@@ -1,0 +1,14 @@
+# Google App Engine configuration
+# Alternative deployment option to Cloud Run
+
+runtime: python39
+
+instance_class: F1
+
+env_variables:
+  GCP_PROJECT_ID: "onyga-482313"
+  BIGQUERY_DATASET: "OI"
+  PORT: "8080"
+
+# Note: Set SECRET_KEY via App Engine environment variables in console
+# or use Google Secret Manager for sensitive values

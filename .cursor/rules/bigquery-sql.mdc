@@ -1,0 +1,54 @@
+---
+description: BigQuery SQL naming, patterns, and project conventions
+globs: "**/*.sql"
+alwaysApply: false
+---
+
+# BigQuery SQL Conventions (OI)
+
+Use these naming and structural rules for all BigQuery objects in this project.
+
+## Project and dataset
+
+- **Project**: `onyga-482313`
+- **Dataset**: `OI`
+- Always qualify objects as `onyga-482313.OI.<object_name>` when creating or referencing in scripts, or use the dataset default in `bq`/client config.
+
+## Naming conventions
+
+| Prefix | Use for | Example |
+|--------|---------|--------|
+| `V_SRC_` | Interface views (Fivetran-facing or external data shape) | `V_SRC_AmazonAds_keyword`, `V_SRC_BANK_LEUMI_ILS` |
+| `V_` | Analytics / internal views (non-interface) | `V_EXPERIMENT_BUDGET_HEALTH` |
+| `DIM_` | Dimension tables | `DIM_PRODUCT`, `DIM_TIME`, `DIM_CURRENCY_RATES` |
+| `FACT_` | Fact tables | `FACT_ORDERS`, `FACT_SHIPMENTS` |
+| `DE_` | Data-entry app tables (user-entered) | `DE_PURCHASE_ORDERS`, `DE_MANUFACTURER_SHIPMENTS`, `DE_VENDOR_PAYMENTS` |
+| `SP_` | Stored procedures | `SP_UPDATE_CURRENCY_RATES`, `SP_ORCHESTRATE_DAILY_REFRESH`, `SP_MERGE_PRODUCT_DIM` |
+| `FN_` | Functions (UDFs, remote functions) | `FN_FETCH_EXCHANGE_RATES` |
+
+## File locations
+
+- **Interface views** → `scripts/bigquery/interface_views/<Name>.sql`
+- **Other views** → `scripts/bigquery/views/`
+- **Tables (DDL)** → `scripts/bigquery/tables/` (with subdirs e.g. `DIM/`, `FACT/` as needed)
+- **Stored procedures** → `scripts/bigquery/procedures/<SP_Name>.sql`
+- **Functions** → `scripts/bigquery/functions/<FN_Name>.sql`
+- **Migrations** → `scripts/bigquery/migrations/` with version prefix (e.g. `001_description.sql`)
+
+## config.yaml
+
+Every new view, table, stored procedure, or function must have an entry in **`config.yaml`** at repo root (under `views`, `tables`, `stored_procedures`, or `functions`) with at least `name`, `description`, and `source_files`. Add `dependencies` when one object depends on another.
+
+## Stored procedure patterns
+
+- **MERGE** (upsert): Use for dimension loads (e.g. `SP_MERGE_PRODUCT_DIM`).
+- **LOAD** (insert from query): Use for fact or staging loads.
+- **UPDATE**: Use for incremental updates (e.g. currency rates). Prefer idempotent logic.
+
+Procedures that run on a schedule (e.g. daily) should be referenced in the daily orchestrator (`SP_ORCHESTRATE_DAILY_REFRESH` or equivalent) and/or noted in `config.yaml` under the procedure’s `schedule` field.
+
+## Migrations
+
+- One logical change per migration file.
+- Use ordered prefixes for execution order (e.g. `001_`, `002_`).
+- Do not remove or reorder already-applied migrations; add new ones only.

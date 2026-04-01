@@ -1,0 +1,56 @@
+---
+description: OI monorepo layout, directory purposes, and config.yaml as source of truth
+alwaysApply: true
+---
+
+# OI Project Architecture
+
+This repo is a **multi-app monorepo** for Operations Intelligence (Amazon Ads and Seller analytics). Know where each app lives and where to add or change code.
+
+## Top-level layout
+
+| Path | Purpose |
+|------|--------|
+| `dashboard-react/` | React 19 + Vite SPA for OI analytics (main UI). Pages, components, hooks, static data fetch. |
+| `cube/` | Cube.js analytics API. Sits between dashboard and BigQuery. Schema in `cube/schema/*.js`. When `VITE_CUBE_API_URL` is set, dashboard fetches most data from Cube instead of JSON. |
+| `data-entry-app/` | Flask app on GCP Cloud Run. Purchase orders, shipments, payments data entry. Talks to BigQuery directly. |
+| `scripts/bigquery/` | All BigQuery SQL: interface views, tables, procedures, functions, migrations, validation. |
+| `cloud-functions/` | GCP Cloud Functions (e.g. fetch-exchange-rates, hot-folder-processor). Node.js. |
+| `deployment/` | Shell scripts to deploy BigQuery objects (views, procedures, etc.). Run via Makefile or directly. |
+| `dashboard/` | Legacy static dashboard (Python script + HTML). |
+| `config.yaml` | **Source of truth** for BigQuery objects and deployment. See below. |
+
+## Where to put things
+
+- **New React page** → `dashboard-react/src/pages/`. Register in `App.tsx` (switch) and `Sidebar.tsx` (nav).
+- **New React component** → `dashboard-react/src/components/`.
+- **New Cube schema** → `cube/schema/<CubeName>.js`. One file per cube. Define `sql`, `measures`, `dimensions`, `joins`. Wire new measures/dimensions in `dashboard-react/src/hooks/useCubeData.ts`. See `.cursor/rules/cube-architecture.mdc`.
+- **New BigQuery view** → `scripts/bigquery/interface_views/` or `scripts/bigquery/views/`. **Always add/update entry in `config.yaml`** under `views` (or the right section).
+- **New BigQuery table DDL** → `scripts/bigquery/tables/`. Register in `config.yaml` under `tables`.
+- **New stored procedure** → `scripts/bigquery/procedures/`. Register in `config.yaml` under `stored_procedures`.
+- **New BigQuery function** → `scripts/bigquery/functions/`. Register in `config.yaml` under `functions`.
+- **New migration** → `scripts/bigquery/migrations/`. Use versioned names (e.g. `001_description.sql`).
+- **Data model changes** → Run `make validate-integrity` or `scripts/bigquery/validation/VALIDATE_DATA_INTEGRITY.sql` after deployment. See `.cursor/rules/testing-required.mdc`.
+- **Flask routes / app logic** → `data-entry-app/app.py`. Templates in `data-entry-app/templates/`.
+- **Deploy scripts for BigQuery** → `deployment/`. Keep in sync with `config.yaml`.
+
+## config.yaml as source of truth
+
+For **BigQuery**, the canonical list of what exists is in **`config.yaml`** at the repo root.
+
+- **views**, **tables**, **stored_procedures**, **functions**, **cloud_functions** are defined there with `name`, `description`, `source_files`, and optional `dependencies`.
+- **Adding a new BigQuery object**: (1) Add the SQL file under `scripts/bigquery/` in the correct subdir. (2) **Add or update the corresponding entry in `config.yaml`.** (3) Deployment scripts in `deployment/` should align with config (e.g. `deploy.sh` uses config or the same list).
+- **Project/dataset**: `project.id` is `onyga-482313`, `dataset.name` is `OI`. Use these when writing SQL or app code that references the dataset.
+
+Do not add or remove BigQuery objects only in SQL or only in deploy scripts without updating `config.yaml`.
+
+## AI workflow
+
+This project uses a **planning competition workflow** (see `ai-workflow.mdc`):
+
+- **Composer** (Builder) plans first — writes a full plan + test scripts, self-assesses whether it can own planning.
+- **Opus 4.6** (Planner) plans blind — writes its own plan without reading Composer's, then compares both and picks the best.
+- **Trust scores** in `docs/ai-feedback-log.md` track how well Composer plans per task pattern. When trust reaches 80%+ over 3+ tasks, Opus delegates that pattern to Composer.
+- **Delegation is revocable** — if quality drops, Opus pulls planning authority back.
+
+Planning files live in `docs/plans/`. Opus always reviews implementation, even for delegated patterns.

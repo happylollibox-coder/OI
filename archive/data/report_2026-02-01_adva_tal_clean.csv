@@ -1,0 +1,8 @@
+transaction_date,description,amount,currency,status,running_balance,transaction_id
+2026-01-28,Payment to HAPPY LOLLI LTD,-11049.99,USD,Completed,0.0,944669602
+2026-01-26,Payment from Amazon - XX-467561  (adva tal),11014.57,USD,Completed,11049.99,943616377
+2026-01-23,Payment from Amazon - XX-467561  (adva tal),35.42,USD,Completed,35.42,942692518
+2026-01-12,Payment to HAPPY LOLLI LTD,-156149.35,USD,Completed,0.0,938186383
+2026-01-12,Payment from Amazon - XX-467561  (adva tal),155980.68,USD,Completed,156149.35,938134628
+2026-01-09,Payment from Amazon - XX-467561  (adva tal),25.86,USD,Completed,168.67,937176988
+2026-01-05,Payment from Amazon - XX-467561  (adva tal),140.96,USD,Completed,142.81,935266072

@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}All Shipments - OI Data Entry Forms{% endblock %}
+
+{% block extra_css %}
+<style>
+    .product-tags .badge { font-size: 0.72rem; margin-right: 4px; margin-bottom: 2px; }
+    .status-PENDING { background-color: #6c757d; }
+    .status-IN_TRANSIT { background-color: #ffc107; color: #000; }
+    .status-RECEIVED { background-color: #198754; }
+    .status-INSPECTED { background-color: #0d6efd; }
+    .status-PUT_AWAY { background-color: #0dcaf0; color: #000; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1><i class="bi bi-box-seam"></i> All Shipments</h1>
+            <div class="d-flex gap-2">
+                <div class="btn-group" role="group">
+                    <a href="{{ url_for('shipments_list', filter='open') }}" 
+                       class="btn btn-sm {{ 'btn-primary' if status_filter == 'open' else 'btn-outline-primary' }}">
+                        <i class="bi bi-funnel"></i> Open
+                    </a>
+                    <a href="{{ url_for('shipments_list', filter='all') }}" 
+                       class="btn btn-sm {{ 'btn-primary' if status_filter == 'all' else 'btn-outline-primary' }}">
+                        All
+                    </a>
+                </div>
+                <a href="{{ url_for('new_shipment') }}" class="btn btn-primary">
+                    <i class="bi bi-plus-circle"></i> New Shipment
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if shipments %}
+                <div class="table-responsive">
+                    <table class="table table-hover table-striped table-sm sortable-table">
+                        <thead>
+                            <tr>
+                                <th style="font-size: 0.85rem;" data-sort="date">Ship Date <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="date">ETA <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Type <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;">Products</th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Qty <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Cost <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Status <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Paid <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for s in shipments %}
+                            <tr style="font-size: 0.85rem;">
+                                <td>{{ s.shipment_date }}</td>
+                                <td>{{ s.estimated_arrival_date or '-' }}</td>
+                                <td>
+                                    {% if s.shipment_type %}
+                                        <span class="badge bg-info">{{ s.shipment_type }}</span>
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td class="product-tags">
+                                    {% if s.line_items %}
+                                        {% for item in s.line_items %}
+                                            {% if item.product_name %}
+                                            <span class="badge bg-secondary" title="{{ item.product_asin or '' }}">
+                                                {{ item.product_name[:20] }}{% if item.product_name|length > 20 %}…{% endif %}
+                                                <small>({{ item.quantity_shipped|int }})</small>
+                                            </span>
+                                            {% endif %}
+                                        {% endfor %}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ s.total_quantity|default(0)|int|format_number }}</td>
+                                <td>
+                                    {% if s.cost_shipped %}
+                                        <strong>{{ s.cost_shipped|format_currency_with_commas }}</strong>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge status-{{ s.shipment_status }}">{{ s.shipment_status }}</span>
+                                </td>
+                                <td>
+                                    {% if s.is_paid %}
+                                        <span class="badge bg-success">Yes</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">No</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <a href="{{ url_for('shipment_details', shipment_id=s.shipment_id) }}" 
+                                       class="btn btn-sm btn-primary" style="font-size: 0.75rem; padding: 0.2rem 0.4rem;">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <form method="POST" action="{{ url_for('delete_shipment', shipment_id=s.shipment_id) }}" 
+                                          style="display: inline;" 
+                                          onsubmit="return confirm('Delete shipment {{ s.shipment_id }}?');">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" style="font-size: 0.75rem; padding: 0.2rem 0.4rem;">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle"></i> No shipments found.
+                    <a href="{{ url_for('new_shipment') }}" class="alert-link">Create your first shipment</a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+// Table sorting - same pattern as index.html
+document.addEventListener('DOMContentLoaded', function() {
+    const tables = document.querySelectorAll('.sortable-table');
+    tables.forEach(table => {
+        const headers = table.querySelectorAll('thead th[data-sort]');
+        let currentSort = { column: null, direction: 'asc' };
+        
+        headers.forEach((header, index) => {
+            header.style.cursor = 'pointer';
+            header.addEventListener('click', () => {
+                const sortType = header.getAttribute('data-sort');
+                const tbody = table.querySelector('tbody');
+                const rows = Array.from(tbody.querySelectorAll('tr'));
+                
+                if (currentSort.column === index) {
+                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.column = index;
+                    currentSort.direction = 'asc';
+                }
+                
+                headers.forEach(h => {
+                    const icon = h.querySelector('.sort-icon');
+                    if (icon) icon.className = 'bi bi-arrow-down-up sort-icon';
+                });
+                const icon = header.querySelector('.sort-icon');
+                if (icon) {
+                    icon.className = currentSort.direction === 'asc' 
+                        ? 'bi bi-arrow-up sort-icon' : 'bi bi-arrow-down sort-icon';
+                }
+                
+                rows.sort((a, b) => {
+                    const aCell = a.cells[index], bCell = b.cells[index];
+                    if (!aCell || !bCell) return 0;
+                    let aVal = aCell.textContent.trim(), bVal = bCell.textContent.trim();
+                    
+                    if (sortType === 'number') {
+                        aVal = (aVal === '-' || aVal === '') ? -Infinity : parseFloat(aVal.replace(/[^\d.-]/g, '')) || -Infinity;
+                        bVal = (bVal === '-' || bVal === '') ? -Infinity : parseFloat(bVal.replace(/[^\d.-]/g, '')) || -Infinity;
+                    } else if (sortType === 'date') {
+                        aVal = (aVal === '-' || aVal === '') ? new Date(0) : new Date(aVal);
+                        bVal = (bVal === '-' || bVal === '') ? new Date(0) : new Date(bVal);
+                    } else {
+                        aVal = (aVal === '-' || aVal === '') ? 'zzz' : aVal.toLowerCase();
+                        bVal = (bVal === '-' || bVal === '') ? 'zzz' : bVal.toLowerCase();
+                    }
+                    
+                    if (aVal < bVal) return currentSort.direction === 'asc' ? -1 : 1;
+                    if (aVal > bVal) return currentSort.direction === 'asc' ? 1 : -1;
+                    return 0;
+                });
+                rows.forEach(row => tbody.appendChild(row));
+            });
+        });
+    });
+});
+</script>
+{% endblock %}
+{% endblock %}

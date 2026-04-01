@@ -1,0 +1,19 @@
+# BigQuery Objects
+
+All BigQuery objects for the OI project, synced and organized by type.
+
+## Structure
+
+| Folder | Contents |
+|--------|----------|
+| **procedures/** | Stored procedures (SP_*) and COPY_* scripts |
+| **tables/** | Table definitions (DIM, FACT, STG, SRC, etc.) |
+| **views/** | Views |
+| **functions/** | BigQuery functions |
+| **interface_views/** | Interface views (Fivetran/source connections) |
+| **runner/** | Scripts that run or support procedures |
+| **tests/** | Object-specific tests |
+
+## Quick reference – procedures
+
+COPY_SQP_ASIN_VIEW_TO_SRC_ACC, SP_ACCUMULATE_FINANCIAL_TRANSACTIONS, SP_AMAZON_PERFORMANCE_DAILY, SP_AmazonAds_purchased_product, SP_CATEGORIZE_TRANSACTIONS, SP_DATA_ENTRY_UPDATES, SP_FACT_AMAZON_ADS, SP_FACT_FINANCIAL_TRANSACTIONS, SP_LOAD_COMPARE_QUANTITY_CLICKS_BY_ASIN, SP_LOAD_DIM_AD_keyword, SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY, SP_LOAD_FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY, SP_LOAD_FACT_INVENTORY_SNAPSHOT, SP_LOAD_FACT_SEARCH_QUERY, SP_LOAD_STG_AMAZON_ADS, SP_LOAD_STG_AMAZON_PERFORMANCE, SP_LOAD_STG_AMAZON_SEARCH_PERFORMANCE_WEEKLY, SP_MERGE_GENERAL_CONVERSION_AD_URL_ASIN, SP_MERGE_PRODUCT_DIM, SP_MERGE_PRODUCT_DIM_SMART, SP_MERGE_SCP_WEEKLY, SP_MERGE_SQP_WEEKLY, SP_ORCHESTRATE_DAILY_REFRESH, SP_POPULATE_FACTLESS_BRIDGE, SP_PROCESS_MANUAL_UPLOADS, SP_STG_UNIFIED_TRANSACTION_SOURCES, SP_UPDATE_CURRENCY_RATES, SP_UPDATE_PRODUCT_COST_DATA

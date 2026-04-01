@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard Attributes & Data Sources | OI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #09090b;
+      --surface: #18181b;
+      --card: #27272a;
+      --border: #3f3f46;
+      --border-strong: #52525b;
+      --text: #fafafa;
+      --muted: #a1a1aa;
+      --subtle: #71717a;
+      --faint: #52525b;
+      --blue: #3b82f6;
+      --blue-dim: rgba(59, 130, 246, 0.2);
+      --emerald: #10b981;
+      --emerald-dim: rgba(16, 185, 129, 0.2);
+      --amber: #f59e0b;
+      --amber-dim: rgba(245, 158, 11, 0.2);
+      --violet: #8b5cf6;
+      --violet-dim: rgba(139, 92, 246, 0.2);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text);
+      background: var(--bg);
+      min-height: 100vh;
+    }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+    h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 0.5rem; letter-spacing: -0.02em; }
+    h2 { font-size: 1.25rem; font-weight: 600; margin: 2rem 0 1rem; color: var(--muted); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.75rem; }
+    p { margin: 0 0 1rem; color: var(--muted); }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .nav {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      z-index: 10;
+    }
+    .nav a {
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--subtle);
+      background: transparent;
+      transition: all 0.15s;
+    }
+    .nav a:hover { color: var(--text); background: var(--surface); }
+    .flow {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      padding: 1.5rem;
+      background: var(--surface);
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      margin-bottom: 2rem;
+      overflow-x: auto;
+    }
+    .flow-node {
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      font-size: 0.8125rem;
+      font-weight:500;
+      white-space: nowrap;
+    }
+    .flow-node.bq { background: var(--blue-dim); color: var(--blue); }
+    .flow-node.py { background: var(--amber-dim); color: var(--amber); }
+    .flow-node.json { background: var(--emerald-dim); color: var(--emerald); }
+    .flow-node.react { background: var(--violet-dim); color: var(--violet); }
+    .flow-arrow { color: var(--faint); font-size: 1rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      overflow: hidden;
+      margin-bottom: 1rem;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .card-header:hover { background: rgba(255,255,255,0.02); }
+    .card-header h3 { margin: 0; font-size: 0.9375rem; }
+    .card-header .badge {
+      font-size: 0.6875rem;
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.25rem;
+      background: var(--surface);
+      color: var(--subtle);
+    }
+    .card-body { padding: 0 1.25rem 1.25rem; }
+    .card.collapsed .card-body { display: none; }
+    .card.collapsed .chevron { transform: rotate(-90deg); }
+    .chevron { transition: transform 0.2s; color: var(--faint); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+    }
+    th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { color: var(--subtle); font-weight: 500; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    .attr { color: var(--blue); font-weight: 500; }
+    .source { color: var(--emerald); font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; }
+    .notes { color: var(--subtle); font-size: 0.8125rem; }
+    .search-wrap {
+      margin-bottom: 1.5rem;
+    }
+    .search-wrap input {
+      width: 100%;
+      max-width: 400px;
+      padding: 0.625rem 1rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.875rem;
+    }
+    .search-wrap input::placeholder { color: var(--faint); }
+    .search-wrap input:focus {
+      outline: none;
+      border-color: var(--blue);
+      box-shadow: 0 0 0 2px var(--blue-dim);
+    }
+    .dup-table .same { color: var(--emerald); }
+    .dup-table .concept { color: var(--amber); }
+    .bq-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 0.75rem;
+    }
+    .bq-item {
+      padding: 0.75rem 1rem;
+      background: var(--surface);
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+    .bq-item .name { color: var(--blue); font-weight: 500; }
+    .bq-item .type { color: var(--faint); font-size: 0.6875rem; text-transform: uppercase; }
+    .bq-item .used { color: var(--subtle); font-size: 0.75rem; margin-top: 0.25rem; }
+    .cmd {
+      padding: 1rem 1.25rem;
+      background: var(--surface);
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+    .csv-badge { background: var(--amber-dim); color: var(--amber); padding: 0.125rem 0.5rem; border-radius: 0.25rem; font-size: 0.6875rem; }
+    .subtitle { color: var(--subtle); font-size: 0.875rem; margin-bottom: 2rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Dashboard Attributes & Data Sources</h1>
+    <p class="subtitle">OI project · BigQuery (onyga-482313.OI) → refresh_data.py → JSON → React Dashboard</p>
+
+    <nav class="nav">
+      <a href="#flow">Data Flow</a>
+      <a href="#sources">Attributes by Source</a>
+      <a href="#duplicates">Identical Attributes</a>
+      <a href="#bq">BigQuery Objects</a>
+      <a href="#refresh">Refresh Command</a>
+    </nav>
+
+    <section id="flow">
+      <h2>Data Flow</h2>
+      <div class="flow">
+        <span class="flow-node bq">BigQuery<br><small>onyga-482313.OI</small></span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-node py">refresh_data.py</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-node json">dashboard/data/*.json</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-node react">useData() → React</span>
+      </div>
+      <p><strong>Connection:</strong> The dashboard does <em>not</em> connect to BigQuery directly. It loads static JSON from <code class="mono">/data/*.json</code>. Run <code class="mono">python3 refresh_data.py</code> to regenerate.</p>
+      <p><span class="csv-badge">CSV</span> <strong>negative_keywords.json</strong> comes from <code class="mono">docs/LOLLIBOX_negative_keywords_by_campaign.csv</code> (not BigQuery).</p>
+    </section>
+
+    <section id="sources">
+      <h2>Attributes by Data Source</h2>
+      <p>Attributes = dimension/identifier fields (not measures like spend, orders).</p>
+      <div class="search-wrap">
+        <input type="text" id="search" placeholder="Search attributes or sources..." oninput="filterCards()">
+      </div>
+      <div id="cards"></div>
+    </section>
+
+    <section id="duplicates">
+      <h2>Identical Attributes from Different Sources</h2>
+      <div class="card">
+        <div class="card-body">
+          <table class="dup-table">
+            <thead><tr><th>Attribute</th><th>Source A</th><th>Source B</th><th>Relation</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="attr">product_short_name</td><td>DIM_PRODUCT</td><td>V_EXPERIMENT_TERM_RECOMMENDATIONS</td><td class="same">Same</td><td class="notes">View joins DIM_PRODUCT; can differ if hero product</td></tr>
+              <tr><td class="attr">product_type</td><td>DIM_PRODUCT</td><td>Derived (family_map)</td><td class="same">Same</td><td class="notes">Lollibox/LolliME/Fresh/Bottle from product_short_name</td></tr>
+              <tr><td class="attr">search_term</td><td>FACT_AMAZON_ADS</td><td>V_EXPERIMENT_TERM_RECOMMENDATIONS</td><td class="concept">Same concept</td><td class="notes">Ads vs experiment recommendations</td></tr>
+              <tr><td class="attr">search_term</td><td>FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY</td><td>FACT_AMAZON_ADS</td><td class="concept">Same concept</td><td class="notes">SQP vs Ads</td></tr>
+              <tr><td class="attr">campaign_id</td><td>FACT_AMAZON_ADS</td><td>DIM_EXPERIMENT_CAMPAIGN</td><td class="same">Same</td><td class="notes">Amazon Ads campaign IDs</td></tr>
+              <tr><td class="attr">campaign_name</td><td>FACT_AMAZON_ADS</td><td>V_SRC_AmazonAds_campaign_history</td><td class="same">Same</td><td class="notes">History has temporal versioning</td></tr>
+              <tr><td class="attr">experiment_id</td><td>DIM_EXPERIMENT</td><td>V_EXPERIMENT_*</td><td class="same">Same</td><td class="notes">All from DIM_EXPERIMENT</td></tr>
+              <tr><td class="attr">asin</td><td>DIM_PRODUCT</td><td>FACT_AMAZON_ADS (most_advertised_asin)</td><td class="same">Same</td><td class="notes">Ads uses advertised ASIN</td></tr>
+              <tr><td class="attr">asin</td><td>V_PARENT_HERO_ASIN</td><td>DIM_PRODUCT</td><td class="same">Same</td><td class="notes">Hero ASINs are product ASINs</td></tr>
+              <tr><td class="attr">week_start</td><td>DIM_TIME.week_start_date</td><td>DATE_TRUNC(date, WEEK)</td><td class="concept">Same concept</td><td class="notes">Week boundaries</td></tr>
+              <tr><td class="attr">portfolio_name</td><td>V_SRC_AmazonAds_portfolio</td><td>—</td><td class="same">Unique</td><td class="notes">Only in ads_7d</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="bq">
+      <h2>BigQuery Objects</h2>
+      <div class="bq-grid" id="bq-grid"></div>
+    </section>
+
+    <section id="refresh">
+      <h2>Refresh Command</h2>
+      <div class="cmd">cd dashboard && python3 refresh_data.py</div>
+      <p>Runs all queries against <code class="mono">onyga-482313.OI</code>, writes JSON to <code class="mono">dashboard/data/</code>.</p>
+    </section>
+  </div>
+
+  <script>
+    const SOURCES = [
+      { file: "summary.json", attrs: [
+        { attr: "product_type", source: "DIM_PRODUCT (family_map)", notes: "Lollibox, LolliME, Fresh, Bottle" },
+        { attr: "period_start", source: "date_range", notes: "Min date of period" },
+        { attr: "period_end", source: "date_range", notes: "Max date of period" }
+      ], bq: "DIM_PRODUCT, DIM_COSTS_HISTORY, V_SRC_sales_and_traffic_business_sku_report_daily, FACT_AMAZON_ADS" },
+      { file: "actions.json", attrs: [
+        { attr: "search_term", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "product_short_name", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "hero_asin", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "experiment_id", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "strategy_id", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "action", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "STOP, REDUCE_BID, START, BOOST, etc." },
+        { attr: "ads_signal", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "reason", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" }
+      ], bq: "V_EXPERIMENT_TERM_RECOMMENDATIONS" },
+      { file: "upcoming.json", attrs: [
+        { attr: "holiday_date", source: "DIM_US_HOLIDAYS", notes: "" },
+        { attr: "holiday_name", source: "DIM_US_HOLIDAYS", notes: "" },
+        { attr: "category", source: "DIM_US_HOLIDAYS", notes: "" },
+        { attr: "pre_season_start", source: "DIM_US_HOLIDAYS", notes: "" },
+        { attr: "status", source: "Computed", notes: "ACTIVE, UPCOMING, PASSED" }
+      ], bq: "DIM_US_HOLIDAYS" },
+      { file: "peak.json", attrs: [
+        { attr: "holiday_name", source: "DIM_US_HOLIDAYS", notes: "" },
+        { attr: "holiday_date", source: "DIM_US_HOLIDAYS", notes: "" },
+        { attr: "peak_start", source: "DIM_US_HOLIDAYS", notes: "= pre_season_start" },
+        { attr: "peak_end", source: "Computed", notes: "holiday_date - 2 days" },
+        { attr: "readiness_start", source: "Computed", notes: "pre_season_start - 120 days" },
+        { attr: "current_stage", source: "Computed", notes: "READINESS, PRE_PEAK, PEAK, POST_PEAK" }
+      ], bq: "DIM_US_HOLIDAYS" },
+      { file: "products.json", attrs: [
+        { attr: "asin", source: "DIM_PRODUCT", notes: "" },
+        { attr: "product_short_name", source: "DIM_PRODUCT", notes: "" },
+        { attr: "product_type", source: "DIM_PRODUCT", notes: "" },
+        { attr: "color", source: "DIM_PRODUCT", notes: "" },
+        { attr: "parent_asin", source: "DIM_PRODUCT", notes: "" }
+      ], bq: "DIM_PRODUCT, DIM_COSTS_HISTORY" },
+      { file: "hero_asins.json", attrs: [
+        { attr: "asin", source: "V_PARENT_HERO_ASIN", notes: "" },
+        { attr: "search_term", source: "V_PARENT_HERO_ASIN", notes: "" },
+        { attr: "parent_name", source: "V_PARENT_HERO_ASIN", notes: "" },
+        { attr: "product_short_name", source: "V_PARENT_HERO_ASIN, DIM_PRODUCT", notes: "" },
+        { attr: "product_type", source: "DIM_PRODUCT", notes: "" },
+        { attr: "hero_rank", source: "V_PARENT_HERO_ASIN", notes: "" }
+      ], bq: "V_PARENT_HERO_ASIN, DIM_PRODUCT" },
+      { file: "keyword_product_map.json", attrs: [
+        { attr: "search_term", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "experiment_id", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "product_short_name", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "hero_asin", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "is_hero_match", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "action", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" }
+      ], bq: "V_EXPERIMENT_TERM_RECOMMENDATIONS" },
+      { file: "weekly_trends.json", attrs: [
+        { attr: "product_type", source: "DIM_PRODUCT (family_map)", notes: "" },
+        { attr: "week_start", source: "DIM_TIME.week_start_date", notes: "" }
+      ], bq: "DIM_PRODUCT, DIM_COSTS_HISTORY, DIM_TIME, V_SRC_*, FACT_AMAZON_ADS" },
+      { file: "monthly_trends.json", attrs: [
+        { attr: "product_type", source: "DIM_PRODUCT (family_map)", notes: "" },
+        { attr: "month_start", source: "DATE_TRUNC(date, MONTH)", notes: "" }
+      ], bq: "Same as weekly_trends" },
+      { file: "weekly_trends_by_asin.json", attrs: [
+        { attr: "product_type", source: "DIM_PRODUCT (family_map)", notes: "" },
+        { attr: "asin", source: "V_SRC_*, FACT_AMAZON_ADS", notes: "" },
+        { attr: "product_short_name", source: "DIM_PRODUCT", notes: "" },
+        { attr: "week_start", source: "DIM_TIME", notes: "" }
+      ], bq: "Same as weekly_trends + ASIN" },
+      { file: "monthly_trends_by_asin.json", attrs: [
+        { attr: "product_type", source: "DIM_PRODUCT (family_map)", notes: "" },
+        { attr: "asin", source: "Same as weekly_trends_by_asin", notes: "" },
+        { attr: "product_short_name", source: "DIM_PRODUCT", notes: "" },
+        { attr: "month_start", source: "DATE_TRUNC(date, MONTH)", notes: "" }
+      ], bq: "Same as weekly_trends" },
+      { file: "learnings.json", attrs: [
+        { attr: "learning_dimension", source: "V_EXPERIMENT_LEARNINGS", notes: "Primary dimension" }
+      ], bq: "V_EXPERIMENT_LEARNINGS" },
+      { file: "experiments.json", attrs: [
+        { attr: "experiment_id", source: "V_EXPERIMENT_SUMMARY", notes: "" },
+        { attr: "experiment_name", source: "V_EXPERIMENT_SUMMARY", notes: "" },
+        { attr: "strategy_id", source: "V_EXPERIMENT_SUMMARY", notes: "" },
+        { attr: "status", source: "V_EXPERIMENT_SUMMARY", notes: "" },
+        { attr: "start_date", source: "V_EXPERIMENT_SUMMARY", notes: "" },
+        { attr: "end_date", source: "V_EXPERIMENT_SUMMARY", notes: "" }
+      ], bq: "V_EXPERIMENT_SUMMARY" },
+      { file: "budget_health.json", attrs: [
+        { attr: "experiment_id", source: "V_EXPERIMENT_BUDGET_HEALTH", notes: "" }
+      ], bq: "V_EXPERIMENT_BUDGET_HEALTH" },
+      { file: "drivers.json", attrs: [
+        { attr: "search_term", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "product_short_name", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "product_type", source: "DIM_PRODUCT (derived)", notes: "" },
+        { attr: "experiment_id", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" },
+        { attr: "action", source: "V_EXPERIMENT_TERM_RECOMMENDATIONS", notes: "" }
+      ], bq: "V_EXPERIMENT_TERM_RECOMMENDATIONS, DIM_PRODUCT" },
+      { file: "change_log.json", attrs: [
+        { attr: "change_id", source: "DIM_EXPERIMENT_CHANGE_LOG", notes: "" },
+        { attr: "experiment_id", source: "DIM_EXPERIMENT_CHANGE_LOG", notes: "" },
+        { attr: "change_date", source: "DIM_EXPERIMENT_CHANGE_LOG", notes: "" },
+        { attr: "change_type", source: "DIM_EXPERIMENT_CHANGE_LOG", notes: "" },
+        { attr: "campaign_id", source: "DIM_EXPERIMENT_CHANGE_LOG", notes: "" },
+        { attr: "field_changed", source: "DIM_EXPERIMENT_CHANGE_LOG", notes: "" }
+      ], bq: "DIM_EXPERIMENT_CHANGE_LOG" },
+      { file: "negative_keywords.json", attrs: [
+        { attr: "campaign_name", source: "CSV", notes: "NOT BigQuery" },
+        { attr: "negative_keyword", source: "CSV", notes: "" }
+      ], bq: null, csv: true },
+      { file: "experiment_weekly.json", attrs: [
+        { attr: "experiment_id", source: "FACT_EXPERIMENT_DAILY, DIM_EXPERIMENT", notes: "" },
+        { attr: "experiment_name", source: "DIM_EXPERIMENT", notes: "" },
+        { attr: "strategy_id", source: "DIM_EXPERIMENT", notes: "" },
+        { attr: "week_start", source: "DATE_TRUNC(snapshot_date, WEEK)", notes: "" }
+      ], bq: "FACT_EXPERIMENT_DAILY, DIM_EXPERIMENT" },
+      { file: "sqp_weekly.json", attrs: [
+        { attr: "product_type", source: "DIM_PRODUCT (family_map)", notes: "" },
+        { attr: "asin", source: "FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY", notes: "" },
+        { attr: "product_short_name", source: "DIM_PRODUCT", notes: "" },
+        { attr: "week_start", source: "Reporting_Date - 6 days", notes: "" },
+        { attr: "search_term", source: "FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY.Search_Query", notes: "" },
+        { attr: "organic_rank_zone", source: "FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY", notes: "" }
+      ], bq: "DIM_PRODUCT, FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY" },
+      { file: "experiment_campaigns.json", attrs: [
+        { attr: "experiment_id", source: "DIM_EXPERIMENT_CAMPAIGN", notes: "" },
+        { attr: "campaign_id", source: "DIM_EXPERIMENT_CAMPAIGN, FACT_AMAZON_ADS", notes: "" },
+        { attr: "campaign_name", source: "FACT_AMAZON_ADS", notes: "" },
+        { attr: "campaign_type", source: "FACT_AMAZON_ADS", notes: "" }
+      ], bq: "DIM_EXPERIMENT_CAMPAIGN, FACT_AMAZON_ADS" },
+      { file: "campaign_search_terms.json", attrs: [
+        { attr: "campaign_id", source: "FACT_AMAZON_ADS", notes: "" },
+        { attr: "search_term", source: "FACT_AMAZON_ADS", notes: "" }
+      ], bq: "FACT_AMAZON_ADS" },
+      { file: "ads_7d.json", attrs: [
+        { attr: "row_type", source: "Computed", notes: "'campaign' or 'search_term'" },
+        { attr: "week_start", source: "DATE_TRUNC(date, WEEK)", notes: "" },
+        { attr: "campaign_id", source: "FACT_AMAZON_ADS", notes: "" },
+        { attr: "campaign_name", source: "FACT_AMAZON_ADS", notes: "" },
+        { attr: "campaign_type", source: "FACT_AMAZON_ADS", notes: "" },
+        { attr: "portfolio_name", source: "V_SRC_AmazonAds_portfolio", notes: "" },
+        { attr: "product_short_name", source: "DIM_PRODUCT (via top_asin)", notes: "" },
+        { attr: "search_term", source: "FACT_AMAZON_ADS", notes: "" }
+      ], bq: "FACT_AMAZON_ADS, V_SRC_AmazonAds_*, DIM_PRODUCT" },
+      { file: "experiment_templates.json", attrs: [
+        { attr: "strategy_id", source: "DIM_EXPERIMENT", notes: "" },
+        { attr: "experiment_id", source: "DIM_EXPERIMENT", notes: "" },
+        { attr: "experiment_name", source: "DIM_EXPERIMENT", notes: "" },
+        { attr: "status", source: "DIM_EXPERIMENT", notes: "" },
+        { attr: "start_date", source: "DIM_EXPERIMENT", notes: "" },
+        { attr: "end_date", source: "DIM_EXPERIMENT", notes: "" },
+        { attr: "lifecycle_stage", source: "DIM_EXPERIMENT", notes: "" }
+      ], bq: "DIM_EXPERIMENT, DIM_EXPERIMENT_CAMPAIGN, FACT_AMAZON_ADS" }
+    ];
+
+    const BQ_OBJECTS = [
+      { name: "DIM_PRODUCT", type: "Table", used: "summary, products, hero_asins, trends, sqp_weekly, drivers, ads_7d" },
+      { name: "DIM_COSTS_HISTORY", type: "Table", used: "summary, products, trends" },
+      { name: "DIM_TIME", type: "Table", used: "weekly_trends, weekly_trends_by_asin" },
+      { name: "DIM_EXPERIMENT", type: "Table", used: "experiment_weekly, experiment_templates" },
+      { name: "DIM_EXPERIMENT_CAMPAIGN", type: "Table", used: "experiment_campaigns, experiment_templates" },
+      { name: "DIM_EXPERIMENT_CHANGE_LOG", type: "Table", used: "change_log" },
+      { name: "DIM_US_HOLIDAYS", type: "Table", used: "upcoming, peak" },
+      { name: "FACT_AMAZON_ADS", type: "Table", used: "summary, trends, experiment_campaigns, campaign_search_terms, ads_7d" },
+      { name: "FACT_EXPERIMENT_DAILY", type: "Table", used: "experiment_weekly" },
+      { name: "FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY", type: "Table", used: "sqp_weekly" },
+      { name: "V_SRC_sales_and_traffic_business_sku_report_daily", type: "View", used: "summary, trends" },
+      { name: "V_EXPERIMENT_TERM_RECOMMENDATIONS", type: "View", used: "actions, keyword_product_map, drivers" },
+      { name: "V_EXPERIMENT_SUMMARY", type: "View", used: "experiments" },
+      { name: "V_EXPERIMENT_BUDGET_HEALTH", type: "View", used: "budget_health" },
+      { name: "V_EXPERIMENT_LEARNINGS", type: "View", used: "learnings" },
+      { name: "V_PARENT_HERO_ASIN", type: "View", used: "hero_asins" },
+      { name: "V_SRC_AmazonAds_campaign_history", type: "View", used: "ads_7d" },
+      { name: "V_SRC_AmazonAds_portfolio", type: "View", used: "ads_7d" }
+    ];
+
+    function renderCards(filter = "") {
+      const q = filter.toLowerCase();
+      const cards = document.getElementById("cards");
+      cards.innerHTML = SOURCES.map((s, i) => {
+        const match = !q || s.file.toLowerCase().includes(q) ||
+          s.attrs.some(a => a.attr.toLowerCase().includes(q) || (a.source && a.source.toLowerCase().includes(q))) ||
+          (s.bq && s.bq.toLowerCase().includes(q));
+        if (!match) return "";
+        const csvBadge = s.csv ? '<span class="csv-badge">CSV</span>' : '';
+        return `
+          <div class="card" data-index="${i}">
+            <div class="card-header" onclick="toggleCard(${i})">
+              <h3><span class="mono">${s.file}</span> ${csvBadge}</h3>
+              <span class="badge">${s.attrs.length} attrs</span>
+              <span class="chevron">▼</span>
+            </div>
+            <div class="card-body">
+              <table>
+                <thead><tr><th>Attribute</th><th>DB Source</th><th>Notes</th></tr></thead>
+                <tbody>
+                  ${s.attrs.map(a => `
+                    <tr>
+                      <td class="attr">${a.attr}</td>
+                      <td class="source">${a.source || "—"}</td>
+                      <td class="notes">${a.notes || "—"}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+              ${s.bq ? `<p style="margin-top:1rem;font-size:0.75rem"><strong>BigQuery:</strong> <span class="source">${s.bq}</span></p>` : ""}
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function toggleCard(i) {
+      const card = document.querySelector(`.card[data-index="${i}"]`);
+      if (card) card.classList.toggle("collapsed");
+    }
+
+    function filterCards() {
+      renderCards(document.getElementById("search").value);
+    }
+
+    function renderBq() {
+      document.getElementById("bq-grid").innerHTML = BQ_OBJECTS.map(o => `
+        <div class="bq-item">
+          <div class="name">${o.name}</div>
+          <div class="type">${o.type}</div>
+          <div class="used">${o.used}</div>
+        </div>
+      `).join("");
+    }
+
+    renderCards();
+    renderBq();
+  </script>
+</body>
+</html>

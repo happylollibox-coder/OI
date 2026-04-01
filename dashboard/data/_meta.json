@@ -1,0 +1,114 @@
+{
+  "refreshed_at": "2026-03-08T22:03:36.489982",
+  "queries_run": 23,
+  "queries_failed": 0,
+  "date_ranges": {
+    "summary_7d": {
+      "start": "2026-02-27",
+      "end": "2026-03-05"
+    }
+  },
+  "data_freshness": {
+    "ads_max_date": "2026-03-06",
+    "performance_max_date": "2026-03-05"
+  },
+  "files": {
+    "summary.json": {
+      "status": "ok",
+      "rows": 4
+    },
+    "actions.json": {
+      "status": "ok",
+      "rows": 297
+    },
+    "upcoming.json": {
+      "status": "ok",
+      "rows": 3
+    },
+    "peak.json": {
+      "status": "ok",
+      "rows": 1
+    },
+    "products.json": {
+      "status": "ok",
+      "rows": 10
+    },
+    "hero_asins.json": {
+      "status": "ok",
+      "rows": 500
+    },
+    "keyword_product_map.json": {
+      "status": "ok",
+      "rows": 2000
+    },
+    "weekly_trends.json": {
+      "status": "ok",
+      "rows": 48
+    },
+    "monthly_trends.json": {
+      "status": "ok",
+      "rows": 51
+    },
+    "weekly_trends_by_asin.json": {
+      "status": "ok",
+      "rows": 120
+    },
+    "monthly_trends_by_asin.json": {
+      "status": "ok",
+      "rows": 133
+    },
+    "learnings.json": {
+      "status": "ok",
+      "rows": 58
+    },
+    "experiments.json": {
+      "status": "ok",
+      "rows": 43
+    },
+    "budget_health.json": {
+      "status": "ok",
+      "rows": 27
+    },
+    "drivers.json": {
+      "status": "ok",
+      "rows": 2000
+    },
+    "experiment_weekly.json": {
+      "status": "ok",
+      "rows": 198
+    },
+    "sqp_weekly.json": {
+      "status": "ok",
+      "rows": 41807
+    },
+    "experiment_campaigns.json": {
+      "status": "ok",
+      "rows": 97
+    },
+    "campaign_search_terms.json": {
+      "status": "ok",
+      "rows": 10000
+    },
+    "ads_7d.json": {
+      "status": "ok",
+      "rows": 23840
+    },
+    "experiment_templates.json": {
+      "status": "ok",
+      "rows": 43
+    },
+    "change_log.json": {
+      "status": "ok",
+      "rows": 61
+    },
+    "negative_keywords.json": {
+      "status": "ok",
+      "rows": 600,
+      "source": "CSV"
+    },
+    "sqp_volume_4w.json": {
+      "status": "ok",
+      "rows": 2383
+    }
+  }
+}

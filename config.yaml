@@ -1,0 +1,789 @@
+# OI Database Project Configuration
+# Source of truth for all BigQuery objects (gemini.md invariant #4)
+
+project:
+  id: "onyga-482313"
+  name: "Ori Intelligence (OI)"
+  description: "Amazon Ads + Seller analytics platform on GCP"
+
+dataset:
+  name: "OI"
+  location: "US"
+
+data_sources:
+  - name: "fivetran-hl"
+    type: "bigquery"
+    description: "Fivetran-managed data from Amazon Ads and Selling Partner APIs"
+    datasets: ["amazon_ads", "amazon_selling_partner"]
+
+# ═══════════════════════════════════════════════════════════════
+# VIEWS
+# ═══════════════════════════════════════════════════════════════
+
+views:
+
+  # ── V_SRC_ Interface Views (Fivetran-managed) ──
+  - name: "V_SRC_AmazonAds_campaign_history"
+    description: "Campaign performance history with temporal versioning"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_campaign_history.sql"]
+
+  - name: "V_SRC_AmazonAds_keyword"
+    description: "Unified keyword targeting data"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_keyword.sql"]
+
+  - name: "V_SRC_AmazonAds_negative_keyword"
+    description: "Negative keyword management"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_negative_keyword.sql"]
+
+  - name: "V_SRC_AmazonAds_purchased_product"
+    description: "Product purchase attribution tracking"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_purchased_product.sql"]
+
+  - name: "V_SRC_AmazonAds_SearchTerms"
+    description: "Search term performance analysis with campaign context"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_SearchTerms.sql"]
+
+  - name: "V_SRC_AmazonAds_ad_group_history"
+    description: "Ad group history from Fivetran"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_ad_group_history.sql"]
+
+  - name: "V_SRC_AmazonAds_advertised_product"
+    description: "Advertised product performance data"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_advertised_product.sql"]
+
+  - name: "V_SRC_AmazonAds_portfolio"
+    description: "Ads portfolio management data"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_portfolio.sql"]
+
+  - name: "V_SRC_AmazonAds_sb_ad_report"
+    description: "Sponsored Brands ad report data"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_sb_ad_report.sql"]
+
+  - name: "V_SRC_Seller_repeat_purchase"
+    description: "Repeat purchase behavior analysis"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_Seller_repeat_purchase.sql"]
+
+  - name: "V_SRC_CURRENCY_CONVERSION"
+    description: "Currency exchange rates and conversion for ILS, USD, HKD"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_CURRENCY_CONVERSION.sql"]
+
+  - name: "V_SRC_BANK_LEUMI_ILS"
+    description: "Bank Leumi ILS account transactions"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_BANK_LEUMI_ILS.sql"]
+
+  - name: "V_SRC_BANK_LEUMI_FOREIGN"
+    description: "Bank Leumi foreign currency transactions"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_BANK_LEUMI_FOREIGN.sql"]
+
+  - name: "V_SRC_BANK_PAYONEER_ADVA_TAL"
+    description: "Payoneer transactions for Adva Tal account"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_BANK_PAYONEER_ADVA_TAL.sql"]
+
+  - name: "V_SRC_BANK_PAYONEER_HAPPY_LOLLI"
+    description: "Payoneer transactions for Happy Lolli account"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_BANK_PAYONEER_HAPPY_LOLLI.sql"]
+
+  - name: "V_SRC_OLD_HIST_SearchTerms"
+    description: "Historical search terms data (legacy)"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_OLD_HIST_SearchTerms.sql"]
+
+  - name: "V_SRC_Products"
+    description: "Products data from seller central"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_Products.sql"]
+
+  - name: "V_SRC_sales_and_traffic_business_sku_report_daily"
+    description: "Daily sales and traffic by SKU"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_sales_and_traffic_business_sku_report_daily.sql"]
+
+  # ── V_ Analytics Views ──
+  - name: "V_ASIN_BEST_PRACTICES"
+    description: "ASIN best practices analysis"
+
+  - name: "V_AUTO_CAMPAIGN_TERM_REVIEW"
+    description: "Auto campaign search term review"
+
+  - name: "V_BOOST_KEYWORD_LEAKAGE"
+    description: "Keyword leakage detection for boost campaigns"
+
+  - name: "V_CAMPAIGN_DAILY_MOMENTUM"
+    description: "Daily campaign momentum tracking"
+
+  - name: "V_CAMPAIGN_PLACEMENT_BIDDING"
+    description: "Campaign placement bidding analysis"
+
+  - name: "V_CAMPAIGN_PLACEMENT_REPORT"
+    description: "Campaign placement performance report"
+
+  - name: "V_EXPERIMENT_BUDGET_HEALTH"
+    description: "Experiment budget health monitoring"
+
+  - name: "V_EXPERIMENT_CAMPAIGN_SETTINGS"
+    description: "Experiment campaign settings overview"
+
+  - name: "V_EXPERIMENT_KEYWORD_COLLISIONS"
+    description: "Keyword collision detection across experiments"
+
+  - name: "V_EXPERIMENT_LEARNINGS"
+    description: "Learnings from completed experiments"
+
+  - name: "V_EXPERIMENT_PLACEMENT_LEARNINGS"
+    description: "Placement-specific experiment learnings"
+
+  - name: "V_EXPERIMENT_RESULTS_ASIN"
+    description: "Experiment results by ASIN"
+
+  - name: "V_EXPERIMENT_RESULTS_SEARCH_TERM"
+    description: "Experiment results by search term"
+
+  - name: "V_EXPERIMENT_SEARCH_TERMS"
+    description: "Search terms across experiments"
+
+  - name: "V_EXPERIMENT_SUGGESTED_CAMPAIGNS"
+    description: "Suggested campaigns from experiments"
+
+  - name: "V_EXPERIMENT_SUGGESTIONS"
+    description: "Optimization suggestions from experiments"
+
+  - name: "V_EXPERIMENT_SUMMARY"
+    description: "Experiment summary dashboard view"
+
+  - name: "V_EXPERIMENT_TERM_RECOMMENDATIONS"
+    description: "Term-level recommendations from experiments (hybrid weighted ROAS)"
+
+  - name: "V_COACH_HOT_SIGNALS"
+    description: "3-day rapid-reaction ads alerts (URGENT_STOP, HOT_WINNER, RAPID_DECLINE)"
+    source_files: ["scripts/bigquery/views/V_COACH_HOT_SIGNALS.sql"]
+
+  - name: "V_PROMOTION_RAMP_ANALYSIS"
+    description: "Tracks promoted keyword ramp-up: milestones, weekly metrics, starting config, verdict"
+    source_files: ["scripts/bigquery/views/V_PROMOTION_RAMP_ANALYSIS.sql"]
+
+  - name: "V_FACT_AMAZON_PERFORMANCE_DAILY"
+    description: "Daily Amazon performance fact view"
+
+  - name: "V_PARENT_HERO_ASIN"
+    description: "Parent-hero ASIN mapping"
+
+  - name: "V_PO_SNAPSHOT"
+    description: "Purchase order snapshot view"
+
+  - name: "V_PRODUCT_FAMILY_MAP"
+    description: "Product to product family mapping"
+
+  - name: "V_SEARCH_TERM_OPPORTUNITIES"
+    description: "Search term opportunity analysis"
+
+  - name: "V_ADS_COACH_DATA"
+    description: "Pure data layer — all metrics at campaign × asin × keyword grain. No logic."
+    source_files: ["scripts/bigquery/views/V_ADS_COACH_DATA.sql"]
+
+  - name: "V_ADS_COACH"
+    description: "Single source of truth for all action decisions. Thin logic layer referencing V_ADS_COACH_DATA."
+    source_files: ["scripts/bigquery/views/V_ADS_COACH.sql"]
+
+  - name: "V_ADS_COACH_PHRASE_NEGATIVES"
+    description: "N-gram phrase analysis — identifies common phrases across unprofitable search terms for phrase-level negation."
+    source_files: ["scripts/bigquery/views/V_ADS_COACH_PHRASE_NEGATIVES.sql"]
+
+  - name: "V_SEARCH_TERM_SEGMENT"
+    description: "Search term segmentation"
+
+  - name: "V_SEASONAL_INDEX_WEEKLY"
+    description: "Weekly seasonal index"
+
+  - name: "V_SNAPSHOT_REMAINING_COSTS"
+    description: "Remaining costs snapshot"
+
+  - name: "V_STRATEGY_CURRENT_RECOMMENDATIONS"
+    description: "Current strategy recommendations"
+
+  - name: "V_TRAFFIC_MULTIPLIER_WEEKLY"
+    description: "Weekly traffic multiplier data"
+
+  - name: "V_UNIFIED_INVENTORY_SNAPSHOT"
+    description: "Unified inventory snapshot across FBA/AWD"
+
+  - name: "V_UNIFIED_TRANSACTION_SOURCES"
+    description: "Unified view of all financial transaction sources"
+
+  - name: "V_ADS_COACH_CAMPAIGN"
+    description: "Campaign-level aggregation of ads coach data"
+    source_files: ["scripts/bigquery/views/V_ADS_COACH_CAMPAIGN.sql"]
+
+  - name: "V_ADS_COACH_DECISION"
+    description: "Decision engine — applies thresholds to coach data for action recommendations"
+    source_files: ["scripts/bigquery/views/V_ADS_COACH_DECISION.sql"]
+
+  - name: "V_ADS_COACH_SEARCH_TERM"
+    description: "Search term level view of ads coach data"
+    source_files: ["scripts/bigquery/views/V_ADS_COACH_SEARCH_TERM.sql"]
+
+  - name: "V_AMAZON_ADS_TOP_SEARCH_QUERY_TERMS_WEEKLY"
+    description: "Top search query terms from Amazon Ads weekly"
+    source_files: ["scripts/bigquery/views/V_AMAZON_ADS_TOP_SEARCH_QUERY_TERMS_WEEKLY.sql"]
+
+  - name: "V_BRAND_KEYWORD_CLASSIFICATION"
+    description: "Classifies keywords as brand, competitor, or generic"
+    source_files: ["scripts/bigquery/views/V_BRAND_KEYWORD_CLASSIFICATION.sql"]
+
+  - name: "V_BRAND_STRENGTH_WEEKLY"
+    description: "Weekly brand strength tracking with phrase type, product, and tag metadata"
+    source_files: ["scripts/bigquery/views/V_BRAND_STRENGTH_WEEKLY.sql"]
+
+  - name: "V_DATA_FRESHNESS"
+    description: "Data freshness monitoring — latest date and staleness status for every key table"
+    source_files: ["scripts/bigquery/views/V_DATA_FRESHNESS.sql"]
+
+  - name: "V_EXPERIMENT_EVALUATION"
+    description: "Experiment evaluation metrics and scoring"
+    source_files: ["scripts/bigquery/views/V_EXPERIMENT_EVALUATION.sql"]
+
+  - name: "V_EXPERIMENT_VARIATION_COMPARISON"
+    description: "Side-by-side experiment variation comparison"
+    source_files: ["scripts/bigquery/views/V_EXPERIMENT_VARIATION_COMPARISON.sql"]
+
+  - name: "V_KEYWORD_STRATEGY_PREDICTIONS"
+    description: "Keyword strategy prediction model results"
+    source_files: ["scripts/bigquery/views/V_KEYWORD_STRATEGY_PREDICTIONS.sql"]
+
+  - name: "V_SNAPSHOT_REMAINING_COSTS_SUMMARY"
+    description: "Summarized remaining costs by product family"
+    source_files: ["scripts/bigquery/views/V_SNAPSHOT_REMAINING_COSTS_SUMMARY.sql"]
+
+  - name: "V_SUMMARY_7D"
+    description: "Rolling 7-day summary metrics"
+    source_files: ["scripts/bigquery/views/V_SUMMARY_7D.sql"]
+
+  - name: "V_UNIFIED_DAILY"
+    description: "Unified daily performance view — single source of truth for ads + sales + organic"
+    source_files: ["scripts/bigquery/views/V_UNIFIED_DAILY.sql"]
+
+# ═══════════════════════════════════════════════════════════════
+# TABLES
+# ═══════════════════════════════════════════════════════════════
+
+tables:
+
+  # ── DIM_ Dimension Tables ──
+  - name: "DIM_AD_keyword"
+    description: "Ad keyword dimension"
+    type: "dimension"
+
+  - name: "DIM_BUDGET_CATEGORIES"
+    description: "Budget category classifications"
+    type: "dimension"
+
+  - name: "DIM_BUSINESS_CONCLUSIONS"
+    description: "Business conclusions reference data"
+    type: "dimension"
+
+  - name: "DIM_COSTS_HISTORY"
+    description: "SCD2 cost history tracking"
+    type: "dimension"
+
+  - name: "DIM_CURRENCY_RATES"
+    description: "Currency exchange rates (USD, ILS, HKD)"
+    type: "dimension"
+    source_files: ["scripts/bigquery/tables/DIM/DIM_CURRENCY_RATES.sql"]
+
+  - name: "DIM_EXPERIMENT"
+    description: "Experiment definitions"
+    type: "dimension"
+
+  - name: "DIM_EXPERIMENT_CAMPAIGN"
+    description: "Experiment-to-campaign mapping"
+    type: "dimension"
+
+  - name: "DIM_EXPERIMENT_CHANGE_LOG"
+    description: "Experiment change audit log"
+    type: "dimension"
+
+  - name: "DIM_GROUND_TRUTHS"
+    description: "Ground truth reference data"
+    type: "dimension"
+
+  - name: "DIM_PAYMENT_SOURCE_HIERARCHY"
+    description: "Payment source hierarchy for financial data"
+    type: "dimension"
+
+  - name: "DIM_PRODUCT_CREATIVES"
+    description: "Amazon Brand Assets (Entity ID, Video Asset ID, Brand Name) per product family"
+    type: "dimension"
+
+  - name: "DIM_PRODUCT"
+    description: "Product master dimension (ASIN, family, SKU, costs)"
+    type: "dimension"
+
+  - name: "DIM_BRAND_PHRASES"
+    description: "Brand/product phrase lookup for BRAND/PRODUCT segment classification"
+    type: "dimension"
+
+  - name: "DIM_STRATEGY_CAMPAIGN_TEMPLATE"
+    description: "Strategy campaign templates"
+    type: "dimension"
+
+  - name: "DIM_STRATEGY_TEMPLATE"
+    description: "Strategy templates"
+    type: "dimension"
+
+  - name: "DIM_TIME"
+    description: "Time dimension with traffic multipliers"
+    type: "dimension"
+
+  - name: "DIM_US_HOLIDAYS"
+    description: "US holiday calendar"
+    type: "dimension"
+
+  # ── FACT_ Fact Tables ──
+  - name: "FACT_AMAZON_ADS"
+    description: "Amazon Ads performance facts"
+    type: "fact"
+
+  - name: "FACT_AMAZON_PERFORMANCE_DAILY"
+    description: "Daily Amazon performance (sales, traffic, ads)"
+    type: "fact"
+
+  - name: "FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY"
+    description: "Weekly search performance (SQP + SCP merged)"
+    type: "fact"
+
+  - name: "FACT_ASIN_CONCLUSIONS"
+    description: "ASIN-level business conclusions"
+    type: "fact"
+
+  - name: "FACT_EXPERIMENT_DAILY"
+    description: "Daily experiment performance snapshots"
+    type: "fact"
+
+  - name: "FACT_EXPERIMENT_RECOMMENDATIONS"
+    description: "Experiment-generated recommendations"
+    type: "fact"
+
+  - name: "FACT_FACTLESS_BRIDGE"
+    description: "Factless bridge table connecting all dimensions"
+    type: "fact"
+
+  - name: "FACT_FINANCIAL_TRANSACTIONS"
+    description: "Categorized financial transactions"
+    type: "fact"
+
+  - name: "FACT_GRADUATED_RULES"
+    description: "Graduated business rules"
+    type: "fact"
+
+  - name: "FACT_INVENTORY_SNAPSHOT"
+    description: "Inventory levels snapshot"
+    type: "fact"
+
+  - name: "FACT_ORDERS"
+    description: "Order facts"
+    type: "fact"
+
+  - name: "FACT_PURCHASE_ORDER"
+    description: "Purchase order facts"
+    type: "fact"
+
+  - name: "FACT_SEARCH_QUERY"
+    description: "Search query performance facts"
+    type: "fact"
+
+  # ── DE_ Data Entry Tables ──
+  - name: "DE_COACH_THRESHOLDS"
+    description: "User-editable thresholds for the Ads Coach decision engine, per strategy and product family"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_COACH_THRESHOLDS.sql"]
+
+  - name: "DE_MANUFACTURER_SHIPMENTS"
+    description: "User-entered manufacturer shipment data"
+    type: "data_entry"
+
+  - name: "DE_PURCHASE_ORDERS"
+    description: "User-entered purchase orders"
+    type: "data_entry"
+
+  - name: "DE_VENDOR_PAYMENTS"
+    description: "User-entered vendor payment records"
+    type: "data_entry"
+
+  - name: "DE_APPROVED_ACTIONS"
+    description: "User-approved bid/keyword actions from the Actions page (PENDING → EXPORTED → APPLIED)"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_APPROVED_ACTIONS.sql"]
+
+  - name: "DE_BULKSHEET_UPLOADS"
+    description: "Logs every bulksheet action uploaded to Amazon, grouped by batch. Used by learning system."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_BULKSHEET_UPLOADS.sql"]
+
+  # ── STG_ Staging Tables ──
+  - name: "STG_AMAZON_ADS"
+    description: "Staging for Amazon Ads data"
+    type: "staging"
+
+  - name: "STG_AMAZON_PERFORMANCE"
+    description: "Staging for Amazon performance data"
+    type: "staging"
+
+  - name: "STG_AMAZON_SEARCH_PERFORMANCE_WEEKLY"
+    description: "Staging for weekly search performance"
+    type: "staging"
+
+  - name: "STG_AmazonAds_purchased_product"
+    description: "Staging for purchased product attribution"
+    type: "staging"
+
+  - name: "STG_PURCHASE_ORDER"
+    description: "Staging for purchase orders"
+    type: "staging"
+
+  - name: "STG_SCP_WEEKLY"
+    description: "Staging for SCP weekly data"
+    type: "staging"
+
+  - name: "STG_SCP_WEEKLY_BACKUP"
+    description: "Backup of SCP weekly staging"
+    type: "staging_backup"
+
+  - name: "STG_SQP_WEEKLY"
+    description: "Staging for SQP weekly data"
+    type: "staging"
+
+  - name: "STG_SQP_WEEKLY_BACKUP"
+    description: "Backup of SQP weekly staging"
+    type: "staging_backup"
+
+  - name: "STG_UNIFIED_TRANSACTION_SOURCES"
+    description: "Staging for unified financial transactions"
+    type: "staging"
+
+  # ── SRC_ACC_ Accumulated Source Tables ──
+  - name: "SRC_ACC_AmazonAds_purchased_product"
+    description: "Accumulated Amazon Ads purchased product data"
+    type: "source_accumulated"
+
+  - name: "SRC_ACC_BANK_LEUMI_FOREIGN"
+    description: "Accumulated Bank Leumi foreign transactions"
+    type: "source_accumulated"
+
+  - name: "SRC_ACC_BANK_LEUMI_ILS"
+    description: "Accumulated Bank Leumi ILS transactions"
+    type: "source_accumulated"
+
+  - name: "SRC_ACC_BANK_PAYONEER_HAPPY_LOLLI"
+    description: "Accumulated Payoneer Happy Lolli transactions"
+    type: "source_accumulated"
+
+  - name: "SRC_ACC_INVENTORY_AWD"
+    description: "Accumulated AWD inventory data"
+    type: "source_accumulated"
+
+  - name: "SRC_ACC_INVENTORY_FBA"
+    description: "Accumulated FBA inventory data"
+    type: "source_accumulated"
+
+  - name: "SRC_ACC_SCP_WEEKLY"
+    description: "Accumulated SCP weekly data"
+    type: "source_accumulated"
+
+  - name: "SRC_ACC_SQP_WEEKLY"
+    description: "Accumulated SQP weekly data"
+    type: "source_accumulated"
+
+  - name: "SRC_ACC_SQP_WEEKLY_TEMP"
+    description: "Temporary accumulated SQP weekly data"
+    type: "source_accumulated"
+
+  # ── SRC_ Raw Source Tables ──
+  - name: "SRC_BANK_LEUMI_FOREIGN"
+    description: "Raw Bank Leumi foreign transactions"
+    type: "source"
+
+  - name: "SRC_BANK_LEUMI_ILS"
+    description: "Raw Bank Leumi ILS transactions"
+    type: "source"
+
+  - name: "SRC_BANK_PAYONEER_ADVA_TAL"
+    description: "Raw Payoneer Adva Tal transactions"
+    type: "source"
+
+  - name: "SRC_BANK_PAYONEER_HAPPY_LOLLI"
+    description: "Raw Payoneer Happy Lolli transactions"
+    type: "source"
+
+  - name: "SRC_INVENTORY_AWD"
+    description: "Raw AWD inventory data"
+    type: "source"
+
+  - name: "SRC_INVENTORY_FBA"
+    description: "Raw FBA inventory data"
+    type: "source"
+
+  - name: "SRC_INVENTORY_FBA_TEST"
+    description: "Test FBA inventory data"
+    type: "source"
+
+  - name: "SRC_OLD_HIST_SB_SEARCH_TERMS"
+    description: "Historical Sponsored Brands search terms"
+    type: "source"
+
+  - name: "SRC_OLD_HIST_SP_SEARCH_TERMS"
+    description: "Historical Sponsored Products search terms"
+    type: "source"
+
+  - name: "SRC_SCP_WEEKLY"
+    description: "Raw SCP weekly upload data"
+    type: "source"
+
+  - name: "SRC_SQP_WEEKLY"
+    description: "Raw SQP weekly upload data"
+    type: "source"
+
+  # ── CFG_ Configuration Tables ──
+  - name: "CFG_TRANSACTION_CATEGORIZATION_RULES"
+    description: "Rules for auto-categorizing financial transactions"
+    type: "config"
+
+  # ── Other Tables ──
+  - name: "COMPARE_QUANTITY_CLICKS_BY_ASIN"
+    description: "Quantity vs clicks comparison by ASIN"
+    type: "analytics"
+
+  - name: "GENERAL_CONVERSION"
+    description: "General conversion data with ad URL ASIN mapping"
+    type: "analytics"
+
+  - name: "SCP_ASIN_View_Week"
+    description: "SCP weekly data by ASIN"
+    type: "data_table"
+
+  - name: "SQP_ASIN_View_Simple_Week"
+    description: "SQP weekly data by ASIN (simple view)"
+    type: "data_table"
+
+  - name: "TimeDIM"
+    description: "Legacy time dimension (see DIM_TIME)"
+    type: "legacy"
+
+  - name: "UNCATEGORIZED_TRANSACTIONS_REVIEW"
+    description: "Transactions pending categorization review"
+    type: "analytics"
+
+  # ── LOG_ Observability Tables ──
+  - name: "LOG_PIPELINE_RUNS"
+    description: "Pipeline execution log for SP_ORCHESTRATE_DAILY_REFRESH — tracks status, duration, errors per procedure"
+    type: "observability"
+    source_files: ["scripts/bigquery/tables/LOG_PIPELINE_RUNS.sql"]
+
+# ═══════════════════════════════════════════════════════════════
+# STORED PROCEDURES
+# ═══════════════════════════════════════════════════════════════
+
+stored_procedures:
+  - name: "SP_ACCUMULATE_BRAND_PHRASES"
+    description: "Auto-discovers and categorizes brand/product phrases from ad searches"
+    source_files: ["scripts/bigquery/procedures/SP_ACCUMULATE_BRAND_PHRASES.sql"]
+    schedule: "daily"
+
+  - name: "SP_ORCHESTRATE_DAILY_REFRESH"
+    description: "Master daily orchestrator — runs all SPs in dependency order"
+    source_files: ["scripts/bigquery/procedures/SP_ORCHESTRATE_DAILY_REFRESH.sql"]
+    schedule: "daily"
+
+  - name: "SP_MERGE_PRODUCT_DIM_SMART"
+    description: "Smart merge for DIM_PRODUCT"
+    source_files: ["scripts/bigquery/procedures/SP_MERGE_PRODUCT_DIM_SMART.sql"]
+
+  - name: "SP_MERGE_PRODUCT_DIM"
+    description: "Merge product dimension data"
+    source_files: ["scripts/bigquery/procedures/SP_MERGE_PRODUCT_DIM.sql"]
+
+  - name: "SP_UPDATE_CURRENCY_RATES"
+    description: "Update currency exchange rates from Cloud Function API"
+    source_files: ["scripts/bigquery/procedures/SP_UPDATE_CURRENCY_RATES.sql"]
+    schedule: "daily"
+
+  - name: "SP_LOAD_STG_AMAZON_ADS"
+    description: "Load Amazon Ads staging from Fivetran views"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_STG_AMAZON_ADS.sql"]
+
+  - name: "SP_FACT_AMAZON_ADS"
+    description: "Build FACT_AMAZON_ADS from staging"
+    source_files: ["scripts/bigquery/procedures/SP_FACT_AMAZON_ADS.sql"]
+
+  - name: "SP_LOAD_STG_AMAZON_PERFORMANCE"
+    description: "Load Amazon performance staging"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_STG_AMAZON_PERFORMANCE.sql"]
+
+  - name: "SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY"
+    description: "Build daily Amazon performance fact"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY.sql"]
+
+  - name: "SP_AMAZON_PERFORMANCE_DAILY"
+    description: "Legacy daily performance aggregation"
+    source_files: ["scripts/bigquery/procedures/SP_AMAZON_PERFORMANCE_DAILY.sql"]
+
+  - name: "SP_AmazonAds_purchased_product"
+    description: "Process purchased product attribution"
+    source_files: ["scripts/bigquery/procedures/SP_AmazonAds_purchased_product.sql"]
+
+  - name: "SP_ACC_AmazonAds_purchased_product"
+    description: "Accumulate purchased product data"
+    source_files: ["scripts/bigquery/procedures/SP_ACC_AmazonAds_purchased_product.sql"]
+
+  - name: "SP_MERGE_SQP_WEEKLY"
+    description: "Merge SQP weekly uploads"
+    source_files: ["scripts/bigquery/procedures/SP_MERGE_SQP_WEEKLY.sql"]
+
+  - name: "SP_MERGE_SCP_WEEKLY"
+    description: "Merge SCP weekly data"
+    source_files: ["scripts/bigquery/procedures/SP_MERGE_SCP_WEEKLY.sql"]
+
+  - name: "SP_LOAD_FACT_SEARCH_QUERY"
+    description: "Load search query fact table"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_FACT_SEARCH_QUERY.sql"]
+
+  - name: "SP_LOAD_DIM_AD_keyword"
+    description: "Load ad keyword dimension"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_AD_keyword.sql"]
+
+  - name: "SP_LOAD_DIM_COSTS_HISTORY"
+    description: "Load SCD2 cost history"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_COSTS_HISTORY.sql"]
+
+  - name: "SP_LOAD_FACT_INVENTORY_SNAPSHOT"
+    description: "Load inventory snapshot fact"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_FACT_INVENTORY_SNAPSHOT.sql"]
+
+  - name: "SP_LOAD_FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY"
+    description: "Load weekly search performance fact"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY.sql"]
+
+  - name: "SP_LOAD_STG_AMAZON_SEARCH_PERFORMANCE_WEEKLY"
+    description: "Load weekly search performance staging"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_STG_AMAZON_SEARCH_PERFORMANCE_WEEKLY.sql"]
+
+  - name: "SP_LOAD_COMPARE_QUANTITY_CLICKS_BY_ASIN"
+    description: "Load quantity vs clicks comparison"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_COMPARE_QUANTITY_CLICKS_BY_ASIN.sql"]
+
+  - name: "SP_MERGE_GENERAL_CONVERSION_AD_URL_ASIN"
+    description: "Merge general conversion with ad URL ASIN"
+    source_files: ["scripts/bigquery/procedures/SP_MERGE_GENERAL_CONVERSION_AD_URL_ASIN.sql"]
+
+  - name: "SP_DATA_ENTRY_UPDATES"
+    description: "Process data entry updates"
+    source_files: ["scripts/bigquery/procedures/SP_DATA_ENTRY_UPDATES.sql"]
+
+  - name: "SP_PROCESS_MANUAL_UPLOADS"
+    description: "Process manual file uploads (now mostly retired for SQP/SCP due to Daton auto-sync)"
+    source_files: ["scripts/bigquery/procedures/SP_PROCESS_MANUAL_UPLOADS.sql"]
+
+  - name: "SP_SRC_ACC_SQP_WEEKLY"
+    description: "Upserts SQP weekly data from Daton SP-API source based on row count comparison"
+    source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_SQP_WEEKLY.sql"]
+
+  - name: "SP_SRC_ACC_SCP_WEEKLY"
+    description: "Upserts SCP weekly data from Daton SP-API source based on row count comparison"
+    source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_SCP_WEEKLY.sql"]
+
+  - name: "SP_PROCESS_BANK_UPLOADS"
+    description: "Process bank transaction uploads"
+    source_files: ["scripts/bigquery/procedures/SP_PROCESS_BANK_UPLOADS.sql"]
+
+  - name: "SP_POPULATE_DIM_TIME"
+    description: "Populate time dimension table"
+    source_files: ["scripts/bigquery/procedures/SP_POPULATE_DIM_TIME.sql"]
+
+  - name: "SP_POPULATE_FACTLESS_BRIDGE"
+    description: "Populate factless bridge table"
+    source_files: ["scripts/bigquery/procedures/SP_POPULATE_FACTLESS_BRIDGE.sql"]
+
+  - name: "SP_UPDATE_PRODUCT_COST_DATA"
+    description: "Update product cost data"
+    source_files: ["scripts/bigquery/procedures/SP_UPDATE_PRODUCT_COST_DATA.sql"]
+
+  - name: "SP_UPDATE_ASIN_CONCLUSIONS"
+    description: "Update ASIN business conclusions"
+    source_files: ["scripts/bigquery/procedures/SP_UPDATE_ASIN_CONCLUSIONS.sql"]
+
+  - name: "SP_UPDATE_DIM_TIME_TRAFFIC_MULTIPLIERS"
+    description: "Update DIM_TIME traffic multiplier columns"
+    source_files: ["scripts/bigquery/procedures/SP_UPDATE_DIM_TIME_TRAFFIC_MULTIPLIERS.sql"]
+    schedule: "weekly_monday"
+
+  - name: "SP_AUTO_LINK_EXPERIMENT_CAMPAIGNS"
+    description: "Auto-link pending experiment campaigns"
+    source_files: ["scripts/bigquery/procedures/SP_AUTO_LINK_EXPERIMENT_CAMPAIGNS.sql"]
+
+  - name: "SP_EXPERIMENT_DAILY_SNAPSHOT"
+    description: "Daily experiment performance snapshot"
+    source_files: ["scripts/bigquery/procedures/SP_EXPERIMENT_DAILY_SNAPSHOT.sql"]
+
+  - name: "SP_EXPERIMENT_WEEKLY_REVIEW"
+    description: "Weekly experiment review and recommendations"
+    source_files: ["scripts/bigquery/procedures/SP_EXPERIMENT_WEEKLY_REVIEW.sql"]
+    schedule: "weekly_monday"
+
+  - name: "SP_STG_UNIFIED_TRANSACTION_SOURCES"
+    description: "Build unified transaction staging"
+    source_files: ["scripts/bigquery/procedures/SP_STG_UNIFIED_TRANSACTION_SOURCES.sql"]
+
+  - name: "SP_FACT_FINANCIAL_TRANSACTIONS"
+    description: "Build financial transactions fact"
+    source_files: ["scripts/bigquery/procedures/SP_FACT_FINANCIAL_TRANSACTIONS.sql"]
+
+  - name: "SP_ACCUMULATE_FINANCIAL_TRANSACTIONS"
+    description: "Accumulate financial transaction data"
+    source_files: ["scripts/bigquery/procedures/SP_ACCUMULATE_FINANCIAL_TRANSACTIONS.sql"]
+
+  - name: "SP_CATEGORIZE_TRANSACTIONS"
+    description: "Auto-categorize financial transactions"
+    source_files: ["scripts/bigquery/procedures/SP_CATEGORIZE_TRANSACTIONS.sql"]
+
+  - name: "SP_SUGGEST_THRESHOLDS"
+    description: "Analyze experiment outcomes to suggest new coach threshold values"
+    source_files: ["scripts/bigquery/procedures/SP_SUGGEST_THRESHOLDS.sql"]
+    schedule: "weekly_monday"
+
+  - name: "SP_SUGGEST_THRESHOLD_UPDATES"
+    description: "Auto-suggest threshold adjustments from ramp analysis and experiment outcomes"
+    source_files: ["scripts/bigquery/procedures/SP_SUGGEST_THRESHOLD_UPDATES.sql"]
+    schedule: "weekly_monday"
+
+  - name: "SP_REFRESH_CUBE_TABLES"
+    description: "Creates physical snapshot tables (T_*) from logical analytics views (V_*) for fast querying in Cube.js."
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_CUBE_TABLES.sql"]
+
+# ═══════════════════════════════════════════════════════════════
+# FUNCTIONS
+# ═══════════════════════════════════════════════════════════════
+
+functions:
+  - name: "FN_FETCH_EXCHANGE_RATES"
+    description: "Remote function to fetch exchange rates via Cloud Function"
+    source_files: ["scripts/bigquery/functions/FN_FETCH_EXCHANGE_RATES.sql"]
+    type: "remote_function"
+
+# ═══════════════════════════════════════════════════════════════
+# CLOUD FUNCTIONS
+# ═══════════════════════════════════════════════════════════════
+
+cloud_functions:
+  - name: "fetch-exchange-rates"
+    description: "Fetches live currency rates from exchangerate-api.com"
+    source_dir: "cloud-functions/fetch-exchange-rates"
+    runtime: "nodejs20"
+    trigger: "http"
+    region: "us-central1"
+
+# ═══════════════════════════════════════════════════════════════
+# INFRASTRUCTURE
+# ═══════════════════════════════════════════════════════════════
+
+deployment:
+  scripts_dir: "deployment"
+  interface_views_dir: "scripts/bigquery/interface_views"
+
+monitoring:
+  freshness_check_hours: 24
+  alert_on_missing_data: true

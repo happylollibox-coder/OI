@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+
+{% block title %}Costs Report - OI Data Entry Forms{% endblock %}
+
+{% block extra_css %}
+<style>
+    .margin-positive { color: #198754; font-weight: bold; }
+    .margin-negative { color: #dc3545; font-weight: bold; }
+    .price-input { width: 90px; }
+    .margin-cell { min-width: 80px; }
+    .new-referral { color: #6f42c1; font-weight: 500; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4"><i class="bi bi-currency-dollar"></i> Costs Report</h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-table"></i> Product Costs ({{ costs|length }} SKUs)</span>
+            </div>
+            <div class="card-body p-0">
+                {% if costs %}
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm mb-0 sortable-table" id="costsTable">
+                        <thead class="table-light">
+                            <tr style="font-size: 0.82rem;">
+                                <th data-sort="string">SKU <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="string">ASIN <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="string">Product <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">FBA Fix <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Amazon 15% <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">COGS <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Shipping <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Total Cost <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th>Price</th>
+                                <th>New 15%</th>
+                                <th class="margin-cell">Margin</th>
+                                <th class="margin-cell">Margin %</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for cost in costs %}
+                            <tr style="font-size: 0.82rem;" data-fba-fix="{{ cost.estimated_pick_pack_fee_per_unit or 0 }}"
+                                data-referral="{{ cost.FBA_COST_estimated_referral_fee_per_unit or 0 }}"
+                                data-cogs="{{ cost.cost_of_goods or 0 }}"
+                                data-shipping="{{ cost.shipping_cost or 0 }}"
+                                data-listing-price="{{ cost.listing_price_amount or '' }}">
+                                <td><code>{{ cost.sku or '-' }}</code></td>
+                                <td><code>{{ cost.asin or '-' }}</code></td>
+                                <td>{{ cost.product_name or '-' }}</td>
+                                <td>
+                                    {% if cost.estimated_pick_pack_fee_per_unit %}
+                                        {{ cost.estimated_pick_pack_fee_per_unit|format_currency_with_commas }}
+                                    {% else %}<span class="text-muted">-</span>{% endif %}
+                                </td>
+                                <td>
+                                    {% if cost.FBA_COST_estimated_referral_fee_per_unit %}
+                                        {{ cost.FBA_COST_estimated_referral_fee_per_unit|format_currency_with_commas }}
+                                    {% else %}<span class="text-muted">-</span>{% endif %}
+                                </td>
+                                <td>
+                                    {% if cost.cost_of_goods %}
+                                        {{ cost.cost_of_goods|format_currency_with_commas }}
+                                    {% else %}<span class="text-muted">-</span>{% endif %}
+                                </td>
+                                <td>
+                                    {% if cost.shipping_cost %}
+                                        {{ cost.shipping_cost|format_currency_with_commas }}
+                                    {% else %}<span class="text-muted">-</span>{% endif %}
+                                </td>
+                                <td>
+                                    {% if cost.TOTAL_COST_PER_UNIT %}
+                                        <strong>{{ cost.TOTAL_COST_PER_UNIT|format_currency_with_commas }}</strong>
+                                    {% else %}<span class="text-muted">-</span>{% endif %}
+                                </td>
+                                <td>
+                                    <input type="number" class="form-control form-control-sm price-input"
+                                           step="0.01" min="0" placeholder="Price"
+                                           {% if cost.listing_price_amount %}value="{{ '%.2f'|format(cost.listing_price_amount) }}"{% endif %}
+                                           onchange="calculateMargin(this)"
+                                           oninput="calculateMargin(this)">
+                                </td>
+                                <td class="new-referral-value">
+                                    {% if cost.listing_price_amount %}
+                                        <span class="new-referral">${{ '%.2f'|format(cost.listing_price_amount * 0.15) }}</span>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td class="margin-value">
+                                    {% if cost.listing_price_amount %}
+                                        {# Pre-calculate margin for default price #}
+                                        {% set price = cost.listing_price_amount %}
+                                        {% set fba = cost.estimated_pick_pack_fee_per_unit or 0 %}
+                                        {% set cogs = cost.cost_of_goods or 0 %}
+                                        {% set ship = cost.shipping_cost or 0 %}
+                                        {% set margin = price - (fba + 0.15 * price + cogs + ship) %}
+                                        {% if margin >= 0 %}
+                                            <span class="margin-positive">${{ '%.2f'|format(margin) }}</span>
+                                        {% else %}
+                                            <span class="margin-negative">${{ '%.2f'|format(margin) }}</span>
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td class="margin-pct-value">
+                                    {% if cost.listing_price_amount %}
+                                        {% set price = cost.listing_price_amount %}
+                                        {% set fba = cost.estimated_pick_pack_fee_per_unit or 0 %}
+                                        {% set cogs = cost.cost_of_goods or 0 %}
+                                        {% set ship = cost.shipping_cost or 0 %}
+                                        {% set margin = price - (fba + 0.15 * price + cogs + ship) %}
+                                        {% set marginPct = (margin / price * 100) if price > 0 else 0 %}
+                                        {% if margin >= 0 %}
+                                            <span class="margin-positive">{{ '%.1f'|format(marginPct) }}%</span>
+                                        {% else %}
+                                            <span class="margin-negative">{{ '%.1f'|format(marginPct) }}%</span>
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-3 text-center text-muted">
+                    <i class="bi bi-info-circle"></i> No cost data found in DIM_COSTS_HISTORY.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+function calculateMargin(input) {
+    const row = input.closest('tr');
+    const price = parseFloat(input.value);
+    const marginCell = row.querySelector('.margin-value');
+    const marginPctCell = row.querySelector('.margin-pct-value');
+    const newReferralCell = row.querySelector('.new-referral-value');
+
+    if (isNaN(price) || price <= 0) {
+        marginCell.innerHTML = '<span class="text-muted">-</span>';
+        marginPctCell.innerHTML = '<span class="text-muted">-</span>';
+        newReferralCell.innerHTML = '<span class="text-muted">-</span>';
+        return;
+    }
+
+    const fbaFix = parseFloat(row.dataset.fbaFix) || 0;
+    const cogs = parseFloat(row.dataset.cogs) || 0;
+    const shipping = parseFloat(row.dataset.shipping) || 0;
+
+    // New Amazon 15% based on the entered price
+    const referralPct = 0.15;
+    const newReferral = referralPct * price;
+    newReferralCell.innerHTML = '<span class="new-referral">$' + newReferral.toFixed(2) + '</span>';
+
+    // margin = price - (FBA fix + 15% * price + COGS + shipping)
+    const margin = price - (fbaFix + newReferral + cogs + shipping);
+    const marginPct = (margin / price) * 100;
+
+    marginCell.innerHTML = margin >= 0
+        ? '<span class="margin-positive">$' + margin.toFixed(2) + '</span>'
+        : '<span class="margin-negative">$' + margin.toFixed(2) + '</span>';
+    marginPctCell.innerHTML = margin >= 0
+        ? '<span class="margin-positive">' + marginPct.toFixed(1) + '%</span>'
+        : '<span class="margin-negative">' + marginPct.toFixed(1) + '%</span>';
+}
+
+// Table sorting functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const tables = document.querySelectorAll('.sortable-table');
+
+    tables.forEach(table => {
+        const headers = table.querySelectorAll('thead th[data-sort]');
+        let currentSort = { column: null, direction: 'asc' };
+
+        headers.forEach((header, index) => {
+            header.style.cursor = 'pointer';
+            header.addEventListener('click', () => {
+                const sortType = header.getAttribute('data-sort');
+                const tbody = table.querySelector('tbody');
+                const rows = Array.from(tbody.querySelectorAll('tr'));
+
+                if (currentSort.column === index) {
+                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.column = index;
+                    currentSort.direction = 'asc';
+                }
+
+                headers.forEach(h => {
+                    const icon = h.querySelector('.sort-icon');
+                    if (icon) icon.className = 'bi bi-arrow-down-up sort-icon';
+                });
+
+                const icon = header.querySelector('.sort-icon');
+                if (icon) {
+                    icon.className = currentSort.direction === 'asc'
+                        ? 'bi bi-arrow-up sort-icon'
+                        : 'bi bi-arrow-down sort-icon';
+                }
+
+                rows.sort((a, b) => {
+                    const aCell = a.cells[index];
+                    const bCell = b.cells[index];
+                    if (!aCell || !bCell) return 0;
+
+                    let aValue = aCell.textContent.trim();
+                    let bValue = bCell.textContent.trim();
+
+                    if (sortType === 'number') {
+                        aValue = (aValue === '-' || aValue === '') ? -Infinity : parseFloat(aValue.replace(/[^\d.-]/g, '')) || -Infinity;
+                        bValue = (bValue === '-' || bValue === '') ? -Infinity : parseFloat(bValue.replace(/[^\d.-]/g, '')) || -Infinity;
+                    } else {
+                        aValue = (aValue === '-' || aValue === '') ? 'zzz' : aValue.toLowerCase();
+                        bValue = (bValue === '-' || bValue === '') ? 'zzz' : bValue.toLowerCase();
+                    }
+
+                    if (aValue < bValue) return currentSort.direction === 'asc' ? -1 : 1;
+                    if (aValue > bValue) return currentSort.direction === 'asc' ? 1 : -1;
+                    return 0;
+                });
+
+                rows.forEach(row => tbody.appendChild(row));
+            });
+        });
+    });
+});
+</script>
+{% endblock %}
+{% endblock %}

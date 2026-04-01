@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}OI Data Entry Forms{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            /* Happy Lolli Pastel Palette */
+            --hl-pink: #FFB6C1;
+            --hl-pink-dark: #F5909F;
+            --hl-pink-light: #FFE4E9;
+            --hl-peach: #FFD6CC;
+            --hl-peach-light: #FFF0EB;
+            --hl-lavender: #E8D5F5;
+            --hl-lavender-light: #F5EEFF;
+            --hl-mint: #C8F7DC;
+            --hl-mint-dark: #6FCF97;
+            --hl-lemon: #FFF3CD;
+            --hl-lemon-dark: #F0D264;
+            --hl-gray: #E9ECEF;
+            --hl-bg: #FFF5F7;
+            --hl-card-shadow: 0 2px 12px rgba(255, 182, 193, 0.15);
+            --hl-text: #4A4A5A;
+            --hl-text-muted: #8B8BA0;
+        }
+        body {
+            background-color: var(--hl-bg);
+            padding-top: 20px;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: var(--hl-text);
+        }
+        /* === Navbar === */
+        .navbar {
+            background: linear-gradient(135deg, var(--hl-pink) 0%, var(--hl-pink-dark) 100%);
+            margin-bottom: 30px;
+            border-radius: 0 0 16px 16px;
+            padding: 0.6rem 1rem;
+            box-shadow: 0 4px 15px rgba(255, 182, 193, 0.3);
+        }
+        .navbar-brand {
+            color: #fff !important;
+            font-weight: 700;
+            font-size: 1.15rem;
+        }
+        .nav-link {
+            color: rgba(255,255,255,0.9) !important;
+            font-weight: 500;
+            font-size: 0.88rem;
+            border-radius: 8px;
+            padding: 0.4rem 0.7rem !important;
+            transition: all 0.2s;
+        }
+        .nav-link:hover {
+            color: #fff !important;
+            background: rgba(255,255,255,0.2);
+        }
+        /* === Cards === */
+        .card {
+            box-shadow: var(--hl-card-shadow);
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 182, 193, 0.2);
+            border-radius: 14px;
+            overflow: hidden;
+        }
+        .card-header {
+            background: linear-gradient(135deg, var(--hl-lavender) 0%, var(--hl-pink-light) 100%);
+            color: var(--hl-text);
+            font-weight: 600;
+            border-bottom: 1px solid rgba(232, 213, 245, 0.4);
+            padding: 0.65rem 1rem;
+        }
+        .card-header .btn-outline-light {
+            color: var(--hl-text);
+            border-color: rgba(74, 74, 90, 0.25);
+            font-size: 0.78rem;
+        }
+        .card-header .btn-outline-light:hover {
+            background: rgba(255,255,255,0.5);
+            color: var(--hl-text);
+        }
+        /* === Forms === */
+        .form-label {
+            font-weight: 500;
+            margin-top: 10px;
+            color: var(--hl-text);
+        }
+        .required-field::after {
+            content: " *";
+            color: #F5909F;
+        }
+        .form-control:focus, .form-select:focus {
+            border-color: var(--hl-pink);
+            box-shadow: 0 0 0 0.2rem rgba(255, 182, 193, 0.25);
+        }
+        /* === Buttons === */
+        .btn-primary {
+            background: linear-gradient(135deg, var(--hl-pink) 0%, var(--hl-pink-dark) 100%);
+            border: none;
+            font-weight: 600;
+            border-radius: 10px;
+            transition: all 0.2s;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, var(--hl-pink-dark) 0%, #E87B8C 100%);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(245, 144, 159, 0.35);
+        }
+        .btn-outline-secondary {
+            border-color: var(--hl-pink);
+            color: var(--hl-pink-dark);
+            border-radius: 10px;
+        }
+        .btn-outline-secondary:hover, .btn-outline-secondary.active {
+            background: var(--hl-pink-light);
+            border-color: var(--hl-pink);
+            color: var(--hl-pink-dark);
+        }
+        /* === Tables === */
+        .table thead {
+            background: var(--hl-lavender-light);
+        }
+        .table thead th {
+            border-bottom: 2px solid var(--hl-lavender);
+            color: var(--hl-text);
+            font-weight: 600;
+        }
+        .table-hover tbody tr:hover {
+            background-color: var(--hl-pink-light) !important;
+        }
+        .table-striped > tbody > tr:nth-of-type(odd) {
+            background-color: rgba(255, 182, 193, 0.04);
+        }
+        /* === Status Badges === */
+        .badge {
+            border-radius: 8px;
+            font-weight: 500;
+            padding: 0.3em 0.65em;
+        }
+        .badge.bg-success { background-color: var(--hl-mint) !important; color: #217a45 !important; }
+        .badge.bg-warning { background-color: var(--hl-lemon) !important; color: #8a6d00 !important; }
+        .badge.bg-info { background-color: var(--hl-lavender) !important; color: #6B42A3 !important; }
+        .badge.bg-secondary { background-color: var(--hl-gray) !important; color: #5A5A6E !important; }
+        .badge.bg-primary { background-color: var(--hl-pink-light) !important; color: var(--hl-pink-dark) !important; }
+        .badge.bg-danger { background-color: #FFDCD9 !important; color: #C53030 !important; }
+        /* === Sort Icons === */
+        .sort-icon {
+            font-size: 0.75rem;
+            opacity: 0.4;
+            margin-left: 4px;
+        }
+        th[data-sort]:hover .sort-icon {
+            opacity: 1;
+            color: var(--hl-pink-dark);
+        }
+        th[data-sort] {
+            cursor: pointer;
+            user-select: none;
+        }
+        /* === Alerts === */
+        .alert-success {
+            background-color: var(--hl-mint);
+            border-color: var(--hl-mint-dark);
+            color: #217a45;
+        }
+        .alert-danger {
+            background-color: #FFDCD9;
+            border-color: #F5909F;
+            color: #C53030;
+        }
+        /* === Summary Cards (Home) === */
+        .summary-card {
+            border: none !important;
+            border-radius: 14px !important;
+            position: relative;
+            overflow: hidden;
+        }
+        .summary-card::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 5px;
+        }
+        .summary-card.accent-yellow::before { background: var(--hl-lemon-dark); }
+        .summary-card.accent-peach::before { background: var(--hl-pink-dark); }
+        .summary-card.accent-lavender::before { background: #B794D6; }
+        .summary-card .card-body { padding-left: 1.25rem; }
+        .summary-card h6 { color: var(--hl-text-muted); font-size: 0.82rem; }
+        .summary-card h3 { font-weight: 700; }
+        /* === Scrollbar === */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--hl-bg); }
+        ::-webkit-scrollbar-thumb { background: var(--hl-pink); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--hl-pink-dark); }
+        /* === Page heading === */
+        h1 { color: var(--hl-text); font-weight: 700; }
+        /* === Misc === */
+        code { color: var(--hl-pink-dark); }
+        a code:hover { color: #B03A5A !important; }
+        .text-warning { color: #C28B00 !important; }
+        .text-success { color: #217a45 !important; }
+        .text-info { color: #6B42A3 !important; }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container">
+            <a class="navbar-brand" href="{{ url_for('index') }}">
+                <i class="bi bi-clipboard-data"></i> OI Data Entry
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    {% if session.user %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">
+                            <i class="bi bi-house"></i> Home
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('dashboard') }}">
+                            <i class="bi bi-graph-up"></i> Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('new_order') }}">
+                            <i class="bi bi-file-earmark-text"></i> Purchase Order
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('new_shipment') }}">
+                            <i class="bi bi-truck"></i> New Shipment
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('shipments_list') }}">
+                            <i class="bi bi-box-seam"></i> All Shipments
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('new_payment') }}">
+                            <i class="bi bi-credit-card"></i> Vendor Payment
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('costs_report') }}">
+                            <i class="bi bi-currency-dollar"></i> Costs Report
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <span class="nav-link text-light">
+                            <i class="bi bi-person-circle"></i> {{ session.user.name or session.user.email }}
+                        </span>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logout') }}">
+                            <i class="bi bi-box-arrow-right"></i> Logout
+                        </a>
+                    </li>
+                    {% else %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('login') }}">
+                            <i class="bi bi-box-arrow-in-right"></i> Login
+                        </a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,49 @@
+---
+description: Cube.js schema conventions, BigQuery mapping, and dashboard wiring
+globs: "cube/**/*.js"
+alwaysApply: false
+---
+
+# Cube Architecture (OI)
+
+Cube.js sits between the dashboard and BigQuery. Schema lives in `cube/schema/*.js`. When `VITE_CUBE_API_URL` is set, the dashboard fetches most data from Cube instead of static JSON.
+
+## Schema structure
+
+- **One file per cube** in `cube/schema/<CubeName>.js`.
+- Each cube defines: `sql` (BigQuery query or table ref), `measures`, `dimensions`, optional `joins`, `refreshKey`, `preAggregations`.
+- Use fully qualified table names: `\`onyga-482313.OI.TABLE_NAME\``.
+- Add a comment at the top: `// Cube: <Name> - from <BigQuery source>`.
+
+## Adding a new cube
+
+1. Create `cube/schema/<CubeName>.js` with `cube(\`CubeName\`, { sql, measures, dimensions, ... })`.
+2. Add a loader in `dashboard-react/src/hooks/useCubeData.ts` that calls `cubeLoad('CubeName', { measures, dimensions, ... })`.
+3. Map the loader result to the `DashboardData` shape expected by pages.
+4. Document the cube in `docs/DATA_SOURCES.md` and `docs/CUBE_OBJECTIVE_IMPLICATIONS_AND_CONFIGURATION.md`.
+
+## Adding measures/dimensions to an existing cube
+
+1. Add the measure/dimension in `cube/schema/<CubeName>.js`.
+2. Update the loader in `useCubeData.ts` to request the new field.
+3. Extend `DashboardData` and the consuming page types in `dashboard-react/src/types.ts` if the shape changes.
+
+## Joins
+
+- Define joins in the cube schema (e.g. `Ads` → `Product` via `most_advertised_asin_impressions = asin`).
+- Joins enable cross-cube queries. Keep join keys aligned with BigQuery table relationships.
+
+## Data flow
+
+```
+Dashboard (useUnifiedData) → useCubeData → POST /cubejs-api/v1/load → Cube → BigQuery
+```
+
+- **Local:** `cd cube && npm run dev` → Cube on port 4000.
+- **Dashboard:** `VITE_CUBE_API_URL=http://localhost:4000` in `.env` for dev.
+- **Production:** Build dashboard with `VITE_CUBE_API_URL` pointing to Cloud Run Cube URL.
+
+## References
+
+- `docs/CUBE_OBJECTIVE_IMPLICATIONS_AND_CONFIGURATION.md` — full architecture, config, implications.
+- `docs/DATA_SOURCES.md` — field-to-cube mapping.

@@ -1,0 +1,28 @@
+[
+  {
+    "product_type": "Lollibox",
+    "sales_7d": 10000,
+    "ad_cost_7d": 2000,
+    "cogs_7d": 5000,
+    "net_profit_7d": 3000,
+    "orders_7d": 100,
+    "organic_orders_7d": 40,
+    "ad_orders_7d": 60,
+    "clicks_7d": 2000,
+    "sessions_7d": 3000,
+    "net_roas": 1.5,
+    "organic_pct": 40,
+    "sales_prev_7d": 8000,
+    "ad_cost_prev_7d": 1800,
+    "cogs_prev_7d": 4000,
+    "net_profit_prev_7d": 2200,
+    "orders_prev_7d": 80,
+    "organic_orders_prev_7d": 30,
+    "net_roas_prev": 1.22,
+    "organic_pct_prev": 37.5,
+    "sales_change_pct": 25,
+    "cost_change_pct": 11,
+    "period_start": "2026-02-26",
+    "period_end": "2026-03-04"
+  }
+]

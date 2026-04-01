@@ -1,0 +1,433 @@
+{% extends "base.html" %}
+
+{% block title %}New Manufacturer Shipment - OI Data Entry Forms{% endblock %}
+
+{% block extra_css %}
+<style>
+    .po-line { border: 1px solid #dee2e6; border-radius: 0.375rem; padding: 12px; margin-bottom: 8px; background: #f8f9fa; }
+    .po-line .remove-line { cursor: pointer; color: #dc3545; }
+    .po-line .remove-line:hover { color: #a71d2a; }
+    .cost-preview { font-size: 0.85rem; color: #6c757d; }
+    /* Inline PO picker styles */
+    #poPickerInline { border-top: 2px solid #0d6efd; background: #f0f4ff; }
+    #poPickerInline .po-option { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #dee2e6; transition: background 0.15s; }
+    #poPickerInline .po-option:hover { background: #d1e7dd; }
+    #poPickerInline .po-option:last-child { border-bottom: none; }
+    .po-list-scroll { max-height: 250px; overflow-y: auto; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4"><i class="bi bi-truck"></i> New Manufacturer Shipment</h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-10 offset-lg-1">
+        <form method="POST" action="{{ url_for('new_shipment') }}" id="shipmentForm">
+            
+            <!-- PO Lines Card -->
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-file-earmark-text"></i> Purchase Order Lines</span>
+                    <button type="button" class="btn btn-sm btn-outline-light" id="addPoLineBtn">
+                        <i class="bi bi-plus-circle"></i> Add PO Line
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div id="poLinesContainer">
+                        <!-- PO lines will be added here dynamically -->
+                    </div>
+                    <div id="noLinesMsg" class="alert alert-info mb-0">
+                        <i class="bi bi-info-circle"></i> Click "Add PO Line" to link purchase orders to this shipment.
+                    </div>
+                    
+                    <!-- Inline PO Picker (replaces modal) -->
+                    <div id="poPickerInline" class="rounded-bottom p-3 mt-2" style="display: none;">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <strong><i class="bi bi-search"></i> Select Purchase Order</strong>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="closePickerBtn">
+                                <i class="bi bi-x-lg"></i> Close
+                            </button>
+                        </div>
+                        <input type="text" class="form-control form-control-sm mb-2" id="poSearchInput" placeholder="Search by product name, ASIN, or PO ID...">
+                        <div class="po-list-scroll">
+                            {% for po in open_pos %}
+                            <div class="po-option" data-po-id="{{ po.purchase_order_id }}" 
+                                 data-product="{{ po.product_name }}" data-asin="{{ po.product_asin }}"
+                                 data-remaining="{{ po.remaining_quantity }}" data-order-qty="{{ po.order_quantity }}"
+                                 data-pkg-qty="{{ po.package_quantity or '' }}" data-cubic-ft="{{ po.package_cubic_feet or '' }}"
+                                 data-manufacturer="{{ po.manufacturer_name or '' }}">
+                                <div class="d-flex justify-content-between">
+                                    <div>
+                                        <strong>{{ po.product_name }}</strong>
+                                        {% if po.product_asin %}<small class="text-muted ms-2">{{ po.product_asin }}</small>{% endif %}
+                                        <br><small class="text-muted">{{ po.purchase_order_id }} · {{ po.manufacturer_name }}</small>
+                                    </div>
+                                    <div class="text-end">
+                                        <span class="badge bg-{{ 'success' if po.remaining_quantity <= 0 else 'warning' }}">
+                                            {{ po.remaining_quantity|int }} remaining
+                                        </span>
+                                        <br><small class="text-muted">of {{ po.order_quantity|int }}</small>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Shipment Details Card -->
+            <div class="card mb-3">
+                <div class="card-header">
+                    <i class="bi bi-info-circle"></i> Shipment Details
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="shipment_date" class="form-label required-field">Shipment Date</label>
+                                <input type="date" class="form-control" id="shipment_date" name="shipment_date" required>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="shipment_type" class="form-label">Shipment Type</label>
+                                <select class="form-select" id="shipment_type" name="shipment_type">
+                                    <option value="">-- Select --</option>
+                                    <option value="SLOW_SEA">Slow Sea</option>
+                                    <option value="FAST_SEA">Fast Sea</option>
+                                    <option value="AIR">Air</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="tracking_number" class="form-label">Warehouse ID</label>
+                                <input type="text" class="form-control" id="tracking_number" name="tracking_number">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="cost_shipped" class="form-label">Total Shipment Cost</label>
+                                <input type="number" class="form-control" id="cost_shipped" name="cost_shipped" step="0.01" min="0">
+                                <small class="text-muted">Will be split by cubic feet</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="kg_price" class="form-label">KG Price</label>
+                                <input type="number" class="form-control" id="kg_price" name="kg_price" step="0.01" min="0">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <div class="form-check mt-4">
+                                    <input class="form-check-input" type="checkbox" id="is_paid" name="is_paid" value="true">
+                                    <label class="form-check-label" for="is_paid">Paid</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="paid_date" class="form-label">Paid Date</label>
+                                <input type="date" class="form-control" id="paid_date" name="paid_date" disabled>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="shipment_status" class="form-label">Status</label>
+                                <select class="form-select" id="shipment_status" name="shipment_status">
+                                    <option value="PENDING" selected>Pending</option>
+                                    <option value="IN_TRANSIT">In Transit</option>
+                                    <option value="RECEIVED">Received</option>
+                                    <option value="INSPECTED">Inspected</option>
+                                    <option value="PUT_AWAY">Put Away</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="notes" class="form-label">Notes</label>
+                        <textarea class="form-control" id="notes" name="notes" rows="2" placeholder="Any additional information..."></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cost Preview Card -->
+            <div class="card mb-3" id="costPreviewCard" style="display: none;">
+                <div class="card-header bg-info text-white">
+                    <i class="bi bi-calculator"></i> Cost Allocation Preview (by Cubic Feet)
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Product</th>
+                                    <th>Qty</th>
+                                    <th>Cartons</th>
+                                    <th>Cubic Ft/CTN</th>
+                                    <th>Total Cubic Ft</th>
+                                    <th>Allocated Cost</th>
+                                </tr>
+                            </thead>
+                            <tbody id="costPreviewBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                {% if po_id %}
+                <a href="{{ url_for('po_details', po_id=po_id) }}" class="btn btn-secondary me-md-2">Cancel</a>
+                {% else %}
+                <a href="{{ url_for('index') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                {% endif %}
+                <button type="submit" class="btn btn-primary" id="submitBtn" disabled>
+                    <i class="bi bi-save"></i> Create Shipment
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const container = document.getElementById('poLinesContainer');
+    const noLinesMsg = document.getElementById('noLinesMsg');
+    const addBtn = document.getElementById('addPoLineBtn');
+    const submitBtn = document.getElementById('submitBtn');
+    const costShippedInput = document.getElementById('cost_shipped');
+    const isPaidCheckbox = document.getElementById('is_paid');
+    const paidDateInput = document.getElementById('paid_date');
+    const costPreviewCard = document.getElementById('costPreviewCard');
+    const costPreviewBody = document.getElementById('costPreviewBody');
+    const poPickerInline = document.getElementById('poPickerInline');
+    const closePickerBtn = document.getElementById('closePickerBtn');
+    let lineCount = 0;
+    const addedPoIds = new Set();
+    
+    // Pre-select PO if passed via URL
+    const preSelectedPo = '{{ po_id }}';
+    
+    // Enable/disable paid date
+    isPaidCheckbox.addEventListener('change', function() {
+        paidDateInput.disabled = !this.checked;
+        if (!this.checked) paidDateInput.value = '';
+    });
+
+    // Toggle inline PO picker
+    addBtn.addEventListener('click', function() {
+        if (poPickerInline.style.display === 'none') {
+            poPickerInline.style.display = 'block';
+            document.getElementById('poSearchInput').value = '';
+            document.getElementById('poSearchInput').focus();
+            // Reset search filter
+            document.querySelectorAll('.po-option').forEach(opt => opt.style.display = '');
+        } else {
+            poPickerInline.style.display = 'none';
+        }
+    });
+
+    // Close picker button
+    closePickerBtn.addEventListener('click', function() {
+        poPickerInline.style.display = 'none';
+    });
+
+    // --- Debounce Helpers & Core UI Updates ---
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    function updateCostPreview() {
+        const cost = parseFloat(costShippedInput.value) || 0;
+        const lines = container.querySelectorAll('.po-line');
+        if (lines.length === 0 || cost === 0) {
+            costPreviewCard.style.display = 'none';
+            return;
+        }
+
+        let totalCubic = 0;
+        const lineData = [];
+        lines.forEach(line => {
+            const qty = parseInt(line.querySelector('.qty-input').value) || 0;
+            const pkgQty = parseInt(line.dataset.pkgQty) || 1;
+            const cubicFt = parseFloat(line.dataset.cubicFt) || 0;
+            const cartons = Math.ceil(qty / pkgQty);
+            const lineCubic = cartons * cubicFt;
+            totalCubic += lineCubic;
+            lineData.push({ line, qty, cartons, cubicFt, lineCubic });
+        });
+
+        // Batch DOM update
+        let tableRowsHTML = '';
+
+        lineData.forEach(d => {
+            const alloc = totalCubic > 0 ? (d.lineCubic / totalCubic * cost) : (cost / lineData.length);
+            const poId = d.line.dataset.poId;
+            const product = d.line.querySelector('strong').textContent;
+            
+            tableRowsHTML += `<tr>
+                <td>${product}</td>
+                <td>${d.qty}</td>
+                <td>${d.cartons}</td>
+                <td>${d.cubicFt || '-'}</td>
+                <td>${d.lineCubic.toFixed(2)}</td>
+                <td><strong>$${alloc.toFixed(2)}</strong></td>
+            </tr>`;
+
+            // Setup inline preview dataset (we'll update the DOM efficiently after)
+            d.cartonText = `${d.cartons} cartons · ${d.lineCubic.toFixed(1)} cu ft`;
+            d.allocText = `≈ $${alloc.toFixed(2)} allocated`;
+        });
+
+        costPreviewBody.innerHTML = tableRowsHTML;
+
+        // Apply string updates efficiently to the lines in DOM
+        lineData.forEach(d => {
+            const cartonEl = d.line.querySelector('.carton-info');
+            const allocEl = d.line.querySelector('.alloc-cost');
+            if (cartonEl) cartonEl.textContent = d.cartonText;
+            if (allocEl) allocEl.textContent = d.allocText;
+        });
+
+        if (costPreviewCard.style.display !== '') {
+            costPreviewCard.style.display = '';
+        }
+    }
+
+    const debouncedUpdateCostPreview = debounce(updateCostPreview, 150);
+    costShippedInput.addEventListener('input', debouncedUpdateCostPreview);
+
+    // Search POs (debounced)
+    const debouncedSearch = debounce(function(term) {
+        document.querySelectorAll('.po-option').forEach(opt => {
+            const text = opt.textContent.toLowerCase();
+            if (term === '' || text.includes(term)) {
+                opt.style.display = '';
+            } else {
+                opt.style.display = 'none';
+            }
+        });
+    }, 150);
+
+    // Search POs
+    document.getElementById('poSearchInput').addEventListener('input', function() {
+        debouncedSearch(this.value.toLowerCase());
+    });
+
+    // Select PO from picker
+    document.querySelectorAll('.po-option').forEach(opt => {
+        opt.addEventListener('click', function() {
+            const poId = this.dataset.poId;
+            if (addedPoIds.has(poId)) { alert('This PO is already added.'); return; }
+            addPoLine(poId, this.dataset.product, this.dataset.asin, 
+                      parseInt(this.dataset.remaining) || 0, parseInt(this.dataset.orderQty) || 0,
+                      this.dataset.pkgQty, this.dataset.cubicFt, this.dataset.manufacturer);
+            poPickerInline.style.display = 'none';
+        });
+    });
+
+    function addPoLine(poId, product, asin, remaining, orderQty, pkgQty, cubicFt, manufacturer) {
+        lineCount++;
+        addedPoIds.add(poId);
+        noLinesMsg.style.display = 'none';
+        submitBtn.disabled = false;
+        
+        const div = document.createElement('div');
+        div.className = 'po-line';
+        div.id = 'poLine_' + lineCount;
+        div.dataset.poId = poId;
+        div.dataset.pkgQty = pkgQty || '1';
+        div.dataset.cubicFt = cubicFt || '';
+        
+        // Cache DOM updates by creating string first
+        const htmlContent = `
+            <div class="d-flex justify-content-between align-items-start">
+                <div class="flex-grow-1">
+                    <div class="d-flex align-items-center mb-1">
+                        <strong>${product}</strong>
+                        ${asin ? '<small class="text-muted ms-2">' + asin + '</small>' : ''}
+                        <span class="badge bg-secondary ms-2">${poId}</span>
+                        ${manufacturer ? '<small class="text-muted ms-2">· ' + manufacturer + '</small>' : ''}
+                    </div>
+                    <div class="row align-items-end">
+                        <div class="col-md-3">
+                            <label class="form-label mb-0" style="font-size: 0.8rem;">Quantity to Ship</label>
+                            <input type="number" class="form-control form-control-sm qty-input" 
+                                   name="quantities[]" min="0" max="${orderQty}" 
+                                   value="${Math.max(0, remaining)}" required>
+                            <small class="text-muted">${remaining} of ${orderQty} remaining</small>
+                        </div>
+                        <div class="col-md-3">
+                            <small class="cost-preview">Pkg: ${pkgQty || '?'} units/ctn</small><br>
+                            <small class="cost-preview">Cubic ft: ${cubicFt || '?'}/ctn</small>
+                        </div>
+                        <div class="col-md-3">
+                            <small class="cost-preview carton-info"></small><br>
+                            <small class="cost-preview alloc-cost"></small>
+                        </div>
+                    </div>
+                </div>
+                <span class="remove-line ms-2" title="Remove" onclick="removePoLine('${poId}', '${div.id}')">
+                    <i class="bi bi-x-circle-fill" style="font-size: 1.2rem;"></i>
+                </span>
+            </div>
+            <input type="hidden" name="po_ids[]" value="${poId}">
+        `;
+        div.innerHTML = htmlContent;
+        container.appendChild(div);
+        
+        // Listen for qty changes to recalculate preview (debounced)
+        div.querySelector('.qty-input').addEventListener('input', debouncedUpdateCostPreview);
+        updateCostPreview();
+    }
+
+    window.removePoLine = function(poId, divId) {
+        document.getElementById(divId).remove();
+        addedPoIds.delete(poId);
+        if (addedPoIds.size === 0) {
+            noLinesMsg.style.display = 'block';
+            submitBtn.disabled = true;
+        }
+        updateCostPreview();
+    };
+
+    // Auto-add pre-selected PO
+    if (preSelectedPo) {
+        const opt = document.querySelector(`.po-option[data-po-id="${preSelectedPo}"]`);
+        if (opt) {
+            addPoLine(preSelectedPo, opt.dataset.product, opt.dataset.asin,
+                      parseInt(opt.dataset.remaining) || 0, parseInt(opt.dataset.orderQty) || 0,
+                      opt.dataset.pkgQty, opt.dataset.cubicFt, opt.dataset.manufacturer);
+        }
+    }
+    
+    // Set today's date as default
+    document.getElementById('shipment_date').value = new Date().toISOString().split('T')[0];
+});
+</script>
+{% endblock %}

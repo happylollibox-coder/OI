@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cube Fields → Page / Label Mapping</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0b;
+      --surface: #141416;
+      --surface-hover: #1c1c1f;
+      --border: #27272a;
+      --text: #fafafa;
+      --text-muted: #a1a1aa;
+      --accent: #3b82f6;
+      --accent-dim: #2563eb;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --page-home: #3b82f6;
+      --page-ads: #ef4444;
+      --page-family: #22c55e;
+      --page-actions: #8b5cf6;
+      --page-keywords: #f59e0b;
+      --page-strategies: #06b6d4;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(10, 10, 11, 0.9);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+    }
+    .header-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .header p {
+      margin: 0.25rem 0 0;
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+    }
+    .search-wrap {
+      flex: 1;
+      min-width: 200px;
+      max-width: 320px;
+    }
+    .search {
+      width: 100%;
+      padding: 0.5rem 1rem 0.5rem 2.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.875rem;
+      font-family: inherit;
+      transition: border-color 0.15s;
+    }
+    .search:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .search::placeholder { color: var(--text-muted); }
+    .search-box { position: relative; }
+    .search-box::before {
+      content: '⌕';
+      position: absolute;
+      left: 0.75rem;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    .main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    .intro {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .intro p {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 0.9375rem;
+    }
+
+    .summary-card {
+      background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.02) 100%);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .summary-card h2 {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--success);
+    }
+    .summary-card p {
+      margin: 0;
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+
+    .cube-section {
+      margin-bottom: 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+    .cube-section.collapsed .cube-body { display: none; }
+    .cube-section.collapsed .chevron { transform: rotate(-90deg); }
+    .cube-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+    .cube-header:hover { background: var(--surface-hover); }
+    .cube-header h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .cube-header .count {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-left: 0.5rem;
+    }
+    .chevron {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      transition: transform 0.2s;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+    }
+    th {
+      text-align: left;
+      padding: 0.75rem 1rem;
+      background: rgba(0,0,0,0.2);
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border);
+    }
+    th:nth-child(1) { width: 28%; }
+    th:nth-child(2) { width: 22%; }
+    th:nth-child(3) { width: 18%; }
+    th:nth-child(4) { width: 32%; }
+    td {
+      padding: 0.625rem 1rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    .cube-field {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      color: var(--accent);
+    }
+    .data-key {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .page-badge {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .page-home { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
+    .page-ads { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+    .page-family { background: rgba(34, 197, 94, 0.2); color: #86efac; }
+    .page-actions { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; }
+    .page-keywords { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+    .page-strategies { background: rgba(6, 182, 212, 0.2); color: #67e8f9; }
+    .page-internal { background: rgba(161, 161, 170, 0.2); color: var(--text-muted); }
+    .label-muted { color: var(--text-muted); font-style: italic; }
+
+    .duplicates-section {
+      margin-top: 3rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+    }
+    .duplicates-section h2 {
+      margin: 0 0 1rem;
+      font-size: 1.125rem;
+      font-weight: 600;
+    }
+    .dup-table th:nth-child(1) { width: 20%; }
+    .dup-table th:nth-child(2) { width: 25%; }
+    .dup-table th:nth-child(3) { width: 20%; }
+    .dup-table th:nth-child(4) { width: 35%; }
+
+    .no-results {
+      padding: 3rem 2rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9375rem;
+    }
+    .no-results.hidden { display: none; }
+
+    @media (max-width: 768px) {
+      .header-inner { flex-direction: column; align-items: stretch; }
+      .search-wrap { max-width: none; }
+      .main { padding: 1rem; }
+      th:nth-child(2) { display: none; }
+      td:nth-child(2) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <div>
+        <h1>Cube Fields → Page / Label Mapping</h1>
+        <p>Trace data lineage and verify no duplicate measures exist</p>
+      </div>
+      <div class="search-wrap">
+        <div class="search-box">
+          <input type="text" class="search" id="search" placeholder="Search cube field, page, or label…" autocomplete="off">
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="intro">
+      <p>This document maps each Cube measure and dimension to the page(s) and UI label(s) where it is displayed.</p>
+    </div>
+
+    <div class="summary-card">
+      <h2>✓ No duplicate measures for the same scope</h2>
+      <p>Different cubes serve different granularities (family vs term vs experiment vs ASIN). Home Ads Spend and Trend ad_cost both use <code>Ads.spend</code> via <code>ads_7d</code>.</p>
+    </div>
+
+    <div id="content">
+      <!-- Ads -->
+      <section class="cube-section" data-cube="Ads">
+        <div class="cube-header">
+          <h2>Ads <span class="count">21 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">Ads.spend</td><td class="data-key">ads_7d[].spend</td><td><span class="page-badge page-home">Home</span></td><td>Ads Spend (KPI, Trend, Per Product Family)</td></tr>
+                <tr><td class="cube-field">Ads.spend</td><td class="data-key">ads_7d[].spend</td><td><span class="page-badge page-ads">Ads</span></td><td>Ads Spend (totals, table)</td></tr>
+                <tr><td class="cube-field">Ads.spend</td><td class="data-key">campaign_search_terms[].spend</td><td><span class="page-badge page-internal">internal</span></td><td class="label-muted">—</td></tr>
+                <tr><td class="cube-field">Ads.orders</td><td class="data-key">ads_7d[].orders</td><td><span class="page-badge page-home">Home</span> <span class="page-badge page-ads">Ads</span></td><td>Ads Orders</td></tr>
+                <tr><td class="cube-field">Ads.clicks</td><td class="data-key">ads_7d[].clicks</td><td><span class="page-badge page-home">Home</span> <span class="page-badge page-ads">Ads</span></td><td>Clicks</td></tr>
+                <tr><td class="cube-field">Ads.impressions</td><td class="data-key">ads_7d[].impressions</td><td><span class="page-badge page-ads">Ads</span></td><td>Impressions</td></tr>
+                <tr><td class="cube-field">Ads.sales</td><td class="data-key">ads_7d[].sales</td><td><span class="page-badge page-ads">Ads</span></td><td>Ads Sales</td></tr>
+                <tr><td class="cube-field">Ads.cogs</td><td class="data-key">ads_7d[].cogs</td><td><span class="page-badge page-ads">Ads</span></td><td>COGS</td></tr>
+                <tr><td class="cube-field">Ads.grossProfit</td><td class="data-key">ads_7d[].grossProfit</td><td><span class="page-badge page-ads">Ads</span></td><td>Gross Profit</td></tr>
+                <tr><td class="cube-field">Ads.date</td><td class="data-key">ads_7d[].date</td><td><span class="page-badge page-internal">filtering</span></td><td class="label-muted">—</td></tr>
+                <tr><td class="cube-field">Ads.campaignId</td><td class="data-key">ads_7d[].campaign_id</td><td><span class="page-badge page-ads">Ads</span></td><td>Campaign ID</td></tr>
+                <tr><td class="cube-field">Ads.campaignName</td><td class="data-key">ads_7d[].campaign_name</td><td><span class="page-badge page-ads">Ads</span></td><td>Campaign Name</td></tr>
+                <tr><td class="cube-field">Ads.campaignType</td><td class="data-key">ads_7d[].campaign_type</td><td><span class="page-badge page-ads">Ads</span></td><td>Campaign Type</td></tr>
+                <tr><td class="cube-field">Ads.searchTerm</td><td class="data-key">ads_7d[].search_term</td><td><span class="page-badge page-ads">Ads</span></td><td>Search Term</td></tr>
+                <tr><td class="cube-field">Product.productShortName</td><td class="data-key">ads_7d[].product_short_name</td><td><span class="page-badge page-ads">Ads</span></td><td>Product</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Summary -->
+      <section class="cube-section" data-cube="Summary">
+        <div class="cube-header">
+          <h2>Summary <span class="count">24 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">Summary.sales7d</td><td class="data-key">summary[].sales_7d</td><td><span class="page-badge page-home">Home</span></td><td>SALES (KPI)</td></tr>
+                <tr><td class="cube-field">Summary.adCost7d</td><td class="data-key">summary[].ad_cost_7d</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(not used for KPI; ads_7d used)</td></tr>
+                <tr><td class="cube-field">Summary.cogs7d</td><td class="data-key">summary[].cogs_7d</td><td><span class="page-badge page-home">Home</span></td><td>COGS (KPI sub, Per Product Family)</td></tr>
+                <tr><td class="cube-field">Summary.netProfit7d</td><td class="data-key">summary[].net_profit_7d</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(computed: sl - cg - co)</td></tr>
+                <tr><td class="cube-field">Summary.orders7d</td><td class="data-key">summary[].orders_7d</td><td><span class="page-badge page-home">Home</span></td><td>Total Orders</td></tr>
+                <tr><td class="cube-field">Summary.organicOrders7d</td><td class="data-key">summary[].organic_orders_7d</td><td><span class="page-badge page-home">Home</span></td><td>Organic Orders</td></tr>
+                <tr><td class="cube-field">Summary.adOrders7d</td><td class="data-key">summary[].ad_orders_7d</td><td><span class="page-badge page-home">Home</span></td><td>Ads Orders</td></tr>
+                <tr><td class="cube-field">Summary.clicks7d</td><td class="data-key">summary[].clicks_7d</td><td><span class="page-badge page-home">Home</span></td><td>Clicks (KPI sub)</td></tr>
+                <tr><td class="cube-field">Summary.sessions7d</td><td class="data-key">summary[].sessions_7d</td><td><span class="page-badge page-home">Home</span></td><td>Sessions (KPI sub)</td></tr>
+                <tr><td class="cube-field">Summary.netRoas</td><td class="data-key">summary[].net_roas</td><td><span class="page-badge page-home">Home</span></td><td>NET ROAS (KPI)</td></tr>
+                <tr><td class="cube-field">Summary.organicPct</td><td class="data-key">summary[].organic_pct</td><td><span class="page-badge page-home">Home</span></td><td>ORGANIC % (KPI)</td></tr>
+                <tr><td class="cube-field">Summary.salesPrev7d</td><td class="data-key">summary[].sales_prev_7d</td><td><span class="page-badge page-home">Home</span></td><td>Sales vs Prev</td></tr>
+                <tr><td class="cube-field">Summary.adCostPrev7d</td><td class="data-key">summary[].ad_cost_prev_7d</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(delta calc)</td></tr>
+                <tr><td class="cube-field">Summary.cogsPrev7d</td><td class="data-key">summary[].cogs_prev_7d</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(delta calc)</td></tr>
+                <tr><td class="cube-field">Summary.netProfitPrev7d</td><td class="data-key">summary[].net_profit_prev_7d</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(delta calc)</td></tr>
+                <tr><td class="cube-field">Summary.ordersPrev7d</td><td class="data-key">summary[].orders_prev_7d</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(delta calc)</td></tr>
+                <tr><td class="cube-field">Summary.organicOrdersPrev7d</td><td class="data-key">summary[].organic_orders_prev_7d</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(delta calc)</td></tr>
+                <tr><td class="cube-field">Summary.netRoasPrev</td><td class="data-key">summary[].net_roas_prev</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(delta calc)</td></tr>
+                <tr><td class="cube-field">Summary.organicPctPrev</td><td class="data-key">summary[].organic_pct_prev</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(delta calc)</td></tr>
+                <tr><td class="cube-field">Summary.salesChangePct</td><td class="data-key">summary[].sales_change_pct</td><td><span class="page-badge page-home">Home</span></td><td>Sales vs Prev</td></tr>
+                <tr><td class="cube-field">Summary.costChangePct</td><td class="data-key">summary[].cost_change_pct</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(delta calc)</td></tr>
+                <tr><td class="cube-field">Summary.periodStart</td><td class="data-key">summary[].period_start</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(date range)</td></tr>
+                <tr><td class="cube-field">Summary.periodEnd</td><td class="data-key">summary[].period_end</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(date range)</td></tr>
+                <tr><td class="cube-field">Summary.productType</td><td class="data-key">summary[].product_type</td><td><span class="page-badge page-home">Home</span></td><td>Family</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- WeeklyTrends -->
+      <section class="cube-section" data-cube="WeeklyTrends">
+        <div class="cube-header">
+          <h2>WeeklyTrends <span class="count">11 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">WeeklyTrends.sales</td><td class="data-key">weekly_trends[].sales</td><td><span class="page-badge page-home">Home</span></td><td>Sales (Trend chart)</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.adCost</td><td class="data-key">weekly_trends[].ad_cost</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(replaced by ads_7d for Trend)</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.cogs</td><td class="data-key">weekly_trends[].cogs</td><td><span class="page-badge page-home">Home</span></td><td>COGS (Trend chart)</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.netProfit</td><td class="data-key">weekly_trends[].net_profit</td><td><span class="page-badge page-home">Home</span></td><td>Net Profit (Trend chart)</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.orders</td><td class="data-key">weekly_trends[].orders</td><td><span class="page-badge page-home">Home</span></td><td>Orders (Trend chart)</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.clicks</td><td class="data-key">weekly_trends[].clicks</td><td><span class="page-badge page-home">Home</span></td><td>Clicks (Trend chart)</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.sessions</td><td class="data-key">weekly_trends[].sessions</td><td><span class="page-badge page-home">Home</span></td><td>Sessions (Trend chart)</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.netRoas</td><td class="data-key">weekly_trends[].net_roas</td><td><span class="page-badge page-home">Home</span></td><td>Ads ROAS (Trend chart)</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.organicPct</td><td class="data-key">weekly_trends[].organic_pct</td><td><span class="page-badge page-home">Home</span></td><td>Organic % (Trend chart)</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.productType</td><td class="data-key">weekly_trends[].product_type</td><td><span class="page-badge page-home">Home</span></td><td>Family</td></tr>
+                <tr><td class="cube-field">WeeklyTrends.weekStart</td><td class="data-key">weekly_trends[].week_start</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(x-axis)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- MonthlyTrends -->
+      <section class="cube-section" data-cube="MonthlyTrends">
+        <div class="cube-header">
+          <h2>MonthlyTrends <span class="count">11 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">MonthlyTrends.sales</td><td class="data-key">monthly_trends[].sales</td><td><span class="page-badge page-home">Home</span></td><td>Sales (Trend chart)</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.adCost</td><td class="data-key">monthly_trends[].ad_cost</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(replaced by ads_7d for Trend)</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.cogs</td><td class="data-key">monthly_trends[].cogs</td><td><span class="page-badge page-home">Home</span></td><td>COGS (Trend chart)</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.netProfit</td><td class="data-key">monthly_trends[].net_profit</td><td><span class="page-badge page-home">Home</span></td><td>Net Profit (Trend chart)</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.orders</td><td class="data-key">monthly_trends[].orders</td><td><span class="page-badge page-home">Home</span></td><td>Orders (Trend chart)</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.clicks</td><td class="data-key">monthly_trends[].clicks</td><td><span class="page-badge page-home">Home</span></td><td>Clicks (Trend chart)</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.sessions</td><td class="data-key">monthly_trends[].sessions</td><td><span class="page-badge page-home">Home</span></td><td>Sessions (Trend chart)</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.netRoas</td><td class="data-key">monthly_trends[].net_roas</td><td><span class="page-badge page-home">Home</span></td><td>Ads ROAS (Trend chart)</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.organicPct</td><td class="data-key">monthly_trends[].organic_pct</td><td><span class="page-badge page-home">Home</span></td><td>Organic % (Trend chart)</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.productType</td><td class="data-key">monthly_trends[].product_type</td><td><span class="page-badge page-home">Home</span></td><td>Family</td></tr>
+                <tr><td class="cube-field">MonthlyTrends.monthStart</td><td class="data-key">monthly_trends[].month_start</td><td><span class="page-badge page-home">Home</span></td><td class="label-muted">(x-axis)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- WeeklyTrendsByAsin -->
+      <section class="cube-section" data-cube="WeeklyTrendsByAsin">
+        <div class="cube-header">
+          <h2>WeeklyTrendsByAsin <span class="count">13 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.sales</td><td class="data-key">weekly_trends_by_asin[].sales</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.adCost</td><td class="data-key">weekly_trends_by_asin[].ad_cost</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.cogs</td><td class="data-key">weekly_trends_by_asin[].cogs</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.netProfit</td><td class="data-key">weekly_trends_by_asin[].net_profit</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.orders</td><td class="data-key">weekly_trends_by_asin[].orders</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.clicks</td><td class="data-key">weekly_trends_by_asin[].clicks</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.sessions</td><td class="data-key">weekly_trends_by_asin[].sessions</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.netRoas</td><td class="data-key">weekly_trends_by_asin[].net_roas</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.organicPct</td><td class="data-key">weekly_trends_by_asin[].organic_pct</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.productType</td><td class="data-key">weekly_trends_by_asin[].product_type</td><td><span class="page-badge page-family">Family</span></td><td>Family</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.asin</td><td class="data-key">weekly_trends_by_asin[].asin</td><td><span class="page-badge page-family">Family</span></td><td>ASIN</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.productShortName</td><td class="data-key">weekly_trends_by_asin[].product_short_name</td><td><span class="page-badge page-family">Family</span></td><td>Product</td></tr>
+                <tr><td class="cube-field">WeeklyTrendsByAsin.weekStart</td><td class="data-key">weekly_trends_by_asin[].week_start</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(x-axis)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- MonthlyTrendsByAsin -->
+      <section class="cube-section" data-cube="MonthlyTrendsByAsin">
+        <div class="cube-header">
+          <h2>MonthlyTrendsByAsin <span class="count">13 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.sales</td><td class="data-key">monthly_trends_by_asin[].sales</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.adCost</td><td class="data-key">monthly_trends_by_asin[].ad_cost</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.cogs</td><td class="data-key">monthly_trends_by_asin[].cogs</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.netProfit</td><td class="data-key">monthly_trends_by_asin[].net_profit</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.orders</td><td class="data-key">monthly_trends_by_asin[].orders</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.clicks</td><td class="data-key">monthly_trends_by_asin[].clicks</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.sessions</td><td class="data-key">monthly_trends_by_asin[].sessions</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.netRoas</td><td class="data-key">monthly_trends_by_asin[].net_roas</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.organicPct</td><td class="data-key">monthly_trends_by_asin[].organic_pct</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(drill-down)</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.productType</td><td class="data-key">monthly_trends_by_asin[].product_type</td><td><span class="page-badge page-family">Family</span></td><td>Family</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.asin</td><td class="data-key">monthly_trends_by_asin[].asin</td><td><span class="page-badge page-family">Family</span></td><td>ASIN</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.productShortName</td><td class="data-key">monthly_trends_by_asin[].product_short_name</td><td><span class="page-badge page-family">Family</span></td><td>Product</td></tr>
+                <tr><td class="cube-field">MonthlyTrendsByAsin.monthStart</td><td class="data-key">monthly_trends_by_asin[].month_start</td><td><span class="page-badge page-family">Family</span></td><td class="label-muted">(x-axis)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ExperimentTermRecommendations -->
+      <section class="cube-section" data-cube="ExperimentTermRecommendations">
+        <div class="cube-header">
+          <h2>ExperimentTermRecommendations <span class="count">38 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsSpend</td><td class="data-key">actions[].spend</td><td><span class="page-badge page-actions">Actions</span></td><td>Ads Spend</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsSpend</td><td class="data-key">drivers[].spend</td><td><span class="page-badge page-family">Family</span></td><td>Ads Spend</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsSpend</td><td class="data-key">keyword_product_map[].spend_60d</td><td><span class="page-badge page-keywords">Keywords</span></td><td>Ads Spend</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsOrders</td><td class="data-key">actions[].orders</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span></td><td>Ads Orders</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsOrders</td><td class="data-key">keyword_product_map[].orders_60d</td><td><span class="page-badge page-keywords">Keywords</span></td><td>Ads Orders</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsClicks</td><td class="data-key">actions[].clicks</td><td><span class="page-badge page-actions">Actions</span></td><td>Ads Clicks</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsClicks</td><td class="data-key">drivers[].clicks</td><td><span class="page-badge page-family">Family</span></td><td>Ads Clicks</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsClicks</td><td class="data-key">keyword_product_map[].clicks_60d</td><td><span class="page-badge page-keywords">Keywords</span></td><td>Ads Clicks</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsImpressions</td><td class="data-key">keyword_product_map[].impressions_60d</td><td><span class="page-badge page-keywords">Keywords</span></td><td>Ads Impr</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.cpc</td><td class="data-key">actions[].cpc</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span> <span class="page-badge page-keywords">Keywords</span></td><td>Ads CPC</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsCvrPct</td><td class="data-key">actions[].conv_rate</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span> <span class="page-badge page-keywords">Keywords</span></td><td>Ads Conv%</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.adsNetRoas</td><td class="data-key">actions[].net_roas</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span> <span class="page-badge page-keywords">Keywords</span></td><td>Ads ROAS</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.yourOrdersSharePct</td><td class="data-key">actions[].impression_share</td><td><span class="page-badge page-actions">Actions</span></td><td>Ads Imp Share</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.yourOrdersSharePct</td><td class="data-key">drivers[].impression_share</td><td><span class="page-badge page-family">Family</span></td><td>Imp Share</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.yourOrdersSharePct</td><td class="data-key">keyword_product_map[].impression_share</td><td><span class="page-badge page-keywords">Keywords</span></td><td>Ads Imp Share</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.marketWeeklyOrders</td><td class="data-key">actions[].market_volume</td><td><span class="page-badge page-actions">Actions</span></td><td>SQP Mkt Vol</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.marketWeeklyOrders</td><td class="data-key">keyword_product_map[].market_volume</td><td><span class="page-badge page-keywords">Keywords</span></td><td>SQP Mkt Vol</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.marginPerUnit</td><td class="data-key">actions[].margin_per_unit</td><td><span class="page-badge page-actions">Actions</span></td><td>Margin/Unit</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.searchTerm</td><td class="data-key">actions[].search_term</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span> <span class="page-badge page-keywords">Keywords</span></td><td>Keyword</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.productShortName</td><td class="data-key">actions[].product_short_name</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span> <span class="page-badge page-keywords">Keywords</span></td><td>Product</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.action</td><td class="data-key">actions[].action</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span> <span class="page-badge page-keywords">Keywords</span></td><td>Action</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.experimentId</td><td class="data-key">actions[].experiment_id</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span> <span class="page-badge page-keywords">Keywords</span></td><td>Experiment</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.heroAsin</td><td class="data-key">keyword_product_map[].hero_asin</td><td><span class="page-badge page-keywords">Keywords</span></td><td>Hero</td></tr>
+                <tr><td class="cube-field">ExperimentTermRecommendations.isHeroMatch</td><td class="data-key">keyword_product_map[].is_hero_match</td><td><span class="page-badge page-keywords">Keywords</span></td><td>Match?</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Sqp -->
+      <section class="cube-section" data-cube="Sqp">
+        <div class="cube-header">
+          <h2>Sqp <span class="count">18 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">Sqp.impressions</td><td class="data-key">sqp[].impressions</td><td><span class="page-badge page-family">Family</span></td><td>Impr</td></tr>
+                <tr><td class="cube-field">Sqp.clicks</td><td class="data-key">sqp[].clicks</td><td><span class="page-badge page-family">Family</span></td><td>SQP Clicks</td></tr>
+                <tr><td class="cube-field">Sqp.orders</td><td class="data-key">sqp[].orders</td><td><span class="page-badge page-family">Family</span></td><td>SQP Orders</td></tr>
+                <tr><td class="cube-field">Sqp.amazonImpressions</td><td class="data-key">sqp_volume_4w</td><td><span class="page-badge page-family">Family</span></td><td>SQP Mkt Vol</td></tr>
+                <tr><td class="cube-field">Sqp.searchQuery</td><td class="data-key">sqp[].search_term</td><td><span class="page-badge page-family">Family</span></td><td>Keyword</td></tr>
+                <tr><td class="cube-field">Sqp.asin</td><td class="data-key">sqp[].asin</td><td><span class="page-badge page-family">Family</span></td><td>ASIN</td></tr>
+                <tr><td class="cube-field">Sqp.showRatePct</td><td class="data-key">sqp[].show_rate_pct</td><td><span class="page-badge page-family">Family</span></td><td>Best Share</td></tr>
+                <tr><td class="cube-field">Sqp.estimatedOrganicRank</td><td class="data-key">sqp[].estimated_organic_rank</td><td><span class="page-badge page-family">Family</span></td><td>Best Page</td></tr>
+                <tr><td class="cube-field">Product.productShortName</td><td class="data-key">sqp[].product_short_name</td><td><span class="page-badge page-family">Family</span></td><td>Product</td></tr>
+                <tr><td class="cube-field">Product.productType</td><td class="data-key">sqp[].product_type</td><td><span class="page-badge page-family">Family</span></td><td>Family</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ParentHeroAsin -->
+      <section class="cube-section" data-cube="ParentHeroAsin">
+        <div class="cube-header">
+          <h2>ParentHeroAsin <span class="count">13 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">ParentHeroAsin.adsSpend</td><td class="data-key">hero_asins[].ads_spend</td><td><span class="page-badge page-family">Family</span></td><td>Ads Spend</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.adsOrders</td><td class="data-key">hero_asins[].ads_orders</td><td><span class="page-badge page-family">Family</span></td><td>Ads Orders</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.adsClicks</td><td class="data-key">hero_asins[].ads_clicks</td><td><span class="page-badge page-family">Family</span></td><td>Ads Clicks</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.adsNetRoas</td><td class="data-key">hero_asins[].ads_net_roas</td><td><span class="page-badge page-family">Family</span></td><td>Ads ROAS</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.sqpImpressions</td><td class="data-key">hero_asins[].sqp_impressions</td><td><span class="page-badge page-family">Family</span></td><td>SQP Impr</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.sqpClicks</td><td class="data-key">hero_asins[].sqp_clicks</td><td><span class="page-badge page-family">Family</span></td><td>SQP Clicks</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.sqpConversions</td><td class="data-key">hero_asins[].sqp_conversions</td><td><span class="page-badge page-family">Family</span></td><td>SQP Conv</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.sqpCtrPct</td><td class="data-key">hero_asins[].sqp_ctr_pct</td><td><span class="page-badge page-family">Family</span></td><td>SQP CTR</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.sqpCvrPct</td><td class="data-key">hero_asins[].sqp_cvr_pct</td><td><span class="page-badge page-family">Family</span></td><td>SQP CVR</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.asin</td><td class="data-key">hero_asins[].asin</td><td><span class="page-badge page-family">Family</span></td><td>ASIN</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.searchTerm</td><td class="data-key">hero_asins[].search_term</td><td><span class="page-badge page-family">Family</span></td><td>Keyword</td></tr>
+                <tr><td class="cube-field">ParentHeroAsin.productShortName</td><td class="data-key">hero_asins[].product_short_name</td><td><span class="page-badge page-family">Family</span></td><td>Product</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ExperimentTemplates -->
+      <section class="cube-section" data-cube="ExperimentTemplates">
+        <div class="cube-header">
+          <h2>ExperimentTemplates <span class="count">14 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">ExperimentTemplates.totalSpend</td><td class="data-key">experiment_templates[].total_spend</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Ads Spend</td></tr>
+                <tr><td class="cube-field">ExperimentTemplates.totalOrders</td><td class="data-key">experiment_templates[].total_orders</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Ads Orders</td></tr>
+                <tr><td class="cube-field">ExperimentTemplates.totalSales</td><td class="data-key">experiment_templates[].total_sales</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Sales</td></tr>
+                <tr><td class="cube-field">ExperimentTemplates.netRoas</td><td class="data-key">experiment_templates[].net_roas</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Ads ROAS</td></tr>
+                <tr><td class="cube-field">ExperimentTemplates.convRate</td><td class="data-key">experiment_templates[].conv_rate</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Ads Conv%</td></tr>
+                <tr><td class="cube-field">ExperimentTemplates.cpc</td><td class="data-key">experiment_templates[].cpc</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Ads CPC</td></tr>
+                <tr><td class="cube-field">ExperimentTemplates.uniqueSearchTerms</td><td class="data-key">experiment_templates[].unique_search_terms</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Terms</td></tr>
+                <tr><td class="cube-field">ExperimentTemplates.experimentId</td><td class="data-key">experiment_templates[].experiment_id</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Experiment</td></tr>
+                <tr><td class="cube-field">ExperimentTemplates.experimentName</td><td class="data-key">experiment_templates[].experiment_name</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Experiment</td></tr>
+                <tr><td class="cube-field">ExperimentTemplates.daysRunning</td><td class="data-key">experiment_templates[].days_running</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Days</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ExperimentDaily -->
+      <section class="cube-section" data-cube="ExperimentDaily">
+        <div class="cube-header">
+          <h2>ExperimentDaily <span class="count">6 rows</span></h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cube-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cube Field</th><th>Data Key</th><th>Page</th><th>Label</th></tr></thead>
+              <tbody>
+                <tr><td class="cube-field">ExperimentDaily.performanceTotalSales</td><td class="data-key">experiment_daily (aggregated)</td><td><span class="page-badge page-internal">internal</span></td><td class="label-muted">(internal)</td></tr>
+                <tr><td class="cube-field">ExperimentDaily.adsAllCost</td><td class="data-key">experiment_daily (aggregated)</td><td><span class="page-badge page-internal">internal</span></td><td class="label-muted">(internal)</td></tr>
+                <tr><td class="cube-field">ExperimentDaily.performanceTotalOrders</td><td class="data-key">experiment_daily (aggregated)</td><td><span class="page-badge page-internal">internal</span></td><td class="label-muted">(internal)</td></tr>
+                <tr><td class="cube-field">ExperimentDaily.adsAllOrders</td><td class="data-key">experiment_daily (aggregated)</td><td><span class="page-badge page-internal">internal</span></td><td class="label-muted">(internal)</td></tr>
+                <tr><td class="cube-field">ExperimentDaily.performanceOrganicOrders</td><td class="data-key">experiment_daily (aggregated)</td><td><span class="page-badge page-internal">internal</span></td><td class="label-muted">(internal)</td></tr>
+                <tr><td class="cube-field">ExperimentDaily.performanceSessions</td><td class="data-key">experiment_daily (aggregated)</td><td><span class="page-badge page-internal">internal</span></td><td class="label-muted">(internal)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="duplicates-section">
+      <h2>Duplicate Measures Summary</h2>
+      <div class="table-wrap">
+        <table class="dup-table">
+          <thead><tr><th>Semantic Measure</th><th>Cube Source(s)</th><th>Page(s)</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td class="cube-field">Ads Spend</td><td>Ads.spend</td><td><span class="page-badge page-home">Home</span> <span class="page-badge page-ads">Ads</span></td><td>Single source; KPI, Trend, Per Product Family</td></tr>
+            <tr><td class="cube-field">Ads Spend</td><td>Summary.adCost7d</td><td class="label-muted">—</td><td>Not used for KPI; Home uses ads_7d</td></tr>
+            <tr><td class="cube-field">Ads Spend</td><td>WeeklyTrends.adCost, MonthlyTrends.adCost</td><td class="label-muted">—</td><td>Replaced by ads_7d for Trend chart</td></tr>
+            <tr><td class="cube-field">Ads Spend</td><td>ExperimentTermRecommendations.adsSpend</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span> <span class="page-badge page-keywords">Keywords</span></td><td>Different scope (60d, by term)</td></tr>
+            <tr><td class="cube-field">Ads Spend</td><td>ExperimentTemplates.totalSpend</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Per experiment</td></tr>
+            <tr><td class="cube-field">Ads Spend</td><td>ParentHeroAsin.adsSpend</td><td><span class="page-badge page-family">Family</span></td><td>Per hero ASIN</td></tr>
+            <tr><td class="cube-field">Sales</td><td>Summary.sales7d</td><td><span class="page-badge page-home">Home</span></td><td>KPI</td></tr>
+            <tr><td class="cube-field">Sales</td><td>WeeklyTrends.sales, MonthlyTrends.sales</td><td><span class="page-badge page-home">Home</span></td><td>Trend chart</td></tr>
+            <tr><td class="cube-field">Sales</td><td>Ads.sales</td><td><span class="page-badge page-ads">Ads</span></td><td>Ad-attributed only</td></tr>
+            <tr><td class="cube-field">Net Profit</td><td>Summary.netProfit7d</td><td class="label-muted">—</td><td>Computed as sl - cg - co on Home</td></tr>
+            <tr><td class="cube-field">Net Profit</td><td>WeeklyTrends.netProfit, MonthlyTrends.netProfit</td><td><span class="page-badge page-home">Home</span></td><td>Trend (uses ads_7d for ad_cost)</td></tr>
+            <tr><td class="cube-field">Net ROAS</td><td>Summary.netRoas</td><td><span class="page-badge page-home">Home</span></td><td>KPI</td></tr>
+            <tr><td class="cube-field">Net ROAS</td><td>WeeklyTrends.netRoas, MonthlyTrends.netRoas</td><td><span class="page-badge page-home">Home</span></td><td>Trend chart</td></tr>
+            <tr><td class="cube-field">Net ROAS</td><td>ExperimentTermRecommendations.adsNetRoas</td><td><span class="page-badge page-actions">Actions</span> <span class="page-badge page-family">Family</span> <span class="page-badge page-keywords">Keywords</span></td><td>Per term</td></tr>
+            <tr><td class="cube-field">Net ROAS</td><td>ExperimentTemplates.netRoas</td><td><span class="page-badge page-strategies">Strategies</span></td><td>Per experiment</td></tr>
+            <tr><td class="cube-field">Net ROAS</td><td>ParentHeroAsin.adsNetRoas</td><td><span class="page-badge page-family">Family</span></td><td>Per hero</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="no-results hidden" id="noResults">
+      No matching rows. Try a different search term.
+    </div>
+  </main>
+
+  <script>
+    (function() {
+      const search = document.getElementById('search');
+      const content = document.getElementById('content');
+      const noResults = document.getElementById('noResults');
+      const sections = content.querySelectorAll('.cube-section');
+
+      // Collapse/expand
+      sections.forEach(s => {
+        s.querySelector('.cube-header').addEventListener('click', () => {
+          s.classList.toggle('collapsed');
+        });
+      });
+
+      // Search
+      search.addEventListener('input', () => {
+        const q = search.value.trim().toLowerCase();
+        let visibleCount = 0;
+        sections.forEach(section => {
+          const rows = section.querySelectorAll('tbody tr');
+          let sectionMatch = false;
+          rows.forEach(row => {
+            const text = row.textContent.toLowerCase();
+            const match = !q || text.includes(q);
+            row.style.display = match ? '' : 'none';
+            if (match) { sectionMatch = true; visibleCount++; }
+          });
+          section.style.display = sectionMatch ? '' : 'none';
+        });
+        noResults.classList.toggle('hidden', !q || visibleCount > 0);
+      });
+    })();
+  </script>
+</body>
+</html>

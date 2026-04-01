@@ -1,0 +1,44 @@
+---
+description: All changes must be tested before completion
+alwaysApply: true
+---
+
+# Testing Required Rule
+
+**All changes to the OI codebase must be tested before the task is considered complete.**
+
+## Scope
+
+This rule applies to:
+- BigQuery schema changes (tables, views, procedures, migrations)
+- Data model changes (new facts, bridge connections, join keys)
+- ETL/load procedure changes
+- Any change that affects data flow or integrity
+
+## Required Actions
+
+1. **Before completing a task**: Run the relevant validation/test scripts.
+2. **For data model changes**: Run `scripts/bigquery/validation/VALIDATE_DATA_INTEGRITY.sql` after deployment.
+3. **For fact/bridge changes**: Ensure `VALIDATE_DATA_INTEGRITY.sql` passes (no missing keys, no duplicate PKs).
+4. **For existing test suites**: Run `scripts/bigquery/tests/RUN_ALL_TESTS.sql` or the unit tests in `scripts/bigquery/tests/unit/`.
+
+## Validation Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/bigquery/validation/VALIDATE_DATA_INTEGRITY.sql` | Bridge ↔ facts, Ads_key, duplicate checks |
+| `scripts/bigquery/tests/RUN_ALL_TESTS.sql` | Search performance, ad_key, factless_key integrity |
+| `scripts/bigquery/tests/TEST_ADS_KEY_CONNECTION.sql` | Performance ↔ Ads Ads_key connection |
+| `scripts/bigquery/runner/RUN_POPULATE_FACTLESS_BRIDGE.sql` | Bridge population + verification |
+
+## Run Command
+
+```bash
+bq query --use_legacy_sql=false --project_id=onyga-482313 < scripts/bigquery/validation/VALIDATE_DATA_INTEGRITY.sql
+```
+
+## Definition of Done
+
+A task is **not complete** until:
+- All relevant tests pass, OR
+- Failures are documented with a known/acceptable reason (e.g. "Ads/Performance misalignment is expected per Amazon data")

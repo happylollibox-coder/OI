@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Login - OI Data Entry{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h4><i class="bi bi-shield-lock"></i> Login Required</h4>
+            </div>
+            <div class="card-body text-center">
+                <p class="lead">Please sign in with your Google account to access the OI Data Entry application.</p>
+                <a href="{{ url_for('auth_google') }}" class="btn btn-primary btn-lg">
+                    <i class="bi bi-google"></i> Sign in with Google
+                </a>
+                <hr>
+                <p class="text-muted small">
+                    Only authorized users can access this application.
+                    <br>Authorized emails: happylollibox@gmail.com, adva.tal2@gmail.com
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

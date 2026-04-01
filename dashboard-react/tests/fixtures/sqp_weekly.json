@@ -1,0 +1,4 @@
+[
+  {"product_type": "Lollibox", "week_start": "2026-02-19", "asin": "B001", "product_short_name": "Test", "orders": 80, "clicks": 1800, "ads_orders": 50},
+  {"product_type": "Lollibox", "week_start": "2026-02-26", "asin": "B001", "product_short_name": "Test", "orders": 100, "clicks": 2000, "ads_orders": 60}
+]

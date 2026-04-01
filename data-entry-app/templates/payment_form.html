@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}New Vendor Payment - OI Data Entry Forms{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4"><i class="bi bi-credit-card"></i> New Vendor Payment</h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-8 offset-lg-2">
+        <div class="card">
+            <div class="card-header">
+                Payment Information
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('new_payment') }}" id="paymentForm">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="purchase_order_id" class="form-label required-field">Purchase Order ID</label>
+                                <input type="text" class="form-control" id="purchase_order_id" name="purchase_order_id" required 
+                                       value="{{ po_id }}" placeholder="Enter the Purchase Order ID">
+                                <small class="form-text text-muted">Link this payment to a purchase order</small>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="payment_date" class="form-label required-field">Payment Date</label>
+                                <input type="date" class="form-control" id="payment_date" name="payment_date" required>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="payment_amount" class="form-label required-field">Payment Amount</label>
+                                <input type="number" class="form-control" id="payment_amount" name="payment_amount" step="0.01" min="0" required>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="bank_fee" class="form-label">Bank Fee</label>
+                                <input type="number" class="form-control" id="bank_fee" name="bank_fee" step="0.01" min="0" value="0">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="currency" class="form-label">Currency</label>
+                                <select class="form-select" id="currency" name="currency">
+                                    <option value="USD" selected>USD</option>
+                                    <option value="ILS">ILS</option>
+                                    <option value="HKD">HKD</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="payment_method" class="form-label">Payment Method</label>
+                                <select class="form-select" id="payment_method" name="payment_method">
+                                    <option value="">-- Select --</option>
+                                    <option value="Account Payoneer">Account Payoneer</option>
+                                    <option value="Bank Leumi Business">Bank Leumi Business</option>
+                                    <option value="Bank Leumi Private">Bank Leumi Private</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-12">
+                            <div class="mb-3">
+                                <label class="form-label required-field">Vendor Name</label>
+                                <div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="checkbox" id="vendor_sylvia" name="vendor_name" value="SYLVIA">
+                                        <label class="form-check-label" for="vendor_sylvia">SYLVIA</label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="checkbox" id="vendor_anna" name="vendor_name" value="ANNA">
+                                        <label class="form-check-label" for="vendor_anna">ANNA</label>
+                                    </div>
+                                </div>
+                                <small class="form-text text-muted">Select one or more vendors</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="notes" class="form-label">Notes</label>
+                        <textarea class="form-control" id="notes" name="notes" rows="3" placeholder="Any additional information..."></textarea>
+                    </div>
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        {% if po_id %}
+                        <a href="{{ url_for('po_details', po_id=po_id) }}" class="btn btn-secondary me-md-2">Cancel</a>
+                        {% else %}
+                        <a href="{{ url_for('index') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                        {% endif %}
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-save"></i> Save Payment
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('paymentForm');
+    const vendorCheckboxes = document.querySelectorAll('input[name="vendor_name"]');
+    
+    // Validate at least one vendor is selected
+    form.addEventListener('submit', function(e) {
+        const checkedVendors = Array.from(vendorCheckboxes).filter(cb => cb.checked);
+        if (checkedVendors.length === 0) {
+            e.preventDefault();
+            alert('Please select at least one vendor.');
+            return false;
+        }
+    });
+});
+</script>
+{% endblock %}
+{% endblock %}

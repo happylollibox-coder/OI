@@ -1,0 +1,487 @@
+-- =============================================
+-- OI Database Project - SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY Stored Procedure
+-- =============================================
+--
+-- Purpose: Load FACT_AMAZON_PERFORMANCE_DAILY with data from STG_AMAZON_ADS and organic deltas from STG_AMAZON_PERFORMANCE
+-- Pattern: TRUNCATE + INSERT (full refresh)
+-- Project: onyga-482313
+-- Dataset: OI
+--
+-- Logic:
+-- 1. TRUNCATE FACT_AMAZON_PERFORMANCE_DAILY
+-- 2. INSERT all rows from STG_AMAZON_ADS with Performance_TYPE='Ads'
+-- 3. Calculate and INSERT sales delta records (Performance - Ads) grouped by child_asin/date
+-- 4. Calculate and INSERT clicks delta records (Performance - Ads) grouped by child_asin/date
+-- 5. Update DATA_QUALITY_STATUS for all records based on data quality checks
+--
+-- =============================================
+
+CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY`()
+OPTIONS (
+  description = "Load FACT_AMAZON_PERFORMANCE_DAILY with Ads data from STG_AMAZON_ADS and organic delta calculations from STG_AMAZON_PERFORMANCE. TRUNCATEs table and inserts Ads records, then calculates and inserts organic delta records, then updates DATA_QUALITY_STATUS."
+)
+BEGIN
+  -- Declare variables for logging
+  DECLARE ads_record_count INT64 DEFAULT 0;
+  DECLARE sales_delta_count INT64 DEFAULT 0;
+  DECLARE clicks_delta_count INT64 DEFAULT 0;
+  DECLARE start_time TIMESTAMP;
+  DECLARE end_time TIMESTAMP;
+
+  SET start_time = CURRENT_TIMESTAMP();
+
+  -- Step 1: TRUNCATE the fact table
+  TRUNCATE TABLE `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`;
+
+  -- Step 2: INSERT all rows from STG_AMAZON_ADS with Performance_TYPE='Ads'
+  -- Split rows by unique ASINs from three columns, combine if same ASIN in multiple columns
+  INSERT INTO `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY` (
+    date,
+    campaign_id,
+    campaign_name,
+    campaign_type,
+    inferred_sales_module,
+    ad_group_id,
+    keyword_id,
+    ad_keyword_status,
+    targeting,
+    search_term,
+    impressions,
+    clicks,
+    orders,
+    units,
+    cost,
+    sales,
+    placement_type,
+    advertised_asins,
+    advertised_asins_count,
+    most_advertised_asin,
+    _fivetran_synced,
+    source_table,
+    data_SOURCE,
+    Performance_TYPE,
+    DATA_QUALITY_STATUS,
+    CLICKS_DAILY_UNIQUE,
+    factless_key
+  )
+  SELECT 
+    date,
+    campaign_id,
+    campaign_name,
+    campaign_type,
+    inferred_sales_module,
+    ad_group_id,
+    keyword_id,
+    ad_keyword_status,
+    targeting,
+    search_term,
+    impressions,
+    clicks,
+    orders,
+    units,
+    cost,
+    sales,
+    placement_type,
+    advertised_asins,
+    advertised_asins_count,
+    asin AS most_advertised_asin,
+    _fivetran_synced,
+    source_table,
+    'STG_AMAZON_ADS' AS data_SOURCE,
+    'Ads' AS Performance_TYPE,
+    'OK' AS DATA_QUALITY_STATUS,
+    NULL AS CLICKS_DAILY_UNIQUE,
+    CONCAT(CAST(CAST(FORMAT_DATE('%Y%m%d', date) AS INT64) AS STRING), '-', COALESCE(asin, 'UNKNOWN')) AS factless_key
+  FROM (
+    -- Unpivot the three ASIN columns and combine measures
+    -- Only include ASINs that exist in STG_AMAZON_PERFORMANCE (source of truth)
+    -- Cap ads sales at performance amount to prevent over-counting when ads > performance
+    WITH unpivoted_ads AS (
+    SELECT 
+      date,
+      campaign_id,
+      campaign_name,
+      campaign_type,
+      inferred_sales_module,
+      ad_group_id,
+      keyword_id,
+      ad_keyword_status,
+      targeting,
+      search_term,
+      placement_type,
+      advertised_asins,
+      advertised_asins_count,
+      _fivetran_synced,
+      source_table,
+      asin,
+        measure_type,
+        impressions,
+        clicks,
+        orders,
+        units,
+        cost,
+        sales
+    FROM `onyga-482313.OI.STG_AMAZON_ADS`
+    UNPIVOT (asin FOR measure_type IN (
+      most_advertised_asin_impressions AS 'impressions',
+      most_advertised_asin_clicks AS 'clicks',
+      most_advertised_asin_purchased AS 'purchased'
+    ))
+    WHERE asin IS NOT NULL
+    ),
+    grouped_ads AS (
+      SELECT 
+        u.date,
+        u.campaign_id,
+        u.campaign_name,
+        u.campaign_type,
+        u.inferred_sales_module,
+        u.ad_group_id,
+        u.keyword_id,
+        u.ad_keyword_status,
+        u.targeting,
+        u.search_term,
+        u.placement_type,
+        u.advertised_asins,
+        u.advertised_asins_count,
+        u.asin,
+        u._fivetran_synced,
+        u.source_table,
+        MAX(CASE WHEN u.measure_type = 'impressions' THEN u.impressions ELSE NULL END) AS impressions,
+        MAX(CASE WHEN u.measure_type = 'clicks' THEN u.clicks ELSE NULL END) AS clicks,
+        SUM(CASE WHEN u.measure_type = 'purchased' THEN u.orders ELSE 0 END) AS orders,
+        SUM(CASE WHEN u.measure_type = 'purchased' THEN u.units ELSE 0 END) AS units,
+        SUM(CASE WHEN u.measure_type = 'purchased' THEN u.cost ELSE 0 END) AS cost,
+        SUM(CASE WHEN u.measure_type = 'purchased' THEN u.sales ELSE 0 END) AS ads_sales_raw
+      FROM unpivoted_ads u
+      INNER JOIN (
+        SELECT DISTINCT child_asin AS asin, date
+        FROM `onyga-482313.OI.STG_AMAZON_PERFORMANCE`
+        WHERE IS_LOADED = TRUE
+      ) perf
+        ON u.asin = perf.asin
+        AND u.date = perf.date
+      GROUP BY 
+        u.date, u.campaign_id, u.campaign_name, u.campaign_type, u.inferred_sales_module,
+        u.ad_group_id, u.keyword_id, u.ad_keyword_status, u.targeting, u.search_term,
+        u.placement_type, u.advertised_asins, u.advertised_asins_count, u.asin,
+        u._fivetran_synced, u.source_table
+    ),
+    asin_capped_totals AS (
+      -- Calculate capped total per ASIN/date
+      SELECT 
+        g.asin,
+        g.date,
+        SUM(g.ads_sales_raw) AS total_ads_sales_raw,
+        LEAST(SUM(g.ads_sales_raw), COALESCE(perf.SALES_AMOUNT, SUM(g.ads_sales_raw))) AS capped_total
+      FROM grouped_ads g
+      LEFT JOIN (
+        SELECT child_asin AS asin, date, SALES_AMOUNT
+        FROM `onyga-482313.OI.STG_AMAZON_PERFORMANCE`
+        WHERE IS_LOADED = TRUE
+      ) perf
+        ON g.asin = perf.asin
+        AND g.date = perf.date
+      GROUP BY g.asin, g.date, perf.SALES_AMOUNT
+    )
+    SELECT 
+      g.date,
+      g.campaign_id,
+      g.campaign_name,
+      g.campaign_type,
+      g.inferred_sales_module,
+      g.ad_group_id,
+      g.keyword_id,
+      g.ad_keyword_status,
+      g.targeting,
+      g.search_term,
+      g.placement_type,
+      g.advertised_asins,
+      g.advertised_asins_count,
+      g._fivetran_synced,
+      g.source_table,
+      g.asin,
+      g.impressions,
+      g.clicks,
+      g.orders,
+      g.units,
+      g.cost,
+      -- Proportionally distribute capped total across groups
+      CASE 
+        WHEN cap.total_ads_sales_raw > 0 
+        THEN g.ads_sales_raw * (cap.capped_total / cap.total_ads_sales_raw)
+        ELSE 0
+      END AS sales
+    FROM grouped_ads g
+    INNER JOIN asin_capped_totals cap
+      ON g.asin = cap.asin
+      AND g.date = cap.date
+  );
+
+  SET ads_record_count = @@row_count;
+
+
+  -- Step 3: INSERT combined organic delta records (sales + clicks in one row per ASIN/date)
+  INSERT INTO `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY` (
+    date,
+    campaign_id,
+    campaign_name,
+    campaign_type,
+    inferred_sales_module,
+    ad_group_id,
+    keyword_id,
+    ad_keyword_status,
+    targeting,
+    search_term,
+    impressions,
+    clicks,
+    orders,
+    units,
+    cost,
+    sales,
+    placement_type,
+    advertised_asins,
+    advertised_asins_count,
+    most_advertised_asin,
+    _fivetran_synced,
+    source_table,
+    data_SOURCE,
+    Performance_TYPE,
+    DATA_QUALITY_STATUS,
+    CLICKS_DAILY_UNIQUE,
+    factless_key
+  )
+  SELECT 
+    COALESCE(sales.date, clicks.date) AS date,
+    NULL AS campaign_id,
+    NULL AS campaign_name,
+    NULL AS campaign_type,
+    NULL AS inferred_sales_module,
+    NULL AS ad_group_id,
+    NULL AS keyword_id,
+    NULL AS ad_keyword_status,
+    NULL AS targeting,
+    NULL AS search_term,
+    NULL AS impressions,
+    COALESCE(clicks.delta_clicks, 0) AS clicks,
+    COALESCE(sales.delta_orders, 0) AS orders,
+    COALESCE(sales.delta_quantity, 0) AS units,
+    0 AS cost,
+    COALESCE(sales.delta_amount, 0) AS sales,
+    NULL AS placement_type,
+    NULL AS advertised_asins,
+    NULL AS advertised_asins_count,
+    COALESCE(sales.child_asin, clicks.child_asin) AS most_advertised_asin,
+    NULL AS _fivetran_synced,
+    'STG_AMAZON_PERFORMANCE' AS source_table,
+    'STG_AMAZON_PERFORMANCE' AS data_SOURCE,
+    'Organic' AS Performance_TYPE,
+    -- Build DATA_QUALITY_STATUS with warnings from both sales and clicks
+    TRIM(
+      CONCAT(
+        CASE WHEN sales.has_negative_quantity THEN 'Negative delta for SALES_QUANTITY; ' ELSE '' END,
+        CASE WHEN sales.has_negative_amount THEN 'Negative delta for SALES_AMOUNT; ' ELSE '' END,
+        CASE WHEN sales.has_negative_orders THEN 'Negative delta for SALES_ORDERS; ' ELSE '' END,
+        CASE WHEN clicks.has_negative_clicks THEN 'Negative delta for CLICKS; ' ELSE '' END,
+        CASE WHEN clicks.has_negative_clicks_daily_unique THEN 'Negative delta for CLICKS_DAILY_UNIQUE; ' ELSE '' END,
+        CASE WHEN sales.ads_units_greater THEN 'Ads SALES_QUANTITY in ads greater than total; ' ELSE '' END,
+        CASE WHEN sales.ads_sales_greater THEN 'Ads SALES_AMOUNT in ads greater than total; ' ELSE '' END,
+        CASE WHEN sales.ads_orders_greater THEN 'Ads SALES_ORDERS in ads greater than total; ' ELSE '' END,
+        CASE WHEN clicks.ads_clicks_greater THEN 'Ads CLICKS in ads greater than total; ' ELSE '' END,
+        CASE WHEN clicks.ads_clicks_daily_unique_greater THEN 'Ads CLICKS_DAILY_UNIQUE in ads greater than total; ' ELSE '' END
+      )
+    ) AS DATA_QUALITY_STATUS,
+    COALESCE(clicks.delta_clicks_daily_unique, 0) AS CLICKS_DAILY_UNIQUE,
+    CONCAT(CAST(CAST(FORMAT_DATE('%Y%m%d', COALESCE(sales.date, clicks.date)) AS INT64) AS STRING), '-', COALESCE(COALESCE(sales.child_asin, clicks.child_asin), 'UNKNOWN')) AS factless_key
+  FROM (
+    -- Sales delta CTE
+    -- Only include ASINs that exist in STG_AMAZON_PERFORMANCE (source of truth)
+    -- Filter to only dates that exist in STG_AMAZON_PERFORMANCE to avoid including orphaned ads
+    WITH perf_dates AS (
+      SELECT DISTINCT date
+      FROM `onyga-482313.OI.STG_AMAZON_PERFORMANCE`
+      WHERE IS_LOADED = TRUE
+    ),
+    ads_sales_agg AS (
+      SELECT 
+        ads.most_advertised_asin_purchased AS asin,
+        ads.date,
+        SUM(ads.orders) AS ads_orders,
+        SUM(ads.units) AS ads_units,
+        SUM(ads.sales) AS ads_sales
+      FROM `onyga-482313.OI.STG_AMAZON_ADS` ads
+      INNER JOIN perf_dates pd
+        ON ads.date = pd.date
+      INNER JOIN (
+        SELECT DISTINCT child_asin AS asin, date
+        FROM `onyga-482313.OI.STG_AMAZON_PERFORMANCE`
+        WHERE IS_LOADED = TRUE
+      ) perf
+        ON ads.most_advertised_asin_purchased = perf.asin
+        AND ads.date = perf.date
+      WHERE ads.most_advertised_asin_purchased IS NOT NULL
+      GROUP BY ads.most_advertised_asin_purchased, ads.date
+    )
+    SELECT 
+      perf.child_asin,
+      perf.date,
+      perf.SALES_QUANTITY,
+      perf.SALES_AMOUNT,
+      perf.SALES_ORDERS,
+      -- Cap ads values at performance values to prevent over-counting
+      LEAST(COALESCE(ads.ads_units, 0), perf.SALES_QUANTITY) AS ads_units,
+      LEAST(COALESCE(ads.ads_sales, 0), perf.SALES_AMOUNT) AS ads_sales,
+      LEAST(COALESCE(ads.ads_orders, 0), perf.SALES_ORDERS) AS ads_orders,
+      GREATEST(0, perf.SALES_QUANTITY - LEAST(COALESCE(ads.ads_units, 0), perf.SALES_QUANTITY)) AS delta_quantity,
+      GREATEST(0, perf.SALES_AMOUNT - LEAST(COALESCE(ads.ads_sales, 0), perf.SALES_AMOUNT)) AS delta_amount,
+      GREATEST(0, perf.SALES_ORDERS - LEAST(COALESCE(ads.ads_orders, 0), perf.SALES_ORDERS)) AS delta_orders,
+      (perf.SALES_QUANTITY - COALESCE(ads.ads_units, 0)) < 0 AS has_negative_quantity,
+      (perf.SALES_AMOUNT - COALESCE(ads.ads_sales, 0)) < 0 AS has_negative_amount,
+      (perf.SALES_ORDERS - COALESCE(ads.ads_orders, 0)) < 0 AS has_negative_orders,
+      COALESCE(ads.ads_units, 0) > perf.SALES_QUANTITY AS ads_units_greater,
+      COALESCE(ads.ads_sales, 0) > perf.SALES_AMOUNT AS ads_sales_greater,
+      COALESCE(ads.ads_orders, 0) > perf.SALES_ORDERS AS ads_orders_greater,
+      -- Store original ads values (before capping) for data quality tracking
+      COALESCE(ads.ads_units, 0) AS original_ads_units,
+      COALESCE(ads.ads_sales, 0) AS original_ads_sales,
+      COALESCE(ads.ads_orders, 0) AS original_ads_orders
+    FROM `onyga-482313.OI.STG_AMAZON_PERFORMANCE` perf
+    LEFT JOIN ads_sales_agg ads
+      ON perf.child_asin = ads.asin
+      AND perf.date = ads.date
+    WHERE (perf.SALES_QUANTITY > 0 OR perf.SALES_AMOUNT > 0 OR perf.SALES_ORDERS > 0)
+      AND perf.IS_LOADED = TRUE
+  ) sales
+  FULL OUTER JOIN (
+    -- Clicks delta CTE
+    -- Only include ASINs that exist in STG_AMAZON_PERFORMANCE (source of truth)
+    -- Filter to only dates that exist in STG_AMAZON_PERFORMANCE to avoid including orphaned ads
+    WITH perf_dates AS (
+      SELECT DISTINCT date
+      FROM `onyga-482313.OI.STG_AMAZON_PERFORMANCE`
+      WHERE IS_LOADED = TRUE
+    ),
+    ads_clicks_agg AS (
+      SELECT 
+        ads.most_advertised_asin_clicks AS asin,
+        ads.date,
+        SUM(ads.clicks) AS ads_clicks
+      FROM `onyga-482313.OI.STG_AMAZON_ADS` ads
+      INNER JOIN perf_dates pd
+        ON ads.date = pd.date
+      INNER JOIN (
+        SELECT DISTINCT child_asin AS asin, date
+        FROM `onyga-482313.OI.STG_AMAZON_PERFORMANCE`
+        WHERE IS_LOADED = TRUE
+      ) perf
+        ON ads.most_advertised_asin_clicks = perf.asin
+        AND ads.date = perf.date
+      WHERE ads.most_advertised_asin_clicks IS NOT NULL
+      GROUP BY ads.most_advertised_asin_clicks, ads.date
+    )
+    SELECT 
+      perf.child_asin,
+      perf.date,
+      perf.CLICKS,
+      perf.CLICKS_DAILY_UNIQUE,
+      COALESCE(ads.ads_clicks, 0) AS ads_clicks,
+      GREATEST(0, perf.CLICKS - COALESCE(ads.ads_clicks, 0)) AS delta_clicks,
+      GREATEST(0, perf.CLICKS_DAILY_UNIQUE - COALESCE(ads.ads_clicks, 0)) AS delta_clicks_daily_unique,
+      (perf.CLICKS - COALESCE(ads.ads_clicks, 0)) < 0 AS has_negative_clicks,
+      (perf.CLICKS_DAILY_UNIQUE - COALESCE(ads.ads_clicks, 0)) < 0 AS has_negative_clicks_daily_unique,
+      COALESCE(ads.ads_clicks, 0) > perf.CLICKS AS ads_clicks_greater,
+      COALESCE(ads.ads_clicks, 0) > perf.CLICKS_DAILY_UNIQUE AS ads_clicks_daily_unique_greater
+    FROM `onyga-482313.OI.STG_AMAZON_PERFORMANCE` perf
+    LEFT JOIN ads_clicks_agg ads
+      ON perf.child_asin = ads.asin
+      AND perf.date = ads.date
+    WHERE (perf.CLICKS > 0 OR perf.CLICKS_DAILY_UNIQUE > 0)
+      AND perf.IS_LOADED = TRUE
+  ) clicks
+    ON sales.child_asin = clicks.child_asin
+    AND sales.date = clicks.date
+  WHERE (sales.delta_quantity > 0 OR sales.delta_amount > 0 OR sales.delta_orders > 0)
+     OR (clicks.delta_clicks > 0 OR clicks.delta_clicks_daily_unique > 0);
+
+  SET clicks_delta_count = @@row_count;
+  SET sales_delta_count = clicks_delta_count;  -- Combined insert, so count is the same
+
+  -- Step 5: Update DATA_QUALITY_STATUS for dates with missing organic data
+  -- First, update for missing dates
+  UPDATE `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY` fact
+  SET DATA_QUALITY_STATUS = 
+    CASE 
+      WHEN fact.DATA_QUALITY_STATUS IS NULL OR fact.DATA_QUALITY_STATUS = '' OR fact.DATA_QUALITY_STATUS = 'OK' 
+        THEN 'Missing Organic data'
+      ELSE CONCAT(fact.DATA_QUALITY_STATUS, '; Missing Organic data')
+    END
+  WHERE fact.date IN (
+    SELECT DISTINCT date
+    FROM `onyga-482313.OI.STG_AMAZON_PERFORMANCE`
+    WHERE IS_LOADED = FALSE
+  )
+  OR fact.date IN (
+    -- Dates that exist in STG_AMAZON_ADS but not in STG_AMAZON_PERFORMANCE
+    SELECT DISTINCT ads.date
+    FROM `onyga-482313.OI.STG_AMAZON_ADS` ads
+    LEFT JOIN `onyga-482313.OI.STG_AMAZON_PERFORMANCE` perf
+      ON ads.date = perf.date
+    WHERE perf.date IS NULL
+  );
+
+  -- Second, update for dates where ads measures > total performance measures
+  UPDATE `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY` fact
+  SET DATA_QUALITY_STATUS = 
+    CASE 
+      WHEN fact.DATA_QUALITY_STATUS IS NULL OR fact.DATA_QUALITY_STATUS = '' OR fact.DATA_QUALITY_STATUS = 'OK' 
+        THEN agg.warning_message
+      ELSE CONCAT(fact.DATA_QUALITY_STATUS, '; ', agg.warning_message)
+    END
+  FROM (
+    SELECT 
+      ads.date,
+      TRIM(
+        CONCAT(
+          CASE WHEN SUM(ads.units) > COALESCE(SUM(perf.SALES_QUANTITY), 0) 
+            THEN 'Ads SALES_QUANTITY in ads greater than total; ' ELSE '' END,
+          CASE WHEN SUM(ads.sales) > COALESCE(SUM(perf.SALES_AMOUNT), 0) 
+            THEN 'Ads SALES_AMOUNT in ads greater than total; ' ELSE '' END,
+          CASE WHEN SUM(ads.orders) > COALESCE(SUM(perf.SALES_ORDERS), 0) 
+            THEN 'Ads SALES_ORDERS in ads greater than total; ' ELSE '' END,
+          CASE WHEN SUM(ads.clicks) > COALESCE(SUM(perf.CLICKS), 0) 
+            THEN 'Ads CLICKS in ads greater than total; ' ELSE '' END,
+          CASE WHEN SUM(ads.clicks) > COALESCE(SUM(perf.CLICKS_DAILY_UNIQUE), 0) 
+            THEN 'Ads CLICKS_DAILY_UNIQUE in ads greater than total; ' ELSE '' END
+        )
+      ) AS warning_message
+    FROM `onyga-482313.OI.STG_AMAZON_ADS` ads
+    LEFT JOIN `onyga-482313.OI.STG_AMAZON_PERFORMANCE` perf
+      ON ads.date = perf.date
+    GROUP BY ads.date
+    HAVING 
+      SUM(ads.units) > COALESCE(SUM(perf.SALES_QUANTITY), 0)
+      OR SUM(ads.sales) > COALESCE(SUM(perf.SALES_AMOUNT), 0)
+      OR SUM(ads.orders) > COALESCE(SUM(perf.SALES_ORDERS), 0)
+      OR SUM(ads.clicks) > COALESCE(SUM(perf.CLICKS), 0)
+      OR SUM(ads.clicks) > COALESCE(SUM(perf.CLICKS_DAILY_UNIQUE), 0)
+  ) agg
+  WHERE fact.date = agg.date
+    AND agg.warning_message != '';
+
+  SET end_time = CURRENT_TIMESTAMP();
+
+  -- Log the operation results
+  SELECT FORMAT(
+    'SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY completed:\n' ||
+    '  Ads records inserted: %d\n' ||
+    '  Organic delta records inserted: %d\n' ||
+    '  Total records: %d\n' ||
+    '  Duration: %d seconds\n' ||
+    '  Completed at: %s',
+    ads_record_count,
+    clicks_delta_count,
+    ads_record_count + clicks_delta_count,
+    TIMESTAMP_DIFF(end_time, start_time, SECOND),
+    CAST(end_time AS STRING)
+  ) as operation_summary;
+END;

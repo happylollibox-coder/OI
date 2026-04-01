@@ -1,0 +1,20 @@
+[
+  {
+    "id": "001",
+    "name": "Source to Target Data Integrity",
+    "purpose": "Verify all data from STG is correctly loaded into FACT with no missing or duplicates",
+    "cases": ["Row count match", "No missing rows", "No duplicate rows", "Data value accuracy", "Key calculation accuracy"]
+  },
+  {
+    "id": "002",
+    "name": "ad_key Referential Integrity",
+    "purpose": "Verify that every ad_key in V_AMAZON_ADS_TOP_SEARCH_QUERY_TERMS_WEEKLY exists in FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY",
+    "cases": ["All ad_keys exist", "Date alignment check", "NULL handling check"]
+  },
+  {
+    "id": "003",
+    "name": "factless_key Referential Integrity",
+    "purpose": "Verify that every factless_key in FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY exists in FACT_FACTLESS_BRIDGE",
+    "cases": ["All factless_keys exist", "Key format compatibility", "Bridge table population check", "NULL ASIN handling"]
+  }
+]

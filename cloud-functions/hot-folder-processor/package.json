@@ -1,0 +1,16 @@
+{
+  "name": "hot-folder-processor",
+  "version": "1.0.0",
+  "description": "Cloud Function to process files uploaded to GCS hot folder",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^7.0.0",
+    "@google-cloud/bigquery": "^7.0.0"
+  },
+  "engines": {
+    "node": "18"
+  }
+}

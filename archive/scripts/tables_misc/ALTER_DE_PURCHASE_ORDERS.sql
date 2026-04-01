@@ -1,0 +1,16 @@
+-- =============================================
+-- Alter DE_PURCHASE_ORDERS Table
+-- =============================================
+-- 
+-- NOTE: This file is kept for historical reference.
+-- The columns LAST_PAYMENT_DATE, LAST_SHIPMENT_DATE, 
+-- LAST_ESTIMATED_ARRIVAL_DATE, and END_DATE have been 
+-- REMOVED from DE_PURCHASE_ORDERS.
+--
+-- These fields are now calculated in STG_PURCHASE_ORDER
+-- and stored in FACT_PURCHASE_ORDER by SP_DATA_ENTRY_UPDATES.
+--
+-- DE_PURCHASE_ORDERS is used for data entry only and
+-- should not contain calculated/accumulated fields.
+--
+-- =============================================

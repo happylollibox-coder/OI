@@ -1,0 +1,1111 @@
+import { useState, useMemo, useEffect } from 'react';
+import { PageHeader } from '../components/PageHeader';
+import { Empty } from '../components/Empty';
+import { Badge, ActionBadge } from '../components/Badge';
+import { usePageSummary } from '../components/PageSummaryBar';
+import { fM, fP, fOrd, ACTION_META } from '../utils';
+import { useDoQueue, type DoQueueItem } from '../hooks/useDoQueue';
+import { Copy, Check, Trash2, X, ChevronDown, ChevronRight, CheckCircle2, RotateCcw, ExternalLink, Download, Upload } from 'lucide-react';
+import type { DashboardData } from '../types';
+
+/* ─── Action ordering: urgent first ─── */
+const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'NEGATE_TERM', 'REDUCE_BID', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'START_TERM', 'MONITOR_TARGET', 'KEEP', 'MONITOR'];
+
+const ACTION_COLORS: Record<string, string> = {
+  STOP_TERM: '#ef4444', STOP_TARGET: '#ef4444', NEGATE_TERM: '#ef4444', REDUCE_BID: '#f59e0b',
+  FIX_HERO: '#f59e0b', SWITCH_HERO: '#f59e0b',
+  KEEP_TARGET: '#22c55e', INCREASE_BID: '#22c55e',
+  PROMOTE_TO_EXACT: '#3b82f6', START_TERM: '#a855f7',
+  MONITOR_TARGET: '#71717a',
+  // Legacy fallbacks
+  STOP: '#ef4444', NEGATE: '#ef4444', KEEP: '#22c55e', BOOST: '#22c55e',
+  SCALE_UP: '#22c55e', START: '#a855f7', MONITOR: '#71717a',
+};
+
+/* ─── Actions that show TARGETS (keywords) instead of search terms ─── */
+const TARGET_LEVEL_ACTIONS = new Set(['INCREASE_BID', 'REDUCE_BID', 'STOP_TARGET', 'KEEP_TARGET', 'MONITOR_TARGET', 'SCALE_UP', 'BOOST']);
+
+interface ActionGroup {
+  action: string;
+  items: DoQueueItem[];
+  // For target-level actions: group items by targeting keyword
+  targets: { targeting: string; matchType: string; targetSpend8w: number; targetOrders8w: number; targetNetRoas8w: number; items: DoQueueItem[] }[];
+}
+
+interface CampaignGroup {
+  campaign: string;
+  actionGroups: ActionGroup[];
+  totalCount: number;
+  urgentCount: number;
+  negateCount: number;
+}
+
+export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: string) => void }) {
+  const doQueue = useDoQueue();
+  const [expandedCampaigns, setExpandedCampaigns] = useState<Set<string>>(new Set());
+  const [expandedTargets, setExpandedTargets] = useState<Set<string>>(new Set());
+  const [copiedCampaign, setCopiedCampaign] = useState<string | null>(null);
+  const [showDone, setShowDone] = useState(false);
+  const [showUploaded, setShowUploaded] = useState(false);
+
+  /* ─── Auto-cleanup: remove uploaded items when no longer in data.actions ─── */
+  useEffect(() => {
+    if (doQueue.uploadedItems.length > 0 && data.actions?.length > 0) {
+      doQueue.cleanupUploaded(data.actions);
+    }
+  }, [data.actions]);
+
+  /* ─── End SQP Lookup ─── */
+
+  /* ─── Group: Campaign → Action → Target/Keywords ─── */
+  const campaignGroups = useMemo((): CampaignGroup[] => {
+    const byCamp: Record<string, DoQueueItem[]> = {};
+    for (const item of doQueue.items) {
+      const c = item.campaign || 'Unassigned';
+      if (!byCamp[c]) byCamp[c] = [];
+      byCamp[c].push(item);
+    }
+
+    return Object.entries(byCamp).map(([campaign, items]) => {
+      // Group items by action
+      const byAction: Record<string, DoQueueItem[]> = {};
+      for (const item of items) {
+        if (!byAction[item.action]) byAction[item.action] = [];
+        byAction[item.action].push(item);
+      }
+
+      const actionGroups: ActionGroup[] = Object.entries(byAction).map(([action, aItems]) => {
+        // For target-level actions, sub-group by targeting keyword
+        const isTargetLevel = TARGET_LEVEL_ACTIONS.has(action);
+        let targets: ActionGroup['targets'] = [];
+
+        if (isTargetLevel) {
+          const byTarget: Record<string, DoQueueItem[]> = {};
+          for (const item of aItems) {
+            const t = item.targeting || item.search_term || 'Other';
+            if (!byTarget[t]) byTarget[t] = [];
+            byTarget[t].push(item);
+          }
+          targets = Object.entries(byTarget).map(([targeting, tItems]) => {
+            const first = tItems[0];
+            return {
+              targeting,
+              matchType: first.match_type || '',
+              targetSpend8w: first.target_spend_8w || 0,
+              targetOrders8w: first.target_orders_8w || 0,
+              targetNetRoas8w: first.target_net_roas_8w || 0,
+              items: tItems.sort((a, b) => (b.spend || 0) - (a.spend || 0)),
+            };
+          }).sort((a, b) => b.targetSpend8w - a.targetSpend8w);
+        }
+
+        return {
+          action,
+          items: aItems.sort((a, b) => (b.spend || 0) - (a.spend || 0)),
+          targets,
+        };
+      }).sort((a, b) => {
+        const ai = ACTION_ORDER.indexOf(a.action);
+        const bi = ACTION_ORDER.indexOf(b.action);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      });
+
+      const urgentCount = items.filter(i => ACTION_META[i.action]?.group === 'urgent').length;
+      const negateCount = items.filter(i => ['NEGATE', 'STOP'].includes(i.action)).length;
+
+      return { campaign, actionGroups, totalCount: items.length, urgentCount, negateCount };
+    }).sort((a, b) => b.urgentCount - a.urgentCount || b.totalCount - a.totalCount);
+  }, [doQueue.items]);
+
+  // Group done items by completion date
+  const doneGroups = useMemo(() => {
+    const byDate: Record<string, DoQueueItem[]> = {};
+    for (const item of doQueue.doneItems) {
+      const dt = item.doneAt ? new Date(item.doneAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Unknown';
+      if (!byDate[dt]) byDate[dt] = [];
+      byDate[dt].push(item);
+    }
+    return Object.entries(byDate).sort(([, a], [, b]) => (b[0].doneAt || 0) - (a[0].doneAt || 0));
+  }, [doQueue.doneItems]);
+
+  const totalItems = doQueue.items.length;
+  const totalDone = doQueue.doneItems.length;
+  const totalUploaded = doQueue.uploadedItems.length;
+  const totalUrgent = campaignGroups.reduce((s, g) => s + g.urgentCount, 0);
+
+  usePageSummary({
+    title: 'DO',
+    breadcrumbs: [
+      { label: 'Home', onClick: () => window.dispatchEvent(new CustomEvent('nav', { detail: 'home' })) },
+      { label: 'DO' },
+    ],
+    items: [
+      { label: 'Queued', value: `${totalItems}` },
+      { label: 'Done', value: `${totalDone}`, color: 'green' },
+      { label: 'Uploaded', value: `${totalUploaded}`, color: 'blue' },
+      { label: 'Urgent', value: `${totalUrgent}`, color: 'red' },
+    ],
+  });
+
+  if (!doQueue.items.length && !doQueue.doneItems.length && !doQueue.uploadedItems.length) {
+    return (
+      <div className="animate-in">
+        <PageHeader title="DO — Your Task Queue" subtitle="Keywords you decided to act on" />
+        <Empty
+          icon="📋"
+          message="No tasks queued yet"
+          hint="Go to the Actions page and click the + button next to any action badge to add keywords here."
+        />
+      </div>
+    );
+  }
+
+  const toggleCampaign = (camp: string) => {
+    setExpandedCampaigns(prev => {
+      const n = new Set(prev);
+      n.has(camp) ? n.delete(camp) : n.add(camp);
+      return n;
+    });
+  };
+
+  const expandAll = () => setExpandedCampaigns(new Set(campaignGroups.map(g => g.campaign)));
+  const collapseAll = () => setExpandedCampaigns(new Set());
+
+  const copyBlacklist = (campaign: string, group: CampaignGroup) => {
+    const negateItems = group.actionGroups
+      .filter(ag => ['NEGATE', 'STOP'].includes(ag.action))
+      .flatMap(ag => ag.items);
+    const keywords = negateItems.map(i => i.search_term).filter(Boolean);
+    if (!keywords.length) return;
+    navigator.clipboard.writeText(keywords.join('\n'));
+    setCopiedCampaign(campaign);
+    setTimeout(() => setCopiedCampaign(null), 2000);
+  };
+
+  const navigateToActions = () => onNav?.('actions');
+
+  const toggleTarget = (key: string) => {
+    setExpandedTargets(prev => {
+      const n = new Set(prev);
+      n.has(key) ? n.delete(key) : n.add(key);
+      return n;
+    });
+  };
+
+  /* ─── Action instruction: what will happen in Amazon ─── */
+  const getActionInstruction = (item: DoQueueItem): { icon: string; lines: string[] } => {
+    const cn = (item.campaign || '').toUpperCase();
+    const campName = item.campaign || 'Unknown';
+
+    if (item.action === 'STOP_TERM' || item.action === 'NEGATE_TERM' || item.action === 'STOP' || item.action === 'NEGATE' || item.action === 'NEGATE_PHRASE' || item.action === 'PROMOTE_TO_PEAK_PHRASE') {
+      const matchTypeLabel = (item.action === 'NEGATE_PHRASE' || item.action === 'PROMOTE_TO_PEAK_PHRASE') ? 'NEGATIVE_PHRASE' : 'NEGATIVE_EXACT';
+      return {
+        icon: '⛔',
+        lines: [`Add ${matchTypeLabel} "${item.search_term}" to ${campName}`],
+      };
+    }
+
+    if (item.action === 'SWITCH_HERO') {
+      return {
+        icon: '🔄',
+        lines: [`Add NEGATIVE_EXACT "${item.search_term}" to ${campName}`, `Switch advertised ASIN to hero product`],
+      };
+    }
+
+    if (item.action === 'STOP_TARGET') {
+      const mt = item.match_type ? item.match_type.toUpperCase() : 'TARGET';
+      const bidStr = item.current_bid ? `$${item.current_bid.toFixed(2)}` : (item.cpc ? `$${item.cpc.toFixed(2)}` : '?');
+      return {
+        icon: '⏸',
+        lines: [`Pause keyword "${item.targeting || item.search_term}" [${mt}] in ${campName} (current bid: ${bidStr})`],
+      };
+    }
+
+    if (item.action === 'REDUCE_BID') {
+      const mt = item.match_type ? item.match_type.toUpperCase() : 'TARGET';
+      const currentBidVal = item.current_bid || item.cpc;
+      const currentBid = currentBidVal ? `$${currentBidVal.toFixed(2)}` : '?';
+      const newBid = item.recommended_bid
+        ? `$${item.recommended_bid.toFixed(2)}`
+        : (currentBidVal ? `$${Math.max(0.02, +(currentBidVal * 0.7).toFixed(2)).toFixed(2)}` : '?');
+      const pct = item.recommended_bid && currentBidVal && currentBidVal > 0
+        ? Math.round(((item.recommended_bid - currentBidVal) / currentBidVal) * 100)
+        : -30;
+      return {
+        icon: '📉',
+        lines: [`Update bid: ${currentBid} → ${newBid} (${pct > 0 ? '+' : ''}${pct}%) on "${item.targeting || item.search_term}" [${mt}] in ${campName}`],
+      };
+    }
+
+    if (item.action === 'INCREASE_BID' || item.action === 'BOOST' || item.action === 'SCALE_UP') {
+      const mt = item.match_type ? item.match_type.toUpperCase() : 'TARGET';
+      const currentBidVal = item.current_bid || item.cpc;
+      const currentBid = currentBidVal ? `$${currentBidVal.toFixed(2)}` : '?';
+      const newBid = item.recommended_bid
+        ? `$${item.recommended_bid.toFixed(2)}`
+        : (currentBidVal ? `$${+(currentBidVal * 1.25).toFixed(2)}` : '?');
+      const pct = item.recommended_bid && currentBidVal && currentBidVal > 0
+        ? Math.round(((item.recommended_bid - currentBidVal) / currentBidVal) * 100)
+        : 25;
+      return {
+        icon: '📈',
+        lines: [`Update bid: ${currentBid} → ${newBid} (+${Math.abs(pct)}%) on "${item.targeting || item.search_term}" [${mt}] in ${campName}`],
+      };
+    }
+
+    if (item.action === 'PROMOTE_TO_EXACT') {
+      const bid = item.cpc ? `$${Math.min(2.0, Math.max(0.5, +(item.cpc * 1.1).toFixed(2))).toFixed(2)}` : '$0.75';
+      const productPrefix = cn.match(/^(BOTTLE|BOX|ME|FRESH)/)?.[1] || 'PRODUCT';
+      const kwShort = item.search_term.split(' ').slice(0, 4).join(' ');
+      const spCampName = `${productPrefix}-SP/EXACT (Boost, ${kwShort})`;
+      const videoCampName = `${productPrefix}-VIDEO/EXACT (Boost, ${kwShort})`;
+      return {
+        icon: '🚀',
+        lines: [
+          `Create SP campaign: ${spCampName}`,
+          `  Bid: ${bid} · Budget: $20/day · DOWN_ONLY + TOS 500%`,
+          `Create SB Video: ${videoCampName}`,
+          `  Bid: ${bid} · Budget: $20/day`,
+          `Create Exact Campaign: "-SP/EXACT (Boost, ...)" with bid $${bid}`,
+        ],
+      };
+    } else if (item.action === 'PROMOTE_TO_PEAK_PHRASE') {
+      const theme = item.seasonal_theme || 'General Peak';
+      return {
+        icon: '🚀',
+        lines: [
+          `Create SP/EXACT (Seasonal Peak - ${theme}) campaign`,
+          `Add EXACT match "${item.search_term}" with bid $1.50`,
+        ],
+      };
+    }
+
+    if (item.action === 'START_TERM' || item.action === 'START') {
+      return {
+        icon: '✨',
+        lines: [`Start advertising "${item.search_term}" — SQP shows organic demand, no ads targeting yet`],
+      };
+    }
+
+    return { icon: '👁', lines: [`Monitor "${item.search_term}" in ${campName}`] };
+  };
+
+  /* ─── Render a search term row ─── */
+  const renderSearchTermRow = (item: DoQueueItem, indent = false) => {
+    const instruction = getActionInstruction(item);
+    return (
+    <div key={item.id} className={indent ? 'pl-8' : ''}>
+      <div
+        className={`flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-white/[.02] transition-colors group`}
+      >
+        <button
+          onClick={() => doQueue.markDone(item.id)}
+          className="w-5 h-5 rounded-full border-2 border-zinc-600 flex items-center justify-center shrink-0 hover:border-emerald-400 hover:bg-emerald-500/15 transition-all group/check"
+          title="Mark as done"
+        >
+          <Check size={10} className="text-transparent group-hover/check:text-emerald-400" />
+        </button>
+        <button
+          onClick={navigateToActions}
+          className="font-medium text-blue-400 hover:text-blue-300 hover:underline transition-colors text-left min-w-[180px] flex items-center gap-1 cursor-pointer"
+          title="View in Actions page"
+        >
+          {item.search_term}
+          <ExternalLink size={9} className="opacity-0 group-hover:opacity-50" />
+        </button>
+        <div className="flex-1" />
+        <span className="w-16 text-right font-mono text-faint shrink-0 text-[10px]">{fM(item.spend)}</span>
+        <span className="w-14 text-right font-mono text-faint shrink-0 text-[10px]">{fOrd(item.orders)}</span>
+        <span className="w-14 text-right font-mono text-faint shrink-0 text-[10px]">{fM(item.cpc)}</span>
+        <span className="w-14 text-right font-mono text-faint shrink-0 text-[10px]">{fP(item.conv_rate)}</span>
+        <button
+          onClick={() => doQueue.removeItem(item.id)}
+          className="w-5 h-5 rounded-md flex items-center justify-center text-faint hover:text-red-400 hover:bg-red-500/15 transition-all opacity-0 group-hover:opacity-100 shrink-0"
+          title="Remove from queue"
+        >
+          <X size={11} />
+        </button>
+      </div>
+      {/* Action instruction */}
+      <div className={`px-4 pb-2 ${indent ? '' : 'pl-12'}`}>
+        <div className="flex items-start gap-1.5 text-[10px] text-subtle/70 font-mono leading-relaxed bg-white/[.02] rounded-md px-2.5 py-1.5 border border-border-faint">
+          <span className="shrink-0">{instruction.icon}</span>
+          <div className="flex flex-col gap-px">
+            {instruction.lines.map((line, i) => (
+              <span key={i} className={line.startsWith('  ') ? 'pl-3 text-faint' : ''}>{line}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+    );
+  };
+
+  /* ─── Export Amazon Bulksheet v2.0 XLSX ─── */
+  const exportBulksheet = () => {
+    if (!doQueue.items.length) return;
+    import('xlsx').then((XLSX) => {
+      // ═══ Brand Asset Config (fetched dynamically from DIM_PRODUCT_CREATIVES via Cube.js) ═══
+      let defaultBrandEntityId = '';
+      let defaultBrandName = 'Happy Lolli';
+      const VIDEO_MEDIA_IDS: Record<string, string> = {};
+
+      const creatives = data.product_creatives || [];
+      for (const c of creatives) {
+        if (c.video_asset_id) VIDEO_MEDIA_IDS[c.product_family] = c.video_asset_id;
+        if (c.brand_entity_id) defaultBrandEntityId = c.brand_entity_id;
+        if (c.brand_name) defaultBrandName = c.brand_name;
+      }
+
+      const BRAND_ENTITY_ID = defaultBrandEntityId;
+      const BRAND_NAME = defaultBrandName;
+
+      // ═══ SP Headers (Sponsored Products upload format) ═══
+      const SP_HEADERS = [
+        'Product', 'Entity', 'Operation',
+        'Campaign ID', 'Ad Group ID', 'Portfolio ID', 'Ad ID', 'Keyword ID', 'Product Targeting ID',
+        'Campaign Name', 'Ad Group Name',
+        'Campaign Name (Informational only)', 'Ad Group Name (Informational only)',
+        'Portfolio Name (Informational only)',
+        'Start Date', 'End Date', 'Targeting Type', 'State',
+        'Campaign State (Informational only)', 'Ad Group State (Informational only)',
+        'Daily Budget', 'SKU', 'ASIN (Informational only)',
+        'Eligibility Status (Informational only)', 'Reason for Ineligibility (Informational only)',
+        'Ad Group Default Bid', 'Ad Group Default Bid (Informational only)',
+        'Bid', 'Keyword Text', 'Native Language Keyword', 'Native Language Locale',
+        'Match Type', 'Bidding Strategy', 'Placement', 'Percentage',
+        'Product Targeting Expression', 'Resolved Product Targeting Expression (Informational only)',
+      ];
+
+      // ═══ SB Headers (Sponsored Brands upload format) ═══
+      const SB_HEADERS = [
+        'Product', 'Entity', 'Operation',
+        'Campaign Id', 'Ad Group Id', 'Ad Id', 'Keyword Id', 'Draft Campaign Id', 'Portfolio Id',
+        'Campaign Name', 'Ad Group Name', 'Ad Name', 'Start Date', 'End Date', 'State',
+        'Budget Type', 'Budget',
+        'Bid Optimization', 'Bid Multiplier',
+        'Bid', 'Keyword Text', 'Match Type',
+        'Product Targeting Expression',
+        'Ad Format', 'Landing Page URL', 'Landing page ASINs',
+        'Brand Entity Id', 'Brand Name',
+        'Creative Headline', 'Creative ASINs', 'Video asset IDs', 'Creative Type',
+      ];
+
+      const PORTFOLIO_MAP: Record<string, string> = {
+        'BOX': '6487122589020',
+        'BRAND': '111579864441847',
+        'FRESH': '19847592608433',
+        'BOTTLE': '81817188183510',
+        'ME': '41310184067669',
+      };
+
+      const ASIN_TO_SKU_MAP: Record<string, string> = {
+        'B0D7N2MLDP': 'Fresh in Beige',
+        'B0D7N31M6S': 'Fresh in Pink',
+        'B0F9XDSVYB': 'Purple LolliME',
+        'B0F9XFXQRW': 'Pink LolliME',
+        'B0F9X95K5H': 'Mint LolliME',
+        'B0DJFG5ZJ7': 'Blue LolliBox',
+        'B0CR6N3WRC': 'Pink Box + Card',
+        'B0C1VLXYBP': 'White Box + Card',
+        'B09XQ56RK5': 'Purple Box 1',
+        'B0F4KCCSWN': 'Truth Dare Bottle',
+      };
+
+      // ═══ Helper: detect Product Targeting entities (ASIN targets + AUTO groups) ═══
+      const AUTO_TARGETING_GROUPS = new Set(['close-match', 'loose-match', 'substitutes', 'complements']);
+      const isProductTargeting = (item: DoQueueItem): boolean => {
+        const mt = (item.match_type || '').toUpperCase();
+        // SQL now provides PRODUCT_TARGETING for product targeting entities
+        if (mt === 'PRODUCT_TARGETING' || mt.startsWith('ASIN')) return true;
+        // Fallback: targeting expression starts with asin= (Amazon format)
+        if (/^asin=/i.test(item.targeting || '')) return true;
+        // Fallback: targeting looks like a raw ASIN (B0 + 8+ alphanumeric)
+        if (!mt && /^B0[A-Z0-9]{8,}$/i.test(item.targeting || '')) return true;
+        // Fallback: AUTO campaign targeting groups
+        if (AUTO_TARGETING_GROUPS.has((item.targeting || '').toLowerCase())) return true;
+        return false;
+      };
+
+      // ═══ Helper: format Product Targeting Expression for Amazon ═══
+      const formatPTExpression = (targeting: string): string => {
+        // AUTO targeting groups use their name directly (close-match, substitutes, etc.)
+        if (AUTO_TARGETING_GROUPS.has(targeting.toLowerCase())) return targeting;
+        // If already in asin="..." format, keep as-is
+        if (/^asin=/i.test(targeting)) return targeting;
+        // If looks like a raw ASIN, wrap in asin="..." format
+        if (/^B0[A-Z0-9]{8,}$/i.test(targeting)) return `asin="${targeting}"`;
+        return targeting;
+      };
+
+      const spRows: Record<string, string>[] = [];
+      const sbRows: Record<string, string>[] = [];
+      const createdPeakCampaigns = new Set<string>();
+      for (const item of doQueue.items) {
+        const campId = item.campaign_id || '';
+        const campName = item.campaign || '';
+        const adGroupId = item.ad_group_id || '';
+
+        // Determine if this is an SB campaign (Sponsored Brands / Video)
+        const ct = (item.campaign_type || '').toUpperCase();
+        const cn = campName.toUpperCase();
+        const isSB = ct === 'SB' || ct === 'SBV' || ct.includes('BRAND') || ct.includes('VIDEO')
+          || cn.includes('SBV') || cn.includes('VIDEO') || cn.includes('STORE');
+
+        const spBase: Record<string, string> = {
+          'Product': 'Sponsored Products',
+          'Campaign ID': campId,
+          'Ad Group ID': adGroupId,
+          'Campaign Name (Informational only)': campName,
+        };
+
+        // ═══════════════════════════════════════════════════════════
+        // TIER 2: Per-SEARCH-TERM actions (Create operations)
+        // Uses: item.search_term as Keyword Text
+        // ═══════════════════════════════════════════════════════════
+        if (item.action === 'STOP_TERM' || item.action === 'NEGATE_TERM' || item.action === 'SWITCH_HERO'
+            || item.action === 'STOP' || item.action === 'NEGATE' || item.action === 'NEGATE_PHRASE' || item.action === 'PROMOTE_TO_PEAK_PHRASE') {
+          
+          const isPhrase = item.action === 'NEGATE_PHRASE' || item.action === 'PROMOTE_TO_PEAK_PHRASE';
+          // Force campaign level if no Ad Group ID is known, or if it's a phrase negative
+          const isCampaignLevel = !adGroupId || isPhrase;
+
+          if (isSB) {
+            // SB campaigns: add negative keyword (SB only supports Ad Group level Negative Keywords)
+            const matchTypeSB = isPhrase ? 'negativePhrase' : 'negativeExact';
+            
+            const sbRow: Record<string, string> = {
+              'Product': 'Sponsored Brands',
+              'Entity': 'Negative Keyword',
+              'Operation': 'Create',
+              'Campaign Id': campId,
+              'Campaign Name': campName,
+              'Ad Group Id': adGroupId || '', // Amazon requires Ad Group ID for SB negatives
+              'Keyword Text': item.search_term,
+              'Match Type': matchTypeSB,
+              'State': 'enabled',
+            };
+            sbRows.push(sbRow);
+          } else {
+            // SP campaigns: add negative keyword
+            const entitySP = isCampaignLevel ? 'Campaign Negative Keyword' : 'Negative Keyword';
+            const matchTypeSP = isCampaignLevel 
+              ? (isPhrase ? 'CAMPAIGN_NEGATIVE_PHRASE' : 'CAMPAIGN_NEGATIVE_EXACT')
+              : (isPhrase ? 'NEGATIVE_PHRASE' : 'NEGATIVE_EXACT');
+              
+            const spRow: Record<string, string> = {
+              ...spBase,
+              'Entity': entitySP,
+              'Operation': 'Create',
+              'Keyword Text': item.search_term,
+              'Match Type': matchTypeSP,
+              'State': 'ENABLED',
+            };
+            if (isCampaignLevel) {
+              delete spRow['Ad Group ID'];
+            }
+            spRows.push(spRow);
+          }
+
+        // ═══════════════════════════════════════════════════════════
+        // TIER 1: Per-TARGET actions (Update operations)
+        // ASIN targets → Entity: Product Targeting + Product Targeting ID
+        // Keywords     → Entity: Keyword + Keyword ID + Match Type
+        // ═══════════════════════════════════════════════════════════
+        } else if (item.action === 'REDUCE_BID') {
+          // Use coach recommended bid, fallback to CPC × 0.70
+          const bid = item.recommended_bid
+            ? String(item.recommended_bid)
+            : (item.cpc ? String(Math.max(0.02, +(item.cpc * 0.7).toFixed(2))) : '');
+          const isAsin = isProductTargeting(item);
+          console.log('[Bulksheet] REDUCE_BID', { keyword_id: item.keyword_id, match_type: item.match_type, targeting: item.targeting, isAsin, bid, isSB });
+          if (isSB) {
+            // SB campaigns: update keyword on the Sponsored Brands sheet
+            const mt = (item.match_type || 'broad').toLowerCase();
+            sbRows.push({
+              'Product': 'Sponsored Brands',
+              'Entity': 'Keyword',
+              'Operation': 'Update',
+              'Campaign Id': campId,
+              'Ad Group Id': adGroupId,
+              'Keyword Id': item.keyword_id,
+              'Keyword Text': item.targeting || item.search_term,
+              'Match Type': mt,
+              'Bid': bid,
+              'State': 'enabled',
+            });
+          } else if (isAsin) {
+            spRows.push({
+              ...spBase,
+              'Entity': 'Product Targeting',
+              'Operation': 'Update',
+              'Product Targeting ID': item.keyword_id,
+              'Product Targeting Expression': formatPTExpression(item.targeting || item.search_term),
+              'Bid': bid,
+              'State': 'ENABLED',
+            });
+          } else {
+            const mt = item.match_type || 'BROAD';
+            spRows.push({
+              ...spBase,
+              'Entity': 'Keyword',
+              'Operation': 'Update',
+              'Keyword ID': item.keyword_id,
+              'Keyword Text': item.targeting || item.search_term,
+              'Match Type': mt.toUpperCase(),
+              'Bid': bid,
+              'State': 'ENABLED',
+            });
+          }
+
+        } else if (item.action === 'STOP_TARGET') {
+          const isAsin = isProductTargeting(item);
+          console.log('[Bulksheet] STOP_TARGET', { keyword_id: item.keyword_id, match_type: item.match_type, targeting: item.targeting, isAsin, isSB });
+          if (isSB) {
+            // SB campaigns: pause keyword on the Sponsored Brands sheet
+            const mt = (item.match_type || 'broad').toLowerCase();
+            sbRows.push({
+              'Product': 'Sponsored Brands',
+              'Entity': 'Keyword',
+              'Operation': 'Update',
+              'Campaign Id': campId,
+              'Ad Group Id': adGroupId,
+              'Keyword Id': item.keyword_id,
+              'Keyword Text': item.targeting || item.search_term,
+              'Match Type': mt,
+              'State': 'paused',
+            });
+          } else if (isAsin) {
+            spRows.push({
+              ...spBase,
+              'Entity': 'Product Targeting',
+              'Operation': 'Update',
+              'Product Targeting ID': item.keyword_id,
+              'Product Targeting Expression': formatPTExpression(item.targeting || item.search_term),
+              'State': 'PAUSED',
+            });
+          } else {
+            const mt = item.match_type || 'BROAD';
+            spRows.push({
+              ...spBase,
+              'Entity': 'Keyword',
+              'Operation': 'Update',
+              'Keyword ID': item.keyword_id,
+              'Keyword Text': item.targeting || item.search_term,
+              'Match Type': mt.toUpperCase(),
+              'State': 'PAUSED',
+            });
+          }
+
+        } else if (item.action === 'INCREASE_BID' || item.action === 'BOOST' || item.action === 'SCALE_UP') {
+          // Use coach recommended bid, fallback to CPC × 1.25
+          const bid = item.recommended_bid
+            ? String(item.recommended_bid)
+            : (item.cpc ? String(+(item.cpc * 1.25).toFixed(2)) : '');
+          const isAsin = isProductTargeting(item);
+          console.log('[Bulksheet] INCREASE_BID', { keyword_id: item.keyword_id, match_type: item.match_type, targeting: item.targeting, isAsin, bid, isSB });
+          if (isSB) {
+            // SB campaigns: update keyword on the Sponsored Brands sheet
+            const mt = (item.match_type || 'broad').toLowerCase();
+            sbRows.push({
+              'Product': 'Sponsored Brands',
+              'Entity': 'Keyword',
+              'Operation': 'Update',
+              'Campaign Id': campId,
+              'Ad Group Id': adGroupId,
+              'Keyword Id': item.keyword_id,
+              'Keyword Text': item.targeting || item.search_term,
+              'Match Type': mt,
+              'Bid': bid,
+              'State': 'enabled',
+            });
+          } else if (isAsin) {
+            spRows.push({
+              ...spBase,
+              'Entity': 'Product Targeting',
+              'Operation': 'Update',
+              'Product Targeting ID': item.keyword_id,
+              'Product Targeting Expression': formatPTExpression(item.targeting || item.search_term),
+              'Bid': bid,
+              'State': 'ENABLED',
+            });
+          } else {
+            const mt = item.match_type || 'BROAD';
+            spRows.push({
+              ...spBase,
+              'Entity': 'Keyword',
+              'Operation': 'Update',
+              'Keyword ID': item.keyword_id,
+              'Keyword Text': item.targeting || item.search_term,
+              'Match Type': mt.toUpperCase(),
+              'Bid': bid,
+              'State': 'ENABLED',
+            });
+          }
+
+        // ═══════════════════════════════════════════════════════════
+        // TIER 2: PROMOTE_TO_EXACT — Create new campaigns
+        // Uses: item.search_term as the new exact keyword
+        // ═══════════════════════════════════════════════════════════
+        } else if (item.action === 'PROMOTE_TO_EXACT') {
+          // EXACT_BOOST strategy template: DOWN_ONLY, TOS=500%, bid=$0.50-$2.00, budget=$20
+          const bid = item.cpc ? String(Math.min(2.0, Math.max(0.5, +(item.cpc * 1.1).toFixed(2)))) : '0.75';
+          const asin = item.product || '';
+          const sku = ASIN_TO_SKU_MAP[asin] || asin; // Fallback to ASIN if mapping missing
+          const kwShort = item.search_term.split(' ').slice(0, 4).join(' ');
+          
+          let productPrefix = cn.match(/^(BOTTLE|BOX|ME|FRESH|BRAND)/)?.[1];
+          const skuUpper = sku.toUpperCase();
+          if (skuUpper.includes('ME')) productPrefix = 'ME';
+          else if (skuUpper.includes('BOX')) productPrefix = 'BOX';
+          else if (skuUpper.includes('FRESH')) productPrefix = 'FRESH';
+          else if (skuUpper.includes('BOTTLE')) productPrefix = 'BOTTLE';
+          productPrefix = productPrefix || 'PRODUCT';
+          const startDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+          const portfolioId = PORTFOLIO_MAP[productPrefix] || '';
+
+          // ── SP/EXACT Boost Campaign (Sponsored Products sheet) ──
+          const spCampName = `${productPrefix}-SP/EXACT (Boost, ${kwShort})`;
+          const spAdGroupName = `${productPrefix} - Exact Boost`;
+          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Campaign', 'Operation': 'Create',
+            'Campaign ID': spCampName, 'Campaign Name': spCampName, 'Portfolio ID': portfolioId, 'Daily Budget': '20', 'Targeting Type': 'MANUAL',
+            'Bidding Strategy': 'Dynamic bids - down only', 'Start Date': startDate, 'State': 'ENABLED' });
+          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Bidding Adjustment', 'Operation': 'Create',
+            'Campaign ID': spCampName, 'Campaign Name': spCampName, 'Placement': 'Placement Top', 'Percentage': '500' });
+          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Ad Group', 'Operation': 'Create',
+            'Campaign ID': spCampName, 'Campaign Name': spCampName,
+            'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
+            'Ad Group Default Bid': bid, 'State': 'ENABLED' });
+          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Keyword', 'Operation': 'Create',
+            'Campaign ID': spCampName, 'Campaign Name': spCampName,
+            'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
+            'Keyword Text': item.search_term, 'Match Type': 'EXACT', 'Bid': bid, 'State': 'ENABLED' });
+          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Ad', 'Operation': 'Create',
+            'Campaign ID': spCampName, 'Campaign Name': spCampName,
+            'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
+            'SKU': sku, 'State': 'ENABLED' });
+
+
+          // ── VIDEO/EXACT Boost Campaign (Sponsored Brands sheet) ──
+          const videoCampName = `${productPrefix}-VIDEO/EXACT (Boost, ${kwShort})`;
+          const videoAdGroupName = `${productPrefix} - Video Exact Boost`;
+          const videoMediaId = VIDEO_MEDIA_IDS[productPrefix] || '';
+          if (videoMediaId) {
+            // 1. Campaign Row
+            sbRows.push({
+              'Product': 'Sponsored Brands', 'Entity': 'Campaign', 'Operation': 'Create',
+              'Campaign Id': videoCampName, 'Campaign Name': videoCampName, 'Portfolio Id': portfolioId,
+              'Start Date': startDate, 'State': 'enabled',
+              'Budget Type': 'daily', 'Budget': '20',
+              'Bid Optimization': 'true',
+              'Brand Entity Id': BRAND_ENTITY_ID, 'Brand Name': BRAND_NAME
+            });
+            
+            // 2. Ad Group Row
+            sbRows.push({
+              'Product': 'Sponsored Brands', 'Entity': 'Ad Group', 'Operation': 'Create',
+              'Campaign Id': videoCampName, 'Campaign Name': videoCampName,
+              'Ad Group Id': videoAdGroupName, 'Ad Group Name': videoAdGroupName,
+              'State': 'enabled'
+            });
+
+            // 3. Video Ad Row
+            const videoAdName = `${productPrefix} - Video Ad`;
+            console.log('[SB Debug] Video Ad values:', { asin, videoMediaId, BRAND_ENTITY_ID, productPrefix });
+            sbRows.push({
+              'Product': 'Sponsored Brands', 'Entity': 'Video Ad', 'Operation': 'Create',
+              'Campaign Id': videoCampName, 'Campaign Name': videoCampName,
+              'Ad Group Id': videoAdGroupName, 'Ad Group Name': videoAdGroupName,
+              'Ad Id': videoAdName, 'Ad Name': videoAdName,
+              'State': 'enabled',
+              'Ad Format': 'video',
+              'Creative ASINs': asin,
+              'Video asset IDs': videoMediaId,
+              'Creative Type': 'video'
+            });
+
+            // 4. Keyword Row
+            sbRows.push({
+              'Product': 'Sponsored Brands', 'Entity': 'Keyword', 'Operation': 'Create',
+              'Campaign Id': videoCampName, 'Campaign Name': videoCampName,
+              'Ad Group Id': videoAdGroupName, 'Ad Group Name': videoAdGroupName,
+              'Keyword Text': item.search_term, 'Match Type': 'exact',
+              'Bid': bid, 'State': 'enabled'
+            });
+          }
+        } else if (item.action === 'PROMOTE_TO_PEAK_PHRASE') {
+          // Seasonal Peak Campaign Strategy
+          const bid = '1.50'; // Aggressive default bid for Peak Seasonal
+          const asin = item.product || '';
+          const sku = ASIN_TO_SKU_MAP[asin] || asin;
+          
+          let productPrefix = cn.match(/^(BOTTLE|BOX|ME|FRESH|BRAND)/)?.[1] || 'PRODUCT';
+          const skuUpper = sku.toUpperCase();
+          if (skuUpper.includes('ME')) productPrefix = 'ME';
+          else if (skuUpper.includes('BOX')) productPrefix = 'BOX';
+          else if (skuUpper.includes('FRESH')) productPrefix = 'FRESH';
+          else if (skuUpper.includes('BOTTLE')) productPrefix = 'BOTTLE';
+          
+          const startDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+          const portfolioId = PORTFOLIO_MAP[productPrefix] || '';
+          const theme = item.seasonal_theme || 'General Peak';
+          
+          const spCampName = `${productPrefix}-SP/EXACT (Seasonal Peak - ${theme})`;
+          const spAdGroupName = `${productPrefix} - Exact Peak (${theme})`;
+          
+          // Deduplicate campaign creation
+          if (!createdPeakCampaigns.has(spCampName)) {
+            createdPeakCampaigns.add(spCampName);
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Campaign', 'Operation': 'Create',
+              'Campaign ID': spCampName, 'Campaign Name': spCampName, 'Portfolio ID': portfolioId, 'Daily Budget': '25', 'Targeting Type': 'MANUAL',
+              'Bidding Strategy': 'Dynamic bids - down only', 'Start Date': startDate, 'State': 'ENABLED' });
+            // Aggressive TOS markup
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Bidding Adjustment', 'Operation': 'Create',
+              'Campaign ID': spCampName, 'Campaign Name': spCampName, 'Placement': 'Placement Top', 'Percentage': '300' });
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Ad Group', 'Operation': 'Create',
+              'Campaign ID': spCampName, 'Campaign Name': spCampName,
+              'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
+              'Ad Group Default Bid': bid, 'State': 'ENABLED' });
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Ad', 'Operation': 'Create',
+              'Campaign ID': spCampName, 'Campaign Name': spCampName,
+              'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
+              'SKU': sku, 'State': 'ENABLED' });
+          }
+          
+          // Add the specific term to the Exact Ad Group
+          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Keyword', 'Operation': 'Create',
+            'Campaign ID': spCampName, 'Campaign Name': spCampName,
+            'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
+            'Keyword Text': item.search_term, 'Match Type': 'EXACT', 'Bid': bid, 'State': 'ENABLED' });
+        }
+      }
+
+      if (!spRows.length && !sbRows.length) return;
+
+      const wb = XLSX.utils.book_new();
+      // SP sheet
+      if (spRows.length) {
+        const spData = [SP_HEADERS, ...spRows.map(row => SP_HEADERS.map(h => row[h] || ''))];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(spData), 'Sponsored Products Campaigns');
+      }
+      // SB sheets — split between legacy (neg keywords) and V4 (new campaigns)
+      if (sbRows.length) {
+        // Legacy SB sheet: negative keywords on existing campaigns
+        const sbLegacyRows = sbRows.filter(r => r['Entity'] === 'Negative Keyword');
+        // V4 Multi Ad Group sheet: new campaign creation (Campaign, Ad Group, Video Ad, Keyword)
+        const sbV4Rows = sbRows.filter(r => r['Entity'] !== 'Negative Keyword');
+
+        if (sbLegacyRows.length) {
+          const sbLegacyData = [SB_HEADERS, ...sbLegacyRows.map(row => SB_HEADERS.map(h => row[h] || ''))];
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sbLegacyData), 'Sponsored Brands Campaigns');
+        }
+        if (sbV4Rows.length) {
+          const sbV4Data = [SB_HEADERS, ...sbV4Rows.map(row => SB_HEADERS.map(h => row[h] || ''))];
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sbV4Data), 'SB Multi Ad Group Campaigns');
+        }
+      }
+      XLSX.writeFile(wb, `amazon_bulksheet_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    });
+  };
+
+  return (
+    <div className="animate-in">
+      <PageHeader title="DO — Your Task Queue" subtitle={`${totalItems} pending · ${totalDone} done · ${totalUploaded} uploaded`} />
+
+      {totalItems > 0 && (
+        <div className="flex gap-2 mb-4">
+          <button onClick={expandAll} className="text-[10px] px-2.5 py-1.5 rounded-lg border border-border text-subtle hover:text-white hover:bg-white/[.04] transition-colors font-semibold">
+            Expand All
+          </button>
+          <button onClick={collapseAll} className="text-[10px] px-2.5 py-1.5 rounded-lg border border-border text-subtle hover:text-white hover:bg-white/[.04] transition-colors font-semibold">
+            Collapse All
+          </button>
+          <div className="flex-1" />
+          <button
+            onClick={exportBulksheet}
+            className="text-[10px] px-2.5 py-1.5 rounded-lg border border-blue-500/30 text-blue-400 hover:bg-blue-500/15 transition-colors font-semibold flex items-center gap-1"
+          >
+            <Download size={11} /> Export Bulksheet
+          </button>
+          <button
+            onClick={() => {
+              if (confirm('Mark all queued items as uploaded to Amazon? This will hide them from the Actions page.')) {
+                doQueue.markAllUploaded();
+              }
+            }}
+            className="text-[10px] px-2.5 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/15 transition-colors font-semibold flex items-center gap-1"
+          >
+            <Upload size={11} /> Uploaded to Amazon ✓
+          </button>
+          <button
+            onClick={() => { if (confirm('Clear all queued tasks?')) doQueue.clearAll(); }}
+            className="text-[10px] px-2.5 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/15 transition-colors font-semibold flex items-center gap-1"
+          >
+            <Trash2 size={11} /> Clear All
+          </button>
+        </div>
+      )}
+
+
+      {/* Pending tasks — Campaign → Action → Target / Keywords */}
+      <div className="space-y-3">
+        {campaignGroups.map(group => {
+          const isExpanded = expandedCampaigns.has(group.campaign);
+
+          return (
+            <div key={group.campaign} className="border border-border rounded-xl bg-card overflow-hidden">
+              {/* Campaign header */}
+              <div
+                className="flex items-center gap-2.5 px-4 py-3 cursor-pointer hover:bg-white/[.02] transition-colors"
+                onClick={() => toggleCampaign(group.campaign)}
+              >
+                <span className="text-[11px] text-faint">
+                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </span>
+                <span className="font-mono text-[12px] font-bold text-white">{group.campaign}</span>
+                <span className="text-[10px] text-subtle font-mono">
+                  ({group.totalCount})
+                </span>
+                {group.urgentCount > 0 && <Badge variant="red">{group.urgentCount} urgent</Badge>}
+
+                <div className="ml-auto flex items-center gap-2">
+                  {group.negateCount > 0 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); copyBlacklist(group.campaign, group); }}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border border-red-500/30 text-red-400 hover:bg-red-500/15 transition-all"
+                      title={`Copy ${group.negateCount} keywords to blacklist`}
+                    >
+                      {copiedCampaign === group.campaign ? <Check size={12} /> : <Copy size={12} />}
+                      {copiedCampaign === group.campaign ? 'Copied!' : `Blacklist (${group.negateCount})`}
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); doQueue.clearCampaign(group.campaign); }}
+                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border border-zinc-600 text-faint hover:text-red-400 hover:border-red-500/30 transition-all"
+                    title="Remove all tasks for this campaign"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Expanded: Action groups */}
+              {isExpanded && (
+                <div className="border-t border-border">
+                  {group.actionGroups.map(ag => {
+                    const color = ACTION_COLORS[ag.action] || '#71717a';
+                    const isTargetLevel = TARGET_LEVEL_ACTIONS.has(ag.action);
+
+                    return (
+                      <div key={ag.action} className="border-b border-border-faint last:border-0">
+                        {/* Action header */}
+                        <div className="flex items-center gap-2 px-4 py-2 bg-surface/30"
+                          style={{ borderLeft: `3px solid ${color}` }}
+                        >
+                          <ActionBadge action={ag.action} />
+                          <span className="text-[10px] text-subtle font-mono">
+                            {isTargetLevel
+                              ? `${ag.targets.length} target${ag.targets.length !== 1 ? 's' : ''}`
+                              : `${ag.items.length} keyword${ag.items.length !== 1 ? 's' : ''}`
+                            }
+                          </span>
+                        </div>
+
+                        {/* Content: Target rows (for bid ops) or flat keyword rows (for search-term ops) */}
+                        <div className="divide-y divide-border-faint">
+                          {isTargetLevel ? (
+                            /* ═══ Target-level: show expandable target rows ═══ */
+                            ag.targets.map(target => {
+                              const targetKey = `${group.campaign}::${ag.action}::${target.targeting}`;
+                              const isTargetExpanded = expandedTargets.has(targetKey);
+
+                              return (
+                                <div key={targetKey}>
+                                  {/* Target header */}
+                                  <div
+                                    className="flex items-center gap-2 px-6 py-2 cursor-pointer hover:bg-white/[.02] transition-colors"
+                                    onClick={() => toggleTarget(targetKey)}
+                                  >
+                                    <span className="text-[10px] text-faint">
+                                      {isTargetExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                                    </span>
+                                    <span className="font-mono text-[11px] font-semibold text-white">
+                                      {target.targeting}
+                                    </span>
+                                    {target.matchType && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-700/50 text-zinc-400 font-mono uppercase">
+                                        {target.matchType}
+                                      </span>
+                                    )}
+                                    <span className="text-[10px] text-subtle font-mono">
+                                      ({target.items.length})
+                                    </span>
+                                    <div className="flex-1" />
+                                    <span className="text-[10px] font-mono text-faint">{fM(target.targetSpend8w)}</span>
+                                    {target.targetNetRoas8w > 0 && (
+                                      <span className={`text-[10px] font-mono ml-1 ${target.targetNetRoas8w >= 1 ? 'text-emerald-400/70' : 'text-amber-400/70'}`}>
+                                        ROAS {target.targetNetRoas8w.toFixed(2)}
+                                      </span>
+                                    )}
+                                    <span className="text-[10px] font-mono text-faint ml-2">{fOrd(target.targetOrders8w)} ord</span>
+                                  </div>
+
+                                  {/* Expanded: search terms under this target */}
+                                  {isTargetExpanded && (
+                                    <div className="divide-y divide-border-faint bg-surface/5">
+                                      {target.items.map((item: DoQueueItem) => renderSearchTermRow(item, true))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          ) : (
+                            /* ═══ Search-term-level: show flat keyword rows ═══ */
+                            ag.items.map((item: DoQueueItem) => renderSearchTermRow(item))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Done section */}
+      {totalDone > 0 && (
+        <div className="mt-6">
+          <button
+            onClick={() => setShowDone(p => !p)}
+            className="flex items-center gap-2 mb-3 text-sm font-bold"
+          >
+            <span className="text-faint">
+              {showDone ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </span>
+            <CheckCircle2 size={14} className="text-emerald-400" />
+            <span className="text-emerald-400">Done</span>
+            <Badge variant="green">{totalDone}</Badge>
+            <div className="flex-1" />
+            {showDone && (
+              <button
+                onClick={(e) => { e.stopPropagation(); if (confirm('Clear done log?')) doQueue.clearDone(); }}
+                className="text-[10px] px-2 py-1 rounded-md border border-zinc-600 text-faint hover:text-red-400 hover:border-red-500/30 transition-all font-normal"
+              >
+                Clear Done
+              </button>
+            )}
+          </button>
+
+          {showDone && (
+            <div className="space-y-3 animate-in">
+              {doneGroups.map(([date, items]) => (
+                <div key={date} className="border border-emerald-500/15 rounded-xl bg-emerald-500/[.02] overflow-hidden">
+                  <div className="px-4 py-2 text-[10px] text-emerald-400/60 font-mono font-semibold uppercase tracking-wider border-b border-emerald-500/10">
+                    {date} · {items.length} completed
+                  </div>
+                  <div className="divide-y divide-emerald-500/10">
+                    {items.map(item => (
+                      <div
+                        key={item.id}
+                        className="flex items-center gap-3 px-4 py-2 text-[11px] group"
+                      >
+                        <CheckCircle2 size={14} className="text-emerald-500/50 shrink-0" />
+                        <span className="text-subtle line-through">{item.search_term}</span>
+                        <ActionBadge action={item.action} />
+                        <span className="text-[10px] text-faint truncate max-w-[150px]">{item.campaign}</span>
+                        <div className="ml-auto flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => doQueue.undoDone(item.id)}
+                            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] text-faint hover:text-amber-400 transition-all opacity-0 group-hover:opacity-100"
+                            title="Move back to queue"
+                          >
+                            <RotateCcw size={10} /> Undo
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Uploaded to Amazon section */}
+      {totalUploaded > 0 && (
+        <div className="mt-6">
+          <button
+            onClick={() => setShowUploaded(p => !p)}
+            className="flex items-center gap-2 mb-3 text-sm font-bold"
+          >
+            <span className="text-faint">
+              {showUploaded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </span>
+            <Upload size={14} className="text-blue-400" />
+            <span className="text-blue-400">Uploaded to Amazon</span>
+            <Badge variant="blue">{totalUploaded}</Badge>
+            <div className="flex-1" />
+            {showUploaded && (
+              <button
+                onClick={(e) => { e.stopPropagation(); if (confirm('Clear uploaded log?')) doQueue.clearUploaded(); }}
+                className="text-[10px] px-2 py-1 rounded-md border border-zinc-600 text-faint hover:text-red-400 hover:border-red-500/30 transition-all font-normal"
+              >
+                Clear Uploaded
+              </button>
+            )}
+          </button>
+
+          {showUploaded && (
+            <div className="space-y-3 animate-in">
+              {(() => {
+                const byDate: Record<string, DoQueueItem[]> = {};
+                for (const item of doQueue.uploadedItems) {
+                  const dt = item.uploadedAt
+                    ? new Date(item.uploadedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                    : 'Unknown';
+                  if (!byDate[dt]) byDate[dt] = [];
+                  byDate[dt].push(item);
+                }
+                return Object.entries(byDate)
+                  .sort(([, a], [, b]) => (b[0].uploadedAt || 0) - (a[0].uploadedAt || 0))
+                  .map(([date, items]) => (
+                    <div key={date} className="border border-blue-500/15 rounded-xl bg-blue-500/[.02] overflow-hidden">
+                      <div className="px-4 py-2 text-[10px] text-blue-400/60 font-mono font-semibold uppercase tracking-wider border-b border-blue-500/10">
+                        {date} · {items.length} uploaded
+                      </div>
+                      <div className="divide-y divide-blue-500/10">
+                        {items.map(item => (
+                          <div
+                            key={item.id}
+                            className="flex items-center gap-3 px-4 py-2 text-[11px] group"
+                          >
+                            <Upload size={12} className="text-blue-500/50 shrink-0" />
+                            <span className="text-subtle">{item.search_term}</span>
+                            <ActionBadge action={item.action} />
+                            <span className="text-[10px] text-faint truncate max-w-[150px]">{item.campaign}</span>
+                            <div className="ml-auto flex items-center gap-2 shrink-0">
+                              <button
+                                onClick={() => doQueue.undoUploaded(item.id)}
+                                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] text-faint hover:text-amber-400 transition-all opacity-0 group-hover:opacity-100"
+                                title="Move back to queue"
+                              >
+                                <RotateCcw size={10} /> Undo
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ));
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+

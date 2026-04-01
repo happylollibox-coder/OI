@@ -1,0 +1,353 @@
+================================================================================
+REVISED SQP INSIGHTS ANALYSIS
+Understanding: ASIN columns = YOUR PRODUCT | Others = MARKET-WIDE
+================================================================================
+Loading data from CSV...
+✓ Loaded 44,568 rows
+
+================================================================================
+INSIGHT 5: SUMMARY - YOUR PRODUCT vs MARKET
+================================================================================
+
+Overall Market Share:
+--------------------------------------------------------------------------------
+Impression Share: 0.1004% (9,335,803 / 9,295,443,546)
+Click Share:      0.1948% (207,740 / 106,625,451)
+Purchase Share:   0.0586% (5,464 / 9,321,959)
+
+Performance Metrics:
+--------------------------------------------------------------------------------
+Market CTR:       1.15%
+Your CTR:         2.23%
+CTR Delta:        1.08%
+
+Market Conversion: 8.74%
+Your Conversion:   2.63%
+Conversion Delta:  -6.11%
+
+================================================================================
+INSIGHT 1: MARKET SHARE LEADERS (Your Product's Best Performers)
+================================================================================
+
+Total queries where you have purchases: 2775
+
+Top 20 Queries by Market Share (Purchase Share %):
+--------------------------------------------------------------------------------
+
+ 1. girls surprise biethday goft
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 50.00% | Impression Share: 5.00%
+
+ 2. lolli box for teen
+    Your Purchases: 2 | Market Total: 2
+    Purchase Share: 100.00% | Click Share: 59.18% | Impression Share: 6.74%
+
+ 3. christmas gift for my 11 year old sister
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 20.00% | Impression Share: 0.25%
+
+ 4. purple lollibox
+    Your Purchases: 6 | Market Total: 6
+    Purchase Share: 100.00% | Click Share: 95.12% | Impression Share: 4.94%
+
+ 5. 8-12 girls christmas bundle gofts
+    Your Purchases: 2 | Market Total: 2
+    Purchase Share: 100.00% | Click Share: 100.00% | Impression Share: 4.55%
+
+ 6. kits for girls 10-12
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 11.76% | Impression Share: 0.58%
+
+ 7. 10-11 year old gift baskets christmas
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 4.55% | Impression Share: 0.82%
+
+ 8. preteen gift basket
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 33.33% | Impression Share: 3.54%
+
+ 9. white lollibox
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 81.48% | Impression Share: 10.84%
+
+10. best upscale 8 year old girl christmas gifts
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 50.00% | Impression Share: 1.67%
+
+11. top girls present for 8 yo girls
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 33.33% | Impression Share: 3.96%
+
+12. gift teen set
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 100.00% | Impression Share: 2.63%
+
+13. christmas gifts 8 year-old girl
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 20.00% | Impression Share: 0.51%
+
+14. girl gifts 10-12 years old christmas
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 12.50% | Impression Share: 0.31%
+
+15. gift set for girls age 8-10 purple lollinox
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 100.00% | Impression Share: 5.56%
+
+16. happy lolli purple
+    Your Purchases: 3 | Market Total: 3
+    Purchase Share: 100.00% | Click Share: 100.00% | Impression Share: 7.72%
+
+17. happy lolli pop gift box
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 100.00% | Impression Share: 2.56%
+
+18. happy lolli gift for tween unicorn purple
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 100.00% | Impression Share: 12.50%
+
+19. 10 and 11 year old girl birthday gifts
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 100.00% | Impression Share: 4.76%
+
+20. best gift baskets for young girls
+    Your Purchases: 1 | Market Total: 1
+    Purchase Share: 100.00% | Click Share: 100.00% | Impression Share: 1.67%
+
+================================================================================
+INSIGHT 2: HIGH OPPORTUNITY, LOW MARKET SHARE
+================================================================================
+
+Found 1213 queries with large markets (>100 purchases) but low share (<1%)
+
+Top 20 Opportunities (Sorted by Market Size):
+--------------------------------------------------------------------------------
+
+ 1. gift cards
+    Market Size: 1,416,316 purchases | Your Share: 0.00%
+    Your Purchases: 0 | Opportunity: 1,416,316 additional purchases
+    Market Clicks: 5,401,205 | Your Clicks: 14
+
+ 2. roblox gift card
+    Market Size: 455,752 purchases | Your Share: 0.00%
+    Your Purchases: 0 | Opportunity: 455,752 additional purchases
+    Market Clicks: 1,294,746 | Your Clicks: 99
+
+ 3. gift card
+    Market Size: 407,246 purchases | Your Share: 0.00%
+    Your Purchases: 0 | Opportunity: 407,246 additional purchases
+    Market Clicks: 1,572,915 | Your Clicks: 11
+
+ 4. teen girl gifts trendy stuff
+    Market Size: 392,657 purchases | Your Share: 0.05%
+    Your Purchases: 208 | Opportunity: 392,449 additional purchases
+    Market Clicks: 6,375,596 | Your Clicks: 24,049
+
+ 5. mothers day gifts
+    Market Size: 310,437 purchases | Your Share: 0.00%
+    Your Purchases: 0 | Opportunity: 310,437 additional purchases
+    Market Clicks: 3,385,615 | Your Clicks: 7
+
+ 6. teen girl gifts
+    Market Size: 281,525 purchases | Your Share: 0.02%
+    Your Purchases: 67 | Opportunity: 281,458 additional purchases
+    Market Clicks: 4,395,116 | Your Clicks: 8,751
+
+ 7. gifts for teen girls
+    Market Size: 256,062 purchases | Your Share: 0.02%
+    Your Purchases: 52 | Opportunity: 256,010 additional purchases
+    Market Clicks: 4,157,041 | Your Clicks: 5,222
+
+ 8. easter basket
+    Market Size: 247,256 purchases | Your Share: 0.00%
+    Your Purchases: 1 | Opportunity: 247,255 additional purchases
+    Market Clicks: 2,757,292 | Your Clicks: 204
+
+ 9. easter basket stuffers
+    Market Size: 244,445 purchases | Your Share: 0.00%
+    Your Purchases: 1 | Opportunity: 244,444 additional purchases
+    Market Clicks: 1,445,468 | Your Clicks: 31
+
+10. mothers day gifts for mom
+    Market Size: 156,191 purchases | Your Share: 0.00%
+    Your Purchases: 0 | Opportunity: 156,191 additional purchases
+    Market Clicks: 1,388,007 | Your Clicks: 0
+
+11. gifts for 10 year old girl
+    Market Size: 122,087 purchases | Your Share: 0.01%
+    Your Purchases: 17 | Opportunity: 122,070 additional purchases
+    Market Clicks: 1,316,274 | Your Clicks: 1,226
+
+12. gifts for teenage girls
+    Market Size: 113,207 purchases | Your Share: 0.02%
+    Your Purchases: 19 | Opportunity: 113,188 additional purchases
+    Market Clicks: 2,702,772 | Your Clicks: 1,389
+
+13. 10 year old girl gifts
+    Market Size: 107,231 purchases | Your Share: 0.01%
+    Your Purchases: 14 | Opportunity: 107,217 additional purchases
+    Market Clicks: 1,115,105 | Your Clicks: 1,120
+
+14. sol de janeiro
+    Market Size: 106,886 purchases | Your Share: 0.00%
+    Your Purchases: 2 | Opportunity: 106,884 additional purchases
+    Market Clicks: 2,062,334 | Your Clicks: 61
+
+15. 10 year old girl birthday gifts
+    Market Size: 106,459 purchases | Your Share: 0.01%
+    Your Purchases: 11 | Opportunity: 106,448 additional purchases
+    Market Clicks: 1,057,885 | Your Clicks: 1,371
+
+16. tween girls trendy stuff
+    Market Size: 100,707 purchases | Your Share: 0.05%
+    Your Purchases: 48 | Opportunity: 100,659 additional purchases
+    Market Clicks: 1,806,364 | Your Clicks: 8,699
+
+17. easter basket stuffers for teens
+    Market Size: 98,715 purchases | Your Share: 0.00%
+    Your Purchases: 1 | Opportunity: 98,714 additional purchases
+    Market Clicks: 725,109 | Your Clicks: 94
+
+18. pink stuff
+    Market Size: 97,346 purchases | Your Share: 0.00%
+    Your Purchases: 1 | Opportunity: 97,345 additional purchases
+    Market Clicks: 410,432 | Your Clicks: 273
+
+19. tween girls gifts
+    Market Size: 78,861 purchases | Your Share: 0.05%
+    Your Purchases: 42 | Opportunity: 78,819 additional purchases
+    Market Clicks: 1,273,322 | Your Clicks: 5,393
+
+20. christmas cards
+    Market Size: 75,830 purchases | Your Share: 0.00%
+    Your Purchases: 0 | Opportunity: 75,830 additional purchases
+    Market Clicks: 554,828 | Your Clicks: 0
+
+================================================================================
+INSIGHT 3: CONVERSION RATE BENCHMARKING (Your Product vs Market)
+================================================================================
+
+Queries with ≥10 clicks: 1173
+
+Top 20 Queries: Your Conversion vs Market Conversion
+--------------------------------------------------------------------------------
+
+📈 Outperforming Market (264 queries):
+   1. happy journal kit
+      Your Conversion: 50.00% | Market: 21.37% | Delta: +28.63%
+   2. spa basket for teen girls
+      Your Conversion: 28.57% | Market: 4.18% | Delta: +24.40%
+   3. happy lolli me journal kit
+      Your Conversion: 60.00% | Market: 36.00% | Delta: +24.00%
+   4. party games for teens
+      Your Conversion: 30.00% | Market: 6.30% | Delta: +23.70%
+   5. kids' diaries, journals & notebooks
+      Your Conversion: 28.57% | Market: 6.84% | Delta: +21.73%
+   6. lollime journal kit
+      Your Conversion: 33.33% | Market: 11.72% | Delta: +21.61%
+   7. birthday gift for teen girl
+      Your Conversion: 27.78% | Market: 6.95% | Delta: +20.83%
+   8. tween journal kit
+      Your Conversion: 27.27% | Market: 7.04% | Delta: +20.24%
+   9. birthday box for girls
+      Your Conversion: 23.08% | Market: 3.27% | Delta: +19.80%
+  10. teen girl gift box
+      Your Conversion: 19.23% | Market: 1.66% | Delta: +17.57%
+
+📉 Underperforming Market (897 queries):
+   1. roblox gift card
+      Your Conversion: 0.00% | Market: 35.20% | Delta: -35.20%
+   2. gift cards
+      Your Conversion: 0.00% | Market: 26.22% | Delta: -26.22%
+   3. gift card
+      Your Conversion: 0.00% | Market: 25.89% | Delta: -25.89%
+   4. sephora gift cards
+      Your Conversion: 0.00% | Market: 25.21% | Delta: -25.21%
+   5. pink stuff
+      Your Conversion: 0.37% | Market: 23.72% | Delta: -23.35%
+   6. face towels
+      Your Conversion: 0.00% | Market: 21.02% | Delta: -21.02%
+   7. teenage girl easter basket stuffers
+      Your Conversion: 0.00% | Market: 17.02% | Delta: -17.02%
+   8. wrist towels
+      Your Conversion: 0.00% | Market: 16.87% | Delta: -16.87%
+   9. easter basket stuffers for teens girls
+      Your Conversion: 0.00% | Market: 15.79% | Delta: -15.79%
+  10. teen easter basket stuffers girl
+      Your Conversion: 0.00% | Market: 14.80% | Delta: -14.80%
+
+================================================================================
+INSIGHT 4: PRICE COMPETITIVENESS ANALYSIS
+================================================================================
+
+Queries with price data: 1895
+
+Price Competitiveness Analysis:
+--------------------------------------------------------------------------------
+
+💵 Your Price Higher by >$5 (1811 queries):
+   1. regalo para 15 a√±os quincea√±eras
+      Your Price: $62375.86 | Market: $23.49 | Diff: +$62352.37 (265442.2%)
+      Your Click Share: 1.87%
+   2. happy lolli gift for girls
+      Your Price: $96.57 | Market: $40.85 | Diff: +$55.72 (136.4%)
+      Your Click Share: 100.00%
+   3. school supplies
+      Your Price: $59.90 | Market: $9.98 | Diff: +$49.92 (500.2%)
+      Your Click Share: 0.02%
+   4. 13th birthday
+      Your Price: $59.90 | Market: $9.99 | Diff: +$49.91 (499.6%)
+      Your Click Share: 0.37%
+   5. easter basket stuffers teen girls
+      Your Price: $59.90 | Market: $9.99 | Diff: +$49.91 (499.6%)
+      Your Click Share: 0.21%
+   6. coquette stuff
+      Your Price: $59.90 | Market: $9.99 | Diff: +$49.91 (499.6%)
+      Your Click Share: 0.81%
+   7. happy birthday
+      Your Price: $59.90 | Market: $10.62 | Diff: +$49.28 (463.9%)
+      Your Click Share: 0.06%
+   8. easter basket stuffers for teen girls
+      Your Price: $59.90 | Market: $10.74 | Diff: +$49.16 (457.7%)
+      Your Click Share: 0.49%
+   9. easter basket essentials
+      Your Price: $59.90 | Market: $10.90 | Diff: +$49.00 (449.5%)
+      Your Click Share: 0.00%
+  10. easter tween girl
+      Your Price: $59.90 | Market: $11.22 | Diff: +$48.68 (434.1%)
+      Your Click Share: 0.73%
+
+⚖️  Price Competitive (within $5) (82 queries):
+   (These may be your best opportunities)
+   1. kits
+      Your Price: $31.40 | Market: $26.49 | Your Click Share: 0.30%
+   2. happy lolli sets
+      Your Price: $57.94 | Market: $53.08 | Your Click Share: 100.00%
+   3. purple diy journal
+      Your Price: $32.10 | Market: $27.55 | Your Click Share: 100.00%
+   4. truth or dare bottle
+      Your Price: $29.90 | Market: $25.42 | Your Click Share: 100.00%
+   5. happy lolli gift box for tween and teen girls
+      Your Price: $48.28 | Market: $44.44 | Your Click Share: 100.00%
+   6. happy lolli blue
+      Your Price: $59.76 | Market: $56.02 | Your Click Share: 100.00%
+   7. lolli gifts for girls
+      Your Price: $48.22 | Market: $44.50 | Your Click Share: 33.33%
+   8. fresh in pink
+      Your Price: $48.07 | Market: $44.42 | Your Click Share: 100.00%
+   9. happylolli
+      Your Price: $48.94 | Market: $45.29 | Your Click Share: 60.00%
+  10. happy lolly gift box for teens
+      Your Price: $51.90 | Market: $48.55 | Your Click Share: 40.00%
+
+================================================================================
+ANALYSIS COMPLETE
+================================================================================
+
+💡 Key Takeaways:
+   • Overall Purchase Share: 0.0586% of market
+   • Your Conversion Rate: 2.63% (Market: 8.74%)
+   • 20 queries where you're winning market share
+   • 20 high-opportunity queries with low share
+
+================================================================================

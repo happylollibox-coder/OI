@@ -1,0 +1,20 @@
+{
+  "name": "cube",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "cubejs-server",
+    "dev:onetime": "CUBESTORE_DATA_DIR=/tmp/cube-oi-cubestore cubejs-server",
+    "dev:reset": "rm -rf /tmp/cube-oi-cubestore && CUBESTORE_DATA_DIR=/tmp/cube-oi-cubestore cubejs-server",
+    "dev:simple": "CUBEJS_SCHEDULED_REFRESH_DEFAULT=false cubejs-server"
+  },
+  "template": "docker",
+  "templateVersion": "1.6.19",
+  "devDependencies": {
+    "@cubejs-backend/bigquery-driver": "^1.6.19",
+    "@cubejs-backend/server": "^1.6.19"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  }
+}

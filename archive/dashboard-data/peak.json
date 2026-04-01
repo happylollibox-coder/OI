@@ -1,0 +1,16 @@
+[
+  {
+    "holiday_name": "Easter",
+    "holiday_date": "2026-04-05",
+    "pre_season_start": "2026-03-22",
+    "readiness_start": "2025-11-22",
+    "pre_peak_start": "2026-02-22",
+    "boost_start": "2026-03-08",
+    "peak_start": "2026-03-22",
+    "peak_end": "2026-04-03",
+    "current_stage": "PRE_PEAK_BOOST",
+    "category": "gift_season",
+    "days_until_peak_start": 14,
+    "days_until_peak_end": 26
+  }
+]

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+
+{% block title %}New Purchase Order - OI Data Entry Forms{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4"><i class="bi bi-file-earmark-text"></i> New Purchase Order</h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-8 offset-lg-2">
+        <div class="card">
+            <div class="card-header">
+                Purchase Order Information
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('new_order') }}">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="order_date" class="form-label required-field">Order Date</label>
+                                <input type="date" class="form-control" id="order_date" name="order_date" required>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="manufacturer_name" class="form-label required-field">Manufacturer Name</label>
+                                <input type="text" class="form-control" id="manufacturer_name" name="manufacturer_name" value="SYLVIA" required>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="product_id" class="form-label required-field">Product</label>
+                                <select class="form-select" id="product_id" name="product_id" required>
+                                    <option value="">-- Select Product --</option>
+                                    {% if products %}
+                                        {% for product in products %}
+                                        <option value="{{ product.product_id }}" 
+                                                data-asin="{{ product.asin or '' }}"
+                                                data-name="{{ product.product_name or product.display_name or '' }}">
+                                            {{ product.sku or ('Product ' + product.product_id|string) }}
+                                            {% if product.asin %} (ASIN: {{ product.asin }}){% endif %}
+                                        </option>
+                                        {% endfor %}
+                                    {% else %}
+                                        <option value="" disabled>No products found in DIM_PRODUCT</option>
+                                    {% endif %}
+                                </select>
+                                <input type="hidden" id="product_asin" name="product_asin">
+                                <input type="hidden" id="product_name" name="product_name">
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="mb-3">
+                                <label for="quantity" class="form-label required-field">Quantity</label>
+                                <input type="number" class="form-control" id="quantity" name="quantity" min="1" value="1" required>
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="mb-3">
+                                <label for="total_amount" class="form-label required-field">Amount</label>
+                                <input type="number" class="form-control" id="total_amount" name="total_amount" step="0.01" min="0" required>
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="mb-3">
+                                <label for="currency" class="form-label">Currency</label>
+                                <select class="form-select" id="currency" name="currency">
+                                    <option value="USD" selected>USD</option>
+                                    <option value="ILS">ILS</option>
+                                    <option value="HKD">HKD</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <small class="text-muted" id="product_info">
+                                    Select a product to see ASIN and details
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="payment_status" class="form-label">Payment Status</label>
+                                <select class="form-select" id="payment_status" name="payment_status">
+                                    <option value="PENDING" selected>Pending</option>
+                                    <option value="PAID">Paid</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="notes" class="form-label">Notes</label>
+                        <textarea class="form-control" id="notes" name="notes" rows="3" placeholder="Any additional information..."></textarea>
+                    </div>
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <a href="{{ url_for('index') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-save"></i> Save Purchase Order
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const productSelect = document.getElementById('product_id');
+    const productAsinInput = document.getElementById('product_asin');
+    const productNameInput = document.getElementById('product_name');
+    const productInfo = document.getElementById('product_info');
+    
+    productSelect.addEventListener('change', function() {
+        const selectedOption = this.options[this.selectedIndex];
+        if (selectedOption.value) {
+            const asin = selectedOption.getAttribute('data-asin');
+            const name = selectedOption.getAttribute('data-name');
+            
+            productAsinInput.value = asin || '';
+            productNameInput.value = name || '';
+            
+            if (asin) {
+                productInfo.textContent = `ASIN: ${asin}`;
+                productInfo.className = 'text-success';
+            } else {
+                productInfo.textContent = 'Product selected (no ASIN)';
+                productInfo.className = 'text-warning';
+            }
+        } else {
+            productAsinInput.value = '';
+            productNameInput.value = '';
+            productInfo.textContent = 'Select a product to see ASIN and details';
+            productInfo.className = 'text-muted';
+        }
+    });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OI Productivity Plan</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --card: #1a1a26;
+    --card-hover: #22222f;
+    --border: #2a2a3a;
+    --text: #e4e4ef;
+    --muted: #8888a0;
+    --faint: #55556a;
+    --accent-blue: #4f8fff;
+    --accent-purple: #a855f7;
+    --accent-green: #22c55e;
+    --accent-orange: #f59e0b;
+    --accent-red: #ef4444;
+    --accent-pink: #ec4899;
+    --accent-cyan: #06b6d4;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    padding: 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    text-align: center;
+    padding: 3rem 1rem 2rem;
+    margin-bottom: 2rem;
+  }
+  .hero h1 {
+    font-size: 2.5rem;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple), var(--accent-pink));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.5rem;
+  }
+  .hero p {
+    color: var(--muted);
+    font-size: 1rem;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+
+  /* ── Stats bar ── */
+  .stats {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin: 2rem 0;
+  }
+  .stat {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem 1.5rem;
+    text-align: center;
+    min-width: 140px;
+  }
+  .stat-num {
+    font-size: 2rem;
+    font-weight: 800;
+    line-height: 1;
+  }
+  .stat-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-top: 0.25rem;
+  }
+
+  /* ── Progress bar ── */
+  .progress-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 2.5rem;
+  }
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+  }
+  .progress-header span {
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+  .progress-header .pct {
+    color: var(--accent-green);
+    font-size: 0.85rem;
+  }
+  .progress-bar {
+    height: 10px;
+    background: var(--card);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent-green), var(--accent-cyan));
+    border-radius: 99px;
+    transition: width 0.5s ease;
+  }
+
+  /* ── Priority lane ── */
+  .priority-lane {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 2.5rem;
+  }
+  .priority-lane h2 {
+    width: 100%;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    margin-bottom: 0.25rem;
+  }
+  .lane-card {
+    flex: 1;
+    min-width: 300px;
+    border-radius: 14px;
+    padding: 1.25rem;
+    border: 1px solid var(--border);
+  }
+  .lane-card h3 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+  }
+  .lane-card ul {
+    list-style: none;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .lane-card ul li {
+    padding: 0.2rem 0;
+  }
+  .lane-card ul li::before {
+    margin-right: 0.4rem;
+  }
+  .lane-now { background: linear-gradient(135deg, rgba(34,197,94,0.08), rgba(6,182,212,0.06)); border-color: rgba(34,197,94,0.25); }
+  .lane-next { background: linear-gradient(135deg, rgba(79,143,255,0.08), rgba(168,85,247,0.06)); border-color: rgba(79,143,255,0.2); }
+  .lane-later { background: linear-gradient(135deg, rgba(245,158,11,0.08), rgba(239,68,68,0.05)); border-color: rgba(245,158,11,0.2); }
+  .lane-now h3 { color: var(--accent-green); }
+  .lane-next h3 { color: var(--accent-blue); }
+  .lane-later h3 { color: var(--accent-orange); }
+
+  /* ── Category sections ── */
+  .category {
+    margin-bottom: 2.5rem;
+  }
+  .cat-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .cat-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    flex-shrink: 0;
+  }
+  .cat-header h2 {
+    font-size: 1.1rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .cat-header .cat-count {
+    font-size: 0.7rem;
+    background: var(--card);
+    color: var(--muted);
+    padding: 0.15rem 0.55rem;
+    border-radius: 99px;
+    font-weight: 600;
+  }
+
+  /* ── Task cards ── */
+  .tasks {
+    display: grid;
+    gap: 0.75rem;
+  }
+  .task {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.1rem 1.25rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .task:hover {
+    background: var(--card-hover);
+    border-color: #3a3a4f;
+    transform: translateY(-1px);
+  }
+  .task.done {
+    opacity: 0.45;
+  }
+  .task.done .task-title {
+    text-decoration: line-through;
+  }
+  .task-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .task-check {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-top: 1px;
+    transition: all 0.15s;
+    position: relative;
+  }
+  .task-check:checked {
+    background: var(--accent-green);
+    border-color: var(--accent-green);
+  }
+  .task-check:checked::after {
+    content: '✓';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #000;
+    font-size: 12px;
+    font-weight: 800;
+  }
+  .task-body {
+    flex: 1;
+  }
+  .task-title {
+    font-weight: 700;
+    font-size: 0.9rem;
+    margin-bottom: 0.3rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .task-desc {
+    font-size: 0.78rem;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+  .task-meta {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.6rem;
+  }
+
+  /* ── Tags ── */
+  .tag {
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: 99px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .tag-quick { background: rgba(34,197,94,0.15); color: var(--accent-green); }
+  .tag-medium { background: rgba(79,143,255,0.15); color: var(--accent-blue); }
+  .tag-larger { background: rgba(245,158,11,0.15); color: var(--accent-orange); }
+  .tag-time { background: rgba(168,85,247,0.12); color: var(--accent-purple); font-size: 0.65rem; }
+  .tag-impact { background: rgba(236,72,153,0.12); color: var(--accent-pink); }
+
+  /* ── Details expand ── */
+  .task-details {
+    display: none;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+  .task-details ul {
+    padding-left: 1.1rem;
+  }
+  .task-details li {
+    margin-bottom: 0.2rem;
+  }
+  .task-details code {
+    background: var(--surface);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    color: var(--accent-cyan);
+  }
+  .task.open .task-details { display: block; }
+  .expand-hint {
+    font-size: 0.65rem;
+    color: var(--faint);
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  /* ── Gains section ── */
+  .gains {
+    background: linear-gradient(135deg, rgba(79,143,255,0.06), rgba(168,85,247,0.04));
+    border: 1px solid rgba(79,143,255,0.15);
+    border-radius: 16px;
+    padding: 1.5rem;
+    margin-top: 2rem;
+  }
+  .gains h2 {
+    font-size: 1rem;
+    font-weight: 800;
+    margin-bottom: 1rem;
+    color: var(--accent-blue);
+  }
+  .gain-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 0.75rem;
+  }
+  .gain {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--card);
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--border);
+  }
+  .gain-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+  }
+  .gain-text strong {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 700;
+  }
+  .gain-text span {
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 700px) {
+    body { padding: 1rem; }
+    .hero h1 { font-size: 1.75rem; }
+    .stat { min-width: 110px; padding: 0.75rem 1rem; }
+    .stat-num { font-size: 1.5rem; }
+    .lane-card { min-width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>OI Productivity Plan</h1>
+  <p>10 automation opportunities to eliminate repetitive work, catch errors earlier, and ship faster.</p>
+</div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-num" style="color:var(--accent-blue)">10</div>
+    <div class="stat-label">Total Tasks</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num" style="color:var(--accent-green)">3</div>
+    <div class="stat-label">Quick Wins</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num" style="color:var(--accent-purple)">5</div>
+    <div class="stat-label">Categories</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num" style="color:var(--accent-orange)">0%</div>
+    <div class="stat-label">Complete</div>
+  </div>
+</div>
+
+<div class="progress-wrap">
+  <div class="progress-header">
+    <span>Overall Progress</span>
+    <span class="pct" id="pctLabel">0 / 10 done</span>
+  </div>
+  <div class="progress-bar">
+    <div class="progress-fill" id="progressFill"></div>
+  </div>
+</div>
+
+<!-- Priority lanes -->
+<div class="priority-lane">
+  <h2>Priority Roadmap &mdash; what to tackle when</h2>
+  <div class="lane-card lane-now">
+    <h3>Do First &mdash; Quick Wins</h3>
+    <ul>
+      <li>Cursor Rules (4 rules)</li>
+      <li>Shared Config Module</li>
+      <li>Extract Shared Components</li>
+    </ul>
+  </div>
+  <div class="lane-card lane-next">
+    <h3>Do Next &mdash; Medium Effort</h3>
+    <ul>
+      <li>Dashboard Page Generator</li>
+      <li>BigQuery Object Agent</li>
+      <li>Pre-Commit Hooks</li>
+    </ul>
+  </div>
+  <div class="lane-card lane-later">
+    <h3>Do Later &mdash; Bigger Builds</h3>
+    <ul>
+      <li>GitHub Actions CI/CD</li>
+      <li>Unified Deploy Command</li>
+      <li>BigQuery Migration Runner</li>
+      <li>CRUD Entity Agent</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ═══ CATEGORY 1: CURSOR RULES ═══ -->
+<div class="category">
+  <div class="cat-header">
+    <div class="cat-icon" style="background:rgba(168,85,247,0.15)">🧠</div>
+    <h2>Cursor Rules</h2>
+    <span class="cat-count">1 task &middot; 4 rules</span>
+  </div>
+  <div class="tasks">
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            Create 4 Project Rules
+            <span class="tag tag-quick">Quick</span>
+            <span class="tag tag-time">~30 min</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">Give Cursor permanent context about your project so it stops asking "what framework is this?"</div>
+          <div class="task-meta">
+            <span class="tag tag-impact">saves 2-5 min per chat</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <p><strong>Four rules to create in <code>.cursor/rules/</code>:</strong></p>
+        <ul>
+          <li><strong>Project Architecture</strong> &mdash; monorepo layout, directory purposes, config.yaml as source of truth</li>
+          <li><strong>BigQuery SQL</strong> &mdash; naming (<code>V_SRC_*</code>, <code>DIM_*</code>, <code>FACT_*</code>, <code>SP_*</code>, <code>FN_*</code>), migration patterns, project <code>onyga-482313.OI</code></li>
+          <li><strong>React Dashboard</strong> &mdash; page pattern (<code>DashboardData</code> prop, <code>useFilters</code>), Tailwind 4 theme tokens, table patterns</li>
+          <li><strong>Flask Data-Entry</strong> &mdash; BigQuery direct access, OAuth + allowlist, cache pattern, error handling</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ CATEGORY 2: CODE GENERATION ═══ -->
+<div class="category">
+  <div class="cat-header">
+    <div class="cat-icon" style="background:rgba(79,143,255,0.15)">⚡</div>
+    <h2>Code Generation Agents</h2>
+    <span class="cat-count">3 tasks</span>
+  </div>
+  <div class="tasks">
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            "New Dashboard Page" Agent
+            <span class="tag tag-medium">Medium</span>
+            <span class="tag tag-time">~1 hr</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">Stop copy-pasting 50 lines of boilerplate every time you add a page.</div>
+          <div class="task-meta">
+            <span class="tag tag-impact">saves 15-30 min per page</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <p><strong>What it generates:</strong></p>
+        <ul>
+          <li>Page file in <code>dashboard-react/src/pages/</code> with standard imports</li>
+          <li>Component skeleton: <code>DashboardData</code> prop, <code>useFilters()</code>, <code>Section</code> wrapper</li>
+          <li><code>Empty</code> state for no-data scenarios</li>
+          <li>Optional sortable table scaffold</li>
+          <li>Auto-registers in <code>App.tsx</code> switch + <code>Sidebar.tsx</code> nav</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            "New BigQuery Object" Agent
+            <span class="tag tag-medium">Medium</span>
+            <span class="tag tag-time">~1 hr</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">Scaffold views, procedures, or tables in the right place and never forget config.yaml again.</div>
+          <div class="task-meta">
+            <span class="tag tag-impact">saves 10-20 min per object</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <p><strong>What it generates:</strong></p>
+        <ul>
+          <li>SQL file in correct dir: <code>scripts/bigquery/views/</code>, <code>tables/</code>, or <code>procedures/</code></li>
+          <li>Adds entry to <code>config.yaml</code> under the right section</li>
+          <li>Updates deployment script if needed</li>
+          <li>Optionally registers in <code>SP_ORCHESTRATE_DAILY_REFRESH</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            "New CRUD Entity" Agent
+            <span class="tag tag-larger">Larger</span>
+            <span class="tag tag-time">~2 hrs</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">Generate full insert/update/delete/list/detail for a new entity in the Flask app.</div>
+          <div class="task-meta">
+            <span class="tag tag-impact">saves 1-2 hrs per entity</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <p><strong>What it generates:</strong></p>
+        <ul>
+          <li>BigQuery table DDL</li>
+          <li>Insert, update, delete functions matching existing patterns</li>
+          <li>List and detail query functions</li>
+          <li>Flask routes (page + API)</li>
+          <li>Jinja templates</li>
+          <li>Cache invalidation hooks</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ CATEGORY 3: DEVOPS ═══ -->
+<div class="category">
+  <div class="cat-header">
+    <div class="cat-icon" style="background:rgba(245,158,11,0.15)">🚀</div>
+    <h2>DevOps &amp; Deployment</h2>
+    <span class="cat-count">3 tasks</span>
+  </div>
+  <div class="tasks">
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            GitHub Actions CI/CD
+            <span class="tag tag-larger">Larger</span>
+            <span class="tag tag-time">~3 hrs</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">Auto-lint on PRs, auto-deploy on merge. No more manual deploys.</div>
+          <div class="task-meta">
+            <span class="tag tag-impact">eliminates deploy errors</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <p><strong>Three workflows:</strong></p>
+        <ul>
+          <li><strong>On PR:</strong> Lint (ESLint, ruff, sqlfluff), type-check, run tests</li>
+          <li><strong>On merge to main:</strong> Deploy BigQuery views, build + deploy Cloud Run, deploy Cloud Functions</li>
+          <li><strong>Scheduled:</strong> Data freshness health check via <code>config.yaml</code> monitoring settings</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            Unified Deploy Command
+            <span class="tag tag-larger">Larger</span>
+            <span class="tag tag-time">~2 hrs</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">One command to deploy everything: <code>make deploy-all</code></div>
+          <div class="task-meta">
+            <span class="tag tag-impact">replaces 6+ scripts</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <ul>
+          <li>Deploy BigQuery objects, Cloud Run app, Cloud Functions in one go</li>
+          <li>Validate with <code>deployment/validate.sh</code></li>
+          <li>Flags: <code>--dry-run</code>, <code>--bq-only</code>, <code>--app-only</code>, <code>--functions-only</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            BigQuery Migration Runner
+            <span class="tag tag-larger">Larger</span>
+            <span class="tag tag-time">~2 hrs</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">Versioned, ordered migrations with history tracking. No more guessing what ran.</div>
+          <div class="task-meta">
+            <span class="tag tag-impact">prevents migration chaos</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <ul>
+          <li>Version-prefixed migration files: <code>001_add_column.sql</code>, <code>002_create_table.sql</code></li>
+          <li><code>_MIGRATION_HISTORY</code> table in BigQuery to track what&rsquo;s been applied</li>
+          <li>Runs pending migrations in order</li>
+          <li>Supports <code>--dry-run</code> and rollback</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ CATEGORY 4: CODE QUALITY ═══ -->
+<div class="category">
+  <div class="cat-header">
+    <div class="cat-icon" style="background:rgba(34,197,94,0.15)">🛡</div>
+    <h2>Code Quality &amp; DX</h2>
+    <span class="cat-count">2 tasks</span>
+  </div>
+  <div class="tasks">
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            Pre-Commit Hooks
+            <span class="tag tag-medium">Medium</span>
+            <span class="tag tag-time">~45 min</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">Catch problems before they reach the repo. Lint + format on every commit.</div>
+          <div class="task-meta">
+            <span class="tag tag-impact">prevents broken pushes</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <ul>
+          <li><strong>React:</strong> ESLint + Prettier via <code>husky</code> + <code>lint-staged</code></li>
+          <li><strong>Python:</strong> <code>ruff</code> for <code>data-entry-app/</code>, <code>scripts/</code>, <code>dashboard/</code></li>
+          <li><strong>SQL:</strong> <code>sqlfluff</code> for BigQuery files in <code>scripts/bigquery/</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            Shared Config Module
+            <span class="tag tag-quick">Quick</span>
+            <span class="tag tag-time">~15 min</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">One <code>config.py</code> instead of PROJECT_ID copy-pasted in 10+ files.</div>
+          <div class="task-meta">
+            <span class="tag tag-impact">eliminates config drift</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <p>Extract to <code>data-entry-app/config.py</code>:</p>
+        <ul>
+          <li><code>PROJECT_ID</code>, <code>DATASET_ID</code>, all table names</li>
+          <li>Read from env vars with sensible defaults</li>
+          <li>Import everywhere instead of redefining</li>
+          <li>Affects: <code>app.py</code>, <code>truncate_and_reimport.py</code>, <code>backup_tables.py</code>, <code>migrate_po_ids.py</code>, and 6+ more</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ CATEGORY 5: FRONTEND ═══ -->
+<div class="category">
+  <div class="cat-header">
+    <div class="cat-icon" style="background:rgba(236,72,153,0.15)">🧩</div>
+    <h2>Frontend Consolidation</h2>
+    <span class="cat-count">1 task</span>
+  </div>
+  <div class="tasks">
+
+    <div class="task" onclick="toggleTask(this)">
+      <div class="task-top">
+        <input type="checkbox" class="task-check" onclick="event.stopPropagation(); updateProgress()">
+        <div class="task-body">
+          <div class="task-title">
+            Extract Shared Components
+            <span class="tag tag-quick">Quick</span>
+            <span class="tag tag-time">~45 min</span>
+            <span class="expand-hint">click to expand</span>
+          </div>
+          <div class="task-desc">Stop re-writing Section, FilterBar, and PageHeader in every page file.</div>
+          <div class="task-meta">
+            <span class="tag tag-impact">faster page development</span>
+          </div>
+        </div>
+      </div>
+      <div class="task-details">
+        <p><strong>Components to extract:</strong></p>
+        <ul>
+          <li><code>Section.tsx</code> &mdash; wrapper duplicated in 5 pages (Home, Experiment, Family, AdsPerformance, Strategies)</li>
+          <li><code>PageFilterBar.tsx</code> &mdash; the repeated flex/gap/select pattern in 3+ pages</li>
+          <li><code>PageHeader.tsx</code> &mdash; h1 + subtitle pattern</li>
+          <li>Consolidate tables &rarr; use <code>DataTable</code> from <code>Table.tsx</code> everywhere</li>
+          <li>Move <code>MEASURE_META</code> to shared <code>constants.ts</code> (duplicated in HomePage &amp; FamilyPage)</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ PRODUCTIVITY GAINS ═══ -->
+<div class="gains">
+  <h2>What You Get</h2>
+  <div class="gain-grid">
+    <div class="gain">
+      <div class="gain-icon">🧠</div>
+      <div class="gain-text">
+        <strong>Cursor Rules</strong>
+        <span>Save 2-5 min per AI conversation</span>
+      </div>
+    </div>
+    <div class="gain">
+      <div class="gain-icon">⚡</div>
+      <div class="gain-text">
+        <strong>Page Generator</strong>
+        <span>Save 15-30 min per new dashboard page</span>
+      </div>
+    </div>
+    <div class="gain">
+      <div class="gain-icon">🗄</div>
+      <div class="gain-text">
+        <strong>BigQuery Agent</strong>
+        <span>Save 10-20 min per new view/procedure</span>
+      </div>
+    </div>
+    <div class="gain">
+      <div class="gain-icon">🛡</div>
+      <div class="gain-text">
+        <strong>Pre-Commit Hooks</strong>
+        <span>Prevent broken deploys &amp; style drift</span>
+      </div>
+    </div>
+    <div class="gain">
+      <div class="gain-icon">🚀</div>
+      <div class="gain-text">
+        <strong>CI/CD Pipeline</strong>
+        <span>Eliminate manual deploy errors</span>
+      </div>
+    </div>
+    <div class="gain">
+      <div class="gain-icon">🧩</div>
+      <div class="gain-text">
+        <strong>Shared Components</strong>
+        <span>Fewer bugs, faster feature dev</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleTask(el) {
+  if (el.querySelector('.task-check') === document.activeElement) return;
+  el.classList.toggle('open');
+  const hint = el.querySelector('.expand-hint');
+  if (hint) hint.textContent = el.classList.contains('open') ? 'click to collapse' : 'click to expand';
+}
+
+function updateProgress() {
+  requestAnimationFrame(() => {
+    const checks = document.querySelectorAll('.task-check');
+    const total = checks.length;
+    let done = 0;
+    checks.forEach(c => {
+      const task = c.closest('.task');
+      if (c.checked) { done++; task.classList.add('done'); }
+      else { task.classList.remove('done'); }
+    });
+    const pct = Math.round((done / total) * 100);
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('pctLabel').textContent = done + ' / ' + total + ' done';
+    document.querySelector('.stat:last-child .stat-num').textContent = pct + '%';
+  });
+}
+</script>
+
+</body>
+</html>

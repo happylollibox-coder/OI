@@ -1,0 +1,72 @@
+---
+description: React dashboard (OI) component patterns, data, and styling
+globs: "dashboard-react/**/*.{ts,tsx}"
+alwaysApply: false
+---
+
+# React Dashboard Conventions (OI)
+
+The OI dashboard lives in `dashboard-react/`. Use these patterns when adding or changing code.
+
+## Stack
+
+- **React 19**, **Vite 7**, **TypeScript**, **Tailwind CSS 4**
+- **Recharts** for charts. **Lucide React** for icons.
+- No React Router: in-app routing is via `useState` in `App.tsx` and a `navigate` callback.
+
+## Page components
+
+- **Location**: `dashboard-react/src/pages/`
+- **Props**: Pages receive `data: DashboardData` (from `useUnifiedData()`). Some also get `onNav`, `family`, `experimentId`, etc., as needed.
+- **Data**: All dashboard data is loaded once at app load via `useUnifiedData()` and passed down. When `VITE_CUBE_API_URL` is set, most data comes from Cube (BigQuery via Cube.js); otherwise from static JSON under `/data/*.json`. JSON-only fields: `negative_keywords`, `_meta`. Do not add ad-hoc fetch calls for the same data; extend the shared data shape and `useCubeData.ts` or the JSON loader if needed.
+- **Filters**: Use the global filter context via `useFilters()` from `hooks/useFilters`. Filters include `family`, `product`, `periodMode`, `periodCount`, `specificPeriod`, `experiment`, `keyword`, `seasonality`.
+- **Empty state**: Use the shared `<Empty icon="…" message="…" hint="…" />` component when there is no data to show.
+- **Sections**: Use a consistent section wrapper for content blocks (title + optional count + children). Prefer a shared `Section` component if present; otherwise keep the same structure (e.g. title + border/card) across pages.
+
+## Header filters (FilterBar)
+
+- **Component**: `FilterBar` in `components/FilterBar.tsx` is the global filter bar rendered above all page content in `App.tsx`. It is sticky when scrolling so filters remain visible.
+- **Data**: Receives `data: DashboardData` to build options via `useFilterOptions(data, filters)`.
+- **State**: Uses `useFilters()` for `filters`, `setFilter`, `resetFilters`, and `activeCount`.
+- **Adding a filter**: Add the filter key to `GlobalFilters` in `useFilters`, extend `useFilterOptions` to compute options, and add a dropdown in `FilterBar.tsx`. Pages read the filter via `useFilters()`.
+- **FilterBar changes**: When adding or changing a filter in FilterBar, wire all relevant visuals across the dashboard to that filter. Audit each page for data that can be filtered by the new/changed dimension and update the page to use it.
+
+## Wiring visuals to filters
+
+- **Principle**: All charts, tables, KPIs, and other visuals should respect the global filters (FilterBar) when the data supports it. Use `useFilters()` and filter data by `family`, `periodMode`, `periodCount`, `specificPeriod`, `experiment`, `keyword`, `product`, and `seasonality` as applicable.
+- **New pages**: When adding a page, wire its visuals to filters unless the data has no meaningful filter dimensions (e.g. system logs, health checks).
+- **Consistency**: Changing a filter in the header should update all pages that show filtered data. Avoid page-local filters that duplicate or override global filters unless there is a clear UX reason.
+
+## Adding a new page
+
+1. Create the page component in `src/pages/<Name>Page.tsx` (e.g. `NewPage.tsx` → `NewPage`).
+2. Add the page id to the `PageId` type in `src/types.ts`.
+3. In `App.tsx`: import the page, add a `case` in the `switch (page)` inside `renderPage()`, and pass the correct props (`data`, `onNav`, etc.).
+4. In `Sidebar.tsx`: add a nav item that calls `onNav('newPageId')` (or the id you chose) so the page is reachable.
+
+## Tables and sorting
+
+- **Sortable tables**: Use the shared `useSort` hook and `SortTh` component from `components/Tooltip.tsx` (or the pattern already used in existing pages). Prefer a consistent pattern: same table structure and sort state handling.
+- **DataTable**: There is a generic `DataTable` in `components/Table.tsx`. Prefer using it for new tables when it fits (columns, sort, expand) instead of ad-hoc `<table>` + `useSort` unless the page has a good reason.
+
+## Styling (Tailwind)
+
+- **Theme**: Custom tokens in `index.css` (e.g. `--color-surface`, `--color-card`, `--color-border`, `--color-muted`, `--color-subtle`, `--color-faint`, `--font-mono`). Use utilities like `bg-card`, `border-border`, `text-subtle`, `text-faint`, `bg-surface`.
+- **Base**: Dark theme; base font size 13px. Use the design tokens for consistency.
+- **Charts**: Use Recharts with the same color palette and tooltip/label style as existing pages.
+
+## Types and data shape
+
+- **Central types**: `src/types.ts` defines `DashboardData`, `SummaryRow`, `ActionRow`, `ExperimentRow`, and other shared types. When adding new JSON data or fields, extend `DashboardData` and the corresponding row/type so TypeScript stays accurate.
+- **Filter types**: `GlobalFilters`, `PeriodMode`, `FamilyName` etc. live in or next to `useFilters`. Use them for filter state and options.
+
+## Measure naming (source prefix)
+
+- **Ads source**: If a measure comes from ads data (FACT_AMAZON_ADS, campaign/search term performance), its label must start with the prefix **Ads** (e.g. Ads Spend, Ads Orders, Ads Sales, Ads Clicks, Ads Conv%, Ads CPC, Ads ROAS).
+- **SQP source**: If a measure comes from Search Query Performance (SQP) data, its label must start with the prefix **SQP** (e.g. SQP Show Rate, SQP Market Volume, SQP CTR, SQP Conv Rate).
+
+## Hooks
+
+- `useUnifiedData()`: Returns `{ data, loading, fromCube }`. Single source of dashboard data. Uses Cube when `VITE_CUBE_API_URL` is set, else JSON.
+- `useFilters()`: Returns filter state and setters. Only available inside `FiltersProvider` (wrapping the app).
+- `useGroundTruth`, `useConclusions`: Used where applicable; do not duplicate their logic in pages.

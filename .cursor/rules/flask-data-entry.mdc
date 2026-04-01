@@ -1,0 +1,54 @@
+---
+description: Flask data-entry app (OI) patterns, auth, BigQuery, and cache
+globs: "data-entry-app/**/*.py"
+alwaysApply: false
+---
+
+# Flask Data-Entry App Conventions (OI)
+
+The OI data-entry app lives in `data-entry-app/`. It is a Flask app deployed to GCP Cloud Run and talks to BigQuery directly (no ORM).
+
+## Stack and entrypoint
+
+- **Flask 3**, **Gunicorn**, **Authlib** (Google OAuth)
+- **google-cloud-bigquery** for all reads/writes. No ORM; use raw SQL or the BigQuery client APIs.
+- Main app and routes: `data-entry-app/app.py`
+
+## Authentication
+
+- **Google OAuth** via Authlib. Routes: `/login`, `/auth/google`, `/auth/callback`, `/logout`.
+- **Allowlist**: Only users in `ALLOWED_USERS` (in `app.py`) can access protected routes. Session stores `user` with `email`, `name`, `picture`.
+- **Protection**: Use the `@login_required` decorator on any route that requires an authenticated, allowlisted user. Do not add token-based API auth unless you explicitly introduce it; the app is session-based.
+
+## Data access (BigQuery)
+
+- **Inserts**: Build a row dict and use `load_table_from_json([row], table_ref, job_config)`. Check `job.result()` and `job.errors` and return errors to the user (e.g. via `flash()`).
+- **Updates**: Build `SET` clauses and `params` and run a parameterized `UPDATE ... WHERE id = @id` with `QueryJobConfig`.
+- **Reads**: `client.query(...).result()` and convert to list of dicts (e.g. `[dict(row) for row in results]`).
+- **Tables**: Main data-entry tables are `DE_PURCHASE_ORDERS`, `DE_MANUFACTURER_SHIPMENTS`, `DE_VENDOR_PAYMENTS`. Project/dataset come from environment (`GCP_PROJECT_ID`, `BIGQUERY_DATASET`) or defaults. Do not hardcode table names in many places; prefer a single config module or env-based constants.
+
+## Caching
+
+- **Decorator**: `@cache_result(ttl_seconds=N)` caches the return value of a function in memory for N seconds. Use it for read-heavy helpers that hit BigQuery (e.g. list of POs, dashboard stats).
+- **Invalidation**: After any insert/update/delete that affects data shown in cached queries, call `clear_data_cache()`. This clears the known data-related cache keys (e.g. `get_purchase_orders`, `get_dashboard_stats`, `get_po_details`). Do not leave caches stale after writes.
+
+## Error handling and user feedback
+
+- **Web requests**: Use `flash(message, 'error')` or `flash(message, 'success')` and then `redirect(...)`. Do not leave the user with no feedback on validation or BigQuery errors.
+- **BigQuery streaming buffer**: If you see errors mentioning the streaming buffer (e.g. "streaming buffer" in the error message), show a user-friendly message (e.g. wait 5–10 minutes and retry) instead of the raw exception.
+- **API-style endpoints**: If you add JSON APIs, return a consistent shape (e.g. `{ "success": true|false, "error": "..." }`) and appropriate status codes (400, 500).
+
+## Route and form patterns
+
+- **Form POST**: Typical pattern is `if request.method == 'POST':` then validate, call an insert/update helper, check for errors, call `clear_data_cache()` on success, `flash()` and `redirect()`. Use the same pattern for new entities so behavior and cache invalidation stay consistent.
+- **Deletes**: Resolve the parent or redirect target (e.g. PO id) if needed, run `DELETE FROM ... WHERE id = @id`, then `clear_data_cache()`, `flash()`, and `redirect()`.
+
+## Templates and static files
+
+- **Templates**: Jinja2 templates live in `data-entry-app/templates/`. Use the same base/layout and styling patterns as existing pages.
+- **Filters**: There is a custom `format_currency` filter; use it for currency display in templates.
+
+## Environment and config
+
+- **Required env vars**: `SECRET_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` for production OAuth. `GCP_PROJECT_ID`, `BIGQUERY_DATASET` for BigQuery. Optional: `PORT` for Cloud Run.
+- **.env**: The app loads `.env` via `dotenv` if available. Do not commit secrets; use env vars or a secret manager in production.

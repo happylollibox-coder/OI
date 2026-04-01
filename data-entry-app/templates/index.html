@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+
+{% block title %}Home - OI Data Entry Forms{% endblock %}
+
+{% block extra_css %}
+<style>
+    .status-PENDING { background-color: var(--hl-gray) !important; color: #5A5A6E !important; }
+    .status-IN_TRANSIT { background-color: var(--hl-lemon) !important; color: #8a6d00 !important; }
+    .status-RECEIVED { background-color: var(--hl-mint) !important; color: #217a45 !important; }
+    .status-INSPECTED { background-color: var(--hl-lavender) !important; color: #6B42A3 !important; }
+    .status-PUT_AWAY { background-color: var(--hl-pink-light) !important; color: var(--hl-pink-dark) !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">Purchase Orders</h1>
+        
+        <!-- Summary Cards -->
+        <div class="row mb-3">
+            <div class="col-md-4">
+                <div class="card summary-card accent-yellow">
+                    <div class="card-body">
+                        <h6 class="card-title mb-1">Remaining to Manufactured</h6>
+                        <h3 class="mb-0" style="color: #C28B00;">{{ remaining_sylvia|format_currency_with_commas }} USD</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card summary-card accent-peach">
+                    <div class="card-body">
+                        <h6 class="card-title mb-1">Remaining to Shipments</h6>
+                        <h3 class="mb-0" style="color: var(--hl-pink-dark);">{{ remaining_anna|format_currency_with_commas }} USD</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card summary-card accent-lavender">
+                    <div class="card-body">
+                        <h6 class="card-title mb-1">Remaining Shipments Estimated</h6>
+                        <h3 class="mb-0" style="color: #6B42A3;">{{ remaining_shipments_estimated_total|format_currency_with_commas }} USD</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Open Shipments Table -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-box-seam"></i> Open Shipments ({{ open_shipments|length }})</span>
+                <div>
+                    <a href="{{ url_for('shipments_list') }}" class="btn btn-sm btn-outline-light me-1">
+                        <i class="bi bi-list"></i> View All
+                    </a>
+                    <a href="{{ url_for('new_shipment') }}" class="btn btn-sm btn-outline-light">
+                        <i class="bi bi-plus-circle"></i> New Shipment
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                {% if open_shipments %}
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm mb-0">
+                        <thead class="table-light">
+                            <tr style="font-size: 0.82rem;">
+                                <th>Ship Date</th>
+                                <th>ETA</th>
+                                <th>Type</th>
+                                <th>Warehouse ID</th>
+                                <th>Products</th>
+                                <th>Qty</th>
+                                <th>Cost</th>
+                                <th>Status</th>
+                                <th>Paid</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for s in open_shipments %}
+                            <tr style="font-size: 0.82rem;">
+                                <td>{{ s.shipment_date }}</td>
+                                <td>{{ s.estimated_arrival_date or '-' }}</td>
+                                <td>
+                                    {% if s.shipment_type %}
+                                    <span class="badge bg-info">{{ s.shipment_type }}</span>
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td>
+                                    {% if s.tracking_number %}
+                                    <code style="font-size: 0.72rem;">{{ s.tracking_number }}</code>
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td>
+                                    {% if s.line_items %}
+                                        {% for item in s.line_items %}
+                                            {% if item.product_name %}
+                                            <span class="badge bg-secondary" style="font-size: 0.72rem;" title="{{ item.product_asin or '' }}">
+                                                {{ item.product_name[:18] }}{% if item.product_name|length > 18 %}…{% endif %}
+                                                <small>({{ item.quantity_shipped|int }})</small>
+                                            </span>
+                                            {% endif %}
+                                        {% endfor %}
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td>{{ s.total_quantity|default(0)|int|format_number }}</td>
+                                <td>
+                                    {% if s.cost_shipped %}
+                                    <strong>{{ s.cost_shipped|format_currency_with_commas }}</strong>
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td><span class="badge status-{{ s.shipment_status }}">{{ s.shipment_status }}</span></td>
+                                <td>
+                                    {% if s.is_paid %}
+                                    <span class="badge bg-success">Yes</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">No</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <a href="{{ url_for('shipment_details', shipment_id=s.shipment_id) }}" 
+                                       class="btn btn-sm btn-primary" style="font-size: 0.72rem; padding: 0.15rem 0.35rem;">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-3 text-center text-muted">
+                    <i class="bi bi-check-circle"></i> No open shipments
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <a href="{{ url_for('new_order') }}" class="btn btn-primary">
+                <i class="bi bi-plus-circle"></i> New Purchase Order
+            </a>
+            <div class="btn-group" role="group">
+                <input type="checkbox" class="btn-check" id="filter_open" autocomplete="off" 
+                       {% if filter_open %}checked{% endif %}
+                       onchange="window.location.href='{{ url_for('index') }}?filter_open_shipments=' + (this.checked ? 'true' : 'false')">
+                <label class="btn btn-outline-secondary" for="filter_open">
+                    <i class="bi bi-truck"></i> Open Shipments
+                </label>
+                
+                {% if filter_open %}
+                <a href="{{ url_for('index') }}?filter_open_shipments=false" class="btn btn-outline-secondary">
+                    <i class="bi bi-x-circle"></i> Show All
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if orders %}
+                <div class="table-responsive">
+                    <table class="table table-hover table-striped table-sm sortable-table">
+                        <thead>
+                            <tr>
+                                <th style="font-size: 0.85rem;" data-sort="date">Date <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Product <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Quantity <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Pending Shipment<br><small>Quantity</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Unit Price <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Cost <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Paid <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem; font-weight: bold; text-decoration: underline;" data-sort="number">Remaining <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Remaining<br><small>Manufactured</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Remaining<br><small>Shipments</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Remaining Shipments<br><small>Estimated</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Avg Ship<br><small>Price</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Avg Cost<br><small>/Unit</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for order in orders %}
+                            <tr style="font-size: 0.85rem;">
+                                <td>{{ order.order_date }}</td>
+                                <td>{{ order.product_name }}</td>
+                                <td>{{ order.quantity|format_number }}</td>
+                                <td>
+                                    {% set pending_qty = order.remaining_quantity_to_ship|default(order.quantity|default(0)) %}
+                                    {% if pending_qty > 0 %}
+                                        <span class="text-warning">{{ pending_qty|int|format_number }}</span>
+                                    {% else %}
+                                        <span class="text-success">0</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ order.unit_price|format_currency_with_commas }} {{ order.currency }}</td>
+                                <td>
+                                    <strong>{{ (order.total_amount_with_shipments|default(order.total_amount))|format_currency_with_commas }} {{ order.currency }}</strong>
+                                    {% if order.total_shipment_cost and order.total_shipment_cost > 0 %}
+                                        <br><small class="text-muted" style="font-size: 0.75rem;">
+                                            PO: {{ order.total_amount|format_currency_with_commas }} | Shipment: {{ order.total_shipment_cost|format_currency_with_commas }}
+                                        </small>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% set total_paid_combined = order.total_paid_with_shipments|default(order.total_paid) %}
+                                    {% if total_paid_combined > 0 %}
+                                        <span class="text-success">{{ total_paid_combined|format_currency_with_commas }} {{ order.currency }}</span>
+                                    {% else %}
+                                        <span class="text-muted">0</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% set remaining_combined = order.amount_remaining_with_shipments|default(order.amount_remaining) %}
+                                    {% if remaining_combined > 0 %}
+                                        <span class="text-warning" style="font-weight: bold; text-decoration: underline;">{{ remaining_combined|format_currency_with_commas }} {{ order.currency }}</span>
+                                    {% else %}
+                                        <span class="text-success">0</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% set remaining_manufactured = order.remaining_manufactured|default(order.amount_remaining|default(0)) %}
+                                    {% if remaining_manufactured > 0 %}
+                                        <span class="text-warning">{{ remaining_manufactured|format_currency_with_commas }} {{ order.currency }}</span>
+                                    {% else %}
+                                        <span class="text-success">0</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% set remaining_shipments = order.remaining_shipments|default(0) %}
+                                    {% if remaining_shipments > 0 %}
+                                        <span class="text-warning">{{ remaining_shipments|format_currency_with_commas }} {{ order.currency }}</span>
+                                    {% else %}
+                                        <span class="text-success">0</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if order.remaining_shipments_estimated is not none %}
+                                        <span class="text-info">{{ order.remaining_shipments_estimated|format_currency_with_commas }} {{ order.currency }}</span>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if order.total_shipment_cost and order.total_quantity_shipped and order.total_quantity_shipped > 0 %}
+                                        {{ (order.total_shipment_cost / order.total_quantity_shipped)|format_currency_with_commas }}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if order.total_amount_with_shipments and order.quantity and order.quantity > 0 %}
+                                        {{ (order.total_amount_with_shipments / order.quantity)|format_currency_with_commas }}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <a href="{{ url_for('po_details', po_id=order.purchase_order_id) }}" class="btn btn-sm btn-primary" style="font-size: 0.75rem; padding: 0.2rem 0.4rem;">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <form method="POST" action="{{ url_for('delete_po', po_id=order.purchase_order_id) }}" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete Purchase Order {{ order.purchase_order_id }}? This action cannot be undone.');">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" style="font-size: 0.75rem; padding: 0.2rem 0.4rem;">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle"></i> No purchase orders found.
+                    <a href="{{ url_for('new_order') }}" class="alert-link">Create your first purchase order</a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+// Table sorting functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const tables = document.querySelectorAll('.sortable-table');
+    
+    tables.forEach(table => {
+        const headers = table.querySelectorAll('thead th[data-sort]');
+        let currentSort = { column: null, direction: 'asc' };
+        
+        headers.forEach((header, index) => {
+            header.style.cursor = 'pointer';
+            header.addEventListener('click', () => {
+                const sortType = header.getAttribute('data-sort');
+                const tbody = table.querySelector('tbody');
+                const rows = Array.from(tbody.querySelectorAll('tr'));
+                
+                // Determine sort direction
+                if (currentSort.column === index) {
+                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.column = index;
+                    currentSort.direction = 'asc';
+                }
+                
+                // Reset all sort icons
+                headers.forEach(h => {
+                    const icon = h.querySelector('.sort-icon');
+                    if (icon) {
+                        icon.className = 'bi bi-arrow-down-up sort-icon';
+                    }
+                });
+                
+                // Update current column icon
+                const icon = header.querySelector('.sort-icon');
+                if (icon) {
+                    icon.className = currentSort.direction === 'asc' 
+                        ? 'bi bi-arrow-up sort-icon' 
+                        : 'bi bi-arrow-down sort-icon';
+                }
+                
+                // Sort rows
+                rows.sort((a, b) => {
+                    const aCell = a.cells[index];
+                    const bCell = b.cells[index];
+                    
+                    if (!aCell || !bCell) return 0;
+                    
+                    let aValue = aCell.textContent.trim();
+                    let bValue = bCell.textContent.trim();
+                    
+                    // Handle different data types
+                    if (sortType === 'number') {
+                        // Extract number from text (handles currency, etc.)
+                        // Handle empty/null values (like "-" or empty strings)
+                        if (aValue === '-' || aValue === '' || aValue === '0.00') {
+                            aValue = -Infinity; // Put empty values at bottom
+                        } else {
+                            aValue = parseFloat(aValue.replace(/[^\d.-]/g, '')) || -Infinity;
+                        }
+                        if (bValue === '-' || bValue === '' || bValue === '0.00') {
+                            bValue = -Infinity;
+                        } else {
+                            bValue = parseFloat(bValue.replace(/[^\d.-]/g, '')) || -Infinity;
+                        }
+                    } else if (sortType === 'date') {
+                        // Handle empty dates
+                        if (aValue === '-' || aValue === '') {
+                            aValue = new Date(0);
+                        } else {
+                            aValue = new Date(aValue) || new Date(0);
+                        }
+                        if (bValue === '-' || bValue === '') {
+                            bValue = new Date(0);
+                        } else {
+                            bValue = new Date(bValue) || new Date(0);
+                        }
+                    } else {
+                        // String comparison - handle empty/null
+                        if (aValue === '-' || aValue === '') aValue = 'zzz'; // Put empty at bottom
+                        if (bValue === '-' || bValue === '') bValue = 'zzz';
+                        aValue = aValue.toLowerCase();
+                        bValue = bValue.toLowerCase();
+                    }
+                    
+                    if (aValue < bValue) return currentSort.direction === 'asc' ? -1 : 1;
+                    if (aValue > bValue) return currentSort.direction === 'asc' ? 1 : -1;
+                    return 0;
+                });
+                
+                // Reorder rows in DOM
+                rows.forEach(row => tbody.appendChild(row));
+            });
+        });
+    });
+});
+</script>
+{% endblock %}
+{% endblock %}

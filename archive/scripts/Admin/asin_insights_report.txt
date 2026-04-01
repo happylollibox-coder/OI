@@ -1,0 +1,243 @@
+================================================================================
+ASIN DATA INSIGHTS ANALYSIS (Standard Library Version)
+================================================================================
+Loading data from CSV...
+✓ Loaded 44,568 rows
+
+================================================================================
+INSIGHT 3: DATA SUMMARY
+================================================================================
+
+Dataset Overview:
+--------------------------------------------------------------------------------
+Total Rows:                 44,568
+Unique SKUs:                     1
+Unique Queries:             19,286
+Unique Weeks:                   69
+
+Performance Metrics:
+--------------------------------------------------------------------------------
+Total Impressions:    9,295,443,546
+Total Clicks:          106,625,451
+Total Cart Adds:        39,627,681
+Total Purchases:         9,321,959
+
+Overall Rates:
+--------------------------------------------------------------------------------
+CTR:                          1.15%
+Conversion Rate:              8.74%
+Cart to Purchase:            23.52%
+
+================================================================================
+INSIGHT 1: TOP PERFORMING SEARCH QUERIES
+================================================================================
+
+Total unique queries: 19286
+Queries with 10+ purchases: 3054
+
+Top 20 Queries by Purchases:
+--------------------------------------------------------------------------------
+
+ 1. gift cards
+    Purchases: 1,416,316 | Conversion: 26.22% | CTR: 0.92%
+    Impressions: 583,982,102 | Clicks: 5,401,205 | Score: 17.9
+
+ 2. roblox gift card
+    Purchases: 455,752 | Conversion: 35.20% | CTR: 3.19%
+    Impressions: 40,646,306 | Clicks: 1,294,746 | Score: 23.3
+
+ 3. gift card
+    Purchases: 407,246 | Conversion: 25.89% | CTR: 1.05%
+    Impressions: 149,453,576 | Clicks: 1,572,915 | Score: 28.7
+
+ 4. teen girl gifts trendy stuff
+    Purchases: 392,657 | Conversion: 6.16% | CTR: 1.19%
+    Impressions: 535,405,427 | Clicks: 6,375,596 | Score: 22.7
+
+ 5. mothers day gifts
+    Purchases: 310,437 | Conversion: 9.17% | CTR: 0.91%
+    Impressions: 370,960,592 | Clicks: 3,385,615 | Score: 37.7
+
+ 6. teen girl gifts
+    Purchases: 281,525 | Conversion: 6.41% | CTR: 1.01%
+    Impressions: 433,951,406 | Clicks: 4,395,116 | Score: 29.2
+
+ 7. gifts for teen girls
+    Purchases: 256,062 | Conversion: 6.16% | CTR: 0.97%
+    Impressions: 428,773,834 | Clicks: 4,157,041 | Score: 29.6
+
+ 8. easter basket
+    Purchases: 247,256 | Conversion: 8.97% | CTR: 1.02%
+    Impressions: 270,032,512 | Clicks: 2,757,292 | Score: 21.7
+
+ 9. easter basket stuffers
+    Purchases: 244,445 | Conversion: 16.91% | CTR: 1.16%
+    Impressions: 125,078,386 | Clicks: 1,445,468 | Score: 22.5
+
+10. mothers day gifts for mom
+    Purchases: 156,191 | Conversion: 11.25% | CTR: 1.02%
+    Impressions: 136,600,342 | Clicks: 1,388,007 | Score: 92.0
+
+11. gifts for 10 year old girl
+    Purchases: 122,087 | Conversion: 9.28% | CTR: 1.37%
+    Impressions: 95,905,272 | Clicks: 1,316,274 | Score: 37.7
+
+12. gifts for teenage girls
+    Purchases: 113,207 | Conversion: 4.19% | CTR: 1.08%
+    Impressions: 250,381,345 | Clicks: 2,702,772 | Score: 39.4
+
+13. 10 year old girl gifts
+    Purchases: 107,231 | Conversion: 9.62% | CTR: 1.31%
+    Impressions: 84,837,707 | Clicks: 1,115,105 | Score: 38.1
+
+14. sol de janeiro
+    Purchases: 106,886 | Conversion: 5.18% | CTR: 1.48%
+    Impressions: 139,328,174 | Clicks: 2,062,334 | Score: 34.0
+
+15. 10 year old girl birthday gifts
+    Purchases: 106,459 | Conversion: 10.06% | CTR: 1.39%
+    Impressions: 76,170,790 | Clicks: 1,057,885 | Score: 29.3
+
+16. tween girls trendy stuff
+    Purchases: 100,707 | Conversion: 5.58% | CTR: 1.46%
+    Impressions: 124,038,939 | Clicks: 1,806,364 | Score: 25.1
+
+17. easter basket stuffers for teens
+    Purchases: 98,715 | Conversion: 13.61% | CTR: 1.21%
+    Impressions: 60,019,242 | Clicks: 725,109 | Score: 26.5
+
+18. pink stuff
+    Purchases: 97,346 | Conversion: 23.72% | CTR: 1.99%
+    Impressions: 20,597,181 | Clicks: 410,432 | Score: 16.2
+
+19. tween girls gifts
+    Purchases: 78,861 | Conversion: 6.19% | CTR: 1.30%
+    Impressions: 97,623,250 | Clicks: 1,273,322 | Score: 19.7
+
+20. christmas cards
+    Purchases: 75,830 | Conversion: 13.67% | CTR: 1.71%
+    Impressions: 32,491,153 | Clicks: 554,828 | Score: 90.5
+
+================================================================================
+INSIGHT 2: SHIPPING SPEED IMPACT ON CONVERSION
+================================================================================
+
+Conversion Rates by Shipping Speed:
+--------------------------------------------------------------------------------
+Same Day        | Clicks: 9,653,691 | Purchases: 1,154,120 | Conversion:  11.96%
+1 Day           | Clicks: 34,431,327 | Purchases: 2,945,717 | Conversion:   8.56%
+2 Day           | Clicks: 23,504,902 | Purchases: 1,606,697 | Conversion:   6.84%
+
+📊 Best performing: Same Day shipping (11.96% conversion)
+
+================================================================================
+INSIGHT 4: PRICE SENSITIVITY ANALYSIS
+================================================================================
+
+Performance by Price Range:
+--------------------------------------------------------------------------------
+
+< $15      (Avg: $12.41)
+  Clicks: 31,513,132 | Purchases: 2,336,308
+  Conversion:   7.41%
+
+$15-$25    (Avg: $19.35)
+  Clicks: 61,069,456 | Purchases: 4,729,175
+  Conversion:   7.74%
+
+$25-$35    (Avg: $29.33)
+  Clicks: 13,347,790 | Purchases: 2,203,249
+  Conversion:  16.51%
+
+$35-$50    (Avg: $44.30)
+  Clicks:  657,225 | Purchases: 49,795
+  Conversion:   7.58%
+
+> $50      (Avg: $66.06)
+  Clicks:   32,955 | Purchases:  2,343
+  Conversion:   7.11%
+
+📊 Sweet spot: $25-$35 range (16.51% conversion)
+
+================================================================================
+INSIGHT 5: UNDERPERFORMING QUERIES (Optimization Opportunities)
+================================================================================
+
+Found 3268 underperforming queries
+
+Top 15 by Impressions (Low Conversion):
+--------------------------------------------------------------------------------
+
+ 1. stuff for teen girls bedroom
+    Impressions: 240,212 | CTR: 0.98% | Conversion: 0.13% | Issue: LOW_CONVERSION
+    Purchases: 3 (Opportunity for improvement)
+
+ 2. cute stuff for tween girls
+    Impressions: 129,189 | CTR: 1.05% | Conversion: 0.30% | Issue: LOW_CONVERSION
+    Purchases: 4 (Opportunity for improvement)
+
+ 3. children's personal care
+    Impressions: 123,774 | CTR: 1.05% | Conversion: 0.23% | Issue: LOW_CONVERSION
+    Purchases: 3 (Opportunity for improvement)
+
+ 4. cute things for teens
+    Impressions: 113,931 | CTR: 0.97% | Conversion: 0.18% | Issue: LOW_CONVERSION
+    Purchases: 2 (Opportunity for improvement)
+
+ 5. stuff for teen girls trendy
+    Impressions: 103,073 | CTR: 0.74% | Conversion: 0.39% | Issue: LOW_CONVERSION
+    Purchases: 3 (Opportunity for improvement)
+
+ 6. christmas stuff for girls
+    Impressions: 96,171 | CTR: 1.27% | Conversion: 0.08% | Issue: LOW_CONVERSION
+    Purchases: 1 (Opportunity for improvement)
+
+ 7. cute christmas stuff
+    Impressions: 90,397 | CTR: 0.92% | Conversion: 0.36% | Issue: LOW_CONVERSION
+    Purchases: 3 (Opportunity for improvement)
+
+ 8. cool things for teen girls
+    Impressions: 88,088 | CTR: 0.77% | Conversion: 0.15% | Issue: LOW_CONVERSION
+    Purchases: 1 (Opportunity for improvement)
+
+ 9. school stuff for teen girls
+    Impressions: 85,985 | CTR: 1.16% | Conversion: 0.10% | Issue: LOW_CONVERSION
+    Purchases: 1 (Opportunity for improvement)
+
+10. bedazzled
+    Impressions: 82,321 | CTR: 1.78% | Conversion: 0.21% | Issue: LOW_CONVERSION
+    Purchases: 3 (Opportunity for improvement)
+
+11. christmas gifts for teen girls 10-12
+    Impressions: 79,921 | CTR: 1.17% | Conversion: 0.43% | Issue: LOW_CONVERSION
+    Purchases: 4 (Opportunity for improvement)
+
+12. cute room decor for teen girls
+    Impressions: 77,362 | CTR: 1.30% | Conversion: 0.20% | Issue: LOW_CONVERSION
+    Purchases: 2 (Opportunity for improvement)
+
+13. school emergency kit for teen girls
+    Impressions: 75,804 | CTR: 1.22% | Conversion: 0.32% | Issue: LOW_CONVERSION
+    Purchases: 3 (Opportunity for improvement)
+
+14. advent+skincare+calendar
+    Impressions: 70,087 | CTR: 2.36% | Conversion: 0.24% | Issue: LOW_CONVERSION
+    Purchases: 4 (Opportunity for improvement)
+
+15. preppy decor
+    Impressions: 68,447 | CTR: 1.19% | Conversion: 0.25% | Issue: LOW_CONVERSION
+    Purchases: 2 (Opportunity for improvement)
+
+================================================================================
+ANALYSIS COMPLETE
+================================================================================
+
+💡 Key Takeaways:
+   • 19,286 unique search queries analyzed
+   • 9,321,959 total purchases tracked
+   • Overall conversion rate: 8.74%
+   • Overall CTR: 1.15%
+   • Top query: 'gift cards...' with 1,416,316 purchases
+   • 15 queries need optimization
+
+================================================================================

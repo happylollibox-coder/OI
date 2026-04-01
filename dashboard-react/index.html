@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Happy Lolli OI — React Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="error-display" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#111;color:#f87171;padding:40px;font-family:monospace;font-size:14px;white-space:pre-wrap;overflow:auto;z-index:99999"></div>
+    <script>
+      window.onerror = function(msg, src, line, col, err) {
+        var el = document.getElementById('error-display');
+        el.style.display = 'block';
+        el.textContent = 'RUNTIME ERROR:\n\n' + msg + '\n\nSource: ' + src + ':' + line + ':' + col + '\n\nStack:\n' + (err && err.stack || 'N/A');
+      };
+      window.addEventListener('unhandledrejection', function(e) {
+        var el = document.getElementById('error-display');
+        el.style.display = 'block';
+        el.textContent = 'UNHANDLED PROMISE REJECTION:\n\n' + (e.reason && e.reason.stack || e.reason || 'Unknown');
+      });
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,46 @@
+# Exclude unnecessary files from upload
+.gcloudignore
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+.env
+.idea
+.vscode
+*.log
+.DS_Store
+*.xlsx
+*.xls
+*.md
+!README.md
+# Exclude migration/utility scripts
+migrate_po_ids.py
+backup_tables.py
+fix_remaining_po_ids.py
+parse_2025_data.py
+truncate_and_reimport.py
+load_excel_data.py
+create_excel_templates.py
+check_streaming_buffer.py
+deploy_cloud_run.sh
+deploy.py
+DEPLOY_COMPLETE.sh
+check_and_deploy.sh
+DEPLOYMENT*.md
+FINAL_DEPLOY*.md
+QUICK_*.md
+ACCESS_*.md
+PERFORMANCE_*.md
+excel_templates/
+# Keep these - they're needed!
+# Dockerfile
+# .dockerignore
+# requirements.txt
+# app.py
+# templates/

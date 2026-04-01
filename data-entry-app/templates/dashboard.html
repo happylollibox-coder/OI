@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - OI Data Entry Forms{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1 class="mb-0"><i class="bi bi-graph-up"></i> Dashboard</h1>
+                <p class="text-muted mb-0">Year-over-Year Comparison: {{ stats.current_year }} vs {{ stats.last_year }}</p>
+            </div>
+            <div>
+                <form method="GET" action="{{ url_for('dashboard') }}" class="d-flex align-items-center">
+                    <label for="year" class="form-label me-2 mb-0">Year:</label>
+                    <select name="year" id="year" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+                        {% for year in available_years %}
+                        <option value="{{ year }}" {% if year == selected_year %}selected{% endif %}>{{ year }}</option>
+                        {% endfor %}
+                    </select>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card border-primary">
+            <div class="card-body text-center">
+                <h6 class="text-muted">Total PO Orders ({{ stats.current_year }})</h6>
+                <h2 class="text-primary">{{ stats.po_orders.this_year|format_currency }} USD</h2>
+                <small class="text-muted">vs {{ stats.last_year }}: {{ stats.po_orders.last_year|format_currency }} USD</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-info">
+            <div class="card-body text-center">
+                <h6 class="text-muted">Total Shipment Amount ({{ stats.current_year }})</h6>
+                <h2 class="text-info">{{ stats.shipment_amount.this_year|format_currency }} USD</h2>
+                <small class="text-muted">vs {{ stats.last_year }}: {{ stats.shipment_amount.last_year|format_currency }} USD</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-success">
+            <div class="card-body text-center">
+                <h6 class="text-muted">Total Quantity Shipped ({{ stats.current_year }})</h6>
+                <h2 class="text-success">{{ stats.quantity_amount.this_year|format_number }}</h2>
+                <small class="text-muted">vs {{ stats.last_year }}: {{ stats.quantity_amount.last_year|format_number }}</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- PO Orders Amount -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-file-earmark-text"></i> Total PO Orders Amount</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="text-center">
+                            <h6 class="text-muted">Selected Year ({{ stats.current_year }})</h6>
+                            <h3 class="text-success">{{ stats.po_orders.this_year|format_currency }} USD</h3>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-center">
+                            <h6 class="text-muted">Previous Year ({{ stats.last_year }})</h6>
+                            <h3 class="text-primary">{{ stats.po_orders.last_year|format_currency }} USD</h3>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-center">
+                            <h6 class="text-muted">Change</h6>
+                            {% set change = stats.po_orders.change_amount %}
+                            {% set percent = stats.po_orders.change_percent %}
+                            <h3 class="{% if change >= 0 %}text-success{% else %}text-danger{% endif %}">
+                                {% if change >= 0 %}+{% endif %}{{ change|format_currency }} USD
+                            </h3>
+                            <p class="{% if percent >= 0 %}text-success{% else %}text-danger{% endif %} mb-0">
+                                {% if percent >= 0 %}+{% endif %}{{ percent|format_percent }}%
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <div class="progress" style="height: 30px;">
+                        {% set max_val = [stats.po_orders.last_year, stats.po_orders.this_year]|max %}
+                        {% if max_val > 0 %}
+                        <div class="progress-bar bg-success" role="progressbar" 
+                             style="width: {{ (stats.po_orders.this_year / max_val * 100) }}%">
+                            {{ stats.current_year }}
+                        </div>
+                        <div class="progress-bar bg-primary" role="progressbar" 
+                             style="width: {{ (stats.po_orders.last_year / max_val * 100) }}%">
+                            {{ stats.last_year }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Shipment Amount -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-truck"></i> Shipment Amount</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="text-center">
+                            <h6 class="text-muted">Selected Year ({{ stats.current_year }})</h6>
+                            <h3 class="text-success">{{ stats.shipment_amount.this_year|format_currency }} USD</h3>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-center">
+                            <h6 class="text-muted">Previous Year ({{ stats.last_year }})</h6>
+                            <h3 class="text-primary">{{ stats.shipment_amount.last_year|format_currency }} USD</h3>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-center">
+                            <h6 class="text-muted">Change</h6>
+                            {% set change = stats.shipment_amount.change_amount %}
+                            {% set percent = stats.shipment_amount.change_percent %}
+                            <h3 class="{% if change >= 0 %}text-success{% else %}text-danger{% endif %}">
+                                {% if change >= 0 %}+{% endif %}{{ change|format_currency }} USD
+                            </h3>
+                            <p class="{% if percent >= 0 %}text-success{% else %}text-danger{% endif %} mb-0">
+                                {% if percent >= 0 %}+{% endif %}{{ percent|format_percent }}%
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <div class="progress" style="height: 30px;">
+                        {% set max_val = [stats.shipment_amount.last_year, stats.shipment_amount.this_year]|max %}
+                        {% if max_val > 0 %}
+                        <div class="progress-bar bg-success" role="progressbar" 
+                             style="width: {{ (stats.shipment_amount.this_year / max_val * 100) }}%">
+                            {{ stats.current_year }}
+                        </div>
+                        <div class="progress-bar bg-primary" role="progressbar" 
+                             style="width: {{ (stats.shipment_amount.last_year / max_val * 100) }}%">
+                            {{ stats.last_year }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quantity Amount -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-box-seam"></i> Quantity Amount</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="text-center">
+                            <h6 class="text-muted">Selected Year ({{ stats.current_year }})</h6>
+                            <h3 class="text-success">{{ stats.quantity_amount.this_year|format_number }}</h3>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-center">
+                            <h6 class="text-muted">Previous Year ({{ stats.last_year }})</h6>
+                            <h3 class="text-primary">{{ stats.quantity_amount.last_year|format_number }}</h3>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-center">
+                            <h6 class="text-muted">Change</h6>
+                            {% set change = stats.quantity_amount.change_amount %}
+                            {% set percent = stats.quantity_amount.change_percent %}
+                            <h3 class="{% if change >= 0 %}text-success{% else %}text-danger{% endif %}">
+                                {% if change >= 0 %}+{% endif %}{{ change|format_number }}
+                            </h3>
+                            <p class="{% if percent >= 0 %}text-success{% else %}text-danger{% endif %} mb-0">
+                                {% if percent >= 0 %}+{% endif %}{{ percent|format_percent }}%
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <div class="progress" style="height: 30px;">
+                        {% set max_val = [stats.quantity_amount.last_year, stats.quantity_amount.this_year]|max %}
+                        {% if max_val > 0 %}
+                        <div class="progress-bar bg-success" role="progressbar" 
+                             style="width: {{ (stats.quantity_amount.this_year / max_val * 100) }}%">
+                            {{ stats.current_year }}
+                        </div>
+                        <div class="progress-bar bg-primary" role="progressbar" 
+                             style="width: {{ (stats.quantity_amount.last_year / max_val * 100) }}%">
+                            {{ stats.last_year }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

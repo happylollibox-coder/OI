@@ -1,0 +1,4 @@
+[
+  {"product_type": "Lollibox", "week_start": "2026-02-19", "sales": 8000, "ad_cost": 1800, "cogs": 4000, "net_profit": 2200, "orders": 80, "clicks": 1800, "sessions": 2500, "net_roas": 1.22, "organic_pct": 37.5},
+  {"product_type": "Lollibox", "week_start": "2026-02-26", "sales": 10000, "ad_cost": 2000, "cogs": 5000, "net_profit": 3000, "orders": 100, "clicks": 2000, "sessions": 3000, "net_roas": 1.5, "organic_pct": 40}
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "holiday_date": "2026-04-05",
+    "holiday_name": "Easter",
+    "category": "gift_season",
+    "ramp_up_days": 14,
+    "pre_season_start": "2026-03-22",
+    "days_until_holiday": 28,
+    "days_until_pre_season": 14,
+    "status": "UPCOMING"
+  },
+  {
+    "holiday_date": "2026-05-10",
+    "holiday_name": "Mothers Day",
+    "category": "gift_season",
+    "ramp_up_days": 21,
+    "pre_season_start": "2026-04-19",
+    "days_until_holiday": 63,
+    "days_until_pre_season": 42,
+    "status": "UPCOMING"
+  },
+  {
+    "holiday_date": "2026-06-21",
+    "holiday_name": "Fathers Day",
+    "category": "gift_season",
+    "ramp_up_days": 21,
+    "pre_season_start": "2026-05-31",
+    "days_until_holiday": 105,
+    "days_until_pre_season": 84,
+    "status": "UPCOMING"
+  }
+]

@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OI BigQuery Schema - onyga-482313.OI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --surface-hover: #243044;
+      --border: #2d3a4d;
+      --text: #e6edf3;
+      --text-muted: #8b9cb3;
+      --accent: #58a6ff;
+      --fact: #3fb950;
+      --dim: #d2a8ff;
+      --view: #f0883e;
+      --danger: #f85149;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'DM Sans', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .header {
+      background: linear-gradient(135deg, var(--surface) 0%, #1e2a3a 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 1.5rem 2rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+    }
+    .header .sub {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+    .search-wrap {
+      margin-top: 1rem;
+      max-width: 400px;
+    }
+    .search-wrap input {
+      width: 100%;
+      padding: 0.6rem 1rem 0.6rem 2.5rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.95rem;
+      font-family: inherit;
+    }
+    .search-wrap input::placeholder { color: var(--text-muted); }
+    .search-wrap input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(88,166,255,0.2);
+    }
+    .search-wrap { position: relative; }
+    .search-wrap::before {
+      content: "🔍";
+      position: absolute;
+      left: 0.75rem;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 0.9rem;
+    }
+    .container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+    .section {
+      margin-bottom: 2rem;
+    }
+    .section-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .badge {
+      font-size: 0.7rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .badge-fact { background: rgba(63,185,80,0.2); color: var(--fact); }
+    .badge-dim { background: rgba(210,168,255,0.2); color: var(--dim); }
+    .badge-view { background: rgba(240,136,62,0.2); color: var(--view); }
+    .badge-bridge { background: rgba(88,166,255,0.2); color: var(--accent); }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 0.75rem;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: var(--accent); }
+    .card-header {
+      padding: 1rem 1.25rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      user-select: none;
+    }
+    .card-header:hover { background: var(--surface-hover); }
+    .card-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    .card-toggle {
+      color: var(--text-muted);
+      font-size: 1.2rem;
+      transition: transform 0.2s;
+    }
+    .card.open .card-toggle { transform: rotate(180deg); }
+    .card-body {
+      display: none;
+      padding: 0 1.25rem 1.25rem;
+      border-top: 1px solid var(--border);
+    }
+    .card.open .card-body { display: block; }
+    .card-desc {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 1rem;
+      padding-top: 1rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    th, td {
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      font-weight: 600;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    .col-name { font-family: 'JetBrains Mono', monospace; color: var(--accent); }
+    .col-type { color: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; }
+    .col-notes { color: var(--text-muted); font-size: 0.8rem; }
+    .rel-list {
+      list-style: none;
+      font-size: 0.85rem;
+    }
+    .rel-list li {
+      padding: 0.35rem 0;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+    }
+    .rel-list li:last-child { border-bottom: none; }
+    .rel-arrow { color: var(--accent); flex-shrink: 0; }
+    .hidden { display: none !important; }
+    .erd-container {
+      background: var(--bg);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin: 1rem 0;
+      overflow-x: auto;
+    }
+    .erd-container .mermaid { text-align: center; }
+    .erd-diagram { margin-bottom: 2rem; }
+    .erd-diagram:last-child { margin-bottom: 0; }
+    .erd-title { font-size: 0.9rem; font-weight: 600; color: var(--text-muted); margin-bottom: 0.75rem; }
+    .footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <h1>OI BigQuery Schema</h1>
+    <p class="sub">onyga-482313.OI · Dashboard & Cube Migration Reference</p>
+    <div class="search-wrap">
+      <input type="text" id="search" placeholder="Search tables or columns...">
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="section">
+      <h2 class="section-title">Entity Relationship Diagram</h2>
+      <div class="card" data-name="ERD">
+        <div class="card-header">
+          <span class="card-title">ERD: Bridge-Centric &amp; Ads/Experiment</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <div class="erd-container">
+            <div class="erd-diagram">
+              <div class="erd-title">Bridge-Centric: FACT_FACTLESS_BRIDGE connects (date_key, asin) across facts</div>
+              <pre class="mermaid">
+flowchart TB
+  subgraph BRIDGE
+    B[FACT_FACTLESS_BRIDGE]
+  end
+  subgraph FACTS
+    F1[FACT_AMAZON_PERFORMANCE_DAILY]
+    F2[FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY]
+    F3[FACT_INVENTORY_SNAPSHOT]
+    F4[FACT_PURCHASE_ORDER]
+    F5[FACT_FINANCIAL_TRANSACTIONS]
+    F6[FACT_EXPERIMENT_DAILY]
+  end
+  subgraph DIMS
+    D1[DIM_TIME]
+    D2[DIM_PRODUCT]
+  end
+  F1 -->|factless_key| B
+  F2 -->|factless_key| B
+  F3 -->|factless_key| B
+  F4 -->|factless_key| B
+  F5 -->|factless_key| B
+  F6 -->|factless_key| B
+  B -->|date_key| D1
+  B -->|asin| D2
+              </pre>
+            </div>
+            <div class="erd-diagram">
+              <div class="erd-title">Experiment &amp; Ads: DIM_EXPERIMENT → campaigns → FACT_AMAZON_ADS (not via bridge)</div>
+              <pre class="mermaid">
+flowchart TB
+  subgraph EXPERIMENT
+    E[DIM_EXPERIMENT]
+    EC[DIM_EXPERIMENT_CAMPAIGN]
+  end
+  subgraph ADS
+    FADS[FACT_AMAZON_ADS]
+    CH[V_SRC_AmazonAds_campaign_history]
+    PF[V_SRC_AmazonAds_portfolio]
+  end
+  subgraph DIMS2
+    DP[DIM_PRODUCT]
+    DCH[DIM_COSTS_HISTORY]
+  end
+  FED[FACT_EXPERIMENT_DAILY]
+  E -->|1:*| EC
+  EC -->|campaign_id| FADS
+  FADS -->|most_advertised_asin| DP
+  FADS -->|campaign_id + date| CH
+  CH -->|portfolio_id| PF
+  E -->|experiment_id| FED
+  FED -->|asin| DP
+  DP -->|asin + temporal| DCH
+              </pre>
+            </div>
+            <div class="erd-diagram">
+              <div class="erd-title">Ads_key: FACT_AMAZON_PERFORMANCE_DAILY ↔ FACT_AMAZON_ADS</div>
+              <pre class="mermaid">
+flowchart LR
+  subgraph PERFORMANCE
+    FAPD[FACT_AMAZON_PERFORMANCE_DAILY]
+  end
+  subgraph ADS
+    FADS2[FACT_AMAZON_ADS]
+  end
+  FAPD -->|Ads_key| FADS2
+  FADS2 -->|Ads_key| FAPD
+              </pre>
+              <p style="font-size:0.85rem;color:var(--text-muted);margin-top:0.5rem;">Ads_key format: DYYYYMMDD-Ccampaign_id-Aad_group_id-Kkeyword_id. Both tables use the same composite key for join.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title"><span class="badge badge-fact">FACT</span> Fact Tables</h2>
+
+      <div class="card" data-name="FACT_AMAZON_ADS">
+        <div class="card-header">
+          <span class="card-title">FACT_AMAZON_ADS</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Amazon Ads search term performance. Partition: YEAR. Cluster: campaign_id, ad_group_id, date.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">date</td><td class="col-type">DATE</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">campaign_id</td><td class="col-type">STRING</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">campaign_name</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">campaign_type</td><td class="col-type">STRING</td><td class="col-notes">SP, SB</td></tr>
+              <tr><td class="col-name">ad_group_id</td><td class="col-type">STRING</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">keyword_id</td><td class="col-type">STRING</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">search_term</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">Ads_impressions</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">Ads_clicks</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">Ads_orders</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">Ads_cost</td><td class="col-type">FLOAT64</td><td class="col-notes">Spend</td></tr>
+              <tr><td class="col-name">Ads_sales</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">most_advertised_asin_impressions</td><td class="col-type">STRING</td><td class="col-notes">ASIN join key</td></tr>
+              <tr><td class="col-name">most_advertised_asin_clicks</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">most_advertised_asin_purchased</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">advertised_asins</td><td class="col-type">STRING</td><td class="col-notes">Comma-separated</td></tr>
+              <tr><td class="col-name">Ads_key</td><td class="col-type">STRING</td><td class="col-notes">Join to FACT_AMAZON_PERFORMANCE_DAILY</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="FACT_AMAZON_PERFORMANCE_DAILY">
+        <div class="card-header">
+          <span class="card-title">FACT_AMAZON_PERFORMANCE_DAILY</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Performance by purchased ASIN. Ads + organic delta. Enriched with campaign/portfolio.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">DATE</td><td class="col-type">DATE</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">PURCHASED_ASIN</td><td class="col-type">STRING</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">campaign_id</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">campaign_name</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">portfolio_name</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">PURCHASED_ORDERS</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">PURCHASED_AMOUNT_USD</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">DATA_SOURCE</td><td class="col-type">STRING</td><td class="col-notes">FACT_AMAZON_ADS or delta</td></tr>
+              <tr><td class="col-name">Performance_TYPE</td><td class="col-type">STRING</td><td class="col-notes">SP, SB, Organic</td></tr>
+              <tr><td class="col-name">factless_key</td><td class="col-type">STRING</td><td class="col-notes">YYYYMMDD-ASIN</td></tr>
+              <tr><td class="col-name">Ads_key</td><td class="col-type">STRING</td><td class="col-notes">Join to FACT_AMAZON_ADS</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY">
+        <div class="card-header">
+          <span class="card-title">FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Weekly SQP data. sqp_weekly.json source.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">Reporting_Date</td><td class="col-type">DATE</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">ASIN</td><td class="col-type">STRING</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">Search_Query</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">Impressions</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">Clicks</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">ORDERS</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">AMAZON_IMPRESSIONS</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">ADS_Impressions</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">ADS_Clicks</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">ADS_Orders</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">show_rate_pct</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="FACT_EXPERIMENT_DAILY">
+        <div class="card-header">
+          <span class="card-title">FACT_EXPERIMENT_DAILY</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Daily experiment snapshots. ads_exp_* = experiment campaigns, ads_all_* = all campaigns on ASIN.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">snapshot_date</td><td class="col-type">DATE</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">experiment_id</td><td class="col-type">STRING</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">asin</td><td class="col-type">STRING</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">ads_exp_orders</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">ads_exp_cost</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">ads_all_orders</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">ads_all_cost</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">performance_total_orders</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">performance_total_sales</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">performance_organic_orders</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title"><span class="badge badge-dim">DIM</span> Dimension Tables</h2>
+
+      <div class="card" data-name="DIM_PRODUCT">
+        <div class="card-header">
+          <span class="card-title">DIM_PRODUCT</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Product master. product_short_name from merge procedure.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">product_id</td><td class="col-type">INT64</td><td class="col-notes">PK</td></tr>
+              <tr><td class="col-name">asin</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">parent_asin</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">parent_name</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">product_short_name</td><td class="col-type">STRING</td><td class="col-notes">e.g. Mint LolliME</td></tr>
+              <tr><td class="col-name">product_type</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">listing_price_amount</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">cost_of_goods</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="DIM_COSTS_HISTORY">
+        <div class="card-header">
+          <span class="card-title">DIM_COSTS_HISTORY</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">SCD Type 2. end_date NULL = current. Full key: (marketplace_id, asin, sku). Join to DIM_PRODUCT: p.asin = ch.asin + ROW_NUMBER() for latest per asin. Procedures filter marketplace_id = ATVPDKIKX0DER.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">marketplace_id</td><td class="col-type">STRING</td><td class="col-notes">Part of business key</td></tr>
+              <tr><td class="col-name">asin</td><td class="col-type">STRING</td><td class="col-notes">Part of business key</td></tr>
+              <tr><td class="col-name">sku</td><td class="col-type">STRING</td><td class="col-notes">Part of business key</td></tr>
+              <tr><td class="col-name">TOTAL_COST_PER_UNIT</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">start_date</td><td class="col-type">DATE</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">end_date</td><td class="col-type">DATE</td><td class="col-notes">NULL = current</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="DIM_TIME">
+        <div class="card-header">
+          <span class="card-title">DIM_TIME</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Time dimension. full_date, week_start_date, month_start_date, etc.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">full_date</td><td class="col-type">DATE</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">week_start_date</td><td class="col-type">DATE</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">week_end_date</td><td class="col-type">DATE</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">month_start_date</td><td class="col-type">DATE</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">traffic_multiplier</td><td class="col-type">FLOAT64</td><td class="col-notes">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="DIM_EXPERIMENT">
+        <div class="card-header">
+          <span class="card-title">DIM_EXPERIMENT</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Experiment definitions. Links to DIM_STRATEGY_TEMPLATE.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">experiment_id</td><td class="col-type">STRING</td><td class="col-notes">PK</td></tr>
+              <tr><td class="col-name">experiment_name</td><td class="col-type">STRING</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">start_date</td><td class="col-type">DATE</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">end_date</td><td class="col-type">DATE</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">strategy_id</td><td class="col-type">STRING</td><td class="col-notes">FK</td></tr>
+              <tr><td class="col-name">status</td><td class="col-type">STRING</td><td class="col-notes">ACTIVE, COMPLETED, etc.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="DIM_EXPERIMENT_CAMPAIGN">
+        <div class="card-header">
+          <span class="card-title">DIM_EXPERIMENT_CAMPAIGN</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Links campaigns to experiments. campaign_id matches FACT_AMAZON_ADS.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">experiment_id</td><td class="col-type">STRING</td><td class="col-notes">FK</td></tr>
+              <tr><td class="col-name">campaign_id</td><td class="col-type">STRING</td><td class="col-notes">FK to FACT_AMAZON_ADS</td></tr>
+              <tr><td class="col-name">top_of_search_pct</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">notes</td><td class="col-type">STRING</td><td class="col-notes">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="DIM_US_HOLIDAYS">
+        <div class="card-header">
+          <span class="card-title">DIM_US_HOLIDAYS</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Holidays and ramp-up timing. peak.json, upcoming.json source.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">holiday_date</td><td class="col-type">DATE</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">holiday_name</td><td class="col-type">STRING</td><td class="col-notes">NOT NULL</td></tr>
+              <tr><td class="col-name">category</td><td class="col-type">STRING</td><td class="col-notes">gift_season, etc.</td></tr>
+              <tr><td class="col-name">ramp_up_days</td><td class="col-type">INT64</td><td class="col-notes">—</td></tr>
+              <tr><td class="col-name">pre_season_start</td><td class="col-type">DATE</td><td class="col-notes">NOT NULL</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title"><span class="badge badge-view">VIEW</span> Interface & Business Views</h2>
+
+      <div class="card" data-name="V_SRC_sales_and_traffic_business_sku_report_daily">
+        <div class="card-header">
+          <span class="card-title">V_SRC_sales_and_traffic_business_sku_report_daily</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Sales & traffic by ASIN. summary.json, weekly_trends source.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">child_asin</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">date</td><td class="col-type">DATE</td></tr>
+              <tr><td class="col-name">SALES_QUANTITY</td><td class="col-type">INT64</td></tr>
+              <tr><td class="col-name">SALES_AMOUNT</td><td class="col-type">FLOAT64</td></tr>
+              <tr><td class="col-name">SALES_ORDERS</td><td class="col-type">INT64</td></tr>
+              <tr><td class="col-name">asin_sessions</td><td class="col-type">INT64</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="V_SRC_AmazonAds_campaign_history">
+        <div class="card-header">
+          <span class="card-title">V_SRC_AmazonAds_campaign_history</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Campaign history with OI_start_date, OI_end_date. Temporal join for portfolio.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">campaign_id</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">campaign_name</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">campaign_type</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">portfolio_id</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">OI_start_date</td><td class="col-type">TIMESTAMP</td></tr>
+              <tr><td class="col-name">OI_end_date</td><td class="col-type">TIMESTAMP</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="V_SRC_AmazonAds_portfolio">
+        <div class="card-header">
+          <span class="card-title">V_SRC_AmazonAds_portfolio</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Portfolio history. portfolio_name for ads_7d hierarchy.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">portfolio_id</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">portfolio_name</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">OI_start_date</td><td class="col-type">TIMESTAMP</td></tr>
+              <tr><td class="col-name">OI_end_date</td><td class="col-type">TIMESTAMP</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="V_EXPERIMENT_TERM_RECOMMENDATIONS">
+        <div class="card-header">
+          <span class="card-title">V_EXPERIMENT_TERM_RECOMMENDATIONS</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">actions.json, keyword_product_map.json, drivers.json source.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">search_term</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">experiment_id</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">product_short_name</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">hero_asin</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">action</td><td class="col-type">STRING</td></tr>
+              <tr><td class="col-name">ads_spend</td><td class="col-type">FLOAT64</td></tr>
+              <tr><td class="col-name">ads_orders</td><td class="col-type">INT64</td></tr>
+              <tr><td class="col-name">ads_net_roas</td><td class="col-type">FLOAT64</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-name="V_PARENT_HERO_ASIN">
+        <div class="card-header">
+          <span class="card-title">V_PARENT_HERO_ASIN</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Hero ASIN per search term per parent. hero_asins.json source.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title"><span class="badge badge-bridge">BRIDGE</span> FACT_FACTLESS_BRIDGE (Central Hub)</h2>
+
+      <div class="card" data-name="FACT_FACTLESS_BRIDGE">
+        <div class="card-header">
+          <span class="card-title">FACT_FACTLESS_BRIDGE</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">Factless fact table linking all (date_key, asin) combinations. Populated by SP_POPULATE_FACTLESS_BRIDGE. Enables unified analysis across facts.</p>
+          <table>
+            <thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="col-name">date_key</td><td class="col-type">INT64</td><td class="col-notes">YYYYMMDD, -1 if missing</td></tr>
+              <tr><td class="col-name">asin</td><td class="col-type">STRING</td><td class="col-notes">UNKNOWN if missing</td></tr>
+              <tr><td class="col-name">factless_key</td><td class="col-type">STRING</td><td class="col-notes">date_key-asin (e.g. 20260201-B09XQ56RK5)</td></tr>
+            </tbody>
+          </table>
+          <p class="card-desc" style="margin-top:1rem;"><strong>Facts contributing to bridge (via UNION in SP_POPULATE_FACTLESS_BRIDGE):</strong></p>
+          <ul class="rel-list" style="margin-top:0.5rem;">
+            <li><span class="rel-arrow">✓</span> FACT_INVENTORY_SNAPSHOT</li>
+            <li><span class="rel-arrow">✓</span> FACT_FINANCIAL_TRANSACTIONS</li>
+            <li><span class="rel-arrow">✓</span> FACT_PURCHASE_ORDER</li>
+            <li><span class="rel-arrow">✓</span> FACT_AMAZON_PERFORMANCE_DAILY (factless_key = YYYYMMDD-PURCHASED_ASIN)</li>
+            <li><span class="rel-arrow">✓</span> FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY (factless_key = Reporting_Date-ASIN)</li>
+            <li><span class="rel-arrow">✓</span> FACT_EXPERIMENT_DAILY (factless_key = snapshot_date-ASIN)</li>
+          </ul>
+          <p class="card-desc" style="margin-top:1rem;"><strong>Facts NOT in bridge:</strong> FACT_AMAZON_ADS (uses Ads_key, campaign/ad_group/keyword grain), FACT_SEARCH_QUERY, FACT_ORDERS</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Relationships</h2>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Join Paths (Bridge-Centric)</span>
+          <span class="card-toggle">▼</span>
+        </div>
+        <div class="card-body">
+          <p class="card-desc"><strong>Via FACT_FACTLESS_BRIDGE:</strong> Facts join on factless_key. Bridge links to DIM_TIME (date_key) and DIM_PRODUCT (asin).</p>
+          <ul class="rel-list">
+            <li><span class="rel-arrow">→</span> FACT_FACTLESS_BRIDGE.factless_key = FACT_AMAZON_PERFORMANCE_DAILY.factless_key</li>
+            <li><span class="rel-arrow">→</span> FACT_FACTLESS_BRIDGE.factless_key = FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY.factless_key</li>
+            <li><span class="rel-arrow">→</span> FACT_FACTLESS_BRIDGE.factless_key = FACT_INVENTORY_SNAPSHOT.factless_key</li>
+            <li><span class="rel-arrow">→</span> FACT_FACTLESS_BRIDGE.factless_key = FACT_PURCHASE_ORDER.factless_key</li>
+            <li><span class="rel-arrow">→</span> FACT_FACTLESS_BRIDGE.factless_key = FACT_EXPERIMENT_DAILY.factless_key</li>
+            <li><span class="rel-arrow">→</span> FACT_FACTLESS_BRIDGE.date_key = DIM_TIME.date_key</li>
+            <li><span class="rel-arrow">→</span> FACT_FACTLESS_BRIDGE.asin = DIM_PRODUCT.asin</li>
+          </ul>
+          <p class="card-desc" style="margin-top:1rem;"><strong>Experiment & Ads (not via bridge):</strong></p>
+          <ul class="rel-list">
+            <li><span class="rel-arrow">→</span> DIM_EXPERIMENT 1:* DIM_EXPERIMENT_CAMPAIGN</li>
+            <li><span class="rel-arrow">→</span> DIM_EXPERIMENT_CAMPAIGN.campaign_id = FACT_AMAZON_ADS.campaign_id</li>
+            <li><span class="rel-arrow">→</span> FACT_AMAZON_ADS.most_advertised_asin_* = DIM_PRODUCT.asin</li>
+            <li><span class="rel-arrow">→</span> FACT_AMAZON_ADS + V_SRC_AmazonAds_campaign_history (date BETWEEN OI_start_date, OI_end_date)</li>
+            <li><span class="rel-arrow">→</span> campaign_history.portfolio_id = V_SRC_AmazonAds_portfolio.portfolio_id</li>
+            <li><span class="rel-arrow">→</span> FACT_EXPERIMENT_DAILY.experiment_id = DIM_EXPERIMENT.experiment_id</li>
+            <li><span class="rel-arrow">→</span> FACT_EXPERIMENT_DAILY.asin = DIM_PRODUCT.asin</li>
+          </ul>
+          <p class="card-desc" style="margin-top:1rem;"><strong>DIM_COSTS_HISTORY (qualified join):</strong> Full key is (marketplace_id, asin, sku). Views use p.asin = ch.asin with ROW_NUMBER() OVER (PARTITION BY asin ORDER BY end_date DESC) = 1 for latest cost. Procedures filter marketplace_id = 'ATVPDKIKX0DER'. Simple asin-only join is a simplification.</p>
+          <ul class="rel-list">
+            <li><span class="rel-arrow">→</span> DIM_PRODUCT.asin = DIM_COSTS_HISTORY.asin (+ temporal: latest row per asin)</li>
+            <li><span class="rel-arrow">→</span> DIM_PRODUCT.asin = V_SRC_sales_and_traffic.child_asin</li>
+          </ul>
+          <p class="card-desc" style="margin-top:1rem;color:var(--view);"><strong>Tested:</strong> factless_key referential integrity (FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY, FACT_AMAZON_PERFORMANCE_DAILY). See scripts/bigquery/tests/</p>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      OI BigQuery Schema · onyga-482313.OI · Cube Migration Reference · Generated from scripts/bigquery/
+    </footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: '#0f1419',
+        primaryColor: '#1a2332',
+        primaryTextColor: '#e6edf3',
+        primaryBorderColor: '#2d3a4d',
+        lineColor: '#58a6ff',
+        secondaryColor: '#243044',
+        tertiaryColor: '#0f1419',
+        fontFamily: 'DM Sans, sans-serif'
+      },
+      flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' }
+    });
+    document.querySelectorAll('.card-header').forEach(h => {
+      h.addEventListener('click', () => h.closest('.card').classList.toggle('open'));
+    });
+    document.getElementById('search').addEventListener('input', e => {
+      const q = e.target.value.toLowerCase().trim();
+      document.querySelectorAll('.card').forEach(card => {
+        const name = (card.dataset.name || '').toLowerCase();
+        const text = card.textContent.toLowerCase();
+        const match = !q || name.includes(q) || text.includes(q);
+        card.classList.toggle('hidden', !match);
+      });
+    });
+    document.querySelectorAll('.card').forEach((c, i) => {
+      if (i < 3 || c.dataset.name === 'FACT_FACTLESS_BRIDGE') c.classList.add('open');
+    });
+    document.querySelectorAll('.card').forEach(c => {
+      if (c.querySelector('.mermaid')) c.classList.add('open');
+    });
+    mermaid.run({ nodes: document.querySelectorAll('.mermaid') }).catch(e => console.warn('Mermaid:', e));
+  </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "fetch-exchange-rates",
+  "version": "1.0.0",
+  "description": "Cloud Function to fetch real-time currency exchange rates",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy": "gcloud functions deploy fetch-exchange-rates --runtime nodejs20 --trigger-http --allow-unauthenticated --project onyga-482313 --region us-central1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
