@@ -15,7 +15,7 @@
  * Profit = totalUnits × margin − adSpend
  * where totalUnits = adUnits / adsShare  (includes organic contribution)
  */
-import { useState, useMemo, useEffect } from 'react';
+import { useMemo, useEffect } from 'react';
 import { fK, fmt } from '../utils';
 import type { AdsEfficiencyMonth, MonthDef } from '../planTypes';
 import { unitsAtSpend, profitMaxSpend } from '../planTypes';
@@ -57,7 +57,6 @@ const HOLIDAY_WINDOWS: { boost_start: string; peak_start: string; holiday_date: 
 
 /** Classify a month by its dominant tier using day-level holiday windows */
 function getSeasonType(mo: number, yr: number): SeasonType {
-  const monthStart = new Date(yr, mo - 1, 1);
   const daysInMonth = new Date(yr, mo, 0).getDate();
   let peakDays = 0, boostDays = 0;
 
@@ -100,6 +99,16 @@ interface CurvePoint {
 // units scaled linearly with spend and Q4 forecasts ballooned ~2x.
 const CPC_EXP = 0.10; // CPC rises k^0.10 with scale (observed 0.07–0.13 across seasons)
 const CVR_EXP_BY_SEASON: Record<SeasonType, number> = { PEAK: 0.25, OFF: 0.32, BOOST: 0.39 };
+// Profitable-CPC ceiling per season (baked from 2025 account-wide ROAS-by-CPC-bucket analysis,
+// 2026-05-21): PEAK pays through ~$1.50 CPC, BOOST to ~$0.60, OFF barely pays at any CPC (~$0.45).
+// Used as the coach bid cap and the Step-3 "profitable CPC ceiling" guidance.
+const SEASON_MAX_CPC: Record<SeasonType, number> = { PEAK: 1.50, BOOST: 0.60, OFF: 0.45 };
+// Unit elasticity per season = 1 − CPC_EXP − cvrExp (PEAK 0.65, OFF 0.58, BOOST 0.51).
+const SEASON_E: Record<SeasonType, number> = {
+  PEAK: 1 - CPC_EXP - CVR_EXP_BY_SEASON.PEAK,
+  OFF: 1 - CPC_EXP - CVR_EXP_BY_SEASON.OFF,
+  BOOST: 1 - CPC_EXP - CVR_EXP_BY_SEASON.BOOST,
+};
 // → unit elasticity e = 1 − 0.10 − cvrExp: PEAK 0.65, OFF 0.58, BOOST 0.51.
 
 /**
@@ -107,6 +116,7 @@ const CVR_EXP_BY_SEASON: Record<SeasonType, number> = { PEAK: 0.25, OFF: 0.32, B
  * diminishing returns: CPC rises (k^CPC_EXP), CVR decays (k^−cvrExp). At k=1 both
  * factors are 1, so current spend is unchanged. totalUnits = adUnits / adsShare (organic halo).
  */
+// eslint-disable-next-line react-refresh/only-export-components -- exported for unit tests (StepAdsPath.test.ts); move to a util module if more non-component exports accrue
 export function atK(k: number, brand: ChannelBase, nb: ChannelBase,
   margin: number, adsShare: number, season: SeasonType) {
   const kk = Math.max(k, 0.01);
@@ -137,7 +147,6 @@ function buildMultipliers(): number[] {
   return [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0];
 }
 const MAX_MONTHLY_RAMP = 1.5; // max 50% spend increase per month (used for BOOST/PEAK)
-const WEEKLY_SPEND_ADD_OFFSEASON = 500; // $500/wk linear increase for off-season (based on historical ramp analysis)
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
@@ -157,6 +166,7 @@ export type AdsTarget = {
   predicted_units: number; predicted_net_profit: number;
   cpc_exponent: number; cvr_exponent: number;
   ads_share: number; season_type: string; multiplier_k: number;
+  max_cpc: number; // season profitable-CPC ceiling — coach bid cap (bid above this and clicks lose money)
 };
 
 export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, onTargets, onTrajectory }: {
@@ -268,11 +278,6 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   // ── Profit-max plan: per calendar month, the spend that maximizes net profit ──
   // Anchored to prior-year (units, spend); extrapolated with the season elasticity
   // e = 1 − CPC_EXP − cvrExp. At S = spend₂₅ it returns units₂₅ (reproduces history).
-  const SEASON_E: Record<SeasonType, number> = {
-    PEAK: 1 - CPC_EXP - CVR_EXP_BY_SEASON.PEAK,   // 0.65
-    OFF: 1 - CPC_EXP - CVR_EXP_BY_SEASON.OFF,     // 0.58
-    BOOST: 1 - CPC_EXP - CVR_EXP_BY_SEASON.BOOST, // 0.51
-  };
   const profitMaxPlan = useMemo(() => {
     const yr = new Date().getFullYear();
     return Array.from({ length: 12 }, (_, i) => {
@@ -296,45 +301,52 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
     });
   }, [monthlyUnits, monthlySpend, margin, seasonBenchmarks, baseAdsShare]);
 
-  // ── Profit curve: full year, each month at its OWN season efficiency ──
-  // (Recommendation must see profitable peaks, not one off-season month × 365 — which
-  // previously made it recommend cutting spend that's profitable at Easter/Christmas.)
+  // ── Profit curve = the profit-max plan scaled by k (k = spendScale) ──
+  // k=1 IS the plan, so the peak (max profit) lands at 1.0× and the explorer agrees with
+  // Step 4 / the order by construction. Each point re-evaluates units off the 2025 anchor.
   const multipliers = useMemo(() => buildMultipliers(), []);
+  // Sum over the PLAN HORIZON (the `months` window: current → Feb'27) so the curve, the 2025
+  // baseline, and Step 4 / the order all cover the same months and totals agree exactly.
+  const horizonDays = useMemo(() => months.reduce((s, m) => s + (DAYS_IN_MONTH[m.month - 1] || 30), 0), [months]);
   const curve: CurvePoint[] = useMemo(() => {
-    const yr = new Date().getFullYear();
     return multipliers.map(k => {
-      let spend = 0, adU = 0, totU = 0, profit = 0, days = 0;
-      for (let mo = 1; mo <= 12; mo++) {
-        const season = getSeasonType(mo, yr);
-        const b = seasonBenchmarks[season] ?? seasonBenchmarks['OFF'];
-        const dim = DAYS_IN_MONTH[mo - 1];
-        const r = atK(k, b.brand, b.nb, margin, baseAdsShare, season);
-        spend += r.daily * dim; adU += r.adUnits * dim; totU += r.totalUnits * dim; profit += r.profit * dim; days += dim;
+      let spend = 0, units = 0;
+      for (const m of months) {
+        const p = profitMaxPlan[m.month - 1];
+        if (!p) continue;
+        const s = p.spend * k;
+        units += p.anchored && p.spend0 > 0 ? unitsAtSpend(s, p.units0, p.spend0, p.e) : p.units * k;
+        spend += s;
       }
+      const profit = units * margin - spend;
       return {
-        k, daily: spend / days, annual: spend,
-        adUnitsYear: Math.round(adU),
-        totalUnitsYear: Math.round(totU),
+        k, daily: horizonDays > 0 ? spend / horizonDays : 0, annual: spend,
+        adUnitsYear: Math.round(units * baseAdsShare),
+        totalUnitsYear: Math.round(units),
         profitYear: Math.round(profit),
-        roas: spend > 0 ? (totU * margin) / spend : 0,
+        roas: spend > 0 ? (units * margin) / spend : 0,
       };
     });
-  }, [multipliers, seasonBenchmarks, margin, baseAdsShare]);
+  }, [multipliers, profitMaxPlan, months, margin, baseAdsShare, horizonDays]);
 
   const peakIdx = curve.reduce((best, p, i) => p.profitYear > curve[best].profitYear ? i : best, 0);
   const maxProfit = Math.max(...curve.map(p => Math.abs(p.profitYear)), 1);
 
-  // Last year average daily spend (for LY badge on curve)
-  const lyDailySpend = useMemo(() => {
-    const now = new Date();
-    const lyYr = now.getFullYear() - 1;
-    const lyRows = channelData.filter(c => c.yr === lyYr);
-    if (lyRows.length === 0) return 0;
-    const totalSpend = lyRows.reduce((s, r) => s + r.spend, 0);
-    const totalDays = lyRows.reduce((s, r) => s + (DAYS_IN_MONTH[(r.mo - 1)] || 30), 0);
-    return totalDays > 0 ? totalSpend / totalDays : 0;
-  }, [channelData]);
-  const lyK = baseDailySpend > 0 ? lyDailySpend / baseDailySpend : 0;
+  // 2025 baseline (what actually happened) + the recommended-plan totals — for the curve
+  // markers and the "2025 → recommended" improvement callout.
+  const baseline2025 = useMemo(() => {
+    let spend = 0, units = 0;
+    for (const m of months) { spend += monthlySpend?.[m.month - 1] ?? 0; units += monthlyUnits?.[m.month - 1] ?? 0; }
+    return { spend, units, profit: units * margin - spend };
+  }, [months, monthlySpend, monthlyUnits, margin]);
+  const planTotals = useMemo(() => {
+    let spend = 0, units = 0, profit = 0;
+    for (const m of months) { const p = profitMaxPlan[m.month - 1]; if (p) { spend += p.spend; units += p.units; profit += p.profit; } }
+    return { spend, units, profit };
+  }, [months, profitMaxPlan]);
+  // Marker positions on the ×-plan axis (over the horizon): 2025 actual (LY) and current spend (NOW).
+  const lyK = planTotals.spend > 0 ? baseline2025.spend / planTotals.spend : 0;
+  const nowK = planTotals.spend > 0 ? (baseDailySpend * horizonDays) / planTotals.spend : 0;
 
   // Selected daily
   const selectedDaily = path === 'current' ? baseDailySpend
@@ -352,23 +364,6 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
     const monthsToPeak = curMo < 9 ? 9 - curMo : 12 - curMo + 9;
     return Math.min(months, monthsToPeak, 12);
   }, [selectedK]);
-
-  // ── Seasonal index = true demand shape from prior-year total units (organic+ad).
-  // Falls back to ad-spend distribution only when unit history is unavailable.
-  // (Spend seasonality ≠ demand seasonality — e.g. spend-flat summer months still sell little.)
-  const seasonalIdx = useMemo(() => {
-    const mo: number[] = Array(12).fill(0);
-    if (monthlyUnits && monthlyUnits.some(u => u > 0)) {
-      for (let i = 0; i < 12; i++) mo[i] = monthlyUnits[i] ?? 0;
-    } else {
-      for (let m = 1; m <= 12; m++) {
-        const rows = channelData.filter(c => c.mo === m);
-        for (const r of rows) mo[m - 1] += r.spend;
-      }
-    }
-    const avg = mo.reduce((a, b) => a + b, 0) / 12 || 1;
-    return mo.map(s => s > 0 ? Math.min(s / avg, 5.0) : 0.5); // 1.0 = average month, cap 5 (keeps Xmas peak)
-  }, [channelData, monthlyUnits]);
 
   // ── Ramp-up trajectory (12+ months from now) ──
   // Derive the data cutoff day for the current month from channelData
@@ -455,76 +450,49 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
     const now = new Date();
     const startMo = now.getMonth();
     const startYr = now.getFullYear();
-    const targets: {
-      yr: number; mo: number; channel: string;
-      daily_spend_target: number; cpc_target: number;
-      predicted_cvr: number; predicted_roas: number;
-      predicted_units: number; predicted_net_profit: number;
-      cpc_exponent: number; cvr_exponent: number;
-      ads_share: number; season_type: string; multiplier_k: number;
-    }[] = [];
-
-    let adsRunningRate = 0;
+    const targets: AdsTarget[] = [];
 
     for (let i = 0; i < 12; i++) {
       const moIdx = (startMo + i) % 12;
       const yr = startYr + Math.floor((startMo + i) / 12);
       const days = DAYS_IN_MONTH[moIdx];
-      const season = seasonalIdx[moIdx] || 1;
       const seasonType = getSeasonType(moIdx + 1, yr);
       const seasonB = seasonBenchmarks[seasonType] ?? seasonBenchmarks['OFF'];
-      // Annual (season-neutral) base for the volume math, so predicted_units follows the
-      // demand-based seasonalIdx (matches the forecast; no double-count with season CVR).
-      // cpc_target/predicted_cvr stay season-specific as operational bid guidance for the coach.
-      const bases = { brand: brandBase, nb: nbBase };
+      const plan = profitMaxPlan[moIdx];
 
-      // Ramp k for this month: OFF = $500/wk linear, BOOST/PEAK = geometric
-      let kEffective: number;
-      if (seasonType === 'OFF') {
-        if (i === 0) {
-          // Initialize from model baseline
-          const r0 = atK(1, bases.brand, bases.nb, margin, baseAdsShare, seasonType);
-          adsRunningRate = r0.daily * season;
-        } else {
-          adsRunningRate += WEEKLY_SPEND_ADD_OFFSEASON / 7;
-        }
-        const nbDaily = bases.nb.dailySpend || 1;
-        kEffective = Math.min(Math.max((adsRunningRate / (season || 1) - bases.brand.dailySpend) / nbDaily, 1), selectedK);
-      } else {
-        kEffective = Math.min(Math.pow(MAX_MONTHLY_RAMP, rampMonths > 0 ? i : 0), selectedK);
-      }
+      // Family month spend/units straight from the profit-max plan (× user dial) — SAME source
+      // as Step 4 and the order, so the coach gets the plan it sees.
+      const spend = plan.spend * spendScale;
+      const units = plan.anchored && plan.spend0 > 0
+        ? unitsAtSpend(spend, plan.units0, plan.spend0, plan.e)
+        : plan.units * spendScale;
 
-      // Brand channel: stays flat (k=1)
-      const bAdUnits = bases.brand.dailySpend > 0 ? (bases.brand.dailySpend / bases.brand.cpc) * bases.brand.cvr * days * season : 0;
-      targets.push({
-        yr, mo: moIdx + 1, channel: 'BRAND',
-        daily_spend_target: Math.round(bases.brand.dailySpend * 100) / 100,
-        cpc_target: Math.round(seasonB.brand.cpc * 1000) / 1000,
-        predicted_cvr: seasonB.brand.cvr,
-        predicted_roas: bases.brand.dailySpend > 0 ? (bAdUnits / baseAdsShare * margin) / (bases.brand.dailySpend * days * season) : 0,
-        predicted_units: Math.round(bAdUnits / baseAdsShare),
-        predicted_net_profit: Math.round(bAdUnits / baseAdsShare * margin - bases.brand.dailySpend * days * season),
+      // Split family spend into channels: brand stays at its (flat, defensive) season run-rate,
+      // non-brand gets the rest. Units split by each channel's efficiency-weighted spend.
+      const brandSpend = Math.min(seasonB.brand.dailySpend * days, spend);
+      const nbSpend = Math.max(0, spend - brandSpend);
+      const bRaw = brandSpend > 0 && seasonB.brand.cpc > 0 ? (brandSpend / seasonB.brand.cpc) * seasonB.brand.cvr : 0;
+      const nRaw = nbSpend > 0 && seasonB.nb.cpc > 0 ? (nbSpend / seasonB.nb.cpc) * seasonB.nb.cvr : 0;
+      const rawTot = bRaw + nRaw;
+
+      const mkRow = (channel: string, chSpend: number, chUnits: number, cpc: number, cvr: number): AdsTarget => ({
+        yr, mo: moIdx + 1, channel,
+        daily_spend_target: Math.round((chSpend / days) * 100) / 100,
+        cpc_target: Math.round(cpc * 1000) / 1000,
+        predicted_cvr: cvr,
+        predicted_roas: chSpend > 0 ? (chUnits * margin) / chSpend : 0,
+        predicted_units: Math.round(chUnits),
+        predicted_net_profit: Math.round(chUnits * margin - chSpend),
         cpc_exponent: 0, cvr_exponent: 0, // flat model — no exponents
-        ads_share: baseAdsShare, season_type: seasonType, multiplier_k: 1,
+        ads_share: baseAdsShare, season_type: seasonType,
+        multiplier_k: Math.round(spendScale * 100) / 100, max_cpc: SEASON_MAX_CPC[seasonType],
       });
 
-      // Non-brand channel: scales with k
-      const nbDailyTarget = bases.nb.dailySpend * kEffective;
-      const nbAdUnits = nbDailyTarget > 0 ? (nbDailyTarget / bases.nb.cpc) * bases.nb.cvr * days * season : 0;
-      targets.push({
-        yr, mo: moIdx + 1, channel: 'NON_BRAND',
-        daily_spend_target: Math.round(nbDailyTarget * 100) / 100,
-        cpc_target: Math.round(seasonB.nb.cpc * 1000) / 1000,
-        predicted_cvr: seasonB.nb.cvr,
-        predicted_roas: nbDailyTarget > 0 ? (nbAdUnits / baseAdsShare * margin) / (nbDailyTarget * days * season) : 0,
-        predicted_units: Math.round(nbAdUnits / baseAdsShare),
-        predicted_net_profit: Math.round(nbAdUnits / baseAdsShare * margin - nbDailyTarget * days * season),
-        cpc_exponent: 0, cvr_exponent: 0, // flat model — no exponents
-        ads_share: baseAdsShare, season_type: seasonType, multiplier_k: kEffective,
-      });
+      targets.push(mkRow('BRAND', brandSpend, rawTot > 0 ? units * (bRaw / rawTot) : 0, seasonB.brand.cpc, seasonB.brand.cvr));
+      targets.push(mkRow('NON_BRAND', nbSpend, rawTot > 0 ? units * (nRaw / rawTot) : units, seasonB.nb.cpc, seasonB.nb.cvr));
     }
     return targets;
-  }, [selectedK, rampMonths, seasonBenchmarks, seasonalIdx, baseAdsShare, margin]);
+  }, [profitMaxPlan, spendScale, seasonBenchmarks, baseAdsShare, margin]);
 
   // Expose targets to parent (PlanWizard) for saving
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -562,6 +530,15 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
         </div>
       )}
 
+      {/* ── Profitable-CPC ceiling by season (baked from 2025 ROAS-by-CPC analysis) ── */}
+      <div className="px-3 py-1.5 rounded-lg border border-border/40 bg-border/5 text-[10px] flex items-center justify-between gap-2">
+        <span className="text-muted font-semibold whitespace-nowrap">Profitable CPC ceiling</span>
+        <span className="tabular-nums text-heading">
+          PEAK <b>≤${SEASON_MAX_CPC.PEAK.toFixed(2)}</b>{' · '}BOOST <b>≤${SEASON_MAX_CPC.BOOST.toFixed(2)}</b>{' · '}OFF <b>≤${SEASON_MAX_CPC.OFF.toFixed(2)}</b>
+          <span className="text-faint font-normal">{' '}— bid above and clicks lose money</span>
+        </span>
+      </div>
+
       {/* ── Profit curve table ── */}
       <div>
         <div className="mb-1">
@@ -569,12 +546,24 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
             Spend → Profit Curve
             <span className="text-faint font-normal ml-1">(margin ${margin.toFixed(2)}/u · ads share {Math.round(baseAdsShare * 100)}%)</span>
           </div>
+          {(() => {
+            const d = planTotals.profit - baseline2025.profit;
+            const pct = baseline2025.profit > 0 ? Math.round((d / baseline2025.profit) * 100) : null;
+            return (
+              <div className="text-[9px] tabular-nums mt-0.5">
+                <span className="text-faint">2025</span> <span className="text-muted">{fK(baseline2025.spend)} → {fK(baseline2025.profit)} profit</span>
+                {'  →  '}
+                <span className="text-emerald-400 font-semibold">recommended {fK(planTotals.spend)} → {fK(planTotals.profit)}</span>
+                <span className="text-emerald-400 font-bold">{' '}({d >= 0 ? '+' : ''}{fK(d)}{pct !== null ? ` · ${pct >= 0 ? '+' : ''}${pct}%` : ''})</span>
+              </div>
+            );
+          })()}
         </div>
         <div className="space-y-[2px]">
           {curve.map((p, i) => {
             const isPeakRow = i === peakIdx;
             const isSelected = Math.abs(p.k - selectedK) < 0.15;
-            const isCurrent = Math.abs(p.k - 1.0) < 0.05;
+            const isCurrent = nowK > 0 && curve.reduce((best, cp, ci) => Math.abs(cp.k - nowK) < Math.abs(curve[best].k - nowK) ? ci : best, 0) === i;
             const isLY = lyK > 0 && curve.reduce((best, cp, ci) => Math.abs(cp.k - lyK) < Math.abs(curve[best].k - lyK) ? ci : best, 0) === i;
             const barW = Math.abs(p.profitYear / maxProfit) * 100;
             const isLoss = p.profitYear < 0;
@@ -585,7 +574,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
                 className={`w-full flex items-center gap-2 px-2 py-1 rounded-md text-[10px] transition-all text-left
                   ${isSelected ? 'ring-2 ring-blue-500/60 bg-blue-500/10' : 'hover:bg-border/10'}
                   ${isPeakRow && !isSelected ? 'bg-emerald-500/5 border border-emerald-500/20' : 'border border-transparent'}`}>
-                <span className="w-[34px] shrink-0 tabular-nums text-faint text-right">{p.k === 1 ? 'Base' : `${p.k}×`}</span>
+                <span className="w-[34px] shrink-0 tabular-nums text-faint text-right">{p.k === 1 ? 'Plan' : `${p.k}×`}</span>
                 <span className="w-[48px] shrink-0 tabular-nums text-heading font-medium text-right">${Math.round(p.daily)}<span className="text-faint text-[8px]">/d</span></span>
                 <div className="flex-1 h-3.5 relative rounded-sm overflow-hidden bg-border/10">
                   {!isLoss ? (

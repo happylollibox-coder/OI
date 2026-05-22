@@ -94,6 +94,28 @@ This is the season-ramped schedule that funds Easter/Christmas — the fix for t
 
 **Out of scope:** changing the coach's own bidding logic; per-week (vs per-month) granularity; modeling a hard demand ceiling beyond the 3× extrapolation cap.
 
+## Season CPC ceilings (bucket-aware, baked v1)
+
+2025 ads, ROAS by season × CPC bucket (account-wide), shows the profitable-CPC ceiling is sharply season-dependent:
+
+| CPC | PEAK | BOOST | OFF |
+|---|---|---|---|
+| <$.40 | 1.46× | 1.14× | 0.91× ✗ |
+| $.40–.60 | 1.48× | 1.06× | 0.85× ✗ |
+| $.60–.80 | 1.49× | 0.77× ✗ | 1.00× |
+| $.80–1.0 | 1.38× | 0.94× ✗ | 0.86× ✗ |
+| $1.0+ | 1.14–1.16× | 0.43× ✗ | 0.90× ✗ |
+
+So PEAK pays through ~$1.50 CPC, BOOST to ~$0.60, OFF barely pays at any CPC.
+
+**v1 (implemented):** bake per-season max-profitable-CPC constants — `SEASON_MAX_CPC = { PEAK: 1.50, BOOST: 0.60, OFF: 0.45 }` in `StepAdsPath` (derived offline like the elasticity exponents). Used two ways:
+1. **Step 3 UI** — a "Profitable CPC ceiling" line (`PEAK ≤$1.50 · BOOST ≤$0.60 · OFF ≤$0.45 — bid above and clicks lose money`).
+2. **Coach target** — each month's `AdsTarget` carries `max_cpc = SEASON_MAX_CPC[season]` as a per-season bid cap.
+
+The per-month *spend level* already reflects season profitability via the elasticity + 2025 anchor (off-season is cut); the CPC ceiling is the complementary **bid-level** guard the spend model can't express.
+
+**Follow-up (not v1):** persist `max_cpc` to `DE_PLAN_ADS_TARGETS` (needs a backend/DE column) so the coach actually consumes the cap; and the "live CPC-bucket curves" upgrade (per-family × season × bucket Cube measure) for per-family ceilings + true marginal per-bucket trimming.
+
 ## Open questions / risks
 
 - The elasticity is pooled across families; per-family elasticities are not estimated. Acceptable for v1 (exponent is more stable than levels), revisit if a family looks off.
