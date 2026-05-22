@@ -1,13 +1,17 @@
 // Cube: DataFreshness - max dates for ads and performance (for header freshness labels)
+// Backed by: V_DATA_FRESHNESS (BigQuery view)
+// Grain: one row per data source
+//
+// Rules compliance:
+//   [x] R2: sql_table pointing to BigQuery view (was: inline UNION ALL)
 cube(`DataFreshness`, {
-  refreshKey: { every: '30 minutes' },
+  // The dashboard only needs 'ads' and 'perf' sources for header labels.
+  // V_DATA_FRESHNESS has all sources; filter to the two needed here.
+  sql: `SELECT source_name AS source, latest_date AS max_date
+        FROM \`onyga-482313.OI.V_DATA_FRESHNESS\`
+        WHERE source_name IN ('FACT_AMAZON_ADS', 'FACT_AMAZON_PERFORMANCE_DAILY')`,
 
-  sql: `
-SELECT 'ads' as source, MAX(\`date\`) as max_date FROM \`onyga-482313.OI.FACT_AMAZON_ADS\`
-UNION ALL
-SELECT 'perf' as source, MAX(\`DATE\`) as max_date
-FROM \`onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY\` WHERE DATA_SOURCE = 'STG_AMAZON_PERFORMANCE'
-`,
+  refreshKey: { every: '30 minutes' },
 
   measures: { count: { type: `count` } },
   dimensions: {

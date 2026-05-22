@@ -6,6 +6,7 @@
     <title>{% block title %}OI Data Entry Forms{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -205,6 +206,51 @@
         .text-warning { color: #C28B00 !important; }
         .text-success { color: #217a45 !important; }
         .text-info { color: #6B42A3 !important; }
+        /* === Info Icons (Measure Tooltips) === */
+        .measure-info {
+            color: #B794D6;
+            font-size: 0.72rem;
+            cursor: help;
+            margin-left: 3px;
+            vertical-align: middle;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .measure-info:hover { opacity: 1; color: #6B42A3; }
+        .popover { border-color: var(--hl-lavender); border-radius: 10px; }
+        .popover-header {
+            background: linear-gradient(135deg, var(--hl-lavender-light), var(--hl-pink-light));
+            color: var(--hl-text);
+            font-weight: 600;
+            border-bottom: 1px solid var(--hl-lavender);
+            border-radius: 10px 10px 0 0;
+        }
+        .popover-body { font-size: 0.82rem; color: var(--hl-text); }
+        .popover-body code { font-size: 0.78rem; }
+        /* === Bulk Delete Toolbar === */
+        .bulk-delete-bar {
+            background: linear-gradient(135deg, #FFDCD9 0%, #FFE4E9 100%);
+            border: 1px solid #F5909F;
+            border-radius: 10px;
+            padding: 0.5rem 1rem;
+            display: none;
+            align-items: center;
+            gap: 0.75rem;
+            animation: slideDown 0.2s ease;
+        }
+        .bulk-delete-bar.visible { display: flex; }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .bulk-delete-bar .btn-danger {
+            background: #C53030;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            font-weight: 600;
+        }
+        .bulk-cb { width: 16px; height: 16px; cursor: pointer; accent-color: var(--hl-pink-dark); }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
@@ -236,6 +282,11 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('new_other_po') }}">
+                            <i class="bi bi-file-earmark-plus"></i> Other PO
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('new_shipment') }}">
                             <i class="bi bi-truck"></i> New Shipment
                         </a>
@@ -246,8 +297,8 @@
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('new_payment') }}">
-                            <i class="bi bi-credit-card"></i> Vendor Payment
+                        <a class="nav-link" href="{{ url_for('payments_list') }}">
+                            <i class="bi bi-credit-card"></i> Payments
                         </a>
                     </li>
                     <li class="nav-item">
@@ -293,6 +344,16 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
+    <script>
+    // Initialize all Bootstrap popovers
+    document.addEventListener('DOMContentLoaded', function() {
+        var popoverTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="popover"]'));
+        popoverTriggerList.forEach(function(el) {
+            new bootstrap.Popover(el, { trigger: 'hover focus', html: true });
+        });
+    });
+    </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

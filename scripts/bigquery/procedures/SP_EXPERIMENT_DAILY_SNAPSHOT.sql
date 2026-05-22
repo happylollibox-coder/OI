@@ -108,10 +108,10 @@ BEGIN
         ec.experiment_id,
         fa.date,
         fa.advertised_asins as asin,
-        SUM(fa.orders) as orders,
-        SUM(fa.units) as units,
-        SUM(fa.cost) as cost,
-        SUM(fa.sales) as sales
+        SUM(fa.Ads_orders) as orders,
+        SUM(fa.Ads_units) as units,
+        SUM(fa.Ads_cost) as cost,
+        SUM(fa.Ads_sales) as sales
       FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
       JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa ON ec.campaign_id = fa.campaign_id
       WHERE ec.experiment_id IN (SELECT experiment_id FROM active_experiments)
@@ -123,10 +123,10 @@ BEGIN
         das.experiment_id,
         fa.date,
         fa.advertised_asins as asin,
-        SUM(fa.orders) as orders,
-        SUM(fa.units) as units,
-        SUM(fa.cost) as cost,
-        SUM(fa.sales) as sales
+        SUM(fa.Ads_orders) as orders,
+        SUM(fa.Ads_units) as units,
+        SUM(fa.Ads_cost) as cost,
+        SUM(fa.Ads_sales) as sales
       FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
       JOIN (SELECT DISTINCT experiment_id, asin FROM date_asin_spine) das
         ON fa.advertised_asins = das.asin

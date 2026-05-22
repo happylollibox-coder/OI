@@ -36,7 +36,17 @@ cube(`Holidays`, {
     preSeasonStart: {
       sql: `CAST(pre_season_start AS TIMESTAMP)`,
       type: `time`,
-      description: `Start of pre-season / peak period`,
+      description: `Start of pre-season period`,
+    },
+    boostStart: {
+      sql: `CAST(boost_start AS TIMESTAMP)`,
+      type: `time`,
+      description: `Start of boost phase`,
+    },
+    peakStart: {
+      sql: `CAST(peak_start AS TIMESTAMP)`,
+      type: `time`,
+      description: `Start of peak phase`,
     },
   },
 });

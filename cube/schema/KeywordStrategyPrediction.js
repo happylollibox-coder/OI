@@ -3,6 +3,13 @@
 cube(`KeywordStrategyPrediction`, {
   sql: `SELECT * FROM \`onyga-482313.OI.T_KEYWORD_STRATEGY_PREDICTIONS\``,
 
+  joins: {
+    Product: {
+      relationship: `belongsTo`,
+      sql: `${CUBE}.asin = ${Product}.asin`,
+    },
+  },
+
   refreshKey: { every: '6 hours' },
 
   measures: {
@@ -14,13 +21,13 @@ cube(`KeywordStrategyPrediction`, {
 
   dimensions: {
     id: {
-      sql: `CONCAT(COALESCE(search_term,''), '|', COALESCE(asin,''))`,
+      sql: `CONCAT(COALESCE(${CUBE}.search_term,''), '|', COALESCE(${CUBE}.asin,''))`,
       type: `string`,
       primaryKey: true,
       description: `Unique row id`,
     },
     searchTerm: { sql: `search_term`, type: `string`, description: `Keyword` },
-    asin: { sql: `asin`, type: `string`, description: `ASIN` },
+    asin: { sql: `${CUBE}.asin`, type: `string`, description: `ASIN` },
     productShortName: { sql: `product_short_name`, type: `string`, description: `Product` },
     parentName: { sql: `parent_name`, type: `string`, description: `Parent family` },
 

@@ -35,11 +35,21 @@ BEGIN
         ON s.endDate = t.Reporting_Date AND s.asin = t.ASIN
       WHERE t.Reporting_Date IS NULL 
          OR s.row_count != t.row_count
+    ),
+    -- Deduplicate: Daton can have multiple batch rows for the same key
+    RankedSource AS (
+      SELECT d.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY d.endDate, d.asin, d.searchQuery
+          ORDER BY d._daton_batch_runtime DESC
+        ) as _rn
+      FROM `daton-491514.BigQuery.amazon_selling_partner_SearchQueryPerformanceReportWeekly` d
+      INNER JOIN PartitionsToUpdate p 
+        ON d.endDate = p.endDate AND d.asin = p.asin
     )
-    SELECT d.* 
-    FROM `daton-491514.BigQuery.amazon_selling_partner_SearchQueryPerformanceReportWeekly` d
-    INNER JOIN PartitionsToUpdate p 
-      ON d.endDate = p.endDate AND d.asin = p.asin
+    SELECT * EXCEPT(_rn)
+    FROM RankedSource
+    WHERE _rn = 1
   ) S
   ON T.Reporting_Date = S.endDate 
      AND T.ASIN = S.asin 

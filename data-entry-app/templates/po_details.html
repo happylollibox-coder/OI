@@ -24,7 +24,7 @@
                     <button class="btn btn-sm btn-outline-light" type="button" data-bs-toggle="collapse" data-bs-target="#poEditForm">
                         <i class="bi bi-pencil"></i> Edit
                     </button>
-                    <form method="POST" action="{{ url_for('delete_po', po_id=po.purchase_order_id) }}" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this Purchase Order? This action cannot be undone.');">
+                    <form method="POST" action="{{ url_for('delete_po', po_id=po.purchase_order_id) }}" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this Purchase Order and all its product lines? This action cannot be undone.');">
                         <button type="submit" class="btn btn-sm btn-outline-danger">
                             <i class="bi bi-trash"></i> Delete
                         </button>
@@ -41,25 +41,21 @@
                         <strong>Manufacturer:</strong><br>
                         {{ po.manufacturer_name }}
                     </div>
-                    <div class="col-md-3">
-                        <strong>Product:</strong><br>
-                        {{ po.product_name }}
-                        {% if po.product_asin %}
-                            <br><small class="text-muted">ASIN: <code>{{ po.product_asin }}</code></small>
-                        {% endif %}
-                        {% if po.product_id %}
-                            <br><small class="text-muted">ID: {{ po.product_id }}</small>
-                        {% endif %}
+                    <div class="col-md-6">
+                        <strong>Products:</strong><br>
+                        {{ po.product_names_combined or '-' }}
                     </div>
                 </div>
                 <hr>
                 <div class="row">
                     <div class="col-md-3">
-                        <strong>Quantity:</strong><br>
+                        <strong>Quantity:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Quantity" data-bs-content="Total units ordered in this PO (all product lines)."></i><br>
                         {{ po.quantity|format_number }}
                     </div>
                     <div class="col-md-3">
-                        <strong>Pending Shipment Quantity:</strong><br>
+                        <strong>Pending Shipment Quantity:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Pending Shipment Quantity" data-bs-content="Units not yet shipped.<br><code>PO Quantity − Total Qty Shipped</code>"></i><br>
                         {% set pending_qty = po.remaining_quantity_to_ship|default(po.quantity|default(0)) %}
                         {% if pending_qty > 0 %}
                             <span class="text-warning">{{ pending_qty|int|format_number }}</span>
@@ -68,12 +64,28 @@
                         {% endif %}
                     </div>
                     <div class="col-md-3">
-                        <strong>Unit Price:</strong><br>
-                        {{ po.unit_price|format_currency_with_commas }} {{ po.currency }}
+                        <strong>Ready:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Ready Quantity" data-bs-content="Total units ready to ship from manufacturer."></i><br>
+                        {% if po.ready_quantity and po.ready_quantity > 0 %}
+                            <span class="text-success">{{ po.ready_quantity|format_number }}</span>
+                        {% else %}
+                            <span class="text-muted">0</span>
+                        {% endif %}
                     </div>
                     <div class="col-md-3">
-                        <strong>Cost:</strong><br>
+                        <strong>Unit Price:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Unit Price" data-bs-content="Average manufacturing cost per unit.<br><code>PO Amount ÷ Quantity</code>"></i><br>
+                        {{ po.unit_price|format_currency_with_commas }} {{ po.currency }}
+                    </div>
+                    <div class="col-md-3 mt-3 mt-md-0">
+                        <strong>Cost:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Cost" data-bs-content="Total cost including PO + adjustments + shipment.<br><code>PO Amount + Adjustments + Shipment Cost</code>"></i><br>
                         <strong class="text-primary">{{ (po.total_amount_with_shipments|default(po.total_amount))|format_currency_with_commas }} {{ po.currency }}</strong>
+                        {% if po.adjustments and po.adjustments != 0 %}
+                            <br><small class="text-{{ 'danger' if po.adjustments < 0 else 'warning' }}" style="font-size: 0.75rem;">
+                                Adj: {{ po.adjustments|format_currency_with_commas }} → Effective PO: {{ (po.total_amount + po.adjustments)|format_currency_with_commas }}
+                            </small>
+                        {% endif %}
                         {% if po.total_shipment_cost and po.total_shipment_cost > 0 %}
                             <br><small class="text-muted" style="font-size: 0.75rem;">
                                 PO: {{ po.total_amount|format_currency_with_commas }} | Shipment: {{ po.total_shipment_cost|format_currency_with_commas }}
@@ -84,25 +96,34 @@
                 <hr>
                 <div class="row">
                     <div class="col-md-3">
-                        <strong>Paid:</strong><br>
+                        <strong>Paid:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Paid" data-bs-content="Total payments made (PO + shipment).<br><code>PO Payments + Paid Shipment Cost</code>"></i><br>
                         {% set total_paid_combined = po.total_paid_with_shipments|default(po.total_paid) %}
                         {% if total_paid_combined > 0 %}
                             <span class="text-success">{{ total_paid_combined|format_currency_with_commas }} {{ po.currency }}</span>
                         {% else %}
                             <span class="text-muted">0</span>
                         {% endif %}
+                        {% if po.deposit and po.deposit > 0 %}
+                            <br><small class="text-info" style="font-size: 0.75rem;">Deposit: {{ po.deposit|format_currency_with_commas }}</small>
+                        {% endif %}
                     </div>
                     <div class="col-md-3">
-                        <strong>Remaining:</strong><br>
+                        <strong>Remaining:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining" data-bs-content="Total outstanding balance.<br><code>Cost − Paid</code><br>(includes both PO and shipment)"></i><br>
                         {% set remaining_combined = po.amount_remaining_with_shipments|default(po.amount_remaining) %}
                         {% if remaining_combined > 0 %}
                             <span class="text-warning" style="font-weight: bold; text-decoration: underline;">{{ remaining_combined|format_currency_with_commas }} {{ po.currency }}</span>
+                            {% if po.remaining_payment_date %}
+                                <br><small class="text-muted" style="font-size: 0.75rem;">Due: {{ po.remaining_payment_date }}</small>
+                            {% endif %}
                         {% else %}
                             <span class="text-success">0</span>
                         {% endif %}
                     </div>
                     <div class="col-md-3">
-                        <strong>Remaining Manufactured:</strong><br>
+                        <strong>Remaining Manufactured:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining Manufactured" data-bs-content="PO amount still unpaid (manufacturing only).<br><code>PO Amount − PO Payments</code>"></i><br>
                         {% set remaining_manufactured = po.remaining_manufactured|default(po.amount_remaining|default(0)) %}
                         {% if remaining_manufactured > 0 %}
                             <span class="text-warning">{{ remaining_manufactured|format_currency_with_commas }} {{ po.currency }}</span>
@@ -111,7 +132,8 @@
                         {% endif %}
                     </div>
                     <div class="col-md-3">
-                        <strong>Remaining Shipments:</strong><br>
+                        <strong>Remaining Shipments:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining Shipments" data-bs-content="Unpaid shipment cost.<br><code>Shipment Cost − Paid Shipment Cost</code>"></i><br>
                         {% set remaining_shipments = po.remaining_shipments|default(0) %}
                         {% if remaining_shipments > 0 %}
                             <span class="text-warning">{{ remaining_shipments|format_currency_with_commas }} {{ po.currency }}</span>
@@ -123,7 +145,8 @@
                 <hr>
                 <div class="row">
                     <div class="col-md-3">
-                        <strong>Remaining Shipments Estimated:</strong><br>
+                        <strong>Remaining Shipments Estimated:</strong>
+                        <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining Shipments Estimated" data-bs-content="Estimated cost for shipped units without cost.<br><code>Qty Without Cost × Avg Unit Cost</code><br>Avg from: same PO → last 12 months."></i><br>
                         {% if po.remaining_shipments_estimated is not none %}
                             <span class="text-info">{{ po.remaining_shipments_estimated|format_currency_with_commas }} {{ po.currency }}</span>
                         {% else %}
@@ -156,65 +179,48 @@
                     <hr>
                     <form method="POST" action="{{ url_for('update_po', po_id=po.purchase_order_id) }}">
                         <div class="row">
-                            <div class="col-md-3">
+                            <div class="col-md-4">
                                 <div class="mb-3">
                                     <label class="form-label">Order Date</label>
                                     <input type="date" class="form-control" name="order_date" value="{{ po.order_date }}">
                                 </div>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-4">
                                 <div class="mb-3">
                                     <label class="form-label">Manufacturer Name</label>
                                     <input type="text" class="form-control" name="manufacturer_name" value="{{ po.manufacturer_name }}">
                                 </div>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-4">
                                 <div class="mb-3">
-                                    <label class="form-label">Product</label>
-                                    <select class="form-select" id="product_id" name="product_id">
-                                        <option value="">-- Select Product --</option>
-                                        {% if products %}
-                                            {% for product in products %}
-                                            <option value="{{ product.product_id }}" 
-                                                    data-asin="{{ product.asin or '' }}"
-                                                    data-name="{{ product.product_name or product.display_name or '' }}"
-                                                    {% if po.product_id and product.product_id == po.product_id %}selected{% endif %}>
-                                                {{ product.sku or ('Product ' + product.product_id|string) }}
-                                                {% if product.asin %} (ASIN: {{ product.asin }}){% endif %}
-                                            </option>
-                                            {% endfor %}
-                                        {% endif %}
+                                    <label class="form-label">Currency</label>
+                                    <select class="form-select" name="currency">
+                                        {% for item in lovs.get('CURRENCY', []) %}
+                                        <option value="{{ item.value_id }}" {% if po.currency == item.value_id %}selected{% endif %}>{{ item.value_caption }}</option>
+                                        {% endfor %}
                                     </select>
-                                    <input type="hidden" id="product_asin" name="product_asin" value="{{ po.product_asin or '' }}">
-                                    <input type="hidden" id="product_name" name="product_name" value="{{ po.product_name or '' }}">
-                                    <small class="text-muted" id="product_info">
-                                        {% if po.product_asin %}ASIN: {{ po.product_asin }}{% else %}Select a product{% endif %}
-                                    </small>
                                 </div>
                             </div>
                         </div>
                         <div class="row">
-                            <div class="col-md-3">
+                            <div class="col-md-4">
                                 <div class="mb-3">
-                                    <label class="form-label">Quantity</label>
-                                    <input type="number" class="form-control" name="quantity" value="{{ po.quantity }}" min="1">
+                                    <label class="form-label">Adjustments</label>
+                                    <input type="number" class="form-control" name="adjustments" step="any" value="{{ po.adjustments|default(0) }}">
+                                    <small class="text-muted">Negative = discount, Positive = surcharge</small>
                                 </div>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-4">
                                 <div class="mb-3">
-                                    <label class="form-label">Amount</label>
-                                    <input type="number" class="form-control" name="total_amount" value="{{ po.total_amount }}" step="0.01" min="0">
-                                    <small class="text-muted">Unit price: {{ po.unit_price|format_currency_with_commas }} {{ po.currency }}</small>
+                                    <label class="form-label">Deposit</label>
+                                    <input type="number" class="form-control" name="deposit" step="any" min="0" value="{{ po.deposit|default(0) }}">
+                                    <small class="text-muted">Amount paid upfront</small>
                                 </div>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-4">
                                 <div class="mb-3">
-                                    <label class="form-label">Currency</label>
-                                    <select class="form-select" name="currency">
-                                        <option value="USD" {% if po.currency == 'USD' %}selected{% endif %}>USD</option>
-                                        <option value="ILS" {% if po.currency == 'ILS' %}selected{% endif %}>ILS</option>
-                                        <option value="HKD" {% if po.currency == 'HKD' %}selected{% endif %}>HKD</option>
-                                    </select>
+                                    <label class="form-label">Date to Pay Remaining</label>
+                                    <input type="date" class="form-control" name="remaining_payment_date" value="{{ po.remaining_payment_date or '' }}">
                                 </div>
                             </div>
                         </div>
@@ -230,6 +236,135 @@
                             <i class="bi bi-save"></i> Save Changes
                         </button>
                     </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Product Lines Section -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-box-seam"></i> Product Lines 
+                    <span class="badge bg-secondary">{{ product_lines|length }}</span>
+                </h5>
+                <button class="btn btn-sm btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#addProductLineForm">
+                    <i class="bi bi-plus-circle"></i> Add Product
+                </button>
+            </div>
+            <div class="card-body">
+                <!-- Add Product Line Form (Collapsed) -->
+                <div class="collapse mb-3" id="addProductLineForm">
+                    <div class="card card-body bg-light">
+                        <h6 class="mb-3">Add Product Line</h6>
+                        <form method="POST" action="{{ url_for('add_po_product_line') }}">
+                            <input type="hidden" name="po_id" value="{{ po.purchase_order_id }}">
+                            <div class="row align-items-end">
+                                <div class="col-md-5">
+                                    <div class="mb-2">
+                                        <label class="form-label">Product</label>
+                                        {% from '_product_select.html' import product_select %}
+                                        {{ product_select(products, name='product_id', required=True) }}
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="mb-2">
+                                        <label class="form-label">Quantity</label>
+                                        <input type="number" class="form-control" name="quantity" min="1" value="1" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="mb-2">
+                                        <label class="form-label">Amount</label>
+                                        <input type="number" class="form-control" name="total_amount" step="0.01" min="0" value="0" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="mb-2">
+                                        <button type="submit" class="btn btn-primary btn-sm w-100">
+                                            <i class="bi bi-plus-lg"></i> Add
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                
+                <!-- Product Lines Table -->
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Product</th>
+                                <th>ASIN</th>
+                                <th>Quantity</th>
+                                <th>Ready Qty</th>
+                                <th>Unit Price</th>
+                                <th>Amount</th>
+                                {% if product_lines|length > 1 %}
+                                <th>Actions</th>
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for line in product_lines %}
+                            <tr>
+                                <td>{{ line.product_name or '-' }}</td>
+                                <td>{% if line.product_asin %}<code>{{ line.product_asin }}</code>{% else %}-{% endif %}</td>
+                                <td>
+                                    <form method="POST" action="{{ url_for('update_po_product_line') }}" class="d-flex align-items-center mb-0">
+                                        <input type="hidden" name="po_id" value="{{ po.purchase_order_id }}">
+                                        <input type="hidden" name="product_id" value="{{ line.product_id }}">
+                                        <input type="hidden" name="field" value="quantity">
+                                        <input type="number" name="quantity" class="form-control form-control-sm me-1" style="width: 80px;" value="{{ line.quantity|int }}" min="1">
+                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Update Quantity"><i class="bi bi-check2"></i></button>
+                                    </form>
+                                </td>
+                                <td>
+                                    <form method="POST" action="{{ url_for('update_po_product_line') }}" class="d-flex align-items-center mb-0">
+                                        <input type="hidden" name="po_id" value="{{ po.purchase_order_id }}">
+                                        <input type="hidden" name="product_id" value="{{ line.product_id }}">
+                                        <input type="number" name="ready_quantity" class="form-control form-control-sm me-1" style="width: 80px;" value="{{ line.ready_quantity or 0 }}" min="0">
+                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Update Ready Qty"><i class="bi bi-check2"></i></button>
+                                    </form>
+                                </td>
+                                <td>{{ line.unit_price|format_currency_with_commas }} {{ po.currency }}</td>
+                                <td>
+                                    <form method="POST" action="{{ url_for('update_po_product_line') }}" class="d-flex align-items-center mb-0">
+                                        <input type="hidden" name="po_id" value="{{ po.purchase_order_id }}">
+                                        <input type="hidden" name="product_id" value="{{ line.product_id }}">
+                                        <input type="hidden" name="field" value="total_amount">
+                                        <input type="number" name="total_amount" class="form-control form-control-sm me-1" style="width: 100px;" value="{{ '%.2f'|format(line.total_amount) }}" min="0" step="0.01">
+                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Update Amount"><i class="bi bi-check2"></i></button>
+                                    </form>
+                                </td>
+                                {% if product_lines|length > 1 %}
+                                <td>
+                                    <form method="POST" action="{{ url_for('delete_po_product_line') }}" style="display: inline;" onsubmit="return confirm('Remove this product line from the PO?');">
+                                        <input type="hidden" name="po_id" value="{{ po.purchase_order_id }}">
+                                        <input type="hidden" name="product_id" value="{{ line.product_id }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Remove line">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                </td>
+                                {% endif %}
+                            </tr>
+                            {% endfor %}
+                            <tr class="table-info">
+                                <td><strong>Total</strong></td>
+                                <td></td>
+                                <td><strong>{{ po.quantity|format_number }}</strong></td>
+                                <td><strong>{{ po.ready_quantity|format_number }}</strong></td>
+                                <td><strong>{{ po.unit_price|format_currency_with_commas }} {{ po.currency }}</strong></td>
+                                <td><strong>{{ po.total_amount|format_currency_with_commas }} {{ po.currency }}</strong></td>
+                                {% if product_lines|length > 1 %}<td></td>{% endif %}
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -372,9 +507,9 @@
                                         <label for="bulk_shipment_type" class="form-label">Shipment Type</label>
                                         <select class="form-select" id="bulk_shipment_type" name="shipment_type">
                                             <option value="">-- Keep Current --</option>
-                                            <option value="SLOW_SEA">Slow Sea</option>
-                                            <option value="FAST_SEA">Fast Sea</option>
-                                            <option value="AIR">Air</option>
+                                            {% for item in lovs.get('SHIPMENT_TYPE', []) %}
+                                            <option value="{{ item.value_id }}">{{ item.value_caption }}</option>
+                                            {% endfor %}
                                         </select>
                                     </div>
                                 </div>
@@ -383,11 +518,9 @@
                                         <label for="bulk_shipment_status" class="form-label">Shipment Status</label>
                                         <select class="form-select" id="bulk_shipment_status" name="shipment_status">
                                             <option value="">-- Keep Current --</option>
-                                            <option value="PENDING">Pending</option>
-                                            <option value="IN_TRANSIT">In Transit</option>
-                                            <option value="RECEIVED">Received</option>
-                                            <option value="INSPECTED">Inspected</option>
-                                            <option value="PUT_AWAY">Put Away</option>
+                                            {% for item in lovs.get('SHIPMENT_STATUS', []) %}
+                                            <option value="{{ item.value_id }}">{{ item.value_caption }}</option>
+                                            {% endfor %}
                                         </select>
                                     </div>
                                 </div>
@@ -439,9 +572,15 @@
                                 <th data-sort="string">Type <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th data-sort="string">Warehouse ID <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th data-sort="number">Qty Shipped <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th data-sort="number">KG Price <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th data-sort="number">Cost Shipped <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th data-sort="number">Cost/Unit <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">KG Price
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="KG Price" data-bs-content="Shipping rate per kilogram."></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Cost Shipped
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Cost Shipped" data-bs-content="Allocated shipping cost for this PO's share.<br><code>allocated_cost</code> from shipment line."></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Cost/Unit
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Cost/Unit" data-bs-content="Shipping cost per unit.<br><code>Cost Shipped ÷ Qty Shipped</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th data-sort="string">Paid <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th data-sort="date">Paid Date <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th data-sort="string">Status <i class="bi bi-arrow-down-up sort-icon"></i></th>
@@ -473,9 +612,9 @@
                                     </span>
                                     <select class="form-select form-select-sm cell-edit" style="display: none;">
                                         <option value="">-</option>
-                                        <option value="SLOW_SEA" {% if shipment.shipment_type == 'SLOW_SEA' %}selected{% endif %}>Slow Sea</option>
-                                        <option value="FAST_SEA" {% if shipment.shipment_type == 'FAST_SEA' %}selected{% endif %}>Fast Sea</option>
-                                        <option value="AIR" {% if shipment.shipment_type == 'AIR' %}selected{% endif %}>Air</option>
+                                        {% for item in lovs.get('SHIPMENT_TYPE', []) %}
+                                        <option value="{{ item.value_id }}" {% if shipment.shipment_type == item.value_id %}selected{% endif %}>{{ item.value_caption }}</option>
+                                        {% endfor %}
                                     </select>
                                 </td>
                                 <td class="editable-cell" data-field="tracking_number" data-type="text" data-value="{{ shipment.tracking_number or '' }}">
@@ -503,8 +642,9 @@
                                 </td>
                                 <td class="editable-cell" data-field="cost_shipped" data-type="number" data-value="{{ shipment.line_allocated_cost or '' }}">
                                     <span class="cell-display">
-                                        {% if shipment.line_allocated_cost %}
-                                            <strong>{{ shipment.line_allocated_cost|format_currency_with_commas }}</strong>
+                                        {% set line_total_cost = (shipment.line_allocated_cost or 0) %}
+                                        {% if line_total_cost > 0 %}
+                                            <strong>{{ line_total_cost|format_currency_with_commas }}</strong>
                                         {% else %}
                                             <span class="text-muted">-</span>
                                         {% endif %}
@@ -546,11 +686,9 @@
                                         </span>
                                     </span>
                                     <select class="form-select form-select-sm cell-edit" style="display: none;">
-                                        <option value="PENDING" {% if shipment.shipment_status == 'PENDING' %}selected{% endif %}>Pending</option>
-                                        <option value="IN_TRANSIT" {% if shipment.shipment_status == 'IN_TRANSIT' %}selected{% endif %}>In Transit</option>
-                                        <option value="RECEIVED" {% if shipment.shipment_status == 'RECEIVED' %}selected{% endif %}>Received</option>
-                                        <option value="INSPECTED" {% if shipment.shipment_status == 'INSPECTED' %}selected{% endif %}>Inspected</option>
-                                        <option value="PUT_AWAY" {% if shipment.shipment_status == 'PUT_AWAY' %}selected{% endif %}>Put Away</option>
+                                        {% for item in lovs.get('SHIPMENT_STATUS', []) %}
+                                        <option value="{{ item.value_id }}" {% if shipment.shipment_status == item.value_id %}selected{% endif %}>{{ item.value_caption }}</option>
+                                        {% endfor %}
                                     </select>
                                 </td>
                                 <td class="editable-cell" data-field="notes" data-type="text" data-value="{{ shipment.notes or '' }}">

@@ -129,8 +129,8 @@ BEGIN
     v.is_fully_paid_as_of_snapshot,
     v.is_fully_shipped_as_of_snapshot,
     v.is_complete_as_of_snapshot,
-    v.cost_of_goods,
-    v.shipping_cost,
+    CAST(NULL AS FLOAT64) AS cost_of_goods,
+    CAST(NULL AS FLOAT64) AS shipping_cost,
     CURRENT_TIMESTAMP() AS loaded_at
     
   FROM `onyga-482313.OI.V_PO_SNAPSHOT` v

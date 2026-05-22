@@ -23,6 +23,11 @@ cube(`Summary`, {
       type: `string`,
       description: `Product family (Lollibox, LolliME, Fresh, Bottle)`,
     },
+    colorHex: {
+      sql: `color_hex`,
+      type: `string`,
+      description: `Hex color code mapped from DE_COLOR_MAP`,
+    },
 
     // --- Current 7d ---
     sales7d: {

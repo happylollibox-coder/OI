@@ -16,13 +16,15 @@ const CUBE_API = import.meta.env.VITE_CUBE_API_URL || (import.meta.env.DEV ? 'ht
 
 const EMPTY: DashboardData = {
   summary: [], actions: [], upcoming: [], peak: [], products: [],
-  hero_asins: [], keyword_product_map: [], weekly_trends: [], monthly_trends: [], weekly_trends_by_asin: [], monthly_trends_by_asin: [],
+  hero_asins: [], keyword_product_map: [], weekly_trends: [], daily_trends: [], monthly_trends: [], weekly_trends_by_asin: [], monthly_trends_by_asin: [],
   learnings: [], experiments: [], budget_health: [], drivers: [], sqp_coverage_weeks: [],
   change_log: [], negative_keywords: [], experiment_weekly: [], sqp_weekly: [], sqp_volume_4w: {},
   experiment_campaigns: [], campaign_search_terms: [],
   ads_7d: [], ads_7d_summary: [], holidays: [], experiment_templates: [],
-  coach_decisions: [], coach_terms: [], coach_campaigns: [], experiment_evaluations: [],
+  coach_decisions: [], coach_campaigns: [], experiment_evaluations: [],
   keyword_predictions: [], brand_strength_weekly: [], coach_phrase_negatives: [], product_creatives: [], hot_signals: [],
+  ads_focus_terms: [], ads_focus_keywords: [], phrase_negatives: [],
+  storage_costs: [], supply_chain: [], supply_pos: [], supply_payments: [], supply_shipments: [], supply_other_pos: [], peak_relevance: [], family_occasions: [], coach_strategy: [], launch_models: [],
   _meta: {},
 };
 

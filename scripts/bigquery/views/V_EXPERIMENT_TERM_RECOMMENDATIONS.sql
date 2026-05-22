@@ -91,9 +91,9 @@ experiment_term_ads AS (
   SELECT
     ec.experiment_id,
     ec.campaign_id,
-    fa.campaign_name,
+    COALESCE(dc.campaign_name, fa.campaign_name) as campaign_name,
     COALESCE(fa.campaign_type, 'SP') as campaign_type,
-    'Unassigned' as portfolio_name,
+    COALESCE(dc.portfolio_name, 'Unassigned') as portfolio_name,
     ae.strategy_id,
     ae.strategy_name,
     ae.start_date,
@@ -116,7 +116,13 @@ experiment_term_ads AS (
   JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa
     ON ec.campaign_id = fa.campaign_id
     AND fa.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)
-
+  -- Portfolio name from DIM_CAMPAIGN
+  -- DEDUPED: pick latest current SCD2 row only (1 per campaign) to prevent fan-out
+  LEFT JOIN (
+    SELECT campaign_id, campaign_name, portfolio_name,
+      ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY is_current DESC, effective_from DESC) as rn
+    FROM `onyga-482313.OI.DIM_CAMPAIGN`
+  ) dc ON fa.campaign_id = dc.campaign_id AND dc.rn = 1
 
   WHERE fa.search_term IS NOT NULL AND fa.search_term != ''
     AND fa.advertised_asins IS NOT NULL
@@ -259,42 +265,54 @@ already_targeted_exact AS (
     )
 ),
 
--- Campaign configuration from bulksheet (latest snapshot)
+-- Campaign configuration from SCD2 DIM tables (live Fivetran data)
 -- Provides: current keyword bids, ad group default bids, placement adjustments
+-- DEDUPED: pick ONE row per (campaign_id, keyword_text) – prefer EXACT match, highest bid
 campaign_config AS (
-  SELECT
-    k.campaign_id,
-    LOWER(k.keyword_text) as keyword_text,
-    k.bid as keyword_bid,
-    k.match_type as keyword_match_type,
-    ag.ad_group_default_bid,
-    ba.top_of_search_pct,
-    ba.product_page_pct,
-    ba.rest_of_search_pct,
-    ba.amazon_business_pct
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG` k
-  LEFT JOIN (
-    SELECT campaign_id, ad_group_default_bid
-    FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-    WHERE entity_type = 'AD_GROUP'
-      AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
-  ) ag ON k.campaign_id = ag.campaign_id
-  LEFT JOIN (
-    SELECT campaign_id,
-      MAX(CASE WHEN placement = 'Placement Top' THEN placement_percentage END) as top_of_search_pct,
-      MAX(CASE WHEN placement = 'Placement Product Page' THEN placement_percentage END) as product_page_pct,
-      MAX(CASE WHEN placement = 'Placement Rest Of Search' THEN placement_percentage END) as rest_of_search_pct,
-      MAX(CASE WHEN placement = 'Placement Amazon Business' THEN placement_percentage END) as amazon_business_pct
-    FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-    WHERE entity_type = 'BIDDING_ADJUSTMENT'
-      AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
-    GROUP BY 1
-  ) ba ON k.campaign_id = ba.campaign_id
-  WHERE k.entity_type = 'KEYWORD'
-    AND k.snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
+  SELECT campaign_id, keyword_text, keyword_bid, keyword_match_type,
+         ad_group_default_bid, top_of_search_pct, product_page_pct,
+         rest_of_search_pct, amazon_business_pct
+  FROM (
+    SELECT
+      k.campaign_id,
+      LOWER(k.keyword_text) as keyword_text,
+      k.bid as keyword_bid,
+      k.match_type as keyword_match_type,
+      ag.ad_group_default_bid,
+      ba.top_of_search_pct,
+      ba.product_page_pct,
+      ba.rest_of_search_pct,
+      ba.amazon_business_pct,
+      ROW_NUMBER() OVER (
+        PARTITION BY k.campaign_id, LOWER(k.keyword_text)
+        ORDER BY
+          CASE k.match_type WHEN 'EXACT' THEN 1 WHEN 'PHRASE' THEN 2 ELSE 3 END,
+          k.bid DESC
+      ) as rn
+    FROM `onyga-482313.OI.DIM_KEYWORD` k
+    LEFT JOIN (
+      SELECT campaign_id, MAX(default_bid) as ad_group_default_bid
+      FROM `onyga-482313.OI.DIM_AD_GROUP`
+      WHERE is_current = TRUE
+      GROUP BY campaign_id
+    ) ag ON k.campaign_id = ag.campaign_id
+    LEFT JOIN (
+      SELECT CAST(campaign_id AS STRING) AS campaign_id,
+        MAX(CASE WHEN placement = 'TOP_OF_SEARCH' THEN bid_adjustment_pct END) as top_of_search_pct,
+        MAX(CASE WHEN placement = 'DETAIL_PAGE' THEN bid_adjustment_pct END) as product_page_pct,
+        MAX(CASE WHEN placement_raw = 'PLACEMENT_REST_OF_SEARCH' THEN bid_adjustment_pct END) as rest_of_search_pct,
+        MAX(CASE WHEN placement = 'AMAZON_BUSINESS' THEN bid_adjustment_pct END) as amazon_business_pct
+      FROM `onyga-482313.OI.V_CAMPAIGN_PLACEMENT_BIDDING`
+      GROUP BY 1
+    ) ba ON k.campaign_id = ba.campaign_id
+    WHERE k.is_current = TRUE
+      AND k.match_type NOT IN ('Automatic', 'ASIN', 'ASIN Expended', 'Category')
+  )
+  WHERE rn = 1
 ),
 
 -- Ad group default bids for auto campaigns (no keyword entity)
+-- DEDUPED: pick ONE row per campaign_id (MAX bid across ad groups)
 campaign_config_ag AS (
   SELECT
     ag.campaign_id,
@@ -303,43 +321,50 @@ campaign_config_ag AS (
     ba.product_page_pct,
     ba.rest_of_search_pct,
     ba.amazon_business_pct
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG` ag
+  FROM (
+    SELECT campaign_id, MAX(default_bid) as ad_group_default_bid
+    FROM `onyga-482313.OI.DIM_AD_GROUP`
+    WHERE is_current = TRUE
+    GROUP BY campaign_id
+  ) ag
   LEFT JOIN (
-    SELECT campaign_id,
-      MAX(CASE WHEN placement = 'Placement Top' THEN placement_percentage END) as top_of_search_pct,
-      MAX(CASE WHEN placement = 'Placement Product Page' THEN placement_percentage END) as product_page_pct,
-      MAX(CASE WHEN placement = 'Placement Rest Of Search' THEN placement_percentage END) as rest_of_search_pct,
-      MAX(CASE WHEN placement = 'Placement Amazon Business' THEN placement_percentage END) as amazon_business_pct
-    FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-    WHERE entity_type = 'BIDDING_ADJUSTMENT'
-      AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
+    SELECT CAST(campaign_id AS STRING) AS campaign_id,
+      MAX(CASE WHEN placement = 'TOP_OF_SEARCH' THEN bid_adjustment_pct END) as top_of_search_pct,
+      MAX(CASE WHEN placement = 'DETAIL_PAGE' THEN bid_adjustment_pct END) as product_page_pct,
+      MAX(CASE WHEN placement_raw = 'PLACEMENT_REST_OF_SEARCH' THEN bid_adjustment_pct END) as rest_of_search_pct,
+      MAX(CASE WHEN placement = 'AMAZON_BUSINESS' THEN bid_adjustment_pct END) as amazon_business_pct
+    FROM `onyga-482313.OI.V_CAMPAIGN_PLACEMENT_BIDDING`
     GROUP BY 1
   ) ba ON ag.campaign_id = ba.campaign_id
-  WHERE ag.entity_type = 'AD_GROUP'
-    AND ag.snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
 ),
 
 -- Negative keywords blacklist per campaign (ad-group + campaign level)
+-- NOTE: Fivetran negative tables still stale as of Jan 2026 — using them directly
+-- DEDUPED: UNION DISTINCT to avoid duplicate join keys causing fan-out
 campaign_negatives AS (
-  SELECT
-    campaign_id,
+  SELECT DISTINCT
+    CAST(campaign_id AS STRING) AS campaign_id,
     LOWER(keyword_text) as neg_keyword
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  WHERE entity_type IN ('NEGATIVE_KEYWORD', 'CAMPAIGN_NEGATIVE_KEYWORD')
-    AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
+  FROM `fivetran-hl.amazon_ads.negative_keyword_history`
+  WHERE state = 'ENABLED'
+  UNION DISTINCT
+  SELECT DISTINCT
+    CAST(campaign_id AS STRING) AS campaign_id,
+    LOWER(keyword_text) as neg_keyword
+  FROM `fivetran-hl.amazon_ads.campaign_negative_keyword_history`
+  WHERE state = 'ENABLED'
 ),
 
 -- Auto-targeting bids per campaign (close-match, substitutes, etc.)
 campaign_auto_bids AS (
   SELECT
     campaign_id,
-    MAX(CASE WHEN product_targeting_expression = 'close-match' THEN pt_bid END) as close_match_bid,
-    MAX(CASE WHEN product_targeting_expression = 'loose-match' THEN pt_bid END) as loose_match_bid,
-    MAX(CASE WHEN product_targeting_expression = 'substitutes' THEN pt_bid END) as substitutes_bid,
-    MAX(CASE WHEN product_targeting_expression = 'complements' THEN pt_bid END) as complements_bid
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  WHERE entity_type = 'PRODUCT_TARGETING'
-    AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
+    MAX(CASE WHEN keyword_text = 'close-match' THEN bid END) as close_match_bid,
+    MAX(CASE WHEN keyword_text = 'loose-match' THEN bid END) as loose_match_bid,
+    MAX(CASE WHEN keyword_text = 'substitutes' THEN bid END) as substitutes_bid,
+    MAX(CASE WHEN keyword_text = 'complements' THEN bid END) as complements_bid
+  FROM `onyga-482313.OI.DIM_KEYWORD`
+  WHERE match_type = 'Automatic' AND UPPER(state) = 'ENABLED' AND is_current = TRUE
   GROUP BY 1
 ),
 
@@ -383,6 +408,8 @@ active_term_rows AS (
     eta.ads_clicks,
     eta.ads_clicks_recent,
     eta.ads_impressions,
+    ROUND(eta.ads_revenue, 2) as ads_sales,
+    ROUND(SAFE_DIVIDE(eta.ads_revenue, NULLIF(eta.ads_spend, 0)), 2) as ads_roas,
     ROUND(SAFE_DIVIDE(eta.ads_spend, NULLIF(eta.ads_clicks, 0)), 2) as cpc,
     ROUND(SAFE_DIVIDE(eta.ads_orders, NULLIF(eta.ads_clicks, 0)) * 100, 2) as ads_cvr_pct,
     ROUND(SAFE_DIVIDE(eta.ads_spend, NULLIF(eta.ads_orders, 0)), 2) as cost_per_order,
@@ -499,16 +526,16 @@ active_term_rows AS (
       -- R2: Not enough data to decide
       WHEN eta.ads_spend < 5 THEN 'MONITOR'
 
-      -- R3: Zero total orders + enough clicks = wasted spend → stop
+      -- R3: Zero total orders + enough clicks = wasted spend → negate this search term
       WHEN (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) = 0
-        AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN 'STOP'
+        AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN 'NEGATE'
 
-      -- R4: EXACT_BOOST with < 20 clicks all-time → increase bid to gather data
+      -- R4: EXACT_BOOST with < 20 clicks all-time → keep (bid decision on target)
       -- "I promoted this to exact. Give it 20 clicks before judging."
       WHEN eta.strategy_id = 'EXACT_BOOST'
         AND eta.ads_clicks < 20
         AND eta.ads_clicks_recent > 0
-        THEN 'INCREASE_BID'
+        THEN 'KEEP'
 
       -- R5: SWITCH_HERO — wrong ASIN in EXACT campaign
       -- Override INCREASE_BID/KEEP: switch product before scaling
@@ -538,20 +565,20 @@ active_term_rows AS (
         AND eta.ads_clicks >= 15
         AND COALESCE(sqp.sqp_organic_rank, 999) <= 5 THEN 'KEEP'
 
-      -- R9: Strong ROAS → INCREASE_BID to scale winners
+      -- R9: Strong ROAS → KEEP (bid scaling decision is on the target keyword)
       WHEN SAFE_DIVIDE((eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) >= 1.5
-        AND eta.ads_clicks >= 15 THEN 'INCREASE_BID'
+        AND eta.ads_clicks >= 15 THEN 'KEEP'
 
       -- R10: Profitable (≥ 1.2x) → KEEP
       WHEN SAFE_DIVIDE((eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) >= 1.2 THEN 'KEEP'
 
-      -- R11: Heavy loss (< 0.5x) + enough data → STOP
+      -- R11: Heavy loss (< 0.5x) + enough data → NEGATE this search term
       WHEN SAFE_DIVIDE((eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) < 0.5
-        AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN 'STOP'
+        AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN 'NEGATE'
 
-      -- R12: Below profitability (< 1.2x) + enough data → REDUCE_BID
+      -- R12: Below profitability (< 1.2x) + enough data → KEEP (bid reduction is on the target)
       WHEN SAFE_DIVIDE((eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) < 1.2
-        AND eta.ads_clicks >= 15 AND eta.ads_clicks_recent > 0 THEN 'REDUCE_BID'
+        AND eta.ads_clicks >= 15 AND eta.ads_clicks_recent > 0 THEN 'KEEP'
 
       ELSE 'MONITOR'
     END as action,
@@ -825,7 +852,7 @@ active_term_rows AS (
                        CAST(ROUND(SAFE_DIVIDE(eta.ads_orders * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)), 2) AS STRING), '). Still receiving clicks.')
         WHEN SAFE_DIVIDE(eta.ads_orders * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) < 1.2 AND eta.ads_clicks >= 15 AND eta.ads_clicks_recent > 0
           THEN CONCAT('Net ROAS(8w) ', CAST(ROUND(SAFE_DIVIDE(eta.ads_orders * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)), 2) AS STRING),
-                       ' — below 1.2x profitability threshold. Reduce bid.')
+                       ' — below 1.2x profitability threshold. Review target keyword bid.')
         ELSE CONCAT(CAST(eta.ads_clicks AS STRING), ' Clicks, ', CAST(eta.ads_orders AS STRING), ' Orders. Monitoring (Not actively bleeding or below action threshold).')
       END,
       -- Hero ASIN context
@@ -924,7 +951,7 @@ opportunity_rows AS (
     CAST(NULL AS STRING) as ad_group_id,
     CAST(NULL AS STRING) as campaign_name,
     CAST(NULL AS STRING) as campaign_type,
-    'Unassigned' as portfolio_name,
+    'Unassigned' as portfolio_name,  -- Opportunities have no campaign → no portfolio
     CASE
       WHEN tc.experiment_segment = 'BRAND' THEN 'BRAND_DEFENSE'
       WHEN tc.intent_segment = 'COMPETITOR' THEN 'CATEGORY_CONQUEST'
@@ -959,6 +986,8 @@ opportunity_rows AS (
     0 as ads_clicks,
     0 as ads_clicks_recent,
     0 as ads_impressions,
+    0.0 as ads_sales,
+    CAST(NULL AS FLOAT64) as ads_roas,
     CAST(NULL AS FLOAT64) as cpc,
     CAST(NULL AS FLOAT64) as ads_cvr_pct,
     CAST(NULL AS FLOAT64) as cost_per_order,
@@ -1069,200 +1098,261 @@ combined AS (
   SELECT * FROM active_term_rows
   UNION ALL
   SELECT * FROM opportunity_rows
-)
+),
 
+-- =============================================
+-- Peak Relevance: family-level holiday qualification
+-- Maps occasion → holiday_name, picks the NEXT upcoming instance,
+-- and joins V_PEAK_RELEVANCE to get per-family coach_recommendation.
+-- Used to suppress seasonal boosts for families where the holiday
+-- historically doesn't create a peak (e.g. Mother's Day for Lollibox).
+-- =============================================
+peak_relevance_next AS (
+  SELECT
+    holiday_name,
+    holiday_date,
+    family,
+    is_relevant_peak,
+    coach_recommendation
+  FROM (
+    SELECT
+      pr.*,
+      ROW_NUMBER() OVER (PARTITION BY pr.holiday_name, pr.family ORDER BY pr.holiday_date DESC) as rn
+    FROM `onyga-482313.OI.V_PEAK_RELEVANCE` pr
+    WHERE pr.holiday_date < CURRENT_DATE()  -- only past data we can evaluate
+      AND pr.confidence IN ('HIGH', 'MEDIUM')
+  )
+  WHERE rn = 1  -- latest evaluated instance per holiday × family
+),
+
+-- Map occasion → primary holiday_name for join (1:1 only to avoid fan-out)
+-- Uses the main gift-giving holiday per occasion (ignore sub-holidays)
+occasion_holiday_map AS (
+  SELECT 'VALENTINES' AS occasion, 'Valentines Day' AS holiday_name UNION ALL
+  SELECT 'EASTER', 'Easter' UNION ALL
+  SELECT 'CHRISTMAS', 'Christmas' UNION ALL
+  SELECT 'BACK_TO_SCHOOL', 'Back to School' UNION ALL
+  SELECT 'MOTHERS_DAY', 'Mothers Day' UNION ALL
+  SELECT 'FATHERS_DAY', 'Fathers Day'
+),
+
+-- =============================================
+-- Phase-Aware Overrides Layer
+-- =============================================
+-- Computes final action, suggested_bid, bid_change_pct FIRST so that
+-- downstream columns (action_explanation, negate_as, hero_action) can
+-- reference the resolved action instead of the pre-override original.
+-- NOW FAMILY-AWARE: if V_PEAK_RELEVANCE says REDUCE/HOLD for this
+-- family+occasion, suppress seasonal BOOST → treat as ALWAYS_ON.
+phase_overridden AS (
+  SELECT
+    c.* EXCEPT (action, suggested_bid, bid_change_pct, ads_signal),
+
+    -- Preserve original action for explanation context
+    c.action as original_action,
+
+    -- Family-level peak relevance (NULL = no data / new product → treat as relevant)
+    pr.coach_recommendation as family_peak_coach,
+
+    -- Phase-aware ADS_SIGNAL override: seasonal phases get SEASONAL signal
+    -- BUT only if the family actually peaks for this holiday
+    CASE
+      WHEN c.peak_phase IN ('POST_PEAK', 'OFF_SEASON', 'PRE_PEAK', 'BOOST')
+        AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
+        AND COALESCE(pr.coach_recommendation, 'MODERATE_BOOST') NOT IN ('REDUCE', 'HOLD')
+        THEN 'SEASONAL'
+      ELSE c.ads_signal
+    END as ads_signal,
+
+    -- Phase-aware ACTION override (FAMILY-AWARE)
+    CASE
+      -- If family doesn't peak for this holiday, skip ALL seasonal overrides
+      -- (treat as ALWAYS_ON = normal graduated ROAS logic)
+      WHEN c.peak_phase IN ('BOOST', 'PEAK', 'PRE_PEAK')
+        AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
+        AND pr.coach_recommendation IN ('REDUCE', 'HOLD')
+        THEN c.action  -- keep normal action, don't boost
+
+      -- POST_PEAK + HUNTER/LOW_COST_DISCOVERY (broad/auto): NEGATE seasonal terms
+      -- Campaign keeps running, but stops matching seasonal keywords
+      WHEN c.peak_phase = 'POST_PEAK'
+        AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
+        AND c.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+        AND c.action NOT IN ('NEGATE', 'NOT_TARGETED')
+        THEN 'NEGATE'
+      -- POST_PEAK + EXACT/CONQUEST (dedicated seasonal campaigns): NEGATE seasonal terms
+      -- These campaigns are seasonal-specific — negate until next year
+      WHEN c.peak_phase = 'POST_PEAK'
+        AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
+        AND c.strategy_id IN ('EXACT_BOOST', 'COMPETITOR_CONQUEST')
+        AND c.action NOT IN ('NEGATE', 'NOT_TARGETED')
+        THEN 'NEGATE'
+      -- POST_PEAK + DEFENSE (brand/product): keep at KEEP (bid reduction is on target)
+      WHEN c.peak_phase = 'POST_PEAK'
+        AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
+        AND c.strategy_id IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+        AND c.action NOT IN ('NEGATE', 'NOT_TARGETED')
+        THEN 'KEEP'
+      -- OFF_SEASON + BOOST/PEAK: no override needed (base actions are already term-level)
+      -- PRE_PEAK: no override needed (base actions are term-level KEEP/MONITOR)
+      -- BOOST / PEAK / ALWAYS_ON: normal logic
+      ELSE c.action
+    END as action,
+
+    -- Phase-aware SUGGESTED_BID override
+    -- Since term-level actions no longer include bid changes,
+    -- suggested_bid is preserved from base (which comes from target enrichment)
+    -- but cleared on seasonal negation
+    CASE
+      WHEN c.peak_phase = 'POST_PEAK'
+        AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
+        THEN NULL  -- seasonal negate, clear bid
+      ELSE c.suggested_bid
+    END as suggested_bid,
+
+    -- Phase-aware BID_CHANGE_PCT override
+    -- Since term-level actions no longer include bid changes,
+    -- bid_change_pct is cleared on seasonal overrides
+    CASE
+      WHEN c.peak_phase = 'POST_PEAK'
+        AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
+        THEN NULL  -- seasonal negate, clear bid pct
+      ELSE c.bid_change_pct
+    END as bid_change_pct
+
+  FROM combined c
+  -- Join peak relevance: occasion → holiday_name → family (via ASIN → parent_name)
+  LEFT JOIN occasion_holiday_map ohm ON c.occasion = ohm.occasion
+  LEFT JOIN (
+    SELECT asin, parent_name,
+      ROW_NUMBER() OVER (PARTITION BY asin ORDER BY asin) as rn
+    FROM `onyga-482313.OI.DIM_PRODUCT`
+    WHERE parent_name IS NOT NULL
+  ) dp ON c.asin = dp.asin AND dp.rn = 1
+  LEFT JOIN peak_relevance_next pr ON ohm.holiday_name = pr.holiday_name AND LOWER(dp.parent_name) = LOWER(pr.family)
+),
+
+-- =============================================
+-- FINAL OUTPUT: Explanations & Negate using resolved action
+-- =============================================
+final_rows AS (
 SELECT
-  * EXCEPT (action, suggested_bid, bid_change_pct),
+  * EXCEPT (original_action, reason, decision_trace),
 
-  -- Phase-aware ACTION override
+  -- ─── Phase-aware REASON override ───
+  -- When phase overrides the action, prepend a phase context prefix to the original reason
   CASE
-    -- POST_PEAK: stop seasonal keywords (demand cliff after shipping cutoff)
+    -- POST_PEAK NEGATE (all strategies): negate search term from campaign
     WHEN peak_phase = 'POST_PEAK'
       AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action NOT IN ('STOP', 'NOT_TARGETED')
-      THEN 'STOP'
-    -- OFF_SEASON: don't increase bids on seasonal terms (override to REDUCE)
-    WHEN peak_phase = 'OFF_SEASON'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action = 'INCREASE_BID'
-      THEN 'REDUCE_BID'
-    -- PRE_PEAK: research phase — don't act on bids, just monitor
-    WHEN peak_phase = 'PRE_PEAK'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action IN ('INCREASE_BID', 'REDUCE_BID')
-      THEN 'MONITOR'
-    -- BOOST / PEAK / ALWAYS_ON: normal logic
-    ELSE action
-  END as action,
-
-  -- Phase-aware SUGGESTED_BID override
-  CASE
-    -- BOOST: push bids harder (×1.3)
-    WHEN peak_phase = 'BOOST'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND suggested_bid IS NOT NULL
-      AND action = 'INCREASE_BID'
-      THEN ROUND(suggested_bid * 1.3, 2)
-    -- POST_PEAK / OFF_SEASON overrides: clear suggested bid
-    WHEN peak_phase IN ('POST_PEAK', 'OFF_SEASON')
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action IN ('INCREASE_BID', 'KEEP')
-      THEN NULL
-    -- OFF_SEASON: set reduce bid to -30% of current
-    WHEN peak_phase = 'OFF_SEASON'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action = 'INCREASE_BID'
-      AND suggested_bid IS NOT NULL
-      THEN ROUND(suggested_bid * 0.54, 2)  -- roughly current_bid * 0.70 (reduce 30%)
-    -- PRE_PEAK: clear bid changes (monitor only)
-    WHEN peak_phase = 'PRE_PEAK'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      THEN NULL
-    ELSE suggested_bid
-  END as suggested_bid,
-
-  -- Phase-aware BID_CHANGE_PCT override
-  CASE
-    -- BOOST: amplify bid change by ×1.3
-    WHEN peak_phase = 'BOOST'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND bid_change_pct IS NOT NULL
-      AND bid_change_pct > 0
-      THEN ROUND(bid_change_pct * 1.3, 1)
-    -- POST_PEAK: clear bid pct (STOP action has no bid change)
+      AND action = 'NEGATE' AND original_action NOT IN ('NEGATE', 'NOT_TARGETED')
+      THEN CONCAT('🚫 POST_PEAK: ', occasion, ' ended — negate "', search_term, '" from ', strategy_id, ' campaign. Original: ', reason)
+    -- POST_PEAK KEEP (defense): conserve
     WHEN peak_phase = 'POST_PEAK'
       AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      THEN NULL
-    -- OFF_SEASON: override INCREASE to -30%
-    WHEN peak_phase = 'OFF_SEASON'
+      AND action = 'KEEP' AND original_action NOT IN ('NEGATE', 'NOT_TARGETED')
+      THEN CONCAT('KEEP: ', occasion, ' ended — see target keyword for post-peak bid adjustment. Original: ', reason)
+    ELSE reason
+  END as reason,
+
+  -- ─── Phase-aware DECISION TRACE override ───
+  -- Append a "Seasonal Phase" step to the JSON array when phase changed the action
+  CASE
+    WHEN decision_trace IS NOT NULL
+      AND peak_phase IN ('POST_PEAK', 'OFF_SEASON', 'PRE_PEAK')
       AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action = 'INCREASE_BID'
-      THEN -30.0
-    -- PRE_PEAK: clear bid pct (monitor only)
-    WHEN peak_phase = 'PRE_PEAK'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      THEN NULL
-    ELSE bid_change_pct
-  END as bid_change_pct,
+      AND action != original_action
+      THEN REPLACE(decision_trace, ']', CONCAT(
+        ',{"id":"phase_override","label":"Seasonal Phase","rule":"',
+        peak_phase, ' → ', action,
+        '","pass":false,"value":"',
+        occasion, ' (', peak_phase, ')"}]'))
+    ELSE decision_trace
+  END as decision_trace,
 
   -- Negate instruction: only negate from BROAD/AUTO AFTER exact campaign exists and converts
-  CASE
+   CASE
     -- Already negated: nothing to do
     WHEN is_negated = TRUE THEN NULL
-    -- STOP action + exact campaign exists → safe to negate (traffic flows through exact)
-    WHEN action = 'STOP' AND has_exact_targeting = TRUE THEN 'NEGATIVE_EXACT'
-    -- STOP action from POST_PEAK override + exact exists → seasonal negate
-    WHEN peak_phase = 'POST_PEAK'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND has_exact_targeting = TRUE THEN 'NEGATIVE_EXACT'
-    -- STOP action but NO exact campaign yet → must promote to exact first
-    WHEN action = 'STOP' AND has_exact_targeting = FALSE THEN 'PROMOTE_FIRST'
-    -- POST_PEAK override but no exact → promote first
-    WHEN peak_phase = 'POST_PEAK'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND has_exact_targeting = FALSE THEN 'PROMOTE_FIRST'
-    -- All other actions (INCREASE_BID, REDUCE_BID, KEEP, MONITOR): no negate
+    -- NEGATE action: add negative exact keyword
+    WHEN action = 'NEGATE' AND has_exact_targeting = TRUE THEN 'NEGATIVE_EXACT'
+    -- NEGATE action but NO exact campaign yet → must promote to exact first
+    WHEN action = 'NEGATE' AND has_exact_targeting = FALSE THEN 'PROMOTE_FIRST'
+    -- All other actions (KEEP, MONITOR, PROMOTE, SWITCH_HERO): no negate
     ELSE NULL
   END as negate_as,
 
   -- Decision tree explanation: human-readable trace of WHY this action is recommended
+  -- Now references the RESOLVED action (after phase overrides)
   CASE
     -- ══════════════════════════════════════════
     -- Phase overrides (these take priority)
     -- ══════════════════════════════════════════
+    -- POST_PEAK NEGATE (hunter/broad)
     WHEN peak_phase = 'POST_PEAK'
       AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action = 'STOP'
+      AND action = 'NEGATE'
+      AND original_action NOT IN ('NEGATE', 'NOT_TARGETED')
       THEN CONCAT(
-        '⏹ POST_PEAK override → STOP seasonal keyword.',
-        ' Phase: ', occasion, ' ended (POST_PEAK = shipping cutoff passed).',
-        ' Demand cliff: seasonal shoppers stop buying after the holiday.',
-        CASE WHEN has_exact_targeting THEN ' ✅ Exact campaign exists → safe to add NEGATIVE_EXACT to this campaign.'
-             ELSE ' ⚠ No exact campaign yet → PROMOTE_FIRST: create exact targeting, verify it converts, then negate.'
-        END
+        '🚫 POST_PEAK → NEGATE seasonal term from ', strategy_id, ' campaign.',
+        ' Phase: ', occasion, ' ended. Add "', search_term, '" as negative exact.',
+        ' Campaign keeps running for non-seasonal terms.',
+        ' Original performance: ', reason
       )
-    WHEN peak_phase = 'OFF_SEASON'
+    -- POST_PEAK NEGATE (exact/conquest): negate seasonal terms
+    WHEN peak_phase = 'POST_PEAK'
       AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action = 'INCREASE_BID'  -- original action (gets overridden to REDUCE_BID)
+      AND action = 'NEGATE'
+      AND original_action NOT IN ('NEGATE', 'NOT_TARGETED')
       THEN CONCAT(
-        '📉 OFF_SEASON override: INCREASE_BID overridden to REDUCE_BID -30%.',
-        ' Phase: ', occasion, ' is OFF_SEASON (next season not started yet).',
-        ' Originally profitable (Weighted Total ROAS ', COALESCE(CAST(weighted_total_net_roas AS STRING), '?'), ') but seasonal demand is low.',
-        ' Reduce bids instead of wasting budget on out-of-season terms.'
+        '🚫 POST_PEAK → NEGATE seasonal search term from ', strategy_id, ' campaign.',
+        ' Phase: ', occasion, ' ended. Add "', search_term, '" as negative exact.',
+        ' Resume when ', occasion, ' PRE_PEAK starts next year.'
       )
-    WHEN peak_phase = 'PRE_PEAK'
+    -- POST_PEAK KEEP (defense): post-peak conservative
+    WHEN peak_phase = 'POST_PEAK'
       AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action IN ('INCREASE_BID', 'REDUCE_BID')  -- original actions that get overridden to MONITOR
+      AND action = 'KEEP'
+      AND original_action NOT IN ('NEGATE', 'NOT_TARGETED')
       THEN CONCAT(
-        '👁 PRE_PEAK override: ', action, ' overridden to MONITOR.',
-        ' Phase: ', occasion, ' PRE_PEAK (research phase, shoppers click but do not buy yet).',
-        ' Do not adjust bids now - wait for BOOST phase when orders start.'
-      )
-    WHEN peak_phase = 'BOOST'
-      AND occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-      AND action = 'INCREASE_BID'
-      AND bid_change_pct IS NOT NULL AND bid_change_pct > 0
-      THEN CONCAT(
-        '🚀 BOOST phase → ×1.3 bid multiplier.',
-        ' Phase: ', occasion, ' BOOST (orders starting to flow).',
-        ' Original bid change +', CAST(ROUND(bid_change_pct / 1.3, 0) AS STRING), '% amplified to +', CAST(ROUND(bid_change_pct, 0) AS STRING), '%.',
-        ' Push harder now to capture early-season momentum.'
+        'KEEP: ', occasion, ' ended — see target keyword for post-peak bid adjustment.',
+        ' Original performance: ', reason
       )
 
     -- ══════════════════════════════════════════
-    -- STOP actions (non-phase)
+    -- NEGATE actions (non-phase)
     -- ══════════════════════════════════════════
-    WHEN action = 'STOP' AND ads_signal = 'WASTED_SPEND'
+    WHEN action = 'NEGATE' AND ads_signal = 'WASTED_SPEND'
       THEN CONCAT(
-        '⛔ STOP: Wasted spend.',
+        '⛔ NEGATE: Wasted spend.',
         ' $', CAST(ROUND(ads_spend, 0) AS STRING), ' spent, 0 orders in 8 weeks, ', CAST(ads_clicks AS STRING), ' clicks.',
-        ' Decision: clicks ≥ 20 with recent activity but zero conversions → stop spending.',
+        ' Decision: clicks ≥ 20 with recent activity but zero conversions → negate this search term.',
         CASE WHEN has_exact_targeting THEN ' ✅ Exact campaign exists → add NEGATIVE_EXACT to this ' || strategy_id || ' campaign.'
              ELSE ' ⚠ No exact campaign → PROMOTE_FIRST: create exact, verify conversions, then negate.'
         END
       )
-    WHEN action = 'STOP' AND ads_signal = 'HEAVY_LOSS'
+    WHEN action = 'NEGATE' AND ads_signal = 'HEAVY_LOSS'
       THEN CONCAT(
-        '⛔ STOP: Heavy loss.',
+        '⛔ NEGATE: Heavy loss.',
         ' $', CAST(ROUND(ads_spend, 0) AS STRING), ' spent, Weighted Total ROAS ', COALESCE(CAST(weighted_total_net_roas AS STRING), '0'),
         ' (threshold < 0.5). ', CAST(ads_clicks AS STRING), ' clicks.',
-        ' Decision: ROAS too low with enough data to be confident → stop.',
+        ' Decision: ROAS too low with enough data to be confident → negate this search term.',
+        CASE WHEN has_exact_targeting THEN ' ✅ Exact campaign exists → add NEGATIVE_EXACT.'
+             ELSE ' ⚠ No exact campaign → PROMOTE_FIRST.'
+        END
+      )
+    WHEN action = 'NEGATE'
+      THEN CONCAT(
+        '⛔ NEGATE: Unprofitable search term.',
+        ' $', CAST(ROUND(ads_spend, 0) AS STRING), ' spent, Weighted Total ROAS ', COALESCE(CAST(weighted_total_net_roas AS STRING), '0'),
+        '. ', CAST(ads_clicks AS STRING), ' clicks, ', CAST(ads_orders AS STRING), ' orders.',
+        ' Decision: below profitability thresholds → negate this search term.',
         CASE WHEN has_exact_targeting THEN ' ✅ Exact campaign exists → add NEGATIVE_EXACT.'
              ELSE ' ⚠ No exact campaign → PROMOTE_FIRST.'
         END
       )
 
-    -- ══════════════════════════════════════════
-    -- Bid change actions
-    -- ══════════════════════════════════════════
-    WHEN action = 'INCREASE_BID'
-      THEN CONCAT(
-        '📈 INCREASE_BID +', COALESCE(CAST(ROUND(bid_change_pct, 0) AS STRING), '?'), '%.',
-        ' Weighted Total ROAS ', COALESCE(CAST(weighted_total_net_roas AS STRING), '?'),
-        CASE
-          WHEN weighted_total_net_roas >= 5.0 THEN ' (excellent, >=5x -> graduated +40%)'
-          WHEN weighted_total_net_roas >= 3.0 THEN ' (strong, >=3x -> graduated +30%)'
-          WHEN weighted_total_net_roas >= 2.0 THEN ' (good, >=2x -> graduated +20%)'
-          WHEN weighted_total_net_roas >= 1.5 THEN ' (profitable, >=1.5x -> graduated +10%)'
-          ELSE ''
-        END,
-        '. ', CAST(ads_clicks AS STRING), ' clicks, ', CAST(ads_orders AS STRING), ' orders.',
-        ' Decision: profitable with enough clicks → scale up.'
-      )
-    WHEN action = 'REDUCE_BID'
-      THEN CONCAT(
-        '📉 REDUCE_BID ', COALESCE(CAST(ROUND(bid_change_pct, 0) AS STRING), '?'), '%.',
-        ' Weighted Total ROAS ', COALESCE(CAST(weighted_total_net_roas AS STRING), '?'),
-        CASE
-          WHEN weighted_total_net_roas < 0.3 THEN ' (very poor, <0.3x → graduated -35%)'
-          WHEN weighted_total_net_roas < 0.5 THEN ' (poor, <0.5x → graduated -25%)'
-          WHEN weighted_total_net_roas < 0.7 THEN ' (marginal, <0.7x → graduated -15%)'
-          WHEN weighted_total_net_roas < 1.2 THEN ' (below threshold, <1.2x → graduated -10%)'
-          ELSE ''
-        END,
-        '. ', CAST(ads_clicks AS STRING), ' clicks, $', CAST(ROUND(ads_spend, 0) AS STRING), ' spent.',
-        ' Decision: below 1.2x profitability → reduce bid.'
-      )
+    -- (INCREASE_BID and REDUCE_BID no longer exist at term level — bid decisions are on targets)
     WHEN action = 'PROMOTE_TO_EXACT'
       THEN CONCAT(
         '🎯 PROMOTE_TO_EXACT.',
@@ -1282,7 +1372,11 @@ SELECT
     -- Passive actions
     -- ══════════════════════════════════════════
     WHEN action = 'KEEP'
-      THEN 'KEEP: Profitable (ROAS ≥ 1.2) but not strong enough to scale. No bid change needed.'
+      THEN CONCAT(
+        'KEEP: Total Net ROAS ', COALESCE(CAST(ROUND(weighted_total_net_roas, 2) AS STRING), '?'), '.',
+        ' ', CAST(ads_clicks AS STRING), ' clicks, ', CAST(ads_orders AS STRING), ' orders.',
+        ' This search term stays. See target keyword for bid recommendations.'
+      )
     WHEN action = 'MONITOR'
       THEN CONCAT(
         'MONITOR: ',
@@ -1301,12 +1395,12 @@ SELECT
 
   -- ══════════════════════════════════════════
   -- Hero mismatch action: should you switch the advertised ASIN?
-  -- Gates: hero exists + wrong ASIN + actionable (not STOP/MONITOR)
+  -- Gates: hero exists + wrong ASIN + actionable (not NEGATE/MONITOR)
   -- ══════════════════════════════════════════
   CASE
     WHEN hero_asin IS NULL THEN NULL
     WHEN is_hero_match = TRUE THEN NULL
-    WHEN action IN ('STOP', 'MONITOR', 'NOT_TARGETED', 'START', 'SWITCH_HERO') THEN NULL
+    WHEN action IN ('NEGATE', 'MONITOR', 'NOT_TARGETED', 'START', 'SWITCH_HERO') THEN NULL
     ELSE 'SWITCH_HERO'
   END as hero_action,
 
@@ -1318,7 +1412,7 @@ SELECT
       ' Hero Net ROAS: ', COALESCE(CAST(hero_net_roas AS STRING), '?'),
       ', ', CAST(COALESCE(hero_total_orders, 0) AS STRING), ' orders.'
     )
-    WHEN action IN ('STOP', 'MONITOR', 'NOT_TARGETED', 'START') THEN NULL
+    WHEN action IN ('NEGATE', 'MONITOR', 'NOT_TARGETED', 'START') THEN NULL
     ELSE CONCAT(
       '🔄 SWITCH_HERO: You are advertising ', product_short_name,
       ' but ', hero_product_name, ' is the hero for "', search_term, '".',
@@ -1340,4 +1434,35 @@ SELECT
     )
   END as hero_action_explanation
 
-FROM combined;
+FROM phase_overridden
+)
+
+-- Unpivot actions into discrete rows using UNNEST
+SELECT
+  final_rows.* EXCEPT(action, action_explanation, hero_action, hero_action_explanation, decision_trace),
+  u.action_type,
+  u.action,
+  u.action_explanation,
+  u.decision_trace,
+  CONCAT(u.prefix, SUBSTR(FORMAT('%x', ABS(FARM_FINGERPRINT(u.hash_input))), 1, 6)) as action_id,
+  CASE WHEN u.decision_trace IS NOT NULL THEN CONCAT('B-', SUBSTR(FORMAT('%x', ABS(FARM_FINGERPRINT(u.decision_trace))), 1, 6)) ELSE NULL END as decision_branch_id
+FROM final_rows
+CROSS JOIN UNNEST([
+  STRUCT(
+    'TERM' as action_type,
+    action,
+    action_explanation,
+    decision_trace,
+    'TRM-' as prefix,
+    CONCAT(COALESCE(campaign_id, ''), '|', COALESCE(search_term, ''), '|', action) as hash_input
+  ),
+  STRUCT(
+    'HERO' as action_type,
+    hero_action as action,
+    hero_action_explanation as action_explanation,
+    CAST(NULL AS STRING) as decision_trace,
+    'HRO-' as prefix,
+    CONCAT(COALESCE(campaign_id, ''), '|', COALESCE(search_term, ''), '|', hero_action) as hash_input
+  )
+]) AS u
+WHERE u.action IS NOT NULL;

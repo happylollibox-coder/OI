@@ -57,12 +57,12 @@ campaign_settings AS (
     CAST(ch.campaign_id AS STRING) as campaign_id,
     ch.campaign_type,
     ch.bidding_strategy,
-    ch.budget as campaign_budget,
-    ch.budget_type as campaign_budget_type,
+    ch.daily_budget as campaign_budget,
+    'DAILY' as campaign_budget_type,
     ch.state as campaign_state,
-    ch.OI_start_date,
-    ch.OI_end_date
-  FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history` ch
+    ch.effective_from,
+    ch.effective_to
+  FROM `onyga-482313.OI.DIM_CAMPAIGN` ch
 ),
 
 -- Ad group settings: latest active version per ad group, aggregated per campaign
@@ -73,9 +73,9 @@ ad_group_settings AS (
     ROUND(AVG(default_bid), 2) as avg_default_bid,
     ROUND(MAX(default_bid), 2) as max_default_bid,
     ROUND(MIN(default_bid), 2) as min_default_bid
-  FROM `onyga-482313.OI.V_SRC_AmazonAds_ad_group_history`
-  WHERE state = 'enabled'
-    AND OI_end_date >= CURRENT_TIMESTAMP()
+  FROM `onyga-482313.OI.DIM_AD_GROUP`
+  WHERE UPPER(state) = 'ENABLED'
+    AND is_current = TRUE
   GROUP BY CAST(campaign_id AS STRING)
 ),
 
@@ -90,14 +90,15 @@ keyword_settings AS (
     ROUND(MAX(k.bid), 2) as max_keyword_bid
   FROM (
     SELECT
-      k.campaign_id,
+      CAST(k.campaign_id AS STRING) as campaign_id,
       k.keyword_id,
       k.match_type,
       k.bid,
       COUNT(*) OVER (PARTITION BY k.campaign_id, k.match_type) as cnt
-    FROM `onyga-482313.OI.V_SRC_AmazonAds_keyword` k
-    WHERE k.state IN ('enabled', '')
+    FROM `onyga-482313.OI.DIM_KEYWORD` k
+    WHERE UPPER(k.state) = 'ENABLED'
       AND k.bid IS NOT NULL
+      AND k.is_current = TRUE
   ) k
   GROUP BY k.campaign_id
 ),
@@ -306,8 +307,8 @@ FROM experiment_campaigns ec
 -- Temporal join: campaign settings valid at experiment start_date
 LEFT JOIN campaign_settings cs
   ON ec.campaign_id = cs.campaign_id
-  AND TIMESTAMP(ec.start_date) >= cs.OI_start_date
-  AND TIMESTAMP(ec.start_date) <= cs.OI_end_date
+  AND DATETIME(TIMESTAMP(ec.start_date)) >= cs.effective_from
+  AND (cs.effective_to IS NULL OR DATETIME(TIMESTAMP(ec.start_date)) < cs.effective_to)
 
 -- Latest snapshot: ad group settings
 LEFT JOIN ad_group_settings ags

@@ -38,6 +38,110 @@ BEGIN
   ) as log_message;
 
   -- ============================================
+  -- Refresh Task 0.1: SRC_ACC_PRODUCTS (Daton → V_SRC → SRC_ACC)
+  -- ============================================
+  SET procedure_name = 'SP_SRC_ACC_PRODUCTS';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SRC_ACC_PRODUCTS`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 0.2: SRC_ACC_SALES_TRAFFIC_DAILY (Daton → V_SRC → SRC_ACC)
+  -- ============================================
+  SET procedure_name = 'SP_SRC_ACC_SALES_TRAFFIC';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SRC_ACC_SALES_TRAFFIC`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 0.3: SRC_ACC_FEE_PREVIEW (Daton → V_SRC → SRC_ACC)
+  -- ============================================
+  SET procedure_name = 'SP_SRC_ACC_FEE_PREVIEW';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SRC_ACC_FEE_PREVIEW`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 0.4: SRC_ACC_REPEAT_PURCHASE (Daton → V_SRC → SRC_ACC)
+  -- ============================================
+  SET procedure_name = 'SP_SRC_ACC_REPEAT_PURCHASE';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SRC_ACC_REPEAT_PURCHASE`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 1: PRODUCT_DIM
   -- ============================================
   SET procedure_name = 'SP_MERGE_PRODUCT_DIM_SMART';
@@ -113,14 +217,84 @@ BEGIN
   END;
 
   -- ============================================
-  -- Refresh Task 2: DIM_AD_keyword
+  -- Refresh Task 2: DIM_KEYWORD (SCD2, replaces DIM_AD_keyword)
   -- ============================================
-  SET procedure_name = 'SP_LOAD_DIM_AD_keyword';
+  SET procedure_name = 'SP_LOAD_DIM_KEYWORD';
   SET procedure_start_time = CURRENT_TIMESTAMP();
   SET total_procedures = total_procedures + 1;
 
   BEGIN
-    CALL `onyga-482313.OI.SP_LOAD_DIM_AD_keyword`();
+    CALL `onyga-482313.OI.SP_LOAD_DIM_KEYWORD`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'OK %s completed successfully in %d seconds',
+      procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)
+    ) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'FAIL %s failed: %s (Error at %s)',
+      procedure_name,
+      @@error.message,
+      CAST(CURRENT_TIMESTAMP() AS STRING)
+    ) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 2.1: DIM_CAMPAIGN (SCD2)
+  -- ============================================
+  SET procedure_name = 'SP_LOAD_DIM_CAMPAIGN';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_LOAD_DIM_CAMPAIGN`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'OK %s completed successfully in %d seconds',
+      procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)
+    ) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'FAIL %s failed: %s (Error at %s)',
+      procedure_name,
+      @@error.message,
+      CAST(CURRENT_TIMESTAMP() AS STRING)
+    ) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 2.2: DIM_AD_GROUP (SCD2)
+  -- ============================================
+  SET procedure_name = 'SP_LOAD_DIM_AD_GROUP';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_LOAD_DIM_AD_GROUP`();
     SET success_count = success_count + 1;
     SET error_msg = NULL;
     INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
@@ -356,6 +530,32 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 7.9: Auto-assign new campaigns to experiments
+  -- ============================================
+  SET procedure_name = 'SP_AUTO_ASSIGN_CAMPAIGNS';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_AUTO_ASSIGN_CAMPAIGNS`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 8: FACT_SEARCH_QUERY (reads from SRC_ACC_SQP_WEEKLY + STG_SCP_WEEKLY)
   -- ============================================
   SET procedure_name = 'SP_LOAD_FACT_SEARCH_QUERY';
@@ -465,7 +665,63 @@ BEGIN
   END;
 
   -- ============================================
-  -- Refresh Task 11: Inventory Snapshot (depends on FACT_PURCHASE_ORDER)
+  -- Refresh Task 10.5: SRC_ACC_INVENTORY_FBA (Daton → V_SRC → SRC_ACC)
+  -- Accumulates daily FBA inventory snapshot from Fivetran.
+  -- Replaces manual file uploads to SRC_ACC_INVENTORY_FBA.
+  -- ============================================
+  SET procedure_name = 'SP_SRC_ACC_INVENTORY_FBA';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SRC_ACC_INVENTORY_FBA`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 10.6: SRC_ACC_INVENTORY_AWD (Daton → V_SRC → SRC_ACC)
+  -- Accumulates daily AWD inventory snapshot from Daton.
+  -- Replaces manual file uploads to SRC_ACC_INVENTORY_AWD.
+  -- ============================================
+  SET procedure_name = 'SP_SRC_ACC_INVENTORY_AWD';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SRC_ACC_INVENTORY_AWD`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 11: Inventory Snapshot (depends on SRC_ACC_INVENTORY_FBA + SRC_ACC_INVENTORY_AWD + FACT_PURCHASE_ORDER)
   -- ============================================
   SET procedure_name = 'SP_LOAD_FACT_INVENTORY_SNAPSHOT';
   SET procedure_start_time = CURRENT_TIMESTAMP();
@@ -1117,9 +1373,130 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 20.5: Materialize Ads Coach Actions (depends on FACT_AMAZON_ADS + experiments)
+  -- Populates FACT_ADS_COACH_ACTIONS with 4 INSERT statements at natural grain
+  -- ============================================
+  SET procedure_name = 'SP_REFRESH_ADS_COACH_ACTIONS';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_REFRESH_ADS_COACH_ACTIONS`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'OK %s completed successfully in %d seconds',
+      procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)
+    ) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'FAIL %s failed: %s (Error at %s)',
+      procedure_name,
+      @@error.message,
+      CAST(CURRENT_TIMESTAMP() AS STRING)
+    ) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.4: Materialize Demand Forecast (speeds up V_PLAN_FORECAST)
+  -- ============================================
+  SET procedure_name = 'SP_LOAD_FACT_FORECAST_DEMAND';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_LOAD_FACT_FORECAST_DEMAND`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s (Error at %s)', procedure_name, @@error.message, CAST(CURRENT_TIMESTAMP() AS STRING)) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.5: Generate Shipment Plan (depends on V_PLAN_FORECAST → inventory + forecast)
+  -- Cascading allocation: Emergency → Emergency PO → AWD Maintenance → Q4 Bulk
+  -- ============================================
+  SET procedure_name = 'SP_GENERATE_SHIPMENT_PLAN';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_GENERATE_SHIPMENT_PLAN`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 22: Weekly Sales Deviation Alerts (runs only on Mondays)
+  -- Compares actual YTD sales pace vs yearly plan. Creates SALES_DEVIATION alerts.
+  -- ============================================
+  IF EXTRACT(DAYOFWEEK FROM CURRENT_DATE()) = 2 THEN  -- Monday = 2
+
+    SET procedure_name = 'SP_GENERATE_SALES_DEVIATION_ALERTS';
+    SET procedure_start_time = CURRENT_TIMESTAMP();
+    SET total_procedures = total_procedures + 1;
+
+    BEGIN
+      CALL `onyga-482313.OI.SP_GENERATE_SALES_DEVIATION_ALERTS`();
+      SET success_count = success_count + 1;
+      SET error_msg = NULL;
+      INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+        (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+      VALUES
+        (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+      SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+    EXCEPTION WHEN ERROR THEN
+      SET failure_count = failure_count + 1;
+      SET error_msg = @@error.message;
+      INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+        (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+      VALUES
+        (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+      SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+    END;
+
+  END IF;
+
+  -- ============================================
   -- Refresh Task 21: Refresh Cube Tables (T_*)
   -- Convert all Cube-facing V_* logical views into physical T_* snapshot tables
   -- ============================================
+
   SET procedure_name = 'SP_REFRESH_CUBE_TABLES';
   SET procedure_start_time = CURRENT_TIMESTAMP();
   SET total_procedures = total_procedures + 1;

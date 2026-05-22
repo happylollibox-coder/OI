@@ -13,11 +13,22 @@ cube(`ExperimentTermRecommendations`, {
   },
 
   dimensions: {
-    id: {
-      sql: `CONCAT(COALESCE(search_term,''), '|', COALESCE(campaign_id,''), '|', COALESCE(asin,''), '|', COALESCE(experiment_id,''))`,
+    // Unpivoted Action Identity
+    actionId: {
+      sql: `action_id`,
       type: `string`,
       primaryKey: true,
-      description: `Unique row id`,
+      description: `Unique row id (action ID)`,
+    },
+    decisionBranchId: {
+      sql: `decision_branch_id`,
+      type: `string`,
+      description: `Decision branch ID (shared by actions taking the same logic path)`,
+    },
+    actionType: {
+      sql: `action_type`,
+      type: `string`,
+      description: `Type of action: TERM, TARGET, BUDGET, HERO`,
     },
     adsSpend: { sql: `ads_spend`, type: `number`, description: `Ads spend` },
     adsOrders: { sql: `ads_orders`, type: `number`, description: `Ads orders` },
@@ -97,40 +108,10 @@ cube(`ExperimentTermRecommendations`, {
       type: `string`,
       description: `Performance signal`,
     },
-    reason: {
-      sql: `reason`,
-      type: `string`,
-      description: `Recommendation reason`,
-    },
-    strategyId: {
-      sql: `strategy_id`,
-      type: `string`,
-      description: `Strategy template`,
-    },
-    recommendationType: {
-      sql: `recommendation_type`,
-      type: `string`,
-      description: `ACTIVE_TERM or OPPORTUNITY`,
-    },
-    negateAs: {
-      sql: `negate_as`,
-      type: `string`,
-      description: `Negate instruction: NEGATIVE_EXACT or PROMOTE_FIRST`,
-    },
     actionExplanation: {
       sql: `action_explanation`,
       type: `string`,
       description: `Human-readable decision tree explanation`,
-    },
-    heroAction: {
-      sql: `hero_action`,
-      type: `string`,
-      description: `SWITCH_HERO when wrong ASIN is advertised`,
-    },
-    heroActionExplanation: {
-      sql: `hero_action_explanation`,
-      type: `string`,
-      description: `Step-by-step hero switch instructions with ROAS comparison`,
     },
     heroProductName: {
       sql: `hero_product_name`,

@@ -1,0 +1,18 @@
+{
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2"
+  },
+  "scripts": {
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "dashboard-react/src/**/*.{ts,tsx}": [
+      "bash -c 'cd dashboard-react && npx eslint --fix'",
+      "bash -c 'cd dashboard-react && npx tsc --noEmit'"
+    ],
+    "data-entry-app/**/*.py": [
+      "python3 -m py_compile"
+    ]
+  }
+}

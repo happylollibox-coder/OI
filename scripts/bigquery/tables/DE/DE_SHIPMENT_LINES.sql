@@ -9,6 +9,7 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.DE_SHIPMENT_LINES` (
   line_id STRING NOT NULL,              -- UUID, e.g. SHL_abc123
   shipment_id STRING NOT NULL,          -- FK → DE_MANUFACTURER_SHIPMENTS
   purchase_order_id STRING NOT NULL,    -- FK → DE_PURCHASE_ORDERS
+  product_id INT64,                     -- FK → DIM_PRODUCT (for multi-product PO tracking)
   quantity_shipped INT64 NOT NULL,       -- Units from this PO in this shipment
   num_cartons INT64,                     -- ceil(quantity_shipped / package_quantity)
   cubic_feet_per_carton FLOAT64,         -- From DIM_PRODUCT.package_cubic_feet at creation time

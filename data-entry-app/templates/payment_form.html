@@ -11,17 +11,38 @@
 
 <div class="row">
     <div class="col-lg-8 offset-lg-2">
+        {% if shipment_context %}
+        <!-- Shipment Context Banner -->
+        <div class="alert alert-info d-flex align-items-center mb-3">
+            <i class="bi bi-truck me-2 fs-5"></i>
+            <div>
+                <strong>Paying for Shipment:</strong> {{ shipment_context.shipment_id }}
+                <span class="ms-2 badge bg-secondary">{{ shipment_context.shipment_type }}</span>
+                <span class="ms-2">Deliverer: <strong>{{ shipment_context.deliverer }}</strong></span>
+                {% set pay_ship_total = (shipment_context.cost_shipped or 0) + (shipment_context.amazon_commission or 0) %}
+                {% if pay_ship_total > 0 %}
+                <span class="ms-2">| Total Cost: <strong>${{ "%.2f"|format(pay_ship_total) }}</strong></span>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
         <div class="card">
             <div class="card-header">
                 Payment Information
             </div>
             <div class="card-body">
                 <form method="POST" action="{{ url_for('new_payment') }}" id="paymentForm">
+                    <!-- Hidden shipment_id if present -->
+                    {% if shipment_id %}
+                    <input type="hidden" name="shipment_id" value="{{ shipment_id }}">
+                    {% endif %}
+
                     <div class="row">
                         <div class="col-md-6">
                             <div class="mb-3">
-                                <label for="purchase_order_id" class="form-label required-field">Purchase Order ID</label>
-                                <input type="text" class="form-control" id="purchase_order_id" name="purchase_order_id" required 
+                                <label for="purchase_order_id" class="form-label">Purchase Order ID <small class="text-muted">(optional if shipment linked)</small></label>
+                                <input type="text" class="form-control" id="purchase_order_id" name="purchase_order_id"
                                        value="{{ po_id }}" placeholder="Enter the Purchase Order ID">
                                 <small class="form-text text-muted">Link this payment to a purchase order</small>
                             </div>
@@ -38,7 +59,8 @@
                         <div class="col-md-3">
                             <div class="mb-3">
                                 <label for="payment_amount" class="form-label required-field">Payment Amount</label>
-                                <input type="number" class="form-control" id="payment_amount" name="payment_amount" step="0.01" min="0" required>
+                                <input type="number" class="form-control" id="payment_amount" name="payment_amount" step="any" required
+                                       value="{{ ((shipment_context.cost_shipped or 0) + (shipment_context.amazon_commission or 0)) if shipment_context and ((shipment_context.cost_shipped or 0) + (shipment_context.amazon_commission or 0)) > 0 else '' }}">
                             </div>
                         </div>
                         <div class="col-md-3">
@@ -51,20 +73,20 @@
                             <div class="mb-3">
                                 <label for="currency" class="form-label">Currency</label>
                                 <select class="form-select" id="currency" name="currency">
-                                    <option value="USD" selected>USD</option>
-                                    <option value="ILS">ILS</option>
-                                    <option value="HKD">HKD</option>
+                                    {% for item in lovs.get('CURRENCY', []) %}
+                                    <option value="{{ item.value_id }}" {% if item.is_default %}selected{% endif %}>{{ item.value_caption }}</option>
+                                    {% endfor %}
                                 </select>
                             </div>
                         </div>
                         <div class="col-md-3">
                             <div class="mb-3">
-                                <label for="payment_method" class="form-label">Payment Method</label>
-                                <select class="form-select" id="payment_method" name="payment_method">
+                                <label for="payment_method" class="form-label required-field">Paid From Account</label>
+                                <select class="form-select" id="payment_method" name="payment_method" required>
                                     <option value="">-- Select --</option>
-                                    <option value="Account Payoneer">Account Payoneer</option>
-                                    <option value="Bank Leumi Business">Bank Leumi Business</option>
-                                    <option value="Bank Leumi Private">Bank Leumi Private</option>
+                                    {% for item in lovs.get('PAYMENT_METHOD', []) %}
+                                    <option value="{{ item.value_id }}" {% if item.is_default %}selected{% endif %}>{{ item.value_caption }}</option>
+                                    {% endfor %}
                                 </select>
                             </div>
                         </div>
@@ -76,15 +98,22 @@
                                 <label class="form-label required-field">Vendor Name</label>
                                 <div>
                                     <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="checkbox" id="vendor_sylvia" name="vendor_name" value="SYLVIA">
+                                        <input class="form-check-input" type="radio" id="vendor_sylvia" name="vendor_name" value="SYLVIA" required
+                                               {% if shipment_context and shipment_context.deliverer == 'SYLVIA' %}checked{% endif %}>
                                         <label class="form-check-label" for="vendor_sylvia">SYLVIA</label>
                                     </div>
                                     <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="checkbox" id="vendor_anna" name="vendor_name" value="ANNA">
+                                        <input class="form-check-input" type="radio" id="vendor_anna" name="vendor_name" value="ANNA"
+                                               {% if shipment_context and shipment_context.deliverer == 'ANNA' %}checked{% endif %}>
                                         <label class="form-check-label" for="vendor_anna">ANNA</label>
                                     </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" id="vendor_jenna" name="vendor_name" value="JENNA"
+                                               {% if shipment_context and shipment_context.deliverer == 'JENNA' %}checked{% endif %}>
+                                        <label class="form-check-label" for="vendor_jenna">JENNA</label>
+                                    </div>
                                 </div>
-                                <small class="form-text text-muted">Select one or more vendors</small>
+                                <small class="form-text text-muted">Select a vendor</small>
                             </div>
                         </div>
                     </div>
@@ -95,7 +124,9 @@
                     </div>
 
                     <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-                        {% if po_id %}
+                        {% if shipment_id %}
+                        <a href="{{ url_for('shipment_details', shipment_id=shipment_id) }}" class="btn btn-secondary me-md-2">Cancel</a>
+                        {% elif po_id %}
                         <a href="{{ url_for('po_details', po_id=po_id) }}" class="btn btn-secondary me-md-2">Cancel</a>
                         {% else %}
                         <a href="{{ url_for('index') }}" class="btn btn-secondary me-md-2">Cancel</a>
@@ -113,18 +144,7 @@
 {% block extra_js %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const form = document.getElementById('paymentForm');
-    const vendorCheckboxes = document.querySelectorAll('input[name="vendor_name"]');
-    
-    // Validate at least one vendor is selected
-    form.addEventListener('submit', function(e) {
-        const checkedVendors = Array.from(vendorCheckboxes).filter(cb => cb.checked);
-        if (checkedVendors.length === 0) {
-            e.preventDefault();
-            alert('Please select at least one vendor.');
-            return false;
-        }
-    });
+    // PO and shipment links are optional — standalone adjustments/discounts are allowed
 });
 </script>
 {% endblock %}

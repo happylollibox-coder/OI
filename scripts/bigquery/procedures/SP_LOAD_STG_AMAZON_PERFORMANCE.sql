@@ -55,7 +55,7 @@ BEGIN
       THEN FALSE
       ELSE TRUE
     END AS IS_LOADED
-  FROM `onyga-482313.OI.V_SRC_sales_and_traffic_business_sku_report_daily`
+  FROM `onyga-482313.OI.SRC_ACC_SALES_TRAFFIC_DAILY`
   GROUP BY
     DATE,
     PURCHASED_ASIN;

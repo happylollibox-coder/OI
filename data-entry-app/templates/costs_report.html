@@ -34,15 +34,33 @@
                                 <th data-sort="string">SKU <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th data-sort="string">ASIN <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th data-sort="string">Product <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th data-sort="number">FBA Fix <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th data-sort="number">Amazon 15% <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th data-sort="number">COGS <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th data-sort="number">Shipping <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th data-sort="number">Total Cost <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th>Price</th>
-                                <th>New 15%</th>
-                                <th class="margin-cell">Margin</th>
-                                <th class="margin-cell">Margin %</th>
+                                <th data-sort="number">FBA Fix
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="FBA Fix" data-bs-content="Amazon FBA pick &amp; pack fee per unit.<br><code>estimated_pick_pack_fee_per_unit</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Amazon 15%
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Amazon 15%" data-bs-content="Amazon referral fee (15% of listing price).<br><code>listing_price × 0.15</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">COGS
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="COGS" data-bs-content="Cost of Goods Sold — manufacturing cost per unit.<br><code>cost_of_goods</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Shipping
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Shipping" data-bs-content="Shipping cost per unit (manufacturer → Amazon FBA).<br><code>shipping_cost</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Total Cost
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Total Cost" data-bs-content="Sum of all per-unit costs.<br><code>FBA Fix + Amazon 15% + COGS + Shipping</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th>Price
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Price" data-bs-content="Current listing price on Amazon. Edit to simulate margin."></i>
+                                </th>
+                                <th>New 15%
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="New 15%" data-bs-content="Recalculated referral fee based on entered price.<br><code>Price × 0.15</code>"></i>
+                                </th>
+                                <th class="margin-cell">Margin
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Margin" data-bs-content="Profit per unit after all costs.<br><code>Price − (FBA Fix + 15% × Price + COGS + Shipping)</code>"></i>
+                                </th>
+                                <th class="margin-cell">Margin %
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Margin %" data-bs-content="Margin as a percentage of price.<br><code>(Margin ÷ Price) × 100</code>"></i>
+                                </th>
                             </tr>
                         </thead>
                         <tbody>

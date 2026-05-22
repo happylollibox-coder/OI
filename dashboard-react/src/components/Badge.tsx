@@ -28,10 +28,22 @@ export function RoasBadge({ value }: { value: number | null | undefined }) {
 
 export function ActionBadge({ action }: { action: string }) {
   const META: Record<string, { l: string; v: string }> = {
-    STOP: { l: 'STOP', v: 'red' }, REDUCE_BID: { l: 'REDUCE BID', v: 'red' }, NEGATE: { l: 'NEGATE', v: 'red' },
-    BOOST: { l: 'SCALE', v: 'green' }, SCALE_UP: { l: 'SCALE UP', v: 'green' },
-    PROMOTE_TO_EXACT: { l: 'PROMOTE', v: 'blue' }, START: { l: 'NEW', v: 'purple' },
+    STOP_TERM: { l: 'STOP', v: 'red' }, STOP_TARGET: { l: 'STOP TARGET', v: 'red' }, STOP_SEASONAL: { l: 'STOP SEASONAL', v: 'red' },
+    NEGATE_TERM: { l: 'NEGATE', v: 'red' }, NEGATE_BOOST_SIMILAR_EXACT: { l: 'NEGATE BOOST', v: 'red' },
+    REDUCE_BID: { l: 'REDUCE BID', v: 'red' }, RESTORE_PRE_PEAK: { l: 'RESTORE', v: 'red' },
+    REDUCE_TO_BASELINE: { l: 'REDUCE', v: 'amber' }, COOLDOWN_MONITOR: { l: 'HOLD', v: 'muted' },
+    INCREASE_BID: { l: 'INCREASE BID', v: 'green' }, KEEP_TARGET: { l: 'KEEP', v: 'green' },
+    PROMOTE_TO_EXACT: { l: 'PROMOTE', v: 'blue' }, START_TERM: { l: 'NEW', v: 'purple' },
     FIX_HERO: { l: 'FIX HERO', v: 'amber' }, SWITCH_HERO: { l: 'SWITCH HERO', v: 'amber' },
+    MONITOR_TARGET: { l: 'MONITOR', v: 'muted' },
+    GUARDIAN_BUDGET_INCREASE: { l: 'BUDGET ↑', v: 'green' }, GUARDIAN_BUDGET_DECREASE: { l: 'BUDGET ↓', v: 'red' },
+    BLITZ_BUDGET_INCREASE: { l: 'BLITZ ↑', v: 'green' }, BLITZ_BUDGET_DECREASE: { l: 'BLITZ ↓', v: 'amber' },
+    BUDGET_OK: { l: 'BUDGET OK', v: 'muted' },
+    // Legacy
+    STOP: { l: 'STOP', v: 'red' }, NEGATE: { l: 'NEGATE', v: 'red' },
+    BOOST: { l: 'SCALE', v: 'green' }, SCALE_UP: { l: 'SCALE UP', v: 'green' },
+    KEEP: { l: 'KEEP', v: 'green' }, MONITOR: { l: 'MONITOR', v: 'muted' },
+    START: { l: 'NEW', v: 'purple' },
   };
   const m = META[action] || { l: action || '?', v: 'muted' };
   return <Badge variant={m.v}>{m.l}</Badge>;

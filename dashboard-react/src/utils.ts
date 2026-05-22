@@ -55,6 +55,21 @@ export function weekRangeLabel(weekStart: string): string {
   return f(d) + ' – ' + f(end);
 }
 
+/** Week range label capped at dataMaxDate (e.g. latest Orders date).
+ *  For a current/in-progress week, shows "May 10 – May 11" instead of "May 10 – May 16". */
+export function weekRangeLabelCapped(weekStart: string, dataMaxDate?: string): string {
+  if (!weekStart) return '';
+  const d = new Date(weekStart + 'T12:00:00Z');
+  const calEnd = new Date(d);
+  calEnd.setUTCDate(calEnd.getUTCDate() + 6);
+  const calEndIso = `${calEnd.getUTCFullYear()}-${String(calEnd.getUTCMonth() + 1).padStart(2, '0')}-${String(calEnd.getUTCDate()).padStart(2, '0')}`;
+  const effectiveEnd = dataMaxDate && dataMaxDate < calEndIso
+    ? new Date(dataMaxDate + 'T12:00:00Z')
+    : calEnd;
+  const f = (dt: Date) => dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return f(d) + ' – ' + f(effectiveEnd);
+}
+
 /** Returns the Sunday of the current week as YYYY-MM-DD (Sunday-start week, matching DIM_TIME). */
 export function getCurrentWeekStart(): string {
   const now = new Date();
@@ -67,6 +82,15 @@ export function getCurrentWeekStart(): string {
   return `${y}-${m}-${d}`;
 }
 
+/** Returns the Sunday week-start (YYYY-MM-DD) containing the given ISO date. */
+export function getWeekStart(iso: string): string {
+  const raw = iso.length === 10 ? iso + 'T12:00:00Z' : iso;
+  const dt = new Date(raw);
+  const day = dt.getUTCDay(); // 0=Sun
+  dt.setUTCDate(dt.getUTCDate() - day);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+}
+
 /** Returns ISO date range for a week: "2026-02-15 – 2026-02-21". Optionally append suffix like " (latest)". */
 export function weekRangeLabelIso(weekStart: string, suffix = ''): string {
   if (!weekStart) return '';
@@ -75,11 +99,18 @@ export function weekRangeLabelIso(weekStart: string, suffix = ''): string {
   return `${weekStart} – ${endStr}${suffix ? ' ' + suffix : ''}`;
 }
 
-export type PeriodMode = 'weeks' | 'month' | 'year';
+export type PeriodMode = 'date' | 'weeks' | 'month' | 'quarter' | 'year';
 
+/** Convert a date/week_start to the appropriate period key. Quarter format: '2025-Q1'. */
 export function periodKey(weekStart: string, mode: PeriodMode): string {
+  if (mode === 'date') return weekStart; // full date YYYY-MM-DD
   if (mode === 'weeks') return weekStart;
   if (mode === 'month') return weekStart.slice(0, 7);
+  if (mode === 'quarter') {
+    const m = parseInt(weekStart.slice(5, 7), 10);
+    const q = Math.ceil(m / 3);
+    return `${weekStart.slice(0, 4)}-Q${q}`;
+  }
   return weekStart.slice(0, 4);
 }
 
@@ -90,9 +121,11 @@ export function periodLabel(key: string, mode: PeriodMode): string {
 
 export function periodModeLabel(mode: PeriodMode, style: 'title' | 'lower' | 'latest' = 'title'): string {
   const map: Record<PeriodMode, { title: string; lower: string; latest: string }> = {
-    weeks: { title: 'Weekly', lower: 'weekly', latest: 'latest week' },
-    month: { title: 'Monthly', lower: 'monthly', latest: 'latest month' },
-    year: { title: 'Yearly', lower: 'yearly', latest: 'latest year' },
+    date:    { title: 'Daily',     lower: 'daily',     latest: 'latest date' },
+    weeks:   { title: 'Weekly',    lower: 'weekly',    latest: 'latest week' },
+    month:   { title: 'Monthly',   lower: 'monthly',   latest: 'latest month' },
+    quarter: { title: 'Quarterly', lower: 'quarterly', latest: 'latest quarter' },
+    year:    { title: 'Yearly',    lower: 'yearly',    latest: 'latest year' },
   };
   return map[mode][style];
 }
@@ -108,6 +141,9 @@ export function latestPeriodLabel(periodValue: string, mode: PeriodMode): string
     const monthStr = MONTH_NAMES[parseInt(m || '0', 10)] || m;
     return `${y}-${monthStr} (${periodModeLabel(mode, 'latest')})`;
   }
+  if (mode === 'quarter') {
+    return `${periodValue} (${periodModeLabel(mode, 'latest')})`;
+  }
   const year = periodValue.slice(0, 4);
   return `${year} (${periodModeLabel(mode, 'latest')})`;
 }
@@ -119,6 +155,9 @@ export function periodDateKey(mode: PeriodMode): 'week_start' | 'month_start' {
 /** Date range [start, end] for a period key. Used to filter ads_7d by period. */
 export function periodDateRange(periodKey: string, mode: PeriodMode): { start: string; end: string } | null {
   if (!periodKey) return null;
+  if (mode === 'date') {
+    return { start: periodKey, end: periodKey };
+  }
   if (mode === 'weeks') {
     return { start: periodKey, end: addDays(periodKey, 6) };
   }
@@ -128,6 +167,15 @@ export function periodDateRange(periodKey: string, mode: PeriodMode): { start: s
     const m = parseInt(periodKey.slice(5, 7), 10);
     const lastDay = new Date(y, m, 0);
     return { start, end: lastDay.toISOString().slice(0, 10) };
+  }
+  if (mode === 'quarter') {
+    const y = parseInt(periodKey.slice(0, 4), 10);
+    const q = parseInt(periodKey.slice(6, 7), 10);
+    const startMonth = (q - 1) * 3 + 1;
+    const endMonth = q * 3;
+    const startStr = `${y}-${String(startMonth).padStart(2, '0')}-01`;
+    const lastDay = new Date(y, endMonth, 0);
+    return { start: startStr, end: lastDay.toISOString().slice(0, 10) };
   }
   return { start: periodKey + '-01-01', end: periodKey + '-12-31' };
 }
@@ -150,7 +198,7 @@ export function sliceByPeriod(sorted: string[], specificPeriod: string | null, c
 /** Anchor period: specificPeriod if set and in available, else latest week with SQP (weekly), else last available. */
 export function getEffectivePeriod(
   sqpWeekly: { week_start: string }[],
-  periodMode: 'weeks' | 'month' | 'year',
+  periodMode: PeriodMode,
   specificPeriod: string | null,
   availablePeriods: string[]
 ): string | null {
@@ -175,7 +223,7 @@ export function getPeriodsForNonTrend(sorted: string[], anchorPeriod: string | n
 /** Get periods to include: sliceByPeriod with anchor + count. */
 export function getPeriodsToInclude(
   specificPeriod: string | null,
-  _periodMode: 'weeks' | 'month' | 'year',
+  _periodMode: PeriodMode,
   availablePeriods: string[],
   count: number
 ): string[] {
@@ -188,15 +236,7 @@ export const deltaClass = (v: number | null | undefined): string =>
 export const deltaStr = (v: number | null | undefined): string =>
   v == null ? '' : v > 0 ? '+' + fP(v) : fP(v);
 
-export function famFromProduct(name: string | null | undefined): FamilyName | null {
-  if (!name) return null;
-  const p = name.toLowerCase();
-  if (p.includes('lollibox')) return 'Lollibox';
-  if (p.includes('lollime') || p.includes('journal') || p.includes('diary') || p.includes('craft') || p.includes('stationary')) return 'LolliME';
-  if (p.includes('bottle') || p.includes('truth')) return 'Bottle';
-  if (p.includes('fresh')) return 'Fresh';
-  return null;
-}
+/** Simple deterministic short hash (6 chars) for generating action/branch IDs */
 
 /** Returns true if experiment name/id matches the given family (for filtering). */
 export function experimentMatchesFamily(nameOrId: string | null | undefined, family: FamilyName): boolean {
@@ -209,16 +249,9 @@ export function experimentMatchesFamily(nameOrId: string | null | undefined, fam
 }
 
 export function famFromType(t: string | null | undefined): FamilyName | string | null {
+  // Pass-through: BigQuery now returns clean family names via V_PRODUCT_FAMILY_MAP
+  // No frontend heuristic needed — new products are handled automatically
   if (!t) return null;
-  const p = t.toLowerCase();
-  if (p === 'lollibox' || p.includes('lollibox')) return 'Lollibox';
-  if (p === 'lollime' || p.includes('lollime')) return 'LolliME';
-  if (p === 'bottle' || p.includes('bottle') || p.includes('truth')) return 'Bottle';
-  if (p === 'fresh' || p.includes('fresh')) return 'Fresh';
-  if (p === 'accessory') return 'Lollibox';
-  if (p === 'art_craft_kit') return 'LolliME';
-  if (p === 'skin_care_agent') return 'Fresh';
-  if (p === 'tabletop_game') return 'Bottle';
   return t;
 }
 
@@ -324,6 +357,20 @@ export const ACTION_META: Record<string, { label: string; variant: 'red' | 'gree
   // ─── Other ───
   FIX_HERO:         { label: 'FIX HERO',       variant: 'amber',  group: 'fix',         criteria: 'Best converting ASIN ≠ advertised ASIN — switch to hero product' },
   SWITCH_HERO:      { label: 'SWITCH HERO',    variant: 'amber',  group: 'fix',         criteria: 'Current hero underperforming vs alternative ASIN — switch hero' },
+  // ─── Boost-specific negation ───
+  NEGATE_BOOST_SIMILAR_EXACT: { label: 'NEGATE BOOST', variant: 'red', group: 'urgent', criteria: 'Boost keyword underperforming — negate similar exact match from parent campaign' },
+  // ─── Seasonal Campaign Actions ───
+  STOP_SEASONAL:    { label: 'STOP SEASONAL',  variant: 'red',    group: 'urgent',      criteria: 'Seasonal campaign past its season — pause campaign to prevent off-season spend' },
+  // ─── Cooldown Actions ───
+  COOLDOWN_MONITOR: { label: 'COOLDOWN HOLD',  variant: 'muted',  group: 'watch',       criteria: 'Post-peak ROAS ≥ 0.8 — no bid change needed during cooldown' },
+  REDUCE_TO_BASELINE: { label: 'REDUCE',       variant: 'amber',  group: 'urgent',      criteria: 'Post-peak ROAS ≥ 0.6 — gradual -10% per cycle toward pre-peak baseline' },
+  RESTORE_PRE_PEAK: { label: 'RESTORE',        variant: 'red',    group: 'urgent',      criteria: 'Post-peak ROAS < 0.6 — snap to pre-peak bid immediately' },
+  // ─── Budget Actions ───
+  GUARDIAN_BUDGET_INCREASE: { label: 'BUDGET ↑', variant: 'green', group: 'growth', criteria: 'Campaign profitable (ROAS ≥ 1.1) + out of budget — increase 10%' },
+  GUARDIAN_BUDGET_DECREASE: { label: 'BUDGET ↓', variant: 'red',   group: 'urgent', criteria: 'Campaign losing (ROAS < 0.9) — decrease 15%' },
+  BLITZ_BUDGET_INCREASE:    { label: 'BLITZ BUDGET ↑', variant: 'green', group: 'growth', criteria: 'Blitz: profitable + out of budget — increase 20%' },
+  BLITZ_BUDGET_DECREASE:    { label: 'BLITZ BUDGET ↓', variant: 'amber', group: 'urgent', criteria: 'Blitz: losing ROAS — decrease 10%' },
+  BUDGET_OK:        { label: 'BUDGET OK',      variant: 'muted',  group: 'watch',       criteria: 'Budget within healthy range — no change needed' },
   // ─── Legacy / passive (term-level, rolled up into target actions) ───
   KEEP:             { label: 'KEEP',           variant: 'green',  group: 'profitable',  criteria: 'Term profitable — passive, bid action is on the target' },
   MONITOR:          { label: 'MONITOR',        variant: 'muted',  group: 'watch',       criteria: 'Not enough data — keep watching' },

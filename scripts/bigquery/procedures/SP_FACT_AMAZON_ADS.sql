@@ -60,6 +60,16 @@ BEGIN
     ASIN_BY_CAMPAIGN_NAME,
     Ads_key
   )
+  WITH cost_deduped AS (
+    SELECT asin, start_date, end_date, TOTAL_COST_PER_UNIT
+    FROM (
+      SELECT asin, start_date, end_date, TOTAL_COST_PER_UNIT,
+        ROW_NUMBER() OVER (PARTITION BY marketplace_id, asin, start_date, COALESCE(end_date, DATE '9999-12-31') ORDER BY COALESCE(sku, '')) AS rn
+      FROM `onyga-482313.OI.DIM_COSTS_HISTORY`
+      WHERE marketplace_id = 'ATVPDKIKX0DER'
+    )
+    WHERE rn = 1
+  )
   SELECT
     ads.date,
     ads.campaign_id,
@@ -78,8 +88,9 @@ BEGIN
     ads.units,
     ads.cost,
     ads.sales,
-    cost.TOTAL_COST_PER_UNIT,
-    ads.sales - COALESCE(cost.TOTAL_COST_PER_UNIT, 0) * ads.units AS GROSS_PROFIT,
+    -- Cost fallback chain: purchased ASIN → impressions ASIN → single advertised ASIN
+    COALESCE(cost_purchased.TOTAL_COST_PER_UNIT, cost_impressions.TOTAL_COST_PER_UNIT, cost_advertised.TOTAL_COST_PER_UNIT) AS TOTAL_COST_PER_UNIT,
+    ads.sales - COALESCE(cost_purchased.TOTAL_COST_PER_UNIT, cost_impressions.TOTAL_COST_PER_UNIT, cost_advertised.TOTAL_COST_PER_UNIT, 0) * ads.units AS GROSS_PROFIT,
     ads.placement_type,
     ads.num_st_in_date_keyword,
     ads.num_ad_groups_for_st,
@@ -91,7 +102,7 @@ BEGIN
     ads.most_advertised_mismatch,
     ads._fivetran_synced,
     ads.source_table,
-    -- Derive ASIN from campaign_name for rows where most_advertised_asin_impressions is NULL
+    -- Derive ASIN from campaign_name for rows where ad-file ASINs are unavailable
     CASE
       -- Lollibox variants
       WHEN REGEXP_CONTAINS(UPPER(ads.campaign_name), r'LOLLIBOX|LOLLI.?BOX|^BOX') THEN
@@ -127,18 +138,22 @@ BEGIN
       END
     ) AS Ads_key
   FROM `onyga-482313.OI.STG_AMAZON_ADS` ads
-  LEFT JOIN (
-    SELECT asin, start_date, end_date, TOTAL_COST_PER_UNIT
-    FROM (
-      SELECT asin, start_date, end_date, TOTAL_COST_PER_UNIT,
-        ROW_NUMBER() OVER (PARTITION BY marketplace_id, asin, start_date, COALESCE(end_date, DATE '9999-12-31') ORDER BY COALESCE(sku, '')) AS rn
-      FROM `onyga-482313.OI.DIM_COSTS_HISTORY`
-      WHERE marketplace_id = 'ATVPDKIKX0DER'
-    )
-    WHERE rn = 1
-  ) cost ON cost.asin = ads.most_advertised_asin_purchased
-    AND ads.date >= cost.start_date
-    AND (cost.end_date IS NULL OR ads.date <= cost.end_date);
+  -- 1st priority: cost from the ASIN that actually got purchased
+  LEFT JOIN cost_deduped cost_purchased ON cost_purchased.asin = ads.most_advertised_asin_purchased
+    AND ads.date >= cost_purchased.start_date
+    AND (cost_purchased.end_date IS NULL OR ads.date <= cost_purchased.end_date)
+  -- 2nd priority: cost from the ASIN with most impressions (populated from 2025+)
+  LEFT JOIN cost_deduped cost_impressions ON cost_impressions.asin = ads.most_advertised_asin_impressions
+    AND ads.date >= cost_impressions.start_date
+    AND (cost_impressions.end_date IS NULL OR ads.date <= cost_impressions.end_date)
+    AND ads.most_advertised_asin_purchased IS NULL
+  -- 3rd priority: cost from advertised_asins (always populated; use only when single ASIN)
+  LEFT JOIN cost_deduped cost_advertised ON cost_advertised.asin = ads.advertised_asins
+    AND ads.date >= cost_advertised.start_date
+    AND (cost_advertised.end_date IS NULL OR ads.date <= cost_advertised.end_date)
+    AND ads.most_advertised_asin_purchased IS NULL
+    AND ads.most_advertised_asin_impressions IS NULL
+    AND ads.advertised_asins_count = 1;
 
   SET record_count = @@row_count;
   SET end_time = CURRENT_TIMESTAMP();

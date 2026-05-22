@@ -54,7 +54,7 @@ Fivetran raw tables → SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY → FACT_AMAZON_PE
 FACT_AMAZON_ADS (Fivetran)  ──┐
 FACT_SQP (manual upload)   ──┼── V_ADS_COACH_DECISION (grain: search_term)
 DIM_PRODUCT                ──┘   ├── Cube: AdsCoachDecision
-                                 ├── V_ADS_COACH_SEARCH_TERM (grain: campaign × term)
+                                 ├── V_ADS_COACH_ACTIONS (grain: campaign × term)
                                  │   └── Cube: AdsCoachTerm
                                  └── V_ADS_COACH_CAMPAIGN (grain: campaign)
                                      └── Cube: AdsCoachCampaign

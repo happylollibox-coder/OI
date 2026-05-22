@@ -240,7 +240,15 @@ BEGIN
   LEFT JOIN search_term_ad_group_count stag
     ON st.date = stag.date
     AND st.search_term = stag.search_term
-  LEFT JOIN `onyga-482313.OI.V_SRC_AmazonAds_keyword` k
+  LEFT JOIN (
+    SELECT keyword_id, match_type
+    FROM (
+      SELECT keyword_id, match_type,
+        ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY date DESC) as rn
+      FROM `onyga-482313.OI.V_SRC_AmazonAds_keyword`
+    )
+    WHERE rn = 1
+  ) k
     ON st.keyword_id = k.keyword_id
   WHERE st.campaign_id IS NOT NULL
     AND st.ad_group_id IS NOT NULL;

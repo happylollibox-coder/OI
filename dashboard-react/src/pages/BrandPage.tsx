@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, BarChart, Bar, LabelList, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
-import { Shield, TrendingUp, TrendingDown, Eye, MousePointer, ShoppingCart, DollarSign, Hash, ChevronRight, ChevronDown, Info, Filter } from 'lucide-react';
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, BarChart, Bar, LabelList, Cell } from 'recharts';
+import { Shield, TrendingUp, TrendingDown, Eye, ShoppingCart, ChevronRight, ChevronDown, Info, Filter } from 'lucide-react';
 import type { DashboardData, BrandStrengthWeeklyRow } from '../types';
 import { useFilters } from '../hooks/useFilters';
 import { sliceByPeriod } from '../utils';
@@ -19,13 +19,43 @@ function fmtPct(v: number | null | undefined): string {
 }
 
 // ─── Dominance Score Explanation ────────────────────────
+const DOMINANCE_TARGETS = [
+  {
+    signal: 'Show Rate',
+    icon: '👁️',
+    target: '100%',
+    floor: '0%',
+    meaning: 'Nobody stole my brand terms',
+    rationale: 'Full impression ownership on brand keywords. Below 100% means competitors are hijacking your search results.',
+    benchmark: 'Industry standard: brand terms should always show 100%+ impression share.',
+  },
+  {
+    signal: 'Brand CVR',
+    icon: '🛒',
+    target: '25%',
+    floor: '0%',
+    meaning: 'I am desirable',
+    rationale: 'Top of the 15–25% industry range for brand keyword conversion. When shoppers search your name, 1 in 4 should buy.',
+    benchmark: 'Industry: brand CVR 15–25%, non-brand CVR 4–12%. Your non-brand CVR: ~4.4%.',
+  },
+  {
+    signal: 'YoY SQP Growth',
+    icon: '📈',
+    target: '2.0× (100% growth)',
+    floor: '0.5×',
+    meaning: 'More people are looking for me',
+    rationale: 'Aggressive target for a young brand. Doubling branded search volume year-over-year proves growth momentum.',
+    benchmark: 'No universal benchmark — young brands should target consistent MoM growth. Ratchet down as you mature.',
+  },
+];
+
 const DOMINANCE_EXPLANATION = {
-  formula: 'Dominance Score = (Show Rate × 0.4) + (Impression Share × 0.3) + (Brand CVR × 0.2) + (Ads CPC Efficiency × 0.1)',
+  formula: 'Score per signal = CLAMP((actual − floor) ÷ (target − floor) × 100, 0, 100)  →  Dominance = avg of 3 scores',
   ranges: [
-    { min: 75, label: 'Dominant', color: 'text-emerald-400', desc: 'Strong brand presence across all signals' },
-    { min: 50, label: 'Strong', color: 'text-blue-400', desc: 'Good brand health, minor gaps to fill' },
-    { min: 25, label: 'Moderate', color: 'text-amber-400', desc: 'Brand is visible but not defending position' },
-    { min: 0, label: 'Weak', color: 'text-rose-400', desc: 'Low brand visibility, needs investment' },
+    { min: 75, label: 'Dominant', color: 'text-emerald-400', desc: 'Hitting targets across all signals' },
+    { min: 50, label: 'Strong', color: 'text-blue-400', desc: 'On track, minor gaps to close' },
+    { min: 25, label: 'Moderate', color: 'text-amber-400', desc: 'Visible but not defending position' },
+    { min: 0, label: 'Weak', color: 'text-rose-400', desc: 'Below targets, needs investment' },
   ],
 };
 
@@ -48,6 +78,8 @@ interface AggRow {
   avg_impression_share: number | null;
   brand_cvr: number | null;
   brand_dominance_score: number | null;
+  sqp_month_impressions: number | null;
+  sqp_ly_month_impressions: number | null;
 }
 
 function aggRows(rows: BrandStrengthWeeklyRow[], period: string, keyword: string): AggRow {
@@ -76,7 +108,22 @@ function aggRows(rows: BrandStrengthWeeklyRow[], period: string, keyword: string
     avg_show_rate: avgN(rows.map(r => r.avg_show_rate)),
     avg_impression_share: avgN(rows.map(r => r.avg_impression_share)),
     brand_cvr: safeDivide(sqpConv, sqpC),
-    brand_dominance_score: avgN(rows.map(r => r.brand_dominance_score)),
+    // Recompute dominance from aggregated metrics (not avg of per-keyword scores)
+    // Target-based: ShowRate→100%, CVR→25%, YoY→2.0× (floor 0.5×), equal weights
+    brand_dominance_score: (() => {
+      const sr = avgN(rows.map(r => r.avg_show_rate)) ?? 0;
+      const cvr = safeDivide(sqpConv, sqpC) ?? 0;
+      const mImp = rows.reduce((s, r) => s + (r.sqp_month_impressions ?? 0), 0);
+      const lyImp = rows.reduce((s, r) => s + (r.sqp_ly_month_impressions ?? 0), 0);
+      const yoyRatio = lyImp > 0 ? mImp / lyImp : 1.0; // neutral if no LY data
+      const clamp = (v: number) => Math.max(0, Math.min(100, v));
+      const srScore = clamp(sr);                                    // target 100%, floor 0%
+      const cvrScore = clamp((cvr / 0.25) * 100);                  // target 25%, floor 0%
+      const yoyScore = clamp(((yoyRatio - 0.5) / 1.5) * 100);     // target 2.0×, floor 0.5×
+      return Math.round(((srScore + cvrScore + yoyScore) / 3) * 10) / 10;
+    })(),
+    sqp_month_impressions: rows.reduce((s, r) => s + (r.sqp_month_impressions ?? 0), 0) || null,
+    sqp_ly_month_impressions: rows.reduce((s, r) => s + (r.sqp_ly_month_impressions ?? 0), 0) || null,
   };
 }
 
@@ -143,6 +190,10 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 
 // ─── Available metrics for dynamic chart ─────────────
 const CHART_METRICS: { key: string; label: string; color: string, type: 'sum' | 'rate' }[] = [
+  { key: 'dominance', label: 'Dominance Score', color: '#3b82f6', type: 'rate' },
+  { key: 'showRate', label: 'Show Rate (%)', color: '#10b981', type: 'rate' },
+  { key: 'cvr', label: 'Brand CVR (%)', color: '#14b8a6', type: 'rate' },
+  { key: 'yoyImpRatio', label: 'YoY SQP Imp (%)', color: '#f59e0b', type: 'rate' },
   { key: 'sqpImpressions', label: 'SQP Impressions', color: '#3b82f6', type: 'sum' },
   { key: 'sqpClicks', label: 'SQP Clicks', color: '#22c55e', type: 'sum' },
   { key: 'sqpConversions', label: 'SQP Conversions', color: '#f59e0b', type: 'sum' },
@@ -151,30 +202,21 @@ const CHART_METRICS: { key: string; label: string; color: string, type: 'sum' | 
   { key: 'adsUnits', label: 'Ads Units', color: '#ec4899', type: 'sum' },
   { key: 'adsSpend', label: 'Ads Spend ($)', color: '#ef4444', type: 'sum' },
   { key: 'adsCpc', label: 'Ads CPC ($)', color: '#f97316', type: 'rate' },
-  { key: 'showRate', label: 'Avg Show Rate (%)', color: '#10b981', type: 'rate' },
   { key: 'impShare', label: 'Avg Imp Share (%)', color: '#a855f7', type: 'rate' },
-  { key: 'dominance', label: 'Dominance Score', color: '#3b82f6', type: 'rate' },
-  { key: 'cvr', label: 'Brand CVR (%)', color: '#14b8a6', type: 'rate' },
 ];
 
-// ─── Radar dimensions ────────────────────────────────
-const RADAR_DIMENSIONS = [
-  { key: 'showRate', label: 'Show Rate', max: 100 },
-  { key: 'impShare', label: 'Imp Share', max: 100 },
-  { key: 'cvr', label: 'CVR', max: 30 },
-  { key: 'cpcEff', label: 'CPC Eff', max: 100 },
-  { key: 'clickShare', label: 'Click Share', max: 100 },
-];
+// ─── Product/Tag split colors ────────────────────────
+const SPLIT_COLORS = ['#3b82f6', '#a855f7', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#8b5cf6'];
 
 // ─── Main component ──────────────────────────────────
 export function BrandPage({ data }: { data: DashboardData }) {
   const rows = data.brand_strength_weekly ?? [];
   const [expandedPeriods, setExpandedPeriods] = useState<Set<string>>(new Set());
-  const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(new Set(['sqpImpressions', 'adsImpressions']));
+  const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(new Set(['dominance']));
   const [showDominanceExplain, setShowDominanceExplain] = useState(false);
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [activeProduct, setActiveProduct] = useState<string | null>(null);
-  const [showRadar, setShowRadar] = useState(true);
+  const [showSplits, setShowSplits] = useState(true);
   const { filters } = useFilters();
   const periodMode = filters.periodMode || 'weeks';
   const periodTrend = filters.periodTrend || 4;
@@ -210,13 +252,15 @@ export function BrandPage({ data }: { data: DashboardData }) {
     return { tags: [...tagSet].sort(), products: [...prodSet].sort() };
   }, [rows]);
 
-  // Apply tag/product filters
+  // Apply tag/product/family filters
   const filteredRows = useMemo(() => {
     let out = rows;
+    // Apply header family filter (parent_name)
+    if (filters.family) out = out.filter(r => r.parent_name === filters.family);
     if (activeTag) out = out.filter(r => r.tag === activeTag);
     if (activeProduct) out = out.filter(r => r.requested_product === activeProduct);
     return out;
-  }, [rows, activeTag, activeProduct]);
+  }, [rows, filters.family, activeTag, activeProduct]);
 
   // Sort all rows ascending by date
   const allSorted = useMemo(() =>
@@ -275,42 +319,61 @@ export function BrandPage({ data }: { data: DashboardData }) {
 
   // Chart data from visible period totals
   const chartData = useMemo(() =>
-    visible.map(v => ({
-      period: periodMode === 'weeks' ? v.period.slice(5) : v.period,
-      periodFull: v.period,
-      sqpImpressions: v.total.sqp_impressions,
-      sqpClicks: v.total.sqp_clicks,
-      sqpConversions: v.total.sqp_conversions,
-      adsImpressions: v.total.ads_impressions,
-      adsClicks: v.total.ads_clicks,
-      adsUnits: v.total.ads_units,
-      adsSpend: v.total.ads_spend,
-      adsCpc: v.total.ads_cpc ?? 0,
-      showRate: v.total.avg_show_rate ?? 0,
-      impShare: v.total.avg_impression_share ?? 0,
-      dominance: v.total.brand_dominance_score ?? 0,
-      cvr: v.total.brand_cvr != null ? v.total.brand_cvr * 100 : 0,
-    })),
+    visible.map(v => {
+      const mImp = v.total.sqp_month_impressions ?? 0;
+      const lyImp = v.total.sqp_ly_month_impressions ?? 0;
+      const yoyRatio = lyImp > 0 ? (mImp / lyImp) * 100 : (mImp > 0 ? 100 : 0);
+      return {
+        period: periodMode === 'weeks' ? v.period.slice(5) : v.period,
+        periodFull: v.period,
+        sqpImpressions: v.total.sqp_impressions,
+        sqpClicks: v.total.sqp_clicks,
+        sqpConversions: v.total.sqp_conversions,
+        adsImpressions: v.total.ads_impressions,
+        adsClicks: v.total.ads_clicks,
+        adsUnits: v.total.ads_units,
+        adsSpend: v.total.ads_spend,
+        adsCpc: v.total.ads_cpc ?? 0,
+        showRate: v.total.avg_show_rate ?? 0,
+        impShare: v.total.avg_impression_share ?? 0,
+        dominance: v.total.brand_dominance_score ?? 0,
+        cvr: v.total.brand_cvr != null ? v.total.brand_cvr * 100 : 0,
+        yoyImpRatio: Math.round(yoyRatio),
+      };
+    }),
     [visible, periodMode]
   );
 
-  // Radar chart data from latest period
-  const radarData = useMemo(() => {
-    const latest = visible.length > 0 ? visible[visible.length - 1].total : null;
-    if (!latest) return [];
-    const showRate = latest.avg_show_rate ?? 0;
-    const impShare = latest.avg_impression_share ?? 0;
-    const cvr = latest.brand_cvr != null ? latest.brand_cvr * 100 : 0;
-    const avgCpc = latest.ads_cpc ?? 0;
-    const cpcEff = avgCpc > 0 ? Math.min(100, (1 / avgCpc) * 50) : 0; // lower CPC = higher efficiency
-    const clickShare = latest.sqp_clicks > 0 ? Math.min(100, (latest.sqp_clicks / Math.max(latest.sqp_impressions, 1)) * 100 * 5) : 0;
-    return RADAR_DIMENSIONS.map(d => ({
-      metric: d.label,
-      value: Math.min(100, (({
-        showRate, impShare, cvr, cpcEff, clickShare
-      } as Record<string, number>)[d.key] / d.max) * 100),
-      fullMark: 100,
-    }));
+  // Product split on dominance score (latest period)
+  const productSplitData = useMemo(() => {
+    if (visible.length === 0) return [];
+    const latestBucket = visible[visible.length - 1];
+    const byProduct: Record<string, { score: number; count: number }> = {};
+    for (const kw of latestBucket.keywords) {
+      const prod = kw.requested_product || 'Unassigned';
+      if (!byProduct[prod]) byProduct[prod] = { score: 0, count: 0 };
+      byProduct[prod].score += kw.brand_dominance_score ?? 0;
+      byProduct[prod].count += 1;
+    }
+    return Object.entries(byProduct)
+      .map(([name, d]) => ({ name, score: Math.round(d.score / d.count) }))
+      .sort((a, b) => b.score - a.score);
+  }, [visible]);
+
+  // Tag split on dominance score (latest period)
+  const tagSplitData = useMemo(() => {
+    if (visible.length === 0) return [];
+    const latestBucket = visible[visible.length - 1];
+    const byTag: Record<string, { score: number; count: number }> = {};
+    for (const kw of latestBucket.keywords) {
+      const tag = kw.tag || 'Untagged';
+      if (!byTag[tag]) byTag[tag] = { score: 0, count: 0 };
+      byTag[tag].score += kw.brand_dominance_score ?? 0;
+      byTag[tag].count += 1;
+    }
+    return Object.entries(byTag)
+      .map(([name, d]) => ({ name, score: Math.round(d.score / d.count) }))
+      .sort((a, b) => b.score - a.score);
   }, [visible]);
 
   // Latest + prev for summary cards
@@ -395,50 +458,44 @@ export function BrandPage({ data }: { data: DashboardData }) {
         </div>
       )}
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      {/* KPI Cards — the 3 dominance sub-components + score */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <MetricCard
           label="Dominance Score"
           value={latest?.brand_dominance_score?.toFixed(0) ?? '—'}
           sub={prev ? <TrendArrow current={latest?.brand_dominance_score ?? 0} previous={prev?.brand_dominance_score ?? 0} /> : undefined}
           icon={<Shield size={16} />}
           color="bg-blue-500/15 text-blue-400"
-          tooltip="Composite score (0–100) measuring brand keyword ownership. Combines Show Rate (40%), Impression Share (30%), Brand CVR (20%), and CPC Efficiency (10%)."
+          tooltip="Target-based score (0–100). Each signal scores 0–100 vs its target, then averaged equally. Show Rate → 100%, Brand CVR → 25%, YoY Growth → 2.0×."
         />
         <MetricCard
-          label="Avg Show Rate"
-          value={latest?.avg_show_rate != null ? `${latest.avg_show_rate.toFixed(0)}%` : '—'}
+          label="Impression Show Rate"
+          value={latest?.avg_show_rate != null ? `${latest.avg_show_rate.toFixed(1)}%` : '—'}
+          sub={prev ? <TrendArrow current={latest?.avg_show_rate ?? 0} previous={prev?.avg_show_rate ?? 0} /> : undefined}
           icon={<Eye size={16} />}
           color="bg-emerald-500/15 text-emerald-400"
-          tooltip="How often your brand appears when shoppers search for this brand keyword. Higher = better brand recognition."
-        />
-        <MetricCard
-          label="Avg Impression Share"
-          value={latest?.avg_impression_share != null ? `${latest.avg_impression_share.toFixed(0)}%` : '—'}
-          icon={<Hash size={16} />}
-          color="bg-purple-500/15 text-purpleald-400"
-          tooltip="Your share of total search impressions for brand keywords. Measures how much of the 'shelf space' you own."
-        />
-        <MetricCard
-          label="Ads CPC"
-          value={latest?.ads_cpc != null ? `$${latest.ads_cpc.toFixed(2)}` : '—'}
-          icon={<MousePointer size={16} />}
-          color="bg-amber-500/15 text-amber-400"
-          tooltip="Average cost per click for brand defense campaigns. Lower CPC on brand terms indicates less competition."
-        />
-        <MetricCard
-          label="Ads Spend (total)"
-          value={`$${grandTotal.ads_spend.toFixed(0)}`}
-          sub={`${grandTotal.ads_units} units`}
-          icon={<DollarSign size={16} />}
-          color="bg-rose-500/15 text-rose-400"
+          tooltip="How often your brand appears when shoppers search brand keywords. Target: 100% — nobody stealing your terms. Score = show_rate / 100."
         />
         <MetricCard
           label="Brand CVR"
           value={fmtPct(latest?.brand_cvr)}
+          sub={prev ? <TrendArrow current={(latest?.brand_cvr ?? 0) * 100} previous={(prev?.brand_cvr ?? 0) * 100} /> : undefined}
           icon={<ShoppingCart size={16} />}
           color="bg-cyan-500/15 text-cyan-400"
-          tooltip="Conversion rate on brand keywords. Higher CVR means customers who search for your brand are buying."
+          tooltip="Conversion rate on brand keywords. Target: 25% — top of industry range (15–25%). Your non-brand CVR is ~4.4%, so brand should be 3–6× higher."
+        />
+        <MetricCard
+          label="YoY SQP Impressions"
+          value={(() => {
+            const mImp = latest?.sqp_month_impressions ?? 0;
+            const lyImp = latest?.sqp_ly_month_impressions ?? 0;
+            if (lyImp > 0) return `${Math.round((mImp / lyImp) * 100)}%`;
+            return mImp > 0 ? '∞' : '—';
+          })()}
+          sub={latest?.sqp_ly_month_impressions ? `LY: ${latest.sqp_ly_month_impressions.toLocaleString()}` : 'No LY data'}
+          icon={<TrendingUp size={16} />}
+          color="bg-amber-500/15 text-amber-400"
+          tooltip="This month SQP impressions ÷ same month last year. Target: 2.0× (100% YoY growth) — aggressive for a young brand. Floor: 0.5× (declining)."
         />
       </div>
 
@@ -456,10 +513,32 @@ export function BrandPage({ data }: { data: DashboardData }) {
           <ChevronRight size={12} className={`text-faint ml-auto transition-transform ${showDominanceExplain ? 'rotate-90' : ''}`} />
         </button>
         {showDominanceExplain && (
-          <div className="px-4 pb-3 pt-1 border-t border-border-faint animate-in space-y-2">
+          <div className="px-4 pb-4 pt-2 border-t border-border-faint animate-in space-y-3">
+            {/* Methodology */}
             <div className="text-[10px] text-muted font-mono bg-zinc-800/50 rounded px-2.5 py-1.5">
               {DOMINANCE_EXPLANATION.formula}
             </div>
+
+            {/* Target cards for each signal */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {DOMINANCE_TARGETS.map(t => (
+                <div key={t.signal} className="rounded-lg border border-border-faint bg-zinc-900/40 p-3 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">{t.icon}</span>
+                    <span className="text-xs font-bold text-foreground">{t.signal}</span>
+                  </div>
+                  <div className="text-[11px] font-semibold text-blue-400 italic">"{t.meaning}"</div>
+                  <div className="flex gap-3 text-[10px]">
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono font-bold">Target: {t.target}</span>
+                    <span className="px-1.5 py-0.5 rounded bg-zinc-700/50 text-faint font-mono">Floor: {t.floor}</span>
+                  </div>
+                  <div className="text-[10px] text-muted leading-relaxed">{t.rationale}</div>
+                  <div className="text-[9px] text-faint border-t border-border-faint/50 pt-1 mt-1">{t.benchmark}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Score ranges */}
             <div className="grid grid-cols-4 gap-2">
               {DOMINANCE_EXPLANATION.ranges.map(r => (
                 <div key={r.label} className={`text-center p-2 rounded-lg border ${dominanceScore >= r.min && (r.min === 75 || dominanceScore < (DOMINANCE_EXPLANATION.ranges.find(x => x.min > r.min)?.min ?? 101)) ? 'border-blue-500/30 bg-blue-500/5' : 'border-border-faint'}`}>
@@ -473,37 +552,65 @@ export function BrandPage({ data }: { data: DashboardData }) {
         )}
       </div>
 
-      {/* Radar Chart — Brand Health Snapshot */}
-      {radarData.length > 0 && (
+      {/* Product & Tag Split Visuals on Dominance Score */}
+      {(productSplitData.length > 0 || tagSplitData.length > 0) && (
         <div className="border border-border-faint rounded-lg bg-surface/30 overflow-hidden">
           <button
-            onClick={() => setShowRadar(p => !p)}
+            onClick={() => setShowSplits(p => !p)}
             className="flex items-center gap-2 w-full text-left px-4 py-2.5 hover:bg-white/[.02] transition-colors"
           >
             <Shield size={14} className="text-purple-400 flex-shrink-0" />
-            <span className="text-xs font-bold text-foreground">Brand Health Radar</span>
+            <span className="text-xs font-bold text-foreground">Dominance by Product & Tag</span>
             <span className="text-[10px] text-faint ml-1">(latest period)</span>
-            <ChevronRight size={12} className={`text-faint ml-auto transition-transform ${showRadar ? 'rotate-90' : ''}`} />
+            <ChevronRight size={12} className={`text-faint ml-auto transition-transform ${showSplits ? 'rotate-90' : ''}`} />
           </button>
-          {showRadar && (
-            <div className="px-4 pb-4 pt-1 border-t border-border-faint animate-in">
-              <div className="h-64 mx-auto" style={{ maxWidth: 400 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <RadarChart data={radarData} cx="50%" cy="50%">
-                    <PolarGrid stroke="rgba(255,255,255,0.08)" />
-                    <PolarAngleAxis dataKey="metric" tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.5)' }} />
-                    <PolarRadiusAxis angle={90} domain={[0, 100]} tick={{ fontSize: 8, fill: 'rgba(255,255,255,0.3)' }} />
-                    <Radar name="Brand Health" dataKey="value" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.25} strokeWidth={2} />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="grid grid-cols-5 gap-2 text-center mt-2">
-                {radarData.map(d => (
-                  <div key={d.metric} className="text-[10px]">
-                    <div className="font-bold text-foreground">{d.value.toFixed(0)}%</div>
-                    <div className="text-faint">{d.metric}</div>
+          {showSplits && (
+            <div className="px-4 pb-4 pt-2 border-t border-border-faint animate-in">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Product Split */}
+                {productSplitData.length > 0 && (
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-faint font-bold mb-2">By Product <span className="text-[8px] text-muted font-normal">(click to filter)</span></div>
+                    <div className="h-48 cursor-pointer">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={productSplitData} layout="vertical" barSize={18} onClick={(e) => { if (e?.activeLabel) { const name = String(e.activeLabel) === 'Unassigned' ? null : String(e.activeLabel); setActiveProduct(activeProduct === name ? null : name); } }}>
+                          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--color-border-faint)" />
+                          <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 9, fill: 'var(--color-muted)' }} />
+                          <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 10, fill: 'var(--color-muted)' }} />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Bar dataKey="score" name="Dominance Score" radius={[0, 4, 4, 0]}>
+                            {productSplitData.map((d, i) => (
+                              <Cell key={i} fill={SPLIT_COLORS[i % SPLIT_COLORS.length]} fillOpacity={!activeProduct || activeProduct === d.name ? 0.85 : 0.25} stroke={activeProduct === d.name ? '#fff' : 'none'} strokeWidth={activeProduct === d.name ? 1.5 : 0} />
+                            ))}
+                            <LabelList dataKey="score" position="right" style={{ fontSize: 10, fill: 'var(--color-foreground)', fontFamily: 'var(--font-mono, monospace)' }} />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
                   </div>
-                ))}
+                )}
+                {/* Tag Split */}
+                {tagSplitData.length > 0 && (
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-faint font-bold mb-2">By Tag <span className="text-[8px] text-muted font-normal">(click to filter)</span></div>
+                    <div className="h-48 cursor-pointer">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={tagSplitData} layout="vertical" barSize={18} onClick={(e) => { if (e?.activeLabel) { const name = String(e.activeLabel) === 'Untagged' ? null : String(e.activeLabel); setActiveTag(activeTag === name ? null : name); } }}>
+                          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--color-border-faint)" />
+                          <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 9, fill: 'var(--color-muted)' }} />
+                          <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 10, fill: 'var(--color-muted)' }} />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Bar dataKey="score" name="Dominance Score" radius={[0, 4, 4, 0]}>
+                            {tagSplitData.map((d, i) => (
+                              <Cell key={i} fill={SPLIT_COLORS[(i + 3) % SPLIT_COLORS.length]} fillOpacity={!activeTag || activeTag === d.name ? 0.85 : 0.25} stroke={activeTag === d.name ? '#fff' : 'none'} strokeWidth={activeTag === d.name ? 1.5 : 0} />
+                            ))}
+                            <LabelList dataKey="score" position="right" style={{ fontSize: 10, fill: 'var(--color-foreground)', fontFamily: 'var(--font-mono, monospace)' }} />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

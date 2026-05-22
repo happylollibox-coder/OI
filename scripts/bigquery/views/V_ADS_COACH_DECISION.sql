@@ -349,6 +349,19 @@ coach_thresholds AS (
     COALESCE(MAX(IF(threshold_key='CONFIDENCE_CLICKS_MEDIUM', threshold_value, NULL)), 20) as confidence_clicks_medium
   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
   WHERE strategy_id = 'GLOBAL' AND product_family IS NULL
+),
+
+-- =============================================
+-- Plan targets: per-family ROAS from saved plan strategy
+-- Overrides PROFITABLE_ROAS when a plan is saved
+-- =============================================
+plan_target AS (
+  SELECT family, target_roas, multiplier, strategy
+  FROM `onyga-482313.OI.DE_PLAN_STRATEGY`
+  WHERE forecast_year = EXTRACT(YEAR FROM CURRENT_DATE())
+    AND forecast_month = EXTRACT(MONTH FROM CURRENT_DATE())
+    AND target_roas IS NOT NULL
+    AND status = 'APPROVED'
 )
 
 -- =============================================
@@ -444,7 +457,7 @@ SELECT
     WHEN t.ads_orders_4w = 0 AND t.sqp_organic_units_4w = 0 AND t.ads_spend_4w >= th.wasted_spend_threshold THEN 'WASTED_SPEND'
     WHEN t.ads_orders_4w = 0 AND t.sqp_organic_units_4w > 0 THEN 'ORGANIC_ONLY'
     WHEN t.ads_net_roas_4w >= th.scale_up_roas THEN 'STRONG'
-    WHEN t.ads_net_roas_4w >= th.profitable_roas THEN 'PROFITABLE'
+    WHEN t.ads_net_roas_4w >= COALESCE(pt.target_roas, th.profitable_roas) THEN 'PROFITABLE'
     WHEN t.ads_net_roas_4w >= th.halo_roas THEN 'MARGINAL'
     WHEN t.ads_net_roas_4w > 0 THEN 'UNPROFITABLE'
     WHEN t.ads_orders_4w > 0 THEN 'UNPROFITABLE'
@@ -461,7 +474,7 @@ SELECT
       THEN 'REDUCE_BID'
     WHEN t.ads_net_roas_4w >= th.scale_up_roas AND t.ads_spend_4w < th.scale_up_spend_cap AND t.ads_orders_4w >= 2
       THEN 'INCREASE_BID'
-    WHEN t.ads_net_roas_4w >= th.profitable_roas
+    WHEN t.ads_net_roas_4w >= COALESCE(pt.target_roas, th.profitable_roas)
       THEN 'KEEP'
     WHEN t.ads_net_roas_4w >= th.halo_roas AND t.sqp_organic_units_4w >= 2
       THEN 'KEEP'
@@ -511,11 +524,13 @@ SELECT
                    CAST(ROUND(t.ads_spend_4w, 0) AS STRING), ' spend. ',
                    'Profit $', CAST(ROUND(t.ads_net_profit_4w, 0) AS STRING),
                    '. Scale up — increase bid.')
-    WHEN t.ads_net_roas_4w >= th.profitable_roas
+    WHEN t.ads_net_roas_4w >= COALESCE(pt.target_roas, th.profitable_roas)
       THEN CONCAT('Profitable ROAS ', CAST(ROUND(t.ads_net_roas_4w, 2) AS STRING),
                    ', profit $', CAST(ROUND(t.ads_net_profit_4w, 0) AS STRING),
                    ' on $', CAST(ROUND(t.ads_spend_4w, 0) AS STRING), '. ',
-                   CAST(t.ads_orders_4w AS STRING), ' orders. Keep.')
+                   CAST(t.ads_orders_4w AS STRING), ' orders.',
+                   IF(pt.target_roas IS NOT NULL, CONCAT(' Plan target: ', CAST(ROUND(pt.target_roas, 2) AS STRING), '×.'), ''),
+                   ' Keep.')
     WHEN t.ads_net_roas_4w >= th.halo_roas AND t.sqp_organic_units_4w >= 2
       THEN CONCAT('Ads marginal (ROAS ', CAST(ROUND(t.ads_net_roas_4w, 2) AS STRING),
                    ') but ', CAST(t.sqp_organic_units_4w AS STRING),
@@ -531,4 +546,5 @@ SELECT
 
 FROM term_asin t
 CROSS JOIN coach_thresholds th
+LEFT JOIN plan_target pt ON t.parent_name = pt.family
 WHERE t.asin_rank = 1;

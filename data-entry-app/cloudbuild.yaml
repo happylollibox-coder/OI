@@ -1,11 +1,11 @@
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/oi-data-entry-app', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/data-entry-forms', '.']
   
   # Push the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/oi-data-entry-app']
+    args: ['push', 'gcr.io/$PROJECT_ID/data-entry-forms']
   
   # Deploy container image to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -13,9 +13,9 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'oi-data-entry-app'
+      - 'data-entry-forms'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/oi-data-entry-app'
+      - 'gcr.io/$PROJECT_ID/data-entry-forms'
       - '--region'
       - 'us-central1'
       - '--platform'
@@ -33,7 +33,7 @@ steps:
       - '10'
 
 images:
-  - 'gcr.io/$PROJECT_ID/oi-data-entry-app'
+  - 'gcr.io/$PROJECT_ID/data-entry-forms'
 
 options:
   machineType: 'E2_HIGHCPU_8'

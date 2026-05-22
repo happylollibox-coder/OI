@@ -378,9 +378,10 @@ interface ThresholdEditorProps {
   saving: boolean;
   onUpdate: (key: string, strategyId: string, family: string | null, value: number) => Promise<void>;
   onApprove: (key: string, strategyId: string, family: string | null) => Promise<void>;
+  onStrategySelect?: (strategyId: string) => void;
 }
 
-export function ThresholdEditor({ grouped, saving, onUpdate, onApprove }: ThresholdEditorProps) {
+export function ThresholdEditor({ grouped, saving, onUpdate, onApprove, onStrategySelect }: ThresholdEditorProps) {
   const [selectedStrategy, setSelectedStrategy] = useState('GLOBAL');
   const [highlightKeys, setHighlightKeys] = useState<string[]>([]);
 
@@ -407,7 +408,7 @@ export function ThresholdEditor({ grouped, saving, onUpdate, onApprove }: Thresh
           return (
             <button
               key={g.strategyId}
-              onClick={() => { setSelectedStrategy(g.strategyId); setHighlightKeys([]); }}
+              onClick={() => { setSelectedStrategy(g.strategyId); setHighlightKeys([]); onStrategySelect?.(g.strategyId); }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all ${
                 isActive
                   ? 'bg-blue-500/15 border border-blue-500/40 text-blue-300 shadow-[0_0_8px_rgba(59,130,246,0.1)]'

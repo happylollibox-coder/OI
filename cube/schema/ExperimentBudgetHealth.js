@@ -1,7 +1,7 @@
 // Cube: ExperimentBudgetHealth - from V_EXPERIMENT_BUDGET_HEALTH
 // Used for budget_health
 cube(`ExperimentBudgetHealth`, {
-  sql: `SELECT * FROM \`onyga-482313.OI.T_EXPERIMENT_BUDGET_HEALTH\` ORDER BY experiment_id`,
+  sql: `SELECT * FROM \`onyga-482313.OI.T_EXPERIMENT_BUDGET_HEALTH\``,
 
   refreshKey: { every: '30 minutes' },
 

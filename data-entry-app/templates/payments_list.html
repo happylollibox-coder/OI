@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}All Payments - OI Data Entry Forms{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1><i class="bi bi-credit-card"></i> All Payments</h1>
+            <a href="{{ url_for('new_payment') }}" class="btn btn-primary">
+                <i class="bi bi-plus-circle"></i> New Payment
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if payments %}
+                <div class="table-responsive">
+                    <table class="table table-hover table-striped table-sm sortable-table">
+                        <thead>
+                            <tr>
+                                <th style="font-size: 0.85rem;" data-sort="date">Date <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;">Payment ID</th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Type <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Lines <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Amount <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Bank Fee <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Vendor <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;">Notes</th>
+                                <th style="font-size: 0.85rem;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% set ns = namespace(total_amount=0, total_fees=0) %}
+                            {% for p in payments %}
+                            {% set ns.total_amount = ns.total_amount + (p.payment_amount or 0) %}
+                            {% set ns.total_fees = ns.total_fees + (p.bank_fee or 0) %}
+                            <tr style="font-size: 0.85rem;">
+                                <td>{{ p.payment_date }}</td>
+                                <td>
+                                    <a href="{{ url_for('payment_details', payment_id=p.payment_id) }}" 
+                                       style="font-size: 0.78rem; font-family: monospace;">
+                                        {{ p.payment_id }}
+                                    </a>
+                                </td>
+                                <td>
+                                    {% if p.payment_type == 'Shipment' %}
+                                        <span class="badge bg-info">Shipment</span>
+                                    {% elif p.payment_type == 'Both' %}
+                                        <span class="badge bg-warning">Both</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">PO</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if p.line_count > 1 %}
+                                        <span class="badge bg-primary">{{ p.line_count }}</span>
+                                    {% else %}
+                                        <span class="text-muted">1</span>
+                                    {% endif %}
+                                </td>
+                                <td><strong>{{ p.payment_amount|format_currency_with_commas }}</strong> {{ p.currency }}</td>
+                                <td>{{ p.bank_fee|format_currency_with_commas if p.bank_fee else '-' }}</td>
+                                <td>{{ p.vendor_name or '-' }}</td>
+                                <td><small>{{ (p.notes or '')[:30] }}{% if p.notes and p.notes|length > 30 %}…{% endif %}</small></td>
+                                <td>
+                                    <a href="{{ url_for('payment_details', payment_id=p.payment_id) }}" 
+                                       class="btn btn-sm btn-primary" style="font-size: 0.75rem; padding: 0.2rem 0.4rem;"
+                                       title="View payment lines">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <form method="POST" action="{{ url_for('delete_payment', payment_id=p.payment_id) }}" 
+                                          style="display: inline;" 
+                                          onsubmit="return confirm('Delete payment {{ p.payment_id }}{% if p.line_count > 1 %} ({{ p.line_count }} lines){% endif %}?');">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" style="font-size: 0.75rem; padding: 0.2rem 0.4rem;">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        <tfoot>
+                            <tr style="font-size: 0.85rem; font-weight: 600;">
+                                <td colspan="4"><strong>Total ({{ payments|length }} payments)</strong></td>
+                                <td><strong class="text-primary">{{ ns.total_amount|format_currency_with_commas }}</strong></td>
+                                <td><strong>{{ ns.total_fees|format_currency_with_commas if ns.total_fees else '-' }}</strong></td>
+                                <td colspan="3"></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle"></i> No payments found.
+                    <a href="{{ url_for('new_payment') }}" class="alert-link">Create your first payment</a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+// ---- Table Sorting ----
+document.addEventListener('DOMContentLoaded', function() {
+    const tables = document.querySelectorAll('.sortable-table');
+    tables.forEach(table => {
+        const headers = table.querySelectorAll('thead th[data-sort]');
+        let currentSort = { column: null, direction: 'asc' };
+        
+        headers.forEach((header, index) => {
+            header.style.cursor = 'pointer';
+            header.addEventListener('click', (e) => {
+                if (e.target.classList.contains('measure-info')) return;
+                const sortType = header.getAttribute('data-sort');
+                const tbody = table.querySelector('tbody');
+                const rows = Array.from(tbody.querySelectorAll('tr'));
+                
+                if (currentSort.column === index) {
+                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.column = index;
+                    currentSort.direction = 'asc';
+                }
+                
+                headers.forEach(h => {
+                    const icon = h.querySelector('.sort-icon');
+                    if (icon) icon.className = 'bi bi-arrow-down-up sort-icon';
+                });
+                const icon = header.querySelector('.sort-icon');
+                if (icon) {
+                    icon.className = currentSort.direction === 'asc' 
+                        ? 'bi bi-arrow-up sort-icon' : 'bi bi-arrow-down sort-icon';
+                }
+                
+                rows.sort((a, b) => {
+                    const aCell = a.cells[index], bCell = b.cells[index];
+                    if (!aCell || !bCell) return 0;
+                    let aVal = aCell.textContent.trim(), bVal = bCell.textContent.trim();
+                    
+                    if (sortType === 'number') {
+                        aVal = (aVal === '-' || aVal === '') ? -Infinity : parseFloat(aVal.replace(/[^\d.-]/g, '')) || -Infinity;
+                        bVal = (bVal === '-' || bVal === '') ? -Infinity : parseFloat(bVal.replace(/[^\d.-]/g, '')) || -Infinity;
+                    } else if (sortType === 'date') {
+                        aVal = (aVal === '-' || aVal === '') ? new Date(0) : new Date(aVal);
+                        bVal = (bVal === '-' || bVal === '') ? new Date(0) : new Date(bVal);
+                    } else {
+                        aVal = (aVal === '-' || aVal === '') ? 'zzz' : aVal.toLowerCase();
+                        bVal = (bVal === '-' || bVal === '') ? 'zzz' : bVal.toLowerCase();
+                    }
+                    
+                    if (aVal < bVal) return currentSort.direction === 'asc' ? -1 : 1;
+                    if (aVal > bVal) return currentSort.direction === 'asc' ? 1 : -1;
+                    return 0;
+                });
+                rows.forEach(row => tbody.appendChild(row));
+            });
+        });
+    });
+});
+</script>
+{% endblock %}
+{% endblock %}

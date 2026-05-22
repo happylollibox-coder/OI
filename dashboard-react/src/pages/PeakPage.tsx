@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import type { DashboardData, FamilyName, ExperimentCampaignRow, CampaignSearchTermRow, HolidayRow } from '../types';
+import type { DashboardData, FamilyName, ExperimentCampaignRow, CampaignSearchTermRow, HolidayRow, PeakRelevanceRow } from '../types';
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
 import { FilterInfoIcon } from '../components/FilterInfoIcon';
@@ -9,16 +9,16 @@ import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { Empty } from '../components/Empty';
 import { Th, MEASURE_TIPS } from '../components/Tooltip';
-import { ChevronRight, ChevronDown, Calendar, TrendingUp } from 'lucide-react';
-import { fM, fP, fOrd, fR, fClk, famFromType, famFromProduct } from '../utils';
+import { ChevronRight, ChevronDown, Calendar, TrendingUp, Zap } from 'lucide-react';
+import { fM, fP, fOrd, fR, fClk, famFromType } from '../utils';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
+import { useProductFamily } from '../hooks/useProductFamily';
 
-const STAGES = ['READINESS', 'PRE_PEAK', 'PRE_PEAK_BOOST', 'PEAK'] as const;
-const STAGE_LABELS: Record<string, string> = { READINESS: 'Readiness', PRE_PEAK: 'Pre Peak', PRE_PEAK_BOOST: 'Boost', PEAK: 'Peak' };
+const STAGES = ['PRE_SEASON', 'PRE_PEAK_BOOST', 'PEAK'] as const;
+const STAGE_LABELS: Record<string, string> = { PRE_SEASON: 'Pre Season', PRE_PEAK_BOOST: 'Boost', PEAK: 'Peak', POST_PEAK: 'Post Peak' };
 const STAGE_COLORS: Record<string, string> = {
-  READINESS: 'from-zinc-700 to-zinc-600',
-  PRE_PEAK: 'from-blue-700 to-blue-500',
+  PRE_SEASON: 'from-blue-700 to-blue-500',
   PRE_PEAK_BOOST: 'from-amber-700 to-amber-500',
   PEAK: 'from-red-700 to-red-500',
 };
@@ -28,24 +28,17 @@ const FAMILY_NAMES: FamilyName[] = ['Lollibox', 'LolliME', 'Bottle', 'Fresh'];
 type CheckItem = { label: string; dataKey: string };
 
 const CHECKLISTS: Record<string, CheckItem[]> = {
-  READINESS: [
+  PRE_SEASON: [
     { label: 'Verify ≥ 10 peak keywords are mapped with market volume data (expand to review)', dataKey: 'peak_keywords' },
     { label: 'Create an experiment per product family — confirm status is ACTIVE (expand to review)', dataKey: 'experiments_status' },
     { label: 'Define bid strategy, daily budget & match types per campaign (Campaign Manager)', dataKey: 'campaign_config' },
     { label: 'Add ≥ 5 negative keywords per campaign to block wasted spend (expand to review)', dataKey: 'negative_keywords' },
     { label: 'Create SP + SB campaigns in Amazon Ads console for each experiment', dataKey: 'campaigns_created' },
     { label: 'Confirm FBA stock covers ≥ 6 weeks of projected peak orders (Seller Central → Inventory Planning)', dataKey: 'inventory' },
-    { label: 'Configure bid multiplier schedule: TOS placement boost ≥ 50% (Campaign Manager → Placements)', dataKey: 'bid_scaling' },
-    { label: 'Set peak sales target per family from current 7d run rate × uplift factor (expand to review)', dataKey: 'peak_sales_estimate' },
-  ],
-  PRE_PEAK: [
     { label: 'Verify all peak campaigns show status ENABLED in Amazon Ads (expand to review)', dataKey: 'campaigns_live' },
     { label: 'Review LY top Ads keywords by orders — add missing high-converters to campaigns (expand)', dataKey: 'ly_ads_best_keywords' },
     { label: 'Review LY top SQP organic keywords — verify paid coverage for top 10 (expand to review)', dataKey: 'ly_sqp_best_keywords' },
     { label: 'Confirm 0 keywords target a non-hero ASIN — fix any mismatches (expand to see list)', dataKey: 'hero_asin_check' },
-    { label: 'Flag keywords with conv rate < 1.5% and spend > $10 — pause or optimize (expand to review)', dataKey: 'conv_rate_check' },
-    { label: 'Confirm 0 keywords targeted by multiple products in same family (expand to review)', dataKey: 'cannibalization' },
-    { label: 'Verify negative keywords are active on all peak campaigns (expand to review count)', dataKey: 'negatives_check' },
     { label: 'Audit hero ASIN listings: peak keywords in title, A+ content live, ≥ 6 images (Seller Central)', dataKey: 'listings_ready' },
   ],
   PRE_PEAK_BOOST: [
@@ -75,8 +68,33 @@ const PEAK_TREND_MEASURES: { id: PeakTrendMeasure; label: string; color: string 
 
 export function PeakPage({ data }: { data: DashboardData }) {
   const { filters } = useFilters();
-  const pa = data.peak || [];
-  const pk = pa[0] || null;
+  const { getFamily } = useProductFamily();
+  const allFuturePeaks = data.peak || [];
+  const peakRelevance = data.peak_relevance || [];
+
+  // ── Smart "Next Real Peak" selection ──
+  // Find the first future holiday that is a REAL peak for at least one family.
+  // If family filter is set, it must be a real peak specifically for THAT family.
+  // Falls back to first future holiday if no relevance data is available yet.
+  const pk = useMemo(() => {
+    if (allFuturePeaks.length === 0) return null;
+    if (peakRelevance.length === 0) return allFuturePeaks[0]; // no relevance data → fallback to next
+    for (const candidate of allFuturePeaks) {
+      const relRows = peakRelevance.filter(r => r.holiday_name === candidate.holiday_name);
+      if (relRows.length === 0) return candidate; // no relevance data for this holiday → show it
+      if (filters.family) {
+        // Family filter active: check if THIS family peaks for this holiday
+        const famRow = relRows.find(r => r.family === filters.family);
+        if (famRow?.is_relevant_peak) return candidate;
+      } else {
+        // No filter: check if ANY family peaks
+        if (relRows.some(r => r.is_relevant_peak)) return candidate;
+      }
+    }
+    // No real peak found — fall back to the first future holiday
+    return allFuturePeaks[0];
+  }, [allFuturePeaks, peakRelevance, filters.family]);
+
   const [openStages, setOpenStages] = useState<Set<number>>(new Set([STAGES.findIndex(s => s === pk?.current_stage)]));
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [expandedExps, setExpandedExps] = useState<Set<string>>(new Set());
@@ -85,10 +103,12 @@ export function PeakPage({ data }: { data: DashboardData }) {
   const [selectedHoliday, setSelectedHoliday] = useState<string | null>(null);
   const [selectedMeasures, setSelectedMeasures] = useMeasureSelection('peak_comparison', COMPARISON_MEASURES);
   const [peakTrendMeasure, setPeakTrendMeasure] = useState<PeakTrendMeasure>('orders');
+  const [peakTrendGranularity, setPeakTrendGranularity] = useState<'weekly' | 'daily'>('weekly');
+  const [dtpRange, setDtpRange] = useState<{ before: number; after: number }>({ before: 999, after: 999 }); // days around peak to show
   const [showDailyPeak, setShowDailyPeak] = useState(true);
   const [showLyTopTerms, setShowLyTopTerms] = useState(true);
 
-  const checkData = useMemo(() => buildCheckData(data, pk), [data, pk]);
+  const allCheckData = useMemo(() => buildCheckData(data, pk, getFamily), [data, pk, getFamily]);
 
   const toggleExp = (eid: string) => setExpandedExps(p => { const n = new Set(p); n.has(eid) ? n.delete(eid) : n.add(eid); return n; });
   const toggleCampaign = (cid: string) => setExpandedCampaigns(p => { const n = new Set(p); n.has(cid) ? n.delete(cid) : n.add(cid); return n; });
@@ -255,6 +275,47 @@ export function PeakPage({ data }: { data: DashboardData }) {
 
   const activeHolidayName = selectedHoliday || pk?.holiday_name || '';
 
+  // Peak Relevance: coach recommendation per family for the active holiday
+  // Respects the family filter — if set, only shows that family
+  const relevanceForHoliday = useMemo(() => {
+    const rows = data.peak_relevance || [];
+    if (!activeHolidayName) return [];
+    // Match by holiday name — pick the latest year's data for each family
+    const matching = rows.filter(r => r.holiday_name === activeHolidayName);
+    // Group by family, pick most recent holiday_date per family
+    const byFamily: Record<string, PeakRelevanceRow> = {};
+    matching.forEach(r => {
+      if (filters.family && r.family !== filters.family) return; // respect family filter
+      if (!byFamily[r.family] || r.holiday_date > byFamily[r.family].holiday_date) {
+        byFamily[r.family] = r;
+      }
+    });
+    return Object.values(byFamily).sort((a, b) => a.family.localeCompare(b.family));
+  }, [data.peak_relevance, activeHolidayName, filters.family]);
+
+  // Check if any family sees this as a real peak
+  const anyRelevantPeak = relevanceForHoliday.some(r => r.is_relevant_peak);
+
+  // Peak Impact Ranking: families sorted by order change % (highest impact first)
+  // Used in the "Peak Impact by Family" section
+  const peakImpactRanking = useMemo(() => {
+    return [...relevanceForHoliday]
+      .filter(r => r.orders_change_pct != null)
+      .sort((a, b) => (b.orders_change_pct ?? 0) - (a.orders_change_pct ?? 0));
+  }, [relevanceForHoliday]);
+
+  // Relevance lookup by holiday name (for dropdown badge)
+  const holidayRelevanceSummary = useMemo(() => {
+    const rows = data.peak_relevance || [];
+    const map: Record<string, { relevant: number; total: number }> = {};
+    rows.forEach(r => {
+      if (!map[r.holiday_name]) map[r.holiday_name] = { relevant: 0, total: 0 };
+      map[r.holiday_name].total++;
+      if (r.is_relevant_peak) map[r.holiday_name].relevant++;
+    });
+    return map;
+  }, [data.peak_relevance]);
+
   const phaseComparison = useMemo(() => {
     const holidays = data.holidays || [];
     const wt = data.weekly_trends || [];
@@ -326,7 +387,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
     }
     if (!pk) return null;
     const wt = data.weekly_trends || [];
-    const readinessStart = pk.readiness_start || pk.peak_start;
+    const readinessStart = pk.pre_peak_start || pk.peak_start;
     const thisYearEnd = pk.peak_end;
     if (!readinessStart || !thisYearEnd) return null;
     const lyStart = shiftYear(readinessStart, -1);
@@ -366,9 +427,9 @@ export function PeakPage({ data }: { data: DashboardData }) {
 
     const tyPhases = phaseBoundaries(tyHoliday);
     const lyPhases = phaseBoundaries(lyHoliday);
-    const tyStart = tyPhases.pre_peak.start;
+    const tyStart = tyPhases.pre_season.start;
     const tyEnd = tyHoliday.holiday_date; // stop at peak day (0 days from peak)
-    const lyStart = lyPhases.pre_peak.start;
+    const lyStart = lyPhases.pre_season.start;
     const lyEnd = lyHoliday.holiday_date;
 
     // Get unique sorted weeks for TY and LY — cap at holiday date
@@ -391,9 +452,10 @@ export function PeakPage({ data }: { data: DashboardData }) {
     const daysToPeakLabel = (weekStr: string, holidayDate: string) => {
       const wMs = new Date(weekStr + 'T00:00:00').getTime();
       const hMs = new Date(holidayDate + 'T00:00:00').getTime();
-      const diff = Math.round((wMs - hMs) / 86400000);
-      if (Math.abs(diff) <= 3) return 'Peak';
-      return diff > 0 ? `+${diff}d` : `${diff}d`;
+      const diffDays = Math.round((wMs - hMs) / 86400000);
+      const diffWeeks = Math.round(diffDays / 7);
+      if (Math.abs(diffDays) <= 3) return 'Peak';
+      return diffWeeks > 0 ? `+${diffWeeks}w` : `${diffWeeks}w`;
     };
     const tyData = tyWeeks.map(w => ({ ...aggWeek(wt, w), label: daysToPeakLabel(w, tyHoliday.holiday_date) }));
     const lyData = lyWeeks.map(w => ({ ...aggWeek(wt, w), label: daysToPeakLabel(w, lyHoliday.holiday_date) }));
@@ -409,39 +471,113 @@ export function PeakPage({ data }: { data: DashboardData }) {
     return { tyData, lyData, maxLen, tyWeeks, lyWeeks, tyBoostIdx, tyPeakIdx, tyRange: `${tyStart} – ${tyEnd}`, lyRange: `${lyStart} – ${lyEnd}` };
   }, [data.holidays, data.weekly_trends, activeHolidayName, filters.family]);
 
-  // ── Per-day peak data from ads_7d ──
+  // ── Per-day peak performance from daily_trends (past 7 days only) ──
   const dailyPeakData = useMemo(() => {
-    if (!pk || pk.current_stage !== 'PEAK') return null;
-    const ads = data.ads_7d || [];
-    const peakStart = pk.peak_start;
-    const peakEnd = pk.peak_end;
-    if (!peakStart || !peakEnd) return null;
+    const dt = data.daily_trends || [];
+    if (!dt.length) return null;
 
-    // Group ads_7d by date (day), aggregate per day
-    const byDay: Record<string, { date: string; sales: number; spend: number; orders: number; clicks: number; impressions: number }> = {};
-    ads.forEach(r => {
-      const dateStr = r.date || r.week_start;
-      if (!dateStr || dateStr < peakStart || dateStr > peakEnd) return;
-      if (filters.family && r.product_short_name) {
-        const fam = famFromProduct(r.product_short_name);
-        if (fam && fam !== filters.family) return;
-      }
-      if (!byDay[dateStr]) byDay[dateStr] = { date: dateStr, sales: 0, spend: 0, orders: 0, clicks: 0, impressions: 0 };
-      byDay[dateStr].sales += r.sales || 0;
-      byDay[dateStr].spend += r.spend || 0;
-      byDay[dateStr].orders += r.orders || 0;
-      byDay[dateStr].clicks += r.clicks || 0;
-      byDay[dateStr].impressions += r.impressions || 0;
+    const today = new Date().toISOString().slice(0, 10);
+    const d7ago = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+
+    const byDate: Record<string, { date: string; sales: number; spend: number; orders: number; clicks: number; sessions: number; cogs: number; netProfit: number }> = {};
+    dt.forEach(r => {
+      const d = r.date;
+      if (!d || d < d7ago || d > today) return;
+      if (filters.family && famFromType(r.product_type) !== filters.family) return;
+      if (!byDate[d]) byDate[d] = { date: d, sales: 0, spend: 0, orders: 0, clicks: 0, sessions: 0, cogs: 0, netProfit: 0 };
+      byDate[d].sales += r.sales || 0;
+      byDate[d].spend += r.ad_cost || 0;
+      byDate[d].orders += r.orders || 0;
+      byDate[d].clicks += r.clicks || 0;
+      byDate[d].sessions += r.sessions || 0;
+      byDate[d].cogs += r.cogs || 0;
+      byDate[d].netProfit += r.net_profit || 0;
     });
 
-    const sorted = Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date));
+    const sorted = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
     if (sorted.length === 0) return null;
 
     const totalSales = sorted.reduce((s, d) => s + d.sales, 0);
     const totalSpend = sorted.reduce((s, d) => s + d.spend, 0);
     const totalOrders = sorted.reduce((s, d) => s + d.orders, 0);
-    return { days: sorted, totalSales, totalSpend, totalOrders };
-  }, [data.ads_7d, pk, filters.family]);
+    return { days: sorted, totalSales, totalSpend, totalOrders, today };
+  }, [data.daily_trends, filters.family]);
+
+  // ── True daily-grain data for "Daily" peak trend chart (TY vs LY) ──
+  // Both TY and LY use daily_trends (now 18 months of data), one bar per day, aligned by days-to-peak
+  const dailyPeakTrendData = useMemo(() => {
+    const holidays = data.holidays || [];
+    const dt = data.daily_trends || [];
+    if (!activeHolidayName || !dt.length) return null;
+
+    const matching = holidays.filter(h => h.holiday_name === activeHolidayName && h.pre_season_start).sort((a, b) => a.holiday_date.localeCompare(b.holiday_date));
+    if (matching.length < 2) return null;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const pkDate = pk?.holiday_date || '';
+    const tyHoliday = matching.find(h => h.holiday_date === pkDate) || matching.find(h => h.holiday_date >= today) || matching[matching.length - 1];
+    const tyIdx2 = matching.indexOf(tyHoliday);
+    const lyHoliday = tyIdx2 > 0 ? matching[tyIdx2 - 1] : matching.find(h => h.holiday_date < tyHoliday.holiday_date) || matching[0];
+    if (tyHoliday === lyHoliday) return null;
+
+    const tyPhases = phaseBoundaries(tyHoliday);
+    const lyPhases = phaseBoundaries(lyHoliday);
+
+    const daysToPeak = (dateStr: string, holidayDate: string) =>
+      Math.round((new Date(dateStr + 'T00:00:00').getTime() - new Date(holidayDate + 'T00:00:00').getTime()) / 86400000);
+    const daysToPeakLabel = (diff: number) => {
+      if (diff === 0) return 'Peak';
+      return diff > 0 ? `+${diff}d` : `${diff}d`;
+    };
+
+    // Helper: build daily bars from daily_trends for a date range
+    const buildDailyBars = (startDate: string, endDate: string, holidayDate: string) => {
+      const dates = [...new Set(
+        dt.filter(r => r.date >= startDate && r.date <= endDate).map(r => r.date)
+      )].sort();
+      const bars: { sales: number; adCost: number; orders: number; netProfit: number; label: string; dtp: number }[] = [];
+      for (const dateStr of dates) {
+        let sales = 0, adCost = 0, orders = 0, netProfit = 0;
+        dt.filter(r => r.date === dateStr).forEach(r => {
+          if (!filters.family || famFromType(r.product_type) === filters.family) {
+            sales += r.sales || 0; adCost += r.ad_cost || 0; orders += r.orders || 0;
+            netProfit += r.net_profit || 0;
+          }
+        });
+        const dtp = daysToPeak(dateStr, holidayDate);
+        bars.push({ sales, adCost, orders, netProfit, label: daysToPeakLabel(dtp), dtp });
+      }
+      return bars;
+    };
+
+    const tyStart = tyPhases.pre_season.start;
+    const tyEnd = today; // include today even if past peak
+    const lyStart = lyPhases.pre_season.start;
+    const lyEnd = addDaysLocal(lyHoliday.holiday_date, 14); // include 2 weeks post-peak for LY
+
+    const tyData = buildDailyBars(tyStart, tyEnd, tyHoliday.holiday_date);
+    const lyData = buildDailyBars(lyStart, lyEnd, lyHoliday.holiday_date);
+
+    const tyHolidayDate = tyHoliday.holiday_date;
+    const lyHolidayDate = lyHoliday.holiday_date;
+
+    if (tyData.length === 0 && lyData.length === 0) return null;
+
+    // Align both series on a shared days-to-peak axis
+    const allDtp = [...new Set([...tyData.map(d => d.dtp), ...lyData.map(d => d.dtp)])].sort((a, b) => a - b);
+    const maxLen = allDtp.length;
+
+    // Phase boundary indices
+    const tyBoostDtp = daysToPeak(tyPhases.boost.start, tyHoliday.holiday_date);
+    const tyPeakDtp = daysToPeak(tyPhases.peak.start, tyHoliday.holiday_date);
+    const tyBoostIdx = allDtp.findIndex(d => d >= tyBoostDtp);
+    const tyPeakIdx = allDtp.findIndex(d => d >= tyPeakDtp);
+
+    const tyRange = `${tyStart} – ${tyEnd}`;
+    const lyRange = `${lyStart} – ${lyEnd}`;
+
+    return { tyData, lyData, maxLen, allDtp, tyBoostIdx: tyBoostIdx >= 0 ? tyBoostIdx : maxLen, tyPeakIdx: tyPeakIdx >= 0 ? tyPeakIdx : maxLen, tyRange, lyRange, isAlignedByDtp: true as const, tyHolidayDate, lyHolidayDate };
+  }, [data.holidays, data.daily_trends, activeHolidayName, filters.family]);
 
   // ── LY top search terms with % contribution ──
   const lyTopTerms = useMemo(() => {
@@ -483,18 +619,18 @@ export function PeakPage({ data }: { data: DashboardData }) {
     };
   }, [data.sqp_weekly, pk]);
 
+  usePageSummary({ title: 'Peak', items: [{ label: 'Peak Planning', value: pk ? 'Active' : 'Inactive' }] });
+
   if (!pk) return <Empty icon="⛰️" message="No upcoming peak" hint="Peak planning activates when a holiday or event is within 6 weeks." />;
 
   const ci = STAGES.indexOf(pk.current_stage as typeof STAGES[number]);
-  const dates = [pk.readiness_start, pk.pre_peak_start, pk.boost_start, pk.peak_start, pk.peak_end]
+  const dates = [pk.pre_peak_start, pk.boost_start, pk.peak_start, pk.holiday_date]
     .map(d => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--');
 
   const toggleStage = (i: number) => setOpenStages(p => { const n = new Set(p); n.has(i) ? n.delete(i) : n.add(i); return n; });
   const toggleItem = (key: string) => setExpandedItems(p => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; });
 
   const peakFilterItems = formatSectionFilters(filters);
-
-  usePageSummary({ title: 'Peak', items: [{ label: 'Peak Planning', value: 'Active' }] });
   return (
     <div className="animate-in">
       <div className="flex items-center gap-2 mb-5">
@@ -502,7 +638,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
         {peakFilterItems.length > 0 && <FilterInfoIcon items={peakFilterItems} />}
       </div>
 
-      <Card className={`!border-l-[3px] mb-6 ${ci >= 3 ? '!border-l-red-500' : ci >= 2 ? '!border-l-amber-500' : ci >= 1 ? '!border-l-blue-500' : '!border-l-zinc-500'}`}>
+      <Card className={`!border-l-[3px] mb-6 ${ci >= 2 ? '!border-l-red-500' : ci >= 1 ? '!border-l-amber-500' : '!border-l-blue-500'}`}>
         <div className="flex justify-between items-start mb-2.5">
           <div>
             <div className="text-xl font-extrabold tracking-tight">NEXT PEAK: {pk.holiday_name || '--'}</div>
@@ -511,7 +647,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
             </div>
           </div>
           <div className="text-right">
-            <Badge variant={ci === 0 ? 'muted' : ci === 1 ? 'blue' : ci === 2 ? 'amber' : 'red'} className="!text-xs">
+            <Badge variant={ci === 0 ? 'blue' : ci === 1 ? 'amber' : 'red'} className="!text-xs">
               {STAGE_LABELS[pk.current_stage] || pk.current_stage || '--'}
             </Badge>
             {pk.days_until_peak_start != null && (
@@ -523,7 +659,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
         </div>
         <div className="flex h-9 rounded-xl overflow-hidden mb-3.5 text-[10px] font-semibold">
           {STAGES.map((s, i) => (
-            <div key={s} className={`flex items-center justify-center text-white/85 px-2 min-w-[44px] bg-gradient-to-br ${STAGE_COLORS[s]} ${i === ci ? 'outline outline-2 outline-white -outline-offset-2 z-[1]' : ''}`} style={{ flex: i === 3 ? 2 : 1 }}>
+            <div key={s} className={`flex items-center justify-center text-white/85 px-2 min-w-[44px] bg-gradient-to-br ${STAGE_COLORS[s]} ${i === ci ? 'outline outline-2 outline-white -outline-offset-2 z-[1]' : ''}`} style={{ flex: 1 }}>
               {STAGE_LABELS[s]}
             </div>
           ))}
@@ -533,35 +669,193 @@ export function PeakPage({ data }: { data: DashboardData }) {
         </div>
       </Card>
 
+      {/* Peak Impact by Family + Coach Recommendation */}
+      {peakImpactRanking.length > 0 && (
+        <Card className="mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Zap size={14} className="text-amber-400" />
+            <span className="text-sm font-bold">Peak Impact by Family — {activeHolidayName}</span>
+            {!anyRelevantPeak && (
+              <Badge variant="red" className="!text-[9px] ml-2">Not a Peak for Your Products</Badge>
+            )}
+            {anyRelevantPeak && (
+              <Badge variant="green" className="!text-[9px] ml-2">{relevanceForHoliday.filter(r => r.is_relevant_peak).length} of {relevanceForHoliday.length} families peak</Badge>
+            )}
+          </div>
+
+          {/* Impact Bars — visual ranking */}
+          <div className="space-y-2 mb-5">
+            {peakImpactRanking.map(r => {
+              const pct = r.orders_change_pct ?? 0;
+              const maxPct = Math.max(...peakImpactRanking.map(x => Math.abs(x.orders_change_pct ?? 0)), 1);
+              const barW = Math.min(Math.abs(pct) / maxPct * 100, 100);
+              const isPositive = pct > 0;
+              const recLabel: Record<string, string> = {
+                AGGRESSIVE_BOOST: '🚀 Aggressive Boost',
+                MODERATE_BOOST: '📈 Moderate Boost',
+                CAUTIOUS_BOOST: '⚠️ Cautious Boost',
+                HOLD: '⏸ Hold',
+                REDUCE: '📉 Reduce',
+              };
+              const barColor = isPositive
+                ? r.coach_recommendation === 'AGGRESSIVE_BOOST' ? 'bg-emerald-500/80' : 'bg-blue-500/70'
+                : 'bg-red-500/60';
+              return (
+                <div key={r.family} className="flex items-center gap-3">
+                  <div className="w-20 text-xs font-semibold text-right truncate">{r.family}</div>
+                  <div className="flex-1 flex items-center gap-2 min-w-0">
+                    <div className="flex-1 h-6 bg-zinc-800/60 rounded-md overflow-hidden relative">
+                      <div
+                        className={`h-full rounded-md ${barColor} transition-all duration-500`}
+                        style={{ width: `${barW}%` }}
+                      />
+                      <div className="absolute inset-0 flex items-center px-2">
+                        <span className={`text-[11px] font-bold font-mono ${barW > 30 ? 'text-white' : 'text-subtle'}`}>
+                          {pct > 0 ? '+' : ''}{pct.toFixed(0)}% orders
+                        </span>
+                      </div>
+                    </div>
+                    <div className="w-40 text-[10px] font-semibold whitespace-nowrap">
+                      <span className={`${isPositive ? 'text-emerald-400' : pct < -10 ? 'text-red-400' : 'text-zinc-400'}`}>
+                        {recLabel[r.coach_recommendation] || r.coach_recommendation}
+                      </span>
+                      {r.confidence !== 'HIGH' && <span className="text-faint ml-1">({r.confidence})</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Detailed Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr>
+                  <Th>Family</Th>
+                  <Th right>Baseline Ord/Day</Th>
+                  <Th right>Peak Ord/Day</Th>
+                  <Th right>Orders Δ</Th>
+                  <Th right>Baseline ROAS</Th>
+                  <Th right>Peak ROAS</Th>
+                  <Th right>ROAS Δ</Th>
+                  <Th>Coach Signal</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {relevanceForHoliday.map(r => {
+                  const recColor: Record<string, string> = {
+                    AGGRESSIVE_BOOST: 'text-emerald-400',
+                    MODERATE_BOOST: 'text-blue-400',
+                    CAUTIOUS_BOOST: 'text-amber-400',
+                    HOLD: 'text-zinc-400',
+                    REDUCE: 'text-red-400',
+                  };
+                  const recIcon: Record<string, string> = {
+                    AGGRESSIVE_BOOST: '🚀',
+                    MODERATE_BOOST: '📈',
+                    CAUTIOUS_BOOST: '⚠️',
+                    HOLD: '⏸',
+                    REDUCE: '📉',
+                  };
+                  const ordDelta = r.orders_change_pct;
+                  return (
+                    <tr key={r.family} className={`border-b border-border-faint hover:bg-white/[.02] ${!r.is_relevant_peak ? 'opacity-50' : ''}`}>
+                      <td className="px-3 py-1.5 font-semibold">{r.family}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{r.baseline_avg_daily_orders?.toFixed(1) ?? '—'}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{r.peak_avg_daily_orders?.toFixed(1) ?? '—'}</td>
+                      <td className={`px-3 py-1.5 text-right font-mono font-semibold ${(ordDelta ?? 0) > 0 ? 'text-emerald-400' : (ordDelta ?? 0) < -10 ? 'text-red-400' : 'text-zinc-400'}`}>
+                        {ordDelta != null ? `${ordDelta > 0 ? '+' : ''}${ordDelta.toFixed(1)}%` : '—'}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono">{r.baseline_net_roas != null ? fR(r.baseline_net_roas) : '—'}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{r.peak_net_roas != null ? fR(r.peak_net_roas) : '—'}</td>
+                      <td className={`px-3 py-1.5 text-right font-mono font-semibold ${(r.net_roas_delta ?? 0) > 0 ? 'text-emerald-400' : (r.net_roas_delta ?? 0) < -0.1 ? 'text-red-400' : 'text-zinc-400'}`}>
+                        {r.net_roas_delta != null ? `${r.net_roas_delta > 0 ? '+' : ''}${r.net_roas_delta.toFixed(2)}` : '—'}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <span className={`font-semibold ${recColor[r.coach_recommendation] || 'text-zinc-400'}`}>
+                          {recIcon[r.coach_recommendation] || ''} {r.coach_recommendation.replace(/_/g, ' ')}
+                        </span>
+                        {r.confidence !== 'HIGH' && (
+                          <span className="text-[9px] text-faint ml-1">({r.confidence})</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-2 text-[10px] text-faint italic">
+            Based on last year's peak vs 4-week baseline. Only families with ≥12 months of data.
+          </div>
+        </Card>
+      )}
+
       {/* Peak Trend Chart: TY vs LY — dynamic measure */}
-      {peakTrendData && peakTrendData.maxLen > 0 && (
+      {((peakTrendGranularity === 'weekly' && peakTrendData && peakTrendData.maxLen > 0) || (peakTrendGranularity === 'daily' && dailyPeakTrendData && dailyPeakTrendData.maxLen > 0)) && (
         <Card className="mb-6">
           <div className="flex items-center justify-between mb-3">
             <div className="text-sm font-bold">Peak {PEAK_TREND_MEASURES.find(m => m.id === peakTrendMeasure)?.label || 'Orders'} Trend — TY vs LY</div>
             <div className="flex items-center gap-4 text-[10px] text-faint font-mono">
-              <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm inline-block" style={{ background: PEAK_TREND_MEASURES.find(m => m.id === peakTrendMeasure)?.color || '#3b82f6' }} /> TY {peakTrendData.tyRange}</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-amber-400 inline-block" style={{ borderTop: '2px dashed' }} /> LY {peakTrendData.lyRange}</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm inline-block" style={{ background: PEAK_TREND_MEASURES.find(m => m.id === peakTrendMeasure)?.color || '#3b82f6' }} /> TY {(peakTrendGranularity === 'daily' ? dailyPeakTrendData : peakTrendData)?.tyRange}{peakTrendGranularity === 'daily' && dailyPeakTrendData?.tyHolidayDate ? ` (peak: ${dailyPeakTrendData.tyHolidayDate})` : ''}</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-amber-400 inline-block" style={{ borderTop: '2px dashed' }} /> LY {(peakTrendGranularity === 'daily' ? dailyPeakTrendData : peakTrendData)?.lyRange}{peakTrendGranularity === 'daily' && dailyPeakTrendData?.lyHolidayDate ? ` (peak: ${dailyPeakTrendData.lyHolidayDate})` : ''}</span>
             </div>
           </div>
-          {/* Measure selector buttons */}
-          <div className="flex gap-1.5 mb-3">
-            {PEAK_TREND_MEASURES.map(m => (
-              <button
-                key={m.id}
-                onClick={() => setPeakTrendMeasure(m.id)}
-                className="px-2.5 py-1 rounded-lg text-[10px] font-semibold border transition-all"
-                style={{
-                  borderColor: peakTrendMeasure === m.id ? m.color : 'rgba(63,63,70,.45)',
-                  background: peakTrendMeasure === m.id ? m.color + '20' : 'transparent',
-                  color: peakTrendMeasure === m.id ? m.color : '#71717a',
-                }}
-              >{m.label}</button>
-            ))}
+          {/* Granularity toggle + Measure selector */}
+          <div className="flex items-center gap-3 mb-3">
+            <div className="flex rounded-lg border border-zinc-700 overflow-hidden">
+              {(['weekly', 'daily'] as const).map(g => (
+                <button key={g} onClick={() => setPeakTrendGranularity(g)}
+                  className={`px-3 py-1 text-[10px] font-semibold transition-all ${peakTrendGranularity === g ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                >{g === 'weekly' ? 'Weekly' : 'Daily'}</button>
+              ))}
+            </div>
+            <div className="flex gap-1.5">
+              {PEAK_TREND_MEASURES.map(m => (
+                <button
+                  key={m.id}
+                  onClick={() => setPeakTrendMeasure(m.id)}
+                  className="px-2.5 py-1 rounded-lg text-[10px] font-semibold border transition-all"
+                  style={{
+                    borderColor: peakTrendMeasure === m.id ? m.color : 'rgba(63,63,70,.45)',
+                    background: peakTrendMeasure === m.id ? m.color + '20' : 'transparent',
+                    color: peakTrendMeasure === m.id ? m.color : '#71717a',
+                  }}
+                >{m.label}</button>
+              ))}
+            </div>
+            {/* Days-to-peak range selector */}
+            <div className="flex rounded-lg border border-zinc-700 overflow-hidden ml-2">
+              {([{ label: '±7d', before: 7, after: 7 }, { label: '±14d', before: 14, after: 14 }, { label: '±30d', before: 30, after: 30 }, { label: 'All', before: 999, after: 999 }] as const).map(r => {
+                const isActive = dtpRange.before === r.before && dtpRange.after === r.after;
+                return (
+                  <button key={r.label} onClick={() => setDtpRange({ before: r.before, after: r.after })}
+                    className={`px-2.5 py-1 text-[10px] font-semibold transition-all ${isActive ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >{r.label}</button>
+                );
+              })}
+            </div>
           </div>
           {(() => {
-            const { tyData, lyData, maxLen, tyBoostIdx, tyPeakIdx } = peakTrendData;
+            const activeTrendData = peakTrendGranularity === 'daily' ? dailyPeakTrendData : peakTrendData;
+            if (!activeTrendData) return null;
             const mKey = peakTrendMeasure;
             const mColor = PEAK_TREND_MEASURES.find(m => m.id === mKey)?.color || '#3b82f6';
+
+            // Apply dtpRange filter to daily data
+            const isDailyDtp = peakTrendGranularity === 'daily' && 'allDtp' in activeTrendData;
+            const tyDataRaw = activeTrendData.tyData;
+            const lyDataRaw = activeTrendData.lyData;
+            const filteredTy = isDailyDtp && dtpRange.before < 999
+              ? tyDataRaw.filter((d: any) => d.dtp >= -dtpRange.before && d.dtp <= dtpRange.after)
+              : tyDataRaw;
+            const filteredLy = isDailyDtp && dtpRange.before < 999
+              ? lyDataRaw.filter((d: any) => d.dtp >= -dtpRange.before && d.dtp <= dtpRange.after)
+              : lyDataRaw;
+            const tyData = filteredTy;
+            const lyData = filteredLy;
+
             const getVal = (d: typeof tyData[0]) => d[mKey] || 0;
             const fmtVal = (v: number) => mKey === 'orders' ? fOrd(v) : fM(v);
             const fmtShort = (v: number) => {
@@ -574,19 +868,53 @@ export function PeakPage({ data }: { data: DashboardData }) {
             const chartH = H - PAD_T - PAD_B;
             const allVals = [...tyData.map(getVal), ...lyData.map(getVal)];
             const maxVal = Math.max(...allVals, 1) * 1.12; // 12% headroom for labels
-            const barW = Math.max(6, Math.min(30, (chartW / maxLen) - 4));
-            const xForIdx = (i: number) => PAD_L + (i + 0.5) * (chartW / maxLen);
             const yForVal = (v: number) => PAD_T + chartH - (v / maxVal) * chartH;
 
-            // LY line path
-            const lyPoints = lyData.map((d, i) => `${xForIdx(i)},${yForVal(getVal(d))}`);
-            const lyPath = lyPoints.length > 0 ? 'M' + lyPoints.join(' L') : '';
+            // Rebuild shared axis after filtering
+            const allDtp = isDailyDtp
+              ? [...new Set([...tyData.map((d: any) => d.dtp), ...lyData.map((d: any) => d.dtp)])].sort((a: number, b: number) => a - b) as number[]
+              : null;
+            const axisLen = allDtp ? allDtp.length : (tyData.length || lyData.length);
+            const barW = Math.max(6, Math.min(30, (chartW / axisLen) - 4));
+            const xForAxisIdx = (i: number) => PAD_L + (i + 0.5) * (chartW / axisLen);
+
+            // Recompute phase boundary indices for potentially filtered axis
+            const origAllDtp = isDailyDtp ? (activeTrendData as any).allDtp as number[] : null;
+            const origBoostDtp = origAllDtp ? origAllDtp[activeTrendData.tyBoostIdx] : undefined;
+            const tyBoostIdx = isDailyDtp && allDtp && origBoostDtp !== undefined
+              ? allDtp.findIndex(d => d >= origBoostDtp)
+              : activeTrendData.tyBoostIdx;
+            const tyPeakIdx = isDailyDtp && allDtp
+              ? allDtp.findIndex(d => d >= 0)
+              : activeTrendData.tyPeakIdx;
+
+            // Map TY/LY points to x positions
+            const tyPoints = isDailyDtp
+              ? tyData.map(d => ({ ...d, x: xForAxisIdx(allDtp!.indexOf((d as any).dtp)) }))
+              : tyData.map((d, i) => ({ ...d, x: xForAxisIdx(i) }));
+            const lyPoints = isDailyDtp
+              ? lyData.map(d => {
+                  // Find nearest dtp position on shared axis
+                  const dtp = (d as any).dtp as number;
+                  let bestIdx = 0; let bestDist = Infinity;
+                  allDtp!.forEach((v, i) => { const dist = Math.abs(v - dtp); if (dist < bestDist) { bestDist = dist; bestIdx = i; } });
+                  return { ...d, x: xForAxisIdx(bestIdx) };
+                })
+              : lyData.map((d, i) => ({ ...d, x: xForAxisIdx(i) }));
+
+
 
             // Grid lines
             const gridLines = [0, 0.25, 0.5, 0.75, 1].map(f => ({
               y: PAD_T + chartH * (1 - f),
               label: fmtVal(maxVal * 0.89 * f), // scale back from headroom
             }));
+
+            // X-axis labels from shared axis
+            const xLabels = isDailyDtp && allDtp
+              ? allDtp.map((dtp, i) => ({ x: xForAxisIdx(i), label: dtp === 0 ? 'Peak' : dtp > 0 ? `+${dtp}d` : `${dtp}d` }))
+              : tyData.map((d, i) => ({ x: xForAxisIdx(i), label: d.label }));
+            const labelStep = Math.max(1, Math.ceil(xLabels.length / 12));
 
             return (
               <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 300 }}>
@@ -599,125 +927,178 @@ export function PeakPage({ data }: { data: DashboardData }) {
                 ))}
 
                 {/* Phase boundary markers */}
-                {tyBoostIdx > 0 && tyBoostIdx < maxLen && (
-                  <line x1={xForIdx(tyBoostIdx) - barW / 2 - 2} x2={xForIdx(tyBoostIdx) - barW / 2 - 2} y1={PAD_T} y2={PAD_T + chartH} stroke="rgba(251,191,36,0.4)" strokeWidth={1} strokeDasharray="3,3" />
+                {tyBoostIdx > 0 && tyBoostIdx < axisLen && (
+                  <line x1={xForAxisIdx(tyBoostIdx) - barW / 2 - 2} x2={xForAxisIdx(tyBoostIdx) - barW / 2 - 2} y1={PAD_T} y2={PAD_T + chartH} stroke="rgba(251,191,36,0.4)" strokeWidth={1} strokeDasharray="3,3" />
                 )}
-                {tyPeakIdx > 0 && tyPeakIdx < maxLen && (
+                {tyPeakIdx > 0 && tyPeakIdx < axisLen && (
                   <>
-                    <line x1={xForIdx(tyPeakIdx) - barW / 2 - 2} x2={xForIdx(tyPeakIdx) - barW / 2 - 2} y1={PAD_T} y2={PAD_T + chartH} stroke="rgba(239,68,68,0.4)" strokeWidth={1} strokeDasharray="3,3" />
-                    <text x={xForIdx(tyPeakIdx) - barW / 2 + 2} y={PAD_T + 8} fill="rgba(239,68,68,0.5)" fontSize={7} fontFamily="monospace">Peak</text>
+                    <line x1={xForAxisIdx(tyPeakIdx) - barW / 2 - 2} x2={xForAxisIdx(tyPeakIdx) - barW / 2 - 2} y1={PAD_T} y2={PAD_T + chartH} stroke="rgba(239,68,68,0.4)" strokeWidth={1} strokeDasharray="3,3" />
+                    <text x={xForAxisIdx(tyPeakIdx) - barW / 2 + 2} y={PAD_T + 8} fill="rgba(239,68,68,0.5)" fontSize={7} fontFamily="monospace">Peak</text>
                   </>
                 )}
 
-                {/* TY bars + value labels */}
-                {tyData.map((d, i) => {
+                {/* TY bars + value labels (offset left when LY present) */}
+                {tyPoints.map((d, i) => {
                   const v = getVal(d);
                   const barY = yForVal(v);
+                  const halfBar = barW / 2;
+                  const xOff = lyPoints.length > 0 ? d.x - halfBar / 2 - 0.5 : d.x;
                   return (
                     <g key={`ty-${i}`}>
                       <rect
-                        x={xForIdx(i) - barW / 2}
+                        x={xOff - halfBar / 2}
                         y={barY}
-                        width={barW}
+                        width={lyPoints.length > 0 ? halfBar : barW}
                         height={Math.max(0, PAD_T + chartH - barY)}
                         rx={2}
                         fill={mColor}
                         opacity={0.7}
                       />
-                      {/* TY value label above bar */}
-                      <text
-                        x={xForIdx(i)}
-                        y={Math.max(barY - 4, PAD_T - 2)}
-                        textAnchor="middle"
-                        fill={mColor}
-                        fontSize={7}
-                        fontFamily="monospace"
-                        fontWeight="bold"
-                      >{fmtShort(v)}</text>
+                      {/* TY value label above bar (only show if not too dense) */}
+                      {axisLen <= 30 && (
+                        <text
+                          x={xOff}
+                          y={Math.max(barY - 4, PAD_T - 2)}
+                          textAnchor="middle"
+                          fill={mColor}
+                          fontSize={7}
+                          fontFamily="monospace"
+                          fontWeight="bold"
+                        >{fmtShort(v)}</text>
+                      )}
                     </g>
                   );
                 })}
 
-                {/* LY line */}
-                {lyPath && (
-                  <path d={lyPath} fill="none" stroke="rgba(251,191,36,0.8)" strokeWidth={2} strokeDasharray="6,3" />
-                )}
-                {/* LY dots + value labels */}
-                {lyData.map((d, i) => {
+                {/* LY bars (yellow, offset right) + value labels */}
+                {lyPoints.map((d, i) => {
                   const v = getVal(d);
-                  const cy = yForVal(v);
+                  const barY = yForVal(v);
+                  const halfBar = barW / 2;
+                  const xOff = d.x + halfBar / 2 + 0.5;
                   return (
                     <g key={`ly-${i}`}>
-                      <circle cx={xForIdx(i)} cy={cy} r={3} fill="rgba(251,191,36,0.9)" stroke="rgba(0,0,0,0.3)" strokeWidth={0.5} />
-                      {/* LY value label below dot */}
-                      <text
-                        x={xForIdx(i)}
-                        y={Math.min(cy + 12, PAD_T + chartH + 2)}
-                        textAnchor="middle"
-                        fill="rgba(251,191,36,0.7)"
-                        fontSize={6}
-                        fontFamily="monospace"
-                      >{fmtShort(v)}</text>
+                      <rect
+                        x={xOff - halfBar / 2}
+                        y={barY}
+                        width={halfBar}
+                        height={Math.max(0, PAD_T + chartH - barY)}
+                        rx={2}
+                        fill="rgba(251,191,36,0.8)"
+                        opacity={0.6}
+                      />
+                      {/* LY value label above bar (only show if not too dense) */}
+                      {axisLen <= 30 && (
+                        <text
+                          x={xOff}
+                          y={Math.max(barY - 4, PAD_T - 2)}
+                          textAnchor="middle"
+                          fill="rgba(251,191,36,0.7)"
+                          fontSize={6}
+                          fontFamily="monospace"
+                        >{fmtShort(v)}</text>
+                      )}
                     </g>
                   );
                 })}
 
                 {/* X-axis labels */}
-                {tyData.map((d, i) => (
-                  (maxLen <= 12 || i % Math.ceil(maxLen / 10) === 0) && (
-                    <text key={`xl-${i}`} x={xForIdx(i)} y={H - 6} textAnchor="middle" fill="rgba(255,255,255,0.35)" fontSize={7} fontFamily="monospace">{d.label}</text>
+                {xLabels.map((xl, i) => (
+                  (axisLen <= 16 || i % labelStep === 0) && (
+                    <text key={`xl-${i}`} x={xl.x} y={H - 6} textAnchor="middle" fill="rgba(255,255,255,0.35)" fontSize={peakTrendGranularity === 'daily' ? 5.5 : 7} fontFamily="monospace">{xl.label}</text>
                   )
                 ))}
               </svg>
             );
           })()}
           {/* Notice when LY has no data for selected measure */}
-          {peakTrendData.lyData.length > 0 && peakTrendData.lyData.every(d => (d[peakTrendMeasure] || 0) === 0) && (
-            <div className="text-[10px] text-amber-400/60 mt-1.5 font-mono">⚠ LY {PEAK_TREND_MEASURES.find(m => m.id === peakTrendMeasure)?.label} data not available for {peakTrendData.lyRange}</div>
+          {(() => {
+            const atd = peakTrendGranularity === 'daily' ? dailyPeakTrendData : peakTrendData;
+            return atd && atd.lyData.length > 0 && atd.lyData.every((d: any) => (d[peakTrendMeasure] || 0) === 0) ? (
+              <div className="text-[10px] text-amber-400/60 mt-1.5 font-mono">⚠ LY {PEAK_TREND_MEASURES.find(m => m.id === peakTrendMeasure)?.label} data not available for {atd.lyRange}</div>
+            ) : null;
+          })()}
+          {peakTrendGranularity === 'daily' && (
+            <div className="text-[9px] text-zinc-600 mt-1 font-mono">
+              Each bar = one day · Day 0 = peak holiday · TY peak: {dailyPeakTrendData?.tyHolidayDate || '—'} · LY peak: {dailyPeakTrendData?.lyHolidayDate || '—'}
+              {dtpRange.before < 999 && ` · Showing ±${dtpRange.before}d around peak`}
+            </div>
           )}
         </Card>
       )}
 
-      {/* ─── Per-Day Peak Performance ─── */}
+      {/* ─── Per-Day Peak Performance (last 7 days) ─── */}
       {dailyPeakData && dailyPeakData.days.length > 0 && (
         <Card className="mb-6">
           <button onClick={() => setShowDailyPeak(p => !p)} className="flex items-center gap-2 w-full text-left mb-2">
             <Calendar size={16} className="text-red-400" />
-            <span className="text-sm font-bold">Daily Peak Performance</span>
+            <span className="text-sm font-bold">Daily Performance</span>
             <Badge variant="red">LIVE</Badge>
-            <span className="text-[10px] text-faint font-mono ml-1">{dailyPeakData.days.length} days · {fM(dailyPeakData.totalSales)} sales · {fOrd(dailyPeakData.totalOrders)} orders</span>
+            <span className="text-[10px] text-faint font-mono ml-1">Last {dailyPeakData.days.length} days · {fM(dailyPeakData.totalSales)} sales · {fOrd(dailyPeakData.totalOrders)} orders</span>
             <ChevronRight size={12} className={`text-faint ml-auto transition-transform ${showDailyPeak ? 'rotate-90' : ''}`} />
           </button>
           {showDailyPeak && (
             <div className="animate-in">
-              {/* Mini daily bar chart */}
+              {/* SVG bar chart */}
               <div className="mb-3">
                 {(() => {
                   const days = dailyPeakData.days;
-                  const maxSales = Math.max(...days.map(d => d.sales), 1);
+                  const today = dailyPeakData.today;
+                  const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                  const maxSales = Math.max(...days.map(d => d.sales), 1) * 1.15;
+                  const W = 700, H = 180, PAD_L = 50, PAD_R = 10, PAD_T = 24, PAD_B = 34;
+                  const chartW = W - PAD_L - PAD_R;
+                  const chartH = H - PAD_T - PAD_B;
+                  const barW = Math.max(16, Math.min(50, (chartW / days.length) - 8));
+                  const xForIdx = (i: number) => PAD_L + (i + 0.5) * (chartW / days.length);
+                  const yForVal = (v: number) => PAD_T + chartH - (v / maxSales) * chartH;
+                  const gridLines = [0, 0.25, 0.5, 0.75, 1].map(f => ({ y: PAD_T + chartH * (1 - f), label: fM(maxSales * 0.87 * f) }));
+                  const fmtShort = (v: number) => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${Math.round(v)}`;
                   return (
-                    <div className="flex items-end gap-1 h-28">
-                      {days.map(d => {
-                        const h = (d.sales / maxSales) * 100;
-                        const dayLabel = new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 200 }}>
+                      {/* Grid */}
+                      {gridLines.map((g, i) => (
+                        <g key={i}>
+                          <line x1={PAD_L} x2={W - PAD_R} y1={g.y} y2={g.y} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+                          <text x={PAD_L - 4} y={g.y + 3} textAnchor="end" fill="rgba(255,255,255,0.25)" fontSize={7} fontFamily="monospace">{g.label}</text>
+                        </g>
+                      ))}
+                      {/* Bars */}
+                      {days.map((d, i) => {
+                        const v = d.sales;
+                        const barY = yForVal(v);
+                        const isToday = d.date === today;
+                        const dayOfWeek = DAY_NAMES[new Date(d.date + 'T00:00:00').getDay()];
+                        const dayLabel = new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                         const roas = d.spend > 0 ? d.sales / d.spend : 0;
                         return (
-                          <div key={d.date} className="flex-1 flex flex-col items-center gap-0.5 group relative">
-                            <div className="text-[8px] font-mono text-emerald-400 font-bold opacity-0 group-hover:opacity-100 transition-opacity">
-                              {fM(d.sales)}
-                            </div>
-                            <div
-                              className="w-full rounded-t-sm bg-gradient-to-t from-red-600 to-red-400 transition-all group-hover:from-red-500 group-hover:to-red-300"
-                              style={{ height: `${h}%`, minHeight: 2 }}
-                              title={`${dayLabel}\nSales: ${fM(d.sales)}\nSpend: ${fM(d.spend)}\nOrders: ${fOrd(d.orders)}\nROAS: ${fR(roas)}`}
+                          <g key={d.date}>
+                            <rect
+                              x={xForIdx(i) - barW / 2} y={barY} width={barW}
+                              height={Math.max(0, PAD_T + chartH - barY)} rx={3}
+                              fill={isToday ? 'url(#todayGrad)' : 'url(#barGrad)'}
+                              opacity={0.85}
                             />
-                            <div className="text-[7px] text-faint font-mono leading-none">
-                              {d.date.slice(5)}
-                            </div>
-                          </div>
+                            {isToday && <rect x={xForIdx(i) - barW / 2 - 1} y={barY - 1} width={barW + 2} height={Math.max(0, PAD_T + chartH - barY + 2)} rx={3} fill="none" stroke="rgba(34,211,238,0.5)" strokeWidth={1.5} />}
+                            <text x={xForIdx(i)} y={Math.max(barY - 5, PAD_T - 2)} textAnchor="middle" fill={isToday ? '#22d3ee' : '#10b981'} fontSize={8} fontFamily="monospace" fontWeight="bold">{fmtShort(v)}</text>
+                            <text x={xForIdx(i)} y={H - 18} textAnchor="middle" fill={isToday ? '#22d3ee' : 'rgba(255,255,255,0.4)'} fontSize={8} fontFamily="monospace" fontWeight={isToday ? 'bold' : 'normal'}>{dayOfWeek}</text>
+                            <text x={xForIdx(i)} y={H - 8} textAnchor="middle" fill={isToday ? 'rgba(34,211,238,0.7)' : 'rgba(255,255,255,0.2)'} fontSize={7} fontFamily="monospace">{d.date.slice(5)}</text>
+                            <title>{`${dayLabel} (${dayOfWeek})\nSales: ${fM(d.sales)}\nSpend: ${fM(d.spend)}\nOrders: ${fOrd(d.orders)}\nROAS: ${fR(roas)}\nNet Profit: ${fM(d.netProfit)}`}</title>
+                          </g>
                         );
                       })}
-                    </div>
+                      {/* Gradient defs */}
+                      <defs>
+                        <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#f87171" />
+                          <stop offset="100%" stopColor="#b91c1c" />
+                        </linearGradient>
+                        <linearGradient id="todayGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#22d3ee" />
+                          <stop offset="100%" stopColor="#0891b2" />
+                        </linearGradient>
+                      </defs>
+                    </svg>
                   );
                 })()}
               </div>
@@ -731,6 +1112,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
                       <th className="text-right px-2 py-1.5">Sales</th>
                       <th className="text-right px-2 py-1.5">Orders</th>
                       <th className="text-right px-2 py-1.5">Ads Spend</th>
+                      <th className="text-right px-2 py-1.5">Net Profit</th>
                       <th className="text-right px-2 py-1.5">ROAS</th>
                       <th className="text-right px-2 py-1.5">Clicks</th>
                       <th className="text-right px-2 py-1.5">Conv %</th>
@@ -741,13 +1123,15 @@ export function PeakPage({ data }: { data: DashboardData }) {
                       const roas = d.spend > 0 ? d.sales / d.spend : 0;
                       const cvr = d.clicks > 0 ? (d.orders / d.clicks) * 100 : 0;
                       const dayName = new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+                      const isToday = d.date === dailyPeakData.today;
                       return (
-                        <tr key={d.date} className="border-b border-border-faint/50 hover:bg-white/[.02]">
-                          <td className="px-2 py-1 font-mono text-foreground">{d.date}</td>
-                          <td className="px-2 py-1 text-muted">{dayName}</td>
+                        <tr key={d.date} className={`border-b border-border-faint/50 ${isToday ? 'bg-cyan-500/10 ring-1 ring-inset ring-cyan-500/20' : 'hover:bg-white/[.02]'}`}>
+                          <td className={`px-2 py-1 font-mono ${isToday ? 'text-cyan-400 font-bold' : 'text-foreground'}`}>{d.date.slice(5)}</td>
+                          <td className="px-2 py-1 text-muted text-[10px]">{dayName}</td>
                           <td className="px-2 py-1 text-right font-mono font-semibold text-emerald-400">{fM(d.sales)}</td>
                           <td className="px-2 py-1 text-right font-mono">{fOrd(d.orders)}</td>
                           <td className="px-2 py-1 text-right font-mono text-amber-400">{fM(d.spend)}</td>
+                          <td className={`px-2 py-1 text-right font-mono font-semibold ${d.netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fM(d.netProfit)}</td>
                           <td className={`px-2 py-1 text-right font-mono font-semibold ${roas >= 2 ? 'text-emerald-400' : roas >= 1 ? 'text-amber-400' : 'text-rose-400'}`}>{fR(roas)}</td>
                           <td className="px-2 py-1 text-right font-mono text-muted">{fClk(d.clicks)}</td>
                           <td className="px-2 py-1 text-right font-mono text-muted">{fP(cvr)}</td>
@@ -760,6 +1144,9 @@ export function PeakPage({ data }: { data: DashboardData }) {
                       <td className="px-2 py-1.5 text-right font-mono text-emerald-400">{fM(dailyPeakData.totalSales)}</td>
                       <td className="px-2 py-1.5 text-right font-mono">{fOrd(dailyPeakData.totalOrders)}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-amber-400">{fM(dailyPeakData.totalSpend)}</td>
+                      <td className={`px-2 py-1.5 text-right font-mono font-semibold ${(dailyPeakData.totalSales - dailyPeakData.totalSpend) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {fM(dailyPeakData.days.reduce((s, d) => s + d.netProfit, 0))}
+                      </td>
                       <td className={`px-2 py-1.5 text-right font-mono font-semibold ${dailyPeakData.totalSpend > 0 ? (dailyPeakData.totalSales / dailyPeakData.totalSpend >= 2 ? 'text-emerald-400' : 'text-amber-400') : ''}`}>
                         {dailyPeakData.totalSpend > 0 ? fR(dailyPeakData.totalSales / dailyPeakData.totalSpend) : '—'}
                       </td>
@@ -853,9 +1240,20 @@ export function PeakPage({ data }: { data: DashboardData }) {
             onChange={e => setSelectedHoliday(e.target.value || null)}
             className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-inset border border-border text-subtle hover:border-border-strong focus:outline-none focus:border-blue-500 appearance-none cursor-pointer"
           >
-            {pk?.holiday_name && <option value={pk.holiday_name}>{pk.holiday_name} (next peak)</option>}
-            {holidayNames.filter(n => n !== pk?.holiday_name).map(n => <option key={n} value={n}>{n}</option>)}
+            {pk?.holiday_name && <option value={pk.holiday_name}>{pk.holiday_name} (next peak){holidayRelevanceSummary[pk.holiday_name] ? ` — ${holidayRelevanceSummary[pk.holiday_name].relevant}/${holidayRelevanceSummary[pk.holiday_name].total} families` : ''}</option>}
+            {holidayNames.filter(n => n !== pk?.holiday_name).map(n => {
+              const rel = holidayRelevanceSummary[n];
+              const suffix = rel ? ` — ${rel.relevant}/${rel.total} families peak` : '';
+              return <option key={n} value={n}>{n}{suffix}</option>;
+            })}
           </select>
+          {relevanceForHoliday.length > 0 && (
+            <Badge variant={anyRelevantPeak ? 'green' : 'red'} className="!text-[9px]">
+              {anyRelevantPeak
+                ? `${relevanceForHoliday.filter(r => r.is_relevant_peak).length}/${relevanceForHoliday.length} families peak`
+                : 'No peak signal'}
+            </Badge>
+          )}
         </div>
       )}
 
@@ -884,7 +1282,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
                 return (
                   <div key={phase}>
                     <div className="flex items-center gap-2 mb-2">
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded bg-gradient-to-br ${STAGE_COLORS[phase === 'pre_peak' ? 'PRE_PEAK' : phase === 'boost' ? 'PRE_PEAK_BOOST' : phase.toUpperCase()] || 'from-zinc-700 to-zinc-600'} text-white/90`}>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded bg-gradient-to-br ${STAGE_COLORS[phase === 'pre_season' ? 'PRE_SEASON' : phase === 'boost' ? 'PRE_PEAK_BOOST' : phase.toUpperCase()] || 'from-zinc-700 to-zinc-600'} text-white/90`}>
                         {PHASE_LABELS_MAP[phase]}
                       </span>
                       <span className="text-[10px] text-faint font-mono">TY: {pd.tyRange} · LY: {pd.lyRange}</span>
@@ -957,7 +1355,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
           <button onClick={() => setShowYoy(p => !p)} className="flex items-center gap-1.5 text-sm font-bold w-full text-left mb-3">
             <ChevronRight size={14} className={`text-faint transition-transform duration-200 ${showYoy ? 'rotate-90' : ''}`} />
             Year-over-Year Comparison
-            <span className="text-[10px] text-faint font-mono font-normal ml-1">(Readiness → Peak End, calendar shift)</span>
+            <span className="text-[10px] text-faint font-mono font-normal ml-1">(Pre Season → Peak End, calendar shift)</span>
           </button>
           {showYoy && (
             <div className="animate-in">
@@ -1192,22 +1590,22 @@ function addDaysLocal(dateStr: string, n: number): string {
 }
 
 function phaseBoundaries(h: HolidayRow) {
-  const peakStart = h.pre_season_start;
-  const peakEnd = addDaysLocal(h.holiday_date, -2);
+  const boostStart = h.boost_start || h.pre_season_start;
+  const peakStart = h.peak_start || boostStart;
+  const peakEnd = addDaysLocal(h.holiday_date, -1);
   return {
-    readiness: { start: addDaysLocal(h.pre_season_start, -120), end: addDaysLocal(h.pre_season_start, -29) },
-    pre_peak: { start: addDaysLocal(h.pre_season_start, -28), end: addDaysLocal(h.pre_season_start, -15) },
-    boost: { start: addDaysLocal(h.pre_season_start, -14), end: addDaysLocal(h.pre_season_start, -1) },
+    pre_season: { start: h.pre_season_start, end: addDaysLocal(boostStart, -1) },
+    boost: { start: boostStart, end: addDaysLocal(peakStart, -1) },
     peak: { start: peakStart, end: peakEnd },
-    full: { start: addDaysLocal(h.pre_season_start, -120), end: peakEnd },
+    full: { start: h.pre_season_start, end: peakEnd },
   };
 }
 
-type PhaseKey = 'readiness' | 'pre_peak' | 'boost' | 'peak';
-const PHASE_KEYS: PhaseKey[] = ['readiness', 'pre_peak', 'boost', 'peak'];
-/** Phases shown in the holiday comparison tables (Readiness removed per user request) */
-const COMPARISON_PHASE_KEYS: PhaseKey[] = ['pre_peak', 'boost', 'peak'];
-const PHASE_LABELS_MAP: Record<PhaseKey, string> = { readiness: 'Readiness', pre_peak: 'Pre Peak', boost: 'Boost', peak: 'Peak' };
+type PhaseKey = 'pre_season' | 'boost' | 'peak';
+const PHASE_KEYS: PhaseKey[] = ['pre_season', 'boost', 'peak'];
+/** Phases shown in the holiday comparison tables */
+const COMPARISON_PHASE_KEYS: PhaseKey[] = ['pre_season', 'boost', 'peak'];
+const PHASE_LABELS_MAP: Record<PhaseKey, string> = { pre_season: 'Pre Season', boost: 'Boost', peak: 'Peak' };
 
 const COMPARISON_MEASURES: MeasureDef[] = [
   { id: 'sales_ly', label: 'LY Sales', tip: MEASURE_TIPS.sales, group: 'PnL', defaultVisible: true },
@@ -1231,7 +1629,7 @@ function calcDaysRunning(startDate: string): number {
 
 type CheckResult = { status: 'ok' | 'warn' | 'info'; summary: string; columns: string[]; rows: string[][]; expIds?: string[] };
 
-function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null): Record<string, CheckResult> {
+function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null, getFamily: (name: string | null | undefined) => string | null): Record<string, CheckResult> {
   const out: Record<string, CheckResult> = {};
   const kw = data.keyword_product_map || [];
   const drv = data.drivers || [];
@@ -1255,7 +1653,7 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
       summary: `${cannibal.length} keywords targeted by multiple products`,
       columns: ['Keyword', 'Products', '# Products', 'Family'],
       rows: cannibal.slice(0, 20).map(c => {
-        const fam = c.prods.map(p => famFromProduct(p)).filter(Boolean).join(', ');
+        const fam = c.prods.map(p => getFamily(p)).filter(Boolean).join(', ');
         return [c.term, c.prods.join(', '), String(c.prods.length), fam || '--'];
       }),
     };
@@ -1322,7 +1720,7 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
     summary: `Top ${lyPeakAdsKw.length} keywords by Ads orders (use as peak targets)`,
     columns: ['Keyword', 'Product', 'Family', 'Orders', 'Spend', 'Conv %', 'ROAS'],
     rows: lyPeakAdsKw.map(d => {
-      const fam = famFromType(d.product_type) || famFromProduct(d.product_short_name) || '--';
+      const fam = famFromType(d.product_type) || getFamily(d.product_short_name) || '--';
       return [d.search_term, d.product_short_name, String(fam), fOrd(d.orders), fM(d.spend), fP(d.conv_rate), fR(d.net_roas)];
     }),
   };
@@ -1331,7 +1729,7 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
   let lySqpPeakStart = '';
   let lySqpPeakEnd = '';
   if (pk?.peak_start && pk?.peak_end) {
-    lySqpPeakStart = shiftYear(pk.readiness_start || pk.peak_start, -1);
+    lySqpPeakStart = shiftYear(pk.pre_peak_start || pk.peak_start, -1);
     lySqpPeakEnd = shiftYear(pk.peak_end, -1);
   }
   const lySqpKw = sqp
@@ -1362,7 +1760,7 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
     summary: heroMismatch.length > 0 ? `${heroMismatch.length} keywords NOT on hero ASIN` : 'All keywords on correct hero ASINs',
     columns: ['Keyword', 'Advertised Product', 'Family', 'Hero ASIN', 'ROAS', 'Action'],
     rows: heroMismatch.slice(0, 15).map(k => {
-      const fam = famFromProduct(k.product_short_name) || '--';
+      const fam = getFamily(k.product_short_name) || '--';
       return [k.search_term, k.product_short_name, String(fam), k.hero_asin || '--', fR(k.net_roas_60d), k.action];
     }),
   };
@@ -1374,7 +1772,7 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
     summary: lowConv.length > 0 ? `${lowConv.length} keywords with conv rate < 1.5%` : 'Conv rates healthy',
     columns: ['Keyword', 'Product', 'Family', 'Conv %', 'Spend', 'Orders', 'ROAS'],
     rows: lowConv.sort((a, b) => (a.conv_rate || 0) - (b.conv_rate || 0)).slice(0, 15).map(d => {
-      const fam = famFromType(d.product_type) || famFromProduct(d.product_short_name) || '--';
+      const fam = famFromType(d.product_type) || getFamily(d.product_short_name) || '--';
       return [d.search_term, d.product_short_name, String(fam), fP(d.conv_rate), fM(d.spend), fOrd(d.orders), fR(d.net_roas)];
     }),
   };
@@ -1396,7 +1794,7 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
     summary: `${uniqueTerms.length} unique keywords tracked`,
     columns: ['Keyword', 'Product', 'Family', 'Market Vol', 'Impression Share', 'Spend', 'ROAS'],
     rows: uniqueTerms.slice(0, 20).map(k => {
-      const fam = famFromProduct(k.product_short_name) || '--';
+      const fam = getFamily(k.product_short_name) || '--';
       return [k.search_term, k.product_short_name, String(fam), k.market_volume ? String(Math.round(k.market_volume)) + ' ord/wk' : '--', k.impression_share ? fP(k.impression_share * 100) : '--', fM(k.spend_60d), fR(k.net_roas_60d)];
     }),
   };
@@ -1450,7 +1848,7 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
     summary: highCpc.length > 0 ? `${highCpc.length} keywords with CPC > $1.50` : 'CPC levels normal',
     columns: ['Keyword', 'Product', 'Family', 'CPC', 'Spend', 'Conv %', 'ROAS'],
     rows: highCpc.sort((a, b) => (b.cpc || 0) - (a.cpc || 0)).slice(0, 15).map(d => {
-      const fam = famFromType(d.product_type) || famFromProduct(d.product_short_name) || '--';
+      const fam = famFromType(d.product_type) || getFamily(d.product_short_name) || '--';
       return [d.search_term, d.product_short_name, String(fam), '$' + (d.cpc || 0).toFixed(2), fM(d.spend), fP(d.conv_rate), fR(d.net_roas)];
     }),
   };
@@ -1462,7 +1860,7 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
     summary: `${topConv.length} keywords with orders`,
     columns: ['Keyword', 'Product', 'Family', 'Orders', 'Spend', 'Conv %', 'ROAS'],
     rows: topConv.slice(0, 15).map(d => {
-      const fam = famFromType(d.product_type) || famFromProduct(d.product_short_name) || '--';
+      const fam = famFromType(d.product_type) || getFamily(d.product_short_name) || '--';
       return [d.search_term, d.product_short_name, String(fam), fOrd(d.orders), fM(d.spend), fP(d.conv_rate), fR(d.net_roas)];
     }),
   };

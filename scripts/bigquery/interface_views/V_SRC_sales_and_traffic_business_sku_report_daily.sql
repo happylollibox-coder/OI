@@ -3,51 +3,80 @@
 -- =============================================
 --
 -- Purpose: Standardized view for daily sales and traffic data by SKU/ASIN
--- Business Logic: Maps Fivetran column names to standardized OI naming convention
--- Dependencies: 
---   - fivetran-hl.amazon_selling_partner.sales_and_traffic_business_sku_report_daily
+-- Business Logic: Maps Daton column names to standardized OI naming convention
+-- Dependencies:
+--   - daton-491514.BigQuery.amazon_selling_partner_SalesAndTrafficReportByChildASIN
+--   - daton-491514.BigQuery.amazon_selling_partner_ListingsItemsSummary (for SKU)
 -- Project: onyga-482313
 -- Dataset: OI
+-- Updated: 2026-04-03 (migrated from fivetran-hl)
 --
 -- =============================================
 
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_SRC_sales_and_traffic_business_sku_report_daily` AS
 
-SELECT 
-  child_asin, 
-  end_date AS date, 
-  marketplace_id, 
-  parent_asin, 
-  sku,
-  sales_by_asin_units_ordered AS SALES_QUANTITY,
-  sales_by_asin_ordered_product_sales_amount AS SALES_AMOUNT,
-  sales_by_asin_ordered_product_sales_currency_code AS SALES_CURRENCY,
-  sales_by_asin_total_order_items AS SALES_ORDERS,
-  traffic_by_asin_sessions AS asin_sessions,
-  -- traffic_by_asin_session_percentage, 
-  traffic_by_asin_page_views AS page_views,
-  -- traffic_by_asin_page_views_percentage,  
-  -- traffic_by_asin_unit_session_percentage
-FROM `fivetran-hl.amazon_selling_partner.sales_and_traffic_business_sku_report_daily`;
+WITH deduped_sales AS (
+  SELECT
+    childAsin,
+    date,
+    marketplaceId,
+    parentAsin,
+    unitsOrdered,
+    orderedProductSales_amount,
+    orderedProductSales_currencyCode,
+    totalOrderItems,
+    sessions,
+    pageViews,
+    ROW_NUMBER() OVER (
+      PARTITION BY childAsin, date
+      ORDER BY _daton_batch_runtime DESC
+    ) AS rn
+  FROM `daton-491514.BigQuery.amazon_selling_partner_SalesAndTrafficReportByChildASIN`
+  WHERE marketplaceId = 'ATVPDKIKX0DER'
+),
+sku_lookup AS (
+  SELECT
+    asin,
+    ReferenceSKU AS sku,
+    ROW_NUMBER() OVER (PARTITION BY asin ORDER BY _daton_batch_runtime DESC) AS rn
+  FROM `daton-491514.BigQuery.amazon_selling_partner_ListingsItemsSummary`
+  WHERE marketplaceId = 'ATVPDKIKX0DER'
+)
+
+SELECT
+  s.childAsin AS child_asin,
+  s.date AS date,
+  s.marketplaceId AS marketplace_id,
+  s.parentAsin AS parent_asin,
+  l.sku,
+  s.unitsOrdered AS SALES_QUANTITY,
+  s.orderedProductSales_amount AS SALES_AMOUNT,
+  s.orderedProductSales_currencyCode AS SALES_CURRENCY,
+  s.totalOrderItems AS SALES_ORDERS,
+  s.sessions AS asin_sessions,
+  s.pageViews AS page_views
+FROM deduped_sales s
+LEFT JOIN sku_lookup l ON s.childAsin = l.asin AND l.rn = 1
+WHERE s.rn = 1;
 
 -- =============================================
 -- VIEW DESCRIPTION
 -- =============================================
 --
 -- This view provides standardized access to daily sales and traffic data from Amazon Seller Central.
--- Maps Fivetran column names to OI naming convention for consistency.
+-- Migrated from fivetran-hl to daton-491514 on 2026-04-03.
 --
 -- Key Fields:
 -- - child_asin: Product ASIN
--- - date: Report date (from end_date)
+-- - date: Report date
 -- - marketplace_id: Marketplace identifier
 -- - parent_asin: Parent product ASIN
--- - sku: Merchant SKU
+-- - sku: Merchant SKU (from ListingsItemsSummary)
 -- - SALES_QUANTITY: Units ordered
 -- - SALES_AMOUNT: Total sales amount
 -- - SALES_CURRENCY: Currency code
 -- - SALES_ORDERS: Total order items
--- - asin_sessions: Unique sessions (traffic_by_asin_sessions)
--- - page_views: Page views (traffic_by_asin_page_views)
+-- - asin_sessions: Unique sessions
+-- - page_views: Page views
 --
 -- =============================================

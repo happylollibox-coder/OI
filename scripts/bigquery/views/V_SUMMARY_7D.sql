@@ -18,6 +18,7 @@ WITH date_ranges AS (
 current_7d AS (
   SELECT
     u.family AS product_type,
+    ANY_VALUE(u.family_color_hex) AS color_hex,
     SUM(u.sales) AS sales_7d,
     SUM(u.ad_cost) AS ad_cost_7d,
     SUM(u.cogs) AS cogs_7d,
@@ -53,6 +54,7 @@ prev_7d AS (
 
 SELECT
   c.product_type,
+  c.color_hex,
 
   -- Current 7d
   ROUND(c.sales_7d, 2) AS sales_7d,

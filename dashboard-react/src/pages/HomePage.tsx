@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell, LabelList, ReferenceLine, Legend } from 'recharts';
 import { SeasonalReferenceLines, getXLabels } from '../components/SeasonalReferenceLines';
-import type { DashboardData, FamilyName, TrendRow, Ads7dRow } from '../types';
+import type { DashboardData, FamilyName, TrendRow, Ads7dRow, SupplyChainRow } from '../types';
 import { FAMILIES } from '../types';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { Card } from '../components/Card';
@@ -11,7 +11,7 @@ import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
 import { Empty } from '../components/Empty';
 import { SortTh, useSort, MEASURE_TIPS } from '../components/Tooltip';
 import { DashboardSummary } from '../components/DashboardSummary';
-import { fM, fP, fR, fOrd, fClk, famFromType, weekRangeLabel, formatDateRange, ACTION_META, sqpCoverageWeeks, latestSqpWeek, periodDateKey, latestPeriodLabel, sliceByPeriod, getPeriodsToInclude, shiftYear, addDays, weeksInDateRange, weekOverlapsAdsGap, monthOverlapsAdsGap, scoreFromRoas, scoreFromProfitDelta, periodKey, experimentMatchesFamily } from '../utils';
+import { fmt, fM, fP, fR, fOrd, fClk, famFromType, weekRangeLabel, weekRangeLabelCapped, formatDateRange, ACTION_META, sqpCoverageWeeks, latestSqpWeek, periodDateKey, latestPeriodLabel, sliceByPeriod, getPeriodsToInclude, shiftYear, addDays, weeksInDateRange, weekOverlapsAdsGap, monthOverlapsAdsGap, scoreFromRoas, scoreFromProfitDelta, periodKey, experimentMatchesFamily } from '../utils';
 import { filterBySeasonality, getSeasonality } from '../seasonality';
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
@@ -20,7 +20,7 @@ import { MEASURE_META, type TrendMeasure } from '../constants';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
 import { usePageSummary } from '../components/PageSummaryBar';
 
-const ALL_MEASURES: TrendMeasure[] = ['sales', 'ad_cost', 'cogs', 'net_profit', 'net_roas', 'orders', 'clicks', 'sessions', 'organic_pct'];
+const ALL_MEASURES: TrendMeasure[] = ['sales', 'ad_cost', 'cogs', 'net_profit', 'net_roas', 'orders', 'clicks', 'sessions', 'organic_pct', 'payment'];
 
 const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'family', label: 'Family', group: 'Info' },
@@ -29,12 +29,16 @@ const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'cogs', label: 'COGS', tip: MEASURE_TIPS.cogs, group: 'PnL' },
   { id: 'ad_cost', label: 'Ads Spend', tip: MEASURE_TIPS.ad_cost, group: 'Ads' },
   { id: 'ads_sales', label: 'Ads Sales', tip: 'Sales attributed to ads campaigns', group: 'Ads' },
+  { id: 'payment', label: 'Payment', tip: MEASURE_TIPS.payment, group: 'PnL' },
+  { id: 'storage_cost', label: 'Storage Cost', tip: 'FBA+AWD monthly storage fees (avg inventory × cubic feet × seasonal rate)', group: 'PnL', defaultVisible: true },
   { id: 'ads_units', label: 'Ads Units', tip: 'Units sold attributed to ads campaigns', group: 'Ads', defaultVisible: false },
   { id: 'net_profit', label: 'Net Profit', tip: MEASURE_TIPS.net_profit, group: 'PnL' },
   { id: 'np_per_unit', label: 'NP/Unit', tip: 'Net Profit divided by total units sold — your north-star metric', group: 'PnL' },
   { id: 'net_roas', label: 'Net ROAS', tip: MEASURE_TIPS.net_roas, group: 'Ads' },
   { id: 'ads_roas', label: 'Ads ROAS', tip: 'Ads Sales / Ads Spend — gross advertising return', group: 'Ads', defaultVisible: false },
   { id: 'tacos', label: 'TACoS', tip: 'Total Ads Cost of Sales — Ads Spend / Total Sales — measures ad dependency', group: 'Ads' },
+  { id: 'pct_ads_spend', label: '% Total Ads Spend', tip: 'Percentage of total ads spend', group: 'Ads', defaultVisible: true },
+  { id: 'pct_net_profit', label: '% Total Net Profit', tip: 'Percentage of total net profit', group: 'PnL', defaultVisible: true },
   { id: 'ad_orders', label: 'Ads Orders', tip: 'Orders attributed to ads', group: 'Ads', defaultVisible: false },
   { id: 'units', label: 'Units', tip: 'Total units sold (COGS / cost per unit)', group: 'PnL', defaultVisible: false },
   { id: 'orders', label: 'Total Orders', tip: MEASURE_TIPS.orders, group: 'SQP' },
@@ -47,6 +51,19 @@ const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'fba_referral', label: 'FBA Referral', tip: 'FBA referral fee per unit (from DIM_COSTS_HISTORY)', group: 'PnL', defaultVisible: false },
   { id: 'cost_of_goods', label: 'COGS/Unit', tip: 'Cost of goods per unit (from DIM_COSTS_HISTORY)', group: 'PnL', defaultVisible: false },
   { id: 'shipping_cost_per_unit', label: 'Shipping/Unit', tip: 'Shipping cost per unit (from DIM_COSTS_HISTORY)', group: 'PnL', defaultVisible: false },
+  { id: 'fba_stock_qty', label: 'FBA Stock', tip: 'Current sellable inventory in FBA', group: 'Supply Chain', defaultVisible: true },
+  { id: 'awd_stock_qty', label: 'AWD Stock', tip: 'Current inventory in AWD', group: 'Supply Chain', defaultVisible: true },
+  { id: 'days_of_coverage', label: 'Days Cover', tip: 'Days of sellable inventory coverage at current velocity (FBA+AWD stock ÷ daily units sold)', group: 'Supply Chain', defaultVisible: true },
+  { id: 'fba_days_of_coverage', label: 'Days Cover (FBA)', tip: 'Days of FBA inventory coverage at current velocity', group: 'Supply Chain', defaultVisible: true },
+  { id: 'awd_days_of_coverage', label: 'Days Cover (AWD)', tip: 'Days of AWD inventory coverage at current velocity', group: 'Supply Chain', defaultVisible: true },
+  { id: 'days_next_shipment', label: 'Days Next Ship', tip: 'Days until next pending shipment arrives', group: 'Supply Chain', defaultVisible: true },
+  { id: 'qty_next_shipment', label: 'Qty Next Ship', tip: 'Quantity in next pending shipment', group: 'Supply Chain', defaultVisible: true },
+  { id: 'last_30d_sold', label: 'Last 30d Sold', tip: 'Actual sales units in the last 30 days', group: 'Supply Chain', defaultVisible: true },
+  { id: 'next_30d_planned', label: 'Next 30d Planned', tip: 'Planned demand for the next 30 days', group: 'Supply Chain', defaultVisible: true },
+  { id: 'next_31_60d_planned', label: 'Next 31-60d Planned', tip: 'Planned demand for days 31-60', group: 'Supply Chain', defaultVisible: true },
+  { id: 'next_61_90d_planned', label: 'Next 61-90d Planned', tip: 'Planned demand for days 61-90', group: 'Supply Chain', defaultVisible: true },
+  { id: 'awd_min_defined', label: 'AWD Min (Defined)', tip: 'AWD target min system (and approved)', group: 'Supply Chain', defaultVisible: true },
+  { id: 'awd_max_defined', label: 'AWD Max (Defined)', tip: 'AWD target max system (and approved)', group: 'Supply Chain', defaultVisible: true },
 ];
 const AVG_MEASURES = new Set<TrendMeasure>(['net_roas', 'organic_pct']);
 const STAGE_LABELS_SHORT: Record<string, string> = { READINESS: 'Readiness', PRE_PEAK: 'Pre Peak', PRE_PEAK_BOOST: 'Boost', PEAK: 'Peak', POST_PEAK: 'Post Peak' };
@@ -71,11 +88,13 @@ function getChangesStatus(d: { sd: number; cd: number; pd: number; roasDelta: nu
 export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: string, f?: FamilyName) => void }) {
   const { filters, setFilter } = useFilters();
   const periodMode = filters.periodMode;
-  const [selectedMeasures, setSelectedMeasures] = useState<Set<TrendMeasure>>(new Set(['net_profit']));
+  const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
+  const [selectedMeasures, setSelectedMeasures] = useState<Set<TrendMeasure>>(new Set(['sales', 'ad_cost', 'net_profit', 'net_roas']));
+  const [approvedAwds, setApprovedAwds] = useState<Set<string>>(new Set());
   const [expandedFamily, setExpandedFamily] = useState<FamilyName | null>(null);
   const [familyCols, setFamilyCols] = useMeasureSelection('home_family', FAMILY_TABLE_COLUMNS);
   const visibleFamilyCols = useMemo(() => FAMILY_TABLE_COLUMNS.filter(c => familyCols.has(c.id)), [familyCols]);
-  const urgentActions = useMemo(() => (data.actions || []).filter(a => a.action === 'REDUCE BID' || a.action === 'NEGATE').length, [data.actions]);
+  const urgentActions = useMemo(() => (data.actions || []).filter(a => a.action === 'REDUCE_BID' || a.action === 'NEGATE_TERM').length, [data.actions]);
 
   const toggleMeasure = (m: TrendMeasure) => {
     setSelectedMeasures(prev => {
@@ -84,6 +103,22 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       else next.add(m);
       return next;
     });
+  };
+
+  const handleApproveAwd = async (asin: string, minUnits: number, maxUnits: number) => {
+    try {
+      const res = await fetch('/api/awd-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asin, min_units: minUnits, max_units: maxUnits }),
+      });
+      if (!res.ok) throw new Error('Failed to approve AWD settings');
+      // Update local state instantly without reloading
+      setApprovedAwds(prev => new Set(prev).add(asin));
+    } catch (e) {
+      console.error('AWD Approval error', e);
+      alert('Failed to approve AWD target.');
+    }
   };
 
   const pk = data.peak?.[0] ?? null;
@@ -159,6 +194,11 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       if (t._cnt > 0) { t.roas /= t._cnt; t.orgP /= t._cnt; }
       return t;
     };
+    const filterForPeriod = (rDate: string, targetDate: string) => {
+      if (!rDate || !targetDate) return false;
+      if (filters.periodType !== 'cumulative') return rDate === targetDate;
+      return rDate.slice(0, 4) === targetDate.slice(0, 4) && rDate <= targetDate;
+    };
 
     if (periodMode === 'weeks') {
       const wt = filteredWeekly;
@@ -168,17 +208,12 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       if (filters.specificPeriod && allWeeksExtended.includes(filters.specificPeriod)) {
         curWeek = filters.specificPeriod;
       } else {
-        // Default: second-to-last period (skip incomplete latest)
-        const latestSqp = latestSqpWeek(data.sqp_weekly || []);
-        const adsLatest = adsPeriodKeys.weeks.length ? adsPeriodKeys.weeks[adsPeriodKeys.weeks.length - 1] : null;
-        const defaultLatest = latestSqp ?? adsLatest ?? (allWeeksExtended.length ? allWeeksExtended[allWeeksExtended.length - 1] : '');
-        const defaultIdx = allWeeksExtended.indexOf(defaultLatest);
-        curWeek = defaultIdx > 0 ? allWeeksExtended[defaultIdx - 1] : defaultLatest;
+        curWeek = allWeeks.length ? allWeeks[allWeeks.length - 1] : (allWeeksExtended.length ? allWeeksExtended[allWeeksExtended.length - 1] : '');
       }
       const curIdx = allWeeksExtended.indexOf(curWeek);
       const prvWeek = curIdx > 0 ? allWeeksExtended[curIdx - 1] : '';
-      const cur = agg(wt.filter(r => r.week_start === curWeek), 'weeks', curWeek);
-      const prv = prvWeek ? agg(wt.filter(r => r.week_start === prvWeek), 'weeks', prvWeek) : null;
+      const cur = agg(wt.filter(r => filterForPeriod(r.week_start || '', curWeek)), 'weeks', curWeek);
+      const prv = prvWeek ? agg(wt.filter(r => filterForPeriod(r.week_start || '', prvWeek)), 'weeks', prvWeek) : null;
       return { totals: cur, prevTotals: prv, kpiWeek: curWeek, kpiPrevWeek: prvWeek, kpiPeriodLabel: curWeek ? weekRangeLabel(curWeek) : '' };
     }
 
@@ -187,71 +222,64 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const allMonths = [...new Set([...mt.map(r => (r.month_start || '').slice(0, 7)), ...adsPeriodKeys.months])].filter(Boolean).sort();
       const keep = new Set(getPeriodsToInclude(filters.specificPeriod, 'month', allMonths, 2));
       const periods = [...keep].sort();
-      const curPeriod = periods[periods.length - 1] || '';
+      const curPeriod = (filters.specificPeriod && allMonths.includes(filters.specificPeriod) ? filters.specificPeriod : null) || (filteredMonthly.length ? [...new Set(filteredMonthly.map(r => (r.month_start || '').slice(0, 7)))].sort().pop() : '') || periods[periods.length - 1] || '';
       const prvPeriod = periods.length >= 2 ? periods[periods.length - 2] : '';
-      const cur = agg(mt.filter(r => (r.month_start || '').slice(0, 7) === curPeriod), 'month', curPeriod);
-      const prv = prvPeriod ? agg(mt.filter(r => (r.month_start || '').slice(0, 7) === prvPeriod), 'month', prvPeriod) : null;
+      const cur = agg(mt.filter(r => filterForPeriod((r.month_start || '').slice(0, 7), curPeriod)), 'month', curPeriod);
+      const prv = prvPeriod ? agg(mt.filter(r => filterForPeriod((r.month_start || '').slice(0, 7), prvPeriod)), 'month', prvPeriod) : null;
       return { totals: cur, prevTotals: prv, kpiWeek: curPeriod, kpiPrevWeek: prvPeriod, kpiPeriodLabel: curPeriod };
     }
 
-    // periodMode === 'year'
+    if (periodMode === 'quarter') {
+      const mt = filteredMonthly;
+      const allQuarters = [...new Set(mt.map(r => {
+        const ms = r.month_start || '';
+        const m = parseInt(ms.slice(5, 7), 10);
+        const q = Math.ceil(m / 3);
+        return `${ms.slice(0, 4)}-Q${q}`;
+      }))].filter(Boolean).sort();
+      const keep = new Set(getPeriodsToInclude(filters.specificPeriod, 'quarter', allQuarters, 2));
+      const quarters = [...keep].sort();
+      const curQuarter = (filters.specificPeriod && allQuarters.includes(filters.specificPeriod) ? filters.specificPeriod : null) || (filteredMonthly.length ? [...new Set(filteredMonthly.map(r => { const m = parseInt((r.month_start || '').slice(5, 7), 10); return `${(r.month_start || '').slice(0, 4)}-Q${Math.ceil(m / 3)}`; }))].filter(Boolean).sort().pop() : '') || quarters[quarters.length - 1] || '';
+      const prvQuarter = quarters.length >= 2 ? quarters[quarters.length - 2] : '';
+      const mapQ = (r: TrendRow) => {
+        const ms = r.month_start || '';
+        const m = parseInt(ms.slice(5, 7), 10);
+        return `${ms.slice(0, 4)}-Q${Math.ceil(m / 3)}`;
+      };
+      const cur = agg(mt.filter(r => filterForPeriod(mapQ(r), curQuarter)), 'quarter', curQuarter);
+      const prv = prvQuarter ? agg(mt.filter(r => filterForPeriod(mapQ(r), prvQuarter)), 'quarter', prvQuarter) : null;
+      return { totals: cur, prevTotals: prv, kpiWeek: curQuarter, kpiPrevWeek: prvQuarter, kpiPeriodLabel: curQuarter };
+    }
+
     const mt = filteredMonthly;
     const allYears = [...new Set([...mt.map(r => (r.month_start || '').slice(0, 4)), ...adsPeriodKeys.years])].filter(Boolean).sort();
     const keep = new Set(getPeriodsToInclude(filters.specificPeriod, 'year', allYears, 2));
     const years = [...keep].sort();
     const curYear = years[years.length - 1] || '';
     const prvYear = years.length >= 2 ? years[years.length - 2] : '';
-    const cur = agg(mt.filter(r => (r.month_start || '').slice(0, 4) === curYear), 'year', curYear);
-    const prv = prvYear ? agg(mt.filter(r => (r.month_start || '').slice(0, 4) === prvYear), 'year', prvYear) : null;
+    const cur = agg(mt.filter(r => filterForPeriod((r.month_start || '').slice(0, 4), curYear)), 'year', curYear);
+    const prv = prvYear ? agg(mt.filter(r => filterForPeriod((r.month_start || '').slice(0, 4), prvYear)), 'year', prvYear) : null;
     return { totals: cur, prevTotals: prv, kpiWeek: curYear, kpiPrevWeek: prvYear, kpiPeriodLabel: curYear };
-  }, [filteredWeekly, filteredMonthly, sqpWeeks, adsPeriodKeys, filters.specificPeriod, periodMode, data.sqp_weekly]);
+  }, [filteredWeekly, filteredMonthly, sqpWeeks, adsPeriodKeys, filters.specificPeriod, periodMode, data.sqp_weekly, filters.periodType]);
 
-  // Ads Spend from ads_7d only (Cube Ads.spend) — same period + filters as Ads page. When no family filter, restrict to product-family campaigns so scope matches sales/cogs.
   const { effectiveTotals, effectivePrevTotals } = useMemo(() => {
-    let ads7d: Ads7dRow[] = data.ads_7d_summary || [];
-    if (famMatch) ads7d = ads7d.filter(r => famMatch.some(p => (r.campaign_name || '').toLowerCase().includes(p)));
-    else ads7d = ads7d.filter(r => ALL_FAMILY_PATTERNS.some(p => (r.campaign_name || '').toLowerCase().includes(p)));
-    if (expCampaignIds) {
-      ads7d = ads7d.filter(r => expCampaignIds.has(r.campaign_id));
-    }
-    if (filters.keyword) {
-      const campaignIdsWithKeyword = new Set(
-        (data.campaign_search_terms || []).filter(r => r.search_term === filters.keyword).map(r => r.campaign_id)
-      );
-      ads7d = ads7d.filter(r => campaignIdsWithKeyword.has(r.campaign_id));
-    }
-    // Apply seasonality filter to ads data too
-    if (filters.seasonality && pk) {
-      ads7d = ads7d.filter(r => {
-        const d = r.date || r.week_start || '';
-        return d ? getSeasonality(d, pk) === filters.seasonality : false;
-      });
-    }
-    const useDateFilter = periodMode !== 'weeks' && ads7d.some(r => r.date);
-    const matchPeriod = (r: Ads7dRow, pk: string) => {
-      if (useDateFilter) {
-        const d = r.date || '';
-        return periodMode === 'month' ? d.slice(0, 7) === pk : d.slice(0, 4) === pk;
-      }
-      return periodKey(r.week_start || '', periodMode) === pk;
-    };
-    const curRows = kpiWeek ? ads7d.filter(r => matchPeriod(r, kpiWeek)) : [];
-    const prevRows = kpiPrevWeek ? ads7d.filter(r => matchPeriod(r, kpiPrevWeek)) : [];
-    const coFromAds = curRows.reduce((s, r) => s + (r.spend || 0), 0);
-    const prevCoFromAds = prevRows.reduce((s, r) => s + (r.spend || 0), 0);
-    const npFromAds = totals.sl - totals.cg - coFromAds;
-    const prevNpFromAds = prevTotals ? prevTotals.sl - prevTotals.cg - prevCoFromAds : 0;
     return {
-      effectiveTotals: { ...totals, co: coFromAds, np: npFromAds },
-      effectivePrevTotals: prevTotals ? { ...prevTotals, co: prevCoFromAds, np: prevNpFromAds } : null,
+      effectiveTotals: totals,
+      effectivePrevTotals: prevTotals,
     };
-  }, [data.ads_7d_summary, data.campaign_search_terms, kpiWeek, kpiPrevWeek, periodMode, totals, prevTotals, famMatch, expCampaignIds, filters.keyword, filters.seasonality, pk]);
+  }, [totals, prevTotals]);
 
-  /** Ads spend per period (for Trend, miniTrend, kpiSparkline) — same filters as effectiveTotals. When no family filter, restrict to product-family campaigns. */
   const adsSpendByPeriod = useMemo(() => {
     let ads7d: Ads7dRow[] = data.ads_7d_summary || [];
-    if (famMatch) ads7d = ads7d.filter(r => famMatch.some(p => (r.campaign_name || '').toLowerCase().includes(p)));
-    else ads7d = ads7d.filter(r => ALL_FAMILY_PATTERNS.some(p => (r.campaign_name || '').toLowerCase().includes(p)));
+    if (filters.product) {
+      const productInfo = (data.products || []).find(p => p.asin === filters.product);
+      const productName = productInfo?.product_short_name;
+      if (productName) ads7d = ads7d.filter(r => r.product_short_name === productName);
+    } else if (famMatch) {
+      ads7d = ads7d.filter(r => famMatch.some(p => (r.campaign_name || '').toLowerCase().includes(p)));
+    } else {
+      ads7d = ads7d.filter(r => ALL_FAMILY_PATTERNS.some(p => (r.campaign_name || '').toLowerCase().includes(p)));
+    }
     if (expCampaignIds) ads7d = ads7d.filter(r => expCampaignIds.has(r.campaign_id));
     if (filters.keyword) {
       const ids = new Set((data.campaign_search_terms || []).filter(r => r.search_term === filters.keyword).map(r => r.campaign_id));
@@ -261,20 +289,19 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       ads7d = ads7d.filter(r => { const d = r.date || r.week_start || ''; return d ? getSeasonality(d, pk) === filters.seasonality : false; });
     }
     const useDateFilter = periodMode !== 'weeks' && ads7d.some(r => r.date);
-    const getPk = (r: Ads7dRow) => useDateFilter
-      ? (r.date || '').slice(0, periodMode === 'month' ? 7 : 4)
-      : periodKey(r.week_start || '', periodMode);
+    const getPk = (r: Ads7dRow) => {
+      if (useDateFilter) return r.date ? periodKey(r.date, periodMode) : '';
+      const ws = r.week_start || '';
+      if (!ws) return '';
+      if (periodMode === 'month' || periodMode === 'quarter') return periodKey(addDays(ws, 3), periodMode);
+      return periodKey(ws, periodMode);
+    };
     const map: Record<string, number> = {};
     ads7d.forEach(r => { const pk = getPk(r); if (pk) map[pk] = (map[pk] || 0) + (r.spend || 0); });
     return map;
-  }, [data.ads_7d_summary, data.campaign_search_terms, periodMode, famMatch, expCampaignIds, filters.keyword, filters.seasonality, pk]);
+  }, [data.ads_7d_summary, data.products, data.campaign_search_terms, periodMode, famMatch, expCampaignIds, filters.product, filters.keyword, filters.seasonality, pk]);
 
-  /** Ads spend per family per period (for Per Product Family) — campaign_name matches family patterns */
-  /** Ads spend/sales/units per product per period.
-   *  Uses ads_7d_summary (campaign-level, all campaigns) enriched with product mapping from ads_7d.
-   *  Keyed as `productShortName|period`. Family-level helpers derived below. */
   const adsDataByProductAndPeriod = useMemo(() => {
-    // Build campaignId → productShortName map from detailed ads_7d (has Product.productShortName)
     const campaignToProduct: Record<string, string> = {};
     const campaignIdToName: Record<string, string> = {};
     for (const r of (data.ads_7d || [])) {
@@ -298,17 +325,22 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     if (filters.product) {
       const productInfo = (data.products || []).find(p => p.asin === filters.product);
       const productName = productInfo?.product_short_name;
-      if (productName) ads7d = ads7d.filter(r => campaignToProduct[r.campaign_id] === productName);
+      if (productName) ads7d = ads7d.filter(r => r.product_short_name === productName);
     }
     const useDateFilter = periodMode !== 'weeks' && ads7d.some(r => r.date);
-    const getPk = (r: Ads7dRow) => useDateFilter ? (r.date || '').slice(0, periodMode === 'month' ? 7 : 4) : periodKey(r.week_start || '', periodMode);
+    const getPk = (r: Ads7dRow) => {
+      if (useDateFilter) return r.date ? periodKey(r.date, periodMode) : '';
+      const ws = r.week_start || '';
+      if (!ws) return '';
+      if (periodMode === 'month' || periodMode === 'quarter') return periodKey(addDays(ws, 3), periodMode);
+      return periodKey(ws, periodMode);
+    };
     const spendMap: Record<string, number> = {};
     const salesMap: Record<string, number> = {};
     const unitsMap: Record<string, number> = {};
     ads7d.forEach(r => {
       let name = r.product_short_name || campaignToProduct[r.campaign_id];
       const campName = String(r.campaign_name || campaignIdToName[r.campaign_id] || '');
-      // Fallback: Infer family from campaign name if product mapping is missing
       if (!name && campName) {
         if (experimentMatchesFamily(campName, 'Lollibox')) name = 'Lollibox';
         else if (experimentMatchesFamily(campName, 'LolliME')) name = 'LolliME';
@@ -326,7 +358,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     return { spend: spendMap, sales: salesMap, units: unitsMap };
   }, [data.ads_7d_summary, data.ads_7d, data.products, data.campaign_search_terms, periodMode, expCampaignIds, filters.keyword, filters.seasonality, filters.product, pk]);
 
-  // Product→Family mapping for aggregating product-level ads to family level
   const productToFamily = useMemo(() => {
     const map: Record<string, FamilyName> = {};
     for (const p of (data.products || [])) {
@@ -336,8 +367,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     return map;
   }, [data.products]);
 
-  // Derive family-level ads maps by summing product-level data (backward compat for consumers)
-  const { adsSpendByFamilyAndPeriod, adsSalesByFamilyAndPeriod, adsUnitsByFamilyAndPeriod } = useMemo(() => {
+  const { adsSpendByFamilyAndPeriod } = useMemo(() => {
     const spendMap: Record<string, number> = {};
     const salesMap: Record<string, number> = {};
     const unitsMap: Record<string, number> = {};
@@ -374,20 +404,36 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   const acts = data.actions || [];
   const grouped = useMemo(() => {
     const g: Record<string, typeof acts> = { urgent: [], growth: [], experiment: [], fix: [] };
-    acts.forEach(a => { const m = ACTION_META[a.action]; (g[m?.group || 'experiment'] || g.experiment).push(a); });
-    return g;
-  }, [acts]);
+    
+    let filteredActs = acts;
+    if (filters.family) {
+      filteredActs = filteredActs.filter(a => {
+        if ((a as any).parent_name && (a as any).parent_name === filters.family) return true;
+        const pStr = (a as any).product_short_name || '';
+        if (experimentMatchesFamily(pStr, filters.family as any)) return true;
+        const famStr = (a as any).experiment_name || (a as any).campaign_name || '';
+        return experimentMatchesFamily(famStr, filters.family as any);
+      });
+    }
+    if (filters.product) {
+      filteredActs = filteredActs.filter(a => {
+        const pStr = (a as any).product_short_name || (a as any).asin || (a as any).experiment_name || (a as any).campaign_name || '';
+        return pStr.toLowerCase().includes(filters.product!.toLowerCase());
+      });
+    }
 
-  // Trend chart data — aggregate across all families, supports multiple measures
+    filteredActs.forEach(a => { const m = ACTION_META[a.action]; (g[m?.group || 'experiment'] || g.experiment).push(a); });
+    return g;
+  }, [acts, filters.family, filters.product]);
+
   const activeMeasures = useMemo(() => [...selectedMeasures], [selectedMeasures]);
   const primaryMeta = MEASURE_META[activeMeasures[0]];
 
-  // Compute effective period trend based on periodType
   const effectivePeriodTrend = useMemo(() => {
     if (filters.periodType === 'cumulative') {
-      // Month: full year (12 months); Weeks: use periodTrend (default 4)
       if (periodMode === 'month') return 12;
-      return filters.periodTrend; // weeks: use chosen period amount
+      if (periodMode === 'quarter') return 4;
+      return filters.periodTrend;
     }
     if (filters.periodType === 'peak' && pk?.pre_peak_start && pk?.peak_end) {
       const preStart = new Date(pk.pre_peak_start + 'T00:00:00');
@@ -396,21 +442,75 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const diffWeeks = Math.max(1, Math.ceil(diffMs / (7 * 86400000)));
       if (periodMode === 'weeks') return diffWeeks;
       if (periodMode === 'month') return Math.max(1, Math.ceil(diffWeeks / 4));
+      if (periodMode === 'quarter') return Math.max(1, Math.ceil(diffWeeks / 13));
       return 1;
     }
     return filters.periodTrend;
   }, [filters.periodType, filters.periodTrend, periodMode, pk]);
 
+  const amazonFeeRate = useMemo(() => {
+    const products = data.products || [];
+    const asinRows = data.weekly_trends_by_asin || [];
+    const latestWeek = asinRows.length ? asinRows.reduce((best, r) => (r.week_start || '') > best ? (r.week_start || '') : best, '') : '';
+    const latestAsinData = latestWeek ? asinRows.filter(r => r.week_start === latestWeek) : [];
+    let totalUnits = 0;
+    let totalFees = 0;
+    for (const ar of latestAsinData) {
+      const asin = (ar as { asin?: string }).asin || '';
+      const prod = products.find(p => p.asin === asin);
+      const u = ar.units || 0;
+      if (prod && u > 0) {
+        totalUnits += u;
+        totalFees += u * (prod.fba_cost ?? 0);
+      }
+    }
+    return totalUnits > 0 ? totalFees / totalUnits : 0;
+  }, [data.products, data.weekly_trends_by_asin]);
+
+  const storageCostLookup = useMemo(() => {
+    const costs = data.storage_costs || [];
+    const byWeek: Record<string, number> = {};
+    const byFamilyWeek: Record<string, number> = {};
+    const byAsinWeek: Record<string, number> = {};
+    for (const c of costs) {
+      const wk = c.week_start_date || '';
+      byWeek[wk] = (byWeek[wk] || 0) + c.weekly_storage_cost;
+      const fk = `${c.product_type}|${wk}`;
+      byFamilyWeek[fk] = (byFamilyWeek[fk] || 0) + c.weekly_storage_cost;
+      if (c.asin) {
+        const akWeek = `${c.asin}|${wk}`;
+        byAsinWeek[akWeek] = (byAsinWeek[akWeek] || 0) + c.weekly_storage_cost;
+      }
+    }
+    const byMonth: Record<string, number> = {};
+    const byFamilyMonth: Record<string, number> = {};
+    const byAsinMonth: Record<string, number> = {};
+    for (const c of costs) {
+      const mk = (c.week_start_date || '').slice(0, 7);
+      if (!mk) continue;
+      byMonth[mk] = (byMonth[mk] || 0) + c.weekly_storage_cost;
+      const fk = `${c.product_type}|${mk}`;
+      byFamilyMonth[fk] = (byFamilyMonth[fk] || 0) + c.weekly_storage_cost;
+      if (c.asin) {
+        const akMonth = `${c.asin}|${mk}`;
+        byAsinMonth[akMonth] = (byAsinMonth[akMonth] || 0) + c.weekly_storage_cost;
+      }
+    }
+    return { byWeek, byMonth, byFamilyWeek, byFamilyMonth, byAsinWeek, byAsinMonth };
+  }, [data.storage_costs]);
+
   const trendData = useMemo(() => {
     type BucketVal = Record<TrendMeasure, { sum: number; count: number }>;
-    const emptyBucket = (): BucketVal => Object.fromEntries(ALL_MEASURES.map(m => [m, { sum: 0, count: 0 }])) as unknown as BucketVal;
+    type Bucket = BucketVal & { __units: number };
+    const emptyBucket = (): Bucket => ({ ...Object.fromEntries(ALL_MEASURES.map(m => [m, { sum: 0, count: 0 }])) as unknown as BucketVal, __units: 0 });
 
-    const addRow = (bucket: BucketVal, row: TrendRow) => {
+    const addRow = (bucket: Bucket, row: TrendRow) => {
       for (const m of ALL_MEASURES) {
         const v = row[m as keyof TrendRow];
         bucket[m].sum += (typeof v === 'number' ? v : 0);
         bucket[m].count += 1;
       }
+      bucket.__units += (row.units ?? row.orders ?? 0);
     };
 
     const resolve = (bucket: BucketVal): Record<string, number> => {
@@ -425,7 +525,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     const pt = effectivePeriodTrend;
     let rawData: { label: string; hasSqp: boolean; ad_cost: number; net_profit: number; [k: string]: unknown }[] = [];
     if (periodMode === 'weeks') {
-      const byWeek: Record<string, BucketVal> = {};
+      const byWeek: Record<string, Bucket> = {};
       filteredWeekly.forEach(w => {
         const k = w.week_start || '';
         if (!byWeek[k]) byWeek[k] = emptyBucket();
@@ -434,12 +534,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const weeks = Object.keys(byWeek).sort();
       const keep = new Set(getPeriodsToInclude(filters.specificPeriod, periodMode, weeks, pt));
       const entries = Object.entries(byWeek).filter(([w]) => keep.has(w)).sort(([a], [b]) => a.localeCompare(b));
-      // Helper: find nearest week ~52 weeks back (±7 days tolerance)
       const findLyWeek = (w: string): string | null => {
         const target = new Date(w + 'T00:00:00');
-        target.setDate(target.getDate() - 364); // ~52 weeks
+        target.setDate(target.getDate() - 364);
         const targetTime = target.getTime();
-        // find nearest week in allWeeks within ±7 days
         let best: string | null = null;
         let bestDiff = Infinity;
         for (const wk of weeks) {
@@ -450,7 +548,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       };
       const rawWeeks = entries.map(([w, d]) => {
         const r = resolve(d);
-        const co = adsSpendByPeriod[w] ?? 0;
+        const co = d?.ad_cost?.sum ?? 0;
         const sl = d?.sales?.sum ?? 0;
         const cg = d?.cogs?.sum ?? 0;
         const lyW = findLyWeek(w);
@@ -460,39 +558,56 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           for (const m of activeMeasures) {
             lyResolved[`ly_${m}`] = AVG_MEASURES.has(m) ? (lyD[m].count ? lyD[m].sum / lyD[m].count : 0) : lyD[m].sum;
           }
-          const lyCo = adsSpendByPeriod[lyW] ?? 0;
+          const lyCo = lyD.ad_cost?.sum ?? 0;
           const lySl = lyD.sales?.sum ?? 0;
           const lyCg = lyD.cogs?.sum ?? 0;
           lyResolved.ly_ad_cost = lyCo;
           lyResolved.ly_net_profit = lySl - lyCg - lyCo;
         }
         return {
-          label: weekRangeLabel(w),
+          label: weekRangeLabelCapped(w, perfMaxDate),
           weekKey: w,
           hasSqp: sqpWeeks.has(w),
-          ...r, ad_cost: co, net_profit: sl - cg - co,
+          ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: sl - cg - co,
+          net_roas: co ? (sl - cg) / co : 0,
+          payment: 0,
           ...lyResolved,
         };
       });
+      for (let i = 0; i < rawWeeks.length; i++) {
+        const curWeekKey = entries[i][0];
+        const curIdx = weeks.indexOf(curWeekKey);
+        const prev2WeekKey = curIdx > 1 ? weeks[curIdx - 2] : '';
+        const prev2Bucket = prev2WeekKey ? byWeek[prev2WeekKey] : null;
+        const prev2Sales = prev2Bucket?.sales?.sum ?? 0;
+        const curAdCost = entries[i][1]?.ad_cost?.sum ?? 0;
+        const prev2Units = prev2Bucket?.__units ?? 0;
+        const curStorage = curWeekKey ? (storageCostLookup.byWeek[curWeekKey] ?? 0) : 0;
+        rawWeeks[i].payment = prev2Sales - curAdCost - (prev2Units * amazonFeeRate) - curStorage;
+        (rawWeeks[i] as Record<string, unknown>).storage_cost = curStorage;
+      }
       rawData = rawWeeks;
     } else if (periodMode === 'month') {
-      const byMonth: Record<string, BucketVal> = {};
+      const byMonth: Record<string, Bucket> = {};
       filteredMonthly.forEach(r => {
         const k = (r.month_start || '').slice(0, 7);
         if (!byMonth[k]) byMonth[k] = emptyBucket();
         addRow(byMonth[k], r);
       });
 
-      // For cumulative: full calendar year (Jan-Dec); for peak: 1 month before peak to peak end
       if (filters.periodType === 'cumulative' || filters.periodType === 'peak') {
         const allMonths = Object.keys(byMonth).sort();
-        const latestMonth = allMonths[allMonths.length - 1] || '';
-        const curYear = latestMonth.slice(0, 4);
+        const curYear = filters.specificPeriod
+          ? filters.specificPeriod.slice(0, 4)
+          : (allMonths[allMonths.length - 1] || '').slice(0, 4);
         const lyYear = String(parseInt(curYear, 10) - 1);
+        const cyMonths = allMonths.filter(m => m.startsWith(curYear));
+        const cutoffMonth = filters.specificPeriod
+          ? (filters.specificPeriod.length >= 7 ? filters.specificPeriod.slice(0, 7) : `${curYear}-12`)
+          : (cyMonths.length ? cyMonths[cyMonths.length - 1].slice(0, 7) : `${curYear}-12`);
 
         let monthSlots: string[];
         if (filters.periodType === 'peak' && pk?.pre_peak_start && pk?.peak_end) {
-          // 1 month before peak start to peak end
           const preStart = new Date(pk.pre_peak_start + 'T00:00:00');
           preStart.setMonth(preStart.getMonth() - 1);
           const peakEnd = new Date(pk.peak_end + 'T00:00:00');
@@ -505,40 +620,98 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
             cursor.setMonth(cursor.getMonth() + 1);
           }
         } else {
-          // Full calendar year: Jan to Dec
           monthSlots = Array.from({ length: 12 }, (_, i) => `${curYear}-${String(i + 1).padStart(2, '0')}`);
         }
 
         const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        rawData = monthSlots.map(m => {
-          const d = byMonth[m] ?? emptyBucket();
-          const r = resolve(d);
-          const co = adsSpendByPeriod[m] ?? 0;
-          const sl = d.sales?.sum ?? 0;
-          const cg = d.cogs?.sum ?? 0;
-          // LY data
-          const lyM = lyYear + m.slice(4); // same month, previous year
+        rawData = monthSlots.map((m, idx) => {
+          const mKey7 = m.slice(0, 7);
+          const isCyActive = mKey7 <= cutoffMonth;
+
+          let cyValues: Record<string, unknown> = {};
+          if (isCyActive) {
+            const d = byMonth[m] ?? emptyBucket();
+            cyValues = resolve(d);
+            const co = d.ad_cost?.sum ?? 0;
+            const sl = d.sales?.sum ?? 0;
+            const cg = d.cogs?.sum ?? 0;
+            cyValues.sales = sl;
+            cyValues.cogs = cg;
+            cyValues.ad_cost = co;
+            cyValues.net_profit = sl - cg - co;
+            cyValues.net_roas = co ? (sl - cg) / co : 0;
+            const prevMonth = idx > 0 ? monthSlots[idx - 1] : null;
+            const prevSales = prevMonth ? (byMonth[prevMonth]?.sales?.sum ?? 0) : 0;
+            const prevUnits = prevMonth ? (byMonth[prevMonth]?.__units ?? 0) : 0;
+            const prevAdCost = prevMonth ? (byMonth[prevMonth]?.ad_cost?.sum ?? 0) : 0;
+            const curUnits = d.__units ?? 0;
+            const curMonthKey = m.slice(0, 7);
+            const curStorage = curMonthKey ? (storageCostLookup.byMonth[curMonthKey] ?? 0) : 0;
+            const prevNet = prevSales - prevAdCost - (prevUnits * amazonFeeRate);
+            const curNet = sl - co - (curUnits * amazonFeeRate);
+            cyValues.payment = 0.5 * prevNet + 0.5 * curNet - curStorage;
+            cyValues.storage_cost = curStorage;
+          } else {
+            for (const mk of activeMeasures) cyValues[mk] = null;
+            cyValues.ad_cost = null;
+            cyValues.net_profit = null;
+          }
+
+          const lyM = lyYear + m.slice(4);
           const lyD = byMonth[lyM] ?? emptyBucket();
           const lyResolved: Record<string, number> = {};
-          for (const mKey of activeMeasures) {
-            lyResolved[`ly_${mKey}`] = AVG_MEASURES.has(mKey) ? (lyD[mKey].count ? lyD[mKey].sum / lyD[mKey].count : 0) : lyD[mKey].sum;
+          for (const mk of activeMeasures) {
+            lyResolved[`ly_${mk}`] = AVG_MEASURES.has(mk) ? (lyD[mk].count ? lyD[mk].sum / lyD[mk].count : 0) : lyD[mk].sum;
           }
-          const lyCo = adsSpendByPeriod[lyM] ?? 0;
+          const lyCo = lyD.ad_cost?.sum ?? 0;
           const lySl = lyD.sales?.sum ?? 0;
           const lyCg = lyD.cogs?.sum ?? 0;
           lyResolved.ly_ad_cost = lyCo;
           lyResolved.ly_net_profit = lySl - lyCg - lyCo;
+
           const monthIdx = parseInt(m.slice(5), 10) - 1;
-          return { label: MONTH_NAMES[monthIdx] || m, weekKey: m, hasSqp: true, ...r, ad_cost: co, net_profit: sl - cg - co, ...lyResolved };
+          return { label: MONTH_NAMES[monthIdx] || m, weekKey: m, hasSqp: true, ...cyValues, ...lyResolved } as unknown as typeof rawData[0];
         });
       } else {
         const months = Object.keys(byMonth).sort();
         const keep = new Set(getPeriodsToInclude(filters.specificPeriod, periodMode, months, pt));
         const entries = Object.entries(byMonth).filter(([m]) => keep.has(m)).sort(([a], [b]) => a.localeCompare(b));
-        rawData = entries.map(([m, d]) => { const r = resolve(d); const co = adsSpendByPeriod[m] ?? 0; const sl = d.sales?.sum ?? 0; const cg = d.cogs?.sum ?? 0; return { label: m, weekKey: m, hasSqp: true, ...r, ad_cost: co, net_profit: sl - cg - co }; });
+        rawData = entries.map(([m, d]) => { const r = resolve(d); const co = d.ad_cost?.sum ?? 0; const sl = d.sales?.sum ?? 0; const cg = d.cogs?.sum ?? 0; const cu = d.__units ?? 0; const mIdx = months.indexOf(m); const prevMk = mIdx > 0 ? months[mIdx - 1] : ''; const prevBucket = prevMk ? byMonth[prevMk] : null; const prevSales = prevBucket?.sales?.sum ?? 0; const prevUnits = prevBucket?.__units ?? 0; const prevAd = prevBucket?.ad_cost?.sum ?? 0; const curMk = m.slice(0, 7); const curSt = curMk ? (storageCostLookup.byMonth[curMk] ?? 0) : 0; const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate); const curNet = sl - co - (cu * amazonFeeRate); return { label: m, weekKey: m, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: sl - cg - co, net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt }; });
       }
+    } else if (periodMode === 'quarter') {
+      const byQuarter: Record<string, Bucket> = {};
+      filteredMonthly.forEach(r => {
+        const ms = r.month_start || '';
+        const m = parseInt(ms.slice(5, 7), 10);
+        const q = Math.ceil(m / 3);
+        const k = `${ms.slice(0, 4)}-Q${q}`;
+        if (!byQuarter[k]) byQuarter[k] = emptyBucket();
+        addRow(byQuarter[k], r);
+      });
+      const quarters = Object.keys(byQuarter).sort();
+      const keep = new Set(getPeriodsToInclude(filters.specificPeriod, periodMode, quarters, pt));
+      const entries = Object.entries(byQuarter).filter(([q]) => keep.has(q)).sort(([a], [b]) => a.localeCompare(b));
+      rawData = entries.map(([q, d], idx) => {
+        const r = resolve(d);
+        const co = d.ad_cost?.sum ?? 0;
+        const sl = d.sales?.sum ?? 0;
+        const cg = d.cogs?.sum ?? 0;
+        const prevSales = idx > 0 ? (entries[idx - 1][1]?.sales?.sum ?? 0) : 0;
+        const prevUnits = idx > 0 ? (entries[idx - 1][1]?.__units ?? 0) : 0;
+        const prevAd = idx > 0 ? (entries[idx - 1][1]?.ad_cost?.sum ?? 0) : 0;
+        const curUnits = d.__units ?? 0;
+        const [yr, qtr] = q.split('-Q');
+        const mStart = (parseInt(qtr, 10) - 1) * 3 + 1;
+        let curSt = 0;
+        for (let m = 0; m < 3; m++) {
+          curSt += storageCostLookup.byMonth[`${yr}-${String(mStart + m).padStart(2, '0')}`] ?? 0;
+        }
+        const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate);
+        const curNet = sl - co - (curUnits * amazonFeeRate);
+        return { label: q, weekKey: q, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: sl - cg - co, net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
+      });
     } else {
-      const byYear: Record<string, BucketVal> = {};
+      const byYear: Record<string, Bucket> = {};
       filteredMonthly.forEach(r => {
         const y = (r.month_start || '').slice(0, 4);
         if (!byYear[y]) byYear[y] = emptyBucket();
@@ -547,13 +720,31 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const years = Object.keys(byYear).sort();
       const keep = new Set(getPeriodsToInclude(filters.specificPeriod, periodMode, years, pt));
       const entries = Object.entries(byYear).filter(([y]) => keep.has(y)).sort(([a], [b]) => a.localeCompare(b));
-      rawData = entries.map(([y, d]) => { const r = resolve(d); const co = adsSpendByPeriod[y] ?? 0; const sl = d.sales?.sum ?? 0; const cg = d.cogs?.sum ?? 0; return { label: y, hasSqp: true, ...r, ad_cost: co, net_profit: sl - cg - co }; });
+      rawData = entries.map(([y, d], idx) => {
+        const r = resolve(d);
+        const co = d.ad_cost?.sum ?? 0;
+        const sl = d.sales?.sum ?? 0;
+        const cg = d.cogs?.sum ?? 0;
+        const prevSales = idx > 0 ? (entries[idx - 1][1]?.sales?.sum ?? 0) : 0;
+        const prevUnits = idx > 0 ? (entries[idx - 1][1]?.__units ?? 0) : 0;
+        const prevAd = idx > 0 ? (entries[idx - 1][1]?.ad_cost?.sum ?? 0) : 0;
+        const curUnits = d.__units ?? 0;
+        let curSt = 0;
+        for (let m = 1; m <= 12; m++) {
+          curSt += storageCostLookup.byMonth[`${y}-${String(m).padStart(2, '0')}`] ?? 0;
+        }
+        const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate);
+        const curNet = sl - co - (curUnits * amazonFeeRate);
+        return { label: y, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: sl - cg - co, net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
+      });
     }
 
-    // Apply cumulative running-sum if periodType === 'cumulative' or 'peak'
     if ((filters.periodType === 'cumulative' || filters.periodType === 'peak') && rawData.length > 0) {
       const lyKeys = activeMeasures.map(m => `ly_${m}`);
-      const cumulativeKeys = [...activeMeasures as unknown as string[], 'ad_cost', 'net_profit', ...lyKeys, 'ly_ad_cost', 'ly_net_profit'];
+      // Exclude ratio measures from naive summation — they'll be recalculated
+      const RATIO_MEASURES = new Set(['net_roas', 'organic_pct']);
+      const sumMeasures = (activeMeasures as unknown as string[]).filter(m => !RATIO_MEASURES.has(m));
+      const cumulativeKeys = [...sumMeasures, 'ad_cost', 'net_profit', 'sales', 'cogs', ...lyKeys, 'ly_ad_cost', 'ly_net_profit', 'ly_sales', 'ly_cogs'];
       const running: Record<string, number> = {};
       return rawData.map(row => {
         const newRow = { ...row };
@@ -564,23 +755,27 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
             (newRow as Record<string, unknown>)[key] = running[key];
           }
         }
+        // Recalculate ratio measures from running totals
+        const cumSales = running['sales'] ?? 0;
+        const cumCogs = running['cogs'] ?? 0;
+        const cumAdCost = running['ad_cost'] ?? 0;
+        (newRow as Record<string, unknown>)['net_roas'] = cumAdCost ? (cumSales - cumCogs) / cumAdCost : 0;
+        const cumOrders = running['orders'] ?? 0;
+        const cumOrgPWeighted = running['organic_pct'] ?? 0;
+        (newRow as Record<string, unknown>)['organic_pct'] = cumOrders ? cumOrgPWeighted / cumOrders : 0;
         return newRow;
       });
     }
 
     return rawData;
-  }, [filteredWeekly, filteredMonthly, periodMode, activeMeasures, sqpWeeks, filters.specificPeriod, effectivePeriodTrend, adsSpendByPeriod, filters.periodType]);
+  }, [filteredWeekly, filteredMonthly, periodMode, activeMeasures, sqpWeeks, filters.specificPeriod, effectivePeriodTrend, filters.periodType, amazonFeeRate, storageCostLookup, perfMaxDate]);
 
-  // Mini trend data for gauge + 3 cards — periods derived from trendData (header period) so x-axis matches
   const miniTrendData = useMemo(() => {
     if (!trendData.length) return { roasTrend: [], pdTrend: [], profitYoyTrend: [], avgScoreTrend: [] };
-
     const getPeriodKey = (row: (typeof trendData)[0]) =>
       (row as { weekKey?: string }).weekKey || row.label;
-
     const periodKeys = trendData.map(getPeriodKey).filter(Boolean) as string[];
     if (!periodKeys.length) return { roasTrend: [], pdTrend: [], profitYoyTrend: [], avgScoreTrend: [] };
-
     if (periodMode === 'weeks') {
       const byWeek: Record<string, { sl: number; cg: number; co: number }> = {};
       filteredWeekly.forEach(w => {
@@ -588,8 +783,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         if (!byWeek[k]) byWeek[k] = { sl: 0, cg: 0, co: 0 };
         byWeek[k].sl += w.sales || 0;
         byWeek[k].cg += w.cogs || 0;
+        byWeek[k].co += w.ad_cost || 0;
       });
-      periodKeys.forEach(k => { if (!byWeek[k]) byWeek[k] = { sl: 0, cg: 0, co: 0 }; byWeek[k].co = adsSpendByPeriod[k] ?? 0; });
       const entries = periodKeys.map(k => [k, byWeek[k] ?? { sl: 0, cg: 0, co: 0 }] as const);
       const roasTrend = entries.map(([, d]) => d.co ? (d.sl - d.cg) / d.co : 0);
       const pdTrend = entries.map((_, i) => {
@@ -625,8 +820,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         if (!byMonth[k]) byMonth[k] = { sl: 0, cg: 0, co: 0 };
         byMonth[k].sl += r.sales || 0;
         byMonth[k].cg += r.cogs || 0;
+        byMonth[k].co += r.ad_cost || 0;
       });
-      periodKeys.forEach(k => { if (!byMonth[k]) byMonth[k] = { sl: 0, cg: 0, co: 0 }; byMonth[k].co = adsSpendByPeriod[k] ?? 0; });
       const entries = periodKeys.map(k => [k, byMonth[k] ?? { sl: 0, cg: 0, co: 0 }] as const);
       const roasTrend = entries.map(([, d]) => d.co ? (d.sl - d.cg) / d.co : 0);
       const pdTrend = entries.map((_, i) => {
@@ -655,14 +850,42 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       });
       return { roasTrend, pdTrend, profitYoyTrend, avgScoreTrend };
     }
+    if (periodMode === 'quarter') {
+      const byQuarter: Record<string, { sl: number; cg: number; co: number }> = {};
+      filteredMonthly.forEach(r => {
+        const k = periodKey(r.month_start || '', 'quarter');
+        if (!byQuarter[k]) byQuarter[k] = { sl: 0, cg: 0, co: 0 };
+        byQuarter[k].sl += r.sales || 0;
+        byQuarter[k].cg += r.cogs || 0;
+        byQuarter[k].co += r.ad_cost || 0;
+      });
+      const entries = periodKeys.map(k => [k, byQuarter[k] ?? { sl: 0, cg: 0, co: 0 }] as const);
+      const roasTrend = entries.map(([, d]) => d.co ? (d.sl - d.cg) / d.co : 0);
+      const pdTrend = entries.map((_, i) => {
+        if (i === 0) return 0;
+        const cur = entries[i][1];
+        const prev = entries[i - 1][1];
+        const curNp = cur.sl - cur.cg - cur.co;
+        const prevNp = prev.sl - prev.cg - prev.co;
+        return prevNp ? ((curNp - prevNp) / Math.abs(prevNp)) * 100 : 0;
+      });
+      const profitYoyTrend = entries.map(() => 0);
+      const avgScoreTrend = entries.map((_, i) => {
+        const s1 = scoreFromRoas(roasTrend[i]);
+        const s2 = scoreFromProfitDelta(pdTrend[i]);
+        const s3 = scoreFromProfitDelta(profitYoyTrend[i]);
+        return (s1 + s2 + s3) / 3;
+      });
+      return { roasTrend, pdTrend, profitYoyTrend, avgScoreTrend };
+    }
     const byYear: Record<string, { sl: number; cg: number; co: number }> = {};
     filteredMonthly.forEach(r => {
       const y = (r.month_start || '').slice(0, 4);
       if (!byYear[y]) byYear[y] = { sl: 0, cg: 0, co: 0 };
       byYear[y].sl += r.sales || 0;
       byYear[y].cg += r.cogs || 0;
+      byYear[y].co += r.ad_cost || 0;
     });
-    periodKeys.forEach(k => { if (!byYear[k]) byYear[k] = { sl: 0, cg: 0, co: 0 }; byYear[k].co = adsSpendByPeriod[k] ?? 0; });
     const entries = periodKeys.map(k => [k, byYear[k] ?? { sl: 0, cg: 0, co: 0 }] as const);
     const roasTrend = entries.map(([, d]) => d.co ? (d.sl - d.cg) / d.co : 0);
     const pdTrend = entries.map((_, i) => {
@@ -690,9 +913,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       return (s1 + s2 + s3) / 3;
     });
     return { roasTrend, pdTrend, profitYoyTrend, avgScoreTrend };
-  }, [trendData, filteredWeekly, filteredMonthly, periodMode, adsSpendByPeriod]);
+  }, [trendData, filteredWeekly, filteredMonthly, periodMode]);
 
-  // KPI sparkline data — all 5 metrics per period for bottom metric cards
   const kpiSparklineData = useMemo(() => {
     if (!trendData.length) return { sales: [], ad_cost: [], profit: [], roas: [], organic: [] };
     const getPeriodKey = (row: (typeof trendData)[0]) =>
@@ -708,15 +930,14 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         const cur = byWeek[k];
         cur.sl += w.sales || 0;
         cur.cg += w.cogs || 0;
+        cur.co += w.ad_cost || 0;
         cur.or += w.orders || 0;
         cur.orgP += (w.organic_pct || 0) * (w.orders || 0);
       });
-      periodKeys.forEach(k => { if (!byWeek[k]) byWeek[k] = { sl: 0, cg: 0, co: 0, or: 0, orgP: 0 }; byWeek[k].co = adsSpendByPeriod[k] ?? 0; });
       Object.keys(byWeek).forEach(k => {
         const c = byWeek[k];
         c.orgP = c.or ? c.orgP / c.or : 0;
       });
-      // Build nearest-week LY lookup
       const allWeekKeys = Object.keys(byWeek).sort();
       const findLyWeek = (wk: string): string | null => {
         const target = new Date(wk + 'T00:00:00');
@@ -740,7 +961,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         return d?.co ? (d.sl - d.cg) / d.co : 0;
       });
       const organic = periodKeys.map(k => (byWeek[k] ?? { orgP: 0 }).orgP);
-      // LY for all metrics using nearest-week
       const salesLy = periodKeys.map(k => { const ly = findLyWeek(k); const d = ly ? byWeek[ly] : null; return d ? d.sl : 0; });
       const ad_costLy = periodKeys.map(k => { const ly = findLyWeek(k); const d = ly ? byWeek[ly] : null; return d ? d.co : 0; });
       const profitLy = periodKeys.map(k => { const ly = findLyWeek(k); const d = ly ? byWeek[ly] : null; return d ? d.sl - d.cg - d.co : 0; });
@@ -756,10 +976,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         const cur = byMonth[k];
         cur.sl += r.sales || 0;
         cur.cg += r.cogs || 0;
+        cur.co += r.ad_cost || 0;
         cur.or += r.orders || 0;
         cur.orgP += (r.organic_pct || 0) * (r.orders || 0);
       });
-      periodKeys.forEach(k => { if (!byMonth[k]) byMonth[k] = { sl: 0, cg: 0, co: 0, or: 0, orgP: 0 }; byMonth[k].co = adsSpendByPeriod[k] ?? 0; });
       Object.keys(byMonth).forEach(k => {
         const c = byMonth[k];
         c.orgP = c.or ? c.orgP / c.or : 0;
@@ -782,6 +1002,35 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const organic = periodKeys.map(k => (byMonth[k] ?? { orgP: 0 }).orgP);
       return { sales, ad_cost, profit, profitLy, roas, organic };
     }
+    if (periodMode === 'quarter') {
+      const byQuarter: Record<string, { sl: number; cg: number; co: number; or: number; orgP: number }> = {};
+      filteredMonthly.forEach(r => {
+        const k = periodKey(r.month_start || '', 'quarter');
+        if (!byQuarter[k]) byQuarter[k] = { sl: 0, cg: 0, co: 0, or: 0, orgP: 0 };
+        const cur = byQuarter[k];
+        cur.sl += r.sales || 0;
+        cur.cg += r.cogs || 0;
+        cur.co += r.ad_cost || 0;
+        cur.or += r.orders || 0;
+        cur.orgP += (r.organic_pct || 0) * (r.orders || 0);
+      });
+      Object.keys(byQuarter).forEach(k => {
+        const c = byQuarter[k];
+        c.orgP = c.or ? c.orgP / c.or : 0;
+      });
+      const sales = periodKeys.map(k => (byQuarter[k] ?? { sl: 0 }).sl);
+      const ad_cost = periodKeys.map(k => (byQuarter[k] ?? { co: 0 }).co);
+      const profit = periodKeys.map(k => {
+        const d = byQuarter[k];
+        return d ? d.sl - d.cg - d.co : 0;
+      });
+      const roas = periodKeys.map(k => {
+        const d = byQuarter[k];
+        return d?.co ? (d.sl - d.cg) / d.co : 0;
+      });
+      const organic = periodKeys.map(k => (byQuarter[k] ?? { orgP: 0 }).orgP);
+      return { sales, ad_cost, profit, roas, organic };
+    }
     const byYear: Record<string, { sl: number; cg: number; co: number; or: number; orgP: number }> = {};
     filteredMonthly.forEach(r => {
       const y = (r.month_start || '').slice(0, 4);
@@ -789,10 +1038,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const cur = byYear[y];
       cur.sl += r.sales || 0;
       cur.cg += r.cogs || 0;
+      cur.co += r.ad_cost || 0;
       cur.or += r.orders || 0;
       cur.orgP += (r.organic_pct || 0) * (r.orders || 0);
     });
-    periodKeys.forEach(k => { if (!byYear[k]) byYear[k] = { sl: 0, cg: 0, co: 0, or: 0, orgP: 0 }; byYear[k].co = adsSpendByPeriod[k] ?? 0; });
     Object.keys(byYear).forEach(k => {
       const c = byYear[k];
       c.orgP = c.or ? c.orgP / c.or : 0;
@@ -814,10 +1063,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     });
     const organic = periodKeys.map(k => (byYear[k] ?? { orgP: 0 }).orgP);
     return { sales, ad_cost, profit, profitLy, roas, organic };
-  }, [trendData, filteredWeekly, filteredMonthly, periodMode, adsSpendByPeriod]);
+  }, [trendData, filteredWeekly, filteredMonthly, periodMode]);
 
-  // Family-level trend table for selected period
-  // In weeks mode, align to the same SQP week used for KPIs to avoid incomplete-week discrepancies
   const familyPeriodData = useMemo(() => {
     const dateKey = periodDateKey(periodMode);
     let srcAll: TrendRow[] = filters.product
@@ -831,20 +1078,32 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     let periods: string[];
     if (filters.specificPeriod) {
       const sp = filters.specificPeriod;
-      periods = periodMode === 'weeks' ? allPeriods.filter(p => p === sp) : allPeriods.filter(p => p.startsWith(sp));
+      if (periodMode === 'weeks') {
+        periods = allPeriods.filter(p => p === sp);
+      } else if (periodMode === 'quarter') {
+        periods = allPeriods.filter(p => periodKey(p, 'quarter') === sp);
+      } else {
+        periods = allPeriods.filter(p => p.startsWith(sp));
+      }
       if (!periods.length) periods = allPeriods.slice(-1);
     } else if (periodMode === 'year') {
       const years = [...new Set(allPeriods.map(p => p.slice(0, 4)))].sort();
       periods = allPeriods.filter(p => new Set(sliceByPeriod(years, null, periodsForTable)).has(p.slice(0, 4)));
+    } else if (periodMode === 'quarter') {
+      const allQuarters = [...new Set(allPeriods.map(p => periodKey(p, 'quarter')))].sort();
+      const keepQ = sliceByPeriod(allQuarters, null, periodsForTable);
+      const keepQSet = new Set(keepQ);
+      periods = allPeriods.filter(p => keepQSet.has(periodKey(p, 'quarter')));
     } else {
       periods = sliceByPeriod(allPeriods, null, periodsForTable);
     }
 
     if (!periods.length) return null;
 
+    const KNOWN_FAMILIES = new Set(['Bottle', 'Fresh', 'LolliME', 'Lollibox']);
     const families = filters.family
       ? [...new Set(srcAll.filter(r => famFromType(r.product_type) === filters.family).map(r => r.product_type))]
-      : [...new Set(srcAll.map(r => r.product_type))].sort();
+      : [...new Set(srcAll.map(r => r.product_type))].filter(t => KNOWN_FAMILIES.has(t)).sort();
 
     let latest: string[];
     let prev: string[];
@@ -852,17 +1111,22 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       latest = periods;
       prev = [];
     } else if (periodMode === 'weeks') {
-      // When Latest: use KPI week only (1 week). Previously could aggregate multiple weeks when kpiWeek not in periods.
       latest = kpiWeek ? [kpiWeek] : (periods.length ? [periods[periods.length - 1]] : []);
       prev = kpiPrevWeek ? [kpiPrevWeek] : [];
     } else if (periodMode === 'year') {
-      // When Latest: split into cur year vs prev year (same as KPI logic). Previously lumped both into latest.
       const years = [...new Set(periods.map(p => p.slice(0, 4)))].sort();
       const keepYears = getPeriodsToInclude(null, 'year', years, periodsForTable);
       const curYear = keepYears[keepYears.length - 1] || '';
       const prvYear = keepYears.length >= 2 ? keepYears[keepYears.length - 2] : '';
       latest = curYear ? periods.filter(p => p.slice(0, 4) === curYear) : periods;
       prev = prvYear ? periods.filter(p => p.slice(0, 4) === prvYear) : [];
+    } else if (periodMode === 'quarter') {
+      const allQuarters = [...new Set(periods.map(p => periodKey(p, 'quarter')))].sort();
+      const keepQ = getPeriodsToInclude(null, 'quarter', allQuarters, periodsForTable);
+      const curQ = keepQ[keepQ.length - 1] || '';
+      const prvQ = keepQ.length >= 2 ? keepQ[keepQ.length - 2] : '';
+      latest = curQ ? periods.filter(p => periodKey(p, 'quarter') === curQ) : periods;
+      prev = prvQ ? periods.filter(p => periodKey(p, 'quarter') === prvQ) : [];
     } else {
       latest = [periods[periods.length - 1]];
       prev = periods.length >= 2 ? [periods[periods.length - 2]] : [];
@@ -878,20 +1142,24 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       return t;
     };
 
-
     const familyAds: Record<FamilyName, number> = { Lollibox: 0, LolliME: 0, Bottle: 0, Fresh: 0 };
     const familyAdsSales: Record<FamilyName, number> = { Lollibox: 0, LolliME: 0, Bottle: 0, Fresh: 0 };
     const familyAdsUnits: Record<FamilyName, number> = { Lollibox: 0, LolliME: 0, Bottle: 0, Fresh: 0 };
-    (['Lollibox', 'LolliME', 'Bottle', 'Fresh'] as FamilyName[]).forEach(fn => {
-      familyAds[fn] = latest.reduce((s, p) => s + (adsSpendByFamilyAndPeriod[`${fn}|${periodKey(p, periodMode)}`] || 0), 0);
-      familyAdsSales[fn] = latest.reduce((s, p) => s + (adsSalesByFamilyAndPeriod[`${fn}|${periodKey(p, periodMode)}`] || 0), 0);
-      familyAdsUnits[fn] = latest.reduce((s, p) => s + (adsUnitsByFamilyAndPeriod[`${fn}|${periodKey(p, periodMode)}`] || 0), 0);
-    });
-    const familySales: Record<FamilyName, number> = { Lollibox: 0, LolliME: 0, Bottle: 0, Fresh: 0 };
-    families.forEach(f => {
-      const fn = famFromType(f) as FamilyName | null;
-      if (fn) familySales[fn] += aggRows(srcAll.filter(r => r.product_type === f && latest.includes(r[dateKey] || ''))).sales;
-    });
+    for (const [key, val] of Object.entries(adsDataByProductAndPeriod.spend)) {
+      const [name, period] = key.split('|');
+      const fam = productToFamily[name] || (['Lollibox', 'LolliME', 'Bottle', 'Fresh'].includes(name) ? name as FamilyName : null);
+      if (fam && latest.some(p => periodKey(p, periodMode) === period)) familyAds[fam] += val;
+    }
+    for (const [key, val] of Object.entries(adsDataByProductAndPeriod.sales)) {
+      const [name, period] = key.split('|');
+      const fam = productToFamily[name] || (['Lollibox', 'LolliME', 'Bottle', 'Fresh'].includes(name) ? name as FamilyName : null);
+      if (fam && latest.some(p => periodKey(p, periodMode) === period)) familyAdsSales[fam] += val;
+    }
+    for (const [key, val] of Object.entries(adsDataByProductAndPeriod.units)) {
+      const [name, period] = key.split('|');
+      const fam = productToFamily[name] || (['Lollibox', 'LolliME', 'Bottle', 'Fresh'].includes(name) ? name as FamilyName : null);
+      if (fam && latest.some(p => periodKey(p, periodMode) === period)) familyAdsUnits[fam] += val;
+    }
 
     return families.map(fam => {
       const famRows = srcAll.filter(r => r.product_type === fam);
@@ -900,35 +1168,74 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const cur = aggRows(curRows);
       const prv = prevRows.length ? aggRows(prevRows) : null;
       const familyName = famFromType(fam) as FamilyName | null;
-      const famAds = familyName ? familyAds[familyName] : 0;
-      const famAdsSales = familyName ? familyAdsSales[familyName] : 0;
-      const famAdsUnitsTotal = familyName ? familyAdsUnits[familyName] : 0;
-      const famSales = familyName ? familySales[familyName] : 0;
-      const curAds = familyName && famSales > 0 ? (cur.sales / famSales) * famAds : (familyName ? famAds : cur.ad_cost);
-      const curAdsSales = familyName && famSales > 0 ? (cur.sales / famSales) * famAdsSales : (familyName ? famAdsSales : 0);
-      const curAdsUnits = familyName && famSales > 0 ? (cur.sales / famSales) * famAdsUnitsTotal : (familyName ? famAdsUnitsTotal : 0);
-      const curWithAds = { ...cur, ad_cost: curAds, ads_sales: curAdsSales, ads_units: Math.round(curAdsUnits), net_profit: cur.sales - cur.cogs - curAds };
+      const curAdsSales = familyName ? familyAdsSales[familyName] : 0;
+      const curAdsUnits = familyName ? familyAdsUnits[familyName] : 0;
+      const curWithAds = { ...cur, ads_sales: curAdsSales, ads_units: Math.round(curAdsUnits) };
       const net_roas = curWithAds.ad_cost ? (curWithAds.sales - curWithAds.cogs) / curWithAds.ad_cost : 0;
       const organic_pct = cur.orders > 0
         ? (curRows.reduce((s, r) => s + ((r.organic_pct || 0) * (r.orders || 0)), 0) / cur.orders)
         : 0;
       const organic_units = Math.round(cur.units * organic_pct / 100);
-      const ad_orders = curWithAds.ads_units; // Use actual campaign-level ads units
+      const ad_orders = curWithAds.ads_units;
       const sc = prv && prv.sales ? ((curWithAds.sales - prv.sales) / prv.sales) * 100 : 0;
-      // Use units directly from the aggregated family row
       const units = cur.units;
-      return { family: fam, ...curWithAds, units, net_roas, organic_pct, organic_units, ad_orders, clicks: curWithAds.clicks, sales_change: sc, sessions: curWithAds.sessions };
+      const famProducts = (data.products || []).filter(p => famFromType(p.product_type || '') === familyName);
+      let famFeeTotal = 0;
+      if (prv && famProducts.length > 0) {
+        const asinUnits: Record<string, number> = {};
+        for (const r of prevRows) {
+          const asin = (r as { asin?: string }).asin || '';
+          if (asin) asinUnits[asin] = (asinUnits[asin] || 0) + (r.units || 0);
+        }
+        for (const [asin, u] of Object.entries(asinUnits)) {
+          const prod = famProducts.find(p => p.asin === asin);
+          if (prod) famFeeTotal += u * (prod.fba_cost ?? 0);
+          else famFeeTotal += u * amazonFeeRate;
+        }
+        if (Object.keys(asinUnits).length === 0) famFeeTotal = (prv.units || 0) * amazonFeeRate;
+      } else if (prv) {
+        famFeeTotal = (prv.units || 0) * amazonFeeRate;
+      }
+      let curFeeTotal = 0;
+      if (famProducts.length > 0) {
+        const curAsinUnits: Record<string, number> = {};
+        for (const r of curRows) {
+          const asin = (r as { asin?: string }).asin || '';
+          if (asin) curAsinUnits[asin] = (curAsinUnits[asin] || 0) + (r.units || 0);
+        }
+        for (const [asin, u] of Object.entries(curAsinUnits)) {
+          const prod = famProducts.find(p => p.asin === asin);
+          if (prod) curFeeTotal += u * (prod.fba_cost ?? 0);
+          else curFeeTotal += u * amazonFeeRate;
+        }
+        if (Object.keys(curAsinUnits).length === 0) curFeeTotal = (cur.units || 0) * amazonFeeRate;
+      } else {
+        curFeeTotal = (cur.units || 0) * amazonFeeRate;
+      }
+      const prevAdCost = prv ? prv.ad_cost : 0;
+      const prevNet = (prv ? prv.sales : 0) - prevAdCost - famFeeTotal;
+      const curNet = curWithAds.sales - curWithAds.ad_cost - curFeeTotal;
+      const payment_no_storage = 0.5 * prevNet + 0.5 * curNet;
+      let famStorageCost = 0;
+      if (latest.length > 0) {
+        const lookup = periodMode === 'weeks' ? storageCostLookup.byFamilyWeek : storageCostLookup.byFamilyMonth;
+        for (const pd of latest) {
+          const key = periodMode === 'weeks' ? `${fam}|${pd}` : `${fam}|${pd.slice(0, 7)}`;
+          famStorageCost += lookup[key] ?? 0;
+        }
+      }
+      const storage_cost = famStorageCost;
+      const payment = payment_no_storage - storage_cost;
+      return { family: fam, ...curWithAds, units, net_roas, organic_pct, organic_units, ad_orders, clicks: curWithAds.clicks, sales_change: sc, sessions: curWithAds.sessions, payment, storage_cost };
     });
-  }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, periodMode, kpiWeek, kpiPrevWeek, filters.family, filters.product, filters.specificPeriod, filters.seasonality, pk, adsSpendByFamilyAndPeriod, adsSalesByFamilyAndPeriod, adsUnitsByFamilyAndPeriod]);
+  }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, periodMode, kpiWeek, kpiPrevWeek, filters.family, filters.product, filters.specificPeriod, filters.seasonality, pk, adsDataByProductAndPeriod, productToFamily, amazonFeeRate, storageCostLookup]);
 
-  // Variation-level data from SQP for expandable family rows (same period as familyPeriodData)
   const variationByFamily = useMemo(() => {
     const sqp = data.sqp_weekly || [];
     if (!kpiWeek || !sqp.length) return { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] } as Record<FamilyName, { asin: string; name: string; orders: number; clicks: number; adsOrders: number }[]>;
     const matchWeek = (w: string) => {
       if (periodMode === 'weeks') return w === kpiWeek;
-      if (periodMode === 'month') return w.slice(0, 7) === kpiWeek;
-      return w.slice(0, 4) === kpiWeek;
+      return periodKey(w, periodMode) === kpiWeek;
     };
     let filtered = sqp.filter(r => matchWeek(r.week_start || ''));
     if (filters.product) filtered = filtered.filter(r => r.asin === filters.product);
@@ -950,7 +1257,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     return result;
   }, [data.sqp_weekly, kpiWeek, periodMode, filters.product]);
 
-  // Per-family Changes vs Prev (full deltas + status)
   const changesByFamily = useMemo(() => {
     if (!effectivePrevTotals || !kpiWeek || !kpiPrevWeek) return [];
     const dateKey = periodDateKey(periodMode);
@@ -963,14 +1269,12 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     const matchCur = (r: TrendRow) => {
       const v = r[dateKey] || '';
       if (periodMode === 'weeks') return v === kpiWeek;
-      if (periodMode === 'month') return v.slice(0, 7) === kpiWeek;
-      return v.slice(0, 4) === kpiWeek;
+      return periodKey(v, periodMode) === kpiWeek;
     };
     const matchPrev = (r: TrendRow) => {
       const v = r[dateKey] || '';
       if (periodMode === 'weeks') return v === kpiPrevWeek;
-      if (periodMode === 'month') return v.slice(0, 7) === kpiPrevWeek;
-      return v.slice(0, 4) === kpiPrevWeek;
+      return periodKey(v, periodMode) === kpiPrevWeek;
     };
 
     const families = filters.family
@@ -1004,8 +1308,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const sd = prv.sales ? ((cur.sales - prv.sales) / prv.sales) * 100 : 0;
       const cd = prvAds ? ((curAds - prvAds) / prvAds) * 100 : 0;
       const pd = prvNp ? ((curNp - prvNp) / Math.abs(prvNp)) * 100 : 0;
-      const roas = curAds ? curNp / curAds : 0;
-      const prevRoas = prvAds ? prvNp / prvAds : 0;
+      const roas = curAds ? (curNp + curAds) / curAds : 0;
+      const prevRoas = prvAds ? (prvNp + prvAds) / prvAds : 0;
       const roasDelta = prevRoas ? ((roas - prevRoas) / Math.abs(prevRoas)) * 100 : 0;
       const orgDelta = prv.organic_pct ? ((cur.organic_pct - prv.organic_pct) / Math.abs(prv.organic_pct)) * 100 : 0;
 
@@ -1020,73 +1324,96 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     }).filter((x): x is NonNullable<typeof x> => x != null);
   }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, periodMode, kpiWeek, kpiPrevWeek, effectivePrevTotals, filters.family, filters.product, filters.seasonality, pk, adsSpendByFamilyAndPeriod]);
 
-  // Per-variation P&L for current period (from trends_by_asin) — ad_cost overridden from ads_7d (allocated by sales ratio)
   const variationPnlByFamily = useMemo(() => {
-    if (!kpiWeek) return { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] } as Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]>;
+    if (!kpiWeek) return { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] } as Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]>;
     type Row = { product_type: string; asin: string; product_short_name: string; week_start?: string; month_start?: string; sales: number; ad_cost: number; cogs: number; net_profit: number; orders: number; units?: number; clicks?: number; sessions?: number; organic_pct?: number };
     const src = periodMode === 'weeks' ? (data.weekly_trends_by_asin || []) : (data.monthly_trends_by_asin || []);
     const dateKey = periodMode === 'weeks' ? 'week_start' : 'month_start';
     const matchCur = (r: Row) => {
       const v = r[dateKey] || '';
       if (periodMode === 'weeks') return v === kpiWeek;
-      if (periodMode === 'month') return v.slice(0, 7) === kpiWeek;
-      return v.slice(0, 4) === kpiWeek;
+      return periodKey(v, periodMode) === kpiWeek;
     };
-    const result: Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]> = { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] };
+    const result: Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]> = { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] };
+    const tempMap: Record<FamilyName, Map<string, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; orders: number; units: number; clicks: number; sessions: number; organic_pct_weighted: number }>> = {
+      Lollibox: new Map(), LolliME: new Map(), Bottle: new Map(), Fresh: new Map(),
+    };
     src.forEach((r: Row) => {
       const fam = famFromType(r.product_type) as FamilyName | null;
-      if (!fam || (filters.family && fam !== filters.family) || (filters.product && r.asin !== filters.product) || !matchCur(r)) return;
-      const cogsVal = r.cogs || 0;
-      const units = r.units || 0;
-      result[fam].push({
-        asin: r.asin,
-
-        product_short_name: r.product_short_name || r.asin,
-        sales: r.sales,
-        cogs: cogsVal,
-        ad_cost: 0,
-        net_profit: r.net_profit,
-        net_roas: 0,
-        orders: r.orders || 0,
-        units,
-        clicks: r.clicks || 0,
-        sessions: r.sessions || 0,
-        organic_pct: r.organic_pct ?? 0,
-        organic_units: 0,
-        ad_orders: 0,
-        ads_sales: 0,
-        ads_units: 0,
+      if (!fam || !tempMap[fam] || (filters.family && fam !== filters.family) || (filters.product && r.asin !== filters.product) || !matchCur(r)) return;
+      const periodKey_ = periodMode === 'weeks' ? r.week_start : (r.month_start || '').slice(0, 7);
+      const asinKey = `${r.asin}|${periodKey_}`;
+      const sCost = periodMode === 'weeks' ? (storageCostLookup.byAsinWeek[asinKey] || 0) : (storageCostLookup.byAsinMonth[asinKey] || 0);
+      const existing = tempMap[fam].get(r.asin);
+      if (existing) {
+        existing.sales += r.sales || 0;
+        existing.cogs += r.cogs || 0;
+        existing.ad_cost += r.ad_cost || 0;
+        existing.storage_cost += sCost;
+        existing.net_profit += r.net_profit || 0;
+        existing.orders += r.orders || 0;
+        existing.units += r.units || 0;
+        existing.clicks += r.clicks || 0;
+        existing.sessions += r.sessions || 0;
+        existing.organic_pct_weighted += (r.organic_pct ?? 0) * (r.orders || 0);
+      } else {
+        tempMap[fam].set(r.asin, {
+          asin: r.asin,
+          product_short_name: r.product_short_name || r.asin,
+          sales: r.sales || 0,
+          cogs: r.cogs || 0,
+          ad_cost: r.ad_cost || 0,
+          storage_cost: sCost,
+          net_profit: r.net_profit || 0,
+          orders: r.orders || 0,
+          units: r.units || 0,
+          clicks: r.clicks || 0,
+          sessions: r.sessions || 0,
+          organic_pct_weighted: (r.organic_pct ?? 0) * (r.orders || 0),
+        });
+      }
+    });
+    (Object.keys(tempMap) as FamilyName[]).forEach(fam => {
+      tempMap[fam].forEach(v => {
+        const adCost = v.ad_cost;
+        const grossMargin = v.sales - v.cogs;
+        const productName = v.product_short_name;
+        const periodKey_ = kpiWeek || '';
+        result[fam].push({
+          asin: v.asin,
+          product_short_name: v.product_short_name,
+          sales: v.sales,
+          cogs: v.cogs,
+          ad_cost: adCost,
+          storage_cost: v.storage_cost,
+          net_profit: grossMargin - adCost - v.storage_cost,
+          net_roas: adCost ? grossMargin / adCost : 0,
+          orders: v.orders,
+          units: v.units,
+          clicks: v.clicks,
+          sessions: v.sessions,
+          organic_pct: v.orders > 0 ? v.organic_pct_weighted / v.orders : 0,
+          organic_units: Math.round((v.units || 0) * (v.orders > 0 ? v.organic_pct_weighted / v.orders : 0) / 100),
+          ad_orders: 0,
+          ads_sales: adsDataByProductAndPeriod.sales[`${productName}|${periodKey_}`] || 0,
+          ads_units: Math.round(adsDataByProductAndPeriod.units[`${productName}|${periodKey_}`] || 0),
+        });
       });
     });
     (Object.keys(result) as FamilyName[]).forEach(fam => {
-      const rows = result[fam];
-      rows.forEach(v => {
-        // Direct product-level ads lookup — no more pro-rating!
-        const productName = v.product_short_name;
-        const periodKey_ = kpiWeek || '';
-        v.ad_cost = adsDataByProductAndPeriod.spend[`${productName}|${periodKey_}`] || 0;
-        v.ads_sales = adsDataByProductAndPeriod.sales[`${productName}|${periodKey_}`] || 0;
-        v.ads_units = Math.round(adsDataByProductAndPeriod.units[`${productName}|${periodKey_}`] || 0);
-        v.net_profit = v.sales - v.cogs - v.ad_cost;
-        v.net_roas = v.ad_cost ? (v.sales - v.cogs) / v.ad_cost : 0;
-        v.organic_units = Math.round((v.units || 0) * (v.organic_pct || 0) / 100);
-        v.ad_orders = v.ads_units; // Use actual campaign-level ads orders, not derived estimate
-      });
       result[fam].sort((a, b) => b.sales - a.sales);
     });
     return result;
-  }, [data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, periodMode, kpiWeek, filters.family, filters.product, adsDataByProductAndPeriod]);
+  }, [data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, periodMode, kpiWeek, filters.family, filters.product, adsDataByProductAndPeriod, storageCostLookup]);
 
-  // Flat lookup: ASIN -> P&L (for enriching SQP variations when variationPnlByFamily is empty for a family)
   const pnlByAsin = useMemo(() => {
-    const map = new Map<string, { sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }>();
-    (Object.values(variationPnlByFamily) as { asin: string; sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[][]).flat().forEach(v => {
-      if (v.asin) map.set(v.asin, { sales: v.sales, cogs: v.cogs, ad_cost: v.ad_cost, net_profit: v.net_profit, net_roas: v.net_roas, orders: v.orders, units: v.units ?? 0, clicks: v.clicks, sessions: v.sessions ?? 0, organic_pct: v.organic_pct, organic_units: v.organic_units ?? 0, ad_orders: v.ad_orders ?? 0, ads_sales: v.ads_sales ?? 0, ads_units: v.ads_units ?? 0 });
+    const map = new Map<string, { payment: number; storage_cost: number; sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }>();
+    (Object.values(variationPnlByFamily) as { asin: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[][]).flat().forEach(v => {
+      if (v.asin) map.set(v.asin, { payment: 0, storage_cost: v.storage_cost, sales: v.sales, cogs: v.cogs, ad_cost: v.ad_cost, net_profit: v.net_profit, net_roas: v.net_roas, orders: v.orders, units: v.units ?? 0, clicks: v.clicks, sessions: v.sessions ?? 0, organic_pct: v.organic_pct, organic_units: v.organic_units ?? 0, ad_orders: v.ad_orders ?? 0, ads_sales: v.ads_sales ?? 0, ads_units: v.ads_units ?? 0 });
     });
     return map;
   }, [variationPnlByFamily]);
 
-  // Product lookup: ASIN -> per-unit costs (for FBA columns in variation rows)
   const productByAsin = useMemo(() => {
     const map = new Map<string, { pick_pack_fee: number; referral_fee: number; cogs: number; shipping_cost: number }>();
     (data.products || []).forEach(p => {
@@ -1095,7 +1422,12 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     return map;
   }, [data.products]);
 
-  // Per-variation Changes vs Prev from trends_by_asin
+  const supplyChainByAsin = useMemo(() => {
+    const map = new Map<string, SupplyChainRow>();
+    (data.supply_chain || []).forEach(sc => { if (sc.asin) map.set(sc.asin, sc); });
+    return map;
+  }, [data.supply_chain]);
+
   const changesByVariation = useMemo(() => {
     if (!kpiWeek || !kpiPrevWeek) return { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] } as Record<FamilyName, { asin: string; product_short_name: string; sd: number; cd: number; pd: number; roasDelta: number; orgDelta: number; status: string; prevSales: number; prevAdCost: number; prevNetProfit: number }[]>;
     type Row = { product_type: string; asin: string; product_short_name: string; week_start?: string; month_start?: string; sales: number; ad_cost: number; net_profit: number; orders: number; organic_pct?: number };
@@ -1105,47 +1437,50 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     const matchCur = (r: Row) => {
       const v = r[dateKey] || '';
       if (periodMode === 'weeks') return v === kpiWeek;
-      if (periodMode === 'month') return v.slice(0, 7) === kpiWeek;
-      return v.slice(0, 4) === kpiWeek;
+      return periodKey(v, periodMode) === kpiWeek;
     };
     const matchPrev = (r: Row) => {
       const v = r[dateKey] || '';
       if (periodMode === 'weeks') return v === kpiPrevWeek;
-      if (periodMode === 'month') return v.slice(0, 7) === kpiPrevWeek;
-      return v.slice(0, 4) === kpiPrevWeek;
+      return periodKey(v, periodMode) === kpiPrevWeek;
     };
 
-    const byAsin: Record<string, { cur: Row; prev: Row }> = {};
+    const byAsin: Record<string, { cur: { sales: number; ad_cost: number; net_profit: number; orders: number; organic_pct_weighted: number; product_type: string; product_short_name: string }; prev: { sales: number; ad_cost: number; net_profit: number; orders: number; organic_pct_weighted: number } }> = {};
+    const emptyAgg = () => ({ sales: 0, ad_cost: 0, net_profit: 0, orders: 0, organic_pct_weighted: 0 });
     src.forEach(r => {
       const fam = famFromType(r.product_type) as FamilyName | null;
       if (!fam || (filters.family && fam !== filters.family) || (filters.product && r.asin !== filters.product)) return;
       const key = `${r.product_type}|${r.asin}`;
+      if (!byAsin[key]) byAsin[key] = { cur: { ...emptyAgg(), product_type: r.product_type, product_short_name: r.product_short_name }, prev: emptyAgg() as any };
       if (matchCur(r)) {
-        if (!byAsin[key]) byAsin[key] = { cur: r as Row, prev: null! };
-        else byAsin[key].cur = r as Row;
+        const c = byAsin[key].cur;
+        c.sales += r.sales || 0; c.ad_cost += r.ad_cost || 0; c.net_profit += r.net_profit || 0;
+        c.orders += r.orders || 0; c.organic_pct_weighted += (r.organic_pct ?? 0) * (r.orders || 0);
       }
       if (matchPrev(r)) {
-        if (!byAsin[key]) byAsin[key] = { cur: null!, prev: r as Row };
-        else byAsin[key].prev = r as Row;
+        const p = byAsin[key].prev;
+        p.sales += r.sales || 0; p.ad_cost += r.ad_cost || 0; p.net_profit += r.net_profit || 0;
+        p.orders += r.orders || 0; p.organic_pct_weighted += (r.organic_pct ?? 0) * (r.orders || 0);
       }
     });
 
     const result: Record<FamilyName, { asin: string; product_short_name: string; sd: number; cd: number; pd: number; roasDelta: number; orgDelta: number; status: string; prevSales: number; prevAdCost: number; prevNetProfit: number }[]> = { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] };
 
     Object.entries(byAsin).forEach(([key, { cur, prev }]) => {
-      if (!cur || !prev) return;
+      if (!cur.orders && !prev.orders) return;
       const [, asin] = key.split('|');
       const fam = famFromType(cur.product_type) as FamilyName | null;
-      if (!fam) return;
+      if (!fam || !result[fam]) return;
 
       const sd = prev.sales ? ((cur.sales - prev.sales) / prev.sales) * 100 : 0;
       const cd = prev.ad_cost ? ((cur.ad_cost - prev.ad_cost) / prev.ad_cost) * 100 : 0;
       const pd = prev.net_profit ? ((cur.net_profit - prev.net_profit) / Math.abs(prev.net_profit)) * 100 : 0;
-      const roas = cur.ad_cost ? cur.net_profit / cur.ad_cost : 0;
-      const prevRoas = prev.ad_cost ? prev.net_profit / prev.ad_cost : 0;
+      const roas = cur.ad_cost ? (cur.net_profit + cur.ad_cost) / cur.ad_cost : 0;
+      const prevRoas = prev.ad_cost ? (prev.net_profit + prev.ad_cost) / prev.ad_cost : 0;
       const roasDelta = prevRoas ? ((roas - prevRoas) / Math.abs(prevRoas)) * 100 : 0;
-      const prevOrg = prev.organic_pct ?? 0;
-      const orgDelta = prevOrg ? (((cur.organic_pct ?? 0) - prevOrg) / Math.abs(prevOrg)) * 100 : 0;
+      const curOrgPct = cur.orders > 0 ? cur.organic_pct_weighted / cur.orders : 0;
+      const prevOrgPct = prev.orders > 0 ? prev.organic_pct_weighted / prev.orders : 0;
+      const orgDelta = prevOrgPct ? ((curOrgPct - prevOrgPct) / Math.abs(prevOrgPct)) * 100 : 0;
 
       result[fam].push({
         asin,
@@ -1180,7 +1515,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     return lines.join('\n');
   }
 
-  // Peak-aligned 7-day YoY or same-period LY fallback. Zero ads spend for rows in ads gap.
   const peakYoYData = useMemo(() => {
     const wt: TrendRow[] = filters.product
       ? (data.weekly_trends_by_asin || []).filter((r: TrendRow & { asin?: string }) => r.asin === filters.product)
@@ -1201,8 +1535,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const daysUntil = pk.days_until_peak_start;
         const startTy = addDays(pk.peak_start, -(daysUntil + 7));
         const endTy = addDays(startTy, 6);
-
-        // Use actual LY holiday dates if available
         const holidays = data.holidays || [];
         const lyHoliday = holidays
           .filter(h => h.holiday_name === pk.holiday_name && h.holiday_date < pk.holiday_date)
@@ -1210,7 +1542,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         let startLy: string, endLy: string;
         if (lyHoliday?.pre_season_start) {
           startLy = addDays(lyHoliday.pre_season_start, -(daysUntil + 7) + (new Date(pk.peak_start + 'T00:00:00').getTime() - new Date(pk.pre_peak_start || pk.peak_start + 'T00:00:00').getTime()) / 86400000);
-          // Align same offset from LY peak start
           const tyOffsetFromPeak = Math.round((new Date(startTy + 'T00:00:00').getTime() - new Date(pk.peak_start + 'T00:00:00').getTime()) / 86400000);
           startLy = addDays(lyHoliday.pre_season_start, tyOffsetFromPeak);
           endLy = addDays(startLy, 6);
@@ -1236,7 +1567,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         const tooltipLines = buildPeakYoYTooltip(ty, ly);
         return { salesTy: ty.sl, salesLy: ly.sl, npTy: ty.np, npLy: ly.np, salesYoy, profitYoy, dateRange, label: `D-${daysUntil + 7} to D-${daysUntil} vs peak`, isPeak: true, tooltipLines };
     }
-    // Fallback: same period last year
     if (!kpiWeek) return null;
     if (periodMode === 'weeks') {
       const lyWeek = shiftYear(kpiWeek, -1);
@@ -1272,6 +1602,26 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const tooltipLines = buildPeakYoYTooltip(ty, ly);
       return { salesTy: ty.sl, salesLy: ly.sl, npTy: ty.np, npLy: ly.np, salesYoy, profitYoy, dateRange, label: 'vs same month last year', isPeak: false, tooltipLines };
     }
+    if (periodMode === 'quarter') {
+      const lyKey = `${parseInt(kpiWeek.slice(0, 4), 10) - 1}${kpiWeek.slice(4)}`;
+      const matchQ = (r: TrendRow, qk: string) => {
+        const ms = r.month_start || '';
+        return periodKey(ms, 'quarter') === qk;
+      };
+      let tyRows = mt.filter(r => matchQ(r, kpiWeek));
+      let lyRows = mt.filter(r => matchQ(r, lyKey));
+      if (filters.family) {
+        tyRows = tyRows.filter(r => famFromType(r.product_type) === filters.family);
+        lyRows = lyRows.filter(r => famFromType(r.product_type) === filters.family);
+      }
+      const ty = agg(tyRows);
+      const ly = agg(lyRows);
+      const salesYoy = ly.sl ? ((ty.sl - ly.sl) / ly.sl) * 100 : 0;
+      const profitYoy = ly.np ? ((ty.np - ly.np) / Math.abs(ly.np)) * 100 : 0;
+      const dateRange = `${kpiWeek} vs ${lyKey}`;
+      const tooltipLines = buildPeakYoYTooltip(ty, ly);
+      return { salesTy: ty.sl, salesLy: ly.sl, npTy: ty.np, npLy: ly.np, salesYoy, profitYoy, dateRange, label: 'vs same quarter last year', isPeak: false, tooltipLines };
+    }
     const lyYear = (parseInt(kpiWeek, 10) - 1).toString();
     let tyRows = mt.filter(r => (r.month_start || '').slice(0, 4) === kpiWeek);
     let lyRows = mt.filter(r => (r.month_start || '').slice(0, 4) === lyYear);
@@ -1295,8 +1645,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   const famSort = useSort('sales');
   const rangeStr = periodMode === 'weeks' && kpiWeek ? weekRangeLabel(kpiWeek) : kpiPeriodLabel || '';
 
-  // Check if current period has complete performance data
-  const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
   const periodIncomplete = useMemo(() => {
     if (!kpiWeek || !perfMaxDate) return false;
     if (periodMode === 'weeks') {
@@ -1312,7 +1660,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     return false;
   }, [kpiWeek, perfMaxDate, periodMode]);
 
-  // Auto-generated narrative headline
   const headline = useMemo(() => {
     if (!effectiveTotals.sl && !effectiveTotals.co) return '';
     const parts: string[] = [];
@@ -1330,12 +1677,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     return parts.join(' · ');
   }, [sd, pd, roas, grouped.urgent, pk, effectiveTotals.sl, effectiveTotals.co]);
 
-  // Trend chart annotations from change_log and upcoming holidays
   const trendAnnotations = useMemo(() => {
     const annotations: { label: string; x: string; color: string }[] = [];
     const labels = trendData.map(d => d.label);
     if (!labels.length) return annotations;
-
     (data.change_log || []).forEach(cl => {
       const d = cl.change_date || cl.created_at || '';
       if (!d) return;
@@ -1353,38 +1698,31 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     return annotations;
   }, [trendData, data.change_log, data.upcoming]);
 
-  // Sales share % for family table
   const totalFamilySales = useMemo(() => {
     return (familyPeriodData || []).reduce((s, r) => s + (r.sales || 0), 0);
+  }, [familyPeriodData]);
+  const totalFamilyAdCost = useMemo(() => {
+    return (familyPeriodData || []).reduce((s, r) => s + (r.ad_cost || 0), 0);
+  }, [familyPeriodData]);
+  const totalFamilyNetProfit = useMemo(() => {
+    return (familyPeriodData || []).reduce((s, r) => s + (r.net_profit || 0), 0);
   }, [familyPeriodData]);
 
   const eT = effectiveTotals;
   const netRoas = eT.co > 0 ? (eT.sl - eT.cg - eT.co) / eT.co : 0;
-  // PageSummaryBar intentionally omitted on HOME — DashboardSummary sparkline cards
-  // already display the same KPIs with additional sparkline context.
   usePageSummary({ title: 'Home', items: [] });
 
   if (!effectiveTotals.sl && !effectiveTotals.co && !effectiveTotals.or) return <Empty icon="📊" message="No summary data" hint="Summary data will appear once your Amazon performance data is synced." />;
 
   const prevLabel = periodMode === 'weeks' && kpiPrevWeek ? weekRangeLabel(kpiPrevWeek) : kpiPrevWeek || '';
-
-  // Peak stage: only actual PEAK (Pre Peak / Pre Peak Boost are not considered peak)
   const isPeakStage = pk?.current_stage === 'PEAK';
-
-  // Scores 0-10 for the 3 cards — suppress WoW when period data is incomplete
   const score1 = periodIncomplete ? 0 : scoreFromRoas(roas);
   const score2 = periodIncomplete ? null : (isPeakStage ? null : (effectivePrevTotals ? scoreFromProfitDelta(pd) : null));
   const score3 = peakYoYData && !periodIncomplete ? scoreFromProfitDelta(peakYoYData.profitYoy) : 0;
-
   const currentSeasonality = pk && kpiWeek ? getSeasonality(kpiWeek, pk) : null;
   const seasonalityLabel = currentSeasonality ? { PRE_PEAK: 'Pre Peak (2-4 wk)', PRE_PEAK_BOOST: 'Pre Peak Boost (1-2 wk)', PEAK: 'Peak', OFF_SEASON: 'Off Season' }[currentSeasonality] : null;
 
   const trendLabels = trendData.map(d => d.label);
-  const card2Range = periodMode === 'weeks' && kpiWeek && kpiPrevWeek
-    ? `${weekRangeLabel(kpiWeek)} vs ${weekRangeLabel(kpiPrevWeek)}`
-    : prevLabel ? `Current vs ${prevLabel}` : rangeStr || '--';
-
-  // eT and netRoas already computed above (before early return)
 
   return (
     <div className="animate-in">
@@ -1393,12 +1731,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           Perf data through {perfMaxDate} — current period not complete, scores/comparisons suppressed
         </div>
       )}
-      {/* Headline summary — above measure buttons */}
       {headline && (
         <div className="font-mono text-[14px] font-semibold text-white/60 truncate mb-1 px-1">{headline}</div>
       )}
 
-      {/* Measure selector buttons — right aligned */}
       <div className="flex items-center justify-end gap-1 mb-1 flex-wrap">
         {ALL_MEASURES.map(m => {
           const meta = MEASURE_META[m];
@@ -1416,7 +1752,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         })}
       </div>
 
-      {/* Hero: KPI cards + Bar Trend Chart */}
       <div className="mb-1 h-[253px] min-h-[200px]">
         <DashboardSummary
         rangeStr={rangeStr || '--'}
@@ -1487,16 +1822,19 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                         </Bar>
                       );
                     })}
-                    {/* LY dotted line — only when single measure selected */}
-                    {selectedMeasures.size === 1 && activeMeasures.map(mKey => {
+                    {(filters.periodType !== 'regular' || selectedMeasures.size === 1) && activeMeasures.map(mKey => {
                       const meta = MEASURE_META[mKey];
                       const lyKey = `ly_${mKey}`;
                       const hasLyData = trendData.some((d: any) => d[lyKey] != null && d[lyKey] !== 0);
                       if (!hasLyData) return null;
+                      const isCumulative = filters.periodType === 'cumulative' || filters.periodType === 'peak';
                       return (
                         <Line key={`ly_${mKey}`} yAxisId="left" type="monotone" dataKey={lyKey}
-                          stroke={meta.color} strokeWidth={1.5} strokeDasharray="6 3" strokeOpacity={0.4}
-                          dot={false} activeDot={{ r: 3, strokeWidth: 1, fill: meta.color, fillOpacity: 0.6 }}
+                          stroke={meta.color} strokeWidth={isCumulative ? 2 : 1.5}
+                          strokeDasharray={isCumulative ? undefined : '6 3'}
+                          strokeOpacity={isCumulative ? 0.5 : 0.4}
+                          dot={isCumulative ? { r: 2.5, fill: meta.color, fillOpacity: 0.5, strokeWidth: 0 } : false}
+                          activeDot={{ r: 3, strokeWidth: 1, fill: meta.color, fillOpacity: 0.6 }}
                           name={`ly_${mKey}`} connectNulls />
                       );
                     })}
@@ -1509,7 +1847,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         />
       </div>
 
-      {/* Family Table — reflects selected period */}
       <Section
         title="Per Product Family"
         count={periodLabel ? latestPeriodLabel(kpiWeek, periodMode) : undefined}
@@ -1528,9 +1865,13 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                 </tr>
               </thead>
               <tbody>
-                {famSort.sorted(familyPeriodData).map((r, i) => {
-                  const f = famFromType(r.family) as FamilyName | null;
-                  const isExpanded = f && expandedFamily === f;
+                {(() => {
+                  const sortedData = famSort.sorted(familyPeriodData);
+                  const totalAdCost = sortedData.reduce((s, r) => s + (r.ad_cost || 0), 0);
+                  const totalNetProfit = sortedData.reduce((s, r) => s + (r.net_profit || 0), 0);
+                  return sortedData.map((r, i) => {
+                    const f = famFromType(r.family) as FamilyName | null;
+                    const isExpanded = f && expandedFamily === f;
                   const varsPnl = f ? (variationPnlByFamily[f] || []) : [];
                   const varsSqp = f ? (variationByFamily[f] || []) : [];
                   const vars = varsPnl.length > 0
@@ -1582,25 +1923,65 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                         share_pct: <td key="share_pct" className="px-3 py-2 text-right font-mono text-[11px] text-faint">{hasPnl ? fP(vSharePct) : '—'}</td>,
                         cogs: <td key="cogs" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fM(v.cogs) : '—'}</td>,
                         ad_cost: <td key="ad_cost" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fM(v.ad_cost) : '—'}</td>,
+                        pct_ads_spend: <td key="pct_ads_spend" className="px-3 py-2 text-right font-mono text-[11px] text-faint">{hasPnl && totalFamilyAdCost > 0 ? fP((v.ad_cost / totalFamilyAdCost) * 100) : '—'}</td>,
+                        pct_net_profit: <td key="pct_net_profit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl && totalFamilyNetProfit !== 0 ? ((v.net_profit / totalFamilyNetProfit) * 100 < 0 ? 'text-red-400' : 'text-emerald-400') : 'text-faint'}`}>{hasPnl && totalFamilyNetProfit !== 0 ? fP((v.net_profit / totalFamilyNetProfit) * 100) : '—'}</td>,
                         ads_sales: <td key="ads_sales" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fM(v.ads_sales ?? 0) : '—'}</td>,
-                        ads_units: <td key="ads_units" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fOrd(v.ads_units ?? 0) : '—'}</td>,
+                        ads_units: <td key="ads_units" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fmt(v.ads_units ?? 0) : '—'}</td>,
                         net_profit: <td key="net_profit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl ? (v.net_profit > 0 ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold') : 'text-faint'}`}>{hasPnl ? fM(v.net_profit) : '—'}</td>,
                         np_per_unit: <td key="np_per_unit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl && (v.units ?? 0) > 0 ? (v.net_profit / v.units > 0 ? 'text-emerald-400' : 'text-red-400') : 'text-faint'}`}>{hasPnl && (v.units ?? 0) > 0 ? fM(v.net_profit / v.units) : '—'}</td>,
                         net_roas: <td key="net_roas" className="px-3 py-2 text-right">{hasPnl ? <RoasBadge value={v.net_roas} /> : <span className="text-faint">—</span>}</td>,
                         tacos: <td key="tacos" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl && v.sales > 0 ? ((v.ad_cost / v.sales) * 100 > 30 ? 'text-red-400' : (v.ad_cost / v.sales) * 100 > 15 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{hasPnl && v.sales > 0 ? fP((v.ad_cost / v.sales) * 100) : '—'}</td>,
                         ads_roas: (() => { const ar = v.ad_cost > 0 ? (v.ads_sales ?? 0) / v.ad_cost : 0; return <td key="ads_roas" className="px-3 py-2 text-right">{hasPnl && ar > 0 ? <RoasBadge value={ar} /> : <span className="text-faint">—</span>}</td>; })(),
-                        ad_orders: <td key="ad_orders" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fOrd(v.ad_orders ?? 0) : '—'}</td>,
-                        units: <td key="units" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fOrd(v.units ?? 0) : '—'}</td>,
-                        orders: <td key="orders" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fOrd(v.orders)}</td>,
-                        organic_units: <td key="organic_units" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fOrd(v.organic_units ?? 0) : '—'}</td>,
+                        payment: <td key="payment" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl ? 'text-sky-400 font-bold' : 'text-faint'}`}>{hasPnl ? fM(pnlByAsin.get(v.asin!)?.payment ?? 0) : '—'}</td>,
+                        storage_cost: <td key="storage_cost" className="px-3 py-2 text-right font-mono text-[11px] text-amber-400">{hasPnl && (pnlByAsin.get(v.asin!)?.storage_cost ?? 0) > 0 ? fM(pnlByAsin.get(v.asin!)?.storage_cost ?? 0) : '—'}</td>,
+                        ad_orders: <td key="ad_orders" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fmt(v.ad_orders) : '—'}</td>,
+                        units: <td key="units" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fmt(v.units) : '—'}</td>,
+                        orders: <td key="orders" className="px-3 py-2 text-right font-mono text-[11px]">{fmt(v.orders)}</td>,
+                        organic_units: <td key="organic_units" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fmt(v.organic_units) : '—'}</td>,
                         clicks: <td key="clicks" className="px-3 py-2 text-right font-mono text-[11px]">{fClk(v.clicks)}</td>,
-                        sessions: <td key="sessions" className="px-3 py-2 text-right font-mono text-[11px]">{(v.sessions ?? 0) > 0 ? (v.sessions ?? 0).toLocaleString() : '—'}</td>,
+                        sessions: <td key="sessions" className="px-3 py-2 text-right font-mono text-[11px]">{v.sessions > 0 ? v.sessions.toLocaleString() : '—'}</td>,
                         organic_pct: <td key="organic_pct" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fP(v.organic_pct) : '—'}</td>,
                         sales_change: <td key="sales_change" className="px-3 py-2">{vc ? <ChangesSummaryCell data={vc} /> : <span className="text-faint">—</span>}</td>,
                         fba_pick_pack: (() => { const prod = v.asin ? productByAsin.get(v.asin) : undefined; return <td key="fba_pick_pack" className="px-3 py-2 text-right font-mono text-[11px]">{prod ? `$${prod.pick_pack_fee.toFixed(2)}` : '—'}</td>; })(),
                         fba_referral: (() => { const prod = v.asin ? productByAsin.get(v.asin) : undefined; return <td key="fba_referral" className="px-3 py-2 text-right font-mono text-[11px]">{prod ? `$${prod.referral_fee.toFixed(2)}` : '—'}</td>; })(),
                         cost_of_goods: (() => { const prod = v.asin ? productByAsin.get(v.asin) : undefined; return <td key="cost_of_goods" className="px-3 py-2 text-right font-mono text-[11px]">{prod ? `$${prod.cogs.toFixed(2)}` : '—'}</td>; })(),
                         shipping_cost_per_unit: (() => { const prod = v.asin ? productByAsin.get(v.asin) : undefined; return <td key="shipping_cost_per_unit" className="px-3 py-2 text-right font-mono text-[11px]">{prod ? `$${prod.shipping_cost.toFixed(2)}` : '—'}</td>; })(),
+                        fba_stock_qty: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.fba_stock_qty; return <td key="fba_stock_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{q != null && q > 0 ? fmt(q) : '—'}</td>; })(),
+                        awd_stock_qty: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.awd_stock_qty; return <td key="awd_stock_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{q != null && q > 0 ? fmt(q) : '—'}</td>; })(),
+                        days_of_coverage: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const d = sc?.days_of_coverage; return <td key="days_of_coverage" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${d != null ? (d < 70 ? 'text-red-400' : d < 100 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
+                        fba_days_of_coverage: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const d = sc?.fba_days_of_coverage; return <td key="fba_days_of_coverage" className={`px-3 py-2 text-right font-mono text-[11px] ${d != null ? (d <= 20 ? 'text-red-400 font-bold' : d < 30 ? 'text-amber-400' : d <= 45 ? 'text-emerald-400' : d <= 60 ? 'text-amber-400' : 'text-red-400 font-bold') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
+                        awd_days_of_coverage: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const d = sc?.awd_days_of_coverage; return <td key="awd_days_of_coverage" className={`px-3 py-2 text-right font-mono text-[11px] ${d != null ? (d < 50 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
+                        days_next_shipment: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const d = sc?.days_to_next_shipment; return <td key="days_next_shipment" className={`px-3 py-2 text-right font-mono text-[11px] ${d != null ? (d <= 3 ? 'text-emerald-400 font-bold' : d <= 14 ? 'text-sky-400' : 'text-subtle') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
+                        qty_next_shipment: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.next_shipment_qty; return <td key="qty_next_shipment" className="px-3 py-2 text-right font-mono text-[11px]">{q != null ? fmt(q) : '—'}</td>; })(),
+                        last_30d_sold: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.last_30d_sold; return <td key="last_30d_sold" className="px-3 py-2 text-right font-mono text-[11px]">{q != null ? fmt(q) : '—'}</td>; })(),
+                        next_30d_planned: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.next_30d_planned; return <td key="next_30d_planned" className="px-3 py-2 text-right font-mono text-[11px]">{q != null ? fmt(q) : '—'}</td>; })(),
+                        next_31_60d_planned: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.next_31_60d_planned; return <td key="next_31_60d_planned" className="px-3 py-2 text-right font-mono text-[11px]">{q != null ? fmt(q) : '—'}</td>; })(),
+                        next_61_90d_planned: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.next_61_90d_planned; return <td key="next_61_90d_planned" className="px-3 py-2 text-right font-mono text-[11px]">{q != null ? fmt(q) : '—'}</td>; })(),
+                        awd_min_defined: (() => {
+                          const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined;
+                          if (!sc || (sc.awd_stock_qty || 0) <= 0) return <td key="awd_min_defined" className="px-3 py-2 text-right font-mono text-[11px] text-faint">—</td>;
+                          return <td key="awd_min_defined" className="px-3 py-2 text-right font-mono text-[11px]">{sc.awd_target_min != null ? fmt(sc.awd_target_min) : '—'} <span className="text-faint">({sc.awd_approved_min != null ? fmt(sc.awd_approved_min) : '—'})</span></td>;
+                        })(),
+                        awd_max_defined: (() => {
+                          const sc = supplyChainByAsin.get(v.asin!);
+                          if (!sc || !sc.awd_stock_qty) return <td key="awd_max_defined" className="px-3 py-2 text-right font-mono text-[11px] text-faint">—</td>;
+                          const hasApprovalNeeds = sc.awd_diff_pct != null && sc.awd_diff_pct > 10;
+                          const isJustApproved = approvedAwds.has(v.asin!);
+                          const diff = sc.awd_diff_pct || 0;
+                          const needsApp = hasApprovalNeeds && !isJustApproved;
+                          return (
+                            <td key="awd_max_defined" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${needsApp ? (diff > 30 ? 'text-red-400' : diff > 20 ? 'text-orange-400' : 'text-amber-400') : 'text-emerald-400'}`}>
+                              <div className="flex items-center justify-end gap-2">
+                                <span>{sc.awd_target_max != null ? fmt(sc.awd_target_max) : '—'} <span className="text-faint">({sc.awd_approved_max > 0 ? fmt(sc.awd_approved_max) : '—'})</span></span>
+                                {needsApp && (
+                                  <button onClick={(e) => { e.stopPropagation(); handleApproveAwd(v.asin!, Math.round(sc.awd_target_min || 0), Math.round(sc.awd_target_max || 0)); }} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${diff > 30 ? 'bg-red-500/20 text-red-300 hover:bg-red-500/40' : diff > 20 ? 'bg-orange-500/20 text-orange-300 hover:bg-orange-500/40' : 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/40'}`}>
+                                    Approve
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          );
+                        })(),
                       };
                       return cells[key] ?? <td key={key} className="px-3 py-2">—</td>;
                     }
@@ -1618,32 +1999,25 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                         </td>
                       ),
                       cogs: <td key="cogs" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fM(r.cogs)}</td>,
-                      ad_cost: <td key="ad_cost" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fM(r.ad_cost)}</td>,
-                      ads_sales: <td key="ads_sales" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fM(r.ads_sales || 0)}</td>,
-                      ads_units: <td key="ads_units" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fOrd(r.ads_units || 0)}</td>,
-                      net_profit: <td key="net_profit" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${r.net_profit > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fM(r.net_profit)}</td>,
-                      np_per_unit: <td key="np_per_unit" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${(r.units ?? 0) > 0 ? (r.net_profit / r.units > 0 ? 'text-emerald-400' : 'text-red-400') : 'text-faint'}`}>{(r.units ?? 0) > 0 ? fM(r.net_profit / r.units) : '—'}</td>,
+                      ad_cost: <td key="ad_cost" className="px-3 py-2 text-right font-mono text-[11px] text-red-400">{fM(r.ad_cost)}</td>,
+                      pct_ads_spend: <td key="pct_ads_spend" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{totalAdCost > 0 ? fP((r.ad_cost / totalAdCost) * 100) : '—'}</td>,
+                      net_profit: <td key="net_profit" className="px-3 py-2 text-right font-mono text-[11px] font-bold text-sky-400">{fM(r.net_profit)}</td>,
+                      pct_net_profit: <td key="pct_net_profit" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{totalNetProfit > 0 && r.net_profit > 0 ? fP((r.net_profit / totalNetProfit) * 100) : '—'}</td>,
                       net_roas: <td key="net_roas" className="px-3 py-2 text-right"><RoasBadge value={r.net_roas} /></td>,
                       tacos: <td key="tacos" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${r.sales > 0 ? ((r.ad_cost / r.sales) * 100 > 30 ? 'text-red-400' : (r.ad_cost / r.sales) * 100 > 15 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{r.sales > 0 ? fP((r.ad_cost / r.sales) * 100) : '—'}</td>,
                       ads_roas: (() => { const ar = r.ad_cost > 0 ? (r.ads_sales || 0) / r.ad_cost : 0; return <td key="ads_roas" className="px-3 py-2 text-right">{ar > 0 ? <RoasBadge value={ar} /> : <span className="text-faint">—</span>}</td>; })(),
-                      ad_orders: <td key="ad_orders" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fOrd(r.ad_orders ?? 0)}</td>,
-                      units: <td key="units" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fOrd(r.units ?? 0)}</td>,
-                      orders: <td key="orders" className="px-3 py-2 text-right">{fOrd(r.orders)}</td>,
-                      organic_units: <td key="organic_units" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fOrd(r.organic_units ?? 0)}</td>,
-                      clicks: <td key="clicks" className="px-3 py-2 text-right">{fClk(r.clicks)}</td>,
-                      sessions: <td key="sessions" className="px-3 py-2 text-right font-mono text-[11px]">{(r.sessions ?? 0) > 0 ? (r.sessions ?? 0).toLocaleString() : '—'}</td>,
-                      organic_pct: <td key="organic_pct" className="px-3 py-2 text-right">{fP(r.organic_pct)}</td>,
+                      ad_orders: <td key="ad_orders" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fmt(r.ad_orders ?? 0)}</td>,
+                      units: <td key="units" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fmt(r.units ?? 0)}</td>,
+                      orders: <td key="orders" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fmt(r.orders)}</td>,
+                      clicks: <td key="clicks" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fClk(r.clicks)}</td>,
+                      sessions: <td key="sessions" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{(r.sessions ?? 0) > 0 ? (r.sessions ?? 0).toLocaleString() : '—'}</td>,
                       sales_change: <td key="sales_change" className="px-3 py-2"><ChangesSummaryCell data={famChanges ?? { status: r.sales_change > 0 ? 'Sales up' : r.sales_change < 0 ? 'Sales down' : 'Flat vs previous period', sd: r.sales_change ?? 0, cd: 0, pd: 0, roasDelta: 0, orgDelta: 0 }} positiveCount={totalCount > 0 ? positiveCount : undefined} totalCount={totalCount > 0 ? totalCount : undefined} /></td>,
-                      fba_pick_pack: <td key="fba_pick_pack" className="px-3 py-2 text-right font-mono text-[11px] text-faint">—</td>,
-                      fba_referral: <td key="fba_referral" className="px-3 py-2 text-right font-mono text-[11px] text-faint">—</td>,
-                      cost_of_goods: <td key="cost_of_goods" className="px-3 py-2 text-right font-mono text-[11px] text-faint">—</td>,
-                      shipping_cost_per_unit: <td key="shipping_cost_per_unit" className="px-3 py-2 text-right font-mono text-[11px] text-faint">—</td>,
                     };
                     return cells[key] ?? <td key={key} className="px-3 py-2">—</td>;
                   };
                   return (
                     <React.Fragment key={i}>
-                      <tr onClick={() => f && setExpandedFamily(isExpanded ? null : f)} className={`border-b border-border-faint last:border-b-0 hover:bg-white/[.02] cursor-pointer transition-colors ${r.net_profit > 0 ? 'profit-positive' : 'profit-negative'}`}>
+                      <tr onClick={() => f && setExpandedFamily(isExpanded ? null : f)} className={`border-b border-border-faint last:border-b-0 hover:bg-white/[.02] cursor-pointer transition-colors`}>
                         {visibleFamilyCols.map(c => renderCell(c.id, false))}
                       </tr>
                       {isExpanded && vars.map((v, j) => (
@@ -1653,9 +2027,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                       ))}
                     </React.Fragment>
                   );
-                })}
-                {/* Total row */}
-                {familyPeriodData && familyPeriodData.length > 1 && (() => {
+                });
+              })()}
+              {/* Total row */}
+              {familyPeriodData && familyPeriodData.length > 1 && (() => {
                   const tot = familyPeriodData.reduce((acc, r) => ({
                     sales: acc.sales + r.sales,
                     cogs: acc.cogs + r.cogs,
@@ -1670,9 +2045,6 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                     organic_units: acc.organic_units + r.organic_units,
                     ad_orders: acc.ad_orders + r.ad_orders,
                   }), { sales: 0, cogs: 0, ad_cost: 0, ads_sales: 0, ads_units: 0, net_profit: 0, orders: 0, units: 0, clicks: 0, sessions: 0, organic_units: 0, ad_orders: 0 });
-                  // Use effectiveTotals.co for consistency with Hero/KPI cards
-                  tot.ad_cost = effectiveTotals.co;
-                  tot.net_profit = tot.sales - tot.cogs - tot.ad_cost;
                   const net_roas = tot.ad_cost ? (tot.sales - tot.cogs) / tot.ad_cost : 0;
                   const organic_pct = tot.units > 0 ? (tot.organic_units / tot.units) * 100 : 0;
                   const totalCells: Record<string, React.ReactNode> = {
@@ -1681,17 +2053,21 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                     share_pct: <td key="share_pct" className="px-3 py-2 text-right font-mono text-[11px] font-bold">100%</td>,
                     cogs: <td key="cogs" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fM(tot.cogs)}</td>,
                     ad_cost: <td key="ad_cost" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fM(tot.ad_cost)}</td>,
+                    pct_ads_spend: <td key="pct_ads_spend" className="px-3 py-2 text-right font-mono text-[11px] font-bold">100%</td>,
                     ads_sales: <td key="ads_sales" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fM(tot.ads_sales)}</td>,
-                    ads_units: <td key="ads_units" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fOrd(tot.ads_units)}</td>,
+                    ads_units: <td key="ads_units" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fmt(tot.ads_units)}</td>,
                     net_profit: <td key="net_profit" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${tot.net_profit > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fM(tot.net_profit)}</td>,
+                    pct_net_profit: <td key="pct_net_profit" className="px-3 py-2 text-right font-mono text-[11px] font-bold">100%</td>,
                     np_per_unit: <td key="np_per_unit" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${tot.units > 0 ? (tot.net_profit / tot.units > 0 ? 'text-emerald-400' : 'text-red-400') : 'text-faint'}`}>{tot.units > 0 ? fM(tot.net_profit / tot.units) : '—'}</td>,
                     net_roas: <td key="net_roas" className="px-3 py-2 text-right"><RoasBadge value={net_roas} /></td>,
                     tacos: <td key="tacos" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${tot.sales > 0 ? ((tot.ad_cost / tot.sales) * 100 > 30 ? 'text-red-400' : (tot.ad_cost / tot.sales) * 100 > 15 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{tot.sales > 0 ? fP((tot.ad_cost / tot.sales) * 100) : '—'}</td>,
                     ads_roas: (() => { const ar = tot.ad_cost > 0 ? tot.ads_sales / tot.ad_cost : 0; return <td key="ads_roas" className="px-3 py-2 text-right">{ar > 0 ? <RoasBadge value={ar} /> : <span className="text-faint">—</span>}</td>; })(),
-                    ad_orders: <td key="ad_orders" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fOrd(tot.ad_orders)}</td>,
-                    units: <td key="units" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fOrd(tot.units)}</td>,
-                    orders: <td key="orders" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fOrd(tot.orders)}</td>,
-                    organic_units: <td key="organic_units" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fOrd(tot.organic_units)}</td>,
+                    payment: (() => { const totPayment = familyPeriodData.reduce((s, r) => s + (r.payment ?? 0), 0); return <td key="payment" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${totPayment > 0 ? 'text-sky-400' : 'text-red-400'}`}>{fM(totPayment)}</td>; })(),
+                    storage_cost: (() => { const totStorage = familyPeriodData.reduce((s, r) => s + (r.storage_cost ?? 0), 0); return <td key="storage_cost" className="px-3 py-2 text-right font-mono text-[11px] font-bold text-amber-400">{totStorage > 0 ? fM(totStorage) : '—'}</td>; })(),
+                    ad_orders: <td key="ad_orders" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fmt(tot.ad_orders)}</td>,
+                    units: <td key="units" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fmt(tot.units)}</td>,
+                    orders: <td key="orders" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fmt(tot.orders)}</td>,
+                    organic_units: <td key="organic_units" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fmt(tot.organic_units)}</td>,
                     clicks: <td key="clicks" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fClk(tot.clicks)}</td>,
                     sessions: <td key="sessions" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{tot.sessions > 0 ? tot.sessions.toLocaleString() : '—'}</td>,
                     organic_pct: <td key="organic_pct" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fP(organic_pct)}</td>,
@@ -1710,15 +2086,18 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       </Section>
 
       {/* Actions Summary */}
-      <Section title="Actions To Do" count={acts.length > 0 ? `${acts.length} pending` : undefined} filterItems={formatSectionFilters(filters)}>
-        {!acts.length ? <Empty icon="✓" message="No pending actions" /> : (
-          <div className="space-y-3.5">
-            {([
-              { k: 'urgent', t: 'Urgent', v: 'red' },
-              { k: 'growth', t: 'Growth', v: 'green' },
-              { k: 'experiment', t: 'Experiments', v: 'blue' },
-              { k: 'fix', t: 'Fix', v: 'amber' },
-            ] as const).map(({ k, t, v }) => {
+      {(() => {
+        const filteredActsCount = Object.values(grouped).reduce((s, arr) => s + arr.length, 0);
+        return (
+          <Section title="Actions To Do" count={filteredActsCount > 0 ? `${filteredActsCount} pending` : undefined} filterItems={formatSectionFilters(filters)}>
+            {!filteredActsCount ? <Empty icon="✓" message="No pending actions" /> : (
+              <div className="space-y-3.5">
+                {([
+                  { k: 'urgent', t: 'Urgent', v: 'red' },
+                  { k: 'growth', t: 'Growth', v: 'green' },
+                  { k: 'experiment', t: 'Experiments', v: 'blue' },
+                  { k: 'fix', t: 'Fix', v: 'amber' },
+                ] as const).map(({ k, t, v }) => {
               const items = grouped[k];
               if (!items.length) return null;
               return (
@@ -1753,7 +2132,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           </div>
         )}
       </Section>
-
+      );})()}
       {/* Upcoming */}
       <Section title="Near Future" filterItems={formatSectionFilters(filters)}>
         {!(data.upcoming || []).length ? <Empty message="No upcoming events" /> : (

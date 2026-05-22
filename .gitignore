@@ -70,3 +70,40 @@ config.local.json
 sqp_*.csv
 data-entry-app/DEPLOY_OAUTH_FIX_INSTRUCTIONS.md
 data-entry-app/STEP_BY_STEP_DEPLOY.md
+
+# Root-level test/scratch scripts
+/test.py
+/test_*.py
+/test_*.js
+/test-*.js
+/test-*.html
+/test_*.sql
+/bq_check.py
+/bq_debug_sp.sql
+/bq_test.js
+/bq_test_*.sql
+/check_model.py
+/patch.py
+/scratch_api.py
+/update_forecast.py
+/update_launch.py
+/update_season.py
+
+# Root-level data/binary files
+/amazon_performance_data.csv
+/dim_product.json
+/pilot_*.csv
+/pilot_*.xlsx
+/bulk-*.xlsx
+
+# Cube test/temp files
+cube/.tmp_*
+cube/cube_test_*.json
+cube/test-cube*.js
+cube/test-cloud-cube.js
+cube/token.txt
+
+# Dashboard temp files
+dashboard-react/check_data.js
+dashboard-react/src/tmp_planpage
+~$*

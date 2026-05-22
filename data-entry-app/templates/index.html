@@ -22,7 +22,10 @@
             <div class="col-md-4">
                 <div class="card summary-card accent-yellow">
                     <div class="card-body">
-                        <h6 class="card-title mb-1">Remaining to Manufactured</h6>
+                        <h6 class="card-title mb-1">Remaining to Manufactured
+                            <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining to Manufactured"
+                               data-bs-content="Unpaid PO amount for manufacturer SYLVIA.<br><code>SUM(PO Amount − Paid) WHERE Manufacturer = SYLVIA</code>"></i>
+                        </h6>
                         <h3 class="mb-0" style="color: #C28B00;">{{ remaining_sylvia|format_currency_with_commas }} USD</h3>
                     </div>
                 </div>
@@ -30,7 +33,10 @@
             <div class="col-md-4">
                 <div class="card summary-card accent-peach">
                     <div class="card-body">
-                        <h6 class="card-title mb-1">Remaining to Shipments</h6>
+                        <h6 class="card-title mb-1">Remaining to Shipments
+                            <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining to Shipments"
+                               data-bs-content="Unpaid shipment costs across all POs.<br><code>SUM(Shipment Cost − Paid Shipment Cost)</code>"></i>
+                        </h6>
                         <h3 class="mb-0" style="color: var(--hl-pink-dark);">{{ remaining_anna|format_currency_with_commas }} USD</h3>
                     </div>
                 </div>
@@ -38,7 +44,10 @@
             <div class="col-md-4">
                 <div class="card summary-card accent-lavender">
                     <div class="card-body">
-                        <h6 class="card-title mb-1">Remaining Shipments Estimated</h6>
+                        <h6 class="card-title mb-1">Remaining Shipments Estimated
+                            <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining Shipments Estimated"
+                               data-bs-content="Estimated cost for shipped units that don't have a cost yet.<br><code>Qty Without Cost × Avg Unit Cost</code><br>Avg is from: same PO → same product → last 12 months."></i>
+                        </h6>
                         <h3 class="mb-0" style="color: #6B42A3;">{{ remaining_shipments_estimated_total|format_currency_with_commas }} USD</h3>
                     </div>
                 </div>
@@ -104,10 +113,16 @@
                                     {% else %}-{% endif %}
                                 </td>
                                 <td>{{ s.total_quantity|default(0)|int|format_number }}</td>
-                                <td>
-                                    {% if s.cost_shipped %}
-                                    <strong>{{ s.cost_shipped|format_currency_with_commas }}</strong>
-                                    {% else %}-{% endif %}
+                                <td class="shipment-cost-cell" data-shipment-id="{{ s.shipment_id }}" style="cursor: pointer;" title="Click to edit">
+                                    {% set total_ship_cost = (s.cost_shipped or 0) + (s.amazon_commission or 0) %}
+                                    {% if total_ship_cost > 0 %}
+                                    <strong class="cost-display">{{ total_ship_cost|format_currency_with_commas }}</strong>
+                                    {% else %}
+                                    <span class="cost-display text-muted">—</span>
+                                    {% endif %}
+                                    <input type="number" class="form-control form-control-sm cost-edit-input" 
+                                           value="{{ s.cost_shipped or '' }}" step="0.01" min="0" 
+                                           style="display: none; width: 100px;">
                                 </td>
                                 <td><span class="badge status-{{ s.shipment_status }}">{{ s.shipment_status }}</span></td>
                                 <td>
@@ -136,24 +151,66 @@
             </div>
         </div>
 
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <a href="{{ url_for('new_order') }}" class="btn btn-primary">
-                <i class="bi bi-plus-circle"></i> New Purchase Order
-            </a>
-            <div class="btn-group" role="group">
-                <input type="checkbox" class="btn-check" id="filter_open" autocomplete="off" 
-                       {% if filter_open %}checked{% endif %}
-                       onchange="window.location.href='{{ url_for('index') }}?filter_open_shipments=' + (this.checked ? 'true' : 'false')">
-                <label class="btn btn-outline-secondary" for="filter_open">
-                    <i class="bi bi-truck"></i> Open Shipments
-                </label>
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <a href="{{ url_for('new_order') }}" class="btn btn-primary">
+                    <i class="bi bi-plus-circle"></i> New Purchase Order
+                </a>
                 
-                {% if filter_open %}
-                <a href="{{ url_for('index') }}?filter_open_shipments=false" class="btn btn-outline-secondary">
-                    <i class="bi bi-x-circle"></i> Show All
+                <!-- Family Filter -->
+                <select class="form-select form-select-sm" id="familyFilter" style="width: auto; min-width: 140px;" onchange="applyFilters()">
+                    <option value="">All Families</option>
+                    {% for f in families %}
+                    <option value="{{ f }}" {% if family_filter == f %}selected{% endif %}>{{ f }}</option>
+                    {% endfor %}
+                </select>
+
+                <!-- Product Filter -->
+                <select class="form-select form-select-sm" id="productFilter" style="width: auto; min-width: 160px;" onchange="applyFilters()">
+                    <option value="">All Products</option>
+                    {% for pid, short_name in dropdown_products %}
+                    <option value="{{ pid }}" {% if product_filter == pid|string %}selected{% endif %}>{{ short_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                {% if family_filter or product_filter %}
+                <a href="{{ url_for('index', filter_open_shipments='true' if filter_open else 'false') }}" class="btn btn-sm btn-outline-danger">
+                    <i class="bi bi-x-circle"></i> Clear Filters
                 </a>
                 {% endif %}
+                <div class="btn-group" role="group">
+                    <input type="checkbox" class="btn-check" id="filter_open" autocomplete="off" 
+                           {% if filter_open %}checked{% endif %}
+                           onchange="applyFilters()">
+                    <label class="btn btn-outline-secondary" for="filter_open">
+                        <i class="bi bi-truck"></i> Open Shipments
+                    </label>
+                    
+                    {% if filter_open %}
+                    <a href="{{ url_for('index', filter_open_shipments='false', family=family_filter, product=product_filter) }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-x-circle"></i> Show All
+                    </a>
+                    {% endif %}
+                </div>
             </div>
+        </div>
+
+        <!-- Bulk Action Bar -->
+        <div class="bulk-delete-bar mb-2" id="poBulkBar">
+            <span><strong id="poSelectedCount">0</strong> selected</span>
+            <form method="POST" action="{{ url_for('bulk_delete_pos') }}" id="poBulkDeleteForm"
+                  onsubmit="return confirmBulkDeletePO();">
+                <button type="submit" class="btn btn-sm btn-danger">
+                    <i class="bi bi-trash"></i> Delete Selected
+                </button>
+            </form>
+            <button type="button" class="btn btn-sm btn-success" onclick="bulkPayPOs()">
+                <i class="bi bi-credit-card"></i> Pay Selected
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearPOSelection()" style="font-size: 0.82rem;">
+                <i class="bi bi-x-circle"></i> Cancel
+            </button>
         </div>
     </div>
 </div>
@@ -164,30 +221,54 @@
             <div class="card-body">
                 {% if orders %}
                 <div class="table-responsive">
-                    <table class="table table-hover table-striped table-sm sortable-table">
+                    <table class="table table-hover table-striped table-sm sortable-table" id="poTable">
                         <thead>
                             <tr>
+                                <th style="font-size: 0.85rem; width: 30px;"><input type="checkbox" class="bulk-cb" id="poSelectAll" onchange="toggleAllPO(this)"></th>
                                 <th style="font-size: 0.85rem;" data-sort="date">Date <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th style="font-size: 0.85rem;" data-sort="string">Product <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Quantity <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Pending Shipment<br><small>Quantity</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Unit Price <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Cost <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Paid <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem; font-weight: bold; text-decoration: underline;" data-sort="number">Remaining <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Remaining<br><small>Manufactured</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Remaining<br><small>Shipments</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Remaining Shipments<br><small>Estimated</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Avg Ship<br><small>Price</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Avg Cost<br><small>/Unit</small> <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Quantity
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Quantity" data-bs-content="Total units ordered in this PO."></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Pending Shipment<br><small>Quantity</small>
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Pending Shipment Quantity" data-bs-content="Units not yet shipped.<br><code>PO Quantity − Total Qty Shipped</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Unit Price
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Unit Price" data-bs-content="Manufacturing cost per unit.<br><code>PO Amount ÷ Quantity</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Cost
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Cost" data-bs-content="Total cost including PO + shipment.<br><code>PO Amount + Shipment Cost</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Paid
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Paid" data-bs-content="Total payments made (PO + shipment).<br><code>PO Payments + Paid Shipment Cost</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem; font-weight: bold; text-decoration: underline;" data-sort="number">Remaining
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining" data-bs-content="Total outstanding balance.<br><code>Cost − Paid</code><br>(includes both PO and shipment)"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Remaining<br><small>Manufactured</small>
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining Manufactured" data-bs-content="PO amount still unpaid (manufacturing only).<br><code>PO Amount − PO Payments</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Remaining<br><small>Shipments</small>
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining Shipments" data-bs-content="Unpaid shipment cost.<br><code>Shipment Cost − Paid Shipment Cost</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Remaining Shipments<br><small>Estimated</small>
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Remaining Shipments Estimated" data-bs-content="Estimated cost for shipped units without cost.<br><code>Qty Without Cost × Avg Unit Cost</code><br>Avg from: same PO → same product → last 12 months."></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Avg Ship<br><small>Price</small>
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Avg Ship Price" data-bs-content="Average shipping cost per unit.<br><code>Shipment Cost ÷ Qty Shipped</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Avg Cost<br><small>/Unit</small>
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Avg Cost / Unit" data-bs-content="Average total cost per unit (manufacturing + shipping).<br><code>(PO Amount + Shipment Cost) ÷ Quantity</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th style="font-size: 0.85rem;">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for order in orders %}
                             <tr style="font-size: 0.85rem;">
+                                <td><input type="checkbox" class="bulk-cb po-cb" value="{{ order.purchase_order_id }}" onchange="updatePOSelection()"></td>
                                 <td>{{ order.order_date }}</td>
-                                <td>{{ order.product_name }}</td>
+                                <td title="{{ order.product_names_combined or order.product_name or '' }}">{{ order.product_names_combined or order.product_name or '-' }}</td>
                                 <td>{{ order.quantity|format_number }}</td>
                                 <td>
                                     {% set pending_qty = order.remaining_quantity_to_ship|default(order.quantity|default(0)) %}
@@ -285,9 +366,139 @@
     </div>
 </div>
 
+<!-- Other PO Table -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h4 class="mb-0">Other Purchase Orders</h4>
+            <a href="{{ url_for('new_other_po') }}" class="btn btn-secondary">
+                <i class="bi bi-plus-circle"></i> New Other PO
+            </a>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                {% if other_pos %}
+                <div class="table-responsive">
+                    <table class="table table-hover table-striped table-sm sortable-table">
+                        <thead>
+                            <tr>
+                                <th style="font-size: 0.85rem;" data-sort="date">Date <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Service Type <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Supplier <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Related ASINs <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Total Amount
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Paid
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem; font-weight: bold; text-decoration: underline;" data-sort="number">Remaining
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for opo in other_pos %}
+                            <tr style="font-size: 0.85rem;">
+                                <td>{{ opo.order_date }}</td>
+                                <td><span class="badge bg-secondary">{{ opo.service_type }}</span></td>
+                                <td>{{ opo.supplier_name }}</td>
+                                <td>
+                                    {% if opo.product_asins %}
+                                        <small>{{ opo.product_asins[:30] }}{% if opo.product_asins|length > 30 %}...{% endif %}</small>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td><strong>{{ opo.total_amount|format_currency_with_commas }} {{ opo.currency }}</strong></td>
+                                <td>
+                                    {% if opo.total_paid and opo.total_paid > 0 %}
+                                        <span class="text-success">{{ opo.total_paid|format_currency_with_commas }} {{ opo.currency }}</span>
+                                    {% else %}
+                                        <span class="text-muted">0</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% set remaining = opo.total_amount - (opo.total_paid|default(0)) %}
+                                    {% if remaining > 0 %}
+                                        <span class="text-warning" style="font-weight: bold; text-decoration: underline;">{{ remaining|format_currency_with_commas }} {{ opo.currency }}</span>
+                                    {% else %}
+                                        <span class="text-success">0</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <a href="{{ url_for('other_po_details', po_id=opo.other_po_id) }}" class="btn btn-sm btn-primary" style="font-size: 0.75rem; padding: 0.2rem 0.4rem;">
+                                        <i class="bi bi-eye"></i> View Payments
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle"></i> No other purchase orders found.
+                    <a href="{{ url_for('new_other_po') }}" class="alert-link">Create an Other PO</a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
 {% block extra_js %}
 <script>
-// Table sorting functionality
+// ---- Product/Family Filter ----
+function applyFilters() {
+    const family = document.getElementById('familyFilter').value;
+    const product = document.getElementById('productFilter').value;
+    const filterOpen = document.getElementById('filter_open').checked;
+    
+    const params = new URLSearchParams();
+    params.set('filter_open_shipments', filterOpen ? 'true' : 'false');
+    if (family) params.set('family', family);
+    if (product) params.set('product', product);
+    
+    window.location.href = '{{ url_for("index") }}?' + params.toString();
+}
+
+// ---- Bulk Delete PO ----
+function toggleAllPO(master) {
+    document.querySelectorAll('.po-cb').forEach(cb => cb.checked = master.checked);
+    updatePOSelection();
+}
+function updatePOSelection() {
+    const checked = document.querySelectorAll('.po-cb:checked');
+    const bar = document.getElementById('poBulkBar');
+    document.getElementById('poSelectedCount').textContent = checked.length;
+    bar.classList.toggle('visible', checked.length > 0);
+}
+function clearPOSelection() {
+    document.querySelectorAll('.po-cb').forEach(cb => cb.checked = false);
+    document.getElementById('poSelectAll').checked = false;
+    updatePOSelection();
+}
+function confirmBulkDeletePO() {
+    const checked = document.querySelectorAll('.po-cb:checked');
+    if (checked.length === 0) return false;
+    if (!confirm(`Delete ${checked.length} Purchase Order(s)? This cannot be undone.`)) return false;
+    const form = document.getElementById('poBulkDeleteForm');
+    checked.forEach(cb => {
+        const inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'po_ids'; inp.value = cb.value;
+        form.appendChild(inp);
+    });
+    return true;
+}
+
+function bulkPayPOs() {
+    const checked = document.querySelectorAll('.po-cb:checked');
+    if (checked.length === 0) { alert('No POs selected'); return; }
+    const params = new URLSearchParams();
+    checked.forEach(cb => params.append('po_ids', cb.value));
+    window.location.href = '{{ url_for("bulk_po_payments") }}?' + params.toString();
+}
+
+// ---- Table Sorting ----
 document.addEventListener('DOMContentLoaded', function() {
     const tables = document.querySelectorAll('.sortable-table');
     
@@ -297,7 +508,10 @@ document.addEventListener('DOMContentLoaded', function() {
         
         headers.forEach((header, index) => {
             header.style.cursor = 'pointer';
-            header.addEventListener('click', () => {
+            header.addEventListener('click', (e) => {
+                // Don't sort when clicking popover icons
+                if (e.target.classList.contains('measure-info')) return;
+                
                 const sortType = header.getAttribute('data-sort');
                 const tbody = table.querySelector('tbody');
                 const rows = Array.from(tbody.querySelectorAll('tr'));
@@ -336,12 +550,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     let aValue = aCell.textContent.trim();
                     let bValue = bCell.textContent.trim();
                     
-                    // Handle different data types
                     if (sortType === 'number') {
-                        // Extract number from text (handles currency, etc.)
-                        // Handle empty/null values (like "-" or empty strings)
                         if (aValue === '-' || aValue === '' || aValue === '0.00') {
-                            aValue = -Infinity; // Put empty values at bottom
+                            aValue = -Infinity;
                         } else {
                             aValue = parseFloat(aValue.replace(/[^\d.-]/g, '')) || -Infinity;
                         }
@@ -351,7 +562,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             bValue = parseFloat(bValue.replace(/[^\d.-]/g, '')) || -Infinity;
                         }
                     } else if (sortType === 'date') {
-                        // Handle empty dates
                         if (aValue === '-' || aValue === '') {
                             aValue = new Date(0);
                         } else {
@@ -363,8 +573,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             bValue = new Date(bValue) || new Date(0);
                         }
                     } else {
-                        // String comparison - handle empty/null
-                        if (aValue === '-' || aValue === '') aValue = 'zzz'; // Put empty at bottom
+                        if (aValue === '-' || aValue === '') aValue = 'zzz';
                         if (bValue === '-' || bValue === '') bValue = 'zzz';
                         aValue = aValue.toLowerCase();
                         bValue = bValue.toLowerCase();
@@ -375,10 +584,55 @@ document.addEventListener('DOMContentLoaded', function() {
                     return 0;
                 });
                 
-                // Reorder rows in DOM
                 rows.forEach(row => tbody.appendChild(row));
             });
         });
+    });
+});
+// ---- Inline Shipment Cost Edit ----
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.shipment-cost-cell').forEach(cell => {
+        const display = cell.querySelector('.cost-display');
+        const input = cell.querySelector('.cost-edit-input');
+        const shipmentId = cell.dataset.shipmentId;
+        if (!display || !input) return;
+
+        cell.addEventListener('click', function(e) {
+            if (e.target === input) return;
+            display.style.display = 'none';
+            input.style.display = '';
+            input.focus();
+            input.select();
+        });
+
+        function saveCost() {
+            const newCost = input.value;
+            input.style.display = 'none';
+            display.style.display = '';
+
+            fetch(`/api/shipment/${shipmentId}/update`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cost_shipped: newCost || '' })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    const v = parseFloat(newCost);
+                    display.innerHTML = v ? `<strong>${v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>` : '<span class="text-muted">—</span>';
+                    display.classList.toggle('text-muted', !v);
+                } else {
+                    alert('Error: ' + (data.error || 'Unknown'));
+                }
+            })
+            .catch(err => alert('Network error: ' + err));
+        }
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); saveCost(); }
+            if (e.key === 'Escape') { input.style.display = 'none'; display.style.display = ''; }
+        });
+        input.addEventListener('blur', saveCost);
     });
 });
 </script>

@@ -18,21 +18,78 @@
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1><i class="bi bi-box-seam"></i> All Shipments</h1>
-            <div class="d-flex gap-2">
+            <div class="d-flex gap-2 align-items-center flex-wrap">
                 <div class="btn-group" role="group">
-                    <a href="{{ url_for('shipments_list', filter='open') }}" 
+                    <a href="{{ url_for('shipments_list', filter='open', year=year_filter, paid=paid_filter, shipment_id=shipment_id_filter) }}" 
                        class="btn btn-sm {{ 'btn-primary' if status_filter == 'open' else 'btn-outline-primary' }}">
                         <i class="bi bi-funnel"></i> Open
                     </a>
-                    <a href="{{ url_for('shipments_list', filter='all') }}" 
+                    <a href="{{ url_for('shipments_list', filter='all', year=year_filter, paid=paid_filter, shipment_id=shipment_id_filter) }}" 
                        class="btn btn-sm {{ 'btn-primary' if status_filter == 'all' else 'btn-outline-primary' }}">
                         All
                     </a>
                 </div>
+                <span class="text-muted mx-1">|</span>
+                <div class="btn-group" role="group" aria-label="Year filter">
+                    {% for y in available_years %}
+                    <a href="{{ url_for('shipments_list', filter=status_filter, year=y, paid=paid_filter, shipment_id=shipment_id_filter) }}" 
+                       class="btn btn-sm {{ 'btn-secondary' if year_filter == y else 'btn-outline-secondary' }}">
+                        {{ y }}
+                    </a>
+                    {% endfor %}
+                    <a href="{{ url_for('shipments_list', filter=status_filter, year='all', paid=paid_filter, shipment_id=shipment_id_filter) }}" 
+                       class="btn btn-sm {{ 'btn-secondary' if year_filter == 'all' else 'btn-outline-secondary' }}">
+                        All
+                    </a>
+                </div>
+                <span class="text-muted mx-1">|</span>
+                <div class="btn-group" role="group" aria-label="Paid filter">
+                    <a href="{{ url_for('shipments_list', filter=status_filter, year=year_filter, paid='all', shipment_id=shipment_id_filter) }}" 
+                       class="btn btn-sm {{ 'btn-info' if paid_filter == 'all' else 'btn-outline-info' }}">
+                        All
+                    </a>
+                    <a href="{{ url_for('shipments_list', filter=status_filter, year=year_filter, paid='paid', shipment_id=shipment_id_filter) }}" 
+                       class="btn btn-sm {{ 'btn-success' if paid_filter == 'paid' else 'btn-outline-success' }}">
+                        <i class="bi bi-check-circle"></i> Paid
+                    </a>
+                    <a href="{{ url_for('shipments_list', filter=status_filter, year=year_filter, paid='unpaid', shipment_id=shipment_id_filter) }}" 
+                       class="btn btn-sm {{ 'btn-danger' if paid_filter == 'unpaid' else 'btn-outline-danger' }}">
+                        <i class="bi bi-x-circle"></i> Unpaid
+                    </a>
+                </div>
+                <form action="{{ url_for('shipments_list') }}" method="GET" class="d-flex align-items-center mb-0 ms-1">
+                    <input type="hidden" name="filter" value="{{ status_filter }}">
+                    <input type="hidden" name="year" value="{{ year_filter }}">
+                    <input type="hidden" name="paid" value="{{ paid_filter }}">
+                    <div class="input-group input-group-sm" style="max-width: 200px;">
+                        <input type="text" class="form-control" name="shipment_id" value="{{ shipment_id_filter }}" placeholder="Shipment ID...">
+                        <button class="btn btn-outline-secondary" type="submit"><i class="bi bi-search"></i></button>
+                        {% if shipment_id_filter %}
+                        <a href="{{ url_for('shipments_list', filter=status_filter, year=year_filter, paid=paid_filter) }}" class="btn btn-outline-danger" title="Clear search"><i class="bi bi-x"></i></a>
+                        {% endif %}
+                    </div>
+                </form>
                 <a href="{{ url_for('new_shipment') }}" class="btn btn-primary">
                     <i class="bi bi-plus-circle"></i> New Shipment
                 </a>
             </div>
+        </div>
+
+        <!-- Bulk Delete Bar -->
+        <div class="bulk-delete-bar mb-2" id="shipBulkBar">
+            <span><strong id="shipSelectedCount">0</strong> selected</span>
+            <button type="button" class="btn btn-sm btn-success" onclick="recordPaymentForSelected()">
+                <i class="bi bi-credit-card"></i> Record Payment
+            </button>
+            <form method="POST" action="{{ url_for('bulk_delete_shipments') }}" id="shipBulkDeleteForm"
+                  onsubmit="return confirmBulkDeleteShip();">
+                <button type="submit" class="btn btn-sm btn-danger">
+                    <i class="bi bi-trash"></i> Delete Selected
+                </button>
+            </form>
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearShipSelection()" style="font-size: 0.82rem;">
+                <i class="bi bi-x-circle"></i> Cancel
+            </button>
         </div>
     </div>
 </div>
@@ -46,12 +103,19 @@
                     <table class="table table-hover table-striped table-sm sortable-table">
                         <thead>
                             <tr>
+                                <th style="font-size: 0.85rem; width: 30px;"><input type="checkbox" class="bulk-cb" id="shipSelectAll" onchange="toggleAllShip(this)"></th>
                                 <th style="font-size: 0.85rem;" data-sort="date">Ship Date <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th style="font-size: 0.85rem;" data-sort="date">ETA <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="string">Type <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="string">Type
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Type" data-bs-content="Shipment method: SLOW_SEA, FAST_SEA, or AIR."></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th style="font-size: 0.85rem;">Products</th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Qty <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                <th style="font-size: 0.85rem;" data-sort="number">Cost <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Qty
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Quantity" data-bs-content="Total units in this shipment (sum of all line items)."></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th style="font-size: 0.85rem;" data-sort="number">Cost
+                                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Cost" data-bs-content="Total shipping cost (Shipment + Commission).<br><code>cost_shipped + amazon_commission</code>"></i>
+                                    <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th style="font-size: 0.85rem;" data-sort="string">Status <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th style="font-size: 0.85rem;" data-sort="string">Paid <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th style="font-size: 0.85rem;">Actions</th>
@@ -60,6 +124,7 @@
                         <tbody>
                             {% for s in shipments %}
                             <tr style="font-size: 0.85rem;">
+                                <td><input type="checkbox" class="bulk-cb ship-cb" value="{{ s.shipment_id }}" onchange="updateShipSelection()"></td>
                                 <td>{{ s.shipment_date }}</td>
                                 <td>{{ s.estimated_arrival_date or '-' }}</td>
                                 <td>
@@ -83,8 +148,9 @@
                                 </td>
                                 <td>{{ s.total_quantity|default(0)|int|format_number }}</td>
                                 <td>
-                                    {% if s.cost_shipped %}
-                                        <strong>{{ s.cost_shipped|format_currency_with_commas }}</strong>
+                                    {% set total_ship_cost = (s.cost_shipped or 0) + (s.amazon_commission or 0) %}
+                                    {% if total_ship_cost > 0 %}
+                                        <strong>{{ total_ship_cost|format_currency_with_commas }}</strong>
                                     {% else %}
                                         <span class="text-muted">-</span>
                                     {% endif %}
@@ -93,10 +159,11 @@
                                     <span class="badge status-{{ s.shipment_status }}">{{ s.shipment_status }}</span>
                                 </td>
                                 <td>
-                                    {% if s.is_paid %}
-                                        <span class="badge bg-success">Yes</span>
+                                    {% if s.has_payments %}
+                                        <span class="badge bg-success"><i class="bi bi-check-circle"></i> Paid</span>
+                                        <br><small class="text-muted">{{ s.payment_count }} payment{{ 's' if s.payment_count > 1 else '' }}</small>
                                     {% else %}
-                                        <span class="badge bg-secondary">No</span>
+                                        <span class="badge bg-danger bg-opacity-75"><i class="bi bi-x-circle"></i> Unpaid</span>
                                     {% endif %}
                                 </td>
                                 <td>
@@ -130,7 +197,43 @@
 
 {% block extra_js %}
 <script>
-// Table sorting - same pattern as index.html
+// ---- Bulk Delete Shipments ----
+function toggleAllShip(master) {
+    document.querySelectorAll('.ship-cb').forEach(cb => cb.checked = master.checked);
+    updateShipSelection();
+}
+function updateShipSelection() {
+    const checked = document.querySelectorAll('.ship-cb:checked');
+    const bar = document.getElementById('shipBulkBar');
+    document.getElementById('shipSelectedCount').textContent = checked.length;
+    bar.classList.toggle('visible', checked.length > 0);
+}
+function clearShipSelection() {
+    document.querySelectorAll('.ship-cb').forEach(cb => cb.checked = false);
+    document.getElementById('shipSelectAll').checked = false;
+    updateShipSelection();
+}
+function confirmBulkDeleteShip() {
+    const checked = document.querySelectorAll('.ship-cb:checked');
+    if (checked.length === 0) return false;
+    if (!confirm(`Delete ${checked.length} Shipment(s)? This cannot be undone.`)) return false;
+    const form = document.getElementById('shipBulkDeleteForm');
+    checked.forEach(cb => {
+        const inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'shipment_ids'; inp.value = cb.value;
+        form.appendChild(inp);
+    });
+    return true;
+}
+function recordPaymentForSelected() {
+    const checked = document.querySelectorAll('.ship-cb:checked');
+    if (checked.length === 0) { alert('Select at least one shipment.'); return; }
+    const ids = Array.from(checked).map(cb => cb.value);
+    const params = ids.map(id => 'shipment_ids=' + encodeURIComponent(id)).join('&');
+    window.location.href = '{{ url_for("bulk_new_payments") }}?' + params;
+}
+
+// ---- Table Sorting ----
 document.addEventListener('DOMContentLoaded', function() {
     const tables = document.querySelectorAll('.sortable-table');
     tables.forEach(table => {
@@ -139,7 +242,8 @@ document.addEventListener('DOMContentLoaded', function() {
         
         headers.forEach((header, index) => {
             header.style.cursor = 'pointer';
-            header.addEventListener('click', () => {
+            header.addEventListener('click', (e) => {
+                if (e.target.classList.contains('measure-info')) return;
                 const sortType = header.getAttribute('data-sort');
                 const tbody = table.querySelector('tbody');
                 const rows = Array.from(tbody.querySelectorAll('tr'));

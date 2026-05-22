@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_INVENTORY_SNAPSHOT` (
   -- Factless Key
   factless_key STRING NOT NULL,        -- Composite key: date_key - asin (e.g., '20240101-B0123456789')
   
+  -- Supply chain: next inbound shipment
+  next_shipment_quantity INT64,
+  next_shipment_arrival_date DATE,
+
   -- Metadata
   loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
 )

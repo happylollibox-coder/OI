@@ -72,16 +72,22 @@ cube(`UnifiedPerformance`, {
       type: `sum`,
       description: `Total ad impressions`,
     },
-    // --- Computed measures (R4: never pre-aggregate ratios) ---
+    grossMargin: {
+      sql: `gross_margin`,
+      type: `sum`,
+      format: `currency`,
+      description: `Gross margin = sales - cogs (summable)`,
+    },
+    // --- Computed measures: ratios of summable measures ---
     netProfit: {
-      sql: `${sales} - ${adCost} - ${cogs}`,
+      sql: `${grossMargin} - ${adCost}`,
       type: `number`,
-      description: `Net profit = sales - ad_cost - cogs`,
+      description: `Net profit = SUM(gross_margin) - SUM(ad_cost)`,
     },
     netRoas: {
-      sql: `CASE WHEN ${adCost} > 0 THEN (${sales} - ${cogs}) / ${adCost} ELSE 0 END`,
+      sql: `CASE WHEN ${adCost} > 0 THEN ${grossMargin} / ${adCost} ELSE 0 END`,
       type: `number`,
-      description: `Net ROAS = (sales - cogs) / ad_cost`,
+      description: `Net ROAS = SUM(gross_margin) / SUM(ad_cost)`,
     },
     organicPct: {
       sql: `CASE WHEN ${units} > 0 THEN GREATEST(${organicUnits}, 0) * 100.0 / ${units} ELSE 0 END`,
@@ -94,9 +100,9 @@ cube(`UnifiedPerformance`, {
       description: `TACoS = ad_cost / sales × 100 (Total Ads Cost of Sales)`,
     },
     npPerUnit: {
-      sql: `CASE WHEN ${units} > 0 THEN (${sales} - ${adCost} - ${cogs}) / ${units} ELSE 0 END`,
+      sql: `CASE WHEN ${units} > 0 THEN (${grossMargin} - ${adCost}) / ${units} ELSE 0 END`,
       type: `number`,
-      description: `Net Profit per Unit = (sales - ad_cost - cogs) / units`,
+      description: `Net Profit per Unit = (gross_margin - ad_cost) / units`,
     },
   },
 
@@ -110,6 +116,16 @@ cube(`UnifiedPerformance`, {
       sql: `family`,
       type: `string`,
       description: `Product family (e.g. Lollibox, LolliME)`,
+    },
+    familyColorHex: {
+      sql: `family_color_hex`,
+      type: `string`,
+      description: `Family color hex code from DE_COLOR_MAP`,
+    },
+    productColorHex: {
+      sql: `product_color_hex`,
+      type: `string`,
+      description: `Product color hex code from DE_COLOR_MAP`,
     },
     asin: {
       sql: `asin`,
@@ -251,6 +267,33 @@ cube(`UnifiedPerformance`, {
       },
       refreshKey: {
         sql: `SELECT CONCAT('v2~', CAST(MAX(date) AS STRING), '~', CAST(COUNT(*) AS STRING)) FROM \`onyga-482313.OI.T_UNIFIED_DAILY\``,
+      },
+      scheduledRefresh: true,
+    },
+
+    // Pre-agg 5: Daily performance for peak monitoring (by family per date)
+    dailyByFamily: {
+      type: `rollup`,
+      measures: [
+        UnifiedPerformance.sales,
+        UnifiedPerformance.adCost,
+        UnifiedPerformance.cogs,
+        UnifiedPerformance.orders,
+        UnifiedPerformance.units,
+        UnifiedPerformance.clicks,
+        UnifiedPerformance.sessions,
+      ],
+      dimensions: [
+        UnifiedPerformance.family,
+        UnifiedPerformance.date,
+      ],
+      timeDimension: UnifiedPerformance.date,
+      granularity: `day`,
+      indexes: {
+        familyIdx: { columns: [UnifiedPerformance.family] },
+      },
+      refreshKey: {
+        sql: `SELECT CONCAT('v1~', CAST(MAX(date) AS STRING), '~', CAST(COUNT(*) AS STRING)) FROM \`onyga-482313.OI.T_UNIFIED_DAILY\``,
       },
       scheduledRefresh: true,
     },

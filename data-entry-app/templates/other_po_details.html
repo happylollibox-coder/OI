@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block title %}Other PO Details - {{ po.other_po_id }}{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1><i class="bi bi-file-earmark-text"></i> Other PO: {{ po.other_po_id }}</h1>
+            <a href="{{ url_for('index') }}" class="btn btn-secondary">
+                <i class="bi bi-arrow-left"></i> Back to List
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Details Section -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> Service Order Details</h5>
+                <div>
+                    <form method="POST" action="{{ url_for('delete_other_po', po_id=po.other_po_id) }}" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this Other PO and all its payments? This action cannot be undone.');">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                            <i class="bi bi-trash"></i> Delete
+                        </button>
+                    </form>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <strong>Order Date:</strong><br>
+                        {{ po.order_date }}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Service Type:</strong><br>
+                        {{ po.service_type }}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Supplier Name:</strong><br>
+                        {{ po.supplier_name }}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Total Amount:</strong><br>
+                        {{ po.total_amount }} {{ po.currency }}
+                    </div>
+                </div>
+                
+                <hr>
+                
+                <div class="row mt-3">
+                    <div class="col-md-6">
+                        <strong>Related Products (ASINs):</strong><br>
+                        {% if po.product_asins %}
+                            {{ po.product_asins }}
+                        {% else %}
+                            <span class="text-muted">None specified</span>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-6">
+                        <strong>Notes:</strong><br>
+                        {% if po.notes %}
+                            {{ po.notes }}
+                        {% else %}
+                            <span class="text-muted">No notes</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Payments Section -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-credit-card"></i> Payments 
+                    <span class="badge bg-secondary">{{ payments|length }}</span>
+                    {% if total_paid < po.total_amount %}
+                        <span class="badge bg-warning ms-2">Remaining: {{ '%.2f'|format(po.total_amount - total_paid) }} {{ po.currency }}</span>
+                    {% elif total_paid >= po.total_amount %}
+                        <span class="badge bg-success ms-2">Paid in Full</span>
+                    {% endif %}
+                </h5>
+                <a href="{{ url_for('new_payment', po_id=po.other_po_id) }}" class="btn btn-sm btn-success">
+                    <i class="bi bi-plus-circle"></i> Add Payment
+                </a>
+            </div>
+            <div class="card-body">
+                {% if payments %}
+                <div class="table-responsive">
+                    <table class="table table-sm sortable-table">
+                        <thead>
+                            <tr>
+                                <th data-sort="date">Payment Date <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Amount <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="number">Bank Fee <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="string">Currency <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="string">Payment Method <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="string">Vendor <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th data-sort="string">Notes <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for payment in payments %}
+                            <tr>
+                                <td>{{ payment.payment_date }}</td>
+                                <td><strong>{{ payment.payment_amount }}</strong></td>
+                                <td>
+                                    {% if payment.bank_fee %}
+                                        {{ payment.bank_fee }}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ payment.currency }}</td>
+                                <td>{{ payment.payment_method or '-' }}</td>
+                                <td>{{ payment.vendor_name }}</td>
+                                <td>{{ payment.notes or '-' }}</td>
+                                <td>
+                                    <form method="POST" action="{{ url_for('delete_payment', payment_id=payment.payment_id) }}" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this payment?');">
+                                        <input type="hidden" name="return_po_id" value="{{ po.other_po_id }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger border-0">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info mb-0">
+                    <i class="bi bi-info-circle"></i> No payments recorded yet. <a href="{{ url_for('new_payment', po_id=po.other_po_id) }}" class="alert-link">Add the first payment</a>.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

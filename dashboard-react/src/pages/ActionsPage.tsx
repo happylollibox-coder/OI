@@ -4,30 +4,45 @@ import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
 import { PageHeader } from '../components/PageHeader';
 import { Empty } from '../components/Empty';
 import { Th, SortTh, useSort, MEASURE_TIPS } from '../components/Tooltip';
-import { fmt, fM, fP, fOrd, fCpc, famFromProduct, ACTION_META } from '../utils';
+import { fmt, fM, fP, fOrd, fCpc } from '../utils';
 import { useFilters } from '../hooks/useFilters';
 import { useDoQueue } from '../hooks/useDoQueue';
+import { useProductFamily } from '../hooks/useProductFamily';
 
-import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
+import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector'; // kept for type reference
 import { usePageSummary } from '../components/PageSummaryBar';
-import { Plus, Check, Download, CircleX, Ban, TrendingUp, TrendingDown, ShieldCheck, Eye, Crosshair, Sparkles, Target, Wrench, ArrowRightLeft } from 'lucide-react';
+import { Plus, Check, Download, CircleX, Ban, TrendingUp, TrendingDown, ShieldCheck, Eye, Crosshair, Sparkles, Wrench, ArrowRightLeft } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { DecisionTreeViewer } from '../components/Actions/DecisionTreeViewer';
+import KeywordIntelligencePanel from '../components/Actions/KeywordIntelligencePanel';
+import { useKeywordIntelligence } from '../hooks/useCubeData';
+import { CoachStrategyPanel } from '../components/CoachStrategyPanel';
 // strategyRules is now DB-only; ActionType kept for potential future use in color mapping
 
 import type { GroundTruth } from '../types';
 
 /* ─── Pie chart bucket classification ─── */
 const SPEND_BUCKETS = [
-  { key: 'not_converting', label: 'Not Converting', color: '#ef4444', actions: ['STOP', 'NEGATE'] },
-  { key: 'losing', label: 'Losing', color: '#f59e0b', actions: ['REDUCE_BID', 'FIX_HERO', 'SWITCH_HERO'] },
-  { key: 'profitable', label: 'Profitable', color: '#22c55e', actions: ['KEEP'] },
-  { key: 'scale', label: 'Scale', color: '#3b82f6', actions: ['BOOST', 'SCALE_UP', 'INCREASE_BID'] },
-  { key: 'opportunity', label: 'Opportunity', color: '#a855f7', actions: ['PROMOTE_TO_EXACT', 'START'] },
+  { key: 'not_converting', label: 'Reduce/Negate', color: '#ef4444', actions: ['NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT', 'REDUCE_BID', 'STOP_TARGET', 'STOP_SEASONAL', 'RESTORE_PRE_PEAK'] },
+  { key: 'profitable', label: 'Profitable', color: '#22c55e', actions: ['KEEP', 'KEEP_TARGET'] },
+  { key: 'opportunity', label: 'Opportunity', color: '#a855f7', actions: ['PROMOTE_TO_EXACT', 'START_TERM', 'INCREASE_BID'] },
+  { key: 'monitor', label: 'Monitoring', color: '#6b7280', actions: ['MONITOR', 'MONITOR_TARGET', 'SWITCH_HERO', 'COOLDOWN_MONITOR', 'REDUCE_TO_BASELINE', 'CAMPAIGN_PAUSED', 'TARGET_PAUSED'] },
 ] as const;
+
+/* ─── Strategy display names ─── */
+const STRATEGY_DISPLAY: Record<string, string> = {
+  HUNTER: 'Hunter', BRAND_DEFENSE: 'Brand Defense', PRODUCT_DEFENSE: 'Product Defense',
+  LOW_COST_DISCOVERY: 'Low-Cost Discovery', EXACT_BOOST: 'Exact Boost',
+  CATEGORY_CONQUEST: 'Category Conquest', COMPETITOR_CONQUEST: 'Competitor Conquest',
+  SEASONAL_PUSH: 'Seasonal Push',
+};
+const humanizeStratId = (id: string) => STRATEGY_DISPLAY[id] || id.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
 
 const ACTIONS_TABLE_COLUMNS: MeasureDef[] = [
+  // IDs
+  { id: 'action_id', label: 'Action ID', group: 'Info' },
+  { id: 'branch_id', label: 'Branch ID', group: 'Info' },
   // Info
   { id: 'search_term', label: 'Keyword', group: 'Info' },
   { id: 'product_short_name', label: 'Product', group: 'Info' },
@@ -38,7 +53,8 @@ const ACTIONS_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'orders', label: 'Ads Orders(4w)', tip: MEASURE_TIPS.orders, group: 'Ads 4w' },
   { id: 'conv_rate', label: 'Ads Conv%(4w)', tip: MEASURE_TIPS.conv_rate, group: 'Ads 4w' },
   { id: 'cpc', label: 'Ads CPC(4w)', tip: MEASURE_TIPS.cpc, group: 'Ads 4w' },
-  { id: 'net_roas', label: 'Ads ROAS(4w)', tip: MEASURE_TIPS.net_roas, group: 'Ads 4w' },
+  { id: 'ads_roas', label: 'Ads ROAS(4w)', tip: 'Ads Sales ÷ Ads Spend (matches Amazon)', group: 'Ads 4w' },
+  { id: 'net_roas', label: 'Net ROAS(4w)', tip: MEASURE_TIPS.net_roas, group: 'Ads 4w' },
   { id: 'ads_clicks_4w', label: 'Ads Clicks(4w)', group: 'Ads 4w', defaultVisible: false },
   { id: 'ads_impressions_4w', label: 'Ads Impressions(4w)', group: 'Ads 4w', defaultVisible: false },
   { id: 'ads_units_4w', label: 'Ads Units(4w)', group: 'Ads 4w', defaultVisible: false },
@@ -105,50 +121,40 @@ const ACTIONS_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'hero_net_roas', label: 'Hero ROAS', group: 'Hero', defaultVisible: false },
   { id: 'hero_total_orders', label: 'Hero Orders', group: 'Hero', defaultVisible: false },
   { id: 'negate_as', label: 'Negate', group: 'Hero', defaultVisible: false },
-  { id: 'action_explanation', label: 'Decision Tree', group: 'Hero', defaultVisible: false },
+  { id: 'action_explanation', label: 'Explanation', group: 'Info' },
   { id: 'hero_action_explanation', label: 'Hero Explanation', group: 'Hero', defaultVisible: false },
 ];
 
-/* ─── Action-level colors & ordering ─── */
-const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'NEGATE_TERM', 'REDUCE_BID', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'START_TERM', 'MONITOR_TARGET', 'KEEP', 'MONITOR'] as const;
-const ACTION_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  STOP_TERM:        { bg: 'bg-red-500/12',     border: 'border-l-red-500',     text: 'text-red-400' },
-  STOP_TARGET:      { bg: 'bg-red-500/12',     border: 'border-l-red-500',     text: 'text-red-400' },
-  NEGATE_TERM:      { bg: 'bg-red-500/12',     border: 'border-l-red-500',     text: 'text-red-400' },
-  REDUCE_BID:       { bg: 'bg-amber-500/12',   border: 'border-l-amber-500',   text: 'text-amber-400' },
-  FIX_HERO:         { bg: 'bg-amber-500/12',   border: 'border-l-amber-500',   text: 'text-amber-400' },
-  SWITCH_HERO:      { bg: 'bg-amber-500/12',   border: 'border-l-amber-500',   text: 'text-amber-400' },
-  KEEP_TARGET:      { bg: 'bg-emerald-500/12', border: 'border-l-emerald-500', text: 'text-emerald-400' },
-  INCREASE_BID:     { bg: 'bg-emerald-500/12', border: 'border-l-emerald-500', text: 'text-emerald-400' },
-  PROMOTE_TO_EXACT: { bg: 'bg-blue-500/12',   border: 'border-l-blue-500',   text: 'text-blue-400' },
-  START_TERM:       { bg: 'bg-purple-500/12',  border: 'border-l-purple-500', text: 'text-purple-400' },
-  MONITOR_TARGET:   { bg: 'bg-zinc-500/12',    border: 'border-l-zinc-500',   text: 'text-zinc-400' },
-  // Legacy fallbacks
-  STOP:             { bg: 'bg-red-500/12',     border: 'border-l-red-500',     text: 'text-red-400' },
-  NEGATE:           { bg: 'bg-red-500/12',     border: 'border-l-red-500',     text: 'text-red-400' },
-  KEEP:             { bg: 'bg-emerald-500/12', border: 'border-l-emerald-500', text: 'text-emerald-400' },
-  BOOST:            { bg: 'bg-emerald-500/12', border: 'border-l-emerald-500', text: 'text-emerald-400' },
-  SCALE_UP:         { bg: 'bg-emerald-500/12', border: 'border-l-emerald-500', text: 'text-emerald-400' },
-  START:            { bg: 'bg-purple-500/12',  border: 'border-l-purple-500', text: 'text-purple-400' },
-  MONITOR:          { bg: 'bg-zinc-500/12',    border: 'border-l-zinc-500',   text: 'text-zinc-400' },
-};
-const defaultActionColor = { bg: 'bg-zinc-500/12', border: 'border-l-zinc-500', text: 'text-zinc-400' };
 
-/* ─── Lucide icon per action ─── */
+const ACTION_TYPES = [
+  { id: 'HOT_SIGNAL', label: '🔥 Hot Signals', emoji: '🔥', desc: 'Real-time 3-day alerts' },
+  { id: 'TERM',       label: '🎯 Term Actions', emoji: '🎯', desc: 'Search term level' },
+  { id: 'PHRASE',     label: '🔫 Phrase Negatives', emoji: '🔫', desc: 'N-gram phrase negation' },
+  { id: 'TARGET',     label: '🎚️ Target Actions', emoji: '🎚️', desc: 'Bid operations' },
+  { id: 'BUDGET',     label: '💰 Budget Actions', emoji: '💰', desc: 'Campaign budget operations' },
+] as const;
+
+// Term actions: NEGATE, KEEP, MONITOR, PROMOTE_TO_EXACT
+// Target actions: INCREASE_BID, REDUCE_BID, COOLDOWN_MONITOR, REDUCE_TO_BASELINE, RESTORE_PRE_PEAK, STOP_TARGET, SWITCH_HERO
+const TARGET_ACTIONS = new Set(['INCREASE_BID', 'REDUCE_BID', 'COOLDOWN_MONITOR', 'REDUCE_TO_BASELINE', 'RESTORE_PRE_PEAK', 'STOP_TARGET', 'SWITCH_HERO', 'NEGATE_BOOST_SIMILAR_EXACT']);
+
+
 const ACTION_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
-  STOP_TERM: CircleX, STOP_TARGET: CircleX, STOP: CircleX,
-  NEGATE_TERM: Ban, NEGATE: Ban,
-  REDUCE_BID: TrendingDown,
+  STOP_TERM: CircleX, STOP_TARGET: CircleX, STOP: CircleX, STOP_SEASONAL: CircleX,
+  NEGATE_TERM: Ban, NEGATE: Ban, NEGATE_BOOST_SIMILAR_EXACT: Ban,
+  REDUCE_BID: TrendingDown, REDUCE_TO_BASELINE: TrendingDown, RESTORE_PRE_PEAK: TrendingDown,
+  COOLDOWN_MONITOR: Eye,
   FIX_HERO: Wrench, SWITCH_HERO: ArrowRightLeft,
   KEEP_TARGET: ShieldCheck, KEEP: ShieldCheck,
   INCREASE_BID: TrendingUp, BOOST: TrendingUp, SCALE_UP: TrendingUp,
   PROMOTE_TO_EXACT: Crosshair,
   START_TERM: Sparkles, START: Sparkles,
   MONITOR_TARGET: Eye, MONITOR: Eye,
+  RESTORE_BUDGET: TrendingDown, REDUCE_BUDGET: TrendingDown,
+  GUARDIAN_BUDGET_INCREASE: TrendingUp, BLITZ_BUDGET_INCREASE: TrendingUp,
+  GUARDIAN_BUDGET_DECREASE: TrendingDown, BLITZ_BUDGET_DECREASE: TrendingDown,
 };
 
-/* ─── Section header classification ─── */
-const TERM_ACTIONS = new Set(['STOP_TERM', 'NEGATE_TERM', 'PROMOTE_TO_EXACT', 'START_TERM', 'STOP', 'NEGATE', 'START']);
 
 
 /* ─── CSV Export (comprehensive) ─── */
@@ -168,6 +174,9 @@ function exportActionsToCSV(
   const pClicks = (a: ActionRow) => a.spend && a.cpc ? Math.round(a.spend / a.cpc) : 0;
 
   const cols: Col[] = [
+    // IDs
+    { label: 'Action ID',     get: a => a.action_id },
+    { label: 'Branch ID',     get: a => a.decision_branch_id || '' },
     // Core Info
     { label: 'Keyword',        get: a => a.search_term },
     { label: 'Product',        get: a => a.product_short_name },
@@ -175,6 +184,8 @@ function exportActionsToCSV(
     { label: 'Portfolio',      get: a => a.portfolio_name },
     { label: 'Experiment',     get: a => a.experiment_id },
     { label: 'Strategy',       get: a => a.strategy_id },
+    { label: 'Coach Mode',     get: a => a.coach_mode },
+    { label: 'Strategic Task', get: a => a.strategic_task },
     { label: 'Action',         get: a => a.action },
     { label: 'Signal',         get: a => a.ads_signal },
     { label: 'Priority Score', get: a => a.priority_score },
@@ -189,12 +200,14 @@ function exportActionsToCSV(
     { label: 'Action Explanation', get: a => a.action_explanation },
     { label: 'Hero Explanation',   get: a => a.hero_action_explanation },
     // Per-Campaign Ads Metrics
+    { label: 'Ads Sales(4w)',        get: a => a.ads_sales },
     { label: 'Ads Spend(4w)',        get: a => a.spend },
     { label: 'Ads Orders(4w)',       get: a => a.orders },
     { label: 'Ads Clicks(4w)',       get: a => a.clicks },
     { label: 'Ads Recent Clicks(3d)', get: a => a.ads_clicks_recent },
     { label: 'Ads Conv%(4w)',        get: a => { const c = pClicks(a); return c > 0 ? +((a.orders * 100) / c).toFixed(2) : a.conv_rate; } },
     { label: 'Ads CPC(4w)',          get: a => a.cpc },
+    { label: 'Ads ROAS(4w)',          get: a => a.ads_roas || (a.ads_sales && a.spend > 0 ? +(a.ads_sales / a.spend).toFixed(2) : 0) },
     { label: 'Ads Net ROAS(4w)',     get: a => a.net_roas },
     { label: 'Margin/Unit',         get: a => a.margin_per_unit },
     { label: 'Impression Share',    get: a => a.impression_share },
@@ -279,18 +292,38 @@ function exportActionsToCSV(
 export function ActionsPage({ data, matchAction }: { data: DashboardData; matchAction: (a: { search_term?: string; experiment_id?: string; net_roas?: number; cpc?: number; conv_rate?: number }) => { gt: GroundTruth; supported: boolean }[] }) {
   const { filters } = useFilters();
   const doQueue = useDoQueue();
-  const acts = data.actions || [];
+  const { getFamily } = useProductFamily();
+  const acts = useMemo(() => {
+    return (data.actions || []).map(ct => ({
+      ...ct,
+      spend: ct.ads_spend_4w,
+      ads_sales: ct.ads_sales_4w,
+      ads_roas: ct.ads_roas_4w,
+      orders: ct.ads_orders_4w,
+      clicks: ct.ads_clicks_4w,
+      cpc: ct.ads_cpc_4w,
+      conv_rate: ct.ads_cvr_pct_4w,
+      net_roas: ct.ads_net_roas_4w,
+      ads_signal: ct.ads_signal || 'UNKNOWN',
+    }) as unknown as ActionRow);
+  }, [data.actions]);
   const [typeFilter, setTypeFilter] = useState('all');
   const [stratFilter, setStratFilter] = useState('all');
   const [famFilter, setFamFilter] = useState('all');
+  const [coachFilter, setCoachFilter] = useState('all');
   const [bucketFilter, setBucketFilter] = useState<string | null>(null);
+  const [strategicTaskFilter, setStrategicTaskFilter] = useState<string | null>(null);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const [intelligenceKeyword, setIntelligenceKeyword] = useState<string | null>(null);
+  const [hideMonitor, setHideMonitor] = useState(true);
+  const [hierarchy, setHierarchy] = useState<'campaign' | 'action' | 'action_type' | 'strategy' | 'branch'>('campaign');
+  const { data: intelligenceData, loading: intelligenceLoading } = useKeywordIntelligence(intelligenceKeyword);
 
   const effectiveFam = filters.family || (famFilter !== 'all' ? famFilter : null);
 
   const types = useMemo(() => [...new Set(acts.map(a => a.action).filter(Boolean))].sort(), [acts]);
   const strategies = useMemo(() => [...new Set(acts.map(a => a.strategy_id).filter(Boolean))].sort(), [acts]);
-  const fams = useMemo(() => [...new Set(acts.map(a => famFromProduct(a.product_short_name)).filter(Boolean))].sort(), [acts]);
+  const fams = useMemo(() => [...new Set(acts.map(a => getFamily(a.product_short_name)).filter(Boolean))].sort(), [acts, getFamily]);
 
   /* ─── Coach decisions enrichment: lookup SQP + extended Ads by search_term ─── */
   const cdByTerm = useMemo(() => {
@@ -302,26 +335,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     return map;
   }, [data.coach_decisions]);
 
-  /* ── Enrich actions with targeting from coach_terms ── */
-  const enrichedActs = useMemo(() => {
-    const ctMap: Record<string, { targeting: string | null; keyword_id: string | null; match_type: string | null; target_action: string | null; target_net_roas_8w: number | null; target_orders_8w: number | null; target_spend_8w: number | null; effective_roas: number | null; target_decision_trace: import('../types').DecisionStep[] | null; recommendation_object: 'TARGET' | 'TERM'; current_bid: number | null; recommended_bid: number | null; bid_change_pct: number | null }> = {};
-    for (const ct of data.coach_terms || []) {
-      const key = `${(ct.search_term || '').toLowerCase()}|${ct.campaign_id || ''}`;
-      if (!ctMap[key]) ctMap[key] = {
-        targeting: ct.targeting, keyword_id: ct.keyword_id, match_type: ct.match_type, target_action: ct.target_action,
-        target_net_roas_8w: ct.target_net_roas_8w, target_orders_8w: ct.target_orders_8w,
-        target_spend_8w: ct.target_spend_8w, effective_roas: ct.effective_roas,
-        target_decision_trace: ct.target_decision_trace, recommendation_object: ct.recommendation_object,
-        current_bid: ct.current_bid, recommended_bid: ct.recommended_bid, bid_change_pct: ct.bid_change_pct,
-      };
-    }
-    return acts.map(a => {
-      const key = `${(a.search_term || '').toLowerCase()}|${a.campaign_id || ''}`;
-      const ct = ctMap[key];
-      if (!ct) return a;
-      return { ...a, targeting: ct.targeting, keyword_id: ct.keyword_id, match_type: ct.match_type, target_action: ct.target_action, target_net_roas_8w: ct.target_net_roas_8w, target_orders_8w: ct.target_orders_8w, target_spend_8w: ct.target_spend_8w, effective_roas: ct.effective_roas, target_decision_trace: ct.target_decision_trace, recommendation_object: ct.recommendation_object, current_bid: ct.current_bid, recommended_bid: ct.recommended_bid, bid_change_pct: ct.bid_change_pct };
-    });
-  }, [acts, data.coach_terms]);
+  const enrichedActs = acts;
 
   /* ── Strategic keyword predictions lookup ── */
   const predByTerm = useMemo(() => {
@@ -333,25 +347,56 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     return map;
   }, [data.keyword_predictions]);
 
+  // Effective coach mode: respect filter dropdown, otherwise detect dominant mode from data
+  const effectiveCoachMode = useMemo(() => {
+    if (coachFilter !== 'all') return coachFilter;
+    const modeCounts: Record<string, number> = {};
+    for (const ct of data.actions || []) {
+      if (ct.coach_mode) modeCounts[ct.coach_mode] = (modeCounts[ct.coach_mode] || 0) + 1;
+    }
+    const sorted = Object.entries(modeCounts).sort((a, b) => b[1] - a[1]);
+    return sorted[0]?.[0] || 'GUARDIAN';
+  }, [coachFilter, data.actions]);
+
   const filtered = useMemo(() => {
     let f = [...enrichedActs];
+    // COOLDOWN mode: suppress negates and hot-signal-like actions — cooldown itself handles wind-down
+    if (effectiveCoachMode === 'COOLDOWN') {
+      f = f.filter(a => !(a.action === 'NEGATE_TERM' || a.action === 'REDUCE_BID'));
+    }
     // Hide actions already uploaded to Amazon
     // Check both search_term and targeting — target actions are queued with targeting keyword as search_term
     f = f.filter(a => !doQueue.isUploaded(a.search_term, a.campaign_id)
       && !(a.targeting && doQueue.isUploaded(a.targeting, a.campaign_id)));
+    // Hide actions already marked as done in Do queue
+    f = f.filter(a => !doQueue.isDone(a.search_term, a.campaign_id)
+      && !(a.targeting && doQueue.isDone(a.targeting, a.campaign_id)));
     if (typeFilter !== 'all') f = f.filter(a => a.action === typeFilter);
     if (stratFilter !== 'all') f = f.filter(a => a.strategy_id === stratFilter);
-    if (effectiveFam) f = f.filter(a => famFromProduct(a.product_short_name) === effectiveFam);
-    else if (famFilter !== 'all') f = f.filter(a => famFromProduct(a.product_short_name) === famFilter);
+    if (effectiveFam) f = f.filter(a => getFamily(a.product_short_name) === effectiveFam);
+    else if (famFilter !== 'all') f = f.filter(a => getFamily(a.product_short_name) === famFilter);
     if (filters.experiment) f = f.filter(a => a.experiment_id === filters.experiment);
     if (filters.keyword) f = f.filter(a => a.search_term === filters.keyword);
+    if (coachFilter !== 'all') f = f.filter(a => a.coach_mode === coachFilter);
+    if (strategicTaskFilter) {
+      // RESTORE_BUDGETS: budget rows are injected from coachTerms in the tree — no action rows needed
+      if (strategicTaskFilter === 'RESTORE_BUDGETS') {
+        f = [];
+      } else {
+        f = f.filter(a => a.strategic_task === strategicTaskFilter);
+      }
+    }
     if (bucketFilter) {
       const bucket = SPEND_BUCKETS.find(b => b.key === bucketFilter);
       if (bucket) f = f.filter(a => (bucket.actions as readonly string[]).includes(a.action));
     }
+    // Default: hide monitor/passive actions unless user explicitly shows them
+    if (hideMonitor) {
+      f = f.filter(a => !['MONITOR', 'MONITOR_TARGET', 'COOLDOWN_MONITOR', 'KEEP', 'KEEP_TARGET', 'BUDGET_OK', 'SWITCH_HERO', 'FIX_HERO'].includes(a.action));
+    }
     f.sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0));
     return f;
-  }, [enrichedActs, typeFilter, stratFilter, famFilter, effectiveFam, filters.experiment, filters.keyword, bucketFilter, doQueue.isUploaded]);
+  }, [enrichedActs, typeFilter, stratFilter, famFilter, effectiveFam, filters.experiment, filters.keyword, coachFilter, bucketFilter, strategicTaskFilter, doQueue.isUploaded, doQueue.isDone, effectiveCoachMode, hideMonitor]);
 
   /* ── Pie chart: classify spend by bucket ── */
   const bucketSpend = useMemo(() => {
@@ -366,9 +411,6 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
   const totalBucketSpend = bucketSpend.reduce((s, b) => s + b.value, 0);
 
 
-  const actSort = useSort('priority_score');
-  const [actionCols, setActionCols] = useMeasureSelection('actions', ACTIONS_TABLE_COLUMNS);
-  const visibleActionCols = useMemo(() => ACTIONS_TABLE_COLUMNS.filter(c => actionCols.has(c.id)), [actionCols]);
 
   const toggleKey = (key: string) => {
     setExpandedKeys(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
@@ -381,239 +423,364 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     metrics: { spend: number; orders: number; count: number; targetAction?: string; targetRoas?: number; targetOrders?: number; matchType?: string; targetDecisionTrace?: import('../types').DecisionStep[] | null };
   };
 
-  /* ── TERM TREE: Action → Family → Product → Term ── */
-  const termTree = useMemo((): TreeNode[] => {
-    const termRows = filtered.filter(r => {
-      const a = r.action || '';
-      return a.endsWith('_TERM') || a === 'PROMOTE_TO_EXACT' || a === 'STOP' || a === 'NEGATE' || a === 'START';
-    });
-    if (!termRows.length) return [];
+  /* ── Compute cross-keyword campaign counts for complexity badges ── */
+  const keywordCampaignCounts = useMemo(() => {
+    const counts: Record<string, Set<string>> = {};
+    for (const r of enrichedActs) {
+      const k = (r.search_term || '').toLowerCase();
+      if (!k) continue;
+      if (!counts[k]) counts[k] = new Set();
+      if (r.campaign_id) counts[k].add(r.campaign_id);
+    }
+    return Object.fromEntries(Object.entries(counts).map(([k, s]) => [k, s.size]));
+  }, [enrichedActs]);
 
-    // Group by Action first
-    const byAction: Record<string, ActionRow[]> = {};
-    for (const r of termRows) {
-      const a = r.action || 'OTHER';
-      if (!byAction[a]) byAction[a] = [];
-      byAction[a].push(r);
+  /* ── UNIFIED TREE: builds hierarchy based on selected mode ── */
+  const unifiedTree = useMemo((): TreeNode[] => {
+    type QueueItem = { spend: number; type: 'TERM' | 'TARGET' | 'HOT_SIGNAL' | 'PHRASE' | 'BUDGET'; signal: string; term: string; campaign: string; campaignId: string; row?: ActionRow; hotSignal?: any; phrase?: any; budgetRow?: any; campaignCount: number; action?: string };
+
+    const items: QueueItem[] = [];
+
+    // 1) SQL-driven Unpivoted Actions
+    for (const r of filtered) {
+      if (!r.action_type) continue;
+      
+      const termLower = (r.search_term || '').toLowerCase();
+      const campaignCount = keywordCampaignCounts[termLower] || 1;
+      const campaignLabel = r.campaign_name || 'Unassigned';
+      const campaignId = r.campaign_id || '';
+      let itemType: 'TERM' | 'TARGET' | 'BUDGET' | 'HOT_SIGNAL' | 'PHRASE';
+      if (r.action_type === 'BUDGET') itemType = 'BUDGET';
+      else if (r.action_type === 'TARGET') itemType = 'TARGET';
+      else if (r.action_type === 'HERO') itemType = 'TERM';
+      else itemType = 'TERM';
+
+      const tSpend = r.action_type === 'TARGET' ? (r.target_spend_8w || r.spend || 0) : (r.spend || 0);
+
+      items.push({
+        spend: tSpend,
+        type: itemType,
+        signal: r.ads_signal || '',
+        term: r.action_type === 'BUDGET' ? (r.campaign_name || '--') : (r.search_term || r.targeting || '--'),
+        campaign: campaignLabel,
+        campaignId,
+        row: r,
+        campaignCount,
+        budgetRow: r.action_type === 'BUDGET' ? r : undefined,
+        action: r.action || 'MONITOR',
+      });
     }
 
-    return Object.entries(byAction).sort((a, b) => {
-      const ai = ACTION_ORDER.indexOf(a[0] as any);
-      const bi = ACTION_ORDER.indexOf(b[0] as any);
-      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-    }).map(([actKey, actRows]) => {
-      const actSpend = actRows.reduce((s, r) => s + (r.spend || 0), 0);
-      const actOrders = actRows.reduce((s, r) => s + (r.orders || 0), 0);
-
-      // Group by Family
-      const byFamily: Record<string, ActionRow[]> = {};
-      for (const r of actRows) {
-        const fam = famFromProduct(r.product_short_name) || 'Other';
-        if (!byFamily[fam]) byFamily[fam] = [];
-        byFamily[fam].push(r);
-      }
-
-      const famChildren = Object.entries(byFamily).sort(([, a], [, b]) => 
-        b.reduce((s, r) => s + (r.spend || 0), 0) - a.reduce((s, r) => s + (r.spend || 0), 0)
-      ).map(([famKey, famRows]) => {
-        const famSpend = famRows.reduce((s, r) => s + (r.spend || 0), 0);
-        const famOrders = famRows.reduce((s, r) => s + (r.orders || 0), 0);
-
-        // Group by Product within Family
-        const byProduct: Record<string, ActionRow[]> = {};
-        for (const r of famRows) {
-          const p = r.product_short_name || 'Other';
-          if (!byProduct[p]) byProduct[p] = [];
-          byProduct[p].push(r);
-        }
-
-        const prodChildren = Object.entries(byProduct).map(([prodKey, prodRows]) => {
-          const prodSpend = prodRows.reduce((s, r) => s + (r.spend || 0), 0);
-          const prodOrders = prodRows.reduce((s, r) => s + (r.orders || 0), 0);
-
-          // Group by search term
-          const byTerm: Record<string, ActionRow[]> = {};
-          for (const r of prodRows) {
-            const t = r.search_term || '--';
-            if (!byTerm[t]) byTerm[t] = [];
-            byTerm[t].push(r);
-          }
-
-          const termChildren = Object.entries(byTerm).map(([termKey, tRows]) => {
-            const termSpend = tRows.reduce((s, r) => s + (r.spend || 0), 0);
-            const termOrd = tRows.reduce((s, r) => s + (r.orders || 0), 0);
-            return {
-              key: `term:${actKey}:${famKey}:${prodKey}:${termKey}`,
-              label: termKey,
-              level: 'keyword' as const,
-              children: [],
-              rows: tRows,
-              metrics: { spend: termSpend, orders: termOrd, count: tRows.length },
-            };
-          }).sort((a, b) => b.metrics.spend - a.metrics.spend);
-
-          return {
-            key: `prod:${actKey}:${famKey}:${prodKey}`,
-            label: prodKey,
-            level: 'campaign' as const, // product level uses campaign styling
-            children: termChildren,
-            rows: prodRows,
-            metrics: { spend: prodSpend, orders: prodOrders, count: prodRows.length },
-          };
-        }).sort((a, b) => b.metrics.spend - a.metrics.spend);
-
-        return {
-          key: `fam:${actKey}:${famKey}`,
-          label: famKey,
-          level: 'portfolio' as const, // family level uses portfolio styling
-          children: prodChildren,
-          rows: famRows,
-          metrics: { spend: famSpend, orders: famOrders, count: famRows.length },
-        };
+    // 2) Hot signals — suppressed in COOLDOWN
+    if (effectiveCoachMode !== 'COOLDOWN') {
+      let hotSignals = (data.hot_signals || []).filter(s => {
+        if (effectiveFam && getFamily(s.product_short_name) !== effectiveFam) return false;
+        if (filters.experiment && s.experiment_id !== filters.experiment) return false;
+        if (filters.keyword && s.search_term !== filters.keyword) return false;
+        if (stratFilter !== 'all' && s.strategy_id !== stratFilter) return false;
+        return true;
       });
-
-      return {
-        key: `act:${actKey}`,
-        label: actKey,
-        level: 'action' as const,
-        children: famChildren,
-        rows: actRows,
-        metrics: { spend: actSpend, orders: actOrders, count: actRows.length },
-      };
-    });
-  }, [filtered]);
-
-  /* ── TARGET TREE: Portfolio → Campaign → Action → Target (bid ops) ── */
-  const targetTree = useMemo((): TreeNode[] => {
-    const targetRows = filtered.filter(r => {
-      const a = r.action || '';
-      const isTermAction = a.endsWith('_TERM') || a === 'PROMOTE_TO_EXACT' || a === 'STOP' || a === 'NEGATE' || a === 'START';
-      return !isTermAction;
-    });
-    if (!targetRows.length) return [];
-
-    // Group by action
-    const byAction: Record<string, ActionRow[]> = {};
-    for (const a of targetRows) {
-      const k = (a as any).target_action || a.action || 'OTHER';
-      if (!byAction[k]) byAction[k] = [];
-      byAction[k].push(a);
+      for (const s of hotSignals) {
+        items.push({
+          spend: s.spend_3d || 0, type: 'HOT_SIGNAL', signal: s.hot_signal || 'HOT_WINNER',
+          term: s.search_term || '--', campaign: s.campaign_name || 'Unassigned', campaignId: s.campaign_id || '',
+          hotSignal: s, campaignCount: 1, action: s.hot_signal || 'HOT_SIGNAL',
+        });
+      }
     }
 
-    return Object.keys(byAction).sort((a, b) => {
-      const ai = ACTION_ORDER.indexOf(a as any); const bi = ACTION_ORDER.indexOf(b as any);
-      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-    }).map(actKey => {
-      const actRows = byAction[actKey];
-      const actSpend = actRows.reduce((s, r) => s + (r.spend || 0), 0);
-      const actOrders = actRows.reduce((s, r) => s + (r.orders || 0), 0);
-
-      // Group by portfolio
-      const byPortfolio: Record<string, ActionRow[]> = {};
-      for (const r of actRows) {
-        const p = r.portfolio_name || 'Unassigned';
-        if (!byPortfolio[p]) byPortfolio[p] = [];
-        byPortfolio[p].push(r);
+    // 3) Phrase negatives — suppressed in COOLDOWN
+    if (effectiveCoachMode !== 'COOLDOWN') {
+      for (const p of (data.coach_phrase_negatives || [])) {
+        items.push({
+          spend: p.phrase_spend_8w || 0, type: 'PHRASE', signal: p.action || 'NEGATE_PHRASE',
+          term: p.phrase || '--', campaign: p.campaign_name || 'Unassigned', campaignId: p.campaign_id || '',
+          phrase: p, campaignCount: 1, action: p.action || 'NEGATE_PHRASE',
+        });
       }
+    }
 
-      const portChildren = Object.keys(byPortfolio).sort().map(portKey => {
-        const portRows = byPortfolio[portKey];
-        const portSpend = portRows.reduce((s, r) => s + (r.spend || 0), 0);
-        const portOrders = portRows.reduce((s, r) => s + (r.orders || 0), 0);
+    if (!items.length) return [];
 
-        // Group by campaign
-        const byCamp: Record<string, ActionRow[]> = {};
-        for (const r of portRows) {
-          const c = r.campaign_name || 'Unknown';
-          if (!byCamp[c]) byCamp[c] = [];
-          byCamp[c].push(r);
-        }
+    // ── Helper: build leaf nodes from items ──
+    const buildLeaves = (leafItems: QueueItem[], keyPrefix: string): TreeNode[] => {
+      const hotItems = leafItems.filter(i => i.type === 'HOT_SIGNAL');
+      const phraseItems = leafItems.filter(i => i.type === 'PHRASE');
+      const budgetItems = leafItems.filter(i => i.type === 'BUDGET');
+      const regularItems = leafItems.filter(i => !['HOT_SIGNAL', 'PHRASE', 'BUDGET'].includes(i.type));
 
-        const campChildren = Object.entries(byCamp).map(([campKey, campRows]) => {
-          const campSpend = campRows.reduce((s, r) => s + (r.spend || 0), 0);
-          const campOrders = campRows.reduce((s, r) => s + (r.orders || 0), 0);
+      const leaves: TreeNode[] = [];
+      for (const item of hotItems) {
+        leaves.push({ key: `${keyPrefix}:hot:${item.term}`, label: item.term, level: 'keyword', children: [], rows: [], metrics: { spend: item.spend, orders: item.hotSignal?.orders_3d || 0, count: 1, hotSignalData: item.hotSignal } });
+      }
+      for (const item of phraseItems) {
+        leaves.push({ key: `${keyPrefix}:phr:${item.term}`, label: item.term, level: 'keyword', children: [], rows: [], metrics: { spend: item.spend, orders: 0, count: 1, phraseData: item.phrase } });
+      }
+      for (const item of budgetItems) {
+        leaves.push({ key: `${keyPrefix}:bud:${item.term}`, label: item.term, level: 'keyword', children: [], rows: [item.row!], metrics: { spend: item.spend, orders: 0, count: 1, budgetRow: item.budgetRow } });
+      }
+      // Group regular items by term
+      const byTerm: Record<string, QueueItem[]> = {};
+      for (const item of regularItems) { if (!byTerm[item.term]) byTerm[item.term] = []; byTerm[item.term].push(item); }
+      for (const [termKey, tItems] of Object.entries(byTerm)) {
+        leaves.push({
+          key: `${keyPrefix}:kw:${termKey}`,
+          label: termKey, level: 'keyword', children: [],
+          rows: tItems.filter(i => i.row).map(i => i.row!),
+          metrics: { spend: tItems.reduce((s, i) => s + i.spend, 0), orders: tItems.reduce((s, i) => s + (i.row?.orders || 0), 0), count: tItems.length },
+        });
+      }
+      return leaves.sort((a, b) => b.metrics.spend - a.metrics.spend);
+    };
 
-          // Group by targeting keyword
-          const byTarget: Record<string, ActionRow[]> = {};
-          for (const r of campRows) {
-            const t = r.targeting || 'Other Terms';
-            if (!byTarget[t]) byTarget[t] = [];
-            byTarget[t].push(r);
+    // ═══ HIERARCHY: By Campaign (default) ═══
+    if (hierarchy === 'campaign') {
+      const byCampaign: Record<string, QueueItem[]> = {};
+      for (const item of items) { const key = item.campaign || 'Unassigned'; if (!byCampaign[key]) byCampaign[key] = []; byCampaign[key].push(item); }
+
+      return Object.entries(byCampaign)
+        .map(([campaignName, campItems]) => {
+          const campSpend = campItems.reduce((s, i) => s + i.spend, 0);
+          const campOrders = campItems.filter(i => i.row).reduce((s, i) => s + (i.row!.orders || 0), 0);
+
+          const typeNodes: TreeNode[] = [];
+          for (const typeDef of ACTION_TYPES) {
+            const typeItems = campItems.filter(i => i.type === typeDef.id);
+            if (!typeItems.length) continue;
+            const typeSpend = typeItems.reduce((s, i) => s + i.spend, 0);
+            const typeOrders = typeItems.filter(i => i.row).reduce((s, i) => s + (i.row!.orders || 0), 0);
+            const leafNodes = buildLeaves(typeItems, `type:${campaignName}:${typeDef.id}`);
+
+            typeNodes.push({
+              key: `type:${campaignName}:${typeDef.id}`,
+              label: typeDef.id, level: 'action', children: leafNodes,
+              rows: typeItems.filter(i => i.row).map(i => i.row!),
+              metrics: { spend: typeSpend, orders: typeOrders, count: typeItems.length },
+            });
           }
 
-          const targetChildren = Object.entries(byTarget).map(([targetKey, tgtRows]) => {
-            const targetSpend = tgtRows.reduce((s, r) => s + (r.spend || 0), 0);
-            const targetOrd = tgtRows.reduce((s, r) => s + (r.orders || 0), 0);
-            const tRoas = tgtRows[0]?.target_net_roas_8w ?? undefined;
-            const tOrders = tgtRows[0]?.target_orders_8w ?? undefined;
-            const tMatchType = (tgtRows[0] as any)?.match_type || '';
-            const tDecisionTrace = (tgtRows[0] as any)?.target_decision_trace ?? null;
+          return {
+            key: `camp:${campaignName}`,
+            label: campaignName, level: 'campaign' as const, children: typeNodes,
+            rows: campItems.filter(i => i.row).map(i => i.row!),
+            metrics: { spend: campSpend, orders: campOrders, count: campItems.length },
+          };
+        })
+        .sort((a, b) => b.metrics.spend - a.metrics.spend);
+    }
 
-            const kwChildren: TreeNode[] = tgtRows.map(r => ({
-              key: `kw:${r.search_term || ''}:${r.campaign_id || ''}`,
-              label: r.search_term || '--',
-              level: 'keyword' as const,
-              children: [],
-              rows: [r],
-              metrics: { spend: r.spend || 0, orders: r.orders || 0, count: 1 },
-            }));
+    // ═══ HIERARCHY: By Action ═══
+    if (hierarchy === 'action') {
+      const byAction: Record<string, QueueItem[]> = {};
+      for (const item of items) { const key = item.action || 'MONITOR'; if (!byAction[key]) byAction[key] = []; byAction[key].push(item); }
 
-            return {
-              key: `tgt:${actKey}:${portKey}:${campKey}:${targetKey}`,
-              label: targetKey,
-              level: 'target' as const,
-              children: kwChildren,
-              rows: tgtRows,
-              metrics: {
-                spend: targetSpend, orders: targetOrd, count: tgtRows.length,
-                targetRoas: tRoas, targetOrders: tOrders, matchType: tMatchType,
-                targetDecisionTrace: tDecisionTrace,
-              },
-            };
-          }).sort((a, b) => (b.metrics.targetRoas ?? 0) - (a.metrics.targetRoas ?? 0));
+      return Object.entries(byAction)
+        .map(([actionName, actionItems]) => {
+          const actionSpend = actionItems.reduce((s, i) => s + i.spend, 0);
+          const actionOrders = actionItems.filter(i => i.row).reduce((s, i) => s + (i.row!.orders || 0), 0);
+
+          // Group by campaign under each action
+          const byCampaign: Record<string, QueueItem[]> = {};
+          for (const item of actionItems) { const key = item.campaign || 'Unassigned'; if (!byCampaign[key]) byCampaign[key] = []; byCampaign[key].push(item); }
+
+          const campNodes: TreeNode[] = Object.entries(byCampaign)
+            .map(([campName, campItems]) => {
+              const leaves = buildLeaves(campItems, `action:${actionName}:${campName}`);
+              return {
+                key: `action:${actionName}:camp:${campName}`,
+                label: campName, level: 'campaign' as const, children: leaves,
+                rows: campItems.filter(i => i.row).map(i => i.row!),
+                metrics: { spend: campItems.reduce((s, i) => s + i.spend, 0), orders: campItems.reduce((s, i) => s + (i.row?.orders || 0), 0), count: campItems.length },
+              };
+            })
+            .sort((a, b) => b.metrics.spend - a.metrics.spend);
 
           return {
-            key: `camp:${actKey}:${portKey}:${campKey}`,
-            label: campKey,
-            level: 'campaign' as const,
-            children: targetChildren,
-            rows: campRows,
-            metrics: { spend: campSpend, orders: campOrders, count: campRows.length },
+            key: `action:${actionName}`,
+            label: actionName, level: 'action' as const, children: campNodes,
+            rows: actionItems.filter(i => i.row).map(i => i.row!),
+            metrics: { spend: actionSpend, orders: actionOrders, count: actionItems.length },
           };
-        }).sort((a, b) => b.metrics.spend - a.metrics.spend);
+        })
+        .sort((a, b) => b.metrics.spend - a.metrics.spend);
+    }
 
-        return {
-          key: `port:${actKey}:${portKey}`,
-          label: portKey,
-          level: 'portfolio' as const,
-          children: campChildren,
-          rows: portRows,
-          metrics: { spend: portSpend, orders: portOrders, count: portRows.length },
-        };
-      });
+    // ═══ HIERARCHY: By Strategy → Campaign → Action Type → Leaves ═══
+    if (hierarchy === 'strategy') {
+      const byStrategy: Record<string, QueueItem[]> = {};
+      for (const item of items) { 
+        const key = item.row?.strategy_id || item.hotSignal?.strategy_id || item.phrase?.strategy_id || 'No Strategy'; 
+        if (!byStrategy[key]) byStrategy[key] = []; 
+        byStrategy[key].push(item);
+      }
 
-      return {
-        key: `act:${actKey}`,
-        label: actKey,
-        level: 'action' as const,
-        children: portChildren,
-        rows: actRows,
-        metrics: { spend: actSpend, orders: actOrders, count: actRows.length },
-      };
-    });
-  }, [filtered]);
+      return Object.entries(byStrategy)
+        .map(([stratId, stratItems]) => {
+          const stratSpend = stratItems.reduce((s, i) => s + i.spend, 0);
+          const stratOrders = stratItems.filter(i => i.row).reduce((s, i) => s + (i.row!.orders || 0), 0);
+          const displayName = humanizeStratId(stratId);
+
+          // Level 2: Group by campaign
+          const byCampaign: Record<string, QueueItem[]> = {};
+          for (const item of stratItems) { const key = item.campaign || 'Unassigned'; if (!byCampaign[key]) byCampaign[key] = []; byCampaign[key].push(item); }
+
+          const campNodes: TreeNode[] = Object.entries(byCampaign)
+            .map(([campName, campItems]) => {
+              const campSpend = campItems.reduce((s, i) => s + i.spend, 0);
+              const campOrders = campItems.filter(i => i.row).reduce((s, i) => s + (i.row?.orders || 0), 0);
+
+              // Level 3: Group by action type within campaign
+              const typeNodes: TreeNode[] = [];
+              for (const typeDef of ACTION_TYPES) {
+                const typeItems = campItems.filter(i => i.type === typeDef.id);
+                if (!typeItems.length) continue;
+                const typeSpend = typeItems.reduce((s, i) => s + i.spend, 0);
+                const typeOrders = typeItems.filter(i => i.row).reduce((s, i) => s + (i.row!.orders || 0), 0);
+                const leafNodes = buildLeaves(typeItems, `strat:${stratId}:${campName}:${typeDef.id}`);
+
+                typeNodes.push({
+                  key: `strat:${stratId}:${campName}:${typeDef.id}`,
+                  label: typeDef.id, level: 'action', children: leafNodes,
+                  rows: typeItems.filter(i => i.row).map(i => i.row!),
+                  metrics: { spend: typeSpend, orders: typeOrders, count: typeItems.length },
+                });
+              }
+
+              return {
+                key: `strat:${stratId}:camp:${campName}`,
+                label: campName, level: 'campaign' as const, children: typeNodes,
+                rows: campItems.filter(i => i.row).map(i => i.row!),
+                metrics: { spend: campSpend, orders: campOrders, count: campItems.length },
+              };
+            })
+            .sort((a, b) => b.metrics.spend - a.metrics.spend);
+
+          return {
+            key: `strat:${stratId}`,
+            label: `🎯 ${displayName}`, level: 'portfolio' as const, children: campNodes,
+            rows: stratItems.filter(i => i.row).map(i => i.row!),
+            metrics: { spend: stratSpend, orders: stratOrders, count: stratItems.length },
+          };
+        })
+        .sort((a, b) => b.metrics.spend - a.metrics.spend);
+    }
+
+    // ═══ HIERARCHY: By Action Type ═══
+    if (hierarchy === 'action_type') {
+      const byType: Record<string, QueueItem[]> = {};
+      for (const item of items) { const key = item.type; if (!byType[key]) byType[key] = []; byType[key].push(item); }
+
+      return ACTION_TYPES
+        .filter(typeDef => byType[typeDef.id]?.length)
+        .map(typeDef => {
+          const typeItems = byType[typeDef.id]!;
+          const typeSpend = typeItems.reduce((s, i) => s + i.spend, 0);
+          const typeOrders = typeItems.filter(i => i.row).reduce((s, i) => s + (i.row!.orders || 0), 0);
+
+          // Group by action within each type
+          const byAction: Record<string, QueueItem[]> = {};
+          for (const item of typeItems) { const key = item.action || 'MONITOR'; if (!byAction[key]) byAction[key] = []; byAction[key].push(item); }
+
+          const actionNodes: TreeNode[] = Object.entries(byAction)
+            .map(([actionName, actionItems]) => {
+              // Group by campaign under each action
+              const byCampaign: Record<string, QueueItem[]> = {};
+              for (const item of actionItems) { const key = item.campaign || 'Unassigned'; if (!byCampaign[key]) byCampaign[key] = []; byCampaign[key].push(item); }
+
+              const campNodes: TreeNode[] = Object.entries(byCampaign)
+                .map(([campName, campItems]) => {
+                  const leaves = buildLeaves(campItems, `atype:${typeDef.id}:${actionName}:${campName}`);
+                  return {
+                    key: `atype:${typeDef.id}:${actionName}:camp:${campName}`,
+                    label: campName, level: 'campaign' as const, children: leaves,
+                    rows: campItems.filter(i => i.row).map(i => i.row!),
+                    metrics: { spend: campItems.reduce((s, i) => s + i.spend, 0), orders: campItems.reduce((s, i) => s + (i.row?.orders || 0), 0), count: campItems.length },
+                  };
+                })
+                .sort((a, b) => b.metrics.spend - a.metrics.spend);
+
+              return {
+                key: `atype:${typeDef.id}:action:${actionName}`,
+                label: actionName, level: 'action' as const, children: campNodes,
+                rows: actionItems.filter(i => i.row).map(i => i.row!),
+                metrics: { spend: actionItems.reduce((s, i) => s + i.spend, 0), orders: actionItems.reduce((s, i) => s + (i.row?.orders || 0), 0), count: actionItems.length },
+              };
+            })
+            .sort((a, b) => b.metrics.spend - a.metrics.spend);
+
+          return {
+            key: `atype:${typeDef.id}`,
+            label: `${typeDef.emoji} ${typeDef.id}`, level: 'campaign' as const, children: actionNodes,
+            rows: typeItems.filter(i => i.row).map(i => i.row!),
+            metrics: { spend: typeSpend, orders: typeOrders, count: typeItems.length },
+          };
+        });
+    }
+
+    // ═══ HIERARCHY: By Branch ID ═══
+    if (hierarchy === 'branch') {
+      const byBranch: Record<string, QueueItem[]> = {};
+      for (const item of items) {
+        const key = item.row?.decision_branch_id || 'No Branch';
+        if (!byBranch[key]) byBranch[key] = [];
+        byBranch[key].push(item);
+      }
+
+      return Object.entries(byBranch)
+        .map(([branchId, branchItems]) => {
+          const branchSpend = branchItems.reduce((s, i) => s + i.spend, 0);
+          const branchOrders = branchItems.filter(i => i.row).reduce((s, i) => s + (i.row!.orders || 0), 0);
+
+          // Level 2: Group by action type
+          const byType: Record<string, QueueItem[]> = {};
+          for (const item of branchItems) {
+            const key = item.type;
+            if (!byType[key]) byType[key] = [];
+            byType[key].push(item);
+          }
+
+          const typeNodes: TreeNode[] = ACTION_TYPES
+            .filter(typeDef => byType[typeDef.id]?.length)
+            .map(typeDef => {
+              const typeItems = byType[typeDef.id]!;
+              const typeSpend = typeItems.reduce((s, i) => s + i.spend, 0);
+              const typeOrders = typeItems.filter(i => i.row).reduce((s, i) => s + (i.row!.orders || 0), 0);
+
+              const leaves = buildLeaves(typeItems, `branch:${branchId}:${typeDef.id}`);
+
+              return {
+                key: `type:branch:${branchId}:${typeDef.id}`, // start with type: to trigger Action Type banner
+                label: typeDef.id, // pure ID so the banner can find the typeDef
+                level: 'action' as const, children: leaves,
+                rows: typeItems.filter(i => i.row).map(i => i.row!),
+                metrics: { spend: typeSpend, orders: typeOrders, count: typeItems.length },
+              };
+            })
+            // Under Branch ID, user wants to order by amount of actions (count) descending
+            .sort((a, b) => b.metrics.count - a.metrics.count);
+
+          return {
+            key: `branch:${branchId}`,
+            label: `🔀 ${branchId}`, level: 'portfolio' as const, children: typeNodes,
+            rows: branchItems.filter(i => i.row).map(i => i.row!),
+            metrics: { spend: branchSpend, orders: branchOrders, count: branchItems.length },
+          };
+        })
+        .sort((a, b) => b.metrics.count - a.metrics.count);
+    }
+
+    return [];
+  }, [filtered, data.hot_signals, data.coach_phrase_negatives, data.actions, keywordCampaignCounts, effectiveFam, famFilter, filters, stratFilter, effectiveCoachMode, hierarchy]);
 
   /* ── Section counts ── */
-  const termCount = termTree.reduce((s, n) => s + n.metrics.count, 0);
-  const termSpend = termTree.reduce((s, n) => s + n.metrics.spend, 0);
-  const targetCount = targetTree.reduce((s, n) => s + n.metrics.count, 0);
-  const targetSpend = targetTree.reduce((s, n) => s + n.metrics.spend, 0);
+  const totalQueueCount = unifiedTree.reduce((s, n) => s + n.metrics.count, 0);
+  const totalQueueSpend = unifiedTree.reduce((s, n) => s + n.metrics.spend, 0);
 
   /* ── Summary counts from flat action list ── */
-  const stopCount = filtered.filter(r => TERM_ACTIONS.has(r.action) && (r.action.includes('STOP') || r.action.includes('NEGATE'))).length;
-  const stopSpend2 = filtered.filter(r => TERM_ACTIONS.has(r.action) && (r.action.includes('STOP') || r.action.includes('NEGATE'))).reduce((s, r) => s + (r.spend || 0), 0);
-  const keepCount = filtered.filter(r => r.action === 'KEEP' || r.action === 'KEEP_TARGET' || (r as any).target_action === 'KEEP_TARGET').length;
-  const growCount = filtered.filter(r => ['PROMOTE_TO_EXACT', 'INCREASE_BID'].includes(r.action) || (r as any).target_action === 'INCREASE_BID').length;
+  const negateCount = filtered.filter(r => r.action === 'NEGATE_TERM' || r.action === 'REDUCE_BID').length;
+  const negateSpend = filtered.filter(r => r.action === 'NEGATE_TERM' || r.action === 'REDUCE_BID').reduce((s, r) => s + (r.spend || 0), 0);
+  const keepCount = filtered.filter(r => r.action === 'KEEP' || r.action === 'KEEP_TARGET').length;
+  const growCount = filtered.filter(r => r.action === 'PROMOTE_TO_EXACT' || r.action === 'INCREASE_BID' || r.action === 'START_TERM').length;
   const newCount = filtered.filter(r => r.action === 'START_TERM' || r.action === 'START').length;
 
   usePageSummary({
@@ -623,14 +790,35 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
       { label: 'Actions' },
     ],
     items: [
-      { label: 'Stop', value: `${stopCount}`, color: 'red' },
-      { label: 'Wasted Spend', value: fM(stopSpend2), color: 'red' },
+      { label: 'Negate', value: `${negateCount}`, color: 'red' },
+      { label: 'Wasted Spend', value: fM(negateSpend), color: 'red' },
       { label: 'Keep', value: `${keepCount}`, color: 'green' },
       { label: 'Growth', value: `${growCount}`, color: 'green' },
       { label: 'Opportunities', value: `${newCount}`, color: 'blue' },
       { label: 'Total', value: `${filtered.length}` },
     ],
   });
+
+  // Derive active coach mode per family from coach_terms (has parent_name)
+  const familyCoachModes = useMemo(() => {
+    const map: Record<string, { mode: string; occasion: string; phase: string; count: number }> = {};
+    for (const ct of data.actions || []) {
+      const fam = ct.parent_name;
+      if (!fam || !ct.coach_mode) continue;
+      if (!map[fam]) map[fam] = { mode: ct.coach_mode, occasion: ct.active_occasion || 'NONE', phase: ct.current_phase || 'OFF_SEASON', count: 0 };
+      map[fam].count++;
+    }
+    return map;
+  }, [data.actions]);
+
+  // Most urgent mode across all families: COOLDOWN > BLITZ > GUARDIAN
+  const activeCoachMode = useMemo(() => {
+    const modes = Object.values(familyCoachModes).map(f => f.mode);
+    if (modes.includes('COOLDOWN')) return 'COOLDOWN';
+    if (modes.includes('BLITZ')) return 'BLITZ';
+    if (modes.some(m => m && m !== 'GUARDIAN')) return modes.find(m => m && m !== 'GUARDIAN') || null;
+    return modes.length ? 'GUARDIAN' : null;
+  }, [familyCoachModes]);
 
   if (!acts.length) return <Empty icon="⚡" message="No pending actions" hint="Actions appear when keyword data detects bid changes, negations, or opportunities." />;
 
@@ -641,197 +829,251 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     const hasChildren = node.children.length > 0;
     const pl = depth * 20 + 12;
 
+    /* ─── KEYWORD / LEAF ─── */
     if (node.level === 'keyword') {
-      // Keyword leaf row → full ActionRowComponent
+      // Hot signal leaf
+      const hotData = (node.metrics as any).hotSignalData;
+      if (hotData) {
+         const SIGNAL_META_MAP: Record<string, { icon: React.ReactNode; color: string; bgColor: string; borderColor: string; label: string; doAction: string }> = {
+          URGENT_STOP: { icon: <CircleX size={14} />, color: 'text-red-400', bgColor: 'bg-red-500/8', borderColor: 'border-red-500/25', label: 'Urgent Stop', doAction: 'STOP' },
+          HOT_WINNER: { icon: <TrendingUp size={14} />, color: 'text-emerald-400', bgColor: 'bg-emerald-500/8', borderColor: 'border-emerald-500/25', label: 'Hot Winner', doAction: 'INCREASE_BID' },
+          RAPID_DECLINE: { icon: <TrendingDown size={14} />, color: 'text-amber-400', bgColor: 'bg-amber-500/8', borderColor: 'border-amber-500/25', label: 'Rapid Decline', doAction: 'REDUCE_BID' },
+          POST_PEAK_REDUCE: { icon: <TrendingDown size={14} />, color: 'text-cyan-400', bgColor: 'bg-cyan-500/8', borderColor: 'border-cyan-500/25', label: 'Post-Peak Reduce', doAction: 'REDUCE_BID' },
+        };
+        const meta = SIGNAL_META_MAP[hotData.hot_signal] || SIGNAL_META_MAP.HOT_WINNER;
+        const wasUploaded = doQueue.isUploaded(hotData.search_term, hotData.campaign_id);
+        const pendingItem = doQueue.items.find(i => i.search_term === hotData.search_term && i.action === meta.doAction && i.campaign === hotData.campaign_name);
+        const inPending = !!pendingItem;
+        if (wasUploaded) return []; // hide uploaded hot signals
+        return [
+          <div key={fullKey}>
+            <div className="p-0">
+              <div className={`flex items-start gap-3 p-3 mx-2 my-1 rounded-lg border ${meta.borderColor} ${meta.bgColor} transition-all hover:brightness-110`}
+                style={{ marginLeft: pl }}>
+                <div className={`mt-0.5 ${meta.color}`}>{meta.icon}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-[10px] font-bold uppercase tracking-wider ${meta.color}`}>{meta.label}</span>
+                    {hotData.coach_8w_action && hotData.hot_signal === 'URGENT_STOP' && (
+                      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">⚠️ Overrides: {hotData.coach_8w_action}</span>
+                    )}
+                    {hotData.hot_signal === 'POST_PEAK_REDUCE' && hotData.current_bid != null && hotData.recommended_bid != null && (
+                      <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/25">
+                        ${hotData.current_bid.toFixed(2)} → ${hotData.recommended_bid.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[12px] text-white font-semibold truncate">{hotData.search_term}</div>
+                  <div className="text-[10px] text-subtle mt-0.5 truncate">Campaign: {hotData.campaign_name} · {hotData.product_short_name}</div>
+                  <div className="text-[10px] text-faint mt-1">{hotData.hot_signal_reason}</div>
+                </div>
+                <div className="flex gap-4 text-right shrink-0 items-start">
+                  {hotData.hot_signal === 'POST_PEAK_REDUCE' ? (
+                    <>
+                      <div><div className="text-[9px] text-subtle uppercase">Bid</div><div className="text-[12px] font-mono text-white">${hotData.current_bid?.toFixed(2)}</div></div>
+                      <div><div className="text-[9px] text-subtle uppercase">Target</div><div className="text-[12px] font-mono text-cyan-400">${hotData.recommended_bid?.toFixed(2)}</div></div>
+                      <div><div className="text-[9px] text-subtle uppercase">Save</div><div className="text-[12px] font-mono text-emerald-400">-{((hotData.current_bid ?? 0) - (hotData.recommended_bid ?? 0)).toFixed(2)}</div></div>
+                    </>
+                  ) : (
+                    <>
+                      <div><div className="text-[9px] text-subtle uppercase">Spend</div><div className="text-[12px] font-mono text-white">{fM(hotData.spend_3d)}</div></div>
+                      <div><div className="text-[9px] text-subtle uppercase">Clicks</div><div className="text-[12px] font-mono text-white">{hotData.clicks_3d}</div></div>
+                      <div><div className="text-[9px] text-subtle uppercase">Orders</div><div className={`text-[12px] font-mono ${hotData.orders_3d > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{hotData.orders_3d}</div></div>
+                    </>
+                  )}
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <button onClick={() => { if (inPending && pendingItem) { doQueue.removeItem(pendingItem.id); return; } doQueue.addItem({ search_term: hotData.search_term, action: meta.doAction, campaign: hotData.campaign_name, campaign_id: hotData.campaign_id, ad_group_id: hotData.ad_group_id, targeting: hotData.search_term, keyword_id: hotData.keyword_id ?? '', match_type: '', target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: hotData.coach_8w_roas ?? 0, current_bid: hotData.current_bid ?? null, recommended_bid: hotData.recommended_bid ?? null, campaign_type: hotData.campaign_type, product: hotData.asin || hotData.product_short_name || '', spend: hotData.spend_3d, orders: hotData.orders_3d, cpc: hotData.cpc_3d ?? 0, conv_rate: hotData.cvr_3d ?? 0 }); }}
+                      className={`w-6 h-6 rounded-full flex items-center justify-center transition-all shrink-0 ${inPending ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 cursor-pointer hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/40' : 'bg-white/5 text-zinc-400 border border-zinc-600 hover:border-blue-500/50 hover:text-blue-400 hover:bg-blue-500/10 cursor-pointer'}`}
+                      title={inPending ? 'Click to remove from DO queue' : `Add "${meta.doAction}" to DO queue`}>{inPending ? <Check size={12} /> : <Plus size={12} />}</button>
+                    <span className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider ${meta.bgColor} ${meta.color} border ${meta.borderColor}`}>
+                      {ACTION_ICONS[meta.doAction] ? React.createElement(ACTION_ICONS[meta.doAction], { size: 11 }) : meta.icon} {meta.doAction.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ];
+      }
+
+      // Phrase negative leaf
+      const phraseData = (node.metrics as any).phraseData;
+      if (phraseData) {
+        const isNeg = phraseData.action === 'NEGATE_PHRASE';
+        const inQ = doQueue.items.some(q => q.campaign_id === phraseData.campaign_id && q.search_term === phraseData.phrase);
+        const sampleTerms: { search_term: string; ads_spend_8w: number; ads_orders_8w: number; ads_clicks_8w: number }[] = phraseData.sample_terms || [];
+        const phraseExpandKey = `phr-detail:${phraseData.phrase}|${phraseData.campaign_id}`;
+        const isPhraseExpanded = expandedKeys.has(phraseExpandKey);
+        return [
+          <div key={fullKey} className={`flex items-center gap-2 px-3 py-2 border-t transition-colors hover:bg-surface/30 cursor-pointer ${isNeg ? 'border-red-500/20' : 'border-purple-500/20 bg-purple-500/[0.03]'}`}
+            onClick={() => toggleKey(phraseExpandKey)}
+            style={{ paddingLeft: pl }}
+          >
+            <div className="flex items-center gap-1.5 min-w-[180px] shrink-0">
+              <span className={`text-[10px] transition-transform ${isPhraseExpanded ? 'rotate-90' : ''}`}>▶</span>
+              <div>
+                <strong className={isNeg ? 'text-blue-400 text-[12px]' : 'text-purple-300 text-[12px]'}>"{phraseData.phrase}"</strong>
+                {!isNeg && <div className="text-[9px] text-purple-400/80 mt-0.5">Theme: {phraseData.seasonal_theme}</div>}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1 shrink-0">
+              <span onClick={e => e.stopPropagation()}>
+                <button className={`p-0.5 rounded transition-colors ${inQ ? 'text-emerald-400' : 'text-zinc-500 hover:text-white'}`}
+                  onClick={() => { if (inQ) return; doQueue.addItem({ search_term: phraseData.phrase, action: phraseData.action, campaign: phraseData.campaign_name, campaign_id: phraseData.campaign_id, ad_group_id: '', targeting: phraseData.phrase, keyword_id: '', match_type: 'PHRASE', target_spend_8w: phraseData.phrase_spend_8w, target_orders_8w: phraseData.phrase_orders_8w, target_net_roas_8w: 0, current_bid: null, recommended_bid: null, campaign_type: phraseData.campaign_type || 'SPONSORED_PRODUCTS', product: 'Keyword', spend: 0, orders: 0, cpc: 0, conv_rate: 0, seasonal_theme: phraseData.seasonal_theme }); }}
+                >{inQ ? <Check size={13} /> : <Plus size={13} />}</button>
+              </span>
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border border-white/10 ${isNeg ? 'bg-red-500/20 text-red-300' : 'bg-purple-500/20 text-purple-300'}`}>
+                {isNeg ? 'NEGATE' : 'PROMOTE_PEAK'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <div className="text-[10px] text-zinc-400 font-mono truncate max-w-[160px]" title={phraseData.campaign_name}>{phraseData.campaign_name}</div>
+              <span className="text-[10px] text-zinc-500 font-mono pl-2 border-l border-zinc-700">{fmt(phraseData.phrase_term_count)} terms</span>
+              <span className="text-[11px] font-mono font-medium text-red-400">{fM(phraseData.phrase_spend_8w)}</span>
+              {phraseData.phrase_clicks_8w > 0 && <span className="text-[10px] text-zinc-500 font-mono">{fmt(phraseData.phrase_clicks_8w)} cl</span>}
+            </div>
+
+            <div className="text-[9px] text-zinc-600 truncate max-w-[200px]" title={phraseData.reason}>{phraseData.reason}</div>
+          </div>,
+          // Expanded detail: show included search terms
+          ...(isPhraseExpanded && sampleTerms.length > 0 ? [
+            <div key={`${fullKey}-detail`} className="border-t border-zinc-800/40">
+              <div style={{ paddingLeft: pl + 24 }} className="py-2">
+                <div className="text-[10px] text-zinc-500 mb-1.5 font-medium">Top keywords containing "{phraseData.phrase}" — {phraseData.phrase_term_count} total</div>
+                <div className="grid gap-0.5">
+                  {sampleTerms.map((st: any, i: number) => (
+                    <div key={i} className="flex items-center gap-3 text-[10px] font-mono py-0.5 px-2 rounded bg-zinc-800/30 hover:bg-zinc-800/50">
+                      <span className="text-zinc-400 w-4 text-right">{i + 1}.</span>
+                      <span className="text-zinc-200 flex-1 truncate">{st.search_term}</span>
+                      <span className="text-red-400/80 w-16 text-right">{fM(st.ads_spend_8w)}</span>
+                      <span className={`w-10 text-right ${st.ads_orders_8w > 0 ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                        {st.ads_orders_8w > 0 ? `${st.ads_orders_8w} ord` : '0 ord'}
+                      </span>
+                      <span className="text-zinc-500 w-12 text-right">{st.ads_clicks_8w} cl</span>
+                    </div>
+                  ))}
+                  {phraseData.phrase_term_count > 5 && (
+                    <div className="text-[9px] text-zinc-600 mt-0.5">… and {phraseData.phrase_term_count - 5} more terms</div>
+                  )}
+                </div>
+                <div className="text-[9px] text-zinc-600 mt-2 italic">{phraseData.reason}</div>
+              </div>
+            </div>
+          ] : []),
+        ];
+      }
+
+      // Standard term/target keyword leaf → ActionRowComponent + optional intelligence panel
       const a = node.rows[0];
       if (!a) return [];
-      return [
+      const termLower = (a.search_term || '').toLowerCase();
+      const campaignCount = keywordCampaignCounts[termLower] || 1;
+      const isComplex = campaignCount >= 3;
+      const isIntelExpanded = intelligenceKeyword === a.search_term;
+
+      const result: React.ReactNode[] = [
         <ActionRowComponent
-          key={fullKey} action={a} cd={cdByTerm[(a.search_term || '').toLowerCase()]}
-          prediction={predByTerm[(a.search_term || '').toLowerCase()]}
+          key={fullKey} action={a} cd={cdByTerm[termLower]}
+          prediction={predByTerm[termLower]}
           expanded={isExpanded}
           onToggle={() => {
             const next = new Set(expandedKeys);
             isExpanded ? next.delete(fullKey) : next.add(fullKey);
             setExpandedKeys(next);
           }}
-          matchAction={matchAction} visibleCols={visibleActionCols} indent={pl}
+          matchAction={matchAction} indent={pl}
+          complexityBadge={isComplex ? campaignCount : undefined}
+          onIntelligenceClick={isComplex ? () => {
+            setIntelligenceKeyword(prev => prev === a.search_term ? null : (a.search_term || null));
+          } : undefined}
+          isIntelExpanded={isIntelExpanded}
+          doQueue={doQueue}
         />
       ];
+
+      if (isIntelExpanded) {
+        result.push(
+          <div key={`${fullKey}:intel`}>
+            <div className="p-0">
+              {intelligenceLoading ? (
+                <div className="px-12 py-4 text-zinc-400 text-xs">Loading keyword intelligence...</div>
+              ) : intelligenceData ? (
+                <div className="pl-8 pr-4 pb-2">
+                  <KeywordIntelligencePanel
+                    data={intelligenceData}
+                    termActions={acts.filter(x => x.search_term?.toLowerCase() === intelligenceKeyword?.toLowerCase())}
+                    coachDecision={cdByTerm[intelligenceKeyword?.toLowerCase() || ''] || null}
+                    onAddToDoQueue={doQueue.addItem}
+                    isInDoQueue={doQueue.hasItem}
+                  />
+                </div>
+              ) : (
+                <div className="px-12 py-3 text-zinc-500 text-xs">No intelligence data available.</div>
+              )}
+            </div>
+          </div>
+        );
+      }
+      return result;
     }
 
+    /* ─── NON-LEAF NODES (campaign / type) ─── */
     const rows: React.ReactNode[] = [];
 
-    if (node.level === 'portfolio') {
-      // Portfolio header row
+    if (node.key.startsWith('camp:')) {
+      // Campaign banner
       rows.push(
-        <tr key={fullKey} onClick={() => toggleKey(fullKey)}
-          className="cursor-pointer transition-all hover:brightness-110 border-b border-border bg-surface/80">
-          <td colSpan={visibleActionCols.length} className="px-0 py-0">
-            <div className="flex items-center gap-2 text-xs font-bold px-3.5 py-2.5 border-l-[3px] border-blue-500"
-              style={{ paddingLeft: pl }}>
+        <div key={fullKey} onClick={() => toggleKey(fullKey)}
+          className="cursor-pointer transition-all hover:brightness-110 border-b border-border bg-gradient-to-r from-zinc-800/60 via-zinc-900/40 to-transparent">
+          <div className="px-0 py-0">
+            <div className="flex items-center gap-2.5 text-sm font-bold px-4 py-3 border-l-[4px] border-blue-500/40">
               <span className={`transition-transform duration-200 text-[10px] ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
-              <span>📁</span>
-              <Badge variant="muted">{node.label}</Badge>
-              <span className="text-white/80 font-semibold">({node.metrics.count})</span>
-              <span className="font-mono text-[10px] opacity-60 ml-1">{fM(node.metrics.spend)}</span>
-              {node.metrics.orders > 0 && <span className="font-mono text-[10px] opacity-60">· {fOrd(node.metrics.orders)}</span>}
+              <span className="text-base">📦</span>
+              <span className="text-white font-bold truncate max-w-[400px]" title={node.label}>{node.label}</span>
+              <span className="text-white/80 font-semibold text-xs">({node.metrics.count})</span>
+              <span className="font-mono text-[11px] opacity-60">{fM(node.metrics.spend)}</span>
+              {node.metrics.orders > 0 && <span className="font-mono text-[10px] opacity-60">· {fOrd(node.metrics.orders)} ord</span>}
             </div>
-          </td>
-        </tr>
+          </div>
+        </div>
       );
-    } else if (node.level === 'campaign') {
-      // Campaign sub-header
+    } else if (node.key.startsWith('type:')) {
+      // Action type banner
+      const typeDef = ACTION_TYPES.find(t => t.id === node.label);
+      const td2 = typeDef || ACTION_TYPES[1];
       rows.push(
-        <tr key={fullKey} onClick={() => toggleKey(fullKey)}
-          className="cursor-pointer border-b border-border-faint hover:bg-white/[.02] transition-colors">
-          <td colSpan={visibleActionCols.length} className="px-0 py-0">
+        <div key={fullKey} onClick={() => toggleKey(fullKey)}
+          className="cursor-pointer transition-all hover:brightness-110 border-b border-border-faint bg-surface/40">
+          <div className="px-0 py-0">
+            <div className="flex items-center gap-2 text-[11px] font-bold px-3.5 py-2"
+              style={{ paddingLeft: pl }}>
+              <span className={`transition-transform duration-200 text-[9px] ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
+              <span className="text-sm">{td2.emoji}</span>
+              <span className="text-zinc-300 font-semibold">{td2.label.replace(/^[^ ]+ /, '')}</span>
+              <span className="text-faint">({node.metrics.count})</span>
+              <span className="font-mono text-[10px] text-faint ml-1">{fM(node.metrics.spend)}</span>
+              <span className="text-[9px] text-muted font-normal ml-2">{td2.desc}</span>
+            </div>
+          </div>
+        </div>
+      );
+    } else {
+      // Fallback: generic collapsible header
+      rows.push(
+        <div key={fullKey} onClick={() => toggleKey(fullKey)}
+          className="cursor-pointer border-b border-border-faint hover:bg-white/[.02]">
+          <div className="px-0 py-0">
             <div className="flex items-center gap-2 text-[11px] font-semibold text-subtle px-3.5 py-2"
               style={{ paddingLeft: pl }}>
               <span className={`transition-transform duration-200 text-[9px] ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
-              <span className="text-zinc-300 font-mono truncate max-w-[350px]" title={node.label}>{node.label}</span>
+              <span>{node.label}</span>
               <span className="text-faint">({node.metrics.count})</span>
               <span className="font-mono text-[10px] text-faint ml-1">{fM(node.metrics.spend)}</span>
-              {node.metrics.orders > 0 && <span className="font-mono text-[10px] text-faint">· {fOrd(node.metrics.orders)}</span>}
             </div>
-          </td>
-        </tr>
-      );
-    } else if (node.level === 'target') {
-      // Target keyword row — add as a single target-level queue item
-      const firstRow = node.rows[0];
-      const targetAction = (firstRow as any)?.target_action || firstRow?.action || 'KEEP';
-      const targetCampaign = firstRow?.campaign_name || firstRow?.strategy_id || 'Other';
-      const targetLabel = node.label; // the targeting keyword itself
-      const allInQueue = doQueue.hasItem(targetLabel, targetAction, targetCampaign);
-      const handleTargetQueue = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        if (allInQueue) {
-          const match = doQueue.items.find(p => p.search_term === targetLabel && p.action === targetAction && p.campaign === targetCampaign);
-          if (match) doQueue.removeItem(match.id);
-        } else {
-          doQueue.addItem({
-            search_term: targetLabel,
-            action: targetAction,
-            campaign: targetCampaign,
-            campaign_id: firstRow?.campaign_id || '',
-            ad_group_id: firstRow?.ad_group_id || '',
-            targeting: firstRow?.targeting || targetLabel,
-            keyword_id: firstRow?.keyword_id || '',
-            match_type: firstRow?.match_type || '',
-            target_spend_8w: firstRow?.target_spend_8w || 0,
-            target_orders_8w: firstRow?.target_orders_8w || 0,
-            target_net_roas_8w: firstRow?.target_net_roas_8w || 0,
-            current_bid: firstRow?.current_bid ?? null,
-            recommended_bid: firstRow?.recommended_bid ?? null,
-            campaign_type: (firstRow as any)?.campaign_type || '',
-            product: firstRow?.hero_asin || firstRow?.asin || firstRow?.product_short_name || '',
-            spend: node.metrics.spend || 0,
-            orders: node.metrics.orders || 0,
-            cpc: firstRow?.cpc || 0,
-            conv_rate: firstRow?.conv_rate || 0,
-          });
-        }
-      };
-
-      rows.push(
-        <tr key={fullKey} onClick={() => toggleKey(fullKey)}
-          className="cursor-pointer transition-all hover:bg-white/[.02] border-b border-border-faint">
-          <td colSpan={visibleActionCols.length} className="px-0 py-0">
-            <div className="flex items-center gap-2 text-[11px] font-semibold px-3.5 py-2"
-              style={{ paddingLeft: pl }}>
-              <span className={`transition-transform duration-200 text-[9px] ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
-              <Target size={12} className="text-zinc-400 shrink-0" />
-              <span className="text-zinc-200 font-mono">{node.label}</span>
-              {node.metrics.matchType && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-700/50 text-zinc-400 font-mono uppercase">
-                  {node.metrics.matchType}
-                </span>
-              )}
-              <span className="text-white/70 font-semibold">({node.metrics.count})</span>
-              <span className="font-mono text-[10px] opacity-60 ml-1">{fM(node.metrics.spend)}</span>
-              {/* Bid pill: current → recommended */}
-              {(() => {
-                const firstRow = node.rows?.[0];
-                const curBid = (firstRow as any)?.current_bid;
-                const recBid = (firstRow as any)?.recommended_bid;
-                const bidPct = (firstRow as any)?.bid_change_pct;
-                if (curBid && recBid && curBid !== recBid) {
-                  const isUp = recBid > curBid;
-                  return (
-                    <span className={`flex items-center gap-1 ml-1 font-mono text-[10px] px-1.5 py-0.5 rounded-full border ${
-                      isUp ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400' : 'bg-red-500/10 border-red-500/25 text-red-400'
-                    }`}>
-                      ${curBid.toFixed(2)} → ${recBid.toFixed(2)}
-                      {bidPct != null && <span className="opacity-70">({isUp ? '+' : ''}{bidPct.toFixed(0)}%)</span>}
-                    </span>
-                  );
-                }
-                return null;
-              })()}
-              {node.metrics.targetRoas != null && <span className={`font-mono text-[10px] ml-1 ${node.metrics.targetRoas >= 1 ? 'text-emerald-400/70' : 'text-amber-400/70'}`}>ROAS {node.metrics.targetRoas.toFixed(2)}</span>}
-              {node.metrics.targetOrders != null && node.metrics.targetOrders > 0 && <span className="font-mono text-[10px] opacity-60">· {node.metrics.targetOrders} ord</span>}
-              {/* Decision trace steps */}
-              {node.metrics.targetDecisionTrace && node.metrics.targetDecisionTrace.length > 0 && (
-                <span className="flex items-center gap-1 ml-2">
-                  {node.metrics.targetDecisionTrace.map(step => (
-                    <span key={step.id}
-                      className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
-                        step.pass
-                          ? 'bg-emerald-500/10 text-emerald-400/80 border border-emerald-500/20'
-                          : 'bg-red-500/10 text-red-400/80 border border-red-500/20'
-                      }`}
-                      title={`${step.label}: ${step.value} (${step.rule}) → ${step.pass ? 'PASS' : 'FAIL'}`}
-                    >
-                      {step.pass ? '✓' : '✗'} {step.label.replace('Target ', '').replace(' 8w', '')}: {step.value}
-                    </span>
-                  ))}
-                </span>
-              )}
-              <div className="flex-1" />
-              <div className="flex items-center gap-3">
-                {(() => {
-                  const tr = node.rows?.[0];
-                  const actionStr = (tr as any)?.target_action || tr?.action;
-                  return actionStr ? <ActionBadge action={actionStr} /> : null;
-                })()}
-                <button
-                  onClick={handleTargetQueue}
-                  className={`w-6 h-6 rounded-full flex items-center justify-center transition-all shrink-0 ${
-                    allInQueue
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                      : 'bg-white/5 text-zinc-400 border border-zinc-600 hover:border-blue-500/50 hover:text-blue-400 hover:bg-blue-500/10'
-                  }`}
-                  title={allInQueue ? 'Remove target from queue' : 'Add target to DO queue'}
-                >
-                  {allInQueue ? <Check size={12} /> : <Plus size={12} />}
-                </button>
-              </div>
-            </div>
-          </td>
-        </tr>
-      );
-    } else if (node.level === 'action') {
-      // Action banner row
-      const ac = ACTION_COLORS[node.label] || defaultActionColor;
-      const ActionIcon = ACTION_ICONS[node.label] || Eye;
-      const criteria = ACTION_META[node.label]?.criteria;
-      rows.push(
-        <tr key={fullKey} onClick={() => toggleKey(fullKey)}
-          className={`cursor-pointer transition-all hover:brightness-110 border-b border-border ${ac.bg}`}>
-          <td colSpan={visibleActionCols.length} className="px-0 py-0">
-            <div className={`flex items-center gap-2 text-xs font-bold px-3.5 py-2 border-l-[3px] ${ac.border}`}
-              style={{ paddingLeft: pl }}>
-              <span className={`transition-transform duration-200 text-[10px] ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
-              <ActionIcon size={13} className={`shrink-0 ${ac.text}`} />
-              <ActionBadge action={node.label} />
-              <span className="text-white/80 font-semibold">({node.metrics.count})</span>
-              <span className="font-mono text-[10px] opacity-60 ml-1">{fM(node.metrics.spend)}</span>
-              {node.metrics.orders > 0 && <span className="font-mono text-[10px] opacity-60">· {fOrd(node.metrics.orders)}</span>}
-              {criteria && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-inset text-muted font-normal ml-auto truncate max-w-[300px]" title={criteria}>{criteria}</span>}
-            </div>
-          </td>
-        </tr>
+          </div>
+        </div>
       );
     }
 
@@ -845,9 +1087,67 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     return rows;
   };
 
+  const COACH_THEMES: Record<string, { emoji: string; label: string; gradient: string; borderColor: string; bgColor: string; textColor: string; desc: string }> = {
+    BLITZ: { emoji: '🔥', label: 'Blitz', gradient: 'from-amber-500/20 via-orange-500/10 to-transparent', borderColor: 'border-amber-500/40', bgColor: 'bg-amber-500/10', textColor: 'text-amber-400', desc: 'Scale up, push volume, promote aggressively' },
+    COOLDOWN: { emoji: '❄️', label: 'Cooldown', gradient: 'from-cyan-500/20 via-blue-500/10 to-transparent', borderColor: 'border-cyan-500/40', bgColor: 'bg-cyan-500/10', textColor: 'text-cyan-400', desc: 'Wind down bids, cascade -30%/day' },
+    GUARDIAN: { emoji: '🛡', label: 'Guardian', gradient: 'from-emerald-500/12 via-zinc-500/5 to-transparent', borderColor: 'border-emerald-500/30', bgColor: 'bg-emerald-500/8', textColor: 'text-emerald-400', desc: 'Protect margins, strict ROAS' },
+  };
+
   return (
     <div className="animate-in">
+      {/* ── Coach Mode Banner ── */}
+      {activeCoachMode && COACH_THEMES[activeCoachMode] && (() => {
+        const theme = COACH_THEMES[activeCoachMode];
+        const activeFamilies = Object.entries(familyCoachModes).filter(([, v]) => v.mode === activeCoachMode);
+        const guardianFamilies = Object.entries(familyCoachModes).filter(([, v]) => v.mode === 'GUARDIAN');
+        return (
+          <div className={`mb-3 px-4 py-2.5 rounded-xl border ${theme.borderColor} bg-gradient-to-r ${theme.gradient} flex items-center gap-3`}>
+            <span className="text-xl">{theme.emoji}</span>
+            <div>
+              <span className={`text-sm font-bold ${theme.textColor}`}>{theme.label} Mode</span>
+              <span className="text-[11px] text-subtle ml-2">{theme.desc}</span>
+            </div>
+            {activeCoachMode !== 'GUARDIAN' && (
+              <div className="ml-auto flex items-center gap-2">
+                {activeFamilies.map(([fam, info]) => (
+                  <span key={fam} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${theme.bgColor} ${theme.textColor} border ${theme.borderColor}`}>
+                    {fam} · {info.occasion}
+                  </span>
+                ))}
+                {guardianFamilies.length > 0 && (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/8 text-emerald-400 border border-emerald-500/30">
+                    🛡 {guardianFamilies.map(([f]) => f).join(', ')}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       <PageHeader title="Detailed Actions" subtitle="Every action justified by measures" />
+
+      {/* ── Coach Strategy Panel ── */}
+      {(() => {
+        const coachTerms = data.actions || [];
+        // Determine dominant mode from actual data
+        const modeCounts: Record<string, number> = {};
+        for (const ct of coachTerms) {
+          if (ct.coach_mode) modeCounts[ct.coach_mode] = (modeCounts[ct.coach_mode] || 0) + 1;
+        }
+        const activeMode = (coachFilter !== 'all' ? coachFilter : Object.entries(modeCounts).sort((a, b) => b[1] - a[1])[0]?.[0]) || 'GUARDIAN';
+        const activeOccasion = coachTerms.find(ct => ct.coach_mode === activeMode && ct.active_occasion)?.active_occasion;
+        return (
+          <CoachStrategyPanel
+            strategy={data.coach_strategy || []}
+            actions={coachTerms}
+            activeMode={activeMode}
+            activeFilter={strategicTaskFilter}
+            onFilterChange={setStrategicTaskFilter}
+            activeOccasion={activeOccasion}
+          />
+        );
+      })()}
 
       {/* ── Filter bar ── */}
       <div className="flex gap-2 items-center flex-wrap p-2.5 bg-surface/50 backdrop-blur border border-border rounded-xl mb-3.5">
@@ -859,12 +1159,27 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         <label className="text-[10px] text-subtle uppercase tracking-wider font-semibold ml-2">Strategy</label>
         <select value={stratFilter} onChange={e => setStratFilter(e.target.value)} className="bg-[#09090b] border border-border text-white px-2.5 py-1.5 rounded-lg text-[11px] focus:outline-none focus:border-blue-500">
           <option value="all">All</option>
-          {strategies.map(s => <option key={s!} value={s!}>{s}</option>)}
+          {strategies.map(s => <option key={s!} value={s!}>{humanizeStratId(s!)}</option>)}
         </select>
         <label className="text-[10px] text-subtle uppercase tracking-wider font-semibold ml-2">Family</label>
         <select value={famFilter} onChange={e => setFamFilter(e.target.value)} className="bg-[#09090b] border border-border text-white px-2.5 py-1.5 rounded-lg text-[11px] focus:outline-none focus:border-blue-500">
           <option value="all">All</option>
           {fams.map(f => <option key={f!} value={f!}>{f}</option>)}
+        </select>
+        <label className="text-[10px] text-subtle uppercase tracking-wider font-semibold ml-2">Coach</label>
+        <select value={coachFilter} onChange={e => setCoachFilter(e.target.value)} className="bg-[#09090b] border border-border text-white px-2.5 py-1.5 rounded-lg text-[11px] focus:outline-none focus:border-blue-500">
+          <option value="all">All</option>
+          <option value="BLITZ">🔥 Blitz</option>
+          <option value="COOLDOWN">❄️ Cooldown</option>
+          <option value="GUARDIAN">🛡 Guardian</option>
+        </select>
+        <label className="text-[10px] text-subtle uppercase tracking-wider font-semibold ml-2">Group by</label>
+        <select value={hierarchy} onChange={e => { setHierarchy(e.target.value as any); setExpandedKeys(new Set()); }} className="bg-[#09090b] border border-border text-white px-2.5 py-1.5 rounded-lg text-[11px] focus:outline-none focus:border-blue-500">
+          <option value="campaign">📂 Campaign</option>
+          <option value="action">⚡ Action</option>
+          <option value="action_type">🏷️ Action Type</option>
+          <option value="strategy">🎯 Strategy</option>
+          <option value="branch">🔀 Branch ID</option>
         </select>
         {bucketFilter && (
           <button
@@ -875,6 +1190,18 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
             <span className="text-blue-300/60 ml-0.5">×</span>
           </button>
         )}
+        <button
+          onClick={() => setHideMonitor(h => !h)}
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
+            hideMonitor
+              ? 'text-zinc-500 border border-zinc-700 hover:border-zinc-500 hover:text-zinc-300'
+              : 'bg-zinc-500/15 text-zinc-300 border border-zinc-500/30 hover:bg-zinc-500/25'
+          }`}
+          title={hideMonitor ? 'Monitor/Keep actions are hidden — click to show' : 'Showing all actions including Monitor/Keep — click to hide'}
+        >
+          <Eye size={12} />
+          {hideMonitor ? 'Show Monitor' : 'Hide Monitor'}
+        </button>
         <div className="ml-auto">
           <button
             onClick={() => exportActionsToCSV(filtered, cdByTerm, predByTerm)}
@@ -888,7 +1215,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
 
       {/* ── Summary badges ── */}
       <div className="flex gap-2 flex-wrap text-xs mb-3.5">
-        <Badge variant="red">{stopCount} stop · {fM(stopSpend2)}</Badge>
+        <Badge variant="red">{negateCount} negate · {fM(negateSpend)}</Badge>
         <Badge variant="green">{keepCount} keep</Badge>
         <Badge variant="green">{growCount} growth</Badge>
         <Badge variant="blue">{newCount} opportunities</Badge>
@@ -902,7 +1229,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
           const adsRows = data.ads_7d || [];
           for (const r of adsRows) {
             if (r.row_type !== 'campaign') continue;
-            const fam = famFromProduct(r.product_short_name || r.parent_name || null);
+            const fam = getFamily(r.product_short_name || r.parent_name || null);
             if (fam) byFam[fam] = (byFam[fam] || 0) + (r.spend || 0);
           }
           return Object.entries(byFam)
@@ -912,9 +1239,9 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         })();
         // Per-family bucket breakdown (from action rows)
         const famBuckets = (() => {
-          const families = [...new Set([...famTotalSpend.map(f => f.family), ...filtered.map(a => famFromProduct(a.product_short_name)).filter(Boolean)])] as string[];
+          const families = [...new Set([...famTotalSpend.map(f => f.family), ...filtered.map(a => getFamily(a.product_short_name)).filter(Boolean)])] as string[];
           return families.map(fam => {
-            const famActions = filtered.filter(a => famFromProduct(a.product_short_name) === fam);
+            const famActions = filtered.filter(a => getFamily(a.product_short_name) === fam);
             const buckets = SPEND_BUCKETS.map(b => ({
               key: b.key,
               label: b.label,
@@ -1024,410 +1351,20 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         );
       })()}
 
-      {/* ── ⚡ Hot Signals — Last 3 Days ── */}
-      {(() => {
-        // Apply same filters as main actions table
-        let hs = (data.hot_signals || []).filter(s => {
-          if (effectiveFam && famFromProduct(s.product_short_name) !== effectiveFam) return false;
-          if (filters.experiment && s.experiment_id !== filters.experiment) return false;
-          if (filters.keyword && s.search_term !== filters.keyword) return false;
-          if (stratFilter !== 'all' && s.strategy_id !== stratFilter) return false;
-          return true;
-        });
-        if (!hs.length) return null;
-
-        const urgentStops = hs.filter(s => s.hot_signal === 'URGENT_STOP');
-        const hotWinners = hs.filter(s => s.hot_signal === 'HOT_WINNER');
-        const rapidDeclines = hs.filter(s => s.hot_signal === 'RAPID_DECLINE');
-
-        const SIGNAL_META: Record<string, { icon: React.ReactNode; color: string; bgColor: string; borderColor: string; label: string; doAction: string }> = {
-          URGENT_STOP: { icon: <CircleX size={14} />, color: 'text-red-400', bgColor: 'bg-red-500/8', borderColor: 'border-red-500/25', label: 'Urgent Stop', doAction: 'STOP' },
-          HOT_WINNER: { icon: <TrendingUp size={14} />, color: 'text-emerald-400', bgColor: 'bg-emerald-500/8', borderColor: 'border-emerald-500/25', label: 'Hot Winner', doAction: 'INCREASE_BID' },
-          RAPID_DECLINE: { icon: <TrendingDown size={14} />, color: 'text-amber-400', bgColor: 'bg-amber-500/8', borderColor: 'border-amber-500/25', label: 'Rapid Decline', doAction: 'REDUCE_BID' },
-        };
-
-        return (
-          <div className="border border-border rounded-xl bg-card overflow-hidden mb-4">
-            <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-surface/50">
-              <Sparkles size={14} className="text-amber-400" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-white/90">⚡ Hot Signals — Last 3 Days</span>
-              <span className="text-[10px] font-mono text-muted">
-                {urgentStops.length > 0 && <span className="text-red-400 mr-2">{urgentStops.length} urgent</span>}
-                {hotWinners.length > 0 && <span className="text-emerald-400 mr-2">{hotWinners.length} winners</span>}
-                {rapidDeclines.length > 0 && <span className="text-amber-400">{rapidDeclines.length} declining</span>}
-              </span>
-              <span className="text-[9px] text-subtle ml-auto">Ads-only · strong signals only</span>
-            </div>
-            <div className="p-3 grid gap-2">
-              {[...urgentStops, ...rapidDeclines, ...hotWinners].map((s, i) => {
-                const meta = SIGNAL_META[s.hot_signal];
-                const isQueued = doQueue.isUploaded(s.search_term, s.campaign_id);
-                return (
-                  <div key={`hs-${i}`} className={`flex items-start gap-3 p-3 rounded-lg border ${meta.borderColor} ${meta.bgColor} transition-all hover:brightness-110`}>
-                    <div className={`mt-0.5 ${meta.color}`}>{meta.icon}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className={`text-[10px] font-bold uppercase tracking-wider ${meta.color}`}>{meta.label}</span>
-                        {s.coach_8w_action && s.hot_signal === 'URGENT_STOP' && (
-                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">
-                            ⚠️ Overrides: {s.coach_8w_action}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[12px] text-white font-semibold truncate">{s.search_term}</div>
-                      <div className="text-[10px] text-subtle mt-0.5 truncate">
-                        Campaign: {s.campaign_name} · {s.product_short_name}
-                      </div>
-                      <div className="text-[10px] text-faint mt-1">{s.hot_signal_reason}</div>
-                    </div>
-                    <div className="flex gap-4 text-right shrink-0 items-start">
-                      <div>
-                        <div className="text-[9px] text-subtle uppercase">Spend</div>
-                        <div className="text-[12px] font-mono text-white">{fM(s.spend_3d)}</div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] text-subtle uppercase">Clicks</div>
-                        <div className="text-[12px] font-mono text-white">{s.clicks_3d}</div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] text-subtle uppercase">Orders</div>
-                        <div className={`text-[12px] font-mono ${s.orders_3d > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{s.orders_3d}</div>
-                      </div>
-                      {s.ads_roas_3d != null && s.ads_roas_3d > 0 && (
-                        <div>
-                          <div className="text-[9px] text-subtle uppercase">ROAS 3d</div>
-                          <div className="text-[12px] font-mono text-white">{s.ads_roas_3d.toFixed(1)}x</div>
-                        </div>
-                      )}
-                      {s.coach_8w_roas != null && s.coach_8w_roas > 0 && (
-                        <div>
-                          <div className="text-[9px] text-subtle uppercase">ROAS 8w</div>
-                          <div className="text-[12px] font-mono text-faint">{s.coach_8w_roas.toFixed(1)}x</div>
-                        </div>
-                      )}
-                      {s.sqp_search_volume_4w > 0 && (
-                        <div>
-                          <div className="text-[9px] text-subtle uppercase">SQP VOL 4w</div>
-                          <div className="text-[12px] font-mono text-blue-300">{fmt(s.sqp_search_volume_4w)}</div>
-                        </div>
-                      )}
-                      {s.sqp_organic_rank != null && s.sqp_organic_rank > 0 && (
-                        <div>
-                          <div className="text-[9px] text-subtle uppercase">Org Rank</div>
-                          <div className={`text-[12px] font-mono ${s.sqp_organic_rank <= 5 ? 'text-emerald-400' : 'text-faint'}`}>#{s.sqp_organic_rank}</div>
-                        </div>
-                      )}
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <button
-                          onClick={() => {
-                            if (isQueued) return;
-                            doQueue.addItem({
-                              search_term: s.search_term,
-                              action: meta.doAction,
-                              campaign: s.campaign_name,
-                              campaign_id: s.campaign_id,
-                              ad_group_id: s.ad_group_id,
-                              targeting: s.search_term,
-                              keyword_id: '',
-                              match_type: '',
-                              target_spend_8w: 0,
-                              target_orders_8w: 0,
-                              target_net_roas_8w: s.coach_8w_roas ?? 0,
-                              current_bid: null,
-                              recommended_bid: null,
-                              campaign_type: s.campaign_type,
-                              product: s.asin || s.product_short_name || '',
-                              spend: s.spend_3d,
-                              orders: s.orders_3d,
-                              cpc: s.cpc_3d ?? 0,
-                              conv_rate: s.cvr_3d ?? 0,
-                            });
-                          }}
-                          className={`w-6 h-6 rounded-full flex items-center justify-center transition-all shrink-0 ${
-                            isQueued
-                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 cursor-default'
-                              : 'bg-white/5 text-zinc-400 border border-zinc-600 hover:border-blue-500/50 hover:text-blue-400 hover:bg-blue-500/10 cursor-pointer'
-                          }`}
-                          title={isQueued ? 'Already in DO queue' : `Add "${meta.doAction}" to DO queue`}
-                        >
-                          {isQueued ? <Check size={12} /> : <Plus size={12} />}
-                        </button>
-                        <span className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider ${meta.bgColor} ${meta.color} border ${meta.borderColor}`}>
-                          {ACTION_ICONS[meta.doAction] ? React.createElement(ACTION_ICONS[meta.doAction], { size: 11 }) : meta.icon}
-                          {meta.doAction.replace(/_/g, ' ')}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* ── Hierarchical Action Tree ── */}
-      {/* ═══ TERM ACTIONS SECTION ═══ */}
-      {termTree.length > 0 && (
+      {/* ── 📋 Unified Daily Queue ── */}
+      {unifiedTree.length > 0 && (
         <div className="border border-border rounded-xl bg-card overflow-hidden mb-4">
           <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-surface/50">
-            <Ban size={14} className="text-red-400" />
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white/90">Term Actions</span>
-            <span className="text-[10px] font-mono text-muted">{termCount} terms · {fM(termSpend)}</span>
-            <span className="text-[9px] text-subtle ml-auto">What to do with each search term</span>
-            <div className="ml-2">
-              <MeasureSelector tableId="actions" measures={ACTIONS_TABLE_COLUMNS} selected={actionCols} onSelectedChange={setActionCols} />
-            </div>
+            <span className="text-base">📋</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-white/90">Daily Queue</span>
+            <span className="text-[10px] font-mono text-muted">{totalQueueCount} items · {fM(totalQueueSpend)}</span>
+            <span className="text-[9px] text-subtle ml-auto">Campaign → Type → Term / Target</span>
           </div>
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr>
-                {visibleActionCols.map(c => (
-                  ['signal', 'action', 'experiment_id', 'strategy_id'].includes(c.id) ? (
-                    <Th key={c.id}>{c.label}</Th>
-                  ) : (
-                    <SortTh key={c.id} k={c.id} sort={actSort.sort} toggle={actSort.toggle} right={!['search_term', 'product_short_name'].includes(c.id)} tip={c.tip}>{c.label}</SortTh>
-                  )
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {termTree.flatMap(node => renderNode(node, 0, ''))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* ═══ TARGET ACTIONS SECTION ═══ */}
-      {targetTree.length > 0 && (
-        <div className="border border-border rounded-xl bg-card overflow-hidden">
-          <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-surface/50">
-            <Target size={14} className="text-emerald-400" />
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white/90">Target Actions</span>
-            <span className="text-[10px] font-mono text-muted">{targetCount} targets · {fM(targetSpend)}</span>
-            <span className="text-[9px] text-subtle ml-auto">Bid changes per campaign × keyword</span>
-            <div className="ml-2">
-              <MeasureSelector tableId="actions" measures={ACTIONS_TABLE_COLUMNS} selected={actionCols} onSelectedChange={setActionCols} />
-            </div>
-          </div>
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr>
-                {visibleActionCols.map(c => (
-                  ['signal', 'action', 'experiment_id', 'strategy_id'].includes(c.id) ? (
-                    <Th key={c.id}>{c.label}</Th>
-                  ) : (
-                    <SortTh key={c.id} k={c.id} sort={actSort.sort} toggle={actSort.toggle} right={!['search_term', 'product_short_name'].includes(c.id)} tip={c.tip}>{c.label}</SortTh>
-                  )
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {targetTree.flatMap(node => renderNode(node, 0, ''))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* ═══ PHRASE NEGATIVES SECTION ═══ */}
-      {(data.coach_phrase_negatives?.length ?? 0) > 0 && (() => {
-        const phrases = data.coach_phrase_negatives!;
-        const safeCount = phrases.filter(p => p.action === 'NEGATE_PHRASE').length;
-        const seasonalCount = phrases.filter(p => p.action === 'PROMOTE_TO_PEAK_PHRASE').length;
-
-        // Build set of queued phrase-campaign combos for cascade logic
-        const queuedPhrases = new Set(
-          doQueue.items
-            .filter(q => q.action === 'NEGATE_PHRASE' || q.action === 'PROMOTE_TO_PEAK_PHRASE')
-            .map(q => `${q.campaign_id}::${q.search_term}`)
-        );
-
-        // Cascade: check if a phrase is "covered" by a shorter queued phrase in the same campaign
-        const isCoveredByCascade = (phrase: string, campaignId: string): boolean => {
-          for (const key of queuedPhrases) {
-            const [qCampId, qPhrase] = key.split('::');
-            if (qCampId === campaignId && qPhrase !== phrase && phrase.includes(qPhrase)) {
-              return true; // this phrase contains an already-queued shorter phrase
-            }
-          }
-          return false;
-        };
-
-        // Build hierarchy: Action → Gram Size → Phrases
-        const byAction: Record<string, typeof phrases> = {};
-        for (const p of phrases) {
-          const act = p.action || 'OTHER';
-          if (!byAction[act]) byAction[act] = [];
-          byAction[act].push(p);
-        }
-
-        const phraseActionOrder = ['NEGATE_PHRASE', 'PROMOTE_TO_PEAK_PHRASE'];
-        const gramLabels: Record<number, string> = { 1: '1-gram (single words)', 2: '2-gram (word pairs)', 3: '3-gram (word triplets)' };
-
-        return (
-        <div className="border border-border rounded-xl bg-card overflow-hidden">
-          <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-surface/50">
-            <Ban size={14} className="text-red-400" />
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white/90">Phrase Negatives</span>
-            <span className="text-[10px] font-mono text-muted">
-              {safeCount > 0 && <><span className="text-red-400">{safeCount} negate</span> · </>}
-              {seasonalCount > 0 && <><span className="text-purple-400">{seasonalCount} peak promote</span> · </>}
-              {fM(phrases.reduce((s, p) => s + p.phrase_spend_8w, 0))} spend(8w)
-            </span>
-            <span className="text-[9px] text-subtle ml-auto">N-gram analysis · 1-year profitability check applied</span>
-          </div>
-
           <div className="divide-y divide-border-faint">
-            {phraseActionOrder.filter(a => byAction[a]?.length).map(actionKey => {
-              const actionPhrases = byAction[actionKey];
-              const isNeg = actionKey === 'NEGATE_PHRASE';
-              const totalSpend = actionPhrases.reduce((s, p) => s + p.phrase_spend_8w, 0);
-              const actionExpKey = `phrase-act:${actionKey}`;
-              const isActionExpanded = expandedKeys.has(actionExpKey);
-
-              // Group by ngram_size
-              const byGram: Record<number, typeof phrases> = {};
-              for (const p of actionPhrases) {
-                const g = p.ngram_size || 2;
-                if (!byGram[g]) byGram[g] = [];
-                byGram[g].push(p);
-              }
-
-              const ac = ACTION_COLORS[actionKey] || defaultActionColor;
-              const ActionIcon = ACTION_ICONS[actionKey] || (isNeg ? Ban : Eye);
-
-              return (
-                <div key={actionKey}>
-                  {/* ── Action banner ── */}
-                  <div
-                    onClick={() => { const n = new Set(expandedKeys); isActionExpanded ? n.delete(actionExpKey) : n.add(actionExpKey); setExpandedKeys(n); }}
-                    className={`flex items-center gap-2 px-4 py-2.5 cursor-pointer transition-all hover:brightness-110 ${ac.bg} border-l-[3px] ${ac.border}`}
-                  >
-                    <span className={`transition-transform duration-200 text-[10px] ${isActionExpanded ? 'rotate-90' : ''}`}>▶</span>
-                    <ActionIcon size={13} className={`shrink-0 ${ac.text}`} />
-                    <ActionBadge action={actionKey} />
-                    <span className="text-white/80 font-semibold text-xs">({actionPhrases.length})</span>
-                    <span className="font-mono text-[10px] opacity-60 ml-1">{fM(totalSpend)}</span>
-                    {ACTION_META[actionKey]?.criteria && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-inset text-muted font-normal ml-auto truncate max-w-[300px]" title={ACTION_META[actionKey].criteria}>{ACTION_META[actionKey].criteria}</span>}
-                  </div>
-
-                  {/* ── Gram buckets under this action ── */}
-                  {isActionExpanded && [1, 2, 3].filter(g => byGram[g]?.length).map(gramSize => {
-                    const gramPhrases = byGram[gramSize];
-                    const gramExpKey = `phrase-gram:${actionKey}:${gramSize}`;
-                    const isGramExpanded = expandedKeys.has(gramExpKey);
-                    const gramSpend = gramPhrases.reduce((s, p) => s + p.phrase_spend_8w, 0);
-
-                    return (
-                      <div key={gramExpKey}>
-                        {/* Gram bucket row */}
-                        <div
-                          onClick={() => { const n = new Set(expandedKeys); isGramExpanded ? n.delete(gramExpKey) : n.add(gramExpKey); setExpandedKeys(n); }}
-                          className="flex items-center gap-2 pl-10 pr-4 py-2 cursor-pointer hover:bg-white/[.02] transition-colors border-t border-border-faint"
-                        >
-                          <span className={`transition-transform duration-200 text-[9px] ${isGramExpanded ? 'rotate-90' : ''}`}>▶</span>
-                          <span className="text-zinc-300 font-semibold text-[11px]">{gramLabels[gramSize] || `${gramSize}-gram`}</span>
-                          <span className="text-faint text-[11px]">({gramPhrases.length})</span>
-                          <span className="font-mono text-[10px] text-faint ml-1">{fM(gramSpend)}</span>
-                        </div>
-
-                        {/* Phrase rows under this gram bucket */}
-                        {isGramExpanded && (
-                          <table className="w-full border-collapse text-xs">
-                            <thead>
-                              <tr>
-                                <th className="pl-16 pr-3 py-1 text-left text-[9px] font-semibold text-muted uppercase tracking-wider">Phrase</th>
-                                <th className="px-3 py-1 text-left text-[9px] font-semibold text-muted uppercase tracking-wider">Campaign</th>
-                                <th className="px-3 py-1 text-right text-[9px] font-semibold text-muted uppercase tracking-wider">Terms</th>
-                                <th className="px-3 py-1 text-right text-[9px] font-semibold text-muted uppercase tracking-wider">Spend(8w)</th>
-                                <th className="px-3 py-1 text-right text-[9px] font-semibold text-muted uppercase tracking-wider">Clicks(8w)</th>
-                                <th className="px-3 py-1 text-right text-[9px] font-semibold text-muted uppercase tracking-wider">Ord(8w)</th>
-                                <th className="px-3 py-1 text-right text-[9px] font-semibold text-muted uppercase tracking-wider">ROAS(1y)</th>
-                                <th className="px-3 py-1 w-8" />
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {gramPhrases
-                                .sort((a, b) => b.phrase_spend_8w - a.phrase_spend_8w)
-                                .map((p, i) => {
-                                  const inQ = queuedPhrases.has(`${p.campaign_id}::${p.phrase}`);
-                                  const cascaded = !inQ && isCoveredByCascade(p.phrase, p.campaign_id);
-                                  const isPeak = p.action === 'PROMOTE_TO_PEAK_PHRASE';
-
-                                  if (cascaded) return null; // hide rows covered by a shorter queued phrase
-
-                                  return (
-                                    <tr
-                                      key={`${gramExpKey}:${i}`}
-                                      className={`border-t transition-colors hover:bg-surface/30 ${
-                                        isNeg ? 'border-red-500/20' : 'border-purple-500/20 bg-purple-500/[0.03]'
-                                      }`}
-                                      title={p.reason}
-                                    >
-                                      <td className="pl-16 pr-3 py-2">
-                                        <strong className={isNeg ? 'text-blue-400' : 'text-purple-300'}>"{p.phrase}"</strong>
-                                        {isPeak && <div className="text-[9px] text-purple-400/80 mt-0.5">Theme: {p.seasonal_theme}</div>}
-                                      </td>
-                                      <td className="px-3 py-2 text-[10px] text-zinc-400 font-mono truncate max-w-[220px]" title={p.campaign_name}>{p.campaign_name}</td>
-                                      <td className="px-3 py-2 text-right font-mono text-[11px]">{fmt(p.phrase_term_count)}</td>
-                                      <td className="px-3 py-2 text-right font-mono text-[11px] font-medium text-red-400">{fM(p.phrase_spend_8w)}</td>
-                                      <td className="px-3 py-2 text-right font-mono text-[11px]">{fmt(p.phrase_clicks_8w)}</td>
-                                      <td className="px-3 py-2 text-right font-mono text-[11px]">0</td>
-                                      <td className="px-3 py-2 text-right font-mono text-[11px]">
-                                        {p.phrase_roas_1y > 0 ? (
-                                          <span className={!isNeg ? 'text-purple-400 font-medium' : 'text-zinc-400'} title={`1-year Sales: ${fM(p.phrase_sales_1y)} / Spend: ${fM(p.phrase_spend_1y)}\nTop 3 months: ${Math.round(p.top3_months_pct * 100)}% of orders`}>
-                                            {p.phrase_roas_1y.toFixed(2)}x
-                                          </span>
-                                        ) : (
-                                          <span className="text-zinc-500">0.00x</span>
-                                        )}
-                                      </td>
-                                      <td className="px-3 py-2">
-                                        <button
-                                          className={`p-1 rounded transition-colors ${inQ ? 'text-emerald-400' : 'text-zinc-500 hover:text-white'}`}
-                                          onClick={() => {
-                                            if (inQ) return;
-                                            doQueue.addItem({
-                                              search_term: p.phrase,
-                                              action: p.action,
-                                              campaign: p.campaign_name,
-                                              campaign_id: p.campaign_id,
-                                              ad_group_id: '',
-                                              targeting: p.phrase,
-                                              keyword_id: '',
-                                              match_type: 'PHRASE',
-                                              target_spend_8w: p.phrase_spend_8w,
-                                              target_orders_8w: p.phrase_orders_8w,
-                                              target_net_roas_8w: 0,
-                                              current_bid: null,
-                                              recommended_bid: null,
-                                              campaign_type: p.campaign_type || 'SPONSORED_PRODUCTS',
-                                              product: 'Keyword',
-                                              spend: 0, orders: 0, cpc: 0, conv_rate: 0,
-                                              seasonal_theme: p.seasonal_theme
-                                            });
-                                          }}
-                                          title={`Queue ${p.action}`}
-                                        >
-                                          {inQ ? <Check size={14} /> : <Plus size={14} />}
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                            </tbody>
-                          </table>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
+              {unifiedTree.flatMap(node => renderNode(node, 0, ''))}
           </div>
         </div>
-        );
-      })()}
+      )}
     </div>
   );
 }
@@ -1444,165 +1381,179 @@ const SIGNAL_COLORS: Record<string, { bg: string; text: string; emoji: string }>
 };
 const defaultSignalColor = { bg: 'bg-zinc-500/10', text: 'text-zinc-500', emoji: '❓' };
 
-function ActionRowComponent({ action: a, cd, prediction: pred, expanded, onToggle, matchAction, visibleCols, indent }: { action: ActionRow; cd?: CoachDecisionRow; prediction?: StrategicPrediction; expanded: boolean; onToggle: () => void; matchAction: (a: { search_term?: string; experiment_id?: string; net_roas?: number; cpc?: number; conv_rate?: number }) => { gt: GroundTruth; supported: boolean }[]; visibleCols: MeasureDef[]; indent?: number }) {
-  const gtm = matchAction(a);
-  const isNotTargeted = a.ads_signal === 'NOT_TARGETED';
-  const na = <span className="text-zinc-500">—</span>;
-  const numTd = (v: number | undefined | null, f: (n: number) => string = fmt) =>
-    <td className="px-3 py-2 text-right font-mono text-[11px]">{v != null && v !== 0 ? f(v) : na}</td>;
-  const pctTd = (v: number | undefined | null) =>
-    <td className="px-3 py-2 text-right font-mono text-[11px]">{v != null && v !== 0 ? fP(v) : na}</td>;
-  const monTd = (v: number | undefined | null) =>
-    <td className="px-3 py-2 text-right font-mono text-[11px] font-medium">{v != null && v !== 0 ? fM(v) : na}</td>;
-  const pSpend = a.spend || 0;
-  const pOrders = a.orders || 0;
-  const pClicks = a.spend && a.cpc ? Math.round(a.spend / a.cpc) : 0;
-  const pConvRate = a.conv_rate || (pClicks > 0 ? (pOrders * 100) / pClicks : 0);
-  const pCpc = a.cpc || (pClicks > 0 ? pSpend / pClicks : 0);
-  const pNetRoas = a.net_roas ?? (pSpend > 0 ? (pOrders * (a.margin_per_unit || 0)) / pSpend : 0);
-  const cells: Record<string, React.ReactNode> = {
-    search_term: <td key="search_term" className="px-3 py-2" style={indent ? { paddingLeft: indent } : undefined}><strong className="text-blue-400">{a.search_term || '--'}</strong></td>,
-    product_short_name: <td key="product_short_name" className="px-3 py-2">{a.product_short_name || '--'}</td>,
-    experiment_id: <td key="experiment_id" className="px-3 py-2 text-[11px] text-subtle">{a.experiment_id || '--'}</td>,
-    strategy_id: <td key="strategy_id" className="px-3 py-2 text-[11px] text-subtle">{a.strategy_id || '--'}</td>,
-    spend: <td key="spend" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{isNotTargeted ? na : fM(pSpend)}</td>,
-    orders: <td key="orders" className="px-3 py-2 text-right">{isNotTargeted ? na : fOrd(pOrders)}</td>,
-    conv_rate: <td key="conv_rate" className="px-3 py-2 text-right">{isNotTargeted ? na : fP(pConvRate)}</td>,
-    cpc: <td key="cpc" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{isNotTargeted ? na : fCpc(pCpc)}</td>,
-    net_roas: <td key="net_roas" className="px-3 py-2 text-right">{isNotTargeted ? na : <RoasBadge value={pNetRoas} />}</td>,
-    ads_clicks_4w: <td key="ads_clicks_4w" className="px-3 py-2 text-right font-mono text-[11px]">{cd?.ads_clicks_4w != null ? fmt(cd.ads_clicks_4w) : na}</td>,
-    ads_impressions_4w: <td key="ads_impressions_4w" className="px-3 py-2 text-right font-mono text-[11px]">{cd?.ads_impressions_4w != null ? fmt(cd.ads_impressions_4w) : na}</td>,
-    ads_units_4w: <td key="ads_units_4w" className="px-3 py-2 text-right font-mono text-[11px]">{cd?.ads_units_4w != null ? fmt(cd.ads_units_4w) : na}</td>,
-    ads_sales_4w: <td key="ads_sales_4w" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{cd?.ads_sales_4w != null ? fM(cd.ads_sales_4w) : na}</td>,
-    ads_net_profit_4w: <td key="ads_net_profit_4w" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{cd?.ads_net_profit_4w != null ? fM(cd.ads_net_profit_4w) : na}</td>,
-    ads_cost_per_order_4w: <td key="ads_cost_per_order_4w" className="px-3 py-2 text-right font-mono text-[11px]">{cd?.ads_cost_per_order_4w != null ? fM(cd.ads_cost_per_order_4w) : na}</td>,
-    ads_spend_ly_peak: monTd(cd?.ads_spend_ly_peak),
-    ads_orders_ly_peak: numTd(cd?.ads_orders_ly_peak, fOrd),
-    ads_clicks_ly_peak: numTd(cd?.ads_clicks_ly_peak),
-    ads_impressions_ly_peak: numTd(cd?.ads_impressions_ly_peak),
-    ads_units_ly_peak: numTd(cd?.ads_units_ly_peak),
-    ads_sales_ly_peak: monTd(cd?.ads_sales_ly_peak),
-    ads_cpc_ly_peak: monTd(cd?.ads_cpc_ly_peak),
-    ads_cvr_pct_ly_peak: pctTd(cd?.ads_cvr_pct_ly_peak),
-    ads_net_roas_ly_peak: <td key="ads_net_roas_ly_peak" className="px-3 py-2 text-right">{cd?.ads_net_roas_ly_peak != null && cd.ads_net_roas_ly_peak !== 0 ? <RoasBadge value={cd.ads_net_roas_ly_peak} /> : na}</td>,
-    ads_spend_lifetime: monTd(cd?.ads_spend_lifetime),
-    ads_orders_lifetime: numTd(cd?.ads_orders_lifetime, fOrd),
-    ads_net_roas_lifetime: <td key="ads_net_roas_lifetime" className="px-3 py-2 text-right">{cd?.ads_net_roas_lifetime != null && cd.ads_net_roas_lifetime !== 0 ? <RoasBadge value={cd.ads_net_roas_lifetime} /> : na}</td>,
-    sqp_impressions_4w: numTd(cd?.sqp_impressions_4w),
-    sqp_clicks_4w: numTd(cd?.sqp_clicks_4w),
-    sqp_cart_adds_4w: numTd(cd?.sqp_cart_adds_4w),
-    sqp_orders_4w: numTd(cd?.sqp_orders_4w, fOrd),
-    sqp_sales_4w: monTd(cd?.sqp_sales_4w),
-    sqp_organic_units_4w: numTd(cd?.sqp_organic_units_4w),
-    sqp_show_rate_4w: pctTd(cd?.sqp_show_rate_4w),
-    sqp_impression_share_4w: pctTd(cd?.sqp_impression_share_4w),
-    sqp_organic_rank_4w: <td key="sqp_organic_rank_4w" className="px-3 py-2 text-right font-mono text-[11px]">{cd?.sqp_organic_rank_4w != null && cd.sqp_organic_rank_4w !== 0 ? cd.sqp_organic_rank_4w.toFixed(1) : na}</td>,
-    sqp_amazon_impressions_4w: numTd(cd?.sqp_amazon_impressions_4w),
-    sqp_amazon_clicks_4w: numTd(cd?.sqp_amazon_clicks_4w),
-    sqp_amazon_cart_adds_4w: numTd(cd?.sqp_amazon_cart_adds_4w),
-    sqp_amazon_orders_4w: numTd(cd?.sqp_amazon_orders_4w, fOrd),
-    sqp_amazon_search_volume_4w: numTd(cd?.sqp_amazon_search_volume_4w),
-    sqp_impressions_ly_peak: numTd(cd?.sqp_impressions_ly_peak),
-    sqp_clicks_ly_peak: numTd(cd?.sqp_clicks_ly_peak),
-    sqp_cart_adds_ly_peak: numTd(cd?.sqp_cart_adds_ly_peak),
-    sqp_orders_ly_peak: numTd(cd?.sqp_orders_ly_peak, fOrd),
-    sqp_sales_ly_peak: monTd(cd?.sqp_sales_ly_peak),
-    sqp_show_rate_ly_peak: pctTd(cd?.sqp_show_rate_ly_peak),
-    sqp_impression_share_ly_peak: pctTd(cd?.sqp_impression_share_ly_peak),
-    sqp_organic_rank_ly_peak: <td key="sqp_organic_rank_ly_peak" className="px-3 py-2 text-right font-mono text-[11px]">{cd?.sqp_organic_rank_ly_peak != null && cd.sqp_organic_rank_ly_peak !== 0 ? cd.sqp_organic_rank_ly_peak.toFixed(1) : na}</td>,
-    sqp_amazon_impressions_ly_peak: numTd(cd?.sqp_amazon_impressions_ly_peak),
-    sqp_amazon_clicks_ly_peak: numTd(cd?.sqp_amazon_clicks_ly_peak),
-    sqp_amazon_cart_adds_ly_peak: numTd(cd?.sqp_amazon_cart_adds_ly_peak),
-    sqp_amazon_orders_ly_peak: numTd(cd?.sqp_amazon_orders_ly_peak, fOrd),
-    sqp_amazon_search_volume_ly_peak: numTd(cd?.sqp_amazon_search_volume_ly_peak),
-    margin_per_unit: <td key="margin_per_unit" className="px-3 py-2 text-right font-mono text-[11px]">{a.margin_per_unit != null ? fM(a.margin_per_unit) : '--'}</td>,
-    signal: <td key="signal" className="px-3 py-2">
-      {a.ads_signal && <Badge variant="muted">{a.ads_signal}</Badge>}
-      {gtm.length > 0 ? gtm.map((m, i) => (
-        <span key={i} className={`inline-block ml-1 px-1.5 py-px rounded text-[9px] font-bold ${m.supported ? 'bg-emerald-500/12 text-emerald-400' : 'bg-amber-500/12 text-amber-400'}`} title={m.gt.description || ''}>
-          {m.supported ? '✓' : '⚠'} {m.gt.metric}
-        </span>
-      )) : null}
-    </td>,
-    action: <td key="action" className="px-3 py-2">
-      <div className="flex items-center gap-1">
-        <ActionBadge action={a.action} />
-        {(a.action === 'NEGATE' || a.action === 'STOP' || a.action === 'REDUCE_BID') && cd && !cd.ads_active_last_7d && (
-          <span className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[8px] font-bold bg-amber-500/12 text-amber-400 whitespace-nowrap" title="No ads impressions in last 7 days — action may be unnecessary">
-            ⏸ No recent ads
-          </span>
-        )}
-      </div>
-    </td>,
-    reason: <td key="reason" className="px-3 py-2 max-w-[200px]"><span className="text-[10px] text-subtle truncate block" title={a.reason || ''}>{a.reason || '—'}</span></td>,
+function ActionRowComponent({ action: a, cd, prediction: pred, expanded, onToggle, matchAction, indent, complexityBadge, onIntelligenceClick, isIntelExpanded, doQueue }: { action: ActionRow; cd?: CoachDecisionRow; prediction?: StrategicPrediction; expanded: boolean; onToggle: () => void; matchAction: (a: { search_term?: string; experiment_id?: string; net_roas?: number; cpc?: number; conv_rate?: number }) => { gt: GroundTruth; supported: boolean }[]; indent?: number; complexityBadge?: number; onIntelligenceClick?: () => void; isIntelExpanded?: boolean; doQueue?: ReturnType<typeof useDoQueue> }) {
+  const inQ = doQueue?.items.some(q => q.search_term === a.search_term && q.campaign_id === a.campaign_id && q.targeting === (a.targeting || '')) ?? false;
+
+  // Measure pill helpers — always rendered; null OR (0+0) = N/A
+  const roasPill = (label: string, tooltip: string, roas: number | null | undefined, orders: number | null | undefined, dateRange?: string) => {
+    // No data = null means no spend in the period; roas=0 means spend exists but no profit → show 0.0
+    const noData = roas == null;
+    const r = noData ? 0 : roas;
+    const color = noData ? 'text-zinc-500 border-zinc-700/40 bg-zinc-800/30'
+      : r >= 1.0 ? 'text-emerald-400 border-emerald-500/25 bg-emerald-500/8'
+      : r >= 0.5 ? 'text-amber-400 border-amber-500/25 bg-amber-500/8'
+      : 'text-red-400 border-red-500/25 bg-red-500/8';
+    const tip = noData ? `${tooltip}: No data${dateRange ? ` (${dateRange})` : ''}` : `${tooltip}: Net ROAS ${r.toFixed(2)}${orders != null && orders > 0 ? `, ${orders} units` : ''}${dateRange ? ` (${dateRange})` : ''}`;
+    return (
+      <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9px] font-mono ${color}`} title={tip}>
+        <span className="text-zinc-500 font-sans text-[8px]">{label}</span>
+        {noData ? <span className="text-zinc-600">N/A</span> : r.toFixed(1)}
+        {!noData && orders != null && orders > 0 && <span className="text-zinc-500">({orders} units)</span>}
+      </span>
+    );
   };
 
-  const sc = pred ? (SIGNAL_COLORS[pred.strategic_signal] || defaultSignalColor) : null;
-  const factorBar = (label: string, val: number, base: number = 1) => {
-    const pct = Math.round((val - base) * 100);
-    const color = pct >= 10 ? 'text-emerald-400' : pct <= -10 ? 'text-red-400' : 'text-zinc-400';
-    return <span className={`font-mono text-[10px] ${color}`}>{label}: {pct >= 0 ? '+' : ''}{pct}%</span>;
+  const volPill = (label: string, tooltip: string, value: number | null | undefined) => {
+    const noData = value == null || value === 0;
+    const tip = noData ? `${tooltip}: No data` : `${tooltip}: ${fmt(value)}`;
+    const cls = noData ? 'text-zinc-500 border-zinc-700/40 bg-zinc-800/30' : 'text-blue-400 border-blue-500/25 bg-blue-500/8';
+    return (
+      <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9px] font-mono ${cls}`} title={tip}>
+        <span className="text-zinc-500 font-sans text-[8px]">{label}</span>
+        {noData ? <span className="text-zinc-600">N/A</span> : value >= 1000 ? `${(value / 1000).toFixed(1)}K` : fmt(value)}
+      </span>
+    );
   };
+
+  const monPill = (label: string, tooltip: string, value: number | null | undefined, hasSiblingData?: boolean) => {
+    // For SQP $: show $0 when there IS SQP data but no sales; show N/A when no SQP data at all
+    const noData = value == null || (value === 0 && !hasSiblingData);
+    const tip = noData ? `${tooltip}: No data` : `${tooltip}: ${fM(value)}`;
+    const cls = noData ? 'text-zinc-500 border-zinc-700/40 bg-zinc-800/30' : 'text-purple-400 border-purple-500/25 bg-purple-500/8';
+    return (
+      <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9px] font-mono ${cls}`} title={tip}>
+        <span className="text-zinc-500 font-sans text-[8px]">{label}</span>
+        {noData ? <span className="text-zinc-600">N/A</span> : fM(value)}
+      </span>
+    );
+  };
+
+  // Format date as "YY.M.D" (e.g. "25.12.5")
+  const shortDate = (d: string | null) => {
+    if (!d) return '?';
+    const p = d.split('-');
+    return `${p[0].slice(2)}.${parseInt(p[1])}.${parseInt(p[2])}`;
+  };
+
+  // Build LY Peak tooltip with occasion context
+  const lyTip = a.occasion && a.occasion !== 'NONE' ? `Last Year ${a.occasion} Peak` : 'Last Year Peak';
+
+  // Compute date ranges for ROAS windows (Pacific time, matching BigQuery)
+  const today = new Date();
+  const fmtD = (d: Date) => `${d.getMonth() + 1}.${d.getDate()}`;
+  const daysAgo = (n: number) => { const d = new Date(today); d.setDate(d.getDate() - n); return d; };
+  const dr3d = `${fmtD(daysAgo(3))}–${fmtD(daysAgo(1))}`;
+  const dr7d = `${fmtD(daysAgo(7))}–${fmtD(daysAgo(1))}`;
+  const dr4w = `${fmtD(daysAgo(31))}–${fmtD(daysAgo(4))}`;
+  const dr12m = a.lt_first_seen && a.lt_last_seen ? `${shortDate(a.lt_first_seen)}–${shortDate(a.lt_last_seen)}` : undefined;
+
+  // SQP sibling check: has ANY SQP data?
+  const hasSqpData = (a.sqp_amazon_search_volume_8w != null && a.sqp_amazon_search_volume_8w > 0) ||
+                     (a.sqp_clicks_8w != null && a.sqp_clicks_8w > 0);
 
   return (
     <>
-      <tr onClick={onToggle} className="border-b border-border-faint hover:bg-white/[.02] cursor-pointer transition-colors">
-        {visibleCols.map(c => cells[c.id])}
-      </tr>
-      {expanded && (
-        <tr>
-          <td colSpan={visibleCols.length} className="p-0">
-            <div className="px-3.5 py-2.5 bg-inset text-[11px] text-subtle leading-relaxed">
-              <strong className="text-muted">Campaign:</strong> {a.campaign_name || '--'}
-              {a.portfolio_name && <> · <strong className="text-muted">Portfolio:</strong> {a.portfolio_name}</>}
-              <br />
-              <strong className="text-muted">Reason:</strong> {a.reason || '--'}<br />
-              <strong className="text-muted">Margin/unit:</strong> {fM(a.margin_per_unit)}
-              {a.impression_share != null && <> · <strong className="text-muted">Share:</strong> {fP(a.impression_share)}</>}
-              {a.strategy_id && <> · <strong className="text-muted">Strategy:</strong> {a.strategy_id}</>}
-              <DecisionTreeViewer row={a} />
+      <div onClick={onToggle} className="flex items-center gap-2 px-3 py-2 hover:bg-white/[.02] cursor-pointer transition-colors"
+        style={{ paddingLeft: indent }}>
+        {/* Keyword / Target name */}
+        <div className="flex items-center gap-1.5 min-w-[180px] shrink-0">
+          <strong className="text-blue-400 text-[12px] truncate max-w-[200px]">{a.action_type === 'BUDGET' ? (a.campaign_name || '--') : (a.search_term || a.targeting || '--')}</strong>
+          {complexityBadge != null && complexityBadge >= 3 && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onIntelligenceClick?.(); }}
+              className={`flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full border font-mono font-bold transition-all cursor-pointer ${
+                isIntelExpanded
+                  ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-400'
+                  : complexityBadge >= 5
+                    ? 'bg-red-500/10 border-red-500/25 text-red-400 hover:bg-red-500/20'
+                    : 'bg-amber-500/10 border-amber-500/25 text-amber-400 hover:bg-amber-500/20'
+              }`}
+              title={`${complexityBadge} campaigns targeting this keyword — click for intelligence`}
+            >
+              {complexityBadge >= 5 ? '🛡️' : '⚠️'} {complexityBadge}
+            </button>
+          )}
+        </div>
 
-              {/* ── Strategic Prediction ── */}
-              {pred && sc && (
-                <div className="mt-2.5 pt-2.5 border-t border-border-faint">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-[10px] uppercase tracking-wider text-faint font-bold">Strategic Prediction</span>
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${sc.bg} ${sc.text}`}>
-                      {sc.emoji} {pred.strategic_signal.replace(/_/g, ' ')}
-                    </span>
-                    <span className="font-mono text-[10px] text-zinc-400">
-                      Predicted Net ROAS: <strong className={pred.predicted_net_roas >= 1 ? 'text-emerald-400' : pred.predicted_net_roas >= 0.7 ? 'text-amber-400' : 'text-red-400'}>{pred.predicted_net_roas.toFixed(2)}</strong>
-                    </span>
-                    <span className="font-mono text-[9px] text-faint ml-1" title="How much data backs this prediction (0-100)">
-                      🎯 {Math.round(pred.prediction_confidence)}% confidence
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
-                    {pred.has_seasonal_data
-                      ? <>
-                          {factorBar('Season', pred.seasonality_multiplier)}
-                          {pred.best_season_month != null && (
-                            <span className="font-mono text-[10px] text-amber-300">📅 Peak: {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][pred.best_season_month - 1]}</span>
-                          )}
-                          {pred.hero_product_name && pred.hero_product_name !== pred.product_short_name && (
-                            <span className="font-mono text-[10px] text-cyan-300">🏆 Hero: {pred.hero_product_name}</span>
-                          )}
-                        </>
-                      : <span className="font-mono text-[10px] text-zinc-600">Season: N/A</span>
-                    }
-                    {pred.peak_multiplier > 1 && factorBar('Peak', pred.peak_multiplier)}
-                    {factorBar('CPC Δ', 1 / pred.cpc_inflation_ratio)}
-                    {factorBar('TOS', pred.tos_cvr_boost)}
-                    {factorBar('Organic Halo', pred.organic_halo_multiplier)}
-                    <span className="font-mono text-[10px] text-zinc-500">Lifetime: {pred.total_orders} ord / {pred.days_with_data}d / {fM(pred.total_spend)}</span>
-                    {pred.peak_description && <span className="text-amber-300 text-[10px]">📅 {pred.peak_description}</span>}
-                  </div>
+        {/* Action badge + DO queue button */}
+        <div className="flex items-center gap-1 shrink-0">
+          <span onClick={e => e.stopPropagation()}>
+            <button className={`p-0.5 rounded transition-colors ${inQ ? 'text-emerald-400' : 'text-zinc-500 hover:text-white'}`}
+              onClick={() => { if (inQ || !doQueue) return; doQueue.addItem({ search_term: a.search_term || '', action: a.action || '', campaign: a.campaign_name || '', campaign_id: a.campaign_id || '', ad_group_id: (a as any).ad_group_id || '', targeting: a.targeting || '', keyword_id: a.keyword_id || '', match_type: a.match_type || '', target_spend_8w: a.ads_spend_4w || 0, target_orders_8w: a.ads_orders_4w || 0, target_net_roas_8w: a.ads_net_roas_4w || 0, current_bid: a.current_bid ?? null, recommended_bid: a.recommended_bid ?? null, campaign_type: a.campaign_type || '', product: a.product_short_name || '', spend: a.ads_spend_4w || 0, orders: a.ads_orders_4w || 0, cpc: a.ads_cpc_4w || 0, conv_rate: a.ads_cvr_pct_4w || 0, current_budget: a.current_budget ?? null, recommended_budget: a.recommended_budget ?? null }); }}
+              title={inQ ? 'Already in DO queue' : 'Add to DO queue'}
+            >{inQ ? <Check size={13} /> : <Plus size={13} />}</button>
+          </span>
+          <ActionBadge action={a.action_type} />
+          {a.decision_branch_id && (
+            <span className="text-[9px] font-mono text-zinc-600 truncate max-w-[60px]" title={`Branch: ${a.decision_branch_id}`}>
+              {a.decision_branch_id}
+            </span>
+          )}
+        </div>
+
+        {/* Measure pills */}
+        <div className="flex flex-wrap items-center gap-1 flex-1 min-w-0">
+          {roasPill('3d', 'Ads Net ROAS — Last 3 Days', a.ads_net_roas_3d, a.ads_units_3d, dr3d)}
+          {roasPill('7d', 'Ads Net ROAS — Last 7 Days', a.ads_net_roas_1w, a.ads_units_1w, dr7d)}
+          {roasPill('4w', 'Ads Net ROAS — Last 4 Weeks', a.ads_net_roas_4w, a.ads_units_4w, dr4w)}
+          {roasPill('12m', 'Ads Net ROAS — All Campaigns × Term × Product (12 months)', a.lt_net_roas, a.lt_units, dr12m)}
+          {roasPill('LY', lyTip, a.ly_net_roas, a.ly_units)}
+          {roasPill('Dec', 'Ads Net ROAS — Q4 December Peak', a.q4_peak_net_roas, a.q4_peak_units)}
+          {/* SQP pills: only for term/target level, not campaign-level BUDGET actions */}
+          {a.action_type !== 'BUDGET' && volPill('SQP Vol', 'SQP Amazon Search Volume — Last 8 Weeks', a.sqp_amazon_search_volume_8w)}
+          {a.action_type !== 'BUDGET' && volPill('SQP Cl', 'SQP Clicks (our product) — Last 8 Weeks', a.sqp_clicks_8w)}
+          {a.action_type !== 'BUDGET' && monPill('SQP $', 'SQP Sales (our product) — Last 8 Weeks', a.sqp_sales_8w, hasSqpData)}
+          
+          {volPill('Cl 7d', 'Ads Clicks — Last 7 Days', a.ads_clicks_1w)}
+          {volPill('Impr 7d', 'Ads Impressions — Last 7 Days', a.ads_impressions_1w)}
+          {monPill('Spend 7d', 'Ads Spend — Last 7 Days', a.ads_spend_1w)}
+          {monPill('CPC 7d', 'Ads Cost Per Click — Last 7 Days', a.ads_cpc_1w)}
+          
+          {/* Data period pill */}
+          {a.lt_first_seen && (
+            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9px] font-mono text-zinc-400 border-zinc-700/40 bg-zinc-800/20"
+              title={`Ads data range: ${a.lt_first_seen} to ${a.lt_last_seen || '?'}`}>
+              <span className="text-zinc-500 font-sans text-[8px]">📅</span>
+              {shortDate(a.lt_first_seen)}–{shortDate(a.lt_last_seen)}
+            </span>
+          )}
+        </div>
+
+        {/* Expand indicator */}
+        <span className={`text-[9px] text-zinc-500 transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`}>▶</span>
+      </div>
+
+      {/* Expanded detail panel */}
+      {expanded && (
+        <div className="px-3.5 py-2.5 bg-inset text-[11px] text-subtle leading-relaxed border-t border-border-faint" style={{ paddingLeft: (indent || 12) + 8 }}>
+          <strong className="text-muted">Campaign:</strong> {a.campaign_name || '--'}
+          <br />
+          <strong className="text-muted">Reason:</strong> {a.reason || '--'}<br />
+          <strong className="text-muted">Margin/unit:</strong> {fM(a.margin_per_unit)}
+          {a.strategy_id && <> · <strong className="text-muted">Strategy:</strong> {a.strategy_id}</>}
+          {a.current_bid != null && <> · <strong className="text-muted">Bid:</strong> {fCpc(a.current_bid)} → {a.recommended_bid != null ? fCpc(a.recommended_bid) : '—'}</>}
+          <DecisionTreeViewer row={a} />
+
+          {/* Strategic Prediction */}
+          {pred && (() => {
+            const sc = SIGNAL_COLORS[pred.strategic_signal] || defaultSignalColor;
+            return (
+              <div className="mt-2.5 pt-2.5 border-t border-border-faint">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-[10px] uppercase tracking-wider text-faint font-bold">Strategic Prediction</span>
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${sc.bg} ${sc.text}`}>
+                    {sc.emoji} {pred.strategic_signal.replace(/_/g, ' ')}
+                  </span>
+                  <span className="font-mono text-[10px] text-zinc-400">
+                    Predicted Net ROAS: <strong className={pred.predicted_net_roas >= 1 ? 'text-emerald-400' : pred.predicted_net_roas >= 0.7 ? 'text-amber-400' : 'text-red-400'}>{pred.predicted_net_roas.toFixed(2)}</strong>
+                  </span>
                 </div>
-              )}
-            </div>
-          </td>
-        </tr>
+              </div>
+            );
+          })()}
+        </div>
       )}
     </>
   );
 }
+

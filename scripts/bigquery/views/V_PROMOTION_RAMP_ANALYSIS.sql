@@ -6,13 +6,15 @@
 --          added to EXACT_BOOST campaigns. Measures ramp-up speed,
 --          starting configuration, and weekly performance progression.
 --
--- Uses FACT_CAMPAIGN_CONFIG snapshots to capture starting bid, TOS%,
+-- Uses SCD2 DIM tables for starting/current bid, TOS%,
 -- bidding strategy, and budget — enabling learning about optimal
 -- launch configurations.
 --
 -- Dependencies:
 --   DIM_EXPERIMENT, DIM_EXPERIMENT_CAMPAIGN, DIM_STRATEGY_TEMPLATE,
---   FACT_AMAZON_ADS, FACT_CAMPAIGN_CONFIG, DIM_PRODUCT, DIM_COSTS_HISTORY
+--   FACT_AMAZON_ADS, DIM_KEYWORD, DIM_AD_GROUP, DIM_CAMPAIGN,
+--   fivetran-hl.amazon_ads.campaign_placement_bidding,
+--   DIM_PRODUCT, DIM_COSTS_HISTORY
 --
 -- Project: onyga-482313
 -- Dataset: OI
@@ -116,52 +118,74 @@ keyword_milestones AS (
     campaign_id,
     asin,
     search_term,
-    MIN(CASE WHEN impressions > 0 THEN date END) as first_impression_date,
-    MIN(CASE WHEN clicks > 0 THEN date END) as first_click_date,
-    MIN(CASE WHEN orders > 0 THEN date END) as first_order_date
+    MIN(CASE WHEN Ads_impressions > 0 THEN date END) as first_impression_date,
+    MIN(CASE WHEN Ads_clicks > 0 THEN date END) as first_click_date,
+    MIN(CASE WHEN Ads_orders > 0 THEN date END) as first_order_date
   FROM keyword_daily
   GROUP BY 1,2,3,4
 ),
 
--- Starting campaign config (earliest snapshot per campaign)
+-- Starting campaign config (earliest SCD2 version per campaign)
 starting_config AS (
   SELECT
-    campaign_id,
-    -- Keyword-level bid
-    MAX(CASE WHEN entity_type = 'KEYWORD' THEN bid END) as starting_keyword_bid,
-    -- Ad group default bid
-    MAX(CASE WHEN entity_type = 'AD_GROUP' THEN ad_group_default_bid END) as starting_ag_default_bid,
-    -- Daily budget
-    MAX(CASE WHEN entity_type IN ('CAMPAIGN', 'KEYWORD', 'AD_GROUP') THEN daily_budget END) as starting_daily_budget,
-    -- Bidding strategy
-    MAX(CASE WHEN entity_type IN ('CAMPAIGN', 'KEYWORD', 'AD_GROUP') THEN bidding_strategy END) as starting_bidding_strategy,
-    -- Placement adjustments
-    MAX(CASE WHEN entity_type = 'BIDDING_ADJUSTMENT' AND placement = 'Placement Top' THEN placement_percentage END) as starting_tos_pct,
-    MAX(CASE WHEN entity_type = 'BIDDING_ADJUSTMENT' AND placement = 'Placement Product Page' THEN placement_percentage END) as starting_product_page_pct,
-    MAX(CASE WHEN entity_type = 'BIDDING_ADJUSTMENT' AND placement = 'Placement Rest Of Search' THEN placement_percentage END) as starting_ros_pct,
-    -- Snapshot date (earliest available)
-    MIN(snapshot_date) as config_snapshot_date
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  WHERE snapshot_date = (
-    SELECT MIN(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  )
-  GROUP BY campaign_id
+    k.campaign_id,
+    k.bid as starting_keyword_bid,
+    ag.default_bid as starting_ag_default_bid,
+    dc.daily_budget as starting_daily_budget,
+    dc.bidding_strategy as starting_bidding_strategy,
+    ba.top_of_search_pct as starting_tos_pct,
+    ba.product_page_pct as starting_product_page_pct,
+    ba.rest_of_search_pct as starting_ros_pct,
+    k.effective_from as config_snapshot_date
+  FROM (
+    SELECT campaign_id, bid, effective_from,
+      ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY effective_from ASC) as rn
+    FROM `onyga-482313.OI.DIM_KEYWORD`
+    WHERE match_type NOT IN ('Automatic', 'ASIN', 'ASIN Expended', 'Category')
+  ) k
+  LEFT JOIN (
+    SELECT campaign_id, default_bid,
+      ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY effective_from ASC) as rn
+    FROM `onyga-482313.OI.DIM_AD_GROUP`
+  ) ag ON k.campaign_id = ag.campaign_id AND ag.rn = 1
+  LEFT JOIN (
+    SELECT campaign_id, daily_budget, bidding_strategy,
+      ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY effective_from ASC) as rn
+    FROM `onyga-482313.OI.DIM_CAMPAIGN`
+  ) dc ON k.campaign_id = dc.campaign_id AND dc.rn = 1
+  LEFT JOIN (
+    SELECT CAST(campaign_id AS STRING) AS campaign_id,
+      MAX(CASE WHEN placement = 'TOP_OF_SEARCH' THEN bid_adjustment_pct END) as top_of_search_pct,
+      MAX(CASE WHEN placement = 'DETAIL_PAGE' THEN bid_adjustment_pct END) as product_page_pct,
+      MAX(CASE WHEN placement_raw = 'PLACEMENT_REST_OF_SEARCH' THEN bid_adjustment_pct END) as rest_of_search_pct
+    FROM `onyga-482313.OI.V_CAMPAIGN_PLACEMENT_BIDDING`
+    GROUP BY 1
+  ) ba ON k.campaign_id = ba.campaign_id
+  WHERE k.rn = 1
 ),
 
--- Current campaign config (latest snapshot)
+-- Current campaign config (latest SCD2 version)
 current_config AS (
   SELECT
-    campaign_id,
-    MAX(CASE WHEN entity_type = 'KEYWORD' THEN bid END) as current_keyword_bid,
-    MAX(CASE WHEN entity_type = 'AD_GROUP' THEN ad_group_default_bid END) as current_ag_default_bid,
-    MAX(CASE WHEN entity_type IN ('CAMPAIGN', 'KEYWORD', 'AD_GROUP') THEN daily_budget END) as current_daily_budget,
-    MAX(CASE WHEN entity_type = 'BIDDING_ADJUSTMENT' AND placement = 'Placement Top' THEN placement_percentage END) as current_tos_pct,
-    MIN(snapshot_date) as latest_snapshot_date
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  WHERE snapshot_date = (
-    SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  )
-  GROUP BY campaign_id
+    k.campaign_id,
+    k.bid as current_keyword_bid,
+    ag.default_bid as current_ag_default_bid,
+    dc.daily_budget as current_daily_budget,
+    ba.top_of_search_pct as current_tos_pct,
+    dc.effective_from as latest_snapshot_date
+  FROM `onyga-482313.OI.DIM_KEYWORD` k
+  LEFT JOIN `onyga-482313.OI.DIM_AD_GROUP` ag
+    ON k.campaign_id = ag.campaign_id AND ag.is_current = TRUE
+  LEFT JOIN `onyga-482313.OI.DIM_CAMPAIGN` dc
+    ON k.campaign_id = dc.campaign_id AND dc.is_current = TRUE
+  LEFT JOIN (
+    SELECT CAST(campaign_id AS STRING) AS campaign_id,
+      MAX(CASE WHEN placement = 'TOP_OF_SEARCH' THEN bid_adjustment_pct END) as top_of_search_pct
+    FROM `onyga-482313.OI.V_CAMPAIGN_PLACEMENT_BIDDING`
+    GROUP BY 1
+  ) ba ON k.campaign_id = ba.campaign_id
+  WHERE k.is_current = TRUE
+    AND k.match_type NOT IN ('Automatic', 'ASIN', 'ASIN Expended', 'Category')
 ),
 
 -- Overall per-keyword aggregates
@@ -176,11 +200,11 @@ keyword_totals AS (
     asin,
     search_term,
     -- Total metrics
-    SUM(Ads_impressions) as total_impressions,
-    SUM(Ads_clicks) as total_clicks,
-    SUM(Ads_orders) as total_orders,
+    SUM(impressions) as total_impressions,
+    SUM(clicks) as total_clicks,
+    SUM(orders) as total_orders,
     SUM(spend) as total_spend,
-    SUM(Ads_sales) as total_sales,
+    SUM(sales) as total_sales,
     COUNT(DISTINCT week_number) as weeks_active,
     -- Week 1 metrics (week_number=0)
     SUM(CASE WHEN week_number = 0 THEN impressions ELSE 0 END) as w1_impressions,
@@ -229,7 +253,7 @@ SELECT
   DATE_DIFF(km.first_click_date, kt.experiment_start_date, DAY) as days_to_first_click,
   DATE_DIFF(km.first_order_date, kt.experiment_start_date, DAY) as days_to_first_order,
 
-  -- Starting configuration (from FACT_CAMPAIGN_CONFIG)
+  -- Starting configuration (from SCD2 DIM tables)
   COALESCE(sc.starting_keyword_bid, sc.starting_ag_default_bid) as starting_bid,
   sc.starting_daily_budget,
   sc.starting_bidding_strategy,

@@ -4,7 +4,7 @@ import { Card } from '../components/Card';
 import { Empty } from '../components/Empty';
 import { Th, SortTh, useSort, MEASURE_TIPS } from '../components/Tooltip';
 import { Badge, RoasBadge } from '../components/Badge';
-import { fM, fP, fOrd, fR, fCpc, fClk, experimentMatchesFamily, weekRangeLabel, periodKey, getPeriodsToInclude } from '../utils';
+import { fM, fP, fOrd, fR, fCpc, fClk, experimentMatchesFamily, weekRangeLabelCapped, periodKey, getPeriodsToInclude } from '../utils';
 import { useFilters, type PeriodMode } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
 import { FilterInfoIcon } from '../components/FilterInfoIcon';
@@ -103,6 +103,7 @@ const QUESTION_STATUS_CONFIG: Record<QuestionStatus, { icon: typeof CheckCircle2
 
 export function StrategiesPage({ data }: { data: DashboardData }) {
   const { filters } = useFilters();
+  const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
   const [expandedExps, setExpandedExps] = useState<Set<string>>(new Set());
   const expSort = useSort('total_spend');
@@ -288,7 +289,7 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
         const d = byWeek[w];
         const roas = d.spend > 0 ? (d.sales - d.spend) / d.spend : 0;
         return {
-          label: weekRangeLabel(w),
+          label: weekRangeLabelCapped(w, perfMaxDate),
           spend: d.spend,
           sales: d.sales,
           orders: d.orders,

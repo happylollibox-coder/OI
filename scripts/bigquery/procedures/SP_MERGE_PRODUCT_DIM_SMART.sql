@@ -3,7 +3,7 @@
 -- =============================================
 --
 -- Purpose: Smart wrapper that only runs MERGE if source table has changed
--- Checks _fivetran_synced timestamp to detect changes
+-- Checks SRC_ACC_PRODUCTS.processed_at timestamp to detect changes
 -- Project: onyga-482313
 -- Dataset: OI
 --
@@ -22,11 +22,10 @@ BEGIN
 
   SET start_time = CURRENT_TIMESTAMP();
 
-  -- Get the latest _fivetran_synced timestamp from source table
+  -- Get the latest processed_at timestamp from SRC_ACC table
   SET source_last_sync = (
-    SELECT MAX(_fivetran_synced)
-    FROM `fivetran-hl.amazon_selling_partner.item_summary`
-    -- Note: _fivetran_deleted may not exist, adjust filter if needed
+    SELECT MAX(processed_at)
+    FROM `onyga-482313.OI.SRC_ACC_PRODUCTS`
   );
 
   -- Get the latest _fivetran_synced timestamp from dimension table

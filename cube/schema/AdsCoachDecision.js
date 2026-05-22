@@ -3,6 +3,13 @@
 cube(`AdsCoachDecision`, {
   sql: `SELECT * FROM \`onyga-482313.OI.T_ADS_COACH_DECISION\``,
 
+  joins: {
+    Product: {
+      relationship: `belongsTo`,
+      sql: `${CUBE}.best_asin = ${Product}.asin`,
+    },
+  },
+
   refreshKey: { every: '30 minutes' },
 
   measures: {

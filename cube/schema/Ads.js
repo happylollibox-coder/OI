@@ -2,6 +2,8 @@
 // Used for ads_7d, campaign hierarchy, drainers, best terms
 
 cube(`Ads`, {
+  // R9 note: WHERE kept inline (not segment) because this is a mandatory data-quality filter
+  // that must always apply — rows with zero cost AND zero impressions are noise
   sql: `SELECT * FROM \`onyga-482313.OI.FACT_AMAZON_ADS\` WHERE Ads_cost > 0 OR Ads_impressions > 0`,
 
   joins: {

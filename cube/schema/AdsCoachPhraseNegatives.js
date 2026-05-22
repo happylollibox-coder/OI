@@ -18,6 +18,7 @@ cube(`AdsCoachPhraseNegatives`, {
     campaignName: { sql: `campaign_name`, type: `string` },
     campaignType: { sql: `campaign_type`, type: `string` },
     portfolioName: { sql: `portfolio_name`, type: `string` },
+    strategyId: { sql: `strategy_id`, type: `string` },
     phraseTermCount: { sql: `phrase_term_count`, type: `number` },
     phraseSpend8w: { sql: `phrase_spend_8w`, type: `number` },
     phraseOrders8w: { sql: `phrase_orders_8w`, type: `number` },
@@ -33,5 +34,6 @@ cube(`AdsCoachPhraseNegatives`, {
     action: { sql: `action`, type: `string` },
     priorityScore: { sql: `priority_score`, type: `number` },
     reason: { sql: `reason`, type: `string` },
+    sampleTerms: { sql: `TO_JSON_STRING(sample_terms)`, type: `string`, description: `Top 5 keywords by spend that contain this phrase (JSON array)` },
   },
 });

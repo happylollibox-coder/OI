@@ -3,6 +3,13 @@
 cube(`ChangeLog`, {
   sql: `SELECT * FROM \`onyga-482313.OI.DIM_EXPERIMENT_CHANGE_LOG\``,
 
+  joins: {
+    Experiment: {
+      relationship: `belongsTo`,
+      sql: `${CUBE}.experiment_id = ${Experiment}.experiment_id`,
+    },
+  },
+
   refreshKey: { every: '15 minutes' },
 
   measures: {
@@ -16,6 +23,7 @@ cube(`ChangeLog`, {
     changeId: {
       sql: `change_id`,
       type: `string`,
+      primaryKey: true,
       description: `Unique change identifier`,
     },
     experimentId: {

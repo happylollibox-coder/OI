@@ -1,26 +1,27 @@
 import { useState, useRef, useEffect } from 'react';
-import type { DashboardData, FamilyName } from '../types';
+import type { DashboardData, FamilyName, PageId } from '../types';
 import { FAMILIES } from '../types';
-import { useFilters, useFilterOptions, PERIOD_TREND_DEFAULT, type PeriodMode, type PeriodType } from '../hooks/useFilters';
-import { weekRangeLabel, latestSqpWeek } from '../utils';
+import { useFilters, useFilterOptions, PERIOD_TREND_DEFAULT, type PeriodMode, type PeriodType, type PeriodOption } from '../hooks/useFilters';
+import { weekRangeLabel, addDays, periodDateRange } from '../utils';
 import { SEASONALITY_OPTIONS, type AdsSeasonality } from '../seasonality';
 import { X, Filter, ChevronDown, Search } from 'lucide-react';
 
-const PERIOD_LABELS: Record<PeriodMode, string> = { weeks: 'Weeks', month: 'Month', year: 'Year' };
+const PERIOD_LABELS: Record<PeriodMode, string> = { date: 'Day', weeks: 'Weeks', month: 'Month', quarter: 'Quarter', year: 'Year' };
 const PERIOD_TYPE_LABELS: Record<PeriodType, string> = { regular: 'Regular', cumulative: 'Cumulative', peak: 'Peak' };
 const FAMILY_LABELS: Record<FamilyName, string> = { Lollibox: 'Lollibox', LolliME: 'LolliME', Bottle: 'Bottle', Fresh: 'Fresh' };
 const PERIOD_TREND_MAX = 36;
 
-export function FilterBar({ data }: { data: DashboardData }) {
+export function FilterBar({ data, page }: { data: DashboardData; page?: PageId }) {
   const { filters, setFilter, setFilters, resetFilters, activeCount } = useFilters();
-  const options = useFilterOptions(data, filters);
+  const performanceMaxDate = data._meta?.data_freshness?.performance_max_date || '';
+  const options = useFilterOptions(data, filters, performanceMaxDate || undefined);
   const [showTier2, setShowTier2] = useState(false);
 
   // Count active Tier 2 filters (Experiment, Keyword, Seasonality)
   const tier2Count = [filters.experiment, filters.keyword, filters.seasonality].filter(Boolean).length;
 
   return (
-    <div className="sticky top-0 z-10 mb-4 space-y-0">
+    <div className="sticky top-0 z-50 mb-4 space-y-0">
       {/* ── Tier 1: Core filters (always visible) ── */}
       <div className="flex items-center gap-2.5 px-2 py-2 rounded-xl bg-overlay border border-border backdrop-blur-xl shadow-float">
         <div className="flex items-center gap-1 pl-2 text-faint">
@@ -44,7 +45,7 @@ export function FilterBar({ data }: { data: DashboardData }) {
         </Dropdown>
 
         {/* Product / ASIN */}
-        {options.products.length > 0 && (
+        {(true) && (
           <Dropdown
             label="Product"
             value={filters.product ? options.products.find(p => p.asin === filters.product)?.name || filters.product.slice(0, 10) : null}
@@ -61,10 +62,13 @@ export function FilterBar({ data }: { data: DashboardData }) {
 
         <div className="w-px h-5 bg-border mx-0.5" />
 
-        {/* Period Mode */}
+        {/* Period Mode — Day only shown on Ads page */}
         <div className="flex items-center bg-inset rounded-lg border border-border">
-          {(['weeks', 'month', 'year'] as PeriodMode[]).map(m => (
-            <button key={m} onClick={() => setFilter('periodMode', m)}
+          {(page === 'ads' ? ['date', 'weeks', 'month', 'quarter', 'year'] as PeriodMode[] : ['weeks', 'month', 'quarter', 'year'] as PeriodMode[]).map(m => (
+            <button key={m} onClick={() => {
+              setFilter('periodMode', m);
+              setFilter('specificPeriod', null);
+            }}
               className={`px-2.5 py-1 text-[10px] font-semibold rounded-lg transition-all ${
                 filters.periodMode === m ? 'bg-blue-500/15 text-blue-400' : 'text-faint hover:text-muted'
               }`}>
@@ -85,8 +89,25 @@ export function FilterBar({ data }: { data: DashboardData }) {
           ))}
         </div>
 
-        {/* Period */}
-        <PeriodDropdown filters={filters} options={options} data={data} setFilters={setFilters} />
+        {/* Period — Calendar input for Day mode, dropdown for others */}
+        {filters.periodMode === 'date' ? (
+          <div className="flex items-center bg-inset rounded-lg border border-border gap-1 px-2 py-0.5">
+            <span className="text-[9px] text-faint uppercase tracking-wider">Day:</span>
+            <input
+              type="date"
+              value={filters.specificPeriod || ''}
+              onChange={e => setFilter('specificPeriod', e.target.value || null)}
+              className="bg-transparent text-[10px] font-mono font-semibold text-subtle border-0 outline-none cursor-pointer appearance-none w-[105px] [color-scheme:dark]"
+            />
+            {filters.specificPeriod && (
+              <button onClick={() => setFilter('specificPeriod', null)} className="text-faint hover:text-muted">
+                <X size={10} />
+              </button>
+            )}
+          </div>
+        ) : (
+          <PeriodDropdown filters={filters} options={options} setFilters={setFilters} periodType={filters.periodType} />
+        )}
 
         {/* Trend count */}
         <div className="flex items-center bg-inset rounded-lg border border-border gap-1 px-2 py-0.5">
@@ -215,44 +236,127 @@ export function FilterBar({ data }: { data: DashboardData }) {
 
 /* ─── Period dropdown ─── */
 
-function PeriodDropdown({ filters, options, data, setFilters }: {
+/** Format a short date like "May 12" */
+function fmtShort(iso: string): string {
+  if (!iso) return '';
+  return new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+/** Build the date-range string used by a period for filtering, shown on hover */
+function periodFilterRange(periodValue: string, mode: PeriodMode, dataMaxDate?: string): string {
+  const range = periodDateRange(periodValue, mode);
+  if (!range) return '';
+  // Guard against reversed range (data hasn't reached this period yet)
+  if (dataMaxDate && dataMaxDate < range.start) return `${fmtShort(range.start)} – ${fmtShort(range.end)}`;
+  const end = dataMaxDate && dataMaxDate < range.end ? dataMaxDate : range.end;
+  return `${fmtShort(range.start)} – ${fmtShort(end)}`;
+}
+
+/** Build a current-period label that caps the end date at dataMaxDate */
+function currentPeriodLabel(periodValue: string, mode: PeriodMode, dataMaxDate?: string): string {
+  if (mode === 'weeks') {
+    const weekEnd = addDays(periodValue, 6);
+    // Guard against reversed range (data hasn't reached this period yet)
+    if (dataMaxDate && dataMaxDate < periodValue) return `${fmtShort(periodValue)} – ${fmtShort(weekEnd)}`;
+    const end = dataMaxDate && dataMaxDate < weekEnd ? dataMaxDate : weekEnd;
+    return `${fmtShort(periodValue)} – ${fmtShort(end)}`;
+  }
+  if (mode === 'month') {
+    // Show "2026-05 (May 1 – May 12)"
+    const range = periodDateRange(periodValue + '-01' > periodValue ? periodValue : periodValue, mode);
+    if (!range) return periodValue;
+    const end = dataMaxDate && dataMaxDate < range.end ? dataMaxDate : range.end;
+    return `${periodValue} (${fmtShort(range.start)} – ${fmtShort(end)})`;
+  }
+  return periodValue;
+}
+
+function PeriodDropdown({ filters, options, setFilters, periodType }: {
   filters: { specificPeriod: string | null; periodMode: PeriodMode };
-  options: { periods: string[]; weeks: string[]; months: string[]; years: string[] };
-  data: DashboardData;
+  options: { periods: string[]; periodsEnriched: PeriodOption[]; currentPeriod: PeriodOption | null; weeks: string[]; months: string[]; years: string[] };
   setFilters: (patch: { specificPeriod?: string | null }) => void;
+  periodType?: PeriodType;
 }) {
-  const latestWeek = latestSqpWeek(data.sqp_weekly || []);
+  const isCumulative = periodType === 'cumulative' || periodType === 'peak';
   const latestPeriod = options.periods[0];
-  const latestPeriodLabel = filters.periodMode === 'weeks' && latestWeek
-    ? weekRangeLabel(latestWeek)
-    : latestPeriod || '';
-  const latestDisplay = filters.periodMode === 'weeks'
-    ? (latestWeek ? `Latest week with SQP (${weekRangeLabel(latestWeek)})` : 'Latest')
-    : latestPeriod ? `Latest (${latestPeriod})` : 'Latest';
+
+  // In cumulative mode (month/quarter/year), show months for year selection
+  const periodsEnriched = isCumulative && filters.periodMode !== 'weeks'
+    ? options.months.map(m => ({ value: m, hasSqp: true }))
+    : options.periodsEnriched;
+
+  const latestLabel = isCumulative && filters.periodMode !== 'weeks'
+    ? (options.months[0] || '')
+    : filters.periodMode === 'weeks'
+      ? (latestPeriod ? weekRangeLabel(latestPeriod) : '')
+      : (latestPeriod || '');
+
+  // For the selected period chip, show data-capped range for current period
+  const currentPeriod = options.currentPeriod;
+  const isCurrentSelected = filters.specificPeriod && currentPeriod && filters.specificPeriod === currentPeriod.value;
 
   const value = filters.specificPeriod
-    ? (filters.periodMode === 'weeks' ? weekRangeLabel(filters.specificPeriod) : filters.specificPeriod)
+    ? (isCurrentSelected && filters.periodMode === 'weeks' && !isCumulative
+        ? currentPeriodLabel(filters.specificPeriod, 'weeks', currentPeriod?.dataMaxDate)
+        : filters.periodMode === 'weeks' && !isCumulative
+          ? weekRangeLabel(filters.specificPeriod)
+          : filters.specificPeriod)
     : null;
 
   const clearPeriod = () => setFilters({ specificPeriod: null });
 
+  /** Format a period label with optional (missing SQP) suffix and hover tooltip */
+  const periodItemLabel = (p: PeriodOption, showRange: boolean) => {
+    const label = showRange ? weekRangeLabel(p.value) : p.value;
+    const tooltip = periodFilterRange(p.value, filters.periodMode);
+    return (
+      <span title={tooltip ? `Filter: ${tooltip}` : undefined}>
+        {label}
+        {!p.hasSqp && <span className="ml-1.5 text-[9px] text-zinc-500 font-normal">(missing SQP)</span>}
+      </span>
+    );
+  };
+
+  /** Current period label — capped at data max date */
+  const currentLabel = currentPeriod
+    ? currentPeriodLabel(currentPeriod.value, filters.periodMode, currentPeriod.dataMaxDate)
+    : null;
+
+  /** Tooltip for current period showing actual filter dates */
+  const currentTooltip = currentPeriod
+    ? periodFilterRange(currentPeriod.value, filters.periodMode, currentPeriod.dataMaxDate)
+    : '';
+
   return (
     <Dropdown
-      label="Period"
+      label={isCumulative ? 'Cumulative To' : 'Period'}
       value={value}
-      placeholder={latestDisplay}
+      placeholder={latestLabel || 'Period'}
       onClear={clearPeriod}
+      tooltip={filters.specificPeriod
+        ? `Filter: ${periodFilterRange(filters.specificPeriod, filters.periodMode, isCurrentSelected ? currentPeriod?.dataMaxDate : undefined)}`
+        : undefined}
     >
-      <DropItem active={!filters.specificPeriod} onClick={clearPeriod}>
-        Latest{filters.periodMode === 'weeks' && latestPeriodLabel ? ` (${latestPeriodLabel})` : latestPeriod ? ` (${latestPeriod})` : ''}
-      </DropItem>
-      {options.periods.map(p => (
+      {currentPeriod && (
         <DropItem
-          key={p}
-          active={filters.specificPeriod === p}
-          onClick={() => setFilters({ specificPeriod: p })}
+          active={filters.specificPeriod === currentPeriod.value}
+          onClick={() => setFilters({ specificPeriod: currentPeriod.value })}
         >
-          {filters.periodMode === 'weeks' ? weekRangeLabel(p) : p}
+          <span className="flex items-center gap-1" title={currentTooltip ? `Filter: ${currentTooltip}` : undefined}>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            Current – {currentLabel}
+            <span className="text-[9px] text-amber-400/70 font-normal">(thru data)</span>
+            {!currentPeriod.hasSqp && <span className="text-[9px] text-zinc-500 font-normal">(missing SQP)</span>}
+          </span>
+        </DropItem>
+      )}
+      {periodsEnriched.map(p => (
+        <DropItem
+          key={p.value}
+          active={filters.specificPeriod === p.value}
+          onClick={() => setFilters({ specificPeriod: p.value })}
+        >
+          {periodItemLabel(p, filters.periodMode === 'weeks' && !isCumulative)}
         </DropItem>
       ))}
     </Dropdown>
@@ -261,9 +365,9 @@ function PeriodDropdown({ filters, options, data, setFilters }: {
 
 /* ─── Dropdown primitives ─── */
 
-function Dropdown({ label, value, placeholder, color, onClear, searchable, children }: {
+function Dropdown({ label, value, placeholder, color, onClear, searchable, tooltip, children }: {
   label: string; value: string | null; placeholder?: string; color?: string;
-  onClear: () => void; searchable?: boolean; children: React.ReactNode;
+  onClear: () => void; searchable?: boolean; tooltip?: string; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -284,7 +388,8 @@ function Dropdown({ label, value, placeholder, color, onClear, searchable, child
   return (
     <div ref={ref} className="relative">
       <button onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-semibold border transition-all max-w-[180px] ${
+        title={tooltip || undefined}
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-semibold border transition-all max-w-[220px] ${
           value ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'text-faint border-border hover:border-zinc-700 hover:text-muted'
         }`}>
         <span className="uppercase tracking-wider text-[9px] opacity-60 mr-0.5">{label}:</span>

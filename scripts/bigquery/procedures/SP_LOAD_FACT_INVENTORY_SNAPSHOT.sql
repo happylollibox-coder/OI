@@ -7,14 +7,12 @@
 --
 -- Business Logic:
 --   Source types in FACT_INVENTORY_SNAPSHOT:
---     FBA        = afn_fulfillable + afn_reserved - pending_customer_orders
---                  (units in Amazon's warehouses, excluding already-sold units)
---     In Transit = afn_inbound_shipped + afn_inbound_receiving
---                  (shipped to Amazon, not yet checked in; comes from V_UNIFIED)
---     AWD        = Amazon Warehousing & Distribution units (comes from V_UNIFIED)
---     Manufacturer = quantity_remaining_at_manufacturer from FACT_PURCHASE_ORDER
---                    (units still at factory; EXCLUDES quantity_remaining_at_shipment
---                     because those are already in Amazon's inbound_shipped)
+--     FBA            = afn_fulfillable + afn_reserved - pending_customer_orders
+--                      (units in Amazon's warehouses, excluding already-sold units)
+--     In Transit     = afn_inbound_shipped + afn_inbound_receiving (Amazon-reported pipeline)
+--     AWD            = Amazon Warehousing & Distribution units (comes from V_UNIFIED)
+--     In Production  = quantity_remaining_at_manufacturer (still being manufactured)
+--     MFR Ready      = quantity_remaining_at_manufacturer (manufacturing complete, awaiting shipment)
 --
 --   Supply chain fields (populated on latest snapshot date only):
 --     next_shipment_quantity      = total qty in next PENDING shipment per ASIN
@@ -67,22 +65,24 @@ BEGIN
   
   UNION ALL
   
+  -- Manufacturer: In Production / MFR Ready (quantity_remaining_at_manufacturer)
   SELECT 
     po.snapshot_date AS Date,
     po.product_asin AS ASIN,
     SUM(COALESCE(po.quantity_remaining_at_manufacturer, 0)) AS quantity_balance,
     CASE 
-      -- Use estimated_arrival_date when available
       WHEN depo.estimated_arrival_date IS NOT NULL AND po.snapshot_date < depo.estimated_arrival_date THEN 'In Production'
       WHEN depo.estimated_arrival_date IS NOT NULL AND po.snapshot_date >= depo.estimated_arrival_date THEN 'MFR Ready'
-      -- Fallback: use order_date + manufacture_day from DIM_PRODUCT when no ETA is set
       WHEN depo.estimated_arrival_date IS NULL 
         AND po.snapshot_date < DATE_ADD(depo.order_date, INTERVAL COALESCE(dp.manufacture_day, 30) DAY) THEN 'In Production'
       ELSE 'MFR Ready'
     END AS source_type,
     SUM(COALESCE(po.cogs_remaining_at_manufacturer, 0)) AS cogs_amount,
     SUM(COALESCE(po.selling_price_remaining_at_manufacturer, 0)) AS sell_amount,
-    SUM(COALESCE(po.cogs_remaining_at_manufacturer, 0) * LEAST(1.0, COALESCE(pay.total_paid, 0) / NULLIF(depo.total_amount, 0))) AS paid_amount
+    SUM(
+      COALESCE(pay.total_paid, 0) 
+      * COALESCE(SAFE_DIVIDE(po.quantity_remaining_at_manufacturer, depo.quantity), 0)
+    ) AS paid_amount
   FROM `onyga-482313.OI.FACT_PURCHASE_ORDER` po
   LEFT JOIN `onyga-482313.OI.DE_PURCHASE_ORDERS` depo
     ON po.purchase_order_id = depo.purchase_order_id
@@ -100,7 +100,7 @@ BEGIN
     ON po.purchase_order_id = pay.purchase_order_id AND d.Date = pay.Date
   GROUP BY 1, 2, 4;
 
-  -- Insert data ensuring 4 rows per Date/ASIN (FBA, AWD, In Transit, Manufacturer)
+  -- Insert data ensuring rows per Date/ASIN (FBA, AWD, In Transit, MFR Ready, In Production)
   INSERT INTO `onyga-482313.OI.FACT_INVENTORY_SNAPSHOT` (
     Date,
     ASIN,
@@ -154,11 +154,9 @@ BEGIN
       COALESCE(a.quantity_balance, 0) * COALESCE(p.listing_price_amount, 0)
     ) AS SELL_AMOUNT,
     
-    -- Calculate Paid Amount: use 'a.paid_amount' if provided (MFR), else assume FBA/AWD/Transit is fully paid
-    COALESCE(
-      a.paid_amount,
-      COALESCE(a.quantity_balance, 0) * (COALESCE(ch.TOTAL_COST_PER_UNIT, 0))
-    ) AS PAID_AMOUNT,
+    -- Calculate Paid Amount: only actual vendor payments (In Production / MFR Ready)
+    -- FBA/AWD/In Transit have no direct payments — show 0
+    COALESCE(a.paid_amount, 0) AS PAID_AMOUNT,
     
     ch.cost_of_goods,
     ch.shipping_cost,

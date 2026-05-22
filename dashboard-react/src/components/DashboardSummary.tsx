@@ -10,11 +10,12 @@ import { SparklineCanvas } from './SparklineCanvas';
 
 /* ── Design tokens ─────────────────────────────────────────────────────────── */
 const GLASS = {
-  background: 'rgba(255,255,255,0.04)',
-  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'var(--color-card)',
+  border: '1px solid var(--color-border)',
   backdropFilter: 'blur(16px)',
   WebkitBackdropFilter: 'blur(16px)',
   borderRadius: 10,
+  boxShadow: 'var(--shadow-card)',
 } as const;
 
 const METRIC_KEYS = ['sales', 'ad_cost', 'profit', 'roas', 'organic'] as const;
@@ -255,9 +256,9 @@ export function DashboardSummary({
             <div className="flex flex-col justify-center shrink-0 rounded-lg px-3"
               style={{ width: heroW, ...GLASS, borderLeft: `3px solid ${heroMetric?.positive ? heroColor : '#f87171'}` }}>
               <span className="font-mono text-[12px] tracking-[0.15em] uppercase"
-                style={{ color: heroColor + '77' }}>{heroMetric?.label ?? '--'}</span>
-              <span className="font-mono text-[24px] font-bold text-white/95 leading-none tracking-tight"
-                style={{ textShadow: `0 0 16px ${heroColor}20` }}>
+                style={{ color: heroColor + 'bb' }}>{heroMetric?.label ?? '--'}</span>
+              <span className="font-mono text-[24px] font-bold leading-none tracking-tight"
+                style={{ color: 'var(--color-text)', textShadow: `0 0 16px ${heroColor}20` }}>
                 {heroMetric?.value ?? '--'}
               </span>
               {heroMetric && (
@@ -267,18 +268,18 @@ export function DashboardSummary({
                     {heroMetric.positive ? '▲' : '▼'}{heroMetric.delta}
                   </span>
                   {heroMetric.prevValue && (
-                    <span className="font-mono text-[12px] text-white/30">prev {heroMetric.prevValue}</span>
+                    <span className="font-mono text-[12px]" style={{ color: 'var(--color-muted)' }}>prev {heroMetric.prevValue}</span>
                   )}
                 </div>
               )}
               {heroMetric?.lyValue && (
                 <div className="flex items-center gap-1 mt-0.5">
-                  <span className="font-mono text-[12px] text-white/20">LY</span>
-                  <span className="font-mono text-[12px] font-medium text-white/35">{heroMetric.lyValue}</span>
+                  <span className="font-mono text-[12px]" style={{ color: 'var(--color-faint)' }}>LY</span>
+                  <span className="font-mono text-[12px] font-medium" style={{ color: 'var(--color-subtle)' }}>{heroMetric.lyValue}</span>
                 </div>
               )}
               {heroMetric?.sub && (
-                <div className="font-mono text-[10px] text-white/25 mt-0.5 leading-tight line-clamp-2">{heroMetric.sub}</div>
+                <div className="font-mono text-[10px] mt-0.5 leading-tight line-clamp-2" style={{ color: 'var(--color-faint)' }}>{heroMetric.sub}</div>
               )}
             </div>
 
@@ -306,14 +307,14 @@ export function DashboardSummary({
                   style={{
                     ...GLASS,
                     height: ROW2_H,
-                    borderLeft: `2px solid ${isActive ? color : 'rgba(255,255,255,0.06)'}`,
+                    borderLeft: `2px solid ${isActive ? color : 'var(--color-border-faint)'}`,
                     background: isActive ? `${color}0d` : GLASS.background,
                     boxShadow: isActive ? `0 0 12px ${color}10` : 'none',
                   }}>
                   <div className="flex flex-col min-w-0 shrink-0">
                     <span className="font-mono text-[10px] uppercase tracking-wider leading-none"
-                      style={{ color: color + (isActive ? 'cc' : '55') }}>{m.label}</span>
-                    <span className="font-mono text-[14px] font-bold text-white/90 leading-none tracking-tight">{m.value}</span>
+                      style={{ color: color + (isActive ? 'ee' : '99') }}>{m.label}</span>
+                    <span className="font-mono text-[14px] font-bold leading-none tracking-tight" style={{ color: 'var(--color-text)' }}>{m.value}</span>
                   </div>
                   <span className="font-mono text-[10px] font-semibold px-0.5 rounded shrink-0"
                     style={{ color: dC, background: dC + '0d' }}>

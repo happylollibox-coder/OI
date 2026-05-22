@@ -148,30 +148,51 @@ export function SeasonalReferenceLines({ holidays, xLabels, yAxisId = 'left' }: 
 
   if (lines.length === 0) return null;
 
+  // Group lines by x position — merge multiple events at the same bar into one label
+  const byX: Record<string, typeof lines> = {};
+  for (const line of lines) {
+    (byX[line.x] ??= []).push(line);
+  }
+
+  // Assign stagger index per unique x position to avoid vertical overlap
+  const xPositions = Object.keys(byX);
+  const staggerMap: Record<string, number> = {};
+  xPositions.forEach((x, i) => { staggerMap[x] = i; });
+
+  // Build merged lines: one ReferenceLine per unique x, combined label
+  const merged = xPositions.map(x => {
+    const group = byX[x];
+    const primary = group[0];
+    const style = PHASE_STYLES[primary.phase];
+    const label = group.map(g => {
+      const s = PHASE_STYLES[g.phase];
+      const short = g.holiday.length > 6 ? g.holiday.slice(0, 5) + '..' : g.holiday;
+      return `${s.label}${short}`;
+    }).join(' ');
+    return { x, style, label, stagger: staggerMap[x] };
+  });
+
   return (
     <>
-      {lines.map((line, i) => {
-        const style = PHASE_STYLES[line.phase];
-        const shortName = line.holiday.length > 10 ? line.holiday.slice(0, 8) + '..' : line.holiday;
-        return (
-          <ReferenceLine
-            key={`season-${i}-${line.phase}`}
-            yAxisId={yAxisId}
-            x={line.x}
-            stroke={style.stroke}
-            strokeDasharray="4 3"
-            strokeWidth={1.5}
-            strokeOpacity={style.opacity}
-            label={{
-              value: `${style.label} ${shortName}`,
-              position: 'top',
-              fill: style.stroke,
-              fontSize: 9,
-              fontWeight: 600,
-            }}
-          />
-        );
-      })}
+      {merged.map((line, i) => (
+        <ReferenceLine
+          key={`season-${i}`}
+          yAxisId={yAxisId}
+          x={line.x}
+          stroke={line.style.stroke}
+          strokeDasharray="4 3"
+          strokeWidth={1.5}
+          strokeOpacity={line.style.opacity}
+          label={{
+            value: line.label,
+            position: 'top',
+            fill: line.style.stroke,
+            fontSize: 8,
+            fontWeight: 600,
+            dy: line.stagger % 2 === 0 ? 0 : -10,
+          }}
+        />
+      ))}
     </>
   );
 }

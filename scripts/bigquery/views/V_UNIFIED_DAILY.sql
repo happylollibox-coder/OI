@@ -44,17 +44,18 @@ perf AS (
 ),
 
 -- Ads metrics: one row per ASIN per day
--- Attribution: most_advertised_asin_impressions ONLY
+-- Attribution: most_advertised_asin_impressions with fallback to advertised_asins
+-- (SB campaigns often have NULL impressions_asin but DO have advertised_asins)
 ads AS (
   SELECT
-    a.most_advertised_asin_impressions AS asin,
+    COALESCE(a.most_advertised_asin_impressions, a.advertised_asins) AS asin,
     a.date,
     SUM(a.Ads_cost) AS ad_cost,
     SUM(a.Ads_clicks) AS clicks,
     SUM(a.Ads_impressions) AS impressions,
     SUM(a.Ads_orders) AS ad_orders
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
-  WHERE a.most_advertised_asin_impressions IS NOT NULL
+  WHERE COALESCE(a.most_advertised_asin_impressions, a.advertised_asins) IS NOT NULL
   GROUP BY 1, 2
 )
 
@@ -63,6 +64,8 @@ ads AS (
 SELECT
   fm.family AS family,
   fm.product_short_name AS product_short_name,
+  fm.family_color_hex AS family_color_hex,
+  fm.product_color_hex AS product_color_hex,
   COALESCE(p.asin, a.asin) AS asin,
   COALESCE(p.date, a.date) AS date,
   dt.week_start_date AS week_start_date,
@@ -78,7 +81,9 @@ SELECT
   COALESCE(a.ad_cost, 0) AS ad_cost,
   COALESCE(a.clicks, 0) AS clicks,
   COALESCE(a.impressions, 0) AS impressions,
-  COALESCE(a.ad_orders, 0) AS ad_orders
+  COALESCE(a.ad_orders, 0) AS ad_orders,
+  -- Pre-computed summable measure for OLAP ratio metrics
+  COALESCE(p.sales, 0) - COALESCE(p.cogs, 0) AS gross_margin
 FROM perf p
 FULL OUTER JOIN ads a ON p.asin = a.asin AND p.date = a.date
 JOIN `onyga-482313.OI.V_PRODUCT_FAMILY_MAP` fm

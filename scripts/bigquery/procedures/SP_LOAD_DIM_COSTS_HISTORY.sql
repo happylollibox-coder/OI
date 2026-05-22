@@ -4,8 +4,8 @@
 --
 -- Purpose: Load fee_preview_report + PO costs into DIM_COSTS_HISTORY as SCD Type 2
 -- start_date < today: close row, insert new version. start_date = today: update in place.
--- Source: fivetran-hl.amazon_selling_partner.fee_preview_report, DE_PURCHASE_ORDERS, DE_MANUFACTURER_SHIPMENTS
--- Fallback: When PO data is missing, inherits last known cost_of_goods/shipping_cost from DIM_COSTS_HISTORY
+-- Source: SRC_ACC_FEE_PREVIEW (from Daton FeePreviewReport), DE_PURCHASE_ORDERS, DE_SHIPMENT_LINES
+-- Fallback: When PO/Shipment data is missing, inherits last known cost_of_goods/shipping_cost from DIM_COSTS_HISTORY
 -- Filter: marketplace_id = ATVPDKIKX0DER
 -- Project: onyga-482313
 -- Dataset: OI
@@ -14,7 +14,7 @@
 
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_LOAD_DIM_COSTS_HISTORY`()
 OPTIONS (
-  description = "Load fee_preview_report + PO costs into DIM_COSTS_HISTORY as SCD Type 2. Closes changed rows, inserts new versions. Carries forward COGS when PO data is missing."
+  description = "Load fee_preview_report + PO/Shipment costs into DIM_COSTS_HISTORY as SCD Type 2. Closes changed rows, inserts new versions. Carries forward COGS/Shipping when PO data is missing."
 )
 BEGIN
   DECLARE closed_count INT64 DEFAULT 0;
@@ -24,25 +24,38 @@ BEGIN
 
   SET start_time = CURRENT_TIMESTAMP();
 
-  -- CTE: latest PO cost_of_goods and shipping per ASIN (reused in all steps)
+  -- CTE: latest PO cost_of_goods per ASIN
   CREATE TEMP TABLE _po_costs AS
   SELECT
-    lpo.asin,
-    lpo.unit_price AS cost_of_goods,
-    AVG(s.unit_cost) AS shipping_cost
+    product_asin AS asin,
+    unit_price AS cost_of_goods,
+    CAST(NULL AS FLOAT64) AS shipping_cost
   FROM (
-    SELECT product_asin AS asin, purchase_order_id, unit_price,
+    SELECT product_asin, unit_price,
       ROW_NUMBER() OVER (PARTITION BY product_asin ORDER BY order_date DESC) AS rn
     FROM `onyga-482313.OI.DE_PURCHASE_ORDERS`
     WHERE product_asin IS NOT NULL AND unit_price IS NOT NULL
-  ) lpo
-  LEFT JOIN `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s
-    ON lpo.purchase_order_id = s.purchase_order_id AND s.unit_cost IS NOT NULL
-  WHERE lpo.rn = 1
-  GROUP BY lpo.asin, lpo.unit_price;
+  )
+  WHERE rn = 1;
+
+  -- CTE: latest Shipment shipping_cost per ASIN
+  CREATE TEMP TABLE _shipment_costs AS
+  SELECT
+    asin,
+    shipping_cost
+  FROM (
+    SELECT 
+      po.product_asin AS asin,
+      sl.allocated_cost / NULLIF(sl.quantity_shipped, 0) AS shipping_cost,
+      ROW_NUMBER() OVER (PARTITION BY po.product_asin ORDER BY sl.created_at DESC) AS rn
+    FROM `onyga-482313.OI.DE_SHIPMENT_LINES` sl
+    JOIN `onyga-482313.OI.DE_PURCHASE_ORDERS` po ON sl.purchase_order_id = po.purchase_order_id
+    WHERE sl.quantity_shipped > 0 AND sl.allocated_cost IS NOT NULL
+  )
+  WHERE rn = 1;
 
   -- Fallback: last known cost_of_goods and shipping_cost per ASIN from history
-  -- Used when PO data is missing (e.g. fake POs were deleted) to prevent NULL COGS
+  -- Used when PO/Shipment data is missing to prevent NULL COGS
   CREATE TEMP TABLE _prev_costs AS
   SELECT asin, cost_of_goods, shipping_cost
   FROM (
@@ -54,27 +67,38 @@ BEGIN
   )
   WHERE rn = 1;
 
+  CREATE TEMP TABLE _all_costs_src AS
+  SELECT
+    COALESCE(fee.marketplace_id, dim.marketplace) AS marketplace_id,
+    COALESCE(fee.asin, dim.asin) AS asin,
+    CAST(COALESCE(fee.sku, dim.sku) AS STRING) AS sku,
+    CASE
+      WHEN fee.estimated_pick_pack_fee_per_unit IS NULL OR fee.estimated_pick_pack_fee_per_unit = 0
+      THEN fee.estimated_fee_total - fee.estimated_referral_fee_per_unit
+      ELSE fee.estimated_pick_pack_fee_per_unit
+    END AS estimated_pick_pack_fee_per_unit,
+    fee.estimated_fee_total AS FBA_COST_estimated_fee_total,
+    fee.estimated_referral_fee_per_unit AS FBA_COST_estimated_referral_fee_per_unit,
+    COALESCE(po.cost_of_goods, prev.cost_of_goods) AS cost_of_goods,
+    COALESCE(sh.shipping_cost, po.shipping_cost, prev.shipping_cost) AS shipping_cost,
+    COALESCE(fee.processed_at, dim._fivetran_synced) AS processed_at,
+    dim.product_name
+  FROM `onyga-482313.OI.SRC_ACC_FEE_PREVIEW` fee
+  FULL OUTER JOIN `onyga-482313.OI.DIM_PRODUCT` dim
+    ON fee.marketplace_id = dim.marketplace
+   AND fee.asin = dim.asin
+   AND (fee.sku = dim.sku OR (fee.sku IS NULL AND dim.sku IS NULL))
+  LEFT JOIN _po_costs po ON po.asin = COALESCE(fee.asin, dim.asin)
+  LEFT JOIN _shipment_costs sh ON sh.asin = COALESCE(fee.asin, dim.asin)
+  LEFT JOIN _prev_costs prev ON prev.asin = COALESCE(fee.asin, dim.asin)
+  WHERE COALESCE(fee.marketplace_id, dim.marketplace) = 'ATVPDKIKX0DER'
+    AND COALESCE(fee.asin, dim.asin) IS NOT NULL
+    AND COALESCE(fee.asin, dim.asin) != 'UNKNOWN';
+
   -- Step 1a: Close rows where attributes changed AND start_date < today
   UPDATE `onyga-482313.OI.DIM_COSTS_HISTORY` acc
   SET end_date = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
-  FROM (
-    SELECT
-      CAST(fee.marketplace_id AS STRING) AS marketplace_id,
-      CAST(fee.asin AS STRING) AS asin,
-      CAST(fee.sku AS STRING) AS sku,
-      COALESCE(fee.estimated_pick_pack_fee_per_unit,
-        fee.estimated_fee_total - fee.estimated_referral_fee_per_unit) AS estimated_pick_pack_fee_per_unit,
-      fee.estimated_fee_total AS FBA_COST_estimated_fee_total,
-      fee.estimated_referral_fee_per_unit AS FBA_COST_estimated_referral_fee_per_unit,
-      COALESCE(po.cost_of_goods, prev.cost_of_goods) AS cost_of_goods,
-      COALESCE(po.shipping_cost, prev.shipping_cost) AS shipping_cost
-    FROM `fivetran-hl.amazon_selling_partner.fee_preview_report` fee
-    LEFT JOIN _po_costs po ON po.asin = CAST(fee.asin AS STRING)
-    LEFT JOIN _prev_costs prev ON prev.asin = CAST(fee.asin AS STRING)
-    WHERE fee.asin IS NOT NULL
-      AND fee.marketplace_id IS NOT NULL
-      AND CAST(fee.marketplace_id AS STRING) = 'ATVPDKIKX0DER'
-  ) src
+  FROM _all_costs_src src
   WHERE acc.marketplace_id = src.marketplace_id
     AND acc.asin = src.asin
     AND (acc.sku = src.sku OR (acc.sku IS NULL AND src.sku IS NULL))
@@ -99,26 +123,8 @@ BEGIN
     cost_of_goods = src.cost_of_goods,
     shipping_cost = src.shipping_cost,
     TOTAL_COST_PER_UNIT = COALESCE(src.cost_of_goods, 0) + COALESCE(src.FBA_COST_estimated_fee_total, 0) + COALESCE(src.shipping_cost, 0),
-    _fivetran_synced = src._fivetran_synced
-  FROM (
-    SELECT
-      CAST(fee.marketplace_id AS STRING) AS marketplace_id,
-      CAST(fee.asin AS STRING) AS asin,
-      CAST(fee.sku AS STRING) AS sku,
-      COALESCE(fee.estimated_pick_pack_fee_per_unit,
-        fee.estimated_fee_total - fee.estimated_referral_fee_per_unit) AS estimated_pick_pack_fee_per_unit,
-      fee.estimated_fee_total AS FBA_COST_estimated_fee_total,
-      fee.estimated_referral_fee_per_unit AS FBA_COST_estimated_referral_fee_per_unit,
-      COALESCE(po.cost_of_goods, prev.cost_of_goods) AS cost_of_goods,
-      COALESCE(po.shipping_cost, prev.shipping_cost) AS shipping_cost,
-      fee._fivetran_synced
-    FROM `fivetran-hl.amazon_selling_partner.fee_preview_report` fee
-    LEFT JOIN _po_costs po ON po.asin = CAST(fee.asin AS STRING)
-    LEFT JOIN _prev_costs prev ON prev.asin = CAST(fee.asin AS STRING)
-    WHERE fee.asin IS NOT NULL
-      AND fee.marketplace_id IS NOT NULL
-      AND CAST(fee.marketplace_id AS STRING) = 'ATVPDKIKX0DER'
-  ) src
+    _fivetran_synced = src.processed_at
+  FROM _all_costs_src src
   WHERE acc.marketplace_id = src.marketplace_id
     AND acc.asin = src.asin
     AND (acc.sku = src.sku OR (acc.sku IS NULL AND src.sku IS NULL))
@@ -134,7 +140,7 @@ BEGIN
 
   SET updated_count = @@row_count;
 
-  -- Step 2a: Insert new rows for changed or new fee data
+  -- Step 2a: Insert new rows for changed or new fee data (including new PO costs)
   INSERT INTO `onyga-482313.OI.DIM_COSTS_HISTORY` (
     marketplace_id, asin, sku,
     estimated_pick_pack_fee_per_unit, FBA_COST_estimated_fee_total,
@@ -149,29 +155,11 @@ BEGIN
     src.cost_of_goods, src.shipping_cost,
     COALESCE(src.cost_of_goods, 0) + COALESCE(src.FBA_COST_estimated_fee_total, 0) + COALESCE(src.shipping_cost, 0) AS TOTAL_COST_PER_UNIT,
     CAST(NULL AS STRING) AS fnsku,
-    CAST(NULL AS STRING) AS product_name,
-    src._fivetran_synced,
+    src.product_name,
+    src.processed_at,
     CURRENT_DATE() AS start_date,
     CAST(NULL AS DATE) AS end_date
-  FROM (
-    SELECT
-      CAST(fee.marketplace_id AS STRING) AS marketplace_id,
-      CAST(fee.asin AS STRING) AS asin,
-      CAST(fee.sku AS STRING) AS sku,
-      COALESCE(fee.estimated_pick_pack_fee_per_unit,
-        fee.estimated_fee_total - fee.estimated_referral_fee_per_unit) AS estimated_pick_pack_fee_per_unit,
-      fee.estimated_fee_total AS FBA_COST_estimated_fee_total,
-      fee.estimated_referral_fee_per_unit AS FBA_COST_estimated_referral_fee_per_unit,
-      COALESCE(po.cost_of_goods, prev.cost_of_goods) AS cost_of_goods,
-      COALESCE(po.shipping_cost, prev.shipping_cost) AS shipping_cost,
-      fee._fivetran_synced
-    FROM `fivetran-hl.amazon_selling_partner.fee_preview_report` fee
-    LEFT JOIN _po_costs po ON po.asin = CAST(fee.asin AS STRING)
-    LEFT JOIN _prev_costs prev ON prev.asin = CAST(fee.asin AS STRING)
-    WHERE fee.asin IS NOT NULL
-      AND fee.marketplace_id IS NOT NULL
-      AND CAST(fee.marketplace_id AS STRING) = 'ATVPDKIKX0DER'
-  ) src
+  FROM _all_costs_src src
   WHERE NOT EXISTS (
     SELECT 1
     FROM `onyga-482313.OI.DIM_COSTS_HISTORY` acc
@@ -188,53 +176,10 @@ BEGIN
 
   SET inserted_count = @@row_count;
 
-  -- Step 2b: Insert rows for products not in fee_preview_report (PO data only, no FBA fees yet)
-  INSERT INTO `onyga-482313.OI.DIM_COSTS_HISTORY` (
-    marketplace_id, asin, sku,
-    estimated_pick_pack_fee_per_unit, FBA_COST_estimated_fee_total,
-    FBA_COST_estimated_referral_fee_per_unit,
-    cost_of_goods, shipping_cost, TOTAL_COST_PER_UNIT,
-    fnsku, product_name, _fivetran_synced, start_date, end_date
-  )
-  SELECT
-    dim.marketplace AS marketplace_id,
-    dim.asin,
-    dim.sku,
-    CAST(NULL AS FLOAT64),
-    CAST(NULL AS FLOAT64),
-    CAST(NULL AS FLOAT64),
-    COALESCE(po.cost_of_goods, prev.cost_of_goods) AS cost_of_goods,
-    COALESCE(po.shipping_cost, prev.shipping_cost) AS shipping_cost,
-    COALESCE(COALESCE(po.cost_of_goods, prev.cost_of_goods), 0) + COALESCE(COALESCE(po.shipping_cost, prev.shipping_cost), 0) AS TOTAL_COST_PER_UNIT,
-    CAST(NULL AS STRING),
-    dim.product_name,
-    dim._fivetran_synced,
-    CURRENT_DATE() AS start_date,
-    CAST(NULL AS DATE) AS end_date
-  FROM `onyga-482313.OI.DIM_PRODUCT` dim
-  LEFT JOIN _po_costs po ON po.asin = dim.asin
-  LEFT JOIN _prev_costs prev ON prev.asin = dim.asin
-  WHERE dim.marketplace = 'ATVPDKIKX0DER'
-    AND dim.asin IS NOT NULL
-    AND dim.asin != 'UNKNOWN'
-    AND NOT EXISTS (
-      SELECT 1 FROM `fivetran-hl.amazon_selling_partner.fee_preview_report` fee
-      WHERE CAST(fee.marketplace_id AS STRING) = dim.marketplace
-        AND CAST(fee.asin AS STRING) = dim.asin
-        AND (fee.sku = dim.sku OR (fee.sku IS NULL AND dim.sku IS NULL))
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM `onyga-482313.OI.DIM_COSTS_HISTORY` acc
-      WHERE acc.marketplace_id = dim.marketplace
-        AND acc.asin = dim.asin
-        AND (acc.sku = dim.sku OR (acc.sku IS NULL AND dim.sku IS NULL))
-        AND acc.end_date IS NULL
-    );
-
-  SET inserted_count = inserted_count + @@row_count;
-
   DROP TABLE _po_costs;
+  DROP TABLE _shipment_costs;
   DROP TABLE _prev_costs;
+  DROP TABLE _all_costs_src;
 
   SELECT FORMAT(
     'SP_LOAD_DIM_COSTS_HISTORY completed: Closed %d rows, Updated %d rows, Inserted %d rows, Duration: %d seconds',

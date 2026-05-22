@@ -50,8 +50,8 @@ BEGIN
         p.asin,
         p.product_short_name,
         p.parent_name,
-        COALESCE(ch.TOTAL_COST_PER_UNIT, p.cost_of_goods + p.shipping_cost) as total_cost,
-        p.listing_price_amount - COALESCE(ch.TOTAL_COST_PER_UNIT, p.cost_of_goods + p.shipping_cost) as margin
+        COALESCE(ch.TOTAL_COST_PER_UNIT, 0) as total_cost,
+        p.listing_price_amount - COALESCE(ch.TOTAL_COST_PER_UNIT, 0) as margin
       FROM `onyga-482313.OI.DIM_PRODUCT` p
       LEFT JOIN (
         SELECT asin, TOTAL_COST_PER_UNIT,
@@ -96,10 +96,10 @@ BEGIN
           WHEN fa.campaign_type = 'SB' THEN 'SB_STORE'
           ELSE 'SP'
         END as ad_format,
-        SUM(fa.cost) as fmt_cost,
-        SUM(fa.orders) as fmt_orders,
-        SUM(fa.units) as fmt_units,
-        SUM(fa.clicks) as fmt_clicks
+        SUM(fa.Ads_cost) as fmt_cost,
+        SUM(fa.Ads_orders) as fmt_orders,
+        SUM(fa.Ads_units) as fmt_units,
+        SUM(fa.Ads_clicks) as fmt_clicks
       FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
       JOIN eligible_experiments ee ON ec.experiment_id = ee.experiment_id
       JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa
@@ -137,13 +137,13 @@ BEGIN
     ads_bidding AS (
       SELECT
         ec.experiment_id,
-        SAFE_DIVIDE(SUM(fa.cost), NULLIF(SUM(fa.clicks), 0)) as avg_cpc
+        SAFE_DIVIDE(SUM(fa.Ads_cost), NULLIF(SUM(fa.Ads_clicks), 0)) as avg_cpc
       FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
       JOIN eligible_experiments ee ON ec.experiment_id = ee.experiment_id
       JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa
         ON ec.campaign_id = fa.campaign_id
         AND fa.date >= ee.start_date
-      WHERE fa.clicks > 0
+      WHERE fa.Ads_clicks > 0
       GROUP BY 1
     ),
 
@@ -185,7 +185,7 @@ BEGIN
         fa.date,
         fa.advertised_asins,
         fa.search_term,
-        fa.cost
+        fa.Ads_cost
       FROM experiment_family_members efm
       JOIN eligible_experiments ee ON efm.experiment_id = ee.experiment_id
       JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa
@@ -196,7 +196,7 @@ BEGIN
     ),
 
     parent_family_ad_spend AS (
-      SELECT experiment_id, parent_name, SUM(cost) as family_ad_cost
+      SELECT experiment_id, parent_name, SUM(Ads_cost) as family_ad_cost
       FROM parent_family_ads_deduped
       GROUP BY 1, 2
     ),

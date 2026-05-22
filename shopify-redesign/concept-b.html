@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Happy Lolli — Concept B: Bold Pop</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Nunito:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#2C255F;--pink:#F7C1C1;--pink-hot:#FF69B4;--gold:#D4AF37;--teal:#008080;--blush:#FDF2F8;--white:#fff;--text:#1a1a2e;--text-light:#6b6b8d}
+body{font-family:'Nunito',sans-serif;color:var(--text);background:var(--white);-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:'Outfit',sans-serif;font-weight:800}
+a{text-decoration:none;color:inherit}img{max-width:100%;display:block}
+.container{max-width:1280px;margin:0 auto;padding:0 40px}
+
+.announce{background:var(--teal);text-align:center;padding:10px;font-size:13px;font-weight:600;color:var(--white);letter-spacing:.5px}
+nav{display:flex;align-items:center;justify-content:space-between;padding:16px 48px;background:var(--white);border-bottom:2px solid var(--blush)}
+.logo{font-family:'Outfit',sans-serif;font-size:28px;font-weight:900;color:var(--navy)}
+.logo span{color:var(--pink-hot)}
+.nav-links{display:flex;gap:28px;list-style:none}
+.nav-links a{font-size:14px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.5px;transition:color .2s}
+.nav-links a:hover{color:var(--pink-hot)}
+.nav-icons{display:flex;gap:14px}
+.nav-icons svg{width:22px;height:22px;stroke:var(--navy);fill:none;stroke-width:2;cursor:pointer}
+
+/* Hero */
+.hero{background:linear-gradient(135deg,var(--pink) 0%,var(--pink-hot) 40%,var(--teal) 100%);position:relative;overflow:hidden;padding:60px 0;min-height:520px;display:flex;align-items:center}
+.hero .container{display:grid;grid-template-columns:1.2fr 1fr;align-items:center;gap:40px;position:relative;z-index:2}
+.hero h1{font-size:64px;line-height:1;color:var(--white);text-transform:uppercase;margin-bottom:20px;letter-spacing:-1px}
+.hero p{font-size:17px;color:rgba(255,255,255,.85);margin-bottom:32px;max-width:440px;line-height:1.6}
+.hero-btns{display:flex;gap:12px}
+.btn-navy{background:var(--navy);color:var(--white);padding:16px 36px;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;text-transform:uppercase;letter-spacing:1px;transition:all .25s;font-family:'Outfit',sans-serif}
+.btn-navy:hover{transform:translateY(-3px);box-shadow:0 12px 32px rgba(44,37,95,.4)}
+.btn-white{background:var(--white);color:var(--navy);padding:16px 36px;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;text-transform:uppercase;letter-spacing:1px;transition:all .25s;font-family:'Outfit',sans-serif;display:flex;align-items:center;gap:8px}
+.btn-white:hover{transform:translateY(-3px);box-shadow:0 12px 32px rgba(0,0,0,.15)}
+.hero-img{text-align:center;position:relative}
+.hero-img img{max-height:400px;margin:0 auto;filter:drop-shadow(0 20px 40px rgba(0,0,0,.2));transform:rotate(-3deg)}
+.confetti{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.conf{position:absolute;width:8px;height:8px;background:var(--gold);animation:fall 4s linear infinite}
+.conf:nth-child(odd){background:var(--gold);border-radius:50%}
+.conf:nth-child(even){background:rgba(255,255,255,.6);width:6px;height:12px;border-radius:2px}
+@keyframes fall{0%{transform:translateY(-20px) rotate(0);opacity:1}100%{transform:translateY(600px) rotate(720deg);opacity:0}}
+
+/* Products */
+.products{padding:72px 0;background:var(--white)}
+.section-head{text-align:center;margin-bottom:44px}
+.section-head h2{font-size:36px;color:var(--navy);text-transform:uppercase;letter-spacing:-1px}
+.section-head p{color:var(--text-light);font-size:15px;margin-top:6px}
+.product-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.p-card{background:var(--white);border-radius:12px;overflow:hidden;border:2px solid var(--blush);transition:all .3s;cursor:pointer}
+.p-card:hover{border-color:var(--pink-hot);transform:translateY(-4px);box-shadow:0 8px 24px rgba(255,105,180,.15)}
+.p-card .img{aspect-ratio:1;background:var(--blush);overflow:hidden;position:relative}
+.p-card img{width:100%;height:100%;object-fit:cover;transition:transform .4s}
+.p-card:hover img{transform:scale(1.06)}
+.p-card .badge{position:absolute;top:12px;left:12px;background:var(--pink-hot);color:var(--white);padding:5px 14px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}
+.p-card .info{padding:16px}
+.p-card .stars{color:var(--gold);font-size:13px;margin-bottom:4px}
+.p-card .stars span{color:var(--text-light);font-size:11px;margin-left:4px}
+.p-card h3{font-family:'Nunito',sans-serif;font-size:14px;font-weight:700;margin-bottom:8px}
+.p-card .price{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.p-card .price del{color:var(--text-light);font-size:13px}
+.p-card .price strong{color:var(--navy);font-size:16px}
+.p-card .add{width:100%;padding:11px;background:var(--pink-hot);color:var(--white);border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;font-family:'Outfit',sans-serif;text-transform:uppercase;letter-spacing:.5px}
+.p-card .add:hover{background:var(--navy)}
+
+/* Banner */
+.banner{background:linear-gradient(135deg,var(--navy),var(--teal));padding:80px 40px;text-align:center;position:relative;overflow:hidden}
+.banner h2{font-size:48px;color:var(--white);text-transform:uppercase;letter-spacing:-1px;margin-bottom:12px}
+.banner p{color:rgba(255,255,255,.7);font-size:16px;margin-bottom:28px}
+.banner .btn-gold{background:var(--gold);color:var(--navy);padding:16px 40px;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;text-transform:uppercase;font-family:'Outfit',sans-serif}
+
+/* Age */
+.age{padding:72px 0;background:var(--blush)}
+.age-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;max-width:960px;margin:0 auto}
+.age-card{background:var(--white);border-radius:16px;padding:36px 24px;text-align:center;border:2px solid transparent;transition:all .3s;cursor:pointer}
+.age-card:hover{border-color:var(--pink-hot);transform:translateY(-4px);box-shadow:0 8px 24px rgba(255,105,180,.12)}
+.age-card .emoji{font-size:48px;margin-bottom:12px}
+.age-card h3{font-size:22px;color:var(--navy);margin-bottom:4px}
+.age-card p{color:var(--text-light);font-size:14px}
+
+/* Reviews */
+.reviews{padding:72px 0;background:var(--white)}
+.rev-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.rev-card{background:var(--blush);border-radius:12px;padding:24px;border-left:4px solid var(--pink-hot)}
+.rev-card .stars{color:var(--gold);font-size:14px;margin-bottom:10px}
+.rev-card q{font-size:14px;color:var(--text);line-height:1.7;display:block;margin-bottom:14px}
+.rev-card .who strong{font-size:13px;color:var(--navy)}
+.rev-card .who small{font-size:11px;color:var(--text-light);display:block}
+
+/* Newsletter */
+.newsletter{background:linear-gradient(135deg,var(--pink),var(--teal));padding:56px 0;text-align:center}
+.newsletter h2{font-size:36px;color:var(--white);text-transform:uppercase;margin-bottom:6px}
+.newsletter p{color:rgba(255,255,255,.85);margin-bottom:24px}
+.nl-form{display:flex;max-width:460px;margin:0 auto;background:rgba(255,255,255,.2);border-radius:10px;padding:4px;backdrop-filter:blur(8px)}
+.nl-form input{flex:1;padding:14px 20px;border:none;background:transparent;color:var(--white);font-size:14px;outline:none;font-family:'Nunito',sans-serif}
+.nl-form input::placeholder{color:rgba(255,255,255,.6)}
+.nl-form button{background:var(--navy);color:var(--white);padding:14px 28px;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;font-family:'Outfit',sans-serif;text-transform:uppercase;letter-spacing:.5px}
+
+footer{background:var(--navy);padding:48px 0 24px;color:rgba(255,255,255,.5)}
+.foot-grid{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:32px;margin-bottom:32px}
+footer h4{color:var(--pink-hot);font-size:13px;margin-bottom:14px;text-transform:uppercase;letter-spacing:1px;font-family:'Outfit',sans-serif}
+footer ul{list-style:none}
+footer li{margin-bottom:8px}
+footer li a{font-size:13px;color:rgba(255,255,255,.4);transition:color .2s}
+footer li a:hover{color:var(--pink-hot)}
+.foot-bottom{border-top:1px solid rgba(255,255,255,.08);padding-top:20px;text-align:center;font-size:12px}
+
+@media(max-width:768px){
+.hero .container{grid-template-columns:1fr}.hero-img{display:none}.hero h1{font-size:40px}
+.product-grid{grid-template-columns:repeat(2,1fr)}.age-grid,.rev-grid{grid-template-columns:1fr}
+nav{padding:14px 20px}.nav-links{display:none}.foot-grid{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+<div class="announce">FREE SHIPPING ON ORDERS $50+ &nbsp;·&nbsp; GIFT-READY PACKAGING</div>
+<nav>
+  <a class="logo" href="#">Happy<span>Lolli</span></a>
+  <ul class="nav-links"><li><a href="#">Shop All</a></li><li><a href="#">Gift Sets</a></li><li><a href="#">Occasions</a></li><li><a href="#">Our Story</a></li><li><a href="#">Blog</a></li></ul>
+  <div class="nav-icons">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+    <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    <svg viewBox="0 0 24 24"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="confetti" id="confetti"></div>
+  <div class="container">
+    <div>
+      <h1>She Deserves<br>The Best</h1>
+      <p>Premium gift sets filled with surprises, sparkle &amp; girl power — curated to make her feel like the queen she is.</p>
+      <div class="hero-btns">
+        <button class="btn-navy">Shop Now</button>
+        <button class="btn-white"><svg width="16" height="16" viewBox="0 0 24 24" fill="var(--pink-hot)" stroke="none"><polygon points="5 3 19 12 5 21"/></svg> Watch Unboxing</button>
+      </div>
+    </div>
+    <div class="hero-img">
+      <img src="https://happy-lolli.com/cdn/shop/files/444_1024x1024.png?v=1755591245" alt="LolliBox">
+    </div>
+  </div>
+</section>
+
+<section class="products"><div class="container">
+  <div class="section-head"><h2>Best Sellers</h2><p>The gifts girls are obsessed with right now</p></div>
+  <div class="product-grid">
+    <div class="p-card"><div class="img"><img src="https://happy-lolli.com/cdn/shop/files/24_81012f74-bd4e-4783-bfac-e1cb8c49430a_1024x1024.png?v=1755592622" alt="Pink LolliBox"><div class="badge">HOT</div></div><div class="info"><div class="stars">★★★★★ <span>124</span></div><h3>Pink LolliBox · Ages 8–14</h3><div class="price"><del>$59.99</del><strong>$44.99</strong></div><button class="add">Add to Cart</button></div></div>
+    <div class="p-card"><div class="img"><img src="https://happy-lolli.com/cdn/shop/files/28_c6bd0bf4-33a4-4472-8cc6-6c9d50db4e82_1024x1024.png?v=1755591244" alt="Fresh Pink"></div><div class="info"><div class="stars">★★★★★ <span>89</span></div><h3>Fresh in Pink · Self Care</h3><div class="price"><del>$49.99</del><strong>$39.99</strong></div><button class="add">Add to Cart</button></div></div>
+    <div class="p-card"><div class="img"><img src="https://happy-lolli.com/cdn/shop/files/1_45f31c1a-a90b-43b8-890c-aa01a22d72b9_1024x1024.png?v=1754766098" alt="LolliME Mint"></div><div class="info"><div class="stars">★★★★★ <span>67</span></div><h3>LolliME Mint · Journal Kit</h3><div class="price"><strong>$34.99</strong></div><button class="add">Add to Cart</button></div></div>
+    <div class="p-card"><div class="img"><img src="https://happy-lolli.com/cdn/shop/files/1_e3d578ec-f768-48a2-95d8-bd4d447acbfc_1024x1024.png?v=1754770471" alt="Truth or Dare"></div><div class="info"><div class="stars">★★★★★ <span>43</span></div><h3>Truth or Dare · Party Game</h3><div class="price"><strong>$29.99</strong></div><button class="add">Add to Cart</button></div></div>
+  </div>
+</div></section>
+
+<section class="banner">
+  <h2>Gift Moments.<br>Create Memories.</h2>
+  <p>Every box is curated with love, packed with sparkle, and wrapped in confidence.</p>
+  <button class="btn-gold">Explore Collections</button>
+</section>
+
+<section class="age"><div class="container">
+  <div class="section-head"><h2>Find Her Gift</h2><p>Shop by age for the perfect match</p></div>
+  <div class="age-grid">
+    <div class="age-card"><div class="emoji">✨</div><h3>Tweens</h3><p>Ages 8–10</p></div>
+    <div class="age-card"><div class="emoji">💖</div><h3>Teens</h3><p>Ages 11–14</p></div>
+    <div class="age-card"><div class="emoji">👑</div><h3>College</h3><p>Ages 15–18+</p></div>
+  </div>
+</div></section>
+
+<section class="reviews"><div class="container">
+  <div class="section-head"><h2>500+ Five Star Reviews</h2></div>
+  <div class="rev-grid">
+    <div class="rev-card"><div class="stars">★★★★★</div><q>My niece was THRILLED! The packaging was gorgeous and every item felt special. Best birthday gift!</q><div class="who"><strong>Amanda R.</strong><small>Verified · Pink LolliBox</small></div></div>
+    <div class="rev-card"><div class="stars">★★★★★</div><q>The self-care set was a huge hit! My teen uses everything daily. Premium quality — way better than expected.</q><div class="who"><strong>Sophia K.</strong><small>Verified · Fresh in Pink</small></div></div>
+    <div class="rev-card"><div class="stars">★★★★★</div><q>Ordered three times! The confidence cards are my favorite touch — such a meaningful addition to a gift.</q><div class="who"><strong>Michelle T.</strong><small>Verified · White LolliBox</small></div></div>
+  </div>
+</div></section>
+
+<section class="newsletter"><div class="container">
+  <h2>Join the Lolli Squad</h2>
+  <p>Get 10% off your first order + birthday surprises for your girl</p>
+  <form class="nl-form" onsubmit="event.preventDefault()"><input type="email" placeholder="Your email"><button>JOIN NOW</button></form>
+</div></section>
+
+<footer><div class="container">
+  <div class="foot-grid">
+    <div><h4>Happy Lolli</h4><p style="font-size:13px;line-height:1.7">Premium gift sets for tween, teen &amp; college girls — spark joy, boost confidence, create memories.</p></div>
+    <div><h4>Shop</h4><ul><li><a href="#">LolliBox</a></li><li><a href="#">Fresh</a></li><li><a href="#">LolliME</a></li><li><a href="#">Games</a></li></ul></div>
+    <div><h4>Help</h4><ul><li><a href="#">Shipping</a></li><li><a href="#">Returns</a></li><li><a href="#">Contact</a></li><li><a href="#">FAQ</a></li></ul></div>
+    <div><h4>About</h4><ul><li><a href="#">Our Story</a></li><li><a href="#">Birthday Club</a></li><li><a href="#">Blog</a></li></ul></div>
+  </div>
+  <div class="foot-bottom">© 2026 Happy Lolli. All rights reserved.</div>
+</div></footer>
+
+<script>
+const c=document.getElementById('confetti');
+for(let i=0;i<20;i++){const d=document.createElement('div');d.className='conf';d.style.left=Math.random()*100+'%';d.style.top=-10+'px';d.style.animationDelay=Math.random()*4+'s';d.style.animationDuration=3+Math.random()*3+'s';c.appendChild(d)}
+</script>
+</body></html>

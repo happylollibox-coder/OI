@@ -13,9 +13,17 @@ RUN npm run build
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 
-# SPA routing: all paths → index.html
+# SPA routing + API proxy to Flask backend
 RUN echo 'server { \
   listen 8080; \
+  resolver 8.8.8.8 valid=30s; \
+  set $flask_backend "https://data-entry-forms-405291422506.us-central1.run.app"; \
+  location /api/ { \
+    proxy_pass $flask_backend; \
+    proxy_set_header Host data-entry-forms-405291422506.us-central1.run.app; \
+    proxy_set_header X-Real-IP $remote_addr; \
+    proxy_ssl_server_name on; \
+  } \
   location / { \
     root /usr/share/nginx/html; \
     try_files $uri $uri/ /index.html; \

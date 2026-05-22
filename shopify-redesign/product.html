@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pink LolliBox · Ages 8–14 | Happy Lolli</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+.pdp { display:grid; grid-template-columns:1fr 1fr; gap:48px; max-width:1200px; margin:0 auto; padding:40px 48px; }
+.pdp-gallery { position:relative; }
+.pdp-main-img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:var(--radius); background:var(--blush); }
+.pdp-thumbs { display:flex; gap:10px; margin-top:12px; }
+.pdp-thumbs img { width:72px; height:72px; object-fit:cover; border-radius:var(--radius-sm); border:2px solid transparent; cursor:pointer; transition:var(--transition); opacity:.7; }
+.pdp-thumbs img:hover,.pdp-thumbs img.active { border-color:var(--lavender); opacity:1; }
+.pdp-info h1 { font-size:36px; color:var(--plum); margin-bottom:4px; }
+.pdp-subtitle { font-size:16px; color:var(--text-muted); margin-bottom:12px; }
+.pdp-rating { display:flex; align-items:center; gap:8px; margin-bottom:16px; }
+.pdp-rating .stars { color:#F59E0B; font-size:16px; }
+.pdp-rating a { color:var(--lavender); font-size:14px; font-weight:500; }
+.pdp-price { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
+.pdp-price .old { text-decoration:line-through; color:var(--text-light); font-size:18px; }
+.pdp-price .current { color:var(--pink-dark); font-size:28px; font-weight:700; font-family:var(--font-heading); }
+.pdp-price .badge { background:var(--blush); color:var(--pink); padding:4px 12px; border-radius:var(--radius-full); font-size:13px; font-weight:600; }
+.pdp-divider { height:1px; background:rgba(139,92,246,.1); margin:20px 0; }
+.whats-inside h3 { font-size:16px; font-weight:600; margin-bottom:14px; color:var(--text); }
+.whats-inside-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:20px; }
+.inside-item { text-align:center; padding:14px 8px; background:var(--blush); border-radius:var(--radius-sm); transition:var(--transition); }
+.inside-item:hover { background:#F3E8FF; }
+.inside-item svg { width:28px; height:28px; stroke:var(--lavender); margin-bottom:6px; }
+.inside-item span { font-size:12px; color:var(--text-muted); display:block; font-weight:500; }
+.gift-msg { display:flex; align-items:center; gap:10px; padding:14px 16px; background:var(--blush); border-radius:var(--radius-sm); margin-bottom:20px; cursor:pointer; transition:var(--transition); }
+.gift-msg:hover { background:#F3E8FF; }
+.gift-msg input[type=checkbox] { accent-color:var(--pink); width:18px; height:18px; }
+.gift-msg label { font-size:14px; font-weight:500; cursor:pointer; }
+.gift-msg svg { width:20px; height:20px; stroke:var(--pink); }
+.btn-atc { width:100%; padding:16px; background:var(--lavender); color:#fff; border:none; border-radius:var(--radius-sm); font-size:17px; font-weight:700; cursor:pointer; transition:var(--transition); font-family:var(--font-body); display:flex; align-items:center; justify-content:center; gap:8px; }
+.btn-atc:hover { background:var(--lavender-dark); transform:translateY(-2px); box-shadow:var(--shadow-hover); }
+.btn-atc svg { width:20px; height:20px; }
+.pdp-trust { display:flex; justify-content:center; gap:32px; margin-top:20px; padding:16px 0; border-top:1px solid rgba(139,92,246,.08); }
+.pdp-trust-item { text-align:center; }
+.pdp-trust-item svg { width:24px; height:24px; stroke:var(--lavender); margin-bottom:4px; }
+.pdp-trust-item span { font-size:12px; color:var(--text-muted); display:block; font-weight:500; }
+.urgency { text-align:center; margin-top:14px; font-size:14px; color:var(--pink); font-weight:500; }
+.urgency svg { width:16px; height:16px; vertical-align:middle; fill:var(--pink); stroke:none; margin-right:4px; }
+/* Tabs */
+.pdp-tabs { max-width:1200px; margin:0 auto; padding:0 48px 60px; }
+.tab-nav { display:flex; gap:0; border-bottom:2px solid rgba(139,92,246,.1); margin-bottom:28px; }
+.tab-nav button { padding:14px 28px; border:none; background:none; font-size:15px; font-weight:500; color:var(--text-muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px; transition:var(--transition); font-family:var(--font-body); }
+.tab-nav button.active { color:var(--lavender-dark); border-bottom-color:var(--lavender); }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+.tab-content h3 { font-size:22px; color:var(--plum); margin-bottom:12px; }
+.tab-content p { color:var(--text-muted); line-height:1.8; margin-bottom:12px; }
+.tab-content ul { color:var(--text-muted); padding-left:20px; line-height:2; }
+.also-like { max-width:1200px; margin:0 auto; padding:0 48px 80px; }
+.also-like h2 { font-size:28px; color:var(--plum); margin-bottom:24px; text-align:center; font-family:var(--font-heading); }
+.also-like .products-grid { grid-template-columns:repeat(4,1fr); }
+@media(max-width:768px) {
+  .pdp { grid-template-columns:1fr; padding:24px 20px; gap:28px; }
+  .whats-inside-grid { grid-template-columns:repeat(2,1fr); }
+  .also-like .products-grid { grid-template-columns:repeat(2,1fr); }
+  .pdp-tabs { padding:0 20px 40px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Announcement Bar -->
+<div class="announcement">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12v6a2 2 0 01-2 2H6a2 2 0 01-2-2v-6"/><path d="M12 12V3"/><path d="M20 7l-8-4-8 4h16z"/><rect x="4" y="7" width="16" height="5" rx="1"/></svg>
+  Gift-Ready Packaging &nbsp;•&nbsp; Free Shipping on Orders $50+ &nbsp;•&nbsp; 30-Day Returns
+</div>
+
+<!-- Navigation -->
+<nav class="nav">
+  <a href="index.html" class="nav-logo">Happy <span>Lolli</span></a>
+  <ul class="nav-links">
+    <li><a href="index.html#shop">Shop</a></li>
+    <li><a href="#">Birthday Club</a></li>
+    <li><a href="#">About</a></li>
+    <li><a href="#">Blog</a></li>
+  </ul>
+  <div class="nav-icons">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    <div class="cart-badge">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+    </div>
+  </div>
+</nav>
+
+<!-- Breadcrumb -->
+<div style="max-width:1200px;margin:0 auto;padding:16px 48px;">
+  <span style="font-size:13px;color:var(--text-light)"><a href="index.html" style="color:var(--text-muted)">Home</a> / <a href="#" style="color:var(--text-muted)">LolliBox</a> / <span style="color:var(--text)">Pink LolliBox</span></span>
+</div>
+
+<!-- Product Detail -->
+<div class="pdp">
+  <div class="pdp-gallery">
+    <img class="pdp-main-img" id="mainImg" src="https://happy-lolli.com/cdn/shop/files/24_81012f74-bd4e-4783-bfac-e1cb8c49430a_1024x1024.png?v=1755592622" alt="Pink LolliBox Gift Set">
+    <div class="pdp-thumbs">
+      <img class="active" src="https://happy-lolli.com/cdn/shop/files/24_81012f74-bd4e-4783-bfac-e1cb8c49430a_1024x1024.png?v=1755592622" alt="Pink LolliBox" onclick="switchImg(this)">
+      <img src="https://happy-lolli.com/cdn/shop/files/26_2774d6b4-ff47-4c21-96f0-b7527591b4bd_1024x1024.png?v=1755592622" alt="Purple LolliBox" onclick="switchImg(this)">
+      <img src="https://happy-lolli.com/cdn/shop/files/25_48c8984a-712f-4ed2-a4f5-d5b968a22657_1024x1024.png?v=1755592622" alt="Blue LolliBox" onclick="switchImg(this)">
+      <img src="https://happy-lolli.com/cdn/shop/files/444_1024x1024.png?v=1755591245" alt="White LolliBox" onclick="switchImg(this)">
+    </div>
+  </div>
+  <div class="pdp-info">
+    <h1>Pink LolliBox</h1>
+    <p class="pdp-subtitle">Gift Set · Ages 8–14</p>
+    <div class="pdp-rating">
+      <span class="stars">★★★★★</span>
+      <a href="#reviews">124 reviews</a>
+    </div>
+    <div class="pdp-price">
+      <span class="old">$59.99</span>
+      <span class="current">$44.99</span>
+      <span class="badge">Save 25%</span>
+    </div>
+    <div class="pdp-divider"></div>
+    <div class="whats-inside">
+      <h3>What's Inside</h3>
+      <div class="whats-inside-grid">
+        <div class="inside-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+          <span>Journal</span>
+        </div>
+        <div class="inside-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+          <span>Scrunchies</span>
+        </div>
+        <div class="inside-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+          <span>Lip Balm</span>
+        </div>
+        <div class="inside-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span>Stickers</span>
+        </div>
+        <div class="inside-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span>Confidence Cards</span>
+        </div>
+        <div class="inside-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><path d="M20 12v6a2 2 0 01-2 2H6a2 2 0 01-2-2v-6"/><path d="M12 12V3"/><path d="M20 7l-8-4-8 4h16z"/><rect x="4" y="7" width="16" height="5" rx="1"/></svg>
+          <span>Surprise Item</span>
+        </div>
+      </div>
+    </div>
+    <div class="gift-msg">
+      <input type="checkbox" id="giftMsg">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+      <label for="giftMsg">Add a personal gift message</label>
+    </div>
+    <button class="btn-atc">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+      Add to Cart — $44.99
+    </button>
+    <div class="pdp-trust">
+      <div class="pdp-trust-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><path d="M20 12v6a2 2 0 01-2 2H6a2 2 0 01-2-2v-6"/><path d="M12 12V3"/><path d="M20 7l-8-4-8 4h16z"/><rect x="4" y="7" width="16" height="5" rx="1"/></svg>
+        <span>Gift-Ready</span>
+      </div>
+      <div class="pdp-trust-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+        <span>Free Shipping $50+</span>
+      </div>
+      <div class="pdp-trust-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+        <span>30-Day Returns</span>
+      </div>
+    </div>
+    <div class="urgency">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+      12 sold in the last 24 hours
+    </div>
+  </div>
+</div>
+
+<!-- Product Tabs -->
+<div class="pdp-tabs">
+  <div class="tab-nav">
+    <button class="active" onclick="showTab('desc',this)">Description</button>
+    <button onclick="showTab('shipping',this)">Shipping</button>
+    <button onclick="showTab('reviews-tab',this)">Reviews (124)</button>
+  </div>
+  <div id="desc" class="tab-content active">
+    <h3>The Perfect Gift for Her</h3>
+    <p>The Pink LolliBox is a premium, ready-to-gift box filled with carefully curated surprises designed to make any girl aged 8–14 feel special, confident, and celebrated.</p>
+    <p>Each box includes a personal journal, trendy accessories, self-care items, fun challenges, and our signature Confidence Cards — empowering messages that remind her she's amazing.</p>
+    <h3 style="margin-top:20px">What Makes It Special</h3>
+    <ul>
+      <li>Beautifully gift-wrapped — no additional wrapping needed</li>
+      <li>6+ premium items curated by moms and loved by girls</li>
+      <li>Signature Confidence Cards with empowering messages</li>
+      <li>Fun unboxing experience with layered surprises</li>
+      <li>Premium magnetic-close box she can reuse</li>
+    </ul>
+  </div>
+  <div id="shipping" class="tab-content">
+    <h3>Shipping Information</h3>
+    <p>Free standard shipping on all orders over $50. Orders ship within 1–2 business days.</p>
+    <ul>
+      <li>Standard Shipping (3–5 days): Free on $50+</li>
+      <li>Express Shipping (1–2 days): $9.99</li>
+      <li>We ship to all 50 US states</li>
+    </ul>
+  </div>
+  <div id="reviews-tab" class="tab-content">
+    <h3>Customer Reviews</h3>
+    <p>★★★★★ 4.9/5 based on 124 verified reviews</p>
+  </div>
+</div>
+
+<!-- You May Also Like -->
+<div class="also-like">
+  <h2>You May Also Like</h2>
+  <div class="products-grid">
+    <div class="product-card">
+      <div class="image-wrap"><img src="https://happy-lolli.com/cdn/shop/files/26_2774d6b4-ff47-4c21-96f0-b7527591b4bd_1024x1024.png?v=1755592622" alt="Purple LolliBox"></div>
+      <div class="card-body">
+        <div class="stars">★★★★★ <span>98</span></div>
+        <h3>Purple LolliBox · Ages 8–14</h3>
+        <div class="price"><span class="price-old">$59.99</span><span class="price-new">$44.99</span></div>
+        <button class="quick-add">Quick Add</button>
+      </div>
+    </div>
+    <div class="product-card">
+      <div class="image-wrap"><img src="https://happy-lolli.com/cdn/shop/files/25_48c8984a-712f-4ed2-a4f5-d5b968a22657_1024x1024.png?v=1755592622" alt="Blue LolliBox"></div>
+      <div class="card-body">
+        <div class="stars">★★★★★ <span>87</span></div>
+        <h3>Blue LolliBox · Ages 8–14</h3>
+        <div class="price"><span class="price-old">$59.99</span><span class="price-new">$44.99</span></div>
+        <button class="quick-add">Quick Add</button>
+      </div>
+    </div>
+    <div class="product-card">
+      <div class="image-wrap"><img src="https://happy-lolli.com/cdn/shop/files/21_fc5144b8-b7b6-4ab4-9844-8682b7034ca1_1024x1024.png?v=1754766126" alt="LolliME Pink"></div>
+      <div class="card-body">
+        <div class="stars">★★★★★ <span>56</span></div>
+        <h3>LolliME Pink · Journal Kit</h3>
+        <div class="price"><span class="price-new">$34.99</span></div>
+        <button class="quick-add">Quick Add</button>
+      </div>
+    </div>
+    <div class="product-card">
+      <div class="image-wrap"><img src="https://happy-lolli.com/cdn/shop/files/1_e3d578ec-f768-48a2-95d8-bd4d447acbfc_1024x1024.png?v=1754770471" alt="Truth or Dare"></div>
+      <div class="card-body">
+        <div class="stars">★★★★★ <span>43</span></div>
+        <h3>Truth or Dare · Party Game</h3>
+        <div class="price"><span class="price-new">$29.99</span></div>
+        <button class="quick-add">Quick Add</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Footer -->
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <h4 style="font-size:24px;font-family:var(--font-heading)">Happy <span style="color:var(--pink-light)">Lolli</span></h4>
+      <p>Premium gift sets for tween, teen & college girls — designed to spark joy, boost confidence, and create memories.</p>
+    </div>
+    <div><h4>Shop</h4><ul><li><a href="#">LolliBox</a></li><li><a href="#">Fresh</a></li><li><a href="#">LolliME</a></li><li><a href="#">Games</a></li></ul></div>
+    <div><h4>Help</h4><ul><li><a href="#">Shipping</a></li><li><a href="#">Returns</a></li><li><a href="#">Contact</a></li><li><a href="#">FAQ</a></li></ul></div>
+    <div><h4>About</h4><ul><li><a href="#">Our Story</a></li><li><a href="#">Birthday Club</a></li><li><a href="#">Blog</a></li></ul></div>
+  </div>
+  <div class="footer-bottom">
+    <p>&copy; 2026 Happy Lolli</p>
+    <div class="payment-icons"><span>Visa</span><span>MC</span><span>PayPal</span><span>Apple Pay</span></div>
+  </div>
+</footer>
+
+<!-- Font Toggle -->
+<div class="font-toggle">
+  <button class="active" onclick="setFont('a',this)">Playfair</button>
+  <button onclick="setFont('b',this)">Cormorant</button>
+</div>
+
+<script>
+function setFont(f,btn){document.body.classList.toggle('font-b',f==='b');document.querySelectorAll('.font-toggle button').forEach(b=>b.classList.remove('active'));btn.classList.add('active')}
+function switchImg(el){document.getElementById('mainImg').src=el.src;document.querySelectorAll('.pdp-thumbs img').forEach(i=>i.classList.remove('active'));el.classList.add('active')}
+function showTab(id,btn){document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('.tab-nav button').forEach(b=>b.classList.remove('active'));btn.classList.add('active')}
+</script>
+</body>
+</html>

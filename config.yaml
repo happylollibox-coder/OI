@@ -22,7 +22,7 @@ data_sources:
 
 views:
 
-  # ── V_SRC_ Interface Views (Fivetran-managed) ──
+  # ── V_SRC_ Interface Views (Daton + Fivetran) ──
   - name: "V_SRC_AmazonAds_campaign_history"
     description: "Campaign performance history with temporal versioning"
     source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_campaign_history.sql"]
@@ -60,7 +60,7 @@ views:
     source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_sb_ad_report.sql"]
 
   - name: "V_SRC_Seller_repeat_purchase"
-    description: "Repeat purchase behavior analysis"
+    description: "Repeat purchase behavior from Daton RepeatPurchaseBehaviourReport"
     source_files: ["scripts/bigquery/interface_views/V_SRC_Seller_repeat_purchase.sql"]
 
   - name: "V_SRC_CURRENCY_CONVERSION"
@@ -88,11 +88,23 @@ views:
     source_files: ["scripts/bigquery/interface_views/V_SRC_OLD_HIST_SearchTerms.sql"]
 
   - name: "V_SRC_Products"
-    description: "Products data from seller central"
+    description: "Products data from Daton CatalogItems + ActiveListingsReport"
     source_files: ["scripts/bigquery/interface_views/V_SRC_Products.sql"]
 
+  - name: "V_SRC_FeePreview"
+    description: "Amazon fee preview data from Daton FeePreviewReport"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_FeePreview.sql"]
+
+  - name: "V_SRC_FBAInventorySummary"
+    description: "FBA inventory from Daton FBAManageInventory (current snapshot)"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_FBAInventorySummary.sql"]
+
+  - name: "V_SRC_AWDListInventory"
+    description: "AWD inventory from Daton AWDListInventory (current snapshot, SKU→ASIN via DIM_PRODUCT)"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_AWDListInventory.sql"]
+
   - name: "V_SRC_sales_and_traffic_business_sku_report_daily"
-    description: "Daily sales and traffic by SKU"
+    description: "Daily sales/traffic from Daton SalesAndTrafficReportByChildASIN"
     source_files: ["scripts/bigquery/interface_views/V_SRC_sales_and_traffic_business_sku_report_daily.sql"]
 
   # ── V_ Analytics Views ──
@@ -150,10 +162,6 @@ views:
   - name: "V_EXPERIMENT_TERM_RECOMMENDATIONS"
     description: "Term-level recommendations from experiments (hybrid weighted ROAS)"
 
-  - name: "V_COACH_HOT_SIGNALS"
-    description: "3-day rapid-reaction ads alerts (URGENT_STOP, HOT_WINNER, RAPID_DECLINE)"
-    source_files: ["scripts/bigquery/views/V_COACH_HOT_SIGNALS.sql"]
-
   - name: "V_PROMOTION_RAMP_ANALYSIS"
     description: "Tracks promoted keyword ramp-up: milestones, weekly metrics, starting config, verdict"
     source_files: ["scripts/bigquery/views/V_PROMOTION_RAMP_ANALYSIS.sql"]
@@ -163,6 +171,16 @@ views:
 
   - name: "V_PARENT_HERO_ASIN"
     description: "Parent-hero ASIN mapping"
+
+  - name: "V_KEYWORD_INTELLIGENCE"
+    description: "Cross-campaign keyword intelligence — hero timeline, stability, fragmentation, complexity scoring"
+    source_files: ["scripts/bigquery/views/V_KEYWORD_INTELLIGENCE.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+      - DIM_COSTS_HISTORY
+      - V_PARENT_HERO_ASIN
+      - V_EXPERIMENT_TERM_RECOMMENDATIONS
 
   - name: "V_PO_SNAPSHOT"
     description: "Purchase order snapshot view"
@@ -203,6 +221,48 @@ views:
   - name: "V_UNIFIED_INVENTORY_SNAPSHOT"
     description: "Unified inventory snapshot across FBA/AWD"
 
+  - name: "V_SUPPLY_CHAIN_SUMMARY"
+    description: "Per-ASIN supply chain health — days of coverage (forecast-based), next shipment date/qty"
+    source_files: ["scripts/bigquery/views/V_SUPPLY_CHAIN_SUMMARY.sql"]
+    dependencies:
+      - FACT_INVENTORY_SNAPSHOT
+      - V_PLAN_FORECAST
+      - DIM_PRODUCT
+
+  - name: "V_PLAN_FORECAST"
+    description: "Master supply chain forecast — single source of truth for effectiveGrowth, adjustedForecast, gap, DOC, and PO-aware supply readiness (READY/IN_PRODUCTION/NEEDS_PO). Consumed by SP_GENERATE_ALERTS, V_SUPPLY_CHAIN_SUMMARY, and PlanPage."
+    source_files: ["scripts/bigquery/views/V_PLAN_FORECAST.sql"]
+    dependencies:
+      - V_FORECAST_DEMAND
+      - DE_PLAN_STRATEGY
+      - DIM_PRODUCT
+      - FACT_INVENTORY_SNAPSHOT
+      - V_SRC_sales_and_traffic_business_sku_report_daily
+      - DE_PURCHASE_ORDERS
+      - DE_SHIPMENT_LINES
+
+  - name: "V_SUPPLY_ORDERS_DASHBOARD"
+    description: "Enriched POs with payment/shipment status for Supply dashboard page"
+    source_files: ["scripts/bigquery/views/V_SUPPLY_ORDERS_DASHBOARD.sql"]
+    dependencies:
+      - DE_PURCHASE_ORDERS
+      - DE_VENDOR_PAYMENTS
+      - DE_MANUFACTURER_SHIPMENTS
+      - DE_SHIPMENT_LINES
+
+  - name: "V_MONTHLY_STORAGE_COST"
+    description: "Monthly FBA+AWD storage cost per ASIN — avg inventory × cubic feet × seasonal rate"
+    source_files: ["scripts/bigquery/views/V_MONTHLY_STORAGE_COST.sql"]
+    dependencies:
+      - FACT_INVENTORY_SNAPSHOT
+      - DIM_PRODUCT
+
+  - name: "V_WEEKLY_STORAGE_COST"
+    description: "Prorated weekly storage cost per ASIN from V_MONTHLY_STORAGE_COST"
+    source_files: ["scripts/bigquery/views/V_WEEKLY_STORAGE_COST.sql"]
+    dependencies:
+      - V_MONTHLY_STORAGE_COST
+
   - name: "V_UNIFIED_TRANSACTION_SOURCES"
     description: "Unified view of all financial transaction sources"
 
@@ -214,17 +274,40 @@ views:
     description: "Decision engine — applies thresholds to coach data for action recommendations"
     source_files: ["scripts/bigquery/views/V_ADS_COACH_DECISION.sql"]
 
-  - name: "V_ADS_COACH_SEARCH_TERM"
-    description: "Search term level view of ads coach data"
-    source_files: ["scripts/bigquery/views/V_ADS_COACH_SEARCH_TERM.sql"]
+  - name: "V_DIM_CAMPAIGN_CURRENT"
+    description: "Current campaign metadata — one row per campaign_id from SCD2 DIM_CAMPAIGN. Prevents rename splits."
+    source_files: ["scripts/bigquery/views/V_DIM_CAMPAIGN_CURRENT.sql"]
+    dependencies:
+      - DIM_CAMPAIGN
+
+  - name: "V_ADS_COACH_ACTIONS"
+    description: "Column-reordered passthrough view over FACT_ADS_COACH_ACTIONS for human-readable ad-hoc queries"
+    source_files: ["scripts/bigquery/views/V_ADS_COACH_ACTIONS.sql"]
 
   - name: "V_AMAZON_ADS_TOP_SEARCH_QUERY_TERMS_WEEKLY"
     description: "Top search query terms from Amazon Ads weekly"
     source_files: ["scripts/bigquery/views/V_AMAZON_ADS_TOP_SEARCH_QUERY_TERMS_WEEKLY.sql"]
 
+  - name: "V_ADS_FOCUS_TERMS"
+    description: "Pre-ranked top 10 winners + top 10 losers by search term per week (net profit). Other terms aggregated. ~546 rows for Cube.js."
+    source_files: ["scripts/bigquery/views/V_ADS_FOCUS_TERMS.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+
+  - name: "V_ADS_FOCUS_KEYWORDS"
+    description: "Pre-ranked top 10 winners + top 10 losers by keyword target per week (net profit). Mirrors V_ADS_FOCUS_TERMS but groups by targeting (bid keyword) instead of search_term."
+    source_files: ["scripts/bigquery/views/V_ADS_FOCUS_KEYWORDS.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+
   - name: "V_BRAND_KEYWORD_CLASSIFICATION"
     description: "Classifies keywords as brand, competitor, or generic"
     source_files: ["scripts/bigquery/views/V_BRAND_KEYWORD_CLASSIFICATION.sql"]
+
+  - name: "V_BRAND_SEARCH_MONTHLY"
+    description: "Monthly branded search purchases (brand-level). Uses DIM_BRAND_PHRASES for term detection. Powers PlanWizard Growth step."
+    source_files: ["scripts/bigquery/views/V_BRAND_SEARCH_MONTHLY.sql"]
 
   - name: "V_BRAND_STRENGTH_WEEKLY"
     description: "Weekly brand strength tracking with phrase type, product, and tag metadata"
@@ -254,9 +337,86 @@ views:
     description: "Rolling 7-day summary metrics"
     source_files: ["scripts/bigquery/views/V_SUMMARY_7D.sql"]
 
+  - name: "V_FORECAST_ROAS"
+    description: "3-tier seasonal Net ROAS forecast — blends off-season, boost, and peak ROAS per family × month using DIM_US_HOLIDAYS + DIM_US_HOLIDAYS_PRODUCT_FAMILY mapping."
+    source_files: ["scripts/bigquery/views/V_FORECAST_ROAS.sql"]
+    dependencies:
+      - T_UNIFIED_DAILY
+      - DIM_US_HOLIDAYS
+      - DIM_US_HOLIDAYS_PRODUCT_FAMILY
+
+  - name: "V_FORECAST_DEMAND"
+    description: "Holiday-driven per-product demand forecast with 3-phase model-based forecasting for new products. Phase 1 (cold start) uses model product's daily rate × seasonality. Phase 2 (hybrid) uses own trailing 14d rate × model seasonality. Phase 3 uses standard family-level forecast."
+    source_files: ["scripts/bigquery/views/V_FORECAST_DEMAND.sql"]
+    dependencies:
+      - T_UNIFIED_DAILY
+      - DIM_US_HOLIDAYS
+      - V_PRODUCT_LAUNCH_MODEL
+      - V_PRODUCT_SEASONALITY_INDEX
+      - DE_NEW_PRODUCT_MODEL
+
+  - name: "V_PRODUCT_LAUNCH_MODEL"
+    description: "Auto-computed first-year sales patterns per product (month 1-12 from launch date). Used as the menu of available launch models for new product forecasting."
+    source_files: ["scripts/bigquery/views/V_PRODUCT_LAUNCH_MODEL.sql"]
+    dependencies:
+      - DIM_PRODUCT
+      - V_PRODUCT_FAMILY_MAP
+      - V_SRC_sales_and_traffic_business_sku_report_daily
+
+  - name: "V_PRODUCT_SEASONALITY_INDEX"
+    description: "Calendar-month seasonality index per product. Index=1.0 means average month, >1 means above average (e.g. Dec peak). Used for seasonal multiplication in Phase 1/2 forecasting."
+    source_files: ["scripts/bigquery/views/V_PRODUCT_SEASONALITY_INDEX.sql"]
+    dependencies:
+      - DIM_PRODUCT
+      - V_PRODUCT_FAMILY_MAP
+      - V_SRC_sales_and_traffic_business_sku_report_daily
+
+  - name: "V_PEAK_RELEVANCE"
+    description: "Automated peak relevance per family per holiday — compares peak vs 4-week baseline, flags non-peaks, provides Coach recommendations (AGGRESSIVE_BOOST, MODERATE_BOOST, CAUTIOUS_BOOST, HOLD, REDUCE)"
+    source_files: ["scripts/bigquery/views/V_PEAK_RELEVANCE.sql"]
+    dependencies:
+      - T_UNIFIED_DAILY
+      - DIM_US_HOLIDAYS
+
   - name: "V_UNIFIED_DAILY"
     description: "Unified daily performance view — single source of truth for ads + sales + organic"
     source_files: ["scripts/bigquery/views/V_UNIFIED_DAILY.sql"]
+
+  - name: "V_EXPERIMENT_TEMPLATES"
+    description: "Experiment definitions with aggregated ads performance summary"
+    source_files: ["scripts/bigquery/views/V_EXPERIMENT_TEMPLATES.sql"]
+    dependencies:
+      - DIM_EXPERIMENT
+      - DIM_EXPERIMENT_CAMPAIGN
+      - FACT_AMAZON_ADS
+
+  - name: "V_ADS_EFFICIENCY_PROFILE"
+    description: "3-parameter unit-consistent forecast model (Spend/CPC × Unit_CVR / Ads_Share) — seasonal-aware per-family × forecast-month, uses DIM_US_HOLIDAYS for off/boost/peak tier classification"
+    source_files: ["scripts/bigquery/views/V_ADS_EFFICIENCY_PROFILE.sql"]
+    cube_schema: "cube/schema/AdsEfficiencyProfile.js"
+    dependencies:
+      - FACT_AMAZON_ADS
+      - FACT_AMAZON_PERFORMANCE_DAILY
+      - V_PRODUCT_FAMILY_MAP
+      - DIM_US_HOLIDAYS
+      - DIM_US_HOLIDAYS_PRODUCT_FAMILY
+
+  - name: "V_ADS_CHANNEL_EFFICIENCY"
+    description: "Per-family × month × search_type (BRAND/NON_BRAND) ads efficiency — CPC, CVR, Net ROAS split by brand vs non-brand keywords. Powers PlanWizard Ads Path channel cards."
+    source_files: ["scripts/bigquery/views/V_ADS_CHANNEL_EFFICIENCY.sql"]
+    cube_schema: "cube/schema/AdsChannelEfficiency.js"
+    dependencies:
+      - FACT_AMAZON_ADS
+      - DIM_BRAND_PHRASES
+      - DIM_PRODUCT
+      - DIM_COSTS_HISTORY
+
+  - name: "V_ADS_TARGET_PERFORMANCE"
+    description: "Compares monthly ads targets (DE_PLAN_ADS_TARGETS) vs actual performance (V_ADS_CHANNEL_EFFICIENCY). Computes spend/CPC gaps, CVR accuracy, and data completeness for model feedback loop."
+    source_files: ["scripts/bigquery/views/V_ADS_TARGET_PERFORMANCE.sql"]
+    dependencies:
+      - DE_PLAN_ADS_TARGETS
+      - V_ADS_CHANNEL_EFFICIENCY
 
 # ═══════════════════════════════════════════════════════════════
 # TABLES
@@ -265,9 +425,20 @@ views:
 tables:
 
   # ── DIM_ Dimension Tables ──
-  - name: "DIM_AD_keyword"
-    description: "Ad keyword dimension"
+  - name: "DIM_KEYWORD"
+    description: "SCD2 keyword dimension with bid tracking (replaces DIM_AD_keyword)"
     type: "dimension"
+    source_files: ["scripts/bigquery/tables/DIM/DIM_KEYWORD.sql"]
+
+  - name: "DIM_CAMPAIGN"
+    description: "SCD2 campaign dimension with budget/strategy tracking"
+    type: "dimension"
+    source_files: ["scripts/bigquery/tables/DIM/DIM_CAMPAIGN.sql"]
+
+  - name: "DIM_AD_GROUP"
+    description: "SCD2 ad group dimension with default bid tracking"
+    type: "dimension"
+    source_files: ["scripts/bigquery/tables/DIM/DIM_AD_GROUP.sql"]
 
   - name: "DIM_BUDGET_CATEGORIES"
     description: "Budget category classifications"
@@ -331,10 +502,21 @@ tables:
     type: "dimension"
 
   - name: "DIM_US_HOLIDAYS"
-    description: "US holiday calendar"
+    description: "US holiday calendar with gift_season peak windows (boost_start, peak_start, holiday_date)"
     type: "dimension"
 
+  - name: "DIM_US_HOLIDAYS_PRODUCT_FAMILY"
+    description: "Maps which gift_season holidays are active per product family. Controls seasonal ROAS forecasting tiers."
+    type: "dimension"
+    source_files: ["scripts/bigquery/tables/DIM_US_HOLIDAYS_PRODUCT_FAMILY.sql"]
+
   # ── FACT_ Fact Tables ──
+  - name: "FACT_ADS_COACH_ACTIONS"
+    description: "Materialized Ads Coach actions (TERM, TARGET, BUDGET, HERO)"
+    type: "fact"
+    source_files: ["scripts/bigquery/tables/FACT_ADS_COACH_ACTIONS.sql"]
+    populated_by: "SP_REFRESH_ADS_COACH_ACTIONS"
+
   - name: "FACT_AMAZON_ADS"
     description: "Amazon Ads performance facts"
     type: "fact"
@@ -387,6 +569,11 @@ tables:
     description: "Search query performance facts"
     type: "fact"
 
+  - name: "FACT_FORECAST_DEMAND"
+    description: "Materialized table for demand forecasting (speeds up shipment planner)"
+    type: "fact"
+    source_files: ["scripts/bigquery/tables/FACT/FACT_FORECAST_DEMAND.sql"]
+
   # ── DE_ Data Entry Tables ──
   - name: "DE_COACH_THRESHOLDS"
     description: "User-editable thresholds for the Ads Coach decision engine, per strategy and product family"
@@ -405,6 +592,11 @@ tables:
     description: "User-entered vendor payment records"
     type: "data_entry"
 
+  - name: "DE_OTHER_PO"
+    description: "User-entered 'Other' Purchase Orders for services like Certifications, Sampling, Photography"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_OTHER_PO.sql"]
+
   - name: "DE_APPROVED_ACTIONS"
     description: "User-approved bid/keyword actions from the Actions page (PENDING → EXPORTED → APPLIED)"
     type: "data_entry"
@@ -414,6 +606,51 @@ tables:
     description: "Logs every bulksheet action uploaded to Amazon, grouped by batch. Used by learning system."
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_BULKSHEET_UPLOADS.sql"]
+
+  - name: "DE_PLAN_STRATEGY"
+    description: "User-saved plan strategies per product family per month. Stores multiplier + target ROAS for Coach integration."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_PLAN_STRATEGY.sql"]
+
+  - name: "DE_PLAN_ADS_TARGETS"
+    description: "Monthly ad-spend & CPC targets per family/channel. Generated by PlanWizard, consumed by Ad Coach. Includes predicted outcomes for feedback loop."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_PLAN_ADS_TARGETS.sql"]
+    dependencies:
+      - DE_PLAN_STRATEGY
+    populated_by: "PlanWizard Step 3 (React → Flask → BigQuery)"
+
+  - name: "DE_FORECAST_SNAPSHOT"
+    description: "Immutable monthly forecast snapshot, written at plan approval time. Used by SP_GENERATE_SALES_DEVIATION_ALERTS to compare actual vs frozen forecast."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_FORECAST_SNAPSHOT.sql"]
+    populated_by: "api_plans_approve (Flask)"
+
+  - name: "DE_SHIPMENT_PLAN"
+    description: "User-saved shipment plans linked to plan strategies. Weekly ship schedule with routing (FBA/AWD), costs, and status tracking."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_SHIPMENT_PLAN.sql"]
+
+  - name: "DE_LIST_OF_VALUES"
+    description: "Generic list of values (LOV) table for dashboard configurations via Data Entry"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_LIST_OF_VALUES.sql"]
+
+  - name: "DE_SCHEDULED_SHIPMENTS"
+    description: "Single-table shipment lifecycle: SUGGESTED → APPROVED → SCHEDULED → SHIPPED. SP_GENERATE_SHIPMENT_PLAN writes SUGGESTED rows (cleared+recreated each run), preserves APPROVED/SCHEDULED/SHIPPED. Carton-rounded via DIM_PRODUCT.package_quantity."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_SCHEDULED_SHIPMENTS.sql"]
+
+  - name: "DE_AWD_SETTINGS"
+    description: "User-approved AWD auto-replenishment targets per ASIN"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_AWD_SETTINGS.sql"]
+
+  - name: "DE_NEW_PRODUCT_MODEL"
+    description: "User-assigned launch model for new products — maps new product to existing product whose first-year sales pattern drives the forecast"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_NEW_PRODUCT_MODEL.sql"]
+
 
   # ── STG_ Staging Tables ──
   - name: "STG_AMAZON_ADS"
@@ -492,6 +729,26 @@ tables:
   - name: "SRC_ACC_SQP_WEEKLY_TEMP"
     description: "Temporary accumulated SQP weekly data"
     type: "source_accumulated"
+
+  - name: "SRC_ACC_PRODUCTS"
+    description: "Accumulated product catalog from Daton CatalogItems + ActiveListingsReport"
+    type: "source_accumulated"
+    source_files: ["scripts/bigquery/tables/SRC_ACC/SRC_ACC_PRODUCTS.sql"]
+
+  - name: "SRC_ACC_SALES_TRAFFIC_DAILY"
+    description: "Accumulated daily sales/traffic from Daton SalesAndTrafficReportByChildASIN"
+    type: "source_accumulated"
+    source_files: ["scripts/bigquery/tables/SRC_ACC/SRC_ACC_SALES_TRAFFIC_DAILY.sql"]
+
+  - name: "SRC_ACC_FEE_PREVIEW"
+    description: "Accumulated fee preview from Daton FeePreviewReport"
+    type: "source_accumulated"
+    source_files: ["scripts/bigquery/tables/SRC_ACC/SRC_ACC_FEE_PREVIEW.sql"]
+
+  - name: "SRC_ACC_REPEAT_PURCHASE"
+    description: "Accumulated repeat purchase from Daton RepeatPurchaseBehaviourReport"
+    type: "source_accumulated"
+    source_files: ["scripts/bigquery/tables/SRC_ACC/SRC_ACC_REPEAT_PURCHASE.sql"]
 
   # ── SRC_ Raw Source Tables ──
   - name: "SRC_BANK_LEUMI_FOREIGN"
@@ -606,6 +863,10 @@ stored_procedures:
     description: "Load Amazon Ads staging from Fivetran views"
     source_files: ["scripts/bigquery/procedures/SP_LOAD_STG_AMAZON_ADS.sql"]
 
+  - name: "SP_REFRESH_ADS_COACH_ACTIONS"
+    description: "Materialize Ads Coach actions into FACT_ADS_COACH_ACTIONS (4 INSERT statements at natural grain)"
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_ADS_COACH_ACTIONS.sql"]
+
   - name: "SP_FACT_AMAZON_ADS"
     description: "Build FACT_AMAZON_ADS from staging"
     source_files: ["scripts/bigquery/procedures/SP_FACT_AMAZON_ADS.sql"]
@@ -642,13 +903,33 @@ stored_procedures:
     description: "Load search query fact table"
     source_files: ["scripts/bigquery/procedures/SP_LOAD_FACT_SEARCH_QUERY.sql"]
 
-  - name: "SP_LOAD_DIM_AD_keyword"
-    description: "Load ad keyword dimension"
-    source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_AD_keyword.sql"]
+  - name: "SP_LOAD_FACT_FORECAST_DEMAND"
+    description: "Materialize V_FORECAST_DEMAND"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_FACT_FORECAST_DEMAND.sql"]
+
+  - name: "SP_LOAD_DIM_KEYWORD"
+    description: "SCD2 load for keyword dimension with bid tracking (replaces SP_LOAD_DIM_AD_keyword)"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_KEYWORD.sql"]
+
+  - name: "SP_LOAD_DIM_CAMPAIGN"
+    description: "SCD2 load for campaign dimension with budget/strategy tracking"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_CAMPAIGN.sql"]
+
+  - name: "SP_LOAD_DIM_AD_GROUP"
+    description: "SCD2 load for ad group dimension with default bid tracking"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_AD_GROUP.sql"]
 
   - name: "SP_LOAD_DIM_COSTS_HISTORY"
     description: "Load SCD2 cost history"
     source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_COSTS_HISTORY.sql"]
+
+  - name: "SP_SRC_ACC_INVENTORY_FBA"
+    description: "Daily accumulation of FBA inventory from Daton → SRC_ACC_INVENTORY_FBA"
+    source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_INVENTORY_FBA.sql"]
+
+  - name: "SP_SRC_ACC_INVENTORY_AWD"
+    description: "Daily accumulation of AWD inventory from Daton → SRC_ACC_INVENTORY_AWD"
+    source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_INVENTORY_AWD.sql"]
 
   - name: "SP_LOAD_FACT_INVENTORY_SNAPSHOT"
     description: "Load inventory snapshot fact"
@@ -685,6 +966,26 @@ stored_procedures:
   - name: "SP_SRC_ACC_SCP_WEEKLY"
     description: "Upserts SCP weekly data from Daton SP-API source based on row count comparison"
     source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_SCP_WEEKLY.sql"]
+
+  - name: "SP_SRC_ACC_PRODUCTS"
+    description: "Load SRC_ACC_PRODUCTS from V_SRC_Products (TRUNCATE + INSERT)"
+    source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_PRODUCTS.sql"]
+    schedule: "daily"
+
+  - name: "SP_SRC_ACC_SALES_TRAFFIC"
+    description: "Load SRC_ACC_SALES_TRAFFIC_DAILY from V_SRC (MERGE)"
+    source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_SALES_TRAFFIC.sql"]
+    schedule: "daily"
+
+  - name: "SP_SRC_ACC_FEE_PREVIEW"
+    description: "Load SRC_ACC_FEE_PREVIEW from V_SRC_FeePreview (TRUNCATE + INSERT)"
+    source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_FEE_PREVIEW.sql"]
+    schedule: "daily"
+
+  - name: "SP_SRC_ACC_REPEAT_PURCHASE"
+    description: "Load SRC_ACC_REPEAT_PURCHASE from V_SRC_Seller_repeat_purchase (MERGE)"
+    source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_REPEAT_PURCHASE.sql"]
+    schedule: "daily"
 
   - name: "SP_PROCESS_BANK_UPLOADS"
     description: "Process bank transaction uploads"
@@ -753,6 +1054,21 @@ stored_procedures:
   - name: "SP_REFRESH_CUBE_TABLES"
     description: "Creates physical snapshot tables (T_*) from logical analytics views (V_*) for fast querying in Cube.js."
     source_files: ["scripts/bigquery/procedures/SP_REFRESH_CUBE_TABLES.sql"]
+
+  - name: "SP_GENERATE_SHIPMENT_PLAN"
+    description: "4-tier cascading shipment allocation engine. Reads V_PLAN_FORECAST demand, deducts APPROVED/SCHEDULED from DE_SCHEDULED_SHIPMENTS, writes SUGGESTED rows back to DE_SCHEDULED_SHIPMENTS. Carton-rounded via DIM_PRODUCT.package_quantity."
+    source_files: ["scripts/bigquery/procedures/SP_GENERATE_SHIPMENT_PLAN.sql"]
+    schedule: "daily"
+
+  - name: "SP_REFRESH_SUGGESTIONS"
+    description: "On-demand Plan page refresh. Runs 6 steps in order: SP_MERGE_PRODUCT_DIM_SMART → SP_SRC_ACC_INVENTORY_FBA → SP_SRC_ACC_INVENTORY_AWD → SP_LOAD_FACT_INVENTORY_SNAPSHOT → SP_LOAD_FACT_FORECAST_DEMAND → SP_GENERATE_SHIPMENT_PLAN."
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_SUGGESTIONS.sql"]
+    schedule: "on-demand (Admin page button)"
+
+  - name: "SP_GENERATE_SALES_DEVIATION_ALERTS"
+    description: "Weekly sales deviation alert generator. Compares actual YTD sales pace vs yearly plan. Creates SALES_DEVIATION alerts in DE_ALERTS when deviation > 20%."
+    source_files: ["scripts/bigquery/procedures/SP_GENERATE_SALES_DEVIATION_ALERTS.sql"]
+    schedule: "weekly (Monday via SP_ORCHESTRATE guard)"
 
 # ═══════════════════════════════════════════════════════════════
 # FUNCTIONS

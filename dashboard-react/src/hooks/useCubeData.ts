@@ -19,6 +19,7 @@ import type {
   SummaryRow,
   ActionRow,
   TrendRow,
+  DailyTrendRow,
   TrendRowByAsin,
   LearningRow,
   ExperimentRow,
@@ -30,14 +31,22 @@ import type {
   ExperimentTemplateRow,
   HolidayRow,
   CoachDecisionRow,
-  CoachTermRow,
+  CoachActionRow,
   CoachCampaignRow,
+  CoachStrategyRow,
   ExperimentEvaluationRow,
   StrategicPrediction,
   BrandStrengthWeeklyRow,
   PhraseNegativeRow,
   ProductCreativeRow,
   HotSignalRow,
+  StorageCostRow,
+  SupplyChainRow,
+  PeakRelevanceRow,
+  SupplyPORow,
+  SupplyPaymentRow,
+  SupplyShipmentRow,
+  SupplyOtherPORow,
 } from '../types';
 
 // In dev, always try Cube via proxy even if env not loaded
@@ -45,22 +54,39 @@ const CUBE_API = import.meta.env.VITE_CUBE_API_URL || (import.meta.env.DEV ? 'ht
 
 type CubeLoadResult = { data: unknown[]; lastRefreshTime?: string; usedPreAggregations?: Record<string, unknown> };
 
-async function cubeLoad(query: object): Promise<unknown[]> {
+export async function cubeLoad(query: object): Promise<unknown[]> {
   const r = await cubeLoadWithMeta(query);
   return r.data;
 }
 
-async function cubeLoadWithMeta(query: object, maxRetries = 20): Promise<CubeLoadResult> {
+export async function cubeLoadWithMeta(query: object, maxRetries = 20): Promise<CubeLoadResult> {
   if (!CUBE_API) return { data: [] };
+  const url = `${CUBE_API}/cubejs-api/v1/load?query=${encodeURIComponent(JSON.stringify(query))}`;
   try {
     let retries = 0;
     while (retries < maxRetries) {
+      const token = localStorage.getItem('dashboard_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const res = await fetch(`${CUBE_API}/cubejs-api/v1/load`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ query }),
       });
-      if (!res.ok) throw new Error(`Cube HTTP ${res.status}`);
+      
+      if (!res.ok) {
+        const text = await res.text();
+        if (res.status === 401 || res.status === 403 || text.includes('Authentication required') || text.includes('Invalid token') || text.includes('Invalid dev token')) {
+          console.warn(`[cubeLoad] Authentication failed (${res.status}). Clearing token.`);
+          localStorage.removeItem('dashboard_token');
+          window.location.href = '/';
+          break;
+        }
+        throw new Error(`Cube HTTP ${res.status}: ${text}`);
+      }
       const json = await res.json();
 
       if (json.error === 'Continue wait') {
@@ -116,6 +142,7 @@ function mapAdsRow(r: Record<string, unknown>): Ads7dRow {
     campaign_name: String(r['Ads.campaignName'] ?? ''),
     campaign_type: r['Ads.campaignType'] != null ? String(r['Ads.campaignType']) : null,
     portfolio_name: null,
+    asin: r['Product.asin'] ? String(r['Product.asin']) : null,
     product_short_name: r['Product.productShortName'] != null ? String(r['Product.productShortName']) : '',
     parent_name: r['Product.parentName'] != null ? String(r['Product.parentName']) : null,
     search_term: r['Ads.searchTerm'] ? String(r['Ads.searchTerm']) : null,
@@ -162,7 +189,7 @@ async function loadAdsFromCube(): Promise<Ads7dRow[]> {
   try {
     const rows = await cubeLoad({
       measures: ['Ads.spend', 'Ads.orders', 'Ads.clicks', 'Ads.impressions', 'Ads.sales', 'Ads.cogs', 'Ads.grossProfit'],
-      dimensions: ['Ads.campaignId', 'Ads.campaignName', 'Ads.campaignType', 'Ads.weekStart', 'Product.productShortName', 'Product.parentName'],
+      dimensions: ['Ads.campaignId', 'Ads.campaignName', 'Ads.campaignType', 'Ads.date', 'Product.asin', 'Product.productShortName', 'Product.parentName'],
       timeDimensions: [{ dimension: 'Ads.date', dateRange: 'Last 180 days' }],
       order: { 'Ads.spend': 'desc' },
       filters: [
@@ -176,7 +203,7 @@ async function loadAdsFromCube(): Promise<Ads7dRow[]> {
     // Fallback: 60-day window with lower limit
     const rows = await cubeLoad({
       measures: ['Ads.spend', 'Ads.orders', 'Ads.clicks', 'Ads.impressions', 'Ads.sales', 'Ads.cogs', 'Ads.grossProfit'],
-      dimensions: ['Ads.campaignId', 'Ads.campaignName', 'Ads.campaignType', 'Ads.weekStart', 'Product.productShortName', 'Product.parentName'],
+      dimensions: ['Ads.campaignId', 'Ads.campaignName', 'Ads.campaignType', 'Ads.date', 'Product.asin', 'Product.productShortName', 'Product.parentName'],
       timeDimensions: [{ dimension: 'Ads.date', dateRange: 'Last 60 days' }],
       order: { 'Ads.spend': 'desc' },
       filters: [
@@ -196,15 +223,16 @@ async function loadSqpFromCube(): Promise<SqpWeeklyRow[]> {
       'Sqp.amazonImpressions', 'Sqp.amazonClicks', 'Sqp.amazonOrders',
       'Sqp.adsImpressions', 'Sqp.adsClicks', 'Sqp.adsOrders',
     ],
-    dimensions: ['Sqp.reportingDate', 'Sqp.asin', 'Sqp.searchQuery', 'Sqp.showRatePct', 'Sqp.estimatedOrganicRank', 'Sqp.organicRankZone', 'Sqp.searchQueryScore', 'Product.productShortName', 'Product.productType'],
-    timeDimensions: [{ dimension: 'Sqp.reportingDate', dateRange: 'Last 56 weeks' }],
-    limit: 50000,
+    dimensions: ['Sqp.reportingDate', 'Sqp.asin', 'Sqp.searchQuery', 'Sqp.showRatePct', 'Sqp.estimatedOrganicRank', 'Sqp.organicRankZone', 'Sqp.searchQueryScore', 'Product.productShortName', 'Product.productType', 'Product.parentName'],
+    timeDimensions: [{ dimension: 'Sqp.reportingDate', dateRange: 'Last 104 weeks' }],
+    limit: 80000,
   });
   return (rows as Record<string, unknown>[]).map(r => {
     const rd = r['Sqp.reportingDate'];
     const weekStart = rd ? addDays(fmtDate(rd), -6) : '';
     return {
       product_type: String(r['Product.productType'] ?? ''),
+      family_name: String(r['Product.parentName'] ?? ''),
       asin: String(r['Sqp.asin'] ?? ''),
       product_short_name: String(r['Product.productShortName'] ?? ''),
       week_start: weekStart,
@@ -231,7 +259,7 @@ async function loadSqpFromCube(): Promise<SqpWeeklyRow[]> {
 async function loadSqpCoverageWeeksFromCube(): Promise<{ week_start: string }[]> {
   const rows = await cubeLoad({
     dimensions: ['Sqp.reportingDate'],
-    timeDimensions: [{ dimension: 'Sqp.reportingDate', dateRange: 'Last 56 weeks' }],
+    timeDimensions: [{ dimension: 'Sqp.reportingDate', dateRange: 'Last 104 weeks' }],
     limit: 500, // max 100 weeks typically
   });
   return (rows as Record<string, unknown>[]).map(r => {
@@ -289,49 +317,52 @@ async function loadUpcomingFromCube(): Promise<UpcomingEvent[]> {
 /** Holidays → peak (next gift_season) */
 async function loadPeakFromCube(): Promise<PeakRow[]> {
   const rows = await cubeLoad({
-    dimensions: ['Holidays.holidayDate', 'Holidays.holidayName', 'Holidays.category', 'Holidays.preSeasonStart'],
+    dimensions: ['Holidays.holidayDate', 'Holidays.holidayName', 'Holidays.category', 'Holidays.preSeasonStart', 'Holidays.boostStart', 'Holidays.peakStart'],
     limit: 50,
   });
   const today = new Date().toISOString().slice(0, 10);
-  const next = (rows as Record<string, unknown>[])
+  const futureHolidays = (rows as Record<string, unknown>[])
     .filter(r => fmtDate(r['Holidays.holidayDate']) > today && String(r['Holidays.category'] ?? '') === 'gift_season')
-    .sort((a, b) => fmtDate(a['Holidays.holidayDate'] as string).localeCompare(fmtDate(b['Holidays.holidayDate'] as string)))[0];
-  if (!next) return [];
-  const holidayDate = fmtDate(next['Holidays.holidayDate']);
-  const preSeasonStart = fmtDate(next['Holidays.preSeasonStart']);
-  const peakStart = preSeasonStart;
-  const peakEnd = addDays(holidayDate, -2);
-  const readinessStart = addDays(preSeasonStart, -120);
-  const prePeakStart = addDays(preSeasonStart, -28);
-  const boostStart = addDays(preSeasonStart, -14);
-  let currentStage = 'READINESS';
-  if (today >= peakEnd) currentStage = 'POST_PEAK';
-  else if (today >= preSeasonStart) currentStage = 'PEAK';
-  else if (today >= boostStart) currentStage = 'PRE_PEAK_BOOST';
-  else if (today >= prePeakStart) currentStage = 'PRE_PEAK';
-  return [{
-    holiday_name: String(next['Holidays.holidayName'] ?? ''),
-    holiday_date: holidayDate,
-    peak_start: peakStart,
-    peak_end: peakEnd,
-    readiness_start: readinessStart,
-    pre_peak_start: prePeakStart,
-    boost_start: boostStart,
-    current_stage: currentStage,
-    days_until_peak_start: daysBetween(today, peakStart),
-  }];
+    .sort((a, b) => fmtDate(a['Holidays.holidayDate'] as string).localeCompare(fmtDate(b['Holidays.holidayDate'] as string)));
+  // Return ALL future holidays — PeakPage picks the first "real peak" via peak_relevance
+  return futureHolidays.map(next => {
+    const holidayDate = fmtDate(next['Holidays.holidayDate']);
+    const preSeasonStart = fmtDate(next['Holidays.preSeasonStart']);
+    const boostStart = fmtDate(next['Holidays.boostStart']) || preSeasonStart;
+    const peakStart = fmtDate(next['Holidays.peakStart']) || boostStart;
+    const peakEnd = addDays(holidayDate, -1);
+    // 3 phases: PRE_SEASON (pre_season_start → boost_start-1), BOOST (boost_start → peak_start-1), PEAK (peak_start → holiday_date-1)
+    let currentStage = 'PRE_SEASON';
+    if (today >= peakEnd) currentStage = 'POST_PEAK';
+    else if (today >= peakStart) currentStage = 'PEAK';
+    else if (today >= boostStart) currentStage = 'PRE_PEAK_BOOST';
+    else if (today >= preSeasonStart) currentStage = 'PRE_SEASON';
+    return {
+      holiday_name: String(next['Holidays.holidayName'] ?? ''),
+      holiday_date: holidayDate,
+      peak_start: peakStart,
+      peak_end: peakEnd,
+      readiness_start: preSeasonStart,
+      pre_peak_start: preSeasonStart,
+      boost_start: boostStart,
+      current_stage: currentStage,
+      days_until_peak_start: daysBetween(today, peakStart),
+    };
+  });
 }
 
 /** All holidays (past + future) for YoY phase comparison */
 async function loadAllHolidaysFromCube(): Promise<HolidayRow[]> {
   const rows = await cubeLoad({
-    dimensions: ['Holidays.holidayDate', 'Holidays.holidayName', 'Holidays.category', 'Holidays.preSeasonStart', 'Holidays.rampUpDays'],
+    dimensions: ['Holidays.holidayDate', 'Holidays.holidayName', 'Holidays.category', 'Holidays.preSeasonStart', 'Holidays.boostStart', 'Holidays.peakStart', 'Holidays.rampUpDays'],
     limit: 200,
   });
   return (rows as Record<string, unknown>[]).map(r => ({
     holiday_name: String(r['Holidays.holidayName'] ?? ''),
     holiday_date: fmtDate(r['Holidays.holidayDate']),
     pre_season_start: fmtDate(r['Holidays.preSeasonStart']),
+    boost_start: fmtDate(r['Holidays.boostStart']) || fmtDate(r['Holidays.preSeasonStart']),
+    peak_start: fmtDate(r['Holidays.peakStart']) || fmtDate(r['Holidays.boostStart']) || fmtDate(r['Holidays.preSeasonStart']),
     category: String(r['Holidays.category'] ?? ''),
     ramp_up_days: r['Holidays.rampUpDays'] != null ? Number(r['Holidays.rampUpDays']) : undefined,
   })).filter(r => r.holiday_date && r.holiday_name);
@@ -413,8 +444,12 @@ async function loadProductCreativesFromCube(): Promise<ProductCreativeRow[]> {
 /** Product + CostsHistory → products */
 async function loadProductsFromCube(): Promise<ProductRow[]> {
   const [productRows, costRows] = await Promise.all([
-    cubeLoad({ dimensions: ['Product.asin', 'Product.productShortName', 'Product.productType'], limit: 5000 }),
-    cubeLoad({ dimensions: ['CostsHistory.asin', 'CostsHistory.costOfGoods', 'CostsHistory.shippingCost', 'CostsHistory.fbaCost', 'CostsHistory.totalCostPerUnit', 'CostsHistory.pickPackFee', 'CostsHistory.referralFee'], limit: 5000 }),
+    cubeLoad({ dimensions: ['Product.asin', 'Product.productShortName', 'Product.productType', 'Product.parentName', 'Product.packageQuantity', 'Product.manufactureDay', 'Product.shipmentDays', 'Product.packageCubicFeet'], limit: 5000 }),
+    cubeLoad({ 
+      dimensions: ['CostsHistory.asin', 'CostsHistory.costOfGoods', 'CostsHistory.shippingCost', 'CostsHistory.fbaCost', 'CostsHistory.totalCostPerUnit', 'CostsHistory.pickPackFee', 'CostsHistory.referralFee'], 
+      filters: [{ member: 'CostsHistory.endDate', operator: 'notSet' }],
+      limit: 5000 
+    }),
   ]);
   const costByAsin = new Map<string, { cogs: number; shipping: number; fba: number; total: number; pickPack: number; referral: number }>();
   for (const r of costRows as Record<string, unknown>[]) {
@@ -435,12 +470,17 @@ async function loadProductsFromCube(): Promise<ProductRow[]> {
       asin,
       product_short_name: String(r['Product.productShortName'] ?? ''),
       product_type: String(r['Product.productType'] ?? ''),
+      family_name: String(r['Product.parentName'] ?? ''),
       cogs: costs?.cogs ?? 0,
       shipping_cost: costs?.shipping ?? 0,
       fba_cost: costs?.fba ?? 0,
       total_cost_per_unit: costs?.total ?? 0,
       pick_pack_fee: costs?.pickPack ?? 0,
       referral_fee: costs?.referral ?? 0,
+      package_quantity: r['Product.packageQuantity'] != null ? Number(r['Product.packageQuantity']) : null,
+      manufacture_day: r['Product.manufactureDay'] != null ? Number(r['Product.manufactureDay']) : null,
+      shipment_days: r['Product.shipmentDays'] != null ? Number(r['Product.shipmentDays']) : null,
+      package_cubic_feet: r['Product.packageCubicFeet'] != null ? Number(r['Product.packageCubicFeet']) : null,
     };
   });
 }
@@ -456,8 +496,8 @@ async function loadDataFreshnessFromCube(): Promise<{ ads_max_date?: string; per
     const src = String(r['DataFreshness.source'] ?? '');
     const md = r['DataFreshness.maxDate'];
     const iso = md ? String(md).slice(0, 10) : '';
-    if (src === 'ads' && iso) out.ads_max_date = iso;
-    if (src === 'perf' && iso) out.performance_max_date = iso;
+    if ((src === 'ads' || src === 'FACT_AMAZON_ADS') && iso) out.ads_max_date = iso;
+    if ((src === 'perf' || src === 'FACT_AMAZON_PERFORMANCE_DAILY') && iso) out.performance_max_date = iso;
   }
   return out;
 }
@@ -482,7 +522,7 @@ async function loadSummaryFromCube(): Promise<SummaryRow[]> {
       'Summary.netRoas', 'Summary.organicPct', 'Summary.salesPrev7d', 'Summary.adCostPrev7d', 'Summary.cogsPrev7d',
       'Summary.netProfitPrev7d', 'Summary.ordersPrev7d', 'Summary.organicUnitsPrev7d',
       'Summary.netRoasPrev', 'Summary.organicPctPrev', 'Summary.salesChangePct', 'Summary.costChangePct',
-      'Summary.periodStart', 'Summary.periodEnd', 'Summary.units7d',
+      'Summary.periodStart', 'Summary.periodEnd', 'Summary.units7d', 'Summary.colorHex',
     ],
     limit: 20,
   });
@@ -492,6 +532,7 @@ async function loadSummaryFromCube(): Promise<SummaryRow[]> {
   }
   return (arr as Record<string, unknown>[]).map(r => ({
     product_type: String(r['Summary.productType'] ?? ''),
+    color_hex: String(r['Summary.colorHex'] ?? '#666666'),
     sales_7d: Number(r['Summary.sales7d'] ?? 0),
     ad_cost_7d: Number(r['Summary.adCost7d'] ?? 0),
     cogs_7d: Number(r['Summary.cogs7d'] ?? 0),
@@ -520,87 +561,6 @@ async function loadSummaryFromCube(): Promise<SummaryRow[]> {
 }
 
 /** ExperimentTermRecommendations → actions (includes KEEP; excludes MONITOR for performance) */
-async function loadActionsFromCube(): Promise<ActionRow[]> {
-  const rows = await cubeLoad({
-    dimensions: [
-      'ExperimentTermRecommendations.action', 'ExperimentTermRecommendations.adsSignal', 'ExperimentTermRecommendations.reason',
-      'ExperimentTermRecommendations.searchTerm', 'ExperimentTermRecommendations.experimentId',
-      'ExperimentTermRecommendations.productShortName', 'ExperimentTermRecommendations.heroAsin', 'ExperimentTermRecommendations.isHeroMatch',
-      'ExperimentTermRecommendations.adsSpend', 'ExperimentTermRecommendations.adsOrders', 'ExperimentTermRecommendations.adsClicks', 'ExperimentTermRecommendations.adsClicksRecent',
-      'ExperimentTermRecommendations.cpc', 'ExperimentTermRecommendations.adsCvrPct', 'ExperimentTermRecommendations.marginPerUnit',
-      'ExperimentTermRecommendations.marketWeeklyOrders', 'ExperimentTermRecommendations.yourOrdersSharePct',
-      'ExperimentTermRecommendations.priorityScore', 'ExperimentTermRecommendations.strategyId', 'ExperimentTermRecommendations.adsNetRoas',
-      'ExperimentTermRecommendations.weightedTotalNetRoas',
-      'ExperimentTermRecommendations.campaignId', 'ExperimentTermRecommendations.campaignName',
-      'ExperimentTermRecommendations.campaignType',
-      'ExperimentTermRecommendations.adGroupId', 'ExperimentTermRecommendations.portfolioName',
-      'ExperimentTermRecommendations.heroAction', 'ExperimentTermRecommendations.heroActionExplanation',
-      'ExperimentTermRecommendations.negateAs', 'ExperimentTermRecommendations.actionExplanation',
-      'ExperimentTermRecommendations.heroProductName', 'ExperimentTermRecommendations.heroNetRoas',
-      'ExperimentTermRecommendations.heroTotalOrders', 'ExperimentTermRecommendations.heroAdsCtrPct',
-      'ExperimentTermRecommendations.sqpSearchVolume',
-      'ExperimentTermRecommendations.sqpOrganicRank', 'ExperimentTermRecommendations.isTopOfPageOrganic',
-      'ExperimentTermRecommendations.decisionTrace',
-    ],
-    limit: 10000,
-  });
-
-  return (rows as Record<string, unknown>[]).map(r => ({
-    search_term: String(r['ExperimentTermRecommendations.searchTerm'] ?? ''),
-    product_short_name: String(r['ExperimentTermRecommendations.productShortName'] ?? ''),
-    asin: String(r['ExperimentTermRecommendations.asin'] ?? ''),
-    experiment_id: String(r['ExperimentTermRecommendations.experimentId'] ?? ''),
-    strategy_id: String(r['ExperimentTermRecommendations.strategyId'] ?? ''),
-    campaign_id: String(r['ExperimentTermRecommendations.campaignId'] ?? ''),
-    ad_group_id: String(r['ExperimentTermRecommendations.adGroupId'] ?? ''),
-    campaign_name: String(r['ExperimentTermRecommendations.campaignName'] ?? ''),
-    campaign_type: String(r['ExperimentTermRecommendations.campaignType'] ?? 'SP'),
-    portfolio_name: String(r['ExperimentTermRecommendations.portfolioName'] ?? 'Unassigned'),
-    hero_asin: String(r['ExperimentTermRecommendations.heroAsin'] ?? ''),
-    is_hero_match: Boolean(r['ExperimentTermRecommendations.isHeroMatch']),
-    action: String(r['ExperimentTermRecommendations.action'] ?? ''),
-    reason: String(r['ExperimentTermRecommendations.reason'] ?? ''),
-    priority_score: Number(r['ExperimentTermRecommendations.priorityScore'] ?? 0),
-    ads_signal: String(r['ExperimentTermRecommendations.adsSignal'] ?? ''),
-    spend: Number(r['ExperimentTermRecommendations.adsSpend'] ?? 0),
-    orders: Number(r['ExperimentTermRecommendations.adsOrders'] ?? 0),
-    clicks: Number(r['ExperimentTermRecommendations.adsClicks'] ?? 0),
-    ads_clicks_recent: Number(r['ExperimentTermRecommendations.adsClicksRecent'] ?? 0),
-    cpc: Number(r['ExperimentTermRecommendations.cpc'] ?? 0),
-    conv_rate: Number(r['ExperimentTermRecommendations.adsCvrPct'] ?? 0),
-    net_roas: Number(r['ExperimentTermRecommendations.adsNetRoas'] ?? 0),
-    margin_per_unit: Number(r['ExperimentTermRecommendations.marginPerUnit'] ?? 0),
-    market_volume: Number(r['ExperimentTermRecommendations.marketWeeklyOrders'] ?? 0),
-    impression_share: Number(r['ExperimentTermRecommendations.yourOrdersSharePct'] ?? 0),
-    // dual-grain: not available from ExperimentTermRecommendations
-    targeting: null,
-    keyword_id: null,
-    target_action: null,
-    effective_roas: null,
-    weighted_total_net_roas: r['ExperimentTermRecommendations.weightedTotalNetRoas'] != null ? Number(r['ExperimentTermRecommendations.weightedTotalNetRoas']) : null,
-    target_net_roas_8w: null,
-    target_clicks_8w: null,
-    target_orders_8w: null,
-    target_spend_8w: null,
-    current_bid: null,
-    recommended_bid: null,
-    match_type: null,
-    // Hero & explanation columns
-    hero_product_name: r['ExperimentTermRecommendations.heroProductName'] ? String(r['ExperimentTermRecommendations.heroProductName']) : null,
-    hero_action: r['ExperimentTermRecommendations.heroAction'] ? String(r['ExperimentTermRecommendations.heroAction']) : null,
-    hero_action_explanation: r['ExperimentTermRecommendations.heroActionExplanation'] ? String(r['ExperimentTermRecommendations.heroActionExplanation']) : null,
-    hero_net_roas: r['ExperimentTermRecommendations.heroNetRoas'] != null ? Number(r['ExperimentTermRecommendations.heroNetRoas']) : null,
-    hero_total_orders: r['ExperimentTermRecommendations.heroTotalOrders'] != null ? Number(r['ExperimentTermRecommendations.heroTotalOrders']) : null,
-    hero_ads_ctr_pct: r['ExperimentTermRecommendations.heroAdsCtrPct'] != null ? Number(r['ExperimentTermRecommendations.heroAdsCtrPct']) : null,
-    negate_as: r['ExperimentTermRecommendations.negateAs'] ? String(r['ExperimentTermRecommendations.negateAs']) : null,
-    action_explanation: r['ExperimentTermRecommendations.actionExplanation'] ? String(r['ExperimentTermRecommendations.actionExplanation']) : null,
-    weighted_total_net_roas_dim: r['ExperimentTermRecommendations.weightedTotalNetRoas'] != null ? Number(r['ExperimentTermRecommendations.weightedTotalNetRoas']) : null,
-    sqp_search_volume: Number(r['ExperimentTermRecommendations.sqpSearchVolume'] ?? 0),
-    sqp_organic_rank: r['ExperimentTermRecommendations.sqpOrganicRank'] != null ? Number(r['ExperimentTermRecommendations.sqpOrganicRank']) : null,
-    is_top_of_page_organic: Boolean(r['ExperimentTermRecommendations.isTopOfPageOrganic']),
-    decision_trace: (() => { try { const raw = r['ExperimentTermRecommendations.decisionTrace']; return raw ? JSON.parse(String(raw)) : null; } catch { return null; } })(),
-  })).sort((a, b) => b.priority_score - a.priority_score);
-}
 
 /** CoachHotSignals → 3-day rapid-reaction ads alerts */
 async function loadHotSignalsFromCube(): Promise<HotSignalRow[]> {
@@ -622,6 +582,8 @@ async function loadHotSignalsFromCube(): Promise<HotSignalRow[]> {
       'CoachHotSignals.coach8wSignal',
       'CoachHotSignals.priorityScore', 'CoachHotSignals.daysWithData',
       'CoachHotSignals.sqpSearchVolume4w', 'CoachHotSignals.sqpOrganicRank',
+      'CoachHotSignals.currentBid', 'CoachHotSignals.recommendedBid',
+      'CoachHotSignals.keywordId', 'CoachHotSignals.keywordText',
     ],
     limit: 500,
   });
@@ -656,13 +618,271 @@ async function loadHotSignalsFromCube(): Promise<HotSignalRow[]> {
     sqp_search_volume_4w: Number(r['CoachHotSignals.sqpSearchVolume4w'] ?? 0),
     sqp_organic_rank: r['CoachHotSignals.sqpOrganicRank'] != null ? Number(r['CoachHotSignals.sqpOrganicRank']) : null,
     days_with_data: Number(r['CoachHotSignals.daysWithData'] ?? 0),
+    current_bid: r['CoachHotSignals.currentBid'] != null ? Number(r['CoachHotSignals.currentBid']) : null,
+    recommended_bid: r['CoachHotSignals.recommendedBid'] != null ? Number(r['CoachHotSignals.recommendedBid']) : null,
+    keyword_id: r['CoachHotSignals.keywordId'] ? String(r['CoachHotSignals.keywordId']) : null,
+    keyword_text: r['CoachHotSignals.keywordText'] ? String(r['CoachHotSignals.keywordText']) : null,
   })).sort((a, b) => b.priority_score - a.priority_score);
+}
+
+/** StorageCost → storage_costs (weekly FBA+AWD storage by product family) */
+async function loadStorageCostsFromCube(): Promise<StorageCostRow[]> {
+  const rows = await cubeLoad({
+    measures: ['StorageCost.totalStorageCost'],
+    dimensions: ['StorageCost.weekStartDate', 'StorageCost.productType', 'StorageCost.asin'],
+    limit: 5000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    week_start_date: fmtDate(r['StorageCost.weekStartDate']),
+    product_type: String(r['StorageCost.productType'] ?? ''),
+    asin: r['StorageCost.asin'] ? String(r['StorageCost.asin']) : undefined,
+    weekly_storage_cost: Number(r['StorageCost.totalStorageCost'] ?? 0),
+  }));
+}
+
+/** SupplyChain → supply_chain (per-ASIN supply chain health) */
+async function loadSupplyChainFromCube(): Promise<SupplyChainRow[]> {
+  const coreDims = [
+    'SupplyChain.asin', 'SupplyChain.productShortName', 'SupplyChain.productType',
+    'SupplyChain.sellableQty', 'SupplyChain.fbaStockQty', 'SupplyChain.awdStockQty', 'SupplyChain.inTransitQty', 'SupplyChain.totalAvailableQty',
+    'SupplyChain.dailyVelocity', 'SupplyChain.daysOfCoverage', 'SupplyChain.fbaDaysOfCoverage', 'SupplyChain.awdDaysOfCoverage',
+    'SupplyChain.nextShipmentDate', 'SupplyChain.daysToNextShipment', 'SupplyChain.nextShipmentQty',
+    'SupplyChain.awdTargetMin', 'SupplyChain.awdTargetMax',
+    'SupplyChain.awdApprovedMin', 'SupplyChain.awdApprovedMax', 'SupplyChain.awdDiffPct',
+  ];
+
+  // Always load core data first (guaranteed to work)
+  const rawRows = await cubeLoad({ dimensions: coreDims, limit: 500 }) as Record<string, unknown>[];
+
+  // Try loading forecast dimensions separately (cubeLoad returns [] on error, never throws)
+  const forecastMap: Record<string, { last30: number; last30Planned: number; next30: number; next31_60: number; next61_90: number }> = {};
+  const fRows = await cubeLoad({
+    dimensions: [
+      'SupplyChain.asin',
+      'SupplyChain.last30dSold', 'SupplyChain.last30dPlanned',
+      'SupplyChain.next30dPlanned', 'SupplyChain.next3160dPlanned', 'SupplyChain.next6190dPlanned',
+    ],
+    limit: 500,
+  }) as Record<string, unknown>[];
+  if (fRows.length > 0) {
+    fRows.forEach(r => {
+      const asin = String(r['SupplyChain.asin'] ?? '');
+      if (asin) forecastMap[asin] = {
+        last30: Number(r['SupplyChain.last30dSold'] ?? 0),
+        last30Planned: Number(r['SupplyChain.last30dPlanned'] ?? 0),
+        next30: Number(r['SupplyChain.next30dPlanned'] ?? 0),
+        next31_60: Number(r['SupplyChain.next3160dPlanned'] ?? 0),
+        next61_90: Number(r['SupplyChain.next6190dPlanned'] ?? 0),
+      };
+    });
+  }
+
+  return rawRows.map(r => {
+    const asin = String(r['SupplyChain.asin'] ?? '');
+    const fc = forecastMap[asin];
+    return {
+      asin,
+      product_short_name: String(r['SupplyChain.productShortName'] ?? ''),
+      product_type: String(r['SupplyChain.productType'] ?? ''),
+      sellable_qty: Number(r['SupplyChain.sellableQty'] ?? 0),
+      fba_stock_qty: Number(r['SupplyChain.fbaStockQty'] ?? 0),
+      awd_stock_qty: Number(r['SupplyChain.awdStockQty'] ?? 0),
+      in_transit_qty: Number(r['SupplyChain.inTransitQty'] ?? 0),
+      total_available_qty: Number(r['SupplyChain.totalAvailableQty'] ?? 0),
+      daily_velocity: Number(r['SupplyChain.dailyVelocity'] ?? 0),
+      days_of_coverage: r['SupplyChain.daysOfCoverage'] != null ? Number(r['SupplyChain.daysOfCoverage']) : null,
+      fba_days_of_coverage: r['SupplyChain.fbaDaysOfCoverage'] != null ? Number(r['SupplyChain.fbaDaysOfCoverage']) : null,
+      awd_days_of_coverage: r['SupplyChain.awdDaysOfCoverage'] != null ? Number(r['SupplyChain.awdDaysOfCoverage']) : null,
+      next_shipment_date: r['SupplyChain.nextShipmentDate'] ? fmtDate(r['SupplyChain.nextShipmentDate']) : null,
+      days_to_next_shipment: r['SupplyChain.daysToNextShipment'] != null ? Number(r['SupplyChain.daysToNextShipment']) : null,
+      next_shipment_qty: r['SupplyChain.nextShipmentQty'] != null ? Number(r['SupplyChain.nextShipmentQty']) : null,
+      awd_target_min: r['SupplyChain.awdTargetMin'] != null ? Number(r['SupplyChain.awdTargetMin']) : null,
+      awd_target_max: r['SupplyChain.awdTargetMax'] != null ? Number(r['SupplyChain.awdTargetMax']) : null,
+      awd_approved_min: r['SupplyChain.awdApprovedMin'] != null ? Number(r['SupplyChain.awdApprovedMin']) : null,
+      awd_approved_max: r['SupplyChain.awdApprovedMax'] != null ? Number(r['SupplyChain.awdApprovedMax']) : null,
+      awd_diff_pct: r['SupplyChain.awdDiffPct'] != null ? Number(r['SupplyChain.awdDiffPct']) : null,
+      last_30d_sold: fc?.last30 ?? 0,
+      last_30d_planned: fc?.last30Planned ?? 0,
+      next_30d_planned: fc?.next30 ?? 0,
+      next_31_60d_planned: fc?.next31_60 ?? 0,
+      next_61_90d_planned: fc?.next61_90 ?? 0,
+    };
+  });
+}
+
+/** PurchaseOrdersDashboard → supply_pos */
+async function loadSupplyPOsFromCube(): Promise<SupplyPORow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'PurchaseOrdersDashboard.purchaseOrderId', 'PurchaseOrdersDashboard.orderDate',
+      'PurchaseOrdersDashboard.expectedReadyDate',
+      'PurchaseOrdersDashboard.manufacturerName', 'PurchaseOrdersDashboard.productName',
+      'PurchaseOrdersDashboard.productAsin', 'PurchaseOrdersDashboard.productId', 'PurchaseOrdersDashboard.quantity',
+      'PurchaseOrdersDashboard.readyQuantity',
+      'PurchaseOrdersDashboard.totalAmountDim', 'PurchaseOrdersDashboard.totalPaidDim',
+      'PurchaseOrdersDashboard.unpaidManufacturer', 'PurchaseOrdersDashboard.totalShipmentCost',
+      'PurchaseOrdersDashboard.paidShipmentCost', 'PurchaseOrdersDashboard.unpaidShipment',
+      'PurchaseOrdersDashboard.totalUnpaidDim', 'PurchaseOrdersDashboard.totalQuantityShipped',
+      'PurchaseOrdersDashboard.remainingToShip', 'PurchaseOrdersDashboard.estimatedShipmentCost',
+      'PurchaseOrdersDashboard.paymentStatus', 'PurchaseOrdersDashboard.isOpen',
+      'PurchaseOrdersDashboard.currency', 'PurchaseOrdersDashboard.notes',
+    ],
+    limit: 500,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    purchase_order_id: String(r['PurchaseOrdersDashboard.purchaseOrderId'] ?? ''),
+    order_date: fmtDate(r['PurchaseOrdersDashboard.orderDate']),
+    expected_ready_date: r['PurchaseOrdersDashboard.expectedReadyDate'] ? fmtDate(r['PurchaseOrdersDashboard.expectedReadyDate']) : null,
+    manufacturer_name: String(r['PurchaseOrdersDashboard.manufacturerName'] ?? ''),
+    product_name: String(r['PurchaseOrdersDashboard.productName'] ?? ''),
+    product_asin: String(r['PurchaseOrdersDashboard.productAsin'] ?? ''),
+    product_id: String(r['PurchaseOrdersDashboard.productId'] ?? ''),
+    quantity: Number(r['PurchaseOrdersDashboard.quantity'] ?? 0),
+    ready_quantity: Number(r['PurchaseOrdersDashboard.readyQuantity'] ?? 0),
+    total_amount: Number(r['PurchaseOrdersDashboard.totalAmountDim'] ?? 0),
+    total_paid: Number(r['PurchaseOrdersDashboard.totalPaidDim'] ?? 0),
+    unpaid_manufacturer: Number(r['PurchaseOrdersDashboard.unpaidManufacturer'] ?? 0),
+    total_shipment_cost: Number(r['PurchaseOrdersDashboard.totalShipmentCost'] ?? 0),
+    paid_shipment_cost: Number(r['PurchaseOrdersDashboard.paidShipmentCost'] ?? 0),
+    unpaid_shipment: Number(r['PurchaseOrdersDashboard.unpaidShipment'] ?? 0),
+    total_unpaid: Number(r['PurchaseOrdersDashboard.totalUnpaidDim'] ?? 0),
+    total_quantity_shipped: Number(r['PurchaseOrdersDashboard.totalQuantityShipped'] ?? 0),
+    remaining_to_ship: Number(r['PurchaseOrdersDashboard.remainingToShip'] ?? 0),
+    estimated_shipment_cost: r['PurchaseOrdersDashboard.estimatedShipmentCost'] != null ? Number(r['PurchaseOrdersDashboard.estimatedShipmentCost']) : null,
+    payment_status: String(r['PurchaseOrdersDashboard.paymentStatus'] ?? ''),
+    is_open: r['PurchaseOrdersDashboard.isOpen'] === true || r['PurchaseOrdersDashboard.isOpen'] === 'true',
+    currency: String(r['PurchaseOrdersDashboard.currency'] ?? 'USD'),
+    notes: r['PurchaseOrdersDashboard.notes'] ? String(r['PurchaseOrdersDashboard.notes']) : null,
+  }));
+}
+
+/** VendorPaymentsDashboard → supply_payments (aggregated by date/vendor/payment_id) */
+async function loadSupplyPaymentsFromCube(): Promise<SupplyPaymentRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'VendorPaymentsDashboard.paymentId',
+      'VendorPaymentsDashboard.paymentDate', 'VendorPaymentsDashboard.paymentAmount',
+      'VendorPaymentsDashboard.bankFee', 'VendorPaymentsDashboard.totalAmountDim',
+      'VendorPaymentsDashboard.currency',
+      'VendorPaymentsDashboard.paymentMethod', 'VendorPaymentsDashboard.vendorName',
+      'VendorPaymentsDashboard.purchaseOrderIds', 'VendorPaymentsDashboard.shipmentIds',
+      'VendorPaymentsDashboard.notes',
+    ],
+    limit: 1000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    payment_id: String(r['VendorPaymentsDashboard.paymentId'] ?? ''),
+    payment_date: fmtDate(r['VendorPaymentsDashboard.paymentDate']),
+    payment_amount: Number(r['VendorPaymentsDashboard.paymentAmount'] ?? 0),
+    bank_fee: Number(r['VendorPaymentsDashboard.bankFee'] ?? 0),
+    total_amount: Number(r['VendorPaymentsDashboard.totalAmountDim'] ?? 0),
+    currency: String(r['VendorPaymentsDashboard.currency'] ?? 'USD'),
+    payment_method: String(r['VendorPaymentsDashboard.paymentMethod'] ?? ''),
+    vendor_name: String(r['VendorPaymentsDashboard.vendorName'] ?? ''),
+    purchase_order_id: r['VendorPaymentsDashboard.purchaseOrderIds'] ? String(r['VendorPaymentsDashboard.purchaseOrderIds']) : null,
+    shipment_id: r['VendorPaymentsDashboard.shipmentIds'] ? String(r['VendorPaymentsDashboard.shipmentIds']) : null,
+    notes: r['VendorPaymentsDashboard.notes'] ? String(r['VendorPaymentsDashboard.notes']) : null,
+  }));
+}
+
+/** ShipmentsDashboard → supply_shipments */
+async function loadSupplyShipmentsFromCube(): Promise<SupplyShipmentRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'ShipmentsDashboard.shipmentId', 'ShipmentsDashboard.shipmentDate',
+      'ShipmentsDashboard.estimatedArrivalDate', 'ShipmentsDashboard.trackingNumber',
+      'ShipmentsDashboard.shipmentType', 'ShipmentsDashboard.totalQuantity',
+      'ShipmentsDashboard.costShipped', 'ShipmentsDashboard.isPaid',
+      'ShipmentsDashboard.paidDate', 'ShipmentsDashboard.shipmentStatus',
+      'ShipmentsDashboard.notes', 'ShipmentsDashboard.lineCount',
+      'ShipmentsDashboard.totalAllocatedCost', 'ShipmentsDashboard.totalQuantityShipped',
+      'ShipmentsDashboard.productsList', 'ShipmentsDashboard.unpaidToShipment',
+      'ShipmentsDashboard.isOpen',
+    ],
+    limit: 500,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    shipment_id: String(r['ShipmentsDashboard.shipmentId'] ?? ''),
+    shipment_date: fmtDate(r['ShipmentsDashboard.shipmentDate']),
+    estimated_arrival_date: r['ShipmentsDashboard.estimatedArrivalDate'] ? fmtDate(r['ShipmentsDashboard.estimatedArrivalDate']) : null,
+    tracking_number: r['ShipmentsDashboard.trackingNumber'] ? String(r['ShipmentsDashboard.trackingNumber']) : null,
+    shipment_type: String(r['ShipmentsDashboard.shipmentType'] ?? ''),
+    total_quantity: Number(r['ShipmentsDashboard.totalQuantity'] ?? 0),
+    cost_shipped: Number(r['ShipmentsDashboard.costShipped'] ?? 0),
+    is_paid: r['ShipmentsDashboard.isPaid'] === true || r['ShipmentsDashboard.isPaid'] === 'true',
+    paid_date: r['ShipmentsDashboard.paidDate'] ? fmtDate(r['ShipmentsDashboard.paidDate']) : null,
+    shipment_status: String(r['ShipmentsDashboard.shipmentStatus'] ?? ''),
+    notes: r['ShipmentsDashboard.notes'] ? String(r['ShipmentsDashboard.notes']) : null,
+    line_count: Number(r['ShipmentsDashboard.lineCount'] ?? 0),
+    total_allocated_cost: Number(r['ShipmentsDashboard.totalAllocatedCost'] ?? 0),
+    total_quantity_shipped: Number(r['ShipmentsDashboard.totalQuantityShipped'] ?? 0),
+    products_list: String(r['ShipmentsDashboard.productsList'] ?? ''),
+    unpaid_to_shipment: Number(r['ShipmentsDashboard.unpaidToShipment'] ?? 0),
+    is_open: r['ShipmentsDashboard.isOpen'] === true || r['ShipmentsDashboard.isOpen'] === 'true',
+  }));
+}
+
+/** PeakRelevance → peak_relevance (per family per holiday) */
+async function loadPeakRelevanceFromCube(): Promise<PeakRelevanceRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'PeakRelevance.holidayName', 'PeakRelevance.holidayDate',
+      'PeakRelevance.family', 'PeakRelevance.isRelevantPeak',
+      'PeakRelevance.confidence', 'PeakRelevance.coachRecommendation',
+      'PeakRelevance.reason', 'PeakRelevance.ordersChangePct',
+      'PeakRelevance.unitsChangePct', 'PeakRelevance.salesChangePct',
+      'PeakRelevance.netRoasDelta', 'PeakRelevance.baselineAvgDailyOrders',
+      'PeakRelevance.peakAvgDailyOrders', 'PeakRelevance.baselineNetRoas',
+      'PeakRelevance.peakNetRoas',
+    ],
+    limit: 5000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    holiday_name: String(r['PeakRelevance.holidayName'] ?? ''),
+    holiday_date: fmtDate(r['PeakRelevance.holidayDate']),
+    family: String(r['PeakRelevance.family'] ?? ''),
+    is_relevant_peak: r['PeakRelevance.isRelevantPeak'] === true || r['PeakRelevance.isRelevantPeak'] === 'true',
+    confidence: String(r['PeakRelevance.confidence'] ?? ''),
+    coach_recommendation: String(r['PeakRelevance.coachRecommendation'] ?? ''),
+    reason: String(r['PeakRelevance.reason'] ?? ''),
+    orders_change_pct: r['PeakRelevance.ordersChangePct'] != null ? Number(r['PeakRelevance.ordersChangePct']) : null,
+    units_change_pct: r['PeakRelevance.unitsChangePct'] != null ? Number(r['PeakRelevance.unitsChangePct']) : null,
+    sales_change_pct: r['PeakRelevance.salesChangePct'] != null ? Number(r['PeakRelevance.salesChangePct']) : null,
+    net_roas_delta: r['PeakRelevance.netRoasDelta'] != null ? Number(r['PeakRelevance.netRoasDelta']) : null,
+    baseline_avg_daily_orders: r['PeakRelevance.baselineAvgDailyOrders'] != null ? Number(r['PeakRelevance.baselineAvgDailyOrders']) : null,
+    peak_avg_daily_orders: r['PeakRelevance.peakAvgDailyOrders'] != null ? Number(r['PeakRelevance.peakAvgDailyOrders']) : null,
+    baseline_net_roas: r['PeakRelevance.baselineNetRoas'] != null ? Number(r['PeakRelevance.baselineNetRoas']) : null,
+    peak_net_roas: r['PeakRelevance.peakNetRoas'] != null ? Number(r['PeakRelevance.peakNetRoas']) : null,
+  }));
+}
+
+/** FamilyOccasionMap → family_occasions (seasonal detection per family) */
+async function loadFamilyOccasionsFromCube(): Promise<import('../types').FamilyOccasionRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'FamilyOccasionMap.parentName', 'FamilyOccasionMap.occasion',
+      'FamilyOccasionMap.liftRatio', 'FamilyOccasionMap.peakDailyOrders',
+      'FamilyOccasionMap.offSeasonDailyOrders', 'FamilyOccasionMap.rankByLift',
+      'FamilyOccasionMap.isPrimary', 'FamilyOccasionMap.isOverride',
+    ],
+    limit: 500,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    parent_name: String(r['FamilyOccasionMap.parentName'] ?? ''),
+    occasion: String(r['FamilyOccasionMap.occasion'] ?? ''),
+    lift_ratio: Number(r['FamilyOccasionMap.liftRatio'] ?? 0),
+    peak_daily_orders: Number(r['FamilyOccasionMap.peakDailyOrders'] ?? 0),
+    off_season_daily_orders: Number(r['FamilyOccasionMap.offSeasonDailyOrders'] ?? 0),
+    rank_by_lift: Number(r['FamilyOccasionMap.rankByLift'] ?? 0),
+    is_primary: r['FamilyOccasionMap.isPrimary'] === true || r['FamilyOccasionMap.isPrimary'] === 'true',
+    is_override: r['FamilyOccasionMap.isOverride'] === true || r['FamilyOccasionMap.isOverride'] === 'true',
+  }));
 }
 
 /** WeeklyTrends → weekly_trends (via UnifiedPerformance) */
 async function loadWeeklyTrendsFromCube(): Promise<TrendRow[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.weekStart'],
     limit: 5000,
   });
@@ -677,6 +897,7 @@ async function loadWeeklyTrendsFromCube(): Promise<TrendRow[]> {
     units: Number(r['UnifiedPerformance.units'] ?? 0),
     clicks: Number(r['UnifiedPerformance.clicks'] ?? 0),
     sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
+    impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
     net_roas: Number(r['UnifiedPerformance.netRoas'] ?? 0),
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
@@ -687,7 +908,7 @@ async function loadWeeklyTrendsFromCube(): Promise<TrendRow[]> {
 /** MonthlyTrends → monthly_trends (via UnifiedPerformance) */
 async function loadMonthlyTrendsFromCube(): Promise<TrendRow[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.monthStart'],
     limit: 5000,
   });
@@ -702,6 +923,7 @@ async function loadMonthlyTrendsFromCube(): Promise<TrendRow[]> {
     units: Number(r['UnifiedPerformance.units'] ?? 0),
     clicks: Number(r['UnifiedPerformance.clicks'] ?? 0),
     sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
+    impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
     net_roas: Number(r['UnifiedPerformance.netRoas'] ?? 0),
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
@@ -709,10 +931,34 @@ async function loadMonthlyTrendsFromCube(): Promise<TrendRow[]> {
   }));
 }
 
+/** DailyTrends → daily_trends (via UnifiedPerformance, last 18 months by family × date) */
+async function loadDailyTrendsFromCube(): Promise<DailyTrendRow[]> {
+  const rows = await cubeLoad({
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions'],
+    dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.date'],
+    timeDimensions: [{ dimension: 'UnifiedPerformance.date', dateRange: [(() => { const d = new Date(); d.setMonth(d.getMonth() - 18); return d.toISOString().slice(0, 10); })(), new Date().toISOString().slice(0, 10)] }],
+    limit: 5000,
+  });
+  const result = (rows as Record<string, unknown>[]).map(r => ({
+    product_type: String(r['UnifiedPerformance.family'] ?? ''),
+    date: fmtDate(r['UnifiedPerformance.date']),
+    sales: Number(r['UnifiedPerformance.sales'] ?? 0),
+    orders: Number(r['UnifiedPerformance.orders'] ?? 0),
+    units: Number(r['UnifiedPerformance.units'] ?? 0),
+    ad_cost: Number(r['UnifiedPerformance.adCost'] ?? 0),
+    cogs: Number(r['UnifiedPerformance.cogs'] ?? 0),
+    net_profit: Number(r['UnifiedPerformance.sales'] ?? 0) - Number(r['UnifiedPerformance.adCost'] ?? 0) - Number(r['UnifiedPerformance.cogs'] ?? 0),
+    clicks: Number(r['UnifiedPerformance.clicks'] ?? 0),
+    sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
+    impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
+  })).filter(r => r.date);
+  return result;
+}
+
 /** WeeklyTrendsByAsin → weekly_trends_by_asin (via UnifiedPerformance) */
 async function loadWeeklyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.asin', 'UnifiedPerformance.productShortName', 'UnifiedPerformance.weekStart'],
     limit: 5000,
   });
@@ -729,6 +975,7 @@ async function loadWeeklyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
     units: Number(r['UnifiedPerformance.units'] ?? 0),
     clicks: Number(r['UnifiedPerformance.clicks'] ?? 0),
     sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
+    impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
     net_roas: Number(r['UnifiedPerformance.netRoas'] ?? 0),
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
@@ -739,7 +986,7 @@ async function loadWeeklyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
 /** MonthlyTrendsByAsin → monthly_trends_by_asin (via UnifiedPerformance) */
 async function loadMonthlyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.asin', 'UnifiedPerformance.productShortName', 'UnifiedPerformance.monthStart'],
     limit: 5000,
   });
@@ -756,6 +1003,7 @@ async function loadMonthlyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
     units: Number(r['UnifiedPerformance.units'] ?? 0),
     clicks: Number(r['UnifiedPerformance.clicks'] ?? 0),
     sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
+    impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
     net_roas: Number(r['UnifiedPerformance.netRoas'] ?? 0),
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
@@ -835,6 +1083,7 @@ async function loadDriversFromCube(): Promise<DriverRow[]> {
     else if (pn.includes('LolliME')) product_type = 'LolliME';
     else if (pn.includes('Fresh')) product_type = 'Fresh';
     else if (pn.includes('Truth') || pn.includes('Bottle')) product_type = 'Bottle';
+    else if (pn.includes('Bunny')) product_type = 'Bunny';
     return {
       search_term: String(r['ExperimentTermRecommendations.searchTerm'] ?? ''),
       product_short_name: pn,
@@ -845,7 +1094,7 @@ async function loadDriversFromCube(): Promise<DriverRow[]> {
       clicks: Number(r['ExperimentTermRecommendations.adsClicks'] ?? 0),
       cpc: Number(r['ExperimentTermRecommendations.cpc'] ?? 0),
       conv_rate: Number(r['ExperimentTermRecommendations.adsCvrPct'] ?? 0),
-      net_roas: Number(r['ExperimentTermRecommendations.adsNetRoas'] ?? 0),
+      net_roas: r['ExperimentTermRecommendations.adsNetRoas'] != null ? Number(r['ExperimentTermRecommendations.adsNetRoas']) : null,
       margin_per_unit: Number(r['ExperimentTermRecommendations.marginPerUnit'] ?? 0),
       impression_share: Number(r['ExperimentTermRecommendations.yourOrdersSharePct'] ?? 0),
       action: String(r['ExperimentTermRecommendations.action'] ?? ''),
@@ -870,6 +1119,7 @@ async function loadHeroAsinsFromCube(): Promise<HeroAsin[]> {
       if (pn.includes('LolliME')) return 'LolliME';
       if (pn.includes('Fresh')) return 'Fresh';
       if (pn.includes('Truth') || pn.includes('Bottle')) return 'Bottle';
+      if (pn.includes('Bunny')) return 'Bunny';
       return pn;
     })(),
     hero_rank: r['ParentHeroAsin.heroRank'] != null ? Number(r['ParentHeroAsin.heroRank']) : undefined,
@@ -913,7 +1163,7 @@ async function loadKeywordProductMapFromCube(): Promise<KeywordMapRow[]> {
     impressions_60d: Number(r['ExperimentTermRecommendations.adsImpressions'] ?? 0),
     cpc_60d: Number(r['ExperimentTermRecommendations.cpc'] ?? 0),
     conv_rate_60d: Number(r['ExperimentTermRecommendations.adsCvrPct'] ?? 0),
-    net_roas_60d: Number(r['ExperimentTermRecommendations.adsNetRoas'] ?? 0),
+    net_roas_60d: r['ExperimentTermRecommendations.adsNetRoas'] != null ? Number(r['ExperimentTermRecommendations.adsNetRoas']) : null,
     market_volume: Number(r['ExperimentTermRecommendations.marketWeeklyOrders'] ?? 0),
     impression_share: Number(r['ExperimentTermRecommendations.yourOrdersSharePct'] ?? 0),
   }));
@@ -1173,96 +1423,198 @@ async function loadCoachDecisionsFromCube(): Promise<CoachDecisionRow[]> {
   });
 }
 
-async function loadCoachTermsFromCube(): Promise<CoachTermRow[]> {
+async function loadCoachActionsFromCube(): Promise<CoachActionRow[]> {
   const rows = await cubeLoad({
     dimensions: [
-      'AdsCoachTerm.campaignId', 'AdsCoachTerm.campaignName', 'AdsCoachTerm.campaignType',
-      'AdsCoachTerm.searchTerm', 'AdsCoachTerm.asin',
-      'AdsCoachTerm.productShortName', 'AdsCoachTerm.parentName',
-      'AdsCoachTerm.experimentName', 'AdsCoachTerm.strategyId', 'AdsCoachTerm.strategyName',
-      'AdsCoachTerm.adsSpend4w', 'AdsCoachTerm.adsOrders4w', 'AdsCoachTerm.adsClicks4w',
-      'AdsCoachTerm.adsSales4w', 'AdsCoachTerm.adsCpc4w', 'AdsCoachTerm.adsCvrPct4w',
-      'AdsCoachTerm.adsNetRoas4w', 'AdsCoachTerm.adsNetProfit4w', 'AdsCoachTerm.marginPerUnit',
-      'AdsCoachTerm.termSpend4w', 'AdsCoachTerm.termOrders4w',
-      'AdsCoachTerm.termCampaignCount', 'AdsCoachTerm.termSellingCampaigns',
-      'AdsCoachTerm.spendSharePct', 'AdsCoachTerm.ordersSharePct',
-      'AdsCoachTerm.sqpOrders4w',
-      'AdsCoachTerm.targeting', 'AdsCoachTerm.keywordId',
-      'AdsCoachTerm.targetAction', 'AdsCoachTerm.effectiveRoas',
-      'AdsCoachTerm.adsWeightedNetRoas',
-      'AdsCoachTerm.targetNetRoas8w', 'AdsCoachTerm.targetClicks8w',
-      'AdsCoachTerm.targetOrders8w', 'AdsCoachTerm.targetSpend8w',
-      'AdsCoachTerm.targetDecisionTrace', 'AdsCoachTerm.recommendationObject',
-      'AdsCoachTerm.currentBid', 'AdsCoachTerm.recommendedBid', 'AdsCoachTerm.bidChangePct',
-      'AdsCoachTerm.matchType',
-      'AdsCoachTerm.action', 'AdsCoachTerm.priorityScore',
-      'AdsCoachTerm.confidence', 'AdsCoachTerm.reason',
-      'AdsCoachTerm.heroAsin', 'AdsCoachTerm.heroProductName', 'AdsCoachTerm.isHeroMatch',
-      'AdsCoachTerm.heroAction', 'AdsCoachTerm.heroActionExplanation',
-      'AdsCoachTerm.heroNetRoas', 'AdsCoachTerm.heroTotalOrders',
+      'AdsCoachActions.campaignId', 'AdsCoachActions.campaignName', 'AdsCoachActions.campaignType',
+      'AdsCoachActions.searchTerm', 'AdsCoachActions.asin',
+      'AdsCoachActions.productShortName', 'AdsCoachActions.parentName',
+      'AdsCoachActions.experimentName', 'AdsCoachActions.strategyId', 'AdsCoachActions.strategyName',
+      'AdsCoachActions.adsSpend4w', 'AdsCoachActions.adsOrders4w', 'AdsCoachActions.adsClicks4w',
+      'AdsCoachActions.adsImpressions4w', 'AdsCoachActions.adsClicks1w', 'AdsCoachActions.adsImpressions1w',
+      'AdsCoachActions.adsSpend1w', 'AdsCoachActions.adsCpc1w',
+      'AdsCoachActions.adsSales4w', 'AdsCoachActions.adsRoas4w', 'AdsCoachActions.adsCpc4w', 'AdsCoachActions.adsCvrPct4w',
+      'AdsCoachActions.adsNetRoas4w', 'AdsCoachActions.adsNetProfit4w', 'AdsCoachActions.marginPerUnit',
+      'AdsCoachActions.termSpend4w', 'AdsCoachActions.termOrders4w',
+      'AdsCoachActions.termCampaignCount', 'AdsCoachActions.termSellingCampaigns',
+      'AdsCoachActions.spendSharePct', 'AdsCoachActions.ordersSharePct',
+      'AdsCoachActions.sqpOrders4w',
+      'AdsCoachActions.targeting', 'AdsCoachActions.keywordId',
+      'AdsCoachActions.targetNetRoas8w', 'AdsCoachActions.targetClicks8w',
+      'AdsCoachActions.targetOrders8w', 'AdsCoachActions.targetSpend8w',
+      'AdsCoachActions.currentBid', 'AdsCoachActions.recommendedBid', 'AdsCoachActions.bidChangePct',
+      'AdsCoachActions.matchType',
+
+      // Unified action fields
+      'AdsCoachActions.actionId', 'AdsCoachActions.decisionBranchId', 'AdsCoachActions.actionType',
+      'AdsCoachActions.action', 'AdsCoachActions.priorityScore',
+      'AdsCoachActions.confidence', 'AdsCoachActions.reason',
+      'AdsCoachActions.actionExplanation', 'AdsCoachActions.decisionTrace',
+
+      'AdsCoachActions.heroAsin', 'AdsCoachActions.heroProductName', 'AdsCoachActions.isHeroMatch',
+      'AdsCoachActions.heroNetRoas', 'AdsCoachActions.heroTotalOrders',
+      'AdsCoachActions.coachMode', 'AdsCoachActions.activeOccasion', 'AdsCoachActions.currentPhase',
+      'AdsCoachActions.ppDays', 'AdsCoachActions.ppTargetNetRoas', 'AdsCoachActions.ppTargetSpend', 'AdsCoachActions.ppTargetOrders',
+      // Cooldown v2: placement & pre-peak comparison
+      'AdsCoachActions.tosPct', 'AdsCoachActions.productPagePct', 'AdsCoachActions.b2bPct',
+      'AdsCoachActions.prePeakBid', 'AdsCoachActions.prePeakTosPct', 'AdsCoachActions.prePeakPpPct',
+      'AdsCoachActions.prePeakB2bPct', 'AdsCoachActions.prePeakAvgCpc', 'AdsCoachActions.lastDayCpc',
+      'AdsCoachActions.currentBudget', 'AdsCoachActions.prePeakBudget', 'AdsCoachActions.recommendedBudget',
+      'AdsCoachActions.ppCampaignNetRoas',
+      // Strategic task
+      'AdsCoachActions.strategicTask',
+      'AdsCoachActions.adsSignal',
+      // ROAS windows + SQP context
+      'AdsCoachActions.adsNetRoas3d', 'AdsCoachActions.adsOrders3d',
+      'AdsCoachActions.adsNetRoas1w', 'AdsCoachActions.adsOrders1w',
+      'AdsCoachActions.lyNetRoas', 'AdsCoachActions.lyOrders',
+      'AdsCoachActions.q4PeakNetRoas', 'AdsCoachActions.q4PeakOrders',
+      'AdsCoachActions.sqpAmazonSearchVolume8w', 'AdsCoachActions.sqpClicks8w',
+      'AdsCoachActions.sqpSales8w', 'AdsCoachActions.sqpOrders8w',
+      'AdsCoachActions.ltNetRoas', 'AdsCoachActions.ltOrders',
+      'AdsCoachActions.ltFirstSeen', 'AdsCoachActions.ltLastSeen',
     ],
-    limit: 50000,
+    order: { 'AdsCoachActions.priorityScore': 'desc' },
+    limit: 2000,
+  });
+  return (rows as Record<string, unknown>[]).map((row) => {
+    const r = row as Record<string, unknown>;
+    const result: CoachActionRow = {
+    campaign_id: String(r['AdsCoachActions.campaignId'] ?? ''),
+    campaign_name: String(r['AdsCoachActions.campaignName'] ?? ''),
+    campaign_type: String(r['AdsCoachActions.campaignType'] ?? ''),
+    search_term: String(r['AdsCoachActions.searchTerm'] ?? ''),
+    asin: String(r['AdsCoachActions.asin'] ?? ''),
+    product_short_name: String(r['AdsCoachActions.productShortName'] ?? ''),
+    parent_name: String(r['AdsCoachActions.parentName'] ?? ''),
+    experiment_name: r['AdsCoachActions.experimentName'] != null ? String(r['AdsCoachActions.experimentName']) : null,
+    strategy_id: r['AdsCoachActions.strategyId'] != null ? String(r['AdsCoachActions.strategyId']) : null,
+    strategy_name: r['AdsCoachActions.strategyName'] != null ? String(r['AdsCoachActions.strategyName']) : null,
+    ads_spend_4w: Number(r['AdsCoachActions.adsSpend4w'] ?? 0),
+    ads_orders_4w: Number(r['AdsCoachActions.adsOrders4w'] ?? 0),
+    ads_clicks_4w: Number(r['AdsCoachActions.adsClicks4w'] ?? 0),
+    ads_impressions_4w: Number(r['AdsCoachActions.adsImpressions4w'] ?? 0),
+    ads_clicks_1w: Number(r['AdsCoachActions.adsClicks1w'] ?? 0),
+    ads_impressions_1w: Number(r['AdsCoachActions.adsImpressions1w'] ?? 0),
+    ads_spend_1w: Number(r['AdsCoachActions.adsSpend1w'] ?? 0),
+    ads_cpc_1w: r['AdsCoachActions.adsCpc1w'] != null ? Number(r['AdsCoachActions.adsCpc1w']) : null,
+    ads_sales_4w: Number(r['AdsCoachActions.adsSales4w'] ?? 0),
+    ads_roas_4w: Number(r['AdsCoachActions.adsRoas4w'] ?? 0),
+    ads_cpc_4w: r['AdsCoachActions.adsCpc4w'] != null ? Number(r['AdsCoachActions.adsCpc4w']) : null,
+    ads_cvr_pct_4w: r['AdsCoachActions.adsCvrPct4w'] != null ? Number(r['AdsCoachActions.adsCvrPct4w']) : null,
+    ads_net_roas_4w: r['AdsCoachActions.adsNetRoas4w'] != null ? Number(r['AdsCoachActions.adsNetRoas4w']) : null,
+    ads_net_profit_4w: Number(r['AdsCoachActions.adsNetProfit4w'] ?? 0),
+    margin_per_unit: Number(r['AdsCoachActions.marginPerUnit'] ?? 0),
+    term_spend_4w: Number(r['AdsCoachActions.termSpend4w'] ?? 0),
+    term_orders_4w: Number(r['AdsCoachActions.termOrders4w'] ?? 0),
+    term_campaign_count: Number(r['AdsCoachActions.termCampaignCount'] ?? 0),
+    term_selling_campaigns: Number(r['AdsCoachActions.termSellingCampaigns'] ?? 0),
+    spend_share_pct: r['AdsCoachActions.spendSharePct'] != null ? Number(r['AdsCoachActions.spendSharePct']) : null,
+    orders_share_pct: r['AdsCoachActions.ordersSharePct'] != null ? Number(r['AdsCoachActions.ordersSharePct']) : null,
+    sqp_orders_4w: Number(r['AdsCoachActions.sqpOrders4w'] ?? 0),
+    targeting: r['AdsCoachActions.targeting'] != null ? String(r['AdsCoachActions.targeting']) : null,
+    keyword_id: r['AdsCoachActions.keywordId'] ? String(r['AdsCoachActions.keywordId']) : null,
+    target_net_roas_8w: r['AdsCoachActions.targetNetRoas8w'] != null ? Number(r['AdsCoachActions.targetNetRoas8w']) : null,
+    target_clicks_8w: r['AdsCoachActions.targetClicks8w'] != null ? Number(r['AdsCoachActions.targetClicks8w']) : null,
+    target_orders_8w: r['AdsCoachActions.targetOrders8w'] != null ? Number(r['AdsCoachActions.targetOrders8w']) : null,
+    target_spend_8w: r['AdsCoachActions.targetSpend8w'] != null ? Number(r['AdsCoachActions.targetSpend8w']) : null,
+    current_bid: r['AdsCoachActions.currentBid'] != null ? Number(r['AdsCoachActions.currentBid']) : null,
+    recommended_bid: r['AdsCoachActions.recommendedBid'] != null ? Number(r['AdsCoachActions.recommendedBid']) : null,
+    bid_change_pct: r['AdsCoachActions.bidChangePct'] != null ? Number(r['AdsCoachActions.bidChangePct']) : null,
+    match_type: r['AdsCoachActions.matchType'] ? String(r['AdsCoachActions.matchType']) : null,
+    action_id: String(r['AdsCoachActions.actionId'] ?? ''),
+    decision_branch_id: r['AdsCoachActions.decisionBranchId'] ? String(r['AdsCoachActions.decisionBranchId']) : null,
+    action_type: String(r['AdsCoachActions.actionType'] ?? 'TERM'),
+    action: String(r['AdsCoachActions.action'] ?? ''),
+    priority_score: Number(r['AdsCoachActions.priorityScore'] ?? 0),
+    confidence: String(r['AdsCoachActions.confidence'] ?? ''),
+    reason: String(r['AdsCoachActions.reason'] ?? ''),
+    action_explanation: r['AdsCoachActions.actionExplanation'] ? String(r['AdsCoachActions.actionExplanation']) : null,
+    decision_trace: (() => { try { const raw = r['AdsCoachActions.decisionTrace']; return raw ? JSON.parse(String(raw)) : null; } catch (_e) { return null; } })(),
+    hero_asin: r['AdsCoachActions.heroAsin'] ? String(r['AdsCoachActions.heroAsin']) : null,
+    hero_product_name: r['AdsCoachActions.heroProductName'] ? String(r['AdsCoachActions.heroProductName']) : null,
+    is_hero_match: Boolean(r['AdsCoachActions.isHeroMatch']),
+    hero_net_roas: r['AdsCoachActions.heroNetRoas'] != null ? Number(r['AdsCoachActions.heroNetRoas']) : null,
+    hero_total_orders: r['AdsCoachActions.heroTotalOrders'] != null ? Number(r['AdsCoachActions.heroTotalOrders']) : null,
+    coach_mode: String(r['AdsCoachActions.coachMode'] ?? 'GUARDIAN'),
+    active_occasion: String(r['AdsCoachActions.activeOccasion'] ?? 'NONE'),
+    current_phase: String(r['AdsCoachActions.currentPhase'] ?? 'OFF_SEASON'),
+    pp_days: r['AdsCoachActions.ppDays'] != null ? Number(r['AdsCoachActions.ppDays']) : null,
+    pp_target_net_roas: r['AdsCoachActions.ppTargetNetRoas'] != null ? Number(r['AdsCoachActions.ppTargetNetRoas']) : null,
+    pp_target_spend: r['AdsCoachActions.ppTargetSpend'] != null ? Number(r['AdsCoachActions.ppTargetSpend']) : null,
+    pp_target_orders: r['AdsCoachActions.ppTargetOrders'] != null ? Number(r['AdsCoachActions.ppTargetOrders']) : null,
+    tos_pct: r['AdsCoachActions.tosPct'] != null ? Number(r['AdsCoachActions.tosPct']) : null,
+    product_page_pct: r['AdsCoachActions.productPagePct'] != null ? Number(r['AdsCoachActions.productPagePct']) : null,
+    b2b_pct: r['AdsCoachActions.b2bPct'] != null ? Number(r['AdsCoachActions.b2bPct']) : null,
+    pre_peak_bid: r['AdsCoachActions.prePeakBid'] != null ? Number(r['AdsCoachActions.prePeakBid']) : null,
+    pre_peak_tos_pct: r['AdsCoachActions.prePeakTosPct'] != null ? Number(r['AdsCoachActions.prePeakTosPct']) : null,
+    pre_peak_pp_pct: r['AdsCoachActions.prePeakPpPct'] != null ? Number(r['AdsCoachActions.prePeakPpPct']) : null,
+    pre_peak_b2b_pct: r['AdsCoachActions.prePeakB2bPct'] != null ? Number(r['AdsCoachActions.prePeakB2bPct']) : null,
+    pre_peak_avg_cpc: r['AdsCoachActions.prePeakAvgCpc'] != null ? Number(r['AdsCoachActions.prePeakAvgCpc']) : null,
+    last_day_cpc: r['AdsCoachActions.lastDayCpc'] != null ? Number(r['AdsCoachActions.lastDayCpc']) : null,
+    current_budget: r['AdsCoachActions.currentBudget'] != null ? Number(r['AdsCoachActions.currentBudget']) : null,
+    pre_peak_budget: r['AdsCoachActions.prePeakBudget'] != null ? Number(r['AdsCoachActions.prePeakBudget']) : null,
+    recommended_budget: r['AdsCoachActions.recommendedBudget'] != null ? Number(r['AdsCoachActions.recommendedBudget']) : null,
+    pp_campaign_net_roas: r['AdsCoachActions.ppCampaignNetRoas'] != null ? Number(r['AdsCoachActions.ppCampaignNetRoas']) : null,
+    strategic_task: r['AdsCoachActions.strategicTask'] != null ? String(r['AdsCoachActions.strategicTask']) : null,
+    ads_signal: r['AdsCoachActions.adsSignal'] ? String(r['AdsCoachActions.adsSignal']) : null,
+    ads_net_roas_3d: r['AdsCoachActions.adsNetRoas3d'] != null ? Number(r['AdsCoachActions.adsNetRoas3d']) : null,
+    ads_orders_3d: r['AdsCoachActions.adsOrders3d'] != null ? Number(r['AdsCoachActions.adsOrders3d']) : null,
+    ads_units_3d: null,
+    ads_net_roas_1w: r['AdsCoachActions.adsNetRoas1w'] != null ? Number(r['AdsCoachActions.adsNetRoas1w']) : null,
+    ads_orders_1w: r['AdsCoachActions.adsOrders1w'] != null ? Number(r['AdsCoachActions.adsOrders1w']) : null,
+    ads_units_1w: null,
+    ly_net_roas: r['AdsCoachActions.lyNetRoas'] != null ? Number(r['AdsCoachActions.lyNetRoas']) : null,
+    ly_orders: r['AdsCoachActions.lyOrders'] != null ? Number(r['AdsCoachActions.lyOrders']) : null,
+    ly_units: null,
+    q4_peak_net_roas: r['AdsCoachActions.q4PeakNetRoas'] != null ? Number(r['AdsCoachActions.q4PeakNetRoas']) : null,
+    q4_peak_orders: r['AdsCoachActions.q4PeakOrders'] != null ? Number(r['AdsCoachActions.q4PeakOrders']) : null,
+    q4_peak_units: null,
+    sqp_amazon_search_volume_8w: r['AdsCoachActions.sqpAmazonSearchVolume8w'] != null ? Number(r['AdsCoachActions.sqpAmazonSearchVolume8w']) : null,
+    sqp_clicks_8w: r['AdsCoachActions.sqpClicks8w'] != null ? Number(r['AdsCoachActions.sqpClicks8w']) : null,
+    sqp_sales_8w: r['AdsCoachActions.sqpSales8w'] != null ? Number(r['AdsCoachActions.sqpSales8w']) : null,
+    sqp_orders_8w: r['AdsCoachActions.sqpOrders8w'] != null ? Number(r['AdsCoachActions.sqpOrders8w']) : null,
+    lt_net_roas: r['AdsCoachActions.ltNetRoas'] != null ? Number(r['AdsCoachActions.ltNetRoas']) : null,
+    lt_orders: r['AdsCoachActions.ltOrders'] != null ? Number(r['AdsCoachActions.ltOrders']) : null,
+    lt_units: null,
+    lt_first_seen: r['AdsCoachActions.ltFirstSeen'] != null ? String(r['AdsCoachActions.ltFirstSeen']) : null,
+    lt_last_seen: r['AdsCoachActions.ltLastSeen'] != null ? String(r['AdsCoachActions.ltLastSeen']) : null,
+    };
+    return result;
+  });
+}
+
+async function loadCoachStrategyFromCube(): Promise<CoachStrategyRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'AdsCoachStrategy.coachMode', 'AdsCoachStrategy.northStar',
+      'AdsCoachStrategy.northStarMetric', 'AdsCoachStrategy.northStarTarget',
+      'AdsCoachStrategy.taskId', 'AdsCoachStrategy.taskName',
+      'AdsCoachStrategy.taskDescription', 'AdsCoachStrategy.capability',
+      'AdsCoachStrategy.capabilityDirection', 'AdsCoachStrategy.displayOrder',
+      'AdsCoachStrategy.mitigation', 'AdsCoachStrategy.emoji',
+    ],
   });
   return (rows as Record<string, unknown>[]).map(r => ({
-    campaign_id: String(r['AdsCoachTerm.campaignId'] ?? ''),
-    campaign_name: String(r['AdsCoachTerm.campaignName'] ?? ''),
-    campaign_type: String(r['AdsCoachTerm.campaignType'] ?? ''),
-    search_term: String(r['AdsCoachTerm.searchTerm'] ?? ''),
-    asin: String(r['AdsCoachTerm.asin'] ?? ''),
-    product_short_name: String(r['AdsCoachTerm.productShortName'] ?? ''),
-    parent_name: String(r['AdsCoachTerm.parentName'] ?? ''),
-    experiment_name: r['AdsCoachTerm.experimentName'] as string | null,
-    strategy_id: r['AdsCoachTerm.strategyId'] as string | null,
-    strategy_name: r['AdsCoachTerm.strategyName'] as string | null,
-    ads_spend_4w: Number(r['AdsCoachTerm.adsSpend4w'] ?? 0),
-    ads_orders_4w: Number(r['AdsCoachTerm.adsOrders4w'] ?? 0),
-    ads_clicks_4w: Number(r['AdsCoachTerm.adsClicks4w'] ?? 0),
-    ads_sales_4w: Number(r['AdsCoachTerm.adsSales4w'] ?? 0),
-    ads_cpc_4w: r['AdsCoachTerm.adsCpc4w'] != null ? Number(r['AdsCoachTerm.adsCpc4w']) : null,
-    ads_cvr_pct_4w: r['AdsCoachTerm.adsCvrPct4w'] != null ? Number(r['AdsCoachTerm.adsCvrPct4w']) : null,
-    ads_net_roas_4w: Number(r['AdsCoachTerm.adsNetRoas4w'] ?? 0),
-    ads_net_profit_4w: Number(r['AdsCoachTerm.adsNetProfit4w'] ?? 0),
-    margin_per_unit: Number(r['AdsCoachTerm.marginPerUnit'] ?? 0),
-    term_spend_4w: Number(r['AdsCoachTerm.termSpend4w'] ?? 0),
-    term_orders_4w: Number(r['AdsCoachTerm.termOrders4w'] ?? 0),
-    term_campaign_count: Number(r['AdsCoachTerm.termCampaignCount'] ?? 0),
-    term_selling_campaigns: Number(r['AdsCoachTerm.termSellingCampaigns'] ?? 0),
-    spend_share_pct: r['AdsCoachTerm.spendSharePct'] != null ? Number(r['AdsCoachTerm.spendSharePct']) : null,
-    orders_share_pct: r['AdsCoachTerm.ordersSharePct'] != null ? Number(r['AdsCoachTerm.ordersSharePct']) : null,
-    sqp_orders_4w: Number(r['AdsCoachTerm.sqpOrders4w'] ?? 0),
-    targeting: r['AdsCoachTerm.targeting'] as string | null,
-    keyword_id: r['AdsCoachTerm.keywordId'] ? String(r['AdsCoachTerm.keywordId']) : null,
-    target_action: r['AdsCoachTerm.targetAction'] as string | null,
-    effective_roas: r['AdsCoachTerm.effectiveRoas'] != null ? Number(r['AdsCoachTerm.effectiveRoas']) : null,
-    weighted_total_net_roas: r['AdsCoachTerm.adsWeightedNetRoas'] != null ? Number(r['AdsCoachTerm.adsWeightedNetRoas']) : null,
-    target_net_roas_8w: r['AdsCoachTerm.targetNetRoas8w'] != null ? Number(r['AdsCoachTerm.targetNetRoas8w']) : null,
-    target_clicks_8w: r['AdsCoachTerm.targetClicks8w'] != null ? Number(r['AdsCoachTerm.targetClicks8w']) : null,
-    target_orders_8w: r['AdsCoachTerm.targetOrders8w'] != null ? Number(r['AdsCoachTerm.targetOrders8w']) : null,
-    target_spend_8w: r['AdsCoachTerm.targetSpend8w'] != null ? Number(r['AdsCoachTerm.targetSpend8w']) : null,
-    target_decision_trace: (() => { try { const raw = r['AdsCoachTerm.targetDecisionTrace']; return raw ? JSON.parse(String(raw)) : null; } catch { return null; } })(),
-    recommendation_object: (String(r['AdsCoachTerm.recommendationObject'] ?? 'TERM') as 'TARGET' | 'TERM'),
-    current_bid: r['AdsCoachTerm.currentBid'] != null ? Number(r['AdsCoachTerm.currentBid']) : null,
-    recommended_bid: r['AdsCoachTerm.recommendedBid'] != null ? Number(r['AdsCoachTerm.recommendedBid']) : null,
-    bid_change_pct: r['AdsCoachTerm.bidChangePct'] != null ? Number(r['AdsCoachTerm.bidChangePct']) : null,
-    match_type: r['AdsCoachTerm.matchType'] ? String(r['AdsCoachTerm.matchType']) : null,
-    action: String(r['AdsCoachTerm.action'] ?? ''),
-    priority_score: Number(r['AdsCoachTerm.priorityScore'] ?? 0),
-    confidence: String(r['AdsCoachTerm.confidence'] ?? ''),
-    reason: String(r['AdsCoachTerm.reason'] ?? ''),
-    hero_asin: r['AdsCoachTerm.heroAsin'] ? String(r['AdsCoachTerm.heroAsin']) : null,
-    hero_product_name: r['AdsCoachTerm.heroProductName'] ? String(r['AdsCoachTerm.heroProductName']) : null,
-    is_hero_match: Boolean(r['AdsCoachTerm.isHeroMatch']),
-    hero_action: r['AdsCoachTerm.heroAction'] ? String(r['AdsCoachTerm.heroAction']) : null,
-    hero_action_explanation: r['AdsCoachTerm.heroActionExplanation'] ? String(r['AdsCoachTerm.heroActionExplanation']) : null,
-    hero_net_roas: r['AdsCoachTerm.heroNetRoas'] != null ? Number(r['AdsCoachTerm.heroNetRoas']) : null,
-    hero_total_orders: r['AdsCoachTerm.heroTotalOrders'] != null ? Number(r['AdsCoachTerm.heroTotalOrders']) : null,
+    coach_mode: String(r['AdsCoachStrategy.coachMode'] ?? ''),
+    north_star: String(r['AdsCoachStrategy.northStar'] ?? ''),
+    north_star_metric: String(r['AdsCoachStrategy.northStarMetric'] ?? ''),
+    north_star_target: r['AdsCoachStrategy.northStarTarget'] != null ? Number(r['AdsCoachStrategy.northStarTarget']) : null,
+    task_id: String(r['AdsCoachStrategy.taskId'] ?? ''),
+    task_name: String(r['AdsCoachStrategy.taskName'] ?? ''),
+    task_description: String(r['AdsCoachStrategy.taskDescription'] ?? ''),
+    capability: String(r['AdsCoachStrategy.capability'] ?? ''),
+    capability_direction: r['AdsCoachStrategy.capabilityDirection'] != null ? String(r['AdsCoachStrategy.capabilityDirection']) : null,
+    display_order: Number(r['AdsCoachStrategy.displayOrder'] ?? 0),
+    mitigation: r['AdsCoachStrategy.mitigation'] != null ? String(r['AdsCoachStrategy.mitigation']) : null,
+    emoji: String(r['AdsCoachStrategy.emoji'] ?? ''),
   }));
 }
 
 async function loadCoachCampaignsFromCube(): Promise<CoachCampaignRow[]> {
   const rows = await cubeLoad({
     dimensions: [
-      'AdsCoachCampaign.campaignId', 'AdsCoachCampaign.campaignName',
+      'AdsCoachCampaign.campaignId', 'AdsCoachCampaign.campaignName', 'AdsCoachCampaign.campaignType',
       'AdsCoachCampaign.experimentName', 'AdsCoachCampaign.strategyId', 'AdsCoachCampaign.strategyName',
       'AdsCoachCampaign.totalTerms', 'AdsCoachCampaign.totalSpend4w', 'AdsCoachCampaign.totalOrders4w',
       'AdsCoachCampaign.totalNetProfit4w', 'AdsCoachCampaign.campaignNetRoas4w', 'AdsCoachCampaign.campaignAvgCpc4w',
@@ -1280,6 +1632,7 @@ async function loadCoachCampaignsFromCube(): Promise<CoachCampaignRow[]> {
   return (rows as Record<string, unknown>[]).map(r => ({
     campaign_id: String(r['AdsCoachCampaign.campaignId'] ?? ''),
     campaign_name: String(r['AdsCoachCampaign.campaignName'] ?? ''),
+    campaign_type: r['AdsCoachCampaign.campaignType'] ? String(r['AdsCoachCampaign.campaignType']) : undefined,
     experiment_name: r['AdsCoachCampaign.experimentName'] as string | null,
     strategy_id: r['AdsCoachCampaign.strategyId'] as string | null,
     strategy_name: r['AdsCoachCampaign.strategyName'] as string | null,
@@ -1307,12 +1660,74 @@ async function loadCoachCampaignsFromCube(): Promise<CoachCampaignRow[]> {
   }));
 }
 
+async function loadAdsFocusTermsFromCube(): Promise<AdsFocusTermRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'AdsFocusTerms.weekStart',
+      'AdsFocusTerms.focusBucket',
+      'AdsFocusTerms.searchTerm',
+    ],
+    measures: [
+      'AdsFocusTerms.spend',
+      'AdsFocusTerms.orders',
+      'AdsFocusTerms.sales',
+      'AdsFocusTerms.netProfit',
+      'AdsFocusTerms.termCount',
+    ],
+    limit: 10000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    week_start: String(r['AdsFocusTerms.weekStart'] ?? '').split('T')[0],
+    focus_bucket: r['AdsFocusTerms.focusBucket'] as 'winner' | 'loser' | 'other_winners' | 'other_losers',
+    search_term: String(r['AdsFocusTerms.searchTerm'] ?? ''),
+    asin: null,
+    product_short_name: null,
+    spend: Number(r['AdsFocusTerms.spend'] ?? 0),
+    orders: Number(r['AdsFocusTerms.orders'] ?? 0),
+    sales: Number(r['AdsFocusTerms.sales'] ?? 0),
+    net_profit: Number(r['AdsFocusTerms.netProfit'] ?? 0),
+    term_count: Number(r['AdsFocusTerms.termCount'] ?? 0),
+  }));
+}
+
+async function loadAdsFocusKeywordsFromCube(): Promise<import('../types').AdsFocusKeywordRow[]> {
+  try {
+    const rows = await cubeLoad({
+      dimensions: [
+        'AdsFocusKeywords.weekStart',
+        'AdsFocusKeywords.focusBucket',
+        'AdsFocusKeywords.keyword',
+      ],
+      measures: [
+        'AdsFocusKeywords.spend',
+        'AdsFocusKeywords.orders',
+        'AdsFocusKeywords.sales',
+        'AdsFocusKeywords.netProfit',
+        'AdsFocusKeywords.keywordCount',
+      ],
+      limit: 10000,
+    });
+    return (rows as Record<string, unknown>[]).map(r => ({
+      week_start: String(r['AdsFocusKeywords.weekStart'] ?? '').split('T')[0],
+      focus_bucket: r['AdsFocusKeywords.focusBucket'] as 'winner' | 'loser' | 'other_winners' | 'other_losers',
+      keyword: String(r['AdsFocusKeywords.keyword'] ?? ''),
+      spend: Number(r['AdsFocusKeywords.spend'] ?? 0),
+      orders: Number(r['AdsFocusKeywords.orders'] ?? 0),
+      sales: Number(r['AdsFocusKeywords.sales'] ?? 0),
+      net_profit: Number(r['AdsFocusKeywords.netProfit'] ?? 0),
+      keyword_count: Number(r['AdsFocusKeywords.keywordCount'] ?? 0),
+    }));
+  } catch (e) {
+    console.warn('[AdsFocusKeywords] Cube schema not available:', e);
+    return [];
+  }
+}
 async function loadPhraseNegativesFromCube(): Promise<PhraseNegativeRow[]> {
   const rows = await cubeLoad({
     dimensions: [
       'AdsCoachPhraseNegatives.phrase', 'AdsCoachPhraseNegatives.ngramSize',
       'AdsCoachPhraseNegatives.campaignId', 'AdsCoachPhraseNegatives.adGroupId', 'AdsCoachPhraseNegatives.campaignName',
-      'AdsCoachPhraseNegatives.campaignType', 'AdsCoachPhraseNegatives.portfolioName',
+      'AdsCoachPhraseNegatives.campaignType', 'AdsCoachPhraseNegatives.portfolioName', 'AdsCoachPhraseNegatives.strategyId',
       'AdsCoachPhraseNegatives.phraseTermCount', 'AdsCoachPhraseNegatives.phraseSpend8w',
       'AdsCoachPhraseNegatives.phraseOrders8w', 'AdsCoachPhraseNegatives.phraseClicks8w',
       'AdsCoachPhraseNegatives.phraseOrders1y', 'AdsCoachPhraseNegatives.phraseSpend1y',
@@ -1320,6 +1735,7 @@ async function loadPhraseNegativesFromCube(): Promise<PhraseNegativeRow[]> {
       'AdsCoachPhraseNegatives.top3MonthsPct', 'AdsCoachPhraseNegatives.peakMonths',
       'AdsCoachPhraseNegatives.seasonalTheme', 'AdsCoachPhraseNegatives.action',
       'AdsCoachPhraseNegatives.priorityScore', 'AdsCoachPhraseNegatives.reason',
+      'AdsCoachPhraseNegatives.sampleTerms',
     ],
     limit: 500,
   });
@@ -1331,6 +1747,7 @@ async function loadPhraseNegativesFromCube(): Promise<PhraseNegativeRow[]> {
     campaign_name: String(r['AdsCoachPhraseNegatives.campaignName'] ?? ''),
     campaign_type: String(r['AdsCoachPhraseNegatives.campaignType'] ?? ''),
     portfolio_name: String(r['AdsCoachPhraseNegatives.portfolioName'] ?? ''),
+    strategy_id: r['AdsCoachPhraseNegatives.strategyId'] ? String(r['AdsCoachPhraseNegatives.strategyId']) : null,
     phrase_term_count: Number(r['AdsCoachPhraseNegatives.phraseTermCount'] ?? 0),
     phrase_spend_8w: Number(r['AdsCoachPhraseNegatives.phraseSpend8w'] ?? 0),
     phrase_orders_8w: Number(r['AdsCoachPhraseNegatives.phraseOrders8w'] ?? 0),
@@ -1345,6 +1762,7 @@ async function loadPhraseNegativesFromCube(): Promise<PhraseNegativeRow[]> {
     action: String(r['AdsCoachPhraseNegatives.action'] ?? ''),
     priority_score: Number(r['AdsCoachPhraseNegatives.priorityScore'] ?? 0),
     reason: String(r['AdsCoachPhraseNegatives.reason'] ?? ''),
+    sample_terms: (() => { try { return JSON.parse(String(r['AdsCoachPhraseNegatives.sampleTerms'] ?? '[]')); } catch { return []; } })(),
   }));
 }
 
@@ -1463,20 +1881,24 @@ async function loadBrandStrengthFromCube(): Promise<BrandStrengthWeeklyRow[]> {
     dimensions: [
       'BrandStrengthWeekly.weekStartDate', 
       'BrandStrengthWeekly.brandKeyword',
+      'BrandStrengthWeekly.parentName',
       'BrandStrengthWeekly.phraseType',
       'BrandStrengthWeekly.requestedProduct',
-      'BrandStrengthWeekly.tag'
+      'BrandStrengthWeekly.tag',
+      // Pre-computed ratios (dimensions, not measures — R4 compliance)
+      'BrandStrengthWeekly.avgShowRate', 'BrandStrengthWeekly.avgImpressionShare',
+      'BrandStrengthWeekly.avgOrganicRank',
+      'BrandStrengthWeekly.adsCpc',
+      'BrandStrengthWeekly.brandCvr', 'BrandStrengthWeekly.brandDominanceScore',
+      'BrandStrengthWeekly.sqpMonthImpressions', 'BrandStrengthWeekly.sqpLyMonthImpressions',
     ],
     measures: [
       'BrandStrengthWeekly.sqpImpressions', 'BrandStrengthWeekly.sqpClicks',
       'BrandStrengthWeekly.sqpConversions', 'BrandStrengthWeekly.sqpCartAdds',
-      'BrandStrengthWeekly.avgShowRate', 'BrandStrengthWeekly.avgImpressionShare',
-      'BrandStrengthWeekly.avgOrganicRank', 'BrandStrengthWeekly.totalSearchVolume',
+      'BrandStrengthWeekly.totalSearchVolume',
       'BrandStrengthWeekly.adsImpressions', 'BrandStrengthWeekly.adsClicks',
       'BrandStrengthWeekly.adsOrders', 'BrandStrengthWeekly.adsUnits',
       'BrandStrengthWeekly.adsSpend', 'BrandStrengthWeekly.adsSales',
-      'BrandStrengthWeekly.adsCpc',
-      'BrandStrengthWeekly.brandCvr', 'BrandStrengthWeekly.brandDominanceScore',
     ],
     order: { 'BrandStrengthWeekly.weekStartDate': 'asc' },
     limit: 5000,
@@ -1484,6 +1906,7 @@ async function loadBrandStrengthFromCube(): Promise<BrandStrengthWeeklyRow[]> {
   return (rows as Record<string, unknown>[]).map(r => ({
     week_start_date: String(r['BrandStrengthWeekly.weekStartDate'] ?? ''),
     brand_keyword: String(r['BrandStrengthWeekly.brandKeyword'] ?? 'other'),
+    parent_name: String(r['BrandStrengthWeekly.parentName'] ?? 'Unknown'),
     phrase_type: r['BrandStrengthWeekly.phraseType'] ? String(r['BrandStrengthWeekly.phraseType']) : null,
     requested_product: r['BrandStrengthWeekly.requestedProduct'] ? String(r['BrandStrengthWeekly.requestedProduct']) : null,
     tag: r['BrandStrengthWeekly.tag'] ? String(r['BrandStrengthWeekly.tag']) : null,
@@ -1505,6 +1928,8 @@ async function loadBrandStrengthFromCube(): Promise<BrandStrengthWeeklyRow[]> {
     ads_cpc: parseCubeNum(r['BrandStrengthWeekly.adsCpc']),
     brand_cvr: parseCubeNum(r['BrandStrengthWeekly.brandCvr']),
     brand_dominance_score: parseCubeNum(r['BrandStrengthWeekly.brandDominanceScore']),
+    sqp_month_impressions: parseCubeNum(r['BrandStrengthWeekly.sqpMonthImpressions']),
+    sqp_ly_month_impressions: parseCubeNum(r['BrandStrengthWeekly.sqpLyMonthImpressions']),
   }));
 }
 
@@ -1659,7 +2084,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           ['experimentTemplates', loadExperimentTemplatesFromCube],
           ['holidays', loadAllHolidaysFromCube],
           ['coachDecisions', loadCoachDecisionsFromCube],
-          ['coachTerms', loadCoachTermsFromCube],
+          ['coachTerms', loadCoachActionsFromCube],
           ['coachCampaigns', loadCoachCampaignsFromCube],
           ['experimentEvaluations', loadExperimentEvaluationsFromCube],
           ['keywordPredictions', loadPredictionsFromCube],
@@ -1667,10 +2092,20 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           ['phraseNegatives', loadPhraseNegativesFromCube],
           ['sqpCoverageWeeks', loadSqpCoverageWeeksFromCube],
           ['hotSignals', loadHotSignalsFromCube],
+          ['dailyTrends', loadDailyTrendsFromCube],
+          ['storageCosts', loadStorageCostsFromCube],
+          ['supplyChain', loadSupplyChainFromCube],
+          ['supplyPOs', loadSupplyPOsFromCube],
+          ['supplyPayments', loadSupplyPaymentsFromCube],
+          ['supplyShipments', loadSupplyShipmentsFromCube],
+          ['peakRelevance', loadPeakRelevanceFromCube],
+          ['familyOccasions', loadFamilyOccasionsFromCube],
+          ['coachStrategy', loadCoachStrategyFromCube],
+          ['adsFocusTerms', loadAdsFocusTermsFromCube],
+          ['adsFocusKeywords', loadAdsFocusKeywordsFromCube],
         ];
 
         const heavyLoaders: [string, () => Promise<unknown>][] = [
-          ['actions', loadActionsFromCube],
           ['ads', loadAdsFromCube],
           ['sqp', loadSqpFromCube],
         ];
@@ -1703,7 +2138,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
         const experimentTemplates = resolveLoader(bgResultsLight[12], 'experimentTemplates') as ExperimentTemplateRow[];
         const holidays = resolveLoader(bgResultsLight[13], 'holidays') as HolidayRow[];
         const coachDecisions = resolveLoader(bgResultsLight[14], 'coachDecisions') as CoachDecisionRow[];
-        const coachTerms = resolveLoader(bgResultsLight[15], 'coachTerms') as CoachTermRow[];
+        const coachTerms = resolveLoader(bgResultsLight[15], 'coachTerms') as CoachActionRow[];
         const coachCampaigns = resolveLoader(bgResultsLight[16], 'coachCampaigns') as CoachCampaignRow[];
         const experimentEvaluations = resolveLoader(bgResultsLight[17], 'experimentEvaluations') as ExperimentEvaluationRow[];
         const keywordPredictions = resolveLoader(bgResultsLight[18], 'keywordPredictions') as StrategicPrediction[];
@@ -1711,10 +2146,20 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
         const phraseNegatives = resolveLoader(bgResultsLight[20], 'phraseNegatives') as PhraseNegativeRow[];
         const sqpCoverageWeeks = resolveLoader(bgResultsLight[21], 'sqpCoverageWeeks') as { week_start: string }[];
         const hotSignals = resolveLoader(bgResultsLight[22], 'hotSignals') as HotSignalRow[];
+        const dailyTrends = resolveLoader(bgResultsLight[23], 'dailyTrends') as DailyTrendRow[];
+        const storageCosts = resolveLoader(bgResultsLight[24], 'storageCosts') as StorageCostRow[];
+        const supplyChain = resolveLoader(bgResultsLight[25], 'supplyChain') as SupplyChainRow[];
+        const supplyPOs = resolveLoader(bgResultsLight[26], 'supplyPOs') as SupplyPORow[];
+        const supplyPayments = resolveLoader(bgResultsLight[27], 'supplyPayments') as SupplyPaymentRow[];
+        const supplyShipments = resolveLoader(bgResultsLight[28], 'supplyShipments') as SupplyShipmentRow[];
+        const peakRelevance = resolveLoader(bgResultsLight[29], 'peakRelevance') as PeakRelevanceRow[];
+        const familyOccasions = resolveLoader(bgResultsLight[30], 'familyOccasions') as import('../types').FamilyOccasionRow[];
+        const coachStrategy = resolveLoader(bgResultsLight[31], 'coachStrategy') as CoachStrategyRow[];
+        const adsFocusTerms = resolveLoader(bgResultsLight[32], 'adsFocusTerms') as AdsFocusTermRow[];
+        const adsFocusKeywords = resolveLoader(bgResultsLight[33], 'adsFocusKeywords') as import('../types').AdsFocusKeywordRow[];
 
-        const actions = resolveLoader(bgResultsHeavy[0], 'actions') as ActionRow[];
-        const ads = resolveLoader(bgResultsHeavy[1], 'ads') as Ads7dRow[];
-        const sqp = resolveLoader(bgResultsHeavy[2], 'sqp') as SqpWeeklyRow[];
+        const ads = resolveLoader(bgResultsHeavy[0], 'ads') as Ads7dRow[];
+        const sqp = resolveLoader(bgResultsHeavy[1], 'sqp') as SqpWeeklyRow[];
 
         if (import.meta.env.DEV) {
           console.log('[useCubeData] Background done — ads:', ads.length, 'sqp:', sqp.length, 'decisions:', coachDecisions.length, 'actions:', coachTerms.length);
@@ -1722,7 +2167,6 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
 
         setData(prev => ({
           ...prev,
-          actions,
           ads_7d: ads,
           sqp_weekly: sqp,
           sqp_coverage_weeks: sqpCoverageWeeks,
@@ -1741,13 +2185,25 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           experiment_templates: experimentTemplates,
           holidays,
           coach_decisions: coachDecisions,
-          coach_terms: coachTerms,
+          actions: coachTerms,
           coach_campaigns: coachCampaigns,
           experiment_evaluations: experimentEvaluations,
           keyword_predictions: keywordPredictions,
           brand_strength_weekly: brandStrength,
           coach_phrase_negatives: phraseNegatives,
           hot_signals: hotSignals,
+          daily_trends: dailyTrends,
+          storage_costs: storageCosts,
+          supply_chain: supplyChain,
+          supply_pos: supplyPOs,
+          supply_payments: supplyPayments,
+          ads_focus_terms: adsFocusTerms,
+          ads_focus_keywords: adsFocusKeywords,
+          supply_shipments: supplyShipments,
+          supply_other_pos: [],
+          peak_relevance: peakRelevance,
+          family_occasions: familyOccasions,
+          coach_strategy: coachStrategy,
           _meta: {
             ...prev._meta,
             queries_run: (prev._meta?.queries_run ?? 0) + lightLoaders.length + heavyLoaders.length,
@@ -1770,4 +2226,128 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
   }, [retryCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { data, loading, fromCube };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * Lazy-load keyword intelligence for inline panel
+ * Only fetches when a complex keyword is expanded in the queue.
+ * ═══════════════════════════════════════════════════════════════ */
+export interface KeywordIntelligenceRow {
+  searchTerm: string;
+  totalSpend: number;
+  totalOrders: number;
+  totalClicks: number;
+  productCount: number;
+  campaignCount: number;
+  heroAsin: string | null;
+  heroProductName: string | null;
+  heroNetRoas: number;
+  heroCvrPct: number;
+  heroStabilityPct: number;
+  heroDataMonths: number;
+  monthsWithData: number;
+  heroSpend: number;
+  heroSpendPct: number;
+  complexityScore: number;
+  isMultiCampaign: boolean;
+  isHeroUnstable: boolean;
+  isHeroUnproven: boolean;
+  isFragmented: boolean;
+  productBreakdown: { asin: string; product_name: string; spend: number; orders: number; clicks: number; cvr_pct: number; net_profit: number; is_hero: boolean; campaign_count: number }[];
+  monthlyHeroes: { month: string; hero_asin: string; hero_product: string; orders: number; cvr_pct: number; spend: number }[];
+  productBreakdown12m: { asin: string; product_name: string; spend: number; orders: number; clicks: number; cvr_pct: number; net_profit: number; is_hero: boolean; campaign_count: number }[];
+  productBreakdownByMonth: { month: string; products: { asin: string; product_name: string; spend: number; orders: number; clicks: number; cvr_pct: number; net_profit: number; is_hero: boolean; campaign_count: number }[] }[];
+}
+
+// Cache to avoid re-fetching the same keyword
+const intelligenceCache = new Map<string, KeywordIntelligenceRow>();
+
+export function useKeywordIntelligence(searchTerm: string | null) {
+  const [data, setData] = useState<KeywordIntelligenceRow | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!searchTerm) { setData(null); return; }
+
+    // Check cache first
+    const cached = intelligenceCache.get(searchTerm);
+    if (cached) { setData(cached); return; }
+
+    let cancelled = false;
+    setLoading(true);
+
+    (async () => {
+      try {
+        const rows = await cubeLoad({
+          dimensions: [
+            'KeywordIntelligence.searchTerm',
+            'KeywordIntelligence.totalSpend', 'KeywordIntelligence.totalOrders', 'KeywordIntelligence.totalClicks',
+            'KeywordIntelligence.productCount', 'KeywordIntelligence.campaignCount',
+            'KeywordIntelligence.heroAsin', 'KeywordIntelligence.heroProductName',
+            'KeywordIntelligence.heroNetRoas', 'KeywordIntelligence.heroCvrPct',
+            'KeywordIntelligence.heroStabilityPct', 'KeywordIntelligence.heroDataMonths', 'KeywordIntelligence.monthsWithData',
+            'KeywordIntelligence.heroSpend', 'KeywordIntelligence.heroSpendPct',
+            'KeywordIntelligence.complexityScore',
+            'KeywordIntelligence.isMultiCampaign', 'KeywordIntelligence.isHeroUnstable',
+            'KeywordIntelligence.isHeroUnproven', 'KeywordIntelligence.isFragmented',
+            'KeywordIntelligence.productBreakdown', 'KeywordIntelligence.monthlyHeroes',
+            'KeywordIntelligence.productBreakdown12m', 'KeywordIntelligence.productBreakdownByMonth',
+          ],
+          filters: [{ member: 'KeywordIntelligence.searchTerm', operator: 'equals', values: [searchTerm] }],
+          limit: 1,
+        });
+
+        if (cancelled) return;
+
+        const r = (rows as Record<string, unknown>[])[0];
+        if (!r) { setData(null); setLoading(false); return; }
+
+        let productBreakdown: KeywordIntelligenceRow['productBreakdown'] = [];
+        let monthlyHeroes: KeywordIntelligenceRow['monthlyHeroes'] = [];
+        let productBreakdown12m: KeywordIntelligenceRow['productBreakdown12m'] = [];
+        let productBreakdownByMonth: KeywordIntelligenceRow['productBreakdownByMonth'] = [];
+        try { productBreakdown = JSON.parse(String(r['KeywordIntelligence.productBreakdown'] ?? '[]')); } catch { /* */ }
+        try { monthlyHeroes = JSON.parse(String(r['KeywordIntelligence.monthlyHeroes'] ?? '[]')); } catch { /* */ }
+        try { productBreakdown12m = JSON.parse(String(r['KeywordIntelligence.productBreakdown12m'] ?? '[]')); } catch { /* */ }
+        try { productBreakdownByMonth = JSON.parse(String(r['KeywordIntelligence.productBreakdownByMonth'] ?? '[]')); } catch { /* */ }
+
+        const row: KeywordIntelligenceRow = {
+          searchTerm: String(r['KeywordIntelligence.searchTerm'] ?? ''),
+          totalSpend: Number(r['KeywordIntelligence.totalSpend'] ?? 0),
+          totalOrders: Number(r['KeywordIntelligence.totalOrders'] ?? 0),
+          totalClicks: Number(r['KeywordIntelligence.totalClicks'] ?? 0),
+          productCount: Number(r['KeywordIntelligence.productCount'] ?? 0),
+          campaignCount: Number(r['KeywordIntelligence.campaignCount'] ?? 0),
+          heroAsin: r['KeywordIntelligence.heroAsin'] ? String(r['KeywordIntelligence.heroAsin']) : null,
+          heroProductName: r['KeywordIntelligence.heroProductName'] ? String(r['KeywordIntelligence.heroProductName']) : null,
+          heroNetRoas: Number(r['KeywordIntelligence.heroNetRoas'] ?? 0),
+          heroCvrPct: Number(r['KeywordIntelligence.heroCvrPct'] ?? 0),
+          heroStabilityPct: Number(r['KeywordIntelligence.heroStabilityPct'] ?? 0),
+          heroDataMonths: Number(r['KeywordIntelligence.heroDataMonths'] ?? 0),
+          monthsWithData: Number(r['KeywordIntelligence.monthsWithData'] ?? 0),
+          heroSpend: Number(r['KeywordIntelligence.heroSpend'] ?? 0),
+          heroSpendPct: Number(r['KeywordIntelligence.heroSpendPct'] ?? 0),
+          complexityScore: Number(r['KeywordIntelligence.complexityScore'] ?? 0),
+          isMultiCampaign: Boolean(r['KeywordIntelligence.isMultiCampaign']),
+          isHeroUnstable: Boolean(r['KeywordIntelligence.isHeroUnstable']),
+          isHeroUnproven: Boolean(r['KeywordIntelligence.isHeroUnproven']),
+          isFragmented: Boolean(r['KeywordIntelligence.isFragmented']),
+          productBreakdown,
+          monthlyHeroes,
+          productBreakdown12m,
+          productBreakdownByMonth,
+        };
+
+        intelligenceCache.set(searchTerm, row);
+        if (!cancelled) { setData(row); setLoading(false); }
+      } catch (e) {
+        console.warn('[useKeywordIntelligence] failed:', e);
+        if (!cancelled) { setData(null); setLoading(false); }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [searchTerm]);
+
+  return { data, loading };
 }

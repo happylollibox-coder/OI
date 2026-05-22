@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'
 import tailwindcss from '@tailwindcss/vite'
@@ -25,9 +26,11 @@ function serveDataPlugin() {
 export default defineConfig({
   plugins: [react(), tailwindcss(), serveDataPlugin()],
   server: {
+    port: 5173,
+    strictPort: true,
     proxy: {
       '/api': {
-        target: 'https://oi-data-entry-app-405291422506.us-central1.run.app',
+        target: 'https://data-entry-forms-405291422506.us-central1.run.app',
         changeOrigin: true,
       },
       '/cubejs-api': 'http://localhost:4000',
@@ -37,5 +40,11 @@ export default defineConfig({
       // Ignore dashboard/data so refresh_data.py writing JSON files doesn't trigger HMR/reload
       ignored: ['**/dashboard/data/**'],
     },
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: './src/test-setup.ts',
+    include: ['src/**/*.test.{ts,tsx}'],
   },
 })

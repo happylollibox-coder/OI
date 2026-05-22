@@ -25,6 +25,9 @@ export interface DoQueueItem {
   cpc: number;
   conv_rate: number;
   seasonal_theme?: string;
+  // Budget actions
+  current_budget?: number | null;
+  recommended_budget?: number | null;
   addedAt: number;
   doneAt?: number; // timestamp when marked done
   uploadedAt?: number; // timestamp when marked as uploaded to Amazon
@@ -46,6 +49,7 @@ interface DoQueueContextValue {
   undoUploaded: (id: string) => void;
   clearUploaded: () => void;
   isUploaded: (search_term: string, campaign_id: string) => boolean;
+  isDone: (search_term: string, campaign_id: string) => boolean;
   cleanupUploaded: (currentActions: { search_term: string; campaign_id: string }[]) => void;
 }
 
@@ -100,12 +104,12 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
   const addItem = useCallback((item: Omit<DoQueueItem, 'id' | 'addedAt'>) => {
     setItems(prev => {
       const exists = prev.some(
-        p => p.search_term === item.search_term && p.action === item.action && p.campaign === item.campaign
+        p => p.search_term === item.search_term && p.action === item.action && p.campaign === item.campaign && p.targeting === item.targeting
       );
       if (exists) return prev;
       const newItem: DoQueueItem = {
         ...item,
-        id: `${item.campaign}|${item.action}|${item.search_term}|${Date.now()}`,
+        id: `${item.campaign}|${item.action}|${item.targeting || item.search_term}|${Date.now()}`,
         addedAt: Date.now(),
       };
       return [...prev, newItem];
@@ -186,6 +190,12 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
     );
   }, [uploadedItems]);
 
+  const isDone = useCallback((search_term: string, campaign_id: string) => {
+    return doneItems.some(
+      p => p.search_term === search_term && p.campaign_id === campaign_id
+    );
+  }, [doneItems]);
+
   const cleanupUploaded = useCallback((currentActions: { search_term: string; campaign_id: string }[]) => {
     if (!uploadedItems.length || !currentActions.length) return;
     const actionSet = new Set(
@@ -206,8 +216,8 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
     items, doneItems, uploadedItems,
     addItem, removeItem, clearCampaign, clearAll, hasItem,
     markDone, undoDone, clearDone,
-    markAllUploaded, undoUploaded, clearUploaded, isUploaded, cleanupUploaded,
-  }), [items, doneItems, uploadedItems, addItem, removeItem, clearCampaign, clearAll, hasItem, markDone, undoDone, clearDone, markAllUploaded, undoUploaded, clearUploaded, isUploaded, cleanupUploaded]);
+    markAllUploaded, undoUploaded, clearUploaded, isUploaded, isDone, cleanupUploaded,
+  }), [items, doneItems, uploadedItems, addItem, removeItem, clearCampaign, clearAll, hasItem, markDone, undoDone, clearDone, markAllUploaded, undoUploaded, clearUploaded, isUploaded, isDone, cleanupUploaded]);
 
   return (
     <DoQueueContext.Provider value={value}>

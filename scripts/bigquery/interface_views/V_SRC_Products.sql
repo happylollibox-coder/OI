@@ -2,119 +2,119 @@
 -- OI Database Project - V_SRC_Products
 -- =============================================
 --
--- Purpose: Standardized product data from Fivetran item_summary table
--- Business Logic: Filters active products and standardizes field names
--- Dependencies: 
---   - fivetran-hl.amazon_selling_partner.item_summary
---   - fivetran-hl.amazon_selling_partner.item_relationship (for parent_asin)
---   - fivetran-hl.amazon_selling_partner.item_product_type (for product_type)
---   - fivetran-hl.amazon_selling_partner.marketplace_participation (for marketplace attributes)
---   - fivetran-hl.amazon_selling_partner.item_dimension (for item dimensions)
---   - fivetran-hl.amazon_selling_partner.item_offer_detail (for listing price)
+-- Purpose: Standardized product data from Daton CatalogItems + ActiveListingsReport
+-- Business Logic: Flattens nested STRUCTs, deduplicates, filters to US marketplace
+-- Dependencies:
+--   - daton-491514.BigQuery.amazon_selling_partner_CatalogItems
+--   - daton-491514.BigQuery.amazon_selling_partner_ActiveListingsReport
 -- Project: onyga-482313
 -- Dataset: OI
--- Updated: 2025-01-01
+-- Updated: 2026-04-03 (migrated from fivetran-hl)
 --
 -- =============================================
 
-DROP VIEW IF EXISTS `OI.V_SRC_Products`;
-CREATE VIEW `onyga-482313.OI.V_SRC_Products`
-AS 
+CREATE OR REPLACE VIEW `onyga-482313.OI.V_SRC_Products`
+AS
+WITH catalog_base AS (
+  -- Flatten CatalogItems: summaries, relationships, productTypes, dimensions
+  SELECT
+    ci.asin,
+    s.marketplaceId AS marketplace_id,
+    s.itemName AS product_name,
+    s.brand,
+    s.manufacturer,
+    s.color,
+    s.size,
+    s.itemClassification AS item_classification,
+    -- Parent ASIN from relationships (strip JSON quotes)
+    REPLACE(rel.parentAsins, '"', '') AS parent_asin,
+    -- Product type
+    pt.productType AS product_type,
+    -- Dimensions (item)
+    idim.weight[SAFE_OFFSET(0)].unit AS item_weight_unit,
+    idim.weight[SAFE_OFFSET(0)].value AS item_weight_value,
+    idim.height[SAFE_OFFSET(0)].value AS item_height_value,
+    idim.length[SAFE_OFFSET(0)].value AS item_length_value,
+    idim.width[SAFE_OFFSET(0)].value AS item_width_value,
+    -- Dimensions (package)
+    pdim.weight[SAFE_OFFSET(0)].unit AS package_weight_unit,
+    pdim.weight[SAFE_OFFSET(0)].value AS package_weight_value,
+    pdim.height[SAFE_OFFSET(0)].value AS package_height_value,
+    pdim.length[SAFE_OFFSET(0)].value AS package_length_value,
+    pdim.width[SAFE_OFFSET(0)].value AS package_width_value,
+    -- Metadata
+    ci._daton_batch_runtime,
+    ROW_NUMBER() OVER (PARTITION BY ci.asin ORDER BY ci._daton_batch_runtime DESC) AS rn
+  FROM `daton-491514.BigQuery.amazon_selling_partner_CatalogItems` ci
+  -- Flatten summaries (1 per marketplace)
+  LEFT JOIN UNNEST(ci.summaries) s ON s.marketplaceId = 'ATVPDKIKX0DER'
+  -- Flatten relationships for parent ASIN
+  LEFT JOIN UNNEST(ci.relationships) r ON r.marketplaceId = 'ATVPDKIKX0DER'
+  LEFT JOIN UNNEST(r.relationships) rel ON rel.type = 'VARIATION' AND rel.parentAsins IS NOT NULL
+  -- Flatten product types
+  LEFT JOIN UNNEST(ci.productTypes) pt ON pt.marketplaceId = 'ATVPDKIKX0DER'
+  -- Flatten dimensions
+  LEFT JOIN UNNEST(ci.dimensions) d ON d.marketplaceId = 'ATVPDKIKX0DER'
+  LEFT JOIN UNNEST(d.item) idim
+  LEFT JOIN UNNEST(d.package) pdim
+  WHERE s.marketplaceId IS NOT NULL  -- Only US marketplace products
+),
+listings AS (
+  -- Get SKU and listing price from ActiveListingsReport
+  SELECT
+    asin1 AS asin,
+    seller_sku AS sku,
+    CAST(price AS FLOAT64) AS listing_price_amount,
+    ROW_NUMBER() OVER (PARTITION BY asin1 ORDER BY _daton_batch_runtime DESC) AS rn
+  FROM `daton-491514.BigQuery.amazon_selling_partner_ActiveListingsReport`
+  WHERE asin1 IS NOT NULL
+)
 SELECT
   -- Product identifiers
-  CAST(ism.asin AS STRING) AS asin,
-  CAST(ism.marketplace_id AS STRING) AS marketplace,
-  CAST(NULL AS STRING) AS sku,  -- SKU not available in item_summary table
-  CAST(rel.parent_asin AS STRING) AS parent_asin,  -- Parent ASIN from item_relationship
-  
-  -- Marketplace attributes from marketplace_participation
-  CAST(mp.name AS STRING) AS marketplace_name,
-  CAST(mp.country_code AS STRING) AS marketplace_country_code,
-  CAST(mp.default_currency_code AS STRING) AS marketplace_default_currency_code,
-  
-  -- Product attributes (mapped from actual item_summary schema)
-  CAST(ism.item_name AS STRING) AS product_name,
-  CAST(ism.display_name AS STRING) AS display_name,
-  CAST(ism.brand AS STRING) AS brand,
-  CAST(ism.manufacturer AS STRING) AS manufacturer,
-  CAST(pt.product_type AS STRING) AS product_type,  -- Product type from item_product_type table
-  CAST(ism.color AS STRING) AS color,
-  CAST(ism.release_date AS DATE) AS launch_date,
-  
-  -- Listing price from item_offer_detail (first offer per ASIN)
-  CAST(iod.listing_price_currency_code AS STRING) AS listing_price_currency_code,
-  iod.listing_price_amount AS listing_price_amount,
-  
-  -- Item dimensions from item_dimension
-  CAST(idim.item_height_unit AS STRING) AS item_height_unit,
-  idim.item_height_value AS item_height_value,
-  CAST(idim.item_length_unit AS STRING) AS item_length_unit,
-  idim.item_length_value AS item_length_value,
-  CAST(idim.item_weight_unit AS STRING) AS item_weight_unit,
-  idim.item_weight_value AS item_weight_value,
-  CAST(idim.item_width_unit AS STRING) AS item_width_unit,
-  idim.item_width_value AS item_width_value,
-  CAST(idim.package_height_unit AS STRING) AS package_height_unit,
-  idim.package_height_value AS package_height_value,
-  CAST(idim.package_length_unit AS STRING) AS package_length_unit,
-  idim.package_length_value AS package_length_value,
-  CAST(idim.package_weight_unit AS STRING) AS package_weight_unit,
-  idim.package_weight_value AS package_weight_value,
-  CAST(idim.package_width_unit AS STRING) AS package_width_unit,
-  idim.package_width_value AS package_width_value,
-  
-  -- Fivetran metadata
-  ism._fivetran_synced
-  
-FROM `fivetran-hl.amazon_selling_partner.item_summary` AS ism
-LEFT JOIN (
-  SELECT 
-    child_asin,
-    parent_asin,
-    ROW_NUMBER() OVER (PARTITION BY child_asin ORDER BY parent_asin) AS rn
-  FROM `fivetran-hl.amazon_selling_partner.item_relationship`
-  -- Note: Removed _fivetran_deleted filter - all relationships currently marked as deleted
-  -- but we still want to use them for parent_asin
-  QUALIFY rn = 1
-) AS rel
-  ON ism.asin = rel.child_asin
-LEFT JOIN `fivetran-hl.amazon_selling_partner.item_product_type` AS pt
-  ON ism.asin = pt.asin
-  AND ism.marketplace_id = pt.marketplace_id
-LEFT JOIN `fivetran-hl.amazon_selling_partner.marketplace_participation` AS mp
-  ON ism.marketplace_id = mp.id
-LEFT JOIN `fivetran-hl.amazon_selling_partner.item_dimension` AS idim
-  ON ism.asin = idim.asin
-  AND ism.marketplace_id = idim.marketplace_id
-LEFT JOIN (
-  SELECT 
-    asin,
-    listing_price_currency_code,
-    listing_price_amount,
-    ROW_NUMBER() OVER (PARTITION BY asin ORDER BY index) AS rn
-  FROM `fivetran-hl.amazon_selling_partner.item_offer_detail`
-  QUALIFY rn = 1
-) AS iod
-  ON ism.asin = iod.asin
--- Note: item_summary table doesn't have _fivetran_deleted field
--- All records in this table are considered active
-;
+  CAST(cb.asin AS STRING) AS asin,
+  CAST(cb.marketplace_id AS STRING) AS marketplace,
+  CAST(l.sku AS STRING) AS sku,
+  CAST(cb.parent_asin AS STRING) AS parent_asin,
 
--- =============================================
--- VIEW DESCRIPTION
--- =============================================
---
--- This view standardizes product data from Fivetran's item_summary table.
--- It filters for active products only and provides a consistent interface
--- for populating DIM_PRODUCT.
---
--- Note: Field names may need adjustment based on actual item_summary schema.
--- Common variations:
--- - product_name might be: title, item_name, product_title
--- - marketplace might be: marketplace_id, marketplace_code
--- - launch_date might be: release_date, first_available_date
---
--- To verify schema, run:
--- SELECT * FROM `fivetran-hl.amazon_selling_partner.item_summary` LIMIT 1
---
--- =============================================
+  -- Marketplace attributes (hardcoded for single US marketplace)
+  CAST('Amazon.com' AS STRING) AS marketplace_name,
+  CAST('US' AS STRING) AS marketplace_country_code,
+  CAST('USD' AS STRING) AS marketplace_default_currency_code,
+
+  -- Product attributes
+  CAST(cb.product_name AS STRING) AS product_name,
+  CAST(cb.product_name AS STRING) AS display_name,
+  CAST(cb.brand AS STRING) AS brand,
+  CAST(cb.manufacturer AS STRING) AS manufacturer,
+  CAST(cb.product_type AS STRING) AS product_type,
+  CAST(cb.color AS STRING) AS color,
+  CAST(NULL AS DATE) AS launch_date,  -- Not available in Daton CatalogItems
+
+  -- Listing price from ActiveListingsReport
+  CAST('USD' AS STRING) AS listing_price_currency_code,
+  l.listing_price_amount,
+
+  -- Item dimensions
+  CAST(cb.item_weight_unit AS STRING) AS item_height_unit,
+  cb.item_height_value,
+  CAST(cb.item_weight_unit AS STRING) AS item_length_unit,
+  cb.item_length_value,
+  CAST(cb.item_weight_unit AS STRING) AS item_weight_unit,
+  cb.item_weight_value,
+  CAST(cb.item_weight_unit AS STRING) AS item_width_unit,
+  cb.item_width_value,
+  CAST(cb.package_weight_unit AS STRING) AS package_height_unit,
+  cb.package_height_value,
+  CAST(cb.package_weight_unit AS STRING) AS package_length_unit,
+  cb.package_length_value,
+  CAST(cb.package_weight_unit AS STRING) AS package_weight_unit,
+  cb.package_weight_value,
+  CAST(cb.package_weight_unit AS STRING) AS package_width_unit,
+  cb.package_width_value,
+
+  -- Metadata (replacing _fivetran_synced)
+  TIMESTAMP_MILLIS(CAST(cb._daton_batch_runtime AS INT64)) AS _fivetran_synced
+
+FROM catalog_base cb
+LEFT JOIN listings l ON cb.asin = l.asin AND l.rn = 1
+WHERE cb.rn = 1;

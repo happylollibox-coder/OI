@@ -30,14 +30,19 @@
 </div>
 
 <!-- PO Lines Card -->
-{% if shipment.lines %}
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-file-earmark-text"></i> Linked Purchase Orders ({{ shipment.lines|length }})</h5>
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-file-earmark-text"></i> Linked Purchase Orders ({{ shipment.lines|length if shipment.lines else 0 }})</h5>
+                {% if available_pos %}
+                <button type="button" class="btn btn-sm btn-outline-light" id="addPoLineBtn">
+                    <i class="bi bi-plus-circle"></i> Add PO Line
+                </button>
+                {% endif %}
             </div>
             <div class="card-body">
+                {% if shipment.lines %}
                 {% for line in shipment.lines %}
                 <div class="card mb-2 line-card">
                     <div class="card-body py-2 px-3">
@@ -119,19 +124,83 @@
                                 </div>
                             </form>
                         </div>
-                        {% if line.allocated_cost and shipment.cost_shipped %}
+                        {% set ship_total_cost = (shipment.cost_shipped or 0) + (shipment.amazon_commission or 0) %}
+                        {% if line.allocated_cost and ship_total_cost > 0 %}
                         <div class="alloc-bar mt-1">
-                            <div class="alloc-bar-fill" style="width: {{ (line.allocated_cost / shipment.cost_shipped * 100)|round(1) }}%"></div>
+                            <div class="alloc-bar-fill" style="width: {{ (line.allocated_cost / ship_total_cost * 100)|round(1) }}%"></div>
                         </div>
                         {% endif %}
                     </div>
                 </div>
                 {% endfor %}
+                {% else %}
+                <p class="text-muted mb-0"><i class="bi bi-info-circle"></i> No purchase orders linked yet. Click "Add PO Line" to link one.</p>
+                {% endif %}
+
+                <!-- Inline PO Picker for adding PO lines -->
+                {% if available_pos %}
+                <div id="poPickerInline" class="rounded border-top mt-3 p-3" style="display: none; border-top: 2px solid #0d6efd !important; background: #f0f4ff;">
+                    <form method="POST" action="{{ url_for('add_po_line_to_shipment', shipment_id=shipment.shipment_id) }}" id="addPoLineForm">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <strong><i class="bi bi-search"></i> Select Purchase Order</strong>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="closePickerBtn">
+                                <i class="bi bi-x-lg"></i> Close
+                            </button>
+                        </div>
+                        <input type="text" class="form-control form-control-sm mb-2" id="poSearchInput" placeholder="Search by product name, ASIN, or PO ID...">
+                        <div style="max-height: 250px; overflow-y: auto;">
+                            {% for po in available_pos %}
+                            <div class="po-option p-2 border-bottom" style="cursor: pointer;" 
+                                 data-po-id="{{ po.purchase_order_id }}" 
+                                 data-product="{{ po.product_name }}"
+                                 data-product-id="{{ po.product_id }}"
+                                 data-remaining="{{ po.remaining_quantity }}">
+                                <div class="d-flex justify-content-between">
+                                    <div>
+                                        <strong>{{ po.product_name }}</strong>
+                                        {% if po.product_asin %}<small class="text-muted ms-2">{{ po.product_asin }}</small>{% endif %}
+                                        <br><small class="text-muted">{{ po.purchase_order_id }} · {{ po.manufacturer_name }}</small>
+                                    </div>
+                                    <div class="text-end">
+                                        <span class="badge bg-{{ 'success' if po.remaining_quantity <= 0 else 'warning' }}">
+                                            {{ po.remaining_quantity|int }} remaining
+                                        </span>
+                                        <br><small class="text-muted">of {{ po.order_quantity|int }}</small>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        <!-- Selected PO + Quantity (hidden until PO selected) -->
+                        <div id="selectedPoSection" class="mt-3 p-2 bg-white border rounded" style="display: none;">
+                            <div class="row align-items-center">
+                                <div class="col-md-5">
+                                    <strong id="selectedPoLabel"></strong>
+                                    <input type="hidden" name="purchase_order_id" id="selectedPoId">
+                                    <input type="hidden" name="product_id" id="selectedProductId">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label form-label-sm mb-0">Quantity to Ship</label>
+                                    <input type="number" class="form-control form-control-sm" name="quantity_shipped" id="addPoQtyInput" min="1" required>
+                                    <small class="text-muted" id="remainingHint"></small>
+                                </div>
+                                <div class="col-md-4 text-end">
+                                    <button type="submit" class="btn btn-sm btn-primary">
+                                        <i class="bi bi-plus-circle"></i> Add to Shipment
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ms-1" id="clearSelectedPoBtn">
+                                        <i class="bi bi-x"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                {% endif %}
             </div>
         </div>
     </div>
 </div>
-{% endif %}
 
 <!-- Shipment Details Section -->
 <div class="row mb-4">
@@ -191,10 +260,27 @@
                             <span class="text-muted">-</span>
                         {% endif %}
                     </div>
-                    <div class="col-md-3">
-                        <strong>Total Cost:</strong><br>
+                    <div class="col-md-2">
+                        <strong>Shipment Cost:</strong><br>
                         {% if shipment.cost_shipped %}
-                            <strong class="text-primary">{{ shipment.cost_shipped|format_currency_with_commas }}</strong>
+                            {{ shipment.cost_shipped|format_currency_with_commas }}
+                        {% else %}
+                            <span class="text-muted">-</span>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-2">
+                        <strong>Amazon Commission:</strong><br>
+                        {% if shipment.amazon_commission %}
+                            {{ shipment.amazon_commission|format_currency_with_commas }}
+                        {% else %}
+                            <span class="text-muted">0</span>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-2">
+                        <strong>Total Cost:</strong><br>
+                        {% set total_cost = (shipment.cost_shipped or 0) + (shipment.amazon_commission or 0) %}
+                        {% if total_cost > 0 %}
+                            <strong class="text-primary">{{ total_cost|format_currency_with_commas }}</strong>
                         {% else %}
                             <span class="text-muted">-</span>
                         {% endif %}
@@ -204,25 +290,16 @@
                         {{ shipment.lines|length if shipment.lines else 0 }}
                     </div>
                 </div>
-                <hr>
                 <div class="row">
-                    <div class="col-md-3">
-                        <strong>Paid:</strong><br>
-                        {% if shipment.is_paid %}
-                            <span class="badge bg-success">Yes</span>
-                        {% else %}
-                            <span class="badge bg-secondary">No</span>
-                        {% endif %}
-                    </div>
-                    <div class="col-md-3">
-                        <strong>Paid Date:</strong><br>
-                        {{ shipment.paid_date or '-' }}
-                    </div>
                     <div class="col-md-3">
                         <strong>Status:</strong><br>
                         <span class="badge bg-{{ 'success' if shipment.shipment_status in ['PUT_AWAY', 'RECEIVED', 'INSPECTED'] else 'warning' if shipment.shipment_status == 'IN_TRANSIT' else 'secondary' }}">
                             {{ shipment.shipment_status }}
                         </span>
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Deliverer:</strong><br>
+                        {{ shipment.deliverer or '-' }}
                     </div>
                 </div>
                 {% if shipment.notes %}
@@ -257,9 +334,9 @@
                                     <label class="form-label">Shipment Type</label>
                                     <select class="form-select" name="shipment_type">
                                         <option value="">-- Select --</option>
-                                        <option value="SLOW_SEA" {% if shipment.shipment_type == 'SLOW_SEA' %}selected{% endif %}>Slow Sea</option>
-                                        <option value="FAST_SEA" {% if shipment.shipment_type == 'FAST_SEA' %}selected{% endif %}>Fast Sea</option>
-                                        <option value="AIR" {% if shipment.shipment_type == 'AIR' %}selected{% endif %}>Air</option>
+                                        {% for item in lovs.get('SHIPMENT_TYPE', []) %}
+                                        <option value="{{ item.value_id }}" {% if shipment.shipment_type == item.value_id %}selected{% endif %}>{{ item.value_caption }}</option>
+                                        {% endfor %}
                                     </select>
                                 </div>
                             </div>
@@ -279,36 +356,32 @@
                             </div>
                             <div class="col-md-3">
                                 <div class="mb-3">
+                                    <label class="form-label">Shipment Cost</label>
+                                    <input type="number" class="form-control" name="cost_shipped" id="edit_cost_shipped" value="{{ shipment.cost_shipped or '' }}" step="0.01" min="0" oninput="updateTotalCostDisplay()">
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="mb-3">
+                                    <label class="form-label">Amazon Commission</label>
+                                    <input type="number" class="form-control" name="amazon_commission" id="edit_amazon_commission" value="{{ shipment.amazon_commission or '0' }}" step="0.01" min="0" oninput="updateTotalCostDisplay()">
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="mb-3">
                                     <label class="form-label">Total Cost</label>
-                                    <input type="number" class="form-control" name="cost_shipped" value="{{ shipment.cost_shipped or '' }}" step="0.01" min="0">
-                                    <small class="text-muted">Cost will be re-allocated to lines</small>
+                                    <input type="text" class="form-control" id="edit_total_cost" readonly
+                                           value="{% set tc = (shipment.cost_shipped or 0) + (shipment.amazon_commission or 0) %}{{ '%.2f'|format(tc) if tc > 0 else '' }}"
+                                           style="background-color: #f0f0f0; font-weight: bold;">
+                                    <small class="text-muted">Shipment Cost + Commission. Will be re-allocated to lines</small>
                                 </div>
                             </div>
-                            <div class="col-md-3">
-                                <div class="mb-3">
-                                    <div class="form-check mt-4">
-                                        <input class="form-check-input" type="checkbox" id="is_paid" name="is_paid" value="true" {% if shipment.is_paid %}checked{% endif %}>
-                                        <label class="form-check-label" for="is_paid">Paid</label>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-3">
-                                <div class="mb-3">
-                                    <label class="form-label">Paid Date</label>
-                                    <input type="date" class="form-control" id="paid_date" name="paid_date" value="{{ shipment.paid_date or '' }}">
-                                </div>
-                            </div>
-                        </div>
-                        <div class="row">
                             <div class="col-md-3">
                                 <div class="mb-3">
                                     <label class="form-label">Status</label>
                                     <select class="form-select" name="shipment_status">
-                                        <option value="PENDING" {% if shipment.shipment_status == 'PENDING' %}selected{% endif %}>Pending</option>
-                                        <option value="IN_TRANSIT" {% if shipment.shipment_status == 'IN_TRANSIT' %}selected{% endif %}>In Transit</option>
-                                        <option value="RECEIVED" {% if shipment.shipment_status == 'RECEIVED' %}selected{% endif %}>Received</option>
-                                        <option value="INSPECTED" {% if shipment.shipment_status == 'INSPECTED' %}selected{% endif %}>Inspected</option>
-                                        <option value="PUT_AWAY" {% if shipment.shipment_status == 'PUT_AWAY' %}selected{% endif %}>Put Away</option>
+                                        {% for item in lovs.get('SHIPMENT_STATUS', []) %}
+                                        <option value="{{ item.value_id }}" {% if shipment.shipment_status == item.value_id %}selected{% endif %}>{{ item.value_caption }}</option>
+                                        {% endfor %}
                                     </select>
                                 </div>
                             </div>
@@ -330,25 +403,104 @@
         </div>
     </div>
 </div>
+<!-- Payment History Card -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-credit-card"></i> Payment History ({{ shipment_payments|length }})</h5>
+                <a href="{{ url_for('new_payment', shipment_id=shipment.shipment_id) }}" class="btn btn-sm btn-outline-light">
+                    <i class="bi bi-plus-circle"></i> Add Payment
+                </a>
+            </div>
+            <div class="card-body">
+                {% if shipment_payments %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Amount</th>
+                                <th>Bank Fee</th>
+                                <th>Paid From</th>
+                                <th>Vendor</th>
+                                <th>Notes</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% set ns = namespace(total_paid=0, total_fees=0) %}
+                            {% for pay in shipment_payments %}
+                            {% set ns.total_paid = ns.total_paid + (pay.payment_amount or 0) %}
+                            {% set ns.total_fees = ns.total_fees + (pay.bank_fee or 0) %}
+                            <tr>
+                                <td>{{ pay.payment_date }}</td>
+                                <td><strong>{{ pay.payment_amount|format_currency_with_commas }}</strong> {{ pay.currency }}</td>
+                                <td>{{ pay.bank_fee|format_currency_with_commas if pay.bank_fee else '-' }}</td>
+                                <td>{{ pay.payment_method or '-' }}</td>
+                                <td>{{ pay.vendor_name or '-' }}</td>
+                                <td><small>{{ pay.notes or '' }}</small></td>
+                                <td>
+                                    <a href="{{ url_for('payment_details', payment_id=pay.payment_id) }}" class="btn btn-sm btn-outline-primary" title="View Details">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        <tfoot class="table-light">
+                            <tr>
+                                <td><strong>Total</strong></td>
+                                <td><strong class="text-primary">{{ ns.total_paid|format_currency_with_commas }}</strong></td>
+                                <td><strong>{{ ns.total_fees|format_currency_with_commas if ns.total_fees else '-' }}</strong></td>
+                                <td colspan="4"></td>
+                            </tr>
+                            {% set pay_total_cost = (shipment.cost_shipped or 0) + (shipment.amazon_commission or 0) %}
+                            {% if pay_total_cost > 0 %}
+                            <tr>
+                                {% set remaining = pay_total_cost - ns.total_paid %}
+                                <td><strong>Remaining</strong></td>
+                                <td>
+                                    <strong class="{{ 'text-success' if remaining <= 0 else 'text-danger' }}">
+                                        {{ remaining|format_currency_with_commas }}
+                                    </strong>
+                                </td>
+                                <td colspan="5">
+                                    {% if remaining <= 0 %}
+                                    <span class="badge bg-success">Fully Paid</span>
+                                    {% else %}
+                                    <span class="badge bg-warning">Outstanding</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endif %}
+                        </tfoot>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted mb-0">
+                    <i class="bi bi-info-circle"></i> No payments recorded for this shipment.
+                    {% set no_pay_total = (shipment.cost_shipped or 0) + (shipment.amazon_commission or 0) %}
+                    {% if no_pay_total > 0 %}
+                    Total cost: <strong>{{ no_pay_total|format_currency_with_commas }}</strong>
+                    {% endif %}
+                </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
 
 {% block extra_js %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const isPaidCheckbox = document.getElementById('is_paid');
-    const paidDateInput = document.getElementById('paid_date');
-    
-    function togglePaidDate() {
-        if (paidDateInput) {
-            paidDateInput.disabled = !isPaidCheckbox.checked;
-            if (!isPaidCheckbox.checked) paidDateInput.value = '';
-        }
-    }
-    
-    if (isPaidCheckbox && paidDateInput) {
-        isPaidCheckbox.addEventListener('change', togglePaidDate);
-        togglePaidDate();
-    }
-});
+function updateTotalCostDisplay() {
+    const costShipped = parseFloat(document.getElementById('edit_cost_shipped').value) || 0;
+    const amazonCommission = parseFloat(document.getElementById('edit_amazon_commission').value) || 0;
+    const total = costShipped + amazonCommission;
+    document.getElementById('edit_total_cost').value = total > 0 ? total.toFixed(2) : '';
+}
 
 function toggleLineEdit(lineId) {
     const display = document.getElementById('display-' + lineId);
@@ -359,6 +511,70 @@ function toggleLineEdit(lineId) {
         edit.style.display = isEditing ? 'none' : '';
     }
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+
+// --- Add PO Line Picker ---
+const addPoLineBtn = document.getElementById('addPoLineBtn');
+const poPickerInline = document.getElementById('poPickerInline');
+const closePickerBtn = document.getElementById('closePickerBtn');
+const poSearchInput = document.getElementById('poSearchInput');
+const selectedPoSection = document.getElementById('selectedPoSection');
+const clearSelectedPoBtn = document.getElementById('clearSelectedPoBtn');
+
+if (addPoLineBtn && poPickerInline) {
+    addPoLineBtn.addEventListener('click', function() {
+        poPickerInline.style.display = poPickerInline.style.display === 'none' ? 'block' : 'none';
+        if (poPickerInline.style.display === 'block' && poSearchInput) {
+            poSearchInput.value = '';
+            poSearchInput.focus();
+            document.querySelectorAll('.po-option').forEach(o => o.style.display = '');
+        }
+    });
+
+    if (closePickerBtn) {
+        closePickerBtn.addEventListener('click', function() {
+            poPickerInline.style.display = 'none';
+        });
+    }
+
+    // Search
+    if (poSearchInput) {
+        poSearchInput.addEventListener('input', function() {
+            const term = this.value.toLowerCase();
+            document.querySelectorAll('.po-option').forEach(opt => {
+                opt.style.display = (term === '' || opt.textContent.toLowerCase().includes(term)) ? '' : 'none';
+            });
+        });
+    }
+
+    // Select PO
+    document.querySelectorAll('.po-option').forEach(opt => {
+        opt.addEventListener('click', function() {
+            const poId = this.dataset.poId;
+            const product = this.dataset.product;
+            const remaining = parseInt(this.dataset.remaining) || 0;
+
+            document.getElementById('selectedPoId').value = poId;
+            document.getElementById('selectedProductId').value = this.dataset.productId || '';
+            document.getElementById('selectedPoLabel').textContent = product + ' (' + poId + ')';
+            const qtyInput = document.getElementById('addPoQtyInput');
+            qtyInput.value = Math.max(0, remaining);
+            qtyInput.max = remaining;
+            document.getElementById('remainingHint').textContent = remaining + ' remaining';
+            selectedPoSection.style.display = 'block';
+        });
+    });
+
+    // Clear selection
+    if (clearSelectedPoBtn) {
+        clearSelectedPoBtn.addEventListener('click', function() {
+            selectedPoSection.style.display = 'none';
+            document.getElementById('selectedPoId').value = '';
+            document.getElementById('addPoQtyInput').value = '';
+        });
+    }
+}
+});
 </script>
-{% endblock %}
 {% endblock %}

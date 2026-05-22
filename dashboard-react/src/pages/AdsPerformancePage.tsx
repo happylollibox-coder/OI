@@ -1,5 +1,5 @@
-import { useState, useMemo, Fragment, type ReactNode } from 'react';
-import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, LabelList } from 'recharts';
+import { useState, useEffect, useMemo, Fragment, type ReactNode } from 'react';
+import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LabelList } from 'recharts';
 import { SeasonalReferenceLines, getXLabels } from '../components/SeasonalReferenceLines';
 import type { DashboardData, Ads7dRow, SqpWeeklyRow, KeywordMapRow, HolidayRow } from '../types';
 import { Card } from '../components/Card';
@@ -8,7 +8,7 @@ import { Empty } from '../components/Empty';
 import { Th, SortTh, useSort, Tip, MEASURE_TIPS } from '../components/Tooltip';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
 import { Badge, RoasBadge } from '../components/Badge';
-import { fM, fP, fOrd, fClk, fR, fCpc, periodKey, getPeriodsToInclude, weekRangeLabel, addDays, ACTION_META, getCurrentWeekStart } from '../utils';
+import { fM, fP, fOrd, fClk, fR, fCpc, periodKey, getPeriodsToInclude, weekRangeLabel, weekRangeLabelCapped, addDays, ACTION_META, getCurrentWeekStart, getWeekStart } from '../utils';
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
 import { ChevronRight, ChevronDown, TrendingDown, AlertTriangle, Zap, GripVertical } from 'lucide-react';
@@ -30,6 +30,7 @@ const DEFAULT_HIERARCHY: (typeof HIERARCHY_OPTIONS)[number]['id'][] = ['portfoli
 
 export function AdsPerformancePage({ data }: { data: DashboardData }) {
   const { filters } = useFilters();
+  const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
   const [campaignHierarchy, setCampaignHierarchy] = useState<(typeof HIERARCHY_OPTIONS)[number]['id'][]>(DEFAULT_HIERARCHY);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [drainerMinSpend, setDrainerMinSpend] = useState(5);
@@ -129,17 +130,8 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   const [adsHierCols, setAdsHierCols] = useMeasureSelection('ads_hier_terms', ADS_HIER_COLUMNS);
   const [adsCampCols, setAdsCampCols] = useMeasureSelection('ads_campaigns', ADS_CAMP_COLUMNS);
 
-  const latestWeek = useMemo(() => {
-    const ws = [...new Set((data.ads_7d || []).map(r => r.week_start || '').filter(Boolean))].sort();
-    return ws[ws.length - 1] || null;
-  }, [data.ads_7d]);
-
-  const weeks4w = useMemo(() => {
-    if (!latestWeek) return new Set<string>();
-    const ws = [...new Set((data.ads_7d || []).map(r => r.week_start || '').filter(Boolean))].sort();
-    const idx = ws.indexOf(latestWeek);
-    return new Set(ws.slice(Math.max(0, idx - 3), idx + 1));
-  }, [data.ads_7d, latestWeek]);
+  // Moved to after rawRows definition below
+  // (latestWeek and weeks4w placeholders)
 
   const lyPeakRange = useMemo(() => {
     const pk = data.peak?.[0];
@@ -211,10 +203,48 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   }, [allRawRows, includeCurrentWeek, filters.periodMode, currentWeekStart]);
   const hasWeekStart = rawRows.some(r => r.week_start);
 
+  const latestWeek = useMemo(() => {
+    const ws = [...new Set(rawRows.map(r => r.week_start || '').filter(Boolean))].sort();
+    return ws[ws.length - 1] || null;
+  }, [rawRows]);
+
+  const weeks4w = useMemo(() => {
+    if (!latestWeek) return new Set<string>();
+    const ws = [...new Set(rawRows.map(r => r.week_start || '').filter(Boolean))].sort();
+    const idx = ws.indexOf(latestWeek);
+    return new Set(ws.slice(Math.max(0, idx - 3), idx + 1));
+  }, [rawRows, latestWeek]);
+
   /** Period-filtered raw rows (before camp/term aggregation). Used for accurate totals. */
   const filteredRawRows = useMemo((): Ads7dRow[] => {
     if (!hasWeekStart || !rawRows.length) return rawRows;
     const periodMode = filters.periodMode;
+
+    // Date mode: filter by specific date's week or latest week
+    // Note: ads_7d data is weekly (has week_start, not daily date), so we find the
+    // containing week for the selected date. KPIs will show that week's totals.
+    if (periodMode === 'date') {
+      // First try matching by actual date field (for rows that have daily data)
+      const hasDateField = rawRows.some(r => r.date);
+      if (hasDateField) {
+        if (filters.specificPeriod) {
+          return rawRows.filter(r => r.date === filters.specificPeriod);
+        }
+        const allDates = [...new Set(rawRows.map(r => r.date || '').filter(Boolean))].sort();
+        const latestDate = allDates[allDates.length - 1];
+        if (latestDate) return rawRows.filter(r => r.date === latestDate);
+      }
+      // Fallback: match by week containing the selected date (or latest week)
+      if (filters.specificPeriod) {
+        const targetWeek = getWeekStart(filters.specificPeriod);
+        return rawRows.filter(r => r.week_start === targetWeek);
+      }
+      // No date selected — show latest week
+      const allWeeks = [...new Set(rawRows.map(r => r.week_start || '').filter(Boolean))].sort();
+      const latestWeek = allWeeks[allWeeks.length - 1];
+      return latestWeek ? rawRows.filter(r => r.week_start === latestWeek) : rawRows;
+    }
+
     const useDateFilter = periodMode !== 'weeks' && rawRows.some(r => r.date);
     const periodKeys = useDateFilter
       ? [...new Set(rawRows.map(r => (r.date || '').slice(0, periodMode === 'month' ? 7 : 4)).filter(Boolean))].sort()
@@ -457,6 +487,11 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
         cpc: t.cpc, conv_rate: t.conv_rate,
         roas: t.spend > 0 ? (sales - cogs) / t.spend : 0,
         gross_roas: t.spend > 0 ? sales / t.spend : 0,
+        // campaign_search_terms is a 90-day aggregate — use as proxy for 4w metrics
+        // so Money Bleeders and action signals can detect zero-order terms
+        spend_4w: t.spend, orders_4w: t.orders, clicks_4w: t.clicks, sales_4w: sales,
+        roas_4w: t.spend > 0 ? sales / t.spend : 0,
+        conv_rate_4w: t.clicks > 0 ? (t.orders * 100) / t.clicks : 0,
         sqp_volume_ly_peak: det?.volume_ly_peak || 0,
         sqp_orders_ly_peak: det?.orders_ly_peak || 0,
         sqp_organic_units: det ? Math.max(0, det.orders - det.ads_orders) : 0,
@@ -468,10 +503,10 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   }, [rows, campaigns, data.campaign_search_terms, famMatch, expCampaignIds, campIds, filters.keyword, sqpDetailsByTerm]);
 
   const totals = useMemo(() => {
-    const t = { spend: 0, orders: 0, clicks: 0, impressions: 0, sales: 0 };
+    const t = { spend: 0, orders: 0, clicks: 0, impressions: 0, sales: 0, gross_profit: 0, cogs: 0 };
     // When keyword filter is active, use search term data (keyword-specific) instead of campaign totals
     const src = filters.keyword ? searchTerms : campaigns;
-    src.forEach(c => { t.spend += c.spend; t.orders += c.orders; t.clicks += c.clicks; t.impressions += c.impressions; t.sales += c.sales; });
+    src.forEach(c => { t.spend += c.spend; t.orders += c.orders; t.clicks += c.clicks; t.impressions += c.impressions; t.sales += c.sales; t.gross_profit += (c.gross_profit ?? 0); t.cogs += (c.cogs ?? 0); });
     return t;
   }, [campaigns, searchTerms, filters.keyword]);
 
@@ -521,6 +556,11 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   const termsForCampaign = (campId: string) => searchTerms.filter(t => t.campaign_id === campId).sort((a, b) => b.spend - a.spend);
 
   const totalRoas = totals.spend > 0 ? totals.sales / totals.spend : 0;
+  // Net Profit = Sales − COGS − Spend (matches trend chart formula)
+  const totalNetProfit = totals.gross_profit !== 0
+    ? totals.gross_profit - totals.spend  // gross_profit = sales - cogs from row finalize
+    : totals.sales - totals.cogs - totals.spend;
+  const totalNetRoas = totals.spend > 0 ? totalNetProfit / totals.spend : 0;
   const totalWasted = drainers.reduce((s, d) => s + (d.spend_4w || 0), 0);
   const resolvedCount = drainers.filter(d => (d as any)._resolved).length;
   const activeBleeders = drainers.filter(d => !(d as any)._resolved);
@@ -554,10 +594,14 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
 
   const periodLabel = useMemo(() => {
     if (!hasWeekStart) return 'Latest period';
+    if (filters.periodMode === 'date') return filters.specificPeriod || 'Latest date';
     const period = filters.specificPeriod || effectivePeriod;
     if (!period) return 'Latest period';
-    return filters.periodMode === 'weeks' ? weekRangeLabel(period) : period;
+    return filters.periodMode === 'weeks' ? weekRangeLabelCapped(period, perfMaxDate) : period;
   }, [hasWeekStart, filters.periodMode, filters.specificPeriod, effectivePeriod]);
+
+  const totalCvr = totals.clicks > 0 ? (totals.orders * 100) / totals.clicks : 0;
+  const totalCtr = totals.impressions > 0 ? (totals.clicks * 100) / totals.impressions : 0;
 
   usePageSummary({
     title: 'Ads',
@@ -566,7 +610,11 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
       { label: 'Orders', value: fOrd(totals.orders) },
       { label: 'Sales', value: fM(totals.sales) },
       { label: 'ROAS', value: fR(totalRoas), color: totalRoas >= 1 ? 'green' : 'red' },
+      { label: 'Net Profit', value: fM(totalNetProfit), color: totalNetProfit >= 0 ? 'green' : 'red' },
+      { label: 'Net ROAS', value: fR(totalNetRoas), color: totalNetRoas >= 1 ? 'green' : 'red' },
       { label: 'CPC', value: fCpc(totals.clicks > 0 ? totals.spend / totals.clicks : 0) },
+      { label: 'CVR', value: fP(totalCvr) },
+      { label: 'CTR', value: fP(totalCtr) },
       { label: 'Wasted', value: fM(totalWasted), color: 'red' },
     ],
   });
@@ -583,44 +631,17 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
               ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
               : 'text-faint border-border hover:text-muted hover:border-border-strong'
           }`}
-          title={`Current week (${weekRangeLabel(currentWeekStart)}) — data may be incomplete`}
+          title={`Current week (${weekRangeLabelCapped(currentWeekStart, perfMaxDate)}) — data may be incomplete`}
         >
           <span className={`w-2 h-2 rounded-full transition-colors ${includeCurrentWeek ? 'bg-amber-400' : 'bg-zinc-600'}`} />
           This Week {includeCurrentWeek ? 'ON' : 'OFF'}
         </button>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-6 gap-3 mb-6">
-        <Card className="!p-3.5 text-center">
-          <div className="text-[10px] text-subtle uppercase font-semibold">Ads Spend</div>
-          <div className="text-lg font-extrabold font-mono">{fM(totals.spend)}</div>
-        </Card>
-        <Card className="!p-3.5 text-center">
-          <div className="text-[10px] text-subtle uppercase font-semibold">Ads Orders</div>
-          <div className="text-lg font-extrabold font-mono">{fOrd(totals.orders)}</div>
-        </Card>
-        <Card className="!p-3.5 text-center">
-          <div className="text-[10px] text-subtle uppercase font-semibold">Ads Sales</div>
-          <div className="text-lg font-extrabold font-mono">{fM(totals.sales)}</div>
-        </Card>
-        <Card className="!p-3.5 text-center">
-          <div title={MEASURE_TIPS.ads_roas} className="text-[10px] text-subtle uppercase font-semibold">Ads ROAS</div>
-          <div className={`text-lg font-extrabold font-mono ${totalRoas >= 1 ? 'text-emerald-400' : 'text-red-400'}`}>{fR(totalRoas)}</div>
-        </Card>
-        <Card className="!p-3.5 text-center">
-          <div className="text-[10px] text-subtle uppercase font-semibold">Ads CPC</div>
-          <div className="text-lg font-extrabold font-mono">{fCpc(totals.clicks > 0 ? totals.spend / totals.clicks : 0)}</div>
-        </Card>
-        <Card className="!p-3.5 text-center">
-          <div className="text-[10px] text-subtle uppercase font-semibold">Wasted</div>
-          <div className="text-lg font-extrabold font-mono text-red-400">{fM(totalWasted)}</div>
-          <div className="text-[9px] text-faint">{drainers.length} bleeder terms (4w){resolvedCount > 0 && <span className="text-emerald-400"> · {resolvedCount} resolved</span>}</div>
-        </Card>
-      </div>
+      {/* KPIs shown in PageSummaryBar above */}
 
       {/* Weekly Ads Trend — dynamic with measure selector */}
-      <AdsTrendChart rawRows={rawRows} famMatch={famMatch} expCampaignIds={expCampaignIds} periodTrend={filters.periodTrend} holidays={data.holidays || []} />
+      <AdsTrendChart rawRows={rawRows} famMatch={famMatch} expCampaignIds={expCampaignIds} periodTrend={filters.periodTrend} holidays={data.holidays || []} perfMaxDate={perfMaxDate} />
 
       {/* Insight Cards */}
       <div className="grid grid-cols-2 gap-3.5 mb-6">
@@ -1519,24 +1540,30 @@ function TermsTable({ terms, highlight, visibleCols, sqpVolume = {}, sqpDetails 
 
 /* ─── Ads Trend Chart with dynamic measure selector ─── */
 const ADS_TREND_MEASURES = [
-  { key: 'spend', label: 'Spend', color: '#ef4444', fmt: fM, type: 'bar' as const },
-  { key: 'sales', label: 'Sales', color: '#3b82f6', fmt: fM, type: 'bar' as const },
-  { key: 'orders', label: 'Orders', color: '#22c55e', fmt: fOrd, type: 'line' as const },
-  { key: 'clicks', label: 'Clicks', color: '#8b5cf6', fmt: fClk, type: 'line' as const },
-  { key: 'impressions', label: 'Impr', color: '#64748b', fmt: (v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v), type: 'line' as const },
-  { key: 'cpc', label: 'CPC', color: '#f59e0b', fmt: fCpc, type: 'line' as const },
-  { key: 'roas', label: 'ROAS', color: '#a855f7', fmt: fR, type: 'line' as const },
-  { key: 'conv_rate', label: 'Conv%', color: '#14b8a6', fmt: fP, type: 'line' as const },
+  { key: 'spend', label: 'Ads Spend', color: '#ef4444', fmt: fM, type: 'bar' as const, axis: 'left' as const },
+  { key: 'sales', label: 'Ads Sales', color: '#3b82f6', fmt: fM, type: 'bar' as const, axis: 'left' as const },
+  { key: 'net_profit', label: 'Ads Net Profit', color: '#10b981', fmt: fM, type: 'bar' as const, axis: 'left' as const },
+  { key: 'orders', label: 'Ads Orders', color: '#22c55e', fmt: fOrd, type: 'bar' as const, axis: 'left' as const },
+  { key: 'clicks', label: 'Ads Clicks', color: '#8b5cf6', fmt: fClk, type: 'bar' as const, axis: 'left' as const },
+  { key: 'impressions', label: 'Ads Impr', color: '#64748b', fmt: (v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v), type: 'bar' as const, axis: 'left' as const },
+  { key: 'roas', label: 'Ads ROAS', color: '#a855f7', fmt: fR, type: 'bar' as const, axis: 'right' as const },
+  { key: 'net_roas', label: 'Ads Net ROAS', color: '#06b6d4', fmt: fR, type: 'bar' as const, axis: 'right' as const },
+  { key: 'cpc', label: 'Ads CPC', color: '#f59e0b', fmt: fCpc, type: 'bar' as const, axis: 'right' as const },
+  { key: 'conv_rate', label: 'Ads CVR', color: '#14b8a6', fmt: fP, type: 'bar' as const, axis: 'right' as const },
+  { key: 'ctr', label: 'Ads CTR', color: '#fb923c', fmt: fP, type: 'bar' as const, axis: 'right' as const },
 ] as const;
 
-function AdsTrendChart({ rawRows, famMatch, expCampaignIds, periodTrend, holidays }: {
+function AdsTrendChart({ rawRows, famMatch, expCampaignIds, periodTrend, holidays, perfMaxDate = '' }: {
   rawRows: Ads7dRow[];
   famMatch: string[] | null;
   expCampaignIds: Set<string> | null;
   periodTrend: number;
   holidays: HolidayRow[];
+  perfMaxDate?: string;
 }) {
-  const [active, setActive] = useState<Set<string>>(new Set(['spend', 'sales', 'orders']));
+  const [active, setActive] = useState<Set<string>>(new Set(['net_profit']));
+  const [dailyRows, setDailyRows] = useState<Ads7dRow[] | null>(null);
+  const [dailyLoading, setDailyLoading] = useState(false);
   const toggle = (key: string) => setActive(prev => {
     const next = new Set(prev);
     next.has(key) ? next.delete(key) : next.add(key);
@@ -1545,80 +1572,164 @@ function AdsTrendChart({ rawRows, famMatch, expCampaignIds, periodTrend, holiday
 
   const { filters } = useFilters();
   const periodMode = filters.periodMode || 'weeks';
-  const data = useMemo(() => {
-    let adsRows = rawRows;
-    if (famMatch) adsRows = adsRows.filter(r => famMatch.some(p => (r.campaign_name || '').toLowerCase().includes(p)));
-    if (expCampaignIds) adsRows = adsRows.filter(r => expCampaignIds.has(r.campaign_id));
-    // When keyword filter is active, only include search term rows for that keyword
-    if (filters.keyword) adsRows = adsRows.filter(r => r.row_type === 'search_term' && r.search_term === filters.keyword);
+  const useDaily = periodMode === 'date';
 
-    // Determine grouping key based on period mode
+  // Lazy-load daily data from Cube when entering date mode
+  useEffect(() => {
+    if (!useDaily || dailyRows) return;
+    const CUBE_API = import.meta.env.VITE_CUBE_API_URL || (import.meta.env.DEV ? 'http://localhost:4000' : '');
+    if (!CUBE_API) return;
+    let cancelled = false;
+    setDailyLoading(true);
+    (async () => {
+      try {
+        let retries = 0;
+        while (retries < 15) {
+          const token = localStorage.getItem('dashboard_token');
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+
+          const res = await fetch(`${CUBE_API}/cubejs-api/v1/load`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ query: {
+              measures: ['Ads.spend', 'Ads.orders', 'Ads.clicks', 'Ads.impressions', 'Ads.sales', 'Ads.cogs', 'Ads.grossProfit'],
+              timeDimensions: [{ dimension: 'Ads.date', granularity: 'day', dateRange: 'Last 180 days' }],
+              filters: [{ member: 'Ads.spend', operator: 'gt', values: ['0'] }],
+              order: { 'Ads.date': 'asc' },
+              limit: 5000,
+            }}),
+          });
+          if (!res.ok) break;
+          const json = await res.json();
+          if (json.error === 'Continue wait') { retries++; await new Promise(r => setTimeout(r, 2000)); continue; }
+          if (json.error) break;
+          if (!cancelled) {
+            const rows: Ads7dRow[] = (json.data ?? []).map((r: Record<string, unknown>) => {
+              const dateStr = r['Ads.date'] ? String(r['Ads.date']).slice(0, 10) : '';
+              const cogs = Number(r['Ads.cogs'] ?? 0);
+              const grossProfit = r['Ads.grossProfit'] != null ? Number(r['Ads.grossProfit']) : null;
+              return {
+                row_type: 'campaign' as const,
+                date: dateStr, week_start: '', campaign_id: 'ALL', campaign_name: '',
+                campaign_type: null, search_term: null,
+                spend: Number(r['Ads.spend'] ?? 0), orders: Number(r['Ads.orders'] ?? 0),
+                clicks: Number(r['Ads.clicks'] ?? 0), impressions: Number(r['Ads.impressions'] ?? 0),
+                sales: Number(r['Ads.sales'] ?? 0), cogs, gross_profit: grossProfit,
+                cpc: 0, conv_rate: 0, roas: 0, search_terms_count: null,
+              };
+            });
+            setDailyRows(rows);
+          }
+          break;
+        }
+      } catch (e) { console.warn('[AdsTrend] daily fetch failed:', e); }
+      if (!cancelled) setDailyLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [useDaily, dailyRows]);
+
+  const data = useMemo(() => {
+    const sourceRows = useDaily ? (dailyRows || []) : rawRows;
+    let adsRows = sourceRows;
+    if (!useDaily) {
+      if (famMatch) adsRows = adsRows.filter(r => famMatch.some(p => (r.campaign_name || '').toLowerCase().includes(p)));
+      if (expCampaignIds) adsRows = adsRows.filter(r => expCampaignIds.has(r.campaign_id));
+      if (filters.keyword) adsRows = adsRows.filter(r => r.row_type === 'search_term' && r.search_term === filters.keyword);
+    }
+
+    // Determine grouping key
     const getGroupKey = (r: Ads7dRow): string => {
+      if (useDaily) return r.date || '';
       const w = r.week_start || '';
       if (!w) return '';
-      if (periodMode === 'month') return w.slice(0, 7); // YYYY-MM
-      if (periodMode === 'year') return w.slice(0, 4);   // YYYY
-      return w; // weeks (default)
+      if (periodMode === 'month') return w.slice(0, 7);
+      if (periodMode === 'year') return w.slice(0, 4);
+      return w;
     };
 
-    const byKeyPeriod: Record<string, { spend: number; orders: number; sales: number; clicks: number; impressions: number }> = {};
+    const byKeyPeriod: Record<string, { spend: number; orders: number; sales: number; clicks: number; impressions: number; gross_profit: number; cogs: number }> = {};
     const campRowSeen = new Set<string>();
     for (const r of adsRows) {
       const p = getGroupKey(r);
       if (!p) continue;
-      const ck = `${r.campaign_id}|${p}`;
+      const ck = useDaily ? p : `${r.campaign_id}|${p}`;
       if (r.row_type === 'campaign') {
-        // Campaign-level row: use directly (overrides any partial search_term sums)
-        byKeyPeriod[ck] = { spend: r.spend, orders: r.orders, sales: r.sales, clicks: r.clicks, impressions: r.impressions };
+        if (!byKeyPeriod[ck]) byKeyPeriod[ck] = { spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0, gross_profit: 0, cogs: 0 };
+        byKeyPeriod[ck].spend += r.spend; byKeyPeriod[ck].orders += r.orders;
+        byKeyPeriod[ck].sales += r.sales; byKeyPeriod[ck].clicks += r.clicks;
+        byKeyPeriod[ck].impressions += r.impressions; byKeyPeriod[ck].gross_profit += (r.gross_profit ?? 0);
+        byKeyPeriod[ck].cogs += (r.cogs ?? 0);
         campRowSeen.add(ck);
       } else if (!campRowSeen.has(ck)) {
-        // Search_term row: accumulate only if no campaign row was seen for this key
-        if (!byKeyPeriod[ck]) byKeyPeriod[ck] = { spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0 };
-        byKeyPeriod[ck].spend += r.spend;
-        byKeyPeriod[ck].orders += r.orders;
-        byKeyPeriod[ck].sales += r.sales;
-        byKeyPeriod[ck].clicks += r.clicks;
-        byKeyPeriod[ck].impressions += r.impressions;
+        if (!byKeyPeriod[ck]) byKeyPeriod[ck] = { spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0, gross_profit: 0, cogs: 0 };
+        byKeyPeriod[ck].spend += r.spend; byKeyPeriod[ck].orders += r.orders;
+        byKeyPeriod[ck].sales += r.sales; byKeyPeriod[ck].clicks += r.clicks;
+        byKeyPeriod[ck].impressions += r.impressions; byKeyPeriod[ck].gross_profit += (r.gross_profit ?? 0);
+        byKeyPeriod[ck].cogs += (r.cogs ?? 0);
       }
     }
 
-    const byPeriod: Record<string, { spend: number; orders: number; sales: number; clicks: number; impressions: number }> = {};
+    const byPeriod: Record<string, { spend: number; orders: number; sales: number; clicks: number; impressions: number; gross_profit: number; cogs: number }> = {};
     for (const [key, d] of Object.entries(byKeyPeriod)) {
-      const p = key.split('|')[1];
-      if (!byPeriod[p]) byPeriod[p] = { spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0 };
+      const p = useDaily ? key : key.split('|')[1];
+      if (!byPeriod[p]) byPeriod[p] = { spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0, gross_profit: 0, cogs: 0 };
       byPeriod[p].spend += d.spend; byPeriod[p].orders += d.orders;
       byPeriod[p].sales += d.sales; byPeriod[p].clicks += d.clicks;
-      byPeriod[p].impressions += d.impressions;
+      byPeriod[p].impressions += d.impressions; byPeriod[p].gross_profit += d.gross_profit;
+      byPeriod[p].cogs += d.cogs;
     }
 
     const formatLabel = (key: string): string => {
-      if (periodMode === 'month') return key; // YYYY-MM
-      if (periodMode === 'year') return key;   // YYYY
-      return weekRangeLabel(key);              // "Mar 8 – Mar 14"
+      if (useDaily) {
+        const d = new Date(key + 'T00:00:00');
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      }
+      if (periodMode === 'month') return key;
+      if (periodMode === 'year') return key;
+      return weekRangeLabelCapped(key, perfMaxDate);
     };
 
-    return Object.entries(byPeriod)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-(periodTrend || 8))
+    const sliceCount = periodTrend || 4;
+    let sorted = Object.entries(byPeriod)
+      .sort(([a], [b]) => a.localeCompare(b));
+
+    if (useDaily) {
+      // Daily mode: show 7 days in the past and up to 7 in the future from today
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const past = sorted.filter(([p]) => p <= todayStr).slice(-7);
+      const future = sorted.filter(([p]) => p > todayStr).slice(0, 7);
+      sorted = [...past, ...future];
+      // Filter out zero-spend days to avoid empty bars
+      sorted = sorted.filter(([, d]) => d.spend > 0 || d.orders > 0);
+    } else {
+      sorted = sorted.slice(-sliceCount);
+    }
+
+    return sorted
       .map(([p, d]) => ({
         week: formatLabel(p),
         weekKey: p,
         ...d,
+        net_profit: d.gross_profit !== 0 ? d.gross_profit - d.spend : d.sales - d.cogs - d.spend,
         cpc: d.clicks > 0 ? d.spend / d.clicks : 0,
         roas: d.spend > 0 ? d.sales / d.spend : 0,
+        net_roas: d.spend > 0 ? (d.gross_profit !== 0 ? d.gross_profit / d.spend : (d.sales - d.cogs) / d.spend) : 0,
         conv_rate: d.clicks > 0 ? (d.orders * 100) / d.clicks : 0,
+        ctr: d.impressions > 0 ? (d.clicks * 100) / d.impressions : 0,
       }));
-  }, [rawRows, famMatch, expCampaignIds, periodTrend, filters.keyword, periodMode]);
-
-  if (data.length < 2) return null;
+  }, [rawRows, dailyRows, famMatch, expCampaignIds, periodTrend, filters.keyword, periodMode, useDaily]);
 
   const activeMeasures = ADS_TREND_MEASURES.filter(m => active.has(m.key));
-  const trendTitle = periodMode === 'month' ? 'Monthly Ads Trend' : periodMode === 'year' ? 'Yearly Ads Trend' : 'Weekly Ads Trend';
+  const trendTitle = useDaily ? 'Daily Ads Trend' : periodMode === 'month' ? 'Monthly Ads Trend' : periodMode === 'quarter' ? 'Quarterly Ads Trend' : periodMode === 'year' ? 'Yearly Ads Trend' : 'Weekly Ads Trend';
+  const showLabels = !useDaily || data.length <= 15; // show labels unless daily with many bars
 
   return (
     <div className="border border-border rounded-xl bg-card p-4 mb-6">
       <div className="flex items-center justify-between mb-2">
-        <div className="text-[11px] font-semibold text-subtle uppercase tracking-wider">{trendTitle}</div>
+        <div className="flex items-center gap-3">
+          <div className="text-[11px] font-semibold text-subtle uppercase tracking-wider">{trendTitle}</div>
+        </div>
         <div className="flex items-center gap-1 flex-wrap">
           {ADS_TREND_MEASURES.map(m => (
             <button key={m.key} onClick={() => toggle(m.key)}
@@ -1632,37 +1743,46 @@ function AdsTrendChart({ rawRows, famMatch, expCampaignIds, periodTrend, holiday
           ))}
         </div>
       </div>
-      <div className="h-[200px]">
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} barCategoryGap="20%" margin={{ top: 20, right: 5, bottom: 0, left: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-            <XAxis dataKey="week" tick={{ fill: '#71717a', fontSize: 10, fontFamily: 'var(--font-mono)' }} tickLine={false} axisLine={false} />
-            <YAxis yAxisId="left" hide />
-            <YAxis yAxisId="right" orientation="right" hide />
-            <Tooltip
-              contentStyle={{ background: '#16161a', border: '1px solid rgba(63,63,70,0.45)', borderRadius: 8, fontSize: 11 }}
-              formatter={((v: unknown, name?: string) => {
-                const n = Number(v) || 0;
-                const m = ADS_TREND_MEASURES.find(x => x.key === name);
-                return [m ? m.fmt(n) : String(n), m?.label || name || ''];
-              }) as any}
-            />
-            {activeMeasures.map(m =>
-              m.type === 'bar' ? (
-                <Bar key={m.key} yAxisId="left" dataKey={m.key} name={m.key} fill={m.color} radius={[3, 3, 0, 0]} fillOpacity={0.7}>
-                  <LabelList dataKey={m.key} position="top" offset={4}
-                    formatter={(v: unknown) => m.fmt(typeof v === 'number' ? v : 0)}
-                    style={{ fill: '#d4d4d8', fontSize: 10, fontWeight: 600, fontFamily: 'var(--font-mono)' }} />
-                </Bar>
-              ) : (
-                <Line key={m.key} yAxisId="right" dataKey={m.key} name={m.key} stroke={m.color} strokeWidth={2}
-                  dot={{ r: 2.5, fill: m.color }} type="monotone" />
-              )
-            )}
-            <SeasonalReferenceLines holidays={holidays} xLabels={getXLabels(data, 'week')} yAxisId="left" />
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
+      {dailyLoading && useDaily && (
+        <div className="h-[200px] flex items-center justify-center text-xs text-subtle animate-pulse">Loading daily data…</div>
+      )}
+      {(!dailyLoading || !useDaily) && data.length < 2 && (
+        <div className="h-[200px] flex items-center justify-center text-xs text-subtle">Not enough data points</div>
+      )}
+      {data.length >= 2 && !(dailyLoading && useDaily) && (
+        <div className="h-[200px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} barCategoryGap={useDaily ? '5%' : '20%'} margin={{ top: 20, right: 5, bottom: 0, left: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+              <XAxis dataKey="week" tick={{ fill: '#71717a', fontSize: useDaily ? 8 : 10, fontFamily: 'var(--font-mono)' }} tickLine={false} axisLine={false} interval={useDaily ? Math.max(0, Math.floor(data.length / 15)) : 0} angle={useDaily ? -45 : 0} textAnchor={useDaily ? 'end' : 'middle'} height={useDaily ? 40 : 30} />
+              <YAxis yAxisId="left" hide />
+              <YAxis yAxisId="right" orientation="right" hide />
+              <Tooltip
+                contentStyle={{ background: '#16161a', border: '1px solid rgba(63,63,70,0.45)', borderRadius: 8, fontSize: 11 }}
+                formatter={((v: unknown, name?: string) => {
+                  const n = Number(v) || 0;
+                  const m = ADS_TREND_MEASURES.find(x => x.key === name);
+                  return [m ? m.fmt(n) : String(n), m?.label || name || ''];
+                }) as any}
+              />
+              {activeMeasures.map(m =>
+                m.type === 'bar' ? (
+                  <Bar key={m.key} yAxisId={m.axis} dataKey={m.key} name={m.key} fill={m.color} radius={[3, 3, 0, 0]} fillOpacity={0.7}>
+                    {showLabels && <LabelList dataKey={m.key} position="top" offset={4}
+                      formatter={(v: unknown) => m.fmt(typeof v === 'number' ? v : 0)}
+                      style={{ fill: '#d4d4d8', fontSize: 10, fontWeight: 600, fontFamily: 'var(--font-mono)' }} />}
+                  </Bar>
+                ) : (
+                  <Line key={m.key} yAxisId="right" dataKey={m.key} name={m.key} stroke={m.color} strokeWidth={useDaily ? 1.5 : 2}
+                    dot={useDaily ? false : { r: 2.5, fill: m.color }} type="monotone" />
+                )
+              )}
+              <SeasonalReferenceLines holidays={holidays} xLabels={getXLabels(data, 'week')} yAxisId="left" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }
+

@@ -2,7 +2,7 @@
 -- OI Database Project - SP_MERGE_PRODUCT_DIM Stored Procedure
 -- =============================================
 --
--- Purpose: Merge active products from Fivetran item_summary into DIM_PRODUCT
+-- Purpose: Merge active products from SRC_ACC_PRODUCTS into DIM_PRODUCT
 -- Uses MERGE for upsert-only operations (no deletes)
 -- Cost data (cost_of_goods, shipping_cost, fba_cost) is managed by DIM_COSTS_HISTORY, not here.
 -- Project: onyga-482313
@@ -12,7 +12,8 @@
 
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_MERGE_PRODUCT_DIM`()
 OPTIONS (
-  description = "Merge active products from V_SRC_Products into DIM_PRODUCT table (upsert only, no deletes). Cost data managed by DIM_COSTS_HISTORY."
+  description = "Merge active products from V_SRC_Products into DIM_PRODUCT table (upsert only, no deletes). Cost data managed by DIM_COSTS_HISTORY.",
+  strict_mode = false
 )
 BEGIN
   -- Declare variables for logging
@@ -71,7 +72,7 @@ BEGIN
       vp.package_width_value,
       vp._fivetran_synced,
       vp.color AS product_short_name
-    FROM `onyga-482313.OI.V_SRC_Products` vp
+    FROM `onyga-482313.OI.SRC_ACC_PRODUCTS` vp
     WHERE vp.marketplace = 'ATVPDKIKX0DER'
     
     UNION ALL
@@ -160,9 +161,10 @@ BEGIN
       is_active = TRUE,
       manufacture_day = dim.manufacture_day,
       shipment_days = dim.shipment_days,
-      -- Preserve manually managed fields (never overwrite from Fivetran)
+      -- Preserve manually managed fields (never overwrite from source)
       package_quantity = dim.package_quantity,
       package_cubic_feet = dim.package_cubic_feet,
+      manuf_upfront_percentage = dim.manuf_upfront_percentage,
       product_short_name = COALESCE(dim.product_short_name, source.product_short_name),
       updated_at = CURRENT_TIMESTAMP()
   WHEN NOT MATCHED THEN
@@ -204,10 +206,12 @@ BEGIN
       package_width_value,
       _fivetran_synced,
       is_active,
+      oi_is_active,
       manufacture_day,
       shipment_days,
       package_quantity,
       package_cubic_feet,
+      manuf_upfront_percentage,
       product_short_name,
       created_at,
       updated_at
@@ -249,16 +253,32 @@ BEGIN
       source.package_width_value,
       source._fivetran_synced,
       TRUE, -- is_active
+      TRUE, -- oi_is_active
       NULL, -- manufacture_day (populated separately)
       NULL, -- shipment_days (populated separately)
       NULL, -- package_quantity (populated separately)
       NULL, -- package_cubic_feet (populated separately)
+      CASE WHEN LOWER(source.brand) LIKE '%lollime%' OR LOWER(source.parent_name) LIKE '%lollime%' THEN 0.4 ELSE 0.3 END, -- manuf_upfront_percentage
       source.product_short_name, -- product_short_name (initialized from color, managed manually)
       CURRENT_TIMESTAMP(), -- created_at
       CURRENT_TIMESTAMP()  -- updated_at
     );
 
   SET matched_count = @@row_count;
+
+  -- Backfill estimated_start_selling_date (first sale date)
+  -- This prevents V_PLAN_FORECAST from needing to join massive daily traffic tables
+  UPDATE `onyga-482313.OI.DIM_PRODUCT` p
+  SET estimated_start_selling_date = fsd.first_sale
+  FROM (
+    SELECT dp.asin, MIN(st.date) AS first_sale
+    FROM `onyga-482313.OI.DIM_PRODUCT` dp
+    JOIN `onyga-482313.OI.V_SRC_sales_and_traffic_business_sku_report_daily` st ON dp.asin = st.child_asin
+    WHERE dp.estimated_start_selling_date IS NULL
+      AND dp.is_active = TRUE
+    GROUP BY dp.asin
+  ) fsd
+  WHERE p.asin = fsd.asin;
 
   -- Log the operation results
   SELECT FORMAT(

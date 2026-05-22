@@ -3,6 +3,13 @@
 cube(`ExperimentEvaluation`, {
   sql: `SELECT * FROM \`onyga-482313.OI.T_EXPERIMENT_EVALUATION\``,
 
+  joins: {
+    Experiment: {
+      relationship: `belongsTo`,
+      sql: `${CUBE}.experiment_id = ${Experiment}.experiment_id`,
+    },
+  },
+
   refreshKey: { every: '30 minutes' },
 
   measures: {

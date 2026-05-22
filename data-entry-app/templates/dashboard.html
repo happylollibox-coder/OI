@@ -29,7 +29,9 @@
     <div class="col-md-4">
         <div class="card border-primary">
             <div class="card-body text-center">
-                <h6 class="text-muted">Total PO Orders ({{ stats.current_year }})</h6>
+                <h6 class="text-muted">Total PO Orders ({{ stats.current_year }})
+                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Total PO Orders" data-bs-content="Sum of all Purchase Order amounts for the selected year.<br><code>SUM(total_amount) WHERE year = selected</code>"></i>
+                </h6>
                 <h2 class="text-primary">{{ stats.po_orders.this_year|format_currency }} USD</h2>
                 <small class="text-muted">vs {{ stats.last_year }}: {{ stats.po_orders.last_year|format_currency }} USD</small>
             </div>
@@ -38,7 +40,9 @@
     <div class="col-md-4">
         <div class="card border-info">
             <div class="card-body text-center">
-                <h6 class="text-muted">Total Shipment Amount ({{ stats.current_year }})</h6>
+                <h6 class="text-muted">Total Shipment Amount ({{ stats.current_year }})
+                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Total Shipment Amount" data-bs-content="Sum of all shipment costs (freight + commission) for the selected year.<br><code>SUM(cost_shipped + amazon_commission) WHERE year = selected</code>"></i>
+                </h6>
                 <h2 class="text-info">{{ stats.shipment_amount.this_year|format_currency }} USD</h2>
                 <small class="text-muted">vs {{ stats.last_year }}: {{ stats.shipment_amount.last_year|format_currency }} USD</small>
             </div>
@@ -47,7 +51,9 @@
     <div class="col-md-4">
         <div class="card border-success">
             <div class="card-body text-center">
-                <h6 class="text-muted">Total Quantity Shipped ({{ stats.current_year }})</h6>
+                <h6 class="text-muted">Total Quantity Shipped ({{ stats.current_year }})
+                    <i class="bi bi-info-circle-fill measure-info" data-bs-toggle="popover" data-bs-title="Total Quantity Shipped" data-bs-content="Sum of all shipped units for the selected year.<br><code>SUM(quantity_shipped) WHERE year = selected</code>"></i>
+                </h6>
                 <h2 class="text-success">{{ stats.quantity_amount.this_year|format_number }}</h2>
                 <small class="text-muted">vs {{ stats.last_year }}: {{ stats.quantity_amount.last_year|format_number }}</small>
             </div>

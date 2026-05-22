@@ -1,0 +1,119 @@
+// ─── Shared Plan Page types ─────────────────────────────────
+// Extracted so PlanWizard and PlanPage can share them.
+
+export interface ForecastMonthData { roas: number; adSpend: number }
+export type ForecastRoasMap = Record<string, Record<number, ForecastMonthData>>;
+
+export type ForecastDemandMap = Record<string, Record<number, number>>;
+
+export interface ForecastProductMeta { isNew: boolean; isDraft: boolean; share: number; family: string; forecastPhase?: string; modelProduct?: string }
+export type ForecastMetaMap = Record<string, ForecastProductMeta>;
+
+export interface MonthSeasonInfo { peakDays: number; offseasonDays: number; holidays: string | null }
+export type MonthSeasonMap = Record<string, Record<number, MonthSeasonInfo>>; // family → yearMonth → info
+
+export interface AdsEfficiencyMonth {
+  cpc: number; unitCvrPct: number; adsSharePct: number; netRoas: number;
+  forecastUnits: number; suggestedSpend: number;
+  currentSpend: number; currentForecastUnits: number; currentDailySpend: number;
+  currentCpc: number; currentNetProfit: number; targetNetProfit: number;
+}
+export type AdsEfficiencyMap = Record<string, Record<number, AdsEfficiencyMonth>>;
+
+export interface VarBaseline {
+  name: string; asin: string; family: string; splitPct: number;
+  dailySpend: number; dailyOrders: number; adsShare: number;
+  asp: number; costPerUnit: number; mfrCost: number; shipCost: number;
+  inventory: number; inventoryBySource: Record<string, number>;
+  yoyGrowth: number; cartonQty: number;
+  mfrDays: number; shipDays: number;
+}
+
+export interface FamilyBaseline {
+  family: string; dailySpend: number; dailyOrders: number; adsShare: number;
+  asp: number; costPerUnit: number; inventory: number;
+  inventoryBySource: Record<string, number>; seasonalityIndex: number[];
+  variations: VarBaseline[];
+}
+
+export interface MonthProj {
+  month: string; key: string; days: number;
+  families: Record<string, { demand: number; revenue: number; cogs: number; adSpend: number; netProfit: number; invEnd: number; isOos: boolean;
+    vars: Record<string, { demand: number; revenue: number; cogs: number; adSpend: number; netProfit: number; invEnd: number; isOos: boolean }>;
+  }>;
+  totalDemand: number; totalRevenue: number; totalCogs: number; totalAdSpend: number; totalNetProfit: number;
+}
+
+export interface MonthDef {
+  key: string; label: string; days: number; year: number; month: number;
+}
+
+// MFR / SHIP cost maps (per product name)
+export const MFR: Record<string, number> = {
+  'White Lollibox': 12.53, 'Purple Lollibox': 11.94, 'Pink Lollibox': 11.28, 'Blue Lollibox': 12.96,
+  'Mint LolliME': 7.14, 'Pink LolliME': 7.14, 'Purple LolliME': 7.14,
+  'Fresh in Pink': 10.81, 'Fresh in Beige': 10.47, 'Fresh in Blue': 10.81, 'Fresh in Purple': 10.81,
+  'Truth Or Dare': 5.21,
+};
+export const SHIP: Record<string, number> = {
+  'White Lollibox': 2.51, 'Purple Lollibox': 1.90, 'Pink Lollibox': 1.89, 'Blue Lollibox': 2.14,
+  'Mint LolliME': 1.90, 'Pink LolliME': 1.90, 'Purple LolliME': 1.90,
+  'Fresh in Pink': 2.85, 'Fresh in Beige': 2.90, 'Fresh in Blue': 2.85, 'Fresh in Purple': 2.85,
+  'Truth Or Dare': 0.82,
+};
+
+// ─── Order allocation ───────────────────────────────────────
+export interface OrderAllocation { byProduct: Record<string, number>; total: number; totalGap: number }
+
+// Split a family order across products by each product's own GAP — its demand-share of the
+// family forecast MINUS its own current stock — then round each UP to a whole buy-unit
+// (carton, or next 100 in friendly mode). Splitting by gap (not raw demand share) respects
+// uneven per-variation stock: a colour already overstocked orders ~0 even if it sells well.
+// `target` scales the gaps (default = totalGap → order ≈ each product's exact gap).
+export function allocateOrder(
+  variations: Pick<VarBaseline, 'name' | 'splitPct' | 'cartonQty' | 'inventory'>[],
+  target: number,
+  forecastTotal: number,
+  friendly: boolean,
+): OrderAllocation {
+  const n = variations.length;
+  // Equal split only when NO product has share data; otherwise a genuine 0% stays 0%.
+  const totalShare = variations.reduce((s, v) => s + (v.splitPct > 0 ? v.splitPct : 0), 0);
+  const gaps = variations.map(v => {
+    const share = totalShare > 0 ? (v.splitPct > 0 ? v.splitPct : 0) : (n > 0 ? 1 / n : 0);
+    return Math.max(0, forecastTotal * share - (v.inventory ?? 0));
+  });
+  const totalGap = gaps.reduce((a, b) => a + b, 0);
+  const byProduct: Record<string, number> = {};
+  let total = 0;
+  variations.forEach((v, i) => {
+    const w = totalGap > 0 ? gaps[i] / totalGap : 0;
+    const raw = target * w;
+    const step = friendly ? 100 : (v.cartonQty > 0 ? v.cartonQty : 1);
+    const qty = raw > 0 ? Math.ceil(raw / step) * step : 0;
+    byProduct[v.name] = qty;
+    total += qty;
+  });
+  return { byProduct, total, totalGap };
+}
+
+// ─── Ads Path: 2025-anchored profit-max spend ───────────────
+// Units a month sells at ad spend `S`, anchored to prior-year (spend0, units0) with
+// season elasticity e (<1): units(S) = units0 × (S/spend0)^e. Total units (incl. organic
+// halo) scale with spend — at S = spend0 it returns exactly units0 (reproduces history).
+export function unitsAtSpend(spend: number, units0: number, spend0: number, e: number): number {
+  if (spend0 <= 0 || units0 <= 0 || spend <= 0) return 0;
+  return units0 * Math.pow(spend / spend0, e);
+}
+
+// Profit-maximizing monthly ad spend — the point where the next dollar returns exactly $1
+// of net profit (marginal ROAS = 1): margin · dUnits/dS = 1.
+//   S* = ((units0 · margin · e) / spend0^e)^(1/(1-e)), clamped to [0, capMultiple × spend0].
+// Returns null when there's no usable 2025 anchor (caller should fall back to the demand forecast).
+export function profitMaxSpend(
+  units0: number, spend0: number, margin: number, e: number, capMultiple = 3,
+): number | null {
+  if (spend0 <= 0 || units0 <= 0 || margin <= 0 || e <= 0 || e >= 1) return null;
+  const sStar = Math.pow((units0 * margin * e) / Math.pow(spend0, e), 1 / (1 - e));
+  return Math.max(0, Math.min(sStar, capMultiple * spend0));
+}

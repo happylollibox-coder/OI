@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block title %}Record PO Payments - OI Data Entry Forms{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1><i class="bi bi-credit-card"></i> Record PO Payments</h1>
+            <a href="{{ url_for('index') }}" class="btn btn-secondary">
+                <i class="bi bi-arrow-left"></i> Back to POs
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-10 offset-lg-1">
+        <form method="POST" action="{{ url_for('bulk_po_payments') }}" id="bulkPOPaymentForm"
+              onsubmit="return confirm('Create payments for ' + document.querySelectorAll('.pay-amount').length + ' PO(s)?');">
+
+            <!-- Selected POs with Editable Amounts -->
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-box-seam"></i> Selected Purchase Orders ({{ pos|length }})</h5>
+                    <small class="text-muted">Adjust amounts to make partial payments</small>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="font-size: 0.85rem;">PO ID</th>
+                                    <th style="font-size: 0.85rem;">Date</th>
+                                    <th style="font-size: 0.85rem;">Manufacturer</th>
+                                    <th style="font-size: 0.85rem;">Product</th>
+                                    <th style="font-size: 0.85rem;" class="text-end">PO Amount</th>
+                                    <th style="font-size: 0.85rem;" class="text-end">Paid</th>
+                                    <th style="font-size: 0.85rem;" class="text-end">Pay Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for po in pos %}
+                                <tr style="font-size: 0.85rem;" class="{{ 'table-success' if po.remaining <= 0 else '' }}">
+                                    <td><strong>{{ po.purchase_order_id }}</strong></td>
+                                    <td>{{ po.order_date }}</td>
+                                    <td>{{ po.manufacturer_name or '-' }}</td>
+                                    <td class="product-tags">
+                                        {% if po.product_names_combined %}
+                                        <span class="badge bg-secondary" style="font-size: 0.72rem;">
+                                            {{ po.product_names_combined[:30] }}{% if po.product_names_combined|length > 30 %}…{% endif %}
+                                            <small>({{ po.quantity|int }})</small>
+                                        </span>
+                                        {% else %}-{% endif %}
+                                    </td>
+                                    <td class="text-end text-muted">
+                                        {{ po.total_amount|format_currency_with_commas if po.total_amount > 0 else '-' }}
+                                    </td>
+                                    <td class="text-end">
+                                        {% if po.already_paid > 0 %}
+                                        <span class="text-success">{{ po.already_paid|format_currency_with_commas }}</span>
+                                        {% else %}
+                                        <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-end" style="width: 140px;">
+                                        <input type="hidden" name="po_ids" value="{{ po.purchase_order_id }}">
+                                        {% if po.total_amount <= 0 %}
+                                        <span class="badge bg-secondary" title="PO amount not set">Amount Not Set</span>
+                                        <input type="hidden" name="amounts" value="0">
+                                        {% elif po.remaining > 0 %}
+                                        <input type="number" class="form-control form-control-sm text-end pay-amount" 
+                                               name="amounts" step="0.01" min="0" 
+                                               value="{{ po.remaining }}"
+                                               data-remaining="{{ po.remaining }}"
+                                               style="width: 120px; display: inline-block;">
+                                        {% else %}
+                                        <span class="badge bg-success">Fully Paid</span>
+                                        <input type="hidden" name="amounts" value="0">
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                            <tfoot>
+                                <tr style="font-size: 0.9rem;">
+                                    <td colspan="5" class="text-end"><strong>Open Balance:</strong></td>
+                                    <td class="text-end"></td>
+                                    <td class="text-end"><strong class="text-primary fs-5" id="payTotal">{{ total_remaining|format_currency_with_commas }}</strong></td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Payment Details Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-pencil"></i> Payment Details</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="payment_date" class="form-label required-field">Payment Date</label>
+                                <input type="date" class="form-control" id="payment_date" name="payment_date" required>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="payment_method" class="form-label required-field">Paid From Account</label>
+                                <select class="form-select" id="payment_method" name="payment_method" required>
+                                    <option value="">-- Select --</option>
+                                    {% for item in lovs.get('PAYMENT_METHOD', []) %}
+                                    <option value="{{ item.value_id }}">{{ item.value_caption }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="currency" class="form-label">Currency</label>
+                                <select class="form-select" id="currency" name="currency">
+                                    {% for item in lovs.get('CURRENCY', []) %}
+                                    <option value="{{ item.value_id }}" {% if item.is_default %}selected{% endif %}>{{ item.value_caption }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label class="form-label required-field">Vendor (Manufacturer)</label>
+                                <div>
+                                    {% for item in lovs.get('SUPPLIER', []) %}
+                                    {% if item.attr1_value == 'Deliverer' or item.attr1_value == 'Manufacturer' %}
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" id="vendor_{{ item.value_id }}" name="vendor_name" value="{{ item.value_id }}" required
+                                               {% if manufacturer == item.value_id %}checked{% endif %}>
+                                        <label class="form-check-label" for="vendor_{{ item.value_id }}">{{ item.value_caption }}</label>
+                                    </div>
+                                    {% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="bank_fee" class="form-label">Bank Fee (total)</label>
+                                <input type="number" class="form-control" id="bank_fee" name="bank_fee" step="0.01" min="0" value="0">
+                                <small class="form-text text-muted">Applied to first payment record</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="notes" class="form-label">Notes</label>
+                        <textarea class="form-control" id="notes" name="notes" rows="2" placeholder="Optional notes for all payments..."></textarea>
+                    </div>
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <a href="{{ url_for('index') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                        <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
+                            <i class="bi bi-check-circle"></i> Create <span id="payCount">{{ pos|length }}</span> Payment<span id="payPlural">{{ 's' if pos|length > 1 else '' }}</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const amounts = document.querySelectorAll('.pay-amount');
+    const payTotal = document.getElementById('payTotal');
+    const payCount = document.getElementById('payCount');
+    const payPlural = document.getElementById('payPlural');
+    
+    function updateTotal() {
+        let total = 0;
+        let count = 0;
+        amounts.forEach(input => {
+            const val = parseFloat(input.value) || 0;
+            if (val > 0) {
+                total += val;
+                count++;
+            }
+        });
+        payTotal.textContent = '$' + total.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        payCount.textContent = count;
+        payPlural.textContent = count !== 1 ? 's' : '';
+    }
+    
+    // Validate amount does not exceed open balance
+    function validateAmount(input) {
+        const maxVal = parseFloat(input.dataset.remaining) || 0;
+        const val = parseFloat(input.value) || 0;
+        if (val > maxVal) {
+            input.value = maxVal;
+            input.classList.add('is-invalid');
+            setTimeout(() => input.classList.remove('is-invalid'), 1500);
+        } else {
+            input.classList.remove('is-invalid');
+        }
+    }
+    
+    amounts.forEach(input => {
+        input.addEventListener('input', function() {
+            validateAmount(this);
+            updateTotal();
+        });
+    });
+    
+    // Validate on form submit
+    document.getElementById('bulkPOPaymentForm').addEventListener('submit', function(e) {
+        let hasError = false;
+        amounts.forEach(input => {
+            const maxVal = parseFloat(input.dataset.remaining) || 0;
+            const val = parseFloat(input.value) || 0;
+            if (val > maxVal) {
+                input.value = maxVal;
+                input.classList.add('is-invalid');
+                hasError = true;
+            }
+        });
+        if (hasError) {
+            e.preventDefault();
+            alert('Some amounts exceeded the open balance and were corrected. Please review and submit again.');
+        }
+    });
+});
+</script>
+{% endblock %}
+{% endblock %}

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Happy Lolli — Concept C: Warm Boutique</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#2C255F;--pink:#F7C1C1;--gold:#D4AF37;--gold-light:#F5E6C8;--teal:#008080;--teal-light:#00A89D;--blush:#FDF2F8;--cream:#FFF9F5;--white:#fff;--text:#2D2248;--text-light:#7B7394}
+body{font-family:'Montserrat',sans-serif;color:var(--text);background:var(--cream);-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{font-family:'Cormorant',serif;font-weight:600}
+a{text-decoration:none;color:inherit}img{max-width:100%;display:block}
+.container{max-width:1200px;margin:0 auto;padding:0 40px}
+
+.announce{background:var(--gold-light);text-align:center;padding:10px;font-size:12px;font-weight:500;color:var(--navy);letter-spacing:.5px}
+nav{display:flex;align-items:center;justify-content:space-between;padding:16px 48px;background:var(--cream);border-bottom:1px solid rgba(44,37,95,.06)}
+.logo{font-family:'Cormorant',serif;font-size:30px;font-weight:700;color:var(--navy)}
+.logo span{color:var(--gold)}
+.nav-links{display:flex;gap:32px;list-style:none}
+.nav-links a{font-size:13px;font-weight:500;color:var(--text-light);letter-spacing:.5px;transition:color .2s}
+.nav-links a:hover{color:var(--navy)}
+.nav-icons{display:flex;gap:16px}
+.nav-icons svg{width:20px;height:20px;stroke:var(--text-light);fill:none;stroke-width:1.5;cursor:pointer}
+
+/* Hero */
+.hero{display:grid;grid-template-columns:1fr 1fr;min-height:520px;background:var(--cream);overflow:hidden}
+.hero-content{display:flex;flex-direction:column;justify-content:center;padding:60px 40px 60px 80px}
+.hero h1{font-size:52px;line-height:1.15;color:var(--navy);margin-bottom:16px}
+.hero h1 em{font-style:italic;color:var(--teal)}
+.hero p{font-size:16px;color:var(--text-light);max-width:400px;margin-bottom:28px;line-height:1.7}
+.btn-gold-solid{background:var(--gold);color:var(--white);padding:14px 36px;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;letter-spacing:.5px;transition:all .25s;font-family:'Montserrat',sans-serif}
+.btn-gold-solid:hover{background:var(--navy);transform:translateY(-2px);box-shadow:0 8px 24px rgba(44,37,95,.15)}
+.hero-visual{position:relative;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--blush),var(--pink));overflow:hidden}
+.hero-visual img{max-height:440px;object-fit:contain;filter:drop-shadow(0 16px 40px rgba(44,37,95,.12))}
+
+/* Trust */
+.trust{background:var(--white);padding:28px 0;border-bottom:1px solid rgba(44,37,95,.06)}
+.trust-grid{display:flex;justify-content:center;gap:48px}
+.trust-item{display:flex;align-items:center;gap:10px}
+.trust-item svg{width:22px;height:22px;stroke:var(--teal);fill:none;stroke-width:1.5}
+.trust-item span{font-size:13px;color:var(--text-light);font-weight:500}
+
+/* Products */
+.products{padding:72px 0;background:var(--cream)}
+.section-head{text-align:center;margin-bottom:44px}
+.section-head h2{font-size:38px;color:var(--navy)}
+.section-head p{color:var(--text-light);font-size:14px;margin-top:6px}
+.product-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:28px}
+.p-card{background:var(--white);border-radius:16px;overflow:hidden;border:1px solid rgba(212,175,55,.15);transition:all .3s;cursor:pointer}
+.p-card:hover{transform:translateY(-6px);box-shadow:0 12px 36px rgba(44,37,95,.08);border-color:var(--gold)}
+.p-card .img{aspect-ratio:1;background:var(--blush);overflow:hidden}
+.p-card img{width:100%;height:100%;object-fit:cover;transition:transform .5s}
+.p-card:hover img{transform:scale(1.04)}
+.p-card .info{padding:20px}
+.p-card .stars{color:var(--gold);font-size:14px;margin-bottom:6px}
+.p-card .stars span{color:var(--text-light);font-size:12px;margin-left:4px}
+.p-card h3{font-family:'Cormorant',serif;font-size:20px;font-weight:600;color:var(--navy);margin-bottom:6px}
+.p-card .subtitle{font-size:12px;color:var(--text-light);margin-bottom:10px}
+.p-card .price{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.p-card .price del{color:var(--text-light);font-size:13px}
+.p-card .price strong{color:var(--navy);font-size:18px;font-family:'Cormorant',serif;font-weight:700}
+.p-card .shop-link{color:var(--teal);font-size:13px;font-weight:600;letter-spacing:.5px;transition:color .2s}
+.p-card .shop-link:hover{color:var(--navy)}
+
+/* What's Inside */
+.inside{padding:72px 0;background:var(--blush)}
+.inside-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:20px;max-width:800px;margin:0 auto}
+.inside-item{text-align:center}
+.inside-item .circle{width:80px;height:80px;border-radius:50%;background:var(--white);border:2px solid var(--gold-light);margin:0 auto 10px;display:flex;align-items:center;justify-content:center;transition:all .3s}
+.inside-item:hover .circle{border-color:var(--gold);background:var(--gold-light)}
+.inside-item svg{width:28px;height:28px;stroke:var(--navy);fill:none;stroke-width:1.5}
+.inside-item span{font-size:12px;color:var(--text-light);font-weight:500}
+
+/* Reviews */
+.reviews{padding:72px 0;background:var(--cream)}
+.rev-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.rev-card{background:var(--white);border-radius:16px;padding:28px;border:1px solid rgba(44,37,95,.06)}
+.rev-card .stars{color:var(--gold);font-size:15px;margin-bottom:12px}
+.rev-card q{font-size:15px;font-family:'Cormorant',serif;color:var(--text);line-height:1.7;display:block;margin-bottom:14px;font-style:italic}
+.rev-card .who{display:flex;align-items:center;gap:10px}
+.rev-card .avatar{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--pink),var(--gold-light));display:flex;align-items:center;justify-content:center;color:var(--navy);font-weight:700;font-size:14px}
+.rev-card .who strong{font-size:13px}
+.rev-card .who small{font-size:11px;color:var(--text-light);display:block}
+
+/* Newsletter */
+.newsletter{padding:60px 0;background:var(--teal);text-align:center}
+.newsletter h2{font-size:36px;color:var(--white);margin-bottom:6px}
+.newsletter p{color:rgba(255,255,255,.7);font-size:15px;margin-bottom:24px}
+.nl-form{display:flex;max-width:440px;margin:0 auto;background:rgba(255,255,255,.15);border-radius:8px;padding:4px;backdrop-filter:blur(8px)}
+.nl-form input{flex:1;padding:13px 18px;border:none;background:transparent;color:var(--white);font-size:14px;outline:none;font-family:'Montserrat',sans-serif}
+.nl-form input::placeholder{color:rgba(255,255,255,.5)}
+.nl-form button{background:var(--gold);color:var(--navy);padding:13px 24px;border:none;border-radius:6px;font-weight:600;font-size:13px;cursor:pointer;font-family:'Montserrat',sans-serif;white-space:nowrap}
+
+footer{background:var(--navy);padding:48px 0 20px;color:rgba(255,255,255,.5)}
+.foot-grid{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:32px;margin-bottom:32px}
+footer h4{color:var(--gold);font-size:16px;margin-bottom:14px;font-family:'Cormorant',serif}
+footer ul{list-style:none}
+footer li{margin-bottom:8px}
+footer li a{font-size:13px;color:rgba(255,255,255,.4);transition:color .2s}
+footer li a:hover{color:var(--gold)}
+.foot-bottom{border-top:1px solid rgba(255,255,255,.08);padding-top:18px;text-align:center;font-size:12px}
+
+@media(max-width:768px){
+.hero{grid-template-columns:1fr}.hero-visual{min-height:300px}.hero-content{padding:40px 24px}
+.hero h1{font-size:36px}.product-grid{grid-template-columns:1fr}.rev-grid{grid-template-columns:1fr}
+.inside-grid{grid-template-columns:repeat(3,1fr)}.trust-grid{flex-wrap:wrap;gap:20px}
+nav{padding:14px 20px}.nav-links{display:none}.foot-grid{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+<div class="announce">Free Shipping on Orders $50+ &nbsp;·&nbsp; Beautifully Gift-Wrapped &nbsp;·&nbsp; 30-Day Returns</div>
+<nav>
+  <a class="logo" href="#">Happy <span>Lolli</span></a>
+  <ul class="nav-links"><li><a href="#">Shop</a></li><li><a href="#">Collections</a></li><li><a href="#">Our Story</a></li><li><a href="#">Birthday Club</a></li><li><a href="#">Blog</a></li></ul>
+  <div class="nav-icons">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+    <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    <svg viewBox="0 0 24 24"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="hero-content">
+    <h1>The Gift She'll<br><em>Never</em> Forget</h1>
+    <p>Premium gift sets curated with love — filled with surprises, confidence cards &amp; sparkle. Beautifully wrapped and ready to give.</p>
+    <button class="btn-gold-solid">Explore Collections</button>
+  </div>
+  <div class="hero-visual">
+    <img src="https://happy-lolli.com/cdn/shop/files/444_1024x1024.png?v=1755591245" alt="White LolliBox">
+  </div>
+</section>
+
+<div class="trust"><div class="container">
+  <div class="trust-grid">
+    <div class="trust-item"><svg viewBox="0 0 24 24"><path d="M20 12v6a2 2 0 01-2 2H6a2 2 0 01-2-2v-6"/><path d="M12 3v9"/><rect x="4" y="7" width="16" height="5" rx="1"/></svg><span>Gift-Ready</span></div>
+    <div class="trust-item"><svg viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg><span>Free Shipping $50+</span></div>
+    <div class="trust-item"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>Premium Quality</span></div>
+    <div class="trust-item"><svg viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg><span>30-Day Returns</span></div>
+  </div>
+</div></div>
+
+<section class="products"><div class="container">
+  <div class="section-head"><h2>Our Collections</h2><p>Curated gift sets designed to spark joy, confidence &amp; memories</p></div>
+  <div class="product-grid">
+    <div class="p-card"><div class="img"><img src="https://happy-lolli.com/cdn/shop/files/24_81012f74-bd4e-4783-bfac-e1cb8c49430a_1024x1024.png?v=1755592622" alt="Pink LolliBox"></div><div class="info"><div class="stars">★★★★★ <span>124 reviews</span></div><h3>Pink LolliBox</h3><p class="subtitle">Gift Set · Ages 8–14</p><div class="price"><del>$59.99</del><strong>$44.99</strong></div><a href="#" class="shop-link">Shop Now →</a></div></div>
+    <div class="p-card"><div class="img"><img src="https://happy-lolli.com/cdn/shop/files/28_c6bd0bf4-33a4-4472-8cc6-6c9d50db4e82_1024x1024.png?v=1755591244" alt="Fresh in Pink"></div><div class="info"><div class="stars">★★★★★ <span>89 reviews</span></div><h3>Fresh in Pink</h3><p class="subtitle">Self Care Set · Ages 12+</p><div class="price"><del>$49.99</del><strong>$39.99</strong></div><a href="#" class="shop-link">Shop Now →</a></div></div>
+    <div class="p-card"><div class="img"><img src="https://happy-lolli.com/cdn/shop/files/1_45f31c1a-a90b-43b8-890c-aa01a22d72b9_1024x1024.png?v=1754766098" alt="LolliME Mint"></div><div class="info"><div class="stars">★★★★★ <span>67 reviews</span></div><h3>LolliME Mint</h3><p class="subtitle">Journal Kit · All Ages</p><div class="price"><strong>$34.99</strong></div><a href="#" class="shop-link">Shop Now →</a></div></div>
+  </div>
+</div></section>
+
+<section class="inside"><div class="container">
+  <div class="section-head"><h2>Every Box Tells a Story</h2><p>Here's what's inside each LolliBox</p></div>
+  <div class="inside-grid">
+    <div class="inside-item"><div class="circle"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg></div><span>Journal</span></div>
+    <div class="inside-item"><div class="circle"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/></svg></div><span>Scrunchies</span></div>
+    <div class="inside-item"><div class="circle"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></div><span>Lip Balm</span></div>
+    <div class="inside-item"><div class="circle"><svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></div><span>Stickers</span></div>
+    <div class="inside-item"><div class="circle"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><span>Confidence Cards</span></div>
+    <div class="inside-item"><div class="circle"><svg viewBox="0 0 24 24"><path d="M20 12v6a2 2 0 01-2 2H6a2 2 0 01-2-2v-6"/><path d="M12 3v9"/><rect x="4" y="7" width="16" height="5" rx="1"/></svg></div><span>Surprise!</span></div>
+  </div>
+</div></section>
+
+<section class="reviews"><div class="container">
+  <div class="section-head"><h2>What Moms Are Saying</h2><p style="color:var(--gold);font-size:18px;margin-top:4px">★★★★★ 4.9/5 from 500+ reviews</p></div>
+  <div class="rev-grid">
+    <div class="rev-card"><div class="stars">★★★★★</div><q>My niece was absolutely thrilled! The packaging was beautiful and every single item inside felt special.</q><div class="who"><div class="avatar">A</div><div><strong>Amanda R.</strong><small>Verified · Pink LolliBox</small></div></div></div>
+    <div class="rev-card"><div class="stars">★★★★★</div><q>The self-care set was a huge hit! My teen daughter uses everything in it daily. Premium quality throughout.</q><div class="who"><div class="avatar">S</div><div><strong>Sophia K.</strong><small>Verified · Fresh in Pink</small></div></div></div>
+    <div class="rev-card"><div class="stars">★★★★★</div><q>The confidence cards are my favorite touch — such a meaningful addition. I've ordered three times now!</q><div class="who"><div class="avatar">M</div><div><strong>Michelle T.</strong><small>Verified · White LolliBox</small></div></div></div>
+  </div>
+</div></section>
+
+<section class="newsletter"><div class="container">
+  <h2>Join the Lolli Squad</h2>
+  <p>Get 10% off your first order + birthday surprises</p>
+  <form class="nl-form" onsubmit="event.preventDefault()"><input type="email" placeholder="Your email address"><button>Subscribe</button></form>
+</div></section>
+
+<footer><div class="container">
+  <div class="foot-grid">
+    <div><h4>Happy Lolli</h4><p style="font-size:13px;color:rgba(255,255,255,.4);line-height:1.7">Premium gift sets for tween, teen &amp; college girls — designed to spark joy, boost confidence, and create unforgettable memories.</p></div>
+    <div><h4>Shop</h4><ul><li><a href="#">LolliBox Gift Sets</a></li><li><a href="#">Fresh Self Care</a></li><li><a href="#">LolliME Journals</a></li><li><a href="#">Truth or Dare</a></li></ul></div>
+    <div><h4>Help</h4><ul><li><a href="#">Shipping Info</a></li><li><a href="#">Returns</a></li><li><a href="#">Contact Us</a></li><li><a href="#">FAQ</a></li></ul></div>
+    <div><h4>About</h4><ul><li><a href="#">Our Story</a></li><li><a href="#">Birthday Club</a></li><li><a href="#">Blog</a></li><li><a href="#">Amazon Store</a></li></ul></div>
+  </div>
+  <div class="foot-bottom">© 2026 Happy Lolli. All rights reserved.</div>
+</div></footer>
+</body></html>

@@ -38,8 +38,8 @@ po_payments AS (
 shipment_payments AS (
   SELECT 
     s.purchase_order_id,
-    SUM(CASE WHEN s.is_paid THEN s.cost_shipped ELSE 0 END) AS total_shipment_paid,
-    SUM(s.cost_shipped) AS total_shipment_cost,
+    SUM(CASE WHEN s.is_paid THEN COALESCE(s.cost_shipped, 0) + COALESCE(s.amazon_commission, 0) ELSE 0 END) AS total_shipment_paid,
+    SUM(COALESCE(s.cost_shipped, 0) + COALESCE(s.amazon_commission, 0)) AS total_shipment_cost,
     MAX(CASE WHEN s.is_paid AND s.paid_date IS NOT NULL THEN s.paid_date ELSE NULL END) AS last_shipment_paid_date
   FROM `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s
   GROUP BY s.purchase_order_id
@@ -134,25 +134,25 @@ po_snapshots AS (
     ), 0) AS remaining_quantity_to_ship_as_of_snapshot,
     
     COALESCE((
-      SELECT SUM(s2.cost_shipped)
+      SELECT SUM(COALESCE(s2.cost_shipped, 0) + COALESCE(s2.amazon_commission, 0))
       FROM `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s2
       WHERE s2.purchase_order_id = po.purchase_order_id
         AND s2.shipment_date <= t.full_date
     ), 0) AS total_shipment_cost_as_of_snapshot,
     
     COALESCE((
-      SELECT SUM(CASE WHEN s2.is_paid AND s2.paid_date <= t.full_date THEN s2.cost_shipped ELSE 0 END)
+      SELECT SUM(CASE WHEN s2.is_paid AND s2.paid_date <= t.full_date THEN COALESCE(s2.cost_shipped, 0) + COALESCE(s2.amazon_commission, 0) ELSE 0 END)
       FROM `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s2
       WHERE s2.purchase_order_id = po.purchase_order_id
     ), 0) AS total_shipment_paid_as_of_snapshot,
     
     COALESCE((
-      SELECT SUM(s2.cost_shipped)
+      SELECT SUM(COALESCE(s2.cost_shipped, 0) + COALESCE(s2.amazon_commission, 0))
       FROM `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s2
       WHERE s2.purchase_order_id = po.purchase_order_id
         AND s2.shipment_date <= t.full_date
     ), 0) - COALESCE((
-      SELECT SUM(CASE WHEN s2.is_paid AND s2.paid_date <= t.full_date THEN s2.cost_shipped ELSE 0 END)
+      SELECT SUM(CASE WHEN s2.is_paid AND s2.paid_date <= t.full_date THEN COALESCE(s2.cost_shipped, 0) + COALESCE(s2.amazon_commission, 0) ELSE 0 END)
       FROM `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s2
       WHERE s2.purchase_order_id = po.purchase_order_id
     ), 0) AS remaining_shipments_cost_as_of_snapshot,

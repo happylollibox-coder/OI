@@ -1,0 +1,40 @@
+{# 
+  Grouped product dropdown macro
+  Usage: {% from '_product_select.html' import product_select %}
+         {{ product_select(products, name='product_id', required=True) }}
+#}
+
+{% macro product_select(products, name='product_id', required=False, css_class='', multiple=False) %}
+<select class="form-select {{ css_class }}" name="{{ name }}" 
+        {% if required %}required{% endif %} 
+        {% if multiple %}multiple data-placeholder="Choose products..."{% endif %}>
+    {% if not multiple %}
+    <option value="">-- Select Product --</option>
+    {% endif %}
+    {% if products %}
+        {# Group products by parent_name #}
+        {% set ns = namespace(current_group='__NONE__') %}
+        {% for product in products %}
+            {% set group = product.parent_name or 'Other' %}
+            {% if group != ns.current_group %}
+                {% if ns.current_group != '__NONE__' %}
+                    </optgroup>
+                {% endif %}
+                {% set ns.current_group = group %}
+                <optgroup label="{{ group|title }}">
+            {% endif %}
+            <option value="{{ product.product_id if not multiple else (product.asin or product.sku) }}"
+                    data-asin="{{ product.asin or '' }}"
+                    data-name="{{ product.product_short_name or product.product_name or product.display_name or '' }}">
+                {{ product.product_short_name or product.sku or ('Product ' + product.product_id|string) }}
+                {% if product.asin %} ({{ product.asin }}){% endif %}
+            </option>
+        {% endfor %}
+        {% if ns.current_group != '__NONE__' %}
+            </optgroup>
+        {% endif %}
+    {% else %}
+        <option value="" disabled>No products found</option>
+    {% endif %}
+</select>
+{% endmacro %}

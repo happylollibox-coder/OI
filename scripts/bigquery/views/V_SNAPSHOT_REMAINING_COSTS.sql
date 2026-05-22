@@ -65,6 +65,8 @@ shipments AS (
     s.shipment_type,
     sl.quantity_shipped,
     s.cost_shipped,
+    s.amazon_commission,
+    COALESCE(s.cost_shipped, 0) + COALESCE(s.amazon_commission, 0) AS total_cost,
     CASE
       WHEN sl.quantity_shipped > 0 THEN sl.allocated_cost / sl.quantity_shipped
       ELSE NULL

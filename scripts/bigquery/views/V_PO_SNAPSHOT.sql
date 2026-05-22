@@ -20,7 +20,7 @@
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_PO_SNAPSHOT` AS
 
 WITH snapshot_dates AS (
-  -- Generate snapshot dates: month-end dates and current date for last 2 calendar years
+  -- Generate ALL snapshot dates: daily dates for last 2 calendar years
   SELECT DISTINCT
     t.full_date AS snapshot_date,
     t.year,
@@ -37,12 +37,6 @@ WITH snapshot_dates AS (
   FROM `onyga-482313.OI.DIM_TIME` t
   WHERE t.full_date >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), YEAR), INTERVAL 2 YEAR)
     AND t.full_date <= CURRENT_DATE()
-    AND (
-      -- Include month-end dates
-      t.full_date = LAST_DAY(t.full_date, MONTH)
-      -- Include current date
-      OR t.full_date = CURRENT_DATE()
-    )
 ),
 
 po_with_end_date AS (
@@ -76,6 +70,7 @@ po_with_end_date AS (
           SELECT SUM(sl.quantity_shipped)
           FROM `onyga-482313.OI.DE_SHIPMENT_LINES` sl
           WHERE sl.purchase_order_id = po.purchase_order_id
+            AND sl.product_id = po.product_id
         ), 0) >= po.quantity
       )
       THEN GREATEST(
@@ -95,12 +90,14 @@ po_with_end_date AS (
           FROM `onyga-482313.OI.DE_SHIPMENT_LINES` sl
           INNER JOIN `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s ON sl.shipment_id = s.shipment_id
           WHERE sl.purchase_order_id = po.purchase_order_id
+            AND sl.product_id = po.product_id
         ), DATE('1900-01-01')),
         COALESCE((
           SELECT MAX(s.estimated_arrival_date)
           FROM `onyga-482313.OI.DE_SHIPMENT_LINES` sl
           INNER JOIN `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s ON sl.shipment_id = s.shipment_id
           WHERE sl.purchase_order_id = po.purchase_order_id
+            AND sl.product_id = po.product_id
         ), DATE('1900-01-01'))
       )
       ELSE NULL
@@ -134,22 +131,23 @@ po_snapshots AS (
     
     -- Payments remaining as of snapshot date
     -- Calculate: total_amount - sum of payments made up to snapshot_date
-    po.total_amount - COALESCE((
+    GREATEST(0, po.total_amount - COALESCE((
       SELECT SUM(p.payment_amount)
       FROM `onyga-482313.OI.DE_VENDOR_PAYMENTS` p
       WHERE p.purchase_order_id = po.purchase_order_id
         AND p.payment_date <= sd.snapshot_date
-    ), 0) AS payments_remaining,
+    ), 0)) AS payments_remaining,
     
     -- Quantity remaining at manufacturer: quantity not yet shipped
     -- Calculate: quantity - sum of quantities shipped up to snapshot_date
-    po.quantity - COALESCE((
+    GREATEST(0, po.quantity - COALESCE((
       SELECT SUM(sl.quantity_shipped)
       FROM `onyga-482313.OI.DE_SHIPMENT_LINES` sl
       INNER JOIN `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s ON sl.shipment_id = s.shipment_id
       WHERE sl.purchase_order_id = po.purchase_order_id
+        AND (sl.product_id = po.product_id OR sl.product_id IS NULL)
         AND s.shipment_date <= sd.snapshot_date
-    ), 0) AS quantity_remaining_at_manufacturer,
+    ), 0)) AS quantity_remaining_at_manufacturer,
     
     -- Quantity remaining at shipment: quantity shipped but not yet arrived
     -- Calculate: sum of quantities shipped where estimated_arrival_date > snapshot_date
@@ -158,6 +156,7 @@ po_snapshots AS (
       FROM `onyga-482313.OI.DE_SHIPMENT_LINES` sl
       INNER JOIN `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s ON sl.shipment_id = s.shipment_id
       WHERE sl.purchase_order_id = po.purchase_order_id
+        AND (sl.product_id = po.product_id OR sl.product_id IS NULL)
         AND s.shipment_date <= sd.snapshot_date
         AND (s.estimated_arrival_date IS NULL OR s.estimated_arrival_date > sd.snapshot_date)
     ), 0) AS quantity_remaining_at_shipment,

@@ -19,7 +19,9 @@
 -- 4. Calculate and INSERT organic delta records (Performance - Ads) grouped by PURCHASED_ASIN/date
 --    - Organic delta considers ALL Ads rows (purchased_product + fallback)
 --    - Allows negative values when Ads > Performance (ensures FACT totals = STG totals)
--- 5. Update DATA_QUALITY_STATUS for all records based on data quality checks
+--    - Includes rows where IS_LOADED=FALSE (sales arrived before traffic data);
+--      these are flagged with DATA_QUALITY_STATUS='Missing traffic data'
+-- 5. Update DATA_QUALITY_STATUS for Ads rows on dates with missing traffic data
 --
 -- =============================================
 
@@ -300,15 +302,18 @@ BEGIN
     perf.ASIN_PAGE_VIEWS,
     'STG_AMAZON_PERFORMANCE' as DATA_SOURCE,
     -- Build DATA_QUALITY_STATUS with warnings
+    -- Include 'Missing traffic data' when IS_LOADED=FALSE (sales arrived before traffic/sessions)
     CASE 
-      WHEN (perf.PURCHASED_UNITS - COALESCE(ads.ads_units, 0)) < 0 
+      WHEN perf.IS_LOADED = FALSE
+        OR (perf.PURCHASED_UNITS - COALESCE(ads.ads_units, 0)) < 0 
         OR (perf.PURCHASED_AMOUNT_USD - COALESCE(ads.ads_sales, 0)) < 0 
         OR (perf.PURCHASED_ORDERS - COALESCE(ads.ads_orders, 0)) < 0
-      THEN TRIM(CONCAT(
+      THEN RTRIM(CONCAT(
+        CASE WHEN perf.IS_LOADED = FALSE THEN 'Missing traffic data; ' ELSE '' END,
         CASE WHEN (perf.PURCHASED_UNITS - COALESCE(ads.ads_units, 0)) < 0 THEN 'Negative delta for UNITS; ' ELSE '' END,
         CASE WHEN (perf.PURCHASED_AMOUNT_USD - COALESCE(ads.ads_sales, 0)) < 0 THEN 'Negative delta for SALES; ' ELSE '' END,
         CASE WHEN (perf.PURCHASED_ORDERS - COALESCE(ads.ads_orders, 0)) < 0 THEN 'Negative delta for ORDERS; ' ELSE '' END
-      ))
+      ), '; ')
       ELSE 'OK'
     END as DATA_QUALITY_STATUS,
     'Organic' as Performance_TYPE,
@@ -326,8 +331,7 @@ BEGIN
   LEFT JOIN cost_lookup_organic cost_org
     ON cost_org.asin = perf.PURCHASED_ASIN
     AND cost_org.date = perf.DATE
-  WHERE perf.IS_LOADED = TRUE
-    AND (
+  WHERE (
       (perf.PURCHASED_ORDERS - COALESCE(ads.ads_orders, 0)) != 0
       OR (perf.PURCHASED_UNITS - COALESCE(ads.ads_units, 0)) != 0
       OR (perf.PURCHASED_AMOUNT_USD - COALESCE(ads.ads_sales, 0)) != 0
@@ -337,13 +341,14 @@ BEGIN
 
   SET sales_delta_count = @@row_count;
 
-  -- Step 5: Update DATA_QUALITY_STATUS for dates with missing organic data
+  -- Step 5: Update DATA_QUALITY_STATUS for Ads rows on dates with missing traffic data
+  -- (Organic delta rows already flagged in Step 4 via IS_LOADED check)
   UPDATE `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY` fact
   SET DATA_QUALITY_STATUS = 
     CASE 
       WHEN fact.DATA_QUALITY_STATUS IS NULL OR fact.DATA_QUALITY_STATUS = '' OR fact.DATA_QUALITY_STATUS = 'OK' 
-        THEN 'Missing Organic data'
-      ELSE CONCAT(fact.DATA_QUALITY_STATUS, '; Missing Organic data')
+        THEN 'Missing traffic data'
+      ELSE CONCAT(fact.DATA_QUALITY_STATUS, '; Missing traffic data')
     END
   WHERE fact.DATE IN (
     SELECT DISTINCT DATE

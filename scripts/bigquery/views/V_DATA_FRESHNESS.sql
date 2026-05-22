@@ -35,6 +35,7 @@ WITH sources AS (
          MAX(date),
          COUNT(*)
   FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`
+  WHERE Performance_TYPE = 'Organic'
 
   UNION ALL
 

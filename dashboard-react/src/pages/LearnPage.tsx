@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import type { DashboardData, BusinessConclusion, ExperimentTemplateRow } from '../types';
+import type { DashboardData, BusinessConclusion, ExperimentTemplateRow, PeakRelevanceRow, ActionRow } from '../types';
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
 import { FilterInfoIcon } from '../components/FilterInfoIcon';
@@ -185,6 +185,7 @@ export function LearnPage({ data }: { data: DashboardData }) {
   const [showForm, setShowForm] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const { grouped, loading: thLoading, error: thError, saving, updateThreshold, approveSuggestion } = useThresholds();
+  const [coachStrategyFilter, setCoachStrategyFilter] = useState<string | null>(null);
 
   const expFilterEffective = filters.experiment || 'all';
   const learnFilterItems = useMemo(() => formatSectionFilters(filters), [filters]);
@@ -250,8 +251,17 @@ export function LearnPage({ data }: { data: DashboardData }) {
             saving={saving}
             onUpdate={updateThreshold}
             onApprove={approveSuggestion}
+            onStrategySelect={(sid) => setCoachStrategyFilter(sid === 'GLOBAL' ? null : sid)}
           />
         )}
+      </div>
+
+      {/* Family–Occasion Detection (Seasonal Coach Modes) */}
+      <div className="mb-6">
+        <div className="flex items-center gap-2 text-sm font-bold mb-3">
+          Seasonal Coach Detection <span className="text-[11px] text-subtle font-normal">per-family peak relevance → Blitz/Cooldown/Guardian mode</span>
+        </div>
+        <SeasonalCoachPanel peakRelevance={data.peak_relevance || []} actions={data.actions || []} />
       </div>
 
       {/* Active Business Conclusions */}
@@ -305,7 +315,20 @@ export function LearnPage({ data }: { data: DashboardData }) {
 
         {!ew.length ? <Empty icon="📈" message="No weekly experiment data" hint="Experiment data will appear once campaigns start collecting performance metrics." /> : (
           <div>
-            {(expFilterEffective === 'all' ? expIds : expIds.filter(e => e === expFilterEffective)).map(eid => {
+            {coachStrategyFilter && (
+              <div className="flex items-center gap-2 mb-2.5 px-3 py-1.5 rounded-lg border border-amber-500/20 bg-amber-500/[.04] text-[11px]">
+                <span className="text-amber-400 font-semibold">⚡ Filtered by strategy:</span>
+                <span className="text-amber-300 font-bold">{coachStrategyFilter}</span>
+                <button onClick={() => setCoachStrategyFilter(null)} className="ml-auto text-[10px] text-subtle hover:text-foreground">✕ Clear</button>
+              </div>
+            )}
+            {(expFilterEffective === 'all' ? expIds : expIds.filter(e => e === expFilterEffective))
+              .filter(eid => {
+                if (!coachStrategyFilter) return true;
+                const rows = byExp[eid];
+                return rows?.some(r => r.strategy_id === coachStrategyFilter);
+              })
+              .map(eid => {
               const rows = byExp[eid];
               const eName = rows[0]?.experiment_name || eid;
               const eSt = rows[0]?.strategy_id || '';
@@ -557,6 +580,138 @@ function LearningsTable({ rows }: { rows: { learning_dimension: string; [k: stri
           </Card>
         );
       })}
+    </div>
+  );
+}
+
+const MODE_THEME: Record<string, { icon: string; label: string; bg: string; border: string; text: string }> = {
+  BLITZ:    { icon: '🔥', label: 'Blitz',    bg: 'bg-amber-500/10',   border: 'border-amber-500/30',  text: 'text-amber-400' },
+  COOLDOWN: { icon: '❄️', label: 'Cooldown', bg: 'bg-cyan-500/10',    border: 'border-cyan-500/30',   text: 'text-cyan-400' },
+  GUARDIAN: { icon: '🛡', label: 'Guardian', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', text: 'text-emerald-400' },
+};
+
+const COACH_REC_STYLE: Record<string, { bg: string; text: string }> = {
+  AGGRESSIVE_BOOST: { bg: 'bg-amber-500/15', text: 'text-amber-300' },
+  MODERATE_BOOST:   { bg: 'bg-yellow-500/15', text: 'text-yellow-300' },
+  CAUTIOUS_BOOST:   { bg: 'bg-orange-500/15', text: 'text-orange-300' },
+  HOLD:             { bg: 'bg-zinc-500/15', text: 'text-zinc-300' },
+  REDUCE:           { bg: 'bg-red-500/15', text: 'text-red-300' },
+};
+
+function SeasonalCoachPanel({ peakRelevance, actions }: { peakRelevance: PeakRelevanceRow[]; actions: ActionRow[] }) {
+  // Derive current coach mode per family from coach_terms
+  const familyModes = useMemo(() => {
+    const map: Record<string, { mode: string; occasion: string; phase: string; count: number }> = {};
+    actions.forEach(t => {
+      const fam = t.parent_name;
+      if (!fam) return;
+      if (!map[fam]) map[fam] = { mode: t.coach_mode || 'GUARDIAN', occasion: t.active_occasion || 'NONE', phase: t.current_phase || 'OFF_SEASON', count: 0 };
+      map[fam].count++;
+    });
+    return map;
+  }, [actions]);
+
+  // Group peak relevance by family
+  const byFamily = useMemo(() => {
+    const m: Record<string, PeakRelevanceRow[]> = {};
+    peakRelevance.forEach(r => {
+      const f = r.family;
+      if (!m[f]) m[f] = [];
+      m[f].push(r);
+    });
+    // Sort each family's rows by holiday_date DESC
+    Object.values(m).forEach(rows => rows.sort((a, b) => b.holiday_date.localeCompare(a.holiday_date)));
+    return m;
+  }, [peakRelevance]);
+
+  const families = useMemo(() => {
+    const all = new Set([...Object.keys(familyModes), ...Object.keys(byFamily)]);
+    return [...all].sort();
+  }, [familyModes, byFamily]);
+
+  if (!families.length) return <Empty icon="🌤" message="No seasonal data" hint="Peak relevance data will appear once enough historical holiday data is available." />;
+
+  return (
+    <div className="space-y-3">
+      {/* Live Coach Mode Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        {families.map(fam => {
+          const info = familyModes[fam] || familyModes[fam.toLowerCase()] || familyModes[fam.charAt(0).toUpperCase() + fam.slice(1)];
+          const mode = info?.mode || 'GUARDIAN';
+          const theme = MODE_THEME[mode] || MODE_THEME.GUARDIAN;
+          return (
+            <div key={fam} className={`rounded-xl border p-3 ${theme.bg} ${theme.border}`}>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-lg">{theme.icon}</span>
+                <span className="text-[13px] font-bold">{fam}</span>
+              </div>
+              <div className={`text-[11px] font-semibold ${theme.text}`}>{theme.label}</div>
+              {info && info.occasion !== 'NONE' && (
+                <div className="text-[10px] text-subtle mt-0.5">
+                  {info.occasion} · {info.phase} · {info.count.toLocaleString()} terms
+                </div>
+              )}
+              {(!info || info.occasion === 'NONE') && (
+                <div className="text-[10px] text-faint mt-0.5">Off-season · {info?.count.toLocaleString() ?? 0} terms</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Peak Relevance History Table */}
+      <Card>
+        <div className="text-[13px] font-bold mb-2 tracking-tight">Historical Peak Relevance</div>
+        <div className="text-[10px] text-subtle mb-3">Which holidays drive real lift for each family. Only relevant peaks trigger Blitz mode.</div>
+        <div className="border border-border rounded-xl bg-card overflow-x-auto">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr>
+                <th className="bg-inset text-subtle text-left px-3 py-2 font-semibold text-[10px] uppercase tracking-wider border-b border-border">Family</th>
+                <th className="bg-inset text-subtle text-left px-3 py-2 font-semibold text-[10px] uppercase tracking-wider border-b border-border">Holiday</th>
+                <th className="bg-inset text-subtle text-left px-3 py-2 font-semibold text-[10px] uppercase tracking-wider border-b border-border">Date</th>
+                <th className="bg-inset text-subtle text-right px-3 py-2 font-semibold text-[10px] uppercase tracking-wider border-b border-border">Orders Δ</th>
+                <th className="bg-inset text-subtle text-right px-3 py-2 font-semibold text-[10px] uppercase tracking-wider border-b border-border">ROAS Δ</th>
+                <th className="bg-inset text-subtle text-center px-3 py-2 font-semibold text-[10px] uppercase tracking-wider border-b border-border">Peak?</th>
+                <th className="bg-inset text-subtle text-left px-3 py-2 font-semibold text-[10px] uppercase tracking-wider border-b border-border">Recommendation</th>
+                <th className="bg-inset text-subtle text-left px-3 py-2 font-semibold text-[10px] uppercase tracking-wider border-b border-border">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {families.flatMap(fam =>
+                (byFamily[fam] || []).map((r, i) => {
+                  const recStyle = COACH_REC_STYLE[r.coach_recommendation] || COACH_REC_STYLE.HOLD;
+                  return (
+                    <tr key={`${fam}-${r.holiday_name}-${r.holiday_date}-${i}`} className="border-b border-border-faint last:border-b-0 hover:bg-white/[.02]">
+                      <td className="px-3 py-2 font-semibold text-[12px]">{fam}</td>
+                      <td className="px-3 py-2 text-[11px]">{r.holiday_name}</td>
+                      <td className="px-3 py-2 text-[11px] font-mono text-subtle">{r.holiday_date}</td>
+                      <td className={`px-3 py-2 text-right font-mono text-[11px] ${(r.orders_change_pct ?? 0) >= 10 ? 'text-emerald-400' : (r.orders_change_pct ?? 0) <= -10 ? 'text-red-400' : 'text-subtle'}`}>
+                        {r.orders_change_pct != null ? `${r.orders_change_pct > 0 ? '+' : ''}${r.orders_change_pct.toFixed(0)}%` : '--'}
+                      </td>
+                      <td className={`px-3 py-2 text-right font-mono text-[11px] ${(r.net_roas_delta ?? 0) >= 0.2 ? 'text-emerald-400' : (r.net_roas_delta ?? 0) <= -0.2 ? 'text-red-400' : 'text-subtle'}`}>
+                        {r.net_roas_delta != null ? `${r.net_roas_delta > 0 ? '+' : ''}${r.net_roas_delta.toFixed(2)}` : '--'}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {r.is_relevant_peak
+                          ? <span className="text-emerald-400 font-bold text-[12px]">✓</span>
+                          : <span className="text-red-400/60 text-[12px]">✗</span>
+                        }
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${recStyle.bg} ${recStyle.text}`}>
+                          {r.coach_recommendation.replace(/_/g, ' ')}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-[10px] text-subtle max-w-[250px] truncate" title={r.reason}>{r.reason}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </div>
   );
 }

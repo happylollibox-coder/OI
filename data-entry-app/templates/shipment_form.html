@@ -57,6 +57,7 @@
                             {% for po in open_pos %}
                             <div class="po-option" data-po-id="{{ po.purchase_order_id }}" 
                                  data-product="{{ po.product_name }}" data-asin="{{ po.product_asin }}"
+                                 data-product-id="{{ po.product_id }}"
                                  data-remaining="{{ po.remaining_quantity }}" data-order-qty="{{ po.order_quantity }}"
                                  data-pkg-qty="{{ po.package_quantity or '' }}" data-cubic-ft="{{ po.package_cubic_feet or '' }}"
                                  data-manufacturer="{{ po.manufacturer_name or '' }}">
@@ -87,24 +88,37 @@
                 </div>
                 <div class="card-body">
                     <div class="row">
-                        <div class="col-md-4">
+                        <div class="col-md-3">
                             <div class="mb-3">
                                 <label for="shipment_date" class="form-label required-field">Shipment Date</label>
                                 <input type="date" class="form-control" id="shipment_date" name="shipment_date" required>
                             </div>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="deliverer" class="form-label required-field">Deliverer</label>
+                                <select class="form-select" id="deliverer" name="deliverer" required>
+                                    <option value="">-- Select --</option>
+                                    {% for item in lovs.get('SUPPLIER', []) %}
+                                        {% if item.attr1_value == 'Deliverer' %}
+                                        <option value="{{ item.value_id }}" {% if item.is_default %}selected{% endif %}>{{ item.value_caption }}</option>
+                                        {% endif %}
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
                             <div class="mb-3">
                                 <label for="shipment_type" class="form-label">Shipment Type</label>
                                 <select class="form-select" id="shipment_type" name="shipment_type">
                                     <option value="">-- Select --</option>
-                                    <option value="SLOW_SEA">Slow Sea</option>
-                                    <option value="FAST_SEA">Fast Sea</option>
-                                    <option value="AIR">Air</option>
+                                    {% for item in lovs.get('SHIPMENT_TYPE', []) %}
+                                    <option value="{{ item.value_id }}" {% if item.is_default %}selected{% endif %}>{{ item.value_caption }}</option>
+                                    {% endfor %}
                                 </select>
                             </div>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
                             <div class="mb-3">
                                 <label for="tracking_number" class="form-label">Warehouse ID</label>
                                 <input type="text" class="form-control" id="tracking_number" name="tracking_number">
@@ -115,12 +129,25 @@
                     <div class="row">
                         <div class="col-md-3">
                             <div class="mb-3">
-                                <label for="cost_shipped" class="form-label">Total Shipment Cost</label>
+                                <label for="cost_shipped" class="form-label">Shipment Cost</label>
                                 <input type="number" class="form-control" id="cost_shipped" name="cost_shipped" step="0.01" min="0">
-                                <small class="text-muted">Will be split by cubic feet</small>
                             </div>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
+                            <div class="mb-3">
+                                <label for="amazon_commission" class="form-label">Amazon Commission</label>
+                                <input type="number" class="form-control" id="amazon_commission" name="amazon_commission" step="0.01" min="0" value="0">
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="mb-3">
+                                <label class="form-label">Total Cost</label>
+                                <input type="text" class="form-control" id="total_cost_display" readonly
+                                       style="background-color: #f0f0f0; font-weight: bold;">
+                                <small class="text-muted">Split by cubic feet</small>
+                            </div>
+                        </div>
+                        <div class="col-md-2">
                             <div class="mb-3">
                                 <label for="kg_price" class="form-label">KG Price</label>
                                 <input type="number" class="form-control" id="kg_price" name="kg_price" step="0.01" min="0">
@@ -128,34 +155,16 @@
                         </div>
                         <div class="col-md-3">
                             <div class="mb-3">
-                                <div class="form-check mt-4">
-                                    <input class="form-check-input" type="checkbox" id="is_paid" name="is_paid" value="true">
-                                    <label class="form-check-label" for="is_paid">Paid</label>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="mb-3">
-                                <label for="paid_date" class="form-label">Paid Date</label>
-                                <input type="date" class="form-control" id="paid_date" name="paid_date" disabled>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-4">
-                            <div class="mb-3">
                                 <label for="shipment_status" class="form-label">Status</label>
                                 <select class="form-select" id="shipment_status" name="shipment_status">
-                                    <option value="PENDING" selected>Pending</option>
-                                    <option value="IN_TRANSIT">In Transit</option>
-                                    <option value="RECEIVED">Received</option>
-                                    <option value="INSPECTED">Inspected</option>
-                                    <option value="PUT_AWAY">Put Away</option>
+                                    {% for item in lovs.get('SHIPMENT_STATUS', []) %}
+                                    <option value="{{ item.value_id }}" {% if item.is_default %}selected{% endif %}>{{ item.value_caption }}</option>
+                                    {% endfor %}
                                 </select>
                             </div>
                         </div>
                     </div>
+
 
                     <div class="mb-3">
                         <label for="notes" class="form-label">Notes</label>
@@ -213,8 +222,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const addBtn = document.getElementById('addPoLineBtn');
     const submitBtn = document.getElementById('submitBtn');
     const costShippedInput = document.getElementById('cost_shipped');
-    const isPaidCheckbox = document.getElementById('is_paid');
-    const paidDateInput = document.getElementById('paid_date');
+    const amazonCommissionInput = document.getElementById('amazon_commission');
+    const totalCostDisplay = document.getElementById('total_cost_display');
     const costPreviewCard = document.getElementById('costPreviewCard');
     const costPreviewBody = document.getElementById('costPreviewBody');
     const poPickerInline = document.getElementById('poPickerInline');
@@ -222,14 +231,18 @@ document.addEventListener('DOMContentLoaded', function() {
     let lineCount = 0;
     const addedPoIds = new Set();
     
+    // Live total cost display update
+    function updateTotalCostField() {
+        const shipped = parseFloat(costShippedInput.value) || 0;
+        const commission = parseFloat(amazonCommissionInput.value) || 0;
+        const total = shipped + commission;
+        totalCostDisplay.value = total > 0 ? total.toFixed(2) : '';
+    }
+    costShippedInput.addEventListener('input', updateTotalCostField);
+    amazonCommissionInput.addEventListener('input', updateTotalCostField);
+    
     // Pre-select PO if passed via URL
     const preSelectedPo = '{{ po_id }}';
-    
-    // Enable/disable paid date
-    isPaidCheckbox.addEventListener('change', function() {
-        paidDateInput.disabled = !this.checked;
-        if (!this.checked) paidDateInput.value = '';
-    });
 
     // Toggle inline PO picker
     addBtn.addEventListener('click', function() {
@@ -237,8 +250,11 @@ document.addEventListener('DOMContentLoaded', function() {
             poPickerInline.style.display = 'block';
             document.getElementById('poSearchInput').value = '';
             document.getElementById('poSearchInput').focus();
-            // Reset search filter
-            document.querySelectorAll('.po-option').forEach(opt => opt.style.display = '');
+            // Reset search filter — hide already-added lines
+            document.querySelectorAll('.po-option').forEach(opt => {
+                const key = opt.dataset.poId + '_' + (opt.dataset.productId || '');
+                opt.style.display = addedPoIds.has(key) ? 'none' : '';
+            });
         } else {
             poPickerInline.style.display = 'none';
         }
@@ -263,7 +279,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateCostPreview() {
-        const cost = parseFloat(costShippedInput.value) || 0;
+        const shipped = parseFloat(costShippedInput.value) || 0;
+        const commission = parseFloat(amazonCommissionInput.value) || 0;
+        const cost = shipped + commission;
         const lines = container.querySelectorAll('.po-line');
         if (lines.length === 0 || cost === 0) {
             costPreviewCard.style.display = 'none';
@@ -321,6 +339,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const debouncedUpdateCostPreview = debounce(updateCostPreview, 150);
     costShippedInput.addEventListener('input', debouncedUpdateCostPreview);
+    amazonCommissionInput.addEventListener('input', debouncedUpdateCostPreview);
 
     // Search POs (debounced)
     const debouncedSearch = debounce(function(term) {
@@ -343,17 +362,20 @@ document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.po-option').forEach(opt => {
         opt.addEventListener('click', function() {
             const poId = this.dataset.poId;
-            if (addedPoIds.has(poId)) { alert('This PO is already added.'); return; }
+            const productId = this.dataset.productId || '';
+            const key = poId + '_' + productId;
+            if (addedPoIds.has(key)) { alert('This product line is already added.'); return; }
             addPoLine(poId, this.dataset.product, this.dataset.asin, 
                       parseInt(this.dataset.remaining) || 0, parseInt(this.dataset.orderQty) || 0,
-                      this.dataset.pkgQty, this.dataset.cubicFt, this.dataset.manufacturer);
+                      this.dataset.pkgQty, this.dataset.cubicFt, this.dataset.manufacturer,
+                      this.dataset.productId);
             poPickerInline.style.display = 'none';
         });
     });
 
-    function addPoLine(poId, product, asin, remaining, orderQty, pkgQty, cubicFt, manufacturer) {
+    function addPoLine(poId, product, asin, remaining, orderQty, pkgQty, cubicFt, manufacturer, productId) {
         lineCount++;
-        addedPoIds.add(poId);
+        addedPoIds.add(poId + '_' + (productId || ''));
         noLinesMsg.style.display = 'none';
         submitBtn.disabled = false;
         
@@ -361,10 +383,10 @@ document.addEventListener('DOMContentLoaded', function() {
         div.className = 'po-line';
         div.id = 'poLine_' + lineCount;
         div.dataset.poId = poId;
+        div.dataset.productId = productId || '';
         div.dataset.pkgQty = pkgQty || '1';
         div.dataset.cubicFt = cubicFt || '';
         
-        // Cache DOM updates by creating string first
         const htmlContent = `
             <div class="d-flex justify-content-between align-items-start">
                 <div class="flex-grow-1">
@@ -376,14 +398,19 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                     <div class="row align-items-end">
                         <div class="col-md-3">
-                            <label class="form-label mb-0" style="font-size: 0.8rem;">Quantity to Ship</label>
+                            <label class="form-label mb-0" style="font-size: 0.8rem;">Quantity (units)</label>
                             <input type="number" class="form-control form-control-sm qty-input" 
                                    name="quantities[]" min="0" max="${orderQty}" 
                                    value="${Math.max(0, remaining)}" required>
                             <small class="text-muted">${remaining} of ${orderQty} remaining</small>
                         </div>
+                        <div class="col-md-2">
+                            <label class="form-label mb-0" style="font-size: 0.8rem;">Cartons</label>
+                            <input type="number" class="form-control form-control-sm cartons-input" 
+                                   min="0" value="${pkgQty ? Math.ceil(Math.max(0, remaining) / pkgQty) : ''}">
+                            <small class="text-muted">${pkgQty || '?'} units/ctn</small>
+                        </div>
                         <div class="col-md-3">
-                            <small class="cost-preview">Pkg: ${pkgQty || '?'} units/ctn</small><br>
                             <small class="cost-preview">Cubic ft: ${cubicFt || '?'}/ctn</small>
                         </div>
                         <div class="col-md-3">
@@ -392,17 +419,33 @@ document.addEventListener('DOMContentLoaded', function() {
                         </div>
                     </div>
                 </div>
-                <span class="remove-line ms-2" title="Remove" onclick="removePoLine('${poId}', '${div.id}')">
+                <span class="remove-line ms-2" title="Remove" onclick="removePoLine('${poId}_${productId || ''}', '${div.id}')">
                     <i class="bi bi-x-circle-fill" style="font-size: 1.2rem;"></i>
                 </span>
             </div>
             <input type="hidden" name="po_ids[]" value="${poId}">
+            <input type="hidden" name="product_ids[]" value="${productId || ''}">
         `;
         div.innerHTML = htmlContent;
         container.appendChild(div);
         
-        // Listen for qty changes to recalculate preview (debounced)
-        div.querySelector('.qty-input').addEventListener('input', debouncedUpdateCostPreview);
+        // Bi-directional qty ↔ cartons sync
+        const qtyInput = div.querySelector('.qty-input');
+        const cartonsInput = div.querySelector('.cartons-input');
+        const unitsPer = parseInt(pkgQty) || 1;
+        
+        qtyInput.addEventListener('input', function() {
+            const q = parseInt(this.value) || 0;
+            cartonsInput.value = Math.ceil(q / unitsPer);
+            debouncedUpdateCostPreview();
+        });
+        
+        cartonsInput.addEventListener('input', function() {
+            const c = parseInt(this.value) || 0;
+            qtyInput.value = c * unitsPer;
+            debouncedUpdateCostPreview();
+        });
+        
         updateCostPreview();
     }
 
@@ -416,14 +459,15 @@ document.addEventListener('DOMContentLoaded', function() {
         updateCostPreview();
     };
 
-    // Auto-add pre-selected PO
+    // Auto-open picker filtered to pre-selected PO
     if (preSelectedPo) {
-        const opt = document.querySelector(`.po-option[data-po-id="${preSelectedPo}"]`);
-        if (opt) {
-            addPoLine(preSelectedPo, opt.dataset.product, opt.dataset.asin,
-                      parseInt(opt.dataset.remaining) || 0, parseInt(opt.dataset.orderQty) || 0,
-                      opt.dataset.pkgQty, opt.dataset.cubicFt, opt.dataset.manufacturer);
-        }
+        poPickerInline.style.display = 'block';
+        document.getElementById('poSearchInput').value = preSelectedPo;
+        // Filter to only show matching PO options
+        document.querySelectorAll('.po-option').forEach(opt => {
+            const text = opt.textContent.toLowerCase();
+            opt.style.display = text.includes(preSelectedPo.toLowerCase()) ? '' : 'none';
+        });
     }
     
     // Set today's date as default

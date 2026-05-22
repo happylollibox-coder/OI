@@ -136,4 +136,5 @@ export const MEASURE_TIPS: Record<string, string> = {
   sales_change: 'Percentage change in sales vs the previous period (prev week, prev month, or prev year depending on view)',
   sqp_ctr: 'Click-Through Rate: your clicks ÷ your impressions. Measures how desirable your product looks when shown in search results (SQP)',
   sqp_conv_rate: 'Conversion Rate: your orders ÷ your clicks. Measures how well your product converts after someone clicks (SQP)',
+  payment: 'Prev period Sales − current Ads Spend − prev period Amazon fees (units × FBA cost) − current period Storage fees (avg inventory × cubic feet × seasonal rate). Reflects actual cash flow timing (PnL)',
 };

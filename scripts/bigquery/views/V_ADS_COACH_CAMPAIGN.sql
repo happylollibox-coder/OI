@@ -5,7 +5,7 @@
 -- Purpose: Per campaign: aggregated term actions → campaign-level action.
 --          Dashboard reads this to show "what to do per campaign."
 --
--- Dependencies: V_ADS_COACH_SEARCH_TERM
+-- Dependencies: FACT_ADS_COACH_ACTIONS
 --
 -- Project: onyga-482313
 -- Dataset: OI
@@ -16,14 +16,14 @@ AS
 WITH
 
 term_data AS (
-  SELECT * FROM `onyga-482313.OI.V_ADS_COACH_SEARCH_TERM`
+  SELECT * FROM `onyga-482313.OI.FACT_ADS_COACH_ACTIONS`
 ),
 
 -- Pre-aggregate top negate terms per campaign
 negate_ranked AS (
   SELECT campaign_id, search_term, ads_spend_4w, priority_score,
     ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY priority_score DESC) as rn
-  FROM term_data WHERE action = 'NEGATE'
+  FROM term_data WHERE action_type = 'TERM' AND action = 'NEGATE'
 ),
 negate_top AS (
   SELECT campaign_id,
@@ -34,27 +34,30 @@ negate_top AS (
 
 -- Pre-aggregate top scale terms per campaign
 scale_ranked AS (
-  SELECT campaign_id, search_term, ads_net_roas_4w, priority_score,
+  SELECT campaign_id, search_term, net_roas_4w, priority_score,
     ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY priority_score DESC) as rn
-  FROM term_data WHERE target_action = 'SCALE_UP'
+  FROM term_data WHERE action_type = 'TARGET' AND action = 'SCALE_UP'
 ),
 scale_top AS (
   SELECT campaign_id,
-    STRING_AGG(CONCAT(search_term, ' (ROAS ', CAST(ROUND(COALESCE(ads_net_roas_4w, 0), 1) AS STRING), ')'), ', ' ORDER BY rn) as top_scale_terms
+    STRING_AGG(CONCAT(search_term, ' (ROAS ', CAST(ROUND(COALESCE(net_roas_4w, 0), 1) AS STRING), ')'), ', ' ORDER BY rn) as top_scale_terms
   FROM scale_ranked WHERE rn <= 5
   GROUP BY campaign_id
 ),
 
 campaign_agg AS (
   SELECT
-    campaign_id,
-    campaign_name,
-    campaign_type,
-    experiment_id,
-    experiment_name,
-    strategy_id,
-    strategy_name,
-    experiment_status,
+    td.campaign_id,
+    td.campaign_name,
+    td.campaign_type,
+    td.experiment_id,
+    td.experiment_name,
+    td.strategy_id,
+    td.strategy_name,
+    td.experiment_status,
+    ANY_VALUE(dc.state) as campaign_state,
+    ANY_VALUE(td.asin) as asin,
+    ANY_VALUE(td.product_short_name) as product_short_name,
 
     -- Total metrics
     COUNT(DISTINCT search_term) as total_terms,
@@ -62,7 +65,7 @@ campaign_agg AS (
     SUM(ads_orders_4w) as total_orders_4w,
     SUM(ads_clicks_4w) as total_clicks_4w,
     ROUND(SUM(ads_sales_4w), 2) as total_sales_4w,
-    ROUND(SUM(ads_net_profit_4w), 2) as total_net_profit_4w,
+    ROUND(SUM(net_profit_4w), 2) as total_net_profit_4w,
     ROUND(SAFE_DIVIDE(SUM(ads_orders_4w * margin_per_unit), NULLIF(SUM(ads_spend_4w), 0)), 2) as campaign_net_roas_4w,
     ROUND(SAFE_DIVIDE(SUM(ads_spend_4w), NULLIF(SUM(ads_clicks_4w), 0)), 2) as campaign_avg_cpc_4w,
     ROUND(SAFE_DIVIDE(SUM(ads_orders_4w), NULLIF(SUM(ads_clicks_4w), 0)) * 100, 2) as campaign_cvr_pct_4w,
@@ -71,38 +74,39 @@ campaign_agg AS (
     SUM(sqp_orders_4w) as total_sqp_orders_4w,
 
     -- Search-term action counts
-    COUNTIF(action = 'NEGATE') as terms_negate,
-    COUNTIF(action = 'STOP') as terms_stop,
-    COUNTIF(action = 'PROMOTE_TO_EXACT') as terms_promote,
-    COUNTIF(action = 'KEEP') as terms_keep,
-    COUNTIF(action = 'START') as terms_start,
-    COUNTIF(action = 'MONITOR') as terms_monitor,
+    COUNTIF(action_type = 'TERM' AND action = 'NEGATE') as terms_negate,
+    COUNTIF(action_type = 'TERM' AND action = 'STOP') as terms_stop,
+    COUNTIF(action_type = 'TERM' AND action = 'PROMOTE_TO_EXACT') as terms_promote,
+    COUNTIF(action_type = 'TERM' AND action = 'KEEP') as terms_keep,
+    COUNTIF(action_type = 'TERM' AND action = 'START') as terms_start,
+    COUNTIF(action_type = 'TERM' AND action = 'MONITOR') as terms_monitor,
 
     -- Target-level action counts (distinct per targeting keyword)
-    COUNT(DISTINCT CASE WHEN target_action = 'REDUCE_BID' THEN targeting END) as targets_reduce,
-    COUNT(DISTINCT CASE WHEN target_action = 'INCREASE_BID' THEN targeting END) as targets_increase,
-    COUNT(DISTINCT CASE WHEN target_action = 'SCALE_UP' THEN targeting END) as targets_scale,
+    COUNT(DISTINCT CASE WHEN action_type = 'TARGET' AND action = 'REDUCE_BID' THEN targeting END) as targets_reduce,
+    COUNT(DISTINCT CASE WHEN action_type = 'TARGET' AND action = 'INCREASE_BID' THEN targeting END) as targets_increase,
+    COUNT(DISTINCT CASE WHEN action_type = 'TARGET' AND action = 'SCALE_UP' THEN targeting END) as targets_scale,
 
     -- Spend by action category (search-term level)
-    ROUND(SUM(CASE WHEN action = 'NEGATE' THEN ads_spend_4w ELSE 0 END), 2) as spend_on_negate_terms,
-    ROUND(SUM(CASE WHEN action = 'STOP' THEN ads_spend_4w ELSE 0 END), 2) as spend_on_stop_terms,
-    ROUND(SUM(CASE WHEN action = 'KEEP' THEN ads_spend_4w ELSE 0 END), 2) as spend_on_keep_terms,
+    ROUND(SUM(CASE WHEN action_type = 'TERM' AND action = 'NEGATE' THEN ads_spend_4w ELSE 0 END), 2) as spend_on_negate_terms,
+    ROUND(SUM(CASE WHEN action_type = 'TERM' AND action = 'STOP' THEN ads_spend_4w ELSE 0 END), 2) as spend_on_stop_terms,
+    ROUND(SUM(CASE WHEN action_type = 'TERM' AND action = 'KEEP' THEN ads_spend_4w ELSE 0 END), 2) as spend_on_keep_terms,
 
     -- Aggregated target metrics
     ROUND(MAX(target_net_roas_8w), 2) as best_target_roas,
     MAX(target_orders_8w) as best_target_orders,
 
-    -- SQP organic (from V_ADS_COACH_SEARCH_TERM)
+    -- SQP organic (from FACT_ADS_COACH_ACTIONS)
     SUM(COALESCE(sqp_orders_4w, 0)) as total_sqp_organic_units_4w,
 
     -- Hero mismatch aggregation
-    COUNTIF(hero_action = 'SWITCH_HERO') as terms_hero_mismatch,
-    ROUND(SUM(CASE WHEN hero_action = 'SWITCH_HERO' THEN ads_spend_4w ELSE 0 END), 2) as spend_on_wrong_hero,
+    COUNTIF(action_type = 'HERO' AND action = 'SWITCH_HERO') as terms_hero_mismatch,
+    ROUND(SUM(CASE WHEN action_type = 'HERO' AND action = 'SWITCH_HERO' THEN ads_spend_4w ELSE 0 END), 2) as spend_on_wrong_hero,
 
     -- Urgency
     ROUND(SUM(priority_score), 0) as total_priority_score
 
-  FROM term_data
+  FROM term_data td
+  LEFT JOIN `onyga-482313.OI.DIM_CAMPAIGN` dc ON td.campaign_id = dc.campaign_id
   GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
 )
 
@@ -115,6 +119,9 @@ SELECT
 
   -- Campaign-level action
   CASE
+    -- 🚫 PAUSED: campaign not active — no actions needed
+    WHEN UPPER(c.campaign_state) != 'ENABLED' AND c.campaign_state IS NOT NULL
+      THEN 'CAMPAIGN_PAUSED'
     WHEN (terms_negate + terms_stop) >= 3 AND spend_on_negate_terms >= 50
       THEN 'CLEAN_UP'
     WHEN campaign_net_roas_4w < 0.5 AND total_spend_4w >= 50

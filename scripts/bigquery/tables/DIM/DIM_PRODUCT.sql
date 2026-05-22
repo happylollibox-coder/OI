@@ -40,6 +40,7 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.DIM_PRODUCT` (
   
   -- Status
   is_active BOOLEAN DEFAULT TRUE, -- Derived from _fivetran_deleted = false
+  oi_is_active BOOLEAN DEFAULT TRUE, -- Manually managed active status
   
   -- Cost and logistics fields
   cost_of_goods FLOAT64, -- Cost of goods
@@ -53,25 +54,27 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.DIM_PRODUCT` (
   
   -- Item dimensions from item_dimension
   item_height_unit STRING, -- Item height unit
-  item_height_value INT64, -- Item height value
+  item_height_value FLOAT64, -- Item height value
   item_length_unit STRING, -- Item length unit
-  item_length_value INT64, -- Item length value
+  item_length_value FLOAT64, -- Item length value
   item_weight_unit STRING, -- Item weight unit
-  item_weight_value INT64, -- Item weight value
+  item_weight_value FLOAT64, -- Item weight value
   item_width_unit STRING, -- Item width unit
-  item_width_value INT64, -- Item width value
+  item_width_value FLOAT64, -- Item width value
   package_height_unit STRING, -- Package height unit
-  package_height_value INT64, -- Package height value
+  package_height_value FLOAT64, -- Package height value
   package_length_unit STRING, -- Package length unit
-  package_length_value INT64, -- Package length value
+  package_length_value FLOAT64, -- Package length value
   package_weight_unit STRING, -- Package weight unit
-  package_weight_value INT64, -- Package weight value
+  package_weight_value FLOAT64, -- Package weight value
   package_width_unit STRING, -- Package width unit
-  package_width_value INT64, -- Package width value
+  package_width_value FLOAT64, -- Package width value
   
   -- Custom shipping fields (manually managed, not from Fivetran)
   package_quantity INT64, -- Units per manufacturer shipping carton
   package_cubic_feet FLOAT64, -- Cubic feet per shipping carton (for cost allocation)
+  share_carton_in_family BOOLEAN DEFAULT TRUE, -- Can share cartons with other products in same family (same dimensions)
+  manuf_upfront_percentage FLOAT64, -- Manufacturer upfront percentage (0.3 or 0.4)
   
   -- Metadata
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),

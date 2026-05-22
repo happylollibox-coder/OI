@@ -9,21 +9,25 @@ import { Copy, Check, Trash2, X, ChevronDown, ChevronRight, CheckCircle2, Rotate
 import type { DashboardData } from '../types';
 
 /* ─── Action ordering: urgent first ─── */
-const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'NEGATE_TERM', 'REDUCE_BID', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'START_TERM', 'MONITOR_TARGET', 'KEEP', 'MONITOR'];
+const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'STOP_SEASONAL', 'NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT', 'REDUCE_BID', 'RESTORE_PRE_PEAK', 'REDUCE_TO_BASELINE', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'COOLDOWN_MONITOR', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'START_TERM', 'GUARDIAN_BUDGET_INCREASE', 'GUARDIAN_BUDGET_DECREASE', 'BLITZ_BUDGET_INCREASE', 'BLITZ_BUDGET_DECREASE', 'MONITOR_TARGET', 'KEEP', 'MONITOR'];
 
 const ACTION_COLORS: Record<string, string> = {
-  STOP_TERM: '#ef4444', STOP_TARGET: '#ef4444', NEGATE_TERM: '#ef4444', REDUCE_BID: '#f59e0b',
+  STOP_TERM: '#ef4444', STOP_TARGET: '#ef4444', STOP_SEASONAL: '#ef4444',
+  NEGATE_TERM: '#ef4444', NEGATE_BOOST_SIMILAR_EXACT: '#ef4444',
+  REDUCE_BID: '#f59e0b', RESTORE_PRE_PEAK: '#ef4444', REDUCE_TO_BASELINE: '#f59e0b',
   FIX_HERO: '#f59e0b', SWITCH_HERO: '#f59e0b',
-  KEEP_TARGET: '#22c55e', INCREASE_BID: '#22c55e',
+  KEEP_TARGET: '#22c55e', INCREASE_BID: '#22c55e', COOLDOWN_MONITOR: '#6b7280',
   PROMOTE_TO_EXACT: '#3b82f6', START_TERM: '#a855f7',
-  MONITOR_TARGET: '#71717a',
+  GUARDIAN_BUDGET_INCREASE: '#22c55e', BLITZ_BUDGET_INCREASE: '#22c55e',
+  GUARDIAN_BUDGET_DECREASE: '#ef4444', BLITZ_BUDGET_DECREASE: '#f59e0b',
+  MONITOR_TARGET: '#71717a', BUDGET_OK: '#71717a',
   // Legacy fallbacks
   STOP: '#ef4444', NEGATE: '#ef4444', KEEP: '#22c55e', BOOST: '#22c55e',
   SCALE_UP: '#22c55e', START: '#a855f7', MONITOR: '#71717a',
 };
 
 /* ─── Actions that show TARGETS (keywords) instead of search terms ─── */
-const TARGET_LEVEL_ACTIONS = new Set(['INCREASE_BID', 'REDUCE_BID', 'STOP_TARGET', 'KEEP_TARGET', 'MONITOR_TARGET', 'SCALE_UP', 'BOOST']);
+const TARGET_LEVEL_ACTIONS = new Set(['INCREASE_BID', 'REDUCE_BID', 'STOP_TARGET', 'KEEP_TARGET', 'MONITOR_TARGET', 'SCALE_UP', 'BOOST', 'COOLDOWN_MONITOR', 'REDUCE_TO_BASELINE', 'RESTORE_PRE_PEAK', 'NEGATE_BOOST_SIMILAR_EXACT']);
 
 interface ActionGroup {
   action: string;
@@ -111,7 +115,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       });
 
       const urgentCount = items.filter(i => ACTION_META[i.action]?.group === 'urgent').length;
-      const negateCount = items.filter(i => ['NEGATE', 'STOP'].includes(i.action)).length;
+      const negateCount = items.filter(i => ['NEGATE', 'NEGATE_TERM'].includes(i.action)).length;
 
       return { campaign, actionGroups, totalCount: items.length, urgentCount, negateCount };
     }).sort((a, b) => b.urgentCount - a.urgentCount || b.totalCount - a.totalCount);
@@ -173,7 +177,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
 
   const copyBlacklist = (campaign: string, group: CampaignGroup) => {
     const negateItems = group.actionGroups
-      .filter(ag => ['NEGATE', 'STOP'].includes(ag.action))
+      .filter(ag => ['NEGATE', 'NEGATE_TERM'].includes(ag.action))
       .flatMap(ag => ag.items);
     const keywords = negateItems.map(i => i.search_term).filter(Boolean);
     if (!keywords.length) return;
@@ -197,11 +201,19 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
     const cn = (item.campaign || '').toUpperCase();
     const campName = item.campaign || 'Unknown';
 
-    if (item.action === 'STOP_TERM' || item.action === 'NEGATE_TERM' || item.action === 'STOP' || item.action === 'NEGATE' || item.action === 'NEGATE_PHRASE' || item.action === 'PROMOTE_TO_PEAK_PHRASE') {
+    if (item.action === 'STOP_TERM' || item.action === 'NEGATE_TERM' || item.action === 'STOP' || item.action === 'NEGATE' || item.action === 'NEGATE_EXACT' || item.action === 'NEGATE_BOOST_SIMILAR_EXACT' || item.action === 'NEGATE_PHRASE' || item.action === 'PROMOTE_TO_PEAK_PHRASE') {
       const matchTypeLabel = (item.action === 'NEGATE_PHRASE' || item.action === 'PROMOTE_TO_PEAK_PHRASE') ? 'NEGATIVE_PHRASE' : 'NEGATIVE_EXACT';
+      const termVal = item.search_term || item.targeting || '';
+      const isAsinNegate = /^B0[A-Z0-9]{8,}$/i.test(termVal);
+      if (isAsinNegate) {
+        return {
+          icon: '⛔',
+          lines: [`Add NEGATIVE_PRODUCT_TARGETING asin="${termVal.toUpperCase()}" to ${campName}`],
+        };
+      }
       return {
         icon: '⛔',
-        lines: [`Add ${matchTypeLabel} "${item.search_term}" to ${campName}`],
+        lines: [`Add ${matchTypeLabel} "${termVal}" to ${campName}`],
       };
     }
 
@@ -287,6 +299,21 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       };
     }
 
+    // Budget actions
+    if (item.action.includes('BUDGET')) {
+      const currentBudget = (item as any).current_budget ?? '?';
+      const recBudget = (item as any).recommended_budget ?? '?';
+      const isIncrease = item.action.includes('INCREASE');
+      const isOk = item.action === 'BUDGET_OK';
+      if (isOk) {
+        return { icon: '✅', lines: [`Budget $${currentBudget}/day is on track for ${campName}`] };
+      }
+      return {
+        icon: isIncrease ? '📈' : '📉',
+        lines: [`Update daily budget: $${currentBudget} → $${recBudget} in ${campName}`],
+      };
+    }
+
     return { icon: '👁', lines: [`Monitor "${item.search_term}" in ${campName}`] };
   };
 
@@ -296,11 +323,11 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
     return (
     <div key={item.id} className={indent ? 'pl-8' : ''}>
       <div
-        className={`flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-white/[.02] transition-colors group`}
+        className={`flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-card-hover transition-colors group`}
       >
         <button
           onClick={() => doQueue.markDone(item.id)}
-          className="w-5 h-5 rounded-full border-2 border-zinc-600 flex items-center justify-center shrink-0 hover:border-emerald-400 hover:bg-emerald-500/15 transition-all group/check"
+          className="w-5 h-5 rounded-full border-2 border-border-strong flex items-center justify-center shrink-0 hover:border-emerald-400 hover:bg-emerald-500/15 transition-all group/check"
           title="Mark as done"
         >
           <Check size={10} className="text-transparent group-hover/check:text-emerald-400" />
@@ -310,7 +337,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           className="font-medium text-blue-400 hover:text-blue-300 hover:underline transition-colors text-left min-w-[180px] flex items-center gap-1 cursor-pointer"
           title="View in Actions page"
         >
-          {item.search_term}
+          {item.search_term || item.campaign || '--'}
           <ExternalLink size={9} className="opacity-0 group-hover:opacity-50" />
         </button>
         <div className="flex-1" />
@@ -328,7 +355,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       </div>
       {/* Action instruction */}
       <div className={`px-4 pb-2 ${indent ? '' : 'pl-12'}`}>
-        <div className="flex items-start gap-1.5 text-[10px] text-subtle/70 font-mono leading-relaxed bg-white/[.02] rounded-md px-2.5 py-1.5 border border-border-faint">
+        <div className="flex items-start gap-1.5 text-[10px] text-subtle/70 font-mono leading-relaxed bg-inset rounded-md px-2.5 py-1.5 border border-border-faint">
           <span className="shrink-0">{instruction.icon}</span>
           <div className="flex flex-col gap-px">
             {instruction.lines.map((line, i) => (
@@ -420,6 +447,8 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         if (mt === 'PRODUCT_TARGETING' || mt.startsWith('ASIN')) return true;
         // Fallback: targeting expression starts with asin= (Amazon format)
         if (/^asin=/i.test(item.targeting || '')) return true;
+        // Fallback: targeting expression starts with category= (Amazon category targeting)
+        if (/^category=/i.test(item.targeting || '')) return true;
         // Fallback: targeting looks like a raw ASIN (B0 + 8+ alphanumeric)
         if (!mt && /^B0[A-Z0-9]{8,}$/i.test(item.targeting || '')) return true;
         // Fallback: AUTO campaign targeting groups
@@ -428,11 +457,18 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       };
 
       // ═══ Helper: format Product Targeting Expression for Amazon ═══
+      // For Update operations, the Product Targeting ID is sufficient — Amazon
+      // looks up the expression from the ID. We only populate the expression 
+      // when we have the correct unresolved format.
       const formatPTExpression = (targeting: string): string => {
         // AUTO targeting groups use their name directly (close-match, substitutes, etc.)
         if (AUTO_TARGETING_GROUPS.has(targeting.toLowerCase())) return targeting;
         // If already in asin="..." format, keep as-is
         if (/^asin=/i.test(targeting)) return targeting;
+        // Category targets: our data has the resolved name (e.g. "Kids' Scrapbooking Kits")
+        // but Amazon requires the unresolved numeric node ID. Omit expression — 
+        // for Update ops the Product Targeting ID is enough.
+        if (/^category=/i.test(targeting)) return '';
         // If looks like a raw ASIN, wrap in asin="..." format
         if (/^B0[A-Z0-9]{8,}$/i.test(targeting)) return `asin="${targeting}"`;
         return targeting;
@@ -464,7 +500,9 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         // Uses: item.search_term as Keyword Text
         // ═══════════════════════════════════════════════════════════
         if (item.action === 'STOP_TERM' || item.action === 'NEGATE_TERM' || item.action === 'SWITCH_HERO'
-            || item.action === 'STOP' || item.action === 'NEGATE' || item.action === 'NEGATE_PHRASE' || item.action === 'PROMOTE_TO_PEAK_PHRASE') {
+            || item.action === 'STOP' || item.action === 'NEGATE' || item.action === 'NEGATE_EXACT'
+            || item.action === 'NEGATE_PHRASE' || item.action === 'NEGATE_BOOST_SIMILAR_EXACT'
+            || item.action === 'PROMOTE_TO_PEAK_PHRASE') {
           
           const isPhrase = item.action === 'NEGATE_PHRASE' || item.action === 'PROMOTE_TO_PEAK_PHRASE';
           // Force campaign level if no Ad Group ID is known, or if it's a phrase negative
@@ -487,24 +525,45 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             };
             sbRows.push(sbRow);
           } else {
-            // SP campaigns: add negative keyword
-            const entitySP = isCampaignLevel ? 'Campaign Negative Keyword' : 'Negative Keyword';
-            const matchTypeSP = isCampaignLevel 
-              ? (isPhrase ? 'CAMPAIGN_NEGATIVE_PHRASE' : 'CAMPAIGN_NEGATIVE_EXACT')
-              : (isPhrase ? 'NEGATIVE_PHRASE' : 'NEGATIVE_EXACT');
-              
-            const spRow: Record<string, string> = {
-              ...spBase,
-              'Entity': entitySP,
-              'Operation': 'Create',
-              'Keyword Text': item.search_term,
-              'Match Type': matchTypeSP,
-              'State': 'ENABLED',
-            };
-            if (isCampaignLevel) {
-              delete spRow['Ad Group ID'];
+            // SP campaigns: detect if this is an ASIN to negate via Product Targeting
+            const termToNegate = item.search_term || item.targeting || '';
+            const isAsinNegate = /^B0[A-Z0-9]{8,}$/i.test(termToNegate) || /^asin=/i.test(termToNegate);
+
+            if (isAsinNegate && !isPhrase) {
+              // ASIN negation → Negative Product Targeting
+              const entityPT = isCampaignLevel ? 'Campaign Negative Product Targeting' : 'Negative Product Targeting';
+              const asinVal = termToNegate.replace(/^asin="?|"?$/gi, '').toUpperCase();
+              const spRow: Record<string, string> = {
+                ...spBase,
+                'Entity': entityPT,
+                'Operation': 'Create',
+                'Product Targeting Expression': `asin="${asinVal}"`,
+                'State': 'ENABLED',
+              };
+              if (isCampaignLevel) {
+                delete spRow['Ad Group ID'];
+              }
+              spRows.push(spRow);
+            } else {
+              // Keyword negation → Negative Keyword
+              const entitySP = isCampaignLevel ? 'Campaign Negative Keyword' : 'Negative Keyword';
+              // Match type is always NEGATIVE_EXACT/NEGATIVE_PHRASE — campaign scope
+              // is conveyed by Entity = 'Campaign Negative Keyword', not by match type
+              const matchTypeSP = isPhrase ? 'NEGATIVE_PHRASE' : 'NEGATIVE_EXACT';
+                
+              const spRow: Record<string, string> = {
+                ...spBase,
+                'Entity': entitySP,
+                'Operation': 'Create',
+                'Keyword Text': termToNegate,
+                'Match Type': matchTypeSP,
+                'State': 'ENABLED',
+              };
+              if (isCampaignLevel) {
+                delete spRow['Ad Group ID'];
+              }
+              spRows.push(spRow);
             }
-            spRows.push(spRow);
           }
 
         // ═══════════════════════════════════════════════════════════
@@ -777,6 +836,19 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             'Campaign ID': spCampName, 'Campaign Name': spCampName,
             'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
             'Keyword Text': item.search_term, 'Match Type': 'EXACT', 'Bid': bid, 'State': 'ENABLED' });
+        // ═══════════════════════════════════════════════════════════
+        // BUDGET actions — Campaign entity Update with new Daily Budget
+        // ═══════════════════════════════════════════════════════════
+        } else if (item.action.includes('BUDGET_INCREASE') || item.action.includes('BUDGET_DECREASE')) {
+          const recBudget = item.recommended_budget;
+          if (recBudget != null) {
+            spRows.push({
+              ...spBase,
+              'Entity': 'Campaign',
+              'Operation': 'Update',
+              'Daily Budget': String(recBudget),
+            });
+          }
         }
       }
 
@@ -814,10 +886,10 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
 
       {totalItems > 0 && (
         <div className="flex gap-2 mb-4">
-          <button onClick={expandAll} className="text-[10px] px-2.5 py-1.5 rounded-lg border border-border text-subtle hover:text-white hover:bg-white/[.04] transition-colors font-semibold">
+          <button onClick={expandAll} className="text-[10px] px-2.5 py-1.5 rounded-lg border border-border text-subtle hover:text-text hover:bg-card-hover transition-colors font-semibold">
             Expand All
           </button>
-          <button onClick={collapseAll} className="text-[10px] px-2.5 py-1.5 rounded-lg border border-border text-subtle hover:text-white hover:bg-white/[.04] transition-colors font-semibold">
+          <button onClick={collapseAll} className="text-[10px] px-2.5 py-1.5 rounded-lg border border-border text-subtle hover:text-text hover:bg-card-hover transition-colors font-semibold">
             Collapse All
           </button>
           <div className="flex-1" />
@@ -856,13 +928,13 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             <div key={group.campaign} className="border border-border rounded-xl bg-card overflow-hidden">
               {/* Campaign header */}
               <div
-                className="flex items-center gap-2.5 px-4 py-3 cursor-pointer hover:bg-white/[.02] transition-colors"
+                className="flex items-center gap-2.5 px-4 py-3 cursor-pointer hover:bg-card-hover transition-colors"
                 onClick={() => toggleCampaign(group.campaign)}
               >
                 <span className="text-[11px] text-faint">
                   {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </span>
-                <span className="font-mono text-[12px] font-bold text-white">{group.campaign}</span>
+                <span className="font-mono text-[12px] font-bold text-text">{group.campaign}</span>
                 <span className="text-[10px] text-subtle font-mono">
                   ({group.totalCount})
                 </span>
@@ -881,7 +953,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
                   )}
                   <button
                     onClick={(e) => { e.stopPropagation(); doQueue.clearCampaign(group.campaign); }}
-                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border border-zinc-600 text-faint hover:text-red-400 hover:border-red-500/30 transition-all"
+                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border border-border text-faint hover:text-red-400 hover:border-red-500/30 transition-all"
                     title="Remove all tasks for this campaign"
                   >
                     <X size={11} />
@@ -923,17 +995,17 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
                                 <div key={targetKey}>
                                   {/* Target header */}
                                   <div
-                                    className="flex items-center gap-2 px-6 py-2 cursor-pointer hover:bg-white/[.02] transition-colors"
+                                    className="flex items-center gap-2 px-6 py-2 cursor-pointer hover:bg-card-hover transition-colors"
                                     onClick={() => toggleTarget(targetKey)}
                                   >
                                     <span className="text-[10px] text-faint">
                                       {isTargetExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                                     </span>
-                                    <span className="font-mono text-[11px] font-semibold text-white">
+                                    <span className="font-mono text-[11px] font-semibold text-text">
                                       {target.targeting}
                                     </span>
                                     {target.matchType && (
-                                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-700/50 text-zinc-400 font-mono uppercase">
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface border border-border-faint text-muted font-mono uppercase">
                                         {target.matchType}
                                       </span>
                                     )}
@@ -991,7 +1063,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             {showDone && (
               <button
                 onClick={(e) => { e.stopPropagation(); if (confirm('Clear done log?')) doQueue.clearDone(); }}
-                className="text-[10px] px-2 py-1 rounded-md border border-zinc-600 text-faint hover:text-red-400 hover:border-red-500/30 transition-all font-normal"
+                className="text-[10px] px-2 py-1 rounded-md border border-border text-faint hover:text-red-400 hover:border-red-500/30 transition-all font-normal"
               >
                 Clear Done
               </button>
@@ -1012,9 +1084,9 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
                         className="flex items-center gap-3 px-4 py-2 text-[11px] group"
                       >
                         <CheckCircle2 size={14} className="text-emerald-500/50 shrink-0" />
-                        <span className="text-subtle line-through">{item.search_term}</span>
+                        <span className="text-subtle line-through min-w-0 truncate max-w-[160px]">{item.targeting || item.search_term}</span>
                         <ActionBadge action={item.action} />
-                        <span className="text-[10px] text-faint truncate max-w-[150px]">{item.campaign}</span>
+                        <span className="text-[10px] text-faint truncate max-w-[200px]">{item.campaign}</span>
                         <div className="ml-auto flex items-center gap-2 shrink-0">
                           <button
                             onClick={() => doQueue.undoDone(item.id)}
@@ -1051,7 +1123,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             {showUploaded && (
               <button
                 onClick={(e) => { e.stopPropagation(); if (confirm('Clear uploaded log?')) doQueue.clearUploaded(); }}
-                className="text-[10px] px-2 py-1 rounded-md border border-zinc-600 text-faint hover:text-red-400 hover:border-red-500/30 transition-all font-normal"
+                className="text-[10px] px-2 py-1 rounded-md border border-border text-faint hover:text-red-400 hover:border-red-500/30 transition-all font-normal"
               >
                 Clear Uploaded
               </button>

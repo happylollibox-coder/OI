@@ -101,7 +101,7 @@ deploy_bigquery() {
   log "  Deploying coach & ads views..."
   local coach_views=(
     "V_ADS_COACH_DATA"
-    "V_ADS_COACH_SEARCH_TERM"
+    "V_ADS_COACH_ACTIONS"
     "V_ADS_COACH_CAMPAIGN"
     "V_ADS_COACH_DECISION"
     "V_ADS_COACH"
@@ -168,6 +168,7 @@ deploy_cube() {
     --project=$PROJECT_ID \
     --region=$REGION \
     --allow-unauthenticated \
+    --update-env-vars CUBEJS_API_SECRET="dev-secret-key-123" \
     --memory=2Gi \
     --cpu=2 \
     --timeout=300 \
@@ -184,13 +185,23 @@ deploy_dashboard() {
   log "Deploying Dashboard to Cloud Run (${REGION})..."
   cd "$BASE_DIR/dashboard-react"
   
+  # Load env for build args
+  [ -f "$BASE_DIR/.env" ] && export $(grep -v '^#' "$BASE_DIR/.env" | xargs)
+
+  local build_env="VITE_CUBE_API_URL=https://cube-api-405291422506.us-central1.run.app,VITE_DATA_ENTRY_URL=https://data-entry-forms-405291422506.us-central1.run.app"
+  if [ -n "$VITE_GOOGLE_CLIENT_ID" ]; then
+      build_env="$build_env,VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID"
+  elif [ -n "$GOOGLE_CLIENT_ID" ]; then
+      build_env="$build_env,VITE_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID"
+  fi
+  
   gcloud run deploy oi-dashboard \
     --source . \
     --project=$PROJECT_ID \
     --region=$REGION \
     --allow-unauthenticated \
     --clear-base-image \
-    --set-build-env-vars VITE_CUBE_API_URL="https://cube-api-405291422506.us-central1.run.app" \
+    --set-build-env-vars "$build_env" \
     --memory=256Mi \
     --cpu=1 \
     --timeout=60 \
@@ -204,14 +215,33 @@ deploy_dashboard() {
 deploy_flask() {
   log "Deploying Flask Data Entry to Cloud Run (${REGION})..."
   cd "$BASE_DIR/data-entry-app"
-  
+  # Source .env if it exists
+  local env_vars="CUBEJS_API_SECRET=dev-secret-key-123,VITE_DASHBOARD_URL=https://oi-dashboard-405291422506.us-central1.run.app"
+  if [ -f "$BASE_DIR/.env" ]; then
+    log "  Loading credentials from .env..."
+    # Export vars from .env (ignoring comments)
+    set -a
+    eval "$(grep -v '^#' "$BASE_DIR/.env")"
+    set +a
+    
+    # Append OAuth credentials if they exist
+    if [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; then
+      env_vars="${env_vars},GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID},GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}"
+      ok "  OAuth credentials found in .env"
+    else
+      warn "  OAuth credentials (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) missing from .env"
+    fi
+  else
+    warn "  No .env file found at $BASE_DIR/.env. OAuth will be missing."
+  fi
+
   gcloud run deploy data-entry-forms \
     --source . \
     --project=$PROJECT_ID \
     --platform managed \
     --region=$REGION \
     --allow-unauthenticated \
-    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,BIGQUERY_DATASET=OI" \
+    --update-env-vars "$env_vars" \
     --memory=512Mi \
     --cpu=1 \
     --timeout=300 \

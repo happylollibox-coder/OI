@@ -32,7 +32,7 @@
 --   DIM_PRODUCT, DIM_COSTS_HISTORY, DIM_EXPERIMENT, DIM_EXPERIMENT_CAMPAIGN,
 --   DIM_STRATEGY_TEMPLATE, DIM_US_HOLIDAYS,
 --   V_PARENT_HERO_ASIN, V_SEARCH_TERM_SEGMENT,
---   V_SRC_AmazonAds_campaign_history, fivetran portfolio_history
+--   DIM_CAMPAIGN
 --
 -- Project: onyga-482313
 -- Dataset: OI
@@ -93,12 +93,55 @@ campaign_experiment AS (
 ),
 
 -- =============================================
+-- Holiday BOOST/PEAK date ranges (for off-season ROAS exclusion)
+-- Guardian mode should evaluate performance on off-season data only,
+-- excluding dates that fall within BOOST or PEAK phases of any holiday.
+-- =============================================
+holiday_boost_peak_dates AS (
+  SELECT
+    boost_start as phase_start,
+    COALESCE(cooldown_start, holiday_date) as phase_end  -- BOOST+PEAK ends when cooldown begins
+  FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
+  WHERE category = 'gift_season'
+    AND boost_start IS NOT NULL
+),
+
+-- Last completed BOOST+PEAK holiday (most recent one that ended)
+last_completed_peak AS (
+  SELECT holiday_name, holiday_date, boost_start,
+    COALESCE(cooldown_start, holiday_date) as peak_end
+  FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
+  WHERE category = 'gift_season'
+    AND boost_start IS NOT NULL
+    AND COALESCE(cooldown_start, holiday_date) < CURRENT_DATE('America/Los_Angeles')
+  ORDER BY holiday_date DESC LIMIT 1
+),
+
+-- Last year's same-name holiday BOOST+PEAK range
+-- e.g., if next holiday is Christmas 2026, this finds Christmas 2025
+ly_same_holiday_peak AS (
+  SELECT h.holiday_name, h.holiday_date, h.boost_start,
+    COALESCE(h.cooldown_start, h.holiday_date) as peak_end
+  FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+  -- Match to the next upcoming holiday (same logic as next_holiday CTE)
+  JOIN (
+    SELECT holiday_name FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
+    WHERE category = 'gift_season' AND holiday_date >= CURRENT_DATE('America/Los_Angeles')
+    ORDER BY holiday_date ASC LIMIT 1
+  ) nh ON h.holiday_name = nh.holiday_name
+  WHERE h.category = 'gift_season'
+    AND h.boost_start IS NOT NULL
+    AND h.holiday_date < CURRENT_DATE('America/Los_Angeles')
+  ORDER BY h.holiday_date DESC LIMIT 1
+),
+
+-- =============================================
 -- LY Peak date range (for both Ads and SQP)
 -- =============================================
 next_holiday AS (
   SELECT holiday_name, holiday_date, pre_season_start
   FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
-  WHERE category = 'gift_season' AND holiday_date >= CURRENT_DATE()
+  WHERE category = 'gift_season' AND holiday_date >= CURRENT_DATE('America/Los_Angeles')
   ORDER BY holiday_date ASC LIMIT 1
 ),
 ly_holiday AS (
@@ -110,48 +153,199 @@ ly_holiday AS (
 ),
 
 -- =============================================
--- Campaign config: current bids from bulksheet snapshot
+-- Campaign config: current bids from SCD2 DIM tables (live Fivetran data)
 -- =============================================
+-- Deduplicated: DIM_KEYWORD may have multiple is_current rows per keyword_id
 campaign_config AS (
-  SELECT
-    campaign_id,
-    LOWER(keyword_text) as keyword_text,
-    keyword_id,
-    bid as keyword_bid
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  WHERE entity_type = 'KEYWORD'
-    AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
+  SELECT campaign_id, keyword_text, keyword_id, keyword_bid
+  FROM (
+    SELECT
+      campaign_id,
+      LOWER(keyword_text) as keyword_text,
+      keyword_id,
+      bid as keyword_bid,
+      ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY bid DESC) as rn
+    FROM `onyga-482313.OI.DIM_KEYWORD`
+    WHERE is_current = TRUE
+      AND match_type NOT IN ('Automatic', 'ASIN', 'ASIN Expended', 'Category')
+      AND UPPER(state) = 'ENABLED'
+  )
+  WHERE rn = 1
 ),
 
--- Product targeting config: AUTO targeting groups (close-match, substitutes, etc.) + ASIN targets
+-- Product targeting config: AUTO targeting groups + ASIN targets (from DIM_KEYWORD)
+-- Deduplicated: DIM_KEYWORD may have multiple is_current rows per keyword_id
 campaign_config_pt AS (
-  SELECT
-    campaign_id,
-    product_targeting_id,
-    LOWER(product_targeting_expression) as product_targeting_expression,
-    pt_bid
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  WHERE entity_type = 'PRODUCT_TARGETING'
-    AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
+  SELECT campaign_id, product_targeting_id, product_targeting_expression, pt_bid
+  FROM (
+    SELECT
+      campaign_id,
+      keyword_id as product_targeting_id,
+      LOWER(keyword_text) as product_targeting_expression,
+      bid as pt_bid,
+      ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY bid DESC) as rn
+    FROM `onyga-482313.OI.DIM_KEYWORD`
+    WHERE is_current = TRUE
+      AND match_type IN ('Automatic', 'ASIN', 'ASIN Expanded', 'Category')
+      AND UPPER(state) = 'ENABLED'
+  )
+  WHERE rn = 1
 ),
 
+-- Deduplicated: campaigns with multiple ad groups pick the highest default bid
 campaign_config_ag AS (
   SELECT campaign_id, ad_group_default_bid
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  WHERE entity_type = 'AD_GROUP'
-    AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
+  FROM (
+    SELECT campaign_id, default_bid as ad_group_default_bid,
+      ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY default_bid DESC) as rn
+    FROM `onyga-482313.OI.DIM_AD_GROUP`
+    WHERE is_current = TRUE
+  )
+  WHERE rn = 1
 ),
 
--- SB keyword config: Sponsored Brands keyword bids
+-- Deduplicated: same as campaign_config for SB
 campaign_config_sb AS (
+  SELECT campaign_id, keyword_id, keyword_text, keyword_bid
+  FROM (
+    SELECT
+      campaign_id,
+      keyword_id,
+      LOWER(keyword_text) as keyword_text,
+      bid as keyword_bid,
+      ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY bid DESC) as rn
+    FROM `onyga-482313.OI.DIM_KEYWORD`
+    WHERE is_current = TRUE
+      AND match_type NOT IN ('Automatic', 'ASIN', 'ASIN Expended', 'Category')
+      AND UPPER(state) = 'ENABLED'
+  )
+  WHERE rn = 1
+),
+
+-- =============================================
+-- Campaign placement adjustments (current values from V_CAMPAIGN_PLACEMENT_BIDDING)
+-- =============================================
+campaign_placements AS (
   SELECT
     campaign_id,
-    keyword_id,
-    LOWER(keyword_text) as keyword_text,
-    bid as keyword_bid
-  FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-  WHERE entity_type = 'SB_KEYWORD'
-    AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`)
+    MAX(CASE WHEN placement = 'TOP_OF_SEARCH' THEN bid_adjustment_pct ELSE 0 END) as tos_pct,
+    MAX(CASE WHEN placement = 'DETAIL_PAGE' THEN bid_adjustment_pct ELSE 0 END) as product_page_pct,
+    MAX(CASE WHEN placement = 'AMAZON_BUSINESS' THEN bid_adjustment_pct ELSE 0 END) as b2b_pct
+  FROM `onyga-482313.OI.V_CAMPAIGN_PLACEMENT_BIDDING`
+  GROUP BY campaign_id
+),
+
+-- =============================================
+-- Pre-peak snapshot (for Cooldown restore-to-baseline)
+-- Joined by campaign × targeting to get pre-peak bid, adjustments, and CPC baseline
+-- =============================================
+pre_peak_snap AS (
+  SELECT
+    s.campaign_id,
+    s.targeting,
+    s.pre_peak_bid,
+    s.tos_pct as pre_peak_tos_pct,
+    s.product_page_pct as pre_peak_pp_pct,
+    s.b2b_pct as pre_peak_b2b_pct,
+    s.avg_cpc_30d as pre_peak_avg_cpc,
+    s.avg_daily_spend_30d as pre_peak_avg_daily_spend,
+    s.avg_daily_orders_30d as pre_peak_avg_daily_orders
+  FROM `onyga-482313.OI.DE_PRE_PEAK_SNAPSHOT` s
+  -- Use latest snapshot (closest holiday) that is still in Cooldown window
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY s.campaign_id, s.targeting ORDER BY s.holiday_date DESC) = 1
+),
+
+-- =============================================
+-- Latest day CPC per campaign × targeting
+-- =============================================
+latest_day_cpc AS (
+  SELECT
+    campaign_id, targeting,
+    ROUND(SAFE_DIVIDE(SUM(Ads_cost), NULLIF(SUM(Ads_clicks), 0)), 2) as last_day_cpc,
+    MAX(date) as last_day_date
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+  WHERE date = (SELECT MAX(date) FROM `onyga-482313.OI.FACT_AMAZON_ADS`)
+  GROUP BY campaign_id, targeting
+),
+
+-- =============================================
+-- Campaign current budget (from latest campaign_history)
+-- =============================================
+campaign_current_budget AS (
+  SELECT
+    campaign_id,
+    daily_budget as current_budget
+  FROM `onyga-482313.OI.DIM_CAMPAIGN`
+  WHERE state = 'ENABLED' AND is_current = TRUE
+),
+
+-- =============================================
+-- Campaign current state (latest state from campaign_history, SP + SB)
+-- Unlike campaign_current_budget, this includes ALL states (ENABLED, PAUSED, ARCHIVED)
+-- =============================================
+campaign_current_state AS (
+  SELECT campaign_id, state as campaign_state, creation_date as campaign_creation_date
+  FROM `onyga-482313.OI.DIM_CAMPAIGN`
+  WHERE is_current = TRUE
+),
+
+-- =============================================
+-- Campaign pre-peak budget (from before boost_start of nearest active holiday)
+-- For campaigns created during/after boost, use their first recorded budget
+-- =============================================
+campaign_pre_peak_budget AS (
+  SELECT
+    ch.campaign_id,
+    ch.daily_budget as pre_peak_budget
+  FROM `onyga-482313.OI.DIM_CAMPAIGN` ch
+  CROSS JOIN (
+    -- Get the boost_start of the nearest holiday in cooldown now
+    SELECT MIN(boost_start) as boost_start
+    FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
+    WHERE category = 'gift_season'
+      AND CURRENT_DATE('America/New_York') BETWEEN cooldown_start AND cooldown_end
+  ) h
+  WHERE ch.state = 'ENABLED'
+    -- Either before boost started, or the earliest record for newer campaigns
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY ch.campaign_id
+    ORDER BY
+      CASE WHEN ch.effective_from < DATETIME(TIMESTAMP(h.boost_start)) THEN 0 ELSE 1 END,
+      CASE WHEN ch.effective_from < DATETIME(TIMESTAMP(h.boost_start)) THEN ch.effective_from END DESC,
+      ch.effective_from ASC
+  ) = 1
+),
+
+-- =============================================
+-- Days since last bid change per keyword (from DIM_KEYWORD SCD2)
+-- Finds the most recent row where the bid actually changed
+-- =============================================
+keyword_last_bid_change AS (
+  SELECT keyword_id,
+    DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), DATE(effective_from), DAY) as days_since_last_bid_change
+  FROM (
+    SELECT keyword_id, bid, effective_from,
+      LAG(bid) OVER (PARTITION BY keyword_id ORDER BY effective_from) as prev_bid
+    FROM `onyga-482313.OI.DIM_KEYWORD`
+  )
+  WHERE bid != prev_bid OR prev_bid IS NULL  -- bid actually changed
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY effective_from DESC) = 1
+),
+
+-- =============================================
+-- Days since last budget change per campaign (from DIM_CAMPAIGN SCD2)
+-- Finds the most recent row where the daily_budget actually changed
+-- =============================================
+campaign_last_budget_change AS (
+  SELECT campaign_id,
+    DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), DATE(effective_from), DAY) as days_since_last_budget_change
+  FROM (
+    SELECT campaign_id, daily_budget, effective_from,
+      LAG(daily_budget) OVER (PARTITION BY campaign_id ORDER BY effective_from) as prev_budget
+    FROM `onyga-482313.OI.DIM_CAMPAIGN`
+  )
+  WHERE daily_budget != prev_budget OR prev_budget IS NULL  -- budget actually changed
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY effective_from DESC) = 1
 ),
 
 -- =============================================
@@ -165,9 +359,10 @@ ads_8w AS (
     ec.experiment_id,
     fa.campaign_id,
     ANY_VALUE(fa.ad_group_id HAVING MAX fa.date) as ad_group_id,
-    fa.campaign_name,
+    -- Current campaign name from V_DIM_CAMPAIGN_CURRENT (prevents rename splits)
+    dc_cur.campaign_name,
     fa.campaign_type,
-    'Unassigned' as portfolio_name,
+    COALESCE(dc_cur.portfolio_name, 'Unassigned') as portfolio_name,
     ce.strategy_id,
     ce.strategy_name,
     ce.experiment_name,
@@ -187,23 +382,28 @@ ads_8w AS (
     MIN(fa.date) as first_seen_8w,
     MAX(fa.date) as last_seen_8w,
     -- Recent 5d bleeding detection
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 5 DAY) THEN fa.Ads_clicks ELSE 0 END) as ads_clicks_recent_5d
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 5 DAY) THEN fa.Ads_clicks ELSE 0 END) as ads_clicks_recent_5d,
+    -- Latest keyword status (ENABLED/PAUSED/ARCHIVED) per search_term
+    UPPER(ANY_VALUE(fa.ad_keyword_status HAVING MAX fa.date)) as ad_keyword_status
 
   FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
   JOIN campaign_experiment ce ON ec.campaign_id = ce.campaign_id AND ec.experiment_id = ce.experiment_id
   JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa
     ON ec.campaign_id = fa.campaign_id
-    AND fa.date BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 56 DAY)
-                   AND DATE_SUB(CURRENT_DATE(), INTERVAL 4 DAY)
+    AND fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 56 DAY)
+                   AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+  -- Current campaign metadata — single source of truth
+  LEFT JOIN `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` dc_cur ON fa.campaign_id = dc_cur.campaign_id
 
-
-  -- Keyword text lookup for SBV campaigns where targeting is NULL
+  -- Keyword text lookup for SBV campaigns where targeting is NULL (deduplicated)
   LEFT JOIN (
-    SELECT keyword_id, keyword_text,
-           ROW_NUMBER() OVER(PARTITION BY keyword_id ORDER BY snapshot_date DESC) as rn
-    FROM `onyga-482313.OI.FACT_CAMPAIGN_CONFIG`
-    WHERE keyword_text IS NOT NULL AND keyword_id IS NOT NULL
-  ) kw_lookup ON fa.keyword_id = kw_lookup.keyword_id AND kw_lookup.rn = 1
+    SELECT keyword_id, keyword_text FROM (
+      SELECT keyword_id, keyword_text,
+        ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY keyword_text) as rn
+      FROM `onyga-482313.OI.DIM_KEYWORD`
+      WHERE is_current = TRUE AND keyword_text IS NOT NULL AND keyword_id IS NOT NULL
+    ) WHERE rn = 1
+  ) kw_lookup ON fa.keyword_id = kw_lookup.keyword_id
   WHERE fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13
@@ -219,11 +419,13 @@ ads_1w AS (
     fa.targeting,
     SUM(fa.Ads_cost) as ads_spend_1w,
     SUM(fa.Ads_orders) as ads_orders_1w,
+    SUM(fa.Ads_units) as ads_units_1w,
     SUM(fa.Ads_clicks) as ads_clicks_1w,
+    SUM(fa.Ads_impressions) as ads_impressions_1w,
     SUM(fa.Ads_sales) as ads_sales_1w
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 10 DAY)
-                     AND DATE_SUB(CURRENT_DATE(), INTERVAL 4 DAY)
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
@@ -238,11 +440,12 @@ ads_4w AS (
     fa.targeting,
     SUM(fa.Ads_cost) as ads_spend_4w,
     SUM(fa.Ads_orders) as ads_orders_4w,
+    SUM(fa.Ads_units) as ads_units_4w,
     SUM(fa.Ads_clicks) as ads_clicks_4w,
     SUM(fa.Ads_sales) as ads_sales_4w
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 31 DAY)
-                     AND DATE_SUB(CURRENT_DATE(), INTERVAL 4 DAY)
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
@@ -258,11 +461,14 @@ target_rollup AS (
     asin,
     SUM(ads_spend_8w) as target_spend_8w,
     SUM(ads_orders_8w) as target_orders_8w,
+    SUM(ads_units_8w) as target_units_8w,
     SUM(ads_clicks_8w) as target_clicks_8w,
     SUM(ads_impressions_8w) as target_impressions_8w,
     SUM(ads_sales_8w) as target_sales_8w,
     COUNT(DISTINCT search_term) as target_search_term_count,
-    SUM(ads_clicks_recent_5d) as target_clicks_recent_5d
+    SUM(ads_clicks_recent_5d) as target_clicks_recent_5d,
+    -- Latest keyword status for this target (take the most recent non-null status)
+    ANY_VALUE(ad_keyword_status HAVING MAX last_seen_8w) as target_keyword_status
   FROM ads_8w
   GROUP BY 1, 2, 3, 4
 ),
@@ -273,6 +479,7 @@ target_rollup_1w AS (
     campaign_id, targeting, asin,
     SUM(ads_spend_1w) as target_spend_1w,
     SUM(ads_orders_1w) as target_orders_1w,
+    SUM(ads_units_1w) as target_units_1w,
     SUM(ads_sales_1w) as target_sales_1w
   FROM ads_1w
   GROUP BY 1, 2, 3
@@ -284,8 +491,174 @@ target_rollup_4w AS (
     campaign_id, targeting, asin,
     SUM(ads_spend_4w) as target_spend_4w,
     SUM(ads_orders_4w) as target_orders_4w,
+    SUM(ads_units_4w) as target_units_4w,
     SUM(ads_sales_4w) as target_sales_4w
   FROM ads_4w
+  GROUP BY 1, 2, 3
+),
+
+-- Target rollup lag: the 3-day window excluded by the 4-day lag (today-3 to today-1)
+-- Used as a "look-ahead safety check" before executing REDUCE_BID
+target_rollup_lag AS (
+  SELECT
+    fa.campaign_id,
+    COALESCE(fa.targeting, LOWER(kw_lookup.keyword_text)) as targeting,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
+    SUM(fa.Ads_cost) as target_lag_spend,
+    SUM(fa.Ads_orders) as target_lag_orders,
+    SUM(fa.Ads_units) as target_lag_units,
+    SUM(fa.Ads_sales) as target_lag_sales
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  LEFT JOIN (
+    SELECT keyword_id, keyword_text FROM (
+      SELECT keyword_id, keyword_text,
+        ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY keyword_text) as rn
+      FROM `onyga-482313.OI.DIM_KEYWORD`
+      WHERE is_current = TRUE AND keyword_text IS NOT NULL AND keyword_id IS NOT NULL
+    ) WHERE rn = 1
+  ) kw_lookup ON fa.keyword_id = kw_lookup.keyword_id
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 3 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
+  GROUP BY 1, 2, 3
+),
+
+-- Term-level lag: same 3-day look-ahead but at search_term grain
+-- Used for term negate safety check
+ads_lag AS (
+  SELECT
+    fa.campaign_id,
+    LOWER(fa.search_term) as search_term,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
+    COALESCE(fa.targeting, LOWER(kw_lookup.keyword_text)) as targeting,
+    SUM(fa.Ads_cost) as lag_spend,
+    SUM(fa.Ads_orders) as lag_orders,
+    SUM(fa.Ads_units) as lag_units,
+    SUM(fa.Ads_sales) as lag_sales
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  LEFT JOIN (
+    SELECT keyword_id, keyword_text FROM (
+      SELECT keyword_id, keyword_text,
+        ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY keyword_text) as rn
+      FROM `onyga-482313.OI.DIM_KEYWORD`
+      WHERE is_current = TRUE AND keyword_text IS NOT NULL AND keyword_id IS NOT NULL
+    ) WHERE rn = 1
+  ) kw_lookup ON fa.keyword_id = kw_lookup.keyword_id
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 3 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
+  GROUP BY 1, 2, 3, 4
+),
+
+-- Ads 3d: last 3 complete days (for BLITZ PEAK target decisions)
+-- Uses days -6 to -4 (same 4-day attribution lag as all other windows)
+ads_3d AS (
+  SELECT
+    fa.campaign_id,
+    LOWER(fa.search_term) as search_term,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
+    fa.targeting,
+    SUM(fa.Ads_cost) as ads_spend_3d,
+    SUM(fa.Ads_orders) as ads_orders_3d,
+    SUM(fa.Ads_units) as ads_units_3d,
+    SUM(fa.Ads_clicks) as ads_clicks_3d,
+    SUM(fa.Ads_sales) as ads_sales_3d
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 3 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
+  GROUP BY 1, 2, 3, 4
+),
+
+-- Ads 14d: last 14 complete days (for BLITZ BOOST term decisions)
+ads_14d AS (
+  SELECT
+    fa.campaign_id,
+    LOWER(fa.search_term) as search_term,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
+    fa.targeting,
+    SUM(fa.Ads_cost) as ads_spend_14d,
+    SUM(fa.Ads_orders) as ads_orders_14d,
+    SUM(fa.Ads_units) as ads_units_14d,
+    SUM(fa.Ads_clicks) as ads_clicks_14d,
+    SUM(fa.Ads_sales) as ads_sales_14d
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
+  GROUP BY 1, 2, 3, 4
+),
+
+-- =============================================
+-- OFF-SEASON aggregation: BOOST/PEAK days excluded
+-- Used by GUARDIAN mode for cleaner ROAS evaluation
+-- =============================================
+ads_offseason AS (
+  SELECT
+    fa.campaign_id,
+    LOWER(fa.search_term) as search_term,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
+    COALESCE(fa.targeting, LOWER(kw_lookup.keyword_text)) as targeting,
+    -- 8w off-season
+    SUM(fa.Ads_cost) as os_spend_8w,
+    SUM(fa.Ads_orders) as os_orders_8w,
+    SUM(fa.Ads_units) as os_units_8w,
+    SUM(fa.Ads_sales) as os_sales_8w,
+    SUM(fa.Ads_clicks) as os_clicks_8w,
+    -- 4w off-season
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_4w,
+    -- 1w off-season
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_1w
+
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  -- Keyword text lookup for SBV campaigns
+  LEFT JOIN (
+    SELECT keyword_id, keyword_text FROM (
+      SELECT keyword_id, keyword_text,
+        ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY keyword_text) as rn
+      FROM `onyga-482313.OI.DIM_KEYWORD`
+      WHERE is_current = TRUE AND keyword_text IS NOT NULL AND keyword_id IS NOT NULL
+    ) WHERE rn = 1
+  ) kw_lookup ON fa.keyword_id = kw_lookup.keyword_id
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 56 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
+    -- EXCLUDE all days that fall within BOOST or PEAK phases
+    AND NOT EXISTS (
+      SELECT 1 FROM holiday_boost_peak_dates h
+      WHERE fa.date >= h.phase_start AND fa.date < h.phase_end
+    )
+  GROUP BY 1, 2, 3, 4
+),
+
+-- Off-season target-level rollup
+target_rollup_offseason AS (
+  SELECT
+    campaign_id, targeting, asin,
+    SUM(os_spend_8w) as target_os_spend_8w,
+    SUM(os_orders_8w) as target_os_orders_8w,
+    SUM(os_units_8w) as target_os_units_8w,
+    SUM(os_sales_8w) as target_os_sales_8w,
+    SUM(os_spend_4w) as target_os_spend_4w,
+    SUM(os_orders_4w) as target_os_orders_4w,
+    SUM(os_units_4w) as target_os_units_4w,
+    SUM(os_sales_4w) as target_os_sales_4w,
+    SUM(os_spend_1w) as target_os_spend_1w,
+    SUM(os_orders_1w) as target_os_orders_1w,
+    SUM(os_units_1w) as target_os_units_1w,
+    SUM(os_sales_1w) as target_os_sales_1w
+  FROM ads_offseason
   GROUP BY 1, 2, 3
 ),
 
@@ -313,6 +686,7 @@ ads_lifetime AS (
     COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
     SUM(fa.Ads_cost) as lt_spend,
     SUM(fa.Ads_orders) as lt_orders,
+    SUM(fa.Ads_units) as lt_units,
     SUM(fa.Ads_clicks) as lt_clicks,
     SUM(fa.Ads_sales) as lt_sales,
     COUNT(DISTINCT fa.date) as lt_days,
@@ -343,6 +717,144 @@ ads_ly_peak AS (
   GROUP BY 1, 2
 ),
 
+-- =============================================
+-- HOT-SEASON Components (for BLITZ / SEASONAL_PUSH ROAS)
+-- Equally weighted: TY 14d + LY same holiday + Last peak
+-- =============================================
+
+-- Component 1: This Year last 14 days — CROSS-CAMPAIGN (term × asin)
+ads_ty_14d AS (
+  SELECT
+    LOWER(fa.search_term) as search_term,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
+    SUM(fa.Ads_cost) as ty14_spend,
+    SUM(fa.Ads_orders) as ty14_orders,
+    SUM(fa.Ads_units) as ty14_units,
+    SUM(fa.Ads_sales) as ty14_sales,
+    SUM(fa.Ads_clicks) as ty14_clicks
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
+  GROUP BY 1, 2
+),
+
+-- Component 2: Last completed peak — CROSS-CAMPAIGN (term × asin)
+ads_last_peak AS (
+  SELECT
+    LOWER(fa.search_term) as search_term,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
+    SUM(fa.Ads_cost) as lp_spend,
+    SUM(fa.Ads_orders) as lp_orders,
+    SUM(fa.Ads_units) as lp_units,
+    SUM(fa.Ads_sales) as lp_sales,
+    SUM(fa.Ads_clicks) as lp_clicks
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  CROSS JOIN last_completed_peak lcp
+  WHERE fa.date BETWEEN lcp.boost_start AND lcp.peak_end
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
+  GROUP BY 1, 2
+),
+
+-- Component 3: LY same holiday (BOOST+PEAK of same-name holiday last year) — already cross-campaign
+ads_ly_same_holiday AS (
+  SELECT
+    LOWER(fa.search_term) as search_term,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
+    SUM(fa.Ads_cost) as lysh_spend,
+    SUM(fa.Ads_orders) as lysh_orders,
+    SUM(fa.Ads_units) as lysh_units,
+    SUM(fa.Ads_sales) as lysh_sales,
+    SUM(fa.Ads_clicks) as lysh_clicks
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  CROSS JOIN ly_same_holiday_peak lyshp
+  WHERE fa.date BETWEEN lyshp.boost_start AND lyshp.peak_end
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
+  GROUP BY 1, 2
+),
+
+-- =============================================
+-- Q4 SEASONAL AUTO-DETECTION (cross-campaign, term-level)
+-- Identifies terms profitable only during Q4 peak (BF/CM/Christmas)
+-- =============================================
+q4_seasonal_detection AS (
+  SELECT
+    LOWER(fa.search_term) as search_term,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) as asin,
+    -- Q4 Peak metrics (all BF + CM + Christmas BOOST+PEAK phases, last 2 years)
+    SUM(CASE WHEN EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND h.holiday_name IN ('Black Friday', 'Cyber Monday', 'Christmas')
+        AND fa.date BETWEEN h.boost_start AND h.cooldown_start
+    ) THEN fa.Ads_cost ELSE 0 END) as q4_spend,
+    SUM(CASE WHEN EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND h.holiday_name IN ('Black Friday', 'Cyber Monday', 'Christmas')
+        AND fa.date BETWEEN h.boost_start AND h.cooldown_start
+    ) THEN fa.Ads_orders ELSE 0 END) as q4_orders,
+    SUM(CASE WHEN EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND h.holiday_name IN ('Black Friday', 'Cyber Monday', 'Christmas')
+        AND fa.date BETWEEN h.boost_start AND h.cooldown_start
+    ) THEN fa.Ads_sales ELSE 0 END) as q4_sales,
+    SUM(CASE WHEN EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND h.holiday_name IN ('Black Friday', 'Cyber Monday', 'Christmas')
+        AND fa.date BETWEEN h.boost_start AND h.cooldown_start
+    ) THEN fa.Ads_units ELSE 0 END) as q4_units,
+    -- Off-season metrics (NOT in any BOOST+PEAK of any gift_season holiday)
+    SUM(CASE WHEN NOT EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND fa.date BETWEEN h.boost_start AND h.cooldown_end
+    ) THEN fa.Ads_cost ELSE 0 END) as os_spend,
+    SUM(CASE WHEN NOT EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND fa.date BETWEEN h.boost_start AND h.cooldown_end
+    ) THEN fa.Ads_orders ELSE 0 END) as os_orders,
+    SUM(CASE WHEN NOT EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND fa.date BETWEEN h.boost_start AND h.cooldown_end
+    ) THEN fa.Ads_sales ELSE 0 END) as os_sales
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  WHERE fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 18 MONTH)
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
+  GROUP BY 1, 2
+),
+
+-- Hot-season target-level rollup — CROSS-CAMPAIGN (targeting × asin)
+target_rollup_hotseason AS (
+  SELECT
+    t14.search_term, t14.asin,
+    SUM(t14.ty14_spend) as target_ty14_spend,
+    SUM(t14.ty14_orders) as target_ty14_orders,
+    SUM(t14.ty14_units) as target_ty14_units,
+    SUM(t14.ty14_sales) as target_ty14_sales
+  FROM ads_ty_14d t14
+  GROUP BY 1, 2
+),
+
+target_rollup_last_peak AS (
+  SELECT
+    search_term, asin,
+    SUM(lp_spend) as target_lp_spend,
+    SUM(lp_orders) as target_lp_orders,
+    SUM(lp_units) as target_lp_units,
+    SUM(lp_sales) as target_lp_sales
+  FROM ads_last_peak
+  GROUP BY 1, 2
+),
+
 -- SQP 8w: Your ASIN + Amazon market measures
 sqp_8w AS (
   SELECT
@@ -365,7 +877,7 @@ sqp_8w AS (
     AVG(fsq.search_query_volume) as sqp_amazon_search_volume_8w,
     COUNT(DISTINCT fsq.week_end_date) as sqp_weeks_8w
   FROM `onyga-482313.OI.FACT_SEARCH_QUERY` fsq
-  WHERE fsq.data_source = 'SQP' AND fsq.week_end_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 56 DAY)
+  WHERE fsq.data_source = 'SQP' AND fsq.week_end_date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 56 DAY)
   GROUP BY 1, 2
 ),
 
@@ -490,31 +1002,34 @@ active_term_data AS (
     ROUND(SAFE_DIVIDE(a8.ads_spend_8w, NULLIF(a8.ads_orders_8w, 0)), 2) as ads_cost_per_order_8w,
     ROUND(
       COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * a8.ads_orders_8w - a8.ads_spend_8w,
+        * a8.ads_units_8w - a8.ads_spend_8w,
     2) as ads_net_profit_8w,
     ROUND(SAFE_DIVIDE(
       COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * a8.ads_orders_8w,
+        * a8.ads_units_8w,
       NULLIF(a8.ads_spend_8w, 0)
     ), 2) as ads_net_roas_8w,
 
     -- 1w window Net ROAS (skip 3d attribution lag: last 7 complete days)
     ROUND(COALESCE(a1.ads_spend_1w, 0), 2) as ads_spend_1w,
     COALESCE(a1.ads_orders_1w, 0) as ads_orders_1w,
+    COALESCE(a1.ads_units_1w, 0) as ads_units_1w,
     COALESCE(a1.ads_clicks_1w, 0) as ads_clicks_1w,
+    COALESCE(a1.ads_impressions_1w, 0) as ads_impressions_1w,
     ROUND(SAFE_DIVIDE(
       COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a1.ads_sales_1w, NULLIF(a1.ads_orders_1w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * COALESCE(a1.ads_orders_1w, 0),
+        * COALESCE(a1.ads_units_1w, 0),
       NULLIF(COALESCE(a1.ads_spend_1w, 0), 0)
     ), 2) as ads_net_roas_1w,
 
     -- 4w window Net ROAS
     ROUND(COALESCE(a4.ads_spend_4w, 0), 2) as ads_spend_4w,
     COALESCE(a4.ads_orders_4w, 0) as ads_orders_4w,
+    COALESCE(a4.ads_units_4w, 0) as ads_units_4w,
     COALESCE(a4.ads_clicks_4w, 0) as ads_clicks_4w,
     ROUND(SAFE_DIVIDE(
       COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a4.ads_sales_4w, NULLIF(a4.ads_orders_4w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * COALESCE(a4.ads_orders_4w, 0),
+        * COALESCE(a4.ads_units_4w, 0),
       NULLIF(COALESCE(a4.ads_spend_4w, 0), 0)
     ), 2) as ads_net_roas_4w,
 
@@ -526,39 +1041,60 @@ active_term_data AS (
         THEN
           SAFE_DIVIDE(
             COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a1.ads_sales_1w, NULLIF(a1.ads_orders_1w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * COALESCE(a1.ads_orders_1w, 0),
+              * COALESCE(a1.ads_units_1w, 0),
             NULLIF(COALESCE(a1.ads_spend_1w, 0), 0)
           ) * 0.5
           + SAFE_DIVIDE(
             COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a4.ads_sales_4w, NULLIF(a4.ads_orders_4w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * COALESCE(a4.ads_orders_4w, 0),
+              * COALESCE(a4.ads_units_4w, 0),
             NULLIF(COALESCE(a4.ads_spend_4w, 0), 0)
           ) * 0.3
           + SAFE_DIVIDE(
             COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * a8.ads_orders_8w,
+              * a8.ads_units_8w,
             NULLIF(a8.ads_spend_8w, 0)
           ) * 0.2
         WHEN COALESCE(a1.ads_spend_1w, 0) = 0 AND COALESCE(a4.ads_spend_4w, 0) > 0
         THEN
           SAFE_DIVIDE(
             COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a4.ads_sales_4w, NULLIF(a4.ads_orders_4w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * COALESCE(a4.ads_orders_4w, 0),
+              * COALESCE(a4.ads_units_4w, 0),
             NULLIF(COALESCE(a4.ads_spend_4w, 0), 0)
           ) * 0.625
           + SAFE_DIVIDE(
             COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * a8.ads_orders_8w,
+              * a8.ads_units_8w,
             NULLIF(a8.ads_spend_8w, 0)
           ) * 0.375
         ELSE
           SAFE_DIVIDE(
             COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * a8.ads_orders_8w,
+              * a8.ads_units_8w,
             NULLIF(a8.ads_spend_8w, 0)
           )
       END
     , 2) as ads_weighted_net_roas,
+
+    -- ═══ Simple Window ROAS (no weighting, for action-specific decisions) ═══
+
+    -- 3d raw Net ROAS (for BLITZ PEAK target decisions)
+    ROUND(COALESCE(a3.ads_spend_3d, 0), 2) as ads_spend_3d,
+    COALESCE(a3.ads_orders_3d, 0) as ads_orders_3d,
+    COALESCE(a3.ads_units_3d, 0) as ads_units_3d,
+    ROUND(SAFE_DIVIDE(
+      COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a3.ads_sales_3d, NULLIF(a3.ads_orders_3d, 0)) - COALESCE(ae.total_cost_per_unit, 0))
+        * COALESCE(a3.ads_units_3d, 0),
+      NULLIF(COALESCE(a3.ads_spend_3d, 0), 0)
+    ), 2) as ads_net_roas_3d,
+
+    -- 14d raw Net ROAS (for BLITZ BOOST term decisions)
+    ROUND(COALESCE(a14.ads_spend_14d, 0), 2) as ads_spend_14d,
+    COALESCE(a14.ads_orders_14d, 0) as ads_orders_14d,
+    ROUND(SAFE_DIVIDE(
+      COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a14.ads_sales_14d, NULLIF(a14.ads_orders_14d, 0)) - COALESCE(ae.total_cost_per_unit, 0))
+        * COALESCE(a14.ads_units_14d, 0),
+      NULLIF(COALESCE(a14.ads_spend_14d, 0), 0)
+    ), 2) as ads_net_roas_14d,
 
     -- Recent 5d bleeding check
     a8.ads_clicks_recent_5d,
@@ -570,10 +1106,18 @@ active_term_data AS (
     COALESCE(tr.target_impressions_8w, a8.ads_impressions_8w) as target_impressions_8w,
     COALESCE(tr.target_search_term_count, 1) as target_search_term_count,
     COALESCE(tr.target_clicks_recent_5d, a8.ads_clicks_recent_5d) as target_clicks_recent_5d,
+    -- Target keyword status: ENABLED/PAUSED/ARCHIVED (from latest FACT row)
+    COALESCE(tr.target_keyword_status, UPPER(a8.ad_keyword_status)) as target_keyword_status,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_orders_8w, a8.ads_orders_8w),
+      COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_units_8w, a8.ads_units_8w),
       NULLIF(COALESCE(tr.target_spend_8w, a8.ads_spend_8w), 0)
     ), 2) as target_net_roas_8w,
+
+    -- Target 1w raw Net ROAS (for BLITZ BOOST target decisions)
+    ROUND(SAFE_DIVIDE(
+      COALESCE(ae.margin_per_unit, 0) * COALESCE(tr1.target_units_1w, 0),
+      NULLIF(COALESCE(tr1.target_spend_1w, 0), 0)
+    ), 2) as target_net_roas_1w,
 
     -- Target Weighted Net ROAS = 1w×0.5 + 4w×0.3 + 8w×0.2
     -- Same weighting as ads_weighted_net_roas but aggregated at target level
@@ -582,34 +1126,164 @@ active_term_data AS (
         WHEN COALESCE(tr1.target_spend_1w, 0) > 0 AND COALESCE(tr4.target_spend_4w, 0) > 0
         THEN
           SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr1.target_orders_1w, 0),
+            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr1.target_units_1w, 0),
             NULLIF(COALESCE(tr1.target_spend_1w, 0), 0)
           ) * 0.5
           + SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr4.target_orders_4w, 0),
+            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr4.target_units_4w, 0),
             NULLIF(COALESCE(tr4.target_spend_4w, 0), 0)
           ) * 0.3
           + SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_orders_8w, a8.ads_orders_8w),
+            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_units_8w, a8.ads_units_8w),
             NULLIF(COALESCE(tr.target_spend_8w, a8.ads_spend_8w), 0)
           ) * 0.2
         WHEN COALESCE(tr1.target_spend_1w, 0) = 0 AND COALESCE(tr4.target_spend_4w, 0) > 0
         THEN
           SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr4.target_orders_4w, 0),
+            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr4.target_units_4w, 0),
             NULLIF(COALESCE(tr4.target_spend_4w, 0), 0)
           ) * 0.625
           + SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_orders_8w, a8.ads_orders_8w),
+            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_units_8w, a8.ads_units_8w),
             NULLIF(COALESCE(tr.target_spend_8w, a8.ads_spend_8w), 0)
           ) * 0.375
         ELSE
           SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_orders_8w, a8.ads_orders_8w),
+            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_units_8w, a8.ads_units_8w),
             NULLIF(COALESCE(tr.target_spend_8w, a8.ads_spend_8w), 0)
           )
       END
     , 2) as target_weighted_net_roas,
+
+    -- ═══ Lag Window Safety Check (last 3 days excluded by 4-day lag) ═══
+    -- If this ROAS is high, REDUCE_BID should be deferred to MONITOR
+    ROUND(SAFE_DIVIDE(
+      COALESCE(ae.margin_per_unit, 0) * COALESCE(trl.target_lag_units, 0),
+      NULLIF(COALESCE(trl.target_lag_spend, 0), 0)
+    ), 2) as target_lag_net_roas,
+
+    -- Term-level lag ROAS (search_term grain) — safety check before NEGATE_TERM
+    ROUND(SAFE_DIVIDE(
+      COALESCE(ae.margin_per_unit, 0) * COALESCE(alag.lag_units, 0),
+      NULLIF(COALESCE(alag.lag_spend, 0), 0)
+    ), 2) as ads_lag_net_roas,
+
+    -- ═══ Off-Season ROAS (BOOST/PEAK days excluded) ═══
+    -- GUARDIAN/COOLDOWN modes use these to avoid inflated ROAS from peak-season data.
+
+    -- Search-term level off-season 1w Net ROAS (simple, no weighting)
+    ROUND(SAFE_DIVIDE(
+      ae.margin_per_unit * COALESCE(aos.os_units_1w, 0),
+      NULLIF(COALESCE(aos.os_spend_1w, 0), 0)
+    ), 2) as ads_net_roas_1w_os,
+
+    -- Search-term level off-season weighted ROAS (legacy, kept for reference)
+    ROUND(
+      CASE
+        WHEN COALESCE(aos.os_spend_8w, 0) = 0 THEN NULL  -- no off-season data
+        WHEN COALESCE(aos.os_spend_1w, 0) > 0 AND COALESCE(aos.os_spend_4w, 0) > 0
+        THEN
+          SAFE_DIVIDE(ae.margin_per_unit * COALESCE(aos.os_units_1w, 0), NULLIF(aos.os_spend_1w, 0)) * 0.5
+          + SAFE_DIVIDE(ae.margin_per_unit * COALESCE(aos.os_units_4w, 0), NULLIF(aos.os_spend_4w, 0)) * 0.3
+          + SAFE_DIVIDE(ae.margin_per_unit * aos.os_units_8w, NULLIF(aos.os_spend_8w, 0)) * 0.2
+        WHEN COALESCE(aos.os_spend_1w, 0) = 0 AND COALESCE(aos.os_spend_4w, 0) > 0
+        THEN
+          SAFE_DIVIDE(ae.margin_per_unit * COALESCE(aos.os_units_4w, 0), NULLIF(aos.os_spend_4w, 0)) * 0.625
+          + SAFE_DIVIDE(ae.margin_per_unit * aos.os_units_8w, NULLIF(aos.os_spend_8w, 0)) * 0.375
+        ELSE
+          SAFE_DIVIDE(ae.margin_per_unit * aos.os_units_8w, NULLIF(aos.os_spend_8w, 0))
+      END
+    , 2) as ads_weighted_net_roas_offseason,
+
+    -- Target level off-season 1w Net ROAS (simple, no weighting)
+    ROUND(SAFE_DIVIDE(
+      ae.margin_per_unit * COALESCE(tros.target_os_units_1w, 0),
+      NULLIF(COALESCE(tros.target_os_spend_1w, 0), 0)
+    ), 2) as target_net_roas_1w_os,
+
+    -- Target level off-season weighted ROAS (legacy, kept for reference)
+    ROUND(
+      CASE
+        WHEN COALESCE(tros.target_os_spend_8w, 0) = 0 THEN NULL  -- no off-season data
+        WHEN COALESCE(tros.target_os_spend_1w, 0) > 0 AND COALESCE(tros.target_os_spend_4w, 0) > 0
+        THEN
+          SAFE_DIVIDE(ae.margin_per_unit * COALESCE(tros.target_os_units_1w, 0), NULLIF(tros.target_os_spend_1w, 0)) * 0.5
+          + SAFE_DIVIDE(ae.margin_per_unit * COALESCE(tros.target_os_units_4w, 0), NULLIF(tros.target_os_spend_4w, 0)) * 0.3
+          + SAFE_DIVIDE(ae.margin_per_unit * tros.target_os_units_8w, NULLIF(tros.target_os_spend_8w, 0)) * 0.2
+        WHEN COALESCE(tros.target_os_spend_1w, 0) = 0 AND COALESCE(tros.target_os_spend_4w, 0) > 0
+        THEN
+          SAFE_DIVIDE(ae.margin_per_unit * COALESCE(tros.target_os_units_4w, 0), NULLIF(tros.target_os_spend_4w, 0)) * 0.625
+          + SAFE_DIVIDE(ae.margin_per_unit * tros.target_os_units_8w, NULLIF(tros.target_os_spend_8w, 0)) * 0.375
+        ELSE
+          SAFE_DIVIDE(ae.margin_per_unit * tros.target_os_units_8w, NULLIF(tros.target_os_spend_8w, 0))
+      END
+    , 2) as target_weighted_net_roas_offseason,
+
+    -- ═══ Hot-Season Weighted Net ROAS ═══
+    -- Equal-weight average of 3 components (each 1/3 when all available):
+    --   1. TY last 14 days (current momentum)
+    --   2. LY same holiday BOOST+PEAK (historical same-season)
+    --   3. Last completed peak BOOST+PEAK (most recent peak memory)
+    -- Components with no data are excluded; denominator adjusts.
+    -- Used for BLITZ mode and SEASONAL_PUSH evaluation.
+
+    -- Search-term level hot-season ROAS
+    ROUND(
+      SAFE_DIVIDE(
+        -- Sum of available component ROAS values
+        COALESCE(SAFE_DIVIDE(ae.margin_per_unit * t14.ty14_units, NULLIF(t14.ty14_spend, 0)), 0)
+        + COALESCE(SAFE_DIVIDE(ae.margin_per_unit * lysh.lysh_units, NULLIF(lysh.lysh_spend, 0)), 0)
+        + COALESCE(SAFE_DIVIDE(ae.margin_per_unit * alp.lp_units, NULLIF(alp.lp_spend, 0)), 0),
+        -- Number of components that had data (denominator)
+        NULLIF(
+          CASE WHEN t14.ty14_spend > 0 THEN 1 ELSE 0 END
+          + CASE WHEN lysh.lysh_spend > 0 THEN 1 ELSE 0 END
+          + CASE WHEN alp.lp_spend > 0 THEN 1 ELSE 0 END
+        , 0)
+      )
+    , 2) as ads_weighted_net_roas_hotseason,
+
+    -- Target level hot-season ROAS
+    ROUND(
+      SAFE_DIVIDE(
+        COALESCE(SAFE_DIVIDE(ae.margin_per_unit * trh.target_ty14_units, NULLIF(trh.target_ty14_spend, 0)), 0)
+        + COALESCE(SAFE_DIVIDE(ae.margin_per_unit * lysh.lysh_units, NULLIF(lysh.lysh_spend, 0)), 0)
+        + COALESCE(SAFE_DIVIDE(ae.margin_per_unit * trlp.target_lp_units, NULLIF(trlp.target_lp_spend, 0)), 0),
+        NULLIF(
+          CASE WHEN trh.target_ty14_spend > 0 THEN 1 ELSE 0 END
+          + CASE WHEN lysh.lysh_spend > 0 THEN 1 ELSE 0 END
+          + CASE WHEN trlp.target_lp_spend > 0 THEN 1 ELSE 0 END
+        , 0)
+      )
+    , 2) as target_weighted_net_roas_hotseason,
+
+    -- ═══ Q4 Seasonal Detection ═══
+    -- Cross-campaign, term-level: is this term profitable ONLY in Q4 peaks?
+    COALESCE(q4s.q4_orders, 0) as q4_peak_orders,
+    COALESCE(q4s.q4_units, 0) as q4_peak_units,
+    ROUND(COALESCE(q4s.q4_spend, 0), 2) as q4_peak_spend,
+    ROUND(SAFE_DIVIDE(ae.margin_per_unit * q4s.q4_orders, NULLIF(q4s.q4_spend, 0)), 2) as q4_peak_net_roas,
+    COALESCE(q4s.os_orders, 0) as q4_os_orders,
+    ROUND(COALESCE(q4s.os_spend, 0), 2) as q4_os_spend,
+    ROUND(SAFE_DIVIDE(ae.margin_per_unit * q4s.os_orders, NULLIF(q4s.os_spend, 0)), 2) as q4_os_net_roas,
+    -- Auto-detection flag: q4_roas > 1.2 AND os_roas < 0.7 AND q4_orders >= 3
+    CASE WHEN q4s.q4_orders >= 3
+      AND SAFE_DIVIDE(ae.margin_per_unit * q4s.q4_orders, NULLIF(q4s.q4_spend, 0)) > 1.2
+      AND COALESCE(SAFE_DIVIDE(ae.margin_per_unit * q4s.os_orders, NULLIF(q4s.os_spend, 0)), 0) < 0.7
+      THEN TRUE ELSE FALSE
+    END as is_q4_seasonal,
+
+    -- ═══ Holiday Seasonal Detection (non-Q4) ═══
+    -- True if search_term contains any gift_season holiday name (Easter, Valentine, Christmas, etc.)
+    CASE WHEN EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND (
+          STRPOS(LOWER(a8.search_term), LOWER(h.holiday_name)) > 0
+          OR STRPOS(LOWER(a8.search_term), LOWER(REGEXP_REPLACE(h.holiday_name, r"'?s?\s+Day$", ''))) > 0
+        )
+    ) THEN TRUE ELSE FALSE
+    END as is_holiday_seasonal,
 
     -- Cross-campaign 8w context
     ROUND(COALESCE(xc.xc_spend_8w, a8.ads_spend_8w), 2) as xc_spend_8w,
@@ -624,25 +1298,27 @@ active_term_data AS (
     -- Lifetime
     ROUND(COALESCE(lt.lt_spend, a8.ads_spend_8w), 2) as lt_spend,
     COALESCE(lt.lt_orders, a8.ads_orders_8w) as lt_orders,
+    COALESCE(lt.lt_units, a8.ads_units_8w) as lt_units,
     COALESCE(lt.lt_clicks, a8.ads_clicks_8w) as lt_clicks,
     COALESCE(lt.lt_days, a8.ads_days_8w) as lt_days,
     lt.lt_first_seen,
     lt.lt_last_seen,
     ROUND(SAFE_DIVIDE(
       COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * COALESCE(lt.lt_orders, a8.ads_orders_8w),
+        * COALESCE(lt.lt_units, a8.ads_units_8w),
       NULLIF(COALESCE(lt.lt_spend, a8.ads_spend_8w), 0)
     ), 2) as lt_net_roas,
 
     -- LY Peak
     ROUND(COALESCE(lyp.ly_spend, 0), 2) as ly_spend,
     COALESCE(lyp.ly_orders, 0) as ly_orders,
+    COALESCE(lyp.ly_units, 0) as ly_units,
     COALESCE(lyp.ly_clicks, 0) as ly_clicks,
     COALESCE(lyp.ly_impressions, 0) as ly_impressions,
     ROUND(SAFE_DIVIDE(COALESCE(lyp.ly_spend, 0), NULLIF(COALESCE(lyp.ly_clicks, 0), 0)), 2) as ly_cpc,
     ROUND(SAFE_DIVIDE(COALESCE(lyp.ly_orders, 0), NULLIF(COALESCE(lyp.ly_clicks, 0), 0)) * 100, 2) as ly_cvr_pct,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, 0) * COALESCE(lyp.ly_orders, 0),
+      COALESCE(ae.margin_per_unit, 0) * COALESCE(lyp.ly_units, 0),
       NULLIF(COALESCE(lyp.ly_spend, 0), 0)
     ), 2) as ly_net_roas,
 
@@ -700,15 +1376,60 @@ active_term_data AS (
     ebt.search_term IS NOT NULL as already_in_exact_boost,
 
     -- Current bid from bulksheet config (SP keyword → SB keyword → product targeting → ad group default)
-    ROUND(COALESCE(cc.keyword_bid, ccsb.keyword_bid, ccpt.pt_bid, ccag.ad_group_default_bid), 2) as current_bid
+    ROUND(COALESCE(cc.keyword_bid, ccsb.keyword_bid, ccpt.pt_bid, ccag.ad_group_default_bid), 2) as current_bid,
+
+    -- Current campaign placement adjustments
+    COALESCE(cp.tos_pct, 0) as tos_pct,
+    COALESCE(cp.product_page_pct, 0) as product_page_pct,
+    COALESCE(cp.b2b_pct, 0) as b2b_pct,
+
+    -- Pre-peak snapshot (for Cooldown restore)
+    pps.pre_peak_bid,
+    pps.pre_peak_tos_pct,
+    pps.pre_peak_pp_pct,
+    pps.pre_peak_b2b_pct,
+    pps.pre_peak_avg_cpc,
+    pps.pre_peak_avg_daily_spend,
+
+    -- Latest day CPC
+    ldc.last_day_cpc,
+    ldc.last_day_date,
+
+    -- Campaign budget (for Cooldown budget recommendations)
+    ccb.current_budget,
+    cpb.pre_peak_budget,
+
+    -- Campaign state (for action guards — suppress recommendations on paused campaigns)
+    ccs.campaign_state,
+
+    -- Campaign creation date (for warmup guard — 14-day new campaign tolerance)
+    ccs.campaign_creation_date,
+
+    -- Action frequency control (days since last change from SCD2 history)
+    COALESCE(klbc.days_since_last_bid_change, 999) as days_since_last_bid_change,
+    COALESCE(clbc.days_since_last_budget_change, 999) as days_since_last_budget_change
 
   FROM ads_8w a8
   JOIN asin_economics ae ON a8.asin = ae.asin
   LEFT JOIN ads_1w a1 ON a8.campaign_id = a1.campaign_id AND a8.search_term = a1.search_term AND a8.asin = a1.asin AND a8.targeting = a1.targeting
+  LEFT JOIN ads_3d a3 ON a8.campaign_id = a3.campaign_id AND a8.search_term = a3.search_term AND a8.asin = a3.asin AND a8.targeting = a3.targeting
+  LEFT JOIN ads_14d a14 ON a8.campaign_id = a14.campaign_id AND a8.search_term = a14.search_term AND a8.asin = a14.asin AND a8.targeting = a14.targeting
   LEFT JOIN ads_4w a4 ON a8.campaign_id = a4.campaign_id AND a8.search_term = a4.search_term AND a8.asin = a4.asin AND a8.targeting = a4.targeting
   LEFT JOIN target_rollup tr ON a8.campaign_id = tr.campaign_id AND a8.targeting = tr.targeting AND a8.keyword_id = tr.keyword_id AND a8.asin = tr.asin
   LEFT JOIN target_rollup_1w tr1 ON a8.campaign_id = tr1.campaign_id AND a8.targeting = tr1.targeting AND a8.asin = tr1.asin
   LEFT JOIN target_rollup_4w tr4 ON a8.campaign_id = tr4.campaign_id AND a8.targeting = tr4.targeting AND a8.asin = tr4.asin
+  LEFT JOIN target_rollup_lag trl ON a8.campaign_id = trl.campaign_id AND a8.targeting = trl.targeting AND a8.asin = trl.asin
+  LEFT JOIN ads_lag alag ON a8.campaign_id = alag.campaign_id AND a8.search_term = alag.search_term AND a8.asin = alag.asin AND a8.targeting = alag.targeting
+  LEFT JOIN ads_offseason aos ON a8.campaign_id = aos.campaign_id AND a8.search_term = aos.search_term AND a8.asin = aos.asin AND a8.targeting = aos.targeting
+  LEFT JOIN target_rollup_offseason tros ON a8.campaign_id = tros.campaign_id AND a8.targeting = tros.targeting AND a8.asin = tros.asin
+  -- Hot-season components (CROSS-CAMPAIGN: term × asin)
+  LEFT JOIN ads_ty_14d t14 ON a8.search_term = t14.search_term AND a8.asin = t14.asin
+  LEFT JOIN ads_last_peak alp ON a8.search_term = alp.search_term AND a8.asin = alp.asin
+  LEFT JOIN ads_ly_same_holiday lysh ON a8.search_term = lysh.search_term AND a8.asin = lysh.asin
+  LEFT JOIN target_rollup_hotseason trh ON a8.search_term = trh.search_term AND a8.asin = trh.asin
+  LEFT JOIN target_rollup_last_peak trlp ON a8.search_term = trlp.search_term AND a8.asin = trlp.asin
+  -- Q4 seasonal detection
+  LEFT JOIN q4_seasonal_detection q4s ON a8.search_term = q4s.search_term AND a8.asin = q4s.asin
   LEFT JOIN cross_campaign_8w xc ON a8.search_term = xc.search_term AND a8.asin = xc.asin
   LEFT JOIN ads_lifetime lt ON a8.search_term = lt.search_term AND a8.asin = lt.asin
   LEFT JOIN ads_ly_peak lyp ON a8.search_term = lyp.search_term AND a8.asin = lyp.asin
@@ -721,6 +1442,14 @@ active_term_data AS (
   LEFT JOIN campaign_config_sb ccsb ON a8.campaign_id = ccsb.campaign_id AND a8.keyword_id = ccsb.keyword_id
   LEFT JOIN campaign_config_pt ccpt ON a8.campaign_id = ccpt.campaign_id AND a8.keyword_id = ccpt.product_targeting_id
   LEFT JOIN campaign_config_ag ccag ON a8.campaign_id = ccag.campaign_id
+  LEFT JOIN campaign_placements cp ON a8.campaign_id = cp.campaign_id
+  LEFT JOIN pre_peak_snap pps ON a8.campaign_id = pps.campaign_id AND LOWER(a8.targeting) = LOWER(pps.targeting)
+  LEFT JOIN latest_day_cpc ldc ON a8.campaign_id = ldc.campaign_id AND LOWER(a8.targeting) = LOWER(ldc.targeting)
+  LEFT JOIN campaign_current_budget ccb ON a8.campaign_id = ccb.campaign_id
+  LEFT JOIN campaign_pre_peak_budget cpb ON a8.campaign_id = cpb.campaign_id
+  LEFT JOIN campaign_current_state ccs ON a8.campaign_id = ccs.campaign_id
+  LEFT JOIN keyword_last_bid_change klbc ON a8.keyword_id = klbc.keyword_id
+  LEFT JOIN campaign_last_budget_change clbc ON a8.campaign_id = clbc.campaign_id
 ),
 
 -- =============================================
@@ -749,7 +1478,7 @@ sqp_with_purchases AS (
     COUNT(DISTINCT fsq.week_end_date) as sqp_weeks
   FROM `onyga-482313.OI.FACT_SEARCH_QUERY` fsq
   WHERE fsq.data_source = 'SQP'
-    AND fsq.week_end_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 56 DAY)
+    AND fsq.week_end_date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 56 DAY)
     AND fsq.conversions > 0
   GROUP BY 1, 2
   HAVING SUM(fsq.conversions) >= 1
@@ -764,7 +1493,7 @@ opportunity_data AS (
     CAST(NULL AS STRING) as ad_group_id,
     CAST(NULL AS STRING) as campaign_name,
     CAST(NULL AS STRING) as campaign_type,
-    'Unassigned' as portfolio_name,
+    'Unassigned' as portfolio_name,  -- Opportunities have no campaign → no portfolio
     COALESCE(th.hero_asin, sp.asin) as asin,
     COALESCE(th.hero_product_name, ae.product_short_name) as product_short_name,
     ae.parent_name,
@@ -795,15 +1524,35 @@ opportunity_data AS (
     CAST(NULL AS FLOAT64) as ads_cost_per_order_8w,
     0.0 as ads_net_profit_8w, CAST(NULL AS FLOAT64) as ads_net_roas_8w,
     -- 1w/4w windows (zeros for opportunity)
-    0.0 as ads_spend_1w, 0 as ads_orders_1w, 0 as ads_clicks_1w, CAST(NULL AS FLOAT64) as ads_net_roas_1w,
-    0.0 as ads_spend_4w, 0 as ads_orders_4w, 0 as ads_clicks_4w, CAST(NULL AS FLOAT64) as ads_net_roas_4w,
+    0.0 as ads_spend_1w, 0 as ads_orders_1w, 0 as ads_units_1w, 0 as ads_clicks_1w, 0 as ads_impressions_1w, CAST(NULL AS FLOAT64) as ads_net_roas_1w,
+    0.0 as ads_spend_4w, 0 as ads_orders_4w, 0 as ads_units_4w, 0 as ads_clicks_4w, CAST(NULL AS FLOAT64) as ads_net_roas_4w,
     CAST(NULL AS FLOAT64) as ads_weighted_net_roas,
+    -- New simple window ROAS fields (NULL for opportunities)
+    0.0 as ads_spend_3d, 0 as ads_orders_3d, 0 as ads_units_3d, CAST(NULL AS FLOAT64) as ads_net_roas_3d,
+    0.0 as ads_spend_14d, 0 as ads_orders_14d, CAST(NULL AS FLOAT64) as ads_net_roas_14d,
     0 as ads_clicks_recent_5d,
     -- Target rollup (zeros for opportunity)
     0.0 as target_spend_8w, 0 as target_orders_8w, 0 as target_clicks_8w,
     0 as target_impressions_8w, 0 as target_search_term_count, 0 as target_clicks_recent_5d,
+    CAST(NULL AS STRING) as target_keyword_status,
     CAST(NULL AS FLOAT64) as target_net_roas_8w,
+    CAST(NULL AS FLOAT64) as target_net_roas_1w,
     CAST(NULL AS FLOAT64) as target_weighted_net_roas,
+    CAST(NULL AS FLOAT64) as target_lag_net_roas,
+    CAST(NULL AS FLOAT64) as ads_lag_net_roas,
+    -- Off-season ROAS (NULL for opportunities — no ads data)
+    CAST(NULL AS FLOAT64) as ads_net_roas_1w_os,
+    CAST(NULL AS FLOAT64) as ads_weighted_net_roas_offseason,
+    CAST(NULL AS FLOAT64) as target_net_roas_1w_os,
+    CAST(NULL AS FLOAT64) as target_weighted_net_roas_offseason,
+    -- Hot-season ROAS (NULL for opportunities — no ads data)
+    CAST(NULL AS FLOAT64) as ads_weighted_net_roas_hotseason,
+    CAST(NULL AS FLOAT64) as target_weighted_net_roas_hotseason,
+    -- Q4 seasonal detection (NULL for opportunities)
+    0 as q4_peak_orders, 0 as q4_peak_units, 0.0 as q4_peak_spend, CAST(NULL AS FLOAT64) as q4_peak_net_roas,
+    0 as q4_os_orders, 0.0 as q4_os_spend, CAST(NULL AS FLOAT64) as q4_os_net_roas,
+    FALSE as is_q4_seasonal,
+    FALSE as is_holiday_seasonal,
 
     -- Cross-campaign (zeros)
     0.0 as xc_spend_8w, 0 as xc_orders_8w, 0 as xc_clicks_8w,
@@ -811,12 +1560,12 @@ opportunity_data AS (
     CAST(NULL AS FLOAT64) as spend_share_pct, CAST(NULL AS FLOAT64) as orders_share_pct,
 
     -- Lifetime (zeros)
-    0.0 as lt_spend, 0 as lt_orders, 0 as lt_clicks, CAST(NULL AS INT64) as lt_days,
+    0.0 as lt_spend, 0 as lt_orders, 0 as lt_units, 0 as lt_clicks, CAST(NULL AS INT64) as lt_days,
     CAST(NULL AS DATE) as lt_first_seen, CAST(NULL AS DATE) as lt_last_seen,
     CAST(NULL AS FLOAT64) as lt_net_roas,
 
     -- LY Peak (zeros)
-    0.0 as ly_spend, 0 as ly_orders, 0 as ly_clicks, 0 as ly_impressions,
+    0.0 as ly_spend, 0 as ly_orders, 0 as ly_units, 0 as ly_clicks, 0 as ly_impressions,
     CAST(NULL AS FLOAT64) as ly_cpc, CAST(NULL AS FLOAT64) as ly_cvr_pct,
     CAST(NULL AS FLOAT64) as ly_net_roas,
 
@@ -867,7 +1616,26 @@ opportunity_data AS (
     FALSE as already_in_exact_boost,
 
     -- No bid for opportunity rows
-    CAST(NULL AS FLOAT64) as current_bid
+    CAST(NULL AS FLOAT64) as current_bid,
+
+    -- No placement/snapshot data for opportunities
+    CAST(0 AS INT64) as tos_pct,
+    CAST(0 AS INT64) as product_page_pct,
+    CAST(0 AS INT64) as b2b_pct,
+    CAST(NULL AS FLOAT64) as pre_peak_bid,
+    CAST(NULL AS INT64) as pre_peak_tos_pct,
+    CAST(NULL AS INT64) as pre_peak_pp_pct,
+    CAST(NULL AS INT64) as pre_peak_b2b_pct,
+    CAST(NULL AS FLOAT64) as pre_peak_avg_cpc,
+    CAST(NULL AS FLOAT64) as pre_peak_avg_daily_spend,
+    CAST(NULL AS FLOAT64) as last_day_cpc,
+    CAST(NULL AS DATE) as last_day_date,
+    CAST(NULL AS FLOAT64) as current_budget,
+    CAST(NULL AS FLOAT64) as pre_peak_budget,
+    CAST(NULL AS STRING) as campaign_state,
+    CAST(NULL AS TIMESTAMP) as campaign_creation_date,
+    CAST(999 AS INT64) as days_since_last_bid_change,
+    CAST(999 AS INT64) as days_since_last_budget_change
 
   FROM sqp_with_purchases sp
   JOIN asin_economics ae ON sp.asin = ae.asin

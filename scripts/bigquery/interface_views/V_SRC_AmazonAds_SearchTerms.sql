@@ -140,7 +140,7 @@ SELECT * FROM (
   LEFT JOIN onyga-482313.OI.V_SRC_AmazonAds_campaign_history c
     ON st.campaign_id = c.campaign_id
     AND TIMESTAMP(st.date) BETWEEN c.OI_start_date AND c.OI_end_date
-  WHERE date >= '2025-10-28'
+  WHERE st.date >= '2025-10-28'
 ) fivetran_data
 
 UNION ALL

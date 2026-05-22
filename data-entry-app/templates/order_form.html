@@ -10,83 +10,104 @@
 </div>
 
 <div class="row">
-    <div class="col-lg-8 offset-lg-2">
+    <div class="col-lg-10 offset-lg-1">
         <div class="card">
             <div class="card-header">
                 Purchase Order Information
             </div>
             <div class="card-body">
-                <form method="POST" action="{{ url_for('new_order') }}">
+                <form method="POST" action="{{ url_for('new_order') }}" id="poForm">
+                    <!-- PO Header Fields -->
                     <div class="row">
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <div class="mb-3">
                                 <label for="order_date" class="form-label required-field">Order Date</label>
                                 <input type="date" class="form-control" id="order_date" name="order_date" required>
                             </div>
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <div class="mb-3">
                                 <label for="manufacturer_name" class="form-label required-field">Manufacturer Name</label>
                                 <input type="text" class="form-control" id="manufacturer_name" name="manufacturer_name" value="SYLVIA" required>
                             </div>
                         </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label for="product_id" class="form-label required-field">Product</label>
-                                <select class="form-select" id="product_id" name="product_id" required>
-                                    <option value="">-- Select Product --</option>
-                                    {% if products %}
-                                        {% for product in products %}
-                                        <option value="{{ product.product_id }}" 
-                                                data-asin="{{ product.asin or '' }}"
-                                                data-name="{{ product.product_name or product.display_name or '' }}">
-                                            {{ product.sku or ('Product ' + product.product_id|string) }}
-                                            {% if product.asin %} (ASIN: {{ product.asin }}){% endif %}
-                                        </option>
-                                        {% endfor %}
-                                    {% else %}
-                                        <option value="" disabled>No products found in DIM_PRODUCT</option>
-                                    {% endif %}
-                                </select>
-                                <input type="hidden" id="product_asin" name="product_asin">
-                                <input type="hidden" id="product_name" name="product_name">
-                            </div>
-                        </div>
-                        <div class="col-md-2">
-                            <div class="mb-3">
-                                <label for="quantity" class="form-label required-field">Quantity</label>
-                                <input type="number" class="form-control" id="quantity" name="quantity" min="1" value="1" required>
-                            </div>
-                        </div>
-                        <div class="col-md-2">
-                            <div class="mb-3">
-                                <label for="total_amount" class="form-label required-field">Amount</label>
-                                <input type="number" class="form-control" id="total_amount" name="total_amount" step="0.01" min="0" required>
-                            </div>
-                        </div>
-                        <div class="col-md-2">
+                        <div class="col-md-4">
                             <div class="mb-3">
                                 <label for="currency" class="form-label">Currency</label>
                                 <select class="form-select" id="currency" name="currency">
-                                    <option value="USD" selected>USD</option>
-                                    <option value="ILS">ILS</option>
-                                    <option value="HKD">HKD</option>
+                                    {% for item in lovs.get('CURRENCY', []) %}
+                                    <option value="{{ item.value_id }}" {% if item.is_default %}selected{% endif %}>{{ item.value_caption }}</option>
+                                    {% endfor %}
                                 </select>
                             </div>
                         </div>
                     </div>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <small class="text-muted" id="product_info">
-                                    Select a product to see ASIN and details
-                                </small>
+
+                    <!-- Product Lines Section -->
+                    <hr>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="mb-0"><i class="bi bi-box-seam"></i> Product Lines</h6>
+                        <button type="button" class="btn btn-sm btn-success" id="addLineBtn">
+                            <i class="bi bi-plus-circle"></i> Add Product
+                        </button>
+                    </div>
+
+                    <div id="productLinesContainer">
+                        <!-- First product line (always present) -->
+                        <div class="product-line border rounded p-3 mb-2" data-line-index="0">
+                            <div class="row align-items-end">
+                                <div class="col-md-5">
+                                    <div class="mb-2">
+                                        <label class="form-label required-field">Product</label>
+                                        {% from '_product_select.html' import product_select %}
+                                        {{ product_select(products, name='product_ids[]', required=True, css_class='product-select') }}
+                                        <small class="text-muted product-info">Select a product</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="mb-2">
+                                        <label class="form-label required-field">Quantity</label>
+                                        <input type="number" class="form-control line-quantity" name="quantities[]" min="1" value="1" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="mb-2">
+                                        <label class="form-label required-field">Amount</label>
+                                        <input type="number" class="form-control line-amount" name="amounts[]" step="0.01" min="0" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="mb-2">
+                                        <label class="form-label">&nbsp;</label>
+                                        <button type="button" class="btn btn-outline-danger btn-sm d-block w-100 remove-line-btn" style="display: none !important;">
+                                            <i class="bi bi-trash"></i> Remove
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
+
+                    <!-- PO Total -->
+                    <div class="row mt-2">
+                        <div class="col-md-8"></div>
+                        <div class="col-md-4">
+                            <div class="card bg-light">
+                                <div class="card-body py-2 px-3">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <strong>PO Total:</strong>
+                                        <span class="fs-5 text-primary fw-bold" id="poTotal">0.00</span>
+                                    </div>
+                                    <div class="d-flex justify-content-between align-items-center text-muted">
+                                        <small>Total Quantity:</small>
+                                        <small id="poTotalQty">0</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr>
 
                     <div class="row">
                         <div class="col-md-6">
@@ -121,34 +142,120 @@
 {% block extra_js %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const productSelect = document.getElementById('product_id');
-    const productAsinInput = document.getElementById('product_asin');
-    const productNameInput = document.getElementById('product_name');
-    const productInfo = document.getElementById('product_info');
+    const container = document.getElementById('productLinesContainer');
+    const addBtn = document.getElementById('addLineBtn');
+    let lineIndex = 1;
     
-    productSelect.addEventListener('change', function() {
-        const selectedOption = this.options[this.selectedIndex];
-        if (selectedOption.value) {
-            const asin = selectedOption.getAttribute('data-asin');
-            const name = selectedOption.getAttribute('data-name');
-            
-            productAsinInput.value = asin || '';
-            productNameInput.value = name || '';
-            
-            if (asin) {
-                productInfo.textContent = `ASIN: ${asin}`;
-                productInfo.className = 'text-success';
-            } else {
-                productInfo.textContent = 'Product selected (no ASIN)';
-                productInfo.className = 'text-warning';
-            }
-        } else {
-            productAsinInput.value = '';
-            productNameInput.value = '';
-            productInfo.textContent = 'Select a product to see ASIN and details';
-            productInfo.className = 'text-muted';
+    // Product options HTML (cached from first select)
+    const productOptionsHtml = container.querySelector('.product-select').innerHTML;
+    
+    // Add product line
+    addBtn.addEventListener('click', function() {
+        const lineHtml = `
+        <div class="product-line border rounded p-3 mb-2" data-line-index="${lineIndex}">
+            <div class="row align-items-end">
+                <div class="col-md-5">
+                    <div class="mb-2">
+                        <label class="form-label required-field">Product</label>
+                        <select class="form-select product-select" name="product_ids[]" required>
+                            ${productOptionsHtml}
+                        </select>
+                        <small class="text-muted product-info">Select a product</small>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="mb-2">
+                        <label class="form-label required-field">Quantity</label>
+                        <input type="number" class="form-control line-quantity" name="quantities[]" min="1" value="1" required>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="mb-2">
+                        <label class="form-label required-field">Amount</label>
+                        <input type="number" class="form-control line-amount" name="amounts[]" step="0.01" min="0" required>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="mb-2">
+                        <label class="form-label">&nbsp;</label>
+                        <button type="button" class="btn btn-outline-danger btn-sm d-block w-100 remove-line-btn">
+                            <i class="bi bi-trash"></i> Remove
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+        container.insertAdjacentHTML('beforeend', lineHtml);
+        lineIndex++;
+        updateRemoveButtons();
+        updateTotals();
+    });
+    
+    // Remove product line (delegated)
+    container.addEventListener('click', function(e) {
+        const removeBtn = e.target.closest('.remove-line-btn');
+        if (removeBtn) {
+            removeBtn.closest('.product-line').remove();
+            updateRemoveButtons();
+            updateTotals();
         }
     });
+    
+    // Product select change — show ASIN info
+    container.addEventListener('change', function(e) {
+        if (e.target.classList.contains('product-select')) {
+            const selectedOption = e.target.options[e.target.selectedIndex];
+            const infoEl = e.target.closest('.product-line').querySelector('.product-info');
+            if (selectedOption.value) {
+                const asin = selectedOption.getAttribute('data-asin');
+                if (asin) {
+                    infoEl.textContent = `ASIN: ${asin}`;
+                    infoEl.className = 'text-success product-info';
+                } else {
+                    infoEl.textContent = 'Selected (no ASIN)';
+                    infoEl.className = 'text-warning product-info';
+                }
+            } else {
+                infoEl.textContent = 'Select a product';
+                infoEl.className = 'text-muted product-info';
+            }
+        }
+    });
+    
+    // Update totals on quantity/amount change
+    container.addEventListener('input', function(e) {
+        if (e.target.classList.contains('line-quantity') || e.target.classList.contains('line-amount')) {
+            updateTotals();
+        }
+    });
+    
+    function updateRemoveButtons() {
+        const lines = container.querySelectorAll('.product-line');
+        lines.forEach(line => {
+            const btn = line.querySelector('.remove-line-btn');
+            if (btn) {
+                // Show remove button only if more than 1 line
+                btn.style.display = lines.length > 1 ? 'block' : 'none';
+                btn.style.setProperty('display', lines.length > 1 ? 'block' : 'none', 'important');
+            }
+        });
+    }
+    
+    function updateTotals() {
+        let totalAmount = 0;
+        let totalQty = 0;
+        container.querySelectorAll('.product-line').forEach(line => {
+            const qty = parseFloat(line.querySelector('.line-quantity').value) || 0;
+            const amt = parseFloat(line.querySelector('.line-amount').value) || 0;
+            totalQty += qty;
+            totalAmount += amt;
+        });
+        document.getElementById('poTotal').textContent = totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        document.getElementById('poTotalQty').textContent = totalQty.toLocaleString();
+    }
+    
+    updateRemoveButtons();
+    updateTotals();
 });
 </script>
 {% endblock %}

@@ -18,6 +18,7 @@ cube(`AdsCoachCampaign`, {
     strategyId: { sql: `strategy_id`, type: `string` },
     strategyName: { sql: `strategy_name`, type: `string` },
     experimentStatus: { sql: `experiment_status`, type: `string` },
+    campaignState: { sql: `campaign_state`, type: `string`, description: `Current campaign state (ENABLED, PAUSED, ARCHIVED)` },
 
     // Totals
     totalTerms: { sql: `total_terms`, type: `number` },
@@ -28,10 +29,6 @@ cube(`AdsCoachCampaign`, {
     campaignNetRoas4w: { sql: `campaign_net_roas_4w`, type: `number` },
     campaignAvgCpc4w: { sql: `campaign_avg_cpc_4w`, type: `number` },
     campaignCvrPct4w: { sql: `campaign_cvr_pct_4w`, type: `number` },
-
-    // LY Peak
-    totalSpendLyPeak: { sql: `total_spend_ly_peak`, type: `number` },
-    totalOrdersLyPeak: { sql: `total_orders_ly_peak`, type: `number` },
 
     // SQP
     totalSqpOrders4w: { sql: `total_sqp_orders_4w`, type: `number` },

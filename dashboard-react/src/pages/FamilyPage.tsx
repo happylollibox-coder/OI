@@ -10,10 +10,11 @@ import { Th, SortTh, useSort, MEASURE_TIPS } from '../components/Tooltip';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
 import { Section } from '../components/Section';
 import { PageHeader } from '../components/PageHeader';
-import { fM, fP, fOrd, fR, fClk, fCpc, famFromType, famFromProduct, weekRangeLabel, sqpCoverageWeeks, latestSqpWeek, periodKey, periodLabel, periodModeLabel, latestPeriodLabel, getPeriodsToInclude } from '../utils';
+import { fM, fP, fOrd, fR, fClk, fCpc, famFromType, weekRangeLabel, weekRangeLabelCapped, sqpCoverageWeeks, latestSqpWeek, periodKey, periodLabel, periodModeLabel, latestPeriodLabel, getPeriodsToInclude } from '../utils';
 import { filterBySeasonality } from '../seasonality';
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
+import { useProductFamily } from '../hooks/useProductFamily';
 import { CHART_GRID, CHART_AXIS_TICK, CHART_AXIS_TICK_MD, CHART_AXIS_TICK_LG, CHART_TOOLTIP_STYLE } from '../chartTheme';
 import { ChevronRight, ChevronDown, TrendingUp } from 'lucide-react';
 
@@ -34,6 +35,8 @@ export function FamilyPage({ data, family, onNavExperiment }: {
   data: DashboardData; family: FamilyName | null; onNavExperiment?: (eid: string) => void;
 }) {
   const { filters, setFilter } = useFilters();
+  const { getFamily } = useProductFamily();
+  const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
   const showAllFamilies = family == null;
   const info = family ? (FAMILIES[family] || { code: family, color: '#3b82f6' }) : { code: 'All', color: '#3b82f6' };
   const trendMode: TrendMode = filters.seasonality ? 'peak' : filters.periodMode === 'weeks' ? 'weeks' : filters.periodMode === 'month' ? 'month' : 'year';
@@ -178,7 +181,7 @@ export function FamilyPage({ data, family, onNavExperiment }: {
   const drains = useMemo(() => drivers.filter(d => d.net_roas != null && d.net_roas < 1).sort((a, b) => (b.spend || 0) - (a.spend || 0)).slice(0, 15), [drivers]);
 
   const kwData = useMemo(() => {
-    let rows = showAllFamilies ? (data.keyword_product_map || []).filter(k => famFromProduct(k.product_short_name) != null) : (data.keyword_product_map || []).filter(k => famFromProduct(k.product_short_name) === family);
+    let rows = showAllFamilies ? (data.keyword_product_map || []).filter(k => getFamily(k.product_short_name) != null) : (data.keyword_product_map || []).filter(k => getFamily(k.product_short_name) === family);
     if (selectedSqpTerm) rows = rows.filter(k => k.search_term === selectedSqpTerm);
     return rows;
   }, [data.keyword_product_map, family, selectedSqpTerm, showAllFamilies]);
@@ -767,7 +770,7 @@ export function FamilyPage({ data, family, onNavExperiment }: {
         byWeek[k].count += 1;
       });
       return Object.entries(byWeek).sort(([a], [b]) => a.localeCompare(b))
-        .map(([w, d]) => ({ label: weekRangeLabel(w), value: isAvg ? (d.count ? d.sum / d.count : 0) : d.sum, hasSqp: sqpWeeks.has(w) }));
+        .map(([w, d]) => ({ label: weekRangeLabelCapped(w, perfMaxDate), value: isAvg ? (d.count ? d.sum / d.count : 0) : d.sum, hasSqp: sqpWeeks.has(w) }));
     } else if (trendMode === 'month') {
       let rows = (data.monthly_trends || []).filter(m => trendFamFilter(m));
       rows = filterBySeasonality(rows, 'month_start', filters.seasonality, pk);
@@ -802,7 +805,7 @@ export function FamilyPage({ data, family, onNavExperiment }: {
           bw[k].count += 1;
         });
         return Object.entries(bw).sort(([a], [b]) => a.localeCompare(b))
-          .map(([w, d]) => ({ label: weekRangeLabel(w), value: isAvg ? (d.count ? d.sum / d.count : 0) : d.sum, hasSqp: sqpWeeks.has(w) }));
+          .map(([w, d]) => ({ label: weekRangeLabelCapped(w, perfMaxDate), value: isAvg ? (d.count ? d.sum / d.count : 0) : d.sum, hasSqp: sqpWeeks.has(w) }));
       };
       if (filters.seasonality && pk) {
         let rows = (data.weekly_trends || []).filter(w => trendFamFilter(w));

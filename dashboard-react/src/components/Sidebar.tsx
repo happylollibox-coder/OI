@@ -1,4 +1,4 @@
-import { Home, Zap, Mountain, BarChart2, Search, GraduationCap, ClipboardList, HeartPulse, Target, Megaphone, Settings, Sun, Moon, CheckSquare, Shield } from 'lucide-react';
+import { Home, Zap, Mountain, BarChart2, Search, GraduationCap, ClipboardList, HeartPulse, Target, Megaphone, Settings, Sun, Moon, CheckSquare, Shield, Calculator, Package, Bell, Rocket, LayoutDashboard } from 'lucide-react';
 import type { PageId, FamilyName } from '../types';
 
 interface NavItem {
@@ -24,6 +24,11 @@ const NAV_GROUPS: NavGroup[] = [
       { page: 'ads', icon: <Megaphone size={16} />, label: 'ADS' },
       { page: 'strategies', icon: <Target size={16} />, label: 'STRATEGY' },
       { page: 'brand', icon: <Shield size={16} />, label: 'BRAND' },
+      { page: 'plan', icon: <Calculator size={16} />, label: 'PLAN' },
+      { page: 'supply', icon: <Package size={16} />, label: 'SUPPLY' },
+      { page: 'products', icon: <Rocket size={16} />, label: 'PRODUCTS' },
+      { page: 'alerts', icon: <Bell size={16} />, label: 'ALERTS' },
+      { page: 'kpi', icon: <LayoutDashboard size={16} />, label: 'KPI' },
     ],
   },
   {
@@ -44,13 +49,15 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-export function Sidebar({ activePage, activeFamily, onNav, themeMode, onToggleTheme, healthBadge }: {
+export function Sidebar({ activePage, activeFamily, onNav, themeMode, onToggleTheme, healthBadge, alertBadge, adminBadge }: {
   activePage: PageId;
   activeFamily: FamilyName | null;
   onNav: (page: PageId, family?: FamilyName) => void;
   themeMode?: 'dark' | 'light';
   onToggleTheme?: () => void;
   healthBadge?: 'ok' | 'warn' | 'error';
+  alertBadge?: { critical: number; warning: number; total: number };
+  adminBadge?: 'error' | 'ok' | null;
 }) {
   return (
     <nav className="fixed top-14 left-0 bottom-0 w-[72px] bg-surface/70 backdrop-blur-xl border-r border-border flex flex-col py-1 z-40 overflow-y-auto">
@@ -76,6 +83,16 @@ export function Sidebar({ activePage, activeFamily, onNav, themeMode, onToggleTh
                   {item.icon}
                   {item.page === 'health' && healthBadge && healthBadge !== 'ok' && (
                     <span className={`absolute -top-1 -right-1.5 w-2.5 h-2.5 rounded-full border-2 border-surface/70 animate-pulse ${healthBadge === 'error' ? 'bg-red-500' : 'bg-amber-500'}`} />
+                  )}
+                  {item.page === 'admin' && adminBadge === 'error' && (
+                    <span className="absolute -top-1 -right-1.5 w-2.5 h-2.5 rounded-full border-2 border-surface/70 bg-red-500 animate-pulse" />
+                  )}
+                  {item.page === 'alerts' && alertBadge && alertBadge.total > 0 && (
+                    <span className={`absolute -top-1.5 -right-2 min-w-[16px] h-4 flex items-center justify-center rounded-full text-[8px] font-bold text-white border border-surface/70 px-0.5 ${
+                      alertBadge.critical > 0 ? 'bg-red-500 animate-pulse' : 'bg-amber-500'
+                    }`}>
+                      {alertBadge.total}
+                    </span>
                   )}
                 </span>
                 <span className="leading-none">{item.label}</span>

@@ -7,6 +7,11 @@ FROM cubejs/cube:latest
 COPY schema /cube/conf/schema
 COPY cube.js /cube/conf/cube.js
 
+COPY package.json /cube/conf/package.json
+
+# Install dependencies required for checkAuth (jwks-rsa, jsonwebtoken)
+RUN cd /cube/conf && npm install
+
 # Environment variables for BigQuery driver
 # Cloud Run uses the default service account — no key file needed
 ENV CUBEJS_DB_TYPE=bigquery
