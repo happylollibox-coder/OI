@@ -3189,6 +3189,32 @@ function PlanVsRealityPanel({ families, snapshot, actuals2026Full }: {
   snapshot: Record<string, Record<string, number>> | null;
   actuals2026Full: Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
 }) {
+  const [mode, setMode] = useState<'units' | 'spend'>('units');
+  const [plannedSpend, setPlannedSpend] = useState<Record<string, (number | null)[]>>({});
+  useEffect(() => {
+    if (mode !== 'spend') return;
+    let cancelled = false;
+    (async () => {
+      const out: Record<string, (number | null)[]> = {};
+      const daysInMonth = (i: number) => new Date(i < 12 ? 2026 : 2027, (i % 12) + 1, 0).getDate();
+      for (const f of families) {
+        try {
+          const r = await fetch(`/api/plans/ads-targets/${encodeURIComponent(f.family)}`);
+          const targetRows: { yr: number; mo: number; daily_spend_target: number }[] = r.ok ? await r.json() : [];
+          const arr: (number | null)[] = Array.from({ length: 14 }, () => null);
+          for (const row of targetRows) {
+            const i = row.yr === 2026 ? row.mo - 1 : row.mo + 11;
+            if (i < 0 || i > 13) continue;
+            arr[i] = (arr[i] ?? 0) + (row.daily_spend_target || 0) * daysInMonth(i);
+          }
+          out[f.family] = arr;
+        } catch { out[f.family] = Array.from({ length: 14 }, () => null); }
+      }
+      if (!cancelled) setPlannedSpend(out);
+    })();
+    return () => { cancelled = true; };
+  }, [mode, families]);
+
   if (!snapshot) return null;
   const monthIdxs = Array.from({ length: 14 }, (_, i) => i);
   const colLabel = (i: number) => i < 12
@@ -3203,24 +3229,42 @@ function PlanVsRealityPanel({ families, snapshot, actuals2026Full }: {
   };
   const actUnits = (prod: string, i: number): number | null =>
     i <= 11 ? (actuals2026Full.get(prod)?.get(i)?.units ?? null) : null;
+  // Ad spend is family-grain (per-variation spend is an attribution artifact). Sum the family's
+  // products' adCost per calendar month from live actuals.
+  const actSpend = (fam: FamilyBaseline, i: number): number | null => {
+    if (i > 11) return null;
+    let s = 0, any = false;
+    for (const v of fam.variations) {
+      const c = actuals2026Full.get(v.name)?.get(i)?.adCost;
+      if (c != null) { s += c; any = true; }
+    }
+    return any ? s : null;
+  };
 
-  const rows = families.flatMap(f => [...f.variations].sort((a, b) => a.name.localeCompare(b.name)));
-  if (rows.length === 0) return null;
+  const prodRows = families.flatMap(f => [...f.variations].sort((a, b) => a.name.localeCompare(b.name)));
+  if (prodRows.length === 0) return null;
 
   return (
     <div className="mt-6">
-      <h3 className="text-sm font-bold text-heading mb-2">Approved Plan vs Reality — Units</h3>
+      <div className="flex items-center gap-3 mb-2">
+        <h3 className="text-sm font-bold text-heading">Approved Plan vs Reality</h3>
+        <div className="flex gap-1">
+          <button onClick={() => setMode('units')} className={`px-2 py-0.5 rounded text-[11px] ${mode === 'units' ? 'bg-blue-500/20 text-blue-300' : 'text-muted'}`}>Units</button>
+          <button onClick={() => setMode('spend')} className={`px-2 py-0.5 rounded text-[11px] ${mode === 'spend' ? 'bg-blue-500/20 text-blue-300' : 'text-muted'}`}>Spend</button>
+        </div>
+        <span className="text-[10px] text-faint">{mode === 'units' ? 'per product' : 'per family · ad spend (under-plan = amber)'}</span>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-[11px]">
           <thead>
             <tr className="text-muted border-b border-border">
-              <th className="text-left py-1.5 px-1.5">Product</th>
+              <th className="text-left py-1.5 px-1.5">{mode === 'units' ? 'Product' : 'Family'}</th>
               <th className="text-left py-1.5 px-1.5"></th>
               {monthIdxs.map(i => <th key={i} className="text-right py-1.5 px-1.5">{colLabel(i)}</th>)}
             </tr>
           </thead>
           <tbody>
-            {rows.map(v => {
+            {mode === 'units' ? prodRows.map(v => {
               const planRow = monthIdxs.map(i => planUnits(v.name, i));
               const actRow = monthIdxs.map(i => actUnits(v.name, i));
               return (
@@ -3240,6 +3284,26 @@ function PlanVsRealityPanel({ families, snapshot, actuals2026Full }: {
                       const p = planRow[i];
                       const cls = u == null || p == null ? '' : u >= p ? 'text-emerald-400' : 'text-red-400';
                       return <td key={i} className={`text-right py-1 px-1.5 tabular-nums ${cls}`}>{u == null ? '—' : Math.round(u)}</td>;
+                    })}
+                  </tr>
+                </Fragment>
+              );
+            }) : families.map(f => {
+              const planRow = plannedSpend[f.family] ?? Array.from({ length: 14 }, () => null);
+              const actRow = monthIdxs.map(i => actSpend(f, i));
+              return (
+                <Fragment key={f.family}>
+                  <tr className="border-b border-border/10">
+                    <td className="py-1 px-1.5 font-medium" rowSpan={2}>{f.family}</td>
+                    <td className="py-1 px-1.5 text-blue-400">Plan</td>
+                    {planRow.map((s, i) => <td key={i} className="text-right py-1 px-1.5 tabular-nums">{s == null ? '—' : fK(Math.round(s))}</td>)}
+                  </tr>
+                  <tr className="border-b border-border/20">
+                    <td className="py-1 px-1.5 text-emerald-400">Actual</td>
+                    {actRow.map((s, i) => {
+                      const p = planRow[i];
+                      const cls = s == null || p == null ? '' : s >= p ? 'text-emerald-400' : 'text-amber-400';
+                      return <td key={i} className={`text-right py-1 px-1.5 tabular-nums ${cls}`}>{s == null ? '—' : fK(Math.round(s))}</td>;
                     })}
                   </tr>
                 </Fragment>
