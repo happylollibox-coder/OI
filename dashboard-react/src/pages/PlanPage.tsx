@@ -5,6 +5,7 @@ import type { DashboardData, ShipmentPlanRow } from '../types';
 import { useShipmentPlan, useScheduledShipments, useShipmentHistory, ReplenishmentFlowSection, ShipmentCardSection } from '../components/ShipmentEngine';
 import { PlanWizard } from '../components/PlanWizard';
 import type { MonthDef } from '../planTypes';
+import { composeMonthlyPlan } from '../planTypes';
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
@@ -1145,6 +1146,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
   const [planSaving, setPlanSaving] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [orderOverrides, setOrderOverrides] = useState<Record<string, number>>({});
+  const [plannedMonthlyOverrides, setPlannedMonthlyOverrides] = useState<Record<string, Record<string, number>>>({});
   const [growthOverrides, setGrowthOverrides] = useState<Record<string, number>>({});
   const [originalOverrides, setOriginalOverrides] = useState<Record<string, number> | null>(null);
 
@@ -1282,12 +1284,24 @@ export function PlanPage({ data }: { data: DashboardData }) {
         }
       }
     }
+    // Override wizard-sourced products: per-product per-month = actual (elapsed + MTD) + forecast.
+    if (Object.keys(plannedMonthlyOverrides).length > 0) {
+      const allCalKeys: string[] = [];
+      for (let mo = 1; mo <= 12; mo++) allCalKeys.push(`${monthLabels[mo - 1]}26`); // jan26..dec26
+      for (const m of MONTHS) if (m.year === 2027) allCalKeys.push(m.key);           // jan27, feb27
+      for (const [prod, forecastByMonth] of Object.entries(plannedMonthlyOverrides)) {
+        const actualByMonth: Record<string, number> = {};
+        const am = actuals2026Full.get(prod);
+        if (am) for (const [mi, v] of am.entries()) actualByMonth[`${monthLabels[mi]}26`] = v.units;
+        snapshotMap[prod] = composeMonthlyPlan(allCalKeys, actualByMonth, forecastByMonth).byMonth;
+      }
+    }
     return {
       rows,
       order_overrides_json: JSON.stringify(orderOverrides),
       snapshot_units_json: JSON.stringify(snapshotMap),
     };
-  }, [families, mults, strategies, forecastMap, growthOverrides, effectiveGrowth, demandMap, orderOverrides, actuals2026Full, actuals2025Full]);
+  }, [families, mults, strategies, forecastMap, growthOverrides, effectiveGrowth, demandMap, orderOverrides, actuals2026Full, actuals2025Full, plannedMonthlyOverrides]);
 
   // Load a plan's data into the sim
   const loadPlanData = useCallback((rows: Array<Record<string, unknown>>) => {
@@ -2148,12 +2162,17 @@ export function PlanPage({ data }: { data: DashboardData }) {
                 return next;
               });
             }
-            // Apply per-product order overrides (keyed by product name to match the PO machinery)
-            if (result.orderByProduct && Object.keys(result.orderByProduct).length > 0) {
+            // Store the wizard's per-product per-month forecast (feeds the frozen snapshot)
+            // and set orderOverrides to the YEARLY PLANNED TOTAL (sold YTD + forecast) so the
+            // PR table's "Gap from Plan" = planned − sold − stock = forecast − stock.
+            if (result.plannedMonthly && Object.keys(result.plannedMonthly).length > 0) {
+              setPlannedMonthlyOverrides(prev => ({ ...prev, ...result.plannedMonthly }));
               setOrderOverrides(p => {
                 const next = { ...p };
-                for (const [name, qty] of Object.entries(result.orderByProduct)) {
-                  if (qty > 0) next[name] = qty;
+                for (const [name, byMonth] of Object.entries(result.plannedMonthly)) {
+                  const forecast = Object.values(byMonth).reduce((a, b) => a + b, 0);
+                  const sold = parentGetSold('', name); // resolves by product name
+                  next[name] = Math.round(sold + forecast);
                 }
                 return next;
               });
