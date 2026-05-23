@@ -7,7 +7,7 @@
  * for Ads Targets, Ads Terms, Ads Campaigns, and SQP Terms.
  * Fully connected to header filters (family, period, seasonality, product).
  */
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from 'react';
 import type { DashboardData, TrendRow, TrendRowByAsin, ActionRow, SqpWeeklyRow, CoachCampaignRow, ProductRow, SupplyChainRow } from '../types';
 import { SparklineCanvas } from '../components/SparklineCanvas';
 import { PriceScenarioCard } from '../components/PriceScenarioCard';
@@ -18,7 +18,7 @@ import {
   shiftYear, fM, fP, fR, fShort, fmt, experimentMatchesFamily, addDays
 } from '../utils';
 import { filterBySeasonality } from '../seasonality';
-import { Plus, X, TrendingUp, TrendingDown, Minus, GripVertical, Maximize2, Minimize2 } from 'lucide-react';
+import { Plus, X, TrendingUp, TrendingDown, Minus, GripVertical, Maximize2, Minimize2, ChevronRight, ChevronDown } from 'lucide-react';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -85,7 +85,7 @@ function saveSelection(ids: string[]) {
 }
 
 /* ── Pareto card types ── */
-type ParetoCardId = 'ads_targets' | 'ads_terms' | 'ads_campaigns' | 'ads_cpc_buckets' | 'sqp_terms' | 'best_product_profit' | 'best_product_units' | 'profit_movers' | 'term_profit_movers' | 'keyword_profit_movers';
+type ParetoCardId = 'ads_targets' | 'ads_terms' | 'ads_campaigns' | 'ads_cpc_buckets' | 'sqp_terms' | 'best_product_profit' | 'best_product_units' | 'profit_movers' | 'term_profit_movers' | 'keyword_profit_movers' | 'ads_strategy' | 'campaign_launch';
 
 interface ParetoCardDef {
   id: ParetoCardId;
@@ -107,10 +107,12 @@ const PARETO_CARDS: ParetoCardDef[] = [
   { id: 'profit_movers',       label: 'Product Profit Movers', icon: '🚀', color: '#ec4899', description: 'Period-over-period product profit changes', category: 'Trend Cards' },
   { id: 'term_profit_movers',  label: 'Term Profit Movers',    icon: '📈', color: '#f43f5e', description: 'Period-over-period term profit changes', category: 'Trend Cards' },
   { id: 'keyword_profit_movers', label: 'Keyword Profit Movers', icon: '🎯', color: '#8b5cf6', description: 'Period-over-period keyword profit changes', category: 'Trend Cards' },
+  { id: 'ads_strategy', label: 'Ad Strategy', icon: '🧭', color: '#8b5cf6', description: 'Performance by ad strategy', category: 'Focus Cards' },
+  { id: 'campaign_launch', label: 'Campaign Launch', icon: '🚀', color: '#f97316', description: 'First 3 months performance per campaign', category: 'Focus Cards' },
 ];
 
 const PARETO_STORAGE_KEY = 'oi_kpi_pareto_cards';
-const DEFAULT_PARETO: ParetoCardId[] = ['ads_targets', 'ads_campaigns', 'ads_terms', 'profit_movers', 'term_profit_movers', 'keyword_profit_movers'];
+const DEFAULT_PARETO: ParetoCardId[] = ['ads_targets', 'ads_campaigns', 'ads_terms', 'profit_movers', 'term_profit_movers', 'keyword_profit_movers', 'ads_strategy', 'campaign_launch'];
 
 function loadPareto(): ParetoCardId[] {
   try {
@@ -236,6 +238,8 @@ interface ParetoItem {
   roas: number | null;
   bucket: 'winner' | 'loser' | 'other' | 'other_winners' | 'other_losers';
   count?: number;
+  _sales?: number;
+  children?: ParetoItem[];
 }
 
 /* ── Family / Product split inside KPI cards ── */
@@ -1458,6 +1462,8 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
       profit_movers: [],
       term_profit_movers: [],
       keyword_profit_movers: [],
+      ads_strategy: [],
+      campaign_launch: [],
     };
 
     // — Ads Targets: group actions by targeting keyword (Coach data) —
@@ -1654,6 +1660,8 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
 
       const mapCurrent: Record<string, number> = {};
       const mapPrev: Record<string, number> = {};
+      const mapCurrentSpend: Record<string, number> = {};
+      const mapCurrentOrders: Record<string, number> = {};
       const nameMap: Record<string, string> = {};
 
       trendData.forEach((r: any) => {
@@ -1663,7 +1671,11 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
         if (!asin || !d) return;
         
         nameMap[asin] = shortName;
-        if (d >= periodStart && d <= periodEnd) mapCurrent[asin] = (mapCurrent[asin] || 0) + (r.net_profit || 0);
+        if (d >= periodStart && d <= periodEnd) {
+          mapCurrent[asin] = (mapCurrent[asin] || 0) + (r.net_profit || 0);
+          mapCurrentSpend[asin] = (mapCurrentSpend[asin] || 0) + (r.ad_cost || 0);
+          mapCurrentOrders[asin] = (mapCurrentOrders[asin] || 0) + (r.orders || 0);
+        }
         if (d >= prevPeriodStart && d <= prevPeriodEnd) mapPrev[asin] = (mapPrev[asin] || 0) + (r.net_profit || 0);
       });
 
@@ -1679,8 +1691,8 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
         if (Math.abs(delta) >= 0.01) {
           moversAll.push({
             name: nameMap[asin] || asin,
-            spend: 0,
-            orders: 0,
+            spend: mapCurrentSpend[asin] || 0,
+            orders: mapCurrentOrders[asin] || 0,
             profit: delta, // Store delta in profit field for UI rendering
             roas: null,
             bucket: delta > 0 ? 'winner' : 'loser',
@@ -1733,12 +1745,18 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
       
       const termCurrent: Record<string, number> = {};
       const termPrev: Record<string, number> = {};
+      const termCurrentSpend: Record<string, number> = {};
+      const termCurrentOrders: Record<string, number> = {};
       
       data.ads_focus_terms.forEach(r => {
         const pVal = r.week_start;
         const term = r.search_term;
         if (!term || term === '__OTHER__') return;
-        if (pVal === ftCurrent) termCurrent[term] = (termCurrent[term] || 0) + (r.net_profit || 0);
+        if (pVal === ftCurrent) {
+          termCurrent[term] = (termCurrent[term] || 0) + (r.net_profit || 0);
+          termCurrentSpend[term] = (termCurrentSpend[term] || 0) + (r.spend || 0);
+          termCurrentOrders[term] = (termCurrentOrders[term] || 0) + (r.orders || 0);
+        }
         if (pVal === ftPrev) termPrev[term] = (termPrev[term] || 0) + (r.net_profit || 0);
       });
 
@@ -1753,7 +1771,9 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
         if (Math.abs(delta) >= 0.01) {
           moversAll.push({
             name: term,
-            spend: 0, orders: 0, roas: null, count: 1,
+            spend: termCurrentSpend[term] || 0,
+            orders: termCurrentOrders[term] || 0,
+            roas: null, count: 1,
             profit: delta,
             bucket: delta > 0 ? 'winner' : 'loser',
           });
@@ -1799,9 +1819,15 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
       if (kwCurrent && kwPrev) {
         const kwCurMap: Record<string, number> = {};
         const kwPrevMap: Record<string, number> = {};
+        const kwCurSpend: Record<string, number> = {};
+        const kwCurOrders: Record<string, number> = {};
         data.ads_focus_keywords.forEach(r => {
           if (r.keyword === '__OTHER__') return;
-          if (r.week_start === kwCurrent) kwCurMap[r.keyword] = (kwCurMap[r.keyword] ?? 0) + r.net_profit;
+          if (r.week_start === kwCurrent) {
+            kwCurMap[r.keyword] = (kwCurMap[r.keyword] ?? 0) + r.net_profit;
+            kwCurSpend[r.keyword] = (kwCurSpend[r.keyword] ?? 0) + (r.spend || 0);
+            kwCurOrders[r.keyword] = (kwCurOrders[r.keyword] ?? 0) + (r.orders || 0);
+          }
           if (r.week_start === kwPrev) kwPrevMap[r.keyword] = (kwPrevMap[r.keyword] ?? 0) + r.net_profit;
         });
         const allKw = new Set([...Object.keys(kwCurMap), ...Object.keys(kwPrevMap)]);
@@ -1811,7 +1837,7 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
           const prev = kwPrevMap[kw] ?? 0;
           const delta = cur - prev;
           if (delta !== 0) {
-            kwMovers.push({ name: kw, profit: cur, delta, prevProfit: prev, type: 'keyword' as const });
+            kwMovers.push({ name: kw, profit: cur, delta, prevProfit: prev, type: 'keyword' as const, spend: kwCurSpend[kw] ?? 0, orders: kwCurOrders[kw] ?? 0 });
           }
         });
         result.keyword_profit_movers = kwMovers;
@@ -1936,8 +1962,171 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
       })
       .sort((a, b) => b.profit - a.profit);
 
+    // — Ads Strategy: aggregate coach_campaigns by strategy_name, cross-referenced with ads_7d —
+    {
+      // Build campaign_id → metrics from ads_7d, filtered by PERIOD + FAMILY only (not product).
+      // Campaign-level rows (row_type='campaign') don't carry product_short_name,
+      // so the global `ads7d` (which is product-filtered) excludes them. Use raw data instead.
+      let stratAds = data.ads_7d || [];
+      if (periodStart && periodEnd) {
+        stratAds = stratAds.filter(r => {
+          const d = r.date || r.week_start || '';
+          return d >= periodStart && d <= periodEnd;
+        });
+      }
+      if (family) stratAds = stratAds.filter(r => famFromType(r.parent_name ?? r.product_short_name ?? null) === family);
+
+      // Fallback to ads_7d_summary (730 days) when ads_7d (180 days) has no campaign rows
+      // for the period (e.g. Year view where early months exceed ads_7d's 180-day window)
+      let stratCampRows = stratAds.filter(r => r.row_type === 'campaign');
+      if (stratCampRows.length === 0 && data.ads_7d_summary && periodStart && periodEnd) {
+        let summaryRows = (data.ads_7d_summary || []).filter(r => {
+          const d = r.date || r.week_start || '';
+          return d >= periodStart && d <= periodEnd;
+        });
+        if (family) summaryRows = summaryRows.filter(r => famFromType(r.parent_name ?? r.product_short_name ?? null) === family);
+        stratCampRows = summaryRows.filter(r => r.row_type === 'campaign');
+      }
+
+      // When product is selected, use the globally product-filtered `ads7d` to identify
+      // which campaign_ids are associated with that product. ads7d is already filtered
+      // by period + product (the PPC card uses the same source and correctly finds campaigns).
+      let productCampaignIds: Set<string> | null = null;
+      if (product) {
+        productCampaignIds = new Set(ads7d.map(r => r.campaign_id).filter(Boolean));
+      }
+
+      // Build campaign-level metrics, filtered to product-relevant campaigns when applicable
+      const campAdsForStrategy = stratCampRows.filter(r => !productCampaignIds || productCampaignIds.has(r.campaign_id));
+      const adsByCampaign: Record<string, { clicks: number; sales: number; spend: number; orders: number; gross_profit: number }> = {};
+      campAdsForStrategy.forEach(r => {
+        const cid = r.campaign_id;
+        if (!adsByCampaign[cid]) adsByCampaign[cid] = { clicks: 0, sales: 0, spend: 0, orders: 0, gross_profit: 0 };
+        adsByCampaign[cid].clicks += r.clicks || 0;
+        adsByCampaign[cid].sales += r.sales || 0;
+        adsByCampaign[cid].spend += r.spend || 0;
+        adsByCampaign[cid].orders += r.orders || 0;
+        adsByCampaign[cid].gross_profit += r.gross_profit || 0;
+      });
+
+      // Coach campaigns have strategy_name & campaign_id
+      let cc = data.coach_campaigns || [];
+      if (family) {
+        // Include campaigns that match by name OR whose campaign_id appears in the
+        // already-family-filtered ads data. This ensures "No Strategy" campaigns
+        // (whose names don't contain family keywords) still appear when they have
+        // ads data linked to products in the selected family.
+        const familyCampaignIds = new Set(Object.keys(adsByCampaign));
+        cc = cc.filter(c => {
+          if (familyCampaignIds.has(c.campaign_id)) return true;
+          const famStr = c.experiment_name || c.campaign_name || '';
+          return experimentMatchesFamily(famStr, family as any);
+        });
+      }
+      // When product is selected, only include campaigns associated with that product
+      if (productCampaignIds) {
+        cc = cc.filter(c => productCampaignIds!.has(c.campaign_id));
+      }
+
+      // Pre-populate with all unique strategy names from the FULL coach_campaigns dataset + "No Strategy"
+      const emptyStrat = () => ({ campaigns: new Set<string>(), spend: 0, clicks: 0, sales: 0, netProfit: 0, campaignDetails: {} as Record<string, { name: string; spend: number; clicks: number; sales: number; netProfit: number }> });
+      const stratMap: Record<string, ReturnType<typeof emptyStrat>> = {};
+      // Collect all strategy names from the full (unfiltered) dataset so they always appear
+      (data.coach_campaigns || []).forEach(c => {
+        const sn = c.strategy_name || 'No Strategy';
+        if (!stratMap[sn]) stratMap[sn] = emptyStrat();
+      });
+      stratMap['No Strategy'] = stratMap['No Strategy'] || emptyStrat();
+
+      cc.forEach(c => {
+        const sName = c.strategy_name || 'No Strategy';
+        if (!stratMap[sName]) stratMap[sName] = emptyStrat();
+        stratMap[sName].campaigns.add(c.campaign_id);
+        // Initialize per-campaign detail
+        if (!stratMap[sName].campaignDetails[c.campaign_id]) {
+          stratMap[sName].campaignDetails[c.campaign_id] = { name: c.campaign_name || c.campaign_id, spend: 0, clicks: 0, sales: 0, netProfit: 0 };
+        }
+        const detail = stratMap[sName].campaignDetails[c.campaign_id];
+        // Use ads_7d period data when available (date-filtered); fall back to coach 4w data
+        const adsData = adsByCampaign[c.campaign_id];
+        if (adsData) {
+          stratMap[sName].spend += adsData.spend;
+          stratMap[sName].clicks += adsData.clicks;
+          stratMap[sName].sales += adsData.sales;
+          stratMap[sName].netProfit += (adsData.gross_profit || 0) - adsData.spend;
+          detail.spend += adsData.spend;
+          detail.clicks += adsData.clicks;
+          detail.sales += adsData.sales;
+          detail.netProfit += (adsData.gross_profit || 0) - adsData.spend;
+        } else {
+          // Fallback to coach's 4w data
+          stratMap[sName].spend += c.total_spend_4w || 0;
+          stratMap[sName].netProfit += c.total_net_profit_4w || 0;
+          detail.spend += c.total_spend_4w || 0;
+          detail.netProfit += c.total_net_profit_4w || 0;
+        }
+      });
+
+      result.ads_strategy = Object.entries(stratMap)
+        .map(([name, d]) => ({
+          name,
+          spend: d.spend,
+          orders: d.campaigns.size, // repurpose orders field for campaign count
+          profit: d.netProfit,
+          roas: d.spend > 0 ? (d.netProfit + d.spend) / d.spend : null,
+          bucket: d.netProfit >= 0 ? 'winner' as const : 'loser' as const,
+          count: d.clicks, // repurpose count field for clicks
+          _sales: d.sales,
+          children: Object.values(d.campaignDetails)
+            .map(cd => ({
+              name: cd.name,
+              spend: cd.spend,
+              orders: 0,
+              profit: cd.netProfit,
+              roas: cd.spend > 0 ? (cd.netProfit + cd.spend) / cd.spend : null,
+              bucket: cd.netProfit >= 0 ? 'winner' as const : 'loser' as const,
+              count: cd.clicks,
+              _sales: cd.sales,
+            }))
+            .sort((a, b) => b.spend - a.spend),
+        }))
+        .sort((a, b) => b.spend - a.spend);
+    }
+
+    // — Campaign Launch: first-3-month performance per campaign —
+    {
+      let launchRows = data.campaign_launch_monthly || [];
+      // Apply Parent/Product filter
+      if (product) launchRows = launchRows.filter(r => r.asin === product);
+      else if (family) launchRows = launchRows.filter(r => famFromType(r.parent_name) === family);
+      // Only include campaigns with any spend, sorted by monthly avg net profit desc
+      result.campaign_launch = launchRows
+        .filter(r => r.m1_ad_spend > 0 || r.m2_ad_spend > 0 || r.m3_ad_spend > 0)
+        .sort((a, b) => b.net_profit_monthly_avg - a.net_profit_monthly_avg)
+        .map(r => ({
+          name: r.campaign_name,
+          spend: r.m1_ad_spend + r.m2_ad_spend + r.m3_ad_spend,
+          orders: r.m1_units + r.m2_units + r.m3_units,
+          profit: r.total_net_profit,
+          roas: null,
+          bucket: r.net_profit_monthly_avg >= 0 ? 'winner' as const : 'loser' as const,
+          count: 0,
+          _sales: r.net_profit_monthly_avg,
+        }));
+    }
+
     return result;
-  }, [actions, ads7d, sqp, data.ads_7d_summary, data.products, data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.ads_focus_terms, data.ads_focus_keywords, periodMode, periodStart, periodEnd, prevPeriodStart, prevPeriodEnd, family, product, currentPeriod, prevPeriod]);
+  }, [actions, ads7d, sqp, data.ads_7d_summary, data.products, data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.ads_focus_terms, data.ads_focus_keywords, data.coach_campaigns, data.campaign_launch_perf, data.campaign_launch_monthly, periodMode, periodStart, periodEnd, prevPeriodStart, prevPeriodEnd, family, product, currentPeriod, prevPeriod]);
+
+  // Filtered monthly launch rows for the CampaignLaunchTable
+  const launchMonthlyFiltered = useMemo(() => {
+    let rows = data.campaign_launch_monthly || [];
+    if (product) rows = rows.filter(r => r.asin === product);
+    else if (family) rows = rows.filter(r => famFromType(r.parent_name) === family);
+    return rows
+      .filter(r => r.m1_ad_spend > 0 || r.m2_ad_spend > 0 || r.m3_ad_spend > 0)
+      .sort((a, b) => b.net_profit_monthly_avg - a.net_profit_monthly_avg);
+  }, [data.campaign_launch_monthly, family, product]);
 
   return (
     <div className="space-y-3 mt-2">
@@ -1983,6 +2172,9 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
                   isProduct={isProduct}
                   isUnits={id === 'best_product_units'}
                   isCpcBuckets={id === 'ads_cpc_buckets'}
+                  isStrategy={id === 'ads_strategy'}
+                  isLaunch={id === 'campaign_launch'}
+                  launchMonthlyRows={id === 'campaign_launch' ? launchMonthlyFiltered : undefined}
                   periodLabel={pLabel}
                   onRemove={() => removePareto(id)}
                   isCompact={cardSizes[id] === 'compact'}
@@ -2009,23 +2201,339 @@ function classifyBucket(profit: number, spend: number): 'winner' | 'loser' | 'ot
   return 'other';
 }
 
+/* ── Strategy Hierarchy Table (Strategy → Campaign Name) ── */
+/* ── Campaign Launch Table — monthly bucketed (M1/M2/M3) ── */
+type LaunchMeasure = 'units' | 'cpc' | 'spend' | 'roas';
+type LaunchSortKey = 'name' | 'created' | 'end' | 'avg_profit' | 'm1_units' | 'm1_cpc' | 'm1_spend' | 'm1_roas' | 'm2_units' | 'm2_cpc' | 'm2_spend' | 'm2_roas' | 'm3_units' | 'm3_cpc' | 'm3_spend' | 'm3_roas';
+type LaunchMonthlyRow = import('../types').CampaignLaunchMonthlyRow;
+
+function launchSortValue(r: LaunchMonthlyRow, key: LaunchSortKey): number | string {
+  switch (key) {
+    case 'name': return r.campaign_name.toLowerCase();
+    case 'created': return r.creation_date;
+    case 'end': return r.end_date_display ?? 'zzzz';
+    case 'avg_profit': return r.net_profit_monthly_avg;
+    case 'm1_units': return r.m1_units; case 'm1_cpc': return r.m1_cpc ?? 0; case 'm1_spend': return r.m1_ad_spend; case 'm1_roas': return r.m1_net_roas ?? 0;
+    case 'm2_units': return r.m2_units; case 'm2_cpc': return r.m2_cpc ?? 0; case 'm2_spend': return r.m2_ad_spend; case 'm2_roas': return r.m2_net_roas ?? 0;
+    case 'm3_units': return r.m3_units; case 'm3_cpc': return r.m3_cpc ?? 0; case 'm3_spend': return r.m3_ad_spend; case 'm3_roas': return r.m3_net_roas ?? 0;
+    default: return 0;
+  }
+}
+
+const LAUNCH_MEASURES: { id: LaunchMeasure; label: string; icon: string }[] = [
+  { id: 'units', label: 'Units', icon: '📦' },
+  { id: 'cpc', label: 'CPC', icon: '★' },
+  { id: 'spend', label: 'Spend', icon: '💰' },
+  { id: 'roas', label: 'ROAS', icon: '📈' },
+];
+
+function CampaignLaunchTable({ rows: allRows, color }: { rows: LaunchMonthlyRow[]; color: string }) {
+  const [activeMeasures, setActiveMeasures] = useState<Set<LaunchMeasure>>(new Set(['cpc']));
+  const [sortKey, setSortKey] = useState<LaunchSortKey>('avg_profit');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  // Filter to campaigns created >= 2025
+  const rows = useMemo(() => allRows.filter(r => r.creation_date >= '2025-01-01'), [allRows]);
+
+  const toggleMeasure = (m: LaunchMeasure) => {
+    setActiveMeasures(prev => {
+      const next = new Set(prev);
+      if (next.has(m)) next.delete(m); else next.add(m);
+      return next;
+    });
+  };
+
+  const toggleSort = (key: LaunchSortKey) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir(key === 'name' || key === 'created' || key === 'end' ? 'asc' : 'desc'); }
+  };
+
+  const sorted = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const va = launchSortValue(a, sortKey);
+      const vb = launchSortValue(b, sortKey);
+      const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [rows, sortKey, sortDir]);
+
+  const arrow = (key: LaunchSortKey) => sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+  const hdr = (label: string, key: LaunchSortKey, w: number, highlight?: boolean) => (
+    <span
+      className="text-[9px] font-mono font-bold uppercase text-right cursor-pointer select-none hover:opacity-80 transition-opacity whitespace-nowrap"
+      style={{ color: highlight ? '#f59e0b' : 'var(--color-faint)', width: w, flexShrink: 0 }}
+      onClick={() => toggleSort(key)}
+    >{label}{arrow(key)}</span>
+  );
+
+  // Date formatter — yyyy-mm-dd
+  const fDate = (d: string | null, isEnd?: boolean) => {
+    if (!d && isEnd) return <span style={{ color: '#22c55e', fontWeight: 600 }}>Active</span>;
+    if (!d) return '--';
+    return d; // already in YYYY-MM-DD format
+  };
+
+  const fCpc = (v: number | null) => v != null ? `$${v.toFixed(2)}` : '--';
+  const fRoas = (v: number | null) => v != null ? v.toFixed(2) + 'x' : '--';
+
+  // Get value for a specific measure from a row for a specific month
+  const getMVal = (r: LaunchMonthlyRow, m: 1 | 2 | 3, measure: LaunchMeasure) => {
+    if (measure === 'units') return (m === 1 ? r.m1_units : m === 2 ? r.m2_units : r.m3_units).toLocaleString();
+    if (measure === 'cpc') return fCpc(m === 1 ? r.m1_cpc : m === 2 ? r.m2_cpc : r.m3_cpc);
+    if (measure === 'spend') return '$' + fmt(m === 1 ? r.m1_ad_spend : m === 2 ? r.m2_ad_spend : r.m3_ad_spend, 0);
+    const roas = m === 1 ? r.m1_net_roas : m === 2 ? r.m2_net_roas : r.m3_net_roas;
+    return fRoas(roas);
+  };
+
+  const getMColor = (r: LaunchMonthlyRow, m: 1 | 2 | 3, measure: LaunchMeasure) => {
+    if (measure === 'units') return 'var(--color-text)';
+    if (measure === 'cpc') return '#f59e0b';
+    if (measure === 'spend') return 'var(--color-negative)';
+    const roas = m === 1 ? r.m1_net_roas : m === 2 ? r.m2_net_roas : r.m3_net_roas;
+    return roas != null && roas >= 1 ? 'var(--color-positive)' : 'var(--color-negative)';
+  };
+
+  const hasMeasures = activeMeasures.size > 0;
+
+  return (
+    <div className="px-3 py-2" style={{ overflowX: 'auto' }}>
+      {/* Measure toggle chips */}
+      <div className="flex items-center gap-1.5 mb-2">
+        <span className="text-[9px] font-mono uppercase" style={{ color: 'var(--color-faint)' }}>Measures:</span>
+        {LAUNCH_MEASURES.map(({ id, label, icon }) => {
+          const active = activeMeasures.has(id);
+          return (
+            <button key={id} onClick={() => toggleMeasure(id)}
+              className="text-[9px] font-mono font-bold px-2 py-0.5 rounded-full transition-all duration-200"
+              style={{
+                background: active ? (id === 'cpc' ? '#f59e0b' : color) : 'var(--color-inset)',
+                color: active ? '#fff' : 'var(--color-faint)',
+                border: `1px solid ${active ? (id === 'cpc' ? '#f59e0b' : color) : 'var(--color-border)'}`,
+              }}
+            >{icon} {label}</button>
+          );
+        })}
+      </div>
+
+      {/* Header */}
+      <div className="flex items-center gap-1 pb-1.5 mb-0.5" style={{ borderBottom: '1px solid var(--color-border)', minWidth: 'fit-content' }}>
+        <span className="text-[9px] font-mono font-bold uppercase cursor-pointer select-none hover:opacity-80" style={{ color: 'var(--color-faint)', flex: '1 1 0', minWidth: 140 }} onClick={() => toggleSort('name')}>Campaign{arrow('name')}</span>
+        {hdr('Created', 'created', 72)}
+        {hdr('End', 'end', 72)}
+        {hdr('Avg $/mo', 'avg_profit', 60, true)}
+        {/* For each active measure, show M1/M2/M3 headers */}
+        {hasMeasures && Array.from(activeMeasures).map(measure => (
+          <Fragment key={measure}>
+            <span className="text-[8px] font-mono font-bold uppercase ml-1.5 px-1 py-0.5 rounded" style={{ color: measure === 'cpc' ? '#f59e0b' : color, background: measure === 'cpc' ? '#f59e0b15' : `${color}15`, flexShrink: 0 }}>
+              {measure.toUpperCase()}
+            </span>
+            {hdr('M1', `m1_${measure}` as LaunchSortKey, 46, measure === 'cpc')}
+            {hdr('M2', `m2_${measure}` as LaunchSortKey, 46, measure === 'cpc')}
+            {hdr('M3', `m3_${measure}` as LaunchSortKey, 46, measure === 'cpc')}
+          </Fragment>
+        ))}
+      </div>
+
+      {/* Empty state */}
+      {rows.length === 0 && (
+        <div className="text-center py-4 text-[11px]" style={{ color: 'var(--color-faint)' }}>No launch data available (2025+)</div>
+      )}
+
+      {/* Rows */}
+      {sorted.map((r) => {
+        const maxSpend = Math.max(...rows.map(x => x.m1_ad_spend + x.m2_ad_spend + x.m3_ad_spend), 1);
+        const totalSpend = r.m1_ad_spend + r.m2_ad_spend + r.m3_ad_spend;
+        return (
+          <div key={r.campaign_id} className="flex items-center gap-1 py-1 rounded-md px-1 hover:bg-white/[.03] transition-colors" style={{ position: 'relative', minWidth: 'fit-content' }}>
+            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${Math.max(1, (totalSpend / maxSpend) * 100)}%`, background: color, opacity: 0.05, borderRadius: '0.375rem' }} />
+            {/* Campaign name + state badge */}
+            <span className="text-[10px] font-semibold truncate" style={{ color: 'var(--color-text)', flex: '1 1 0', minWidth: 140, position: 'relative' }}>
+              {r.campaign_name}
+              {r.campaign_state !== 'ENABLED' && (
+                <span className="text-[8px] font-mono ml-1 px-1 rounded" style={{
+                  color: r.campaign_state === 'PAUSED' ? '#f59e0b' : '#ef4444',
+                  background: r.campaign_state === 'PAUSED' ? '#f59e0b15' : '#ef444415',
+                }}>{r.campaign_state === 'PAUSED' ? '⏸' : '⛔'}</span>
+              )}
+            </span>
+            {/* Created — with year */}
+            <span className="text-[10px] font-mono text-right" style={{ color: 'var(--color-muted)', width: 72, flexShrink: 0, position: 'relative' }}>
+              {fDate(r.creation_date)}
+            </span>
+            {/* End — with year */}
+            <span className="text-[10px] font-mono text-right" style={{ width: 72, flexShrink: 0, position: 'relative' }}>
+              {fDate(r.end_date_display, true)}
+            </span>
+            {/* Avg Net Profit/mo */}
+            <span className="text-[10px] font-mono text-right font-bold" style={{
+              color: r.net_profit_monthly_avg >= 0 ? 'var(--color-positive)' : 'var(--color-negative)',
+              width: 60, flexShrink: 0, position: 'relative',
+            }}>
+              {r.net_profit_monthly_avg >= 0 ? '+' : ''}{fShort(r.net_profit_monthly_avg)}
+            </span>
+            {/* Measure × month columns */}
+            {hasMeasures && Array.from(activeMeasures).map(measure => (
+              <Fragment key={measure}>
+                <span style={{ width: 28, flexShrink: 0 }} />
+                {([1, 2, 3] as const).map(m => (
+                  <span key={m} className="text-[10px] font-mono text-right" style={{
+                    color: getMColor(r, m, measure),
+                    width: 46, flexShrink: 0,
+                    fontWeight: measure === 'cpc' ? 600 : 400,
+                  }}>{getMVal(r, m, measure)}</span>
+                ))}
+              </Fragment>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function StrategyHierarchyTable({ items, def }: { items: ParetoItem[]; def: ParetoCardDef }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggle = (name: string) => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
+  const maxSpend = Math.max(...items.map(i => i.spend), 1);
+
+  return (
+    <div className="px-4 py-2">
+      {/* Header */}
+      <div className="flex items-center gap-2 pb-2 mb-1" style={{ borderBottom: '1px solid var(--color-border)' }}>
+        <span className="text-[10px] font-mono font-bold uppercase" style={{ color: 'var(--color-faint)', flex: '1 1 0', paddingLeft: 20 }}>Strategy</span>
+        <span className="text-[10px] font-mono font-bold uppercase text-right" style={{ color: 'var(--color-faint)', width: 45 }}># Camps</span>
+        <span className="text-[10px] font-mono font-bold uppercase text-right" style={{ color: 'var(--color-faint)', width: 60 }}>Ad Spend</span>
+        <span className="text-[10px] font-mono font-bold uppercase text-right" style={{ color: 'var(--color-faint)', width: 50 }}>Clicks</span>
+        <span className="text-[10px] font-mono font-bold uppercase text-right" style={{ color: 'var(--color-faint)', width: 55 }}>Sales</span>
+        <span className="text-[10px] font-mono font-bold uppercase text-right" style={{ color: 'var(--color-faint)', width: 52 }}>Net ROAS</span>
+        <span className="text-[10px] font-mono font-bold uppercase text-right" style={{ color: 'var(--color-faint)', width: 60 }}>Net Profit</span>
+      </div>
+      {items.length === 0 && (
+        <div className="text-center py-4 text-[11px]" style={{ color: 'var(--color-faint)' }}>No strategy data available</div>
+      )}
+      {items.map((item, i) => {
+        const netRoas = item.roas;
+        const clicks = item.count ?? 0;
+        const campaigns = item.orders;
+        const sales = item._sales ?? 0;
+        const isExpanded = expanded[item.name] ?? false;
+        const hasChildren = (item.children?.length ?? 0) > 0;
+        return (
+          <div key={item.name + i}>
+            {/* Strategy row */}
+            <div
+              className="flex items-center gap-2 py-1.5 rounded-lg px-1 hover:bg-white/[.02]"
+              style={{ position: 'relative', cursor: hasChildren ? 'pointer' : 'default' }}
+              onClick={() => hasChildren && toggle(item.name)}
+            >
+              {/* Background spend bar */}
+              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${Math.max(2, (item.spend / maxSpend) * 100)}%`, background: def.color, opacity: 0.07, borderRadius: '0.5rem' }} />
+              <span className="flex items-center gap-1 text-[11px] font-semibold truncate" style={{ color: 'var(--color-text)', flex: '1 1 0', position: 'relative' }}>
+                {hasChildren ? (
+                  <span className="shrink-0 transition-transform duration-150" style={{ display: 'inline-flex', transform: isExpanded ? 'rotate(0deg)' : 'rotate(0deg)' }}>
+                    {isExpanded ? <ChevronDown size={13} style={{ color: 'var(--color-faint)' }} /> : <ChevronRight size={13} style={{ color: 'var(--color-faint)' }} />}
+                  </span>
+                ) : (
+                  <span style={{ width: 13, display: 'inline-block' }} />
+                )}
+                <span className="truncate">{item.name}</span>
+              </span>
+              <span className="text-[10px] font-mono text-right font-semibold" style={{ color: 'var(--color-text)', width: 45, position: 'relative' }}>
+                {campaigns}
+              </span>
+              <span className="text-[10px] font-mono text-right font-semibold" style={{ color: 'var(--color-text)', width: 60, position: 'relative' }}>
+                {fM(item.spend)}
+              </span>
+              <span className="text-[10px] font-mono text-right font-semibold" style={{ color: 'var(--color-text)', width: 50, position: 'relative' }}>
+                {clicks > 0 ? clicks.toLocaleString() : '--'}
+              </span>
+              <span className="text-[10px] font-mono text-right font-semibold" style={{ color: 'var(--color-text)', width: 55, position: 'relative' }}>
+                {sales > 0 ? fM(sales) : '--'}
+              </span>
+              <span className="text-[10px] font-mono text-right font-semibold" style={{ color: netRoas != null && netRoas >= 1 ? 'var(--color-positive)' : 'var(--color-negative)', width: 52, position: 'relative' }}>
+                {netRoas != null ? `${netRoas.toFixed(2)}x` : '--'}
+              </span>
+              <span className="text-[10px] font-mono text-right font-semibold" style={{ color: item.profit >= 0 ? 'var(--color-positive)' : 'var(--color-negative)', width: 60, position: 'relative' }}>
+                {item.profit >= 0 ? '+' : '-'}${fShort(Math.abs(item.profit))}
+              </span>
+            </div>
+            {/* Expanded campaign rows */}
+            {isExpanded && item.children && item.children.map((child, ci) => {
+              const cClicks = child.count ?? 0;
+              const cSales = child._sales ?? 0;
+              const cRoas = child.roas;
+              return (
+                <div key={child.name + ci} className="flex items-center gap-2 py-1 rounded-lg px-1 hover:bg-white/[.02]" style={{ position: 'relative' }}>
+                  <span className="text-[10px] truncate" style={{ color: 'var(--color-muted)', flex: '1 1 0', position: 'relative', paddingLeft: 24 }}>
+                    {child.name}
+                  </span>
+                  <span className="text-[10px] font-mono text-right" style={{ color: 'var(--color-faint)', width: 45, position: 'relative' }}>
+                  </span>
+                  <span className="text-[10px] font-mono text-right" style={{ color: 'var(--color-muted)', width: 60, position: 'relative' }}>
+                    {fM(child.spend)}
+                  </span>
+                  <span className="text-[10px] font-mono text-right" style={{ color: 'var(--color-muted)', width: 50, position: 'relative' }}>
+                    {cClicks > 0 ? cClicks.toLocaleString() : '--'}
+                  </span>
+                  <span className="text-[10px] font-mono text-right" style={{ color: 'var(--color-muted)', width: 55, position: 'relative' }}>
+                    {cSales > 0 ? fM(cSales) : '--'}
+                  </span>
+                  <span className="text-[10px] font-mono text-right" style={{ color: cRoas != null && cRoas >= 1 ? 'var(--color-positive)' : 'var(--color-negative)', width: 52, position: 'relative' }}>
+                    {cRoas != null ? `${cRoas.toFixed(2)}x` : '--'}
+                  </span>
+                  <span className="text-[10px] font-mono text-right" style={{ color: child.profit >= 0 ? 'var(--color-positive)' : 'var(--color-negative)', width: 60, position: 'relative' }}>
+                    {child.profit >= 0 ? '+' : '-'}${fShort(Math.abs(child.profit))}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      {/* Totals row */}
+      {items.length > 0 && (() => {
+        const tCamps = items.reduce((s, i) => s + i.orders, 0);
+        const tSpend = items.reduce((s, i) => s + i.spend, 0);
+        const tClicks = items.reduce((s, i) => s + (i.count ?? 0), 0);
+        const tSales = items.reduce((s, i) => s + (i._sales ?? 0), 0);
+        const tProfit = items.reduce((s, i) => s + i.profit, 0);
+        const tRoas = tSpend > 0 ? (tProfit + tSpend) / tSpend : null;
+        return (
+          <div className="flex items-center gap-2 pt-2 mt-1 px-1" style={{ borderTop: '1px solid var(--color-border)' }}>
+            <span className="text-[10px] font-mono font-bold uppercase" style={{ color: 'var(--color-faint)', flex: '1 1 0', paddingLeft: 20 }}>Total</span>
+            <span className="text-[10px] font-mono text-right font-bold" style={{ color: 'var(--color-text)', width: 45 }}>{tCamps}</span>
+            <span className="text-[10px] font-mono text-right font-bold" style={{ color: 'var(--color-text)', width: 60 }}>{fM(tSpend)}</span>
+            <span className="text-[10px] font-mono text-right font-bold" style={{ color: 'var(--color-text)', width: 50 }}>{tClicks > 0 ? tClicks.toLocaleString() : '--'}</span>
+            <span className="text-[10px] font-mono text-right font-bold" style={{ color: 'var(--color-text)', width: 55 }}>{tSales > 0 ? fM(tSales) : '--'}</span>
+            <span className="text-[10px] font-mono text-right font-bold" style={{ color: tRoas != null && tRoas >= 1 ? 'var(--color-positive)' : 'var(--color-negative)', width: 52 }}>{tRoas != null ? `${tRoas.toFixed(2)}x` : '--'}</span>
+            <span className="text-[10px] font-mono text-right font-bold" style={{ color: tProfit >= 0 ? 'var(--color-positive)' : 'var(--color-negative)', width: 60 }}>{tProfit >= 0 ? '+' : '-'}${fShort(Math.abs(tProfit))}</span>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 const TOP_N = 10;
 
-function SortableParetoCard({ def, items, isSqp, isProduct, isUnits, isCpcBuckets, periodLabel, onRemove, isCompact, onToggleSize }: {
+function SortableParetoCard({ def, items, isSqp, isProduct, isUnits, isCpcBuckets, isStrategy, isLaunch, launchMonthlyRows, periodLabel, onRemove, isCompact, onToggleSize }: {
   def: ParetoCardDef;
   items: ParetoItem[];
   isSqp: boolean;
   isProduct?: boolean;
   isUnits?: boolean;
   isCpcBuckets?: boolean;
+  isStrategy?: boolean;
+  isLaunch?: boolean;
+  launchMonthlyRows?: import('../types').CampaignLaunchMonthlyRow[];
   periodLabel: string;
   onRemove: () => void;
   isCompact: boolean;
   onToggleSize: () => void;
 }) {
-  const measureLabel = isCpcBuckets ? 'Units · Spend · Profit · ROAS' : isSqp ? 'Orders' : isUnits ? 'Units' : 'Net Profit';
+  const measureLabel = isLaunch ? 'Created · End · Avg Profit · M1 · M2 · M3' : isStrategy ? '# Camps · Spend · Clicks · Sales · ROAS · Profit' : isCpcBuckets ? 'Units · Spend · Profit · ROAS' : isSqp ? 'Orders' : isUnits ? 'Units' : 'Net Profit';
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: def.id });
-  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 50 : 'auto' as const };
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 50 : 'auto' as const, ...(isStrategy ? { gridColumn: '1 / -1' as const } : {}), ...(isLaunch ? { gridColumn: '1 / -1' as const } : {}) };
   const [tab, setTab] = useState<'winner' | 'loser' | 'other_winners' | 'other_losers'>('winner');
   const [showAll, setShowAll] = useState(false);
   const displayLimit = showAll ? 10 : 5;
@@ -2184,8 +2692,14 @@ function SortableParetoCard({ def, items, isSqp, isProduct, isUnits, isCpcBucket
         );
       })()}
 
+      {/* Ad Strategy table — hierarchical: Strategy → Campaign Name */}
+      {isStrategy && !isCompact && <StrategyHierarchyTable items={items} def={def} />}
+
+      {/* Campaign Launch table — monthly bucketed performance */}
+      {isLaunch && !isCompact && <CampaignLaunchTable rows={launchMonthlyRows || []} color={def.color} />}
+
       {/* Tabs + Items — hidden in compact mode, hidden for product/CPC-bucket cards */}
-      {!isCompact && !isProduct && !isCpcBuckets && (
+      {!isCompact && !isProduct && !isCpcBuckets && !isStrategy && !isLaunch && (
         <>
           <div className="flex px-4 pt-2 gap-1 overflow-x-auto no-scrollbar">
             {(['winner', 'loser', 'other_winners', 'other_losers'] as const)
