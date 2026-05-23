@@ -6,7 +6,7 @@ import type {
   FamilyBaseline, AdsEfficiencyMap, ForecastDemandMap, ForecastMetaMap,
   MonthSeasonMap, MonthDef, MonthProj,
 } from '../planTypes';
-import { MFR, SHIP, allocateOrder } from '../planTypes';
+import { MFR, SHIP, allocateOrder, splitTrajectoryToProducts } from '../planTypes';
 
 const STEPS = [
   { id: 1, label: 'Baseline' },
@@ -24,6 +24,9 @@ export interface WizardResult {
   orderQty: number;
   orderByProduct: Record<string, number>; // per-product, carton/100-rounded — keyed by product name
   adsTargets?: AdsTarget[]; // monthly spend/CPC targets for Ad Coach
+  // Per-product per-month FORECAST over the horizon (excludes elapsed actuals).
+  // Keyed by product name → { "may26": units, ... }.
+  plannedMonthly: Record<string, Record<string, number>>;
 }
 
 type ActualsMap = Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
@@ -126,6 +129,16 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
     return arr;
   }, [actuals2025, f.variations]);
 
+  // Per-product per-month forecast from the chosen Ads Path, split by demand share.
+  const inHorizon = useCallback(
+    (mo: number, yr: number) => months.some(m => m.month === mo && m.year === yr),
+    [months],
+  );
+  const plannedMonthly = useMemo(
+    () => splitTrajectoryToProducts(trajectory, f.variations, inHorizon),
+    [trajectory, f.variations, inHorizon],
+  );
+
   // Fix #1: Sync orderQty to gap until user manually edits it
   useEffect(() => {
     if (!orderQtyUserEdited) setOrderQty(gap);
@@ -213,7 +226,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
               Next <ChevronRight size={14} />
             </button>
           ) : (
-            <button onClick={() => { if (!canSave) return; const alloc = allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound); onSave({ family: f.family, brandGrowth, adsPath, customDailySpend: adsPath === 'custom' ? customDaily : undefined, orderQty: alloc.total, orderByProduct: alloc.byProduct, adsTargets }); }}
+            <button onClick={() => { if (!canSave) return; const alloc = allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound); onSave({ family: f.family, brandGrowth, adsPath, customDailySpend: adsPath === 'custom' ? customDaily : undefined, orderQty: alloc.total, orderByProduct: alloc.byProduct, adsTargets, plannedMonthly }); }}
               disabled={!canSave}
               title={!canSave ? 'Set order quantity > 0 before saving' : undefined}
               className={`flex items-center gap-1 px-5 py-2 rounded-lg text-xs font-bold transition-colors shadow-lg ${
