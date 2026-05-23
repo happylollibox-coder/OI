@@ -360,6 +360,12 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
     : path === 'target' ? (totals.tSpend / (Object.keys(famEff).length * 30 || 1))
     : customDaily;
   const selectedK = baseDailySpend > 0 ? selectedDaily / baseDailySpend : 1;
+  // The curve row matching the selection — single source for the highlight AND the Target panel.
+  // The curve/trajectory/coach all operate on the profit-max plan's spend, so the displayed daily
+  // must be the row's plan-scale daily (p.daily), not selectedDaily (which is current-baseline scale).
+  const selectedPoint = curve.length
+    ? curve.reduce((best, p) => Math.abs(p.k - selectedK) < Math.abs(best.k - selectedK) ? p : best, curve[0])
+    : null;
 
   // Auto ramp-up: geometric (50%/mo cap), 0 if already at target
   const rampMonths = useMemo(() => {
@@ -563,7 +569,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
         <div className="space-y-[2px]">
           {curve.map((p, i) => {
             const isPeakRow = i === peakIdx;
-            const isSelected = Math.abs(p.k - selectedK) < 0.15;
+            const isSelected = p === selectedPoint;
             const isCurrent = nowK > 0 && curve.reduce((best, cp, ci) => Math.abs(cp.k - nowK) < Math.abs(curve[best].k - nowK) ? ci : best, 0) === i;
             const isLY = lyK > 0 && curve.reduce((best, cp, ci) => Math.abs(cp.k - lyK) < Math.abs(curve[best].k - lyK) ? ci : best, 0) === i;
             const barW = Math.abs(p.profitYear / maxProfit) * 100;
@@ -606,8 +612,8 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
       <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border border-blue-500/30 bg-blue-500/5">
         <div>
           <div className="text-[11px] font-bold text-heading">
-            Target: <span className="text-blue-300">${Math.round(selectedDaily)}/day</span>
-            <span className="text-faint font-normal ml-1">({selectedK.toFixed(1)}× baseline)</span>
+            Target: <span className="text-blue-300">${Math.round(selectedPoint?.daily ?? selectedDaily)}/day</span>
+            <span className="text-faint font-normal ml-1">({(selectedPoint?.k ?? selectedK).toFixed(1)}× plan)</span>
           </div>
           <div className="flex items-center gap-2 mt-1 text-[10px]">
             <span className="text-muted">Ramp-up:</span>
