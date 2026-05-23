@@ -140,12 +140,6 @@ export function atK(k: number, brand: ChannelBase, nb: ChannelBase,
   return { daily: totalDaily, adUnits, totalUnits, profit, roas };
 }
 
-/** Fixed multiplier steps — capped at 5× baseline.
- *  Exponents are calibrated from $128–$2,529/day data;
- *  extrapolating beyond ~5× is unreliable. */
-function buildMultipliers(): number[] {
-  return [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0];
-}
 const MAX_MONTHLY_RAMP = 1.5; // max 50% spend increase per month (used for BOOST/PEAK)
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -304,10 +298,39 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   // ── Profit curve = the profit-max plan scaled by k (k = spendScale) ──
   // k=1 IS the plan, so the peak (max profit) lands at 1.0× and the explorer agrees with
   // Step 4 / the order by construction. Each point re-evaluates units off the 2025 anchor.
-  const multipliers = useMemo(() => buildMultipliers(), []);
   // Sum over the PLAN HORIZON (the `months` window: current → Feb'27) so the curve, the 2025
   // baseline, and Step 4 / the order all cover the same months and totals agree exactly.
   const horizonDays = useMemo(() => months.reduce((s, m) => s + (DAYS_IN_MONTH[m.month - 1] || 30), 0), [months]);
+  // 2025 baseline (what actually happened) + the recommended-plan totals — for the curve
+  // markers and the "2025 → recommended" improvement callout.
+  const baseline2025 = useMemo(() => {
+    let spend = 0, units = 0;
+    for (const m of months) { spend += monthlySpend?.[m.month - 1] ?? 0; units += monthlyUnits?.[m.month - 1] ?? 0; }
+    return { spend, units, profit: units * margin - spend };
+  }, [months, monthlySpend, monthlyUnits, margin]);
+  const planTotals = useMemo(() => {
+    let spend = 0, units = 0, profit = 0;
+    for (const m of months) { const p = profitMaxPlan[m.month - 1]; if (p) { spend += p.spend; units += p.units; profit += p.profit; } }
+    return { spend, units, profit };
+  }, [months, profitMaxPlan]);
+  // Marker positions on the ×-plan axis (over the horizon): 2025 actual (LY) and current spend (NOW).
+  const lyK = planTotals.spend > 0 ? baseline2025.spend / planTotals.spend : 0;
+  const nowK = planTotals.spend > 0 ? (baseDailySpend * horizonDays) / planTotals.spend : 0;
+
+  // ── Profit curve = the profit-max plan scaled by k (k = spendScale) ──
+  // Fine 0.1× steps zoomed to the useful zone: from ~current/last-year up to the peak
+  // (1.0× = the recommended plan, where profit maxes) plus 2 steps where profit is already
+  // declining — instead of a wide 0.5–5× span dominated by deep-loss rows.
+  const multipliers = useMemo(() => {
+    const refs = [nowK, lyK].filter(v => v > 0.05);
+    const minRef = refs.length ? Math.min(...refs) : 0.5;
+    const maxRef = refs.length ? Math.max(...refs) : 1.0;
+    const lo = Math.max(0.3, Math.min(0.9, Math.floor(minRef * 10) / 10)); // ≤0.9 so the peak always shows
+    const hi = Math.max(1.2, Math.ceil(maxRef * 10) / 10 + 0.1);           // ≥1.2 → 2 declining steps past the peak
+    const out: number[] = [];
+    for (let k = lo; k <= hi + 1e-9; k += 0.1) out.push(Math.round(k * 10) / 10);
+    return out;
+  }, [nowK, lyK]);
   const curve: CurvePoint[] = useMemo(() => {
     return multipliers.map(k => {
       let spend = 0, units = 0;
@@ -331,22 +354,6 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
 
   const peakIdx = curve.reduce((best, p, i) => p.profitYear > curve[best].profitYear ? i : best, 0);
   const maxProfit = Math.max(...curve.map(p => Math.abs(p.profitYear)), 1);
-
-  // 2025 baseline (what actually happened) + the recommended-plan totals — for the curve
-  // markers and the "2025 → recommended" improvement callout.
-  const baseline2025 = useMemo(() => {
-    let spend = 0, units = 0;
-    for (const m of months) { spend += monthlySpend?.[m.month - 1] ?? 0; units += monthlyUnits?.[m.month - 1] ?? 0; }
-    return { spend, units, profit: units * margin - spend };
-  }, [months, monthlySpend, monthlyUnits, margin]);
-  const planTotals = useMemo(() => {
-    let spend = 0, units = 0, profit = 0;
-    for (const m of months) { const p = profitMaxPlan[m.month - 1]; if (p) { spend += p.spend; units += p.units; profit += p.profit; } }
-    return { spend, units, profit };
-  }, [months, profitMaxPlan]);
-  // Marker positions on the ×-plan axis (over the horizon): 2025 actual (LY) and current spend (NOW).
-  const lyK = planTotals.spend > 0 ? baseline2025.spend / planTotals.spend : 0;
-  const nowK = planTotals.spend > 0 ? (baseDailySpend * horizonDays) / planTotals.spend : 0;
 
   // Selected daily
   const selectedDaily = path === 'current' ? baseDailySpend
@@ -386,15 +393,12 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   // User dial on the profit-max plan: 1.0 = profit-max; >1 over-spends, <1 under-spends.
   const spendScale = selectedK;
   const trajectoryMonths = useMemo(() => {
-    const now = new Date();
-    const startMo = now.getMonth();
-    const startYr = now.getFullYear();
     const result: TrajMonth[] = [];
     let cumProfit = 0, cumUnits = 0;
 
-    for (let i = 0; i < 12; i++) {
-      const moIdx = (startMo + i) % 12;
-      const yr = startYr + Math.floor((startMo + i) / 12);
+    for (let i = 0; i < months.length; i++) {
+      const moIdx = months[i].month - 1;
+      const yr = months[i].year;
       const fullDays = DAYS_IN_MONTH[moIdx];
       const plan = profitMaxPlan[moIdx];
       const spend = plan.spend * spendScale;
@@ -438,7 +442,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
       }
     }
     return result;
-  }, [profitMaxPlan, spendScale, margin, baseAdsShare, dataActualDay]);
+  }, [profitMaxPlan, spendScale, margin, baseAdsShare, dataActualDay, months]);
 
   const maxTrajSpend = Math.max(...trajectoryMonths.map(t => t.spend), 1);
   const yr1Units = trajectoryMonths[trajectoryMonths.length - 1]?.cumUnits ?? 0;
@@ -447,14 +451,11 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
 
   // ── Generate per-month/channel targets for DE_PLAN_ADS_TARGETS ──
   const adsTargets = useMemo(() => {
-    const now = new Date();
-    const startMo = now.getMonth();
-    const startYr = now.getFullYear();
     const targets: AdsTarget[] = [];
 
-    for (let i = 0; i < 12; i++) {
-      const moIdx = (startMo + i) % 12;
-      const yr = startYr + Math.floor((startMo + i) / 12);
+    for (let i = 0; i < months.length; i++) {
+      const moIdx = months[i].month - 1;
+      const yr = months[i].year;
       const days = DAYS_IN_MONTH[moIdx];
       const seasonType = getSeasonType(moIdx + 1, yr);
       const seasonB = seasonBenchmarks[seasonType] ?? seasonBenchmarks['OFF'];
@@ -492,7 +493,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
       targets.push(mkRow('NON_BRAND', nbSpend, rawTot > 0 ? units * (nRaw / rawTot) : units, seasonB.nb.cpc, seasonB.nb.cvr));
     }
     return targets;
-  }, [profitMaxPlan, spendScale, seasonBenchmarks, baseAdsShare, margin]);
+  }, [profitMaxPlan, spendScale, seasonBenchmarks, baseAdsShare, margin, months]);
 
   // Expose targets to parent (PlanWizard) for saving
   // eslint-disable-next-line react-hooks/exhaustive-deps
