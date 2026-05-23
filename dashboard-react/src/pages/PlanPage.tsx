@@ -1147,6 +1147,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [orderOverrides, setOrderOverrides] = useState<Record<string, number>>({});
   const [plannedMonthlyOverrides, setPlannedMonthlyOverrides] = useState<Record<string, Record<string, number>>>({});
+  const [activeSnapshot, setActiveSnapshot] = useState<Record<string, Record<string, number>> | null>(null);
   const [growthOverrides, setGrowthOverrides] = useState<Record<string, number>>({});
   const [originalOverrides, setOriginalOverrides] = useState<Record<string, number> | null>(null);
 
@@ -1312,6 +1313,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
     let overridesParsed = false;
     let loadedOverrides: Record<string, number> = {};
     let loadedOriginal: Record<string, number> | null = null;
+    let loadedSnapshot: Record<string, Record<string, number>> | null = null;
     for (const r of rows) {
       const fam = String(r.family ?? '');
       const strat = String(r.strategy ?? 'SEASONAL') as PlanStrategy;
@@ -1342,6 +1344,9 @@ export function PlanPage({ data }: { data: DashboardData }) {
         if (r.original_overrides_json) {
           try { loadedOriginal = JSON.parse(String(r.original_overrides_json)); } catch { /* ignore */ }
         }
+        if (r.snapshot_units_json) {
+          try { loadedSnapshot = JSON.parse(String(r.snapshot_units_json)); } catch { /* ignore */ }
+        }
         overridesParsed = true;
       }
     }
@@ -1351,6 +1356,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
       setGrowthOverrides(loadedGrowth);
       setOrderOverrides(loadedOverrides);
       setOriginalOverrides(loadedOriginal);
+      setActiveSnapshot(loadedSnapshot);
       setPlanDirty(false);
       setPlanSaved(true);
     }
@@ -2218,6 +2224,10 @@ export function PlanPage({ data }: { data: DashboardData }) {
 
       {/* ─── New: Replenishment Flow + Shipment Cards (SP-backed) ─── */}
       <ReplenishmentFlowWrapper orderOverrides={orderOverrides} salesSummary={salesSummary} demandMap={demandMap} seasonMap={seasonMap} metaMap={metaMap} growthOverrides={effectiveGrowth} products={filteredProducts} projs={projs} unconstrainedForecastMap={unconstrainedForecastMap} />
+
+      {activePlan?.status === 'APPROVED' && (
+        <PlanVsRealityPanel families={filteredFamilies} snapshot={activeSnapshot} actuals2026Full={actuals2026Full} />
+      )}
 
       <CashflowSection projs={projs} families={filteredFamilies} planId={activePlan?.plan_id ?? null} />
     </div>
@@ -3170,6 +3180,77 @@ const COMPARE_LABELS: Record<CompareMode, { label: string; left: string; right: 
   ORIGINAL_VS_CURRENT: { label: 'Original vs Current', left: 'Original Qty', right: 'Current Qty' },
   ORIGINAL_VS_ACTUAL: { label: 'Original vs Actual', left: 'Original Qty', right: 'Actual Qty' },
 };
+
+// Approved Plan vs Reality — per-product UNITS plan (frozen snapshot) vs live daily actuals.
+// Columns: Jan'26 (idx 0) → Feb'27 (idx 13). Elapsed months: plan == actual by construction;
+// future months: plan only until reality arrives.
+function PlanVsRealityPanel({ families, snapshot, actuals2026Full }: {
+  families: FamilyBaseline[];
+  snapshot: Record<string, Record<string, number>> | null;
+  actuals2026Full: Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
+}) {
+  if (!snapshot) return null;
+  const monthIdxs = Array.from({ length: 14 }, (_, i) => i);
+  const colLabel = (i: number) => i < 12
+    ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][i] + "'26"
+    : ['Jan', 'Feb'][i - 12] + "'27";
+  const keyForIdx = (i: number) => MONTHS.find(m => (m.year === 2026 ? m.month - 1 : m.month + 11) === i)?.key;
+  const planUnits = (prod: string, i: number): number | null => {
+    const k = keyForIdx(i);
+    if (k && snapshot[prod]?.[k] != null) return snapshot[prod][k];
+    if (i <= 11) return actuals2026Full.get(prod)?.get(i)?.units ?? null; // elapsed: plan == actual
+    return null;
+  };
+  const actUnits = (prod: string, i: number): number | null =>
+    i <= 11 ? (actuals2026Full.get(prod)?.get(i)?.units ?? null) : null;
+
+  const rows = families.flatMap(f => [...f.variations].sort((a, b) => a.name.localeCompare(b.name)));
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="mt-6">
+      <h3 className="text-sm font-bold text-heading mb-2">Approved Plan vs Reality — Units</h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="text-muted border-b border-border">
+              <th className="text-left py-1.5 px-1.5">Product</th>
+              <th className="text-left py-1.5 px-1.5"></th>
+              {monthIdxs.map(i => <th key={i} className="text-right py-1.5 px-1.5">{colLabel(i)}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(v => {
+              const planRow = monthIdxs.map(i => planUnits(v.name, i));
+              const actRow = monthIdxs.map(i => actUnits(v.name, i));
+              return (
+                <Fragment key={v.name}>
+                  <tr className="border-b border-border/10">
+                    <td className="py-1 px-1.5 font-medium" rowSpan={2}>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: PROD_COLORS[v.name] ?? '#666' }} />{v.name}
+                      </span>
+                    </td>
+                    <td className="py-1 px-1.5 text-blue-400">Plan</td>
+                    {planRow.map((u, i) => <td key={i} className="text-right py-1 px-1.5 tabular-nums">{u == null ? '—' : Math.round(u)}</td>)}
+                  </tr>
+                  <tr className="border-b border-border/20">
+                    <td className="py-1 px-1.5 text-emerald-400">Actual</td>
+                    {actRow.map((u, i) => {
+                      const p = planRow[i];
+                      const cls = u == null || p == null ? '' : u >= p ? 'text-emerald-400' : 'text-red-400';
+                      return <td key={i} className={`text-right py-1 px-1.5 tabular-nums ${cls}`}>{u == null ? '—' : Math.round(u)}</td>;
+                    })}
+                  </tr>
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function PurchaseRequestSection({ families, projs, orderOverrides, planId, planStatus, originalOverrides, onOverride, onResetOverrides }: {
   families: FamilyBaseline[]; projs: MonthProj[];
