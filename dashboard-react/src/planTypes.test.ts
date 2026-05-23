@@ -1,5 +1,64 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts } from './planTypes';
+
+describe('monthKey', () => {
+  it('formats month + 2-digit year like the snapshot keys', () => {
+    expect(monthKey(5, 2026)).toBe('may26');
+    expect(monthKey(1, 2027)).toBe('jan27');
+    expect(monthKey(12, 2026)).toBe('dec26');
+  });
+});
+
+describe('composeMonthlyPlan', () => {
+  const keys = ['jan26', 'may26', 'jun26', 'jan27'];
+
+  it('sums actual + forecast per month and totals over ordered keys', () => {
+    const actual = { jan26: 100, may26: 30 };   // elapsed + current-MTD
+    const forecast = { may26: 20, jun26: 80, jan27: 50 }; // current-remainder + future
+    const r = composeMonthlyPlan(keys, actual, forecast);
+    expect(r.byMonth).toEqual({ jan26: 100, may26: 50, jun26: 80, jan27: 50 });
+    expect(r.total).toBe(280);
+  });
+
+  it('treats missing months as zero', () => {
+    const r = composeMonthlyPlan(['jan26', 'feb26'], {}, { jan26: 10 });
+    expect(r.byMonth).toEqual({ jan26: 10, feb26: 0 });
+    expect(r.total).toBe(10);
+  });
+});
+
+describe('splitTrajectoryToProducts', () => {
+  const splitVars = [
+    { name: 'White', splitPct: 0.75 },
+    { name: 'Purple', splitPct: 0.25 },
+  ];
+  const inHorizon = () => true;
+
+  it('splits forecast slices by share and keys by month', () => {
+    const traj = [
+      { mo: 5, yr: 2026, totalUnits: 40, isActual: true },  // current MTD — excluded
+      { mo: 5, yr: 2026, totalUnits: 60, isActual: false },  // current remainder
+      { mo: 6, yr: 2026, totalUnits: 200 },                  // future
+    ];
+    const out = splitTrajectoryToProducts(traj, splitVars, inHorizon);
+    expect(out.White).toEqual({ may26: 45, jun26: 150 });
+    expect(out.Purple).toEqual({ may26: 15, jun26: 50 });
+  });
+
+  it('drops months outside the horizon', () => {
+    const traj = [{ mo: 3, yr: 2027, totalUnits: 100 }];
+    const out = splitTrajectoryToProducts(traj, splitVars, (mo, yr) => !(mo === 3 && yr === 2027));
+    expect(out.White).toEqual({});
+    expect(out.Purple).toEqual({});
+  });
+
+  it('equal-splits when no product has share data', () => {
+    const traj = [{ mo: 6, yr: 2026, totalUnits: 100 }];
+    const out = splitTrajectoryToProducts(traj, [{ name: 'A', splitPct: 0 }, { name: 'B', splitPct: 0 }], inHorizon);
+    expect(out.A).toEqual({ jun26: 50 });
+    expect(out.B).toEqual({ jun26: 50 });
+  });
+});
 
 type Row = Pick<import('./planTypes').VarBaseline, 'name' | 'splitPct' | 'cartonQty' | 'inventory'>;
 const vars = (...rows: [string, number, number, number?][]): Row[] =>

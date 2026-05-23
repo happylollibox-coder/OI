@@ -62,6 +62,58 @@ export const SHIP: Record<string, number> = {
   'Truth Or Dare': 0.82,
 };
 
+// ─── Monthly plan helpers ───────────────────────────────────
+const MONTH_ABBR = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+// Snapshot/MonthDef key for a calendar month, e.g. monthKey(5, 2026) === "may26".
+export function monthKey(mo: number, yr: number): string {
+  return `${MONTH_ABBR[mo - 1]}${String(yr).slice(2)}`;
+}
+
+export interface MonthlyPlan { byMonth: Record<string, number>; total: number }
+
+// Merge actual (elapsed + current-MTD) over forecast (current-remainder + future) across an
+// ordered set of month keys. Additive: the current month's actual-MTD and forecast-remainder
+// are disjoint slices, so summing is correct everywhere.
+export function composeMonthlyPlan(
+  orderedKeys: string[],
+  actualByMonth: Record<string, number>,
+  forecastByMonth: Record<string, number>,
+): MonthlyPlan {
+  const byMonth: Record<string, number> = {};
+  let total = 0;
+  for (const k of orderedKeys) {
+    const u = (actualByMonth[k] ?? 0) + (forecastByMonth[k] ?? 0);
+    byMonth[k] = u;
+    total += u;
+  }
+  return { byMonth, total };
+}
+
+// Split a family's per-month trajectory into per-product per-month forecast by demand share.
+// Excludes isActual slices (current-month MTD is taken from real actuals downstream). Only
+// keeps months for which inHorizon(mo, yr) is true.
+export function splitTrajectoryToProducts(
+  trajectory: { mo: number; yr: number; totalUnits: number; isActual?: boolean }[],
+  variations: { name: string; splitPct: number }[],
+  inHorizon: (mo: number, yr: number) => boolean,
+): Record<string, Record<string, number>> {
+  const totalShare = variations.reduce((s, v) => s + (v.splitPct > 0 ? v.splitPct : 0), 0);
+  const n = variations.length;
+  const out: Record<string, Record<string, number>> = {};
+  for (const v of variations) out[v.name] = {};
+  for (const t of trajectory) {
+    if (t.isActual) continue;
+    if (!inHorizon(t.mo, t.yr)) continue;
+    const key = monthKey(t.mo, t.yr);
+    for (const v of variations) {
+      const share = totalShare > 0 ? (v.splitPct > 0 ? v.splitPct : 0) : (n > 0 ? 1 / n : 0);
+      out[v.name][key] = (out[v.name][key] ?? 0) + t.totalUnits * share;
+    }
+  }
+  return out;
+}
+
 // ─── Order allocation ───────────────────────────────────────
 export interface OrderAllocation { byProduct: Record<string, number>; total: number; totalGap: number }
 
