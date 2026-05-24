@@ -5,7 +5,7 @@ import type { DashboardData, ShipmentPlanRow } from '../types';
 import { useShipmentPlan, useScheduledShipments, useShipmentHistory, ReplenishmentFlowSection, ShipmentCardSection } from '../components/ShipmentEngine';
 import { PlanWizard } from '../components/PlanWizard';
 import type { MonthDef } from '../planTypes';
-import { composeMonthlyPlan } from '../planTypes';
+import { composeMonthlyPlan, monthKey, buildEffectiveProjs } from '../planTypes';
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
@@ -1393,7 +1393,63 @@ export function PlanPage({ data }: { data: DashboardData }) {
 
 
 
-  const projs = useMemo(() => runSim(families, mults, forecastMap, demandMap, effectiveGrowth), [families, mults, forecastMap, demandMap, effectiveGrowth]);
+  // ── Wizard-sourced forecast inputs ──
+  // Per-product per-month FORECAST units. Current month = remainder only (strip MTD actuals) so it
+  // matches projs/NEED semantics and doesn't double-count YTD sold. In-session wizard saves
+  // (plannedMonthlyOverrides, already MTD-excluded) override the loaded snapshot.
+  const plannedUnits = useMemo(() => {
+    const out: Record<string, Record<string, number>> = {};
+    const curKey = MONTHS[0]?.key;
+    const curIdx = MONTHS[0] ? (MONTHS[0].year === 2026 ? MONTHS[0].month - 1 : MONTHS[0].month + 11) : -1;
+    if (activeSnapshot) {
+      for (const [prod, byMonth] of Object.entries(activeSnapshot)) {
+        out[prod] = { ...byMonth };
+        if (curKey && out[prod][curKey] != null && curIdx >= 0 && curIdx <= 11) {
+          const mtd = actuals2026Full.get(prod)?.get(curIdx)?.units ?? 0;
+          out[prod][curKey] = Math.max(0, out[prod][curKey] - mtd);
+        }
+      }
+    }
+    for (const [prod, byMonth] of Object.entries(plannedMonthlyOverrides)) out[prod] = { ...byMonth };
+    return out;
+  }, [activeSnapshot, plannedMonthlyOverrides, actuals2026Full]);
+
+  // Planned ad spend per family-month from saved coach targets (Σ daily_spend × days).
+  const [plannedSpend, setPlannedSpend] = useState<Record<string, Record<string, number>>>({});
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const out: Record<string, Record<string, number>> = {};
+      await Promise.all(families.map(async f => {
+        try {
+          const r = await fetch(`/api/plans/ads-targets/${encodeURIComponent(f.family)}`);
+          const tRows: { yr: number; mo: number; daily_spend_target: number }[] = r.ok ? await r.json() : [];
+          const byMonth: Record<string, number> = {};
+          for (const row of tRows) {
+            const k = monthKey(row.mo, row.yr);
+            const days = new Date(row.yr, row.mo, 0).getDate();
+            byMonth[k] = (byMonth[k] ?? 0) + (row.daily_spend_target || 0) * days;
+          }
+          if (Object.keys(byMonth).length > 0) out[f.family] = byMonth;
+        } catch { /* ignore */ }
+      }));
+      if (!cancelled) setPlannedSpend(out);
+    })();
+    return () => { cancelled = true; };
+  }, [families]);
+
+  // A family is "planned" once BOTH its snapshot units AND saved spend exist — the spend gate
+  // doubles as a loading guard (no spend-less P&L is shown as final; falls back to runSim until ready).
+  const isPlanned = useCallback((fam: string) => {
+    const f = families.find(ff => ff.family === fam);
+    if (!f) return false;
+    const hasUnits = f.variations.some(v => plannedUnits[v.name] && Object.keys(plannedUnits[v.name]).length > 0);
+    return hasUnits && !!plannedSpend[fam] && Object.keys(plannedSpend[fam]).length > 0;
+  }, [families, plannedUnits, plannedSpend]);
+
+  // runSim is the fallback; the wizard's saved plan is substituted in for planned families.
+  const rawProjs = useMemo(() => runSim(families, mults, forecastMap, demandMap, effectiveGrowth), [families, mults, forecastMap, demandMap, effectiveGrowth]);
+  const projs = useMemo(() => buildEffectiveProjs(rawProjs, plannedUnits, plannedSpend, families, isPlanned), [rawProjs, plannedUnits, plannedSpend, families, isPlanned]);
 
   const unconstrainedProjs = useMemo(() => runSim(families, mults, forecastMap, demandMap, growthOverrides), [families, mults, forecastMap, demandMap, growthOverrides]);
 
