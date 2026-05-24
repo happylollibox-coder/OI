@@ -2173,12 +2173,23 @@ export function PlanPage({ data }: { data: DashboardData }) {
             // PR table's "Gap from Plan" = planned − sold − stock = forecast − stock.
             if (result.plannedMonthly && Object.keys(result.plannedMonthly).length > 0) {
               setPlannedMonthlyOverrides(prev => ({ ...prev, ...result.plannedMonthly }));
+              const famVars = filteredFamilies.find(ff => ff.family === result.family)?.variations ?? [];
               setOrderOverrides(p => {
                 const next = { ...p };
-                for (const [name, byMonth] of Object.entries(result.plannedMonthly)) {
-                  const forecast = Object.values(byMonth).reduce((a, b) => a + b, 0);
-                  const sold = parentGetSold('', name); // resolves by product name
-                  next[name] = Math.round(sold + forecast);
+                if (result.orderMode === 'manual' && result.orderByProduct) {
+                  // Manual buy quantities → override = sold + stock + qty, so PR "Gap from Plan" = your qty.
+                  for (const [name, qty] of Object.entries(result.orderByProduct)) {
+                    const sold = parentGetSold('', name);
+                    const stock = famVars.find(v => v.name === name)?.inventory ?? 0;
+                    next[name] = Math.round(sold + stock + qty);
+                  }
+                } else {
+                  // Auto → override = yearly planned total (sold + forecast); Gap from Plan = forecast − stock.
+                  for (const [name, byMonth] of Object.entries(result.plannedMonthly)) {
+                    const forecast = Object.values(byMonth).reduce((a, b) => a + b, 0);
+                    const sold = parentGetSold('', name); // resolves by product name
+                    next[name] = Math.round(sold + forecast);
+                  }
                 }
                 return next;
               });

@@ -27,6 +27,8 @@ export interface WizardResult {
   // Per-product per-month FORECAST over the horizon (excludes elapsed actuals).
   // Keyed by product name → { "may26": units, ... }.
   plannedMonthly: Record<string, Record<string, number>>;
+  // 'auto' = order derived from forecast; 'manual' = orderByProduct are user-set buy quantities.
+  orderMode: 'auto' | 'manual';
 }
 
 type ActualsMap = Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
@@ -72,6 +74,8 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
   const [adsTargets, setAdsTargets] = useState<AdsTarget[]>([]);
   const [trajectory, setTrajectory] = useState<TrajMonth[]>([]);
   const [friendlyRound, setFriendlyRound] = useState(false); // round per-product to next 100 instead of cartons
+  const [orderMode, setOrderMode] = useState<'auto' | 'manual'>('auto');
+  const [manualByProduct, setManualByProduct] = useState<Record<string, number>>({}); // user-set per-product buy qty (manual mode)
   const modalRef = useRef<HTMLDivElement>(null);
 
   const famEff = adsEfficiency[f.family] ?? {};
@@ -156,6 +160,18 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
     setOrderQty(n);
   }, []);
 
+  // Switch order mode; on first switch to manual, seed per-product quantities from the auto allocation.
+  const handleOrderMode = useCallback((m: 'auto' | 'manual') => {
+    if (m === 'manual' && Object.keys(manualByProduct).length === 0) {
+      setManualByProduct({ ...allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound).byProduct });
+    }
+    setOrderMode(m);
+  }, [manualByProduct, f.variations, orderQty, forecastDemand, friendlyRound]);
+  // Manual per-product order quantity (StepOrder rounds up to the carton/100 before calling).
+  const handleManualQty = useCallback((name: string, qty: number) => {
+    setManualByProduct(prev => ({ ...prev, [name]: Math.max(0, qty) }));
+  }, []);
+
   // Fix #6: Escape-to-close
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -218,7 +234,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
           {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} onGrowthChange={setBrandGrowth} />}
           {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelEfficiency.filter(c => c.family === f.family)} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
           {step === 4 && <StepSpendPlan months={months} famEff={famEff} path={adsPath} customDaily={customDaily} trajectory={trajectory} />}
-          {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} />}
+          {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} />}
         </div>
 
         {/* Footer */}
@@ -233,7 +249,20 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
               Next <ChevronRight size={14} />
             </button>
           ) : (
-            <button onClick={() => { if (!canSave) return; const alloc = allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound); onSave({ family: f.family, brandGrowth, adsPath, customDailySpend: adsPath === 'custom' ? customDaily : undefined, orderQty: alloc.total, orderByProduct: alloc.byProduct, adsTargets, plannedMonthly }); }}
+            <button onClick={() => {
+              if (!canSave) return;
+              const alloc = allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound);
+              // Effective per-product order: manual mode = user quantities (carton-rounded); auto = allocation.
+              const effectiveByProduct = orderMode === 'manual'
+                ? Object.fromEntries(f.variations.map(v => {
+                    const stepUnit = friendlyRound ? 100 : (v.cartonQty > 0 ? v.cartonQty : 1);
+                    const raw = manualByProduct[v.name] ?? 0;
+                    return [v.name, raw > 0 ? Math.ceil(raw / stepUnit) * stepUnit : 0];
+                  }))
+                : alloc.byProduct;
+              const effectiveTotal = Object.values(effectiveByProduct).reduce((a, b) => a + b, 0);
+              onSave({ family: f.family, brandGrowth, adsPath, customDailySpend: adsPath === 'custom' ? customDaily : undefined, orderQty: effectiveTotal, orderByProduct: effectiveByProduct, adsTargets, plannedMonthly, orderMode });
+            }}
               disabled={!canSave}
               title={!canSave ? 'Set order quantity > 0 before saving' : undefined}
               className={`flex items-center gap-1 px-5 py-2 rounded-lg text-xs font-bold transition-colors shadow-lg ${
@@ -800,20 +829,25 @@ function StepSpendPlan({ months, famEff, path, customDaily, trajectory }: {
 }
 
 // ─── Step 5: Order Summary ───────────────────────────────
-function StepOrder({ family: f, annualDemand, gap, orderQty, onQty, friendly, onFriendly }: {
+function StepOrder({ family: f, annualDemand, gap, orderQty, onQty, friendly, onFriendly, mode, onMode, manualByProduct, onManualQty }: {
   family: FamilyBaseline; annualDemand: number; gap: number; orderQty: number; onQty: (n: number) => void;
   friendly: boolean; onFriendly: (b: boolean) => void;
+  mode: 'auto' | 'manual'; onMode: (m: 'auto' | 'manual') => void;
+  manualByProduct: Record<string, number>; onManualQty: (name: string, qty: number) => void;
 }) {
   const alloc = useMemo(() => allocateOrder(f.variations, orderQty, annualDemand, friendly), [f.variations, orderQty, annualDemand, friendly]);
-  const costs = useMemo(() => {
-    let mfr = 0, ship = 0;
-    for (const v of f.variations) {
-      const qty = alloc.byProduct[v.name] ?? 0;
-      mfr += qty * (MFR[v.name] ?? 0);
-      ship += qty * (SHIP[v.name] ?? 0);
-    }
-    return { mfr, ship };
-  }, [alloc, f.variations]);
+  // Effective per-product order: manual mode = user quantities; auto mode = gap-share allocation.
+  const byProduct: Record<string, number> = mode === 'manual'
+    ? Object.fromEntries(f.variations.map(v => [v.name, manualByProduct[v.name] ?? 0]))
+    : alloc.byProduct;
+  const orderTotal = f.variations.reduce((s, v) => s + (byProduct[v.name] ?? 0), 0);
+  let mfrCost = 0, shipCost = 0;
+  for (const v of f.variations) {
+    const qty = byProduct[v.name] ?? 0;
+    mfrCost += qty * (MFR[v.name] ?? 0);
+    shipCost += qty * (SHIP[v.name] ?? 0);
+  }
+  const costs = { mfr: mfrCost, ship: shipCost };
   // Per-product forecast demand (same share split as the order allocation)
   const fcstByProduct = useMemo(() => {
     const totalShare = f.variations.reduce((s, v) => s + (v.splitPct > 0 ? v.splitPct : 0), 0);
@@ -847,15 +881,24 @@ function StepOrder({ family: f, annualDemand, gap, orderQty, onQty, friendly, on
         </div>
       </div>
 
-      {/* Editable target + rounding toggle */}
+      {/* Mode toggle + editable target + rounding toggle */}
       <div className="p-4 rounded-xl border border-blue-500/30 bg-blue-500/5 mb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-[10px] text-muted">Order by:</span>
+          <button onClick={() => onMode('auto')}
+            className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${mode === 'auto' ? 'bg-blue-500 text-white' : 'bg-border/30 text-muted hover:bg-border/50'}`}>Auto (family target)</button>
+          <button onClick={() => onMode('manual')}
+            className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${mode === 'manual' ? 'bg-blue-500 text-white' : 'bg-border/30 text-muted hover:bg-border/50'}`}>Manual (per product)</button>
+        </div>
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-heading">Order Target</div>
-            <div className="text-[9px] text-muted mt-0.5">Products round up to {friendly ? 'the next 100' : 'full cartons'}</div>
+            <div className="text-[11px] font-bold text-heading">{mode === 'manual' ? 'Order (manual per product)' : 'Order Target'}</div>
+            <div className="text-[9px] text-muted mt-0.5">{mode === 'manual' ? 'Set each product below — rounds up to ' : 'Products round up to '}{friendly ? 'the next 100' : 'full cartons'}</div>
           </div>
-          <input type="number" value={orderQty} onChange={e => onQty(Number(e.target.value))}
-            className="w-28 px-3 py-2 rounded-lg bg-black/30 border border-blue-500/30 text-blue-300 text-right tabular-nums text-lg font-bold" />
+          {mode === 'manual'
+            ? <div className="w-28 px-3 py-2 rounded-lg bg-black/20 border border-blue-500/20 text-blue-300/70 text-right tabular-nums text-lg font-bold">{fmt(orderTotal)}</div>
+            : <input type="number" value={orderQty} onChange={e => onQty(Number(e.target.value))}
+                className="w-28 px-3 py-2 rounded-lg bg-black/30 border border-blue-500/30 text-blue-300 text-right tabular-nums text-lg font-bold" />}
         </div>
         <div className="flex items-center gap-2 mt-3 pt-3 border-t border-blue-500/20">
           <span className="text-[10px] text-muted">Rounding:</span>
@@ -863,9 +906,9 @@ function StepOrder({ family: f, annualDemand, gap, orderQty, onQty, friendly, on
             className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${!friendly ? 'bg-blue-500 text-white' : 'bg-border/30 text-muted hover:bg-border/50'}`}>Cartons</button>
           <button onClick={() => onFriendly(true)}
             className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${friendly ? 'bg-blue-500 text-white' : 'bg-border/30 text-muted hover:bg-border/50'}`}>Friendly (100s)</button>
-          <span className="ml-auto text-[10px] text-muted">Order total: <span className="text-heading font-bold tabular-nums">{fmt(alloc.total)}</span> units</span>
+          <span className="ml-auto text-[10px] text-muted">Order total: <span className="text-heading font-bold tabular-nums">{fmt(orderTotal)}</span> units</span>
         </div>
-        {alloc.total > 0 && (
+        {orderTotal > 0 && (
           <div className="flex items-center gap-4 mt-3 pt-3 border-t border-blue-500/20 text-[10px]">
             <span className="text-muted">MFR: <span className="text-heading font-bold">{fK(costs.mfr)}</span></span>
             <span className="text-muted">Ship: <span className="text-heading font-bold">{fK(costs.ship)}</span></span>
@@ -884,7 +927,7 @@ function StepOrder({ family: f, annualDemand, gap, orderQty, onQty, friendly, on
           </div>
         </div>
         {f.variations.map(v => {
-          const qty = alloc.byProduct[v.name] ?? 0;
+          const qty = byProduct[v.name] ?? 0;
           const mfr = MFR[v.name] ?? 0;
           const ship = SHIP[v.name] ?? 0;
           const lot = !friendly && v.cartonQty > 1 ? `${Math.round(qty / v.cartonQty)} ct @ ${v.cartonQty}/box · ` : '';
@@ -897,7 +940,16 @@ function StepOrder({ family: f, annualDemand, gap, orderQty, onQty, friendly, on
               </div>
               <div className="flex items-center gap-4">
                 <span className="tabular-nums text-heading font-medium w-12 text-right">{fmt(v.inventory)}</span>
-                <span className="tabular-nums text-muted"><span className="text-faint">{fmt(fcstByProduct[v.name] ?? 0)} →</span> {fmt(qty)} units · {lot}{fK(qty * (mfr + ship))}</span>
+                <span className="tabular-nums text-muted inline-flex items-center gap-1">
+                  <span className="text-faint">{fmt(fcstByProduct[v.name] ?? 0)} →</span>
+                  {mode === 'manual'
+                    ? <input type="number" value={manualByProduct[v.name] ?? 0}
+                        onChange={e => onManualQty(v.name, Number(e.target.value) || 0)}
+                        onBlur={e => { const s = friendly ? 100 : (v.cartonQty > 0 ? v.cartonQty : 1); const raw = Number(e.target.value) || 0; onManualQty(v.name, raw > 0 ? Math.ceil(raw / s) * s : 0); }}
+                        className="w-20 px-2 py-1 rounded bg-black/30 border border-blue-500/30 text-blue-300 text-right tabular-nums font-bold" />
+                    : <span>{fmt(qty)} units</span>}
+                  <span>· {lot}{fK(qty * (mfr + ship))}</span>
+                </span>
               </div>
             </div>
           );
