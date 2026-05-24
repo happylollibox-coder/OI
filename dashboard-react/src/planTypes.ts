@@ -125,6 +125,67 @@ export function splitTrajectoryToProducts(
   return out;
 }
 
+// ─── Wizard-sourced forecast (effectiveProjs) ───────────────
+// Substitute the wizard's saved plan into a runSim MonthProj[]: planned families get units from
+// `plannedUnits` (per product × monthKey), revenue/cogs from units×asp/cost, family ad spend from
+// `plannedSpend` (per family × monthKey), and P&L reconstructed. Unplanned families pass the runSim
+// entry through unchanged. Inventory carries sequentially across months (planned products only).
+// Per-product ad spend is a units-share allocation of the family spend — display-only, NOT a real
+// per-variation signal. A planned product missing a given month falls back to that month's runSim demand.
+type EffFamily = {
+  family: string; asp: number; costPerUnit: number;
+  variations: { name: string; asp: number; costPerUnit: number; inventory: number }[];
+};
+export function buildEffectiveProjs(
+  projs: MonthProj[],
+  plannedUnits: Record<string, Record<string, number>>,
+  plannedSpend: Record<string, Record<string, number>>,
+  families: EffFamily[],
+  isPlanned: (family: string) => boolean,
+): MonthProj[] {
+  const famByName = new Map(families.map(f => [f.family, f]));
+  const curInv: Record<string, number> = {};
+  for (const f of families) for (const v of f.variations) curInv[v.name] = v.inventory;
+
+  return projs.map(p => {
+    const familiesData: MonthProj['families'] = {};
+    let tD = 0, tR = 0, tC = 0, tA = 0, tN = 0;
+    for (const [fam, fd] of Object.entries(p.families)) {
+      const fb = famByName.get(fam);
+      if (!fb || !isPlanned(fam)) {
+        familiesData[fam] = fd; // runSim passthrough
+        tD += fd.demand; tR += fd.revenue; tC += fd.cogs; tA += fd.adSpend; tN += fd.netProfit;
+        continue;
+      }
+      const familyAd = plannedSpend[fam]?.[p.key] ?? 0;
+      const unitsByV: Record<string, number> = {};
+      let famUnits = 0;
+      for (const v of fb.variations) {
+        const u = plannedUnits[v.name]?.[p.key] ?? fd.vars[v.name]?.demand ?? 0;
+        unitsByV[v.name] = u; famUnits += u;
+      }
+      const vars: MonthProj['families'][string]['vars'] = {};
+      let fDemand = 0, fRev = 0, fCogs = 0, fAd = 0, fNp = 0, fInvEnd = 0;
+      for (const v of fb.variations) {
+        const u = unitsByV[v.name];
+        const asp = v.asp > 0 ? v.asp : fb.asp;
+        const cpu = v.costPerUnit > 0 ? v.costPerUnit : fb.costPerUnit;
+        const rev = u * asp, cog = u * cpu;
+        const ad = famUnits > 0 ? familyAd * (u / famUnits) : 0; // display-only allocation
+        const np = rev - cog - ad;
+        const prev = curInv[v.name] ?? 0;
+        const ie = Math.max(0, prev - u);
+        curInv[v.name] = ie;
+        vars[v.name] = { demand: u, revenue: rev, cogs: cog, adSpend: ad, netProfit: np, invEnd: ie, isOos: prev - u <= 0 };
+        fDemand += u; fRev += rev; fCogs += cog; fAd += ad; fNp += np; fInvEnd += ie;
+      }
+      familiesData[fam] = { demand: fDemand, revenue: fRev, cogs: fCogs, adSpend: fAd, netProfit: fNp, invEnd: fInvEnd, isOos: fInvEnd <= 0, vars };
+      tD += fDemand; tR += fRev; tC += fCogs; tA += fAd; tN += fNp;
+    }
+    return { ...p, families: familiesData, totalDemand: tD, totalRevenue: tR, totalCogs: tC, totalAdSpend: tA, totalNetProfit: tN };
+  });
+}
+
 // ─── Order allocation ───────────────────────────────────────
 export interface OrderAllocation { byProduct: Record<string, number>; total: number; totalGap: number }
 

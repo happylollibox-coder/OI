@@ -1,5 +1,58 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs } from './planTypes';
+
+describe('buildEffectiveProjs', () => {
+  const effFams = [{
+    family: 'F', asp: 10, costPerUnit: 4,
+    variations: [
+      { name: 'A', asp: 10, costPerUnit: 4, inventory: 100 },
+      { name: 'B', asp: 10, costPerUnit: 4, inventory: 50 },
+    ],
+  }];
+  const mkVar = (demand: number) => ({ demand, revenue: demand * 10, cogs: demand * 4, adSpend: 5, netProfit: 1, invEnd: 0, isOos: false });
+  const mkProj = (key: string, a: number, b: number) => ({
+    month: key, key, days: 30,
+    families: { F: { demand: a + b, revenue: 0, cogs: 0, adSpend: 0, netProfit: 0, invEnd: 0, isOos: false, vars: { A: mkVar(a), B: mkVar(b) } } },
+    totalDemand: a + b, totalRevenue: 0, totalCogs: 0, totalAdSpend: 0, totalNetProfit: 0,
+  });
+  const projs = [mkProj('may26', 999, 999), mkProj('jun26', 999, 999)]; // runSim values (should be overridden)
+  const plannedUnits = { A: { may26: 30, jun26: 40 }, B: { may26: 10, jun26: 20 } };
+  const plannedSpend = { F: { may26: 100, jun26: 200 } };
+
+  it('rebuilds planned-family P&L from snapshot units + target spend, carrying inventory', () => {
+    const out = buildEffectiveProjs(projs, plannedUnits, plannedSpend, effFams, () => true);
+    const may = out[0].families.F;
+    expect(may.demand).toBe(40);
+    expect(may.revenue).toBe(400);   // 40 × 10
+    expect(may.cogs).toBe(160);      // 40 × 4
+    expect(may.adSpend).toBe(100);   // from target
+    expect(may.netProfit).toBe(140); // 400 − 160 − 100
+    expect(may.vars.A.adSpend).toBe(75);  // 100 × 30/40
+    expect(may.vars.A.invEnd).toBe(70);   // 100 − 30
+    expect(may.vars.B.invEnd).toBe(40);   // 50 − 10
+    // inventory carries into June: A 70 − 40 = 30
+    expect(out[1].families.F.vars.A.invEnd).toBe(30);
+    // per-product ad spend sums to the family spend
+    expect(out[0].families.F.vars.A.adSpend + out[0].families.F.vars.B.adSpend).toBeCloseTo(100, 6);
+    // month totals reflect the rebuilt family
+    expect(out[0].totalRevenue).toBe(400);
+    expect(out[0].totalNetProfit).toBe(140);
+  });
+
+  it('passes unplanned families through runSim unchanged', () => {
+    const out = buildEffectiveProjs(projs, plannedUnits, plannedSpend, effFams, () => false);
+    expect(out[0].families.F).toEqual(projs[0].families.F); // byte-for-byte
+    expect(out[0].families.F.vars.A.demand).toBe(999);
+  });
+
+  it('falls back to runSim demand for a planned product missing that month', () => {
+    const partial = { A: { may26: 30 } }; // A has no jun26, B absent entirely
+    const out = buildEffectiveProjs(projs, partial, plannedSpend, effFams, () => true);
+    expect(out[1].families.F.vars.A.demand).toBe(999); // jun26 → runSim fallback
+    expect(out[0].families.F.vars.B.demand).toBe(999); // B → runSim fallback
+    expect(out[0].families.F.vars.A.demand).toBe(30);  // A may26 → planned
+  });
+});
 
 describe('monthKey', () => {
   it('formats month + 2-digit year like the snapshot keys', () => {
