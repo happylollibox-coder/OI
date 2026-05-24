@@ -2015,9 +2015,6 @@ export function PlanPage({ data }: { data: DashboardData }) {
           <thead><tr className="text-muted border-b border-border">
             <th className="text-left py-2 px-2 w-40">Family</th>
             <th className="text-right py-2 px-2 w-20"><Tip text="Current daily ad spend across all campaigns">$/day <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
-            <th className="text-center py-2 px-2 w-36"><Tip text="Select a strategy that auto-computes per-month spend multipliers\nHISTORIC = mirror LY spend\nSEASONAL = off-season profit, peak volume\nCONSERVATIVE = max profit everywhere\nAGGRESSIVE = push volume everywhere">Strategy <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
-            <th className="text-right py-2 px-2 w-20"><Tip text="Average multiplier across all months">Avg Mult <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
-            <th className="text-right py-2 px-2 w-16"><Tip text="% of total orders driven by ads\nHigher = more dependent on ads">Ads% <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
             <th className="text-right py-2 px-2 w-20"><Tip text="Current inventory (FBA + Manufacturer)\nWeeks of stock in parentheses">Stock <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
             <th className="text-right py-2 px-2 w-20"><Tip text="Total simulated ad spend\nApr ’26 – Feb ’27">Ad Spend <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
             <th className="text-right py-2 px-2 w-16"><Tip text="(Revenue − COGS) ÷ Ad Spend\nSimulated gross profit per ad dollar">ROAS <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
@@ -2030,7 +2027,6 @@ export function PlanPage({ data }: { data: DashboardData }) {
           <tbody>
             {filteredFamilies.map(f => {
               const famMults = mults[f.family] ?? {};
-              const avgMult = Object.keys(famMults).length > 0 ? Object.values(famMults).reduce((a, v) => a + v, 0) / Object.values(famMults).length : 1;
               const oos = getOos(projs, f.family, false);
               const wks = getWos(f.inventory, projs, f.family, false);
               const isExp = expanded === f.family;
@@ -2054,7 +2050,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
               const fMfrTotal = prQty * fMfrCost;
               const fShipTotal = prQty * fShipCost;
               const fLanded = fMfrTotal + fShipTotal;
-              return (<FamilyRow key={f.family} f={f} avgMult={avgMult} famMults={famMults} strategy={strategies[f.family]} oos={oos} wks={wks} isExp={isExp} projs={projs}
+              return (<FamilyRow key={f.family} f={f} famMults={famMults} strategy={strategies[f.family]} oos={oos} wks={wks} isExp={isExp} projs={projs}
                 simAdSpend={fAd} simNetRoas={fNetRoas}
                 prQty={prQty} prLanded={fLanded}
                 actuals2026Full={actuals2026Full}
@@ -2100,8 +2096,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
             })}
             <tr className="border-t-2 border-border font-bold">
               <td className="py-2 px-2 text-heading">{isFiltered ? 'FILTERED TOTAL' : 'TOTAL'}</td>
-              <td className="text-right py-2 px-2 tabular-nums text-muted">{fM(curDaily)}</td><td></td>
-              <td className="text-right py-2 px-2 tabular-nums text-heading">{fM(simDaily)}</td><td></td>
+              <td className="text-right py-2 px-2 tabular-nums text-muted">{fM(curDaily)}</td>
               <td className="text-right py-2 px-2 tabular-nums text-muted">{fU(filteredFamilies.reduce((s, f) => s + f.inventory, 0))}</td>
               <td className="text-right py-2 px-2 tabular-nums text-heading">{fK(filteredTotals.adSpend)}</td>
               <td className={`text-right py-2 px-2 tabular-nums ${filteredTotals.netRoas >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>{filteredTotals.netRoas.toFixed(2)}×</td>
@@ -2239,8 +2234,8 @@ export function PlanPage({ data }: { data: DashboardData }) {
   );
 }
 
-function FamilyRow({ f, avgMult, famMults, strategy, oos, wks, isExp, projs, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, onGrowthChange, onStrategy, onMonthMult, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
-  f: FamilyBaseline; avgMult: number; famMults: Record<string, number>; strategy?: PlanStrategy; oos: string | null; wks: number; isExp: boolean; projs: MonthProj[];
+function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, onGrowthChange, onStrategy, onMonthMult, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
+  f: FamilyBaseline; famMults: Record<string, number>; strategy?: PlanStrategy; oos: string | null; wks: number; isExp: boolean; projs: MonthProj[];
   simAdSpend: number; simNetRoas: number;
   prQty: number; prLanded: number;
   actuals2026Full: Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
@@ -2293,33 +2288,6 @@ function FamilyRow({ f, avgMult, famMults, strategy, oos, wks, isExp, projs, sim
         </span>
       </td>
       <td className="text-right py-2 px-2 text-muted tabular-nums">{fM(f.dailySpend)}</td>
-      <td className="py-2 px-2 relative" onClick={e => { e.stopPropagation(); setShowStrategyMenu(!showStrategyMenu); }}>
-        <div 
-          className="flex items-center justify-between w-full text-[11px] py-1.5 px-2 rounded-md font-medium bg-white/5 border border-border/50 text-heading hover:border-blue-500/50 cursor-pointer transition-colors"
-          title={strategy ? STRATEGY_LABELS[strategy].tip.replace(/\n/g, ' · ') : ''}
-        >
-          <span className="truncate">{strategy ? `${STRATEGY_LABELS[strategy].icon} ${STRATEGY_LABELS[strategy].label}` : 'Optimized'}</span>
-          <ChevronDown size={12} className="text-faint flex-shrink-0 ml-1" />
-        </div>
-        {showStrategyMenu && (
-          <div className="absolute top-full left-2 right-2 mt-1 bg-[#1c1c2e] border border-border rounded-lg shadow-xl z-50 py-1" onClick={e => e.stopPropagation()}>
-            {STRATEGY_ORDER.map(s => {
-              const info = STRATEGY_LABELS[s];
-              return (
-                <button 
-                  key={s} 
-                  className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex items-center gap-2 ${strategy === s ? 'text-blue-300 bg-blue-500/10' : 'text-muted'}`}
-                  onClick={() => { onStrategy(s); setShowStrategyMenu(false); }}
-                >
-                  <span className="w-4 text-center">{info.icon}</span> {info.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </td>
-      <td className={`text-right py-2 px-2 tabular-nums font-medium ${avgMult > 1.05 ? 'text-emerald-400' : avgMult < 0.95 ? 'text-red-400' : 'text-muted'}`}>{avgMult.toFixed(2)}×</td>
-      <td className="text-right py-2 px-2 tabular-nums text-muted">{fP(f.adsShare * 100)}</td>
       <td className="text-right py-2 px-2 tabular-nums text-muted">{fU(f.inventory)} <span className="text-faint text-[9px]">({wks}w)</span></td>
       <td className="text-right py-2 px-2 tabular-nums text-heading">
         <div>{fK(simAdSpend)}</div>
@@ -2343,8 +2311,35 @@ function FamilyRow({ f, avgMult, famMults, strategy, oos, wks, isExp, projs, sim
       <td className="text-right py-2 px-2 tabular-nums text-heading font-medium">{prQty > 0 ? fmt(prQty) : '—'}</td>
       <td className="text-right py-2 px-2 tabular-nums text-heading font-bold">{prLanded > 0 ? fK(prLanded) : '—'}</td>
     </tr>
-    {isExp && <tr><td colSpan={13} className="p-0">
+    {isExp && <tr><td colSpan={10} className="p-0">
       <div className="bg-surface/50 border-y border-border/50 px-4 py-3 space-y-3">
+
+        {/* Strategy preset — auto-computes the per-month multipliers below */}
+        <div className="flex items-center gap-2 mb-2 relative">
+          <span className="text-[10px] text-muted font-medium">Strategy:</span>
+          <div className="relative" onClick={e => { e.stopPropagation(); setShowStrategyMenu(!showStrategyMenu); }}>
+            <div className="flex items-center justify-between gap-2 w-44 text-[11px] py-1 px-2 rounded-md font-medium bg-white/5 border border-border/50 text-heading hover:border-blue-500/50 cursor-pointer transition-colors"
+              title={strategy ? STRATEGY_LABELS[strategy].tip.replace(/\n/g, ' · ') : ''}>
+              <span className="truncate">{strategy ? `${STRATEGY_LABELS[strategy].icon} ${STRATEGY_LABELS[strategy].label}` : 'Optimized'}</span>
+              <ChevronDown size={12} className="text-faint flex-shrink-0 ml-1" />
+            </div>
+            {showStrategyMenu && (
+              <div className="absolute top-full left-0 mt-1 w-56 bg-[#1c1c2e] border border-border rounded-lg shadow-xl z-50 py-1" onClick={e => e.stopPropagation()}>
+                {STRATEGY_ORDER.map(s => {
+                  const info = STRATEGY_LABELS[s];
+                  return (
+                    <button key={s}
+                      className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex items-center gap-2 ${strategy === s ? 'text-blue-300 bg-blue-500/10' : 'text-muted'}`}
+                      onClick={() => { onStrategy(s); setShowStrategyMenu(false); }}>
+                      <span className="w-4 text-center">{info.icon}</span> {info.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <span className="text-[9px] text-faint">auto-sets the monthly multipliers below</span>
+        </div>
 
         {/* Per-month multiplier overrides */}
         <div className="flex items-center gap-2 flex-wrap mb-2">
