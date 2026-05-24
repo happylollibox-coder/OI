@@ -6,7 +6,7 @@ import type {
   FamilyBaseline, AdsEfficiencyMap, ForecastDemandMap, ForecastMetaMap,
   MonthSeasonMap, MonthDef, MonthProj,
 } from '../planTypes';
-import { MFR, SHIP, allocateOrder, splitTrajectoryToProducts } from '../planTypes';
+import { MFR, SHIP, allocateOrder, splitTrajectoryToProducts, monthKey } from '../planTypes';
 
 const STEPS = [
   { id: 1, label: 'Baseline' },
@@ -129,14 +129,21 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
     return arr;
   }, [actuals2025, f.variations]);
 
-  // Per-product per-month forecast from the chosen Ads Path, split by demand share.
+  // Per-product per-month forecast from the chosen Ads Path. The family month total (which carries
+  // the spend decision + seasonality) is distributed by each product's per-month runSim demand
+  // share — so seasonality is counted once, not compounded.
   const inHorizon = useCallback(
     (mo: number, yr: number) => months.some(m => m.month === mo && m.year === yr),
     [months],
   );
+  const runSimUnits = useCallback(
+    (name: string, mo: number, yr: number) =>
+      projs.find(p => p.key === monthKey(mo, yr))?.families[f.family]?.vars[name]?.demand ?? 0,
+    [projs, f.family],
+  );
   const plannedMonthly = useMemo(
-    () => splitTrajectoryToProducts(trajectory, f.variations, inHorizon),
-    [trajectory, f.variations, inHorizon],
+    () => splitTrajectoryToProducts(trajectory, f.variations, inHorizon, runSimUnits),
+    [trajectory, f.variations, inHorizon, runSimUnits],
   );
 
   // Fix #1: Sync orderQty to gap until user manually edits it

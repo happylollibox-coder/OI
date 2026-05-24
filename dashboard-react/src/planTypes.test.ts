@@ -34,27 +34,37 @@ describe('splitTrajectoryToProducts', () => {
   ];
   const inHorizon = () => true;
 
-  it('splits forecast slices by share and keys by month', () => {
+  it('distributes each family month total by per-month runSim share (no seasonality double-count)', () => {
     const traj = [
-      { mo: 5, yr: 2026, totalUnits: 40, isActual: true },  // current MTD — excluded
-      { mo: 5, yr: 2026, totalUnits: 60, isActual: false },  // current remainder
-      { mo: 6, yr: 2026, totalUnits: 200 },                  // future
+      { mo: 5, yr: 2026, totalUnits: 40, isActual: true },   // current MTD — excluded
+      { mo: 5, yr: 2026, totalUnits: 100, isActual: false },  // May family total
+      { mo: 12, yr: 2026, totalUnits: 200 },                  // Dec family total
     ];
-    const out = splitTrajectoryToProducts(traj, splitVars, inHorizon);
-    expect(out.White).toEqual({ may26: 45, jun26: 150 });
-    expect(out.Purple).toEqual({ may26: 15, jun26: 50 });
+    // runSim share shifts by month: May White-heavy (80/20), Dec Purple-heavy (25/75)
+    const runSim = (name: string, mo: number) =>
+      mo === 5 ? (name === 'White' ? 80 : 20) : mo === 12 ? (name === 'White' ? 50 : 150) : 0;
+    const out = splitTrajectoryToProducts(traj, splitVars, inHorizon, runSim);
+    expect(out.White).toEqual({ may26: 80, dec26: 50 });    // 100×0.8, 200×0.25
+    expect(out.Purple).toEqual({ may26: 20, dec26: 150 });  // 100×0.2, 200×0.75
+  });
+
+  it('falls back to static splitPct when a month has no runSim demand', () => {
+    const traj = [{ mo: 6, yr: 2026, totalUnits: 100 }];
+    const out = splitTrajectoryToProducts(traj, splitVars, inHorizon, () => 0);
+    expect(out.White).toEqual({ jun26: 75 });
+    expect(out.Purple).toEqual({ jun26: 25 });
   });
 
   it('drops months outside the horizon', () => {
     const traj = [{ mo: 3, yr: 2027, totalUnits: 100 }];
-    const out = splitTrajectoryToProducts(traj, splitVars, (mo, yr) => !(mo === 3 && yr === 2027));
+    const out = splitTrajectoryToProducts(traj, splitVars, (mo, yr) => !(mo === 3 && yr === 2027), () => 50);
     expect(out.White).toEqual({});
     expect(out.Purple).toEqual({});
   });
 
-  it('equal-splits when no product has share data', () => {
+  it('equal-splits when neither runSim nor splitPct have data', () => {
     const traj = [{ mo: 6, yr: 2026, totalUnits: 100 }];
-    const out = splitTrajectoryToProducts(traj, [{ name: 'A', splitPct: 0 }, { name: 'B', splitPct: 0 }], inHorizon);
+    const out = splitTrajectoryToProducts(traj, [{ name: 'A', splitPct: 0 }, { name: 'B', splitPct: 0 }], inHorizon, () => 0);
     expect(out.A).toEqual({ jun26: 50 });
     expect(out.B).toEqual({ jun26: 50 });
   });

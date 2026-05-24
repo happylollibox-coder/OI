@@ -90,15 +90,21 @@ export function composeMonthlyPlan(
   return { byMonth, total };
 }
 
-// Split a family's per-month trajectory into per-product per-month forecast by demand share.
-// Excludes isActual slices (current-month MTD is taken from real actuals downstream). Only
-// keeps months for which inHorizon(mo, yr) is true.
+// Split a family's per-month trajectory into per-product per-month forecast.
+// The family month total `t.totalUnits` (which carries the chosen ad-spend level AND seasonality)
+// is distributed by each product's OWN runSim demand share for that month:
+//   forecast[p][mo] = t.totalUnits × ( runSim[p][mo] / Σ runSim[·][mo] )
+// Seasonality is counted ONCE — it lives in t.totalUnits; the per-product share is a dimensionless
+// ratio (per-product seasonal share shifts are preserved, not multiplied in again). Falls back to
+// the static splitPct (then equal split) when a month has no runSim demand. Excludes isActual
+// slices (current-month MTD comes from real actuals downstream) and months outside the horizon.
 export function splitTrajectoryToProducts(
   trajectory: { mo: number; yr: number; totalUnits: number; isActual?: boolean }[],
   variations: { name: string; splitPct: number }[],
   inHorizon: (mo: number, yr: number) => boolean,
+  runSimUnits: (name: string, mo: number, yr: number) => number,
 ): Record<string, Record<string, number>> {
-  const totalShare = variations.reduce((s, v) => s + (v.splitPct > 0 ? v.splitPct : 0), 0);
+  const flatTotal = variations.reduce((s, v) => s + (v.splitPct > 0 ? v.splitPct : 0), 0);
   const n = variations.length;
   const out: Record<string, Record<string, number>> = {};
   for (const v of variations) out[v.name] = {};
@@ -106,10 +112,15 @@ export function splitTrajectoryToProducts(
     if (t.isActual) continue;
     if (!inHorizon(t.mo, t.yr)) continue;
     const key = monthKey(t.mo, t.yr);
-    for (const v of variations) {
-      const share = totalShare > 0 ? (v.splitPct > 0 ? v.splitPct : 0) : (n > 0 ? 1 / n : 0);
+    const sim = variations.map(v => Math.max(0, runSimUnits(v.name, t.mo, t.yr)));
+    const simTotal = sim.reduce((a, b) => a + b, 0);
+    variations.forEach((v, i) => {
+      const share = simTotal > 0
+        ? sim[i] / simTotal                                              // per-month runSim share
+        : flatTotal > 0 ? (v.splitPct > 0 ? v.splitPct : 0) / flatTotal  // fallback: static split
+        : n > 0 ? 1 / n : 0;                                             // fallback: equal
       out[v.name][key] = (out[v.name][key] ?? 0) + t.totalUnits * share;
-    }
+    });
   }
   return out;
 }
