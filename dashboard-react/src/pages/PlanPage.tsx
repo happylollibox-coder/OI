@@ -2366,7 +2366,7 @@ function FamilyRow({ f, avgMult, famMults, strategy, oos, wks, isExp, projs, sim
             <th className="text-right py-1.5 px-2"><Tip text="Current inventory\n(FBA + Manufacturer + AWD)\nWeeks of stock in parentheses">Stock <span className="text-faint text-[8px]">ⓘ</span></Tip></th>
             <th className="text-right py-1.5 px-2"><Tip text="Total simulated demand\nApr '26 – Feb '27">Need <span className="text-faint text-[8px]">ⓘ</span></Tip></th>
             <th className="text-right py-1.5 px-2"><Tip text="Need − Stock\nPositive = shortfall\nNegative = surplus">Gap <span className="text-faint text-[8px]">ⓘ</span></Tip></th>
-            <th className="text-right py-1.5 px-2"><Tip text="Suggested order quantity = Gap\n0 if stock covers demand">Order <span className="text-faint text-[8px]">ⓘ</span></Tip></th>
+            <th className="text-right py-1.5 px-2"><Tip text="Order to place = Gap rounded UP to whole cartons\nMatches the Buy Plan Summary\n0 if stock covers demand">Order <span className="text-faint text-[8px]">ⓘ</span></Tip></th>
             <th className="text-right py-1.5 px-2"><Tip text="Order × (mfr cost + shipping)\nTotal landed cost for this PO">Landed $ <span className="text-faint text-[8px]">ⓘ</span></Tip></th>
             <th className="text-center py-1.5 px-2"><Tip text="First month stock runs out">OOS <span className="text-faint text-[8px]">ⓘ</span></Tip></th>
             <th className="text-center py-1.5 px-2"><Tip text="Urgency wave for restocking\nW1 🔴 Apr–May: Critical\nW2 🟡 Jun–Aug: Plan now\nW3 🟢 Sep+: Not urgent">Wave <span className="text-faint text-[8px]">ⓘ</span></Tip></th>
@@ -2379,7 +2379,8 @@ function FamilyRow({ f, avgMult, famMults, strategy, oos, wks, isExp, projs, sim
               let totalNeed = 0;
               for (const p of projs) for (const fd of Object.values(p.families)) totalNeed += fd.vars[v.name]?.demand ?? 0;
               const gap = totalNeed - v.inventory;
-              const orderQty = gap > 0 ? Math.ceil(gap) : 0;
+              // Carton-rounded buy — matches the Buy Plan Summary card (ceil to whole cartons).
+              const orderQty = gap > 0 ? Math.ceil(gap / v.cartonQty) * v.cartonQty : 0;
               const meta = metaMap[v.name];
               return (<tr key={v.name} className="border-b border-border/20 hover:bg-white/[.01]">
                 <td className="py-1.5 px-2 font-medium">
@@ -2397,7 +2398,7 @@ function FamilyRow({ f, avgMult, famMults, strategy, oos, wks, isExp, projs, sim
                 <td className="text-right py-1.5 px-2 tabular-nums">{fU(v.inventory)} <span className="text-faint text-[8px]">({vWks}w)</span></td>
                 <td className="text-right py-1.5 px-2 tabular-nums">{fU(totalNeed)}</td>
                 <td className={`text-right py-1.5 px-2 tabular-nums font-bold ${gap > 0 ? 'text-red-400' : 'text-emerald-400'}`}>{gap > 0 ? `+${fU(gap)}` : fU(gap)}</td>
-                <td className="text-right py-1.5 px-2 tabular-nums font-bold">{orderQty > 0 ? fU(orderQty) : '—'}</td>
+                <td className="text-right py-1.5 px-2 tabular-nums font-bold">{orderQty > 0 ? <>{fU(orderQty)} <span className="text-faint text-[8px] font-normal">({Math.round(orderQty / v.cartonQty)} ct)</span></> : '—'}</td>
                 <td className="text-right py-1.5 px-2 tabular-nums">{orderQty > 0 ? fK(orderQty * (v.mfrCost + v.shipCost)) : '—'}</td>
                 <td className="text-center py-1.5 px-2">{vOos
                   ? <span className="text-[9px] font-bold text-red-400">{vOos}</span>
@@ -2591,6 +2592,13 @@ function FamilyRow({ f, avgMult, famMults, strategy, oos, wks, isExp, projs, sim
               </Tip>;
             })}
           </div>
+          {tab !== 'cmpUnits' && tab !== 'lastYear' && (
+            <div className="text-[9px] text-faint mb-1 flex flex-wrap gap-x-3 gap-y-0.5">
+              <span><span className="text-amber-400 font-semibold">Actual</span> = 2026 YTD</span>
+              <span><span className="text-cyan-400 font-semibold">Forecast</span> = your plan</span>
+              <span><span className="text-purple-400 font-semibold">2025</span> = last year</span>
+            </div>
+          )}
           <div className="overflow-x-auto"><table className="w-full text-[9px]">
             <thead><tr className="text-muted border-b border-border/30">
               <th className="text-left py-1 px-1.5 w-32">Variant</th>
@@ -3036,69 +3044,9 @@ function FamilyRow({ f, avgMult, famMults, strategy, oos, wks, isExp, projs, sim
                 );
               }
 
-              // ── Current Path + Target Path rows ──
-              {
-                const famEff = adsEfficiency[f.family];
-                if (famEff && Object.keys(famEff).length > 0 && (tab === 'units' || tab === 'adSpend' || tab === 'netProfit')) {
-                  // Current path (trailing 30d spend → seasonal efficiency)
-                  let cSum = 0;
-                  const cVals: { val: number | null }[] = [];
-                  for (const i of allMonthIdx) {
-                    const mo = i < 12 ? i + 1 : i - 11;
-                    const d = famEff[mo];
-                    const val = d ? (tab === 'units' ? d.currentForecastUnits : tab === 'adSpend' ? d.currentSpend : d.currentNetProfit) : null;
-                    if (val !== null) cSum += val;
-                    cVals.push({ val });
-                  }
-                  totalRows.push(
-                    <tr key="total-current" className="border-b border-cyan-500/10 bg-cyan-500/5">
-                      <td className="py-1.5 px-1.5 text-cyan-300 font-bold">Total</td>
-                      <td className="py-1.5 px-1.5">
-                        <Tip text={`Current path: trailing 30-day actual spend\n$${Math.round(Object.values(famEff)[0]?.currentDailySpend ?? 0)}/day run rate`}>
-                          <span className="text-cyan-400 font-bold">Current <span className="text-faint text-[8px]">ⓘ</span></span>
-                        </Tip>
-                      </td>
-                      {cVals.map((mv, i) => (
-                        <td key={i} className="text-right py-1.5 px-1.5 tabular-nums text-cyan-300">
-                          {mv.val !== null ? fmtVal(mv.val) : '—'}
-                        </td>
-                      ))}
-                      <td className="text-right py-1.5 px-1.5 tabular-nums font-bold text-cyan-300">
-                        {tab === 'units' ? fmt(Math.round(cSum)) : fK(cSum)}
-                      </td>
-                    </tr>
-                  );
-
-                  // Target path (historical avg daily spend → seasonal efficiency)
-                  let tSum = 0;
-                  const tVals: { val: number | null }[] = [];
-                  for (const i of allMonthIdx) {
-                    const mo = i < 12 ? i + 1 : i - 11;
-                    const d = famEff[mo];
-                    const val = d ? (tab === 'units' ? d.forecastUnits : tab === 'adSpend' ? d.suggestedSpend : d.targetNetProfit) : null;
-                    if (val !== null) tSum += val;
-                    tVals.push({ val });
-                  }
-                  totalRows.push(
-                    <tr key="total-target" className="border-b border-violet-500/10 bg-violet-500/5">
-                      <td className="py-1.5 px-1.5 text-violet-300 font-bold">Total</td>
-                      <td className="py-1.5 px-1.5">
-                        <Tip text={`Target path: historical avg spend\nSpend÷CPC × CVR ÷ AdsShare\nCPC: $${(Object.values(famEff).reduce((s, d) => s + d.cpc, 0) / Object.keys(famEff).length).toFixed(3)}\nUnit CVR: ${(Object.values(famEff).reduce((s, d) => s + d.unitCvrPct, 0) / Object.keys(famEff).length).toFixed(2)}%\nAds Share: ${(Object.values(famEff).reduce((s, d) => s + d.adsSharePct, 0) / Object.keys(famEff).length).toFixed(0)}%`}>
-                          <span className="text-violet-400 font-bold">Target <span className="text-faint text-[8px]">ⓘ</span></span>
-                        </Tip>
-                      </td>
-                      {tVals.map((mv, i) => (
-                        <td key={i} className="text-right py-1.5 px-1.5 tabular-nums text-violet-300">
-                          {mv.val !== null ? fmtVal(mv.val) : '—'}
-                        </td>
-                      ))}
-                      <td className="text-right py-1.5 px-1.5 tabular-nums font-bold text-violet-300">
-                        {tab === 'units' ? fmt(Math.round(tSum)) : fK(tSum)}
-                      </td>
-                    </tr>
-                  );
-                }
-              }
+              // (Legacy "Current path" / "Target path" famEff scenario rows removed —
+              //  the spend-scenario decision now lives in the wizard's Ads Path. Totals
+              //  shown are Actual = 2026 YTD · Forecast = your plan · 2025 = last year.)
 
               // Total 2025
               {
