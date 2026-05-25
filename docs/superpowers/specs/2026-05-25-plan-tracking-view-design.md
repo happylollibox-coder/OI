@@ -1,71 +1,65 @@
-# Plan Page — Forecast / Tracking Toggle (family-level target vs actual)
+# Approved-Plan Tracking Scorecard — plan vs actual by period
 
 **Date:** 2026-05-25
-**Component:** `dashboard-react/src/pages/PlanPage.tsx` (family overview table in `Section`)
+**Component:** `dashboard-react/src/pages/PlanPage.tsx` (the `PlanVsRealityPanel`)
 **Status:** Design — pending review
-**Builds on:** the wizard-sourced-forecast rewire (`2026-05-24-wizard-sourced-forecast-design.md`) and the Approved-Plan-vs-Reality panel.
+**Builds on:** the wizard-sourced-forecast rewire + the existing Approved-Plan-vs-Reality panel.
 
-## Problem
+## Problem / use case
 
-The family overview table is a **forecast / P&L summary** ($/day, Stock, Ad Spend, ROAS, YTD NP, EOY NP, OOS, PR Qty, Landed $). It answers *"what's the plan and what will it earn?"* — not *"am I executing to my plan?"* The user wants a family-level **target-vs-actual** view: ad spend, units sold, unit stock, CPC.
+> "Let's say I approved a plan. After a week I want to see, per each measure I approved in the wizard, the **forecast vs the actual** done that week — ad spend, CPC, sold units, net profit."
 
-## Goal
+So the need is an **approved-plan adherence scorecard**: for a chosen recent **period**, per family, show **plan vs actual** for the four wizard measures. Because any period after approval sits **inside** the plan horizon, plan and actual both exist for it — no Jan–Apr window mismatch.
 
-Add a **Forecast / Tracking toggle** above the family overview. Forecast = the current columns (unchanged). Tracking = per-family target-vs-actual for **ad spend, units sold, stock, CPC**, with **both** plan-to-date and full-horizon targets.
+The family **overview** table stays **Forecast-only** (the planning view). Tracking lives in the **panel** (already approved-gated, already a plan-vs-actual surface). Planning = overview; tracking = panel.
 
-## The key semantic issue (must resolve in review)
+## Measures (the four approved in the wizard)
 
-The wizard plan is **forward-looking**: the saved snapshot units and coach `daily_spend`/`cpc` targets cover the **horizon only — current month → Feb'27**. There are **no plan values for already-elapsed months (Jan–Apr'26)**. Actuals, conversely, are **Jan → now**. So:
+Per family, per period:
 
-- The plan and the actuals **only overlap in the current (partial) month**.
-- A naive "plan-to-date vs actual-to-date" over Jan→now is apples-to-oranges: the plan didn't exist for Jan–Apr.
+| Measure | Plan (forecast) | Actual |
+|---|---|---|
+| **Ad spend** | Σ coach `daily_spend_target` over the period | Σ `adCost` |
+| **CPC** | spend-weighted `cpc_target` | Σ adCost ÷ Σ clicks |
+| **Sold units** | Σ snapshot units over the period | Σ `units` |
+| **Net profit** | plan units × margin − plan spend | revenue − cogs − adCost |
 
-So "target vs actual" at a family level resolves cleanly into **three honest quantities**, which is how this view is defined:
+`margin = asp − costPerUnit` (family-weighted). Each cell shows **plan vs actual** with a Δ (and Δ%) and under/over coloring. Ad spend is family-grain (per the attribution rule); CPC family-grain.
 
-1. **This month (pace):** plan for the current month **prorated to today** vs actual MTD. Answers *"am I on pace this month?"* — the only true overlap.
-2. **Horizon target (full):** the plan total over current→Feb'27 — the forward commitment / goal.
-3. **Actual YTD:** Jan→now actuals — where the family stands today.
+## Period tabs
 
-The user's "plan-to-date + full-year" maps to (1) **pace this month** + (2) **horizon target**; (3) actual-YTD is the reference.
+A period selector (tabs) on the panel:
 
-## Layout (Tracking tab)
+1. **By week** — default to the latest **complete** week; prev/next to step back through weeks since approval. Plan is **prorated** month→week (`monthPlan × daysOfWeekInMonth / daysInMonth`); approximate at week grain (assumes even within-month distribution). Needs **weekly actuals** (see Data).
+2. **By month** — pick a month (default current); plan = that month's stored plan (exact, no proration); actual = monthly actuals (already loaded).
+3. **Since approval** — cumulative from the approval date → now: Σ plan vs Σ actual over whole + partial elapsed months since approved.
 
-Per family row:
+## Layout
 
-| Family | Ad Spend (MTD act / MTD plan) | Ad Spend horizon target | Units (MTD act / MTD plan) | Units horizon target | Stock | CPC (act / target) |
-|---|---|---|---|---|---|---|
+Panel header: the existing title + a **period tab strip** (Week ‹ ›/ Month / Since approval). Below, a **per-family table**:
 
-- **Ad Spend — pace:** `actual MTD` vs `plan MTD` (Δ% badge: under/over). **horizon target:** Σ coach targets current→Feb'27.
-- **Units — pace:** `actual MTD` vs `plan MTD`. **horizon target:** Σ snapshot units current→Feb'27.
-- **Stock:** current inventory (actual only).
-- **CPC:** `actual` (YTD or trailing) vs `target` (weighted coach `cpc_target`). Single comparison (CPC isn't cumulative).
+| Family | Ad Spend (plan → actual, Δ%) | CPC (plan → actual) | Units (plan → actual, Δ%) | Net Profit (plan → actual, Δ%) |
 
-Unplanned families (no saved targets) show actual columns only, with "—" for plan/target and the existing "est · not planned" badge.
+Plus a TOTAL row. The existing per-product per-month **units/spend grid** becomes a secondary "By month detail" (kept, or folded under the Month tab) so we don't lose the monthly breakdown.
 
-## Data sources
+## Data
 
-- **Ad spend actual (MTD):** `actuals2026Full` `adCost` for the current month, summed over the family's products.
-- **Ad spend plan (MTD):** Σ coach `daily_spend_target` × elapsed-days-of-current-month (prorated) for the family; **horizon target** = Σ `daily_spend_target × days` over all plan months.
-- **Units actual (MTD):** `actuals2026Full` `units`, current month, family sum. **plan (MTD):** current-month snapshot units × (elapsedDays / daysInMonth). **horizon target** = Σ snapshot units current→Feb'27.
-- **Stock:** `f.inventory`.
-- **CPC actual:** from `channelEfficiency` (`AdsChannelEfficiency` — already loaded; carries spend + clicks per family) → `Σ spend / Σ clicks`. (If trailing-window CPC is preferred, use the channel-summary window already computed for the Ads Path.) **CPC target:** spend-weighted avg of the family's saved `cpc_target`.
-
-No new BigQuery objects; `AdsChannelEfficiency` and the coach targets are already fetched. (Targets are fetched per-family by the rewire's `plannedSpend`; reuse it — extend it to also keep `cpc_target` if needed.)
-
-## Toggle mechanism
-
-A `viewMode: 'forecast' | 'tracking'` state on the overview `Section`. Two pill buttons above the table (mirroring the existing Compare/tab styling). The `<thead>` and each family `<tr>` render the column set for the active mode; the expanded-row detail is shared/unchanged. Keep the row count aligned per mode.
+- **Plan (frozen at approval):** snapshot units (`snapshot_units_json` / `original_overrides_json` sibling) + coach targets (`DE_PLAN_ADS_TARGETS`, incl. `cpc_target`). Use the **approved/frozen** values, not live wizard edits.
+- **Monthly actuals:** `actuals2026Full` (units/sales/cogs/adCost) — already loaded. **No clicks** → CPC actual not available monthly without adding a clicks measure.
+- **Weekly actuals (NEW):** a Cube query by ISO week × family with `units, sales, cogs, adCost, clicks`. Required for the Week tab and for CPC actual. (The dashboard already queries weekly elsewhere — same `UnifiedPerformance` cube, week granularity + a `clicks` measure.)
+- **Approval date (PREREQ — confirmed gap):** the approve endpoint (`app.py:4584-4593`) only sets `status='APPROVED'` + bumps `updated_at`; there is **no `approved_at`** on `DE_PLAN_STRATEGY`. So "Since approval" needs either (a) a new `approved_at` column (backend + DDL + `config.yaml`), or (b) lean on `updated_at` — imperfect, since it also changes on later edits. Decide before building the cumulative tab; the Week/Month tabs don't need it.
 
 ## Scope
 
-**Changes:** the toggle + the Tracking column set (header + per-family cells + totals) in `Section`; reuse `plannedSpend`, `activeSnapshot`/`plannedUnits`, `actuals2026Full`, `channelEfficiency`.
+**Changes:** restructure `PlanVsRealityPanel` into the period-tabbed scorecard (4 measures × plan/actual per family); add a weekly-actuals fetch (+ clicks); wire CPC + net-profit plan/actual; keep the monthly units/spend grid as detail.
 
-**Keeps unchanged:** the Forecast columns (current view); the expanded-row detail; the wizard; the Approved-Plan-vs-Reality panel (the per-month drill-down — Tracking tab is the family summary).
+**Keeps unchanged:** the family **overview** (Forecast-only — no Tracking toggle after all); the wizard; the forecast rewire; the order math.
 
-**Out of scope:** per-month tracking in this table (that's the panel); reconstructing a Jan–Apr plan the wizard never produced; per-variation CPC (family-grain only, per the attribution rule).
+**Out of scope:** per-variation CPC/ad spend (family-grain only); reconstructing pre-approval history; changing the coach.
 
 ## Open questions / risks
 
-- **Window mismatch (above)** — confirm the "pace this month + horizon target + actual YTD" framing is what you want, vs a different cut.
-- **CPC actual window:** YTD vs trailing-N-months — which is more useful for the at-a-glance row?
-- **Column density:** ~10 columns; if too wide, collapse Ad Spend/Units "pace" into a single "act vs plan (Δ%)" cell with the horizon target as a tooltip.
+- **Placement** — confirm tracking lives in the panel (overview stays forecast), vs. you wanting it on the overview after all.
+- **Weekly proration** — month→week even split ignores intra-month seasonality (e.g. a Dec week near Christmas under-counts). Acceptable for a pace check? Or weekly only for spend/CPC (which are daily-target-based and prorate cleanly) and units/profit monthly?
+- **Approval date** — pending the backend check; the "Since approval" tab depends on it.
+- **CPC actual window** — within a period it's Σspend/Σclicks for that period; confirm that's the intended CPC (vs a trailing average).
