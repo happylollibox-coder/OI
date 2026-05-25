@@ -122,14 +122,6 @@ const ML = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','D
 
 // ─── Strategy System ───────────────────────────────────────
 type PlanStrategy = 'OPTIMIZED' | 'HISTORIC' | 'HISTORIC_PLUS' | 'SEASONAL' | 'CONSERVATIVE' | 'AGGRESSIVE';
-const STRATEGY_LABELS: Record<PlanStrategy, { icon: string; label: string; tip: string }> = {
-  OPTIMIZED:     { icon: '✨', label: 'Optimized',    tip: 'Mathematically maximize net profit per month\nUsing diminishing-returns ROAS model' },
-  HISTORIC:      { icon: '📊', label: 'Historic',     tip: 'Mirror last year\'s spend behavior per month' },
-  HISTORIC_PLUS: { icon: '📈', label: 'Historic+',    tip: 'Historic baseline with slight seasonal shift\nOffseason: 0.90× · Boost: 1.10× · Peak: 1.20×\nSave in offseason, push during peaks' },
-  SEASONAL:      { icon: '🌊', label: 'Seasonal',     tip: 'Off-season: max profit · Peak: push volume' },
-  CONSERVATIVE:  { icon: '🛡️', label: 'Conservative', tip: 'Maximize profit everywhere, sell fewer units' },
-  AGGRESSIVE:    { icon: '🚀', label: 'Aggressive',   tip: 'Push volume everywhere (default for NEW families)' },
-};
 // Strategy presets (STRATEGY_ORDER / STRATEGY_TARGETS / computeStrategyMults) were removed —
 // the wizard is now the only forecast lever; per-month mults are loaded from the saved plan and
 // drive only the runSim fallback for unplanned families. STRATEGY_LABELS is kept for the
@@ -1985,7 +1977,6 @@ export function PlanPage({ data }: { data: DashboardData }) {
           </tr></thead>
           <tbody>
             {filteredFamilies.map(f => {
-              const famMults = mults[f.family] ?? {};
               const oos = getOos(projs, f.family, false);
               const wks = getWos(f.inventory, projs, f.family, false);
               const isExp = expanded === f.family;
@@ -2009,7 +2000,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
               const fMfrTotal = prQty * fMfrCost;
               const fShipTotal = prQty * fShipCost;
               const fLanded = fMfrTotal + fShipTotal;
-              return (<FamilyRow key={f.family} f={f} famMults={famMults} strategy={strategies[f.family]} oos={oos} wks={wks} isExp={isExp} projs={projs}
+              return (<FamilyRow key={f.family} f={f} oos={oos} wks={wks} isExp={isExp} projs={projs}
                 simAdSpend={fAd} simNetRoas={fNetRoas}
                 prQty={prQty} prLanded={fLanded}
                 actuals2026Full={actuals2026Full}
@@ -2174,8 +2165,8 @@ export function PlanPage({ data }: { data: DashboardData }) {
   );
 }
 
-function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, planned, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
-  f: FamilyBaseline; famMults: Record<string, number>; strategy?: PlanStrategy; oos: string | null; wks: number; isExp: boolean; projs: MonthProj[];
+function FamilyRow({ f, oos, wks, isExp, projs, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, planned, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
+  f: FamilyBaseline; oos: string | null; wks: number; isExp: boolean; projs: MonthProj[];
   simAdSpend: number; simNetRoas: number;
   prQty: number; prLanded: number;
   actuals2026Full: Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
@@ -2245,27 +2236,6 @@ function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, 
     {isExp && <tr><td colSpan={10} className="p-0">
       <div className="bg-surface/50 border-y border-border/50 px-4 py-3 space-y-3">
 
-        {/* Forecast is set in the wizard — strategy + per-month multipliers shown read-only here.
-            They drive the runSim fallback for families not yet planned in the wizard. */}
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-[10px] text-muted font-medium">Strategy:</span>
-          <span className="text-[11px] text-heading" title={strategy ? STRATEGY_LABELS[strategy].tip.replace(/\n/g, ' · ') : ''}>
-            {strategy ? `${STRATEGY_LABELS[strategy].icon} ${STRATEGY_LABELS[strategy].label}` : 'Optimized'}
-          </span>
-          <span className="text-[9px] text-faint">set in the wizard</span>
-        </div>
-
-        {/* Per-month multipliers (read-only) */}
-        <div className="flex items-center gap-2 flex-wrap mb-2">
-          <span className="text-[10px] text-muted font-medium">Per-month mult:</span>
-          {MONTHS.map(m => {
-            const val = famMults[m.key] ?? 1;
-            return <div key={m.key} className="flex flex-col items-center gap-0.5">
-              <span className="text-[8px] text-faint">{m.label}</span>
-              <span className="w-12 text-center text-[10px] py-0.5 tabular-nums text-muted">{Number(val.toFixed(2))}</span>
-            </div>;
-          })}
-        </div>
         {/* Variation rows */}
         <table className="w-full text-[11px]">
           <thead><tr className="text-muted text-[9px] uppercase tracking-wide border-b border-border/30">
