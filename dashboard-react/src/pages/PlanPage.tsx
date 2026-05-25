@@ -130,107 +130,10 @@ const STRATEGY_LABELS: Record<PlanStrategy, { icon: string; label: string; tip: 
   CONSERVATIVE:  { icon: '🛡️', label: 'Conservative', tip: 'Maximize profit everywhere, sell fewer units' },
   AGGRESSIVE:    { icon: '🚀', label: 'Aggressive',   tip: 'Push volume everywhere (default for NEW families)' },
 };
-const STRATEGY_ORDER: PlanStrategy[] = ['OPTIMIZED', 'HISTORIC', 'HISTORIC_PLUS', 'SEASONAL', 'CONSERVATIVE', 'AGGRESSIVE'];
-// Each strategy defines TARGET effective ROAS per season tier
-// mult = clamp((baseRoas / targetRoas)², 0.1, 3.0)
-const STRATEGY_TARGETS: Record<PlanStrategy, { off: number; boost: number; peak: number }> = {
-  OPTIMIZED:     { off: 0, boost: 0, peak: 0 },             // special: computed per-month via grid search
-  HISTORIC:      { off: 0, boost: 0, peak: 0 },              // special: use LY actuals
-  HISTORIC_PLUS: { off: 0, boost: 0, peak: 0 },              // special: historic + slight seasonal bump
-  SEASONAL:      { off: 2.0, boost: 1.5, peak: 1.2 },        // off: profit-first, peak: push volume
-  CONSERVATIVE:  { off: 2.5, boost: 2.0, peak: 1.5 },        // high targets → low mults → less spend
-  AGGRESSIVE:    { off: 1.5, boost: 1.2, peak: 1.0 },        // low targets → high mults → more spend
-};
-
-function computeStrategyMults(
-  strategy: PlanStrategy,
-  family: string,
-  seasonMap: MonthSeasonMap,
-  forecastMap: ForecastRoasMap,
-  familyBaseline?: FamilyBaseline,
-  demandMap?: ForecastDemandMap,
-  growthOverrides?: Record<string, number>,
-): Record<string, number> {
-  const targets = STRATEGY_TARGETS[strategy];
-  const result: Record<string, number> = {};
-
-  for (const m of MONTHS) {
-    const yearMonth = m.year * 100 + m.month;
-    const season = seasonMap[family]?.[yearMonth];
-    const baseRoas = forecastMap[family]?.[m.month]?.roas ?? 1.0;
-
-    if (strategy === 'HISTORIC') {
-      result[m.key] = 1.0;
-      continue;
-    }
-
-    // ── HISTORIC_PLUS: slight seasonal shift — save in offseason, push in peaks ──
-    if (strategy === 'HISTORIC_PLUS') {
-      if (season) {
-        const totalDays = m.days;
-        const peakDays = season.peakDays ?? 0;
-        const offDays = season.offseasonDays ?? totalDays;
-        const boostDays = Math.max(0, totalDays - peakDays - offDays);
-        // Offseason: 0.90, Boost: 1.10, Peak: 1.20
-        const blended = (offDays * 0.90 + boostDays * 1.10 + peakDays * 1.20) / totalDays;
-        result[m.key] = Math.max(0.1, Math.min(3.0, blended));
-      } else {
-        result[m.key] = 0.90; // pure offseason month
-      }
-      continue;
-    }
-
-    // ── OPTIMIZED: grid search for profit-maximizing multiplier ──
-    if (strategy === 'OPTIMIZED' && familyBaseline && demandMap) {
-      const si = familyBaseline.seasonalityIndex[(m.month - 1)] ?? 1;
-      let bestMult = 1.0;
-      let bestProfit = -Infinity;
-
-      for (let trial = 10; trial <= 300; trial += 5) {
-        const tm = trial / 100; // 0.10 to 3.00
-        let totalNp = 0;
-        for (const v of familyBaseline.variations) {
-          const demandKey = m.year * 100 + m.month;
-          const rawDemand = demandMap[v.name]?.[demandKey] ?? Math.round(v.dailyOrders * si * m.days);
-          const baseDemand = Math.round(rawDemand * (growthOverrides?.[v.name] ?? 1.0));
-          const adjFactor = (1 - v.adsShare) + v.adsShare * tm;
-          const demand = baseDemand * adjFactor;
-          const asp = v.asp > 0 ? v.asp : familyBaseline.asp;
-          const cpu = v.costPerUnit > 0 ? v.costPerUnit : familyBaseline.costPerUnit;
-          const rev = demand * asp;
-          const cog = demand * cpu;
-          const grossProfit = rev - cog;
-          const effectiveRoas = baseRoas / Math.sqrt(tm);
-          const ad = effectiveRoas > 0 && grossProfit > 0 ? grossProfit / effectiveRoas : 0;
-          totalNp += grossProfit - ad;
-        }
-        if (totalNp > bestProfit) { bestProfit = totalNp; bestMult = tm; }
-      }
-      result[m.key] = bestMult;
-      continue;
-    }
-
-    if (season) {
-      const totalDays = m.days;
-      const peakDays = season.peakDays ?? 0;
-      const offDays = season.offseasonDays ?? totalDays;
-      const boostDays = Math.max(0, totalDays - peakDays - offDays);
-
-      const blendedTarget = (
-        offDays * targets.off +
-        boostDays * targets.boost +
-        peakDays * targets.peak
-      ) / totalDays;
-
-      const rawMult = blendedTarget > 0 ? Math.pow(baseRoas / blendedTarget, 2) : 1.0;
-      result[m.key] = Math.max(0.1, Math.min(3.0, rawMult));
-    } else {
-      const rawMult = targets.off > 0 ? Math.pow(baseRoas / targets.off, 2) : 1.0;
-      result[m.key] = Math.max(0.1, Math.min(3.0, rawMult));
-    }
-  }
-  return result;
-}
+// Strategy presets (STRATEGY_ORDER / STRATEGY_TARGETS / computeStrategyMults) were removed —
+// the wizard is now the only forecast lever; per-month mults are loaded from the saved plan and
+// drive only the runSim fallback for unplanned families. STRATEGY_LABELS is kept for the
+// read-only Strategy label on the expanded row.
 
 // ─── Types ─────────────────────────────────────────────────
 interface InvRow { product: string; sourceType: string; units: number }
@@ -2118,26 +2021,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
                 demandMap={demandMap}
                 ytdNp={ytdProfit.byFamily[f.family] ?? 0}
                 growthOverrides={effectiveGrowth}
-                onGrowthChange={(product: string, val: number) => {
-                  setGrowthOverrides(p => ({ ...p, [product]: val }));
-                  setOrderOverrides(p => {
-                    const next = { ...p };
-                    delete next[product];
-                    return next;
-                  });
-                  setPlanDirty(true); setPlanSaved(false);
-                }}
-                onStrategy={(strat: PlanStrategy) => {
-                  const newMults = computeStrategyMults(strat, f.family, seasonMap, forecastMap, f, demandMap, growthOverrides);
-                  setMults(p => ({ ...p, [f.family]: newMults }));
-                  setStrategies(p => ({ ...p, [f.family]: strat }));
-                  setOrderOverrides({}); // reset PR overrides to match new strategy
-                  setPlanDirty(true); setPlanSaved(false);
-                }}
-                onMonthMult={(monthKey: string, val: number) => {
-                  setMults(p => ({ ...p, [f.family]: { ...(p[f.family] ?? {}), [monthKey]: val } }));
-                  setPlanDirty(true); setPlanSaved(false);
-                }}
+                planned={isPlanned(f.family)}
                 onToggle={() => setExpanded(isExp ? null : f.family)}
                 baseCmp={baseStats?.byFamily?.[f.family]}
                 baseCmpType={baseStats?.type}
@@ -2290,7 +2174,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
   );
 }
 
-function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, onGrowthChange, onStrategy, onMonthMult, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
+function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, planned, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
   f: FamilyBaseline; famMults: Record<string, number>; strategy?: PlanStrategy; oos: string | null; wks: number; isExp: boolean; projs: MonthProj[];
   simAdSpend: number; simNetRoas: number;
   prQty: number; prLanded: number;
@@ -2302,9 +2186,9 @@ function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, 
   demandMap: ForecastDemandMap;
   ytdNp: number;
   growthOverrides: Record<string, number>;
-  onGrowthChange: (product: string, val: number) => void;
+  planned: boolean;
   forecastMap: ForecastRoasMap;
-  onStrategy: (s: PlanStrategy) => void; onMonthMult: (monthKey: string, val: number) => void; onToggle: () => void; onWizard: () => void;
+  onToggle: () => void; onWizard: () => void;
   baseCmp?: { ytdNp: number; totals: { revenue: number, cogs: number, adSpend: number, netProfit: number, demand: number, netRoas: number } };
   baseCmpType?: string;
   baseCmpProjs?: MonthProj[] | null;
@@ -2322,16 +2206,6 @@ function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, 
     for (const p of projs) { const fd = p.families[f.family]; if (fd) np += fd.netProfit; }
     return np;
   }, [projs, f.family]);
-  const [showStrategyMenu, setShowStrategyMenu] = useState(false);
-  
-  // Close menu when clicking outside
-  useEffect(() => {
-    if (!showStrategyMenu) return;
-    const close = () => setShowStrategyMenu(false);
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [showStrategyMenu]);
-
   return (<>
     <tr className={`border-b border-border/30 hover:bg-white/[.02] cursor-pointer ${isExp ? 'bg-white/[.03]' : ''}`} onClick={onToggle}>
       <td className="py-2.5 px-2 font-medium text-heading">
@@ -2340,6 +2214,7 @@ function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, 
           <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: FAMILY_COLORS[f.family] ?? '#666' }} />
           {f.family}
           <span className="text-[9px] text-faint">({f.variations.length})</span>
+          {!planned && <span className="text-[8px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 font-medium" title="Not planned in the wizard — showing a runSim estimate">est · not planned</span>}
           <button onClick={e => { e.stopPropagation(); onWizard(); }} className="ml-1 px-1.5 py-0.5 rounded text-[9px] bg-blue-500/15 text-blue-400 hover:bg-blue-500/25 transition-colors" title="Open planning wizard">✨</button>
         </span>
       </td>
@@ -2370,43 +2245,24 @@ function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, 
     {isExp && <tr><td colSpan={10} className="p-0">
       <div className="bg-surface/50 border-y border-border/50 px-4 py-3 space-y-3">
 
-        {/* Strategy preset — auto-computes the per-month multipliers below */}
-        <div className="flex items-center gap-2 mb-2 relative">
+        {/* Forecast is set in the wizard — strategy + per-month multipliers shown read-only here.
+            They drive the runSim fallback for families not yet planned in the wizard. */}
+        <div className="flex items-center gap-2 mb-2">
           <span className="text-[10px] text-muted font-medium">Strategy:</span>
-          <div className="relative" onClick={e => { e.stopPropagation(); setShowStrategyMenu(!showStrategyMenu); }}>
-            <div className="flex items-center justify-between gap-2 w-44 text-[11px] py-1 px-2 rounded-md font-medium bg-white/5 border border-border/50 text-heading hover:border-blue-500/50 cursor-pointer transition-colors"
-              title={strategy ? STRATEGY_LABELS[strategy].tip.replace(/\n/g, ' · ') : ''}>
-              <span className="truncate">{strategy ? `${STRATEGY_LABELS[strategy].icon} ${STRATEGY_LABELS[strategy].label}` : 'Optimized'}</span>
-              <ChevronDown size={12} className="text-faint flex-shrink-0 ml-1" />
-            </div>
-            {showStrategyMenu && (
-              <div className="absolute top-full left-0 mt-1 w-56 bg-[#1c1c2e] border border-border rounded-lg shadow-xl z-50 py-1" onClick={e => e.stopPropagation()}>
-                {STRATEGY_ORDER.map(s => {
-                  const info = STRATEGY_LABELS[s];
-                  return (
-                    <button key={s}
-                      className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex items-center gap-2 ${strategy === s ? 'text-blue-300 bg-blue-500/10' : 'text-muted'}`}
-                      onClick={() => { onStrategy(s); setShowStrategyMenu(false); }}>
-                      <span className="w-4 text-center">{info.icon}</span> {info.label}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-          <span className="text-[9px] text-faint">auto-sets the monthly multipliers below</span>
+          <span className="text-[11px] text-heading" title={strategy ? STRATEGY_LABELS[strategy].tip.replace(/\n/g, ' · ') : ''}>
+            {strategy ? `${STRATEGY_LABELS[strategy].icon} ${STRATEGY_LABELS[strategy].label}` : 'Optimized'}
+          </span>
+          <span className="text-[9px] text-faint">set in the wizard</span>
         </div>
 
-        {/* Per-month multiplier overrides */}
+        {/* Per-month multipliers (read-only) */}
         <div className="flex items-center gap-2 flex-wrap mb-2">
           <span className="text-[10px] text-muted font-medium">Per-month mult:</span>
           {MONTHS.map(m => {
             const val = famMults[m.key] ?? 1;
             return <div key={m.key} className="flex flex-col items-center gap-0.5">
               <span className="text-[8px] text-faint">{m.label}</span>
-              <input type="number" min={0.1} max={3} step={0.05} value={Number(val.toFixed(2))}
-                onChange={e => onMonthMult(m.key, Math.max(0.1, Math.min(3, Number(e.target.value) || 1)))}
-                className="w-12 text-center text-[10px] bg-white/5 border border-border/40 rounded py-0.5 tabular-nums text-heading focus:border-blue-500/60 focus:outline-none" />
+              <span className="w-12 text-center text-[10px] py-0.5 tabular-nums text-muted">{Number(val.toFixed(2))}</span>
             </div>;
           })}
         </div>
@@ -2514,15 +2370,9 @@ function FamilyRow({ f, famMults, strategy, oos, wks, isExp, projs, simAdSpend, 
                   <span className="text-faint">·</span>
                   {v.dailyOrders.toFixed(1)}/d
                   <span className="text-faint">·</span>
-                  <Tip text={`Demand growth override for ${v.name}\n0% = forecast as-is\n+10% = 10% more demand\n−10% = 10% less demand`}>
+                  <Tip text={`Demand growth for ${v.name} (set in the wizard)\n0% = forecast as-is\n+10% = 10% more demand`}>
                     <span className="inline-flex items-center gap-0.5">
-                      <input type="number" step="any"
-                        value={grPct}
-                        onClick={e => e.stopPropagation()}
-                        onChange={e => { e.stopPropagation(); onGrowthChange(v.name, 1 + (Number(e.target.value) || 0) / 100); }}
-                        className={`w-12 text-center text-[9px] bg-white/5 border rounded py-0.5 tabular-nums focus:outline-none ${
-                          gr !== 1.0 ? 'border-amber-500/50 text-amber-300' : 'border-border/40 text-heading'
-                        } focus:border-blue-500/60`} />
+                      <span className={`text-[9px] tabular-nums ${gr !== 1.0 ? 'text-amber-300' : 'text-heading'}`}>{grPct}</span>
                       <span className="text-[8px] text-faint">%</span>
                     </span>
                   </Tip>
