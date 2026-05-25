@@ -47,7 +47,7 @@ Plus a TOTAL row. The existing per-product per-month **units/spend grid** become
 - **Plan (frozen at approval):** snapshot units (`snapshot_units_json` / `original_overrides_json` sibling) + coach targets (`DE_PLAN_ADS_TARGETS`, incl. `cpc_target`). Use the **approved/frozen** values, not live wizard edits.
 - **Monthly actuals:** `actuals2026Full` (units/sales/cogs/adCost) — already loaded. **No clicks** → CPC actual not available monthly without adding a clicks measure.
 - **Weekly actuals (NEW):** a Cube query by ISO week × family with `units, sales, cogs, adCost, clicks`. Required for the Week tab and for CPC actual. (The dashboard already queries weekly elsewhere — same `UnifiedPerformance` cube, week granularity + a `clicks` measure.)
-- **Approval date (PREREQ — confirmed gap):** the approve endpoint (`app.py:4584-4593`) only sets `status='APPROVED'` + bumps `updated_at`; there is **no `approved_at`** on `DE_PLAN_STRATEGY`. So "Since approval" needs either (a) a new `approved_at` column (backend + DDL + `config.yaml`), or (b) lean on `updated_at` — imperfect, since it also changes on later edits. Decide before building the cumulative tab; the Week/Month tabs don't need it.
+- **Approval date — DECIDED: use `updated_at`.** No `approved_at` exists on `DE_PLAN_STRATEGY` and we will **not** add one (no backend change). The "Since approval" tab uses the plan's `updated_at` (bumped at approval) as the window start. Caveat: editing an approved plan re-bumps `updated_at`, shifting the start — accepted for v1.
 
 ## Scope
 
@@ -57,9 +57,13 @@ Plus a TOTAL row. The existing per-product per-month **units/spend grid** become
 
 **Out of scope:** per-variation CPC/ad spend (family-grain only); reconstructing pre-approval history; changing the coach.
 
-## Open questions / risks
+## Resolved decisions
 
-- **Placement** — confirm tracking lives in the panel (overview stays forecast), vs. you wanting it on the overview after all.
-- **Weekly proration** — month→week even split ignores intra-month seasonality (e.g. a Dec week near Christmas under-counts). Acceptable for a pace check? Or weekly only for spend/CPC (which are daily-target-based and prorate cleanly) and units/profit monthly?
-- **Approval date** — pending the backend check; the "Since approval" tab depends on it.
-- **CPC actual window** — within a period it's Σspend/Σclicks for that period; confirm that's the intended CPC (vs a trailing average).
+- **Placement:** tracking lives in the **panel** (approved-gated). The family **overview stays Forecast-only** (planning view) — no Tracking toggle on the overview.
+- **Weekly proration:** month→week even split is **accepted as a pace check** (all four measures), despite ignoring intra-month seasonality.
+- **Approval date:** use **`updated_at`** for the "Since approval" window (no backend change; accepts the edit-re-bump caveat).
+- **CPC actual:** **Σ spend ÷ Σ clicks** over the selected period.
+
+## Remaining risk
+
+- Weekly proration understates/overstates peak-adjacent weeks (accepted). The TOTAL/Month/Since-approval tabs are unaffected by intra-month split.
