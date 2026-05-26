@@ -70,6 +70,38 @@ export function monthKey(mo: number, yr: number): string {
   return `${MONTH_ABBR[mo - 1]}${String(yr).slice(2)}`;
 }
 
+// Fraction of each calendar month covered by the inclusive date range [startISO, endISO].
+// Keyed by monthKey (e.g. "may26"). Used to prorate a monthly plan over an arbitrary period.
+export function monthFractions(startISO: string, endISO: string): Record<string, number> {
+  const start = new Date(startISO + 'T00:00:00');
+  const end = new Date(endISO + 'T00:00:00');
+  const out: Record<string, number> = {};
+  const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+  while (cur <= end) {
+    const y = cur.getFullYear(), m = cur.getMonth();
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const mStart = new Date(y, m, 1), mEnd = new Date(y, m, daysInMonth);
+    const lo = start > mStart ? start : mStart;
+    const hi = end < mEnd ? end : mEnd;
+    const days = Math.round((hi.getTime() - lo.getTime()) / 86400000) + 1;
+    if (days > 0) out[monthKey(m + 1, y)] = days / daysInMonth;
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  return out;
+}
+
+// Σ monthlyMap[k] × fractions[k] — prorate a monthly series over a period.
+export function sumOverPeriod(monthlyMap: Record<string, number>, fractions: Record<string, number>): number {
+  let s = 0;
+  for (const [k, frac] of Object.entries(fractions)) s += (monthlyMap[k] ?? 0) * frac;
+  return s;
+}
+
+// Plan net profit for a period given prorated plan units, family margin, and prorated plan spend.
+export function netProfitPlan(planUnits: number, margin: number, planSpend: number): number {
+  return planUnits * margin - planSpend;
+}
+
 export interface MonthlyPlan { byMonth: Record<string, number>; total: number }
 
 // Merge actual (elapsed + current-MTD) over forecast (current-remainder + future) across an

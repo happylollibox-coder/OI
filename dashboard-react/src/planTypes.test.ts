@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions } from './planTypes';
 
 describe('buildEffectiveProjs', () => {
   const effFams = [{
@@ -51,6 +51,33 @@ describe('buildEffectiveProjs', () => {
     expect(out[1].families.F.vars.A.demand).toBe(999); // jun26 → runSim fallback
     expect(out[0].families.F.vars.B.demand).toBe(999); // B → runSim fallback
     expect(out[0].families.F.vars.A.demand).toBe(30);  // A may26 → planned
+  });
+});
+
+describe('monthFractions', () => {
+  it('returns 1.0 for a full single month', () => {
+    expect(monthFractions('2026-05-01', '2026-05-31')).toEqual({ may26: 1 });
+  });
+  it('returns a partial fraction within one month', () => {
+    const f = monthFractions('2026-05-01', '2026-05-07');
+    expect(f.may26).toBeCloseTo(7 / 31, 6);
+    expect(Object.keys(f)).toEqual(['may26']);
+  });
+  it('splits a week spanning two months', () => {
+    const f = monthFractions('2026-04-29', '2026-05-05');
+    expect(f.apr26).toBeCloseTo(2 / 30, 6);
+    expect(f.may26).toBeCloseTo(5 / 31, 6);
+  });
+  it('spans multiple whole + partial months (since-approval style)', () => {
+    const f = monthFractions('2026-05-10', '2026-07-15');
+    expect(f.may26).toBeCloseTo(22 / 31, 6);
+    expect(f.jun26).toBeCloseTo(1, 6);
+    expect(f.jul26).toBeCloseTo(15 / 31, 6);
+  });
+  it('crosses the year boundary', () => {
+    const f = monthFractions('2026-12-28', '2027-01-03');
+    expect(f.dec26).toBeCloseTo(4 / 31, 6);
+    expect(f.jan27).toBeCloseTo(3 / 31, 6);
   });
 });
 
