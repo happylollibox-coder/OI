@@ -898,6 +898,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
   // Fetch monthly actuals from Cube using DAILY grain (not weekly) to avoid
   // cross-month week boundary misattribution (e.g., week_start Mar 29 → includes Apr 1-4)
   interface ActualMonth { units: number; revenue: number; cogs: number; adCost: number }
+  interface WeekActual { units: number; revenue: number; cogs: number; adCost: number; clicks: number }
   const [actuals2026Full, setActuals2026] = useState<Map<string, Map<number, ActualMonth>>>(new Map());
   const [actuals2025Full, setActuals2025] = useState<Map<string, Map<number, ActualMonth>>>(new Map());
   useEffect(() => {
@@ -932,6 +933,40 @@ export function PlanPage({ data }: { data: DashboardData }) {
     };
     fetchActuals(2026, setActuals2026);
     fetchActuals(2025, setActuals2025);
+  }, []);
+
+  // Weekly actuals (incl. clicks, for the tracking scorecard's Week tab + CPC actual).
+  // Map<productShortName, Map<weekStartISO, WeekActual>>.
+  const [actualsWeekly, setActualsWeekly] = useState<Map<string, Map<string, WeekActual>>>(new Map());
+  useEffect(() => {
+    (async () => {
+      try {
+        const now = new Date();
+        const endDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const rows = await cubeLoad({
+          dimensions: ['UnifiedPerformance.productShortName', 'UnifiedPerformance.weekStart'],
+          measures: ['UnifiedPerformance.units', 'UnifiedPerformance.sales', 'UnifiedPerformance.cogs', 'UnifiedPerformance.adCost', 'UnifiedPerformance.clicks'],
+          timeDimensions: [{ dimension: 'UnifiedPerformance.date', dateRange: ['2026-01-01', endDate] }],
+        });
+        const map = new Map<string, Map<string, WeekActual>>();
+        for (const r of rows as Record<string, unknown>[]) {
+          const name = String(r['UnifiedPerformance.productShortName'] ?? '');
+          const wkRaw = String(r['UnifiedPerformance.weekStart'] ?? '');
+          if (!name || !wkRaw) continue;
+          const wk = wkRaw.slice(0, 10);
+          if (!map.has(name)) map.set(name, new Map());
+          map.get(name)!.set(wk, {
+            units: Number(r['UnifiedPerformance.units'] ?? 0),
+            revenue: Number(r['UnifiedPerformance.sales'] ?? 0),
+            cogs: Number(r['UnifiedPerformance.cogs'] ?? 0),
+            adCost: Number(r['UnifiedPerformance.adCost'] ?? 0),
+            clicks: Number(r['UnifiedPerformance.clicks'] ?? 0),
+          });
+        }
+        console.log('[PlanPage] weekly actuals loaded:', map.size, 'products');
+        setActualsWeekly(map);
+      } catch (e) { console.warn('[PlanPage] weekly actuals load failed', e); }
+    })();
   }, []);
 
   // Branded search monthly data (per-family: branded + total channels)
