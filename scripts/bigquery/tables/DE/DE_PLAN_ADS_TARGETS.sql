@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS `onyga-482313`.OI.DE_PLAN_ADS_TARGETS (
   season_type         STRING,                -- 'PEAK' or 'OFF'
   multiplier_k        FLOAT64,               -- spend multiplier vs baseline
 
+  -- ROAS reference (frozen at save; helps the coach judge halo + direction)
+  ly_ad_net_roas      FLOAT64,               -- ad-only Net ROAS, this channel, 2025 (from V_ADS_CHANNEL_EFFICIENCY)
+  cy_ad_net_roas      FLOAT64,               -- ad-only Net ROAS, this channel, 2026
+  ly_net_roas         FLOAT64,               -- blended (organic-incl) Net ROAS, family-month, 2025
+  cy_net_roas         FLOAT64,               -- blended (organic-incl) Net ROAS, family-month, 2026
+
   -- Metadata
   plan_strategy_id    STRING,                -- links to DE_PLAN_STRATEGY.id
   created_at          TIMESTAMP   DEFAULT CURRENT_TIMESTAMP(),
