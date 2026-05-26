@@ -5,7 +5,7 @@ import type { DashboardData, ShipmentPlanRow } from '../types';
 import { useShipmentPlan, useScheduledShipments, useShipmentHistory, ReplenishmentFlowSection, ShipmentCardSection } from '../components/ShipmentEngine';
 import { PlanWizard } from '../components/PlanWizard';
 import type { MonthDef } from '../planTypes';
-import { composeMonthlyPlan, monthKey, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange } from '../planTypes';
+import { composeMonthlyPlan, monthKey, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas } from '../planTypes';
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
@@ -1097,6 +1097,37 @@ export function PlanPage({ data }: { data: DashboardData }) {
 
   const isLoading = loading || fcLoading || dmLoading;
   const families = useMemo(() => isLoading ? [] : buildFamilyBaselines(data, inv, metaMap), [data, inv, metaMap, isLoading]);
+
+  // ─── Per-family ROAS reference (LY 2025 / CY 2026) ───
+  // blended (organic-incl) per family-year from total actuals; ad-only per family-year-channel as a
+  // spend-weighted avg of the view's per-month netRoas (AdsChannelEfficiency). Frozen onto ads targets at save.
+  const familyRoas = useMemo(() => {
+    const out: Record<string, {
+      blended: { 2025: number | null; 2026: number | null };
+      adOnly: Record<string, { 2025: number | null; 2026: number | null }>;
+    }> = {};
+    for (const f of families) {
+      const blendedFor = (yr: 2025 | 2026) => {
+        const src = yr === 2025 ? actuals2025Full : actuals2026Full;
+        const rows: { sales: number; cogs: number; adCost: number }[] = [];
+        for (const v of f.variations) { const mm = src.get(v.name); if (!mm) continue; for (const a of mm.values()) rows.push({ sales: a.revenue, cogs: a.cogs, adCost: a.adCost }); }
+        return blendedNetRoas(rows);
+      };
+      const adOnly: Record<string, { 2025: number | null; 2026: number | null }> = { BRAND: { 2025: null, 2026: null }, NON_BRAND: { 2025: null, 2026: null } };
+      for (const ch of ['BRAND', 'NON_BRAND']) {
+        for (const yr of [2025, 2026] as const) {
+          let num = 0, den = 0;
+          for (const r of channelEfficiency) {
+            if (r.family !== f.family || r.searchType !== ch || r.yr !== yr) continue;
+            if (r.spend > 0) { num += r.netRoas * r.spend; den += r.spend; }
+          }
+          adOnly[ch][yr] = den > 0 ? num / den : null;
+        }
+      }
+      out[f.family] = { blended: { 2025: blendedFor(2025), 2026: blendedFor(2026) }, adOnly };
+    }
+    return out;
+  }, [families, channelEfficiency, actuals2025Full, actuals2026Full]);
 
   // ─── Plan versioning state ────────────────────────────
   const [planList, setPlanList] = useState<PlanMeta[]>([]);
