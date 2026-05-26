@@ -5,7 +5,7 @@ import type { DashboardData, ShipmentPlanRow } from '../types';
 import { useShipmentPlan, useScheduledShipments, useShipmentHistory, ReplenishmentFlowSection, ShipmentCardSection } from '../components/ShipmentEngine';
 import { PlanWizard } from '../components/PlanWizard';
 import type { MonthDef } from '../planTypes';
-import { composeMonthlyPlan, monthKey, buildEffectiveProjs } from '../planTypes';
+import { composeMonthlyPlan, monthKey, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange } from '../planTypes';
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
@@ -2202,7 +2202,8 @@ export function PlanPage({ data }: { data: DashboardData }) {
       <ReplenishmentFlowWrapper orderOverrides={orderOverrides} salesSummary={salesSummary} demandMap={demandMap} seasonMap={seasonMap} metaMap={metaMap} growthOverrides={effectiveGrowth} products={filteredProducts} projs={projs} unconstrainedForecastMap={unconstrainedForecastMap} />
 
       {activePlan?.status === 'APPROVED' && (
-        <PlanVsRealityPanel families={filteredFamilies} snapshot={activeSnapshot} actuals2026Full={actuals2026Full} />
+        <PlanVsRealityPanel families={filteredFamilies} snapshot={activeSnapshot} actuals2026Full={actuals2026Full}
+          plannedSpend={plannedSpend} plannedCpc={plannedCpc} actualsWeekly={actualsWeekly} planUpdatedAt={activePlan?.updated_at ?? null} />
       )}
 
       <CashflowSection projs={projs} families={filteredFamilies} planId={activePlan?.plan_id ?? null} />
@@ -3050,134 +3051,160 @@ const COMPARE_LABELS: Record<CompareMode, { label: string; left: string; right: 
 // Approved Plan vs Reality — per-product UNITS plan (frozen snapshot) vs live daily actuals.
 // Columns: Jan'26 (idx 0) → Feb'27 (idx 13). Elapsed months: plan == actual by construction;
 // future months: plan only until reality arrives.
-function PlanVsRealityPanel({ families, snapshot, actuals2026Full }: {
+// monthKey ("may26") → 0-based 2026 month index (0–11); 2027 → -1 (no monthly actuals yet).
+const PANEL_MONTH_ABBR = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+function monthIdxFromKey(k: string): number {
+  const m = PANEL_MONTH_ABBR.indexOf(k.slice(0, 3));
+  return k.slice(3) === '26' ? m : -1;
+}
+
+function PlanVsRealityPanel({ families, snapshot, actuals2026Full, plannedSpend, plannedCpc, actualsWeekly, planUpdatedAt }: {
   families: FamilyBaseline[];
   snapshot: Record<string, Record<string, number>> | null;
   actuals2026Full: Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
+  plannedSpend: Record<string, Record<string, number>>;
+  plannedCpc: Record<string, Record<string, number>>;
+  actualsWeekly: Map<string, Map<string, { units: number; revenue: number; cogs: number; adCost: number; clicks: number }>>;
+  planUpdatedAt: string | null;
 }) {
-  const [mode, setMode] = useState<'units' | 'spend'>('units');
-  const [plannedSpend, setPlannedSpend] = useState<Record<string, (number | null)[]>>({});
-  useEffect(() => {
-    if (mode !== 'spend') return;
-    let cancelled = false;
-    (async () => {
-      const out: Record<string, (number | null)[]> = {};
-      const daysInMonth = (i: number) => new Date(i < 12 ? 2026 : 2027, (i % 12) + 1, 0).getDate();
-      for (const f of families) {
-        try {
-          const r = await fetch(`/api/plans/ads-targets/${encodeURIComponent(f.family)}`);
-          const targetRows: { yr: number; mo: number; daily_spend_target: number }[] = r.ok ? await r.json() : [];
-          const arr: (number | null)[] = Array.from({ length: 14 }, () => null);
-          for (const row of targetRows) {
-            const i = row.yr === 2026 ? row.mo - 1 : row.mo + 11;
-            if (i < 0 || i > 13) continue;
-            arr[i] = (arr[i] ?? 0) + (row.daily_spend_target || 0) * daysInMonth(i);
-          }
-          out[f.family] = arr;
-        } catch { out[f.family] = Array.from({ length: 14 }, () => null); }
-      }
-      if (!cancelled) setPlannedSpend(out);
-    })();
-    return () => { cancelled = true; };
-  }, [mode, families]);
+  const [period, setPeriod] = useState<'week' | 'month' | 'sinceApproval'>('week');
+  const [weekBack, setWeekBack] = useState(0);
+  const [monthIdx, setMonthIdx] = useState(() => { const n = new Date(); return n.getMonth() + (n.getFullYear() === 2026 ? 0 : 12); });
+  const [showGrid, setShowGrid] = useState(false);
+  const [gridMode, setGridMode] = useState<'units' | 'spend'>('units');
+
+  const range = useMemo<[string, string]>(() => {
+    const iso = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+    if (period === 'week') return latestCompleteWeekRange(new Date(), weekBack);
+    if (period === 'sinceApproval') return [iso(planUpdatedAt ? new Date(planUpdatedAt) : new Date()), iso(new Date())];
+    const y = monthIdx < 12 ? 2026 : 2027, m = (monthIdx % 12) + 1, last = new Date(y, m, 0).getDate();
+    const p = (n: number) => String(n).padStart(2, '0');
+    return [`${y}-${p(m)}-01`, `${y}-${p(m)}-${p(last)}`];
+  }, [period, weekBack, monthIdx, planUpdatedAt]);
+  const fractions = useMemo(() => monthFractions(range[0], range[1]), [range]);
+
+  // Per-family plan (prorated over the period) vs actual (real period data), for the 4 measures.
+  const scorecard = useMemo(() => families.map(fam => {
+    const planUnits = fam.variations.reduce((s, v) => s + sumOverPeriod(snapshot?.[v.name] ?? {}, fractions), 0);
+    const planSpend = sumOverPeriod(plannedSpend[fam.family] ?? {}, fractions);
+    let cpcNum = 0, cpcDen = 0;
+    for (const [k, frac] of Object.entries(fractions)) {
+      const sp = (plannedSpend[fam.family]?.[k] ?? 0) * frac, c = plannedCpc[fam.family]?.[k] ?? 0;
+      if (sp > 0 && c > 0) { cpcNum += c * sp; cpcDen += sp; }
+    }
+    const planCpc = cpcDen > 0 ? cpcNum / cpcDen : 0;
+    const margin = fam.asp - fam.costPerUnit;
+    let units = 0, revenue = 0, cogs = 0, adCost = 0, clicks = 0;
+    if (period === 'week') {
+      for (const v of fam.variations) { const wm = actualsWeekly.get(v.name); if (!wm) continue; for (const [wk, a] of wm.entries()) if (wk >= range[0] && wk <= range[1]) { units += a.units; revenue += a.revenue; cogs += a.cogs; adCost += a.adCost; clicks += a.clicks; } }
+    } else {
+      for (const v of fam.variations) { const mm = actuals2026Full.get(v.name); if (!mm) continue; for (const k of Object.keys(fractions)) { const idx = monthIdxFromKey(k); if (idx < 0) continue; const a = mm.get(idx); if (a) { units += a.units; revenue += a.revenue; cogs += a.cogs; adCost += a.adCost; } } }
+    }
+    return {
+      family: fam.family, planned: !!plannedSpend[fam.family],
+      adSpend: { plan: planSpend, actual: adCost },
+      cpc: { plan: planCpc || null, actual: clicks > 0 ? adCost / clicks : null },
+      units: { plan: planUnits, actual: units },
+      netProfit: { plan: netProfitPlan(planUnits, margin, planSpend), actual: revenue - cogs - adCost },
+    };
+  }), [families, snapshot, fractions, plannedSpend, plannedCpc, period, range, actualsWeekly, actuals2026Full]);
 
   if (!snapshot) return null;
-  const monthIdxs = Array.from({ length: 14 }, (_, i) => i);
-  const colLabel = (i: number) => i < 12
-    ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][i] + "'26"
-    : ['Jan', 'Feb'][i - 12] + "'27";
-  const keyForIdx = (i: number) => MONTHS.find(m => (m.year === 2026 ? m.month - 1 : m.month + 11) === i)?.key;
-  const planUnits = (prod: string, i: number): number | null => {
-    const k = keyForIdx(i);
-    if (k && snapshot[prod]?.[k] != null) return snapshot[prod][k];
-    if (i <= 11) return actuals2026Full.get(prod)?.get(i)?.units ?? null; // elapsed: plan == actual
-    return null;
-  };
-  const actUnits = (prod: string, i: number): number | null =>
-    i <= 11 ? (actuals2026Full.get(prod)?.get(i)?.units ?? null) : null;
-  // Ad spend is family-grain (per-variation spend is an attribution artifact). Sum the family's
-  // products' adCost per calendar month from live actuals.
-  const actSpend = (fam: FamilyBaseline, i: number): number | null => {
-    if (i > 11) return null;
-    let s = 0, any = false;
-    for (const v of fam.variations) {
-      const c = actuals2026Full.get(v.name)?.get(i)?.adCost;
-      if (c != null) { s += c; any = true; }
-    }
-    return any ? s : null;
-  };
 
+  const cell = (plan: number | null, actual: number | null, fmtFn: (n: number) => string, good: (p: number, a: number) => boolean) => {
+    const d = (plan != null && actual != null && plan !== 0) ? (actual - plan) / plan : null;
+    const tone = (plan == null || actual == null) ? 'text-muted' : good(plan, actual) ? 'text-emerald-400' : 'text-amber-400';
+    return (
+      <td className="text-right py-1 px-1.5 tabular-nums">
+        <div className="text-faint text-[10px]">{plan == null ? '—' : fmtFn(plan)}</div>
+        <div className={`font-semibold ${tone}`}>{actual == null ? '—' : fmtFn(actual)}{d != null && <span className="text-[9px] ml-1 text-faint">{d >= 0 ? '+' : ''}{Math.round(d * 100)}%</span>}</div>
+      </td>
+    );
+  };
+  const fmtUnits = (n: number) => fmt(Math.round(n), 0);
+  const fmtCpc = (n: number) => '$' + n.toFixed(2);
+
+  // ── by-month detail grid (collapsible) ──
+  const monthIdxs = Array.from({ length: 14 }, (_, i) => i);
+  const colLabel = (i: number) => i < 12 ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][i] + "'26" : ['Jan', 'Feb'][i - 12] + "'27";
+  const keyForIdx = (i: number) => MONTHS.find(m => (m.year === 2026 ? m.month - 1 : m.month + 11) === i)?.key;
+  const planUnitsGrid = (prod: string, i: number): number | null => { const k = keyForIdx(i); if (k && snapshot[prod]?.[k] != null) return snapshot[prod][k]; if (i <= 11) return actuals2026Full.get(prod)?.get(i)?.units ?? null; return null; };
+  const actUnitsGrid = (prod: string, i: number): number | null => i <= 11 ? (actuals2026Full.get(prod)?.get(i)?.units ?? null) : null;
+  const planSpendGrid = (fam: string, i: number): number | null => { const k = keyForIdx(i); return k ? (plannedSpend[fam]?.[k] ?? null) : null; };
+  const actSpendGrid = (fam: FamilyBaseline, i: number): number | null => { if (i > 11) return null; let s = 0, any = false; for (const v of fam.variations) { const c = actuals2026Full.get(v.name)?.get(i)?.adCost; if (c != null) { s += c; any = true; } } return any ? s : null; };
   const prodRows = families.flatMap(f => [...f.variations].sort((a, b) => a.name.localeCompare(b.name)));
-  if (prodRows.length === 0) return null;
 
   return (
     <div className="mt-6">
-      <div className="flex items-center gap-3 mb-2">
-        <h3 className="text-sm font-bold text-heading">Approved Plan vs Reality</h3>
+      <div className="flex items-center gap-3 mb-2 flex-wrap">
+        <h3 className="text-sm font-bold text-heading">Plan vs Actual</h3>
         <div className="flex gap-1">
-          <button onClick={() => setMode('units')} className={`px-2 py-0.5 rounded text-[11px] ${mode === 'units' ? 'bg-blue-500/20 text-blue-300' : 'text-muted'}`}>Units</button>
-          <button onClick={() => setMode('spend')} className={`px-2 py-0.5 rounded text-[11px] ${mode === 'spend' ? 'bg-blue-500/20 text-blue-300' : 'text-muted'}`}>Spend</button>
+          {(['week', 'month', 'sinceApproval'] as const).map(p => (
+            <button key={p} onClick={() => setPeriod(p)} className={`px-2 py-0.5 rounded text-[11px] ${period === p ? 'bg-blue-500/20 text-blue-300' : 'text-muted'}`}>{p === 'week' ? 'Week' : p === 'month' ? 'Month' : 'Since approval'}</button>
+          ))}
         </div>
-        <span className="text-[10px] text-faint">{mode === 'units' ? 'per product' : 'per family · ad spend (under-plan = amber)'}</span>
+        {period === 'week' && <span className="flex items-center gap-1 text-[11px] text-muted"><button onClick={() => setWeekBack(w => w + 1)} className="px-1">‹</button>{range[0]} – {range[1]}<button onClick={() => setWeekBack(w => Math.max(0, w - 1))} className="px-1" disabled={weekBack === 0}>›</button></span>}
+        {period === 'month' && <span className="flex items-center gap-1 text-[11px] text-muted"><button onClick={() => setMonthIdx(i => Math.max(0, i - 1))} className="px-1">‹</button>{range[0].slice(0, 7)}<button onClick={() => setMonthIdx(i => Math.min(13, i + 1))} className="px-1">›</button></span>}
+        {period === 'sinceApproval' && <span className="text-[11px] text-muted">{range[0]} → today</span>}
+        {period !== 'week' && <span className="text-[10px] text-faint">CPC actual: Week tab only</span>}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-[11px]">
           <thead>
-            <tr className="text-muted border-b border-border">
-              <th className="text-left py-1.5 px-1.5">{mode === 'units' ? 'Product' : 'Family'}</th>
-              <th className="text-left py-1.5 px-1.5"></th>
-              {monthIdxs.map(i => <th key={i} className="text-right py-1.5 px-1.5">{colLabel(i)}</th>)}
+            <tr className="text-muted border-b border-border text-[9px] uppercase tracking-wide">
+              <th className="text-left py-1.5 px-1.5">Family</th>
+              <th className="text-right py-1.5 px-1.5">Ad Spend</th>
+              <th className="text-right py-1.5 px-1.5">CPC</th>
+              <th className="text-right py-1.5 px-1.5">Units</th>
+              <th className="text-right py-1.5 px-1.5">Net Profit</th>
             </tr>
+            <tr className="text-faint text-[8px]"><td></td><td className="text-right px-1.5">plan / actual</td><td className="text-right px-1.5">plan / actual</td><td className="text-right px-1.5">plan / actual</td><td className="text-right px-1.5">plan / actual</td></tr>
           </thead>
           <tbody>
-            {mode === 'units' ? prodRows.map(v => {
-              const planRow = monthIdxs.map(i => planUnits(v.name, i));
-              const actRow = monthIdxs.map(i => actUnits(v.name, i));
-              return (
-                <Fragment key={v.name}>
-                  <tr className="border-b border-border/10">
-                    <td className="py-1 px-1.5 font-medium" rowSpan={2}>
-                      <span className="inline-flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: PROD_COLORS[v.name] ?? '#666' }} />{v.name}
-                      </span>
-                    </td>
-                    <td className="py-1 px-1.5 text-blue-400">Plan</td>
-                    {planRow.map((u, i) => <td key={i} className="text-right py-1 px-1.5 tabular-nums">{u == null ? '—' : Math.round(u)}</td>)}
-                  </tr>
-                  <tr className="border-b border-border/20">
-                    <td className="py-1 px-1.5 text-emerald-400">Actual</td>
-                    {actRow.map((u, i) => {
-                      const p = planRow[i];
-                      const cls = u == null || p == null ? '' : u >= p ? 'text-emerald-400' : 'text-red-400';
-                      return <td key={i} className={`text-right py-1 px-1.5 tabular-nums ${cls}`}>{u == null ? '—' : Math.round(u)}</td>;
-                    })}
-                  </tr>
-                </Fragment>
-              );
-            }) : families.map(f => {
-              const planRow = plannedSpend[f.family] ?? Array.from({ length: 14 }, () => null);
-              const actRow = monthIdxs.map(i => actSpend(f, i));
-              return (
-                <Fragment key={f.family}>
-                  <tr className="border-b border-border/10">
-                    <td className="py-1 px-1.5 font-medium" rowSpan={2}>{f.family}</td>
-                    <td className="py-1 px-1.5 text-blue-400">Plan</td>
-                    {planRow.map((s, i) => <td key={i} className="text-right py-1 px-1.5 tabular-nums">{s == null ? '—' : fK(Math.round(s))}</td>)}
-                  </tr>
-                  <tr className="border-b border-border/20">
-                    <td className="py-1 px-1.5 text-emerald-400">Actual</td>
-                    {actRow.map((s, i) => {
-                      const p = planRow[i];
-                      const cls = s == null || p == null ? '' : s >= p ? 'text-emerald-400' : 'text-amber-400';
-                      return <td key={i} className={`text-right py-1 px-1.5 tabular-nums ${cls}`}>{s == null ? '—' : fK(Math.round(s))}</td>;
-                    })}
-                  </tr>
-                </Fragment>
-              );
-            })}
+            {scorecard.map(r => (
+              <tr key={r.family} className="border-b border-border/20">
+                <td className="py-1 px-1.5 font-medium">{r.family}{!r.planned && <span className="ml-1 text-[8px] text-amber-300/80">not planned</span>}</td>
+                {cell(r.adSpend.plan, r.adSpend.actual, fK, (p, a) => Math.abs(a - p) <= 0.1 * p)}
+                {cell(r.cpc.plan, r.cpc.actual, fmtCpc, (p, a) => a <= p)}
+                {cell(r.units.plan, r.units.actual, fmtUnits, (p, a) => a >= p * 0.9)}
+                {cell(r.netProfit.plan, r.netProfit.actual, fK, (p, a) => a >= p)}
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
+
+      <button onClick={() => setShowGrid(g => !g)} className="mt-3 text-[10px] text-muted hover:text-heading">{showGrid ? '▾' : '▸'} By-month detail</button>
+      {showGrid && (
+        <div className="mt-1">
+          <div className="flex gap-1 mb-1">
+            <button onClick={() => setGridMode('units')} className={`px-2 py-0.5 rounded text-[10px] ${gridMode === 'units' ? 'bg-blue-500/20 text-blue-300' : 'text-muted'}`}>Units (per product)</button>
+            <button onClick={() => setGridMode('spend')} className={`px-2 py-0.5 rounded text-[10px] ${gridMode === 'spend' ? 'bg-blue-500/20 text-blue-300' : 'text-muted'}`}>Spend (per family)</button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead><tr className="text-muted border-b border-border"><th className="text-left py-1.5 px-1.5">{gridMode === 'units' ? 'Product' : 'Family'}</th><th></th>{monthIdxs.map(i => <th key={i} className="text-right py-1.5 px-1.5">{colLabel(i)}</th>)}</tr></thead>
+              <tbody>
+                {gridMode === 'units' ? prodRows.map(v => {
+                  const planRow = monthIdxs.map(i => planUnitsGrid(v.name, i));
+                  const actRow = monthIdxs.map(i => actUnitsGrid(v.name, i));
+                  return (<Fragment key={v.name}>
+                    <tr className="border-b border-border/10"><td className="py-1 px-1.5 font-medium" rowSpan={2}><span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ background: PROD_COLORS[v.name] ?? '#666' }} />{v.name}</span></td><td className="py-1 px-1.5 text-blue-400">Plan</td>{planRow.map((u, i) => <td key={i} className="text-right py-1 px-1.5 tabular-nums">{u == null ? '—' : Math.round(u)}</td>)}</tr>
+                    <tr className="border-b border-border/20"><td className="py-1 px-1.5 text-emerald-400">Actual</td>{actRow.map((u, i) => { const p = planRow[i]; const cls = u == null || p == null ? '' : u >= p ? 'text-emerald-400' : 'text-red-400'; return <td key={i} className={`text-right py-1 px-1.5 tabular-nums ${cls}`}>{u == null ? '—' : Math.round(u)}</td>; })}</tr>
+                  </Fragment>);
+                }) : families.map(f => {
+                  const planRow = monthIdxs.map(i => planSpendGrid(f.family, i));
+                  const actRow = monthIdxs.map(i => actSpendGrid(f, i));
+                  return (<Fragment key={f.family}>
+                    <tr className="border-b border-border/10"><td className="py-1 px-1.5 font-medium" rowSpan={2}>{f.family}</td><td className="py-1 px-1.5 text-blue-400">Plan</td>{planRow.map((s, i) => <td key={i} className="text-right py-1 px-1.5 tabular-nums">{s == null ? '—' : fK(Math.round(s))}</td>)}</tr>
+                    <tr className="border-b border-border/20"><td className="py-1 px-1.5 text-emerald-400">Actual</td>{actRow.map((s, i) => { const p = planRow[i]; const cls = s == null || p == null ? '' : s >= p ? 'text-emerald-400' : 'text-amber-400'; return <td key={i} className={`text-right py-1 px-1.5 tabular-nums ${cls}`}>{s == null ? '—' : fK(Math.round(s))}</td>; })}</tr>
+                  </Fragment>);
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
