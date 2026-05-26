@@ -102,6 +102,14 @@ export function netProfitPlan(planUnits: number, margin: number, planSpend: numb
   return planUnits * margin - planSpend;
 }
 
+// Blended (organic-inclusive) Net ROAS over a set of {sales,cogs,adCost} rows.
+// (Σsales − Σcogs) / ΣadCost; null when there's no ad spend.
+export function blendedNetRoas(rows: { sales: number; cogs: number; adCost: number }[]): number | null {
+  let s = 0, c = 0, a = 0;
+  for (const r of rows) { s += r.sales; c += r.cogs; a += r.adCost; }
+  return a > 0 ? (s - c) / a : null;
+}
+
 // [Mon, Sun] ISO dates of the (stepsBack)-th most recent COMPLETE week before `today`.
 // stepsBack=0 → the latest fully-elapsed Mon–Sun week; stepsBack=1 → the week before that.
 export function latestCompleteWeekRange(today: Date, stepsBack: number): [string, string] {

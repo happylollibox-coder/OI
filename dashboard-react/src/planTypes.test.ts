@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas } from './planTypes';
+
+describe('blendedNetRoas', () => {
+  it('returns (sales − cogs) / adCost summed over rows', () => {
+    const rows = [{ sales: 100, cogs: 40, adCost: 20 }, { sales: 200, cogs: 80, adCost: 30 }];
+    expect(blendedNetRoas(rows)).toBeCloseTo(3.6, 6); // (300−120)/50
+  });
+  it('returns null when there is no ad spend', () => {
+    expect(blendedNetRoas([{ sales: 100, cogs: 40, adCost: 0 }])).toBeNull();
+    expect(blendedNetRoas([])).toBeNull();
+  });
+});
 
 describe('latestCompleteWeekRange', () => {
   it('returns Mon..Sun of the most recent complete week before today', () => {
