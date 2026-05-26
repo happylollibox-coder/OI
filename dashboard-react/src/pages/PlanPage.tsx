@@ -2151,6 +2151,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
           actuals2026={actuals2026Full}
           brandedSearch={brandedSearch}
           channelEfficiency={channelEfficiency}
+          roas={familyRoas[wf.family] ?? null}
           onClose={() => setWizardFamily(null)}
           onSave={async (result) => {
             // Fix #5: Apply brand growth to all products in this family (always, to clear stale overrides)

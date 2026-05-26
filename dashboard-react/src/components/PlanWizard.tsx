@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from 'react';
 import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react';
-import { StepAdsPath, type AdsTarget, type TrajMonth } from './StepAdsPath';
+import { StepAdsPath, type AdsTarget, type TrajMonth, type FamilyRoasRef } from './StepAdsPath';
 import { fM, fK, fmt } from '../utils';
 import type {
   FamilyBaseline, AdsEfficiencyMap, ForecastDemandMap, ForecastMetaMap,
@@ -60,11 +60,12 @@ interface Props {
   actuals2026: ActualsMap;
   brandedSearch: BrandedSearchMonth[];
   channelEfficiency: AdsChannelMonth[];
+  roas: FamilyRoasRef | null;
   onSave: (result: WizardResult) => void;
   onClose: () => void;
 }
 
-export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, adsEfficiency, projs, growthOverrides: initGrowth, actuals2025, actuals2026, brandedSearch, channelEfficiency, onSave, onClose }: Props) {
+export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, adsEfficiency, projs, growthOverrides: initGrowth, actuals2025, actuals2026, brandedSearch, channelEfficiency, roas, onSave, onClose }: Props) {
   const [step, setStep] = useState(1);
   const [adsPath, setAdsPath] = useState<'current' | 'target' | 'custom'>('current');
   const [customDaily, setCustomDaily] = useState(0);
@@ -232,7 +233,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 text-xs">
           {step === 1 && <StepBaseline products={products} months={months} metaMap={metaMap} actuals2025={actuals2025} />}
           {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} onGrowthChange={setBrandGrowth} />}
-          {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelEfficiency.filter(c => c.family === f.family)} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
+          {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelEfficiency.filter(c => c.family === f.family)} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} roas={roas} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
           {step === 4 && <StepSpendPlan months={months} famEff={famEff} path={adsPath} customDaily={customDaily} trajectory={trajectory} />}
           {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} />}
         </div>

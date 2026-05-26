@@ -163,7 +163,14 @@ export type AdsTarget = {
   max_cpc: number; // season profitable-CPC ceiling — coach bid cap (bid above this and clicks lose money)
 };
 
-export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, onTargets, onTrajectory }: {
+// Per-family ROAS reference (LY 2025 / CY 2026): blended (organic-incl) at family grain,
+// ad-only per channel. Surfaced for planning context; the gap (blended − ad-only) ≈ halo.
+export interface FamilyRoasRef {
+  blended: { 2025: number | null; 2026: number | null };
+  adOnly: Record<string, { 2025: number | null; 2026: number | null }>;
+}
+
+export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, roas, onTargets, onTrajectory }: {
   famEff: Record<number, AdsEfficiencyMonth>;
   path: 'current' | 'target' | 'custom'; onPath: (p: 'current' | 'target' | 'custom') => void;
   customDaily: number; onCustom: (v: number) => void;
@@ -172,6 +179,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   asp: number; costPerUnit: number;
   monthlyUnits?: number[]; // total units (organic+ad) per calendar month, prior year — true demand seasonality
   monthlySpend?: number[]; // prior-year ad spend per calendar month — anchors the profit-max curve
+  roas?: FamilyRoasRef | null;
   onTargets?: (targets: AdsTarget[]) => void;
   onTrajectory?: (traj: TrajMonth[]) => void;
 }) {
@@ -545,6 +553,20 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
           <span className="text-faint font-normal">{' '}— bid above and clicks lose money</span>
         </span>
       </div>
+
+      {/* ── Net ROAS reference: LY → CY, blended (family) vs ad-only (per channel) ── */}
+      {roas && (() => {
+        const fr = (x: number | null) => x != null ? `${x.toFixed(2)}×` : '—';
+        return (
+          <div className="px-3 py-1.5 rounded-lg border border-border/40 bg-border/5 text-[10px] flex flex-wrap items-center gap-x-4 gap-y-0.5">
+            <span className="text-muted font-semibold whitespace-nowrap">Net ROAS (LY → CY)</span>
+            <span className="tabular-nums text-heading">Blended {fr(roas.blended[2025])} → {fr(roas.blended[2026])}</span>
+            <span className="tabular-nums text-heading">Brand ad-only {fr(roas.adOnly.BRAND?.[2025] ?? null)} → {fr(roas.adOnly.BRAND?.[2026] ?? null)}</span>
+            <span className="tabular-nums text-heading">Non-brand ad-only {fr(roas.adOnly.NON_BRAND?.[2025] ?? null)} → {fr(roas.adOnly.NON_BRAND?.[2026] ?? null)}</span>
+            <span className="text-faint">blended − ad-only ≈ halo</span>
+          </div>
+        );
+      })()}
 
       {/* ── Profit curve table ── */}
       <div>
