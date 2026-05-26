@@ -926,12 +926,17 @@ def insert_purchase_order(data, product_lines=None):
     if not resolved_lines:
         return ['At least one product line is required'], None
     
-    # Generate PO ID: PO_YYYYMMDD_MANUFACTURER_TOTALQTY
+    # Generate PO ID: PO_YYYYMMDD_MANUFACTURER_PRODUCT_QTY (single line) or PO_YYYYMMDD_MANUFACTURER_QTY (multi)
     if not data.get('purchase_order_id'):
         date_str = order_date.replace('-', '') if order_date else ''
         mfr_str = (manufacturer_name or 'UNKNOWN').replace(' ', '_').replace('-', '_')[:20]
         qty_str = str(int(total_quantity))
-        base_po_id = f"PO_{date_str}_{mfr_str}_{qty_str}"
+        # Include product name when single product line for easy identification
+        if len(resolved_lines) == 1 and resolved_lines[0].get('product_name'):
+            prod_str = resolved_lines[0]['product_name'].replace(' ', '').replace('-', '')[:20]
+            base_po_id = f"PO_{date_str}_{mfr_str}_{prod_str}_{qty_str}"
+        else:
+            base_po_id = f"PO_{date_str}_{mfr_str}_{qty_str}"
         
         po_id = base_po_id
         suffix = 1
@@ -4725,6 +4730,10 @@ ADS_TARGETS_SCHEMA = [
     bigquery.SchemaField('plan_strategy_id', 'STRING'),
     bigquery.SchemaField('created_at', 'TIMESTAMP'),
     bigquery.SchemaField('updated_at', 'TIMESTAMP'),
+    bigquery.SchemaField('ly_ad_net_roas', 'FLOAT'),
+    bigquery.SchemaField('cy_ad_net_roas', 'FLOAT'),
+    bigquery.SchemaField('ly_net_roas', 'FLOAT'),
+    bigquery.SchemaField('cy_net_roas', 'FLOAT'),
 ]
 
 
@@ -4783,6 +4792,10 @@ def api_ads_targets_save():
             'ads_share': t.get('ads_share'),
             'season_type': t.get('season_type'),
             'multiplier_k': t.get('multiplier_k'),
+            'ly_ad_net_roas': t.get('ly_ad_net_roas'),
+            'cy_ad_net_roas': t.get('cy_ad_net_roas'),
+            'ly_net_roas': t.get('ly_net_roas'),
+            'cy_net_roas': t.get('cy_net_roas'),
             'plan_strategy_id': plan_strategy_id,
             'created_at': now,
             'updated_at': now,
