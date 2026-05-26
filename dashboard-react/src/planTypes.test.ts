@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange } from './planTypes';
+
+describe('latestCompleteWeekRange', () => {
+  it('returns Mon..Sun of the most recent complete week before today', () => {
+    const r = latestCompleteWeekRange(new Date('2026-05-21T12:00:00'), 0); // Thu
+    expect(r).toEqual(['2026-05-11', '2026-05-17']);
+  });
+  it('stepsBack shifts to earlier weeks', () => {
+    const r = latestCompleteWeekRange(new Date('2026-05-21T12:00:00'), 1);
+    expect(r).toEqual(['2026-05-04', '2026-05-10']);
+  });
+});
 
 describe('buildEffectiveProjs', () => {
   const effFams = [{

@@ -102,6 +102,18 @@ export function netProfitPlan(planUnits: number, margin: number, planSpend: numb
   return planUnits * margin - planSpend;
 }
 
+// [Mon, Sun] ISO dates of the (stepsBack)-th most recent COMPLETE week before `today`.
+// stepsBack=0 → the latest fully-elapsed Mon–Sun week; stepsBack=1 → the week before that.
+export function latestCompleteWeekRange(today: Date, stepsBack: number): [string, string] {
+  const d = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dow = (d.getDay() + 6) % 7; // 0 = Monday
+  const thisMonday = new Date(d); thisMonday.setDate(d.getDate() - dow);
+  const sun = new Date(thisMonday); sun.setDate(thisMonday.getDate() - 1 - 7 * stepsBack); // last complete week's Sunday
+  const mon = new Date(sun); mon.setDate(sun.getDate() - 6);
+  const iso = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+  return [iso(mon), iso(sun)];
+}
+
 export interface MonthlyPlan { byMonth: Record<string, number>; total: number }
 
 // Merge actual (elapsed + current-MTD) over forecast (current-remainder + future) across an
