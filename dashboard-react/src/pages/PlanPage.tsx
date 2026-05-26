@@ -2193,10 +2193,19 @@ export function PlanPage({ data }: { data: DashboardData }) {
             // Fix #7: Await ads targets save and surface errors
             if (result.adsTargets && result.adsTargets.length > 0) {
               try {
+                // Freeze LY/CY ROAS reference onto each target row (ad-only by channel; blended on all).
+                const fr = familyRoas[result.family];
+                const enriched = result.adsTargets.map(t => ({
+                  ...t,
+                  ly_ad_net_roas: fr?.adOnly[t.channel]?.[2025] ?? null,
+                  cy_ad_net_roas: fr?.adOnly[t.channel]?.[2026] ?? null,
+                  ly_net_roas: fr?.blended[2025] ?? null,
+                  cy_net_roas: fr?.blended[2026] ?? null,
+                }));
                 const resp = await fetch('/api/plans/ads-targets', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ family: result.family, targets: result.adsTargets }),
+                  body: JSON.stringify({ family: result.family, targets: enriched }),
                 });
                 const d = await resp.json();
                 if (d.success) {
