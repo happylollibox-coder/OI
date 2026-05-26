@@ -1311,24 +1311,34 @@ export function PlanPage({ data }: { data: DashboardData }) {
 
   // Planned ad spend per family-month from saved coach targets (Σ daily_spend × days).
   const [plannedSpend, setPlannedSpend] = useState<Record<string, Record<string, number>>>({});
+  const [plannedCpc, setPlannedCpc] = useState<Record<string, Record<string, number>>>({}); // spend-weighted cpc_target per family-month
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const out: Record<string, Record<string, number>> = {};
+      const outCpc: Record<string, Record<string, number>> = {};
       await Promise.all(families.map(async f => {
         try {
           const r = await fetch(`/api/plans/ads-targets/${encodeURIComponent(f.family)}`);
-          const tRows: { yr: number; mo: number; daily_spend_target: number }[] = r.ok ? await r.json() : [];
+          const tRows: { yr: number; mo: number; daily_spend_target: number; cpc_target?: number }[] = r.ok ? await r.json() : [];
           const byMonth: Record<string, number> = {};
+          const cpcNum: Record<string, number> = {}; // Σ cpc×spend
+          const cpcDen: Record<string, number> = {}; // Σ spend
           for (const row of tRows) {
             const k = monthKey(row.mo, row.yr);
             const days = new Date(row.yr, row.mo, 0).getDate();
-            byMonth[k] = (byMonth[k] ?? 0) + (row.daily_spend_target || 0) * days;
+            const spend = (row.daily_spend_target || 0) * days;
+            byMonth[k] = (byMonth[k] ?? 0) + spend;
+            const cpc = row.cpc_target ?? 0;
+            if (cpc > 0 && spend > 0) { cpcNum[k] = (cpcNum[k] ?? 0) + cpc * spend; cpcDen[k] = (cpcDen[k] ?? 0) + spend; }
           }
           if (Object.keys(byMonth).length > 0) out[f.family] = byMonth;
+          const cpcByMonth: Record<string, number> = {};
+          for (const k of Object.keys(cpcDen)) cpcByMonth[k] = cpcNum[k] / cpcDen[k];
+          if (Object.keys(cpcByMonth).length > 0) outCpc[f.family] = cpcByMonth;
         } catch { /* ignore */ }
       }));
-      if (!cancelled) setPlannedSpend(out);
+      if (!cancelled) { setPlannedSpend(out); setPlannedCpc(outCpc); }
     })();
     return () => { cancelled = true; };
   }, [families]);
