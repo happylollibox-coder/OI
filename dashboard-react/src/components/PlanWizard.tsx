@@ -81,6 +81,10 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
 
   const famEff = adsEfficiency[f.family] ?? {};
   const products = f.variations;
+  // Memoized so StepAdsPath gets a STABLE array ref — an inline .filter() here recreates the array
+  // every render, which cascades through seasonBenchmarks → profitMaxPlan → adsTargets/trajectory
+  // and makes StepAdsPath's onTargets/onTrajectory effects fire every render → setState → infinite loop.
+  const channelData = useMemo(() => channelEfficiency.filter(c => c.family === f.family), [channelEfficiency, f.family]);
 
   // Demand from runSim (fallback before the ads path is built)
   const simDemand = useMemo(() => {
@@ -233,7 +237,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 text-xs">
           {step === 1 && <StepBaseline products={products} months={months} metaMap={metaMap} actuals2025={actuals2025} />}
           {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} onGrowthChange={setBrandGrowth} />}
-          {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelEfficiency.filter(c => c.family === f.family)} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} roas={roas} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
+          {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelData} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} roas={roas} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
           {step === 4 && <StepSpendPlan months={months} famEff={famEff} path={adsPath} customDaily={customDaily} trajectory={trajectory} />}
           {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} />}
         </div>
