@@ -21,7 +21,9 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
-      - '--set-env-vars'
+      # --update-env-vars MERGES the listed keys; --set-env-vars would REPLACE the entire env set
+      # and wipe runtime secrets (GOOGLE_CLIENT_ID/SECRET, CUBEJS_API_SECRET, VITE_DASHBOARD_URL).
+      - '--update-env-vars'
       - 'GCP_PROJECT_ID=onyga-482313,BIGQUERY_DATASET=OI'
       - '--memory'
       - '512Mi'
