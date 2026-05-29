@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-26
 **Components:** `dashboard-react/src/components/StepAdsPath.tsx` + `PlanWizard.tsx`, `dashboard-react/src/pages/PlanPage.tsx`, `data-entry-app/app.py`, `scripts/bigquery/tables/DE_PLAN_ADS_TARGETS*` (+ migration), `config.yaml`. (Cube/views are read-only — sources already exist.)
-**Status:** Design — pending review
+**Status:** ✅ Implemented & deployed (2026-05-29). Commits: `e501006` (BQ migration), `26fcaa7` (backend schema/save), `e392da1` (blendedNetRoas helper), `5f6a769` (familyRoas compute), `50c6677` (ads-targets enrichment), `00186ce` (wizard display), `d476a17` (render-loop fix). Backend deployed as Cloud Run revision `data-entry-forms-00132-9t7`; the 4 columns verified populated in `DE_PLAN_ADS_TARGETS` for Lollibox (BRAND ad-only 10.73→8.57, NON_BRAND 1.19→1.26, blended 1.66→1.76).
 
 ## Problem / use case
 
