@@ -147,6 +147,7 @@ const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 export type TrajMonth = {
   idx: number; label: string; yr: number; mo: number;
   kEffective: number; seasonFactor: number;
+  days: number;
   spend: number; baselineSpend: number;
   totalUnits: number; adUnits: number; organicUnits: number;
   profit: number; cumProfit: number; cumUnits: number;
@@ -432,6 +433,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
         result.push({
           idx: -1, label: `${MONTH_LABELS[moIdx]}✓`, yr, mo: moIdx + 1,
           kEffective: spendScale, seasonFactor: 1,
+          days: Math.max(1, fullDays * fAct),
           spend: spend * fAct, baselineSpend: plan.spend * fAct,
           totalUnits: units * fAct, adUnits: adU * fAct, organicUnits: (units - adU) * fAct,
           profit: profit * fAct, cumProfit, cumUnits: Math.round(cumUnits), isActual: true,
@@ -440,6 +442,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
         result.push({
           idx: 0, label: `${MONTH_LABELS[moIdx]}→`, yr, mo: moIdx + 1,
           kEffective: spendScale, seasonFactor: 1,
+          days: Math.max(1, fullDays * fFc),
           spend: spend * fFc, baselineSpend: plan.spend * fFc,
           totalUnits: units * fFc, adUnits: adU * fFc, organicUnits: (units - adU) * fFc,
           profit: profit * fFc, cumProfit, cumUnits: Math.round(cumUnits),
@@ -449,6 +452,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
         result.push({
           idx: i, label: MONTH_LABELS[moIdx], yr, mo: moIdx + 1,
           kEffective: spendScale, seasonFactor: 1,
+          days: fullDays,
           spend, baselineSpend: plan.spend,
           totalUnits: units, adUnits: adU, organicUnits: units - adU,
           profit, cumProfit, cumUnits: Math.round(cumUnits),
@@ -714,8 +718,10 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
                 <th className="text-left py-0.5 px-0.5 font-medium">Month</th>
                 <th className="text-right py-0.5 px-0.5 font-medium">Scale</th>
                 <th className="text-right py-0.5 px-0.5 font-medium">Spend</th>
+                <th className="text-right py-0.5 px-0.5 font-medium">Spend/d</th>
                 <th className="text-right py-0.5 px-0.5 font-medium">Ads Units</th>
                 <th className="text-right py-0.5 px-0.5 font-medium">Total Units</th>
+                <th className="text-right py-0.5 px-0.5 font-medium">Units/d</th>
                 <th className="text-right py-0.5 px-0.5 font-medium">Profit</th>
                 <th className="text-right py-0.5 px-0.5 font-medium">Cum. Profit</th>
               </tr></thead>
@@ -727,8 +733,10 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
                       {t.kEffective.toFixed(2)}×
                     </td>
                     <td className="text-right py-0.5 px-0.5 tabular-nums text-muted">{fK(Math.round(t.spend))}</td>
+                    <td className="text-right py-0.5 px-0.5 tabular-nums text-muted">{fK(Math.round(t.spend / t.days))}</td>
                     <td className="text-right py-0.5 px-0.5 tabular-nums text-faint">{fmt(Math.round(t.adUnits))}</td>
                     <td className="text-right py-0.5 px-0.5 tabular-nums font-bold text-heading">{fmt(Math.round(t.totalUnits))}</td>
+                    <td className="text-right py-0.5 px-0.5 tabular-nums text-faint">{fmt(Math.round(t.totalUnits / t.days))}</td>
                     <td className={`text-right py-0.5 px-0.5 tabular-nums font-bold ${t.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                       {fK(Math.round(t.profit))}
                     </td>

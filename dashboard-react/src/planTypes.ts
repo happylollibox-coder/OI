@@ -70,6 +70,29 @@ export function monthKey(mo: number, yr: number): string {
   return `${MONTH_ABBR[mo - 1]}${String(yr).slice(2)}`;
 }
 
+// Reduce saved Ads-Coach targets (per channel × year-month) into monthly ad spend and a
+// spend-weighted CPC, both keyed by monthKey. Spend = daily_spend_target × days-in-month.
+// Shared by the PlanPage loader (reads from the server) and the wizard's onSave optimistic
+// update (writes the same shape locally), so the two can never drift apart.
+export function aggregateAdsTargetSpend(
+  targets: { yr: number; mo: number; daily_spend_target?: number; cpc_target?: number }[],
+): { spendByMonth: Record<string, number>; cpcByMonth: Record<string, number> } {
+  const spendByMonth: Record<string, number> = {};
+  const cpcNum: Record<string, number> = {};
+  const cpcDen: Record<string, number> = {};
+  for (const t of targets) {
+    const k = monthKey(t.mo, t.yr);
+    const days = new Date(t.yr, t.mo, 0).getDate();
+    const spend = (t.daily_spend_target || 0) * days;
+    spendByMonth[k] = (spendByMonth[k] ?? 0) + spend;
+    const cpc = t.cpc_target ?? 0;
+    if (cpc > 0 && spend > 0) { cpcNum[k] = (cpcNum[k] ?? 0) + cpc * spend; cpcDen[k] = (cpcDen[k] ?? 0) + spend; }
+  }
+  const cpcByMonth: Record<string, number> = {};
+  for (const k of Object.keys(cpcDen)) cpcByMonth[k] = cpcNum[k] / cpcDen[k];
+  return { spendByMonth, cpcByMonth };
+}
+
 // Fraction of each calendar month covered by the inclusive date range [startISO, endISO].
 // Keyed by monthKey (e.g. "may26"). Used to prorate a monthly plan over an arbitrary period.
 export function monthFractions(startISO: string, endISO: string): Record<string, number> {
@@ -251,13 +274,20 @@ export function allocateOrder(
   target: number,
   forecastTotal: number,
   friendly: boolean,
+  // Per-product forecast demand (velocity-shaped, e.g. from splitTrajectoryToProducts). When given,
+  // each product's gap is forecastByProduct[name] − stock. Falls back to forecastTotal × splitPct
+  // when omitted or missing a product — needed because static splitPct misallocates demand across
+  // variations whose forward velocity differs from their historical sales share.
+  forecastByProduct?: Record<string, number>,
 ): OrderAllocation {
   const n = variations.length;
   // Equal split only when NO product has share data; otherwise a genuine 0% stays 0%.
   const totalShare = variations.reduce((s, v) => s + (v.splitPct > 0 ? v.splitPct : 0), 0);
   const gaps = variations.map(v => {
-    const share = totalShare > 0 ? (v.splitPct > 0 ? v.splitPct : 0) : (n > 0 ? 1 / n : 0);
-    return Math.max(0, forecastTotal * share - (v.inventory ?? 0));
+    const fcst = forecastByProduct && forecastByProduct[v.name] != null
+      ? forecastByProduct[v.name]
+      : forecastTotal * (totalShare > 0 ? (v.splitPct > 0 ? v.splitPct : 0) : (n > 0 ? 1 / n : 0));
+    return Math.max(0, fcst - (v.inventory ?? 0));
   });
   const totalGap = gaps.reduce((a, b) => a + b, 0);
   const byProduct: Record<string, number> = {};
@@ -271,6 +301,87 @@ export function allocateOrder(
     total += qty;
   });
   return { byProduct, total, totalGap };
+}
+
+// ─── New-product off-season forecast ───────────────────────
+// For products launched mid-prior-year, YoY (LY × growth) collapses to ~0 in months the
+// product didn't yet exist. Instead derive demand from the product's OWN within-year
+// off-season momentum: a recent off-season run-rate (units/day), trended by how it compares
+// to the prior off-season window — never using the unsteady first-3-months launch period.
+// Monthly grain: "recent" = most recent completed off-season month; "prior" = the 2 before it.
+export interface OffSeasonTrendResult {
+  usable: boolean;        // true when there's ≥1 post-warmup off-season month with data
+  recentRate: number;     // off-season units/day, most recent window
+  priorRate: number;      // off-season units/day, prior 2-month window (0 if none)
+  momentum: number;       // clamp(recentRate/priorRate, 0.5, 1.8); 1 when no prior window
+  launch: { year: number; month: number } | null; // detected launch month (warmup = launch..+2)
+  forecastUnits: (year: number, month: number) => number; // units for a missing-LY off-season month
+}
+
+export function offSeasonTrend(
+  history: { year: number; month: number; units: number }[],
+  isOffSeason: (year: number, month: number) => boolean,
+  launch: { year: number; month: number } | null,
+  cutoff: { year: number; month: number; prorate: number },
+): OffSeasonTrendResult {
+  const ord = (y: number, m: number) => y * 12 + (m - 1);
+  const daysInMonth = (y: number, m: number) => new Date(y, m, 0).getDate();
+  const cutoffOrd = ord(cutoff.year, cutoff.month);
+
+  // Launch month = explicit, else earliest month with any sales. Warmup = launch + next 2.
+  let launchOrd = launch ? ord(launch.year, launch.month) : null;
+  if (launchOrd == null) {
+    const sold = history.filter(d => d.units > 0).map(d => ord(d.year, d.month));
+    launchOrd = sold.length ? Math.min(...sold) : null;
+  }
+  const warmupEnd = launchOrd != null ? launchOrd + 2 : -Infinity;
+  const launchOut = launchOrd != null ? { year: Math.floor(launchOrd / 12), month: (launchOrd % 12) + 1 } : null;
+
+  // Post-warmup off-season months that have data (≤ cutoff), most recent first.
+  // Post-warmup off-season months with data (≤ cutoff), chronological (ascending).
+  const usable = history
+    .filter(d => {
+      const o = ord(d.year, d.month);
+      return o > warmupEnd && o <= cutoffOrd && isOffSeason(d.year, d.month);
+    })
+    .map(d => {
+      const o = ord(d.year, d.month);
+      const days = daysInMonth(d.year, d.month) * (o === cutoffOrd ? cutoff.prorate : 1);
+      return { o, units: d.units, days };
+    })
+    .filter(d => d.days > 0)
+    .sort((a, b) => a.o - b.o);
+
+  if (usable.length === 0) {
+    return { usable: false, recentRate: 0, priorRate: 0, momentum: 1, launch: launchOut, forecastUnits: () => 0 };
+  }
+
+  // Split the usable off-season months into a first (earlier) and second (later) period.
+  // momentum = 2nd-period daily rate / 1st-period daily rate. A single period → no trend.
+  const mid = Math.floor(usable.length / 2);
+  const first = usable.slice(0, mid);
+  const second = usable.slice(mid);
+  const rate = (arr: typeof usable) => {
+    const d = arr.reduce((s, x) => s + x.days, 0);
+    return d > 0 ? arr.reduce((s, x) => s + x.units, 0) / d : 0;
+  };
+  const midOrd = (arr: typeof usable) => arr.reduce((s, x) => s + x.o, 0) / arr.length;
+  const secondRate = rate(second);
+  const firstRate = first.length ? rate(first) : 0;
+  const momentum = firstRate > 0 ? Math.min(1.8, Math.max(0.5, secondRate / firstRate)) : 1;
+  // Spread the period-to-period momentum across the months between the period midpoints, so it's a
+  // per-month growth rate (not re-compounded monthly) — avoids explosive extrapolation.
+  const gap = first.length ? Math.max(1, midOrd(second) - midOrd(first)) : 1;
+  const g = Math.pow(momentum, 1 / gap);
+  const anchorOrd = usable[usable.length - 1].o; // most recent off-season month with data
+
+  const forecastUnits = (year: number, month: number) => {
+    if (!(secondRate > 0)) return 0;
+    const k = Math.max(0, ord(year, month) - anchorOrd);
+    return Math.round(secondRate * daysInMonth(year, month) * Math.pow(g, k));
+  };
+
+  return { usable: true, recentRate: secondRate, priorRate: firstRate, momentum, launch: launchOut, forecastUnits };
 }
 
 // ─── Ads Path: 2025-anchored profit-max spend ───────────────

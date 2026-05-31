@@ -6,7 +6,7 @@ import type {
   FamilyBaseline, AdsEfficiencyMap, ForecastDemandMap, ForecastMetaMap,
   MonthSeasonMap, MonthDef, MonthProj,
 } from '../planTypes';
-import { MFR, SHIP, allocateOrder, splitTrajectoryToProducts, monthKey } from '../planTypes';
+import { MFR, SHIP, allocateOrder, splitTrajectoryToProducts, monthKey, offSeasonTrend } from '../planTypes';
 
 const STEPS = [
   { id: 1, label: 'Baseline' },
@@ -105,17 +105,6 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
   }, [trajectory, months]);
 
   const forecastDemand = adsPathDemand ?? simDemand;
-  // Family gap = sum of per-product gaps (each product's demand share of the forecast minus
-  // its OWN stock) — not family-forecast minus family-stock, since stock isn't fungible across
-  // variations (a colour overstocked on its own demand shouldn't be reordered).
-  const gap = useMemo(() => {
-    const totalShare = f.variations.reduce((s, v) => s + (v.splitPct > 0 ? v.splitPct : 0), 0);
-    const n = f.variations.length;
-    return Math.round(f.variations.reduce((sum, v) => {
-      const share = totalShare > 0 ? (v.splitPct > 0 ? v.splitPct : 0) : (n > 0 ? 1 / n : 0);
-      return sum + Math.max(0, forecastDemand * share - v.inventory);
-    }, 0));
-  }, [f.variations, forecastDemand]);
 
   // Prior-year (2025) per-calendar-month anchors for this family: total units + ad spend.
   // These anchor the profit-max Ads Path (units(S) = units₂₅ × (S/spend₂₅)^e).
@@ -155,6 +144,34 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
     [trajectory, f.variations, inHorizon, runSimUnits],
   );
 
+  // Per-product forecast demand, velocity-shaped: each product's planned units summed across the
+  // horizon (plannedMonthly is the ads-path trajectory split by per-month runSim demand share —
+  // the SAME per-variation basis the main Plan page uses for NEED). Falls back to forecastDemand ×
+  // static splitPct for products the trajectory doesn't cover (e.g. before Step 3 builds it).
+  // This replaces the old splitPct-only allocation, which misordered variations whose forward
+  // velocity differs from their historical sales share (e.g. ordering an overstocked colour).
+  const forecastByProduct = useMemo(() => {
+    const totalShare = f.variations.reduce((s, v) => s + (v.splitPct > 0 ? v.splitPct : 0), 0);
+    const n = f.variations.length;
+    const map: Record<string, number> = {};
+    for (const v of f.variations) {
+      const planned = plannedMonthly[v.name]
+        ? Object.values(plannedMonthly[v.name]).reduce((a, b) => a + b, 0)
+        : 0;
+      map[v.name] = planned > 0
+        ? planned
+        : forecastDemand * (totalShare > 0 ? (v.splitPct > 0 ? v.splitPct : 0) : (n > 0 ? 1 / n : 0));
+    }
+    return map;
+  }, [f.variations, plannedMonthly, forecastDemand]);
+
+  // Family gap = sum of per-product gaps (own velocity forecast − own stock). Stock isn't fungible
+  // across variations, so a colour overstocked on its own demand shouldn't be reordered.
+  const gap = useMemo(
+    () => Math.round(f.variations.reduce((sum, v) => sum + Math.max(0, (forecastByProduct[v.name] ?? 0) - v.inventory), 0)),
+    [f.variations, forecastByProduct],
+  );
+
   // Fix #1: Sync orderQty to gap until user manually edits it
   useEffect(() => {
     if (!orderQtyUserEdited) setOrderQty(gap);
@@ -168,10 +185,10 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
   // Switch order mode; on first switch to manual, seed per-product quantities from the auto allocation.
   const handleOrderMode = useCallback((m: 'auto' | 'manual') => {
     if (m === 'manual' && Object.keys(manualByProduct).length === 0) {
-      setManualByProduct({ ...allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound).byProduct });
+      setManualByProduct({ ...allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound, forecastByProduct).byProduct });
     }
     setOrderMode(m);
-  }, [manualByProduct, f.variations, orderQty, forecastDemand, friendlyRound]);
+  }, [manualByProduct, f.variations, orderQty, forecastDemand, friendlyRound, forecastByProduct]);
   // Manual per-product order quantity (StepOrder rounds up to the carton/100 before calling).
   const handleManualQty = useCallback((name: string, qty: number) => {
     setManualByProduct(prev => ({ ...prev, [name]: Math.max(0, qty) }));
@@ -236,10 +253,10 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 text-xs">
           {step === 1 && <StepBaseline products={products} months={months} metaMap={metaMap} actuals2025={actuals2025} />}
-          {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} onGrowthChange={setBrandGrowth} />}
+          {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} seasonMap={seasonMap} onGrowthChange={setBrandGrowth} />}
           {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelData} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} roas={roas} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
-          {step === 4 && <StepSpendPlan months={months} famEff={famEff} path={adsPath} customDaily={customDaily} trajectory={trajectory} />}
-          {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} />}
+          {step === 4 && <StepSpendPlan months={months} famEff={famEff} path={adsPath} customDaily={customDaily} trajectory={trajectory} currentStock={f.inventory} />}
+          {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} forecastByProduct={forecastByProduct} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} />}
         </div>
 
         {/* Footer */}
@@ -256,7 +273,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
           ) : (
             <button onClick={() => {
               if (!canSave) return;
-              const alloc = allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound);
+              const alloc = allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound, forecastByProduct);
               // Effective per-product order: manual mode = user quantities (carton-rounded); auto = allocation.
               const effectiveByProduct = orderMode === 'manual'
                 ? Object.fromEntries(f.variations.map(v => {
@@ -332,10 +349,11 @@ function StepBaseline({ products, months, metaMap, actuals2025 }: {
 // Shows branded search purchases — units from customers who specifically
 // searched for the brand. Uses same DIM_BRAND_PHRASES logic as Brand page.
 // Brand-level (not per-family) because top searches span multiple families.
-function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, onGrowthChange }: {
+function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, seasonMap, onGrowthChange }: {
   products: FamilyBaseline['variations']; months: MonthDef[];
   demandMap: ForecastDemandMap; actuals2025: ActualsMap; actuals2026: ActualsMap;
   brandedSearch: BrandedSearchMonth[]; family: string;
+  seasonMap: Record<string, Record<number, { peakDays: number; offseasonDays: number }>>;
   onGrowthChange: (g: number) => void;
 }) {
   // Compare branded search purchases: YoY through data cutoff date
@@ -416,9 +434,32 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
       ? `Jan 1–${monthNames[currentMonth-1]} ${cutoffDay}`
       : 'N/A';
 
+    // ── New-product off-season fallback ──
+    // When a month has no prior-year base (product launched mid-2025), YoY collapses to ~0.
+    // Derive those off-season months from the family's OWN within-year off-season run-rate.
+    const LY_MIN = 5; // units — "no usable prior-year base" threshold
+    const seasonInfo = seasonMap[family] ?? {};
+    const isOffSeason = (year: number, month: number) => {
+      const info = seasonInfo[year * 100 + month] ?? seasonInfo[2026 * 100 + month] ?? seasonInfo[2025 * 100 + month];
+      return info ? info.peakDays === 0 : true; // unknown → off-season (peak is the exception)
+    };
+    const brandHistory = familyData.map(b => ({ year: b.yr, month: b.mo, units: (b.purchases ?? 0) + (b.adsUnits ?? 0) }));
+    const nbHistory = familyData.map(b => ({ year: b.yr, month: b.mo, units: (b.totalSqpPurchases ?? 0) + (b.totalAdsUnits ?? 0) - ((b.purchases ?? 0) + (b.adsUnits ?? 0)) }));
+    const trendCutoff = { year: 2026, month: currentMonth, prorate: prorateFactor };
+    const brandTrend = offSeasonTrend(brandHistory, isOffSeason, null, trendCutoff);
+    const nbTrend = offSeasonTrend(nbHistory, isOffSeason, null, trendCutoff);
+    const daysRemaining = daysInCurrentMonth * (1 - prorateFactor);
+    // A 2026 forecast month has no USABLE prior-year base when its 2025 source is missing (~0)
+    // OR falls in the product's launch+2 warmup (ramp period — not a steady baseline).
+    const ordOf = (y: number, m: number) => y * 12 + (m - 1);
+    const noUsableBase = (lyUnits: number, trend: typeof brandTrend, m: number) =>
+      (lyUnits <= LY_MIN || (trend.launch != null && ordOf(2025, m) <= ordOf(trend.launch.year, trend.launch.month) + 2))
+      && isOffSeason(2026, m) && trend.usable;
+
     // Forecast: actual months + projected remaining months (using per-channel growth)
     // Brand forecast
     let brandForecast26 = 0, nbForecast26 = 0;
+    let brandCurRemaining = 0, nbCurRemaining = 0; // current-month remaining forecast (for MayF render)
     // Per-month forecast maps for table display
     const brandFcstByMonth = new Map<number, number>();
     const nbFcstByMonth = new Map<number, number>();
@@ -435,21 +476,28 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
         // Partial month: actual (prorated) + remaining (forecast)
         const bActual = (d26?.purchases ?? 0) + (d26?.adsUnits ?? 0);
         const nbActual = (d26?.totalSqpPurchases ?? 0) + (d26?.totalAdsUnits ?? 0) - bActual;
-        // Remaining = LY remaining portion × growth
+        // Remaining = LY remaining portion × growth — or, for a new product with no LY base in an
+        // off-season month, the within-year off-season run-rate × remaining days.
         const bLy = (d25?.purchases ?? 0) + (d25?.adsUnits ?? 0);
         const nbLy = (d25?.totalSqpPurchases ?? 0) + (d25?.totalAdsUnits ?? 0) - bLy;
-        const bRemaining = Math.round(bLy * (1 - prorateFactor) * brandGrowth);
-        const nbRemaining = Math.round(nbLy * (1 - prorateFactor) * nbGrowth);
+        const bRemaining = noUsableBase(bLy, brandTrend, m)
+          ? Math.round(brandTrend.recentRate * daysRemaining) : Math.round(bLy * (1 - prorateFactor) * brandGrowth);
+        const nbRemaining = noUsableBase(nbLy, nbTrend, m)
+          ? Math.round(nbTrend.recentRate * daysRemaining) : Math.round(nbLy * (1 - prorateFactor) * nbGrowth);
+        brandCurRemaining = bRemaining; nbCurRemaining = nbRemaining;
         brandForecast26 += bActual + bRemaining;
         nbForecast26 += nbActual + nbRemaining;
         brandFcstByMonth.set(m, bActual + bRemaining);
         nbFcstByMonth.set(m, nbActual + nbRemaining);
       } else {
-        // Future month: project from LY × channel growth
+        // Future month: project from LY × channel growth — but if there's no usable prior-year
+        // base (new product) and the month is off-season, use the within-year off-season run-rate.
         const bLy = (d25?.purchases ?? 0) + (d25?.adsUnits ?? 0);
         const nbLy = (d25?.totalSqpPurchases ?? 0) + (d25?.totalAdsUnits ?? 0) - bLy;
-        const bProj = Math.round(bLy * brandGrowth);
-        const nbProj = Math.round(nbLy * nbGrowth);
+        const bProj = noUsableBase(bLy, brandTrend, m)
+          ? brandTrend.forecastUnits(2026, m) : Math.round(bLy * brandGrowth);
+        const nbProj = noUsableBase(nbLy, nbTrend, m)
+          ? nbTrend.forecastUnits(2026, m) : Math.round(nbLy * nbGrowth);
         brandForecast26 += bProj;
         nbForecast26 += nbProj;
         brandFcstByMonth.set(m, bProj); nbFcstByMonth.set(m, nbProj);
@@ -470,6 +518,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
       periodLabel, overlapMonths, mo25, mo26, forecast26, fullYear25,
       currentMonth, lastFullMonth, prorateFactor, cutoffDay, brandFcstByMonth, nbFcstByMonth,
       brandForecast26, nbForecast26,
+      brandTrend, nbTrend, isOffSeason, brandCurRemaining, nbCurRemaining, LY_MIN,
     };
   }, [brandedSearch, family]);
 
@@ -487,6 +536,18 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
   const combUp = brandComparison.combinedGrowthPct > 5;
   const combDown = brandComparison.combinedGrowthPct < -5;
 
+  // For a new product (no usable prior-year base), the YoY % is meaningless ("X vs 0 → 0%").
+  // Show the within-year off-season momentum instead.
+  const channelHeadline = (c25: number, trend: { usable: boolean; momentum: number; recentRate: number; priorRate: number }, growthPct: number) => {
+    if (c25 <= brandComparison.LY_MIN && trend.usable) {
+      const pct = (trend.momentum - 1) * 100;
+      return { pct, isOffTrend: true, sub: `off-season trend · ${trend.recentRate.toFixed(1)}/d vs ${trend.priorRate.toFixed(1)}/d` };
+    }
+    return { pct: growthPct, isOffTrend: false, sub: null as string | null };
+  };
+  const brandHead = channelHeadline(brandComparison.brand25, brandComparison.brandTrend, brandComparison.brandGrowthPct);
+  const nbHead = channelHeadline(brandComparison.nb25, brandComparison.nbTrend, brandComparison.nbGrowthPct);
+
   return (
     <div>
       <p className="text-muted mb-3">
@@ -500,9 +561,11 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
         <div className={`p-3 rounded-xl border text-center ${brandUp ? 'border-emerald-500/30 bg-emerald-500/5' : brandDown ? 'border-red-500/30 bg-red-500/5' : 'border-border/30 bg-border/5'}`}>
           <div className="text-[9px] text-faint mb-1">🛡 Brand ({brandComparison.periodLabel})</div>
           <div className={`text-2xl font-black tabular-nums ${brandUp ? 'text-emerald-400' : brandDown ? 'text-red-400' : 'text-heading'}`}>
-            {brandComparison.brandGrowthPct > 0 ? '+' : ''}{brandComparison.brandGrowthPct.toFixed(0)}%
+            {brandHead.pct > 0 ? '+' : ''}{brandHead.pct.toFixed(0)}%
           </div>
-          <div className="text-[9px] text-muted mt-0.5">{fmt(brandComparison.brand26)} vs {fmt(brandComparison.brand25)}</div>
+          {brandHead.sub
+            ? <div className="text-[8px] text-blue-400/80 mt-0.5">{brandHead.sub}</div>
+            : <div className="text-[9px] text-muted mt-0.5">{fmt(brandComparison.brand26)} vs {fmt(brandComparison.brand25)}</div>}
           <div className="text-[8px] text-faint mt-0.5">SQP: {fmt(brandComparison.brandSqp26)} · Ads: {fmt(brandComparison.brandAds26)}</div>
           <div className="text-[8px] text-faint">Spend: ${fK(brandComparison.brandAdsSpend26)}</div>
           <div className="text-[8px] text-blue-400/70 italic">2026F: {fmt(brandComparison.brandForecast26)} units</div>
@@ -511,9 +574,11 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
         <div className={`p-3 rounded-xl border text-center ${nbUp ? 'border-emerald-500/30 bg-emerald-500/5' : nbDown ? 'border-red-500/30 bg-red-500/5' : 'border-border/30 bg-border/5'}`}>
           <div className="text-[9px] text-faint mb-1">🔍 Non-brand ({brandComparison.periodLabel})</div>
           <div className={`text-2xl font-black tabular-nums ${nbUp ? 'text-emerald-400' : nbDown ? 'text-red-400' : 'text-heading'}`}>
-            {brandComparison.nbGrowthPct > 0 ? '+' : ''}{brandComparison.nbGrowthPct.toFixed(0)}%
+            {nbHead.pct > 0 ? '+' : ''}{nbHead.pct.toFixed(0)}%
           </div>
-          <div className="text-[9px] text-muted mt-0.5">{fmt(brandComparison.nb26)} vs {fmt(brandComparison.nb25)}</div>
+          {nbHead.sub
+            ? <div className="text-[8px] text-blue-400/80 mt-0.5">{nbHead.sub}</div>
+            : <div className="text-[9px] text-muted mt-0.5">{fmt(brandComparison.nb26)} vs {fmt(brandComparison.nb25)}</div>}
           <div className="text-[8px] text-faint mt-0.5">SQP: {fmt(brandComparison.nbSqp26)} · Ads: {fmt(brandComparison.nbAds26)}</div>
           <div className="text-[8px] text-faint">Spend: ${fK(brandComparison.nbAdsSpend26)}</div>
           <div className="text-[8px] text-blue-400/70 italic">2026F: {fmt(brandComparison.nbForecast26)} units</div>
@@ -532,7 +597,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
 
       {/* Channel summary table */}
       {displayMonths && (() => {
-        const { currentMonth: cm, lastFullMonth: lfm, mo25, mo26, brandFcstByMonth, nbFcstByMonth, brandGrowth: bG, nbGrowth: nG, prorateFactor: pf } = brandComparison;
+        const { currentMonth: cm, lastFullMonth: lfm, mo25, mo26, brandFcstByMonth, nbFcstByMonth, brandGrowth: bG, nbGrowth: nG, prorateFactor: pf, brandCurRemaining, nbCurRemaining } = brandComparison;
         // Helper: cell value for brand (units)
         const brandVal = (mo: Map<number, BrandedSearchMonth>, m: number) => (mo.get(m)?.purchases ?? 0) + (mo.get(m)?.adsUnits ?? 0);
         // Helper: brand spend
@@ -621,9 +686,9 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
               v = valFn(mo26, c.month); sp = spendFn(mo26, c.month);
               ytd += v; ytdSpend += sp; yearTotal += v; yearSpend += sp;
             } else if (c.type === 'current_fcst') {
-              const ly = valFn(mo25, c.month);
               const lySp = spendFn(mo25, c.month);
-              v = Math.round(ly * (1 - pf) * growth);
+              // Units: stored remaining (off-season run-rate for new products, else LY×growth)
+              v = channel === 'brand' ? brandCurRemaining : nbCurRemaining;
               sp = Math.round(lySp * (1 - pf) * growth);
               isForecast = true;
               yearTotal += v; yearSpend += sp;
@@ -681,9 +746,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
               ytd += v; ytdSpend += sp; yearTotal += v; yearSpend += sp;
               return cell(c.key, v, sp, 'text-heading font-bold', getProfit(2026, c.month));
             } else if (c.type === 'current_fcst') {
-              const bRem = Math.round(brandVal(mo25, c.month) * (1 - pf) * bG);
-              const nRem = Math.round(nbVal(mo25, c.month) * (1 - pf) * nG);
-              v = bRem + nRem;
+              v = brandCurRemaining + nbCurRemaining;
               const bSpRem = Math.round(brandSpend(mo25, c.month) * (1 - pf) * bG);
               const nSpRem = Math.round(nbSpend(mo25, c.month) * (1 - pf) * nG);
               sp = bSpRem + nSpRem;
@@ -754,9 +817,9 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
 
 
 // ─── Step 4: Spend Plan ──────────────────────────────────
-function StepSpendPlan({ months, famEff, path, customDaily, trajectory }: {
+function StepSpendPlan({ months, famEff, path, customDaily, trajectory, currentStock }: {
   months: MonthDef[]; famEff: Record<number, AdsEfficiencyMonth>; path: 'current' | 'target' | 'custom'; customDaily: number;
-  trajectory: TrajMonth[];
+  trajectory: TrajMonth[]; currentStock: number;
 }) {
   // Aggregate trajectory by month (combine actual + forecast slices for current month)
   const trajByMonth = useMemo(() => {
@@ -784,13 +847,16 @@ function StepSpendPlan({ months, famEff, path, customDaily, trajectory }: {
           <th className="text-left py-1.5 px-1">Month</th>
           <th className="text-right py-1.5 px-1">Scale</th>
           <th className="text-right py-1.5 px-1">Spend</th>
+          <th className="text-right py-1.5 px-1">Spend/d</th>
           <th className="text-right py-1.5 px-1">Units</th>
+          <th className="text-right py-1.5 px-1">Units/d</th>
+          <th className="text-right py-1.5 px-1">Stock</th>
           <th className="text-right py-1.5 px-1">Profit</th>
           <th className="text-right py-1.5 px-1">CPC</th>
           <th className="text-right py-1.5 px-1">ROAS</th>
         </tr></thead>
         <tbody>
-          {months.map(m => {
+          {(() => { let runningStock = currentStock; return months.map(m => {
             const d = famEff[m.month];
             const tj = trajByMonth.get(m.month);
 
@@ -809,24 +875,30 @@ function StepSpendPlan({ months, famEff, path, customDaily, trajectory }: {
                 : Math.round(spend * Math.max(d.netRoas - 1, 0));
               scale = 1;
             } else {
-              return <tr key={m.key}><td colSpan={7} className="text-faint py-1">—</td></tr>;
+              return <tr key={m.key}><td colSpan={10} className="text-faint py-1">—</td></tr>;
             }
 
             const cpc = d?.cpc ?? 0;
             const roas = spend > 0 ? (profit + spend) / spend : 0;
+            // Forecasted end-of-month stock: current stock drawn down by cumulative units sold.
+            runningStock -= units;
+            const stock = Math.round(runningStock);
 
             return (
               <tr key={m.key} className="border-b border-border/20 hover:bg-border/10">
                 <td className="py-1.5 px-1 font-medium text-heading">{m.label} '{String(m.year).slice(2)}</td>
                 <td className="text-right py-1.5 px-1 tabular-nums text-muted">{scale.toFixed(2)}×</td>
                 <td className="text-right py-1.5 px-1 tabular-nums">{fK(spend)}</td>
+                <td className="text-right py-1.5 px-1 tabular-nums text-muted">{fK(Math.round(spend / m.days))}</td>
                 <td className="text-right py-1.5 px-1 tabular-nums font-bold">{fmt(units)}</td>
+                <td className="text-right py-1.5 px-1 tabular-nums text-muted">{fmt(Math.round(units / m.days))}</td>
+                <td className={`text-right py-1.5 px-1 tabular-nums font-bold ${stock <= 0 ? 'text-red-400' : 'text-muted'}`}>{fmt(stock)}</td>
                 <td className={`text-right py-1.5 px-1 tabular-nums font-bold ${profit > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fK(profit)}</td>
                 <td className="text-right py-1.5 px-1 tabular-nums text-muted">${cpc.toFixed(3)}</td>
                 <td className="text-right py-1.5 px-1 tabular-nums text-muted">{roas.toFixed(2)}×</td>
               </tr>
             );
-          })}
+          }); })()}
         </tbody>
       </table>
     </div>
@@ -834,13 +906,13 @@ function StepSpendPlan({ months, famEff, path, customDaily, trajectory }: {
 }
 
 // ─── Step 5: Order Summary ───────────────────────────────
-function StepOrder({ family: f, annualDemand, gap, orderQty, onQty, friendly, onFriendly, mode, onMode, manualByProduct, onManualQty }: {
-  family: FamilyBaseline; annualDemand: number; gap: number; orderQty: number; onQty: (n: number) => void;
+function StepOrder({ family: f, annualDemand, forecastByProduct, gap, orderQty, onQty, friendly, onFriendly, mode, onMode, manualByProduct, onManualQty }: {
+  family: FamilyBaseline; annualDemand: number; forecastByProduct: Record<string, number>; gap: number; orderQty: number; onQty: (n: number) => void;
   friendly: boolean; onFriendly: (b: boolean) => void;
   mode: 'auto' | 'manual'; onMode: (m: 'auto' | 'manual') => void;
   manualByProduct: Record<string, number>; onManualQty: (name: string, qty: number) => void;
 }) {
-  const alloc = useMemo(() => allocateOrder(f.variations, orderQty, annualDemand, friendly), [f.variations, orderQty, annualDemand, friendly]);
+  const alloc = useMemo(() => allocateOrder(f.variations, orderQty, annualDemand, friendly, forecastByProduct), [f.variations, orderQty, annualDemand, friendly, forecastByProduct]);
   // Effective per-product order: manual mode = user quantities; auto mode = gap-share allocation.
   const byProduct: Record<string, number> = mode === 'manual'
     ? Object.fromEntries(f.variations.map(v => [v.name, manualByProduct[v.name] ?? 0]))
@@ -853,17 +925,12 @@ function StepOrder({ family: f, annualDemand, gap, orderQty, onQty, friendly, on
     shipCost += qty * (SHIP[v.name] ?? 0);
   }
   const costs = { mfr: mfrCost, ship: shipCost };
-  // Per-product forecast demand (same share split as the order allocation)
+  // Per-product forecast demand (velocity-shaped — same per-variation basis as the order allocation)
   const fcstByProduct = useMemo(() => {
-    const totalShare = f.variations.reduce((s, v) => s + (v.splitPct > 0 ? v.splitPct : 0), 0);
-    const n = f.variations.length;
     const map: Record<string, number> = {};
-    for (const v of f.variations) {
-      const share = totalShare > 0 ? (v.splitPct > 0 ? v.splitPct : 0) : (n > 0 ? 1 / n : 0);
-      map[v.name] = Math.round(annualDemand * share);
-    }
+    for (const v of f.variations) map[v.name] = Math.round(forecastByProduct[v.name] ?? 0);
     return map;
-  }, [f.variations, annualDemand]);
+  }, [f.variations, forecastByProduct]);
 
   return (
     <div>

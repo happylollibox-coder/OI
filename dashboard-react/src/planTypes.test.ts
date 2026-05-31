@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend } from './planTypes';
 
 describe('blendedNetRoas', () => {
   it('returns (sales − cogs) / adCost summed over rows', () => {
@@ -221,6 +221,111 @@ describe('allocateOrder', () => {
     const { byProduct, total } = allocateOrder(vars(['A', 0, 1], ['B', 0, 1]), 10, 10, false);
     expect(byProduct).toEqual({ A: 5, B: 5 });
     expect(total).toBe(10);
+  });
+
+  it('uses per-product forecast (forecastByProduct) instead of splitPct when provided', () => {
+    // splitPct would over-allocate White (54.4% of 14549 = 7914 > stock 6913 → looks short)
+    // and under-allocate Pink. The velocity forecast is the truth: White is overstocked → 0,
+    // Pink's demand (3302) exceeds its stock (2923) → orders the 379 gap.
+    const v = vars(['White', 0.544, 1, 6913], ['Pink', 0.151, 1, 2923]);
+    const fcst = { White: 5996, Pink: 3302 };
+    const { byProduct, totalGap } = allocateOrder(v, 379, 14549, false, fcst);
+    expect(byProduct.White).toBe(0);
+    expect(byProduct.Pink).toBe(379);
+    expect(totalGap).toBeCloseTo(379, 6);
+  });
+});
+
+describe('aggregateAdsTargetSpend', () => {
+  it('sums daily spend × days-in-month per month, across channel rows', () => {
+    const { spendByMonth } = aggregateAdsTargetSpend([
+      { yr: 2026, mo: 6, daily_spend_target: 100 }, // June (30d) → 3000
+      { yr: 2026, mo: 6, daily_spend_target: 50 },  // June (30d) → 1500
+      { yr: 2026, mo: 7, daily_spend_target: 10 },  // July (31d) → 310
+    ]);
+    expect(spendByMonth[monthKey(6, 2026)]).toBe(4500);
+    expect(spendByMonth[monthKey(7, 2026)]).toBe(310);
+  });
+
+  it('computes spend-weighted CPC per month and ignores zero/absent cpc', () => {
+    const { cpcByMonth } = aggregateAdsTargetSpend([
+      { yr: 2026, mo: 6, daily_spend_target: 100, cpc_target: 0.40 }, // spend 3000
+      { yr: 2026, mo: 6, daily_spend_target: 100, cpc_target: 0.60 }, // spend 3000
+      { yr: 2026, mo: 6, daily_spend_target: 100, cpc_target: 0 },    // ignored for cpc
+    ]);
+    // (0.40×3000 + 0.60×3000) / 6000 = 0.50
+    expect(cpcByMonth[monthKey(6, 2026)]).toBeCloseTo(0.50, 6);
+  });
+
+  it('returns empty maps for no targets', () => {
+    expect(aggregateAdsTargetSpend([])).toEqual({ spendByMonth: {}, cpcByMonth: {} });
+  });
+});
+
+describe('offSeasonTrend', () => {
+  const allOff = () => true;
+  // history: months of units for ONE channel (both years)
+  const h = (rows: [number, number, number][]) => rows.map(([year, month, units]) => ({ year, month, units }));
+
+  it('splits post-warmup off-season months into two periods; momentum = 2nd-period rate / 1st-period rate', () => {
+    // launch Jun 2025 → warmup Jun/Jul/Aug 2025 excluded.
+    // usable off-season (ascending): Feb26(28d,280→10/d) Mar26(31d,310→10/d) | Apr26(30d,360→12/d) May26(31d,372→12/d)
+    // first half = [Feb,Mar] → 590/59 = 10/d ; second half = [Apr,May] → 732/61 = 12/d ; momentum = 1.2
+    const res = offSeasonTrend(
+      h([[2025,6,50],[2025,7,60],[2025,8,70],[2026,2,280],[2026,3,310],[2026,4,360],[2026,5,372]]),
+      allOff,
+      { year: 2025, month: 6 },
+      { year: 2026, month: 5, prorate: 1 },
+    );
+    expect(res.usable).toBe(true);
+    expect(res.priorRate).toBeCloseTo(10, 6);  // 1st-period rate
+    expect(res.recentRate).toBeCloseTo(12, 6); // 2nd-period rate (the projection base)
+    expect(res.momentum).toBeCloseTo(1.2, 6);
+    expect(res.launch).toEqual({ year: 2025, month: 6 });
+    // gap between period midpoints = 2 months → per-month growth g = 1.2^(1/2) ≈ 1.09545
+    // anchored at the last usable month (May): Jun is k=1 → 12 × 30 × 1.09545 ≈ 394
+    expect(res.forecastUnits(2026, 6)).toBe(394);
+    // Jul is k=2 → g^2 = 1.2 → 12 × 31 × 1.2 = 446.4
+    expect(res.forecastUnits(2026, 7)).toBe(446);
+  });
+
+  it('excludes the first 3 post-launch months; a single usable period yields flat momentum=1', () => {
+    // launch auto-detected = Jan26; warmup Jan/Feb/Mar26 excluded; only Apr26 usable → one period
+    const res = offSeasonTrend(
+      h([[2026,1,100],[2026,2,100],[2026,3,100],[2026,4,360]]),
+      allOff,
+      null,
+      { year: 2026, month: 4, prorate: 1 },
+    );
+    expect(res.usable).toBe(true);
+    expect(res.launch).toEqual({ year: 2026, month: 1 });
+    expect(res.momentum).toBe(1);                 // single period → no trend
+    expect(res.recentRate).toBeCloseTo(12, 6);
+    expect(res.forecastUnits(2026, 5)).toBe(372); // 12 × 31 × 1
+  });
+
+  it('is not usable when there is no post-warmup off-season data', () => {
+    const res = offSeasonTrend(h([[2026,1,100],[2026,2,100],[2026,3,100]]), allOff, null, { year: 2026, month: 3, prorate: 1 });
+    expect(res.usable).toBe(false);
+    expect(res.forecastUnits(2026, 6)).toBe(0);
+  });
+
+  it('clamps momentum to [0.5, 1.8]', () => {
+    // 1st period 10/d, 2nd period 30/d → raw 3.0 → clamp 1.8
+    const res = offSeasonTrend(
+      h([[2025,6,1],[2025,7,1],[2025,8,1],[2026,2,280],[2026,3,310],[2026,4,900],[2026,5,930]]),
+      allOff, { year: 2025, month: 6 }, { year: 2026, month: 5, prorate: 1 },
+    );
+    expect(res.momentum).toBeCloseTo(1.8, 6);
+  });
+
+  it('prorates the current (cutoff) month when computing its run-rate', () => {
+    // May26 is the cutoff, half elapsed: 186 units over 15.5 effective days → 12/d (2nd-period rate)
+    const res = offSeasonTrend(
+      h([[2025,6,1],[2025,7,1],[2025,8,1],[2026,4,360],[2026,5,186]]),
+      allOff, { year: 2025, month: 6 }, { year: 2026, month: 5, prorate: 0.5 },
+    );
+    expect(res.recentRate).toBeCloseTo(12, 6); // 186 / (31×0.5)
   });
 });
 

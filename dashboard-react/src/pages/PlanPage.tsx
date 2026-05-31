@@ -5,7 +5,7 @@ import type { DashboardData, ShipmentPlanRow } from '../types';
 import { useShipmentPlan, useScheduledShipments, useShipmentHistory, ReplenishmentFlowSection, ShipmentCardSection } from '../components/ShipmentEngine';
 import { PlanWizard } from '../components/PlanWizard';
 import type { MonthDef } from '../planTypes';
-import { composeMonthlyPlan, monthKey, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas } from '../planTypes';
+import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas } from '../planTypes';
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
@@ -1265,6 +1265,10 @@ export function PlanPage({ data }: { data: DashboardData }) {
     };
   }, [families, mults, strategies, forecastMap, growthOverrides, effectiveGrowth, demandMap, orderOverrides, actuals2026Full, actuals2025Full, plannedMonthlyOverrides]);
 
+  // Bumped whenever a plan is loaded, to force the [families]-keyed plannedSpend loader to refetch
+  // ads-targets for the newly-loaded plan (otherwise switching plans keeps the prior plan's spend).
+  const [plannedSpendNonce, setPlannedSpendNonce] = useState(0);
+
   // Load a plan's data into the sim
   const loadPlanData = useCallback((rows: Array<Record<string, unknown>>) => {
     const loadedMults: Record<string, Record<string, number>> = {};
@@ -1321,6 +1325,9 @@ export function PlanPage({ data }: { data: DashboardData }) {
       setPlanDirty(false);
       setPlanSaved(true);
     }
+    // Refresh ads-targets-derived spend for the loaded plan so `isPlanned` reflects it (the
+    // plannedSpend loader is keyed on [families], which doesn't change on a plan switch).
+    setPlannedSpendNonce(n => n + 1);
   }, []);
 
   // Fetch plan list + auto-load latest
@@ -1387,27 +1394,15 @@ export function PlanPage({ data }: { data: DashboardData }) {
         try {
           const r = await fetch(`/api/plans/ads-targets/${encodeURIComponent(f.family)}`);
           const tRows: { yr: number; mo: number; daily_spend_target: number; cpc_target?: number }[] = r.ok ? await r.json() : [];
-          const byMonth: Record<string, number> = {};
-          const cpcNum: Record<string, number> = {}; // Σ cpc×spend
-          const cpcDen: Record<string, number> = {}; // Σ spend
-          for (const row of tRows) {
-            const k = monthKey(row.mo, row.yr);
-            const days = new Date(row.yr, row.mo, 0).getDate();
-            const spend = (row.daily_spend_target || 0) * days;
-            byMonth[k] = (byMonth[k] ?? 0) + spend;
-            const cpc = row.cpc_target ?? 0;
-            if (cpc > 0 && spend > 0) { cpcNum[k] = (cpcNum[k] ?? 0) + cpc * spend; cpcDen[k] = (cpcDen[k] ?? 0) + spend; }
-          }
-          if (Object.keys(byMonth).length > 0) out[f.family] = byMonth;
-          const cpcByMonth: Record<string, number> = {};
-          for (const k of Object.keys(cpcDen)) cpcByMonth[k] = cpcNum[k] / cpcDen[k];
+          const { spendByMonth, cpcByMonth } = aggregateAdsTargetSpend(tRows);
+          if (Object.keys(spendByMonth).length > 0) out[f.family] = spendByMonth;
           if (Object.keys(cpcByMonth).length > 0) outCpc[f.family] = cpcByMonth;
         } catch { /* ignore */ }
       }));
       if (!cancelled) { setPlannedSpend(out); setPlannedCpc(outCpc); }
     })();
     return () => { cancelled = true; };
-  }, [families]);
+  }, [families, plannedSpendNonce]);
 
   // A family is "planned" once BOTH its snapshot units AND saved spend exist — the spend gate
   // doubles as a loading guard (no spend-less P&L is shown as final; falls back to runSim until ready).
@@ -1590,11 +1585,19 @@ export function PlanPage({ data }: { data: DashboardData }) {
     if (filters.product) {
       // Product filter stores an ASIN — find the family containing it
       ff = ff.filter(f => f.variations.some(v => v.asin === filters.product));
-      // Also narrow variations within the matching family
-      ff = ff.map(f => ({
-        ...f,
-        variations: f.variations.filter(v => v.asin === filters.product),
-      }));
+      // Also narrow variations within the matching family and recompute inventory totals
+      ff = ff.map(f => {
+        const filteredVars = f.variations.filter(v => v.asin === filters.product);
+        const filteredInv = filteredVars.reduce((s, v) => s + v.inventory, 0);
+        const filteredInvSrc: Record<string, number> = {};
+        for (const v of filteredVars) for (const [k, q] of Object.entries(v.inventoryBySource)) filteredInvSrc[k] = (filteredInvSrc[k] ?? 0) + q;
+        return {
+          ...f,
+          variations: filteredVars,
+          inventory: filteredInv,
+          inventoryBySource: filteredInvSrc,
+        };
+      });
     }
     return ff;
   }, [families, filters.family, filters.product]);
@@ -2211,6 +2214,12 @@ export function PlanPage({ data }: { data: DashboardData }) {
                 const d = await resp.json();
                 if (d.success) {
                   console.log(`[AdsTargets] Saved ${d.targets_saved} targets for ${result.family}`);
+                  // Optimistically refresh plannedSpend/plannedCpc for this family so `isPlanned`
+                  // flips true immediately — the [families]-keyed loader won't re-run on save, so
+                  // without this the main page stays on the runSim estimate until a page reload.
+                  const { spendByMonth, cpcByMonth } = aggregateAdsTargetSpend(result.adsTargets);
+                  setPlannedSpend(prev => ({ ...prev, [result.family]: spendByMonth }));
+                  setPlannedCpc(prev => ({ ...prev, [result.family]: cpcByMonth }));
                 } else {
                   console.error('[AdsTargets] Save failed:', d.error);
                   alert(`⚠️ Ads targets failed to save: ${d.error || 'Unknown error'}. Local plan was saved but targets were not persisted.`);
