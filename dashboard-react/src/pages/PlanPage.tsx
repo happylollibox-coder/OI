@@ -5,7 +5,7 @@ import type { DashboardData, ShipmentPlanRow } from '../types';
 import { useShipmentPlan, useScheduledShipments, useShipmentHistory, ReplenishmentFlowSection, ShipmentCardSection } from '../components/ShipmentEngine';
 import { PlanWizard } from '../components/PlanWizard';
 import type { MonthDef } from '../planTypes';
-import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas } from '../planTypes';
+import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas, MONTH_ABBR } from '../planTypes';
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
@@ -3102,9 +3102,8 @@ const COMPARE_LABELS: Record<CompareMode, { label: string; left: string; right: 
 // Columns: Jan'26 (idx 0) → Feb'27 (idx 13). Elapsed months: plan == actual by construction;
 // future months: plan only until reality arrives.
 // monthKey ("may26") → 0-based 2026 month index (0–11); 2027 → -1 (no monthly actuals yet).
-const PANEL_MONTH_ABBR = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 function monthIdxFromKey(k: string): number {
-  const m = PANEL_MONTH_ABBR.indexOf(k.slice(0, 3));
+  const m = MONTH_ABBR.indexOf(k.slice(0, 3));
   return k.slice(3) === '26' ? m : -1;
 }
 
@@ -3176,7 +3175,7 @@ function PlanVsRealityPanel({ families, snapshot, actuals2026Full, plannedSpend,
 
   // ── by-month detail grid (collapsible) ──
   const monthIdxs = Array.from({ length: 14 }, (_, i) => i);
-  const colLabel = (i: number) => i < 12 ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][i] + "'26" : ['Jan', 'Feb'][i - 12] + "'27";
+  const colLabel = (i: number) => i < 12 ? ML[i] + "'26" : ['Jan', 'Feb'][i - 12] + "'27";
   const keyForIdx = (i: number) => MONTHS.find(m => (m.year === 2026 ? m.month - 1 : m.month + 11) === i)?.key;
   const planUnitsGrid = (prod: string, i: number): number | null => { const k = keyForIdx(i); if (k && snapshot[prod]?.[k] != null) return snapshot[prod][k]; if (i <= 11) return actuals2026Full.get(prod)?.get(i)?.units ?? null; return null; };
   const actUnitsGrid = (prod: string, i: number): number | null => i <= 11 ? (actuals2026Full.get(prod)?.get(i)?.units ?? null) : null;

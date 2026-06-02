@@ -63,7 +63,7 @@ export const SHIP: Record<string, number> = {
 };
 
 // ─── Monthly plan helpers ───────────────────────────────────
-const MONTH_ABBR = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+export const MONTH_ABBR = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 // Snapshot/MonthDef key for a calendar month, e.g. monthKey(5, 2026) === "may26".
 export function monthKey(mo: number, yr: number): string {
