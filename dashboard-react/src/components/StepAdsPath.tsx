@@ -476,40 +476,48 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
       const seasonType = getSeasonType(moIdx + 1, yr);
       const seasonB = seasonBenchmarks[seasonType] ?? seasonBenchmarks['OFF'];
       const plan = profitMaxPlan[moIdx];
+      // Current calendar month counts only its forward-remaining slice (forecast-based), so the
+      // coach's predicted_units/profit tie to the snapshot. daily_spend_target stays a full-month
+      // per-day rate; only the monthly TOTALS are prorated.
+      const frac = moIdx === curMoIdx0 ? curRemFrac : 1;
 
-      // Family month spend/units straight from the profit-max plan (× user dial) — SAME source
-      // as Step 4 and the order, so the coach gets the plan it sees.
+      // Full-month family spend/units from the profit-max plan (× user dial) — same source as the
+      // curve, Step 4, and the order. Channel split uses FULL spend so the per-day rate stays correct.
       const spend = plan.spend * spendScale;
       const units = plan.anchored && plan.spend0 > 0
         ? unitsAtSpend(spend, plan.units0, plan.spend0, plan.e)
         : plan.units * spendScale;
 
-      // Split family spend into channels: brand stays at its (flat, defensive) season run-rate,
-      // non-brand gets the rest. Units split by each channel's efficiency-weighted spend.
       const brandSpend = Math.min(seasonB.brand.dailySpend * days, spend);
       const nbSpend = Math.max(0, spend - brandSpend);
       const bRaw = brandSpend > 0 && seasonB.brand.cpc > 0 ? (brandSpend / seasonB.brand.cpc) * seasonB.brand.cvr : 0;
       const nRaw = nbSpend > 0 && seasonB.nb.cpc > 0 ? (nbSpend / seasonB.nb.cpc) * seasonB.nb.cvr : 0;
       const rawTot = bRaw + nRaw;
 
-      const mkRow = (channel: string, chSpend: number, chUnits: number, cpc: number, cvr: number): AdsTarget => ({
-        yr, mo: moIdx + 1, channel,
-        daily_spend_target: Math.round((chSpend / days) * 100) / 100,
-        cpc_target: Math.round(cpc * 1000) / 1000,
-        predicted_cvr: cvr,
-        predicted_roas: chSpend > 0 ? (chUnits * margin) / chSpend : 0,
-        predicted_units: Math.round(chUnits),
-        predicted_net_profit: Math.round(chUnits * margin - chSpend),
-        cpc_exponent: 0, cvr_exponent: 0, // flat model — no exponents
-        ads_share: baseAdsShare, season_type: seasonType,
-        multiplier_k: Math.round(spendScale * 100) / 100, max_cpc: SEASON_MAX_CPC[seasonType],
-      });
+      // chSpendFull/chUnitsFull are full-month; the monthly totals applied to the row are × frac
+      // (forecast-remaining for the current month), but the per-day rate divides full spend by full days.
+      const mkRow = (channel: string, chSpendFull: number, chUnitsFull: number, cpc: number, cvr: number): AdsTarget => {
+        const chSpend = chSpendFull * frac;
+        const chUnits = chUnitsFull * frac;
+        return {
+          yr, mo: moIdx + 1, channel,
+          daily_spend_target: Math.round((chSpendFull / days) * 100) / 100,
+          cpc_target: Math.round(cpc * 1000) / 1000,
+          predicted_cvr: cvr,
+          predicted_roas: chSpend > 0 ? (chUnits * margin) / chSpend : 0,
+          predicted_units: Math.round(chUnits),
+          predicted_net_profit: Math.round(chUnits * margin - chSpend),
+          cpc_exponent: 0, cvr_exponent: 0, // flat model — no exponents
+          ads_share: baseAdsShare, season_type: seasonType,
+          multiplier_k: Math.round(spendScale * 100) / 100, max_cpc: SEASON_MAX_CPC[seasonType],
+        };
+      };
 
       targets.push(mkRow('BRAND', brandSpend, rawTot > 0 ? units * (bRaw / rawTot) : 0, seasonB.brand.cpc, seasonB.brand.cvr));
       targets.push(mkRow('NON_BRAND', nbSpend, rawTot > 0 ? units * (nRaw / rawTot) : units, seasonB.nb.cpc, seasonB.nb.cvr));
     }
     return targets;
-  }, [profitMaxPlan, spendScale, seasonBenchmarks, baseAdsShare, margin, months]);
+  }, [profitMaxPlan, spendScale, seasonBenchmarks, baseAdsShare, margin, months, curMoIdx0, curRemFrac]);
 
   // Expose targets to parent (PlanWizard) for saving
   // eslint-disable-next-line react-hooks/exhaustive-deps
