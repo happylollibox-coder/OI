@@ -290,7 +290,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
               className={`flex items-center gap-1 px-5 py-2 rounded-lg text-xs font-bold transition-colors shadow-lg ${
                 canSave ? 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-500/20'
                   : 'bg-border/30 text-faint cursor-not-allowed shadow-none'}`}>
-              <Check size={14} /> Save Plan
+              <Check size={14} /> Apply
             </button>
           )}
         </div>
