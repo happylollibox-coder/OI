@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from 'react';
-import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Check, Loader2 } from 'lucide-react';
 import { StepAdsPath, type AdsTarget, type TrajMonth, type FamilyRoasRef } from './StepAdsPath';
 import { fM, fK, fmt } from '../utils';
 import type {
@@ -61,7 +61,7 @@ interface Props {
   brandedSearch: BrandedSearchMonth[];
   channelEfficiency: AdsChannelMonth[];
   roas: FamilyRoasRef | null;
-  onSave: (result: WizardResult) => void;
+  onSave: (result: WizardResult) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -75,6 +75,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
   const [adsTargets, setAdsTargets] = useState<AdsTarget[]>([]);
   const [trajectory, setTrajectory] = useState<TrajMonth[]>([]);
   const [friendlyRound, setFriendlyRound] = useState(false); // round per-product to next 100 instead of cartons
+  const [applying, setApplying] = useState(false); // Apply in flight — disables the button + shows a spinner
   const [orderMode, setOrderMode] = useState<'auto' | 'manual'>('auto');
   const [manualByProduct, setManualByProduct] = useState<Record<string, number>>({}); // user-set per-product buy qty (manual mode)
   const modalRef = useRef<HTMLDivElement>(null);
@@ -271,8 +272,10 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
               Next <ChevronRight size={14} />
             </button>
           ) : (
-            <button onClick={() => {
-              if (!canSave) return;
+            <button onClick={async () => {
+              if (!canSave || applying) return;
+              setApplying(true);
+              try {
               const alloc = allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound, forecastByProduct);
               // Effective per-product order: manual mode = user quantities (carton-rounded); auto = allocation.
               const effectiveByProduct = orderMode === 'manual'
@@ -283,14 +286,18 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
                   }))
                 : alloc.byProduct;
               const effectiveTotal = Object.values(effectiveByProduct).reduce((a, b) => a + b, 0);
-              onSave({ family: f.family, brandGrowth, adsPath, customDailySpend: adsPath === 'custom' ? customDaily : undefined, orderQty: effectiveTotal, orderByProduct: effectiveByProduct, adsTargets, plannedMonthly, orderMode });
+              await onSave({ family: f.family, brandGrowth, adsPath, customDailySpend: adsPath === 'custom' ? customDaily : undefined, orderQty: effectiveTotal, orderByProduct: effectiveByProduct, adsTargets, plannedMonthly, orderMode });
+              } finally {
+                setApplying(false);
+              }
             }}
-              disabled={!canSave}
-              title={!canSave ? 'Set order quantity > 0 before saving' : undefined}
+              disabled={!canSave || applying}
+              title={!canSave ? 'Set order quantity > 0 before saving' : applying ? 'Applying…' : undefined}
               className={`flex items-center gap-1 px-5 py-2 rounded-lg text-xs font-bold transition-colors shadow-lg ${
-                canSave ? 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-500/20'
+                applying ? 'bg-emerald-500/70 text-white cursor-wait shadow-none'
+                  : canSave ? 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-500/20'
                   : 'bg-border/30 text-faint cursor-not-allowed shadow-none'}`}>
-              <Check size={14} /> Apply
+              {applying ? <><Loader2 size={14} className="animate-spin" /> Applying…</> : <><Check size={14} /> Apply</>}
             </button>
           )}
         </div>
