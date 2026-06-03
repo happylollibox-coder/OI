@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan } from './planTypes';
 
 describe('blendedNetRoas', () => {
   it('returns (sales − cogs) / adCost summed over rows', () => {
@@ -363,5 +363,38 @@ describe('profitMaxSpend', () => {
   it('returns null with no usable anchor (caller falls back)', () => {
     expect(profitMaxSpend(0, 0, 23.81, 0.65)).toBeNull();
     expect(profitMaxSpend(100, 5000, 23.81, 1)).toBeNull(); // e must be < 1
+  });
+});
+
+describe('scaleHorizonPlan', () => {
+  const plan = [
+    { mo: 5, spend: 1000, units: 100, units0: 100, spend0: 1000, anchored: true, e: 0.5 },
+    { mo: 6, spend: 2000, units: 200, units0: 200, spend0: 2000, anchored: true, e: 0.5 },
+  ];
+  const months = [{ month: 5 }, { month: 6 }] as { month: number }[];
+
+  it('sums spend & units over the horizon at k=1 with no current-month proration', () => {
+    const r = scaleHorizonPlan(plan, months, 1, -1, 1);
+    expect(r.spend).toBe(3000);
+    expect(r.units).toBeCloseTo(300, 6);
+  });
+
+  it('scales spend by k and re-derives units via the elasticity', () => {
+    const r = scaleHorizonPlan(plan, months, 2, -1, 1);
+    expect(r.spend).toBe(6000);
+    expect(r.units).toBeCloseTo(141.421 + 282.842, 2);
+  });
+
+  it('prorates the current month to remFrac (spend AND units)', () => {
+    const r = scaleHorizonPlan(plan, months, 1, 4, 0.25); // curMoIdx=4 (May, 0-based)
+    expect(r.spend).toBe(1000 * 0.25 + 2000);
+    expect(r.units).toBeCloseTo(100 * 0.25 + 200, 6);
+  });
+
+  it('falls back to units*k for unanchored months', () => {
+    const p2 = [{ mo: 5, spend: 1000, units: 100, units0: 0, spend0: 0, anchored: false, e: 0.5 }];
+    const r = scaleHorizonPlan(p2, [{ month: 5 }], 3, -1, 1);
+    expect(r.spend).toBe(3000);
+    expect(r.units).toBe(300);
   });
 });

@@ -404,3 +404,30 @@ export function profitMaxSpend(
   const sStar = Math.pow((units0 * margin * e) / Math.pow(spend0, e), 1 / (1 - e));
   return Math.max(0, Math.min(sStar, capMultiple * spend0));
 }
+
+// Per-month plan entry the Ads Path curve scales. mo is 1-based calendar month.
+export interface HorizonPlanMonth { mo: number; spend: number; units: number; units0: number; spend0: number; anchored: boolean; e: number }
+
+// Σ {spend, units} over the horizon `months` at scale k. The current calendar month (curMoIdx,
+// 0-based; -1 = none) contributes only its remaining-days fraction remFrac (spend AND units),
+// so totals are forecast-remaining for the current month. Anchored months re-derive units off
+// the 2025 anchor via unitsAtSpend; unanchored scale linearly.
+export function scaleHorizonPlan(
+  plan: HorizonPlanMonth[],
+  months: { month: number }[],
+  k: number,
+  curMoIdx: number,
+  remFrac: number,
+): { spend: number; units: number } {
+  let spend = 0, units = 0;
+  for (const m of months) {
+    const p = plan.find(x => x.mo === m.month);
+    if (!p) continue;
+    const s = p.spend * k;
+    const u = p.anchored && p.spend0 > 0 ? unitsAtSpend(s, p.units0, p.spend0, p.e) : p.units * k;
+    const frac = (m.month - 1) === curMoIdx ? remFrac : 1;
+    spend += s * frac;
+    units += u * frac;
+  }
+  return { spend, units };
+}
