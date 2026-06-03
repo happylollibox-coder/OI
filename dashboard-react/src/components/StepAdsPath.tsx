@@ -18,7 +18,7 @@
 import { useMemo, useEffect } from 'react';
 import { fK, fmt } from '../utils';
 import type { AdsEfficiencyMonth, MonthDef } from '../planTypes';
-import { unitsAtSpend, profitMaxSpend } from '../planTypes';
+import { unitsAtSpend, profitMaxSpend, scaleHorizonPlan } from '../planTypes';
 
 type AdsChannelMonth = {
   family: string; yr: number; mo: number; searchType: string;
@@ -310,6 +310,30 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   // Sum over the PLAN HORIZON (the `months` window: current → Feb'27) so the curve, the 2025
   // baseline, and Step 4 / the order all cover the same months and totals agree exactly.
   const horizonDays = useMemo(() => months.reduce((s, m) => s + (DAYS_IN_MONTH[m.month - 1] || 30), 0), [months]);
+
+  // ── Ramp-up trajectory (12+ months from now) ──
+  // Derive the data cutoff day for the current month from channelData
+  const dataActualDay = useMemo(() => {
+    const now = new Date();
+    const curMo = now.getMonth() + 1;
+    const curYr = now.getFullYear();
+    // Find current month's channel data — if spend/days ratio suggests partial month
+    const curMonthRows = channelData.filter(c => c.yr === curYr && c.mo === curMo);
+    if (curMonthRows.length > 0) {
+      // Estimate actual days from spend: total spend / daily spend rate
+      const totalSpend = curMonthRows.reduce((s, r) => s + r.spend, 0);
+      const dailyRate = curMonthRows[0]?.currentDailySpend || 1;
+      const estDays = Math.round(totalSpend / dailyRate);
+      return Math.max(1, Math.min(estDays, now.getDate() - 2)); // data lags 2 days
+    }
+    return Math.max(1, now.getDate() - 2); // fallback: 2-day lag
+  }, [channelData]);
+
+  // Current calendar month (0-based) + remaining-days fraction — the current month counts only
+  // its forward-remaining slice in every plan total (forecast-based; matches snapshot + coach).
+  const curMoIdx0 = new Date().getMonth();
+  const curRemFrac = Math.max(0, 1 - dataActualDay / (DAYS_IN_MONTH[curMoIdx0] || 30));
+
   // 2025 baseline (what actually happened) + the recommended-plan totals — for the curve
   // markers and the "2025 → recommended" improvement callout.
   const baseline2025 = useMemo(() => {
@@ -318,10 +342,9 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
     return { spend, units, profit: units * margin - spend };
   }, [months, monthlySpend, monthlyUnits, margin]);
   const planTotals = useMemo(() => {
-    let spend = 0, units = 0, profit = 0;
-    for (const m of months) { const p = profitMaxPlan[m.month - 1]; if (p) { spend += p.spend; units += p.units; profit += p.profit; } }
-    return { spend, units, profit };
-  }, [months, profitMaxPlan]);
+    const t = scaleHorizonPlan(profitMaxPlan, months, 1, curMoIdx0, curRemFrac);
+    return { spend: t.spend, units: t.units, profit: t.units * margin - t.spend };
+  }, [profitMaxPlan, months, margin, curMoIdx0, curRemFrac]);
   // Marker positions on the ×-plan axis (over the horizon): 2025 actual (LY) and current spend (NOW).
   const lyK = planTotals.spend > 0 ? baseline2025.spend / planTotals.spend : 0;
   const nowK = planTotals.spend > 0 ? (baseDailySpend * horizonDays) / planTotals.spend : 0;
@@ -342,14 +365,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   }, [nowK, lyK]);
   const curve: CurvePoint[] = useMemo(() => {
     return multipliers.map(k => {
-      let spend = 0, units = 0;
-      for (const m of months) {
-        const p = profitMaxPlan[m.month - 1];
-        if (!p) continue;
-        const s = p.spend * k;
-        units += p.anchored && p.spend0 > 0 ? unitsAtSpend(s, p.units0, p.spend0, p.e) : p.units * k;
-        spend += s;
-      }
+      const { spend, units } = scaleHorizonPlan(profitMaxPlan, months, k, curMoIdx0, curRemFrac);
       const profit = units * margin - spend;
       return {
         k, daily: horizonDays > 0 ? spend / horizonDays : 0, annual: spend,
@@ -359,7 +375,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
         roas: spend > 0 ? (units * margin) / spend : 0,
       };
     });
-  }, [multipliers, profitMaxPlan, months, margin, baseAdsShare, horizonDays]);
+  }, [multipliers, profitMaxPlan, months, margin, baseAdsShare, horizonDays, curMoIdx0, curRemFrac]);
 
   const peakIdx = curve.reduce((best, p, i) => p.profitYear > curve[best].profitYear ? i : best, 0);
   const maxProfit = Math.max(...curve.map(p => Math.abs(p.profitYear)), 1);
@@ -386,24 +402,6 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
     const monthsToPeak = curMo < 9 ? 9 - curMo : 12 - curMo + 9;
     return Math.min(months, monthsToPeak, 12);
   }, [selectedK]);
-
-  // ── Ramp-up trajectory (12+ months from now) ──
-  // Derive the data cutoff day for the current month from channelData
-  const dataActualDay = useMemo(() => {
-    const now = new Date();
-    const curMo = now.getMonth() + 1;
-    const curYr = now.getFullYear();
-    // Find current month's channel data — if spend/days ratio suggests partial month
-    const curMonthRows = channelData.filter(c => c.yr === curYr && c.mo === curMo);
-    if (curMonthRows.length > 0) {
-      // Estimate actual days from spend: total spend / daily spend rate
-      const totalSpend = curMonthRows.reduce((s, r) => s + r.spend, 0);
-      const dailyRate = curMonthRows[0]?.currentDailySpend || 1;
-      const estDays = Math.round(totalSpend / dailyRate);
-      return Math.max(1, Math.min(estDays, now.getDate() - 2)); // data lags 2 days
-    }
-    return Math.max(1, now.getDate() - 2); // fallback: 2-day lag
-  }, [channelData]);
 
   // User dial on the profit-max plan: 1.0 = profit-max; >1 over-spends, <1 under-spends.
   const spendScale = selectedK;
