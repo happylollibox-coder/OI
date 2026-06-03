@@ -2046,6 +2046,8 @@ export function PlanPage({ data }: { data: DashboardData }) {
             <th className="text-left py-2 px-2 w-40">Family</th>
             <th className="text-right py-2 px-2 w-20"><Tip text="Current daily ad spend across all campaigns">$/day <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
             <th className="text-right py-2 px-2 w-20"><Tip text="Current inventory (FBA + Manufacturer)\nWeeks of stock in parentheses">Stock <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
+            <th className="text-right py-2 px-2 w-20"><Tip text={`Plan units over the horizon (forecast; current month = remaining)\n${MONTHS[0].label} – ${MONTHS[MONTHS.length - 1].label}`}>Plan Units <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
+            <th className="text-right py-2 px-2 w-20"><Tip text="Plan net profit = units×margin − ad spend (horizon)">Plan Profit <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
             <th className="text-right py-2 px-2 w-20"><Tip text="Total simulated ad spend\nApr ’26 – Feb ’27">Ad Spend <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
             <th className="text-right py-2 px-2 w-16"><Tip text="(Revenue − COGS) ÷ Ad Spend\nSimulated gross profit per ad dollar">ROAS <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
             <th className="text-right py-2 px-2 w-20"><Tip text="Year-to-date Net Profit\nJan–Mar 2026 actuals">YTD NP <span className="text-faint text-[9px]">ⓘ</span></Tip></th>
@@ -2064,6 +2066,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
               for (const p of projs) { const fd = p.families[f.family]; if (fd) { fDemand += fd.demand; fRev += fd.revenue; fCogs += fd.cogs; fAd += fd.adSpend; } }
               const fGap = fDemand - f.inventory;
               const fNetRoas = fAd > 0 ? (fRev - fCogs) / fAd : 0;
+              const fNp = fRev - fCogs - fAd; // plan net profit over the horizon
               // PR (purchase request) costs per family
               const prQty = fGap > 0 ? Math.ceil(fGap) : 0;
               let fMfrCost = 0, fShipCost = 0;
@@ -2080,6 +2083,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
               const fShipTotal = prQty * fShipCost;
               const fLanded = fMfrTotal + fShipTotal;
               return (<FamilyRow key={f.family} f={f} oos={oos} wks={wks} isExp={isExp} projs={projs}
+                simUnits={fDemand} simNetProfit={fNp}
                 simAdSpend={fAd} simNetRoas={fNetRoas}
                 prQty={prQty} prLanded={fLanded}
                 actuals2026Full={actuals2026Full}
@@ -2108,6 +2112,8 @@ export function PlanPage({ data }: { data: DashboardData }) {
               <td className="py-2 px-2 text-heading">{isFiltered ? 'FILTERED TOTAL' : 'TOTAL'}</td>
               <td className="text-right py-2 px-2 tabular-nums text-muted">{fM(curDaily)}</td>
               <td className="text-right py-2 px-2 tabular-nums text-muted">{fU(filteredFamilies.reduce((s, f) => s + f.inventory, 0))}</td>
+              <td className="text-right py-2 px-2 tabular-nums text-heading">{fU(filteredTotals.demand)}</td>
+              <td className={`text-right py-2 px-2 tabular-nums font-bold ${filteredTotals.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fK(filteredTotals.netProfit)}</td>
               <td className="text-right py-2 px-2 tabular-nums text-heading">{fK(filteredTotals.adSpend)}</td>
               <td className={`text-right py-2 px-2 tabular-nums ${filteredTotals.netRoas >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>{filteredTotals.netRoas.toFixed(2)}×</td>
               <td className={`text-right py-2 px-2 tabular-nums font-bold ${filteredYtdProfit.total >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fK(filteredYtdProfit.total)}</td>
@@ -2261,9 +2267,9 @@ export function PlanPage({ data }: { data: DashboardData }) {
   );
 }
 
-function FamilyRow({ f, oos, wks, isExp, projs, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, planned, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
+function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, planned, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
   f: FamilyBaseline; oos: string | null; wks: number; isExp: boolean; projs: MonthProj[];
-  simAdSpend: number; simNetRoas: number;
+  simUnits: number; simNetProfit: number; simAdSpend: number; simNetRoas: number;
   prQty: number; prLanded: number;
   actuals2026Full: Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
   actuals2025Full: Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
@@ -2307,6 +2313,8 @@ function FamilyRow({ f, oos, wks, isExp, projs, simAdSpend, simNetRoas, prQty, p
       </td>
       <td className="text-right py-2 px-2 text-muted tabular-nums">{fM(f.dailySpend)}</td>
       <td className="text-right py-2 px-2 tabular-nums text-muted">{fU(f.inventory)} <span className="text-faint text-[9px]">({wks}w)</span></td>
+      <td className="text-right py-2 px-2 tabular-nums text-heading">{fU(simUnits)}</td>
+      <td className={`text-right py-2 px-2 tabular-nums font-bold ${simNetProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fK(simNetProfit)}</td>
       <td className="text-right py-2 px-2 tabular-nums text-heading">
         <div>{fK(simAdSpend)}</div>
         {useCompare && baseCmp && tgtCmp && renderDeltaNode(baseCmp.totals.adSpend, tgtCmp.totals.adSpend, 'currency', true, 'ml-auto mt-0.5 block w-fit')}
@@ -2329,7 +2337,7 @@ function FamilyRow({ f, oos, wks, isExp, projs, simAdSpend, simNetRoas, prQty, p
       <td className="text-right py-2 px-2 tabular-nums text-heading font-medium">{prQty > 0 ? fmt(prQty) : '—'}</td>
       <td className="text-right py-2 px-2 tabular-nums text-heading font-bold">{prLanded > 0 ? fK(prLanded) : '—'}</td>
     </tr>
-    {isExp && <tr><td colSpan={10} className="p-0">
+    {isExp && <tr><td colSpan={12} className="p-0">
       <div className="bg-surface/50 border-y border-border/50 px-4 py-3 space-y-3">
 
         {/* Variation rows */}
