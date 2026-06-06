@@ -431,3 +431,27 @@ export function scaleHorizonPlan(
   }
   return { spend, units };
 }
+
+// Day-of-month through which we have *actual* current-month data — derived from the real latest
+// data date (e.g. FACT_AMAZON_PERFORMANCE_DAILY's max date) instead of a wall-clock lag guess.
+// This is the numerator of the current-month proration (cutoffDay / daysInMonth).
+//   - latestDataDate in the current (year, month) → its day-of-month (e.g. Jun 4 → 4).
+//   - latestDataDate in an earlier month (current month has no data yet) → 1 (never /0).
+//   - missing/invalid latestDataDate → fallbackDay (caller passes today − lag, clamped ≥ 1).
+// `month` is 1-based.
+export function dataCutoffDay(
+  latestDataDate: Date | null | undefined,
+  year: number,
+  month: number,
+  fallbackDay: number,
+): number {
+  const fb = Math.max(1, fallbackDay);
+  if (latestDataDate && !isNaN(latestDataDate.getTime())) {
+    const ly = latestDataDate.getFullYear();
+    const lm = latestDataDate.getMonth() + 1;
+    if (ly === year && lm === month) return Math.max(1, latestDataDate.getDate());
+    if (ly < year || (ly === year && lm < month)) return 1; // no current-month data yet
+    return fb; // beyond current month (shouldn't happen) → fall back
+  }
+  return fb;
+}

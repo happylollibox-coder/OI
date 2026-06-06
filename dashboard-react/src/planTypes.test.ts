@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay } from './planTypes';
 
 describe('blendedNetRoas', () => {
   it('returns (sales − cogs) / adCost summed over rows', () => {
@@ -396,5 +396,31 @@ describe('scaleHorizonPlan', () => {
     const r = scaleHorizonPlan(p2, [{ month: 5 }], 3, -1, 1);
     expect(r.spend).toBe(3000);
     expect(r.units).toBe(300);
+  });
+});
+
+describe('dataCutoffDay', () => {
+  it('uses the latest data date day-of-month when it is in the current month', () => {
+    // Orders through Jun 4, today is Jun 6 — should be 4, not the wall-clock fallback.
+    expect(dataCutoffDay(new Date(2026, 5, 4), 2026, 6, 2)).toBe(4);
+  });
+
+  it('clamps day to >= 1', () => {
+    expect(dataCutoffDay(new Date(2026, 5, 1), 2026, 6, 5)).toBe(1);
+  });
+
+  it('returns 1 when the latest data is in an earlier month (no current-month data yet)', () => {
+    expect(dataCutoffDay(new Date(2026, 4, 31), 2026, 6, 4)).toBe(1);
+    expect(dataCutoffDay(new Date(2025, 11, 31), 2026, 6, 4)).toBe(1);
+  });
+
+  it('falls back to the wall-clock day when latestDataDate is missing or invalid', () => {
+    expect(dataCutoffDay(null, 2026, 6, 4)).toBe(4);
+    expect(dataCutoffDay(undefined, 2026, 6, 4)).toBe(4);
+    expect(dataCutoffDay(new Date('nope'), 2026, 6, 4)).toBe(4);
+  });
+
+  it('clamps the fallback to >= 1', () => {
+    expect(dataCutoffDay(null, 2026, 6, -3)).toBe(1);
   });
 });

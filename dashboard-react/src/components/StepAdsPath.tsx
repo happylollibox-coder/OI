@@ -18,7 +18,7 @@
 import { useMemo, useEffect } from 'react';
 import { fK, fmt } from '../utils';
 import type { AdsEfficiencyMonth, MonthDef } from '../planTypes';
-import { unitsAtSpend, profitMaxSpend, scaleHorizonPlan } from '../planTypes';
+import { unitsAtSpend, profitMaxSpend, scaleHorizonPlan, dataCutoffDay } from '../planTypes';
 
 type AdsChannelMonth = {
   family: string; yr: number; mo: number; searchType: string;
@@ -171,7 +171,7 @@ export interface FamilyRoasRef {
   adOnly: Record<string, { 2025: number | null; 2026: number | null }>;
 }
 
-export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, roas, onTargets, onTrajectory }: {
+export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, roas, latestDataDate, onTargets, onTrajectory }: {
   famEff: Record<number, AdsEfficiencyMonth>;
   path: 'current' | 'target' | 'custom'; onPath: (p: 'current' | 'target' | 'custom') => void;
   customDaily: number; onCustom: (v: number) => void;
@@ -181,6 +181,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   monthlyUnits?: number[]; // total units (organic+ad) per calendar month, prior year — true demand seasonality
   monthlySpend?: number[]; // prior-year ad spend per calendar month — anchors the profit-max curve
   roas?: FamilyRoasRef | null;
+  latestDataDate?: Date | null;
   onTargets?: (targets: AdsTarget[]) => void;
   onTrajectory?: (traj: TrajMonth[]) => void;
 }) {
@@ -312,22 +313,24 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   const horizonDays = useMemo(() => months.reduce((s, m) => s + (DAYS_IN_MONTH[m.month - 1] || 30), 0), [months]);
 
   // ── Ramp-up trajectory (12+ months from now) ──
-  // Derive the data cutoff day for the current month from channelData
+  // Current-month data cutoff day = the REAL latest orders/units date (latestDataDate, from
+  // FACT_AMAZON_PERFORMANCE_DAILY). Falls back to the spend-derived estimate (then today−2)
+  // only while the freshness query is loading — same source of truth as StepGrowth.
   const dataActualDay = useMemo(() => {
     const now = new Date();
     const curMo = now.getMonth() + 1;
     const curYr = now.getFullYear();
-    // Find current month's channel data — if spend/days ratio suggests partial month
+    // Fallback estimate from channelData spend/rate, capped at today−2.
     const curMonthRows = channelData.filter(c => c.yr === curYr && c.mo === curMo);
+    let fallbackDay = now.getDate() - 2;
     if (curMonthRows.length > 0) {
-      // Estimate actual days from spend: total spend / daily spend rate
       const totalSpend = curMonthRows.reduce((s, r) => s + r.spend, 0);
       const dailyRate = curMonthRows[0]?.currentDailySpend || 1;
       const estDays = Math.round(totalSpend / dailyRate);
-      return Math.max(1, Math.min(estDays, now.getDate() - 2)); // data lags 2 days
+      fallbackDay = Math.min(estDays, now.getDate() - 2);
     }
-    return Math.max(1, now.getDate() - 2); // fallback: 2-day lag
-  }, [channelData]);
+    return dataCutoffDay(latestDataDate, curYr, curMo, fallbackDay);
+  }, [channelData, latestDataDate]);
 
   // Current calendar month (0-based) + remaining-days fraction — the current month counts only
   // its forward-remaining slice in every plan total (forecast-based; matches snapshot + coach).

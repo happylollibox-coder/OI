@@ -6,7 +6,7 @@ import type {
   FamilyBaseline, AdsEfficiencyMap, ForecastDemandMap, ForecastMetaMap,
   MonthSeasonMap, MonthDef, MonthProj,
 } from '../planTypes';
-import { MFR, SHIP, allocateOrder, splitTrajectoryToProducts, monthKey, offSeasonTrend } from '../planTypes';
+import { MFR, SHIP, allocateOrder, splitTrajectoryToProducts, monthKey, offSeasonTrend, dataCutoffDay } from '../planTypes';
 
 const STEPS = [
   { id: 1, label: 'Baseline' },
@@ -61,11 +61,12 @@ interface Props {
   brandedSearch: BrandedSearchMonth[];
   channelEfficiency: AdsChannelMonth[];
   roas: FamilyRoasRef | null;
+  latestDataDate?: Date | null;
   onSave: (result: WizardResult) => void | Promise<void>;
   onClose: () => void;
 }
 
-export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, adsEfficiency, projs, growthOverrides: initGrowth, actuals2025, actuals2026, brandedSearch, channelEfficiency, roas, onSave, onClose }: Props) {
+export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, adsEfficiency, projs, growthOverrides: initGrowth, actuals2025, actuals2026, brandedSearch, channelEfficiency, roas, latestDataDate, onSave, onClose }: Props) {
   const [step, setStep] = useState(1);
   const [adsPath, setAdsPath] = useState<'current' | 'target' | 'custom'>('current');
   const [customDaily, setCustomDaily] = useState(0);
@@ -254,8 +255,8 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 text-xs">
           {step === 1 && <StepBaseline products={products} months={months} metaMap={metaMap} actuals2025={actuals2025} />}
-          {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} seasonMap={seasonMap} onGrowthChange={setBrandGrowth} />}
-          {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelData} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} roas={roas} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
+          {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} seasonMap={seasonMap} latestDataDate={latestDataDate} onGrowthChange={setBrandGrowth} />}
+          {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelData} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} roas={roas} latestDataDate={latestDataDate} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
           {step === 4 && <StepSpendPlan months={months} famEff={famEff} path={adsPath} customDaily={customDaily} trajectory={trajectory} currentStock={f.inventory} />}
           {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} forecastByProduct={forecastByProduct} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} />}
         </div>
@@ -356,11 +357,12 @@ function StepBaseline({ products, months, metaMap, actuals2025 }: {
 // Shows branded search purchases — units from customers who specifically
 // searched for the brand. Uses same DIM_BRAND_PHRASES logic as Brand page.
 // Brand-level (not per-family) because top searches span multiple families.
-function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, seasonMap, onGrowthChange }: {
+function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, seasonMap, latestDataDate, onGrowthChange }: {
   products: FamilyBaseline['variations']; months: MonthDef[];
   demandMap: ForecastDemandMap; actuals2025: ActualsMap; actuals2026: ActualsMap;
   brandedSearch: BrandedSearchMonth[]; family: string;
   seasonMap: Record<string, Record<number, { peakDays: number; offseasonDays: number }>>;
+  latestDataDate?: Date | null;
   onGrowthChange: (g: number) => void;
 }) {
   const [perDay, setPerDay] = useState(false); // Monthly Demand table: monthly total vs daily average
@@ -375,17 +377,12 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
       if (b.yr === 2026) mo26.set(b.mo, b);
     }
 
-    // Data cutoff: orders lag ~2 days from today
+    // Data cutoff = the REAL latest orders/units date (FACT_AMAZON_PERFORMANCE_DAILY's max,
+    // passed in as latestDataDate), not a wall-clock lag guess. Falls back to today−2 (the
+    // orders feed's typical lag) only if the freshness query hasn't loaded yet.
     const today = new Date();
-    // Fix #2: Derive cutoff from actual data, not hardcoded wall-clock lag
     const currentMonth = today.getMonth() + 1; // 1-based
-    const maxDataDate = familyData
-      .filter(b => b.yr === 2026 && b.mo === currentMonth)
-      .reduce((max, b) => Math.max(max, b.mo), 0);
-    // If we have current month data, use the day count from data; else fallback to today - 4
-    const cutoffDay = maxDataDate > 0
-      ? Math.max(today.getDate() - 4, 1) // 4-day lag per architecture doc
-      : Math.max(today.getDate() - 4, 1);
+    const cutoffDay = dataCutoffDay(latestDataDate, today.getFullYear(), currentMonth, today.getDate() - 2);
     const daysInCurrentMonth = new Date(2026, currentMonth, 0).getDate();
     const prorateFactor = Math.max(cutoffDay / daysInCurrentMonth, 0.01); // never 0 or negative
 
@@ -530,7 +527,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
       brandForecast26, nbForecast26,
       brandTrend, nbTrend, combinedTrend, isOffSeason, brandCurRemaining, nbCurRemaining, LY_MIN,
     };
-  }, [brandedSearch, family]);
+  }, [brandedSearch, family, latestDataDate]);
 
   // Report combined growth to parent wizard state
   useEffect(() => { onGrowthChange(brandComparison.combinedGrowth); }, [brandComparison.combinedGrowth, onGrowthChange]);

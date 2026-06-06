@@ -935,6 +935,25 @@ export function PlanPage({ data }: { data: DashboardData }) {
     fetchActuals(2025, setActuals2025);
   }, []);
 
+  // Real latest data date for orders/units (FACT_AMAZON_PERFORMANCE_DAILY) — drives the
+  // current-month proration cutoff in the wizard instead of a wall-clock lag guess.
+  const [latestDataDate, setLatestDataDate] = useState<Date | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await cubeLoad({
+          dimensions: ['DataFreshness.source', 'DataFreshness.maxDate'],
+          filters: [{ member: 'DataFreshness.source', operator: 'equals', values: ['FACT_AMAZON_PERFORMANCE_DAILY'] }],
+        });
+        const raw = (rows as Record<string, unknown>[])[0]?.['DataFreshness.maxDate'];
+        if (raw) {
+          const d = new Date(String(raw).slice(0, 10) + 'T00:00:00');
+          if (!isNaN(d.getTime())) { setLatestDataDate(d); console.log('[PlanPage] perf data through:', d.toISOString().slice(0, 10)); }
+        }
+      } catch (e) { console.warn('[PlanPage] data-freshness load failed', e); }
+    })();
+  }, []);
+
   // Weekly actuals (incl. clicks, for the tracking scorecard's Week tab + CPC actual).
   // Map<productShortName, Map<weekStartISO, WeekActual>>.
   const [actualsWeekly, setActualsWeekly] = useState<Map<string, Map<string, WeekActual>>>(new Map());
@@ -2161,6 +2180,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
           brandedSearch={brandedSearch}
           channelEfficiency={channelEfficiency}
           roas={familyRoas[wf.family] ?? null}
+          latestDataDate={latestDataDate}
           onClose={() => setWizardFamily(null)}
           onSave={async (result) => {
             // Fix #5: Apply brand growth to all products in this family (always, to clear stale overrides)
