@@ -454,8 +454,10 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
     const brandHistory = familyData.map(b => ({ year: b.yr, month: b.mo, units: (b.purchases ?? 0) + (b.adsUnits ?? 0) }));
     const nbHistory = familyData.map(b => ({ year: b.yr, month: b.mo, units: (b.totalSqpPurchases ?? 0) + (b.totalAdsUnits ?? 0) - ((b.purchases ?? 0) + (b.adsUnits ?? 0)) }));
     const trendCutoff = { year: 2026, month: currentMonth, prorate: prorateFactor };
+    const combinedHistory = familyData.map(b => ({ year: b.yr, month: b.mo, units: (b.totalSqpPurchases ?? 0) + (b.totalAdsUnits ?? 0) }));
     const brandTrend = offSeasonTrend(brandHistory, isOffSeason, null, trendCutoff);
     const nbTrend = offSeasonTrend(nbHistory, isOffSeason, null, trendCutoff);
+    const combinedTrend = offSeasonTrend(combinedHistory, isOffSeason, null, trendCutoff);
     const daysRemaining = daysInCurrentMonth * (1 - prorateFactor);
     // A 2026 forecast month has no USABLE prior-year base when its 2025 source is missing (~0)
     // OR falls in the product's launch+2 warmup (ramp period — not a steady baseline).
@@ -526,7 +528,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
       periodLabel, overlapMonths, mo25, mo26, forecast26, fullYear25,
       currentMonth, lastFullMonth, prorateFactor, cutoffDay, brandFcstByMonth, nbFcstByMonth,
       brandForecast26, nbForecast26,
-      brandTrend, nbTrend, isOffSeason, brandCurRemaining, nbCurRemaining, LY_MIN,
+      brandTrend, nbTrend, combinedTrend, isOffSeason, brandCurRemaining, nbCurRemaining, LY_MIN,
     };
   }, [brandedSearch, family]);
 
@@ -537,15 +539,8 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
   const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const displayMonths = brandComparison.overlapMonths.length > 0;
 
-  const brandUp = brandComparison.brandGrowthPct > 5;
-  const brandDown = brandComparison.brandGrowthPct < -5;
-  const nbUp = brandComparison.nbGrowthPct > 5;
-  const nbDown = brandComparison.nbGrowthPct < -5;
-  const combUp = brandComparison.combinedGrowthPct > 5;
-  const combDown = brandComparison.combinedGrowthPct < -5;
-
   // For a new product (no usable prior-year base), the YoY % is meaningless ("X vs 0 → 0%").
-  // Show the within-year off-season momentum instead.
+  // Show the within-year off-season momentum instead. Combined uses the SAME method as Brand/Non-brand.
   const channelHeadline = (c25: number, trend: { usable: boolean; momentum: number; recentRate: number; priorRate: number }, growthPct: number) => {
     if (c25 <= brandComparison.LY_MIN && trend.usable) {
       const pct = (trend.momentum - 1) * 100;
@@ -555,6 +550,12 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
   };
   const brandHead = channelHeadline(brandComparison.brand25, brandComparison.brandTrend, brandComparison.brandGrowthPct);
   const nbHead = channelHeadline(brandComparison.nb25, brandComparison.nbTrend, brandComparison.nbGrowthPct);
+  const combHead = channelHeadline(brandComparison.combined25, brandComparison.combinedTrend, brandComparison.combinedGrowthPct);
+
+  // Card up/down border colors track the displayed headline % (off-season trend when YoY is unusable).
+  const brandUp = brandHead.pct > 5, brandDown = brandHead.pct < -5;
+  const nbUp = nbHead.pct > 5, nbDown = nbHead.pct < -5;
+  const combUp = combHead.pct > 5, combDown = combHead.pct < -5;
 
   return (
     <div>
@@ -595,9 +596,11 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
         <div className={`p-3 rounded-xl border-2 text-center ${combUp ? 'border-emerald-500/40 bg-emerald-500/5' : combDown ? 'border-red-500/40 bg-red-500/5' : 'border-border/40 bg-border/5'}`}>
           <div className="text-[9px] text-faint mb-1">📊 Combined ({brandComparison.periodLabel})</div>
           <div className={`text-2xl font-black tabular-nums ${combUp ? 'text-emerald-400' : combDown ? 'text-red-400' : 'text-heading'}`}>
-            {brandComparison.combinedGrowthPct > 0 ? '+' : ''}{brandComparison.combinedGrowthPct.toFixed(0)}%
+            {combHead.pct > 0 ? '+' : ''}{combHead.pct.toFixed(0)}%
           </div>
-          <div className="text-[9px] text-muted mt-0.5">{fmt(brandComparison.combined26)} vs {fmt(brandComparison.combined25)}</div>
+          {combHead.sub
+            ? <div className="text-[8px] text-blue-400/80 mt-0.5">{combHead.sub}</div>
+            : <div className="text-[9px] text-muted mt-0.5">{fmt(brandComparison.combined26)} vs {fmt(brandComparison.combined25)}</div>}
           <div className="text-[8px] text-faint mt-0.5">Brand: {brandComparison.combined26 > 0 ? ((brandComparison.brand26 / brandComparison.combined26) * 100).toFixed(0) : 0}% · Non-brand: {brandComparison.combined26 > 0 ? ((brandComparison.nb26 / brandComparison.combined26) * 100).toFixed(0) : 0}%</div>
           <div className="text-[8px] text-faint">2026F: {fmt(brandComparison.forecast26)} units</div>
         </div>
