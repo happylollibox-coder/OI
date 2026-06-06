@@ -363,6 +363,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
   seasonMap: Record<string, Record<number, { peakDays: number; offseasonDays: number }>>;
   onGrowthChange: (g: number) => void;
 }) {
+  const [perDay, setPerDay] = useState(false); // Monthly Demand table: monthly total vs daily average
   // Compare branded search purchases: YoY through data cutoff date
   // Prorates the current partial month in BOTH years for fair comparison
   const brandComparison = useMemo(() => {
@@ -638,14 +639,26 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
           return total;
         };
 
-        // Cell renderer: units + spend subtitle + optional profit
-        const cell = (key: string, v: number, spend: number, cls: string, profit?: number) => (
-          <td key={key} className={`text-right py-1 px-1 tabular-nums ${cls}`}>
-            <div>{v > 0 ? fmt(v) : '—'}</div>
-            {spend > 0 && <div className="text-[8px] text-faint font-normal not-italic">{fK(spend)}</div>}
-            {profit !== undefined && profit !== 0 && <div className={`text-[8px] font-normal not-italic ${profit >= 0 ? 'text-emerald-400/70' : 'text-red-400/70'}`}>{fK(profit)}</div>}
-          </td>
-        );
+        // Cell renderer: units + spend subtitle + optional profit. In per-day mode each value is
+        // divided by the days it spans — full months by days-in-month; the split current-month
+        // columns (key suffix 'a' = elapsed actual, 'f' = remaining forecast) by their slice days.
+        const cell = (key: string, v: number, spend: number, cls: string, profit?: number) => {
+          let dv = v, ds = spend, dp = profit;
+          if (perDay) {
+            const m = parseInt(key.replace(/\D/g, ''), 10) || cm;
+            const dim = new Date(2026, m, 0).getDate();
+            const elapsed = Math.max(1, Math.round(dim * pf));
+            const days = key.endsWith('a') ? elapsed : key.endsWith('f') ? Math.max(1, dim - elapsed) : dim;
+            dv = v / days; ds = spend / days; dp = profit !== undefined ? profit / days : undefined;
+          }
+          return (
+            <td key={key} className={`text-right py-1 px-1 tabular-nums ${cls}`}>
+              <div>{dv > 0 ? fmt(Math.round(dv)) : '—'}</div>
+              {ds > 0 && <div className="text-[8px] text-faint font-normal not-italic">{fK(ds)}</div>}
+              {dp !== undefined && Math.round(dp) !== 0 && <div className={`text-[8px] font-normal not-italic ${dp >= 0 ? 'text-emerald-400/70' : 'text-red-400/70'}`}>{fK(dp)}</div>}
+            </td>
+          );
+        };
 
         // Columns: Jan..Apr (full actual), May Actual, May Fcst, Jun..Dec (forecast)
         type Col = { key: string; label: string; month: number; type: 'actual' | 'current_actual' | 'current_fcst' | 'forecast' };
@@ -788,7 +801,13 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
 
         return (
           <div className="mb-4">
-            <div className="text-heading font-bold text-[11px] mb-2">Monthly Demand by Channel</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-heading font-bold text-[11px]">Monthly Demand by Channel</div>
+              <div className="flex gap-1">
+                <button onClick={() => setPerDay(false)} className={`px-2 py-0.5 rounded text-[9px] font-medium transition-colors ${!perDay ? 'bg-blue-500 text-white' : 'bg-border/30 text-muted hover:bg-border/50'}`}>Monthly</button>
+                <button onClick={() => setPerDay(true)} className={`px-2 py-0.5 rounded text-[9px] font-medium transition-colors ${perDay ? 'bg-blue-500 text-white' : 'bg-border/30 text-muted hover:bg-border/50'}`}>Daily avg</button>
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-[10px]">
                 <thead><tr className="text-muted border-b border-border">
