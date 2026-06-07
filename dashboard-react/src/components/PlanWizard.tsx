@@ -384,12 +384,13 @@ function StepBaseline({ products, months, metaMap, actuals2025 }: {
 // Shows branded search purchases — units from customers who specifically
 // searched for the brand. Uses same DIM_BRAND_PHRASES logic as Brand page.
 // Brand-level (not per-family) because top searches span multiple families.
-function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, seasonMap, latestDataDate, onGrowthChange }: {
+function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, seasonMap, latestDataDate, shape, onGrowthChange }: {
   products: FamilyBaseline['variations']; months: MonthDef[];
   demandMap: ForecastDemandMap; actuals2025: ActualsMap; actuals2026: ActualsMap;
   brandedSearch: BrandedSearchMonth[]; family: string;
   seasonMap: Record<string, Record<number, { peakDays: number; offseasonDays: number }>>;
   latestDataDate?: Date | null;
+  shape: number[];
   onGrowthChange: (g: number) => void;
 }) {
   const [perDay, setPerDay] = useState(false); // Monthly Demand table: monthly total vs daily average
@@ -483,12 +484,6 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
     const nbTrend = offSeasonTrend(nbHistory, isOffSeason, null, trendCutoff);
     const combinedTrend = offSeasonTrend(combinedHistory, isOffSeason, null, trendCutoff);
     const daysRemaining = daysInCurrentMonth * (1 - prorateFactor);
-    // A 2026 forecast month has no USABLE prior-year base when its 2025 source is missing (~0)
-    // OR falls in the product's launch+2 warmup (ramp period — not a steady baseline).
-    const ordOf = (y: number, m: number) => y * 12 + (m - 1);
-    const noUsableBase = (lyUnits: number, trend: typeof brandTrend, m: number) =>
-      (lyUnits <= LY_MIN || (trend.launch != null && ordOf(2025, m) <= ordOf(trend.launch.year, trend.launch.month) + 2))
-      && isOffSeason(2026, m) && trend.usable;
 
     // Forecast: actual months + projected remaining months (using per-channel growth)
     // Brand forecast
@@ -499,7 +494,6 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
     const nbFcstByMonth = new Map<number, number>();
     for (let m = 1; m <= 12; m++) {
       const d26 = mo26.get(m);
-      const d25 = mo25.get(m);
       if (m <= lastFullMonth) {
         // Full actual month
         const bv = (d26?.purchases ?? 0) + (d26?.adsUnits ?? 0);
@@ -510,28 +504,19 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
         // Partial month: actual (prorated) + remaining (forecast)
         const bActual = (d26?.purchases ?? 0) + (d26?.adsUnits ?? 0);
         const nbActual = (d26?.totalSqpPurchases ?? 0) + (d26?.totalAdsUnits ?? 0) - bActual;
-        // Remaining = LY remaining portion × growth — or, for a new product with no LY base in an
-        // off-season month, the within-year off-season run-rate × remaining days.
-        const bLy = (d25?.purchases ?? 0) + (d25?.adsUnits ?? 0);
-        const nbLy = (d25?.totalSqpPurchases ?? 0) + (d25?.totalAdsUnits ?? 0) - bLy;
-        const bRemaining = noUsableBase(bLy, brandTrend, m)
-          ? Math.round(brandTrend.recentRate * daysRemaining) : Math.round(bLy * (1 - prorateFactor) * brandGrowth);
-        const nbRemaining = noUsableBase(nbLy, nbTrend, m)
-          ? Math.round(nbTrend.recentRate * daysRemaining) : Math.round(nbLy * (1 - prorateFactor) * nbGrowth);
+        // Remaining = current channel run-rate × remaining days (shape[currentMonth] = 1).
+        const bRemaining = Math.round(brandTrend.recentRate * daysRemaining);
+        const nbRemaining = Math.round(nbTrend.recentRate * daysRemaining);
         brandCurRemaining = bRemaining; nbCurRemaining = nbRemaining;
         brandForecast26 += bActual + bRemaining;
         nbForecast26 += nbActual + nbRemaining;
         brandFcstByMonth.set(m, bActual + bRemaining);
         nbFcstByMonth.set(m, nbActual + nbRemaining);
       } else {
-        // Future month: project from LY × channel growth — but if there's no usable prior-year
-        // base (new product) and the month is off-season, use the within-year off-season run-rate.
-        const bLy = (d25?.purchases ?? 0) + (d25?.adsUnits ?? 0);
-        const nbLy = (d25?.totalSqpPurchases ?? 0) + (d25?.totalAdsUnits ?? 0) - bLy;
-        const bProj = noUsableBase(bLy, brandTrend, m)
-          ? brandTrend.forecastUnits(2026, m) : Math.round(bLy * brandGrowth);
-        const nbProj = noUsableBase(nbLy, nbTrend, m)
-          ? nbTrend.forecastUnits(2026, m) : Math.round(nbLy * nbGrowth);
+        // Future month: current channel run-rate × days × the family seasonal shape (no LY×growth).
+        const daysInM = new Date(2026, m, 0).getDate();
+        const bProj = Math.round(brandTrend.recentRate * daysInM * (shape[m - 1] ?? 1));
+        const nbProj = Math.round(nbTrend.recentRate * daysInM * (shape[m - 1] ?? 1));
         brandForecast26 += bProj;
         nbForecast26 += nbProj;
         brandFcstByMonth.set(m, bProj); nbFcstByMonth.set(m, nbProj);
@@ -554,7 +539,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
       brandForecast26, nbForecast26,
       brandTrend, nbTrend, combinedTrend, isOffSeason, brandCurRemaining, nbCurRemaining, LY_MIN,
     };
-  }, [brandedSearch, family, latestDataDate]);
+  }, [brandedSearch, family, latestDataDate, shape, seasonMap]);
 
   // Report combined growth to parent wizard state
   useEffect(() => { onGrowthChange(brandComparison.combinedGrowth); }, [brandComparison.combinedGrowth, onGrowthChange]);
@@ -858,7 +843,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
               </table>
             </div>
             <div className="text-[9px] text-faint mt-1">
-              {brandComparison.periodLabel} compared YoY (prorated). <span className="italic text-blue-400/70">Blue italic = forecast (Brand {brandComparison.brandGrowthPct > 0 ? '+' : ''}{brandComparison.brandGrowthPct.toFixed(0)}% · Non-brand {brandComparison.nbGrowthPct > 0 ? '+' : ''}{brandComparison.nbGrowthPct.toFixed(0)}%)</span>
+              {brandComparison.periodLabel} compared YoY (prorated). <span className="italic text-blue-400/70">Blue italic = forecast (recent run-rate × last-year seasonal shape)</span>
             </div>
           </div>
         );
