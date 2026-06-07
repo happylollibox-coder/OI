@@ -1,98 +1,103 @@
-# Forecast Starting Point = Current 30-Day Run-Rate (× holiday shape)
+# Forecast Starting Point = Weighted Run-Rate × Last-Year Seasonal Shape
 
-**Date:** 2026-06-03
-**Component:** `dashboard-react/src/components/PlanWizard.tsx` (the `monthlyUnits2025` / `monthlySpend2025` anchors fed to `StepAdsPath`), `dashboard-react/src/pages/PlanPage.tsx` (trailing-30-day data), `dashboard-react/src/planTypes.ts` (pure anchor builder)
-**Status:** Design approved (approach + forks), pending spec review
-**Builds on:** the wizard-sourced-forecast + consistency work — the Ads Path profit-max engine is the single forecast source for planned families.
+**Date:** 2026-06-03 · **Revised:** 2026-06-07 (concrete recipe + scope locked via brainstorming)
+**Component:** `dashboard-react/src/planTypes.ts` (pure builders), `dashboard-react/src/pages/PlanPage.tsx` (trailing daily data + LY shape), `dashboard-react/src/components/PlanWizard.tsx` (StepGrowth display) + `StepAdsPath.tsx` (order anchor)
+**Status:** Design approved (all forks resolved), pending spec review
+**Builds on:** the wizard-sourced-forecast + consistency work — the Ads Path profit-max engine is the single forecast source that drives the plan/order/coach.
 
 ## Problem
 
-The Ads Path engine anchors each month to the **same month in 2025** (`monthlyUnits2025` / `monthlySpend2025`, raw actuals). For a young/growing family this is stale: **LolliME June 2025 = 0 units** (pre-launch), so the Jun '26 forecast has no real anchor and falls back to a season-benchmark (~22/day) — while LolliME actually sells a steady **~40/day** in 2026. The family's YoY growth never reaches the Ads Path (the Step-2 growth factor only feeds the runSim/demand path). Result: young/growing families are systematically under-forecast in their ramp months.
+Both wizard forecasts anchor on the **same month in 2025**, and both break for a young/growing family because LolliME's 2025 baseline ≈ 0:
 
-## Decisions (from brainstorming)
+- **Step 3 (Ads Path / order):** `units(S) = units₂₅ × (S/spend₂₅)^e`. With `units₂₅ ≈ 0` (LolliME June 2025 = 0, pre-launch) the anchor collapses to a thin season benchmark → the order under-calls June at **~9/day** while LolliME actually sells **~40/day**.
+- **Step 2 (Growth / "Monthly Demand by Channel" display):** future months = `LY_units[M] × YoY_growth`, where `YoY_growth = units₂₆(Jan–Jun) / units₂₅(Jan–Jun) = ~200 / ~0 = +98,900%`. A guard routes *off-season* future months to the within-year trend, but **peak months (Sep–Dec) skip the guard** (`isOffSeason` false) and compute `LY × 990` → **Dec 166,991, Year 8.3M units**.
 
-- **Approach A:** for **established** products the **starting point = the current 30-day run-rate** (the *level*), projected forward with a **seasonal shape** (so Dec still peaks).
-- **New products:** the 30-day run-rate is too thin → forecast off the **associated model product's first-year launch pattern** (the existing `demandMap` PHASE_1/PHASE_2 model). The model-product association is **per family** (`DE_NEW_PRODUCT_MODEL`) and becomes **display + editable in the wizard** (persisting via the existing endpoints).
-- **Scope:** **all products** — established ones via run-rate, new ones via the model product. Both branches feed the **Ads Path anchor** (today new products there fall back to a generic season benchmark; the model product only feeds runSim, so this wires it in).
-- **Seasonal shape source (established):** the **holiday demand model** (`V_FORECAST_DEMAND` / `demandMap`), new-product-aware and **not** distorted by a family's own 2025 ramp — unlike `computeSeasonality`.
+Same zero, opposite roles (anchor *level* vs. growth *divisor*), opposite blow-ups. The cure is to stop anchoring on 2025 and instead anchor on the **current run-rate**, shaped by a **last-year seasonal curve** that is launch-aware and divide-by-zero-safe.
+
+## Decisions (locked)
+
+1. **Level = weighted trailing run-rate** (recency-weighted), not raw 2025.
+2. **Seasonality = last-year monthly multipliers**, normalized so the **current month = 1**.
+3. **Launch-ramp exclusion:** a product's own LY months are only trusted from **launch + 3** onward (drop the first 3 post-launch months — they're low because *new*, not seasonal).
+4. **Reference fallback:** months a product can't supply (the current-month anchor + pre-launch + launch-ramp months) are borrowed from the **most-mature full-year family** (resolves to **Lollibox**), stitched onto the product's own clean months.
+5. **Scope = both tables, one model:** the same shape drives **Step 2's display** and **Step 3's order anchor**, so they stop exploding/under-calling and stay consistent.
 
 ## Model
 
-Replace the Ads Path anchors `monthlyUnits2025[m]` / `monthlySpend2025[m]` with a **current-reality anchor**:
+### 1. Level — weighted run-rate (pure: `weightedRunRate`)
+Four trailing 7-day buckets ending at the latest data date (`latestDataDate`, already plumbed from `DataFreshness.maxDate`), weighted toward recency:
 
-### 1. Level — per-product trailing-30-day run-rate
-From `V_UNIFIED_DAILY` (latest 30 days ending at the latest data date):
-- `runUnitsPerDay[product]` = Σ units (last 30d) ÷ 30
-- `runSpendPerDay[product]` = Σ adCost (last 30d) ÷ 30
-
-### 2. Shape — holiday demand curve, normalized to "now"
-From `demandMap[product][yearMonth]` (already loaded; holiday-driven, new-product-aware):
 ```
-shapeFactor[product][m] = demandMap[product][m] / demandMap[product][currentMonth]
+ratePerDay = 0.40·(Σwk1/7) + 0.30·(Σwk2/7) + 0.20·(Σwk3/7) + 0.10·(Σwk4/7)
 ```
-So `shapeFactor[currentMonth] = 1`, Dec lifts to its peak multiple, etc. **Fallbacks:** if `demandMap[product][currentMonth]` is 0/missing, fall back to the family-level demand ratio; if that's also absent, `shapeFactor = 1` (flat). Never divide by zero.
+- 28 days = 4×7 (reading "30 days" as 4 whole weeks; weights sum to 1.0).
+- Computed **per product** for **units/day** and **ad-spend/day** from `V_UNIFIED_DAILY`, giving a coherent `(unitsPerDay, spendPerDay)` pair.
+- Pure signature: `weightedRunRate(dailyValues: {date, value}[], asOf: Date, weights = [0.4,0.3,0.2,0.1]) → number`. Bucket *i* = days `[asOf-7i-6 … asOf-7i]`; a bucket with no days contributes 0 (its weight still divides by 7 so a partial recent week isn't over-counted). Robust to missing days.
 
-### 3. New anchor (replaces the 2025 anchors)
+### 2. Seasonal shape — `s[M]`, current month = 1 (pure: `seasonalShape`)
+Per family (seasonality is a family trait; one shape used by both steps):
+
+- `own[M]` = the family's 2025 monthly units, **only for clean months** `M ≥ launchMonth + 3`; else undefined. `launchMonth` = first 2025 month with units above a small floor.
+- `ref[M]` = the reference family's (Lollibox) 2025 monthly units — full year, always defined.
+- **Stitch scale** `a = mean over clean overlap months of ( own[M] / ref[M] )` (how much hotter/cooler this family runs vs the reference). If there is no clean overlap, `a = 1`.
+- **Expected-units curve:**
+  - `u[M] = own[M]` for clean own months (keeps the family's *real* holiday peak)
+  - `u[M] = a · ref[M]` for every other month — **including the current month** (this is how the current-month anchor gets a non-zero value when own LY is 0)
+- `s[M] = u[M] / u[currentMonth]` (so `s[currentMonth] = 1` by construction).
+
+**Degenerate cases, same formula:** a fully-mature family (Lollibox itself) → all months clean → pure own shape, reference unused. A brand-new family (no clean months) → `a` undefined → pure reference shape (`s[M] = ref[M]/ref[currentMonth]`).
+
+**Reference resolution:** the reference is derived, not hard-coded — the family with a complete 12-month 2025 history, a non-zero current month, and the largest annual volume → **Lollibox** today. (Per-family configurable reference via `DE_NEW_PRODUCT_MODEL` was offered and deferred — YAGNI for v1.)
+
+**Worked example — LolliME, June current:** clean own = Oct/Nov/Dec; `a ≈ 1.23`. Forward shape: Jun **1.00** · Jul 0.72 · Aug 1.04 · Sep 1.46 · Oct 1.20 · Nov **3.58** · Dec **9.32**. (Dec ≈ 9× June, not the raw 21× — the 21× was inflated by the artificially-low launch-Jul base, now excluded.) Forecast Dec = 40/d × 31 × 9.32 ≈ **11,556 units** — sane, vs today's 166,991 (display) and ~9/d (order). Minor seam: the reference-borrowed Sep (1.46) slightly exceeds the own Oct (1.20) — an acceptable stitch artifact since `a` is a mean over the clean overlap.
+
+### 3. Anchor (Step 3 — order)
 ```
-anchorUnits[product][m] = runUnitsPerDay[product] × daysInMonth[m] × shapeFactor[product][m]
-anchorSpend[product][m] = runSpendPerDay[product] × daysInMonth[m] × shapeFactor[product][m]
+anchorUnits[product][M] = unitsPerDay[product] · daysInMonth[M] · s[family][M]
+anchorSpend[product][M] = spendPerDay[product] · daysInMonth[M] · s[family][M]
 ```
-Re-leveling **both** units and spend by the same factor keeps a coherent `(units, spend)` pair every month — the anchor efficiency = the product's **current** units-per-ad-dollar, with **no 2025 dependency and no divide-by-zero** on pre-launch months. The family anchors fed to `StepAdsPath` are the per-product anchors summed over the family.
+Family anchor = Σ products. **Replaces** `monthlyUnits2025` / `monthlySpend2025` feeding `StepAdsPath`. The profit-max engine, season elasticities, order logic, coach, and snapshot are **unchanged** — they receive a current-reality `(units, spend)` anchor instead of stale 2025. Current-month proration (forecast-remaining) is unchanged: `s[currentMonth] = 1` ⇒ current month = run-rate × remaining days.
 
-### 3b. New products — model-product launch pattern (not run-rate)
-For a product where `metaMap[product].isNew` is true, **do not** use its (thin) 30-day run-rate. Instead set the Ads Path anchor from the model-based forecast that already exists per product in `demandMap` (driven by the family's `model_product` via `DE_NEW_PRODUCT_MODEL`, PHASE_1/PHASE_2):
+### 4. Display (Step 2 — Growth table)
+Replace the future-month projection (PlanWizard L499–511) for **both** channels:
 ```
-anchorUnits[product][m] = demandMap[product][m]                 // model launch-pattern units
-anchorSpend[product][m] = anchorUnits[product][m] × spendPerUnit  // see below
+proj_channel[M] = recentRate_channel · daysInMonth[M] · s[family][M]
 ```
-`spendPerUnit` for a new product comes from the family's recent ad efficiency (the season-benchmark spend÷units already used by the profit-max fallback) or the model product's spend-per-unit — so the `(units, spend)` anchor pair is coherent. This is the branch that actually **wires the model product into the Ads Path** (currently absent — new products there get the generic season fallback).
-
-**Selection per product:** `isNew ? modelAnchor (3b) : runRateAnchor (3)`. Both replace the raw-2025 anchor.
-
-### 4. Profit-max engine unchanged
-`profitMaxSpend` / `unitsAtSpend` / the season elasticities are untouched — they just receive the current-reality `(anchorUnits, anchorSpend)` instead of stale 2025. At the anchor spend the model reproduces the current run-rate × seasonality; it then optimizes spend around that.
-
-### 5. Current month
-The trailing-30-day rate **is** the current pace, so the current month's forecast = `runUnitsPerDay × remainingDays × shapeFactor[current]` (= run-rate × remaining days, since `shapeFactor[current]=1`) — consistent with the forecast-remaining rule already in place.
-
-## Wizard — model-product editor (display + edit)
-
-For families that contain new products, the wizard surfaces the **model product** that drives their launch forecast, and lets the user change it:
-- **Display:** in the wizard (Baseline or Growth step), show `family → model_product` (e.g. "New products modeled on: Mint LolliME"). Today this only appears as a MODEL/HYBRID tooltip badge in the family table.
-- **Edit:** a dropdown of candidate established products (from `GET /api/products`, excluding new/draft items), defaulting to the current `model_product`. On change, `POST` the upsert to **`DE_NEW_PRODUCT_MODEL`** (`{ family, model_product }`) via the existing endpoint (~app.py:6602, which UPSERTs + should `clear_data_cache()`).
-- **No new backend:** the GET (~app.py:6541), the upsert POST, and `/api/products` already exist.
-
-**Recompute timing (flagged):** `demandMap`/`V_FORECAST_DEMAND` is server-computed from the model product, so changing it persists immediately but the **forecast curve reflects the new model only after `V_FORECAST_DEMAND` recomputes** (next data refresh / SP run). v1: persist now + show the new association immediately, with a note that the forecast updates on the next refresh. (Client-side recompute from the chosen model's pattern is a possible follow-up.)
+- `recentRate_channel` = the existing per-channel current daily rate already computed by `offSeasonTrend` (`brandTrend.recentRate`, `nbTrend.recentRate`). Branded-search is monthly, so there's no clean daily channel split to re-weight; the existing recent-rate is the channel level. (The weighted run-rate from §1 is reserved for the order anchor, which has daily product data.)
+- Drop the `noUsableBase` / `isOffSeason` gating and the `LY × growth` branch entirely — every future month uses run-rate × shape, so peak months can no longer explode. Current-month remaining is already `recentRate × daysRemaining` (= shape 1.0) and stays.
+- The headline cards (+30 % / +49 % trend %) already use the trend path (prior fix `f84e507`) and are unchanged.
 
 ## Data
 
-- **Trailing-30-day per product** (`runUnitsPerDay`, `runSpendPerDay`): a new aggregate — either a small `V_UNIFIED_DAILY` Cube/SQL query on PlanPage (Σ units, Σ adCost over the last 30 days per `productShortName`) passed into the wizard, or derived from the existing weekly actuals (`actualsWeekly`, last ~4 weeks). Prefer the explicit 30-day query for accuracy.
-- **`demandMap`** — already loaded in the wizard (props).
-- **`daysInMonth`** — existing constant.
+- **Trailing daily per product** (`V_UNIFIED_DAILY`, last 28 days, units + adCost per `productShortName`): a new PlanPage Cube query (or reuse a daily pull), passed into the wizard.
+- **LY monthly units per family** (`own[M]`, `ref[M]`): from a 2025 monthly Cube pull per family (the Step-2 data already has family monthly units via `brandedSearch`; the reference needs full-year family units — add Lollibox to that pull or a small dedicated query).
+- **`latestDataDate`** — already plumbed (FACT_AMAZON_PERFORMANCE_DAILY max).
+- **`launchMonth`** — first 2025 month above a small floor (or reuse `offSeasonTrend(...).launch`).
 
-No new BigQuery object (V_UNIFIED_DAILY exists; demandMap exists).
+No new BigQuery object (`V_UNIFIED_DAILY` exists).
 
 ## Consistency
 
-The Ads Path is the single forecast source for planned families (per the prior work), so changing its anchor flows automatically to the snapshot, the coach targets, the Plan-page columns, and the order. **Follow-up (not this spec):** align the `runSim` fallback path to the same run-rate start so un-planned families match too; today runSim uses its own growth + new-product model.
+The Ads Path is the single forecast source for planned families, so the new anchor flows automatically to the snapshot, coach targets, Plan-page columns, and the order. With Step 2 on the same `s[M]`, the Growth display and the order now agree on the shape. **Follow-up (not this spec):** align the `runSim` fallback (unplanned families) to the same run-rate start.
 
 ## Testing
 
-- **Unit (`planTypes.ts`):** a pure `runRateAnchor(runPerDay, shapeByMonth, daysByMonth, months)` builder — verifies `anchor[m] = runPerDay × days[m] × shape[m]`, `shape[current]=1` ⇒ current month = run-rate, and the zero/missing-shape fallback to 1.
-- **Unit (branch selection):** a pure `productAnchor` selector — `isNew` product → uses the model/`demandMap` units; established → uses the run-rate anchor. Verifies the switch and that a new product never produces a near-zero anchor from thin run-rate data.
-- **Live:** open the LolliME wizard → Ads Path/Spend Plan → confirm the mid-year months (Jun–Oct '26) forecast **≈ the current ~40/day run-rate × seasonality**, not the old ~22/day; Dec still peaks; the headline/curve/columns all reflect it.
+- **Unit (`planTypes.ts`):**
+  - `weightedRunRate` — exact weights (e.g. uniform 7/day across 4 weeks → 7), recency weighting (recent week dominates), missing-day robustness, partial recent week.
+  - `seasonalShape` — `s[currentMonth] = 1` always; mature family → pure own shape (reference unused); young family (current-month own = 0) → stitched, `s[Dec]` finite and ≈ reference-scaled; brand-new (no clean months) → pure reference shape; launch-ramp months excluded; never divides by zero.
+- **Live:** open the LolliME wizard → Step 2 shows a sane Dec (~11.5K, **not** 166,991) and a realistic Year total; Step 3 trajectory/curve mid-year ≈ ~40/day (not ~9), Dec peaks; both tables agree on the shape; Lollibox (mature) is unchanged.
 
 ## Scope
 
-**Changes:** PlanPage computes the trailing-30-day per-product run-rate; PlanWizard builds the Ads Path anchor per product — established = run-rate × holiday shape, new = `demandMap` model launch pattern (replacing `monthlyUnits2025`/`monthlySpend2025`); a pure anchor builder + test in `planTypes.ts`; a wizard model-product display+edit control wired to the existing `DE_NEW_PRODUCT_MODEL` GET/upsert + `/api/products`.
+**Changes:** two pure builders + tests in `planTypes.ts` (`weightedRunRate`, `seasonalShape`); PlanPage computes the trailing-28-day per-product run-rate and the per-family LY-shape inputs (incl. the Lollibox reference); StepAdsPath anchor = run-rate × shape (replacing `monthlyUnits2025`/`monthlySpend2025`); StepGrowth future-month projection = recentRate × shape (removing the `LY × growth` explosion path).
 
-**Keeps unchanged:** the profit-max math, the order logic, the coach/snapshot wiring, the season elasticities, `V_FORECAST_DEMAND` (consumed, not changed), the new-product-model backend endpoints (reused), `computeSeasonality` (no longer the Ads Path shape source, but other callers keep it).
+**Keeps unchanged:** the profit-max math, order logic, coach/snapshot wiring, season elasticities, the headline trend cards, the current-month proration/cutoff (just-shipped), `computeSeasonality` (other callers).
 
-**Out of scope:** aligning the `runSim` fallback (follow-up); client-side recompute on model-product change (follow-up); re-keying `DE_NEW_PRODUCT_MODEL` to per-product (staying per-family); per-product elasticities.
+**Out of scope:** aligning the `runSim` fallback (follow-up); per-family configurable reference via `DE_NEW_PRODUCT_MODEL` (deferred); re-weighting Step 2's channel level to a daily weighted run-rate (needs daily channel data); per-product (vs per-family) seasonal shape.
 
 ## Open questions / risks
 
-- **`isNew` flag = the branch switch.** New products use the model launch pattern (3b); established use the 30-day run-rate (3). The `metaMap[product].isNew` flag (from `ForecastDemand`) is the discriminator — confirm it's reliable (a product transitions new→established over time; when it does it should move to the run-rate branch automatically once it has a real 30-day history).
-- **Model-edit recompute lag** (above): changing the model product reflects in the forecast only after `V_FORECAST_DEMAND` recomputes. Accepted for v1.
-- **Shape normalization month** (established): normalizing to the *current* calendar month assumes `demandMap[current]` is representative; if the current month is a holiday outlier, the whole curve shifts. Acceptable; revisit if a family looks off.
-- **Spend re-leveling:** re-leveling spend by the same factor assumes current efficiency holds across seasons; the season elasticity still adjusts marginal returns, so this only sets the anchor, not the optimum.
+- **Reference seasonality ≠ target seasonality.** Borrowing Lollibox's off-season/early-year shape for LolliME assumes similar seasonality outside the holiday peak. Accepted; LolliME's own peak (Oct–Dec) is preserved, only the low months are borrowed.
+- **Stitch scale `a` on thin overlap.** With only 3 clean own months, `a` is a 3-point mean; an outlier month skews it. Mitigation: `a` is a mean (not a single ratio); revisit if a family looks off.
+- **Step 2 vs Step 3 level mismatch.** Step 2 uses per-channel `recentRate` (monthly branded-search) while Step 3 uses the weighted daily run-rate — different universes (branded-search demand vs total units), so absolute levels won't match exactly. They share the *shape*; that's the consistency that matters. Documented, not reconciled.
+- **`launchMonth` detection floor.** Needs a sensible units floor so a single stray early sale isn't treated as launch. Reuse `offSeasonTrend`'s launch detection for consistency.
