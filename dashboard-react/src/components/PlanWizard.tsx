@@ -6,7 +6,7 @@ import type {
   FamilyBaseline, AdsEfficiencyMap, ForecastDemandMap, ForecastMetaMap,
   MonthSeasonMap, MonthDef, MonthProj,
 } from '../planTypes';
-import { MFR, SHIP, allocateOrder, splitTrajectoryToProducts, monthKey, offSeasonTrend, dataCutoffDay, seasonalShape, detectLaunchMonth } from '../planTypes';
+import { MFR, SHIP, allocateOrder, splitTrajectoryToProducts, monthKey, offSeasonTrend, dataCutoffDay, seasonalShape, detectLaunchMonth, launchOrderPhases } from '../planTypes';
 
 const STEPS = [
   { id: 1, label: 'Baseline' },
@@ -209,6 +209,20 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
 
   // Family gap = sum of per-product gaps (own velocity forecast − own stock). Stock isn't fungible
   // across variations, so a colour overstocked on its own demand shouldn't be reordered.
+  // ── Two-phase launch order (just-launched families: no last-year history, selling now) ──
+  const runRatePerProduct = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const v of f.variations) m[v.name] = runRateMap.get(v.name)?.unitsPerDay ?? 0;
+    return m;
+  }, [runRateMap, f.variations]);
+  const isLaunchFamily = useMemo(() => {
+    const own2025 = (familyMonthly2025[f.family] ?? []).reduce((a, b) => a + b, 0);
+    return own2025 <= 5 && familyRun.unitsPerDay > 0;
+  }, [familyMonthly2025, f.family, familyRun.unitsPerDay]);
+  const launchPhases = useMemo(
+    () => launchOrderPhases(f.variations, runRatePerProduct, forecastByProduct, friendlyRound),
+    [f.variations, runRatePerProduct, forecastByProduct, friendlyRound]);
+
   const gap = useMemo(
     () => Math.round(f.variations.reduce((sum, v) => sum + Math.max(0, (forecastByProduct[v.name] ?? 0) - v.inventory), 0)),
     [f.variations, forecastByProduct],
@@ -261,7 +275,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
     step !== 3 || adsPath !== 'current' || true // can always proceed from ads path (current is valid)
   );
   const canBack = step > 1;
-  const canSave = orderQty > 0;
+  const canSave = isLaunchFamily ? launchPhases.phase1Total > 0 : orderQty > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -298,7 +312,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
           {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} seasonMap={seasonMap} latestDataDate={latestDataDate} shape={shape} spendShape={spendShape} familyRunRate={familyRun.unitsPerDay} onGrowthChange={setBrandGrowth} />}
           {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelData} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} anchorUnits={anchorUnits} anchorSpend={anchorSpend} roas={roas} latestDataDate={latestDataDate} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
           {step === 4 && <StepSpendPlan months={months} famEff={famEff} path={adsPath} customDaily={customDaily} trajectory={trajectory} currentStock={f.inventory} />}
-          {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} forecastByProduct={forecastByProduct} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} />}
+          {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} forecastByProduct={forecastByProduct} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} isLaunchFamily={isLaunchFamily} launchPhase1={launchPhases.phase1} launchPhase2={launchPhases.phase2} runRatePerProduct={runRatePerProduct} />}
         </div>
 
         {/* Footer */}
@@ -318,8 +332,11 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
               setApplying(true);
               try {
               const alloc = allocateOrder(f.variations, orderQty, forecastDemand, friendlyRound, forecastByProduct);
-              // Effective per-product order: manual mode = user quantities (carton-rounded); auto = allocation.
-              const effectiveByProduct = orderMode === 'manual'
+              // Effective per-product order: launch family = Phase 1 (90-day buy); manual = user
+              // quantities (carton-rounded); auto = allocation. Phase 2 is an estimate, not saved.
+              const effectiveByProduct = isLaunchFamily
+                ? launchPhases.phase1
+                : orderMode === 'manual'
                 ? Object.fromEntries(f.variations.map(v => {
                     const stepUnit = friendlyRound ? 100 : (v.cartonQty > 0 ? v.cartonQty : 1);
                     const raw = manualByProduct[v.name] ?? 0;
@@ -969,11 +986,12 @@ function StepSpendPlan({ months, famEff, path, customDaily, trajectory, currentS
 }
 
 // ─── Step 5: Order Summary ───────────────────────────────
-function StepOrder({ family: f, annualDemand, forecastByProduct, gap, orderQty, onQty, friendly, onFriendly, mode, onMode, manualByProduct, onManualQty }: {
+function StepOrder({ family: f, annualDemand, forecastByProduct, gap, orderQty, onQty, friendly, onFriendly, mode, onMode, manualByProduct, onManualQty, isLaunchFamily, launchPhase1, launchPhase2, runRatePerProduct }: {
   family: FamilyBaseline; annualDemand: number; forecastByProduct: Record<string, number>; gap: number; orderQty: number; onQty: (n: number) => void;
   friendly: boolean; onFriendly: (b: boolean) => void;
   mode: 'auto' | 'manual'; onMode: (m: 'auto' | 'manual') => void;
   manualByProduct: Record<string, number>; onManualQty: (name: string, qty: number) => void;
+  isLaunchFamily: boolean; launchPhase1: Record<string, number>; launchPhase2: Record<string, number>; runRatePerProduct: Record<string, number>;
 }) {
   const alloc = useMemo(() => allocateOrder(f.variations, orderQty, annualDemand, friendly, forecastByProduct), [f.variations, orderQty, annualDemand, friendly, forecastByProduct]);
   // Effective per-product order: manual mode = user quantities; auto mode = gap-share allocation.
@@ -994,6 +1012,54 @@ function StepOrder({ family: f, annualDemand, forecastByProduct, gap, orderQty, 
     for (const v of f.variations) map[v.name] = Math.round(forecastByProduct[v.name] ?? 0);
     return map;
   }, [f.variations, forecastByProduct]);
+
+  // Just-launched family → two-phase launch order (90-day buy now + rest-of-year estimate for later).
+  if (isLaunchFamily) {
+    const p1Total = Object.values(launchPhase1).reduce((a, b) => a + b, 0);
+    const p2Total = Object.values(launchPhase2).reduce((a, b) => a + b, 0);
+    const ctn = (name: string, qty: number) => { const c = f.variations.find(v => v.name === name)?.cartonQty ?? 0; return c > 0 ? Math.round(qty / c) : 0; };
+    return (
+      <div>
+        <div className="mb-4 px-3 py-2 rounded-lg border border-blue-500/20 bg-blue-500/5 text-[11px] text-muted">
+          🚀 <span className="font-semibold text-heading">New launch</span> — buying in 2 phases: <b className="text-heading">90 days now</b>, then the rest once a month of real sales confirms the pace.
+        </div>
+        {/* Phase 1 — order now */}
+        <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div><span className="text-sm font-bold text-heading">Phase 1 — Launch buy (90 days)</span><span className="text-[10px] text-emerald-400 font-semibold ml-2">ORDER NOW</span></div>
+            <div className="text-lg font-bold text-heading tabular-nums">{fmt(p1Total)} u</div>
+          </div>
+          <table className="w-full text-[11px]"><tbody>
+            {f.variations.map(v => (
+              <tr key={v.name} className="border-b border-border/10">
+                <td className="py-1 text-muted">{v.name}</td>
+                <td className="py-1 text-right text-faint tabular-nums">{(runRatePerProduct[v.name] ?? 0).toFixed(1)}/d</td>
+                <td className="py-1 text-right text-heading font-medium tabular-nums">{fmt(launchPhase1[v.name] ?? 0)}</td>
+                <td className="py-1 text-right text-faint tabular-nums w-12">{ctn(v.name, launchPhase1[v.name] ?? 0)} ctn</td>
+              </tr>
+            ))}
+          </tbody></table>
+        </div>
+        {/* Phase 2 — estimate for later */}
+        <div className="rounded-xl border border-border/30 bg-border/5 p-4 opacity-80">
+          <div className="flex items-center justify-between mb-2">
+            <div><span className="text-sm font-bold text-muted">Phase 2 — Full restock to year-end</span><span className="text-[10px] text-amber-400/80 font-semibold ml-2">PLACE ~1 MONTH</span></div>
+            <div className="text-lg font-bold text-muted tabular-nums">{fmt(p2Total)} u</div>
+          </div>
+          <table className="w-full text-[11px]"><tbody>
+            {f.variations.map(v => (
+              <tr key={v.name} className="border-b border-border/10">
+                <td className="py-1 text-muted">{v.name}</td>
+                <td className="py-1 text-right text-muted tabular-nums">{fmt(launchPhase2[v.name] ?? 0)}</td>
+                <td className="py-1 text-right text-faint tabular-nums w-12">{ctn(v.name, launchPhase2[v.name] ?? 0)} ctn</td>
+              </tr>
+            ))}
+          </tbody></table>
+          <div className="text-[10px] text-faint mt-2 italic">Estimate — place after ~1 month and recalc on the real 30-day run-rate. Not ordered now.</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>

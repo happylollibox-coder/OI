@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, detectLaunchMonth, seasonalShape } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, detectLaunchMonth, seasonalShape, launchOrderPhases } from './planTypes';
 
 describe('blendedNetRoas', () => {
   it('returns (sales − cogs) / adCost summed over rows', () => {
@@ -422,6 +422,37 @@ describe('dataCutoffDay', () => {
 
   it('clamps the fallback to >= 1', () => {
     expect(dataCutoffDay(null, 2026, 6, -3)).toBe(1);
+  });
+});
+
+describe('launchOrderPhases', () => {
+  const vars = [{ name: 'A', inventory: 0, cartonQty: 12 }];
+  it('Phase 1 = ceilCarton(rate×90 − stock); Phase 2 = ceilCarton(forecast − stock − phase1)', () => {
+    const r = launchOrderPhases(vars, { A: 1 }, { A: 300 }, false);
+    expect(r.phase1.A).toBe(96);   // 90 → ceil(90/12)*12
+    expect(r.phase2.A).toBe(204);  // 300 − 0 − 96 = 204 (÷12 exact)
+    expect(r.phase1Total).toBe(96);
+    expect(r.phase2Total).toBe(204);
+  });
+  it('subtracts existing stock from both phases', () => {
+    const r = launchOrderPhases([{ name: 'B', inventory: 50, cartonQty: 10 }], { B: 2 }, { B: 400 }, false);
+    expect(r.phase1.B).toBe(130);  // 180 − 50 = 130
+    expect(r.phase2.B).toBe(220);  // 400 − 50 − 130
+  });
+  it('rate 0 → Phase 1 = 0 (seed-PO case); Phase 2 still sized', () => {
+    const r = launchOrderPhases([{ name: 'C', inventory: 20, cartonQty: 5 }], { C: 0 }, { C: 100 }, false);
+    expect(r.phase1.C).toBe(0);
+    expect(r.phase2.C).toBe(80);   // 100 − 20 − 0
+  });
+  it('never negative when stock covers the need', () => {
+    const r = launchOrderPhases([{ name: 'D', inventory: 500, cartonQty: 10 }], { D: 1 }, { D: 100 }, false);
+    expect(r.phase1.D).toBe(0);
+    expect(r.phase2.D).toBe(0);
+  });
+  it('friendly mode rounds to the next 100', () => {
+    const r = launchOrderPhases(vars, { A: 1 }, { A: 300 }, true);
+    expect(r.phase1.A).toBe(100);  // 90 → 100
+    expect(r.phase2.A).toBe(200);  // 300 − 0 − 100 = 200
   });
 });
 

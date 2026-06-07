@@ -432,6 +432,37 @@ export function scaleHorizonPlan(
   return { spend, units };
 }
 
+// Two-phase launch order for a just-launched family. Phase 1 = a 90-day launch buy at the early
+// run-rate (placed now); Phase 2 = the rest-of-horizon restock (an estimate placed ~1 month later).
+// `inventory` is the total pipeline (sellable + on-order), subtracted once — Phase 2 nets out Phase 1
+// and stock so the two never double-count. Quantities round up to whole cartons (or next 100 when
+// `friendly`). A product with rate 0 (< 3 selling days) gets Phase 1 = 0 (the manual seed PO covers it).
+export function launchOrderPhases(
+  variations: { name: string; inventory: number; cartonQty: number }[],
+  runRatePerProduct: Record<string, number>,
+  forecastByProduct: Record<string, number>,
+  friendly: boolean,
+): { phase1: Record<string, number>; phase2: Record<string, number>; phase1Total: number; phase2Total: number } {
+  const ceilTo = (x: number, c: number) => {
+    if (x <= 0) return 0;
+    const step = friendly ? 100 : (c > 0 ? c : 1);
+    return Math.ceil(x / step) * step;
+  };
+  const phase1: Record<string, number> = {};
+  const phase2: Record<string, number> = {};
+  let phase1Total = 0, phase2Total = 0;
+  for (const v of variations) {
+    const inv = v.inventory ?? 0;
+    const rate = runRatePerProduct[v.name] ?? 0;
+    const p1 = ceilTo(rate * 90 - inv, v.cartonQty);
+    const restOfYear = forecastByProduct[v.name] ?? 0;
+    const p2 = ceilTo(restOfYear - inv - p1, v.cartonQty);
+    phase1[v.name] = p1; phase2[v.name] = p2;
+    phase1Total += p1; phase2Total += p2;
+  }
+  return { phase1, phase2, phase1Total, phase2Total };
+}
+
 // Day-of-month through which we have *actual* current-month data — derived from the real latest
 // data date (e.g. FACT_AMAZON_PERFORMANCE_DAILY's max date) instead of a wall-clock lag guess.
 // This is the numerator of the current-month proration (cutoffDay / daysInMonth).
