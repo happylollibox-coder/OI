@@ -20,11 +20,11 @@ Same zero, opposite roles (anchor *level* vs. growth *divisor*), opposite blow-u
 2. **Seasonality = last-year monthly multipliers**, normalized so the **current month = 1**.
 3. **Launch-ramp exclusion:** a product's own LY months are only trusted from **launch + 3** onward (drop the first 3 post-launch months — they're low because *new*, not seasonal).
 4. **Reference fallback:** months a product can't supply (the current-month anchor + pre-launch + launch-ramp months) are borrowed from the **most-mature full-year family** (resolves to **Lollibox**), stitched onto the product's own clean months.
-5. **Just-launched products** (no clean own last-year month — e.g. Bunny, launched mid-2026) are not anchored to their own thin, still-ramping run-rate. Their **level follows the configured model product's launch ramp** (`DE_NEW_PRODUCT_MODEL`), with the model's **seasonality removed** so the holiday peak lands on the correct calendar month.
+5. **Just-launched products** (no clean own last-year month — e.g. Bunny) get **no full-year plan**. They are replenished in **small batches sized from their own earliest sales** (seed → first 3–5 days → first month), recalculated monthly. This is **PO/reorder mechanics** and is **split into its own follow-up spec** (see §2b + Scope).
 6. **Maturity is read from the app**, not guessed: a product is "just-launched" via `metaMap.isNew`/`forecastPhase` (PHASE_1) and/or "has zero clean own last-year months" — never from "first month with sales" (that misfires on a mature product whose data window simply starts in January).
 7. **Scope = both tables, one model:** the same shape drives **Step 2's display** and **Step 3's order anchor**, so they stop exploding/under-calling and stay consistent.
 
-Two mechanisms result: **(A) has ≥1 clean own last-year month** (Mature *and* New) → own run-rate × stitched shape; **(B) no clean own months** (Just-launched) → own run-rate × the model product's deseasonalized launch ramp × the model's shape.
+Two mechanisms result: **(A) has ≥1 clean own last-year month** (Mature *and* New) → own run-rate × stitched shape — **this spec**; **(B) no clean own months** (Just-launched) → staged own-sales batch replenishment — **separate spec**.
 
 ## Model
 
@@ -55,16 +55,18 @@ Per family (seasonality is a family trait; one shape used by both steps):
 
 **Worked example — LolliME, June current:** clean own = Oct/Nov/Dec; `a ≈ 1.23`. Forward shape: Jun **1.00** · Jul 0.72 · Aug 1.04 · Sep 1.46 · Oct 1.20 · Nov **3.58** · Dec **9.32**. (Dec ≈ 9× June, not the raw 21× — the 21× was inflated by the artificially-low launch-Jul base, now excluded.) Forecast Dec = 40/d × 31 × 9.32 ≈ **11,556 units** — sane, vs today's 166,991 (display) and ~9/d (order). Minor seam: the reference-borrowed Sep (1.46) slightly exceeds the own Oct (1.20) — an acceptable stitch artifact since `a` is a mean over the clean overlap.
 
-### 2b. Just-launched products — model launch ramp (mechanism B, pure: `launchRamp`)
-A product with **no clean own last-year month** (e.g. Bunny — launched ~May 2026, ~2 months of sales) has no usable own shape and a still-ramping run-rate. Anchor its **level** to the configured model product's launch trajectory, with seasonality removed so the holiday peak lands on the right *calendar* month (not "launch + k").
+### 2b. Just-launched products — staged batch replenishment (mechanism B)
+A product with **no clean own last-year month** (e.g. Bunny — launched ~May 2026) does **not** get a full-year plan. A launch is uncertain, so it is replenished **in small batches sized from its own earliest sales**, recalculated monthly:
 
-- **Model product** = `DE_NEW_PRODUCT_MODEL[family].model_product` (Bunny → Mint LolliME). Its shape `s_model[M]` is built by mechanism A. If no model is configured, fall back to the reference (Lollibox) shape.
-- **Deseasonalize the model's first-year history** to extract the pure ramp:
-  `L[k] = modelUnits[launch+k] / s_model[calendarMonth(launch+k)]` → `ramp[k] = L[k] / L[0]`, clamped **non-decreasing** (a launch only ramps up or plateaus, never dips).
-- **Forecast:** with the new product's age `k(M) = monthsSince(productLaunch, M)` and current age `k₀`,
-  `level(M) = runRate · ramp[k(M)] / ramp[k₀]`, then `forecast[M] = level(M) · daysInMonth[M] · s_model[M]`.
+- **Batch 1** — a small launch **seed** quantity (no sales yet; fixed/manual, not forecast-driven).
+- **Batch 2** — sized from the product's **first 3–5 days** of own sales (`unitsPerDay over the first 3–5 selling days`).
+- **Batch 3** — sized from the **first ~1 month** of own sales.
+- **Each batch covers a short rolling horizon** — replenishment lead time + the review interval (≈ 1 month) — **not 12 months**. `batchQty = ownRate × (leadDays + reviewDays) + safety − (onHand + onOrder)`.
+- **Recalculate monthly**; add a PO only when the accruing real sales justify it.
+- **Own sales only** — the similar product from the launch page (`V_PRODUCT_LAUNCH_MODEL`: per-product `daily_rate`/`ramp_index` by launch-month) is a **reference/expectation** to sanity-check against, **not a multiplier** on the batch.
+- **Graduation:** once the product has ~1 clean month of history it moves to **mechanism A** (full run-rate × shape) on the normal annual cycle.
 
-**Worked example — Bunny (model = Mint LolliME):** model deseasonalized level `492→818` ⇒ `ramp = [1.0, 1.02, 1.17, 1.67, 1.67, 1.67]` (+67% over 3 months, then plateau). Bunny run-rate 2.1/d, age 1 (June): level grows 2.1 → 3.4/d by August, then the shape lifts it. **Dec ≈ 993** (vs a flat-run-rate 613), Jul–Dec ≈ 1,806 — ramps like LolliME did, peaks in **December** (calendar-correct).
+**This is reorder/PO mechanics, not a demand-curve change** — it touches the order/Order-step logic (batch sizing, lead times, monthly recalc, "additional PO needed?"), independent of the run-rate × shape anchor that fixes Mature/New. **Recommended split into its own spec** (see Scope) so the urgent LolliME fix (mechanism A + both tables) can ship without waiting on launch-replenishment mechanics.
 
 ### 3. Anchor (Step 3 — order)
 ```
@@ -96,15 +98,15 @@ No new BigQuery object (`V_UNIFIED_DAILY` exists).
 
 Ran the exact algorithm on one product of each maturity class. All three produce sane, divide-by-zero-free forecasts:
 
-| Tier | Family | run-rate | Mechanism | Jun | Dec | Jul–Dec |
+| Tier | Family | run-rate | Mechanism (this spec) | Jun | Dec | Jul–Dec |
 |---|---|---|---|---|---|---|
 | Mature | Lollibox | 19/d | A — own run-rate × **own** shape (a=1.0, no borrow) | 576 | 5,563 | 10,083 |
 | New | LolliME | 46/d | A — own run-rate × (own peak + Lollibox borrow, a=1.23) | 1,368 | 13,174 | 24,260 |
-| Just-launched | Bunny | 2.1/d | B — run-rate × model deseasonalized ramp × model shape | 63 | 993 | 1,806 |
+| Just-launched | Bunny | 2.1/d | **B — out of this spec** (staged batch replenishment) | — | — | — |
 
 - **Mature** degenerates exactly as designed (all months clean, reference unused; own 9.35× Dec preserved; Jul–Dec ≈ 89 % of last year's actual, tracking the flat 2026 pace).
 - **New** is the headline win: Dec **13,174** vs today's broken **166,991** (display) / **~9/d** (order).
-- **Just-launched**: the deseasonalization cleanly split LolliME's ramp (level 492→818, +67 %) from its holidays; Bunny ramps 2.1→3.4/d then peaks in **December** at 993 (vs flat 613). Calendar-correct.
+- **Just-launched** is handled by the separate launch-replenishment spec (mechanism B). Until that ships, a just-launched family safely falls back to mechanism A's conservative own-run-rate (Bunny's thin ~2/d × the reference shape) — low but never exploding.
 
 ## Consistency
 
@@ -115,24 +117,22 @@ The Ads Path is the single forecast source for planned families, so the new anch
 - **Unit (`planTypes.ts`):**
   - `weightedRunRate` — exact weights (e.g. uniform 7/day across 4 weeks → 7), recency weighting (recent week dominates), missing-day robustness, partial recent week.
   - `seasonalShape` — `s[currentMonth] = 1` always; mature family → pure own shape (reference unused); young family (current-month own = 0) → stitched, `s[Dec]` finite and ≈ reference-scaled; brand-new (no clean months) → pure reference shape; launch-ramp months excluded; never divides by zero.
-  - `launchRamp` (mechanism B) — deseasonalizing a model's first-year history yields a non-decreasing ramp; a flat model → ramp all 1.0; the ramp is clamped non-decreasing (no mid-launch dip); holiday peak stays on the calendar month, not "launch + k".
-- **Live (all 3 tiers):** Lollibox (mature) Dec ≈ 5.5K and unchanged from its own shape; LolliME (new) Step 2 Dec ≈ 13K (**not** 166,991) and Step 3 mid-year ≈ ~40–46/day (not ~9), both tables agree on the shape; Bunny (just-launched) ramps from ~2/d and peaks in December (not October).
+- **Live:** Lollibox (mature) Dec ≈ 5.5K and unchanged from its own shape; LolliME (new) Step 2 Dec ≈ 13K (**not** 166,991) and Step 3 mid-year ≈ ~40–46/day (not ~9), both tables agree on the shape. Just-launched (Bunny) safely falls back to a conservative own-run-rate (no explosion); its proper staged-batch handling is the follow-up spec.
 
 ## Scope
 
-**Changes:** three pure builders + tests in `planTypes.ts` (`weightedRunRate`, `seasonalShape`, `launchRamp`); PlanPage computes the trailing-28-day per-product run-rate and the per-family LY-shape inputs (incl. the Lollibox reference); StepAdsPath anchor = run-rate × shape — mechanism A, or mechanism B (model launch ramp) for just-launched products (replacing `monthlyUnits2025`/`monthlySpend2025`); StepGrowth future-month projection = recentRate × shape (removing the `LY × growth` explosion path).
+**This spec = mechanism A + both tables.** Two pure builders + tests in `planTypes.ts` (`weightedRunRate`, `seasonalShape`); PlanPage computes the trailing-28-day per-product run-rate and the per-family LY-shape inputs (incl. the Lollibox reference); StepAdsPath anchor = run-rate × shape (replacing `monthlyUnits2025`/`monthlySpend2025`); StepGrowth future-month projection = recentRate × shape (removing the `LY × growth` explosion path). Just-launched families fall back to the conservative own-run-rate path here (no explosion) until mechanism B ships.
 
-**Suggested sequencing:** mechanism A (Mature + New) + both tables first — that fixes the LolliME explosion/under-call, the bulk of the value. Mechanism B (Just-launched ramp) is the most complex piece (deseasonalize → ramp → months-since-launch) and is a clean candidate for the **last task / a phase 2**; until it lands, just-launched products use mechanism A's conservative own-run-rate fallback.
+**Mechanism B (just-launched staged batch replenishment) → its own spec.** It's reorder/PO mechanics, independent of the demand curve, and shouldn't block the urgent LolliME fix. Its spec covers: detecting a just-launched product (`metaMap.isNew`/no-clean-month), batch sizing from own early sales (seed → 3–5 days → 1 month), the short rolling horizon (lead + review), monthly recalc / "additional PO needed", the `V_PRODUCT_LAUNCH_MODEL` reference, and the graduation to mechanism A.
 
 **Keeps unchanged:** the profit-max math, order logic, coach/snapshot wiring, season elasticities, the headline trend cards, the current-month proration/cutoff (just-shipped), `computeSeasonality` (other callers).
 
-**Out of scope:** aligning the `runSim` fallback (follow-up); per-family configurable reference via `DE_NEW_PRODUCT_MODEL` (deferred); re-weighting Step 2's channel level to a daily weighted run-rate (needs daily channel data); per-product (vs per-family) seasonal shape.
+**Out of scope (this spec):** mechanism B (separate spec); aligning the `runSim` fallback (follow-up); per-family configurable reference via `DE_NEW_PRODUCT_MODEL` (deferred); re-weighting Step 2's channel level to a daily weighted run-rate (needs daily channel data); per-product (vs per-family) seasonal shape.
 
 ## Open questions / risks
 
 - **Reference seasonality ≠ target seasonality.** Borrowing Lollibox's off-season/early-year shape for LolliME assumes similar seasonality outside the holiday peak. Accepted; LolliME's own peak (Oct–Dec) is preserved, only the low months are borrowed.
 - **Stitch scale `a` on thin overlap.** With only 3 clean own months, `a` is a 3-point mean; an outlier month skews it. Mitigation: `a` is a mean (not a single ratio); revisit if a family looks off.
 - **Step 2 vs Step 3 level mismatch.** Step 2 uses per-channel `recentRate` (monthly branded-search) while Step 3 uses the weighted daily run-rate — different universes (branded-search demand vs total units), so absolute levels won't match exactly. They share the *shape*; that's the consistency that matters. Documented, not reconciled.
-- **Just-launched run-rate is itself mid-ramp.** Mechanism B anchors the model ramp at the new product's *current* run-rate, which is still climbing — so the absolute level carries the new product's early noise (Bunny's ~2/d is a thin sample). The ramp *shape* comes from the model; the *level* from a noisy 28-day window. Accepted; revisit if a launch looks mis-sized.
-- **Model product must itself be old enough to ramp.** Mechanism B needs the model product to have ≥ a few post-launch months to extract a ramp; if the model is also brand-new, fall back to flat run-rate × reference shape.
+- **Just-launched fallback is low.** Until mechanism B ships, a just-launched family forecasts at its thin own run-rate × reference shape — conservative (under-orders) but safe. Acceptable interim.
 - **Launch/newness signal.** Relies on `metaMap.isNew`/`forecastPhase` being reliable as the maturity discriminator (a product transitions just-launched → new → mature; it should move from mechanism B to A once it has a clean own month).
