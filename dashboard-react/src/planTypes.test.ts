@@ -441,3 +441,17 @@ describe('weightedRunRate', () => {
     expect(weightedRunRate([7, 7], [0.5, 0.5])).toBeCloseTo(1, 6);
   });
 });
+
+describe('detectLaunchMonth', () => {
+  const lollibox = [745, 891, 1058, 2040, 898, 666, 481, 692, 972, 944, 2066, 6225];
+  const lollime  = [0, 0, 0, 0, 0, 0, 354, 520, 843, 983, 2929, 7620];
+  it('returns null for a mature family with January sales', () => {
+    expect(detectLaunchMonth(lollibox)).toBeNull();
+  });
+  it('returns the launch month when 2025 starts mid-year', () => {
+    expect(detectLaunchMonth(lollime)).toBe(7);
+  });
+  it('returns null when there is no 2025 data at all', () => {
+    expect(detectLaunchMonth(Array(12).fill(0))).toBeNull();
+  });
+});

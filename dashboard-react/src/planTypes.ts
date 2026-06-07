@@ -465,3 +465,14 @@ export function weightedRunRate(weeklyTotals: number[], weights: number[] = [0.4
   for (let i = 0; i < weights.length; i++) rate += weights[i] * ((weeklyTotals[i] ?? 0) / 7);
   return rate;
 }
+
+// The launch month (1-based) for a family's 2025 monthly-units array, or null when the
+// family is mature / has no data. A family with January sales (first-sale month === 1) is
+// treated as mature (no launch ramp) — this avoids mis-flagging a mature product whose data
+// window merely starts in January. `own[i]` is month i+1's 2025 total units.
+export function detectLaunchMonth(own: number[], floor = 5): number | null {
+  let first: number | null = null;
+  for (let i = 0; i < 12; i++) if ((own[i] ?? 0) > floor) { first = i + 1; break; }
+  if (first == null || first === 1) return null;
+  return first;
+}
