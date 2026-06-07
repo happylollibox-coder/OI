@@ -476,3 +476,25 @@ export function detectLaunchMonth(own: number[], floor = 5): number | null {
   if (first == null || first === 1) return null;
   return first;
 }
+
+// 12-month seasonal multiplier `s` for a family, normalized so s[currentMonth-1] === 1.
+// own/ref are 2025 monthly-units arrays (index 0 = January). A month is a "clean own month"
+// when its own units exceed `floor` AND it is past the launch ramp (launchMonth+3); launchMonth
+// null means mature (no ramp exclusion). The reference (most-mature full-year family) fills every
+// non-clean month — including the current-month anchor — scaled to the family's level by
+// a = mean(own/ref) over the clean overlap. Mature → pure own shape; brand-new → pure reference.
+export function seasonalShape(
+  own: number[],
+  ref: number[],
+  currentMonth: number,
+  launchMonth: number | null,
+  floor = 5,
+): number[] {
+  const clean = own.map((v, i) => v > floor && (launchMonth == null || (i + 1) >= launchMonth + 3));
+  let aNum = 0, aCnt = 0;
+  for (let i = 0; i < 12; i++) if (clean[i] && (ref[i] ?? 0) > 0) { aNum += own[i] / ref[i]; aCnt++; }
+  const a = aCnt ? aNum / aCnt : 1;
+  const u = own.map((v, i) => (clean[i] ? v : a * (ref[i] ?? 0)));
+  const ucm = u[currentMonth - 1];
+  return u.map((x, i) => (ucm > 0 ? x / ucm : (i === currentMonth - 1 ? 1 : 0)));
+}

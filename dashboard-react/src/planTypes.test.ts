@@ -455,3 +455,35 @@ describe('detectLaunchMonth', () => {
     expect(detectLaunchMonth(Array(12).fill(0))).toBeNull();
   });
 });
+
+describe('seasonalShape', () => {
+  const lollibox = [745, 891, 1058, 2040, 898, 666, 481, 692, 972, 944, 2066, 6225];
+  const lollime  = [0, 0, 0, 0, 0, 0, 354, 520, 843, 983, 2929, 7620];
+  const empty    = Array(12).fill(0);
+
+  it('current month is always 1', () => {
+    expect(seasonalShape(lollibox, lollibox, 6, null)[5]).toBeCloseTo(1, 6);
+    expect(seasonalShape(lollime, lollibox, 6, 7)[5]).toBeCloseTo(1, 6);
+  });
+  it('mature family uses its own shape (reference unused)', () => {
+    const s = seasonalShape(lollibox, lollibox, 6, null);
+    expect(s[11]).toBeCloseTo(6225 / 666, 4);
+    expect(s[6]).toBeCloseTo(481 / 666, 4);
+  });
+  it('new family keeps own Oct-Dec peak, borrows June anchor from reference', () => {
+    const s = seasonalShape(lollime, lollibox, 6, 7);
+    expect(s[11]).toBeGreaterThan(8.5);
+    expect(s[11]).toBeLessThan(10);
+    expect(s[10]).toBeCloseTo(2929 / (1.228 * 666), 1);
+  });
+  it('brand-new family (no clean own months) falls back to pure reference shape', () => {
+    const s = seasonalShape(empty, lollibox, 6, null);
+    expect(s[11]).toBeCloseTo(6225 / 666, 4);
+    expect(s[5]).toBeCloseTo(1, 6);
+  });
+  it('never produces NaN when reference current month is also 0', () => {
+    const s = seasonalShape(empty, empty, 6, null);
+    expect(s.every(x => Number.isFinite(x))).toBe(true);
+    expect(s[5]).toBe(1);
+  });
+});
