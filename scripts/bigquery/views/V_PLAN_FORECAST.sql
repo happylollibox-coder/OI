@@ -165,6 +165,51 @@ daily_rates AS (
   GROUP BY product
 ),
 
+-- 7b. Launch signal: first-sale date, is_launching (<=60d), and own early run-rate.
+-- For just-launched products the engine orders off their OWN trailing sales (widening window
+-- MIN(days_since_launch, 30)), not the model forecast. >=3 selling days required before a rate is
+-- trusted (else 0 -- the manual seed PO covers days 0-N). Mirrors last_30d_sales' join pattern.
+launch_signal AS (
+  SELECT
+    fsd.product,
+    fsd.first_sale_date,
+    DATE_DIFF(fsd.last_date, fsd.first_sale_date, DAY) AS days_since_launch,
+    CASE
+      WHEN COALESCE(lw.launch_selling_days, 0) >= 3
+      THEN lw.launch_units / LEAST(GREATEST(DATE_DIFF(fsd.last_date, fsd.first_sale_date, DAY), 1), 30)
+      ELSE 0
+    END AS launch_daily_rate,
+    (fsd.first_sale_date IS NOT NULL
+      AND DATE_DIFF(fsd.last_date, fsd.first_sale_date, DAY) BETWEEN 0 AND 60) AS is_launching
+  FROM (
+    SELECT dp.product_short_name AS product,
+      ANY_VALUE(lld.last_date) AS last_date,
+      COALESCE(MIN(fs.first_sale), MIN(dp.estimated_start_selling_date)) AS first_sale_date
+    FROM `onyga-482313.OI.DIM_PRODUCT` dp
+    CROSS JOIN last_loaded_date lld
+    LEFT JOIN (
+      SELECT dp2.product_short_name AS product, MIN(f.DATE) AS first_sale
+      FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY` f
+      JOIN `onyga-482313.OI.DIM_PRODUCT` dp2 ON dp2.asin = f.PURCHASED_ASIN
+      WHERE f.PURCHASED_UNITS > 0
+      GROUP BY 1
+    ) fs ON fs.product = dp.product_short_name
+    WHERE dp.is_active = TRUE AND dp.oi_is_active = TRUE
+    GROUP BY dp.product_short_name
+  ) fsd
+  LEFT JOIN (
+    SELECT dp3.product_short_name AS product,
+      SUM(f.PURCHASED_UNITS) AS launch_units,
+      COUNT(DISTINCT f.DATE) AS launch_selling_days
+    FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY` f
+    JOIN `onyga-482313.OI.DIM_PRODUCT` dp3 ON dp3.asin = f.PURCHASED_ASIN
+    CROSS JOIN last_loaded_date lld2
+    WHERE f.DATE BETWEEN DATE_SUB(lld2.last_date, INTERVAL 29 DAY) AND lld2.last_date
+      AND f.PURCHASED_UNITS > 0
+    GROUP BY 1
+  ) lw ON lw.product = fsd.product
+),
+
 -- 8. Inventory snapshot (latest date)
 inventory AS (
   SELECT
@@ -728,6 +773,7 @@ SELECT
 
 FROM inventory inv
 LEFT JOIN daily_rates dr ON inv.product = dr.product
+LEFT JOIN launch_signal ls ON inv.product = ls.product
 LEFT JOIN effective_growth eg ON inv.product = eg.product
 LEFT JOIN overrides o ON inv.product = o.product
 LEFT JOIN ytd_sales ys ON inv.product = ys.product
