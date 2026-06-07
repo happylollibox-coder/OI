@@ -455,3 +455,13 @@ export function dataCutoffDay(
   }
   return fb;
 }
+
+// Recency-weighted daily run-rate from the last N complete weekly totals.
+// weeklyTotals[0] = most recent complete week's total, [1] = the week before, …
+// Default weights bias the last 4 weeks 40/30/20/10. Each week is 7 days, so dividing
+// every bucket by 7 yields a per-day rate; missing buckets contribute 0.
+export function weightedRunRate(weeklyTotals: number[], weights: number[] = [0.4, 0.3, 0.2, 0.1]): number {
+  let rate = 0;
+  for (let i = 0; i < weights.length; i++) rate += weights[i] * ((weeklyTotals[i] ?? 0) / 7);
+  return rate;
+}

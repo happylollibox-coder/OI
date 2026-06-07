@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, detectLaunchMonth, seasonalShape } from './planTypes';
 
 describe('blendedNetRoas', () => {
   it('returns (sales − cogs) / adCost summed over rows', () => {
@@ -422,5 +422,22 @@ describe('dataCutoffDay', () => {
 
   it('clamps the fallback to >= 1', () => {
     expect(dataCutoffDay(null, 2026, 6, -3)).toBe(1);
+  });
+});
+
+describe('weightedRunRate', () => {
+  it('returns a flat per-day rate for uniform weeks', () => {
+    expect(weightedRunRate([70, 70, 70, 70])).toBeCloseTo(10, 6);
+  });
+  it('weights the most recent week most heavily', () => {
+    expect(weightedRunRate([70, 0, 0, 0])).toBeCloseTo(4, 6);
+    expect(weightedRunRate([0, 0, 0, 70])).toBeCloseTo(1, 6);
+  });
+  it('treats missing buckets as 0 (fewer than 4 weeks)', () => {
+    expect(weightedRunRate([70])).toBeCloseTo(4, 6);
+    expect(weightedRunRate([])).toBe(0);
+  });
+  it('accepts custom weights', () => {
+    expect(weightedRunRate([7, 7], [0.5, 0.5])).toBeCloseTo(1, 6);
   });
 });
