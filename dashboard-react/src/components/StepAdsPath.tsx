@@ -171,15 +171,17 @@ export interface FamilyRoasRef {
   adOnly: Record<string, { 2025: number | null; 2026: number | null }>;
 }
 
-export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, roas, latestDataDate, onTargets, onTrajectory }: {
+export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, anchorUnits, anchorSpend, roas, latestDataDate, onTargets, onTrajectory }: {
   famEff: Record<number, AdsEfficiencyMonth>;
   path: 'current' | 'target' | 'custom'; onPath: (p: 'current' | 'target' | 'custom') => void;
   customDaily: number; onCustom: (v: number) => void;
   totals: { cSpend: number; cUnits: number; cProfit: number; tSpend: number; tUnits: number; tProfit: number };
   channelData: AdsChannelMonth[]; months: MonthDef[];
   asp: number; costPerUnit: number;
-  monthlyUnits?: number[]; // total units (organic+ad) per calendar month, prior year — true demand seasonality
-  monthlySpend?: number[]; // prior-year ad spend per calendar month — anchors the profit-max curve
+  monthlyUnits?: number[]; // total units (organic+ad) per calendar month, prior year — for the 2025 baseline callout
+  monthlySpend?: number[]; // prior-year ad spend per calendar month — for the 2025 baseline callout
+  anchorUnits?: number[];  // run-rate × shape units per calendar month — anchors the profit-max curve
+  anchorSpend?: number[];  // run-rate × shape ad spend per calendar month — anchors the profit-max curve
   roas?: FamilyRoasRef | null;
   latestDataDate?: Date | null;
   onTargets?: (targets: AdsTarget[]) => void;
@@ -288,8 +290,8 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
       const mo = i + 1;
       const season = getSeasonType(mo, yr);
       const e = SEASON_E[season];
-      const u0 = monthlyUnits?.[i] ?? 0;
-      const s0 = monthlySpend?.[i] ?? 0;
+      const u0 = anchorUnits?.[i] ?? 0;
+      const s0 = anchorSpend?.[i] ?? 0;
       const sStar = profitMaxSpend(u0, s0, margin, e);
       if (sStar == null) {
         // No 2025 anchor (e.g. new family) — fall back to the season-benchmark daily run-rate.
@@ -303,7 +305,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
       return { mo, season, e, units0: u0, spend0: s0, anchored: true,
         spend: sStar, units, profit: units * margin - sStar };
     });
-  }, [monthlyUnits, monthlySpend, margin, seasonBenchmarks, baseAdsShare]);
+  }, [anchorUnits, anchorSpend, margin, seasonBenchmarks, baseAdsShare]);
 
   // ── Profit curve = the profit-max plan scaled by k (k = spendScale) ──
   // k=1 IS the plan, so the peak (max profit) lands at 1.0× and the explorer agrees with
