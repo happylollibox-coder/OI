@@ -660,7 +660,7 @@ SELECT
   inv.total_stock, inv.is_awd_product,
 
   -- Forecast
-  COALESCE(dr.daily_rate, 0) AS daily_rate,
+  CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.daily_rate, 0) END AS daily_rate,
   COALESCE(eg.growth, 1.0) AS effective_growth,
   ROUND(COALESCE(eg.unconstrained_growth, 1.0) * COALESCE(eg.demand_base, 0)) AS unconstrained_remaining_forecast,
 
@@ -694,56 +694,71 @@ SELECT
   inv.fba_stock + inv.in_transit + inv.awd_stock AS available_stock,
 
   -- Demand during effective lead time (month-by-month, not flat)
-  ROUND(COALESCE(ld.demand_during_lead, 0)) AS demand_during_lead,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * COALESCE(pl.effective_lead_days, inv.full_lead_days))
+       ELSE ROUND(COALESCE(ld.demand_during_lead, 0)) END AS demand_during_lead,
 
   -- Proportional 30, 45, 60 and 90-day demand and daily rate
-  ROUND(COALESCE(dwin.demand_30d, 0)) AS demand_30d,
-  ROUND(COALESCE(dwin.demand_45d, 0)) AS demand_45d,
-  ROUND(COALESCE(dwin.demand_60d, 0)) AS demand_60d,
-  ROUND(COALESCE(dwin.demand_90d, 0)) AS demand_90d,
-  ROUND(COALESCE(dwin.demand_90d, 0) / 90, 2) AS proportional_daily_demand,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * 30) ELSE ROUND(COALESCE(dwin.demand_30d, 0)) END AS demand_30d,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * LEAST(45, inv.full_lead_days + 30)) ELSE ROUND(COALESCE(dwin.demand_45d, 0)) END AS demand_45d,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * LEAST(60, inv.full_lead_days + 30)) ELSE ROUND(COALESCE(dwin.demand_60d, 0)) END AS demand_60d,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * (inv.full_lead_days + 30)) ELSE ROUND(COALESCE(dwin.demand_90d, 0)) END AS demand_90d,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate, 2) ELSE ROUND(COALESCE(dwin.demand_90d, 0) / 90, 2) END AS proportional_daily_demand,
 
   -- Days until OOS (using proportional demand, accounts for seasonality)
-  CASE WHEN COALESCE(dwin.demand_90d, 0) > 0
-    THEN CAST(FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / (dwin.demand_90d / 90)) AS INT64)
+  CASE
+    WHEN ls.is_launching THEN
+      CASE WHEN ls.launch_daily_rate > 0
+        THEN CAST(FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / ls.launch_daily_rate) AS INT64)
+        ELSE 999 END
+    WHEN COALESCE(dwin.demand_90d, 0) > 0
+      THEN CAST(FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / (dwin.demand_90d / 90)) AS INT64)
     ELSE 999
   END AS days_until_oos,
 
   -- Emergency priority: CEIL(weeks_to_OOS) + 1
-  CASE WHEN COALESCE(dwin.demand_90d, 0) > 0
-    THEN CAST(CEIL(GREATEST(0, FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / (dwin.demand_90d / 90))) / 7.0) AS INT64) + 1
+  CASE
+    WHEN ls.is_launching THEN
+      CASE WHEN ls.launch_daily_rate > 0
+        THEN CAST(CEIL(GREATEST(0, FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / ls.launch_daily_rate)) / 7.0) AS INT64) + 1
+        ELSE 999 END
+    WHEN COALESCE(dwin.demand_90d, 0) > 0
+      THEN CAST(CEIL(GREATEST(0, FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / (dwin.demand_90d / 90))) / 7.0) AS INT64) + 1
     ELSE 999
   END AS emergency_priority,
 
   -- Emergency check: available stock DOC < 90 days
   CASE
+    WHEN ls.is_launching THEN
+      (ls.launch_daily_rate > 0
+        AND (inv.fba_stock + inv.in_transit + inv.awd_stock) < ROUND(ls.launch_daily_rate * (inv.full_lead_days + 30)))
     WHEN COALESCE(dwin.demand_90d, 0) = 0 THEN FALSE
     WHEN (inv.fba_stock + inv.in_transit + inv.awd_stock) < COALESCE(dwin.demand_90d, 0) THEN TRUE
     ELSE FALSE
   END AS is_emergency,
 
   -- Q4 demand (Sep-Feb)
-  COALESCE(q4d.q4_demand, 0) AS q4_demand,
+  CASE WHEN ls.is_launching THEN 0 ELSE COALESCE(q4d.q4_demand, 0) END AS q4_demand,
 
   -- Pre-Q4 demand (current month through Aug)
-  COALESCE(pq4d.pre_q4_demand, 0) AS pre_q4_demand,
+  CASE WHEN ls.is_launching THEN 0 ELSE COALESCE(pq4d.pre_q4_demand, 0) END AS pre_q4_demand,
 
   -- Forecasted Sep 1 pipeline
-  GREATEST(0, (inv.fba_stock + inv.awd_stock + inv.in_transit) - COALESCE(pq4d.pre_q4_demand, 0)) AS forecasted_sep1_pipeline,
+  CASE WHEN ls.is_launching THEN (inv.fba_stock + inv.awd_stock + inv.in_transit)
+       ELSE GREATEST(0, (inv.fba_stock + inv.awd_stock + inv.in_transit) - COALESCE(pq4d.pre_q4_demand, 0)) END AS forecasted_sep1_pipeline,
 
   -- DOC walkthrough (month-by-month depletion — accurate with seasonal demand)
   CAST(ROUND(dw.sellable_doc_walk) AS INT64) AS sellable_doc_walk,
   CAST(ROUND(dw.fba_doc_walk) AS INT64) AS fba_doc_walk,
 
   -- Legacy flat-rate DOC (kept for backward compat)
-  CASE WHEN COALESCE(dr.daily_rate, 0) > 0
-    THEN ROUND(inv.fba_stock / dr.daily_rate, 1) ELSE 999.0
+  CASE WHEN (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.daily_rate, 0) END) > 0
+    THEN ROUND(inv.fba_stock / (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE dr.daily_rate END), 1) ELSE 999.0
   END AS fba_doc,
-  CASE WHEN COALESCE(dr.daily_rate, 0) > 0
-    THEN ROUND((inv.fba_stock + inv.in_transit) / dr.daily_rate, 1) ELSE 999.0
+  CASE WHEN (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.daily_rate, 0) END) > 0
+    THEN ROUND((inv.fba_stock + inv.in_transit) / (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE dr.daily_rate END), 1) ELSE 999.0
   END AS fba_doc_effective,
-  CASE WHEN COALESCE(dr.daily_rate, 0) > 0
-    THEN ROUND(inv.total_stock / dr.daily_rate, 1) ELSE 999.0
+  CASE WHEN (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.daily_rate, 0) END) > 0
+    THEN ROUND(inv.total_stock / (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE dr.daily_rate END), 1) ELSE 999.0
   END AS system_doc,
 
   -- Q4 PO feasibility
