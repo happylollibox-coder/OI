@@ -282,7 +282,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 text-xs">
           {step === 1 && <StepBaseline products={products} months={months} metaMap={metaMap} actuals2025={actuals2025} />}
-          {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} seasonMap={seasonMap} latestDataDate={latestDataDate} shape={shape} onGrowthChange={setBrandGrowth} />}
+          {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} seasonMap={seasonMap} latestDataDate={latestDataDate} shape={shape} familyRunRate={familyRun.unitsPerDay} onGrowthChange={setBrandGrowth} />}
           {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelData} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} anchorUnits={anchorUnits} anchorSpend={anchorSpend} roas={roas} latestDataDate={latestDataDate} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
           {step === 4 && <StepSpendPlan months={months} famEff={famEff} path={adsPath} customDaily={customDaily} trajectory={trajectory} currentStock={f.inventory} />}
           {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} forecastByProduct={forecastByProduct} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} />}
@@ -384,13 +384,14 @@ function StepBaseline({ products, months, metaMap, actuals2025 }: {
 // Shows branded search purchases — units from customers who specifically
 // searched for the brand. Uses same DIM_BRAND_PHRASES logic as Brand page.
 // Brand-level (not per-family) because top searches span multiple families.
-function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, seasonMap, latestDataDate, shape, onGrowthChange }: {
+function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, seasonMap, latestDataDate, shape, familyRunRate, onGrowthChange }: {
   products: FamilyBaseline['variations']; months: MonthDef[];
   demandMap: ForecastDemandMap; actuals2025: ActualsMap; actuals2026: ActualsMap;
   brandedSearch: BrandedSearchMonth[]; family: string;
   seasonMap: Record<string, Record<number, { peakDays: number; offseasonDays: number }>>;
   latestDataDate?: Date | null;
   shape: number[];
+  familyRunRate: number;
   onGrowthChange: (g: number) => void;
 }) {
   const [perDay, setPerDay] = useState(false); // Monthly Demand table: monthly total vs daily average
@@ -483,6 +484,14 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
     const brandTrend = offSeasonTrend(brandHistory, isOffSeason, null, trendCutoff);
     const nbTrend = offSeasonTrend(nbHistory, isOffSeason, null, trendCutoff);
     const combinedTrend = offSeasonTrend(combinedHistory, isOffSeason, null, trendCutoff);
+    // Forecast level = the trailing 4-week weighted run-rate (40/30/20/10) — the SAME level the
+    // order step uses — instead of offSeasonTrend's month-based "May + June-to-date". Split into
+    // brand / non-brand by their current share; fall back to the trend rate if run-rate is missing.
+    const trendTot = brandTrend.recentRate + nbTrend.recentRate;
+    const brandShare = trendTot > 0 ? brandTrend.recentRate / trendTot : 0;
+    const fcstRate = familyRunRate > 0 ? familyRunRate : trendTot;
+    const brandRate = fcstRate * brandShare;
+    const nbRate = fcstRate * (1 - brandShare);
     const daysRemaining = daysInCurrentMonth * (1 - prorateFactor);
 
     // Forecast: actual months + projected remaining months (using per-channel growth)
@@ -504,19 +513,19 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
         // Partial month: actual (prorated) + remaining (forecast)
         const bActual = (d26?.purchases ?? 0) + (d26?.adsUnits ?? 0);
         const nbActual = (d26?.totalSqpPurchases ?? 0) + (d26?.totalAdsUnits ?? 0) - bActual;
-        // Remaining = current channel run-rate × remaining days (shape[currentMonth] = 1).
-        const bRemaining = Math.round(brandTrend.recentRate * daysRemaining);
-        const nbRemaining = Math.round(nbTrend.recentRate * daysRemaining);
+        // Remaining = weighted 4-week run-rate × remaining days (shape[currentMonth] = 1).
+        const bRemaining = Math.round(brandRate * daysRemaining);
+        const nbRemaining = Math.round(nbRate * daysRemaining);
         brandCurRemaining = bRemaining; nbCurRemaining = nbRemaining;
         brandForecast26 += bActual + bRemaining;
         nbForecast26 += nbActual + nbRemaining;
         brandFcstByMonth.set(m, bActual + bRemaining);
         nbFcstByMonth.set(m, nbActual + nbRemaining);
       } else {
-        // Future month: current channel run-rate × days × the family seasonal shape (no LY×growth).
+        // Future month: weighted 4-week run-rate × days × the family seasonal shape (no LY×growth).
         const daysInM = new Date(2026, m, 0).getDate();
-        const bProj = Math.round(brandTrend.recentRate * daysInM * (shape[m - 1] ?? 1));
-        const nbProj = Math.round(nbTrend.recentRate * daysInM * (shape[m - 1] ?? 1));
+        const bProj = Math.round(brandRate * daysInM * (shape[m - 1] ?? 1));
+        const nbProj = Math.round(nbRate * daysInM * (shape[m - 1] ?? 1));
         brandForecast26 += bProj;
         nbForecast26 += nbProj;
         brandFcstByMonth.set(m, bProj); nbFcstByMonth.set(m, nbProj);
@@ -539,7 +548,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
       brandForecast26, nbForecast26,
       brandTrend, nbTrend, combinedTrend, isOffSeason, brandCurRemaining, nbCurRemaining, LY_MIN,
     };
-  }, [brandedSearch, family, latestDataDate, shape, seasonMap]);
+  }, [brandedSearch, family, latestDataDate, shape, seasonMap, familyRunRate]);
 
   // Report combined growth to parent wizard state
   useEffect(() => { onGrowthChange(brandComparison.combinedGrowth); }, [brandComparison.combinedGrowth, onGrowthChange]);
