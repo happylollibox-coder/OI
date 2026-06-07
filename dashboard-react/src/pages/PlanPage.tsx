@@ -5,7 +5,7 @@ import type { DashboardData, ShipmentPlanRow } from '../types';
 import { useShipmentPlan, useScheduledShipments, useShipmentHistory, ReplenishmentFlowSection, ShipmentCardSection } from '../components/ShipmentEngine';
 import { PlanWizard } from '../components/PlanWizard';
 import type { MonthDef } from '../planTypes';
-import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas, MONTH_ABBR } from '../planTypes';
+import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas, MONTH_ABBR, weightedRunRate } from '../planTypes';
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
@@ -1117,6 +1117,39 @@ export function PlanPage({ data }: { data: DashboardData }) {
   const isLoading = loading || fcLoading || dmLoading;
   const families = useMemo(() => isLoading ? [] : buildFamilyBaselines(data, inv, metaMap), [data, inv, metaMap, isLoading]);
 
+  // Per-product weighted run-rate (units/day, ad-spend/day) from the last 4 COMPLETE weeks of
+  // actualsWeekly. Recency-weighted 40/30/20/10. Drives the new forecast anchor.
+  const runRateMap = useMemo(() => {
+    const m = new Map<string, { unitsPerDay: number; spendPerDay: number }>();
+    if (!latestDataDate) return m;
+    for (const [prod, weeks] of actualsWeekly) {
+      const complete = Array.from(weeks.entries())
+        .filter(([ws]) => { const end = new Date(ws + 'T00:00:00'); end.setDate(end.getDate() + 6); return end <= latestDataDate; })
+        .sort((a, b) => b[0].localeCompare(a[0]))   // most recent week first
+        .slice(0, 4);
+      m.set(prod, {
+        unitsPerDay: weightedRunRate(complete.map(([, w]) => w.units)),
+        spendPerDay: weightedRunRate(complete.map(([, w]) => w.adCost)),
+      });
+    }
+    return m;
+  }, [actualsWeekly, latestDataDate]);
+
+  // Per-family 2025 monthly total units (index 0 = Jan) — the own/reference inputs for the shape.
+  const familyMonthly2025 = useMemo(() => {
+    const out: Record<string, number[]> = {};
+    for (const fam of families) {
+      const arr = Array(12).fill(0) as number[];
+      for (const v of fam.variations) {
+        const pm = actuals2025Full.get(v.name);
+        if (!pm) continue;
+        for (let mo = 0; mo < 12; mo++) arr[mo] += pm.get(mo)?.units ?? 0;
+      }
+      out[fam.family] = arr;
+    }
+    return out;
+  }, [families, actuals2025Full]);
+
   // ─── Per-family ROAS reference (LY 2025 / CY 2026) ───
   // blended (organic-incl) per family-year from total actuals; ad-only per family-year-channel as a
   // spend-weighted avg of the view's per-month netRoas (AdsChannelEfficiency). Frozen onto ads targets at save.
@@ -2181,6 +2214,8 @@ export function PlanPage({ data }: { data: DashboardData }) {
           channelEfficiency={channelEfficiency}
           roas={familyRoas[wf.family] ?? null}
           latestDataDate={latestDataDate}
+          runRateMap={runRateMap}
+          familyMonthly2025={familyMonthly2025}
           onClose={() => setWizardFamily(null)}
           onSave={async (result) => {
             // Fix #5: Apply brand growth to all products in this family (always, to clear stale overrides)
