@@ -617,7 +617,7 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
 
       {/* Channel summary table */}
       {displayMonths && (() => {
-        const { currentMonth: cm, lastFullMonth: lfm, mo25, mo26, brandFcstByMonth, nbFcstByMonth, brandGrowth: bG, nbGrowth: nG, prorateFactor: pf, brandCurRemaining, nbCurRemaining } = brandComparison;
+        const { currentMonth: cm, lastFullMonth: lfm, mo25, mo26, brandFcstByMonth, nbFcstByMonth, prorateFactor: pf, brandCurRemaining, nbCurRemaining } = brandComparison;
         // Helper: cell value for brand (units)
         const brandVal = (mo: Map<number, BrandedSearchMonth>, m: number) => (mo.get(m)?.purchases ?? 0) + (mo.get(m)?.adsUnits ?? 0);
         // Helper: brand spend
@@ -692,7 +692,11 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
           const valFn = channel === 'brand' ? brandVal : nbVal;
           const spendFn = channel === 'brand' ? brandSpend : nbSpend;
           const fcstMap = channel === 'brand' ? brandFcstByMonth : nbFcstByMonth;
-          const growth = channel === 'brand' ? bG : nG;
+          // Current channel ad-spend-per-unit (2026 elapsed actuals). Forecast spend tracks
+          // forecast units at today's efficiency — no LY×growth (which exploded for young families).
+          let su26 = 0, sv26 = 0;
+          for (let mm = 1; mm <= cm; mm++) { sv26 += valFn(mo26, mm); su26 += spendFn(mo26, mm); }
+          const spendPerUnit = sv26 > 0 ? su26 / sv26 : 0;
           let ytd = 0, ytdSpend = 0;
           let yearTotal = 0, yearSpend = 0;
           const cells = cols.map(c => {
@@ -718,16 +722,14 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
               v = valFn(mo26, c.month); sp = spendFn(mo26, c.month);
               ytd += v; ytdSpend += sp; yearTotal += v; yearSpend += sp;
             } else if (c.type === 'current_fcst') {
-              const lySp = spendFn(mo25, c.month);
-              // Units: stored remaining (off-season run-rate for new products, else LY×growth)
+              // Units: stored remaining (current run-rate × remaining days); spend tracks it.
               v = channel === 'brand' ? brandCurRemaining : nbCurRemaining;
-              sp = Math.round(lySp * (1 - pf) * growth);
+              sp = Math.round(v * spendPerUnit);
               isForecast = true;
               yearTotal += v; yearSpend += sp;
             } else {
               v = fcstMap.get(c.month) ?? 0;
-              const lySp = spendFn(mo25, c.month);
-              sp = Math.round(lySp * growth);
+              sp = Math.round(v * spendPerUnit);
               isForecast = true;
               yearTotal += v; yearSpend += sp;
             }
@@ -753,6 +755,10 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
         // Combined row renderer
         const renderCombinedRow = (yr: string) => {
           const is25 = yr === '25';
+          // Current combined ad-spend-per-unit (2026 elapsed actuals) — forecast spend tracks units.
+          let suC = 0, svC = 0;
+          for (let mm = 1; mm <= cm; mm++) { svC += combVal(mo26, mm); suC += combSpend(mo26, mm); }
+          const combSpendPerUnit = svC > 0 ? suC / svC : 0;
           let ytd = 0, ytdSpend = 0, yearTotal = 0, yearSpend = 0;
           const cells = cols.map(c => {
             let v = 0, sp = 0;
@@ -779,16 +785,12 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
               return cell(c.key, v, sp, 'text-heading font-bold', getProfit(2026, c.month));
             } else if (c.type === 'current_fcst') {
               v = brandCurRemaining + nbCurRemaining;
-              const bSpRem = Math.round(brandSpend(mo25, c.month) * (1 - pf) * bG);
-              const nSpRem = Math.round(nbSpend(mo25, c.month) * (1 - pf) * nG);
-              sp = bSpRem + nSpRem;
+              sp = Math.round(v * combSpendPerUnit);
               isForecast = true;
               yearTotal += v; yearSpend += sp;
             } else {
               v = (brandFcstByMonth.get(c.month) ?? 0) + (nbFcstByMonth.get(c.month) ?? 0);
-              const bSp = Math.round(brandSpend(mo25, c.month) * bG);
-              const nSp = Math.round(nbSpend(mo25, c.month) * nG);
-              sp = bSp + nSp;
+              sp = Math.round(v * combSpendPerUnit);
               isForecast = true;
               yearTotal += v; yearSpend += sp;
             }
