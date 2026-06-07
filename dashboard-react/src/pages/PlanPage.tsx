@@ -1150,6 +1150,23 @@ export function PlanPage({ data }: { data: DashboardData }) {
     return out;
   }, [families, actuals2025Full]);
 
+  // Per-family 2025 monthly AD SPEND (index 0 = Jan) — own/reference inputs for the SPEND shape.
+  // Ad spend is flatter than demand at the peak (organic carries the holidays), so the spend
+  // forecast rides this shape, not the demand shape — avoids overstating Q4 ad spend.
+  const familyMonthlySpend2025 = useMemo(() => {
+    const out: Record<string, number[]> = {};
+    for (const fam of families) {
+      const arr = Array(12).fill(0) as number[];
+      for (const v of fam.variations) {
+        const pm = actuals2025Full.get(v.name);
+        if (!pm) continue;
+        for (let mo = 0; mo < 12; mo++) arr[mo] += pm.get(mo)?.adCost ?? 0;
+      }
+      out[fam.family] = arr;
+    }
+    return out;
+  }, [families, actuals2025Full]);
+
   // ─── Per-family ROAS reference (LY 2025 / CY 2026) ───
   // blended (organic-incl) per family-year from total actuals; ad-only per family-year-channel as a
   // spend-weighted avg of the view's per-month netRoas (AdsChannelEfficiency). Frozen onto ads targets at save.
@@ -2216,6 +2233,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
           latestDataDate={latestDataDate}
           runRateMap={runRateMap}
           familyMonthly2025={familyMonthly2025}
+          familyMonthlySpend2025={familyMonthlySpend2025}
           onClose={() => setWizardFamily(null)}
           onSave={async (result) => {
             // Fix #5: Apply brand growth to all products in this family (always, to clear stale overrides)

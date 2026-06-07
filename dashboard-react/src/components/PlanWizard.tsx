@@ -64,11 +64,12 @@ interface Props {
   latestDataDate?: Date | null;
   runRateMap: Map<string, { unitsPerDay: number; spendPerDay: number }>;
   familyMonthly2025: Record<string, number[]>;
+  familyMonthlySpend2025: Record<string, number[]>;
   onSave: (result: WizardResult) => void | Promise<void>;
   onClose: () => void;
 }
 
-export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, adsEfficiency, projs, growthOverrides: initGrowth, actuals2025, actuals2026, brandedSearch, channelEfficiency, roas, latestDataDate, runRateMap, familyMonthly2025, onSave, onClose }: Props) {
+export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, adsEfficiency, projs, growthOverrides: initGrowth, actuals2025, actuals2026, brandedSearch, channelEfficiency, roas, latestDataDate, runRateMap, familyMonthly2025, familyMonthlySpend2025, onSave, onClose }: Props) {
   const [step, setStep] = useState(1);
   const [adsPath, setAdsPath] = useState<'current' | 'target' | 'custom'>('current');
   const [customDaily, setCustomDaily] = useState(0);
@@ -148,13 +149,25 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
     return seasonalShape(own, ref, cm, detectLaunchMonth(own));
   }, [familyMonthly2025, f.family]);
 
-  // anchorUnits[mo] = run-rate units/day × days-in-month × shape (shape[currentMonth] = 1).
+  // SPEND shape: ad spend is flatter than demand at the peak (organic carries the holidays), so the
+  // spend forecast rides last-year's ad-spend seasonality, NOT the demand shape — avoids the
+  // constant-$/unit assumption overstating Q4 spend. Same builder, fed 2025 ad spend.
+  const spendShape = useMemo(() => {
+    const ownSpend = familyMonthlySpend2025[f.family] ?? Array(12).fill(0);
+    const refSpend = familyMonthlySpend2025['Lollibox'] ?? Array(12).fill(0);
+    const ownUnits = familyMonthly2025[f.family] ?? Array(12).fill(0);
+    const cm = new Date().getMonth() + 1;
+    return seasonalShape(ownSpend, refSpend, cm, detectLaunchMonth(ownUnits));
+  }, [familyMonthlySpend2025, familyMonthly2025, f.family]);
+
+  // anchorUnits rides the demand shape; anchorSpend rides the SPEND shape (so the profit-max
+  // anchor's per-month efficiency reflects cheaper-per-unit ad spend at the peak).
   const anchorUnits = useMemo(
     () => Array.from({ length: 12 }, (_, i) => familyRun.unitsPerDay * new Date(2026, i + 1, 0).getDate() * shape[i]),
     [familyRun, shape]);
   const anchorSpend = useMemo(
-    () => Array.from({ length: 12 }, (_, i) => familyRun.spendPerDay * new Date(2026, i + 1, 0).getDate() * shape[i]),
-    [familyRun, shape]);
+    () => Array.from({ length: 12 }, (_, i) => familyRun.spendPerDay * new Date(2026, i + 1, 0).getDate() * spendShape[i]),
+    [familyRun, spendShape]);
 
   // Per-product per-month forecast from the chosen Ads Path. The family month total (which carries
   // the spend decision + seasonality) is distributed by each product's per-month runSim demand
@@ -282,7 +295,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 text-xs">
           {step === 1 && <StepBaseline products={products} months={months} metaMap={metaMap} actuals2025={actuals2025} />}
-          {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} seasonMap={seasonMap} latestDataDate={latestDataDate} shape={shape} familyRunRate={familyRun.unitsPerDay} onGrowthChange={setBrandGrowth} />}
+          {step === 2 && <StepGrowth products={products} months={months} demandMap={demandMap} actuals2025={actuals2025} actuals2026={actuals2026} brandedSearch={brandedSearch} family={f.family} seasonMap={seasonMap} latestDataDate={latestDataDate} shape={shape} spendShape={spendShape} familyRunRate={familyRun.unitsPerDay} onGrowthChange={setBrandGrowth} />}
           {step === 3 && <StepAdsPath famEff={famEff} path={adsPath} onPath={setAdsPath} customDaily={customDaily} onCustom={setCustomDaily} totals={pathTotals} channelData={channelData} months={months} asp={f.asp} costPerUnit={f.costPerUnit} monthlyUnits={monthlyUnits2025} monthlySpend={monthlySpend2025} anchorUnits={anchorUnits} anchorSpend={anchorSpend} roas={roas} latestDataDate={latestDataDate} onTargets={setAdsTargets} onTrajectory={setTrajectory} />}
           {step === 4 && <StepSpendPlan months={months} famEff={famEff} path={adsPath} customDaily={customDaily} trajectory={trajectory} currentStock={f.inventory} />}
           {step === 5 && <StepOrder family={f} annualDemand={forecastDemand} forecastByProduct={forecastByProduct} gap={gap} orderQty={orderQty} onQty={handleQtyChange} friendly={friendlyRound} onFriendly={setFriendlyRound} mode={orderMode} onMode={handleOrderMode} manualByProduct={manualByProduct} onManualQty={handleManualQty} />}
@@ -384,13 +397,14 @@ function StepBaseline({ products, months, metaMap, actuals2025 }: {
 // Shows branded search purchases — units from customers who specifically
 // searched for the brand. Uses same DIM_BRAND_PHRASES logic as Brand page.
 // Brand-level (not per-family) because top searches span multiple families.
-function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, seasonMap, latestDataDate, shape, familyRunRate, onGrowthChange }: {
+function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, brandedSearch, family, seasonMap, latestDataDate, shape, spendShape, familyRunRate, onGrowthChange }: {
   products: FamilyBaseline['variations']; months: MonthDef[];
   demandMap: ForecastDemandMap; actuals2025: ActualsMap; actuals2026: ActualsMap;
   brandedSearch: BrandedSearchMonth[]; family: string;
   seasonMap: Record<string, Record<number, { peakDays: number; offseasonDays: number }>>;
   latestDataDate?: Date | null;
   shape: number[];
+  spendShape: number[];
   familyRunRate: number;
   onGrowthChange: (g: number) => void;
 }) {
@@ -733,12 +747,12 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
             } else if (c.type === 'current_fcst') {
               // Units: stored remaining (current run-rate × remaining days); spend tracks it.
               v = channel === 'brand' ? brandCurRemaining : nbCurRemaining;
-              sp = Math.round(v * spendPerUnit);
+              sp = Math.round(v * spendPerUnit * (spendShape[c.month - 1] ?? 1) / (shape[c.month - 1] || 1));
               isForecast = true;
               yearTotal += v; yearSpend += sp;
             } else {
               v = fcstMap.get(c.month) ?? 0;
-              sp = Math.round(v * spendPerUnit);
+              sp = Math.round(v * spendPerUnit * (spendShape[c.month - 1] ?? 1) / (shape[c.month - 1] || 1));
               isForecast = true;
               yearTotal += v; yearSpend += sp;
             }
@@ -794,12 +808,12 @@ function StepGrowth({ products, months, demandMap, actuals2025, actuals2026, bra
               return cell(c.key, v, sp, 'text-heading font-bold', getProfit(2026, c.month));
             } else if (c.type === 'current_fcst') {
               v = brandCurRemaining + nbCurRemaining;
-              sp = Math.round(v * combSpendPerUnit);
+              sp = Math.round(v * combSpendPerUnit * (spendShape[c.month - 1] ?? 1) / (shape[c.month - 1] || 1));
               isForecast = true;
               yearTotal += v; yearSpend += sp;
             } else {
               v = (brandFcstByMonth.get(c.month) ?? 0) + (nbFcstByMonth.get(c.month) ?? 0);
-              sp = Math.round(v * combSpendPerUnit);
+              sp = Math.round(v * combSpendPerUnit * (spendShape[c.month - 1] ?? 1) / (shape[c.month - 1] || 1));
               isForecast = true;
               yearTotal += v; yearSpend += sp;
             }
