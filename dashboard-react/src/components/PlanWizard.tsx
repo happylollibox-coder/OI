@@ -275,7 +275,8 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
     step !== 3 || adsPath !== 'current' || true // can always proceed from ads path (current is valid)
   );
   const canBack = step > 1;
-  const canSave = isLaunchFamily ? launchPhases.phase1Total > 0 : orderQty > 0;
+  const launchEffectiveTotal = f.variations.reduce((s, v) => s + (manualByProduct[v.name] ?? launchPhases.phase1[v.name] ?? 0), 0);
+  const canSave = isLaunchFamily ? launchEffectiveTotal > 0 : orderQty > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -335,7 +336,7 @@ export function PlanWizard({ family: f, months, demandMap, metaMap, seasonMap, a
               // Effective per-product order: launch family = Phase 1 (90-day buy); manual = user
               // quantities (carton-rounded); auto = allocation. Phase 2 is an estimate, not saved.
               const effectiveByProduct = isLaunchFamily
-                ? launchPhases.phase1
+                ? Object.fromEntries(f.variations.map(v => [v.name, manualByProduct[v.name] ?? launchPhases.phase1[v.name] ?? 0]))
                 : orderMode === 'manual'
                 ? Object.fromEntries(f.variations.map(v => {
                     const stepUnit = friendlyRound ? 100 : (v.cartonQty > 0 ? v.cartonQty : 1);
@@ -1015,7 +1016,8 @@ function StepOrder({ family: f, annualDemand, forecastByProduct, gap, orderQty, 
 
   // Just-launched family → two-phase launch order (90-day buy now + rest-of-year estimate for later).
   if (isLaunchFamily) {
-    const p1Total = Object.values(launchPhase1).reduce((a, b) => a + b, 0);
+    const p1eff = (name: string) => manualByProduct[name] ?? (launchPhase1[name] ?? 0);   // user override → computed default
+    const p1Total = f.variations.reduce((s, v) => s + p1eff(v.name), 0);
     const p2Total = Object.values(launchPhase2).reduce((a, b) => a + b, 0);
     const ctn = (name: string, qty: number) => { const c = f.variations.find(v => v.name === name)?.cartonQty ?? 0; return c > 0 ? Math.round(qty / c) : 0; };
     return (
@@ -1030,15 +1032,25 @@ function StepOrder({ family: f, annualDemand, forecastByProduct, gap, orderQty, 
             <div className="text-lg font-bold text-heading tabular-nums">{fmt(p1Total)} u</div>
           </div>
           <table className="w-full text-[11px]"><tbody>
-            {f.variations.map(v => (
+            {f.variations.map(v => {
+              const eff = p1eff(v.name);
+              const cq = v.cartonQty > 0 ? v.cartonQty : 1;
+              return (
               <tr key={v.name} className="border-b border-border/10">
                 <td className="py-1 text-muted">{v.name}</td>
                 <td className="py-1 text-right text-faint tabular-nums">{(runRatePerProduct[v.name] ?? 0).toFixed(1)}/d</td>
-                <td className="py-1 text-right text-heading font-medium tabular-nums">{fmt(launchPhase1[v.name] ?? 0)}</td>
-                <td className="py-1 text-right text-faint tabular-nums w-12">{ctn(v.name, launchPhase1[v.name] ?? 0)} ctn</td>
+                <td className="py-1 text-right text-heading font-medium tabular-nums">{fmt(eff)}</td>
+                <td className="py-1 text-right w-20 whitespace-nowrap">
+                  <input type="number" min={0} value={Math.round(eff / cq)}
+                    onChange={e => onManualQty(v.name, Math.max(0, Math.floor(Number(e.target.value) || 0)) * cq)}
+                    className="w-11 text-right bg-card border border-border/40 rounded px-1 py-0.5 text-[11px] tabular-nums text-heading focus:border-emerald-500/50 outline-none" />
+                  <span className="text-faint text-[10px] ml-1">ctn</span>
+                </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody></table>
+          <div className="text-[10px] text-faint mt-2 italic">Edit cartons to adjust the launch buy ({f.variations[0]?.cartonQty || 0}/carton).</div>
         </div>
         {/* Phase 2 — estimate for later */}
         <div className="rounded-xl border border-border/30 bg-border/5 p-4 opacity-80">
