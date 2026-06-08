@@ -507,8 +507,17 @@ function buildFamilyBaselines(data: DashboardData, inv: InvRow[], metaMap?: Fore
     const famInv = vars.reduce((s, v) => s + v.inventory, 0);
     const famInvSrc: Record<string, number> = {};
     for (const v of vars) for (const [k, q] of Object.entries(v.inventoryBySource)) famInvSrc[k] = (famInvSrc[k] ?? 0) + q;
-    const wAvgAsp = famDailyOrders > 0 ? vars.reduce((s, v) => s + v.asp * v.dailyOrders, 0) / famDailyOrders : 0;
-    const wAvgCpu = famDailyOrders > 0 ? vars.reduce((s, v) => s + v.costPerUnit * v.dailyOrders, 0) / famDailyOrders : 0;
+    // Blended ASP/cost = recent-orders-weighted avg. When the family has ~0 recent orders (e.g. OOS),
+    // fall back to the simple avg of each product's own ASP/cost (already 6-month-derived) so margin
+    // stays real — otherwise margin collapses to $0 and the profit curve shows all-loss/red.
+    const aspProducts = vars.filter(v => v.asp > 0);
+    const cpuProducts = vars.filter(v => v.costPerUnit > 0);
+    const wAvgAsp = famDailyOrders > 0
+      ? vars.reduce((s, v) => s + v.asp * v.dailyOrders, 0) / famDailyOrders
+      : (aspProducts.length ? aspProducts.reduce((s, v) => s + v.asp, 0) / aspProducts.length : 0);
+    const wAvgCpu = famDailyOrders > 0
+      ? vars.reduce((s, v) => s + v.costPerUnit * v.dailyOrders, 0) / famDailyOrders
+      : (cpuProducts.length ? cpuProducts.reduce((s, v) => s + v.costPerUnit, 0) / cpuProducts.length : 0);
     const wAvgAds = famDailyOrders > 0 ? vars.reduce((s, v) => s + v.adsShare * v.dailyOrders, 0) / famDailyOrders : 0.5;
 
     families.push({
