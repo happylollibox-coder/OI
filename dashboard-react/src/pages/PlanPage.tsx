@@ -5,7 +5,7 @@ import type { DashboardData, ShipmentPlanRow } from '../types';
 import { useShipmentPlan, useScheduledShipments, useShipmentHistory, ReplenishmentFlowSection, ShipmentCardSection } from '../components/ShipmentEngine';
 import { PlanWizard } from '../components/PlanWizard';
 import type { MonthDef } from '../planTypes';
-import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas, MONTH_ABBR, weightedRunRate } from '../planTypes';
+import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas, MONTH_ABBR, weightedRunRate, launchOrderPhases } from '../planTypes';
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
@@ -2136,8 +2136,13 @@ export function PlanPage({ data }: { data: DashboardData }) {
               const fGap = fDemand - f.inventory;
               const fNetRoas = fAd > 0 ? (fRev - fCogs) / fAd : 0;
               const fNp = fRev - fCogs - fAd; // plan net profit over the horizon
-              // PR (purchase request) costs per family
-              const prQty = fGap > 0 ? Math.ceil(fGap) : 0;
+              // PR (purchase request) qty. Just-launched family (no last-year history + selling now) →
+              // the launch buy is Phase 1 (90-day), NOT the full-year gap. Same builder as the wizard.
+              const fam25 = (familyMonthly2025[f.family] ?? []).reduce((a, b) => a + b, 0);
+              const isLaunch = fam25 <= 5 && f.variations.some(v => (runRateMap.get(v.name)?.unitsPerDay ?? 0) > 0);
+              const prQty = isLaunch
+                ? launchOrderPhases(f.variations, Object.fromEntries(f.variations.map(v => [v.name, runRateMap.get(v.name)?.unitsPerDay ?? 0])), {}, false).phase1Total
+                : (fGap > 0 ? Math.ceil(fGap) : 0);
               let fMfrCost = 0, fShipCost = 0;
               if (prQty > 0) {
                 // Weighted avg mfr/ship cost across variations
@@ -2253,10 +2258,14 @@ export function PlanPage({ data }: { data: DashboardData }) {
             if (result.plannedMonthly && Object.keys(result.plannedMonthly).length > 0) {
               setPlannedMonthlyOverrides(prev => ({ ...prev, ...result.plannedMonthly }));
               const famVars = filteredFamilies.find(ff => ff.family === result.family)?.variations ?? [];
+              // Just-launched family → the saved order is Phase 1 (orderByProduct), like a manual buy —
+              // NOT the full-year forecast. Otherwise the plan/POs would record the whole year, not the launch buy.
+              const fam25Save = (familyMonthly2025[result.family] ?? []).reduce((a, b) => a + b, 0);
+              const isLaunchSave = fam25Save <= 5 && famVars.some(v => (runRateMap.get(v.name)?.unitsPerDay ?? 0) > 0);
               setOrderOverrides(p => {
                 const next = { ...p };
-                if (result.orderMode === 'manual' && result.orderByProduct) {
-                  // Manual buy quantities → override = sold + stock + qty, so PR "Gap from Plan" = your qty.
+                if ((result.orderMode === 'manual' || isLaunchSave) && result.orderByProduct) {
+                  // Manual/launch buy quantities → override = sold + stock + qty, so PR "Gap from Plan" = your qty.
                   for (const [name, qty] of Object.entries(result.orderByProduct)) {
                     const sold = parentGetSold('', name);
                     const stock = famVars.find(v => v.name === name)?.inventory ?? 0;
