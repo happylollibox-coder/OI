@@ -171,7 +171,7 @@ export interface FamilyRoasRef {
   adOnly: Record<string, { 2025: number | null; 2026: number | null }>;
 }
 
-export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, anchorUnits, anchorSpend, roas, latestDataDate, onTargets, onTrajectory }: {
+export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, anchorUnits, anchorSpend, roas, latestDataDate, currentStock, onTargets, onTrajectory }: {
   famEff: Record<number, AdsEfficiencyMonth>;
   path: 'current' | 'target' | 'custom'; onPath: (p: 'current' | 'target' | 'custom') => void;
   customDaily: number; onCustom: (v: number) => void;
@@ -184,6 +184,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   anchorSpend?: number[];  // run-rate × shape ad spend per calendar month — anchors the profit-max curve
   roas?: FamilyRoasRef | null;
   latestDataDate?: Date | null;
+  currentStock?: number;   // total on-hand stock, all sources (FBA + AWD + in-transit + in-prod + MFR ready)
   onTargets?: (targets: AdsTarget[]) => void;
   onTrajectory?: (traj: TrajMonth[]) => void;
 }) {
@@ -599,6 +600,23 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
                 {'  →  '}
                 <span className="text-emerald-400 font-semibold">recommended {fK(planTotals.spend)} → {fK(planTotals.profit)}</span>
                 <span className="text-emerald-400 font-bold">{' '}({d >= 0 ? '+' : ''}{fK(d)}{pct !== null ? ` · ${pct >= 0 ? '+' : ''}${pct}%` : ''})</span>
+              </div>
+            );
+          })()}
+          {(() => {
+            // Current on-hand stock across ALL sources (FBA + AWD + in-transit + in-production + MFR ready),
+            // with weeks-of-cover at the recommended plan's selling pace.
+            const stock = Math.round(currentStock || 0);
+            const planRate = horizonDays > 0 ? planTotals.units / horizonDays : 0; // units/day at plan
+            const weeksCover = planRate > 0 ? stock / planRate / 7 : 0;
+            return (
+              <div className="text-[9px] tabular-nums mt-0.5 flex items-center gap-1.5">
+                <span className="text-[7px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-400 font-bold">STOCK</span>
+                <span className="text-muted">Current stock <b className="text-heading">{fmt(stock)} u</b> <span className="text-faint">(all sources)</span></span>
+                {stock > 0 && planRate > 0 && (
+                  <span className="text-faint">· ≈ <b className="text-muted">{weeksCover < 1 ? weeksCover.toFixed(1) : Math.round(weeksCover)}</b> wk cover at plan pace</span>
+                )}
+                {stock <= 0 && <span className="text-red-400 font-semibold">· out of stock</span>}
               </div>
             );
           })()}
