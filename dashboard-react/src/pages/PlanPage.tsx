@@ -5,7 +5,7 @@ import type { DashboardData, ShipmentPlanRow } from '../types';
 import { useShipmentPlan, useScheduledShipments, useShipmentHistory, ReplenishmentFlowSection, ShipmentCardSection } from '../components/ShipmentEngine';
 import { PlanWizard } from '../components/PlanWizard';
 import type { MonthDef } from '../planTypes';
-import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas, MONTH_ABBR, weightedRunRate, launchOrderPhases } from '../planTypes';
+import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, monthFractions, sumOverPeriod, netProfitPlan, latestCompleteWeekRange, blendedNetRoas, MONTH_ABBR, weightedRunRate, stockCorrectedRunRate, launchOrderPhases } from '../planTypes';
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
@@ -997,6 +997,37 @@ export function PlanPage({ data }: { data: DashboardData }) {
     })();
   }, []);
 
+  // Daily sellable-stock history (FBA + AWD) per product, ~5 months back — used to detect which
+  // weeks a product was out of stock so the run-rate can skip them (stockout correction).
+  const [dailyStockMap, setDailyStockMap] = useState<Map<string, Map<string, number>>>(new Map());
+  useEffect(() => {
+    (async () => {
+      try {
+        const end = new Date();
+        const start = new Date(); start.setDate(start.getDate() - 150);
+        const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const rows = await cubeLoad({
+          measures: ['InventorySnapshot.totalUnits'],
+          dimensions: ['InventorySnapshot.productShortName'],
+          timeDimensions: [{ dimension: 'InventorySnapshot.date', granularity: 'day', dateRange: [iso(start), iso(end)] }],
+          filters: [{ member: 'InventorySnapshot.sourceType', operator: 'equals', values: ['FBA', 'AWD'] }],
+        });
+        const map = new Map<string, Map<string, number>>();
+        for (const r of rows as Record<string, unknown>[]) {
+          const name = String(r['InventorySnapshot.productShortName'] ?? '');
+          const dRaw = String(r['InventorySnapshot.date.day'] ?? r['InventorySnapshot.date'] ?? '');
+          if (!name || !dRaw) continue;
+          const day = dRaw.slice(0, 10);
+          if (!map.has(name)) map.set(name, new Map());
+          const cur = map.get(name)!;
+          cur.set(day, (cur.get(day) ?? 0) + Number(r['InventorySnapshot.totalUnits'] ?? 0)); // FBA + AWD
+        }
+        console.log('[PlanPage] daily stock history loaded:', map.size, 'products');
+        setDailyStockMap(map);
+      } catch (e) { console.warn('[PlanPage] daily stock history load failed', e); }
+    })();
+  }, []);
+
   // Branded search monthly data (per-family: branded + total channels)
   // Uses same DIM_BRAND_PHRASES logic as Brand page
   type BrandedSearchMonth = {
@@ -1131,18 +1162,36 @@ export function PlanPage({ data }: { data: DashboardData }) {
   const runRateMap = useMemo(() => {
     const m = new Map<string, { unitsPerDay: number; spendPerDay: number }>();
     if (!latestDataDate) return m;
+    const isoOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     for (const [prod, weeks] of actualsWeekly) {
       const complete = Array.from(weeks.entries())
         .filter(([ws]) => { const end = new Date(ws + 'T00:00:00'); end.setDate(end.getDate() + 6); return end <= latestDataDate; })
-        .sort((a, b) => b[0].localeCompare(a[0]))   // most recent week first
-        .slice(0, 4);
+        .sort((a, b) => b[0].localeCompare(a[0]));   // most recent week first (ALL complete weeks, so the
+                                                     // stockout correction can reach back past OOS weeks)
+      const stock = dailyStockMap.get(prod);
+      // Tag each week with how many of its 7 days the product was in stock. A day counts as in-stock
+      // unless the daily snapshot shows it explicitly at 0 sellable (FBA+AWD); missing days are assumed
+      // in-stock so snapshot gaps don't falsely exclude a week. No stock data at all → all 7 (unchanged).
+      const weeksWithStock = complete.map(([ws, w]) => {
+        let inStockDays = 7;
+        if (stock && stock.size) {
+          inStockDays = 0;
+          const d = new Date(ws + 'T00:00:00');
+          for (let i = 0; i < 7; i++) {
+            const v = stock.get(isoOf(d));
+            if (v === undefined || v > 0) inStockDays++;
+            d.setDate(d.getDate() + 1);
+          }
+        }
+        return { units: w.units, inStockDays };
+      });
       m.set(prod, {
-        unitsPerDay: weightedRunRate(complete.map(([, w]) => w.units)),
-        spendPerDay: weightedRunRate(complete.map(([, w]) => w.adCost)),
+        unitsPerDay: stockCorrectedRunRate(weeksWithStock),                          // skip OOS weeks
+        spendPerDay: weightedRunRate(complete.slice(0, 4).map(([, w]) => w.adCost)), // spend not throttled by OOS
       });
     }
     return m;
-  }, [actualsWeekly, latestDataDate]);
+  }, [actualsWeekly, latestDataDate, dailyStockMap]);
 
   // Per-family 2025 monthly total units (index 0 = Jan) — the own/reference inputs for the shape.
   const familyMonthly2025 = useMemo(() => {
