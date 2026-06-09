@@ -497,6 +497,37 @@ export function weightedRunRate(weeklyTotals: number[], weights: number[] = [0.4
   return rate;
 }
 
+// Per-family planned ad targets for one month, blended across ad channels (Brand + Non-brand).
+// dailyCost = Σ planned daily ad spend; cpc/roas = spend-weighted across channels. Lets the Ads
+// Coacher see "what the plan says this month" (planned ad cost, CPC, ROAS) next to actuals.
+export interface PlanAdsTargetLike {
+  family: string; yr: number; mo: number;
+  daily_spend_target: number; cpc_target: number; predicted_roas: number;
+}
+export function monthlyPlanTargets(
+  rows: PlanAdsTargetLike[], year: number, month: number,
+): Map<string, { dailyCost: number; cpc: number; roas: number }> {
+  const acc = new Map<string, { dailyCost: number; cpcW: number; roasW: number }>();
+  for (const r of rows) {
+    if (r.yr !== year || r.mo !== month) continue;
+    const a = acc.get(r.family) ?? { dailyCost: 0, cpcW: 0, roasW: 0 };
+    const spend = r.daily_spend_target || 0;
+    a.dailyCost += spend;
+    a.cpcW += (r.cpc_target || 0) * spend;     // spend-weighted CPC numerator
+    a.roasW += (r.predicted_roas || 0) * spend; // spend-weighted ROAS numerator
+    acc.set(r.family, a);
+  }
+  const out = new Map<string, { dailyCost: number; cpc: number; roas: number }>();
+  for (const [fam, a] of acc) {
+    out.set(fam, {
+      dailyCost: a.dailyCost,
+      cpc: a.dailyCost > 0 ? a.cpcW / a.dailyCost : 0,
+      roas: a.dailyCost > 0 ? a.roasW / a.dailyCost : 0,
+    });
+  }
+  return out;
+}
+
 // Stockout-corrected run-rate: like weightedRunRate, but it ignores weeks where the product was
 // out of stock so the rate reflects true demand (what it sells when on the shelf), not the supply
 // throttle. `weeks` is most-recent-first, each tagged with how many days that week the product was

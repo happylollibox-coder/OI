@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { monthlyPlanTargets } from '../planTypes';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
 import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
 import { PageHeader } from '../components/PageHeader';
@@ -334,6 +335,13 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     }
     return map;
   }, [data.coach_decisions]);
+
+  /* ─── Plan targets: this month's planned ad cost / CPC / ROAS per family (from the Plan wizard) ─── */
+  const planTargets = useMemo(() => {
+    const d = new Date();
+    return monthlyPlanTargets(data.plan_ads_targets || [], d.getFullYear(), d.getMonth() + 1);
+  }, [data.plan_ads_targets]);
+  const planMoLabel = new Date().toLocaleString('en-US', { month: 'short' });
 
   const enrichedActs = acts;
 
@@ -1320,6 +1328,16 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                         <span className="text-[11px] font-semibold">{f.family}</span>
                         <span className="text-[10px] font-mono text-faint">{fM(f.total)}</span>
                       </div>
+                      {(() => {
+                        const pt = planTargets.get(f.family);
+                        if (!pt || pt.dailyCost <= 0) return null;
+                        return (
+                          <div className="text-[9px] tabular-nums text-faint mb-1" title={`Plan target for ${planMoLabel} (from the Plan wizard's Ads Path)`}>
+                            <span className="text-blue-400/80 font-semibold">Plan {planMoLabel}:</span>{' '}
+                            <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d ad cost · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span> · ROAS <span className="text-muted">{pt.roas.toFixed(2)}×</span>
+                          </div>
+                        );
+                      })()}
                       <div className="flex h-5 rounded-md overflow-hidden" title={[...f.buckets.map(b => `${b.label}: ${fM(b.value)}`), `Total: ${fM(f.total)}`].join(' · ')}>
                         {f.buckets.map(b => (
                           <div

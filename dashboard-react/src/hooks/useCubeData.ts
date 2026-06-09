@@ -34,6 +34,7 @@ import type {
   CoachActionRow,
   CoachCampaignRow,
   CoachStrategyRow,
+  PlanAdsTargetRow,
   ExperimentEvaluationRow,
   StrategicPrediction,
   BrandStrengthWeeklyRow,
@@ -444,7 +445,7 @@ async function loadProductCreativesFromCube(): Promise<ProductCreativeRow[]> {
 /** Product + CostsHistory → products */
 async function loadProductsFromCube(): Promise<ProductRow[]> {
   const [productRows, costRows] = await Promise.all([
-    cubeLoad({ dimensions: ['Product.asin', 'Product.productShortName', 'Product.productType', 'Product.parentName', 'Product.packageQuantity', 'Product.manufactureDay', 'Product.shipmentDays', 'Product.packageCubicFeet'], limit: 5000 }),
+    cubeLoad({ dimensions: ['Product.asin', 'Product.productShortName', 'Product.productType', 'Product.parentName', 'Product.parentAsin', 'Product.packageQuantity', 'Product.manufactureDay', 'Product.shipmentDays', 'Product.packageCubicFeet', 'Product.manufUpfrontPercentage', 'Product.shareCartonInFamily', 'Product.listingPriceAmount'], limit: 5000 }),
     cubeLoad({ 
       dimensions: ['CostsHistory.asin', 'CostsHistory.costOfGoods', 'CostsHistory.shippingCost', 'CostsHistory.fbaCost', 'CostsHistory.totalCostPerUnit', 'CostsHistory.pickPackFee', 'CostsHistory.referralFee'], 
       filters: [{ member: 'CostsHistory.endDate', operator: 'notSet' }],
@@ -471,6 +472,8 @@ async function loadProductsFromCube(): Promise<ProductRow[]> {
       product_short_name: String(r['Product.productShortName'] ?? ''),
       product_type: String(r['Product.productType'] ?? ''),
       family_name: String(r['Product.parentName'] ?? ''),
+      parent_asin: r['Product.parentAsin'] ? String(r['Product.parentAsin']) : null,
+      parent_name: String(r['Product.parentName'] ?? ''),
       cogs: costs?.cogs ?? 0,
       shipping_cost: costs?.shipping ?? 0,
       fba_cost: costs?.fba ?? 0,
@@ -481,6 +484,9 @@ async function loadProductsFromCube(): Promise<ProductRow[]> {
       manufacture_day: r['Product.manufactureDay'] != null ? Number(r['Product.manufactureDay']) : null,
       shipment_days: r['Product.shipmentDays'] != null ? Number(r['Product.shipmentDays']) : null,
       package_cubic_feet: r['Product.packageCubicFeet'] != null ? Number(r['Product.packageCubicFeet']) : null,
+      manuf_upfront_percentage: r['Product.manufUpfrontPercentage'] != null ? Number(r['Product.manufUpfrontPercentage']) : null,
+      share_carton_in_family: r['Product.shareCartonInFamily'] != null ? (r['Product.shareCartonInFamily'] === true || r['Product.shareCartonInFamily'] === 'true') : null,
+      listing_price: r['Product.listingPriceAmount'] != null ? Number(r['Product.listingPriceAmount']) : null,
     };
   });
 }
@@ -644,7 +650,7 @@ async function loadStorageCostsFromCube(): Promise<StorageCostRow[]> {
 async function loadSupplyChainFromCube(): Promise<SupplyChainRow[]> {
   const coreDims = [
     'SupplyChain.asin', 'SupplyChain.productShortName', 'SupplyChain.productType',
-    'SupplyChain.sellableQty', 'SupplyChain.fbaStockQty', 'SupplyChain.awdStockQty', 'SupplyChain.inTransitQty', 'SupplyChain.totalAvailableQty',
+    'SupplyChain.sellableQty', 'SupplyChain.fbaStockQty', 'SupplyChain.awdStockQty', 'SupplyChain.inTransitQty', 'SupplyChain.mfrStockQty', 'SupplyChain.totalAvailableQty',
     'SupplyChain.dailyVelocity', 'SupplyChain.daysOfCoverage', 'SupplyChain.fbaDaysOfCoverage', 'SupplyChain.awdDaysOfCoverage',
     'SupplyChain.nextShipmentDate', 'SupplyChain.daysToNextShipment', 'SupplyChain.nextShipmentQty',
     'SupplyChain.awdTargetMin', 'SupplyChain.awdTargetMax',
@@ -688,6 +694,7 @@ async function loadSupplyChainFromCube(): Promise<SupplyChainRow[]> {
       fba_stock_qty: Number(r['SupplyChain.fbaStockQty'] ?? 0),
       awd_stock_qty: Number(r['SupplyChain.awdStockQty'] ?? 0),
       in_transit_qty: Number(r['SupplyChain.inTransitQty'] ?? 0),
+      mfr_stock_qty: Number(r['SupplyChain.mfrStockQty'] ?? 0),
       total_available_qty: Number(r['SupplyChain.totalAvailableQty'] ?? 0),
       daily_velocity: Number(r['SupplyChain.dailyVelocity'] ?? 0),
       days_of_coverage: r['SupplyChain.daysOfCoverage'] != null ? Number(r['SupplyChain.daysOfCoverage']) : null,
@@ -1584,6 +1591,32 @@ async function loadCoachActionsFromCube(): Promise<CoachActionRow[]> {
   });
 }
 
+async function loadPlanAdsTargetsFromCube(): Promise<PlanAdsTargetRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'PlanAdsTargets.family', 'PlanAdsTargets.yr', 'PlanAdsTargets.mo', 'PlanAdsTargets.channel',
+      'PlanAdsTargets.dailySpendTarget', 'PlanAdsTargets.cpcTarget', 'PlanAdsTargets.predictedCvr',
+      'PlanAdsTargets.predictedRoas', 'PlanAdsTargets.predictedUnits', 'PlanAdsTargets.predictedNetProfit',
+      'PlanAdsTargets.adsShare', 'PlanAdsTargets.seasonType', 'PlanAdsTargets.multiplierK',
+    ],
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    family: String(r['PlanAdsTargets.family'] ?? ''),
+    yr: Number(r['PlanAdsTargets.yr'] ?? 0),
+    mo: Number(r['PlanAdsTargets.mo'] ?? 0),
+    channel: String(r['PlanAdsTargets.channel'] ?? ''),
+    daily_spend_target: Number(r['PlanAdsTargets.dailySpendTarget'] ?? 0),
+    cpc_target: Number(r['PlanAdsTargets.cpcTarget'] ?? 0),
+    predicted_cvr: Number(r['PlanAdsTargets.predictedCvr'] ?? 0),
+    predicted_roas: Number(r['PlanAdsTargets.predictedRoas'] ?? 0),
+    predicted_units: Number(r['PlanAdsTargets.predictedUnits'] ?? 0),
+    predicted_net_profit: Number(r['PlanAdsTargets.predictedNetProfit'] ?? 0),
+    ads_share: Number(r['PlanAdsTargets.adsShare'] ?? 0),
+    season_type: String(r['PlanAdsTargets.seasonType'] ?? ''),
+    multiplier_k: Number(r['PlanAdsTargets.multiplierK'] ?? 0),
+  }));
+}
+
 async function loadCoachStrategyFromCube(): Promise<CoachStrategyRow[]> {
   const rows = await cubeLoad({
     dimensions: [
@@ -1611,6 +1644,97 @@ async function loadCoachStrategyFromCube(): Promise<CoachStrategyRow[]> {
   }));
 }
 
+async function loadCampaignLaunchPerfFromCube(): Promise<import('../types').CampaignLaunchPerfRow[]> {
+  try {
+    const rows = await cubeLoad({
+      dimensions: [
+        'CampaignLaunchPerf.campaignId', 'CampaignLaunchPerf.campaignName',
+        'CampaignLaunchPerf.campaignType', 'CampaignLaunchPerf.campaignState',
+        'CampaignLaunchPerf.creationDate', 'CampaignLaunchPerf.strategyName',
+        'CampaignLaunchPerf.windowStatus',
+        'CampaignLaunchPerf.units', 'CampaignLaunchPerf.clicks',
+        'CampaignLaunchPerf.orders', 'CampaignLaunchPerf.adSpend',
+        'CampaignLaunchPerf.grossProfit', 'CampaignLaunchPerf.netProfit',
+        'CampaignLaunchPerf.cpc', 'CampaignLaunchPerf.netRoas',
+        'CampaignLaunchPerf.activeDays',
+      ],
+      limit: 500,
+    });
+    return (rows as Record<string, unknown>[]).map(r => ({
+      campaign_id: String(r['CampaignLaunchPerf.campaignId'] ?? ''),
+      campaign_name: String(r['CampaignLaunchPerf.campaignName'] ?? ''),
+      campaign_type: String(r['CampaignLaunchPerf.campaignType'] ?? ''),
+      campaign_state: String(r['CampaignLaunchPerf.campaignState'] ?? ''),
+      creation_date: String(r['CampaignLaunchPerf.creationDate'] ?? '').split('T')[0],
+      strategy_name: String(r['CampaignLaunchPerf.strategyName'] ?? 'No Strategy'),
+      window_status: String(r['CampaignLaunchPerf.windowStatus'] ?? ''),
+      units: Number(r['CampaignLaunchPerf.units'] ?? 0),
+      clicks: Number(r['CampaignLaunchPerf.clicks'] ?? 0),
+      orders: Number(r['CampaignLaunchPerf.orders'] ?? 0),
+      ad_spend: Number(r['CampaignLaunchPerf.adSpend'] ?? 0),
+      gross_profit: Number(r['CampaignLaunchPerf.grossProfit'] ?? 0),
+      net_profit: Number(r['CampaignLaunchPerf.netProfit'] ?? 0),
+      cpc: r['CampaignLaunchPerf.cpc'] != null ? Number(r['CampaignLaunchPerf.cpc']) : null,
+      net_roas: r['CampaignLaunchPerf.netRoas'] != null ? Number(r['CampaignLaunchPerf.netRoas']) : null,
+      active_days: Number(r['CampaignLaunchPerf.activeDays'] ?? 0),
+    }));
+  } catch (e) {
+    console.warn('[CampaignLaunchPerf] Load failed:', e);
+    return [];
+  }
+}
+async function loadCampaignLaunchMonthlyFromCube(): Promise<import('../types').CampaignLaunchMonthlyRow[]> {
+  try {
+    const rows = await cubeLoad({
+      dimensions: [
+        'CampaignLaunchMonthly.campaignId', 'CampaignLaunchMonthly.campaignName',
+        'CampaignLaunchMonthly.campaignType', 'CampaignLaunchMonthly.campaignState',
+        'CampaignLaunchMonthly.creationDate', 'CampaignLaunchMonthly.strategyName',
+        'CampaignLaunchMonthly.asin', 'CampaignLaunchMonthly.parentName',
+        'CampaignLaunchMonthly.lastActiveDate', 'CampaignLaunchMonthly.endDateDisplay',
+        'CampaignLaunchMonthly.monthsActive', 'CampaignLaunchMonthly.totalNetProfitDim',
+        'CampaignLaunchMonthly.netProfitMonthlyAvg',
+        'CampaignLaunchMonthly.m1Units', 'CampaignLaunchMonthly.m1Cpc',
+        'CampaignLaunchMonthly.m1AdSpend', 'CampaignLaunchMonthly.m1NetRoas',
+        'CampaignLaunchMonthly.m2Units', 'CampaignLaunchMonthly.m2Cpc',
+        'CampaignLaunchMonthly.m2AdSpend', 'CampaignLaunchMonthly.m2NetRoas',
+        'CampaignLaunchMonthly.m3Units', 'CampaignLaunchMonthly.m3Cpc',
+        'CampaignLaunchMonthly.m3AdSpend', 'CampaignLaunchMonthly.m3NetRoas',
+      ],
+      limit: 500,
+    });
+    return (rows as Record<string, unknown>[]).map(r => ({
+      campaign_id: String(r['CampaignLaunchMonthly.campaignId'] ?? ''),
+      campaign_name: String(r['CampaignLaunchMonthly.campaignName'] ?? ''),
+      campaign_type: String(r['CampaignLaunchMonthly.campaignType'] ?? ''),
+      campaign_state: String(r['CampaignLaunchMonthly.campaignState'] ?? ''),
+      creation_date: String(r['CampaignLaunchMonthly.creationDate'] ?? '').split('T')[0],
+      strategy_name: String(r['CampaignLaunchMonthly.strategyName'] ?? 'No Strategy'),
+      asin: r['CampaignLaunchMonthly.asin'] != null ? String(r['CampaignLaunchMonthly.asin']) : null,
+      parent_name: r['CampaignLaunchMonthly.parentName'] != null ? String(r['CampaignLaunchMonthly.parentName']) : null,
+      last_active_date: r['CampaignLaunchMonthly.lastActiveDate'] != null ? String(r['CampaignLaunchMonthly.lastActiveDate']).split('T')[0] : null,
+      end_date_display: r['CampaignLaunchMonthly.endDateDisplay'] != null ? String(r['CampaignLaunchMonthly.endDateDisplay']).split('T')[0] : null,
+      months_active: Number(r['CampaignLaunchMonthly.monthsActive'] ?? 1),
+      total_net_profit: Number(r['CampaignLaunchMonthly.totalNetProfitDim'] ?? 0),
+      net_profit_monthly_avg: Number(r['CampaignLaunchMonthly.netProfitMonthlyAvg'] ?? 0),
+      m1_units: Number(r['CampaignLaunchMonthly.m1Units'] ?? 0),
+      m1_cpc: r['CampaignLaunchMonthly.m1Cpc'] != null ? Number(r['CampaignLaunchMonthly.m1Cpc']) : null,
+      m1_ad_spend: Number(r['CampaignLaunchMonthly.m1AdSpend'] ?? 0),
+      m1_net_roas: r['CampaignLaunchMonthly.m1NetRoas'] != null ? Number(r['CampaignLaunchMonthly.m1NetRoas']) : null,
+      m2_units: Number(r['CampaignLaunchMonthly.m2Units'] ?? 0),
+      m2_cpc: r['CampaignLaunchMonthly.m2Cpc'] != null ? Number(r['CampaignLaunchMonthly.m2Cpc']) : null,
+      m2_ad_spend: Number(r['CampaignLaunchMonthly.m2AdSpend'] ?? 0),
+      m2_net_roas: r['CampaignLaunchMonthly.m2NetRoas'] != null ? Number(r['CampaignLaunchMonthly.m2NetRoas']) : null,
+      m3_units: Number(r['CampaignLaunchMonthly.m3Units'] ?? 0),
+      m3_cpc: r['CampaignLaunchMonthly.m3Cpc'] != null ? Number(r['CampaignLaunchMonthly.m3Cpc']) : null,
+      m3_ad_spend: Number(r['CampaignLaunchMonthly.m3AdSpend'] ?? 0),
+      m3_net_roas: r['CampaignLaunchMonthly.m3NetRoas'] != null ? Number(r['CampaignLaunchMonthly.m3NetRoas']) : null,
+    }));
+  } catch (e) {
+    console.warn('[CampaignLaunchMonthly] Cube schema not available:', e);
+    return [];
+  }
+}
 async function loadCoachCampaignsFromCube(): Promise<CoachCampaignRow[]> {
   const rows = await cubeLoad({
     dimensions: [
@@ -2103,6 +2227,9 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           ['coachStrategy', loadCoachStrategyFromCube],
           ['adsFocusTerms', loadAdsFocusTermsFromCube],
           ['adsFocusKeywords', loadAdsFocusKeywordsFromCube],
+          ['campaignLaunchPerf', loadCampaignLaunchPerfFromCube],
+          ['campaignLaunchMonthly', loadCampaignLaunchMonthlyFromCube],
+          ['planAdsTargets', loadPlanAdsTargetsFromCube],
         ];
 
         const heavyLoaders: [string, () => Promise<unknown>][] = [
@@ -2157,12 +2284,15 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
         const coachStrategy = resolveLoader(bgResultsLight[31], 'coachStrategy') as CoachStrategyRow[];
         const adsFocusTerms = resolveLoader(bgResultsLight[32], 'adsFocusTerms') as AdsFocusTermRow[];
         const adsFocusKeywords = resolveLoader(bgResultsLight[33], 'adsFocusKeywords') as import('../types').AdsFocusKeywordRow[];
+        const campaignLaunchPerf = resolveLoader(bgResultsLight[34], 'campaignLaunchPerf') as import('../types').CampaignLaunchPerfRow[];
+        const campaignLaunchMonthly = resolveLoader(bgResultsLight[35], 'campaignLaunchMonthly') as import('../types').CampaignLaunchMonthlyRow[];
+        const planAdsTargets = resolveLoader(bgResultsLight[36], 'planAdsTargets') as PlanAdsTargetRow[];
 
         const ads = resolveLoader(bgResultsHeavy[0], 'ads') as Ads7dRow[];
         const sqp = resolveLoader(bgResultsHeavy[1], 'sqp') as SqpWeeklyRow[];
 
         if (import.meta.env.DEV) {
-          console.log('[useCubeData] Background done — ads:', ads.length, 'sqp:', sqp.length, 'decisions:', coachDecisions.length, 'actions:', coachTerms.length);
+          console.log('[useCubeData] Background done — ads:', ads.length, 'sqp:', sqp.length, 'decisions:', coachDecisions.length, 'actions:', coachTerms.length, 'launchPerf:', campaignLaunchPerf.length, 'bgResultsLight length:', bgResultsLight.length);
         }
 
         setData(prev => ({
@@ -2204,6 +2334,9 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           peak_relevance: peakRelevance,
           family_occasions: familyOccasions,
           coach_strategy: coachStrategy,
+          campaign_launch_perf: campaignLaunchPerf,
+          campaign_launch_monthly: campaignLaunchMonthly,
+          plan_ads_targets: planAdsTargets,
           _meta: {
             ...prev._meta,
             queries_run: (prev._meta?.queries_run ?? 0) + lightLoaders.length + heavyLoaders.length,

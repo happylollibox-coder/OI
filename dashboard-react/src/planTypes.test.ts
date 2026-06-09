@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, stockCorrectedRunRate, detectLaunchMonth, seasonalShape, launchOrderPhases } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, stockCorrectedRunRate, monthlyPlanTargets, detectLaunchMonth, seasonalShape, launchOrderPhases } from './planTypes';
 
 describe('blendedNetRoas', () => {
   it('returns (sales − cogs) / adCost summed over rows', () => {
@@ -505,6 +505,39 @@ describe('stockCorrectedRunRate', () => {
   });
   it('returns 0 for no weeks', () => {
     expect(stockCorrectedRunRate([])).toBe(0);
+  });
+});
+
+describe('monthlyPlanTargets', () => {
+  const row = (family: string, mo: number, channel: string, daily_spend_target: number, cpc_target: number, predicted_roas: number) =>
+    ({ family, yr: 2026, mo, channel, daily_spend_target, cpc_target, predicted_roas });
+  it('sums daily ad cost and spend-weights CPC and ROAS across channels', () => {
+    const rows = [
+      row('Fresh', 6, 'BRAND', 100, 0.50, 2.0),
+      row('Fresh', 6, 'NON_BRAND', 300, 0.30, 1.5),
+    ];
+    const m = monthlyPlanTargets(rows, 2026, 6);
+    const f = m.get('Fresh')!;
+    expect(f.dailyCost).toBeCloseTo(400, 6);
+    expect(f.cpc).toBeCloseTo(0.35, 6);   // (0.5*100 + 0.3*300)/400
+    expect(f.roas).toBeCloseTo(1.625, 6); // (2.0*100 + 1.5*300)/400
+  });
+  it('ignores rows from other months/years', () => {
+    const rows = [row('Fresh', 6, 'BRAND', 100, 0.50, 2.0), row('Fresh', 7, 'BRAND', 999, 9, 9)];
+    expect(monthlyPlanTargets(rows, 2026, 6).get('Fresh')!.dailyCost).toBeCloseTo(100, 6);
+  });
+  it('keeps families separate', () => {
+    const rows = [row('Fresh', 6, 'BRAND', 100, 0.4, 2), row('Lollibox', 6, 'BRAND', 250, 0.6, 3)];
+    const m = monthlyPlanTargets(rows, 2026, 6);
+    expect(m.get('Fresh')!.dailyCost).toBeCloseTo(100, 6);
+    expect(m.get('Lollibox')!.dailyCost).toBeCloseTo(250, 6);
+  });
+  it('handles zero spend without dividing by zero', () => {
+    const m = monthlyPlanTargets([row('Fresh', 6, 'BRAND', 0, 0.4, 2)], 2026, 6);
+    expect(m.get('Fresh')).toEqual({ dailyCost: 0, cpc: 0, roas: 0 });
+  });
+  it('returns an empty map when no rows match', () => {
+    expect(monthlyPlanTargets([], 2026, 6).size).toBe(0);
   });
 });
 

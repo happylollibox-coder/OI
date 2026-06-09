@@ -202,6 +202,7 @@ export interface SupplyChainRow {
   fba_stock_qty: number;
   awd_stock_qty: number;
   in_transit_qty: number;
+  mfr_stock_qty: number;
   total_available_qty: number;
   daily_velocity: number;
   days_of_coverage: number | null;
@@ -306,6 +307,8 @@ export interface ProductRow {
   product_short_name: string;
   product_type: string;
   family_name: string;
+  parent_asin: string | null;
+  parent_name: string;
   cogs: number;
   shipping_cost: number;
   fba_cost: number;
@@ -316,6 +319,9 @@ export interface ProductRow {
   manufacture_day: number | null;
   shipment_days: number | null;
   package_cubic_feet: number | null;
+  manuf_upfront_percentage: number | null;
+  share_carton_in_family: boolean | null;
+  listing_price: number | null;
 }
 
 export interface HeroAsin {
@@ -1051,6 +1057,61 @@ export interface SupplyOtherPORow {
   notes: string | null;
 }
 
+export interface CampaignLaunchPerfRow {
+  campaign_id: string;
+  campaign_name: string;
+  campaign_type: string;
+  campaign_state: string;
+  creation_date: string;
+  strategy_name: string;
+  window_status: string;
+  units: number;
+  clicks: number;
+  orders: number;
+  ad_spend: number;
+  gross_profit: number;
+  net_profit: number;
+  cpc: number | null;
+  net_roas: number | null;
+  active_days: number;
+}
+
+export interface CampaignLaunchMonthlyRow {
+  campaign_id: string;
+  campaign_name: string;
+  campaign_type: string;
+  campaign_state: string;
+  creation_date: string;
+  strategy_name: string;
+  asin: string | null;
+  parent_name: string | null;
+  last_active_date: string | null;
+  end_date_display: string | null;
+  months_active: number;
+  total_net_profit: number;
+  net_profit_monthly_avg: number;
+  m1_units: number; m1_cpc: number | null; m1_ad_spend: number; m1_net_roas: number | null;
+  m2_units: number; m2_cpc: number | null; m2_ad_spend: number; m2_net_roas: number | null;
+  m3_units: number; m3_cpc: number | null; m3_ad_spend: number; m3_net_roas: number | null;
+}
+
+/** One row of the Plan wizard's Ads Path targets — per family / month / ad-channel. */
+export interface PlanAdsTargetRow {
+  family: string;
+  yr: number;
+  mo: number;
+  channel: string;
+  daily_spend_target: number;
+  cpc_target: number;
+  predicted_cvr: number;
+  predicted_roas: number;
+  predicted_units: number;
+  predicted_net_profit: number;
+  ads_share: number;
+  season_type: string;
+  multiplier_k: number;
+}
+
 export interface DashboardData {
   summary: SummaryRow[];
   legacy_actions_deprecated: LegacyActionRow[];
@@ -1101,6 +1162,9 @@ export interface DashboardData {
   peak_relevance: PeakRelevanceRow[];
   family_occasions: FamilyOccasionRow[];
   coach_strategy: CoachStrategyRow[];
+  campaign_launch_perf: CampaignLaunchPerfRow[];
+  campaign_launch_monthly: CampaignLaunchMonthlyRow[];
+  plan_ads_targets: PlanAdsTargetRow[];
   launch_models: { product: string; daily_rate: number }[];
   _meta: {
     refreshed_at?: string;
@@ -1114,7 +1178,7 @@ export interface DashboardData {
   };
 }
 
-export type PageId = 'home' | 'actions' | 'peak' | 'family' | 'sqp' | 'learn' | 'kwds' | 'log' | 'health' | 'experiment' | 'ads' | 'strategies' | 'admin' | 'do' | 'brand' | 'plan' | 'supply' | 'alerts' | 'products' | 'kpi';
+export type PageId = 'home' | 'actions' | 'peak' | 'family' | 'sqp' | 'learn' | 'kwds' | 'log' | 'health' | 'experiment' | 'ads' | 'strategies' | 'admin' | 'do' | 'brand' | 'plan' | 'supply' | 'alerts' | 'products' | 'kpi' | 'research';
 
 export interface BrandStrengthWeeklyRow {
   week_start_date: string;
@@ -1151,13 +1215,15 @@ export interface ProductCreativeRow {
   video_asset_id: string;
 }
 
-export type FamilyName = 'Lollibox' | 'LolliME' | 'Bottle' | 'Fresh';
+export type FamilyName = 'Lollibox' | 'LolliME' | 'Bottle' | 'Fresh' | 'Bunny' | 'LolliBall';
 
 export const FAMILIES: Record<FamilyName, { code: string; color: string }> = {
-  Lollibox: { code: 'BOX', color: '#3b82f6' },
-  LolliME:  { code: 'ME',  color: '#a855f7' },
-  Bottle:   { code: 'BTL', color: '#22c55e' },
-  Fresh:    { code: 'FSH', color: '#f59e0b' },
+  Lollibox:  { code: 'BOX', color: '#3b82f6' },
+  LolliME:   { code: 'ME',  color: '#a855f7' },
+  Bottle:    { code: 'BTL', color: '#22c55e' },
+  Fresh:     { code: 'FSH', color: '#f59e0b' },
+  Bunny:     { code: 'BNY', color: '#ec4899' },
+  LolliBall: { code: 'BAL', color: '#06b6d4' },
 };
 
 export interface LovRow {
