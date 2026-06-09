@@ -171,7 +171,7 @@ export interface FamilyRoasRef {
   adOnly: Record<string, { 2025: number | null; 2026: number | null }>;
 }
 
-export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, anchorUnits, anchorSpend, roas, latestDataDate, currentStock, onTargets, onTrajectory }: {
+export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, totals, channelData, months, asp, costPerUnit, monthlyUnits, monthlySpend, anchorUnits, anchorSpend, roas, latestDataDate, currentStock, sellableStock, onTargets, onTrajectory }: {
   famEff: Record<number, AdsEfficiencyMonth>;
   path: 'current' | 'target' | 'custom'; onPath: (p: 'current' | 'target' | 'custom') => void;
   customDaily: number; onCustom: (v: number) => void;
@@ -185,6 +185,7 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
   roas?: FamilyRoasRef | null;
   latestDataDate?: Date | null;
   currentStock?: number;   // total on-hand stock, all sources (FBA + AWD + in-transit + in-prod + MFR ready)
+  sellableStock?: number;  // on-shelf / buyable now (FBA only); the rest of currentStock is incoming pipeline
   onTargets?: (targets: AdsTarget[]) => void;
   onTrajectory?: (traj: TrajMonth[]) => void;
 }) {
@@ -604,19 +605,24 @@ export function StepAdsPath({ famEff, path, onPath, customDaily, onCustom, total
             );
           })()}
           {(() => {
-            // Current on-hand stock across ALL sources (FBA + AWD + in-transit + in-production + MFR ready),
-            // with weeks-of-cover at the recommended plan's selling pace.
-            const stock = Math.round(currentStock || 0);
+            // Sellable = on the shelf / buyable now (FBA). Pipeline = everything else incoming (AWD +
+            // in-transit + in-production + MFR ready). Weeks-of-cover rides SELLABLE, since that's what
+            // actually runs out — pipeline doesn't sell until it lands at FBA.
+            const total = Math.round(currentStock || 0);
+            const sellable = Math.round(sellableStock ?? total);
+            const pipeline = Math.max(0, total - sellable);
             const planRate = horizonDays > 0 ? planTotals.units / horizonDays : 0; // units/day at plan
-            const weeksCover = planRate > 0 ? stock / planRate / 7 : 0;
+            const weeksCover = planRate > 0 ? sellable / planRate / 7 : 0;
             return (
-              <div className="text-[9px] tabular-nums mt-0.5 flex items-center gap-1.5">
+              <div className="text-[9px] tabular-nums mt-0.5 flex items-center gap-1.5 flex-wrap">
                 <span className="text-[7px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-400 font-bold">STOCK</span>
-                <span className="text-muted">Current stock <b className="text-heading">{fmt(stock)} u</b> <span className="text-faint">(all sources)</span></span>
-                {stock > 0 && planRate > 0 && (
+                {sellable > 0
+                  ? <span className="text-muted">Sellable <b className="text-heading">{fmt(sellable)} u</b> <span className="text-faint">(FBA)</span></span>
+                  : <span className="text-red-400 font-semibold">Sellable 0 u — out of stock on shelf</span>}
+                {pipeline > 0 && <span className="text-faint">· Pipeline <b className="text-muted">{fmt(pipeline)} u</b> incoming</span>}
+                {sellable > 0 && planRate > 0 && (
                   <span className="text-faint">· ≈ <b className="text-muted">{weeksCover < 1 ? weeksCover.toFixed(1) : Math.round(weeksCover)}</b> wk cover at plan pace</span>
                 )}
-                {stock <= 0 && <span className="text-red-400 font-semibold">· out of stock</span>}
               </div>
             );
           })()}
