@@ -343,40 +343,43 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
   }, [data.plan_ads_targets]);
   const planMoLabel = new Date().toLocaleString('en-US', { month: 'short' });
 
-  /* ─── Actual per-family metrics vs the plan:
-       • daily ad SPEND = last-30-day pace from daily_trends (product_type = family) — clean,
-         non-overlapping, recent (NOT the 180-day ads_7d total, NOT the double-counting term sum).
-       • CPC + net ROAS = last-4w, spend-weighted across the family's terms (ratios, overlap cancels). ─── */
+  /* ─── Last-week actuals per family vs the (daily) plan guidelines:
+       • SPEND/d + CPC = last 7 days from daily_trends (product_type = family; ad_cost & clicks are
+         ad-only) — clean, recent, non-overlapping.
+       • net ROAS = last 4w, ad-only, spend-weighted over the family's coach term rows — the only
+         ad-only ROAS available (a daily_trends ROAS would be blended/halo, not comparable to the
+         ad-only plan target). ─── */
   const famActuals = useMemo(() => {
-    // recent daily spend from daily_trends (last 30 data-days)
     const dt = data.daily_trends || [];
     const dates = [...new Set(dt.map(r => r.date))].sort();
-    const recentDates = new Set(dates.slice(-30));
+    const recentDates = new Set(dates.slice(-7));   // last week
     const nDays = recentDates.size || 1;
-    const spendByFam = new Map<string, number>();
+    const sp = new Map<string, { cost: number; clicks: number }>();
     for (const r of dt) {
       if (!recentDates.has(r.date)) continue;
-      spendByFam.set(r.product_type, (spendByFam.get(r.product_type) || 0) + (r.ad_cost || 0));
+      const e = sp.get(r.product_type) ?? { cost: 0, clicks: 0 };
+      e.cost += r.ad_cost || 0;
+      e.clicks += r.clicks || 0;
+      sp.set(r.product_type, e);
     }
-    // spend-weighted CPC + net ROAS from coach term rows (4w)
-    const agg = new Map<string, { spend: number; cpcW: number; roasW: number }>();
+    const ro = new Map<string, { spend: number; roasW: number }>();
     for (const a of acts) {
       const fam = getFamily(a.product_short_name);
       if (!fam) continue;
       const s = a.spend || 0;
-      const e = agg.get(fam) ?? { spend: 0, cpcW: 0, roasW: 0 };
+      const e = ro.get(fam) ?? { spend: 0, roasW: 0 };
       e.spend += s;
-      e.cpcW += (a.cpc || 0) * s;
       e.roasW += (a.net_roas || 0) * s;
-      agg.set(fam, e);
+      ro.set(fam, e);
     }
     const out = new Map<string, { dailyCost: number; cpc: number; roas: number }>();
-    for (const fam of new Set([...spendByFam.keys(), ...agg.keys()])) {
-      const e = agg.get(fam);
+    for (const fam of new Set([...sp.keys(), ...ro.keys()])) {
+      const s = sp.get(fam);
+      const r = ro.get(fam);
       out.set(fam, {
-        dailyCost: (spendByFam.get(fam) || 0) / nDays,
-        cpc: e && e.spend > 0 ? e.cpcW / e.spend : 0,
-        roas: e && e.spend > 0 ? e.roasW / e.spend : 0,
+        dailyCost: s ? s.cost / nDays : 0,
+        cpc: s && s.clicks > 0 ? s.cost / s.clicks : 0,
+        roas: r && r.spend > 0 ? r.roasW / r.spend : 0,
       });
     }
     return out;
@@ -422,6 +425,8 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     if (stratFilter !== 'all') f = f.filter(a => a.strategy_id === stratFilter);
     if (effectiveFam) f = f.filter(a => getFamily(a.product_short_name) === effectiveFam);
     else if (famFilter !== 'all') f = f.filter(a => getFamily(a.product_short_name) === famFilter);
+    // Header product filter: filter by ASIN
+    if (filters.product) f = f.filter(a => a.asin === filters.product);
     if (filters.experiment) f = f.filter(a => a.experiment_id === filters.experiment);
     if (filters.keyword) f = f.filter(a => a.search_term === filters.keyword);
     if (coachFilter !== 'all') f = f.filter(a => a.coach_mode === coachFilter);
@@ -443,7 +448,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     }
     f.sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0));
     return f;
-  }, [enrichedActs, typeFilter, stratFilter, famFilter, effectiveFam, filters.experiment, filters.keyword, coachFilter, bucketFilter, strategicTaskFilter, doQueue.isUploaded, doQueue.isDone, effectiveCoachMode, hideMonitor]);
+  }, [enrichedActs, typeFilter, stratFilter, famFilter, effectiveFam, filters.product, filters.experiment, filters.keyword, coachFilter, bucketFilter, strategicTaskFilter, doQueue.isUploaded, doQueue.isDone, effectiveCoachMode, hideMonitor]);
 
   /* ── Pie chart: classify spend by bucket ── */
   const bucketSpend = useMemo(() => {
@@ -522,6 +527,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     if (effectiveCoachMode !== 'COOLDOWN') {
       let hotSignals = (data.hot_signals || []).filter(s => {
         if (effectiveFam && getFamily(s.product_short_name) !== effectiveFam) return false;
+        if (filters.product && s.asin !== filters.product) return false;
         if (filters.experiment && s.experiment_id !== filters.experiment) return false;
         if (filters.keyword && s.search_term !== filters.keyword) return false;
         if (stratFilter !== 'all' && s.strategy_id !== stratFilter) return false;
@@ -537,7 +543,8 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     }
 
     // 3) Phrase negatives — suppressed in COOLDOWN
-    if (effectiveCoachMode !== 'COOLDOWN') {
+    // Phrase negatives: suppress when product filter is active (phrases have no product context)
+    if (effectiveCoachMode !== 'COOLDOWN' && !filters.product) {
       for (const p of (data.coach_phrase_negatives || [])) {
         items.push({
           spend: p.phrase_spend_8w || 0, type: 'PHRASE', signal: p.action || 'NEGATE_PHRASE',
@@ -817,7 +824,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     }
 
     return [];
-  }, [filtered, data.hot_signals, data.coach_phrase_negatives, data.actions, keywordCampaignCounts, effectiveFam, famFilter, filters, stratFilter, effectiveCoachMode, hierarchy]);
+  }, [filtered, data.hot_signals, data.coach_phrase_negatives, data.actions, keywordCampaignCounts, effectiveFam, famFilter, filters, filters.product, stratFilter, effectiveCoachMode, hierarchy]);
 
   /* ── Section counts ── */
   const totalQueueCount = unifiedTree.reduce((s, n) => s + n.metrics.count, 0);
@@ -852,11 +859,14 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     for (const ct of data.actions || []) {
       const fam = ct.parent_name;
       if (!fam || !ct.coach_mode) continue;
+      // Respect header filters
+      if (effectiveFam && fam !== effectiveFam) continue;
+      if (filters.product && ct.asin !== filters.product) continue;
       if (!map[fam]) map[fam] = { mode: ct.coach_mode, occasion: ct.active_occasion || 'NONE', phase: ct.current_phase || 'OFF_SEASON', count: 0 };
       map[fam].count++;
     }
     return map;
-  }, [data.actions]);
+  }, [data.actions, effectiveFam, filters.product]);
 
   // Most urgent mode across all families: COOLDOWN > BLITZ > GUARDIAN
   const activeCoachMode = useMemo(() => {
@@ -1176,8 +1186,11 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
 
       {/* ── Coach Strategy Panel ── */}
       {(() => {
-        const coachTerms = data.actions || [];
-        // Determine dominant mode from actual data
+        // Filter coach terms by header parent & product filters
+        let coachTerms = data.actions || [];
+        if (effectiveFam) coachTerms = coachTerms.filter(ct => ct.parent_name === effectiveFam);
+        if (filters.product) coachTerms = coachTerms.filter(ct => ct.asin === filters.product);
+        // Determine dominant mode from filtered data
         const modeCounts: Record<string, number> = {};
         for (const ct of coachTerms) {
           if (ct.coach_mode) modeCounts[ct.coach_mode] = (modeCounts[ct.coach_mode] || 0) + 1;
@@ -1371,7 +1384,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                         const pt = planTargets.get(f.family);
                         if (!pt || pt.dailyCost <= 0) return null;
                         const act = famActuals.get(f.family);
-                        const actualDaily = act?.dailyCost ?? 0;   // last-30d ad-spend pace (daily_trends)
+                        const actualDaily = act?.dailyCost ?? 0;   // last-7d ad-spend pace (daily_trends)
                         // delta badge: higherIsBetter=false for spend/CPC (over plan = bad/red),
                         // true for ROAS (over plan = good/green); within ±10% = on-plan (faint).
                         const badge = (actual: number, plan: number, higherIsBetter: boolean) => {
@@ -1387,10 +1400,11 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                               <span className="text-blue-400/80 font-semibold">Plan {planMoLabel}:</span>{' '}
                               <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span> · ROAS <span className="text-muted">{pt.roas.toFixed(2)}×</span>
                             </div>
-                            <div className="text-[9px] tabular-nums text-faint mb-1" title="Actual vs plan (Jun). Spend = last-30-day daily pace; CPC & net ROAS = last 4 weeks, spend-weighted">
-                              <span className="text-subtle font-semibold">Actual:</span>{' '}
+                            <div className="text-[9px] tabular-nums text-faint mb-1" title="Last-week actuals vs the daily plan (Jun). Spend/d & CPC = last 7 days (ad); net ROAS = last 4 weeks, ad-only">
+                              <span className="text-subtle font-semibold">Last 7d:</span>{' '}
                               ${actualDaily.toFixed(0)}/d {badge(actualDaily, pt.dailyCost, false)}
-                              {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {badge(act.cpc, pt.cpc, false)} · ROAS {act.roas.toFixed(2)}× {badge(act.roas, pt.roas, true)}</>}
+                              {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {badge(act.cpc, pt.cpc, false)}</>}
+                              {act && act.roas > 0 && <> · ROAS {act.roas.toFixed(2)}× {badge(act.roas, pt.roas, true)}</>}
                             </div>
                           </>
                         );
