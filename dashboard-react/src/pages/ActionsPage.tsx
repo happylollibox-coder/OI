@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { monthlyPlanTargets, planDelta, adRoasSignal } from '../planTypes';
+import { familyActuals, familyModes, dominantMode } from '../coachActuals';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
 import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
 import { PageHeader } from '../components/PageHeader';
@@ -349,41 +350,13 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
        • net ROAS = last 4w, ad-only, spend-weighted over the family's coach term rows — the only
          ad-only ROAS available (a daily_trends ROAS would be blended/halo, not comparable to the
          ad-only plan target). ─── */
-  const famActuals = useMemo(() => {
-    const dt = data.daily_trends || [];
-    const dates = [...new Set(dt.map(r => r.date))].sort();
-    const recentDates = new Set(dates.slice(-7));   // last week
-    const nDays = recentDates.size || 1;
-    const sp = new Map<string, { cost: number; clicks: number }>();
-    for (const r of dt) {
-      if (!recentDates.has(r.date)) continue;
-      const e = sp.get(r.product_type) ?? { cost: 0, clicks: 0 };
-      e.cost += r.ad_cost || 0;
-      e.clicks += r.clicks || 0;
-      sp.set(r.product_type, e);
-    }
-    const ro = new Map<string, { spend: number; roasW: number }>();
-    for (const a of acts) {
-      const fam = getFamily(a.product_short_name);
-      if (!fam) continue;
-      const s = a.spend || 0;
-      const e = ro.get(fam) ?? { spend: 0, roasW: 0 };
-      e.spend += s;
-      e.roasW += (a.net_roas || 0) * s;
-      ro.set(fam, e);
-    }
-    const out = new Map<string, { dailyCost: number; cpc: number; roas: number }>();
-    for (const fam of new Set([...sp.keys(), ...ro.keys()])) {
-      const s = sp.get(fam);
-      const r = ro.get(fam);
-      out.set(fam, {
-        dailyCost: s ? s.cost / nDays : 0,
-        cpc: s && s.clicks > 0 ? s.cost / s.clicks : 0,
-        roas: r && r.spend > 0 ? r.roasW / r.spend : 0,
-      });
-    }
-    return out;
-  }, [acts, getFamily, data.daily_trends]);
+  const famActuals = useMemo(
+    () => familyActuals(acts, data.daily_trends || [], getFamily),
+    [acts, getFamily, data.daily_trends],
+  );
+
+  // Per-family dominant coach mode (keyed by getFamily) — each family is judged on its OWN mode.
+  const famModes = useMemo(() => familyModes(data.actions || [], getFamily), [data.actions, getFamily]);
 
   const enrichedActs = acts;
 
@@ -400,12 +373,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
   // Effective coach mode: respect filter dropdown, otherwise detect dominant mode from data
   const effectiveCoachMode = useMemo(() => {
     if (coachFilter !== 'all') return coachFilter;
-    const modeCounts: Record<string, number> = {};
-    for (const ct of data.actions || []) {
-      if (ct.coach_mode) modeCounts[ct.coach_mode] = (modeCounts[ct.coach_mode] || 0) + 1;
-    }
-    const sorted = Object.entries(modeCounts).sort((a, b) => b[1] - a[1]);
-    return sorted[0]?.[0] || 'GUARDIAN';
+    return dominantMode(data.actions || []);
   }, [coachFilter, data.actions]);
 
   const filtered = useMemo(() => {
@@ -1191,11 +1159,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         if (effectiveFam) coachTerms = coachTerms.filter(ct => ct.parent_name === effectiveFam);
         if (filters.product) coachTerms = coachTerms.filter(ct => ct.asin === filters.product);
         // Determine dominant mode from filtered data
-        const modeCounts: Record<string, number> = {};
-        for (const ct of coachTerms) {
-          if (ct.coach_mode) modeCounts[ct.coach_mode] = (modeCounts[ct.coach_mode] || 0) + 1;
-        }
-        const activeMode = (coachFilter !== 'all' ? coachFilter : Object.entries(modeCounts).sort((a, b) => b[1] - a[1])[0]?.[0]) || 'GUARDIAN';
+        const activeMode = coachFilter !== 'all' ? coachFilter : dominantMode(coachTerms);
         const activeOccasion = coachTerms.find(ct => ct.coach_mode === activeMode && ct.active_occasion)?.active_occasion;
         return (
           <CoachStrategyPanel
@@ -1410,7 +1374,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                                 ${actualDaily.toFixed(0)}/d {hasPlan && pt && badge(actualDaily, pt.dailyCost, false)}
                                 {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {hasPlan && pt && badge(act.cpc, pt.cpc, false)}</>}
                                 {act && act.roas > 0 && (() => {
-                                  const sig = adRoasSignal(act.roas, effectiveCoachMode).action;
+                                  const sig = adRoasSignal(act.roas, famModes.get(f.family) ?? effectiveCoachMode).action;
                                   const roasCls = sig === 'scale' ? 'text-emerald-400' : sig === 'cut' ? 'text-red-400' : 'text-muted';
                                   const hint = sig === 'scale' ? { t: ' ↑ scale budget', c: 'text-emerald-400/80' }
                                              : sig === 'cut'   ? { t: ' ↓ cut spend',     c: 'text-red-400/80' }
