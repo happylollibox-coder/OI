@@ -1387,7 +1387,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                               <span className="text-blue-400/80 font-semibold">Plan {planMoLabel}:</span>{' '}
                               <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span> · ROAS <span className="text-muted">{pt.roas.toFixed(2)}×</span>
                             </div>
-                            <div className="text-[9px] tabular-nums text-faint mb-1" title="Actual: daily spend = last 7d campaign pace; CPC & net ROAS = last 4w, spend-weighted">
+                            <div className="text-[9px] tabular-nums text-faint mb-1" title="Actual vs plan (Jun). Spend = last-30-day daily pace; CPC & net ROAS = last 4 weeks, spend-weighted">
                               <span className="text-subtle font-semibold">Actual:</span>{' '}
                               ${actualDaily.toFixed(0)}/d {badge(actualDaily, pt.dailyCost, false)}
                               {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {badge(act.cpc, pt.cpc, false)} · ROAS {act.roas.toFixed(2)}× {badge(act.roas, pt.roas, true)}</>}
