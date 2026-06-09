@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { familyActuals } from './coachActuals';
+import { familyActuals, familyModes, dominantMode } from './coachActuals';
 
 // daily_trends rows are keyed by product_type = family. ad_cost & clicks are ad-only.
 const trends = [
@@ -51,5 +51,33 @@ describe('familyActuals', () => {
     const f = out.get('Lollibox')!;
     expect(f.cpc).toBe(0);
     expect(f.roas).toBe(0);
+  });
+});
+
+describe('dominantMode', () => {
+  it('returns the most frequent coach_mode', () => {
+    expect(dominantMode([{ coach_mode: 'BLITZ' }, { coach_mode: 'BLITZ' }, { coach_mode: 'GUARDIAN' }])).toBe('BLITZ');
+  });
+  it('defaults to GUARDIAN when empty', () => {
+    expect(dominantMode([])).toBe('GUARDIAN');
+  });
+});
+
+describe('familyModes', () => {
+  const rows = [
+    { product_short_name: 'White Lollibox', coach_mode: 'BLITZ' },
+    { product_short_name: 'Pink Lollibox',  coach_mode: 'BLITZ' },
+    { product_short_name: 'Mint LolliME',   coach_mode: 'COOLDOWN' },
+  ];
+  const fam = (n?: string | null) =>
+    n?.includes('Lollibox') ? 'Lollibox' : n?.includes('LolliME') ? 'LolliME' : null;
+  it('maps each family to its own dominant mode (keyed by getFamily)', () => {
+    const m = familyModes(rows, fam);
+    expect(m.get('Lollibox')).toBe('BLITZ');
+    expect(m.get('LolliME')).toBe('COOLDOWN'); // NOT the global dominant (BLITZ)
+  });
+  it('ignores rows with no family or no mode', () => {
+    const m = familyModes([{ product_short_name: 'Unknown', coach_mode: 'BLITZ' }], fam);
+    expect(m.size).toBe(0);
   });
 });
