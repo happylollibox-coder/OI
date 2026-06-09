@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, stockCorrectedRunRate, monthlyPlanTargets, planDelta, detectLaunchMonth, seasonalShape, launchOrderPhases } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, stockCorrectedRunRate, monthlyPlanTargets, planDelta, adRoasSignal, detectLaunchMonth, seasonalShape, launchOrderPhases } from './planTypes';
 
 describe('blendedNetRoas', () => {
   it('returns (sales − cogs) / adCost summed over rows', () => {
@@ -563,6 +563,28 @@ describe('planDelta', () => {
     const d = planDelta(0, 110);
     expect(d.pct).toBeCloseTo(-1, 6);
     expect(d.status).toBe('under');
+  });
+});
+
+describe('adRoasSignal', () => {
+  it('GUARDIAN: scale at >=1.1, hold in 0.9-1.1, cut below 0.9', () => {
+    expect(adRoasSignal(1.27, 'GUARDIAN').action).toBe('scale');
+    expect(adRoasSignal(1.00, 'GUARDIAN').action).toBe('hold');
+    expect(adRoasSignal(0.70, 'GUARDIAN').action).toBe('cut');
+  });
+  it('BLITZ scales more eagerly (>=1.0)', () => {
+    expect(adRoasSignal(1.00, 'BLITZ').action).toBe('scale');
+    expect(adRoasSignal(0.95, 'BLITZ').action).toBe('hold');
+    expect(adRoasSignal(0.85, 'BLITZ').action).toBe('cut');
+  });
+  it('COOLDOWN never scales — holds >=0.8, else cuts', () => {
+    expect(adRoasSignal(1.50, 'COOLDOWN').action).toBe('hold'); // high ROAS but wind-down mode
+    expect(adRoasSignal(0.90, 'COOLDOWN').action).toBe('hold');
+    expect(adRoasSignal(0.70, 'COOLDOWN').action).toBe('cut');
+  });
+  it('unknown mode falls back to GUARDIAN rules', () => {
+    expect(adRoasSignal(1.27, 'WHATEVER').action).toBe('scale');
+    expect(adRoasSignal(0.70, '').action).toBe('cut');
   });
 });
 

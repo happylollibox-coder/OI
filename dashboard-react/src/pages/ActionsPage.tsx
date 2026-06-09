@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { monthlyPlanTargets, planDelta } from '../planTypes';
+import { monthlyPlanTargets, planDelta, adRoasSignal } from '../planTypes';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
 import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
 import { PageHeader } from '../components/PageHeader';
@@ -342,9 +342,6 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     return monthlyPlanTargets(data.plan_ads_targets || [], d.getFullYear(), d.getMonth() + 1);
   }, [data.plan_ads_targets]);
   const planMoLabel = new Date().toLocaleString('en-US', { month: 'short' });
-  // "Good" ad ROAS bar (a RESULT, not a plan target). >= this = profitable → coacher pushes to
-  // scale daily spend for more net profit. Margin-ROAS, so 1.0 ≈ breakeven. TODO: make configurable.
-  const GOOD_AD_ROAS = 1.0;
 
   /* ─── Last-week actuals per family vs the (daily) plan guidelines:
        • SPEND/d + CPC = last 7 days from daily_trends (product_type = family; ad_cost & clicks are
@@ -1371,7 +1368,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
             {/* Right: Family Stacked Bar Chart */}
             {famBuckets.length > 0 && (
               <div className="flex-1 min-w-[280px] border-l border-border pl-5">
-                <div className="text-[11px] font-semibold text-subtle uppercase tracking-wider mb-3">Per Family Breakdown</div>
+                <div className="text-[11px] font-semibold text-subtle uppercase tracking-wider mb-3">Per Family Breakdown <span className="text-faint normal-case font-normal">· {effectiveCoachMode} mode</span></div>
                 <div className="space-y-2.5">
                   {famBuckets.map(f => (
                     <div
@@ -1408,14 +1405,17 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                               </div>
                             )}
                             {hasActual && (
-                              <div className="text-[9px] tabular-nums text-faint mb-1" title="Spend/d & CPC = last 7 days (ad), vs the plan levers. ROAS = last 4 weeks ad-only, a RESULT (2-day lag) judged against the good-ROAS bar — not the plan.">
+                              <div className="text-[9px] tabular-nums text-faint mb-1" title={`Spend/d & CPC = last 7 days (ad), vs the plan levers. ROAS = last 4 weeks ad-only, a RESULT (2-day lag) → coacher reacts per ${effectiveCoachMode} mode (scale/hold/cut), not vs plan.`}>
                                 <span className="text-subtle font-semibold">Last 7d:</span>{' '}
                                 ${actualDaily.toFixed(0)}/d {hasPlan && pt && badge(actualDaily, pt.dailyCost, false)}
                                 {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {hasPlan && pt && badge(act.cpc, pt.cpc, false)}</>}
                                 {act && act.roas > 0 && (() => {
-                                  const good = act.roas >= GOOD_AD_ROAS;
-                                  return <> · ROAS <span className={good ? 'text-emerald-400' : 'text-red-400'}>{act.roas.toFixed(2)}×</span>
-                                    <span className={good ? 'text-emerald-400/80' : 'text-amber-400/80'}>{good ? ' ↑ scale budget' : ' ↓ below breakeven'}</span></>;
+                                  const sig = adRoasSignal(act.roas, effectiveCoachMode).action;
+                                  const roasCls = sig === 'scale' ? 'text-emerald-400' : sig === 'cut' ? 'text-red-400' : 'text-muted';
+                                  const hint = sig === 'scale' ? { t: ' ↑ scale budget', c: 'text-emerald-400/80' }
+                                             : sig === 'cut'   ? { t: ' ↓ cut spend',     c: 'text-red-400/80' }
+                                             :                   { t: ' · hold',          c: 'text-faint' };
+                                  return <> · ROAS <span className={roasCls}>{act.roas.toFixed(2)}×</span><span className={hint.c}>{hint.t}</span></>;
                                 })()}
                                 {!hasPlan && <span className="text-faint/60"> · no plan yet</span>}
                               </div>
