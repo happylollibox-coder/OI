@@ -342,6 +342,9 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     return monthlyPlanTargets(data.plan_ads_targets || [], d.getFullYear(), d.getMonth() + 1);
   }, [data.plan_ads_targets]);
   const planMoLabel = new Date().toLocaleString('en-US', { month: 'short' });
+  // "Good" ad ROAS bar (a RESULT, not a plan target). >= this = profitable → coacher pushes to
+  // scale daily spend for more net profit. Margin-ROAS, so 1.0 ≈ breakeven. TODO: make configurable.
+  const GOOD_AD_ROAS = 1.0;
 
   /* ─── Last-week actuals per family vs the (daily) plan guidelines:
        • SPEND/d + CPC = last 7 days from daily_trends (product_type = family; ad_cost & clicks are
@@ -1399,17 +1402,21 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                         return (
                           <>
                             {hasPlan && pt && (
-                              <div className="text-[9px] tabular-nums text-faint mb-0.5" title={`Plan target for ${planMoLabel} (from the Plan wizard's Ads Path)`}>
+                              <div className="text-[9px] tabular-nums text-faint mb-0.5" title={`Plan inputs for ${planMoLabel} — the levers the coacher steers (daily spend & CPC). ROAS is a measured result, not a plan target.`}>
                                 <span className="text-blue-400/80 font-semibold">Plan {planMoLabel}:</span>{' '}
-                                <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span> · ROAS <span className="text-muted">{pt.roas.toFixed(2)}×</span>
+                                <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span>
                               </div>
                             )}
                             {hasActual && (
-                              <div className="text-[9px] tabular-nums text-faint mb-1" title={hasPlan ? 'Last-week actuals vs the daily plan (Jun). Spend/d & CPC = last 7 days (ad); net ROAS = last 4 weeks, ad-only' : 'Last-week actuals (no plan saved yet). Spend/d & CPC = last 7 days (ad); net ROAS = last 4 weeks, ad-only'}>
+                              <div className="text-[9px] tabular-nums text-faint mb-1" title="Spend/d & CPC = last 7 days (ad), vs the plan levers. ROAS = last 4 weeks ad-only, a RESULT (2-day lag) judged against the good-ROAS bar — not the plan.">
                                 <span className="text-subtle font-semibold">Last 7d:</span>{' '}
                                 ${actualDaily.toFixed(0)}/d {hasPlan && pt && badge(actualDaily, pt.dailyCost, false)}
                                 {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {hasPlan && pt && badge(act.cpc, pt.cpc, false)}</>}
-                                {act && act.roas > 0 && <> · ROAS {act.roas.toFixed(2)}× {hasPlan && pt && badge(act.roas, pt.roas, true)}</>}
+                                {act && act.roas > 0 && (() => {
+                                  const good = act.roas >= GOOD_AD_ROAS;
+                                  return <> · ROAS <span className={good ? 'text-emerald-400' : 'text-red-400'}>{act.roas.toFixed(2)}×</span>
+                                    <span className={good ? 'text-emerald-400/80' : 'text-amber-400/80'}>{good ? ' ↑ scale budget' : ' ↓ below breakeven'}</span></>;
+                                })()}
                                 {!hasPlan && <span className="text-faint/60"> · no plan yet</span>}
                               </div>
                             )}
