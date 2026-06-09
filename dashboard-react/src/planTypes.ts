@@ -531,14 +531,23 @@ export function monthlyPlanTargets(
 // Mode-aware reaction to a measured ad ROAS (a RESULT, not a plan target). ROAS is a margin-ROAS
 // (~1.0 = breakeven). The "good enough to scale" bar follows the coacher MODE, mirroring its existing
 // per-mode budget rules: GUARDIAN (defend profit) scales at >=1.1; BLITZ (grow) at >=1.0; COOLDOWN
-// (wind-down) never scales and only holds while >=0.8. Returns the action the coacher should push.
-const MODE_ROAS: Record<string, { up: number; down: number; scale: boolean }> = {
+// (wind-down) never scales and only holds while >=0.8. `overrides` lets a live source (CoachThresholds,
+// per-mode/per-season) tune any bar field without changing this logic — Phase 2B passes them in.
+// Per-mode ROAS reaction thresholds: scale at/above `up`, cut below `down`; `scale=false` never scales.
+export interface RoasBar { up: number; down: number; scale: boolean }
+export const MODE_ROAS: Record<string, RoasBar> = {
   GUARDIAN: { up: 1.1, down: 0.9, scale: true },
   BLITZ:    { up: 1.0, down: 0.9, scale: true },
   COOLDOWN: { up: Infinity, down: 0.8, scale: false },
 };
-export function adRoasSignal(roas: number, mode: string): { action: 'scale' | 'hold' | 'cut' } {
-  const cfg = MODE_ROAS[mode] ?? MODE_ROAS.GUARDIAN;
+export function adRoasSignal(
+  roas: number,
+  mode: string,
+  overrides?: Record<string, Partial<RoasBar>>,
+): { action: 'scale' | 'hold' | 'cut' } {
+  const base = MODE_ROAS[mode] ?? MODE_ROAS.GUARDIAN;
+  const override = overrides?.[mode];
+  const cfg: RoasBar = override ? { ...base, ...override } : base;
   if (cfg.scale && roas >= cfg.up) return { action: 'scale' };
   if (roas < cfg.down) return { action: 'cut' };
   return { action: 'hold' };

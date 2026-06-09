@@ -588,6 +588,22 @@ describe('adRoasSignal', () => {
   });
 });
 
+describe('adRoasSignal overrides (live thresholds)', () => {
+  it('applies a per-mode override over the built-in bar', () => {
+    // GUARDIAN default scales at >=1.1; override the bar up to >=1.3
+    const ov = { GUARDIAN: { up: 1.3 } };
+    expect(adRoasSignal(1.27, 'GUARDIAN', ov).action).toBe('hold'); // below the raised bar
+    expect(adRoasSignal(1.35, 'GUARDIAN', ov).action).toBe('scale');
+  });
+  it('falls back to the built-in bar when no override exists for that mode', () => {
+    const ov = { BLITZ: { up: 2.0 } };
+    expect(adRoasSignal(1.27, 'GUARDIAN', ov).action).toBe('scale'); // GUARDIAN unchanged
+  });
+  it('can flip scale off via override', () => {
+    expect(adRoasSignal(5.0, 'GUARDIAN', { GUARDIAN: { scale: false } }).action).toBe('hold');
+  });
+});
+
 describe('detectLaunchMonth', () => {
   const lollibox = [745, 891, 1058, 2040, 898, 666, 481, 692, 972, 944, 2066, 6225];
   const lollime  = [0, 0, 0, 0, 0, 0, 354, 520, 843, 983, 2929, 7620];
