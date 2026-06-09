@@ -359,8 +359,6 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
   // Per-family dominant coach mode (keyed by getFamily) — each family is judged on its OWN mode.
   const famModes = useMemo(() => familyModes(data.actions || [], getFamily), [data.actions, getFamily]);
 
-  const enrichedActs = acts;
-
   /* ── Strategic keyword predictions lookup ── */
   const predByTerm = useMemo(() => {
     const map: Record<string, StrategicPrediction> = {};
@@ -378,7 +376,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
   }, [coachFilter, data.actions]);
 
   const filtered = useMemo(() => {
-    let f = [...enrichedActs];
+    let f = [...acts];
     // COOLDOWN mode: suppress negates and hot-signal-like actions — cooldown itself handles wind-down
     if (effectiveCoachMode === 'COOLDOWN') {
       f = f.filter(a => !(a.action === 'NEGATE_TERM' || a.action === 'REDUCE_BID'));
@@ -417,7 +415,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     }
     f.sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0));
     return f;
-  }, [enrichedActs, typeFilter, stratFilter, famFilter, effectiveFam, filters.product, filters.experiment, filters.keyword, coachFilter, bucketFilter, strategicTaskFilter, doQueue.isUploaded, doQueue.isDone, effectiveCoachMode, hideMonitor]);
+  }, [acts, typeFilter, stratFilter, famFilter, effectiveFam, filters.product, filters.experiment, filters.keyword, coachFilter, bucketFilter, strategicTaskFilter, doQueue.isUploaded, doQueue.isDone, effectiveCoachMode, hideMonitor]);
 
   /* ── Pie chart: classify spend by bucket ── */
   const bucketSpend = useMemo(() => {
@@ -447,14 +445,14 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
   /* ── Compute cross-keyword campaign counts for complexity badges ── */
   const keywordCampaignCounts = useMemo(() => {
     const counts: Record<string, Set<string>> = {};
-    for (const r of enrichedActs) {
+    for (const r of acts) {
       const k = (r.search_term || '').toLowerCase();
       if (!k) continue;
       if (!counts[k]) counts[k] = new Set();
       if (r.campaign_id) counts[k].add(r.campaign_id);
     }
     return Object.fromEntries(Object.entries(counts).map(([k, s]) => [k, s.size]));
-  }, [enrichedActs]);
+  }, [acts]);
 
   /* ── UNIFIED TREE: builds hierarchy based on selected mode ── */
   const unifiedTree = useMemo((): TreeNode[] => {
