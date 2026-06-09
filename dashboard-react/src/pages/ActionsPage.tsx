@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { monthlyPlanTargets, planDelta, adRoasSignal } from '../planTypes';
 import { familyActuals, familyModes, dominantMode } from '../coachActuals';
+import { FamilyPlanActuals } from './FamilyPlanActuals';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
 import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
 import { PageHeader } from '../components/PageHeader';
@@ -1344,49 +1345,12 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                         <span className="text-[11px] font-semibold">{f.family}</span>
                         <span className="text-[10px] font-mono text-faint">{fM(f.total)}</span>
                       </div>
-                      {(() => {
-                        const pt = planTargets.get(f.family);
-                        const hasPlan = !!pt && pt.dailyCost > 0;
-                        const act = famActuals.get(f.family);
-                        const actualDaily = act?.dailyCost ?? 0;   // last-7d ad-spend pace (daily_trends)
-                        const hasActual = actualDaily > 0 || (!!act && act.cpc > 0);
-                        if (!hasPlan && !hasActual) return null;
-                        // delta badge (only when there's a plan): higherIsBetter=false for spend/CPC
-                        // (over plan = bad/red), true for ROAS; within ±10% = on-plan (faint).
-                        const badge = (actual: number, plan: number, higherIsBetter: boolean) => {
-                          const d = planDelta(actual, plan);
-                          if (d.pct === null) return null;
-                          const good = higherIsBetter ? d.status !== 'under' : d.status !== 'over';
-                          const cls = d.status === 'on' ? 'text-faint' : good ? 'text-emerald-400' : 'text-red-400';
-                          return <span className={cls}>({d.pct >= 0 ? '+' : ''}{Math.round(d.pct * 100)}%)</span>;
-                        };
-                        return (
-                          <>
-                            {hasPlan && pt && (
-                              <div className="text-[9px] tabular-nums text-faint mb-0.5" title={`Plan inputs for ${planMoLabel} — the levers the coacher steers (daily spend & CPC). ROAS is a measured result, not a plan target.`}>
-                                <span className="text-blue-400/80 font-semibold">Plan {planMoLabel}:</span>{' '}
-                                <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span>
-                              </div>
-                            )}
-                            {hasActual && (
-                              <div className="text-[9px] tabular-nums text-faint mb-1" title={`Spend/d & CPC = last 7 days (ad), vs the plan levers. ROAS = last 4 weeks ad-only, a RESULT (2-day lag) → coacher reacts per ${effectiveCoachMode} mode (scale/hold/cut), not vs plan.`}>
-                                <span className="text-subtle font-semibold">Last 7d:</span>{' '}
-                                ${actualDaily.toFixed(0)}/d {hasPlan && pt && badge(actualDaily, pt.dailyCost, false)}
-                                {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {hasPlan && pt && badge(act.cpc, pt.cpc, false)}</>}
-                                {act && act.roas > 0 && (() => {
-                                  const sig = adRoasSignal(act.roas, famModes.get(f.family) ?? effectiveCoachMode).action;
-                                  const roasCls = sig === 'scale' ? 'text-emerald-400' : sig === 'cut' ? 'text-red-400' : 'text-muted';
-                                  const hint = sig === 'scale' ? { t: ' ↑ scale budget', c: 'text-emerald-400/80' }
-                                             : sig === 'cut'   ? { t: ' ↓ cut spend',     c: 'text-red-400/80' }
-                                             :                   { t: ' · hold',          c: 'text-faint' };
-                                  return <> · ROAS <span className={roasCls}>{act.roas.toFixed(2)}×</span><span className={hint.c}>{hint.t}</span></>;
-                                })()}
-                                {!hasPlan && <span className="text-faint/60"> · no plan yet</span>}
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
+                      <FamilyPlanActuals
+                        planTarget={planTargets.get(f.family)}
+                        actual={famActuals.get(f.family)}
+                        mode={famModes.get(f.family) ?? effectiveCoachMode}
+                        planMoLabel={planMoLabel}
+                      />
                       <div className="flex h-5 rounded-md overflow-hidden" title={[...f.buckets.map(b => `${b.label}: ${fM(b.value)}`), `Total: ${fM(f.total)}`].join(' · ')}>
                         {f.buckets.map(b => (
                           <div
