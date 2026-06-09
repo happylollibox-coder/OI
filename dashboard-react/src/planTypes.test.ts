@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, detectLaunchMonth, seasonalShape, launchOrderPhases } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, stockCorrectedRunRate, detectLaunchMonth, seasonalShape, launchOrderPhases } from './planTypes';
 
 describe('blendedNetRoas', () => {
   it('returns (sales − cogs) / adCost summed over rows', () => {
@@ -470,6 +470,41 @@ describe('weightedRunRate', () => {
   });
   it('accepts custom weights', () => {
     expect(weightedRunRate([7, 7], [0.5, 0.5])).toBeCloseTo(1, 6);
+  });
+});
+
+describe('stockCorrectedRunRate', () => {
+  const wk = (units: number, inStockDays: number) => ({ units, inStockDays });
+  it('matches weightedRunRate when every week is fully in stock (no change for normal products)', () => {
+    const weeks = [wk(70, 7), wk(70, 7), wk(70, 7), wk(70, 7)];
+    expect(stockCorrectedRunRate(weeks)).toBeCloseTo(10, 6);
+  });
+  it('preserves recency weighting for a normal product', () => {
+    const weeks = [wk(70, 7), wk(0, 7), wk(0, 7), wk(0, 7)];
+    expect(stockCorrectedRunRate(weeks)).toBeCloseTo(4, 6); // 0.4 * 10
+  });
+  it('skips recent out-of-stock weeks and reaches back to the last healthy weeks', () => {
+    // 2 recent OOS weeks (throttled), then 4 healthy in-stock weeks of 70/wk
+    const weeks = [wk(7, 1), wk(0, 0), wk(70, 7), wk(70, 7), wk(70, 7), wk(70, 7)];
+    expect(stockCorrectedRunRate(weeks)).toBeCloseTo(10, 6); // uses the 4 healthy weeks, not ~1/day
+  });
+  it('excludes partially-stocked weeks below the in-stock-day threshold', () => {
+    // a week with only 5 in-stock days is censored (default min = 6)
+    const weeks = [wk(35, 5), wk(70, 7), wk(70, 7), wk(70, 7), wk(70, 7)];
+    expect(stockCorrectedRunRate(weeks)).toBeCloseTo(10, 6); // the 5-day week is skipped
+  });
+  it('renormalizes weights when fewer than 4 healthy weeks exist', () => {
+    // only 2 healthy weeks: most-recent 70, prior 140; rest OOS
+    const weeks = [wk(0, 0), wk(70, 7), wk(140, 7), wk(0, 0), wk(0, 0)];
+    // renormalized weights [0.4,0.3]→[4/7,3/7]: (4/7)*10 + (3/7)*20 = 14.2857
+    expect(stockCorrectedRunRate(weeks)).toBeCloseTo(14.2857, 3);
+  });
+  it('falls back to the raw recent weeks when nothing is in stock', () => {
+    const weeks = [wk(70, 0), wk(0, 0), wk(0, 0), wk(0, 0)];
+    expect(stockCorrectedRunRate(weeks)).toBeCloseTo(4, 6); // = weightedRunRate([70,0,0,0])
+  });
+  it('returns 0 for no weeks', () => {
+    expect(stockCorrectedRunRate([])).toBe(0);
   });
 });
 

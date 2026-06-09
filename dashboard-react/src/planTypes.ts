@@ -497,6 +497,30 @@ export function weightedRunRate(weeklyTotals: number[], weights: number[] = [0.4
   return rate;
 }
 
+// Stockout-corrected run-rate: like weightedRunRate, but it ignores weeks where the product was
+// out of stock so the rate reflects true demand (what it sells when on the shelf), not the supply
+// throttle. `weeks` is most-recent-first, each tagged with how many days that week the product was
+// in stock. A week counts as "healthy" only if it was in stock at least `minInStockDays` days; the
+// most-recent N healthy weeks are recency-weighted (weights renormalized to however many exist).
+// A fully-in-stock product is unchanged (every recent week is healthy → identical to weightedRunRate);
+// an OOS product reaches back to its last healthy weeks. If nothing is in stock anywhere in the
+// window, it falls back to the raw recent weeks (un-corrected).
+export function stockCorrectedRunRate(
+  weeks: { units: number; inStockDays: number }[],
+  weights: number[] = [0.4, 0.3, 0.2, 0.1],
+  minInStockDays = 6,
+): number {
+  const healthy = weeks.filter(w => w.inStockDays >= minInStockDays).slice(0, weights.length);
+  if (healthy.length === 0) {
+    return weightedRunRate(weeks.slice(0, weights.length).map(w => w.units), weights);
+  }
+  const w = weights.slice(0, healthy.length);
+  const wSum = w.reduce((s, x) => s + x, 0) || 1;
+  let rate = 0;
+  for (let i = 0; i < healthy.length; i++) rate += (w[i] / wSum) * (healthy[i].units / 7);
+  return rate;
+}
+
 // The launch month (1-based) for a family's 2025 monthly-units array, or null when the
 // family is mature / has no data. A family with January sales (first-sale month === 1) is
 // treated as mature (no launch ramp) — this avoids mis-flagging a mature product whose data
