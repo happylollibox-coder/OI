@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { monthlyPlanTargets, planDelta, adRoasSignal } from '../planTypes';
+import { monthlyPlanTargets } from '../planTypes';
 import { familyActuals, familyModes, dominantMode } from '../coachActuals';
 import { FamilyPlanActuals } from './FamilyPlanActuals';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
