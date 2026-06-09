@@ -1382,11 +1382,13 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                       </div>
                       {(() => {
                         const pt = planTargets.get(f.family);
-                        if (!pt || pt.dailyCost <= 0) return null;
+                        const hasPlan = !!pt && pt.dailyCost > 0;
                         const act = famActuals.get(f.family);
                         const actualDaily = act?.dailyCost ?? 0;   // last-7d ad-spend pace (daily_trends)
-                        // delta badge: higherIsBetter=false for spend/CPC (over plan = bad/red),
-                        // true for ROAS (over plan = good/green); within ±10% = on-plan (faint).
+                        const hasActual = actualDaily > 0 || (!!act && act.cpc > 0);
+                        if (!hasPlan && !hasActual) return null;
+                        // delta badge (only when there's a plan): higherIsBetter=false for spend/CPC
+                        // (over plan = bad/red), true for ROAS; within ±10% = on-plan (faint).
                         const badge = (actual: number, plan: number, higherIsBetter: boolean) => {
                           const d = planDelta(actual, plan);
                           if (d.pct === null) return null;
@@ -1396,16 +1398,21 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                         };
                         return (
                           <>
-                            <div className="text-[9px] tabular-nums text-faint mb-0.5" title={`Plan target for ${planMoLabel} (from the Plan wizard's Ads Path)`}>
-                              <span className="text-blue-400/80 font-semibold">Plan {planMoLabel}:</span>{' '}
-                              <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span> · ROAS <span className="text-muted">{pt.roas.toFixed(2)}×</span>
-                            </div>
-                            <div className="text-[9px] tabular-nums text-faint mb-1" title="Last-week actuals vs the daily plan (Jun). Spend/d & CPC = last 7 days (ad); net ROAS = last 4 weeks, ad-only">
-                              <span className="text-subtle font-semibold">Last 7d:</span>{' '}
-                              ${actualDaily.toFixed(0)}/d {badge(actualDaily, pt.dailyCost, false)}
-                              {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {badge(act.cpc, pt.cpc, false)}</>}
-                              {act && act.roas > 0 && <> · ROAS {act.roas.toFixed(2)}× {badge(act.roas, pt.roas, true)}</>}
-                            </div>
+                            {hasPlan && pt && (
+                              <div className="text-[9px] tabular-nums text-faint mb-0.5" title={`Plan target for ${planMoLabel} (from the Plan wizard's Ads Path)`}>
+                                <span className="text-blue-400/80 font-semibold">Plan {planMoLabel}:</span>{' '}
+                                <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span> · ROAS <span className="text-muted">{pt.roas.toFixed(2)}×</span>
+                              </div>
+                            )}
+                            {hasActual && (
+                              <div className="text-[9px] tabular-nums text-faint mb-1" title={hasPlan ? 'Last-week actuals vs the daily plan (Jun). Spend/d & CPC = last 7 days (ad); net ROAS = last 4 weeks, ad-only' : 'Last-week actuals (no plan saved yet). Spend/d & CPC = last 7 days (ad); net ROAS = last 4 weeks, ad-only'}>
+                                <span className="text-subtle font-semibold">Last 7d:</span>{' '}
+                                ${actualDaily.toFixed(0)}/d {hasPlan && pt && badge(actualDaily, pt.dailyCost, false)}
+                                {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {hasPlan && pt && badge(act.cpc, pt.cpc, false)}</>}
+                                {act && act.roas > 0 && <> · ROAS {act.roas.toFixed(2)}× {hasPlan && pt && badge(act.roas, pt.roas, true)}</>}
+                                {!hasPlan && <span className="text-faint/60"> · no plan yet</span>}
+                              </div>
+                            )}
                           </>
                         );
                       })()}
