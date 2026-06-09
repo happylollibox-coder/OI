@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, stockCorrectedRunRate, monthlyPlanTargets, detectLaunchMonth, seasonalShape, launchOrderPhases } from './planTypes';
+import { allocateOrder, unitsAtSpend, profitMaxSpend, monthKey, composeMonthlyPlan, splitTrajectoryToProducts, buildEffectiveProjs, monthFractions, latestCompleteWeekRange, blendedNetRoas, aggregateAdsTargetSpend, offSeasonTrend, scaleHorizonPlan, dataCutoffDay, weightedRunRate, stockCorrectedRunRate, monthlyPlanTargets, planDelta, detectLaunchMonth, seasonalShape, launchOrderPhases } from './planTypes';
 
 describe('blendedNetRoas', () => {
   it('returns (sales − cogs) / adCost summed over rows', () => {
@@ -538,6 +538,31 @@ describe('monthlyPlanTargets', () => {
   });
   it('returns an empty map when no rows match', () => {
     expect(monthlyPlanTargets([], 2026, 6).size).toBe(0);
+  });
+});
+
+describe('planDelta', () => {
+  it('flags actual above plan as over (beyond tolerance)', () => {
+    const d = planDelta(140, 110);
+    expect(d.pct).toBeCloseTo(0.2727, 3);
+    expect(d.status).toBe('over');
+  });
+  it('flags actual below plan as under', () => {
+    const d = planDelta(90, 110);
+    expect(d.pct).toBeCloseTo(-0.1818, 3);
+    expect(d.status).toBe('under');
+  });
+  it('treats within-tolerance as on-plan', () => {
+    expect(planDelta(115, 110, 0.1).status).toBe('on'); // +4.5% ≤ 10%
+    expect(planDelta(102, 110, 0.1).status).toBe('on'); // −7.3% ≤ 10%
+  });
+  it('returns none when there is no plan to compare', () => {
+    expect(planDelta(140, 0)).toEqual({ pct: null, status: 'none' });
+  });
+  it('reports −100% when actual is zero against a real plan', () => {
+    const d = planDelta(0, 110);
+    expect(d.pct).toBeCloseTo(-1, 6);
+    expect(d.status).toBe('under');
   });
 });
 

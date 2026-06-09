@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { monthlyPlanTargets } from '../planTypes';
+import { monthlyPlanTargets, planDelta } from '../planTypes';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
 import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
 import { PageHeader } from '../components/PageHeader';
@@ -342,6 +342,45 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     return monthlyPlanTargets(data.plan_ads_targets || [], d.getFullYear(), d.getMonth() + 1);
   }, [data.plan_ads_targets]);
   const planMoLabel = new Date().toLocaleString('en-US', { month: 'short' });
+
+  /* ─── Actual per-family metrics vs the plan:
+       • daily ad SPEND = last-30-day pace from daily_trends (product_type = family) — clean,
+         non-overlapping, recent (NOT the 180-day ads_7d total, NOT the double-counting term sum).
+       • CPC + net ROAS = last-4w, spend-weighted across the family's terms (ratios, overlap cancels). ─── */
+  const famActuals = useMemo(() => {
+    // recent daily spend from daily_trends (last 30 data-days)
+    const dt = data.daily_trends || [];
+    const dates = [...new Set(dt.map(r => r.date))].sort();
+    const recentDates = new Set(dates.slice(-30));
+    const nDays = recentDates.size || 1;
+    const spendByFam = new Map<string, number>();
+    for (const r of dt) {
+      if (!recentDates.has(r.date)) continue;
+      spendByFam.set(r.product_type, (spendByFam.get(r.product_type) || 0) + (r.ad_cost || 0));
+    }
+    // spend-weighted CPC + net ROAS from coach term rows (4w)
+    const agg = new Map<string, { spend: number; cpcW: number; roasW: number }>();
+    for (const a of acts) {
+      const fam = getFamily(a.product_short_name);
+      if (!fam) continue;
+      const s = a.spend || 0;
+      const e = agg.get(fam) ?? { spend: 0, cpcW: 0, roasW: 0 };
+      e.spend += s;
+      e.cpcW += (a.cpc || 0) * s;
+      e.roasW += (a.net_roas || 0) * s;
+      agg.set(fam, e);
+    }
+    const out = new Map<string, { dailyCost: number; cpc: number; roas: number }>();
+    for (const fam of new Set([...spendByFam.keys(), ...agg.keys()])) {
+      const e = agg.get(fam);
+      out.set(fam, {
+        dailyCost: (spendByFam.get(fam) || 0) / nDays,
+        cpc: e && e.spend > 0 ? e.cpcW / e.spend : 0,
+        roas: e && e.spend > 0 ? e.roasW / e.spend : 0,
+      });
+    }
+    return out;
+  }, [acts, getFamily, data.daily_trends]);
 
   const enrichedActs = acts;
 
@@ -1331,11 +1370,29 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                       {(() => {
                         const pt = planTargets.get(f.family);
                         if (!pt || pt.dailyCost <= 0) return null;
+                        const act = famActuals.get(f.family);
+                        const actualDaily = act?.dailyCost ?? 0;   // last-30d ad-spend pace (daily_trends)
+                        // delta badge: higherIsBetter=false for spend/CPC (over plan = bad/red),
+                        // true for ROAS (over plan = good/green); within ±10% = on-plan (faint).
+                        const badge = (actual: number, plan: number, higherIsBetter: boolean) => {
+                          const d = planDelta(actual, plan);
+                          if (d.pct === null) return null;
+                          const good = higherIsBetter ? d.status !== 'under' : d.status !== 'over';
+                          const cls = d.status === 'on' ? 'text-faint' : good ? 'text-emerald-400' : 'text-red-400';
+                          return <span className={cls}>({d.pct >= 0 ? '+' : ''}{Math.round(d.pct * 100)}%)</span>;
+                        };
                         return (
-                          <div className="text-[9px] tabular-nums text-faint mb-1" title={`Plan target for ${planMoLabel} (from the Plan wizard's Ads Path)`}>
-                            <span className="text-blue-400/80 font-semibold">Plan {planMoLabel}:</span>{' '}
-                            <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d ad cost · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span> · ROAS <span className="text-muted">{pt.roas.toFixed(2)}×</span>
-                          </div>
+                          <>
+                            <div className="text-[9px] tabular-nums text-faint mb-0.5" title={`Plan target for ${planMoLabel} (from the Plan wizard's Ads Path)`}>
+                              <span className="text-blue-400/80 font-semibold">Plan {planMoLabel}:</span>{' '}
+                              <span className="text-muted">${pt.dailyCost.toFixed(0)}</span>/d · CPC <span className="text-muted">${pt.cpc.toFixed(2)}</span> · ROAS <span className="text-muted">{pt.roas.toFixed(2)}×</span>
+                            </div>
+                            <div className="text-[9px] tabular-nums text-faint mb-1" title="Actual: daily spend = last 7d campaign pace; CPC & net ROAS = last 4w, spend-weighted">
+                              <span className="text-subtle font-semibold">Actual:</span>{' '}
+                              ${actualDaily.toFixed(0)}/d {badge(actualDaily, pt.dailyCost, false)}
+                              {act && act.cpc > 0 && <> · CPC ${act.cpc.toFixed(2)} {badge(act.cpc, pt.cpc, false)} · ROAS {act.roas.toFixed(2)}× {badge(act.roas, pt.roas, true)}</>}
+                            </div>
+                          </>
                         );
                       })()}
                       <div className="flex h-5 rounded-md overflow-hidden" title={[...f.buckets.map(b => `${b.label}: ${fM(b.value)}`), `Total: ${fM(f.total)}`].join(' · ')}>

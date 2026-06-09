@@ -528,6 +528,18 @@ export function monthlyPlanTargets(
   return out;
 }
 
+// Compare an actual value to its plan target. Returns the signed % difference and a status:
+// 'over' (above plan beyond tolerance), 'under' (below), 'on' (within ±tol), 'none' (no plan).
+// The caller decides colour per metric — for spend/CPC "over" is bad, for ROAS "over" is good.
+export function planDelta(
+  actual: number, plan: number, tol = 0.1,
+): { pct: number | null; status: 'over' | 'under' | 'on' | 'none' } {
+  if (!plan || plan <= 0) return { pct: null, status: 'none' };
+  const pct = actual / plan - 1;
+  const status = pct > tol ? 'over' : pct < -tol ? 'under' : 'on';
+  return { pct, status };
+}
+
 // Stockout-corrected run-rate: like weightedRunRate, but it ignores weeks where the product was
 // out of stock so the rate reflects true demand (what it sells when on the shelf), not the supply
 // throttle. `weeks` is most-recent-first, each tagged with how many days that week the product was
