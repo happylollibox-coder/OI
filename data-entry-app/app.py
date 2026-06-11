@@ -15,6 +15,7 @@ from authlib.integrations.flask_client import OAuth
 import requests
 from concurrent.futures import ThreadPoolExecutor
 import jwt
+import json as json_lib
 
 # Load environment variables from .env file if it exists
 try:
@@ -135,6 +136,95 @@ def clear_data_cache():
     clear_cache('get_open_pos_for_shipment')
     clear_cache('get_costs_history')
 
+
+def auto_close_received_shipments():
+    """Auto-close shipments whose ETA has passed and that have been paid.
+    Called after payment insertion so shipment status updates immediately."""
+    try:
+        client.query(f"""
+            UPDATE `{SHIPMENTS_TABLE}` s
+            SET shipment_status = 'RECEIVED'
+            WHERE s.estimated_arrival_date <= CURRENT_DATE()
+              AND s.shipment_status NOT IN ('RECEIVED', 'INSPECTED', 'PUT_AWAY')
+              AND (
+                s.is_paid = TRUE
+                OR EXISTS (
+                  SELECT 1 FROM `{PAYMENTS_TABLE}` p
+                  WHERE p.shipment_id = s.shipment_id
+                )
+              )
+        """).result()
+    except Exception as e:
+        print(f"Auto-close shipments error (non-blocking): {e}")
+
+
+def sync_shipment_paid_status(shipment_ids):
+    """Sync is_paid and paid_date on shipments based on actual vendor payment records.
+    
+    Compares total payments for a shipment against its cost (cost_shipped + amazon_commission).
+    If total_paid >= shipment_cost (within 0.01 tolerance), marks is_paid=TRUE and sets paid_date
+    to the latest payment date. Otherwise resets is_paid=FALSE and paid_date=NULL.
+    
+    Args:
+        shipment_ids: single string or list of shipment_id values to sync
+    """
+    if not shipment_ids:
+        return
+    if isinstance(shipment_ids, str):
+        shipment_ids = [shipment_ids]
+    # Deduplicate and filter None values
+    shipment_ids = list(set(sid for sid in shipment_ids if sid))
+    if not shipment_ids:
+        return
+    
+    try:
+        placeholders = ', '.join([f'@sid_{i}' for i in range(len(shipment_ids))])
+        params = [bigquery.ScalarQueryParameter(f'sid_{i}', 'STRING', sid) for i, sid in enumerate(shipment_ids)]
+        
+        # Update shipments: mark as paid if total payments cover the cost
+        query = f"""
+            UPDATE `{SHIPMENTS_TABLE}` s
+            SET
+              s.is_paid = CASE
+                WHEN COALESCE(pay.total_paid, 0) >= (COALESCE(s.cost_shipped, 0) + COALESCE(s.amazon_commission, 0)) - 0.01
+                 AND COALESCE(pay.total_paid, 0) > 0
+                THEN TRUE
+                ELSE FALSE
+              END,
+              s.paid_date = CASE
+                WHEN COALESCE(pay.total_paid, 0) >= (COALESCE(s.cost_shipped, 0) + COALESCE(s.amazon_commission, 0)) - 0.01
+                 AND COALESCE(pay.total_paid, 0) > 0
+                THEN pay.latest_payment_date
+                ELSE NULL
+              END
+            FROM (
+              SELECT shipment_id,
+                     COALESCE(SUM(payment_amount), 0) AS total_paid,
+                     MAX(payment_date) AS latest_payment_date
+              FROM `{PAYMENTS_TABLE}`
+              WHERE shipment_id IN ({placeholders})
+              GROUP BY shipment_id
+            ) pay
+            WHERE s.shipment_id = pay.shipment_id
+        """
+        client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+        
+        # Handle shipments that have NO payment records at all (e.g. all payments deleted)
+        # These won't be matched by the JOIN above, so update them separately
+        query_no_payments = f"""
+            UPDATE `{SHIPMENTS_TABLE}` s
+            SET s.is_paid = FALSE, s.paid_date = NULL
+            WHERE s.shipment_id IN ({placeholders})
+              AND NOT EXISTS (
+                SELECT 1 FROM `{PAYMENTS_TABLE}` p WHERE p.shipment_id = s.shipment_id
+              )
+        """
+        client.query(query_no_payments, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+        
+        print(f"Synced paid status for shipments: {shipment_ids}")
+    except Exception as e:
+        print(f"sync_shipment_paid_status error (non-blocking): {e}")
+
 # Custom Jinja2 filter for formatting numbers
 @app.template_filter('format_currency')
 def format_currency(value):
@@ -180,7 +270,7 @@ def format_number_with_commas(value):
     except (ValueError, TypeError):
         return "0"
 
-from config import PROJECT_ID, DATASET_ID, ORDERS_TABLE, OTHER_PO_TABLE, SHIPMENTS_TABLE, SHIPMENT_LINES_TABLE, PAYMENTS_TABLE, PRODUCTS_TABLE, COSTS_HISTORY_TABLE, ALERTS_TABLE
+from config import PROJECT_ID, DATASET_ID, ORDERS_TABLE, OTHER_PO_TABLE, SHIPMENTS_TABLE, SHIPMENT_LINES_TABLE, PAYMENTS_TABLE, PRODUCTS_TABLE, COSTS_HISTORY_TABLE, ALERTS_TABLE, PHRASE_NEGATIVES_TABLE
 
 client = bigquery.Client(project=PROJECT_ID)
 
@@ -1157,17 +1247,8 @@ def get_all_shipments(status_filter='open', year_filter=None, shipment_id_filter
         year_filter: year string (e.g. '2025') or 'all' for no year filter
         shipment_id_filter: string to partial match on shipment_id
     """
-    # Auto-update: if estimated_arrival_date has passed AND is_paid, mark as RECEIVED
-    try:
-        client.query(f"""
-            UPDATE `{SHIPMENTS_TABLE}`
-            SET shipment_status = 'RECEIVED'
-            WHERE estimated_arrival_date <= CURRENT_DATE()
-              AND is_paid = TRUE
-              AND shipment_status NOT IN ('RECEIVED', 'INSPECTED', 'PUT_AWAY')
-        """).result()
-    except Exception as e:
-        print(f"Auto-status update error (non-blocking): {e}")
+    # Auto-update paid+arrived shipments to RECEIVED
+    auto_close_received_shipments()
     
     where_clauses = []
     if status_filter == 'open':
@@ -1545,6 +1626,13 @@ def insert_payment(data):
     # Check for job errors
     if job.errors:
         return job.errors, payment_id
+    
+    # Sync shipment paid status if this payment is linked to a shipment
+    if has_shipment:
+        sync_shipment_paid_status(data.get('shipment_id'))
+    
+    # Auto-close shipments that are now paid and past ETA
+    auto_close_received_shipments()
     
     return [], payment_id  # Return empty errors list for consistency
 
@@ -2658,6 +2746,10 @@ def bulk_new_payments():
         
         clear_data_cache()
         if created > 0:
+            # Sync paid status for all shipments that received payments
+            paid_shipment_ids = [r['shipment_id'] for r in rows if r.get('shipment_id')]
+            sync_shipment_paid_status(paid_shipment_ids)
+            auto_close_received_shipments()
             flash(f'{created} payment(s) created successfully!', 'success')
         return redirect(url_for('payments_list'))
     
@@ -2709,9 +2801,9 @@ def bulk_new_payments():
 @app.route('/payments/bulk-po-new', methods=['GET', 'POST'])
 @login_required
 def bulk_po_payments():
-    """Create payments for multiple purchase orders at once"""
+    """Create payments for multiple purchase orders at once (standard + Other POs)"""
     if request.method == 'POST':
-        # Get form data
+        # Get form data — all PO IDs (standard + other) come as a single list
         po_ids = request.form.getlist('po_ids')
         amounts = request.form.getlist('amounts')
         payment_date = request.form.get('payment_date')
@@ -2730,7 +2822,7 @@ def bulk_po_payments():
         
         created = 0
         rows = []
-        # Fetch PO details for payment ID generation
+        # Fetch standard PO details for payment ID generation (best-effort)
         po_details_list = []
         for pid in po_ids:
             po_data = get_po_details(pid)
@@ -2779,17 +2871,21 @@ def bulk_po_payments():
         
         clear_data_cache()
         if created > 0:
+            auto_close_received_shipments()
             flash(f'{created} payment(s) created for {created} PO(s)!', 'success')
         return redirect(url_for('payments_list'))
     
-    # GET: Fetch PO details for selected IDs
+    # GET: Fetch PO details for selected IDs (standard + other)
     po_ids = request.args.getlist('po_ids')
-    if not po_ids:
+    other_po_ids = request.args.getlist('other_po_ids')
+    
+    if not po_ids and not other_po_ids:
         flash('No purchase orders selected', 'error')
         return redirect(url_for('index'))
     
-    # Query existing payments for these POs in one go
-    placeholders = ', '.join([f'@pid{i}' for i in range(len(po_ids))])
+    # Combine all IDs to query existing payments in one go
+    all_ids = list(po_ids) + list(other_po_ids)
+    placeholders = ', '.join([f'@pid{i}' for i in range(len(all_ids))])
     paid_query = f"""
     SELECT purchase_order_id, COALESCE(SUM(payment_amount), 0) AS total_paid
     FROM `{PAYMENTS_TABLE}`
@@ -2798,7 +2894,7 @@ def bulk_po_payments():
     """
     paid_params = [
         bigquery.ScalarQueryParameter(f"pid{i}", "STRING", pid)
-        for i, pid in enumerate(po_ids)
+        for i, pid in enumerate(all_ids)
     ]
     paid_jc = bigquery.QueryJobConfig(query_parameters=paid_params)
     paid_results = client.query(paid_query, job_config=paid_jc).result()
@@ -2807,6 +2903,8 @@ def bulk_po_payments():
     pos = []
     total_remaining = 0
     manufacturer = None
+    
+    # Standard POs
     for pid in po_ids:
         po_data = get_po_details(pid)
         if po_data and po_data[0]:
@@ -2816,14 +2914,48 @@ def bulk_po_payments():
             remaining = round(max(0, po_amount - already_paid), 2)
             po['already_paid'] = already_paid
             po['remaining'] = remaining
+            po['_po_type'] = 'standard'
             pos.append(po)
             total_remaining += remaining
             if not manufacturer:
                 manufacturer = po.get('manufacturer_name', '')
     
+    # Other POs — fetch from DE_OTHER_PO and normalise into same shape
+    for oid in other_po_ids:
+        try:
+            q = f"SELECT * FROM `{OTHER_PO_TABLE}` WHERE other_po_id = @oid LIMIT 1"
+            jc = bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter("oid", "STRING", oid)
+            ])
+            result = list(client.query(q, job_config=jc).result())
+            if result:
+                opo = dict(result[0])
+                po_amount = round(float(opo.get('total_amount') or 0), 2)
+                already_paid = round(paid_map.get(oid, 0), 2)
+                remaining = round(max(0, po_amount - already_paid), 2)
+                # Normalise keys to match standard PO shape expected by template
+                normalised = {
+                    'purchase_order_id': opo['other_po_id'],
+                    'order_date': opo.get('order_date'),
+                    'manufacturer_name': opo.get('supplier_name', ''),
+                    'product_names_combined': opo.get('service_type', ''),
+                    'quantity': None,
+                    'total_amount': po_amount,
+                    'adjustments': 0,
+                    'already_paid': already_paid,
+                    'remaining': remaining,
+                    '_po_type': 'other',
+                }
+                pos.append(normalised)
+                total_remaining += remaining
+                if not manufacturer:
+                    manufacturer = opo.get('supplier_name', '')
+        except Exception as e:
+            print(f"Error fetching Other PO {oid}: {e}")
+    
     return render_template('bulk_po_payment_form.html',
                            pos=pos,
-                           po_ids=po_ids,
+                           po_ids=all_ids,
                            total_remaining=total_remaining,
                            manufacturer=manufacturer)
 
@@ -3303,6 +3435,92 @@ def bulk_delete_shipments():
         flash(f'Successfully deleted {deleted} Shipment(s).', 'success')
     if errors:
         flash(f'Errors deleting {len(errors)} shipment(s): {";".join(errors[:3])}', 'error')
+    return redirect(url_for('shipments_list'))
+
+
+@app.route('/shipments/bulk-update', methods=['POST'])
+@login_required
+def bulk_update_shipments_standalone():
+    """Bulk update shipments from the shipments list page (status + paid)"""
+    try:
+        shipment_ids = request.form.getlist('shipment_ids')
+        if not shipment_ids:
+            flash('No shipments selected for update', 'error')
+            return redirect(url_for('shipments_list'))
+        
+        # Build the SET clause dynamically based on provided fields
+        set_clauses = []
+        params = []
+        
+        # Shipment Status
+        if request.form.get('shipment_status'):
+            set_clauses.append('shipment_status = @shipment_status')
+            params.append(bigquery.ScalarQueryParameter("shipment_status", "STRING", request.form.get('shipment_status')))
+        
+        # Paid status — only update if the hidden flag indicates the user set this field
+        if request.form.get('update_is_paid') == 'true':
+            is_paid = request.form.get('is_paid') == 'true'
+            set_clauses.append('is_paid = @is_paid')
+            params.append(bigquery.ScalarQueryParameter("is_paid", "BOOL", is_paid))
+            
+            # Paid Date
+            if is_paid and request.form.get('paid_date'):
+                set_clauses.append('paid_date = @paid_date')
+                params.append(bigquery.ScalarQueryParameter("paid_date", "DATE", request.form.get('paid_date')))
+            elif is_paid:
+                set_clauses.append('paid_date = NULL')
+            else:
+                # If paid is unchecked, clear paid_date
+                set_clauses.append('paid_date = NULL')
+        
+        if not set_clauses:
+            flash('No fields selected for update', 'error')
+            return redirect(url_for('shipments_list'))
+        
+        updated_count = 0
+        failed_shipments = []
+        
+        for shipment_id in shipment_ids:
+            try:
+                query = f"""
+                UPDATE `{SHIPMENTS_TABLE}`
+                SET {', '.join(set_clauses)}
+                WHERE shipment_id = @shipment_id
+                """
+                job_config = bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)
+                    ] + params
+                )
+                client.query(query, job_config=job_config).result()
+                updated_count += 1
+            except Exception as e:
+                error_msg = str(e)
+                if 'streaming buffer' in error_msg.lower():
+                    failed_shipments.append(shipment_id)
+                else:
+                    raise
+        
+        if failed_shipments:
+            if updated_count > 0:
+                flash(f'Updated {updated_count} shipment(s). {len(failed_shipments)} could not be updated (streaming buffer).', 'warning')
+            else:
+                flash(f'Cannot update: All {len(failed_shipments)} shipment(s) are in streaming buffer. Wait a few minutes.', 'error')
+        else:
+            clear_data_cache()
+            flash(f'Successfully updated {updated_count} shipment(s)!', 'success')
+            
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        error_msg = str(e)
+        
+        if 'streaming buffer' in error_msg.lower():
+            flash('Cannot update: Shipments are in streaming buffer. Wait a few minutes.', 'error')
+        else:
+            flash(f'Error updating shipments: {error_msg}', 'error')
+        print(f"Bulk update shipments error: {error_details}")
+    
     return redirect(url_for('shipments_list'))
 
 
@@ -4046,7 +4264,7 @@ def delete_payment(payment_id):
     po_id = None
     linked_shipment_id = None
     try:
-        # Get PO ID and shipment_id before deleting for redirect
+        # Get PO ID and shipment_ids before deleting for redirect + sync
         query_get_ref = f"""
         SELECT purchase_order_id, shipment_id FROM `{PAYMENTS_TABLE}`
         WHERE payment_id = @payment_id
@@ -4055,6 +4273,8 @@ def delete_payment(payment_id):
             query_parameters=[bigquery.ScalarQueryParameter("payment_id", "STRING", payment_id)]
         )
         ref_result = list(client.query(query_get_ref, job_config=job_config_get).result())
+        # Collect ALL linked shipment IDs (a payment can span multiple shipments)
+        linked_shipment_ids = list(set(r.shipment_id for r in ref_result if r.shipment_id))
         if ref_result:
             po_id = ref_result[0].purchase_order_id
             linked_shipment_id = ref_result[0].shipment_id
@@ -4068,6 +4288,11 @@ def delete_payment(payment_id):
         )
         client.query(query, job_config=job_config).result()
         clear_data_cache()
+        
+        # Re-sync paid status for affected shipments (payment removed → might no longer be fully paid)
+        if linked_shipment_ids:
+            sync_shipment_paid_status(linked_shipment_ids)
+        
         flash(f'Payment {payment_id} deleted successfully!', 'success')
         
         # Redirect: prefer shipment detail if shipment-linked
@@ -4136,6 +4361,11 @@ def delete_payment_line(payment_id):
 
         client.query(query, job_config=job_config).result()
         clear_data_cache()
+        
+        # Re-sync paid status for the affected shipment
+        if shipment_id:
+            sync_shipment_paid_status(shipment_id)
+        
         flash(f'Payment line removed successfully!', 'success')
     except Exception as e:
         import traceback
@@ -5739,6 +5969,307 @@ def trigger_refresh_shipments():
 
 
 # ═══════════════════════════════════════════════
+# PHRASE NEGATIVES API
+# Manages DE_PRODUCT_PHRASE_NEGATIVES for negative
+# phrase/exact targeting rules per product family.
+# ═══════════════════════════════════════════════
+
+@app.route('/api/admin/phrase-negatives', methods=['GET'])
+def api_phrase_negatives_list():
+    """List all phrase negatives, grouped by parent_name."""
+    try:
+        query = f"""
+            SELECT id, parent_name, product_short_name, phrase,
+                   match_type, source, status
+            FROM `{PHRASE_NEGATIVES_TABLE}`
+            ORDER BY parent_name, phrase
+        """
+        results = client.query(query).result()
+        phrases = [dict(row) for row in results]
+
+        families = sorted(set(r['parent_name'] for r in phrases))
+        return jsonify({'success': True, 'phrases': phrases, 'families': families})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/phrase-negatives', methods=['POST'])
+def api_phrase_negatives_add():
+    """Add a single phrase negative.
+    Body: { parent_name, phrase, product_short_name?, match_type?, source? }
+    """
+    try:
+        data = request.get_json()
+        parent_name = data.get('parent_name')
+        phrase = data.get('phrase', '').strip().lower()
+
+        if not parent_name or not phrase:
+            return jsonify({'success': False, 'error': 'parent_name and phrase are required'}), 400
+
+        match_type = data.get('match_type', 'Negative Phrase')
+        source = data.get('source', 'MANUAL')
+        product_short_name = data.get('product_short_name')
+        row_id = str(uuid.uuid4())
+
+        row = {
+            'id': row_id,
+            'parent_name': parent_name,
+            'product_short_name': product_short_name,
+            'phrase': phrase,
+            'match_type': match_type,
+            'source': source,
+            'status': 'ACTIVE',
+        }
+
+        job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField('id', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('parent_name', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('product_short_name', 'STRING', mode='NULLABLE'),
+                bigquery.SchemaField('phrase', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('match_type', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('source', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('status', 'STRING', mode='REQUIRED'),
+            ],
+            write_disposition='WRITE_APPEND',
+        )
+
+        job = client.load_table_from_json([row], PHRASE_NEGATIVES_TABLE, job_config=job_config)
+        job.result()
+
+        if job.errors:
+            return jsonify({'success': False, 'error': str(job.errors)}), 500
+
+        clear_data_cache()
+        return jsonify({'success': True, 'id': row_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/phrase-negatives/bulk', methods=['POST'])
+def api_phrase_negatives_bulk():
+    """Bulk add phrases. Each phrase gets its own row.
+    Body: { parent_name, phrases: ['word1', 'word2', ...], match_type?, source? }
+    """
+    try:
+        data = request.get_json()
+        parent_name = data.get('parent_name')
+        phrases = data.get('phrases', [])
+
+        if not parent_name or not phrases:
+            return jsonify({'success': False, 'error': 'parent_name and phrases[] are required'}), 400
+
+        match_type = data.get('match_type', 'Negative Phrase')
+        source = data.get('source', 'MANUAL')
+        product_short_name = data.get('product_short_name')
+
+        rows = []
+        for p in phrases:
+            p_clean = p.strip().lower()
+            if not p_clean:
+                continue
+            rows.append({
+                'id': str(uuid.uuid4()),
+                'parent_name': parent_name,
+                'product_short_name': product_short_name,
+                'phrase': p_clean,
+                'match_type': match_type,
+                'source': source,
+                'status': 'ACTIVE',
+            })
+
+        if not rows:
+            return jsonify({'success': False, 'error': 'No valid phrases provided'}), 400
+
+        job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField('id', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('parent_name', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('product_short_name', 'STRING', mode='NULLABLE'),
+                bigquery.SchemaField('phrase', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('match_type', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('source', 'STRING', mode='REQUIRED'),
+                bigquery.SchemaField('status', 'STRING', mode='REQUIRED'),
+            ],
+            write_disposition='WRITE_APPEND',
+        )
+
+        job = client.load_table_from_json(rows, PHRASE_NEGATIVES_TABLE, job_config=job_config)
+        job.result()
+
+        if job.errors:
+            return jsonify({'success': False, 'error': str(job.errors)}), 500
+
+        clear_data_cache()
+        return jsonify({'success': True, 'count': len(rows)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/phrase-negatives/copy', methods=['POST'])
+def api_phrase_negatives_copy():
+    """Copy phrases from one family to another (skip duplicates).
+    Body: { from_family, to_family, phrase_ids? }
+    If phrase_ids is provided, only those specific phrases are copied.
+    Otherwise, all phrases from from_family are copied.
+    """
+    try:
+        data = request.get_json()
+        from_family = data.get('from_family')
+        to_family = data.get('to_family')
+        phrase_ids = data.get('phrase_ids')  # optional list of specific IDs
+
+        if not from_family or not to_family:
+            return jsonify({'success': False, 'error': 'from_family and to_family are required'}), 400
+
+        if from_family == to_family:
+            return jsonify({'success': False, 'error': 'from_family and to_family must be different'}), 400
+
+        # Get source phrases (optionally filtered by IDs)
+        if phrase_ids and isinstance(phrase_ids, list) and len(phrase_ids) > 0:
+            # Filter by specific IDs — use IN with a subquery
+            placeholders = ', '.join([f'@id_{i}' for i in range(len(phrase_ids))])
+            src_query = f"""
+                SELECT phrase, match_type, source, product_short_name
+                FROM `{PHRASE_NEGATIVES_TABLE}`
+                WHERE parent_name = @from_family
+                  AND id IN ({placeholders})
+            """
+            params = [bigquery.ScalarQueryParameter('from_family', 'STRING', from_family)]
+            for i, pid in enumerate(phrase_ids):
+                params.append(bigquery.ScalarQueryParameter(f'id_{i}', 'STRING', pid))
+            src_config = bigquery.QueryJobConfig(query_parameters=params)
+        else:
+            src_query = f"""
+                SELECT phrase, match_type, source, product_short_name
+                FROM `{PHRASE_NEGATIVES_TABLE}`
+                WHERE parent_name = @from_family
+            """
+            src_config = bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter('from_family', 'STRING', from_family),
+            ])
+        src_rows = [dict(r) for r in client.query(src_query, job_config=src_config).result()]
+
+        # Get existing phrases in target
+        tgt_query = f"""
+            SELECT phrase
+            FROM `{PHRASE_NEGATIVES_TABLE}`
+            WHERE parent_name = @to_family
+        """
+        tgt_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('to_family', 'STRING', to_family),
+        ])
+        existing = set(r['phrase'] for r in client.query(tgt_query, job_config=tgt_config).result())
+
+        rows_to_insert = []
+        skipped = 0
+        for src in src_rows:
+            if src['phrase'] in existing:
+                skipped += 1
+                continue
+            rows_to_insert.append({
+                'id': str(uuid.uuid4()),
+                'parent_name': to_family,
+                'product_short_name': src.get('product_short_name'),
+                'phrase': src['phrase'],
+                'match_type': src['match_type'],
+                'source': src['source'],
+                'status': 'ACTIVE',
+            })
+
+        if rows_to_insert:
+            job_config = bigquery.LoadJobConfig(
+                schema=[
+                    bigquery.SchemaField('id', 'STRING', mode='REQUIRED'),
+                    bigquery.SchemaField('parent_name', 'STRING', mode='REQUIRED'),
+                    bigquery.SchemaField('product_short_name', 'STRING', mode='NULLABLE'),
+                    bigquery.SchemaField('phrase', 'STRING', mode='REQUIRED'),
+                    bigquery.SchemaField('match_type', 'STRING', mode='REQUIRED'),
+                    bigquery.SchemaField('source', 'STRING', mode='REQUIRED'),
+                    bigquery.SchemaField('status', 'STRING', mode='REQUIRED'),
+                ],
+                write_disposition='WRITE_APPEND',
+            )
+            job = client.load_table_from_json(rows_to_insert, PHRASE_NEGATIVES_TABLE, job_config=job_config)
+            job.result()
+
+            if job.errors:
+                return jsonify({'success': False, 'error': str(job.errors)}), 500
+
+            clear_data_cache()
+
+        return jsonify({'success': True, 'copied': len(rows_to_insert), 'skipped': skipped})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/phrase-negatives/<phrase_id>', methods=['DELETE'])
+def api_phrase_negatives_delete(phrase_id):
+    """Delete a phrase negative by ID."""
+    try:
+        query = f"""
+            DELETE FROM `{PHRASE_NEGATIVES_TABLE}`
+            WHERE id = @id
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('id', 'STRING', phrase_id),
+        ])
+        result = client.query(query, job_config=jc).result()
+
+        if result.num_dml_affected_rows == 0:
+            return jsonify({'success': False, 'error': 'Phrase not found'}), 404
+
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/phrase-negatives/<phrase_id>', methods=['PUT'])
+def api_phrase_negatives_update(phrase_id):
+    """Update a phrase negative.
+    Body can include: { phrase?, match_type?, status? }
+    """
+    try:
+        data = request.get_json()
+        updates = []
+        params = [bigquery.ScalarQueryParameter('id', 'STRING', phrase_id)]
+
+        if 'phrase' in data:
+            updates.append('phrase = @phrase')
+            params.append(bigquery.ScalarQueryParameter('phrase', 'STRING', data['phrase'].strip().lower()))
+
+        if 'match_type' in data:
+            updates.append('match_type = @match_type')
+            params.append(bigquery.ScalarQueryParameter('match_type', 'STRING', data['match_type']))
+
+        if 'status' in data:
+            updates.append('status = @status')
+            params.append(bigquery.ScalarQueryParameter('status', 'STRING', data['status']))
+
+        if not updates:
+            return jsonify({'success': False, 'error': 'No fields to update'}), 400
+
+        updates.append('updated_at = CURRENT_TIMESTAMP()')
+
+        query = f"""
+            UPDATE `{PHRASE_NEGATIVES_TABLE}`
+            SET {', '.join(updates)}
+            WHERE id = @id
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=params)
+        result = client.query(query, job_config=jc).result()
+
+        if result.num_dml_affected_rows == 0:
+            return jsonify({'success': False, 'error': 'Phrase not found'}), 404
+
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ═══════════════════════════════════════════════
 # ALERTS API
 # ═══════════════════════════════════════════════
 
@@ -6284,6 +6815,789 @@ def api_open_pos():
         return jsonify({'success': True, 'data': open_pos})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+# ─── Research: shared synonym groups + ranked-score projection ──────────
+# Hardcoded fallback synonym groups; DE_SYNONYM_CACHE (Gemini-populated)
+# takes priority, these unlock Related mode when the cache misses.
+_SYNONYM_GROUPS = [
+    ['bff', 'best friend', 'bestie'],
+    ['birthday', 'bday', 'b day'],
+    ['christmas', 'xmas', 'holiday'],
+    ['teen', 'teenager', 'teenage'],
+    ['tween', 'preteen', 'pre teen'],
+    ['kid', 'kids', 'child', 'children'],
+    ['girl', 'girls'],
+    ['boy', 'boys'],
+    ['gift', 'gifts', 'present', 'presents'],
+    ['diy', 'craft', 'crafts'],
+    ['jewelry', 'jewellery'],
+    ['makeup', 'make up', 'cosmetic', 'cosmetics'],
+    ['diary', 'journal', 'journals', 'journaling', 'notebook'],
+    ['spa', 'bath', 'bath bomb', 'bath set'],
+    ['unicorn', 'unicorns'],
+    ['princess', 'princesses'],
+    ['stocking stuffer', 'stocking filler'],
+    ['backpack', 'back pack', 'school bag'],
+]
+_SYNONYM_MAP = {}
+for _group in _SYNONYM_GROUPS:
+    for _word in _group:
+        _SYNONYM_MAP[_word.lower()] = [w for w in _group if w.lower() != _word.lower()]
+
+_RESEARCH_STOP_WORDS = {'a', 'an', 'the', 'for', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'by', 'is', 'it', 'my', 'with'}
+
+
+def _research_ranked_select(parent, alias='t'):
+    """Projection + JOIN for enriching term rows with FACT_RESEARCH_RANKED
+    per-family scores. Returns (cols_sql, join_sql); NULL-typed placeholders
+    and empty join when no parent is given."""
+    if parent:
+        join = (
+            "LEFT JOIN `onyga-482313`.OI.FACT_RESEARCH_RANKED rr "
+            f"ON rr.parent_name = @parent AND LOWER(rr.query_text) = LOWER({alias}.query_text)"
+        )
+        cols = """
+          rr.cpc_12m, rr.cpc_30d, rr.units_cvr_30d, rr.units_cvr_12m,
+          COALESCE(rr.ads_family_orders, 0) AS ads_family_orders,
+          COALESCE(rr.ads_units_30d, 0) AS ads_units_30d, COALESCE(rr.ads_units_12m, 0) AS ads_units_12m,
+          rr.roas_30d,
+          rr.cvr_christmas, rr.cvr_easter, rr.cvr_valentines, rr.cvr_graduation, rr.cvr_back_to_school, rr.cvr_mothers_day,
+          rr.seg_fit, rr.cps_fit, rr.overall_fit,
+          rr.gender_score, rr.age_score, rr.occasion_score, rr.pt_score,
+          rr.cps_source, rr.effective_cps, rr.is_holiday_active,
+          rr.purchase_rank AS purchase_rank_score, rr.rank AS rank_score,
+          rr.ads_purch, rr.ads_cps, rr.est_cps,
+          COALESCE(rr.family_purchases, 0) AS family_purchases,
+          COALESCE(rr.family_clicks, 0) AS family_clicks,
+          COALESCE(rr.family_impressions, 0) AS family_impressions"""
+    else:
+        join = ""
+        cols = """
+          CAST(NULL AS FLOAT64) AS cpc_12m, CAST(NULL AS FLOAT64) AS cpc_30d,
+          CAST(NULL AS FLOAT64) AS units_cvr_30d, CAST(NULL AS FLOAT64) AS units_cvr_12m,
+          0 AS ads_family_orders, 0 AS ads_units_30d, 0 AS ads_units_12m,
+          CAST(NULL AS FLOAT64) AS roas_30d,
+          CAST(NULL AS FLOAT64) AS cvr_christmas, CAST(NULL AS FLOAT64) AS cvr_easter,
+          CAST(NULL AS FLOAT64) AS cvr_valentines, CAST(NULL AS FLOAT64) AS cvr_graduation,
+          CAST(NULL AS FLOAT64) AS cvr_back_to_school, CAST(NULL AS FLOAT64) AS cvr_mothers_day,
+          CAST(NULL AS FLOAT64) AS seg_fit, CAST(NULL AS INT64) AS cps_fit, CAST(NULL AS FLOAT64) AS overall_fit,
+          CAST(NULL AS INT64) AS gender_score, CAST(NULL AS INT64) AS age_score,
+          CAST(NULL AS INT64) AS occasion_score, CAST(NULL AS INT64) AS pt_score,
+          CAST(NULL AS STRING) AS cps_source, CAST(NULL AS FLOAT64) AS effective_cps,
+          CAST(NULL AS BOOL) AS is_holiday_active,
+          CAST(NULL AS FLOAT64) AS purchase_rank_score, CAST(NULL AS FLOAT64) AS rank_score,
+          CAST(NULL AS INT64) AS ads_purch, CAST(NULL AS FLOAT64) AS ads_cps, CAST(NULL AS FLOAT64) AS est_cps,
+          0 AS family_purchases, 0 AS family_clicks, 0 AS family_impressions"""
+    return cols, join
+
+
+@app.route('/api/research/related-terms', methods=['POST'])
+def research_related_terms():
+    """Find related search queries by co-occurrence with a seed term.
+
+    Accepts JSON body:
+      { "term": "birthday", "parent": "Bunny", "mode": "direct"|"related", "synonyms": {...} }
+    parent is optional – when supplied, rows are enriched with that family's
+    pre-computed scores from FACT_RESEARCH_RANKED.
+
+    Term aggregates come from FACT_RESEARCH_TERMS (104-week window, refreshed
+    by SP_REFRESH_RESEARCH_RANKED); only the ASIN co-occurrence seed CTEs run
+    at request time.
+
+    Returns a JSON array sorted by market_purchases DESC.
+    """
+    data = request.get_json()
+    term = (data.get('term') or '').strip()
+    weeks = 104  # co-occurrence window — matches the FACT layer's fixed window
+    parent = (data.get('parent') or '').strip() or None
+
+    if not term:
+        return jsonify({'error': 'term is required'}), 400
+
+    mode = (data.get('mode') or 'direct').strip()  # 'direct' or 'related'
+    # Frontend can pass pre-fetched synonyms from Gemini: {"bff": ["best friend", "bestie"]}
+    frontend_synonyms = data.get('synonyms') or {}
+
+    # Filter out stop words that add noise to multi-word AND search
+    words = [w for w in term.strip().split() if w.lower() not in _RESEARCH_STOP_WORDS]
+    if not words:
+        # All words were stop words — use entire term as one pattern
+        words = [term.strip()]
+
+    if mode == 'related':
+        # Expand each word to include synonyms using OR logic
+        # Merge: frontend Gemini synonyms take priority, then hardcoded map
+        word_groups_sq = []
+        word_groups_t = []
+        word_param_map = []
+        for i, word in enumerate(words):
+            gemini_syns = frontend_synonyms.get(word.lower(), [])
+            hardcoded_syns = _SYNONYM_MAP.get(word.lower(), [])
+            all_syns = list(dict.fromkeys([word] + gemini_syns + hardcoded_syns))  # dedupe, preserve order
+            or_parts_sq = []
+            or_parts_t = []
+            for j, syn in enumerate(all_syns):
+                param_name = f'word_{i}_{j}'
+                or_parts_sq.append(f"LOWER(sq.query_text) LIKE LOWER(@{param_name})")
+                or_parts_t.append(f"LOWER(t.query_text) LIKE LOWER(@{param_name})")
+                word_param_map.append((param_name, f'%{syn}%'))
+            word_groups_sq.append(f"({' OR '.join(or_parts_sq)})")
+            word_groups_t.append(f"({' OR '.join(or_parts_t)})")
+        word_likes_sq = ' AND '.join(word_groups_sq)
+        word_likes_t = ' AND '.join(word_groups_t)
+    else:
+        # Direct mode: exact word matching
+        word_param_map = [(f'word_{i}', f'%{word}%') for i, word in enumerate(words)]
+        word_likes_sq = ' AND '.join([f"LOWER(sq.query_text) LIKE LOWER(@word_{i})" for i in range(len(words))])
+        word_likes_t = ' AND '.join([f"LOWER(t.query_text) LIKE LOWER(@word_{i})" for i in range(len(words))])
+
+    rr_cols, rr_join = _research_ranked_select(parent, alias='t')
+
+    # Direct mode shows only word-matching terms (the old client-side filter,
+    # now server-side); related mode also returns synonym + co-occurrence rows.
+    match_filter = f"WHERE {word_likes_t}" if mode != 'related' else ""
+
+    sql = f"""
+    WITH seed_asins AS (
+      SELECT DISTINCT sq.ASIN
+      FROM `onyga-482313`.OI.FACT_SEARCH_QUERY sq
+      WHERE {word_likes_sq}
+        AND sq.week_start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @weeks WEEK)
+    ),
+    seed_count AS (
+      SELECT COUNT(*) AS total_seed_asins FROM seed_asins
+    ),
+    related_queries AS (
+      SELECT
+        sq2.query_text,
+        COUNT(DISTINCT sq2.ASIN) AS asin_overlap
+      FROM `onyga-482313`.OI.FACT_SEARCH_QUERY sq2
+      WHERE sq2.ASIN IN (SELECT ASIN FROM seed_asins)
+        AND sq2.week_start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @weeks WEEK)
+        AND sq2.query_text != 'OTHER'
+      GROUP BY sq2.query_text
+    )
+    SELECT
+      t.*,
+      CASE WHEN {word_likes_t} THEN 'direct' ELSE 'related' END AS match_type,
+      rq.asin_overlap,
+      sc.total_seed_asins,
+      ROUND(SAFE_DIVIDE(rq.asin_overlap, sc.total_seed_asins) * 100, 1) AS overlap_pct,
+      {rr_cols}
+    FROM related_queries rq
+    JOIN `onyga-482313`.OI.FACT_RESEARCH_TERMS t ON t.query_text = rq.query_text
+    CROSS JOIN seed_count sc
+    {rr_join}
+    {match_filter}
+    ORDER BY t.market_purchases DESC
+    """
+
+    query_params = [
+        bigquery.ScalarQueryParameter('weeks', 'INT64', weeks),
+    ]
+    for param_name, param_val in word_param_map:
+        query_params.append(bigquery.ScalarQueryParameter(param_name, 'STRING', param_val))
+    if parent:
+        query_params.append(
+            bigquery.ScalarQueryParameter('parent', 'STRING', parent)
+        )
+
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+
+    try:
+        results = client.query(sql, job_config=job_config).result()
+        rows = [dict(row) for row in results]
+        return jsonify(rows)
+    except Exception as e:
+        print(f"Error in research_related_terms: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ─── Synonym lookup (in-memory cache + BigQuery table) ──────────
+_synonym_cache = {}
+
+@app.route('/api/research/get-synonyms', methods=['POST'])
+def research_get_synonyms():
+    """Look up synonyms from DE_SYNONYM_CACHE table.
+
+    Accepts JSON body: { "words": ["bff", "gift"] }
+    Returns JSON: { "bff": ["best friend", "bestie"], "gift": ["gifts", "present"] }
+    """
+    data = request.get_json()
+    words = data.get('words', [])
+    if not words:
+        return jsonify({})
+
+    # 1. Check in-memory cache
+    result = {}
+    uncached_words = []
+    for w in words:
+        wl = w.lower().strip()
+        if wl in _synonym_cache:
+            result[wl] = _synonym_cache[wl]
+        else:
+            uncached_words.append(wl)
+
+    if not uncached_words:
+        return jsonify(result)
+
+    # 2. Look up from BigQuery
+    try:
+        sql = """
+        SELECT word, synonyms
+        FROM `onyga-482313`.OI.DE_SYNONYM_CACHE
+        WHERE word IN UNNEST(@words)
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter('words', 'STRING', uncached_words)
+        ])
+        rows = client.query(sql, job_config=jc).result()
+        for row in rows:
+            syns = json_lib.loads(row['synonyms'])
+            _synonym_cache[row['word']] = syns
+            result[row['word']] = syns
+    except Exception as e:
+        print(f"Error reading synonyms from BQ: {e}")
+
+    # Words not in the table fall back to the hardcoded synonym groups
+    # (unlocks Related mode even when DE_SYNONYM_CACHE misses)
+    for w in uncached_words:
+        if w not in result:
+            fallback = _SYNONYM_MAP.get(w, [])
+            _synonym_cache[w] = fallback
+            result[w] = fallback
+
+    return jsonify(result)
+
+@app.route('/api/research/conversion-curve', methods=['GET'])
+@cache_result(ttl_seconds=600)  # param-less endpoint — safe to cache
+def research_conversion_curve():
+    """Return the pre-computed conversion curve from V_CONVERSION_CURVE.
+    Used by the Research page to estimate clicks-per-sale for any product × search term.
+    """
+    try:
+        sql = """
+        SELECT
+          parent_name,
+          price_bucket,
+          price_ratio_low,
+          price_ratio_high,
+          holiday_name,
+          total_clicks,
+          total_orders,
+          clicks_per_sale,
+          cvr_pct,
+          cost_per_sale,
+          avg_cpc
+        FROM `onyga-482313`.OI.V_CONVERSION_CURVE
+        ORDER BY parent_name, price_bucket, holiday_name
+        """
+        results = client.query(sql).result()
+        rows = [dict(row) for row in results]
+        return jsonify(rows)
+    except Exception as e:
+        print(f"Error in research_conversion_curve: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/top-terms', methods=['GET'])
+def research_top_terms():
+    """Return all search terms with brand purchases (104-week window from
+    FACT_RESEARCH_TERMS), enriched with per-family scores from
+    FACT_RESEARCH_RANKED when ?parent= is given. Client sorts/paginates."""
+    parent = (request.args.get('parent') or '').strip() or None
+    try:
+        rr_cols, rr_join = _research_ranked_select(parent, alias='t')
+        sql = f"""
+        SELECT t.*, {rr_cols}
+        FROM `onyga-482313`.OI.FACT_RESEARCH_TERMS t
+        {rr_join}
+        WHERE t.brand_purchases > 0
+        ORDER BY t.brand_purchases DESC
+        """
+        params = [bigquery.ScalarQueryParameter('parent', 'STRING', parent)] if parent else []
+        job_config = bigquery.QueryJobConfig(query_parameters=params) if params else None
+        rows = [dict(row) for row in client.query(sql, job_config=job_config).result()]
+        return jsonify(rows)
+    except Exception as e:
+        print(f"Error in research_top_terms: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/term-ranks', methods=['POST'])
+def research_term_ranks():
+    """Per-family rank breakdown for a batch of terms (hover comparison).
+
+    Body: { "terms": ["...", ...] }  (≤500, lowercased server-side)
+    Returns: { "<term>": [ {parent_name, rank, purchase_rank, overall_fit,
+                            seg_fit, cps_fit, ads_cps, est_cps}, ... ] }
+    """
+    data = request.get_json() or {}
+    terms = [t.lower() for t in (data.get('terms') or []) if isinstance(t, str)][:500]
+    if not terms:
+        return jsonify({})
+    try:
+        sql = """
+        SELECT parent_name, LOWER(query_text) AS query_text,
+               rank, purchase_rank, overall_fit, seg_fit, cps_fit, ads_cps, est_cps
+        FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED
+        WHERE LOWER(query_text) IN UNNEST(@terms)
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter('terms', 'STRING', terms)
+        ])
+        out = {}
+        for row in client.query(sql, job_config=jc).result():
+            d = dict(row)
+            out.setdefault(d.pop('query_text'), []).append(d)
+        return jsonify(out)
+    except Exception as e:
+        print(f"Error in research_term_ranks: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/update-segments', methods=['POST'])
+def research_update_segments():
+    """Atomically upsert manual segment overrides for a search term.
+
+    Overrides win immediately in V_SQP_QUERY_WEEKLY / V_RESEARCH_RANKED
+    (COALESCE) and surface in the FACT_RESEARCH_* tables on the next
+    SP_REFRESH_RESEARCH_RANKED run.
+    """
+    data = request.get_json()
+    query_text = (data.get('query_text') or '').strip()
+    if not query_text:
+        return jsonify({'error': 'query_text is required'}), 400
+
+    fields = ['gender', 'age_group', 'occasion', 'cost_tier', 'product_type', 'brand']
+    updates = {f: data.get(f) for f in fields if f in data}
+    if not updates:
+        return jsonify({'error': 'No segment fields provided'}), 400
+
+    try:
+        sql = """
+        MERGE `onyga-482313`.OI.DE_SEARCH_TERM_SEGMENTS t
+        USING (SELECT @query_text AS query_text) s
+        ON t.query_text = s.query_text
+        WHEN MATCHED THEN UPDATE SET
+          gender = @gender, age_group = @age_group, occasion = @occasion,
+          cost_tier = @cost_tier, product_type = @product_type, brand = @brand,
+          updated_at = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN INSERT
+          (query_text, gender, age_group, occasion, cost_tier, product_type, brand, updated_at)
+        VALUES (@query_text, @gender, @age_group, @occasion, @cost_tier, @product_type, @brand, CURRENT_TIMESTAMP())
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('query_text', 'STRING', query_text),
+            bigquery.ScalarQueryParameter('gender', 'STRING', updates.get('gender')),
+            bigquery.ScalarQueryParameter('age_group', 'STRING', updates.get('age_group')),
+            bigquery.ScalarQueryParameter('occasion', 'STRING', updates.get('occasion')),
+            bigquery.ScalarQueryParameter('cost_tier', 'STRING', updates.get('cost_tier')),
+            bigquery.ScalarQueryParameter('product_type', 'STRING', updates.get('product_type')),
+            bigquery.ScalarQueryParameter('brand', 'STRING', updates.get('brand')),
+        ])
+        client.query(sql, job_config=jc).result()
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"Error in research_update_segments: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/get-segments', methods=['POST'])
+def research_get_segments():
+    """Get manual segment overrides for given query texts."""
+    data = request.get_json()
+    query_texts = data.get('query_texts', [])
+    if not query_texts:
+        return jsonify({})
+
+    try:
+        sql = """
+        SELECT query_text, gender, age_group, occasion, cost_tier, product_type, brand
+        FROM `onyga-482313`.OI.DE_SEARCH_TERM_SEGMENTS
+        WHERE query_text IN UNNEST(@texts)
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter('texts', 'STRING', query_texts)
+        ])
+        results = client.query(sql, job_config=job_config).result()
+        overrides = {}
+        for row in results:
+            d = dict(row)
+            overrides[d['query_text']] = d
+        return jsonify(overrides)
+    except Exception as e:
+        print(f"Error in research_get_segments: {e}")
+        return jsonify({})
+
+
+@app.route('/api/research/products', methods=['GET'])
+@cache_result(ttl_seconds=300)  # param-less endpoint — safe to cache
+def research_products():
+    """Return active product families with their current listing prices
+    and 30-day ads gross profit for ordering.
+    """
+    try:
+        sql = """
+        SELECT
+          dp.parent_name AS name,
+          ROUND(AVG(lc.price), 2) AS price,
+          COUNT(DISTINCT dp.asin) AS product_count,
+          ROUND(COALESCE(SUM(fa.gross_profit), 0), 2) AS ads_profit,
+          CAST(COALESCE(SUM(fa.ads_units), 0) AS INT64) AS ads_units,
+          ROUND(SAFE_DIVIDE(COALESCE(SUM(fa.ads_clicks), 0), NULLIF(COALESCE(SUM(fa.ads_orders), 0), 0)), 1) AS ads_cps
+        FROM `onyga-482313`.OI.V_DIM_LISTING_CURRENT lc
+        JOIN `onyga-482313`.OI.DIM_PRODUCT dp
+          ON lc.asin1 = dp.asin
+        LEFT JOIN (
+          SELECT advertised_asins, SUM(GROSS_PROFIT) AS gross_profit, SUM(Ads_units) AS ads_units, SUM(Ads_clicks) AS ads_clicks, SUM(Ads_orders) AS ads_orders
+          FROM `onyga-482313`.OI.FACT_AMAZON_ADS
+          WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+          GROUP BY advertised_asins
+        ) fa ON dp.asin = fa.advertised_asins
+        WHERE lc.price > 0
+          AND dp.parent_name IS NOT NULL
+          AND dp.is_active = true
+        GROUP BY dp.parent_name
+        ORDER BY COALESCE(SUM(fa.gross_profit), 0) DESC
+        """
+        results = client.query(sql).result()
+        rows = [dict(row) for row in results]
+        return jsonify(rows)
+    except Exception as e:
+        print(f"Error in research_products: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/family-info', methods=['GET'])
+def research_family_info():
+    """Return product family details: parent summary + individual child products
+    with their Amazon product_type, price, and variant name.
+    """
+    family = request.args.get('family', '')
+    if not family:
+        return jsonify({'error': 'family parameter required'}), 400
+    try:
+        sql = """
+        SELECT
+          dp.parent_name,
+          dp.asin,
+          dp.product_short_name,
+          dp.product_type,
+          dp.color AS variant,
+          ROUND(lc.price, 2) AS current_price,
+          ROUND(COALESCE(ch.cost_of_goods, 0), 2) AS cogs,
+          ROUND(COALESCE(ch.FBA_COST_estimated_referral_fee_per_unit, 0), 2) AS referral_fee,
+          ROUND(COALESCE(ch.FBA_COST_estimated_fee_total, 0), 2) AS fba_fee,
+          ROUND(COALESCE(ch.shipping_cost, 0), 2) AS shipping_cost,
+          ROUND(COALESCE(ch.TOTAL_COST_PER_UNIT, 0), 2) AS total_cost_per_unit,
+          ROUND(lc.price - COALESCE(ch.TOTAL_COST_PER_UNIT, 0), 2) AS gross_profit_per_unit,
+          dp.seg_gender,
+          dp.seg_age_group,
+          dp.seg_occasion,
+          dp.seg_product_type
+        FROM `onyga-482313`.OI.DIM_PRODUCT dp
+        LEFT JOIN (
+          SELECT asin1, price
+          FROM `onyga-482313`.OI.V_DIM_LISTING_CURRENT
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY asin1 ORDER BY price DESC) = 1
+        ) lc ON lc.asin1 = dp.asin
+        LEFT JOIN (
+          SELECT asin, cost_of_goods, FBA_COST_estimated_referral_fee_per_unit, FBA_COST_estimated_fee_total, shipping_cost, TOTAL_COST_PER_UNIT
+          FROM `onyga-482313`.OI.DIM_COSTS_HISTORY
+          WHERE end_date IS NULL OR end_date >= CURRENT_DATE()
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY asin ORDER BY start_date DESC) = 1
+        ) ch ON ch.asin = dp.asin
+        WHERE dp.parent_name = @family
+          AND dp.is_active = true
+        ORDER BY lc.price, dp.product_short_name
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("family", "STRING", family),
+            ]
+        )
+        results = client.query(sql, job_config=job_config).result()
+        products = [dict(row) for row in results]
+
+        # Build parent summary
+        product_types = list(set(p['product_type'] for p in products if p.get('product_type')))
+        prices = [p['current_price'] for p in products if p.get('current_price')]
+
+        # Merge segments across all products (union of all unique values)
+        def merge_seg(col):
+            vals = set()
+            for p in products:
+                v = p.get(col)
+                if v:
+                    for item in v.split(','):
+                        item = item.strip()
+                        if item:
+                            vals.add(item)
+            return ','.join(sorted(vals)) if vals else None
+
+        segments = {
+            'gender': merge_seg('seg_gender'),
+            'age_group': merge_seg('seg_age_group'),
+            'occasion': merge_seg('seg_occasion'),
+            'product_type': merge_seg('seg_product_type'),
+        }
+
+        # Add per-product segments to each product
+        for p in products:
+            p['segments'] = {
+                'gender': p.get('seg_gender'),
+                'age_group': p.get('seg_age_group'),
+                'occasion': p.get('seg_occasion'),
+                'product_type': p.get('seg_product_type'),
+            }
+
+        gross_profits = [p['gross_profit_per_unit'] for p in products if p.get('gross_profit_per_unit') is not None]
+        total_costs = [p['total_cost_per_unit'] for p in products if p.get('total_cost_per_unit') is not None]
+        cogs_list = [p['cogs'] for p in products if p.get('cogs') is not None]
+        referral_list = [p['referral_fee'] for p in products if p.get('referral_fee') is not None]
+        fba_list = [p['fba_fee'] for p in products if p.get('fba_fee') is not None]
+        shipping_list = [p['shipping_cost'] for p in products if p.get('shipping_cost') is not None]
+
+        summary = {
+            'parent_name': family,
+            'product_count': len(products),
+            'product_types': product_types,
+            'min_price': min(prices) if prices else None,
+            'max_price': max(prices) if prices else None,
+            'avg_price': round(sum(prices) / len(prices), 2) if prices else None,
+            'avg_cogs': round(sum(cogs_list) / len(cogs_list), 2) if cogs_list else None,
+            'avg_referral_fee': round(sum(referral_list) / len(referral_list), 2) if referral_list else None,
+            'avg_fba_fee': round(sum(fba_list) / len(fba_list), 2) if fba_list else None,
+            'avg_shipping_cost': round(sum(shipping_list) / len(shipping_list), 2) if shipping_list else None,
+            'avg_total_cost': round(sum(total_costs) / len(total_costs), 2) if total_costs else None,
+            'gross_profit_per_unit': round(sum(gross_profits) / len(gross_profits), 2) if gross_profits else None,
+            'segments': segments,
+        }
+
+        return jsonify({'summary': summary, 'products': products})
+    except Exception as e:
+        print(f"Error in research_family_info: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/product-segments', methods=['POST'])
+def update_product_segments():
+    """Manually update product segmentation.
+    Body: { parent_name, asin?, seg_gender?, seg_age_group?, seg_occasion?, seg_product_type? }
+    If asin is provided, update only that product. Otherwise update all products in parent.
+    Values are comma-separated strings. Pass null to clear.
+    """
+    try:
+        data = request.get_json()
+        parent_name = data.get('parent_name')
+        asin = data.get('asin')
+        if not parent_name:
+            return jsonify({'error': 'parent_name required'}), 400
+
+        updates = []
+        params = [bigquery.ScalarQueryParameter('parent', 'STRING', parent_name)]
+
+        for col in ['seg_gender', 'seg_age_group', 'seg_occasion', 'seg_product_type']:
+            if col in data:
+                val = data[col] if data[col] else None
+                updates.append(f'{col} = @{col}')
+                params.append(bigquery.ScalarQueryParameter(col, 'STRING', val))
+
+        if not updates:
+            return jsonify({'error': 'No segment fields provided'}), 400
+
+        where = "WHERE parent_name = @parent AND is_active = true"
+        if asin:
+            where += " AND asin = @asin"
+            params.append(bigquery.ScalarQueryParameter('asin', 'STRING', asin))
+
+        sql = f"""
+        UPDATE `onyga-482313`.OI.DIM_PRODUCT
+        SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP()
+        {where}
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=params)
+        job = client.query(sql, job_config=jc)
+        job.result()
+        clear_data_cache()
+        return jsonify({'ok': True, 'updated': job.num_dml_affected_rows})
+    except Exception as e:
+        print(f"Error in update_product_segments: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/derive-segments', methods=['POST'])
+def derive_product_segments():
+    """Trigger SP_DERIVE_PRODUCT_SEGMENTS.
+    Body: { parent_name?: string } — null/omit = derive for all products.
+    Pass force: true to clear existing auto-derived segments first.
+    """
+    try:
+        data = request.get_json() or {}
+        parent_name = data.get('parent_name')
+        force = data.get('force', False)
+
+        # If force, clear existing segments first
+        if force:
+            clear_sql = """
+            UPDATE `onyga-482313`.OI.DIM_PRODUCT
+            SET seg_gender = NULL, seg_age_group = NULL,
+                seg_occasion = NULL, seg_product_type = NULL
+            WHERE is_active = true
+            """
+            if parent_name:
+                clear_sql += " AND parent_name = @parent"
+                jc = bigquery.QueryJobConfig(query_parameters=[
+                    bigquery.ScalarQueryParameter('parent', 'STRING', parent_name)
+                ])
+                client.query(clear_sql, job_config=jc).result()
+            else:
+                client.query(clear_sql).result()
+
+        # Call the procedure
+        call_sql = "CALL `onyga-482313`.OI.SP_DERIVE_PRODUCT_SEGMENTS(@parent)"
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('parent', 'STRING', parent_name)
+        ])
+        client.query(call_sql, job_config=jc).result()
+        clear_data_cache()
+        return jsonify({'ok': True, 'parent_name': parent_name or 'ALL'})
+    except Exception as e:
+        print(f"Error in derive_product_segments: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/segment-reasoning', methods=['GET'])
+def segment_reasoning():
+    """Show the purchase data behind each auto-derived segment value.
+    Returns breakdown of purchases per segment value per parent.
+    """
+    family = request.args.get('family', '')
+    if not family:
+        return jsonify({'error': 'family parameter required'}), 400
+    try:
+        sql = """
+        WITH tagged AS (
+          SELECT
+            p.parent_name,
+            p.asin,
+            a.search_term,
+            a.Ads_orders,
+            a.Ads_clicks,
+            -- Single-source taxonomy (FN_EXTRACT_SEGMENTS) + canonical
+            -- product_type vocabulary (DE_PRODUCT_TYPE_KEYWORDS)
+            `onyga-482313`.OI.FN_EXTRACT_SEGMENTS(a.search_term).gender    AS gender,
+            `onyga-482313`.OI.FN_EXTRACT_SEGMENTS(a.search_term).age_group AS age_group,
+            `onyga-482313`.OI.FN_EXTRACT_SEGMENTS(a.search_term).occasion  AS occasion,
+            ptl.product_type
+          FROM `onyga-482313`.OI.FACT_AMAZON_ADS a
+          JOIN `onyga-482313`.OI.DIM_PRODUCT p
+            ON COALESCE(a.most_advertised_asin_impressions, a.ASIN_BY_CAMPAIGN_NAME) = p.asin
+          LEFT JOIN (
+            SELECT
+              t.search_term,
+              ARRAY_AGG(ptk.product_type ORDER BY ptk.priority ASC, LENGTH(ptk.keyword) DESC LIMIT 1)[OFFSET(0)] AS product_type
+            FROM (
+              SELECT DISTINCT search_term
+              FROM `onyga-482313`.OI.FACT_AMAZON_ADS
+              WHERE Ads_clicks > 0
+            ) t
+            CROSS JOIN `onyga-482313.OI.DE_PRODUCT_TYPE_KEYWORDS` ptk
+            WHERE REGEXP_CONTAINS(LOWER(t.search_term), CONCAT(r'(?:^|\\W)', ptk.keyword, r'(?:\\W|$)'))
+            GROUP BY t.search_term
+          ) ptl ON ptl.search_term = a.search_term
+          WHERE a.Ads_clicks > 0
+            AND p.parent_name = @family
+            AND p.is_active = true
+        ),
+        totals AS (
+          SELECT SUM(Ads_orders) AS total_orders FROM tagged
+        ),
+        asin_totals AS (
+          SELECT asin, SUM(Ads_orders) AS total_orders FROM tagged GROUP BY asin
+        )
+        -- Parent-level aggregation
+        SELECT
+          '_PARENT' AS asin,
+          'gender' AS segment_type, gender AS segment_value,
+          SUM(Ads_orders) AS orders,
+          ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(t.total_orders)) * 100, 1) AS pct,
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1) AS clicks_per_sale
+        FROM tagged, totals t WHERE gender IS NOT NULL GROUP BY gender
+        UNION ALL
+        SELECT '_PARENT', 'age_group', age_group, SUM(Ads_orders),
+          ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(t.total_orders)) * 100, 1),
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+        FROM tagged, totals t WHERE age_group IS NOT NULL GROUP BY age_group
+        UNION ALL
+        SELECT '_PARENT', 'occasion', occasion, SUM(Ads_orders),
+          ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(t.total_orders)) * 100, 1),
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+        FROM tagged, totals t WHERE occasion IS NOT NULL GROUP BY occasion
+        UNION ALL
+        SELECT '_PARENT', 'product_type', product_type, SUM(Ads_orders),
+          ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(t.total_orders)) * 100, 1),
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+        FROM tagged, totals t WHERE product_type IS NOT NULL GROUP BY product_type
+        UNION ALL
+        -- Per-ASIN aggregation
+        SELECT tagged.asin, 'gender', gender, SUM(Ads_orders),
+          ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(atot.total_orders)) * 100, 1),
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+        FROM tagged JOIN asin_totals atot ON tagged.asin = atot.asin WHERE gender IS NOT NULL GROUP BY tagged.asin, gender
+        UNION ALL
+        SELECT tagged.asin, 'age_group', age_group, SUM(Ads_orders),
+          ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(atot.total_orders)) * 100, 1),
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+        FROM tagged JOIN asin_totals atot ON tagged.asin = atot.asin WHERE age_group IS NOT NULL GROUP BY tagged.asin, age_group
+        UNION ALL
+        SELECT tagged.asin, 'occasion', occasion, SUM(Ads_orders),
+          ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(atot.total_orders)) * 100, 1),
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+        FROM tagged JOIN asin_totals atot ON tagged.asin = atot.asin WHERE occasion IS NOT NULL GROUP BY tagged.asin, occasion
+        UNION ALL
+        SELECT tagged.asin, 'product_type', product_type, SUM(Ads_orders),
+          ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(atot.total_orders)) * 100, 1),
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+        FROM tagged JOIN asin_totals atot ON tagged.asin = atot.asin WHERE product_type IS NOT NULL GROUP BY tagged.asin, product_type
+        ORDER BY asin, segment_type, orders DESC
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('family', 'STRING', family)
+        ])
+        results = client.query(sql, job_config=jc).result()
+        rows = [dict(row) for row in results]
+
+        # Group by segment_type (parent-level) and by_asin
+        grouped = {}
+        by_asin = {}
+        for row in rows:
+            st = row['segment_type']
+            asin = row['asin']
+            entry = {
+                'value': row['segment_value'],
+                'orders': row['orders'],
+                'pct': row['pct'],
+                'clicks_per_sale': row.get('clicks_per_sale'),
+            }
+            if asin == '_PARENT':
+                if st not in grouped:
+                    grouped[st] = []
+                grouped[st].append(entry)
+            else:
+                if asin not in by_asin:
+                    by_asin[asin] = {}
+                if st not in by_asin[asin]:
+                    by_asin[asin][st] = []
+                by_asin[asin][st].append(entry)
+
+        grouped['by_asin'] = by_asin
+        return jsonify(grouped)
+    except Exception as e:
+        print(f"Error in segment_reasoning: {e}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
