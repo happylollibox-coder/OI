@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { monthlyPlanTargets } from '../planTypes';
-import { familyActuals, familyModes, dominantMode } from '../coachActuals';
+import { familyActuals, familyModes, dominantMode, clearCase } from '../coachActuals';
+import type { GateVerdict } from '../coachActuals';
 import { FamilyPlanActuals } from './FamilyPlanActuals';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
 import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
@@ -17,6 +18,7 @@ import { usePageSummary } from '../components/PageSummaryBar';
 import { Plus, Check, Download, CircleX, Ban, TrendingUp, TrendingDown, ShieldCheck, Eye, Crosshair, Sparkles, Wrench, ArrowRightLeft } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { DecisionTreeViewer } from '../components/Actions/DecisionTreeViewer';
+import { DecisionCard } from '../components/Actions/DecisionCard';
 import KeywordIntelligencePanel from '../components/Actions/KeywordIntelligencePanel';
 import { useKeywordIntelligence } from '../hooks/useCubeData';
 import { CoachStrategyPanel } from '../components/CoachStrategyPanel';
@@ -320,6 +322,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
   const [intelligenceKeyword, setIntelligenceKeyword] = useState<string | null>(null);
   const [hideMonitor, setHideMonitor] = useState(true);
   const [hierarchy, setHierarchy] = useState<'campaign' | 'action' | 'action_type' | 'strategy' | 'branch'>('campaign');
+  const [showQueue, setShowQueue] = useState(false);
   const { data: intelligenceData, loading: intelligenceLoading } = useKeywordIntelligence(intelligenceKeyword);
 
   const effectiveFam = filters.family || (famFilter !== 'all' ? famFilter : null);
@@ -374,6 +377,56 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     if (coachFilter !== 'all') return coachFilter;
     return dominantMode(data.actions || []);
   }, [coachFilter, data.actions]);
+
+  // Stage-1 trust list: confidence-gated clear cases, capped, sorted by spend at stake.
+  const CLEAR_CARD_CAP = 10;
+  const clearCases = useMemo(() => {
+    const out: { a: ActionRow; family: string; why: GateVerdict }[] = [];
+    for (const a of acts) {
+      const family = getFamily(a.product_short_name) || a.parent_name || '';
+      if (!family) continue;
+      const v = clearCase({
+        action: a.action,
+        spend: (a as { spend?: number }).spend ?? 0,
+        clicks: (a as { clicks?: number }).clicks ?? 0,
+        orders: (a as { orders?: number }).orders ?? 0,
+        netRoas: (a as { net_roas?: number }).net_roas ?? 0,
+        mode: famModes.get(family) ?? effectiveCoachMode,
+        confidence: a.confidence,
+      });
+      if (v.clear
+          && !doQueue.isUploaded(a.search_term, a.campaign_id)
+          && !doQueue.isDone(a.search_term, a.campaign_id)) {
+        out.push({ a, family, why: v });
+      }
+    }
+    out.sort((x, y) => ((y.a as { spend?: number }).spend ?? 0) - ((x.a as { spend?: number }).spend ?? 0));
+    return out.slice(0, CLEAR_CARD_CAP);
+  }, [acts, getFamily, famModes, effectiveCoachMode, doQueue.isUploaded, doQueue.isDone]);
+
+  const queueAction = (a: ActionRow) => doQueue.addItem({
+    search_term: a.search_term || '',
+    action: a.action || '',
+    campaign: a.campaign_name || '',
+    campaign_id: a.campaign_id || '',
+    ad_group_id: (a as unknown as { ad_group_id?: string }).ad_group_id || '',
+    targeting: a.targeting || '',
+    keyword_id: a.keyword_id || '',
+    match_type: a.match_type || '',
+    target_spend_8w: a.ads_spend_4w || 0,
+    target_orders_8w: a.ads_orders_4w || 0,
+    target_net_roas_8w: a.ads_net_roas_4w || 0,
+    current_bid: a.current_bid ?? null,
+    recommended_bid: a.recommended_bid ?? null,
+    campaign_type: a.campaign_type || '',
+    product: a.product_short_name || '',
+    spend: a.ads_spend_4w || 0,
+    orders: a.ads_orders_4w || 0,
+    cpc: a.ads_cpc_4w || 0,
+    conv_rate: a.ads_cvr_pct_4w || 0,
+    current_budget: (a as unknown as { current_budget?: number | null }).current_budget ?? null,
+    recommended_budget: (a as unknown as { recommended_budget?: number | null }).recommended_budget ?? null,
+  });
 
   const filtered = useMemo(() => {
     let f = [...acts];
@@ -1380,18 +1433,41 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         );
       })()}
 
+      {/* ── ✅ Clear cases (Stage-1 trust list) ── */}
+      {clearCases.length > 0 && (
+        <div className="mb-4">
+          <div className="flex items-baseline gap-2 mb-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider">✅ Clear cases</span>
+            <span className="text-[10px] text-faint">{clearCases.length} obvious calls · everything else is under "Needs judgment" below</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {clearCases.map(({ a, family, why }) => (
+              <DecisionCard
+                key={`${a.campaign_id}|${a.search_term}|${a.action}`}
+                action={a} family={family} why={why}
+                inQueue={doQueue.hasItem(a.search_term, a.action, a.campaign_name)}
+                onQueue={() => queueAction(a)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── 📋 Unified Daily Queue ── */}
       {unifiedTree.length > 0 && (
         <div className="border border-border rounded-xl bg-card overflow-hidden mb-4">
-          <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-surface/50">
+          <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-surface/50 cursor-pointer" onClick={() => setShowQueue(p => !p)}>
             <span className="text-base">📋</span>
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white/90">Daily Queue</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-white/90">Needs judgment / full queue</span>
             <span className="text-[10px] font-mono text-muted">{totalQueueCount} items · {fM(totalQueueSpend)}</span>
             <span className="text-[9px] text-subtle ml-auto">Campaign → Type → Term / Target</span>
+            <span className="text-[11px] text-subtle ml-1">{showQueue ? '▾' : '▸'}</span>
           </div>
-          <div className="divide-y divide-border-faint">
-              {unifiedTree.flatMap(node => renderNode(node, 0, ''))}
-          </div>
+          {showQueue && (
+            <div className="divide-y divide-border-faint">
+                {unifiedTree.flatMap(node => renderNode(node, 0, ''))}
+            </div>
+          )}
         </div>
       )}
     </div>
