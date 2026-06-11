@@ -906,9 +906,10 @@ sqp_ly_peak AS (
   GROUP BY 1, 2
 ),
 
--- Hero ASIN per search term (GLOBAL — best product across ALL families)
--- If "birthday gifts" converts best on Truth Or Dare (Family A), that's the hero
--- even if the current campaign advertises Lolli Box (Family B).
+-- Hero ASIN per search term × FAMILY (best product WITHIN each family).
+-- Each family is an independent business unit: "birthday gifts" can have a Lollibox hero
+-- AND a Truth-Or-Dare hero at once. is_hero_match means "best product in its OWN family".
+-- ASINs with NULL parent_name match no hero row (LEFT JOIN → NULL hero_*) — intentional.
 term_hero AS (
   SELECT
     search_term,
@@ -921,11 +922,11 @@ term_hero AS (
     confidence as hero_confidence
   FROM (
     SELECT *,
-      ROW_NUMBER() OVER (PARTITION BY search_term ORDER BY hero_score DESC) as global_rank
+      ROW_NUMBER() OVER (PARTITION BY search_term, parent_name ORDER BY hero_score DESC) as family_rank
     FROM `onyga-482313.OI.V_PARENT_HERO_ASIN`
     WHERE hero_score > 0
   )
-  WHERE global_rank = 1
+  WHERE family_rank = 1
 ),
 
 -- Search term segment/classification
@@ -1435,7 +1436,7 @@ active_term_data AS (
   LEFT JOIN ads_ly_peak lyp ON a8.search_term = lyp.search_term AND a8.asin = lyp.asin
   LEFT JOIN sqp_8w sq8 ON a8.search_term = sq8.search_term AND a8.asin = sq8.asin
   LEFT JOIN sqp_ly_peak sqlp ON a8.search_term = sqlp.search_term AND a8.asin = sqlp.asin
-  LEFT JOIN term_hero th ON a8.search_term = th.search_term
+  LEFT JOIN term_hero th ON a8.search_term = th.search_term AND ae.parent_name = th.hero_parent_name
   LEFT JOIN term_classification tc ON a8.search_term = tc.search_term AND a8.asin = tc.asin
   LEFT JOIN exact_boost_terms ebt ON a8.search_term = ebt.search_term AND a8.asin = ebt.asin
   LEFT JOIN campaign_config cc ON a8.campaign_id = cc.campaign_id AND a8.keyword_id = cc.keyword_id
@@ -1644,7 +1645,7 @@ opportunity_data AS (
   LEFT JOIN term_classification tc
     ON sp.search_term = tc.search_term AND sp.asin = tc.asin
   LEFT JOIN term_hero th
-    ON sp.search_term = th.search_term
+    ON sp.search_term = th.search_term AND ae.parent_name = th.hero_parent_name  -- ae = asin_economics (FROM/JOIN above), not active_experiments
   LEFT JOIN asin_economics hero_ae ON th.hero_asin = hero_ae.asin
   LEFT JOIN sqp_ly_peak sqlp ON sp.search_term = sqlp.search_term AND sp.asin = sqlp.asin
   WHERE aet.search_term IS NULL  -- Not targeted by any experiment
