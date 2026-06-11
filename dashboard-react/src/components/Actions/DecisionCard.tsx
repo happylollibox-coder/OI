@@ -27,7 +27,7 @@ export function DecisionCard({ action: a, family, why, inQueue, onQueue }: {
     : isReduce ? <ArrowDownRight size={13} className="text-amber-400" />
     : <ArrowUpRight size={13} className="text-emerald-400" />;
   const claim = isCut
-    ? `Stop "${a.search_term}" for ${family}`
+    ? `Stop "${a.search_term || a.targeting}" for ${family}`
     : isReduce
     ? `Lower the bid on "${a.targeting || a.search_term}" for ${family}`
     : `Bid up "${a.targeting || a.search_term}" for ${family}`;
