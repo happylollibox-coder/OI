@@ -144,6 +144,27 @@ Note the split between the **display reaction bar** (`MODE_ROAS.up` = GUARDIAN 1
 
 (Values illustrative; finalized in the plan, owner-tunable thereafter.)
 
+## 7b. Trust roadmap — staged rollout, each stage verified with real Amazon results
+
+The owner's requirement (2026-06-11): *make the coacher explainable in a simple, clear way; end state = the action list is generated automatically for bulk upload on the DO page; build trust in stages, each verified with real data and real results from Amazon a few days later.*
+
+UI review findings that shape this:
+- Good raw material exists: per-action plain-English `reason` with real numbers (`V_ADS_COACH_DECISION.sql` ~505), a `confidence` field (HIGH/MEDIUM/LOW), and a working Amazon Bulksheet v2.0 exporter (`DoPage.tsx`).
+- Blockers: 200+ surfaced actions (volume kills trust); explanations buried in expanded rows; **no outcome-verification loop at all** (uploaded actions go to localStorage and are forgotten — the system never shows whether its calls were right); localStorage-only action state can't power verification.
+- Dormant asset: `DE_APPROVED_ACTIONS` table (DDL exists, status flow PENDING→EXPORTED→APPLIED, nothing writes to it) — becomes the action log.
+
+**Stage 1 — short, explainable list (decision cards).**
+Per-family hero (✅ deployed 2026-06-11) + a client-side **clear-case selector** over engine-provided fields (confidence, spend, clicks, orders, net ROAS — the §7 knob defaults) + each surfaced action rendered as a **decision card**: the claim ("Stop X for Fresh") → the evidence (3 numbers, from `reason`) → real past impact in dollars (facts, not forecasts) → exactly what changes in Amazon (campaign, negative type). Everything else collapses into the "needs judgment" bucket. *No wizard* — trust comes from repeated small verifications, not a one-time walkthrough. (The selector migrates into `V_ADS_COACH_DECISION` at Stage 3, per Approach A; client-side first so the knobs can be iterated daily.)
+**Success test:** Ori reads the short list daily and agrees with ~all of it.
+
+**Stage 2 — the receipt loop (action log + scoreboard).**
+Wire `DE_APPROVED_ACTIONS`: on "Uploaded to Amazon" the DO page POSTs each item with a **metric snapshot at action time** (spend/orders/ROAS/bid). New view `V_COACH_ACTION_OUTCOMES` compares post-action actuals from `FACT_AMAZON_ADS` at **+3/+7/+14 days** (excluding the ~2-day ads lag): NEGATE/STOP verified when spend stops; REDUCE_BID when CPC/ROAS improves; PROMOTE when ROAS holds with more volume; TOO_EARLY before enough post-lag days. A **Track Record panel** renders the scoreboard: *"N calls in the last 2 weeks — K verified correct, $X saved, M wrong (with reasons)."*
+**Success test:** after ~2 weeks the scoreboard shows a hit rate Ori believes, computed from real Amazon data.
+
+**Stage 3 — widen the gate.** Once hit-rate holds (≥85–90%), loosen `CoachThresholds` knobs to admit more cases; move the clear-case selector into the engine (`V_ADS_COACH_DECISION`); auto-build the DO queue (human still clicks upload). Includes roadmap plans 2–6 (territory, attribution, engine gate, launch ramp, action mapping).
+
+**Stage 4 — end state.** Bulk list generated automatically on the DO page; Ori reviews-and-uploads; the scoreboard grades the coacher continuously.
+
 ## 8. Testing strategy
 
 - **Per-family hero:** SQL spot-check — a known term that converts best on Family A but is run by Family B now yields a Family-B hero row (B's own best ASIN), not A's.
