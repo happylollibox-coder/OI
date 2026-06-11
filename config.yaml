@@ -107,6 +107,12 @@ views:
     description: "Daily sales/traffic from Daton SalesAndTrafficReportByChildASIN"
     source_files: ["scripts/bigquery/interface_views/V_SRC_sales_and_traffic_business_sku_report_daily.sql"]
 
+  - name: "V_SRC_ActiveListingsReport"
+    description: "Listing pricing data from Daton ActiveListingsReport (deduped by business key)"
+    source_files: ["scripts/bigquery/interface_views/V_SRC_ActiveListingsReport.sql"]
+    dependencies:
+      - DIM_LISTING_HISTORY
+
   # ── V_ Analytics Views ──
   - name: "V_ASIN_BEST_PRACTICES"
     description: "ASIN best practices analysis"
@@ -119,6 +125,12 @@ views:
 
   - name: "V_CAMPAIGN_DAILY_MOMENTUM"
     description: "Daily campaign momentum tracking"
+
+  - name: "V_CAMPAIGN_LAUNCH_MONTHLY"
+    description: "First-3-month performance with monthly buckets (M1/M2/M3) per campaign"
+
+  - name: "V_CAMPAIGN_LAUNCH_PERF"
+    description: "First-3-month aggregated performance metrics per campaign launch"
 
   - name: "V_CAMPAIGN_PLACEMENT_BIDDING"
     description: "Campaign placement bidding analysis"
@@ -203,6 +215,14 @@ views:
     description: "N-gram phrase analysis — identifies common phrases across unprofitable search terms for phrase-level negation."
     source_files: ["scripts/bigquery/views/V_ADS_COACH_PHRASE_NEGATIVES.sql"]
 
+  - name: "V_PRODUCT_PHRASE_NEGATIVES"
+    description: "Curated per-product negative phrases with _ALL/FAMILY/PRODUCT resolution. Read view over DE_PRODUCT_PHRASE_NEGATIVES."
+    source_files: ["scripts/bigquery/views/V_PRODUCT_PHRASE_NEGATIVES.sql"]
+    cube_schema: "cube/schema/ProductPhraseNegatives.js"
+    dependencies:
+      - DE_PRODUCT_PHRASE_NEGATIVES
+      - V_PRODUCT_FAMILY_MAP
+
   - name: "V_SEARCH_TERM_SEGMENT"
     description: "Search term segmentation"
 
@@ -230,13 +250,14 @@ views:
       - DIM_PRODUCT
 
   - name: "V_PLAN_FORECAST"
-    description: "Master supply chain forecast — single source of truth for effectiveGrowth, adjustedForecast, gap, DOC, and PO-aware supply readiness (READY/IN_PRODUCTION/NEEDS_PO). Consumed by SP_GENERATE_ALERTS, V_SUPPLY_CHAIN_SUMMARY, and PlanPage."
+    description: "Master supply chain forecast — single source of truth for effectiveGrowth, adjustedForecast, gap, DOC, and PO-aware supply readiness (READY/IN_PRODUCTION/NEEDS_PO). Consumed by SP_GENERATE_ALERTS, V_SUPPLY_CHAIN_SUMMARY, and PlanPage. Mechanism B (launch_signal): just-launched products (first sale < 60d) override daily_rate with their own widening-window run-rate, cap demand to lead+1mo, and zero q4_demand — so the shipment engine orders gradual launch batches instead of a full-year/Q4 plan."
     source_files: ["scripts/bigquery/views/V_PLAN_FORECAST.sql"]
     dependencies:
       - V_FORECAST_DEMAND
       - DE_PLAN_STRATEGY
       - DIM_PRODUCT
       - FACT_INVENTORY_SNAPSHOT
+      - FACT_AMAZON_PERFORMANCE_DAILY
       - V_SRC_sales_and_traffic_business_sku_report_daily
       - DE_PURCHASE_ORDERS
       - DE_SHIPMENT_LINES
@@ -279,6 +300,12 @@ views:
     source_files: ["scripts/bigquery/views/V_DIM_CAMPAIGN_CURRENT.sql"]
     dependencies:
       - DIM_CAMPAIGN
+
+  - name: "V_DIM_LISTING_CURRENT"
+    description: "Current listing pricing — one row per listing from SCD2 DIM_LISTING_HISTORY."
+    source_files: ["scripts/bigquery/views/V_DIM_LISTING_CURRENT.sql"]
+    dependencies:
+      - DIM_LISTING_HISTORY
 
   - name: "V_ADS_COACH_ACTIONS"
     description: "Column-reordered passthrough view over FACT_ADS_COACH_ACTIONS for human-readable ad-hoc queries"
@@ -418,6 +445,46 @@ views:
       - DE_PLAN_ADS_TARGETS
       - V_ADS_CHANNEL_EFFICIENCY
 
+  - name: "V_SQP_QUERY_WEEKLY"
+    description: "Weekly search query performance at query_text grain — market totals (deduplicated) + brand totals (summed across ASINs). Segments via FN_EXTRACT_SEGMENTS + DE_PRODUCT_TYPE_KEYWORDS, manual overrides from DE_SEARCH_TERM_SEGMENTS win via COALESCE."
+    source_files: ["scripts/bigquery/views/V_SQP_QUERY_WEEKLY.sql"]
+    dependencies:
+      - FACT_SEARCH_QUERY
+      - FN_EXTRACT_SEGMENTS
+      - DE_PRODUCT_TYPE_KEYWORDS
+      - DE_SEARCH_TERM_SEGMENTS
+
+  - name: "V_CONVERSION_CURVE"
+    description: "Pre-computed clicks-per-sale conversion curves by (product × price_bucket × holiday_season). Used by Research page to estimate click requirements."
+    source_files: ["scripts/bigquery/views/V_CONVERSION_CURVE.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+      - DIM_US_HOLIDAYS
+      - V_SQP_QUERY_WEEKLY
+
+  - name: "V_RESEARCH_RANKED"
+    description: "Pre-computed ranking/FIT scores per family × search term incl. explanation columns (per-field seg scores, cps_source, effective_cps). Single source of truth for Research page scoring (Invariant #8). Materialized into FACT_RESEARCH_RANKED."
+    source_files: ["scripts/bigquery/views/V_RESEARCH_RANKED.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - FACT_SEARCH_QUERY
+      - DIM_PRODUCT
+      - V_SQP_QUERY_WEEKLY
+      - V_CONVERSION_CURVE
+      - V_DIM_LISTING_CURRENT
+      - FN_EXTRACT_SEGMENTS
+      - DE_SEARCH_TERM_SEGMENTS
+      - DE_PRODUCT_TYPE_KEYWORDS
+
+  - name: "V_RESEARCH_TERMS"
+    description: "Per-search-term market/brand aggregates (104-week window) for the Research page — single home for the CTE block formerly duplicated across top-terms and related-terms endpoints. Materialized into FACT_RESEARCH_TERMS."
+    source_files: ["scripts/bigquery/views/V_RESEARCH_TERMS.sql"]
+    dependencies:
+      - V_SQP_QUERY_WEEKLY
+      - SRC_ACC_SQP_WEEKLY
+      - DIM_PRODUCT
+
 # ═══════════════════════════════════════════════════════════════
 # TABLES
 # ═══════════════════════════════════════════════════════════════
@@ -439,6 +506,11 @@ tables:
     description: "SCD2 ad group dimension with default bid tracking"
     type: "dimension"
     source_files: ["scripts/bigquery/tables/DIM/DIM_AD_GROUP.sql"]
+
+  - name: "DIM_LISTING_HISTORY"
+    description: "SCD2 listing pricing history — tracks price/business price/quantity pricing changes per listing"
+    type: "dimension"
+    source_files: ["scripts/bigquery/tables/DIM/DIM_LISTING_HISTORY.sql"]
 
   - name: "DIM_BUDGET_CATEGORIES"
     description: "Budget category classifications"
@@ -516,6 +588,16 @@ tables:
     type: "fact"
     source_files: ["scripts/bigquery/tables/FACT_ADS_COACH_ACTIONS.sql"]
     populated_by: "SP_REFRESH_ADS_COACH_ACTIONS"
+
+  - name: "FACT_RESEARCH_TERMS"
+    description: "Materialized V_RESEARCH_TERMS — per-term Research page aggregates (CREATE OR REPLACE on refresh, no DDL file)"
+    type: "fact"
+    populated_by: "SP_REFRESH_RESEARCH_RANKED"
+
+  - name: "FACT_RESEARCH_RANKED"
+    description: "Materialized V_RESEARCH_RANKED — per family × term Research page scores, clustered by (parent_name, query_text) (CREATE OR REPLACE on refresh, no DDL file)"
+    type: "fact"
+    populated_by: "SP_REFRESH_RESEARCH_RANKED"
 
   - name: "FACT_AMAZON_ADS"
     description: "Amazon Ads performance facts"
@@ -650,6 +732,16 @@ tables:
     description: "User-assigned launch model for new products — maps new product to existing product whose first-year sales pattern drives the forecast"
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE/DE_NEW_PRODUCT_MODEL.sql"]
+
+  - name: "DE_PRODUCT_PHRASE_NEGATIVES"
+    description: "Curated per-product negative keyword phrase list. Seeded manually, queried at bulksheet generation. Supports _ALL (cross-family), family-level, and product-level resolution."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_PRODUCT_PHRASE_NEGATIVES.sql"]
+
+  - name: "DE_SEARCH_TERM_SEGMENTS"
+    description: "Manual overrides for search term segmentation (gender, age, occasion, etc.)"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_SEARCH_TERM_SEGMENTS.sql"]
 
 
   # ── STG_ Staging Tables ──
@@ -867,6 +959,10 @@ stored_procedures:
     description: "Materialize Ads Coach actions into FACT_ADS_COACH_ACTIONS (4 INSERT statements at natural grain)"
     source_files: ["scripts/bigquery/procedures/SP_REFRESH_ADS_COACH_ACTIONS.sql"]
 
+  - name: "SP_REFRESH_RESEARCH_RANKED"
+    description: "Materialize V_RESEARCH_TERMS → FACT_RESEARCH_TERMS and V_RESEARCH_RANKED → FACT_RESEARCH_RANKED for the Research page (called by SP_ORCHESTRATE_DAILY_REFRESH)"
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_RESEARCH_RANKED.sql"]
+
   - name: "SP_FACT_AMAZON_ADS"
     description: "Build FACT_AMAZON_ADS from staging"
     source_files: ["scripts/bigquery/procedures/SP_FACT_AMAZON_ADS.sql"]
@@ -918,6 +1014,17 @@ stored_procedures:
   - name: "SP_LOAD_DIM_AD_GROUP"
     description: "SCD2 load for ad group dimension with default bid tracking"
     source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_AD_GROUP.sql"]
+
+  - name: "SP_LOAD_DIM_LISTING_HISTORY"
+    description: "SCD2 load for listing pricing history. Closes changed rows (3ms gap) and inserts new versions."
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_LISTING_HISTORY.sql"]
+
+  - name: "SP_DERIVE_PRODUCT_SEGMENTS"
+    description: "Auto-derive product segmentation (gender, age, occasion, product_type) from ad purchase data into DIM_PRODUCT"
+    source_files: ["scripts/bigquery/procedures/SP_DERIVE_PRODUCT_SEGMENTS.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
 
   - name: "SP_LOAD_DIM_COSTS_HISTORY"
     description: "Load SCD2 cost history"
@@ -1075,6 +1182,11 @@ stored_procedures:
 # ═══════════════════════════════════════════════════════════════
 
 functions:
+  - name: "FN_EXTRACT_SEGMENTS"
+    description: "Single source of truth for search-term segment extraction (gender, age_group, occasion, holiday). Consumed by V_SQP_QUERY_WEEKLY, V_RESEARCH_RANKED, SP_DERIVE_PRODUCT_SEGMENTS, segment-reasoning endpoint."
+    source_files: ["scripts/bigquery/functions/FN_EXTRACT_SEGMENTS.sql"]
+    type: "sql_udf"
+
   - name: "FN_FETCH_EXCHANGE_RATES"
     description: "Remote function to fetch exchange rates via Cloud Function"
     source_files: ["scripts/bigquery/functions/FN_FETCH_EXCHANGE_RATES.sql"]
