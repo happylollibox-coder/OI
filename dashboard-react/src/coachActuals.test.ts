@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { familyActuals, familyModes, dominantMode } from './coachActuals';
+import { familyActuals, familyModes, dominantMode, clearCase } from './coachActuals';
 
 // daily_trends rows are keyed by product_type = family. ad_cost & clicks are ad-only.
 const trends = [
@@ -79,5 +79,61 @@ describe('familyModes', () => {
   it('ignores rows with no family or no mode', () => {
     const m = familyModes([{ product_short_name: 'Unknown', coach_mode: 'BLITZ' }], fam);
     expect(m.size).toBe(0);
+  });
+});
+
+describe('clearCase', () => {
+  const base = { spend: 22, clicks: 40, orders: 0, netRoas: 0, mode: 'GUARDIAN', confidence: 'HIGH' };
+  it('zero-conversion negate with enough data is the cleanest clear case', () => {
+    const v = clearCase({ ...base, action: 'NEGATE_TERM' });
+    expect(v.clear).toBe(true);
+  });
+  it('parks thin data (spend < $5 or clicks < 10 or non-HIGH confidence)', () => {
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', spend: 3 }).clear).toBe(false);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', clicks: 4 }).clear).toBe(false);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', confidence: 'LOW' }).clear).toBe(false);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', confidence: 'MEDIUM' }).clear).toBe(false);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', spend: 3 }).reason).toMatch(/spend/i);
+  });
+  it('parks a negate that HAS orders (halo risk — direct ROAS understates value)', () => {
+    const v = clearCase({ ...base, action: 'NEGATE_TERM', orders: 2, netRoas: 0.5 });
+    expect(v.clear).toBe(false);
+    expect(v.reason).toMatch(/order/i);
+  });
+  it('REDUCE_BID is clear only when ROAS is decisively below the gray band (<0.9)', () => {
+    expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6 }).clear).toBe(true);
+    expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.95 }).clear).toBe(false); // gray band
+  });
+  it('promote needs mode-specific clear bar: GUARDIAN >=1.3, BLITZ >=1.15, COOLDOWN never', () => {
+    const p = { ...base, action: 'INCREASE_BID', orders: 3 };
+    expect(clearCase({ ...p, netRoas: 1.35, mode: 'GUARDIAN' }).clear).toBe(true);
+    expect(clearCase({ ...p, netRoas: 1.2, mode: 'GUARDIAN' }).clear).toBe(false);
+    expect(clearCase({ ...p, netRoas: 1.2, mode: 'BLITZ' }).clear).toBe(true);
+    expect(clearCase({ ...p, netRoas: 5.0, mode: 'COOLDOWN' }).clear).toBe(false);
+  });
+  it('promote with fewer than 2 orders is parked even at high ROAS', () => {
+    expect(clearCase({ ...base, action: 'INCREASE_BID', orders: 1, netRoas: 2.0 }).clear).toBe(false);
+  });
+  it('non-actionable types (MONITOR/KEEP/etc.) are never clear cases', () => {
+    expect(clearCase({ ...base, action: 'MONITOR' }).clear).toBe(false);
+    expect(clearCase({ ...base, action: 'KEEP' }).clear).toBe(false);
+  });
+  it('covers the legacy/seasonal cut actions (drift guard)', () => {
+    for (const action of ['NEGATE', 'STOP_TERM', 'STOP_SEASONAL']) {
+      expect(clearCase({ ...base, action }).clear).toBe(true); // 0 orders, enough data
+    }
+    expect(clearCase({ ...base, action: 'REDUCE_TO_BASELINE', orders: 3, netRoas: 0.6 }).clear).toBe(true);
+  });
+  it('REDUCE_BID with ROAS above the band parks with a conflict reason (not "gray band")', () => {
+    const v = clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 5.0 });
+    expect(v.clear).toBe(false);
+    expect(v.reason).toMatch(/above breakeven/i);
+  });
+  it('boundary values: floors are exclusive-below, bars inclusive-at', () => {
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', spend: 5 }).clear).toBe(true);    // at floor → passes
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', clicks: 10 }).clear).toBe(true);  // at floor → passes
+    expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.9 }).clear).toBe(false); // at grayLow → parks
+    expect(clearCase({ ...base, action: 'INCREASE_BID', orders: 2, netRoas: 1.3 }).clear).toBe(true);  // GUARDIAN bar inclusive
+    expect(clearCase({ ...base, action: 'INCREASE_BID', orders: 2, netRoas: 1.15, mode: 'BLITZ' }).clear).toBe(true);
   });
 });

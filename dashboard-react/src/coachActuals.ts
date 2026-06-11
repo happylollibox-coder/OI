@@ -84,3 +84,55 @@ export function familyModes(
   for (const [family, frows] of byFam) out.set(family, dominantMode(frows));
   return out;
 }
+
+// ─── Stage-1 clear-case selector (spec §7 confidence gate, client-side) ──────
+// Decides whether an action is a CLEAR case (surface as a decision card) or parked
+// ("needs judgment"). Facts only — uses the engine's own 4w fields. Direct net ROAS
+// carries NO organic/repeat halo, so: zero-conversion negates are the cleanest cut;
+// negates on terms WITH orders are parked (halo risk); promotes need a margin above
+// the mode's display bar (GUARDIAN 1.30 / BLITZ 1.15 / COOLDOWN never).
+// Migrates into V_ADS_COACH_DECISION at Stage 3 — keep it dumb and tunable.
+export interface GateInput {
+  action: string; spend: number; clicks: number; orders: number;
+  netRoas: number; mode: string; confidence: string;
+}
+export interface GateVerdict { clear: boolean; reason: string }
+
+export const GATE = Object.freeze({
+  minSpend: 5, minClicks: 10, grayLow: 0.9, grayHigh: 1.1, promoteMinOrders: 2,
+  scaleClear: Object.freeze({ GUARDIAN: 1.3, BLITZ: 1.15 }) as Record<string, number>,
+});
+
+// Act-now actions the cards can represent (keyword/term-level changes in Amazon).
+// DELIBERATELY EXCLUDED from cards v1 (different Amazon semantics — not keyword-level):
+//   budget actions (GUARDIAN/BLITZ_BUDGET_*), hero swaps (FIX_HERO/SWITCH_HERO),
+//   experiment starts (START/START_TERM), placement (REDUCE_TOS), phrase-level
+//   (NEGATE_PHRASE handled by the phrase panel, PROMOTE_TO_PEAK_PHRASE seasonal flow).
+const CUT_ACTIONS = new Set(['NEGATE', 'NEGATE_TERM', 'NEGATE_ROAS_THRESHOLD', 'NEGATE_SPEND_THRESHOLD', 'NEGATE_BOOST_SIMILAR_EXACT', 'STOP', 'STOP_TERM', 'STOP_TARGET', 'STOP_SEASONAL']);
+const REDUCE_ACTIONS = new Set(['REDUCE_BID', 'REDUCE_BID_ROAS', 'REDUCE_BID_SPEND', 'REDUCE_TO_BASELINE']);
+const PROMOTE_ACTIONS = new Set(['INCREASE_BID', 'PROMOTE_TO_EXACT', 'SCALE', 'SCALE_UP', 'SCALE_UP_ROAS', 'BOOST']);
+
+export function clearCase(g: GateInput): GateVerdict {
+  const isCut = CUT_ACTIONS.has(g.action);
+  const isReduce = REDUCE_ACTIONS.has(g.action);
+  const isPromote = PROMOTE_ACTIONS.has(g.action);
+  if (!isCut && !isReduce && !isPromote) return { clear: false, reason: 'not an act-now action' };
+  if (g.confidence !== 'HIGH') return { clear: false, reason: `${g.confidence} confidence — needs more data to act automatically` };
+  if (g.spend < GATE.minSpend) return { clear: false, reason: `spend $${g.spend.toFixed(0)} < $${GATE.minSpend} floor` };
+  if (g.clicks < GATE.minClicks) return { clear: false, reason: `${g.clicks} clicks < ${GATE.minClicks} floor` };
+  if (isCut) {
+    if (g.orders === 0) return { clear: true, reason: 'real spend, zero orders — nothing to lose' };
+    return { clear: false, reason: `${g.orders} order(s) — halo risk, judge manually` };
+  }
+  if (isReduce) {
+    if (g.netRoas < GATE.grayLow) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} decisively below breakeven` };
+    if (g.netRoas > GATE.grayHigh) return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} above breakeven — conflicts with a bid cut, judge manually` };
+    return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} inside gray band (${GATE.grayLow}–${GATE.grayHigh}) — too close to call` };
+  }
+  // promote
+  const bar = GATE.scaleClear[g.mode];
+  if (bar == null) return { clear: false, reason: `${g.mode} mode never promotes` };
+  if (g.orders < GATE.promoteMinOrders) return { clear: false, reason: `${g.orders} order(s) < ${GATE.promoteMinOrders} — winner not proven` };
+  if (g.netRoas >= bar) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} clears the ${g.mode} bar (${bar})` };
+  return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} below the ${g.mode} promote bar (${bar})` };
+}
