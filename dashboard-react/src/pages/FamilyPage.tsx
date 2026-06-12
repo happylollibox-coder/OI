@@ -184,7 +184,7 @@ export function FamilyPage({ data, family, onNavExperiment }: {
     let rows = showAllFamilies ? (data.keyword_product_map || []).filter(k => getFamily(k.product_short_name) != null) : (data.keyword_product_map || []).filter(k => getFamily(k.product_short_name) === family);
     if (selectedSqpTerm) rows = rows.filter(k => k.search_term === selectedSqpTerm);
     return rows;
-  }, [data.keyword_product_map, family, selectedSqpTerm, showAllFamilies]);
+  }, [data.keyword_product_map, family, selectedSqpTerm, showAllFamilies, getFamily]);
 
   // Group keywords by search_term, aggregate across experiments
   const kwGrouped = useMemo(() => {

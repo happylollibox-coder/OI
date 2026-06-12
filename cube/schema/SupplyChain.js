@@ -109,6 +109,11 @@ cube(`SupplyChain`, {
       type: `number`,
       description: `AWD sellable units`,
     },
+    mfrStockQty: {
+      sql: `mfr_stock_qty`,
+      type: `number`,
+      description: `MFR Ready units (manufactured, ready to ship from factory)`,
+    },
     nextShipmentDate: {
       sql: `next_shipment_date`,
       type: `string`,

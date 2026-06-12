@@ -53,5 +53,25 @@ cube(`Product`, {
       type: `number`,
       description: `Cubic feet per unit (L×W×H inches / 1728)`,
     },
+    parentAsin: {
+      sql: `parent_asin`,
+      type: `string`,
+      description: `Parent ASIN from item_relationship table`,
+    },
+    manufUpfrontPercentage: {
+      sql: `manuf_upfront_percentage`,
+      type: `number`,
+      description: `Manufacturer upfront payment percentage (0.3 or 0.4)`,
+    },
+    shareCartonInFamily: {
+      sql: `share_carton_in_family`,
+      type: `boolean`,
+      description: `Can share cartons with other products in same family`,
+    },
+    listingPriceAmount: {
+      sql: `listing_price_amount`,
+      type: `number`,
+      description: `Current listing price on Amazon`,
+    },
   },
 });

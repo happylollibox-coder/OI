@@ -44,18 +44,18 @@ perf AS (
 ),
 
 -- Ads metrics: one row per ASIN per day
--- Attribution: most_advertised_asin_impressions with fallback to advertised_asins
--- (SB campaigns often have NULL impressions_asin but DO have advertised_asins)
+-- Attribution: most_advertised_asin_impressions with fallback to advertised_asins,
+-- then ASIN_BY_CAMPAIGN_NAME (covers ~unknown_spend gap rows)
 ads AS (
   SELECT
-    COALESCE(a.most_advertised_asin_impressions, a.advertised_asins) AS asin,
+    COALESCE(a.most_advertised_asin_impressions, a.advertised_asins, a.ASIN_BY_CAMPAIGN_NAME) AS asin,
     a.date,
     SUM(a.Ads_cost) AS ad_cost,
     SUM(a.Ads_clicks) AS clicks,
     SUM(a.Ads_impressions) AS impressions,
     SUM(a.Ads_orders) AS ad_orders
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
-  WHERE COALESCE(a.most_advertised_asin_impressions, a.advertised_asins) IS NOT NULL
+  WHERE COALESCE(a.most_advertised_asin_impressions, a.advertised_asins, a.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2
 )
 

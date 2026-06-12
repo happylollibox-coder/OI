@@ -56,4 +56,13 @@ BEGIN
   -- 14. Coach Hot Signals (3-day rapid alerts)
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_COACH_HOT_SIGNALS` AS SELECT * FROM `onyga-482313.OI.V_COACH_HOT_SIGNALS`;
 
+  -- 15. Campaign Launch Performance (first 3 months)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_CAMPAIGN_LAUNCH_PERF` AS SELECT * FROM `onyga-482313.OI.V_CAMPAIGN_LAUNCH_PERF`;
+
+  -- 16. Campaign Launch Monthly (M1/M2/M3 bucketed metrics)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_CAMPAIGN_LAUNCH_MONTHLY` AS SELECT * FROM `onyga-482313.OI.V_CAMPAIGN_LAUNCH_MONTHLY`;
+
+  -- 17. Product Phrase Negatives (curated per-product negative phrases)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_PRODUCT_PHRASE_NEGATIVES` AS SELECT * FROM `onyga-482313.OI.V_PRODUCT_PHRASE_NEGATIVES`;
+
 END;

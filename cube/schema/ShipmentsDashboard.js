@@ -40,7 +40,7 @@ cube(`ShipmentsDashboard`, {
     ) agg ON s.shipment_id = agg.shipment_id
   `,
 
-  refreshKey: { every: '5 minute' },
+  refreshKey: { every: '1 second' },
 
   measures: {
     totalCostShipped: {

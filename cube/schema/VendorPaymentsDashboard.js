@@ -28,7 +28,7 @@ cube(`VendorPaymentsDashboard`, {
       vp.payment_method
   `,
 
-  refreshKey: { every: '5 minute' },
+  refreshKey: { every: '1 second' },
 
   measures: {
     totalPayments: {

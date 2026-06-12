@@ -113,6 +113,11 @@ cube(`ExperimentTermRecommendations`, {
       type: `string`,
       description: `Human-readable decision tree explanation`,
     },
+    reason: {
+      sql: `reason`,
+      type: `string`,
+      description: `Short reason/explanation for the recommendation`,
+    },
     heroProductName: {
       sql: `hero_product_name`,
       type: `string`,

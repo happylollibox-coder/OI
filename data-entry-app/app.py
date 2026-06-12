@@ -25,7 +25,16 @@ except ImportError:
     pass  # dotenv is optional
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+
+# On Cloud Run / App Engine, secrets must come from the environment — the dev
+# fallbacks are committed to the repo and would let anyone forge sessions/tokens.
+IS_MANAGED_RUNTIME = bool(os.environ.get('K_SERVICE') or os.environ.get('GAE_ENV'))
+
+app.secret_key = os.environ.get('SECRET_KEY') or (
+    None if IS_MANAGED_RUNTIME else 'dev-secret-key-change-in-production'
+)
+if not app.secret_key:
+    raise RuntimeError('SECRET_KEY env var must be set when running on Cloud Run')
 
 @app.after_request
 def add_response_headers(response):
@@ -58,7 +67,11 @@ oauth = OAuth(app)
 # Get OAuth credentials from environment
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '').strip()
-CUBEJS_API_SECRET = os.environ.get('CUBEJS_API_SECRET', 'dev-secret-key-123').strip()
+CUBEJS_API_SECRET = (os.environ.get('CUBEJS_API_SECRET') or (
+    '' if IS_MANAGED_RUNTIME else 'dev-secret-key-123'
+)).strip()
+if not CUBEJS_API_SECRET:
+    raise RuntimeError('CUBEJS_API_SECRET env var must be set when running on Cloud Run')
 
 # Validate that credentials are set (warn but don't fail - allows app to start)
 if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
@@ -5622,6 +5635,151 @@ def api_bulksheet_uploads():
         import traceback
         error_details = traceback.format_exc()
         print(f"Bulksheet upload log error: {error_details}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════
+# PPC CHANGE LOG API — close the loop on applied PPC changes
+# Writes FACT_PPC_CHANGE_LOG; scored by V_PPC_ACTION_OUTCOMES.
+# SOP: architecture/PPC_CLOSE_THE_LOOP.md
+# ═══════════════════════════════════════════════════════════════
+
+PPC_CHANGE_LOG_SCHEMA = [
+    bigquery.SchemaField('change_id', 'STRING', mode='REQUIRED'),
+    bigquery.SchemaField('batch_id', 'STRING', mode='REQUIRED'),
+    bigquery.SchemaField('applied_at', 'TIMESTAMP', mode='REQUIRED'),
+    bigquery.SchemaField('action', 'STRING', mode='REQUIRED'),
+    bigquery.SchemaField('search_term', 'STRING'),
+    bigquery.SchemaField('targeting', 'STRING'),
+    bigquery.SchemaField('keyword_id', 'STRING'),
+    bigquery.SchemaField('match_type', 'STRING'),
+    bigquery.SchemaField('campaign_id', 'STRING'),
+    bigquery.SchemaField('campaign_name', 'STRING'),
+    bigquery.SchemaField('campaign_type', 'STRING'),
+    bigquery.SchemaField('ad_group_id', 'STRING'),
+    bigquery.SchemaField('product', 'STRING'),
+    bigquery.SchemaField('old_bid', 'FLOAT'),
+    bigquery.SchemaField('new_bid', 'FLOAT'),
+    bigquery.SchemaField('old_budget', 'FLOAT'),
+    bigquery.SchemaField('new_budget', 'FLOAT'),
+    bigquery.SchemaField('target_spend_8w', 'FLOAT'),
+    bigquery.SchemaField('target_orders_8w', 'INTEGER'),
+    bigquery.SchemaField('target_net_roas_8w', 'FLOAT'),
+    bigquery.SchemaField('coach_mode', 'STRING'),
+    bigquery.SchemaField('source', 'STRING', mode='REQUIRED'),
+]
+
+
+def _ppc_num(value):
+    """Coerce an incoming JSON value to float, treating ''/None/garbage as NULL."""
+    if value is None or value == '':
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+@app.route('/api/ppc-change-log', methods=['POST'])
+def api_ppc_change_log_insert():
+    """Persist applied PPC changes (DO page 'Uploaded to Amazon').
+
+    Body JSON: array of items mirroring DoQueueItem fields:
+      { "action": "REDUCE_BID", "search_term": "...", "targeting": "...",
+        "keyword_id": "...", "match_type": "BROAD", "campaign_id": "...",
+        "campaign_name": "...", "campaign_type": "...", "ad_group_id": "...",
+        "product": "...", "old_bid": 0.8, "new_bid": 0.56,
+        "old_budget": null, "new_budget": null,
+        "target_spend_8w": 120.5, "target_orders_8w": 3, "target_net_roas_8w": 0.4,
+        "coach_mode": "GUARDIAN", "source": "COACH" }
+    """
+    try:
+        data = request.get_json()
+        if not data or not isinstance(data, list):
+            return jsonify({'error': 'Expected JSON array of items'}), 400
+
+        batch_id = f'batch_{datetime.now().strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:6]}'
+        applied_at = datetime.utcnow().isoformat()
+
+        rows = []
+        for item in data:
+            action = (item.get('action') or '').strip()
+            if not action:
+                continue  # an action-less row can never be scored
+            orders_8w = item.get('target_orders_8w')
+            rows.append({
+                'change_id': f'chg_{uuid.uuid4().hex[:12]}',
+                'batch_id': batch_id,
+                # Offline-retried items carry their original timestamp
+                'applied_at': item.get('applied_at') or applied_at,
+                'action': action,
+                'search_term': item.get('search_term') or None,
+                'targeting': item.get('targeting') or None,
+                'keyword_id': item.get('keyword_id') or None,
+                'match_type': item.get('match_type') or None,
+                'campaign_id': item.get('campaign_id') or None,
+                'campaign_name': item.get('campaign_name') or None,
+                'campaign_type': item.get('campaign_type') or None,
+                'ad_group_id': item.get('ad_group_id') or None,
+                'product': item.get('product') or None,
+                'old_bid': _ppc_num(item.get('old_bid')),
+                'new_bid': _ppc_num(item.get('new_bid')),
+                'old_budget': _ppc_num(item.get('old_budget')),
+                'new_budget': _ppc_num(item.get('new_budget')),
+                'target_spend_8w': _ppc_num(item.get('target_spend_8w')),
+                'target_orders_8w': int(orders_8w) if orders_8w not in (None, '') else None,
+                'target_net_roas_8w': _ppc_num(item.get('target_net_roas_8w')),
+                'coach_mode': item.get('coach_mode') or None,
+                'source': item.get('source') if item.get('source') in ('COACH', 'MANUAL') else 'COACH',
+            })
+
+        if not rows:
+            return jsonify({'error': 'No valid items (every item needs an action)'}), 400
+
+        table_ref = f'{PROJECT_ID}.{DATASET_ID}.FACT_PPC_CHANGE_LOG'
+        job_config = bigquery.LoadJobConfig(
+            schema=PPC_CHANGE_LOG_SCHEMA,
+            write_disposition='WRITE_APPEND',
+        )
+        job = client.load_table_from_json(rows, table_ref, job_config=job_config)
+        job.result()
+
+        if job.errors:
+            return jsonify({'error': str(job.errors)}), 500
+
+        clear_data_cache()
+        return jsonify({
+            'success': True,
+            'batch_id': batch_id,
+            'items_logged': len(rows),
+        })
+    except Exception as e:
+        import traceback
+        print(f"PPC change log error: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ppc-change-log', methods=['GET'])
+def api_ppc_change_log_list():
+    """Recent logged PPC changes — verification/debug."""
+    try:
+        limit = min(int(request.args.get('limit', 100)), 1000)
+        query = f"""
+            SELECT *
+            FROM `{PROJECT_ID}.{DATASET_ID}.FACT_PPC_CHANGE_LOG`
+            WHERE DATE(applied_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+            ORDER BY applied_at DESC
+            LIMIT @limit
+        """
+        results = client.query(query, job_config=bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("limit", "INT64", limit)]
+        )).result()
+        rows = [dict(row) for row in results]
+        for r in rows:
+            if r.get('applied_at'):
+                r['applied_at'] = r['applied_at'].isoformat()
+        return jsonify(rows)
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 

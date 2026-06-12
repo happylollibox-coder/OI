@@ -50,7 +50,8 @@ SELECT
   -- Enrich advertised_asin: SP uses source value, SB uses enriched value from search terms + ad report
   COALESCE(
     sb_asin.Advertised_sell_asin,  -- SB: Use enriched value (replaces 'Unknown')
-    t.advertised_asin  -- SP: Use source advertised_asin (already exists in source data)
+    t.advertised_asin,  -- SP: Use source advertised_asin (already exists in source data)
+    'Unknown'  -- Fallback: rare cases where Amazon API returns NULL (e.g. self-purchase zero-measure rows)
   ) AS advertised_asin,
   t.advertised_sku,
   t.orders,

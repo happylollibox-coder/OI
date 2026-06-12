@@ -1703,7 +1703,9 @@ function AdsTrendChart({ rawRows, famMatch, expCampaignIds, periodTrend, holiday
       // Filter out zero-spend days to avoid empty bars
       sorted = sorted.filter(([, d]) => d.spend > 0 || d.orders > 0);
     } else {
-      sorted = sorted.slice(-sliceCount);
+      const keys = sorted.map(([k]) => k);
+      const keepKeys = new Set(getPeriodsToInclude(filters.specificPeriod, periodMode as any, keys, sliceCount));
+      sorted = sorted.filter(([k]) => keepKeys.has(k));
     }
 
     return sorted
@@ -1718,7 +1720,7 @@ function AdsTrendChart({ rawRows, famMatch, expCampaignIds, periodTrend, holiday
         conv_rate: d.clicks > 0 ? (d.orders * 100) / d.clicks : 0,
         ctr: d.impressions > 0 ? (d.clicks * 100) / d.impressions : 0,
       }));
-  }, [rawRows, dailyRows, famMatch, expCampaignIds, periodTrend, filters.keyword, periodMode, useDaily]);
+  }, [rawRows, dailyRows, famMatch, expCampaignIds, periodTrend, filters.keyword, filters.specificPeriod, periodMode, useDaily]);
 
   const activeMeasures = ADS_TREND_MEASURES.filter(m => active.has(m.key));
   const trendTitle = useDaily ? 'Daily Ads Trend' : periodMode === 'month' ? 'Monthly Ads Trend' : periodMode === 'quarter' ? 'Quarterly Ads Trend' : periodMode === 'year' ? 'Yearly Ads Trend' : 'Weekly Ads Trend';

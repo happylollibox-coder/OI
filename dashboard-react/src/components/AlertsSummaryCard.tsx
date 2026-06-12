@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Info } from 'lucide-react';
 import type { AlertRow } from '../types';
 import { useFilters } from '../hooks/useFilters';
-import { famFromType } from '../utils';
+import { experimentMatchesFamily } from '../utils';
+import type { FamilyName } from '../types';
 import { AlertCard } from './AlertCard';
 import { RemediationModal } from './Actions/RemediationModal';
 
@@ -34,8 +35,9 @@ export function AlertsSummaryCard() {
         return a.product_asin === filters.product || a.product_name === filters.product;
       }
       if (filters.family) {
-        const aFam = a.family_name || famFromType(a.product_name) || famFromType(a.product_asin);
-        return aFam === filters.family;
+        // Match product_name against family using substring matching (e.g. "Fresh in Beige" → "Fresh")
+        const nameToMatch = a.product_name || a.product_asin || '';
+        return experimentMatchesFamily(nameToMatch, filters.family as FamilyName);
       }
       return true;
     });

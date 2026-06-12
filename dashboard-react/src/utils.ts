@@ -245,6 +245,8 @@ export function experimentMatchesFamily(nameOrId: string | null | undefined, fam
   if (family === 'LolliME') return n.includes('lollime') || n.includes('me') || n.includes('mint');
   if (family === 'Bottle') return n.includes('bottle') || n.includes('truth');
   if (family === 'Fresh') return n.includes('fresh');
+  if (family === 'Bunny') return n.includes('bunny');
+  if (family === 'LolliBall') return n.includes('lolliball') || n.includes('ball');
   return false;
 }
 

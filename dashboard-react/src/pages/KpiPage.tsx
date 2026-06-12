@@ -8,7 +8,7 @@
  * Fully connected to header filters (family, period, seasonality, product).
  */
 import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from 'react';
-import type { DashboardData, TrendRow, TrendRowByAsin, ActionRow, SqpWeeklyRow, CoachCampaignRow, ProductRow, SupplyChainRow } from '../types';
+import type { DashboardData, TrendRow, TrendRowByAsin, ActionRow, SqpWeeklyRow, CoachCampaignRow, ProductRow, SupplyChainRow, DailyTrendRow } from '../types';
 import { SparklineCanvas } from '../components/SparklineCanvas';
 import { PriceScenarioCard } from '../components/PriceScenarioCard';
 import { AlertsSummaryCard } from '../components/AlertsSummaryCard';
@@ -168,7 +168,7 @@ function saveSpecials(ids: SpecialCardId[]) {
 }
 
 /* ── Measure card types ── */
-type MeasureCardId = 'pnl_total' | 'pnl_per_unit' | 'daily_avg' | 'plan' | 'ppc';
+type MeasureCardId = 'pnl_total' | 'pnl_per_unit' | 'daily_avg' | 'plan' | 'plan_trend' | 'ppc';
 
 interface MeasureCardDef {
   id: MeasureCardId;
@@ -182,11 +182,12 @@ const MEASURE_CARDS: MeasureCardDef[] = [
   { id: 'pnl_per_unit', label: 'P&L per Unit',   color: '#a78bfa', description: 'Per-unit cost breakdown' },
   { id: 'daily_avg',    label: 'Daily Average',   color: '#60a5fa', description: 'Daily averages for period' },
   { id: 'plan',         label: 'Plan',            color: '#34d399', description: 'Stock & forecast overview' },
+  { id: 'plan_trend',   label: 'Plan Trend',      color: '#06b6d4', description: 'Actual vs forecast demand chart' },
   { id: 'ppc',          label: 'PPC',             color: '#ef4444', description: 'Ads performance metrics' },
 ];
 
 const MEASURE_STORAGE_KEY = 'oi_kpi_measure_cards';
-const DEFAULT_MEASURES: MeasureCardId[] = ['pnl_total', 'pnl_per_unit', 'daily_avg', 'plan', 'ppc'];
+const DEFAULT_MEASURES: MeasureCardId[] = ['pnl_total', 'pnl_per_unit', 'daily_avg', 'plan', 'plan_trend', 'ppc'];
 
 function loadMeasures(): MeasureCardId[] {
   try {
@@ -2925,13 +2926,14 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
     else if (periodMode === 'year') days = 365;
 
     // Stock — aggregate all supply chain fields (same calc as HomePage)
-    let sFba = 0, sAwd = 0, sTransit = 0, sAvail = 0, sVel = 0, sSellable = 0;
+    let sFba = 0, sAwd = 0, sTransit = 0, sMfr = 0, sAvail = 0, sVel = 0, sSellable = 0;
     let sAwdTargetMin = 0, sAwdTargetMax = 0, sAwdApprovedMin = 0, sAwdApprovedMax = 0;
     let sLast30d = 0, sLast30dPlanned = 0, sNext30d = 0, sNext31_60d = 0, sNext61_90d = 0;
     supply.forEach(s => {
       sFba += s.fba_stock_qty || 0;
       sAwd += s.awd_stock_qty || 0;
       sTransit += s.in_transit_qty || 0;
+      sMfr += s.mfr_stock_qty || 0;
       sAvail += s.total_available_qty || 0;
       sSellable += s.sellable_qty || 0;
       sVel += s.daily_velocity || 0;
@@ -3010,6 +3012,7 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
         { l: 'FBA', v: fmt(sFba, 0), c: 'var(--color-text)' },
         { l: 'AWD', v: fmt(sAwd, 0), c: 'var(--color-text)' },
         { l: 'In Transit', v: fmt(sTransit, 0), c: 'var(--color-text)' },
+        { l: 'MFR Stock', v: fmt(sMfr, 0), c: 'var(--color-text)' },
         { l: 'Total Available', v: fmt(sAvail, 0), c: 'var(--color-text)' },
         { l: '30d Sales vs Expected', v: (() => {
           const pct = sLast30dPlanned > 0 ? Math.round((sLast30d / sLast30dPlanned) * 100) : 0;
@@ -3150,10 +3153,11 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
     pnl_per_unit: { t: 'P&L per Unit',   col: '#a78bfa', items: measures.pnl },
     daily_avg:    { t: 'Daily Average',   col: '#60a5fa', items: measures.daily },
     plan:         { t: 'Plan',            col: '#34d399', items: measures.stock, forecast: measures.forecast },
+    plan_trend:   { t: 'Plan Trend',      col: '#06b6d4', items: [] },
     ppc:          { t: 'PPC',             col: '#ef4444', items: measures.ppc },
   };
 
-  const GS = measureIds.map(id => ALL_MEASURE_MAP[id]).filter(Boolean);
+  const GS = measureIds.map(id => ({ id, ...ALL_MEASURE_MAP[id] })).filter(g => g.items !== undefined);
 
   if (GS.length === 0) return null;
 
@@ -3161,7 +3165,9 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
     <div className="space-y-3 mt-2">
       <h2 className="text-[16px] font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>Measures</h2>
       <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-        {GS.map(g => (
+        {GS.map(g => g.id === 'plan_trend' ? (
+          <PlanTrendCard key={g.t} data={data} family={family} product={product} />
+        ) : (
           <div key={g.t} className="rounded-xl overflow-hidden" style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)' }}>
             <div className="px-4 py-2" style={{ borderBottom: '1px solid var(--color-border)' }}>
               <span className="font-mono text-[10px] uppercase tracking-[0.12em] font-bold" style={{ color: g.col }}>{g.t}</span>
@@ -3206,7 +3212,6 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
               return (
                 <div className="px-4 py-3" style={{ borderTop: '1px solid var(--color-border)' }}>
                   <div className="text-[10px] font-mono uppercase tracking-wider font-bold mb-2" style={{ color: 'var(--color-muted)' }}>Planned Forecast</div>
-                  {/* Timeline bar */}
                   <div className="relative flex items-center h-[28px] rounded-md overflow-hidden" style={{ background: 'var(--color-inset)' }}>
                     {segments.map((seg, i) => {
                       const pct = (seg.units / total) * 100;
@@ -3228,7 +3233,6 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
                       );
                     })}
                   </div>
-                  {/* Labels below bar */}
                   <div className="flex mt-1">
                     {segments.map((seg, i) => {
                       const pct = (seg.units / total) * 100;
@@ -3245,6 +3249,270 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
             })()}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── Plan Trend Card ── */
+type FcMap = Record<string, number>; // YYYY-MM → forecast units
+
+function PlanTrendCard({ data, family, product }: { data: DashboardData; family: string | null; product: string | null }) {
+  const [tab, setTab] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [fcMap, setFcMap] = useState<FcMap>({});
+
+  // Load forecast demand from Cube (monthly granularity per product)
+  useEffect(() => {
+    (async () => {
+      try {
+        const { cubeLoad } = await import('../hooks/useCubeData');
+        const rows = await cubeLoad({
+          dimensions: ['ForecastDemand.product', 'ForecastDemand.family', 'ForecastDemand.forecastYear', 'ForecastDemand.forecastMonth'],
+          measures: ['ForecastDemand.forecastUnits'],
+        }) as Record<string, unknown>[];
+        const prods = data.products || [];
+        const map: FcMap = {};
+        for (const r of rows) {
+          const prod = String(r['ForecastDemand.product'] ?? '');
+          const fam = String(r['ForecastDemand.family'] ?? '');
+          const yr = Number(r['ForecastDemand.forecastYear'] ?? 0);
+          const mo = Number(r['ForecastDemand.forecastMonth'] ?? 0);
+          const units = Number(r['ForecastDemand.forecastUnits'] ?? 0);
+          if (!yr || !mo) continue;
+          // Apply family/product filter
+          if (product) {
+            const p = prods.find(pp => pp.asin === product);
+            if (!p || (p.product_short_name !== prod && famFromType(p.product_type) !== fam)) continue;
+            // For product filter, only include matching product rows
+            if (p.product_short_name !== prod) continue;
+          } else if (family) {
+            if (fam !== family) continue;
+          }
+          const key = `${yr}-${String(mo).padStart(2, '0')}`;
+          map[key] = (map[key] || 0) + units;
+        }
+        setFcMap(map);
+      } catch (e) { console.warn('[PlanTrendCard] forecast load failed', e); }
+    })();
+  }, [data.products, family, product]);
+
+  // Helper: get forecast daily rate for a date from monthly forecast map
+  const getFcDaily = useCallback((dateStr: string): number => {
+    const ym = dateStr.slice(0, 7); // YYYY-MM
+    const fcUnits = fcMap[ym];
+    if (!fcUnits) return 0;
+    const [y, m] = ym.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    return fcUnits / daysInMonth;
+  }, [fcMap]);
+
+  const trendData = useMemo(() => {
+    const perfMax = data._meta?.data_freshness?.performance_max_date || '';
+    if (!perfMax) return [];
+
+    const toISO = (d: Date) => d.toISOString().slice(0, 10);
+
+    if (tab === 'daily') {
+      let daily = data.daily_trends || [];
+      if (product) {
+        const prod = (data.products || []).find(p => p.asin === product);
+        if (prod) daily = daily.filter(d => d.product_type === prod.product_type);
+        else daily = [];
+      } else if (family) {
+        daily = daily.filter(d => famFromType(d.product_type) === family);
+      }
+
+      const byDate: Record<string, number> = {};
+      for (const r of daily) {
+        if (!r.date) continue;
+        byDate[r.date] = (byDate[r.date] || 0) + (r.orders || 0);
+      }
+
+      const allDates = Object.keys(byDate).filter(d => d <= perfMax).sort();
+      const last7 = allDates.slice(-7);
+
+      const cutoff = new Date(perfMax + 'T00:00:00');
+      const forecastDays: { label: string; value: number; planned: number; isForecast: boolean }[] = [];
+      for (let i = 1; i <= 7; i++) {
+        const d = new Date(cutoff);
+        d.setDate(d.getDate() + i);
+        const ds = toISO(d);
+        const fc = Math.round(getFcDaily(ds));
+        forecastDays.push({ label: ds.slice(5), value: fc, planned: 0, isForecast: true });
+      }
+
+      const actualDays = last7.map(d => ({ label: d.slice(5), value: byDate[d] || 0, planned: Math.round(getFcDaily(d)), isForecast: false }));
+      return [...actualDays, ...forecastDays];
+    }
+
+    if (tab === 'weekly') {
+      let weekly: TrendRow[] = product
+        ? (data.weekly_trends_by_asin || []).filter((r: TrendRow & { asin?: string }) => r.asin === product)
+        : (data.weekly_trends || []);
+      if (family) weekly = weekly.filter(r => famFromType(r.product_type) === family);
+
+      const byWeek: Record<string, number> = {};
+      for (const r of weekly) {
+        const ws = r.week_start || '';
+        if (!ws) continue;
+        byWeek[ws] = (byWeek[ws] || 0) + (r.orders || 0);
+      }
+
+      const allWeeks = Object.keys(byWeek).filter(w => w <= perfMax).sort();
+      const last4 = allWeeks.slice(-4);
+
+      // Compute weekly forecast from monthly map: sum daily rate for 7 days starting at week_start
+      const weekFc = (ws: string): number => {
+        let total = 0;
+        const start = new Date(ws + 'T00:00:00');
+        for (let d = 0; d < 7; d++) {
+          const dt = new Date(start);
+          dt.setDate(dt.getDate() + d);
+          total += getFcDaily(toISO(dt));
+        }
+        return Math.round(total);
+      };
+
+      const lastWeekDate = last4.length > 0 ? new Date(last4[last4.length - 1] + 'T00:00:00') : new Date(perfMax + 'T00:00:00');
+      const forecastWeeks: { label: string; value: number; planned: number; isForecast: boolean }[] = [];
+      for (let i = 1; i <= 4; i++) {
+        const d = new Date(lastWeekDate);
+        d.setDate(d.getDate() + i * 7);
+        const ds = toISO(d);
+        const fc = weekFc(ds);
+        forecastWeeks.push({ label: ds.slice(5), value: fc, planned: 0, isForecast: true });
+      }
+
+      const actualWeeks = last4.map(w => ({ label: w.slice(5), value: byWeek[w] || 0, planned: weekFc(w), isForecast: false }));
+      return [...actualWeeks, ...forecastWeeks];
+    }
+
+    // Monthly
+    let monthly: TrendRow[] = product
+      ? (data.monthly_trends_by_asin || []).filter((r: TrendRow & { asin?: string }) => r.asin === product)
+      : (data.monthly_trends || []);
+    if (family) monthly = monthly.filter(r => famFromType(r.product_type) === family);
+
+    const byMonth: Record<string, number> = {};
+    for (const r of monthly) {
+      const ms = (r.month_start || '').slice(0, 7);
+      if (!ms) continue;
+      byMonth[ms] = (byMonth[ms] || 0) + (r.orders || 0);
+    }
+
+    const perfMonth = perfMax.slice(0, 7);
+    const allMonths = Object.keys(byMonth).filter(m => m <= perfMonth).sort();
+    const last4m = allMonths.slice(-4);
+
+    const MNAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const lastMonth = last4m.length > 0 ? last4m[last4m.length - 1] : perfMonth;
+    const [lastY, lastM] = lastMonth.split('-').map(Number);
+    const forecastMonths: { label: string; value: number; planned: number; isForecast: boolean }[] = [];
+    for (let i = 1; i <= 4; i++) {
+      const m = ((lastM - 1 + i) % 12);
+      const y = lastY + Math.floor((lastM - 1 + i) / 12);
+      const key = `${y}-${String(m + 1).padStart(2, '0')}`;
+      forecastMonths.push({ label: MNAMES[m], value: fcMap[key] || 0, planned: 0, isForecast: true });
+    }
+
+    const actualMonths = last4m.map(m => ({
+      label: MNAMES[parseInt(m.slice(5), 10) - 1],
+      value: byMonth[m] || 0,
+      planned: fcMap[m] || 0,
+      isForecast: false,
+    }));
+    return [...actualMonths, ...forecastMonths];
+  }, [data, family, product, tab, fcMap, getFcDaily]);
+
+  const maxVal = Math.max(...trendData.map(d => Math.max(d.value, d.planned)), 1);
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)' }}>
+      <div className="px-4 py-2 flex items-center justify-between" style={{ borderBottom: '1px solid var(--color-border)' }}>
+        <span className="font-mono text-[10px] uppercase tracking-[0.12em] font-bold" style={{ color: '#06b6d4' }}>Plan Trend</span>
+        <div className="flex gap-0.5">
+          {(['daily', 'weekly', 'monthly'] as const).map(t => (
+            <button key={t} onClick={() => setTab(t)}
+              className="text-[9px] px-2 py-0.5 rounded-full font-medium transition-colors"
+              style={{
+                background: tab === t ? 'rgba(6,182,212,0.15)' : 'transparent',
+                color: tab === t ? '#06b6d4' : 'var(--color-faint)',
+                border: tab === t ? '1px solid rgba(6,182,212,0.3)' : '1px solid transparent',
+              }}
+            >{t.charAt(0).toUpperCase() + t.slice(1)}</button>
+          ))}
+        </div>
+      </div>
+      <div className="px-3 py-3">
+        {trendData.length === 0 ? (
+          <div className="text-center py-4 text-[11px]" style={{ color: 'var(--color-faint)' }}>No data available</div>
+        ) : (
+          <>
+            {/* Legend */}
+            <div className="flex items-center gap-3 mb-2">
+              <span className="flex items-center gap-1 text-[9px]" style={{ color: 'var(--color-muted)' }}>
+                <span className="w-2.5 h-2.5 rounded-sm" style={{ background: '#06b6d4' }} /> Actual
+              </span>
+              <span className="flex items-center gap-1 text-[9px]" style={{ color: 'var(--color-muted)' }}>
+                <span className="w-2.5 h-2.5 rounded-sm" style={{ background: '#06b6d4', opacity: 0.3 }} /> Forecast
+              </span>
+              <span className="flex items-center gap-1 text-[9px]" style={{ color: 'var(--color-muted)' }}>
+                <span className="w-2.5 h-[2px]" style={{ background: '#f59e0b' }} /> Plan
+              </span>
+            </div>
+            {/* Bar chart */}
+            <div className="flex items-end gap-[3px]" style={{ height: '90px' }}>
+              {trendData.map((d, i) => {
+                const h = maxVal > 0 ? (d.value / maxVal) * 100 : 0;
+                const ph = d.planned > 0 && maxVal > 0 ? (d.planned / maxVal) * 100 : 0;
+                const containerH = Math.max(h, ph, 2);
+                return (
+                  <div key={i} className="flex-1 flex flex-col items-center justify-end h-full min-w-0 relative">
+                    <span className="text-[8px] font-mono mb-0.5 tabular-nums" style={{ color: d.isForecast ? 'rgba(6,182,212,0.5)' : '#06b6d4' }}>
+                      {d.value > 999 ? `${(d.value / 1000).toFixed(1)}k` : d.value}
+                    </span>
+                    <div className="w-full relative" style={{ height: `${containerH}%` }}>
+                      {/* Actual / forecast bar */}
+                      <div
+                        className="absolute bottom-0 left-0 right-0 rounded-t-sm transition-all"
+                        style={{
+                          height: `${h > 0 ? (h / containerH) * 100 : 2}%`,
+                          background: d.isForecast ? 'rgba(6,182,212,0.2)' : '#06b6d4',
+                          border: d.isForecast ? '1px dashed rgba(6,182,212,0.4)' : 'none',
+                          borderBottom: 'none',
+                        }}
+                      />
+                      {/* Plan line marker — only on actual bars */}
+                      {!d.isForecast && ph > 0 && (
+                        <div
+                          className="absolute left-0 right-0"
+                          style={{
+                            bottom: `${(ph / containerH) * 100}%`,
+                            height: '2px',
+                            background: '#f59e0b',
+                            borderRadius: '1px',
+                            boxShadow: '0 0 3px rgba(245,158,11,0.4)',
+                          }}
+                          title={`Plan: ${d.planned}`}
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Labels */}
+            <div className="flex gap-[3px] mt-1">
+              {trendData.map((d, i) => (
+                <div key={i} className="flex-1 text-center min-w-0">
+                  <span className="text-[7px] font-mono block truncate" style={{ color: d.isForecast ? 'var(--color-faint)' : 'var(--color-muted)' }}>
+                    {d.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

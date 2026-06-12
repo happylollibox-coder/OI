@@ -46,7 +46,7 @@ const DATA_CHECKS: {
   { label: 'Upcoming events',               dataKey: 'upcoming',              cubeSource: 'DimTime',            minRows: 0, critical: false, loaderName: 'upcoming' },
   { label: 'Peak data',                     dataKey: 'peak',                  cubeSource: 'DimTime',            minRows: 0, critical: false, loaderName: 'peak' },
   { label: 'Hero ASINs',                    dataKey: 'hero_asins',            cubeSource: 'V_PARENT_HERO_ASIN', minRows: 1, critical: false, loaderName: 'heroAsins' },
-  { label: 'Keyword-product map',           dataKey: 'keyword_product_map',   cubeSource: 'AdsKeywordProduct',  minRows: 1, critical: true,  loaderName: 'keywordProductMap' },
+  { label: 'Keyword-product map',           dataKey: 'keyword_product_map',   cubeSource: 'ExperimentTermRecommendations',  minRows: 1, critical: true,  loaderName: 'keywordProductMap' },
   { label: 'Learnings',                     dataKey: 'learnings',             cubeSource: 'AdsLearning',        minRows: 0, critical: false, loaderName: 'learnings' },
   { label: 'Budget health',                 dataKey: 'budget_health',         cubeSource: 'V_EXPERIMENT_BUDGET_HEALTH', minRows: 0, critical: false, loaderName: 'budgetHealth' },
   { label: 'Drivers',                       dataKey: 'drivers',               cubeSource: 'V_WEEKLY_DRIVERS',   minRows: 1, critical: true,  loaderName: 'drivers' },

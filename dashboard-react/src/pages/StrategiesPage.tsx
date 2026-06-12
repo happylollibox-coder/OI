@@ -11,11 +11,14 @@ import { FilterInfoIcon } from '../components/FilterInfoIcon';
 import { filterBySeasonality } from '../seasonality';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { CHART_GRID, CHART_AXIS_TICK_LG, CHART_TOOLTIP_STYLE } from '../chartTheme';
+import { type SeasonPhase, PHASE_META, ALL_PHASES, classifyPhase, filterByPhase } from '../phaseClassifier';
 
-import { ChevronRight, ChevronDown, Target, BookOpen, TrendingUp, Lightbulb, CheckCircle2, GraduationCap, Circle, CircleDot } from 'lucide-react';
+import { ChevronRight, ChevronDown, Target, BookOpen, TrendingUp, Lightbulb, CheckCircle2, GraduationCap, Circle, CircleDot, Sun, Flame, Zap } from 'lucide-react';
 import { STRATEGY_META, DEFAULT_STRATEGY, CHART_MEASURE_META, ALL_CHART_MEASURES, DEFAULT_KPI_COLUMNS, type ChartMeasureId, type QuestionStatus, type DataCheck, type KpiColumnId } from '../strategies';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
 import { usePageSummary } from '../components/PageSummaryBar';
+
+const PHASE_ICONS: Record<SeasonPhase, typeof Sun> = { offseason: Sun, boost: Flame, peak: Zap };
 
 const STRATEGIES_EXP_COLUMNS: MeasureDef[] = [
   { id: 'experiment_name', label: 'Experiment', group: 'Info' },
@@ -106,9 +109,11 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
   const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
   const [expandedExps, setExpandedExps] = useState<Set<string>>(new Set());
+  const [activePhase, setActivePhase] = useState<SeasonPhase | null>(null);
   const expSort = useSort('total_spend');
   const [stratCols, setStratCols] = useMeasureSelection('strategies_experiments', STRATEGIES_EXP_COLUMNS);
   const visibleStratCols = useMemo(() => STRATEGIES_EXP_COLUMNS.filter(c => stratCols.has(c.id)), [stratCols]);
+  const holidays = data.holidays || [];
   const templates = useMemo(() => {
     let t = data.experiment_templates || [];
     if (filters.family) {
@@ -159,6 +164,8 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
     const sp = filters.specificPeriod;
     let rows = data.experiment_weekly || [];
     rows = filterBySeasonality(rows, 'week_start', filters.seasonality, pk);
+    // Apply phase filter
+    rows = filterByPhase(rows, 'week_start', activePhase, holidays);
 
     const byExp: Record<string, { spend: number; sales: number; orders: number; conv_rate_sum: number; conv_rate_cnt: number; net_roas_sum: number; net_roas_cnt: number }> = {};
 
@@ -196,7 +203,7 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
       };
     });
     return out;
-  }, [data.experiment_weekly, pk, filters.periodMode, filters.specificPeriod, filters.seasonality]);
+  }, [data.experiment_weekly, pk, filters.periodMode, filters.specificPeriod, filters.seasonality, activePhase, holidays]);
 
   const periodLabel = useMemo(() => {
     const m = filters.periodMode;
@@ -222,6 +229,41 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
       return { ...meta, id, experiments: exps, active, completed, totalSpend, totalOrders, totalSales, avgRoas, avgConv };
     }).sort((a, b) => b.totalSpend - a.totalSpend);
   }, [templates, periodFilteredByExp]);
+
+  // Pre-compute per-phase aggregates for each strategy (used in strategy cards)
+  const phaseMetricsByStrategy = useMemo(() => {
+    const result: Record<string, Record<SeasonPhase, { spend: number; sales: number; orders: number; roas: number; weeks: number }>> = {};
+    const allRows = filterBySeasonality(data.experiment_weekly || [], 'week_start', filters.seasonality, pk);
+    const templatesByStrat: Record<string, Set<string>> = {};
+    templates.forEach(t => {
+      if (!templatesByStrat[t.strategy_id]) templatesByStrat[t.strategy_id] = new Set();
+      templatesByStrat[t.strategy_id].add(t.experiment_id);
+    });
+    Object.entries(templatesByStrat).forEach(([stratId, expIds]) => {
+      const init = () => ({ spend: 0, sales: 0, orders: 0, roas: 0, weeks: 0 });
+      const phases: Record<SeasonPhase, { spend: number; sales: number; orders: number; roas: number; weeks: number }> = { offseason: init(), boost: init(), peak: init() };
+      const weeksSeen: Record<SeasonPhase, Set<string>> = { offseason: new Set(), boost: new Set(), peak: new Set() };
+      allRows.filter(r => expIds.has(r.experiment_id)).forEach(r => {
+        const phase = classifyPhase(r.week_start || '', holidays);
+        phases[phase].spend += r.ads_spend || 0;
+        phases[phase].sales += r.sales || 0;
+        phases[phase].orders += r.total_orders || 0;
+        weeksSeen[phase].add(r.week_start || '');
+      });
+      ALL_PHASES.forEach(p => {
+        phases[p].weeks = weeksSeen[p].size;
+        phases[p].roas = phases[p].spend > 0 ? (phases[p].sales - phases[p].spend) / phases[p].spend : 0;
+      });
+      result[stratId] = phases;
+    });
+    return result;
+  }, [data.experiment_weekly, templates, pk, filters.seasonality, holidays]);
+
+  // Phase summary for the selected strategy (KPI row)
+  const selectedPhaseMetrics = useMemo(() => {
+    if (!selectedStrategy) return null;
+    return phaseMetricsByStrategy[selectedStrategy] || null;
+  }, [selectedStrategy, phaseMetricsByStrategy]);
 
   const toggleExp = (id: string) => setExpandedExps(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -253,16 +295,18 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
 
   // Trend by period — aggregated across strategy experiments, uses periodTrend
   const strategyTrendData = useMemo(() => {
-    if (!selected) return [] as { label: string; spend: number; sales: number; orders: number; conv_rate: number; net_roas: number; organic_pct: number }[];
+    if (!selected) return [] as { label: string; spend: number; sales: number; orders: number; conv_rate: number; net_roas: number; organic_pct: number; cpc: number }[];
     const expIds = new Set(selected.experiments.map(e => e.experiment_id));
     let rows = (data.experiment_weekly || []).filter(r => expIds.has(r.experiment_id));
     rows = filterBySeasonality(rows, 'week_start', filters.seasonality, pk);
+    // Apply phase filter to trend
+    rows = filterByPhase(rows, 'week_start', activePhase, holidays);
     const periodMode: PeriodMode = filters.periodMode;
     const pt = filters.periodTrend;
     const sp = filters.specificPeriod;
 
     const agg = () => ({
-      spend: 0, sales: 0, orders: 0,
+      spend: 0, sales: 0, orders: 0, clicks: 0,
       conv_rate_sum: 0, conv_rate_cnt: 0,
       net_roas_sum: 0, net_roas_cnt: 0,
       organic_pct_sum: 0, organic_pct_cnt: 0,
@@ -280,6 +324,10 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
         d.spend += r.ads_spend || 0;
         d.sales += r.sales || 0;
         d.orders += r.total_orders || 0;
+        // Derive clicks from conv_rate: clicks = ads_orders * 100 / conv_rate
+        if (r.conv_rate && r.conv_rate > 0 && r.ads_orders) {
+          d.clicks += (r.ads_orders * 100) / r.conv_rate;
+        }
         if (r.conv_rate != null) { d.conv_rate_sum += r.conv_rate; d.conv_rate_cnt++; }
         if (r.net_roas != null) { d.net_roas_sum += r.net_roas; d.net_roas_cnt++; }
         if (r.organic_pct != null) { d.organic_pct_sum += r.organic_pct; d.organic_pct_cnt++; }
@@ -296,6 +344,7 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
           conv_rate: d.conv_rate_cnt ? d.conv_rate_sum / d.conv_rate_cnt : 0,
           net_roas: d.net_roas_cnt ? d.net_roas_sum / d.net_roas_cnt : roas,
           organic_pct: d.organic_pct_cnt ? d.organic_pct_sum / d.organic_pct_cnt : 0,
+          cpc: d.clicks > 0 ? d.spend / d.clicks : 0,
         };
       });
     }
@@ -307,6 +356,9 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
       d.spend += r.ads_spend || 0;
       d.sales += r.sales || 0;
       d.orders += r.total_orders || 0;
+      if (r.conv_rate && r.conv_rate > 0 && r.ads_orders) {
+        d.clicks += (r.ads_orders * 100) / r.conv_rate;
+      }
       if (r.conv_rate != null) { d.conv_rate_sum += r.conv_rate; d.conv_rate_cnt++; }
       if (r.net_roas != null) { d.net_roas_sum += r.net_roas; d.net_roas_cnt++; }
       if (r.organic_pct != null) { d.organic_pct_sum += r.organic_pct; d.organic_pct_cnt++; }
@@ -324,9 +376,10 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
         conv_rate: d.conv_rate_cnt ? d.conv_rate_sum / d.conv_rate_cnt : 0,
         net_roas: d.net_roas_cnt ? d.net_roas_sum / d.net_roas_cnt : roas,
         organic_pct: d.organic_pct_cnt ? d.organic_pct_sum / d.organic_pct_cnt : 0,
+        cpc: d.clicks > 0 ? d.spend / d.clicks : 0,
       };
     });
-  }, [selected, data.experiment_weekly, data.peak, filters.periodMode, filters.periodTrend, filters.specificPeriod, filters.seasonality]);
+  }, [selected, data.experiment_weekly, data.peak, filters.periodMode, filters.periodTrend, filters.specificPeriod, filters.seasonality, activePhase, holidays]);
 
   const activeTrendMeasures = useMemo(() => [...selectedTrendMeasures], [selectedTrendMeasures]);
 
@@ -402,6 +455,24 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
                 <div className={`font-mono font-bold text-sm ${s.avgRoas >= 1 ? 'text-emerald-400' : s.avgRoas >= 0 ? 'text-amber-400' : 'text-red-400'}`}>{fR(s.avgRoas)}</div>
               </div>
             </div>
+            {/* Per-phase ROAS mini indicators */}
+            {phaseMetricsByStrategy[s.id] && (
+              <div className="flex items-center gap-3 mt-2.5 pt-2.5 border-t border-border-faint">
+                {ALL_PHASES.map(p => {
+                  const pm = phaseMetricsByStrategy[s.id][p];
+                  const meta = PHASE_META[p];
+                  return (
+                    <div key={p} className="flex items-center gap-1 text-[9px]">
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: pm.weeks > 0 ? meta.color : '#3f3f46' }} />
+                      <span className="text-faint">{meta.label.split(' ')[0]}</span>
+                      <span className="font-mono font-semibold" style={{ color: pm.weeks > 0 ? meta.color : '#52525b' }}>
+                        {pm.weeks > 0 ? fR(pm.roas) : '—'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </Card>
         ))}
       </div>
@@ -418,6 +489,85 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
               <p className="text-xs text-subtle mt-1">{selected.goal}</p>
             </div>
           </div>
+
+          {/* Phase Tab Bar */}
+          <div className="flex items-center gap-1.5 mb-4">
+            <button
+              onClick={() => setActivePhase(null)}
+              className="px-3 py-1.5 rounded-lg text-[11px] font-semibold border transition-all"
+              style={{
+                borderColor: !activePhase ? selected.color + '60' : 'rgba(63,63,70,.45)',
+                background: !activePhase ? selected.color + '15' : 'transparent',
+                color: !activePhase ? selected.color : '#71717a',
+              }}
+            >All Phases</button>
+            {ALL_PHASES.map(p => {
+              const meta = PHASE_META[p];
+              const Icon = PHASE_ICONS[p];
+              const isActive = activePhase === p;
+              const phaseData = selectedPhaseMetrics?.[p];
+              return (
+                <button key={p} onClick={() => setActivePhase(isActive ? null : p)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold border transition-all"
+                  style={{
+                    borderColor: isActive ? meta.color + '60' : 'rgba(63,63,70,.45)',
+                    background: isActive ? meta.color + '15' : 'transparent',
+                    color: isActive ? meta.color : '#71717a',
+                  }}
+                >
+                  <Icon size={12} />
+                  {meta.label}
+                  {phaseData && phaseData.weeks > 0 && (
+                    <span className="text-[9px] font-mono opacity-70">{phaseData.weeks}w</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Phase Summary KPI Row */}
+          {selectedPhaseMetrics && (
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              {ALL_PHASES.map(p => {
+                const pm = selectedPhaseMetrics[p];
+                const meta = PHASE_META[p];
+                const Icon = PHASE_ICONS[p];
+                return (
+                  <Card key={p} className={`!p-4 ${activePhase === p ? 'ring-1' : ''}`}
+                    style={activePhase === p ? { borderColor: meta.color + '40' } : {}}
+                  >
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: meta.color + '20', color: meta.color }}>
+                        <Icon size={14} />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold" style={{ color: meta.color }}>{meta.label}</div>
+                        <div className="text-[9px] text-faint font-mono">{pm.weeks} weeks data</div>
+                      </div>
+                    </div>
+                    {pm.weeks > 0 ? (
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div>
+                          <div className="text-[9px] text-faint uppercase">Ads Spend</div>
+                          <div className="font-mono font-bold text-sm">{fM(pm.spend)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-faint uppercase">Ads ROAS</div>
+                          <div className={`font-mono font-bold text-sm ${pm.roas >= 1 ? 'text-emerald-400' : pm.roas >= 0 ? 'text-amber-400' : 'text-red-400'}`}>{fR(pm.roas)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-faint uppercase">Ads Orders</div>
+                          <div className="font-mono font-bold text-sm">{fOrd(pm.orders)}</div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-faint italic text-center py-2">No data in this phase</div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          )}
 
           {/* Questions to Answer — per-strategy, prominent */}
           <Card className="!p-5 mb-4" style={{ borderColor: selected.color + '30' }}>
@@ -465,6 +615,17 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
               {strategyTrendData.length > 0 && (
                 <div className="mt-2">
                   <div className="text-[9px] text-faint uppercase font-semibold mb-1">Weekly Trend</div>
+                  <div className="flex items-center gap-3 mb-1.5">
+                    {(selected.chartMeasureIds ?? ALL_CHART_MEASURES).slice(0, 2).map(mKey => {
+                      const meta = CHART_MEASURE_META[mKey];
+                      return meta ? (
+                        <div key={mKey} className="flex items-center gap-1 text-[9px]">
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: meta.color }} />
+                          <span className="text-faint">{meta.label}</span>
+                        </div>
+                      ) : null;
+                    })}
+                  </div>
                   <ResponsiveContainer width="100%" height={80}>
                     <BarChart data={strategyTrendData} barCategoryGap="20%">
                       <XAxis dataKey="label" tick={{ fontSize: 8, fill: '#71717a' }} tickLine={false} axisLine={false} />

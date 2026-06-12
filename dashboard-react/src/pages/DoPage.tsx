@@ -5,6 +5,7 @@ import { Badge, ActionBadge } from '../components/Badge';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { fM, fP, fOrd, ACTION_META } from '../utils';
 import { useDoQueue, type DoQueueItem } from '../hooks/useDoQueue';
+import { DecisionScorecard } from '../components/DecisionScorecard';
 import { Copy, Check, Trash2, X, ChevronDown, ChevronRight, CheckCircle2, RotateCcw, ExternalLink, Download, Upload } from 'lucide-react';
 import type { DashboardData } from '../types';
 
@@ -155,6 +156,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
     return (
       <div className="animate-in">
         <PageHeader title="DO — Your Task Queue" subtitle="Keywords you decided to act on" />
+        <DecisionScorecard />
         <Empty
           icon="📋"
           message="No tasks queued yet"
@@ -883,6 +885,8 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
   return (
     <div className="animate-in">
       <PageHeader title="DO — Your Task Queue" subtitle={`${totalItems} pending · ${totalDone} done · ${totalUploaded} uploaded`} />
+
+      <DecisionScorecard />
 
       {totalItems > 0 && (
         <div className="flex gap-2 mb-4">

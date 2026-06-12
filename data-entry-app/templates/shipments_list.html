@@ -75,9 +75,12 @@
             </div>
         </div>
 
-        <!-- Bulk Delete Bar -->
+        <!-- Bulk Action Bar -->
         <div class="bulk-delete-bar mb-2" id="shipBulkBar">
             <span><strong id="shipSelectedCount">0</strong> selected</span>
+            <button type="button" class="btn btn-sm btn-info" onclick="toggleBulkUpdateForm()">
+                <i class="bi bi-pencil-square"></i> Bulk Update
+            </button>
             <button type="button" class="btn btn-sm btn-success" onclick="recordPaymentForSelected()">
                 <i class="bi bi-credit-card"></i> Record Payment
             </button>
@@ -91,8 +94,54 @@
                 <i class="bi bi-x-circle"></i> Cancel
             </button>
         </div>
+
+        <!-- Bulk Update Form (hidden by default) -->
+        <div class="card mb-3" id="bulkUpdatePanel" style="display: none; border-color: var(--bs-info);">
+            <div class="card-body bg-light py-3">
+                <h6 class="mb-3"><i class="bi bi-pencil-square"></i> Bulk Update Selected Shipments</h6>
+                <form method="POST" action="{{ url_for('bulk_update_shipments_standalone') }}" id="shipBulkUpdateForm"
+                      onsubmit="return prepareBulkUpdate();">
+                    <div class="row align-items-end">
+                        <div class="col-md-3">
+                            <label for="bulk_shipment_status" class="form-label mb-1">Status</label>
+                            <select class="form-select form-select-sm" id="bulk_shipment_status" name="shipment_status">
+                                <option value="">-- Keep Current --</option>
+                                {% for item in lovs.get('SHIPMENT_STATUS', []) %}
+                                <option value="{{ item.value_id }}">{{ item.value_caption }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label mb-1">Paid</label>
+                            <select class="form-select form-select-sm" id="bulk_is_paid" onchange="togglePaidDate(this)">
+                                <option value="">-- Keep Current --</option>
+                                <option value="true">Yes</option>
+                                <option value="false">No</option>
+                            </select>
+                            <input type="hidden" name="update_is_paid" id="update_is_paid" value="false">
+                            <input type="hidden" name="is_paid" id="is_paid_value" value="">
+                        </div>
+                        <div class="col-md-2" id="paidDateCol" style="display: none;">
+                            <label for="bulk_paid_date" class="form-label mb-1">Paid Date</label>
+                            <input type="date" class="form-control form-control-sm" id="bulk_paid_date" name="paid_date">
+                        </div>
+                        <div class="col-md-3">
+                            <div class="d-flex gap-2">
+                                <button type="submit" class="btn btn-sm btn-primary">
+                                    <i class="bi bi-check-circle"></i> Update <span id="bulkUpdateCount">0</span> Shipments
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="closeBulkUpdateForm()">
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
     </div>
 </div>
+
 
 <div class="row">
     <div class="col-12">
@@ -197,22 +246,79 @@
 
 {% block extra_js %}
 <script>
-// ---- Bulk Delete Shipments ----
+// ---- Bulk Selection ----
 function toggleAllShip(master) {
     document.querySelectorAll('.ship-cb').forEach(cb => cb.checked = master.checked);
     updateShipSelection();
 }
 function updateShipSelection() {
     const checked = document.querySelectorAll('.ship-cb:checked');
+    const count = checked.length;
     const bar = document.getElementById('shipBulkBar');
-    document.getElementById('shipSelectedCount').textContent = checked.length;
-    bar.classList.toggle('visible', checked.length > 0);
+    document.getElementById('shipSelectedCount').textContent = count;
+    document.getElementById('bulkUpdateCount').textContent = count;
+    bar.classList.toggle('visible', count > 0);
+    if (count === 0) closeBulkUpdateForm();
 }
 function clearShipSelection() {
     document.querySelectorAll('.ship-cb').forEach(cb => cb.checked = false);
     document.getElementById('shipSelectAll').checked = false;
     updateShipSelection();
+    closeBulkUpdateForm();
 }
+
+// ---- Bulk Update ----
+function toggleBulkUpdateForm() {
+    const panel = document.getElementById('bulkUpdatePanel');
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+function closeBulkUpdateForm() {
+    document.getElementById('bulkUpdatePanel').style.display = 'none';
+}
+function togglePaidDate(sel) {
+    const paidDateCol = document.getElementById('paidDateCol');
+    const updateFlag = document.getElementById('update_is_paid');
+    const isPaidValue = document.getElementById('is_paid_value');
+    
+    if (sel.value === '') {
+        // Keep Current
+        paidDateCol.style.display = 'none';
+        updateFlag.value = 'false';
+        isPaidValue.value = '';
+    } else {
+        updateFlag.value = 'true';
+        isPaidValue.value = sel.value;
+        paidDateCol.style.display = sel.value === 'true' ? 'block' : 'none';
+    }
+}
+function prepareBulkUpdate() {
+    const checked = document.querySelectorAll('.ship-cb:checked');
+    if (checked.length === 0) { alert('Select at least one shipment.'); return false; }
+    
+    // Check that at least one field is set
+    const status = document.getElementById('bulk_shipment_status').value;
+    const paidSel = document.getElementById('bulk_is_paid').value;
+    if (!status && !paidSel) {
+        alert('Please set at least one field (Status or Paid) to update.');
+        return false;
+    }
+    
+    if (!confirm(`Update ${checked.length} shipment(s)?`)) return false;
+    
+    const form = document.getElementById('shipBulkUpdateForm');
+    // Remove any previously added hidden inputs
+    form.querySelectorAll('input.bulk-id').forEach(el => el.remove());
+    // Add selected shipment IDs
+    checked.forEach(cb => {
+        const inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'shipment_ids'; inp.value = cb.value;
+        inp.className = 'bulk-id';
+        form.appendChild(inp);
+    });
+    return true;
+}
+
+// ---- Bulk Delete ----
 function confirmBulkDeleteShip() {
     const checked = document.querySelectorAll('.ship-cb:checked');
     if (checked.length === 0) return false;

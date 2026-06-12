@@ -8,7 +8,7 @@ import { X, Filter, ChevronDown, Search } from 'lucide-react';
 
 const PERIOD_LABELS: Record<PeriodMode, string> = { date: 'Day', weeks: 'Weeks', month: 'Month', quarter: 'Quarter', year: 'Year' };
 const PERIOD_TYPE_LABELS: Record<PeriodType, string> = { regular: 'Regular', cumulative: 'Cumulative', peak: 'Peak' };
-const FAMILY_LABELS: Record<FamilyName, string> = { Lollibox: 'Lollibox', LolliME: 'LolliME', Bottle: 'Bottle', Fresh: 'Fresh' };
+const FAMILY_LABELS: Record<FamilyName, string> = { Lollibox: 'Lollibox', LolliME: 'LolliME', Bottle: 'Bottle', Fresh: 'Fresh', Bunny: 'Bunny', LolliBall: 'LolliBall' };
 const PERIOD_TREND_MAX = 36;
 
 export function FilterBar({ data, page }: { data: DashboardData; page?: PageId }) {

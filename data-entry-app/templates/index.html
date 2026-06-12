@@ -208,7 +208,7 @@
             <button type="button" class="btn btn-sm btn-success" onclick="bulkPayPOs()">
                 <i class="bi bi-credit-card"></i> Pay Selected
             </button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearPOSelection()" style="font-size: 0.82rem;">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearAllSelection()" style="font-size: 0.82rem;">
                 <i class="bi bi-x-circle"></i> Cancel
             </button>
         </div>
@@ -382,6 +382,7 @@
                     <table class="table table-hover table-striped table-sm sortable-table">
                         <thead>
                             <tr>
+                                <th style="font-size: 0.85rem; width: 30px;"><input type="checkbox" class="bulk-cb" id="otherPoSelectAll" onchange="toggleAllOtherPO(this)"></th>
                                 <th style="font-size: 0.85rem;" data-sort="date">Date <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th style="font-size: 0.85rem;" data-sort="string">Service Type <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 <th style="font-size: 0.85rem;" data-sort="string">Supplier <i class="bi bi-arrow-down-up sort-icon"></i></th>
@@ -398,6 +399,7 @@
                         <tbody>
                             {% for opo in other_pos %}
                             <tr style="font-size: 0.85rem;">
+                                <td><input type="checkbox" class="bulk-cb other-po-cb" value="{{ opo.other_po_id }}" onchange="updateCombinedSelection()"></td>
                                 <td>{{ opo.order_date }}</td>
                                 <td><span class="badge bg-secondary">{{ opo.service_type }}</span></td>
                                 <td>{{ opo.supplier_name }}</td>
@@ -461,21 +463,32 @@ function applyFilters() {
     window.location.href = '{{ url_for("index") }}?' + params.toString();
 }
 
-// ---- Bulk Delete PO ----
+// ---- Bulk PO Selection (Standard + Other) ----
 function toggleAllPO(master) {
     document.querySelectorAll('.po-cb').forEach(cb => cb.checked = master.checked);
-    updatePOSelection();
+    updateCombinedSelection();
 }
-function updatePOSelection() {
-    const checked = document.querySelectorAll('.po-cb:checked');
+function toggleAllOtherPO(master) {
+    document.querySelectorAll('.other-po-cb').forEach(cb => cb.checked = master.checked);
+    updateCombinedSelection();
+}
+function updateCombinedSelection() {
+    const checkedPO = document.querySelectorAll('.po-cb:checked');
+    const checkedOther = document.querySelectorAll('.other-po-cb:checked');
+    const totalChecked = checkedPO.length + checkedOther.length;
     const bar = document.getElementById('poBulkBar');
-    document.getElementById('poSelectedCount').textContent = checked.length;
-    bar.classList.toggle('visible', checked.length > 0);
+    document.getElementById('poSelectedCount').textContent = totalChecked;
+    bar.classList.toggle('visible', totalChecked > 0);
 }
-function clearPOSelection() {
+// Keep old name as alias for the master checkbox handler
+function updatePOSelection() { updateCombinedSelection(); }
+function clearAllSelection() {
     document.querySelectorAll('.po-cb').forEach(cb => cb.checked = false);
+    document.querySelectorAll('.other-po-cb').forEach(cb => cb.checked = false);
     document.getElementById('poSelectAll').checked = false;
-    updatePOSelection();
+    const otherSelectAll = document.getElementById('otherPoSelectAll');
+    if (otherSelectAll) otherSelectAll.checked = false;
+    updateCombinedSelection();
 }
 function confirmBulkDeletePO() {
     const checked = document.querySelectorAll('.po-cb:checked');
@@ -491,10 +504,12 @@ function confirmBulkDeletePO() {
 }
 
 function bulkPayPOs() {
-    const checked = document.querySelectorAll('.po-cb:checked');
-    if (checked.length === 0) { alert('No POs selected'); return; }
+    const checkedPO = document.querySelectorAll('.po-cb:checked');
+    const checkedOther = document.querySelectorAll('.other-po-cb:checked');
+    if (checkedPO.length + checkedOther.length === 0) { alert('No POs selected'); return; }
     const params = new URLSearchParams();
-    checked.forEach(cb => params.append('po_ids', cb.value));
+    checkedPO.forEach(cb => params.append('po_ids', cb.value));
+    checkedOther.forEach(cb => params.append('other_po_ids', cb.value));
     window.location.href = '{{ url_for("bulk_po_payments") }}?' + params.toString();
 }
 

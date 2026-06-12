@@ -179,9 +179,9 @@ export function RemediationModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="bg-[#1C1C1F] border border-border w-full max-w-md rounded-xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="bg-card border border-border w-full max-w-md rounded-xl shadow-2xl overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border/50 bg-white/[0.02]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border/50 bg-surface">
           <div className="flex items-center gap-3">
             <div className={`p-2 rounded-lg ${isPO ? 'bg-purple-500/10 text-purple-400' : isShipment ? 'bg-emerald-500/10 text-emerald-400' : isAdjustForecast ? 'bg-cyan-500/10 text-cyan-400' : 'bg-blue-500/10 text-blue-400'}`}>
               {isPO ? <Package size={18} /> : isShipment ? <Truck size={18} /> : isAdjustForecast ? <TrendingUp size={18} /> : <Settings size={18} />}
@@ -215,7 +215,7 @@ export function RemediationModal({
                     type="date"
                     value={orderDate}
                     onChange={e => setOrderDate(e.target.value)}
-                    className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading focus:outline-none focus:border-blue-500/50"
+                    className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading focus:outline-none focus:border-blue-500/50"
                   />
                 </div>
                 <div>
@@ -223,7 +223,7 @@ export function RemediationModal({
                   <select
                     value={manufacturer}
                     onChange={e => setManufacturer(e.target.value)}
-                    className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading focus:outline-none focus:border-blue-500/50"
+                    className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading focus:outline-none focus:border-blue-500/50"
                   >
                     {manufacturerOptions.length === 0 ? (
                       <option value={manufacturer}>{manufacturer}</option>
@@ -242,7 +242,7 @@ export function RemediationModal({
                   <select
                     value={currency}
                     onChange={e => setCurrency(e.target.value)}
-                    className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading focus:outline-none focus:border-blue-500/50"
+                    className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading focus:outline-none focus:border-blue-500/50"
                   >
                     <option value="USD">USD ($)</option>
                     <option value="GBP">GBP (£)</option>
@@ -256,7 +256,7 @@ export function RemediationModal({
                   <select
                     value={paymentStatus}
                     onChange={e => setPaymentStatus(e.target.value)}
-                    className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading focus:outline-none focus:border-blue-500/50"
+                    className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading focus:outline-none focus:border-blue-500/50"
                   >
                     <option value="PENDING">Pending</option>
                     <option value="PAID">Paid</option>
@@ -265,7 +265,7 @@ export function RemediationModal({
               </div>
 
               {/* Product Line Area */}
-              <div className="p-3 bg-white/[0.02] border border-border rounded-md space-y-3">
+              <div className="p-3 bg-surface border border-border rounded-md space-y-3">
                 <div className="flex items-center gap-2">
                   <Package size={14} className="text-muted" />
                   <span className="text-sm text-heading font-medium truncate">
@@ -283,7 +283,7 @@ export function RemediationModal({
                         setQty(newQty);
                         setTotalAmount(parseFloat((newQty * (payload.unit_cost || 0)).toFixed(2)));
                       }}
-                      className="w-full bg-black/40 border border-border rounded-md px-3 py-1.5 text-sm text-heading focus:outline-none focus:border-blue-500/50"
+                      className="w-full bg-inset border border-border rounded-md px-3 py-1.5 text-sm text-heading focus:outline-none focus:border-blue-500/50"
                     />
                     <div className="mt-1 text-[10px] text-muted text-right">Rec: {fmt(payload.recommended_qty || alert.suggested_qty)}</div>
                   </div>
@@ -293,7 +293,7 @@ export function RemediationModal({
                       type="number"
                       value={totalAmount || ''}
                       onChange={e => setTotalAmount(parseFloat(e.target.value) || 0)}
-                      className="w-full bg-black/40 border border-border rounded-md px-3 py-1.5 text-sm text-heading focus:outline-none focus:border-blue-500/50"
+                      className="w-full bg-inset border border-border rounded-md px-3 py-1.5 text-sm text-heading focus:outline-none focus:border-blue-500/50"
                     />
                   </div>
                 </div>
@@ -305,7 +305,7 @@ export function RemediationModal({
                   value={notes}
                   onChange={e => setNotes(e.target.value)}
                   rows={2}
-                  className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-blue-500/50 resize-none"
+                  className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-blue-500/50 resize-none"
                   placeholder="Any additional instructions..."
                 />
               </div>
@@ -321,7 +321,7 @@ export function RemediationModal({
                   value={poId}
                   onChange={e => setPoId(e.target.value)}
                   placeholder="e.g., PO_20250101_ABC"
-                  className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-emerald-500/50"
+                  className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-emerald-500/50"
                 />
                 <div className="mt-1 text-[10px] text-muted text-right">At Mfr: {fmt(payload.at_manufacturer || 0)}</div>
               </div>
@@ -332,7 +332,7 @@ export function RemediationModal({
                     type="number"
                     value={fbaQty || ''}
                     onChange={e => setFbaQty(parseInt(e.target.value) || 0)}
-                    className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-emerald-500/50"
+                    className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-emerald-500/50"
                   />
                   <div className="mt-1 text-[10px] text-muted text-right">Rec: {fmt(payload.recommended_fba_qty || alert.suggested_split_fba)}</div>
                 </div>
@@ -342,7 +342,7 @@ export function RemediationModal({
                     type="number"
                     value={awdQty || ''}
                     onChange={e => setAwdQty(parseInt(e.target.value) || 0)}
-                    className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-emerald-500/50"
+                    className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-emerald-500/50"
                   />
                   <div className="mt-1 text-[10px] text-muted text-right">Rec: {fmt(payload.recommended_awd_qty || alert.suggested_split_awd)}</div>
                 </div>
@@ -358,7 +358,7 @@ export function RemediationModal({
                   type="number"
                   value={awdTargetMin || ''}
                   onChange={e => setAwdTargetMin(parseInt(e.target.value) || 0)}
-                  className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-blue-500/50"
+                  className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-blue-500/50"
                 />
                 <div className="mt-1 text-[10px] text-muted text-right">Rec: {fmt(payload.recommended_awd_target_min || 0)}</div>
               </div>
@@ -368,7 +368,7 @@ export function RemediationModal({
                   type="number"
                   value={awdTargetMax || ''}
                   onChange={e => setAwdTargetMax(parseInt(e.target.value) || 0)}
-                  className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-blue-500/50"
+                  className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-blue-500/50"
                 />
                 <div className="mt-1 text-[10px] text-muted text-right">Rec: {fmt(payload.recommended_awd_target_max || payload.recommended_qty || 0)}</div>
               </div>
@@ -382,7 +382,7 @@ export function RemediationModal({
                 type="number"
                 value={forecastTarget || ''}
                 onChange={e => setForecastTarget(parseInt(e.target.value) || 0)}
-                className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-cyan-500/50"
+                className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-heading placeholder-muted focus:outline-none focus:border-cyan-500/50"
               />
               <div className="mt-1 text-[10px] text-muted flex justify-between">
                 <span>Current: {fmt(payload.current_qty || 0)}</span>
@@ -394,7 +394,7 @@ export function RemediationModal({
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-4 bg-white/[0.02] border-t border-border/50 flex justify-end gap-3">
+        <div className="px-5 py-4 bg-surface border-t border-border/50 flex justify-end gap-3">
           <button
             onClick={onClose}
             className="px-4 py-2 text-xs font-medium text-subtle hover:text-heading bg-transparent border border-border hover:bg-white/5 rounded-md transition-colors"

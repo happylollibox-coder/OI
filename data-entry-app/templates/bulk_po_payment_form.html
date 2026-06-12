@@ -31,9 +31,10 @@
                             <thead>
                                 <tr>
                                     <th style="font-size: 0.85rem;">PO ID</th>
+                                    <th style="font-size: 0.85rem;">Type</th>
                                     <th style="font-size: 0.85rem;">Date</th>
-                                    <th style="font-size: 0.85rem;">Manufacturer</th>
-                                    <th style="font-size: 0.85rem;">Product</th>
+                                    <th style="font-size: 0.85rem;">Vendor</th>
+                                    <th style="font-size: 0.85rem;">Product / Service</th>
                                     <th style="font-size: 0.85rem;" class="text-end">PO Amount</th>
                                     <th style="font-size: 0.85rem;" class="text-end">Paid</th>
                                     <th style="font-size: 0.85rem;" class="text-end">Pay Amount</th>
@@ -43,13 +44,20 @@
                                 {% for po in pos %}
                                 <tr style="font-size: 0.85rem;" class="{{ 'table-success' if po.remaining <= 0 else '' }}">
                                     <td><strong>{{ po.purchase_order_id }}</strong></td>
+                                    <td>
+                                        {% if po.get('_po_type') == 'other' %}
+                                        <span class="badge bg-info">Other</span>
+                                        {% else %}
+                                        <span class="badge bg-primary">Standard</span>
+                                        {% endif %}
+                                    </td>
                                     <td>{{ po.order_date }}</td>
                                     <td>{{ po.manufacturer_name or '-' }}</td>
                                     <td class="product-tags">
                                         {% if po.product_names_combined %}
                                         <span class="badge bg-secondary" style="font-size: 0.72rem;">
                                             {{ po.product_names_combined[:30] }}{% if po.product_names_combined|length > 30 %}…{% endif %}
-                                            <small>({{ po.quantity|int }})</small>
+                                            {% if po.quantity %}<small>({{ po.quantity|int }})</small>{% endif %}
                                         </span>
                                         {% else %}-{% endif %}
                                     </td>
@@ -84,7 +92,7 @@
                             </tbody>
                             <tfoot>
                                 <tr style="font-size: 0.9rem;">
-                                    <td colspan="5" class="text-end"><strong>Open Balance:</strong></td>
+                                    <td colspan="6" class="text-end"><strong>Open Balance:</strong></td>
                                     <td class="text-end"></td>
                                     <td class="text-end"><strong class="text-primary fs-5" id="payTotal">{{ total_remaining|format_currency_with_commas }}</strong></td>
                                 </tr>

@@ -965,14 +965,17 @@ function POTable({ rows, sort, onSort, allPayments, allShipments }: {
             <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{fmtDate(r.order_date)}</td>
             <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{fmtDate(r.expected_ready_date)}</td>
             <td className="px-4 py-2.5 text-xs font-mono whitespace-nowrap">
-              <button
-                onClick={() => setSelectedPO(r)}
-                className="text-blue-400 hover:text-blue-300 hover:underline underline-offset-2 transition-colors flex items-center gap-1 cursor-pointer"
-                title={`View details: ${r.purchase_order_id}`}
-              >
-                <Eye size={12} className="shrink-0 opacity-60" />
-                <span className="truncate max-w-[200px]">{r.purchase_order_id}</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setSelectedPO(r)}
+                  className="text-blue-400 hover:text-blue-300 hover:underline underline-offset-2 transition-colors flex items-center gap-1 cursor-pointer"
+                  title={`View details: ${r.purchase_order_id}`}
+                >
+                  <Eye size={12} className="shrink-0 opacity-60" />
+                  <span className="truncate max-w-[200px]">{r.purchase_order_id}</span>
+                </button>
+                <CopyButton text={r.purchase_order_id} />
+              </div>
             </td>
             <td className="px-4 py-2.5 text-subtle text-xs">{r.manufacturer_name}</td>
             <td className="px-4 py-2.5 text-subtle text-xs font-medium max-w-[200px] truncate" title={r.product_name}>{r.product_name}</td>
@@ -1069,57 +1072,15 @@ function PaymentsTable({ rows, allPos, sort, onSort }: { rows: SupplyPaymentRow[
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   if (rows.length === 0) return <div className="p-8 text-center text-muted text-sm">No payments match filters</div>;
 
-  const groups: { poId: string, payments: SupplyPaymentRow[] }[] = [];
-  const groupMap = new Map<string, SupplyPaymentRow[]>();
-  const unlinked: SupplyPaymentRow[] = [];
-
-  for (const r of rows) {
-    if (!r.purchase_order_id) {
-      unlinked.push(r);
-    } else {
-      if (!groupMap.has(r.purchase_order_id)) {
-        const arr: SupplyPaymentRow[] = [];
-        groupMap.set(r.purchase_order_id, arr);
-        groups.push({ poId: r.purchase_order_id, payments: arr });
-      }
-      groupMap.get(r.purchase_order_id)!.push(r);
-    }
-  }
-
-  const toggleGroup = (poId: string) => {
+  const toggleGroup = (paymentId: string) => {
     setCollapsed(prev => {
       const next = new Set(prev);
-      if (next.has(poId)) next.delete(poId); else next.add(poId);
+      if (next.has(paymentId)) next.delete(paymentId); else next.add(paymentId);
       return next;
     });
   };
 
-  const renderPaymentRow = (r: SupplyPaymentRow, i: number) => {
-    const typePrefix = Boolean(r.shipment_id) ? "INV_" : "PI_";
-    const fileName = r.payment_id ? r.payment_id.replace(/^PAY_/, typePrefix) : '—';
-    return (
-      <tr key={`${r.payment_id}_${i}`} className="border-b border-border/20 hover:bg-white/[.03] transition-colors">
-        {/* indent with a subtle connector line */}
-        <td className="px-4 py-2 text-xs text-muted whitespace-nowrap text-right pl-10 border-l-2 border-blue-500/20">{fmtDate(r.payment_date)}</td>
-        <td className="px-4 py-2 text-subtle text-xs">{r.vendor_name}</td>
-        <td className="px-4 py-2 text-xs text-muted font-mono whitespace-nowrap max-w-[240px] truncate" title={r.payment_id}>
-          {r.payment_id || '—'}
-        </td>
-        <td className="px-4 py-2 text-xs text-accent max-w-[280px]">
-          <div className="flex items-center gap-2">
-            <span className="truncate flex-1 min-w-0" title={fileName}>{fileName}</span>
-            {fileName !== '—' && <CopyButton text={fileName} />}
-          </div>
-        </td>
-        <td className={`px-4 py-2 text-right font-mono text-xs font-semibold ${r.payment_amount < 0 ? 'text-red-400' : 'text-heading'}`}>{fmtFull$(r.payment_amount)}</td>
-        <td className="px-4 py-2 text-right text-amber-400 font-mono text-xs">{r.bank_fee > 0 ? fmtFull$(r.bank_fee) : '—'}</td>
-        <td className="px-4 py-2 text-right text-blue-400 font-mono text-xs font-semibold">{fmtFull$(r.total_amount)}</td>
-        <td className="px-4 py-2 text-xs text-muted">{r.currency}</td>
-        <td className="px-4 py-2 text-xs text-muted">{r.payment_method || '—'}</td>
-      </tr>
-    );
-  };
-
+  // Each payment is a top-level row; linked POs are children
   return (
     <table className="w-full text-sm">
       <thead>
@@ -1127,7 +1088,6 @@ function PaymentsTable({ rows, allPos, sort, onSort }: { rows: SupplyPaymentRow[
           <SortHeader label="Date" field="payment_date" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Vendor</th>
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Payment ID</th>
-          <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">File Name</th>
           <SortHeader label="Amount" field="payment_amount" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Bank Fee" field="bank_fee" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Total" field="total_amount" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
@@ -1136,111 +1096,90 @@ function PaymentsTable({ rows, allPos, sort, onSort }: { rows: SupplyPaymentRow[
         </tr>
       </thead>
       <tbody>
-        {groups.map(g => {
-          const po = allPos.find(p => p.purchase_order_id === g.poId);
-          const poCost = po ? po.total_amount : 0;
-          const poPaid = po ? po.total_paid : 0;
-          const poRem = Math.max(poCost - poPaid, 0);
-          const paidPct = poCost > 0 ? Math.min((poPaid / poCost) * 100, 100) : 0;
-          const isOpen = !collapsed.has(g.poId);
-          const groupTotal = g.payments.reduce((s, r) => s + r.total_amount, 0);
+        {rows.map((r, i) => {
+          // Parse linked PO IDs (may be comma-separated)
+          const linkedPoIds = r.purchase_order_id
+            ? r.purchase_order_id.split(',').map(s => s.trim()).filter(Boolean)
+            : [];
+          const linkedPos = linkedPoIds
+            .map(poId => allPos.find(p => p.purchase_order_id === poId))
+            .filter(Boolean) as SupplyPORow[];
+          const hasLinkedPOs = linkedPos.length > 0;
+          const payKey = r.payment_id || `pay_${i}`;
+          const isOpen = !collapsed.has(payKey);
 
           return (
-            <Fragment key={`group_${g.poId}`}>
-              {/* ── PO Group Header ── */}
+            <Fragment key={payKey}>
+              {/* ── Payment Row (Parent) ── */}
               <tr
-                className="bg-surface/80 border-b border-border cursor-pointer hover:bg-surface transition-colors select-none"
-                onClick={() => toggleGroup(g.poId)}
+                className={`border-b border-border/50 transition-colors ${hasLinkedPOs ? 'cursor-pointer hover:bg-surface/80' : 'hover:bg-white/[.03]'}`}
+                onClick={hasLinkedPOs ? () => toggleGroup(payKey) : undefined}
               >
-                <td colSpan={4} className="px-4 py-2.5">
-                  <div className="flex items-center gap-3">
-                    {/* Expand / Collapse chevron */}
-                    <span className="text-muted shrink-0 transition-transform" style={{ transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}>
-                      <ChevronDown size={14} />
-                    </span>
-                    {/* PO ID */}
-                    <span className="font-mono text-xs font-semibold text-heading truncate max-w-[280px]" title={g.poId}>
-                      {g.poId}
-                    </span>
-                    {/* Payment count pill */}
-                    <span className="shrink-0 px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 text-[10px] font-semibold leading-none">
-                      {g.payments.length} {g.payments.length === 1 ? 'payment' : 'payments'}
-                    </span>
+                <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">
+                  <div className="flex items-center gap-2 justify-end">
+                    {hasLinkedPOs && (
+                      <span className="text-muted shrink-0 transition-transform" style={{ transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}>
+                        <ChevronDown size={12} />
+                      </span>
+                    )}
+                    {fmtDate(r.payment_date)}
                   </div>
                 </td>
-                <td colSpan={5} className="px-4 py-2.5">
-                  <div className="flex items-center justify-end gap-5 font-mono text-xs">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-faint text-[10px] uppercase tracking-wider">Cost</span>
-                      <span className="text-subtle font-semibold">{fmtFull$(poCost)}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-faint text-[10px] uppercase tracking-wider">Paid</span>
-                      <span className="text-emerald-400 font-semibold">{fmtFull$(poPaid)}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-faint text-[10px] uppercase tracking-wider">Rem</span>
-                      <span className={`font-semibold ${poRem > 0 ? 'text-red-400' : 'text-emerald-400'}`}>{fmtFull$(poRem)}</span>
-                    </div>
-                    {/* Mini progress bar */}
-                    <div className="w-16 h-1.5 rounded-full bg-white/[.06] overflow-hidden shrink-0" title={`${paidPct.toFixed(0)}% paid`}>
-                      <div
-                        className={`h-full rounded-full transition-all ${paidPct >= 100 ? 'bg-emerald-400' : paidPct >= 50 ? 'bg-blue-400' : 'bg-amber-400'}`}
-                        style={{ width: `${paidPct}%` }}
-                      />
-                    </div>
+                <td className="px-4 py-2.5 text-subtle text-xs">{r.vendor_name}</td>
+                <td className="px-4 py-2.5 text-xs font-mono whitespace-nowrap max-w-[280px]">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate flex-1 min-w-0 text-heading font-medium" title={r.payment_id}>{r.payment_id || '—'}</span>
+                    {r.payment_id && <CopyButton text={r.payment_id} />}
                   </div>
                 </td>
+                <td className={`px-4 py-2.5 text-right font-mono text-xs font-semibold ${r.payment_amount < 0 ? 'text-red-400' : 'text-heading'}`}>{fmtFull$(r.payment_amount)}</td>
+                <td className="px-4 py-2.5 text-right text-amber-400 font-mono text-xs">{r.bank_fee > 0 ? fmtFull$(r.bank_fee) : '—'}</td>
+                <td className="px-4 py-2.5 text-right text-blue-400 font-mono text-xs font-semibold">{fmtFull$(r.total_amount)}</td>
+                <td className="px-4 py-2.5 text-xs text-muted">{r.currency}</td>
+                <td className="px-4 py-2.5 text-xs text-muted">{r.payment_method || '—'}</td>
               </tr>
-              {/* ── Child payment rows ── */}
-              {isOpen && g.payments.map((r, i) => renderPaymentRow(r, i))}
-              {/* ── PO group subtotal ── */}
-              {isOpen && g.payments.length > 1 && (
-                <tr className="border-b border-border/40 bg-white/[.01]">
-                  <td colSpan={4} className="px-4 py-1.5 pl-10 border-l-2 border-blue-500/20 text-[10px] text-faint uppercase tracking-wider font-semibold">
-                    Subtotal · {g.payments.length} payments
+              {/* ── Linked PO Lines (Children) ── */}
+              {hasLinkedPOs && isOpen && linkedPos.map(po => (
+                <tr key={`${payKey}_${po.purchase_order_id}`} className="border-b border-border/20 hover:bg-white/[.02] transition-colors">
+                  <td colSpan={3} className="px-4 py-1.5 pl-10 border-l-2 border-blue-500/20">
+                    <div className="flex items-center gap-3 text-xs">
+                      <Package size={12} className="text-muted shrink-0" />
+                      <span className="font-mono text-subtle font-medium truncate max-w-[220px]" title={po.purchase_order_id}>{po.purchase_order_id}</span>
+                      <span className="text-faint">·</span>
+                      <span className="text-muted truncate max-w-[150px]" title={po.product_name}>{po.product_name}</span>
+                    </div>
                   </td>
-                  <td className="px-4 py-1.5 text-right font-mono text-[11px] font-semibold text-heading">
-                    {fmtFull$(g.payments.reduce((s, r) => s + r.payment_amount, 0))}
+                  <td className="px-4 py-1.5 text-right font-mono text-[11px]">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span className="text-faint text-[10px]">Cost</span>
+                      <span className="text-subtle">{fmtFull$(po.total_amount)}</span>
+                    </div>
                   </td>
-                  <td className="px-4 py-1.5 text-right font-mono text-[11px] text-amber-400">
-                    {fmtFull$(g.payments.reduce((s, r) => s + r.bank_fee, 0))}
+                  <td className="px-4 py-1.5 text-right font-mono text-[11px]">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span className="text-faint text-[10px]">Paid</span>
+                      <span className="text-emerald-400">{fmtFull$(po.total_paid)}</span>
+                    </div>
                   </td>
-                  <td className="px-4 py-1.5 text-right font-mono text-[11px] font-semibold text-blue-400">
-                    {fmtFull$(groupTotal)}
+                  <td className="px-4 py-1.5 text-right font-mono text-[11px]">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span className="text-faint text-[10px]">Rem</span>
+                      <span className={Math.max(po.unpaid_manufacturer, 0) > 0.01 ? 'text-red-400' : 'text-emerald-400'}>{fmtFull$(Math.max(po.unpaid_manufacturer, 0))}</span>
+                    </div>
                   </td>
-                  <td colSpan={2}></td>
+                  <td colSpan={2} className="px-4 py-1.5">
+                    <StatusBadge status={po.payment_status} />
+                  </td>
                 </tr>
-              )}
+              ))}
             </Fragment>
           );
         })}
-        {unlinked.length > 0 && (
-          <Fragment key="unlinked">
-            <tr
-              className="bg-surface/80 border-b border-border cursor-pointer hover:bg-surface transition-colors select-none"
-              onClick={() => toggleGroup('__unlinked__')}
-            >
-              <td colSpan={9} className="px-4 py-2.5">
-                <div className="flex items-center gap-3">
-                  <span className="text-muted shrink-0 transition-transform" style={{ transform: !collapsed.has('__unlinked__') ? 'rotate(0deg)' : 'rotate(-90deg)' }}>
-                    <ChevronDown size={14} />
-                  </span>
-                  <span className="text-xs font-semibold text-muted">Unlinked Payments</span>
-                  <span className="shrink-0 px-1.5 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400 text-[10px] font-semibold leading-none">
-                    {unlinked.length}
-                  </span>
-                </div>
-              </td>
-            </tr>
-            {!collapsed.has('__unlinked__') && unlinked.map((r, i) => renderPaymentRow(r, i))}
-          </Fragment>
-        )}
       </tbody>
       <tfoot>
         <tr className="border-t-2 border-border bg-surface/40">
-          <td colSpan={4} className="px-4 py-3 text-xs font-semibold text-faint uppercase">
-            {groups.length} POs · {rows.length} Payments
+          <td colSpan={3} className="px-4 py-3 text-xs font-semibold text-faint uppercase">
+            {rows.length} Payments
           </td>
           <td className="px-4 py-3 text-right text-heading font-bold font-mono text-xs">
             {fmtFull$(rows.reduce((s, r) => s + r.payment_amount, 0))}

@@ -71,6 +71,10 @@ BEGIN
       Cart_Adds_Total_Count AS TOTAL_CART_ADDS,
       Purchases_Total_Count AS TOTAL_PURCHASES,
       
+      -- Median Click Price Metrics
+      Clicks_Price_Median AS total_median_click_price,
+      Clicks_ASIN_Price_Median AS asin_median_click_price,
+      
       -- Additional metrics
       CAST(NULL AS INT64) AS query_rank,
       CAST(NULL AS FLOAT64) AS avg_position,
@@ -105,6 +109,8 @@ BEGIN
     OR COALESCE(stg.TOTAL_CLICKS, 0) != COALESCE(source.TOTAL_CLICKS, 0)
     OR COALESCE(stg.TOTAL_CART_ADDS, 0) != COALESCE(source.TOTAL_CART_ADDS, 0)
     OR COALESCE(stg.TOTAL_PURCHASES, 0) != COALESCE(source.TOTAL_PURCHASES, 0)
+    OR COALESCE(stg.total_median_click_price, 0) != COALESCE(source.total_median_click_price, 0)
+    OR COALESCE(stg.asin_median_click_price, 0) != COALESCE(source.asin_median_click_price, 0)
   ) THEN
     -- Update all fields with new values
     UPDATE SET
@@ -125,6 +131,8 @@ BEGIN
       TOTAL_CLICKS = source.TOTAL_CLICKS,
       TOTAL_CART_ADDS = source.TOTAL_CART_ADDS,
       TOTAL_PURCHASES = source.TOTAL_PURCHASES,
+      total_median_click_price = source.total_median_click_price,
+      asin_median_click_price = source.asin_median_click_price,
       query_rank = source.query_rank,
       avg_position = source.avg_position,
       
@@ -159,6 +167,8 @@ BEGIN
       TOTAL_CLICKS,
       TOTAL_CART_ADDS,
       TOTAL_PURCHASES,
+      total_median_click_price,
+      asin_median_click_price,
       query_rank,
       avg_position,
       
@@ -192,6 +202,8 @@ BEGIN
       source.TOTAL_CLICKS,
       source.TOTAL_CART_ADDS,
       source.TOTAL_PURCHASES,
+      source.total_median_click_price,
+      source.asin_median_click_price,
       source.query_rank,
       source.avg_position,
       

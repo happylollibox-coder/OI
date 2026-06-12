@@ -243,7 +243,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
   }, [expDetails, filters.family, filters.experiment]);
 
   const filteredCheckData = useMemo(() => {
-    const cd = checkData;
+    const cd = allCheckData;
     const out = { ...cd };
     const filterExpRows = (key: string) => {
       const item = cd[key];
@@ -265,7 +265,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
     filterExpRows('experiments_status');
     filterExpRows('campaigns_live');
     return out;
-  }, [checkData, expDetails, filters.family, filters.experiment]);
+  }, [allCheckData, expDetails, filters.family, filters.experiment]);
 
   const holidayNames = useMemo(() => {
     const holidays = data.holidays || [];

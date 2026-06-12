@@ -292,16 +292,22 @@ function ProductAttributesTable({ data }: { data: DashboardData }) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{text: string, type: 'success'|'error'} | null>(null);
 
-  // Group products by family
-  const families = useMemo(() => {
-    if (!data.products) return {};
-    const grouped: Record<string, any[]> = {};
+  // Group products by parent (family_name from Cube, or parent_name, with product_type fallback)
+  const parentGroups = useMemo(() => {
+    if (!data.products) return [];
+    const grouped: Record<string, { parent_asin: string; parent_name: string; products: any[] }> = {};
     data.products.forEach(p => {
-      const fam = p.parent_name || 'Uncategorized';
-      if (!grouped[fam]) grouped[fam] = [];
-      grouped[fam].push(p);
+      const key = p.parent_name || p.family_name || p.product_type || 'Uncategorized';
+      if (!grouped[key]) {
+        grouped[key] = {
+          parent_asin: p.parent_asin || '',
+          parent_name: key,
+          products: [],
+        };
+      }
+      grouped[key].products.push(p);
     });
-    return grouped;
+    return Object.values(grouped).sort((a, b) => b.products.length - a.products.length);
   }, [data.products]);
 
   const handleEdit = (p: any) => {
@@ -356,34 +362,56 @@ function ProductAttributesTable({ data }: { data: DashboardData }) {
         <table className="w-full text-sm text-left">
           <thead className="text-xs uppercase bg-[var(--color-surface)]/50 text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
             <tr>
-              <th className="px-4 py-3 rounded-tl-lg">Family / Product</th>
+              <th className="px-4 py-3 rounded-tl-lg">Product</th>
               <th className="px-4 py-3">ASIN</th>
-              <th className="px-4 py-3">COGS</th>
+              <th className="px-4 py-3 text-right">Listing $</th>
+              <th className="px-4 py-3 text-right">COGS</th>
               <th className="px-4 py-3 text-right">Shipping</th>
+              <th className="px-4 py-3 text-center" title="Manufacturing lead time">Mfr Days</th>
+              <th className="px-4 py-3 text-center" title="Shipping transit time">Ship Days</th>
+              <th className="px-4 py-3 text-center" title="Units per manufacturer shipping carton">Pkg Qty</th>
+              <th className="px-4 py-3 text-center" title="Cubic feet per unit">Cu.Ft</th>
+              <th className="px-4 py-3 text-center" title="Manufacturer upfront payment percentage">Upfront %</th>
+              <th className="px-4 py-3 text-center" title="Can share cartons with other products in same family">Shared</th>
               <th className="px-4 py-3 text-right rounded-tr-lg">Action</th>
             </tr>
           </thead>
           <tbody>
-            {Object.entries(families).map(([family, products]) => (
-              <Fragment key={family}>
-                {/* Family Row */}
+            {parentGroups.map(group => (
+              <Fragment key={group.parent_name}>
+                {/* Parent Row */}
                 <tr className="bg-[var(--color-surface)]/80 border-b border-[var(--color-border)]">
-                  <td colSpan={5} className="px-4 py-2 font-bold text-[var(--color-text)]">
-                    {family}
+                  <td colSpan={12} className="px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-[var(--color-text)]">{group.parent_name}</span>
+                      {group.parent_asin && (
+                        <span className="text-xs font-mono text-[var(--color-text-muted)] bg-[var(--color-bg-primary)] px-2 py-0.5 rounded border border-[var(--color-border)]">
+                          {group.parent_asin}
+                        </span>
+                      )}
+                      <span className="text-xs text-[var(--color-text-muted)]">
+                        {group.products.length} {group.products.length === 1 ? 'variation' : 'variations'}
+                      </span>
+                    </div>
                   </td>
                 </tr>
                 {/* Product Rows */}
-                {products.map(p => (
+                {group.products.map(p => (
                   <tr key={p.asin} className="border-b border-[var(--color-border)] hover:bg-[var(--color-surface)]/30 transition-colors">
                     <td className="px-4 py-3 font-medium text-[var(--color-text)] pl-8">
                       {p.product_short_name}
                     </td>
-                    <td className="px-4 py-3 text-[var(--color-text-muted)]">
+                    <td className="px-4 py-3 text-[var(--color-text-muted)] font-mono text-xs">
                       {p.asin}
                     </td>
                     
+                    {/* Listing Price */}
+                    <td className="px-4 py-3 text-right text-[var(--color-text)]">
+                      {p.listing_price != null ? `$${Number(p.listing_price).toFixed(2)}` : <span className="text-[var(--color-text-muted)]">—</span>}
+                    </td>
+                    
                     {/* COGS */}
-                    <td className="px-4 py-3 text-[var(--color-text)]">
+                    <td className="px-4 py-3 text-right text-[var(--color-text)]">
                       {editingAsin === p.asin ? (
                         <input
                           type="number"
@@ -410,6 +438,46 @@ function ProductAttributesTable({ data }: { data: DashboardData }) {
                       ) : (
                         `$${Number(p.shipping_cost || 0).toFixed(2)}`
                       )}
+                    </td>
+                    
+                    {/* Manufacture Days */}
+                    <td className="px-4 py-3 text-center text-[var(--color-text)]">
+                      {p.manufacture_day != null ? p.manufacture_day : <span className="text-[var(--color-text-muted)]">—</span>}
+                    </td>
+                    
+                    {/* Shipment Days */}
+                    <td className="px-4 py-3 text-center text-[var(--color-text)]">
+                      {p.shipment_days != null ? p.shipment_days : <span className="text-[var(--color-text-muted)]">—</span>}
+                    </td>
+                    
+                    {/* Package Quantity */}
+                    <td className="px-4 py-3 text-center text-[var(--color-text)]">
+                      {p.package_quantity != null ? p.package_quantity : <span className="text-[var(--color-text-muted)]">—</span>}
+                    </td>
+                    
+                    {/* Package Cubic Feet */}
+                    <td className="px-4 py-3 text-center text-[var(--color-text)] font-mono text-xs">
+                      {p.package_cubic_feet != null ? p.package_cubic_feet.toFixed(3) : <span className="text-[var(--color-text-muted)]">—</span>}
+                    </td>
+                    
+                    {/* Manuf Upfront % */}
+                    <td className="px-4 py-3 text-center text-[var(--color-text)]">
+                      {p.manuf_upfront_percentage != null ? (
+                        <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${
+                          p.manuf_upfront_percentage >= 0.4 ? 'bg-amber-500/10 text-amber-500' : 'bg-blue-500/10 text-blue-400'
+                        }`}>
+                          {Math.round(p.manuf_upfront_percentage * 100)}%
+                        </span>
+                      ) : <span className="text-[var(--color-text-muted)]">—</span>}
+                    </td>
+                    
+                    {/* Share Carton */}
+                    <td className="px-4 py-3 text-center">
+                      {p.share_carton_in_family != null ? (
+                        p.share_carton_in_family 
+                          ? <span className="text-green-500 text-xs font-medium">✓</span> 
+                          : <span className="text-red-400 text-xs font-medium">✗</span>
+                      ) : <span className="text-[var(--color-text-muted)]">—</span>}
                     </td>
                     
                     {/* Action */}

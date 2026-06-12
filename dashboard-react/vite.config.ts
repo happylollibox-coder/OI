@@ -30,7 +30,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'https://data-entry-forms-405291422506.us-central1.run.app',
+        target: 'https://data-entry-forms-405291422506.me-west1.run.app',
         changeOrigin: true,
       },
       '/cubejs-api': 'http://localhost:4000',

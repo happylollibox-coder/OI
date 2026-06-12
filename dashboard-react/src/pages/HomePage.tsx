@@ -20,7 +20,7 @@ import { MEASURE_META, type TrendMeasure } from '../constants';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
 import { usePageSummary } from '../components/PageSummaryBar';
 
-const ALL_MEASURES: TrendMeasure[] = ['sales', 'ad_cost', 'cogs', 'net_profit', 'net_roas', 'orders', 'clicks', 'sessions', 'organic_pct', 'payment'];
+const ALL_MEASURES: TrendMeasure[] = ['sales', 'ad_cost', 'cogs', 'net_profit', 'net_roas', 'orders', 'units', 'clicks', 'sessions', 'organic_pct', 'payment'];
 
 const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'family', label: 'Family', group: 'Info' },
@@ -562,13 +562,13 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           const lySl = lyD.sales?.sum ?? 0;
           const lyCg = lyD.cogs?.sum ?? 0;
           lyResolved.ly_ad_cost = lyCo;
-          lyResolved.ly_net_profit = lySl - lyCg - lyCo;
+          lyResolved.ly_net_profit = lyD.net_profit?.sum ?? (lySl - lyCg - lyCo);
         }
         return {
           label: weekRangeLabelCapped(w, perfMaxDate),
           weekKey: w,
           hasSqp: sqpWeeks.has(w),
-          ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: sl - cg - co,
+          ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: d?.net_profit?.sum ?? (sl - cg - co),
           net_roas: co ? (sl - cg) / co : 0,
           payment: 0,
           ...lyResolved,
@@ -638,7 +638,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
             cyValues.sales = sl;
             cyValues.cogs = cg;
             cyValues.ad_cost = co;
-            cyValues.net_profit = sl - cg - co;
+            cyValues.net_profit = d.net_profit?.sum ?? (sl - cg - co);
             cyValues.net_roas = co ? (sl - cg) / co : 0;
             const prevMonth = idx > 0 ? monthSlots[idx - 1] : null;
             const prevSales = prevMonth ? (byMonth[prevMonth]?.sales?.sum ?? 0) : 0;
@@ -667,7 +667,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           const lySl = lyD.sales?.sum ?? 0;
           const lyCg = lyD.cogs?.sum ?? 0;
           lyResolved.ly_ad_cost = lyCo;
-          lyResolved.ly_net_profit = lySl - lyCg - lyCo;
+          lyResolved.ly_net_profit = lyD.net_profit?.sum ?? (lySl - lyCg - lyCo);
 
           const monthIdx = parseInt(m.slice(5), 10) - 1;
           return { label: MONTH_NAMES[monthIdx] || m, weekKey: m, hasSqp: true, ...cyValues, ...lyResolved } as unknown as typeof rawData[0];
@@ -676,7 +676,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         const months = Object.keys(byMonth).sort();
         const keep = new Set(getPeriodsToInclude(filters.specificPeriod, periodMode, months, pt));
         const entries = Object.entries(byMonth).filter(([m]) => keep.has(m)).sort(([a], [b]) => a.localeCompare(b));
-        rawData = entries.map(([m, d]) => { const r = resolve(d); const co = d.ad_cost?.sum ?? 0; const sl = d.sales?.sum ?? 0; const cg = d.cogs?.sum ?? 0; const cu = d.__units ?? 0; const mIdx = months.indexOf(m); const prevMk = mIdx > 0 ? months[mIdx - 1] : ''; const prevBucket = prevMk ? byMonth[prevMk] : null; const prevSales = prevBucket?.sales?.sum ?? 0; const prevUnits = prevBucket?.__units ?? 0; const prevAd = prevBucket?.ad_cost?.sum ?? 0; const curMk = m.slice(0, 7); const curSt = curMk ? (storageCostLookup.byMonth[curMk] ?? 0) : 0; const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate); const curNet = sl - co - (cu * amazonFeeRate); return { label: m, weekKey: m, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: sl - cg - co, net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt }; });
+        rawData = entries.map(([m, d]) => { const r = resolve(d); const co = d.ad_cost?.sum ?? 0; const sl = d.sales?.sum ?? 0; const cg = d.cogs?.sum ?? 0; const np = d.net_profit?.sum ?? (sl - cg - co); const cu = d.__units ?? 0; const mIdx = months.indexOf(m); const prevMk = mIdx > 0 ? months[mIdx - 1] : ''; const prevBucket = prevMk ? byMonth[prevMk] : null; const prevSales = prevBucket?.sales?.sum ?? 0; const prevUnits = prevBucket?.__units ?? 0; const prevAd = prevBucket?.ad_cost?.sum ?? 0; const curMk = m.slice(0, 7); const curSt = curMk ? (storageCostLookup.byMonth[curMk] ?? 0) : 0; const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate); const curNet = sl - co - (cu * amazonFeeRate); return { label: m, weekKey: m, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: np, net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt }; });
       }
     } else if (periodMode === 'quarter') {
       const byQuarter: Record<string, Bucket> = {};
@@ -708,7 +708,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         }
         const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate);
         const curNet = sl - co - (curUnits * amazonFeeRate);
-        return { label: q, weekKey: q, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: sl - cg - co, net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
+        return { label: q, weekKey: q, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: d.net_profit?.sum ?? (sl - cg - co), net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
       });
     } else {
       const byYear: Record<string, Bucket> = {};
@@ -735,7 +735,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         }
         const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate);
         const curNet = sl - co - (curUnits * amazonFeeRate);
-        return { label: y, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: sl - cg - co, net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
+        return { label: y, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: d.net_profit?.sum ?? (sl - cg - co), net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
       });
     }
 
@@ -744,7 +744,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       // Exclude ratio measures from naive summation — they'll be recalculated
       const RATIO_MEASURES = new Set(['net_roas', 'organic_pct']);
       const sumMeasures = (activeMeasures as unknown as string[]).filter(m => !RATIO_MEASURES.has(m));
-      const cumulativeKeys = [...sumMeasures, 'ad_cost', 'net_profit', 'sales', 'cogs', ...lyKeys, 'ly_ad_cost', 'ly_net_profit', 'ly_sales', 'ly_cogs'];
+      const cumulativeKeys = [...new Set([...sumMeasures, 'ad_cost', 'net_profit', 'sales', 'cogs', ...lyKeys, 'ly_ad_cost', 'ly_net_profit', 'ly_sales', 'ly_cogs'])];
       const running: Record<string, number> = {};
       return rawData.map(row => {
         const newRow = { ...row };

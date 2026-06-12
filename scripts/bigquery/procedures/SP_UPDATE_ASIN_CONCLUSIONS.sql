@@ -42,6 +42,7 @@ BEGIN
         DATE_DIFF(COALESCE(e.end_date, CURRENT_DATE()), e.start_date, DAY) as experiment_days
       FROM `onyga-482313.OI.DIM_EXPERIMENT` e
       WHERE e.status IN ('ACTIVE', 'COMPLETED')
+        AND e.strategy_id IS NOT NULL
         AND DATE_DIFF(COALESCE(e.end_date, CURRENT_DATE()), e.start_date, DAY) >= 14
     ),
 

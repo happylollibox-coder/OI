@@ -3,7 +3,7 @@
 cube(`PurchaseOrdersDashboard`, {
   sql: `SELECT * FROM \`onyga-482313.OI.V_SUPPLY_ORDERS_DASHBOARD\``,
 
-  refreshKey: { every: '5 minute' },
+  refreshKey: { every: '1 second' },
 
   measures: {
     totalUnpaidManufacturer: {

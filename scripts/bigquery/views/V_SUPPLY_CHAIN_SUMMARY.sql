@@ -46,6 +46,18 @@ in_transit AS (
   GROUP BY i.ASIN
 ),
 
+-- MFR Ready inventory (manufactured, ready to ship from factory)
+mfr_ready AS (
+  SELECT
+    i.ASIN,
+    SUM(i.quantity_balance) AS mfr_stock_qty
+  FROM `onyga-482313.OI.FACT_INVENTORY_SNAPSHOT` i
+  CROSS JOIN latest_date ld
+  WHERE i.Date = ld.snapshot_date
+    AND i.source_type = 'MFR Ready'
+  GROUP BY i.ASIN
+),
+
 -- Incoming AWD Shipments (Physical shipments created)
 incoming_awd AS (
   SELECT p.asin, sum(l.quantity_shipped) as awd_incoming_qty
@@ -96,7 +108,8 @@ SELECT
   -- Stock levels
   COALESCE(se.sellable_qty, 0)                                    AS sellable_qty,
   COALESCE(it.in_transit_qty, 0)                                  AS in_transit_qty,
-  COALESCE(se.sellable_qty, 0) + COALESCE(it.in_transit_qty, 0)  AS total_available_qty,
+  COALESCE(mr.mfr_stock_qty, 0)                                   AS mfr_stock_qty,
+  COALESCE(se.sellable_qty, 0) + COALESCE(it.in_transit_qty, 0) + COALESCE(mr.mfr_stock_qty, 0) AS total_available_qty,
   COALESCE(se.fba_stock_qty, 0)                                   AS fba_stock_qty,
   COALESCE(se.awd_stock_qty, 0)                                   AS awd_stock_qty,
 
@@ -151,6 +164,7 @@ FROM `onyga-482313.OI.DIM_PRODUCT` p
 CROSS JOIN latest_date ld
 LEFT JOIN sellable se      ON se.ASIN = p.asin
 LEFT JOIN in_transit it    ON it.ASIN = p.asin
+LEFT JOIN mfr_ready mr    ON mr.ASIN = p.asin
 LEFT JOIN incoming_awd ia  ON ia.ASIN = p.asin
 LEFT JOIN next_ship ns     ON ns.ASIN = p.asin
 LEFT JOIN forecast_rate fr ON fr.asin = p.asin

@@ -4,6 +4,7 @@ import { Card } from '../components/Card';
 import { Section } from '../components/Section';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { Badge } from '../components/Badge';
+import { NegativePhrases } from '../components/NegativePhrases';
 
 interface PipelineTask {
   procedure_name: string;
@@ -121,6 +122,10 @@ export function AdminPage() {
           </Card>
         </Section>
       )}
+
+      <Section title="Negative Phrases" count={`Per-Product Keyword Negatives`}>
+        <NegativePhrases />
+      </Section>
 
       <Section title="Pipeline Run Logs">
         <div className="flex justify-between items-center mb-4">

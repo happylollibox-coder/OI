@@ -122,23 +122,23 @@ export function CreatePOModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="bg-[#1C1C1F] border border-border w-full max-w-5xl rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-card border border-border w-full max-w-5xl rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border/50 bg-white/[0.02]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border/50 bg-surface">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400">
               <Package size={18} />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-white">
+              <h2 className="text-sm font-semibold text-text">
                 Create Purchase Order
               </h2>
-              <p className="text-[11px] text-gray-400 truncate max-w-[250px]">
+              <p className="text-[11px] text-muted truncate max-w-[250px]">
                 {draftLines.length} product line{draftLines.length > 1 ? 's' : ''} drafted
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-md transition-colors">
+          <button onClick={onClose} className="p-1.5 text-muted hover:text-text hover:bg-inset rounded-md transition-colors">
             <X size={16} />
           </button>
         </div>
@@ -154,22 +154,22 @@ export function CreatePOModal({
           {/* Drafted Lines Summary */}
           <div className="space-y-2">
             <div className="flex justify-between items-center mb-2">
-              <h3 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Order Items</h3>
+              <h3 className="text-[11px] font-bold text-muted uppercase tracking-wider">Order Items</h3>
               <div className="relative">
                 <button 
                   onClick={() => setIsAddMenuOpen(!isAddMenuOpen)}
-                  className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 rounded-md transition-colors"
+                  className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 bg-purple-500/15 text-purple-500 dark:text-purple-400 hover:bg-purple-500/25 rounded-md transition-colors"
                 >
                   <Plus size={12} />
                   ADD LINE
                 </button>
                 {isAddMenuOpen && (
-                  <div className="absolute z-20 mt-1 w-64 bg-[#2C2C30] border border-border/50 rounded-lg shadow-xl overflow-hidden right-0 max-h-64 overflow-y-auto">
+                  <div className="absolute z-20 mt-1 w-64 bg-card border border-border/50 rounded-lg shadow-xl overflow-hidden right-0 max-h-64 overflow-y-auto">
                     {Object.entries(productsByFamily).map(([family, prods]) => (
                       <div key={family} className="border-b border-border/50 last:border-0">
                         <button 
                           onClick={() => setExpandedFamilies(prev => ({...prev, [family]: !prev[family]}))}
-                          className="w-full flex items-center justify-between px-3 py-2 text-left bg-black/20 hover:bg-black/40 text-[11px] font-bold text-gray-300"
+                          className="w-full flex items-center justify-between px-3 py-2 text-left bg-inset hover:bg-card-hover text-[11px] font-bold text-text"
                         >
                           {family}
                           {expandedFamilies[family] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -180,10 +180,10 @@ export function CreatePOModal({
                               <button
                                 key={p.asin}
                                 onClick={() => handleAddLine(p)}
-                                className="w-full text-left px-3 py-1.5 hover:bg-white/5 transition-colors flex items-center justify-between"
+                                className="w-full text-left px-3 py-1.5 hover:bg-card-hover transition-colors flex items-center justify-between"
                               >
-                                <span className="text-[11px] font-medium text-gray-200 truncate pr-2">{p.product_short_name}</span>
-                                <span className="text-[9px] text-gray-500 font-mono">{p.asin}</span>
+                                <span className="text-[11px] font-medium text-text truncate pr-2">{p.product_short_name}</span>
+                                <span className="text-[9px] text-subtle font-mono">{p.asin}</span>
                               </button>
                             ))}
                           </div>
@@ -198,38 +198,38 @@ export function CreatePOModal({
             <div className="rounded-md border border-border/50 p-2 space-y-1 max-h-64 overflow-y-auto">
               {draftLines.map((line, idx) => (
                 <div key={idx} className="flex items-start gap-3 py-1.5 px-2 hover:bg-white/5 rounded-md transition-colors group min-w-0">
-                  <div className="flex-1 min-w-0 flex items-center justify-between bg-black/20 border border-border/50 rounded px-3 py-2">
-                    <span className="font-semibold text-white text-[12px] pr-4">{line.product}</span>
-                    <span className="text-[10px] text-gray-500 font-mono tracking-wider bg-black/30 px-1.5 py-0.5 rounded flex-shrink-0">{line.asin}</span>
+                  <div className="flex-1 min-w-0 flex items-center justify-between bg-inset border border-border/50 rounded px-3 py-2">
+                    <span className="font-semibold text-text text-[12px] pr-4">{line.product}</span>
+                    <span className="text-[10px] text-subtle font-mono tracking-wider bg-inset px-1.5 py-0.5 rounded flex-shrink-0">{line.asin}</span>
                   </div>
                   
-                  <div className="flex items-center gap-2 bg-black/20 border border-border/50 rounded flex-shrink-0 px-2 py-2 mt-0.5">
-                    <span className="text-[10px] text-gray-400 font-medium">QTY</span>
+                  <div className="flex items-center gap-2 bg-inset border border-border/50 rounded flex-shrink-0 px-2 py-2 mt-0.5">
+                    <span className="text-[10px] text-muted font-medium">QTY</span>
                     <input 
                       type="number" 
                       min="1"
                       value={line.qty} 
                       onChange={e => handleUpdateLine(idx, { qty: parseInt(e.target.value) || 0 })}
-                      className="w-16 bg-transparent text-[12px] text-white font-semibold outline-none text-right"
+                      className="w-16 bg-transparent text-[12px] text-text font-semibold outline-none text-right"
                     />
                   </div>
                   
-                  <div className="flex items-center gap-2 bg-black/20 border border-border/50 rounded flex-shrink-0 px-2 py-2 mt-0.5">
-                    <span className="text-[10px] text-gray-400 font-medium">COST</span>
-                    <span className="text-[12px] text-gray-400">$</span>
+                  <div className="flex items-center gap-2 bg-inset border border-border/50 rounded flex-shrink-0 px-2 py-2 mt-0.5">
+                    <span className="text-[10px] text-muted font-medium">COST</span>
+                    <span className="text-[12px] text-muted">$</span>
                     <input 
                       type="number" 
                       min="0"
                       step="0.01"
                       value={line.cogs} 
                       onChange={e => handleUpdateLine(idx, { cogs: parseFloat(e.target.value) || 0 })}
-                      className="w-20 bg-transparent text-[12px] text-white font-semibold outline-none text-right -ml-1"
+                      className="w-20 bg-transparent text-[12px] text-text font-semibold outline-none text-right -ml-1"
                     />
                   </div>
                   
-                  <div className="flex items-center gap-2 bg-black/20 border border-border/50 rounded flex-shrink-0 px-2 py-2 mt-0.5">
-                    <span className="text-[10px] text-gray-400 font-medium">AMT</span>
-                    <span className="text-[12px] text-gray-400">$</span>
+                  <div className="flex items-center gap-2 bg-inset border border-border/50 rounded flex-shrink-0 px-2 py-2 mt-0.5">
+                    <span className="text-[10px] text-muted font-medium">AMT</span>
+                    <span className="text-[12px] text-muted">$</span>
                     <input 
                       type="text" 
                       value={line.amtString ?? Number((line.qty * line.cogs).toFixed(2))} 
@@ -244,13 +244,13 @@ export function CreatePOModal({
                         }
                       }}
                       onBlur={() => handleUpdateLine(idx, { amtString: undefined })}
-                      className="w-24 bg-transparent text-[12px] text-white font-semibold outline-none text-right -ml-1"
+                      className="w-24 bg-transparent text-[12px] text-text font-semibold outline-none text-right -ml-1"
                     />
                   </div>
                   
                   <button 
                     onClick={() => handleRemoveLine(idx)}
-                    className="text-gray-400 hover:text-red-400 p-1.5 rounded-md opacity-50 hover:opacity-100 transition-all flex-shrink-0 bg-black/20 border border-border/50 mt-1"
+                    className="text-muted hover:text-red-400 p-1.5 rounded-md opacity-50 hover:opacity-100 transition-all flex-shrink-0 bg-inset border border-border/50 mt-1"
                     title="Remove line"
                   >
                     <Minus size={12} />
@@ -267,11 +267,11 @@ export function CreatePOModal({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Manufacturer</label>
+              <label className="text-[11px] font-semibold text-muted uppercase tracking-wider">Manufacturer</label>
               <select 
                 value={manufacturer} 
                 onChange={e => setManufacturer(e.target.value)}
-                className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-white outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-text outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
               >
                 {manufacturerOptions.length === 0 ? (
                   <option value="Standard Supplier">Standard Supplier</option>
@@ -283,23 +283,23 @@ export function CreatePOModal({
               </select>
             </div>
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Order Date</label>
+              <label className="text-[11px] font-semibold text-muted uppercase tracking-wider">Order Date</label>
               <input 
                 type="date" 
                 value={orderDate} 
                 onChange={e => setOrderDate(e.target.value)}
-                className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-white outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-text outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Payment Status</label>
+              <label className="text-[11px] font-semibold text-muted uppercase tracking-wider">Payment Status</label>
               <select 
                 value={paymentStatus} 
                 onChange={e => setPaymentStatus(e.target.value)}
-                className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-white outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-text outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
               >
                 <option value="PENDING">Pending</option>
                 <option value="DEPOSIT_PAID">Deposit Paid</option>
@@ -307,11 +307,11 @@ export function CreatePOModal({
               </select>
             </div>
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Currency</label>
+              <label className="text-[11px] font-semibold text-muted uppercase tracking-wider">Currency</label>
               <select 
                 value={currency} 
                 onChange={e => setCurrency(e.target.value)}
-                className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-white outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-text outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
               >
                 <option value="USD">USD</option>
                 <option value="CNY">CNY</option>
@@ -321,22 +321,22 @@ export function CreatePOModal({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Notes</label>
+            <label className="text-[11px] font-semibold text-muted uppercase tracking-wider">Notes</label>
             <textarea 
               value={notes} 
               onChange={e => setNotes(e.target.value)}
               placeholder="Optional order notes..."
-              className="w-full bg-black/20 border border-border rounded-md px-3 py-2 text-sm text-white outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50 min-h-[80px]"
+              className="w-full bg-inset border border-border rounded-md px-3 py-2 text-sm text-text outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50 min-h-[80px]"
             />
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-4 border-t border-border/50 bg-white/[0.02] flex justify-end gap-3">
+        <div className="px-5 py-4 border-t border-border/50 bg-surface flex justify-end gap-3">
           <button 
             onClick={onClose}
             disabled={loading}
-            className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm font-medium text-muted hover:text-text transition-colors disabled:opacity-50"
           >
             Cancel
           </button>

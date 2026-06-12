@@ -1,6 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 
-export type ChartMeasureId = 'spend' | 'sales' | 'orders' | 'conv_rate' | 'net_roas' | 'organic_pct';
+export type ChartMeasureId = 'spend' | 'sales' | 'orders' | 'conv_rate' | 'net_roas' | 'organic_pct' | 'cpc';
 
 export type DataCheck =
   | 'has_spend_data'

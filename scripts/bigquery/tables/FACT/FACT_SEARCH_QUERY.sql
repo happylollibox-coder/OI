@@ -38,6 +38,10 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.FACT_SEARCH_QUERY` (
   TOTAL_CART_ADDS INT64,
   TOTAL_PURCHASES INT64,
   
+  -- Median Click Price Metrics
+  total_median_click_price FLOAT64,   -- Median click price across all ASINs for the query
+  asin_median_click_price FLOAT64,    -- Median click price for this specific ASIN
+  
   -- Additional metrics
   query_rank INT64,
   avg_position FLOAT64,

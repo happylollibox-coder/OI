@@ -76,6 +76,12 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.DIM_PRODUCT` (
   share_carton_in_family BOOLEAN DEFAULT TRUE, -- Can share cartons with other products in same family (same dimensions)
   manuf_upfront_percentage FLOAT64, -- Manufacturer upfront percentage (0.3 or 0.4)
   
+  -- Product segmentation (auto-derived from ad data, manually overridable)
+  seg_gender STRING, -- Target gender(s), comma-separated. e.g. 'Female,Male'
+  seg_age_group STRING, -- Target age group(s), comma-separated. e.g. '5-9 (Kid),10-12 (Tween)'
+  seg_occasion STRING, -- Target occasion(s), comma-separated. e.g. 'Birthday,Christmas'
+  seg_product_type STRING, -- Shopper product type(s), comma-separated. e.g. 'Accessories,Gift Sets'
+
   -- Metadata
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
