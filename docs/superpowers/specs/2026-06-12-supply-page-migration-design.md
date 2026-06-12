@@ -27,15 +27,18 @@ React Supply page ──reads/writes──> Flask /api/* ──> BigQuery DE_* t
        └── analytics reads (Stock Snapshot, summaries) ──> Cube.js
 ```
 
-- **Shared API client:** `dashboard-react/src/lib/dataEntryApi.ts`. Base URL from `VITE_DATA_ENTRY_URL`, attaches `Authorization: Bearer <dashboard_token>`, normalizes errors. Existing scattered `fetch` calls (ShipmentEngine, LearnPage, StrategiesPage) migrate onto it.
+- **Shared API client:** `dashboard-react/src/utils/apiFetch.ts` (exists since `ff91564`) — attaches `Authorization: Bearer <dashboard_token>`; requests go through the `/api/*` proxy. All existing consumers already converted. May be extended with error normalization for the Supply forms.
 - **Post-write refresh:** after any write, refetch the affected list from Flask. Flask already calls `clear_data_cache()` on writes, so reads are immediately consistent.
 - **No optimistic UI.** Always confirm from the server response — parity with Flask's post-redirect-refresh behavior.
 
 ## 3. Phase 0 — API hardening + client plumbing
 
-- `@token_required` decorator on all `/api/*` routes, verifying the JWT issued by `/api/auth/dashboard-token` (signed with `SECRET_KEY`).
-- CORS narrowed from `*` to the dashboard production origin + localhost dev ports.
-- Existing dashboard API consumers start sending the Bearer header (same pattern they already use with Cube).
+**Status: DONE** — implemented in commit `ff91564` (2026-06-12), see `architecture/API_AUTH.md`.
+
+- `protect_api` `before_request` hook on all `/api/*` routes: requires the dashboard JWT (HS256, `CUBEJS_API_SECRET` — same token Cube verifies) or an allowed session cookie; OPTIONS exempt. New `/api` routes are protected by default.
+- CORS narrowed from `*` to the `ALLOWED_ORIGINS` allowlist (Cloud Run dashboard origins + localhost:5173).
+- Shared client: `dashboard-react/src/utils/apiFetch.ts` injects `Authorization` from `dashboard_token`; all 67 `fetch('/api/…')` call sites converted. **All new Supply-page code must use `apiFetch`, never raw `fetch`.**
+- Calls go through the dev/nginx proxy at `/api/*` (Vite dev → local Flask :5050; Docker nginx → us-central1 Cloud Run), not a direct `VITE_DATA_ENTRY_URL` fetch.
 - Browser-session routes (`/login`, `/auth/*`, HTML pages) untouched so the Flask UI keeps working during migration.
 
 ## 4. Flask API gap-fill (additive only)
@@ -91,7 +94,7 @@ Tab bar extends to: **POs · Shipments · Payments · Stock Snapshot · Costs Re
 
 | Phase | Scope |
 |---|---|
-| 0 | API auth + CORS, shared API client, repoint existing consumers, endpoint/auto-logic audit |
+| 0 | ✅ DONE (`ff91564`) — API auth + CORS, shared API client, consumers repointed. Remaining: endpoint/auto-logic audit |
 | 1 | POs — list + details drawer + new-PO/other-PO forms + line editing + delete/bulk-delete |
 | 2 | Shipments — list + details + new form + line ops + bulk update |
 | 3 | Payments — list + details + new form + both bulk-entry flows |
