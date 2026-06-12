@@ -70,6 +70,8 @@ export function mapResearchRow(t: Record<string, unknown>): ResearchRow {
     cps_source: (t.cps_source as ResearchRow['cps_source']) ?? null,
     effective_cps: num(t.effective_cps),
     price_bucket: (t.price_bucket as string) ?? null,
+    est_cps_curve: num(t.est_cps_curve),
+    intent_factor: num(t.intent_factor),
     is_holiday_active: t.is_holiday_active == null ? null : Boolean(t.is_holiday_active),
   };
 }

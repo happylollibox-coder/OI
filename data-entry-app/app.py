@@ -7075,7 +7075,7 @@ def _research_ranked_select(parent, alias='t'):
           rr.gender_score, rr.age_score, rr.occasion_score, rr.pt_score,
           rr.cps_source, rr.effective_cps, rr.price_bucket, rr.is_holiday_active,
           rr.purchase_rank AS purchase_rank_score, rr.rank AS rank_score,
-          rr.ads_purch, rr.ads_cps, rr.est_cps,
+          rr.ads_purch, rr.ads_cps, rr.est_cps, rr.est_cps_curve, rr.intent_factor,
           COALESCE(rr.family_purchases, 0) AS family_purchases,
           COALESCE(rr.family_clicks, 0) AS family_clicks,
           COALESCE(rr.family_impressions, 0) AS family_impressions"""
@@ -7097,6 +7097,7 @@ def _research_ranked_select(parent, alias='t'):
           CAST(NULL AS BOOL) AS is_holiday_active,
           CAST(NULL AS FLOAT64) AS purchase_rank_score, CAST(NULL AS FLOAT64) AS rank_score,
           CAST(NULL AS INT64) AS ads_purch, CAST(NULL AS FLOAT64) AS ads_cps, CAST(NULL AS FLOAT64) AS est_cps,
+          CAST(NULL AS FLOAT64) AS est_cps_curve, CAST(NULL AS FLOAT64) AS intent_factor,
           0 AS family_purchases, 0 AS family_clicks, 0 AS family_impressions"""
     return cols, join
 

@@ -12,7 +12,11 @@
 --   gender_score/age_score/occasion_score/pt_score
 --                    per-field seg-fit breakdown (-1 = mismatch pre-cap,
 --                    NULL = family not segmented, 0 = term value unknown)
---   est_cps          Estimated clicks-per-sale from conversion curve (_ALL season)
+--   est_cps          Market-model clicks/sale: family curve (_ALL season) at the
+--                    term's price bucket × the term's market-intent factor.
+--                    Independent of our ads — the Est. CPS column shows this.
+--   est_cps_curve    raw curve value (pre-adjustment), for tooltips
+--   intent_factor    term market CPS ÷ bucket-median market CPS, clamped [0.5, 2]
 --   effective_cps    Real ads CPS (1/CVR) when available, else est_cps
 --   cps_source       'ads_30d' | 'ads_12m' | 'curve' | NULL
 --   cps_fit          0-100 CPS efficiency score
@@ -28,6 +32,8 @@
 --
 -- Dependencies:
 --   FN_EXTRACT_SEGMENTS, V_SQP_QUERY_WEEKLY, FACT_AMAZON_ADS, FACT_SEARCH_QUERY,
+--   FACT_RESEARCH_TERMS (must be refreshed BEFORE this view is materialized —
+--   SP_REFRESH_RESEARCH_RANKED does so),
 --   DIM_PRODUCT, DIM_COSTS_HISTORY, V_DIM_LISTING_CURRENT, V_CONVERSION_CURVE,
 --   DE_SEARCH_TERM_SEGMENTS (manual overrides), DE_PRODUCT_TYPE_KEYWORDS
 --
@@ -222,24 +228,83 @@ ads_metrics AS (
   GROUP BY p.parent_name, a.search_term
 ),
 
--- ═══ 5. Est. CPS from conversion curve (_ALL season) ═══
--- Matches each (family × search term) to the right price bucket
-est_cps_lookup AS (
+-- ═══ 5. Est. CPS v2 (market model) ═══
+-- Cost note: built from FACT_RESEARCH_TERMS (term grain, refreshed FIRST by
+-- SP_REFRESH_RESEARCH_RANKED) instead of re-scanning V_SQP_QUERY_WEEKLY, and
+-- the curve is joined as a tiny (family × bucket) lookup instead of a range
+-- join over the family × term cross join — the v1 shape of this pipeline
+-- blew BigQuery's per-statement CPU guardrail during materialization.
+-- Bucket thresholds mirror V_CONVERSION_CURVE (keep in sync).
+term_stats AS (
+  SELECT
+    query_text,
+    median_click_price,
+    SAFE_DIVIDE(market_clicks, NULLIF(market_purchases, 0)) AS market_cps
+  FROM `onyga-482313`.OI.FACT_RESEARCH_TERMS
+  WHERE median_click_price > 0
+),
+
+fam_term_bucket AS (
   SELECT
     fs.parent_name,
-    st.query_text,
-    SAFE_DIVIDE(fs.product_price, st.median_click_price) AS price_ratio,
-    cc.clicks_per_sale AS est_cps,
-    cc.price_bucket
+    ts.query_text,
+    ts.market_cps,
+    SAFE_DIVIDE(fs.product_price, ts.median_click_price) AS price_ratio,
+    CASE
+      WHEN SAFE_DIVIDE(fs.product_price, ts.median_click_price) < 0.8 THEN 'A. Cheaper'
+      WHEN SAFE_DIVIDE(fs.product_price, ts.median_click_price) < 1.2 THEN 'B. Sweet spot'
+      WHEN SAFE_DIVIDE(fs.product_price, ts.median_click_price) < 1.8 THEN 'C. Pricier'
+      WHEN SAFE_DIVIDE(fs.product_price, ts.median_click_price) < 2.5 THEN 'D. Much pricier'
+      ELSE 'E. Way above'
+    END AS price_bucket
   FROM family_segments fs
-  CROSS JOIN search_terms st
-  LEFT JOIN `onyga-482313`.OI.V_CONVERSION_CURVE cc
-    ON cc.parent_name = fs.parent_name
-    AND cc.holiday_name = '_ALL'
-    AND SAFE_DIVIDE(fs.product_price, st.median_click_price) >= cc.price_ratio_low
-    AND SAFE_DIVIDE(fs.product_price, st.median_click_price) < cc.price_ratio_high
-  WHERE st.median_click_price > 0
-    AND fs.product_price > 0
+  CROSS JOIN term_stats ts
+  WHERE fs.product_price > 0
+),
+
+-- Typical market CPS per family × bucket (median across that bucket's terms)
+bucket_median AS (
+  SELECT
+    parent_name,
+    price_bucket,
+    APPROX_QUANTILES(market_cps, 100)[OFFSET(50)] AS median_market_cps
+  FROM fam_term_bucket
+  WHERE market_cps > 0
+  GROUP BY parent_name, price_bucket
+),
+
+curve_lookup AS (
+  SELECT parent_name, price_bucket, clicks_per_sale
+  FROM `onyga-482313`.OI.V_CONVERSION_CURVE
+  WHERE holiday_name = '_ALL'
+),
+
+-- Est. CPS v2: family curve anchored, adjusted by the term's own market
+-- conversion intent relative to the typical term in the same bucket
+-- (clamped 0.5×–2×). Fixes the "same number on every row in a bucket" problem.
+est_v2 AS (
+  SELECT
+    ftb.parent_name,
+    ftb.query_text,
+    ftb.price_bucket,
+    cl.clicks_per_sale AS est_cps_curve,
+    CASE
+      WHEN cl.clicks_per_sale IS NOT NULL AND ftb.market_cps > 0 AND bm.median_market_cps > 0
+        THEN ROUND(LEAST(GREATEST(ftb.market_cps / bm.median_market_cps, 0.5), 2.0), 2)
+      ELSE NULL
+    END AS intent_factor,
+    CASE
+      WHEN cl.clicks_per_sale IS NULL THEN NULL
+      ELSE ROUND(cl.clicks_per_sale * COALESCE(
+        CASE WHEN ftb.market_cps > 0 AND bm.median_market_cps > 0
+             THEN LEAST(GREATEST(ftb.market_cps / bm.median_market_cps, 0.5), 2.0)
+        END, 1), 1)
+    END AS est_cps
+  FROM fam_term_bucket ftb
+  LEFT JOIN curve_lookup cl
+    ON cl.parent_name = ftb.parent_name AND cl.price_bucket = ftb.price_bucket
+  LEFT JOIN bucket_median bm
+    ON bm.parent_name = ftb.parent_name AND bm.price_bucket = ftb.price_bucket
 ),
 
 -- ═══ 6. Segment fit calculation ═══
@@ -375,8 +440,10 @@ scored AS (
     sf.occasion_score,
     sf.pt_score,
 
-    -- Est. CPS (from conversion curve, _ALL season) + matched price bucket
+    -- Est. CPS v2 (market-intent-adjusted curve) + components for tooltips
     ec.est_cps,
+    ec.est_cps_curve,
+    ec.intent_factor,
     ec.price_bucket,
 
     -- Ads Purch: 30d if >3, else 12m
@@ -435,7 +502,7 @@ scored AS (
     ON sf.parent_name = fs.parent_name AND sf.query_text = st.query_text
   LEFT JOIN ads_metrics am
     ON am.parent_name = fs.parent_name AND LOWER(am.search_term) = LOWER(st.query_text)
-  LEFT JOIN est_cps_lookup ec
+  LEFT JOIN est_v2 ec
     ON ec.parent_name = fs.parent_name AND ec.query_text = st.query_text
   LEFT JOIN family_sqp fq
     ON fq.parent_name = fs.parent_name AND fq.query_text = LOWER(st.query_text)

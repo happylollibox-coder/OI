@@ -291,8 +291,8 @@ export function ResearchPage() {
     rows = [...rows].sort((a, b) => {
       let av: number | string | null, bv: number | string | null;
       if (sortKey === 'est_clicks_per_sale') {
-        av = a.effective_cps ?? a.est_cps;
-        bv = b.effective_cps ?? b.est_cps;
+        av = a.est_cps;
+        bv = b.est_cps;
       } else if (sortKey === 'match_rank') {
         av = a.seg_fit;
         bv = b.seg_fit;

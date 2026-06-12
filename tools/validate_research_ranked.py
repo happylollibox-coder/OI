@@ -38,6 +38,17 @@ CHECKS = [
         WHERE ads_cps IS NOT NULL
           AND (cps_source NOT IN ('ads_30d','ads_12m')
                OR ABS(effective_cps - ads_cps) > 0.06)"""),
+    ("intent_factor clamped to [0.5, 2]", """
+        SELECT COUNT(*) FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED
+        WHERE intent_factor IS NOT NULL AND (intent_factor < 0.5 OR intent_factor > 2.0)"""),
+    ("est_cps = curve x intent (within rounding)", """
+        -- intent_factor is stored rounded to 2dp while est_cps used the
+        -- unrounded factor: tolerance = curve x 0.005 (factor rounding)
+        -- + 0.05 (est rounding) + slack
+        SELECT COUNT(*) FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED
+        WHERE est_cps IS NOT NULL AND est_cps_curve IS NOT NULL
+          AND ABS(est_cps - est_cps_curve * COALESCE(intent_factor, 1))
+              > est_cps_curve * 0.006 + 0.06"""),
     ("fallback overall_fit = seg_fit - bucket penalty", """
         SELECT COUNT(*) FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED
         WHERE NOT (ads_family_orders > 3 AND cps_source IN ('ads_30d','ads_12m'))

@@ -220,7 +220,7 @@ export function ResultsTable({
                   <SortHeader label="ROAS 30d" colKey="roas_30d" className="text-right" tooltip="Return on ad spend (sales / spend) over the last 30 days" />
                   <th className="px-2 py-2 text-[9px] text-muted font-semibold uppercase tracking-wide text-right" title="Ads units sold. If 30d > 3 → 30d value, else 12m value">Ads Purch</th>
                   <th className="px-2 py-2 text-[9px] text-muted font-semibold uppercase tracking-wide text-right" title="Ads CPS = 1/CVR. If 30d units > 3 → 30d CVR, else 12m CVR">Ads CPS</th>
-                  <SortHeader label="Est. CPS" colKey="est_clicks_per_sale" className="text-right" tooltip="Clicks per sale — from real CVR data when available, otherwise estimated from conversion curve" />
+                  <SortHeader label="Est. CPS" colKey="est_clicks_per_sale" className="text-right" tooltip="Market-model clicks per sale: family conversion curve at the term's price bucket × the term's market intent (SQP, 0.5×–2×). Independent of your ads — compare against Ads CPS." />
                   <th className="px-2 py-2 text-[9px] text-muted font-semibold uppercase tracking-wide text-right" title="Estimated cost per sale = Est. CPS × CPC (30d or 12m)">Est. $/Sale</th>
                 </tr>
               </thead>
@@ -531,10 +531,14 @@ export function ResultsTable({
                           }
                         </td>
 
-                        {/* Est. Clicks Per Sale (effective CPS from SQL) */}
-                        <td className={`px-2 py-2 text-right tabular-nums font-medium ${isRealCps ? 'text-heading' : rowRatioColor}`}
-                          title={isRealCps ? `From real ads CVR (${row.cps_source === 'ads_30d' ? '30d' : '12m'}) → ${estCps?.toFixed(1)} clicks/sale` : `Estimated from conversion curve (price bucket)`}>
-                          {estCps != null ? fmt(estCps, 1) : '--'}
+                        {/* Est. Clicks Per Sale — market model, independent of our ads */}
+                        <td className={`px-2 py-2 text-right tabular-nums font-medium ${rowRatioColor}`}
+                          title={row.est_cps == null
+                            ? 'No estimate: no curve match for this price bucket'
+                            : row.intent_factor != null
+                              ? `Market model: curve ${row.est_cps_curve?.toFixed(1)} (${row.price_bucket}) × term intent ${row.intent_factor.toFixed(2)} = ${row.est_cps.toFixed(1)} clicks/sale${isRealCps ? `\nCompare: real Ads CPS ${row.ads_cps ?? '—'}` : ''}`
+                              : `Market model: curve ${row.est_cps_curve?.toFixed(1) ?? row.est_cps.toFixed(1)} (${row.price_bucket ?? 'bucket'}), no market intent data${isRealCps ? `\nCompare: real Ads CPS ${row.ads_cps ?? '—'}` : ''}`}>
+                          {row.est_cps != null ? fmt(row.est_cps, 1) : '--'}
                         </td>
 
                         {/* Est. Cost Per Sale */}

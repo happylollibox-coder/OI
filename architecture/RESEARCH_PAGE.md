@@ -83,6 +83,21 @@ Invariant: whenever `ads_cps` is non-null, `cps_source` is `ads_*` and
 `effective_cps ≈ ads_cps` (validated by tools/validate_research_ranked.py).
 Brackets: ≤5→100, ≤8→85, ≤12→70, ≤20→55, ≤35→35, ≤50→20, else 10.
 
+### Est. CPS (market model, independent of our ads)
+`est_cps = est_cps_curve × intent_factor` (changed 2026-06-12; was the raw
+curve value, a family-wide constant per bucket — every term in a bucket showed
+the same number):
+- `est_cps_curve` — family conversion curve (`_ALL` season) at the term's
+  price bucket (`product_price / term median purchase price`).
+- `intent_factor` — the term's market clicks-per-purchase (SQP, 104w, all
+  sellers) ÷ the median market clicks-per-purchase of terms in the SAME
+  family × bucket, clamped to [0.5, 2.0]. High-intent terms estimate lower,
+  weak terms higher. NULL market data → factor 1 (pure curve).
+The **Est. CPS column always shows this model value** — compare it against the
+real `ads_cps` side by side (display unification rolled back 2026-06-12 per Ori).
+`effective_cps` (scoring) still prefers real ads CVR and falls back to this
+improved estimate.
+
 ### Overall Fit
 - `ads_family_orders > 3` with positive CVR → CPS-fit bracket of the real CPS only.
 - Else (no reliable ads data) → **SEG FIT is the base; the price bucket can only
