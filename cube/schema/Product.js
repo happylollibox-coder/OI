@@ -73,5 +73,10 @@ cube(`Product`, {
       type: `number`,
       description: `Current listing price on Amazon`,
     },
+    sku: {
+      sql: `sku`,
+      type: `string`,
+      description: `Merchant SKU (seller SKU used in Amazon Seller Central)`,
+    },
   },
 });

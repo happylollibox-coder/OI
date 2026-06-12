@@ -322,6 +322,7 @@ export interface ProductRow {
   manuf_upfront_percentage: number | null;
   share_carton_in_family: boolean | null;
   listing_price: number | null;
+  sku: string;
 }
 
 export interface HeroAsin {

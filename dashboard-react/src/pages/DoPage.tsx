@@ -428,18 +428,16 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         'ME': '41310184067669',
       };
 
-      const ASIN_TO_SKU_MAP: Record<string, string> = {
-        'B0D7N2MLDP': 'Fresh in Beige',
-        'B0D7N31M6S': 'Fresh in Pink',
-        'B0F9XDSVYB': 'Purple LolliME',
-        'B0F9XFXQRW': 'Pink LolliME',
-        'B0F9X95K5H': 'Mint LolliME',
-        'B0DJFG5ZJ7': 'Blue LolliBox',
-        'B0CR6N3WRC': 'Pink Box + Card',
-        'B0C1VLXYBP': 'White Box + Card',
-        'B09XQ56RK5': 'Purple Box 1',
-        'B0F4KCCSWN': 'Truth Dare Bottle',
-      };
+      // ═══ ASIN / SKU resolution maps ═══
+      // Primary: items queued after 2026-06-12 carry item.asin from ActionRow.asin.
+      // Fallback for older items: resolve ASIN from supply_chain (asin → product_short_name)
+      // and SKU from products (asin → sku loaded from DIM_PRODUCT via Product cube).
+      const asinByShortName = new Map<string, string>(
+        (data.supply_chain || []).filter(r => r.asin && r.product_short_name).map(r => [r.product_short_name, r.asin])
+      );
+      const skuByAsin = new Map<string, string>(
+        (data.products || []).filter(r => r.asin && r.sku).map(r => [r.asin, r.sku])
+      );
 
       // ═══ Helper: detect Product Targeting entities (ASIN targets + AUTO groups) ═══
       const AUTO_TARGETING_GROUPS = new Set(['close-match', 'loose-match', 'substitutes', 'complements']);
@@ -711,16 +709,20 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         } else if (item.action === 'PROMOTE_TO_EXACT') {
           // EXACT_BOOST strategy template: DOWN_ONLY, TOS=500%, bid=$0.50-$2.00, budget=$20
           const bid = item.cpc ? String(Math.min(2.0, Math.max(0.5, +(item.cpc * 1.1).toFixed(2)))) : '0.75';
-          const asin = item.product || '';
-          const sku = ASIN_TO_SKU_MAP[asin] || asin; // Fallback to ASIN if mapping missing
+          // Resolve ASIN: use item.asin (set since 2026-06-12), fall back to supply_chain lookup by short-name
+          const asin = item.asin || asinByShortName.get(item.product) || '';
+          // Resolve SKU from DIM_PRODUCT (via products loader); never write product short-name
+          const sku = skuByAsin.get(asin) || '';
+          if (!asin) console.warn('[Bulksheet] unresolved ASIN/SKU for', item.product);
+          if (asin && !sku) console.warn('[Bulksheet] unresolved ASIN/SKU for', item.product, '— ASIN found but SKU missing, check DIM_PRODUCT');
           const kwShort = item.search_term.split(' ').slice(0, 4).join(' ');
-          
+
           let productPrefix = cn.match(/^(BOTTLE|BOX|ME|FRESH|BRAND)/)?.[1];
-          const skuUpper = sku.toUpperCase();
-          if (skuUpper.includes('ME')) productPrefix = 'ME';
-          else if (skuUpper.includes('BOX')) productPrefix = 'BOX';
-          else if (skuUpper.includes('FRESH')) productPrefix = 'FRESH';
-          else if (skuUpper.includes('BOTTLE')) productPrefix = 'BOTTLE';
+          const productShortUpper = item.product.toUpperCase();
+          if (productShortUpper.includes('ME')) productPrefix = 'ME';
+          else if (productShortUpper.includes('BOX')) productPrefix = 'BOX';
+          else if (productShortUpper.includes('FRESH')) productPrefix = 'FRESH';
+          else if (productShortUpper.includes('BOTTLE')) productPrefix = 'BOTTLE';
           productPrefix = productPrefix || 'PRODUCT';
           const startDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
           const portfolioId = PORTFOLIO_MAP[productPrefix] || '';
@@ -744,7 +746,8 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Ad', 'Operation': 'Create',
             'Campaign ID': spCampName, 'Campaign Name': spCampName,
             'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
-            'SKU': sku, 'State': 'ENABLED' });
+            ...(sku ? { 'SKU': sku } : asin ? { 'ASIN (Informational only)': asin } : {}),
+            'State': 'ENABLED' });
 
 
           // ── VIDEO/EXACT Boost Campaign (Sponsored Brands sheet) ──
@@ -772,7 +775,8 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
 
             // 3. Video Ad Row
             const videoAdName = `${productPrefix} - Video Ad`;
-            console.log('[SB Debug] Video Ad values:', { asin, videoMediaId, BRAND_ENTITY_ID, productPrefix });
+            console.log('[SB Debug] Video Ad values:', { asin, sku, videoMediaId, BRAND_ENTITY_ID, productPrefix });
+            if (!asin) console.warn('[Bulksheet] unresolved ASIN/SKU for', item.product, '— Creative ASINs will be blank');
             sbRows.push({
               'Product': 'Sponsored Brands', 'Entity': 'Video Ad', 'Operation': 'Create',
               'Campaign Id': videoCampName, 'Campaign Name': videoCampName,
@@ -780,7 +784,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
               'Ad Id': videoAdName, 'Ad Name': videoAdName,
               'State': 'enabled',
               'Ad Format': 'video',
-              'Creative ASINs': asin,
+              'Creative ASINs': asin, // resolved ASIN (never product short-name)
               'Video asset IDs': videoMediaId,
               'Creative Type': 'video'
             });
@@ -797,15 +801,17 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         } else if (item.action === 'PROMOTE_TO_PEAK_PHRASE') {
           // Seasonal Peak Campaign Strategy
           const bid = '1.50'; // Aggressive default bid for Peak Seasonal
-          const asin = item.product || '';
-          const sku = ASIN_TO_SKU_MAP[asin] || asin;
-          
+          // Resolve ASIN and SKU — never write product short-name into Amazon fields
+          const asin = item.asin || asinByShortName.get(item.product) || '';
+          const sku = skuByAsin.get(asin) || '';
+          if (!asin) console.warn('[Bulksheet] unresolved ASIN/SKU for', item.product);
+
           let productPrefix = cn.match(/^(BOTTLE|BOX|ME|FRESH|BRAND)/)?.[1] || 'PRODUCT';
-          const skuUpper = sku.toUpperCase();
-          if (skuUpper.includes('ME')) productPrefix = 'ME';
-          else if (skuUpper.includes('BOX')) productPrefix = 'BOX';
-          else if (skuUpper.includes('FRESH')) productPrefix = 'FRESH';
-          else if (skuUpper.includes('BOTTLE')) productPrefix = 'BOTTLE';
+          const productShortUpper = item.product.toUpperCase();
+          if (productShortUpper.includes('ME')) productPrefix = 'ME';
+          else if (productShortUpper.includes('BOX')) productPrefix = 'BOX';
+          else if (productShortUpper.includes('FRESH')) productPrefix = 'FRESH';
+          else if (productShortUpper.includes('BOTTLE')) productPrefix = 'BOTTLE';
           
           const startDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
           const portfolioId = PORTFOLIO_MAP[productPrefix] || '';
@@ -830,7 +836,8 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Ad', 'Operation': 'Create',
               'Campaign ID': spCampName, 'Campaign Name': spCampName,
               'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
-              'SKU': sku, 'State': 'ENABLED' });
+              ...(sku ? { 'SKU': sku } : asin ? { 'ASIN (Informational only)': asin } : {}),
+              'State': 'ENABLED' });
           }
           
           // Add the specific term to the Exact Ad Group

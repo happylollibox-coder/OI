@@ -446,7 +446,7 @@ async function loadProductCreativesFromCube(): Promise<ProductCreativeRow[]> {
 /** Product + CostsHistory → products */
 async function loadProductsFromCube(): Promise<ProductRow[]> {
   const [productRows, costRows] = await Promise.all([
-    cubeLoad({ dimensions: ['Product.asin', 'Product.productShortName', 'Product.productType', 'Product.parentName', 'Product.parentAsin', 'Product.packageQuantity', 'Product.manufactureDay', 'Product.shipmentDays', 'Product.packageCubicFeet', 'Product.manufUpfrontPercentage', 'Product.shareCartonInFamily', 'Product.listingPriceAmount'], limit: 5000 }),
+    cubeLoad({ dimensions: ['Product.asin', 'Product.productShortName', 'Product.productType', 'Product.parentName', 'Product.parentAsin', 'Product.packageQuantity', 'Product.manufactureDay', 'Product.shipmentDays', 'Product.packageCubicFeet', 'Product.manufUpfrontPercentage', 'Product.shareCartonInFamily', 'Product.listingPriceAmount', 'Product.sku'], limit: 5000 }),
     cubeLoad({ 
       dimensions: ['CostsHistory.asin', 'CostsHistory.costOfGoods', 'CostsHistory.shippingCost', 'CostsHistory.fbaCost', 'CostsHistory.totalCostPerUnit', 'CostsHistory.pickPackFee', 'CostsHistory.referralFee'], 
       filters: [{ member: 'CostsHistory.endDate', operator: 'notSet' }],
@@ -488,6 +488,7 @@ async function loadProductsFromCube(): Promise<ProductRow[]> {
       manuf_upfront_percentage: r['Product.manufUpfrontPercentage'] != null ? Number(r['Product.manufUpfrontPercentage']) : null,
       share_carton_in_family: r['Product.shareCartonInFamily'] != null ? (r['Product.shareCartonInFamily'] === true || r['Product.shareCartonInFamily'] === 'true') : null,
       listing_price: r['Product.listingPriceAmount'] != null ? Number(r['Product.listingPriceAmount']) : null,
+      sku: String(r['Product.sku'] ?? ''),
     };
   });
 }

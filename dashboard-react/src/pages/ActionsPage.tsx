@@ -456,6 +456,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     recommended_bid: a.recommended_bid ?? null,
     campaign_type: a.campaign_type || '',
     product: a.product_short_name || '',
+    asin: a.asin || '',
     spend: a.ads_spend_4w || 0,
     orders: a.ads_orders_4w || 0,
     cpc: a.ads_cpc_4w || 0,
@@ -1633,7 +1634,7 @@ function ActionRowComponent({ action: a, cd, prediction: pred, expanded, onToggl
         <div className="flex items-center gap-1 shrink-0">
           <span onClick={e => e.stopPropagation()}>
             <button className={`p-0.5 rounded transition-colors ${inQ ? 'text-emerald-400' : 'text-zinc-500 hover:text-[var(--color-text)]'}`}
-              onClick={() => { if (inQ || !doQueue) return; doQueue.addItem({ search_term: a.search_term || '', action: a.action || '', campaign: a.campaign_name || '', campaign_id: a.campaign_id || '', ad_group_id: (a as any).ad_group_id || '', targeting: a.targeting || '', keyword_id: a.keyword_id || '', match_type: a.match_type || '', target_spend_8w: a.ads_spend_4w || 0, target_orders_8w: a.ads_orders_4w || 0, target_net_roas_8w: a.ads_net_roas_4w || 0, current_bid: a.current_bid ?? null, recommended_bid: a.recommended_bid ?? null, campaign_type: a.campaign_type || '', product: a.product_short_name || '', spend: a.ads_spend_4w || 0, orders: a.ads_orders_4w || 0, cpc: a.ads_cpc_4w || 0, conv_rate: a.ads_cvr_pct_4w || 0, current_budget: a.current_budget ?? null, recommended_budget: a.recommended_budget ?? null, coach_mode: a.coach_mode || '', source: 'COACH' }); }}
+              onClick={() => { if (inQ || !doQueue) return; doQueue.addItem({ search_term: a.search_term || '', action: a.action || '', campaign: a.campaign_name || '', campaign_id: a.campaign_id || '', ad_group_id: (a as any).ad_group_id || '', targeting: a.targeting || '', keyword_id: a.keyword_id || '', match_type: a.match_type || '', target_spend_8w: a.ads_spend_4w || 0, target_orders_8w: a.ads_orders_4w || 0, target_net_roas_8w: a.ads_net_roas_4w || 0, current_bid: a.current_bid ?? null, recommended_bid: a.recommended_bid ?? null, campaign_type: a.campaign_type || '', product: a.product_short_name || '', asin: a.asin || '', spend: a.ads_spend_4w || 0, orders: a.ads_orders_4w || 0, cpc: a.ads_cpc_4w || 0, conv_rate: a.ads_cvr_pct_4w || 0, current_budget: a.current_budget ?? null, recommended_budget: a.recommended_budget ?? null, coach_mode: a.coach_mode || '', source: 'COACH' }); }}
               title={inQ ? 'Already in DO queue' : 'Add to DO queue'}
             >{inQ ? <Check size={13} /> : <Plus size={13} />}</button>
           </span>

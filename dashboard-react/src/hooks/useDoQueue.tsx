@@ -21,6 +21,7 @@ export interface DoQueueItem {
   recommended_bid: number | null;
   campaign_type: string; // 'SPONSORED_PRODUCTS' | 'SPONSORED_BRANDS' | 'SPONSORED_BRANDS_VIDEO' | ''
   product: string;
+  asin?: string; // ASIN for the promoted product — used for Creative ASINs / SKU resolution in bulksheet
   spend: number;
   orders: number;
   cpc: number;
