@@ -36,6 +36,13 @@ All `/api/*` calls go through `apiFetch()` (`src/utils/apiFetch.ts`), which inje
 `Authorization: Bearer <localStorage.dashboard_token>`. **Rule: never call `fetch('/api/…')`
 directly from dashboard code — use `apiFetch`.**
 
+**401 self-heal:** a stored token can be invalid in ways the client cannot detect
+(signed with a rotated secret, or a Google credential JWT planted by the login screen —
+the gate only accepts Flask-issued HS256 tokens). On any 401, `apiFetch` clears
+`dashboard_token` and navigates to `/api/auth/dashboard-token` (the bootstrap exemption),
+which re-issues a valid token via Google OAuth and redirects back with `?token=`.
+Loop-guarded to one attempt per minute via sessionStorage.
+
 ## 4. CORS
 
 `Access-Control-Allow-Origin` is no longer `*`: the request `Origin` is echoed only if it is
