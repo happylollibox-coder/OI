@@ -1,7 +1,7 @@
 import { ArrowDownRight, ArrowUpRight, Ban, Plus } from 'lucide-react';
 import type { ActionRow } from '../../types';
 import { fM } from '../../utils';
-import { CUT_ACTIONS, REDUCE_ACTIONS, type GateVerdict } from '../../coachActuals';
+import { CUT_ACTIONS, REDUCE_ACTIONS, selectPeak, type GateVerdict } from '../../coachActuals';
 
 // ActionRow uses ads_spend_4w / ads_clicks_4w / ads_orders_4w / ads_net_roas_4w as field names.
 // ActionsPage re-maps them to spend/clicks/orders/net_roas when building the `acts` array.
@@ -59,7 +59,7 @@ export function DecisionCard({ action: a, family, why, inQueue, onQueue }: {
       <div className="text-[10px] font-mono text-muted flex gap-3 tabular-nums flex-wrap">
         <span title="This week (1w, ad-only)">1w: {a.ads_net_roas_1w != null ? `ROAS ${Number(a.ads_net_roas_1w).toFixed(2)}× (${a.ads_orders_1w ?? 0} ord)` : '—'}</span>
         <span title="Last 4 weeks">4w: {fM(spend ?? 0)} · {clicks ?? 0} clicks · {orders ?? 0} ord{(orders ?? 0) > 0 && netRoas != null ? ` · ROAS ${Number(netRoas).toFixed(2)}×` : ''}</span>
-        <span title="Best of last-year peak and Q4 peak">Peak: {(() => { const p = Math.max(a.ly_net_roas ?? 0, a.q4_peak_net_roas ?? 0); const po = (a.ly_net_roas ?? 0) >= (a.q4_peak_net_roas ?? 0) ? a.ly_orders : a.q4_peak_orders; return p > 0 ? `ROAS ${p.toFixed(2)}× (${po ?? 0} ord)` : '—'; })()}</span>
+        <span title="Best of last-year peak and Q4 peak">Peak: {(() => { const p = selectPeak(a); return p ? `ROAS ${p.roas.toFixed(2)}× (${p.orders != null ? p.orders : '—'} ord)` : '—'; })()}</span>
       </div>
       <div className="text-[10px] text-subtle">{why.reason}.</div>
       <div className="text-[9px] text-faint">{amazonChange}</div>

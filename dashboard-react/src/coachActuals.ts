@@ -85,6 +85,16 @@ export function familyModes(
   return out;
 }
 
+// Best peak evidence for a row: the stronger of last-year-peak and Q4-peak ROAS,
+// with its MATCHING orders. null when neither window has a positive ROAS.
+export interface PeakLike { ly_net_roas?: number | null; ly_orders?: number | null; q4_peak_net_roas?: number | null; q4_peak_orders?: number | null }
+export function selectPeak(r: PeakLike): { roas: number; orders: number | null } | null {
+  const ly = r.ly_net_roas ?? 0, q4 = r.q4_peak_net_roas ?? 0;
+  const roas = Math.max(ly, q4);
+  if (roas <= 0) return null;
+  return { roas, orders: ly >= q4 ? (r.ly_orders ?? null) : (r.q4_peak_orders ?? null) };
+}
+
 // ─── Stage-1 clear-case selector (spec §7 confidence gate, client-side) ──────
 // Decides whether an action is a CLEAR case (surface as a decision card) or parked
 // ("needs judgment"). Facts only — uses the engine's own 4w fields. Direct net ROAS

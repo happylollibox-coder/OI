@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { monthlyPlanTargets } from '../planTypes';
-import { familyActuals, familyModes, dominantMode, clearCase } from '../coachActuals';
+import { familyActuals, familyModes, dominantMode, clearCase, selectPeak } from '../coachActuals';
 import type { GateVerdict } from '../coachActuals';
 import { FamilyPlanActuals } from './FamilyPlanActuals';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
@@ -394,8 +394,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         mode: famModes.get(family) ?? effectiveCoachMode,
         confidence: a.confidence,
         roas1w: a.ads_net_roas_1w, orders1w: a.ads_orders_1w,
-        peakRoas: Math.max(a.ly_net_roas ?? 0, a.q4_peak_net_roas ?? 0) || null,
-        peakOrders: (a.ly_net_roas ?? 0) >= (a.q4_peak_net_roas ?? 0) ? a.ly_orders : a.q4_peak_orders,
+        ...((pk => ({ peakRoas: pk?.roas ?? null, peakOrders: pk?.orders ?? null }))(selectPeak(a))),
       });
       if (v.clear
           && !doQueue.isUploaded(a.search_term, a.campaign_id)

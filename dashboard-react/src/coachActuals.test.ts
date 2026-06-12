@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { familyActuals, familyModes, dominantMode, clearCase } from './coachActuals';
+import { familyActuals, familyModes, dominantMode, clearCase, selectPeak } from './coachActuals';
 
 // daily_trends rows are keyed by product_type = family. ad_cost & clicks are ad-only.
 const trends = [
@@ -155,5 +155,22 @@ describe('clearCase', () => {
     const v = clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, roas1w: 1.4, orders1w: 2 });
     expect(v.clear).toBe(false);
     expect(v.reason).toMatch(/recovering/i);
+  });
+  it('REDUCE with all-null window fields behaves exactly as before (no guard misfire)', () => {
+    expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, roas1w: null, orders1w: null, peakRoas: null, peakOrders: null }).clear).toBe(true);
+  });
+});
+
+describe('selectPeak', () => {
+  it('picks the stronger window with its matching orders', () => {
+    expect(selectPeak({ ly_net_roas: 1.8, ly_orders: 7, q4_peak_net_roas: 2.4, q4_peak_orders: 12 })).toEqual({ roas: 2.4, orders: 12 });
+    expect(selectPeak({ ly_net_roas: 2.5, ly_orders: 7, q4_peak_net_roas: 2.4, q4_peak_orders: 12 })).toEqual({ roas: 2.5, orders: 7 });
+  });
+  it('returns null when neither window has positive ROAS', () => {
+    expect(selectPeak({})).toBeNull();
+    expect(selectPeak({ ly_net_roas: 0, q4_peak_net_roas: null })).toBeNull();
+  });
+  it('keeps orders null when the winning window has no order data', () => {
+    expect(selectPeak({ ly_net_roas: 1.8, ly_orders: null })).toEqual({ roas: 1.8, orders: null });
   });
 });
