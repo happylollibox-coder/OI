@@ -86,13 +86,16 @@ export function familyModes(
 }
 
 // Best peak evidence for a row: the stronger of last-year-peak and Q4-peak ROAS,
-// with its MATCHING orders. null when neither window has a positive ROAS.
-export interface PeakLike { ly_net_roas?: number | null; ly_orders?: number | null; q4_peak_net_roas?: number | null; q4_peak_orders?: number | null }
-export function selectPeak(r: PeakLike): { roas: number; orders: number | null } | null {
+// with its MATCHING orders/spend/clicks/cpc. null when neither window has a positive ROAS.
+// Q4 has NO clicks/cpc columns (only spend) — when Q4 wins, clicks/cpc stay null honestly.
+export interface PeakLike { ly_net_roas?: number | null; ly_orders?: number | null; ly_spend?: number | null; ly_clicks?: number | null; ly_cpc?: number | null; q4_peak_net_roas?: number | null; q4_peak_orders?: number | null; q4_peak_spend?: number | null }
+export function selectPeak(r: PeakLike): { roas: number; orders: number | null; spend: number | null; clicks: number | null; cpc: number | null } | null {
   const ly = r.ly_net_roas ?? 0, q4 = r.q4_peak_net_roas ?? 0;
   const roas = Math.max(ly, q4);
   if (roas <= 0) return null;
-  return { roas, orders: ly >= q4 ? (r.ly_orders ?? null) : (r.q4_peak_orders ?? null) };
+  return ly >= q4
+    ? { roas, orders: r.ly_orders ?? null, spend: r.ly_spend ?? null, clicks: r.ly_clicks ?? null, cpc: r.ly_cpc ?? null }
+    : { roas, orders: r.q4_peak_orders ?? null, spend: r.q4_peak_spend ?? null, clicks: null, cpc: null }; // Q4 has no clicks/cpc
 }
 
 // ─── Stage-1 clear-case selector (spec §7 confidence gate, client-side) ──────

@@ -63,7 +63,7 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: 
         const windows = [
           { label: '1w', title: 'This week (ad-only)', roas: a.ads_net_roas_1w, orders: a.ads_orders_1w, cpc: a.ads_cpc_1w, spend: a.ads_spend_1w ?? null, clicks: a.ads_clicks_1w ?? null },
           { label: '4w', title: 'Last 4 weeks', roas: netRoas ?? null, orders: orders ?? null, cpc: a.ads_cpc_4w, spend: spend ?? null, clicks: clicks ?? null },
-          { label: 'Peak', title: 'Best of last-year peak and Q4 peak', roas: peak?.roas ?? null, orders: peak?.orders ?? null, cpc: null, spend: null, clicks: null },
+          { label: 'Peak', title: 'Best of last-year peak and Q4 peak', roas: peak?.roas ?? null, orders: peak?.orders ?? null, cpc: peak?.cpc ?? null, spend: peak?.spend ?? null, clicks: peak?.clicks ?? null },
         ];
         const roasCls = (v: number | null | undefined) =>
           v == null ? 'text-faint' : v >= 1.1 ? 'text-emerald-400' : v < 0.9 ? 'text-red-400' : 'text-[var(--color-text)]';

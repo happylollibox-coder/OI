@@ -163,15 +163,21 @@ describe('clearCase', () => {
 
 describe('selectPeak', () => {
   it('picks the stronger window with its matching orders', () => {
-    expect(selectPeak({ ly_net_roas: 1.8, ly_orders: 7, q4_peak_net_roas: 2.4, q4_peak_orders: 12 })).toEqual({ roas: 2.4, orders: 12 });
-    expect(selectPeak({ ly_net_roas: 2.5, ly_orders: 7, q4_peak_net_roas: 2.4, q4_peak_orders: 12 })).toEqual({ roas: 2.5, orders: 7 });
+    expect(selectPeak({ ly_net_roas: 1.8, ly_orders: 7, q4_peak_net_roas: 2.4, q4_peak_orders: 12 })).toEqual({ roas: 2.4, orders: 12, spend: null, clicks: null, cpc: null });
+    expect(selectPeak({ ly_net_roas: 2.5, ly_orders: 7, q4_peak_net_roas: 2.4, q4_peak_orders: 12 })).toEqual({ roas: 2.5, orders: 7, spend: null, clicks: null, cpc: null });
   });
   it('returns null when neither window has positive ROAS', () => {
     expect(selectPeak({})).toBeNull();
     expect(selectPeak({ ly_net_roas: 0, q4_peak_net_roas: null })).toBeNull();
   });
   it('keeps orders null when the winning window has no order data', () => {
-    expect(selectPeak({ ly_net_roas: 1.8, ly_orders: null })).toEqual({ roas: 1.8, orders: null });
+    expect(selectPeak({ ly_net_roas: 1.8, ly_orders: null })).toEqual({ roas: 1.8, orders: null, spend: null, clicks: null, cpc: null });
+  });
+  it('LY win carries spend/clicks/cpc; Q4 win carries spend only (no clicks/cpc data)', () => {
+    expect(selectPeak({ ly_net_roas: 2.5, ly_orders: 7, ly_spend: 120, ly_clicks: 80, ly_cpc: 1.5, q4_peak_net_roas: 2.0, q4_peak_spend: 300 }))
+      .toEqual({ roas: 2.5, orders: 7, spend: 120, clicks: 80, cpc: 1.5 });
+    expect(selectPeak({ ly_net_roas: 1.0, q4_peak_net_roas: 2.0, q4_peak_orders: 12, q4_peak_spend: 300 }))
+      .toEqual({ roas: 2.0, orders: 12, spend: 300, clicks: null, cpc: null });
   });
 });
 

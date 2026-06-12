@@ -854,6 +854,10 @@ export interface ActionRow {
   ly_net_roas: number | null;
   ly_orders: number | null;
   ly_units: number | null;
+  ly_spend: number | null;
+  ly_clicks: number | null;
+  ly_cpc: number | null;
+  q4_peak_spend: number | null;
   q4_peak_net_roas: number | null;
   q4_peak_orders: number | null;
   q4_peak_units: number | null;
