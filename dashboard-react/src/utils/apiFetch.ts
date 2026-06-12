@@ -31,7 +31,11 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
     if (Date.now() - lastAttempt > 60_000) {
       sessionStorage.setItem(REAUTH_AT_KEY, String(Date.now()));
       localStorage.removeItem('dashboard_token');
-      window.location.assign('/api/auth/dashboard-token');
+      // Must hit the Flask ORIGIN directly: through the dashboard nginx proxy,
+      // Flask's redirect to /auth/google resolves against the dashboard host,
+      // where that route doesn't exist (the SPA swallows it).
+      const flaskOrigin = import.meta.env.VITE_DATA_ENTRY_URL || '';
+      window.location.assign(`${flaskOrigin}/api/auth/dashboard-token`);
     }
   }
   return res;
