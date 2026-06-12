@@ -1436,6 +1436,7 @@ async function loadCoachActionsFromCube(): Promise<CoachActionRow[]> {
   const rows = await cubeLoad({
     dimensions: [
       'AdsCoachActions.campaignId', 'AdsCoachActions.campaignName', 'AdsCoachActions.campaignType',
+      'AdsCoachActions.adGroupId',
       'AdsCoachActions.searchTerm', 'AdsCoachActions.asin',
       'AdsCoachActions.productShortName', 'AdsCoachActions.parentName',
       'AdsCoachActions.experimentName', 'AdsCoachActions.strategyId', 'AdsCoachActions.strategyName',
@@ -1491,6 +1492,7 @@ async function loadCoachActionsFromCube(): Promise<CoachActionRow[]> {
     const r = row as Record<string, unknown>;
     const result: CoachActionRow = {
     campaign_id: String(r['AdsCoachActions.campaignId'] ?? ''),
+    ad_group_id: String(r['AdsCoachActions.adGroupId'] ?? ''),
     campaign_name: String(r['AdsCoachActions.campaignName'] ?? ''),
     campaign_type: String(r['AdsCoachActions.campaignType'] ?? ''),
     search_term: String(r['AdsCoachActions.searchTerm'] ?? ''),

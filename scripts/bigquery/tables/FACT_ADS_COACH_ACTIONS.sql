@@ -118,5 +118,6 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.FACT_ADS_COACH_ACTIONS`
   ly_spend FLOAT64,
   ly_clicks INT64,
   ly_cpc FLOAT64,
-  q4_peak_spend FLOAT64
+  q4_peak_spend FLOAT64,
+  ad_group_id STRING
 );

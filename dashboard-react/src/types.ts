@@ -760,6 +760,7 @@ export interface CoachDecisionRow {
 
 export interface ActionRow {
   campaign_id: string;
+  ad_group_id: string;
   campaign_name: string;
   campaign_type: string;
   search_term: string;

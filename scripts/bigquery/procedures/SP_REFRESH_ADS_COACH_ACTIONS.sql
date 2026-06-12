@@ -114,6 +114,7 @@ BEGIN
       a4.campaign_id,
       COALESCE(dc.campaign_name, a4.campaign_name) as campaign_name,
       a4.campaign_type, a4.search_term, a4.asin,
+      CAST(a4.ad_group_id AS STRING) as ad_group_id,
       ae.product_short_name, ae.parent_name,
       ce.experiment_id, ce.experiment_name, ce.strategy_id,
       ce.strategy_name, ce.experiment_status, ce.recommended_bid_max,
@@ -184,6 +185,7 @@ BEGIN
     COALESCE(ca.is_hero_match, FALSE) as is_hero_match,
     ca.targeting,
     ca.keyword_id,
+    a.ad_group_id,
     ca.ads_signal,
     ca.target_roas,
     ca.th_scale_up_roas,
@@ -437,7 +439,8 @@ BEGIN
     ROUND(COALESCE(ANY_VALUE(ly_spend), 0), 2) as ly_spend,
     CAST(ANY_VALUE(ly_clicks) AS INT64) as ly_clicks,
     ANY_VALUE(ly_cpc) as ly_cpc,
-    ROUND(COALESCE(ANY_VALUE(q4_peak_spend), 0), 2) as q4_peak_spend
+    ROUND(COALESCE(ANY_VALUE(q4_peak_spend), 0), 2) as q4_peak_spend,
+    ANY_VALUE(ad_group_id) as ad_group_id
   FROM _base_rows
   WHERE action IS NOT NULL
   GROUP BY campaign_id, search_term, action;
@@ -648,7 +651,9 @@ BEGIN
     ROUND(COALESCE(SUM(ly_spend), 0), 2) as ly_spend,
     SUM(ly_clicks) as ly_clicks,
     ROUND(SAFE_DIVIDE(SUM(ly_spend), NULLIF(SUM(ly_clicks), 0)), 2) as ly_cpc,
-    ROUND(COALESCE(SUM(q4_peak_spend), 0), 2) as q4_peak_spend
+    ROUND(COALESCE(SUM(q4_peak_spend), 0), 2) as q4_peak_spend,
+    -- ad_group_id is constant per campaign×targeting (one ad group per keyword); ANY_VALUE is correct
+    ANY_VALUE(ad_group_id) as ad_group_id
   FROM _base_rows
   WHERE target_action IS NOT NULL
   GROUP BY campaign_id, targeting, target_action;
@@ -863,7 +868,9 @@ BEGIN
     ROUND(COALESCE(SUM(ly_spend), 0), 2) as ly_spend,
     SUM(ly_clicks) as ly_clicks,
     ROUND(SAFE_DIVIDE(SUM(ly_spend), NULLIF(SUM(ly_clicks), 0)), 2) as ly_cpc,
-    ROUND(COALESCE(SUM(q4_peak_spend), 0), 2) as q4_peak_spend
+    ROUND(COALESCE(SUM(q4_peak_spend), 0), 2) as q4_peak_spend,
+    -- BUDGET is campaign-grain; a campaign may span multiple ad groups → ANY_VALUE (best effort)
+    ANY_VALUE(ad_group_id) as ad_group_id
   FROM _base_rows
   WHERE budget_action IS NOT NULL
   GROUP BY campaign_id, budget_action;
@@ -1004,7 +1011,8 @@ BEGIN
     ROUND(COALESCE(ANY_VALUE(ly_spend), 0), 2) as ly_spend,
     CAST(ANY_VALUE(ly_clicks) AS INT64) as ly_clicks,
     ANY_VALUE(ly_cpc) as ly_cpc,
-    ROUND(COALESCE(ANY_VALUE(q4_peak_spend), 0), 2) as q4_peak_spend
+    ROUND(COALESCE(ANY_VALUE(q4_peak_spend), 0), 2) as q4_peak_spend,
+    ANY_VALUE(ad_group_id) as ad_group_id
   FROM _base_rows
   WHERE hero_action IS NOT NULL
   GROUP BY campaign_id, search_term, hero_action;

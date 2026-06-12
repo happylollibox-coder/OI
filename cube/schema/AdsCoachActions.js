@@ -53,6 +53,7 @@ cube(`AdsCoachActions`, {
 
     // Strategy Context
     campaignId: { sql: `campaign_id`, type: `string` },
+    adGroupId: { sql: `ad_group_id`, type: `string` },
 
     campaignName: { sql: `campaign_name`, type: `string` },
     campaignType: { sql: `campaign_type`, type: `string` },
