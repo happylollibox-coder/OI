@@ -138,6 +138,11 @@ def protect_api():
         return None
     if request.method == 'OPTIONS':  # CORS preflight carries no credentials
         return None
+    # Auth bootstrap: the token-issuing endpoint must be reachable WITHOUT a
+    # token (otherwise a secret rotation locks everyone out). It enforces its
+    # own auth: ALLOWED_USERS session or redirect into Google OAuth.
+    if request.path == '/api/auth/dashboard-token':
+        return None
     if session.get('user', {}).get('email') in ALLOWED_USERS:
         return None  # data-entry HTML pages (same-origin session)
     if _has_valid_api_token():

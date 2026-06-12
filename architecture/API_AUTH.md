@@ -24,6 +24,12 @@ unless ONE of these holds:
 No per-route decorators: new `/api/*` routes are protected by default. Failure returns
 `401 {"error": "unauthorized"}`.
 
+**Bootstrap exemption:** `/api/auth/dashboard-token` is exempt from the gate. It is the
+endpoint that ISSUES the JWT, so it must be reachable without one (otherwise a secret
+rotation locks everyone out: stale token → 401 → can't reach the token dispenser).
+It enforces its own auth — it only issues a token to an `ALLOWED_USERS` session and
+redirects everyone else into the Google OAuth flow.
+
 ## 3. Dashboard side
 
 All `/api/*` calls go through `apiFetch()` (`src/utils/apiFetch.ts`), which injects
