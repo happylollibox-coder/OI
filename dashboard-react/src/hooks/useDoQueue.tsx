@@ -28,6 +28,12 @@ export interface DoQueueItem {
   // Budget actions
   current_budget?: number | null;
   recommended_budget?: number | null;
+  // Close-the-loop snapshot (FACT_PPC_CHANGE_LOG)
+  coach_mode?: string;     // GUARDIAN / COOLDOWN / BLITZ at decision time
+  source?: 'COACH' | 'MANUAL';
+  // Weekly impact target from the decision card (not yet wired to BQ — the table lacks the column)
+  expected_impact_weekly?: number;   // $/wk target from the decision card (save or earn)
+  expected_impact_kind?: 'save' | 'earn';
   addedAt: number;
   doneAt?: number; // timestamp when marked done
   uploadedAt?: number; // timestamp when marked as uploaded to Amazon
@@ -56,6 +62,7 @@ interface DoQueueContextValue {
 const STORAGE_KEY = 'oi_do_queue';
 const DONE_STORAGE_KEY = 'oi_do_done';
 const UPLOADED_STORAGE_KEY = 'oi_do_uploaded';
+const PENDING_LOG_KEY = 'oi_ppc_log_pending';
 
 const DoQueueContext = createContext<DoQueueContextValue | null>(null);
 
@@ -81,6 +88,96 @@ function saveDone(items: DoQueueItem[]) {
   try { localStorage.setItem(DONE_STORAGE_KEY, JSON.stringify(items)); } catch {}
 }
 
+/* ─── Close the loop: persist applied changes to FACT_PPC_CHANGE_LOG ───
+ * POST /api/ppc-change-log on "Uploaded to Amazon". localStorage stays the
+ * source for the UI; failed posts wait in PENDING_LOG_KEY and are re-flushed
+ * on next app load or next upload. SOP: architecture/PPC_CLOSE_THE_LOOP.md */
+
+interface PpcChangeLogEntry {
+  applied_at: string; // preserved across offline retries
+  action: string;
+  search_term: string;
+  targeting: string;
+  keyword_id: string;
+  match_type: string;
+  campaign_id: string;
+  campaign_name: string;
+  campaign_type: string;
+  ad_group_id: string;
+  product: string;
+  old_bid: number | null;
+  new_bid: number | null;
+  old_budget: number | null;
+  new_budget: number | null;
+  target_spend_8w: number;
+  target_orders_8w: number;
+  target_net_roas_8w: number;
+  coach_mode: string;
+  source: 'COACH' | 'MANUAL';
+}
+
+function toChangeLogEntries(items: DoQueueItem[]): PpcChangeLogEntry[] {
+  const now = new Date().toISOString();
+  return items.map(i => ({
+    applied_at: now,
+    action: i.action,
+    search_term: i.search_term || '',
+    targeting: i.targeting || '',
+    keyword_id: i.keyword_id || '',
+    match_type: i.match_type || '',
+    campaign_id: i.campaign_id || '',
+    campaign_name: i.campaign || '',
+    campaign_type: i.campaign_type || '',
+    ad_group_id: i.ad_group_id || '',
+    product: i.product || '',
+    old_bid: i.current_bid ?? null,
+    new_bid: i.recommended_bid ?? null,
+    old_budget: i.current_budget ?? null,
+    new_budget: i.recommended_budget ?? null,
+    target_spend_8w: i.target_spend_8w || 0,
+    target_orders_8w: i.target_orders_8w || 0,
+    target_net_roas_8w: i.target_net_roas_8w || 0,
+    coach_mode: i.coach_mode || '',
+    source: i.source || 'COACH',
+  }));
+}
+
+function loadPendingLog(): PpcChangeLogEntry[] {
+  try {
+    const raw = localStorage.getItem(PENDING_LOG_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function savePendingLog(entries: PpcChangeLogEntry[]) {
+  try {
+    if (entries.length) localStorage.setItem(PENDING_LOG_KEY, JSON.stringify(entries));
+    else localStorage.removeItem(PENDING_LOG_KEY);
+  } catch {}
+}
+
+async function postChangeLog(entries: PpcChangeLogEntry[]): Promise<boolean> {
+  if (!entries.length) return true;
+  try {
+    const res = await fetch('/api/ppc-change-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entries),
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
+/** Queue entries (incl. any prior failures), then try to flush. */
+function logAppliedChanges(items: DoQueueItem[]) {
+  const pending = [...loadPendingLog(), ...toChangeLogEntries(items)];
+  savePendingLog(pending); // offline fallback first — clear only on success
+  postChangeLog(pending).then(ok => {
+    if (ok) savePendingLog([]);
+    else console.warn('[DoQueue] PPC change log POST failed — kept in oi_ppc_log_pending for retry');
+  });
+}
+
 function loadUploaded(): DoQueueItem[] {
   try {
     const raw = localStorage.getItem(UPLOADED_STORAGE_KEY);
@@ -100,6 +197,14 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { saveQueue(items); }, [items]);
   useEffect(() => { saveDone(doneItems); }, [doneItems]);
   useEffect(() => { saveUploaded(uploadedItems); }, [uploadedItems]);
+
+  // Flush change-log entries that failed to reach BigQuery in a previous session
+  useEffect(() => {
+    const pending = loadPendingLog();
+    if (pending.length) {
+      postChangeLog(pending).then(ok => { if (ok) savePendingLog([]); });
+    }
+  }, []);
 
   const addItem = useCallback((item: Omit<DoQueueItem, 'id' | 'addedAt'>) => {
     setItems(prev => {
@@ -167,6 +272,8 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
             .map(item => ({ ...item, uploadedAt: now }));
           return [...up, ...newItems];
         });
+        // Close the loop: persist this batch to FACT_PPC_CHANGE_LOG
+        logAppliedChanges(prev);
       }, 0);
       return [];
     });

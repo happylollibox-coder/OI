@@ -18,8 +18,8 @@ type ActionRowRuntime = ActionRow & {
 //   EVIDENCE   the 3 facts that justify it (4w window — real past numbers, no forecasts)
 //   CHANGE     exactly what will change in Amazon (campaign + object)
 // Queue button adds to the Do queue exactly like the row UI does (handler passed in).
-export function DecisionCard({ action: a, family, why, inQueue, onQueue }: {
-  action: ActionRowRuntime; family: string; why: GateVerdict; inQueue: boolean; onQueue: () => void;
+export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: {
+  action: ActionRowRuntime; family: string; why: GateVerdict; opp: { kind: 'save' | 'earn'; dollars: number }; inQueue: boolean; onQueue: () => void;
 }) {
   const isCut = CUT_ACTIONS.has(a.action);
   const isReduce = REDUCE_ACTIONS.has(a.action);
@@ -62,6 +62,12 @@ export function DecisionCard({ action: a, family, why, inQueue, onQueue }: {
         <span title="Best of last-year peak and Q4 peak">Peak: {(() => { const p = selectPeak(a); return p ? `ROAS ${p.roas.toFixed(2)}× (${p.orders != null ? p.orders : '—'} ord)` : '—'; })()}</span>
       </div>
       <div className="text-[10px] text-subtle">{why.reason}.</div>
+      <div className="text-[10px] tabular-nums font-mono">
+        {opp.kind === 'save'
+          ? <span className="text-emerald-400">→ save ~{fM(opp.dollars)}/wk</span>
+          : <span className="text-emerald-400">→ earning {fM(opp.dollars)}/wk — scale to beat</span>}
+        <span className="text-faint"> · checked vs real results 1 week after upload</span>
+      </div>
       <div className="text-[9px] text-faint">{amazonChange}</div>
     </div>
   );

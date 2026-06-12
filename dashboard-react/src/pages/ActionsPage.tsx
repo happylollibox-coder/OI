@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { monthlyPlanTargets } from '../planTypes';
-import { familyActuals, familyModes, dominantMode, clearCase, selectPeak } from '../coachActuals';
-import type { GateVerdict } from '../coachActuals';
+import { familyActuals, familyModes, dominantMode, clearCase, selectPeak, opportunityPerWeek } from '../coachActuals';
+import type { GateVerdict, OpportunityInput } from '../coachActuals';
 import { FamilyPlanActuals } from './FamilyPlanActuals';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
 import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
@@ -378,10 +378,10 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     return dominantMode(data.actions || []);
   }, [coachFilter, data.actions]);
 
-  // Stage-1 trust list: confidence-gated clear cases, capped, sorted by spend at stake.
+  // Stage-1 trust list: confidence-gated clear cases, capped, sorted by weekly $ opportunity.
   const CLEAR_CARD_CAP = 10;
   const clearCases = useMemo(() => {
-    const out: { a: ActionRow; family: string; why: GateVerdict }[] = [];
+    const out: { a: ActionRow; family: string; why: GateVerdict; opp: ReturnType<typeof opportunityPerWeek> }[] = [];
     for (const a of acts) {
       const family = getFamily(a.product_short_name) || a.parent_name || '';
       if (!family) continue;
@@ -401,14 +401,29 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
           && !(a.targeting && doQueue.isUploaded(a.targeting, a.campaign_id))
           && !doQueue.isDone(a.search_term, a.campaign_id)
           && !(a.targeting && doQueue.isDone(a.targeting, a.campaign_id))) {
-        out.push({ a, family, why: v });
+        const opp = opportunityPerWeek({
+          action: a.action,
+          spend4w: a.ads_spend_4w ?? 0,
+          netProfit4w: a.ads_net_profit_4w ?? null,
+          netRoas4w: a.ads_net_roas_4w ?? null,
+        });
+        out.push({ a, family, why: v, opp });
       }
     }
-    out.sort((x, y) => ((y.a as { spend?: number }).spend ?? 0) - ((x.a as { spend?: number }).spend ?? 0));
+    out.sort((x, y) => y.opp.dollars - x.opp.dollars);
     return out.slice(0, CLEAR_CARD_CAP);
   }, [acts, getFamily, famModes, effectiveCoachMode, doQueue.isUploaded, doQueue.isDone]);
 
-  const queueAction = (a: ActionRow) => doQueue.addItem({
+  // Group clear cases by family, order groups by total weekly $ opportunity.
+  const clearGroups = useMemo(() => {
+    const m = new Map<string, typeof clearCases>();
+    for (const c of clearCases) { const g = m.get(c.family); if (g) g.push(c); else m.set(c.family, [c]); }
+    return [...m.entries()]
+      .map(([family, cases]) => ({ family, cases, total: cases.reduce((s, c) => s + c.opp.dollars, 0) }))
+      .sort((x, y) => y.total - x.total);
+  }, [clearCases]);
+
+  const queueAction = (a: ActionRow, opp?: { kind: 'save' | 'earn'; dollars: number }) => doQueue.addItem({
     search_term: a.search_term || '',
     action: a.action || '',
     campaign: a.campaign_name || '',
@@ -432,6 +447,8 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     recommended_budget: (a as unknown as { recommended_budget?: number | null }).recommended_budget ?? null,
     coach_mode: a.coach_mode || '',
     source: 'COACH',
+    expected_impact_weekly: opp ? Math.round(opp.dollars * 100) / 100 : undefined,
+    expected_impact_kind: opp?.kind,
   });
 
   const filtered = useMemo(() => {
@@ -1439,23 +1456,32 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         );
       })()}
 
-      {/* ── ✅ Clear cases (Stage-1 trust list) ── */}
-      {clearCases.length > 0 && (
+      {/* ── ✅ Clear cases (Stage-1 trust list) — grouped by family, ordered by weekly $ opportunity ── */}
+      {clearGroups.length > 0 && (
         <div className="mb-4">
           <div className="flex items-baseline gap-2 mb-2">
             <span className="text-[11px] font-bold uppercase tracking-wider">✅ Clear cases</span>
             <span className="text-[10px] text-faint">{clearCases.length} obvious calls · everything else is under "Needs judgment" below</span>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {clearCases.map(({ a, family, why }) => (
-              <DecisionCard
-                key={`${a.campaign_id}|${a.search_term}|${a.targeting || ''}|${a.action}`}
-                action={a} family={family} why={why}
-                inQueue={doQueue.hasItem(a.search_term, a.action, a.campaign_name)}
-                onQueue={() => queueAction(a)}
-              />
-            ))}
-          </div>
+          {clearGroups.map(({ family, cases, total }) => (
+            <div key={family} className="mb-3">
+              <div className="flex items-baseline gap-2 mb-1.5 px-0.5">
+                <span className="text-[11px] font-semibold text-white/80">{family}</span>
+                <span className="text-[10px] font-mono text-emerald-400">~{fM(total)}/wk opportunity</span>
+                <span className="text-[10px] text-faint">{cases.length} case{cases.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {cases.map(({ a, why, opp }) => (
+                  <DecisionCard
+                    key={`${a.campaign_id}|${a.search_term}|${a.targeting || ''}|${a.action}`}
+                    action={a} family={family} why={why} opp={opp}
+                    inQueue={doQueue.hasItem(a.search_term, a.action, a.campaign_name)}
+                    onQueue={() => queueAction(a, opp)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

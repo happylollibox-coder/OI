@@ -125,6 +125,24 @@ export const CUT_ACTIONS = new Set(['NEGATE', 'NEGATE_TERM', 'NEGATE_ROAS_THRESH
 export const REDUCE_ACTIONS = new Set(['REDUCE_BID', 'REDUCE_BID_ROAS', 'REDUCE_BID_SPEND', 'REDUCE_TO_BASELINE']);
 const PROMOTE_ACTIONS = new Set(['INCREASE_BID', 'PROMOTE_TO_EXACT', 'SCALE', 'SCALE_UP', 'SCALE_UP_ROAS', 'BOOST']);
 
+// Weekly dollars at stake for a clear case — the owner's "opportunity" and the
+// one-week TARGET the receipt loop verifies after upload (FACT_PPC_CHANGE_LOG).
+// Facts-anchored (current 4w run rates / 4), not a forecast:
+//   cut    (0-order term)        → save = its weekly burn  (spend4w / 4)
+//   reduce (losing money)        → save = the weekly loss being stopped (−netProfit4w / 4)
+//   promote (winner)             → earn = current weekly profit at stake (netProfit4w / 4) — "scale to beat"
+export interface OpportunityInput { action: string; spend4w: number; netProfit4w: number | null; netRoas4w: number | null }
+export function opportunityPerWeek(o: OpportunityInput): { kind: 'save' | 'earn'; dollars: number } {
+  if (CUT_ACTIONS.has(o.action)) return { kind: 'save', dollars: Math.max(0, o.spend4w) / 4 };
+  if (REDUCE_ACTIONS.has(o.action)) {
+    const loss = o.netProfit4w != null
+      ? Math.max(0, -o.netProfit4w)
+      : Math.max(0, o.spend4w * (1 - Math.min(o.netRoas4w ?? 1, 1)));
+    return { kind: 'save', dollars: loss / 4 };
+  }
+  return { kind: 'earn', dollars: Math.max(0, o.netProfit4w ?? 0) / 4 };
+}
+
 export function clearCase(g: GateInput): GateVerdict {
   const isCut = CUT_ACTIONS.has(g.action);
   const isReduce = REDUCE_ACTIONS.has(g.action);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { familyActuals, familyModes, dominantMode, clearCase, selectPeak } from './coachActuals';
+import { familyActuals, familyModes, dominantMode, clearCase, selectPeak, opportunityPerWeek } from './coachActuals';
 
 // daily_trends rows are keyed by product_type = family. ad_cost & clicks are ad-only.
 const trends = [
@@ -172,5 +172,28 @@ describe('selectPeak', () => {
   });
   it('keeps orders null when the winning window has no order data', () => {
     expect(selectPeak({ ly_net_roas: 1.8, ly_orders: null })).toEqual({ roas: 1.8, orders: null });
+  });
+});
+
+describe('opportunityPerWeek', () => {
+  it('cut: weekly burn of a zero-order term', () => {
+    expect(opportunityPerWeek({ action: 'NEGATE_TERM', spend4w: 84, netProfit4w: -84, netRoas4w: 0 }))
+      .toEqual({ kind: 'save', dollars: 21 });
+  });
+  it('reduce: the weekly loss being stopped', () => {
+    expect(opportunityPerWeek({ action: 'REDUCE_BID', spend4w: 400, netProfit4w: -120, netRoas4w: 0.7 }))
+      .toEqual({ kind: 'save', dollars: 30 });
+  });
+  it('reduce falls back to spend×(1−roas) when net profit missing', () => {
+    const r = opportunityPerWeek({ action: 'REDUCE_BID', spend4w: 400, netProfit4w: null, netRoas4w: 0.7 });
+    expect(r.kind).toBe('save');
+    expect(r.dollars).toBeCloseTo(400 * 0.3 / 4);
+  });
+  it('promote: current weekly profit at stake (scale to beat)', () => {
+    expect(opportunityPerWeek({ action: 'INCREASE_BID', spend4w: 388, netProfit4w: 240, netRoas4w: 2.0 }))
+      .toEqual({ kind: 'earn', dollars: 60 });
+  });
+  it('never negative', () => {
+    expect(opportunityPerWeek({ action: 'INCREASE_BID', spend4w: 100, netProfit4w: -50, netRoas4w: 0.5 }).dollars).toBe(0);
   });
 });
