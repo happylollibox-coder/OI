@@ -849,6 +849,8 @@ export interface ActionRow {
   ads_orders_1w: number | null;
   ads_units_1w: number | null;
   ads_cpc_1w: number | null;
+  ads_spend_1w: number;
+  ads_clicks_1w: number;
   ly_net_roas: number | null;
   ly_orders: number | null;
   ly_units: number | null;

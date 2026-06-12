@@ -1,3 +1,4 @@
+import React from 'react';
 import { ArrowDownRight, ArrowUpRight, Ban, Plus } from 'lucide-react';
 import type { ActionRow } from '../../types';
 import { fM } from '../../utils';
@@ -56,11 +57,37 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: 
           {inQueue ? 'Queued ✓' : <span className="flex items-center gap-1"><Plus size={10} /> Queue</span>}
         </button>
       </div>
-      <div className="text-[10px] font-mono text-muted flex gap-3 tabular-nums flex-wrap">
-        <span title="This week (1w, ad-only)">1w: {a.ads_net_roas_1w != null ? `ROAS ${Number(a.ads_net_roas_1w).toFixed(2)}× (${a.ads_orders_1w ?? 0} ord)${a.ads_cpc_1w != null ? ` · CPC $${Number(a.ads_cpc_1w).toFixed(2)}` : ''}` : '—'}</span>
-        <span title="Last 4 weeks">4w: {fM(spend ?? 0)} · {clicks ?? 0} clicks{a.ads_cpc_4w != null ? ` · CPC $${Number(a.ads_cpc_4w).toFixed(2)}` : ''} · {orders ?? 0} ord{(orders ?? 0) > 0 && netRoas != null ? ` · ROAS ${Number(netRoas).toFixed(2)}×` : ''}</span>
-        <span title="Best of last-year peak and Q4 peak">Peak: {(() => { const p = selectPeak(a); return p ? `ROAS ${p.roas.toFixed(2)}× (${p.orders != null ? p.orders : '—'} ord)` : '—'; })()}</span>
-      </div>
+      {(() => {
+        // Three-window evidence as a compact comparison grid (windows = columns).
+        const peak = selectPeak(a);
+        const windows = [
+          { label: '1w', title: 'This week (ad-only)', roas: a.ads_net_roas_1w, orders: a.ads_orders_1w, cpc: a.ads_cpc_1w, spend: a.ads_spend_1w ?? null, clicks: a.ads_clicks_1w ?? null },
+          { label: '4w', title: 'Last 4 weeks', roas: netRoas ?? null, orders: orders ?? null, cpc: a.ads_cpc_4w, spend: spend ?? null, clicks: clicks ?? null },
+          { label: 'Peak', title: 'Best of last-year peak and Q4 peak', roas: peak?.roas ?? null, orders: peak?.orders ?? null, cpc: null, spend: null, clicks: null },
+        ];
+        const roasCls = (v: number | null | undefined) =>
+          v == null ? 'text-faint' : v >= 1.1 ? 'text-emerald-400' : v < 0.9 ? 'text-red-400' : 'text-[var(--color-text)]';
+        const cell = (v: number | null | undefined, f: (n: number) => string) => (v == null ? '—' : f(v));
+        const rows: { name: string; render: (w: typeof windows[number]) => React.ReactNode }[] = [
+          { name: 'ROAS', render: w => <span className={roasCls(w.roas)}>{cell(w.roas, n => `${n.toFixed(2)}×`)}</span> },
+          { name: 'Orders', render: w => cell(w.orders, n => String(n)) },
+          { name: 'CPC', render: w => cell(w.cpc, n => `$${n.toFixed(2)}`) },
+          { name: 'Spend', render: w => cell(w.spend, n => fM(n)) },
+          { name: 'Clicks', render: w => cell(w.clicks, n => n.toLocaleString()) },
+        ];
+        return (
+          <div className="grid grid-cols-[auto_1fr_1fr_1fr] gap-x-4 gap-y-px text-[10px] tabular-nums font-mono text-muted items-baseline w-fit min-w-[60%]">
+            <span />
+            {windows.map(w => <span key={`h-${w.label}`} title={w.title} className="font-sans font-semibold text-[9px] uppercase tracking-wider text-subtle">{w.label}</span>)}
+            {rows.map(rw => (
+              <React.Fragment key={rw.name}>
+                <span className="font-sans text-faint">{rw.name}</span>
+                {windows.map(w => <span key={`${rw.name}-${w.label}`}>{rw.render(w)}</span>)}
+              </React.Fragment>
+            ))}
+          </div>
+        );
+      })()}
       <div className="text-[10px] text-subtle">{why.reason}.</div>
       <div className="text-[10px] tabular-nums font-mono">
         {opp.kind === 'save'
