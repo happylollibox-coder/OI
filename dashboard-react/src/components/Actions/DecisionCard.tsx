@@ -57,8 +57,8 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: 
         </button>
       </div>
       <div className="text-[10px] font-mono text-muted flex gap-3 tabular-nums flex-wrap">
-        <span title="This week (1w, ad-only)">1w: {a.ads_net_roas_1w != null ? `ROAS ${Number(a.ads_net_roas_1w).toFixed(2)}× (${a.ads_orders_1w ?? 0} ord)` : '—'}</span>
-        <span title="Last 4 weeks">4w: {fM(spend ?? 0)} · {clicks ?? 0} clicks · {orders ?? 0} ord{(orders ?? 0) > 0 && netRoas != null ? ` · ROAS ${Number(netRoas).toFixed(2)}×` : ''}</span>
+        <span title="This week (1w, ad-only)">1w: {a.ads_net_roas_1w != null ? `ROAS ${Number(a.ads_net_roas_1w).toFixed(2)}× (${a.ads_orders_1w ?? 0} ord)${a.ads_cpc_1w != null ? ` · CPC $${Number(a.ads_cpc_1w).toFixed(2)}` : ''}` : '—'}</span>
+        <span title="Last 4 weeks">4w: {fM(spend ?? 0)} · {clicks ?? 0} clicks{a.ads_cpc_4w != null ? ` · CPC $${Number(a.ads_cpc_4w).toFixed(2)}` : ''} · {orders ?? 0} ord{(orders ?? 0) > 0 && netRoas != null ? ` · ROAS ${Number(netRoas).toFixed(2)}×` : ''}</span>
         <span title="Best of last-year peak and Q4 peak">Peak: {(() => { const p = selectPeak(a); return p ? `ROAS ${p.roas.toFixed(2)}× (${p.orders != null ? p.orders : '—'} ord)` : '—'; })()}</span>
       </div>
       <div className="text-[10px] text-subtle">{why.reason}.</div>
