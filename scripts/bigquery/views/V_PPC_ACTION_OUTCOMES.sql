@@ -60,6 +60,8 @@ changes AS (
     c.target_spend_8w, c.target_orders_8w, c.target_net_roas_8w,
     c.coach_mode,
     c.source,
+    c.expected_impact_weekly,
+    c.expected_impact_kind,
     CASE
       WHEN c.action LIKE 'NEGATE%' OR c.action IN ('STOP_TERM', 'STOP', 'SWITCH_HERO') THEN 'NEGATE'
       WHEN c.action = 'STOP_TARGET' THEN 'PAUSE_TARGET'
@@ -212,5 +214,45 @@ SELECT
            THEN 'IMPROVED' ELSE 'WORSE' END
 
     ELSE 'NO_DATA'
-  END AS verdict
+  END AS verdict,
+
+  -- ── Target-vs-actual grading ─────────────────────────────────────
+  -- actual_weekly_impact:
+  --   kind='save': pre-window weekly spend rate (same as weekly_savings; spend
+  --     that disappears after negating / pausing is the realised saving).
+  --   kind='earn': post-window weekly net-profit rate.
+  --     net_profit = margin_per_unit*units − spend (captured in post_net_profit
+  --     which = post_margin − post_spend).  Normalised to 7 days.
+  --   NULL when target is absent.
+  --
+  --  Earn proxy reasoning: the view does not have a standalone weekly-revenue
+  --  KPI, but it does compute post_net_profit (post_margin − post_spend) which
+  --  mirrors coach net-profit semantics.  Weekly rate = post_net_profit /
+  --  post_days_elapsed * 7.  This is the closest sound measure for "are we
+  --  earning the expected $/wk" without inventing new data.
+  CASE
+    WHEN s.expected_impact_kind = 'save'
+      THEN ROUND(s.pre_spend / 14 * 7, 2)
+    WHEN s.expected_impact_kind = 'earn'
+      -- post_net_profit = post_margin − post_spend (computed in scored CTE)
+      -- Weekly rate: post_net_profit / post_days_elapsed * 7
+      THEN ROUND(SAFE_DIVIDE(s.post_net_profit, NULLIF(s.post_days_elapsed, 0)) * 7, 2)
+    ELSE NULL
+  END AS actual_weekly_impact,
+
+  CASE
+    WHEN s.expected_impact_weekly IS NULL THEN 'NO_TARGET'
+    WHEN s.post_days_elapsed < 7          THEN 'TOO_EARLY'
+    WHEN s.expected_impact_kind = 'save'
+      THEN IF(ROUND(s.pre_spend / 14 * 7, 2) >= s.expected_impact_weekly * 0.8,
+              'TARGET_MET', 'BELOW_TARGET')
+    WHEN s.expected_impact_kind = 'earn'
+      -- actual weekly net-profit rate >= 80% of target
+      THEN IF(
+        SAFE_DIVIDE(s.post_net_profit, NULLIF(s.post_days_elapsed, 0)) * 7
+              >= s.expected_impact_weekly * 0.8,
+        'TARGET_MET', 'BELOW_TARGET')
+    ELSE 'NO_TARGET'
+  END AS target_status
+
 FROM scored s;

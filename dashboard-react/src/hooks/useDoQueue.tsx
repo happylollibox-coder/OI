@@ -32,7 +32,8 @@ export interface DoQueueItem {
   // Close-the-loop snapshot (FACT_PPC_CHANGE_LOG)
   coach_mode?: string;     // GUARDIAN / COOLDOWN / BLITZ at decision time
   source?: 'COACH' | 'MANUAL';
-  // Weekly impact target from the decision card (not yet wired to BQ — the table lacks the column)
+  // Weekly impact target from the decision card — persisted to FACT_PPC_CHANGE_LOG and
+  // graded as target_status by V_PPC_ACTION_OUTCOMES a week after upload.
   expected_impact_weekly?: number;   // $/wk target from the decision card (save or earn)
   expected_impact_kind?: 'save' | 'earn';
   addedAt: number;
@@ -115,6 +116,8 @@ interface PpcChangeLogEntry {
   target_net_roas_8w: number;
   coach_mode: string;
   source: 'COACH' | 'MANUAL';
+  expected_impact_weekly: number | null;
+  expected_impact_kind: string | null;
 }
 
 function toChangeLogEntries(items: DoQueueItem[]): PpcChangeLogEntry[] {
@@ -140,6 +143,8 @@ function toChangeLogEntries(items: DoQueueItem[]): PpcChangeLogEntry[] {
     target_net_roas_8w: i.target_net_roas_8w || 0,
     coach_mode: i.coach_mode || '',
     source: i.source || 'COACH',
+    expected_impact_weekly: i.expected_impact_weekly ?? null,
+    expected_impact_kind: i.expected_impact_kind ?? null,
   }));
 }
 

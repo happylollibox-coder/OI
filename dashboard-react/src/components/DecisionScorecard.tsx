@@ -36,6 +36,10 @@ interface OutcomeRow {
   post_orders_per_day: number | null;
   net_roas_delta: number;
   weekly_savings: number;
+  expected_impact_weekly: number | null;
+  expected_impact_kind: string | null;
+  actual_weekly_impact: number | null;
+  target_status: string | null;
 }
 
 const num = (v: unknown): number => (v == null ? 0 : Number(v));
@@ -56,6 +60,8 @@ async function loadOutcomes(): Promise<OutcomeRow[]> {
       'PpcActionOutcomes.postSpend', 'PpcActionOutcomes.postOrders', 'PpcActionOutcomes.postNetRoas',
       'PpcActionOutcomes.postOrdersPerDay',
       'PpcActionOutcomes.netRoasDelta', 'PpcActionOutcomes.weeklySavings',
+      'PpcActionOutcomes.expectedImpactWeekly', 'PpcActionOutcomes.expectedImpactKind',
+      'PpcActionOutcomes.actualWeeklyImpact', 'PpcActionOutcomes.targetStatus',
     ],
     order: { 'PpcActionOutcomes.appliedAt': 'desc' },
     limit: 500,
@@ -86,6 +92,10 @@ async function loadOutcomes(): Promise<OutcomeRow[]> {
     post_orders_per_day: numOrNull(r['PpcActionOutcomes.postOrdersPerDay']),
     net_roas_delta: num(r['PpcActionOutcomes.netRoasDelta']),
     weekly_savings: num(r['PpcActionOutcomes.weeklySavings']),
+    expected_impact_weekly: numOrNull(r['PpcActionOutcomes.expectedImpactWeekly']),
+    expected_impact_kind: r['PpcActionOutcomes.expectedImpactKind'] ? String(r['PpcActionOutcomes.expectedImpactKind']) : null,
+    actual_weekly_impact: numOrNull(r['PpcActionOutcomes.actualWeeklyImpact']),
+    target_status: r['PpcActionOutcomes.targetStatus'] ? String(r['PpcActionOutcomes.targetStatus']) : null,
   }));
 }
 
@@ -161,7 +171,10 @@ export function DecisionScorecard() {
     const weeklySavings = r
       .filter(x => (x.action_group === 'NEGATE' || x.action_group === 'PAUSE_TARGET') && x.verdict === 'IMPROVED')
       .reduce((s, x) => s + x.weekly_savings, 0);
-    return { improved, worse, tooEarly, noData, scoreable, accuracy, weeklySavings };
+    const gradedTargets = r.filter(x => x.target_status === 'TARGET_MET' || x.target_status === 'BELOW_TARGET');
+    const targetsMet = gradedTargets.filter(x => x.target_status === 'TARGET_MET').length;
+    const targetsTotal = gradedTargets.length;
+    return { improved, worse, tooEarly, noData, scoreable, accuracy, weeklySavings, targetsMet, targetsTotal };
   }, [rows]);
 
   // Hide entirely until the first change has been logged
@@ -185,6 +198,11 @@ export function DecisionScorecard() {
         {stats.weeklySavings > 0 && (
           <Badge variant="green">{fM(stats.weeklySavings)}/wk saved</Badge>
         )}
+        {stats.targetsTotal > 0 && (
+          <span className={`text-[10px] font-mono ${stats.targetsMet === stats.targetsTotal ? 'text-emerald-400' : stats.targetsMet > 0 ? 'text-amber-400' : 'text-red-400'}`}>
+            {stats.targetsMet}/{stats.targetsTotal} targets met
+          </span>
+        )}
         <span className="flex items-center gap-2 text-[10px] font-mono">
           <span className="text-emerald-400">✓ {stats.improved}</span>
           <span className="text-red-400">✗ {stats.worse}</span>
@@ -205,6 +223,18 @@ export function DecisionScorecard() {
               <span className="text-subtle flex-1 min-w-0 truncate" title={verdictSentence(r)}>
                 {verdictSentence(r)}
               </span>
+              {r.expected_impact_weekly != null && r.target_status && r.target_status !== 'NO_TARGET' && (
+                <span className={`text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded border ${
+                  r.target_status === 'TARGET_MET'
+                    ? 'text-emerald-400 border-emerald-800 bg-emerald-950/30'
+                    : r.target_status === 'BELOW_TARGET'
+                    ? 'text-red-400 border-red-800 bg-red-950/30'
+                    : 'text-zinc-500 border-zinc-700 bg-zinc-900/30'
+                }`}>
+                  target {fM(r.expected_impact_weekly)}/wk →{' '}
+                  {r.target_status === 'TARGET_MET' ? '✓ met' : r.target_status === 'BELOW_TARGET' ? '✗ below' : '… early'}
+                </span>
+              )}
               <span className="text-[10px] text-faint font-mono truncate max-w-[160px] shrink-0">{r.campaign_name}</span>
               {r.coach_mode && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface border border-border-faint text-muted font-mono uppercase shrink-0">

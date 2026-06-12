@@ -5713,6 +5713,8 @@ PPC_CHANGE_LOG_SCHEMA = [
     bigquery.SchemaField('target_net_roas_8w', 'FLOAT'),
     bigquery.SchemaField('coach_mode', 'STRING'),
     bigquery.SchemaField('source', 'STRING', mode='REQUIRED'),
+    bigquery.SchemaField('expected_impact_weekly', 'FLOAT'),
+    bigquery.SchemaField('expected_impact_kind', 'STRING'),
 ]
 
 
@@ -5737,7 +5739,8 @@ def api_ppc_change_log_insert():
         "product": "...", "old_bid": 0.8, "new_bid": 0.56,
         "old_budget": null, "new_budget": null,
         "target_spend_8w": 120.5, "target_orders_8w": 3, "target_net_roas_8w": 0.4,
-        "coach_mode": "GUARDIAN", "source": "COACH" }
+        "coach_mode": "GUARDIAN", "source": "COACH",
+        "expected_impact_weekly": 30.0, "expected_impact_kind": "save" }
     """
     try:
         data = request.get_json()
@@ -5777,6 +5780,8 @@ def api_ppc_change_log_insert():
                 'target_net_roas_8w': _ppc_num(item.get('target_net_roas_8w')),
                 'coach_mode': item.get('coach_mode') or None,
                 'source': item.get('source') if item.get('source') in ('COACH', 'MANUAL') else 'COACH',
+                'expected_impact_weekly': _ppc_num(item.get('expected_impact_weekly')),
+                'expected_impact_kind': (item.get('expected_impact_kind') or None),
             })
 
         if not rows:

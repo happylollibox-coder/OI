@@ -93,5 +93,11 @@ cube(`PpcActionOutcomes`, {
     postOrdersPerDay: { sql: `post_orders_per_day`, type: `number` },
     netRoasDelta: { sql: `net_roas_delta`, type: `number` },
     weeklySavings: { sql: `weekly_savings`, type: `number`, description: `Pre-window weekly burn rate (negate savings estimate)` },
+
+    // Decision-card target wiring (2026-06-12)
+    expectedImpactWeekly: { sql: `expected_impact_weekly`, type: `number`, description: `Decision-card weekly $ target (save or earn)` },
+    expectedImpactKind: { sql: `expected_impact_kind`, type: `string`, description: `'save' or 'earn' — which direction the target applies` },
+    actualWeeklyImpact: { sql: `actual_weekly_impact`, type: `number`, description: `Realised $/wk (save=pre weekly burn; earn=post net-profit/wk)` },
+    targetStatus: { sql: `target_status`, type: `string`, description: `NO_TARGET / TOO_EARLY / TARGET_MET / BELOW_TARGET` },
   },
 });
