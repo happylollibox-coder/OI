@@ -60,8 +60,14 @@ module.exports = {
            resolve();
         });
       } else {
-        // Fallback to local dev secret verification
-        const secret = process.env.CUBEJS_API_SECRET || 'dev-secret-key-123';
+        // Fallback to local dev secret verification.
+        // In production the dev fallback would accept tokens signed with a secret
+        // that is committed to this repo — refuse to verify instead.
+        const secret = process.env.CUBEJS_API_SECRET
+          || (process.env.NODE_ENV !== 'production' ? 'dev-secret-key-123' : null);
+        if (!secret) {
+          return reject(new Error('CUBEJS_API_SECRET is not configured'));
+        }
         jwt.verify(auth, secret, (err, payload) => {
            if (err) {
              return reject(new Error('Invalid dev token'));

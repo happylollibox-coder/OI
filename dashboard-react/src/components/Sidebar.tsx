@@ -1,4 +1,5 @@
-import { Home, Zap, Mountain, BarChart2, Search, GraduationCap, ClipboardList, HeartPulse, Target, Megaphone, Settings, Sun, Moon, CheckSquare, Shield, Calculator, Package, Bell, Rocket, LayoutDashboard } from 'lucide-react';
+import { Home, Zap, Mountain, BarChart2, Search, GraduationCap, ClipboardList, HeartPulse, Target, Megaphone, Settings, Sun, Moon, CheckSquare, Shield, Calculator, Package, Bell, Rocket, LayoutDashboard, TrendingUp, Eye, EyeOff } from 'lucide-react';
+import { useViewMode, isPageVisible } from '../hooks/useViewMode';
 import type { PageId, FamilyName } from '../types';
 
 interface NavItem {
@@ -37,6 +38,7 @@ const NAV_GROUPS: NavGroup[] = [
       { page: 'sqp', icon: <BarChart2 size={16} />, label: 'SQP' },
       { page: 'learn', icon: <GraduationCap size={16} />, label: 'LEARN' },
       { page: 'kwds', icon: <Search size={16} />, label: 'KEYWORDS' },
+      { page: 'research', icon: <TrendingUp size={16} />, label: 'RESEARCH' },
       { page: 'log', icon: <ClipboardList size={16} />, label: 'LOG' },
     ],
   },
@@ -59,9 +61,14 @@ export function Sidebar({ activePage, activeFamily, onNav, themeMode, onToggleTh
   alertBadge?: { critical: number; warning: number; total: number };
   adminBadge?: 'error' | 'ok' | null;
 }) {
+  const { mode: viewMode, isAdmin, toggle: toggleViewMode } = useViewMode();
+  const visibleGroups = NAV_GROUPS
+    .map(g => ({ ...g, items: g.items.filter(i => isPageVisible(i.page, viewMode)) }))
+    .filter(g => g.items.length > 0);
+
   return (
     <nav className="fixed top-14 left-0 bottom-0 w-[72px] bg-surface/70 backdrop-blur-xl border-r border-border flex flex-col py-1 z-40 overflow-y-auto">
-      {NAV_GROUPS.map((group, gi) => (
+      {visibleGroups.map((group, gi) => (
         <div key={gi}>
           {gi > 0 && <div className="h-px bg-border mx-3 my-1" />}
           <div className="text-[7px] uppercase font-bold tracking-[0.12em] text-faint/40 text-center py-1 select-none">
@@ -102,10 +109,21 @@ export function Sidebar({ activePage, activeFamily, onNav, themeMode, onToggleTh
         </div>
       ))}
 
+      <div className="flex-1" />
+      <div className="h-px bg-border mx-3 my-1" />
+      <button
+        onClick={toggleViewMode}
+        className="flex flex-col items-center justify-center w-[58px] mx-auto py-2 text-[8px] font-semibold uppercase tracking-widest text-faint hover:text-muted transition-all duration-300"
+        title={isAdmin ? 'Admin view: all pages & diagnostics. Click for simple view.' : 'Simple view: curated pages only. Click for admin view.'}
+      >
+        {isAdmin
+          ? <Eye size={14} className="mb-1 text-violet-400" />
+          : <EyeOff size={14} className="mb-1 text-faint" />
+        }
+        <span className="leading-none">{isAdmin ? 'ADMIN' : 'SIMPLE'}</span>
+      </button>
       {onToggleTheme && (
         <>
-          <div className="flex-1" />
-          <div className="h-px bg-border mx-3 my-1" />
           <button
             onClick={onToggleTheme}
             className="flex flex-col items-center justify-center w-[58px] mx-auto py-2 text-[8px] font-semibold uppercase tracking-widest text-faint hover:text-muted transition-all duration-300"

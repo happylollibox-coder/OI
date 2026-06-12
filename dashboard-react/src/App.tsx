@@ -27,7 +27,9 @@ import { SupplyPage } from './pages/SupplyPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { ProductsPage } from './pages/ProductsPage';
 import { KpiPage } from './pages/KpiPage';
+import { ResearchPage } from './pages/ResearchPage';
 import { DoQueueProvider } from './hooks/useDoQueue';
+import { ViewModeProvider, useViewMode, isPageVisible } from './hooks/useViewMode';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LoginScreen } from './components/LoginScreen';
 import type { PageId, FamilyName } from './types';
@@ -36,11 +38,13 @@ export default function App() {
   return (
     <AuthProvider>
       <DoQueueProvider>
-        <FiltersProvider>
-          <PageSummaryProvider>
-            <AppWrapper />
-          </PageSummaryProvider>
-        </FiltersProvider>
+        <ViewModeProvider>
+          <FiltersProvider>
+            <PageSummaryProvider>
+              <AppWrapper />
+            </PageSummaryProvider>
+          </FiltersProvider>
+        </ViewModeProvider>
       </DoQueueProvider>
     </AuthProvider>
   );
@@ -65,6 +69,11 @@ function AppInner() {
   const [experimentId, setExperimentId] = useState<string | null>(null);
   const [alertBadge, setAlertBadge] = useState<{ critical: number; warning: number; total: number } | undefined>();
   const [adminBadge, setAdminBadge] = useState<'error' | 'ok' | null>(null);
+  const { mode: viewMode } = useViewMode();
+
+  // In user view, admin-only pages fall back to home (derived, not state —
+  // switching back to admin view returns to the original page)
+  const visiblePage: PageId = isPageVisible(page, viewMode) ? page : 'home';
 
   // Fetch alert count for sidebar badge
   useEffect(() => {
@@ -95,7 +104,7 @@ function AppInner() {
     return (
       <>
         <Header data={data} onNav={navigate} />
-        <Sidebar activePage={page} activeFamily={filters.family} onNav={navigate} themeMode={themeMode} onToggleTheme={toggleTheme} />
+        <Sidebar activePage={visiblePage} activeFamily={filters.family} onNav={navigate} themeMode={themeMode} onToggleTheme={toggleTheme} />
         <main className="fixed top-14 left-[72px] right-0 bottom-0 overflow-y-auto px-8 py-5 pb-16 scroll-smooth">
           <DashboardSkeleton />
         </main>
@@ -104,7 +113,7 @@ function AppInner() {
   }
 
   const renderPage = () => {
-    switch (page) {
+    switch (visiblePage) {
       case 'home': return <HomePage data={data} onNav={navigate} />;
       case 'actions': return <ActionsPage data={data} matchAction={gt.matchAction} />;
       case 'peak': return <PeakPage data={data} />;
@@ -125,6 +134,7 @@ function AppInner() {
       case 'alerts': return <AlertsPage />;
       case 'products': return <ProductsPage data={data} />;
       case 'kpi': return <KpiPage data={data} />;
+      case 'research': return <ResearchPage />;
       default: return <HomePage data={data} onNav={navigate} />;
     }
   };
@@ -138,7 +148,7 @@ function AppInner() {
         </div>
       )}
       <Header data={data} onNav={navigate} />
-      <Sidebar activePage={page} activeFamily={filters.family} onNav={navigate} themeMode={themeMode} onToggleTheme={toggleTheme} healthBadge={(() => {
+      <Sidebar activePage={visiblePage} activeFamily={filters.family} onNav={navigate} themeMode={themeMode} onToggleTheme={toggleTheme} healthBadge={(() => {
         const meta = data._meta || {};
         const files = meta.files || {};
         const criticalFiles = ['summary.json', 'actions.json', 'products.json', 'weekly_trends.json', 'monthly_trends.json', 'keyword_product_map.json', 'drivers.json'];

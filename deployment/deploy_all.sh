@@ -158,17 +158,40 @@ deploy_bigquery() {
   ok "BigQuery views deployed: $deployed succeeded, $failed failed"
 }
 
+# ─── Secrets ─────────────────────────────────────────────────
+# Production secrets must come from .env — never hardcoded here. The old
+# hardcoded "dev-secret-key-123" was committed to the repo, meaning anyone
+# with repo access could mint valid Cube API tokens for production.
+require_prod_secrets() {
+  if [ -f "$BASE_DIR/.env" ]; then
+    set -a
+    eval "$(grep -v '^#' "$BASE_DIR/.env")"
+    set +a
+  fi
+  if [ -z "$CUBEJS_API_SECRET" ] || [ "$CUBEJS_API_SECRET" = "dev-secret-key-123" ]; then
+    err "CUBEJS_API_SECRET missing from .env or still set to the dev value."
+    err "Generate one:  openssl rand -hex 32   and add CUBEJS_API_SECRET=... to $BASE_DIR/.env"
+    exit 1
+  fi
+  if [ -z "$SECRET_KEY" ] || [ "$SECRET_KEY" = "dev-secret-key-change-in-production" ]; then
+    err "SECRET_KEY missing from .env or still set to the dev value."
+    err "Generate one:  openssl rand -hex 32   and add SECRET_KEY=... to $BASE_DIR/.env"
+    exit 1
+  fi
+}
+
 # ─── Cube API ────────────────────────────────────────────────
 deploy_cube() {
   log "Deploying Cube API to Cloud Run (${REGION})..."
+  require_prod_secrets
   cd "$BASE_DIR/cube"
-  
+
   gcloud run deploy cube-api \
     --source . \
     --project=$PROJECT_ID \
     --region=$REGION \
     --allow-unauthenticated \
-    --update-env-vars CUBEJS_API_SECRET="dev-secret-key-123" \
+    --update-env-vars CUBEJS_API_SECRET="$CUBEJS_API_SECRET" \
     --memory=2Gi \
     --cpu=2 \
     --timeout=300 \
@@ -214,9 +237,10 @@ deploy_dashboard() {
 # ─── Flask Data Entry ───────────────────────────────────────
 deploy_flask() {
   log "Deploying Flask Data Entry to Cloud Run (${REGION})..."
+  require_prod_secrets
   cd "$BASE_DIR/data-entry-app"
   # Source .env if it exists
-  local env_vars="CUBEJS_API_SECRET=dev-secret-key-123,VITE_DASHBOARD_URL=https://oi-dashboard-405291422506.us-central1.run.app"
+  local env_vars="CUBEJS_API_SECRET=${CUBEJS_API_SECRET},SECRET_KEY=${SECRET_KEY},VITE_DASHBOARD_URL=https://oi-dashboard-405291422506.us-central1.run.app"
   if [ -f "$BASE_DIR/.env" ]; then
     log "  Loading credentials from .env..."
     # Export vars from .env (ignoring comments)

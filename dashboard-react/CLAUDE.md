@@ -37,6 +37,7 @@ BigQuery → Cube.js (:4000) → useCubeData → useUnifiedData → components
 | `useGroundTruth` | Experiment validation rules (API + localStorage fallback) |
 | `useConclusions` | Business insights (API + localStorage fallback) |
 | `useThresholds` | User-set warning thresholds |
+| `useViewMode` | Admin/Simple view toggle — gates nav pages (USER_VISIBLE_PAGES) and, via `isAdmin`, extra columns/diagnostics (localStorage) |
 
 ## Styling
 

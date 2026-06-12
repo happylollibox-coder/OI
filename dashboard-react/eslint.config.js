@@ -20,4 +20,13 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // Context/hook modules intentionally export a Provider component alongside
+    // its hook and constants — the project-wide pattern (useFilters, useDoQueue,
+    // useViewMode, AuthContext). Fast-refresh purity doesn't apply to them.
+    files: ['src/hooks/**/*.{ts,tsx}', 'src/contexts/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])
