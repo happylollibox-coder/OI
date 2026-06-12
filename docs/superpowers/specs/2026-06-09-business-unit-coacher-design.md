@@ -140,6 +140,16 @@ Where new keywords *come from*. `V_RESEARCH_RANKED` is already at grain **`paren
 | `scale_clear` — **COOLDOWN** | **N/A — never promotes** (`scale: false`) | Wind-down mode only holds (≥ 0.8×) or cuts; the promote gate does not apply. |
 | `remove_asin_split` | winner ≥ 1.3× **and** loser ≤ 0.7×, both gated | Stark split only. |
 
+**Three-window rule (owner, 2026-06-12 — Stage 1 feedback):** every cut/reduce decision must see **this week (1w)**, **4 weeks (4w)**, and **peak season** (best of last-year-peak `ly_net_roas` / Q4 `q4_peak_net_roas`, if either exists), and every decision card displays all three.
+
+| 1w | 4w | Peak | Verdict |
+|---|---|---|---|
+| bad | bad | bad / none | **Definitely waste** → cut/reduce stays clear |
+| bad | bad | **great** (≥ `peak_great` 1.3× with ≥ `peak_min_orders` 3) | **Don't cut** → park: "seasonal — BOOST before next peak" (boost-phase action comes with the engine work in Stage 3) |
+| **good** (≥ `recovering_1w` 1.1× with orders) | bad | any | **Don't cut yet** → park: "recovering this week" |
+
+Knobs: `peak_great` (1.3), `peak_min_orders` (3), `recovering_1w` (1.1) — in the `GATE` constants now, `CoachThresholds` at Stage 3. Peak selection is the shared `selectPeak()` helper (single source for gate + card display).
+
 Note the split between the **display reaction bar** (`MODE_ROAS.up` = GUARDIAN 1.1 / BLITZ 1.0 — drives the dashboard "↑ scale budget" hint) and the **auto-promote gate** (the stricter ~1.30 / ~1.15 above). Display = "lean toward scaling"; gate = "confident enough to spend more."
 
 (Values illustrative; finalized in the plan, owner-tunable thereafter.)
