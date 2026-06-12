@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Package, X, Plus, Minus, Loader2, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react';
 import { fmt } from '../../utils';
 import { useUnifiedData } from '../../hooks/useUnifiedData';
+import { apiFetch } from '../../utils/apiFetch';
 
 export interface DraftShipmentLine {
   product: string;
@@ -91,7 +92,7 @@ export function CreateShipmentModal({
 
   // Fetch LOVs
   useEffect(() => {
-    fetch('/api/lov/SUPPLIER')
+    apiFetch('/api/lov/SUPPLIER')
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -102,7 +103,7 @@ export function CreateShipmentModal({
       })
       .catch(console.error);
 
-    fetch('/api/lov/SHIPMENT_TYPE')
+    apiFetch('/api/lov/SHIPMENT_TYPE')
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -112,7 +113,7 @@ export function CreateShipmentModal({
       })
       .catch(console.error);
 
-    fetch('/api/lov/SHIPMENT_STATUS')
+    apiFetch('/api/lov/SHIPMENT_STATUS')
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -143,7 +144,7 @@ export function CreateShipmentModal({
   // Fetch Open POs and match them to drafted lines
   useEffect(() => {
     setPosLoading(true);
-    fetch('/api/open-pos')
+    apiFetch('/api/open-pos')
       .then(res => res.json())
       .then(data => {
         if (data.success && data.data) {
@@ -375,7 +376,7 @@ export function CreateShipmentModal({
           lines: linesForSplit
         };
 
-        promises.push(fetch('/api/shipments', {
+        promises.push(apiFetch('/api/shipments', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),

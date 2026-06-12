@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { AlertRow } from '../../types';
 import { Package, Truck, Settings, X, Loader2, TrendingUp } from 'lucide-react';
 import { fmt } from '../../utils';
+import { apiFetch } from '../../utils/apiFetch';
 
 export function RemediationModal({
   alert,
@@ -40,7 +41,7 @@ export function RemediationModal({
 
   useEffect(() => {
     if (isPO) {
-      fetch('/api/lov/SUPPLIER')
+      apiFetch('/api/lov/SUPPLIER')
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data)) {
@@ -77,7 +78,7 @@ export function RemediationModal({
     try {
       if (isPO) {
         // Create PO
-        const res = await fetch('/api/po', {
+        const res = await apiFetch('/api/po', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -99,7 +100,7 @@ export function RemediationModal({
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed to create PO');
       } else if (isShipment) {
         // Create Shipment
-        const res = await fetch('/api/shipments', {
+        const res = await apiFetch('/api/shipments', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -134,7 +135,7 @@ export function RemediationModal({
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed to create Shipment');
       } else if (isAwdTarget) {
         // Update AWD Target
-        const res = await fetch('/api/awd_target', {
+        const res = await apiFetch('/api/awd_target', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -147,7 +148,7 @@ export function RemediationModal({
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update AWD Target');
       } else if (isAdjustForecast) {
         // Adjust Forecast
-        const res = await fetch('/api/adjust_forecast', {
+        const res = await apiFetch('/api/adjust_forecast', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -160,7 +161,7 @@ export function RemediationModal({
       }
 
       // Mark alert as DONE
-      const doneRes = await fetch(`/api/alerts/${alert.id}/done`, {
+      const doneRes = await apiFetch(`/api/alerts/${alert.id}/done`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes: `Auto-remediated via ${alert.action_type}` }),

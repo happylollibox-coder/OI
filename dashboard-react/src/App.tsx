@@ -33,6 +33,7 @@ import { ViewModeProvider, useViewMode, isPageVisible } from './hooks/useViewMod
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LoginScreen } from './components/LoginScreen';
 import type { PageId, FamilyName } from './types';
+import { apiFetch } from './utils/apiFetch';
 
 export default function App() {
   return (
@@ -78,11 +79,11 @@ function AppInner() {
   // Fetch alert count for sidebar badge
   useEffect(() => {
     const fetchCount = () => {
-      fetch('/api/alerts/count').then(r => r.ok ? r.json() : null).then(d => {
+      apiFetch('/api/alerts/count').then(r => r.ok ? r.json() : null).then(d => {
         if (d) setAlertBadge({ critical: d.critical || 0, warning: d.warning || 0, total: d.total || 0 });
       }).catch(() => {});
       
-      fetch('/api/admin/pipeline-logs').then(r => r.ok ? r.json() : null).then(d => {
+      apiFetch('/api/admin/pipeline-logs').then(r => r.ok ? r.json() : null).then(d => {
         if (d && d.success && d.runs && d.runs.length > 0) {
           const latestRun = d.runs[0];
           setAdminBadge(latestRun.fail_count > 0 ? 'error' : 'ok');

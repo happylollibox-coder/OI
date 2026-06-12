@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Package, X, Plus, Minus, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import { fmt } from '../../utils';
 import { useUnifiedData } from '../../hooks/useUnifiedData';
+import { apiFetch } from '../../utils/apiFetch';
 
 export interface DraftPOLine {
   product: string;
@@ -52,7 +53,7 @@ export function CreatePOModal({
   const [manufacturerOptions, setManufacturerOptions] = useState<string[]>([]);
 
   useEffect(() => {
-    fetch('/api/lov/SUPPLIER')
+    apiFetch('/api/lov/SUPPLIER')
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -93,7 +94,7 @@ export function CreatePOModal({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/po', {
+      const res = await apiFetch('/api/po', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

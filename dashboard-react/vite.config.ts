@@ -29,8 +29,11 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
+      // Local Flask data-entry app (launch.json pins it to 5050; macOS AirPlay owns 5000).
+      // Dev must NOT proxy to prod: /api is JWT-gated there (architecture/API_AUTH.md)
+      // and dev previously read/wrote production data by accident.
       '/api': {
-        target: 'https://data-entry-forms-405291422506.me-west1.run.app',
+        target: process.env.VITE_FLASK_API_URL || 'http://localhost:5050',
         changeOrigin: true,
       },
       '/cubejs-api': 'http://localhost:4000',

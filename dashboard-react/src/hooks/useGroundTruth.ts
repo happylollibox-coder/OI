@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { GroundTruth } from '../types';
+import { apiFetch } from '../utils/apiFetch';
 
 const GT_KEY = 'hl_ground_truths';
 const API = '/api/ground-truths';
@@ -13,7 +14,7 @@ function saveToStorage(arr: GroundTruth[]) {
 }
 
 async function fetchApi<T>(url: string, opts?: RequestInit): Promise<T> {
-  const r = await fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', ...opts?.headers } });
+  const r = await apiFetch(url, { ...opts, headers: { 'Content-Type': 'application/json', ...opts?.headers } });
   if (!r.ok) throw new Error(r.statusText);
   return r.json();
 }
@@ -25,14 +26,14 @@ export function useGroundTruth() {
   useEffect(() => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 2000);
-    fetch(API, { signal: ctrl.signal }).then(r => { if (r.ok) setUseApi(true); }).catch(() => {}).finally(() => clearTimeout(t));
+    apiFetch(API, { signal: ctrl.signal }).then(r => { if (r.ok) setUseApi(true); }).catch(() => {}).finally(() => clearTimeout(t));
   }, []);
 
   useEffect(() => {
     if (useApi) {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 5000);
-      fetch(API, { signal: ctrl.signal })
+      apiFetch(API, { signal: ctrl.signal })
         .then(r => r.ok ? r.json() : Promise.reject(new Error('Not ok')))
         .then((data: GroundTruth[]) => setGroundTruths(Array.isArray(data) ? data : []))
         .catch(() => setGroundTruths(loadFromStorage()))

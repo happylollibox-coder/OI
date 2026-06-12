@@ -13,6 +13,7 @@ import { FamilyTabs } from './research/FamilyTabs';
 import { FamilyInfoCard } from './research/FamilyInfoCard';
 import { ConversionCurveCard } from './research/ConversionCurveCard';
 import { ResultsTable } from './research/ResultsTable';
+import { apiFetch } from '../utils/apiFetch';
 
 // All scoring lives in SQL (V_RESEARCH_RANKED → FACT_RESEARCH_RANKED).
 // This page fetches, filters, sorts, and formats — it never computes scores.
@@ -61,8 +62,8 @@ export function ResearchPage() {
   useEffect(() => {
     setOverviewLoading(true);
     Promise.all([
-      fetch('/api/research/conversion-curve').then(r => r.ok ? r.json() : []).catch(() => []),
-      fetch('/api/research/products').then(r => r.ok ? r.json() : []).catch(() => []),
+      apiFetch('/api/research/conversion-curve').then(r => r.ok ? r.json() : []).catch(() => []),
+      apiFetch('/api/research/products').then(r => r.ok ? r.json() : []).catch(() => []),
     ]).then(([curveData, productsData]) => {
       setCurve(curveData);
       setProducts(productsData);
@@ -77,8 +78,8 @@ export function ResearchPage() {
   // ─── Load family info + reasoning when product changes ─────
   const fetchFamily = useCallback(async (signal?: AbortSignal) => {
     const [fi, sr] = await Promise.all([
-      fetch(`/api/research/family-info?family=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`/api/research/segment-reasoning?family=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
+      apiFetch(`/api/research/family-info?family=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
+      apiFetch(`/api/research/segment-reasoning?family=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     if (!signal?.aborted) {
       setFamilyInfo(fi);
@@ -98,7 +99,7 @@ export function ResearchPage() {
     // submittedTerm '__top__' means showing top terms (not a real search) — allow refetch
     if (!parent || (submittedTerm && submittedTerm !== '__top__')) return;
     setOverviewLoading(true);
-    fetch(`/api/research/top-terms?parent=${encodeURIComponent(parent)}`)
+    apiFetch(`/api/research/top-terms?parent=${encodeURIComponent(parent)}`)
       .then(r => r.ok ? r.json() : [])
       .then((topData: Record<string, unknown>[]) => {
         setResults(topData.map(mapResearchRow));
@@ -122,7 +123,7 @@ export function ResearchPage() {
       setSynonyms({});
       setSynonymsReady(false);
       try {
-        const res = await fetch(`/api/research/top-terms${parent ? `?parent=${encodeURIComponent(parent)}` : ''}`);
+        const res = await apiFetch(`/api/research/top-terms${parent ? `?parent=${encodeURIComponent(parent)}` : ''}`);
         if (res.ok) {
           const topData: Record<string, unknown>[] = await res.json();
           setResults(topData.map(mapResearchRow));
@@ -146,7 +147,7 @@ export function ResearchPage() {
 
     // 1. Run direct search immediately
     try {
-      const res = await fetch('/api/research/related-terms', {
+      const res = await apiFetch('/api/research/related-terms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ term: searchTerm, parent: parent || undefined, mode: 'direct' }),
@@ -167,7 +168,7 @@ export function ResearchPage() {
     if (searchWords.length > 0) {
       setSynonymsLoading(true);
       try {
-        const synRes = await fetch('/api/research/get-synonyms', {
+        const synRes = await apiFetch('/api/research/get-synonyms', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ words: searchWords }),
@@ -192,7 +193,7 @@ export function ResearchPage() {
     if (Object.keys(synonyms).length === 0) return;
 
     setLoading(true);
-    fetch('/api/research/related-terms', {
+    apiFetch('/api/research/related-terms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -216,7 +217,7 @@ export function ResearchPage() {
       (async () => {
         setLoading(true);
         try {
-          const res = await fetch('/api/research/related-terms', {
+          const res = await apiFetch('/api/research/related-terms', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -326,7 +327,7 @@ export function ResearchPage() {
     const missing = pagedRowTerms.filter(t => !(t in termRanks));
     if (missing.length === 0) return;
     const controller = new AbortController();
-    fetch('/api/research/term-ranks', {
+    apiFetch('/api/research/term-ranks', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ terms: missing }), signal: controller.signal,
     }).then(r => r.ok ? r.json() : {})
@@ -364,7 +365,7 @@ export function ResearchPage() {
 
   // ─── Save manual segment overrides (MERGE upsert server-side) ──
   const onSaveSegments = useCallback(async (queryText: string, segs: Record<string, string | null>) => {
-    await fetch('/api/research/update-segments', {
+    await apiFetch('/api/research/update-segments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query_text: queryText, ...segs }),

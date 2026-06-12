@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { BusinessConclusion } from '../types';
+import { apiFetch } from '../utils/apiFetch';
 
 const KEY = 'hl_business_conclusions';
 const API = '/api/conclusions';
@@ -13,7 +14,7 @@ function saveToStorage(arr: BusinessConclusion[]) {
 }
 
 async function fetchApi<T>(url: string, opts?: RequestInit): Promise<T> {
-  const r = await fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', ...opts?.headers } });
+  const r = await apiFetch(url, { ...opts, headers: { 'Content-Type': 'application/json', ...opts?.headers } });
   if (!r.ok) throw new Error(r.statusText);
   return r.json();
 }
@@ -25,7 +26,7 @@ export function useConclusions() {
   useEffect(() => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 2000);
-    fetch(API, { signal: ctrl.signal }).then(r => { if (r.ok) setUseApi(true); }).catch(() => {}).finally(() => clearTimeout(t));
+    apiFetch(API, { signal: ctrl.signal }).then(r => { if (r.ok) setUseApi(true); }).catch(() => {}).finally(() => clearTimeout(t));
   }, []);
 
   useEffect(() => {

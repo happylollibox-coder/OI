@@ -4,31 +4,47 @@
     {
       "name": "Vite Dashboard",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "cwd": "/Users/ori/Develop/OI/dashboard-react",
       "port": 5173
     },
     {
       "name": "Dashboard Backend",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["backend/app.py"],
+      "runtimeArgs": [
+        "backend/app.py"
+      ],
       "cwd": "/Users/ori/Develop/OI/dashboard-react",
-      "env": { "SKIP_BQ_API": "1" },
+      "env": {
+        "SKIP_BQ_API": "1"
+      },
       "port": 5001
     },
     {
       "name": "Cube.js",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "cwd": "/Users/ori/Develop/OI/cube",
       "port": 4000
     },
     {
       "name": "Flask Data-Entry",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["app.py"],
+      "runtimeArgs": [
+        "app.py"
+      ],
       "cwd": "/Users/ori/Develop/OI/data-entry-app",
-      "port": 5000
+      "port": 5050,
+      "env": {
+        "PORT": "5050"
+      },
+      "autoPort": false
     }
   ]
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FamilyInfo, SegmentReason, SegmentReasoning } from './types';
+import { apiFetch } from '../../utils/apiFetch';
 
 interface FamilyInfoCardProps {
   familyInfo: FamilyInfo;
@@ -33,7 +34,7 @@ export function FamilyInfoCard({ familyInfo, selectedProduct, segmentReasoning, 
   const segs = familyInfo.summary.segments || {};
 
   const postSegments = async (body: Record<string, string | null>) => {
-    await fetch('/api/research/product-segments', {
+    await apiFetch('/api/research/product-segments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ parent_name: selectedProduct, ...body }),
@@ -156,7 +157,7 @@ export function FamilyInfoCard({ familyInfo, selectedProduct, segmentReasoning, 
           <button
             onClick={async () => {
               try {
-                await fetch('/api/research/derive-segments', {
+                await apiFetch('/api/research/derive-segments', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ parent_name: selectedProduct, force: true }),

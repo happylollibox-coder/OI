@@ -14,6 +14,7 @@ import { Package, CreditCard, Truck, ChevronDown, ChevronUp, Filter, X, Download
 import XLSX from 'xlsx-js-style';
 import { cubeLoad } from '../hooks/useCubeData';
 import PODetailsModal from '../components/PODetailsModal';
+import { apiFetch } from '../utils/apiFetch';
 
 /* ─── helpers ─── */
 const fmt$ = (v?: number | null) => {
@@ -863,7 +864,7 @@ function InlineReadyCell({ poId, productId, initialQuantity, maxQuantity, isEdit
       const firstId = productId ? productId.split(',')[0].trim() : '';
       const parsedProductId = firstId || null;
       
-      const res = await fetch('/api/po/update_line', {
+      const res = await apiFetch('/api/po/update_line', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ po_id: poId, product_id: parsedProductId, ready_quantity: Number(val) })

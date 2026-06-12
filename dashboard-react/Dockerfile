@@ -17,10 +17,10 @@ COPY --from=build /app/dist /usr/share/nginx/html
 RUN echo 'server { \
   listen 8080; \
   resolver 8.8.8.8 valid=30s; \
-  set $flask_backend "https://data-entry-forms-405291422506.me-west1.run.app"; \
+  set $flask_backend "https://data-entry-forms-405291422506.us-central1.run.app"; \
   location /api/ { \
     proxy_pass $flask_backend; \
-    proxy_set_header Host data-entry-forms-405291422506.me-west1.run.app; \
+    proxy_set_header Host data-entry-forms-405291422506.us-central1.run.app; \
     proxy_set_header X-Real-IP $remote_addr; \
     proxy_ssl_server_name on; \
   } \

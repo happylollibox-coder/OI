@@ -8,6 +8,7 @@ import { CreatePOModal } from '../components/Actions/CreatePOModal';
 import type { DraftPOLine } from '../components/Actions/CreatePOModal';
 
 import { AlertCard, SEVERITY_CONFIG, TYPE_CONFIG } from '../components/AlertCard';
+import { apiFetch } from '../utils/apiFetch';
 
 // ─── Component ────────────────────────────────────────────
 export function AlertsPage() {
@@ -42,8 +43,8 @@ export function AlertsPage() {
   const loadAlerts = useCallback(async () => {
     try {
       const [openRes, doneRes] = await Promise.all([
-        fetch('/api/alerts?status=OPEN'),
-        fetch('/api/alerts?status=DONE'),
+        apiFetch('/api/alerts?status=OPEN'),
+        apiFetch('/api/alerts?status=DONE'),
       ]);
       if (openRes.ok) setAlerts(await openRes.json());
       if (doneRes.ok) setArchive(await doneRes.json());
@@ -59,7 +60,7 @@ export function AlertsPage() {
   const generateAlerts = async () => {
     setGenerating(true);
     try {
-      const res = await fetch('/api/alerts/generate', { method: 'POST' });
+      const res = await apiFetch('/api/alerts/generate', { method: 'POST' });
       if (res.ok) await loadAlerts();
     } catch (e) {
       console.error('Failed to generate alerts:', e);
@@ -70,14 +71,14 @@ export function AlertsPage() {
 
   const markDone = async (id: string) => {
     try {
-      const res = await fetch(`/api/alerts/${id}/done`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const res = await apiFetch(`/api/alerts/${id}/done`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
       if (res.ok) await loadAlerts();
     } catch (e) { console.error('Failed:', e); }
   };
 
   const cancelAlert = async (id: string) => {
     try {
-      const res = await fetch(`/api/alerts/${id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const res = await apiFetch(`/api/alerts/${id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
       if (res.ok) await loadAlerts();
     } catch (e) { console.error('Failed:', e); }
   };
@@ -105,7 +106,7 @@ export function AlertsPage() {
 
   const handleReopen = async (alertId: string) => {
     try {
-      const res = await fetch(`/api/alerts/${alertId}/reopen`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const res = await apiFetch(`/api/alerts/${alertId}/reopen`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
       if (res.ok) await loadAlerts();
       else console.error('Failed to reopen alert', await res.text());
     } catch (e) { console.error('Failed to reopen alert', e); }

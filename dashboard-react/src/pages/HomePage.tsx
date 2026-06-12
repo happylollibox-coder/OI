@@ -19,6 +19,7 @@ import { CHART_GRID, CHART_AXIS_TICK_LG, CHART_TOOLTIP_STYLE } from '../chartThe
 import { MEASURE_META, type TrendMeasure } from '../constants';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
 import { usePageSummary } from '../components/PageSummaryBar';
+import { apiFetch } from '../utils/apiFetch';
 
 const ALL_MEASURES: TrendMeasure[] = ['sales', 'ad_cost', 'cogs', 'net_profit', 'net_roas', 'orders', 'units', 'clicks', 'sessions', 'organic_pct', 'payment'];
 
@@ -107,7 +108,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
 
   const handleApproveAwd = async (asin: string, minUnits: number, maxUnits: number) => {
     try {
-      const res = await fetch('/api/awd-settings', {
+      const res = await apiFetch('/api/awd-settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ asin, min_units: minUnits, max_units: maxUnits }),

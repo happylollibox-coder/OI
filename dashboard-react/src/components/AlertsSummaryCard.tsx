@@ -6,6 +6,7 @@ import { experimentMatchesFamily } from '../utils';
 import type { FamilyName } from '../types';
 import { AlertCard } from './AlertCard';
 import { RemediationModal } from './Actions/RemediationModal';
+import { apiFetch } from '../utils/apiFetch';
 
 export function AlertsSummaryCard() {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
@@ -17,7 +18,7 @@ export function AlertsSummaryCard() {
 
   const loadAlerts = useCallback(async () => {
     try {
-      const res = await fetch('/api/alerts?status=OPEN');
+      const res = await apiFetch('/api/alerts?status=OPEN');
       if (res.ok) setAlerts(await res.json());
     } catch (e) {
       console.error('Failed to load alerts:', e);
@@ -53,14 +54,14 @@ export function AlertsSummaryCard() {
 
   const markDone = async (id: string) => {
     try {
-      const res = await fetch(`/api/alerts/${id}/done`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const res = await apiFetch(`/api/alerts/${id}/done`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
       if (res.ok) await loadAlerts();
     } catch (e) { console.error('Failed:', e); }
   };
 
   const cancelAlert = async (id: string) => {
     try {
-      const res = await fetch(`/api/alerts/${id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const res = await apiFetch(`/api/alerts/${id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
       if (res.ok) await loadAlerts();
     } catch (e) { console.error('Failed:', e); }
   };

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, Fragment } from 'react';
 import { Rocket, Save, AlertCircle, CheckCircle, RefreshCw, Database, Calculator, DollarSign, Percent, TrendingUp, Target, Zap, ChevronDown, ChevronUp } from 'lucide-react';
 import { useUnifiedData } from '../hooks/useUnifiedData';
 import type { DashboardData } from '../types';
+import { apiFetch } from '../utils/apiFetch';
 
 // --- Margin Presets ---
 const MARGIN_PRESETS = [
@@ -322,7 +323,7 @@ function ProductAttributesTable({ data }: { data: DashboardData }) {
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch('/api/products/update-costs', {
+      const res = await apiFetch('/api/products/update-costs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -531,7 +532,7 @@ export function ProductsPage({ data }: { data: DashboardData }) {
   const fetchAssignments = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/launch_models');
+      const res = await apiFetch('/api/launch_models');
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
@@ -571,7 +572,7 @@ export function ProductsPage({ data }: { data: DashboardData }) {
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch('/api/launch_models', {
+      const res = await apiFetch('/api/launch_models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ family, model_product })
@@ -593,7 +594,7 @@ export function ProductsPage({ data }: { data: DashboardData }) {
     setTriggering(true);
     setMessage(null);
     try {
-      const res = await fetch('/api/trigger_forecast', {
+      const res = await apiFetch('/api/trigger_forecast', {
         method: 'POST',
       });
       const json = await res.json();

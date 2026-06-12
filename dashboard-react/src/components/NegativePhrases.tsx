@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, Trash2, Copy, Upload, Search, X, Check, CheckSquare, Square } from 'lucide-react';
 import { Card } from './Card';
 import { Badge } from './Badge';
+import { apiFetch } from '../utils/apiFetch';
 
 interface PhraseNegative {
   id: string;
@@ -60,7 +61,7 @@ export function NegativePhrases() {
   const fetchPhrases = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${FLASK_API}/api/admin/phrase-negatives`);
+      const res = await apiFetch(`${FLASK_API}/api/admin/phrase-negatives`);
       if (res.ok) {
         const data = await res.json();
         if (data.success) setPhrases(data.phrases || []);
@@ -113,7 +114,7 @@ export function NegativePhrases() {
     const phrase = addInput.trim().toLowerCase();
     if (!phrase) return;
     try {
-      const res = await fetch(`${FLASK_API}/api/admin/phrase-negatives`, {
+      const res = await apiFetch(`${FLASK_API}/api/admin/phrase-negatives`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ parent_name: activeFamily, phrase, match_type: addMatchType }),
@@ -134,7 +135,7 @@ export function NegativePhrases() {
   // Delete phrase
   const handleDelete = async (id: string, phrase: string) => {
     try {
-      const res = await fetch(`${FLASK_API}/api/admin/phrase-negatives/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`${FLASK_API}/api/admin/phrase-negatives/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (data.success) {
         showFeedback('success', `Removed "${phrase}"`);
@@ -153,7 +154,7 @@ export function NegativePhrases() {
     const lines = bulkInput.split('\n').map(l => l.trim().toLowerCase()).filter(Boolean);
     if (lines.length === 0) return;
     try {
-      const res = await fetch(`${FLASK_API}/api/admin/phrase-negatives/bulk`, {
+      const res = await apiFetch(`${FLASK_API}/api/admin/phrase-negatives/bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ parent_name: activeFamily, phrases: lines, match_type: bulkMatchType }),
@@ -180,7 +181,7 @@ export function NegativePhrases() {
       if (hasSelection) {
         body.phrase_ids = Array.from(selectedIds);
       }
-      const res = await fetch(`${FLASK_API}/api/admin/phrase-negatives/copy`, {
+      const res = await apiFetch(`${FLASK_API}/api/admin/phrase-negatives/copy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

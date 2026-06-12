@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import { apiFetch } from '../utils/apiFetch';
 
 export interface DoQueueItem {
   id: string;
@@ -159,7 +160,7 @@ function savePendingLog(entries: PpcChangeLogEntry[]) {
 async function postChangeLog(entries: PpcChangeLogEntry[]): Promise<boolean> {
   if (!entries.length) return true;
   try {
-    const res = await fetch('/api/ppc-change-log', {
+    const res = await apiFetch('/api/ppc-change-log', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(entries),

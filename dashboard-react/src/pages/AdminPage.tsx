@@ -5,6 +5,7 @@ import { Section } from '../components/Section';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { Badge } from '../components/Badge';
 import { NegativePhrases } from '../components/NegativePhrases';
+import { apiFetch } from '../utils/apiFetch';
 
 interface PipelineTask {
   procedure_name: string;
@@ -37,7 +38,7 @@ export function AdminPage() {
   const fetchLogs = async () => {
     setLoadingLogs(true);
     try {
-      const res = await fetch('/api/admin/pipeline-logs');
+      const res = await apiFetch('/api/admin/pipeline-logs');
       if (res.ok) {
         const data = await res.json();
         if (data.success) setRuns(data.runs || []);
@@ -58,7 +59,7 @@ export function AdminPage() {
     setOutput('Running… Fetching data from BigQuery. This may take 1–2 minutes.');
     setLastOpSuccess(null);
     try {
-      const res = await fetch('/api/admin/refresh', { method: 'POST' });
+      const res = await apiFetch('/api/admin/refresh', { method: 'POST' });
       const data = await res.json();
       setOutput(data.output || 'No output');
       setLastOpSuccess(data.success);
@@ -90,7 +91,7 @@ export function AdminPage() {
               setOutput('Refreshing suggestions (Product → Inventory → Forecast → Shipment Plan)...');
               setLastOpSuccess(null);
               try {
-                const res = await fetch('/api/admin/refresh-shipments', { method: 'POST' });
+                const res = await apiFetch('/api/admin/refresh-shipments', { method: 'POST' });
                 const data = await res.json();
                 setOutput(data.output || 'No output');
                 setLastOpSuccess(data.success);

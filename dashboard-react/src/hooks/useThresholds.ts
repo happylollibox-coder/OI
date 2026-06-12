@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { apiFetch } from '../utils/apiFetch';
 
 /** Shape of one threshold row */
 export interface ThresholdRow {
@@ -112,7 +113,7 @@ export function useThresholds() {
   ) => {
     setSaving(true);
     try {
-      const res = await fetch('/api/thresholds', {
+      const res = await apiFetch('/api/thresholds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -139,7 +140,7 @@ export function useThresholds() {
   ) => {
     setSaving(true);
     try {
-      const res = await fetch('/api/thresholds', {
+      const res = await apiFetch('/api/thresholds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

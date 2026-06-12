@@ -32,6 +32,7 @@ export const renderDeltaNode = (base: number, cmp: number, mode: 'currency' | 'n
 /** Format as units (not "ord") for inventory/stock context */
 const fU = (n: number) => fmt(n) + ' units';
 import { Section } from '../components/Section';
+import { apiFetch } from '../utils/apiFetch';
 
 
 // ─── Constants ────────────────────────────────────────────
@@ -1144,7 +1145,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
   // ─── YTD Sales Summary (parent-level for growth derivation) ─────
   const [salesSummary, setSalesSummary] = useState<{asin: string; product_name: string; sold: number}[]>([]);
   useEffect(() => {
-    fetch('/api/sales-summary/2026')
+    apiFetch('/api/sales-summary/2026')
       .then(r => r.ok ? r.json() : [])
       .then(d => { if (Array.isArray(d)) setSalesSummary(d); })
       .catch(e => console.error('[PlanPage] sales-summary load failed', e));
@@ -1460,7 +1461,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
   // Fetch plan list + auto-load latest
   const refreshPlanList = useCallback(async () => {
     try {
-      const res = await fetch('/api/plans');
+      const res = await apiFetch('/api/plans');
       if (!res.ok) return;
       const plans: PlanMeta[] = await res.json();
       setPlanList(plans);
@@ -1476,7 +1477,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
         if (!plans || plans.length === 0) return;
         // Auto-load the latest plan (first in list, sorted by version DESC)
         const latest = plans[0];
-        const res = await fetch(`/api/plans/${latest.plan_id}`);
+        const res = await apiFetch(`/api/plans/${latest.plan_id}`);
         if (!res.ok) return;
         const data = await res.json();
         setActivePlan(latest);
@@ -1519,7 +1520,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
       const outCpc: Record<string, Record<string, number>> = {};
       await Promise.all(families.map(async f => {
         try {
-          const r = await fetch(`/api/plans/ads-targets/${encodeURIComponent(f.family)}`);
+          const r = await apiFetch(`/api/plans/ads-targets/${encodeURIComponent(f.family)}`);
           const tRows: { yr: number; mo: number; daily_spend_target: number; cpc_target?: number }[] = r.ok ? await r.json() : [];
           const { spendByMonth, cpcByMonth } = aggregateAdsTargetSpend(tRows);
           if (Object.keys(spendByMonth).length > 0) out[f.family] = spendByMonth;
@@ -1811,7 +1812,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
                   <button key={p.plan_id} onClick={async () => {
                     setShowPlanMenu(false);
                     try {
-                      const res = await fetch(`/api/plans/${p.plan_id}`);
+                      const res = await apiFetch(`/api/plans/${p.plan_id}`);
                       if (!res.ok) return;
                       const d = await res.json();
                       setActivePlan(p);
@@ -1837,7 +1838,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
                     setPlanSaving(true);
                     try {
                       const _payload = buildPayloadRows(projs);
-                      const res = await fetch('/api/plans', {
+                      const res = await apiFetch('/api/plans', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ rows: _payload.rows, order_overrides_json: _payload.order_overrides_json, snapshot_units_json: _payload.snapshot_units_json, plan_year: 2026 }),
@@ -1879,14 +1880,14 @@ export function PlanPage({ data }: { data: DashboardData }) {
                 let res: Response;
                 if (activePlan) {
                   // Update existing plan
-                  res = await fetch(`/api/plans/${activePlan.plan_id}`, {
+                  res = await apiFetch(`/api/plans/${activePlan.plan_id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ rows: payload.rows, order_overrides_json: payload.order_overrides_json, snapshot_units_json: payload.snapshot_units_json }),
                   });
                 } else {
                   // Create new plan
-                  res = await fetch('/api/plans', {
+                  res = await apiFetch('/api/plans', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ rows: payload.rows, order_overrides_json: payload.order_overrides_json, snapshot_units_json: payload.snapshot_units_json, plan_year: 2026 }),
@@ -1922,7 +1923,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
               <button onClick={async () => {
                 if (!confirm(`Approve "${activePlan.plan_name}"?\n\nApproving means you will open a PR to manufacturer based on this plan.`)) return;
                 try {
-                  const res = await fetch(`/api/plans/${activePlan.plan_id}/approve`, { method: 'POST' });
+                  const res = await apiFetch(`/api/plans/${activePlan.plan_id}/approve`, { method: 'POST' });
                   if (res.ok) {
                     const plans = await refreshPlanList();
                     const updated = plans?.find((p: PlanMeta) => p.plan_id === activePlan.plan_id);
@@ -1935,7 +1936,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
             ) : (
               <button onClick={async () => {
                 try {
-                  const res = await fetch(`/api/plans/${activePlan.plan_id}/unapprove`, { method: 'POST' });
+                  const res = await apiFetch(`/api/plans/${activePlan.plan_id}/unapprove`, { method: 'POST' });
                   if (res.ok) {
                     const plans = await refreshPlanList();
                     const updated = plans?.find((p: PlanMeta) => p.plan_id === activePlan.plan_id);
@@ -1953,7 +1954,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
             <button onClick={async () => {
               if (!confirm(`Delete "${activePlan.plan_name}"? This cannot be undone.`)) return;
               try {
-                const res = await fetch(`/api/plans/${activePlan.plan_id}`, { method: 'DELETE' });
+                const res = await apiFetch(`/api/plans/${activePlan.plan_id}`, { method: 'DELETE' });
                 if (res.ok) {
                   setActivePlan(null); setMults({}); setStrategies({});
                   setPlanDirty(false); setPlanSaved(false);
@@ -1989,7 +1990,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
               return;
             }
             try {
-              const res = await fetch(`/api/plans/${val}`);
+              const res = await apiFetch(`/api/plans/${val}`);
               if (!res.ok) return;
               const d = await res.json();
               const loaded: Record<string, Record<string, number>> = {};
@@ -2043,7 +2044,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
               return;
             }
             try {
-              const res = await fetch(`/api/plans/${val}`);
+              const res = await apiFetch(`/api/plans/${val}`);
               if (!res.ok) return;
               const d = await res.json();
               const loaded: Record<string, Record<string, number>> = {};
@@ -2352,7 +2353,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
                   ly_net_roas: fr?.blended[2025] ?? null,
                   cy_net_roas: fr?.blended[2026] ?? null,
                 }));
-                const resp = await fetch('/api/plans/ads-targets', {
+                const resp = await apiFetch('/api/plans/ads-targets', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ family: result.family, targets: enriched }),
@@ -3422,7 +3423,7 @@ function PurchaseRequestSection({ families, projs, orderOverrides, planId, planS
   interface SalesSummaryRow { asin: string; product_name: string; sold: number }
   const [salesSummary, setSalesSummary] = useState<SalesSummaryRow[]>([]);
   useEffect(() => {
-    fetch('/api/sales-summary/2026')
+    apiFetch('/api/sales-summary/2026')
       .then(r => r.ok ? r.json() : [])
       .then(d => { if (Array.isArray(d)) setSalesSummary(d); })
       .catch(e => console.error('Failed to load sales summary', e));
@@ -3437,7 +3438,7 @@ function PurchaseRequestSection({ families, projs, orderOverrides, planId, planS
   const [fulfillment, setFulfillment] = useState<FulfillmentRow[]>([]);
   useEffect(() => {
     if (isApproved && planId) {
-      fetch(`/api/plans/${planId}/fulfillment`)
+      apiFetch(`/api/plans/${planId}/fulfillment`)
         .then(r => r.ok ? r.json() : [])
         .then(d => { if (Array.isArray(d)) setFulfillment(d); })
         .catch(e => console.error('Failed to load fulfillment', e));
@@ -3808,7 +3809,7 @@ function CashflowSection({ projs, families, planId }: {
   const { scheduled } = useScheduledShipments();
 
   useEffect(() => {
-    fetch('/api/cashflow-actuals/2026')
+    apiFetch('/api/cashflow-actuals/2026')
       .then(r => r.json()).then(d => setActuals(d)).catch(() => {});
   }, []);
 

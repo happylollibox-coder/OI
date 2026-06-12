@@ -9,6 +9,7 @@ import XLSX from 'xlsx-js-style';
 import type { ShipmentPlanFactRow, ScheduledShipmentRow, UnifiedShipmentRow } from '../types';
 import { Section } from '../components/Section';
 import { fmt } from '../utils';
+import { apiFetch } from '../utils/apiFetch';
 
 
 // ─── Forecast types (mirror from PlanPage) ────────────────
@@ -70,7 +71,7 @@ async function cubeLoad(query: object): Promise<unknown[]> {
 async function fetchScheduledShipments(): Promise<Record<string, unknown>[]> {
   const base = FLASK_API || '';
   try {
-    const res = await fetch(`${base}/api/scheduled-shipments?_t=${Date.now()}`);
+    const res = await apiFetch(`${base}/api/scheduled-shipments?_t=${Date.now()}`);
     if (!res.ok) return [];
     return await res.json();
   } catch { return []; }
@@ -269,7 +270,7 @@ async function apiCall(url: string, opts: RequestInit) {
   const base = FLASK_API || '';
   const fullUrl = `${base}${url}`;
   console.log(`[apiCall] ${opts.method || 'GET'} ${fullUrl}`, opts.body ? JSON.parse(opts.body as string) : '');
-  const res = await fetch(fullUrl, { ...opts, headers: { 'Content-Type': 'application/json', ...opts.headers } });
+  const res = await apiFetch(fullUrl, { ...opts, headers: { 'Content-Type': 'application/json', ...opts.headers } });
   const body = await res.json().catch(() => null);
   console.log(`[apiCall] Response ${res.status}:`, body);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${JSON.stringify(body)}`);

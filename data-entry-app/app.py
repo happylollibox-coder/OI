@@ -43,12 +43,23 @@ def add_response_headers(response):
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
-    # CORS: allow React dashboard (different Cloud Run domain) to call API endpoints
+    # CORS: only the React dashboard origins may call API endpoints (see architecture/API_AUTH.md)
     if request.path.startswith('/api/'):
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        origin = request.headers.get('Origin', '')
+        if origin in ALLOWED_ORIGINS:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Vary'] = 'Origin'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     return response
+
+# Dashboard origins allowed to call /api/* cross-origin
+ALLOWED_ORIGINS = {
+    'https://oi-dashboard-405291422506.us-central1.run.app',
+    'https://oi-dashboard-cllsaft6eq-uc.a.run.app',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+}
 
 # Handle CORS preflight (OPTIONS) for API routes
 @app.route('/api/<path:path>', methods=['OPTIONS'])
@@ -102,6 +113,36 @@ def login_required(f):
             return redirect(url_for('logout'))
         return f(*args, **kwargs)
     return decorated_function
+
+
+# ─── API authentication gate (see architecture/API_AUTH.md) ───
+# Every /api/* request must carry either the dashboard JWT (signed with
+# CUBEJS_API_SECRET, same token Cube verifies) or an allowed session cookie.
+# No per-route decorators: new /api routes are protected by default.
+
+def _has_valid_api_token() -> bool:
+    auth = request.headers.get('Authorization', '')
+    token = auth[7:] if auth.startswith('Bearer ') else auth
+    if not token:
+        return False
+    try:
+        jwt.decode(token, CUBEJS_API_SECRET, algorithms=['HS256'])
+        return True
+    except Exception:
+        return False
+
+
+@app.before_request
+def protect_api():
+    if not request.path.startswith('/api/'):
+        return None
+    if request.method == 'OPTIONS':  # CORS preflight carries no credentials
+        return None
+    if session.get('user', {}).get('email') in ALLOWED_USERS:
+        return None  # data-entry HTML pages (same-origin session)
+    if _has_valid_api_token():
+        return None
+    return jsonify({'error': 'unauthorized'}), 401
 
 # Simple in-memory cache
 _cache = {}
