@@ -378,6 +378,13 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     return dominantMode(data.actions || []);
   }, [coachFilter, data.actions]);
 
+  // Current sellable stock per ASIN — the OOS guard parks negates/promotes on empty shelves.
+  const sellableByAsin = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of data.supply_chain || []) if (r.asin) m.set(r.asin, r.sellable_qty ?? 0);
+    return m;
+  }, [data.supply_chain]);
+
   // Stage-1 trust list: confidence-gated clear cases, capped, sorted by weekly $ opportunity.
   const CLEAR_CARD_CAP = 10;
   const clearCases = useMemo(() => {
@@ -395,6 +402,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         confidence: a.confidence,
         roas1w: a.ads_net_roas_1w, orders1w: a.ads_orders_1w,
         ...((pk => ({ peakRoas: pk?.roas ?? null, peakOrders: pk?.orders ?? null }))(selectPeak(a))),
+        sellableQty: a.asin ? sellableByAsin.get(a.asin) ?? null : null,
       });
       if (v.clear
           && !doQueue.isUploaded(a.search_term, a.campaign_id)
@@ -412,7 +420,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     }
     out.sort((x, y) => y.opp.dollars - x.opp.dollars);
     return out.slice(0, CLEAR_CARD_CAP);
-  }, [acts, getFamily, famModes, effectiveCoachMode, doQueue.isUploaded, doQueue.isDone]);
+  }, [acts, getFamily, famModes, effectiveCoachMode, doQueue.isUploaded, doQueue.isDone, sellableByAsin]);
 
   // Group clear cases by family, order groups by total weekly $ opportunity.
   const clearGroups = useMemo(() => {

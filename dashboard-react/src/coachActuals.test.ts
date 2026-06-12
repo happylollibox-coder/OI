@@ -162,6 +162,22 @@ describe('clearCase', () => {
   it('REDUCE with all-null window fields behaves exactly as before (no guard misfire)', () => {
     expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, roas1w: null, orders1w: null, peakRoas: null, peakOrders: null }).clear).toBe(true);
   });
+  it('OOS guard: negate parked (window may be the empty shelf), promote parked, reduce allowed with restock note', () => {
+    const oosNeg = clearCase({ ...base, action: 'NEGATE_TERM', sellableQty: 0 });
+    expect(oosNeg.clear).toBe(false);
+    expect(oosNeg.reason).toMatch(/out of stock/i);
+    const oosPromote = clearCase({ ...base, action: 'INCREASE_BID', orders: 3, netRoas: 2.0, sellableQty: 0 });
+    expect(oosPromote.clear).toBe(false);
+    expect(oosPromote.reason).toMatch(/empty shelf/i);
+    const oosReduce = clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, sellableQty: 0 });
+    expect(oosReduce.clear).toBe(true);
+    expect(oosReduce.reason).toMatch(/restore bid after restock/i);
+  });
+  it('OOS guard inert when stock unknown or positive (unchanged behavior)', () => {
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', sellableQty: null }).clear).toBe(true);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', sellableQty: 12 }).clear).toBe(true);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM' }).clear).toBe(true); // field absent
+  });
 });
 
 describe('selectPeak', () => {

@@ -150,6 +150,12 @@ Where new keywords *come from*. `V_RESEARCH_RANKED` is already at grain **`paren
 
 Knobs: `peak_great` (1.3), `peak_min_orders` (3), `recovering_1w` (1.1) — in the `GATE` constants now, `CoachThresholds` at Stage 3. Peak selection is the shared `selectPeak()` helper (single source for gate + card display).
 
+**OOS guard (owner case, 2026-06-12 — "gift for 14 year old girl"/Fresh):** a stockout poisons the windows (0 orders = empty shelf, not a bad term). Gate rule, by reversibility, using CURRENT `sellable_qty` from `data.supply_chain`:
+- **negate/stop + OOS → park** ("the 0-order window may be the empty shelf; judge after restock" — a negative is permanent)
+- **promote + OOS → park** ("don't scale an empty shelf")
+- **reduce + OOS → allowed** (cutting spend on an empty shelf is right) with a "restore bid after restock" note
+**Known limitation:** current stock can't catch "was OOS during the window but restocked since" (exactly the owner's Fresh case) — that needs inventory **history** (`InventorySnapshot` join in the engine) = the Phase-3 OOS-aware coaching slice.
+
 Note the split between the **display reaction bar** (`MODE_ROAS.up` = GUARDIAN 1.1 / BLITZ 1.0 — drives the dashboard "↑ scale budget" hint) and the **auto-promote gate** (the stricter ~1.30 / ~1.15 above). Display = "lean toward scaling"; gate = "confident enough to spend more."
 
 (Values illustrative; finalized in the plan, owner-tunable thereafter.)

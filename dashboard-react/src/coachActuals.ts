@@ -110,6 +110,7 @@ export interface GateInput {
   netRoas: number; mode: string; confidence: string;
   roas1w?: number | null; orders1w?: number | null;
   peakRoas?: number | null; peakOrders?: number | null;
+  sellableQty?: number | null; // current sellable stock of the advertised ASIN (null = unknown)
 }
 export interface GateVerdict { clear: boolean; reason: string }
 
@@ -160,7 +161,15 @@ export function clearCase(g: GateInput): GateVerdict {
   const peakGreat = (g.peakRoas ?? 0) >= GATE.peakGreat && (g.peakOrders ?? 0) >= GATE.peakMinOrders;
   const week = g.roas1w;
   const weekGood = week != null && week >= GATE.recovering1w && (g.orders1w ?? 0) > 0;
+  // OOS guard (owner case 2026-06-12: hero was out of stock → windows showed 0 orders → a wrongly
+  // surfaced bid-down). CURRENT stock only — null = unknown = no guard. Reversibility principle:
+  //   negate/stop  + OOS → park (the 0-order window may be the empty shelf, and a negative is permanent)
+  //   promote      + OOS → park (never scale an empty shelf)
+  //   reduce       + OOS → allowed (cutting spend on an empty shelf is right) with a restore-after-restock note
+  // Catching "was OOS during the window but restocked since" needs inventory HISTORY — engine work, not done here.
+  const oos = g.sellableQty != null && g.sellableQty <= 0;
   if (isCut) {
+    if (oos) return { clear: false, reason: 'product out of stock — the 0-order window may be the empty shelf, not the term; judge after restock' };
     if (peakGreat) return { clear: false, reason: `weak now but last peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — seasonal: BOOST before next peak, don't cut` };
     if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
     if (g.orders === 0) return { clear: true, reason: 'real spend, zero orders — nothing to lose' };
@@ -169,15 +178,17 @@ export function clearCase(g: GateInput): GateVerdict {
   if (isReduce) {
     // Owner workflow (2026-06-12): a bid-down is REVERSIBLE — a great peak doesn't block it.
     // Lower now, boost back in the BOOST phase before the next peak. Only negates stay parked.
+    const oosNote = oos ? ' (product OOS — restore bid after restock)' : '';
     if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
     if (g.netRoas < GATE.grayLow) {
-      if (peakGreat) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} now, but peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — lower now, BOOST back before next peak` };
-      return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} decisively below breakeven` };
+      if (peakGreat) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} now, but peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — lower now, BOOST back before next peak${oosNote}` };
+      return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} decisively below breakeven${oosNote}` };
     }
     if (g.netRoas > GATE.grayHigh) return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} above breakeven — conflicts with a bid cut, judge manually` };
     return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} inside gray band (${GATE.grayLow}–${GATE.grayHigh}) — too close to call` };
   }
   // promote
+  if (oos) return { clear: false, reason: 'product out of stock — don\'t scale an empty shelf; revisit after restock' };
   const bar = GATE.scaleClear[g.mode];
   if (bar == null) return { clear: false, reason: `${g.mode} mode never promotes` };
   if (g.orders < GATE.promoteMinOrders) return { clear: false, reason: `${g.orders} order(s) < ${GATE.promoteMinOrders} — winner not proven` };
