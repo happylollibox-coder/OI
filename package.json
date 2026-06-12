@@ -8,7 +8,7 @@
   },
   "lint-staged": {
     "dashboard-react/src/**/*.{ts,tsx}": [
-      "bash -c 'cd dashboard-react && npx eslint --fix'",
+      "bash -c 'cd dashboard-react && npx eslint --fix \"$@\"' --",
       "bash -c 'cd dashboard-react && npx tsc --noEmit'"
     ],
     "data-entry-app/**/*.py": [
