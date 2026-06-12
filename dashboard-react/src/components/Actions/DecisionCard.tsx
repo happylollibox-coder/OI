@@ -27,14 +27,22 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: 
   const icon = isCut ? <Ban size={13} className="text-red-400" />
     : isReduce ? <ArrowDownRight size={13} className="text-amber-400" />
     : <ArrowUpRight size={13} className="text-emerald-400" />;
+  // PROMOTE_TO_EXACT is NOT a bid edit — the bulksheet creates a whole new exact campaign
+  // (campaign + ad group + ad + keyword). The card must never understate that (trust surface;
+  // a real upload on 2026-06-12 created campaigns the owner didn't expect).
+  const isExtract = a.action === 'PROMOTE_TO_EXACT';
   const claim = isCut
     ? `Stop "${a.search_term || a.targeting}" for ${family}`
     : isReduce
     ? `Lower the bid on "${a.targeting || a.search_term}" for ${family}`
+    : isExtract
+    ? `Extract "${a.targeting || a.search_term}" into its own EXACT campaign for ${family}`
     : `Bid up "${a.targeting || a.search_term}" for ${family}`;
   const bid = a.recommended_bid;
   const amazonChange = isCut
     ? `Add negative exact in: ${a.campaign_name}`
+    : isExtract
+    ? `Create NEW exact campaign ($20/d budget): campaign + ad group + ad + keyword${bid != null ? ` @ $${Number(bid).toFixed(2)}` : ''}`
     : `${isReduce ? 'Reduce' : 'Raise'} keyword bid in: ${a.campaign_name}${bid != null ? ` → $${Number(bid).toFixed(2)}` : ''}`;
 
   // Prefer runtime-mapped fields (spend/clicks/orders/net_roas from ActionsPage's acts mapping),
