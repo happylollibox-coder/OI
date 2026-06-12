@@ -1475,7 +1475,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                   <DecisionCard
                     key={`${a.campaign_id}|${a.search_term}|${a.targeting || ''}|${a.action}`}
                     action={a} family={family} why={why} opp={opp}
-                    inQueue={doQueue.hasItem(a.search_term, a.action, a.campaign_name)}
+                    inQueue={doQueue.hasItem(a.search_term, a.action, a.campaign_name, a.targeting || '')}
                     onQueue={() => queueAction(a, opp)}
                   />
                 ))}

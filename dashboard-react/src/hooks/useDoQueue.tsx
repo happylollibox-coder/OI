@@ -48,7 +48,7 @@ interface DoQueueContextValue {
   removeItem: (id: string) => void;
   clearCampaign: (campaign: string) => void;
   clearAll: () => void;
-  hasItem: (search_term: string, action: string, campaign: string) => boolean;
+  hasItem: (search_term: string, action: string, campaign: string, targeting?: string) => boolean;
   markDone: (id: string) => void;
   undoDone: (id: string) => void;
   clearDone: () => void;
@@ -232,8 +232,12 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
 
   const clearAll = useCallback(() => setItems([]), []);
 
-  const hasItem = useCallback((search_term: string, action: string, campaign: string) => {
-    return items.some(p => p.search_term === search_term && p.action === action && p.campaign === campaign);
+  const hasItem = useCallback((search_term: string, action: string, campaign: string, targeting?: string) => {
+    // targeting disambiguates target-level rows (empty search_term, keyword in targeting):
+    // without it, queueing ONE keyword marks every sibling keyword in the same
+    // campaign+action as queued. Optional to keep legacy 3-arg call sites working.
+    return items.some(p => p.search_term === search_term && p.action === action && p.campaign === campaign
+      && (targeting === undefined || p.targeting === targeting));
   }, [items]);
 
   const markDone = useCallback((id: string) => {
