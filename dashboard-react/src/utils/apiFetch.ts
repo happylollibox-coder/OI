@@ -23,8 +23,11 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
 
   if (res.status === 401) {
     if (import.meta.env.DEV) {
-      // Dev: the bounce would land on the prod dashboard URL — fail loudly instead.
-      console.warn(`[apiFetch] 401 from ${typeof input === 'string' ? input : ''} — dashboard_token is invalid for this backend (rotated secret?). Get a fresh one via /api/auth/dashboard-token.`);
+      // Dev: the bounce would land on the prod dashboard URL — fail loudly and
+      // drop the dead token so AuthContext's VITE_DEV_BYPASS_TOKEN fallback
+      // (regenerate it after secret rotations!) kicks in on the next reload.
+      localStorage.removeItem('dashboard_token');
+      console.warn(`[apiFetch] 401 from ${typeof input === 'string' ? input : ''} — dashboard_token was invalid for this backend (rotated secret?) and has been cleared. Reload to pick up VITE_DEV_BYPASS_TOKEN, and regenerate it in dashboard-react/.env if reloading doesn't help.`);
       return res;
     }
     const lastAttempt = Number(sessionStorage.getItem(REAUTH_AT_KEY) || 0);

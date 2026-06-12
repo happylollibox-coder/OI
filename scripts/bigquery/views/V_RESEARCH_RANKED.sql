@@ -16,7 +16,9 @@
 --   effective_cps    Real ads CPS (1/CVR) when available, else est_cps
 --   cps_source       'ads_30d' | 'ads_12m' | 'curve' | NULL
 --   cps_fit          0-100 CPS efficiency score
---   overall_fit      Combined FIT (real CPS if >3 orders, else avg of seg+est)
+--   price_bucket     matched conversion-curve bucket (A. Cheaper … E. Way above)
+--   overall_fit      real-CPS bracket if >3 orders, else seg_fit minus a
+--                    price-bucket penalty (C −10, D −20, E −30), floored at 0
 --   purchase_rank    0-100 weekly purchases bucket score
 --   rank             Final rank = avg(overall_fit, purchase_rank), holiday override
 --   ads_purch        Ad units (30d if >3, else 12m)
@@ -227,7 +229,8 @@ est_cps_lookup AS (
     fs.parent_name,
     st.query_text,
     SAFE_DIVIDE(fs.product_price, st.median_click_price) AS price_ratio,
-    cc.clicks_per_sale AS est_cps
+    cc.clicks_per_sale AS est_cps,
+    cc.price_bucket
   FROM family_segments fs
   CROSS JOIN search_terms st
   LEFT JOIN `onyga-482313`.OI.V_CONVERSION_CURVE cc
@@ -372,8 +375,9 @@ scored AS (
     sf.occasion_score,
     sf.pt_score,
 
-    -- Est. CPS (from conversion curve, _ALL season)
+    -- Est. CPS (from conversion curve, _ALL season) + matched price bucket
     ec.est_cps,
+    ec.price_bucket,
 
     -- Ads Purch: 30d if >3, else 12m
     CASE
@@ -464,9 +468,9 @@ FROM (
       WHEN effective_cps <= 50 THEN 20
       ELSE 10
     END AS cps_fit,
-    -- Overall Fit: >3 orders → real-CPS bracket only, else avg(seg_fit, est_cps bracket).
-    -- NB: the fallback branch deliberately brackets est_cps (not effective_cps) to
-    -- preserve legacy semantics for terms with 1-3 orders.
+    -- Overall Fit: >3 orders → real-CPS bracket only.
+    -- Else: SEG FIT is the base; the price bucket can only REDUCE it
+    -- (Sweet spot/Cheaper −0, Pricier −10, Much pricier −20, Way above −30).
     CASE
       WHEN has_reliable_ads_cvr THEN
         CASE
@@ -478,19 +482,14 @@ FROM (
           WHEN effective_cps <= 50 THEN 20
           ELSE 10
         END
-      ELSE ROUND(
-        (COALESCE(seg_fit, 0) +
-         COALESCE(CASE
-           WHEN est_cps <= 5  THEN 100
-           WHEN est_cps <= 8  THEN 85
-           WHEN est_cps <= 12 THEN 70
-           WHEN est_cps <= 20 THEN 55
-           WHEN est_cps <= 35 THEN 35
-           WHEN est_cps <= 50 THEN 20
-           WHEN est_cps IS NOT NULL THEN 10
-           ELSE NULL END, 0)
-        ) / NULLIF(IF(seg_fit IS NOT NULL, 1, 0) + IF(est_cps IS NOT NULL, 1, 0), 0)
-      )
+      WHEN seg_fit IS NULL THEN NULL
+      ELSE GREATEST(
+        seg_fit - CASE price_bucket
+          WHEN 'C. Pricier'      THEN 10
+          WHEN 'D. Much pricier' THEN 20
+          WHEN 'E. Way above'    THEN 30
+          ELSE 0
+        END, 0)
     END AS overall_fit
   FROM scored
 )

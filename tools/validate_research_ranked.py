@@ -38,6 +38,15 @@ CHECKS = [
         WHERE ads_cps IS NOT NULL
           AND (cps_source NOT IN ('ads_30d','ads_12m')
                OR ABS(effective_cps - ads_cps) > 0.06)"""),
+    ("fallback overall_fit = seg_fit - bucket penalty", """
+        SELECT COUNT(*) FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED
+        WHERE NOT (ads_family_orders > 3 AND cps_source IN ('ads_30d','ads_12m'))
+          AND seg_fit IS NOT NULL
+          AND overall_fit != GREATEST(seg_fit - CASE price_bucket
+                WHEN 'C. Pricier' THEN 10
+                WHEN 'D. Much pricier' THEN 20
+                WHEN 'E. Way above' THEN 30
+                ELSE 0 END, 0)"""),
     ("ranked table non-empty (inverted)", """
         SELECT IF(COUNT(*) > 0, 0, 1) FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED"""),
     ("terms table non-empty (inverted)", """

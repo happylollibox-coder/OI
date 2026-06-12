@@ -68,6 +68,7 @@ export interface ResearchRow {
   pt_score: number | null;
   cps_source: 'ads_30d' | 'ads_12m' | 'curve' | null;
   effective_cps: number | null;
+  price_bucket: string | null;
   is_holiday_active: boolean | null;
 }
 

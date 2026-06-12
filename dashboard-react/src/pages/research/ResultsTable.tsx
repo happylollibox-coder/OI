@@ -188,7 +188,7 @@ export function ResultsTable({
                   <SortHeader label="Search Term" colKey="query_text" className="text-left pl-4 sticky left-0 bg-surface/95 backdrop-blur z-10" tooltip="Amazon search query from SQP data. Hover a row's term to compare ranks across all families." />
                   <SortHeader label="Rank" colKey="rank" className="text-center" tooltip="Overall rank = average of Fit and Purchase Rank (0-100)" />
                   <SortHeader label="Purch" colKey="purchase_rank" className="text-center" tooltip="Purchase rank based on weekly market purchases (bucket score 0-100). ≥1000→100 | ≥500→90 | ≥200→80 | ≥100→70 | ≥50→55 | ≥20→40 | ≥5→25 | <5→10" />
-                  <SortHeader label="Fit" colKey="overall_fit" className="text-center" tooltip="If >3 ad sales → CPS FIT only. Otherwise → avg(SEG FIT, EST CPS FIT)" />
+                  <SortHeader label="Fit" colKey="overall_fit" className="text-center" tooltip="If >3 ad sales → CPS FIT only. Otherwise → SEG FIT minus a price penalty (Pricier −10, Much pricier −20, Way above −30)" />
                   <SortHeader label="Seg Fit" colKey="match_rank" className="text-center" tooltip="Segment fit: how well this search term's segments (gender, age, occasion, type) align with your product family (0-100)" />
                   <SortHeader label="CPS Fit" colKey="cps_fit" className="text-center" tooltip="CPS fit: how efficiently this search term converts to sales (based on real CVR or conversion curve). Lower CPS = higher score." />
                   <SortHeader label="Brand" colKey="brand" className="text-center" tooltip="Detected brand in the search term (own brand or competitor)" />
@@ -252,7 +252,7 @@ export function ResultsTable({
                             const color = r >= 70 ? 'text-emerald-400 bg-emerald-500/15' :
                                           r >= 40 ? 'text-amber-400 bg-amber-500/15' :
                                           r > 0 ? 'text-red-400 bg-red-500/15' : 'text-muted bg-white/5';
-                            const fitSrc = isRealCps && row.ads_family_orders > 3 ? 'Ads CPS' : 'avg(Seg,Est)';
+                            const fitSrc = isRealCps && row.ads_family_orders > 3 ? 'Ads CPS' : 'Seg−price adj';
                             return (
                               <span className={`inline-block px-1.5 py-0.5 rounded text-[8px] font-bold tabular-nums ${color}`}
                                 title={`Rank: ${r} = avg(Fit:${row.overall_fit ?? '—'} [${fitSrc}], Purch:${row.purchase_rank_score ?? '—'})${row.holiday && row.is_holiday_active === false ? '\nOff-season holiday → rank forced to 0' : ''}`}>{r}</span>
@@ -282,9 +282,13 @@ export function ResultsTable({
                                           overall >= 40 ? 'text-amber-400 bg-amber-500/15' :
                                           overall > 0 ? 'text-red-400 bg-red-500/15' : 'text-muted bg-white/5';
                             const hasRealCps = isRealCps && row.ads_family_orders > 3;
+                            const bucketPenalty: Record<string, number> = {
+                              'C. Pricier': 10, 'D. Much pricier': 20, 'E. Way above': 30,
+                            };
+                            const penalty = row.price_bucket ? (bucketPenalty[row.price_bucket] ?? 0) : 0;
                             const tooltip = hasRealCps
                               ? `Fit: ${overall} = CPS FIT (Ads CPS: ${row.ads_cps ?? '—'}, ${row.ads_family_orders} sales)`
-                              : `Fit: ${overall} = avg(Seg:${row.seg_fit ?? '—'}, Est CPS FIT)`;
+                              : `Fit: ${overall} = Seg ${row.seg_fit ?? '—'}${penalty > 0 ? ` − ${penalty} (${row.price_bucket})` : ` − 0 (${row.price_bucket ?? 'no price bucket'})`}`;
                             return (
                               <span className={`inline-block px-1.5 py-0.5 rounded text-[8px] font-bold tabular-nums ${color}`}
                                 title={tooltip}>

@@ -85,7 +85,14 @@ Brackets: ≤5→100, ≤8→85, ≤12→70, ≤20→55, ≤35→35, ≤50→20,
 
 ### Overall Fit
 - `ads_family_orders > 3` with positive CVR → CPS-fit bracket of the real CPS only.
-- Else → `ROUND(avg(seg_fit, bracket(est_cps)))` over the non-NULL members.
+- Else (no reliable ads data) → **SEG FIT is the base; the price bucket can only
+  reduce it** (changed 2026-06-12, was avg(seg_fit, est-CPS bracket)):
+  `overall_fit = GREATEST(seg_fit − penalty, 0)` with penalty by conversion-curve
+  price bucket (`price_ratio = product_price / median_click_price`):
+  | A. Cheaper | B. Sweet spot | C. Pricier | D. Much pricier | E. Way above | no bucket |
+  |---|---|---|---|---|---|
+  | −0 | −0 | −10 | −20 | −30 | −0 |
+  The matched bucket is exposed as `price_bucket` for tooltips.
 
 ### Purchase Rank (0-100)
 Weekly market purchases buckets: ≥1000→100, ≥500→90, ≥200→80, ≥100→70,
