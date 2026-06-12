@@ -6,6 +6,8 @@ Non-active and one-off assets moved here to keep the project root and `scripts/`
 
 - **data/** – Sample/upload CSVs and schema JSON (SQP, SCP, Leumi, reports). Not part of the live pipeline.
 - **docs/** – One-off and superseded guides (correlation, currency, upload, deployment, pilot/campaign docs).
+- **docs/data-entry-app/** – Firefight/superseded guides (FIX_*, TROUBLESHOOT_*, CLOUD_SHELL_*, old DEPLOY_* variants) moved 2026-06-12. Active docs stay in `data-entry-app/`: README, DEPLOYMENT, QUICK_REDEPLOY, SETUP_GOOGLE_OAUTH, ACCESS_CONTROL_OPTIONS, IAP_DISABLED_PUBLIC, EXCEL_LOAD_GUIDE, UPDATE_ESTIMATED_ARRIVAL_DATES.
+- **scripts/root_oneoffs/** – Scratch/test scripts from the project root (`test_*.py/js`, `bq_test*`, `scratch_api.py`, `patch.py`, `check_model.py`, and single-view deploy helpers `update_forecast/launch/season.py`) moved 2026-06-12.
 - **scripts/** – One-off SQL/shell and former script folders:
   - **Admin/** – Ad-hoc analysis, ASIN insights, merge feasibility, correlation investigations.
   - **Analysis/** – Correlation and pilot-finding SQL and scripts.
