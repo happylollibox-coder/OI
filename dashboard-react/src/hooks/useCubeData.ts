@@ -48,6 +48,7 @@ import type {
   SupplyPaymentRow,
   SupplyShipmentRow,
   SupplyOtherPORow,
+  AsinOosDaysRow,
 } from '../types';
 
 // In dev, always try Cube via proxy even if env not loaded
@@ -1622,6 +1623,23 @@ async function loadPlanAdsTargetsFromCube(): Promise<PlanAdsTargetRow[]> {
   }));
 }
 
+/** AsinOosDays → asin_oos_days (per-ASIN OOS day counts, feeds clear-case gate) */
+async function loadAsinOosDaysFromCube(): Promise<AsinOosDaysRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'AsinOosDays.asin', 'AsinOosDays.oosDays28d', 'AsinOosDays.oosDays7d',
+      'AsinOosDays.observedDays28d',
+    ],
+    limit: 5000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    asin: String(r['AsinOosDays.asin'] ?? ''),
+    oos_days_28d: Number(r['AsinOosDays.oosDays28d'] ?? 0),
+    oos_days_7d: Number(r['AsinOosDays.oosDays7d'] ?? 0),
+    observed_days_28d: Number(r['AsinOosDays.observedDays28d'] ?? 0),
+  }));
+}
+
 async function loadCoachStrategyFromCube(): Promise<CoachStrategyRow[]> {
   const rows = await cubeLoad({
     dimensions: [
@@ -2235,6 +2253,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           ['campaignLaunchPerf', loadCampaignLaunchPerfFromCube],
           ['campaignLaunchMonthly', loadCampaignLaunchMonthlyFromCube],
           ['planAdsTargets', loadPlanAdsTargetsFromCube],
+          ['asinOosDays', loadAsinOosDaysFromCube],
         ];
 
         const heavyLoaders: [string, () => Promise<unknown>][] = [
@@ -2292,6 +2311,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
         const campaignLaunchPerf = resolveLoader(bgResultsLight[34], 'campaignLaunchPerf') as import('../types').CampaignLaunchPerfRow[];
         const campaignLaunchMonthly = resolveLoader(bgResultsLight[35], 'campaignLaunchMonthly') as import('../types').CampaignLaunchMonthlyRow[];
         const planAdsTargets = resolveLoader(bgResultsLight[36], 'planAdsTargets') as PlanAdsTargetRow[];
+        const asinOosDays = resolveLoader(bgResultsLight[37], 'asinOosDays') as AsinOosDaysRow[];
 
         const ads = resolveLoader(bgResultsHeavy[0], 'ads') as Ads7dRow[];
         const sqp = resolveLoader(bgResultsHeavy[1], 'sqp') as SqpWeeklyRow[];
@@ -2342,6 +2362,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           campaign_launch_perf: campaignLaunchPerf,
           campaign_launch_monthly: campaignLaunchMonthly,
           plan_ads_targets: planAdsTargets,
+          asin_oos_days: asinOosDays,
           _meta: {
             ...prev._meta,
             queries_run: (prev._meta?.queries_run ?? 0) + lightLoaders.length + heavyLoaders.length,

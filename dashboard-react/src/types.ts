@@ -1102,6 +1102,14 @@ export interface CampaignLaunchMonthlyRow {
   m3_units: number; m3_cpc: number | null; m3_ad_spend: number; m3_net_roas: number | null;
 }
 
+/** Per-ASIN out-of-stock day counts from V_ASIN_OOS_DAYS — feeds the clear-case gate. */
+export interface AsinOosDaysRow {
+  asin: string;
+  oos_days_28d: number;
+  oos_days_7d: number;
+  observed_days_28d: number;
+}
+
 /** One row of the Plan wizard's Ads Path targets — per family / month / ad-channel. */
 export interface PlanAdsTargetRow {
   family: string;
@@ -1172,6 +1180,7 @@ export interface DashboardData {
   campaign_launch_perf: CampaignLaunchPerfRow[];
   campaign_launch_monthly: CampaignLaunchMonthlyRow[];
   plan_ads_targets: PlanAdsTargetRow[];
+  asin_oos_days: AsinOosDaysRow[];
   launch_models: { product: string; daily_rate: number }[];
   _meta: {
     refreshed_at?: string;

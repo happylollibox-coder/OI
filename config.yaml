@@ -485,6 +485,12 @@ views:
       - SRC_ACC_SQP_WEEKLY
       - DIM_PRODUCT
 
+  - name: "V_ASIN_OOS_DAYS"
+    description: "Per-ASIN out-of-stock day counts (28d/7d) from FACT_INVENTORY_SNAPSHOT — feeds the clear-case gate"
+    source_files: ["scripts/bigquery/views/V_ASIN_OOS_DAYS.sql"]
+    dependencies:
+      - FACT_INVENTORY_SNAPSHOT
+
   - name: "V_PPC_ACTION_OUTCOMES"
     description: "Outcome scoring for applied PPC changes (close the loop): per change_id, compares 14d pre vs 14d post windows (LA dates, excluding the most recent 2 days for ads attribution lag) of spend/orders/net ROAS from FACT_AMAZON_ADS at the matching scope (term/target/campaign), and emits verdict IMPROVED/WORSE/NO_DATA/TOO_EARLY. Net ROAS mirrors V_ADS_COACH_DATA margin semantics (direct ad-attributed, no halo). See architecture/PPC_CLOSE_THE_LOOP.md"
     source_files: ["scripts/bigquery/views/V_PPC_ACTION_OUTCOMES.sql"]

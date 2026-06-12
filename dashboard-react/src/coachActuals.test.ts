@@ -178,6 +178,31 @@ describe('clearCase', () => {
     expect(clearCase({ ...base, action: 'NEGATE_TERM', sellableQty: 12 }).clear).toBe(true);
     expect(clearCase({ ...base, action: 'NEGATE_TERM' }).clear).toBe(true); // field absent
   });
+
+  // OOS-history guard: window-poisoned cases (product restocked now but was OOS during 4w window)
+  it('NEGATE with oosDays4w >= 7 is parked (window has out-of-stock days)', () => {
+    const v = clearCase({ ...base, action: 'NEGATE_TERM', oosDays4w: 10 });
+    expect(v.clear).toBe(false);
+    expect(v.reason).toMatch(/out-of-stock days/i);
+  });
+  it('INCREASE_BID with great ROAS and oosDays4w >= 7 is parked (performance understated)', () => {
+    const v = clearCase({ ...base, action: 'INCREASE_BID', orders: 3, netRoas: 2.0, oosDays4w: 9 });
+    expect(v.clear).toBe(false);
+    expect(v.reason).toMatch(/oos days/i);
+  });
+  it('REDUCE_BID is clear when window had OOS days, but reason includes OOS note', () => {
+    const v = clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, oosDays4w: 8 });
+    expect(v.clear).toBe(true);
+    expect(v.reason).toMatch(/oos days/i);
+  });
+  it('oosDays4w below threshold (< 7) does not trigger the history guard (unchanged behavior)', () => {
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', oosDays4w: 3 }).clear).toBe(true);
+    expect(clearCase({ ...base, action: 'INCREASE_BID', orders: 3, netRoas: 2.0, oosDays4w: 3 }).clear).toBe(true);
+  });
+  it('oosDays4w null or absent does not trigger the history guard (unchanged behavior)', () => {
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', oosDays4w: null }).clear).toBe(true);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM' }).clear).toBe(true);
+  });
 });
 
 describe('selectPeak', () => {

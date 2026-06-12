@@ -385,6 +385,14 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     return m;
   }, [data.supply_chain]);
 
+  // OOS history per ASIN — the window-poisoned guard parks actions where the 4w measurement
+  // window overlaps OOS days (product restocked since; 0-order window is shelf data, not demand).
+  const oosDaysByAsin = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of data.asin_oos_days || []) if (r.asin) m.set(r.asin, r.oos_days_28d);
+    return m;
+  }, [data.asin_oos_days]);
+
   // Stage-1 trust list: confidence-gated clear cases, capped, sorted by weekly $ opportunity.
   const CLEAR_CARD_CAP = 10;
   const clearCases = useMemo(() => {
@@ -403,6 +411,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         roas1w: a.ads_net_roas_1w, orders1w: a.ads_orders_1w,
         ...((pk => ({ peakRoas: pk?.roas ?? null, peakOrders: pk?.orders ?? null }))(selectPeak(a))),
         sellableQty: a.asin ? sellableByAsin.get(a.asin) ?? null : null,
+        oosDays4w: a.asin ? oosDaysByAsin.get(a.asin) ?? null : null,
       });
       if (v.clear
           && !doQueue.isUploaded(a.search_term, a.campaign_id)
@@ -420,7 +429,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     }
     out.sort((x, y) => y.opp.dollars - x.opp.dollars);
     return out.slice(0, CLEAR_CARD_CAP);
-  }, [acts, getFamily, famModes, effectiveCoachMode, doQueue.isUploaded, doQueue.isDone, sellableByAsin]);
+  }, [acts, getFamily, famModes, effectiveCoachMode, doQueue.isUploaded, doQueue.isDone, sellableByAsin, oosDaysByAsin]);
 
   // Group clear cases by family, order groups by total weekly $ opportunity.
   const clearGroups = useMemo(() => {

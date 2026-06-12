@@ -24,7 +24,7 @@ const EMPTY: DashboardData = {
   coach_decisions: [], coach_campaigns: [], experiment_evaluations: [],
   keyword_predictions: [], brand_strength_weekly: [], coach_phrase_negatives: [], product_creatives: [], hot_signals: [],
   ads_focus_terms: [], ads_focus_keywords: [], phrase_negatives: [],
-  storage_costs: [], supply_chain: [], supply_pos: [], supply_payments: [], supply_shipments: [], supply_other_pos: [], peak_relevance: [], family_occasions: [], coach_strategy: [], campaign_launch_perf: [], campaign_launch_monthly: [], plan_ads_targets: [], launch_models: [],
+  storage_costs: [], supply_chain: [], supply_pos: [], supply_payments: [], supply_shipments: [], supply_other_pos: [], peak_relevance: [], family_occasions: [], coach_strategy: [], campaign_launch_perf: [], campaign_launch_monthly: [], plan_ads_targets: [], asin_oos_days: [], launch_models: [],
   _meta: {},
 };
 

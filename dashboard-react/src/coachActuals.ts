@@ -111,6 +111,7 @@ export interface GateInput {
   roas1w?: number | null; orders1w?: number | null;
   peakRoas?: number | null; peakOrders?: number | null;
   sellableQty?: number | null; // current sellable stock of the advertised ASIN (null = unknown)
+  oosDays4w?: number | null;   // OOS days during the 4w measurement window (null = unknown)
 }
 export interface GateVerdict { clear: boolean; reason: string }
 
@@ -118,6 +119,7 @@ export const GATE = Object.freeze({
   minSpend: 5, minClicks: 10, grayLow: 0.9, grayHigh: 1.1, promoteMinOrders: 2,
   scaleClear: Object.freeze({ GUARDIAN: 1.3, BLITZ: 1.15 }) as Record<string, number>,
   peakGreat: 1.3, peakMinOrders: 3, recovering1w: 1.1,
+  oosWindowMax: 7, // OOS days in the 4w measurement window that poisons the data
 });
 
 // Act-now actions the cards can represent (keyword/term-level changes in Amazon).
@@ -166,10 +168,17 @@ export function clearCase(g: GateInput): GateVerdict {
   //   negate/stop  + OOS → park (the 0-order window may be the empty shelf, and a negative is permanent)
   //   promote      + OOS → park (never scale an empty shelf)
   //   reduce       + OOS → allowed (cutting spend on an empty shelf is right) with a restore-after-restock note
-  // Catching "was OOS during the window but restocked since" needs inventory HISTORY — engine work, not done here.
   const oos = g.sellableQty != null && g.sellableQty <= 0;
+  // OOS-history guard: product restocked now but was OOS during the 4w measurement window.
+  // oosDays4w >= oosWindowMax means the 0-order window is shelf data, not demand data.
+  // Reversibility principle mirrors current-OOS guard:
+  //   negate/stop  → park (permanent action on poisoned data)
+  //   promote      → park (data understates performance; won't scale on incomplete signal)
+  //   reduce       → allowed (reversible), but append an OOS note to the clear reason
+  const windowPoisoned = (g.oosDays4w ?? 0) >= GATE.oosWindowMax;
   if (isCut) {
     if (oos) return { clear: false, reason: 'product out of stock — the 0-order window may be the empty shelf, not the term; judge after restock' };
+    if (windowPoisoned) return { clear: false, reason: `window includes ${g.oosDays4w} out-of-stock days — shelf data, not demand; judge after clean weeks` };
     if (peakGreat) return { clear: false, reason: `weak now but last peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — seasonal: BOOST before next peak, don't cut` };
     if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
     if (g.orders === 0) return { clear: true, reason: 'real spend, zero orders — nothing to lose' };
@@ -179,16 +188,18 @@ export function clearCase(g: GateInput): GateVerdict {
     // Owner workflow (2026-06-12): a bid-down is REVERSIBLE — a great peak doesn't block it.
     // Lower now, boost back in the BOOST phase before the next peak. Only negates stay parked.
     const oosNote = oos ? ' (product OOS — restore bid after restock)' : '';
+    const windowOosNote = windowPoisoned ? ` (window had ${g.oosDays4w} OOS days)` : '';
     if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
     if (g.netRoas < GATE.grayLow) {
-      if (peakGreat) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} now, but peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — lower now, BOOST back before next peak${oosNote}` };
-      return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} decisively below breakeven${oosNote}` };
+      if (peakGreat) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} now, but peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — lower now, BOOST back before next peak${oosNote}${windowOosNote}` };
+      return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} decisively below breakeven${oosNote}${windowOosNote}` };
     }
     if (g.netRoas > GATE.grayHigh) return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} above breakeven — conflicts with a bid cut, judge manually` };
     return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} inside gray band (${GATE.grayLow}–${GATE.grayHigh}) — too close to call` };
   }
   // promote
   if (oos) return { clear: false, reason: 'product out of stock — don\'t scale an empty shelf; revisit after restock' };
+  if (windowPoisoned) return { clear: false, reason: `window includes ${g.oosDays4w} OOS days — performance understated; revisit with clean data` };
   const bar = GATE.scaleClear[g.mode];
   if (bar == null) return { clear: false, reason: `${g.mode} mode never promotes` };
   if (g.orders < GATE.promoteMinOrders) return { clear: false, reason: `${g.orders} order(s) < ${GATE.promoteMinOrders} — winner not proven` };
