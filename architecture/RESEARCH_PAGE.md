@@ -74,9 +74,13 @@ Explanation columns: `gender_score`, `age_score`, `occasion_score`, `pt_score`
 (-1 encodes mismatch pre-cap).
 
 ### CPS Fit (0-100)
-`effective_cps` = `1/CVR` from real ads (30d preferred, else 12m; requires
-`ads_family_orders > 0` and CVR > 0) else conversion-curve estimate (`est_cps`,
-`_ALL` season). Provenance in `cps_source`: `ads_30d` | `ads_12m` | `curve` | NULL.
+`effective_cps` = `1/CVR` from real ads, using the SAME trust rule as the
+displayed `ads_cps` (so the two always agree): 30d CVR if `ads_units_30d > 3`
+and CVR > 0, **else 12m CVR if > 0** (a zero 30d CVR falls through — it must
+not mask a valid 12m CVR), else conversion-curve estimate (`est_cps`, `_ALL`
+season). Provenance in `cps_source`: `ads_30d` | `ads_12m` | `curve` | NULL.
+Invariant: whenever `ads_cps` is non-null, `cps_source` is `ads_*` and
+`effective_cps ≈ ads_cps` (validated by tools/validate_research_ranked.py).
 Brackets: ≤5→100, ≤8→85, ≤12→70, ≤20→55, ≤35→35, ≤50→20, else 10.
 
 ### Overall Fit

@@ -33,6 +33,11 @@ CHECKS = [
     ("cps_source enum", """
         SELECT COUNT(*) FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED
         WHERE cps_source IS NOT NULL AND cps_source NOT IN ('ads_30d','ads_12m','curve')"""),
+    ("ads_cps and effective_cps agree", """
+        SELECT COUNT(*) FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED
+        WHERE ads_cps IS NOT NULL
+          AND (cps_source NOT IN ('ads_30d','ads_12m')
+               OR ABS(effective_cps - ads_cps) > 0.06)"""),
     ("ranked table non-empty (inverted)", """
         SELECT IF(COUNT(*) > 0, 0, 1) FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED"""),
     ("terms table non-empty (inverted)", """

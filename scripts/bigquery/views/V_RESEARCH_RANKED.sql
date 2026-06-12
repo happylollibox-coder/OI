@@ -389,20 +389,24 @@ scored AS (
       ELSE NULL
     END AS ads_cps,
 
-    -- CPS for scoring (real CVR → 1/CVR, else curve estimate) + provenance
+    -- CPS for scoring — SAME trust rule as ads_cps so the two always agree:
+    -- 30d CVR if >3 units sold in 30d, else 12m CVR if > 0, else curve.
+    -- (A zero 30d CVR — recent clicks, no recent sales — must fall through
+    -- to 12m, not mask it.)
     CASE
-      WHEN COALESCE(am.ads_family_orders, 0) > 0 AND COALESCE(am.units_cvr_30d, am.units_cvr_12m) > 0
-        THEN 1.0 / COALESCE(am.units_cvr_30d, am.units_cvr_12m)
+      WHEN COALESCE(am.ads_units_30d, 0) > 3 AND am.units_cvr_30d > 0 THEN 1.0 / am.units_cvr_30d
+      WHEN am.units_cvr_12m > 0 THEN 1.0 / am.units_cvr_12m
       ELSE ec.est_cps
     END AS effective_cps,
     CASE
-      WHEN COALESCE(am.ads_family_orders, 0) > 0 AND COALESCE(am.units_cvr_30d, am.units_cvr_12m) > 0
-        THEN IF(am.units_cvr_30d IS NOT NULL, 'ads_30d', 'ads_12m')
+      WHEN COALESCE(am.ads_units_30d, 0) > 3 AND am.units_cvr_30d > 0 THEN 'ads_30d'
+      WHEN am.units_cvr_12m > 0 THEN 'ads_12m'
       WHEN ec.est_cps IS NOT NULL THEN 'curve'
       ELSE NULL
     END AS cps_source,
     COALESCE(am.ads_family_orders, 0) > 3
-      AND COALESCE(am.units_cvr_30d, am.units_cvr_12m) > 0 AS has_reliable_ads_cvr,
+      AND ((COALESCE(am.ads_units_30d, 0) > 3 AND am.units_cvr_30d > 0) OR am.units_cvr_12m > 0)
+      AS has_reliable_ads_cvr,
 
     -- Purchase Rank (weekly purchases buckets)
     CASE
