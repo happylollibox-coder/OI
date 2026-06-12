@@ -261,6 +261,8 @@ BEGIN
     CAST(ca.ly_orders AS INT64) as ly_orders,
     CAST(ca.ly_units AS INT64) as ly_units,
     ROUND(COALESCE(ca.ly_spend, 0), 2) as ly_spend,
+    CAST(ca.ly_clicks AS INT64) as ly_clicks,
+    ca.ly_cpc as ly_cpc,
     ROUND(COALESCE(ca.q4_peak_net_roas, 0), 2) as q4_peak_net_roas,
     CAST(ca.q4_peak_orders AS INT64) as q4_peak_orders,
     CAST(ca.q4_peak_units AS INT64) as q4_peak_units,
@@ -430,7 +432,12 @@ BEGIN
     ANY_VALUE(lt_first_seen) as lt_first_seen,
     ANY_VALUE(lt_last_seen) as lt_last_seen,
     ROUND(ANY_VALUE(ads_spend_1w), 2) as ads_spend_1w,
-    ROUND(SAFE_DIVIDE(ANY_VALUE(ads_spend_1w), NULLIF(ANY_VALUE(ads_clicks_1w), 0)), 2) as ads_cpc_1w
+    ROUND(SAFE_DIVIDE(ANY_VALUE(ads_spend_1w), NULLIF(ANY_VALUE(ads_clicks_1w), 0)), 2) as ads_cpc_1w,
+    -- Peak-window evidence (per-term rows share the same ly_/q4_ values → ANY_VALUE)
+    ROUND(COALESCE(ANY_VALUE(ly_spend), 0), 2) as ly_spend,
+    CAST(ANY_VALUE(ly_clicks) AS INT64) as ly_clicks,
+    ANY_VALUE(ly_cpc) as ly_cpc,
+    ROUND(COALESCE(ANY_VALUE(q4_peak_spend), 0), 2) as q4_peak_spend
   FROM _base_rows
   WHERE action IS NOT NULL
   GROUP BY campaign_id, search_term, action;
@@ -636,7 +643,12 @@ BEGIN
     MIN(lt_first_seen) as lt_first_seen,
     MAX(lt_last_seen) as lt_last_seen,
     ROUND(SUM(ads_spend_1w), 2) as ads_spend_1w,
-    ROUND(SAFE_DIVIDE(SUM(ads_spend_1w), NULLIF(SUM(ads_clicks_1w), 0)), 2) as ads_cpc_1w
+    ROUND(SAFE_DIVIDE(SUM(ads_spend_1w), NULLIF(SUM(ads_clicks_1w), 0)), 2) as ads_cpc_1w,
+    -- Peak-window evidence (aggregated across search terms under this target → SUM/SAFE_DIVIDE)
+    ROUND(COALESCE(SUM(ly_spend), 0), 2) as ly_spend,
+    SUM(ly_clicks) as ly_clicks,
+    ROUND(SAFE_DIVIDE(SUM(ly_spend), NULLIF(SUM(ly_clicks), 0)), 2) as ly_cpc,
+    ROUND(COALESCE(SUM(q4_peak_spend), 0), 2) as q4_peak_spend
   FROM _base_rows
   WHERE target_action IS NOT NULL
   GROUP BY campaign_id, targeting, target_action;
@@ -846,7 +858,12 @@ BEGIN
     MIN(lt_first_seen) as lt_first_seen,
     MAX(lt_last_seen) as lt_last_seen,
     ROUND(SUM(ads_spend_1w), 2) as ads_spend_1w,
-    ROUND(SAFE_DIVIDE(SUM(ads_spend_1w), NULLIF(SUM(ads_clicks_1w), 0)), 2) as ads_cpc_1w
+    ROUND(SAFE_DIVIDE(SUM(ads_spend_1w), NULLIF(SUM(ads_clicks_1w), 0)), 2) as ads_cpc_1w,
+    -- Peak-window evidence (aggregated across all search terms in campaign → SUM/SAFE_DIVIDE)
+    ROUND(COALESCE(SUM(ly_spend), 0), 2) as ly_spend,
+    SUM(ly_clicks) as ly_clicks,
+    ROUND(SAFE_DIVIDE(SUM(ly_spend), NULLIF(SUM(ly_clicks), 0)), 2) as ly_cpc,
+    ROUND(COALESCE(SUM(q4_peak_spend), 0), 2) as q4_peak_spend
   FROM _base_rows
   WHERE budget_action IS NOT NULL
   GROUP BY campaign_id, budget_action;
@@ -982,7 +999,12 @@ BEGIN
     ANY_VALUE(lt_first_seen) as lt_first_seen,
     ANY_VALUE(lt_last_seen) as lt_last_seen,
     ROUND(ANY_VALUE(ads_spend_1w), 2) as ads_spend_1w,
-    ROUND(SAFE_DIVIDE(ANY_VALUE(ads_spend_1w), NULLIF(ANY_VALUE(ads_clicks_1w), 0)), 2) as ads_cpc_1w
+    ROUND(SAFE_DIVIDE(ANY_VALUE(ads_spend_1w), NULLIF(ANY_VALUE(ads_clicks_1w), 0)), 2) as ads_cpc_1w,
+    -- Peak-window evidence (per-term rows share the same ly_/q4_ values → ANY_VALUE)
+    ROUND(COALESCE(ANY_VALUE(ly_spend), 0), 2) as ly_spend,
+    CAST(ANY_VALUE(ly_clicks) AS INT64) as ly_clicks,
+    ANY_VALUE(ly_cpc) as ly_cpc,
+    ROUND(COALESCE(ANY_VALUE(q4_peak_spend), 0), 2) as q4_peak_spend
   FROM _base_rows
   WHERE hero_action IS NOT NULL
   GROUP BY campaign_id, search_term, hero_action;

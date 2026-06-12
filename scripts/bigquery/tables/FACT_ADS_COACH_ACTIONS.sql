@@ -25,8 +25,6 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.FACT_ADS_COACH_ACTIONS`
   ads_impressions_4w INT64,
   ads_clicks_1w INT64,
   ads_impressions_1w INT64,
-  ads_spend_1w FLOAT64,
-  ads_cpc_1w FLOAT64,
   ads_sales_4w FLOAT64,
   ads_cpc_4w FLOAT64,
   ads_cvr_pct_4w FLOAT64,
@@ -114,5 +112,11 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.FACT_ADS_COACH_ACTIONS`
   lt_orders INT64,
   lt_units INT64,
   lt_first_seen DATE,
-  lt_last_seen DATE
+  lt_last_seen DATE,
+  ads_spend_1w FLOAT64,
+  ads_cpc_1w FLOAT64,
+  ly_spend FLOAT64,
+  ly_clicks INT64,
+  ly_cpc FLOAT64,
+  q4_peak_spend FLOAT64
 );
