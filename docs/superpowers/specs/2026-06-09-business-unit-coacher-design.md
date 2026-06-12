@@ -145,7 +145,7 @@ Where new keywords *come from*. `V_RESEARCH_RANKED` is already at grain **`paren
 | 1w | 4w | Peak | Verdict |
 |---|---|---|---|
 | bad | bad | bad / none | **Definitely waste** → cut/reduce stays clear |
-| bad | bad | **great** (≥ `peak_great` 1.3× with ≥ `peak_min_orders` 3) | **Don't cut** → park: "seasonal — BOOST before next peak" (boost-phase action comes with the engine work in Stage 3) |
+| bad | bad | **great** (≥ `peak_great` 1.3× with ≥ `peak_min_orders` 3) | **Split by reversibility (owner, 2026-06-12):** NEGATE/STOP → **park** ("seasonal — BOOST before next peak, don't cut" — a negative is hard to boost back); REDUCE_BID → **CLEAR** with "lower now, BOOST back before next peak" (bid-downs are reversible; owner's workflow is reduce now + boost in BOOST phase). Boost-phase action automation comes with the engine work in Stage 3. |
 | **good** (≥ `recovering_1w` 1.1× with orders) | bad | any | **Don't cut yet** → park: "recovering this week" |
 
 Knobs: `peak_great` (1.3), `peak_min_orders` (3), `recovering_1w` (1.1) — in the `GATE` constants now, `CoachThresholds` at Stage 3. Peak selection is the shared `selectPeak()` helper (single source for gate + card display).

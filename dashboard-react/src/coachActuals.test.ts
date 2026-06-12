@@ -140,12 +140,15 @@ describe('clearCase', () => {
     expect(clearCase({ ...base, action: 'NEGATE_TERM', roas1w: 0, orders1w: 0, peakRoas: 0.4, peakOrders: 1 }).clear).toBe(true);
     expect(clearCase({ ...base, action: 'NEGATE_TERM', roas1w: null, orders1w: null, peakRoas: null, peakOrders: null }).clear).toBe(true); // no extra data = unchanged behavior
   });
-  it('1w+4w bad but peak GREAT → parked with boost-before-peak guidance', () => {
+  it('NEGATE with peak GREAT → parked (a negative is hard to boost back)', () => {
     const v = clearCase({ ...base, action: 'NEGATE_TERM', roas1w: 0, orders1w: 0, peakRoas: 2.1, peakOrders: 12 });
     expect(v.clear).toBe(false);
     expect(v.reason).toMatch(/boost before next peak/i);
+  });
+  it('REDUCE with peak GREAT → CLEAR with boost-back guidance (bid-downs are reversible — owner workflow)', () => {
     const r = clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, peakRoas: 1.8, peakOrders: 5 });
-    expect(r.clear).toBe(false);
+    expect(r.clear).toBe(true);
+    expect(r.reason).toMatch(/lower now, boost back/i);
   });
   it('peak good but below GREAT bar or thin → still waste', () => {
     expect(clearCase({ ...base, action: 'NEGATE_TERM', peakRoas: 1.1, peakOrders: 10 }).clear).toBe(true); // below 1.3

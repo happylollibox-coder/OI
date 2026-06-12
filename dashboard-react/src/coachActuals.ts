@@ -167,9 +167,13 @@ export function clearCase(g: GateInput): GateVerdict {
     return { clear: false, reason: `${g.orders} order(s) — halo risk, judge manually` };
   }
   if (isReduce) {
-    if (peakGreat) return { clear: false, reason: `weak now but last peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — seasonal: BOOST before next peak, don't cut` };
+    // Owner workflow (2026-06-12): a bid-down is REVERSIBLE — a great peak doesn't block it.
+    // Lower now, boost back in the BOOST phase before the next peak. Only negates stay parked.
     if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
-    if (g.netRoas < GATE.grayLow) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} decisively below breakeven` };
+    if (g.netRoas < GATE.grayLow) {
+      if (peakGreat) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} now, but peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — lower now, BOOST back before next peak` };
+      return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} decisively below breakeven` };
+    }
     if (g.netRoas > GATE.grayHigh) return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} above breakeven — conflicts with a bid cut, judge manually` };
     return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} inside gray band (${GATE.grayLow}–${GATE.grayHigh}) — too close to call` };
   }
