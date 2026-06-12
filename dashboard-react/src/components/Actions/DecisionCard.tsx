@@ -56,10 +56,10 @@ export function DecisionCard({ action: a, family, why, inQueue, onQueue }: {
           {inQueue ? 'Queued ✓' : <span className="flex items-center gap-1"><Plus size={10} /> Queue</span>}
         </button>
       </div>
-      <div className="text-[10px] font-mono text-muted flex gap-3 tabular-nums">
-        <span>spent {fM(spend ?? 0)} / 4w</span>
-        <span>{clicks ?? 0} clicks</span>
-        <span>{orders ?? 0} orders{(orders ?? 0) > 0 && netRoas != null ? ` · ROAS ${Number(netRoas).toFixed(2)}×` : ''}</span>
+      <div className="text-[10px] font-mono text-muted flex gap-3 tabular-nums flex-wrap">
+        <span title="This week (1w, ad-only)">1w: {a.ads_net_roas_1w != null ? `ROAS ${Number(a.ads_net_roas_1w).toFixed(2)}× (${a.ads_orders_1w ?? 0} ord)` : '—'}</span>
+        <span title="Last 4 weeks">4w: {fM(spend ?? 0)} · {clicks ?? 0} clicks · {orders ?? 0} ord{(orders ?? 0) > 0 && netRoas != null ? ` · ROAS ${Number(netRoas).toFixed(2)}×` : ''}</span>
+        <span title="Best of last-year peak and Q4 peak">Peak: {(() => { const p = Math.max(a.ly_net_roas ?? 0, a.q4_peak_net_roas ?? 0); const po = (a.ly_net_roas ?? 0) >= (a.q4_peak_net_roas ?? 0) ? a.ly_orders : a.q4_peak_orders; return p > 0 ? `ROAS ${p.toFixed(2)}× (${po ?? 0} ord)` : '—'; })()}</span>
       </div>
       <div className="text-[10px] text-subtle">{why.reason}.</div>
       <div className="text-[9px] text-faint">{amazonChange}</div>

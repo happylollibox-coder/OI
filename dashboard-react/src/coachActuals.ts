@@ -95,12 +95,15 @@ export function familyModes(
 export interface GateInput {
   action: string; spend: number; clicks: number; orders: number;
   netRoas: number; mode: string; confidence: string;
+  roas1w?: number | null; orders1w?: number | null;
+  peakRoas?: number | null; peakOrders?: number | null;
 }
 export interface GateVerdict { clear: boolean; reason: string }
 
 export const GATE = Object.freeze({
   minSpend: 5, minClicks: 10, grayLow: 0.9, grayHigh: 1.1, promoteMinOrders: 2,
   scaleClear: Object.freeze({ GUARDIAN: 1.3, BLITZ: 1.15 }) as Record<string, number>,
+  peakGreat: 1.3, peakMinOrders: 3, recovering1w: 1.1,
 });
 
 // Act-now actions the cards can represent (keyword/term-level changes in Amazon).
@@ -120,11 +123,21 @@ export function clearCase(g: GateInput): GateVerdict {
   if (g.confidence !== 'HIGH') return { clear: false, reason: `${g.confidence} confidence — needs more data to act automatically` };
   if (g.spend < GATE.minSpend) return { clear: false, reason: `spend $${g.spend.toFixed(0)} < $${GATE.minSpend} floor` };
   if (g.clicks < GATE.minClicks) return { clear: false, reason: `${g.clicks} clicks < ${GATE.minClicks} floor` };
+  // Owner three-window rule: applied before CUT and REDUCE verdicts fire.
+  // peakGreat: weak now but GREAT last peak → seasonal, boost before peak — never cut.
+  // recovering1w: this week already good → recovering, too early to cut.
+  const peakGreat = (g.peakRoas ?? 0) >= GATE.peakGreat && (g.peakOrders ?? 0) >= GATE.peakMinOrders;
+  const week = g.roas1w;
+  const weekGood = week != null && week >= GATE.recovering1w && (g.orders1w ?? 0) > 0;
   if (isCut) {
+    if (peakGreat) return { clear: false, reason: `weak now but last peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — seasonal: BOOST before next peak, don't cut` };
+    if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
     if (g.orders === 0) return { clear: true, reason: 'real spend, zero orders — nothing to lose' };
     return { clear: false, reason: `${g.orders} order(s) — halo risk, judge manually` };
   }
   if (isReduce) {
+    if (peakGreat) return { clear: false, reason: `weak now but last peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — seasonal: BOOST before next peak, don't cut` };
+    if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
     if (g.netRoas < GATE.grayLow) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} decisively below breakeven` };
     if (g.netRoas > GATE.grayHigh) return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} above breakeven — conflicts with a bid cut, judge manually` };
     return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} inside gray band (${GATE.grayLow}–${GATE.grayHigh}) — too close to call` };

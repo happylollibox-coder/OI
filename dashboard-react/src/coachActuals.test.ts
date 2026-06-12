@@ -136,4 +136,24 @@ describe('clearCase', () => {
     expect(clearCase({ ...base, action: 'INCREASE_BID', orders: 2, netRoas: 1.3 }).clear).toBe(true);  // GUARDIAN bar inclusive
     expect(clearCase({ ...base, action: 'INCREASE_BID', orders: 2, netRoas: 1.15, mode: 'BLITZ' }).clear).toBe(true);
   });
+  it('all three windows bad → definitely waste (clear cut)', () => {
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', roas1w: 0, orders1w: 0, peakRoas: 0.4, peakOrders: 1 }).clear).toBe(true);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', roas1w: null, orders1w: null, peakRoas: null, peakOrders: null }).clear).toBe(true); // no extra data = unchanged behavior
+  });
+  it('1w+4w bad but peak GREAT → parked with boost-before-peak guidance', () => {
+    const v = clearCase({ ...base, action: 'NEGATE_TERM', roas1w: 0, orders1w: 0, peakRoas: 2.1, peakOrders: 12 });
+    expect(v.clear).toBe(false);
+    expect(v.reason).toMatch(/boost before next peak/i);
+    const r = clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, peakRoas: 1.8, peakOrders: 5 });
+    expect(r.clear).toBe(false);
+  });
+  it('peak good but below GREAT bar or thin → still waste', () => {
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', peakRoas: 1.1, peakOrders: 10 }).clear).toBe(true); // below 1.3
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', peakRoas: 3.0, peakOrders: 1 }).clear).toBe(true);  // too few peak orders
+  });
+  it('this week already good → recovering, parked', () => {
+    const v = clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, roas1w: 1.4, orders1w: 2 });
+    expect(v.clear).toBe(false);
+    expect(v.reason).toMatch(/recovering/i);
+  });
 });
