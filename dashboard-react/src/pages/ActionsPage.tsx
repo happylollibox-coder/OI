@@ -1466,7 +1466,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
           {clearGroups.map(({ family, cases, total }) => (
             <div key={family} className="mb-3">
               <div className="flex items-baseline gap-2 mb-1.5 px-0.5">
-                <span className="text-[11px] font-semibold text-white/80">{family}</span>
+                <span className="text-[11px] font-semibold text-[var(--color-text)]">{family}</span>
                 <span className="text-[10px] font-mono text-emerald-400">~{fM(total)}/wk opportunity</span>
                 <span className="text-[10px] text-faint">{cases.length} case{cases.length !== 1 ? 's' : ''}</span>
               </div>
@@ -1490,7 +1490,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         <div className="border border-border rounded-xl bg-card overflow-hidden mb-4">
           <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-surface/50 cursor-pointer" onClick={() => setShowQueue(p => !p)}>
             <span className="text-base">📋</span>
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white/90">Needs judgment / full queue</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text)]">Needs judgment / full queue</span>
             <span className="text-[10px] font-mono text-muted">{totalQueueCount} items · {fM(totalQueueSpend)}</span>
             <span className="text-[9px] text-subtle ml-auto">Campaign → Type → Term / Target</span>
             <span className="text-[11px] text-subtle ml-1">{showQueue ? '▾' : '▸'}</span>
