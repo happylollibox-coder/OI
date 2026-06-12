@@ -820,13 +820,13 @@ export function SupplyPage({ data }: { data: DashboardData }) {
               <div className="flex items-center bg-black/5 p-0.5 rounded-lg">
                 <button
                   onClick={() => setSnapshotGroup('source')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${snapshotGroup === 'source' ? 'bg-white text-black shadow-sm' : 'text-muted hover:text-black'}`}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${snapshotGroup === 'source' ? 'bg-white text-black shadow-sm' : 'text-muted hover:text-[var(--color-text)]'}`}
                 >
                   Available In
                 </button>
                 <button
                   onClick={() => setSnapshotGroup('product')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${snapshotGroup === 'product' ? 'bg-white text-black shadow-sm' : 'text-muted hover:text-black'}`}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${snapshotGroup === 'product' ? 'bg-white text-black shadow-sm' : 'text-muted hover:text-[var(--color-text)]'}`}
                 >
                   Family + Product
                 </button>

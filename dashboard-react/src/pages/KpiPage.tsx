@@ -952,7 +952,7 @@ export function KpiPage({ data }: { data: DashboardData }) {
         {specialIds.includes('price_scenario') && (
           <div className="relative group">
             <button onClick={() => removeSpecial('price_scenario')} className="absolute top-2 right-2 z-10 p-1 rounded hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-              <X size={12} className="text-[var(--color-faint)] hover:text-white" />
+              <X size={12} className="text-[var(--color-faint)] hover:text-[var(--color-text)]" />
             </button>
             {(() => {
               const currentBucket = periodBuckets[currentPeriod] || null;
@@ -1232,7 +1232,7 @@ function SortableKpiCard({ card, stagger, onRemove, canRemove, isDetail, onToggl
                       }}
                     />
                     {/* Target line at 100% */}
-                    <div className="absolute top-0 bottom-0 w-[1px] bg-white z-10 opacity-30" style={{ left: '100%' }} />
+                    <div className="absolute top-0 bottom-0 w-[1px] bg-[var(--color-text)] z-10 opacity-30" style={{ left: '100%' }} />
                   </div>
                 </div>
               ))}

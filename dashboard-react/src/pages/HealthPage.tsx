@@ -290,12 +290,12 @@ export function HealthPage({ data }: { data: DashboardData }) {
         <Card className="!p-4">
           <div className="text-[11px] text-muted space-y-2">
             <p>
-              This page monitors the <strong className="text-white">live state of data loaded from Cube.js API</strong>.
+              This page monitors the <strong className="text-[var(--color-text)]">live state of data loaded from Cube.js API</strong>.
               Each row represents a data source that the dashboard queries on startup.
             </p>
             <div className="grid grid-cols-2 gap-4 mt-3">
               <div>
-                <div className="font-semibold text-white mb-1">Status Badges</div>
+                <div className="font-semibold text-[var(--color-text)] mb-1">Status Badges</div>
                 <div className="space-y-1">
                   <div className="flex items-center gap-2"><Badge variant="green">LOADED</Badge> <span>Data successfully fetched from Cube API</span></div>
                   <div className="flex items-center gap-2"><Badge variant="red">MISSING</Badge> <span>Critical data not available — page may show $0</span></div>
@@ -305,7 +305,7 @@ export function HealthPage({ data }: { data: DashboardData }) {
                 </div>
               </div>
               <div>
-                <div className="font-semibold text-white mb-1">Data Flow</div>
+                <div className="font-semibold text-[var(--color-text)] mb-1">Data Flow</div>
                 <div className="space-y-1 font-mono text-[10px]">
                   <div className="flex items-center gap-2">
                     <span className="text-blue-400">BigQuery</span>

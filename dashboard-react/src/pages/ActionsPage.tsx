@@ -963,21 +963,21 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                       </span>
                     )}
                   </div>
-                  <div className="text-[12px] text-white font-semibold truncate">{hotData.search_term}</div>
+                  <div className="text-[12px] text-[var(--color-text)] font-semibold truncate">{hotData.search_term}</div>
                   <div className="text-[10px] text-subtle mt-0.5 truncate">Campaign: {hotData.campaign_name} · {hotData.product_short_name}</div>
                   <div className="text-[10px] text-faint mt-1">{hotData.hot_signal_reason}</div>
                 </div>
                 <div className="flex gap-4 text-right shrink-0 items-start">
                   {hotData.hot_signal === 'POST_PEAK_REDUCE' ? (
                     <>
-                      <div><div className="text-[9px] text-subtle uppercase">Bid</div><div className="text-[12px] font-mono text-white">${hotData.current_bid?.toFixed(2)}</div></div>
+                      <div><div className="text-[9px] text-subtle uppercase">Bid</div><div className="text-[12px] font-mono text-[var(--color-text)]">${hotData.current_bid?.toFixed(2)}</div></div>
                       <div><div className="text-[9px] text-subtle uppercase">Target</div><div className="text-[12px] font-mono text-cyan-400">${hotData.recommended_bid?.toFixed(2)}</div></div>
                       <div><div className="text-[9px] text-subtle uppercase">Save</div><div className="text-[12px] font-mono text-emerald-400">-{((hotData.current_bid ?? 0) - (hotData.recommended_bid ?? 0)).toFixed(2)}</div></div>
                     </>
                   ) : (
                     <>
-                      <div><div className="text-[9px] text-subtle uppercase">Spend</div><div className="text-[12px] font-mono text-white">{fM(hotData.spend_3d)}</div></div>
-                      <div><div className="text-[9px] text-subtle uppercase">Clicks</div><div className="text-[12px] font-mono text-white">{hotData.clicks_3d}</div></div>
+                      <div><div className="text-[9px] text-subtle uppercase">Spend</div><div className="text-[12px] font-mono text-[var(--color-text)]">{fM(hotData.spend_3d)}</div></div>
+                      <div><div className="text-[9px] text-subtle uppercase">Clicks</div><div className="text-[12px] font-mono text-[var(--color-text)]">{hotData.clicks_3d}</div></div>
                       <div><div className="text-[9px] text-subtle uppercase">Orders</div><div className={`text-[12px] font-mono ${hotData.orders_3d > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{hotData.orders_3d}</div></div>
                     </>
                   )}
@@ -1019,7 +1019,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
 
             <div className="flex items-center gap-1 shrink-0">
               <span onClick={e => e.stopPropagation()}>
-                <button className={`p-0.5 rounded transition-colors ${inQ ? 'text-emerald-400' : 'text-zinc-500 hover:text-white'}`}
+                <button className={`p-0.5 rounded transition-colors ${inQ ? 'text-emerald-400' : 'text-zinc-500 hover:text-[var(--color-text)]'}`}
                   onClick={() => { if (inQ) return; doQueue.addItem({ search_term: phraseData.phrase, action: phraseData.action, campaign: phraseData.campaign_name, campaign_id: phraseData.campaign_id, ad_group_id: '', targeting: phraseData.phrase, keyword_id: '', match_type: 'PHRASE', target_spend_8w: phraseData.phrase_spend_8w, target_orders_8w: phraseData.phrase_orders_8w, target_net_roas_8w: 0, current_bid: null, recommended_bid: null, campaign_type: phraseData.campaign_type || 'SPONSORED_PRODUCTS', product: 'Keyword', spend: 0, orders: 0, cpc: 0, conv_rate: 0, seasonal_theme: phraseData.seasonal_theme }); }}
                 >{inQ ? <Check size={13} /> : <Plus size={13} />}</button>
               </span>
@@ -1131,8 +1131,8 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
             <div className="flex items-center gap-2.5 text-sm font-bold px-4 py-3 border-l-[4px] border-blue-500/40">
               <span className={`transition-transform duration-200 text-[10px] ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
               <span className="text-base">📦</span>
-              <span className="text-white font-bold truncate max-w-[400px]" title={node.label}>{node.label}</span>
-              <span className="text-white/80 font-semibold text-xs">({node.metrics.count})</span>
+              <span className="text-[var(--color-text)] font-bold truncate max-w-[400px]" title={node.label}>{node.label}</span>
+              <span className="text-[var(--color-text)] font-semibold text-xs">({node.metrics.count})</span>
               <span className="font-mono text-[11px] opacity-60">{fM(node.metrics.spend)}</span>
               {node.metrics.orders > 0 && <span className="font-mono text-[10px] opacity-60">· {fOrd(node.metrics.orders)} ord</span>}
             </div>
@@ -1304,7 +1304,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         <div className="ml-auto">
           <button
             onClick={() => exportActionsToCSV(filtered, cdByTerm, predByTerm)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-subtle border border-border hover:border-border-strong hover:text-white hover:bg-white/[.04] transition-all"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-subtle border border-border hover:border-border-strong hover:text-[var(--color-text)] hover:bg-white/[.04] transition-all"
           >
             <Download size={12} />
             Export
@@ -1615,7 +1615,7 @@ function ActionRowComponent({ action: a, cd, prediction: pred, expanded, onToggl
         {/* Action badge + DO queue button */}
         <div className="flex items-center gap-1 shrink-0">
           <span onClick={e => e.stopPropagation()}>
-            <button className={`p-0.5 rounded transition-colors ${inQ ? 'text-emerald-400' : 'text-zinc-500 hover:text-white'}`}
+            <button className={`p-0.5 rounded transition-colors ${inQ ? 'text-emerald-400' : 'text-zinc-500 hover:text-[var(--color-text)]'}`}
               onClick={() => { if (inQ || !doQueue) return; doQueue.addItem({ search_term: a.search_term || '', action: a.action || '', campaign: a.campaign_name || '', campaign_id: a.campaign_id || '', ad_group_id: (a as any).ad_group_id || '', targeting: a.targeting || '', keyword_id: a.keyword_id || '', match_type: a.match_type || '', target_spend_8w: a.ads_spend_4w || 0, target_orders_8w: a.ads_orders_4w || 0, target_net_roas_8w: a.ads_net_roas_4w || 0, current_bid: a.current_bid ?? null, recommended_bid: a.recommended_bid ?? null, campaign_type: a.campaign_type || '', product: a.product_short_name || '', spend: a.ads_spend_4w || 0, orders: a.ads_orders_4w || 0, cpc: a.ads_cpc_4w || 0, conv_rate: a.ads_cvr_pct_4w || 0, current_budget: a.current_budget ?? null, recommended_budget: a.recommended_budget ?? null, coach_mode: a.coach_mode || '', source: 'COACH' }); }}
               title={inQ ? 'Already in DO queue' : 'Add to DO queue'}
             >{inQ ? <Check size={13} /> : <Plus size={13} />}</button>

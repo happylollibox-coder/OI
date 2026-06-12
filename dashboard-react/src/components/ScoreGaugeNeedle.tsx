@@ -60,7 +60,7 @@ export function ScoreGaugeNeedle({
         padding: '10px 0 12px',
       }}>
       <div
-        className="font-mono text-[10px] tracking-[0.2em] text-white/30 mb-2"
+        className="font-mono text-[10px] tracking-[0.2em] text-faint mb-2"
         style={{ letterSpacing: '0.2em' }}>
         SCORE
       </div>
@@ -142,11 +142,11 @@ export function ScoreGaugeNeedle({
           }}>
           {score.toFixed(1)}
         </span>
-        <span className="font-mono text-white/20 ml-1.5 align-middle" style={{ fontSize: Math.min(20, size * 0.08) }}>/10</span>
+        <span className="font-mono text-faint ml-1.5 align-middle" style={{ fontSize: Math.min(20, size * 0.08) }}>/10</span>
       </div>
 
       {subLabel && (
-        <div className="font-mono text-[10px] text-white/20 mt-1.5 px-3" style={{ letterSpacing: '0.1em' }}>
+        <div className="font-mono text-[10px] text-faint mt-1.5 px-3" style={{ letterSpacing: '0.1em' }}>
           {subLabel}
         </div>
       )}

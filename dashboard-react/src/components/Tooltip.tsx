@@ -91,7 +91,7 @@ export function SortTh({ k, sort, toggle, children, tip, right }: {
   const inner = (
     <span className="inline-flex items-center gap-0.5">
       <button type="button" onClick={() => toggle(k)}
-        className={`hover:text-white transition-colors select-none ${active ? 'text-blue-400' : ''}`}>
+        className={`hover:text-[var(--color-text)] transition-colors select-none ${active ? 'text-blue-400' : ''}`}>
         {children}
         {arrow && <span className="text-[9px] ml-0.5 font-mono">{arrow}</span>}
       </button>

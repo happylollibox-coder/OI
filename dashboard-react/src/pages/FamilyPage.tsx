@@ -1056,12 +1056,12 @@ export function FamilyPage({ data, family, onNavExperiment }: {
             <div className="flex items-center gap-1.5 mb-3 flex-wrap">
               <span className="text-[10px] text-subtle uppercase font-semibold tracking-wider mr-1">Variation:</span>
               <button onClick={() => { setSelectedVariation(null); setSelectedSqpTerm(null); }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${!selectedVariation ? 'text-white border-transparent bg-blue-500/20 text-blue-400' : 'text-faint border-border hover:text-muted hover:border-border-strong'}`}>
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${!selectedVariation ? 'border-transparent bg-blue-500/20 text-blue-400' : 'text-faint border-border hover:text-muted hover:border-border-strong'}`}>
                 All ({variations.length})
               </button>
               {variations.map(v => (
                 <button key={v.asin} onClick={() => { setSelectedVariation(v.asin); setSelectedSqpTerm(null); }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${selectedVariation === v.asin ? 'text-white border-transparent bg-blue-500/20 text-blue-400' : 'text-faint border-border hover:text-muted hover:border-border-strong'}`}>
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${selectedVariation === v.asin ? 'border-transparent bg-blue-500/20 text-blue-400' : 'text-faint border-border hover:text-muted hover:border-border-strong'}`}>
                   {v.name} <span className="font-mono text-[10px] opacity-60">({v.totalOrders} ord)</span>
                 </button>
               ))}
@@ -1074,9 +1074,9 @@ export function FamilyPage({ data, family, onNavExperiment }: {
                 <input
                   type="text" placeholder="Search keywords…" value={sqpSearch}
                   onChange={e => setSqpSearch(e.target.value)}
-                  className="flex-1 bg-transparent border border-border rounded-lg px-2.5 py-1 text-[11px] text-white placeholder:text-faint focus:outline-none focus:border-blue-500"
+                  className="flex-1 bg-transparent border border-border rounded-lg px-2.5 py-1 text-[11px] text-[var(--color-text)] placeholder:text-faint focus:outline-none focus:border-blue-500"
                 />
-                {sqpSearch && <button onClick={() => setSqpSearch('')} className="text-faint hover:text-white text-xs">✕</button>}
+                {sqpSearch && <button onClick={() => setSqpSearch('')} className="text-faint hover:text-[var(--color-text)] text-xs">✕</button>}
                 <span className="text-[10px] text-faint font-mono">{sqpTopTerms.length}</span>
               </div>
               <div className="overflow-y-auto flex-1">
@@ -1417,7 +1417,7 @@ export function FamilyPage({ data, family, onNavExperiment }: {
       <Section title={`${mMeta.label} Trend`} count={latestSqp ? `SQP through ${latestPeriodLabel(latestSqp, 'weeks')}` : undefined} filterItems={formatSectionFilters(filters)}>
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <select value={trendMeasure} onChange={e => setTrendMeasure(e.target.value as TrendMeasure)}
-            className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-border bg-card text-white cursor-pointer appearance-none hover:border-border-strong transition-colors">
+            className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-border bg-card text-[var(--color-text)] cursor-pointer appearance-none hover:border-border-strong transition-colors">
             {(Object.entries(MEASURE_META) as [TrendMeasure, typeof mMeta][]).map(([k, m]) => (<option key={k} value={k}>{m.label}</option>))}
           </select>
         </div>

@@ -347,7 +347,7 @@ function ProductAttributesTable({ data }: { data: DashboardData }) {
   };
 
   return (
-    <div className="mb-6 bg-white/50 dark:bg-[#1C2128]/50 rounded-2xl border border-[var(--color-border)] p-4 shadow-sm backdrop-blur-md">
+    <div className="mb-6 bg-card/50 rounded-2xl border border-[var(--color-border)] p-4 shadow-sm backdrop-blur-md">
       <h2 className="text-xl font-semibold mb-4 text-[var(--color-text)] flex items-center">
         <Database className="mr-2 h-5 w-5 text-blue-500" />
         Product Costs Database

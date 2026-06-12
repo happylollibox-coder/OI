@@ -409,7 +409,7 @@ function Dropdown({ label, value, placeholder, color, onClear, searchable, toolt
                 <Search size={10} className="text-faint shrink-0" />
                 <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..."
                   autoFocus
-                  className="bg-transparent text-[11px] text-white outline-none w-full placeholder:text-zinc-600" />
+                  className="bg-transparent text-[11px] text-[var(--color-text)] outline-none w-full placeholder:text-zinc-600" />
               </div>
             </div>
           )}

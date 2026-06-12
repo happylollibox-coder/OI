@@ -33,7 +33,7 @@ export function LoginScreen() {
           </div>
           
           <div className="space-y-2">
-            <h1 className="text-2xl font-bold text-white tracking-tight">Ori Intelligence</h1>
+            <h1 className="text-2xl font-bold text-[var(--color-text)] tracking-tight">Ori Intelligence</h1>
             <p className="text-[var(--color-text-muted)] text-sm px-4">
               Secure analytics dashboard. Please sign in through the centralized Data Entry system.
             </p>

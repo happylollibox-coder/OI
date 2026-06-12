@@ -1733,7 +1733,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         </div>
       )}
       {headline && (
-        <div className="font-mono text-[14px] font-semibold text-white/60 truncate mb-1 px-1">{headline}</div>
+        <div className="font-mono text-[14px] font-semibold text-muted truncate mb-1 px-1">{headline}</div>
       )}
 
       <div className="flex items-center justify-end gap-1 mb-1 flex-wrap">
