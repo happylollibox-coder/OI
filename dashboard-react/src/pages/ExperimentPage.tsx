@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line, Legend } from 'recharts';
 import { SeasonalReferenceLines, getXLabels } from '../components/SeasonalReferenceLines';
 import type { DashboardData } from '../types';
@@ -71,12 +71,13 @@ export function ExperimentPage({ data, experimentId }: { data: DashboardData; ex
     } catch { return []; }
   }, [experimentId]);
 
-  if (!exp) return <Empty icon="🧪" message={`Experiment "${experimentId}" not found`} hint="Check experiment ID" />;
+  // ── Hooks must run unconditionally — all above the !exp guard (Rules of Hooks) ──
+  usePageSummary({ title: 'Experiment', items: [{ label: 'ID', value: experimentId }] });
 
-  const strategyMeta = STRATEGY_META[exp.strategy_id] || { ...DEFAULT_STRATEGY, label: exp.strategy_id };
-  const strategyGoal = strategyMeta.goal || `Strategy: ${exp.strategy_id}`;
-  const sig = exp.action_signal || exp.verdict || bh?.action_signal || '--';
-  const sigColor = sig.includes('SCALE') ? 'green' as const : sig.includes('REDUCE') || sig.includes('STOP') ? 'red' as const : sig.includes('WATCH') ? 'amber' as const : 'blue' as const;
+  // null-safe so the chart hooks below can run before the guard
+  const strategyMeta = exp
+    ? (STRATEGY_META[exp.strategy_id] || { ...DEFAULT_STRATEGY, label: exp.strategy_id })
+    : DEFAULT_STRATEGY;
 
   // Chart measures for this strategy
   const chartMeasures = useMemo(() => {
@@ -84,41 +85,17 @@ export function ExperimentPage({ data, experimentId }: { data: DashboardData; ex
     return ids.filter((id): id is ChartMeasureId => CHART_MEASURE_META[id] != null);
   }, [strategyMeta.chartMeasureIds]);
 
-  const [selectedChartMeasures, setSelectedChartMeasures] = useState<Set<ChartMeasureId>>(new Set(['spend']));
+  // Raw user selection; the effective selection is derived (no effect needed).
+  const [userMeasures, setUserMeasures] = useState<Set<ChartMeasureId>>(new Set(['spend']));
 
-  useEffect(() => {
-    if (chartMeasures.length > 0) {
-      const first = chartMeasures[0];
-      setSelectedChartMeasures(prev => {
-        const hasValid = chartMeasures.some(m => prev.has(m));
-        return hasValid ? prev : new Set([first]);
-      });
-    }
-  }, [experimentId, chartMeasures]);
+  // Effective selection: user choices intersected with measures valid for this
+  // strategy; falls back to the first valid measure so the chart is never empty.
+  const selectedChartMeasures = useMemo(() => {
+    const valid = chartMeasures.filter(m => userMeasures.has(m));
+    return valid.length ? new Set(valid) : new Set(chartMeasures.slice(0, 1));
+  }, [userMeasures, chartMeasures]);
 
-  const toggleChartMeasure = (m: ChartMeasureId) => {
-    setSelectedChartMeasures(prev => {
-      const next = new Set(prev);
-      if (next.has(m)) { if (next.size > 1) next.delete(m); }
-      else next.add(m);
-      return next;
-    });
-  };
-
-  // Map chart measure IDs to trendChart data keys
-  const measureToDataKey: Record<ChartMeasureId, string> = {
-    spend: 'spend',
-    sales: 'sales',
-    orders: 'orders',
-    conv_rate: 'conv_rate',
-    net_roas: 'roas',
-    organic_pct: 'organic_pct',
-  };
-  const dataKeyToMeasure: Record<string, ChartMeasureId> = Object.fromEntries(
-    (Object.entries(measureToDataKey) as [ChartMeasureId, string][]).map(([k, v]) => [v, k])
-  );
-
-  // Trend chart data — respects periodMode (weeks / month / year)
+  // Trend chart data — respects periodMode (weeks / month / year). No exp dependency.
   const trendChart = useMemo(() => {
     if (periodMode === 'weeks') {
       return weeklyData.map(w => {
@@ -170,6 +147,33 @@ export function ExperimentPage({ data, experimentId }: { data: DashboardData; ex
     });
   }, [periodMode, weeklyData, baseRows, filters.periodTrend, filters.specificPeriod]);
 
+  if (!exp) return <Empty icon="🧪" message={`Experiment "${experimentId}" not found`} hint="Check experiment ID" />;
+
+  // exp is non-null below the guard — these feed JSX, not hooks
+  const strategyGoal = strategyMeta.goal || `Strategy: ${exp.strategy_id}`;
+  const sig = exp.action_signal || exp.verdict || bh?.action_signal || '--';
+  const sigColor = sig.includes('SCALE') ? 'green' as const : sig.includes('REDUCE') || sig.includes('STOP') ? 'red' as const : sig.includes('WATCH') ? 'amber' as const : 'blue' as const;
+
+  const toggleChartMeasure = (m: ChartMeasureId) => {
+    const next = new Set(selectedChartMeasures);
+    if (next.has(m)) { if (next.size > 1) next.delete(m); }
+    else next.add(m);
+    setUserMeasures(next);
+  };
+
+  // Map chart measure IDs to trendChart data keys
+  const measureToDataKey: Record<ChartMeasureId, string> = {
+    spend: 'spend',
+    sales: 'sales',
+    orders: 'orders',
+    conv_rate: 'conv_rate',
+    net_roas: 'roas',
+    organic_pct: 'organic_pct',
+  };
+  const dataKeyToMeasure: Record<string, ChartMeasureId> = Object.fromEntries(
+    (Object.entries(measureToDataKey) as [ChartMeasureId, string][]).map(([k, v]) => [v, k])
+  );
+
   // SQP share changes
   const hasSQP = exp.search_bl_impressions_share_pct != null || exp.search_exp_impressions_share_pct != null;
   const sqpMetrics = hasSQP ? [
@@ -183,7 +187,6 @@ export function ExperimentPage({ data, experimentId }: { data: DashboardData; ex
   // Performance lift
   const hasPerf = exp.performance_baseline_total_orders != null && exp.performance_baseline_total_orders > 0;
 
-  usePageSummary({ title: 'Experiment', items: [{ label: 'ID', value: experimentId }] });
   return (
     <div className="animate-in">
       {/* Header */}

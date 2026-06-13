@@ -54,6 +54,9 @@ export function KeywordsPage({ data }: { data: DashboardData }) {
   const [kwCols, setKwCols] = useMeasureSelection('keywords', KEYWORDS_TABLE_COLUMNS);
   const visibleKwCols = useMemo(() => KEYWORDS_TABLE_COLUMNS.filter(c => kwCols.has(c.id)), [kwCols]);
 
+  // Hooks must run unconditionally — keep above any early return (Rules of Hooks).
+  usePageSummary({ title: 'Keywords', items: [{ label: 'Keyword Tracker', value: 'Active' }] });
+
   if (!rows.length) return <Empty icon="🔍" message="No keyword data" hint="Keyword data syncs from your Amazon Ads campaigns." />;
 
   const kwFilterItems = formatSectionFilters(filters, {
@@ -61,7 +64,6 @@ export function KeywordsPage({ data }: { data: DashboardData }) {
     ...(heroFilter !== 'all' && { Hero: heroFilter === 'yes' ? 'Match' : 'Mismatch' }),
   });
 
-  usePageSummary({ title: 'Keywords', items: [{ label: 'Keyword Tracker', value: 'Active' }] });
   return (
     <div className="animate-in">
       <div className="flex items-center gap-2 mb-5">
