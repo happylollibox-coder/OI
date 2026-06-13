@@ -141,6 +141,37 @@ Computed in SQL (`is_holiday_active`), exposed to the UI.
 ⚠️ `cache_result` keys on Python args only — Flask routes read `request`, so the
 decorator is ONLY safe on endpoints without query/body params.
 
+`recommendations?parent=` — GET, reads `FACT_RESEARCH_RECOMMENDATIONS`, returns NEW +
+ADVERTISED rows grouped by rec_type. See the Recommendations section below.
+
+## Recommendations
+
+Per family, 4 types of net-new keyword recommendations for terms we are **not
+advertising**. "Not advertised" = **0 ads clicks in the last 7 days** for the family's
+ASINs (`FACT_AMAZON_ADS`, joined via `ASIN_BY_CAMPAIGN_NAME → DIM_PRODUCT.parent_name`);
+the coacher decides net-new vs bid-raise. Own brand = `brand = 'Happy Lolli'`.
+
+| Type | match | filter | keyword | ranked by |
+|---|---|---|---|---|
+| EXACT | EXACT | not-advertised, not own-brand, `rank ≥ 75` | the term | rank desc |
+| PHRASE | PHRASE | not-advertised, not own-brand, `rank ≥ 75`, ≥3 words | the term (as phrase) + `coverage_count` (other family terms its words cover) | rank desc, tie-break coverage |
+| BROAD | BROAD | not-advertised seed `overall_fit ≥ 90`; co-occurrence related terms also `fit ≥ 90`; cluster `market_purchases` (104w) `> 500` | the seed | cluster sales desc |
+| BRAND | PHRASE | not-advertised, own-brand (no rank/fit bar) | the term | market volume desc |
+
+`V_RESEARCH_RECOMMENDATION_CANDIDATES` emits per-family candidates (Broad rows are
+seeds only). `SP_REFRESH_RESEARCH_RECOMMENDATIONS` (in `SP_ORCHESTRATE_DAILY_REFRESH`
+after `SP_REFRESH_RESEARCH_RANKED`, idempotent daily) computes the Broad co-occurrence
+clusters (bounded to fit≥90 seeds via temp tables — avoids the per-statement CPU guard),
+the Phrase coverage, dedups against history (never re-recommend a keyword already
+NEW/ADVERTISED) and now-advertised terms, and inserts up to `5 − (already NEW this week)`
+per family × type into `FACT_RESEARCH_RECOMMENDATIONS` (caps at 5 new/type/family/week,
+resets Monday). It also flips prior NEW rows whose term now has 7-day clicks → ADVERTISED.
+
+**Coacher sharing:** the coacher reads `FACT_RESEARCH_RECOMMENDATIONS` directly (same
+table the UI reads); no injection into `FACT_ADS_COACH_ACTIONS`. UI: read-only
+`RecommendationsCard` below `FamilyInfoCard`. Validation:
+`python3 tools/validate_research_recommendations.py`.
+
 ## Refresh Cadence
 
 `SP_REFRESH_RESEARCH_RANKED` (CREATE OR REPLACE both FACT tables) runs inside
@@ -162,3 +193,6 @@ Validation: `python3 tools/validate_research_ranked.py` (enum/bounds/consistency
 - 2026-06-11: Consolidation — taxonomy UDF, overrides wired (was orphaned),
   Girl/Boy enum drift fixed, materialized FACT tables, endpoint dedup, component
   split. Plan: `docs/superpowers/plans/2026-06-11-research-page-consolidation.md`.
+- 2026-06-12: Recommendations layer — 4 net-new keyword recommendation types per
+  family, rate-limited 5/type/family/week, shared with the coacher. Spec:
+  `docs/superpowers/specs/2026-06-12-research-recommendations-design.md`.
