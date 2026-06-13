@@ -15,10 +15,15 @@ WITH advertised_7d AS (
     AND a.Ads_clicks > 0
 ),
 base AS (
-  SELECT r.parent_name, r.query_text, r.rank, r.overall_fit, r.brand,
+  SELECT r.parent_name, r.query_text, r.rank, r.overall_fit,
          r.weekly_market_impressions,
          r.holiday, r.is_holiday_active,
-         ARRAY_LENGTH(SPLIT(TRIM(r.query_text), ' ')) AS word_count
+         ARRAY_LENGTH(SPLIT(TRIM(r.query_text), ' ')) AS word_count,
+         -- own brand by the detected brand column OR by the term text (brand
+         -- detection misses some of our long listing titles)
+         (COALESCE(r.brand, '') = 'Happy Lolli'
+          OR LOWER(r.query_text) LIKE '%happy lolli%'
+          OR LOWER(r.query_text) LIKE '%happylolli%') AS is_own_brand
   FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED r
   LEFT JOIN advertised_7d ad
     ON ad.parent_name = r.parent_name AND ad.query_text = LOWER(r.query_text)
@@ -33,7 +38,7 @@ SELECT parent_name, query_text, 'EXACT' AS rec_type, 'EXACT' AS match_type,
        CAST(weekly_market_impressions AS INT64) AS market_volume,
        rank AS sort_metric
 FROM base
-WHERE (brand IS NULL OR brand != 'Happy Lolli') AND rank >= 75
+WHERE NOT is_own_brand AND rank >= 75
 UNION ALL
 -- PHRASE: not own brand, rank >= 75, >= 3 words
 SELECT parent_name, query_text, 'PHRASE', 'PHRASE',
@@ -41,7 +46,7 @@ SELECT parent_name, query_text, 'PHRASE', 'PHRASE',
        CAST(weekly_market_impressions AS INT64),
        rank
 FROM base
-WHERE (brand IS NULL OR brand != 'Happy Lolli') AND rank >= 75 AND word_count >= 3
+WHERE NOT is_own_brand AND rank >= 75 AND word_count >= 3
 UNION ALL
 -- BROAD seeds: not own brand, fit >= 90 (cluster filter in SP)
 SELECT parent_name, query_text, 'BROAD', 'BROAD',
@@ -49,12 +54,12 @@ SELECT parent_name, query_text, 'BROAD', 'BROAD',
        CAST(weekly_market_impressions AS INT64),
        overall_fit
 FROM base
-WHERE (brand IS NULL OR brand != 'Happy Lolli') AND overall_fit >= 90
+WHERE NOT is_own_brand AND overall_fit >= 90
 UNION ALL
--- BRAND defense: own brand, any rank/fit; ordered by market volume
+-- BRAND defense: own brand (by column or text), any rank/fit; ordered by market volume
 SELECT parent_name, query_text, 'BRAND', 'PHRASE',
        query_text, rank, overall_fit,
        CAST(weekly_market_impressions AS INT64),
        CAST(weekly_market_impressions AS FLOAT64)
 FROM base
-WHERE brand = 'Happy Lolli'
+WHERE is_own_brand

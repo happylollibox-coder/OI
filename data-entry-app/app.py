@@ -6146,6 +6146,41 @@ def get_pipeline_logs():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/admin/mapping-coverage', methods=['GET'])
+def get_mapping_coverage():
+    """Mapping/enrichment coverage checks — 'are the conversions done?'
+
+    Reads V_ADMIN_MAPPING_COVERAGE: one row per check (campaign→strategy/family,
+    campaign→experiment, advertised ASIN→DIM_PRODUCT) with the gap count and the
+    offending entities. A gap means a spending campaign/ASIN is silently dropped
+    from strategy evaluation, family rollups, or profit math.
+    """
+    query = """
+    SELECT check_key, label, scope, total, mapped, gap, pct, critical, items
+    FROM `onyga-482313.OI.V_ADMIN_MAPPING_COVERAGE`
+    ORDER BY (gap > 0) DESC, critical DESC, gap DESC
+    """
+    try:
+        results = client.query(query).result()
+        checks = []
+        for row in results:
+            checks.append({
+                'check_key': row.check_key,
+                'label': row.label,
+                'scope': row.scope,
+                'total': row.total,
+                'mapped': row.mapped,
+                'gap': row.gap,
+                'pct': row.pct,
+                'critical': row.critical,
+                # NB: use row['items'] — row.items collides with the Row.items() method
+                'items': list(row['items']) if row['items'] else [],
+            })
+        return jsonify({'success': True, 'checks': checks})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/admin/refresh', methods=['POST'])
 def trigger_refresh():
     """Trigger the BigQuery orchestrator in the background"""
@@ -7364,6 +7399,41 @@ def research_term_ranks():
         return jsonify(out)
     except Exception as e:
         print(f"Error in research_term_ranks: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/recommendations', methods=['GET'])
+def research_recommendations():
+    """Current keyword recommendations for a family, grouped by rec_type.
+
+    Query: ?parent=<family>
+    Returns: { "EXACT": [...], "PHRASE": [...], "BROAD": [...], "BRAND": [...] }
+    Each row: {keyword, match_type, rank, overall_fit, market_sales, market_volume,
+               coverage_count, cluster_size, status, week_start}
+    Reads FACT_RESEARCH_RECOMMENDATIONS (same table the coacher reads).
+    """
+    parent = (request.args.get('parent') or '').strip()
+    if not parent:
+        return jsonify({'error': 'parent is required'}), 400
+    try:
+        sql = """
+        SELECT rec_type, match_type, keyword, rank, overall_fit, market_sales,
+               market_volume, coverage_count, cluster_size, status,
+               CAST(week_start AS STRING) AS week_start
+        FROM `onyga-482313`.OI.FACT_RESEARCH_RECOMMENDATIONS
+        WHERE parent_name = @parent AND status IN ('NEW','ADVERTISED')
+        ORDER BY rec_type, status, market_sales DESC NULLS LAST, rank DESC NULLS LAST
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('parent', 'STRING', parent)
+        ])
+        out = {'EXACT': [], 'PHRASE': [], 'BROAD': [], 'BRAND': []}
+        for row in client.query(sql, job_config=jc).result():
+            d = dict(row)
+            out.setdefault(d['rec_type'], []).append(d)
+        return jsonify(out)
+    except Exception as e:
+        print(f"Error in research_recommendations: {e}")
         return jsonify({'error': str(e)}), 500
 
 
