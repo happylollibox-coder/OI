@@ -287,6 +287,16 @@ views:
   - name: "V_UNIFIED_TRANSACTION_SOURCES"
     description: "Unified view of all financial transaction sources"
 
+  - name: "V_ADMIN_MAPPING_COVERAGE"
+    description: "Admin coverage panel — one row per mapping check (campaign→strategy/family, campaign→experiment, advertised ASIN→DIM_PRODUCT) with gap count and offending entities. A gap means a spending campaign/ASIN is silently dropped from strategy/family/profit math."
+    source_files: ["scripts/bigquery/views/V_ADMIN_MAPPING_COVERAGE.sql"]
+    dependencies:
+      - DIM_CAMPAIGN
+      - FACT_AMAZON_ADS
+      - DIM_EXPERIMENT_CAMPAIGN
+      - FACT_AMAZON_PERFORMANCE_DAILY
+      - DIM_PRODUCT
+
   - name: "V_ADS_COACH_CAMPAIGN"
     description: "Campaign-level aggregation of ads coach data"
     source_files: ["scripts/bigquery/views/V_ADS_COACH_CAMPAIGN.sql"]
@@ -485,6 +495,14 @@ views:
       - SRC_ACC_SQP_WEEKLY
       - DIM_PRODUCT
 
+  - name: "V_RESEARCH_RECOMMENDATION_CANDIDATES"
+    description: "Per family × term candidates for the 4 recommendation types (Exact/Phrase/Broad seeds/Brand), filtered to not-advertised (0 ads clicks in last 7 days). Consumed by SP_REFRESH_RESEARCH_RECOMMENDATIONS."
+    source_files: ["scripts/bigquery/views/V_RESEARCH_RECOMMENDATION_CANDIDATES.sql"]
+    dependencies:
+      - FACT_RESEARCH_RANKED
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+
   - name: "V_ASIN_OOS_DAYS"
     description: "Per-ASIN out-of-stock day counts (28d/7d) from FACT_INVENTORY_SNAPSHOT — feeds the clear-case gate"
     source_files: ["scripts/bigquery/views/V_ASIN_OOS_DAYS.sql"]
@@ -613,6 +631,12 @@ tables:
     description: "Materialized V_RESEARCH_RANKED — per family × term Research page scores, clustered by (parent_name, query_text) (CREATE OR REPLACE on refresh, no DDL file)"
     type: "fact"
     populated_by: "SP_REFRESH_RESEARCH_RANKED"
+
+  - name: "FACT_RESEARCH_RECOMMENDATIONS"
+    description: "Weekly net-new keyword recommendations per family × type (5/type/family/week), shared with the coacher. Read by the Research page and coacher."
+    type: "fact"
+    source_files: ["scripts/bigquery/tables/DE/FACT_RESEARCH_RECOMMENDATIONS.sql"]
+    populated_by: "SP_REFRESH_RESEARCH_RECOMMENDATIONS"
 
   - name: "FACT_AMAZON_ADS"
     description: "Amazon Ads performance facts"
@@ -982,6 +1006,10 @@ stored_procedures:
   - name: "SP_REFRESH_RESEARCH_RANKED"
     description: "Materialize V_RESEARCH_TERMS → FACT_RESEARCH_TERMS and V_RESEARCH_RANKED → FACT_RESEARCH_RANKED for the Research page (called by SP_ORCHESTRATE_DAILY_REFRESH)"
     source_files: ["scripts/bigquery/procedures/SP_REFRESH_RESEARCH_RANKED.sql"]
+
+  - name: "SP_REFRESH_RESEARCH_RECOMMENDATIONS"
+    description: "Weekly top-up of FACT_RESEARCH_RECOMMENDATIONS — broad co-occurrence clusters, phrase coverage, dedup vs history, 5 new/type/family/week, NEW→ADVERTISED status (called by SP_ORCHESTRATE_DAILY_REFRESH after SP_REFRESH_RESEARCH_RANKED)"
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_RESEARCH_RECOMMENDATIONS.sql"]
 
   - name: "SP_FACT_AMAZON_ADS"
     description: "Build FACT_AMAZON_ADS from staging"
