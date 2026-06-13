@@ -81,16 +81,18 @@ export function ResearchPage() {
 
   // ─── Load family info + reasoning when product changes ─────
   const fetchFamily = useCallback(async (signal?: AbortSignal) => {
-    const [fi, sr, rc] = await Promise.all([
-      apiFetch(`/api/research/family-info?family=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
-      apiFetch(`/api/research/segment-reasoning?family=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
-      apiFetch(`/api/research/recommendations?parent=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]);
-    if (!signal?.aborted) {
-      setFamilyInfo(fi);
-      setSegmentReasoning(sr);
-      setRecommendations(rc ? mapRecommendationsByType(rc) : null);
-    }
+    const get = (path: string) =>
+      apiFetch(path, { signal }).then(r => r.ok ? r.json() : null).catch(() => null);
+    // Set each piece of state as soon as its own request resolves — never let a
+    // slow/failing endpoint (segment-reasoning can be expensive) block the others
+    // via Promise.all, which previously hid the family + recommendations cards.
+    get(`/api/research/family-info?family=${encodeURIComponent(selectedProduct)}`)
+      .then(fi => { if (!signal?.aborted) setFamilyInfo(fi); });
+    get(`/api/research/recommendations?parent=${encodeURIComponent(selectedProduct)}`)
+      .then(rc => { if (!signal?.aborted) setRecommendations(rc ? mapRecommendationsByType(rc) : null); });
+    // awaited so onRefreshFamily() resolves after the (optional) reasoning lands
+    await get(`/api/research/segment-reasoning?family=${encodeURIComponent(selectedProduct)}`)
+      .then(sr => { if (!signal?.aborted) setSegmentReasoning(sr); });
   }, [selectedProduct]);
 
   useEffect(() => {

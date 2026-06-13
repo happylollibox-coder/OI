@@ -6181,6 +6181,149 @@ def get_mapping_coverage():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ═══════════════════════════════════════════════
+# CAMPAIGN MAPPING API
+# Read V_CAMPAIGN_MAPPING_STATUS and let an admin
+# approve/edit a campaign's family+strategy. Writes
+# through to DIM_EXPERIMENT_CAMPAIGN (+DIM_EXPERIMENT).
+# ═══════════════════════════════════════════════
+
+# Canonical option lists for the dropdowns (validated server-side on assign)
+MAPPING_FAMILIES = ['Bottle', 'Bunny', 'Fresh', 'LolliBall', 'LolliME', 'Lollibox']
+MAPPING_STRATEGIES = ['BRAND_DEFENSE', 'CATEGORY_CONQUEST', 'COMPETITOR_CONQUEST',
+                      'EXACT_BOOST', 'HUNTER', 'LOW_COST_DISCOVERY', 'PRODUCT_DEFENSE']
+# Human-readable strategy label for generated experiment names
+_STRATEGY_LABEL = {
+    'EXACT_BOOST': 'Exact Boost', 'HUNTER': 'Broad Hunter',
+    'LOW_COST_DISCOVERY': 'Auto Discovery', 'BRAND_DEFENSE': 'Brand Defense',
+    'PRODUCT_DEFENSE': 'Product Defense', 'COMPETITOR_CONQUEST': 'Competitor Conquest',
+    'CATEGORY_CONQUEST': 'Category Conquest',
+}
+
+
+@app.route('/api/admin/campaign-mapping', methods=['GET'])
+def get_campaign_mapping():
+    """List spending campaigns with their current mapping + source + suggestion."""
+    query = """
+    SELECT campaign_id, campaign_name, spend_60d,
+           current_experiment_id, current_experiment_name, current_strategy_id,
+           suggested_family, suggested_strategy, suggested_experiment_id,
+           confidence, source
+    FROM `onyga-482313.OI.V_CAMPAIGN_MAPPING_STATUS`
+    ORDER BY (source IN ('unmapped','default')) DESC, spend_60d DESC
+    """
+    try:
+        rows = [dict(r) for r in client.query(query).result()]
+        return jsonify({
+            'success': True,
+            'campaigns': rows,
+            'families': MAPPING_FAMILIES,
+            'strategies': MAPPING_STRATEGIES,
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _build_experiment_id(family, strategy, campaign_name):
+    """Generate experiment_id the same way SP_AUTO_ASSIGN_CAMPAIGNS does."""
+    import re
+    fam_token = re.sub(r'[^A-Z0-9]', '', family.upper())
+    theme = None
+    m = re.search(r'\((?:Boost, ?)?(.+?)\)', campaign_name or '')
+    if m:
+        theme = m.group(1)
+    theme_token = re.sub(r'[^A-Z0-9]', '_', (theme or 'GENERAL').upper())
+    return f"{fam_token}_{strategy}_{theme_token}", theme
+
+
+@app.route('/api/admin/campaign-mapping/assign', methods=['POST'])
+def assign_campaign_mapping():
+    """Approve a {campaign_id, family, strategy} mapping.
+
+    Resolves to an experiment_id (creating the experiment if needed), then
+    upserts DIM_EXPERIMENT_CAMPAIGN with a 'manual:' note. Idempotent.
+    """
+    data = request.get_json(force=True) or {}
+    campaign_id = data.get('campaign_id')
+    family = data.get('family')
+    strategy = data.get('strategy')
+
+    if not campaign_id or not family or not strategy:
+        return jsonify({'success': False, 'error': 'campaign_id, family and strategy are required'}), 400
+    if family not in MAPPING_FAMILIES:
+        return jsonify({'success': False, 'error': f'unknown family: {family}'}), 400
+    if strategy not in MAPPING_STRATEGIES:
+        return jsonify({'success': False, 'error': f'unknown strategy: {strategy}'}), 400
+
+    user_email = session.get('user', {}).get('email', 'dashboard')
+
+    try:
+        # Resolve the campaign name (for experiment_id theme + the EC row)
+        name_rows = list(client.query(
+            "SELECT campaign_name FROM `onyga-482313.OI.DIM_CAMPAIGN` "
+            "WHERE campaign_id = @cid AND is_current = TRUE LIMIT 1",
+            job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter('cid', 'STRING', campaign_id),
+            ])).result())
+        if not name_rows:
+            return jsonify({'success': False, 'error': 'campaign not found'}), 404
+        campaign_name = name_rows[0].campaign_name
+
+        experiment_id, theme = _build_experiment_id(family, strategy, campaign_name)
+        experiment_name = f"{family} - {_STRATEGY_LABEL.get(strategy, strategy)}" + (f" ({theme})" if theme else "")
+        note = f"manual: {user_email} {date.today().isoformat()}"
+
+        # 1. Create the experiment if it doesn't exist (idempotent)
+        client.query(
+            """
+            INSERT INTO `onyga-482313.OI.DIM_EXPERIMENT`
+              (experiment_id, experiment_name, description, start_date, baseline_days,
+               status, strategy_id, lifecycle_stage, season_context, created_at, updated_at)
+            SELECT @eid, @ename, @desc, CURRENT_DATE(), 14,
+                   'ACTIVE', @strategy, 'ACTIVE', 'EVERGREEN', CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()
+            FROM (SELECT 1)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM `onyga-482313.OI.DIM_EXPERIMENT` WHERE experiment_id = @eid
+            )
+            """,
+            job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter('eid', 'STRING', experiment_id),
+                bigquery.ScalarQueryParameter('ename', 'STRING', experiment_name),
+                bigquery.ScalarQueryParameter('desc', 'STRING', f'Manually mapped via Admin on {date.today().isoformat()}'),
+                bigquery.ScalarQueryParameter('strategy', 'STRING', strategy),
+            ])).result()
+
+        # 2. Upsert DIM_EXPERIMENT_CAMPAIGN (MERGE: update if the campaign already has a row)
+        client.query(
+            """
+            MERGE `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` T
+            USING (SELECT @cid AS campaign_id) S
+            ON T.campaign_id = S.campaign_id
+            WHEN MATCHED THEN UPDATE SET
+              experiment_id = @eid, campaign_name = @cname, notes = @note
+            WHEN NOT MATCHED THEN INSERT (experiment_id, campaign_id, campaign_name, notes)
+              VALUES (@eid, @cid, @cname, @note)
+            """,
+            job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter('cid', 'STRING', campaign_id),
+                bigquery.ScalarQueryParameter('eid', 'STRING', experiment_id),
+                bigquery.ScalarQueryParameter('cname', 'STRING', campaign_name),
+                bigquery.ScalarQueryParameter('note', 'STRING', note),
+            ])).result()
+
+        clear_data_cache()
+        return jsonify({
+            'success': True,
+            'campaign_id': campaign_id,
+            'experiment_id': experiment_id,
+            'strategy': strategy,
+            'family': family,
+            'source': 'manual',
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/admin/refresh', methods=['POST'])
 def trigger_refresh():
     """Trigger the BigQuery orchestrator in the background"""
@@ -7781,9 +7924,13 @@ def segment_reasoning():
               t.search_term,
               ARRAY_AGG(ptk.product_type ORDER BY ptk.priority ASC, LENGTH(ptk.keyword) DESC LIMIT 1)[OFFSET(0)] AS product_type
             FROM (
-              SELECT DISTINCT search_term
-              FROM `onyga-482313`.OI.FACT_AMAZON_ADS
-              WHERE Ads_clicks > 0
+              -- only THIS family's ad search terms (not the whole account) —
+              -- the unbounded cross join blew BigQuery's per-statement CPU guard
+              SELECT DISTINCT a2.search_term
+              FROM `onyga-482313`.OI.FACT_AMAZON_ADS a2
+              JOIN `onyga-482313`.OI.DIM_PRODUCT p2
+                ON COALESCE(a2.most_advertised_asin_impressions, a2.ASIN_BY_CAMPAIGN_NAME) = p2.asin
+              WHERE a2.Ads_clicks > 0 AND p2.parent_name = @family AND p2.is_active = true
             ) t
             CROSS JOIN `onyga-482313.OI.DE_PRODUCT_TYPE_KEYWORDS` ptk
             WHERE REGEXP_CONTAINS(LOWER(t.search_term), CONCAT(r'(?:^|\\W)', ptk.keyword, r'(?:\\W|$)'))
