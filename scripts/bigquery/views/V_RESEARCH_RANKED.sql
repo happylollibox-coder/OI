@@ -273,10 +273,25 @@ bucket_median AS (
   GROUP BY parent_name, price_bucket
 ),
 
+-- Which curve each family uses: its OWN if it has one, else the global '_ALL'
+-- (new products like Bunny have no own curve — mirrors the frontend card's
+-- hasOwn ? family : '_ALL' fallback, so est_cps populates for them too).
+curve_src AS (
+  SELECT
+    fs.parent_name,
+    IF(own.parent_name IS NOT NULL, fs.parent_name, '_ALL') AS curve_parent
+  FROM family_segments fs
+  LEFT JOIN (
+    SELECT DISTINCT parent_name
+    FROM `onyga-482313`.OI.V_CONVERSION_CURVE
+    WHERE holiday_name = '_ALL' AND parent_name != '_ALL'
+  ) own ON own.parent_name = fs.parent_name
+),
 curve_lookup AS (
-  SELECT parent_name, price_bucket, clicks_per_sale
-  FROM `onyga-482313`.OI.V_CONVERSION_CURVE
-  WHERE holiday_name = '_ALL'
+  SELECT cs.parent_name, cc.price_bucket, cc.clicks_per_sale
+  FROM curve_src cs
+  JOIN `onyga-482313`.OI.V_CONVERSION_CURVE cc
+    ON cc.holiday_name = '_ALL' AND cc.parent_name = cs.curve_parent
 ),
 
 -- Est. CPS v2: family curve anchored, adjusted by the term's own market

@@ -603,6 +603,30 @@ export function ResultsTable({
                   );
                 })}
               </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-border/40 bg-white/[0.03] font-semibold text-heading">
+                  {/* Search Term → Week (18 cols): label */}
+                  <td colSpan={18} className="px-2 py-2 pl-4 text-left text-[10px] uppercase tracking-wide text-muted sticky left-0 bg-surface/95 backdrop-blur z-10">
+                    Total · {section.rows.length} terms
+                  </td>
+                  {/* Wk Vol. */}
+                  <td className="px-2 py-2 text-right tabular-nums">{fShort(section.rows.reduce((s, r) => s + (r.weekly_market_impressions || 0), 0))}</td>
+                  {/* Wk Purch. */}
+                  <td className="px-2 py-2 text-right tabular-nums">{fmt(section.rows.reduce((s, r) => s + (r.weekly_market_purchases || 0), 0))}</td>
+                  {/* Wk CVR% / Wk MD Purch / Wk MD Click — not summable */}
+                  <td /><td /><td />
+                  {/* Fam. Impr. */}
+                  <td className="px-2 py-2 text-right tabular-nums">{fShort(section.rows.reduce((s, r) => s + (r.family_impressions || 0), 0))}</td>
+                  {/* Fam. Purch. */}
+                  <td className="px-2 py-2 text-right tabular-nums">{fmt(section.rows.reduce((s, r) => s + (r.family_purchases || 0), 0))}</td>
+                  {/* Brand Impr. */}
+                  <td className="px-2 py-2 text-right tabular-nums">{fShort(section.rows.reduce((s, r) => s + (r.brand_impressions || 0), 0))}</td>
+                  {/* Brand Purch. */}
+                  <td className="px-2 py-2 text-right tabular-nums">{fmt(section.rows.reduce((s, r) => s + (r.brand_purchases || 0), 0))}</td>
+                  {/* Brand Show% → Est. $/Sale (10 cols): not summable */}
+                  <td colSpan={10} />
+                </tr>
+              </tfoot>
             </table>
           </div>
         </div>
