@@ -31,6 +31,7 @@ export function mapResearchRow(t: Record<string, unknown>): ResearchRow {
     holiday: (t.holiday as string) ?? null,
     cpc_12m: num(t.cpc_12m),
     cpc_30d: num(t.cpc_30d),
+    ads_cost_7d: num(t.ads_cost_7d),
     product_type: (t.product_type as string) ?? null,
     is_brand_term: Boolean(t.is_brand_term),
     brand: (t.brand as string) ?? null,

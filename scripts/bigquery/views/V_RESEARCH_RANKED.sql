@@ -207,6 +207,8 @@ ads_metrics AS (
     SUM(CASE WHEN a.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) THEN a.Ads_units END) AS ads_units_30d,
     SUM(CASE WHEN a.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH) THEN a.Ads_units END) AS ads_units_12m,
     SUM(a.Ads_orders) AS ads_family_orders,
+    -- 7-day ad spend (helps the coacher tell new vs existing-needs-bid-raise)
+    SUM(CASE WHEN a.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) THEN a.Ads_cost END) AS ads_cost_7d,
     -- ROAS
     SAFE_DIVIDE(
       SUM(CASE WHEN a.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) THEN a.Ads_sales END),
@@ -435,6 +437,7 @@ scored AS (
     COALESCE(am.ads_units_30d, 0) AS ads_units_30d,
     COALESCE(am.ads_units_12m, 0) AS ads_units_12m,
     COALESCE(am.ads_family_orders, 0) AS ads_family_orders,
+    am.ads_cost_7d,
     am.roas_30d,
     am.cvr_christmas,
     am.cvr_easter,

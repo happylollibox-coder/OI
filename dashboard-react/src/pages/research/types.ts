@@ -25,6 +25,7 @@ export interface ResearchRow {
   holiday: string | null;
   cpc_12m: number | null;
   cpc_30d: number | null;
+  ads_cost_7d: number | null;
   product_type: string | null;
   is_brand_term: boolean;
   brand: string | null;

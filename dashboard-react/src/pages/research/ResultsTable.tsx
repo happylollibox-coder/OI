@@ -215,6 +215,7 @@ export function ResultsTable({
                   <SortHeader label="Brand Show%" colKey="show_rate_pct" className="text-right" tooltip="Your share of impressions: brand impressions / market impressions" />
                   <SortHeader label="CPC 12m" colKey="cpc_12m" className="text-right" tooltip="Your average cost-per-click for this term over the last 12 months (from Ads data)" />
                   <SortHeader label="CPC 30d" colKey="cpc_30d" className="text-right" tooltip="Your average cost-per-click for this term over the last 30 days (from Ads data)" />
+                  <SortHeader label="Ads Cost 7d" colKey="ads_cost_7d" className="text-right" tooltip="Your ad spend on this term over the last 7 days (this family). $0 = effectively not running it." />
                   <SortHeader label="CVR 12m" colKey="units_cvr_12m" className="text-right" tooltip="Ads unit conversion rate (units sold / clicks) over the last 12 months" />
                   <SortHeader label="CVR 30d" colKey="units_cvr_30d" className="text-right" tooltip="Ads unit conversion rate (units sold / clicks) over the last 30 days" />
                   <SortHeader label="ROAS 30d" colKey="roas_30d" className="text-right" tooltip="Return on ad spend (sales / spend) over the last 30 days" />
@@ -498,6 +499,11 @@ export function ResultsTable({
                           {row.ads_family_orders > 0 && row.cpc_30d != null ? fM(row.cpc_30d) : '--'}
                         </td>
 
+                        {/* Ads Cost 7d */}
+                        <td className="px-2 py-2 text-right text-muted tabular-nums">
+                          {row.ads_cost_7d != null && row.ads_cost_7d > 0 ? fM(row.ads_cost_7d) : '--'}
+                        </td>
+
                         {/* Units CVR 12m */}
                         <td className="px-2 py-2 text-right text-muted tabular-nums">
                           {row.ads_family_orders > 0 && row.units_cvr_12m != null ? fP(row.units_cvr_12m * 100) : '--'}
@@ -623,8 +629,12 @@ export function ResultsTable({
                   <td className="px-2 py-2 text-right tabular-nums">{fShort(section.rows.reduce((s, r) => s + (r.brand_impressions || 0), 0))}</td>
                   {/* Brand Purch. */}
                   <td className="px-2 py-2 text-right tabular-nums">{fmt(section.rows.reduce((s, r) => s + (r.brand_purchases || 0), 0))}</td>
-                  {/* Brand Show% → Est. $/Sale (10 cols): not summable */}
-                  <td colSpan={10} />
+                  {/* Brand Show% / CPC 12m / CPC 30d (3 cols): not summable */}
+                  <td colSpan={3} />
+                  {/* Ads Cost 7d */}
+                  <td className="px-2 py-2 text-right tabular-nums">{fM(section.rows.reduce((s, r) => s + (r.ads_cost_7d || 0), 0))}</td>
+                  {/* CVR 12m → Est. $/Sale (7 cols): not summable */}
+                  <td colSpan={7} />
                 </tr>
               </tfoot>
             </table>
