@@ -1480,6 +1480,42 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 20.7: Research Recommendations (depends on SP_REFRESH_RESEARCH_RANKED)
+  -- Weekly top-up of FACT_RESEARCH_RECOMMENDATIONS (5 new/type/family/week)
+  -- ============================================
+  SET procedure_name = 'SP_REFRESH_RESEARCH_RECOMMENDATIONS';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_REFRESH_RESEARCH_RECOMMENDATIONS`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'OK %s completed successfully in %d seconds',
+      procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)
+    ) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'FAIL %s failed: %s (Error at %s)',
+      procedure_name,
+      @@error.message,
+      CAST(CURRENT_TIMESTAMP() AS STRING)
+    ) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 20.4: Materialize Demand Forecast (speeds up V_PLAN_FORECAST)
   -- ============================================
   SET procedure_name = 'SP_LOAD_FACT_FORECAST_DEMAND';
