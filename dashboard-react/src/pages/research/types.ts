@@ -164,6 +164,22 @@ export interface TermRank {
 
 export type TermRanksMap = Record<string, TermRank[]>;
 
+export interface RecommendationRow {
+  rec_type: 'EXACT' | 'PHRASE' | 'BROAD' | 'BRAND';
+  match_type: 'EXACT' | 'PHRASE' | 'BROAD';
+  keyword: string;
+  rank: number | null;
+  overall_fit: number | null;
+  market_sales: number | null;
+  market_volume: number | null;
+  coverage_count: number | null;
+  cluster_size: number | null;
+  status: 'NEW' | 'ADVERTISED' | 'DISMISSED';
+  week_start: string | null;
+}
+
+export type RecommendationsByType = Record<'EXACT' | 'PHRASE' | 'BROAD' | 'BRAND', RecommendationRow[]>;
+
 export const SEASONS = [
   { key: '_ALL', label: 'All Year' },
   { key: 'Off-Season', label: 'Off-Season' },

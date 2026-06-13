@@ -7,10 +7,13 @@ import {
   SEASONS,
   type ResearchRow, type ConversionCurveRow, type SortKey, type SortDir,
   type ProductInfo, type FamilyInfo, type SegmentReasoning, type TermRanksMap,
+  type RecommendationsByType,
 } from './research/types';
 import { mapResearchRow } from './research/mapRow';
+import { mapRecommendationsByType } from './research/mapRecommendation';
 import { FamilyTabs } from './research/FamilyTabs';
 import { FamilyInfoCard } from './research/FamilyInfoCard';
+import { RecommendationsCard } from './research/RecommendationsCard';
 import { ConversionCurveCard } from './research/ConversionCurveCard';
 import { ResultsTable } from './research/ResultsTable';
 import { apiFetch } from '../utils/apiFetch';
@@ -44,6 +47,7 @@ export function ResearchPage() {
   const [filterBrand, setFilterBrand] = useState<string>('');
   const [familyInfo, setFamilyInfo] = useState<FamilyInfo | null>(null);
   const [segmentReasoning, setSegmentReasoning] = useState<SegmentReasoning | null>(null);
+  const [recommendations, setRecommendations] = useState<RecommendationsByType | null>(null);
 
   // Sorting + pagination
   const [sortKey, setSortKey] = useState<SortKey>('rank');
@@ -77,18 +81,20 @@ export function ResearchPage() {
 
   // ─── Load family info + reasoning when product changes ─────
   const fetchFamily = useCallback(async (signal?: AbortSignal) => {
-    const [fi, sr] = await Promise.all([
+    const [fi, sr, rc] = await Promise.all([
       apiFetch(`/api/research/family-info?family=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
       apiFetch(`/api/research/segment-reasoning?family=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
+      apiFetch(`/api/research/recommendations?parent=${encodeURIComponent(selectedProduct)}`, { signal }).then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     if (!signal?.aborted) {
       setFamilyInfo(fi);
       setSegmentReasoning(sr);
+      setRecommendations(rc ? mapRecommendationsByType(rc) : null);
     }
   }, [selectedProduct]);
 
   useEffect(() => {
-    if (!selectedProduct) { setFamilyInfo(null); setSegmentReasoning(null); return; }
+    if (!selectedProduct) { setFamilyInfo(null); setSegmentReasoning(null); setRecommendations(null); return; }
     const controller = new AbortController();
     fetchFamily(controller.signal);
     return () => controller.abort();
@@ -395,6 +401,10 @@ export function ResearchPage() {
             segmentReasoning={segmentReasoning}
             onRefreshFamily={() => fetchFamily()}
           />
+        )}
+
+        {selectedProduct && (
+          <RecommendationsCard recs={recommendations} selectedProduct={selectedProduct} />
         )}
 
         {/* ─── Season Selector ─── */}
