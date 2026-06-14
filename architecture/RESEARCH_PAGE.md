@@ -147,9 +147,16 @@ ADVERTISED rows grouped by rec_type. See the Recommendations section below.
 ## Recommendations
 
 Per family, 4 types of net-new keyword recommendations for terms we are **not
-advertising**. "Not advertised" = **0 ads clicks in the last 7 days** for the family's
-ASINs (`FACT_AMAZON_ADS`, joined via `ASIN_BY_CAMPAIGN_NAME → DIM_PRODUCT.parent_name`);
-the coacher decides net-new vs bid-raise. Own brand = `brand = 'Happy Lolli'`.
+advertising as a keyword of that match type**. "Not advertised" is KEYWORD-based and
+per match type (changed 2026-06-13, was search-term-clicks): a term is excluded from a
+type only if we already run a keyword of that match type on it — i.e.
+`exact_kw_cost_7d > 0` (Exact), `phrase_kw_cost_7d > 0` (Phrase / Brand), or
+`broad_kw_cost_7d > 0` (Broad). These come from `V_RESEARCH_RANKED.keyword_cost_7d`
+(`FACT_AMAZON_ADS.targeting` text = term, by `targeting_type`, last 7d; Automatic/ASIN/
+Category excluded). A term served only via broad/auto with no dedicated keyword is
+therefore still recommendable — that's the "graduate to its own keyword" signal. The
+per-search-term `ads_cost_7d` (any keyword that served the query) is shown as a table
+column but is NOT the gate. Own brand = `brand = 'Happy Lolli'`.
 
 | Type | match | filter | keyword | ranked by |
 |---|---|---|---|---|

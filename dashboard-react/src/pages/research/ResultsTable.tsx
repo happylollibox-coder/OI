@@ -215,7 +215,10 @@ export function ResultsTable({
                   <SortHeader label="Brand Show%" colKey="show_rate_pct" className="text-right" tooltip="Your share of impressions: brand impressions / market impressions" />
                   <SortHeader label="CPC 12m" colKey="cpc_12m" className="text-right" tooltip="Your average cost-per-click for this term over the last 12 months (from Ads data)" />
                   <SortHeader label="CPC 30d" colKey="cpc_30d" className="text-right" tooltip="Your average cost-per-click for this term over the last 30 days (from Ads data)" />
-                  <SortHeader label="Ads Cost 7d" colKey="ads_cost_7d" className="text-right" tooltip="Your ad spend on this term over the last 7 days (this family). $0 = effectively not running it." />
+                  <SortHeader label="Ads Cost 7d" colKey="ads_cost_7d" className="text-right" tooltip="Your ad spend on this SEARCH TERM over the last 7 days (any keyword that served it, this family). $0 = not served recently." />
+                  <SortHeader label="Exact KW $7d" colKey="exact_kw_cost_7d" className="text-right" tooltip="7-day spend on an EXACT keyword we bid on whose text = this term. $0 = no exact keyword (Exact recommendation candidate)." />
+                  <SortHeader label="Phrase KW $7d" colKey="phrase_kw_cost_7d" className="text-right" tooltip="7-day spend on a PHRASE keyword we bid on whose text = this term. $0 = no phrase keyword." />
+                  <SortHeader label="Broad KW $7d" colKey="broad_kw_cost_7d" className="text-right" tooltip="7-day spend on a BROAD keyword we bid on whose text = this term. $0 = no broad keyword." />
                   <SortHeader label="CVR 12m" colKey="units_cvr_12m" className="text-right" tooltip="Ads unit conversion rate (units sold / clicks) over the last 12 months" />
                   <SortHeader label="CVR 30d" colKey="units_cvr_30d" className="text-right" tooltip="Ads unit conversion rate (units sold / clicks) over the last 30 days" />
                   <SortHeader label="ROAS 30d" colKey="roas_30d" className="text-right" tooltip="Return on ad spend (sales / spend) over the last 30 days" />
@@ -499,9 +502,24 @@ export function ResultsTable({
                           {row.ads_family_orders > 0 && row.cpc_30d != null ? fM(row.cpc_30d) : '--'}
                         </td>
 
-                        {/* Ads Cost 7d */}
+                        {/* Ads Cost 7d (search term) */}
                         <td className="px-2 py-2 text-right text-muted tabular-nums">
                           {row.ads_cost_7d != null && row.ads_cost_7d > 0 ? fM(row.ads_cost_7d) : '--'}
+                        </td>
+
+                        {/* Exact KW $7d */}
+                        <td className="px-2 py-2 text-right text-muted tabular-nums">
+                          {row.exact_kw_cost_7d != null && row.exact_kw_cost_7d > 0 ? fM(row.exact_kw_cost_7d) : '--'}
+                        </td>
+
+                        {/* Phrase KW $7d */}
+                        <td className="px-2 py-2 text-right text-muted tabular-nums">
+                          {row.phrase_kw_cost_7d != null && row.phrase_kw_cost_7d > 0 ? fM(row.phrase_kw_cost_7d) : '--'}
+                        </td>
+
+                        {/* Broad KW $7d */}
+                        <td className="px-2 py-2 text-right text-muted tabular-nums">
+                          {row.broad_kw_cost_7d != null && row.broad_kw_cost_7d > 0 ? fM(row.broad_kw_cost_7d) : '--'}
                         </td>
 
                         {/* Units CVR 12m */}
@@ -633,6 +651,10 @@ export function ResultsTable({
                   <td colSpan={3} />
                   {/* Ads Cost 7d */}
                   <td className="px-2 py-2 text-right tabular-nums">{fM(section.rows.reduce((s, r) => s + (r.ads_cost_7d || 0), 0))}</td>
+                  {/* Exact / Phrase / Broad KW $7d */}
+                  <td className="px-2 py-2 text-right tabular-nums">{fM(section.rows.reduce((s, r) => s + (r.exact_kw_cost_7d || 0), 0))}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{fM(section.rows.reduce((s, r) => s + (r.phrase_kw_cost_7d || 0), 0))}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{fM(section.rows.reduce((s, r) => s + (r.broad_kw_cost_7d || 0), 0))}</td>
                   {/* CVR 12m → Est. $/Sale (7 cols): not summable */}
                   <td colSpan={7} />
                 </tr>

@@ -1,24 +1,24 @@
 -- =============================================
 -- V_RESEARCH_RECOMMENDATION_CANDIDATES
--- Per family × term candidates for the 4 recommendation types, filtered to
--- "not advertised" (0 ads clicks in last 7 days for the family). Broad rows are
--- seeds only — SP_REFRESH_RESEARCH_RECOMMENDATIONS computes the co-occurrence
--- cluster + >500-sales filter and Phrase coverage. SOP: architecture/RESEARCH_PAGE.md
+-- Per family × term candidates for the 4 recommendation types. "Not advertised"
+-- is now KEYWORD-based and per match type: a term is excluded from a type only
+-- if we already run a keyword of THAT match type on it (targeting text = term,
+-- spend in last 7d). A term served only via broad/auto with no dedicated keyword
+-- is still recommendable. Broad rows are seeds only — SP_REFRESH_RESEARCH_RECOMMENDATIONS
+-- computes the co-occurrence cluster + >500-sales filter and Phrase coverage.
+-- SOP: architecture/RESEARCH_PAGE.md
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313`.OI.V_RESEARCH_RECOMMENDATION_CANDIDATES AS
 
-WITH advertised_7d AS (
-  SELECT DISTINCT p.parent_name, LOWER(a.search_term) AS query_text
-  FROM `onyga-482313`.OI.FACT_AMAZON_ADS a
-  JOIN `onyga-482313`.OI.DIM_PRODUCT p ON a.ASIN_BY_CAMPAIGN_NAME = p.asin
-  WHERE a.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
-    AND a.Ads_clicks > 0
-),
-base AS (
+WITH base AS (
   SELECT r.parent_name, r.query_text, r.rank, r.overall_fit,
          r.weekly_market_impressions,
          r.holiday, r.is_holiday_active,
          ARRAY_LENGTH(SPLIT(TRIM(r.query_text), ' ')) AS word_count,
+         -- per-match-type keyword spend in last 7d (0 = we don't run that keyword)
+         COALESCE(r.exact_kw_cost_7d, 0)  AS exact_kw_cost_7d,
+         COALESCE(r.phrase_kw_cost_7d, 0) AS phrase_kw_cost_7d,
+         COALESCE(r.broad_kw_cost_7d, 0)  AS broad_kw_cost_7d,
          -- real market demand: terms with no market purchases over 104w are
          -- phantoms whose rank is inflated purely by seg_fit (purchase_rank NULL
          -- → rank collapses to overall_fit). Recommendations must be searchable.
@@ -29,43 +29,44 @@ base AS (
           OR LOWER(r.query_text) LIKE '%happy lolli%'
           OR LOWER(r.query_text) LIKE '%happylolli%') AS is_own_brand
   FROM `onyga-482313`.OI.FACT_RESEARCH_RANKED r
-  LEFT JOIN advertised_7d ad
-    ON ad.parent_name = r.parent_name AND ad.query_text = LOWER(r.query_text)
   LEFT JOIN `onyga-482313`.OI.FACT_RESEARCH_TERMS t
     ON LOWER(t.query_text) = LOWER(r.query_text)
-  WHERE ad.query_text IS NULL              -- not advertised
-    AND r.query_text != 'OTHER'
+  WHERE r.query_text != 'OTHER'
     -- off-season holiday terms are rank 0 / not actionable now
     AND (r.holiday IS NULL OR r.is_holiday_active)
 )
--- EXACT: not own brand, real demand, rank >= 75
+-- EXACT: not own brand, real demand, rank >= 75, no EXACT keyword running
 SELECT parent_name, query_text, 'EXACT' AS rec_type, 'EXACT' AS match_type,
        query_text AS keyword, rank, overall_fit,
        CAST(weekly_market_impressions AS INT64) AS market_volume,
        rank AS sort_metric
 FROM base
 WHERE NOT is_own_brand AND market_purchases > 0 AND rank >= 75
+  AND exact_kw_cost_7d = 0
 UNION ALL
--- PHRASE: not own brand, real demand, rank >= 75, >= 3 words
+-- PHRASE: not own brand, real demand, rank >= 75, >= 3 words, no PHRASE keyword running
 SELECT parent_name, query_text, 'PHRASE', 'PHRASE',
        query_text, rank, overall_fit,
        CAST(weekly_market_impressions AS INT64),
        rank
 FROM base
 WHERE NOT is_own_brand AND market_purchases > 0 AND rank >= 75 AND word_count >= 3
+  AND phrase_kw_cost_7d = 0
 UNION ALL
--- BROAD seeds: not own brand, fit >= 90 (cluster sales filter in SP)
+-- BROAD seeds: not own brand, fit >= 90, no BROAD keyword running (cluster filter in SP)
 SELECT parent_name, query_text, 'BROAD', 'BROAD',
        query_text, rank, overall_fit,
        CAST(weekly_market_impressions AS INT64),
        overall_fit
 FROM base
 WHERE NOT is_own_brand AND overall_fit >= 90
+  AND broad_kw_cost_7d = 0
 UNION ALL
--- BRAND defense: own brand, real demand; ordered by market volume
+-- BRAND defense: own brand, real demand; phrase match → gate on PHRASE keyword spend
 SELECT parent_name, query_text, 'BRAND', 'PHRASE',
        query_text, rank, overall_fit,
        CAST(weekly_market_impressions AS INT64),
        CAST(weekly_market_impressions AS FLOAT64)
 FROM base
 WHERE is_own_brand AND market_purchases > 0
+  AND phrase_kw_cost_7d = 0

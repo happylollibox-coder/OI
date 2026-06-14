@@ -26,6 +26,9 @@ export interface ResearchRow {
   cpc_12m: number | null;
   cpc_30d: number | null;
   ads_cost_7d: number | null;
+  exact_kw_cost_7d: number | null;
+  phrase_kw_cost_7d: number | null;
+  broad_kw_cost_7d: number | null;
   product_type: string | null;
   is_brand_term: boolean;
   brand: string | null;

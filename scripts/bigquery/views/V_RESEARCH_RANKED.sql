@@ -29,6 +29,10 @@
 --   ads_cps          1/CVR (30d if >3 units, else 12m)
 --   family_purchases/family_clicks/family_impressions
 --                    this family's SQP performance for the term (104w)
+--   ads_cost_7d      7-day ad spend on this SEARCH TERM (any keyword that served it)
+--   exact_kw_cost_7d / phrase_kw_cost_7d / broad_kw_cost_7d
+--                    7-day spend on the KEYWORD we bid on (targeting text = term)
+--                    by match type. Drives the recommendation "already a keyword" gate.
 --
 -- Dependencies:
 --   FN_EXTRACT_SEGMENTS, V_SQP_QUERY_WEEKLY, FACT_AMAZON_ADS, FACT_SEARCH_QUERY,
@@ -228,6 +232,28 @@ ads_metrics AS (
     AND p.is_active = true
     AND p.parent_name IS NOT NULL
   GROUP BY p.parent_name, a.search_term
+),
+
+-- ═══ 4b. Per-KEYWORD 7-day spend by match type (keyed on what we BID on,
+-- i.e. targeting text — NOT the customer search_term). Powers the
+-- Exact/Phrase/Broad keyword-cost columns + the recommendation gates.
+-- Non-keyword targeting (Automatic / ASIN / Category) is excluded.
+keyword_cost_7d AS (
+  SELECT
+    p.parent_name,
+    LOWER(a.targeting) AS kw,
+    SUM(CASE WHEN UPPER(a.targeting_type) = 'EXACT'  THEN a.Ads_cost END) AS exact_kw_cost_7d,
+    SUM(CASE WHEN UPPER(a.targeting_type) = 'PHRASE' THEN a.Ads_cost END) AS phrase_kw_cost_7d,
+    SUM(CASE WHEN UPPER(a.targeting_type) = 'BROAD'  THEN a.Ads_cost END) AS broad_kw_cost_7d
+  FROM `onyga-482313`.OI.FACT_AMAZON_ADS a
+  JOIN `onyga-482313`.OI.DIM_PRODUCT p
+    ON a.ASIN_BY_CAMPAIGN_NAME = p.asin
+  WHERE a.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+    AND a.targeting IS NOT NULL
+    AND UPPER(a.targeting_type) IN ('EXACT','PHRASE','BROAD')
+    AND p.is_active = true
+    AND p.parent_name IS NOT NULL
+  GROUP BY p.parent_name, kw
 ),
 
 -- ═══ 5. Est. CPS v2 (market model) ═══
@@ -438,6 +464,9 @@ scored AS (
     COALESCE(am.ads_units_12m, 0) AS ads_units_12m,
     COALESCE(am.ads_family_orders, 0) AS ads_family_orders,
     am.ads_cost_7d,
+    kc.exact_kw_cost_7d,
+    kc.phrase_kw_cost_7d,
+    kc.broad_kw_cost_7d,
     am.roas_30d,
     am.cvr_christmas,
     am.cvr_easter,
@@ -520,6 +549,8 @@ scored AS (
     ON sf.parent_name = fs.parent_name AND sf.query_text = st.query_text
   LEFT JOIN ads_metrics am
     ON am.parent_name = fs.parent_name AND LOWER(am.search_term) = LOWER(st.query_text)
+  LEFT JOIN keyword_cost_7d kc
+    ON kc.parent_name = fs.parent_name AND kc.kw = LOWER(st.query_text)
   LEFT JOIN est_v2 ec
     ON ec.parent_name = fs.parent_name AND ec.query_text = st.query_text
   LEFT JOIN family_sqp fq

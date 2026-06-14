@@ -14,19 +14,20 @@ CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_REFRESH_RESEARCH_RECOMMENDATIONS
 BEGIN
   DECLARE wk DATE DEFAULT DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY));
 
-  -- ── Step A: status maintenance — terms now getting clicks are ADVERTISED
-  CREATE TEMP TABLE _adv AS
-  SELECT DISTINCT p.parent_name, LOWER(a.search_term) AS query_text
-  FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
-  JOIN `onyga-482313.OI.DIM_PRODUCT` p ON a.ASIN_BY_CAMPAIGN_NAME = p.asin
-  WHERE a.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) AND a.Ads_clicks > 0;
-
+  -- ── Step A: status maintenance — a rec is ADVERTISED once we run a keyword of
+  -- its own match type on it (per-type 7-day keyword spend, from FACT_RESEARCH_RANKED).
   UPDATE `onyga-482313.OI.FACT_RESEARCH_RECOMMENDATIONS` t
   SET status = 'ADVERTISED'
-  FROM _adv
+  FROM `onyga-482313.OI.FACT_RESEARCH_RANKED` rr
   WHERE t.status = 'NEW'
-    AND t.parent_name = _adv.parent_name
-    AND LOWER(t.keyword) = _adv.query_text;
+    AND rr.parent_name = t.parent_name
+    AND LOWER(rr.query_text) = LOWER(t.keyword)
+    AND (
+      (t.rec_type = 'EXACT'  AND COALESCE(rr.exact_kw_cost_7d, 0)  > 0) OR
+      (t.rec_type = 'PHRASE' AND COALESCE(rr.phrase_kw_cost_7d, 0) > 0) OR
+      (t.rec_type = 'BRAND'  AND COALESCE(rr.phrase_kw_cost_7d, 0) > 0) OR
+      (t.rec_type = 'BROAD'  AND COALESCE(rr.broad_kw_cost_7d, 0)  > 0)
+    );
 
   -- ── Step B: Broad clusters (fit>=90 seeds WITH market demand, bounded expansion)
   CREATE TEMP TABLE _broad_seeds AS
@@ -144,12 +145,11 @@ BEGIN
     ON bc.parent_name = c.parent_name AND LOWER(bc.seed) = LOWER(c.query_text)
   LEFT JOIN _phrase_cov pc
     ON pc.parent_name = c.parent_name AND pc.query_text = c.query_text
-  LEFT JOIN _adv
-    ON _adv.parent_name = c.parent_name AND _adv.query_text = LOWER(c.keyword)
   LEFT JOIN _hist h
     ON h.parent_name = c.parent_name AND h.rec_type = c.rec_type AND h.keyword = LOWER(c.keyword)
-  WHERE _adv.query_text IS NULL                                   -- not advertised now
-    AND h.keyword IS NULL                                          -- never re-recommend
+  -- "not advertised" (no matching-type keyword spend) is already enforced by the
+  -- candidate view's per-type gate, so no search-term anti-join here.
+  WHERE h.keyword IS NULL                                          -- never re-recommend
     AND (c.rec_type != 'BROAD' OR bc.cluster_sales > 500);         -- Broad cluster threshold
 
   -- ── Step E: per family x type, insert up to (5 - already NEW this week)
