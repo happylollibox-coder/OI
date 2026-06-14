@@ -228,6 +228,21 @@ export function DecisionScorecard() {
             + (bidChange ? ` · ${r.new_budget != null ? 'budget' : 'bid'} ${bidChange}` : '')
             + (r.coach_mode ? ` · ${r.coach_mode}` : '')
             + ` · ${verdictSentence(r)}`;
+          const prevWk = r.pre_net_profit / 2;
+          const isEarn = r.expected_impact_kind === 'earn';
+          const statusLine =
+            r.target_status === 'TARGET_MET' ? 'MET — actual met or beat the promise.'
+            : r.target_status === 'BELOW_TARGET' ? 'BELOW — actual came in under the promise.'
+            : `TOO EARLY — needs ≥3 settled post-change days (2-day attribution lag); ${r.post_days_elapsed}/14 so far.`;
+          const targetTooltip = isEarn
+            ? `NET PROFIT per week — direct ad-attributed: margin × units − ad spend (no organic/repeat halo).\n`
+              + `• prev ${fM(prevWk)}/wk = this keyword's weekly net profit in the window BEFORE the change (0 if new).\n`
+              + `• target ${fM(r.expected_impact_weekly ?? 0)}/wk = what the coach expects to be earning after the bid-up — the bar to "scale to beat".\n`
+              + `• Verdict: ${statusLine} Counts as met at ≥80% of target, graded on real Amazon data.`
+            : `Weekly DOLLARS SAVED — net profit protected by the change (net profit = margin × units − spend, no halo).\n`
+              + `• prev ${fM(prevWk)}/wk = weekly net profit before the change (negative = it was losing money).\n`
+              + `• target ${fM(r.expected_impact_weekly ?? 0)}/wk = the weekly loss/burn this change should stop.\n`
+              + `• Verdict: ${statusLine} Counts as met at ≥80% of target, graded on real Amazon data.`;
           return (
             <div key={r.change_id} className="flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-card-hover transition-colors" title={fullDetail}>
               <Icon size={13} className={`${meta.color} shrink-0`} />
@@ -240,7 +255,7 @@ export function DecisionScorecard() {
                 {verdictSentence(r)}
               </span>
               {r.expected_impact_weekly != null && r.target_status && r.target_status !== 'NO_TARGET' && (
-                <span className={`text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded border ${
+                <span title={targetTooltip} className={`text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded border cursor-help ${
                   r.target_status === 'TARGET_MET'
                     ? 'text-emerald-400 border-emerald-800 bg-emerald-950/30'
                     : r.target_status === 'BELOW_TARGET'
