@@ -1112,6 +1112,19 @@ export interface AsinOosDaysRow {
   observed_days_28d: number;
 }
 
+/** One row from V_ADS_NEGATIVE_CONFLICTS — a term the product negates but converts on. */
+export interface NegativeConflictRow {
+  campaign_id: string;
+  campaign_name: string;
+  negated_term: string;
+  asin: string;
+  product_short_name: string;
+  parent_name: string;
+  converter_orders: number;
+  converter_sales: number;
+  conflict_type: string;
+}
+
 /** One row of the Plan wizard's Ads Path targets — per family / month / ad-channel. */
 export interface PlanAdsTargetRow {
   family: string;
@@ -1183,6 +1196,7 @@ export interface DashboardData {
   campaign_launch_monthly: CampaignLaunchMonthlyRow[];
   plan_ads_targets: PlanAdsTargetRow[];
   asin_oos_days: AsinOosDaysRow[];
+  negative_conflicts: NegativeConflictRow[];
   launch_models: { product: string; daily_rate: number }[];
   _meta: {
     refreshed_at?: string;

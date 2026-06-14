@@ -1503,6 +1503,66 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         </div>
       )}
 
+      {/* ── 🚫 Remove conflicting negatives ── */}
+      {(() => {
+        const allConflicts = data.negative_conflicts ?? [];
+        const conflicts = effectiveFam
+          ? allConflicts.filter(r => r.parent_name === effectiveFam)
+          : allConflicts;
+        if (conflicts.length === 0) return null;
+        const totalBlocked = conflicts.reduce((s, r) => s + r.converter_sales, 0);
+        // Group by parent_name
+        const groups = new Map<string, typeof conflicts>();
+        for (const r of conflicts) {
+          const g = groups.get(r.parent_name);
+          if (g) g.push(r); else groups.set(r.parent_name, [r]);
+        }
+        const sorted = [...groups.entries()].sort(([, a], [, b]) =>
+          b.reduce((s, r) => s + r.converter_sales, 0) - a.reduce((s, r) => s + r.converter_sales, 0)
+        );
+        return (
+          <div className="mb-4">
+            <div className="flex items-baseline gap-2 mb-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text)]">🚫 Remove conflicting negatives</span>
+              <span className="text-[10px] text-faint">{conflicts.length} terms your products negate but convert on · ~{fM(totalBlocked)}/yr blocked</span>
+            </div>
+            {sorted.map(([family, rows]) => {
+              const familyTotal = rows.reduce((s, r) => s + r.converter_sales, 0);
+              const sortedRows = [...rows].sort((a, b) => b.converter_sales - a.converter_sales);
+              return (
+                <div key={family} className="mb-3">
+                  {!effectiveFam && (
+                    <div className="flex items-baseline gap-2 mb-1 px-0.5">
+                      <span className="text-[11px] font-semibold text-[var(--color-text)]">{family}</span>
+                      <span className="text-[10px] font-mono text-faint">~{fM(familyTotal)}/yr blocked</span>
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-1">
+                    {sortedRows.map(r => (
+                      <div
+                        key={`${r.campaign_id}|${r.negated_term}|${r.asin}`}
+                        className="text-[11px] text-[var(--color-text)] px-0.5"
+                      >
+                        <span className="font-medium">{r.product_short_name}</span>
+                        {' '}negates{' '}
+                        <span className="font-mono text-[var(--color-text)]">"{r.negated_term}"</span>
+                        {' '}but converts on it —{' '}
+                        <span className="font-mono">{r.converter_orders} orders / {fM(r.converter_sales)}/yr.</span>
+                        {' '}
+                        <span className="text-faint">
+                          Consider removing the negative in{' '}
+                          <span title={r.campaign_name} className="underline decoration-dotted cursor-help">{r.campaign_name.length > 40 ? r.campaign_name.slice(0, 40) + '…' : r.campaign_name}</span>.
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {/* ── 📋 Unified Daily Queue ── */}
       {unifiedTree.length > 0 && (
         <div className="border border-border rounded-xl bg-card overflow-hidden mb-4">

@@ -1626,6 +1626,30 @@ async function loadPlanAdsTargetsFromCube(): Promise<PlanAdsTargetRow[]> {
   }));
 }
 
+/** AdsNegativeConflicts → negative_conflicts (terms a product negates but converts on) */
+async function loadNegativeConflictsFromCube(): Promise<import('../types').NegativeConflictRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'AdsNegativeConflicts.campaignId', 'AdsNegativeConflicts.campaignName',
+      'AdsNegativeConflicts.negatedTerm', 'AdsNegativeConflicts.asin',
+      'AdsNegativeConflicts.productShortName', 'AdsNegativeConflicts.parentName',
+      'AdsNegativeConflicts.converterOrders', 'AdsNegativeConflicts.converterSales',
+      'AdsNegativeConflicts.conflictType',
+    ],
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    campaign_id: String(r['AdsNegativeConflicts.campaignId'] ?? ''),
+    campaign_name: String(r['AdsNegativeConflicts.campaignName'] ?? ''),
+    negated_term: String(r['AdsNegativeConflicts.negatedTerm'] ?? ''),
+    asin: String(r['AdsNegativeConflicts.asin'] ?? ''),
+    product_short_name: String(r['AdsNegativeConflicts.productShortName'] ?? ''),
+    parent_name: String(r['AdsNegativeConflicts.parentName'] ?? ''),
+    converter_orders: Number(r['AdsNegativeConflicts.converterOrders'] ?? 0),
+    converter_sales: Number(r['AdsNegativeConflicts.converterSales'] ?? 0),
+    conflict_type: String(r['AdsNegativeConflicts.conflictType'] ?? ''),
+  }));
+}
+
 /** AsinOosDays → asin_oos_days (per-ASIN OOS day counts, feeds clear-case gate) */
 async function loadAsinOosDaysFromCube(): Promise<AsinOosDaysRow[]> {
   const rows = await cubeLoad({
@@ -2257,6 +2281,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           ['campaignLaunchMonthly', loadCampaignLaunchMonthlyFromCube],
           ['planAdsTargets', loadPlanAdsTargetsFromCube],
           ['asinOosDays', loadAsinOosDaysFromCube],
+          ['negativeConflicts', loadNegativeConflictsFromCube],
         ];
 
         const heavyLoaders: [string, () => Promise<unknown>][] = [
@@ -2315,6 +2340,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
         const campaignLaunchMonthly = resolveLoader(bgResultsLight[35], 'campaignLaunchMonthly') as import('../types').CampaignLaunchMonthlyRow[];
         const planAdsTargets = resolveLoader(bgResultsLight[36], 'planAdsTargets') as PlanAdsTargetRow[];
         const asinOosDays = resolveLoader(bgResultsLight[37], 'asinOosDays') as AsinOosDaysRow[];
+        const negativeConflicts = resolveLoader(bgResultsLight[38], 'negativeConflicts') as import('../types').NegativeConflictRow[];
 
         const ads = resolveLoader(bgResultsHeavy[0], 'ads') as Ads7dRow[];
         const sqp = resolveLoader(bgResultsHeavy[1], 'sqp') as SqpWeeklyRow[];
@@ -2366,6 +2392,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           campaign_launch_monthly: campaignLaunchMonthly,
           plan_ads_targets: planAdsTargets,
           asin_oos_days: asinOosDays,
+          negative_conflicts: negativeConflicts,
           _meta: {
             ...prev._meta,
             queries_run: (prev._meta?.queries_run ?? 0) + lightLoaders.length + heavyLoaders.length,
