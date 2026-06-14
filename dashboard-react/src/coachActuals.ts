@@ -120,6 +120,7 @@ export const GATE = Object.freeze({
   scaleClear: Object.freeze({ GUARDIAN: 1.3, BLITZ: 1.15 }) as Record<string, number>,
   peakGreat: 1.3, peakMinOrders: 3, recovering1w: 1.1,
   oosWindowMax: 7, // OOS days in the 4w measurement window that poisons the data
+  negateMinClicks: 20, // §5/§8c: at ~3% CVR, 10 clicks → ~0.3 expected orders; 0 orders isn't signal until ~20 clicks
 });
 
 // Act-now actions the cards can represent (keyword/term-level changes in Amazon).
@@ -181,7 +182,11 @@ export function clearCase(g: GateInput): GateVerdict {
     if (windowPoisoned) return { clear: false, reason: `window includes ${g.oosDays4w} out-of-stock days — shelf data, not demand; judge after clean weeks` };
     if (peakGreat) return { clear: false, reason: `weak now but last peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — seasonal: BOOST before next peak, don't cut` };
     if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
-    if (g.orders === 0) return { clear: true, reason: 'real spend, zero orders — nothing to lose' };
+    if (g.orders === 0) {
+      if (g.clicks < GATE.negateMinClicks)
+        return { clear: false, reason: `only ${g.clicks} clicks — 0 orders isn't conclusive yet (need ~${GATE.negateMinClicks} at ~3% CVR)` };
+      return { clear: true, reason: 'real spend, zero orders — nothing to lose' };
+    }
     return { clear: false, reason: `${g.orders} order(s) — halo risk, judge manually` };
   }
   if (isReduce) {

@@ -131,10 +131,16 @@ describe('clearCase', () => {
   });
   it('boundary values: floors are exclusive-below, bars inclusive-at', () => {
     expect(clearCase({ ...base, action: 'NEGATE_TERM', spend: 5 }).clear).toBe(true);    // at floor → passes
-    expect(clearCase({ ...base, action: 'NEGATE_TERM', clicks: 10 }).clear).toBe(true);  // at floor → passes
+    expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, clicks: 10 }).clear).toBe(true);  // general 10-click floor (non-negate action)
     expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.9 }).clear).toBe(false); // at grayLow → parks
     expect(clearCase({ ...base, action: 'INCREASE_BID', orders: 2, netRoas: 1.3 }).clear).toBe(true);  // GUARDIAN bar inclusive
     expect(clearCase({ ...base, action: 'INCREASE_BID', orders: 2, netRoas: 1.15, mode: 'BLITZ' }).clear).toBe(true);
+  });
+  it('zero-order negate needs >= negateMinClicks (0 orders is noise at low clicks)', () => {
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', clicks: 12 }).clear).toBe(false); // below 20 → park
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', clicks: 12 }).reason).toMatch(/conclusive/i);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', clicks: 20 }).clear).toBe(true);  // at floor → clear
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', clicks: 40 }).clear).toBe(true);
   });
   it('all three windows bad → definitely waste (clear cut)', () => {
     expect(clearCase({ ...base, action: 'NEGATE_TERM', roas1w: 0, orders1w: 0, peakRoas: 0.4, peakOrders: 1 }).clear).toBe(true);
