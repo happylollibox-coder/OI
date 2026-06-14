@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
 import { apiFetch } from '../utils/apiFetch';
+import { changeLogKey, dedupNewEntries } from '../ppcLogDedup';
 
 export interface DoQueueItem {
   id: string;
@@ -66,6 +67,7 @@ const STORAGE_KEY = 'oi_do_queue';
 const DONE_STORAGE_KEY = 'oi_do_done';
 const UPLOADED_STORAGE_KEY = 'oi_do_uploaded';
 const PENDING_LOG_KEY = 'oi_ppc_log_pending';
+const SENT_LOG_KEY = 'oi_ppc_log_sent';
 
 const DoQueueContext = createContext<DoQueueContextValue | null>(null);
 
@@ -175,12 +177,25 @@ async function postChangeLog(entries: PpcChangeLogEntry[]): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Queue entries (incl. any prior failures), then try to flush. */
+function loadSentKeys(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(SENT_LOG_KEY) || '[]')); } catch { return new Set(); }
+}
+
+function addSentKeys(keys: string[]) {
+  try {
+    const cur = [...loadSentKeys(), ...keys];
+    localStorage.setItem(SENT_LOG_KEY, JSON.stringify(cur.slice(-500)));
+  } catch {}
+}
+
+/** Queue entries (incl. any prior failures), dedup against already-sent keys, then try to flush. */
 function logAppliedChanges(items: DoQueueItem[]) {
-  const pending = [...loadPendingLog(), ...toChangeLogEntries(items)];
-  savePendingLog(pending); // offline fallback first — clear only on success
-  postChangeLog(pending).then(ok => {
-    if (ok) savePendingLog([]);
+  const sent = loadSentKeys();
+  const fresh = dedupNewEntries([...loadPendingLog(), ...toChangeLogEntries(items)], sent);
+  if (!fresh.length) { savePendingLog([]); return; }
+  savePendingLog(fresh); // offline fallback first — clear only on success
+  postChangeLog(fresh).then(ok => {
+    if (ok) { addSentKeys(fresh.map(changeLogKey)); savePendingLog([]); }
     else console.warn('[DoQueue] PPC change log POST failed — kept in oi_ppc_log_pending for retry');
   });
 }
