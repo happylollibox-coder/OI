@@ -216,10 +216,24 @@ export function DecisionScorecard() {
         {visible.map(r => {
           const meta = VERDICT_META[r.verdict];
           const Icon = meta.icon;
+          const entity = r.targeting || r.search_term || '(campaign-level)';
+          const bidChange = r.new_bid != null
+            ? `${r.old_bid != null ? `$${r.old_bid.toFixed(2)}→` : ''}$${r.new_bid.toFixed(2)}`
+            : r.new_budget != null
+            ? `${r.old_budget != null ? `$${r.old_budget.toFixed(0)}→` : ''}$${r.new_budget.toFixed(0)}/d`
+            : null;
+          const fullDetail = `${r.action} "${entity}" in ${r.campaign_name}`
+            + (bidChange ? ` · ${r.new_budget != null ? 'budget' : 'bid'} ${bidChange}` : '')
+            + (r.coach_mode ? ` · ${r.coach_mode}` : '')
+            + ` · ${verdictSentence(r)}`;
           return (
-            <div key={r.change_id} className="flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-card-hover transition-colors">
+            <div key={r.change_id} className="flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-card-hover transition-colors" title={fullDetail}>
               <Icon size={13} className={`${meta.color} shrink-0`} />
               <ActionBadge action={r.action} />
+              <span className="font-semibold text-[var(--color-text)] shrink-0 max-w-[180px] truncate" title={entity}>"{entity}"</span>
+              {bidChange && (
+                <span className="text-[9px] font-mono text-muted shrink-0 px-1.5 py-0.5 rounded bg-surface border border-border-faint">{bidChange}</span>
+              )}
               <span className="text-subtle flex-1 min-w-0 truncate" title={verdictSentence(r)}>
                 {verdictSentence(r)}
               </span>
@@ -235,7 +249,7 @@ export function DecisionScorecard() {
                   {r.target_status === 'TARGET_MET' ? '✓ met' : r.target_status === 'BELOW_TARGET' ? '✗ below' : '… early'}
                 </span>
               )}
-              <span className="text-[10px] text-faint font-mono truncate max-w-[160px] shrink-0">{r.campaign_name}</span>
+              <span className="text-[10px] text-faint font-mono truncate max-w-[160px] shrink-0" title={r.campaign_name}>{r.campaign_name}</span>
               {r.coach_mode && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface border border-border-faint text-muted font-mono uppercase shrink-0">
                   {r.coach_mode}
