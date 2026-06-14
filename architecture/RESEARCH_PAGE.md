@@ -127,7 +127,7 @@ Computed in SQL (`is_holiday_active`), exposed to the UI.
 | Endpoint | Method | Reads | Notes |
 |---|---|---|---|
 | `top-terms?parent=` | GET | FACT_RESEARCH_TERMS (+RANKED if parent) | all terms with brand purchases, 104w window |
-| `related-terms` | POST `{term, parent?, mode, synonyms?}` | FACT_SEARCH_QUERY (seeds) + FACT tables | co-occurrence expansion |
+| `related-terms` | POST `{term, parent?, mode, synonyms?}` | FACT_SEARCH_QUERY (seeds) + FACT tables | co-occurrence expansion. **Direct mode = whole-word, plural-tolerant match** (`7`≠`17`, `girl`=`girls`); not substring `LIKE '%word%'`. Related mode keeps synonym `LIKE` expansion. |
 | `term-ranks` | POST `{terms[]}` | FACT_RESEARCH_RANKED | per-family hover comparison (≤500 terms) |
 | `get-synonyms` | POST `{words[]}` | DE_SYNONYM_CACHE → hardcoded fallback | fallback unlocks Related mode |
 | `update-segments` | POST | MERGE into DE_SEARCH_TERM_SEGMENTS | atomic upsert |
@@ -161,8 +161,8 @@ column but is NOT the gate. Own brand = `brand = 'Happy Lolli'`.
 | Type | match | filter | keyword | ranked by |
 |---|---|---|---|---|
 | EXACT | EXACT | not-advertised, not own-brand, `rank ≥ 75` | the term | rank desc |
-| PHRASE | PHRASE | not-advertised, not own-brand, `rank ≥ 75`, ≥3 words | the term (as phrase) + `coverage_count` (other family terms its words cover) | rank desc, tie-break coverage |
-| BROAD | BROAD | not-advertised seed `overall_fit ≥ 90`; co-occurrence related terms also `fit ≥ 90`; cluster `market_purchases` (104w) `> 500` | the seed | cluster sales desc |
+| PHRASE | PHRASE | eligible if seed `rank ≥ 75`, not own-brand, ≥3 words | the term (as phrase) + `coverage_count` (count of **all** searchable terms in `FACT_RESEARCH_TERMS` whose text contains every seed token by **whole-word, plural-tolerant** match — `7`≠`17`, but `girl`=`girls` — the real phrase reach, not the candidate subset). **Stored/displayed `rank` is DEMAND-WEIGHTED**: `Σ(overall_fit × weekly_market_purchases) ÷ Σ(weekly_market_purchases)` over the seed + every covered term (each term's FIT taken for the seed's family), so the rank reflects the whole phrase's reach, not just the seed. | weighted rank desc, tie-break coverage |
+| BROAD | BROAD | not-advertised seed gated **like PHRASE** — `market_purchases > 0 AND rank ≥ 75` (NOT fit-only; word_count≥3 omitted since broad is a discovery match); co-occurrence related terms drawn from the same demand+rank-gated pool; cluster `market_purchases` (104w) `> 500` | the seed | cluster sales desc |
 | BRAND | PHRASE | not-advertised, own-brand, `overall_fit ≥ 75` (fit not rank — brand terms have low market volume) | the term | market volume desc |
 
 `V_RESEARCH_RECOMMENDATION_CANDIDATES` emits per-family candidates (Broad rows are

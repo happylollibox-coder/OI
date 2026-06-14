@@ -37,7 +37,9 @@ BEGIN
     ON LOWER(rt.query_text) = LOWER(c.query_text) AND COALESCE(rt.market_purchases, 0) > 0
   WHERE c.rec_type = 'BROAD';
 
-  -- fit>=90 candidate terms per family (the only terms allowed into a cluster)
+  -- BROAD candidate terms per family — the only terms allowed into a cluster. NOTE: the gate
+  -- moved to the view (demand + rank>=75, like phrase, 2026-06-13); the legacy name "_fit90"
+  -- is kept to avoid churn but it now holds the rank-gated broad candidates, not fit>=90.
   CREATE TEMP TABLE _fit90 AS
   SELECT parent_name, LOWER(query_text) AS query_text
   FROM `onyga-482313.OI.V_RESEARCH_RECOMMENDATION_CANDIDATES`
@@ -91,9 +93,11 @@ BEGIN
     WHERE rec_type = 'PHRASE'
   ) WHERE rn <= 30;
 
+  -- tokenize on any non-alphanumeric run so punctuation is a delimiter
+  -- ("gifts,popular" -> "gifts","popular"); tokens are whole words, never substrings
   CREATE TEMP TABLE _seed_tokens AS
   SELECT t.parent_name, t.query_text, w AS tok
-  FROM _phrase_top t, UNNEST(SPLIT(LOWER(t.query_text), ' ')) w
+  FROM _phrase_top t, UNNEST(SPLIT(REGEXP_REPLACE(LOWER(t.query_text), r'[^a-z0-9]+', ' '), ' ')) w
   WHERE w NOT IN ('a','an','the','for','and','or','of','to','in','on','at','by','is','it','my','with')
     AND w != '';
 
@@ -102,17 +106,26 @@ BEGIN
     SELECT parent_name, query_text, COUNT(*) AS ntok
     FROM _seed_tokens GROUP BY parent_name, query_text
   ),
+  -- coverage = phrase reach over the FULL search-term universe (the same set
+  -- you'd see by searching the term), NOT just the small candidate subset
   fam_terms AS (
-    SELECT DISTINCT parent_name, LOWER(query_text) AS term
-    FROM `onyga-482313.OI.V_RESEARCH_RECOMMENDATION_CANDIDATES`
+    SELECT DISTINCT LOWER(query_text) AS term,
+      -- WHOLE-WORD, plural-tolerant match key: punctuation -> spaces, pad with
+      -- spaces, then strip one trailing 's' per word. " 7 year old girl " matches
+      -- token "girl"/"girls" (Amazon-style plural) but never " 17 " (different word)
+      REGEXP_REPLACE(
+        CONCAT(' ', REGEXP_REPLACE(LOWER(query_text), r'[^a-z0-9]+', ' '), ' '),
+        r's ', ' '
+      ) AS norm_term
+    FROM `onyga-482313.OI.FACT_RESEARCH_TERMS`
+    WHERE query_text != 'OTHER'
   ),
   matched AS (
     SELECT st.parent_name, st.query_text, ft.term, COUNT(DISTINCT st.tok) AS n_matched
     FROM _seed_tokens st
     JOIN fam_terms ft
-      ON ft.parent_name = st.parent_name
-     AND ft.term != LOWER(st.query_text)
-     AND ft.term LIKE CONCAT('%', st.tok, '%')
+      ON ft.term != LOWER(st.query_text)
+     AND STRPOS(ft.norm_term, CONCAT(' ', REGEXP_REPLACE(st.tok, r's$', ''), ' ')) > 0
     GROUP BY st.parent_name, st.query_text, ft.term
   )
   SELECT sn.parent_name, sn.query_text,
@@ -121,6 +134,51 @@ BEGIN
   LEFT JOIN matched m
     ON m.parent_name = sn.parent_name AND m.query_text = sn.query_text
   GROUP BY sn.parent_name, sn.query_text;
+
+  -- ── Step C2: Phrase WEIGHTED rank = Σ(FIT × WK_PURCH) / Σ(WK_PURCH) over the
+  -- seed + every term it covers (whole-word, plural-tolerant), with each term's FIT
+  -- taken for the seed's own family. Demand-weighted relevance — replaces the bare
+  -- seed rank shown for Phrase recs so the rank reflects the whole phrase's reach.
+  CREATE TEMP TABLE _phrase_wrank AS
+  WITH seed_ntok AS (
+    SELECT parent_name, query_text, COUNT(DISTINCT tok) AS ntok
+    FROM _seed_tokens GROUP BY parent_name, query_text
+  ),
+  fam_terms AS (
+    SELECT DISTINCT LOWER(query_text) AS term,
+      REGEXP_REPLACE(
+        CONCAT(' ', REGEXP_REPLACE(LOWER(query_text), r'[^a-z0-9]+', ' '), ' '),
+        r's ', ' '
+      ) AS norm_term
+    FROM `onyga-482313.OI.FACT_RESEARCH_TERMS`
+    WHERE query_text != 'OTHER'
+  ),
+  -- counts per (seed, candidate term) of how many seed tokens it contains
+  member_counts AS (
+    SELECT st.parent_name, st.query_text AS seed, ft.term,
+           COUNT(DISTINCT st.tok) AS n_matched
+    FROM _seed_tokens st
+    JOIN fam_terms ft
+      ON STRPOS(ft.norm_term, CONCAT(' ', REGEXP_REPLACE(st.tok, r's$', ''), ' ')) > 0
+    GROUP BY st.parent_name, st.query_text, ft.term
+  ),
+  -- the 18-term set: terms (INCLUDING the seed itself) that contain ALL seed tokens
+  member_terms AS (
+    SELECT mc.parent_name, mc.seed, mc.term
+    FROM member_counts mc
+    JOIN seed_ntok sn
+      ON sn.parent_name = mc.parent_name AND sn.query_text = mc.seed
+    WHERE mc.n_matched = sn.ntok
+  )
+  SELECT m.parent_name, m.seed AS query_text,
+    ROUND(SAFE_DIVIDE(
+      SUM(r.overall_fit * r.weekly_market_purchases),
+      SUM(r.weekly_market_purchases)
+    )) AS weighted_rank
+  FROM member_terms m
+  JOIN `onyga-482313.OI.FACT_RESEARCH_RANKED` r
+    ON r.parent_name = m.parent_name AND LOWER(r.query_text) = m.term
+  GROUP BY m.parent_name, m.seed;
 
   -- ── Step D: assemble candidate pool with sort_metric + dedup (anti-join, de-correlated)
   CREATE TEMP TABLE _hist AS
@@ -131,13 +189,17 @@ BEGIN
   CREATE TEMP TABLE _pool AS
   SELECT
     c.parent_name, c.rec_type, c.match_type, c.keyword, c.query_text,
-    c.rank, c.overall_fit, c.market_volume,
+    -- Phrase rank is the demand-weighted rank over its covered terms (Step C2);
+    -- fall back to the seed's own rank if no purchase weight is available.
+    CASE WHEN c.rec_type = 'PHRASE' THEN COALESCE(pw.weighted_rank, c.rank)
+         ELSE c.rank END AS rank,
+    c.overall_fit, c.market_volume,
     CASE WHEN c.rec_type = 'BROAD' THEN bc.cluster_sales ELSE NULL END AS market_sales,
     pc.coverage_count,
     CASE WHEN c.rec_type = 'BROAD' THEN bc.cluster_size ELSE NULL END AS cluster_size,
     CASE
       WHEN c.rec_type = 'BROAD'  THEN CAST(bc.cluster_sales AS FLOAT64)
-      WHEN c.rec_type = 'PHRASE' THEN c.sort_metric + COALESCE(pc.coverage_count, 0) / 1000.0
+      WHEN c.rec_type = 'PHRASE' THEN COALESCE(pw.weighted_rank, c.rank) + COALESCE(pc.coverage_count, 0) / 1000.0
       ELSE c.sort_metric
     END AS sort_metric
   FROM `onyga-482313.OI.V_RESEARCH_RECOMMENDATION_CANDIDATES` c
@@ -145,6 +207,8 @@ BEGIN
     ON bc.parent_name = c.parent_name AND LOWER(bc.seed) = LOWER(c.query_text)
   LEFT JOIN _phrase_cov pc
     ON pc.parent_name = c.parent_name AND pc.query_text = c.query_text
+  LEFT JOIN _phrase_wrank pw
+    ON pw.parent_name = c.parent_name AND pw.query_text = c.query_text
   LEFT JOIN _hist h
     ON h.parent_name = c.parent_name AND h.rec_type = c.rec_type AND h.keyword = LOWER(c.keyword)
   -- "not advertised" (no matching-type keyword spend) is already enforced by the

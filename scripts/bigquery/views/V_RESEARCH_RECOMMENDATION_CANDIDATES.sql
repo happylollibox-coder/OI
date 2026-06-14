@@ -53,13 +53,17 @@ FROM base
 WHERE NOT is_own_brand AND market_purchases > 0 AND rank >= 75 AND word_count >= 3
   AND phrase_kw_cost_7d = 0
 UNION ALL
--- BROAD seeds: not own brand, fit >= 90, no BROAD keyword running (cluster filter in SP)
+-- BROAD seeds: gated like PHRASE — real market demand + rank >= 75 (NOT fit-only), no BROAD
+-- keyword running. (Ori 2026-06-13: "broad similar to phrase". The old fit>=90-only bar
+-- produced ~39k seeds, 98% with zero market demand — phantom high-seg-fit terms.) word_count>=3
+-- is intentionally OMITTED here (unlike phrase): broad is a discovery match and benefits from
+-- short 1-2 word seeds, which then expand into an ASIN co-occurrence cluster in the SP.
 SELECT parent_name, query_text, 'BROAD', 'BROAD',
        query_text, rank, overall_fit,
        CAST(weekly_market_impressions AS INT64),
-       overall_fit
+       rank
 FROM base
-WHERE NOT is_own_brand AND overall_fit >= 90
+WHERE NOT is_own_brand AND market_purchases > 0 AND rank >= 75
   AND broad_kw_cost_7d = 0
 UNION ALL
 -- BRAND defense: own brand, real demand, FIT >= 75 (relevance — brand terms have
