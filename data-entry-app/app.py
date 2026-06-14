@@ -7491,18 +7491,27 @@ def research_conversion_curve():
 
 @app.route('/api/research/top-terms', methods=['GET'])
 def research_top_terms():
-    """Return all search terms with brand purchases (104-week window from
-    FACT_RESEARCH_TERMS), enriched with per-family scores from
-    FACT_RESEARCH_RANKED when ?parent= is given. Client sorts/paginates."""
+    """Default Research overview: top search terms for a family ORDERED BY RANK
+    (the opportunity score), 104-week window from FACT_RESEARCH_TERMS, enriched
+    with per-family scores from FACT_RESEARCH_RANKED. Client sorts/paginates.
+
+    No brand_purchases filter — the list must be a complete ranked view so a
+    high-rank term we don't yet sell on (e.g. a recommendation) still appears
+    at its rank position, consistent with search. Capped at 5000 by rank to
+    keep the payload bounded; rank-90+ terms are always well within that.
+    Without a parent there is no per-family rank, so fall back to market volume.
+    """
     parent = (request.args.get('parent') or '').strip() or None
     try:
         rr_cols, rr_join = _research_ranked_select(parent, alias='t')
+        order_by = ("rr.rank DESC NULLS LAST, t.market_purchases DESC NULLS LAST"
+                    if parent else "t.market_purchases DESC NULLS LAST")
         sql = f"""
         SELECT t.*, {rr_cols}
         FROM `onyga-482313`.OI.FACT_RESEARCH_TERMS t
         {rr_join}
-        WHERE t.brand_purchases > 0
-        ORDER BY t.brand_purchases DESC
+        ORDER BY {order_by}
+        LIMIT 5000
         """
         params = [bigquery.ScalarQueryParameter('parent', 'STRING', parent)] if parent else []
         job_config = bigquery.QueryJobConfig(query_parameters=params) if params else None
