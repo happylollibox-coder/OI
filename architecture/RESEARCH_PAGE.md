@@ -163,7 +163,7 @@ column but is NOT the gate. Own brand = `brand = 'Happy Lolli'`.
 | EXACT | EXACT | not-advertised, not own-brand, `rank ≥ 75` | the term | rank desc |
 | PHRASE | PHRASE | not-advertised, not own-brand, `rank ≥ 75`, ≥3 words | the term (as phrase) + `coverage_count` (other family terms its words cover) | rank desc, tie-break coverage |
 | BROAD | BROAD | not-advertised seed `overall_fit ≥ 90`; co-occurrence related terms also `fit ≥ 90`; cluster `market_purchases` (104w) `> 500` | the seed | cluster sales desc |
-| BRAND | PHRASE | not-advertised, own-brand (no rank/fit bar) | the term | market volume desc |
+| BRAND | PHRASE | not-advertised, own-brand, `overall_fit ≥ 75` (fit not rank — brand terms have low market volume) | the term | market volume desc |
 
 `V_RESEARCH_RECOMMENDATION_CANDIDATES` emits per-family candidates (Broad rows are
 seeds only). `SP_REFRESH_RESEARCH_RECOMMENDATIONS` (in `SP_ORCHESTRATE_DAILY_REFRESH`
