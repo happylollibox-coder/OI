@@ -659,6 +659,7 @@ export function ResearchPage() {
             productPrice={productPrice}
             termRanks={termRanks}
             onSaveSegments={onSaveSegments}
+            clusterSyn={searchMode === 'related' && synonymsReady ? synonyms : undefined}
           />
         )}
       </Section>

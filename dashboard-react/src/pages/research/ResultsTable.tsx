@@ -1,7 +1,8 @@
 import { Fragment, useState } from 'react';
-import { ArrowUpDown, Check, Pencil } from 'lucide-react';
+import { ArrowUpDown, Check, ChevronRight, ChevronDown, Pencil } from 'lucide-react';
 import { fmt, fM, fP, fShort } from '../../utils';
 import type { ResearchRow, SortKey, SortDir, TermRanksMap } from './types';
+import { clusterTerms, type SynonymMap } from './clusterTerms';
 
 interface ResultsTableProps {
   rows: ResearchRow[];            // current page of display rows
@@ -16,6 +17,8 @@ interface ResultsTableProps {
   productPrice: number;
   termRanks: TermRanksMap;
   onSaveSegments: (queryText: string, segs: Record<string, string | null>) => Promise<void>;
+  /** When set (Related mode only), groups rows into collapsible synonym clusters */
+  clusterSyn?: SynonymMap;
 }
 
 // ─── Tooltips: pure formatters over SQL explanation columns ──────
@@ -62,10 +65,18 @@ export function ResultsTable({
   rows, totalCount, currentPage, pageSize, onPageChange,
   sortKey, sortDir, onSort,
   selectedProduct, productPrice, termRanks, onSaveSegments,
+  clusterSyn,
 }: ResultsTableProps) {
   const [editingTerm, setEditingTerm] = useState<string | null>(null);
   const [editSegments, setEditSegments] = useState<Record<string, string | null>>({});
   const [savingSegment, setSavingSegment] = useState(false);
+  // Cluster collapse state — all clusters start collapsed (user sees summaries first)
+  const [openClusters, setOpenClusters] = useState<Set<string>>(new Set());
+  const toggleCluster = (key: string) => setOpenClusters(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
 
   const totalPages = Math.ceil(totalCount / pageSize);
 
@@ -229,14 +240,16 @@ export function ResultsTable({
                 </tr>
               </thead>
               <tbody>
-                {section.rows.map((row, i) => {
-                  const isRealCps = row.cps_source === 'ads_30d' || row.cps_source === 'ads_12m';
-                  const estCps = row.effective_cps ?? row.est_cps;
-                  const cpc = row.cpc_30d ?? row.cpc_12m;
-                  const estCostPerSale = estCps && cpc ? estCps * cpc : null;
-                  const rowRatioColor = ratioColor(row.median_click_price);
-
-                  return (
+                {(() => {
+                  // renderRow: shared renderer for both flat-list and cluster-member rows.
+                  // `i` drives the alternating stripe; `indented` adds left padding in cluster mode.
+                  const renderRow = (row: ResearchRow, i: number, indented = false) => {
+                    const isRealCps = row.cps_source === 'ads_30d' || row.cps_source === 'ads_12m';
+                    const estCps = row.effective_cps ?? row.est_cps;
+                    const cpc = row.cpc_30d ?? row.cpc_12m;
+                    const estCostPerSale = estCps && cpc ? estCps * cpc : null;
+                    const rowRatioColor = ratioColor(row.median_click_price);
+                    return (
                     <Fragment key={row.query_text}>
                       <tr
                         className={`border-b border-border/10 hover:bg-white/[0.02] transition-colors ${
@@ -244,7 +257,7 @@ export function ResultsTable({
                         }`}
                       >
                         {/* Search Term — hover shows all-families comparison (SQL-computed) */}
-                        <td className="px-2 py-2 pl-4 text-heading font-medium whitespace-nowrap sticky left-0 bg-inherit backdrop-blur z-10 max-w-[280px] truncate" title={familyCompareTooltip(row)}>
+                        <td className={`px-2 py-2 text-heading font-medium whitespace-nowrap sticky left-0 bg-inherit backdrop-blur z-10 max-w-[280px] truncate ${indented ? 'pl-8' : 'pl-4'}`} title={familyCompareTooltip(row)}>
                           {row.query_text}
                         </td>
 
@@ -624,8 +637,62 @@ export function ResultsTable({
                         </tr>
                       )}
                     </Fragment>
-                  );
-                })}
+                    );
+                  }; // end renderRow
+
+                  if (clusterSyn) {
+                    // ─── Related mode: collapsible cluster groups ───
+                    const clusters = clusterTerms(section.rows, clusterSyn);
+                    let rowIdx = 0;
+                    return clusters.map(cluster => {
+                      if (cluster.size === 1) {
+                        // singleton — render as a normal flat row
+                        return renderRow(cluster.members[0], rowIdx++);
+                      }
+                      const isOpen = openClusters.has(cluster.key);
+                      return (
+                        <Fragment key={cluster.key}>
+                          {/* Cluster header row */}
+                          <tr
+                            className="border-b border-border/20 hover:bg-purple-500/[0.04] cursor-pointer transition-colors bg-purple-500/[0.02]"
+                            onClick={() => toggleCluster(cluster.key)}
+                          >
+                            {/* Search Term cell — representative term + chevron + count badge */}
+                            <td className="px-2 py-1.5 pl-4 sticky left-0 bg-inherit backdrop-blur z-10">
+                              <span className="inline-flex items-center gap-1.5">
+                                {isOpen
+                                  ? <ChevronDown size={11} className="text-purple-400 shrink-0" />
+                                  : <ChevronRight size={11} className="text-purple-400 shrink-0" />
+                                }
+                                <span className="text-heading font-semibold text-[11px] whitespace-nowrap truncate max-w-[220px]">{cluster.representative.query_text}</span>
+                                <span className="inline-flex items-center px-1 py-0.5 rounded text-[8px] font-bold bg-purple-500/20 text-purple-300">×{cluster.size}</span>
+                              </span>
+                            </td>
+                            {/* Rank / Purch / Fit / Seg / CPS / Brand / Match / Relevance / Type / Gender / Age / Occasion / Holiday — blank */}
+                            <td /><td /><td /><td /><td /><td /><td /><td /><td /><td /><td /><td /><td />
+                            {/* Edit — blank */}
+                            <td />
+                            {/* Cost Tier — blank */}
+                            <td />
+                            {/* Weeks / Week — blank */}
+                            <td /><td />
+                            {/* Wk Vol. */}
+                            <td className="px-2 py-1.5 text-right text-muted tabular-nums text-[10px]">{fShort(cluster.totalImpressions)}</td>
+                            {/* Wk Purch. */}
+                            <td className="px-2 py-1.5 text-right text-muted tabular-nums text-[10px]">{fmt(cluster.totalPurchases)}</td>
+                            {/* remaining cols — blank */}
+                            <td colSpan={99} />
+                          </tr>
+                          {/* Member rows — only when cluster is open */}
+                          {isOpen && cluster.members.map((member, mi) => renderRow(member, mi, true))}
+                        </Fragment>
+                      );
+                    });
+                  }
+
+                  // ─── Direct mode (or no synonyms): flat render, unchanged ───
+                  return section.rows.map((row, i) => renderRow(row, i));
+                })()}
               </tbody>
               <tfoot>
                 <tr className="border-t-2 border-border/40 bg-white/[0.03] font-semibold text-heading">
