@@ -75,6 +75,17 @@ changes AS (
   FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` c
   WHERE DATE(c.applied_at, 'America/Los_Angeles')
         >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 180 DAY)
+  -- Dedup duplicate-logged changes (the upload path had no idempotency — one logical
+  -- change could be re-POSTed across retries/double-clicks, each minting a fresh change_id).
+  -- One row per identical change on a day; keep the earliest. Prevents the scorecard
+  -- triple-counting one decision (e.g. 3× INCREASE_BID "journal for girls" on 2026-06-14).
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY c.campaign_id, c.action,
+      COALESCE(NULLIF(c.keyword_id, ''), NULLIF(c.targeting, ''), NULLIF(c.search_term, ''), ''),
+      IFNULL(CAST(c.new_bid AS STRING), ''), IFNULL(CAST(c.new_budget AS STRING), ''),
+      DATE(c.applied_at, 'America/Los_Angeles')
+    ORDER BY c.applied_at, c.change_id
+  ) = 1
 ),
 
 -- FACT rows joined to each change at the action's scope, bucketed pre/post.
