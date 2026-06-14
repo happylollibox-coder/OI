@@ -1,12 +1,18 @@
 export type SynonymMap = Record<string, string[]>;
 
-// Collapse a term to its CLUSTER KEY by replacing every synonym variant with its canonical word.
-// - case-insensitive, whitespace-normalized
-// - multi-word variants handled (e.g. "b day" → "birthday")
-// - longest variants first + word-boundary matching so "present" doesn't fire inside "presents"
+// Filler words Amazon broad match ignores — dropped so word-order/connector variants merge
+// (e.g. "journal kit FOR girls" ≡ "girls journal kit"). Content words (7, year, old) are kept.
+const STOPWORDS = new Set(['for', 'the', 'a', 'an', 'to', 'of', 'and', '&', 'with', 'in', 'on', 'my', 'your']);
+
+// Collapse a term to its CLUSTER KEY — an Amazon-BROAD-equivalent bag of words:
+//   1. replace every synonym variant with its canonical word (singular/plural too)
+//   2. drop filler stopwords
+//   3. sort the remaining content words (order-independent, like broad match)
+// So "gift for 7 year old girl", "gifts for 7 year old girls", and "7 year old girls gifts"
+// all collapse to the same key. case-insensitive; multi-word variants ("b day"→"birthday")
+// handled; longest variants first + word-boundary so "present" doesn't fire inside "presents".
 export function clusterKey(term: string, syn: SynonymMap): string {
   let s = ` ${term.toLowerCase().trim().replace(/\s+/g, ' ')} `;
-  // Build [variantPhrase → canonical], longest variant first.
   const reps: { from: string; to: string }[] = [];
   for (const [canon, variants] of Object.entries(syn)) {
     for (const v of variants) {
@@ -16,11 +22,10 @@ export function clusterKey(term: string, syn: SynonymMap): string {
   }
   reps.sort((a, b) => b.from.length - a.from.length);
   for (const { from, to } of reps) {
-    // whole-word/phrase replace (space-padded so internal substrings don't match)
     const re = new RegExp(`(?<=\\s)${from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s)`, 'g');
     s = s.replace(re, to);
   }
-  return s.trim().replace(/\s+/g, ' ');
+  return s.trim().split(/\s+/).filter(w => w && !STOPWORDS.has(w)).sort().join(' ');
 }
 
 export interface Clusterable { query_text: string; market_impressions?: number | null; market_purchases?: number | null }

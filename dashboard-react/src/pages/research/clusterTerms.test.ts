@@ -2,17 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { clusterKey, clusterTerms } from './clusterTerms';
 const syn = { gifts: ['gift','present','presents'], girls: ['girl'], birthday: ['bday','b day'] };
 describe('clusterKey', () => {
-  it('collapses singular/plural + synonyms to one key', () => {
+  it('collapses singular/plural + synonyms to one key (bag of words)', () => {
     expect(clusterKey('gift for 7 year old girl', syn)).toBe(clusterKey('gifts for 7 year old girls', syn));
-    expect(clusterKey('gifts for 7 year old girls', syn)).toBe('gifts for 7 year old girls');
+    expect(clusterKey('gifts for 7 year old girls', syn)).toBe('7 gifts girls old year'); // sorted, "for" dropped
+  });
+  it('order-independent like Amazon broad: same words different order → same cluster', () => {
+    expect(clusterKey('journal kit for girls', syn)).toBe(clusterKey('girls journal kit', syn));
   });
   it('handles multi-word variants', () => {
-    expect(clusterKey('b day present for girl', syn)).toBe('birthday gifts for girls');
+    expect(clusterKey('b day present for girl', syn)).toBe('birthday gifts girls');
   });
   it('word-boundary safe: "presents" maps as a whole word, not "present"+s', () => {
     expect(clusterKey('birthday presents', syn)).toBe('birthday gifts');
   });
-  it('leaves unknown words untouched', () => {
+  it('leaves unknown content words untouched', () => {
     expect(clusterKey('cute notebook', syn)).toBe('cute notebook');
   });
 });
