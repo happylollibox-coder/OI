@@ -207,6 +207,10 @@ views:
     description: "Pure data layer — all metrics at campaign × asin × keyword grain. No logic."
     source_files: ["scripts/bigquery/views/V_ADS_COACH_DATA.sql"]
 
+  - name: "V_ADS_NEGATIVE_CONFLICTS"
+    description: "Pilot §8b: ENABLED NEGATIVE_EXACT keywords whose advertised ASIN converts on that term (SQP 365d, >=3 orders). Brand terms in non-defense campaigns excluded (intentional funnel control). conflict_type SELF_BLOCK / BRAND_IN_DEFENSE."
+    source_files: ["scripts/bigquery/views/V_ADS_NEGATIVE_CONFLICTS.sql"]
+
   - name: "V_ADS_COACH"
     description: "Single source of truth for all action decisions. Thin logic layer referencing V_ADS_COACH_DATA."
     source_files: ["scripts/bigquery/views/V_ADS_COACH.sql"]
@@ -295,6 +299,16 @@ views:
       - FACT_AMAZON_ADS
       - DIM_EXPERIMENT_CAMPAIGN
       - FACT_AMAZON_PERFORMANCE_DAILY
+      - DIM_PRODUCT
+
+  - name: "V_CAMPAIGN_MAPPING_STATUS"
+    description: "Admin Campaign Mapping panel — per ENABLED spending campaign: current experiment/strategy + source tag (manual/auto/default/unmapped) + deterministic suggested family/strategy/experiment_id with confidence. Backs the approve/edit mapping flow."
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_MAPPING_STATUS.sql"]
+    dependencies:
+      - DIM_CAMPAIGN
+      - FACT_AMAZON_ADS
+      - DIM_EXPERIMENT_CAMPAIGN
+      - DIM_EXPERIMENT
       - DIM_PRODUCT
 
   - name: "V_ADS_COACH_CAMPAIGN"
