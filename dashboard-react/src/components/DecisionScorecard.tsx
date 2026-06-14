@@ -29,6 +29,7 @@ interface OutcomeRow {
   pre_spend: number;
   pre_orders: number;
   pre_net_roas: number | null;
+  pre_net_profit: number;
   pre_orders_per_day: number;
   post_spend: number;
   post_orders: number;
@@ -56,7 +57,7 @@ async function loadOutcomes(): Promise<OutcomeRow[]> {
       'PpcActionOutcomes.oldBudget', 'PpcActionOutcomes.newBudget',
       'PpcActionOutcomes.postDaysElapsed',
       'PpcActionOutcomes.preSpend', 'PpcActionOutcomes.preOrders', 'PpcActionOutcomes.preNetRoas',
-      'PpcActionOutcomes.preOrdersPerDay',
+      'PpcActionOutcomes.preNetProfit', 'PpcActionOutcomes.preOrdersPerDay',
       'PpcActionOutcomes.postSpend', 'PpcActionOutcomes.postOrders', 'PpcActionOutcomes.postNetRoas',
       'PpcActionOutcomes.postOrdersPerDay',
       'PpcActionOutcomes.netRoasDelta', 'PpcActionOutcomes.weeklySavings',
@@ -85,6 +86,7 @@ async function loadOutcomes(): Promise<OutcomeRow[]> {
     pre_spend: num(r['PpcActionOutcomes.preSpend']),
     pre_orders: num(r['PpcActionOutcomes.preOrders']),
     pre_net_roas: numOrNull(r['PpcActionOutcomes.preNetRoas']),
+    pre_net_profit: num(r['PpcActionOutcomes.preNetProfit']),
     pre_orders_per_day: num(r['PpcActionOutcomes.preOrdersPerDay']),
     post_spend: num(r['PpcActionOutcomes.postSpend']),
     post_orders: num(r['PpcActionOutcomes.postOrders']),
@@ -245,7 +247,7 @@ export function DecisionScorecard() {
                     ? 'text-red-400 border-red-800 bg-red-950/30'
                     : 'text-zinc-500 border-zinc-700 bg-zinc-900/30'
                 }`}>
-                  target {fM(r.expected_impact_weekly)}/wk →{' '}
+                  prev {fM(r.pre_net_profit / 2)}/wk → target {fM(r.expected_impact_weekly)}/wk →{' '}
                   {r.target_status === 'TARGET_MET' ? '✓ met' : r.target_status === 'BELOW_TARGET' ? '✗ below' : '… early'}
                 </span>
               )}
