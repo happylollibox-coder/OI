@@ -62,11 +62,11 @@ FROM base
 WHERE NOT is_own_brand AND overall_fit >= 90
   AND broad_kw_cost_7d = 0
 UNION ALL
--- BRAND defense: own brand, real demand; phrase match → gate on PHRASE keyword spend
+-- BRAND defense: own brand, real demand; gate on EXACT keyword spend (per Ori)
 SELECT parent_name, query_text, 'BRAND', 'PHRASE',
        query_text, rank, overall_fit,
        CAST(weekly_market_impressions AS INT64),
        CAST(weekly_market_impressions AS FLOAT64)
 FROM base
 WHERE is_own_brand AND market_purchases > 0
-  AND phrase_kw_cost_7d = 0
+  AND exact_kw_cost_7d = 0

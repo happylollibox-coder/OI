@@ -25,7 +25,7 @@ BEGIN
     AND (
       (t.rec_type = 'EXACT'  AND COALESCE(rr.exact_kw_cost_7d, 0)  > 0) OR
       (t.rec_type = 'PHRASE' AND COALESCE(rr.phrase_kw_cost_7d, 0) > 0) OR
-      (t.rec_type = 'BRAND'  AND COALESCE(rr.phrase_kw_cost_7d, 0) > 0) OR
+      (t.rec_type = 'BRAND'  AND COALESCE(rr.exact_kw_cost_7d, 0)  > 0) OR
       (t.rec_type = 'BROAD'  AND COALESCE(rr.broad_kw_cost_7d, 0)  > 0)
     );
 
