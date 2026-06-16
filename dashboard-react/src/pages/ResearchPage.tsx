@@ -30,7 +30,7 @@ export function ResearchPage() {
   const [parent, setParent] = useState<string>('');
   const [selectedProduct, setSelectedProduct] = useState<string>('');
 
-  const [searchMode, setSearchMode] = useState<'direct' | 'related'>('direct');
+  const [searchMode, setSearchMode] = useState<'direct' | 'phrase' | 'broad'>('phrase');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<ResearchRow[]>([]);
   const [curve, setCurve] = useState<ConversionCurveRow[]>([]);
@@ -150,27 +150,11 @@ export function ResearchPage() {
     setSubmittedTerm(searchTerm);
     setSynonyms({});
     setSynonymsReady(false);
-    setSearchMode('direct');  // Always start with direct
+    setSearchMode('phrase');  // default match-type after a search; the mode effect fetches
     setCurrentPage(1);
 
-    // 1. Run direct search immediately
-    try {
-      const res = await apiFetch('/api/research/related-terms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ term: searchTerm, parent: parent || undefined, mode: 'direct' }),
-      });
-      if (res.ok) {
-        const data: Record<string, unknown>[] = await res.json();
-        setResults(data.map(mapResearchRow));
-      }
-    } catch (e) {
-      console.error('Research search failed:', e);
-    } finally {
-      setLoading(false);
-    }
-
-    // 2. Background: fetch synonyms (DE_SYNONYM_CACHE + hardcoded fallback)
+    // Results are fetched by the mode effect below (keyed on submittedTerm + searchMode).
+    // Background: fetch synonyms (DE_SYNONYM_CACHE + hardcoded fallback) to enable Broad.
     const stopWords = new Set(['a', 'an', 'the', 'for', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'by', 'is', 'it', 'my', 'with']);
     const searchWords = searchTerm.split(/\s+/).filter(w => !stopWords.has(w.toLowerCase()));
     if (searchWords.length > 0) {
@@ -195,55 +179,34 @@ export function ResearchPage() {
     }
   }, [term, parent]);
 
-  // When user toggles to Related mode with available synonyms, re-search
+  // Single fetch path for a live search: runs whenever the term, family, or match-type
+  // mode changes. Synonyms only matter for Broad, so a synonym arrival re-fetches only
+  // in that mode (reqKey dedupes against modes synonyms don't affect). Replaces the old
+  // per-mode and per-parent effects, and the inline fetch that doSearch used to do.
+  const searchReqRef = useRef('');
   useEffect(() => {
-    if (searchMode !== 'related' || !submittedTerm || submittedTerm === '__top__') return;
-    if (Object.keys(synonyms).length === 0) return;
-
+    if (!submittedTerm || submittedTerm === '__top__') return;
+    const synActive = searchMode === 'broad' && synonymsReady;
+    const reqKey = `${submittedTerm}|${parent}|${searchMode}|${synActive}`;
+    if (searchReqRef.current === reqKey) return;
+    searchReqRef.current = reqKey;
     setLoading(true);
     apiFetch('/api/research/related-terms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        term: submittedTerm, parent: parent || undefined,
-        mode: 'related', synonyms,
+        term: submittedTerm,
+        parent: parent || undefined,
+        mode: searchMode,
+        ...(searchMode === 'broad' ? { synonyms } : {}),
       }),
     })
       .then(r => r.ok ? r.json() : [])
       .then((data: Record<string, unknown>[]) => setResults(data.map(mapResearchRow)))
-      .catch(e => console.error('Related search failed:', e))
+      .catch(e => console.error('Research mode fetch failed:', e))
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchMode]);
-
-  // Auto-re-fetch when parent scope changes (e.g. user changes family tab mid-search)
-  const parentRef = useRef(parent);
-  useEffect(() => {
-    if (parentRef.current === parent) return; // skip initial
-    parentRef.current = parent;
-    if (submittedTerm && submittedTerm !== '__top__') {
-      (async () => {
-        setLoading(true);
-        try {
-          const res = await apiFetch('/api/research/related-terms', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              term: submittedTerm, parent: parent || undefined,
-              mode: searchMode,
-              ...(searchMode === 'related' ? { synonyms } : {}),
-            }),
-          });
-          if (res.ok) {
-            const data: Record<string, unknown>[] = await res.json();
-            setResults(data.map(mapResearchRow));
-          }
-        } catch (e) { console.error('Re-fetch failed:', e); }
-        finally { setLoading(false); }
-      })();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parent, submittedTerm]);
+  }, [submittedTerm, parent, searchMode, synonymsReady]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') doSearch();
@@ -592,12 +555,13 @@ export function ResearchPage() {
           </div>
         )}
 
-        {/* ─── Direct / Related toggle (above table) ─── */}
+        {/* ─── Direct / Phrase / Broad toggle (above table) ─── */}
         {!loading && submittedTerm && submittedTerm !== '__top__' && (
           <div className="flex items-center gap-3 mb-3">
             <div className="inline-flex rounded-lg border border-border overflow-hidden">
               <button
                 onClick={() => setSearchMode('direct')}
+                title="Exact term + plurals only"
                 className={`px-4 py-1.5 text-xs font-semibold transition-all ${
                   searchMode === 'direct'
                     ? 'text-white bg-blue-600'
@@ -607,23 +571,33 @@ export function ResearchPage() {
                 Direct
               </button>
               <button
-                onClick={() => synonymsReady && setSearchMode('related')}
-                disabled={!synonymsReady}
+                onClick={() => setSearchMode('phrase')}
+                title="All words, any order, extra words allowed"
+                className={`px-4 py-1.5 text-xs font-semibold transition-all border-l border-border ${
+                  searchMode === 'phrase'
+                    ? 'text-white bg-blue-600'
+                    : 'text-muted bg-white/[0.02] hover:text-subtle'
+                }`}
+              >
+                Phrase
+              </button>
+              <button
+                onClick={() => setSearchMode('broad')}
                 className={`px-4 py-1.5 text-xs font-semibold transition-all border-l border-border relative ${
-                  searchMode === 'related'
+                  searchMode === 'broad'
                     ? 'text-white bg-purple-600'
                     : synonymsReady
-                      ? 'text-purple-400 bg-purple-500/10 hover:bg-purple-500/20 cursor-pointer'
-                      : 'text-muted/40 bg-white/[0.01] cursor-not-allowed'
+                      ? 'text-purple-400 bg-purple-500/10 hover:bg-purple-500/20'
+                      : 'text-muted bg-white/[0.02] hover:text-subtle'
                 }`}
                 title={
                   synonymsLoading ? 'Finding synonyms...'
-                  : synonymsReady ? `Synonyms: ${Object.entries(synonyms).map(([w, s]) => `${w} → ${s.join(', ')}`).join(' | ')}`
-                  : 'No synonyms found for these words'
+                  : synonymsReady ? `Phrase reach + synonyms: ${Object.entries(synonyms).map(([w, s]) => `${w} → ${s.join(', ')}`).join(' | ')}`
+                  : 'Phrase reach + synonyms (none found yet for these words)'
                 }
               >
                 {synonymsLoading && <RefreshCw size={10} className="inline animate-spin mr-1" />}
-                Related
+                Broad
                 {synonymsReady && (
                   <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 flex items-center justify-center rounded-full bg-purple-500 text-white text-[9px] font-bold px-1">
                     {Object.values(synonyms).flat().length}
@@ -631,7 +605,7 @@ export function ResearchPage() {
                 )}
               </button>
             </div>
-            {synonymsReady && searchMode === 'related' && (
+            {searchMode === 'broad' && synonymsReady && (
               <span className="text-[11px] text-muted">
                 {Object.entries(synonyms).filter(([, s]) => s.length > 0).map(([w, s]) => (
                   <span key={w} className="mr-3">
@@ -659,7 +633,7 @@ export function ResearchPage() {
             productPrice={productPrice}
             termRanks={termRanks}
             onSaveSegments={onSaveSegments}
-            clusterSyn={searchMode === 'related' && synonymsReady ? synonyms : undefined}
+            clusterSyn={searchMode === 'broad' && synonymsReady ? synonyms : undefined}
           />
         )}
       </Section>
