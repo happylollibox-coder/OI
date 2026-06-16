@@ -121,11 +121,24 @@ Each row includes a `term_decision_trace` and `target_decision_trace` column con
 | Negate ROAS | `negate_roas` | 0.5 | NEGATE_EXACT / STOP_TERM |
 | Negate Spend | `negate_spend` | $20 | Legacy (clicks preferred) |
 | Reduce Bid ROAS | `reduce_bid_roas` | 0.9 | REDUCE_BID |
-| Scale Up ROAS | `scale_up_roas` | 2.0 | INCREASE_BID |
-| Profitable ROAS | `profitable_roas` | 1.1 | INCREASE_BID (baseline) |
+| Scale Up ROAS | `scale_up_roas` | 2.0 | INCREASE_BID (STRONG tier) |
+| Profitable ROAS | `profitable_roas` | 1.1 | INCREASE_BID (the **bid-up floor** = `min(profitable, scale_up)`) |
 | Promote Min Orders | `promote_min_orders` | 4 | PROMOTE_TO_EXACT |
 | Promote Min ROAS | `promote_min_roas` | 1.5 | PROMOTE_TO_EXACT |
 | Halo ROAS | `halo_roas` | 0.5 | SQP halo credit |
+| Bid Ceiling | `bid_cap_suggestion` | **$2.00** | Hard cap on every recommended bid |
+| Defense Dominate IS% | `defense_dominate_is_pct` | **50** | BRAND_DEFENSE bid-up gate |
+
+> **Reminder:** the bar called `profitable_roas` is **not "profitable"** for every strategy — it is the per-strategy **bid-up floor**, and several strategies set it below ad-breakeven on purpose (NEW_LAUNCH 0.5, SEASONAL_PUSH 0.7). The decision trace must explain the *intent* per strategy in plain language, never just "profitable threshold."
+
+### Per-strategy `profitable_roas` (GUARDIAN), post-2026-06-16
+
+| Strategy | Bar | Rationale |
+|----------|-----|-----------|
+| GLOBAL, HUNTER, EXACT_BOOST, LOW_COST_DISCOVERY, CATEGORY_CONQUEST, TOS_DOMINATION, RETARGETING | **1.1** | must be ad-profitable to scale (net ROAS is ads-only, breakeven = 1.0) |
+| SEASONAL_PUSH | 0.7 | keep peak-proven terms warm for the next peak |
+| NEW_LAUNCH | 0.5 | first days push for clicks to learn — buy rank at a controlled loss |
+| BRAND_DEFENSE / PRODUCT_DEFENSE | 3.0 / 2.0 | vestigial for the ROAS bar — defense never scales on ROAS (see redesign §) |
 
 ---
 
@@ -142,10 +155,30 @@ The ROAS metric used depends on the coach mode:
 
 ---
 
+## 2026-06-16 GUARDIAN Redesign
+
+Net ROAS used for all bid decisions is **ads-only** (`margin_per_unit × ad-attributed units ÷ ad spend`); breakeven = 1.0; no organic/SQP halo. Changes:
+
+1. **Bid-up floor = 1.1** across non-discovery strategies (see per-strategy table). The floor is `min(profitable_roas, scale_up_roas)`, so HUNTER also got `scale_up_roas` 1.0→2.0. Stops bidding *up* terms that aren't ad-profitable.
+2. **`NEEDS_STRATEGY`** (new target_action): a target on a campaign with no mapped strategy gets no bid action — it is flagged for the user to assign a strategy (name-based suggestion reused from the Campaign Mapping panel). No more silent GLOBAL-bar fallback on unmapped campaigns.
+3. **Frequency-gate bypass**: the GUARDIAN 7-day bid-change cadence may be bypassed at **≥3 days** if the **3-day net ROAS ≥ 2.0** (`ads_net_roas_3d`) — strong winners aren't held a full week.
+4. **`DEFENDED`** (new `ads_signal`): BRAND/PRODUCT_DEFENSE terms report `DEFENDED` instead of the misleading `WASTED_SPEND`.
+5. **Defense bid-raise** (replaces pure `MONITOR_TARGET` for defense — purpose: control the auction and make terms expensive for competitors):
+   - **BRAND_DEFENSE** (brand search terms): `INCREASE_BID` toward the $2 ceiling when SQP `impression_share_pct < defense_dominate_is_pct` (50%); else MONITOR (already dominating). Share comes from `FACT_SEARCH_QUERY`.
+   - **PRODUCT_DEFENSE** (ASIN targeting on own detail pages): `INCREASE_BID` toward the $2 ceiling **unconditionally** when `current_bid < ceiling` — no SQP signal exists for detail-page slots; intent is to occupy own listings.
+6. **Bid ceiling**: every recommended bid is capped at `bid_cap_suggestion` ($2.00, GLOBAL default). When the cap binds, the trace carries a "bid set by BID Ceiling" chip.
+7. **Dead config dropped**: `PROMOTE_ROAS_THRESHOLD` (never read — pivot uses `PROMOTE_MIN_ROAS`) and `REDUCE_BID_SPEND` (no logic) removed from `DE_COACH_THRESHOLDS`.
+8. **Per-strategy reasoning**: decision-trace explains each strategy's intent in plain language (the `profitable` bar is not self-explanatory).
+
+**Follow-ups (not in this change):** display research_rank + source keyword on cards; PRODUCT_DEFENSE self-brand cross-sell (suggest adding own ASINs as product-targets on own listings).
+
+---
+
 ## Maintenance Log
 
 | Date | Change |
 |------|--------|
+| 2026-06-16 | GUARDIAN redesign: per-strategy 1.1 bid-up floor, NEEDS_STRATEGY, 3d freq-gate bypass, DEFENDED signal, defense bid-raise (SQP IS gate / unconditional), $2 bid ceiling, dropped dead keys, per-strategy trace. See §2026-06-16. |
 | 2026-04-13 | Added lag window safety check (3-day look-ahead) for REDUCE_BID and ROAS-based NEGATE_EXACT. |
 | 2026-04-13 | Fixed deploy script: V_ADS_COACH was read but never deployed to BigQuery. |
 | 2026-04-13 | Added paused target guard: INCREASE_BID/REDUCE_BID only fire for ENABLED keywords. Paused/archived → TARGET_PAUSED. |
