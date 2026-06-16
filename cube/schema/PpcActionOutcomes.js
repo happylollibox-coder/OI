@@ -53,7 +53,7 @@ cube(`PpcActionOutcomes`, {
     appliedAt: { sql: `applied_at`, type: `time`, description: `When the change was marked uploaded (UTC)` },
     changeDate: { sql: `CAST(change_date AS TIMESTAMP)`, type: `time`, description: `LA-local change date used for windows` },
     action: { sql: `action`, type: `string` },
-    actionGroup: { sql: `action_group`, type: `string`, description: `NEGATE / PAUSE_TARGET / BID_DOWN / BID_UP / PROMOTE / BUDGET_UP / BUDGET_DOWN / OTHER` },
+    actionGroup: { sql: `action_group`, type: `string`, description: `NEGATE / UNNEGATE / PAUSE_TARGET / BID_DOWN / BID_UP / PROMOTE / BUDGET_UP / BUDGET_DOWN / OTHER` },
     verdict: { sql: `verdict`, type: `string`, description: `IMPROVED / WORSE / NO_DATA / TOO_EARLY` },
     searchTerm: { sql: `search_term`, type: `string` },
     targeting: { sql: `targeting`, type: `string` },

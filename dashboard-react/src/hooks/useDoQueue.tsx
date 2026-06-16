@@ -79,7 +79,7 @@ function loadQueue(): DoQueueItem[] {
 }
 
 function saveQueue(items: DoQueueItem[]) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(items)); } catch {}
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(items)); } catch { /* localStorage unavailable — ignore */ }
 }
 
 function loadDone(): DoQueueItem[] {
@@ -90,7 +90,7 @@ function loadDone(): DoQueueItem[] {
 }
 
 function saveDone(items: DoQueueItem[]) {
-  try { localStorage.setItem(DONE_STORAGE_KEY, JSON.stringify(items)); } catch {}
+  try { localStorage.setItem(DONE_STORAGE_KEY, JSON.stringify(items)); } catch { /* localStorage unavailable — ignore */ }
 }
 
 /* ─── Close the loop: persist applied changes to FACT_PPC_CHANGE_LOG ───
@@ -162,7 +162,7 @@ function savePendingLog(entries: PpcChangeLogEntry[]) {
   try {
     if (entries.length) localStorage.setItem(PENDING_LOG_KEY, JSON.stringify(entries));
     else localStorage.removeItem(PENDING_LOG_KEY);
-  } catch {}
+  } catch { /* localStorage unavailable — ignore */ }
 }
 
 async function postChangeLog(entries: PpcChangeLogEntry[]): Promise<boolean> {
@@ -185,7 +185,7 @@ function addSentKeys(keys: string[]) {
   try {
     const cur = [...loadSentKeys(), ...keys];
     localStorage.setItem(SENT_LOG_KEY, JSON.stringify(cur.slice(-500)));
-  } catch {}
+  } catch { /* localStorage unavailable — ignore */ }
 }
 
 /** Queue entries (incl. any prior failures), dedup against already-sent keys, then try to flush. */
@@ -208,7 +208,7 @@ function loadUploaded(): DoQueueItem[] {
 }
 
 function saveUploaded(items: DoQueueItem[]) {
-  try { localStorage.setItem(UPLOADED_STORAGE_KEY, JSON.stringify(items)); } catch {}
+  try { localStorage.setItem(UPLOADED_STORAGE_KEY, JSON.stringify(items)); } catch { /* localStorage unavailable — ignore */ }
 }
 
 export function DoQueueProvider({ children }: { children: React.ReactNode }) {
@@ -220,12 +220,16 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { saveDone(doneItems); }, [doneItems]);
   useEffect(() => { saveUploaded(uploadedItems); }, [uploadedItems]);
 
-  // Flush change-log entries that failed to reach BigQuery in a previous session
+  // Flush change-log entries that failed to reach BigQuery in a previous session.
+  // Dedup against already-sent keys first so a stale pending queue can't re-POST a
+  // change we already logged (the server MERGE is idempotent regardless, but this
+  // avoids the needless round-trip and keeps oi_ppc_log_sent authoritative).
   useEffect(() => {
-    const pending = loadPendingLog();
-    if (pending.length) {
-      postChangeLog(pending).then(ok => { if (ok) savePendingLog([]); });
-    }
+    const pending = dedupNewEntries(loadPendingLog(), loadSentKeys());
+    if (!pending.length) { savePendingLog([]); return; }
+    postChangeLog(pending).then(ok => {
+      if (ok) { addSentKeys(pending.map(changeLogKey)); savePendingLog([]); }
+    });
   }, []);
 
   const addItem = useCallback((item: Omit<DoQueueItem, 'id' | 'addedAt'>) => {
@@ -274,6 +278,7 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
     setDoneItems(prev => {
       const item = prev.find(p => p.id === id);
       if (!item) return prev;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- strip doneAt before re-queueing
       const { doneAt, ...rest } = item;
       setItems(q => [...q, rest]);
       return prev.filter(p => p.id !== id);
@@ -309,6 +314,7 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
     setUploadedItems(prev => {
       const item = prev.find(p => p.id === id);
       if (!item) return prev;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- strip uploaded/done timestamps before re-queueing
       const { uploadedAt, doneAt, ...rest } = item;
       setItems(q => [...q, rest]);
       return prev.filter(p => p.id !== id);

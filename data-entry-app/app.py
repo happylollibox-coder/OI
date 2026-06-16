@@ -5944,6 +5944,34 @@ def _ppc_num(value):
         return None
 
 
+def _ppc_canon(value):
+    """Canonical string form for the idempotency key (stable across re-POSTs)."""
+    if value is None:
+        return ''
+    if isinstance(value, float):
+        return repr(value)
+    return str(value)
+
+
+def _ppc_change_id(row):
+    """Deterministic change_id so a re-POSTed identical change collapses instead of
+    minting a fresh duplicate row. One logical change per object per applied-day —
+    mirrors the client changeLogKey and the V_PPC_ACTION_OUTCOMES dedup. The MERGE
+    in the insert route relies on this id being stable."""
+    import hashlib
+    obj = row.get('keyword_id') or row.get('targeting') or row.get('search_term') or ''
+    day = (row.get('applied_at') or '')[:10]  # YYYY-MM-DD
+    raw = '|'.join([
+        row.get('campaign_id') or '',
+        row.get('action') or '',
+        obj,
+        _ppc_canon(row.get('new_bid')),
+        _ppc_canon(row.get('new_budget')),
+        day,
+    ])
+    return 'chg_' + hashlib.sha1(raw.encode('utf-8')).hexdigest()[:12]
+
+
 @app.route('/api/ppc-change-log', methods=['POST'])
 def api_ppc_change_log_insert():
     """Persist applied PPC changes (DO page 'Uploaded to Amazon').
@@ -5972,8 +6000,7 @@ def api_ppc_change_log_insert():
             if not action:
                 continue  # an action-less row can never be scored
             orders_8w = item.get('target_orders_8w')
-            rows.append({
-                'change_id': f'chg_{uuid.uuid4().hex[:12]}',
+            row = {
                 'batch_id': batch_id,
                 # Offline-retried items carry their original timestamp
                 'applied_at': item.get('applied_at') or applied_at,
@@ -5998,21 +6025,52 @@ def api_ppc_change_log_insert():
                 'source': item.get('source') if item.get('source') in ('COACH', 'MANUAL') else 'COACH',
                 'expected_impact_weekly': _ppc_num(item.get('expected_impact_weekly')),
                 'expected_impact_kind': (item.get('expected_impact_kind') or None),
-            })
+            }
+            row['change_id'] = _ppc_change_id(row)
+            rows.append(row)
 
         if not rows:
             return jsonify({'error': 'No valid items (every item needs an action)'}), 400
 
-        table_ref = f'{PROJECT_ID}.{DATASET_ID}.FACT_PPC_CHANGE_LOG'
-        job_config = bigquery.LoadJobConfig(
-            schema=PPC_CHANGE_LOG_SCHEMA,
-            write_disposition='WRITE_APPEND',
-        )
-        job = client.load_table_from_json(rows, table_ref, job_config=job_config)
-        job.result()
+        items_received = len(rows)
+        # Dedup within this batch on the deterministic change_id (keep first).
+        _seen = set()
+        rows = [r for r in rows if not (r['change_id'] in _seen or _seen.add(r['change_id']))]
 
-        if job.errors:
-            return jsonify({'error': str(job.errors)}), 500
+        # Idempotent insert: stage the batch, then MERGE … WHEN NOT MATCHED on change_id.
+        # A re-POST (double-click / multi-tab / offline-flush race / dev StrictMode) becomes
+        # a no-op instead of a duplicate row; BigQuery serialises DML on the target so
+        # concurrent re-POSTs are race-safe. Staging table is dropped in finally().
+        table_ref = f'{PROJECT_ID}.{DATASET_ID}.FACT_PPC_CHANGE_LOG'
+        stage_ref = f'{PROJECT_ID}.{DATASET_ID}.FACT_PPC_CHANGE_LOG_stage_{uuid.uuid4().hex[:8]}'
+        stage_job = client.load_table_from_json(
+            rows, stage_ref,
+            job_config=bigquery.LoadJobConfig(
+                schema=PPC_CHANGE_LOG_SCHEMA,
+                write_disposition='WRITE_TRUNCATE',
+            ),
+        )
+        stage_job.result()
+        if stage_job.errors:
+            client.delete_table(stage_ref, not_found_ok=True)
+            return jsonify({'error': str(stage_job.errors)}), 500
+
+        try:
+            cols = [f.name for f in PPC_CHANGE_LOG_SCHEMA]
+            col_list = ', '.join(cols)
+            val_list = ', '.join(f'S.{c}' for c in cols)
+            merge_sql = f"""
+                MERGE `{table_ref}` T
+                USING `{stage_ref}` S
+                ON T.change_id = S.change_id
+                WHEN NOT MATCHED THEN
+                  INSERT ({col_list}) VALUES ({val_list})
+            """
+            merge_job = client.query(merge_sql)
+            merge_job.result()
+            inserted = merge_job.num_dml_affected_rows or 0
+        finally:
+            client.delete_table(stage_ref, not_found_ok=True)
 
         # Fold the just-uploaded negates/removes into the owned registries
         # (DE_NEGATIVE_KEYWORDS / DE_NEGATIVE_TARGETS). Best-effort: a sync failure
@@ -6028,7 +6086,8 @@ def api_ppc_change_log_insert():
         return jsonify({
             'success': True,
             'batch_id': batch_id,
-            'items_logged': len(rows),
+            'items_received': items_received,
+            'items_logged': inserted,  # rows actually inserted (re-POSTs dedup to 0)
             'negatives_synced': negatives_synced,
         })
     except Exception as e:

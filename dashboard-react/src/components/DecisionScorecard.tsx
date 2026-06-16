@@ -110,9 +110,11 @@ function verdictSentence(r: OutcomeRow): string {
     return `${r.post_days_elapsed} of 14 post-change days in — verdict pending`;
   }
   if (r.verdict === 'NO_DATA') {
-    return r.action_group === 'PROMOTE'
-      ? `promoted "${entity}" — no spend recorded yet, keyword may not be live`
-      : `no ads data matched this change — check campaign/keyword identifiers`;
+    if (r.action_group === 'PROMOTE')
+      return `promoted "${entity}" — no spend recorded yet, keyword may not be live`;
+    if (r.action_group === 'UNNEGATE')
+      return `re-allowed "${entity}" — no spend recorded yet, term may not be serving`;
+    return `no ads data matched this change — check campaign/keyword identifiers`;
   }
 
   switch (r.action_group) {
@@ -136,6 +138,10 @@ function verdictSentence(r: OutcomeRow): string {
       return r.verdict === 'IMPROVED'
         ? `promoted "${entity}" — now ${(r.post_orders_per_day ?? 0).toFixed(1)} orders/day at net ROAS ${roas(r.post_net_roas)}`
         : `promoted "${entity}" — net ROAS ${roas(r.post_net_roas)} post-launch, below break-even`;
+    case 'UNNEGATE':
+      return r.verdict === 'IMPROVED'
+        ? `re-allowed "${entity}" — now ${(r.post_orders_per_day ?? 0).toFixed(1)} orders/day at net ROAS ${roas(r.post_net_roas)}`
+        : `re-allowed "${entity}" — net ROAS ${roas(r.post_net_roas)} post-unblock, below break-even`;
     default:
       return r.verdict === 'IMPROVED'
         ? `"${entity}" — net ROAS ${roas(r.pre_net_roas)} → ${roas(r.post_net_roas)}`

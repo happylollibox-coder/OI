@@ -42,7 +42,7 @@ DO page "Uploaded to Amazon ✓"
 
 | Column | Type | Notes |
 |---|---|---|
-| `change_id` | STRING NOT NULL | `chg_<uuid12>` minted server-side |
+| `change_id` | STRING NOT NULL | `chg_<sha1-12>` — **deterministic** hash of (campaign_id, action, object, new_bid, new_budget, applied-day). Same logical change → same id, so a re-POST collapses via idempotent MERGE (no more duplicate rows) |
 | `batch_id` | STRING NOT NULL | groups one upload batch |
 | `applied_at` | TIMESTAMP NOT NULL | UTC instant the user marked uploaded; views derive LA date |
 | `action` | STRING NOT NULL | DO-queue action (`NEGATE_TERM`, `REDUCE_BID`, `PROMOTE_TO_EXACT`, …) |
@@ -90,6 +90,7 @@ Pre/post metrics are compared as **per-day rates** so a partial post window is s
 | `action_group` | Actions | Scope predicate |
 |---|---|---|
 | `NEGATE` | `NEGATE_*`, `STOP_TERM`, `STOP`, `NEGATE`, `SWITCH_HERO` | `campaign_id` + `LOWER(search_term)` |
+| `UNNEGATE` | `REMOVE_NEGATIVE`, `REMOVE_CONFLICTING_NEGATIVE` | `campaign_id` + `LOWER(search_term)` — the inverse of `NEGATE`: a previously-blocked term is re-allowed, so it's judged term-scoped on whether it now converts (not the generic campaign-level `OTHER` check it used to fall into) |
 | `PAUSE_TARGET` | `STOP_TARGET` | `campaign_id` + `keyword_id` (exact Amazon ID; falls back to `LOWER(targeting)` when no keyword_id was logged — `FACT_AMAZON_ADS` has no `match_type` column) |
 | `BID_DOWN` | `REDUCE_BID` | same as `PAUSE_TARGET` |
 | `BID_UP` | `INCREASE_BID`, `BOOST`, `SCALE_UP` | same as `PAUSE_TARGET` |
@@ -115,8 +116,8 @@ metric that fired the threshold (gotchas #1 and #5 in the oi-data-analyst skill)
 `TOO_EARLY` and `NO_DATA` always take precedence:
 
 - `TOO_EARLY` — `post_days_elapsed < 7` (full confidence at 14).
-- `NO_DATA` — no FACT rows matched in either window (or, for `PROMOTE`, no post spend:
-  the promoted keyword never went live).
+- `NO_DATA` — no FACT rows matched in either window (or, for `PROMOTE`/`UNNEGATE`, no post spend:
+  the promoted/re-allowed keyword never went live).
 
 Otherwise, per action group:
 
@@ -127,6 +128,7 @@ Otherwise, per action group:
 | `BID_DOWN` | post `net_roas ≥` pre `net_roas` | bid cuts are an efficiency play |
 | `BID_UP` | post orders/day ≥ pre orders/day AND post `net_roas ≥ 0.8 ×` pre | scaling allows modest efficiency dip |
 | `PROMOTE` | post orders/day > pre orders/day AND post `net_roas ≥ 1.0` | promotion must produce profitable volume |
+| `UNNEGATE` | post orders > 0 AND post `net_roas ≥ 1.0` | re-allowing a blocked term must prove it now converts profitably (pre window is ~0 by construction — it was negated); `NO_DATA` when no post spend |
 | `BUDGET` (increase) | as `BID_UP`, campaign scope | |
 | `BUDGET` (decrease) / `OTHER` | as `BID_DOWN` scope rules | |
 
@@ -141,9 +143,16 @@ premise right", not a counterfactual. Bid/budget/promote verdicts are true pre/p
 ## Ingestion — Flask + DO page
 
 - `POST /api/ppc-change-log` — body: JSON array of change items (camel-ish keys identical to
-  `DoQueueItem` fields plus `source`). Server mints `change_id`/`batch_id`/`applied_at`.
-  Pattern: raw BigQuery client, explicit `LoadJobConfig` schema, `WRITE_APPEND`,
-  check `job.errors`, `clear_data_cache()` after write. Returns `{success, batch_id, items_logged}`.
+  `DoQueueItem` fields plus `source`). Server mints a **deterministic** `change_id` (see table
+  above) plus `batch_id`/`applied_at`. **Idempotent**: rows are loaded to an ephemeral staging
+  table and `MERGE … WHEN NOT MATCHED`-ed into `FACT_PPC_CHANGE_LOG` on `change_id`, so any
+  re-POST (double-click, multi-tab, offline-flush race, dev StrictMode) is a no-op rather than
+  a duplicate row. BigQuery serialises DML on the target, so concurrent re-POSTs are race-safe.
+  `clear_data_cache()` after write. Returns `{success, batch_id, items_received, items_logged}`
+  (`items_logged` = rows actually inserted by the MERGE).
+- **Client dedup (defence in depth)**: `useDoQueue.tsx` keeps `oi_ppc_log_sent` keys
+  (`ppcLogDedup.changeLogKey`) and dedups both the upload batch and the on-mount re-flush of
+  `oi_ppc_log_pending` before POSTing. The server MERGE is the authoritative backstop.
 - `GET /api/ppc-change-log?limit=N` — recent rows, for verification/debug.
 - **DO page**: `markAllUploaded()` in `useDoQueue.tsx` now also POSTs the batch.
   localStorage remains the source for the UI (offline fallback). Failed POSTs are queued in
@@ -172,3 +181,4 @@ premise right", not a counterfactual. Bid/budget/promote verdicts are true pre/p
 | Date | Change |
 |---|---|
 | 2026-06-11 | Initial design + implementation (table, view, endpoint, DO-page wiring, Cube, scorecard). |
+| 2026-06-16 | **Idempotent ingestion**: deterministic `change_id` + staging-table `MERGE` (no more duplicate-logged rows); client mount-flush now dedups. **`UNNEGATE` action_group**: `REMOVE_NEGATIVE`/`REMOVE_CONFLICTING_NEGATIVE` now scored term-scoped (did the re-allowed term convert?) instead of falling into campaign-level `OTHER`. |

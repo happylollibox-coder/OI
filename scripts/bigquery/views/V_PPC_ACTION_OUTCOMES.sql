@@ -64,6 +64,9 @@ changes AS (
     c.expected_impact_kind,
     CASE
       WHEN c.action LIKE 'NEGATE%' OR c.action IN ('STOP_TERM', 'STOP', 'SWITCH_HERO') THEN 'NEGATE'
+      -- Inverse of NEGATE: a previously-blocked term is re-allowed. Judged term-scoped
+      -- (did it now convert?), not the generic campaign-level OTHER it used to fall into.
+      WHEN c.action IN ('REMOVE_NEGATIVE', 'REMOVE_CONFLICTING_NEGATIVE') THEN 'UNNEGATE'
       WHEN c.action = 'STOP_TARGET' THEN 'PAUSE_TARGET'
       WHEN c.action = 'REDUCE_BID' THEN 'BID_DOWN'
       WHEN c.action IN ('INCREASE_BID', 'BOOST', 'SCALE_UP') THEN 'BID_UP'
@@ -112,8 +115,8 @@ scoped AS (
     ON fa.date BETWEEN DATE_SUB(ch.change_date, INTERVAL 14 DAY)
                    AND DATE_ADD(ch.change_date, INTERVAL 14 DAY)
    AND (
-     -- Term scope within campaign: negates / stop-term
-     (ch.action_group IN ('NEGATE')
+     -- Term scope within campaign: negates / stop-term / un-negates (re-allowed terms)
+     (ch.action_group IN ('NEGATE', 'UNNEGATE')
         AND fa.campaign_id = ch.campaign_id
         AND LOWER(fa.search_term) = LOWER(COALESCE(ch.search_term, ch.targeting)))
      -- Target (keyword) scope within campaign: bid changes / pause target.
@@ -196,13 +199,19 @@ SELECT
   CASE
     -- Not enough post-window signal yet (full confidence at 14 days)
     WHEN s.post_days_elapsed < 7 THEN 'TOO_EARLY'
-    -- Nothing matched in either window / promoted keyword never went live
+    -- Nothing matched in either window / promoted|re-allowed keyword never went live
     WHEN s.pre_rows = 0 AND s.post_rows = 0 THEN 'NO_DATA'
-    WHEN s.action_group = 'PROMOTE' AND s.post_spend = 0 THEN 'NO_DATA'
+    WHEN s.action_group IN ('PROMOTE', 'UNNEGATE') AND s.post_spend = 0 THEN 'NO_DATA'
 
     -- Negate / pause: did we cut losing spend? (premise check — see SOP)
     WHEN s.action_group IN ('NEGATE', 'PAUSE_TARGET') THEN
       CASE WHEN s.pre_orders = 0 OR COALESCE(s.pre_net_roas, 0) < 1.0
+           THEN 'IMPROVED' ELSE 'WORSE' END
+
+    -- Un-negate: re-allowing a blocked term must prove it now converts profitably.
+    -- Pre window is ~0 by construction (it was negated), so judge on post like a PROMOTE.
+    WHEN s.action_group = 'UNNEGATE' THEN
+      CASE WHEN s.post_orders > 0 AND COALESCE(s.post_net_roas, 0) >= 1.0
            THEN 'IMPROVED' ELSE 'WORSE' END
 
     -- Bid down / budget down / other: efficiency must not degrade
