@@ -127,7 +127,7 @@ Computed in SQL (`is_holiday_active`), exposed to the UI.
 | Endpoint | Method | Reads | Notes |
 |---|---|---|---|
 | `top-terms?parent=` | GET | FACT_RESEARCH_TERMS (+RANKED if parent) | all terms with brand purchases, 104w window |
-| `related-terms` | POST `{term, parent?, mode, synonyms?}` | FACT_SEARCH_QUERY (seeds) + FACT tables | co-occurrence expansion. **Direct mode = whole-word, plural-tolerant match** (`7`≠`17`, `girl`=`girls`); not substring `LIKE '%word%'`. Related mode keeps synonym `LIKE` expansion. |
+| `related-terms` | POST `{term, parent?, mode, synonyms?}` | FACT_SEARCH_QUERY (seeds) + FACT tables | co-occurrence expansion. **mode ∈ {direct, phrase, broad}** (default `phrase`). **Direct** = exact term + plurals, whole-string regex. **Phrase** = every token present, any order, extra words allowed (whole-word, plural-tolerant regex; `7`≠`17`, `girl`=`girls`). Direct/Phrase predicates built by `research_match.research_match_predicate` and applied as a `match_filter`. **Broad** = the former `related` mode unchanged: per-word synonym `LIKE` OR-expansion over the full co-occurrence net (no `match_filter`), marking rows direct vs related. |
 | `term-ranks` | POST `{terms[]}` | FACT_RESEARCH_RANKED | per-family hover comparison (≤500 terms) |
 | `get-synonyms` | POST `{words[]}` | DE_SYNONYM_CACHE → hardcoded fallback | fallback unlocks Related mode |
 | `update-segments` | POST | MERGE into DE_SEARCH_TERM_SEGMENTS | atomic upsert |
@@ -203,3 +203,9 @@ Validation: `python3 tools/validate_research_ranked.py` (enum/bounds/consistency
 - 2026-06-12: Recommendations layer — 4 net-new keyword recommendation types per
   family, rate-limited 5/type/family/week, shared with the coacher. Spec:
   `docs/superpowers/specs/2026-06-12-research-recommendations-design.md`.
+- 2026-06-16: Search toggle is now 3-way **Direct / Phrase / Broad** (was Direct/Related);
+  Direct/Phrase use whole-word plural-tolerant regex (fixes the substring `7`/`17` bug),
+  Broad = the old synonym-expansion path. Default mode = Phrase. Brand recommendation card
+  now hides ADVERTISED rows (shows only not-yet-advertised own-brand gaps). Helper:
+  `data-entry-app/research_match.py`. Spec:
+  `docs/superpowers/specs/2026-06-16-research-match-type-toggles-and-brand-card-design.md`.
