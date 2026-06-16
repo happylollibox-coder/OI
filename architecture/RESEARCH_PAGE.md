@@ -127,7 +127,7 @@ Computed in SQL (`is_holiday_active`), exposed to the UI.
 | Endpoint | Method | Reads | Notes |
 |---|---|---|---|
 | `top-terms?parent=` | GET | FACT_RESEARCH_TERMS (+RANKED if parent) | all terms with brand purchases, 104w window |
-| `related-terms` | POST `{term, parent?, mode, synonyms?}` | FACT_SEARCH_QUERY (seeds) + FACT tables | co-occurrence expansion. **mode ∈ {direct, phrase, broad}** (default `phrase`). **Direct** = exact term + plurals, whole-string regex. **Phrase** = every token present, any order, extra words allowed (whole-word, plural-tolerant regex; `7`≠`17`, `girl`=`girls`). Direct/Phrase predicates built by `research_match.research_match_predicate` and applied as a `match_filter`. **Broad** = the former `related` mode unchanged: per-word synonym `LIKE` OR-expansion over the full co-occurrence net (no `match_filter`), marking rows direct vs related. |
+| `related-terms` | POST `{term, parent?, mode, synonyms?}` | FACT_RESEARCH_TERMS (direct/phrase) · FACT_SEARCH_QUERY+FACT (broad) | **mode ∈ {direct, phrase, broad}** (default `phrase`). **Direct/Phrase** query the FULL term universe `FACT_RESEARCH_TERMS` directly (NO ASIN co-occurrence gate), using the SAME tokenization as `coverage_count` in `SP_REFRESH_RESEARCH_RECOMMENDATIONS` — punctuation-delimited tokens (`8-10`→`8`,`10`), bidirectional plural via trailing-`s` strip on both sides (`girl`=`girls`), whole-word `STRPOS` over a normalized term (`7`≠`17`). Tokens built by `research_match.research_match_predicate`; **Phrase** = all tokens present any order (AND of `STRPOS(NORM, ' tok ')>0`), **Direct** = exact normalized-string equality. A Phrase search therefore returns the same set the card's "covers N" counts (plus the seed). `asin_overlap`/`overlap_pct` are NULL for these (Relevance column shows "—"). **Broad** = the former `related` mode unchanged: per-word synonym `LIKE` OR-expansion over the full ASIN co-occurrence net, marking rows direct vs related. |
 | `term-ranks` | POST `{terms[]}` | FACT_RESEARCH_RANKED | per-family hover comparison (≤500 terms) |
 | `get-synonyms` | POST `{words[]}` | DE_SYNONYM_CACHE → hardcoded fallback | fallback feeds Broad mode synonym expansion |
 | `update-segments` | POST | MERGE into DE_SEARCH_TERM_SEGMENTS | atomic upsert |
@@ -209,3 +209,10 @@ Validation: `python3 tools/validate_research_ranked.py` (enum/bounds/consistency
   now hides ADVERTISED rows (shows only not-yet-advertised own-brand gaps). Helper:
   `data-entry-app/research_match.py`. Spec:
   `docs/superpowers/specs/2026-06-16-research-match-type-toggles-and-brand-card-design.md`.
+- 2026-06-16: Direct/Phrase parity fix — they now match the FULL term universe
+  (`FACT_RESEARCH_TERMS` directly, no ASIN co-occurrence gate) using the exact
+  `coverage_count` tokenization (punctuation split so `8-10`→`8`,`10`; bidirectional plural;
+  whole-word `STRPOS` over a normalized term). Previously Phrase ran through the co-occurrence
+  net with one-directional-plural regex, so a term whose card said "covers 9" returned only 2.
+  Now Phrase returns the covered set (+ the seed). `research_match_predicate` reworked to emit
+  normalized stems; Broad path unchanged.
