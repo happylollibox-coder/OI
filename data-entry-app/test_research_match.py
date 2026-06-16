@@ -29,6 +29,12 @@ class PhraseMode(unittest.TestCase):
         params, _ = research_match_predicate(['Girl'], 'phrase')
         self.assertEqual(params, [('rx_0', r'\bgirls?\b')])
 
+    def test_special_char_token_is_escaped(self):
+        # Regex-special chars are escaped literally; the trailing 's?' binds only to the
+        # appended 's', so escaping a token never corrupts the plural-tolerance suffix.
+        params, _ = research_match_predicate(['c++'], 'phrase')
+        self.assertEqual(params, [('rx_0', r'\bc\+\+s?\b')])
+
 
 if __name__ == '__main__':
     unittest.main()
