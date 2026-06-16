@@ -15,10 +15,12 @@ import XLSX from 'xlsx-js-style';
 import { cubeLoad } from '../hooks/useCubeData';
 import PODetailDrawer from '../components/supply/PODetailDrawer';
 import ShipmentDetailDrawer from '../components/supply/ShipmentDetailDrawer';
+import PaymentDetailDrawer from '../components/supply/PaymentDetailDrawer';
 import { NewPOModal } from '../components/supply/NewPOModal';
 import { NewOtherPOModal } from '../components/supply/NewOtherPOModal';
 import { NewShipmentModal } from '../components/supply/NewShipmentModal';
-import { dataEntry, type PODetail, type ShipmentDetail } from '../utils/dataEntry';
+import { NewPaymentModal } from '../components/supply/NewPaymentModal';
+import { dataEntry, type PODetail, type ShipmentDetail, type PaymentDetail } from '../utils/dataEntry';
 import { apiFetch } from '../utils/apiFetch';
 
 /* ─── Map a Flask PODetail into table rows (one per product line) ───
@@ -93,6 +95,29 @@ function mapShipmentDetailToRows(detail: ShipmentDetail, existing: SupplyShipmen
     products_list: productNames.join(', '),
     unpaid_to_shipment: prior?.unpaid_to_shipment ?? 0,
     is_open: !RECEIVED_SHIPMENT_STATUSES.has(status.toUpperCase()),
+  }];
+}
+
+/* ─── Map a Flask PaymentDetail into a single Payments-table row ───
+ * One row per payment. total_amount = payment_amount + bank_fee (matches the
+ * Cube row's computed total). */
+function mapPaymentDetailToRows(detail: PaymentDetail, _existing: SupplyPaymentRow[]): SupplyPaymentRow[] {
+  void _existing;
+  const p = detail.payment as Record<string, unknown>;
+  const payment_amount = Number(p.payment_amount ?? 0);
+  const bank_fee = Number(p.bank_fee ?? 0);
+  return [{
+    payment_id: String(p.payment_id),
+    payment_date: String(p.payment_date ?? ''),
+    payment_amount,
+    bank_fee,
+    total_amount: payment_amount + bank_fee,
+    currency: String(p.currency ?? ''),
+    payment_method: String(p.payment_method ?? ''),
+    vendor_name: String(p.vendor_name ?? ''),
+    purchase_order_id: (p.purchase_order_id ?? null) as string | null,
+    shipment_id: (p.shipment_id ?? null) as string | null,
+    notes: (p.notes ?? null) as string | null,
   }];
 }
 
@@ -314,6 +339,12 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   const [showNewShipment, setShowNewShipment] = useState(false);
   const [selectedShipment, setSelectedShipment] = useState<SupplyShipmentRow | null>(null);
 
+  // ── Payment write-through override layer (table stays on Cube; writes go via Flask) ──
+  const [paymentOverrides, setPaymentOverrides] = useState<Record<string, SupplyPaymentRow[]>>({});
+  const [deletedPaymentIds, setDeletedPaymentIds] = useState<Set<string>>(new Set());
+  const [showNewPayment, setShowNewPayment] = useState(false);
+  const [selectedPayment, setSelectedPayment] = useState<SupplyPaymentRow | null>(null);
+
   // Stock snapshot state
   const [snapshotDate, setSnapshotDate] = useState(new Date().toISOString().slice(0, 10));
   const [snapshotRows, setSnapshotRows] = useState<StockSnapshotRow[]>([]);
@@ -479,6 +510,46 @@ export function SupplyPage({ data }: { data: DashboardData }) {
     }
   }, [selectedShipment, data.supply_shipments]);
 
+  /* ─── Effective Payment list: Cube base + Flask write-through overrides ─── */
+  const effectivePayments = useMemo(() => {
+    const base = (data.supply_payments || []).filter(r => !deletedPaymentIds.has(r.payment_id));
+    const overriddenIds = new Set(Object.keys(paymentOverrides));
+    const kept = base.filter(r => !overriddenIds.has(r.payment_id));
+    const overrideRows = Object.values(paymentOverrides).flat().filter(r => !deletedPaymentIds.has(r.payment_id));
+    return [...kept, ...overrideRows];
+  }, [data.supply_payments, paymentOverrides, deletedPaymentIds]);
+
+  /* ─── Payment write-through handlers ─── */
+  const handleNewPaymentSaved = useCallback(async (id: string) => {
+    try {
+      const d = await dataEntry.getPayment(id);
+      setPaymentOverrides(p => ({ ...p, [id]: mapPaymentDetailToRows(d, []) }));
+    } catch {
+      // Non-fatal: new payment will appear on next Cube refresh
+    }
+    setShowNewPayment(false);
+  }, []);
+
+  const handlePaymentDrawerChanged = useCallback((detail: PaymentDetail | null) => {
+    if (!selectedPayment) return;
+    if (detail === null) {
+      const id = selectedPayment.payment_id;
+      setDeletedPaymentIds(s => { const next = new Set(s); next.add(id); return next; });
+      setPaymentOverrides(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setSelectedPayment(null);
+    } else {
+      const id = String((detail.payment as Record<string, unknown>).payment_id);
+      setPaymentOverrides(p => ({
+        ...p,
+        [id]: mapPaymentDetailToRows(detail, (data.supply_payments || []).filter(r => r.payment_id === id)),
+      }));
+    }
+  }, [selectedPayment, data.supply_payments]);
+
   /* ─── Summary from ALL POs (not filtered) ─── */
   const allPos = effectivePos;
   const summaryTotals = useMemo(() => {
@@ -511,7 +582,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   }, [allPos, showOpenOnly, poDateFrom, poDateTo, poSort]);
 
   /* ─── Filtered Payments ─── */
-  const allPayments = data.supply_payments || [];
+  const allPayments = effectivePayments;
   const paymentYears = useMemo(() => {
     const ys = new Set<string>();
     for (const p of allPayments) {
@@ -920,6 +991,15 @@ export function SupplyPage({ data }: { data: DashboardData }) {
               New Shipment
             </button>
           )}
+          {tab === 'payments' && (
+            <button
+              onClick={() => setShowNewPayment(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-md text-xs font-semibold text-white transition-colors"
+            >
+              <Plus size={14} />
+              New Payment
+            </button>
+          )}
           {tab === 'pos' && (
             <>
               <button
@@ -969,7 +1049,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
       {tab === 'payments' && (() => {
         return (
           <div className="rounded-xl border border-border overflow-x-auto">
-            <PaymentsTable rows={filteredPayments} allPos={allPos} sort={paySort} onSort={toggleSort(setPaySort)} />
+            <PaymentsTable rows={filteredPayments} allPos={allPos} sort={paySort} onSort={toggleSort(setPaySort)} onSelectPayment={setSelectedPayment} />
           </div>
         );
       })()}
@@ -1059,6 +1139,15 @@ export function SupplyPage({ data }: { data: DashboardData }) {
         />
       )}
 
+      {/* ─── Payment detail drawer (Flask-backed edits) ─── */}
+      {selectedPayment && (
+        <PaymentDetailDrawer
+          payment={selectedPayment}
+          onClose={() => setSelectedPayment(null)}
+          onChanged={handlePaymentDrawerChanged}
+        />
+      )}
+
       {/* ─── Create modals ─── */}
       {showNewPO && (
         <NewPOModal onClose={() => setShowNewPO(false)} onSaved={handleNewPOSaved} />
@@ -1068,6 +1157,9 @@ export function SupplyPage({ data }: { data: DashboardData }) {
       )}
       {showNewShipment && (
         <NewShipmentModal onClose={() => setShowNewShipment(false)} onSaved={handleNewShipmentSaved} />
+      )}
+      {showNewPayment && (
+        <NewPaymentModal onClose={() => setShowNewPayment(false)} onSaved={handleNewPaymentSaved} />
       )}
     </div>
   );
@@ -1282,7 +1374,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function PaymentsTable({ rows, allPos, sort, onSort }: { rows: SupplyPaymentRow[]; allPos: SupplyPORow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void }) {
+function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: SupplyPaymentRow[]; allPos: SupplyPORow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void; onSelectPayment: (p: SupplyPaymentRow) => void }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   if (rows.length === 0) return <div className="p-8 text-center text-muted text-sm">No payments match filters</div>;
 
@@ -1342,7 +1434,18 @@ function PaymentsTable({ rows, allPos, sort, onSort }: { rows: SupplyPaymentRow[
                 <td className="px-4 py-2.5 text-subtle text-xs">{r.vendor_name}</td>
                 <td className="px-4 py-2.5 text-xs font-mono whitespace-nowrap max-w-[280px]">
                   <div className="flex items-center gap-2">
-                    <span className="truncate flex-1 min-w-0 text-heading font-medium" title={r.payment_id}>{r.payment_id || '—'}</span>
+                    {r.payment_id ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onSelectPayment(r); }}
+                        className="inline-flex items-center gap-1 flex-1 min-w-0 text-blue-400 hover:text-blue-300 hover:underline underline-offset-2 transition-colors cursor-pointer"
+                        title={`View details: ${r.payment_id}`}
+                      >
+                        <Eye size={12} className="shrink-0 opacity-60" />
+                        <span className="truncate font-medium">{r.payment_id}</span>
+                      </button>
+                    ) : (
+                      <span className="truncate flex-1 min-w-0 text-heading font-medium">—</span>
+                    )}
                     {r.payment_id && <CopyButton text={r.payment_id} />}
                   </div>
                 </td>
