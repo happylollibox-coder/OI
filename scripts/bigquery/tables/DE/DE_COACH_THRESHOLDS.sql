@@ -62,6 +62,7 @@ VALUES
   ('SCALE_UP_ROAS', 'GLOBAL', 'GUARDIAN', 2, 'Scale up if Net ROAS exceeds this', 1, 1, 'SEED'),
   ('SCALE_UP_SPEND_CAP', 'GLOBAL', 'GUARDIAN', 50, 'Only scale up if spend is below this cap', 1, 1, 'SEED'),
   ('WASTED_SPEND_THRESHOLD', 'GLOBAL', 'GUARDIAN', 15, 'Flag as wasted if spend exceeds this with 0 orders', 1, 1, 'SEED'),
+  ('CROSS_SELL_MIN_ORDERS', 'GLOBAL', 'GUARDIAN', 3, 'Min A->B cross-purchase orders (30d) to recommend a self-cross-sell product target', 1, 1, 'MANUAL'),
 
   -- GUARDIAN x BRAND_DEFENSE
   ('BID_CAP_SUGGESTION', 'BRAND_DEFENSE', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
