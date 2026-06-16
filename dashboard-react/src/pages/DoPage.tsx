@@ -11,7 +11,7 @@ import { Copy, Check, Trash2, X, ChevronDown, ChevronRight, CheckCircle2, Rotate
 import type { DashboardData } from '../types';
 
 /* ─── Action ordering: urgent first ─── */
-const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'STOP_SEASONAL', 'NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT', 'REDUCE_BID', 'RESTORE_PRE_PEAK', 'REDUCE_TO_BASELINE', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'COOLDOWN_MONITOR', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'START_TERM', 'GUARDIAN_BUDGET_INCREASE', 'GUARDIAN_BUDGET_DECREASE', 'BLITZ_BUDGET_INCREASE', 'BLITZ_BUDGET_DECREASE', 'MONITOR_TARGET', 'KEEP', 'MONITOR'];
+const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'STOP_SEASONAL', 'NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT', 'REDUCE_BID', 'RESTORE_PRE_PEAK', 'REDUCE_TO_BASELINE', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'COOLDOWN_MONITOR', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'ADD_CROSS_SELL_TARGET', 'START_TERM', 'GUARDIAN_BUDGET_INCREASE', 'GUARDIAN_BUDGET_DECREASE', 'BLITZ_BUDGET_INCREASE', 'BLITZ_BUDGET_DECREASE', 'MONITOR_TARGET', 'KEEP', 'MONITOR'];
 
 const ACTION_COLORS: Record<string, string> = {
   STOP_TERM: '#ef4444', STOP_TARGET: '#ef4444', STOP_SEASONAL: '#ef4444',
@@ -19,7 +19,7 @@ const ACTION_COLORS: Record<string, string> = {
   REDUCE_BID: '#f59e0b', RESTORE_PRE_PEAK: '#ef4444', REDUCE_TO_BASELINE: '#f59e0b',
   FIX_HERO: '#f59e0b', SWITCH_HERO: '#f59e0b',
   KEEP_TARGET: '#22c55e', INCREASE_BID: '#22c55e', COOLDOWN_MONITOR: '#6b7280',
-  PROMOTE_TO_EXACT: '#3b82f6', START_TERM: '#a855f7',
+  PROMOTE_TO_EXACT: '#3b82f6', ADD_CROSS_SELL_TARGET: '#3b82f6', START_TERM: '#a855f7',
   GUARDIAN_BUDGET_INCREASE: '#22c55e', BLITZ_BUDGET_INCREASE: '#22c55e',
   GUARDIAN_BUDGET_DECREASE: '#ef4444', BLITZ_BUDGET_DECREASE: '#f59e0b',
   MONITOR_TARGET: '#71717a', BUDGET_OK: '#71717a',
@@ -300,6 +300,23 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         lines: [
           `Create SP/EXACT (Seasonal Peak - ${theme}) campaign`,
           `Add EXACT match "${item.search_term}" with bid $1.50`,
+        ],
+      };
+    }
+
+    if (item.action === 'ADD_CROSS_SELL_TARGET') {
+      // Mirror the export: all values come from the PRODUCT_DEFENSE template.
+      const tmpls = data.strategy_campaign_templates || [];
+      const spTmpl = tmpls.find(t => t.strategy_id === 'PRODUCT_DEFENSE' && t.ad_format === 'SP');
+      const bid = spTmpl?.bid_min != null ? `$${spTmpl.bid_min.toFixed(2)}` : '—';
+      const budget = spTmpl?.daily_budget ?? null;
+      const targetAsin = (item.targeting || '').replace(/^asin="?|"?$/gi, '').toUpperCase();
+      return {
+        icon: '🔁',
+        lines: [
+          `Create SP product-targeting campaign (PRODUCT_DEFENSE)`,
+          `Advertise ${item.product} on ${item.targeting || `asin="${targetAsin}"`}`,
+          `  Bid: ${bid} · Budget: ${budget != null ? `$${budget}/day` : '—'} · product-page boost`,
         ],
       };
     }
@@ -857,6 +874,68 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
               'Keyword Text': item.search_term, 'Match Type': 'exact',
               'Bid': bid, 'State': 'enabled'
             });
+          }
+        } else if (item.action === 'ADD_CROSS_SELL_TARGET') {
+          // TIER 2: ADD_CROSS_SELL_TARGET — advertise product B on product A's
+          // listing via a Sponsored Products *product-targeting* campaign. Budget,
+          // bid bounds and placement all come from the PRODUCT_DEFENSE template
+          // (no fabricated values, per the coacher no-auto-fill rule).
+          const spTmpl = findTemplate('PRODUCT_DEFENSE', 'SP');
+          if (!spTmpl) {
+            console.warn('[Bulksheet] No PRODUCT_DEFENSE/SP template loaded — skipping cross-sell campaign for', item.product);
+          } else {
+            const bidMin = spTmpl.bid_min ?? 0.3;
+            // Brand-new product target: no per-pair CPC history, so start at the
+            // template's floor bid (a deliberate template value, not a guess).
+            const bid = String(bidMin);
+            // Advertised product (B) — queue builder sets item.asin = advertise_asin.
+            const asin = item.asin || asinByShortName.get(item.product) || item.product;
+            const sku = skuByAsin.get(asin) || '';
+            if (!asin) console.warn('[Bulksheet] cross-sell: unresolved advertised ASIN for', item.product);
+            else if (!sku) console.warn('[Bulksheet] cross-sell: ASIN', asin, 'has no SKU in DIM_PRODUCT');
+            // Target listing (A) — the asin="..." expression carried on the queue item.
+            const targetExpr = formatPTExpression(item.targeting || '');
+            const targetAsin = (item.targeting || '').replace(/^asin="?|"?$/gi, '').toUpperCase();
+            // Resolve the advertised product's family → portfolio (blank if unknown).
+            const advProduct = (data.products || []).find(p => p.asin === asin);
+            const advName = (advProduct?.product_short_name || advProduct?.parent_name || '').toUpperCase();
+            let productPrefix = 'PRODUCT';
+            if (advName.includes('ME')) productPrefix = 'ME';
+            else if (advName.includes('BOX')) productPrefix = 'BOX';
+            else if (advName.includes('FRESH')) productPrefix = 'FRESH';
+            else if (advName.includes('BOTTLE')) productPrefix = 'BOTTLE';
+            const portfolioId = PORTFOLIO_MAP[productPrefix] || '';
+            const startDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+            const xsCampName = `${productPrefix}-SP/DEFENSE (Cross-sell ${asin} → ${targetAsin})`;
+            const xsAdGroupName = `${productPrefix} - Cross-sell ${targetAsin}`;
+            if (!targetExpr) {
+              console.warn('[Bulksheet] cross-sell: missing target expression for', item.product, '— skipping');
+            } else if (claimNewCampaign(xsCampName)) {
+              spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Campaign', 'Operation': 'Create',
+                'Campaign ID': xsCampName, 'Campaign Name': xsCampName, 'Portfolio ID': portfolioId,
+                'Daily Budget': String(spTmpl.daily_budget ?? ''), 'Targeting Type': 'MANUAL',
+                'Bidding Strategy': 'Dynamic bids - down only', 'Start Date': startDate, 'State': 'ENABLED' });
+              // Product-page placement boost — product targets serve on detail pages.
+              if ((spTmpl.product_page_pct ?? 0) > 0) {
+                spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Bidding Adjustment', 'Operation': 'Create',
+                  'Campaign ID': xsCampName, 'Campaign Name': xsCampName, 'Placement': 'Placement Product Page',
+                  'Percentage': String(spTmpl.product_page_pct) });
+              }
+              spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Ad Group', 'Operation': 'Create',
+                'Campaign ID': xsCampName, 'Campaign Name': xsCampName,
+                'Ad Group ID': xsAdGroupName, 'Ad Group Name': xsAdGroupName,
+                'Ad Group Default Bid': bid, 'State': 'ENABLED' });
+              spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Targeting', 'Operation': 'Create',
+                'Campaign ID': xsCampName, 'Campaign Name': xsCampName,
+                'Ad Group ID': xsAdGroupName, 'Ad Group Name': xsAdGroupName,
+                'Product Targeting Expression': targetExpr, 'Bid': bid, 'State': 'ENABLED' });
+              spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Ad', 'Operation': 'Create',
+                'Campaign ID': xsCampName, 'Campaign Name': xsCampName,
+                'Ad Group ID': xsAdGroupName, 'Ad Group Name': xsAdGroupName,
+                ...(sku ? { 'SKU': sku } : asin ? { 'ASIN (Informational only)': asin } : {}),
+                'State': 'ENABLED' });
+            }
           }
         } else if (item.action === 'PROMOTE_TO_PEAK_PHRASE') {
           // Seasonal Peak Campaign Strategy
