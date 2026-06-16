@@ -31,6 +31,7 @@ import type {
   ExperimentTemplateRow,
   HolidayRow,
   CoachDecisionRow,
+  CoachCrossSellRow,
   CoachActionRow,
   CoachCampaignRow,
   CoachStrategyRow,
@@ -1462,6 +1463,33 @@ async function loadCoachDecisionsFromCube(): Promise<CoachDecisionRow[]> {
   });
 }
 
+/** AdsCoachCrossSell → coach_cross_sell (self-brand co-purchase affinity gaps) */
+async function loadCrossSellFromCube(): Promise<CoachCrossSellRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'AdsCoachCrossSell.targetAsin', 'AdsCoachCrossSell.advertiseAsin',
+      'AdsCoachCrossSell.targetName', 'AdsCoachCrossSell.advertiseName',
+      'AdsCoachCrossSell.targetParent', 'AdsCoachCrossSell.confidence',
+    ],
+    measures: ['AdsCoachCrossSell.crossOrders30d', 'AdsCoachCrossSell.crossSales30d'],
+    order: { 'AdsCoachCrossSell.crossOrders30d': 'desc' },
+    limit: 5000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => {
+    const sn = (k: string) => (r[k] != null ? String(r[k]) : null);
+    return {
+      target_asin: String(r['AdsCoachCrossSell.targetAsin'] ?? ''),
+      advertise_asin: String(r['AdsCoachCrossSell.advertiseAsin'] ?? ''),
+      target_name: sn('AdsCoachCrossSell.targetName'),
+      advertise_name: sn('AdsCoachCrossSell.advertiseName'),
+      target_parent: sn('AdsCoachCrossSell.targetParent'),
+      cross_orders_30d: Number(r['AdsCoachCrossSell.crossOrders30d'] ?? 0),
+      cross_sales_30d: Number(r['AdsCoachCrossSell.crossSales30d'] ?? 0),
+      confidence: String(r['AdsCoachCrossSell.confidence'] ?? ''),
+    };
+  });
+}
+
 async function loadCoachActionsFromCube(): Promise<CoachActionRow[]> {
   const rows = await cubeLoad({
     dimensions: [
@@ -2331,6 +2359,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           ['asinOosDays', loadAsinOosDaysFromCube],
           ['negativeConflicts', loadNegativeConflictsFromCube],
           ['strategyCampaignTemplates', loadStrategyCampaignTemplatesFromCube],
+          ['coachCrossSell', loadCrossSellFromCube],
         ];
 
         const heavyLoaders: [string, () => Promise<unknown>][] = [
@@ -2391,6 +2420,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
         const asinOosDays = resolveLoader(bgResultsLight[37], 'asinOosDays') as AsinOosDaysRow[];
         const negativeConflicts = resolveLoader(bgResultsLight[38], 'negativeConflicts') as import('../types').NegativeConflictRow[];
         const strategyCampaignTemplates = resolveLoader(bgResultsLight[39], 'strategyCampaignTemplates') as import('../types').StrategyCampaignTemplateRow[];
+        const coachCrossSell = resolveLoader(bgResultsLight[40], 'coachCrossSell') as CoachCrossSellRow[];
 
         const ads = resolveLoader(bgResultsHeavy[0], 'ads') as Ads7dRow[];
         const sqp = resolveLoader(bgResultsHeavy[1], 'sqp') as SqpWeeklyRow[];
@@ -2420,6 +2450,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           strategy_campaign_templates: strategyCampaignTemplates,
           holidays,
           coach_decisions: coachDecisions,
+          coach_cross_sell: coachCrossSell,
           actions: coachTerms,
           coach_campaigns: coachCampaigns,
           experiment_evaluations: experimentEvaluations,

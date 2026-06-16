@@ -677,6 +677,17 @@ export interface ExperimentTemplateRow {
   unique_search_terms: number | null;
 }
 
+export interface CoachCrossSellRow {
+  target_asin: string;
+  advertise_asin: string;
+  target_name: string | null;
+  advertise_name: string | null;
+  target_parent: string | null;
+  cross_orders_30d: number;
+  cross_sales_30d: number;
+  confidence: string;
+}
+
 export interface CoachDecisionRow {
   search_term: string;
   best_asin: string;
@@ -1204,6 +1215,7 @@ export interface DashboardData {
   experiment_templates: ExperimentTemplateRow[];
   strategy_campaign_templates: StrategyCampaignTemplateRow[];
   coach_decisions: CoachDecisionRow[];
+  coach_cross_sell: CoachCrossSellRow[];
   actions: ActionRow[];
   coach_campaigns: CoachCampaignRow[];
   experiment_evaluations: ExperimentEvaluationRow[];
