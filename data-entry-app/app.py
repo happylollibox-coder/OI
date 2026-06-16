@@ -4521,14 +4521,12 @@ def add_payment_line(payment_id):
     return redirect(url_for('payment_details', payment_id=payment_id))
 
 
-@app.route('/payment/<payment_id>/delete', methods=['POST'])
-@login_required
-def delete_payment(payment_id):
-    """Delete a payment"""
-    po_id = None
-    linked_shipment_id = None
+def delete_payment_record(payment_id):
+    """Delete all rows for a payment_id and re-sync linked shipment paid status.
+    Returns (errors_list, linked_shipment_ids, first_po_id).
+    errors_list is [] on success."""
     try:
-        # Get PO ID and shipment_ids before deleting for redirect + sync
+        # Collect linked refs before deleting for sync + caller redirect
         query_get_ref = f"""
         SELECT purchase_order_id, shipment_id FROM `{PAYMENTS_TABLE}`
         WHERE payment_id = @payment_id
@@ -4537,12 +4535,9 @@ def delete_payment(payment_id):
             query_parameters=[bigquery.ScalarQueryParameter("payment_id", "STRING", payment_id)]
         )
         ref_result = list(client.query(query_get_ref, job_config=job_config_get).result())
-        # Collect ALL linked shipment IDs (a payment can span multiple shipments)
         linked_shipment_ids = list(set(r.shipment_id for r in ref_result if r.shipment_id))
-        if ref_result:
-            po_id = ref_result[0].purchase_order_id
-            linked_shipment_id = ref_result[0].shipment_id
-        
+        first_po_id = ref_result[0].purchase_order_id if ref_result else None
+
         query = f"""
         DELETE FROM `{PAYMENTS_TABLE}`
         WHERE payment_id = @payment_id
@@ -4551,52 +4546,54 @@ def delete_payment(payment_id):
             query_parameters=[bigquery.ScalarQueryParameter("payment_id", "STRING", payment_id)]
         )
         client.query(query, job_config=job_config).result()
-        clear_data_cache()
-        
-        # Re-sync paid status for affected shipments (payment removed → might no longer be fully paid)
+
+        # Re-sync paid status for affected shipments
         if linked_shipment_ids:
             sync_shipment_paid_status(linked_shipment_ids)
-        
-        flash(f'Payment {payment_id} deleted successfully!', 'success')
-        
-        # Redirect: prefer shipment detail if shipment-linked
-        if linked_shipment_id:
-            return redirect(url_for('shipment_details', shipment_id=linked_shipment_id))
-        elif po_id:
-            if po_id.startswith('OPO_'):
-                return redirect(url_for('other_po_details', po_id=po_id))
-            return redirect(url_for('po_details', po_id=po_id))
-        else:
-            return redirect(url_for('index'))
+
+        return [], linked_shipment_ids, first_po_id
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
         error_msg = str(e)
-        
-        # Check for streaming buffer error
         if 'streaming buffer' in error_msg.lower():
-            flash(f'Cannot delete payment: This payment is still in BigQuery\'s streaming buffer. This may be an older payment created before we switched to batch loading. Please wait 5-10 minutes and try again. Note: New payments created now can be deleted immediately.', 'error')
-        else:
-            flash(f'Error deleting payment: {error_msg}', 'error')
-        print(f"Delete payment error: {error_details}")
-        
-        if linked_shipment_id:
-            return redirect(url_for('shipment_details', shipment_id=linked_shipment_id))
-        elif po_id:
-            return redirect(url_for('po_details', po_id=po_id))
-        else:
-            return redirect(url_for('index'))
+            return (["Cannot delete payment: This payment is still in BigQuery's streaming buffer. "
+                     "This may be an older payment created before we switched to batch loading. "
+                     "Please wait 5-10 minutes and try again. "
+                     "Note: New payments created now can be deleted immediately."],
+                    [], None)
+        return [f'Error deleting payment: {error_msg}'], [], None
 
 
-@app.route('/payment/<payment_id>/delete_line', methods=['POST'])
+@app.route('/payment/<payment_id>/delete', methods=['POST'])
 @login_required
-def delete_payment_line(payment_id):
-    """Delete a specific line from a payment"""
-    shipment_id = request.form.get('shipment_id')
-    po_id = request.form.get('purchase_order_id')
-    
+def delete_payment(payment_id):
+    """Delete a payment"""
+    errors, linked_shipment_ids, po_id = delete_payment_record(payment_id)
+    linked_shipment_id = linked_shipment_ids[0] if linked_shipment_ids else None
+    if errors:
+        import traceback
+        flash(errors[0], 'error')
+    else:
+        clear_data_cache()
+        flash(f'Payment {payment_id} deleted successfully!', 'success')
+
+    # Redirect: prefer shipment detail if shipment-linked
+    if linked_shipment_id:
+        return redirect(url_for('shipment_details', shipment_id=linked_shipment_id))
+    elif po_id:
+        if po_id.startswith('OPO_'):
+            return redirect(url_for('other_po_details', po_id=po_id))
+        return redirect(url_for('po_details', po_id=po_id))
+    else:
+        return redirect(url_for('index'))
+
+
+def delete_payment_line_record(payment_id, shipment_id=None, po_id=None):
+    """Delete a single line from a payment (matched by shipment_id OR po_id).
+    Re-syncs shipment paid status when a shipment line is removed.
+    Returns [] on success, list of error strings on failure."""
+    if not shipment_id and not po_id:
+        return ['No line identifier provided (shipment_id or purchase_order_id required)']
     try:
-        # Delete only the specific line
         if shipment_id:
             query = f"""
             DELETE FROM `{PAYMENTS_TABLE}`
@@ -4608,7 +4605,7 @@ def delete_payment_line(payment_id):
                     bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)
                 ]
             )
-        elif po_id:
+        else:
             query = f"""
             DELETE FROM `{PAYMENTS_TABLE}`
             WHERE payment_id = @payment_id AND purchase_order_id = @po_id
@@ -4619,30 +4616,160 @@ def delete_payment_line(payment_id):
                     bigquery.ScalarQueryParameter("po_id", "STRING", po_id)
                 ]
             )
-        else:
-            flash("No line specified for deletion.", "error")
-            return redirect(url_for('payment_details', payment_id=payment_id))
 
         client.query(query, job_config=job_config).result()
-        clear_data_cache()
-        
+
         # Re-sync paid status for the affected shipment
         if shipment_id:
             sync_shipment_paid_status(shipment_id)
-        
-        flash(f'Payment line removed successfully!', 'success')
+
+        return []
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
         error_msg = str(e)
-        
         if 'streaming buffer' in error_msg.lower():
-            flash(f'Cannot delete payment line: This payment is still in BigQuery\'s streaming buffer. Please wait 5-10 minutes and try again.', 'error')
-        else:
-            flash(f'Error deleting payment line: {error_msg}', 'error')
-        print(f"Delete payment line error: {error_details}")
-        
+            return ["Cannot delete payment line: This payment is still in BigQuery's streaming buffer. "
+                    "Please wait 5-10 minutes and try again."]
+        return [f'Error deleting payment line: {error_msg}']
+
+
+@app.route('/payment/<payment_id>/delete_line', methods=['POST'])
+@login_required
+def delete_payment_line(payment_id):
+    """Delete a specific line from a payment"""
+    shipment_id = request.form.get('shipment_id')
+    po_id = request.form.get('purchase_order_id')
+
+    if not shipment_id and not po_id:
+        flash("No line specified for deletion.", "error")
+        return redirect(url_for('payment_details', payment_id=payment_id))
+
+    errors = delete_payment_line_record(payment_id, shipment_id=shipment_id, po_id=po_id)
+    if errors:
+        flash(errors[0], 'error')
+    else:
+        clear_data_cache()
+        flash('Payment line removed successfully!', 'success')
+
     return redirect(url_for('payment_details', payment_id=payment_id))
+
+
+# ═══════════════════════════════════════════════════════════════
+# PAYMENT JSON API TWINS — no @login_required; global JWT gate
+# ═══════════════════════════════════════════════════════════════
+
+@app.route('/api/payment/<payment_id>', methods=['GET'])
+def api_payment_get(payment_id):
+    """Full payment detail (summary + lines) as JSON."""
+    try:
+        summary, lines = get_payment_details(payment_id)
+        if summary is None:
+            return jsonify({'error': 'Payment not found'}), 404
+        def _ser(d):
+            o = {}
+            for k, v in d.items():
+                o[k] = v.isoformat() if hasattr(v, 'isoformat') else v
+            return o
+        return jsonify({'payment': _ser(summary), 'lines': [_ser(x) for x in lines]})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/payments', methods=['POST'])
+def api_payment_create():
+    """Create a new payment. insert_payment already calls sync_shipment_paid_status
+    and auto_close_received_shipments internally."""
+    try:
+        data = request.get_json() or {}
+        errors, payment_id = insert_payment(data)
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True, 'payment_id': payment_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/payment/<payment_id>/update', methods=['POST'])
+def api_payment_update(payment_id):
+    """Update payment header fields. The HTML update route calls no additional
+    sync beyond clear_data_cache — replicated here exactly."""
+    try:
+        data = request.get_json() or {}
+        errors = update_payment(payment_id, data)
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/payment/<payment_id>', methods=['DELETE'])
+def api_payment_delete(payment_id):
+    """Delete all rows for a payment and re-sync linked shipment paid status
+    (via delete_payment_record which calls sync_shipment_paid_status)."""
+    try:
+        errors, _shipment_ids, _po_id = delete_payment_record(payment_id)
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/payment/<payment_id>/lines', methods=['POST'])
+def api_payment_line_add(payment_id):
+    """Add a line to an existing payment (inheriting header fields from the parent
+    payment row). insert_payment calls sync_shipment_paid_status internally."""
+    try:
+        parent, _ = get_payment_details(payment_id)
+        if parent is None:
+            return jsonify({'success': False, 'error': 'Payment not found'}), 404
+        d = request.get_json() or {}
+        line_type = d.get('line_type')  # 'shipment', 'po', or 'other_po'
+        linked_id = d.get('linked_id')
+        if not linked_id:
+            return jsonify({'success': False, 'error': 'linked_id is required'}), 400
+        data = {
+            'payment_id': payment_id,
+            'payment_date': str(parent.get('payment_date', '')),
+            'vendor_name': parent.get('vendor_name'),
+            'currency': parent.get('currency', 'USD'),
+            'payment_method': parent.get('payment_method'),
+            'payment_amount': d.get('payment_amount', 0),
+            'bank_fee': d.get('bank_fee') or None,
+            'notes': d.get('notes', ''),
+        }
+        if line_type == 'shipment':
+            data['shipment_id'] = linked_id
+        elif line_type in ('po', 'other_po'):
+            data['purchase_order_id'] = linked_id
+        errors, _ = insert_payment(data)
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True, 'payment_id': payment_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/payment/<payment_id>/lines/<line_id>', methods=['DELETE'])
+def api_payment_line_delete(payment_id, line_id):
+    """Delete one line from a payment.  line_id is either a shipment_id ('SHP_…')
+    or a purchase_order_id ('PO_…' / 'OPO_…').
+    delete_payment_line_record calls sync_shipment_paid_status when needed."""
+    try:
+        if line_id.startswith('SHP'):
+            errors = delete_payment_line_record(payment_id, shipment_id=line_id)
+        else:
+            errors = delete_payment_line_record(payment_id, po_id=line_id)
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ═══════════════════════════════════════════════════════════════
