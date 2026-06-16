@@ -99,5 +99,9 @@ export const dataEntry = {
   addShipmentLine: (id: string, b: { purchase_order_id: string; product_id: number; quantity_shipped: number }) => json<{ line_id: string }>(`/api/shipment/${encodeURIComponent(id)}/lines`, { method: 'POST', body: JSON.stringify(b) }),
   updateShipmentLine: (id: string, lineId: string, b: { quantity_shipped?: number; allocated_cost?: number }) => json(`/api/shipment/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`, { method: 'PUT', body: JSON.stringify(b) }),
   deleteShipmentLine: (id: string, lineId: string) => json(`/api/shipment/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`, { method: 'DELETE' }),
-  getOpenPOs: () => json<Record<string, unknown>[]>('/api/open-pos', { method: 'GET' }),
+  getOpenPOs: async () => {
+    // /api/open-pos returns { success, data: [...] } — unwrap to the array
+    const r = await json<{ success?: boolean; data?: Record<string, unknown>[] }>('/api/open-pos', { method: 'GET' });
+    return Array.isArray(r) ? r : (r.data ?? []);
+  },
 };
