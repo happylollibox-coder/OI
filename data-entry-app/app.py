@@ -6691,6 +6691,20 @@ def costs_report():
         return render_template('costs_report.html', costs=[])
 
 
+@app.route('/api/costs-report', methods=['GET'])
+def api_costs_report():
+    """Costs report rows (DIM_COSTS_HISTORY joined DIM_PRODUCT) as JSON for the Supply page."""
+    try:
+        rows = get_costs_history()
+        for d in rows:
+            for k, v in list(d.items()):
+                if hasattr(v, 'isoformat'):
+                    d[k] = v.isoformat()
+        return jsonify(rows)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ==========================================
 # Admin API Routes
 # ==========================================
