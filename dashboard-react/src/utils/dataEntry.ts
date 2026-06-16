@@ -35,6 +35,45 @@ export interface Product {
   product_short_name: string | null;
 }
 
+export interface ShipmentLineInput {
+  purchase_order_id: string;
+  product_id: number;
+  quantity: number;
+  cartons?: number;
+}
+
+export interface CreateShipmentInput {
+  shipment_date: string;
+  shipment_type: string;
+  deliverer: string;
+  cost_shipped: number;
+  amazon_commission?: number;
+  kg_price?: number;
+  tracking_number?: string;
+  shipment_status?: string;
+  notes?: string;
+  is_paid?: boolean;
+  paid_date?: string;
+  lines: ShipmentLineInput[];
+}
+
+export interface ShipmentDetail {
+  shipment_id: string;
+  shipment_date: string;
+  shipment_type: string;
+  deliverer: string;
+  cost_shipped: number;
+  amazon_commission?: number;
+  kg_price?: number;
+  tracking_number?: string;
+  shipment_status?: string;
+  notes?: string;
+  is_paid?: boolean;
+  paid_date?: string;
+  lines: Record<string, unknown>[];
+  [k: string]: unknown;
+}
+
 export const dataEntry = {
   listOrders: () => json<Record<string, unknown>[]>('/api/orders', { method: 'GET' }),
   getPO: (id: string) => json<PODetail>(`/api/po/${encodeURIComponent(id)}`, { method: 'GET' }),
@@ -53,4 +92,12 @@ export const dataEntry = {
   createOtherPO: (b: Record<string, unknown>) => json<{ other_po_id: string }>('/api/other_po', { method: 'POST', body: JSON.stringify(b) }),
   deleteOtherPO: (id: string) => json(`/api/other_po/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   listProducts: () => json<Product[]>('/api/products', { method: 'GET' }),
+  getShipment: (id: string) => json<ShipmentDetail>(`/api/shipment/${encodeURIComponent(id)}`, { method: 'GET' }),
+  createShipment: (b: CreateShipmentInput) => json<{ shipment_id: string }>('/api/shipments', { method: 'POST', body: JSON.stringify(b) }),
+  updateShipmentHeader: (id: string, b: Record<string, unknown>) => json(`/api/shipment/${encodeURIComponent(id)}/update`, { method: 'POST', body: JSON.stringify(b) }),
+  deleteShipment: (id: string) => json(`/api/shipment/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  addShipmentLine: (id: string, b: { purchase_order_id: string; product_id: number; quantity_shipped: number }) => json<{ line_id: string }>(`/api/shipment/${encodeURIComponent(id)}/lines`, { method: 'POST', body: JSON.stringify(b) }),
+  updateShipmentLine: (id: string, lineId: string, b: { quantity_shipped?: number; allocated_cost?: number }) => json(`/api/shipment/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`, { method: 'PUT', body: JSON.stringify(b) }),
+  deleteShipmentLine: (id: string, lineId: string) => json(`/api/shipment/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`, { method: 'DELETE' }),
+  getOpenPOs: () => json<Record<string, unknown>[]>('/api/open-pos', { method: 'GET' }),
 };
