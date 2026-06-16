@@ -7536,16 +7536,16 @@ def research_related_terms():
     # Frontend can pass pre-fetched synonyms from Gemini: {"bff": ["best friend", "bestie"]}
     frontend_synonyms = data.get('synonyms') or {}
 
-    # Filter out stop words that add noise to multi-word matching
-    words = [w for w in term.strip().split() if w.lower() not in _RESEARCH_STOP_WORDS]
-    if not words:
-        # All words were stop words — use entire term as one pattern
-        words = [term.strip()]
+    rr_cols, rr_join = _research_ranked_select(parent, alias='t')
 
     if mode == 'broad':
-        # Broad = Phrase reach + synonym expansion (was the old 'related' mode, unchanged):
-        # per-word OR over [word + synonyms], AND-ed across words; returns the full
-        # co-occurrence net (no final match_filter) marking direct vs related rows.
+        # Broad = Phrase reach + synonym expansion (the former 'related' mode): per-word
+        # OR over [word + synonyms], AND-ed across words, over the full ASIN co-occurrence
+        # net (no match_filter), marking rows direct vs related.
+        words = [w for w in term.strip().split() if w.lower() not in _RESEARCH_STOP_WORDS]
+        if not words:
+            # All words were stop words — use entire term as one pattern
+            words = [term.strip()]
         word_groups_sq = []
         word_groups_t = []
         word_param_map = []
@@ -7564,53 +7564,71 @@ def research_related_terms():
             word_groups_t.append(f"({' OR '.join(or_parts_t)})")
         word_likes_sq = ' AND '.join(word_groups_sq)
         word_likes_t = ' AND '.join(word_groups_t)
+
+        sql = f"""
+        WITH seed_asins AS (
+          SELECT DISTINCT sq.ASIN
+          FROM `onyga-482313`.OI.FACT_SEARCH_QUERY sq
+          WHERE {word_likes_sq}
+            AND sq.week_start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @weeks WEEK)
+        ),
+        seed_count AS (
+          SELECT COUNT(*) AS total_seed_asins FROM seed_asins
+        ),
+        related_queries AS (
+          SELECT
+            sq2.query_text,
+            COUNT(DISTINCT sq2.ASIN) AS asin_overlap
+          FROM `onyga-482313`.OI.FACT_SEARCH_QUERY sq2
+          WHERE sq2.ASIN IN (SELECT ASIN FROM seed_asins)
+            AND sq2.week_start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @weeks WEEK)
+            AND sq2.query_text != 'OTHER'
+          GROUP BY sq2.query_text
+        )
+        SELECT
+          t.*,
+          CASE WHEN {word_likes_t} THEN 'direct' ELSE 'related' END AS match_type,
+          rq.asin_overlap,
+          sc.total_seed_asins,
+          ROUND(SAFE_DIVIDE(rq.asin_overlap, sc.total_seed_asins) * 100, 1) AS overlap_pct,
+          {rr_cols}
+        FROM related_queries rq
+        JOIN `onyga-482313`.OI.FACT_RESEARCH_TERMS t ON t.query_text = rq.query_text
+        CROSS JOIN seed_count sc
+        {rr_join}
+        ORDER BY t.market_purchases DESC
+        """
     else:
-        # Direct (exact term + plurals, whole string) / Phrase (all words, any order):
-        # whole-word, plural-tolerant REGEXP predicates (fixes the old substring 7/17 bug).
-        word_param_map, rx_names = research_match_predicate(words, mode)
-        word_likes_sq = ' AND '.join(f"REGEXP_CONTAINS(LOWER(sq.query_text), @{n})" for n in rx_names)
-        word_likes_t = ' AND '.join(f"REGEXP_CONTAINS(LOWER(t.query_text), @{n})" for n in rx_names)
+        # Direct / Phrase = parity with the recommendation coverage_count: match over the
+        # FULL term universe (FACT_RESEARCH_TERMS, no ASIN co-occurrence gate), using the
+        # SAME tokenization as SP_REFRESH_RESEARCH_RECOMMENDATIONS — punctuation-delimited
+        # tokens, bidirectional plural (trailing-'s' strip on both sides), whole-word via a
+        # space-padded normalized term. So a Phrase search returns exactly the terms the
+        # card's "covers N" counts (plus the seed itself).
+        word_param_map, rx_names = research_match_predicate(term, mode, _RESEARCH_STOP_WORDS)
+        # NORM(col): punctuation -> space, pad with spaces, strip one trailing 's' per word.
+        norm_t = ("REGEXP_REPLACE(CONCAT(' ', "
+                  "REGEXP_REPLACE(LOWER(t.query_text), r'[^a-z0-9]+', ' '), ' '), r's ', ' ')")
+        if not rx_names:
+            match_pred = 'FALSE'  # term had no usable tokens — match nothing
+        elif mode == 'direct':
+            match_pred = f"{norm_t} = @rx_0"  # exact term + plural/punctuation variants
+        else:  # phrase
+            match_pred = ' AND '.join(f"STRPOS({norm_t}, @{n}) > 0" for n in rx_names)
 
-    rr_cols, rr_join = _research_ranked_select(parent, alias='t')
-
-    # Direct/Phrase narrow the co-occurrence net to text-matching terms; Broad keeps the
-    # full net (synonym + co-occurrence) and marks rows direct vs related.
-    match_filter = f"WHERE {word_likes_t}" if mode != 'broad' else ""
-
-    sql = f"""
-    WITH seed_asins AS (
-      SELECT DISTINCT sq.ASIN
-      FROM `onyga-482313`.OI.FACT_SEARCH_QUERY sq
-      WHERE {word_likes_sq}
-        AND sq.week_start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @weeks WEEK)
-    ),
-    seed_count AS (
-      SELECT COUNT(*) AS total_seed_asins FROM seed_asins
-    ),
-    related_queries AS (
-      SELECT
-        sq2.query_text,
-        COUNT(DISTINCT sq2.ASIN) AS asin_overlap
-      FROM `onyga-482313`.OI.FACT_SEARCH_QUERY sq2
-      WHERE sq2.ASIN IN (SELECT ASIN FROM seed_asins)
-        AND sq2.week_start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @weeks WEEK)
-        AND sq2.query_text != 'OTHER'
-      GROUP BY sq2.query_text
-    )
-    SELECT
-      t.*,
-      CASE WHEN {word_likes_t} THEN 'direct' ELSE 'related' END AS match_type,
-      rq.asin_overlap,
-      sc.total_seed_asins,
-      ROUND(SAFE_DIVIDE(rq.asin_overlap, sc.total_seed_asins) * 100, 1) AS overlap_pct,
-      {rr_cols}
-    FROM related_queries rq
-    JOIN `onyga-482313`.OI.FACT_RESEARCH_TERMS t ON t.query_text = rq.query_text
-    CROSS JOIN seed_count sc
-    {rr_join}
-    {match_filter}
-    ORDER BY t.market_purchases DESC
-    """
+        sql = f"""
+        SELECT
+          t.*,
+          'direct' AS match_type,
+          CAST(NULL AS INT64) AS asin_overlap,
+          CAST(NULL AS INT64) AS total_seed_asins,
+          CAST(NULL AS FLOAT64) AS overlap_pct,
+          {rr_cols}
+        FROM `onyga-482313`.OI.FACT_RESEARCH_TERMS t
+        {rr_join}
+        WHERE t.query_text != 'OTHER' AND {match_pred}
+        ORDER BY t.market_purchases DESC
+        """
 
     query_params = [
         bigquery.ScalarQueryParameter('weeks', 'INT64', weeks),
