@@ -57,6 +57,23 @@ export interface CreateShipmentInput {
   lines: ShipmentLineInput[];
 }
 
+export interface CreatePaymentInput {
+  payment_date: string;
+  payment_amount: number;
+  bank_fee?: number;
+  currency?: string;
+  payment_method: string;
+  vendor_name: string;
+  purchase_order_id?: string;
+  shipment_id?: string;
+  notes?: string;
+}
+
+export interface PaymentDetail {
+  payment: Record<string, unknown>;
+  lines: Record<string, unknown>[];
+}
+
 export interface ShipmentDetail {
   shipment_id: string;
   shipment_date: string;
@@ -99,6 +116,12 @@ export const dataEntry = {
   addShipmentLine: (id: string, b: { purchase_order_id: string; product_id: number; quantity_shipped: number }) => json<{ line_id: string }>(`/api/shipment/${encodeURIComponent(id)}/lines`, { method: 'POST', body: JSON.stringify(b) }),
   updateShipmentLine: (id: string, lineId: string, b: { quantity_shipped?: number; allocated_cost?: number }) => json(`/api/shipment/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`, { method: 'PUT', body: JSON.stringify(b) }),
   deleteShipmentLine: (id: string, lineId: string) => json(`/api/shipment/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`, { method: 'DELETE' }),
+  getPayment: (id: string) => json<PaymentDetail>(`/api/payment/${encodeURIComponent(id)}`, { method: 'GET' }),
+  createPayment: (b: CreatePaymentInput) => json<{ payment_id: string }>('/api/payments', { method: 'POST', body: JSON.stringify(b) }),
+  updatePayment: (id: string, b: Record<string, unknown>) => json(`/api/payment/${encodeURIComponent(id)}/update`, { method: 'POST', body: JSON.stringify(b) }),
+  deletePayment: (id: string) => json(`/api/payment/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  addPaymentLine: (id: string, b: Record<string, unknown>) => json(`/api/payment/${encodeURIComponent(id)}/lines`, { method: 'POST', body: JSON.stringify(b) }),
+  deletePaymentLine: (id: string, lineId: string) => json(`/api/payment/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`, { method: 'DELETE' }),
   getOpenPOs: async () => {
     // /api/open-pos returns { success, data: [...] } — unwrap to the array
     const r = await json<{ success?: boolean; data?: Record<string, unknown>[] }>('/api/open-pos', { method: 'GET' });

@@ -101,3 +101,64 @@ describe('dataEntry shipments', () => {
     expect(spy).toHaveBeenCalledWith('/api/shipment/SHP%2Fwith%20space', expect.objectContaining({ method: 'DELETE' }));
   });
 });
+
+describe('dataEntry payments', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it('getPayment calls GET /api/payment/<id> and returns parsed json', async () => {
+    const spy = vi.spyOn(api, 'apiFetch').mockResolvedValue(
+      new Response(JSON.stringify({ payment: { payment_id: 'PAY_1' }, lines: [] }), { status: 200 }),
+    );
+    const res = await dataEntry.getPayment('PAY_1');
+    expect(spy).toHaveBeenCalledWith('/api/payment/PAY_1', expect.objectContaining({ method: 'GET' }));
+    expect(res.payment.payment_id).toBe('PAY_1');
+  });
+
+  it('createPayment posts JSON body to /api/payments with vendor_name', async () => {
+    const spy = vi.spyOn(api, 'apiFetch').mockResolvedValue(
+      new Response(JSON.stringify({ success: true, payment_id: 'PAY_2' }), { status: 200 }),
+    );
+    await dataEntry.createPayment({
+      payment_date: '2026-06-16',
+      payment_amount: 1500,
+      payment_method: 'wire',
+      vendor_name: 'ACME Supplier',
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/payments');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(init?.body as string).vendor_name).toBe('ACME Supplier');
+  });
+
+  it('updatePayment posts changed fields to /api/payment/<id>/update', async () => {
+    const spy = vi.spyOn(api, 'apiFetch').mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    );
+    await dataEntry.updatePayment('PAY_1', { payment_amount: 2000 });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/payment/PAY_1/update');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(init?.body as string).payment_amount).toBe(2000);
+  });
+
+  it('deletePayment calls DELETE /api/payment/<id>', async () => {
+    const spy = vi.spyOn(api, 'apiFetch').mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    );
+    await dataEntry.deletePayment('PAY_1');
+    expect(spy).toHaveBeenCalledWith('/api/payment/PAY_1', expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('throws normalized error on non-ok with {error}', async () => {
+    vi.spyOn(api, 'apiFetch').mockResolvedValue(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }));
+    await expect(dataEntry.getPayment('PAY_x')).rejects.toThrow('not found');
+  });
+
+  it('encodes payment id with slash and space', async () => {
+    const spy = vi.spyOn(api, 'apiFetch').mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    );
+    await dataEntry.deletePayment('PAY/with space');
+    expect(spy).toHaveBeenCalledWith('/api/payment/PAY%2Fwith%20space', expect.objectContaining({ method: 'DELETE' }));
+  });
+});
