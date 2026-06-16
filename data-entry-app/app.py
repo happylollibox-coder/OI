@@ -3130,6 +3130,183 @@ def api_update_po_eta(po_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# PO line / delete helpers — shared by HTML routes and JSON API twins
+# ---------------------------------------------------------------------------
+
+def add_po_line(po_id, product_id, quantity, total_amount):
+    """Insert one product line row into an existing PO.
+
+    Returns (errors_list, po_id).  Caller is responsible for clear_data_cache().
+    """
+    if not po_id:
+        return (['Missing PO ID'], po_id)
+    if not product_id or quantity <= 0:
+        return (['Product and quantity > 0 are required'], po_id)
+
+    # Get PO header info from existing rows
+    header_query = f"""
+    SELECT order_date, manufacturer_name, currency, payment_status, notes
+    FROM `{ORDERS_TABLE}`
+    WHERE purchase_order_id = @po_id
+    LIMIT 1
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
+    )
+    header_result = list(client.query(header_query, job_config=job_config).result())
+    if not header_result:
+        return ([f'PO {po_id} not found'], po_id)
+
+    header = dict(header_result[0])
+
+    # Look up product info
+    product_asin = None
+    product_name = None
+    prod_query = f"""
+    SELECT product_id, asin, product_name, display_name, sku
+    FROM `{PRODUCTS_TABLE}`
+    WHERE product_id = @product_id AND is_active = TRUE
+    """
+    prod_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("product_id", "INT64", int(product_id))]
+    )
+    prod_result = list(client.query(prod_query, job_config=prod_config).result())
+    if prod_result:
+        product_asin = prod_result[0].asin
+        product_name = prod_result[0].sku or prod_result[0].display_name or prod_result[0].product_name
+
+    unit_price = total_amount / quantity if quantity > 0 else 0
+
+    row = {
+        'purchase_order_id': po_id,
+        'order_date': header['order_date'].isoformat() if header['order_date'] else None,
+        'manufacturer_name': header['manufacturer_name'],
+        'product_id': int(product_id),
+        'quantity': quantity,
+        'unit_price': unit_price,
+        'total_amount': total_amount,
+        'currency': header['currency'] or 'USD',
+        'payment_status': header['payment_status'] or 'PENDING',
+    }
+    if product_asin:
+        row['product_asin'] = product_asin
+    if product_name:
+        row['product_name'] = product_name
+    if header.get('notes'):
+        row['notes'] = header['notes']
+
+    table_ref = client.get_table(ORDERS_TABLE)
+    load_config = bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+        autodetect=False,
+        schema=table_ref.schema
+    )
+    job = client.load_table_from_json([row], table_ref, job_config=load_config)
+    job.result()
+    return (job.errors or [], po_id)
+
+
+def delete_po_line(po_id, product_id):
+    """Delete a single product line from a PO.
+
+    Refuses to delete the last remaining line.
+    Returns errors_list (empty on success).  Caller is responsible for clear_data_cache().
+    """
+    count_query = f"""
+    SELECT COUNT(*) as cnt FROM `{ORDERS_TABLE}`
+    WHERE purchase_order_id = @po_id
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
+    )
+    count_result = list(client.query(count_query, job_config=job_config).result())
+    line_count = count_result[0].cnt if count_result else 0
+
+    if line_count <= 1:
+        return ['Cannot delete the last product line. Delete the entire PO instead.']
+
+    delete_query = f"""
+    DELETE FROM `{ORDERS_TABLE}`
+    WHERE purchase_order_id = @po_id AND product_id = @product_id
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("po_id", "STRING", po_id),
+            bigquery.ScalarQueryParameter("product_id", "INT64", product_id),
+        ]
+    )
+    client.query(delete_query, job_config=job_config).result()
+    return []
+
+
+def update_po_line(po_id, product_id, field, value):
+    """Update quantity | total_amount | ready_quantity for a product line.
+
+    product_id may be None — in that case the WHERE clause omits it.
+    Returns errors_list (empty on success).  Caller is responsible for clear_data_cache().
+    """
+    where_params = [
+        bigquery.ScalarQueryParameter("po_id", "STRING", po_id)
+    ]
+    if product_id is not None:
+        where_clause = "purchase_order_id = @po_id AND product_id = @product_id"
+        where_params.append(bigquery.ScalarQueryParameter("product_id", "INT64", product_id))
+    else:
+        where_clause = "purchase_order_id = @po_id"
+
+    if field == 'quantity':
+        new_value = int(value) if value is not None else 0
+        if new_value < 1:
+            return ['Quantity must be at least 1']
+        set_clause = "quantity = @new_value"
+        where_params.append(bigquery.ScalarQueryParameter("new_value", "INT64", new_value))
+    elif field == 'total_amount':
+        new_value = float(value) if value is not None else 0.0
+        if new_value < 0:
+            return ['Amount cannot be negative']
+        set_clause = "total_amount = @new_value"
+        where_params.append(bigquery.ScalarQueryParameter("new_value", "FLOAT64", new_value))
+    else:
+        # Default: ready_quantity
+        new_value = int(value) if value is not None else 0
+        if new_value < 0:
+            return ['Ready quantity cannot be negative']
+        set_clause = "ready_quantity = @new_value"
+        where_params.append(bigquery.ScalarQueryParameter("new_value", "INT64", new_value))
+
+    update_query = f"""
+    UPDATE `{ORDERS_TABLE}`
+    SET {set_clause}
+    WHERE {where_clause}
+    """
+    job_config = bigquery.QueryJobConfig(query_parameters=where_params)
+    client.query(update_query, job_config=job_config).result()
+    return []
+
+
+def _do_delete_po(po_id):
+    """Delete an entire PO (all rows) from ORDERS_TABLE.
+
+    Returns errors_list (empty on success).  Caller is responsible for clear_data_cache().
+    Raises on streaming-buffer or other BQ errors so the caller can inspect the exception.
+    """
+    query = f"""
+    DELETE FROM `{ORDERS_TABLE}`
+    WHERE purchase_order_id = @po_id
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
+    )
+    client.query(query, job_config=job_config).result()
+    return []
+
+
+# ---------------------------------------------------------------------------
+# HTML routes — delegate to helpers, keep original flash/redirect behaviour
+# ---------------------------------------------------------------------------
+
 @app.route('/po/add_line', methods=['POST'])
 @login_required
 def add_po_product_line():
@@ -3139,131 +3316,46 @@ def add_po_product_line():
         flash('Missing PO ID', 'error')
         return redirect(url_for('index'))
     try:
-        form = request.form
-        product_id = form.get('product_id')
-        quantity = int(form.get('quantity', 0))
-        total_amount = float(form.get('total_amount', 0))
-        
-        if not product_id or quantity <= 0:
-            flash('Product and quantity > 0 are required', 'error')
+        product_id = request.form.get('product_id')
+        quantity = int(request.form.get('quantity', 0))
+        total_amount = float(request.form.get('total_amount', 0))
+
+        errors, _ = add_po_line(po_id, product_id, quantity, total_amount)
+        if errors:
+            # Distinguish "not found" vs validation errors for redirect target
+            msg = str(errors[0]) if errors else 'Error adding product line'
+            flash(msg, 'error')
+            if 'not found' in msg:
+                return redirect(url_for('index'))
             return redirect(url_for('po_details', po_id=po_id))
-        
-        # Get PO header info from existing rows
-        header_query = f"""
-        SELECT order_date, manufacturer_name, currency, payment_status, notes
-        FROM `{ORDERS_TABLE}`
-        WHERE purchase_order_id = @po_id
-        LIMIT 1
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
-        )
-        header_result = list(client.query(header_query, job_config=job_config).result())
-        if not header_result:
-            flash(f'PO {po_id} not found', 'error')
-            return redirect(url_for('index'))
-        
-        header = dict(header_result[0])
-        
-        # Look up product info
-        product_asin = None
-        product_name = None
-        prod_query = f"""
-        SELECT product_id, asin, product_name, display_name, sku
-        FROM `{PRODUCTS_TABLE}`
-        WHERE product_id = @product_id AND is_active = TRUE
-        """
-        prod_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("product_id", "INT64", int(product_id))]
-        )
-        prod_result = list(client.query(prod_query, job_config=prod_config).result())
-        if prod_result:
-            product_asin = prod_result[0].asin
-            product_name = prod_result[0].sku or prod_result[0].display_name or prod_result[0].product_name
-        
-        unit_price = total_amount / quantity if quantity > 0 else 0
-        
-        row = {
-            'purchase_order_id': po_id,
-            'order_date': header['order_date'].isoformat() if header['order_date'] else None,
-            'manufacturer_name': header['manufacturer_name'],
-            'product_id': int(product_id),
-            'quantity': quantity,
-            'unit_price': unit_price,
-            'total_amount': total_amount,
-            'currency': header['currency'] or 'USD',
-            'payment_status': header['payment_status'] or 'PENDING',
-        }
-        if product_asin:
-            row['product_asin'] = product_asin
-        if product_name:
-            row['product_name'] = product_name
-        if header.get('notes'):
-            row['notes'] = header['notes']
-        
-        table_ref = client.get_table(ORDERS_TABLE)
-        job_config = bigquery.LoadJobConfig(
-            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
-            autodetect=False,
-            schema=table_ref.schema
-        )
-        job = client.load_table_from_json([row], table_ref, job_config=job_config)
-        job.result()
-        
-        if job.errors:
-            flash(f'Error adding product line: {job.errors}', 'error')
-        else:
-            clear_data_cache()
-            flash(f'Product line added to PO {po_id}', 'success')
+
+        clear_data_cache()
+        flash(f'Product line added to PO {po_id}', 'success')
     except Exception as e:
         flash(f'Error: {str(e)}', 'error')
-    
+
     return redirect(url_for('po_details', po_id=po_id))
 
 
 @app.route('/po/delete_line', methods=['POST'])
 @login_required
 def delete_po_product_line():
+    """Delete a single product line from a PO"""
     po_id = request.form.get('po_id')
     product_id = int(request.form.get('product_id', 0))
     if not po_id or not product_id:
         flash('Missing PO ID or product ID', 'error')
         return redirect(url_for('index'))
-    """Delete a single product line from a PO"""
     try:
-        # Check how many lines remain
-        count_query = f"""
-        SELECT COUNT(*) as cnt FROM `{ORDERS_TABLE}`
-        WHERE purchase_order_id = @po_id
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
-        )
-        count_result = list(client.query(count_query, job_config=job_config).result())
-        line_count = count_result[0].cnt if count_result else 0
-        
-        if line_count <= 1:
-            flash('Cannot delete the last product line. Delete the entire PO instead.', 'error')
+        errors = delete_po_line(po_id, product_id)
+        if errors:
+            flash(errors[0], 'error')
             return redirect(url_for('po_details', po_id=po_id))
-        
-        # Delete the specific line
-        delete_query = f"""
-        DELETE FROM `{ORDERS_TABLE}`
-        WHERE purchase_order_id = @po_id AND product_id = @product_id
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("po_id", "STRING", po_id),
-                bigquery.ScalarQueryParameter("product_id", "INT64", product_id),
-            ]
-        )
-        client.query(delete_query, job_config=job_config).result()
         clear_data_cache()
         flash(f'Product line removed from PO {po_id}', 'success')
     except Exception as e:
         flash(f'Error: {str(e)}', 'error')
-    
+
     return redirect(url_for('po_details', po_id=po_id))
 
 @app.route('/po/update_line', methods=['POST'])
@@ -3272,69 +3364,39 @@ def update_po_product_line():
     """Update a field (ready_quantity, quantity, or total_amount) for a specific product line"""
     po_id = request.form.get('po_id')
     field = request.form.get('field', 'ready_quantity')  # Default to ready_quantity for backward compat
-    
+
     # Handle NULL product_id scenario
     product_id_str = request.form.get('product_id')
     if product_id_str == 'None' or not product_id_str:
         product_id = None
     else:
         product_id = int(product_id_str)
-        
+
     if not po_id:
         flash('Missing PO ID', 'error')
         return redirect(url_for('index'))
-    
+
     try:
-        # Build WHERE clause
-        where_params = [
-            bigquery.ScalarQueryParameter("po_id", "STRING", po_id)
-        ]
-        if product_id is not None:
-            where_clause = "purchase_order_id = @po_id AND product_id = @product_id"
-            where_params.append(bigquery.ScalarQueryParameter("product_id", "INT64", product_id))
-        else:
-            where_clause = "purchase_order_id = @po_id"
-        
-        # Determine which field to update
+        # Pull the correct raw value from the form for the chosen field
         if field == 'quantity':
-            new_value = int(request.form.get('quantity', 0))
-            if new_value < 1:
-                flash('Quantity must be at least 1', 'error')
-                return redirect(url_for('po_details', po_id=po_id))
-            set_clause = "quantity = @new_value"
-            where_params.append(bigquery.ScalarQueryParameter("new_value", "INT64", new_value))
+            raw_value = request.form.get('quantity', 0)
             label = 'Quantity'
         elif field == 'total_amount':
-            new_value = float(request.form.get('total_amount', 0))
-            if new_value < 0:
-                flash('Amount cannot be negative', 'error')
-                return redirect(url_for('po_details', po_id=po_id))
-            set_clause = "total_amount = @new_value"
-            where_params.append(bigquery.ScalarQueryParameter("new_value", "FLOAT64", new_value))
+            raw_value = request.form.get('total_amount', 0)
             label = 'Amount'
         else:
-            # Default: ready_quantity
-            new_value = int(request.form.get('ready_quantity', 0))
-            if new_value < 0:
-                flash('Ready quantity cannot be negative', 'error')
-                return redirect(url_for('po_details', po_id=po_id))
-            set_clause = "ready_quantity = @new_value"
-            where_params.append(bigquery.ScalarQueryParameter("new_value", "INT64", new_value))
+            raw_value = request.form.get('ready_quantity', 0)
             label = 'Ready Quantity'
-        
-        update_query = f"""
-        UPDATE `{ORDERS_TABLE}`
-        SET {set_clause}
-        WHERE {where_clause}
-        """
-        
-        job_config = bigquery.QueryJobConfig(query_parameters=where_params)
-        client.query(update_query, job_config=job_config).result()
+
+        errors = update_po_line(po_id, product_id, field, raw_value)
+        if errors:
+            flash(errors[0], 'error')
+            return redirect(url_for('po_details', po_id=po_id))
         clear_data_cache()
         flash(f'{label} updated successfully', 'success')
     except Exception as e:
         flash(f'Error updating product line: {str(e)}', 'error')
-        
+
     return redirect(url_for('po_details', po_id=po_id))
 
 @app.route('/api/po/<po_id>', methods=['GET'])
@@ -3420,19 +3482,71 @@ def api_po_line_update():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+# ---------------------------------------------------------------------------
+# JSON API twins — no @login_required; global JWT gate covers /api/*
+# ---------------------------------------------------------------------------
+
+@app.route('/api/po/<po_id>/header', methods=['POST'])
+def api_po_header_update(po_id):
+    try:
+        errors, _ = update_purchase_order(po_id, request.get_json() or {})
+        if errors:
+            return jsonify({'success': False, 'error': str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True, 'po_id': po_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/po/<po_id>/lines', methods=['POST'])
+def api_po_line_add(po_id):
+    d = request.get_json() or {}
+    errors, _ = add_po_line(po_id, d.get('product_id'), d.get('quantity', 0), d.get('total_amount', 0))
+    if errors:
+        return jsonify({'success': False, 'error': str(errors)}), 400
+    clear_data_cache()
+    return jsonify({'success': True, 'po_id': po_id})
+
+
+@app.route('/api/po/<po_id>/lines/<int:product_id>', methods=['PUT'])
+def api_po_line_edit(po_id, product_id):
+    d = request.get_json() or {}
+    field = d.get('field', 'ready_quantity')
+    errors = update_po_line(po_id, product_id, field, d.get('value'))
+    if errors:
+        return jsonify({'success': False, 'error': str(errors)}), 400
+    clear_data_cache()
+    return jsonify({'success': True})
+
+
+@app.route('/api/po/<po_id>/lines/<int:product_id>', methods=['DELETE'])
+def api_po_line_delete(po_id, product_id):
+    errors = delete_po_line(po_id, product_id)
+    if errors:
+        return jsonify({'success': False, 'error': str(errors)}), 400
+    clear_data_cache()
+    return jsonify({'success': True})
+
+
+@app.route('/api/po/<po_id>', methods=['DELETE'])
+def api_po_delete(po_id):
+    try:
+        errors = _do_delete_po(po_id)
+        if errors:
+            return jsonify({'success': False, 'error': str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/po/<po_id>/delete', methods=['POST'])
 @login_required
 def delete_po(po_id):
     """Delete a purchase order"""
     try:
-        query = f"""
-        DELETE FROM `{ORDERS_TABLE}`
-        WHERE purchase_order_id = @po_id
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
-        )
-        client.query(query, job_config=job_config).result()
+        _do_delete_po(po_id)
         clear_data_cache()
         flash(f'Purchase Order {po_id} deleted successfully!', 'success')
         return redirect(url_for('index'))
@@ -3440,7 +3554,7 @@ def delete_po(po_id):
         import traceback
         error_details = traceback.format_exc()
         error_msg = str(e)
-        
+
         # Check for streaming buffer error
         if 'streaming buffer' in error_msg.lower():
             flash(f'Cannot delete purchase order: This PO is still in BigQuery\'s streaming buffer. This may be an older PO created before we switched to batch loading. Please wait 5-10 minutes and try again. Note: New POs created now can be deleted immediately.', 'error')
