@@ -31,6 +31,8 @@ export function ResearchPage() {
   const [selectedProduct, setSelectedProduct] = useState<string>('');
 
   const [searchMode, setSearchMode] = useState<'direct' | 'phrase' | 'broad'>('phrase');
+  // Bumped on each explicit Search so re-searching the current term always re-fetches.
+  const [searchNonce, setSearchNonce] = useState(0);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<ResearchRow[]>([]);
   const [curve, setCurve] = useState<ConversionCurveRow[]>([]);
@@ -152,6 +154,7 @@ export function ResearchPage() {
     setSynonymsReady(false);
     setSearchMode('phrase');  // default match-type after a search; the mode effect fetches
     setCurrentPage(1);
+    setSearchNonce(n => n + 1);  // force the mode effect to fetch even on an identical re-search
 
     // Results are fetched by the mode effect below (keyed on submittedTerm + searchMode).
     // Background: fetch synonyms (DE_SYNONYM_CACHE + hardcoded fallback) to enable Broad.
@@ -187,7 +190,7 @@ export function ResearchPage() {
   useEffect(() => {
     if (!submittedTerm || submittedTerm === '__top__') return;
     const synActive = searchMode === 'broad' && synonymsReady;
-    const reqKey = `${submittedTerm}|${parent}|${searchMode}|${synActive}`;
+    const reqKey = `${submittedTerm}|${parent}|${searchMode}|${synActive}|${searchNonce}`;
     if (searchReqRef.current === reqKey) return;
     searchReqRef.current = reqKey;
     setLoading(true);
@@ -206,7 +209,7 @@ export function ResearchPage() {
       .catch(e => console.error('Research mode fetch failed:', e))
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [submittedTerm, parent, searchMode, synonymsReady]);
+  }, [submittedTerm, parent, searchMode, synonymsReady, searchNonce]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') doSearch();
