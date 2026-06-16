@@ -147,4 +147,7 @@ export const dataEntry = {
     bank_fee?: number;
     notes?: string;
   }) => json<{ created: number; payment_id: string }>('/api/payments/bulk-po', { method: 'POST', body: JSON.stringify(b) }),
+  getCostsReport: () => json<Record<string, unknown>[]>('/api/costs-report', { method: 'GET' }),
+  updateProductCosts: (b: { asin: string; shipping_cost?: number; cogs?: number }) =>
+    json('/api/products/update-costs', { method: 'POST', body: JSON.stringify(b) }),
 };

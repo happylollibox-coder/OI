@@ -10,7 +10,7 @@
 
 import { useState, useMemo, useCallback, Fragment, useRef, useEffect } from 'react';
 import type { DashboardData, SupplyPORow, SupplyPaymentRow, SupplyShipmentRow } from '../types';
-import { Package, CreditCard, Truck, ChevronDown, ChevronUp, Filter, X, Download, Copy, Check, BarChart3, Eye, Plus } from 'lucide-react';
+import { Package, CreditCard, Truck, ChevronDown, ChevronUp, Filter, X, Download, Copy, Check, BarChart3, Eye, Plus, DollarSign } from 'lucide-react';
 import XLSX from 'xlsx-js-style';
 import { cubeLoad } from '../hooks/useCubeData';
 import PODetailDrawer from '../components/supply/PODetailDrawer';
@@ -21,6 +21,7 @@ import { NewOtherPOModal } from '../components/supply/NewOtherPOModal';
 import { NewShipmentModal } from '../components/supply/NewShipmentModal';
 import { NewPaymentModal } from '../components/supply/NewPaymentModal';
 import { BulkPaymentModal } from '../components/supply/BulkPaymentModal';
+import { CostsReportTab } from '../components/supply/CostsReportTab';
 import { dataEntry, type PODetail, type ShipmentDetail, type PaymentDetail } from '../utils/dataEntry';
 import { apiFetch } from '../utils/apiFetch';
 
@@ -129,7 +130,7 @@ const fmtFull$ = (v?: number | null) => {
 };
 const fmtDate = (d: string) => d ? new Date(d + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 
-type Tab = 'pos' | 'payments' | 'shipments' | 'snapshot';
+type Tab = 'pos' | 'payments' | 'shipments' | 'snapshot' | 'costs';
 
 /* ─── Stock Snapshot row type ─── */
 interface StockSnapshotRow {
@@ -848,6 +849,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
     { id: 'payments', label: 'Payments', icon: <CreditCard size={14} />, count: filteredPayments.length },
     { id: 'shipments', label: 'Shipments', icon: <Truck size={14} />, count: filteredShipments.length },
     { id: 'snapshot', label: 'Stock Snapshot', icon: <BarChart3 size={14} />, count: snapshotRows.length },
+    { id: 'costs', label: 'Costs', icon: <DollarSign size={14} />, count: 0 },
   ];
 
   return (
@@ -917,8 +919,8 @@ export function SupplyPage({ data }: { data: DashboardData }) {
             </button>
           ))}
           <div className="flex-1" />
-          {/* Open filter toggle (not for snapshot tab) */}
-          {tab !== 'snapshot' && (
+          {/* Open filter toggle (not for snapshot or costs tab) */}
+          {tab !== 'snapshot' && tab !== 'costs' && (
             <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer mr-2 select-none">
               <Filter size={12} />
               <input
@@ -1029,13 +1031,15 @@ export function SupplyPage({ data }: { data: DashboardData }) {
               </button>
             </>
           )}
-          <button
-            onClick={handleExport}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-surface border border-border rounded-md text-xs font-medium text-subtle hover:text-heading hover:border-blue-500/50 transition-colors"
-          >
-            <Download size={14} />
-            Export CSV
-          </button>
+          {tab !== 'costs' && (
+            <button
+              onClick={handleExport}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-surface border border-border rounded-md text-xs font-medium text-subtle hover:text-heading hover:border-blue-500/50 transition-colors"
+            >
+              <Download size={14} />
+              Export CSV
+            </button>
+          )}
         </div>
       </div>
 
@@ -1131,6 +1135,9 @@ export function SupplyPage({ data }: { data: DashboardData }) {
           </>
         );
       })()}
+
+      {/* ─── Costs Report tab ─── */}
+      {tab === 'costs' && <CostsReportTab />}
 
       {/* ─── Detail drawer (Flask-backed edits) ─── */}
       {selectedPO && (
