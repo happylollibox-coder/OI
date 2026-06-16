@@ -2794,80 +2794,193 @@ def payments_list():
     return render_template('payments_list.html', payments=payments)
 
 
+def bulk_create_shipment_payments(data):
+    """Helper: create payments for multiple shipments from a data dict.
+
+    Expected keys in *data*:
+        shipment_ids  – list[str]   parallel with amounts
+        amounts       – list[str|float]   one per shipment_id
+        payment_date  – str  (YYYY-MM-DD)
+        payment_method – str
+        vendor_name   – str
+        currency      – str  (default 'USD')
+        bank_fee      – float|None  (applied to first row only)
+        notes         – str
+
+    Returns (errors_list, created_count, payment_id).
+    errors_list is [] on success.
+    """
+    shipment_ids = data.get('shipment_ids') or []
+    amounts = data.get('amounts') or []
+    payment_date = data.get('payment_date')
+    payment_method = data.get('payment_method')
+    vendor_name = data.get('vendor_name')
+    currency = data.get('currency', 'USD')
+    raw_fee = data.get('bank_fee')
+    bank_fee = float(raw_fee) if raw_fee is not None and raw_fee != '' else None
+    notes = data.get('notes', '')
+
+    errors = []
+    if not shipment_ids:
+        errors.append('No shipments selected')
+    if not payment_date or not vendor_name:
+        errors.append('Payment date and vendor are required')
+    if errors:
+        return errors, 0, None
+
+    rows = []
+    shipment_details = [get_shipment_details(sid) for sid in shipment_ids]
+    shipment_details = [s for s in shipment_details if s]
+    payment_id = generate_payment_id(payment_date, vendor_name, shipment_details)
+
+    for i, sid in enumerate(shipment_ids):
+        amount = float(amounts[i]) if i < len(amounts) else 0
+        if amount <= 0:
+            continue
+        row = {
+            'payment_id': payment_id,
+            'shipment_id': sid,
+            'payment_date': payment_date,
+            'payment_amount': round(amount, 2),
+            'vendor_name': vendor_name,
+            'currency': currency,
+            'payment_method': payment_method,
+        }
+        if notes:
+            row['notes'] = notes
+        if bank_fee and len(rows) == 0:
+            row['bank_fee'] = bank_fee
+        rows.append(row)
+
+    created = 0
+    if rows:
+        table_ref = client.get_table(PAYMENTS_TABLE)
+        job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+            autodetect=False,
+            schema=table_ref.schema
+        )
+        job = client.load_table_from_json(rows, table_ref, job_config=job_config)
+        job.result()
+        if job.errors:
+            errors.append(f'BigQuery errors: {job.errors}')
+        else:
+            created = len(rows)
+
+    if created > 0:
+        paid_shipment_ids = [r['shipment_id'] for r in rows if r.get('shipment_id')]
+        sync_shipment_paid_status(paid_shipment_ids)
+        auto_close_received_shipments()
+
+    return errors, created, payment_id
+
+
+def bulk_create_po_payments(data):
+    """Helper: create payments for multiple POs (standard + Other) from a data dict.
+
+    Expected keys in *data*:
+        po_ids        – list[str]   parallel with amounts (all PO IDs: standard + other)
+        amounts       – list[str|float]   one per po_id
+        payment_date  – str  (YYYY-MM-DD)
+        payment_method – str
+        vendor_name   – str
+        currency      – str  (default 'USD')
+        bank_fee      – float|None  (applied to first row only)
+        notes         – str
+
+    Returns (errors_list, created_count, payment_id).
+    errors_list is [] on success.
+    """
+    po_ids = data.get('po_ids') or []
+    amounts = data.get('amounts') or []
+    payment_date = data.get('payment_date')
+    payment_method = data.get('payment_method')
+    vendor_name = data.get('vendor_name')
+    currency = data.get('currency', 'USD')
+    raw_fee = data.get('bank_fee')
+    bank_fee = float(raw_fee) if raw_fee is not None and raw_fee != '' else None
+    notes = data.get('notes', '')
+
+    errors = []
+    if not po_ids:
+        errors.append('No purchase orders selected')
+    if not payment_date or not vendor_name:
+        errors.append('Payment date and vendor are required')
+    if errors:
+        return errors, 0, None
+
+    po_details_list = []
+    for pid in po_ids:
+        po_data = get_po_details(pid)
+        if po_data and po_data[0]:
+            po_details_list.append(po_data[0])
+    payment_id = generate_payment_id(payment_date, vendor_name, [], po_details_list)
+
+    rows = []
+    for i, pid in enumerate(po_ids):
+        amount = float(amounts[i]) if i < len(amounts) else 0
+        if amount <= 0:
+            continue
+        row = {
+            'payment_id': payment_id,
+            'purchase_order_id': pid,
+            'payment_date': payment_date,
+            'payment_amount': round(amount, 2),
+            'vendor_name': vendor_name,
+            'currency': currency,
+            'payment_method': payment_method,
+        }
+        if notes:
+            row['notes'] = notes
+        if bank_fee and len(rows) == 0:
+            row['bank_fee'] = bank_fee
+        rows.append(row)
+
+    created = 0
+    if rows:
+        table_ref = client.get_table(PAYMENTS_TABLE)
+        job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+            autodetect=False,
+            schema=table_ref.schema
+        )
+        job = client.load_table_from_json(rows, table_ref, job_config=job_config)
+        job.result()
+        if job.errors:
+            errors.append(f'BigQuery errors: {job.errors}')
+        else:
+            created = len(rows)
+
+    if created > 0:
+        auto_close_received_shipments()
+
+    return errors, created, payment_id
+
+
 @app.route('/payments/bulk-new', methods=['GET', 'POST'])
 @login_required
 def bulk_new_payments():
     """Create payments for multiple shipments at once"""
     if request.method == 'POST':
-        # Get form data
-        shipment_ids = request.form.getlist('shipment_ids')
-        amounts = request.form.getlist('amounts')
-        payment_date = request.form.get('payment_date')
-        payment_method = request.form.get('payment_method')
-        vendor_name = request.form.get('vendor_name')
-        currency = request.form.get('currency', 'USD')
-        bank_fee = float(request.form.get('bank_fee', 0)) if request.form.get('bank_fee') else None
-        notes = request.form.get('notes', '')
-        
-        if not shipment_ids:
-            flash('No shipments selected', 'error')
+        data = {
+            'shipment_ids': request.form.getlist('shipment_ids'),
+            'amounts': request.form.getlist('amounts'),
+            'payment_date': request.form.get('payment_date'),
+            'payment_method': request.form.get('payment_method'),
+            'vendor_name': request.form.get('vendor_name'),
+            'currency': request.form.get('currency', 'USD'),
+            'bank_fee': request.form.get('bank_fee'),
+            'notes': request.form.get('notes', ''),
+        }
+        errors, created, _payment_id = bulk_create_shipment_payments(data)
+        if errors:
+            for e in errors:
+                flash(str(e), 'error')
             return redirect(url_for('shipments_list'))
-        if not payment_date or not vendor_name:
-            flash('Payment date and vendor are required', 'error')
-            return redirect(url_for('shipments_list'))
-        
-        created = 0
-        rows = []
-        # Fetch shipment details for product-based payment ID
-        shipment_details = [get_shipment_details(sid) for sid in shipment_ids]
-        shipment_details = [s for s in shipment_details if s]
-        payment_id = generate_payment_id(payment_date, vendor_name, shipment_details)
-        for i, sid in enumerate(shipment_ids):
-            # Use user-specified amount (allows partial payments)
-            amount = float(amounts[i]) if i < len(amounts) else 0
-            if amount <= 0:
-                continue  # Skip zero-amount shipments
-            
-            row = {
-                'payment_id': payment_id,
-                'shipment_id': sid,
-                'payment_date': payment_date,
-                'payment_amount': round(amount, 2),
-                'vendor_name': vendor_name,
-                'currency': currency,
-                'payment_method': payment_method,
-            }
-            if notes:
-                row['notes'] = notes
-            # Put bank_fee on the first payment record
-            if bank_fee and len(rows) == 0:
-                row['bank_fee'] = bank_fee
-            rows.append(row)
-        
-        if rows:
-            try:
-                table_ref = client.get_table(PAYMENTS_TABLE)
-                job_config = bigquery.LoadJobConfig(
-                    write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-                    source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
-                    autodetect=False,
-                    schema=table_ref.schema
-                )
-                job = client.load_table_from_json(rows, table_ref, job_config=job_config)
-                job.result()
-                if job.errors:
-                    flash(f'BigQuery errors: {job.errors}', 'error')
-                else:
-                    created = len(rows)
-            except Exception as e:
-                flash(f'Error inserting payments: {str(e)}', 'error')
-        
         clear_data_cache()
         if created > 0:
-            # Sync paid status for all shipments that received payments
-            paid_shipment_ids = [r['shipment_id'] for r in rows if r.get('shipment_id')]
-            sync_shipment_paid_status(paid_shipment_ids)
-            auto_close_received_shipments()
             flash(f'{created} payment(s) created successfully!', 'success')
         return redirect(url_for('payments_list'))
     
@@ -2921,75 +3034,23 @@ def bulk_new_payments():
 def bulk_po_payments():
     """Create payments for multiple purchase orders at once (standard + Other POs)"""
     if request.method == 'POST':
-        # Get form data — all PO IDs (standard + other) come as a single list
-        po_ids = request.form.getlist('po_ids')
-        amounts = request.form.getlist('amounts')
-        payment_date = request.form.get('payment_date')
-        payment_method = request.form.get('payment_method')
-        vendor_name = request.form.get('vendor_name')
-        currency = request.form.get('currency', 'USD')
-        bank_fee = float(request.form.get('bank_fee', 0)) if request.form.get('bank_fee') else None
-        notes = request.form.get('notes', '')
-        
-        if not po_ids:
-            flash('No purchase orders selected', 'error')
+        data = {
+            'po_ids': request.form.getlist('po_ids'),
+            'amounts': request.form.getlist('amounts'),
+            'payment_date': request.form.get('payment_date'),
+            'payment_method': request.form.get('payment_method'),
+            'vendor_name': request.form.get('vendor_name'),
+            'currency': request.form.get('currency', 'USD'),
+            'bank_fee': request.form.get('bank_fee'),
+            'notes': request.form.get('notes', ''),
+        }
+        errors, created, _payment_id = bulk_create_po_payments(data)
+        if errors:
+            for e in errors:
+                flash(str(e), 'error')
             return redirect(url_for('index'))
-        if not payment_date or not vendor_name:
-            flash('Payment date and vendor are required', 'error')
-            return redirect(url_for('index'))
-        
-        created = 0
-        rows = []
-        # Fetch standard PO details for payment ID generation (best-effort)
-        po_details_list = []
-        for pid in po_ids:
-            po_data = get_po_details(pid)
-            if po_data and po_data[0]:
-                po_details_list.append(po_data[0])
-        payment_id = generate_payment_id(payment_date, vendor_name, [], po_details_list)
-        
-        for i, pid in enumerate(po_ids):
-            amount = float(amounts[i]) if i < len(amounts) else 0
-            if amount <= 0:
-                continue  # Skip zero-amount POs
-            
-            row = {
-                'payment_id': payment_id,
-                'purchase_order_id': pid,
-                'payment_date': payment_date,
-                'payment_amount': round(amount, 2),
-                'vendor_name': vendor_name,
-                'currency': currency,
-                'payment_method': payment_method,
-            }
-            if notes:
-                row['notes'] = notes
-            # Put bank_fee on the first payment record
-            if bank_fee and len(rows) == 0:
-                row['bank_fee'] = bank_fee
-            rows.append(row)
-        
-        if rows:
-            try:
-                table_ref = client.get_table(PAYMENTS_TABLE)
-                job_config = bigquery.LoadJobConfig(
-                    write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-                    source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
-                    autodetect=False,
-                    schema=table_ref.schema
-                )
-                job = client.load_table_from_json(rows, table_ref, job_config=job_config)
-                job.result()
-                if job.errors:
-                    flash(f'BigQuery errors: {job.errors}', 'error')
-                else:
-                    created = len(rows)
-            except Exception as e:
-                flash(f'Error inserting payments: {str(e)}', 'error')
-        
         clear_data_cache()
         if created > 0:
-            auto_close_received_shipments()
             flash(f'{created} payment(s) created for {created} PO(s)!', 'success')
         return redirect(url_for('payments_list'))
     
@@ -3076,6 +3137,54 @@ def bulk_po_payments():
                            po_ids=all_ids,
                            total_remaining=total_remaining,
                            manufacturer=manufacturer)
+
+
+@app.route('/api/payments/bulk', methods=['POST'])
+def api_payments_bulk():
+    """JSON twin: create payments for multiple shipments.
+
+    Body (application/json):
+        shipment_ids  – list[str]
+        amounts       – list[str|float]  (parallel with shipment_ids)
+        payment_date  – str  (YYYY-MM-DD)
+        payment_method – str
+        vendor_name   – str
+        currency      – str  (default 'USD')
+        bank_fee      – float|null
+        notes         – str
+    """
+    try:
+        errors, created, payment_id = bulk_create_shipment_payments(request.get_json() or {})
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True, 'created': created, 'payment_id': payment_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/payments/bulk-po', methods=['POST'])
+def api_payments_bulk_po():
+    """JSON twin: create payments for multiple POs (standard + Other).
+
+    Body (application/json):
+        po_ids        – list[str]  (standard PO IDs and/or other_po_ids, merged)
+        amounts       – list[str|float]  (parallel with po_ids)
+        payment_date  – str  (YYYY-MM-DD)
+        payment_method – str
+        vendor_name   – str
+        currency      – str  (default 'USD')
+        bank_fee      – float|null
+        notes         – str
+    """
+    try:
+        errors, created, payment_id = bulk_create_po_payments(request.get_json() or {})
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True, 'created': created, 'payment_id': payment_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/orders', methods=['GET'])
