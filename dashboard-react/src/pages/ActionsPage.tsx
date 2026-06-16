@@ -20,6 +20,8 @@ import { Plus, Check, Download, CircleX, Ban, TrendingUp, TrendingDown, ShieldCh
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { DecisionTreeViewer } from '../components/Actions/DecisionTreeViewer';
 import { DecisionCard } from '../components/Actions/DecisionCard';
+import { CrossSellCard } from '../components/Actions/CrossSellCard';
+import { buildCrossSellQueueItem } from '../components/Actions/crossSell';
 import KeywordIntelligencePanel from '../components/Actions/KeywordIntelligencePanel';
 import { useKeywordIntelligence } from '../hooks/useCubeData';
 import { CoachStrategyPanel } from '../components/CoachStrategyPanel';
@@ -1505,6 +1507,56 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
           ))}
         </div>
       )}
+
+      {/* ── 🔁 Cross-sell: advertise your own products on your best-affinity listings ── */}
+      {(() => {
+        const all = data.coach_cross_sell ?? [];
+        const rows = effectiveFam ? all.filter(r => r.target_parent === effectiveFam) : all;
+        if (rows.length === 0) return null;
+        const totalSales = rows.reduce((s, r) => s + r.cross_sales_30d, 0);
+        // Group by target_parent (the family whose listing we'd product-target)
+        const groups = new Map<string, typeof rows>();
+        for (const r of rows) {
+          const fam = r.target_parent || '—';
+          const g = groups.get(fam);
+          if (g) g.push(r); else groups.set(fam, [r]);
+        }
+        const sorted = [...groups.entries()].sort(([, a], [, b]) =>
+          b.reduce((s, r) => s + r.cross_orders_30d, 0) - a.reduce((s, r) => s + r.cross_orders_30d, 0)
+        );
+        return (
+          <div className="mb-4">
+            <div className="flex items-baseline gap-2 mb-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text)]">🔁 Cross-sell your own products</span>
+              <span className="text-[10px] text-faint">{rows.length} proven in-brand co-purchase pair{rows.length !== 1 ? 's' : ''} (30d) · ~{fM(totalSales)} co-purchase sales</span>
+            </div>
+            {sorted.map(([family, famRows]) => {
+              const sortedRows = [...famRows].sort((a, b) => b.cross_orders_30d - a.cross_orders_30d);
+              return (
+                <div key={family} className="mb-3">
+                  <div className="flex items-baseline gap-2 mb-1.5 px-0.5">
+                    <span className="text-[11px] font-semibold text-[var(--color-text)]">{family}</span>
+                    <span className="text-[10px] text-faint">{famRows.length} pair{famRows.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {sortedRows.map(r => {
+                      const item = buildCrossSellQueueItem(r);
+                      return (
+                        <CrossSellCard
+                          key={`${r.target_asin}|${r.advertise_asin}`}
+                          row={r}
+                          inQueue={doQueue.hasItem(item.search_term, item.action, item.campaign, item.targeting)}
+                          onQueue={() => doQueue.addItem(item)}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* ── 🚫 Remove conflicting negatives ── */}
       {(() => {
