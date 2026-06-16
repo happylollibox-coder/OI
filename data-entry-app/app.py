@@ -3941,8 +3941,32 @@ def get_shipment_details(shipment_id):
             seen_line_ids.add(d['line_id'])
             lines.append(d)
     shipment['lines'] = lines
-    
+
     return shipment
+
+
+@app.route('/api/shipment/<shipment_id>', methods=['GET'])
+def api_shipment_get(shipment_id):
+    """Full shipment detail (header + lines) as JSON."""
+    try:
+        shipment = get_shipment_details(shipment_id)
+        if shipment is None:
+            return jsonify({'error': 'Shipment not found'}), 404
+
+        def _ser(d):
+            out = {}
+            for k, v in d.items():
+                if k == 'lines' and isinstance(v, list):
+                    out[k] = [_ser(x) for x in v]
+                elif hasattr(v, 'isoformat'):
+                    out[k] = v.isoformat()
+                else:
+                    out[k] = v
+            return out
+
+        return jsonify(_ser(shipment))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 def update_shipment(shipment_id, data):
