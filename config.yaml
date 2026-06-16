@@ -219,6 +219,15 @@ views:
     description: "N-gram phrase analysis — identifies common phrases across unprofitable search terms for phrase-level negation."
     source_files: ["scripts/bigquery/views/V_ADS_COACH_PHRASE_NEGATIVES.sql"]
 
+  - name: "V_ADS_COACH_CROSSSELL"
+    description: "Cross-sell gap recommendations at grain (target_asin, advertise_asin): proven in-brand co-purchase pairs (advertised A → bought B, last 30d, ≥CROSS_SELL_MIN_ORDERS) where B is not already targeted on A's listing. Confidence: HIGH ≥10 orders, MEDIUM ≥5, LOW ≥3."
+    source_files: ["scripts/bigquery/views/V_ADS_COACH_CROSSSELL.sql"]
+    dependencies:
+      - V_SRC_AmazonAds_purchased_product
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+      - DE_COACH_THRESHOLDS
+
   - name: "V_PRODUCT_PHRASE_NEGATIVES"
     description: "Curated per-product negative phrases with _ALL/FAMILY/PRODUCT resolution. Read view over DE_PRODUCT_PHRASE_NEGATIVES."
     source_files: ["scripts/bigquery/views/V_PRODUCT_PHRASE_NEGATIVES.sql"]
