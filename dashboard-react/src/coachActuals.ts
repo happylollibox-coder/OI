@@ -130,6 +130,22 @@ export const GATE = Object.freeze({
 //   (NEGATE_PHRASE handled by the phrase panel, PROMOTE_TO_PEAK_PHRASE seasonal flow).
 export const CUT_ACTIONS = new Set(['NEGATE', 'NEGATE_TERM', 'NEGATE_ROAS_THRESHOLD', 'NEGATE_SPEND_THRESHOLD', 'NEGATE_BOOST_SIMILAR_EXACT', 'STOP', 'STOP_TERM', 'STOP_TARGET', 'STOP_SEASONAL']);
 export const REDUCE_ACTIONS = new Set(['REDUCE_BID', 'REDUCE_BID_ROAS', 'REDUCE_BID_SPEND', 'REDUCE_TO_BASELINE']);
+
+// Grain of the Amazon entity an action operates on. Cut/negate acts on the shopper
+// SEARCH TERM; bid actions act on the KEYWORD/target (an ASIN target = product target).
+// Always label this so a "keyword" you bid on is never confused with a "search term" you negate.
+export type TermGrain = 'search term' | 'keyword' | 'product target';
+export function termGrain(a: { action: string; search_term?: string | null; targeting?: string | null; match_type?: string | null }): TermGrain {
+  const isCut = CUT_ACTIONS.has(a.action);
+  const usedSearchTerm = isCut ? !!a.search_term : !a.targeting;
+  if (usedSearchTerm) return 'search term';
+  const mt = (a.match_type || '').toUpperCase();
+  const tgt = (a.targeting || '').trim();
+  if (mt === 'PRODUCT_TARGETING' || mt.startsWith('ASIN') || /^asin=/i.test(tgt) || /^b0[a-z0-9]{8,}$/i.test(tgt)) return 'product target';
+  return 'keyword';
+}
+// Compact tag for dense rows.
+export const termGrainShort = (g: TermGrain): string => g === 'search term' ? 'ST' : g === 'product target' ? 'PT' : 'KW';
 const PROMOTE_ACTIONS = new Set(['INCREASE_BID', 'PROMOTE_TO_EXACT', 'SCALE', 'SCALE_UP', 'SCALE_UP_ROAS', 'BOOST']);
 
 // Weekly dollars at stake for a clear case — the owner's "opportunity" and the

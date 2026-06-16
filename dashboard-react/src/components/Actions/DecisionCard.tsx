@@ -2,7 +2,22 @@ import React from 'react';
 import { ArrowDownRight, ArrowUpRight, Ban, Plus } from 'lucide-react';
 import type { ActionRow } from '../../types';
 import { fM } from '../../utils';
-import { CUT_ACTIONS, REDUCE_ACTIONS, selectPeak, type GateVerdict } from '../../coachActuals';
+import { CUT_ACTIONS, REDUCE_ACTIONS, selectPeak, termGrain, type GateVerdict } from '../../coachActuals';
+import type { LastChange } from '../../hooks/useLastChange';
+
+// "Jun 12" from a YYYY-MM-DD (or ISO) string, parsed as a local date to avoid TZ drift.
+const fmtShortDate = (ds: string) => {
+  const [y, m, d] = ds.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return ds;
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+const daysAgo = (ds: string) => {
+  const [y, m, d] = ds.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const then = new Date(y, m - 1, d);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((today.getTime() - then.getTime()) / 86400000);
+};
 
 // ActionRow uses ads_spend_4w / ads_clicks_4w / ads_orders_4w / ads_net_roas_4w as field names.
 // ActionsPage re-maps them to spend/clicks/orders/net_roas when building the `acts` array.
@@ -19,8 +34,8 @@ type ActionRowRuntime = ActionRow & {
 //   EVIDENCE   the 3 facts that justify it (4w window — real past numbers, no forecasts)
 //   CHANGE     exactly what will change in Amazon (campaign + object)
 // Queue button adds to the Do queue exactly like the row UI does (handler passed in).
-export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: {
-  action: ActionRowRuntime; family: string; why: GateVerdict; opp: { kind: 'save' | 'earn'; dollars: number }; inQueue: boolean; onQueue: () => void;
+export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, lastChange }: {
+  action: ActionRowRuntime; family: string; why: GateVerdict; opp: { kind: 'save' | 'earn'; dollars: number }; inQueue: boolean; onQueue: () => void; lastChange?: LastChange | null;
 }) {
   const isCut = CUT_ACTIONS.has(a.action);
   const isReduce = REDUCE_ACTIONS.has(a.action);
@@ -31,13 +46,17 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: 
   // (campaign + ad group + ad + keyword). The card must never understate that (trust surface;
   // a real upload on 2026-06-12 created campaigns the owner didn't expect).
   const isExtract = a.action === 'PROMOTE_TO_EXACT';
+  // Grain label: cut/negate acts on the shopper SEARCH TERM; bid actions act on the KEYWORD/target.
+  // Always state which, so the action's grain is never ambiguous.
+  const term = isCut ? (a.search_term || a.targeting) : (a.targeting || a.search_term);
+  const termKind = termGrain(a);
   const claim = isCut
-    ? `Stop "${a.search_term || a.targeting}" for ${family}`
+    ? `Stop ${termKind} "${term}" for ${family}`
     : isReduce
-    ? `Lower the bid on "${a.targeting || a.search_term}" for ${family}`
+    ? `Lower the bid on ${termKind} "${term}" for ${family}`
     : isExtract
-    ? `Extract "${a.targeting || a.search_term}" into its own EXACT campaign for ${family}`
-    : `Bid up "${a.targeting || a.search_term}" for ${family}`;
+    ? `Extract ${termKind} "${term}" into its own EXACT campaign for ${family}`
+    : `Bid up ${termKind} "${term}" for ${family}`;
   const bid = a.recommended_bid;
   const amazonChange = isCut
     ? `Add negative exact in: ${a.campaign_name}`
@@ -51,6 +70,11 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: 
   const clicks = a.clicks ?? a.ads_clicks_4w;
   const orders = a.orders ?? a.ads_orders_4w;
   const netRoas = a.net_roas ?? a.ads_net_roas_4w;
+
+  // Peak winner: cut card on a term that performed in peak. Blitz's anticipatory gate
+  // re-bids proven peak terms in boost, so cutting it now drops a term Blitz would revive.
+  const peak = selectPeak(a);
+  const isPeakWinner = isCut && peak != null && ((peak.orders ?? 0) >= 3 || peak.roas >= 1.3);
 
   return (
     <div className="border border-border rounded-xl bg-card p-3 flex flex-col gap-1.5">
@@ -67,7 +91,6 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: 
       </div>
       {(() => {
         // Three-window evidence as a compact comparison grid (windows = columns).
-        const peak = selectPeak(a);
         const windows = [
           { label: '1w', title: 'This week (ad-only)', roas: a.ads_net_roas_1w, orders: a.ads_orders_1w, cpc: a.ads_cpc_1w, spend: a.ads_spend_1w ?? null, clicks: a.ads_clicks_1w ?? null },
           { label: '4w', title: 'Last 4 weeks', roas: netRoas ?? null, orders: orders ?? null, cpc: a.ads_cpc_4w, spend: spend ?? null, clicks: clicks ?? null },
@@ -97,6 +120,11 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: 
         );
       })()}
       <div className="text-[10px] text-subtle">{why.reason}.</div>
+      {isPeakWinner && peak && (
+        <div className="text-[10px] text-amber-400/90">
+          ⚠ Peak winner: {peak.orders ?? 0} orders @ {peak.roas.toFixed(2)}× last peak — Blitz re-bids proven peak terms in boost; cutting now drops it for next peak.
+        </div>
+      )}
       <div className="text-[10px] tabular-nums font-mono">
         {opp.kind === 'save'
           ? <span className="text-emerald-400">→ save ~{fM(opp.dollars)}/wk</span>
@@ -104,6 +132,22 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue }: 
         <span className="text-faint"> · checked vs real results 1 week after upload</span>
       </div>
       <div className="text-[9px] text-faint">{amazonChange}</div>
+      {(() => {
+        // Recency of this keyword-in-campaign: last bid/action WE uploaded, else when it was created.
+        if (lastChange?.date) {
+          const n = daysAgo(lastChange.date);
+          const rel = n == null ? '' : n <= 0 ? 'today' : n === 1 ? 'yesterday' : `${n}d ago`;
+          return (
+            <div className="text-[9px] text-faint">
+              Last changed {rel && `${rel} `}({fmtShortDate(lastChange.date)}){lastChange.action ? ` · ${lastChange.action}` : ''}
+            </div>
+          );
+        }
+        if (a.lt_first_seen) {
+          return <div className="text-[9px] text-faint">Created {fmtShortDate(a.lt_first_seen)} · no prior change</div>;
+        }
+        return null;
+      })()}
     </div>
   );
 }

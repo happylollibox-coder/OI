@@ -443,6 +443,36 @@ async function loadProductCreativesFromCube(): Promise<ProductCreativeRow[]> {
   }));
 }
 
+/** StrategyCampaignTemplate → strategy_campaign_templates (campaign-creation recipes) */
+async function loadStrategyCampaignTemplatesFromCube(): Promise<import('../types').StrategyCampaignTemplateRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'StrategyCampaignTemplate.strategyId', 'StrategyCampaignTemplate.campaignSeq',
+      'StrategyCampaignTemplate.adFormat', 'StrategyCampaignTemplate.matchType',
+      'StrategyCampaignTemplate.biddingStrategy', 'StrategyCampaignTemplate.bidMin',
+      'StrategyCampaignTemplate.bidMax', 'StrategyCampaignTemplate.dailyBudget',
+      'StrategyCampaignTemplate.topOfSearchPct', 'StrategyCampaignTemplate.productPagePct',
+      'StrategyCampaignTemplate.namingHint', 'StrategyCampaignTemplate.isRequired',
+    ],
+    limit: 200,
+  });
+  const n = (v: unknown): number | null => (v === null || v === undefined || v === '' ? null : Number(v));
+  return (rows as Record<string, unknown>[]).map(r => ({
+    strategy_id: String(r['StrategyCampaignTemplate.strategyId'] ?? ''),
+    campaign_seq: Number(r['StrategyCampaignTemplate.campaignSeq'] ?? 0),
+    ad_format: String(r['StrategyCampaignTemplate.adFormat'] ?? ''),
+    match_type: String(r['StrategyCampaignTemplate.matchType'] ?? ''),
+    bidding_strategy: String(r['StrategyCampaignTemplate.biddingStrategy'] ?? ''),
+    bid_min: n(r['StrategyCampaignTemplate.bidMin']),
+    bid_max: n(r['StrategyCampaignTemplate.bidMax']),
+    daily_budget: n(r['StrategyCampaignTemplate.dailyBudget']),
+    top_of_search_pct: n(r['StrategyCampaignTemplate.topOfSearchPct']),
+    product_page_pct: n(r['StrategyCampaignTemplate.productPagePct']),
+    naming_hint: String(r['StrategyCampaignTemplate.namingHint'] ?? ''),
+    is_required: Boolean(r['StrategyCampaignTemplate.isRequired']),
+  }));
+}
+
 /** Product + CostsHistory → products */
 async function loadProductsFromCube(): Promise<ProductRow[]> {
   const [productRows, costRows] = await Promise.all([
@@ -1632,20 +1662,38 @@ async function loadNegativeConflictsFromCube(): Promise<import('../types').Negat
     dimensions: [
       'AdsNegativeConflicts.campaignId', 'AdsNegativeConflicts.campaignName',
       'AdsNegativeConflicts.negatedTerm', 'AdsNegativeConflicts.asin',
+      'AdsNegativeConflicts.negativeId', 'AdsNegativeConflicts.adGroupId',
+      'AdsNegativeConflicts.matchType', 'AdsNegativeConflicts.level',
       'AdsNegativeConflicts.productShortName', 'AdsNegativeConflicts.parentName',
       'AdsNegativeConflicts.converterOrders', 'AdsNegativeConflicts.converterSales',
+      'AdsNegativeConflicts.converterOrders90d', 'AdsNegativeConflicts.converterSales90d',
+      'AdsNegativeConflicts.campaignNetRoasAllTime', 'AdsNegativeConflicts.campaignGrossRoasAllTime',
+      'AdsNegativeConflicts.campaignSpendAllTime', 'AdsNegativeConflicts.campaignDistinctAsins',
+      'AdsNegativeConflicts.campaignProductChanged',
       'AdsNegativeConflicts.conflictType',
     ],
   });
+  const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
   return (rows as Record<string, unknown>[]).map(r => ({
     campaign_id: String(r['AdsNegativeConflicts.campaignId'] ?? ''),
     campaign_name: String(r['AdsNegativeConflicts.campaignName'] ?? ''),
     negated_term: String(r['AdsNegativeConflicts.negatedTerm'] ?? ''),
+    negative_id: String(r['AdsNegativeConflicts.negativeId'] ?? ''),
+    ad_group_id: String(r['AdsNegativeConflicts.adGroupId'] ?? ''),
+    match_type: String(r['AdsNegativeConflicts.matchType'] ?? ''),
+    level: String(r['AdsNegativeConflicts.level'] ?? ''),
     asin: String(r['AdsNegativeConflicts.asin'] ?? ''),
     product_short_name: String(r['AdsNegativeConflicts.productShortName'] ?? ''),
     parent_name: String(r['AdsNegativeConflicts.parentName'] ?? ''),
     converter_orders: Number(r['AdsNegativeConflicts.converterOrders'] ?? 0),
     converter_sales: Number(r['AdsNegativeConflicts.converterSales'] ?? 0),
+    converter_orders_90d: Number(r['AdsNegativeConflicts.converterOrders90d'] ?? 0),
+    converter_sales_90d: Number(r['AdsNegativeConflicts.converterSales90d'] ?? 0),
+    campaign_net_roas_all_time: num(r['AdsNegativeConflicts.campaignNetRoasAllTime']),
+    campaign_gross_roas_all_time: num(r['AdsNegativeConflicts.campaignGrossRoasAllTime']),
+    campaign_spend_all_time: num(r['AdsNegativeConflicts.campaignSpendAllTime']),
+    campaign_distinct_asins: Number(r['AdsNegativeConflicts.campaignDistinctAsins'] ?? 0),
+    campaign_product_changed: Boolean(r['AdsNegativeConflicts.campaignProductChanged']),
     conflict_type: String(r['AdsNegativeConflicts.conflictType'] ?? ''),
   }));
 }
@@ -2282,6 +2330,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           ['planAdsTargets', loadPlanAdsTargetsFromCube],
           ['asinOosDays', loadAsinOosDaysFromCube],
           ['negativeConflicts', loadNegativeConflictsFromCube],
+          ['strategyCampaignTemplates', loadStrategyCampaignTemplatesFromCube],
         ];
 
         const heavyLoaders: [string, () => Promise<unknown>][] = [
@@ -2341,6 +2390,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
         const planAdsTargets = resolveLoader(bgResultsLight[36], 'planAdsTargets') as PlanAdsTargetRow[];
         const asinOosDays = resolveLoader(bgResultsLight[37], 'asinOosDays') as AsinOosDaysRow[];
         const negativeConflicts = resolveLoader(bgResultsLight[38], 'negativeConflicts') as import('../types').NegativeConflictRow[];
+        const strategyCampaignTemplates = resolveLoader(bgResultsLight[39], 'strategyCampaignTemplates') as import('../types').StrategyCampaignTemplateRow[];
 
         const ads = resolveLoader(bgResultsHeavy[0], 'ads') as Ads7dRow[];
         const sqp = resolveLoader(bgResultsHeavy[1], 'sqp') as SqpWeeklyRow[];
@@ -2367,6 +2417,7 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           experiment_campaigns: experimentCampaigns,
           campaign_search_terms: campaignSearchTerms,
           experiment_templates: experimentTemplates,
+          strategy_campaign_templates: strategyCampaignTemplates,
           holidays,
           coach_decisions: coachDecisions,
           actions: coachTerms,

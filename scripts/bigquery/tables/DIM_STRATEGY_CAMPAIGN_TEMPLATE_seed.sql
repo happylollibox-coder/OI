@@ -44,13 +44,13 @@ VALUES
 -- EXACT_BOOST: Heavy investment on proven keywords
 -- =============================================
 ('EXACT_BOOST', 1, 'SP', 'EXACT', 'DOWN_ONLY',
-  0.50, 2.00, 40.0, 500, 0,
+  0.50, 2.00, 20.0, 20, 0,
   'SP exact match for top-of-search dominance on proven terms',
   '{PRODUCT}-SP/EXACT ({keywords summary})',
-  TRUE, 'Core traffic driver. High TOS boost to win the top ad spot.'),
+  TRUE, 'Core traffic driver. Modest TOS boost; budget kept lean.'),
 
 ('EXACT_BOOST', 2, 'SB_VIDEO', 'EXACT', 'DOWN_ONLY',
-  0.50, 1.50, 25.0, 0, 0,
+  0.50, 1.50, 20.0, 0, 0,
   'SB Video for visual engagement on same proven terms',
   '{PRODUCT}-VIDEO/EXACT ({keywords summary})',
   TRUE, 'Video appears above organic results. Drives high CTR and conversion.'),

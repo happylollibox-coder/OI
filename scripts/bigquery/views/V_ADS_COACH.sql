@@ -158,6 +158,7 @@ threshold_pivot AS (
     MAX(IF(threshold_key='PROMOTE_MIN_ORDERS', threshold_value, NULL)) as promote_min_orders,
     MAX(IF(threshold_key='PROMOTE_MIN_ROAS', threshold_value, NULL)) as promote_min_roas,
     MAX(IF(threshold_key='PROMOTE_MIN_SQP_VOLUME', threshold_value, NULL)) as promote_min_sqp_vol,
+    MAX(IF(threshold_key='PROMOTE_MIN_RANK', threshold_value, NULL)) as promote_min_rank,
     MAX(IF(threshold_key='CONFIDENCE_DAYS_HIGH', threshold_value, NULL)) as conf_days_high,
     MAX(IF(threshold_key='CONFIDENCE_CLICKS_HIGH', threshold_value, NULL)) as conf_clicks_high,
     MAX(IF(threshold_key='CONFIDENCE_DAYS_MEDIUM', threshold_value, NULL)) as conf_days_medium,
@@ -192,6 +193,9 @@ coach_data AS (
     COALESCE(tp_sm.promote_min_orders, tp_gm.promote_min_orders, tp_sg.promote_min_orders, tp_gg.promote_min_orders, 4) as th_promote_min_orders,
     COALESCE(tp_sm.promote_min_roas, tp_gm.promote_min_roas, tp_sg.promote_min_roas, tp_gg.promote_min_roas, 1.5) as th_promote_min_roas,
     COALESCE(tp_sm.promote_min_sqp_vol, tp_gm.promote_min_sqp_vol, tp_sg.promote_min_sqp_vol, tp_gg.promote_min_sqp_vol, 500) as th_promote_min_sqp_vol,
+    COALESCE(tp_sm.promote_min_rank, tp_gm.promote_min_rank, tp_sg.promote_min_rank, tp_gg.promote_min_rank, 75) as th_promote_min_rank,
+    -- Research Rank (Fit + Purchase, 0-100) for this term × family — gates PROMOTE_TO_EXACT.
+    rr.rank AS research_rank,
     COALESCE(tp_sm.conf_days_high, tp_gm.conf_days_high, tp_sg.conf_days_high, tp_gg.conf_days_high, 14) as th_conf_days_high,
     COALESCE(tp_sm.conf_clicks_high, tp_gm.conf_clicks_high, tp_sg.conf_clicks_high, tp_gg.conf_clicks_high, 50) as th_conf_clicks_high,
     COALESCE(tp_sm.conf_days_medium, tp_gm.conf_days_medium, tp_sg.conf_days_medium, tp_gg.conf_days_medium, 7) as th_conf_days_medium,
@@ -229,6 +233,12 @@ coach_data AS (
   LEFT JOIN threshold_pivot tp_gg ON tp_gg.strategy_id = 'GLOBAL' AND tp_gg.coach_mode = 'GUARDIAN'
   -- Strategy template for min bid floor
   LEFT JOIN `onyga-482313.OI.DIM_STRATEGY_TEMPLATE` stmpl ON d.strategy_id = stmpl.strategy_id
+  -- Research Rank per term × family (deduped to one row per term+family to avoid fan-out).
+  LEFT JOIN (
+    SELECT LOWER(query_text) AS qt, parent_name, MAX(rank) AS rank
+    FROM `onyga-482313.OI.V_RESEARCH_RANKED`
+    GROUP BY 1, 2
+  ) rr ON LOWER(d.search_term) = rr.qt AND d.parent_name = rr.parent_name
 ),
 
 -- ═══════════════════════════════════════════════════════
@@ -529,7 +539,10 @@ SELECT
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       AND d.ads_weighted_net_roas_offseason IS NOT NULL AND d.ads_weighted_net_roas_offseason >= d.th_promote_min_roas
       AND NOT d.already_in_exact_boost
-      AND d.sqp_amazon_search_volume_8w >= d.th_promote_min_sqp_vol THEN 'PROMOTE_TO_EXACT'
+      AND d.sqp_amazon_search_volume_8w >= d.th_promote_min_sqp_vol
+      -- Research-rank gate: only promote terms that are a strong fit for the family (rank > threshold).
+      -- NULL rank (term not in research) is treated as below threshold → not promoted.
+      AND COALESCE(d.research_rank, 0) >= d.th_promote_min_rank THEN 'PROMOTE_TO_EXACT'
 
     -- Heavy loss + still active → negate (uses 12-month lifetime ROAS)
     -- If no LT data, don't negate → MONITOR

@@ -1117,11 +1117,25 @@ export interface NegativeConflictRow {
   campaign_id: string;
   campaign_name: string;
   negated_term: string;
+  /** Archive identifiers — remove the negative via bulksheet (real Amazon Keyword ID). */
+  negative_id: string;
+  ad_group_id: string;
+  match_type: string;
+  level: string;
   asin: string;
   product_short_name: string;
   parent_name: string;
   converter_orders: number;
   converter_sales: number;
+  /** Recency: conversions in the last 90 days (vs the 12-month total above). */
+  converter_orders_90d: number;
+  converter_sales_90d: number;
+  /** Blocking campaign context for judging the negative. */
+  campaign_net_roas_all_time: number | null;
+  campaign_gross_roas_all_time: number | null;
+  campaign_spend_all_time: number | null;
+  campaign_distinct_asins: number;
+  campaign_product_changed: boolean;
   conflict_type: string;
 }
 
@@ -1140,6 +1154,23 @@ export interface PlanAdsTargetRow {
   ads_share: number;
   season_type: string;
   multiplier_k: number;
+}
+
+/** Campaign recipe per strategy — source of truth for campaign-creation defaults
+ *  (budget, TOS%, bid bounds). From DIM_STRATEGY_CAMPAIGN_TEMPLATE. */
+export interface StrategyCampaignTemplateRow {
+  strategy_id: string;
+  campaign_seq: number;
+  ad_format: string;          // SP, SB_VIDEO, SB_STORE
+  match_type: string;
+  bidding_strategy: string;
+  bid_min: number | null;
+  bid_max: number | null;
+  daily_budget: number | null;
+  top_of_search_pct: number | null;
+  product_page_pct: number | null;
+  naming_hint: string;
+  is_required: boolean;
 }
 
 export interface DashboardData {
@@ -1171,6 +1202,7 @@ export interface DashboardData {
   ads_7d: Ads7dRow[];
   holidays: HolidayRow[];
   experiment_templates: ExperimentTemplateRow[];
+  strategy_campaign_templates: StrategyCampaignTemplateRow[];
   coach_decisions: CoachDecisionRow[];
   actions: ActionRow[];
   coach_campaigns: CoachCampaignRow[];

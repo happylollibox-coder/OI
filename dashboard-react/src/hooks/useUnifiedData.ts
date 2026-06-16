@@ -20,7 +20,7 @@ const EMPTY: DashboardData = {
   learnings: [], experiments: [], budget_health: [], drivers: [], sqp_coverage_weeks: [],
   change_log: [], negative_keywords: [], experiment_weekly: [], sqp_weekly: [], sqp_volume_4w: {},
   experiment_campaigns: [], campaign_search_terms: [],
-  ads_7d: [], ads_7d_summary: [], holidays: [], experiment_templates: [],
+  ads_7d: [], ads_7d_summary: [], holidays: [], experiment_templates: [], strategy_campaign_templates: [],
   coach_decisions: [], coach_campaigns: [], experiment_evaluations: [],
   keyword_predictions: [], brand_strength_weekly: [], coach_phrase_negatives: [], product_creatives: [], hot_signals: [],
   ads_focus_terms: [], ads_focus_keywords: [], phrase_negatives: [],

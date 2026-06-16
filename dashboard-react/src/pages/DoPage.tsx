@@ -4,6 +4,7 @@ import { Empty } from '../components/Empty';
 import { Badge, ActionBadge } from '../components/Badge';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { fM, fP, fOrd, ACTION_META } from '../utils';
+import { termGrain, termGrainShort } from '../coachActuals';
 import { useDoQueue, type DoQueueItem } from '../hooks/useDoQueue';
 import { DecisionScorecard } from '../components/DecisionScorecard';
 import { Copy, Check, Trash2, X, ChevronDown, ChevronRight, CheckCircle2, RotateCcw, ExternalLink, Download, Upload } from 'lucide-react';
@@ -322,6 +323,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
   /* ─── Render a search term row ─── */
   const renderSearchTermRow = (item: DoQueueItem, indent = false) => {
     const instruction = getActionInstruction(item);
+    const grain = (item.search_term || item.targeting) ? termGrain(item) : null;
     return (
     <div key={item.id} className={indent ? 'pl-8' : ''}>
       <div
@@ -339,6 +341,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           className="font-medium text-blue-400 hover:text-blue-300 hover:underline transition-colors text-left min-w-[180px] flex items-center gap-1 cursor-pointer"
           title="View in Actions page"
         >
+          {grain && <span className="text-[8px] font-mono uppercase tracking-wider text-faint shrink-0 px-1 py-px rounded border border-border" title={grain}>{termGrainShort(grain)}</span>}
           {item.search_term || item.campaign || '--'}
           <ExternalLink size={9} className="opacity-0 group-hover:opacity-50" />
         </button>
@@ -858,6 +861,22 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
               'Daily Budget': String(recBudget),
             });
           }
+        // ═══ REMOVE_NEGATIVE — archive an existing negative keyword (conflict removal) ═══
+        // Keyed by the real Amazon Keyword ID; State=archived removes the block.
+        } else if (item.action === 'REMOVE_NEGATIVE' && item.keyword_id) {
+          const isCampaignLevel = !item.ad_group_id;
+          const mtDisplay = (item.match_type || '').toUpperCase().includes('PHRASE') ? 'Negative Phrase' : 'Negative Exact';
+          spRows.push({
+            'Product': 'Sponsored Products',
+            'Entity': isCampaignLevel ? 'Campaign Negative Keyword' : 'Negative Keyword',
+            'Operation': 'Update',
+            'Campaign ID': item.campaign_id,
+            ...(isCampaignLevel ? {} : { 'Ad Group ID': item.ad_group_id }),
+            'Keyword ID': item.keyword_id,
+            'Keyword Text': item.search_term,
+            'Match Type': mtDisplay,
+            'State': 'archived',
+          });
         }
       }
 

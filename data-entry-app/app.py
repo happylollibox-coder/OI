@@ -6016,11 +6016,22 @@ def api_ppc_change_log_insert():
         if job.errors:
             return jsonify({'error': str(job.errors)}), 500
 
+        # Fold the just-uploaded negates/removes into the owned registries
+        # (DE_NEGATIVE_KEYWORDS / DE_NEGATIVE_TARGETS). Best-effort: a sync failure
+        # must not fail the upload log — the MERGE is idempotent and will catch up next run.
+        negatives_synced = False
+        try:
+            client.query(f'CALL `{PROJECT_ID}.{DATASET_ID}.SP_SYNC_NEGATIVES`()').result()
+            negatives_synced = True
+        except Exception as sync_err:
+            print(f"SP_SYNC_NEGATIVES after change-log insert failed (non-fatal): {sync_err}")
+
         clear_data_cache()
         return jsonify({
             'success': True,
             'batch_id': batch_id,
             'items_logged': len(rows),
+            'negatives_synced': negatives_synced,
         })
     except Exception as e:
         import traceback

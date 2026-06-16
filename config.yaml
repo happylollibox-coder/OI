@@ -720,6 +720,16 @@ tables:
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE/DE_COACH_THRESHOLDS.sql"]
 
+  - name: "DE_NEGATIVE_KEYWORDS"
+    description: "Warehouse-owned negative-keyword registry (replaces frozen Fivetran negative_keyword sync). Seeded from an Amazon bulksheet download via tools/load_negatives_seed.py; maintained by SP_SYNC_NEGATIVES from FACT_PPC_CHANGE_LOG."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_NEGATIVE_KEYWORDS.sql"]
+
+  - name: "DE_NEGATIVE_TARGETS"
+    description: "Warehouse-owned negative PRODUCT-targeting registry (replaces frozen Fivetran negative_targeting_clause sync). Seeded from a bulksheet download via tools/load_negatives_seed.py; maintained by SP_SYNC_NEGATIVES."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_NEGATIVE_TARGETS.sql"]
+
   - name: "DE_MANUFACTURER_SHIPMENTS"
     description: "User-entered manufacturer shipment data"
     type: "data_entry"
@@ -990,6 +1000,10 @@ stored_procedures:
     description: "Auto-discovers and categorizes brand/product phrases from ad searches"
     source_files: ["scripts/bigquery/procedures/SP_ACCUMULATE_BRAND_PHRASES.sql"]
     schedule: "daily"
+
+  - name: "SP_SYNC_NEGATIVES"
+    description: "Folds NEGATE_*/REMOVE negatives we upload (from FACT_PPC_CHANGE_LOG) into the owned DE_NEGATIVE_KEYWORDS / DE_NEGATIVE_TARGETS registries. Idempotent MERGE; run after each upload."
+    source_files: ["scripts/bigquery/procedures/SP_SYNC_NEGATIVES.sql"]
 
   - name: "SP_ORCHESTRATE_DAILY_REFRESH"
     description: "Master daily orchestrator — runs all SPs in dependency order"

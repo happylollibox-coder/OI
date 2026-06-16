@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { monthlyPlanTargets } from '../planTypes';
-import { familyActuals, familyModes, dominantMode, clearCase, selectPeak, opportunityPerWeek } from '../coachActuals';
+import { familyActuals, familyModes, dominantMode, clearCase, selectPeak, opportunityPerWeek, termGrain, termGrainShort } from '../coachActuals';
+import { useLastChange } from '../hooks/useLastChange';
 import type { GateVerdict, OpportunityInput } from '../coachActuals';
 import { FamilyPlanActuals } from './FamilyPlanActuals';
 import type { DashboardData, ActionRow, CoachDecisionRow, StrategicPrediction } from '../types';
@@ -298,6 +299,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
   const { filters } = useFilters();
   const doQueue = useDoQueue();
   const { getFamily } = useProductFamily();
+  const { lastChangeFor } = useLastChange();
   const acts = useMemo(() => {
     return (data.actions || []).map(ct => ({
       ...ct,
@@ -1493,6 +1495,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                   <DecisionCard
                     key={`${a.campaign_id}|${a.search_term}|${a.targeting || ''}|${a.action}`}
                     action={a} family={family} why={why} opp={opp}
+                    lastChange={lastChangeFor(a.campaign_id, a.keyword_id, a.targeting)}
                     inQueue={doQueue.hasItem(a.search_term, a.action, a.campaign_name, a.targeting || '')}
                     onQueue={() => queueAction(a, opp)}
                   />
@@ -1538,23 +1541,36 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                     </div>
                   )}
                   <div className="flex flex-col gap-1">
-                    {sortedRows.map(r => (
+                    {sortedRows.map(r => {
+                      const inQ = doQueue.hasItem(r.negated_term, 'REMOVE_NEGATIVE', r.campaign_name, r.negated_term);
+                      return (
                       <div
-                        key={`${r.campaign_id}|${r.negated_term}|${r.asin}`}
-                        className="text-[11px] text-[var(--color-text)] px-0.5"
+                        key={`${r.campaign_id}|${r.negated_term}|${r.asin}|${r.negative_id}`}
+                        className="flex items-baseline gap-2 text-[11px] text-[var(--color-text)] px-0.5"
                       >
-                        <span className="font-medium">{r.product_short_name}</span>
-                        {' '}negates{' '}
-                        <span className="font-mono text-[var(--color-text)]">"{r.negated_term}"</span>
-                        {' '}but converts on it —{' '}
-                        <span className="font-mono">{r.converter_orders} orders / {fM(r.converter_sales)}/yr.</span>
-                        {' '}
-                        <span className="text-faint">
-                          Consider removing the negative in{' '}
-                          <span title={r.campaign_name} className="underline decoration-dotted cursor-help">{r.campaign_name.length > 40 ? r.campaign_name.slice(0, 40) + '…' : r.campaign_name}</span>.
-                        </span>
+                        <div className="flex-1">
+                          <span className="font-medium">{r.product_short_name}</span>
+                          {' '}negates{' '}
+                          <span className="font-mono text-[var(--color-text)]">"{r.negated_term}"</span>
+                          {' '}but converts on it —{' '}
+                          <span className="font-mono">{r.converter_orders_90d} orders/90d · {r.converter_orders}/yr / {fM(r.converter_sales)}.</span>
+                          {' '}
+                          <span className="text-faint">
+                            Remove the negative in{' '}
+                            <span title={r.campaign_name} className="underline decoration-dotted cursor-help">{r.campaign_name.length > 40 ? r.campaign_name.slice(0, 40) + '…' : r.campaign_name}</span>
+                            {r.campaign_net_roas_all_time != null && ` · campaign ${r.campaign_net_roas_all_time.toFixed(2)}× net ROAS all-time`}
+                            {r.campaign_product_changed && <span className="text-amber-400/90"> · ⚠ product changed</span>}.
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => { if (inQ || !r.negative_id) return; doQueue.addItem({ search_term: r.negated_term, action: 'REMOVE_NEGATIVE', campaign: r.campaign_name, campaign_id: r.campaign_id, ad_group_id: r.ad_group_id, targeting: r.negated_term, keyword_id: r.negative_id, match_type: r.match_type, target_spend_8w: 0, target_orders_8w: r.converter_orders, target_net_roas_8w: 0, current_bid: null, recommended_bid: null, campaign_type: 'SPONSORED_PRODUCTS', product: r.product_short_name, spend: 0, orders: r.converter_orders, cpc: 0, conv_rate: 0 }); }}
+                          disabled={inQ}
+                          className={`shrink-0 text-[10px] px-2 py-0.5 rounded-md border ${inQ ? 'border-border text-faint' : 'border-blue-500/40 text-blue-400 hover:bg-blue-500/10'}`}
+                          title={r.negative_id ? `Archive negative ${r.negative_id}` : 'Missing keyword id'}
+                        >{inQ ? 'Queued ✓' : 'Remove'}</button>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -1673,6 +1689,9 @@ function ActionRowComponent({ action: a, cd, prediction: pred, expanded, onToggl
         {/* Keyword / Target name */}
         <div className="flex items-center gap-1.5 min-w-[180px] shrink-0">
           <strong className="text-blue-400 text-[12px] truncate max-w-[200px]">{a.action_type === 'BUDGET' ? (a.campaign_name || '--') : (a.search_term || a.targeting || '--')}</strong>
+          {a.action_type !== 'BUDGET' && (
+            <span className="text-[8px] font-mono uppercase tracking-wider text-faint shrink-0 px-1 py-px rounded border border-border" title={termGrain(a)}>{termGrainShort(termGrain(a))}</span>
+          )}
           {complexityBadge != null && complexityBadge >= 3 && (
             <button
               onClick={(e) => { e.stopPropagation(); onIntelligenceClick?.(); }}
