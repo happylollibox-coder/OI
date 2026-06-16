@@ -20,6 +20,7 @@ import { NewPOModal } from '../components/supply/NewPOModal';
 import { NewOtherPOModal } from '../components/supply/NewOtherPOModal';
 import { NewShipmentModal } from '../components/supply/NewShipmentModal';
 import { NewPaymentModal } from '../components/supply/NewPaymentModal';
+import { BulkPaymentModal } from '../components/supply/BulkPaymentModal';
 import { dataEntry, type PODetail, type ShipmentDetail, type PaymentDetail } from '../utils/dataEntry';
 import { apiFetch } from '../utils/apiFetch';
 
@@ -343,6 +344,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   const [paymentOverrides, setPaymentOverrides] = useState<Record<string, SupplyPaymentRow[]>>({});
   const [deletedPaymentIds, setDeletedPaymentIds] = useState<Set<string>>(new Set());
   const [showNewPayment, setShowNewPayment] = useState(false);
+  const [showBulkPayment, setShowBulkPayment] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<SupplyPaymentRow | null>(null);
 
   // Stock snapshot state
@@ -992,13 +994,22 @@ export function SupplyPage({ data }: { data: DashboardData }) {
             </button>
           )}
           {tab === 'payments' && (
-            <button
-              onClick={() => setShowNewPayment(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-md text-xs font-semibold text-white transition-colors"
-            >
-              <Plus size={14} />
-              New Payment
-            </button>
+            <>
+              <button
+                onClick={() => setShowBulkPayment(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-md text-xs font-semibold text-white transition-colors"
+              >
+                <Plus size={14} />
+                Bulk Pay
+              </button>
+              <button
+                onClick={() => setShowNewPayment(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-md text-xs font-semibold text-white transition-colors"
+              >
+                <Plus size={14} />
+                New Payment
+              </button>
+            </>
           )}
           {tab === 'pos' && (
             <>
@@ -1160,6 +1171,20 @@ export function SupplyPage({ data }: { data: DashboardData }) {
       )}
       {showNewPayment && (
         <NewPaymentModal onClose={() => setShowNewPayment(false)} onSaved={handleNewPaymentSaved} />
+      )}
+      {showBulkPayment && (
+        <BulkPaymentModal
+          shipments={data.supply_shipments || []}
+          pos={data.supply_pos || []}
+          otherPos={data.supply_other_pos || []}
+          onClose={() => setShowBulkPayment(false)}
+          onSaved={(_paymentId, _created) => {
+            // New payments will appear on the next Cube refresh.
+            // Bulk creates multiple rows; we don't seed them individually.
+            console.info(`[BulkPay] Created ${_created} payment(s), batch id: ${_paymentId}`);
+            setShowBulkPayment(false);
+          }}
+        />
       )}
     </div>
   );

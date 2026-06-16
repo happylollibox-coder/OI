@@ -127,4 +127,24 @@ export const dataEntry = {
     const r = await json<{ success?: boolean; data?: Record<string, unknown>[] }>('/api/open-pos', { method: 'GET' });
     return Array.isArray(r) ? r : (r.data ?? []);
   },
+  bulkCreateShipmentPayments: (b: {
+    shipment_ids: string[];
+    amounts: number[];
+    payment_date: string;
+    payment_method: string;
+    vendor_name: string;
+    currency?: string;
+    bank_fee?: number;
+    notes?: string;
+  }) => json<{ created: number; payment_id: string }>('/api/payments/bulk', { method: 'POST', body: JSON.stringify(b) }),
+  bulkCreatePoPayments: (b: {
+    po_ids: string[];
+    amounts: number[];
+    payment_date: string;
+    payment_method: string;
+    vendor_name: string;
+    currency?: string;
+    bank_fee?: number;
+    notes?: string;
+  }) => json<{ created: number; payment_id: string }>('/api/payments/bulk-po', { method: 'POST', body: JSON.stringify(b) }),
 };
