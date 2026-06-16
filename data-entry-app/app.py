@@ -7512,7 +7512,7 @@ def research_related_terms():
     """Find related search queries by co-occurrence with a seed term.
 
     Accepts JSON body:
-      { "term": "birthday", "parent": "Bunny", "mode": "direct"|"related", "synonyms": {...} }
+      { "term": "birthday", "parent": "Bunny", "mode": "direct"|"phrase"|"broad", "synonyms": {...} }
     parent is optional – when supplied, rows are enriched with that family's
     pre-computed scores from FACT_RESEARCH_RANKED.
 
@@ -7530,7 +7530,7 @@ def research_related_terms():
     if not term:
         return jsonify({'error': 'term is required'}), 400
 
-    mode = (data.get('mode') or 'phrase').strip()  # 'direct' | 'phrase' | 'broad'
+    mode = (data.get('mode') or 'phrase').strip()  # 'direct' | 'phrase' | 'broad' (default phrase; was 'direct'/substring pre-2026-06-16)
     if mode not in ('direct', 'phrase', 'broad'):
         mode = 'phrase'
     # Frontend can pass pre-fetched synonyms from Gemini: {"bff": ["best friend", "bestie"]}
