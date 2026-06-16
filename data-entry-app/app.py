@@ -330,6 +330,7 @@ def format_number_with_commas(value):
         return "0"
 
 from config import PROJECT_ID, DATASET_ID, ORDERS_TABLE, OTHER_PO_TABLE, SHIPMENTS_TABLE, SHIPMENT_LINES_TABLE, PAYMENTS_TABLE, PRODUCTS_TABLE, COSTS_HISTORY_TABLE, ALERTS_TABLE, PHRASE_NEGATIVES_TABLE
+from research_match import research_match_predicate
 
 client = bigquery.Client(project=PROJECT_ID)
 
@@ -7529,19 +7530,22 @@ def research_related_terms():
     if not term:
         return jsonify({'error': 'term is required'}), 400
 
-    mode = (data.get('mode') or 'direct').strip()  # 'direct' or 'related'
+    mode = (data.get('mode') or 'phrase').strip()  # 'direct' | 'phrase' | 'broad'
+    if mode not in ('direct', 'phrase', 'broad'):
+        mode = 'phrase'
     # Frontend can pass pre-fetched synonyms from Gemini: {"bff": ["best friend", "bestie"]}
     frontend_synonyms = data.get('synonyms') or {}
 
-    # Filter out stop words that add noise to multi-word AND search
+    # Filter out stop words that add noise to multi-word matching
     words = [w for w in term.strip().split() if w.lower() not in _RESEARCH_STOP_WORDS]
     if not words:
         # All words were stop words — use entire term as one pattern
         words = [term.strip()]
 
-    if mode == 'related':
-        # Expand each word to include synonyms using OR logic
-        # Merge: frontend Gemini synonyms take priority, then hardcoded map
+    if mode == 'broad':
+        # Broad = Phrase reach + synonym expansion (was the old 'related' mode, unchanged):
+        # per-word OR over [word + synonyms], AND-ed across words; returns the full
+        # co-occurrence net (no final match_filter) marking direct vs related rows.
         word_groups_sq = []
         word_groups_t = []
         word_param_map = []
@@ -7561,16 +7565,17 @@ def research_related_terms():
         word_likes_sq = ' AND '.join(word_groups_sq)
         word_likes_t = ' AND '.join(word_groups_t)
     else:
-        # Direct mode: exact word matching
-        word_param_map = [(f'word_{i}', f'%{word}%') for i, word in enumerate(words)]
-        word_likes_sq = ' AND '.join([f"LOWER(sq.query_text) LIKE LOWER(@word_{i})" for i in range(len(words))])
-        word_likes_t = ' AND '.join([f"LOWER(t.query_text) LIKE LOWER(@word_{i})" for i in range(len(words))])
+        # Direct (exact term + plurals, whole string) / Phrase (all words, any order):
+        # whole-word, plural-tolerant REGEXP predicates (fixes the old substring 7/17 bug).
+        word_param_map, rx_names = research_match_predicate(words, mode)
+        word_likes_sq = ' AND '.join(f"REGEXP_CONTAINS(LOWER(sq.query_text), @{n})" for n in rx_names)
+        word_likes_t = ' AND '.join(f"REGEXP_CONTAINS(LOWER(t.query_text), @{n})" for n in rx_names)
 
     rr_cols, rr_join = _research_ranked_select(parent, alias='t')
 
-    # Direct mode shows only word-matching terms (the old client-side filter,
-    # now server-side); related mode also returns synonym + co-occurrence rows.
-    match_filter = f"WHERE {word_likes_t}" if mode != 'related' else ""
+    # Direct/Phrase narrow the co-occurrence net to text-matching terms; Broad keeps the
+    # full net (synonym + co-occurrence) and marks rows direct vs related.
+    match_filter = f"WHERE {word_likes_t}" if mode != 'broad' else ""
 
     sql = f"""
     WITH seed_asins AS (
