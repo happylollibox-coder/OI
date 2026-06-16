@@ -15,7 +15,7 @@
  *
  * Never sends client-computed ids/unit_price/totals — only raw field values.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Package, CreditCard, Truck, X, Pencil, Save, Plus, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import type { SupplyPORow } from '../../types';
 import { dataEntry, type PODetail } from '../../utils/dataEntry';
@@ -24,7 +24,7 @@ import { ProductSelect } from './ProductSelect';
 /* ── helpers ── */
 const fmtDate = (d: string | null | undefined) => {
   if (!d) return '—';
-  const dt = new Date(String(d) + 'T00:00:00');
+  const dt = new Date(String(d) + 'T00:00:00Z');
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 const fmtFull$ = (n: number) =>
@@ -83,6 +83,9 @@ export default function PODetailDrawer({ po, onClose, onChanged }: PODetailDrawe
   // ── Delete-PO confirm ──
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // ── In-flight write guard (ref so closure captures current value) ──
+  const busyRef = useRef(false);
+
   const fetchDetail = useCallback(async () => {
     return dataEntry.getPO(poId);
   }, [poId]);
@@ -129,6 +132,8 @@ export default function PODetailDrawer({ po, onClose, onChanged }: PODetailDrawe
   }, [fetchDetail, onChanged]);
 
   const runWrite = useCallback(async (fn: () => Promise<unknown>) => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
     setActionError(null);
     setBusy(true);
     try {
@@ -139,6 +144,7 @@ export default function PODetailDrawer({ po, onClose, onChanged }: PODetailDrawe
       setActionError(e instanceof Error ? e.message : 'Write failed');
       return false;
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }, [refreshAndNotify]);
@@ -225,6 +231,8 @@ export default function PODetailDrawer({ po, onClose, onChanged }: PODetailDrawe
   };
 
   const doDeletePO = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setActionError(null);
     setBusy(true);
     try {
@@ -233,8 +241,10 @@ export default function PODetailDrawer({ po, onClose, onChanged }: PODetailDrawe
       onClose();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : 'Failed to delete PO');
-      setBusy(false);
       setConfirmDelete(false);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
     }
   };
 
@@ -253,7 +263,7 @@ export default function PODetailDrawer({ po, onClose, onChanged }: PODetailDrawe
         {/* ─── Header ─── */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-surface/50 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: '#3b82f620' }}>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-blue-500/10">
               <Package size={16} className="text-blue-400" />
             </div>
             <div className="min-w-0">

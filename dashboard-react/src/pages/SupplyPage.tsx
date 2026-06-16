@@ -62,7 +62,7 @@ const fmtFull$ = (v?: number | null) => {
   if (v == null || Number.isNaN(Number(v))) return '—';
   return `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
-const fmtDate = (d: string) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+const fmtDate = (d: string) => d ? new Date(d + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 
 type Tab = 'pos' | 'payments' | 'shipments' | 'snapshot';
 
@@ -359,7 +359,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
     const base = (data.supply_pos || []).filter(r => !deletedPOIds.has(r.purchase_order_id));
     const overriddenIds = new Set(Object.keys(poOverrides));
     const kept = base.filter(r => !overriddenIds.has(r.purchase_order_id));
-    const overrideRows = Object.values(poOverrides).flat();
+    const overrideRows = Object.values(poOverrides).flat().filter(r => !deletedPOIds.has(r.purchase_order_id));
     return [...kept, ...overrideRows];
   }, [data.supply_pos, poOverrides, deletedPOIds]);
 
@@ -379,6 +379,11 @@ export function SupplyPage({ data }: { data: DashboardData }) {
     if (detail === null) {
       const id = selectedPO.purchase_order_id;
       setDeletedPOIds(s => { const next = new Set(s); next.add(id); return next; });
+      setPoOverrides(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       setSelectedPO(null);
     } else {
       const id = String((detail.po as Record<string, unknown>).purchase_order_id);
