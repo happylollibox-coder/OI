@@ -16,7 +16,7 @@ const TYPE_META: Record<keyof RecommendationsByType, { label: string; badge: str
 function metricFor(row: RecommendationRow): string {
   switch (row.rec_type) {
     case 'BROAD':  return `${fShort(row.market_sales ?? 0)} cluster sales` + (row.cluster_size ? ` · ${row.cluster_size} terms` : '');
-    case 'PHRASE': return `rank ${row.rank ?? '—'}` + (row.coverage_count ? ` · covers ${row.coverage_count}` : '');
+    case 'PHRASE': return `fit ${row.rank ?? '—'}` + (row.coverage_count ? ` · covers ${row.coverage_count}` : '');
     case 'BRAND':  return `${fShort(row.market_volume ?? 0)} vol`;
     default:       return `rank ${row.rank ?? '—'}`;
   }
