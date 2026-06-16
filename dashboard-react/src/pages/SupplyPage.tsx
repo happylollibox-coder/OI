@@ -10,18 +10,54 @@
 
 import { useState, useMemo, useCallback, Fragment, useRef, useEffect } from 'react';
 import type { DashboardData, SupplyPORow, SupplyPaymentRow, SupplyShipmentRow } from '../types';
-import { Package, CreditCard, Truck, ChevronDown, ChevronUp, Filter, X, Download, Copy, Check, Pencil, Save, AlertCircle, BarChart3, Eye, ExternalLink } from 'lucide-react';
+import { Package, CreditCard, Truck, ChevronDown, ChevronUp, Filter, X, Download, Copy, Check, BarChart3, Eye, Plus } from 'lucide-react';
 import XLSX from 'xlsx-js-style';
 import { cubeLoad } from '../hooks/useCubeData';
-import PODetailsModal from '../components/PODetailsModal';
+import PODetailDrawer from '../components/supply/PODetailDrawer';
+import { NewPOModal } from '../components/supply/NewPOModal';
+import { NewOtherPOModal } from '../components/supply/NewOtherPOModal';
+import { dataEntry, type PODetail } from '../utils/dataEntry';
 import { apiFetch } from '../utils/apiFetch';
 
+/* ─── Map a Flask PODetail into table rows (one per product line) ───
+ * Preserves financial fields that the thin Flask detail doesn't carry
+ * (shipment costs, paid amounts) from the prior Cube-backed rows. */
+function mapDetailToRows(detail: PODetail, existing: SupplyPORow[]): SupplyPORow[] {
+  const po = detail.po as Record<string, unknown>;
+  return detail.product_lines.map((l: Record<string, unknown>) => {
+    const prior = existing.find(e => String(e.product_id) === String(l.product_id));
+    const total_paid = prior?.total_paid ?? 0;
+    const total_shipment_cost = prior?.total_shipment_cost ?? 0;
+    const paid_shipment_cost = prior?.paid_shipment_cost ?? 0;
+    const total_amount = Number(l.total_amount ?? 0);
+    const quantity = Number(l.quantity ?? 0);
+    const shipped = Number(l.quantity_shipped ?? 0);
+    const unpaid_manufacturer = Math.max(total_amount - total_paid, 0);
+    const unpaid_shipment = Math.max(total_shipment_cost - paid_shipment_cost, 0);
+    return {
+      purchase_order_id: String(po.purchase_order_id),
+      order_date: String(po.order_date ?? ''),
+      manufacturer_name: String(po.manufacturer_name ?? ''),
+      product_name: String(l.product_name ?? ''),
+      product_asin: String(l.product_asin ?? ''),
+      product_id: String(l.product_id ?? ''),
+      quantity, total_amount, total_paid,
+      unpaid_manufacturer, total_shipment_cost, paid_shipment_cost, unpaid_shipment,
+      total_unpaid: unpaid_manufacturer + unpaid_shipment,
+      total_quantity_shipped: shipped,
+      remaining_to_ship: Math.max(quantity - shipped, 0),
+      estimated_shipment_cost: prior?.estimated_shipment_cost ?? null,
+      payment_status: String(po.payment_status ?? 'PENDING'),
+      is_open: !po.is_paid_in_full,
+      currency: String(po.currency ?? 'USD'),
+      notes: (po.notes ?? null) as string | null,
+      ready_quantity: Number(l.ready_quantity ?? 0),
+      expected_ready_date: (po.expected_ready_date ?? null) as string | null,
+    };
+  });
+}
+
 /* ─── helpers ─── */
-const fmt$ = (v?: number | null) => {
-  if (v == null || Number.isNaN(Number(v))) return '—';
-  const num = Number(v);
-  return num >= 1000 ? `$${(num / 1000).toFixed(1)}K` : `$${num.toFixed(0)}`;
-};
 const fmtFull$ = (v?: number | null) => {
   if (v == null || Number.isNaN(Number(v))) return '—';
   return `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -225,6 +261,14 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   const [shipSort, setShipSort] = useState<{ field: string; dir: SortDir }>({ field: 'shipment_date', dir: 'desc' });
   const [snapSort, setSnapSort] = useState<{ field: string; dir: SortDir }>({ field: 'stock_value', dir: 'desc' });
 
+  // ── PO write-through override layer (table stays on Cube; writes go via Flask) ──
+  const [poOverrides, setPoOverrides] = useState<Record<string, SupplyPORow[]>>({});
+  const [deletedPOIds, setDeletedPOIds] = useState<Set<string>>(new Set());
+  const [showNewPO, setShowNewPO] = useState(false);
+  const [showNewOtherPO, setShowNewOtherPO] = useState(false);
+  // Selected PO for the detail drawer (lifted from POTable so writes can update overrides)
+  const [selectedPO, setSelectedPO] = useState<SupplyPORow | null>(null);
+
   // Stock snapshot state
   const [snapshotDate, setSnapshotDate] = useState(new Date().toISOString().slice(0, 10));
   const [snapshotRows, setSnapshotRows] = useState<StockSnapshotRow[]>([]);
@@ -310,8 +354,43 @@ export function SupplyPage({ data }: { data: DashboardData }) {
     })),
   []);
 
+  /* ─── Effective PO list: Cube base + Flask write-through overrides ─── */
+  const effectivePos = useMemo(() => {
+    const base = (data.supply_pos || []).filter(r => !deletedPOIds.has(r.purchase_order_id));
+    const overriddenIds = new Set(Object.keys(poOverrides));
+    const kept = base.filter(r => !overriddenIds.has(r.purchase_order_id));
+    const overrideRows = Object.values(poOverrides).flat();
+    return [...kept, ...overrideRows];
+  }, [data.supply_pos, poOverrides, deletedPOIds]);
+
+  /* ─── PO write-through handlers ─── */
+  const handleNewPOSaved = useCallback(async (poId: string) => {
+    try {
+      const d = await dataEntry.getPO(poId);
+      setPoOverrides(p => ({ ...p, [poId]: mapDetailToRows(d, []) }));
+    } catch {
+      // Non-fatal: new PO will appear on next Cube refresh
+    }
+    setShowNewPO(false);
+  }, []);
+
+  const handleDrawerChanged = useCallback((detail: PODetail | null) => {
+    if (!selectedPO) return;
+    if (detail === null) {
+      const id = selectedPO.purchase_order_id;
+      setDeletedPOIds(s => { const next = new Set(s); next.add(id); return next; });
+      setSelectedPO(null);
+    } else {
+      const id = String((detail.po as Record<string, unknown>).purchase_order_id);
+      setPoOverrides(p => ({
+        ...p,
+        [id]: mapDetailToRows(detail, (data.supply_pos || []).filter(r => r.purchase_order_id === id)),
+      }));
+    }
+  }, [selectedPO, data.supply_pos]);
+
   /* ─── Summary from ALL POs (not filtered) ─── */
-  const allPos = data.supply_pos || [];
+  const allPos = effectivePos;
   const summaryTotals = useMemo(() => {
     let mfg = 0, ship = 0, other = 0;
     for (const po of allPos) {
@@ -386,7 +465,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   }, [allShipments, showOpenOnly, shipDateFrom, shipDateTo, shipSort]);
 
   const handleExport = useCallback(() => {
-    let rows: any[] = [];
+    let rows: Record<string, unknown>[] = [];
     let headers: string[] = [];
     let filename = '';
 
@@ -453,7 +532,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
 
         let subAmount = 0, subFee = 0, subTotal = 0;
         for (const r of payments) {
-          const typePrefix = Boolean(r.shipment_id) ? 'INV_' : 'PI_';
+          const typePrefix = r.shipment_id ? 'INV_' : 'PI_';
           const fileName = r.payment_id ? r.payment_id.replace(/^PAY_/, typePrefix) : '';
           subAmount += r.payment_amount;
           subFee += r.bank_fee;
@@ -483,7 +562,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
 
         let subAmount = 0, subFee = 0, subTotal = 0;
         for (const r of unlinked) {
-          const typePrefix = Boolean(r.shipment_id) ? 'INV_' : 'PI_';
+          const typePrefix = r.shipment_id ? 'INV_' : 'PI_';
           const fileName = r.payment_id ? r.payment_id.replace(/^PAY_/, typePrefix) : '';
           subAmount += r.payment_amount;
           subFee += r.bank_fee;
@@ -578,7 +657,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
       return headers.map(header => {
         let val = row[header];
         if (header === 'file_name' && tab === 'payments') {
-          const typePrefix = Boolean(row.shipment_id) ? "INV_" : "PI_";
+          const typePrefix = row.shipment_id ? "INV_" : "PI_";
           val = row.payment_id ? row.payment_id.replace(/^PAY_/, typePrefix) : '—';
         }
         if (val === null || val === undefined) {
@@ -742,6 +821,24 @@ export function SupplyPage({ data }: { data: DashboardData }) {
             </div>
           )}
           <div className="flex-1" />
+          {tab === 'pos' && (
+            <>
+              <button
+                onClick={() => setShowNewPO(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-md text-xs font-semibold text-white transition-colors"
+              >
+                <Plus size={14} />
+                New PO
+              </button>
+              <button
+                onClick={() => setShowNewOtherPO(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-surface border border-border rounded-md text-xs font-medium text-subtle hover:text-heading hover:border-purple-500/50 transition-colors"
+              >
+                <Plus size={14} />
+                New Other PO
+              </button>
+            </>
+          )}
           <button
             onClick={handleExport}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-surface border border-border rounded-md text-xs font-medium text-subtle hover:text-heading hover:border-blue-500/50 transition-colors"
@@ -765,7 +862,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
               { label: 'Remaining', value: fmtFull$(totalRemaining), color: totalRemaining > 0 ? 'var(--color-red, #f87171)' : 'var(--color-emerald, #34d399)' },
             ]} />
             <div className="rounded-xl border border-border overflow-x-auto">
-              <POTable rows={filteredPOs} sort={poSort} onSort={toggleSort(setPOSort)} allPayments={allPayments} allShipments={allShipments} />
+              <POTable rows={filteredPOs} sort={poSort} onSort={toggleSort(setPOSort)} onSelectPO={setSelectedPO} />
             </div>
           </>
         );
@@ -844,6 +941,23 @@ export function SupplyPage({ data }: { data: DashboardData }) {
           </>
         );
       })()}
+
+      {/* ─── Detail drawer (Flask-backed edits) ─── */}
+      {selectedPO && (
+        <PODetailDrawer
+          po={selectedPO}
+          onClose={() => setSelectedPO(null)}
+          onChanged={handleDrawerChanged}
+        />
+      )}
+
+      {/* ─── Create modals ─── */}
+      {showNewPO && (
+        <NewPOModal onClose={() => setShowNewPO(false)} onSaved={handleNewPOSaved} />
+      )}
+      {showNewOtherPO && (
+        <NewOtherPOModal onClose={() => setShowNewOtherPO(false)} onSaved={() => setShowNewOtherPO(false)} />
+      )}
     </div>
   );
 }
@@ -874,8 +988,8 @@ function InlineReadyCell({ poId, productId, initialQuantity, maxQuantity, isEdit
       
       setCurrentVal(Number(val));
       setIsEditing(false);
-    } catch (e: any) {
-      alert(e.message || 'Failed to save changes');
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to save changes');
     } finally {
       setSaving(false);
     }
@@ -925,15 +1039,12 @@ function InlineReadyCell({ poId, productId, initialQuantity, maxQuantity, isEdit
   );
 }
 
-function POTable({ rows, sort, onSort, allPayments, allShipments }: {
+function POTable({ rows, sort, onSort, onSelectPO }: {
   rows: SupplyPORow[];
   sort: { field: string; dir: SortDir };
   onSort: (field: string) => void;
-  allPayments: SupplyPaymentRow[];
-  allShipments: SupplyShipmentRow[];
+  onSelectPO: (po: SupplyPORow) => void;
 }) {
-  const [selectedPO, setSelectedPO] = useState<SupplyPORow | null>(null);
-
   if (rows.length === 0) return <div className="p-8 text-center text-muted text-sm">No purchase orders match filters</div>;
   return (
     <>
@@ -968,7 +1079,7 @@ function POTable({ rows, sort, onSort, allPayments, allShipments }: {
             <td className="px-4 py-2.5 text-xs font-mono whitespace-nowrap">
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={() => setSelectedPO(r)}
+                  onClick={() => onSelectPO(r)}
                   className="text-blue-400 hover:text-blue-300 hover:underline underline-offset-2 transition-colors flex items-center gap-1 cursor-pointer"
                   title={`View details: ${r.purchase_order_id}`}
                 >
@@ -1036,15 +1147,6 @@ function POTable({ rows, sort, onSort, allPayments, allShipments }: {
         </tr>
       </tfoot>
     </table>
-    {selectedPO && (
-       <PODetailsModal
-         po={selectedPO}
-         allPORows={rows}
-         payments={allPayments}
-         shipments={allShipments}
-         onClose={() => setSelectedPO(null)}
-       />
-     )}
     </>
   );
 }
@@ -1310,8 +1412,8 @@ function StockSnapshotTable({ rows, loading, sort, onSort, groupBy }: {
     // Sort rows inside each group
     for (const g of sortedGroups) {
       g.rows.sort((a, b) => {
-        const av = (a as Record<string, any>)[field];
-        const bv = (b as Record<string, any>)[field];
+        const av = (a as Record<string, unknown>)[field];
+        const bv = (b as Record<string, unknown>)[field];
         if (typeof av === 'number' && typeof bv === 'number') return dir === 'asc' ? av - bv : bv - av;
         return dir === 'asc' ? String(av ?? '').localeCompare(String(bv ?? '')) : String(bv ?? '').localeCompare(String(av ?? ''));
       });
