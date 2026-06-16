@@ -3,7 +3,7 @@
  * Field parity with data-entry-app/templates/other_po_form.html.
  *
  * Fields:
- *   order_date (req), service_type (req, text), supplier_name (req, text),
+ *   order_date (req), service_type (req, LOV SERVICE_TYPE), supplier_name (req, LOV SUPPLIER),
  *   product_asins (optional — add/remove tag list, sent as string[]),
  *   total_amount (number, step 0.01, default 0),
  *   currency (LOV, preselect is_default),
@@ -45,6 +45,8 @@ export function NewOtherPOModal({ onClose, onSaved }: NewOtherPOModalProps) {
 
   // ── LOVs ──
   const [currencies, setCurrencies] = useState<LovItem[]>([]);
+  const [serviceTypes, setServiceTypes] = useState<LovItem[]>([]);
+  const [suppliers, setSuppliers] = useState<LovItem[]>([]);
 
   // ── Submission ──
   const [submitting, setSubmitting] = useState(false);
@@ -61,12 +63,14 @@ export function NewOtherPOModal({ onClose, onSaved }: NewOtherPOModalProps) {
     let cancelled = false;
     dataEntry.getLovs().then((lovs) => {
       if (cancelled) return;
+      setServiceTypes(lovs['SERVICE_TYPE'] ?? []);
+      setSuppliers(lovs['SUPPLIER'] ?? []);
       const curr = lovs['CURRENCY'] ?? [];
       setCurrencies(curr);
       const def = curr.find((c) => c.is_default);
       if (def) setCurrency(def.value_id);
     }).catch(() => {
-      // Non-fatal: currency will stay empty, user can leave blank
+      // Non-fatal: fields will stay empty, user can leave blank
     });
     return () => { cancelled = true; };
   }, []);
@@ -200,14 +204,22 @@ export function NewOtherPOModal({ onClose, onSaved }: NewOtherPOModalProps) {
               <label className="text-[10px] text-faint uppercase tracking-wider font-semibold">
                 Service Type <span className="text-negative">*</span>
               </label>
-              <input
-                type="text"
+              <select
                 required
                 value={serviceType}
                 onChange={(e) => setServiceType(e.target.value)}
-                placeholder="e.g. Freight, Photography…"
                 className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-xs text-heading focus:outline-none focus:ring-1 focus:ring-purple-500/50"
-              />
+              >
+                <option value="" disabled>Select a service…</option>
+                {serviceTypes.length === 0 && serviceType === '' && (
+                  <option value="" disabled>Loading…</option>
+                )}
+                {serviceTypes.map((s) => (
+                  <option key={s.value_id} value={s.value_id}>
+                    {s.value_caption}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -216,14 +228,22 @@ export function NewOtherPOModal({ onClose, onSaved }: NewOtherPOModalProps) {
             <label className="text-[10px] text-faint uppercase tracking-wider font-semibold">
               Supplier Name <span className="text-negative">*</span>
             </label>
-            <input
-              type="text"
+            <select
               required
               value={supplierName}
               onChange={(e) => setSupplierName(e.target.value)}
-              placeholder="Supplier or vendor name"
               className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-xs text-heading focus:outline-none focus:ring-1 focus:ring-purple-500/50"
-            />
+            >
+              <option value="" disabled>Select a supplier…</option>
+              {suppliers.length === 0 && supplierName === '' && (
+                <option value="" disabled>Loading…</option>
+              )}
+              {suppliers.map((s) => (
+                <option key={s.value_id} value={s.value_id}>
+                  {s.value_caption}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Row 3: Related Products (ASINs) */}
