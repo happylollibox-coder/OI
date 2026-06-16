@@ -14,9 +14,11 @@ import { Package, CreditCard, Truck, ChevronDown, ChevronUp, Filter, X, Download
 import XLSX from 'xlsx-js-style';
 import { cubeLoad } from '../hooks/useCubeData';
 import PODetailDrawer from '../components/supply/PODetailDrawer';
+import ShipmentDetailDrawer from '../components/supply/ShipmentDetailDrawer';
 import { NewPOModal } from '../components/supply/NewPOModal';
 import { NewOtherPOModal } from '../components/supply/NewOtherPOModal';
-import { dataEntry, type PODetail } from '../utils/dataEntry';
+import { NewShipmentModal } from '../components/supply/NewShipmentModal';
+import { dataEntry, type PODetail, type ShipmentDetail } from '../utils/dataEntry';
 import { apiFetch } from '../utils/apiFetch';
 
 /* ─── Map a Flask PODetail into table rows (one per product line) ───
@@ -55,6 +57,43 @@ function mapDetailToRows(detail: PODetail, existing: SupplyPORow[]): SupplyPORow
       expected_ready_date: (po.expected_ready_date ?? null) as string | null,
     };
   });
+}
+
+const RECEIVED_SHIPMENT_STATUSES = new Set(['RECEIVED', 'INSPECTED', 'PUT_AWAY']);
+
+/* ─── Map a Flask ShipmentDetail into a single Shipments-table row ───
+ * One row per shipment. Payment aggregates (unpaid_to_shipment) are carried
+ * from the prior Cube-backed row since the thin Flask detail lacks them. */
+function mapShipmentDetailToRows(detail: ShipmentDetail, existing: SupplyShipmentRow[]): SupplyShipmentRow[] {
+  const lines = detail.lines as Record<string, unknown>[];
+  const totalQtyShipped = lines.reduce((s, l) => s + Number(l.quantity_shipped ?? 0), 0);
+  const totalAllocatedCost = lines.reduce((s, l) => s + Number(l.allocated_cost ?? 0), 0);
+  const headerTotalQty = Number(detail.total_quantity ?? 0);
+  const total_quantity = headerTotalQty > 0 ? headerTotalQty : totalQtyShipped;
+  const productNames = Array.from(new Set(
+    lines.map(l => String(l.product_name ?? '')).filter(Boolean),
+  ));
+  const status = String(detail.shipment_status ?? '');
+  const prior = existing.find(e => e.shipment_id === detail.shipment_id);
+  return [{
+    shipment_id: String(detail.shipment_id),
+    shipment_date: String(detail.shipment_date ?? ''),
+    estimated_arrival_date: (detail.estimated_arrival_date ?? null) as string | null,
+    tracking_number: (detail.tracking_number ?? null) as string | null,
+    shipment_type: String(detail.shipment_type ?? ''),
+    total_quantity,
+    cost_shipped: Number(detail.cost_shipped ?? 0),
+    is_paid: Boolean(detail.is_paid),
+    paid_date: (detail.paid_date ?? null) as string | null,
+    shipment_status: status,
+    notes: (detail.notes ?? null) as string | null,
+    line_count: lines.length,
+    total_allocated_cost: totalAllocatedCost,
+    total_quantity_shipped: totalQtyShipped,
+    products_list: productNames.join(', '),
+    unpaid_to_shipment: prior?.unpaid_to_shipment ?? 0,
+    is_open: !RECEIVED_SHIPMENT_STATUSES.has(status.toUpperCase()),
+  }];
 }
 
 /* ─── helpers ─── */
@@ -269,6 +308,12 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   // Selected PO for the detail drawer (lifted from POTable so writes can update overrides)
   const [selectedPO, setSelectedPO] = useState<SupplyPORow | null>(null);
 
+  // ── Shipment write-through override layer (table stays on Cube; writes go via Flask) ──
+  const [shipmentOverrides, setShipmentOverrides] = useState<Record<string, SupplyShipmentRow[]>>({});
+  const [deletedShipmentIds, setDeletedShipmentIds] = useState<Set<string>>(new Set());
+  const [showNewShipment, setShowNewShipment] = useState(false);
+  const [selectedShipment, setSelectedShipment] = useState<SupplyShipmentRow | null>(null);
+
   // Stock snapshot state
   const [snapshotDate, setSnapshotDate] = useState(new Date().toISOString().slice(0, 10));
   const [snapshotRows, setSnapshotRows] = useState<StockSnapshotRow[]>([]);
@@ -394,6 +439,46 @@ export function SupplyPage({ data }: { data: DashboardData }) {
     }
   }, [selectedPO, data.supply_pos]);
 
+  /* ─── Effective Shipment list: Cube base + Flask write-through overrides ─── */
+  const effectiveShipments = useMemo(() => {
+    const base = (data.supply_shipments || []).filter(r => !deletedShipmentIds.has(r.shipment_id));
+    const overriddenIds = new Set(Object.keys(shipmentOverrides));
+    const kept = base.filter(r => !overriddenIds.has(r.shipment_id));
+    const overrideRows = Object.values(shipmentOverrides).flat().filter(r => !deletedShipmentIds.has(r.shipment_id));
+    return [...kept, ...overrideRows];
+  }, [data.supply_shipments, shipmentOverrides, deletedShipmentIds]);
+
+  /* ─── Shipment write-through handlers ─── */
+  const handleNewShipmentSaved = useCallback(async (id: string) => {
+    try {
+      const d = await dataEntry.getShipment(id);
+      setShipmentOverrides(p => ({ ...p, [id]: mapShipmentDetailToRows(d, []) }));
+    } catch {
+      // Non-fatal: new shipment will appear on next Cube refresh
+    }
+    setShowNewShipment(false);
+  }, []);
+
+  const handleShipmentDrawerChanged = useCallback((detail: ShipmentDetail | null) => {
+    if (!selectedShipment) return;
+    if (detail === null) {
+      const id = selectedShipment.shipment_id;
+      setDeletedShipmentIds(s => { const next = new Set(s); next.add(id); return next; });
+      setShipmentOverrides(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setSelectedShipment(null);
+    } else {
+      const id = String(detail.shipment_id);
+      setShipmentOverrides(p => ({
+        ...p,
+        [id]: mapShipmentDetailToRows(detail, (data.supply_shipments || []).filter(r => r.shipment_id === id)),
+      }));
+    }
+  }, [selectedShipment, data.supply_shipments]);
+
   /* ─── Summary from ALL POs (not filtered) ─── */
   const allPos = effectivePos;
   const summaryTotals = useMemo(() => {
@@ -453,7 +538,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   }, [allPayments, payYear, payDateFrom, payDateTo, paySort]);
 
   /* ─── Filtered Shipments ─── */
-  const allShipments = data.supply_shipments || [];
+  const allShipments = effectiveShipments;
   const filteredShipments = useMemo(() => {
     let rows = allShipments;
     if (showOpenOnly) rows = rows.filter(r => r.is_open);
@@ -826,6 +911,15 @@ export function SupplyPage({ data }: { data: DashboardData }) {
             </div>
           )}
           <div className="flex-1" />
+          {tab === 'shipments' && (
+            <button
+              onClick={() => setShowNewShipment(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 rounded-md text-xs font-semibold text-white transition-colors"
+            >
+              <Plus size={14} />
+              New Shipment
+            </button>
+          )}
           {tab === 'pos' && (
             <>
               <button
@@ -891,7 +985,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
               { label: 'Remaining', value: fmtFull$(totalShipUnpaid), color: totalShipUnpaid > 0 ? 'var(--color-orange, #fb923c)' : 'var(--color-emerald, #34d399)' },
             ]} />
             <div className="rounded-xl border border-border overflow-x-auto">
-              <ShipmentsTable rows={filteredShipments} sort={shipSort} onSort={toggleSort(setShipSort)} />
+              <ShipmentsTable rows={filteredShipments} sort={shipSort} onSort={toggleSort(setShipSort)} onSelectShipment={setSelectedShipment} />
             </div>
           </>
         );
@@ -956,12 +1050,24 @@ export function SupplyPage({ data }: { data: DashboardData }) {
         />
       )}
 
+      {/* ─── Shipment detail drawer (Flask-backed edits) ─── */}
+      {selectedShipment && (
+        <ShipmentDetailDrawer
+          shipment={selectedShipment}
+          onClose={() => setSelectedShipment(null)}
+          onChanged={handleShipmentDrawerChanged}
+        />
+      )}
+
       {/* ─── Create modals ─── */}
       {showNewPO && (
         <NewPOModal onClose={() => setShowNewPO(false)} onSaved={handleNewPOSaved} />
       )}
       {showNewOtherPO && (
         <NewOtherPOModal onClose={() => setShowNewOtherPO(false)} onSaved={() => setShowNewOtherPO(false)} />
+      )}
+      {showNewShipment && (
+        <NewShipmentModal onClose={() => setShowNewShipment(false)} onSaved={handleNewShipmentSaved} />
       )}
     </div>
   );
@@ -1309,7 +1415,7 @@ function PaymentsTable({ rows, allPos, sort, onSort }: { rows: SupplyPaymentRow[
 /* ═══════════════════════════════════════════════════════════════
  * SHIPMENTS TABLE
  * ═══════════════════════════════════════════════════════════════ */
-function ShipmentsTable({ rows, sort, onSort }: { rows: SupplyShipmentRow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void }) {
+function ShipmentsTable({ rows, sort, onSort, onSelectShipment }: { rows: SupplyShipmentRow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void; onSelectShipment: (s: SupplyShipmentRow) => void }) {
   if (rows.length === 0) return <div className="p-8 text-center text-muted text-sm">No shipments match filters</div>;
   return (
     <table className="w-full text-sm">
@@ -1328,7 +1434,16 @@ function ShipmentsTable({ rows, sort, onSort }: { rows: SupplyShipmentRow[]; sor
       <tbody>
         {rows.map(r => (
           <tr key={r.shipment_id} className="border-b border-border/50 hover:bg-white/[.02] transition-colors">
-            <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{fmtDate(r.shipment_date)}</td>
+            <td className="px-4 py-2.5 text-xs whitespace-nowrap text-right">
+              <button
+                onClick={() => onSelectShipment(r)}
+                className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 hover:underline underline-offset-2 transition-colors cursor-pointer"
+                title={`View details: ${r.shipment_id}`}
+              >
+                <Eye size={12} className="shrink-0 opacity-60" />
+                <span>{fmtDate(r.shipment_date)}</span>
+              </button>
+            </td>
             <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{r.estimated_arrival_date ? fmtDate(r.estimated_arrival_date) : '—'}</td>
             <td className="px-4 py-2.5 text-subtle text-xs font-medium max-w-[250px] truncate" title={r.products_list}>{r.products_list || '—'}</td>
             <td className="px-4 py-2.5 text-xs text-muted">{r.shipment_type || '—'}</td>
