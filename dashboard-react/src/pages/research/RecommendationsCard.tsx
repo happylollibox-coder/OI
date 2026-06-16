@@ -25,7 +25,14 @@ function metricFor(row: RecommendationRow): string {
 export function RecommendationsCard({ recs, selectedProduct }: RecommendationsCardProps) {
   if (!recs) return null;
   const order: (keyof RecommendationsByType)[] = ['EXACT', 'PHRASE', 'BROAD', 'BRAND'];
-  const total = order.reduce((s, k) => s + recs[k].length, 0);
+  // Brand defense surfaces only gaps — drop terms we already advertise (✓ live).
+  const displayed: RecommendationsByType = {
+    EXACT: recs.EXACT,
+    PHRASE: recs.PHRASE,
+    BROAD: recs.BROAD,
+    BRAND: recs.BRAND.filter(r => r.status !== 'ADVERTISED'),
+  };
+  const total = order.reduce((s, k) => s + displayed[k].length, 0);
   if (total === 0) return null;
 
   return (
@@ -36,7 +43,7 @@ export function RecommendationsCard({ recs, selectedProduct }: RecommendationsCa
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border/20">
         {order.map(type => {
-          const rows = recs[type];
+          const rows = displayed[type];
           const meta = TYPE_META[type];
           return (
             <div key={type} className="bg-surface px-4 py-3">
