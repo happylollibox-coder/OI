@@ -3324,9 +3324,10 @@ def add_po_product_line():
         if errors:
             # Distinguish "not found" vs validation errors for redirect target
             msg = str(errors[0]) if errors else 'Error adding product line'
-            flash(msg, 'error')
             if 'not found' in msg:
+                flash(msg, 'error')
                 return redirect(url_for('index'))
+            flash(f'Error adding product line: {errors}', 'error')
             return redirect(url_for('po_details', po_id=po_id))
 
         clear_data_cache()
@@ -3492,7 +3493,7 @@ def api_po_header_update(po_id):
     try:
         errors, _ = update_purchase_order(po_id, request.get_json() or {})
         if errors:
-            return jsonify({'success': False, 'error': str(errors)}), 400
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
         clear_data_cache()
         return jsonify({'success': True, 'po_id': po_id})
     except Exception as e:
@@ -3501,32 +3502,41 @@ def api_po_header_update(po_id):
 
 @app.route('/api/po/<po_id>/lines', methods=['POST'])
 def api_po_line_add(po_id):
-    d = request.get_json() or {}
-    errors, _ = add_po_line(po_id, d.get('product_id'), d.get('quantity', 0), d.get('total_amount', 0))
-    if errors:
-        return jsonify({'success': False, 'error': str(errors)}), 400
-    clear_data_cache()
-    return jsonify({'success': True, 'po_id': po_id})
+    try:
+        d = request.get_json() or {}
+        errors, _ = add_po_line(po_id, d.get('product_id'), d.get('quantity', 0), d.get('total_amount', 0))
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True, 'po_id': po_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/po/<po_id>/lines/<int:product_id>', methods=['PUT'])
 def api_po_line_edit(po_id, product_id):
-    d = request.get_json() or {}
-    field = d.get('field', 'ready_quantity')
-    errors = update_po_line(po_id, product_id, field, d.get('value'))
-    if errors:
-        return jsonify({'success': False, 'error': str(errors)}), 400
-    clear_data_cache()
-    return jsonify({'success': True})
+    try:
+        d = request.get_json() or {}
+        field = d.get('field', 'ready_quantity')
+        errors = update_po_line(po_id, product_id, field, d.get('value'))
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/po/<po_id>/lines/<int:product_id>', methods=['DELETE'])
 def api_po_line_delete(po_id, product_id):
-    errors = delete_po_line(po_id, product_id)
-    if errors:
-        return jsonify({'success': False, 'error': str(errors)}), 400
-    clear_data_cache()
-    return jsonify({'success': True})
+    try:
+        errors = delete_po_line(po_id, product_id)
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/po/<po_id>', methods=['DELETE'])
@@ -3534,7 +3544,7 @@ def api_po_delete(po_id):
     try:
         errors = _do_delete_po(po_id)
         if errors:
-            return jsonify({'success': False, 'error': str(errors)}), 400
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
         clear_data_cache()
         return jsonify({'success': True})
     except Exception as e:
