@@ -5605,6 +5605,14 @@ def api_shipments_save(plan_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/lov', methods=['GET'])
+def api_lov_all():
+    """All LOV sets at once: {lov_set: [{value_id, value_caption, is_default, attr1_*, attr2_*}]}."""
+    try:
+        return jsonify(get_lovs())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/lov/<lov_set>', methods=['GET'])
 def api_lov_get(lov_set):
     """Get list of values for a given lov_set (e.g. SHIPMENT_TYPE)"""
