@@ -23,6 +23,18 @@ export interface PODetail {
 }
 export interface LovItem { value_id: string; value_caption: string; is_default: boolean; [k: string]: unknown; }
 
+export interface Product {
+  product_id: number;
+  asin: string | null;
+  product_name: string | null;
+  display_name: string | null;
+  sku: string | null;
+  brand: string | null;
+  manufacturer: string | null;
+  parent_name: string | null;
+  product_short_name: string | null;
+}
+
 export const dataEntry = {
   listOrders: () => json<Record<string, unknown>[]>('/api/orders', { method: 'GET' }),
   getPO: (id: string) => json<PODetail>(`/api/po/${encodeURIComponent(id)}`, { method: 'GET' }),
@@ -40,4 +52,5 @@ export const dataEntry = {
   listOtherPOs: () => json<Record<string, unknown>[]>('/api/other_po', { method: 'GET' }),
   createOtherPO: (b: Record<string, unknown>) => json<{ other_po_id: string }>('/api/other_po', { method: 'POST', body: JSON.stringify(b) }),
   deleteOtherPO: (id: string) => json(`/api/other_po/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  listProducts: () => json<Product[]>('/api/products', { method: 'GET' }),
 };
