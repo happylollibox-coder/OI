@@ -2414,7 +2414,6 @@ def new_order():
 
 
 @app.route('/api/products', methods=['GET'])
-@login_required
 def api_products():
     """API endpoint to get products"""
     products = get_products()
@@ -3079,7 +3078,6 @@ def bulk_po_payments():
 
 
 @app.route('/api/orders', methods=['GET'])
-@login_required
 def get_orders():
     """API endpoint to get recent purchase orders (for lookup)"""
     query = f"""
@@ -4172,7 +4170,6 @@ def update_shipment(shipment_id, data):
 
 
 @app.route('/api/shipment/<shipment_id>/update', methods=['POST'])
-@login_required
 def api_update_shipment(shipment_id):
     """API endpoint for inline editing of shipment fields"""
     try:
