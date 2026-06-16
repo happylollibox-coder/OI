@@ -58,6 +58,23 @@
 
 ---
 
+## Cross-Sell Action (`ADD_CROSS_SELL_TARGET`)
+
+Self-brand cross-sell: advertise product **B** on product **A**'s detail page,
+chosen from proven in-brand co-purchase affinity. This is a *separate* engine
+from the term/target/budget decisions above — it has its own view and grain.
+
+| Aspect | Detail |
+|--------|--------|
+| Source | `V_ADS_COACH_CROSSSELL` (grain `target_asin` × `advertise_asin`) → materialized to `T_ADS_COACH_CROSSSELL` → `AdsCoachCrossSell` cube |
+| Signal | `V_SRC_AmazonAds_purchased_product` — shoppers who engaged ads for A (`advertised_asin`) then bought B (`purchased_asin`), last 30d, our ASINs only, A ≠ B |
+| Gate | `cross_orders_30d ≥ CROSS_SELL_MIN_ORDERS` (default **3**) **and** the pair is not already covered by a live product-target (gaps only, via `FACT_AMAZON_ADS.targeting` `asin=` coverage) |
+| Confidence | HIGH ≥ 10 orders · MEDIUM ≥ 5 · LOW ≥ 3 (30d) |
+| Surface | Actions page "🔁 Cross-sell" section, grouped by `target_parent`; `+ Queue` enqueues an `ADD_CROSS_SELL_TARGET` item (`product` = B, `targeting` = `asin="A"`, `match_type` = PRODUCT_TARGETING, **no fabricated bids**) |
+| Export | Do-page bulksheet emits a Sponsored Products **product-targeting** campaign (Campaign → Ad Group → Product Targeting `asin="A"` → Product Ad for B). Budget, bid floor and product-page placement all come from the **`PRODUCT_DEFENSE`** row of `DIM_STRATEGY_CAMPAIGN_TEMPLATE` (no hardcoding); deduped against live campaigns. |
+
+---
+
 ## Safety Guards
 
 ### ⚡ Lag Window Safety Check (NEW — 2026-04-13)
@@ -125,6 +142,7 @@ Each row includes a `term_decision_trace` and `target_decision_trace` column con
 | Profitable ROAS | `profitable_roas` | 1.1 | INCREASE_BID (the **bid-up floor** = `min(profitable, scale_up)`) |
 | Promote Min Orders | `promote_min_orders` | 4 | PROMOTE_TO_EXACT |
 | Promote Min ROAS | `promote_min_roas` | 1.5 | PROMOTE_TO_EXACT |
+| Cross-Sell Min Orders | `CROSS_SELL_MIN_ORDERS` | 3 | ADD_CROSS_SELL_TARGET (`V_ADS_COACH_CROSSSELL`) |
 | Halo ROAS | `halo_roas` | 0.5 | SQP halo credit |
 | Bid Ceiling | `bid_cap_suggestion` | **$2.00** | Hard cap on every recommended bid |
 | Defense Dominate IS% | `defense_dominate_is_pct` | **50** | BRAND_DEFENSE bid-up gate |
@@ -178,6 +196,7 @@ Net ROAS used for all bid decisions is **ads-only** (`margin_per_unit × ad-attr
 
 | Date | Change |
 |------|--------|
+| 2026-06-16 | Added self-brand cross-sell: `V_ADS_COACH_CROSSSELL` (target×advertise co-purchase pairs, gaps only), `CROSS_SELL_MIN_ORDERS` threshold (3), `ADD_CROSS_SELL_TARGET` action + Actions card, Do-page bulksheet export into a `PRODUCT_DEFENSE` SP product-targeting campaign. See §Cross-Sell Action. |
 | 2026-06-16 | GUARDIAN redesign: per-strategy 1.1 bid-up floor, NEEDS_STRATEGY, 3d freq-gate bypass, DEFENDED signal, defense bid-raise (SQP IS gate / unconditional), $2 bid ceiling, dropped dead keys, per-strategy trace. See §2026-06-16. |
 | 2026-04-13 | Added lag window safety check (3-day look-ahead) for REDUCE_BID and ROAS-based NEGATE_EXACT. |
 | 2026-04-13 | Fixed deploy script: V_ADS_COACH was read but never deployed to BigQuery. |
