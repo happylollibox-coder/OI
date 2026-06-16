@@ -4304,9 +4304,9 @@ def shipment_details(shipment_id):
 @login_required
 def delete_shipment(shipment_id):
     """Delete a shipment and its lines"""
+    # Get PO ID from lines before deleting for redirect
     po_id = None
     try:
-        # Get PO ID from lines before deleting for redirect
         query_get_po = f"""
         SELECT purchase_order_id FROM `{SHIPMENT_LINES_TABLE}`
         WHERE shipment_id = @shipment_id
@@ -4317,47 +4317,20 @@ def delete_shipment(shipment_id):
         )
         po_result = list(client.query(query_get_po, job_config=job_config_get).result())
         po_id = po_result[0].purchase_order_id if po_result else None
-        
-        # Delete lines first
-        query_lines = f"""
-        DELETE FROM `{SHIPMENT_LINES_TABLE}`
-        WHERE shipment_id = @shipment_id
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)]
-        )
-        client.query(query_lines, job_config=job_config).result()
-        
-        # Delete header
-        query_header = f"""
-        DELETE FROM `{SHIPMENTS_TABLE}`
-        WHERE shipment_id = @shipment_id
-        """
-        client.query(query_header, job_config=job_config).result()
-        
+    except Exception:
+        pass
+
+    errors = delete_shipment_record(shipment_id)
+    if errors:
+        flash(errors[0], 'error')
+    else:
         clear_data_cache()
         flash(f'Shipment {shipment_id} deleted successfully!', 'success')
-        
-        if po_id:
-            return redirect(url_for('po_details', po_id=po_id))
-        else:
-            return redirect(url_for('index'))
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        error_msg = str(e)
-        
-        # Check for streaming buffer error
-        if 'streaming buffer' in error_msg.lower():
-            flash(f'Cannot delete shipment: This shipment is still in BigQuery\'s streaming buffer. This may be an older shipment created before we switched to batch loading. Please wait 5-10 minutes and try again. Note: New shipments created now can be deleted immediately.', 'error')
-        else:
-            flash(f'Error deleting shipment: {error_msg}', 'error')
-        print(f"Delete shipment error: {error_details}")
-        
-        if po_id:
-            return redirect(url_for('po_details', po_id=po_id))
-        else:
-            return redirect(url_for('index'))
+
+    if po_id:
+        return redirect(url_for('po_details', po_id=po_id))
+    else:
+        return redirect(url_for('index'))
 
 
 def get_payment_details(payment_id):
@@ -6144,21 +6117,53 @@ def api_ppc_change_log_list():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/shipment/<shipment_id>/add_po_line', methods=['POST'])
-@login_required
-def add_po_line_to_shipment(shipment_id):
-    """Add a PO line to an existing shipment."""
+# ==========================================
+# Shipment helpers (shared by HTML routes + JSON API)
+# ==========================================
+
+def delete_shipment_record(shipment_id):
+    """Delete a shipment's lines then its header.  Returns [] on success, list of error strings on failure."""
+    try:
+        # Delete lines first
+        query_lines = f"""
+        DELETE FROM `{SHIPMENT_LINES_TABLE}`
+        WHERE shipment_id = @shipment_id
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)]
+        )
+        client.query(query_lines, job_config=job_config).result()
+
+        # Delete header
+        query_header = f"""
+        DELETE FROM `{SHIPMENTS_TABLE}`
+        WHERE shipment_id = @shipment_id
+        """
+        client.query(query_header, job_config=job_config).result()
+
+        return []
+    except Exception as e:
+        error_msg = str(e)
+        if 'streaming buffer' in error_msg.lower():
+            return ["Cannot delete shipment: This shipment is still in BigQuery's streaming buffer. "
+                    "This may be an older shipment created before we switched to batch loading. "
+                    "Please wait 5-10 minutes and try again. "
+                    "Note: New shipments created now can be deleted immediately."]
+        return [f'Error deleting shipment: {error_msg}']
+
+
+def add_shipment_line(shipment_id, data):
+    """Add a PO line to a shipment.  Returns (errors_list, line_id_or_None)."""
     import math
     try:
-        po_id = request.form.get('purchase_order_id')
-        product_id_str = request.form.get('product_id', '')
+        po_id = data.get('purchase_order_id')
+        product_id_str = data.get('product_id', '')
         product_id = int(product_id_str) if product_id_str else None
-        quantity = int(request.form.get('quantity_shipped', 0))
-        
+        quantity = int(data.get('quantity_shipped', 0))
+
         if not po_id or quantity <= 0:
-            flash('Please select a PO and enter a quantity > 0.', 'error')
-            return redirect(url_for('shipment_details', shipment_id=shipment_id))
-        
+            return (['Please select a PO and enter a quantity > 0.'], None)
+
         # Look up product packaging info — prefer direct product_id, fallback to PO
         product_info = {}
         if product_id:
@@ -6172,7 +6177,7 @@ def add_po_line_to_shipment(shipment_id):
             pr = list(client.query(pq, job_config=pq_cfg).result())
             if pr:
                 product_info = dict(pr[0])
-        
+
         if not product_info:
             product_query = f"""
             SELECT dp.package_quantity, dp.package_cubic_feet
@@ -6186,14 +6191,15 @@ def add_po_line_to_shipment(shipment_id):
             )
             product_result = list(client.query(product_query, job_config=job_config).result())
             product_info = dict(product_result[0]) if product_result else {}
-        
+
         pkg_qty = product_info.get('package_quantity') or 1
         cubic_ft = product_info.get('package_cubic_feet')
         num_cartons = math.ceil(quantity / pkg_qty) if pkg_qty > 0 else None
         total_cubic_ft = (num_cartons * cubic_ft) if (num_cartons and cubic_ft) else None
-        
+
+        line_id = generate_id('SHL')
         line_row = {
-            'line_id': generate_id('SHL'),
+            'line_id': line_id,
             'shipment_id': shipment_id,
             'purchase_order_id': po_id,
             'product_id': product_id,
@@ -6203,7 +6209,7 @@ def add_po_line_to_shipment(shipment_id):
             'total_cubic_feet': total_cubic_ft,
             'allocated_cost': None,
         }
-        
+
         # Insert the line
         lines_table_ref = client.get_table(SHIPMENT_LINES_TABLE)
         lines_job_config = bigquery.LoadJobConfig(
@@ -6214,84 +6220,76 @@ def add_po_line_to_shipment(shipment_id):
         )
         job = client.load_table_from_json([line_row], lines_table_ref, job_config=lines_job_config)
         job.result()
-        
+
         if job.errors:
-            flash(f'Error adding PO line: {job.errors}', 'error')
-        else:
-            # Update shipment total_quantity
-            update_qty_query = f"""
-            UPDATE `{SHIPMENTS_TABLE}`
-            SET total_quantity = COALESCE(total_quantity, 0) + @qty
-            WHERE shipment_id = @shipment_id
+            return ([f'Error adding PO line: {job.errors}'], None)
+
+        # Update shipment total_quantity
+        update_qty_query = f"""
+        UPDATE `{SHIPMENTS_TABLE}`
+        SET total_quantity = COALESCE(total_quantity, 0) + @qty
+        WHERE shipment_id = @shipment_id
+        """
+        qty_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("qty", "INT64", quantity),
+                bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)
+            ]
+        )
+        client.query(update_qty_query, job_config=qty_config).result()
+
+        # Reset ready_quantity to NULL for this PO product
+        if product_id is not None:
+            reset_ready_query = f"""
+            UPDATE `{ORDERS_TABLE}`
+            SET ready_quantity = NULL
+            WHERE purchase_order_id = @po_id AND product_id = @product_id
             """
-            qty_config = bigquery.QueryJobConfig(
+            reset_config = bigquery.QueryJobConfig(
                 query_parameters=[
-                    bigquery.ScalarQueryParameter("qty", "INT64", quantity),
-                    bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)
+                    bigquery.ScalarQueryParameter("po_id", "STRING", po_id),
+                    bigquery.ScalarQueryParameter("product_id", "INT64", product_id)
                 ]
             )
-            client.query(update_qty_query, job_config=qty_config).result()
-            
-            # Reset ready_quantity to NULL for this PO product
-            if product_id is not None:
-                reset_ready_query = f"""
-                UPDATE `{ORDERS_TABLE}`
-                SET ready_quantity = NULL
-                WHERE purchase_order_id = @po_id AND product_id = @product_id
-                """
-                reset_config = bigquery.QueryJobConfig(
-                    query_parameters=[
-                        bigquery.ScalarQueryParameter("po_id", "STRING", po_id),
-                        bigquery.ScalarQueryParameter("product_id", "INT64", product_id)
-                    ]
-                )
-                client.query(reset_ready_query, job_config=reset_config).result()
-            else:
-                reset_ready_query = f"""
-                UPDATE `{ORDERS_TABLE}`
-                SET ready_quantity = NULL
-                WHERE purchase_order_id = @po_id
-                """
-                reset_config = bigquery.QueryJobConfig(
-                    query_parameters=[
-                        bigquery.ScalarQueryParameter("po_id", "STRING", po_id)
-                    ]
-                )
-                client.query(reset_ready_query, job_config=reset_config).result()
-            
-            clear_data_cache()
-            flash(f'PO {po_id} linked to shipment with {quantity} units.', 'success')
+            client.query(reset_ready_query, job_config=reset_config).result()
+        else:
+            reset_ready_query = f"""
+            UPDATE `{ORDERS_TABLE}`
+            SET ready_quantity = NULL
+            WHERE purchase_order_id = @po_id
+            """
+            reset_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("po_id", "STRING", po_id)
+                ]
+            )
+            client.query(reset_ready_query, job_config=reset_config).result()
+
+        return ([], line_id)
     except Exception as e:
         import traceback
-        flash(f'Error adding PO line: {str(e)}', 'error')
-        print(f"Add PO line error: {traceback.format_exc()}")
-    
-    return redirect(url_for('shipment_details', shipment_id=shipment_id))
+        print(f"Add shipment line error: {traceback.format_exc()}")
+        return ([f'Error adding PO line: {str(e)}'], None)
 
 
-@app.route('/shipment/<shipment_id>/line/<line_id>/update', methods=['POST'])
-@login_required
-def update_shipment_line(shipment_id, line_id):
-    """Update a single shipment line (quantity and allocated cost)."""
+def update_shipment_line_fields(shipment_id, line_id, quantity_shipped, allocated_cost):
+    """Update quantity_shipped and/or allocated_cost on a shipment line; recalc header total_quantity.
+    Returns [] on success, list of error strings on failure."""
     try:
-        data = request.form
         updates = []
         params = [bigquery.ScalarQueryParameter("line_id", "STRING", line_id)]
-        
-        quantity = data.get('quantity_shipped')
-        if quantity:
+
+        if quantity_shipped is not None:
             updates.append("quantity_shipped = @quantity")
-            params.append(bigquery.ScalarQueryParameter("quantity", "INT64", int(quantity)))
-        
-        allocated_cost = data.get('allocated_cost')
-        if allocated_cost:
+            params.append(bigquery.ScalarQueryParameter("quantity", "INT64", int(quantity_shipped)))
+
+        if allocated_cost is not None:
             updates.append("allocated_cost = @allocated_cost")
             params.append(bigquery.ScalarQueryParameter("allocated_cost", "FLOAT64", float(allocated_cost)))
-        
+
         if not updates:
-            flash('No changes to update', 'warning')
-            return redirect(url_for('shipment_details', shipment_id=shipment_id))
-        
+            return ['No changes to update']
+
         query = f"""
             UPDATE `{SHIPMENT_LINES_TABLE}`
             SET {', '.join(updates)}
@@ -6300,38 +6298,31 @@ def update_shipment_line(shipment_id, line_id):
         job_config = bigquery.QueryJobConfig(query_parameters=params)
         job = client.query(query, job_config=job_config)
         job.result()
-        
+
         if job.errors:
-            flash(f'Error updating line: {job.errors}', 'danger')
-        else:
-            # Update the shipment header total_quantity
-            recalc_query = f"""
-                UPDATE `{SHIPMENTS_TABLE}` s
-                SET total_quantity = (
-                    SELECT COALESCE(SUM(sl.quantity_shipped), 0)
-                    FROM `{SHIPMENT_LINES_TABLE}` sl
-                    WHERE sl.shipment_id = s.shipment_id
-                )
-                WHERE s.shipment_id = @shipment_id
-            """
-            recalc_params = [bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)]
-            recalc_config = bigquery.QueryJobConfig(query_parameters=recalc_params)
-            recalc_job = client.query(recalc_query, job_config=recalc_config)
-            recalc_job.result()
-            
-            flash('Shipment line updated successfully', 'success')
-            clear_data_cache()
-        
-        return redirect(url_for('shipment_details', shipment_id=shipment_id))
+            return [f'Error updating line: {job.errors}']
+
+        # Recalc header total_quantity
+        recalc_query = f"""
+            UPDATE `{SHIPMENTS_TABLE}` s
+            SET total_quantity = (
+                SELECT COALESCE(SUM(sl.quantity_shipped), 0)
+                FROM `{SHIPMENT_LINES_TABLE}` sl
+                WHERE sl.shipment_id = s.shipment_id
+            )
+            WHERE s.shipment_id = @shipment_id
+        """
+        recalc_params = [bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)]
+        recalc_config = bigquery.QueryJobConfig(query_parameters=recalc_params)
+        client.query(recalc_query, job_config=recalc_config).result()
+
+        return []
     except Exception as e:
-        flash(f'Error updating shipment line: {str(e)}', 'danger')
-        return redirect(url_for('shipment_details', shipment_id=shipment_id))
+        return [f'Error updating shipment line: {str(e)}']
 
 
-@app.route('/shipment/<shipment_id>/line/<line_id>/delete', methods=['POST'])
-@login_required
-def delete_shipment_line(shipment_id, line_id):
-    """Delete a single shipment line."""
+def delete_shipment_line_record(shipment_id, line_id):
+    """Delete a shipment line and recalc header total_quantity.  Returns [] on success, list of error strings on failure."""
     try:
         query = f"""
             DELETE FROM `{SHIPMENT_LINES_TABLE}`
@@ -6341,35 +6332,87 @@ def delete_shipment_line(shipment_id, line_id):
         job_config = bigquery.QueryJobConfig(query_parameters=params)
         job = client.query(query, job_config=job_config)
         job.result()
-        
+
         if job.errors:
-            flash(f'Error deleting line: {job.errors}', 'danger')
-        else:
-            # Update the shipment header total_quantity
-            recalc_query = f"""
-                UPDATE `{SHIPMENTS_TABLE}` s
-                SET total_quantity = (
-                    SELECT COALESCE(SUM(sl.quantity_shipped), 0)
-                    FROM `{SHIPMENT_LINES_TABLE}` sl
-                    WHERE sl.shipment_id = s.shipment_id
-                )
-                WHERE s.shipment_id = @shipment_id
-            """
-            recalc_params = [bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)]
-            recalc_config = bigquery.QueryJobConfig(query_parameters=recalc_params)
-            recalc_job = client.query(recalc_query, job_config=recalc_config)
-            recalc_job.result()
-            
-            flash('Shipment line deleted successfully', 'success')
-            clear_data_cache()
-        
-        return redirect(url_for('shipment_details', shipment_id=shipment_id))
+            return [f'Error deleting line: {job.errors}']
+
+        # Recalc header total_quantity
+        recalc_query = f"""
+            UPDATE `{SHIPMENTS_TABLE}` s
+            SET total_quantity = (
+                SELECT COALESCE(SUM(sl.quantity_shipped), 0)
+                FROM `{SHIPMENT_LINES_TABLE}` sl
+                WHERE sl.shipment_id = s.shipment_id
+            )
+            WHERE s.shipment_id = @shipment_id
+        """
+        recalc_params = [bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)]
+        recalc_config = bigquery.QueryJobConfig(query_parameters=recalc_params)
+        recalc_job = client.query(recalc_query, job_config=recalc_config)
+        recalc_job.result()
+
+        return []
     except Exception as e:
-        if 'UPDATE or DELETE statement over table' in str(e) and 'would affect rows in the streaming buffer' in str(e):
-            flash('Cannot delete this line yet — it is still in BigQuery streaming buffer. Please wait 5-10 minutes and try again.', 'warning')
+        error_msg = str(e)
+        if 'UPDATE or DELETE statement over table' in error_msg and 'would affect rows in the streaming buffer' in error_msg:
+            return ['Cannot delete this line yet — it is still in BigQuery streaming buffer. Please wait 5-10 minutes and try again.']
+        return [f'Error deleting shipment line: {error_msg}']
+
+
+@app.route('/shipment/<shipment_id>/add_po_line', methods=['POST'])
+@login_required
+def add_po_line_to_shipment(shipment_id):
+    """Add a PO line to an existing shipment."""
+    data = {
+        'purchase_order_id': request.form.get('purchase_order_id'),
+        'product_id': request.form.get('product_id', ''),
+        'quantity_shipped': request.form.get('quantity_shipped', 0),
+    }
+    errors, line_id = add_shipment_line(shipment_id, data)
+    if errors:
+        flash(errors[0], 'error')
+    else:
+        po_id = data['purchase_order_id']
+        quantity = int(data['quantity_shipped'])
+        clear_data_cache()
+        flash(f'PO {po_id} linked to shipment with {quantity} units.', 'success')
+    return redirect(url_for('shipment_details', shipment_id=shipment_id))
+
+
+@app.route('/shipment/<shipment_id>/line/<line_id>/update', methods=['POST'])
+@login_required
+def update_shipment_line(shipment_id, line_id):
+    """Update a single shipment line (quantity and allocated cost)."""
+    quantity = request.form.get('quantity_shipped') or None
+    allocated_cost = request.form.get('allocated_cost') or None
+    errors = update_shipment_line_fields(shipment_id, line_id, quantity, allocated_cost)
+    if errors:
+        msg = errors[0]
+        if msg == 'No changes to update':
+            flash(msg, 'warning')
         else:
-            flash(f'Error deleting shipment line: {str(e)}', 'danger')
-        return redirect(url_for('shipment_details', shipment_id=shipment_id))
+            flash(msg, 'danger')
+    else:
+        flash('Shipment line updated successfully', 'success')
+        clear_data_cache()
+    return redirect(url_for('shipment_details', shipment_id=shipment_id))
+
+
+@app.route('/shipment/<shipment_id>/line/<line_id>/delete', methods=['POST'])
+@login_required
+def delete_shipment_line(shipment_id, line_id):
+    """Delete a single shipment line."""
+    errors = delete_shipment_line_record(shipment_id, line_id)
+    if errors:
+        msg = errors[0]
+        if 'streaming buffer' in msg.lower():
+            flash(msg, 'warning')
+        else:
+            flash(msg, 'danger')
+    else:
+        flash('Shipment line deleted successfully', 'success')
+        clear_data_cache()
+    return redirect(url_for('shipment_details', shipment_id=shipment_id))
 
 
 # ==========================================
@@ -8367,6 +8410,59 @@ def segment_reasoning():
     except Exception as e:
         print(f"Error in segment_reasoning: {e}")
         return jsonify({'error': str(e)}), 500
+
+# ==========================================
+# Shipment JSON API twins (Phase 2 Task 2)
+# ==========================================
+
+@app.route('/api/shipment/<shipment_id>', methods=['DELETE'])
+def api_shipment_delete(shipment_id):
+    try:
+        errors = delete_shipment_record(shipment_id)
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/shipment/<shipment_id>/lines', methods=['POST'])
+def api_shipment_line_add(shipment_id):
+    try:
+        errors, line_id = add_shipment_line(shipment_id, request.get_json() or {})
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True, 'line_id': line_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/shipment/<shipment_id>/lines/<line_id>', methods=['PUT'])
+def api_shipment_line_update(shipment_id, line_id):
+    d = request.get_json() or {}
+    try:
+        errors = update_shipment_line_fields(shipment_id, line_id, d.get('quantity_shipped'), d.get('allocated_cost'))
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/shipment/<shipment_id>/lines/<line_id>', methods=['DELETE'])
+def api_shipment_line_delete(shipment_id, line_id):
+    try:
+        errors = delete_shipment_line_record(shipment_id, line_id)
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
