@@ -2174,6 +2174,61 @@ def update_po(po_id):
     return redirect(url_for('po_details', po_id=po_id))
 
 
+def insert_other_po(data):
+    """Insert a new Other PO row. Returns (errors_list, other_po_id)."""
+    order_date = data.get('order_date')
+    service_type = data.get('service_type')
+    supplier_name = data.get('supplier_name')
+
+    if not order_date or not service_type or not supplier_name:
+        return (['Order date, service type, and supplier are required'], None)
+
+    other_po_id = data.get('other_po_id') or generate_other_po_id(order_date, supplier_name, service_type)
+
+    # Normalize product_asins: list → join; string → use as-is; empty → None
+    product_asins_raw = data.get('product_asins')
+    if isinstance(product_asins_raw, list):
+        product_asins = ', '.join(product_asins_raw) if product_asins_raw else None
+    elif isinstance(product_asins_raw, str):
+        product_asins = product_asins_raw if product_asins_raw else None
+    else:
+        product_asins = None
+
+    row = {
+        'other_po_id': other_po_id,
+        'order_date': order_date,
+        'service_type': service_type,
+        'supplier_name': supplier_name,
+        'product_asins': product_asins,
+        'total_amount': float(data.get('total_amount', 0)),
+        'currency': data.get('currency', 'USD'),
+        'payment_status': 'PENDING',
+        'notes': data.get('notes', ''),
+        'created_at': datetime.utcnow().isoformat()
+    }
+
+    table_ref = client.get_table(OTHER_PO_TABLE)
+    job_config = bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+        autodetect=False,
+        schema=table_ref.schema
+    )
+    job = client.load_table_from_json([row], table_ref, job_config=job_config)
+    job.result()
+    return (job.errors or [], other_po_id)
+
+
+def delete_other_po_record(po_id):
+    """Delete an Other PO and its related payments. Returns errors_list (empty on success)."""
+    jc = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
+    )
+    client.query(f"DELETE FROM `{PAYMENTS_TABLE}` WHERE purchase_order_id = @po_id", job_config=jc).result()
+    client.query(f"DELETE FROM `{OTHER_PO_TABLE}` WHERE other_po_id = @po_id", job_config=jc).result()
+    return []
+
+
 @app.route('/other_po/new', methods=['GET', 'POST'])
 @login_required
 def new_other_po():
@@ -2181,51 +2236,13 @@ def new_other_po():
     if request.method == 'POST':
         try:
             data = request.form.to_dict()
-            order_date = data.get('order_date')
-            service_type = data.get('service_type')
-            supplier_name = data.get('supplier_name')
-            
-            other_po_id = data.get('other_po_id')
-            if not other_po_id:
-                other_po_id = generate_other_po_id(order_date, supplier_name, service_type)
-                
-            total_amount = float(data.get('total_amount', 0))
-            currency = data.get('currency', 'USD')
-            notes = data.get('notes', '')
-            
-            # Handle multiple products
-            product_asins_raw = request.form.getlist('product_asins')
-            product_asins = ', '.join(product_asins_raw) if product_asins_raw else None
-            
-            if not order_date or not service_type or not supplier_name:
-                flash('Order date, service type, and supplier are required', 'error')
-                return render_template('other_po_form.html')
-                
-            row = {
-                'other_po_id': other_po_id,
-                'order_date': order_date,
-                'service_type': service_type,
-                'supplier_name': supplier_name,
-                'product_asins': product_asins,
-                'total_amount': total_amount,
-                'currency': currency,
-                'payment_status': 'PENDING',
-                'notes': notes,
-                'created_at': datetime.utcnow().isoformat()
-            }
-            
-            table_ref = client.get_table(OTHER_PO_TABLE)
-            job_config = bigquery.LoadJobConfig(
-                write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-                source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
-                autodetect=False,
-                schema=table_ref.schema
-            )
-            job = client.load_table_from_json([row], table_ref, job_config=job_config)
-            job.result()
-            
-            if job.errors:
-                flash(f'Error inserting Other PO: {job.errors}', 'error')
+            # Pass product_asins as a list (from multi-select form field)
+            data['product_asins'] = request.form.getlist('product_asins')
+            errors, other_po_id = insert_other_po(data)
+            if errors:
+                flash(f'Error inserting Other PO: {errors}', 'error')
+                if 'required' in str(errors):
+                    return render_template('other_po_form.html')
             else:
                 clear_data_cache()
                 flash(f'Other PO {other_po_id} created successfully!', 'success')
@@ -2283,23 +2300,65 @@ def other_po_details(po_id):
 def delete_other_po(po_id):
     """Delete an Other PO and its payments"""
     try:
-        # Delete related payments
-        delete_payments_query = f"DELETE FROM `{PAYMENTS_TABLE}` WHERE purchase_order_id = @po_id"
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
-        )
-        client.query(delete_payments_query, job_config=job_config).result()
-        
-        # Delete PO
-        delete_po_query = f"DELETE FROM `{OTHER_PO_TABLE}` WHERE other_po_id = @po_id"
-        client.query(delete_po_query, job_config=job_config).result()
-        
-        clear_data_cache()
-        flash(f'Other PO {po_id} and related payments deleted successfully', 'success')
+        errors = delete_other_po_record(po_id)
+        if errors:
+            flash(f'Error deleting Other PO: {errors}', 'error')
+        else:
+            clear_data_cache()
+            flash(f'Other PO {po_id} and related payments deleted successfully', 'success')
     except Exception as e:
         flash(f'Error deleting Other PO: {str(e)}', 'error')
-        
+
     return redirect(url_for('index'))
+
+
+@app.route('/api/other_po', methods=['GET'])
+def api_other_po_list():
+    q = f"SELECT * FROM `{OTHER_PO_TABLE}` ORDER BY order_date DESC LIMIT 200"
+    rows = [dict(r) for r in client.query(q).result()]
+    for d in rows:
+        for k, v in list(d.items()):
+            if hasattr(v, 'isoformat'):
+                d[k] = v.isoformat()
+    return jsonify(rows)
+
+
+@app.route('/api/other_po/<po_id>', methods=['GET'])
+def api_other_po_get(po_id):
+    jc = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)])
+    rows = list(client.query(f"SELECT * FROM `{OTHER_PO_TABLE}` WHERE other_po_id=@po_id", job_config=jc).result())
+    if not rows:
+        return jsonify({'error': 'Other PO not found'}), 404
+    d = dict(rows[0])
+    for k, v in list(d.items()):
+        if hasattr(v, 'isoformat'):
+            d[k] = v.isoformat()
+    return jsonify(d)
+
+
+@app.route('/api/other_po', methods=['POST'])
+def api_other_po_create():
+    try:
+        errors, oid = insert_other_po(request.get_json() or {})
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True, 'other_po_id': oid})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/other_po/<po_id>', methods=['DELETE'])
+def api_other_po_delete(po_id):
+    try:
+        errors = delete_other_po_record(po_id)
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(str(x) for x in errors) if isinstance(errors, list) else str(errors)}), 400
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/orders/new', methods=['GET', 'POST'])
 @login_required
