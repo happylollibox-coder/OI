@@ -129,7 +129,7 @@ Computed in SQL (`is_holiday_active`), exposed to the UI.
 | `top-terms?parent=` | GET | FACT_RESEARCH_TERMS (+RANKED if parent) | all terms with brand purchases, 104w window |
 | `related-terms` | POST `{term, parent?, mode, synonyms?}` | FACT_SEARCH_QUERY (seeds) + FACT tables | co-occurrence expansion. **mode ∈ {direct, phrase, broad}** (default `phrase`). **Direct** = exact term + plurals, whole-string regex. **Phrase** = every token present, any order, extra words allowed (whole-word, plural-tolerant regex; `7`≠`17`, `girl`=`girls`). Direct/Phrase predicates built by `research_match.research_match_predicate` and applied as a `match_filter`. **Broad** = the former `related` mode unchanged: per-word synonym `LIKE` OR-expansion over the full co-occurrence net (no `match_filter`), marking rows direct vs related. |
 | `term-ranks` | POST `{terms[]}` | FACT_RESEARCH_RANKED | per-family hover comparison (≤500 terms) |
-| `get-synonyms` | POST `{words[]}` | DE_SYNONYM_CACHE → hardcoded fallback | fallback unlocks Related mode |
+| `get-synonyms` | POST `{words[]}` | DE_SYNONYM_CACHE → hardcoded fallback | fallback feeds Broad mode synonym expansion |
 | `update-segments` | POST | MERGE into DE_SEARCH_TERM_SEGMENTS | atomic upsert |
 | `conversion-curve` | GET (cached) | V_CONVERSION_CURVE | |
 | `products` | GET (cached) | V_DIM_LISTING_CURRENT + FACT_AMAZON_ADS | |
