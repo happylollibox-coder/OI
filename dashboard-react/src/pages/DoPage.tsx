@@ -269,19 +269,28 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
     }
 
     if (item.action === 'PROMOTE_TO_EXACT') {
-      const bid = item.cpc ? `$${Math.min(2.0, Math.max(0.5, +(item.cpc * 1.1).toFixed(2))).toFixed(2)}` : '$0.75';
+      // Mirror the export: all values come from the EXACT_BOOST template, not hardcoded.
+      const tmpls = data.strategy_campaign_templates || [];
+      const spTmpl = tmpls.find(t => t.strategy_id === 'EXACT_BOOST' && t.ad_format === 'SP');
+      const videoTmpl = tmpls.find(t => t.strategy_id === 'EXACT_BOOST' && t.ad_format === 'SB_VIDEO');
+      const bidMin = spTmpl?.bid_min ?? 0.5;
+      const bidMax = spTmpl?.bid_max ?? 2.0;
+      const bid = item.cpc ? `$${Math.min(bidMax, Math.max(bidMin, +(item.cpc * 1.1).toFixed(2))).toFixed(2)}` : `$${bidMin.toFixed(2)}`;
+      const spBudget = spTmpl?.daily_budget ?? null;
+      const spTos = spTmpl?.top_of_search_pct ?? 0;
+      const videoBudget = videoTmpl?.daily_budget ?? null;
       const productPrefix = cn.match(/^(BOTTLE|BOX|ME|FRESH)/)?.[1] || 'PRODUCT';
       const kwShort = item.search_term.split(' ').slice(0, 4).join(' ');
       const spCampName = `${productPrefix}-SP/EXACT (Boost, ${kwShort})`;
       const videoCampName = `${productPrefix}-VIDEO/EXACT (Boost, ${kwShort})`;
+      const tosStr = spTos > 0 ? ` + TOS ${spTos}%` : '';
       return {
         icon: '🚀',
         lines: [
           `Create SP campaign: ${spCampName}`,
-          `  Bid: ${bid} · Budget: $20/day · DOWN_ONLY + TOS 500%`,
+          `  Bid: ${bid} · Budget: ${spBudget != null ? `$${spBudget}/day` : '—'} · DOWN_ONLY${tosStr}`,
           `Create SB Video: ${videoCampName}`,
-          `  Bid: ${bid} · Budget: $20/day`,
-          `Create Exact Campaign: "-SP/EXACT (Boost, ...)" with bid $${bid}`,
+          `  Bid: ${bid} · Budget: ${videoBudget != null ? `$${videoBudget}/day` : '—'}`,
         ],
       };
     } else if (item.action === 'PROMOTE_TO_PEAK_PHRASE') {
@@ -299,6 +308,13 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       return {
         icon: '✨',
         lines: [`Start advertising "${item.search_term}" — SQP shows organic demand, no ads targeting yet`],
+      };
+    }
+
+    if (item.action === 'REMOVE_NEGATIVE') {
+      return {
+        icon: '🗑️',
+        lines: [`Archive negative "${item.search_term}" in ${campName} — it blocks a converting term`],
       };
     }
 
@@ -479,7 +495,32 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
 
       const spRows: Record<string, string>[] = [];
       const sbRows: Record<string, string>[] = [];
-      const createdPeakCampaigns = new Set<string>();
+
+      // ═══ Dedup guard: never emit Create rows for a campaign that already exists ═══
+      // Sources: live campaigns (Ads cube, ~1–2d lag) + campaigns the coach already tracks.
+      const normCamp = (s: string) => s.trim().toUpperCase();
+      const existingCampaigns = new Set<string>();
+      for (const r of (data.ads_7d || [])) {
+        if (r.row_type === 'campaign' && r.campaign_name) existingCampaigns.add(normCamp(r.campaign_name));
+      }
+      for (const c of (data.coach_campaigns || [])) {
+        if (c.campaign_name) existingCampaigns.add(normCamp(c.campaign_name));
+      }
+      // Returns true only if this campaign is new (not already live AND not already
+      // queued earlier in this export). Registers the name so later rows dedup too.
+      const createdInExport = new Set<string>();
+      const claimNewCampaign = (name: string): boolean => {
+        const key = normCamp(name);
+        if (existingCampaigns.has(key) || createdInExport.has(key)) return false;
+        createdInExport.add(key);
+        return true;
+      };
+
+      // ═══ Campaign-creation defaults come from DIM_STRATEGY_CAMPAIGN_TEMPLATE (no hardcoding) ═══
+      const campaignTemplates = data.strategy_campaign_templates || [];
+      const findTemplate = (strategyId: string, adFormat: string) =>
+        campaignTemplates.find(t => t.strategy_id === strategyId && t.ad_format === adFormat);
+
       for (const item of doQueue.items) {
         const campId = item.campaign_id || '';
         const campName = item.campaign || '';
@@ -710,8 +751,15 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         // Uses: item.search_term as the new exact keyword
         // ═══════════════════════════════════════════════════════════
         } else if (item.action === 'PROMOTE_TO_EXACT') {
-          // EXACT_BOOST strategy template: DOWN_ONLY, TOS=500%, bid=$0.50-$2.00, budget=$20
-          const bid = item.cpc ? String(Math.min(2.0, Math.max(0.5, +(item.cpc * 1.1).toFixed(2)))) : '0.75';
+          // EXACT_BOOST recipe — budget / TOS / bid bounds all sourced from
+          // DIM_STRATEGY_CAMPAIGN_TEMPLATE (no hardcoded defaults).
+          const spTmpl = findTemplate('EXACT_BOOST', 'SP');
+          const videoTmpl = findTemplate('EXACT_BOOST', 'SB_VIDEO');
+          const bidMin = spTmpl?.bid_min ?? 0.5;
+          const bidMax = spTmpl?.bid_max ?? 2.0;
+          const bid = item.cpc
+            ? String(Math.min(bidMax, Math.max(bidMin, +(item.cpc * 1.1).toFixed(2))))
+            : String(bidMin);
           // Resolve ASIN: use item.asin (set since 2026-06-12), fall back to supply_chain lookup by short-name
           const asin = item.asin || asinByShortName.get(item.product) || '';
           // Resolve SKU from DIM_PRODUCT (via products loader); never write product short-name
@@ -733,41 +781,50 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           // ── SP/EXACT Boost Campaign (Sponsored Products sheet) ──
           const spCampName = `${productPrefix}-SP/EXACT (Boost, ${kwShort})`;
           const spAdGroupName = `${productPrefix} - Exact Boost`;
-          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Campaign', 'Operation': 'Create',
-            'Campaign ID': spCampName, 'Campaign Name': spCampName, 'Portfolio ID': portfolioId, 'Daily Budget': '20', 'Targeting Type': 'MANUAL',
-            'Bidding Strategy': 'Dynamic bids - down only', 'Start Date': startDate, 'State': 'ENABLED' });
-          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Bidding Adjustment', 'Operation': 'Create',
-            'Campaign ID': spCampName, 'Campaign Name': spCampName, 'Placement': 'Placement Top', 'Percentage': '500' });
-          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Ad Group', 'Operation': 'Create',
-            'Campaign ID': spCampName, 'Campaign Name': spCampName,
-            'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
-            'Ad Group Default Bid': bid, 'State': 'ENABLED' });
-          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Keyword', 'Operation': 'Create',
-            'Campaign ID': spCampName, 'Campaign Name': spCampName,
-            'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
-            'Keyword Text': item.search_term, 'Match Type': 'EXACT', 'Bid': bid, 'State': 'ENABLED' });
-          spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Ad', 'Operation': 'Create',
-            'Campaign ID': spCampName, 'Campaign Name': spCampName,
-            'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
-            ...(sku ? { 'SKU': sku } : asin ? { 'ASIN (Informational only)': asin } : {}),
-            'State': 'ENABLED' });
+          if (!spTmpl) {
+            console.warn('[Bulksheet] No EXACT_BOOST/SP template loaded — skipping SP campaign creation for', item.product);
+          } else if (claimNewCampaign(spCampName)) {
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Campaign', 'Operation': 'Create',
+              'Campaign ID': spCampName, 'Campaign Name': spCampName, 'Portfolio ID': portfolioId,
+              'Daily Budget': String(spTmpl.daily_budget ?? ''), 'Targeting Type': 'MANUAL',
+              'Bidding Strategy': 'Dynamic bids - down only', 'Start Date': startDate, 'State': 'ENABLED' });
+            // Top-of-search placement adjustment — only when the recipe sets one (> 0)
+            if ((spTmpl.top_of_search_pct ?? 0) > 0) {
+              spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Bidding Adjustment', 'Operation': 'Create',
+                'Campaign ID': spCampName, 'Campaign Name': spCampName, 'Placement': 'Placement Top',
+                'Percentage': String(spTmpl.top_of_search_pct) });
+            }
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Ad Group', 'Operation': 'Create',
+              'Campaign ID': spCampName, 'Campaign Name': spCampName,
+              'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
+              'Ad Group Default Bid': bid, 'State': 'ENABLED' });
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Keyword', 'Operation': 'Create',
+              'Campaign ID': spCampName, 'Campaign Name': spCampName,
+              'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
+              'Keyword Text': item.search_term, 'Match Type': 'EXACT', 'Bid': bid, 'State': 'ENABLED' });
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Ad', 'Operation': 'Create',
+              'Campaign ID': spCampName, 'Campaign Name': spCampName,
+              'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
+              ...(sku ? { 'SKU': sku } : asin ? { 'ASIN (Informational only)': asin } : {}),
+              'State': 'ENABLED' });
+          }
 
 
           // ── VIDEO/EXACT Boost Campaign (Sponsored Brands sheet) ──
           const videoCampName = `${productPrefix}-VIDEO/EXACT (Boost, ${kwShort})`;
           const videoAdGroupName = `${productPrefix} - Video Exact Boost`;
           const videoMediaId = VIDEO_MEDIA_IDS[productPrefix] || '';
-          if (videoMediaId) {
+          if (videoMediaId && videoTmpl && claimNewCampaign(videoCampName)) {
             // 1. Campaign Row
             sbRows.push({
               'Product': 'Sponsored Brands', 'Entity': 'Campaign', 'Operation': 'Create',
               'Campaign Id': videoCampName, 'Campaign Name': videoCampName, 'Portfolio Id': portfolioId,
               'Start Date': startDate, 'State': 'enabled',
-              'Budget Type': 'daily', 'Budget': '20',
+              'Budget Type': 'daily', 'Budget': String(videoTmpl.daily_budget ?? ''),
               'Bid Optimization': 'true',
               'Brand Entity Id': BRAND_ENTITY_ID, 'Brand Name': BRAND_NAME
             });
-            
+
             // 2. Ad Group Row
             sbRows.push({
               'Product': 'Sponsored Brands', 'Entity': 'Ad Group', 'Operation': 'Create',
@@ -823,9 +880,8 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           const spCampName = `${productPrefix}-SP/EXACT (Seasonal Peak - ${theme})`;
           const spAdGroupName = `${productPrefix} - Exact Peak (${theme})`;
           
-          // Deduplicate campaign creation
-          if (!createdPeakCampaigns.has(spCampName)) {
-            createdPeakCampaigns.add(spCampName);
+          // Deduplicate campaign creation (within export + against already-live campaigns)
+          if (claimNewCampaign(spCampName)) {
             spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Campaign', 'Operation': 'Create',
               'Campaign ID': spCampName, 'Campaign Name': spCampName, 'Portfolio ID': portfolioId, 'Daily Budget': '25', 'Targeting Type': 'MANUAL',
               'Bidding Strategy': 'Dynamic bids - down only', 'Start Date': startDate, 'State': 'ENABLED' });
