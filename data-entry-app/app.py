@@ -3337,6 +3337,33 @@ def update_po_product_line():
         
     return redirect(url_for('po_details', po_id=po_id))
 
+@app.route('/api/po/<po_id>', methods=['GET'])
+def api_po_get(po_id):
+    """Full PO detail (header aggregates + lines + linked payments + shipments) as JSON."""
+    try:
+        po, payments, shipments, product_lines = get_po_details(po_id)
+        if po is None:
+            return jsonify({'error': 'PO not found'}), 404
+
+        def _ser(rows):
+            out = []
+            for r in rows:
+                d = dict(r)
+                for k, v in d.items():
+                    if hasattr(v, 'isoformat'):
+                        d[k] = v.isoformat()
+                out.append(d)
+            return out
+
+        return jsonify({
+            'po': _ser([po])[0],
+            'product_lines': _ser(product_lines),
+            'payments': _ser(payments),
+            'shipments': _ser(shipments),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/po/<po_id>/lines', methods=['GET'])
 def api_po_lines_get(po_id):
     """API endpoint to get product lines for a PO (returns JSON)"""
