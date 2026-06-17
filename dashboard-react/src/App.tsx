@@ -1,8 +1,6 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
 import { useUnifiedData } from './hooks/useUnifiedData';
 import { CubeDataProvider, useCubeContext } from './hooks/data/CubeDataProvider';
-import { DATASET_LOADERS } from './hooks/useCubeData';
-import type { DatasetName } from './hooks/data/datasetTypes';
 import { useGroundTruth } from './hooks/useGroundTruth';
 import { useTheme } from './hooks/useTheme';
 import { FiltersProvider, useFilters } from './hooks/useFilters';
@@ -73,12 +71,7 @@ function AppWrapper() {
 function AppInner() {
   const { data, loading, fromCube } = useUnifiedData();
 
-  // PHASE 1 ONLY — preserves "load everything on mount" so this checkpoint has
-  // zero behavior change. Replaced by per-page loading in the next task.
-  const { ensureDatasets } = useCubeContext();
-  useEffect(() => {
-    ensureDatasets(Object.keys(DATASET_LOADERS) as DatasetName[]);
-  }, [ensureDatasets]);
+  const { ensurePage, isPageReady } = useCubeContext();
 
   const gt = useGroundTruth();
   const { mode: themeMode, toggle: toggleTheme } = useTheme();
@@ -92,6 +85,10 @@ function AppInner() {
   // In user view, admin-only pages fall back to home (derived, not state —
   // switching back to admin view returns to the original page)
   const visiblePage: PageId = isPageVisible(page, viewMode) ? page : 'home';
+
+  // Load only the datasets the current page needs (+ shell core). Cached, deduped.
+  useEffect(() => { ensurePage(visiblePage); }, [visiblePage, ensurePage]);
+  const pageReady = isPageReady(visiblePage);
 
   // Fetch alert count for sidebar badge
   useEffect(() => {
@@ -118,12 +115,13 @@ function AppInner() {
     if (expId) setExperimentId(expId);
   }, [setFilter]);
 
-  if (loading) {
+  if (loading || !pageReady) {
     return (
       <>
         <Header data={data} onNav={navigate} />
         <Sidebar activePage={visiblePage} activeFamily={filters.family} onNav={navigate} themeMode={themeMode} onToggleTheme={toggleTheme} />
         <main className="fixed top-14 left-[72px] right-0 bottom-0 overflow-y-auto px-8 py-5 pb-16 scroll-smooth">
+          <FilterBar data={data} page={page} />
           <DashboardSkeleton />
         </main>
       </>
