@@ -38,9 +38,13 @@ interface OpenPOLine {
 }
 
 interface AllocationRow extends OpenPOLine {
-  /** units to ship — user input, capped at remaining_quantity */
+  /** units to ship — source of truth, capped at remaining_quantity */
   qtyToShip: number;
-  /** cartons — optional user input */
+  /**
+   * cartons — two-way synced with qtyToShip when package_quantity
+   * (units-per-carton) is known: editing either field derives the other.
+   * Free-form, independent input when no conversion factor exists.
+   */
   cartons: string;
 }
 
@@ -182,7 +186,15 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
             Math.max(0, rawValue || 0),
             r.remaining_quantity,
           );
-          return { ...r, qtyToShip: clamped };
+          const pkg = r.package_quantity ?? 0;
+          // Two-way sync: derive cartons from qty when we know units/carton.
+          const cartons =
+            pkg > 0
+              ? clamped > 0
+                ? String(Math.ceil(clamped / pkg))
+                : ''
+              : r.cartons;
+          return { ...r, qtyToShip: clamped, cartons };
         }),
       );
     },
@@ -192,11 +204,22 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
   const updateCartons = useCallback(
     (poId: string, productId: number, value: string) => {
       setAllRows((prev) =>
-        prev.map((r) =>
-          r.purchase_order_id === poId && r.product_id === productId
-            ? { ...r, cartons: value }
-            : r,
-        ),
+        prev.map((r) => {
+          if (r.purchase_order_id !== poId || r.product_id !== productId)
+            return r;
+          const pkg = r.package_quantity ?? 0;
+          // No units-per-carton → cartons is a free, independent field.
+          if (pkg <= 0) return { ...r, cartons: value };
+
+          const n = parseInt(value, 10);
+          // Cleared / zero cartons → clear qty too.
+          if (isNaN(n) || n <= 0) return { ...r, cartons: '', qtyToShip: 0 };
+
+          // Derive qty from cartons, clamped to remaining (partial last carton).
+          const qty = Math.min(n * pkg, r.remaining_quantity);
+          // Re-derive cartons so the field reflects any clamp to remaining.
+          return { ...r, qtyToShip: qty, cartons: String(Math.ceil(qty / pkg)) };
+        }),
       );
     },
     [],
@@ -656,20 +679,27 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
 
                           {/* Cartons */}
                           <td className="px-3 py-2 text-center">
-                            <input
-                              type="number"
-                              min={0}
-                              value={row.cartons}
-                              placeholder="—"
-                              onChange={(e) =>
-                                updateCartons(
-                                  row.purchase_order_id,
-                                  row.product_id,
-                                  e.target.value,
-                                )
-                              }
-                              className="w-16 rounded border border-border bg-surface px-2 py-1 text-xs text-heading font-mono text-center focus:outline-none focus:ring-1 focus:ring-blue-500/50"
-                            />
+                            <div className="flex flex-col items-center gap-0.5">
+                              <input
+                                type="number"
+                                min={0}
+                                value={row.cartons}
+                                placeholder="—"
+                                onChange={(e) =>
+                                  updateCartons(
+                                    row.purchase_order_id,
+                                    row.product_id,
+                                    e.target.value,
+                                  )
+                                }
+                                className="w-16 rounded border border-border bg-surface px-2 py-1 text-xs text-heading font-mono text-center focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                              />
+                              {row.package_quantity && row.package_quantity > 0 ? (
+                                <span className="text-[9px] text-faint font-mono leading-none">
+                                  ×{row.package_quantity.toLocaleString()}/ctn
+                                </span>
+                              ) : null}
+                            </div>
                           </td>
                         </tr>
                       );
