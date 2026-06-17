@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Card } from './Card';
 import { Badge, ActionBadge } from './Badge';
 import { cubeLoad } from '../hooks/useCubeData';
-import { fM } from '../utils';
+import { fM, fR, fCpc, fmt } from '../utils';
 import { ChevronDown, ChevronRight, Target, TrendingUp, TrendingDown, Clock, HelpCircle } from 'lucide-react';
 
 /* ─── Decision Scorecard — close the loop on applied PPC changes ───
@@ -35,6 +35,15 @@ interface OutcomeRow {
   post_orders: number;
   post_net_roas: number | null;
   post_orders_per_day: number | null;
+  // 7-day daily averages (post normalised over days elapsed) for the detail panel
+  pre_net_profit_per_day: number;
+  post_net_profit_per_day: number | null;
+  pre_spend_per_day: number;
+  post_spend_per_day: number | null;
+  pre_units_per_day: number;
+  post_units_per_day: number | null;
+  pre_cpc: number | null;
+  post_cpc: number | null;
   net_roas_delta: number;
   weekly_savings: number;
   expected_impact_weekly: number | null;
@@ -60,6 +69,10 @@ async function loadOutcomes(): Promise<OutcomeRow[]> {
       'PpcActionOutcomes.preNetProfit', 'PpcActionOutcomes.preOrdersPerDay',
       'PpcActionOutcomes.postSpend', 'PpcActionOutcomes.postOrders', 'PpcActionOutcomes.postNetRoas',
       'PpcActionOutcomes.postOrdersPerDay',
+      'PpcActionOutcomes.preNetProfitPerDay', 'PpcActionOutcomes.postNetProfitPerDay',
+      'PpcActionOutcomes.preSpendPerDay', 'PpcActionOutcomes.postSpendPerDay',
+      'PpcActionOutcomes.preUnitsPerDay', 'PpcActionOutcomes.postUnitsPerDay',
+      'PpcActionOutcomes.preCpc', 'PpcActionOutcomes.postCpc',
       'PpcActionOutcomes.netRoasDelta', 'PpcActionOutcomes.weeklySavings',
       'PpcActionOutcomes.expectedImpactWeekly', 'PpcActionOutcomes.expectedImpactKind',
       'PpcActionOutcomes.actualWeeklyImpact', 'PpcActionOutcomes.targetStatus',
@@ -92,6 +105,14 @@ async function loadOutcomes(): Promise<OutcomeRow[]> {
     post_orders: num(r['PpcActionOutcomes.postOrders']),
     post_net_roas: numOrNull(r['PpcActionOutcomes.postNetRoas']),
     post_orders_per_day: numOrNull(r['PpcActionOutcomes.postOrdersPerDay']),
+    pre_net_profit_per_day: num(r['PpcActionOutcomes.preNetProfitPerDay']),
+    post_net_profit_per_day: numOrNull(r['PpcActionOutcomes.postNetProfitPerDay']),
+    pre_spend_per_day: num(r['PpcActionOutcomes.preSpendPerDay']),
+    post_spend_per_day: numOrNull(r['PpcActionOutcomes.postSpendPerDay']),
+    pre_units_per_day: num(r['PpcActionOutcomes.preUnitsPerDay']),
+    post_units_per_day: numOrNull(r['PpcActionOutcomes.postUnitsPerDay']),
+    pre_cpc: numOrNull(r['PpcActionOutcomes.preCpc']),
+    post_cpc: numOrNull(r['PpcActionOutcomes.postCpc']),
     net_roas_delta: num(r['PpcActionOutcomes.netRoasDelta']),
     weekly_savings: num(r['PpcActionOutcomes.weeklySavings']),
     expected_impact_weekly: numOrNull(r['PpcActionOutcomes.expectedImpactWeekly']),
@@ -107,7 +128,7 @@ function verdictSentence(r: OutcomeRow): string {
   const roas = (v: number | null) => (v == null ? '—' : v.toFixed(2));
 
   if (r.verdict === 'TOO_EARLY') {
-    return `${r.post_days_elapsed} of 14 post-change days in — verdict pending`;
+    return `${r.post_days_elapsed} of 7 post-change days in — verdict pending`;
   }
   if (r.verdict === 'NO_DATA') {
     if (r.action_group === 'PROMOTE')
@@ -156,9 +177,59 @@ const VERDICT_META: Record<OutcomeRow['verdict'], { color: string; icon: typeof 
   NO_DATA: { color: 'text-zinc-500', icon: HelpCircle, label: 'No data' },
 };
 
+/* ─── Per-change detail: 7-day daily averages, pre vs post ─── */
+function OutcomeDetail({ r }: { r: OutcomeRow }) {
+  const n = r.post_days_elapsed;
+  const measures: {
+    label: string;
+    pre: number | null;
+    post: number | null;
+    fmt: (v: number | null) => string;
+    betterWhen: 'higher' | 'lower' | 'neutral';
+  }[] = [
+    { label: 'Net profit / day', pre: r.pre_net_profit_per_day, post: r.post_net_profit_per_day, fmt: fM, betterWhen: 'higher' },
+    { label: 'Ad spend / day', pre: r.pre_spend_per_day, post: r.post_spend_per_day, fmt: fM, betterWhen: 'neutral' },
+    { label: 'Units / day', pre: r.pre_units_per_day, post: r.post_units_per_day, fmt: (v) => fmt(v, 1), betterWhen: 'higher' },
+    { label: 'CPC', pre: r.pre_cpc, post: r.post_cpc, fmt: fCpc, betterWhen: 'lower' },
+    { label: 'Net ROAS', pre: r.pre_net_roas, post: r.post_net_roas, fmt: fR, betterWhen: 'higher' },
+  ];
+  return (
+    <div className="px-4 py-3 bg-surface/40 border-t border-border-faint">
+      <div className="text-[9px] uppercase tracking-wide text-faint font-mono mb-2">
+        7-day daily averages — pre vs post · {n}/7 post-days settled
+      </div>
+      <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr] gap-x-4 gap-y-1 text-[10px]">
+        <div className="text-faint font-mono">measure</div>
+        <div className="text-faint font-mono text-right">pre (7d)</div>
+        <div className="text-faint font-mono text-right">post ({n}d)</div>
+        <div className="text-faint font-mono text-right">Δ</div>
+        {measures.map(m => {
+          const hasBoth = m.pre != null && m.post != null;
+          const delta = hasBoth ? (m.post as number) - (m.pre as number) : null;
+          const good =
+            delta == null || m.betterWhen === 'neutral' ? null
+            : m.betterWhen === 'higher' ? delta >= 0 : delta <= 0;
+          const deltaColor = good == null ? 'text-muted' : good ? 'text-emerald-400' : 'text-red-400';
+          return (
+            <Fragment key={m.label}>
+              <div className="text-subtle">{m.label}</div>
+              <div className="text-text font-mono text-right">{m.fmt(m.pre)}</div>
+              <div className="text-text font-mono text-right">{m.post == null ? '…' : m.fmt(m.post)}</div>
+              <div className={`font-mono text-right ${deltaColor}`}>
+                {delta == null ? '—' : (delta >= 0 ? '+' : '−') + m.fmt(Math.abs(delta))}
+              </div>
+            </Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function DecisionScorecard() {
   const [rows, setRows] = useState<OutcomeRow[] | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -234,12 +305,15 @@ export function DecisionScorecard() {
             + (bidChange ? ` · ${r.new_budget != null ? 'budget' : 'bid'} ${bidChange}` : '')
             + (r.coach_mode ? ` · ${r.coach_mode}` : '')
             + ` · ${verdictSentence(r)}`;
-          const prevWk = r.pre_net_profit / 2;
+          const prevWk = r.pre_net_profit; // 7-day pre window = one week
+          const npPost = r.post_net_profit_per_day;
+          const npUp = npPost != null && npPost >= r.pre_net_profit_per_day;
+          const isOpen = openId === r.change_id;
           const isEarn = r.expected_impact_kind === 'earn';
           const statusLine =
             r.target_status === 'TARGET_MET' ? 'MET — actual met or beat the promise.'
             : r.target_status === 'BELOW_TARGET' ? 'BELOW — actual came in under the promise.'
-            : `TOO EARLY — needs ≥3 settled post-change days (2-day attribution lag); ${r.post_days_elapsed}/14 so far.`;
+            : `TOO EARLY — needs all 7 settled post-change days (2-day attribution lag); ${r.post_days_elapsed}/7 so far.`;
           const targetTooltip = isEarn
             ? `NET PROFIT per week — direct ad-attributed: margin × units − ad spend (no organic/repeat halo).\n`
               + `• prev ${fM(prevWk)}/wk = this keyword's weekly net profit in the window BEFORE the change (0 if new).\n`
@@ -250,13 +324,32 @@ export function DecisionScorecard() {
               + `• target ${fM(r.expected_impact_weekly ?? 0)}/wk = the weekly loss/burn this change should stop.\n`
               + `• Verdict: ${statusLine} Counts as met at ≥80% of target, graded on real Amazon data.`;
           return (
-            <div key={r.change_id} className="flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-card-hover transition-colors" title={fullDetail}>
+            <div key={r.change_id}>
+            <div
+              onClick={() => setOpenId(p => (p === r.change_id ? null : r.change_id))}
+              className="flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-card-hover transition-colors cursor-pointer"
+              title={fullDetail}
+            >
+              {isOpen
+                ? <ChevronDown size={11} className="text-faint shrink-0" />
+                : <ChevronRight size={11} className="text-faint shrink-0" />}
               <Icon size={13} className={`${meta.color} shrink-0`} />
               <ActionBadge action={r.action} />
               <span className="font-semibold text-[var(--color-text)] shrink-0 max-w-[180px] truncate" title={entity}>"{entity}"</span>
               {bidChange && (
                 <span className="text-[9px] font-mono text-muted shrink-0 px-1.5 py-0.5 rounded bg-surface border border-border-faint">{bidChange}</span>
               )}
+              <span
+                className="text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded bg-surface border border-border-faint"
+                title="Net profit / day — pre 7-day avg → post avg (over days elapsed)"
+              >
+                <span className="text-faint">NP/d </span>
+                <span className="text-muted">{fM(r.pre_net_profit_per_day)}</span>
+                <span className="text-faint">→</span>
+                <span className={npPost == null ? 'text-faint' : npUp ? 'text-emerald-400' : 'text-red-400'}>
+                  {npPost == null ? '…' : fM(npPost)}
+                </span>
+              </span>
               <span className="text-subtle flex-1 min-w-0 truncate" title={verdictSentence(r)}>
                 {verdictSentence(r)}
               </span>
@@ -268,7 +361,7 @@ export function DecisionScorecard() {
                     ? 'text-red-400 border-red-800 bg-red-950/30'
                     : 'text-zinc-500 border-zinc-700 bg-zinc-900/30'
                 }`}>
-                  prev {fM(r.pre_net_profit / 2)}/wk → target {fM(r.expected_impact_weekly)}/wk →{' '}
+                  prev {fM(prevWk)}/wk → target {fM(r.expected_impact_weekly)}/wk →{' '}
                   {r.target_status === 'TARGET_MET' ? '✓ met' : r.target_status === 'BELOW_TARGET' ? '✗ below' : '… early'}
                 </span>
               )}
@@ -281,6 +374,8 @@ export function DecisionScorecard() {
               <span className="text-[10px] text-faint font-mono shrink-0 w-16 text-right">
                 {r.applied_at ? new Date(r.applied_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
               </span>
+            </div>
+            {isOpen && <OutcomeDetail r={r} />}
             </div>
           );
         })}

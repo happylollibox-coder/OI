@@ -2,16 +2,17 @@
 -- V_PPC_ACTION_OUTCOMES — Outcome scoring for applied PPC changes
 -- =============================================
 -- One row per change_id from FACT_PPC_CHANGE_LOG (last 180 days).
--- Compares a 14-day pre window vs a 14-day post window of
+-- Compares a 7-day pre window vs a 7-day post window of
 -- spend / orders / net ROAS from FACT_AMAZON_ADS at the scope that
 -- matches the action (term / target / campaign), and emits a verdict:
 --   IMPROVED / WORSE / NO_DATA / TOO_EARLY
 --
 -- Windows (LA-local dates; change day itself excluded):
 --   change_date  = DATE(applied_at, 'America/Los_Angeles')
---   pre          = [change_date-14, change_date-1]
---   post         = [change_date+1, LEAST(change_date+14, data_cutoff)]
+--   pre          = [change_date-7, change_date-1]
+--   post         = [change_date+1, LEAST(change_date+7, data_cutoff)]
 --   data_cutoff  = CURRENT_DATE(LA) - 2  (ads attribution lag)
+--   Verdict stays TOO_EARLY until all 7 post-days settle (~9 cal days).
 --
 -- Net ROAS mirrors V_ADS_COACH_DATA (direct ad-attributed, no halo):
 --   margin_per_unit = listing_price - latest TOTAL_COST_PER_UNIT
@@ -105,6 +106,7 @@ scoped AS (
     fa.Ads_orders AS orders,
     fa.Ads_units AS units,
     fa.Ads_sales AS sales,
+    fa.Ads_clicks AS clicks,
     -- Coach margin semantics with the coach's own fallback
     COALESCE(
       ae.margin_per_unit,
@@ -112,8 +114,8 @@ scoped AS (
     ) * fa.Ads_units AS net_profit_contrib
   FROM changes ch
   JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa
-    ON fa.date BETWEEN DATE_SUB(ch.change_date, INTERVAL 14 DAY)
-                   AND DATE_ADD(ch.change_date, INTERVAL 14 DAY)
+    ON fa.date BETWEEN DATE_SUB(ch.change_date, INTERVAL 7 DAY)
+                   AND DATE_ADD(ch.change_date, INTERVAL 7 DAY)
    AND (
      -- Term scope within campaign: negates / stop-term / un-negates (re-allowed terms)
      (ch.action_group IN ('NEGATE', 'UNNEGATE')
@@ -143,11 +145,12 @@ scoped AS (
 windows AS (
   SELECT
     change_id,
-    -- Pre window (always 14 days)
+    -- Pre window (always 7 days)
     SUM(IF(bucket = 'PRE', spend, 0))  AS pre_spend,
     SUM(IF(bucket = 'PRE', orders, 0)) AS pre_orders,
     SUM(IF(bucket = 'PRE', units, 0))  AS pre_units,
     SUM(IF(bucket = 'PRE', sales, 0))  AS pre_sales,
+    SUM(IF(bucket = 'PRE', clicks, 0)) AS pre_clicks,
     SUM(IF(bucket = 'PRE', net_profit_contrib, 0)) AS pre_margin,
     COUNTIF(bucket = 'PRE')  AS pre_rows,
     -- Post window (may be partial — normalize via post_days_elapsed)
@@ -155,6 +158,7 @@ windows AS (
     SUM(IF(bucket = 'POST', orders, 0)) AS post_orders,
     SUM(IF(bucket = 'POST', units, 0))  AS post_units,
     SUM(IF(bucket = 'POST', sales, 0))  AS post_sales,
+    SUM(IF(bucket = 'POST', clicks, 0)) AS post_clicks,
     SUM(IF(bucket = 'POST', net_profit_contrib, 0)) AS post_margin,
     COUNTIF(bucket = 'POST') AS post_rows
   FROM scoped
@@ -166,25 +170,27 @@ scored AS (
   SELECT
     ch.*,
     GREATEST(DATE_DIFF(
-      LEAST(DATE_ADD(ch.change_date, INTERVAL 14 DAY),
+      LEAST(DATE_ADD(ch.change_date, INTERVAL 7 DAY),
             DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 2 DAY)),
       ch.change_date, DAY), 0) AS post_days_elapsed,
     COALESCE(w.pre_spend, 0)  AS pre_spend,
     COALESCE(w.pre_orders, 0) AS pre_orders,
     COALESCE(w.pre_units, 0)  AS pre_units,
     COALESCE(w.pre_sales, 0)  AS pre_sales,
+    COALESCE(w.pre_clicks, 0) AS pre_clicks,
     COALESCE(w.pre_rows, 0)   AS pre_rows,
     COALESCE(w.post_spend, 0)  AS post_spend,
     COALESCE(w.post_orders, 0) AS post_orders,
     COALESCE(w.post_units, 0)  AS post_units,
     COALESCE(w.post_sales, 0)  AS post_sales,
+    COALESCE(w.post_clicks, 0) AS post_clicks,
     COALESCE(w.post_rows, 0)   AS post_rows,
     ROUND(SAFE_DIVIDE(w.pre_margin,  NULLIF(w.pre_spend, 0)), 2)  AS pre_net_roas,
     ROUND(SAFE_DIVIDE(w.post_margin, NULLIF(w.post_spend, 0)), 2) AS post_net_roas,
     ROUND(COALESCE(w.pre_margin, 0)  - COALESCE(w.pre_spend, 0), 2)  AS pre_net_profit,
     ROUND(COALESCE(w.post_margin, 0) - COALESCE(w.post_spend, 0), 2) AS post_net_profit,
-    ROUND(COALESCE(w.pre_spend, 0) / 14, 2)  AS pre_spend_per_day,
-    ROUND(COALESCE(w.pre_orders, 0) / 14, 2) AS pre_orders_per_day
+    ROUND(COALESCE(w.pre_spend, 0) / 7, 2)  AS pre_spend_per_day,
+    ROUND(COALESCE(w.pre_orders, 0) / 7, 2) AS pre_orders_per_day
   FROM changes ch
   LEFT JOIN windows w USING (change_id)
 )
@@ -193,11 +199,21 @@ SELECT
   s.* EXCEPT (pre_rows, post_rows),
   ROUND(SAFE_DIVIDE(s.post_spend,  NULLIF(s.post_days_elapsed, 0)), 2) AS post_spend_per_day,
   ROUND(SAFE_DIVIDE(s.post_orders, NULLIF(s.post_days_elapsed, 0)), 2) AS post_orders_per_day,
+  -- Daily averages for the scorecard detail panel.
+  -- Pre window is a full 7 days; post window is partial until 7 days settle.
+  ROUND(s.pre_net_profit / 7, 2)                                           AS pre_net_profit_per_day,
+  ROUND(SAFE_DIVIDE(s.post_net_profit, NULLIF(s.post_days_elapsed, 0)), 2) AS post_net_profit_per_day,
+  ROUND(s.pre_units / 7, 2)                                                AS pre_units_per_day,
+  ROUND(SAFE_DIVIDE(s.post_units, NULLIF(s.post_days_elapsed, 0)), 2)      AS post_units_per_day,
+  -- CPC is a window-level ratio (spend / clicks), not a per-day average.
+  ROUND(SAFE_DIVIDE(s.pre_spend,  NULLIF(s.pre_clicks, 0)), 2)             AS pre_cpc,
+  ROUND(SAFE_DIVIDE(s.post_spend, NULLIF(s.post_clicks, 0)), 2)            AS post_cpc,
   -- "saved $Y/wk" for negate-style actions: the pre-window weekly burn rate
-  ROUND(s.pre_spend / 14 * 7, 2) AS weekly_savings,
+  -- (pre window is 7 days, so the 7-day total IS the weekly rate).
+  ROUND(s.pre_spend, 2) AS weekly_savings,
   ROUND(COALESCE(s.post_net_roas, 0) - COALESCE(s.pre_net_roas, 0), 2) AS net_roas_delta,
   CASE
-    -- Not enough post-window signal yet (full confidence at 14 days)
+    -- Not enough post-window signal yet (verdict final once all 7 post-days settle)
     WHEN s.post_days_elapsed < 7 THEN 'TOO_EARLY'
     -- Nothing matched in either window / promoted|re-allowed keyword never went live
     WHEN s.pre_rows = 0 AND s.post_rows = 0 THEN 'NO_DATA'
@@ -222,14 +238,14 @@ SELECT
     -- Bid up / budget up: more volume, efficiency may dip at most 20%
     WHEN s.action_group IN ('BID_UP', 'BUDGET_UP') THEN
       CASE WHEN SAFE_DIVIDE(s.post_orders, NULLIF(s.post_days_elapsed, 0))
-                  >= s.pre_orders / 14
+                  >= s.pre_orders / 7
              AND COALESCE(s.post_net_roas, 0) >= COALESCE(s.pre_net_roas, 0) * 0.8
            THEN 'IMPROVED' ELSE 'WORSE' END
 
     -- Promote: must produce profitable volume
     WHEN s.action_group = 'PROMOTE' THEN
       CASE WHEN SAFE_DIVIDE(s.post_orders, NULLIF(s.post_days_elapsed, 0))
-                  > s.pre_orders / 14
+                  > s.pre_orders / 7
              AND COALESCE(s.post_net_roas, 0) >= 1.0
            THEN 'IMPROVED' ELSE 'WORSE' END
 
@@ -252,7 +268,7 @@ SELECT
   --  earning the expected $/wk" without inventing new data.
   CASE
     WHEN s.expected_impact_kind = 'save'
-      THEN ROUND(s.pre_spend / 14 * 7, 2)
+      THEN ROUND(s.pre_spend, 2)
     WHEN s.expected_impact_kind = 'earn'
       -- post_net_profit = post_margin − post_spend (computed in scored CTE)
       -- Weekly rate: post_net_profit / post_days_elapsed * 7
@@ -264,7 +280,7 @@ SELECT
     WHEN s.expected_impact_weekly IS NULL THEN 'NO_TARGET'
     WHEN s.post_days_elapsed < 7          THEN 'TOO_EARLY'
     WHEN s.expected_impact_kind = 'save'
-      THEN IF(ROUND(s.pre_spend / 14 * 7, 2) >= s.expected_impact_weekly * 0.8,
+      THEN IF(ROUND(s.pre_spend, 2) >= s.expected_impact_weekly * 0.8,
               'TARGET_MET', 'BELOW_TARGET')
     WHEN s.expected_impact_kind = 'earn'
       -- actual weekly net-profit rate >= 80% of target

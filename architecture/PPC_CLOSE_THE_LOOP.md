@@ -78,12 +78,15 @@ Timezone note (per the layered model): `applied_at` is a UTC `TIMESTAMP`;
 | Window | Range (LA dates) |
 |---|---|
 | `change_date` | `DATE(applied_at, 'America/Los_Angeles')` — excluded from both windows |
-| Pre | `[change_date − 14d, change_date − 1d]` |
-| Post | `[change_date + 1d, change_date + 14d]`, additionally capped at `data_cutoff` |
+| Pre | `[change_date − 7d, change_date − 1d]` |
+| Post | `[change_date + 1d, change_date + 7d]`, additionally capped at `data_cutoff` |
 | `data_cutoff` | `CURRENT_DATE('America/Los_Angeles') − 2d` — excludes the ads attribution lag (1–2 days per Ori 2026-05-17; the Coach's "4-day lag" doc note is a conservative buffer, see `ADS_COACH_DECISION_MATRIX.md`) |
 
-`post_days_elapsed = DATE_DIFF(LEAST(change_date + 14, data_cutoff), change_date, DAY)` (≥ 0).
+`post_days_elapsed = DATE_DIFF(LEAST(change_date + 7, data_cutoff), change_date, DAY)` (≥ 0).
 Pre/post metrics are compared as **per-day rates** so a partial post window is still comparable.
+The pre window is a full 7 days, so its 7-day total equals the weekly rate (`weekly_savings = pre_spend`).
+The view also emits per-day averages (`pre/post_net_profit_per_day`, `pre/post_units_per_day`) and
+window-level CPC (`pre/post_cpc = spend / clicks`) for the scorecard detail panel.
 
 ### Scope — which FACT_AMAZON_ADS rows count
 
@@ -115,7 +118,7 @@ metric that fired the threshold (gotchas #1 and #5 in the oi-data-analyst skill)
 
 `TOO_EARLY` and `NO_DATA` always take precedence:
 
-- `TOO_EARLY` — `post_days_elapsed < 7` (full confidence at 14).
+- `TOO_EARLY` — `post_days_elapsed < 7` (verdict final once all 7 post-days settle, ~9 cal days post-change).
 - `NO_DATA` — no FACT rows matched in either window (or, for `PROMOTE`/`UNNEGATE`, no post spend:
   the promoted/re-allowed keyword never went live).
 
