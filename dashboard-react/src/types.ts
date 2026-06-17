@@ -767,6 +767,9 @@ export interface CoachDecisionRow {
   priority_score: number;
   confidence: string;
   reason: string;
+  research_rank: number | null;
+  source_keyword: string | null;
+  source_keyword_match_type: string | null;
 }
 
 export interface ActionRow {

@@ -1372,6 +1372,9 @@ async function loadCoachDecisionsFromCube(): Promise<CoachDecisionRow[]> {
       'AdsCoachDecision.signal', 'AdsCoachDecision.decision',
       'AdsCoachDecision.priorityScore', 'AdsCoachDecision.confidence',
       'AdsCoachDecision.reason',
+      // Display: research rank + top-spend source targeting
+      'AdsCoachDecision.researchRank', 'AdsCoachDecision.sourceKeyword',
+      'AdsCoachDecision.sourceKeywordMatchType',
       // 7d activity
       'AdsCoachDecision.adsImpressions7d', 'AdsCoachDecision.adsSpend7d',
       'AdsCoachDecision.adsActiveLast7d',
@@ -1459,6 +1462,9 @@ async function loadCoachDecisionsFromCube(): Promise<CoachDecisionRow[]> {
       priority_score: n('AdsCoachDecision.priorityScore'),
       confidence: s('AdsCoachDecision.confidence'),
       reason: s('AdsCoachDecision.reason'),
+      research_rank: nul('AdsCoachDecision.researchRank'),
+      source_keyword: r['AdsCoachDecision.sourceKeyword'] != null ? String(r['AdsCoachDecision.sourceKeyword']) : null,
+      source_keyword_match_type: r['AdsCoachDecision.sourceKeywordMatchType'] != null ? String(r['AdsCoachDecision.sourceKeywordMatchType']) : null,
     };
   });
 }
