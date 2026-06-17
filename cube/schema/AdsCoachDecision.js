@@ -105,5 +105,10 @@ cube(`AdsCoachDecision`, {
     priorityScore: { sql: `priority_score`, type: `number` },
     confidence: { sql: `confidence`, type: `string` },
     reason: { sql: `reason`, type: `string` },
+
+    // Display: research fit rank (0-100) + top-spend 4w source targeting
+    researchRank: { sql: `research_rank`, type: `number` },
+    sourceKeyword: { sql: `source_keyword`, type: `string` },
+    sourceKeywordMatchType: { sql: `source_keyword_match_type`, type: `string` },
   },
 });
