@@ -197,6 +197,32 @@ sqp_ly_peak AS (
   GROUP BY 1, 2
 ),
 
+-- Top-spend targeting per term (4w) — "where this term's money comes from"
+src_kw_4w AS (
+  SELECT search_term, source_keyword, source_keyword_match_type
+  FROM (
+    SELECT
+      LOWER(fa.search_term) AS search_term,
+      fa.targeting          AS source_keyword,
+      ANY_VALUE(fa.targeting_type) AS source_keyword_match_type,
+      SUM(fa.Ads_cost) AS spend
+    FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+    WHERE fa.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 28 DAY)
+      AND fa.search_term IS NOT NULL AND fa.search_term != ''
+      AND fa.targeting   IS NOT NULL AND fa.targeting   != ''
+      AND LOWER(fa.targeting) != LOWER(fa.search_term)   -- suppress exact-self
+    GROUP BY LOWER(fa.search_term), fa.targeting
+  )
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY search_term ORDER BY spend DESC) = 1
+),
+
+-- Research rank deduped to one row per (family, query) — fanout safeguard
+research_rank_1 AS (
+  SELECT parent_name, LOWER(query_text) AS query_text, rank AS research_rank
+  FROM `onyga-482313.OI.FACT_RESEARCH_RANKED`
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY parent_name, LOWER(query_text) ORDER BY rank DESC) = 1
+),
+
 -- =============================================
 -- Assemble per term × ASIN (will pick best ASIN below)
 -- =============================================
@@ -542,9 +568,14 @@ SELECT
                 CAST(t.ads_orders_4w AS STRING), ' orders (ROAS ',
                 CAST(COALESCE(ROUND(t.ads_net_roas_4w, 2), 0) AS STRING), '). ',
                 CAST(t.selling_campaigns_4w AS STRING), '/', CAST(t.campaign_count_4w AS STRING), ' campaigns selling. Monitoring.')
-  END as reason
+  END as reason,
+  ROUND(rr.research_rank) AS research_rank,
+  sk.source_keyword,
+  sk.source_keyword_match_type
 
 FROM term_asin t
 CROSS JOIN coach_thresholds th
 LEFT JOIN plan_target pt ON t.parent_name = pt.family
+LEFT JOIN src_kw_4w sk ON sk.search_term = t.search_term
+LEFT JOIN research_rank_1 rr ON rr.parent_name = t.parent_name AND rr.query_text = t.search_term
 WHERE t.asin_rank = 1;
