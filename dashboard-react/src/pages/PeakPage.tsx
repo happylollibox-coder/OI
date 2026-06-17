@@ -10,7 +10,7 @@ import { Card } from '../components/Card';
 import { Empty } from '../components/Empty';
 import { Th, MEASURE_TIPS } from '../components/Tooltip';
 import { ChevronRight, ChevronDown, Calendar, TrendingUp, Zap } from 'lucide-react';
-import { fM, fP, fOrd, fR, fClk, famFromType } from '../utils';
+import { fM, fP, fOrd, fR, fClk, famFromType, formatDateRange } from '../utils';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
 import { useProductFamily } from '../hooks/useProductFamily';
@@ -1869,9 +1869,10 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
   const summary = data.summary || [];
   const totalSales7d = summary.reduce((s, r) => s + (r.sales_7d || 0), 0);
   const totalOrders7d = summary.reduce((s, r) => s + (r.orders_7d || 0), 0);
+  const run7dRange = summary[0]?.period_start && summary[0]?.period_end ? formatDateRange(summary[0].period_start, summary[0].period_end) : '';
   out.peak_sales_estimate = {
     status: 'info',
-    summary: `Current weekly run rate: ${fM(totalSales7d)} / ${fOrd(totalOrders7d)}`,
+    summary: `Current weekly run rate: ${fM(totalSales7d)} / ${fOrd(totalOrders7d)}${run7dRange ? ` (${run7dRange})` : ''}`,
     columns: ['Family', 'Sales 7d', 'Orders 7d', 'Ads ROAS', 'Projected 4wk'],
     rows: summary.map(r => {
       const fam = famFromType(r.product_type) || r.product_type;

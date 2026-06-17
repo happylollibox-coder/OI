@@ -70,6 +70,47 @@ export function weekRangeLabelCapped(weekStart: string, dataMaxDate?: string): s
   return f(d) + ' – ' + f(effectiveEnd);
 }
 
+/**
+ * Number of days a period covers, for daily-average normalization.
+ * - Completed periods → full calendar length (week 7, month its days, quarter its days, year 365/366).
+ * - In-progress period → ELAPSED days through the orders watermark (dataMaxDate), inclusive,
+ *   so the partial current period is comparable to prior full periods.
+ * periodKey formats: weeks 'YYYY-MM-DD' (week start), month 'YYYY-MM', quarter 'YYYY-Q#', year 'YYYY'.
+ */
+export function periodDayCount(periodKey: string, mode: string, dataMaxDate?: string): number {
+  if (!periodKey) return 1;
+  let start: Date;
+  let calEnd: Date;
+  if (mode === 'weeks') {
+    start = new Date(periodKey + 'T00:00:00Z');
+    calEnd = new Date(start);
+    calEnd.setUTCDate(calEnd.getUTCDate() + 6);
+  } else if (mode === 'month') {
+    const [y, m] = periodKey.split('-').map(Number);
+    start = new Date(Date.UTC(y, m - 1, 1));
+    calEnd = new Date(Date.UTC(y, m, 0)); // day 0 of next month = last day of this month
+  } else if (mode === 'quarter') {
+    const [yStr, qStr] = periodKey.split('-Q');
+    const y = Number(yStr);
+    const startMonth = (Number(qStr) - 1) * 3;
+    start = new Date(Date.UTC(y, startMonth, 1));
+    calEnd = new Date(Date.UTC(y, startMonth + 3, 0));
+  } else if (mode === 'year') {
+    const y = Number(periodKey);
+    start = new Date(Date.UTC(y, 0, 1));
+    calEnd = new Date(Date.UTC(y, 11, 31));
+  } else {
+    return 1; // 'date' mode = a single day
+  }
+  let end = calEnd;
+  if (dataMaxDate) {
+    const dm = new Date(dataMaxDate + 'T00:00:00Z');
+    if (dm < end) end = dm;
+  }
+  const days = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+  return Math.max(1, days);
+}
+
 /** Returns the Sunday of the current week as YYYY-MM-DD (Sunday-start week, matching DIM_TIME). */
 export function getCurrentWeekStart(): string {
   const now = new Date();

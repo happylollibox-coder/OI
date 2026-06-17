@@ -10,7 +10,7 @@ import { Th, SortTh, useSort, MEASURE_TIPS } from '../components/Tooltip';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
 import { Section } from '../components/Section';
 import { PageHeader } from '../components/PageHeader';
-import { fM, fP, fOrd, fR, fClk, fCpc, famFromType, weekRangeLabel, weekRangeLabelCapped, sqpCoverageWeeks, latestSqpWeek, periodKey, periodLabel, periodModeLabel, latestPeriodLabel, getPeriodsToInclude } from '../utils';
+import { fM, fP, fOrd, fR, fClk, fCpc, famFromType, weekRangeLabel, weekRangeLabelCapped, formatDateRange, sqpCoverageWeeks, latestSqpWeek, periodKey, periodLabel, periodModeLabel, latestPeriodLabel, getPeriodsToInclude } from '../utils';
 import { filterBySeasonality } from '../seasonality';
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
@@ -886,6 +886,11 @@ export function FamilyPage({ data, family, onNavExperiment }: {
       )}
 
       {/* KPIs */}
+      {!selectedSqpTerm && filters.periodMode === 'weeks' && sm?.period_start && sm?.period_end && (
+        <div className="text-[11px] font-mono text-faint mb-1.5" title="Window ends on the last date with complete orders/sales data (not the ads date, which runs ~1 day ahead).">
+          Counting {formatDateRange(sm.period_start, sm.period_end)} · 7 days thru last complete orders day
+        </div>
+      )}
       <div className="grid grid-cols-5 gap-3.5 mb-6">
         {selectedSqpTerm ? (() => {
           // Keyword-specific KPIs from filtered SQP + ads data

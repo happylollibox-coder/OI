@@ -14,7 +14,7 @@ import { PriceScenarioCard } from '../components/PriceScenarioCard';
 import { AlertsSummaryCard } from '../components/AlertsSummaryCard';
 import { useFilters } from '../hooks/useFilters';
 import {
-  famFromType, weekRangeLabel, getPeriodsToInclude,
+  famFromType, weekRangeLabelCapped, getPeriodsToInclude, periodDayCount,
   shiftYear, fM, fP, fR, fShort, fmt, experimentMatchesFamily, addDays
 } from '../utils';
 import { filterBySeasonality } from '../seasonality';
@@ -360,10 +360,19 @@ function resolveValue(bucket: Bucket, id: string): number {
   return b.sum;
 }
 
+/* ── Daily-average ("per day") mode ── */
+// Ratio / per-unit / rate measures — NOT divided by days in per-day mode (already length-independent).
+// (Additive sums like sales, orders, ad_cost, net_profit, units, clicks, sessions ARE divided.)
+const RATIO_KPI_IDS = new Set(['net_roas', 'tacos', 'np_per_unit', 'margin_pct', 'ads_acos', 'ads_cpc', 'ads_cvr', 'ads_ctr', 'plan_vs_actual']);
+const PER_DAY_STORAGE_KEY = 'oi_kpi_per_day';
+function loadPerDay(): boolean { try { return localStorage.getItem(PER_DAY_STORAGE_KEY) === '1'; } catch { return false; } }
+
 /* ── Main component ── */
 export function KpiPage({ data }: { data: DashboardData }) {
   const { filters } = useFilters();
   const periodMode = filters.periodMode;
+  const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
+  const [perDay, setPerDay] = useState<boolean>(loadPerDay);
   const [selectedIds, setSelectedIds] = useState<string[]>(loadSelection);
   const [showCustomize, setShowCustomize] = useState(false);
   const [paretoIds, setParetoIds] = useState<ParetoCardId[]>(loadPareto);
@@ -377,6 +386,7 @@ export function KpiPage({ data }: { data: DashboardData }) {
   useEffect(() => { saveSpecials(specialIds); }, [specialIds]);
   useEffect(() => { saveMeasures(measureIds); }, [measureIds]);
   useEffect(() => { saveCardSizes(cardSizes); }, [cardSizes]);
+  useEffect(() => { try { localStorage.setItem(PER_DAY_STORAGE_KEY, perDay ? '1' : '0'); } catch { /* ignore */ } }, [perDay]);
 
   // DnD sensors — 8px activation distance prevents accidental drags
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
@@ -639,6 +649,13 @@ export function KpiPage({ data }: { data: DashboardData }) {
         };
       }
 
+      // Per-day (daily average): divide additive measures by the period's day-count.
+      // Ratios/rates are length-independent → left untouched. Denominator uses elapsed
+      // days through the orders watermark for the in-progress period (via periodDayCount).
+      const additive = perDay && !def.isAvg && !RATIO_KPI_IDS.has(id);
+      const dc = (key: string) => periodDayCount(key, periodMode, perfMaxDate);
+      const sumDc = (keys: string[]) => Math.max(1, keys.reduce((s, k) => s + dc(k), 0));
+
       let curBucket = periodBuckets[currentPeriod];
       let prevBucket = periodBuckets[prevPeriod];
       // LY: find nearest matching period in weekly mode
@@ -664,7 +681,8 @@ export function KpiPage({ data }: { data: DashboardData }) {
       // Sparkline: last N periods (always single-period values)
       const sparkline = sortedPeriods.map(p => {
         const b = periodBuckets[p];
-        return b ? resolveValue(b, id) : 0;
+        const v = b ? resolveValue(b, id) : 0;
+        return additive ? v / dc(p) : v;
       });
 
       // Cumulative data: CY running sum + LY running sum aligned by month/week index
@@ -681,17 +699,21 @@ export function KpiPage({ data }: { data: DashboardData }) {
         lyPeriods = allSorted.filter(p => p.startsWith(lyYear));
         
         let runCY = emptyBucket();
+        let cyDays = 0;
         cyPeriods.forEach(p => {
           const b = periodBuckets[p];
           if (b) runCY = mergeBuckets(runCY, b);
-          cumulativeCY.push(resolveValue(runCY, id));
+          cyDays += dc(p);
+          cumulativeCY.push(resolveValue(runCY, id) / (additive ? Math.max(1, cyDays) : 1));
         });
-        
+
         let runLY = emptyBucket();
+        let lyDays = 0;
         lyPeriods.forEach(p => {
           const b = periodBuckets[p];
           if (b) runLY = mergeBuckets(runLY, b);
-          cumulativeLY.push(resolveValue(runLY, id));
+          lyDays += dc(p);
+          cumulativeLY.push(resolveValue(runLY, id) / (additive ? Math.max(1, lyDays) : 1));
         });
 
         if (filters.periodType === 'cumulative' && currentPeriod) {
@@ -723,9 +745,25 @@ export function KpiPage({ data }: { data: DashboardData }) {
         }
       }
 
-      const value = curBucket ? resolveValue(curBucket, id) : 0;
-      const prevValue = prevBucket ? resolveValue(prevBucket, id) : null;
-      const lyValue = lyBucket ? resolveValue(lyBucket, id) : null;
+      // Day-count denominators for per-day mode. In cumulative mode the buckets span
+      // multiple periods, so sum the day-counts over the same range.
+      let dCur = 1, dPrev = 1, dLy = 1;
+      if (additive) {
+        if (filters.periodType === 'cumulative' && currentPeriod && cyPeriods.length) {
+          const curIdx = cyPeriods.indexOf(currentPeriod);
+          dCur = curIdx >= 0 ? sumDc(cyPeriods.slice(0, curIdx + 1)) : dc(currentPeriod);
+          dPrev = curIdx > 0 ? sumDc(cyPeriods.slice(0, curIdx)) : dc(prevPeriod);
+          const lyIdx = lyPeriods.indexOf(lyPeriodMatched);
+          dLy = lyIdx >= 0 ? sumDc(lyPeriods.slice(0, lyIdx + 1)) : dc(lyPeriodMatched);
+        } else {
+          dCur = dc(currentPeriod);
+          dPrev = dc(prevPeriod);
+          dLy = dc(lyPeriodMatched);
+        }
+      }
+      const value = (curBucket ? resolveValue(curBucket, id) : 0) / dCur;
+      const prevValue = prevBucket ? resolveValue(prevBucket, id) / dPrev : null;
+      const lyValue = lyBucket ? resolveValue(lyBucket, id) / dLy : null;
 
       const delta = prevValue != null && prevValue !== 0
         ? ((value - prevValue) / Math.abs(prevValue)) * 100
@@ -742,13 +780,16 @@ export function KpiPage({ data }: { data: DashboardData }) {
         color: getSplitColor(label),
       })).filter(s => s.value !== 0 || splitEntries.length <= 6);
 
-      return { id, def, value, prevValue, lyValue, delta, positive, sentiment, sparkline, cumulativeCY, cumulativeLY, splits };
+      return { id, def, value, prevValue, lyValue, delta, positive, sentiment, sparkline, cumulativeCY, cumulativeLY, splits, perDay: additive };
     }).filter(Boolean) as NonNullable<ReturnType<typeof Array.prototype.map>[number]>[];
-  }, [selectedIds, periodBuckets, currentPeriod, prevPeriod, lyPeriod, sortedPeriods, periodMode, splitBuckets, planVsActual]);
+  }, [selectedIds, periodBuckets, currentPeriod, prevPeriod, lyPeriod, sortedPeriods, periodMode, splitBuckets, planVsActual, perDay, perfMaxDate, filters.periodType]);
 
-  // Period label
+  // Period label — for the in-progress week, cap the end at the orders watermark
+  // (data through perfMaxDate) so the header shows the ACTUAL window counted,
+  // not the full calendar week. e.g. "Jun 14 – Jun 15" instead of "Jun 14 – Jun 20".
+  const periodIncomplete = !!(periodMode === 'weeks' && currentPeriod && perfMaxDate && perfMaxDate < addDays(currentPeriod, 6));
   const periodLabel = periodMode === 'weeks' && currentPeriod
-    ? weekRangeLabel(currentPeriod)
+    ? weekRangeLabelCapped(currentPeriod, perfMaxDate)
     : currentPeriod || '--';
 
   // Group catalog by group
@@ -776,8 +817,23 @@ export function KpiPage({ data }: { data: DashboardData }) {
               KPI Board
             </h1>
             <p className="text-[12px] font-mono mt-0.5" style={{ color: 'var(--color-faint)' }}>
-              {periodLabel} · {selectedIds.length} KPIs · {measureIds.length} measures
+              {periodLabel}{periodIncomplete ? ' · wk in progress' : ''}{perDay ? ' · per day' : ''} · {selectedIds.length} KPIs · {measureIds.length} measures
             </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+          {/* Total | Per-day toggle */}
+          <div className="flex items-center rounded-lg border overflow-hidden" style={{ borderColor: 'var(--color-border)' }} title="Per-day divides additive KPIs (sales, orders, spend, net profit…) by the days in the period — using elapsed days for the in-progress period — so periods of different lengths are comparable. Ratios (ROAS, Organic %) are unchanged.">
+            {(['total', 'perday'] as const).map(mode => {
+              const active = (mode === 'perday') === perDay;
+              return (
+                <button key={mode} onClick={() => setPerDay(mode === 'perday')}
+                  className="px-2.5 py-1.5 text-[11px] font-semibold transition-all cursor-pointer"
+                  style={{ background: active ? 'var(--color-accent, #3b82f6)' : 'transparent', color: active ? '#fff' : 'var(--color-faint)' }}>
+                  {mode === 'total' ? 'Total' : '/day'}
+                </button>
+              );
+            })}
           </div>
 
           {/* Customize button */}
@@ -915,6 +971,7 @@ export function KpiPage({ data }: { data: DashboardData }) {
                 </div>
               </>
             )}
+          </div>
           </div>
         </div>
       </div>
@@ -1064,6 +1121,7 @@ type KpiCardData = {
   cumulativeCY: number[];
   cumulativeLY: number[];
   splits: SplitItem[];
+  perDay?: boolean; // value/comparisons are daily averages (show "/d")
 };
 
 function SortableKpiCard({ card, stagger, onRemove, canRemove, isDetail, onToggleSize, periodType }: {
@@ -1083,7 +1141,7 @@ function SortableKpiCard({ card, stagger, onRemove, canRemove, isDetail, onToggl
     zIndex: isDragging ? 50 : 'auto' as const,
   };
 
-  const { def, value, prevValue, lyValue, delta, sentiment, sparkline, cumulativeCY, cumulativeLY, splits } = card;
+  const { def, value, prevValue, lyValue, delta, sentiment, sparkline, cumulativeCY, cumulativeLY, splits, perDay } = card;
   const deltaColor = sentiment ? 'var(--color-positive)' : 'var(--color-negative)';
   const isCumulative = periodType === 'cumulative';
 
@@ -1134,7 +1192,7 @@ function SortableKpiCard({ card, stagger, onRemove, canRemove, isDetail, onToggl
       <div className="flex items-end justify-between">
         <div className="flex flex-col">
           <div className={`font-mono font-bold leading-none tracking-tight ${isDetail ? 'text-[28px]' : 'text-[24px]'}`} style={{ color: 'var(--color-text)' }}>
-            {def.fmt(value)}
+            {def.fmt(value)}{perDay && <span className="text-[13px] font-medium" style={{ color: 'var(--color-faint)' }}>/d</span>}
           </div>
           {/* Delta vs LY or Prev right under the value */}
           <div className="flex flex-col gap-0.5 mt-1">
@@ -2153,7 +2211,7 @@ function ParetoSection({ data, paretoIds, family, product, currentPeriod, prevPe
               const isCoachSnapshot = id === 'ads_targets';
               let pLabel = isCoachSnapshot
                 ? (periodMode === 'weeks' ? 'Last 7d' : 'Last 4w')
-                : (periodMode === 'weeks' ? weekRangeLabel(currentPeriod) : currentPeriod);
+                : (periodMode === 'weeks' ? weekRangeLabelCapped(currentPeriod, perfMaxDate) : currentPeriod);
               if (def.category === 'Trend Cards') {
                 // Show actual date ranges being compared (respects day-capping)
                 const fmtShort = (d: string) => { const [, m, dd] = d.split('-'); return `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(m)-1]} ${Number(dd)}`; };

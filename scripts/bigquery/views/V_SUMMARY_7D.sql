@@ -6,13 +6,24 @@
 
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_SUMMARY_7D` AS
 
-WITH date_ranges AS (
+WITH
+-- Orders/sales watermark = last date with COMPLETE sales/orders data.
+-- MUST anchor on this, NOT MAX(date) over V_UNIFIED_DAILY: the unified view carries
+-- ad-attributed rows ~1 day ahead of the Seller-Central business report, so its MAX(date)
+-- is the ADS date. Anchoring blended/sales windows there pulls in a partial sales day
+-- (under-counts sales/orders/net) and shifts the prev-7d comparison.
+-- Same definition as V_DATA_FRESHNESS + V_PLAN_FORECAST.last_loaded_date.
+date_ranges AS (
   SELECT
-    MAX(date) AS latest_date,
-    DATE_SUB(MAX(date), INTERVAL 6 DAY) AS period_start,   -- current 7d
-    DATE_SUB(MAX(date), INTERVAL 7 DAY) AS prev_end,       -- previous 7d end
-    DATE_SUB(MAX(date), INTERVAL 13 DAY) AS prev_start     -- previous 7d start
-  FROM `onyga-482313.OI.V_UNIFIED_DAILY`
+    latest_date,
+    DATE_SUB(latest_date, INTERVAL 6 DAY)  AS period_start,   -- current 7d
+    DATE_SUB(latest_date, INTERVAL 7 DAY)  AS prev_end,       -- previous 7d end
+    DATE_SUB(latest_date, INTERVAL 13 DAY) AS prev_start      -- previous 7d start
+  FROM (
+    SELECT MAX(date) AS latest_date
+    FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`
+    WHERE Performance_TYPE = 'Organic'
+  )
 ),
 
 current_7d AS (
