@@ -71,7 +71,7 @@ function AppWrapper() {
 function AppInner() {
   const { data, loading, fromCube } = useUnifiedData();
 
-  const { ensurePage, isPageReady } = useCubeContext();
+  const { ensurePage, isPageReady, prefetchRemaining } = useCubeContext();
 
   const gt = useGroundTruth();
   const { mode: themeMode, toggle: toggleTheme } = useTheme();
@@ -89,6 +89,26 @@ function AppInner() {
   // Load only the datasets the current page needs (+ shell core). Cached, deduped.
   useEffect(() => { ensurePage(visiblePage); }, [visiblePage, ensurePage]);
   const pageReady = isPageReady(visiblePage);
+
+  // Once the current page is ready, warm the remaining datasets during idle so
+  // later navigation is instant. prefetchRemaining() skips loaded/in-flight ones.
+  useEffect(() => {
+    if (!pageReady) return;
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void) => number;
+      cancelIdleCallback?: (h: number) => void;
+    };
+    let handle: number;
+    if (w.requestIdleCallback) {
+      handle = w.requestIdleCallback(() => prefetchRemaining());
+    } else {
+      handle = window.setTimeout(() => prefetchRemaining(), 1500);
+    }
+    return () => {
+      if (w.requestIdleCallback && w.cancelIdleCallback) w.cancelIdleCallback(handle);
+      else clearTimeout(handle);
+    };
+  }, [pageReady, prefetchRemaining]);
 
   // Fetch alert count for sidebar badge
   useEffect(() => {
