@@ -128,6 +128,14 @@ Each row includes a `term_decision_trace` and `target_decision_trace` column con
 | `tgt_lag` | Lag ROAS (3d) | ≤ 1.3 → reduce *(only when ROAS < reduce threshold + orders > 0)* |
 | `tgt_status` | Target Status | ENABLED *(only when target is paused/archived)* |
 
+### Card display (non-decision)
+
+Search-term DecisionCards also surface two **display-only** signals (no effect on the decision):
+- **Fit `NN` badge** — `research_rank` (0–100) from `FACT_RESEARCH_RANKED.rank` (avg of `overall_fit` + `purchase_rank`), joined by family × term. Color: green ≥ 75 (promote-worthy), amber 40–74, faint < 40; hidden when the term has no research match.
+- **`via {MATCH}: {term}` line** — `source_keyword`: the top-spend `targeting` the term matched through in the last 4w (+ its match type), suppressed when the term is its own exact targeting.
+
+Both columns live on `V_ADS_COACH_DECISION` (LEFT JOINs, no fanout) → cube `AdsCoachDecision` → `CoachDecisionRow`.
+
 ---
 
 ## Thresholds (from `DE_COACH_THRESHOLDS`)
@@ -188,7 +196,7 @@ Net ROAS used for all bid decisions is **ads-only** (`margin_per_unit × ad-attr
 7. **Dead config dropped**: `PROMOTE_ROAS_THRESHOLD` (never read — pivot uses `PROMOTE_MIN_ROAS`) and `REDUCE_BID_SPEND` (no logic) removed from `DE_COACH_THRESHOLDS`.
 8. **Per-strategy reasoning**: decision-trace explains each strategy's intent in plain language (the `profitable` bar is not self-explanatory).
 
-**Follow-ups (not in this change):** display research_rank + source keyword on cards; PRODUCT_DEFENSE self-brand cross-sell (suggest adding own ASINs as product-targets on own listings).
+**Follow-ups:** ~~display research_rank + source keyword on cards~~ (shipped 2026-06-16, display-only — see §Card display); ~~PRODUCT_DEFENSE self-brand cross-sell~~ (shipped 2026-06-16 — see §Cross-Sell Action).
 
 ---
 
@@ -196,6 +204,7 @@ Net ROAS used for all bid decisions is **ads-only** (`margin_per_unit × ad-attr
 
 | Date | Change |
 |------|--------|
+| 2026-06-16 | DecisionCards now show research **Fit** rank (`FACT_RESEARCH_RANKED.rank`, 0–100; green ≥75 / amber 40–74 / faint <40) + top-spend 4w **source keyword/target** (+ match type). Display-only — added `research_rank`/`source_keyword`/`source_keyword_match_type` to `V_ADS_COACH_DECISION` via LEFT JOINs (row-count parity verified, no decision change). See §Card display. |
 | 2026-06-16 | Added self-brand cross-sell: `V_ADS_COACH_CROSSSELL` (target×advertise co-purchase pairs, gaps only), `CROSS_SELL_MIN_ORDERS` threshold (3), `ADD_CROSS_SELL_TARGET` action + Actions card, Do-page bulksheet export into a `PRODUCT_DEFENSE` SP product-targeting campaign. See §Cross-Sell Action. |
 | 2026-06-16 | GUARDIAN redesign: per-strategy 1.1 bid-up floor, NEEDS_STRATEGY, 3d freq-gate bypass, DEFENDED signal, defense bid-raise (SQP IS gate / unconditional), $2 bid ceiling, dropped dead keys, per-strategy trace. See §2026-06-16. |
 | 2026-04-13 | Added lag window safety check (3-day look-ahead) for REDUCE_BID and ROAS-based NEGATE_EXACT. |
