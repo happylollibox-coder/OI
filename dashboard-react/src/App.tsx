@@ -1,5 +1,8 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
 import { useUnifiedData } from './hooks/useUnifiedData';
+import { CubeDataProvider, useCubeContext } from './hooks/data/CubeDataProvider';
+import { DATASET_LOADERS } from './hooks/useCubeData';
+import type { DatasetName } from './hooks/data/datasetTypes';
 import { useGroundTruth } from './hooks/useGroundTruth';
 import { useTheme } from './hooks/useTheme';
 import { FiltersProvider, useFilters } from './hooks/useFilters';
@@ -8,26 +11,6 @@ import { Sidebar } from './components/Sidebar';
 import { FilterBar } from './components/FilterBar';
 import { DashboardSkeleton } from './components/Skeleton';
 import { PageSummaryBar, PageSummaryProvider } from './components/PageSummaryBar';
-import { HomePage } from './pages/HomePage';
-import { ActionsPage } from './pages/ActionsPage';
-import { PeakPage } from './pages/PeakPage';
-import { FamilyPage } from './pages/FamilyPage';
-import { LearnPage } from './pages/LearnPage';
-import { KeywordsPage } from './pages/KeywordsPage';
-import { LogPage } from './pages/LogPage';
-import { HealthPage } from './pages/HealthPage';
-import { ExperimentPage } from './pages/ExperimentPage';
-import { AdsPerformancePage } from './pages/AdsPerformancePage';
-import { StrategiesPage } from './pages/StrategiesPage';
-import { AdminPage } from './pages/AdminPage';
-import { DoPage } from './pages/DoPage';
-import { BrandPage } from './pages/BrandPage';
-import { PlanPage } from './pages/PlanPage';
-import { SupplyPage } from './pages/SupplyPage';
-import { AlertsPage } from './pages/AlertsPage';
-import { ProductsPage } from './pages/ProductsPage';
-import { KpiPage } from './pages/KpiPage';
-import { ResearchPage } from './pages/ResearchPage';
 import { DoQueueProvider } from './hooks/useDoQueue';
 import { ViewModeProvider, useViewMode, isPageVisible } from './hooks/useViewMode';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -35,19 +18,45 @@ import { LoginScreen } from './components/LoginScreen';
 import type { PageId, FamilyName } from './types';
 import { apiFetch } from './utils/apiFetch';
 
+// Pages are lazy-loaded: the initial bundle ships only the app shell, and each
+// page is fetched as its own chunk on first navigation. This keeps first paint
+// from downloading + parsing code for all 21 pages (recharts, jspdf, etc.).
+const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.HomePage })));
+const ActionsPage = lazy(() => import('./pages/ActionsPage').then(m => ({ default: m.ActionsPage })));
+const PeakPage = lazy(() => import('./pages/PeakPage').then(m => ({ default: m.PeakPage })));
+const FamilyPage = lazy(() => import('./pages/FamilyPage').then(m => ({ default: m.FamilyPage })));
+const LearnPage = lazy(() => import('./pages/LearnPage').then(m => ({ default: m.LearnPage })));
+const KeywordsPage = lazy(() => import('./pages/KeywordsPage').then(m => ({ default: m.KeywordsPage })));
+const LogPage = lazy(() => import('./pages/LogPage').then(m => ({ default: m.LogPage })));
+const HealthPage = lazy(() => import('./pages/HealthPage').then(m => ({ default: m.HealthPage })));
+const ExperimentPage = lazy(() => import('./pages/ExperimentPage').then(m => ({ default: m.ExperimentPage })));
+const AdsPerformancePage = lazy(() => import('./pages/AdsPerformancePage').then(m => ({ default: m.AdsPerformancePage })));
+const StrategiesPage = lazy(() => import('./pages/StrategiesPage').then(m => ({ default: m.StrategiesPage })));
+const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
+const DoPage = lazy(() => import('./pages/DoPage').then(m => ({ default: m.DoPage })));
+const BrandPage = lazy(() => import('./pages/BrandPage').then(m => ({ default: m.BrandPage })));
+const PlanPage = lazy(() => import('./pages/PlanPage').then(m => ({ default: m.PlanPage })));
+const SupplyPage = lazy(() => import('./pages/SupplyPage').then(m => ({ default: m.SupplyPage })));
+const AlertsPage = lazy(() => import('./pages/AlertsPage').then(m => ({ default: m.AlertsPage })));
+const ProductsPage = lazy(() => import('./pages/ProductsPage').then(m => ({ default: m.ProductsPage })));
+const KpiPage = lazy(() => import('./pages/KpiPage').then(m => ({ default: m.KpiPage })));
+const ResearchPage = lazy(() => import('./pages/ResearchPage').then(m => ({ default: m.ResearchPage })));
+
 export default function App() {
   return (
-    <AuthProvider>
-      <DoQueueProvider>
-        <ViewModeProvider>
-          <FiltersProvider>
-            <PageSummaryProvider>
-              <AppWrapper />
-            </PageSummaryProvider>
-          </FiltersProvider>
-        </ViewModeProvider>
-      </DoQueueProvider>
-    </AuthProvider>
+    <CubeDataProvider>
+      <AuthProvider>
+        <DoQueueProvider>
+          <ViewModeProvider>
+            <FiltersProvider>
+              <PageSummaryProvider>
+                <AppWrapper />
+              </PageSummaryProvider>
+            </FiltersProvider>
+          </ViewModeProvider>
+        </DoQueueProvider>
+      </AuthProvider>
+    </CubeDataProvider>
   );
 }
 
@@ -63,6 +72,14 @@ function AppWrapper() {
 
 function AppInner() {
   const { data, loading, fromCube } = useUnifiedData();
+
+  // PHASE 1 ONLY — preserves "load everything on mount" so this checkpoint has
+  // zero behavior change. Replaced by per-page loading in the next task.
+  const { ensureDatasets } = useCubeContext();
+  useEffect(() => {
+    ensureDatasets(Object.keys(DATASET_LOADERS) as DatasetName[]);
+  }, [ensureDatasets]);
+
   const gt = useGroundTruth();
   const { mode: themeMode, toggle: toggleTheme } = useTheme();
   const { filters, setFilter } = useFilters();
@@ -163,7 +180,9 @@ function AppInner() {
         <FilterBar data={data} page={page} />
         <PageSummaryBar />
         <div key={page} className="animate-in rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] shadow-[var(--shadow-card)] p-6 mt-3">
-          {renderPage()}
+          <Suspense fallback={<div className="flex items-center justify-center py-24 text-sm text-[var(--color-muted)]">Loading…</div>}>
+            {renderPage()}
+          </Suspense>
         </div>
       </main>
     </>
