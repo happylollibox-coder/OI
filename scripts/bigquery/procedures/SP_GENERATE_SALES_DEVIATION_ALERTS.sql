@@ -45,7 +45,17 @@ BEGIN
   );
 
   IF active_plan_id IS NULL THEN
-    SELECT 'SP_GENERATE_SALES_DEVIATION_ALERTS: Skipped — no approved plan with forecast snapshot found.' AS log_message;
+    -- No approved plan → there is no valid basis for any deviation alert.
+    -- Auto-resolve any still-open ones instead of stranding them (previously this
+    -- early-returned, leaving stale OPEN alerts that never refreshed).
+    UPDATE `onyga-482313.OI.DE_ALERTS`
+    SET status = 'AUTO_RESOLVED',
+        resolved_at = CURRENT_TIMESTAMP(),
+        resolved_by = 'system',
+        updated_at = CURRENT_TIMESTAMP(),
+        notes = CONCAT('Auto-resolved on ', CAST(today AS STRING), ': no approved plan to evaluate against')
+    WHERE status = 'OPEN' AND alert_type = 'SALES_DEVIATION';
+    SELECT 'SP_GENERATE_SALES_DEVIATION_ALERTS: No approved plan — resolved any stranded SALES_DEVIATION alerts.' AS log_message;
     RETURN;
   END IF;
 
@@ -193,9 +203,11 @@ BEGIN
 
   -- ─── Step 4: Auto-Resolve stale deviation alerts ───
   UPDATE `onyga-482313.OI.DE_ALERTS` t
-  SET 
-    status = 'AUTO_RESOLVED', 
-    updated_at = CURRENT_TIMESTAMP(), 
+  SET
+    status = 'AUTO_RESOLVED',
+    resolved_at = CURRENT_TIMESTAMP(),
+    resolved_by = 'system',
+    updated_at = CURRENT_TIMESTAMP(),
     notes = CONCAT('Auto-resolved on ', CAST(today AS STRING), ': deviation fell below threshold')
   WHERE status = 'OPEN'
     AND alert_type = 'SALES_DEVIATION'

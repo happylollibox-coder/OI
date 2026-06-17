@@ -26,7 +26,13 @@ export function AlertCard({ alert, expanded, onToggle, onDone, onCancel, onReope
   const sev = SEVERITY_CONFIG[alert.severity as keyof typeof SEVERITY_CONFIG] || SEVERITY_CONFIG.INFO;
   const SevIcon = sev.icon;
   const typeCfg = TYPE_CONFIG[alert.alert_type] || TYPE_CONFIG.CREATE_PO;
-  const age = Math.floor((Date.now() - new Date(alert.created_at).getTime()) / 86400000);
+  // Freshness is based on updated_at (last time the generator re-validated the alert),
+  // NOT created_at (first fired) — an old-but-still-confirmed alert shouldn't look stale.
+  const lastSeenMs = new Date(alert.updated_at || alert.created_at).getTime();
+  const age = Math.floor((Date.now() - lastSeenMs) / 86400000);
+  const stale = age > 8; // generators run daily/weekly; >8d means it stopped refreshing
+  const firstSeen = new Date(alert.created_at).toLocaleDateString();
+  const lastSeen = new Date(alert.updated_at || alert.created_at).toLocaleDateString();
 
   return (
     <div className={`rounded-lg border ${sev.border} ${sev.bg} transition-all`}>
@@ -50,9 +56,10 @@ export function AlertCard({ alert, expanded, onToggle, onDone, onCancel, onReope
               {fmt(alert.suggested_qty)} units
             </span>
           )}
-          {/* Age */}
-          <span className="text-[9px] text-faint w-12 text-right">
-            {age === 0 ? 'Today' : `${age}d ago`}
+          {/* Freshness — last re-validation (updated_at). Amber = generator hasn't refreshed it. */}
+          <span className={`text-[9px] w-16 text-right ${stale ? 'text-amber-400 font-semibold' : 'text-faint'}`}
+            title={`First seen ${firstSeen} · last re-validated ${lastSeen}${stale ? ` — STALE: not refreshed in ${age}d (alert generator may not be running)` : ''}`}>
+            {stale ? `⚠ ${age}d` : age === 0 ? 'Today' : `${age}d ago`}
           </span>
           {/* Actions */}
           {!isArchive && (
