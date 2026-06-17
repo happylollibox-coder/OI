@@ -6,6 +6,7 @@
  * so the UI renders immediately. Background loaders (ads, sqp, etc.) fill in after.
  */
 import { useState, useEffect } from 'react';
+import type { DatasetName } from './data/datasetTypes';
 import type {
   DashboardData,
   Ads7dRow,
@@ -2220,6 +2221,65 @@ function getWeekStart(iso: string): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 }
 
+// Maps each loadable dataset to its existing loader. Single source of truth
+// for "how to load dataset X" — consumed by CubeDataProvider.
+export const DATASET_LOADERS: Record<DatasetName, () => Promise<unknown>> = {
+  summary: loadSummaryFromCube,
+  weekly_trends: loadWeeklyTrendsFromCube,
+  monthly_trends: loadMonthlyTrendsFromCube,
+  weekly_trends_by_asin: loadWeeklyTrendsByAsinFromCube,
+  monthly_trends_by_asin: loadMonthlyTrendsByAsinFromCube,
+  daily_trends: loadDailyTrendsFromCube,
+  products: loadProductsFromCube,
+  product_creatives: loadProductCreativesFromCube,
+  experiments: loadExperimentsFromCube,
+  ads_7d_summary: loadAdsSummaryFromCube,
+  ads_7d: loadAdsFromCube,
+  sqp_weekly: loadSqpFromCube,
+  sqp_coverage_weeks: loadSqpCoverageWeeksFromCube,
+  sqp_volume_4w: loadSqpVolume4wFromCube,
+  change_log: loadChangeLogFromCube,
+  upcoming: loadUpcomingFromCube,
+  peak: loadPeakFromCube,
+  hero_asins: loadHeroAsinsFromCube,
+  keyword_product_map: loadKeywordProductMapFromCube,
+  learnings: loadLearningsFromCube,
+  budget_health: loadBudgetHealthFromCube,
+  drivers: loadDriversFromCube,
+  experiment_weekly: loadExperimentWeeklyFromCube,
+  experiment_campaigns: loadExperimentCampaignsFromCube,
+  campaign_search_terms: loadCampaignSearchTermsFromCube,
+  experiment_templates: loadExperimentTemplatesFromCube,
+  holidays: loadAllHolidaysFromCube,
+  coach_decisions: loadCoachDecisionsFromCube,
+  actions: loadCoachActionsFromCube,
+  coach_campaigns: loadCoachCampaignsFromCube,
+  experiment_evaluations: loadExperimentEvaluationsFromCube,
+  keyword_predictions: loadPredictionsFromCube,
+  brand_strength_weekly: loadBrandStrengthFromCube,
+  coach_phrase_negatives: loadPhraseNegativesFromCube,
+  hot_signals: loadHotSignalsFromCube,
+  storage_costs: loadStorageCostsFromCube,
+  supply_chain: loadSupplyChainFromCube,
+  supply_pos: loadSupplyPOsFromCube,
+  supply_payments: loadSupplyPaymentsFromCube,
+  supply_shipments: loadSupplyShipmentsFromCube,
+  peak_relevance: loadPeakRelevanceFromCube,
+  family_occasions: loadFamilyOccasionsFromCube,
+  coach_strategy: loadCoachStrategyFromCube,
+  ads_focus_terms: loadAdsFocusTermsFromCube,
+  ads_focus_keywords: loadAdsFocusKeywordsFromCube,
+  campaign_launch_perf: loadCampaignLaunchPerfFromCube,
+  campaign_launch_monthly: loadCampaignLaunchMonthlyFromCube,
+  plan_ads_targets: loadPlanAdsTargetsFromCube,
+  asin_oos_days: loadAsinOosDaysFromCube,
+  negative_conflicts: loadNegativeConflictsFromCube,
+  strategy_campaign_templates: loadStrategyCampaignTemplatesFromCube,
+  coach_cross_sell: loadCrossSellFromCube,
+  cubeMeta: loadCubeMeta,
+  dataFreshness: loadDataFreshnessFromCube,
+};
+
 /**
  * useCubeData - fetches dashboard data from Cube when VITE_CUBE_API_URL is set.
  * Returns partial data (Cube-backed fields); use with useUnifiedData for full data.
@@ -2258,22 +2318,21 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
 
     (async () => {
       try {
-        // --- Priority loaders: UI renders after these complete ---
-        const priorityLoaders: [string, () => Promise<unknown>][] = [
+        // --- Critical loaders: first paint happens as soon as THESE resolve.
+        // Home above-the-fold needs only these. The heavier by-ASIN / creatives /
+        // experiments queries used to sit here too and gated the whole UI on the
+        // slowest of 11 — they're now deferred (below) and stream in. ---
+        const criticalLoaders: [string, () => Promise<unknown>][] = [
           ['cubeMeta', loadCubeMeta],
           ['dataFreshness', loadDataFreshnessFromCube],
           ['summary', loadSummaryFromCube],
           ['weeklyTrends', loadWeeklyTrendsFromCube],
           ['monthlyTrends', loadMonthlyTrendsFromCube],
-          ['weeklyTrendsByAsin', loadWeeklyTrendsByAsinFromCube],
-          ['monthlyTrendsByAsin', loadMonthlyTrendsByAsinFromCube],
           ['products', loadProductsFromCube],
-          ['productCreatives', loadProductCreativesFromCube],
-          ['experiments', loadExperimentsFromCube],
           ['adsSummary', loadAdsSummaryFromCube],
         ];
 
-        const pResults = await Promise.allSettled(priorityLoaders.map(([, fn]) => fn()));
+        const pResults = await Promise.allSettled(criticalLoaders.map(([, fn]) => fn()));
         if (cancelled) return;
 
         const cubeMeta = resolveLoader(pResults[0], 'cubeMeta') as { refreshed_at?: string; cube_source: 'preagg' | 'live' };
@@ -2281,20 +2340,16 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
         const summary = resolveLoader(pResults[2], 'summary') as SummaryRow[];
         const weeklyTrends = resolveLoader(pResults[3], 'weeklyTrends') as TrendRow[];
         const monthlyTrends = resolveLoader(pResults[4], 'monthlyTrends') as TrendRow[];
-        const weeklyTrendsByAsin = resolveLoader(pResults[5], 'weeklyTrendsByAsin') as TrendRowByAsin[];
-        const monthlyTrendsByAsin = resolveLoader(pResults[6], 'monthlyTrendsByAsin') as TrendRowByAsin[];
-        const products = resolveLoader(pResults[7], 'products') as ProductRow[];
-        const productCreatives = resolveLoader(pResults[8], 'productCreatives') as ProductCreativeRow[];
-        const experiments = resolveLoader(pResults[9], 'experiments') as ExperimentRow[];
-        const adsSummary = resolveLoader(pResults[10], 'adsSummary') as Ads7dRow[];
+        const products = resolveLoader(pResults[5], 'products') as ProductRow[];
+        const adsSummary = resolveLoader(pResults[6], 'adsSummary') as Ads7dRow[];
 
         if (import.meta.env.DEV) {
-          console.log('[useCubeData] Priority done — summary:', summary.length, 'weeklyTrends:', weeklyTrends.length, 'adsSummary:', adsSummary.length);
+          console.log('[useCubeData] Critical done — summary:', summary.length, 'weeklyTrends:', weeklyTrends.length, 'adsSummary:', adsSummary.length);
         }
 
-        // Auto-retry if priority data is empty (Cube may have been restarting)
+        // Auto-retry if critical data is empty (Cube may have been restarting)
         if (!summary.length && !weeklyTrends.length && retryCount < 3) {
-          console.warn(`[useCubeData] Priority data empty, retrying in 3s (attempt ${retryCount + 1}/3)`);
+          console.warn(`[useCubeData] Critical data empty, retrying in 3s (attempt ${retryCount + 1}/3)`);
           setTimeout(() => { if (!cancelled) setRetryCount(c => c + 1); }, 3000);
           return;
         }
@@ -2310,18 +2365,41 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
           summary,
           weekly_trends: weeklyTrends,
           monthly_trends: monthlyTrends,
-          weekly_trends_by_asin: weeklyTrendsByAsin,
-          monthly_trends_by_asin: monthlyTrendsByAsin,
           products,
-          product_creatives: productCreatives,
-          experiments,
           ads_7d_summary: adsSummary,
+          // Deferred-priority keys start empty so consumers always see an array;
+          // they're overwritten by the streaming loaders below as each resolves.
+          weekly_trends_by_asin: [],
+          monthly_trends_by_asin: [],
+          product_creatives: [],
+          experiments: [],
           negative_keywords: [],
           _meta: buildMeta(summary, dataFreshness, cubeMeta),
         };
 
         setData(priorityData);
         setLoading(false);
+
+        // --- Deferred-priority loaders: high priority but off the paint-blocking
+        // path. Each merges into state the moment it resolves, so charts/tables
+        // fill in progressively instead of all waiting on the slowest query.
+        // (These keys are NOT touched by the background merge below, so the
+        // streamed values are preserved.) ---
+        const applyResult = (key: keyof DashboardData, name: string, value: unknown) => {
+          if (cancelled) return;
+          setData(prev => ({ ...prev, [key]: (value as unknown[]) ?? [] }));
+          if (import.meta.env.DEV) console.log(`[useCubeData] deferred ${name}:`, Array.isArray(value) ? value.length : value);
+        };
+        const onDeferredFail = (name: string) => (e: unknown) => {
+          console.error(`[useCubeData] ${name} failed:`, e);
+          failedQueries.push(name);
+        };
+        const deferredPriority: Promise<unknown>[] = [
+          loadWeeklyTrendsByAsinFromCube().then(v => applyResult('weekly_trends_by_asin', 'weeklyTrendsByAsin', v), onDeferredFail('weeklyTrendsByAsin')),
+          loadMonthlyTrendsByAsinFromCube().then(v => applyResult('monthly_trends_by_asin', 'monthlyTrendsByAsin', v), onDeferredFail('monthlyTrendsByAsin')),
+          loadProductCreativesFromCube().then(v => applyResult('product_creatives', 'productCreatives', v), onDeferredFail('productCreatives')),
+          loadExperimentsFromCube().then(v => applyResult('experiments', 'experiments', v), onDeferredFail('experiments')),
+        ];
 
         // --- Background loaders: split to avoid browser connection pooling timeouts ---
         const lightLoaders: [string, () => Promise<unknown>][] = [
@@ -2434,6 +2512,11 @@ export function useCubeData(): { data: Partial<DashboardData>; loading: boolean;
         if (import.meta.env.DEV) {
           console.log('[useCubeData] Background done — ads:', ads.length, 'sqp:', sqp.length, 'decisions:', coachDecisions.length, 'actions:', coachTerms.length, 'launchPerf:', campaignLaunchPerf.length, 'bgResultsLight length:', bgResultsLight.length);
         }
+
+        // Make sure the deferred-priority queries have settled so their failures
+        // are reflected in _meta below (they've already streamed into state).
+        await Promise.allSettled(deferredPriority);
+        if (cancelled) return;
 
         setData(prev => ({
           ...prev,
