@@ -4,6 +4,7 @@ import type { ActionRow } from '../../types';
 import { fM } from '../../utils';
 import { CUT_ACTIONS, REDUCE_ACTIONS, selectPeak, termGrain, type GateVerdict } from '../../coachActuals';
 import type { LastChange } from '../../hooks/useLastChange';
+import { fitBadgeClass, fitBadgeLabel } from './fitBadge';
 
 // "Jun 12" from a YYYY-MM-DD (or ISO) string, parsed as a local date to avoid TZ drift.
 const fmtShortDate = (ds: string) => {
@@ -34,8 +35,9 @@ type ActionRowRuntime = ActionRow & {
 //   EVIDENCE   the 3 facts that justify it (4w window — real past numbers, no forecasts)
 //   CHANGE     exactly what will change in Amazon (campaign + object)
 // Queue button adds to the Do queue exactly like the row UI does (handler passed in).
-export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, lastChange }: {
+export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, lastChange, researchRank, sourceKeyword, sourceKeywordMatchType }: {
   action: ActionRowRuntime; family: string; why: GateVerdict; opp: { kind: 'save' | 'earn'; dollars: number }; inQueue: boolean; onQueue: () => void; lastChange?: LastChange | null;
+  researchRank?: number | null; sourceKeyword?: string | null; sourceKeywordMatchType?: string | null;
 }) {
   const isCut = CUT_ACTIONS.has(a.action);
   const isReduce = REDUCE_ACTIONS.has(a.action);
@@ -81,6 +83,9 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, la
       <div className="flex items-center gap-2">
         {icon}
         <span className="text-[12px] font-semibold">{claim}</span>
+        {researchRank != null && (
+          <span className={`shrink-0 text-[10px] font-mono ${fitBadgeClass(researchRank)}`} title="Research fit+purchase rank (0–100)">{fitBadgeLabel(researchRank)}</span>
+        )}
         <button
           onClick={onQueue}
           disabled={inQueue}
@@ -120,6 +125,9 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, la
         );
       })()}
       <div className="text-[10px] text-subtle">{why.reason}.</div>
+      {sourceKeyword && (
+        <div className="text-[9px] text-faint">via {(sourceKeywordMatchType || 'TARGET').toUpperCase()}: {sourceKeyword}</div>
+      )}
       {isPeakWinner && peak && (
         <div className="text-[10px] text-amber-400/90">
           ⚠ Peak winner: {peak.orders ?? 0} orders @ {peak.roas.toFixed(2)}× last peak — Blitz re-bids proven peak terms in boost; cutting now drops it for next peak.

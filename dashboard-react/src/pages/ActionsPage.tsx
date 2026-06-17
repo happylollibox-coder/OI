@@ -1493,15 +1493,21 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                 <span className="text-[10px] text-faint">{cases.length} case{cases.length !== 1 ? 's' : ''}</span>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {cases.map(({ a, why, opp }) => (
+                {cases.map(({ a, why, opp }) => {
+                  const cd = cdByTerm[(a.search_term || '').toLowerCase()];
+                  return (
                   <DecisionCard
                     key={`${a.campaign_id}|${a.search_term}|${a.targeting || ''}|${a.action}`}
                     action={a} family={family} why={why} opp={opp}
                     lastChange={lastChangeFor(a.campaign_id, a.keyword_id, a.targeting)}
                     inQueue={doQueue.hasItem(a.search_term, a.action, a.campaign_name, a.targeting || '')}
                     onQueue={() => queueAction(a, opp)}
+                    researchRank={cd?.research_rank}
+                    sourceKeyword={cd?.source_keyword}
+                    sourceKeywordMatchType={cd?.source_keyword_match_type}
                   />
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}
