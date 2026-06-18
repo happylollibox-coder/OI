@@ -60,11 +60,16 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, la
     ? `Extract ${termKind} "${term}" into its own EXACT campaign for ${family}`
     : `Bid up ${termKind} "${term}" for ${family}`;
   const bid = a.recommended_bid;
+  const curBid = a.current_bid;
+  // Bid line shows the move explicitly: "$current → $suggested" (falls back to "→ $suggested" when current is unknown).
+  const bidMove = bid == null ? ''
+    : curBid != null ? `: $${Number(curBid).toFixed(2)} → $${Number(bid).toFixed(2)}`
+    : ` → $${Number(bid).toFixed(2)}`;
   const amazonChange = isCut
     ? `Add negative exact in: ${a.campaign_name}`
     : isExtract
     ? `Create NEW exact campaign ($20/d budget): campaign + ad group + ad + keyword${bid != null ? ` @ $${Number(bid).toFixed(2)}` : ''}`
-    : `${isReduce ? 'Reduce' : 'Raise'} keyword bid in: ${a.campaign_name}${bid != null ? ` → $${Number(bid).toFixed(2)}` : ''}`;
+    : `${isReduce ? 'Reduce' : 'Raise'} keyword bid in: ${a.campaign_name}${bidMove}`;
 
   // Prefer runtime-mapped fields (spend/clicks/orders/net_roas from ActionsPage's acts mapping),
   // fall back to the canonical 4w fields on ActionRow.
