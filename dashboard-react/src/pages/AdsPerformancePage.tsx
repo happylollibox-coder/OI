@@ -853,7 +853,27 @@ function DynamicHierarchyCampaignsTable({
 
   const { filters } = useFilters();
   type Node = { key: string; label: string; level: string; children: Node[]; rows: Ads7dRow[]; campaignIds?: Set<string>; metrics: { spend: number; sales: number; orders: number; clicks: number; conv_rate: number; cpc: number; roas: number; gross_roas: number; search_terms_count: number; sqp_volume: number; sqp_clicks: number; sqp_cart_adds: number; sqp_orders: number; sqp_organic_units: number; sqp_organic_pct: number; sqp_show_rate: number; spend_4w: number; orders_4w: number; clicks_4w: number; sales_4w: number; roas_4w: number; conv_rate_4w: number; spend_ly_peak: number; orders_ly_peak: number; sales_ly_peak: number; roas_ly_peak: number; sqp_volume_ly_peak: number; sqp_orders_ly_peak: number; } };
-  const buildTree = (rows: Ads7dRow[], levelIdx: number, _campaignIds?: Set<string>, sort: ReturnType<typeof useSort> = campSort): Node[] => {
+  // Index synthesized search-term rows by campaign once per data change, so buildTree
+  // can look up a node's terms in O(1) instead of re-scanning the full searchTerms
+  // array (up to ~100k rows) at every node — the cause of multi-second render freezes.
+  const termsByCampaign = useMemo(() => {
+    const m = new Map<string, Ads7dRow[]>();
+    for (const t of searchTerms) {
+      const arr = m.get(t.campaign_id);
+      if (arr) arr.push(t);
+      else m.set(t.campaign_id, [t]);
+    }
+    return m;
+  }, [searchTerms]);
+  const termsFor = (ids: Set<string>): Ads7dRow[] => {
+    const out: Ads7dRow[] = [];
+    for (const id of ids) {
+      const arr = termsByCampaign.get(id);
+      if (arr) for (const t of arr) out.push(t);
+    }
+    return out;
+  };
+  const buildTree = (rows: Ads7dRow[], levelIdx: number, _campaignIds?: Set<string>, sort: ReturnType<typeof useSort> = campSort, path: string[] = []): Node[] => {
     if (levelIdx >= hierarchy.length) return [];
     const level = hierarchy[levelIdx];
     const nextLevel = hierarchy[levelIdx + 1];
@@ -873,7 +893,7 @@ function DynamicHierarchyCampaignsTable({
       const ids = new Set(groupRows.map(r => r.campaign_id));
       const useTermMetrics = !!filters.keyword && (useCampaigns || level === 'campaign');
       const metricRows = useTermMetrics
-        ? searchTerms.filter(t => ids.has(t.campaign_id))
+        ? termsFor(ids)
         : groupRows;
       const spend = metricRows.reduce((s, r) => s + r.spend, 0);
       const sales = metricRows.reduce((s, r) => s + r.sales, 0);
@@ -887,7 +907,13 @@ function DynamicHierarchyCampaignsTable({
           : groupRows.reduce((s, r) => s + (r.search_terms_count ?? 0), 0);
       let childRows: Ads7dRow[];
       if (nextLevel === 'search_term') {
-        childRows = searchTerms.filter(t => ids.has(t.campaign_id));
+        // Cap deep expansion: broad-match campaigns can have thousands of 90-day
+        // search terms. Show the top spenders so expanding stays responsive (parent
+        // metrics above still aggregate every term, so totals are unaffected).
+        const allTerms = termsFor(ids);
+        childRows = allTerms.length > 50
+          ? [...allTerms].sort((a, b) => b.spend - a.spend).slice(0, 50)
+          : allTerms;
       } else if (level === 'search_term' && nextLevel === 'campaign') {
         childRows = campaigns.filter(c => ids.has(c.campaign_id));
       } else {
@@ -896,7 +922,7 @@ function DynamicHierarchyCampaignsTable({
       // For SQP aggregation: collect unique search terms from the search-term rows under these campaigns
       const sqpTermsForGroup = level === 'search_term'
         ? [k.toLowerCase().trim()]
-        : [...new Set(searchTerms.filter(t => ids.has(t.campaign_id)).map(t => (t.search_term || '').toLowerCase().trim()).filter(Boolean))];
+        : [...new Set(termsFor(ids).map(t => (t.search_term || '').toLowerCase().trim()).filter(Boolean))];
       let sqp_volume = 0, sqp_clicks = 0, sqp_cart_adds = 0, sqp_orders = 0, sqp_ads_orders = 0, sqp_show_rate_sum = 0, sqp_show_rate_cnt = 0;
       let sqp_volume_ly = 0, sqp_orders_ly = 0;
       let spend_4w = 0, orders_4w = 0, clicks_4w = 0, sales_4w = 0, spend_ly_peak = 0, orders_ly_peak = 0, sales_ly_peak = 0;
@@ -939,9 +965,16 @@ function DynamicHierarchyCampaignsTable({
         sqp_volume_ly_peak: sqp_volume_ly,
         sqp_orders_ly_peak: sqp_orders_ly,
       };
-      const children = levelIdx + 1 < hierarchy.length ? buildTree(childRows, levelIdx + 1, ids, campSort) : [];
+      // Build children lazily — only recurse for expanded nodes. Collapsed subtrees
+      // are never rendered (renderRow gates child rows on isExp and has render-time
+      // fallbacks), so eagerly building the entire tree every render wasted ~1.5s.
+      const nodeKey = `${level}:${k}`;
+      const isExpanded = expandedKeys.has([...path, nodeKey].join('\0'));
+      const children = levelIdx + 1 < hierarchy.length && isExpanded
+        ? buildTree(childRows, levelIdx + 1, ids, campSort, [...path, nodeKey])
+        : [];
       const displayLabel = level === 'campaign' ? (groupRows[0]?.campaign_name || k) : k;
-      nodes.push({ key: `${level}:${k}`, label: displayLabel, level, children, rows: groupRows, campaignIds: ids, metrics });
+      nodes.push({ key: nodeKey, label: displayLabel, level, children, rows: groupRows, campaignIds: ids, metrics });
     }
     return sort.sorted(nodes, (n, k) => n.metrics[k as keyof typeof n.metrics]);
   };
@@ -949,7 +982,7 @@ function DynamicHierarchyCampaignsTable({
   const initialRows = hierarchy.length > 0 && hierarchy[0] === 'search_term' ? searchTerms : campaigns;
   const buildTreeWithSort = (rows: Ads7dRow[], levelIdx: number, campaignIds?: Set<string>) =>
     buildTree(rows, levelIdx, campaignIds, campSort);
-  const tree = useMemo(() => buildTreeWithSort(initialRows, 0), [campaigns, searchTerms, initialRows, hierarchy, productByTerm, campaignToProduct, campSort, sqpVolumeByTerm]);
+  const tree = useMemo(() => buildTreeWithSort(initialRows, 0), [campaigns, searchTerms, initialRows, hierarchy, productByTerm, campaignToProduct, campSort, sqpVolumeByTerm, expandedKeys]);
 
   const renderLevel = (level: string): string => {
     const o = HIERARCHY_OPTIONS.find(x => x.id === level);
