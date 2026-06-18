@@ -98,6 +98,14 @@ export function selectPeak(r: PeakLike): { roas: number; orders: number | null; 
     : { roas, orders: r.q4_peak_orders ?? null, spend: r.q4_peak_spend ?? null, clicks: null, cpc: null }; // Q4 has no clicks/cpc
 }
 
+// The engine's own one-line rationale — the "summary" chip in the decision trace.
+// This is the basis the engine ACTUALLY decided on (whole-keyword grain, mode-aware
+// ROAS — e.g. off-season in GUARDIAN), so surfacing it keeps the card's stated reason
+// consistent with the action even when a displayed cell (raw 1w) differs.
+export function traceSummary(trace: { id: string; value: string }[] | null | undefined): string | null {
+  return trace?.find(s => s.id === 'summary')?.value ?? null;
+}
+
 // ─── Stage-1 clear-case selector (spec §7 confidence gate, client-side) ──────
 // Decides whether an action is a CLEAR case (surface as a decision card) or parked
 // ("needs judgment"). Facts only — uses the engine's own 4w fields. Direct net ROAS

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { familyActuals, familyModes, dominantMode, clearCase, selectPeak, opportunityPerWeek } from './coachActuals';
+import { familyActuals, familyModes, dominantMode, clearCase, selectPeak, opportunityPerWeek, traceSummary } from './coachActuals';
 
 // daily_trends rows are keyed by product_type = family. ad_cost & clicks are ad-only.
 const trends = [
@@ -12,6 +12,20 @@ const acts = [
   { product_short_name: 'Pink Lollibox',  spend: 100, net_roas: 0.5 },
 ];
 const getFamily = (n?: string | null) => (n ? (n.split(' ').slice(-1)[0] === 'Lollibox' ? 'Lollibox' : null) : null);
+
+describe('traceSummary', () => {
+  it('returns the engine summary step value (the basis the engine actually decided on)', () => {
+    const trace = [
+      { id: 'tgt_roas', label: 'Target ROAS', pass: true, value: '1.27' },
+      { id: 'summary', label: 'Summary', pass: true, value: '📈 Profitable ROAS 1.27 with 24 orders → increase bid.' },
+    ];
+    expect(traceSummary(trace)).toBe('📈 Profitable ROAS 1.27 with 24 orders → increase bid.');
+  });
+  it('returns null when there is no summary step or the trace is null', () => {
+    expect(traceSummary(null)).toBeNull();
+    expect(traceSummary([{ id: 'tgt_roas', label: 'x', pass: true, value: '1.27' }])).toBeNull();
+  });
+});
 
 describe('familyActuals', () => {
   it('computes last-7d daily ad spend, ad-only CPC, and spend-weighted 4w ROAS per family', () => {

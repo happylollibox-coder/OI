@@ -2,7 +2,7 @@ import React from 'react';
 import { ArrowDownRight, ArrowUpRight, Ban, Plus } from 'lucide-react';
 import type { ActionRow } from '../../types';
 import { fM } from '../../utils';
-import { CUT_ACTIONS, REDUCE_ACTIONS, selectPeak, termGrain, type GateVerdict } from '../../coachActuals';
+import { CUT_ACTIONS, REDUCE_ACTIONS, selectPeak, termGrain, traceSummary, type GateVerdict } from '../../coachActuals';
 import type { LastChange } from '../../hooks/useLastChange';
 import { fitBadgeClass, fitBadgeLabel } from './fitBadge';
 
@@ -124,7 +124,14 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, la
           </div>
         );
       })()}
-      <div className="text-[10px] text-subtle">{why.reason}.</div>
+      {(() => {
+        // Surface the ENGINE's own rationale (whole-keyword grain, mode-aware ROAS) so the card's
+        // stated reason matches what the engine actually decided on — not a displayed cell that may
+        // be a per-action fragment (1w) or the raw (non-off-season) ROAS. Falls back to the dashboard
+        // clear-case verdict when the trace carries no summary.
+        const engine = traceSummary(a.decision_trace);
+        return <div className="text-[10px] text-subtle">{engine ?? `${why.reason}.`}</div>;
+      })()}
       {sourceKeyword && (
         <div className="text-[9px] text-faint">via {(sourceKeywordMatchType || 'TARGET').toUpperCase()}: {sourceKeyword}</div>
       )}
