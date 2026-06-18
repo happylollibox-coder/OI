@@ -35,8 +35,8 @@ SELECT
   p.advertise_asin,
   pa.parent_name    AS target_parent,
   pb.parent_name    AS advertise_parent,
-  pa.product_name   AS target_name,
-  pb.product_name   AS advertise_name,
+  pa.product_short_name AS target_name,     -- short label (e.g. "Mint LolliME"), not the full ASIN title
+  pb.product_short_name AS advertise_name,
   p.cross_orders_30d,
   p.cross_sales_30d,
   CASE
