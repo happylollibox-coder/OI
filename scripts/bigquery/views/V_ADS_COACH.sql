@@ -789,9 +789,20 @@ SELECT
       -- 7. Summary narrative (generated in SQL, frontend only renders)
       ',{"id":"summary","label":"Summary","pass":true,"value":"',
       CASE
-        -- Defense: monitoring only
+        -- Defense: mirror the DEFENSE BID-RAISE branches in target_action (~line 592) so the
+        -- summary matches the action — raise to dominate when not yet dominant / below the ceiling, else monitor.
+        WHEN d.strategy_id = 'BRAND_DEFENSE'
+          AND COALESCE(d.current_bid, 0) < d.th_bid_cap
+          AND COALESCE(d.impression_share_pct, 0) < d.th_defense_dominate_is
+          THEN CONCAT('🛡 Defense — impression share ',
+               CAST(ROUND(COALESCE(d.impression_share_pct, 0), 0) AS STRING), '% < ',
+               CAST(CAST(d.th_defense_dominate_is AS INT64) AS STRING),
+               '% → bid up to dominate the auction.')
+        WHEN d.strategy_id = 'PRODUCT_DEFENSE'
+          AND COALESCE(d.current_bid, 0) < d.th_bid_cap
+          THEN '🛡 Defense — bid up toward the ceiling to occupy our own detail pages.'
         WHEN d.strategy_id IN ('PRODUCT_DEFENSE', 'BRAND_DEFENSE')
-          THEN '🔒 Defense strategy — monitoring only, no bid changes.'
+          THEN '🔒 Defense — already dominating (or at bid ceiling), monitoring only.'
         -- Insufficient clicks
         WHEN COALESCE(d.target_clicks_8w, 0) < d.th_min_clicks
           THEN CONCAT('📊 Only ', CAST(COALESCE(d.target_clicks_8w, 0) AS STRING),
