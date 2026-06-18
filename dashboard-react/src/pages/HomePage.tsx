@@ -11,7 +11,7 @@ import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
 import { Empty } from '../components/Empty';
 import { SortTh, useSort, MEASURE_TIPS } from '../components/Tooltip';
 import { DashboardSummary } from '../components/DashboardSummary';
-import { fmt, fM, fP, fR, fOrd, fClk, famFromType, weekRangeLabel, weekRangeLabelCapped, formatDateRange, ACTION_META, sqpCoverageWeeks, latestSqpWeek, periodDateKey, latestPeriodLabel, sliceByPeriod, getPeriodsToInclude, shiftYear, addDays, weeksInDateRange, weekOverlapsAdsGap, monthOverlapsAdsGap, scoreFromRoas, scoreFromProfitDelta, periodKey, experimentMatchesFamily } from '../utils';
+import { fmt, fM, fP, fR, fOrd, fClk, famFromType, weekRangeLabel, weekRangeLabelCapped, formatDateRange, ACTION_META, sqpCoverageWeeks, latestSqpWeek, periodDateKey, latestPeriodLabel, sliceByPeriod, getPeriodsToInclude, shiftYear, addDays, weeksInDateRange, weekOverlapsAdsGap, monthOverlapsAdsGap, scoreFromRoas, scoreFromProfitDelta, periodKey, periodDayCount, experimentMatchesFamily } from '../utils';
 import { filterBySeasonality, getSeasonality } from '../seasonality';
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
@@ -22,6 +22,16 @@ import { usePageSummary } from '../components/PageSummaryBar';
 import { apiFetch } from '../utils/apiFetch';
 
 const ALL_MEASURES: TrendMeasure[] = ['sales', 'ad_cost', 'cogs', 'net_profit', 'net_roas', 'orders', 'units', 'clicks', 'sessions', 'organic_pct', 'payment'];
+
+// All known families (drives inclusion + per-family record initialization). Derived from
+// FAMILIES so new families (Bunny, LolliBall, …) are picked up without code edits.
+const FAM_KEYS = Object.keys(FAMILIES) as FamilyName[];
+function famRecord<T>(init: () => T): Record<FamilyName, T> {
+  return Object.fromEntries(FAM_KEYS.map(k => [k, init()])) as Record<FamilyName, T>;
+}
+// Stock anywhere in the pipeline: FBA + AWD + in-transit + manufactured-ready.
+const stockAnywhere = (sc: { fba_stock_qty?: number; awd_stock_qty?: number; in_transit_qty?: number; mfr_stock_qty?: number }): number =>
+  (sc.fba_stock_qty || 0) + (sc.awd_stock_qty || 0) + (sc.in_transit_qty || 0) + (sc.mfr_stock_qty || 0);
 
 const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'family', label: 'Family', group: 'Info' },
@@ -54,6 +64,8 @@ const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'shipping_cost_per_unit', label: 'Shipping/Unit', tip: 'Shipping cost per unit (from DIM_COSTS_HISTORY)', group: 'PnL', defaultVisible: false },
   { id: 'fba_stock_qty', label: 'FBA Stock', tip: 'Current sellable inventory in FBA', group: 'Supply Chain', defaultVisible: true },
   { id: 'awd_stock_qty', label: 'AWD Stock', tip: 'Current inventory in AWD', group: 'Supply Chain', defaultVisible: true },
+  { id: 'in_transit_qty', label: 'In Transit', tip: 'Units currently in transit (inbound shipments)', group: 'Supply Chain', defaultVisible: true },
+  { id: 'mfr_stock_qty', label: 'Mfg Ready', tip: 'Units manufactured and ready to ship from the factory', group: 'Supply Chain', defaultVisible: true },
   { id: 'days_of_coverage', label: 'Days Cover', tip: 'Days of sellable inventory coverage at current velocity (FBA+AWD stock ÷ daily units sold)', group: 'Supply Chain', defaultVisible: true },
   { id: 'fba_days_of_coverage', label: 'Days Cover (FBA)', tip: 'Days of FBA inventory coverage at current velocity', group: 'Supply Chain', defaultVisible: true },
   { id: 'awd_days_of_coverage', label: 'Days Cover (AWD)', tip: 'Days of AWD inventory coverage at current velocity', group: 'Supply Chain', defaultVisible: true },
@@ -90,6 +102,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   const { filters, setFilter } = useFilters();
   const periodMode = filters.periodMode;
   const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
+  // Total | /day toggle — divides additive measures by the days each period covers
+  // (elapsed days for the in-progress period) so partial periods are comparable.
+  const [perDay, setPerDay] = useState<boolean>(() => { try { return localStorage.getItem('oi_home_per_day') === '1'; } catch { return false; } });
+  const setPerDayPersist = (v: boolean) => { setPerDay(v); try { localStorage.setItem('oi_home_per_day', v ? '1' : '0'); } catch { /* ignore */ } };
   const [selectedMeasures, setSelectedMeasures] = useState<Set<TrendMeasure>>(new Set(['sales', 'ad_cost', 'net_profit', 'net_roas']));
   const [approvedAwds, setApprovedAwds] = useState<Set<string>>(new Set());
   const [expandedFamily, setExpandedFamily] = useState<FamilyName | null>(null);
@@ -360,13 +376,50 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   }, [data.ads_7d_summary, data.ads_7d, data.products, data.campaign_search_terms, periodMode, expCampaignIds, filters.keyword, filters.seasonality, filters.product, pk]);
 
   const productToFamily = useMemo(() => {
+    // OI family lives in parent_name (falls back to product_short_name), NOT product_type
+    // — product_type on DIM_PRODUCT is the Amazon category (e.g. KEYCHAIN).
     const map: Record<string, FamilyName> = {};
     for (const p of (data.products || [])) {
-      const fam = famFromType(p.product_type || '') as FamilyName | null;
+      const fam = (p.parent_name || p.product_short_name || '') as FamilyName;
       if (fam && p.product_short_name) map[p.product_short_name] = fam;
     }
     return map;
   }, [data.products]);
+
+  // asin → OI family (parent_name || product_short_name), matching V_PRODUCT_FAMILY_MAP.
+  const asinToFamily = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of (data.products || [])) {
+      if (p.asin) map.set(p.asin, p.parent_name || p.product_short_name || '');
+    }
+    return map;
+  }, [data.products]);
+
+  // Per-family inventory totals + the set of families that hold stock anywhere
+  // (FBA / AWD / in-transit / manufactured). Drives "show everything with stock".
+  const { supplyByFamily, familiesWithStock } = useMemo(() => {
+    type FamSupply = { fba: number; awd: number; in_transit: number; mfr: number; sellable: number; velocity: number; next_ship_qty: number; last_30d_sold: number; next_30d: number; next_31_60: number; next_61_90: number };
+    const agg: Record<string, FamSupply> = {};
+    const withStock = new Set<string>();
+    for (const sc of (data.supply_chain || [])) {
+      const fam = asinToFamily.get(sc.asin) || '';
+      if (!fam) continue;
+      if (stockAnywhere(sc) > 0) withStock.add(fam);
+      const a = agg[fam] || (agg[fam] = { fba: 0, awd: 0, in_transit: 0, mfr: 0, sellable: 0, velocity: 0, next_ship_qty: 0, last_30d_sold: 0, next_30d: 0, next_31_60: 0, next_61_90: 0 });
+      a.fba += sc.fba_stock_qty || 0;
+      a.awd += sc.awd_stock_qty || 0;
+      a.in_transit += sc.in_transit_qty || 0;
+      a.mfr += sc.mfr_stock_qty || 0;
+      a.sellable += sc.sellable_qty || 0;
+      a.velocity += sc.daily_velocity || 0;
+      a.next_ship_qty += sc.next_shipment_qty || 0;
+      a.last_30d_sold += sc.last_30d_sold || 0;
+      a.next_30d += sc.next_30d_planned || 0;
+      a.next_31_60 += sc.next_31_60d_planned || 0;
+      a.next_61_90 += sc.next_61_90d_planned || 0;
+    }
+    return { supplyByFamily: agg, familiesWithStock: withStock };
+  }, [data.supply_chain, asinToFamily]);
 
   const { adsSpendByFamilyAndPeriod } = useMemo(() => {
     const spendMap: Record<string, number> = {};
@@ -374,30 +427,48 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     const unitsMap: Record<string, number> = {};
     for (const [key, val] of Object.entries(adsDataByProductAndPeriod.spend)) {
       const [name, period] = key.split('|');
-      const fam = productToFamily[name] || (['Lollibox', 'LolliME', 'Bottle', 'Fresh'].includes(name) ? name : null);
+      const fam = productToFamily[name] || ((FAM_KEYS as string[]).includes(name) ? name : null);
       if (fam && period) spendMap[`${fam}|${period}`] = (spendMap[`${fam}|${period}`] || 0) + val;
     }
     for (const [key, val] of Object.entries(adsDataByProductAndPeriod.sales)) {
       const [name, period] = key.split('|');
-      const fam = productToFamily[name] || (['Lollibox', 'LolliME', 'Bottle', 'Fresh'].includes(name) ? name : null);
+      const fam = productToFamily[name] || ((FAM_KEYS as string[]).includes(name) ? name : null);
       if (fam && period) salesMap[`${fam}|${period}`] = (salesMap[`${fam}|${period}`] || 0) + val;
     }
     for (const [key, val] of Object.entries(adsDataByProductAndPeriod.units)) {
       const [name, period] = key.split('|');
-      const fam = productToFamily[name] || (['Lollibox', 'LolliME', 'Bottle', 'Fresh'].includes(name) ? name : null);
+      const fam = productToFamily[name] || ((FAM_KEYS as string[]).includes(name) ? name : null);
       if (fam && period) unitsMap[`${fam}|${period}`] = (unitsMap[`${fam}|${period}`] || 0) + val;
     }
     return { adsSpendByFamilyAndPeriod: spendMap, adsSalesByFamilyAndPeriod: salesMap, adsUnitsByFamilyAndPeriod: unitsMap };
   }, [adsDataByProductAndPeriod, productToFamily]);
 
-  const roas = effectiveTotals.co ? (effectiveTotals.sl - effectiveTotals.cg) / effectiveTotals.co : 0;
+  // ── Per-day denominators. dCur = elapsed days of the (possibly partial) current
+  // period; dPrev = prev period days; dLy = full length (LY periods are complete). ──
+  const dCur = Math.max(1, periodDayCount(kpiWeek, periodMode, perfMaxDate));
+  const dPrev = Math.max(1, periodDayCount(kpiPrevWeek, periodMode, perfMaxDate));
+  const dLy = Math.max(1, periodDayCount(kpiWeek, periodMode));
+  const lyScale = perDay ? 1 / dLy : 1;
+  const _sc = perDay ? 1 / dCur : 1;
+  const _scp = perDay ? 1 / dPrev : 1;
+  // Display totals — additive fields scaled per-day; ratios computed from them stay invariant.
+  const eT2 = {
+    sl: effectiveTotals.sl * _sc, co: effectiveTotals.co * _sc, cg: effectiveTotals.cg * _sc,
+    np: effectiveTotals.np * _sc, or: effectiveTotals.or * _sc, cl: effectiveTotals.cl * _sc, ss: effectiveTotals.ss * _sc,
+  };
+  const eP2 = effectivePrevTotals ? {
+    sl: effectivePrevTotals.sl * _scp, co: effectivePrevTotals.co * _scp,
+    cg: effectivePrevTotals.cg * _scp, np: effectivePrevTotals.np * _scp,
+  } : null;
+
+  const roas = eT2.co ? (eT2.sl - eT2.cg) / eT2.co : 0;
   const orgP = effectiveTotals.orgP;
-  const orgOrd = effectiveTotals.or > 0 ? Math.round(effectiveTotals.or * orgP / 100) : 0;
-  const sd = effectivePrevTotals?.sl ? ((effectiveTotals.sl - effectivePrevTotals.sl) / effectivePrevTotals.sl) * 100 : 0;
-  const cd = effectivePrevTotals?.co ? ((effectiveTotals.co - effectivePrevTotals.co) / effectivePrevTotals.co) * 100 : 0;
-  const pd = effectivePrevTotals?.np ? ((effectiveTotals.np - effectivePrevTotals.np) / Math.abs(effectivePrevTotals.np)) * 100 : 0;
-  const margin = effectiveTotals.sl ? (effectiveTotals.np / effectiveTotals.sl) * 100 : 0;
-  const prevRoas = effectivePrevTotals?.co ? (effectivePrevTotals.sl - effectivePrevTotals.cg) / effectivePrevTotals.co : 0;
+  const orgOrd = eT2.or > 0 ? Math.round(eT2.or * orgP / 100) : 0;
+  const sd = eP2?.sl ? ((eT2.sl - eP2.sl) / eP2.sl) * 100 : 0;
+  const cd = eP2?.co ? ((eT2.co - eP2.co) / eP2.co) * 100 : 0;
+  const pd = eP2?.np ? ((eT2.np - eP2.np) / Math.abs(eP2.np)) * 100 : 0;
+  const margin = eT2.sl ? (eT2.np / eT2.sl) * 100 : 0;
+  const prevRoas = eP2?.co ? (eP2.sl - eP2.cg) / eP2.co : 0;
   const roasDelta = prevRoas ? ((roas - prevRoas) / Math.abs(prevRoas)) * 100 : 0;
   const prevOrgP = effectivePrevTotals?.orgP || 0;
   const orgDelta = prevOrgP ? ((orgP - prevOrgP) / Math.abs(prevOrgP)) * 100 : 0;
@@ -476,7 +547,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     for (const c of costs) {
       const wk = c.week_start_date || '';
       byWeek[wk] = (byWeek[wk] || 0) + c.weekly_storage_cost;
-      const fk = `${c.product_type}|${wk}`;
+      // Key the family rollup by asin→OI family — the storage view labels newer products
+      // (e.g. Bunny) with their Amazon category, so product_type alone misses them.
+      const fam = (c.asin && asinToFamily.get(c.asin)) || c.product_type;
+      const fk = `${fam}|${wk}`;
       byFamilyWeek[fk] = (byFamilyWeek[fk] || 0) + c.weekly_storage_cost;
       if (c.asin) {
         const akWeek = `${c.asin}|${wk}`;
@@ -490,7 +564,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const mk = (c.week_start_date || '').slice(0, 7);
       if (!mk) continue;
       byMonth[mk] = (byMonth[mk] || 0) + c.weekly_storage_cost;
-      const fk = `${c.product_type}|${mk}`;
+      const fam = (c.asin && asinToFamily.get(c.asin)) || c.product_type;
+      const fk = `${fam}|${mk}`;
       byFamilyMonth[fk] = (byFamilyMonth[fk] || 0) + c.weekly_storage_cost;
       if (c.asin) {
         const akMonth = `${c.asin}|${mk}`;
@@ -498,7 +573,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       }
     }
     return { byWeek, byMonth, byFamilyWeek, byFamilyMonth, byAsinWeek, byAsinMonth };
-  }, [data.storage_costs]);
+  }, [data.storage_costs, asinToFamily]);
 
   const trendData = useMemo(() => {
     type BucketVal = Record<TrendMeasure, { sum: number; count: number }>;
@@ -1101,10 +1176,12 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
 
     if (!periods.length) return null;
 
-    const KNOWN_FAMILIES = new Set(['Bottle', 'Fresh', 'LolliME', 'Lollibox']);
+    // Show a family if it had sales this period OR holds stock anywhere (FBA/AWD/in-transit/mfr).
+    // Families with stock but no sales (e.g. newly launched) are surfaced too.
+    const familiesWithSales = [...new Set(srcAll.map(r => r.product_type))].filter(Boolean);
     const families = filters.family
-      ? [...new Set(srcAll.filter(r => famFromType(r.product_type) === filters.family).map(r => r.product_type))]
-      : [...new Set(srcAll.map(r => r.product_type))].filter(t => KNOWN_FAMILIES.has(t)).sort();
+      ? (familiesWithSales.includes(filters.family) || familiesWithStock.has(filters.family) ? [filters.family] : [])
+      : [...new Set([...familiesWithSales, ...familiesWithStock])].filter(Boolean).sort();
 
     let latest: string[];
     let prev: string[];
@@ -1143,22 +1220,22 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       return t;
     };
 
-    const familyAds: Record<FamilyName, number> = { Lollibox: 0, LolliME: 0, Bottle: 0, Fresh: 0 };
-    const familyAdsSales: Record<FamilyName, number> = { Lollibox: 0, LolliME: 0, Bottle: 0, Fresh: 0 };
-    const familyAdsUnits: Record<FamilyName, number> = { Lollibox: 0, LolliME: 0, Bottle: 0, Fresh: 0 };
+    const familyAds = famRecord<number>(() => 0);
+    const familyAdsSales = famRecord<number>(() => 0);
+    const familyAdsUnits = famRecord<number>(() => 0);
     for (const [key, val] of Object.entries(adsDataByProductAndPeriod.spend)) {
       const [name, period] = key.split('|');
-      const fam = productToFamily[name] || (['Lollibox', 'LolliME', 'Bottle', 'Fresh'].includes(name) ? name as FamilyName : null);
+      const fam = productToFamily[name] || ((FAM_KEYS as string[]).includes(name) ? name as FamilyName : null);
       if (fam && latest.some(p => periodKey(p, periodMode) === period)) familyAds[fam] += val;
     }
     for (const [key, val] of Object.entries(adsDataByProductAndPeriod.sales)) {
       const [name, period] = key.split('|');
-      const fam = productToFamily[name] || (['Lollibox', 'LolliME', 'Bottle', 'Fresh'].includes(name) ? name as FamilyName : null);
+      const fam = productToFamily[name] || ((FAM_KEYS as string[]).includes(name) ? name as FamilyName : null);
       if (fam && latest.some(p => periodKey(p, periodMode) === period)) familyAdsSales[fam] += val;
     }
     for (const [key, val] of Object.entries(adsDataByProductAndPeriod.units)) {
       const [name, period] = key.split('|');
-      const fam = productToFamily[name] || (['Lollibox', 'LolliME', 'Bottle', 'Fresh'].includes(name) ? name as FamilyName : null);
+      const fam = productToFamily[name] || ((FAM_KEYS as string[]).includes(name) ? name as FamilyName : null);
       if (fam && latest.some(p => periodKey(p, periodMode) === period)) familyAdsUnits[fam] += val;
     }
 
@@ -1227,13 +1304,28 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       }
       const storage_cost = famStorageCost;
       const payment = payment_no_storage - storage_cost;
-      return { family: fam, ...curWithAds, units, net_roas, organic_pct, organic_units, ad_orders, clicks: curWithAds.clicks, sales_change: sc, sessions: curWithAds.sessions, payment, storage_cost };
+      // Per-family inventory totals (snapshot — not period-scaled). Coverage is recomputed
+      // from summed stock ÷ summed velocity since days-of-coverage isn't additive.
+      const supply = supplyByFamily[fam];
+      const velocity = supply?.velocity ?? 0;
+      const cov = (qty: number) => (velocity > 0 ? Math.round(qty / velocity) : null);
+      return {
+        family: fam, ...curWithAds, units, net_roas, organic_pct, organic_units, ad_orders,
+        clicks: curWithAds.clicks, sales_change: sc, sessions: curWithAds.sessions, payment, storage_cost,
+        fba_stock_qty: supply?.fba ?? 0, awd_stock_qty: supply?.awd ?? 0,
+        in_transit_qty: supply?.in_transit ?? 0, mfr_stock_qty: supply?.mfr ?? 0,
+        days_of_coverage: cov(supply?.sellable ?? 0),
+        fba_days_of_coverage: cov(supply?.fba ?? 0),
+        awd_days_of_coverage: cov(supply?.awd ?? 0),
+        qty_next_shipment: supply?.next_ship_qty ?? 0, last_30d_sold: supply?.last_30d_sold ?? 0,
+        next_30d_planned: supply?.next_30d ?? 0, next_31_60d_planned: supply?.next_31_60 ?? 0, next_61_90d_planned: supply?.next_61_90 ?? 0,
+      };
     });
-  }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, periodMode, kpiWeek, kpiPrevWeek, filters.family, filters.product, filters.specificPeriod, filters.seasonality, pk, adsDataByProductAndPeriod, productToFamily, amazonFeeRate, storageCostLookup]);
+  }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, periodMode, kpiWeek, kpiPrevWeek, filters.family, filters.product, filters.specificPeriod, filters.seasonality, pk, adsDataByProductAndPeriod, productToFamily, amazonFeeRate, storageCostLookup, supplyByFamily]);
 
   const variationByFamily = useMemo(() => {
     const sqp = data.sqp_weekly || [];
-    if (!kpiWeek || !sqp.length) return { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] } as Record<FamilyName, { asin: string; name: string; orders: number; clicks: number; adsOrders: number }[]>;
+    if (!kpiWeek || !sqp.length) return famRecord(() => []) as Record<FamilyName, { asin: string; name: string; orders: number; clicks: number; adsOrders: number }[]>;
     const matchWeek = (w: string) => {
       if (periodMode === 'weeks') return w === kpiWeek;
       return periodKey(w, periodMode) === kpiWeek;
@@ -1251,7 +1343,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       byFamily[fam][key].clicks += r.clicks || 0;
       byFamily[fam][key].adsOrders += r.ads_orders || 0;
     });
-    const result: Record<FamilyName, { asin: string; name: string; orders: number; clicks: number; adsOrders: number }[]> = { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] };
+    const result: Record<FamilyName, { asin: string; name: string; orders: number; clicks: number; adsOrders: number }[]> = famRecord(() => []);
     (Object.keys(byFamily) as FamilyName[]).forEach(fam => {
       result[fam] = Object.values(byFamily[fam]).sort((a, b) => b.orders - a.orders);
     });
@@ -1326,7 +1418,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, periodMode, kpiWeek, kpiPrevWeek, effectivePrevTotals, filters.family, filters.product, filters.seasonality, pk, adsSpendByFamilyAndPeriod]);
 
   const variationPnlByFamily = useMemo(() => {
-    if (!kpiWeek) return { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] } as Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]>;
+    if (!kpiWeek) return famRecord(() => []) as Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]>;
     type Row = { product_type: string; asin: string; product_short_name: string; week_start?: string; month_start?: string; sales: number; ad_cost: number; cogs: number; net_profit: number; orders: number; units?: number; clicks?: number; sessions?: number; organic_pct?: number };
     const src = periodMode === 'weeks' ? (data.weekly_trends_by_asin || []) : (data.monthly_trends_by_asin || []);
     const dateKey = periodMode === 'weeks' ? 'week_start' : 'month_start';
@@ -1335,10 +1427,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       if (periodMode === 'weeks') return v === kpiWeek;
       return periodKey(v, periodMode) === kpiWeek;
     };
-    const result: Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]> = { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] };
-    const tempMap: Record<FamilyName, Map<string, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; orders: number; units: number; clicks: number; sessions: number; organic_pct_weighted: number }>> = {
-      Lollibox: new Map(), LolliME: new Map(), Bottle: new Map(), Fresh: new Map(),
-    };
+    const result: Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]> = famRecord(() => []);
+    const tempMap: Record<FamilyName, Map<string, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; orders: number; units: number; clicks: number; sessions: number; organic_pct_weighted: number }>> = famRecord(() => new Map());
     src.forEach((r: Row) => {
       const fam = famFromType(r.product_type) as FamilyName | null;
       if (!fam || !tempMap[fam] || (filters.family && fam !== filters.family) || (filters.product && r.asin !== filters.product) || !matchCur(r)) return;
@@ -1401,11 +1491,27 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         });
       });
     });
+    // Inject products that hold stock anywhere but had no sales this period, so newly-stocked
+    // (or temporarily zero-sales) items still appear under their family with their inventory.
+    for (const sc of (data.supply_chain || [])) {
+      const fam = (asinToFamily.get(sc.asin) || '') as FamilyName;
+      if (!fam || !result[fam]) continue;
+      if (filters.family && fam !== filters.family) continue;
+      if (filters.product && sc.asin !== filters.product) continue;
+      if (stockAnywhere(sc) <= 0) continue;
+      if (result[fam].some(v => v.asin === sc.asin)) continue;
+      result[fam].push({
+        asin: sc.asin, product_short_name: sc.product_short_name || sc.asin,
+        sales: 0, cogs: 0, ad_cost: 0, storage_cost: 0, net_profit: 0, net_roas: 0,
+        orders: 0, units: 0, clicks: 0, sessions: 0, organic_pct: 0, organic_units: 0,
+        ad_orders: 0, ads_sales: 0, ads_units: 0,
+      });
+    }
     (Object.keys(result) as FamilyName[]).forEach(fam => {
       result[fam].sort((a, b) => b.sales - a.sales);
     });
     return result;
-  }, [data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, periodMode, kpiWeek, filters.family, filters.product, adsDataByProductAndPeriod, storageCostLookup]);
+  }, [data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, data.supply_chain, asinToFamily, periodMode, kpiWeek, filters.family, filters.product, adsDataByProductAndPeriod, storageCostLookup]);
 
   const pnlByAsin = useMemo(() => {
     const map = new Map<string, { payment: number; storage_cost: number; sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }>();
@@ -1430,7 +1536,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   }, [data.supply_chain]);
 
   const changesByVariation = useMemo(() => {
-    if (!kpiWeek || !kpiPrevWeek) return { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] } as Record<FamilyName, { asin: string; product_short_name: string; sd: number; cd: number; pd: number; roasDelta: number; orgDelta: number; status: string; prevSales: number; prevAdCost: number; prevNetProfit: number }[]>;
+    if (!kpiWeek || !kpiPrevWeek) return famRecord(() => []) as Record<FamilyName, { asin: string; product_short_name: string; sd: number; cd: number; pd: number; roasDelta: number; orgDelta: number; status: string; prevSales: number; prevAdCost: number; prevNetProfit: number }[]>;
     type Row = { product_type: string; asin: string; product_short_name: string; week_start?: string; month_start?: string; sales: number; ad_cost: number; net_profit: number; orders: number; organic_pct?: number };
     const src = periodMode === 'weeks' ? (data.weekly_trends_by_asin || []) : (data.monthly_trends_by_asin || []);
     const dateKey = periodMode === 'weeks' ? 'week_start' : 'month_start';
@@ -1465,7 +1571,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       }
     });
 
-    const result: Record<FamilyName, { asin: string; product_short_name: string; sd: number; cd: number; pd: number; roasDelta: number; orgDelta: number; status: string; prevSales: number; prevAdCost: number; prevNetProfit: number }[]> = { Lollibox: [], LolliME: [], Bottle: [], Fresh: [] };
+    const result: Record<FamilyName, { asin: string; product_short_name: string; sd: number; cd: number; pd: number; roasDelta: number; orgDelta: number; status: string; prevSales: number; prevAdCost: number; prevNetProfit: number }[]> = famRecord(() => []);
 
     Object.entries(byAsin).forEach(([key, { cur, prev }]) => {
       if (!cur.orders && !prev.orders) return;
@@ -1699,15 +1805,56 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     return annotations;
   }, [trendData, data.change_log, data.upcoming]);
 
+  // ── Per-day display data (Total | /day toggle) ──
+  // Post-process the source aggregates: divide additive "flow" fields by each period's
+  // day-count. Ratios (net_roas, organic_pct) and last-year values are handled per surface.
+  const trendDataDisplay = useMemo(() => {
+    if (!perDay) return trendData;
+    const ADD = ['sales', 'ad_cost', 'cogs', 'net_profit', 'payment', 'storage_cost', 'orders', 'units', 'clicks', 'sessions'];
+    return trendData.map(d => {
+      const key = (d as { weekKey?: string }).weekKey || '';
+      const dc = Math.max(1, periodDayCount(key, periodMode, perfMaxDate));
+      const dFull = Math.max(1, periodDayCount(key, periodMode)); // LY is always complete → full length
+      const o: Record<string, unknown> = { ...d };
+      for (const m of ADD) {
+        if (typeof o[m] === 'number') o[m] = (o[m] as number) / dc;
+        const ly = `ly_${m}`;
+        if (typeof o[ly] === 'number') o[ly] = (o[ly] as number) / dFull;
+      }
+      return o as typeof trendData[number];
+    });
+  }, [trendData, perDay, periodMode, perfMaxDate]);
+
+  const kpiSparklineDisplay = useMemo(() => {
+    if (!perDay) return kpiSparklineData;
+    const keys = trendData.map(d => (d as { weekKey?: string }).weekKey || d.label);
+    const divs = keys.map(k => Math.max(1, periodDayCount(k, periodMode, perfMaxDate)));
+    const scale = (arr?: number[]) => (arr || []).map((v, i) => (divs[i] ? v / divs[i] : v));
+    return { ...kpiSparklineData, sales: scale(kpiSparklineData.sales), ad_cost: scale(kpiSparklineData.ad_cost), profit: scale(kpiSparklineData.profit) };
+  }, [kpiSparklineData, perDay, trendData, periodMode, perfMaxDate]);
+
+  const familyPeriodDataDisplay = useMemo(() => {
+    const base = familyPeriodData;
+    if (!perDay || !base) return base;
+    const d = Math.max(1, periodDayCount(kpiWeek, periodMode, perfMaxDate));
+    if (d <= 1) return base;
+    const FLOW = ['sales', 'cogs', 'ad_cost', 'ads_sales', 'ads_units', 'net_profit', 'orders', 'units', 'clicks', 'sessions', 'organic_units', 'ad_orders', 'payment', 'storage_cost'];
+    return base.map(row => {
+      const o = { ...row } as Record<string, unknown>;
+      for (const k of FLOW) if (typeof o[k] === 'number') o[k] = (o[k] as number) / d;
+      return o;
+    }) as typeof familyPeriodData;
+  }, [familyPeriodData, perDay, kpiWeek, periodMode, perfMaxDate]);
+
   const totalFamilySales = useMemo(() => {
-    return (familyPeriodData || []).reduce((s, r) => s + (r.sales || 0), 0);
-  }, [familyPeriodData]);
+    return (familyPeriodDataDisplay || []).reduce((s, r) => s + (r.sales || 0), 0);
+  }, [familyPeriodDataDisplay]);
   const totalFamilyAdCost = useMemo(() => {
-    return (familyPeriodData || []).reduce((s, r) => s + (r.ad_cost || 0), 0);
-  }, [familyPeriodData]);
+    return (familyPeriodDataDisplay || []).reduce((s, r) => s + (r.ad_cost || 0), 0);
+  }, [familyPeriodDataDisplay]);
   const totalFamilyNetProfit = useMemo(() => {
-    return (familyPeriodData || []).reduce((s, r) => s + (r.net_profit || 0), 0);
-  }, [familyPeriodData]);
+    return (familyPeriodDataDisplay || []).reduce((s, r) => s + (r.net_profit || 0), 0);
+  }, [familyPeriodDataDisplay]);
 
   const eT = effectiveTotals;
   const netRoas = eT.co > 0 ? (eT.sl - eT.cg - eT.co) / eT.co : 0;
@@ -1725,6 +1872,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
 
   const trendLabels = trendData.map(d => d.label);
 
+  // Divisor for the family table's current period (variation sub-rows + direct-source cells).
+  const famDiv = perDay ? Math.max(1, periodDayCount(kpiWeek, periodMode, perfMaxDate)) : 1;
+  const pdSuffix = perDay ? '/d' : '';
+
   return (
     <div className="animate-in">
       {periodIncomplete && (
@@ -1732,9 +1883,24 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           Perf data through {perfMaxDate} — current period not complete, scores/comparisons suppressed
         </div>
       )}
-      {headline && (
-        <div className="font-mono text-[14px] font-semibold text-muted truncate mb-1 px-1">{headline}</div>
-      )}
+      <div className="flex items-center justify-between gap-2 mb-1 px-1">
+        <div className="font-mono text-[14px] font-semibold text-muted truncate">{headline || ''}</div>
+        {/* Total | /day — divides additive measures by the days in each period (elapsed days
+            for the in-progress period), making partial/uneven periods comparable. Ratios unchanged. */}
+        <div className="flex items-center rounded-lg border overflow-hidden shrink-0" style={{ borderColor: 'var(--color-border)' }}
+          title="Per-day divides additive measures (sales, ads spend, net profit, orders…) by the days in the period — using elapsed days for the in-progress period — so periods of different lengths are comparable. Ratios (Net ROAS, Organic %) are unchanged.">
+          {(['total', 'perday'] as const).map(mode => {
+            const active = (mode === 'perday') === perDay;
+            return (
+              <button key={mode} onClick={() => setPerDayPersist(mode === 'perday')}
+                className="px-2.5 py-1 text-[11px] font-semibold transition-all cursor-pointer"
+                style={{ background: active ? 'var(--color-accent, #3b82f6)' : 'transparent', color: active ? '#fff' : 'var(--color-faint)' }}>
+                {mode === 'total' ? 'Total' : '/day'}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       <div className="flex items-center justify-end gap-1 mb-1 flex-wrap">
         {ALL_MEASURES.map(m => {
@@ -1761,13 +1927,13 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         latestPeriodLabel={latestPeriodLabel(kpiWeek, periodMode)}
         trendLabels={trendLabels}
         metrics={[
-          { label: 'SALES', value: fM(effectiveTotals.sl), prevValue: fM(effectivePrevTotals?.sl || 0), lyValue: peakYoYData ? fM(peakYoYData.salesLy) : undefined, delta: `${sd >= 0 ? '+' : ''}${sd.toFixed(1)}%`, positive: sd >= 0, warn: cd > sd ? 'Cost outpacing sales' : undefined, sub: sd > cd ? 'outgrowing cost' : '' },
-          { label: 'ADS SPEND', value: fM(effectiveTotals.co), prevValue: fM(effectivePrevTotals?.co || 0), delta: `${cd >= 0 ? '+' : ''}${cd.toFixed(1)}%`, positive: cd <= 0, sub: `${fClk(effectiveTotals.cl)} clicks · ${effectiveTotals.ss.toLocaleString()} sess` },
-          { label: 'NET PROFIT', value: fM(effectiveTotals.np), prevValue: fM(effectivePrevTotals?.np || 0), lyValue: peakYoYData ? fM(peakYoYData.npLy) : undefined, delta: `${pd >= 0 ? '+' : ''}${pd.toFixed(1)}%`, positive: pd >= 0, sub: `COGS ${fM(effectiveTotals.cg)} · margin ${fP(margin)}` },
+          { label: 'SALES', value: fM(eT2.sl) + pdSuffix, prevValue: fM(eP2?.sl || 0), lyValue: peakYoYData ? fM(peakYoYData.salesLy * lyScale) : undefined, delta: `${sd >= 0 ? '+' : ''}${sd.toFixed(1)}%`, positive: sd >= 0, warn: cd > sd ? 'Cost outpacing sales' : undefined, sub: sd > cd ? 'outgrowing cost' : '' },
+          { label: 'ADS SPEND', value: fM(eT2.co) + pdSuffix, prevValue: fM(eP2?.co || 0), delta: `${cd >= 0 ? '+' : ''}${cd.toFixed(1)}%`, positive: cd <= 0, sub: `${fClk(Math.round(eT2.cl))} clicks · ${Math.round(eT2.ss).toLocaleString()} sess` },
+          { label: 'NET PROFIT', value: fM(eT2.np) + pdSuffix, prevValue: fM(eP2?.np || 0), lyValue: peakYoYData ? fM(peakYoYData.npLy * lyScale) : undefined, delta: `${pd >= 0 ? '+' : ''}${pd.toFixed(1)}%`, positive: pd >= 0, sub: `COGS ${fM(eT2.cg)}${pdSuffix} · margin ${fP(margin)}` },
           { label: 'NET ROAS', value: fR(roas), prevValue: fR(prevRoas), lyValue: peakYoYData && peakYoYData.npLy && peakYoYData.salesLy ? fR(peakYoYData.salesLy > 0 ? peakYoYData.npLy / peakYoYData.salesLy : 0) : undefined, delta: `${roasDelta >= 0 ? '+' : ''}${roasDelta.toFixed(1)}%`, positive: roasDelta >= 0, warn: roas < 1 && roas > 0 ? 'Below break-even' : undefined, sub: roas >= 1 ? 'above break-even' : '' },
-          { label: 'ORGANIC %', value: fP(orgP), prevValue: fP(prevOrgP), delta: `${orgDelta >= 0 ? '+' : ''}${orgDelta.toFixed(1)}%`, positive: orgDelta >= 0, sub: `${fOrd(effectiveTotals.or)} total · ${fOrd(orgOrd)} organic` },
+          { label: 'ORGANIC %', value: fP(orgP), prevValue: fP(prevOrgP), delta: `${orgDelta >= 0 ? '+' : ''}${orgDelta.toFixed(1)}%`, positive: orgDelta >= 0, sub: `${fOrd(Math.round(eT2.or))} total · ${fOrd(orgOrd)} organic` },
         ]}
-        kpiSparklineData={kpiSparklineData}
+        kpiSparklineData={kpiSparklineDisplay}
         headline={headline}
         onMetricSelect={(key) => {
           const map: Record<string, TrendMeasure> = { sales: 'sales', ad_cost: 'ad_cost', profit: 'net_profit', roas: 'net_roas', organic: 'organic_pct' };
@@ -1779,7 +1945,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
             <div className="w-full h-full flex flex-col">
               <div className="flex-1 min-h-0">
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={trendData} barCategoryGap="20%" margin={{ top: 18, right: 0, bottom: 0, left: 0 }}>
+                  <ComposedChart data={trendDataDisplay} barCategoryGap="20%" margin={{ top: 18, right: 0, bottom: 0, left: 0 }}>
                     <CartesianGrid {...CHART_GRID} />
                     <XAxis dataKey="label" tick={CHART_AXIS_TICK_LG} tickLine={false} axisLine={false} />
                     <YAxis yAxisId="left" hide />
@@ -1855,7 +2021,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           <MeasureSelector tableId="home_family" measures={FAMILY_TABLE_COLUMNS} selected={familyCols} onSelectedChange={setFamilyCols} />
         }
       >
-        {familyPeriodData ? (
+        {familyPeriodDataDisplay ? (
           <div className="border border-border rounded-xl bg-card overflow-x-auto">
             <table className="w-full border-collapse text-xs min-w-[900px]">
               <thead>
@@ -1867,7 +2033,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
               </thead>
               <tbody>
                 {(() => {
-                  const sortedData = famSort.sorted(familyPeriodData);
+                  const sortedData = famSort.sorted(familyPeriodDataDisplay);
                   const totalAdCost = sortedData.reduce((s, r) => s + (r.ad_cost || 0), 0);
                   const totalNetProfit = sortedData.reduce((s, r) => s + (r.net_profit || 0), 0);
                   return sortedData.map((r, i) => {
@@ -1875,7 +2041,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                     const isExpanded = f && expandedFamily === f;
                   const varsPnl = f ? (variationPnlByFamily[f] || []) : [];
                   const varsSqp = f ? (variationByFamily[f] || []) : [];
-                  const vars = varsPnl.length > 0
+                  const varsRaw = varsPnl.length > 0
                     ? varsPnl
                     : varsSqp.map(v => {
                         const pnl = v.asin ? pnlByAsin.get(v.asin) : undefined;
@@ -1902,6 +2068,10 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                           ads_units: pnl?.ads_units ?? 0,
                         };
                       });
+                  // Per-day: scale variation flow fields by the current period's day-count (ratios untouched).
+                  const vars = famDiv > 1
+                    ? varsRaw.map(v => ({ ...v, sales: v.sales / famDiv, cogs: v.cogs / famDiv, ad_cost: v.ad_cost / famDiv, net_profit: v.net_profit / famDiv, orders: v.orders / famDiv, units: v.units / famDiv, clicks: v.clicks / famDiv, sessions: v.sessions / famDiv, organic_units: v.organic_units / famDiv, ad_orders: v.ad_orders / famDiv, ads_sales: (v.ads_sales ?? 0) / famDiv, ads_units: (v.ads_units ?? 0) / famDiv }))
+                    : varsRaw;
                   const famChanges = f ? changesByFamily.find(c => c.family === f) : null;
                   const varChanges = f ? (changesByVariation[f] || []) : [];
                   const positiveCount = varChanges.filter(v => v.pd > 0).length;
@@ -1933,8 +2103,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                         net_roas: <td key="net_roas" className="px-3 py-2 text-right">{hasPnl ? <RoasBadge value={v.net_roas} /> : <span className="text-faint">—</span>}</td>,
                         tacos: <td key="tacos" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl && v.sales > 0 ? ((v.ad_cost / v.sales) * 100 > 30 ? 'text-red-400' : (v.ad_cost / v.sales) * 100 > 15 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{hasPnl && v.sales > 0 ? fP((v.ad_cost / v.sales) * 100) : '—'}</td>,
                         ads_roas: (() => { const ar = v.ad_cost > 0 ? (v.ads_sales ?? 0) / v.ad_cost : 0; return <td key="ads_roas" className="px-3 py-2 text-right">{hasPnl && ar > 0 ? <RoasBadge value={ar} /> : <span className="text-faint">—</span>}</td>; })(),
-                        payment: <td key="payment" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl ? 'text-sky-400 font-bold' : 'text-faint'}`}>{hasPnl ? fM(pnlByAsin.get(v.asin!)?.payment ?? 0) : '—'}</td>,
-                        storage_cost: <td key="storage_cost" className="px-3 py-2 text-right font-mono text-[11px] text-amber-400">{hasPnl && (pnlByAsin.get(v.asin!)?.storage_cost ?? 0) > 0 ? fM(pnlByAsin.get(v.asin!)?.storage_cost ?? 0) : '—'}</td>,
+                        payment: <td key="payment" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl ? 'text-sky-400 font-bold' : 'text-faint'}`}>{hasPnl ? fM((pnlByAsin.get(v.asin!)?.payment ?? 0) / famDiv) : '—'}</td>,
+                        storage_cost: <td key="storage_cost" className="px-3 py-2 text-right font-mono text-[11px] text-amber-400">{hasPnl && (pnlByAsin.get(v.asin!)?.storage_cost ?? 0) / famDiv > 0 ? fM((pnlByAsin.get(v.asin!)?.storage_cost ?? 0) / famDiv) : '—'}</td>,
                         ad_orders: <td key="ad_orders" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fmt(v.ad_orders) : '—'}</td>,
                         units: <td key="units" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fmt(v.units) : '—'}</td>,
                         orders: <td key="orders" className="px-3 py-2 text-right font-mono text-[11px]">{fmt(v.orders)}</td>,
@@ -1949,6 +2119,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                         shipping_cost_per_unit: (() => { const prod = v.asin ? productByAsin.get(v.asin) : undefined; return <td key="shipping_cost_per_unit" className="px-3 py-2 text-right font-mono text-[11px]">{prod ? `$${prod.shipping_cost.toFixed(2)}` : '—'}</td>; })(),
                         fba_stock_qty: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.fba_stock_qty; return <td key="fba_stock_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{q != null && q > 0 ? fmt(q) : '—'}</td>; })(),
                         awd_stock_qty: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.awd_stock_qty; return <td key="awd_stock_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{q != null && q > 0 ? fmt(q) : '—'}</td>; })(),
+                        in_transit_qty: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.in_transit_qty; return <td key="in_transit_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{q != null && q > 0 ? fmt(q) : '—'}</td>; })(),
+                        mfr_stock_qty: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const q = sc?.mfr_stock_qty; return <td key="mfr_stock_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{q != null && q > 0 ? fmt(q) : '—'}</td>; })(),
                         days_of_coverage: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const d = sc?.days_of_coverage; return <td key="days_of_coverage" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${d != null ? (d < 70 ? 'text-red-400' : d < 100 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
                         fba_days_of_coverage: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const d = sc?.fba_days_of_coverage; return <td key="fba_days_of_coverage" className={`px-3 py-2 text-right font-mono text-[11px] ${d != null ? (d <= 20 ? 'text-red-400 font-bold' : d < 30 ? 'text-amber-400' : d <= 45 ? 'text-emerald-400' : d <= 60 ? 'text-amber-400' : 'text-red-400 font-bold') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
                         awd_days_of_coverage: (() => { const sc = v.asin ? supplyChainByAsin.get(v.asin) : undefined; const d = sc?.awd_days_of_coverage; return <td key="awd_days_of_coverage" className={`px-3 py-2 text-right font-mono text-[11px] ${d != null ? (d < 50 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
@@ -2013,6 +2185,27 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                       clicks: <td key="clicks" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fClk(r.clicks)}</td>,
                       sessions: <td key="sessions" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{(r.sessions ?? 0) > 0 ? (r.sessions ?? 0).toLocaleString() : '—'}</td>,
                       sales_change: <td key="sales_change" className="px-3 py-2"><ChangesSummaryCell data={famChanges ?? { status: r.sales_change > 0 ? 'Sales up' : r.sales_change < 0 ? 'Sales down' : 'Flat vs previous period', sd: r.sales_change ?? 0, cd: 0, pd: 0, roasDelta: 0, orgDelta: 0 }} positiveCount={totalCount > 0 ? positiveCount : undefined} totalCount={totalCount > 0 ? totalCount : undefined} /></td>,
+                      // Summable / derivable family-level aggregates (previously rendered as "—").
+                      ads_sales: <td key="ads_sales" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fM(r.ads_sales ?? 0)}</td>,
+                      ads_units: <td key="ads_units" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fmt(r.ads_units ?? 0)}</td>,
+                      payment: <td key="payment" className="px-3 py-2 text-right font-mono text-[11px] font-bold text-sky-400">{fM(r.payment ?? 0)}</td>,
+                      storage_cost: <td key="storage_cost" className="px-3 py-2 text-right font-mono text-[11px] text-amber-400">{(r.storage_cost ?? 0) !== 0 ? fM(r.storage_cost) : '—'}</td>,
+                      np_per_unit: <td key="np_per_unit" className={`px-3 py-2 text-right font-mono text-[11px] font-medium ${(r.units ?? 0) > 0 ? (r.net_profit / r.units > 0 ? 'text-emerald-400' : 'text-red-400') : 'text-faint'}`}>{(r.units ?? 0) > 0 ? fM(r.net_profit / r.units) : '—'}</td>,
+                      organic_units: <td key="organic_units" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fmt(r.organic_units ?? 0)}</td>,
+                      organic_pct: <td key="organic_pct" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fP(r.organic_pct ?? 0)}</td>,
+                      // Per-family inventory totals (summed across the family's ASINs).
+                      fba_stock_qty: <td key="fba_stock_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{(r.fba_stock_qty ?? 0) > 0 ? fmt(r.fba_stock_qty) : '—'}</td>,
+                      awd_stock_qty: <td key="awd_stock_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{(r.awd_stock_qty ?? 0) > 0 ? fmt(r.awd_stock_qty) : '—'}</td>,
+                      in_transit_qty: <td key="in_transit_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{(r.in_transit_qty ?? 0) > 0 ? fmt(r.in_transit_qty) : '—'}</td>,
+                      mfr_stock_qty: <td key="mfr_stock_qty" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{(r.mfr_stock_qty ?? 0) > 0 ? fmt(r.mfr_stock_qty) : '—'}</td>,
+                      days_of_coverage: (() => { const d = r.days_of_coverage; return <td key="days_of_coverage" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${d != null ? (d < 70 ? 'text-red-400' : d < 100 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
+                      fba_days_of_coverage: (() => { const d = r.fba_days_of_coverage; return <td key="fba_days_of_coverage" className={`px-3 py-2 text-right font-mono text-[11px] ${d != null ? (d <= 20 ? 'text-red-400 font-bold' : d < 30 ? 'text-amber-400' : d <= 45 ? 'text-emerald-400' : d <= 60 ? 'text-amber-400' : 'text-red-400 font-bold') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
+                      awd_days_of_coverage: (() => { const d = r.awd_days_of_coverage; return <td key="awd_days_of_coverage" className={`px-3 py-2 text-right font-mono text-[11px] ${d != null ? (d < 50 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{d != null ? d : '—'}</td>; })(),
+                      qty_next_shipment: <td key="qty_next_shipment" className="px-3 py-2 text-right font-mono text-[11px]">{(r.qty_next_shipment ?? 0) > 0 ? fmt(r.qty_next_shipment) : '—'}</td>,
+                      last_30d_sold: <td key="last_30d_sold" className="px-3 py-2 text-right font-mono text-[11px]">{(r.last_30d_sold ?? 0) > 0 ? fmt(r.last_30d_sold) : '—'}</td>,
+                      next_30d_planned: <td key="next_30d_planned" className="px-3 py-2 text-right font-mono text-[11px]">{(r.next_30d_planned ?? 0) > 0 ? fmt(r.next_30d_planned) : '—'}</td>,
+                      next_31_60d_planned: <td key="next_31_60d_planned" className="px-3 py-2 text-right font-mono text-[11px]">{(r.next_31_60d_planned ?? 0) > 0 ? fmt(r.next_31_60d_planned) : '—'}</td>,
+                      next_61_90d_planned: <td key="next_61_90d_planned" className="px-3 py-2 text-right font-mono text-[11px]">{(r.next_61_90d_planned ?? 0) > 0 ? fmt(r.next_61_90d_planned) : '—'}</td>,
                     };
                     return cells[key] ?? <td key={key} className="px-3 py-2">—</td>;
                   };
@@ -2031,8 +2224,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                 });
               })()}
               {/* Total row */}
-              {familyPeriodData && familyPeriodData.length > 1 && (() => {
-                  const tot = familyPeriodData.reduce((acc, r) => ({
+              {familyPeriodDataDisplay && familyPeriodDataDisplay.length > 1 && (() => {
+                  const tot = familyPeriodDataDisplay.reduce((acc, r) => ({
                     sales: acc.sales + r.sales,
                     cogs: acc.cogs + r.cogs,
                     ad_cost: acc.ad_cost + r.ad_cost,
@@ -2063,8 +2256,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                     net_roas: <td key="net_roas" className="px-3 py-2 text-right"><RoasBadge value={net_roas} /></td>,
                     tacos: <td key="tacos" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${tot.sales > 0 ? ((tot.ad_cost / tot.sales) * 100 > 30 ? 'text-red-400' : (tot.ad_cost / tot.sales) * 100 > 15 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{tot.sales > 0 ? fP((tot.ad_cost / tot.sales) * 100) : '—'}</td>,
                     ads_roas: (() => { const ar = tot.ad_cost > 0 ? tot.ads_sales / tot.ad_cost : 0; return <td key="ads_roas" className="px-3 py-2 text-right">{ar > 0 ? <RoasBadge value={ar} /> : <span className="text-faint">—</span>}</td>; })(),
-                    payment: (() => { const totPayment = familyPeriodData.reduce((s, r) => s + (r.payment ?? 0), 0); return <td key="payment" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${totPayment > 0 ? 'text-sky-400' : 'text-red-400'}`}>{fM(totPayment)}</td>; })(),
-                    storage_cost: (() => { const totStorage = familyPeriodData.reduce((s, r) => s + (r.storage_cost ?? 0), 0); return <td key="storage_cost" className="px-3 py-2 text-right font-mono text-[11px] font-bold text-amber-400">{totStorage > 0 ? fM(totStorage) : '—'}</td>; })(),
+                    payment: (() => { const totPayment = familyPeriodDataDisplay.reduce((s, r) => s + (r.payment ?? 0), 0); return <td key="payment" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${totPayment > 0 ? 'text-sky-400' : 'text-red-400'}`}>{fM(totPayment)}</td>; })(),
+                    storage_cost: (() => { const totStorage = familyPeriodDataDisplay.reduce((s, r) => s + (r.storage_cost ?? 0), 0); return <td key="storage_cost" className="px-3 py-2 text-right font-mono text-[11px] font-bold text-amber-400">{totStorage > 0 ? fM(totStorage) : '—'}</td>; })(),
                     ad_orders: <td key="ad_orders" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fmt(tot.ad_orders)}</td>,
                     units: <td key="units" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fmt(tot.units)}</td>,
                     orders: <td key="orders" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fmt(tot.orders)}</td>,
