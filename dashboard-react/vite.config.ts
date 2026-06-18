@@ -25,6 +25,21 @@ function serveDataPlugin() {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), serveDataPlugin()],
+  build: {
+    rollupOptions: {
+      output: {
+        // Split heavy vendors into their own long-term-cacheable chunks so they
+        // load in parallel and aren't re-downloaded on every app deploy.
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('recharts') || id.includes('victory-vendor') || id.includes('/d3-')) return 'charts'
+          if (id.includes('jspdf') || id.includes('html2canvas')) return 'pdf'
+          if (id.includes('xlsx')) return 'xlsx'
+          if (id.includes('react-dom') || id.includes('/react/') || id.includes('scheduler')) return 'react-vendor'
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,
