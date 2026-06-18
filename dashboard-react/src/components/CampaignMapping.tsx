@@ -70,11 +70,14 @@ export function CampaignMapping() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // Prefill: family from the suggestion (the GET payload has no current_family field);
-  // strategy from current mapping, else the suggestion.
+  // Prefill, but only with values the backend will accept (the suggestion engine can
+  // emit non-option values like "UNKNOWN"). Family from the suggestion (the GET payload
+  // has no current_family field); strategy from current mapping, else the suggestion.
+  const validFamily = (f: string | null) => (f && families.includes(f) ? f : '');
+  const validStrategy = (s: string | null) => (s && strategies.includes(s) ? s : '');
   const editFor = (r: CampaignMappingRow) => edits[r.campaign_id] || {
-    family: r.suggested_family || '',
-    strategy: r.current_strategy_id || r.suggested_strategy || '',
+    family: validFamily(r.suggested_family),
+    strategy: validStrategy(r.current_strategy_id) || validStrategy(r.suggested_strategy),
   };
   const setEdit = (r: CampaignMappingRow, patch: Partial<{ family: string; strategy: string }>) => {
     setEdits(prev => ({ ...prev, [r.campaign_id]: { ...editFor(r), ...patch } }));
@@ -287,8 +290,8 @@ export function CampaignMapping() {
                       <>
                         <span className="text-faint">Suggested: </span>
                         {r.suggested_family} / {friendlyStrategy(r.suggested_strategy)}
-                        {r.confidence != null && (
-                          <span className="font-mono opacity-60"> ({Math.round((r.confidence || 0) * 100)}%)</span>
+                        {Number.isFinite(r.confidence) && (
+                          <span className="font-mono opacity-60"> ({Math.round((r.confidence as number) * 100)}%)</span>
                         )}
                       </>
                     ) : (
