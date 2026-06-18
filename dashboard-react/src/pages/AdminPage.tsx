@@ -34,18 +34,24 @@ export function AdminPage() {
   
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [loadingLogs, setLoadingLogs] = useState<boolean>(true);
+  const [logsError, setLogsError] = useState<boolean>(false);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
 
   const fetchLogs = async () => {
     setLoadingLogs(true);
+    setLogsError(false);
     try {
       const res = await apiFetch('/api/admin/pipeline-logs');
       if (res.ok) {
         const data = await res.json();
         if (data.success) setRuns(data.runs || []);
+        else setLogsError(true);
+      } else {
+        setLogsError(true);
       }
     } catch (e) {
       console.error('Failed to fetch pipeline logs', e);
+      setLogsError(true);
     } finally {
       setLoadingLogs(false);
     }
@@ -148,6 +154,15 @@ export function AdminPage() {
         
         {loadingLogs && runs.length === 0 ? (
           <div className="py-8 text-center text-subtle text-sm animate-pulse">Loading logs...</div>
+        ) : logsError ? (
+          <Card className="p-8 text-center text-sm border-dashed border-red-500/30">
+            <AlertTriangle size={20} className="mx-auto mb-2 text-red-400" />
+            <div className="text-default">Couldn't load pipeline logs.</div>
+            <div className="text-xs text-subtle mt-1">Is the data-entry API running? (local: Flask on :5050)</div>
+            <button onClick={fetchLogs} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-border bg-card hover:bg-white/[.04] transition-colors">
+              <RefreshCw size={14} /> Retry
+            </button>
+          </Card>
         ) : runs.length === 0 ? (
           <Card className="p-8 text-center text-subtle border-dashed">
             No pipeline logs found.

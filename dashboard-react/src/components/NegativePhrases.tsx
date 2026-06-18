@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Trash2, Copy, Upload, Search, X, Check, CheckSquare, Square } from 'lucide-react';
+import { Plus, Trash2, Copy, Upload, Search, X, Check, CheckSquare, Square, AlertTriangle, RefreshCw } from 'lucide-react';
 import { Card } from './Card';
 import { Badge } from './Badge';
 import { apiFetch } from '../utils/apiFetch';
@@ -30,6 +30,7 @@ const FLASK_API = '';
 export function NegativePhrases() {
   const [phrases, setPhrases] = useState<PhraseNegative[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [activeFamily, setActiveFamily] = useState('_ALL');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -60,14 +61,19 @@ export function NegativePhrases() {
 
   const fetchPhrases = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const res = await apiFetch(`${FLASK_API}/api/admin/phrase-negatives`);
       if (res.ok) {
         const data = await res.json();
         if (data.success) setPhrases(data.phrases || []);
+        else setLoadError(true);
+      } else {
+        setLoadError(true);
       }
     } catch (e) {
       console.error('Failed to fetch phrase negatives', e);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -401,6 +407,15 @@ export function NegativePhrases() {
       {/* Phrases list */}
       {loading ? (
         <div className="py-12 text-center text-subtle text-sm animate-pulse">Loading phrases…</div>
+      ) : loadError ? (
+        <Card className="p-6 text-center text-sm border-dashed border-red-500/30">
+          <AlertTriangle size={20} className="mx-auto mb-2 text-red-400" />
+          <div className="text-default">Couldn't load negative phrases.</div>
+          <div className="text-xs text-subtle mt-1">Is the data-entry API running? (local: Flask on :5050)</div>
+          <button onClick={fetchPhrases} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-border bg-card hover:bg-white/[.04] transition-colors">
+            <RefreshCw size={14} /> Retry
+          </button>
+        </Card>
       ) : filtered.length === 0 ? (
         <Card className="py-8 text-center text-subtle text-sm border-dashed">
           {searchQuery ? `No phrases matching "${searchQuery}"` : `No phrases for ${FAMILY_LABELS[activeFamily] || activeFamily}`}
