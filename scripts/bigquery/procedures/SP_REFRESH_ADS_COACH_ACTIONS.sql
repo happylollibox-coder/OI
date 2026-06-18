@@ -31,19 +31,31 @@ BEGIN
   CREATE TEMP TABLE _base_rows AS
   WITH
   campaign_experiment AS (
-    SELECT
-      ec.campaign_id,
-      e.experiment_id,
-      e.experiment_name,
-      e.strategy_id,
-      e.status as experiment_status,
-      st.strategy_name,
-      st.recommended_bid_min,
-      st.recommended_bid_max
-    FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
-    JOIN `onyga-482313.OI.DIM_EXPERIMENT` e ON ec.experiment_id = e.experiment_id
-    LEFT JOIN `onyga-482313.OI.DIM_STRATEGY_TEMPLATE` st ON e.strategy_id = st.strategy_id
-    WHERE e.status IN ('ACTIVE', 'PAUSED')
+    -- One row per campaign. A campaign can map to several experiments (a current ACTIVE one plus a
+    -- stale PAUSED one). Without this dedupe the downstream LEFT JOINs on campaign_id (here in
+    -- `assembled` and again as top-level `ce_fb`) fan out, and SUM in Steps 4/5 double-counts
+    -- clicks/orders/spend. Every multi-experiment campaign is exactly 1 ACTIVE + PAUSED, so prefer
+    -- ACTIVE; latest start_date then experiment_id as a deterministic tiebreak for any future case.
+    SELECT * EXCEPT(rn) FROM (
+      SELECT
+        ec.campaign_id,
+        e.experiment_id,
+        e.experiment_name,
+        e.strategy_id,
+        e.status as experiment_status,
+        st.strategy_name,
+        st.recommended_bid_min,
+        st.recommended_bid_max,
+        ROW_NUMBER() OVER (
+          PARTITION BY ec.campaign_id
+          ORDER BY IF(e.status = 'ACTIVE', 0, 1), e.start_date DESC NULLS LAST, e.experiment_id
+        ) AS rn
+      FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
+      JOIN `onyga-482313.OI.DIM_EXPERIMENT` e ON ec.experiment_id = e.experiment_id
+      LEFT JOIN `onyga-482313.OI.DIM_STRATEGY_TEMPLATE` st ON e.strategy_id = st.strategy_id
+      WHERE e.status IN ('ACTIVE', 'PAUSED')
+    )
+    WHERE rn = 1
   ),
   asin_economics AS (
     SELECT p.asin, p.product_short_name, p.parent_name,
@@ -158,10 +170,14 @@ BEGIN
     COALESCE(a.strategy_name, ce_fb.strategy_name) as strategy_name,
     COALESCE(a.experiment_status, ce_fb.experiment_status) as experiment_status,
     COALESCE(a.recommended_bid_max, ce_fb.recommended_bid_max) as recommended_bid_max,
-    ROUND(COALESCE(a.ads_spend_4w, 0), 2) as ads_spend_4w,
-    COALESCE(a.ads_orders_4w, 0) as ads_orders_4w,
-    COALESCE(a.ads_units_4w, 0) as ads_units_4w,
-    COALESCE(a.ads_clicks_4w, 0) as ads_clicks_4w,
+    -- 4w volume from `ca` (per-targeting). `assembled` (a) is grouped (campaign, search_term, asin)
+    -- WITHOUT targeting, so a.*_4w is cross-targeting and over-counts when TARGET/BUDGET rows SUM by
+    -- campaign×targeting (Step 4/5). 1w already comes from ca; this aligns 4w. impressions/sales_4w
+    -- stay on `a` (not exposed on ca, not card-critical — same asin-grain bucket as net_profit_4w).
+    ROUND(COALESCE(ca.ads_spend_4w, 0), 2) as ads_spend_4w,
+    COALESCE(ca.ads_orders_4w, 0) as ads_orders_4w,
+    COALESCE(ca.ads_units_4w, 0) as ads_units_4w,
+    COALESCE(ca.ads_clicks_4w, 0) as ads_clicks_4w,
     COALESCE(a.ads_impressions_4w, 0) as ads_impressions_4w,
     ROUND(COALESCE(a.ads_sales_4w, 0), 2) as ads_sales_4w,
     a.ads_cpc_4w,
@@ -300,6 +316,9 @@ BEGIN
   FROM `onyga-482313.OI.V_ADS_COACH` ca
   LEFT JOIN `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` dc_cur ON ca.campaign_id = dc_cur.campaign_id
   LEFT JOIN assembled a ON ca.campaign_id = a.campaign_id AND ca.search_term = a.search_term
+    -- include asin: `assembled` is (campaign, search_term, asin); without this key the join is
+    -- many-to-many and SUM in Steps 4/5 double-counts clicks/orders/spend across asins.
+    AND ca.asin IS NOT DISTINCT FROM a.asin
   LEFT JOIN campaign_experiment ce_fb ON ca.campaign_id = ce_fb.campaign_id
   LEFT JOIN hero_lookup hl ON ca.search_term = hl.search_term
   LEFT JOIN `onyga-482313.OI.DIM_KEYWORD` dk
@@ -478,7 +497,10 @@ BEGIN
     ROUND(SUM(ads_sales_4w), 2) as ads_sales_4w,
     ROUND(SAFE_DIVIDE(SUM(ads_spend_4w), NULLIF(SUM(ads_clicks_4w), 0)), 2) as ads_cpc_4w,
     ROUND(SAFE_DIVIDE(SUM(ads_orders_4w), NULLIF(SUM(ads_clicks_4w), 0)) * 100, 2) as ads_cvr_pct_4w,
-    ROUND(SUM(net_profit_4w), 2) as net_profit_4w,
+    -- Net profit from the corrected per-targeting volume (consistent with net_roas_4w and the
+    -- displayed orders/spend). SUM(net_profit_4w) would carry `assembled`'s cross-targeting value
+    -- and overstate the "$/wk" opportunity shown on cards.
+    ROUND(SUM(COALESCE(margin_per_unit, 0) * ads_units_4w) - SUM(ads_spend_4w), 2) as net_profit_4w,
     ROUND(SAFE_DIVIDE(SUM(COALESCE(margin_per_unit, 0) * ads_units_4w), NULLIF(SUM(ads_spend_4w), 0)), 2) as net_roas_4w,
     ANY_VALUE(margin_per_unit) as margin_per_unit,
     ANY_VALUE(term_spend_4w HAVING MAX ads_spend_4w) as term_spend_4w,
@@ -690,7 +712,10 @@ BEGIN
     ROUND(SUM(ads_sales_4w), 2) as ads_sales_4w,
     ROUND(SAFE_DIVIDE(SUM(ads_spend_4w), NULLIF(SUM(ads_clicks_4w), 0)), 2) as ads_cpc_4w,
     ROUND(SAFE_DIVIDE(SUM(ads_orders_4w), NULLIF(SUM(ads_clicks_4w), 0)) * 100, 2) as ads_cvr_pct_4w,
-    ROUND(SUM(net_profit_4w), 2) as net_profit_4w,
+    -- Net profit from the corrected per-targeting volume (consistent with net_roas_4w and the
+    -- displayed orders/spend). SUM(net_profit_4w) would carry `assembled`'s cross-targeting value
+    -- and overstate the "$/wk" opportunity shown on cards.
+    ROUND(SUM(COALESCE(margin_per_unit, 0) * ads_units_4w) - SUM(ads_spend_4w), 2) as net_profit_4w,
     ROUND(SAFE_DIVIDE(SUM(COALESCE(margin_per_unit, 0) * ads_units_4w), NULLIF(SUM(ads_spend_4w), 0)), 2) as net_roas_4w,
     ANY_VALUE(margin_per_unit) as margin_per_unit,
     CAST(NULL AS FLOAT64) as term_spend_4w,
