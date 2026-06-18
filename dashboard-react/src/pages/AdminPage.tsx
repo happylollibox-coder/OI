@@ -5,6 +5,7 @@ import { Section } from '../components/Section';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { Badge } from '../components/Badge';
 import { NegativePhrases } from '../components/NegativePhrases';
+import { CampaignMapping } from '../components/CampaignMapping';
 import { apiFetch } from '../utils/apiFetch';
 
 interface PipelineTask {
@@ -124,13 +125,17 @@ export function AdminPage() {
         </Section>
       )}
 
+      <Section title="Campaign Mapping" count="Campaign → Strategy / Family">
+        <CampaignMapping />
+      </Section>
+
       <Section title="Negative Phrases" count={`Per-Product Keyword Negatives`}>
         <NegativePhrases />
       </Section>
 
       <Section title="Pipeline Run Logs">
         <div className="flex justify-between items-center mb-4">
-          <div className="text-sm text-subtle">Recent BigQuery orchestrator runs.</div>
+          <div className="text-sm text-subtle">Last 15 BigQuery orchestrator runs.</div>
           <button 
             onClick={fetchLogs} 
             disabled={loadingLogs}
@@ -149,7 +154,7 @@ export function AdminPage() {
           </Card>
         ) : (
           <div className="space-y-3">
-            {runs.map(run => {
+            {runs.slice(0, 15).map(run => {
               const isFailed = run.fail_count > 0;
               const isExpanded = expandedRunId === run.run_id;
               
