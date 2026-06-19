@@ -25,6 +25,9 @@ import { buildCrossSellQueueItem } from '../components/Actions/crossSell';
 import KeywordIntelligencePanel from '../components/Actions/KeywordIntelligencePanel';
 import { useKeywordIntelligence } from '../hooks/useCubeData';
 import { CoachStrategyPanel } from '../components/CoachStrategyPanel';
+import { isBudgetRow, budgetTrimPerDay } from './sectionUtils';
+import { CollapsibleSection } from '../components/Actions/CollapsibleSection';
+import { QueueToggle } from '../components/Actions/QueueToggle';
 // strategyRules is now DB-only; ActionType kept for potential future use in color mapping
 
 import type { GroundTruth } from '../types';
@@ -491,8 +494,28 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     expected_impact_kind: opp?.kind,
   });
 
+  // Is this row already in the DO queue? (campaign + action + keyword/targeting)
+  const rowQueued = (a: ActionRow): boolean =>
+    doQueue.items.some(q => q.campaign_id === a.campaign_id
+      && q.action === a.action
+      && (q.search_term === a.search_term || q.targeting === (a.targeting || '')));
+
+  const queuedIdFor = (a: ActionRow): string | undefined =>
+    doQueue.items.find(q => q.campaign_id === a.campaign_id
+      && q.action === a.action
+      && (q.search_term === a.search_term || q.targeting === (a.targeting || '')))?.id;
+
+  // Budget-decrease/increase rows (not BUDGET_OK), surfaced as the 💰 Budget section.
+  const budgetRows = useMemo(() => acts.filter(a =>
+    isBudgetRow(a)
+    && !doQueue.isUploaded(a.search_term, a.campaign_id)
+    && !doQueue.isDone(a.search_term, a.campaign_id)
+  ), [acts, doQueue.isUploaded, doQueue.isDone]);
+
   const filtered = useMemo(() => {
     let f = [...acts];
+    // Budget rows are owned by the 💰 Budget section — keep them out of the table to avoid double-listing.
+    f = f.filter(a => !isBudgetRow(a));
     // COOLDOWN mode: suppress negates and hot-signal-like actions — cooldown itself handles wind-down
     if (effectiveCoachMode === 'COOLDOWN') {
       f = f.filter(a => !(a.action === 'NEGATE_TERM' || a.action === 'REDUCE_BID'));
@@ -1266,6 +1289,37 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
       })()}
 
       <PageHeader title="Detailed Actions" subtitle="Every action justified by measures" />
+
+      {/* ── 💰 Budget Actions (campaign-level budget decisions) ── */}
+      {budgetRows.length > 0 && (
+        <CollapsibleSection
+          id="budget"
+          title="💰 Budget Actions"
+          summary={`${budgetRows.length} campaigns · trim ~$${Math.round(budgetRows.reduce((s, a) => s + budgetTrimPerDay(a), 0))}/day · ${budgetRows.filter(rowQueued).length} queued`}
+          queueableCount={budgetRows.length}
+          queuedCount={budgetRows.filter(rowQueued).length}
+          onQueueAll={() => budgetRows.forEach(a => { if (!rowQueued(a)) queueAction(a); })}
+          onUnqueueAll={() => budgetRows.forEach(a => { const id = queuedIdFor(a); if (id) doQueue.removeItem(id); })}
+        >
+          <div className="flex flex-col gap-1">
+            {budgetRows.map(a => (
+              <div key={`${a.campaign_id}:${a.action}`} className="flex items-center justify-between gap-2 rounded border border-[var(--color-border)] px-2.5 py-1.5">
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold text-[var(--color-text)] truncate">{a.campaign_name}</div>
+                  <div className="text-[10px] text-muted">
+                    {a.action.replace(/_/g, ' ').toLowerCase()} · ${a.current_budget ?? '?'} → ${a.recommended_budget ?? '?'}/day
+                  </div>
+                </div>
+                <QueueToggle
+                  queued={rowQueued(a)}
+                  onQueue={() => queueAction(a)}
+                  onUnqueue={() => { const id = queuedIdFor(a); if (id) doQueue.removeItem(id); }}
+                />
+              </div>
+            ))}
+          </div>
+        </CollapsibleSection>
+      )}
 
       {/* ── Coach Strategy Panel ── */}
       {(() => {
