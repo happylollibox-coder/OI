@@ -36,7 +36,7 @@ const DOMINANCE_TARGETS = [
     floor: '0%',
     meaning: 'I am desirable',
     rationale: 'Top of the 15–25% industry range for brand keyword conversion. When shoppers search your name, 1 in 4 should buy.',
-    benchmark: 'Industry: brand CVR 15–25%, non-brand CVR 4–12%. Your non-brand CVR: ~4.4%.',
+    benchmark: 'Industry: brand CVR 15–25%, non-brand CVR 4–12%. Brand terms should convert several times higher than non-brand.',
   },
   {
     signal: 'YoY SQP Growth',

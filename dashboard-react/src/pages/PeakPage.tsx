@@ -1777,12 +1777,17 @@ function buildCheckData(data: DashboardData, pk: DashboardData['peak'][0] | null
     }),
   };
 
-  // Negative keywords
+  // Negative keywords (warehouse-owned registry — ENABLED only)
   out.negatives_check = {
     status: neg.length > 0 ? 'ok' : 'info',
     summary: `${neg.length} negative keywords set`,
-    columns: ['Campaign', 'Negative Keyword', 'Spend 30d'],
-    rows: neg.slice(0, 20).map(n => [n.campaign_name || '--', n.negative_keyword || '--', fM(n.spend_30d)]),
+    columns: ['Keyword', 'Match', 'Campaign', 'Source'],
+    rows: neg.slice(0, 20).map(n => [
+      n.keyword_text || '--',
+      (n.match_type || '').replace('NEGATIVE_', '').toLowerCase() || '--',
+      n.campaign_name || '--',
+      n.source || '--',
+    ]),
   };
   out.negative_keywords = out.negatives_check;
 

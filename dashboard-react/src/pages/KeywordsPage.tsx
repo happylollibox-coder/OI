@@ -37,7 +37,7 @@ export function KeywordsPage({ data }: { data: DashboardData }) {
 
   const actions = useMemo(() => [...new Set(rows.map(r => r.action).filter(Boolean))].sort(), [rows]);
 
-  const filtered = useMemo(() => {
+  const filteredAll = useMemo(() => {
     let f = rows;
     if (filters.family) f = f.filter(r => {
       const p = products.find(x => x.asin === r.hero_asin);
@@ -47,8 +47,10 @@ export function KeywordsPage({ data }: { data: DashboardData }) {
     if (actFilter !== 'all') f = f.filter(r => r.action === actFilter);
     if (heroFilter === 'yes') f = f.filter(r => r.is_hero_match === true);
     if (heroFilter === 'no') f = f.filter(r => r.is_hero_match === false);
-    return f.slice(0, 200);
+    return f;
   }, [rows, products, filters.family, filters.keyword, actFilter, heroFilter]);
+  const ROW_CAP = 200;
+  const filtered = useMemo(() => filteredAll.slice(0, ROW_CAP), [filteredAll]);
 
   const s = useSort('spend_60d');
   const [kwCols, setKwCols] = useMeasureSelection('keywords', KEYWORDS_TABLE_COLUMNS);
@@ -68,6 +70,7 @@ export function KeywordsPage({ data }: { data: DashboardData }) {
     <div className="animate-in">
       <div className="flex items-center gap-2 mb-5">
         <PageHeader title="Keyword\u2013Product Map" subtitle="Advertised vs. Purchased" />
+        <span className="text-[11px] text-faint">{filteredAll.length > ROW_CAP ? `showing ${ROW_CAP} of ${filteredAll.length}` : `${filteredAll.length} keywords`}</span>
         {kwFilterItems.length > 0 && <FilterInfoIcon items={kwFilterItems} />}
         <div className="ml-auto"><MeasureSelector tableId="keywords" measures={KEYWORDS_TABLE_COLUMNS} selected={kwCols} onSelectedChange={setKwCols} /></div>
       </div>

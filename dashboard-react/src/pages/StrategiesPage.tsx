@@ -46,7 +46,7 @@ const KPI_COL_META: Record<KpiColumnId, { label: string; right?: boolean }> = {
   organic_pct: { label: 'Organic %', right: true },
 };
 
-type PeriodMetrics = { spend: number; sales: number; orders: number; conv_rate: number; net_roas: number; cpc: number };
+type PeriodMetrics = { spend: number; sales: number; orders: number; conv_rate: number; net_roas: number; cpc: number; organic_pct: number };
 
 function resolveQuestionStatus(
   dataCheck: DataCheck,
@@ -94,7 +94,7 @@ function renderKpiCell(col: KpiColumnId, e: ExperimentTemplateRow, pf?: PeriodMe
     case 'cpc': return <td key={col} className="px-3 py-2 text-right font-mono">{cpc != null ? fCpc(cpc) : '--'}</td>;
     case 'net_roas': return <td key={col} className="px-3 py-2"><RoasBadge value={roas} /></td>;
     case 'search_terms': return <td key={col} className="px-3 py-2 text-right font-mono text-faint">{e.unique_search_terms || '--'}</td>;
-    case 'organic_pct': return <td key={col} className="px-3 py-2 text-right font-mono">{'—'}</td>;
+    case 'organic_pct': return <td key={col} className="px-3 py-2 text-right font-mono">{pf ? fP(pf.organic_pct) : '—'}</td>;
   }
 }
 
@@ -167,7 +167,7 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
     // Apply phase filter
     rows = filterByPhase(rows, 'week_start', activePhase, holidays);
 
-    const byExp: Record<string, { spend: number; sales: number; orders: number; conv_rate_sum: number; conv_rate_cnt: number; net_roas_sum: number; net_roas_cnt: number }> = {};
+    const byExp: Record<string, { spend: number; sales: number; orders: number; organic_units: number; conv_rate_sum: number; conv_rate_cnt: number; net_roas_sum: number; net_roas_cnt: number }> = {};
 
     if (periodMode === 'weeks') {
       const allWeeks = [...new Set(rows.map(r => r.week_start || ''))].filter(Boolean).sort();
@@ -181,16 +181,17 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
 
     rows.forEach(r => {
       const eid = r.experiment_id || '';
-      if (!byExp[eid]) byExp[eid] = { spend: 0, sales: 0, orders: 0, conv_rate_sum: 0, conv_rate_cnt: 0, net_roas_sum: 0, net_roas_cnt: 0 };
+      if (!byExp[eid]) byExp[eid] = { spend: 0, sales: 0, orders: 0, organic_units: 0, conv_rate_sum: 0, conv_rate_cnt: 0, net_roas_sum: 0, net_roas_cnt: 0 };
       const d = byExp[eid];
       d.spend += r.ads_spend || 0;
       d.sales += r.sales || 0;
       d.orders += r.total_orders || 0;
+      d.organic_units += r.organic_units || 0;
       if (r.conv_rate != null) { d.conv_rate_sum += r.conv_rate; d.conv_rate_cnt++; }
       if (r.net_roas != null) { d.net_roas_sum += r.net_roas; d.net_roas_cnt++; }
     });
 
-    const out: Record<string, { spend: number; sales: number; orders: number; conv_rate: number; net_roas: number; cpc: number }> = {};
+    const out: Record<string, PeriodMetrics> = {};
     Object.entries(byExp).forEach(([eid, d]) => {
       const roas = d.spend > 0 ? (d.sales - d.spend) / d.spend : 0;
       out[eid] = {
@@ -200,6 +201,7 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
         conv_rate: d.conv_rate_cnt ? d.conv_rate_sum / d.conv_rate_cnt : 0,
         net_roas: d.net_roas_cnt ? d.net_roas_sum / d.net_roas_cnt : roas,
         cpc: 0, // experiment_weekly has no clicks
+        organic_pct: d.orders > 0 ? d.organic_units / d.orders : 0, // organic share of total orders
       };
     });
     return out;
@@ -779,7 +781,7 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
                     conv_rate: <td key="conv_rate" className="px-3 py-2 text-right font-mono">{fP(convRate)}</td>,
                     cpc: <td key="cpc" className="px-3 py-2 text-right font-mono">{cpc != null ? fCpc(cpc) : '--'}</td>,
                     net_roas: <td key="net_roas" className="px-3 py-2"><RoasBadge value={roas} /></td>,
-                    organic_pct: <td key="organic_pct" className="px-3 py-2 text-right font-mono">{'—'}</td>,
+                    organic_pct: <td key="organic_pct" className="px-3 py-2 text-right font-mono">{pf ? fP(pf.organic_pct) : '—'}</td>,
                     unique_search_terms: <td key="unique_search_terms" className="px-3 py-2 text-right font-mono text-faint">{e.unique_search_terms || '--'}</td>,
                     outcome_score: <td key="outcome_score" className="px-3 py-2">{e.outcome_score != null ? <ScoreBadge score={e.outcome_score} /> : <span className="text-faint">--</span>}</td>,
                   };

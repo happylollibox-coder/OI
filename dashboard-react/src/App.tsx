@@ -154,7 +154,7 @@ function AppInner() {
       case 'actions': return <ActionsPage data={data} matchAction={gt.matchAction} />;
       case 'peak': return <PeakPage data={data} />;
       case 'family': return filters.family ? <FamilyPage data={data} family={filters.family} onNavExperiment={(eid: string) => navigate('experiment', undefined, eid)} /> : <HomePage data={data} onNav={navigate} />;
-      case 'sqp': return <FamilyPage data={data} family={filters.family} onNavExperiment={(eid: string) => navigate('experiment', undefined, eid)} />;
+      case 'sqp': return <FamilyPage data={data} family={filters.family} focus="sqp" onNavExperiment={(eid: string) => navigate('experiment', undefined, eid)} />;
       case 'learn': return <LearnPage data={data} />;
       case 'kwds': return <KeywordsPage data={data} />;
       case 'log': return <LogPage data={data} />;

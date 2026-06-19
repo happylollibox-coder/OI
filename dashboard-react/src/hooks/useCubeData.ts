@@ -1805,6 +1805,30 @@ async function loadNegativeConflictsFromCube(): Promise<import('../types').Negat
   }));
 }
 
+/** NegativeKeywords → negative_keywords (warehouse-owned registry, ENABLED only) */
+async function loadNegativeKeywordsFromCube(): Promise<import('../types').NegativeKeyword[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'NegativeKeywords.id', 'NegativeKeywords.campaignName', 'NegativeKeywords.adGroupName',
+      'NegativeKeywords.keywordText', 'NegativeKeywords.matchType', 'NegativeKeywords.level',
+      'NegativeKeywords.source', 'NegativeKeywords.addedAt',
+    ],
+    order: { 'NegativeKeywords.addedAt': 'desc' },
+    limit: 20000,
+  });
+  const str = (v: unknown): string | null => (v === null || v === undefined || v === '' ? null : String(v));
+  return (rows as Record<string, unknown>[]).map(r => ({
+    negative_id: String(r['NegativeKeywords.id'] ?? ''),
+    campaign_name: String(r['NegativeKeywords.campaignName'] ?? ''),
+    ad_group_name: str(r['NegativeKeywords.adGroupName']),
+    keyword_text: String(r['NegativeKeywords.keywordText'] ?? ''),
+    match_type: String(r['NegativeKeywords.matchType'] ?? ''),
+    level: String(r['NegativeKeywords.level'] ?? ''),
+    source: String(r['NegativeKeywords.source'] ?? ''),
+    added_at: str(r['NegativeKeywords.addedAt']),
+  }));
+}
+
 /** AsinOosDays → asin_oos_days (per-ASIN OOS day counts, feeds clear-case gate) */
 async function loadAsinOosDaysFromCube(): Promise<AsinOosDaysRow[]> {
   const rows = await cubeLoad({
@@ -2348,6 +2372,7 @@ export const DATASET_LOADERS: Record<DatasetName, () => Promise<unknown>> = {
   plan_ads_targets: loadPlanAdsTargetsFromCube,
   asin_oos_days: loadAsinOosDaysFromCube,
   negative_conflicts: loadNegativeConflictsFromCube,
+  negative_keywords: loadNegativeKeywordsFromCube,
   strategy_campaign_templates: loadStrategyCampaignTemplatesFromCube,
   coach_cross_sell: loadCrossSellFromCube,
   cubeMeta: loadCubeMeta,

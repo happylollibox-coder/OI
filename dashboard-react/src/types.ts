@@ -523,9 +523,14 @@ export interface ChangeLogRow {
 }
 
 export interface NegativeKeyword {
+  negative_id: string;
   campaign_name: string;
-  negative_keyword: string;
-  spend_30d: number;
+  ad_group_name: string | null;
+  keyword_text: string;
+  match_type: string;   // NEGATIVE_EXACT | NEGATIVE_PHRASE
+  level: string;        // CAMPAIGN | AD_GROUP
+  source: string;       // SEED | COACH | MANUAL
+  added_at: string | null;
 }
 
 export interface ExperimentWeeklyRow {

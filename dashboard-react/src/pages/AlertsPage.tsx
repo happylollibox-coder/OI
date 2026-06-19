@@ -9,9 +9,13 @@ import type { DraftPOLine } from '../components/Actions/CreatePOModal';
 
 import { AlertCard, SEVERITY_CONFIG, TYPE_CONFIG } from '../components/AlertCard';
 import { apiFetch } from '../utils/apiFetch';
+import { useFilters } from '../hooks/useFilters';
+import { useProductFamily } from '../hooks/useProductFamily';
 
 // ─── Component ────────────────────────────────────────────
 export function AlertsPage() {
+  const { filters } = useFilters();
+  const { getFamily } = useProductFamily();
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [archive, setArchive] = useState<AlertRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,11 +96,29 @@ export function AlertsPage() {
   };
 
   // ─── Computed ────────────────────────────────────────────
-  const displayAlerts = tab === 'open' ? alerts : archive;
+  // Respect the global family filter. Product-keyed alerts are matched by
+  // mapping product_name → family; non-product alerts (no family match) stay
+  // visible so plan-level alerts are never hidden by a family selection.
+  const inFamily = useCallback((a: AlertRow) => {
+    if (!filters.family) return true;
+    const fam = getFamily(a.product_name);
+    return fam == null || fam === filters.family;
+  }, [filters.family, getFamily]);
+
+  const famAlerts = alerts.filter(inFamily);
+  const famArchive = archive.filter(inFamily);
+  const displayAlerts = tab === 'open' ? famAlerts : famArchive;
   const filtered = typeFilter ? displayAlerts.filter(a => a.alert_type === typeFilter) : displayAlerts;
-  const critical = alerts.filter(a => a.severity === 'CRITICAL').length;
-  const warning = alerts.filter(a => a.severity === 'WARNING').length;
-  const info = alerts.filter(a => a.severity === 'INFO').length;
+  const critical = famAlerts.filter(a => a.severity === 'CRITICAL').length;
+  const warning = famAlerts.filter(a => a.severity === 'WARNING').length;
+  const info = famAlerts.filter(a => a.severity === 'INFO').length;
+
+  // Newest alert timestamp — a proxy for "last generated".
+  const lastGenerated = [...alerts, ...archive]
+    .map(a => a.created_at)
+    .filter(Boolean)
+    .sort()
+    .pop();
 
   // Group by type
   const grouped = filtered.reduce<Record<string, AlertRow[]>>((acc, a) => {
@@ -128,8 +150,8 @@ export function AlertsPage() {
       {/* ─── Summary Cards ─── */}
       <div className="grid grid-cols-4 gap-3 mb-5">
         <div className="p-3 rounded-lg border border-border bg-white/[0.02]">
-          <div className="text-[10px] text-muted uppercase tracking-wide mb-1">Total Open</div>
-          <div className="text-2xl font-bold text-heading">{alerts.length}</div>
+          <div className="text-[10px] text-muted uppercase tracking-wide mb-1">Total Open{filters.family ? ` · ${filters.family}` : ''}</div>
+          <div className="text-2xl font-bold text-heading">{famAlerts.length}</div>
         </div>
         <div className={`p-3 rounded-lg border ${critical > 0 ? 'border-red-500/30 bg-red-500/5' : 'border-border bg-white/[0.02]'}`}>
           <div className="text-[10px] text-muted uppercase tracking-wide mb-1">Critical</div>
@@ -150,11 +172,11 @@ export function AlertsPage() {
         <div className="flex items-center gap-2">
           <button onClick={() => setTab('open')}
             className={`px-3 py-1.5 text-[10px] font-semibold rounded-md transition-colors ${tab === 'open' ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30' : 'text-muted hover:text-subtle border border-border/50'}`}>
-            Open ({alerts.length})
+            Open ({famAlerts.length})
           </button>
           <button onClick={() => setTab('archive')}
             className={`px-3 py-1.5 text-[10px] font-semibold rounded-md transition-colors ${tab === 'archive' ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30' : 'text-muted hover:text-subtle border border-border/50'}`}>
-            Archive ({archive.length})
+            Archive ({famArchive.length})
           </button>
           <div className="w-px h-5 bg-border mx-1" />
           {Object.entries(TYPE_CONFIG).map(([type, cfg]) => {
@@ -169,11 +191,18 @@ export function AlertsPage() {
             );
           })}
         </div>
-        <button onClick={generateAlerts} disabled={generating}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 rounded-md hover:bg-emerald-500/20 transition-colors disabled:opacity-50">
-          <RefreshCw size={11} className={generating ? 'animate-spin' : ''} />
-          {generating ? 'Generating...' : 'Run Engine'}
-        </button>
+        <div className="flex items-center gap-3">
+          {lastGenerated && (
+            <span className="text-[10px] text-faint" title={lastGenerated}>
+              Latest alert: {String(lastGenerated).slice(0, 16).replace('T', ' ')}
+            </span>
+          )}
+          <button onClick={generateAlerts} disabled={generating}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 rounded-md hover:bg-emerald-500/20 transition-colors disabled:opacity-50">
+            <RefreshCw size={11} className={generating ? 'animate-spin' : ''} />
+            {generating ? 'Generating...' : 'Run Engine'}
+          </button>
+        </div>
       </div>
 
       {/* ─── Empty State ─── */}

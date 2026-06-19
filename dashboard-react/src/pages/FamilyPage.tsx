@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, ComposedChart, Line, Cell } from 'recharts';
 import { SeasonalReferenceLines, getXLabels } from '../components/SeasonalReferenceLines';
 import type { DashboardData, FamilyName } from '../types';
@@ -31,9 +31,17 @@ const ZONE_LABELS: Record<string, string> = {
 };
 function zoneLabel(z: string): string { return ZONE_LABELS[z] || (z || '--'); }
 
-export function FamilyPage({ data, family, onNavExperiment }: {
-  data: DashboardData; family: FamilyName | null; onNavExperiment?: (eid: string) => void;
+export function FamilyPage({ data, family, onNavExperiment, focus }: {
+  data: DashboardData; family: FamilyName | null; onNavExperiment?: (eid: string) => void; focus?: 'sqp';
 }) {
+  const sqpFocusRef = useRef<HTMLDivElement>(null);
+  // SQP nav lands directly on the SQP Performance section.
+  useEffect(() => {
+    if (focus === 'sqp') {
+      const t = setTimeout(() => sqpFocusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 250);
+      return () => clearTimeout(t);
+    }
+  }, [focus]);
   const { filters, setFilter } = useFilters();
   const { getFamily } = useProductFamily();
   const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
@@ -874,7 +882,12 @@ export function FamilyPage({ data, family, onNavExperiment }: {
   usePageSummary({ title: family || 'Family', items: [{ label: 'Family', value: family || 'All' }] });
   return (
     <div className="animate-in">
-      <PageHeader title={showAllFamilies ? 'All Families' : family} subtitle={showAllFamilies ? 'SQP across all product families' : info.code + ' Product Family'} />
+      <PageHeader
+        title={focus === 'sqp' ? 'SQP' : showAllFamilies ? 'All Families' : family}
+        subtitle={focus === 'sqp'
+          ? (showAllFamilies ? 'Search Query Performance — all families' : `Search Query Performance — ${info.code}`)
+          : showAllFamilies ? 'SQP across all product families' : info.code + ' Product Family'}
+      />
 
       {bestRoiProduct && (
         <div className="mb-3.5">
@@ -1373,6 +1386,7 @@ export function FamilyPage({ data, family, onNavExperiment }: {
       </Section>
 
       {/* SQP Detail */}
+      <div ref={sqpFocusRef} className="scroll-mt-4" />
       {sqpData.length > 0 && (
         <Section title="SQP Performance (Search Query Performance)" count={`${sqpData.length} terms with SQP data`} filterItems={formatSectionFilters(filters)} headerRight={<MeasureSelector tableId="family_sqp_perf" measures={FAMILY_SQP_COLUMNS} selected={familySqpCols} onSelectedChange={setFamilySqpCols} />}>
           <div className="border border-border rounded-xl bg-card overflow-hidden">

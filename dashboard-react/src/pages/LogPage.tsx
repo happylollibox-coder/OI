@@ -21,10 +21,18 @@ const LOG_TABLE_COLUMNS: MeasureDef[] = [
 ];
 
 const NK_TABLE_COLUMNS: MeasureDef[] = [
+  { id: 'keyword_text', label: 'Keyword', group: 'Info' },
+  { id: 'match_type', label: 'Match', group: 'Info' },
   { id: 'campaign_name', label: 'Campaign', group: 'Info' },
-  { id: 'negative_keyword', label: 'Keyword', group: 'Info' },
-  { id: 'spend_30d', label: 'Spend 30d', group: 'Ads' },
+  { id: 'level', label: 'Level', group: 'Info' },
+  { id: 'source', label: 'Source', group: 'Info' },
+  { id: 'added_at', label: 'Added', group: 'Info' },
 ];
+
+const NK_SOURCE_VARIANT: Record<string, 'green' | 'blue' | 'muted'> = {
+  COACH: 'green', MANUAL: 'blue', SEED: 'muted',
+};
+const fmtMatch = (m: string) => m?.replace('NEGATIVE_', '').toLowerCase() || '--';
 
 export function LogPage({ data }: { data: DashboardData }) {
   const { filters, setFilter } = useFilters();
@@ -35,14 +43,16 @@ export function LogPage({ data }: { data: DashboardData }) {
   const types = useMemo(() => [...new Set(logs.map(r => r.change_type).filter(Boolean))].sort(), [logs]);
   const exps = useMemo(() => [...new Set(logs.map(r => r.experiment_id).filter(Boolean))].sort(), [logs]);
 
-  const filtered = useMemo(() => {
+  const filteredAll = useMemo(() => {
     let f = logs;
     if (typeFilter !== 'all') f = f.filter(r => r.change_type === typeFilter);
     if (filters.experiment) f = f.filter(r => r.experiment_id === filters.experiment);
-    return f.slice(0, 100);
+    return f;
   }, [logs, typeFilter, filters.experiment]);
+  const LOG_CAP = 100;
+  const filtered = useMemo(() => filteredAll.slice(0, LOG_CAP), [filteredAll]);
   const logSort = useSort('change_date');
-  const nkSort = useSort('spend_30d');
+  const nkSort = useSort('added_at');
   const [logCols, setLogCols] = useMeasureSelection('log_changelog', LOG_TABLE_COLUMNS);
   const [nkCols, setNkCols] = useMeasureSelection('log_negative_keywords', NK_TABLE_COLUMNS);
   const visibleLogCols = useMemo(() => LOG_TABLE_COLUMNS.filter(c => logCols.has(c.id)), [logCols]);
@@ -58,6 +68,7 @@ export function LogPage({ data }: { data: DashboardData }) {
     <div className="animate-in">
       <div className="flex items-center gap-2 mb-5">
         <PageHeader title="Change Log" subtitle="Recent changes" />
+        {filteredAll.length > 0 && <span className="text-[11px] text-faint">{filteredAll.length > LOG_CAP ? `showing ${LOG_CAP} of ${filteredAll.length}` : filteredAll.length}</span>}
         {logFilterItems.length > 0 && <FilterInfoIcon items={logFilterItems} />}
         <div className="ml-auto"><MeasureSelector tableId="log_changelog" measures={LOG_TABLE_COLUMNS} selected={logCols} onSelectedChange={setLogCols} /></div>
       </div>
@@ -110,28 +121,32 @@ export function LogPage({ data }: { data: DashboardData }) {
 
       {/* Negative Keywords */}
       <div className="mt-6">
-        <div className="flex items-center gap-2 text-sm font-bold mb-3">
+        <div className="flex items-center gap-2 text-sm font-bold mb-1">
           Negative Keywords
+          {nk.length > 0 && <span className="text-[11px] font-normal text-faint">({nk.length > 200 ? `showing 200 of ${nk.length}` : nk.length})</span>}
           {nkFilterItems.length > 0 && <FilterInfoIcon items={nkFilterItems} />}
           <div className="ml-auto"><MeasureSelector tableId="log_negative_keywords" measures={NK_TABLE_COLUMNS} selected={nkCols} onSelectedChange={setNkCols} /></div>
         </div>
-        {!nk.length ? <Empty message="No data" /> : (
+        <div className="text-[11px] text-faint mb-3">Warehouse-owned registry — seeded once, then maintained automatically from coacher uploads (SEED / COACH / MANUAL).</div>
+        {!nk.length ? <Empty message="No enabled negative keywords" /> : (
           <div className="border border-border rounded-xl bg-card overflow-x-auto" style={{ maxHeight: '36vh', overflowY: 'auto' }}>
             <table className="w-full border-collapse text-xs">
               <thead>
                 <tr>
                   {visibleNkCols.map(c => (
-                    <SortTh key={c.id} k={c.id} sort={nkSort.sort} toggle={nkSort.toggle} right={c.id === 'spend_30d'}>{c.label}</SortTh>
+                    <SortTh key={c.id} k={c.id} sort={nkSort.sort} toggle={nkSort.toggle}>{c.label}</SortTh>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {nkSort.sorted(nk).slice(0, 100).map((r, i) => {
-                  const ks = Object.keys(r);
+                {nkSort.sorted(nk).slice(0, 200).map((r, i) => {
                   const cells: Record<string, React.ReactNode> = {
-                    campaign_name: <td key="campaign_name" className="px-3 py-2">{r.campaign_name || (r as unknown as Record<string, unknown>)[ks[0]] as string || '--'}</td>,
-                    negative_keyword: <td key="negative_keyword" className="px-3 py-2">{r.negative_keyword || (r as unknown as Record<string, unknown>)[ks[1]] as string || '--'}</td>,
-                    spend_30d: <td key="spend_30d" className="px-3 py-2 text-right font-mono">{r.spend_30d ?? (r as unknown as Record<string, unknown>)[ks[2]] ?? '--'}</td>,
+                    keyword_text: <td key="keyword_text" className="px-3 py-2 font-semibold">{r.keyword_text || '--'}</td>,
+                    match_type: <td key="match_type" className="px-3 py-2 text-[10px] uppercase tracking-wide text-subtle">{fmtMatch(r.match_type)}</td>,
+                    campaign_name: <td key="campaign_name" className="px-3 py-2 max-w-[220px] truncate" title={r.campaign_name}>{r.campaign_name || '--'}</td>,
+                    level: <td key="level" className="px-3 py-2 text-[10px] uppercase tracking-wide text-faint">{r.level || '--'}</td>,
+                    source: <td key="source" className="px-3 py-2"><Badge variant={NK_SOURCE_VARIANT[r.source] || 'muted'}>{r.source || '--'}</Badge></td>,
+                    added_at: <td key="added_at" className="px-3 py-2 font-mono text-[11px] whitespace-nowrap">{r.added_at ? r.added_at.slice(0, 10) : '--'}</td>,
                   };
                   return (
                     <tr key={i} className="border-b border-border-faint last:border-b-0 hover:bg-white/[.02]">
