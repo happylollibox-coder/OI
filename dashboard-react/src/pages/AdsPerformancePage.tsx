@@ -1598,7 +1598,7 @@ function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sq
 function trendInline(series: number[] | undefined, color: string, baseline?: number): ReactNode {
   if (!series || series.length === 0) return <span className="text-faint text-[10px]">—</span>;
   const vals = series.length === 1 ? [series[0], series[0]] : series;
-  return <MiniTrend values={vals} color={color} width={64} height={22} baseline={baseline} />;
+  return <MiniTrend values={vals} color={color} width={64} height={22} baseline={baseline} baselineLabel={baseline != null ? '$0' : undefined} />;
 }
 
 /** Renders a row's mini-trend inside its own <td>. */

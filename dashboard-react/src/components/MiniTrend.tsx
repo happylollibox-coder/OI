@@ -9,6 +9,7 @@ export function MiniTrend({
   showValues = false,
   valueFormat = (v: number) => v.toFixed(1),
   baseline,
+  baselineLabel = 'Target',
 }: {
   values: number[];
   color?: string;
@@ -18,6 +19,8 @@ export function MiniTrend({
   valueFormat?: (v: number) => string;
   /** Baseline value (e.g. 5 for score target) — draws horizontal reference line */
   baseline?: number;
+  /** Label shown next to the baseline line (default "Target") */
+  baselineLabel?: string;
 }) {
   if (!values.length) return null;
   const gradId = useId().replace(/:/g, '');
@@ -56,7 +59,7 @@ export function MiniTrend({
         <line x1={padX} y1={baselineY} x2={width - padX} y2={baselineY} stroke="rgba(113,113,122,0.4)" strokeWidth={1} strokeDasharray="4 2" />
       )}
       {baselineY != null && (
-        <text x={width - padX - 2} y={baselineY - 4} textAnchor="end" className="text-[9px] fill-zinc-500">Target</text>
+        <text x={width - padX - 2} y={baselineY - 4} textAnchor="end" className="text-[9px] fill-zinc-500">{baselineLabel}</text>
       )}
       <path d={d} fill="none" stroke={color} strokeWidth={strokeW} strokeLinecap="round" strokeLinejoin="round" />
       {showValues && coords.map((c, i) => (
