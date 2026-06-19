@@ -312,7 +312,18 @@ BEGIN
           ', Hero Orders: ', CAST(COALESCE(hl.hero_total_orders, 0) AS STRING), '.'
         )
       ELSE NULL
-    END as hero_action_explanation
+    END as hero_action_explanation,
+    -- Launch track passthrough from V_ADS_COACH (per-keyword)
+    ca.campaign_age_days,
+    ca.is_new_campaign,
+    ca.launch_phase,
+    ca.launch_decision,
+    ca.launch_bid,
+    ca.launch_bid_source,
+    ca.launch_recommended_bid,
+    ca.launch_clicks,
+    ca.clicks_since_last_bid_change,
+    ca.launch_decision_trace
   FROM `onyga-482313.OI.V_ADS_COACH` ca
   LEFT JOIN `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` dc_cur ON ca.campaign_id = dc_cur.campaign_id
   LEFT JOIN assembled a ON ca.campaign_id = a.campaign_id AND ca.search_term = a.search_term
@@ -459,7 +470,18 @@ BEGIN
     CAST(ANY_VALUE(ly_clicks) AS INT64) as ly_clicks,
     ANY_VALUE(ly_cpc) as ly_cpc,
     ROUND(COALESCE(ANY_VALUE(q4_peak_spend), 0), 2) as q4_peak_spend,
-    ANY_VALUE(ad_group_id) as ad_group_id
+    ANY_VALUE(ad_group_id) as ad_group_id,
+    -- Launch track: NULL on TERM grain (launch decisions live on TARGET-grain rows)
+    CAST(NULL AS INT64) as campaign_age_days,
+    CAST(NULL AS BOOL) as is_new_campaign,
+    CAST(NULL AS STRING) as launch_phase,
+    CAST(NULL AS STRING) as launch_decision,
+    CAST(NULL AS FLOAT64) as launch_bid,
+    CAST(NULL AS STRING) as launch_bid_source,
+    CAST(NULL AS FLOAT64) as launch_recommended_bid,
+    CAST(NULL AS INT64) as launch_clicks,
+    CAST(NULL AS INT64) as clicks_since_last_bid_change,
+    CAST(NULL AS STRING) as launch_decision_trace
   FROM _base_rows
   WHERE action IS NOT NULL
   GROUP BY campaign_id, search_term, action;
@@ -675,7 +697,18 @@ BEGIN
     ROUND(SAFE_DIVIDE(SUM(ly_spend), NULLIF(SUM(ly_clicks), 0)), 2) as ly_cpc,
     ROUND(COALESCE(SUM(q4_peak_spend), 0), 2) as q4_peak_spend,
     -- ad_group_id is constant per campaign×targeting (one ad group per keyword); ANY_VALUE is correct
-    ANY_VALUE(ad_group_id) as ad_group_id
+    ANY_VALUE(ad_group_id) as ad_group_id,
+    -- Launch track: real values on TARGET grain (per keyword/target — constant within the group)
+    ANY_VALUE(campaign_age_days) as campaign_age_days,
+    ANY_VALUE(is_new_campaign) as is_new_campaign,
+    ANY_VALUE(launch_phase) as launch_phase,
+    ANY_VALUE(launch_decision) as launch_decision,
+    ANY_VALUE(launch_bid) as launch_bid,
+    ANY_VALUE(launch_bid_source) as launch_bid_source,
+    ANY_VALUE(launch_recommended_bid) as launch_recommended_bid,
+    ANY_VALUE(launch_clicks) as launch_clicks,
+    ANY_VALUE(clicks_since_last_bid_change) as clicks_since_last_bid_change,
+    ANY_VALUE(launch_decision_trace) as launch_decision_trace
   FROM _base_rows
   WHERE target_action IS NOT NULL
   GROUP BY campaign_id, targeting, target_action;
@@ -895,7 +928,18 @@ BEGIN
     ROUND(SAFE_DIVIDE(SUM(ly_spend), NULLIF(SUM(ly_clicks), 0)), 2) as ly_cpc,
     ROUND(COALESCE(SUM(q4_peak_spend), 0), 2) as q4_peak_spend,
     -- BUDGET is campaign-grain; a campaign may span multiple ad groups → ANY_VALUE (best effort)
-    ANY_VALUE(ad_group_id) as ad_group_id
+    ANY_VALUE(ad_group_id) as ad_group_id,
+    -- Launch track: NULL on BUDGET grain
+    CAST(NULL AS INT64) as campaign_age_days,
+    CAST(NULL AS BOOL) as is_new_campaign,
+    CAST(NULL AS STRING) as launch_phase,
+    CAST(NULL AS STRING) as launch_decision,
+    CAST(NULL AS FLOAT64) as launch_bid,
+    CAST(NULL AS STRING) as launch_bid_source,
+    CAST(NULL AS FLOAT64) as launch_recommended_bid,
+    CAST(NULL AS INT64) as launch_clicks,
+    CAST(NULL AS INT64) as clicks_since_last_bid_change,
+    CAST(NULL AS STRING) as launch_decision_trace
   FROM _base_rows
   WHERE budget_action IS NOT NULL
   GROUP BY campaign_id, budget_action;
@@ -1037,7 +1081,18 @@ BEGIN
     CAST(ANY_VALUE(ly_clicks) AS INT64) as ly_clicks,
     ANY_VALUE(ly_cpc) as ly_cpc,
     ROUND(COALESCE(ANY_VALUE(q4_peak_spend), 0), 2) as q4_peak_spend,
-    ANY_VALUE(ad_group_id) as ad_group_id
+    ANY_VALUE(ad_group_id) as ad_group_id,
+    -- Launch track: NULL on HERO grain
+    CAST(NULL AS INT64) as campaign_age_days,
+    CAST(NULL AS BOOL) as is_new_campaign,
+    CAST(NULL AS STRING) as launch_phase,
+    CAST(NULL AS STRING) as launch_decision,
+    CAST(NULL AS FLOAT64) as launch_bid,
+    CAST(NULL AS STRING) as launch_bid_source,
+    CAST(NULL AS FLOAT64) as launch_recommended_bid,
+    CAST(NULL AS INT64) as launch_clicks,
+    CAST(NULL AS INT64) as clicks_since_last_bid_change,
+    CAST(NULL AS STRING) as launch_decision_trace
   FROM _base_rows
   WHERE hero_action IS NOT NULL
   GROUP BY campaign_id, search_term, hero_action;

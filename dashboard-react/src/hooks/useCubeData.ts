@@ -1604,6 +1604,12 @@ async function loadCoachActionsFromCube(): Promise<CoachActionRow[]> {
       'AdsCoachActions.sqpSales8w', 'AdsCoachActions.sqpOrders8w',
       'AdsCoachActions.ltNetRoas', 'AdsCoachActions.ltOrders',
       'AdsCoachActions.ltFirstSeen', 'AdsCoachActions.ltLastSeen',
+      // Launch track (new-campaign lifecycle)
+      'AdsCoachActions.campaignAgeDays', 'AdsCoachActions.isNewCampaign',
+      'AdsCoachActions.launchPhase', 'AdsCoachActions.launchDecision',
+      'AdsCoachActions.launchBid', 'AdsCoachActions.launchBidSource',
+      'AdsCoachActions.launchRecommendedBid', 'AdsCoachActions.launchClicks',
+      'AdsCoachActions.clicksSinceLastBidChange', 'AdsCoachActions.launchDecisionTrace',
     ],
     order: { 'AdsCoachActions.priorityScore': 'desc' },
     limit: 2000,
@@ -1715,6 +1721,17 @@ async function loadCoachActionsFromCube(): Promise<CoachActionRow[]> {
     lt_units: null,
     lt_first_seen: r['AdsCoachActions.ltFirstSeen'] != null ? String(r['AdsCoachActions.ltFirstSeen']) : null,
     lt_last_seen: r['AdsCoachActions.ltLastSeen'] != null ? String(r['AdsCoachActions.ltLastSeen']) : null,
+    // Launch track (new-campaign lifecycle)
+    campaign_age_days: r['AdsCoachActions.campaignAgeDays'] != null ? Number(r['AdsCoachActions.campaignAgeDays']) : null,
+    is_new_campaign: r['AdsCoachActions.isNewCampaign'] != null ? Boolean(r['AdsCoachActions.isNewCampaign']) : null,
+    launch_phase: r['AdsCoachActions.launchPhase'] != null ? String(r['AdsCoachActions.launchPhase']) : null,
+    launch_decision: r['AdsCoachActions.launchDecision'] != null ? String(r['AdsCoachActions.launchDecision']) : null,
+    launch_bid: r['AdsCoachActions.launchBid'] != null ? Number(r['AdsCoachActions.launchBid']) : null,
+    launch_bid_source: r['AdsCoachActions.launchBidSource'] != null ? String(r['AdsCoachActions.launchBidSource']) : null,
+    launch_recommended_bid: r['AdsCoachActions.launchRecommendedBid'] != null ? Number(r['AdsCoachActions.launchRecommendedBid']) : null,
+    launch_clicks: r['AdsCoachActions.launchClicks'] != null ? Number(r['AdsCoachActions.launchClicks']) : null,
+    clicks_since_last_bid_change: r['AdsCoachActions.clicksSinceLastBidChange'] != null ? Number(r['AdsCoachActions.clicksSinceLastBidChange']) : null,
+    launch_decision_trace: (() => { try { const raw = r['AdsCoachActions.launchDecisionTrace']; return raw ? JSON.parse(String(raw)) : null; } catch (_e) { return null; } })(),
     };
     return result;
   });

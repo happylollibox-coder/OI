@@ -444,6 +444,24 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
       .sort((x, y) => y.total - x.total);
   }, [clearCases]);
 
+  // ── 🆕 New-campaign launch track: per-keyword launch decisions (engine-computed) ──
+  // Rows where launch_decision is set (new campaigns, TARGET grain). Grouped by family,
+  // respecting the global family filter. Display-driven: the engine already decided.
+  const launchGroups = useMemo(() => {
+    const m = new Map<string, ActionRow[]>();
+    for (const a of acts) {
+      if (!a.launch_decision) continue;
+      if (doQueue.isUploaded(a.targeting || a.search_term, a.campaign_id) || doQueue.isDone(a.targeting || a.search_term, a.campaign_id)) continue;
+      const family = getFamily(a.product_short_name) || a.parent_name || '—';
+      if (effectiveFam && family !== effectiveFam) continue;
+      const g = m.get(family); if (g) g.push(a); else m.set(family, [a]);
+    }
+    return [...m.entries()]
+      .map(([family, rows]) => ({ family, rows: rows.sort((x, y) => (y.launch_clicks ?? 0) - (x.launch_clicks ?? 0)) }))
+      .sort((a, b) => b.rows.length - a.rows.length);
+  }, [acts, getFamily, effectiveFam, doQueue.isUploaded, doQueue.isDone]);
+  const launchCount = useMemo(() => launchGroups.reduce((s, g) => s + g.rows.length, 0), [launchGroups]);
+
   const queueAction = (a: ActionRow, opp?: { kind: 'save' | 'earn'; dollars: number }) => doQueue.addItem({
     search_term: a.search_term || '',
     action: a.action || '',
@@ -1477,6 +1495,54 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
           </div>
         );
       })()}
+
+      {/* ── 🆕 New campaigns (launch track) — young campaigns judged every 15 clicks ── */}
+      {launchGroups.length > 0 && (
+        <div className="mb-4">
+          <div className="flex items-baseline gap-2 mb-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text)]">🆕 New campaigns</span>
+            <span className="text-[10px] text-faint">{launchCount} launch-phase keyword{launchCount !== 1 ? 's' : ''} · bid aggressive → reduce → decide, re-judged every 15 clicks</span>
+          </div>
+          {launchGroups.map(({ family, rows }) => (
+            <div key={family} className="mb-3">
+              <div className="flex items-baseline gap-2 mb-1.5 px-0.5">
+                <span className="text-[11px] font-semibold text-[var(--color-text)]">{family}</span>
+                <span className="text-[10px] text-faint">{rows.length} keyword{rows.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {rows.map(a => {
+                  const dec = a.launch_decision || '';
+                  const view = dec === 'LAUNCH_GRADUATE' ? { label: 'Graduate ✓ proven winner', cls: 'text-emerald-400' }
+                    : dec === 'LAUNCH_NEGATE' ? { label: 'Negate — real negative', cls: 'text-rose-400' }
+                    : dec === 'LAUNCH_REDUCE_BID' ? { label: 'Reduce bid −20%', cls: 'text-amber-400' }
+                    : { label: 'Hold aggressive bid', cls: 'text-sky-400' };
+                  const bid = a.launch_recommended_bid ?? a.launch_bid;
+                  const roas = a.ads_net_roas_4w;
+                  return (
+                    <div key={`${a.campaign_id}|${a.search_term}|${a.targeting || ''}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-[12px] font-semibold text-[var(--color-text)] truncate" title={a.targeting || a.search_term}>{a.targeting || a.search_term}</span>
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-[var(--color-surface)] text-faint shrink-0">{a.launch_phase}{a.campaign_age_days != null ? ` · ${a.campaign_age_days}d` : ''}</span>
+                      </div>
+                      <div className="text-[10px] text-muted mb-1 truncate" title={a.product_short_name}>{a.product_short_name}{a.match_type ? ` · ${a.match_type}` : ''}</div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className={`text-[12px] font-semibold ${view.cls}`}>{view.label}</span>
+                        {bid != null && dec !== 'LAUNCH_NEGATE' && dec !== 'LAUNCH_GRADUATE' && (
+                          <span className="text-[11px] font-mono text-[var(--color-text)]">${bid.toFixed(2)}<span className="text-faint text-[9px]"> bid{a.launch_bid_source ? ` (${a.launch_bid_source})` : ''}</span></span>
+                        )}
+                      </div>
+                      <div className="text-[10px] font-mono text-faint mt-1">
+                        {a.launch_clicks ?? 0} clicks · {a.ads_orders_4w ?? 0} ord{roas != null ? ` · net ROAS ${roas.toFixed(2)}` : ''}
+                        {a.clicks_since_last_bid_change != null ? ` · ${a.clicks_since_last_bid_change} since bid` : ''}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── ✅ Clear cases (Stage-1 trust list) — grouped by family, ordered by weekly $ opportunity ── */}
       {clearGroups.length > 0 && (

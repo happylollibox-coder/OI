@@ -14,8 +14,9 @@
 --   5. Hardcoded fallback in V_ADS_COACH SQL
 --
 -- NOTE: This seed is a FAITHFUL SNAPSHOT of the live table, regenerated 2026-06-16
---       (112 rows, coach_mode-aware). The live table is edited via the Flask API and
---       direct DML; keep this file in sync after any live change so a re-seed is safe.
+--       (112 rows, coach_mode-aware), plus 9 LAUNCH_* keys added 2026-06-19 for the
+--       new-campaign launch track (121 rows). The live table is edited via the Flask API
+--       and direct DML; keep this file in sync after any live change so a re-seed is safe.
 -- =============================================
 
 CREATE TABLE IF NOT EXISTS `onyga-482313.OI.DE_COACH_THRESHOLDS` (
@@ -63,6 +64,22 @@ VALUES
   ('SCALE_UP_SPEND_CAP', 'GLOBAL', 'GUARDIAN', 50, 'Only scale up if spend is below this cap', 1, 1, 'SEED'),
   ('WASTED_SPEND_THRESHOLD', 'GLOBAL', 'GUARDIAN', 15, 'Flag as wasted if spend exceeds this with 0 orders', 1, 1, 'SEED'),
   ('CROSS_SELL_MIN_ORDERS', 'GLOBAL', 'GUARDIAN', 3, 'Min A->B cross-purchase orders (30d) to recommend a self-cross-sell product target', 1, 1, 'MANUAL'),
+
+  -- Launch track (new-campaign aggressive→reduce→decide lifecycle; keyed off campaign age, applies globally)
+  ('LAUNCH_WINDOW_DAYS', 'GLOBAL', 'GUARDIAN', 30, 'Campaign age (days) under which a keyword is on the new-campaign launch track', 1, 1, 'SEED'),
+  ('LAUNCH_BID_MULT', 'GLOBAL', 'GUARDIAN', 1.7, 'Aggressive launch bid = anchor CPC x this multiplier', 1, 1, 'SEED'),
+  ('LAUNCH_BID_CEILING', 'GLOBAL', 'GUARDIAN', 1.4, 'Hard max ($) on any launch-track bid', 1, 1, 'SEED'),
+  ('LAUNCH_COLD_BID', 'GLOBAL', 'GUARDIAN', 1.2, 'Flat launch bid ($) when no CPC anchor exists (never-advertised keyword)', 1, 1, 'SEED'),
+  ('LAUNCH_STEP_DOWN_PCT', 'GLOBAL', 'GUARDIAN', 0.2, 'Bid reduction fraction per reduce checkpoint (0.2 = -20%)', 1, 1, 'SEED'),
+  ('LAUNCH_CHECKPOINT_CLICKS', 'GLOBAL', 'GUARDIAN', 15, 'Clicks per launch-track decision checkpoint', 1, 1, 'SEED'),
+  ('LAUNCH_NEGATE_CLICKS', 'GLOBAL', 'GUARDIAN', 45, 'Launch-track clicks with 0 orders that trigger negate', 1, 1, 'SEED'),
+  ('LAUNCH_WINNER_ORDERS', 'GLOBAL', 'GUARDIAN', 2, 'Orders in the winner window to graduate off the launch track', 1, 1, 'SEED'),
+  ('LAUNCH_WINNER_DAYS', 'GLOBAL', 'GUARDIAN', 3, 'Trailing days (ending at ads watermark) for the launch winner check', 1, 1, 'SEED'),
+
+  -- Money-bleeder fit-gated rule (0-order bleeders: research-fit → reduce & keep, not-fit → negate)
+  ('BLEEDER_FIT_RANK', 'GLOBAL', 'GUARDIAN', 50, 'Research rank at/above which a 0-order bleeder is REDUCED (kept) instead of negated', 1, 1, 'SEED'),
+  ('BLEEDER_REDUCE_PCT', 'GLOBAL', 'GUARDIAN', 0.4, 'Aggressive bid cut fraction for a fit money-bleeder (0.4 = -40%)', 1, 1, 'SEED'),
+  ('BLEEDER_MIN_CLICKS', 'GLOBAL', 'GUARDIAN', 20, 'Min 4w clicks for a 0-order term to count as an actionable money bleeder', 1, 1, 'SEED'),
 
   -- GUARDIAN x BRAND_DEFENSE
   ('BID_CAP_SUGGESTION', 'BRAND_DEFENSE', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),

@@ -118,6 +118,12 @@ describe('clearCase', () => {
     expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6 }).clear).toBe(true);
     expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.95 }).clear).toBe(false); // gray band
   });
+  it('reversible REDUCE_BID clears at MEDIUM confidence; permanent CUT/PROMOTE still need HIGH', () => {
+    expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, confidence: 'MEDIUM' }).clear).toBe(true);
+    expect(clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, confidence: 'LOW' }).clear).toBe(false);
+    expect(clearCase({ ...base, action: 'NEGATE_TERM', confidence: 'MEDIUM' }).clear).toBe(false);
+    expect(clearCase({ ...base, action: 'INCREASE_BID', orders: 2, netRoas: 1.3, confidence: 'MEDIUM' }).clear).toBe(false);
+  });
   it('promote needs mode-specific clear bar: GUARDIAN >=1.3, BLITZ >=1.15, COOLDOWN never', () => {
     const p = { ...base, action: 'INCREASE_BID', orders: 3 };
     expect(clearCase({ ...p, netRoas: 1.35, mode: 'GUARDIAN' }).clear).toBe(true);

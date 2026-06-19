@@ -125,7 +125,21 @@ threshold_pivot AS (
     MAX(IF(threshold_key='CONFIDENCE_DAYS_MEDIUM', threshold_value, NULL)) as conf_days_medium,
     MAX(IF(threshold_key='CONFIDENCE_CLICKS_MEDIUM', threshold_value, NULL)) as conf_clicks_medium,
     MAX(IF(threshold_key='BID_CAP_SUGGESTION', threshold_value, NULL)) as bid_cap,
-    MAX(IF(threshold_key='DEFENSE_DOMINATE_IS_PCT', threshold_value, NULL)) as defense_dominate_is
+    MAX(IF(threshold_key='DEFENSE_DOMINATE_IS_PCT', threshold_value, NULL)) as defense_dominate_is,
+    -- Launch track (new-campaign aggressive→reduce→decide lifecycle)
+    MAX(IF(threshold_key='LAUNCH_WINDOW_DAYS', threshold_value, NULL)) as launch_window_days,
+    MAX(IF(threshold_key='LAUNCH_BID_MULT', threshold_value, NULL)) as launch_bid_mult,
+    MAX(IF(threshold_key='LAUNCH_BID_CEILING', threshold_value, NULL)) as launch_bid_ceiling,
+    MAX(IF(threshold_key='LAUNCH_COLD_BID', threshold_value, NULL)) as launch_cold_bid,
+    MAX(IF(threshold_key='LAUNCH_STEP_DOWN_PCT', threshold_value, NULL)) as launch_step_down_pct,
+    MAX(IF(threshold_key='LAUNCH_CHECKPOINT_CLICKS', threshold_value, NULL)) as launch_checkpoint_clicks,
+    MAX(IF(threshold_key='LAUNCH_NEGATE_CLICKS', threshold_value, NULL)) as launch_negate_clicks,
+    MAX(IF(threshold_key='LAUNCH_WINNER_ORDERS', threshold_value, NULL)) as launch_winner_orders,
+    MAX(IF(threshold_key='LAUNCH_WINNER_DAYS', threshold_value, NULL)) as launch_winner_days,
+    -- Money-bleeder fit-gated rule
+    MAX(IF(threshold_key='BLEEDER_FIT_RANK', threshold_value, NULL)) as bleeder_fit_rank,
+    MAX(IF(threshold_key='BLEEDER_REDUCE_PCT', threshold_value, NULL)) as bleeder_reduce_pct,
+    MAX(IF(threshold_key='BLEEDER_MIN_CLICKS', threshold_value, NULL)) as bleeder_min_clicks
   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
   WHERE product_family IS NULL
   GROUP BY strategy_id, coach_mode
@@ -168,6 +182,24 @@ coach_data AS (
     -- Hard bid ceiling ($) and BRAND_DEFENSE "already dominating" impression-share cutoff (%)
     COALESCE(tp_sm.bid_cap, tp_gm.bid_cap, tp_sg.bid_cap, tp_gg.bid_cap, 2.0) as th_bid_cap,
     COALESCE(tp_sm.defense_dominate_is, tp_gm.defense_dominate_is, tp_sg.defense_dominate_is, tp_gg.defense_dominate_is, 50.0) as th_defense_dominate_is,
+    -- Launch-track thresholds (resolved strategy×mode → GLOBAL×mode → strategy×GUARDIAN → GLOBAL×GUARDIAN)
+    COALESCE(tp_sm.launch_window_days, tp_gm.launch_window_days, tp_sg.launch_window_days, tp_gg.launch_window_days, 30) as th_launch_window_days,
+    COALESCE(tp_sm.launch_bid_mult, tp_gm.launch_bid_mult, tp_sg.launch_bid_mult, tp_gg.launch_bid_mult, 1.7) as th_launch_bid_mult,
+    COALESCE(tp_sm.launch_bid_ceiling, tp_gm.launch_bid_ceiling, tp_sg.launch_bid_ceiling, tp_gg.launch_bid_ceiling, 1.4) as th_launch_bid_ceiling,
+    COALESCE(tp_sm.launch_cold_bid, tp_gm.launch_cold_bid, tp_sg.launch_cold_bid, tp_gg.launch_cold_bid, 1.2) as th_launch_cold_bid,
+    COALESCE(tp_sm.launch_step_down_pct, tp_gm.launch_step_down_pct, tp_sg.launch_step_down_pct, tp_gg.launch_step_down_pct, 0.2) as th_launch_step_down_pct,
+    COALESCE(tp_sm.launch_checkpoint_clicks, tp_gm.launch_checkpoint_clicks, tp_sg.launch_checkpoint_clicks, tp_gg.launch_checkpoint_clicks, 15) as th_launch_checkpoint_clicks,
+    COALESCE(tp_sm.launch_negate_clicks, tp_gm.launch_negate_clicks, tp_sg.launch_negate_clicks, tp_gg.launch_negate_clicks, 45) as th_launch_negate_clicks,
+    COALESCE(tp_sm.launch_winner_orders, tp_gm.launch_winner_orders, tp_sg.launch_winner_orders, tp_gg.launch_winner_orders, 2) as th_launch_winner_orders,
+    COALESCE(tp_sm.launch_winner_days, tp_gm.launch_winner_days, tp_sg.launch_winner_days, tp_gg.launch_winner_days, 3) as th_launch_winner_days,
+    -- Money-bleeder thresholds
+    COALESCE(tp_sm.bleeder_fit_rank, tp_gm.bleeder_fit_rank, tp_sg.bleeder_fit_rank, tp_gg.bleeder_fit_rank, 50) as th_bleeder_fit_rank,
+    COALESCE(tp_sm.bleeder_reduce_pct, tp_gm.bleeder_reduce_pct, tp_sg.bleeder_reduce_pct, tp_gg.bleeder_reduce_pct, 0.4) as th_bleeder_reduce_pct,
+    COALESCE(tp_sm.bleeder_min_clicks, tp_gm.bleeder_min_clicks, tp_sg.bleeder_min_clicks, tp_gg.bleeder_min_clicks, 20) as th_bleeder_min_clicks,
+    -- Strategy template max bid (cold-start bid anchor when no CPC exists) + research-page CPC anchors
+    stmpl.recommended_bid_max as strategy_bid_max,
+    rr.cpc_30d AS research_cpc_30d,
+    rr.cpc_12m AS research_cpc_12m,
     -- Mode-aware target ROAS:
     --   GUARDIAN/COOLDOWN  → 7d off-season (live)
     --   BLITZ PEAK         → 3d raw (live, react fast at peak)
@@ -217,7 +249,8 @@ coach_data AS (
   LEFT JOIN `onyga-482313.OI.DIM_STRATEGY_TEMPLATE` stmpl ON d.strategy_id = stmpl.strategy_id
   -- Research Rank per term × family (deduped to one row per term+family to avoid fan-out).
   LEFT JOIN (
-    SELECT LOWER(query_text) AS qt, parent_name, MAX(rank) AS rank
+    SELECT LOWER(query_text) AS qt, parent_name, MAX(rank) AS rank,
+      MAX(cpc_30d) AS cpc_30d, MAX(cpc_12m) AS cpc_12m
     FROM `onyga-482313.OI.V_RESEARCH_RANKED`
     GROUP BY 1, 2
   ) rr ON LOWER(d.search_term) = rr.qt AND d.parent_name = rr.parent_name
@@ -370,6 +403,60 @@ SELECT
   -- ─── Campaign Age (for 14-day warmup guard) ───
   DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) as campaign_age_days,
 
+  -- ═══════════════════════════════════════════════════════════════════════════
+  -- LAUNCH TRACK (new-campaign aggressive→reduce→decide lifecycle)
+  -- Young campaigns bid aggressively to buy clicks fast, then re-decide every
+  -- LAUNCH_CHECKPOINT_CLICKS clicks; surfaced in the dashboard "New campaigns" section.
+  -- ═══════════════════════════════════════════════════════════════════════════
+  (DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < d.th_launch_window_days) as is_new_campaign,
+  -- launch_clicks ≈ lifetime clicks (the 4w window ≈ a <30d campaign's whole life)
+  COALESCE(d.ads_clicks_4w, 0) as launch_clicks,
+  -- Aggressive launch bid: anchor (research CPC) × mult, cold-start chain, capped at ceiling.
+  -- Cold-start (a) "SQP market CPC" is infeasible (SQP has no cost) → proxy with the term's own
+  -- observed 8w CPC, then strategy template max, then the flat cold bid.
+  ROUND(LEAST(
+    CASE
+      WHEN COALESCE(NULLIF(d.research_cpc_30d, 0), NULLIF(d.research_cpc_12m, 0)) IS NOT NULL
+        THEN COALESCE(NULLIF(d.research_cpc_30d, 0), NULLIF(d.research_cpc_12m, 0)) * d.th_launch_bid_mult
+      WHEN NULLIF(d.ads_cpc_8w, 0) IS NOT NULL THEN d.ads_cpc_8w * d.th_launch_bid_mult
+      WHEN NULLIF(d.strategy_bid_max, 0) IS NOT NULL THEN d.strategy_bid_max * d.th_launch_bid_mult
+      ELSE d.th_launch_cold_bid
+    END,
+    d.th_launch_bid_ceiling
+  ), 2) as launch_bid,
+  CASE
+    WHEN COALESCE(NULLIF(d.research_cpc_30d, 0), NULLIF(d.research_cpc_12m, 0)) IS NOT NULL THEN 'cpc'
+    WHEN NULLIF(d.ads_cpc_8w, 0) IS NOT NULL THEN 'market'
+    WHEN NULLIF(d.strategy_bid_max, 0) IS NOT NULL THEN 'template'
+    ELSE 'cold'
+  END as launch_bid_source,
+  -- Lifecycle phase (label only; null off-track)
+  CASE
+    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= d.th_launch_window_days THEN NULL
+    WHEN COALESCE(d.ads_orders_3d, 0) >= d.th_launch_winner_orders AND COALESCE(d.ads_net_roas_3d, 0) >= d.th_profitable_roas THEN 'WINNER'
+    WHEN COALESCE(d.ads_orders_4w, 0) = 0 AND COALESCE(d.ads_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'CUT'
+    WHEN COALESCE(d.ads_orders_4w, 0) >= 1 THEN 'EVALUATE'
+    ELSE 'GATHER'
+  END as launch_phase,
+  -- The 15-click decision matrix (NULL = not on the launch track)
+  CASE
+    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= d.th_launch_window_days THEN NULL
+    -- Winner: trailing-window orders at/above the profitable bar → graduate to the normal coacher
+    WHEN COALESCE(d.ads_orders_3d, 0) >= d.th_launch_winner_orders AND COALESCE(d.ads_net_roas_3d, 0) >= d.th_profitable_roas THEN 'LAUNCH_GRADUATE'
+    -- Has orders: profitable → hold; expensive → reduce (gated to once per click batch)
+    WHEN COALESCE(d.ads_orders_4w, 0) >= 1 THEN
+      CASE
+        WHEN COALESCE(d.ads_net_roas_4w, 0) >= d.th_profitable_roas THEN 'LAUNCH_HOLD'
+        WHEN COALESCE(d.clicks_since_last_bid_change, 0) >= d.th_launch_checkpoint_clicks THEN 'LAUNCH_REDUCE_BID'
+        ELSE 'LAUNCH_HOLD'
+      END
+    -- Zero orders: 15 hold / 30 reduce / 45 negate
+    WHEN COALESCE(d.ads_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'LAUNCH_NEGATE'
+    WHEN COALESCE(d.ads_clicks_4w, 0) >= 2 * d.th_launch_checkpoint_clicks
+         AND COALESCE(d.clicks_since_last_bid_change, 0) >= d.th_launch_checkpoint_clicks THEN 'LAUNCH_REDUCE_BID'
+    ELSE 'LAUNCH_HOLD'
+  END as launch_decision,
+
   -- ─── Signal ───
   CASE
     WHEN d.recommendation_type = 'OPPORTUNITY' THEN 'NOT_TARGETED'
@@ -452,6 +539,16 @@ SELECT
     -- ═══ Insufficient data at SEARCH TERM level → MONITOR ═══
     -- Bid decisions (INCREASE/REDUCE) live in target_action column, not here.
     WHEN d.ads_clicks_8w < d.th_min_clicks THEN 'MONITOR'
+
+    -- ═══ FIT PROTECTION (money-bleeder rule) — runs BEFORE every negate branch ═══
+    -- A research-fit term (rank ≥ BLEEDER_FIT_RANK) with 0 orders (4w) is NEVER negated:
+    -- keep it (MONITOR here) so target_action can REDUCE_BID aggressively instead. Broad on
+    -- purpose (no spend/clicks gate) so a fit term can't slip into a downstream negate; the
+    -- actual bid cut is still gated to real bleeders in target_action/recommended_bid.
+    WHEN d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND COALESCE(d.ads_orders_4w, 0) = 0
+      AND COALESCE(d.research_rank, 0) >= d.th_bleeder_fit_rank
+      THEN 'MONITOR'
 
     -- ═══ EXACT_BOOST strategy: already boosted, evaluate performance ═══
     -- When target = term: can't negate yourself → STOP_TARGET or MOVE_TO_SEASONAL_PUSH
@@ -546,6 +643,17 @@ SELECT
     WHEN d.lt_net_roas IS NOT NULL AND d.lt_net_roas < d.th_negate_roas
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_TERM'
 
+    -- ═══ MONEY BLEEDER (not-fit) catch — stop the bleed ═══
+    -- A 0-order (4w) term with real spend ($5+ panel floor) + enough clicks that is NOT a research
+    -- fit (rank < BLEEDER_FIT_RANK, or not in research) → NEGATE_TERM. Catches bleeders the
+    -- strategy-specific branches let fall through to MONITOR (e.g. no recent-5d clicks / no LT data).
+    WHEN d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND COALESCE(d.ads_orders_4w, 0) = 0
+      AND COALESCE(d.ads_spend_4w, 0) >= 5
+      AND COALESCE(d.ads_clicks_4w, 0) >= d.th_bleeder_min_clicks
+      AND COALESCE(d.research_rank, 0) < d.th_bleeder_fit_rank
+      THEN 'NEGATE_TERM'
+
     ELSE 'MONITOR'
   END as action,
 
@@ -635,6 +743,21 @@ SELECT
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
       AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
       THEN 'WARMUP_MONITOR'
+
+    -- ═══ MONEY BLEEDER (fit): 0 orders (4w) + real spend + enough clicks + research-fit → REDUCE_BID ═══
+    -- The standard reduce tier needs target_orders_8w > 0; a fit bleeder has 0 orders, so it would
+    -- otherwise fall through to MONITOR_TARGET. Cut the bid hard (recommended_bid handles -BLEEDER_REDUCE_PCT).
+    WHEN d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND COALESCE(d.ads_orders_4w, 0) = 0
+      AND COALESCE(d.ads_spend_4w, 0) >= 5
+      AND COALESCE(d.ads_clicks_4w, 0) >= d.th_bleeder_min_clicks
+      AND COALESCE(d.research_rank, 0) >= d.th_bleeder_fit_rank
+      AND NOT (
+        (d.coach_mode = 'GUARDIAN' AND d.days_since_last_bid_change < 7)
+        OR (d.coach_mode = 'COOLDOWN' AND d.days_since_last_bid_change < 1)
+        OR (d.coach_mode = 'BLITZ' AND d.current_phase IN ('BOOST', 'PEAK') AND d.days_since_last_bid_change < 3)
+      )
+      THEN 'REDUCE_BID'
 
     -- ═══ FREQUENCY GATE: prevent too-frequent bid changes ═══
     -- GUARDIAN: weekly (7d), COOLDOWN: daily (1d), BLITZ BOOST: every 3d, BLITZ PEAK: every 3d
@@ -931,6 +1054,19 @@ SELECT
       THEN GREATEST(d.pre_peak_bid, 0.10)
     WHEN d.coach_mode = 'COOLDOWN'
       THEN GREATEST(d.current_bid * 0.70, 0.10)
+    -- Money bleeder (fit): aggressive -BLEEDER_REDUCE_PCT cut. The CPC floor only applies when the
+    -- term's CPC is BELOW the current bid (its purpose: keep the bid competitive enough to win some
+    -- clicks). When the bid is already at/below CPC (stale/SB data), the floor is moot → apply the
+    -- full cut down to the $0.10 minimum. Always non-increasing.
+    WHEN d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND COALESCE(d.ads_orders_4w, 0) = 0
+      AND COALESCE(d.ads_spend_4w, 0) >= 5
+      AND COALESCE(d.ads_clicks_4w, 0) >= d.th_bleeder_min_clicks
+      AND COALESCE(d.research_rank, 0) >= d.th_bleeder_fit_rank
+      THEN GREATEST(
+        d.current_bid * (1 - d.th_bleeder_reduce_pct),
+        IF(d.ads_cpc_8w IS NOT NULL AND d.ads_cpc_8w > 0 AND d.ads_cpc_8w < d.current_bid, d.ads_cpc_8w, 0.10)
+      )
     -- Target has 0 orders + enough clicks + still active → reduce 30%
     WHEN d.target_orders_8w = 0 AND d.target_clicks_8w >= d.th_min_clicks
       AND d.target_clicks_recent_5d > 0
@@ -1607,5 +1743,28 @@ SELECT
       AND scored.recommended_bid >= scored.th_bid_cap
       THEN CONCAT('bid set by BID Ceiling ($', CAST(ROUND(scored.th_bid_cap, 2) AS STRING), ')')
     ELSE NULL
-  END AS bid_ceiling_note
+  END AS bid_ceiling_note,
+  -- Launch-track bid the coacher would set for this decision (capped at the launch ceiling):
+  --   HOLD   → the aggressive launch bid (establishes/keeps the gather-phase bid)
+  --   REDUCE → current bid −LAUNCH_STEP_DOWN_PCT, floored at the term's own CPC
+  --   NEGATE/GRADUATE/off-track → no bid
+  CASE scored.launch_decision
+    WHEN 'LAUNCH_HOLD' THEN scored.launch_bid
+    WHEN 'LAUNCH_REDUCE_BID' THEN ROUND(GREATEST(
+      COALESCE(scored.current_bid, scored.launch_bid) * (1 - scored.th_launch_step_down_pct),
+      COALESCE(NULLIF(scored.ads_cpc_8w, 0), 0.05)
+    ), 2)
+    ELSE NULL
+  END AS launch_recommended_bid,
+  -- Compact decision-trace for the launch card (NULL when off the track)
+  CASE WHEN scored.launch_decision IS NOT NULL THEN CONCAT(
+    '[',
+    '{"id":"launch","label":"Launch","pass":true,"value":"', scored.launch_phase, ' · ', scored.launch_decision, '"},',
+    '{"id":"clicks","label":"Clicks (launch)","pass":true,"value":"', CAST(scored.launch_clicks AS STRING), '"},',
+    '{"id":"csbc","label":"Clicks since bid","pass":true,"value":"', CAST(COALESCE(scored.clicks_since_last_bid_change, 0) AS STRING), '"},',
+    '{"id":"orders","label":"Orders 4w","pass":true,"value":"', CAST(COALESCE(scored.ads_orders_4w, 0) AS STRING), '"},',
+    '{"id":"net_roas","label":"Net ROAS 4w","pass":true,"value":"', CAST(ROUND(COALESCE(scored.ads_net_roas_4w, 0), 2) AS STRING), '"},',
+    '{"id":"bid","label":"Launch bid","pass":true,"value":"$', CAST(scored.launch_bid AS STRING), ' (', scored.launch_bid_source, ')"}',
+    ']'
+  ) ELSE NULL END AS launch_decision_trace
 FROM scored

@@ -322,6 +322,7 @@ campaign_pre_peak_budget AS (
 -- =============================================
 keyword_last_bid_change AS (
   SELECT keyword_id,
+    DATE(effective_from) as last_bid_change_date,
     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), DATE(effective_from), DAY) as days_since_last_bid_change
   FROM (
     SELECT keyword_id, bid, effective_from,
@@ -330,6 +331,21 @@ keyword_last_bid_change AS (
   )
   WHERE bid != prev_bid OR prev_bid IS NULL  -- bid actually changed
   QUALIFY ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY effective_from DESC) = 1
+),
+
+-- =============================================
+-- Clicks accrued since the last bid change per keyword (launch-track batch gate)
+-- Lets the launch loop fire a -20% reduce ONCE per 15-click batch, not every refresh.
+-- =============================================
+keyword_clicks_since_bid_change AS (
+  SELECT fa.keyword_id,
+    SUM(fa.Ads_clicks) as clicks_since_last_bid_change
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  JOIN keyword_last_bid_change klbc ON fa.keyword_id = klbc.keyword_id
+  WHERE fa.keyword_id IS NOT NULL
+    AND fa.date >= klbc.last_bid_change_date
+    AND fa.date <= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+  GROUP BY 1
 ),
 
 -- =============================================
@@ -1408,7 +1424,9 @@ active_term_data AS (
 
     -- Action frequency control (days since last change from SCD2 history)
     COALESCE(klbc.days_since_last_bid_change, 999) as days_since_last_bid_change,
-    COALESCE(clbc.days_since_last_budget_change, 999) as days_since_last_budget_change
+    COALESCE(clbc.days_since_last_budget_change, 999) as days_since_last_budget_change,
+    -- Launch-track batch gate: clicks accrued since the last bid change
+    COALESCE(kcsbc.clicks_since_last_bid_change, 0) as clicks_since_last_bid_change
 
   FROM ads_8w a8
   JOIN asin_economics ae ON a8.asin = ae.asin
@@ -1450,6 +1468,7 @@ active_term_data AS (
   LEFT JOIN campaign_pre_peak_budget cpb ON a8.campaign_id = cpb.campaign_id
   LEFT JOIN campaign_current_state ccs ON a8.campaign_id = ccs.campaign_id
   LEFT JOIN keyword_last_bid_change klbc ON a8.keyword_id = klbc.keyword_id
+  LEFT JOIN keyword_clicks_since_bid_change kcsbc ON a8.keyword_id = kcsbc.keyword_id
   LEFT JOIN campaign_last_budget_change clbc ON a8.campaign_id = clbc.campaign_id
 ),
 
@@ -1636,7 +1655,8 @@ opportunity_data AS (
     CAST(NULL AS STRING) as campaign_state,
     CAST(NULL AS TIMESTAMP) as campaign_creation_date,
     CAST(999 AS INT64) as days_since_last_bid_change,
-    CAST(999 AS INT64) as days_since_last_budget_change
+    CAST(999 AS INT64) as days_since_last_budget_change,
+    CAST(0 AS INT64) as clicks_since_last_bid_change
 
   FROM sqp_with_purchases sp
   JOIN asin_economics ae ON sp.asin = ae.asin

@@ -11,6 +11,7 @@ import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
 import { Empty } from '../components/Empty';
 import { SortTh, useSort, MEASURE_TIPS } from '../components/Tooltip';
 import { DashboardSummary } from '../components/DashboardSummary';
+import { HomeBrief } from '../components/HomeBrief';
 import { fmt, fM, fP, fR, fOrd, fClk, famFromType, weekRangeLabel, weekRangeLabelCapped, formatDateRange, ACTION_META, sqpCoverageWeeks, latestSqpWeek, periodDateKey, latestPeriodLabel, sliceByPeriod, getPeriodsToInclude, shiftYear, addDays, weeksInDateRange, weekOverlapsAdsGap, monthOverlapsAdsGap, scoreFromRoas, scoreFromProfitDelta, periodKey, periodDayCount, experimentMatchesFamily } from '../utils';
 import { filterBySeasonality, getSeasonality } from '../seasonality';
 import { useFilters } from '../hooks/useFilters';
@@ -1878,6 +1879,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
 
   return (
     <div className="animate-in">
+      <HomeBrief data={data} onNav={onNav} />
       {periodIncomplete && (
         <div className="mb-3 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5 text-[11px] text-amber-400 font-mono">
           Perf data through {perfMaxDate} — current period not complete, scores/comparisons suppressed

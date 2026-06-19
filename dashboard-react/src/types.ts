@@ -914,6 +914,18 @@ export interface ActionRow {
   lt_units: number | null;
   lt_first_seen: string | null;
   lt_last_seen: string | null;
+
+  // Launch track (new-campaign lifecycle; present only on TARGET-grain rows of new campaigns)
+  campaign_age_days?: number | null;
+  is_new_campaign?: boolean | null;
+  launch_phase?: string | null;
+  launch_decision?: string | null;
+  launch_bid?: number | null;
+  launch_bid_source?: string | null;
+  launch_recommended_bid?: number | null;
+  launch_clicks?: number | null;
+  clicks_since_last_bid_change?: number | null;
+  launch_decision_trace?: DecisionStep[] | null;
 }
 
 /** Alias: loadCoachActionsFromCube returns ActionRow shape */

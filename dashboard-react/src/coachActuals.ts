@@ -179,7 +179,9 @@ export function clearCase(g: GateInput): GateVerdict {
   const isReduce = REDUCE_ACTIONS.has(g.action);
   const isPromote = PROMOTE_ACTIONS.has(g.action);
   if (!isCut && !isReduce && !isPromote) return { clear: false, reason: 'not an act-now action' };
-  if (g.confidence !== 'HIGH') return { clear: false, reason: `${g.confidence} confidence — needs more data to act automatically` };
+  // Reversible bid reductions can act on MEDIUM confidence; permanent cuts/promotes need HIGH.
+  const okConf = isReduce ? (g.confidence === 'HIGH' || g.confidence === 'MEDIUM') : g.confidence === 'HIGH';
+  if (!okConf) return { clear: false, reason: `${g.confidence} confidence — needs more data to act automatically` };
   if (g.spend < GATE.minSpend) return { clear: false, reason: `spend $${g.spend.toFixed(0)} < $${GATE.minSpend} floor` };
   if (g.clicks < GATE.minClicks) return { clear: false, reason: `${g.clicks} clicks < ${GATE.minClicks} floor` };
   // Owner three-window rule: applied before CUT and REDUCE verdicts fire.

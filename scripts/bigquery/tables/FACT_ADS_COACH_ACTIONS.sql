@@ -119,5 +119,17 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.FACT_ADS_COACH_ACTIONS`
   ly_clicks INT64,
   ly_cpc FLOAT64,
   q4_peak_spend FLOAT64,
-  ad_group_id STRING
+  ad_group_id STRING,
+
+  -- Launch track (new-campaign aggressive→reduce→decide lifecycle; populated on TARGET-grain rows)
+  campaign_age_days INT64,
+  is_new_campaign BOOL,
+  launch_phase STRING,
+  launch_decision STRING,
+  launch_bid FLOAT64,
+  launch_bid_source STRING,
+  launch_recommended_bid FLOAT64,
+  launch_clicks INT64,
+  clicks_since_last_bid_change INT64,
+  launch_decision_trace STRING
 );

@@ -161,5 +161,17 @@ cube(`AdsCoachActions`, {
     ltUnits: { sql: `lt_units`, type: `number`, description: `Lifetime (12m) Units` },
     ltFirstSeen: { sql: `lt_first_seen`, type: `string`, description: `First date with ads data for this term` },
     ltLastSeen: { sql: `lt_last_seen`, type: `string`, description: `Last date with ads data for this term` },
+
+    // Launch track (new-campaign lifecycle; populated on TARGET-grain rows)
+    campaignAgeDays: { sql: `campaign_age_days`, type: `number`, description: `Days since campaign creation` },
+    isNewCampaign: { sql: `is_new_campaign`, type: `boolean`, description: `True if on the new-campaign launch track (age < window)` },
+    launchPhase: { sql: `launch_phase`, type: `string`, description: `Launch lifecycle phase: GATHER, EVALUATE, WINNER, CUT` },
+    launchDecision: { sql: `launch_decision`, type: `string`, description: `Launch decision: LAUNCH_HOLD, LAUNCH_REDUCE_BID, LAUNCH_NEGATE, LAUNCH_GRADUATE` },
+    launchBid: { sql: `launch_bid`, type: `number`, description: `Aggressive launch bid ($, capped at ceiling)` },
+    launchBidSource: { sql: `launch_bid_source`, type: `string`, description: `Anchor used for the launch bid: cpc, market, template, cold` },
+    launchRecommendedBid: { sql: `launch_recommended_bid`, type: `number`, description: `Bid the launch decision would set ($)` },
+    launchClicks: { sql: `launch_clicks`, type: `number`, description: `Clicks since launch (≈ lifetime for a <30d campaign)` },
+    clicksSinceLastBidChange: { sql: `clicks_since_last_bid_change`, type: `number`, description: `Clicks accrued since the last bid change (batch gate)` },
+    launchDecisionTrace: { sql: `launch_decision_trace`, type: `string`, description: `JSON decision-trace chips for the launch card` },
   },
 });

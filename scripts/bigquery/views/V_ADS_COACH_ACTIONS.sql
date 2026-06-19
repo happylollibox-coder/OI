@@ -126,6 +126,18 @@ SELECT
   lt_net_roas,
   lt_orders,
   lt_first_seen,
-  lt_last_seen
+  lt_last_seen,
+
+  -- ═══ Launch track (new-campaign lifecycle) ═══
+  campaign_age_days,
+  is_new_campaign,
+  launch_phase,
+  launch_decision,
+  launch_bid,
+  launch_bid_source,
+  launch_recommended_bid,
+  launch_clicks,
+  clicks_since_last_bid_change,
+  launch_decision_trace
 
 FROM `onyga-482313.OI.FACT_ADS_COACH_ACTIONS`
