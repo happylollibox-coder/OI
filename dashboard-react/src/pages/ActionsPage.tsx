@@ -512,6 +512,23 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     && !doQueue.isDone(a.search_term, a.campaign_id)
   ), [acts, doQueue.isUploaded, doQueue.isDone]);
 
+  // Last-day campaign spend (latest date from ads_7d daily campaign rows) for Budget cards.
+  const campLastDaySpend = useMemo(() => {
+    const byCampDate = new Map<string, Map<string, number>>();
+    for (const r of (data.ads_7d || [])) {
+      if (r.row_type !== 'campaign' || !r.campaign_id || !r.date) continue;
+      let m = byCampDate.get(r.campaign_id);
+      if (!m) { m = new Map(); byCampDate.set(r.campaign_id, m); }
+      m.set(r.date, (m.get(r.date) || 0) + (r.spend || 0));
+    }
+    const out = new Map<string, number>();
+    for (const [cid, m] of byCampDate) {
+      const lastDate = [...m.keys()].sort().pop();
+      if (lastDate) out.set(cid, m.get(lastDate) || 0);
+    }
+    return out;
+  }, [data.ads_7d]);
+
   // ── Launch (New Campaigns) queue: translate launch decisions → base bulksheet ops ──
   const launchQueued = (a: ActionRow): boolean => {
     const b = launchToBaseAction(a); if (!b) return false;
@@ -1319,37 +1336,6 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
 
       <PageHeader title="Detailed Actions" subtitle="Every action justified by measures" />
 
-      {/* ── 💰 Budget Actions (campaign-level budget decisions) ── */}
-      {budgetRows.length > 0 && (
-        <CollapsibleSection
-          id="budget"
-          title="💰 Budget Actions"
-          summary={`${budgetRows.length} campaigns · trim ~$${Math.round(budgetRows.reduce((s, a) => s + budgetTrimPerDay(a), 0))}/day · ${budgetRows.filter(rowQueued).length} queued`}
-          queueableCount={budgetRows.length}
-          queuedCount={budgetRows.filter(rowQueued).length}
-          onQueueAll={() => budgetRows.forEach(a => { if (!rowQueued(a)) queueAction(a); })}
-          onUnqueueAll={() => budgetRows.forEach(a => { const id = queuedIdFor(a); if (id) doQueue.removeItem(id); })}
-        >
-          <div className="flex flex-col gap-1">
-            {budgetRows.map(a => (
-              <div key={`${a.campaign_id}:${a.action}`} className="flex items-center justify-between gap-2 rounded border border-[var(--color-border)] px-2.5 py-1.5">
-                <div className="min-w-0">
-                  <div className="text-[12px] font-semibold text-[var(--color-text)] truncate">{a.campaign_name}</div>
-                  <div className="text-[10px] text-muted">
-                    {a.action.replace(/_/g, ' ').toLowerCase()} · ${a.current_budget ?? '?'} → ${a.recommended_budget ?? '?'}/day
-                  </div>
-                </div>
-                <QueueToggle
-                  queued={rowQueued(a)}
-                  onQueue={() => queueAction(a)}
-                  onUnqueue={() => { const id = queuedIdFor(a); if (id) doQueue.removeItem(id); }}
-                />
-              </div>
-            ))}
-          </div>
-        </CollapsibleSection>
-      )}
-
       {/* ── Coach Strategy Panel ── */}
       {(() => {
         // Filter coach terms by header parent & product filters
@@ -1578,6 +1564,48 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
           </div>
         );
       })()}
+
+      {/* ── 💰 Budget Actions (campaign-level budget decisions) — same card look as New campaigns ── */}
+      {budgetRows.length > 0 && (
+        <CollapsibleSection
+          id="budget"
+          title="💰 Budget Actions"
+          summary={`${budgetRows.length} campaigns · trim ~$${Math.round(budgetRows.reduce((s, a) => s + budgetTrimPerDay(a), 0))}/day · ${budgetRows.filter(rowQueued).length} queued`}
+          queueableCount={budgetRows.length}
+          queuedCount={budgetRows.filter(rowQueued).length}
+          onQueueAll={() => budgetRows.forEach(a => { if (!rowQueued(a)) queueAction(a); })}
+          onUnqueueAll={() => budgetRows.forEach(a => { const id = queuedIdFor(a); if (id) doQueue.removeItem(id); })}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {budgetRows.map(a => {
+              const lastDay = campLastDaySpend.get(a.campaign_id);
+              const avg7 = a.ads_spend_1w != null ? a.ads_spend_1w / 7 : null;
+              const cur = a.current_budget ?? 0, rec = a.recommended_budget ?? 0;
+              const down = rec < cur;
+              return (
+                <div key={`${a.campaign_id}:${a.action}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-[12px] font-semibold text-[var(--color-text)] truncate" title={a.campaign_name}>{a.campaign_name}</span>
+                    <span className={`text-[9px] px-1 py-0.5 rounded shrink-0 ${down ? 'bg-amber-500/15 text-amber-400' : 'bg-emerald-500/15 text-emerald-400'}`}>{down ? '−' : '+'}${Math.abs(cur - rec)}/d</span>
+                  </div>
+                  <div className="text-[10px] text-muted mb-1 truncate">{a.action.replace(/_/g, ' ').toLowerCase()}</div>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className={`text-[12px] font-semibold ${down ? 'text-amber-400' : 'text-emerald-400'}`}>${cur} → ${rec}<span className="text-faint text-[9px]">/day budget</span></span>
+                    <QueueToggle
+                      queued={rowQueued(a)}
+                      onQueue={() => queueAction(a)}
+                      onUnqueue={() => { const id = queuedIdFor(a); if (id) doQueue.removeItem(id); }}
+                    />
+                  </div>
+                  <div className="text-[10px] font-mono text-faint mt-1">
+                    {lastDay != null ? `last day $${lastDay.toFixed(2)}/d` : 'last day —'} · {avg7 != null ? `7d avg $${avg7.toFixed(2)}/d` : '7d avg —'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CollapsibleSection>
+      )}
 
       {/* ── 🆕 New campaigns (launch track) — young campaigns judged every 15 clicks ── */}
       {launchGroups.length > 0 && (() => {
