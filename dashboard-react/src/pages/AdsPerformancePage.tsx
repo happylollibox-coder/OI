@@ -12,7 +12,8 @@ import { fM, fP, fOrd, fClk, fR, fCpc, periodKey, getPeriodsToInclude, weekRange
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
 import { familyForRow, rowMatchesFamily } from './adsHierarchy.helpers';
-import { withWindow } from './adsTrend.helpers';
+import { withWindow, buildCampaignDailyIndex, buildTermWeeklyIndex, seriesFor, TERM_KEY, daysBetween, weeksBetween } from './adsTrend.helpers';
+import { MiniTrend } from '../components/MiniTrend';
 import { ChevronRight, ChevronDown, TrendingDown, AlertTriangle, Zap, GripVertical } from 'lucide-react';
 import { usePageSummary } from '../components/PageSummaryBar';
 
@@ -41,6 +42,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   const campSort = useSort('spend');
   const ADS_TERMS_COLUMNS: MeasureDef[] = [
     { id: 'search_term', label: 'Search Term', group: 'Info' },
+    { id: 'trend', label: 'Trend', tip: 'Weekly trend over this table’s window', group: 'Info', defaultVisible: true },
     { id: 'campaign_name', label: 'Campaign', group: 'Info' },
     { id: 'spend', label: 'Ads Spend', tip: MEASURE_TIPS.spend, group: 'Ads' },
     { id: 'orders', label: 'Ads Orders', tip: MEASURE_TIPS.orders, group: 'Ads' },
@@ -70,6 +72,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   ];
   const ADS_HIER_COLUMNS: MeasureDef[] = [
     { id: 'label', label: 'Search Term → Product → Campaign', group: 'Info' },
+    { id: 'trend', label: 'Trend', tip: 'Weekly net-profit trend over this table’s window', group: 'Info', defaultVisible: true },
     { id: 'spend', label: 'Ads Spend', tip: MEASURE_TIPS.spend, group: 'Ads' },
     { id: 'sales', label: 'Ads Sales', tip: MEASURE_TIPS.ads_sales, group: 'Ads' },
     { id: 'orders', label: 'Ads Orders', tip: MEASURE_TIPS.orders, group: 'Ads' },
@@ -99,6 +102,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   ];
   const ADS_CAMP_COLUMNS: MeasureDef[] = [
     { id: 'label', label: 'Hierarchy', group: 'Info' },
+    { id: 'trend', label: 'Trend', tip: 'Daily net-profit trend over this table’s window', group: 'Info', defaultVisible: true },
     { id: 'type', label: 'Type', group: 'Info' },
     { id: 'spend', label: 'Ads Spend', tip: MEASURE_TIPS.spend, group: 'Ads' },
     { id: 'sales', label: 'Ads Sales', tip: MEASURE_TIPS.ads_sales, group: 'Ads' },
@@ -208,6 +212,13 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     return new Set(ws.slice(Math.max(0, idx - 3), idx + 1));
   }, [rawRows, latestWeek]);
 
+  // Trend indexes: campaign-level daily (from ads_7d) and term-level weekly (new fetch).
+  const campaignDailyIndex = useMemo(() => buildCampaignDailyIndex(rawRows), [rawRows]);
+  const termWeeklyIndex = useMemo(
+    () => buildTermWeeklyIndex(data.campaign_search_terms_weekly || []),
+    [data.campaign_search_terms_weekly]
+  );
+
   /** Period-filtered raw rows (before camp/term aggregation). Used for accurate totals. */
   const filteredRawRows = useMemo((): Ads7dRow[] => {
     if (!hasWeekStart || !rawRows.length) return rawRows;
@@ -251,6 +262,37 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
       return pk && keepPeriods.has(pk);
     });
   }, [rawRows, hasWeekStart, filters.periodMode, filters.specificPeriod]);
+
+  // Daily axis for the Campaigns table = the filtered period's calendar days.
+  const campaignDayAxis = useMemo(() => {
+    const dates = [...new Set(filteredRawRows.map(r => r.date || '').filter(Boolean))].sort();
+    if (!dates.length) return [];
+    return daysBetween(dates[0], dates[dates.length - 1]);
+  }, [filteredRawRows]);
+
+  // Weekly axis for filter-driven term tables = the weeks spanned by the filtered period.
+  const termFilterWeekAxis = useMemo(() => {
+    const ws = [...new Set(filteredRawRows.map(r => r.week_start || '').filter(Boolean))].sort();
+    if (!ws.length) return [];
+    return weeksBetween(ws[0], ws[ws.length - 1]);
+  }, [filteredRawRows]);
+
+  // Weekly axis for Money Bleeders = the fixed 4-week window.
+  const drainerWeekAxis = useMemo(() => {
+    const ws = [...weeks4w].sort();
+    if (!ws.length) return [];
+    return weeksBetween(ws[0], ws[ws.length - 1]);
+  }, [weeks4w]);
+
+  // campaign_id -> daily net-profit series across the campaign day axis.
+  const campaignTrendByCampaignId = useMemo(() => {
+    const m = new Map<string, number[]>();
+    if (!campaignDayAxis.length) return m;
+    for (const [cid, buckets] of campaignDailyIndex) {
+      m.set(cid, seriesFor(buckets, campaignDayAxis, 'net'));
+    }
+    return m;
+  }, [campaignDailyIndex, campaignDayAxis]);
 
   const rows = useMemo((): Ads7dRow[] => {
     const filtered = filteredRawRows;
@@ -519,6 +561,34 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     searchTerms.filter(t => t.spend >= 10 && t.clicks >= 20 && t.conv_rate < 3)
       .sort((a, b) => b.spend - a.spend).slice(0, 30),
   [searchTerms]);
+
+  // Per-term weekly trend series, one map per table (context metric + that table's window).
+  const bestTrendByKey = useMemo(() => {
+    const m = new Map<string, number[]>();
+    for (const t of bestTerms) {
+      const k = TERM_KEY(t.campaign_id, t.search_term || '');
+      m.set(k, seriesFor(termWeeklyIndex.get(k), termFilterWeekAxis, 'net'));
+    }
+    return m;
+  }, [bestTerms, termWeeklyIndex, termFilterWeekAxis]);
+
+  const drainerTrendByKey = useMemo(() => {
+    const m = new Map<string, number[]>();
+    for (const t of drainers) {
+      const k = TERM_KEY(t.campaign_id, t.search_term || '');
+      m.set(k, seriesFor(termWeeklyIndex.get(k), drainerWeekAxis, 'spend'));
+    }
+    return m;
+  }, [drainers, termWeeklyIndex, drainerWeekAxis]);
+
+  const lowConvTrendByKey = useMemo(() => {
+    const m = new Map<string, number[]>();
+    for (const t of lowConvHighSpend) {
+      const k = TERM_KEY(t.campaign_id, t.search_term || '');
+      m.set(k, seriesFor(termWeeklyIndex.get(k), termFilterWeekAxis, 'spend'));
+    }
+    return m;
+  }, [lowConvHighSpend, termWeeklyIndex, termFilterWeekAxis]);
 
   const toggleHierarchyLevel = (id: (typeof HIERARCHY_OPTIONS)[number]['id']) => {
     setCampaignHierarchy(prev => {
