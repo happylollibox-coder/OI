@@ -1,8 +1,9 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Card } from './Card';
 import { Badge, ActionBadge } from './Badge';
 import { cubeLoad } from '../hooks/useCubeData';
 import { fM, fR, fCpc, fmt } from '../utils';
+import { splitOutcomes } from './decisionScorecard.helpers';
 import { ChevronDown, ChevronRight, Target, TrendingUp, TrendingDown, Clock, HelpCircle } from 'lucide-react';
 
 /* ─── Decision Scorecard — close the loop on applied PPC changes ───
@@ -226,161 +227,128 @@ function OutcomeDetail({ r }: { r: OutcomeRow }) {
   );
 }
 
-export function DecisionScorecard() {
-  const [rows, setRows] = useState<OutcomeRow[] | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [openId, setOpenId] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    loadOutcomes()
-      .then(r => { if (alive) setRows(r); })
-      .catch(() => { if (alive) setRows([]); });
-    return () => { alive = false; };
-  }, []);
-
-  const stats = useMemo(() => {
-    const r = rows ?? [];
-    const improved = r.filter(x => x.verdict === 'IMPROVED').length;
-    const worse = r.filter(x => x.verdict === 'WORSE').length;
-    const tooEarly = r.filter(x => x.verdict === 'TOO_EARLY').length;
-    const noData = r.filter(x => x.verdict === 'NO_DATA').length;
-    const scoreable = improved + worse;
-    const accuracy = scoreable > 0 ? (improved / scoreable) * 100 : null;
-    const weeklySavings = r
-      .filter(x => (x.action_group === 'NEGATE' || x.action_group === 'PAUSE_TARGET') && x.verdict === 'IMPROVED')
-      .reduce((s, x) => s + x.weekly_savings, 0);
-    const gradedTargets = r.filter(x => x.target_status === 'TARGET_MET' || x.target_status === 'BELOW_TARGET');
-    const targetsMet = gradedTargets.filter(x => x.target_status === 'TARGET_MET').length;
-    const targetsTotal = gradedTargets.length;
-    return { improved, worse, tooEarly, noData, scoreable, accuracy, weeklySavings, targetsMet, targetsTotal };
-  }, [rows]);
-
-  // Hide entirely until the first change has been logged
-  if (rows === null || rows.length === 0) return null;
-
-  const visible = expanded ? rows : rows.slice(0, 8);
-
+/* ─── One scorecard row (click to expand the 7-day detail) ─── */
+function ScorecardRow({ r, open, onToggle }: { r: OutcomeRow; open: boolean; onToggle: () => void }) {
+  const meta = VERDICT_META[r.verdict];
+  const Icon = meta.icon;
+  const entity = r.targeting || r.search_term || '(campaign-level)';
+  const bidChange = r.new_bid != null
+    ? `${r.old_bid != null ? `$${r.old_bid.toFixed(2)}→` : ''}$${r.new_bid.toFixed(2)}`
+    : r.new_budget != null
+    ? `${r.old_budget != null ? `$${r.old_budget.toFixed(0)}→` : ''}$${r.new_budget.toFixed(0)}/d`
+    : null;
+  const fullDetail = `${r.action} "${entity}" in ${r.campaign_name}`
+    + (bidChange ? ` · ${r.new_budget != null ? 'budget' : 'bid'} ${bidChange}` : '')
+    + (r.coach_mode ? ` · ${r.coach_mode}` : '')
+    + ` · ${verdictSentence(r)}`;
+  const prevWk = r.pre_net_profit; // 7-day pre window = one week
+  const npPost = r.post_net_profit_per_day;
+  const npUp = npPost != null && npPost >= r.pre_net_profit_per_day;
+  const isEarn = r.expected_impact_kind === 'earn';
+  const statusLine =
+    r.target_status === 'TARGET_MET' ? 'MET — actual met or beat the promise.'
+    : r.target_status === 'BELOW_TARGET' ? 'BELOW — actual came in under the promise.'
+    : `TOO EARLY — needs all 7 settled post-change days (2-day attribution lag); ${r.post_days_elapsed}/7 so far.`;
+  const targetTooltip = isEarn
+    ? `NET PROFIT per week — direct ad-attributed: margin × units − ad spend (no organic/repeat halo).\n`
+      + `• prev ${fM(prevWk)}/wk = this keyword's weekly net profit in the window BEFORE the change (0 if new).\n`
+      + `• target ${fM(r.expected_impact_weekly ?? 0)}/wk = what the coach expects to be earning after the bid-up — the bar to "scale to beat".\n`
+      + `• Verdict: ${statusLine} Counts as met at ≥80% of target, graded on real Amazon data.`
+    : `Weekly DOLLARS SAVED — net profit protected by the change (net profit = margin × units − spend, no halo).\n`
+      + `• prev ${fM(prevWk)}/wk = weekly net profit before the change (negative = it was losing money).\n`
+      + `• target ${fM(r.expected_impact_weekly ?? 0)}/wk = the weekly loss/burn this change should stop.\n`
+      + `• Verdict: ${statusLine} Counts as met at ≥80% of target, graded on real Amazon data.`;
   return (
-    <Card className="mb-5 !p-0 overflow-hidden">
-      {/* Header: aggregate accuracy */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-        <Target size={15} className="text-blue-400 shrink-0" />
-        <span className="text-[13px] font-bold text-text">Decision Scorecard</span>
-        <span className="text-[10px] text-subtle">{rows.length} logged changes · last 180d</span>
-        <div className="flex-1" />
-        {stats.accuracy != null && (
-          <span className={`font-mono text-[13px] font-bold ${stats.accuracy >= 70 ? 'text-emerald-400' : stats.accuracy >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
-            {stats.accuracy.toFixed(0)}% right
+    <div>
+      <div
+        onClick={onToggle}
+        className="flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-card-hover transition-colors cursor-pointer"
+        title={fullDetail}
+      >
+        {open
+          ? <ChevronDown size={11} className="text-faint shrink-0" />
+          : <ChevronRight size={11} className="text-faint shrink-0" />}
+        <Icon size={13} className={`${meta.color} shrink-0`} />
+        <ActionBadge action={r.action} />
+        <span className="font-semibold text-[var(--color-text)] shrink-0 max-w-[180px] truncate" title={entity}>"{entity}"</span>
+        {bidChange && (
+          <span className="text-[9px] font-mono text-muted shrink-0 px-1.5 py-0.5 rounded bg-surface border border-border-faint">{bidChange}</span>
+        )}
+        <span
+          className="text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded bg-surface border border-border-faint"
+          title="Net profit / day — pre 7-day avg → post avg (over days elapsed)"
+        >
+          <span className="text-faint">NP/d </span>
+          <span className="text-muted">{fM(r.pre_net_profit_per_day)}</span>
+          <span className="text-faint">→</span>
+          <span className={npPost == null ? 'text-faint' : npUp ? 'text-emerald-400' : 'text-red-400'}>
+            {npPost == null ? '…' : fM(npPost)}
+          </span>
+        </span>
+        <span className="text-subtle flex-1 min-w-0 truncate" title={verdictSentence(r)}>
+          {verdictSentence(r)}
+        </span>
+        {r.expected_impact_weekly != null && r.target_status && r.target_status !== 'NO_TARGET' && (
+          <span title={targetTooltip} className={`text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded border cursor-help ${
+            r.target_status === 'TARGET_MET'
+              ? 'text-emerald-400 border-emerald-800 bg-emerald-950/30'
+              : r.target_status === 'BELOW_TARGET'
+              ? 'text-red-400 border-red-800 bg-red-950/30'
+              : 'text-zinc-500 border-zinc-700 bg-zinc-900/30'
+          }`}>
+            prev {fM(prevWk)}/wk → target {fM(r.expected_impact_weekly)}/wk →{' '}
+            {r.target_status === 'TARGET_MET' ? '✓ met' : r.target_status === 'BELOW_TARGET' ? '✗ below' : '… early'}
           </span>
         )}
-        {stats.weeklySavings > 0 && (
-          <Badge variant="green">{fM(stats.weeklySavings)}/wk saved</Badge>
-        )}
-        {stats.targetsTotal > 0 && (
-          <span className={`text-[10px] font-mono ${stats.targetsMet === stats.targetsTotal ? 'text-emerald-400' : stats.targetsMet > 0 ? 'text-amber-400' : 'text-red-400'}`}>
-            {stats.targetsMet}/{stats.targetsTotal} targets met
+        <span className="text-[10px] text-faint font-mono truncate max-w-[160px] shrink-0" title={r.campaign_name}>{r.campaign_name}</span>
+        {r.coach_mode && (
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface border border-border-faint text-muted font-mono uppercase shrink-0">
+            {r.coach_mode}
           </span>
         )}
-        <span className="flex items-center gap-2 text-[10px] font-mono">
-          <span className="text-emerald-400">✓ {stats.improved}</span>
-          <span className="text-red-400">✗ {stats.worse}</span>
-          <span className="text-amber-400">⏳ {stats.tooEarly}</span>
-          {stats.noData > 0 && <span className="text-zinc-500">? {stats.noData}</span>}
+        <span className="text-[10px] text-faint font-mono shrink-0 w-16 text-right">
+          {r.applied_at ? new Date(r.applied_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
         </span>
       </div>
+      {open && <OutcomeDetail r={r} />}
+    </div>
+  );
+}
 
-      {/* Per-change verdicts */}
-      <div className="divide-y divide-border-faint">
-        {visible.map(r => {
-          const meta = VERDICT_META[r.verdict];
-          const Icon = meta.icon;
-          const entity = r.targeting || r.search_term || '(campaign-level)';
-          const bidChange = r.new_bid != null
-            ? `${r.old_bid != null ? `$${r.old_bid.toFixed(2)}→` : ''}$${r.new_bid.toFixed(2)}`
-            : r.new_budget != null
-            ? `${r.old_budget != null ? `$${r.old_budget.toFixed(0)}→` : ''}$${r.new_budget.toFixed(0)}/d`
-            : null;
-          const fullDetail = `${r.action} "${entity}" in ${r.campaign_name}`
-            + (bidChange ? ` · ${r.new_budget != null ? 'budget' : 'bid'} ${bidChange}` : '')
-            + (r.coach_mode ? ` · ${r.coach_mode}` : '')
-            + ` · ${verdictSentence(r)}`;
-          const prevWk = r.pre_net_profit; // 7-day pre window = one week
-          const npPost = r.post_net_profit_per_day;
-          const npUp = npPost != null && npPost >= r.pre_net_profit_per_day;
-          const isOpen = openId === r.change_id;
-          const isEarn = r.expected_impact_kind === 'earn';
-          const statusLine =
-            r.target_status === 'TARGET_MET' ? 'MET — actual met or beat the promise.'
-            : r.target_status === 'BELOW_TARGET' ? 'BELOW — actual came in under the promise.'
-            : `TOO EARLY — needs all 7 settled post-change days (2-day attribution lag); ${r.post_days_elapsed}/7 so far.`;
-          const targetTooltip = isEarn
-            ? `NET PROFIT per week — direct ad-attributed: margin × units − ad spend (no organic/repeat halo).\n`
-              + `• prev ${fM(prevWk)}/wk = this keyword's weekly net profit in the window BEFORE the change (0 if new).\n`
-              + `• target ${fM(r.expected_impact_weekly ?? 0)}/wk = what the coach expects to be earning after the bid-up — the bar to "scale to beat".\n`
-              + `• Verdict: ${statusLine} Counts as met at ≥80% of target, graded on real Amazon data.`
-            : `Weekly DOLLARS SAVED — net profit protected by the change (net profit = margin × units − spend, no halo).\n`
-              + `• prev ${fM(prevWk)}/wk = weekly net profit before the change (negative = it was losing money).\n`
-              + `• target ${fM(r.expected_impact_weekly ?? 0)}/wk = the weekly loss/burn this change should stop.\n`
-              + `• Verdict: ${statusLine} Counts as met at ≥80% of target, graded on real Amazon data.`;
-          return (
-            <div key={r.change_id}>
-            <div
-              onClick={() => setOpenId(p => (p === r.change_id ? null : r.change_id))}
-              className="flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-card-hover transition-colors cursor-pointer"
-              title={fullDetail}
-            >
-              {isOpen
-                ? <ChevronDown size={11} className="text-faint shrink-0" />
-                : <ChevronRight size={11} className="text-faint shrink-0" />}
-              <Icon size={13} className={`${meta.color} shrink-0`} />
-              <ActionBadge action={r.action} />
-              <span className="font-semibold text-[var(--color-text)] shrink-0 max-w-[180px] truncate" title={entity}>"{entity}"</span>
-              {bidChange && (
-                <span className="text-[9px] font-mono text-muted shrink-0 px-1.5 py-0.5 rounded bg-surface border border-border-faint">{bidChange}</span>
-              )}
-              <span
-                className="text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded bg-surface border border-border-faint"
-                title="Net profit / day — pre 7-day avg → post avg (over days elapsed)"
-              >
-                <span className="text-faint">NP/d </span>
-                <span className="text-muted">{fM(r.pre_net_profit_per_day)}</span>
-                <span className="text-faint">→</span>
-                <span className={npPost == null ? 'text-faint' : npUp ? 'text-emerald-400' : 'text-red-400'}>
-                  {npPost == null ? '…' : fM(npPost)}
-                </span>
-              </span>
-              <span className="text-subtle flex-1 min-w-0 truncate" title={verdictSentence(r)}>
-                {verdictSentence(r)}
-              </span>
-              {r.expected_impact_weekly != null && r.target_status && r.target_status !== 'NO_TARGET' && (
-                <span title={targetTooltip} className={`text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded border cursor-help ${
-                  r.target_status === 'TARGET_MET'
-                    ? 'text-emerald-400 border-emerald-800 bg-emerald-950/30'
-                    : r.target_status === 'BELOW_TARGET'
-                    ? 'text-red-400 border-red-800 bg-red-950/30'
-                    : 'text-zinc-500 border-zinc-700 bg-zinc-900/30'
-                }`}>
-                  prev {fM(prevWk)}/wk → target {fM(r.expected_impact_weekly)}/wk →{' '}
-                  {r.target_status === 'TARGET_MET' ? '✓ met' : r.target_status === 'BELOW_TARGET' ? '✗ below' : '… early'}
-                </span>
-              )}
-              <span className="text-[10px] text-faint font-mono truncate max-w-[160px] shrink-0" title={r.campaign_name}>{r.campaign_name}</span>
-              {r.coach_mode && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface border border-border-faint text-muted font-mono uppercase shrink-0">
-                  {r.coach_mode}
-                </span>
-              )}
-              <span className="text-[10px] text-faint font-mono shrink-0 w-16 text-right">
-                {r.applied_at ? new Date(r.applied_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
-              </span>
-            </div>
-            {isOpen && <OutcomeDetail r={r} />}
-            </div>
-          );
-        })}
+/* ─── A scorecard card: header + rows + show-all toggle ─── */
+function ScorecardSection({
+  title, subtitle, icon: Icon, iconClass, headerExtra, rows, openId, setOpenId,
+}: {
+  title: string;
+  subtitle: string;
+  icon: typeof Target;
+  iconClass: string;
+  headerExtra?: ReactNode;
+  rows: OutcomeRow[];
+  openId: string | null;
+  setOpenId: (fn: (p: string | null) => string | null) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? rows : rows.slice(0, 8);
+  return (
+    <Card className="mb-5 !p-0 overflow-hidden">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
+        <Icon size={15} className={iconClass} />
+        <span className="text-[13px] font-bold text-text">{title}</span>
+        <span className="text-[10px] text-subtle">{subtitle}</span>
+        <div className="flex-1" />
+        {headerExtra}
       </div>
-
+      <div className="divide-y divide-border-faint">
+        {visible.map(r => (
+          <ScorecardRow
+            key={r.change_id}
+            r={r}
+            open={openId === r.change_id}
+            onToggle={() => setOpenId(p => (p === r.change_id ? null : r.change_id))}
+          />
+        ))}
+      </div>
       {rows.length > 8 && (
         <button
           onClick={() => setExpanded(p => !p)}
@@ -391,5 +359,95 @@ export function DecisionScorecard() {
         </button>
       )}
     </Card>
+  );
+}
+
+export function DecisionScorecard() {
+  const [rows, setRows] = useState<OutcomeRow[] | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    loadOutcomes()
+      .then(r => { if (alive) setRows(r); })
+      .catch(() => { if (alive) setRows([]); });
+    return () => { alive = false; };
+  }, []);
+
+  // Pending = verdict still TOO_EARLY (post-window settling), oldest first.
+  // Settled = the 7 post-change days are done (IMPROVED/WORSE/NO_DATA), newest first.
+  const { pending, settled } = useMemo(() => splitOutcomes(rows ?? []), [rows]);
+
+  // Aggregate stats are only meaningful for settled (scored) changes.
+  const stats = useMemo(() => {
+    const r = settled;
+    const improved = r.filter(x => x.verdict === 'IMPROVED').length;
+    const worse = r.filter(x => x.verdict === 'WORSE').length;
+    const noData = r.filter(x => x.verdict === 'NO_DATA').length;
+    const scoreable = improved + worse;
+    const accuracy = scoreable > 0 ? (improved / scoreable) * 100 : null;
+    const weeklySavings = r
+      .filter(x => (x.action_group === 'NEGATE' || x.action_group === 'PAUSE_TARGET') && x.verdict === 'IMPROVED')
+      .reduce((s, x) => s + x.weekly_savings, 0);
+    const gradedTargets = r.filter(x => x.target_status === 'TARGET_MET' || x.target_status === 'BELOW_TARGET');
+    const targetsMet = gradedTargets.filter(x => x.target_status === 'TARGET_MET').length;
+    const targetsTotal = gradedTargets.length;
+    return { improved, worse, noData, scoreable, accuracy, weeklySavings, targetsMet, targetsTotal };
+  }, [settled]);
+
+  // Hide entirely until the first change has been logged
+  if (rows === null || rows.length === 0) return null;
+
+  return (
+    <>
+      {/* Pending — awaiting the full 7-day post-change window, oldest first */}
+      {pending.length > 0 && (
+        <ScorecardSection
+          title="Decision Scorecard · Pending"
+          subtitle={`${pending.length} awaiting 7-day verdict · oldest first`}
+          icon={Clock}
+          iconClass="text-amber-400 shrink-0"
+          rows={pending}
+          openId={openId}
+          setOpenId={setOpenId}
+          headerExtra={<span className="text-[10px] font-mono text-amber-400">⏳ {pending.length}</span>}
+        />
+      )}
+
+      {/* Scored — 7 post-change days settled, newest first */}
+      {settled.length > 0 && (
+        <ScorecardSection
+          title="Decision Scorecard"
+          subtitle={`${settled.length} scored · last 180d · newest first`}
+          icon={Target}
+          iconClass="text-blue-400 shrink-0"
+          rows={settled}
+          openId={openId}
+          setOpenId={setOpenId}
+          headerExtra={
+            <>
+              {stats.accuracy != null && (
+                <span className={`font-mono text-[13px] font-bold ${stats.accuracy >= 70 ? 'text-emerald-400' : stats.accuracy >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {stats.accuracy.toFixed(0)}% right
+                </span>
+              )}
+              {stats.weeklySavings > 0 && (
+                <Badge variant="green">{fM(stats.weeklySavings)}/wk saved</Badge>
+              )}
+              {stats.targetsTotal > 0 && (
+                <span className={`text-[10px] font-mono ${stats.targetsMet === stats.targetsTotal ? 'text-emerald-400' : stats.targetsMet > 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {stats.targetsMet}/{stats.targetsTotal} targets met
+                </span>
+              )}
+              <span className="flex items-center gap-2 text-[10px] font-mono">
+                <span className="text-emerald-400">✓ {stats.improved}</span>
+                <span className="text-red-400">✗ {stats.worse}</span>
+                {stats.noData > 0 && <span className="text-zinc-500">? {stats.noData}</span>}
+              </span>
+            </>
+          }
+        />
+      )}
+    </>
   );
 }
