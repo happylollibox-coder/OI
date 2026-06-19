@@ -833,7 +833,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
             </button>
           ))}
         </div>
-        <TermsTable terms={drainers} highlight="drain" visibleCols={visibleAdsTermsCols} sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} getSignal={getSignal} />
+        <TermsTable terms={drainers} highlight="drain" visibleCols={visibleAdsTermsCols} sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} getSignal={getSignal} trendByKey={drainerTrendByKey} trendColor="var(--color-negative)" />
       </Section>
 
       {/* Low Conversion High Spend */}
@@ -846,7 +846,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
             </div>
             <div className="text-[10px] text-subtle mt-1">These terms get traffic but rarely convert. Review listing relevance, adjust bids, or negate.</div>
           </div>
-          <TermsTable terms={lowConvHighSpend} highlight="warn" visibleCols={visibleAdsTermsCols} sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} getSignal={getSignal} />
+          <TermsTable terms={lowConvHighSpend} highlight="warn" visibleCols={visibleAdsTermsCols} sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} getSignal={getSignal} trendByKey={lowConvTrendByKey} trendColor="var(--color-warning)" />
         </Section>
       )}
     </div>
@@ -1555,7 +1555,20 @@ function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sq
   );
 }
 
-function TermsTable({ terms, highlight, visibleCols, sqpVolume = {}, sqpDetails = {}, getSignal }: { terms: Ads7dRow[]; highlight: 'best' | 'drain' | 'warn'; visibleCols: MeasureDef[]; sqpVolume?: Record<string, number>; sqpDetails?: Record<string, any>; getSignal: (m: any, node?: any) => { type: keyof typeof ACTION_META; reason: string }[] }) {
+/** Renders a row's mini-trend, handling empty/single-point series. */
+function TrendCell({ series, color, baseline }: { series?: number[]; color: string; baseline?: number }) {
+  if (!series || series.length === 0) {
+    return <td className="px-3 py-2 text-faint text-[10px]">—</td>;
+  }
+  const vals = series.length === 1 ? [series[0], series[0]] : series;
+  return (
+    <td className="px-3 py-2">
+      <MiniTrend values={vals} color={color} width={64} height={22} baseline={baseline} />
+    </td>
+  );
+}
+
+function TermsTable({ terms, highlight, visibleCols, sqpVolume = {}, sqpDetails = {}, getSignal, trendByKey, trendColor, trendBaseline }: { terms: Ads7dRow[]; highlight: 'best' | 'drain' | 'warn'; visibleCols: MeasureDef[]; sqpVolume?: Record<string, number>; sqpDetails?: Record<string, any>; getSignal: (m: any, node?: any) => { type: keyof typeof ACTION_META; reason: string }[]; trendByKey?: Map<string, number[]>; trendColor?: string; trendBaseline?: number }) {
   const s = useSort('spend');
   if (!terms.length) return <Empty message="No matching terms" />;
   const filtered = visibleCols.filter(c => c.id !== 'action' || highlight === 'drain');
@@ -1566,7 +1579,9 @@ function TermsTable({ terms, highlight, visibleCols, sqpVolume = {}, sqpDetails 
       <table className="w-full border-collapse text-xs" style={{ minWidth: cols.length * 100 }}>
         <thead><tr>
           {cols.map(c => (
-            <SortTh key={c.id} k={c.id} sort={s.sort} toggle={s.toggle} right={!['search_term', 'campaign_name', 'action'].includes(c.id)} tip={c.tip || (c.id === 'sqp_volume' ? volTip : undefined)}>{c.label}</SortTh>
+            c.id === 'trend'
+              ? <Th key="trend" right={false} tip={c.tip}>{c.label}</Th>
+              : <SortTh key={c.id} k={c.id} sort={s.sort} toggle={s.toggle} right={!['search_term', 'campaign_name', 'action'].includes(c.id)} tip={c.tip || (c.id === 'sqp_volume' ? volTip : undefined)}>{c.label}</SortTh>
           ))}
         </tr></thead>
         <tbody>
@@ -1577,6 +1592,7 @@ function TermsTable({ terms, highlight, visibleCols, sqpVolume = {}, sqpDetails 
             const orgPct = det && det.orders > 0 ? (orgOrders / det.orders) * 100 : 0;
             const cells: Record<string, ReactNode> = {
               search_term: <td key="search_term" className="px-3 py-2 font-semibold text-blue-400 max-w-[200px] truncate" title={t.search_term || ''}>{t.search_term}</td>,
+              trend: <TrendCell key="trend" series={trendByKey?.get(TERM_KEY(t.campaign_id, t.search_term || ''))} color={trendColor || 'var(--color-muted)'} baseline={trendBaseline} />,
               campaign_name: <td key="campaign_name" className="px-3 py-2 text-[10px] text-faint max-w-[160px] truncate" title={t.campaign_name}>{t.campaign_name}</td>,
               spend: <td key="spend" className="px-3 py-2 text-right font-mono font-semibold">{fM(t.spend)}</td>,
               orders: <td key="orders" className={`px-3 py-2 text-right font-mono ${t.orders === 0 ? 'text-red-400' : 'text-emerald-400'}`}>{t.orders}</td>,
