@@ -399,6 +399,26 @@ export interface DailyTrendRow {
   impressions?: number;
 }
 
+// Per-ASIN daily P&L (UnifiedPerformance asin × date). Finer grain than DailyTrendRow,
+// with true organic_units / ad_orders — used by the Home Brief for per-product detail.
+export interface DailyTrendByAsinRow {
+  product_type: string; // OI family
+  asin: string;
+  product_short_name: string;
+  date: string;
+  sales: number;
+  ad_cost: number;
+  cogs: number;
+  net_profit: number;
+  orders: number;
+  units: number;
+  organic_units: number;
+  ad_orders: number;
+  clicks?: number;
+  sessions?: number;
+  impressions?: number;
+}
+
 export interface TrendRowByAsin extends TrendRow {
   asin: string;
   product_short_name: string;
@@ -599,6 +619,14 @@ export interface CampaignSearchTermRow {
   impressions: number;
   conv_rate: number;
   cpc: number;
+}
+
+export interface CampaignSearchTermWeeklyRow {
+  campaign_id: string;
+  search_term: string;
+  week_start: string;   // Sunday-aligned ISO date
+  spend: number;
+  gross_profit: number;  // sales − COGS for that term-week
 }
 
 export interface Ads7dRow {
@@ -1197,6 +1225,7 @@ export interface DashboardData {
   keyword_product_map: KeywordMapRow[];
   weekly_trends: TrendRow[];
   daily_trends: DailyTrendRow[];
+  daily_trends_by_asin: DailyTrendByAsinRow[];
   monthly_trends: TrendRow[];
   weekly_trends_by_asin: TrendRowByAsin[];
   monthly_trends_by_asin: TrendRowByAsin[];
@@ -1212,6 +1241,7 @@ export interface DashboardData {
   sqp_volume_4w: Record<string, number>;
   experiment_campaigns: ExperimentCampaignRow[];
   campaign_search_terms: CampaignSearchTermRow[];
+  campaign_search_terms_weekly: CampaignSearchTermWeeklyRow[];
   ads_7d_summary: Ads7dRow[];
   ads_7d: Ads7dRow[];
   holidays: HolidayRow[];

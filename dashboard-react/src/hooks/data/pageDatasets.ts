@@ -8,8 +8,8 @@ export const SHELL_CORE: DatasetName[] = [
 ];
 
 export const PAGE_DATASETS: Record<PageId, DatasetName[]> = {
-  home: ['actions', 'ads_7d', 'ads_7d_summary', 'campaign_search_terms', 'change_log',
-    'experiment_campaigns', 'experiments', 'holidays', 'monthly_trends', 'monthly_trends_by_asin',
+  home: ['actions', 'ads_7d', 'ads_7d_summary', 'asin_oos_days', 'campaign_search_terms', 'change_log',
+    'daily_trends_by_asin', 'experiment_campaigns', 'experiments', 'holidays', 'monthly_trends', 'monthly_trends_by_asin',
     'peak', 'products', 'sqp_coverage_weeks', 'sqp_weekly', 'storage_costs', 'supply_chain',
     'upcoming', 'weekly_trends', 'weekly_trends_by_asin'],
   kpi: ['actions', 'ads_7d', 'ads_7d_summary', 'ads_focus_keywords', 'ads_focus_terms',
@@ -28,7 +28,7 @@ export const PAGE_DATASETS: Record<PageId, DatasetName[]> = {
   actions: ['actions', 'ads_7d', 'asin_oos_days', 'coach_cross_sell', 'coach_decisions',
     'coach_phrase_negatives', 'coach_strategy', 'daily_trends', 'hot_signals', 'keyword_predictions',
     'negative_conflicts', 'plan_ads_targets', 'supply_chain'],
-  ads: ['ads_7d', 'campaign_search_terms', 'coach_decisions', 'experiment_campaigns', 'holidays',
+  ads: ['ads_7d', 'campaign_search_terms', 'campaign_search_terms_weekly', 'coach_decisions', 'experiment_campaigns', 'holidays',
     'keyword_product_map', 'peak', 'sqp_volume_4w', 'sqp_weekly'],
   do: ['actions', 'ads_7d', 'coach_campaigns', 'product_creatives', 'products',
     'strategy_campaign_templates', 'supply_chain'],

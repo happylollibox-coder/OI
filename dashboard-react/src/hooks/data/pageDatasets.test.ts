@@ -20,4 +20,7 @@ describe('pageDatasets', () => {
     expect(PAGE_DATASETS.alerts).toEqual([]);
     expect(PAGE_DATASETS.research).toEqual([]);
   });
+  it('ads page requests the weekly term trend dataset', () => {
+    expect(PAGE_DATASETS.ads).toContain('campaign_search_terms_weekly');
+  });
 });

@@ -16,9 +16,11 @@ import type {
   ExperimentWeeklyRow,
   ProductRow,
   CampaignSearchTermRow,
+  CampaignSearchTermWeeklyRow,
   SummaryRow,
   TrendRow,
   DailyTrendRow,
+  DailyTrendByAsinRow,
   TrendRowByAsin,
   LearningRow,
   ExperimentRow,
@@ -1021,6 +1023,38 @@ async function loadWeeklyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
   }));
 }
 
+/**
+ * DailyTrendsByAsin → daily_trends_by_asin (via UnifiedPerformance, last 400 days by asin × date).
+ * Powers the Home Brief: true per-product P&L + organic_units. 400d covers the 30-day window and
+ * its prior-30-day baseline, plus last year's same season for the peak-anchored baseline.
+ */
+async function loadDailyTrendsByAsinFromCube(): Promise<DailyTrendByAsinRow[]> {
+  const start = (() => { const d = new Date(); d.setDate(d.getDate() - 400); return d.toISOString().slice(0, 10); })();
+  const rows = await cubeLoad({
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.organicUnits', 'UnifiedPerformance.adOrders', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions'],
+    dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.asin', 'UnifiedPerformance.productShortName', 'UnifiedPerformance.date'],
+    timeDimensions: [{ dimension: 'UnifiedPerformance.date', dateRange: [start, new Date().toISOString().slice(0, 10)] }],
+    limit: 50000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    product_type: String(r['UnifiedPerformance.family'] ?? ''),
+    asin: String(r['UnifiedPerformance.asin'] ?? ''),
+    product_short_name: String(r['UnifiedPerformance.productShortName'] ?? ''),
+    date: fmtDate(r['UnifiedPerformance.date']),
+    sales: Number(r['UnifiedPerformance.sales'] ?? 0),
+    ad_cost: Number(r['UnifiedPerformance.adCost'] ?? 0),
+    cogs: Number(r['UnifiedPerformance.cogs'] ?? 0),
+    net_profit: Number(r['UnifiedPerformance.netProfit'] ?? 0),
+    orders: Number(r['UnifiedPerformance.orders'] ?? 0),
+    units: Number(r['UnifiedPerformance.units'] ?? 0),
+    organic_units: Number(r['UnifiedPerformance.organicUnits'] ?? 0),
+    ad_orders: Number(r['UnifiedPerformance.adOrders'] ?? 0),
+    clicks: Number(r['UnifiedPerformance.clicks'] ?? 0),
+    sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
+    impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
+  })).filter(r => r.date);
+}
+
 /** MonthlyTrendsByAsin → monthly_trends_by_asin (via UnifiedPerformance) */
 async function loadMonthlyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
   const rows = await cubeLoad({
@@ -1322,6 +1356,27 @@ async function loadCampaignSearchTermsFromCube(): Promise<CampaignSearchTermRow[
         cpc: m.clicks ? m.spend / m.clicks : 0,
       };
     });
+}
+
+/** Ads → campaign_search_terms_weekly (term-level weekly buckets for sparklines). */
+async function loadCampaignSearchTermsWeeklyFromCube(): Promise<CampaignSearchTermWeeklyRow[]> {
+  const rows = await cubeLoad({
+    measures: ['Ads.spend', 'Ads.grossProfit'],
+    dimensions: ['Ads.campaignId', 'Ads.searchTerm'],
+    timeDimensions: [{ dimension: 'Ads.date', dateRange: 'Last 90 days', granularity: 'week' }],
+    filters: [{ member: 'Ads.spend', operator: 'gt', values: ['0'] }],
+    limit: 100000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => {
+    const wk = r['Ads.date.week'] ?? r['Ads.date'];
+    return {
+      campaign_id: String(r['Ads.campaignId'] ?? ''),
+      search_term: r['Ads.searchTerm'] ? String(r['Ads.searchTerm']) : '',
+      week_start: wk ? fmtDate(wk) : '',
+      spend: Number(r['Ads.spend'] ?? 0),
+      gross_profit: r['Ads.grossProfit'] != null ? Number(r['Ads.grossProfit']) : 0,
+    };
+  });
 }
 
 async function loadCoachDecisionsFromCube(): Promise<CoachDecisionRow[]> {
@@ -2227,6 +2282,7 @@ export const DATASET_LOADERS: Record<DatasetName, () => Promise<unknown>> = {
   weekly_trends_by_asin: loadWeeklyTrendsByAsinFromCube,
   monthly_trends_by_asin: loadMonthlyTrendsByAsinFromCube,
   daily_trends: loadDailyTrendsFromCube,
+  daily_trends_by_asin: loadDailyTrendsByAsinFromCube,
   products: loadProductsFromCube,
   product_creatives: loadProductCreativesFromCube,
   experiments: loadExperimentsFromCube,
@@ -2246,6 +2302,7 @@ export const DATASET_LOADERS: Record<DatasetName, () => Promise<unknown>> = {
   experiment_weekly: loadExperimentWeeklyFromCube,
   experiment_campaigns: loadExperimentCampaignsFromCube,
   campaign_search_terms: loadCampaignSearchTermsFromCube,
+  campaign_search_terms_weekly: loadCampaignSearchTermsWeeklyFromCube,
   experiment_templates: loadExperimentTemplatesFromCube,
   holidays: loadAllHolidaysFromCube,
   coach_decisions: loadCoachDecisionsFromCube,

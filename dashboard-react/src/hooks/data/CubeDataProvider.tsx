@@ -11,11 +11,11 @@ const CUBE_API = import.meta.env.VITE_CUBE_API_URL || (import.meta.env.DEV ? 'ht
 // Default shape so consumers always see arrays/objects (never undefined) before load.
 const EMPTY: Partial<DashboardData> = {
   summary: [], actions: [], upcoming: [], peak: [], products: [], hero_asins: [],
-  keyword_product_map: [], weekly_trends: [], daily_trends: [], monthly_trends: [],
+  keyword_product_map: [], weekly_trends: [], daily_trends: [], daily_trends_by_asin: [], monthly_trends: [],
   weekly_trends_by_asin: [], monthly_trends_by_asin: [], learnings: [], experiments: [],
   budget_health: [], drivers: [], sqp_coverage_weeks: [], change_log: [], negative_keywords: [],
   experiment_weekly: [], sqp_weekly: [], sqp_volume_4w: {}, experiment_campaigns: [],
-  campaign_search_terms: [], ads_7d: [], ads_7d_summary: [], holidays: [], experiment_templates: [],
+  campaign_search_terms: [], campaign_search_terms_weekly: [], ads_7d: [], ads_7d_summary: [], holidays: [], experiment_templates: [],
   strategy_campaign_templates: [], coach_decisions: [], coach_cross_sell: [], coach_campaigns: [],
   experiment_evaluations: [], keyword_predictions: [], brand_strength_weekly: [],
   coach_phrase_negatives: [], product_creatives: [], hot_signals: [], ads_focus_terms: [],

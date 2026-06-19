@@ -2,11 +2,11 @@
 // EXCEPT 'cubeMeta' + 'dataFreshness', which are assembled into data._meta.
 export type DatasetName =
   | 'summary' | 'weekly_trends' | 'monthly_trends' | 'weekly_trends_by_asin'
-  | 'monthly_trends_by_asin' | 'daily_trends' | 'products' | 'product_creatives'
+  | 'monthly_trends_by_asin' | 'daily_trends' | 'daily_trends_by_asin' | 'products' | 'product_creatives'
   | 'experiments' | 'ads_7d_summary' | 'ads_7d' | 'sqp_weekly' | 'sqp_coverage_weeks'
   | 'sqp_volume_4w' | 'change_log' | 'upcoming' | 'peak' | 'hero_asins'
   | 'keyword_product_map' | 'learnings' | 'budget_health' | 'drivers'
-  | 'experiment_weekly' | 'experiment_campaigns' | 'campaign_search_terms'
+  | 'experiment_weekly' | 'experiment_campaigns' | 'campaign_search_terms' | 'campaign_search_terms_weekly'
   | 'experiment_templates' | 'holidays' | 'coach_decisions' | 'actions'
   | 'coach_campaigns' | 'experiment_evaluations' | 'keyword_predictions'
   | 'brand_strength_weekly' | 'coach_phrase_negatives' | 'hot_signals' | 'storage_costs'
