@@ -11,6 +11,8 @@ import { Badge, RoasBadge } from '../components/Badge';
 import { fM, fP, fOrd, fClk, fR, fCpc, periodKey, getPeriodsToInclude, weekRangeLabel, weekRangeLabelCapped, addDays, ACTION_META, getCurrentWeekStart, getWeekStart } from '../utils';
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
+import { familyForRow, rowMatchesFamily } from './adsHierarchy.helpers';
+import { withWindow } from './adsTrend.helpers';
 import { ChevronRight, ChevronDown, TrendingDown, AlertTriangle, Zap, GripVertical } from 'lucide-react';
 import { usePageSummary } from '../components/PageSummaryBar';
 
@@ -19,7 +21,6 @@ const HIERARCHY_OPTIONS = [
   { id: 'campaign', label: 'Campaign' },
   { id: 'search_term', label: 'Search term' },
   { id: 'family', label: 'Family' },
-  { id: 'collection', label: 'Collection' },
   { id: 'product', label: 'Product' },
   { id: 'day', label: 'Day' },
   { id: 'week', label: 'Week' },
@@ -183,16 +184,8 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     return ids.size > 0 ? ids : null;
   }, [data.experiment_campaigns, filters.experiment]);
 
-  const famMatch = useMemo(() => {
-    if (!filters.family) return null;
-    const patterns: Record<string, string[]> = {
-      Lollibox: ['box'],
-      LolliME: ['me-', 'me_', 'mint', 'lollime'],
-      Bottle: ['bottle', 'truth', 'btl'],
-      Fresh: ['fresh'],
-    };
-    return patterns[filters.family] || null;
-  }, [filters.family]);
+  // Global family filter, keyed on the canonical parent_name family (see adsHierarchy.helpers).
+  const familyFilter = filters.family || null;
 
   const allRawRows = data.ads_7d || [];
   // When includeCurrentWeek is OFF and periodMode is 'weeks', exclude current week from raw rows
@@ -360,17 +353,14 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
 
   const campaigns = useMemo(() => {
     let filtered = rows.filter(r => r.row_type === 'campaign');
-    if (famMatch) filtered = filtered.filter(r => {
-      const cn = (r.campaign_name || '').toLowerCase();
-      return famMatch.some(p => cn.includes(p));
-    });
+    if (familyFilter) filtered = filtered.filter(r => rowMatchesFamily(r, familyFilter));
     if (expCampaignIds) filtered = filtered.filter(r => expCampaignIds.has(r.campaign_id));
     if (filters.keyword) filtered = filtered.filter(c => {
       const terms = rows.filter(r => r.row_type === 'search_term' && r.campaign_id === c.campaign_id);
       return terms.some(t => t.search_term === filters.keyword);
     });
     return filtered.sort((a, b) => b.spend - a.spend);
-  }, [rows, famMatch, expCampaignIds, filters.keyword]);
+  }, [rows, familyFilter, expCampaignIds, filters.keyword]);
   const campIds = useMemo(() => new Set(campaigns.map(c => c.campaign_id)), [campaigns]);
   const sqpVolumeByTerm = useMemo(() => {
     // Primary: use pre-computed sqp_amazon_search_volume_4w from AdsCoachDecision (DB layer)
@@ -451,7 +441,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   const searchTerms = useMemo((): Ads7dRow[] => {
     // Prefer ads_7d search_term rows if available; otherwise synthesize from campaign_search_terms
     let fromAds = rows.filter(r => r.row_type === 'search_term');
-    if (famMatch || expCampaignIds) fromAds = fromAds.filter(r => campIds.has(r.campaign_id));
+    if (familyFilter || expCampaignIds) fromAds = fromAds.filter(r => campIds.has(r.campaign_id));
     if (filters.keyword) fromAds = fromAds.filter(r => r.search_term === filters.keyword);
     
     if (fromAds.length > 0) {
@@ -500,7 +490,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     });
     if (filters.keyword) synth = synth.filter(r => r.search_term === filters.keyword);
     return synth;
-  }, [rows, campaigns, data.campaign_search_terms, famMatch, expCampaignIds, campIds, filters.keyword, sqpDetailsByTerm]);
+  }, [rows, campaigns, data.campaign_search_terms, familyFilter, expCampaignIds, campIds, filters.keyword, sqpDetailsByTerm]);
 
   const totals = useMemo(() => {
     const t = { spend: 0, orders: 0, clicks: 0, impressions: 0, sales: 0, gross_profit: 0, cogs: 0 };
@@ -641,7 +631,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
       {/* KPIs shown in PageSummaryBar above */}
 
       {/* Weekly Ads Trend — dynamic with measure selector */}
-      <AdsTrendChart rawRows={rawRows} famMatch={famMatch} expCampaignIds={expCampaignIds} periodTrend={filters.periodTrend} holidays={data.holidays || []} perfMaxDate={perfMaxDate} />
+      <AdsTrendChart rawRows={rawRows} familyFilter={familyFilter} expCampaignIds={expCampaignIds} periodTrend={filters.periodTrend} holidays={data.holidays || []} perfMaxDate={perfMaxDate} />
 
       {/* Insight Cards */}
       <div className="grid grid-cols-2 gap-3.5 mb-6">
@@ -673,7 +663,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
       </div>
 
       {/* Campaigns */}
-      <Section title="Campaigns" count={`${campaigns.length} active`} filterItems={formatSectionFilters(filters, { Hierarchy: campaignHierarchy.join(' → ') })} headerRight={<MeasureSelector tableId="ads_campaigns" measures={ADS_CAMP_COLUMNS} selected={adsCampCols} onSelectedChange={setAdsCampCols} />}>
+      <Section title="Campaigns" count={withWindow(`${campaigns.length} active`, periodLabel)} filterItems={formatSectionFilters(filters, { Hierarchy: campaignHierarchy.join(' → ') })} headerRight={<MeasureSelector tableId="ads_campaigns" measures={ADS_CAMP_COLUMNS} selected={adsCampCols} onSelectedChange={setAdsCampCols} />}>
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <span className="text-[10px] text-subtle">Hierarchy:</span>
           <div className="flex flex-wrap items-center gap-1">
@@ -749,7 +739,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
       </Section>
 
       {/* Best Search Terms */}
-      <Section title="Best Search Terms" count={`Top ${bestTerms.length} · min ${fM(bestMinSpend)} spend`} filterItems={formatSectionFilters(filters, { 'Best min spend': fM(bestMinSpend) })} headerRight={<MeasureSelector tableId="ads_hier_terms" measures={ADS_HIER_COLUMNS} selected={adsHierCols} onSelectedChange={setAdsHierCols} />}>
+      <Section title="Best Search Terms" count={withWindow(`Top ${bestTerms.length} · min ${fM(bestMinSpend)} spend`, periodLabel)} filterItems={formatSectionFilters(filters, { 'Best min spend': fM(bestMinSpend) })} headerRight={<MeasureSelector tableId="ads_hier_terms" measures={ADS_HIER_COLUMNS} selected={adsHierCols} onSelectedChange={setAdsHierCols} />}>
         <div className="flex items-center gap-2 mb-2">
           <span className="text-[10px] text-subtle">Min spend:</span>
           {[3, 5, 10, 20].map(v => (
@@ -778,7 +768,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
 
       {/* Low Conversion High Spend */}
       {lowConvHighSpend.length > 0 && (
-        <Section title="Low Conversion, High Spend" count={`${lowConvHighSpend.length} terms · ≥$10 spend, ≥20 clicks, <3% conv`} filterItems={formatSectionFilters(filters, { 'Min spend': '$10', 'Min clicks': '20', 'Max conv%': '3%' })} headerRight={<MeasureSelector tableId="ads_terms" measures={ADS_TERMS_COLUMNS} selected={adsTermsCols} onSelectedChange={setAdsTermsCols} />}>
+        <Section title="Low Conversion, High Spend" count={withWindow(`${lowConvHighSpend.length} terms · ≥$10 spend, ≥20 clicks, <3% conv`, periodLabel)} filterItems={formatSectionFilters(filters, { 'Min spend': '$10', 'Min clicks': '20', 'Max conv%': '3%' })} headerRight={<MeasureSelector tableId="ads_terms" measures={ADS_TERMS_COLUMNS} selected={adsTermsCols} onSelectedChange={setAdsTermsCols} />}>
           <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-3 mb-3">
             <div className="flex items-center gap-2">
               <TrendingDown size={14} className="text-amber-400" />
@@ -832,7 +822,7 @@ function DynamicHierarchyCampaignsTable({
     }
     if (level === 'campaign') return r.campaign_id;
     if (level === 'search_term') return r.search_term || '';
-    if (level === 'family') return extractFamilyFromCampaign(r.campaign_name || '');
+    if (level === 'family') return familyForRow(r);
     if (level === 'product') {
       const p = (r.product_short_name || '').trim();
       if (p) return p;
@@ -841,9 +831,6 @@ function DynamicHierarchyCampaignsTable({
       const fromCampaign = campaignToProduct[r.campaign_id || ''];
       if (fromCampaign) return fromCampaign;
       return '—';
-    }
-    if (level === 'collection') {
-      return (r.parent_name || '').trim() || 'Other';
     }
     if (level === 'day') return r.week_start || '';
     if (level === 'week') return r.week_start || '';
@@ -877,7 +864,7 @@ function DynamicHierarchyCampaignsTable({
     if (levelIdx >= hierarchy.length) return [];
     const level = hierarchy[levelIdx];
     const nextLevel = hierarchy[levelIdx + 1];
-    const useCampaigns = level === 'portfolio' || level === 'family' || level === 'collection';
+    const useCampaigns = level === 'portfolio' || level === 'family';
     const srcRows = useCampaigns ? rows.filter(r => r.row_type === 'campaign') : rows;
     const groups: Record<string, Ads7dRow[]> = {};
     for (const r of srcRows) {
@@ -888,7 +875,7 @@ function DynamicHierarchyCampaignsTable({
     }
     const nodes: Node[] = [];
     for (const [k, groupRows] of Object.entries(groups)) {
-      // When keyword filter is active and this is a parent level (portfolio/family/collection/campaign),
+      // When keyword filter is active and this is a parent level (portfolio/family/campaign),
       // use filtered search term rows for metric aggregation instead of campaign totals
       const ids = new Set(groupRows.map(r => r.campaign_id));
       const useTermMetrics = !!filters.keyword && (useCampaigns || level === 'campaign');
@@ -1202,17 +1189,6 @@ function DynamicHierarchyCampaignsTable({
 function extractPortfolio(campaignName: string): string {
   const m = (campaignName || '').match(/^([A-Za-z]+)[-\s]/);
   return m ? m[1].toUpperCase() : (campaignName || '').split(/[\/-]/)[0]?.trim() || 'Other';
-}
-
-/** Extract family from campaign name for grouping */
-function extractFamilyFromCampaign(campaignName: string): string {
-  const cn = (campaignName || '').toLowerCase();
-  if (cn.includes('box')) return 'Lollibox';
-  if (cn.includes('me') || cn.includes('mint') || cn.includes('lollime')) return 'LolliME';
-  if (cn.includes('bottle') || cn.includes('truth')) return 'Bottle';
-  if (cn.includes('fresh')) return 'Fresh';
-  if (cn.includes('brand')) return 'Brand';
-  return 'Other';
 }
 
 /** Product name looks like a real product (e.g. "Fresh in Beige") vs person name (e.g. "Jenna") */
@@ -1586,9 +1562,9 @@ const ADS_TREND_MEASURES = [
   { key: 'ctr', label: 'Ads CTR', color: '#fb923c', fmt: fP, type: 'bar' as const, axis: 'right' as const },
 ] as const;
 
-function AdsTrendChart({ rawRows, famMatch, expCampaignIds, periodTrend, holidays, perfMaxDate = '' }: {
+function AdsTrendChart({ rawRows, familyFilter, expCampaignIds, periodTrend, holidays, perfMaxDate = '' }: {
   rawRows: Ads7dRow[];
-  famMatch: string[] | null;
+  familyFilter: string | null;
   expCampaignIds: Set<string> | null;
   periodTrend: number;
   holidays: HolidayRow[];
@@ -1666,7 +1642,7 @@ function AdsTrendChart({ rawRows, famMatch, expCampaignIds, periodTrend, holiday
     const sourceRows = useDaily ? (dailyRows || []) : rawRows;
     let adsRows = sourceRows;
     if (!useDaily) {
-      if (famMatch) adsRows = adsRows.filter(r => famMatch.some(p => (r.campaign_name || '').toLowerCase().includes(p)));
+      if (familyFilter) adsRows = adsRows.filter(r => rowMatchesFamily(r, familyFilter));
       if (expCampaignIds) adsRows = adsRows.filter(r => expCampaignIds.has(r.campaign_id));
       if (filters.keyword) adsRows = adsRows.filter(r => r.row_type === 'search_term' && r.search_term === filters.keyword);
     }
@@ -1753,7 +1729,7 @@ function AdsTrendChart({ rawRows, famMatch, expCampaignIds, periodTrend, holiday
         conv_rate: d.clicks > 0 ? (d.orders * 100) / d.clicks : 0,
         ctr: d.impressions > 0 ? (d.clicks * 100) / d.impressions : 0,
       }));
-  }, [rawRows, dailyRows, famMatch, expCampaignIds, periodTrend, filters.keyword, filters.specificPeriod, periodMode, useDaily]);
+  }, [rawRows, dailyRows, familyFilter, expCampaignIds, periodTrend, filters.keyword, filters.specificPeriod, periodMode, useDaily]);
 
   const activeMeasures = ADS_TREND_MEASURES.filter(m => active.has(m.key));
   const trendTitle = useDaily ? 'Daily Ads Trend' : periodMode === 'month' ? 'Monthly Ads Trend' : periodMode === 'quarter' ? 'Quarterly Ads Trend' : periodMode === 'year' ? 'Yearly Ads Trend' : 'Weekly Ads Trend';
