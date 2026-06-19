@@ -1588,7 +1588,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                     <span className="text-[12px] font-semibold text-[var(--color-text)] truncate" title={a.campaign_name}>{a.campaign_name}</span>
                     <span className={`text-[9px] px-1 py-0.5 rounded shrink-0 ${down ? 'bg-amber-500/15 text-amber-400' : 'bg-emerald-500/15 text-emerald-400'}`}>{down ? '−' : '+'}${Math.abs(cur - rec)}/d</span>
                   </div>
-                  <div className="text-[10px] text-muted mb-1 truncate">{a.action.replace(/_/g, ' ').toLowerCase()}</div>
+                  <div className="text-[10px] text-subtle mb-1 leading-snug">{a.action_explanation ?? a.action.replace(/_/g, ' ').toLowerCase()}</div>
                   <div className="flex items-baseline justify-between gap-2">
                     <span className={`text-[12px] font-semibold ${down ? 'text-amber-400' : 'text-emerald-400'}`}>${cur} → ${rec}<span className="text-faint text-[9px]">/day budget</span></span>
                     <QueueToggle
