@@ -12,7 +12,7 @@ import { fM, fP, fOrd, fClk, fR, fCpc, periodKey, getPeriodsToInclude, weekRange
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
 import { familyForRow, rowMatchesFamily } from './adsHierarchy.helpers';
-import { withWindow, buildCampaignDailyIndex, buildTermWeeklyIndex, seriesFor, TERM_KEY, daysBetween, weeksBetween } from './adsTrend.helpers';
+import { withWindow, buildCampaignDailyIndex, buildTermWeeklyIndex, seriesFor, fillSeries, TERM_KEY, daysBetween, weeksBetween } from './adsTrend.helpers';
 import { MiniTrend } from '../components/MiniTrend';
 import { ChevronRight, ChevronDown, TrendingDown, AlertTriangle, Zap, GripVertical } from 'lucide-react';
 import { usePageSummary } from '../components/PageSummaryBar';
@@ -563,14 +563,20 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   [searchTerms]);
 
   // Per-term weekly trend series, one map per table (context metric + that table's window).
-  const bestTrendByKey = useMemo(() => {
-    const m = new Map<string, number[]>();
-    for (const t of bestTerms) {
-      const k = TERM_KEY(t.campaign_id, t.search_term || '');
-      m.set(k, seriesFor(termWeeklyIndex.get(k), termFilterWeekAxis, 'net'));
+  // Best Terms groups by search_term across campaigns, so its trend is aggregated per term.
+  const bestTrendByTerm = useMemo(() => {
+    const byTerm = new Map<string, Map<string, number>>(); // term -> week_start -> net
+    for (const r of data.campaign_search_terms_weekly || []) {
+      const term = r.search_term || '';
+      if (!term || !r.week_start) continue;
+      let wk = byTerm.get(term);
+      if (!wk) { wk = new Map(); byTerm.set(term, wk); }
+      wk.set(r.week_start, (wk.get(r.week_start) ?? 0) + ((r.gross_profit ?? 0) - r.spend));
     }
+    const m = new Map<string, number[]>();
+    for (const [term, wk] of byTerm) m.set(term, fillSeries(wk, termFilterWeekAxis));
     return m;
-  }, [bestTerms, termWeeklyIndex, termFilterWeekAxis]);
+  }, [data.campaign_search_terms_weekly, termFilterWeekAxis]);
 
   const drainerTrendByKey = useMemo(() => {
     const m = new Map<string, number[]>();
@@ -819,7 +825,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
             </button>
           ))}
         </div>
-        <HierarchicalTermsTable terms={bestTerms} highlight="best" sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} sqpWeekly={data.sqp_weekly || []} keywordProductMap={data.keyword_product_map || []} visibleCols={visibleAdsHierCols} getSignal={getSignal} />
+        <HierarchicalTermsTable terms={bestTerms} highlight="best" sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} sqpWeekly={data.sqp_weekly || []} keywordProductMap={data.keyword_product_map || []} visibleCols={visibleAdsHierCols} getSignal={getSignal} trendByTerm={bestTrendByTerm} trendColor="var(--color-positive)" trendBaseline={0} />
       </Section>
 
       {/* Drainer Search Terms */}
@@ -1336,7 +1342,7 @@ function productByTermMap(kwMap: KeywordMapRow[], sqp: SqpWeeklyRow[]): Record<s
 }
 
 /** Hierarchy: search_term -> product -> campaign */
-function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sqpDetails = {}, sqpWeekly, keywordProductMap, visibleCols, getSignal }: { terms: Ads7dRow[]; highlight: 'best' | 'drain' | 'warn'; sqpVolume?: Record<string, number>; sqpDetails?: Record<string, any>; sqpWeekly: SqpWeeklyRow[]; keywordProductMap: KeywordMapRow[]; visibleCols: MeasureDef[]; getSignal: (m: any, node?: any) => { type: keyof typeof ACTION_META; reason: string }[] }) {
+function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sqpDetails = {}, sqpWeekly, keywordProductMap, visibleCols, getSignal, trendByTerm, trendColor, trendBaseline }: { terms: Ads7dRow[]; highlight: 'best' | 'drain' | 'warn'; sqpVolume?: Record<string, number>; sqpDetails?: Record<string, any>; sqpWeekly: SqpWeeklyRow[]; keywordProductMap: KeywordMapRow[]; visibleCols: MeasureDef[]; getSignal: (m: any, node?: any) => { type: keyof typeof ACTION_META; reason: string }[]; trendByTerm?: Map<string, number[]>; trendColor?: string; trendBaseline?: number }) {
   const [expandedTerms, setExpandedTerms] = useState<Set<string>>(new Set());
   const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
   const s = useSort('spend');
@@ -1408,7 +1414,9 @@ function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sq
       <table className="w-full border-collapse text-xs">
         <thead><tr>
           {cols.map(c => (
-            <SortTh key={c.id} k={c.id} sort={s.sort} toggle={s.toggle} right={c.id !== 'label' && c.id !== 'action'} tip={c.tip || (c.id === 'sqp_volume' ? volTip : undefined)}>{c.label}</SortTh>
+            c.id === 'trend'
+              ? <Th key="trend" right={false} tip={c.tip}>{c.label}</Th>
+              : <SortTh key={c.id} k={c.id} sort={s.sort} toggle={s.toggle} right={c.id !== 'label' && c.id !== 'action'} tip={c.tip || (c.id === 'sqp_volume' ? volTip : undefined)}>{c.label}</SortTh>
           ))}
         </tr></thead>
         <tbody>
@@ -1422,6 +1430,7 @@ function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sq
             const detOrganicPct = det && det.orders > 0 ? (detOrganic / det.orders) * 100 : 0;
             const termCells: Record<string, ReactNode> = {
               label: <span className="inline-flex items-center gap-1">{isTermExp ? <ChevronDown size={12} className="text-faint shrink-0" /> : <ChevronRight size={12} className="text-faint shrink-0" />}<span className="font-semibold text-blue-400" title={term}>{term}</span></span>,
+              trend: trendInline(trendByTerm?.get(term), trendColor || 'var(--color-positive)', trendBaseline),
               sqp_volume: vol > 0 ? vol.toLocaleString() : '',
               sqp_clicks: det ? det.clicks.toLocaleString() : '',
               sqp_cart_adds: det ? det.cart_adds.toLocaleString() : '',
@@ -1472,6 +1481,7 @@ function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sq
                   const isProdExp = expandedProducts.has(pKey);
                   const prodCells: Record<string, ReactNode> = {
                     label: <span className="inline-flex items-center gap-1">{isProdExp ? <ChevronDown size={11} className="text-faint shrink-0" /> : <ChevronRight size={11} className="text-faint shrink-0" />}<span className="text-[11px] text-subtle" title={product}>{product}</span></span>,
+                    trend: '',
                     sqp_volume: '',
                     sqp_clicks: '',
                     sqp_cart_adds: '',
@@ -1510,6 +1520,7 @@ function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sq
                         const rowOrgPct = rowSqpDet && rowSqpDet.orders > 0 ? (rowOrg / rowSqpDet.orders) * 100 : 0;
                         const rowCells: Record<string, ReactNode> = {
                           label: t.campaign_name,
+                          trend: '',
                           sqp_volume: rowSqpVol != null ? rowSqpVol.toLocaleString() : '',
                           sqp_clicks: rowSqpDet ? rowSqpDet.clicks.toLocaleString() : '',
                           sqp_cart_adds: rowSqpDet ? rowSqpDet.cart_adds.toLocaleString() : '',
@@ -1555,17 +1566,16 @@ function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sq
   );
 }
 
-/** Renders a row's mini-trend, handling empty/single-point series. */
-function TrendCell({ series, color, baseline }: { series?: number[]; color: string; baseline?: number }) {
-  if (!series || series.length === 0) {
-    return <td className="px-3 py-2 text-faint text-[10px]">—</td>;
-  }
+/** Inner mini-trend node, handling empty/single-point series (no <td> wrapper). */
+function trendInline(series: number[] | undefined, color: string, baseline?: number): ReactNode {
+  if (!series || series.length === 0) return <span className="text-faint text-[10px]">—</span>;
   const vals = series.length === 1 ? [series[0], series[0]] : series;
-  return (
-    <td className="px-3 py-2">
-      <MiniTrend values={vals} color={color} width={64} height={22} baseline={baseline} />
-    </td>
-  );
+  return <MiniTrend values={vals} color={color} width={64} height={22} baseline={baseline} />;
+}
+
+/** Renders a row's mini-trend inside its own <td>. */
+function TrendCell({ series, color, baseline }: { series?: number[]; color: string; baseline?: number }) {
+  return <td className="px-3 py-2">{trendInline(series, color, baseline)}</td>;
 }
 
 function TermsTable({ terms, highlight, visibleCols, sqpVolume = {}, sqpDetails = {}, getSignal, trendByKey, trendColor, trendBaseline }: { terms: Ads7dRow[]; highlight: 'best' | 'drain' | 'warn'; visibleCols: MeasureDef[]; sqpVolume?: Record<string, number>; sqpDetails?: Record<string, any>; getSignal: (m: any, node?: any) => { type: keyof typeof ACTION_META; reason: string }[]; trendByKey?: Map<string, number[]>; trendColor?: string; trendBaseline?: number }) {
