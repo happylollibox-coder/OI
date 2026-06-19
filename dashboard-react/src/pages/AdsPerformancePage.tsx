@@ -811,6 +811,9 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
           sqpDetailsByTerm={sqpDetailsByTerm}
           getSignal={getSignal}
           minClicksFilter={campMinClicks}
+          trendByCampaignId={campaignTrendByCampaignId}
+          trendAxisLen={campaignDayAxis.length}
+          trendColor="var(--color-muted)"
         />
       </Section>
 
@@ -875,6 +878,9 @@ function DynamicHierarchyCampaignsTable({
   sqpDetailsByTerm,
   getSignal,
   minClicksFilter,
+  trendByCampaignId,
+  trendAxisLen,
+  trendColor,
 }: {
   campaigns: Ads7dRow[];
   searchTerms: Ads7dRow[];
@@ -890,6 +896,9 @@ function DynamicHierarchyCampaignsTable({
   sqpDetailsByTerm: Record<string, any>;
   getSignal: (m: any, node?: any) => { type: keyof typeof ACTION_META; reason: string }[];
   minClicksFilter?: number | null;
+  trendByCampaignId?: Map<string, number[]>;
+  trendAxisLen?: number;
+  trendColor?: string;
 }) {
   const getKey = (r: Ads7dRow, level: (typeof HIERARCHY_OPTIONS)[number]['id']): string => {
     if (level === 'portfolio') {
@@ -928,6 +937,22 @@ function DynamicHierarchyCampaignsTable({
     }
     return m;
   }, [searchTerms]);
+  // Daily net-profit series for a node = elementwise sum of its campaigns' daily series.
+  // search_term-level nodes get no trend (per-term daily data is not available).
+  const nodeTrend = (node: Node): number[] | undefined => {
+    if (node.level === 'search_term') return undefined;
+    if (!trendAxisLen || !trendByCampaignId) return undefined;
+    const cids = node.campaignIds ?? new Set(node.rows.map(r => r.campaign_id));
+    const sum = new Array(trendAxisLen).fill(0);
+    let any = false;
+    for (const cid of cids) {
+      const s = trendByCampaignId.get(cid);
+      if (!s) continue;
+      any = true;
+      for (let i = 0; i < sum.length && i < s.length; i++) sum[i] += s[i];
+    }
+    return any ? sum : undefined;
+  };
   const termsFor = (ids: Set<string>): Ads7dRow[] => {
     const out: Ads7dRow[] = [];
     for (const id of ids) {
@@ -1119,6 +1144,7 @@ function DynamicHierarchyCampaignsTable({
             {hasChildren ? (isExp ? <ChevronDown size={12} className="text-faint" /> : <ChevronRight size={12} className="text-faint" />) : null}
           </td>
           {visibleCols.map(c => {
+            if (c.id === 'trend') return <td key="trend" className="px-3 py-2">{trendInline(nodeTrend(node), trendColor || 'var(--color-muted)', 0)}</td>;
             const v = cells[c.id as keyof typeof cells];
             const right = ['sqp_volume', 'sqp_clicks', 'sqp_cart_adds', 'sqp_orders', 'sqp_organic_units', 'sqp_organic_pct', 'sqp_show_rate', 'spend', 'sales', 'orders', 'clicks', 'conv_rate', 'cpc', 'search_terms_count', 'spend_4w', 'orders_4w', 'roas_4w', 'conv_rate_4w', 'spend_ly_peak', 'orders_ly_peak', 'roas_ly_peak', 'sqp_volume_ly_peak', 'sqp_orders_ly_peak'].includes(c.id);
             const labelClass = c.id === 'label' ? 'font-semibold max-w-[250px] truncate' : '';
@@ -1176,6 +1202,7 @@ function DynamicHierarchyCampaignsTable({
               <tr key={`${fullKey}-p-${i}`} className="border-b border-border-faint bg-inset">
                 <td className="px-3 py-1 pl-8" />
                 {visibleCols.map(col => {
+                  if (col.id === 'trend') return <td key="trend" className="px-3 py-1" />;
                   const v = tCells[col.id];
                   const right = ['sqp_volume', 'sqp_clicks', 'sqp_cart_adds', 'sqp_orders', 'sqp_organic_units', 'sqp_organic_pct', 'sqp_show_rate', 'spend', 'sales', 'orders', 'clicks', 'conv_rate', 'cpc', 'search_terms_count'].includes(col.id);
                   const orderClass = col.id === 'orders' ? (m.orders === 0 ? 'text-red-400' : 'text-emerald-400') : '';
@@ -1222,6 +1249,7 @@ function DynamicHierarchyCampaignsTable({
               <tr key={`${fullKey}-t-${i}`} className="border-b border-border-faint bg-inset">
                 <td className="px-3 py-1 pl-8" />
                 {visibleCols.map(col => {
+                  if (col.id === 'trend') return <td key="trend" className="px-3 py-1" />;
                   const v = tCells[col.id];
                   const right = ['sqp_volume', 'sqp_clicks', 'sqp_cart_adds', 'sqp_orders', 'sqp_organic_units', 'sqp_organic_pct', 'sqp_show_rate', 'spend', 'sales', 'orders', 'clicks', 'conv_rate', 'cpc', 'search_terms_count'].includes(col.id);
                   const orderClass = col.id === 'orders' ? (t.orders === 0 ? 'text-red-400' : 'text-emerald-400') : '';
@@ -1248,8 +1276,8 @@ function DynamicHierarchyCampaignsTable({
         <thead><tr>
           <Th> </Th>
           {visibleCols.map(c => (
-            ['label', 'type', 'product', 'search_terms_count'].includes(c.id)
-              ? <Th key={c.id} right={!['label', 'type', 'product'].includes(c.id)} tip={c.tip}>{c.id === 'label' ? hierarchy.map(renderLevel).join(' → ') : c.label}</Th>
+            ['label', 'type', 'product', 'search_terms_count', 'trend'].includes(c.id)
+              ? <Th key={c.id} right={!['label', 'type', 'product', 'trend'].includes(c.id)} tip={c.tip}>{c.id === 'label' ? hierarchy.map(renderLevel).join(' → ') : c.label}</Th>
               : <SortTh key={c.id} k={c.id} sort={campSort.sort} toggle={campSort.toggle} right tip={c.tip}>{c.label}</SortTh>
           ))}
         </tr></thead>
