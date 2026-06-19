@@ -1582,7 +1582,8 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
 
       {/* ── 🔁 Cross-sell: advertise your own products on your best-affinity listings ── */}
       {(() => {
-        const all = data.coach_cross_sell ?? [];
+        // Show only HIGH-confidence cross-sell pairs (hide MEDIUM/LOW).
+        const all = (data.coach_cross_sell ?? []).filter(r => r.confidence === 'HIGH');
         const rows = effectiveFam ? all.filter(r => r.target_parent === effectiveFam) : all;
         if (rows.length === 0) return null;
         const totalSales = rows.reduce((s, r) => s + r.cross_sales_30d, 0);
@@ -1600,7 +1601,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
           <div className="mb-4">
             <div className="flex items-baseline gap-2 mb-2">
               <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text)]">🔁 Cross-sell your own products</span>
-              <span className="text-[10px] text-faint">{rows.length} proven in-brand co-purchase pair{rows.length !== 1 ? 's' : ''} (30d) · ~{fM(totalSales)} co-purchase sales</span>
+              <span className="text-[10px] text-faint">{rows.length} high-confidence in-brand co-purchase pair{rows.length !== 1 ? 's' : ''} (30d) · ~{fM(totalSales)} co-purchase sales</span>
             </div>
             {sorted.map(([family, famRows]) => {
               const sortedRows = [...famRows].sort((a, b) => b.cross_orders_30d - a.cross_orders_30d);
