@@ -25,7 +25,7 @@ import { buildCrossSellQueueItem } from '../components/Actions/crossSell';
 import KeywordIntelligencePanel from '../components/Actions/KeywordIntelligencePanel';
 import { useKeywordIntelligence } from '../hooks/useCubeData';
 import { CoachStrategyPanel } from '../components/CoachStrategyPanel';
-import { isBudgetRow, budgetTrimPerDay } from './sectionUtils';
+import { isBudgetRow, budgetTrimPerDay, launchToBaseAction } from './sectionUtils';
 import { CollapsibleSection } from '../components/Actions/CollapsibleSection';
 import { QueueToggle } from '../components/Actions/QueueToggle';
 // strategyRules is now DB-only; ActionType kept for potential future use in color mapping
@@ -511,6 +511,35 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
     && !doQueue.isUploaded(a.search_term, a.campaign_id)
     && !doQueue.isDone(a.search_term, a.campaign_id)
   ), [acts, doQueue.isUploaded, doQueue.isDone]);
+
+  // ── Launch (New Campaigns) queue: translate launch decisions → base bulksheet ops ──
+  const launchQueued = (a: ActionRow): boolean => {
+    const b = launchToBaseAction(a); if (!b) return false;
+    return doQueue.items.some(q => q.campaign_id === a.campaign_id && q.action === b.action
+      && (q.search_term === a.search_term || q.targeting === (a.targeting || '')));
+  };
+  const launchQueuedId = (a: ActionRow): string | undefined => {
+    const b = launchToBaseAction(a); if (!b) return undefined;
+    return doQueue.items.find(q => q.campaign_id === a.campaign_id && q.action === b.action
+      && (q.search_term === a.search_term || q.targeting === (a.targeting || '')))?.id;
+  };
+  const queueLaunchAction = (a: ActionRow): boolean => {
+    const base = launchToBaseAction(a); if (!base) return false;
+    doQueue.addItem({
+      search_term: a.search_term || '', action: base.action,
+      campaign: a.campaign_name || '', campaign_id: a.campaign_id || '',
+      ad_group_id: a.ad_group_id || '', targeting: a.targeting || '',
+      keyword_id: a.keyword_id || '', match_type: a.match_type || '',
+      target_spend_8w: a.ads_spend_4w || 0, target_orders_8w: a.ads_orders_4w || 0,
+      target_net_roas_8w: a.ads_net_roas_4w || 0,
+      current_bid: a.current_bid ?? null, recommended_bid: base.recommended_bid,
+      campaign_type: a.campaign_type || '', product: a.product_short_name || '', asin: a.asin || '',
+      spend: a.ads_spend_4w || 0, orders: a.ads_orders_4w || 0,
+      cpc: a.ads_cpc_4w || 0, conv_rate: a.ads_cvr_pct_4w || 0,
+      coach_mode: a.coach_mode || '', source: 'COACH',
+    });
+    return true;
+  };
 
   const filtered = useMemo(() => {
     let f = [...acts];
@@ -1551,12 +1580,22 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
       })()}
 
       {/* ── 🆕 New campaigns (launch track) — young campaigns judged every 15 clicks ── */}
-      {launchGroups.length > 0 && (
-        <div className="mb-4">
-          <div className="flex items-baseline gap-2 mb-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text)]">🆕 New campaigns</span>
-            <span className="text-[10px] text-faint">{launchCount} launch-phase keyword{launchCount !== 1 ? 's' : ''} · bid aggressive → reduce → decide, re-judged every 15 clicks</span>
-          </div>
+      {launchGroups.length > 0 && (() => {
+        const launchAll = launchGroups.flatMap(g => g.rows);
+        const red = launchAll.filter(a => a.launch_decision === 'LAUNCH_REDUCE_BID').length;
+        const neg = launchAll.filter(a => a.launch_decision === 'LAUNCH_NEGATE').length;
+        const queueable = launchAll.filter(a => launchToBaseAction(a) !== null);
+        const queuedN = queueable.filter(launchQueued).length;
+        return (
+        <CollapsibleSection
+          id="new-campaigns"
+          title="🆕 New campaigns"
+          summary={`${launchCount} launch kw · ${red} reduce / ${neg} negate / ${launchCount - red - neg} hold · ${queuedN} queued`}
+          queueableCount={queueable.length}
+          queuedCount={queuedN}
+          onQueueAll={() => queueable.forEach(a => { if (!launchQueued(a)) queueLaunchAction(a); })}
+          onUnqueueAll={() => queueable.forEach(a => { const id = launchQueuedId(a); if (id) doQueue.removeItem(id); })}
+        >
           {launchGroups.map(({ family, rows }) => (
             <div key={family} className="mb-3">
               <div className="flex items-baseline gap-2 mb-1.5 px-0.5">
@@ -1564,7 +1603,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                 <span className="text-[10px] text-faint">{rows.length} keyword{rows.length !== 1 ? 's' : ''}</span>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {rows.map(a => {
+                {rows.map((a, i) => {
                   const dec = a.launch_decision || '';
                   const view = dec === 'LAUNCH_GRADUATE' ? { label: 'Graduate ✓ proven winner', cls: 'text-emerald-400' }
                     : dec === 'LAUNCH_NEGATE' ? { label: 'Negate — real negative', cls: 'text-rose-400' }
@@ -1573,7 +1612,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                   const bid = a.launch_recommended_bid ?? a.launch_bid;
                   const roas = a.ads_net_roas_4w;
                   return (
-                    <div key={`${a.campaign_id}|${a.search_term}|${a.targeting || ''}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5">
+                    <div key={`${a.campaign_id}|${a.targeting || a.search_term}|${i}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5">
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <span className="text-[12px] font-semibold text-[var(--color-text)] truncate" title={a.targeting || a.search_term}>{a.targeting || a.search_term}</span>
                         <span className="text-[9px] px-1 py-0.5 rounded bg-[var(--color-surface)] text-faint shrink-0">{a.launch_phase}{a.campaign_age_days != null ? ` · ${a.campaign_age_days}d` : ''}</span>
@@ -1581,9 +1620,14 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                       <div className="text-[10px] text-muted mb-1 truncate" title={a.product_short_name}>{a.product_short_name}{a.match_type ? ` · ${a.match_type}` : ''}</div>
                       <div className="flex items-baseline justify-between gap-2">
                         <span className={`text-[12px] font-semibold ${view.cls}`}>{view.label}</span>
-                        {bid != null && dec !== 'LAUNCH_NEGATE' && dec !== 'LAUNCH_GRADUATE' && (
-                          <span className="text-[11px] font-mono text-[var(--color-text)]">${bid.toFixed(2)}<span className="text-faint text-[9px]"> bid{a.launch_bid_source ? ` (${a.launch_bid_source})` : ''}</span></span>
-                        )}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {bid != null && dec !== 'LAUNCH_NEGATE' && dec !== 'LAUNCH_GRADUATE' && (
+                            <span className="text-[11px] font-mono text-[var(--color-text)]">${bid.toFixed(2)}<span className="text-faint text-[9px]"> bid{a.launch_bid_source ? ` (${a.launch_bid_source})` : ''}</span></span>
+                          )}
+                          {launchToBaseAction(a) && (
+                            <QueueToggle queued={launchQueued(a)} onQueue={() => queueLaunchAction(a)} onUnqueue={() => { const id = launchQueuedId(a); if (id) doQueue.removeItem(id); }} />
+                          )}
+                        </div>
                       </div>
                       <div className="text-[10px] font-mono text-faint mt-1">
                         {a.launch_clicks ?? 0} clicks · {a.ads_orders_4w ?? 0} ord{roas != null ? ` · net ROAS ${roas.toFixed(2)}` : ''}
@@ -1595,8 +1639,9 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
               </div>
             </div>
           ))}
-        </div>
-      )}
+        </CollapsibleSection>
+        );
+      })()}
 
       {/* ── ✅ Clear cases (Stage-1 trust list) — grouped by family, ordered by weekly $ opportunity ── */}
       {clearGroups.length > 0 && (
