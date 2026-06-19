@@ -1360,15 +1360,18 @@ async function loadCampaignSearchTermsFromCube(): Promise<CampaignSearchTermRow[
 
 /** Ads → campaign_search_terms_weekly (term-level weekly buckets for sparklines). */
 async function loadCampaignSearchTermsWeeklyFromCube(): Promise<CampaignSearchTermWeeklyRow[]> {
+  // Group by the Sunday-aligned Ads.weekStart dimension (DATE_TRUNC WEEK(SUNDAY)) to match
+  // the rest of the app's weeks (getWeekStart / weeks4w). Cube's granularity:'week' is
+  // Monday-aligned and would never match the Sunday-based trend axes.
   const rows = await cubeLoad({
     measures: ['Ads.spend', 'Ads.grossProfit'],
-    dimensions: ['Ads.campaignId', 'Ads.searchTerm'],
-    timeDimensions: [{ dimension: 'Ads.date', dateRange: 'Last 90 days', granularity: 'week' }],
+    dimensions: ['Ads.campaignId', 'Ads.searchTerm', 'Ads.weekStart'],
+    timeDimensions: [{ dimension: 'Ads.date', dateRange: 'Last 90 days' }],
     filters: [{ member: 'Ads.spend', operator: 'gt', values: ['0'] }],
     limit: 100000,
   });
   return (rows as Record<string, unknown>[]).map(r => {
-    const wk = r['Ads.date.week'] ?? r['Ads.date'];
+    const wk = r['Ads.weekStart'] ?? r['Ads.date'];
     return {
       campaign_id: String(r['Ads.campaignId'] ?? ''),
       search_term: r['Ads.searchTerm'] ? String(r['Ads.searchTerm']) : '',
