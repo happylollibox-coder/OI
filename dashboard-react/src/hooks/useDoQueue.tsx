@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { apiFetch } from '../utils/apiFetch';
 import { changeLogKey, dedupNewEntries } from '../ppcLogDedup';
+import { planFlush, dropSent } from '../ppcLogSync';
 
 export interface DoQueueItem {
   id: string;
@@ -61,6 +62,11 @@ interface DoQueueContextValue {
   isUploaded: (search_term: string, campaign_id: string) => boolean;
   isDone: (search_term: string, campaign_id: string) => boolean;
   cleanupUploaded: (currentActions: { search_term: string; campaign_id: string }[]) => void;
+  // Changes marked "Uploaded to Amazon" whose change-log POST hasn't reached
+  // BigQuery yet (offline / API down). They won't appear on the Decision Scorecard
+  // until synced. retryPendingSync re-attempts the POST.
+  pendingSyncCount: number;
+  retryPendingSync: () => void;
 }
 
 const STORAGE_KEY = 'oi_do_queue';
@@ -188,18 +194,6 @@ function addSentKeys(keys: string[]) {
   } catch { /* localStorage unavailable — ignore */ }
 }
 
-/** Queue entries (incl. any prior failures), dedup against already-sent keys, then try to flush. */
-function logAppliedChanges(items: DoQueueItem[]) {
-  const sent = loadSentKeys();
-  const fresh = dedupNewEntries([...loadPendingLog(), ...toChangeLogEntries(items)], sent);
-  if (!fresh.length) { savePendingLog([]); return; }
-  savePendingLog(fresh); // offline fallback first — clear only on success
-  postChangeLog(fresh).then(ok => {
-    if (ok) { addSentKeys(fresh.map(changeLogKey)); savePendingLog([]); }
-    else console.warn('[DoQueue] PPC change log POST failed — kept in oi_ppc_log_pending for retry');
-  });
-}
-
 function loadUploaded(): DoQueueItem[] {
   try {
     const raw = localStorage.getItem(UPLOADED_STORAGE_KEY);
@@ -215,22 +209,54 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<DoQueueItem[]>(loadQueue);
   const [doneItems, setDoneItems] = useState<DoQueueItem[]>(loadDone);
   const [uploadedItems, setUploadedItems] = useState<DoQueueItem[]>(loadUploaded);
+  // Change-log entries marked uploaded but not yet confirmed in BigQuery. Mirrors
+  // oi_ppc_log_pending; deduped against already-sent keys so a stale queue can't
+  // inflate the count for a change we already logged.
+  const [pendingSync, setPendingSync] = useState<PpcChangeLogEntry[]>(
+    () => dedupNewEntries(loadPendingLog(), loadSentKeys()),
+  );
 
   useEffect(() => { saveQueue(items); }, [items]);
   useEffect(() => { saveDone(doneItems); }, [doneItems]);
   useEffect(() => { saveUploaded(uploadedItems); }, [uploadedItems]);
 
-  // Flush change-log entries that failed to reach BigQuery in a previous session.
-  // Dedup against already-sent keys first so a stale pending queue can't re-POST a
-  // change we already logged (the server MERGE is idempotent regardless, but this
-  // avoids the needless round-trip and keeps oi_ppc_log_sent authoritative).
-  useEffect(() => {
-    const pending = dedupNewEntries(loadPendingLog(), loadSentKeys());
-    if (!pending.length) { savePendingLog([]); return; }
-    postChangeLog(pending).then(ok => {
-      if (ok) { addSentKeys(pending.map(changeLogKey)); savePendingLog([]); }
-    });
+  const flushingRef = useRef(false);
+
+  // Flush the change log to BigQuery: prior failures + any new uploads, deduped
+  // against already-sent keys (keeps oi_ppc_log_sent authoritative). New uploads
+  // are persisted to the durable pending queue FIRST, then a single POST runs at
+  // a time — flushingRef guards React StrictMode double-fire, double-clicks and
+  // mount+upload overlap that would otherwise double-insert the same batch. Keeps
+  // oi_ppc_log_pending (durable) and pendingSync (reactive) in lockstep so the DO
+  // page can show how many uploaded changes still aren't logged.
+  const flushLog = useCallback(async (newItems: DoQueueItem[] = []) => {
+    // Persist new uploads first so an in-flight flush can't drop them.
+    const queued = planFlush(loadPendingLog(), toChangeLogEntries(newItems), loadSentKeys());
+    savePendingLog(queued);
+    setPendingSync(queued);
+    if (flushingRef.current || !queued.length) return;
+    flushingRef.current = true;
+    try {
+      const toSend = planFlush(loadPendingLog(), [], loadSentKeys());
+      if (!toSend.length) return;
+      const ok = await postChangeLog(toSend);
+      if (ok) {
+        const keys = toSend.map(changeLogKey);
+        addSentKeys(keys);
+        // Drop only what we sent; keep anything queued while the POST was in flight.
+        const remaining = dropSent(loadPendingLog(), new Set(keys));
+        savePendingLog(remaining);
+        setPendingSync(remaining);
+      } else {
+        console.warn('[DoQueue] PPC change log POST failed — kept in oi_ppc_log_pending for retry');
+      }
+    } finally {
+      flushingRef.current = false;
+    }
   }, []);
+
+  // On load, retry any change-log entries that failed to reach BigQuery before.
+  useEffect(() => { void flushLog(); }, [flushLog]);
 
   const addItem = useCallback((item: Omit<DoQueueItem, 'id' | 'addedAt'>) => {
     setItems(prev => {
@@ -304,11 +330,11 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
           return [...up, ...newItems];
         });
         // Close the loop: persist this batch to FACT_PPC_CHANGE_LOG
-        logAppliedChanges(prev);
+        void flushLog(prev);
       }, 0);
       return [];
     });
-  }, []);
+  }, [flushLog]);
 
   const undoUploaded = useCallback((id: string) => {
     setUploadedItems(prev => {
@@ -335,6 +361,8 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
     );
   }, [doneItems]);
 
+  const retryPendingSync = useCallback(() => { void flushLog(); }, [flushLog]);
+
   const cleanupUploaded = useCallback((currentActions: { search_term: string; campaign_id: string }[]) => {
     if (!uploadedItems.length || !currentActions.length) return;
     const actionSet = new Set(
@@ -356,7 +384,8 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
     addItem, removeItem, clearCampaign, clearAll, hasItem,
     markDone, undoDone, clearDone,
     markAllUploaded, undoUploaded, clearUploaded, isUploaded, isDone, cleanupUploaded,
-  }), [items, doneItems, uploadedItems, addItem, removeItem, clearCampaign, clearAll, hasItem, markDone, undoDone, clearDone, markAllUploaded, undoUploaded, clearUploaded, isUploaded, isDone, cleanupUploaded]);
+    pendingSyncCount: pendingSync.length, retryPendingSync,
+  }), [items, doneItems, uploadedItems, addItem, removeItem, clearCampaign, clearAll, hasItem, markDone, undoDone, clearDone, markAllUploaded, undoUploaded, clearUploaded, isUploaded, isDone, cleanupUploaded, pendingSync, retryPendingSync]);
 
   return (
     <DoQueueContext.Provider value={value}>

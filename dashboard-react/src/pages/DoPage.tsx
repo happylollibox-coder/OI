@@ -7,7 +7,7 @@ import { fM, fP, fOrd, ACTION_META } from '../utils';
 import { termGrain, termGrainShort } from '../coachActuals';
 import { useDoQueue, type DoQueueItem } from '../hooks/useDoQueue';
 import { DecisionScorecard } from '../components/DecisionScorecard';
-import { Copy, Check, Trash2, X, ChevronDown, ChevronRight, CheckCircle2, RotateCcw, ExternalLink, Download, Upload } from 'lucide-react';
+import { Copy, Check, Trash2, X, ChevronDown, ChevronRight, CheckCircle2, RotateCcw, ExternalLink, Download, Upload, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { DashboardData } from '../types';
 
 /* ─── Action ordering: urgent first ─── */
@@ -1048,6 +1048,28 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       <PageHeader title="DO — Your Task Queue" subtitle={`${totalItems} pending · ${totalDone} done · ${totalUploaded} uploaded`} />
 
       <DecisionScorecard />
+
+      {/* Uploaded ≠ logged: changes marked uploaded whose change-log POST never
+          reached BigQuery. Without this, the scorecard silently under-counts. */}
+      {doQueue.pendingSyncCount > 0 && (
+        <div className="mb-5 flex items-center gap-3 px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/[.06]">
+          <AlertTriangle size={15} className="text-amber-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[12px] font-semibold text-amber-300">
+              {doQueue.pendingSyncCount} uploaded change{doQueue.pendingSyncCount !== 1 ? 's' : ''} not yet logged to the scorecard
+            </div>
+            <div className="text-[10px] text-subtle">
+              The change-log save to BigQuery didn’t go through (API unreachable). These won’t appear on the Decision Scorecard until synced.
+            </div>
+          </div>
+          <button
+            onClick={doQueue.retryPendingSync}
+            className="text-[10px] px-2.5 py-1.5 rounded-lg border border-amber-500/40 text-amber-300 hover:bg-amber-500/15 transition-colors font-semibold flex items-center gap-1 shrink-0"
+          >
+            <RefreshCw size={11} /> Retry sync
+          </button>
+        </div>
+      )}
 
       {totalItems > 0 && (
         <div className="flex gap-2 mb-4">
