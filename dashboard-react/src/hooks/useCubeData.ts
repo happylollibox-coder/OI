@@ -2253,8 +2253,11 @@ async function loadBrandStrengthFromCube(): Promise<BrandStrengthWeeklyRow[]> {
       'BrandStrengthWeekly.adsOrders', 'BrandStrengthWeekly.adsUnits',
       'BrandStrengthWeekly.adsSpend', 'BrandStrengthWeekly.adsSales',
     ],
-    order: { 'BrandStrengthWeekly.weekStartDate': 'asc' },
-    limit: 5000,
+    // Order desc + a generous limit so the NEWEST weeks always survive the row
+    // cap (the table has >5k rows; an asc+5000 cap was dropping recent weeks,
+    // leaving the Brand page stuck ~2 months stale). Page re-sorts asc for display.
+    order: { 'BrandStrengthWeekly.weekStartDate': 'desc' },
+    limit: 50000,
   });
   return (rows as Record<string, unknown>[]).map(r => ({
     week_start_date: String(r['BrandStrengthWeekly.weekStartDate'] ?? ''),
