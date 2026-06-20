@@ -334,6 +334,33 @@ keyword_last_bid_change AS (
 ),
 
 -- =============================================
+-- Days since WE last logged a change for a target / campaign (FACT_PPC_CHANGE_LOG = the
+-- authoritative upload time; DIM_KEYWORD/DIM_CAMPAIGN SCD2 lags ~1-2d behind our uploads).
+-- Drives the 3-day "no re-suggest" cooldown applied in V_ADS_COACH.
+-- =============================================
+suggestion_by_keyword AS (
+  SELECT campaign_id, keyword_id,
+    DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE keyword_id IS NOT NULL AND keyword_id != ''
+  GROUP BY 1, 2
+),
+suggestion_by_targeting AS (
+  SELECT campaign_id, LOWER(targeting) AS targeting_lc,
+    DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE targeting IS NOT NULL AND targeting != ''
+  GROUP BY 1, 2
+),
+suggestion_by_campaign AS (
+  SELECT campaign_id,
+    DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE campaign_id IS NOT NULL AND campaign_id != ''
+  GROUP BY 1
+),
+
+-- =============================================
 -- Clicks accrued since the last bid change per keyword (launch-track batch gate)
 -- Lets the launch loop fire a -20% reduce ONCE per 15-click batch, not every refresh.
 -- =============================================
@@ -1426,7 +1453,10 @@ active_term_data AS (
     COALESCE(klbc.days_since_last_bid_change, 999) as days_since_last_bid_change,
     COALESCE(clbc.days_since_last_budget_change, 999) as days_since_last_budget_change,
     -- Launch-track batch gate: clicks accrued since the last bid change
-    COALESCE(kcsbc.clicks_since_last_bid_change, 0) as clicks_since_last_bid_change
+    COALESCE(kcsbc.clicks_since_last_bid_change, 0) as clicks_since_last_bid_change,
+    -- 3-day no-re-suggest cooldown: days since WE last changed this target / campaign (change log).
+    LEAST(COALESCE(slk.days_since, 999), COALESCE(slt.days_since, 999)) as days_since_last_suggestion,
+    COALESCE(slc.days_since, 999) as days_since_last_suggestion_camp
 
   FROM ads_8w a8
   JOIN asin_economics ae ON a8.asin = ae.asin
@@ -1470,6 +1500,9 @@ active_term_data AS (
   LEFT JOIN keyword_last_bid_change klbc ON a8.keyword_id = klbc.keyword_id
   LEFT JOIN keyword_clicks_since_bid_change kcsbc ON a8.keyword_id = kcsbc.keyword_id
   LEFT JOIN campaign_last_budget_change clbc ON a8.campaign_id = clbc.campaign_id
+  LEFT JOIN suggestion_by_keyword slk ON a8.campaign_id = slk.campaign_id AND a8.keyword_id = slk.keyword_id
+  LEFT JOIN suggestion_by_targeting slt ON a8.campaign_id = slt.campaign_id AND LOWER(a8.targeting) = slt.targeting_lc
+  LEFT JOIN suggestion_by_campaign slc ON a8.campaign_id = slc.campaign_id
 ),
 
 -- =============================================
@@ -1656,7 +1689,9 @@ opportunity_data AS (
     CAST(NULL AS TIMESTAMP) as campaign_creation_date,
     CAST(999 AS INT64) as days_since_last_bid_change,
     CAST(999 AS INT64) as days_since_last_budget_change,
-    CAST(0 AS INT64) as clicks_since_last_bid_change
+    CAST(0 AS INT64) as clicks_since_last_bid_change,
+    CAST(999 AS INT64) as days_since_last_suggestion,
+    CAST(999 AS INT64) as days_since_last_suggestion_camp
 
   FROM sqp_with_purchases sp
   JOIN asin_economics ae ON sp.asin = ae.asin

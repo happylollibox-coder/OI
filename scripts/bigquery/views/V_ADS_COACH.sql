@@ -385,7 +385,7 @@ ly_peak_campaign_roas AS (
   GROUP BY h_now.holiday_name
 ),
 
-scored AS (
+scored_raw AS (
 SELECT
   d.*,
   -- Pre-resolve: each coach mode uses the most relevant ROAS signal (no fallback)
@@ -1732,10 +1732,26 @@ LEFT JOIN pp_campaign_metrics ppc ON d.campaign_id = ppc.campaign_id
 LEFT JOIN campaign_budget_metrics cbm ON d.campaign_id = cbm.campaign_id
 LEFT JOIN seasonal_campaign_holiday sch ON d.campaign_id = sch.campaign_id
 LEFT JOIN ly_peak_campaign_roas lypr ON sch.seasonal_peak_name = lypr.holiday_name
+),
+
+-- ─── 3-day "no re-suggest" cooldown ───────────────────────────────────────────
+-- Hide a target's bid/budget re-tweaks for 3 days after WE last changed it
+-- (days_since_last_suggestion[_camp] sourced from FACT_PPC_CHANGE_LOG in
+-- V_ADS_COACH_DATA — the authoritative upload time, unlike the lagging SCD2 history).
+-- Safety valve: STOP_TARGET / NEGATE_TERM / STOP_TERM on a clear loser still pass.
+scored AS (
+  SELECT * REPLACE(
+    CASE WHEN days_since_last_suggestion < 3 AND action NOT IN ('NEGATE_TERM', 'STOP_TERM')
+         THEN 'KEEP' ELSE action END AS action,
+    CASE WHEN days_since_last_suggestion < 3 AND target_action != 'STOP_TARGET'
+         THEN 'KEEP_TARGET' ELSE target_action END AS target_action,
+    CASE WHEN days_since_last_suggestion_camp < 3
+         THEN 'BUDGET_OK' ELSE budget_action END AS budget_action
+  ) FROM scored_raw
 )
 
 SELECT
-  scored.* EXCEPT(bid_ceiling_note),
+  scored.* EXCEPT(bid_ceiling_note, days_since_last_suggestion, days_since_last_suggestion_camp),
   -- Exact bid-ceiling note: fires when the (capped) recommended bid sits at the ceiling on an increase.
   CASE
     WHEN scored.target_action = 'INCREASE_BID'
