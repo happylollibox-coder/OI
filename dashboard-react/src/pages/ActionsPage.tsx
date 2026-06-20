@@ -1641,6 +1641,27 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                     : { label: 'Hold aggressive bid', cls: 'text-sky-400' };
                   const bid = a.launch_recommended_bid ?? a.launch_bid;
                   const roas = a.ads_net_roas_4w;
+                  const lOrders = a.ads_orders_4w ?? 0;
+                  const lClicks = a.launch_clicks ?? 0;
+                  const explain = dec === 'LAUNCH_GRADUATE'
+                    ? `Proven winner — ${lOrders} orders at a profitable ROAS. Graduate to the normal coacher.`
+                    : dec === 'LAUNCH_NEGATE'
+                    ? `${lClicks} clicks and 0 orders — a real negative. Negate it.`
+                    : dec === 'LAUNCH_REDUCE_BID'
+                    ? (lOrders >= 1
+                        ? `Net ROAS ${roas != null ? roas.toFixed(2) : '—'} with ${lOrders} orders is below the profitable bar — reduce the launch bid 20%.`
+                        : `${lClicks} clicks and 0 orders — bleeding. Reduce the launch bid 20%.`)
+                    : (lOrders >= 1
+                        ? `Net ROAS ${roas != null ? roas.toFixed(2) : '—'} with ${lOrders} orders — working. Hold the aggressive bid.`
+                        : `${lClicks} clicks, 0 orders — too early. Hold the aggressive bid while it gathers data.`);
+                  const actionLine = dec === 'LAUNCH_REDUCE_BID' && bid != null
+                    ? `Reduce bid in: ${a.campaign_name}${a.current_bid != null ? `: $${a.current_bid.toFixed(2)} → $${bid.toFixed(2)}` : ` → $${bid.toFixed(2)}`}`
+                    : dec === 'LAUNCH_NEGATE'
+                    ? `Negate in: ${a.campaign_name}`
+                    : a.campaign_name;
+                  const lc = lastChangeFor(a.campaign_id, a.keyword_id, a.targeting);
+                  const lcDays = lc ? Math.round((Date.now() - new Date(lc.date + 'T00:00:00').getTime()) / 86400000) : null;
+                  const lcLabel = lc ? `Last changed ${lcDays === 0 ? 'today' : `${lcDays}d ago`} (${new Date(lc.date + 'T00:00:00').toLocaleString('en-US', { month: 'short', day: 'numeric' })}) · ${lc.action}` : null;
                   return (
                     <div key={`${a.campaign_id}|${a.targeting || a.search_term}|${i}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5">
                       <div className="flex items-center justify-between gap-2 mb-1">
@@ -1661,8 +1682,10 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                       </div>
                       <div className="text-[10px] font-mono text-faint mt-1">
                         {a.launch_clicks ?? 0} clicks · {a.ads_orders_4w ?? 0} ord{roas != null ? ` · net ROAS ${roas.toFixed(2)}` : ''}
-                        {a.clicks_since_last_bid_change != null ? ` · ${a.clicks_since_last_bid_change} since bid` : ''}
                       </div>
+                      <div className="text-[10px] text-subtle mt-1 leading-snug">{explain}</div>
+                      <div className="text-[10px] text-faint mt-0.5 leading-snug" title={a.campaign_name}>{actionLine}</div>
+                      {lcLabel && <div className="text-[9px] text-faint mt-0.5">{lcLabel}</div>}
                     </div>
                   );
                 })}
