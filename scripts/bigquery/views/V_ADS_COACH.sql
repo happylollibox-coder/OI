@@ -1766,9 +1766,11 @@ SELECT
   --   NEGATE/GRADUATE/off-track → no bid
   CASE scored.launch_decision
     WHEN 'LAUNCH_HOLD' THEN scored.launch_bid
+    -- A launch reduce must genuinely LOWER the bid (the point is to choke a bleeder), so it floors at
+    -- a hard $0.05 — NOT the term's CPC, which can sit above the current bid and turn a "reduce" into a raise.
     WHEN 'LAUNCH_REDUCE_BID' THEN ROUND(GREATEST(
       COALESCE(scored.current_bid, scored.launch_bid) * (1 - scored.th_launch_step_down_pct),
-      COALESCE(NULLIF(scored.ads_cpc_8w, 0), 0.05)
+      0.05
     ), 2)
     ELSE NULL
   END AS launch_recommended_bid,

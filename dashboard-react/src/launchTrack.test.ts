@@ -55,8 +55,8 @@ describe('launchStepDownBid', () => {
   it('reduces the current bid by 20%', () => {
     expect(launchStepDownBid(1.0, null)).toBeCloseTo(0.8);
   });
-  it('floors at the term CPC (never bids below what a click costs)', () => {
-    expect(launchStepDownBid(1.0, 0.95)).toBeCloseTo(0.95); // 0.80 would be below the 0.95 floor
+  it('ignores the term CPC and genuinely reduces (a launch reduce chokes a bleeder, never raises)', () => {
+    expect(launchStepDownBid(1.0, 0.95)).toBeCloseTo(0.8); // a real -20%, not floored up to the 0.95 CPC
   });
   it('honors a normal floor when current×0.8 is above it', () => {
     expect(launchStepDownBid(2.0, 0.5)).toBeCloseTo(1.6);

@@ -58,10 +58,11 @@ export function launchBid(i: LaunchBidInput, t: LaunchThresholds = LAUNCH_DEFAUL
   return { bid: cap(t.coldBid), source: 'cold' };
 }
 
-/** Reduce step: current × (1 − stepDownPct), floored at the term's own CPC (don't bid below a click). */
-export function launchStepDownBid(currentBid: number, termCpc: number | null, t: LaunchThresholds = LAUNCH_DEFAULTS): number {
-  const stepped = currentBid * (1 - t.stepDownPct);
-  return termCpc != null && termCpc > 0 ? Math.max(stepped, termCpc) : stepped;
+/** Reduce step: current × (1 − stepDownPct), floored at a hard $0.05. A launch reduce must genuinely
+ *  LOWER the bid to choke a bleeder, so it does NOT floor at the term CPC (which can exceed the current
+ *  bid and turn a "reduce" into a raise). termCpc is accepted for signature stability but unused. */
+export function launchStepDownBid(currentBid: number, _termCpc: number | null, t: LaunchThresholds = LAUNCH_DEFAULTS): number {
+  return Math.max(currentBid * (1 - t.stepDownPct), 0.05);
 }
 
 // ── The 15-click decision matrix ──

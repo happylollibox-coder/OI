@@ -1672,7 +1672,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
                       <div className="flex items-baseline justify-between gap-2">
                         <span className={`text-[12px] font-semibold ${view.cls}`}>{view.label}</span>
                         <div className="flex items-center gap-2 shrink-0">
-                          {bid != null && dec !== 'LAUNCH_NEGATE' && dec !== 'LAUNCH_GRADUATE' && (
+                          {dec !== 'LAUNCH_REDUCE_BID' && dec !== 'LAUNCH_NEGATE' && dec !== 'LAUNCH_GRADUATE' && bid != null && (
                             <span className="text-[11px] font-mono text-[var(--color-text)]">${bid.toFixed(2)}<span className="text-faint text-[9px]"> bid{a.launch_bid_source ? ` (${a.launch_bid_source})` : ''}</span></span>
                           )}
                           {launchToBaseAction(a) && (
