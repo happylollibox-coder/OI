@@ -103,9 +103,9 @@ describe('launchDecision — has orders', () => {
   it('reduces when it has orders but is below the profitable bar', () => {
     expect(launchDecision({ ...base, launchClicks: 20, orders: 1, netRoas: 0.6 }).decision).toBe('LAUNCH_REDUCE_BID');
   });
-  it('waits (HOLD) on an unprofitable term if <15 clicks since the last bid change', () => {
+  it('reduces an unprofitable term with orders regardless of clicks-since-bid (the 3-day cooldown handles churn)', () => {
     const r = launchDecision({ ...base, launchClicks: 20, orders: 1, netRoas: 0.6, clicksSinceLastBidChange: 8 });
-    expect(r.decision).toBe('LAUNCH_HOLD');
+    expect(r.decision).toBe('LAUNCH_REDUCE_BID');
   });
 });
 

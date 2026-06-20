@@ -534,10 +534,25 @@ target_rollup_4w AS (
     campaign_id, targeting, asin,
     SUM(ads_spend_4w) as target_spend_4w,
     SUM(ads_orders_4w) as target_orders_4w,
+    SUM(ads_clicks_4w) as target_clicks_4w,
     SUM(ads_units_4w) as target_units_4w,
     SUM(ads_sales_4w) as target_sales_4w
   FROM ads_4w
   GROUP BY 1, 2, 3
+),
+
+-- Clause-level 4w rollup at (campaign, targeting) — sums across ALL asins + search terms. An SP-Auto
+-- auto-clause (loose-match etc.) bids once and serves every asin, so the launch track must judge the
+-- whole clause; a per-asin slice (target_rollup_4w) can look profitable while the clause bleeds.
+clause_rollup_4w AS (
+  SELECT a4.campaign_id, a4.targeting,
+    SUM(a4.ads_clicks_4w) as clause_clicks_4w,
+    SUM(a4.ads_orders_4w) as clause_orders_4w,
+    SUM(a4.ads_spend_4w) as clause_spend_4w,
+    SUM(COALESCE(ae.margin_per_unit, 0) * COALESCE(a4.ads_units_4w, 0)) as clause_net_profit_4w
+  FROM ads_4w a4
+  JOIN asin_economics ae ON a4.asin = ae.asin
+  GROUP BY 1, 2
 ),
 
 -- Target rollup lag: the 3-day window excluded by the 4-day lag (today-3 to today-1)
@@ -1456,7 +1471,13 @@ active_term_data AS (
     COALESCE(kcsbc.clicks_since_last_bid_change, 0) as clicks_since_last_bid_change,
     -- 3-day no-re-suggest cooldown: days since WE last changed this target / campaign (change log).
     LEAST(COALESCE(slk.days_since, 999), COALESCE(slt.days_since, 999)) as days_since_last_suggestion,
-    COALESCE(slc.days_since, 999) as days_since_last_suggestion_camp
+    COALESCE(slc.days_since, 999) as days_since_last_suggestion_camp,
+    -- Target-level 4w rollup (summed across all search terms under this targeting). The launch
+    -- track judges on these so SP-Auto auto-clauses (loose-match etc.) aren't under-read by the
+    -- per-search-term fan-out. target_net_roas_4w mirrors the ads_net_roas_4w formula on tr4 sums.
+    COALESCE(cr4.clause_orders_4w, 0) as target_orders_4w,
+    COALESCE(cr4.clause_clicks_4w, 0) as target_clicks_4w,
+    ROUND(SAFE_DIVIDE(cr4.clause_net_profit_4w, NULLIF(cr4.clause_spend_4w, 0)), 2) as target_net_roas_4w
 
   FROM ads_8w a8
   JOIN asin_economics ae ON a8.asin = ae.asin
@@ -1467,6 +1488,7 @@ active_term_data AS (
   LEFT JOIN target_rollup tr ON a8.campaign_id = tr.campaign_id AND a8.targeting = tr.targeting AND a8.keyword_id = tr.keyword_id AND a8.asin = tr.asin
   LEFT JOIN target_rollup_1w tr1 ON a8.campaign_id = tr1.campaign_id AND a8.targeting = tr1.targeting AND a8.asin = tr1.asin
   LEFT JOIN target_rollup_4w tr4 ON a8.campaign_id = tr4.campaign_id AND a8.targeting = tr4.targeting AND a8.asin = tr4.asin
+  LEFT JOIN clause_rollup_4w cr4 ON a8.campaign_id = cr4.campaign_id AND a8.targeting = cr4.targeting
   LEFT JOIN target_rollup_lag trl ON a8.campaign_id = trl.campaign_id AND a8.targeting = trl.targeting AND a8.asin = trl.asin
   LEFT JOIN ads_lag alag ON a8.campaign_id = alag.campaign_id AND a8.search_term = alag.search_term AND a8.asin = alag.asin AND a8.targeting = alag.targeting
   LEFT JOIN ads_offseason aos ON a8.campaign_id = aos.campaign_id AND a8.search_term = aos.search_term AND a8.asin = aos.asin AND a8.targeting = aos.targeting
@@ -1691,7 +1713,10 @@ opportunity_data AS (
     CAST(999 AS INT64) as days_since_last_budget_change,
     CAST(0 AS INT64) as clicks_since_last_bid_change,
     CAST(999 AS INT64) as days_since_last_suggestion,
-    CAST(999 AS INT64) as days_since_last_suggestion_camp
+    CAST(999 AS INT64) as days_since_last_suggestion_camp,
+    CAST(0 AS INT64) as target_orders_4w,
+    CAST(0 AS INT64) as target_clicks_4w,
+    CAST(NULL AS FLOAT64) as target_net_roas_4w
 
   FROM sqp_with_purchases sp
   JOIN asin_economics ae ON sp.asin = ae.asin

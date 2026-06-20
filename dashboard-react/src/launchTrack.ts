@@ -73,7 +73,7 @@ export interface LaunchDecisionInput {
   profitableRoas: number;          // the mode's PROFITABLE_ROAS bar
   winOrders: number;               // orders in the trailing winner window
   winNetRoas: number;              // net ROAS in the trailing winner window
-  clicksSinceLastBidChange: number; // gates the reduce cadence (once per batch)
+  clicksSinceLastBidChange?: number; // deprecated — reduce cadence is now handled by the 3-day engine cooldown
 }
 export type LaunchDecision =
   | 'NONE'             // not on the launch track
@@ -90,26 +90,21 @@ export function launchDecision(i: LaunchDecisionInput, t: LaunchThresholds = LAU
     return { decision: 'LAUNCH_GRADUATE', reason: `${i.winOrders} orders @ net ROAS ${i.winNetRoas.toFixed(2)} in the last ${t.winnerDays}d — proven winner, graduate` };
   }
 
-  // Reduce cadence: a −20% may only fire once per checkpoint batch.
-  const batchOpen = i.clicksSinceLastBidChange >= t.checkpointClicks;
-  const reduce = (reason: string) =>
-    batchOpen
-      ? { decision: 'LAUNCH_REDUCE_BID' as const, reason }
-      : { decision: 'LAUNCH_HOLD' as const, reason: `${reason} — holding for the next ${t.checkpointClicks}-click batch` };
-
+  // Has orders: profitable → hold; unprofitable → reduce. Judged on the target-clause rollup; churn is
+  // prevented by the 3-day no-re-suggest cooldown (engine), so there is no per-click-batch gate.
   if (i.orders >= 1) {
     if (i.netRoas >= i.profitableRoas) {
       return { decision: 'LAUNCH_HOLD', reason: `net ROAS ${i.netRoas.toFixed(2)} ≥ ${i.profitableRoas} — working, hold` };
     }
-    return reduce(`net ROAS ${i.netRoas.toFixed(2)} < ${i.profitableRoas} with orders — too expensive`);
+    return { decision: 'LAUNCH_REDUCE_BID', reason: `net ROAS ${i.netRoas.toFixed(2)} < ${i.profitableRoas} with orders — too expensive` };
   }
 
-  // Zero orders: progression by cumulative clicks (15 hold / 30 reduce / 45 negate).
+  // Zero orders: progression by cumulative clicks (hold / reduce at 2× checkpoint / negate).
   if (i.launchClicks >= t.negateClicks) {
     return { decision: 'LAUNCH_NEGATE', reason: `${i.launchClicks} clicks, 0 orders ≥ ${t.negateClicks} — real negative` };
   }
   if (i.launchClicks >= 2 * t.checkpointClicks) {
-    return reduce(`${i.launchClicks} clicks, 0 orders — warning`);
+    return { decision: 'LAUNCH_REDUCE_BID', reason: `${i.launchClicks} clicks, 0 orders — warning` };
   }
   return { decision: 'LAUNCH_HOLD', reason: `${i.launchClicks} clicks, 0 orders — too early, keep gathering` };
 }

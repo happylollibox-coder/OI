@@ -410,7 +410,7 @@ SELECT
   -- ═══════════════════════════════════════════════════════════════════════════
   (DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < d.th_launch_window_days) as is_new_campaign,
   -- launch_clicks ≈ lifetime clicks (the 4w window ≈ a <30d campaign's whole life)
-  COALESCE(d.ads_clicks_4w, 0) as launch_clicks,
+  COALESCE(d.target_clicks_4w, d.ads_clicks_4w, 0) as launch_clicks,
   -- Aggressive launch bid: anchor (research CPC) × mult, cold-start chain, capped at ceiling.
   -- Cold-start (a) "SQP market CPC" is infeasible (SQP has no cost) → proxy with the term's own
   -- observed 8w CPC, then strategy template max, then the flat cold bid.
@@ -434,8 +434,8 @@ SELECT
   CASE
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= d.th_launch_window_days THEN NULL
     WHEN COALESCE(d.ads_orders_3d, 0) >= d.th_launch_winner_orders AND COALESCE(d.ads_net_roas_3d, 0) >= d.th_profitable_roas THEN 'WINNER'
-    WHEN COALESCE(d.ads_orders_4w, 0) = 0 AND COALESCE(d.ads_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'CUT'
-    WHEN COALESCE(d.ads_orders_4w, 0) >= 1 THEN 'EVALUATE'
+    WHEN COALESCE(d.target_orders_4w, 0) = 0 AND COALESCE(d.target_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'CUT'
+    WHEN COALESCE(d.target_orders_4w, 0) >= 1 THEN 'EVALUATE'
     ELSE 'GATHER'
   END as launch_phase,
   -- The 15-click decision matrix (NULL = not on the launch track)
@@ -443,17 +443,17 @@ SELECT
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= d.th_launch_window_days THEN NULL
     -- Winner: trailing-window orders at/above the profitable bar → graduate to the normal coacher
     WHEN COALESCE(d.ads_orders_3d, 0) >= d.th_launch_winner_orders AND COALESCE(d.ads_net_roas_3d, 0) >= d.th_profitable_roas THEN 'LAUNCH_GRADUATE'
-    -- Has orders: profitable → hold; expensive → reduce (gated to once per click batch)
-    WHEN COALESCE(d.ads_orders_4w, 0) >= 1 THEN
+    -- Has orders: profitable → hold; unprofitable → reduce. Judged on the TARGET rollup (not the
+    -- per-search-term slice) so SP-Auto auto-clauses aren't under-read. The 3-day no-re-suggest
+    -- cooldown (V_ADS_COACH suppression) prevents churn, so no per-click-batch gate is needed here.
+    WHEN COALESCE(d.target_orders_4w, 0) >= 1 THEN
       CASE
-        WHEN COALESCE(d.ads_net_roas_4w, 0) >= d.th_profitable_roas THEN 'LAUNCH_HOLD'
-        WHEN COALESCE(d.clicks_since_last_bid_change, 0) >= d.th_launch_checkpoint_clicks THEN 'LAUNCH_REDUCE_BID'
-        ELSE 'LAUNCH_HOLD'
+        WHEN COALESCE(d.target_net_roas_4w, 0) >= d.th_profitable_roas THEN 'LAUNCH_HOLD'
+        ELSE 'LAUNCH_REDUCE_BID'
       END
-    -- Zero orders: 15 hold / 30 reduce / 45 negate
-    WHEN COALESCE(d.ads_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'LAUNCH_NEGATE'
-    WHEN COALESCE(d.ads_clicks_4w, 0) >= 2 * d.th_launch_checkpoint_clicks
-         AND COALESCE(d.clicks_since_last_bid_change, 0) >= d.th_launch_checkpoint_clicks THEN 'LAUNCH_REDUCE_BID'
+    -- Zero orders: negate once enough clicks have bled, else reduce past the discovery click bar
+    WHEN COALESCE(d.target_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'LAUNCH_NEGATE'
+    WHEN COALESCE(d.target_clicks_4w, 0) >= 2 * d.th_launch_checkpoint_clicks THEN 'LAUNCH_REDUCE_BID'
     ELSE 'LAUNCH_HOLD'
   END as launch_decision,
 
@@ -1751,7 +1751,7 @@ scored AS (
 )
 
 SELECT
-  scored.* EXCEPT(bid_ceiling_note, days_since_last_suggestion, days_since_last_suggestion_camp),
+  scored.* EXCEPT(bid_ceiling_note, days_since_last_suggestion, days_since_last_suggestion_camp, target_orders_4w, target_clicks_4w, target_net_roas_4w),
   -- Exact bid-ceiling note: fires when the (capped) recommended bid sits at the ceiling on an increase.
   CASE
     WHEN scored.target_action = 'INCREASE_BID'
@@ -1778,8 +1778,8 @@ SELECT
     '{"id":"launch","label":"Launch","pass":true,"value":"', scored.launch_phase, ' · ', scored.launch_decision, '"},',
     '{"id":"clicks","label":"Clicks (launch)","pass":true,"value":"', CAST(scored.launch_clicks AS STRING), '"},',
     '{"id":"csbc","label":"Clicks since bid","pass":true,"value":"', CAST(COALESCE(scored.clicks_since_last_bid_change, 0) AS STRING), '"},',
-    '{"id":"orders","label":"Orders 4w","pass":true,"value":"', CAST(COALESCE(scored.ads_orders_4w, 0) AS STRING), '"},',
-    '{"id":"net_roas","label":"Net ROAS 4w","pass":true,"value":"', CAST(ROUND(COALESCE(scored.ads_net_roas_4w, 0), 2) AS STRING), '"},',
+    '{"id":"orders","label":"Orders 4w","pass":true,"value":"', CAST(COALESCE(scored.target_orders_4w, 0) AS STRING), '"},',
+    '{"id":"net_roas","label":"Net ROAS 4w","pass":true,"value":"', CAST(ROUND(COALESCE(scored.target_net_roas_4w, 0), 2) AS STRING), '"},',
     '{"id":"bid","label":"Launch bid","pass":true,"value":"$', CAST(scored.launch_bid AS STRING), ' (', scored.launch_bid_source, ')"}',
     ']'
   ) ELSE NULL END AS launch_decision_trace
