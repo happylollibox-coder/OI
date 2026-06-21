@@ -3,7 +3,7 @@
 export type DatasetName =
   | 'summary' | 'weekly_trends' | 'monthly_trends' | 'weekly_trends_by_asin'
   | 'monthly_trends_by_asin' | 'daily_trends' | 'daily_trends_by_asin' | 'products' | 'product_creatives'
-  | 'experiments' | 'ads_7d_summary' | 'ads_7d' | 'sqp_weekly' | 'sqp_coverage_weeks'
+  | 'experiments' | 'ads_7d_summary' | 'ads_7d' | 'sqp_weekly' | 'sqp_ads_by_term' | 'sqp_coverage_weeks'
   | 'sqp_volume_4w' | 'change_log' | 'upcoming' | 'peak' | 'hero_asins'
   | 'keyword_product_map' | 'learnings' | 'budget_health' | 'drivers'
   | 'experiment_weekly' | 'experiment_campaigns' | 'campaign_search_terms' | 'campaign_search_terms_weekly'

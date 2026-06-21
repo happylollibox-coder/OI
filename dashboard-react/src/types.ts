@@ -598,6 +598,33 @@ export interface SqpWeeklyRow {
   search_query_score: number;
 }
 
+export interface SqpAdsByTermRow {
+  reporting_date: string;
+  week_start: string;
+  asin: string;
+  parent_name: string | null;
+  product_short_name: string | null;
+  search_term: string;
+  impressions: number;
+  clicks: number;
+  cart_adds: number;
+  orders: number;
+  organic_orders: number;
+  amazon_impressions: number | null;
+  amazon_orders: number | null;
+  ad_impressions: number;
+  ad_clicks: number;
+  ad_orders: number;
+  ad_units: number;
+  ad_spend: number;
+  ad_sales: number;
+  ad_gross_profit: number;
+  show_rate_pct: number | null;
+  estimated_organic_rank: number | null;
+  organic_rank_zone: string | null;
+  search_query_score: number | null;
+}
+
 export interface ExperimentCampaignRow {
   experiment_id: string | null;
   campaign_id: string;
@@ -1254,6 +1281,7 @@ export interface DashboardData {
   negative_keywords: NegativeKeyword[];
   experiment_weekly: ExperimentWeeklyRow[];
   sqp_weekly: SqpWeeklyRow[];
+  sqp_ads_by_term: SqpAdsByTermRow[];
   sqp_coverage_weeks: { week_start: string }[];
   sqp_volume_4w: Record<string, number>;
   experiment_campaigns: ExperimentCampaignRow[];

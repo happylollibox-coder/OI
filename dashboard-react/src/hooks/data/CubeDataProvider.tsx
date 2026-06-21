@@ -14,7 +14,7 @@ const EMPTY: Partial<DashboardData> = {
   keyword_product_map: [], weekly_trends: [], daily_trends: [], daily_trends_by_asin: [], monthly_trends: [],
   weekly_trends_by_asin: [], monthly_trends_by_asin: [], learnings: [], experiments: [],
   budget_health: [], drivers: [], sqp_coverage_weeks: [], change_log: [], negative_keywords: [],
-  experiment_weekly: [], sqp_weekly: [], sqp_volume_4w: {}, experiment_campaigns: [],
+  experiment_weekly: [], sqp_weekly: [], sqp_ads_by_term: [], sqp_volume_4w: {}, experiment_campaigns: [],
   campaign_search_terms: [], campaign_search_terms_weekly: [], ads_7d: [], ads_7d_summary: [], holidays: [], experiment_templates: [],
   strategy_campaign_templates: [], coach_decisions: [], coach_cross_sell: [], coach_campaigns: [],
   experiment_evaluations: [], keyword_predictions: [], brand_strength_weekly: [],

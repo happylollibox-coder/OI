@@ -10,6 +10,7 @@ import type { DatasetName } from './data/datasetTypes';
 import type {
   Ads7dRow,
   SqpWeeklyRow,
+  SqpAdsByTermRow,
   ChangeLogRow,
   UpcomingEvent,
   PeakRow,
@@ -254,6 +255,58 @@ async function loadSqpFromCube(): Promise<SqpWeeklyRow[]> {
       estimated_organic_rank: Number(r['Sqp.estimatedOrganicRank'] ?? 0),
       organic_rank_zone: String(r['Sqp.organicRankZone'] ?? ''),
       search_query_score: Number(r['Sqp.searchQueryScore'] ?? 0),
+    };
+  });
+}
+
+/** SqpAdsByTerm → sqp_ads_by_term */
+async function loadSqpAdsByTermFromCube(): Promise<SqpAdsByTermRow[]> {
+  const rows = await cubeLoad({
+    measures: [
+      'SqpAdsByTerm.impressions', 'SqpAdsByTerm.clicks', 'SqpAdsByTerm.cartAdds',
+      'SqpAdsByTerm.orders', 'SqpAdsByTerm.organicOrders',
+      'SqpAdsByTerm.amazonImpressions', 'SqpAdsByTerm.amazonOrders',
+      'SqpAdsByTerm.adImpressions', 'SqpAdsByTerm.adClicks', 'SqpAdsByTerm.adOrders',
+      'SqpAdsByTerm.adUnits', 'SqpAdsByTerm.adSpend', 'SqpAdsByTerm.adSales', 'SqpAdsByTerm.adGrossProfit',
+    ],
+    dimensions: [
+      'SqpAdsByTerm.reportingDate', 'SqpAdsByTerm.asin', 'SqpAdsByTerm.searchTerm',
+      'SqpAdsByTerm.showRatePct', 'SqpAdsByTerm.estimatedOrganicRank', 'SqpAdsByTerm.organicRankZone',
+      'SqpAdsByTerm.searchQueryScore', 'Product.productShortName', 'Product.parentName',
+    ],
+    timeDimensions: [{ dimension: 'SqpAdsByTerm.reportingDate', dateRange: 'Last 104 weeks' }],
+    limit: 80000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => {
+    const rd = r['SqpAdsByTerm.reportingDate'];
+    const reporting = rd ? fmtDate(rd) : '';
+    const num = (k: string) => Number(r[k] ?? 0);
+    const numN = (k: string) => (r[k] != null ? Number(r[k]) : null);
+    return {
+      reporting_date: reporting,
+      week_start: reporting ? addDays(reporting, -6) : '',
+      asin: String(r['SqpAdsByTerm.asin'] ?? ''),
+      parent_name: r['Product.parentName'] != null ? String(r['Product.parentName']) : null,
+      product_short_name: r['Product.productShortName'] != null ? String(r['Product.productShortName']) : null,
+      search_term: String(r['SqpAdsByTerm.searchTerm'] ?? ''),
+      impressions: num('SqpAdsByTerm.impressions'),
+      clicks: num('SqpAdsByTerm.clicks'),
+      cart_adds: num('SqpAdsByTerm.cartAdds'),
+      orders: num('SqpAdsByTerm.orders'),
+      organic_orders: num('SqpAdsByTerm.organicOrders'),
+      amazon_impressions: numN('SqpAdsByTerm.amazonImpressions'),
+      amazon_orders: numN('SqpAdsByTerm.amazonOrders'),
+      ad_impressions: num('SqpAdsByTerm.adImpressions'),
+      ad_clicks: num('SqpAdsByTerm.adClicks'),
+      ad_orders: num('SqpAdsByTerm.adOrders'),
+      ad_units: num('SqpAdsByTerm.adUnits'),
+      ad_spend: num('SqpAdsByTerm.adSpend'),
+      ad_sales: num('SqpAdsByTerm.adSales'),
+      ad_gross_profit: num('SqpAdsByTerm.adGrossProfit'),
+      show_rate_pct: numN('SqpAdsByTerm.showRatePct'),
+      estimated_organic_rank: numN('SqpAdsByTerm.estimatedOrganicRank'),
+      organic_rank_zone: r['SqpAdsByTerm.organicRankZone'] != null ? String(r['SqpAdsByTerm.organicRankZone']) : null,
+      search_query_score: numN('SqpAdsByTerm.searchQueryScore'),
     };
   });
 }
@@ -2336,6 +2389,7 @@ export const DATASET_LOADERS: Record<DatasetName, () => Promise<unknown>> = {
   ads_7d_summary: loadAdsSummaryFromCube,
   ads_7d: loadAdsFromCube,
   sqp_weekly: loadSqpFromCube,
+  sqp_ads_by_term: loadSqpAdsByTermFromCube,
   sqp_coverage_weeks: loadSqpCoverageWeeksFromCube,
   sqp_volume_4w: loadSqpVolume4wFromCube,
   change_log: loadChangeLogFromCube,
