@@ -487,6 +487,14 @@ views:
       - DE_PRODUCT_TYPE_KEYWORDS
       - DE_SEARCH_TERM_SEGMENTS
 
+  - name: "V_SQP_ADS_BY_TERM"
+    description: "Per (search_term, asin, week): real SQP funnel (FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY) FULL OUTER JOINed to weekly-aggregated paid ads (FACT_AMAZON_ADS). Feeds the SQP page Search Terms panel via T_SQP_ADS_BY_TERM. amazon_* are market totals (dedupe with MAX per term/week on rollup)."
+    source_files: ["scripts/bigquery/views/V_SQP_ADS_BY_TERM.sql"]
+    dependencies:
+      - FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+
   - name: "V_CONVERSION_CURVE"
     description: "Pre-computed clicks-per-sale conversion curves by (product × price_bucket × holiday_season). Used by Research page to estimate click requirements."
     source_files: ["scripts/bigquery/views/V_CONVERSION_CURVE.sql"]
