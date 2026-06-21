@@ -21,6 +21,8 @@ import { ChevronRight, ChevronDown, TrendingUp } from 'lucide-react';
 type TrendMode = 'weeks' | 'month' | 'year' | 'peak';
 import { MEASURE_META, type TrendMeasure } from '../constants';
 import { usePageSummary } from '../components/PageSummaryBar';
+import { SqpTermsPanel } from '../components/SqpTermsPanel';
+import { rollupSqpTerms } from '../utils/sqpTermTable';
 
 const ZONE_LABELS: Record<string, string> = {
   upper_p1: 'P1 Top',
@@ -49,7 +51,6 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
   const info = family ? (FAMILIES[family] || { code: family, color: '#3b82f6' }) : { code: 'All', color: '#3b82f6' };
   const trendMode: TrendMode = filters.seasonality ? 'peak' : filters.periodMode === 'weeks' ? 'weeks' : filters.periodMode === 'month' ? 'month' : 'year';
   const [trendMeasure, setTrendMeasure] = useState<TrendMeasure>('sales');
-  const [expandedKw, setExpandedKw] = useState<Set<string>>(new Set());
   const [sqpSearch, setSqpSearch] = useState('');
   const [expandedCollection, setExpandedCollection] = useState<FamilyName | null>(null);
 
@@ -60,7 +61,6 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
 
   const colSort = useSort('orders');
   const sqpSort = useSort('totalOrders');
-  const kwSort = useSort('marketVol');
   const FAMILY_COL_COLUMNS: MeasureDef[] = [
     { id: 'collection', label: 'Collection', group: 'Info' },
     { id: 'variations', label: 'Variations', group: 'Info' },
@@ -86,18 +86,6 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
     { id: 'organicInfo', label: 'Organic Signal', tip: MEASURE_TIPS.organic_lift, group: 'SQP' },
     { id: 'impShare', label: 'Imp Share', tip: MEASURE_TIPS.impression_share, group: 'Ads' },
     { id: 'avgRoas', label: 'Ads ROAS', group: 'Ads' },
-    { id: 'bestAction', label: 'Action', group: 'Info' },
-  ];
-  const FAMILY_KW_COLUMNS: MeasureDef[] = [
-    { id: 'term', label: 'Keyword', group: 'Info' },
-    { id: 'marketVol', label: 'SQP Mkt Vol', tip: MEASURE_TIPS.market_volume, group: 'SQP' },
-    { id: 'totalSpend', label: 'Ads Spend', group: 'Ads' },
-    { id: 'totalOrders', label: 'Ads Orders', group: 'Ads' },
-    { id: 'totalClicks', label: 'Ads Clicks', group: 'Ads' },
-    { id: 'avgConv', label: 'Ads Conv%', group: 'Ads' },
-    { id: 'impShare', label: 'Ads Imp Share', tip: MEASURE_TIPS.impression_share, group: 'Ads' },
-    { id: 'avgRoas', label: 'Ads ROAS', group: 'Ads' },
-    { id: 'hasOrganicLift', label: 'Organic', tip: MEASURE_TIPS.organic_lift, group: 'SQP' },
     { id: 'bestAction', label: 'Action', group: 'Info' },
   ];
   const FAMILY_SQP_COLUMNS: MeasureDef[] = [
@@ -134,13 +122,11 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
   ];
   const [familyColCols, setFamilyColCols] = useMeasureSelection('family_collections', FAMILY_COL_COLUMNS);
   const [familyOrgCols, setFamilyOrgCols] = useMeasureSelection('family_organic_lift', FAMILY_ORG_COLUMNS);
-  const [familyKwCols, setFamilyKwCols] = useMeasureSelection('family_search_terms', FAMILY_KW_COLUMNS);
   const [familySqpCols, setFamilySqpCols] = useMeasureSelection('family_sqp_perf', FAMILY_SQP_COLUMNS);
   const [familyDriverCols, setFamilyDriverCols] = useMeasureSelection('family_drivers', FAMILY_DRIVER_COLUMNS);
   const [familyDrainCols, setFamilyDrainCols] = useMeasureSelection('family_drains', FAMILY_DRAIN_COLUMNS);
   const visibleColCols = useMemo(() => FAMILY_COL_COLUMNS.filter(c => familyColCols.has(c.id)), [familyColCols]);
   const visibleOrgCols = useMemo(() => FAMILY_ORG_COLUMNS.filter(c => familyOrgCols.has(c.id)), [familyOrgCols]);
-  const visibleKwCols = useMemo(() => FAMILY_KW_COLUMNS.filter(c => familyKwCols.has(c.id)), [familyKwCols]);
   const visibleSqpCols = useMemo(() => FAMILY_SQP_COLUMNS.filter(c => familySqpCols.has(c.id)), [familySqpCols]);
   const visibleDriverCols = useMemo(() => FAMILY_DRIVER_COLUMNS.filter(c => familyDriverCols.has(c.id)), [familyDriverCols]);
   const visibleDrainCols = useMemo(() => FAMILY_DRAIN_COLUMNS.filter(c => familyDrainCols.has(c.id)), [familyDrainCols]);
@@ -244,6 +230,32 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
 
   // Keywords with organic lift potential
   const organicLiftKw = useMemo(() => kwGrouped.filter(k => k.hasOrganicLift), [kwGrouped]);
+
+  // Real SQP × Ads term table (Task 6)
+  const sqpTermTable = useMemo(() => {
+    let rows = (data.sqp_ads_by_term || []);
+    rows = showAllFamilies
+      ? rows.filter(r => r.parent_name != null)
+      : rows.filter(r => r.parent_name === family);
+    if (selectedVariation) rows = rows.filter(r => r.asin === selectedVariation);
+    if (selectedSqpTerm) rows = rows.filter(r => r.search_term === selectedSqpTerm);
+    const mode = filters.periodMode;
+    if (rows.length) {
+      if (mode === 'weeks') {
+        const latest = rows.reduce((m, r) => (r.reporting_date > m ? r.reporting_date : m), '');
+        rows = rows.filter(r => r.reporting_date === latest);
+      } else if (mode === 'month') {
+        const months = [...new Set(rows.map(r => r.reporting_date.slice(0, 7)))].sort();
+        const picked = new Set(getPeriodsToInclude(filters.specificPeriod, 'month', months, 1));
+        rows = rows.filter(r => picked.has(r.reporting_date.slice(0, 7)));
+      } else {
+        const years = [...new Set(rows.map(r => r.reporting_date.slice(0, 4)))].sort();
+        const picked = new Set(getPeriodsToInclude(filters.specificPeriod, 'year', years, 1));
+        rows = rows.filter(r => picked.has(r.reporting_date.slice(0, 4)));
+      }
+    }
+    return rollupSqpTerms(rows);
+  }, [data.sqp_ads_by_term, family, showAllFamilies, selectedVariation, selectedSqpTerm, filters.periodMode, filters.specificPeriod]);
 
   const pk = data.peak?.[0] ?? null;
 
@@ -877,8 +889,6 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
       }));
   }, [sqpWeeklyAllForTrend, sqpWeeklyForTrend, selectedVariation, selectedSqpTerm, filters.periodMode]);
 
-  const toggleKw = (term: string) => setExpandedKw(p => { const n = new Set(p); n.has(term) ? n.delete(term) : n.add(term); return n; });
-
   usePageSummary({ title: family || 'Family', items: [{ label: 'Family', value: family || 'All' }] });
   return (
     <div className="animate-in">
@@ -1304,86 +1314,7 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
       )}
 
       {/* Search Terms & SQP Detail */}
-      <Section title="Search Terms" count={`${kwGrouped.length} keywords`} filterItems={formatSectionFilters(filters)} headerRight={<MeasureSelector tableId="family_search_terms" measures={FAMILY_KW_COLUMNS} selected={familyKwCols} onSelectedChange={setFamilyKwCols} />}>
-        <div className="border border-border rounded-xl bg-card overflow-hidden">
-          <table className="w-full border-collapse text-xs">
-            <thead><tr>
-              <Th> </Th>
-              {visibleKwCols.map(c => (
-                <SortTh key={c.id} k={c.id} sort={kwSort.sort} toggle={kwSort.toggle} right={!['term', 'hasOrganicLift', 'bestAction'].includes(c.id)} tip={c.tip}>{c.label}</SortTh>
-              ))}
-            </tr></thead>
-            <tbody>
-              {kwSort.sorted(kwGrouped).map((k) => {
-                const isExp = expandedKw.has(k.term);
-                return (
-                  <><tr key={k.term} onClick={() => toggleKw(k.term)} className="border-b border-border-faint hover:bg-white/[.02] cursor-pointer transition-colors">
-                    <td className="px-3 py-2 w-6">{isExp ? <ChevronDown size={12} className="text-faint" /> : <ChevronRight size={12} className="text-faint" />}</td>
-                    {visibleKwCols.map(c => {
-                      const cells: Record<string, React.ReactNode> = {
-                        term: <td key="term" className="px-3 py-2 font-semibold text-blue-400">{k.term}</td>,
-                        marketVol: <td key="marketVol" className="px-3 py-2 text-right font-mono text-[11px]">{k.marketVol ? Math.round(k.marketVol) : '--'}</td>,
-                        totalSpend: <td key="totalSpend" className="px-3 py-2 text-right font-mono text-[11px]">{fM(k.totalSpend)}</td>,
-                        totalOrders: <td key="totalOrders" className="px-3 py-2 text-right">{fOrd(k.totalOrders)}</td>,
-                        totalClicks: <td key="totalClicks" className="px-3 py-2 text-right">{fClk(k.totalClicks)}</td>,
-                        avgConv: <td key="avgConv" className="px-3 py-2 text-right">{fP(k.avgConv)}</td>,
-                        impShare: <td key="impShare" className="px-3 py-2 text-right font-mono text-[11px]">{k.impShare ? fP(k.impShare * 100) : '--'}</td>,
-                        avgRoas: <td key="avgRoas" className="px-3 py-2"><RoasBadge value={k.avgRoas} /></td>,
-                        hasOrganicLift: <td key="hasOrganicLift" className="px-3 py-2">{k.hasOrganicLift ? <Badge variant="green" className="!text-[10px]">Organic</Badge> : <span className="text-faint">--</span>}</td>,
-                        bestAction: <td key="bestAction" className="px-3 py-2"><ActionBadge action={k.bestAction} /></td>,
-                      };
-                      return cells[c.id];
-                    })}
-                  </tr>
-                  {isExp && (
-                    <tr key={k.term + '-detail'}>
-                      <td colSpan={visibleKwCols.length + 1} className="p-0">
-                        <div className="bg-inset px-4 py-3 border-b border-border-faint">
-                          <div className="text-[10px] text-faint uppercase font-semibold mb-2 tracking-wider">Per-Experiment Breakdown</div>
-                          <table className="w-full text-[11px]">
-                            <thead><tr className="text-subtle">
-                              <th className="text-left py-1 px-2 font-semibold">Experiment</th>
-                              <th className="text-left py-1 px-2 font-semibold">Product</th>
-                              <th className="text-right py-1 px-2 font-semibold">Ads Spend</th>
-                              <th className="text-right py-1 px-2 font-semibold">Ads Orders</th>
-                              <th className="text-right py-1 px-2 font-semibold">Ads Clicks</th>
-                              <th className="text-right py-1 px-2 font-semibold">Ads Impr</th>
-                              <th className="text-right py-1 px-2 font-semibold">Ads CPC</th>
-                              <th className="text-right py-1 px-2 font-semibold">Ads Conv%</th>
-                              <th className="text-right py-1 px-2 font-semibold">Ads ROAS</th>
-                              <th className="text-left py-1 px-2 font-semibold">Hero?</th>
-                            </tr></thead>
-                            <tbody>
-                              {k.entries.map((e, ei) => (
-                                <tr key={ei} className="border-t border-border-faint">
-                                  <td className="py-1 px-2 font-mono text-[10px]">{e.experiment_id}</td>
-                                  <td className="py-1 px-2">{e.product_short_name}</td>
-                                  <td className="py-1 px-2 text-right font-mono">{fM(e.spend_60d)}</td>
-                                  <td className="py-1 px-2 text-right">{fOrd(e.orders_60d)}</td>
-                                  <td className="py-1 px-2 text-right">{fClk(e.clicks_60d)}</td>
-                                  <td className="py-1 px-2 text-right font-mono">{(e.impressions_60d || 0).toLocaleString()}</td>
-                                  <td className="py-1 px-2 text-right font-mono">{fCpc(e.cpc_60d)}</td>
-                                  <td className="py-1 px-2 text-right">{fP(e.conv_rate_60d)}</td>
-                                  <td className="py-1 px-2 text-right"><RoasBadge value={e.net_roas_60d} /></td>
-                                  <td className="py-1 px-2">{e.is_hero_match ? <span className="text-emerald-400">✓</span> : <span className="text-red-400">✗</span>}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          {k.entries[0]?.reason && (
-                            <div className="mt-2 text-[10px] text-subtle italic border-t border-border-faint pt-2">{k.entries[0].reason}</div>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                  </>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Section>
+      <SqpTermsPanel terms={sqpTermTable} filterItems={formatSectionFilters(filters)} />
 
       {/* SQP Detail */}
       <div ref={sqpFocusRef} className="scroll-mt-4" />
