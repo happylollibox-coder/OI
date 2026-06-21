@@ -242,6 +242,7 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
     const mode = filters.periodMode;
     if (rows.length) {
       if (mode === 'weeks') {
+        // Weeks mode always shows the single latest SQP week (specificPeriod is not used here).
         const latest = rows.reduce((m, r) => (r.reporting_date > m ? r.reporting_date : m), '');
         rows = rows.filter(r => r.reporting_date === latest);
       } else if (mode === 'month') {

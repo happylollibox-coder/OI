@@ -36,7 +36,7 @@ export function SqpTermsPanel({ terms, filterItems }: { terms: SqpTermAgg[]; fil
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const visible = COLUMNS.filter(c => cols.has(c.id));
   const toggle = (t: string) => setExpanded(p => { const n = new Set(p); n.has(t) ? n.delete(t) : n.add(t); return n; });
-  const num = (n: number) => (n ? Math.round(n).toLocaleString() : '--');
+  const num = (n: number) => Math.round(n).toLocaleString();
   const pctCell = (v: number | null) => (v == null ? '--' : fP(v));
 
   return (
