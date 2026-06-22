@@ -46,6 +46,15 @@ V_RESEARCH_TERMS    V_RESEARCH_RANKED  ◄── V_CONVERSION_CURVE, DIM_PRODUCT
 2. **Product-type vocabulary** lives ONLY in `DE_PRODUCT_TYPE_KEYWORDS`
    (values like `Food & Treats`, `Bath & Spa`, `Journal & Diary`). Any product_type
    tagging must use the keyword-lookup join (priority ASC, longest keyword wins).
+   Item-level within accessories: `Bracelet`, `Necklace`, `Earrings`, `Jewelry`,
+   `Headband`, `Hair Clip`, `Hair Accessories`, `Charms`, `Keychain`, `Sunglasses`
+   (a term naming both charm + keychain resolves to `Keychain` via longest-keyword tiebreak);
+   generic `Accessories` is the coarse fallback that still catches brand/IP terms
+   (hello kitty, sanrio, kpop, …). Seeded by `seed_product_type_keywords*.sql`;
+   the frontend override dropdown enum (`ResultsTable.tsx`) must list the same values.
+   After editing the vocabulary, re-run `SP_DERIVE_PRODUCT_SEGMENTS` (NULL the
+   affected families' `seg_product_type` first — it only fills NULLs) then
+   `SP_REFRESH_RESEARCH_RANKED`, or the +30 `pt_score` match silently breaks.
 3. **Scoring** (seg fit, CPS fit, overall fit, purchase rank, rank) lives ONLY in
    `V_RESEARCH_RANKED`. The frontend renders SQL outputs and formats tooltips from
    the explanation columns — it must never re-implement brackets or weights.
@@ -216,3 +225,12 @@ Validation: `python3 tools/validate_research_ranked.py` (enum/bounds/consistency
   net with one-directional-plural regex, so a term whose card said "covers 9" returned only 2.
   Now Phrase returns the covered set (+ the seed). `research_match_predicate` reworked to emit
   normalized stems; Broad path unchanged.
+- 2026-06-21: Granular accessory TYPEs — the coarse `Accessories` bucket was split into
+  item-level types (`Bracelet`, `Necklace`, `Earrings`, `Jewelry`, `Headband`, `Hair Clip`,
+  `Hair Accessories`, `Charms`, `Keychain`, `Sunglasses`) by relabeling the 58 Accessories rows
+  in `DE_PRODUCT_TYPE_KEYWORDS` (priorities unchanged → no cross-type drift; brand/IP terms
+  stay `Accessories`). `Keychain & Charms` was further split into separate `Charms` (charm-only
+  terms) and `Keychain` (everything else; dual terms → Keychain by length). Bunny
+  `seg_product_type` re-derived (`Accessories,Gift Sets` → `Toys,Keychain`; Charms fell under the
+  5% family threshold). Seeds + `ResultsTable.tsx` enum updated; `SP_REFRESH_RESEARCH_RANKED`
+  re-run. Globally: Charms=50, Keychain=340 terms.

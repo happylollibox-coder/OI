@@ -596,7 +596,7 @@ export function ResultsTable({
                                   age_group: ['0-2 (Baby)', '2-4 (Toddler)', '5-9 (Kid)', '8-14', '10-12 (Tween)', '13-17 (Teen)', '18+ (Adult)'],
                                   occasion: ['Birthday', 'Christmas', 'Easter', 'Valentines', 'Graduation', 'Back to School', 'Performance', 'Get Well', 'Encouragement', 'Mothers Day', 'Fathers Day', 'Wedding', 'Sleepover', 'Camp', 'Sweet 16'],
                                   cost_tier: ['Budget (<$10)', 'Value ($10-$20)', 'Mid ($20-$35)', 'Premium ($35-$50)', 'Luxury ($50+)'],
-                                  product_type: ['Social Game', 'Board Game', 'Bath & Spa', 'Beauty', 'Journal & Diary', 'Stationery', 'Books', 'Toys', 'Food & Treats', 'Clothing', 'Crafts & DIY', 'Accessories', 'Home & Room', 'Electronics', 'Party Supplies', 'Cards', 'Gift Sets', 'General'],
+                                  product_type: ['Social Game', 'Board Game', 'Bath & Spa', 'Beauty', 'Journal & Diary', 'Stationery', 'Books', 'Toys', 'Food & Treats', 'Clothing', 'Crafts & DIY', 'Accessories', 'Bracelet', 'Necklace', 'Earrings', 'Jewelry', 'Headband', 'Hair Clip', 'Hair Accessories', 'Charms', 'Keychain', 'Sunglasses', 'Home & Room', 'Electronics', 'Party Supplies', 'Cards', 'Gift Sets', 'General'],
                                   brand: ['Happy Lolli', 'L.O.L Surprise', 'Disney', 'Barbie', 'Squishmallows', 'Sanrio', 'Pokemon', 'Taylor Swift', 'Minecraft', 'Roblox', 'Unicorn', 'Bluey', 'Gabbys Dollhouse', 'Paw Patrol', 'Harry Potter', 'LEGO', 'Hot Wheels', 'Bratz', 'Marvel', 'Star Wars', 'CoComelon', 'Peppa Pig'],
                                 };
                                 const label = field.replace('_', ' ');
