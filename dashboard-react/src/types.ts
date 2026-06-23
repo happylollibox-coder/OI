@@ -302,6 +302,40 @@ export interface PeakRelevanceRow {
   peak_net_roas: number | null;
 }
 
+export interface PeakKeywordRecRow {
+  holiday_name: string;
+  parent_name: string;
+  search_term: string;
+  targeting_status: string;   // EXISTING | NEW
+  recommendation: string;     // INCREASE | INCREASE_CAUTIOUS | ADD | WATCH
+  match_bucket: string;       // INCREASE | EXACT | PHRASE | BROAD | BRAND
+  is_trending: boolean;
+  is_own_brand: boolean;
+  word_count: number;
+  ly_peak_orders: number;
+  amazon_volume: number;
+  amazon_sales: number;
+  ly_net_roas: number | null;
+  ly_ad_spend: number | null;
+  research_rank: number | null;
+  is_currently_advertised: boolean;
+  priority_score: number;
+  reason: string;
+}
+
+export interface PeakStuckCampaignRow {
+  campaign_name: string;
+  parent_name: string;
+  campaign_state: string;
+  stuck_flag: string;      // PAUSED | BUDGET_CAPPED | DORMANT | SHARE_DROPPED
+  budget_util_pct: number | null;
+  budget: number | null;
+  recent_orders: number | null;
+  net_roas: number | null;
+  days_since_budget_chg: number | null;
+  reason: string;
+}
+
 export interface ProductRow {
   asin: string;
   product_short_name: string;
@@ -1312,6 +1346,8 @@ export interface DashboardData {
   supply_shipments: SupplyShipmentRow[];
   supply_other_pos: SupplyOtherPORow[];
   peak_relevance: PeakRelevanceRow[];
+  peak_keyword_recs: PeakKeywordRecRow[];
+  peak_stuck_campaigns: PeakStuckCampaignRow[];
   family_occasions: FamilyOccasionRow[];
   coach_strategy: CoachStrategyRow[];
   campaign_launch_perf: CampaignLaunchPerfRow[];

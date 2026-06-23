@@ -6876,18 +6876,24 @@ def assign_campaign_mapping():
         experiment_name = f"{family} - {_STRATEGY_LABEL.get(strategy, strategy)}" + (f" ({theme})" if theme else "")
         note = f"manual: {user_email} {date.today().isoformat()}"
 
-        # 1. Create the experiment if it doesn't exist (idempotent)
+        # 1. Create the experiment if it doesn't exist (idempotent).
+        # MERGE, not INSERT...WHERE NOT EXISTS: the latter is not race-safe in
+        # BigQuery (no row locks / unique constraints), so a double-submit could
+        # pass the NOT EXISTS check twice and create duplicate experiment_id rows
+        # — which then breaks SP_EXPERIMENT_DAILY_SNAPSHOT's MERGE with
+        # "must match at most one source row". A single MERGE keyed on
+        # experiment_id is the atomic upsert (no WHEN MATCHED = leave existing
+        # rows untouched).
         client.query(
             """
-            INSERT INTO `onyga-482313.OI.DIM_EXPERIMENT`
+            MERGE `onyga-482313.OI.DIM_EXPERIMENT` T
+            USING (SELECT @eid AS experiment_id) S
+            ON T.experiment_id = S.experiment_id
+            WHEN NOT MATCHED THEN INSERT
               (experiment_id, experiment_name, description, start_date, baseline_days,
                status, strategy_id, lifecycle_stage, season_context, created_at, updated_at)
-            SELECT @eid, @ename, @desc, CURRENT_DATE(), 14,
-                   'ACTIVE', @strategy, 'ACTIVE', 'EVERGREEN', CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()
-            FROM (SELECT 1)
-            WHERE NOT EXISTS (
-              SELECT 1 FROM `onyga-482313.OI.DIM_EXPERIMENT` WHERE experiment_id = @eid
-            )
+            VALUES (@eid, @ename, @desc, CURRENT_DATE(), 14,
+                    'ACTIVE', @strategy, 'ACTIVE', 'EVERGREEN', CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
             """,
             job_config=bigquery.QueryJobConfig(query_parameters=[
                 bigquery.ScalarQueryParameter('eid', 'STRING', experiment_id),

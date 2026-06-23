@@ -17,7 +17,7 @@ export const PAGE_DATASETS: Record<PageId, DatasetName[]> = {
     'monthly_trends', 'monthly_trends_by_asin', 'peak', 'products', 'sqp_weekly', 'storage_costs',
     'supply_chain', 'weekly_trends', 'weekly_trends_by_asin'],
   peak: ['budget_health', 'campaign_search_terms', 'daily_trends', 'drivers', 'experiment_campaigns',
-    'experiments', 'holidays', 'keyword_product_map', 'negative_keywords', 'peak', 'peak_relevance', 'sqp_weekly',
+    'experiments', 'holidays', 'keyword_product_map', 'negative_keywords', 'peak', 'peak_relevance', 'peak_keyword_recs', 'peak_stuck_campaigns', 'sqp_weekly',
     'summary', 'weekly_trends'],
   family: ['budget_health', 'drivers', 'experiments', 'hero_asins', 'holidays', 'keyword_product_map',
     'monthly_trends', 'peak', 'sqp_ads_by_term', 'sqp_coverage_weeks', 'sqp_weekly', 'summary', 'weekly_trends',

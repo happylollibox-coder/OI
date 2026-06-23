@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react';
 import type { DashboardData, FamilyName } from '../types';
 import {
-  buildBriefModel, formatMetric, formatDelta, todayStr,
+  buildBriefModel, formatMetric, formatDelta,
   type DateMode, type Health, type MetricDelta, type AttentionItem,
 } from '../homeBrief';
 
@@ -22,8 +22,12 @@ const DATE_MODES: { key: DateMode; label: string }[] = [
 const DOT: Record<Health, string> = {
   risk: 'bg-red-500', warn: 'bg-amber-500', good: 'bg-emerald-500', flat: 'bg-zinc-600',
 };
-const dirColor = (dir: MetricDelta['dir']) =>
-  dir === 'up' ? 'text-emerald-400' : dir === 'dn' ? 'text-red-400' : 'text-faint';
+// Ad spend / CPC moving isn't inherently good or bad — show those deltas in a neutral colour.
+const NEUTRAL_KEYS = new Set(['ad_cost', 'cpc', 'ads_spend', 'ads_cpc']);
+const metricColor = (m: MetricDelta) =>
+  NEUTRAL_KEYS.has(m.key) ? 'text-muted'
+  : m.dir === 'up' ? 'text-emerald-400' : m.dir === 'dn' ? 'text-red-400' : 'text-faint';
+const arrowFor = (m: MetricDelta) => m.dir === 'up' ? '▲' : m.dir === 'dn' ? '▼' : '■';
 const ATT_ICON: Record<AttentionItem['level'], string> = { risk: '🔴', warn: '🟠', watch: '🟡' };
 
 const persist = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
@@ -41,8 +45,11 @@ export function HomeBrief({ data, onNav }: { data: DashboardData; onNav: (p: str
   const [famKey, setFamKey] = useState<string>(() => recall('oi_brief_family', 'All'));
   const [showNumbers, setShowNumbers] = useState<boolean>(() => recall('oi_brief_numbers', '0') === '1');
 
-  const adsMax = data._meta?.data_freshness?.ads_max_date || '';
-  const todayEnabled = !!adsMax && adsMax === todayStr();
+  const fresh = data._meta?.data_freshness;
+  const adsMax = fresh?.ads_max_date || '';
+  const perfMax = fresh?.performance_max_date || '';
+  // Today is ready when ads data is a day ahead of orders (an ads-only day before orders catch up).
+  const todayEnabled = !!adsMax && !!perfMax && adsMax > perfMax;
   const effMode: DateMode = mode === 'today' && !todayEnabled ? 'yday' : mode;
 
   const model = useMemo(() => buildBriefModel(data, effMode), [data, effMode]);
@@ -121,12 +128,22 @@ function KpiStrip({ kpis, showNumbers }: { kpis: MetricDelta[]; showNumbers: boo
         <div key={m.key} className="flex-1 min-w-[92px] border border-border-faint rounded-lg px-2.5 py-1.5">
           <div className="text-[10px] uppercase tracking-wide text-subtle">{m.label}</div>
           {showNumbers && <div className="text-[16px] font-bold font-mono text-text leading-tight">{formatMetric(m)}</div>}
-          <div className={`text-[11px] font-mono font-semibold ${dirColor(m.dir)}`}>
-            {m.dir === 'up' ? '▲' : m.dir === 'dn' ? '▼' : '■'} {m.moved ? formatDelta(m) : '~flat'}
+          <div className={`text-[11px] font-mono font-semibold ${metricColor(m)}`}>
+            {arrowFor(m)} {m.moved ? formatDelta(m) : '~flat'}
           </div>
         </div>
       ))}
     </div>
+  );
+}
+
+// One per-product metric: absolute value + trend (Sales / Units / Spend / CPC).
+function ProductMetric({ m }: { m: MetricDelta }) {
+  return (
+    <span className="whitespace-nowrap font-mono">
+      <span className="text-subtle">{m.label}</span> <span className="text-text">{formatMetric(m)}</span>
+      {m.moved && <span className={metricColor(m)}> {arrowFor(m)}{formatDelta(m)}</span>}
+    </span>
   );
 }
 
@@ -143,12 +160,14 @@ function FamilyPanel({ view, showNumbers, onNav }: { view: import('../homeBrief'
           view.products.length ? (
             <div className="border-t border-border-faint pt-2">
               {view.products.map((p, i) => (
-                <div key={i} className="flex gap-2 text-[12px] py-1 border-t border-border-faint/50 first:border-t-0">
-                  <span className="text-text font-medium min-w-[104px]">{p.name}</span>
-                  <span className="text-muted">{p.text}</span>
+                <div key={i} className="flex items-start gap-2 text-[12px] py-1.5 border-t border-border-faint/50 first:border-t-0">
+                  <span className="text-text font-medium min-w-[104px] shrink-0">{p.name}</span>
+                  <span className="flex flex-wrap gap-x-3 gap-y-0.5">
+                    {p.metrics.map(m => <ProductMetric key={m.key} m={m} />)}
+                  </span>
                 </div>
               ))}
-              {view.adsOnly && <p className="text-[10px] text-faint italic mt-1.5">Per-product is ads-derived (spend / ads sales / ROAS) — orders not in yet today.</p>}
+              {view.adsOnly && <p className="text-[10px] text-faint italic mt-1.5">Per-product is ads-derived (orders not in yet today).</p>}
             </div>
           ) : <p className="text-[12px] text-faint">All products steady — nothing moved.</p>
         )}

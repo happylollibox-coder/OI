@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import type { DashboardData, FamilyName, ExperimentCampaignRow, CampaignSearchTermRow, HolidayRow, PeakRelevanceRow } from '../types';
+import type { DashboardData, FamilyName, ExperimentCampaignRow, CampaignSearchTermRow, HolidayRow, PeakRelevanceRow, PeakKeywordRecRow } from '../types';
 import { useFilters } from '../hooks/useFilters';
 import { formatSectionFilters } from '../utils/filterUtils';
 import { FilterInfoIcon } from '../components/FilterInfoIcon';
@@ -9,7 +9,7 @@ import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { Empty } from '../components/Empty';
 import { Th, MEASURE_TIPS } from '../components/Tooltip';
-import { ChevronRight, ChevronDown, Calendar, TrendingUp, Zap } from 'lucide-react';
+import { ChevronRight, ChevronDown, Calendar, TrendingUp, Zap, AlertTriangle } from 'lucide-react';
 import { fM, fP, fOrd, fR, fClk, famFromType, formatDateRange } from '../utils';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
@@ -66,6 +66,39 @@ const PEAK_TREND_MEASURES: { id: PeakTrendMeasure; label: string; color: string 
   { id: 'netProfit', label: 'Net Profit', color: '#a78bfa' },
 ];
 
+function KwRecRow({ r }: { r: PeakKeywordRecRow }) {
+  const meta: Record<string, { label: string; cls: string }> = {
+    INCREASE: { label: '↑ Increase', cls: 'text-emerald-400' },
+    INCREASE_CAUTIOUS: { label: '↑ Cap', cls: 'text-amber-400' },
+    ADD: { label: '+ Add', cls: 'text-blue-400' },
+    DEFENSE: { label: '🛡 Defense', cls: 'text-purple-400' },
+    WATCH: { label: 'Watch', cls: 'text-faint' },
+  };
+  const m = meta[r.recommendation] || meta.WATCH;
+  return (
+    <div className="flex items-center gap-2 text-[11px] py-1 border-b border-border-faint/40" title={r.reason}>
+      <span className={`font-semibold whitespace-nowrap w-[58px] shrink-0 ${m.cls}`}>{m.label}</span>
+      <span className="text-blue-300 font-medium truncate flex-1 min-w-0">{r.search_term}</span>
+      {r.is_trending && <span className="text-[8px] text-amber-400 font-semibold whitespace-nowrap shrink-0" title="Market demand rising now">↗ trending</span>}
+      <span className="font-mono text-faint text-[9px] whitespace-nowrap hidden lg:inline">{r.parent_name}</span>
+      <span className="font-mono text-muted text-[10px] whitespace-nowrap w-16 text-right shrink-0">{r.amazon_sales.toLocaleString()} sales</span>
+      <span className={`font-mono text-[10px] whitespace-nowrap w-9 text-right shrink-0 ${r.ly_net_roas != null && r.ly_net_roas >= 1 ? 'text-emerald-400' : 'text-muted'}`}>{r.ly_net_roas != null ? `${r.ly_net_roas.toFixed(1)}x` : '—'}</span>
+    </div>
+  );
+}
+
+function KwBucket({ title, sub, color, rows, limit }: { title: string; sub: string; color: string; rows: PeakKeywordRecRow[]; limit: number }) {
+  return (
+    <div>
+      <div className={`text-[10px] uppercase tracking-wider font-semibold mb-1 ${color}`}>
+        {title} <span className="text-faint normal-case font-normal">({rows.length}) · {sub}</span>
+      </div>
+      {rows.slice(0, limit).map(r => <KwRecRow key={r.parent_name + r.search_term} r={r} />)}
+      {rows.length === 0 && <div className="text-[11px] text-faint py-1">None</div>}
+    </div>
+  );
+}
+
 export function PeakPage({ data }: { data: DashboardData }) {
   const { filters } = useFilters();
   const { getFamily } = useProductFamily();
@@ -103,10 +136,13 @@ export function PeakPage({ data }: { data: DashboardData }) {
   const [selectedHoliday, setSelectedHoliday] = useState<string | null>(null);
   const [selectedMeasures, setSelectedMeasures] = useMeasureSelection('peak_comparison', COMPARISON_MEASURES);
   const [peakTrendMeasure, setPeakTrendMeasure] = useState<PeakTrendMeasure>('orders');
-  const [peakTrendGranularity, setPeakTrendGranularity] = useState<'weekly' | 'daily'>('weekly');
-  const [dtpRange, setDtpRange] = useState<{ before: number; after: number }>({ before: 999, after: 999 }); // days around peak to show
+  const [peakTrendGranularity, setPeakTrendGranularity] = useState<'weekly' | 'daily'>('daily');
+  const [dtpRange, setDtpRange] = useState<{ before: number; after: number }>({ before: 7, after: 3 }); // days around peak to show: default 7 before → 3 after
   const [showDailyPeak, setShowDailyPeak] = useState(true);
   const [showLyTopTerms, setShowLyTopTerms] = useState(true);
+  const [showKwPlan, setShowKwPlan] = useState(true);
+  const [showProdActions, setShowProdActions] = useState(true);
+  const [showStuck, setShowStuck] = useState(true);
 
   const allCheckData = useMemo(() => buildCheckData(data, pk, getFamily), [data, pk, getFamily]);
 
@@ -269,7 +305,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
 
   const holidayNames = useMemo(() => {
     const holidays = data.holidays || [];
-    const names = [...new Set(holidays.filter(h => h.category === 'gift_season').map(h => h.holiday_name))].sort();
+    const names = [...new Set(holidays.filter(h => h.category === 'gift_season' || h.category === 'prime_event').map(h => h.holiday_name))].sort();
     return names;
   }, [data.holidays]);
 
@@ -427,9 +463,14 @@ export function PeakPage({ data }: { data: DashboardData }) {
 
     const tyPhases = phaseBoundaries(tyHoliday);
     const lyPhases = phaseBoundaries(lyHoliday);
-    const tyStart = tyPhases.pre_season.start;
+    // Floor the start at peak − 35d so single-phase events (e.g. Prime Day, whose
+    // pre_season_start = the peak day) still span several weeks; without this the weekly
+    // window collapses to ~0 weeks and the whole trend card is hidden.
+    const tyFloorW = addDaysLocal(tyHoliday.holiday_date, -35);
+    const lyFloorW = addDaysLocal(lyHoliday.holiday_date, -35);
+    const tyStart = tyPhases.pre_season.start < tyFloorW ? tyPhases.pre_season.start : tyFloorW;
     const tyEnd = tyHoliday.holiday_date; // stop at peak day (0 days from peak)
-    const lyStart = lyPhases.pre_season.start;
+    const lyStart = lyPhases.pre_season.start < lyFloorW ? lyPhases.pre_season.start : lyFloorW;
     const lyEnd = lyHoliday.holiday_date;
 
     // Get unique sorted weeks for TY and LY — cap at holiday date
@@ -550,9 +591,14 @@ export function PeakPage({ data }: { data: DashboardData }) {
       return bars;
     };
 
-    const tyStart = tyPhases.pre_season.start;
+    // Floor the start at peak − 30d so single-phase events (e.g. Prime Day, whose
+    // pre_season_start = the peak day itself) still have pre-peak data for the window
+    // filter. Long-ramp holidays keep their earlier pre_season_start via the min.
+    const tyFloor = addDaysLocal(tyHoliday.holiday_date, -30);
+    const lyFloor = addDaysLocal(lyHoliday.holiday_date, -30);
+    const tyStart = tyPhases.pre_season.start < tyFloor ? tyPhases.pre_season.start : tyFloor;
     const tyEnd = today; // include today even if past peak
-    const lyStart = lyPhases.pre_season.start;
+    const lyStart = lyPhases.pre_season.start < lyFloor ? lyPhases.pre_season.start : lyFloor;
     const lyEnd = addDaysLocal(lyHoliday.holiday_date, 14); // include 2 weeks post-peak for LY
 
     const tyData = buildDailyBars(tyStart, tyEnd, tyHoliday.holiday_date);
@@ -581,25 +627,52 @@ export function PeakPage({ data }: { data: DashboardData }) {
 
   // ── LY top search terms with % contribution ──
   const lyTopTerms = useMemo(() => {
-    if (!pk?.peak_start || !pk?.peak_end) return null;
-    // Get LY date range
-    const lyPeakStart = shiftYear(pk.peak_start, -1);
-    const lyPeakEnd = shiftYear(pk.peak_end, -1);
+    const holidays = data.holidays || [];
+    if (!activeHolidayName) return null;
+    // Look up LAST YEAR's actual occasion row — Prime Day moves year to year
+    // (2025: Jul 8-11, 2026: Jun 23-26), so a naive -1yr shift lands on the wrong dates.
+    const matching = holidays.filter(h => h.holiday_name === activeHolidayName && h.pre_season_start)
+      .sort((a, b) => a.holiday_date.localeCompare(b.holiday_date));
+    if (matching.length < 2) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    const pkDate = pk?.holiday_date || '';
+    const tyHoliday = matching.find(h => h.holiday_date === pkDate) || matching.find(h => h.holiday_date >= today) || matching[matching.length - 1];
+    const tyIdx = matching.indexOf(tyHoliday);
+    const lyHoliday = tyIdx > 0 ? matching[tyIdx - 1] : matching.find(h => h.holiday_date < tyHoliday.holiday_date) || matching[0];
+    if (tyHoliday === lyHoliday) return null;
+    // LY peak window = last year's ACTUAL peak_start → holiday_date
+    const lyPeakStart = phaseBoundaries(lyHoliday).peak.start;
+    const lyPeakEnd = lyHoliday.holiday_date;
 
-    // Aggregate from SQP data
+    // 2-week baseline window immediately before the peak (for daily-avg purchase delta)
+    const baseStart = addDaysLocal(lyPeakStart, -14);
+    const baseEnd = addDaysLocal(lyPeakStart, -1);
+
+    // SQP is weekly grain — include any week that OVERLAPS the target window
     const sqp = data.sqp_weekly || [];
-    const lyRows = sqp.filter(s => s.week_start >= lyPeakStart && s.week_start <= lyPeakEnd);
-    if (lyRows.length === 0) return null;
+    const overlaps = (wk: string, s: string, e: string) => wk <= e && addDaysLocal(wk, 6) >= s;
+    const peakRows = sqp.filter(s => overlaps(s.week_start, lyPeakStart, lyPeakEnd));
+    const baseRows = sqp.filter(s => overlaps(s.week_start, baseStart, baseEnd));
+    if (peakRows.length === 0) return null;
 
-    const termAgg: Record<string, { term: string; orders: number; impressions: number; clicks: number; families: Set<string> }> = {};
-    lyRows.forEach(s => {
-      if (!termAgg[s.search_term]) termAgg[s.search_term] = { term: s.search_term, orders: 0, impressions: 0, clicks: 0, families: new Set() };
-      termAgg[s.search_term].orders += s.orders || 0;
-      termAgg[s.search_term].impressions += s.impressions || 0;
-      termAgg[s.search_term].clicks += s.clicks || 0;
+    // Days in each window (weekly grain → distinct weeks × 7) for daily-average math
+    const peakDays = (new Set(peakRows.map(r => r.week_start)).size || 1) * 7;
+    const baseDays = (new Set(baseRows.map(r => r.week_start)).size || 1) * 7;
+
+    type Agg = { term: string; orders: number; impressions: number; clicks: number; amzVolume: number; amzSales: number; families: Set<string>; baseOrders: number };
+    const termAgg: Record<string, Agg> = {};
+    const ensure = (term: string) => (termAgg[term] ||= { term, orders: 0, impressions: 0, clicks: 0, amzVolume: 0, amzSales: 0, families: new Set(), baseOrders: 0 });
+    peakRows.forEach(s => {
+      const a = ensure(s.search_term);
+      a.orders += s.orders || 0;
+      a.impressions += s.impressions || 0;
+      a.clicks += s.clicks || 0;
+      a.amzVolume += s.amazon_impressions || 0;   // total Amazon search volume for the term
+      a.amzSales += s.amazon_orders || 0;          // total Amazon purchases (market-wide) for the term
       const fam = famFromType(s.product_type);
-      if (fam) termAgg[s.search_term].families.add(String(fam));
+      if (fam) a.families.add(String(fam));
     });
+    baseRows.forEach(s => { ensure(s.search_term).baseOrders += s.orders || 0; });
 
     const sorted = Object.values(termAgg).sort((a, b) => b.orders - a.orders);
     const totalOrders = sorted.reduce((s, t) => s + t.orders, 0);
@@ -608,16 +681,110 @@ export function PeakPage({ data }: { data: DashboardData }) {
     const top20Pct = totalOrders > 0 ? (top20Orders / totalOrders) * 100 : 0;
 
     return {
-      terms: top20.map(t => ({
-        ...t,
-        pctOfTotal: totalOrders > 0 ? (t.orders / totalOrders) * 100 : 0,
-        families: [...t.families].join(', '),
-      })),
+      terms: top20.map(t => {
+        const peakDaily = t.orders / peakDays;
+        const baseDaily = t.baseOrders / baseDays;
+        return {
+          term: t.term,
+          orders: t.orders,
+          impressions: t.impressions,
+          clicks: t.clicks,
+          amzVolume: t.amzVolume,
+          amzSales: t.amzSales,
+          pctOfTotal: totalOrders > 0 ? (t.orders / totalOrders) * 100 : 0,
+          families: [...t.families].join(', '),
+          peakDaily,
+          baseDaily,
+          dailyDelta: peakDaily - baseDaily,                                   // abs change in purchases/day
+          dailyDeltaPct: baseDaily > 0 ? ((peakDaily - baseDaily) / baseDaily) * 100 : null, // null = no baseline (new at peak)
+        };
+      }),
       totalOrders,
       top20Pct,
       dateRange: `${lyPeakStart} – ${lyPeakEnd}`,
+      baselineRange: `${baseStart} – ${baseEnd}`,
     };
-  }, [data.sqp_weekly, pk]);
+  }, [data.sqp_weekly, data.holidays, activeHolidayName, pk]);
+
+  // Sort state for the LY top-terms table
+  const [lyTermSort, setLyTermSort] = useState<{ key: 'orders' | 'pctOfTotal' | 'dailyDelta' | 'amzVolume' | 'amzSales' | 'impressions' | 'clicks'; dir: 'asc' | 'desc' }>({ key: 'orders', dir: 'desc' });
+  const lyTermsSorted = useMemo(() => {
+    if (!lyTopTerms) return [];
+    const { key, dir } = lyTermSort;
+    const m = dir === 'asc' ? 1 : -1;
+    return [...lyTopTerms.terms].sort((a, b) => (((a[key] ?? -Infinity) as number) - ((b[key] ?? -Infinity) as number)) * m);
+  }, [lyTopTerms, lyTermSort]);
+  const lyTermArrow = (k: typeof lyTermSort.key) => (lyTermSort.key === k ? (lyTermSort.dir === 'desc' ? ' ↓' : ' ↑') : '');
+  const lyTermSortBy = (k: typeof lyTermSort.key) => setLyTermSort(s => ({ key: k, dir: s.key === k && s.dir === 'desc' ? 'asc' : 'desc' }));
+
+  // ── Peak Keyword Plan: Research-style buckets, from V_PEAK_KEYWORD_RECS ──
+  const peakKwRecs = useMemo(() => {
+    const all = (data.peak_keyword_recs || []).filter(r =>
+      r.holiday_name === activeHolidayName && (!filters.family || r.parent_name === filters.family));
+    if (!all.length) return null;
+    const byPriority = (a: PeakKeywordRecRow, b: PeakKeywordRecRow) => b.priority_score - a.priority_score;
+    // INCREASE = existing terms to boost; trending first
+    const increase = all.filter(r => r.match_bucket === 'INCREASE')
+      .sort((a, b) => (Number(b.is_trending) - Number(a.is_trending)) || byPriority(a, b));
+    // New-term buckets mirror Research: only fit-qualified (ADD = rank>75)
+    const addOf = (b: string) => all.filter(r => r.match_bucket === b && r.recommendation === 'ADD').sort(byPriority);
+    return {
+      increase,
+      exact: addOf('EXACT'),
+      phrase: addOf('PHRASE'),
+      broad: addOf('BROAD'),
+      brand: all.filter(r => r.match_bucket === 'BRAND').sort(byPriority),
+      trendingCount: increase.filter(r => r.is_trending).length,
+      addCount: all.filter(r => r.recommendation === 'ADD').length,
+    };
+  }, [data.peak_keyword_recs, activeHolidayName, filters.family]);
+
+  // ── Per-product peak actions: roll the recs up to one action line per product ──
+  const peakProductActions = useMemo(() => {
+    const all = (data.peak_keyword_recs || []).filter(r =>
+      r.holiday_name === activeHolidayName && (!filters.family || r.parent_name === filters.family));
+    if (!all.length) return null;
+    const byFam: Record<string, { family: string; boost: number; trending: number; add: number; cautious: number; defense: number }> = {};
+    all.forEach(r => {
+      const f = (byFam[r.parent_name] ||= { family: r.parent_name, boost: 0, trending: 0, add: 0, cautious: 0, defense: 0 });
+      if (r.recommendation === 'INCREASE') { f.boost++; if (r.is_trending) f.trending++; }
+      else if (r.recommendation === 'INCREASE_CAUTIOUS') f.cautious++;
+      else if (r.recommendation === 'ADD') f.add++;
+      else if (r.recommendation === 'DEFENSE') f.defense++;
+    });
+    return Object.values(byFam)
+      .map(f => ({ ...f, action: (f.add >= 3 && f.add >= f.boost) ? 'NEW_CAMPAIGN' : f.boost > 0 ? 'SCALE' : f.add > 0 ? 'ADD_KW' : 'MONITOR' }))
+      .sort((a, b) => (b.boost + b.add) - (a.boost + a.add));
+  }, [data.peak_keyword_recs, activeHolidayName, filters.family]);
+
+  // ── Stuck campaigns to refresh before the peak ──
+  const peakStuck = useMemo(() => {
+    const rows = (data.peak_stuck_campaigns || []).filter(c => !filters.family || c.parent_name === filters.family);
+    if (!rows.length) return null;
+    const order: Record<string, number> = { BUDGET_CAPPED: 0, PAUSED: 1, DORMANT: 2, SHARE_DROPPED: 3 };
+    return [...rows].sort((a, b) => (order[a.stuck_flag] ?? 9) - (order[b.stuck_flag] ?? 9) || a.parent_name.localeCompare(b.parent_name));
+  }, [data.peak_stuck_campaigns, filters.family]);
+
+  // Export the full peak keyword plan (active holiday) as a CSV the team can action.
+  const exportPeakRecsCsv = () => {
+    const rows = (data.peak_keyword_recs || [])
+      .filter(r => r.holiday_name === activeHolidayName && (!filters.family || r.parent_name === filters.family))
+      .sort((a, b) => a.parent_name.localeCompare(b.parent_name) || b.priority_score - a.priority_score);
+    if (!rows.length) return;
+    const hdr = ['Family', 'Search Term', 'Bucket', 'Recommendation', 'Trending', 'Amazon Volume', 'Amazon Sales', 'Net ROAS', 'Research Rank', 'Priority', 'Reason'];
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [
+      hdr.join(','),
+      ...rows.map(r => [r.parent_name, r.search_term, r.match_bucket, r.recommendation, r.is_trending ? 'yes' : '',
+        r.amazon_volume, r.amazon_sales, r.ly_net_roas ?? '', r.research_rank ?? '', r.priority_score, r.reason].map(esc).join(',')),
+    ].join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `peak-keyword-plan-${activeHolidayName.replace(/\s+/g, '-')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   usePageSummary({ title: 'Peak', items: [{ label: 'Peak Planning', value: pk ? 'Active' : 'Inactive' }] });
 
@@ -827,7 +994,7 @@ export function PeakPage({ data }: { data: DashboardData }) {
             </div>
             {/* Days-to-peak range selector */}
             <div className="flex rounded-lg border border-zinc-700 overflow-hidden ml-2">
-              {([{ label: '±7d', before: 7, after: 7 }, { label: '±14d', before: 14, after: 14 }, { label: '±30d', before: 30, after: 30 }, { label: 'All', before: 999, after: 999 }] as const).map(r => {
+              {([{ label: '-7/+3d', before: 7, after: 3 }, { label: '±7d', before: 7, after: 7 }, { label: '±14d', before: 14, after: 14 }, { label: '±30d', before: 30, after: 30 }, { label: 'All', before: 999, after: 999 }] as const).map(r => {
                 const isActive = dtpRange.before === r.before && dtpRange.after === r.after;
                 return (
                   <button key={r.label} onClick={() => setDtpRange({ before: r.before, after: r.after })}
@@ -1021,7 +1188,9 @@ export function PeakPage({ data }: { data: DashboardData }) {
           {peakTrendGranularity === 'daily' && (
             <div className="text-[9px] text-zinc-600 mt-1 font-mono">
               Each bar = one day · Day 0 = peak holiday · TY peak: {dailyPeakTrendData?.tyHolidayDate || '—'} · LY peak: {dailyPeakTrendData?.lyHolidayDate || '—'}
-              {dtpRange.before < 999 && ` · Showing ±${dtpRange.before}d around peak`}
+              {dtpRange.before < 999 && (dtpRange.before === dtpRange.after
+                ? ` · Showing ±${dtpRange.before}d around peak`
+                : ` · Showing ${dtpRange.before}d before → ${dtpRange.after}d after peak`)}
             </div>
           )}
         </Card>
@@ -1193,15 +1362,17 @@ export function PeakPage({ data }: { data: DashboardData }) {
                       <th className="text-left px-2 py-1.5 w-6">#</th>
                       <th className="text-left px-2 py-1.5">Search Term</th>
                       <th className="text-left px-2 py-1.5">Families</th>
-                      <th className="text-right px-2 py-1.5">SQP Orders</th>
-                      <th className="text-right px-2 py-1.5">% of Total</th>
-                      <th className="text-right px-2 py-1.5">Impressions</th>
-                      <th className="text-right px-2 py-1.5">Clicks</th>
+                      <th className="text-right px-2 py-1.5 cursor-pointer select-none hover:text-foreground" onClick={() => lyTermSortBy('orders')}>SQP Orders{lyTermArrow('orders')}</th>
+                      <th className="text-right px-2 py-1.5 cursor-pointer select-none hover:text-foreground" onClick={() => lyTermSortBy('pctOfTotal')}>% of Total{lyTermArrow('pctOfTotal')}</th>
+                      <th className="text-right px-2 py-1.5 cursor-pointer select-none hover:text-foreground" onClick={() => lyTermSortBy('dailyDelta')} title="Change in avg purchases/day: peak window vs the 2 weeks before">Δ Purch/day{lyTermArrow('dailyDelta')}</th>
+                      <th className="text-right px-2 py-1.5 cursor-pointer select-none hover:text-foreground" onClick={() => lyTermSortBy('amzVolume')} title="Total Amazon search volume for this term (market-wide)">Amazon Volume{lyTermArrow('amzVolume')}</th>
+                      <th className="text-right px-2 py-1.5 cursor-pointer select-none hover:text-foreground" onClick={() => lyTermSortBy('amzSales')} title="Total Amazon purchases for this term (market-wide)">Amazon Sales{lyTermArrow('amzSales')}</th>
+                      <th className="text-right px-2 py-1.5 cursor-pointer select-none hover:text-foreground" onClick={() => lyTermSortBy('clicks')}>Clicks{lyTermArrow('clicks')}</th>
                       <th className="text-right px-2 py-1.5">Conv %</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {lyTopTerms.terms.map((t, i) => {
+                    {lyTermsSorted.map((t, i) => {
                       const cvr = t.clicks > 0 ? (t.orders / t.clicks) * 100 : 0;
                       return (
                         <tr key={t.term} className="border-b border-border-faint/50 hover:bg-white/[.02]">
@@ -1217,7 +1388,13 @@ export function PeakPage({ data }: { data: DashboardData }) {
                               <span className="font-mono text-amber-400 text-[10px] w-10 text-right">{t.pctOfTotal.toFixed(1)}%</span>
                             </div>
                           </td>
-                          <td className="px-2 py-1 text-right font-mono text-muted">{t.impressions.toLocaleString()}</td>
+                          <td className={`px-2 py-1 text-right font-mono ${t.dailyDelta > 0 ? 'text-emerald-400' : t.dailyDelta < 0 ? 'text-rose-400' : 'text-muted'}`}>
+                            {t.dailyDelta >= 0 ? '+' : ''}{t.dailyDelta.toFixed(1)}/d
+                            {t.dailyDeltaPct != null && <span className="text-faint text-[9px] ml-1">({t.dailyDeltaPct >= 0 ? '+' : ''}{t.dailyDeltaPct.toFixed(0)}%)</span>}
+                            {t.dailyDeltaPct == null && t.dailyDelta > 0 && <span className="text-faint text-[9px] ml-1">(new)</span>}
+                          </td>
+                          <td className="px-2 py-1 text-right font-mono text-muted">{t.amzVolume.toLocaleString()}</td>
+                          <td className="px-2 py-1 text-right font-mono text-muted">{t.amzSales.toLocaleString()}</td>
                           <td className="px-2 py-1 text-right font-mono text-muted">{t.clicks.toLocaleString()}</td>
                           <td className={`px-2 py-1 text-right font-mono ${cvr > 5 ? 'text-emerald-400' : 'text-muted'}`}>{fP(cvr)}</td>
                         </tr>
@@ -1226,6 +1403,105 @@ export function PeakPage({ data }: { data: DashboardData }) {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ─── Per-Product Peak Actions (rollup of the keyword recs) ─── */}
+      {peakProductActions && (
+        <Card className="mb-6">
+          <button onClick={() => setShowProdActions(p => !p)} className="flex items-center gap-2 w-full text-left mb-2">
+            <Zap size={16} className="text-amber-400" />
+            <span className="text-sm font-bold">Per-Product Peak Actions — {activeHolidayName}</span>
+            <span className="text-[10px] text-faint font-mono ml-1">{peakProductActions.length} products</span>
+            <ChevronRight size={12} className={`text-faint ml-auto transition-transform ${showProdActions ? 'rotate-90' : ''}`} />
+          </button>
+          {showProdActions && (
+            <div className="animate-in space-y-1.5">
+              {peakProductActions.map(p => {
+                const meta = ({
+                  NEW_CAMPAIGN: { label: '🆕 New campaign', cls: 'bg-blue-500/15 text-blue-400' },
+                  SCALE: { label: '↑ Scale existing', cls: 'bg-emerald-500/15 text-emerald-400' },
+                  ADD_KW: { label: '+ Add keywords', cls: 'bg-blue-500/15 text-blue-400' },
+                  MONITOR: { label: 'Monitor', cls: 'bg-white/[0.04] text-faint' },
+                } as Record<string, { label: string; cls: string }>)[p.action];
+                return (
+                  <div key={p.family} className="flex items-center gap-3 text-[12px] py-1.5 border-b border-border-faint/40">
+                    <span className="font-bold text-heading w-24 shrink-0 truncate">{p.family}</span>
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold whitespace-nowrap ${meta.cls}`}>{meta.label}</span>
+                    <div className="flex items-center gap-3 font-mono text-[11px] ml-auto">
+                      {p.boost > 0 && <span className="text-emerald-400">↑ {p.boost} boost{p.trending > 0 ? ` (${p.trending} ↗)` : ''}</span>}
+                      {p.add > 0 && <span className="text-blue-400">🆕 {p.add} add</span>}
+                      {p.cautious > 0 && <span className="text-amber-400">↓ {p.cautious} trim</span>}
+                      {p.defense > 0 && <span className="text-purple-400">🛡 {p.defense} defense</span>}
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="text-[9px] text-zinc-600 mt-1 font-mono">New campaign = ≥3 new keywords to add · Scale = raise bids on existing winners · trim = advertised but unprofitable at peak</div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ─── Peak Keyword Plan (from V_PEAK_KEYWORD_RECS) ─── */}
+      {peakKwRecs && (
+        <Card className="mb-6">
+          <div className="flex items-center gap-2 mb-2">
+            <button onClick={() => setShowKwPlan(p => !p)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+              <Zap size={16} className="text-blue-400 shrink-0" />
+              <span className="text-sm font-bold whitespace-nowrap">Peak Keyword Plan — {activeHolidayName}</span>
+              <span className="text-[10px] text-faint font-mono ml-1 truncate">
+                {peakKwRecs.increase.length} to boost{peakKwRecs.trendingCount ? ` (${peakKwRecs.trendingCount} ↗ trending)` : ''} · {peakKwRecs.addCount} to add
+              </span>
+            </button>
+            <button onClick={exportPeakRecsCsv} title="Download the full plan as CSV" className="text-[10px] font-semibold px-2 py-1 rounded-md border border-border/40 text-muted hover:text-foreground hover:border-border whitespace-nowrap shrink-0">⬇ CSV</button>
+            <button onClick={() => setShowKwPlan(p => !p)} className="shrink-0" aria-label="Toggle"><ChevronRight size={12} className={`text-faint transition-transform ${showKwPlan ? 'rotate-90' : ''}`} /></button>
+          </div>
+          {showKwPlan && (
+            <>
+              <div className="animate-in grid md:grid-cols-2 gap-x-6 gap-y-3">
+                <KwBucket title="↑ Boost existing" sub="advertised — raise bids" color="text-emerald-400" rows={peakKwRecs.increase} limit={12} />
+                <KwBucket title="🎯 Add — Exact" sub="new · rank≥75" color="text-blue-400" rows={peakKwRecs.exact} limit={8} />
+                <KwBucket title="🔤 Add — Phrase" sub="new · ≥3 words" color="text-blue-400" rows={peakKwRecs.phrase} limit={8} />
+                <KwBucket title="📡 Add — Broad" sub="new · high volume" color="text-blue-400" rows={peakKwRecs.broad} limit={6} />
+                {peakKwRecs.brand.length > 0 && <KwBucket title="🛡 Brand defense" sub="own-brand" color="text-purple-400" rows={peakKwRecs.brand} limit={6} />}
+              </div>
+              <div className="text-[9px] text-zinc-600 mt-2 font-mono">From last year's {activeHolidayName} peak demand × profitability + current trend (↗) · new terms gated on research fit (rank&gt;75) · hover a row for the reason</div>
+            </>
+          )}
+        </Card>
+      )}
+
+      {/* ─── Stuck campaigns to refresh before the peak ─── */}
+      {peakStuck && peakStuck.length > 0 && (
+        <Card className="mb-6">
+          <button onClick={() => setShowStuck(p => !p)} className="flex items-center gap-2 w-full text-left mb-2">
+            <AlertTriangle size={16} className="text-amber-400" />
+            <span className="text-sm font-bold">Stuck Campaigns — refresh before peak</span>
+            <span className="text-[10px] text-faint font-mono ml-1">{peakStuck.length} need attention</span>
+            <ChevronRight size={12} className={`text-faint ml-auto transition-transform ${showStuck ? 'rotate-90' : ''}`} />
+          </button>
+          {showStuck && (
+            <div className="animate-in space-y-1">
+              {peakStuck.slice(0, 20).map(c => {
+                const fm = ({
+                  BUDGET_CAPPED: { label: 'CAPPED', cls: 'bg-red-500/15 text-red-400' },
+                  PAUSED: { label: 'PAUSED', cls: 'bg-amber-500/15 text-amber-400' },
+                  DORMANT: { label: 'DORMANT', cls: 'bg-amber-500/15 text-amber-400' },
+                  SHARE_DROPPED: { label: 'SHARE ↓', cls: 'bg-blue-500/15 text-blue-400' },
+                } as Record<string, { label: string; cls: string }>)[c.stuck_flag] || { label: c.stuck_flag, cls: 'bg-white/[0.04] text-faint' };
+                return (
+                  <div key={c.campaign_name} className="flex items-center gap-2 text-[11px] py-1 border-b border-border-faint/40">
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0 ${fm.cls}`}>{fm.label}</span>
+                    <span className="font-mono text-faint text-[9px] w-16 shrink-0 truncate">{c.parent_name}</span>
+                    <span className="text-blue-300 truncate flex-1 min-w-0" title={c.campaign_name}>{c.campaign_name}</span>
+                    <span className="text-muted text-[10px] truncate max-w-[45%] hidden md:inline" title={c.reason}>{c.reason}</span>
+                  </div>
+                );
+              })}
+              <div className="text-[9px] text-zinc-600 mt-1 font-mono">From V_ADS_COACH campaign health · raise capped budgets · reactivate paused · refresh dormant before the peak</div>
             </div>
           )}
         </Card>

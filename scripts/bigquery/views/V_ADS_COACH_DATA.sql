@@ -987,6 +987,27 @@ term_hero AS (
   WHERE family_rank = 1
 ),
 
+-- Target-grain hero match: clicks-weighted majority of a keyword's search-term slices whose advertised
+-- ASIN is the family hero. Lets the TARGET (bid) SWITCH_HERO branch judge the keyword as a whole instead
+-- of fanning it into conflicting bid rows when individual queries diverge on hero (per-term hero
+-- correction stays in the HERO/TERM action paths, which are legitimately search-term grained).
+target_hero_match AS (
+  SELECT
+    a8.campaign_id,
+    a8.targeting,
+    a8.asin,
+    COALESCE(
+      SAFE_DIVIDE(
+        SUM(CASE WHEN a8.asin = th.hero_asin THEN a8.ads_clicks_8w ELSE 0 END),
+        NULLIF(SUM(a8.ads_clicks_8w), 0)
+      ) >= 0.5, FALSE
+    ) AS target_is_hero_match
+  FROM ads_8w a8
+  JOIN asin_economics ae ON a8.asin = ae.asin
+  LEFT JOIN term_hero th ON a8.search_term = th.search_term AND ae.parent_name = th.hero_parent_name
+  GROUP BY 1, 2, 3
+),
+
 -- Search term segment/classification
 term_classification AS (
   SELECT
@@ -1477,7 +1498,11 @@ active_term_data AS (
     -- per-search-term fan-out. target_net_roas_4w mirrors the ads_net_roas_4w formula on tr4 sums.
     COALESCE(cr4.clause_orders_4w, 0) as target_orders_4w,
     COALESCE(cr4.clause_clicks_4w, 0) as target_clicks_4w,
-    ROUND(SAFE_DIVIDE(cr4.clause_net_profit_4w, NULLIF(cr4.clause_spend_4w, 0)), 2) as target_net_roas_4w
+    ROUND(SAFE_DIVIDE(cr4.clause_net_profit_4w, NULLIF(cr4.clause_spend_4w, 0)), 2) as target_net_roas_4w,
+    -- Keyword-grain 4w spend + hero match — consumed by the TARGET bid decision so its money-bleeder
+    -- and SWITCH_HERO branches judge the whole keyword, not a single search-term slice.
+    COALESCE(cr4.clause_spend_4w, 0) as target_spend_4w,
+    COALESCE(thm.target_is_hero_match, FALSE) as target_is_hero_match
 
   FROM ads_8w a8
   JOIN asin_economics ae ON a8.asin = ae.asin
@@ -1489,6 +1514,7 @@ active_term_data AS (
   LEFT JOIN target_rollup_1w tr1 ON a8.campaign_id = tr1.campaign_id AND a8.targeting = tr1.targeting AND a8.asin = tr1.asin
   LEFT JOIN target_rollup_4w tr4 ON a8.campaign_id = tr4.campaign_id AND a8.targeting = tr4.targeting AND a8.asin = tr4.asin
   LEFT JOIN clause_rollup_4w cr4 ON a8.campaign_id = cr4.campaign_id AND a8.targeting = cr4.targeting
+  LEFT JOIN target_hero_match thm ON a8.campaign_id = thm.campaign_id AND a8.targeting = thm.targeting AND a8.asin = thm.asin
   LEFT JOIN target_rollup_lag trl ON a8.campaign_id = trl.campaign_id AND a8.targeting = trl.targeting AND a8.asin = trl.asin
   LEFT JOIN ads_lag alag ON a8.campaign_id = alag.campaign_id AND a8.search_term = alag.search_term AND a8.asin = alag.asin AND a8.targeting = alag.targeting
   LEFT JOIN ads_offseason aos ON a8.campaign_id = aos.campaign_id AND a8.search_term = aos.search_term AND a8.asin = aos.asin AND a8.targeting = aos.targeting
@@ -1716,7 +1742,9 @@ opportunity_data AS (
     CAST(999 AS INT64) as days_since_last_suggestion_camp,
     CAST(0 AS INT64) as target_orders_4w,
     CAST(0 AS INT64) as target_clicks_4w,
-    CAST(NULL AS FLOAT64) as target_net_roas_4w
+    CAST(NULL AS FLOAT64) as target_net_roas_4w,
+    CAST(0 AS FLOAT64) as target_spend_4w,
+    CAST(FALSE AS BOOL) as target_is_hero_match
 
   FROM sqp_with_purchases sp
   JOIN asin_economics ae ON sp.asin = ae.asin

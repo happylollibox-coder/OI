@@ -28,7 +28,7 @@ active_holidays AS (
       ELSE 'OFF_SEASON'
     END as today_phase
   FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
-  WHERE category = 'gift_season'
+  WHERE category IN ('gift_season', 'prime_event')  -- Prime Day drives BLITZ like gift seasons
     AND holiday_date BETWEEN DATE_SUB(CURRENT_DATE('America/New_York'), INTERVAL 10 DAY)
                         AND DATE_ADD(CURRENT_DATE('America/New_York'), INTERVAL 90 DAY)
 ),
@@ -215,7 +215,9 @@ coach_data AS (
       WHEN COALESCE(fcm.coach_mode,
         CASE WHEN (SELECT is_cooldown FROM global_cooldown) THEN 'COOLDOWN' ELSE 'GUARDIAN' END
       ) = 'BLITZ' AND COALESCE(fcm.current_phase, 'OFF_SEASON') = 'PEAK'
-        THEN d.ads_net_roas_3d
+        -- keyword-grain recent-3d net ROAS (was per-search-term d.ads_net_roas_3d, which fanned one
+        -- keyword into conflicting bid tiers); target_lag_net_roas is the same 3d window at target grain.
+        THEN d.target_lag_net_roas
       WHEN COALESCE(fcm.coach_mode,
         CASE WHEN (SELECT is_cooldown FROM global_cooldown) THEN 'COOLDOWN' ELSE 'GUARDIAN' END
       ) = 'BLITZ'
@@ -378,8 +380,8 @@ ly_peak_campaign_roas AS (
     ON fa.date BETWEEN h_ly.peak_start AND h_ly.holiday_date
     AND (STRPOS(UPPER(fa.campaign_name), UPPER(h_now.holiday_name)) > 0
       OR STRPOS(UPPER(fa.campaign_name), UPPER(REGEXP_REPLACE(h_now.holiday_name, r"'?s?\s+Day$", ''))) > 0)
-  WHERE h_now.category = 'gift_season'
-    AND h_ly.category = 'gift_season'
+  WHERE h_now.category IN ('gift_season', 'prime_event')
+    AND h_ly.category IN ('gift_season', 'prime_event')
     AND h_now.holiday_date BETWEEN DATE_SUB(CURRENT_DATE('America/New_York'), INTERVAL 10 DAY)
                                 AND DATE_ADD(CURRENT_DATE('America/New_York'), INTERVAL 90 DAY)
   GROUP BY h_now.holiday_name
@@ -710,10 +712,10 @@ SELECT
 
     -- SWITCH_HERO: wrong ASIN at TARGET level (Bug #5 fix: moved from term-level)
     -- Case 1: zero orders with current ASIN + hero exists + enough clicks at target level
-    WHEN d.hero_asin IS NOT NULL AND NOT d.is_hero_match
+    WHEN d.hero_asin IS NOT NULL AND NOT d.target_is_hero_match
       AND d.target_orders_8w = 0 AND d.target_clicks_8w >= 20 THEN 'SWITCH_HERO'
     -- Case 2: hero outperforms by 50%+ at target level
-    WHEN d.hero_asin IS NOT NULL AND NOT d.is_hero_match
+    WHEN d.hero_asin IS NOT NULL AND NOT d.target_is_hero_match
       AND d.target_orders_8w > 0 AND d.target_clicks_8w >= 20
       AND d.hero_ads_cvr_pct > 0
       AND SAFE_DIVIDE(d.hero_ads_cvr_pct, NULLIF(SAFE_DIVIDE(d.target_orders_8w, NULLIF(d.target_clicks_8w, 0)) * 100, 0)) >= 1.5
@@ -747,10 +749,14 @@ SELECT
     -- ═══ MONEY BLEEDER (fit): 0 orders (4w) + real spend + enough clicks + research-fit → REDUCE_BID ═══
     -- The standard reduce tier needs target_orders_8w > 0; a fit bleeder has 0 orders, so it would
     -- otherwise fall through to MONITOR_TARGET. Cut the bid hard (recommended_bid handles -BLEEDER_REDUCE_PCT).
+    -- Keyword-grain bleeder: judge the whole target (summed across its search terms), not a single
+    -- 0-order slice — a per-term slice firing REDUCE while the keyword is profitable was the main source
+    -- of contradictory INCREASE+REDUCE rows on one keyword_id (research_rank stays per-term but is moot
+    -- here: the gate only reaches it when the entire keyword has 0 orders in 4w).
     WHEN d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
-      AND COALESCE(d.ads_orders_4w, 0) = 0
-      AND COALESCE(d.ads_spend_4w, 0) >= 5
-      AND COALESCE(d.ads_clicks_4w, 0) >= d.th_bleeder_min_clicks
+      AND COALESCE(d.target_orders_4w, 0) = 0
+      AND COALESCE(d.target_spend_4w, 0) >= 5
+      AND COALESCE(d.target_clicks_4w, 0) >= d.th_bleeder_min_clicks
       AND COALESCE(d.research_rank, 0) >= d.th_bleeder_fit_rank
       AND NOT (
         (d.coach_mode = 'GUARDIAN' AND d.days_since_last_bid_change < 7)
@@ -1058,10 +1064,12 @@ SELECT
     -- term's CPC is BELOW the current bid (its purpose: keep the bid competitive enough to win some
     -- clicks). When the bid is already at/below CPC (stale/SB data), the floor is moot → apply the
     -- full cut down to the $0.10 minimum. Always non-increasing.
+    -- Keyword-grain bleeder cut — must mirror the target_action bleeder gate above (kept in sync so the
+    -- REDUCE_BID action and its recommended_bid fire on the same whole-keyword condition).
     WHEN d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
-      AND COALESCE(d.ads_orders_4w, 0) = 0
-      AND COALESCE(d.ads_spend_4w, 0) >= 5
-      AND COALESCE(d.ads_clicks_4w, 0) >= d.th_bleeder_min_clicks
+      AND COALESCE(d.target_orders_4w, 0) = 0
+      AND COALESCE(d.target_spend_4w, 0) >= 5
+      AND COALESCE(d.target_clicks_4w, 0) >= d.th_bleeder_min_clicks
       AND COALESCE(d.research_rank, 0) >= d.th_bleeder_fit_rank
       THEN GREATEST(
         d.current_bid * (1 - d.th_bleeder_reduce_pct),

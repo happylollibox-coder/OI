@@ -11,7 +11,7 @@ export type DatasetName =
   | 'coach_campaigns' | 'experiment_evaluations' | 'keyword_predictions'
   | 'brand_strength_weekly' | 'coach_phrase_negatives' | 'hot_signals' | 'storage_costs'
   | 'supply_chain' | 'supply_pos' | 'supply_payments' | 'supply_shipments'
-  | 'peak_relevance' | 'family_occasions' | 'coach_strategy' | 'ads_focus_terms'
+  | 'peak_relevance' | 'peak_keyword_recs' | 'peak_stuck_campaigns' | 'family_occasions' | 'coach_strategy' | 'ads_focus_terms'
   | 'ads_focus_keywords' | 'campaign_launch_perf' | 'campaign_launch_monthly'
   | 'plan_ads_targets' | 'asin_oos_days' | 'negative_conflicts'
   | 'strategy_campaign_templates' | 'coach_cross_sell' | 'negative_keywords'

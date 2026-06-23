@@ -33,6 +33,12 @@ BEGIN
   MERGE `onyga-482313.OI.FACT_EXPERIMENT_DAILY` AS target
   USING (
     WITH active_experiments AS (
+      -- One row per experiment_id. DIM_EXPERIMENT has PRIMARY KEY (experiment_id)
+      -- NOT ENFORCED, so BigQuery does not prevent duplicate rows (e.g. a
+      -- double-submit from the Admin "assign campaign" endpoint, whose
+      -- INSERT ... WHERE NOT EXISTS guard is not race-safe). A dup here would
+      -- double the date spine and break the MERGE with
+      -- "UPDATE/MERGE must match at most one source row". Keep the latest.
       SELECT
         e.experiment_id,
         e.start_date,
@@ -41,6 +47,10 @@ BEGIN
         DATE_SUB(e.start_date, INTERVAL e.baseline_days DAY) as baseline_start
       FROM `onyga-482313.OI.DIM_EXPERIMENT` e
       WHERE e.status = 'ACTIVE'
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY e.experiment_id
+        ORDER BY e.updated_at DESC, e.start_date DESC, e.baseline_days DESC
+      ) = 1
     ),
     -- Generate date spine for each experiment (all dates from start to today)
     experiment_dates AS (

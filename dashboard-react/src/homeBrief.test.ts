@@ -152,15 +152,16 @@ function makeData(): DashboardData {
     asin_oos_days: [],
     actions: [],
     peak: [],
-    _meta: { data_freshness: { performance_max_date: PERF, ads_max_date: PERF } },
+    // ads (Jun 19) one day ahead of orders (Jun 18) → an ads-only "Today" exists.
+    _meta: { data_freshness: { performance_max_date: PERF, ads_max_date: '2026-06-19' } },
   } as unknown as DashboardData;
 }
 
 describe('buildBriefModel', () => {
-  it('enables Today only when ads data reaches today', () => {
-    expect(buildBriefModel(makeData(), 'yday', NOW).todayEnabled).toBe(true);
+  it('enables Today only when ads data is ahead of the orders date', () => {
+    expect(buildBriefModel(makeData(), 'yday', NOW).todayEnabled).toBe(true); // ads 06-19 > perf 06-18
     const stale = makeData();
-    stale._meta.data_freshness!.ads_max_date = '2026-06-17';
+    stale._meta.data_freshness!.ads_max_date = '2026-06-18'; // == perf → not ahead
     const m = buildBriefModel(stale, 'yday', NOW);
     expect(m.todayEnabled).toBe(false);
     expect(m.todayDisabledReason).toBeTruthy();
@@ -185,13 +186,17 @@ describe('buildBriefModel', () => {
     expect(org.cur).toBeCloseTo(60); // 30 organic_units / 50 units
   });
 
-  it('per-product moves use full P&L (sales + profit) outside Today mode', () => {
+  it('per-product shows Sales / Units / Spend / CPC with absolute + trend', () => {
     const m = buildBriefModel(makeData(), 'yday', NOW);
     const lolli = m.families.find(f => f.family === 'Lollibox')!;
     const box = lolli.products.find(p => p.name === 'Box Classic')!;
     expect(box).toBeTruthy();
-    expect(box.text).toMatch(/sales \+25%/);
-    expect(box.text).toMatch(/profit \+33%/);
+    expect(box.metrics.map(x => x.key)).toEqual(['sales', 'units', 'ad_cost', 'cpc']);
+    const sales = box.metrics.find(x => x.key === 'sales')!;
+    const units = box.metrics.find(x => x.key === 'units')!;
+    expect(sales.dir).toBe('up');
+    expect(Math.round(sales.deltaPct)).toBe(25); // 1000 vs 800/day avg
+    expect(units.dir).toBe('up');
   });
 
   it('flags Bottle out-of-stock risk and marks it red', () => {

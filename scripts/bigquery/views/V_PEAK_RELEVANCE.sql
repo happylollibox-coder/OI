@@ -13,7 +13,7 @@ WITH holidays AS (
     boost_start,
     peak_start
   FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
-  WHERE category = 'gift_season'
+  WHERE category IN ('gift_season', 'prime_event')  -- Prime Day judged for peak lift like gift seasons
     AND holiday_date < CURRENT_DATE()  -- only evaluate past holidays with actual data
 ),
 
@@ -75,7 +75,10 @@ peak_agg AS (
   JOIN `onyga-482313.OI.T_UNIFIED_DAILY` d
     ON d.date BETWEEN hp.peak_period_start AND hp.peak_period_end
   JOIN family_data_range fr ON d.family = fr.family
-    AND hp.peak_period_start >= fr.first_date  -- family must have data for this period
+    -- Pre-peak maturity: family must have >=90d of history BEFORE the baseline window.
+    -- Otherwise a product that launched at/near the LY peak shows its launch ramp as a
+    -- seasonal "lift" (e.g. Bottle/LolliME launched into Prime 2025 → false +340% peak).
+    AND hp.baseline_start >= DATE_ADD(fr.first_date, INTERVAL 90 DAY)
   WHERE d.family IS NOT NULL AND d.family != ''
   GROUP BY hp.holiday_name, hp.holiday_date, d.family
 ),
@@ -101,7 +104,7 @@ baseline_agg AS (
   JOIN `onyga-482313.OI.T_UNIFIED_DAILY` d
     ON d.date BETWEEN hp.baseline_start AND hp.baseline_end
   JOIN family_data_range fr ON d.family = fr.family
-    AND hp.baseline_start >= fr.first_date
+    AND hp.baseline_start >= DATE_ADD(fr.first_date, INTERVAL 90 DAY)  -- pre-peak maturity gate (matches peak_agg)
   WHERE d.family IS NOT NULL AND d.family != ''
   GROUP BY hp.holiday_name, hp.holiday_date, d.family
 ),

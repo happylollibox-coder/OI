@@ -58,8 +58,8 @@ VALUES
   ('2025-05-11', 'Mothers Day', 'gift_season', 21, '2025-04-20', '2025-04-20', '2025-04-20', '2025-05-10', '2025-05-14'),
   -- Fathers Day: single-phase
   ('2025-06-15', 'Fathers Day', 'gift_season', 21, '2025-05-25', '2025-05-25', '2025-05-25', '2025-06-14', '2025-06-18'),
-  -- Prime Day: single-phase
-  ('2025-07-15', 'Prime Day', 'prime_event', 14, '2025-07-01', '2025-07-01', '2025-07-01', '2025-07-14', '2025-07-18'),
+  -- Prime Day (actual 4-day event Jul 8-11, 2025): single-phase PEAK over the event days, no cooldown
+  ('2025-07-11', 'Prime Day', 'prime_event', 3, '2025-07-08', '2025-07-08', '2025-07-08', NULL, NULL),
   -- Back to School (Aug 1): no PRE_PEAK (pre=boost=28d), peak=25d
   ('2025-08-01', 'Back to School', 'back_to_school', 28, '2025-07-04', '2025-07-04', '2025-07-07', '2025-07-31', '2025-08-04'),
   -- Halloween: single-phase
@@ -82,8 +82,8 @@ VALUES
   ('2026-05-10', 'Mothers Day', 'gift_season', 21, '2026-04-19', '2026-04-19', '2026-04-19', '2026-05-09', '2026-05-13'),
   -- Fathers Day
   ('2026-06-21', 'Fathers Day', 'gift_season', 21, '2026-05-31', '2026-05-31', '2026-05-31', '2026-06-20', '2026-06-24'),
-  -- Prime Day
-  ('2026-07-15', 'Prime Day', 'prime_event', 14, '2026-07-01', '2026-07-01', '2026-07-01', '2026-07-14', '2026-07-18'),
+  -- Prime Day (actual 4-day event Jun 23-26, 2026): single-phase PEAK over the event days, no cooldown
+  ('2026-06-26', 'Prime Day', 'prime_event', 3, '2026-06-23', '2026-06-23', '2026-06-23', NULL, NULL),
   -- Back to School (Aug 1)
   ('2026-08-01', 'Back to School', 'back_to_school', 28, '2026-07-04', '2026-07-04', '2026-07-07', '2026-07-31', '2026-08-04'),
   -- Halloween

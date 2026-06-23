@@ -438,6 +438,22 @@ views:
       - T_UNIFIED_DAILY
       - DIM_US_HOLIDAYS
 
+  - name: "V_PEAK_KEYWORD_RECS"
+    description: "Peak keyword recommendations per upcoming occasion × family — LY_PEAK source (peak-relevant families, from LY peak demand) + RESEARCH source (non-LY families, from V_RESEARCH_RANKED forward fit+demand); match-type buckets (INCREASE/EXACT/PHRASE/BROAD/BRAND), is_trending, DEFENSE for own-brand. Peak page card; Phase 2: BLITZ coacher."
+    source_files: ["scripts/bigquery/views/V_PEAK_KEYWORD_RECS.sql"]
+    dependencies:
+      - V_PEAK_RELEVANCE
+      - DIM_US_HOLIDAYS
+      - V_SQP_ADS_BY_TERM
+      - V_RESEARCH_RANKED
+      - DIM_PRODUCT
+
+  - name: "V_PEAK_STUCK_CAMPAIGNS"
+    description: "Campaigns to refresh before a peak, per family: PAUSED / BUDGET_CAPPED / DORMANT / SHARE_DROPPED, from V_ADS_COACH campaign-level fields. Peak page 'Stuck campaigns' card."
+    source_files: ["scripts/bigquery/views/V_PEAK_STUCK_CAMPAIGNS.sql"]
+    dependencies:
+      - V_ADS_COACH
+
   - name: "V_UNIFIED_DAILY"
     description: "Unified daily performance view — single source of truth for ads + sales + organic"
     source_files: ["scripts/bigquery/views/V_UNIFIED_DAILY.sql"]

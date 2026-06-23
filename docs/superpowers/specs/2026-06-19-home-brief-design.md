@@ -123,9 +123,15 @@ P&L** (sales + net profit); **organic %** is now real (`organic_units / units`),
 `(orders − ad_orders)` proxy. Also wired `asin_oos_days` + `daily_trends_by_asin` into `home`'s
 dataset set — fixes a latent gap where the brief only painted because idle-prefetch had warmed those.
 
-**#2 Hours-freshness gate — DECIDED: keep the proxy.** `V_DATA_FRESHNESS` is date-grain only;
-Ori chose to keep `ads_max_date === today` (no hour check). No code change. A true hours/sync
-signal can be added later if the early-morning partial-day view becomes a problem.
+**#2 Today gate — REVISED 2026-06-19.** No hour signal exists (`V_DATA_FRESHNESS` is date-grain).
+The original `ads_max_date === system-today` proxy was wrong: with the normal 1–2 day ads lag it left
+"Today · Ads" perpetually greyed. Corrected to enable when **`ads_max_date > performance_max_date`**
+(an ads-only day beyond the orders watermark), and "Today" now anchors on `ads_max_date`, not the wall
+clock — matching the original "Today = ads-only, before orders catch up" intent.
+
+**Per-product + family measures (revised).** Per-product line shows **Sales / Units / Ad Spend / CPC**
+(absolute value + trend), not sales/profit %; a product is listed only when a *volume* measure moved.
+Family KPI strip adds **Ad Spend** and **CPC**. Ad-spend/CPC deltas render neutral (not green/red).
 
 **#3 Peak baseline — DONE: peak-anchor-relative.** `resolveWindow` now takes `lyShiftDays`;
 `peakShiftDays(holidays, pk)` computes the gap between this year's and last year's peak anchor

@@ -33,7 +33,7 @@ const ZONE_LABELS: Record<string, string> = {
 };
 function zoneLabel(z: string): string { return ZONE_LABELS[z] || (z || '--'); }
 
-export function FamilyPage({ data, family, onNavExperiment, focus }: {
+export function FamilyPage({ data, family: familyProp, onNavExperiment, focus }: {
   data: DashboardData; family: FamilyName | null; onNavExperiment?: (eid: string) => void; focus?: 'sqp';
 }) {
   const sqpFocusRef = useRef<HTMLDivElement>(null);
@@ -46,6 +46,14 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
   }, [focus]);
   const { filters, setFilter } = useFilters();
   const { getFamily } = useProductFamily();
+  // SQP page gets its own family selector (default All), independent of the global filter.
+  const [sqpFamily, setSqpFamily] = useState<FamilyName | null>(null);
+  const family = focus === 'sqp' ? sqpFamily : familyProp;
+  const sqpFamilyList = useMemo(() => {
+    const s = new Set<string>();
+    (data.sqp_ads_by_term || []).forEach(r => { if (r.parent_name) s.add(r.parent_name); });
+    return [...s].sort();
+  }, [data.sqp_ads_by_term]);
   const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
   const showAllFamilies = family == null;
   const info = family ? (FAMILIES[family] || { code: family, color: '#3b82f6' }) : { code: 'All', color: '#3b82f6' };
@@ -899,6 +907,25 @@ export function FamilyPage({ data, family, onNavExperiment, focus }: {
           ? (showAllFamilies ? 'Search Query Performance — all families' : `Search Query Performance — ${info.code}`)
           : showAllFamilies ? 'SQP across all product families' : info.code + ' Product Family'}
       />
+
+      {focus === 'sqp' && (
+        <div className="flex gap-1.5 mb-4 flex-wrap">
+          {([null, ...sqpFamilyList] as (FamilyName | null)[]).map(f => {
+            const active = sqpFamily === f;
+            return (
+              <button
+                key={f ?? 'all'}
+                onClick={() => setSqpFamily(f)}
+                className={`px-3 py-1 text-xs font-semibold rounded-lg border transition-all ${
+                  active ? 'border-blue-500/40 bg-blue-500/10 text-blue-400' : 'border-border/30 bg-white/[0.02] text-muted hover:border-border/60 hover:text-subtle'
+                }`}
+              >
+                {f ?? 'All'}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {bestRoiProduct && (
         <div className="mb-3.5">

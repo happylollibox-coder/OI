@@ -47,6 +47,8 @@ import type {
   StorageCostRow,
   SupplyChainRow,
   PeakRelevanceRow,
+  PeakKeywordRecRow,
+  PeakStuckCampaignRow,
   SupplyPORow,
   SupplyPaymentRow,
   SupplyShipmentRow,
@@ -378,7 +380,10 @@ async function loadPeakFromCube(): Promise<PeakRow[]> {
   });
   const today = new Date().toISOString().slice(0, 10);
   const futureHolidays = (rows as Record<string, unknown>[])
-    .filter(r => fmtDate(r['Holidays.holidayDate']) > today && String(r['Holidays.category'] ?? '') === 'gift_season')
+    .filter(r => {
+      const cat = String(r['Holidays.category'] ?? '');
+      return fmtDate(r['Holidays.holidayDate']) > today && (cat === 'gift_season' || cat === 'prime_event');
+    })
     .sort((a, b) => fmtDate(a['Holidays.holidayDate'] as string).localeCompare(fmtDate(b['Holidays.holidayDate'] as string)));
   // Return ALL future holidays — PeakPage picks the first "real peak" via peak_relevance
   return futureHolidays.map(next => {
@@ -946,6 +951,67 @@ async function loadPeakRelevanceFromCube(): Promise<PeakRelevanceRow[]> {
     peak_avg_daily_orders: r['PeakRelevance.peakAvgDailyOrders'] != null ? Number(r['PeakRelevance.peakAvgDailyOrders']) : null,
     baseline_net_roas: r['PeakRelevance.baselineNetRoas'] != null ? Number(r['PeakRelevance.baselineNetRoas']) : null,
     peak_net_roas: r['PeakRelevance.peakNetRoas'] != null ? Number(r['PeakRelevance.peakNetRoas']) : null,
+  }));
+}
+
+/** PeakKeywordRecs → peak_keyword_recs (per occasion × family × term) */
+async function loadPeakKeywordRecsFromCube(): Promise<PeakKeywordRecRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'PeakKeywordRecs.holidayName', 'PeakKeywordRecs.parentName', 'PeakKeywordRecs.searchTerm',
+      'PeakKeywordRecs.targetingStatus', 'PeakKeywordRecs.recommendation',
+      'PeakKeywordRecs.matchBucket', 'PeakKeywordRecs.isTrending', 'PeakKeywordRecs.isOwnBrand', 'PeakKeywordRecs.wordCount',
+      'PeakKeywordRecs.lyPeakOrders', 'PeakKeywordRecs.amazonVolume', 'PeakKeywordRecs.amazonSales',
+      'PeakKeywordRecs.lyNetRoas', 'PeakKeywordRecs.lyAdSpend', 'PeakKeywordRecs.researchRank',
+      'PeakKeywordRecs.isCurrentlyAdvertised', 'PeakKeywordRecs.priorityScore', 'PeakKeywordRecs.reason',
+    ],
+    limit: 5000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    holiday_name: String(r['PeakKeywordRecs.holidayName'] ?? ''),
+    parent_name: String(r['PeakKeywordRecs.parentName'] ?? ''),
+    search_term: String(r['PeakKeywordRecs.searchTerm'] ?? ''),
+    targeting_status: String(r['PeakKeywordRecs.targetingStatus'] ?? ''),
+    recommendation: String(r['PeakKeywordRecs.recommendation'] ?? ''),
+    match_bucket: String(r['PeakKeywordRecs.matchBucket'] ?? ''),
+    is_trending: r['PeakKeywordRecs.isTrending'] === true || r['PeakKeywordRecs.isTrending'] === 'true',
+    is_own_brand: r['PeakKeywordRecs.isOwnBrand'] === true || r['PeakKeywordRecs.isOwnBrand'] === 'true',
+    word_count: Number(r['PeakKeywordRecs.wordCount'] ?? 0),
+    // ly_peak_orders below
+    ly_peak_orders: Number(r['PeakKeywordRecs.lyPeakOrders'] ?? 0),
+    amazon_volume: Number(r['PeakKeywordRecs.amazonVolume'] ?? 0),
+    amazon_sales: Number(r['PeakKeywordRecs.amazonSales'] ?? 0),
+    ly_net_roas: r['PeakKeywordRecs.lyNetRoas'] != null ? Number(r['PeakKeywordRecs.lyNetRoas']) : null,
+    ly_ad_spend: r['PeakKeywordRecs.lyAdSpend'] != null ? Number(r['PeakKeywordRecs.lyAdSpend']) : null,
+    research_rank: r['PeakKeywordRecs.researchRank'] != null ? Number(r['PeakKeywordRecs.researchRank']) : null,
+    is_currently_advertised: r['PeakKeywordRecs.isCurrentlyAdvertised'] === true || r['PeakKeywordRecs.isCurrentlyAdvertised'] === 'true',
+    priority_score: Number(r['PeakKeywordRecs.priorityScore'] ?? 0),
+    reason: String(r['PeakKeywordRecs.reason'] ?? ''),
+  }));
+}
+
+/** PeakStuckCampaigns → peak_stuck_campaigns (campaigns to refresh before a peak) */
+async function loadPeakStuckCampaignsFromCube(): Promise<PeakStuckCampaignRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'PeakStuckCampaigns.campaignName', 'PeakStuckCampaigns.parentName', 'PeakStuckCampaigns.campaignState',
+      'PeakStuckCampaigns.stuckFlag', 'PeakStuckCampaigns.budgetUtilPct', 'PeakStuckCampaigns.budget',
+      'PeakStuckCampaigns.recentOrders', 'PeakStuckCampaigns.netRoas', 'PeakStuckCampaigns.daysSinceBudgetChg',
+      'PeakStuckCampaigns.reason',
+    ],
+    limit: 500,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    campaign_name: String(r['PeakStuckCampaigns.campaignName'] ?? ''),
+    parent_name: String(r['PeakStuckCampaigns.parentName'] ?? ''),
+    campaign_state: String(r['PeakStuckCampaigns.campaignState'] ?? ''),
+    stuck_flag: String(r['PeakStuckCampaigns.stuckFlag'] ?? ''),
+    budget_util_pct: r['PeakStuckCampaigns.budgetUtilPct'] != null ? Number(r['PeakStuckCampaigns.budgetUtilPct']) : null,
+    budget: r['PeakStuckCampaigns.budget'] != null ? Number(r['PeakStuckCampaigns.budget']) : null,
+    recent_orders: r['PeakStuckCampaigns.recentOrders'] != null ? Number(r['PeakStuckCampaigns.recentOrders']) : null,
+    net_roas: r['PeakStuckCampaigns.netRoas'] != null ? Number(r['PeakStuckCampaigns.netRoas']) : null,
+    days_since_budget_chg: r['PeakStuckCampaigns.daysSinceBudgetChg'] != null ? Number(r['PeakStuckCampaigns.daysSinceBudgetChg']) : null,
+    reason: String(r['PeakStuckCampaigns.reason'] ?? ''),
   }));
 }
 
@@ -2420,6 +2486,8 @@ export const DATASET_LOADERS: Record<DatasetName, () => Promise<unknown>> = {
   supply_payments: loadSupplyPaymentsFromCube,
   supply_shipments: loadSupplyShipmentsFromCube,
   peak_relevance: loadPeakRelevanceFromCube,
+  peak_keyword_recs: loadPeakKeywordRecsFromCube,
+  peak_stuck_campaigns: loadPeakStuckCampaignsFromCube,
   family_occasions: loadFamilyOccasionsFromCube,
   coach_strategy: loadCoachStrategyFromCube,
   ads_focus_terms: loadAdsFocusTermsFromCube,

@@ -48,7 +48,7 @@ export interface MetricDelta {
 
 export interface ProductMove {
   name: string;
-  text: string;
+  metrics: MetricDelta[];
 }
 
 export interface AttentionItem {
@@ -125,6 +125,7 @@ function addAds(a: Agg, adsRows: Ads7dRow[], productToFamily: Record<string, str
     a.ads_spend += r.spend || 0;
     a.ads_sales += r.sales || 0;
     a.ads_orders += r.orders || 0;
+    a.clicks += r.clicks || 0;
   }
 }
 
@@ -188,14 +189,15 @@ export function peakShiftDays(
   return shift >= 330 && shift <= 400 ? shift : DEFAULT; // sanity: ~1 year ± 5 weeks
 }
 
-export function resolveWindow(mode: DateMode, perfMax: string, _adsMax: string, pk: PeakRow | null, now: Date = new Date(), lyShiftDays = 364): ResolvedWindow {
-  const today = todayStr(now);
+export function resolveWindow(mode: DateMode, perfMax: string, adsMax: string, pk: PeakRow | null, now: Date = new Date(), lyShiftDays = 364): ResolvedWindow {
   if (mode === 'today') {
+    // "Today" = the latest ads-only day (beyond the orders watermark), not the wall clock.
+    const day = adsMax || todayStr(now);
     return {
-      curStart: today, curEnd: today,
-      baseStart: addDays(today, -7), baseEnd: addDays(today, -1),
+      curStart: day, curEnd: day,
+      baseStart: addDays(day, -7), baseEnd: addDays(day, -1),
       baseScale: 1 / 7, adsOnly: true, peak: false,
-      label: 'Today so far · ads only · vs 7-day avg',
+      label: `${day} · ads only · vs 7-day avg`,
     };
   }
   if (mode === 'yday') {
@@ -251,6 +253,8 @@ export function classifyDelta(
 
 const netRoas = (a: Agg) => a.ad_cost ? (a.sales - a.cogs) / a.ad_cost : 0;
 const adsRoas = (a: Agg) => a.ads_spend ? a.ads_sales / a.ads_spend : 0;
+const cpc = (a: Agg) => a.clicks ? a.ad_cost / a.clicks : 0;
+const adsCpc = (a: Agg) => a.clicks ? a.ads_spend / a.clicks : 0;
 // True organic share from organic_units (UnifiedPerformance); falls back to the
 // (orders − ad_orders)/orders proxy only if units are missing.
 const organicPct = (a: Agg) =>
@@ -266,6 +270,7 @@ function familyKpis(cur: Agg, base: Agg, scale: number, adsOnly: boolean, th: Br
       classifyDelta('ads_sales', 'Ads Sales', cur.ads_sales, base.ads_sales * scale, 'money', th),
       classifyDelta('ads_orders', 'Ads Orders', cur.ads_orders, base.ads_orders * scale, 'int', th),
       classifyDelta('ads_roas', 'Ads ROAS', adsRoas(cur), adsRoas(base), 'ratio', th),
+      classifyDelta('cpc', 'CPC', adsCpc(cur), adsCpc(base), 'money', th),
     ];
   }
   return [
@@ -273,6 +278,8 @@ function familyKpis(cur: Agg, base: Agg, scale: number, adsOnly: boolean, th: Br
     classifyDelta('net_profit', 'Net Profit', cur.net_profit, base.net_profit * scale, 'money', th),
     classifyDelta('net_roas', 'Net ROAS', netRoas(cur), netRoas(base), 'ratio', th),
     classifyDelta('organic_pct', 'Organic', organicPct(cur), organicPct(base), 'pct', th),
+    classifyDelta('ad_cost', 'Ad Spend', cur.ad_cost, base.ad_cost * scale, 'money', th),
+    classifyDelta('cpc', 'CPC', cpc(cur), cpc(base), 'money', th),
   ];
 }
 
@@ -299,15 +306,45 @@ export function familyOosRisks(
 
 /* ── Per-product movement ────────────────────────────────────────────────── */
 
+// Per-product measure set (obj: Sales / Units / Ad Spend / CPC), absolute values + trend.
+function productMetricSet(cur: Agg, base: Agg, scale: number, adsOnly: boolean, th: BriefThresholds): MetricDelta[] {
+  if (adsOnly) {
+    return [
+      classifyDelta('sales', 'Sales', cur.ads_sales, base.ads_sales * scale, 'money', th),
+      classifyDelta('units', 'Units', cur.ads_orders, base.ads_orders * scale, 'int', th),
+      classifyDelta('ad_cost', 'Spend', cur.ads_spend, base.ads_spend * scale, 'money', th),
+      classifyDelta('cpc', 'CPC', adsCpc(cur), adsCpc(base), 'money', th),
+    ];
+  }
+  return [
+    classifyDelta('sales', 'Sales', cur.sales, base.sales * scale, 'money', th),
+    classifyDelta('units', 'Units', cur.units, base.units * scale, 'int', th),
+    classifyDelta('ad_cost', 'Spend', cur.ad_cost, base.ad_cost * scale, 'money', th),
+    classifyDelta('cpc', 'CPC', cpc(cur), cpc(base), 'money', th),
+  ];
+}
+
+// A product is listed when a *volume* measure (sales / units / spend) moved — CPC alone is too noisy.
+function buildProductMove(name: string, cur: Agg, base: Agg, scale: number, adsOnly: boolean, th: BriefThresholds): (ProductMove & { mag: number }) | null {
+  const metrics = productMetricSet(cur, base, scale, adsOnly, th);
+  const volumeMoved = metrics.some(m => (m.key === 'sales' || m.key === 'units' || m.key === 'ad_cost') && m.moved);
+  if (!volumeMoved) return null;
+  const sales = metrics.find(m => m.key === 'sales')!;
+  const spend = metrics.find(m => m.key === 'ad_cost')!;
+  return { name, metrics, mag: Math.abs(sales.deltaAbs) + Math.abs(spend.deltaAbs) };
+}
+
+const topMoves = (moves: (ProductMove & { mag: number })[]): ProductMove[] =>
+  moves.sort((a, b) => b.mag - a.mag).slice(0, 5).map(({ name, metrics }) => ({ name, metrics }));
+
 /** Full-P&L per-product movement from daily_trends_by_asin (Yesterday / 7d / 30d). */
-function productMovesPnl(
-  rows: DailyTrendByAsinRow[], family: string, w: ResolvedWindow, th: BriefThresholds,
-): ProductMove[] {
+function productMovesPnl(rows: DailyTrendByAsinRow[], family: string, w: ResolvedWindow, th: BriefThresholds): ProductMove[] {
   const cur: Record<string, Agg> = {};
   const base: Record<string, Agg> = {};
   const bump = (m: Record<string, Agg>, name: string, r: DailyTrendByAsinRow) => {
     const a = m[name] || (m[name] = emptyAgg());
-    a.sales += r.sales || 0; a.net_profit += r.net_profit || 0; a.units += r.units || 0; a.ad_cost += r.ad_cost || 0;
+    a.sales += r.sales || 0; a.net_profit += r.net_profit || 0; a.units += r.units || 0;
+    a.ad_cost += r.ad_cost || 0; a.clicks += r.clicks || 0;
   };
   for (const r of rows) {
     if (r.product_type !== family) continue;
@@ -318,36 +355,22 @@ function productMovesPnl(
   }
   const moves: (ProductMove & { mag: number })[] = [];
   for (const name of Object.keys(cur)) {
-    const c = cur[name], b = base[name] || emptyAgg();
-    const salesD = classifyDelta('sa', 'Sales', c.sales, b.sales * w.baseScale, 'money', th);
-    const npD = classifyDelta('np', 'Profit', c.net_profit, b.net_profit * w.baseScale, 'money', th);
-    if (!salesD.moved && !npD.moved) continue;
-    moves.push({ name, text: pnlPhrase(salesD, npD), mag: Math.abs(salesD.deltaAbs) + Math.abs(npD.deltaAbs) });
+    const mv = buildProductMove(name, cur[name], base[name] || emptyAgg(), w.baseScale, false, th);
+    if (mv) moves.push(mv);
   }
-  return moves.sort((a, b) => b.mag - a.mag).slice(0, 5).map(({ name, text }) => ({ name, text }));
-}
-
-function pnlPhrase(sales: MetricDelta, np: MetricDelta): string {
-  const parts: string[] = [];
-  if (sales.moved) parts.push(`sales ${signPct(sales.deltaPct)}`);
-  if (np.moved) parts.push(`profit ${signPct(np.deltaPct)}`);
-  return parts.join(', ');
+  return topMoves(moves);
 }
 
 /** Ads-only per-product movement from ads_7d (Today mode — orders not in yet). */
-function productMovesAds(
-  adsRows: Ads7dRow[], productToFamily: Record<string, string>, family: string,
-  w: ResolvedWindow, th: BriefThresholds,
-): ProductMove[] {
+function productMovesAds(adsRows: Ads7dRow[], productToFamily: Record<string, string>, family: string, w: ResolvedWindow, th: BriefThresholds): ProductMove[] {
   const cur: Record<string, Agg> = {};
   const base: Record<string, Agg> = {};
   const bump = (m: Record<string, Agg>, name: string, r: Ads7dRow) => {
     const a = m[name] || (m[name] = emptyAgg());
-    a.ads_spend += r.spend || 0; a.ads_sales += r.sales || 0; a.ads_orders += r.orders || 0;
+    a.ads_spend += r.spend || 0; a.ads_sales += r.sales || 0; a.ads_orders += r.orders || 0; a.clicks += r.clicks || 0;
   };
   for (const r of adsRows) {
-    const fam = resolveAdsFamily(r, productToFamily);
-    if (fam !== family) continue;
+    if (resolveAdsFamily(r, productToFamily) !== family) continue;
     const name = r.product_short_name || '';
     if (!name) continue;
     const d = r.date || '';
@@ -356,28 +379,11 @@ function productMovesAds(
   }
   const moves: (ProductMove & { mag: number })[] = [];
   for (const name of Object.keys(cur)) {
-    const c = cur[name], b = base[name] || emptyAgg();
-    const spendD = classifyDelta('s', 'Spend', c.ads_spend, b.ads_spend * w.baseScale, 'money', th);
-    const salesD = classifyDelta('sa', 'Sales', c.ads_sales, b.ads_sales * w.baseScale, 'money', th);
-    const roasD = classifyDelta('r', 'ROAS', adsRoas(c), adsRoas(b), 'ratio', th);
-    if (!spendD.moved && !salesD.moved && !roasD.moved) continue;
-    const mag = Math.abs(salesD.deltaAbs) + Math.abs(spendD.deltaAbs);
-    moves.push({ name, text: productPhrase(spendD, salesD, roasD), mag });
+    const mv = buildProductMove(name, cur[name], base[name] || emptyAgg(), w.baseScale, true, th);
+    if (mv) moves.push(mv);
   }
-  // Biggest movers first (by absolute ads sales + spend delta); cap at 5.
-  return moves.sort((a, b) => b.mag - a.mag).slice(0, 5).map(({ name, text }) => ({ name, text }));
+  return topMoves(moves);
 }
-
-function productPhrase(spend: MetricDelta, sales: MetricDelta, roas: MetricDelta): string {
-  const parts: string[] = [];
-  if (spend.moved) parts.push(`spend ${signPct(spend.deltaPct)}`);
-  if (sales.moved) parts.push(`ads sales ${signPct(sales.deltaPct)}`);
-  if (roas.moved) parts.push(`ROAS ${roas.deltaAbs >= 0 ? '+' : ''}${roas.deltaAbs.toFixed(1)}x`);
-  if (spend.moved && spend.dir === 'up' && !sales.moved) parts.push('— spend up, sales flat');
-  return parts.join(', ');
-}
-
-const signPct = (p: number) => `${p >= 0 ? '+' : ''}${p.toFixed(0)}%`;
 
 /* ── Narrative builders ──────────────────────────────────────────────────── */
 
@@ -431,7 +437,9 @@ function familyHealth(kpis: MetricDelta[], oos: OosRisk[], coachCount: number): 
   const np = kpis.find(m => m.key === 'net_profit'), roas = kpis.find(m => m.key === 'net_roas' || m.key === 'ads_roas');
   const org = kpis.find(m => m.key === 'organic_pct');
   if ((np?.dir === 'dn') || (roas?.dir === 'dn') || (org?.dir === 'dn') || coachCount > 0) return 'warn';
-  if (kpis.some(m => m.dir === 'up')) return 'good';
+  // "good" only from outcome metrics — spend/cpc moving up isn't inherently good.
+  const GOOD_KEYS = new Set(['sales', 'net_profit', 'net_roas', 'organic_pct', 'ads_sales', 'ads_roas', 'ads_orders']);
+  if (kpis.some(m => m.dir === 'up' && GOOD_KEYS.has(m.key))) return 'good';
   return 'flat';
 }
 
@@ -483,8 +491,9 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
   const fresh = data._meta?.data_freshness || {};
   const perfMax = fresh.performance_max_date || maxDate(byAsin);
   const adsMax = fresh.ads_max_date || maxDate(ads);
-  const today = todayStr(now);
-  const todayEnabled = !!adsMax && adsMax === today;
+  // "Today · Ads" is ready when ads data reaches a day beyond the orders watermark
+  // (an ads-only day before orders catch up) — robust to the normal 1–2 day ads lag.
+  const todayEnabled = !!adsMax && !!perfMax && adsMax > perfMax;
 
   const productToFamily = buildProductToFamily(products);
   const asinToFamily = buildAsinToFamily(products);
@@ -547,7 +556,7 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
     dateMode: mode,
     periodLabel: w.label,
     todayEnabled,
-    todayDisabledReason: todayEnabled ? undefined : "Today's ads data isn't in yet",
+    todayDisabledReason: todayEnabled ? undefined : 'No ads-only day yet — ads data is not ahead of the orders date',
     overview: buildOverview(views, w.adsOnly),
     families: views,
   };
