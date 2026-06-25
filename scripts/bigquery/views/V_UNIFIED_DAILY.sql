@@ -57,6 +57,25 @@ ads AS (
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   WHERE COALESCE(a.most_advertised_asin_impressions, a.advertised_asins, a.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2
+),
+
+-- Cost components: split the landed per-unit cost into goods / freight / pick&pack / referral
+-- via SCD2 join to DIM_COSTS_HISTORY (unit-weighted, time-correct). Sums back to `cogs` (landed).
+cost_components AS (
+  SELECT
+    p.PURCHASED_ASIN AS asin,
+    p.DATE AS date,
+    SUM(p.PURCHASED_UNITS * COALESCE(c.cost_of_goods, 0)) AS cogs_goods,
+    SUM(p.PURCHASED_UNITS * COALESCE(c.shipping_cost, 0)) AS shipping_cost,
+    SUM(p.PURCHASED_UNITS * COALESCE(c.estimated_pick_pack_fee_per_unit, 0)) AS pick_pack_cost,
+    SUM(p.PURCHASED_UNITS * COALESCE(c.FBA_COST_estimated_referral_fee_per_unit, 0)) AS referral_cost
+  FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY` p
+  LEFT JOIN `onyga-482313.OI.DIM_COSTS_HISTORY` c
+    ON p.PURCHASED_ASIN = c.asin
+   AND p.DATE >= c.start_date
+   AND p.DATE <= COALESCE(c.end_date, DATE '9999-12-31')
+  WHERE p.PURCHASED_ASIN IS NOT NULL
+  GROUP BY 1, 2
 )
 
 -- Final join: FULL OUTER JOIN ensures no data is lost
@@ -76,6 +95,11 @@ SELECT
   COALESCE(p.units, 0) AS units,
   COALESCE(p.sessions, 0) AS sessions,
   COALESCE(p.cogs, 0) AS cogs,
+  -- Landed-cost breakdown (cogs_goods + shipping_cost + pick_pack_cost + referral_cost = cogs)
+  COALESCE(cc.cogs_goods, 0) AS cogs_goods,
+  COALESCE(cc.shipping_cost, 0) AS shipping_cost,
+  COALESCE(cc.pick_pack_cost, 0) AS pick_pack_cost,
+  COALESCE(cc.referral_cost, 0) AS referral_cost,
   COALESCE(p.organic_units, 0) AS organic_units,
   -- Ads metrics
   COALESCE(a.ad_cost, 0) AS ad_cost,
@@ -86,6 +110,7 @@ SELECT
   COALESCE(p.sales, 0) - COALESCE(p.cogs, 0) AS gross_margin
 FROM perf p
 FULL OUTER JOIN ads a ON p.asin = a.asin AND p.date = a.date
+LEFT JOIN cost_components cc ON cc.asin = p.asin AND cc.date = p.date
 JOIN `onyga-482313.OI.V_PRODUCT_FAMILY_MAP` fm
   ON COALESCE(p.asin, a.asin) = fm.asin
 JOIN `onyga-482313.OI.DIM_TIME` dt

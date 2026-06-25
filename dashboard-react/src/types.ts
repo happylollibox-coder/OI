@@ -409,6 +409,11 @@ export interface TrendRow {
   units?: number;
   ad_cost: number;
   cogs: number;
+  // Landed-cost breakdown (cogs_goods + shipping_cost + pick_pack_cost + referral_cost = cogs)
+  cogs_goods?: number;
+  shipping_cost?: number;
+  pick_pack_cost?: number;
+  referral_cost?: number;
   net_profit: number;
   clicks?: number;
   sessions?: number;

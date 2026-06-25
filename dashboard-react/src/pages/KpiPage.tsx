@@ -2892,13 +2892,28 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
     });
 
     let tS = 0, tO = 0, tU = 0, tA = 0, tC = 0, tN = 0;
-    periodRows.forEach(r => { tS += r.sales || 0; tO += r.orders || 0; tU += r.units ?? r.orders ?? 0; tA += r.ad_cost || 0; tC += r.cogs || 0; tN += r.net_profit || 0; });
+    let tCG = 0, tShipC = 0, tPPc = 0, tRefC = 0; // real landed-cost breakdown from Cube; sums to tC
+    periodRows.forEach(r => { tS += r.sales || 0; tO += r.orders || 0; tU += r.units ?? r.orders ?? 0; tA += r.ad_cost || 0; tC += r.cogs || 0; tN += r.net_profit || 0; tCG += r.cogs_goods || 0; tShipC += r.shipping_cost || 0; tPPc += r.pick_pack_cost || 0; tRefC += r.referral_cost || 0; });
 
     // Per-unit P&L from product dimension
     const n = prods.length || 1;
     const avg = (f: (p: ProductRow) => number) => prods.reduce((s, p) => s + f(p), 0) / n;
-    const wCogs = avg(p => p.cogs || 0), wShip = avg(p => p.shipping_cost || 0), wPP = avg(p => p.pick_pack_fee || 0), wRef = avg(p => p.referral_fee || 0), wFba = avg(p => p.fba_cost || 0);
+    const wShip = avg(p => p.shipping_cost || 0), wPP = avg(p => p.pick_pack_fee || 0), wRef = avg(p => p.referral_fee || 0);
     const wSP = tU > 0 ? tS / tU : 0;
+
+    // Landed-cost breakdown for the period from the Cube (unit-weighted, SCD2-correct); tCG/tShipC/tPPc/tRefC sum to tC.
+    // Fall back to the product-dimension per-unit estimate only when that breakdown isn't present (JSON mode).
+    const hasBreakdown = (tCG + tShipC + tPPc + tRefC) > 0;
+    const totalShip = hasBreakdown ? tShipC : wShip * tU;
+    const totalPP = hasBreakdown ? tPPc : wPP * tU;
+    const totalRef = hasBreakdown ? tRefC : wRef * tU;
+    const totalCogsGoods = hasBreakdown ? tCG : (tC - totalShip - totalPP - totalRef);
+    const totalGP = tS - tC; // gross profit (pre-ads) = Sales − landed cost; Net Profit = totalGP − Ads = tN (Cube)
+    // Per-unit views derive from the same period totals so the two P&L cards reconcile exactly.
+    const cogsGoodsPU = tU > 0 ? totalCogsGoods / tU : 0;
+    const shipPU = tU > 0 ? totalShip / tU : 0;
+    const ppPU = tU > 0 ? totalPP / tU : 0;
+    const refPU = tU > 0 ? totalRef / tU : 0;
 
     // Storage — filter by family/product AND by current period
     let sc = data.storage_costs || [];
@@ -2975,7 +2990,7 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
       storageAwdPU = storPU * (awdRate / totalRate);
     }
 
-    const gpPU = wSP - wCogs - wShip - wFba, adsPU = tU > 0 ? tA / tU : 0, npPU = tU > 0 ? tN / tU : 0;
+    const gpPU = tU > 0 ? totalGP / tU : 0, adsPU = tU > 0 ? tA / tU : 0, npPU = tU > 0 ? tN / tU : 0;
 
     // Days in period
     let days = 7;
@@ -3042,14 +3057,14 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
     const measures = {
       pnl: [
         { l: 'Sale Price', v: fM(wSP), c: 'var(--color-positive)' },
-        { l: 'COGS', v: fM(wCogs), c: 'var(--color-negative)' },
-        { l: 'Shipping', v: fM(wShip), c: 'var(--color-negative)' },
-        { l: 'Pick & Pack', v: fM(wPP), c: 'var(--color-negative)' },
-        { l: 'Referral Fee', v: fM(wRef), c: 'var(--color-negative)' },
+        { l: 'COGS', v: fM(cogsGoodsPU), c: 'var(--color-negative)' },
+        { l: 'Shipping', v: fM(shipPU), c: 'var(--color-negative)' },
+        { l: 'Pick & Pack', v: fM(ppPU), c: 'var(--color-negative)' },
+        { l: 'Referral Fee', v: fM(refPU), c: 'var(--color-negative)' },
         { l: 'Gross Profit', v: fM(gpPU), c: gpPU >= 0 ? 'var(--color-positive)' : 'var(--color-negative)' },
         { l: 'Ads Cost', v: fM(adsPU), c: 'var(--color-negative)' },
         { l: 'Net Profit', v: fM(npPU), c: npPU >= 0 ? 'var(--color-positive)' : 'var(--color-negative)' },
-        { l: 'Margin', v: fP(wSP > 0 ? npPU / wSP : 0), c: npPU >= 0 ? 'var(--color-positive)' : 'var(--color-negative)' },
+        { l: 'Margin', v: fP(wSP > 0 ? (npPU / wSP) * 100 : 0), c: npPU >= 0 ? 'var(--color-positive)' : 'var(--color-negative)' },
         // Storage per unit of inventory (not part of P&L — depends on inventory, not sales)
         { l: `Storage FBA (${storagePeriodLabel})`, v: fM(storageFbaPU), c: 'var(--color-faint)', it: true },
         { l: `Storage AWD (${storagePeriodLabel})`, v: fM(storageAwdPU), c: 'var(--color-faint)', it: true },
@@ -3183,15 +3198,14 @@ function MeasuresSection({ data, family, product, currentPeriod, periodMode, per
       { l: '% Total Net Profit', v: (family || product) ? fP(pctNetProfit) : '100.0%', c: pctNetProfit < 0 ? 'var(--color-negative)' : 'var(--color-text)' },
     ];
 
-    // P&L totals for the period (not per-unit)
-    const totalShip = wShip * tU, totalPP = wPP * tU, totalRef = wRef * tU;
-    const totalGP = tS - tC - totalShip - (wFba * tU);
+    // P&L totals: landed-cost breakdown (totalCogsGoods/totalShip/totalPP/totalRef/totalGP) computed above,
+    // shared by the per-unit and total cards so they reconcile. Margin is off the trusted Cube Net Profit.
     const totalNPMargin = tS > 0 ? (tN / tS) * 100 : 0;
 
     const pnl_total: { l: string; v: string; c: string; it?: boolean }[] = [
       { l: 'Sales', v: fM(tS), c: 'var(--color-positive)' },
       { l: 'Units', v: fmt(tU, 0), c: 'var(--color-text)' },
-      { l: 'COGS', v: fM(tC), c: 'var(--color-negative)' },
+      { l: 'COGS', v: fM(totalCogsGoods), c: 'var(--color-negative)' },
       { l: 'Shipping', v: fM(totalShip), c: 'var(--color-negative)' },
       { l: 'Pick & Pack', v: fM(totalPP), c: 'var(--color-negative)' },
       { l: 'Referral Fee', v: fM(totalRef), c: 'var(--color-negative)' },

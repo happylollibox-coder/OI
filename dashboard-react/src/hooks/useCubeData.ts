@@ -1041,7 +1041,7 @@ async function loadFamilyOccasionsFromCube(): Promise<import('../types').FamilyO
 /** WeeklyTrends → weekly_trends (via UnifiedPerformance) */
 async function loadWeeklyTrendsFromCube(): Promise<TrendRow[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.weekStart'],
     limit: 5000,
   });
@@ -1061,13 +1061,17 @@ async function loadWeeklyTrendsFromCube(): Promise<TrendRow[]> {
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
     np_per_unit: Number(r['UnifiedPerformance.npPerUnit'] ?? 0),
+    cogs_goods: Number(r['UnifiedPerformance.cogsGoods'] ?? 0),
+    shipping_cost: Number(r['UnifiedPerformance.shippingCost'] ?? 0),
+    pick_pack_cost: Number(r['UnifiedPerformance.pickPackCost'] ?? 0),
+    referral_cost: Number(r['UnifiedPerformance.referralCost'] ?? 0),
   }));
 }
 
 /** MonthlyTrends → monthly_trends (via UnifiedPerformance) */
 async function loadMonthlyTrendsFromCube(): Promise<TrendRow[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.monthStart'],
     limit: 5000,
   });
@@ -1087,6 +1091,10 @@ async function loadMonthlyTrendsFromCube(): Promise<TrendRow[]> {
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
     np_per_unit: Number(r['UnifiedPerformance.npPerUnit'] ?? 0),
+    cogs_goods: Number(r['UnifiedPerformance.cogsGoods'] ?? 0),
+    shipping_cost: Number(r['UnifiedPerformance.shippingCost'] ?? 0),
+    pick_pack_cost: Number(r['UnifiedPerformance.pickPackCost'] ?? 0),
+    referral_cost: Number(r['UnifiedPerformance.referralCost'] ?? 0),
   }));
 }
 
@@ -1117,7 +1125,7 @@ async function loadDailyTrendsFromCube(): Promise<DailyTrendRow[]> {
 /** WeeklyTrendsByAsin → weekly_trends_by_asin (via UnifiedPerformance) */
 async function loadWeeklyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.asin', 'UnifiedPerformance.productShortName', 'UnifiedPerformance.weekStart'],
     limit: 5000,
   });
@@ -1139,6 +1147,10 @@ async function loadWeeklyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
     np_per_unit: Number(r['UnifiedPerformance.npPerUnit'] ?? 0),
+    cogs_goods: Number(r['UnifiedPerformance.cogsGoods'] ?? 0),
+    shipping_cost: Number(r['UnifiedPerformance.shippingCost'] ?? 0),
+    pick_pack_cost: Number(r['UnifiedPerformance.pickPackCost'] ?? 0),
+    referral_cost: Number(r['UnifiedPerformance.referralCost'] ?? 0),
   }));
 }
 
@@ -1177,7 +1189,7 @@ async function loadDailyTrendsByAsinFromCube(): Promise<DailyTrendByAsinRow[]> {
 /** MonthlyTrendsByAsin → monthly_trends_by_asin (via UnifiedPerformance) */
 async function loadMonthlyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.asin', 'UnifiedPerformance.productShortName', 'UnifiedPerformance.monthStart'],
     limit: 5000,
   });
@@ -1199,6 +1211,10 @@ async function loadMonthlyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
     np_per_unit: Number(r['UnifiedPerformance.npPerUnit'] ?? 0),
+    cogs_goods: Number(r['UnifiedPerformance.cogsGoods'] ?? 0),
+    shipping_cost: Number(r['UnifiedPerformance.shippingCost'] ?? 0),
+    pick_pack_cost: Number(r['UnifiedPerformance.pickPackCost'] ?? 0),
+    referral_cost: Number(r['UnifiedPerformance.referralCost'] ?? 0),
   }));
 }
 
