@@ -3,29 +3,16 @@
 import pandas as pd
 
 
-class RankedDF(pd.DataFrame):
-    """DataFrame subclass that exposes a 'rank' column as .rank (overriding the built-in method).
+def rank_strategies(cells: pd.DataFrame) -> pd.DataFrame:
+    """Rank strategies by net_profit_per_day, CONCLUSIVE cells only (rank=1 is best).
 
-    pandas 3.0 changed __getattr__ so that DataFrame methods take priority over columns of the
-    same name. 'rank' is a built-in DataFrame method, so `df.rank` returns the method rather
-    than the column. This subclass restores the expected behaviour for tests that use
-    `ranked.rank == 1` to filter by the strategy-rank column.
+    Note: the result has a column named ``rank``; access it as ``df["rank"]``, not
+    ``df.rank`` (that attribute is the built-in DataFrame.rank method in every pandas version).
     """
-
-    @property
-    def rank(self):  # type: ignore[override]
-        if "rank" in self.columns:
-            return self["rank"]
-        return super().rank  # fall back to the built-in method when column absent
-
-
-def rank_strategies(cells: pd.DataFrame) -> RankedDF:
-    """Rank strategies by net_profit_per_day, CONCLUSIVE cells only (rank=1 is best)."""
     conc = cells[cells["verdict"] == "CONCLUSIVE"].copy()
     conc["rank"] = (conc.groupby(["parent_name", "calendar_segment"])["net_profit_per_day"]
                         .rank(ascending=False, method="first").astype(int))
-    result = conc.sort_values(["parent_name", "calendar_segment", "rank"])
-    return RankedDF(result)
+    return conc.sort_values(["parent_name", "calendar_segment", "rank"])
 
 
 def merge_segments(ranked: pd.DataFrame) -> pd.DataFrame:

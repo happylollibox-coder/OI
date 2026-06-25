@@ -564,7 +564,8 @@ def test_rank_picks_highest_npd_among_conclusive():
         ["Bottle", "EVERYDAY_2026-01", "CPC_LOWERED",5, 999, 99,  50.0, 12.0, "WEAK"],
     ])
     ranked = rank_strategies(cells)
-    top = ranked[(ranked.parent_name == "Bottle") & (ranked.rank == 1)].iloc[0]
+    # use bracket access: ranked["rank"] — `.rank` is the built-in DataFrame method
+    top = ranked[(ranked["parent_name"] == "Bottle") & (ranked["rank"] == 1)].iloc[0]
     assert top["strategy"] == "CPC_RAISED"   # WEAK cell ignored despite higher npd
 
 def test_merge_collapses_segments_with_same_winner():
