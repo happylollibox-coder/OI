@@ -6431,6 +6431,13 @@ def delete_shipment_record(shipment_id):
         )
         client.query(query_lines, job_config=job_config).result()
 
+        # Delete connected Other PO links
+        query_links = f"""
+        DELETE FROM `{SHIPMENT_OTHER_PO_TABLE}`
+        WHERE shipment_id = @shipment_id
+        """
+        client.query(query_links, job_config=job_config).result()
+
         # Delete header
         query_header = f"""
         DELETE FROM `{SHIPMENTS_TABLE}`
