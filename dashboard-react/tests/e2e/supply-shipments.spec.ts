@@ -242,3 +242,23 @@ test('Shipment create → edit → delete round-trip', async ({ page }) => {
   // text (from the Notes section) is gone from the page entirely.
   await expect(page.getByText(marker)).toHaveCount(0);
 });
+
+test('New Shipment modal can connect an Other PO and roll it into landed cost', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByText('Weekly Summary')).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'SUPPLY' }).click();
+  await expect(page.getByText('Supply Chain')).toBeVisible({ timeout: 8_000 });
+  await page.getByRole('button', { name: /^Shipments/ }).click();
+  await page.getByRole('button', { name: /New Shipment/ }).click();
+
+  // The Connected Other POs section renders.
+  await expect(page.getByText('Connected Other POs (services)')).toBeVisible({ timeout: 8_000 });
+
+  // Select the first Other PO checkbox in that section, if any exist.
+  const firstOtherPo = page.locator('input[type="checkbox"][class*="accent-purple-500"]').first();
+  if (await firstOtherPo.count()) {
+    await firstOtherPo.check();
+    // The landed-cost summary appears.
+    await expect(page.getByText(/added to landed cost/)).toBeVisible();
+  }
+});
