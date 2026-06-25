@@ -11,7 +11,7 @@ def build_recommendations(ranked: pd.DataFrame) -> pd.DataFrame:
     a `rank`), so no second merge is needed — that avoids a net_profit_per_day _x/_y clash.
     """
     rec = ranked[ranked["rank"] == 1].copy()
-    rec = rec.rename(columns={"strategy": "recommended_strategy",
+    rec = rec.rename(columns={"cpc_action": "recommended_action",
                               "verdict": "confidence",
                               "net_profit_per_day": "winner_npd"})
     return rec.sort_values(["parent_name", "calendar_segment"])
@@ -46,8 +46,8 @@ def compare_to_coacher(rec: pd.DataFrame, coach: pd.DataFrame) -> pd.DataFrame:
         lambda r: "RAISE" if r.n_increase > r.n_reduce + r.n_cut
         else ("LOWER" if r.n_reduce + r.n_cut > r.n_increase else "MIXED"), axis=1)
     rec = rec.merge(coach[["parent_name", "coacher_bias"]], on="parent_name", how="left")
-    direction = {"CPC_RAISED": "RAISE", "CPC_LOWERED": "LOWER", "CPC_HELD": "HOLD"}
-    rec["rec_direction"] = rec["recommended_strategy"].map(direction).fillna("OTHER")
+    direction = {"RAISE": "RAISE", "LOWER": "LOWER", "CONSTANT": "HOLD"}
+    rec["rec_direction"] = rec["recommended_action"].map(direction).fillna("OTHER")
     # NA (not False) where the coacher has no recent moves for this parent — absence != disagreement
     agree = rec["rec_direction"] == rec["coacher_bias"]
     rec["agrees_with_coacher"] = agree.where(rec["coacher_bias"].notna(), other=pd.NA)

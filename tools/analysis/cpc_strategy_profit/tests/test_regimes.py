@@ -42,11 +42,22 @@ def test_magnitude_tiers():
     assert magnitude_tier(0.40) == "MEDIUM"
     assert magnitude_tier(0.90) == "LARGE"
 
-def test_long_stable_regime_is_held():
+def test_never_moved_regime_is_constant_and_held():
     d = assign_regimes(_daily([1.00]*20))
     segs = summarize_regime_segments(d)
-    assert (segs["strategy"] == "CPC_HELD").all()
+    assert (segs["cpc_action"] == "CONSTANT").all()    # set and left
+    assert (segs["duration_class"] == "HELD").all()    # persisted >= 14 days
     assert segs["days"].iloc[0] == 20
+
+def test_raise_then_held_keeps_raise_action():
+    # 3 flat days at 1.0, then 16 days at 1.5 — the second regime is a RAISE that then HELD.
+    # The de-confound: a long-lived raise must stay RAISE, not be relabeled by its duration.
+    d = assign_regimes(_daily([1.00, 1.00, 1.00] + [1.50]*16))
+    segs = summarize_regime_segments(d)
+    raised = segs[segs["entry_transition"] == "INCREASE"]
+    assert len(raised) == 1
+    assert raised["cpc_action"].iloc[0] == "RAISE"
+    assert raised["duration_class"].iloc[0] == "HELD"
 
 def test_summary_one_row_per_regime_segment_and_npd():
     d = assign_regimes(_daily([1.00, 1.00, 1.50, 1.50]))

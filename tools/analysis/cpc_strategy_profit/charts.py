@@ -9,10 +9,10 @@ def chart_npd_by_strategy(cells, parent: str):
     sub = cells[(cells.parent_name == parent) & (cells.verdict == "CONCLUSIVE")]
     if sub.empty:
         return None
-    agg = sub.groupby("strategy")["net_profit_per_day"].median().sort_values()
+    agg = sub.groupby("cpc_action")["net_profit_per_day"].median().sort_values()
     fig, ax = plt.subplots(figsize=(7, 4))
     agg.plot.barh(ax=ax, color="#3b7")
-    ax.set_title(f"{parent}: median net profit / day by CPC strategy")
+    ax.set_title(f"{parent}: median net profit / day by CPC action")
     ax.set_xlabel("net profit per active day ($)")
     ax.axvline(0, color="k", lw=0.8)
     fig.tight_layout()

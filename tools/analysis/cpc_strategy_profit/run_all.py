@@ -32,6 +32,28 @@ def run():
     write_findings(segs, cells, rec, merged)
     print("done. findings:", C.FINDINGS_DOC)
 
+def _action_x_duration(segs):
+    """De-confound view: median net profit/day by what we DID to CPC (rows) vs how long it
+    then HELD (cols), pooled over all regime-segments. Shows a long-lived raise is still a raise."""
+    grp = segs.groupby(["cpc_action", "duration_class"])["net_profit_per_day"]
+    med = grp.median().unstack("duration_class")
+    cnt = grp.size().unstack("duration_class")
+    out = med.astype(object).copy()
+    for r in med.index:
+        for c in med.columns:
+            m = med.loc[r, c]
+            out.loc[r, c] = "" if pd.isna(m) else f"{m:+.2f} (n={int(cnt.loc[r, c])})"
+    out = out.reindex(index=[a for a in ["RAISE", "LOWER", "CONSTANT"] if a in out.index],
+                      columns=[c for c in ["TRANSIENT", "HELD"] if c in out.columns])
+    return out.to_markdown()
+
+def _action_per_parent(segs):
+    """Median net profit/day by CPC action, per parent (pooled over all segments — descriptive)."""
+    piv = (segs.pivot_table(index="parent_name", columns="cpc_action",
+                            values="net_profit_per_day", aggfunc="median").round(2))
+    piv = piv.reindex(columns=[a for a in ["RAISE", "LOWER", "CONSTANT"] if a in piv.columns])
+    return piv.to_markdown()
+
 def write_findings(segs, cells, rec, merged):
     n_conc = int((cells.verdict == "CONCLUSIVE").sum())
     lines = [
@@ -40,13 +62,20 @@ def write_findings(segs, cells, rec, merged):
         f"{segs.parent_name.nunique()} parents; "
         f"{n_conc}/{len(cells)} cells statistically conclusive._", "",
         "> Observational analysis — associational, not causal. See spec.", "",
-        "## Recommended CPC strategy per parent × calendar part", "",
+        "> Two orthogonal labels: `cpc_action` (RAISE/LOWER/CONSTANT = what we did to CPC) and",
+        "> `duration_class` (TRANSIENT/HELD = how long it persisted). A raise that then holds",
+        "> stays a RAISE — duration no longer overwrites the action.", "",
+        "## De-confound: net profit/day by CPC action × hold duration (pooled)", "",
+        _action_x_duration(segs), "",
+        "## Net profit/day by CPC action, per parent (pooled, descriptive)", "",
+        _action_per_parent(segs), "",
+        "## Recommended CPC action per parent × calendar part", "",
     ]
     if rec.empty:
         lines.append("_No CONCLUSIVE cells — not enough data to recommend. Relax thresholds in config.py._")
     else:
         lines.append(
-            rec[["parent_name", "calendar_segment", "recommended_strategy", "winner_npd",
+            rec[["parent_name", "calendar_segment", "recommended_action", "winner_npd",
                  "confidence", "coacher_bias", "agrees_with_coacher"]]
             .to_markdown(index=False)
         )

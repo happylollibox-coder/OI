@@ -1,5 +1,11 @@
 # tools/analysis/cpc_strategy_profit/regimes.py
-"""Segment each target's daily CPC series into regimes; label strategy + magnitude."""
+"""Segment each target's daily CPC series into regimes; label the CPC action + duration.
+
+Two ORTHOGONAL labels per regime-segment (deliberately de-confounded):
+  - cpc_action ∈ {RAISE, LOWER, CONSTANT} — what we DID to CPC entering the regime.
+    A raise that then persists stays RAISE (it is NOT relabeled by how long it lasted).
+  - duration_class ∈ {TRANSIENT, HELD} — how long the level then persisted.
+"""
 from __future__ import annotations
 import pandas as pd
 from . import config as C
@@ -45,12 +51,29 @@ def assign_regimes(daily: pd.DataFrame,
     d["entry_pct"] = d["regime_id"].map(pct)
     return d
 
-def _strategy(entry_transition: str, regime_total_days: int,
-              constant_min_days: int = C.CONSTANT_MIN_DAYS) -> str:
-    if regime_total_days >= constant_min_days:
-        return "CPC_HELD"
-    return {"INCREASE": "CPC_RAISED", "DECREASE": "CPC_LOWERED",
-            "LAUNCH": "LAUNCH", "REACTIVATE": "REACTIVATE"}.get(entry_transition, "CPC_HELD")
+def cpc_action(entry_transition: str, entry_pct: float,
+               reactivate_pct: float = C.BOUNDARY_PCT) -> str:
+    """The CPC action that opened the regime — independent of how long it then held.
+
+    RAISE/LOWER = a deliberate up/down move. CONSTANT = CPC was set and left (LAUNCH, or a
+    REACTIVATE that resumed near the pre-gap level). A REACTIVATE far above/below the prior
+    level is treated as a raise/lower across the pause.
+    """
+    if entry_transition == "INCREASE":
+        return "RAISE"
+    if entry_transition == "DECREASE":
+        return "LOWER"
+    if entry_transition == "REACTIVATE":
+        if (entry_pct or 0.0) > reactivate_pct:
+            return "RAISE"
+        if (entry_pct or 0.0) < -reactivate_pct:
+            return "LOWER"
+        return "CONSTANT"
+    return "CONSTANT"  # LAUNCH and any fallback
+
+def duration_class(regime_total_days: int,
+                   constant_min_days: int = C.CONSTANT_MIN_DAYS) -> str:
+    return "HELD" if regime_total_days >= constant_min_days else "TRANSIENT"
 
 def summarize_regime_segments(daily_with_regimes: pd.DataFrame,
                               constant_min_days: int = C.CONSTANT_MIN_DAYS) -> pd.DataFrame:
@@ -73,7 +96,8 @@ def summarize_regime_segments(daily_with_regimes: pd.DataFrame,
              .rename("regime_total_days").reset_index())
     g = g.merge(dur, on=["target_key", "regime_id"], how="left")
     g["magnitude"] = g["entry_pct"].apply(magnitude_tier)
-    g["strategy"] = [
-        _strategy(t, rd, constant_min_days)
-        for t, rd in zip(g["entry_transition"], g["regime_total_days"])]
+    g["cpc_action"] = [cpc_action(t, p)
+                       for t, p in zip(g["entry_transition"], g["entry_pct"])]
+    g["duration_class"] = [duration_class(rd, constant_min_days)
+                           for rd in g["regime_total_days"]]
     return g

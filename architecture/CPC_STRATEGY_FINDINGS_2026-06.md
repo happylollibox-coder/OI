@@ -1,83 +1,104 @@
 # CPC Strategy → Net Profit — Findings (2026-06)
 
-_Generated from 6,602 regime-segments across 4 parents; 151/290 cells statistically conclusive._
+_Generated from 6,602 regime-segments across 4 parents; 133/192 cells statistically conclusive._
 
 > Observational analysis — associational, not causal. See spec.
 
-## Recommended CPC strategy per parent × calendar part
+> Two orthogonal labels: `cpc_action` (RAISE/LOWER/CONSTANT = what we did to CPC) and
+> `duration_class` (TRANSIENT/HELD = how long it persisted). A raise that then holds
+> stays a RAISE — duration no longer overwrites the action.
 
-| parent_name   | calendar_segment        | recommended_strategy   |   winner_npd | confidence   | coacher_bias   | agrees_with_coacher   |
-|:--------------|:------------------------|:-----------------------|-------------:|:-------------|:---------------|:----------------------|
-| Bottle        | Christmas_COOLDOWN      | CPC_HELD               |   -0.695     | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | Christmas_PEAK          | CPC_RAISED             |    2.98988   | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | Cyber Monday_COOLDOWN   | CPC_HELD               |    4.7919    | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | Cyber Monday_PEAK       | CPC_HELD               |    2.80706   | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | EVERYDAY_2025-12        | CPC_HELD               |   -0.76      | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | EVERYDAY_2026-01        | CPC_HELD               |    0.639873  | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | EVERYDAY_2026-04        | CPC_HELD               |   -0.206     | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | EVERYDAY_2026-05        | CPC_RAISED             |    0.192564  | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | EVERYDAY_2026-06        | CPC_HELD               |   -0.173409  | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | Easter_BOOST            | CPC_HELD               |    0.0833922 | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | Easter_COOLDOWN         | CPC_HELD               |   -0.248333  | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | Easter_PEAK             | CPC_HELD               |    0.8765    | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | Valentines Day_BOOST    | CPC_HELD               |    1.46247   | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | Valentines Day_COOLDOWN | CPC_HELD               |   -0.392083  | CONCLUSIVE   | nan            | <NA>                  |
-| Bottle        | Valentines Day_PEAK     | CPC_HELD               |    0.899123  | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Christmas_COOLDOWN      | CPC_HELD               |   -0.364554  | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Christmas_PEAK          | CPC_HELD               |    5.71778   | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Cyber Monday_COOLDOWN   | CPC_HELD               |    5.51817   | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Cyber Monday_PEAK       | CPC_HELD               |    5.73225   | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | EVERYDAY_2025-12        | CPC_HELD               |   -0.92      | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | EVERYDAY_2026-01        | CPC_HELD               |    0.407873  | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | EVERYDAY_2026-04        | CPC_HELD               |   -0.0552673 | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | EVERYDAY_2026-05        | CPC_HELD               |   -0.633157  | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | EVERYDAY_2026-06        | CPC_HELD               |   -1.58156   | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Easter_BOOST            | CPC_HELD               |    2.27628   | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Easter_COOLDOWN         | CPC_HELD               |   -0.5468    | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Easter_PEAK             | CPC_RAISED             |    5.46543   | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Valentines Day_BOOST    | CPC_HELD               |    1.09628   | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Valentines Day_COOLDOWN | CPC_HELD               |    5.93488   | CONCLUSIVE   | nan            | <NA>                  |
-| Fresh         | Valentines Day_PEAK     | CPC_HELD               |    7.56409   | CONCLUSIVE   | nan            | <NA>                  |
-| LolliME       | Christmas_COOLDOWN      | CPC_HELD               |    0.124351  | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | Christmas_PEAK          | CPC_RAISED             |    9.17161   | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | Cyber Monday_COOLDOWN   | CPC_LOWERED            |    9.07692   | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | Cyber Monday_PEAK       | CPC_HELD               |    1.59909   | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | EVERYDAY_2025-12        | CPC_HELD               |   -1.16      | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | EVERYDAY_2026-01        | CPC_HELD               |   -0.377244  | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | EVERYDAY_2026-04        | CPC_HELD               |    0.722264  | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | EVERYDAY_2026-05        | CPC_HELD               |    2.06607   | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | EVERYDAY_2026-06        | CPC_HELD               |   -0.0264752 | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | Easter_BOOST            | CPC_HELD               |    1.44317   | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | Easter_COOLDOWN         | CPC_HELD               |    1.7312    | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | Easter_PEAK             | CPC_HELD               |    3.84071   | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | Valentines Day_BOOST    | CPC_HELD               |   -1.0775    | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | Valentines Day_COOLDOWN | CPC_HELD               |    1.0437    | CONCLUSIVE   | MIXED          | False                 |
-| LolliME       | Valentines Day_PEAK     | CPC_HELD               |    1.96579   | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Christmas_BOOST         | CPC_RAISED             |    3.49522   | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Christmas_COOLDOWN      | CPC_HELD               |   -0.9775    | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Christmas_PEAK          | CPC_HELD               |    4.85732   | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Cyber Monday_COOLDOWN   | CPC_HELD               |   -0.5375    | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Cyber Monday_PEAK       | CPC_HELD               |    0.787979  | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | EVERYDAY_2025-12        | CPC_HELD               |   -1.09667   | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | EVERYDAY_2026-01        | CPC_HELD               |   -0.312585  | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | EVERYDAY_2026-04        | CPC_HELD               |    1.3938    | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | EVERYDAY_2026-05        | CPC_HELD               |   -0.353257  | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | EVERYDAY_2026-06        | CPC_HELD               |   -0.3425    | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Easter_BOOST            | CPC_HELD               |   -0.416     | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Easter_COOLDOWN         | CPC_HELD               |   -0.329671  | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Easter_PEAK             | CPC_HELD               |    1.05638   | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Valentines Day_BOOST    | CPC_HELD               |   -0.310651  | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Valentines Day_COOLDOWN | CPC_HELD               |   -0.882753  | CONCLUSIVE   | MIXED          | False                 |
-| Lollibox      | Valentines Day_PEAK     | CPC_RAISED             |    0.194495  | CONCLUSIVE   | MIXED          | False                 |
+## De-confound: net profit/day by CPC action × hold duration (pooled)
+
+| cpc_action   | TRANSIENT      | HELD          |
+|:-------------|:---------------|:--------------|
+| RAISE        | -0.62 (n=1684) | +1.12 (n=505) |
+| LOWER        | -0.74 (n=1688) | +0.24 (n=816) |
+| CONSTANT     | -0.60 (n=1424) | +1.01 (n=485) |
+
+## Net profit/day by CPC action, per parent (pooled, descriptive)
+
+| parent_name   |   RAISE |   LOWER |   CONSTANT |
+|:--------------|--------:|--------:|-----------:|
+| Bottle        |   -0.4  |   -0.42 |      -0.26 |
+| Fresh         |   -0.5  |   -0.46 |      -0.35 |
+| LolliME       |    0.16 |   -0.45 |      -0.31 |
+| Lollibox      |   -0.69 |   -0.68 |      -0.59 |
+
+## Recommended CPC action per parent × calendar part
+
+| parent_name   | calendar_segment        | recommended_action   |   winner_npd | confidence   | coacher_bias   | agrees_with_coacher   |
+|:--------------|:------------------------|:---------------------|-------------:|:-------------|:---------------|:----------------------|
+| Bottle        | Christmas_BOOST         | CONSTANT             |    0.480174  | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Christmas_COOLDOWN      | LOWER                |   -0.64      | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Christmas_PEAK          | RAISE                |    2.08656   | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Cyber Monday_COOLDOWN   | CONSTANT             |    3.21055   | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Cyber Monday_PEAK       | CONSTANT             |   -0.195     | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | EVERYDAY_2025-12        | LOWER                |   -0.703333  | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | EVERYDAY_2026-01        | RAISE                |    0.840759  | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | EVERYDAY_2026-04        | RAISE                |    0.101759  | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | EVERYDAY_2026-05        | RAISE                |   -0.08      | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | EVERYDAY_2026-06        | LOWER                |   -1.1325    | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Easter_BOOST            | LOWER                |   -0.3       | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Easter_COOLDOWN         | LOWER                |   -0.22875   | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Easter_PEAK             | LOWER                |    0.94325   | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Valentines Day_BOOST    | LOWER                |    1.73522   | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Valentines Day_COOLDOWN | LOWER                |   -0.396667  | CONCLUSIVE   | nan            | <NA>                  |
+| Bottle        | Valentines Day_PEAK     | LOWER                |    0.0207403 | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Christmas_COOLDOWN      | RAISE                |   -1.4       | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Christmas_PEAK          | RAISE                |    4.86977   | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Cyber Monday_COOLDOWN   | RAISE                |    5.38067   | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Cyber Monday_PEAK       | RAISE                |    0.195103  | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | EVERYDAY_2026-01        | LOWER                |    0.407873  | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | EVERYDAY_2026-04        | LOWER                |   -0.48      | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | EVERYDAY_2026-05        | LOWER                |   -0.7       | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | EVERYDAY_2026-06        | RAISE                |   -1.38      | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Easter_BOOST            | RAISE                |   -0.233795  | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Easter_COOLDOWN         | RAISE                |   -0.821858  | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Easter_PEAK             | RAISE                |    4.85997   | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Valentines Day_BOOST    | RAISE                |   -0.650608  | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Valentines Day_COOLDOWN | LOWER                |    5.45209   | CONCLUSIVE   | nan            | <NA>                  |
+| Fresh         | Valentines Day_PEAK     | RAISE                |    4.04782   | CONCLUSIVE   | nan            | <NA>                  |
+| LolliME       | Christmas_COOLDOWN      | LOWER                |   -0.531667  | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | Christmas_PEAK          | RAISE                |    6.57683   | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | Cyber Monday_COOLDOWN   | RAISE                |    3.7924    | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | Cyber Monday_PEAK       | RAISE                |    0.885315  | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | EVERYDAY_2025-12        | LOWER                |   -0.78      | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | EVERYDAY_2026-01        | LOWER                |   -0.561667  | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | EVERYDAY_2026-04        | RAISE                |   -0.170663  | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | EVERYDAY_2026-05        | RAISE                |    0.76567   | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | EVERYDAY_2026-06        | RAISE                |   -0.68      | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | Easter_BOOST            | LOWER                |    1.1062    | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | Easter_COOLDOWN         | LOWER                |   -0.552532  | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | Easter_PEAK             | LOWER                |    0.0866667 | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | Valentines Day_BOOST    | RAISE                |   -0.6068    | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | Valentines Day_COOLDOWN | LOWER                |    0.181753  | CONCLUSIVE   | MIXED          | False                 |
+| LolliME       | Valentines Day_PEAK     | LOWER                |    1.67303   | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Christmas_BOOST         | RAISE                |    3.49522   | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Christmas_COOLDOWN      | LOWER                |   -0.925     | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Christmas_PEAK          | RAISE                |   -0.2       | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Cyber Monday_COOLDOWN   | LOWER                |   -0.545     | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Cyber Monday_PEAK       | CONSTANT             |   -0.640501  | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | EVERYDAY_2025-12        | LOWER                |   -0.71      | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | EVERYDAY_2026-01        | CONSTANT             |   -0.276667  | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | EVERYDAY_2026-04        | CONSTANT             |   -0.394444  | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | EVERYDAY_2026-05        | CONSTANT             |   -0.505     | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | EVERYDAY_2026-06        | CONSTANT             |   -0.65      | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Easter_BOOST            | RAISE                |   -0.502222  | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Easter_COOLDOWN         | CONSTANT             |   -0.44      | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Easter_PEAK             | LOWER                |   -0.503136  | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Valentines Day_BOOST    | LOWER                |    0.292989  | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Valentines Day_COOLDOWN | LOWER                |   -0.77625   | CONCLUSIVE   | MIXED          | False                 |
+| Lollibox      | Valentines Day_PEAK     | LOWER                |    0.522177  | CONCLUSIVE   | MIXED          | False                 |
 
 ## Power coverage (where we can vs cannot conclude)
 
 | parent_name   |   CONCLUSIVE |   WEAK |
 |:--------------|-------------:|-------:|
-| Bottle        |           27 |     49 |
-| Fresh         |           34 |     32 |
-| LolliME       |           42 |     35 |
-| Lollibox      |           48 |     23 |
+| Bottle        |           25 |     25 |
+| Fresh         |           29 |     15 |
+| LolliME       |           36 |     14 |
+| Lollibox      |           43 |      5 |
 
 ## Charts
 
