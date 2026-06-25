@@ -4246,7 +4246,17 @@ def update_shipment(shipment_id, data):
         new_cost_shipped = float(data.get('cost_shipped')) if data.get('cost_shipped') else (current.get('cost_shipped') or 0)
         new_amazon_commission = float(data.get('amazon_commission') or 0) if 'amazon_commission' in data else (current.get('amazon_commission') or 0)
         total_cost = new_cost_shipped + new_amazon_commission
-        
+        # Keep connected Other PO amounts in the allocation so editing cost does not drop them
+        opo_sum_q = f"""
+            SELECT COALESCE(SUM(o.total_amount), 0) AS s
+            FROM `{SHIPMENT_OTHER_PO_TABLE}` j
+            JOIN `{OTHER_PO_TABLE}` o ON j.other_po_id = o.other_po_id
+            WHERE j.shipment_id = @shipment_id
+        """
+        opo_sum_jc = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("shipment_id", "STRING", shipment_id)])
+        opo_sum_rows = list(client.query(opo_sum_q, job_config=opo_sum_jc).result())
+        total_cost += float(opo_sum_rows[0].s) if opo_sum_rows else 0.0
+
         if total_cost > 0:
             # Get existing lines for this shipment
             lines_q = f"SELECT line_id, total_cubic_feet FROM `{SHIPMENT_LINES_TABLE}` WHERE shipment_id = @shipment_id"
