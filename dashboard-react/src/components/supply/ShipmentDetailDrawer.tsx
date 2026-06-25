@@ -16,7 +16,7 @@
  * Never sends client-computed ids/ETA/cost/totals — only raw field values.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Truck, CreditCard, X, Pencil, Save, Plus, Trash2, AlertCircle, Loader2, Search } from 'lucide-react';
+import { Truck, CreditCard, X, Pencil, Save, Plus, Trash2, AlertCircle, Loader2, Search, Tag } from 'lucide-react';
 import type { SupplyShipmentRow } from '../../types';
 import { dataEntry, type ShipmentDetail } from '../../utils/dataEntry';
 
@@ -593,6 +593,33 @@ export default function ShipmentDetailDrawer({ shipment, onClose, onChanged }: S
                     <Plus size={13} /> Add
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Connected Other POs (read-only) ── */}
+          {!loading && !loadError && (detail?.connected_other_pos?.length ?? 0) > 0 && (
+            <div>
+              <div className="text-[10px] text-faint uppercase tracking-wider font-semibold mb-1.5 flex items-center gap-1.5">
+                <Tag size={11} /> Connected Other POs ({detail?.connected_other_pos?.length})
+              </div>
+              <div className="rounded-lg border border-border overflow-hidden divide-y divide-border">
+                {(detail?.connected_other_pos ?? []).map((o) => (
+                  <div key={o.other_po_id} className="flex items-center gap-3 px-3 py-2">
+                    <Tag size={12} className="text-purple-400 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-heading font-medium truncate">
+                        {o.supplier_name ?? '—'}
+                        <span className="ml-1.5 text-[10px] text-muted font-normal">{o.service_type ?? ''}</span>
+                      </div>
+                      <div className="text-[10px] text-faint font-mono truncate">{o.other_po_id}</div>
+                    </div>
+                    <div className="text-xs font-mono text-heading shrink-0">
+                      {fmtFull$(Number(o.total_amount) || 0)}
+                      <span className="ml-1 text-[10px] text-faint">{o.currency ?? 'USD'}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
