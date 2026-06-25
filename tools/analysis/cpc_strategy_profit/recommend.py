@@ -48,5 +48,7 @@ def compare_to_coacher(rec: pd.DataFrame, coach: pd.DataFrame) -> pd.DataFrame:
     rec = rec.merge(coach[["parent_name", "coacher_bias"]], on="parent_name", how="left")
     direction = {"CPC_RAISED": "RAISE", "CPC_LOWERED": "LOWER", "CPC_HELD": "HOLD"}
     rec["rec_direction"] = rec["recommended_strategy"].map(direction).fillna("OTHER")
-    rec["agrees_with_coacher"] = rec["rec_direction"] == rec["coacher_bias"]
+    # NA (not False) where the coacher has no recent moves for this parent — absence != disagreement
+    agree = rec["rec_direction"] == rec["coacher_bias"]
+    rec["agrees_with_coacher"] = agree.where(rec["coacher_bias"].notna(), other=pd.NA)
     return rec
