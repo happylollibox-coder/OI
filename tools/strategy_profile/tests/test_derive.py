@@ -57,3 +57,16 @@ def test_derive_main_keywords_ranks_top_n():
     mk = derive_main_keywords(df, top_n=2)
     assert list(mk.sort_values("rank")["keyword_text"]) == ["b","c"]   # top 2 by net
     assert (mk["is_anchor"] == True).all() and (mk["source"]=="DERIVED").all()
+
+from tools.strategy_profile.load import to_json_rows
+
+def test_to_json_rows_stamps_audit_fields():
+    import pandas as pd
+    df = pd.DataFrame([{"parent_name":"Fresh","season":"OFF","match_type":"BROAD",
+                        "enabled":True,"cpc_target":0.55,"cpc_min":0.4,"cpc_max":0.7,
+                        "launch_cpc":0.4,"raise_pace_pct":15.0,"net_per_dollar":0.8,
+                        "confidence":"CONCLUSIVE","tos_target_pct":None,"borrowed_from":None,
+                        "source":"DERIVED"}])
+    rows = to_json_rows(df, updated_by="strategy_profile_tool")
+    assert rows[0]["updated_by"] == "strategy_profile_tool"
+    assert "updated_at" in rows[0] and rows[0]["enabled"] is True
