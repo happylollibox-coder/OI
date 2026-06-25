@@ -12,12 +12,14 @@
  * Server computes ETA, cost allocation, total_quantity — NOT done client-side.
  */
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { X, Truck, Search } from 'lucide-react';
+import { X, Truck, Search, Plus, Tag, AlertTriangle } from 'lucide-react';
 import {
   dataEntry,
   type CreateShipmentInput,
   type LovItem,
 } from '../../utils/dataEntry';
+import { NewOtherPOModal } from './NewOtherPOModal';
+import { summarizeConnectedOtherPos, type OtherPoLite } from '../../utils/otherPoSummary';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -84,6 +86,13 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
   const [allRows, setAllRows] = useState<AllocationRow[]>([]);
   const [posLoading, setPosLoading] = useState(true);
   const [search, setSearch] = useState('');
+
+  // ── Connected Other POs (services rolled into landed cost) ──
+  const [otherPos, setOtherPos] = useState<OtherPoLite[]>([]);
+  const [otherPosLoading, setOtherPosLoading] = useState(true);
+  const [selectedOtherPoIds, setSelectedOtherPoIds] = useState<string[]>([]);
+  const [otherPoSearch, setOtherPoSearch] = useState('');
+  const [showNewOtherPo, setShowNewOtherPo] = useState(false);
 
   // ── Submission ──
   const [submitting, setSubmitting] = useState(false);
@@ -159,6 +168,24 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
     };
   }, []);
 
+  // ── Load existing Other POs ──
+  const loadOtherPos = useCallback(() => {
+    setOtherPosLoading(true);
+    dataEntry
+      .listOtherPOs()
+      .then((raw) => {
+        setOtherPos(raw as unknown as OtherPoLite[]);
+      })
+      .catch(() => {
+        // Leave empty — user can still create one
+      })
+      .finally(() => setOtherPosLoading(false));
+  }, []);
+
+  useEffect(() => {
+    loadOtherPos();
+  }, [loadOtherPos]);
+
   // ── Derived: filtered rows for display ──
   const filteredRows = search.trim()
     ? allRows.filter((r) => {
@@ -174,6 +201,26 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
 
   // ── Derived: total allocated units ──
   const totalAllocated = allRows.reduce((s, r) => s + r.qtyToShip, 0);
+
+  // ── Derived: connected Other PO summary ──
+  const otherPoSummary = summarizeConnectedOtherPos(otherPos, selectedOtherPoIds);
+
+  const filteredOtherPos = otherPoSearch.trim()
+    ? otherPos.filter((o) => {
+        const q = otherPoSearch.toLowerCase();
+        return (
+          (o.supplier_name ?? '').toLowerCase().includes(q) ||
+          (o.service_type ?? '').toLowerCase().includes(q) ||
+          o.other_po_id.toLowerCase().includes(q)
+        );
+      })
+    : otherPos;
+
+  const toggleOtherPo = useCallback((id: string) => {
+    setSelectedOtherPoIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }, []);
 
   // ── Row update helpers ──
   const updateQty = useCallback(
@@ -258,6 +305,7 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
         notes: notes || undefined,
         is_paid: isPaid || undefined,
         paid_date: isPaid && paidDate ? paidDate : undefined,
+        other_po_ids: selectedOtherPoIds.length ? selectedOtherPoIds : undefined,
         lines: activeLines.map((r) => ({
           purchase_order_id: r.purchase_order_id,
           product_id: r.product_id,
@@ -277,6 +325,7 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
     },
     [
       allRows,
+      selectedOtherPoIds,
       shipmentDate,
       deliverer,
       shipmentType,
@@ -537,6 +586,111 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
             )}
           </div>
 
+          {/* ── Connected Other POs (services → landed cost) ── */}
+          <div>
+            <div className="flex items-center justify-between mb-2 gap-3">
+              <span className={labelCls}>Connected Other POs (services)</span>
+              <button
+                type="button"
+                onClick={() => setShowNewOtherPo(true)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border text-[11px] font-medium text-muted hover:text-heading hover:bg-white/5 transition-colors"
+              >
+                <Plus size={12} /> New Other PO
+              </button>
+            </div>
+
+            {/* Search */}
+            <div className="relative mb-2">
+              <Search
+                size={12}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-faint pointer-events-none"
+              />
+              <input
+                type="text"
+                value={otherPoSearch}
+                onChange={(e) => setOtherPoSearch(e.target.value)}
+                placeholder="Search by supplier, service, or Other PO ID…"
+                className="w-full rounded-lg border border-border bg-surface pl-8 pr-3 py-2 text-xs text-heading focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+              />
+            </div>
+
+            {/* List */}
+            <div
+              className="rounded-lg border border-border overflow-hidden"
+              style={{ maxHeight: 220, overflowY: 'auto', scrollbarWidth: 'thin', scrollbarColor: 'var(--color-border) transparent' }}
+            >
+              {otherPosLoading ? (
+                <div className="flex items-center justify-center py-6 text-xs text-muted">
+                  Loading Other POs…
+                </div>
+              ) : filteredOtherPos.length === 0 ? (
+                <div className="flex items-center justify-center py-6 text-xs text-muted">
+                  {otherPoSearch ? 'No Other POs match your search.' : 'No Other POs yet — create one above.'}
+                </div>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {filteredOtherPos.map((o) => {
+                    const checked = selectedOtherPoIds.includes(o.other_po_id);
+                    return (
+                      <li key={o.other_po_id}>
+                        <label
+                          className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
+                            checked ? 'bg-purple-500/5' : 'hover:bg-white/3'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleOtherPo(o.other_po_id)}
+                            className="w-3.5 h-3.5 rounded accent-purple-500 shrink-0"
+                          />
+                          <Tag size={12} className="text-purple-400 shrink-0" />
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-xs text-heading font-medium truncate">
+                              {o.supplier_name ?? '—'}
+                              <span className="ml-1.5 text-[10px] text-muted font-normal">
+                                {o.service_type ?? ''}
+                              </span>
+                            </span>
+                            <span className="block text-[10px] text-faint font-mono truncate">
+                              {o.other_po_id}
+                            </span>
+                          </span>
+                          <span className="text-xs font-mono text-heading shrink-0">
+                            {(Number(o.total_amount) || 0).toLocaleString(undefined, {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}{' '}
+                            <span className="text-[10px] text-faint">{o.currency ?? 'USD'}</span>
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            {/* Summary */}
+            {otherPoSummary.count > 0 && (
+              <div className="mt-2 flex items-center justify-between gap-3">
+                {otherPoSummary.hasNonUsd && (
+                  <span className="flex items-center gap-1 text-[10px] text-warning">
+                    <AlertTriangle size={11} />
+                    Mixed currencies — amounts rolled at face value
+                  </span>
+                )}
+                <span className="ml-auto text-[11px] font-mono text-purple-400 font-semibold">
+                  +{otherPoSummary.total.toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{' '}
+                  added to landed cost
+                </span>
+              </div>
+            )}
+          </div>
+
           {/* ── PO-line Allocation Picker ── */}
           <div>
             <div className="flex items-center justify-between mb-2 gap-3">
@@ -754,6 +908,18 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
           </button>
         </div>
       </div>
+      {showNewOtherPo && (
+        <NewOtherPOModal
+          onClose={() => setShowNewOtherPo(false)}
+          onSaved={(otherPoId) => {
+            setShowNewOtherPo(false);
+            setSelectedOtherPoIds((prev) =>
+              prev.includes(otherPoId) ? prev : [...prev, otherPoId],
+            );
+            loadOtherPos();
+          }}
+        />
+      )}
     </div>
   );
 }
