@@ -449,10 +449,23 @@ views:
       - DIM_PRODUCT
 
   - name: "V_PEAK_STUCK_CAMPAIGNS"
-    description: "Campaigns to refresh before a peak, per family: PAUSED / BUDGET_CAPPED / DORMANT / SHARE_DROPPED, from V_ADS_COACH campaign-level fields. Peak page 'Stuck campaigns' card."
+    description: "Campaigns to refresh before a peak, per family: PAUSED / BUDGET_CAPPED / DORMANT / SHARE_DROPPED (gated on lifetime success), from V_ADS_COACH + FACT_AMAZON_ADS. Peak page 'Stuck campaigns' card."
     source_files: ["scripts/bigquery/views/V_PEAK_STUCK_CAMPAIGNS.sql"]
     dependencies:
       - V_ADS_COACH
+      - FACT_AMAZON_ADS
+
+  - name: "T_PEAK_KEYWORD_RECS"
+    description: "Materialized V_PEAK_KEYWORD_RECS, unique per (parent_name, search_term, holiday_name). Cheap 1:1 join target so V_ADS_COACH surfaces the active-occasion peak signal in its decision trace (📈 Peak-plan chip) without re-scanning V_RESEARCH_RANKED. Refreshed by SP_REFRESH_PEAK_KEYWORD_RECS (run before the coach refresh)."
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_PEAK_KEYWORD_RECS.sql"]
+    dependencies:
+      - V_PEAK_KEYWORD_RECS
+
+  - name: "SP_REFRESH_PEAK_KEYWORD_RECS"
+    description: "Materializes V_PEAK_KEYWORD_RECS → T_PEAK_KEYWORD_RECS (1 row per family×term×occasion). Decoupled from the coach SP because V_PEAK_KEYWORD_RECS re-scans the heavy V_RESEARCH_RANKED."
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_PEAK_KEYWORD_RECS.sql"]
+    dependencies:
+      - V_PEAK_KEYWORD_RECS
 
   - name: "V_UNIFIED_DAILY"
     description: "Unified daily performance view — single source of truth for ads + sales + organic"
@@ -753,6 +766,11 @@ tables:
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE/DE_COACH_THRESHOLDS.sql"]
 
+  - name: "DE_PEAK_OVERRIDES"
+    description: "Manual peak-relevance overrides — force a family into BLITZ for a holiday V_PEAK_RELEVANCE can't measure (launched into the only completed occurrence → no clean baseline). UNIONed into V_ADS_COACH.family_holiday_relevance on force_relevant=TRUE. Judgment override; remove once the family has a clean prior-year baseline (auto-qualifies)."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_PEAK_OVERRIDES.sql"]
+
   - name: "DE_NEGATIVE_KEYWORDS"
     description: "Warehouse-owned negative-keyword registry (replaces frozen Fivetran negative_keyword sync). Seeded from an Amazon bulksheet download via tools/load_negatives_seed.py; maintained by SP_SYNC_NEGATIVES from FACT_PPC_CHANGE_LOG."
     type: "data_entry"
@@ -780,6 +798,11 @@ tables:
     description: "User-entered 'Other' Purchase Orders for services like Certifications, Sampling, Photography"
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE/DE_OTHER_PO.sql"]
+
+  - name: "DE_SHIPMENT_OTHER_PO"
+    description: "Junction linking shipments to Other POs (service costs rolled into landed cost)"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_SHIPMENT_OTHER_PO.sql"]
 
   - name: "DE_APPROVED_ACTIONS"
     description: "User-approved bid/keyword actions from the Actions page (PENDING → EXPORTED → APPLIED)"
