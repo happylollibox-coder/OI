@@ -54,6 +54,7 @@ export interface CreateShipmentInput {
   notes?: string;
   is_paid?: boolean;
   paid_date?: string;
+  other_po_ids?: string[];
   lines: ShipmentLineInput[];
 }
 
@@ -74,6 +75,14 @@ export interface PaymentDetail {
   lines: Record<string, unknown>[];
 }
 
+export interface ConnectedOtherPo {
+  other_po_id: string;
+  supplier_name: string | null;
+  service_type: string | null;
+  total_amount: number | null;
+  currency: string | null;
+}
+
 export interface ShipmentDetail {
   shipment_id: string;
   shipment_date: string;
@@ -88,6 +97,7 @@ export interface ShipmentDetail {
   is_paid?: boolean;
   paid_date?: string;
   lines: Record<string, unknown>[];
+  connected_other_pos?: ConnectedOtherPo[];
   [k: string]: unknown;
 }
 
