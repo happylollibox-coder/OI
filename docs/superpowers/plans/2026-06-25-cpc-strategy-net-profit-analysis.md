@@ -237,8 +237,8 @@ def build_base() -> str:
     sql = (C.SQL_DIR / "enriched_base.sql").read_text()
     out = subprocess.run(
         ["bq", f"--project_id={C.PROJECT}", "query", "--use_legacy_sql=false",
-         "--format=csv", "--max_rows=10000000", sql],
-        capture_output=True, text=True)
+         "--format=csv", "--max_rows=10000000"],
+        input=sql, capture_output=True, text=True)   # SQL via stdin: multi-line '--' comments break as a positional arg
     if out.returncode != 0:
         sys.stderr.write(out.stderr)
         raise SystemExit(f"bq query failed: {out.returncode}")
@@ -270,7 +270,7 @@ df = pd.read_csv(C.BASE_CSV, parse_dates=["date"])
 print("rows", len(df), "parents", df.parent_name.nunique(),
       "targets", df.target_key.nunique(), "segments", df.calendar_segment.nunique())
 assert df.parent_name.notna().all() and df.target_key.notna().all() and df.date.notna().all()
-assert (df.net_profit == df.gross_profit - df.cost).abs().max() < 1e-6
+assert (df.net_profit - (df.gross_profit - df.cost)).abs().max() < 1e-6
 print("calendar sample:", sorted(df.calendar_segment.unique())[:8])
 print("OK")
 PY
