@@ -868,6 +868,16 @@ tables:
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE/DE_SEARCH_TERM_SEGMENTS.sql"]
 
+  - name: "DE_PRODUCT_MAIN_KEYWORDS"
+    description: "Per-product anchor keywords for the coacher strategy profile (derived + editable)"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_PRODUCT_MAIN_KEYWORDS.sql"]
+
+  - name: "DE_PRODUCT_STRATEGY_PROFILE"
+    description: "Per parent x season x match-type bid strategy the coacher steers toward (derived + editable)"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_PRODUCT_STRATEGY_PROFILE.sql"]
+
 
   # ── STG_ Staging Tables ──
   - name: "STG_AMAZON_ADS"
