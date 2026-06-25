@@ -11,6 +11,10 @@ def to_json_rows(df, updated_by: str):
     now = dt.datetime.utcnow().isoformat()
     rows = df.where(df.notna(), None).to_dict("records")
     for r in rows:
+        # pandas 3.0 leaves float NaN in dict even after .where(); convert to None for valid JSON
+        for k, v in r.items():
+            if isinstance(v, float) and v != v:  # NaN check
+                r[k] = None
         r["updated_at"] = now
         r["updated_by"] = updated_by
     return rows
