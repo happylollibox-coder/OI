@@ -108,13 +108,13 @@ Spec: `docs/superpowers/specs/2026-06-25-cpc-strategy-net-profit-analysis-design
 ## Run
 ```bash
 cd /Users/ori/Develop/OI
-venv/bin/python -m tools.analysis.cpc_strategy_profit.run_all
+.venv/bin/python -m tools.analysis.cpc_strategy_profit.run_all
 ```
 Outputs: `.tmp/cpc_strategy/` (CSVs + charts) and `architecture/CPC_STRATEGY_FINDINGS_2026-06.md`.
 
 ## Test
 ```bash
-venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests -v
+.venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests -v
 ```
 ```
 
@@ -122,9 +122,9 @@ venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests -v
 
 Run:
 ```bash
-cd /Users/ori/Develop/OI && venv/bin/pip install -q pandas matplotlib pytest && echo OK
+cd /Users/ori/Develop/OI && .venv/bin/python -m pip install -q pandas matplotlib tabulate pytest && echo OK
 ```
-Expected: `OK` (if `venv/` is missing, create it: `/usr/bin/python3 -m venv venv` then retry).
+Expected: `OK`. (The OI root venv is `.venv` — Python 3.12, uv-managed, so use `.venv/bin/python -m pip`, not a `pip` binary. Deps were pre-installed during setup; this is idempotent.)
 
 - [ ] **Step 5: Commit**
 
@@ -255,7 +255,7 @@ if __name__ == "__main__":
 
 Run:
 ```bash
-cd /Users/ori/Develop/OI && venv/bin/python -m tools.analysis.cpc_strategy_profit.build_base
+cd /Users/ori/Develop/OI && .venv/bin/python -m tools.analysis.cpc_strategy_profit.build_base
 ```
 Expected: `wrote .../cpc_base.csv (NNNN rows)` with NNNN in the low tens of thousands.
 
@@ -263,7 +263,7 @@ Expected: `wrote .../cpc_base.csv (NNNN rows)` with NNNN in the low tens of thou
 
 Run:
 ```bash
-cd /Users/ori/Develop/OI && venv/bin/python - <<'PY'
+cd /Users/ori/Develop/OI && .venv/bin/python - <<'PY'
 import pandas as pd
 from tools.analysis.cpc_strategy_profit import config as C
 df = pd.read_csv(C.BASE_CSV, parse_dates=["date"])
@@ -355,7 +355,7 @@ def test_summary_one_row_per_regime_segment_and_npd():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/ori/Develop/OI && venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_regimes.py -v`
+Run: `cd /Users/ori/Develop/OI && .venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_regimes.py -v`
 Expected: FAIL with `ModuleNotFoundError` / `cannot import name`.
 
 - [ ] **Step 3: Write `regimes.py`**
@@ -444,7 +444,7 @@ def summarize_regime_segments(daily_with_regimes: pd.DataFrame,
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/ori/Develop/OI && venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_regimes.py -v`
+Run: `cd /Users/ori/Develop/OI && .venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_regimes.py -v`
 Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
@@ -495,7 +495,7 @@ def test_weak_when_too_few_regimes():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/ori/Develop/OI && venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_power.py -v`
+Run: `cd /Users/ori/Develop/OI && .venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_power.py -v`
 Expected: FAIL (`ModuleNotFoundError`).
 
 - [ ] **Step 3: Write `power.py`**
@@ -527,7 +527,7 @@ def build_power_matrix(segs: pd.DataFrame,
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/ori/Develop/OI && venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_power.py -v`
+Run: `cd /Users/ori/Develop/OI && .venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_power.py -v`
 Expected: 3 passed.
 
 - [ ] **Step 5: Commit**
@@ -581,7 +581,7 @@ def test_merge_collapses_segments_with_same_winner():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/ori/Develop/OI && venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_analyze.py -v`
+Run: `cd /Users/ori/Develop/OI && .venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_analyze.py -v`
 Expected: FAIL (`ModuleNotFoundError`).
 
 - [ ] **Step 3: Write `analyze.py`**
@@ -607,7 +607,7 @@ def merge_segments(ranked: pd.DataFrame) -> pd.DataFrame:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/ori/Develop/OI && venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_analyze.py -v`
+Run: `cd /Users/ori/Develop/OI && .venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests/test_analyze.py -v`
 Expected: 2 passed.
 
 - [ ] **Step 5: Commit**
@@ -687,7 +687,7 @@ def compare_to_coacher(rec: pd.DataFrame, coach: pd.DataFrame) -> pd.DataFrame:
 
 Run:
 ```bash
-cd /Users/ori/Develop/OI && venv/bin/python -c "from tools.analysis.cpc_strategy_profit import recommend; print('import OK')"
+cd /Users/ori/Develop/OI && .venv/bin/python -c "from tools.analysis.cpc_strategy_profit import recommend; print('import OK')"
 ```
 Expected: `import OK`.
 
@@ -759,7 +759,7 @@ def render_all(cells, segs):
 
 Run:
 ```bash
-cd /Users/ori/Develop/OI && venv/bin/python -c "from tools.analysis.cpc_strategy_profit import charts; print('import OK')"
+cd /Users/ori/Develop/OI && .venv/bin/python -c "from tools.analysis.cpc_strategy_profit import charts; print('import OK')"
 ```
 Expected: `import OK`.
 
@@ -841,7 +841,7 @@ if __name__ == "__main__":
 
 Run:
 ```bash
-cd /Users/ori/Develop/OI && venv/bin/python -m tools.analysis.cpc_strategy_profit.run_all
+cd /Users/ori/Develop/OI && .venv/bin/python -m tools.analysis.cpc_strategy_profit.run_all
 ```
 Expected: prints `wrote N charts...` and `done. findings: .../CPC_STRATEGY_FINDINGS_2026-06.md` with no traceback. (`to_markdown` needs `tabulate`; if it errors, run `venv/bin/pip install -q tabulate` and retry.)
 
@@ -855,7 +855,7 @@ Expected: a recommendation table, a power-coverage table, and a list of PNGs.
 
 - [ ] **Step 4: Run the whole test suite**
 
-Run: `cd /Users/ori/Develop/OI && venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests -v`
+Run: `cd /Users/ori/Develop/OI && .venv/bin/python -m pytest tools/analysis/cpc_strategy_profit/tests -v`
 Expected: all tests pass (7 + 3 + 2 = 12).
 
 - [ ] **Step 5: Commit**
@@ -877,7 +877,7 @@ After Task 8, stop and review with Ori before drawing conclusions:
 ---
 
 ## Notes / gotchas for the executor
-- **Run from `OI/` root** with `venv/bin/python -m tools.analysis.cpc_strategy_profit.<module>` so package imports resolve.
+- **Run from `OI/` root** with `.venv/bin/python -m tools.analysis.cpc_strategy_profit.<module>` so package imports resolve.
 - `bq` CLI must be authed (ADC). A bare `bq query 'SELECT 1'` confirms access.
 - `.tmp/` is gitignored — never `git add` its contents. Only code + the findings doc are committed.
 - Timezone: holidays are NY-local, ads facts LA-local; the join compares on LA `date` (documented boundary fuzz in the spec).
