@@ -1391,12 +1391,13 @@ def shipments_list():
                          available_years=available_years)
 
 
-def insert_shipment(data, lines):
+def insert_shipment(data, lines, other_po_ids=None):
     """Insert shipment header + lines into BigQuery.
-    
+
     Args:
         data: dict with shipment header fields (shipment_date, shipment_type, cost_shipped, etc.)
         lines: list of dicts with [{'purchase_order_id': ..., 'quantity_shipped': ...}, ...]
+        other_po_ids: optional list of DE_OTHER_PO ids whose total_amount is rolled into landed cost
     """
     import math
     
@@ -1407,8 +1408,18 @@ def insert_shipment(data, lines):
     cost_shipped = float(data.get('cost_shipped')) if data.get('cost_shipped') else None
     amazon_commission = float(data.get('amazon_commission')) if data.get('amazon_commission') else 0.0
     
-    # total_cost = shipment cost + amazon commission (used for allocation)
-    total_cost = (cost_shipped or 0) + amazon_commission
+    # --- Roll connected Other PO amounts into the allocable cost ---
+    other_po_ids = [str(pid) for pid in (other_po_ids or []) if pid]
+    other_po_total = 0.0
+    if other_po_ids:
+        opo_ph = ', '.join([f'@opo_{i}' for i in range(len(other_po_ids))])
+        opo_q = f"SELECT COALESCE(SUM(total_amount), 0) AS s FROM `{OTHER_PO_TABLE}` WHERE other_po_id IN ({opo_ph})"
+        opo_params = [bigquery.ScalarQueryParameter(f'opo_{i}', 'STRING', pid) for i, pid in enumerate(other_po_ids)]
+        opo_rows = list(client.query(opo_q, job_config=bigquery.QueryJobConfig(query_parameters=opo_params)).result())
+        other_po_total = float(opo_rows[0].s) if opo_rows else 0.0
+
+    # total_cost = shipment cost + amazon commission + connected Other POs (used for allocation)
+    total_cost = (cost_shipped or 0) + amazon_commission + other_po_total
     
     # Handle is_paid checkbox
     is_paid_value = data.get('is_paid')
@@ -1577,7 +1588,26 @@ def insert_shipment(data, lines):
     lines_job.result()
     if lines_job.errors:
         return lines_job.errors, shipment_id
-    
+
+    # --- Insert connected Other PO junction rows ---
+    if other_po_ids:
+        link_rows = [{
+            'link_id': generate_id('SOP'),
+            'shipment_id': shipment_id,
+            'other_po_id': pid,
+        } for pid in other_po_ids]
+        sop_table_ref = client.get_table(SHIPMENT_OTHER_PO_TABLE)
+        sop_job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+            autodetect=False,
+            schema=sop_table_ref.schema,
+        )
+        sop_job = client.load_table_from_json(link_rows, sop_table_ref, job_config=sop_job_config)
+        sop_job.result()
+        if sop_job.errors:
+            return sop_job.errors, shipment_id
+
     # --- Cleanup APPROVED schedules to prevent duplication ---
     try:
         product_ids = [str(l.get('product_id')) for l in lines if l.get('product_id')]
@@ -2581,8 +2611,19 @@ def api_create_shipment():
         
         if not lines:
             return jsonify({'success': False, 'error': 'At least one shipment line is required (must provide PO ID and product)'}), 400
-            
-        errors, shipment_id = insert_shipment(header_data, lines)
+
+        # Validate connected Other POs (rolled into landed cost) — reject unknown ids
+        other_po_ids = [str(x) for x in (data.get('other_po_ids') or []) if x]
+        if other_po_ids:
+            chk_ph = ', '.join([f'@id_{i}' for i in range(len(other_po_ids))])
+            chk_q = f"SELECT other_po_id FROM `{OTHER_PO_TABLE}` WHERE other_po_id IN ({chk_ph})"
+            chk_params = [bigquery.ScalarQueryParameter(f'id_{i}', 'STRING', pid) for i, pid in enumerate(other_po_ids)]
+            found = {r.other_po_id for r in client.query(chk_q, job_config=bigquery.QueryJobConfig(query_parameters=chk_params)).result()}
+            missing = [pid for pid in other_po_ids if pid not in found]
+            if missing:
+                return jsonify({'success': False, 'error': f"Unknown Other PO id(s): {', '.join(missing)}"}), 400
+
+        errors, shipment_id = insert_shipment(header_data, lines, other_po_ids=other_po_ids)
         if errors:
             return jsonify({'success': False, 'error': f"Error inserting shipment: {errors}"}), 500
             
