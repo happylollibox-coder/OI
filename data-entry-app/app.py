@@ -4092,6 +4092,16 @@ def get_shipment_details(shipment_id):
             lines.append(d)
     shipment['lines'] = lines
 
+    # Connected Other POs (services rolled into landed cost) — read-only for the drawer
+    opo_q = f"""
+    SELECT j.other_po_id, o.supplier_name, o.service_type, o.total_amount, o.currency
+    FROM `{SHIPMENT_OTHER_PO_TABLE}` j
+    LEFT JOIN `{OTHER_PO_TABLE}` o ON j.other_po_id = o.other_po_id
+    WHERE j.shipment_id = @shipment_id
+    """
+    opo_rows = client.query(opo_q, job_config=job_config).result()
+    shipment['connected_other_pos'] = [dict(r) for r in opo_rows]
+
     return shipment
 
 
