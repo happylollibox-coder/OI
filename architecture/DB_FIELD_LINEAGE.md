@@ -21,7 +21,11 @@ Fivetran raw tables → SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY → FACT_AMAZON_PE
 | Dashboard Field | Cube Measure/Dim | BQ View Column | Logic Owner | Source Tables |
 |---|---|---|---|---|
 | Sales | `UnifiedPerformance.sales` | `V_UNIFIED_DAILY.sales` | `SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY` Step 1 | `V_SRC_sales_and_traffic_business_sku_report_daily.ordered_product_sales_amount` |
-| COGS | `UnifiedPerformance.cogs` | `V_UNIFIED_DAILY.cogs` | `SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY` Step 1 | `DIM_PRODUCT.total_cost` × units (via `FN_COGS` UDF) |
+| COGS (landed) | `UnifiedPerformance.cogs` | `V_UNIFIED_DAILY.cogs` | `SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY` Step 1 | `DIM_COSTS_HISTORY.TOTAL_COST_PER_UNIT` × units (via `FN_COGS` UDF). **LANDED** = `cogs_goods + shipping_cost + pick_pack_cost + referral_cost` (goods + freight + FBA fulfillment + referral). |
+| COGS — goods only | `UnifiedPerformance.cogsGoods` | `V_UNIFIED_DAILY.cogs_goods` | `V_UNIFIED_DAILY` `cost_components` CTE | units × `DIM_COSTS_HISTORY.cost_of_goods` (SCD2 date-range join) |
+| Shipping (freight-in) | `UnifiedPerformance.shippingCost` | `V_UNIFIED_DAILY.shipping_cost` | `V_UNIFIED_DAILY` `cost_components` CTE | units × `DIM_COSTS_HISTORY.shipping_cost` (SCD2 date-range join) |
+| Pick & Pack | `UnifiedPerformance.pickPackCost` | `V_UNIFIED_DAILY.pick_pack_cost` | `V_UNIFIED_DAILY` `cost_components` CTE | units × `DIM_COSTS_HISTORY.estimated_pick_pack_fee_per_unit` (SCD2 date-range join) |
+| Referral Fee | `UnifiedPerformance.referralCost` | `V_UNIFIED_DAILY.referral_cost` | `V_UNIFIED_DAILY` `cost_components` CTE | units × `DIM_COSTS_HISTORY.FBA_COST_estimated_referral_fee_per_unit` (SCD2 date-range join) |
 | Ads Spend | `UnifiedPerformance.adCost` | `V_UNIFIED_DAILY.ad_cost` | `V_UNIFIED_DAILY` join | `FACT_AMAZON_ADS.cost` (Fivetran → `V_SRC_AmazonAds_*`) |
 | Ads Sales | `UnifiedPerformance.adSales` | `V_UNIFIED_DAILY.ad_sales` | `V_UNIFIED_DAILY` join | `FACT_AMAZON_ADS.sales` (Fivetran) |
 | Ads Units | `UnifiedPerformance.adUnits` | `V_UNIFIED_DAILY.ad_units` | `V_UNIFIED_DAILY` join | `FACT_AMAZON_ADS.units` (Fivetran) |
