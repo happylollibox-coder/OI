@@ -389,6 +389,10 @@ views:
     description: "Keyword strategy prediction model results"
     source_files: ["scripts/bigquery/views/V_KEYWORD_STRATEGY_PREDICTIONS.sql"]
 
+  - name: "V_KEYWORD_INTENT_CLASS"
+    description: "Classifies each ad keyword as BRAND/PRODUCT/GENERIC (brand dict + research fit + anchors + manual override)"
+    source_files: ["scripts/bigquery/views/V_KEYWORD_INTENT_CLASS.sql"]
+
   - name: "V_SNAPSHOT_REMAINING_COSTS_SUMMARY"
     description: "Summarized remaining costs by product family"
     source_files: ["scripts/bigquery/views/V_SNAPSHOT_REMAINING_COSTS_SUMMARY.sql"]
@@ -886,6 +890,11 @@ tables:
     description: "Per parent x season x match-type bid strategy the coacher steers toward (derived + editable)"
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_PRODUCT_STRATEGY_PROFILE.sql"]
+
+  - name: "DE_KEYWORD_INTENT_OVERRIDE"
+    description: "Manual override of keyword intent class (BRAND/PRODUCT/GENERIC) for the coacher strategy"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_KEYWORD_INTENT_OVERRIDE.sql"]
 
 
   # ── STG_ Staging Tables ──
