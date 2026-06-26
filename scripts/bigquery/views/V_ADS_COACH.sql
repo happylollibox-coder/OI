@@ -739,10 +739,12 @@ SELECT
       THEN 'RESTORE_PRE_PEAK'
 
     -- ═══ PRODUCT STRATEGY PROFILE SUPPRESSION: block bid-up when the profile disables this match type
-    -- Only fires when profile_steers (MANUAL or CONCLUSIVE derived evidence) + profile_enabled = FALSE.
+    -- Only fires when intent_class = GENERIC (BRAND + PRODUCT intents are protected — never suppressed).
+    -- Also requires profile_steers (MANUAL or CONCLUSIVE derived evidence) + profile_enabled = FALSE.
     -- WEAK derived cells (profile_steers = NULL/FALSE) and no-profile families pass through unaffected.
     -- REDUCE_BID / STOP_TARGET / DEFENSE branches are intentionally not guarded — cuts and defense still fire.
-    WHEN d.profile_enabled = FALSE AND d.profile_steers
+    WHEN d.intent_class = 'GENERIC'
+      AND d.profile_enabled = FALSE AND d.profile_steers
       AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
       AND (d.target_roas >= d.th_scale_up_roas OR d.target_roas >= d.th_profitable_roas)
       AND d.eff_orders_for_bid >= 2
@@ -1107,6 +1109,7 @@ SELECT
         CONCAT(',{"id":"product_strategy","label":"Product Strategy","rule":"suppressed by product strategy","pass":',
           IF(COALESCE(d.profile_enabled, TRUE), 'true', 'false'),
           ',"value":"', COALESCE(d.profile_source, 'DERIVED'), ' · enabled=', CAST(COALESCE(d.profile_enabled, TRUE) AS STRING),
+          ' · intent=', COALESCE(d.intent_class, 'GENERIC'),
           IF(d.profile_cpc_target IS NOT NULL, CONCAT(' · target=$', CAST(ROUND(d.profile_cpc_target, 2) AS STRING)), ''),
           '"}'),
         ''),
