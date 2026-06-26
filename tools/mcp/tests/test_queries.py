@@ -2,6 +2,7 @@ from tools.mcp.google_ads.queries import (
     campaigns_query,
     asset_groups_query,
     asset_group_assets_query,
+    campaign_brand_assets_query,
 )
 
 
@@ -24,3 +25,10 @@ def test_asset_group_assets_query_filters_by_group():
     assert "FROM asset_group_asset" in q
     assert "asset_group.id = 987654" in q
     assert "asset_group_asset.field_type" in q
+
+
+def test_campaign_brand_assets_query_targets_business_name_and_logo():
+    q = campaign_brand_assets_query()
+    assert "FROM campaign_asset" in q
+    assert "BUSINESS_NAME" in q
+    assert "LOGO" in q

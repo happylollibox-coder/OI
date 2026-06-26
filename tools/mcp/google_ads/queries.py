@@ -24,6 +24,19 @@ def asset_groups_query() -> str:
     )
 
 
+def campaign_brand_assets_query() -> str:
+    """Campaign-level brand assets (business name, logos). In PMax these are set
+    once per campaign and apply to every asset group, so the asset-group audit
+    must count them or it false-flags them as missing."""
+    return (
+        "SELECT campaign.id, campaign_asset.field_type, campaign_asset.asset "
+        "FROM campaign_asset "
+        "WHERE campaign_asset.field_type IN "
+        "('BUSINESS_NAME', 'LOGO', 'LANDSCAPE_LOGO', 'BUSINESS_LOGO') "
+        "AND campaign_asset.status != 'REMOVED'"
+    )
+
+
 def asset_group_assets_query(asset_group_id: str) -> str:
     return (
         "SELECT asset_group_asset.field_type, asset_group_asset.asset, "
@@ -76,13 +89,28 @@ def fetch_account_snapshot(client, customer_id: str) -> dict:
         camp["asset_groups"].append(ag)
         camp["_ag_index"][ag["id"]] = ag
 
-    for camp in campaigns.values():
+    # Campaign-level brand assets (business name + logos) apply to every asset
+    # group in the campaign. Collect them per campaign so we can merge them in.
+    camp_brand: dict[str, list[tuple[str, str]]] = {}
+    for row in svc.search(
+        customer_id=customer_id, query=campaign_brand_assets_query()
+    ):
+        camp_brand.setdefault(str(row.campaign.id), []).append(
+            (row.campaign_asset.field_type.name, str(row.campaign_asset.asset))
+        )
+
+    for camp_id, camp in campaigns.items():
+        brand = camp_brand.get(camp_id, [])
         for ag in camp["asset_groups"]:
             for row in svc.search(
                 customer_id=customer_id, query=asset_group_assets_query(ag["id"])
             ):
                 field = row.asset_group_asset.field_type.name
                 ag["assets"].setdefault(field, []).append(str(row.asset.id))
+            # Merge campaign-wide brand assets (business name, logos) into the
+            # asset group's coverage so they aren't false-flagged as missing.
+            for field, asset_id in brand:
+                ag["assets"].setdefault(field, []).append(asset_id)
         camp.pop("_ag_index", None)
 
     return {
