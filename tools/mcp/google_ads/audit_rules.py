@@ -87,3 +87,23 @@ def check_targeting(ag: dict) -> list[Finding]:
         return [Finding("warning", scope, "audience_signal",
             "No audience signal attached — slows PMax learning.")]
     return []
+
+
+def check_campaign(camp: dict) -> list[Finding]:
+    scope = f"campaign:{camp.get('name', '?')}"
+    findings: list[Finding] = []
+
+    if (camp.get("budget_micros") or 0) <= 0:
+        findings.append(Finding("error", scope, "budget",
+            "Campaign has no daily budget set."))
+    if camp.get("target_roas") in (None, 0):
+        findings.append(Finding("warning", scope, "target_roas",
+            "No target ROAS set — bidding has no profit target."))
+    if not camp.get("final_url_expansion_opt_out", False):
+        findings.append(Finding("warning", scope, "final_url_expansion",
+            "Final URL expansion is ON — verify it isn't sending traffic to off-target pages."))
+    if (camp.get("brand_exclusions_count") or 0) < 1:
+        findings.append(Finding("warning", scope, "brand_exclusions",
+            "No brand exclusions — PMax may spend on your own brand searches."))
+
+    return findings

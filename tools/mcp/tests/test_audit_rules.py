@@ -111,3 +111,43 @@ def test_targeting_warns_when_no_audience_signal():
 def test_targeting_ok_with_audience_signal():
     ag = {"name": "G", "has_audience_signal": True}
     assert all(f.check != "audience_signal" for f in check_targeting(ag))
+
+
+from tools.mcp.google_ads.audit_rules import check_campaign
+
+
+def _campaign(**overrides):
+    base = {
+        "name": "PMax-Gifts",
+        "status": "ENABLED",
+        "budget_micros": 50_000_000,
+        "target_roas": 4.0,
+        "final_url_expansion_opt_out": True,
+        "brand_exclusions_count": 1,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_campaign_healthy_has_no_errors():
+    assert all(f.severity != "error" for f in check_campaign(_campaign()))
+
+
+def test_campaign_zero_budget_is_error():
+    findings = check_campaign(_campaign(budget_micros=0))
+    assert any(f.check == "budget" and f.severity == "error" for f in findings)
+
+
+def test_campaign_missing_target_roas_is_warning():
+    findings = check_campaign(_campaign(target_roas=None))
+    assert any(f.check == "target_roas" and f.severity == "warning" for f in findings)
+
+
+def test_campaign_url_expansion_on_is_warning():
+    findings = check_campaign(_campaign(final_url_expansion_opt_out=False))
+    assert any(f.check == "final_url_expansion" and f.severity == "warning" for f in findings)
+
+
+def test_campaign_no_brand_exclusions_is_warning():
+    findings = check_campaign(_campaign(brand_exclusions_count=0))
+    assert any(f.check == "brand_exclusions" and f.severity == "warning" for f in findings)
