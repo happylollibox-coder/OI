@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE` (
   tos_target_pct  FLOAT64,                  -- nullable until foundation A
   borrowed_from   STRING,                   -- nullable until sub-project C
   source          STRING NOT NULL,          -- DERIVED / MANUAL / BORROWED
+  status          STRING,                   -- MANUAL suggestions: PENDING / VALIDATED / REJECTED (NULL/ACTIVE for DERIVED)
+  applied_at      TIMESTAMP,                -- when a MANUAL suggestion went live (for outcome scoring)
   updated_at      TIMESTAMP,
   updated_by      STRING
 )

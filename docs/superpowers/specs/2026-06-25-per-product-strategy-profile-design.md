@@ -122,6 +122,10 @@ Business-wide: most profitable band $0.50–0.60; off-season net profit turns ne
 - **Selection effects** in the source analysis (raising winners) — the profile encodes associations, not proven causation; Ori's MANUAL overrides are the safety valve.
 - Observational, US-only.
 
+## 9b. Refinement (2026-06-25, at the seed-review checkpoint)
+1. **CONCLUSIVE-only steering, with MANUAL override.** A profile cell steers the bid band **and** suppression only when `source='MANUAL'` OR `confidence='CONCLUSIVE'` (`profile_steers`). WEAK *derived* cells apply nothing (fall back to the generic engine) — this auto-ignores thin-data artifacts seen in the seed (e.g. WEAK PHRASE net/$ of 21, junk bands like $0.00–0.10).
+2. **Manual suggestions are tried, then judged.** Ori's MANUAL rows always steer (even if unproven). New columns `status` (PENDING/VALIDATED/REJECTED) + `applied_at` track them; the data-entry upsert stamps `status='PENDING'`, `applied_at=now`. A new view `V_PRODUCT_STRATEGY_OUTCOMES` scores each MANUAL suggestion's ads net-profit-per-dollar post-vs-pre `applied_at` and emits a verdict (GAIN/LOSS/INSUFFICIENT) — the "try them and decide the results" loop (full auto-escalation lives in sub-project E).
+
 ## 10. Testing
 - `SP_REFRESH_PRODUCT_STRATEGY`: run against a synthetic keyword×day fixture; assert per-cell `enabled`/`cpc_target`/`confidence` match expected, and that a pre-seeded `source='MANUAL'` row is left untouched.
 - Steering SQL: row-count parity before/after the join (no fan-out); every `recommended_bid` for a profiled row lands within `[cpc_min, cpc_max]`; `enabled=FALSE` cells emit zero `INCREASE_BID`; a decision-trace chip is present.

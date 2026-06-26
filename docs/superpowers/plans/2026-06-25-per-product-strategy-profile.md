@@ -489,6 +489,9 @@ In the CTE that joins `DIM_STRATEGY_TEMPLATE` (the one exposing `recommended_bid
   ,psp.cpc_min        AS profile_cpc_min
   ,psp.cpc_max        AS profile_cpc_max
   ,psp.confidence     AS profile_confidence
+  ,psp.source         AS profile_source
+  -- profile STEERS only when the user manually set it OR the derived evidence is conclusive
+  ,(psp.source = 'MANUAL' OR psp.confidence = 'CONCLUSIVE') AS profile_steers
 ```
 and the join (place next to the `DIM_STRATEGY_TEMPLATE` LEFT JOIN, mapping the row's match type via the same normalization as the tool — uppercased `targeting_type` collapsed to BROAD/EXACT/PHRASE/AUTO/PRODUCT):
 ```sql
@@ -536,10 +539,10 @@ Note: where `strategy_bid_min`/`strategy_bid_max` are set (≈ lines 162/209), w
 
 - [ ] **Step 2: Override the bid band with the product band**
 
-Change the `strategy_bid_min` / `strategy_bid_max` definitions to prefer the product profile:
+Change the `strategy_bid_min` / `strategy_bid_max` definitions to prefer the product profile **only when it steers** (MANUAL or CONCLUSIVE — WEAK derived cells fall through to the generic defaults):
 ```sql
-    COALESCE(d.profile_cpc_min, stmpl.recommended_bid_min, 0.10) as strategy_bid_min,
-    COALESCE(d.profile_cpc_max, stmpl.recommended_bid_max)      as strategy_bid_max,
+    COALESCE(IF(d.profile_steers, d.profile_cpc_min, NULL), stmpl.recommended_bid_min, 0.10) as strategy_bid_min,
+    COALESCE(IF(d.profile_steers, d.profile_cpc_max, NULL), stmpl.recommended_bid_max)      as strategy_bid_max,
 ```
 The existing `recommended_bid` already clamps with `LEAST(..., bid_cap)`; extend it to also respect the band:
 ```sql
@@ -549,14 +552,14 @@ The existing `recommended_bid` already clamps with `LEAST(..., bid_cap)`; extend
 
 - [ ] **Step 3: Suppress bid-up on CONCLUSIVE-negative cells**
 
-In the `target_action` CASE, add — **before** any branch that can emit `INCREASE_BID` — a guard that blocks bid-up when the product profile disables this match type with confidence:
+In the `target_action` CASE, add — **before** any branch that can emit `INCREASE_BID` — a guard that blocks bid-up when the product profile disables this match type **and the profile steers** (MANUAL suggestion, or CONCLUSIVE derived evidence):
 ```sql
-      WHEN d.profile_enabled = FALSE AND d.profile_confidence = 'CONCLUSIVE'
+      WHEN d.profile_enabled = FALSE AND d.profile_steers
            AND <the_increase_condition> THEN 'MONITOR_TARGET'
 ```
-Keep `REDUCE_BID` / `STOP_TARGET` branches intact (money-bleeders in a suppressed cell should still be cut). Add a decision-trace chip in the existing trace JSON build: `STRUCT('product_strategy' AS id, 'suppressed by product strategy' AS label, d.profile_confidence AS rule)` (match the existing chip struct shape in the file).
+Keep `REDUCE_BID` / `STOP_TARGET` branches intact (money-bleeders in a suppressed cell should still be cut). A WEAK derived cell (`profile_steers = FALSE`) applies nothing — no band, no suppression. Add a decision-trace chip in the existing trace JSON build: `STRUCT('product_strategy' AS id, 'suppressed by product strategy' AS label, d.profile_source AS rule)` (match the existing chip struct shape in the file).
 
-Also surface the profile fields in `V_ADS_COACH`'s final SELECT so they're queryable for validation and display: add `d.profile_cpc_min`, `d.profile_cpc_max`, `d.profile_cpc_target`, `d.profile_enabled`, `d.profile_confidence` to the output column list.
+Also surface the profile fields in `V_ADS_COACH`'s final SELECT so they're queryable for validation and display: add `d.profile_cpc_min`, `d.profile_cpc_max`, `d.profile_cpc_target`, `d.profile_enabled`, `d.profile_confidence`, `d.profile_source`, `d.profile_steers` to the output column list.
 
 - [ ] **Step 4: Deploy the view**
 
@@ -569,9 +572,9 @@ Run:
 ```bash
 bq --project_id=onyga-482313 query --use_legacy_sql=false --format=pretty '
 SELECT
-  COUNTIF(profile_cpc_max IS NOT NULL AND recommended_bid > profile_cpc_max + 0.001) AS over_band,
-  COUNTIF(profile_cpc_min IS NOT NULL AND recommended_bid < profile_cpc_min - 0.001) AS under_band,
-  COUNTIF(profile_enabled = FALSE AND profile_confidence="CONCLUSIVE" AND target_action="INCREASE_BID") AS suppressed_violations
+  COUNTIF(profile_steers AND profile_cpc_max IS NOT NULL AND recommended_bid > profile_cpc_max + 0.001) AS over_band,
+  COUNTIF(profile_steers AND profile_cpc_min IS NOT NULL AND recommended_bid < profile_cpc_min - 0.001) AS under_band,
+  COUNTIF(profile_enabled = FALSE AND profile_steers AND target_action="INCREASE_BID") AS suppressed_violations
 FROM `onyga-482313.OI.V_ADS_COACH`'
 ```
 Expected: `over_band=0`, `under_band=0`, `suppressed_violations=0`. Any non-zero means the clamp/suppress isn't applied — stop and fix.
@@ -625,9 +628,10 @@ def upsert_product_strategy():
       USING (SELECT @parent parent_name, @season season, @mt match_type) s
       ON t.parent_name=s.parent_name AND t.season=s.season AND t.match_type=s.match_type
       WHEN MATCHED THEN UPDATE SET enabled=@enabled, cpc_target=@cpc_target, cpc_min=@cpc_min,
-        cpc_max=@cpc_max, source='MANUAL', updated_at=CURRENT_TIMESTAMP(), updated_by=@user
-      WHEN NOT MATCHED THEN INSERT (parent_name,season,match_type,enabled,cpc_target,cpc_min,cpc_max,source,updated_at,updated_by)
-        VALUES (@parent,@season,@mt,@enabled,@cpc_target,@cpc_min,@cpc_max,'MANUAL',CURRENT_TIMESTAMP(),@user)"""
+        cpc_max=@cpc_max, source='MANUAL', status='PENDING', applied_at=CURRENT_TIMESTAMP(),
+        updated_at=CURRENT_TIMESTAMP(), updated_by=@user
+      WHEN NOT MATCHED THEN INSERT (parent_name,season,match_type,enabled,cpc_target,cpc_min,cpc_max,source,status,applied_at,updated_at,updated_by)
+        VALUES (@parent,@season,@mt,@enabled,@cpc_target,@cpc_min,@cpc_max,'MANUAL','PENDING',CURRENT_TIMESTAMP(),CURRENT_TIMESTAMP(),@user)"""
     run_parameterized(sql, p)   # use the app's existing parameterized-query helper
     clear_data_cache()
     return jsonify({"ok": True})
@@ -648,6 +652,99 @@ Expected: a JSON array of profile rows (or an auth redirect if the local dev tok
 ```bash
 git add data-entry-app/app.py
 git commit --no-verify -m "feat(coach): data-entry CRUD for per-product strategy profile (MANUAL edits)"
+```
+
+---
+
+### Task 8: Outcomes view — score & decide each MANUAL suggestion
+
+**Files:**
+- Create: `scripts/bigquery/views/V_PRODUCT_STRATEGY_OUTCOMES.sql`
+- Modify: `config.yaml`
+
+Purpose: for every MANUAL suggestion (`source='MANUAL'`, `applied_at` set), measure ads net-profit-per-dollar in the window since it went live vs the equal-length window before, and emit a verdict (GAIN / LOSS / INSUFFICIENT) — this is the "try them and decide the results" loop.
+
+- [ ] **Step 1: Write `V_PRODUCT_STRATEGY_OUTCOMES.sql`**
+
+```sql
+-- V_PRODUCT_STRATEGY_OUTCOMES — net-profit verdict per MANUAL strategy suggestion (pre vs post applied_at)
+CREATE OR REPLACE VIEW `onyga-482313.OI.V_PRODUCT_STRATEGY_OUTCOMES` AS
+WITH camp_parent AS (
+  SELECT campaign_id, parent_name FROM (
+    SELECT a.campaign_id, p.parent_name,
+      ROW_NUMBER() OVER (PARTITION BY a.campaign_id ORDER BY SUM(a.Ads_cost) DESC) rn
+    FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
+    JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = a.ASIN_BY_CAMPAIGN_NAME
+    WHERE a.date >= DATE('2025-09-23') GROUP BY a.campaign_id, p.parent_name
+  ) WHERE rn = 1
+),
+cal AS (
+  SELECT d AS date,
+    IF(MAX(CASE WHEN d BETWEEN h.boost_start AND h.cooldown_start THEN 1 END) = 1, 'PEAK', 'OFF') AS season
+  FROM UNNEST(GENERATE_DATE_ARRAY(DATE('2025-09-23'), CURRENT_DATE('America/Los_Angeles'))) d
+  LEFT JOIN `onyga-482313.OI.DIM_US_HOLIDAYS` h ON d BETWEEN h.boost_start AND h.cooldown_start
+  GROUP BY d
+),
+kd AS (
+  SELECT a.date, cp.parent_name, cal.season,
+    CASE LOWER(a.targeting_type)
+      WHEN 'broad' THEN 'BROAD' WHEN 'exact' THEN 'EXACT' WHEN 'phrase' THEN 'PHRASE'
+      WHEN 'automatic' THEN 'AUTO' WHEN 'asin' THEN 'PRODUCT' WHEN 'asin expanded' THEN 'PRODUCT'
+      WHEN 'category' THEN 'CATEGORY' ELSE UPPER(a.targeting_type) END AS match_type,
+    SUM(a.GROSS_PROFIT) AS gp, SUM(a.Ads_cost) AS cost
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
+  JOIN camp_parent cp ON cp.campaign_id = a.campaign_id
+  JOIN cal ON cal.date = a.date
+  WHERE a.Ads_clicks > 0
+  GROUP BY 1, 2, 3, 4
+),
+m AS (
+  SELECT parent_name, season, match_type, enabled, cpc_target, status, applied_at,
+    DATE(applied_at, 'America/Los_Angeles') AS applied_date,
+    GREATEST(DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), DATE(applied_at, 'America/Los_Angeles'), DAY), 1) AS post_days
+  FROM `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE`
+  WHERE source = 'MANUAL' AND applied_at IS NOT NULL
+),
+agg AS (
+  SELECT m.parent_name, m.season, m.match_type, m.enabled, m.cpc_target, m.status, m.applied_at, m.post_days,
+    SUM(IF(kd.date >= m.applied_date, kd.gp - kd.cost, 0)) AS post_net,
+    SUM(IF(kd.date >= m.applied_date, kd.cost, 0)) AS post_cost,
+    SUM(IF(kd.date < m.applied_date AND kd.date >= DATE_SUB(m.applied_date, INTERVAL m.post_days DAY), kd.gp - kd.cost, 0)) AS pre_net,
+    SUM(IF(kd.date < m.applied_date AND kd.date >= DATE_SUB(m.applied_date, INTERVAL m.post_days DAY), kd.cost, 0)) AS pre_cost
+  FROM m LEFT JOIN kd
+    ON kd.parent_name = m.parent_name AND kd.season = m.season AND kd.match_type = m.match_type
+  GROUP BY 1,2,3,4,5,6,7,8
+)
+SELECT *,
+  ROUND(SAFE_DIVIDE(post_net, NULLIF(post_cost, 0)), 2) AS post_net_per_dollar,
+  ROUND(SAFE_DIVIDE(pre_net,  NULLIF(pre_cost, 0)),  2) AS pre_net_per_dollar,
+  CASE
+    WHEN post_cost < 200 THEN 'INSUFFICIENT'
+    WHEN SAFE_DIVIDE(post_net, NULLIF(post_cost,0)) >= COALESCE(SAFE_DIVIDE(pre_net, NULLIF(pre_cost,0)), 0) THEN 'GAIN'
+    ELSE 'LOSS' END AS verdict
+FROM agg;
+```
+
+- [ ] **Step 2: Deploy + validate it runs**
+
+Run:
+```bash
+cd /Users/ori/Develop/OI
+bq --project_id=onyga-482313 query --use_legacy_sql=false < scripts/bigquery/views/V_PRODUCT_STRATEGY_OUTCOMES.sql && echo OK
+bq --project_id=onyga-482313 query --use_legacy_sql=false --format=pretty 'SELECT * FROM `onyga-482313.OI.V_PRODUCT_STRATEGY_OUTCOMES`'
+```
+Expected: `OK`, then a result set (empty until a MANUAL suggestion with `applied_at` exists — that's correct; insert one via the Task 7 endpoint to see a verdict row).
+
+- [ ] **Step 3: Register in config.yaml + commit**
+
+Add to `config.yaml` (views section):
+```yaml
+  - name: "V_PRODUCT_STRATEGY_OUTCOMES"
+    description: "Net-profit verdict (GAIN/LOSS/INSUFFICIENT) per MANUAL strategy suggestion, pre vs post applied_at"
+```
+```bash
+git add scripts/bigquery/views/V_PRODUCT_STRATEGY_OUTCOMES.sql config.yaml
+git commit --no-verify -m "feat(coach): outcomes view to score & decide manual strategy suggestions"
 ```
 
 ---
