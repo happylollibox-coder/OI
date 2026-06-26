@@ -574,8 +574,11 @@ bq --project_id=onyga-482313 query --use_legacy_sql=false --format=pretty '
 SELECT
   COUNTIF(profile_steers AND profile_cpc_max IS NOT NULL AND recommended_bid > profile_cpc_max + 0.001) AS over_band,
   COUNTIF(profile_steers AND profile_cpc_min IS NOT NULL AND recommended_bid < profile_cpc_min - 0.001) AS under_band,
-  COUNTIF(profile_enabled = FALSE AND profile_steers AND target_action="INCREASE_BID") AS suppressed_violations
+  COUNTIF(profile_enabled = FALSE AND profile_steers AND target_action="INCREASE_BID"
+          AND strategy_id NOT IN ("BRAND_DEFENSE","PRODUCT_DEFENSE")) AS suppressed_violations
 FROM `onyga-482313.OI.V_ADS_COACH`'
+-- Defense strategies (BRAND_DEFENSE/PRODUCT_DEFENSE) are exempt — they must always bid up to
+-- protect listings, so the suppression guard carves them out. Only NON-defense violations count.
 ```
 Expected: `over_band=0`, `under_band=0`, `suppressed_violations=0`. Any non-zero means the clamp/suppress isn't applied — stop and fix.
 
