@@ -427,7 +427,9 @@ ads_8w AS (
     -- Recent 5d bleeding detection
     SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 5 DAY) THEN fa.Ads_clicks ELSE 0 END) as ads_clicks_recent_5d,
     -- Latest keyword status (ENABLED/PAUSED/ARCHIVED) per search_term
-    UPPER(ANY_VALUE(fa.ad_keyword_status HAVING MAX fa.date)) as ad_keyword_status
+    UPPER(ANY_VALUE(fa.ad_keyword_status HAVING MAX fa.date)) as ad_keyword_status,
+    -- Match type (latest) for the per-product strategy profile join
+    UPPER(ANY_VALUE(fa.targeting_type HAVING MAX fa.date)) as targeting_type
 
   FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
   JOIN campaign_experiment ce ON ec.campaign_id = ce.campaign_id AND ec.experiment_id = ce.experiment_id
@@ -1035,6 +1037,43 @@ exact_boost_terms AS (
 ),
 
 -- =============================================
+-- Per-family season for the product strategy profile join
+-- PEAK = family has active BLITZ holiday right now (PRE_PEAK/BOOST/PEAK phase)
+-- OFF  = everything else (GUARDIAN / COOLDOWN)
+-- Mirrors the V_ADS_COACH coach_mode logic without creating a circular dependency.
+-- =============================================
+family_season AS (
+  SELECT
+    families.parent_name,
+    CASE
+      WHEN COUNT(fbm.parent_name) > 0 THEN 'PEAK'
+      ELSE 'OFF'
+    END AS profile_season
+  FROM (
+    SELECT DISTINCT COALESCE(p.parent_name, '') AS parent_name
+    FROM `onyga-482313.OI.DIM_PRODUCT` p
+    WHERE p.parent_name IS NOT NULL AND p.parent_name != ''
+  ) families
+  LEFT JOIN (
+    -- Which (family, holiday) combos are in an active BLITZ phase right now?
+    SELECT DISTINCT fhr.parent_name
+    FROM (
+      SELECT DISTINCT family AS parent_name, holiday_name
+      FROM `onyga-482313.OI.V_PEAK_RELEVANCE` WHERE is_relevant_peak = TRUE
+      UNION DISTINCT
+      SELECT DISTINCT family AS parent_name, holiday_name
+      FROM `onyga-482313.OI.DE_PEAK_OVERRIDES` WHERE force_relevant = TRUE
+    ) fhr
+    JOIN `onyga-482313.OI.DIM_US_HOLIDAYS` ah
+      ON ah.holiday_name = fhr.holiday_name
+      AND ah.category IN ('gift_season', 'prime_event')
+      AND CURRENT_DATE('America/New_York') BETWEEN ah.pre_season_start AND ah.holiday_date
+      AND CURRENT_DATE('America/New_York') NOT BETWEEN ah.cooldown_start AND ah.cooldown_end
+  ) fbm ON LOWER(families.parent_name) = LOWER(fbm.parent_name)
+  GROUP BY families.parent_name
+),
+
+-- =============================================
 -- ACTIVE TERM ROWS: assemble all windows at campaign × asin × keyword grain
 -- Now includes targeting (target keyword) and weighted ROAS
 -- =============================================
@@ -1502,7 +1541,21 @@ active_term_data AS (
     -- Keyword-grain 4w spend + hero match — consumed by the TARGET bid decision so its money-bleeder
     -- and SWITCH_HERO branches judge the whole keyword, not a single search-term slice.
     COALESCE(cr4.clause_spend_4w, 0) as target_spend_4w,
-    COALESCE(thm.target_is_hero_match, FALSE) as target_is_hero_match
+    COALESCE(thm.target_is_hero_match, FALSE) as target_is_hero_match,
+
+    -- ═══ Per-product strategy profile (Task 5: season + profile join) ═══
+    -- Season: PEAK when the family has an active BLITZ holiday, OFF otherwise.
+    -- Profile: one row per (parent × season × match_type) from DE_PRODUCT_STRATEGY_PROFILE.
+    -- Join is many-to-one → never multiplies rows.
+    COALESCE(fs.profile_season, 'OFF') as profile_season,
+    psp.enabled        as profile_enabled,
+    psp.cpc_target     as profile_cpc_target,
+    psp.cpc_min        as profile_cpc_min,
+    psp.cpc_max        as profile_cpc_max,
+    psp.confidence     as profile_confidence,
+    psp.source         as profile_source,
+    -- profile_steers = true when the evidence is conclusive or the user set it manually
+    (psp.source = 'MANUAL' OR psp.confidence = 'CONCLUSIVE') as profile_steers
 
   FROM ads_8w a8
   JOIN asin_economics ae ON a8.asin = ae.asin
@@ -1551,6 +1604,21 @@ active_term_data AS (
   LEFT JOIN suggestion_by_keyword slk ON a8.campaign_id = slk.campaign_id AND a8.keyword_id = slk.keyword_id
   LEFT JOIN suggestion_by_targeting slt ON a8.campaign_id = slt.campaign_id AND LOWER(a8.targeting) = slt.targeting_lc
   LEFT JOIN suggestion_by_campaign slc ON a8.campaign_id = slc.campaign_id
+  -- Per-product strategy profile: season then profile row (many-to-one — no fan-out)
+  LEFT JOIN family_season fs ON LOWER(ae.parent_name) = LOWER(fs.parent_name)
+  LEFT JOIN `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE` psp
+    ON psp.parent_name = ae.parent_name
+   AND psp.season = COALESCE(fs.profile_season, 'OFF')
+   AND psp.match_type = CASE UPPER(a8.targeting_type)
+        WHEN 'BROAD'         THEN 'BROAD'
+        WHEN 'EXACT'         THEN 'EXACT'
+        WHEN 'PHRASE'        THEN 'PHRASE'
+        WHEN 'AUTOMATIC'     THEN 'AUTO'
+        WHEN 'ASIN'          THEN 'PRODUCT'
+        WHEN 'ASIN EXPANDED' THEN 'PRODUCT'
+        WHEN 'CATEGORY'      THEN 'CATEGORY'
+        ELSE UPPER(a8.targeting_type)
+      END
 ),
 
 -- =============================================
@@ -1744,7 +1812,17 @@ opportunity_data AS (
     CAST(0 AS INT64) as target_clicks_4w,
     CAST(NULL AS FLOAT64) as target_net_roas_4w,
     CAST(0 AS FLOAT64) as target_spend_4w,
-    CAST(FALSE AS BOOL) as target_is_hero_match
+    CAST(FALSE AS BOOL) as target_is_hero_match,
+
+    -- Per-product strategy profile (NULL for opportunities — no targeting match type)
+    CAST(NULL AS STRING)  as profile_season,
+    CAST(NULL AS BOOL)    as profile_enabled,
+    CAST(NULL AS FLOAT64) as profile_cpc_target,
+    CAST(NULL AS FLOAT64) as profile_cpc_min,
+    CAST(NULL AS FLOAT64) as profile_cpc_max,
+    CAST(NULL AS STRING)  as profile_confidence,
+    CAST(NULL AS STRING)  as profile_source,
+    CAST(NULL AS BOOL)    as profile_steers
 
   FROM sqp_with_purchases sp
   JOIN asin_economics ae ON sp.asin = ae.asin
