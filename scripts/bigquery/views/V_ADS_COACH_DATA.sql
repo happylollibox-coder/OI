@@ -1077,6 +1077,22 @@ family_season AS (
 ),
 
 -- =============================================
+-- TOS 8w aggregate: lag-trimmed 8-week per-keyword TOS share + impression volume
+-- from V_KEYWORD_DAILY (targeting_keyword_report). One row per keyword_id → no fan-out.
+-- Window: today-58d to today-2d (excludes the 2-day attribution lag edge).
+-- =============================================
+tos_8w AS (
+  SELECT keyword_id,
+    SAFE_DIVIDE(SUM(tos_share * impressions), NULLIF(SUM(impressions), 0)) AS target_tos_share,
+    SUM(impressions) AS target_impressions_8w_kw,
+    SAFE_DIVIDE(COUNTIF(no_traffic), COUNT(*)) AS no_traffic_rate
+  FROM `onyga-482313.OI.V_KEYWORD_DAILY`
+  WHERE date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 58 DAY)
+    AND date <  DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 2 DAY)
+  GROUP BY keyword_id
+),
+
+-- =============================================
 -- ACTIVE TERM ROWS: assemble all windows at campaign × asin × keyword grain
 -- Now includes targeting (target keyword) and weighted ROAS
 -- =============================================
@@ -1560,7 +1576,17 @@ active_term_data AS (
     -- profile_steers = true when the evidence is conclusive or the user set it manually
     (psp.source = 'MANUAL' OR psp.confidence = 'CONCLUSIVE') as profile_steers,
     -- intent_class: BRAND / PRODUCT / GENERIC (from V_KEYWORD_INTENT_CLASS; default GENERIC)
-    COALESCE(kic.intent_class, 'GENERIC') as intent_class
+    COALESCE(kic.intent_class, 'GENERIC') as intent_class,
+
+    -- ═══ TOS signals (Task 3): 8-week per-keyword aggregate from V_KEYWORD_DAILY ═══
+    -- target_tos_share: impression-weighted avg TOS share (0–100) over 8w lag-trimmed window.
+    -- target_impressions_8w_kw: total keyword impressions in that window.
+    -- no_traffic_rate: fraction of days the keyword had 0 impressions (buried detection).
+    -- tos_target_pct: per-cell TOS target from DE_PRODUCT_STRATEGY_PROFILE (seeded by Task 2).
+    t8w.target_tos_share,
+    t8w.target_impressions_8w_kw,
+    t8w.no_traffic_rate,
+    psp.tos_target_pct
 
   FROM ads_8w a8
   JOIN asin_economics ae ON a8.asin = ae.asin
@@ -1629,6 +1655,8 @@ active_term_data AS (
         WHEN 'CATEGORY'      THEN 'CATEGORY'
         ELSE UPPER(a8.targeting_type)
       END
+  -- TOS 8w: one row per keyword_id → many-to-one, no fan-out
+  LEFT JOIN tos_8w t8w ON t8w.keyword_id = CAST(a8.keyword_id AS STRING)
 ),
 
 -- =============================================
@@ -1833,7 +1861,13 @@ opportunity_data AS (
     CAST(NULL AS STRING)  as profile_confidence,
     CAST(NULL AS STRING)  as profile_source,
     CAST(NULL AS BOOL)    as profile_steers,
-    CAST(NULL AS STRING)  as intent_class
+    CAST(NULL AS STRING)  as intent_class,
+
+    -- TOS signals (NULL for opportunities — no keyword_id / no keyword report data)
+    CAST(NULL AS FLOAT64) as target_tos_share,
+    CAST(NULL AS INT64)   as target_impressions_8w_kw,
+    CAST(NULL AS FLOAT64) as no_traffic_rate,
+    CAST(NULL AS FLOAT64) as tos_target_pct
 
   FROM sqp_with_purchases sp
   JOIN asin_economics ae ON sp.asin = ae.asin
