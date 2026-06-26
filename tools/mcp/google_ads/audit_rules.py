@@ -67,3 +67,23 @@ def check_image_coverage(ag: dict) -> list[Finding]:
             "No square (1:1) logo."))
 
     return findings
+
+
+def check_ad_strength(ag: dict) -> list[Finding]:
+    scope = f"asset_group:{ag.get('name', '?')}"
+    strength = (ag.get("ad_strength") or "PENDING").upper()
+    if strength == "POOR":
+        return [Finding("error", scope, "ad_strength",
+            "Ad strength is POOR — add more/varied assets.")]
+    if strength == "AVERAGE":
+        return [Finding("warning", scope, "ad_strength",
+            "Ad strength is AVERAGE — room to improve.")]
+    return [Finding("ok", scope, "ad_strength", f"Ad strength is {strength}.")]
+
+
+def check_targeting(ag: dict) -> list[Finding]:
+    scope = f"asset_group:{ag.get('name', '?')}"
+    if not ag.get("has_audience_signal", False):
+        return [Finding("warning", scope, "audience_signal",
+            "No audience signal attached — slows PMax learning.")]
+    return []

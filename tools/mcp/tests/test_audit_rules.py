@@ -80,3 +80,34 @@ def test_image_coverage_errors_when_no_logo():
     ag = {"name": "G", "assets": _img_assets(LOGO=[])}
     findings = check_image_coverage(ag)
     assert any(f.check == "logo" and f.severity == "error" for f in findings)
+
+
+from tools.mcp.google_ads.audit_rules import check_ad_strength, check_targeting
+
+
+def test_ad_strength_good_is_ok():
+    ag = {"name": "G", "ad_strength": "GOOD"}
+    assert all(f.severity != "error" for f in check_ad_strength(ag))
+
+
+def test_ad_strength_poor_is_error():
+    ag = {"name": "G", "ad_strength": "POOR"}
+    findings = check_ad_strength(ag)
+    assert any(f.check == "ad_strength" and f.severity == "error" for f in findings)
+
+
+def test_ad_strength_average_is_warning():
+    ag = {"name": "G", "ad_strength": "AVERAGE"}
+    findings = check_ad_strength(ag)
+    assert any(f.check == "ad_strength" and f.severity == "warning" for f in findings)
+
+
+def test_targeting_warns_when_no_audience_signal():
+    ag = {"name": "G", "has_audience_signal": False}
+    findings = check_targeting(ag)
+    assert any(f.check == "audience_signal" and f.severity == "warning" for f in findings)
+
+
+def test_targeting_ok_with_audience_signal():
+    ag = {"name": "G", "has_audience_signal": True}
+    assert all(f.check != "audience_signal" for f in check_targeting(ag))
