@@ -8,8 +8,7 @@ def campaigns_query() -> str:
     return (
         "SELECT campaign.id, campaign.name, campaign.status, "
         "campaign.advertising_channel_type, campaign_budget.amount_micros, "
-        "campaign.maximize_conversion_value.target_roas, "
-        "campaign.url_expansion_opt_out "
+        "campaign.maximize_conversion_value.target_roas "
         "FROM campaign "
         "WHERE campaign.advertising_channel_type IN ('PERFORMANCE_MAX', 'SHOPPING') "
         "AND campaign.status != 'REMOVED'"
@@ -54,7 +53,9 @@ def fetch_account_snapshot(client, customer_id: str) -> dict:
             "status": row.campaign.status.name,
             "budget_micros": row.campaign_budget.amount_micros,
             "target_roas": target_roas,
-            "final_url_expansion_opt_out": bool(row.campaign.url_expansion_opt_out),
+            # Final-URL-expansion state is not selectable via GAQL (no such field
+            # in the current API), so we leave it unknown and the audit skips it.
+            "final_url_expansion_opt_out": None,
             "brand_exclusions_count": 0,  # populated by a brand-list query in a later iteration
             "asset_groups": [],
             "_ag_index": {},

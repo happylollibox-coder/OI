@@ -176,6 +176,12 @@ def test_campaign_no_brand_exclusions_is_warning():
     assert any(f.check == "brand_exclusions" and f.severity == "warning" for f in findings)
 
 
+def test_campaign_unknown_url_expansion_does_not_warn():
+    # None = not readable via the API → skip the check, don't false-warn.
+    findings = check_campaign(_campaign(final_url_expansion_opt_out=None))
+    assert all(f.check != "final_url_expansion" for f in findings)
+
+
 import json
 from pathlib import Path
 
