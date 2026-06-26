@@ -896,6 +896,11 @@ tables:
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_KEYWORD_INTENT_OVERRIDE.sql"]
 
+  - name: "DE_PRODUCT_CATEGORY_TERMS"
+    description: "Per-family product-category term regex; a non-brand keyword matching it is PRODUCT intent (else GENERIC). Editable seed table replacing the research-fit signal in V_KEYWORD_INTENT_CLASS."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_PRODUCT_CATEGORY_TERMS.sql"]
+
 
   # ── STG_ Staging Tables ──
   - name: "STG_AMAZON_ADS"
