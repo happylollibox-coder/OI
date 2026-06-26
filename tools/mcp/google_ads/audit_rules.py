@@ -47,3 +47,23 @@ def check_text_coverage(ag: dict) -> list[Finding]:
             "No business name asset set."))
 
     return findings
+
+
+def check_image_coverage(ag: dict) -> list[Finding]:
+    scope = f"asset_group:{ag.get('name', '?')}"
+    findings: list[Finding] = []
+
+    if _count(ag, "MARKETING_IMAGE") < 1:
+        findings.append(Finding("error", scope, "landscape_image",
+            "No landscape (1.91:1) marketing image."))
+    if _count(ag, "SQUARE_MARKETING_IMAGE") < 1:
+        findings.append(Finding("error", scope, "square_image",
+            "No square (1:1) marketing image."))
+    if _count(ag, "PORTRAIT_MARKETING_IMAGE") < 1:
+        findings.append(Finding("warning", scope, "portrait_image",
+            "No portrait (4:5) image; adding one improves reach."))
+    if _count(ag, "LOGO") < 1:
+        findings.append(Finding("error", scope, "logo",
+            "No square (1:1) logo."))
+
+    return findings
