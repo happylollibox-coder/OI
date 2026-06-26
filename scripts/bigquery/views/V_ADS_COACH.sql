@@ -50,6 +50,15 @@ family_holiday_relevance AS (
     holiday_name
   FROM `onyga-482313.OI.V_PEAK_RELEVANCE`
   WHERE is_relevant_peak = TRUE
+  UNION DISTINCT
+  -- Manual overrides: families forced into BLITZ for a holiday V_PEAK_RELEVANCE can't measure
+  -- (e.g. launched INTO the only completed occurrence → no clean baseline → maturity gate drops it).
+  -- holiday_name must match active_holidays/DIM_US_HOLIDAYS exactly. See DE_PEAK_OVERRIDES.
+  SELECT DISTINCT
+    o.family AS parent_name,
+    o.holiday_name
+  FROM `onyga-482313.OI.DE_PEAK_OVERRIDES` o
+  WHERE o.force_relevant = TRUE
 ),
 
 -- Resolve Blitz per family (only for families with peak relevance)
@@ -149,8 +158,8 @@ threshold_pivot AS (
 coach_data AS (
   SELECT
     d.*,
-    -- Strategy min bid floor from DIM_STRATEGY_TEMPLATE
-    COALESCE(stmpl.recommended_bid_min, 0.10) as strategy_bid_min,
+    -- Strategy min bid floor: prefer product profile band when it steers (MANUAL or CONCLUSIVE)
+    COALESCE(IF(d.profile_steers, d.profile_cpc_min, NULL), stmpl.recommended_bid_min, 0.10) as strategy_bid_min,
     -- Coach mode: resolved per family → fallback to global cooldown check → GUARDIAN
     COALESCE(fcm.coach_mode,
       CASE WHEN (SELECT is_cooldown FROM global_cooldown) THEN 'COOLDOWN' ELSE 'GUARDIAN' END
@@ -196,8 +205,8 @@ coach_data AS (
     COALESCE(tp_sm.bleeder_fit_rank, tp_gm.bleeder_fit_rank, tp_sg.bleeder_fit_rank, tp_gg.bleeder_fit_rank, 50) as th_bleeder_fit_rank,
     COALESCE(tp_sm.bleeder_reduce_pct, tp_gm.bleeder_reduce_pct, tp_sg.bleeder_reduce_pct, tp_gg.bleeder_reduce_pct, 0.4) as th_bleeder_reduce_pct,
     COALESCE(tp_sm.bleeder_min_clicks, tp_gm.bleeder_min_clicks, tp_sg.bleeder_min_clicks, tp_gg.bleeder_min_clicks, 20) as th_bleeder_min_clicks,
-    -- Strategy template max bid (cold-start bid anchor when no CPC exists) + research-page CPC anchors
-    stmpl.recommended_bid_max as strategy_bid_max,
+    -- Strategy template max bid: prefer product profile band when it steers (MANUAL or CONCLUSIVE)
+    COALESCE(IF(d.profile_steers, d.profile_cpc_max, NULL), stmpl.recommended_bid_max) as strategy_bid_max,
     rr.cpc_30d AS research_cpc_30d,
     rr.cpc_12m AS research_cpc_12m,
     -- Mode-aware target ROAS:
@@ -215,9 +224,13 @@ coach_data AS (
       WHEN COALESCE(fcm.coach_mode,
         CASE WHEN (SELECT is_cooldown FROM global_cooldown) THEN 'COOLDOWN' ELSE 'GUARDIAN' END
       ) = 'BLITZ' AND COALESCE(fcm.current_phase, 'OFF_SEASON') = 'PEAK'
-        -- keyword-grain recent-3d net ROAS (was per-search-term d.ads_net_roas_3d, which fanned one
-        -- keyword into conflicting bid tiers); target_lag_net_roas is the same 3d window at target grain.
-        THEN d.target_lag_net_roas
+        -- keyword-grain recent ROAS for fast PEAK reaction (was per-search-term d.ads_net_roas_3d, which
+        -- fanned one keyword into conflicting bid tiers). The freshest 3d (target_lag, today-3..today-1)
+        -- sits INSIDE the attribution lag — spend booked, orders not yet attributed — so on its own it
+        -- understates ROAS and would spuriously REDUCE healthy winners at peak. Take GREATEST(3d, 1w) at
+        -- keyword grain: a genuinely-hot 3d still scales up fast, but the lag-complete 1w floors it so a
+        -- lag artifact can't cut a profitable keyword mid-peak.
+        THEN GREATEST(COALESCE(d.target_lag_net_roas, 0), COALESCE(d.target_net_roas_1w, 0))
       WHEN COALESCE(fcm.coach_mode,
         CASE WHEN (SELECT is_cooldown FROM global_cooldown) THEN 'COOLDOWN' ELSE 'GUARDIAN' END
       ) = 'BLITZ'
@@ -234,7 +247,28 @@ coach_data AS (
       ) = 'BLITZ' AND COALESCE(fcm.current_phase, 'OFF_SEASON') IN ('BOOST', 'PRE_PEAK')
         THEN GREATEST(COALESCE(d.target_orders_8w, 0), COALESCE(d.ly_orders, 0), COALESCE(d.q4_peak_orders, 0))
       ELSE COALESCE(d.target_orders_8w, 0)
-    END as eff_orders_for_bid
+    END as eff_orders_for_bid,
+    -- Peak keyword plan signal (informational — surfaced in the decision trace only; no bid/action change)
+    pkr.recommendation AS peak_rec,
+    pkr.match_bucket   AS peak_bucket,
+    pkr.is_trending    AS peak_trending,
+    pkr.holiday_name   AS peak_occasion,
+    -- Peak re-increase bid (BLITZ): restore a decayed bid to its peak-competitive level for a proven
+    -- peak-plan winner (peak_rec = INCREASE). Base = GREATEST(current bid, the CPC that won clicks at
+    -- peak); multiplier tiered by PEAK ROAS (best of LY / Q4); capped at margin × 0.5 (floor $0.30).
+    -- The OUTER recommended_bid LEAST() applies th_bid_cap on top. Computed ONCE here and referenced by
+    -- recommended_bid + bid_change_pct so the bid value and its % can never drift apart.
+    ROUND(LEAST(
+      GREATEST(d.current_bid, COALESCE(d.ly_cpc, d.ads_cpc_8w, d.current_bid))
+      * CASE
+          WHEN GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 5   THEN 1.50
+          WHEN GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 3   THEN 1.40
+          WHEN GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 2   THEN 1.30
+          WHEN GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 1.5 THEN 1.20
+          ELSE 1.10
+        END,
+      GREATEST(d.margin_per_unit * 0.5, 0.30)
+    ), 2) AS peak_reincrease_bid
   FROM `onyga-482313.OI.V_ADS_COACH_DATA` d
   -- Resolve coach mode from family
   LEFT JOIN family_coach_mode fcm ON LOWER(d.parent_name) = LOWER(fcm.parent_name)
@@ -264,6 +298,12 @@ coach_data AS (
       FROM `onyga-482313.OI.FACT_SEARCH_QUERY`
     ) WHERE rn = 1
   ) sqis ON LOWER(d.search_term) = sqis.qt AND d.asin = sqis.asin
+  -- Peak keyword recs for the family's ACTIVE occasion (1 row per family×term×occasion → 1:1, no
+  -- fan-out). Matching fcm.active_occasion means the chip reflects the peak we're actually in.
+  LEFT JOIN `onyga-482313.OI.T_PEAK_KEYWORD_RECS` pkr
+    ON LOWER(pkr.search_term) = LOWER(d.search_term)
+    AND LOWER(pkr.parent_name) = LOWER(d.parent_name)
+    AND pkr.holiday_name = fcm.active_occasion
 ),
 
 -- ═══════════════════════════════════════════════════════
@@ -694,6 +734,16 @@ SELECT
     WHEN d.coach_mode = 'COOLDOWN' AND d.current_bid IS NOT NULL
       THEN 'RESTORE_PRE_PEAK'
 
+    -- ═══ PRODUCT STRATEGY PROFILE SUPPRESSION: block bid-up when the profile disables this match type
+    -- Only fires when profile_steers (MANUAL or CONCLUSIVE derived evidence) + profile_enabled = FALSE.
+    -- WEAK derived cells (profile_steers = NULL/FALSE) and no-profile families pass through unaffected.
+    -- REDUCE_BID / STOP_TARGET / DEFENSE branches are intentionally not guarded — cuts and defense still fire.
+    WHEN d.profile_enabled = FALSE AND d.profile_steers
+      AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND (d.target_roas >= d.th_scale_up_roas OR d.target_roas >= d.th_profitable_roas)
+      AND d.eff_orders_for_bid >= 2
+      THEN 'MONITOR_TARGET'
+
     -- ═══ DEFENSE BID-RAISE: control the auction, make terms expensive for competitors ═══
     -- BRAND_DEFENSE (brand search terms): bid up toward the ceiling while we're NOT already
     --   dominating (SQP impression share < cutoff). Once dominating, a higher bid won't move it.
@@ -721,6 +771,28 @@ SELECT
       AND SAFE_DIVIDE(d.hero_ads_cvr_pct, NULLIF(SAFE_DIVIDE(d.target_orders_8w, NULLIF(d.target_clicks_8w, 0)) * 100, 0)) >= 1.5
       AND COALESCE(d.hero_score, 0) >= 3
       THEN 'SWITCH_HERO'
+
+    -- ═══ PEAK RE-INCREASE (acts on the peak plan): a proven LY-peak winner (peak_rec = INCREASE) in
+    -- BLITZ is bid UP toward its peak level — never cut/stopped as a dormant bleeder. Placed ABOVE
+    -- STOP_TARGET so a proven peak winner is never stopped. Fires only for ENABLED peak-plan keywords
+    -- whose CURRENT performance would otherwise CUT/STOP/HOLD them (NOT already healthy-increasing —
+    -- those fall through to the normal scale/profitable tiers below). Kept in sync with recommended_bid
+    -- / bid_change_pct (both reference d.peak_reincrease_bid):
+    --   • off cooldown + past warmup → INCREASE_BID (re-increase; bid value = d.peak_reincrease_bid)
+    --   • otherwise (cooldown/warmup) → MONITOR_TARGET (HOLD — never cut a peak winner; supersedes and
+    --     generalises the task-#7 hold, which only covered active orders>0 terms, to dormant ones).
+    -- Paused/archived keywords are excluded here and fall through to the PAUSED guard below.
+    WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
+      AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
+      AND GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 1.0  -- profitable AT peak only
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      AND DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= 14
+      AND NOT (d.current_phase IN ('BOOST', 'PEAK') AND d.days_since_last_bid_change < 3)
+      THEN 'INCREASE_BID'
+    WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
+      AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      THEN 'MONITOR_TARGET'
 
     -- STOP_TARGET: all terms under target have 0 orders + enough clicks → entire target is bad
     WHEN d.target_orders_8w = 0 AND d.target_clicks_8w >= d.th_min_clicks
@@ -787,6 +859,10 @@ SELECT
       )
       THEN 'INCREASE_BID'
     WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2 THEN 'MONITOR_TARGET'
+    -- ═══ PEAK PROTECTION: handled higher up (PEAK RE-INCREASE block, before the bleeder/reduce tiers)
+    -- so a proven peak-plan winner (peak_rec = INCREASE) is bid UP or HELD, never cut — for dormant AND
+    -- active terms. (Replaces the earlier orders>0-only hold, which sat here and could still let a
+    -- dormant peak winner fall through to the bleeder cut.) ═══
     -- Reduce tier: ROAS < reduce_threshold → reduce (with lag safety check)
     -- Safety: if the lag window (last 3 days, excluded by 4-day lag) shows strong ROAS, defer to MONITOR
     WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0
@@ -932,6 +1008,24 @@ SELECT
           THEN '🛡 Defense — bid up toward the ceiling to occupy our own detail pages.'
         WHEN d.strategy_id IN ('PRODUCT_DEFENSE', 'BRAND_DEFENSE')
           THEN '🔒 Defense — already dominating (or at bid ceiling), monitoring only.'
+        -- PEAK RE-INCREASE / HOLD: proven peak-plan winner — mirrors the PEAK RE-INCREASE block in
+        -- target_action so the narrative matches the action (bid up, not the dormant-bleeder cut).
+        WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
+          AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
+          AND GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 1.0  -- profitable AT peak only
+          AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+          AND DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= 14
+          AND NOT (d.current_phase IN ('BOOST', 'PEAK') AND d.days_since_last_bid_change < 3)
+          THEN CONCAT('📈 Peak plan winner — last peak ROAS ',
+               CAST(ROUND(GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)), 2) AS STRING),
+               ' (', CAST(GREATEST(COALESCE(d.ly_orders, 0), COALESCE(d.q4_peak_orders, 0)) AS STRING),
+               ' peak orders). Weak now → re-increase bid to its peak-competitive level to capture peak demand.')
+        WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
+          AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
+          AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+          THEN CONCAT('📈 Peak plan winner — last peak ROAS ',
+               CAST(ROUND(GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)), 2) AS STRING),
+               '. Holding bid (recent change or warmup) — never cut a proven peak winner during BLITZ.')
         -- Insufficient clicks
         WHEN COALESCE(d.target_clicks_8w, 0) < d.th_min_clicks
           THEN CONCAT('📊 Only ', CAST(COALESCE(d.target_clicks_8w, 0) AS STRING),
@@ -1004,6 +1098,20 @@ SELECT
         ELSE '👀 Monitoring target performance.'
       END,
       '"}',
+      -- Product strategy profile chip — shown when the profile steers this match type
+      IF(d.profile_steers,
+        CONCAT(',{"id":"product_strategy","label":"Product Strategy","rule":"suppressed by product strategy","pass":',
+          IF(COALESCE(d.profile_enabled, TRUE), 'true', 'false'),
+          ',"value":"', COALESCE(d.profile_source, 'DERIVED'), ' · enabled=', CAST(COALESCE(d.profile_enabled, TRUE) AS STRING),
+          IF(d.profile_cpc_target IS NOT NULL, CONCAT(' · target=$', CAST(ROUND(d.profile_cpc_target, 2) AS STRING)), ''),
+          '"}'),
+        ''),
+      -- Peak keyword plan signal (from T_PEAK_KEYWORD_RECS) — informational chip, only when the term is in the plan
+      IF(d.peak_rec IS NOT NULL,
+        CONCAT(',{"id":"peak_kw","label":"📈 Peak plan","sql":"V_PEAK_KEYWORD_RECS","rule":"peak signal for ',
+          COALESCE(d.peak_occasion, 'peak'), ' → prioritize","pass":true,"value":"',
+          d.peak_rec, ' (', COALESCE(d.peak_bucket, ''), ')', IF(COALESCE(d.peak_trending, FALSE), ' · ↗ trending', ''), '"}'),
+        ''),
     ']')
   END as target_decision_trace,
 
@@ -1025,7 +1133,8 @@ SELECT
   -- ─── Recommended Bid (graduated based on target_net_roas_8w) ───
   -- Uses current_bid from bulksheet as base, applies ROAS-graduated multiplier,
   -- caps increases at margin × 0.5, floors decreases at $0.10
-  ROUND(LEAST(CASE
+  -- Product profile band: when profile_steers, clamp the bid into [strategy_bid_min, strategy_bid_max].
+  ROUND(LEAST(GREATEST(CASE
     WHEN d.recommendation_type = 'OPPORTUNITY' THEN NULL
     WHEN d.current_bid IS NULL THEN NULL
     -- 🚫 PAUSED: suppress bid recommendations for non-enabled campaigns
@@ -1060,6 +1169,22 @@ SELECT
       THEN GREATEST(d.pre_peak_bid, 0.10)
     WHEN d.coach_mode = 'COOLDOWN'
       THEN GREATEST(d.current_bid * 0.70, 0.10)
+    -- ═══ PEAK RE-INCREASE bid (mirrors the target_action PEAK RE-INCREASE block) ═══
+    -- A proven peak-plan winner that current performance would otherwise cut/hold is restored to its
+    -- peak-competitive bid (d.peak_reincrease_bid — tiered by peak ROAS, floored at peak CPC). The outer
+    -- LEAST(..., d.th_bid_cap) caps it. Second branch HOLDS (NULL = keep current bid) when on cooldown
+    -- or in warmup, so the bid is never cut for a peak winner.
+    WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
+      AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
+      AND GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 1.0  -- profitable AT peak only
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      AND DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= 14
+      AND NOT (d.current_phase IN ('BOOST', 'PEAK') AND d.days_since_last_bid_change < 3)
+      THEN d.peak_reincrease_bid
+    WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
+      AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      THEN NULL
     -- Money bleeder (fit): aggressive -BLEEDER_REDUCE_PCT cut. The CPC floor only applies when the
     -- term's CPC is BELOW the current bid (its purpose: keep the bid competitive enough to win some
     -- clicks). When the bid is already at/below CPC (stale/SB data), the floor is moot → apply the
@@ -1108,7 +1233,7 @@ SELECT
       THEN GREATEST(d.current_bid * CASE d.coach_mode WHEN 'COOLDOWN' THEN 0.75 WHEN 'GUARDIAN' THEN 0.93 WHEN 'BLITZ' THEN 0.90 ELSE 0.85 END, 0.10)
     -- Sufficient data but no bid action needed
     ELSE NULL
-  END, d.th_bid_cap), 2) as recommended_bid,
+  END, d.strategy_bid_min), LEAST(COALESCE(d.strategy_bid_max, d.th_bid_cap), d.th_bid_cap)), 2) as recommended_bid,
 
   -- ─── Bid Change % ───
   ROUND(CASE
@@ -1133,6 +1258,18 @@ SELECT
       AND COALESCE(pp.pp_spend, 0) > 0
       AND SAFE_DIVIDE(pp.pp_sales, NULLIF(pp.pp_spend, 0)) >= 0.6 THEN -10
     WHEN d.coach_mode = 'COOLDOWN' THEN -30
+    -- PEAK RE-INCREASE % (mirrors recommended_bid; both reference d.peak_reincrease_bid → can't drift)
+    WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
+      AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
+      AND GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 1.0  -- profitable AT peak only
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      AND DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= 14
+      AND NOT (d.current_phase IN ('BOOST', 'PEAK') AND d.days_since_last_bid_change < 3)
+      THEN (d.peak_reincrease_bid / NULLIF(d.current_bid, 0) - 1) * 100
+    WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
+      AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      THEN NULL
     WHEN d.target_orders_8w = 0 AND d.target_clicks_8w >= d.th_min_clicks
       AND d.target_clicks_recent_5d > 0 THEN -30
     -- SEASONAL GUARD: 0% change for seasonal targets in GUARDIAN
