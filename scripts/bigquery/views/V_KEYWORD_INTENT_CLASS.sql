@@ -25,11 +25,16 @@ brand AS (
                 WHERE b.phrase_type = 'BRAND' AND STRPOS(k.keyword_text, LOWER(b.phrase)) > 0)
 ),
 anchor AS (
+  -- exclude auto/product-targeting expressions (not real keywords) from anchor->PRODUCT promotion
   SELECT DISTINCT parent_name, LOWER(keyword_text) AS keyword_text
-  FROM `onyga-482313.OI.DE_PRODUCT_MAIN_KEYWORDS` WHERE is_anchor
+  FROM `onyga-482313.OI.DE_PRODUCT_MAIN_KEYWORDS`
+  WHERE is_anchor
+    AND NOT REGEXP_CONTAINS(LOWER(keyword_text), r'close-match|loose-match|substitutes|complements|asin=|category=|brand=')
 ),
 cat AS (
-  SELECT parent_name, category_regex FROM `onyga-482313.OI.DE_PRODUCT_CATEGORY_TERMS`
+  -- one regex per parent (defensive: STRING_AGG so a 2nd seed row can't fan out the join)
+  SELECT parent_name, STRING_AGG(category_regex, '|') AS category_regex
+  FROM `onyga-482313.OI.DE_PRODUCT_CATEGORY_TERMS` GROUP BY parent_name
 )
 SELECT kw.parent_name, kw.keyword_text,
   COALESCE(ov.intent_class,
