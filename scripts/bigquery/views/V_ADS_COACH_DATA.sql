@@ -1068,7 +1068,10 @@ family_season AS (
       ON ah.holiday_name = fhr.holiday_name
       AND ah.category IN ('gift_season', 'prime_event')
       AND CURRENT_DATE('America/New_York') BETWEEN ah.pre_season_start AND ah.holiday_date
-      AND CURRENT_DATE('America/New_York') NOT BETWEEN ah.cooldown_start AND ah.cooldown_end
+      -- B1 fix: NULL-safe cooldown exclusion. A holiday with NULL cooldown window (e.g. Prime Day)
+      -- made `x NOT BETWEEN NULL AND NULL` evaluate to NULL (not TRUE), dropping the join row → EVERY
+      -- family fell through to profile_season='OFF', clamping peak bids to off-season ceilings.
+      AND NOT COALESCE(CURRENT_DATE('America/New_York') BETWEEN ah.cooldown_start AND ah.cooldown_end, FALSE)
   ) fbm ON LOWER(families.parent_name) = LOWER(fbm.parent_name)
   GROUP BY families.parent_name
 ),

@@ -1134,7 +1134,11 @@ SELECT
   -- Uses current_bid from bulksheet as base, applies ROAS-graduated multiplier,
   -- caps increases at margin × 0.5, floors decreases at $0.10
   -- Product profile band: when profile_steers, clamp the bid into [strategy_bid_min, strategy_bid_max].
-  ROUND(LEAST(GREATEST(CASE
+  -- B2 fix: this emits the RAW (un-clamped) bid expression. The lower floor (GREATEST(.., strategy_bid_min))
+  -- must only floor bid-UP intents — flooring a REDUCE_BID/STOP_TARGET/MONITOR_TARGET up to cpc_min would
+  -- invert a reduction into a large increase. The final clamp (conditional lower floor + upper cap + ROUND)
+  -- is applied in the downstream `scored` CTE, keyed on target_action.
+  CASE
     WHEN d.recommendation_type = 'OPPORTUNITY' THEN NULL
     WHEN d.current_bid IS NULL THEN NULL
     -- 🚫 PAUSED: suppress bid recommendations for non-enabled campaigns
@@ -1233,7 +1237,7 @@ SELECT
       THEN GREATEST(d.current_bid * CASE d.coach_mode WHEN 'COOLDOWN' THEN 0.75 WHEN 'GUARDIAN' THEN 0.93 WHEN 'BLITZ' THEN 0.90 ELSE 0.85 END, 0.10)
     -- Sufficient data but no bid action needed
     ELSE NULL
-  END, d.strategy_bid_min), LEAST(COALESCE(d.strategy_bid_max, d.th_bid_cap), d.th_bid_cap)), 2) as recommended_bid,
+  END as recommended_bid,
 
   -- ─── Bid Change % ───
   ROUND(CASE
@@ -1891,7 +1895,18 @@ scored AS (
     CASE WHEN days_since_last_suggestion < 3 AND target_action != 'STOP_TARGET'
          THEN 'KEEP_TARGET' ELSE target_action END AS target_action,
     CASE WHEN days_since_last_suggestion_camp < 3
-         THEN 'BUDGET_OK' ELSE budget_action END AS budget_action
+         THEN 'BUDGET_OK' ELSE budget_action END AS budget_action,
+    -- B2 fix: finalize recommended_bid here, where target_action is referenceable.
+    -- recommended_bid (from scored_raw) is now the RAW bid. Apply the upper clamp always; apply the
+    -- lower floor (strategy_bid_min) ONLY for bid-UP intents — never floor a REDUCE_BID/STOP_TARGET/
+    -- MONITOR_TARGET up to cpc_min (that inverted reductions into large increases, e.g. $0.13 → $0.60
+    -- labelled −20%). Keyed on the genuine target_action (pre-cooldown-mask), so a real reduce never
+    -- gets floored up.
+    ROUND(LEAST(
+      CASE WHEN target_action IN ('REDUCE_BID', 'STOP_TARGET', 'MONITOR_TARGET')
+           THEN recommended_bid
+           ELSE GREATEST(recommended_bid, strategy_bid_min) END,
+      COALESCE(strategy_bid_max, th_bid_cap), th_bid_cap), 2) AS recommended_bid
   ) FROM scored_raw
 )
 
