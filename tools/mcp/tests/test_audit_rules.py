@@ -102,6 +102,29 @@ def test_ad_strength_average_is_warning():
     assert any(f.check == "ad_strength" and f.severity == "warning" for f in findings)
 
 
+def test_ad_strength_missing_key_defaults_to_pending_ok():
+    ag = {"name": "G"}
+    findings = check_ad_strength(ag)
+    assert len(findings) == 1
+    assert findings[0].check == "ad_strength"
+    assert findings[0].severity == "ok"
+    assert "PENDING" in findings[0].message
+
+
+def test_ad_strength_none_value_defaults_to_pending_ok():
+    ag = {"name": "G", "ad_strength": None}
+    findings = check_ad_strength(ag)
+    assert len(findings) == 1
+    assert findings[0].severity == "ok"
+    assert "PENDING" in findings[0].message
+
+
+def test_ad_strength_is_case_insensitive():
+    ag = {"name": "G", "ad_strength": "poor"}
+    findings = check_ad_strength(ag)
+    assert any(f.check == "ad_strength" and f.severity == "error" for f in findings)
+
+
 def test_targeting_warns_when_no_audience_signal():
     ag = {"name": "G", "has_audience_signal": False}
     findings = check_targeting(ag)
