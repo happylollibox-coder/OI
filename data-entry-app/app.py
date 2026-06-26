@@ -5052,6 +5052,107 @@ def api_thresholds_update():
         return jsonify({'error': str(e)}), 500
 
 # ═══════════════════════════════════════════════════════════════
+# PRODUCT STRATEGY PROFILE API
+# ═══════════════════════════════════════════════════════════════
+
+@app.route('/api/product-strategy', methods=['GET'])
+def api_product_strategy_get():
+    """Return all DE_PRODUCT_STRATEGY_PROFILE rows ordered by parent/season/match_type."""
+    try:
+        query = """
+            SELECT parent_name, season, match_type, enabled, cpc_target, cpc_min, cpc_max,
+                   launch_cpc, raise_pace_pct, net_per_dollar, confidence,
+                   tos_target_pct, borrowed_from, source, updated_at, updated_by
+            FROM `{project}.{dataset}.DE_PRODUCT_STRATEGY_PROFILE`
+            ORDER BY parent_name, season, match_type
+        """.format(project=PROJECT_ID, dataset=DATASET_ID)
+        results = client.query(query).result()
+        rows = [dict(row) for row in results]
+        for row in rows:
+            if row.get('updated_at'):
+                row['updated_at'] = row['updated_at'].isoformat()
+        return jsonify(rows)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/product-strategy', methods=['POST'])
+def api_product_strategy_upsert():
+    """MERGE a single row into DE_PRODUCT_STRATEGY_PROFILE as a MANUAL suggestion.
+
+    Body JSON:
+      { "parent_name": "Fresh", "season": "OFF", "match_type": "EXACT",
+        "enabled": false, "cpc_target": 0.65, "cpc_min": 0.50, "cpc_max": 0.80 }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON body provided'}), 400
+
+        parent_name = data.get('parent_name')
+        season = data.get('season')
+        match_type = data.get('match_type')
+
+        if not parent_name or not season or not match_type:
+            return jsonify({'error': 'parent_name, season, and match_type are required'}), 400
+
+        enabled = data.get('enabled')
+        if enabled is None:
+            return jsonify({'error': 'enabled is required'}), 400
+
+        cpc_target = data.get('cpc_target')
+        cpc_min = data.get('cpc_min')
+        cpc_max = data.get('cpc_max')
+
+        user_email = session.get('user', {}).get('email', 'unknown')
+
+        query = """
+            MERGE `{project}.{dataset}.DE_PRODUCT_STRATEGY_PROFILE` t
+            USING (SELECT @parent_name AS parent_name, @season AS season, @match_type AS match_type) s
+            ON t.parent_name = s.parent_name AND t.season = s.season AND t.match_type = s.match_type
+            WHEN MATCHED THEN
+              UPDATE SET
+                enabled       = @enabled,
+                cpc_target    = @cpc_target,
+                cpc_min       = @cpc_min,
+                cpc_max       = @cpc_max,
+                source        = 'MANUAL',
+                status        = 'PENDING',
+                applied_at    = CURRENT_TIMESTAMP(),
+                updated_at    = CURRENT_TIMESTAMP(),
+                updated_by    = @user_email
+            WHEN NOT MATCHED THEN
+              INSERT (parent_name, season, match_type, enabled, cpc_target, cpc_min, cpc_max,
+                      source, status, applied_at, updated_at, updated_by)
+              VALUES (@parent_name, @season, @match_type, @enabled, @cpc_target, @cpc_min, @cpc_max,
+                      'MANUAL', 'PENDING', CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), @user_email)
+        """.format(project=PROJECT_ID, dataset=DATASET_ID)
+
+        params = [
+            bigquery.ScalarQueryParameter("parent_name", "STRING", parent_name),
+            bigquery.ScalarQueryParameter("season",      "STRING", season),
+            bigquery.ScalarQueryParameter("match_type",  "STRING", match_type),
+            bigquery.ScalarQueryParameter("enabled",     "BOOL",   bool(enabled)),
+            bigquery.ScalarQueryParameter("cpc_target",  "FLOAT64", float(cpc_target) if cpc_target is not None else None),
+            bigquery.ScalarQueryParameter("cpc_min",     "FLOAT64", float(cpc_min)    if cpc_min    is not None else None),
+            bigquery.ScalarQueryParameter("cpc_max",     "FLOAT64", float(cpc_max)    if cpc_max    is not None else None),
+            bigquery.ScalarQueryParameter("user_email",  "STRING",  user_email),
+        ]
+
+        job_config = bigquery.QueryJobConfig(query_parameters=params)
+        job = client.query(query, job_config=job_config)
+        job.result()
+
+        if job.errors:
+            return jsonify({'error': str(job.errors)}), 500
+
+        clear_data_cache()
+        return jsonify({'success': True, 'message': f'Strategy profile updated for {parent_name}/{season}/{match_type}'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════
 # AWD SETTINGS API
 # ═══════════════════════════════════════════════════════════════
 
