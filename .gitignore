@@ -108,3 +108,6 @@ dashboard-react/check_data.js
 dashboard-react/src/tmp_planpage
 ~$*
 media/
+
+# Google Ads PMax audit dumps
+exports/pmax_audit_*.json
