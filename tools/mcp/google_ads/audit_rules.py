@@ -107,3 +107,31 @@ def check_campaign(camp: dict) -> list[Finding]:
             "No brand exclusions — PMax may spend on your own brand searches."))
 
     return findings
+
+
+def audit_asset_group(ag: dict) -> list[Finding]:
+    return (
+        check_text_coverage(ag)
+        + check_image_coverage(ag)
+        + check_ad_strength(ag)
+        + check_targeting(ag)
+    )
+
+
+def audit_account(snapshot: dict) -> dict:
+    """Run every rule over an account snapshot and return JSON-serializable findings."""
+    findings: list[Finding] = []
+    for camp in snapshot.get("campaigns", []):
+        findings.extend(check_campaign(camp))
+        for ag in camp.get("asset_groups", []):
+            findings.extend(audit_asset_group(ag))
+
+    summary = {"error": 0, "warning": 0, "ok": 0}
+    for f in findings:
+        summary[f.severity] = summary.get(f.severity, 0) + 1
+
+    return {
+        "customer_id": snapshot.get("customer_id"),
+        "summary": summary,
+        "findings": [vars(f) for f in findings],
+    }

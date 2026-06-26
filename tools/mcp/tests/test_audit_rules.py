@@ -151,3 +151,24 @@ def test_campaign_url_expansion_on_is_warning():
 def test_campaign_no_brand_exclusions_is_warning():
     findings = check_campaign(_campaign(brand_exclusions_count=0))
     assert any(f.check == "brand_exclusions" and f.severity == "warning" for f in findings)
+
+
+import json
+from pathlib import Path
+
+from tools.mcp.google_ads.audit_rules import audit_account
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_audit_account_returns_grouped_findings():
+    snapshot = json.loads((FIXTURES / "account_snapshot.json").read_text())
+    result = audit_account(snapshot)
+
+    assert result["customer_id"] == "1234567890"
+    assert set(result["summary"]) == {"error", "warning", "ok"}
+    checks = {f["check"] for f in result["findings"]}
+    assert "ad_strength" in checks
+    assert "audience_signal" in checks
+    assert "portrait_image" in checks
+    assert all(isinstance(f, dict) for f in result["findings"])
