@@ -158,8 +158,11 @@ threshold_pivot AS (
 coach_data AS (
   SELECT
     d.*,
-    -- Strategy min bid floor: prefer product profile band when it steers (MANUAL or CONCLUSIVE)
-    COALESCE(IF(d.profile_steers, d.profile_cpc_min, NULL), stmpl.recommended_bid_min, 0.10) as strategy_bid_min,
+    -- Strategy min bid floor: clamp to profile band ONLY for MANUAL suggestions (Prime Day blast-radius fix).
+    -- Derived-CONCLUSIVE cells fall back to the generic template floor; only MANUAL overrides set a custom band.
+    -- The suppression guard (profile_steers) in target_action is intentionally unchanged — derived-CONCLUSIVE
+    -- loss-making match types (e.g. Fresh/Lollibox EXACT) still get their bid-ups suppressed.
+    COALESCE(IF(d.profile_source = 'MANUAL', d.profile_cpc_min, NULL), stmpl.recommended_bid_min, 0.10) as strategy_bid_min,
     -- Coach mode: resolved per family → fallback to global cooldown check → GUARDIAN
     COALESCE(fcm.coach_mode,
       CASE WHEN (SELECT is_cooldown FROM global_cooldown) THEN 'COOLDOWN' ELSE 'GUARDIAN' END
@@ -205,8 +208,9 @@ coach_data AS (
     COALESCE(tp_sm.bleeder_fit_rank, tp_gm.bleeder_fit_rank, tp_sg.bleeder_fit_rank, tp_gg.bleeder_fit_rank, 50) as th_bleeder_fit_rank,
     COALESCE(tp_sm.bleeder_reduce_pct, tp_gm.bleeder_reduce_pct, tp_sg.bleeder_reduce_pct, tp_gg.bleeder_reduce_pct, 0.4) as th_bleeder_reduce_pct,
     COALESCE(tp_sm.bleeder_min_clicks, tp_gm.bleeder_min_clicks, tp_sg.bleeder_min_clicks, tp_gg.bleeder_min_clicks, 20) as th_bleeder_min_clicks,
-    -- Strategy template max bid: prefer product profile band when it steers (MANUAL or CONCLUSIVE)
-    COALESCE(IF(d.profile_steers, d.profile_cpc_max, NULL), stmpl.recommended_bid_max) as strategy_bid_max,
+    -- Strategy template max bid: clamp to profile band ONLY for MANUAL suggestions (Prime Day blast-radius fix).
+    -- Mirrors the strategy_bid_min change above — derived cells fall back to template max.
+    COALESCE(IF(d.profile_source = 'MANUAL', d.profile_cpc_max, NULL), stmpl.recommended_bid_max) as strategy_bid_max,
     rr.cpc_30d AS research_cpc_30d,
     rr.cpc_12m AS research_cpc_12m,
     -- Mode-aware target ROAS:
