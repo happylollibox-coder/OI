@@ -58,6 +58,29 @@ def test_derive_main_keywords_ranks_top_n():
     assert list(mk.sort_values("rank")["keyword_text"]) == ["b","c"]   # top 2 by net
     assert (mk["is_anchor"] == True).all() and (mk["source"]=="DERIVED").all()
 
+def test_derive_profile_groups_by_intent_and_brand_is_enabled():
+    import pandas as pd
+    from tools.strategy_profile.derive import derive_profile
+    rows = []
+    # LolliME EXACT, two intents: PRODUCT profits, GENERIC loses; plus a BRAND losing cell
+    for cpc, net in [(0.75, 30.0)]*6:
+        rows.append(("LolliME","Christmas_PEAK","exact","PRODUCT",cpc,net,40,2,"journal for girls"))
+    for cpc, net in [(0.80, -25.0)]*6:
+        rows.append(("LolliME","Christmas_PEAK","exact","GENERIC",cpc,net,40,2,"gift for girls"))
+    for cpc, net in [(0.50, -10.0)]*6:
+        rows.append(("LolliME","Christmas_PEAK","exact","BRAND",cpc,net,40,2,"happy lolli journal"))
+    df = pd.DataFrame(rows, columns=["parent_name","calendar_segment","targeting_type","intent_class",
+                                     "cpc","net_profit","clicks","orders","targeting"])
+    prof = derive_profile(df)
+    prod = prof[(prof.intent_class=="PRODUCT")].iloc[0]
+    gen  = prof[(prof.intent_class=="GENERIC")].iloc[0]
+    brand= prof[(prof.intent_class=="BRAND")].iloc[0]
+    assert set(["parent_name","season","match_type","intent_class","enabled"]).issubset(prof.columns)
+    assert prod.enabled == True                 # product profits -> enabled
+    assert gen.enabled == False                 # generic loses -> disabled
+    assert brand.enabled == True                # BRAND always enabled (defense) despite negative net
+
+
 from tools.strategy_profile.load import to_json_rows
 
 def test_to_json_rows_stamps_audit_fields():
