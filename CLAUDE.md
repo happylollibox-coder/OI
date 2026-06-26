@@ -20,6 +20,7 @@
 | Google OAuth (Authlib) | Authentication for Flask data-entry app | ✅ Active |
 | Amazon Seller Central | Source of Search Query Performance (SQP) data | ✅ Active |
 | Amazon Ads API | Source of Ads campaign / keyword performance data | ✅ Active |
+| Google Ads API (PMax audit MCP) | Read-only PMax/Shopping config audit — `tools/mcp/google_ads_server.py` (list_campaigns, get_asset_groups, audit_pmax). See `tools/mcp/GOOGLE_ADS_SETUP.md` | 🚧 Phase 1, needs dev token |
 
 ---
 
