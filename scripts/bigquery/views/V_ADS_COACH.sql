@@ -882,6 +882,23 @@ SELECT
       )
       THEN 'REDUCE_BID'
     WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0 THEN 'MONITOR_TARGET'
+    -- ═══ TOS BID-UP: profitable-but-buried keyword — raise to capture top-of-search ═══
+    -- Fires when:
+    --   • We have a measured TOS share (keyword report, 8w aggregate)
+    --   • The profile has a TOS target set (seeded by Task 2)
+    --   • We're below that target (buried)
+    --   • The keyword is profitable (has orders AND target ROAS ≥ profitable floor)
+    --   • NOT suppressed by the GENERIC+disabled profile branch (B.2 guard)
+    --   • Current bid is below the hard ceiling
+    -- Priority: after reduce/stop tiers, before the dead-zone KEEP_TARGET.
+    WHEN d.target_tos_share IS NOT NULL
+         AND d.tos_target_pct IS NOT NULL
+         AND d.target_tos_share < d.tos_target_pct
+         AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+         AND NOT (d.intent_class = 'GENERIC' AND d.profile_enabled = FALSE AND d.profile_steers)
+         AND COALESCE(d.current_bid, 0) < d.th_bid_cap
+      THEN 'INCREASE_BID'
+
     -- Dead zone: between reduce and profitable thresholds → KEEP_TARGET (no action)
     WHEN d.target_orders_8w > 0 THEN 'KEEP_TARGET'
     ELSE 'MONITOR_TARGET'
@@ -1119,6 +1136,15 @@ SELECT
           COALESCE(d.peak_occasion, 'peak'), ' → prioritize","pass":true,"value":"',
           d.peak_rec, ' (', COALESCE(d.peak_bucket, ''), ')', IF(COALESCE(d.peak_trending, FALSE), ' · ↗ trending', ''), '"}'),
         ''),
+      -- TOS signal chip — shown when TOS data is available for this keyword
+      IF(d.target_tos_share IS NOT NULL AND d.tos_target_pct IS NOT NULL,
+        CONCAT(',{"id":"tos","label":"Top-of-Search","sql":"target_tos_share","rule":"buried: TOS ',
+          CAST(ROUND(COALESCE(d.target_tos_share, 0), 0) AS STRING), '% < target ',
+          CAST(ROUND(d.tos_target_pct, 0) AS STRING), '%","pass":',
+          IF(d.target_tos_share >= d.tos_target_pct, 'true', 'false'),
+          ',"value":"', CAST(ROUND(COALESCE(d.target_tos_share, 0), 1) AS STRING), '% (target: ',
+          CAST(ROUND(d.tos_target_pct, 1) AS STRING), '%)"}'),
+        ''),
     ']')
   END as target_decision_trace,
 
@@ -1224,6 +1250,17 @@ SELECT
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
       AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
       THEN NULL
+    -- ═══ TOS BID-UP: profitable-but-buried keyword — step toward the ceiling ═══
+    -- Mirrors the BRAND_DEFENSE raise shape: GREATEST(+15%, +$0.10), capped at th_bid_cap.
+    -- The outer LEAST(..., strategy_bid_max, th_bid_cap) in the `scored` CTE caps it further.
+    WHEN d.target_tos_share IS NOT NULL
+         AND d.tos_target_pct IS NOT NULL
+         AND d.target_tos_share < d.tos_target_pct
+         AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+         AND NOT (d.intent_class = 'GENERIC' AND d.profile_enabled = FALSE AND d.profile_steers)
+         AND COALESCE(d.current_bid, 0) < d.th_bid_cap
+      THEN LEAST(GREATEST(d.current_bid * 1.15, d.current_bid + 0.10), d.th_bid_cap)
+
     -- ═══ MODE-AWARE INCREASE: BLITZ aggressive ↑ · GUARDIAN gentle ↑ · COOLDOWN minimal ↑ ═══
     WHEN d.target_roas >= 5.0 AND d.eff_orders_for_bid >= 2
       THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.50 WHEN 'GUARDIAN' THEN 1.10 WHEN 'COOLDOWN' THEN 1.05 ELSE 1.40 END, GREATEST(d.margin_per_unit * 0.5, 0.30))
@@ -1292,6 +1329,15 @@ SELECT
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
       AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
       THEN 0
+    -- TOS raise % (mirrors recommended_bid TOS block: GREATEST(+15%, +$0.10) → +15% typical)
+    WHEN d.target_tos_share IS NOT NULL
+         AND d.tos_target_pct IS NOT NULL
+         AND d.target_tos_share < d.tos_target_pct
+         AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+         AND NOT (d.intent_class = 'GENERIC' AND d.profile_enabled = FALSE AND d.profile_steers)
+         AND COALESCE(d.current_bid, 0) < d.th_bid_cap
+      THEN ROUND((LEAST(GREATEST(d.current_bid * 1.15, d.current_bid + 0.10), d.th_bid_cap) / NULLIF(d.current_bid, 0) - 1) * 100, 0)
+
     -- Mode-aware % (mirrors recommended_bid; COOLDOWN reduce handled by the block above)
     WHEN d.target_roas >= 5.0 AND d.eff_orders_for_bid >= 2 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 50 WHEN 'GUARDIAN' THEN 10 WHEN 'COOLDOWN' THEN 5 ELSE 40 END
     WHEN d.target_roas >= 3.0 AND d.eff_orders_for_bid >= 2 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 40 WHEN 'GUARDIAN' THEN 8 WHEN 'COOLDOWN' THEN 5 ELSE 30 END
