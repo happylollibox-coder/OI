@@ -1558,7 +1558,9 @@ active_term_data AS (
     psp.confidence     as profile_confidence,
     psp.source         as profile_source,
     -- profile_steers = true when the evidence is conclusive or the user set it manually
-    (psp.source = 'MANUAL' OR psp.confidence = 'CONCLUSIVE') as profile_steers
+    (psp.source = 'MANUAL' OR psp.confidence = 'CONCLUSIVE') as profile_steers,
+    -- intent_class: BRAND / PRODUCT / GENERIC (from V_KEYWORD_INTENT_CLASS; default GENERIC)
+    COALESCE(kic.intent_class, 'GENERIC') as intent_class
 
   FROM ads_8w a8
   JOIN asin_economics ae ON a8.asin = ae.asin
@@ -1609,9 +1611,14 @@ active_term_data AS (
   LEFT JOIN suggestion_by_campaign slc ON a8.campaign_id = slc.campaign_id
   -- Per-product strategy profile: season then profile row (many-to-one — no fan-out)
   LEFT JOIN family_season fs ON LOWER(ae.parent_name) = LOWER(fs.parent_name)
+  -- Intent class: one row per (parent_name, keyword_text) — no fan-out
+  LEFT JOIN `onyga-482313.OI.V_KEYWORD_INTENT_CLASS` kic
+    ON kic.parent_name = ae.parent_name
+   AND kic.keyword_text = LOWER(a8.targeting)
   LEFT JOIN `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE` psp
     ON psp.parent_name = ae.parent_name
    AND psp.season = COALESCE(fs.profile_season, 'OFF')
+   AND psp.intent_class = COALESCE(kic.intent_class, 'GENERIC')
    AND psp.match_type = CASE UPPER(a8.targeting_type)
         WHEN 'BROAD'         THEN 'BROAD'
         WHEN 'EXACT'         THEN 'EXACT'
@@ -1825,7 +1832,8 @@ opportunity_data AS (
     CAST(NULL AS FLOAT64) as profile_cpc_max,
     CAST(NULL AS STRING)  as profile_confidence,
     CAST(NULL AS STRING)  as profile_source,
-    CAST(NULL AS BOOL)    as profile_steers
+    CAST(NULL AS BOOL)    as profile_steers,
+    CAST(NULL AS STRING)  as intent_class
 
   FROM sqp_with_purchases sp
   JOIN asin_economics ae ON sp.asin = ae.asin
