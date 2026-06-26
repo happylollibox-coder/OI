@@ -431,6 +431,15 @@ views:
       - V_PRODUCT_FAMILY_MAP
       - V_SRC_sales_and_traffic_business_sku_report_daily
 
+  - name: "V_PRODUCT_STRATEGY_OUTCOMES"
+    description: "Net-profit verdict (GAIN/LOSS/INSUFFICIENT) per MANUAL strategy suggestion, pre vs post applied_at"
+    source_files: ["scripts/bigquery/views/V_PRODUCT_STRATEGY_OUTCOMES.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+      - DIM_US_HOLIDAYS
+      - DE_PRODUCT_STRATEGY_PROFILE
+
   - name: "V_PEAK_RELEVANCE"
     description: "Automated peak relevance per family per holiday — compares peak vs 4-week baseline, flags non-peaks, provides Coach recommendations (AGGRESSIVE_BOOST, MODERATE_BOOST, CAUTIOUS_BOOST, HOLD, REDUCE)"
     source_files: ["scripts/bigquery/views/V_PEAK_RELEVANCE.sql"]
