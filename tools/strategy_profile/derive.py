@@ -57,7 +57,7 @@ def derive_profile(base: pd.DataFrame) -> pd.DataFrame:
             tos_target_pct=None, borrowed_from=None, source="DERIVED"))
     return pd.DataFrame(rows)
 
-def derive_main_keywords(base: pd.DataFrame, top_n: int = C.TOP_N_KEYWORDS) -> pd.DataFrame:
+def derive_main_keywords(base: pd.DataFrame, intent=None, top_n: int = C.TOP_N_KEYWORDS) -> pd.DataFrame:
     d = base.copy()
     d["match_type"] = d["targeting_type"].map(normalize_match_type)
     g = (d.groupby(["parent_name", "match_type", "targeting"], dropna=False)
@@ -70,5 +70,11 @@ def derive_main_keywords(base: pd.DataFrame, top_n: int = C.TOP_N_KEYWORDS) -> p
     g = g.rename(columns={"targeting": "keyword_text"})
     g["is_anchor"] = True
     g["source"] = "DERIVED"
+    if intent is not None:
+        key = g["parent_name"] + "|" + g["keyword_text"].str.lower()
+        g["intent_class"] = key.map(intent).fillna("GENERIC")
+    else:
+        g["intent_class"] = "GENERIC"
+    g["is_brand"] = g["intent_class"].eq("BRAND")
     return g[["parent_name", "keyword_text", "keyword_id", "match_type",
-              "rank", "net_profit_90d", "is_anchor", "source"]]
+              "rank", "net_profit_90d", "is_anchor", "is_brand", "intent_class", "source"]]
