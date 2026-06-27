@@ -225,6 +225,26 @@ views:
       - V_PEAK_RELEVANCE
       - V_KEYWORD_INTENT_CLASS
 
+  - name: "V_WEEKLY_PLAN_REVIEW"
+    description: "Actual vs expected per plan item for the last completed week (ON_PLAN/OFF_PLAN by purpose metric, overspend, business-plan flag). Coacher D."
+    source_files: ["scripts/bigquery/views/V_WEEKLY_PLAN_REVIEW.sql"]
+    dependencies:
+      - DE_WEEKLY_PLAN
+      - V_WEEKLY_CELL_NET
+
+  - name: "V_PLAN_LEARNINGS"
+    description: "Track record per cell x purpose across completed weeks (win_rate, WORKS/DOESNT/INCONCLUSIVE). Coacher D memory; generator consumption = v1.1."
+    source_files: ["scripts/bigquery/views/V_PLAN_LEARNINGS.sql"]
+    dependencies:
+      - DE_WEEKLY_PLAN
+
+  - name: "V_WEEKLY_PLAN_ACTIONS"
+    description: "Current-week V_ADS_COACH actions grouped under each cell's plan item with a purpose-derived expected_result. Coacher D."
+    source_files: ["scripts/bigquery/views/V_WEEKLY_PLAN_ACTIONS.sql"]
+    dependencies:
+      - V_ADS_COACH
+      - DE_WEEKLY_PLAN
+
   - name: "V_ADS_COACH_DATA"
     description: "Pure data layer — all metrics at campaign × asin × keyword grain. No logic."
     source_files: ["scripts/bigquery/views/V_ADS_COACH_DATA.sql"]
@@ -1161,6 +1181,10 @@ stored_procedures:
   - name: "SP_REFRESH_PROBE_LOG"
     description: "Close the probe loop (Coacher C): start ACTIVE probes for target_action=PROBE keywords, accumulate clicks, graduate at 15 clicks / exhaust at 14 days. Run daily after the coach refresh."
     source_files: ["scripts/bigquery/procedures/SP_REFRESH_PROBE_LOG.sql"]
+
+  - name: "SP_REVIEW_WEEKLY_PLAN"
+    description: "Persist V_WEEKLY_PLAN_REVIEW status/actual back onto DE_WEEKLY_PLAN so V_PLAN_LEARNINGS accumulates. Run weekly after the week completes, before the generator. Coacher D."
+    source_files: ["scripts/bigquery/procedures/SP_REVIEW_WEEKLY_PLAN.sql"]
 
   - name: "SP_REFRESH_RESEARCH_RANKED"
     description: "Materialize V_RESEARCH_TERMS → FACT_RESEARCH_TERMS and V_RESEARCH_RANKED → FACT_RESEARCH_RANKED for the Research page (called by SP_ORCHESTRATE_DAILY_REFRESH)"
