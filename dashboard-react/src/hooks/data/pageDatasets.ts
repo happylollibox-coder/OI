@@ -47,4 +47,5 @@ export const PAGE_DATASETS: Record<PageId, DatasetName[]> = {
   admin: [],
   alerts: [],
   research: [],
+  thisweek: [],
 };

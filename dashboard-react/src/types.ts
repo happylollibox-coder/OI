@@ -1373,7 +1373,7 @@ export interface DashboardData {
   };
 }
 
-export type PageId = 'home' | 'actions' | 'peak' | 'family' | 'sqp' | 'learn' | 'kwds' | 'log' | 'health' | 'experiment' | 'ads' | 'strategies' | 'admin' | 'do' | 'brand' | 'plan' | 'supply' | 'alerts' | 'products' | 'kpi' | 'research';
+export type PageId = 'home' | 'actions' | 'peak' | 'family' | 'sqp' | 'learn' | 'kwds' | 'log' | 'health' | 'experiment' | 'ads' | 'strategies' | 'admin' | 'do' | 'brand' | 'plan' | 'supply' | 'alerts' | 'products' | 'kpi' | 'research' | 'thisweek';
 
 export interface BrandStrengthWeeklyRow {
   week_start_date: string;

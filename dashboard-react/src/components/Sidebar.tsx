@@ -1,4 +1,4 @@
-import { Home, Zap, Mountain, BarChart2, Search, GraduationCap, ClipboardList, HeartPulse, Target, Megaphone, Settings, Sun, Moon, CheckSquare, Shield, Calculator, Package, Bell, Rocket, LayoutDashboard, TrendingUp, Eye, EyeOff } from 'lucide-react';
+import { Home, Zap, Mountain, BarChart2, Search, GraduationCap, ClipboardList, HeartPulse, Target, Megaphone, Settings, Sun, Moon, CheckSquare, Shield, Calculator, Package, Bell, Rocket, LayoutDashboard, TrendingUp, Eye, EyeOff, CalendarClock } from 'lucide-react';
 import { useViewMode, isPageVisible } from '../hooks/useViewMode';
 import type { PageId, FamilyName } from '../types';
 
@@ -19,6 +19,7 @@ const NAV_GROUPS: NavGroup[] = [
     header: 'Overview',
     items: [
       { page: 'home', icon: <Home size={16} />, label: 'HOME' },
+      { page: 'thisweek', icon: <CalendarClock size={16} />, label: 'THIS WEEK' },
       { page: 'actions', icon: <Zap size={16} />, label: 'ACTIONS' },
       { page: 'do', icon: <CheckSquare size={16} />, label: 'DO' },
       { page: 'peak', icon: <Mountain size={16} />, label: 'PEAK' },

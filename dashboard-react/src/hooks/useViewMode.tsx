@@ -12,7 +12,7 @@ const STORAGE_KEY = 'oi_view_mode';
 // Pages considered "fully baked" — the only ones a regular user sees.
 // Based on the PPC specialist audit grades + page maturity; edit freely.
 export const USER_VISIBLE_PAGES: PageId[] = [
-  'home', 'actions', 'do', 'ads', 'kwds', 'strategies', 'learn', 'sqp', 'supply', 'alerts',
+  'home', 'thisweek', 'actions', 'do', 'ads', 'kwds', 'strategies', 'learn', 'sqp', 'supply', 'alerts',
 ];
 
 export function isPageVisible(page: PageId, mode: ViewMode): boolean {
