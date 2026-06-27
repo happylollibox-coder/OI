@@ -1131,11 +1131,13 @@ SELECT
           COALESCE(d.peak_occasion, 'peak'), ' → prioritize","pass":true,"value":"',
           d.peak_rec, ' (', COALESCE(d.peak_bucket, ''), ')', IF(COALESCE(d.peak_trending, FALSE), ' · ↗ trending', ''), '"}'),
         ''),
-      -- TOS signal chip — shown when TOS data is available for this keyword
+      -- TOS signal chip — position read + brake state (A.1). pass:true = dominant (bid held); pass:false = below target (raised by the normal tier).
       IF(d.target_tos_share IS NOT NULL AND d.tos_target_pct IS NOT NULL,
-        CONCAT(',{"id":"tos","label":"Top-of-Search","sql":"target_tos_share","rule":"buried: TOS ',
-          CAST(ROUND(COALESCE(d.target_tos_share, 0), 0) AS STRING), '% < target ',
-          CAST(ROUND(d.tos_target_pct, 0) AS STRING), '%","pass":',
+        CONCAT(',{"id":"tos","label":"Top-of-Search","sql":"target_tos_share","rule":"',
+          IF(d.target_tos_share >= d.tos_target_pct,
+             CONCAT('dominant — holding bid (TOS ', CAST(ROUND(COALESCE(d.target_tos_share, 0), 0) AS STRING), '% ≥ target ', CAST(ROUND(d.tos_target_pct, 0) AS STRING), '%)'),
+             CONCAT('TOS ', CAST(ROUND(COALESCE(d.target_tos_share, 0), 0) AS STRING), '% < target ', CAST(ROUND(d.tos_target_pct, 0) AS STRING), '%')),
+          '","pass":',
           IF(d.target_tos_share >= d.tos_target_pct, 'true', 'false'),
           ',"value":"', CAST(ROUND(COALESCE(d.target_tos_share, 0), 1) AS STRING), '% (target: ',
           CAST(ROUND(d.tos_target_pct, 1) AS STRING), '%)"}'),
