@@ -843,6 +843,18 @@ SELECT
       )
       THEN 'REDUCE_BID'
 
+    -- ═══ TOS BRAKE: already-dominant profitable keyword → hold the bid ═══
+    -- Once target_tos_share ≥ tos_target_pct the term owns its top-of-search position;
+    -- raising the bid further buys CPC, not impressions. Hold (no change). Defense exempt
+    -- (the brand moat always defends). Self-correcting: if TOS later erodes below target,
+    -- this WHEN fails and the normal scale-up/profitable raise resumes. (Coacher A.1.)
+    WHEN d.target_tos_share IS NOT NULL
+         AND d.tos_target_pct IS NOT NULL
+         AND d.target_tos_share >= d.tos_target_pct
+         AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+         AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      THEN 'MONITOR_TARGET'
+
     -- ═══ FREQUENCY GATE: prevent too-frequent bid changes ═══
     -- GUARDIAN: weekly (7d), COOLDOWN: daily (1d), BLITZ BOOST: every 3d, BLITZ PEAK: every 3d
     -- BOOST ramps fast (3d) so bids are already high when PEAK starts.
@@ -882,23 +894,6 @@ SELECT
       )
       THEN 'REDUCE_BID'
     WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0 THEN 'MONITOR_TARGET'
-    -- ═══ TOS BID-UP: profitable-but-buried keyword — raise to capture top-of-search ═══
-    -- Fires when:
-    --   • We have a measured TOS share (keyword report, 8w aggregate)
-    --   • The profile has a TOS target set (seeded by Task 2)
-    --   • We're below that target (buried)
-    --   • The keyword is profitable (has orders AND target ROAS ≥ profitable floor)
-    --   • NOT suppressed by the GENERIC+disabled profile branch (B.2 guard)
-    --   • Current bid is below the hard ceiling
-    -- Priority: after reduce/stop tiers, before the dead-zone KEEP_TARGET.
-    WHEN d.target_tos_share IS NOT NULL
-         AND d.tos_target_pct IS NOT NULL
-         AND d.target_tos_share < d.tos_target_pct
-         AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
-         AND NOT (d.intent_class = 'GENERIC' AND d.profile_enabled = FALSE AND d.profile_steers)
-         AND COALESCE(d.current_bid, 0) < d.th_bid_cap
-      THEN 'INCREASE_BID'
-
     -- Dead zone: between reduce and profitable thresholds → KEEP_TARGET (no action)
     WHEN d.target_orders_8w > 0 THEN 'KEEP_TARGET'
     ELSE 'MONITOR_TARGET'
