@@ -1574,7 +1574,7 @@ active_term_data AS (
     psp.confidence     as profile_confidence,
     psp.source         as profile_source,
     -- profile_steers = true when the evidence is conclusive or the user set it manually
-    (psp.source = 'MANUAL' OR psp.confidence = 'CONCLUSIVE') as profile_steers,
+    (psp.source IN ('MANUAL','BORROWED') OR psp.confidence = 'CONCLUSIVE') as profile_steers,
     -- intent_class: BRAND / PRODUCT / GENERIC (from V_KEYWORD_INTENT_CLASS; default GENERIC)
     COALESCE(kic.intent_class, 'GENERIC') as intent_class,
     -- cell coordinates exposed for V_STRATEGY_GAPS (Coacher C) — identical to the psp join below,
