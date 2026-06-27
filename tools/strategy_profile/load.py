@@ -25,9 +25,10 @@ def _bq(sql: str):
     if out.returncode:
         raise SystemExit(out.stderr)
 
-def load_table(df, table: str, updated_by="strategy_profile_tool"):
-    """Replace only the DERIVED rows of `table` with df's rows (MANUAL rows preserved)."""
-    _bq(f"DELETE FROM `{C.PROJECT}.{C.DATASET}.{table}` WHERE source='DERIVED'")
+def load_table(df, table: str, updated_by="strategy_profile_tool", replace_sources=("DERIVED",)):
+    """Replace only rows whose source is in replace_sources (MANUAL preserved)."""
+    in_list = ",".join(f"'{s}'" for s in replace_sources)
+    _bq(f"DELETE FROM `{C.PROJECT}.{C.DATASET}.{table}` WHERE source IN ({in_list})")
     rows = to_json_rows(df, updated_by)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         for r in rows:
@@ -38,4 +39,4 @@ def load_table(df, table: str, updated_by="strategy_profile_tool"):
          f"{C.DATASET}.{table}", path], capture_output=True, text=True)
     if out.returncode:
         raise SystemExit(out.stderr)
-    print(f"loaded {len(rows)} DERIVED rows into {table}")
+    print(f"loaded {len(rows)} rows ({'/'.join(replace_sources)}) into {table}")
