@@ -910,6 +910,11 @@ tables:
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_KEYWORD_INTENT_OVERRIDE.sql"]
 
+  - name: "DE_PROBE_LOG"
+    description: "Tracks each keyword probe's decision budget (15 clicks / 14 days): ACTIVE/GRADUATED/EXHAUSTED. Coacher C close-the-loop, refreshed by SP_REFRESH_PROBE_LOG."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_PROBE_LOG.sql"]
+
   - name: "DE_PRODUCT_CATEGORY_TERMS"
     description: "Per-family product-category term regex; a non-brand keyword matching it is PRODUCT intent (else GENERIC). Editable seed table replacing the research-fit signal in V_KEYWORD_INTENT_CLASS."
     type: "data_entry"
