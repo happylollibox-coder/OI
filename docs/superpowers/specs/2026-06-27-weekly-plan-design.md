@@ -20,12 +20,16 @@ The coacher produces live per-keyword decisions, but there is **no plan** and **
 
 | Purpose | Success metric ("on plan" means…) | Judged at |
 |---|---|---|
-| `SCALE` (grow a profitable cell) | net profit ≥ expected (trend-calibrated) | product (robust) |
+| `SCALE` (grow a profitable cell at its target CPC) | net profit ≥ expected | **cell → aggregated to product** |
 | `MAP` / `ESTABLISH` (e.g. Bunny EXACT) | **15 clicks** gathered, then graduate — *not* profit | cell |
 | `PROBE` / `EXPLORE` (C's probe) | 15 clicks / 14 days | cell |
 | `DEFEND` (brand) | hold top-of-search / impression share | cell |
 | `CUT` (bleeders) | wasted spend reduced (spend ↓, net ↑) | cell |
 | `HOLD` (TOS-brake at target) | maintain position/net, no churn | cell |
+
+Every metric is measured at the **cell grain**; the product view is the roll-up (SCALE net profit sums cells → product; thin cells land `INCONCLUSIVE` in learnings rather than polluting the product verdict).
+
+**SCALE ↔ target CPC (one feedback loop with B).** SCALE operationalizes the per-cell target CPC from `DE_PRODUCT_STRATEGY_PROFILE`: the plan item operates the cell at its **`cpc_target`** (+ band) and its **`expected_value` (net profit) = `net_per_dollar × planned_spend`** at that CPC. The review measures both actual net profit **and** the actual achieved CPC vs `cpc_target`. The learning closes back to B — if at target CPC the cell underdelivers, recalibrate `cpc_target` down; if it beats expectation with CPC headroom, push it up. B sets the target CPC; D operates at it, measures, and tunes it.
 
 **Learning loop:** plan → act → measure (per purpose's metric) → **learn** (accumulate what works per product/cell/purpose) → **next plan improves** (calibrate expectations + re-assign purposes from the track record). History is retained, never overwritten.
 
@@ -44,6 +48,7 @@ One row per `week_start × parent_name × season × match_type × intent` (the a
 - **`purpose`** (`SCALE`/`MAP`/`PROBE`/`DEFEND`/`CUT`/`HOLD`) — always set.
 - `objective` — short text ("establish EXACT coverage for Bunny", "scale Fresh EXACT winners").
 - **`success_metric`** (`NET_PROFIT`/`CLICKS`/`TOS_SHARE`/`SPEND_DOWN`/`HOLD`) + **`expected_value`** (the target number for that metric).
+- **`target_cpc`** — for SCALE items, the cell's operating CPC carried from `DE_PRODUCT_STRATEGY_PROFILE.cpc_target` (NULL for non-SCALE purposes).
 - `expected_net_profit`, `plan_net_profit` (business-plan target for the week) — populated for product-level reconciliation regardless of item purpose.
 - `coach_mode_hint` (GUARDIAN/BLITZ/COOLDOWN from the calendar).
 - `source` (`DERIVED`|`MANUAL`), `status` (`PROPOSED`|`ON_PLAN`|`OFF_PLAN`|`MET`|`MISSED`), `updated_at`, `updated_by`.
@@ -53,19 +58,19 @@ One row per `week_start × parent_name × season × match_type × intent` (the a
 
 Python tool (same pattern as `tools/strategy_profile`): derive → load (preserving MANUAL + past weeks). For the current + next 3 weeks, per active cell:
 - **Assign purpose from strategy + gaps + learnings:** a CONCLUSIVE profitable cell → `SCALE`; a weak/missing gap cell (from `V_STRATEGY_GAPS`) → `MAP`/`PROBE`; a brand cell → `DEFEND`; a bleeder → `CUT`; a TOS-dominant cell → `HOLD`. **`V_PLAN_LEARNINGS` (Component 5) overrides:** a cell whose `MAP` has repeatedly failed to convert after its clicks → switch to `CUT`; a `SCALE` that consistently beats expectation → keep/raise.
-- **Set `expected_value` from realized history** (calibrated), not a naïve guess: SCALE expected NP from the cell/product's realized net-per-dollar × planned spend; MAP/PROBE = 15 clicks; etc.
+- **Set `expected_value` from realized history** (calibrated), not a naïve guess: SCALE expected NP = the cell's `net_per_dollar` × planned spend **at its `cpc_target`** (carried into `target_cpc`); MAP/PROBE = 15 clicks; etc.
 - **expected_net_profit (trend)** per product, season-adjusted, reconciled to `V_PLAN_FORECAST`.
 - Run by `SP_ORCHESTRATE_DAILY_REFRESH` (weekly cadence); idempotent for the current+future window.
 
 ## 5. Component 3 — measure, review & learn
 
 **`V_WEEKLY_PLAN_REVIEW`** (last completed week, per plan item): compute the **actual** value of the item's `success_metric` and compare to `expected_value`:
-- `SCALE`/NET_PROFIT → actual weekly net profit (product-level) vs expected; `ON_PLAN` if `actual ≥ tol × expected` (tol seeded 0.90 in `DE_COACH_THRESHOLDS`), else `OFF_PLAN`; plus `vs_business_plan = BELOW_TARGET` when `actual < plan_net_profit`.
+- `SCALE`/NET_PROFIT → actual weekly net profit **per cell** vs expected (then summed to the product roll-up); `ON_PLAN` if `actual ≥ tol × expected` (tol seeded 0.90 in `DE_COACH_THRESHOLDS`), else `OFF_PLAN`; also record **actual achieved CPC vs `target_cpc`**; plus `vs_business_plan = BELOW_TARGET` when product `actual < plan_net_profit`.
 - `MAP`/`PROBE`/CLICKS → clicks accumulated (joins `DE_PROBE_LOG` / `V_KEYWORD_DAILY`); `MET` at ≥ 15, else `OPEN`/`MISSED` (14-day).
 - `DEFEND`/TOS_SHARE, `CUT`/SPEND_DOWN, `HOLD` → their respective actuals.
 - Writes `status` + `actual_value` back onto the reviewed week's `DE_WEEKLY_PLAN` rows (building the corpus). **Persistent OFF_PLAN/MISSED is the hand-off signal to E.**
 
-**`V_PLAN_LEARNINGS`** (the memory that makes next plans better): per `parent × season × match × intent × purpose`, aggregate the **track record across all completed weeks** — attempts, success rate, realized metric (net-per-dollar / click-yield / etc.), and a `verdict` (`WORKS` / `DOESNT` / `INCONCLUSIVE`). The generator (Component 2) reads this to calibrate `expected_value` and re-assign purposes. *This is the "learn what works per product and improve" loop.*
+**`V_PLAN_LEARNINGS`** (the memory that makes next plans better): per `parent × season × match × intent × purpose`, aggregate the **track record across all completed weeks** — attempts, success rate, realized metric (net-per-dollar / click-yield / etc.), realized-CPC-vs-target, and a `verdict` (`WORKS` / `DOESNT` / `INCONCLUSIVE`). The generator (Component 2) reads this to calibrate `expected_value`, **recalibrate the SCALE `target_cpc`** (under-delivering at target → lower it; beating it with CPC headroom → raise it — the loop back to B), and re-assign purposes. *This is the "learn what works per product and improve" loop.*
 
 ## 6. Component 4 — actions + expected results (`V_WEEKLY_PLAN_ACTIONS`)
 
