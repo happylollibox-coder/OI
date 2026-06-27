@@ -894,6 +894,17 @@ SELECT
       )
       THEN 'REDUCE_BID'
     WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0 THEN 'MONITOR_TARGET'
+    -- ═══ PROBE: starved keyword in a donor-less gap cell — bounded exploration (Coacher C) ═══
+    -- Only when there's no real performance to act on (no traffic, 0 orders) and the cell is a
+    -- non-steering gap with no borrow donor; capped per-match-type launch CPC; DE_PROBE_LOG tracks
+    -- the 15-click/14-day budget (probe_status drops to GRADUATED/EXHAUSTED to stop).
+    WHEN d.is_probe_cell
+         AND COALESCE(d.no_traffic_rate, 0) >= 0.8
+         AND COALESCE(d.sqp_amazon_search_volume_8w, 0) >= 100
+         AND COALESCE(d.target_orders_8w, 0) = 0
+         AND COALESCE(d.probe_status, 'ACTIVE') = 'ACTIVE'
+         AND COALESCE(d.current_bid, 0) < d.probe_launch_cpc
+      THEN 'PROBE'
     -- Dead zone: between reduce and profitable thresholds → KEEP_TARGET (no action)
     WHEN d.target_orders_8w > 0 THEN 'KEEP_TARGET'
     ELSE 'MONITOR_TARGET'
@@ -1142,6 +1153,12 @@ SELECT
           ',"value":"', CAST(ROUND(COALESCE(d.target_tos_share, 0), 1) AS STRING), '% (target: ',
           CAST(ROUND(d.tos_target_pct, 1) AS STRING), '%)"}'),
         ''),
+      -- Probe chip (Coacher C): starved keyword in a donor-less gap cell being explored
+      IF(d.is_probe_cell AND COALESCE(d.no_traffic_rate,0) >= 0.8,
+        CONCAT(',{"id":"probe","label":"Probe","sql":"V_STRATEGY_GAPS","rule":"starved cell, no donor — exploring at $',
+          CAST(ROUND(COALESCE(d.probe_launch_cpc,0),2) AS STRING),
+          ' (p50 ', COALESCE(d.match_type,''), ' CPC)","pass":true,"value":"probe"}'),
+        ''),
     ']')
   END as target_decision_trace,
 
@@ -1247,6 +1264,14 @@ SELECT
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
       AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
       THEN NULL
+    -- PROBE: bid to the per-match-type launch CPC (p50 real CPC for this parent×match), capped (Coacher C)
+    WHEN d.is_probe_cell
+         AND COALESCE(d.no_traffic_rate, 0) >= 0.8
+         AND COALESCE(d.sqp_amazon_search_volume_8w, 0) >= 100
+         AND COALESCE(d.target_orders_8w, 0) = 0
+         AND COALESCE(d.probe_status, 'ACTIVE') = 'ACTIVE'
+         AND COALESCE(d.current_bid, 0) < d.probe_launch_cpc
+      THEN ROUND(LEAST(d.probe_launch_cpc, 2.0), 2)
     -- ═══ MODE-AWARE INCREASE: BLITZ aggressive ↑ · GUARDIAN gentle ↑ · COOLDOWN minimal ↑ ═══
     WHEN d.target_roas >= 5.0 AND d.eff_orders_for_bid >= 2
       THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.50 WHEN 'GUARDIAN' THEN 1.10 WHEN 'COOLDOWN' THEN 1.05 ELSE 1.40 END, GREATEST(d.margin_per_unit * 0.5, 0.30))
