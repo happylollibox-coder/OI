@@ -1201,6 +1201,10 @@ stored_procedures:
     description: "Persist V_WEEKLY_PLAN_REVIEW status/actual back onto DE_WEEKLY_PLAN so V_PLAN_LEARNINGS accumulates. Run weekly after the week completes, before the generator. Coacher D."
     source_files: ["scripts/bigquery/procedures/SP_REVIEW_WEEKLY_PLAN.sql"]
 
+  - name: "SP_REFRESH_COACH_LOOP"
+    description: "SQL half of the coacher loop (CALL SP_REVIEW_WEEKLY_PLAN + SP_REFRESH_PROBE_LOG). Scheduled daily 15:00 UTC via the 'daily_coach_loop' scheduled query. Python generators (strategy_profile/weekly_plan/derive_tos_targets) need a separate Cloud runner."
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_COACH_LOOP.sql"]
+
   - name: "SP_REFRESH_RESEARCH_RANKED"
     description: "Materialize V_RESEARCH_TERMS → FACT_RESEARCH_TERMS and V_RESEARCH_RANKED → FACT_RESEARCH_RANKED for the Research page (called by SP_ORCHESTRATE_DAILY_REFRESH)"
     source_files: ["scripts/bigquery/procedures/SP_REFRESH_RESEARCH_RANKED.sql"]
