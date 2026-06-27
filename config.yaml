@@ -217,6 +217,14 @@ views:
       - V_ADS_COACH_DATA
       - DE_PRODUCT_STRATEGY_PROFILE
 
+  - name: "V_WEEKLY_CELL_NET"
+    description: "Weekly ads net profit/spend per strategy cell (parent x season x match x intent x week); per-product peak. Coacher D base for trend/review/learnings."
+    source_files: ["scripts/bigquery/views/V_WEEKLY_CELL_NET.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - V_PEAK_RELEVANCE
+      - V_KEYWORD_INTENT_CLASS
+
   - name: "V_ADS_COACH_DATA"
     description: "Pure data layer — all metrics at campaign × asin × keyword grain. No logic."
     source_files: ["scripts/bigquery/views/V_ADS_COACH_DATA.sql"]
@@ -914,6 +922,16 @@ tables:
     description: "Tracks each keyword probe's decision budget (15 clicks / 14 days): ACTIVE/GRADUATED/EXHAUSTED. Coacher C close-the-loop, refreshed by SP_REFRESH_PROBE_LOG."
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_PROBE_LOG.sql"]
+
+  - name: "DE_PRODUCT_BUDGET"
+    description: "Per-product weekly spend ceiling (risk envelope, editable; MANUAL/BUSINESS_PLAN/BOOTSTRAP). Coacher D budget anchor."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_PRODUCT_BUDGET.sql"]
+
+  - name: "DE_WEEKLY_PLAN"
+    description: "Per-cell weekly plan (history-retained): purpose + success_metric + expected_value + spend_mode + status. Coacher D, written by tools/weekly_plan."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_WEEKLY_PLAN.sql"]
 
   - name: "DE_PRODUCT_CATEGORY_TERMS"
     description: "Per-family product-category term regex; a non-brand keyword matching it is PRODUCT intent (else GENERIC). Editable seed table replacing the research-fit signal in V_KEYWORD_INTENT_CLASS."
