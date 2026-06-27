@@ -1245,17 +1245,6 @@ SELECT
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
       AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
       THEN NULL
-    -- ═══ TOS BID-UP: profitable-but-buried keyword — step toward the ceiling ═══
-    -- Mirrors the BRAND_DEFENSE raise shape: GREATEST(+15%, +$0.10), capped at th_bid_cap.
-    -- The outer LEAST(..., strategy_bid_max, th_bid_cap) in the `scored` CTE caps it further.
-    WHEN d.target_tos_share IS NOT NULL
-         AND d.tos_target_pct IS NOT NULL
-         AND d.target_tos_share < d.tos_target_pct
-         AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
-         AND NOT (d.intent_class = 'GENERIC' AND d.profile_enabled = FALSE AND d.profile_steers)
-         AND COALESCE(d.current_bid, 0) < d.th_bid_cap
-      THEN LEAST(GREATEST(d.current_bid * 1.15, d.current_bid + 0.10), d.th_bid_cap)
-
     -- ═══ MODE-AWARE INCREASE: BLITZ aggressive ↑ · GUARDIAN gentle ↑ · COOLDOWN minimal ↑ ═══
     WHEN d.target_roas >= 5.0 AND d.eff_orders_for_bid >= 2
       THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.50 WHEN 'GUARDIAN' THEN 1.10 WHEN 'COOLDOWN' THEN 1.05 ELSE 1.40 END, GREATEST(d.margin_per_unit * 0.5, 0.30))
@@ -1324,15 +1313,6 @@ SELECT
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
       AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
       THEN 0
-    -- TOS raise % (mirrors recommended_bid TOS block: GREATEST(+15%, +$0.10) → +15% typical)
-    WHEN d.target_tos_share IS NOT NULL
-         AND d.tos_target_pct IS NOT NULL
-         AND d.target_tos_share < d.tos_target_pct
-         AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
-         AND NOT (d.intent_class = 'GENERIC' AND d.profile_enabled = FALSE AND d.profile_steers)
-         AND COALESCE(d.current_bid, 0) < d.th_bid_cap
-      THEN ROUND((LEAST(GREATEST(d.current_bid * 1.15, d.current_bid + 0.10), d.th_bid_cap) / NULLIF(d.current_bid, 0) - 1) * 100, 0)
-
     -- Mode-aware % (mirrors recommended_bid; COOLDOWN reduce handled by the block above)
     WHEN d.target_roas >= 5.0 AND d.eff_orders_for_bid >= 2 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 50 WHEN 'GUARDIAN' THEN 10 WHEN 'COOLDOWN' THEN 5 ELSE 40 END
     WHEN d.target_roas >= 3.0 AND d.eff_orders_for_bid >= 2 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 40 WHEN 'GUARDIAN' THEN 8 WHEN 'COOLDOWN' THEN 5 ELSE 30 END
