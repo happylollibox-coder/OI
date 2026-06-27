@@ -254,6 +254,12 @@ views:
       - V_WEEKLY_CELL_NET
       - DE_PROBE_LOG
 
+  - name: "V_COACH_APPLY"
+    description: "Prepare-only apply package (Coacher F): deduped one-row-per-keyword bid changes ready for the Amazon bulksheet (fixes Duplicate Id rejection). Backend; frontend formats the XLSX."
+    source_files: ["scripts/bigquery/views/V_COACH_APPLY.sql"]
+    dependencies:
+      - V_ADS_COACH
+
   - name: "V_ADS_COACH_DATA"
     description: "Pure data layer — all metrics at campaign × asin × keyword grain. No logic."
     source_files: ["scripts/bigquery/views/V_ADS_COACH_DATA.sql"]
