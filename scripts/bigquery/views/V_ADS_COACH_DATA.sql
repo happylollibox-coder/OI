@@ -1111,6 +1111,15 @@ probe_state AS (   -- active probe per keyword (graduated/exhausted ones drop ou
   SELECT keyword_id, status AS probe_status
   FROM `onyga-482313.OI.DE_PROBE_LOG` WHERE status = 'ACTIVE'
 ),
+wk_plan AS (   -- this week's plan target per cell (Coacher D) → so each action explains its week target
+  SELECT parent_name, season, match_type, intent_class,
+         ANY_VALUE(purpose) AS purpose, ANY_VALUE(objective) AS objective,
+         ANY_VALUE(success_metric) AS success_metric, ANY_VALUE(expected_value) AS expected_value
+  FROM `onyga-482313.OI.DE_WEEKLY_PLAN`
+  WHERE horizon = 'CURRENT'
+    AND week_start = DATE_TRUNC(CURRENT_DATE('America/Los_Angeles'), WEEK(MONDAY))
+  GROUP BY parent_name, season, match_type, intent_class
+),
 
 -- =============================================
 -- ACTIVE TERM ROWS: assemble all windows at campaign × asin × keyword grain
@@ -1616,6 +1625,11 @@ active_term_data AS (
        AND dim.match_type IS NULL)        as is_probe_cell,
     pcpc.probe_launch_cpc                  as probe_launch_cpc,
     pst.probe_status                       as probe_status,
+    -- this week's plan target (Coacher D) — lets the Actions page explain each action's week target
+    wkp.purpose                            as week_purpose,
+    wkp.objective                          as week_objective,
+    wkp.success_metric                     as week_success_metric,
+    wkp.expected_value                     as week_expected_value,
 
     -- ═══ TOS signals (Task 3): 8-week per-keyword aggregate from V_KEYWORD_DAILY ═══
     -- target_tos_share: impression-weighted avg TOS share (0–100) over 8w lag-trimmed window.
@@ -1712,6 +1726,15 @@ active_term_data AS (
         WHEN 'AUTOMATIC' THEN 'AUTO' WHEN 'ASIN' THEN 'PRODUCT' WHEN 'ASIN EXPANDED' THEN 'PRODUCT'
         WHEN 'CATEGORY' THEN 'CATEGORY' ELSE UPPER(a8.targeting_type) END
   LEFT JOIN probe_state pst ON pst.keyword_id = CAST(a8.keyword_id AS STRING)
+  -- this week's plan target for this action's cell (Coacher D ↔ Actions connection)
+  LEFT JOIN wk_plan wkp
+    ON wkp.parent_name = ae.parent_name
+   AND wkp.season = COALESCE(fs.profile_season, 'OFF')
+   AND wkp.intent_class = COALESCE(kic.intent_class, 'GENERIC')
+   AND wkp.match_type = CASE UPPER(a8.targeting_type)
+        WHEN 'BROAD' THEN 'BROAD' WHEN 'EXACT' THEN 'EXACT' WHEN 'PHRASE' THEN 'PHRASE'
+        WHEN 'AUTOMATIC' THEN 'AUTO' WHEN 'ASIN' THEN 'PRODUCT' WHEN 'ASIN EXPANDED' THEN 'PRODUCT'
+        WHEN 'CATEGORY' THEN 'CATEGORY' ELSE UPPER(a8.targeting_type) END
 ),
 
 -- =============================================
@@ -1922,6 +1945,10 @@ opportunity_data AS (
     CAST(NULL AS BOOL)    as is_probe_cell,
     CAST(NULL AS FLOAT64) as probe_launch_cpc,
     CAST(NULL AS STRING)  as probe_status,
+    CAST(NULL AS STRING)  as week_purpose,
+    CAST(NULL AS STRING)  as week_objective,
+    CAST(NULL AS STRING)  as week_success_metric,
+    CAST(NULL AS FLOAT64) as week_expected_value,
 
     -- TOS signals (NULL for opportunities — no keyword_id / no keyword report data)
     CAST(NULL AS FLOAT64) as target_tos_share,
