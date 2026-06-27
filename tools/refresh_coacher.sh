@@ -14,4 +14,6 @@ bq query --use_legacy_sql=false < scripts/bigquery/queries/derive_tos_targets.sq
 echo "==> 3/3  roll the weekly plan forward (D: current + 3 weeks, budget-allocated)"
 .venv/bin/python -m tools.weekly_plan.run
 
-echo "==> done. Review escalations:  bq query 'SELECT * FROM \`onyga-482313.OI.V_PLAN_ESCALATION\`'"
+echo "==> 4/4  generate the This Week report"
+.venv/bin/python -m tools.coacher_report
+echo "==> done. Open the report:  open .tmp/coacher_this_week.html"
