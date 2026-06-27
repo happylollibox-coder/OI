@@ -1577,6 +1577,19 @@ active_term_data AS (
     (psp.source = 'MANUAL' OR psp.confidence = 'CONCLUSIVE') as profile_steers,
     -- intent_class: BRAND / PRODUCT / GENERIC (from V_KEYWORD_INTENT_CLASS; default GENERIC)
     COALESCE(kic.intent_class, 'GENERIC') as intent_class,
+    -- cell coordinates exposed for V_STRATEGY_GAPS (Coacher C) — identical to the psp join below,
+    -- so the gaps aggregation can never drift from the profile grain.
+    COALESCE(fs.profile_season, 'OFF') as season,
+    CASE UPPER(a8.targeting_type)
+      WHEN 'BROAD'         THEN 'BROAD'
+      WHEN 'EXACT'         THEN 'EXACT'
+      WHEN 'PHRASE'        THEN 'PHRASE'
+      WHEN 'AUTOMATIC'     THEN 'AUTO'
+      WHEN 'ASIN'          THEN 'PRODUCT'
+      WHEN 'ASIN EXPANDED' THEN 'PRODUCT'
+      WHEN 'CATEGORY'      THEN 'CATEGORY'
+      ELSE UPPER(a8.targeting_type)
+    END as match_type,
 
     -- ═══ TOS signals (Task 3): 8-week per-keyword aggregate from V_KEYWORD_DAILY ═══
     -- target_tos_share: impression-weighted avg TOS share (0–100) over 8w lag-trimmed window.
@@ -1862,6 +1875,8 @@ opportunity_data AS (
     CAST(NULL AS STRING)  as profile_source,
     CAST(NULL AS BOOL)    as profile_steers,
     CAST(NULL AS STRING)  as intent_class,
+    CAST(NULL AS STRING)  as season,
+    CAST(NULL AS STRING)  as match_type,
 
     -- TOS signals (NULL for opportunities — no keyword_id / no keyword report data)
     CAST(NULL AS FLOAT64) as target_tos_share,
