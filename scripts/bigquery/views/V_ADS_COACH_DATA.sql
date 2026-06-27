@@ -1092,6 +1092,26 @@ tos_8w AS (
   GROUP BY keyword_id
 ),
 
+-- ═══ PROBE inputs (Coacher C) — non-circular: read profile + V_KEYWORD_DAILY, not V_STRATEGY_GAPS ═══
+pm_cpc AS (   -- per-match-type launch CPC = p50 real cost_per_click for this parent×match, capped
+  SELECT parent_name, match_type,
+         LEAST(APPROX_QUANTILES(cost_per_click, 100)[OFFSET(50)], 2.0) AS probe_launch_cpc
+  FROM `onyga-482313.OI.V_KEYWORD_DAILY`
+  WHERE clicks > 0 GROUP BY 1, 2
+),
+donor_ip AS (   -- a CONCLUSIVE cell sharing intent+parent (borrow ladder reachability)
+  SELECT DISTINCT intent_class, parent_name
+  FROM `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE` WHERE confidence = 'CONCLUSIVE'
+),
+donor_im AS (   -- a CONCLUSIVE cell sharing intent+match
+  SELECT DISTINCT intent_class, match_type
+  FROM `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE` WHERE confidence = 'CONCLUSIVE'
+),
+probe_state AS (   -- active probe per keyword (graduated/exhausted ones drop out)
+  SELECT keyword_id, status AS probe_status
+  FROM `onyga-482313.OI.DE_PROBE_LOG` WHERE status = 'ACTIVE'
+),
+
 -- =============================================
 -- ACTIVE TERM ROWS: assemble all windows at campaign × asin × keyword grain
 -- Now includes targeting (target keyword) and weighted ROAS
@@ -1590,6 +1610,12 @@ active_term_data AS (
       WHEN 'CATEGORY'      THEN 'CATEGORY'
       ELSE UPPER(a8.targeting_type)
     END as match_type,
+    -- PROBE eligibility (Coacher C): cell does not steer AND no borrow donor reachable
+    (NOT COALESCE((psp.source IN ('MANUAL','BORROWED') OR psp.confidence = 'CONCLUSIVE'), FALSE)
+       AND dip.parent_name IS NULL
+       AND dim.match_type IS NULL)        as is_probe_cell,
+    pcpc.probe_launch_cpc                  as probe_launch_cpc,
+    pst.probe_status                       as probe_status,
 
     -- ═══ TOS signals (Task 3): 8-week per-keyword aggregate from V_KEYWORD_DAILY ═══
     -- target_tos_share: impression-weighted avg TOS share (0–100) over 8w lag-trimmed window.
@@ -1670,6 +1696,22 @@ active_term_data AS (
       END
   -- TOS 8w: one row per keyword_id → many-to-one, no fan-out
   LEFT JOIN tos_8w t8w ON t8w.keyword_id = CAST(a8.keyword_id AS STRING)
+  -- PROBE inputs (Coacher C): per-match launch CPC + donor reachability + active-probe state
+  LEFT JOIN pm_cpc pcpc
+    ON pcpc.parent_name = ae.parent_name
+   AND pcpc.match_type = CASE UPPER(a8.targeting_type)
+        WHEN 'BROAD' THEN 'BROAD' WHEN 'EXACT' THEN 'EXACT' WHEN 'PHRASE' THEN 'PHRASE'
+        WHEN 'AUTOMATIC' THEN 'AUTO' WHEN 'ASIN' THEN 'PRODUCT' WHEN 'ASIN EXPANDED' THEN 'PRODUCT'
+        WHEN 'CATEGORY' THEN 'CATEGORY' ELSE UPPER(a8.targeting_type) END
+  LEFT JOIN donor_ip dip
+    ON dip.intent_class = COALESCE(kic.intent_class, 'GENERIC') AND dip.parent_name = ae.parent_name
+  LEFT JOIN donor_im dim
+    ON dim.intent_class = COALESCE(kic.intent_class, 'GENERIC')
+   AND dim.match_type = CASE UPPER(a8.targeting_type)
+        WHEN 'BROAD' THEN 'BROAD' WHEN 'EXACT' THEN 'EXACT' WHEN 'PHRASE' THEN 'PHRASE'
+        WHEN 'AUTOMATIC' THEN 'AUTO' WHEN 'ASIN' THEN 'PRODUCT' WHEN 'ASIN EXPANDED' THEN 'PRODUCT'
+        WHEN 'CATEGORY' THEN 'CATEGORY' ELSE UPPER(a8.targeting_type) END
+  LEFT JOIN probe_state pst ON pst.keyword_id = CAST(a8.keyword_id AS STRING)
 ),
 
 -- =============================================
@@ -1877,6 +1919,9 @@ opportunity_data AS (
     CAST(NULL AS STRING)  as intent_class,
     CAST(NULL AS STRING)  as season,
     CAST(NULL AS STRING)  as match_type,
+    CAST(NULL AS BOOL)    as is_probe_cell,
+    CAST(NULL AS FLOAT64) as probe_launch_cpc,
+    CAST(NULL AS STRING)  as probe_status,
 
     -- TOS signals (NULL for opportunities — no keyword_id / no keyword report data)
     CAST(NULL AS FLOAT64) as target_tos_share,
