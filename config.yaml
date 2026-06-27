@@ -1140,6 +1140,10 @@ stored_procedures:
     description: "Materialize Ads Coach actions into FACT_ADS_COACH_ACTIONS (4 INSERT statements at natural grain)"
     source_files: ["scripts/bigquery/procedures/SP_REFRESH_ADS_COACH_ACTIONS.sql"]
 
+  - name: "SP_REFRESH_PROBE_LOG"
+    description: "Close the probe loop (Coacher C): start ACTIVE probes for target_action=PROBE keywords, accumulate clicks, graduate at 15 clicks / exhaust at 14 days. Run daily after the coach refresh."
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_PROBE_LOG.sql"]
+
   - name: "SP_REFRESH_RESEARCH_RANKED"
     description: "Materialize V_RESEARCH_TERMS → FACT_RESEARCH_TERMS and V_RESEARCH_RANKED → FACT_RESEARCH_RANKED for the Research page (called by SP_ORCHESTRATE_DAILY_REFRESH)"
     source_files: ["scripts/bigquery/procedures/SP_REFRESH_RESEARCH_RANKED.sql"]
