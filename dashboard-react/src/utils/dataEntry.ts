@@ -10,7 +10,8 @@ async function json<T>(input: string, init: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
-export interface POLineInput { product_id: number; quantity: number; total_amount: number; }
+// product_id is a >2^53 int — kept as a string end-to-end so the JS number type can't round it.
+export interface POLineInput { product_id: string; quantity: number; total_amount: number; }
 export interface CreatePOInput {
   order_date: string; manufacturer_name: string; currency?: string;
   payment_status?: string; notes?: string; product_lines: POLineInput[];
@@ -24,7 +25,7 @@ export interface PODetail {
 export interface LovItem { value_id: string; value_caption: string; is_default: boolean; [k: string]: unknown; }
 
 export interface Product {
-  product_id: number;
+  product_id: string;
   asin: string | null;
   product_name: string | null;
   display_name: string | null;
@@ -37,7 +38,7 @@ export interface Product {
 
 export interface ShipmentLineInput {
   purchase_order_id: string;
-  product_id: number;
+  product_id: string;
   quantity: number;
   cartons?: number;
 }
@@ -123,7 +124,7 @@ export const dataEntry = {
   createShipment: (b: CreateShipmentInput) => json<{ shipment_id: string }>('/api/shipments', { method: 'POST', body: JSON.stringify(b) }),
   updateShipmentHeader: (id: string, b: Record<string, unknown>) => json(`/api/shipment/${encodeURIComponent(id)}/update`, { method: 'POST', body: JSON.stringify(b) }),
   deleteShipment: (id: string) => json(`/api/shipment/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  addShipmentLine: (id: string, b: { purchase_order_id: string; product_id: number; quantity_shipped: number }) => json<{ line_id: string }>(`/api/shipment/${encodeURIComponent(id)}/lines`, { method: 'POST', body: JSON.stringify(b) }),
+  addShipmentLine: (id: string, b: { purchase_order_id: string; product_id: string; quantity_shipped: number }) => json<{ line_id: string }>(`/api/shipment/${encodeURIComponent(id)}/lines`, { method: 'POST', body: JSON.stringify(b) }),
   updateShipmentLine: (id: string, lineId: string, b: { quantity_shipped?: number; allocated_cost?: number }) => json(`/api/shipment/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`, { method: 'PUT', body: JSON.stringify(b) }),
   deleteShipmentLine: (id: string, lineId: string) => json(`/api/shipment/${encodeURIComponent(id)}/lines/${encodeURIComponent(lineId)}`, { method: 'DELETE' }),
   getPayment: (id: string) => json<PaymentDetail>(`/api/payment/${encodeURIComponent(id)}`, { method: 'GET' }),

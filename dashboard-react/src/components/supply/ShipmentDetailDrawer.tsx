@@ -52,7 +52,8 @@ type LineField = 'quantity_shipped' | 'allocated_cost';
 /** Open-PO line shape returned by /api/open-pos (mirrors NewShipmentModal). */
 interface OpenPOLine {
   purchase_order_id: string;
-  product_id: number;
+  // product_id is a >2^53 int — string end-to-end so the JS number type can't round it.
+  product_id: string;
   product_name: string | null;
   product_asin: string | null;
   manufacturer_name: string | null;
@@ -332,6 +333,7 @@ export default function ShipmentDetailDrawer({ shipment, onClose, onChanged }: S
                 <span>{fmtDate(headerView.shipment_date)}</span>
                 {headerView.estimated_arrival_date && <><span>·</span><span>ETA {fmtDate(headerView.estimated_arrival_date)}</span></>}
                 {headerView.shipment_type && <><span>·</span><span>{headerView.shipment_type}</span></>}
+                {headerView.tracking_number && <><span>·</span><span className="font-mono" title="Warehouse ID / Tracking">WH {headerView.tracking_number}</span></>}
               </div>
             </div>
           </div>
@@ -411,8 +413,8 @@ export default function ShipmentDetailDrawer({ shipment, onClose, onChanged }: S
                   </select>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Tracking</label>
-                  <input className={inputCls} value={hTracking} onChange={(e) => setHTracking(e.target.value)} />
+                  <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Warehouse ID / Tracking</label>
+                  <input className={inputCls} value={hTracking} onChange={(e) => setHTracking(e.target.value)} placeholder="Optional" />
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Cost Shipped</label>

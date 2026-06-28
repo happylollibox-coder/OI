@@ -500,8 +500,10 @@ def generate_payment_id(payment_date, vendor_name, shipments, purchase_orders=No
 def get_products():
     """Get all active products from DIM_PRODUCT, with parent hierarchy info"""
     query = f"""
-    SELECT 
-      product_id,
+    SELECT
+      -- product_id is a >2^53 int; return it as STRING so the React client (JS number)
+      -- can't round it and write a corrupted id back when creating a PO.
+      CAST(product_id AS STRING) AS product_id,
       asin,
       product_name,
       display_name,
@@ -1271,15 +1273,32 @@ def get_open_pos_for_shipment(include_all=False):
         remaining_filter = "AND (po.quantity - COALESCE(sh.total_shipped, 0)) > 0"
     
     query = f"""
-    WITH shipped AS (
-      SELECT l.purchase_order_id,
-             COALESCE(l.product_id, po.product_id) AS product_id,
+    WITH po_pcount AS (
+      SELECT purchase_order_id, COUNT(*) AS np
+      FROM `{ORDERS_TABLE}` GROUP BY purchase_order_id
+    ),
+    shipped AS (
+      -- Attribute shipped units to the exact PO product. A shipment line's product_id can be
+      -- NULL, or rounded to ~16 digits because the React client serialized a >2^53 product_id
+      -- through a JS number (precision loss) — so an exact `=` join silently misses them and
+      -- remaining stays at the full order qty. Match non-null ids by their FLOAT64 value (the
+      -- exact and rounded ids collapse to the same double); for single-product POs attribute
+      -- every line to that product (the line->PO join is 1:1, so no fan-out).
+      SELECT l.purchase_order_id, po.product_id,
              SUM(COALESCE(l.quantity_shipped, 0)) as total_shipped
       FROM `{SHIPMENT_LINES_TABLE}` l
       JOIN `{ORDERS_TABLE}` po ON l.purchase_order_id = po.purchase_order_id
+      JOIN po_pcount pc ON pc.purchase_order_id = l.purchase_order_id
+      WHERE pc.np = 1
+         OR (l.product_id IS NOT NULL
+             AND CAST(l.product_id AS FLOAT64) = CAST(po.product_id AS FLOAT64))
       GROUP BY 1, 2
     )
-    SELECT po.purchase_order_id, po.product_id, po.product_name, COALESCE(dp.asin, po.product_asin) as product_asin,
+    SELECT po.purchase_order_id,
+           -- product_id is a >2^53 int; return it as STRING so the React client (JS number)
+           -- can't round it and write a corrupted id back on the next shipment.
+           CAST(po.product_id AS STRING) AS product_id,
+           po.product_name, COALESCE(dp.asin, po.product_asin) as product_asin,
            po.quantity as order_quantity,
            po.total_amount,
            po.manufacturer_name,

@@ -10,6 +10,7 @@ cube(`InventorySnapshot`, {
       agg.PAID_AMOUNT,
       agg.cost_of_goods,
       agg.shipping_cost,
+      agg.loaded_at,
       p.product_short_name,
       p.parent_name AS product_family
     FROM (
@@ -20,7 +21,8 @@ cube(`InventorySnapshot`, {
         SUM(SELL_AMOUNT) AS SELL_AMOUNT,
         SUM(PAID_AMOUNT) AS PAID_AMOUNT,
         SUM(cost_of_goods) AS cost_of_goods,
-        SUM(shipping_cost) AS shipping_cost
+        SUM(shipping_cost) AS shipping_cost,
+        MAX(loaded_at) AS loaded_at
       FROM \`onyga-482313.OI.FACT_INVENTORY_SNAPSHOT\`
       GROUP BY Date, ASIN, source_type
     ) agg
@@ -60,6 +62,12 @@ cube(`InventorySnapshot`, {
       type: `max`,
       sql: `Date`,
       title: `Snapshot Date`,
+    },
+
+    lastLoadedAt: {
+      type: `max`,
+      sql: `${CUBE}.loaded_at`,
+      title: `Last Refreshed`,
     },
 
     productCount: {

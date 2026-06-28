@@ -23,7 +23,8 @@ import { ProductSelect } from './ProductSelect';
 
 interface ProductLine {
   id: number;
-  product_id: number | null;
+  // product_id is a >2^53 int — string so the JS number type can't round it.
+  product_id: string | null;
   quantity: number;
   amount: string; // string so input is controlled without rounding issues
 }
@@ -132,7 +133,7 @@ export function NewPOModal({ onClose, onSaved }: NewPOModalProps) {
       payment_status: paymentStatus,
       notes: notes || undefined,
       product_lines: validLines.map((l) => ({
-        product_id: l.product_id as number,
+        product_id: l.product_id as string,
         quantity: l.quantity,
         total_amount: parseFloat(l.amount) || 0,
       })),

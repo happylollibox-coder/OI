@@ -27,7 +27,8 @@ import { summarizeConnectedOtherPos, type OtherPoLite } from '../../utils/otherP
 
 interface OpenPOLine {
   purchase_order_id: string;
-  product_id: number;
+  // product_id is a >2^53 int — string end-to-end so the JS number type can't round it.
+  product_id: string;
   product_name: string | null;
   product_asin: string | null;
   manufacturer_name: string | null;

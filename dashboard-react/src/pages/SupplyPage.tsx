@@ -351,6 +351,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   // Stock snapshot state
   const [snapshotDate, setSnapshotDate] = useState(new Date().toISOString().slice(0, 10));
   const [snapshotRows, setSnapshotRows] = useState<StockSnapshotRow[]>([]);
+  const [snapshotLoadedAt, setSnapshotLoadedAt] = useState<string | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [snapshotGroup, setSnapshotGroup] = useState<'source' | 'product'>('source');
 
@@ -372,7 +373,8 @@ export function SupplyPage({ data }: { data: DashboardData }) {
             'InventorySnapshot.shippingCost',
           ],
           measures: [
-            'InventorySnapshot.totalPaidAmount'
+            'InventorySnapshot.totalPaidAmount',
+            'InventorySnapshot.lastLoadedAt'
           ],
           timeDimensions: [
             { dimension: 'InventorySnapshot.date', dateRange: [snapshotDate, snapshotDate] },
@@ -380,8 +382,12 @@ export function SupplyPage({ data }: { data: DashboardData }) {
           limit: 5000,
         });
         if (cancelled) return;
-        
-        const mapped = (rows as Record<string, unknown>[])
+
+        const rawRows = rows as Record<string, unknown>[];
+        const loadedAt = rawRows.find(r => r['InventorySnapshot.lastLoadedAt'] != null)?.['InventorySnapshot.lastLoadedAt'];
+        setSnapshotLoadedAt(loadedAt != null ? String(loadedAt) : null);
+
+        const mapped = rawRows
           .map(r => {
           const qty = Number(r['InventorySnapshot.quantityBalance'] ?? 0);
           const cogs = r['InventorySnapshot.costOfGoods'] != null ? Number(r['InventorySnapshot.costOfGoods']) : null;
@@ -406,6 +412,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
       } catch (e) {
         console.error('[SupplyPage] Stock snapshot load failed:', e);
         setSnapshotRows([]);
+        setSnapshotLoadedAt(null);
       } finally {
         if (!cancelled) setSnapshotLoading(false);
       }
@@ -983,6 +990,11 @@ export function SupplyPage({ data }: { data: DashboardData }) {
                 onChange={e => setSnapshotDate(e.target.value)}
                 className="bg-surface border border-border rounded px-2 py-1 text-subtle text-xs focus:outline-none focus:ring-1 focus:ring-blue-500/50"
               />
+              {snapshotLoadedAt && (
+                <span className="text-faint" title="When the daily refresh process last rebuilt this snapshot. New shipments appear after the next refresh.">
+                  · refreshed {new Date(snapshotLoadedAt).toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
             </div>
           )}
           <div className="flex-1" />
@@ -1560,6 +1572,7 @@ function ShipmentsTable({ rows, sort, onSort, onSelectShipment }: { rows: Supply
           <SortHeader label="Arrival" field="estimated_arrival_date" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Products</th>
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Type</th>
+          <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Warehouse ID</th>
           <SortHeader label="Qty" field="total_quantity_shipped" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Cost" field="cost_shipped" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Unpaid" field="unpaid_to_shipment" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
@@ -1582,6 +1595,7 @@ function ShipmentsTable({ rows, sort, onSort, onSelectShipment }: { rows: Supply
             <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{r.estimated_arrival_date ? fmtDate(r.estimated_arrival_date) : '—'}</td>
             <td className="px-4 py-2.5 text-subtle text-xs font-medium max-w-[250px] truncate" title={r.products_list}>{r.products_list || '—'}</td>
             <td className="px-4 py-2.5 text-xs text-muted">{r.shipment_type || '—'}</td>
+            <td className="px-4 py-2.5 text-xs text-muted font-mono whitespace-nowrap" title={r.tracking_number || ''}>{r.tracking_number || '—'}</td>
             <td className="px-4 py-2.5 text-right text-subtle font-mono text-xs">{r.total_quantity_shipped.toLocaleString()}</td>
             <td className="px-4 py-2.5 text-right text-subtle font-mono text-xs">{r.cost_shipped > 0 ? fmtFull$(r.cost_shipped) : '—'}</td>
             <td className="px-4 py-2.5 text-right font-mono text-xs">
@@ -1595,7 +1609,7 @@ function ShipmentsTable({ rows, sort, onSort, onSelectShipment }: { rows: Supply
       </tbody>
       <tfoot>
         <tr className="border-t border-border bg-surface/30">
-          <td colSpan={4} className="px-4 py-2.5 text-xs font-semibold text-faint uppercase">{rows.length} Shipments</td>
+          <td colSpan={5} className="px-4 py-2.5 text-xs font-semibold text-faint uppercase">{rows.length} Shipments</td>
           <td className="px-4 py-2.5 text-right text-heading font-semibold font-mono text-xs">
             {rows.reduce((s, r) => s + r.total_quantity_shipped, 0).toLocaleString()}
           </td>

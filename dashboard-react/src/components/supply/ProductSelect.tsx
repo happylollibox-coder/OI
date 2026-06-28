@@ -28,8 +28,9 @@ function productLabel(p: Product): string {
 // ---------------------------------------------------------------------------
 
 interface ProductSelectProps {
-  value: number | null;
-  onChange: (id: number) => void;
+  // product_id is a >2^53 int — kept as a string so the JS number type can't round it.
+  value: string | null;
+  onChange: (id: string) => void;
   required?: boolean;
 }
 
@@ -65,7 +66,7 @@ export function ProductSelect({ value, onChange, required = false }: ProductSele
   // API (ORDER BY COALESCE(parent_name,'zzz'), product_short_name, product_name).
   const { options, labelToId } = useMemo(() => {
     const opts: string[] = [];
-    const map = new Map<string, number>();
+    const map = new Map<string, string>();
     for (const p of products) {
       const label = productLabel(p);
       opts.push(label);
