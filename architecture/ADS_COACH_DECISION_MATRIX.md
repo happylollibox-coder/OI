@@ -45,6 +45,8 @@
 | 10 | `KEEP_TARGET` | Orders > 0 (between thresholds) | — |
 | 11 | `MONITOR_TARGET` | Fallback | — |
 
+> **Grain: one bid decision per keyword.** A bid is set on the **keyword (target)**, not the search term, but `V_ADS_COACH_DATA` is one row **per search term** (a BROAD keyword matches dozens of queries). Every condition above therefore reads **keyword-grain** metrics (`target_*`), so `target_action` is identical across a keyword's search-term slices and the SP's `GROUP BY campaign, targeting, target_action` collapses to one TARGET row per keyword. See [§2026-06-23 Target Bid Grain](#2026-06-23-target-bid-grain-one-decision-per-keyword). Per-query divergence is handled by **term-level** `NEGATE_TERM` / `SWITCH_HERO` (search-term grain — correct there), never by emitting multiple bid rows.
+
 ---
 
 ## Budget Actions (`budget_action` column)
@@ -179,6 +181,8 @@ The ROAS metric used depends on the coach mode:
 | **BLITZ** | `COALESCE(ads_weighted_net_roas_hotseason, ads_weighted_net_roas, ads_net_roas_8w)` | `COALESCE(target_weighted_net_roas_hotseason, target_weighted_net_roas, target_net_roas_8w)` |
 | **Default** | `COALESCE(ads_weighted_net_roas, ads_net_roas_8w)` | `COALESCE(target_weighted_net_roas, target_net_roas_8w)` |
 
+**BLITZ PEAK phase** overrides the target ROAS for fast peak reaction with **keyword-grain** `GREATEST(target_lag_net_roas, target_net_roas_1w)` (was per-search-term `ads_net_roas_3d` until 2026-06-23). The freshest 3d (`target_lag`, today-3..today-1) sits inside the attribution lag and understates ROAS, so the lag-complete 1w floors it — a genuinely-hot 3d still scales up, but a lag artifact can't REDUCE a profitable keyword mid-peak. See [§Target Bid Grain](#2026-06-23-target-bid-grain-one-decision-per-keyword).
+
 ---
 
 ## 2026-06-16 GUARDIAN Redesign
@@ -200,10 +204,32 @@ Net ROAS used for all bid decisions is **ads-only** (`margin_per_unit × ad-attr
 
 ---
 
+## 2026-06-23 Target Bid Grain (one decision per keyword)
+
+**Problem:** one keyword produced multiple contradictory TARGET rows (e.g. `INCREASE_BID` **and** `REDUCE_BID` on the same keyword) → confusing cards + "Duplicate Id" rejection if two bid Updates for one Keyword Id reach a bulksheet. Cause: `V_ADS_COACH_DATA` is **per search term**; the SP already groups TARGET rows by `(campaign, targeting, target_action)`, so the only way to get >1 row per keyword was `target_action` *varying across the keyword's search-term slices*. Three slice-grain fields leaked into the otherwise keyword-grain decision:
+
+| # | Branch | Leaked field (per term) | Fixed to (per keyword) |
+|---|--------|-------------------------|------------------------|
+| 1 | Money-bleeder `REDUCE_BID` (`target_action` + matching `recommended_bid`) | `ads_orders_4w` / `ads_spend_4w` / `ads_clicks_4w` | `target_orders_4w` / `target_spend_4w` / `target_clicks_4w` |
+| 2 | BLITZ **PEAK** `target_roas` | `ads_net_roas_3d` | `GREATEST(target_lag_net_roas, target_net_roas_1w)` — keyword-grain, lag-robust (3d understates inside the attribution lag) |
+| 3 | `SWITCH_HERO` trigger | `is_hero_match` | `target_is_hero_match` |
+
+**New fields in `V_ADS_COACH_DATA`:** exposed `target_spend_4w` (= `clause_spend_4w`); added `target_hero_match` CTE → `target_is_hero_match` (TRUE when ≥50% clicks-weighted of a keyword's search-term slices advertise the family hero). Once `target_action` is keyword-invariant, the existing SP `GROUP BY` collapses to one TARGET row per keyword with correctly summed 4w stats.
+
+**Auto-clause guard (SP):** an SP-Auto auto-targeting clause (`loose-match` etc.) serves multiple ASINs but bids **once**, and ROAS metrics are per-ASIN — so one clause can still split into INCREASE(asin A)+REDUCE(asin B). `SP_REFRESH_ADS_COACH_ACTIONS` Step 4 adds a `QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign, targeting, [bid-actions-as-one] ORDER BY priority DESC) = 1` so all bid-exporting actions collapse to the single highest-priority one (≤1 bid Update per keyword); non-bid actions (SWITCH_HERO) keep their own partition and still surface.
+
+**Left at search-term grain (correct):** term-level `NEGATE_TERM` money-bleeder + fit-protection (`action` column), and `SWITCH_HERO` export — DoPage emits it as `Add NEGATIVE_EXACT` + "switch ASIN", a different bulksheet op than a keyword bid Update, so it is **not** a Duplicate-Id even when co-located with a bid action.
+
+**Verified:** `kw_increase_AND_reduce` 5→0; keywords exporting 2 bid Updates 19→0; `gifts for girls` 4 bid actions → 1 (`INCREASE_BID`, BLITZ-correct). Deployed + `SP_REFRESH_ADS_COACH_ACTIONS` run.
+
+---
+
 ## Maintenance Log
 
 | Date | Change |
 |------|--------|
+| 2026-06-23 | **Peak-relevance override**: new `DE_PEAK_OVERRIDES(family, holiday_name, force_relevant)` table UNIONed into `V_ADS_COACH.family_holiday_relevance` — lets a family be forced into BLITZ for a holiday `V_PEAK_RELEVANCE` can't measure (launched into the only completed occurrence → 90d maturity gate drops it). Seeded `LolliME / Prime Day` for Prime 2026 (first sale 2025-06-07; auto-qualifies from Prime 2027, so remove the row after). Judgment override — BLITZ then runs on default aggression with no measured peak anchor. |
+| 2026-06-23 | **Target bid grain fix**: TARGET bid decisions now read keyword-grain metrics (`target_orders_4w`/`target_spend_4w`/`target_clicks_4w`, `target_lag_net_roas` for BLITZ PEAK, new `target_is_hero_match`) so one keyword no longer fans into contradictory INCREASE/REDUCE bid rows. See §2026-06-23. |
 | 2026-06-16 | DecisionCards now show research **Fit** rank (`FACT_RESEARCH_RANKED.rank`, 0–100; green ≥75 / amber 40–74 / faint <40) + top-spend 4w **source keyword/target** (+ match type). Display-only — added `research_rank`/`source_keyword`/`source_keyword_match_type` to `V_ADS_COACH_DECISION` via LEFT JOINs (row-count parity verified, no decision change). See §Card display. |
 | 2026-06-16 | Added self-brand cross-sell: `V_ADS_COACH_CROSSSELL` (target×advertise co-purchase pairs, gaps only), `CROSS_SELL_MIN_ORDERS` threshold (3), `ADD_CROSS_SELL_TARGET` action + Actions card, Do-page bulksheet export into a `PRODUCT_DEFENSE` SP product-targeting campaign. See §Cross-Sell Action. |
 | 2026-06-16 | GUARDIAN redesign: per-strategy 1.1 bid-up floor, NEEDS_STRATEGY, 3d freq-gate bypass, DEFENDED signal, defense bid-raise (SQP IS gate / unconditional), $2 bid ceiling, dropped dead keys, per-strategy trace. See §2026-06-16. |

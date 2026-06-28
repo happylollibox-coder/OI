@@ -34,7 +34,8 @@ def _load_env_file() -> None:
         from dotenv import load_dotenv
     except ImportError:
         return
-    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+    # This file is at OI/tools/mcp/google_ads/ — OI root is parents[3].
+    load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 
 
 def main() -> None:

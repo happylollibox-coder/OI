@@ -8000,6 +8000,68 @@ def api_open_pos():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# ─── Coacher: This Week escalations (E-layer) — surface + Ori's Ack/Snooze actions ──
+ESCALATION_ACTION_TABLE = f"{PROJECT_ID}.{DATASET_ID}.DE_COACH_ESCALATION_ACTION"
+
+@cache_result(ttl_seconds=60)
+def _get_coach_escalations():
+    """V_PLAN_ESCALATION_SURFACE rows (escalations + handled state). Served fresh-ish so an
+    Ack/Snooze reflects on the next fetch; the POST clears this cache."""
+    query = f"""
+        SELECT parent_name, scope, season, match_type, intent_class, trigger, severity,
+               actual_net, expected_net, trend_net, spend_vs_cap, recommended_action, evidence,
+               escalation_key, last_action, CAST(snooze_until AS STRING) AS snooze_until,
+               handled_note, CAST(handled_at AS STRING) AS handled_at, is_handled
+        FROM `{PROJECT_ID}.{DATASET_ID}.V_PLAN_ESCALATION_SURFACE`
+        ORDER BY is_handled, severity DESC, parent_name
+    """
+    return [dict(row) for row in client.query(query).result()]
+
+@app.route('/api/coach/escalations', methods=['GET'])
+@login_required
+def api_coach_escalations():
+    """This Week escalations + their handled (ack/snooze) state — Coacher E."""
+    try:
+        return jsonify({'success': True, 'data': _get_coach_escalations()})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/coach/escalation-action', methods=['POST'])
+@login_required
+def api_coach_escalation_action():
+    """Record an Ack/Snooze on a This Week escalation — Coacher E (all logic in backend)."""
+    try:
+        data = request.get_json() or {}
+        key = data.get('escalation_key')
+        action = (data.get('action') or '').upper()
+        if not key or action not in ('ACK', 'SNOOZE'):
+            return jsonify({'success': False, 'error': 'escalation_key and action (ACK|SNOOZE) required'}), 400
+        snooze_until = None
+        if action == 'SNOOZE':
+            days = int(data.get('snooze_days', 7) or 7)
+            snooze_until = (date.today() + timedelta(days=days)).isoformat()
+        row = {
+            'escalation_key': key,
+            'parent_name': data.get('parent_name'),
+            'trigger': data.get('trigger'),
+            'action': action,
+            'severity_at_action': data.get('severity'),
+            'note': (data.get('note') or None),
+            'snooze_until': snooze_until,
+            'created_at': datetime.utcnow().isoformat(),
+            'created_by': session.get('user', {}).get('email', 'dashboard'),
+        }
+        job_config = bigquery.LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_APPEND)
+        job = client.load_table_from_json([row], ESCALATION_ACTION_TABLE, job_config=job_config)
+        job.result()
+        if job.errors:
+            return jsonify({'success': False, 'error': str(job.errors)}), 500
+        clear_cache('_get_coach_escalations')
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # ─── Research: shared synonym groups + ranked-score projection ──────────
 # Hardcoded fallback synonym groups; DE_SYNONYM_CACHE (Gemini-populated)
 # takes priority, these unlock Related mode when the cache misses.

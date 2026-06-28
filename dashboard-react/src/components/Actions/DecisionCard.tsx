@@ -5,6 +5,7 @@ import { fM } from '../../utils';
 import { CUT_ACTIONS, REDUCE_ACTIONS, selectPeak, termGrain, traceSummary, type GateVerdict } from '../../coachActuals';
 import type { LastChange } from '../../hooks/useLastChange';
 import { fitBadgeClass, fitBadgeLabel } from './fitBadge';
+import { loadWeekTargets, type WeekTarget } from '../../weekTargets';
 
 // "Jun 12" from a YYYY-MM-DD (or ISO) string, parsed as a local date to avoid TZ drift.
 const fmtShortDate = (ds: string) => {
@@ -36,9 +37,16 @@ type ActionRowRuntime = ActionRow & {
 //   CHANGE     exactly what will change in Amazon (campaign + object)
 // Queue button adds to the Do queue exactly like the row UI does (handler passed in).
 export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, lastChange, researchRank, sourceKeyword, sourceKeywordMatchType }: {
-  action: ActionRowRuntime; family: string; why: GateVerdict; opp: { kind: 'save' | 'earn'; dollars: number }; inQueue: boolean; onQueue: () => void; lastChange?: LastChange | null;
+  action: ActionRowRuntime; family: string; why: GateVerdict; opp: { kind: 'save' | 'earn'; dollars: number; basis?: 'peak' }; inQueue: boolean; onQueue: () => void; lastChange?: LastChange | null;
   researchRank?: number | null; sourceKeyword?: string | null; sourceKeywordMatchType?: string | null;
 }) {
+  // This week's plan target for this product (Coacher D) — explains which week target the action serves.
+  const [weekTgt, setWeekTgt] = React.useState<WeekTarget | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    loadWeekTargets().then(m => { if (alive) setWeekTgt(m.get(family) ?? null); });
+    return () => { alive = false; };
+  }, [family]);
   const isCut = CUT_ACTIONS.has(a.action);
   const isReduce = REDUCE_ACTIONS.has(a.action);
   const icon = isCut ? <Ban size={13} className="text-red-400" />
@@ -78,8 +86,9 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, la
   const orders = a.orders ?? a.ads_orders_4w;
   const netRoas = a.net_roas ?? a.ads_net_roas_4w;
 
-  // Peak winner: cut card on a term that performed in peak. Blitz's anticipatory gate
-  // re-bids proven peak terms in boost, so cutting it now drops a term Blitz would revive.
+  // Peak winner: cut card on a term that performed in peak. Blitz bids proven peak terms up
+  // through the peak window, so cutting it now drops a term Blitz would revive (copy below is
+  // phase-aware: "LIVE now" during PEAK vs "before next peak" off-season).
   const peak = selectPeak(a);
   const isPeakWinner = isCut && peak != null && ((peak.orders ?? 0) >= 3 || peak.roas >= 1.3);
 
@@ -90,6 +99,16 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, la
         <span className="text-[12px] font-semibold">{claim}</span>
         {researchRank != null && (
           <span className={`shrink-0 text-[10px] font-mono ${fitBadgeClass(researchRank)}`} title="Research fit+purchase rank (0–100)">{fitBadgeLabel(researchRank)}</span>
+        )}
+        {weekTgt && weekTgt.purposes && (
+          <span className="shrink-0 text-[9px] text-subtle" title="This week's plan target for this product (Coacher D) — forward ads-direct net from profit-scaling cells (excludes organic)">
+            wk: {weekTgt.purposes}
+            {weekTgt.scaleCells > 0 && weekTgt.fwdNet != null
+              ? ` · ${fM(weekTgt.fwdNet)}`
+              : weekTgt.probeClicks > 0
+              ? ` · ${weekTgt.probeClicks} clicks`
+              : ''}
+          </span>
         )}
         <button
           onClick={onQueue}
@@ -140,14 +159,24 @@ export function DecisionCard({ action: a, family, why, opp, inQueue, onQueue, la
       {sourceKeyword && (
         <div className="text-[9px] text-faint">via {(sourceKeywordMatchType || 'TARGET').toUpperCase()}: {sourceKeyword}</div>
       )}
-      {isPeakWinner && peak && (
-        <div className="text-[10px] text-amber-400/90">
-          ⚠ Peak winner: {peak.orders ?? 0} orders @ {peak.roas.toFixed(2)}× last peak — Blitz re-bids proven peak terms in boost; cutting now drops it for next peak.
-        </div>
-      )}
+      {isPeakWinner && peak && (() => {
+        const ph = (a.current_phase || '').toUpperCase();
+        const tail = ph === 'PEAK'
+          ? 'the peak is LIVE now — Blitz bids these up; cutting mid-peak throws away demand happening right now.'
+          : (ph === 'BOOST' || ph === 'PRE_PEAK')
+          ? 'the peak is ramping — Blitz bids proven peak terms up; cutting now drops it before the peak.'
+          : 'Blitz revives proven peak terms in the peak push; cutting now drops it for the next peak.';
+        return (
+          <div className="text-[10px] text-amber-400/90">
+            ⚠ Peak winner: {peak.orders ?? 0} orders @ {peak.roas.toFixed(2)}× last peak — {tail}
+          </div>
+        );
+      })()}
       <div className="text-[10px] tabular-nums font-mono">
         {opp.kind === 'save'
           ? <span className="text-emerald-400">→ save ~{fM(opp.dollars)}/wk</span>
+          : opp.basis === 'peak'
+          ? <span className="text-emerald-400">→ ~{fM(opp.dollars)} net profit at last peak — Blitz: bid up to capture it now</span>
           : <span className="text-emerald-400">→ earning {fM(opp.dollars)}/wk — scale to beat</span>}
         <span className="text-faint"> · checked vs real results 1 week after upload</span>
       </div>

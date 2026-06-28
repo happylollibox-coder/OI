@@ -1468,7 +1468,10 @@ export function PeakPage({ data }: { data: DashboardData }) {
                 <KwBucket title="📡 Add — Broad" sub="new · high volume" color="text-blue-400" rows={peakKwRecs.broad} limit={6} />
                 {peakKwRecs.brand.length > 0 && <KwBucket title="🛡 Brand defense" sub="own-brand" color="text-purple-400" rows={peakKwRecs.brand} limit={6} />}
               </div>
-              <div className="text-[9px] text-zinc-600 mt-2 font-mono">From last year's {activeHolidayName} peak demand × profitability + current trend (↗) · new terms gated on research fit (rank&gt;75) · hover a row for the reason</div>
+              <div className="text-[9px] text-zinc-600 mt-2 font-mono leading-relaxed">
+                <span className="text-emerald-400">Nx</span> = net ROAS (gross profit ÷ ad spend at last year's peak) · <span className="text-muted">sales</span> = Amazon market purchases for the term · <span className="text-amber-400">↗</span> = demand trending up now.
+                New terms gated on research fit (rank&gt;75) · hover a row for the full reason.
+              </div>
             </>
           )}
         </Card>

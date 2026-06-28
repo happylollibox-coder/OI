@@ -116,6 +116,7 @@ export function traceSummary(trace: { id: string; value: string }[] | null | und
 export interface GateInput {
   action: string; spend: number; clicks: number; orders: number;
   netRoas: number; mode: string; confidence: string;
+  phase?: string | null; // current peak phase: PEAK / BOOST / PRE_PEAK / OFF_SEASON — shapes peak-timing copy & holds
   roas1w?: number | null; orders1w?: number | null;
   peakRoas?: number | null; peakOrders?: number | null;
   sellableQty?: number | null; // current sellable stock of the advertised ASIN (null = unknown)
@@ -145,7 +146,10 @@ export const REDUCE_ACTIONS = new Set(['REDUCE_BID', 'REDUCE_BID_ROAS', 'REDUCE_
 export type TermGrain = 'search term' | 'keyword' | 'product target';
 export function termGrain(a: { action: string; search_term?: string | null; targeting?: string | null; match_type?: string | null }): TermGrain {
   const isCut = CUT_ACTIONS.has(a.action);
-  const usedSearchTerm = isCut ? !!a.search_term : !a.targeting;
+  // Cut/negate acts on the shopper SEARCH TERM. Bid/promote (incl. NEW_SEASONAL) acts on a
+  // KEYWORD — you bid keywords, never raw search terms — even when the explicit `targeting`
+  // field is empty because the engine sourced the keyword from a search term it detected.
+  const usedSearchTerm = isCut && !!a.search_term;
   if (usedSearchTerm) return 'search term';
   const mt = (a.match_type || '').toUpperCase();
   const tgt = (a.targeting || '').trim();
@@ -162,8 +166,14 @@ const PROMOTE_ACTIONS = new Set(['INCREASE_BID', 'PROMOTE_TO_EXACT', 'SCALE', 'S
 //   cut    (0-order term)        → save = its weekly burn  (spend4w / 4)
 //   reduce (losing money)        → save = the weekly loss being stopped (−netProfit4w / 4)
 //   promote (winner)             → earn = current weekly profit at stake (netProfit4w / 4) — "scale to beat"
-export interface OpportunityInput { action: string; spend4w: number; netProfit4w: number | null; netRoas4w: number | null }
-export function opportunityPerWeek(o: OpportunityInput): { kind: 'save' | 'earn'; dollars: number } {
+export interface OpportunityInput {
+  action: string; spend4w: number; netProfit4w: number | null; netRoas4w: number | null;
+  // Peak anchor (BLITZ only): a term dormant now but proven at last peak is a PEAK opportunity,
+  // not a dead one. mode + peak roas/spend let us size it on the profit it earned at peak so it
+  // isn't buried under $0/wk during the very push it should win.
+  mode?: string | null; peakRoas?: number | null; peakSpend?: number | null;
+}
+export function opportunityPerWeek(o: OpportunityInput): { kind: 'save' | 'earn'; dollars: number; basis?: 'peak' } {
   if (CUT_ACTIONS.has(o.action)) return { kind: 'save', dollars: Math.max(0, o.spend4w) / 4 };
   if (REDUCE_ACTIONS.has(o.action)) {
     const loss = o.netProfit4w != null
@@ -171,7 +181,15 @@ export function opportunityPerWeek(o: OpportunityInput): { kind: 'save' | 'earn'
       : Math.max(0, o.spend4w * (1 - Math.min(o.netRoas4w ?? 1, 1)));
     return { kind: 'save', dollars: loss / 4 };
   }
-  return { kind: 'earn', dollars: Math.max(0, o.netProfit4w ?? 0) / 4 };
+  const currentEarn = Math.max(0, o.netProfit4w ?? 0) / 4;
+  // BLITZ: when the term earns nothing now but earned at peak (net ROAS > 1, real spend), the
+  // opportunity is what it captured at peak — net profit = spend × (peakROAS − 1). Net ROAS is
+  // gross_profit/spend, so net profit = spend×roas − spend.
+  if (o.mode === 'BLITZ' && currentEarn === 0 && (o.peakRoas ?? 0) > 1 && (o.peakSpend ?? 0) > 0) {
+    const peakProfit = (o.peakSpend as number) * ((o.peakRoas as number) - 1);
+    if (peakProfit > 0) return { kind: 'earn', dollars: peakProfit, basis: 'peak' };
+  }
+  return { kind: 'earn', dollars: currentEarn };
 }
 
 export function clearCase(g: GateInput): GateVerdict {
@@ -188,6 +206,13 @@ export function clearCase(g: GateInput): GateVerdict {
   // peakGreat: weak now but GREAT last peak → seasonal, boost before peak — never cut.
   // recovering1w: this week already good → recovering, too early to cut.
   const peakGreat = (g.peakRoas ?? 0) >= GATE.peakGreat && (g.peakOrders ?? 0) >= GATE.peakMinOrders;
+  // Peak timing: is the peak happening NOW (or ramping), vs a future/last-year peak? Shapes both the
+  // copy ("peak is LIVE now" vs "before next peak") and whether a reversible bid-down is allowed.
+  const ph = (g.phase || '').toUpperCase();
+  const inPeakWindow = ph === 'PEAK' || ph === 'BOOST' || ph === 'PRE_PEAK';
+  const peakCutNote = ph === 'PEAK' ? "peak is LIVE now — bid up, don't cut"
+    : (ph === 'BOOST' || ph === 'PRE_PEAK') ? "peak is ramping — bid up, don't cut"
+    : "proven at last peak — revive before next peak, don't cut";
   const week = g.roas1w;
   const weekGood = week != null && week >= GATE.recovering1w && (g.orders1w ?? 0) > 0;
   // OOS guard (owner case 2026-06-12: hero was out of stock → windows showed 0 orders → a wrongly
@@ -206,7 +231,7 @@ export function clearCase(g: GateInput): GateVerdict {
   if (isCut) {
     if (oos) return { clear: false, reason: 'product out of stock — the 0-order window may be the empty shelf, not the term; judge after restock' };
     if (windowPoisoned) return { clear: false, reason: `window includes ${g.oosDays4w} out-of-stock days — shelf data, not demand; judge after clean weeks` };
-    if (peakGreat) return { clear: false, reason: `weak now but last peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — seasonal: BOOST before next peak, don't cut` };
+    if (peakGreat) return { clear: false, reason: `weak now but last peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — ${peakCutNote}` };
     if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
     if (g.orders === 0) {
       if (g.clicks < GATE.negateMinClicks)
@@ -216,13 +241,15 @@ export function clearCase(g: GateInput): GateVerdict {
     return { clear: false, reason: `${g.orders} order(s) — halo risk, judge manually` };
   }
   if (isReduce) {
-    // Owner workflow (2026-06-12): a bid-down is REVERSIBLE — a great peak doesn't block it.
-    // Lower now, boost back in the BOOST phase before the next peak. Only negates stay parked.
+    // Owner workflow (2026-06-12): a bid-down is REVERSIBLE — OFF-season a great peak doesn't block it
+    // (lower now, boost back before the next peak). But INSIDE the peak window (PEAK/BOOST/PRE_PEAK) the
+    // peak is happening now — hold a proven peak winner UP, don't lower it mid-peak. Only negates stay parked.
     const oosNote = oos ? ' (product OOS — restore bid after restock)' : '';
     const windowOosNote = windowPoisoned ? ` (window had ${g.oosDays4w} OOS days)` : '';
     if (weekGood) return { clear: false, reason: `this week ROAS ${week!.toFixed(2)} with ${g.orders1w} order(s) — recovering, too early to cut` };
     if (g.netRoas < GATE.grayLow) {
-      if (peakGreat) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} now, but peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — lower now, BOOST back before next peak${oosNote}${windowOosNote}` };
+      if (peakGreat && inPeakWindow) return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} now, but ${ph === 'PEAK' ? 'the peak is LIVE' : 'the peak is ramping'} and it did peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — hold the bid up through the peak, don't lower${oosNote}${windowOosNote}` };
+      if (peakGreat) return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} now, but peak ROAS ${g.peakRoas!.toFixed(2)} (${g.peakOrders} orders) — lower now, boost back before next peak${oosNote}${windowOosNote}` };
       return { clear: true, reason: `ROAS ${g.netRoas.toFixed(2)} decisively below breakeven${oosNote}${windowOosNote}` };
     }
     if (g.netRoas > GATE.grayHigh) return { clear: false, reason: `ROAS ${g.netRoas.toFixed(2)} above breakeven — conflicts with a bid cut, judge manually` };

@@ -43,6 +43,31 @@ export interface ShipmentLineInput {
   cartons?: number;
 }
 
+// Coacher E — This Week escalation + Ori's handled (ack/snooze) state.
+export interface CoachEscalationRow {
+  parent_name: string;
+  trigger: string;
+  severity: string;
+  actual_net: number | null;
+  recommended_action: string | null;
+  evidence?: string | null;
+  escalation_key: string;
+  last_action: string | null;          // 'ACK' | 'SNOOZE' | null
+  snooze_until: string | null;
+  handled_note: string | null;
+  handled_at: string | null;
+  is_handled: boolean;
+}
+export interface EscalationActionInput {
+  escalation_key: string;
+  parent_name: string;
+  trigger: string;
+  action: 'ACK' | 'SNOOZE';
+  severity: string;
+  note?: string;
+  snooze_days?: number;
+}
+
 export interface CreateShipmentInput {
   shipment_date: string;
   shipment_type: string;
@@ -138,6 +163,13 @@ export const dataEntry = {
     const r = await json<{ success?: boolean; data?: Record<string, unknown>[] }>('/api/open-pos', { method: 'GET' });
     return Array.isArray(r) ? r : (r.data ?? []);
   },
+  // Coacher E — This Week escalations (served fresh by Flask so Ack/Snooze reflects on re-fetch).
+  getCoachEscalations: async (): Promise<CoachEscalationRow[]> => {
+    const r = await json<{ success?: boolean; data?: CoachEscalationRow[] }>('/api/coach/escalations', { method: 'GET' });
+    return Array.isArray(r) ? r : (r.data ?? []);
+  },
+  postEscalationAction: (b: EscalationActionInput) =>
+    json<{ success: boolean }>('/api/coach/escalation-action', { method: 'POST', body: JSON.stringify(b) }),
   bulkCreateShipmentPayments: (b: {
     shipment_ids: string[];
     amounts: number[];

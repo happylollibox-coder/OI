@@ -166,15 +166,21 @@ describe('clearCase', () => {
     expect(clearCase({ ...base, action: 'NEGATE_TERM', roas1w: 0, orders1w: 0, peakRoas: 0.4, peakOrders: 1 }).clear).toBe(true);
     expect(clearCase({ ...base, action: 'NEGATE_TERM', roas1w: null, orders1w: null, peakRoas: null, peakOrders: null }).clear).toBe(true); // no extra data = unchanged behavior
   });
-  it('NEGATE with peak GREAT → parked (a negative is hard to boost back)', () => {
-    const v = clearCase({ ...base, action: 'NEGATE_TERM', roas1w: 0, orders1w: 0, peakRoas: 2.1, peakOrders: 12 });
-    expect(v.clear).toBe(false);
-    expect(v.reason).toMatch(/boost before next peak/i);
+  it('NEGATE with peak GREAT → parked; copy is phase-aware', () => {
+    const off = clearCase({ ...base, action: 'NEGATE_TERM', roas1w: 0, orders1w: 0, peakRoas: 2.1, peakOrders: 12 });
+    expect(off.clear).toBe(false);
+    expect(off.reason).toMatch(/before next peak/i);            // off-season: revive before next peak
+    const live = clearCase({ ...base, action: 'NEGATE_TERM', phase: 'PEAK', roas1w: 0, orders1w: 0, peakRoas: 2.1, peakOrders: 12 });
+    expect(live.clear).toBe(false);
+    expect(live.reason).toMatch(/peak is LIVE/i);               // during the peak: live now, don't cut
   });
-  it('REDUCE with peak GREAT → CLEAR with boost-back guidance (bid-downs are reversible — owner workflow)', () => {
-    const r = clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, peakRoas: 1.8, peakOrders: 5 });
-    expect(r.clear).toBe(true);
-    expect(r.reason).toMatch(/lower now, boost back/i);
+  it('REDUCE with peak GREAT → off-season CLEAR (reversible), but HELD during the live peak', () => {
+    const off = clearCase({ ...base, action: 'REDUCE_BID', orders: 3, netRoas: 0.6, peakRoas: 1.8, peakOrders: 5 });
+    expect(off.clear).toBe(true);
+    expect(off.reason).toMatch(/lower now, boost back/i);
+    const live = clearCase({ ...base, action: 'REDUCE_BID', phase: 'PEAK', orders: 3, netRoas: 0.6, peakRoas: 1.8, peakOrders: 5 });
+    expect(live.clear).toBe(false);                             // don't lower a proven peak winner mid-peak
+    expect(live.reason).toMatch(/hold the bid up through the peak/i);
   });
   it('peak good but below GREAT bar or thin → still waste', () => {
     expect(clearCase({ ...base, action: 'NEGATE_TERM', peakRoas: 1.1, peakOrders: 10 }).clear).toBe(true); // below 1.3

@@ -1,13 +1,17 @@
 -- target × day enriched base for CPC strategy analysis
 -- Net profit (ads-attributed) = GROSS_PROFIT - Ads_cost
-WITH camp_parent AS (        -- campaign -> dominant parent by spend (100% asin coverage)
+WITH camp_parent AS (        -- campaign -> dominant parent by spend
+  -- Attribute by the ASIN actually advertised (impressions), falling back to the
+  -- campaign-name ASIN. Matches V_ADS_COACH_DATA so the plan covers every product the
+  -- engine coaches; the campaign-name ASIN alone misfiles Bunny/LolliBall under Lollibox.
   SELECT campaign_id, parent_name
   FROM (
     SELECT a.campaign_id, p.parent_name,
            ROW_NUMBER() OVER (PARTITION BY a.campaign_id
                               ORDER BY SUM(a.Ads_cost) DESC) AS rn
     FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
-    JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = a.ASIN_BY_CAMPAIGN_NAME
+    JOIN `onyga-482313.OI.DIM_PRODUCT` p
+      ON p.asin = COALESCE(a.most_advertised_asin_impressions, a.ASIN_BY_CAMPAIGN_NAME)
     WHERE a.date >= DATE('2025-09-23')
     GROUP BY a.campaign_id, p.parent_name
   ) WHERE rn = 1

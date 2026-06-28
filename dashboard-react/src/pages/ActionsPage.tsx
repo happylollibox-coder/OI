@@ -140,7 +140,7 @@ const ACTIONS_TABLE_COLUMNS: MeasureDef[] = [
 
 const ACTION_TYPES = [
   { id: 'HOT_SIGNAL', label: '🔥 Hot Signals', emoji: '🔥', desc: 'Real-time 3-day alerts' },
-  { id: 'TERM',       label: '🎯 Term Actions', emoji: '🎯', desc: 'Search term level' },
+  { id: 'TERM',       label: '🎯 Term Actions', emoji: '🎯', desc: 'Per search term: negate or promote to keyword' },
   { id: 'PHRASE',     label: '🔫 Phrase Negatives', emoji: '🔫', desc: 'N-gram phrase negation' },
   { id: 'TARGET',     label: '🎚️ Target Actions', emoji: '🎚️', desc: 'Bid operations' },
   { id: 'BUDGET',     label: '💰 Budget Actions', emoji: '💰', desc: 'Campaign budget operations' },
@@ -331,6 +331,7 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
   const [hideMonitor, setHideMonitor] = useState(true);
   const [hierarchy, setHierarchy] = useState<'campaign' | 'action' | 'action_type' | 'strategy' | 'branch'>('campaign');
   const [showQueue, setShowQueue] = useState(false);
+  const [queueCardView, setQueueCardView] = useState(true);
   const { data: intelligenceData, loading: intelligenceLoading } = useKeywordIntelligence(intelligenceKeyword);
 
   const effectiveFam = filters.family || (famFilter !== 'all' ? famFilter : null);
@@ -403,36 +404,41 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
 
   // Stage-1 trust list: confidence-gated clear cases, capped, sorted by weekly $ opportunity.
   const CLEAR_CARD_CAP = 10;
+  // Shared verdict + weekly-$ opportunity for an action — used by Clear cases AND the full-queue cards.
+  const gateFor = (a: ActionRow, family: string): GateVerdict => clearCase({
+    action: a.action,
+    spend: (a as { spend?: number }).spend ?? 0,
+    clicks: (a as { clicks?: number }).clicks ?? 0,
+    orders: (a as { orders?: number }).orders ?? 0,
+    netRoas: (a as { net_roas?: number }).net_roas ?? 0,
+    mode: famModes.get(family) ?? effectiveCoachMode,
+    confidence: a.confidence,
+    phase: a.current_phase,
+    roas1w: a.ads_net_roas_1w, orders1w: a.ads_orders_1w,
+    ...((pk => ({ peakRoas: pk?.roas ?? null, peakOrders: pk?.orders ?? null }))(selectPeak(a))),
+    sellableQty: a.asin ? sellableByAsin.get(a.asin) ?? null : null,
+    oosDays4w: a.asin ? oosDaysByAsin.get(a.asin) ?? null : null,
+  });
+  const oppFor = (a: ActionRow, family: string) => opportunityPerWeek({
+    action: a.action,
+    spend4w: a.ads_spend_4w ?? 0,
+    netProfit4w: a.ads_net_profit_4w ?? null,
+    netRoas4w: a.ads_net_roas_4w ?? null,
+    mode: famModes.get(family) ?? effectiveCoachMode,
+    ...((pk => ({ peakRoas: pk?.roas ?? null, peakSpend: pk?.spend ?? null }))(selectPeak(a))),
+  });
   const clearCases = useMemo(() => {
     const out: { a: ActionRow; family: string; why: GateVerdict; opp: ReturnType<typeof opportunityPerWeek> }[] = [];
     for (const a of acts) {
       const family = getFamily(a.product_short_name) || a.parent_name || '';
       if (!family) continue;
-      const v = clearCase({
-        action: a.action,
-        spend: (a as { spend?: number }).spend ?? 0,
-        clicks: (a as { clicks?: number }).clicks ?? 0,
-        orders: (a as { orders?: number }).orders ?? 0,
-        netRoas: (a as { net_roas?: number }).net_roas ?? 0,
-        mode: famModes.get(family) ?? effectiveCoachMode,
-        confidence: a.confidence,
-        roas1w: a.ads_net_roas_1w, orders1w: a.ads_orders_1w,
-        ...((pk => ({ peakRoas: pk?.roas ?? null, peakOrders: pk?.orders ?? null }))(selectPeak(a))),
-        sellableQty: a.asin ? sellableByAsin.get(a.asin) ?? null : null,
-        oosDays4w: a.asin ? oosDaysByAsin.get(a.asin) ?? null : null,
-      });
+      const v = gateFor(a, family);
       if (v.clear
           && !doQueue.isUploaded(a.search_term, a.campaign_id)
           && !(a.targeting && doQueue.isUploaded(a.targeting, a.campaign_id))
           && !doQueue.isDone(a.search_term, a.campaign_id)
           && !(a.targeting && doQueue.isDone(a.targeting, a.campaign_id))) {
-        const opp = opportunityPerWeek({
-          action: a.action,
-          spend4w: a.ads_spend_4w ?? 0,
-          netProfit4w: a.ads_net_profit_4w ?? null,
-          netRoas4w: a.ads_net_roas_4w ?? null,
-        });
-        out.push({ a, family, why: v, opp });
+        out.push({ a, family, why: v, opp: oppFor(a, family) });
       }
     }
     out.sort((x, y) => y.opp.dollars - x.opp.dollars);
@@ -1175,32 +1181,57 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
         ];
       }
 
-      // Standard term/target keyword leaf → ActionRowComponent + optional intelligence panel
+      // Standard term/target keyword leaf → DecisionCard (rich, same as Clear cases) or compact row.
       const a = node.rows[0];
       if (!a) return [];
       const termLower = (a.search_term || '').toLowerCase();
       const campaignCount = keywordCampaignCounts[termLower] || 1;
       const isComplex = campaignCount >= 3;
       const isIntelExpanded = intelligenceKeyword === a.search_term;
+      const cd = cdByTerm[termLower];
+      const cardFamily = getFamily(a.product_short_name) || a.parent_name || '—';
+      const cardOpp = oppFor(a, cardFamily);
 
       const result: React.ReactNode[] = [
-        <ActionRowComponent
-          key={fullKey} action={a} cd={cdByTerm[termLower]}
-          prediction={predByTerm[termLower]}
-          expanded={isExpanded}
-          onToggle={() => {
-            const next = new Set(expandedKeys);
-            isExpanded ? next.delete(fullKey) : next.add(fullKey);
-            setExpandedKeys(next);
-          }}
-          matchAction={matchAction} indent={pl}
-          complexityBadge={isComplex ? campaignCount : undefined}
-          onIntelligenceClick={isComplex ? () => {
-            setIntelligenceKeyword(prev => prev === a.search_term ? null : (a.search_term || null));
-          } : undefined}
-          isIntelExpanded={isIntelExpanded}
-          doQueue={doQueue}
-        />
+        queueCardView ? (
+          <div key={fullKey} className="py-1.5 pr-2" style={{ paddingLeft: pl }}>
+            <DecisionCard
+              action={a} family={cardFamily} why={gateFor(a, cardFamily)} opp={cardOpp}
+              lastChange={lastChangeFor(a.campaign_id, a.keyword_id, a.targeting)}
+              inQueue={doQueue.hasItem(a.search_term, a.action, a.campaign_name, a.targeting || '')}
+              onQueue={() => queueAction(a, cardOpp)}
+              researchRank={cd?.research_rank}
+              sourceKeyword={cd?.source_keyword}
+              sourceKeywordMatchType={cd?.source_keyword_match_type}
+            />
+            {isComplex && (
+              <button
+                onClick={() => setIntelligenceKeyword(prev => prev === a.search_term ? null : (a.search_term || null))}
+                className="mt-1 ml-1 text-[10px] text-blue-400 hover:text-blue-300 font-medium"
+              >
+                🔍 {campaignCount} campaigns · {isIntelExpanded ? 'hide intelligence' : 'cross-campaign intelligence'}
+              </button>
+            )}
+          </div>
+        ) : (
+          <ActionRowComponent
+            key={fullKey} action={a} cd={cd}
+            prediction={predByTerm[termLower]}
+            expanded={isExpanded}
+            onToggle={() => {
+              const next = new Set(expandedKeys);
+              isExpanded ? next.delete(fullKey) : next.add(fullKey);
+              setExpandedKeys(next);
+            }}
+            matchAction={matchAction} indent={pl}
+            complexityBadge={isComplex ? campaignCount : undefined}
+            onIntelligenceClick={isComplex ? () => {
+              setIntelligenceKeyword(prev => prev === a.search_term ? null : (a.search_term || null));
+            } : undefined}
+            isIntelExpanded={isIntelExpanded}
+            doQueue={doQueue}
+          />
+        )
       ];
 
       if (isIntelExpanded) {
@@ -1863,7 +1894,16 @@ export function ActionsPage({ data, matchAction }: { data: DashboardData; matchA
             <span className="text-base">📋</span>
             <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text)]">Needs judgment / full queue</span>
             <span className="text-[10px] font-mono text-muted">{totalQueueCount} items · {fM(totalQueueSpend)}</span>
-            <span className="text-[9px] text-subtle ml-auto">Campaign → Type → Term / Target</span>
+            <div className="ml-auto flex items-center gap-2" onClick={e => e.stopPropagation()}>
+              <button
+                onClick={() => setQueueCardView(v => !v)}
+                className="text-[9px] font-semibold px-2 py-0.5 rounded border border-border hover:bg-white/[.04] text-subtle"
+                title="Toggle between rich decision cards and compact rows"
+              >
+                {queueCardView ? '🎴 Cards' : '☰ Compact'}
+              </button>
+              <span className="text-[9px] text-subtle">Campaign → Type → Term / Target</span>
+            </div>
             <span className="text-[11px] text-subtle ml-1">{showQueue ? '▾' : '▸'}</span>
           </div>
           {showQueue && (

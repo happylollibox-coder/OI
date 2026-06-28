@@ -25,6 +25,11 @@
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_REFRESH_ADS_COACH_ACTIONS`()
 BEGIN
 
+  -- NOTE: T_PEAK_KEYWORD_RECS (which V_ADS_COACH joins for the 📈 Peak-plan trace chip) is
+  -- refreshed SEPARATELY (SP_REFRESH_PEAK_KEYWORD_RECS), NOT here — computing V_PEAK_KEYWORD_RECS
+  -- inline tripled this SP's runtime (it re-scans the heavy V_RESEARCH_RANKED). The coach view
+  -- joins the already-materialized table cheaply. Run that refresh before this SP for fresh chips.
+
   -- ═══════════════════════════════════════════
   -- Step 1: Build base_rows temp table (computed once)
   -- ═══════════════════════════════════════════
@@ -490,9 +495,10 @@ BEGIN
 
   -- ═══════════════════════════════════════════
   -- Step 4: INSERT TARGET actions
-  -- 1 row per campaign × targeting × target_action (GROUP BY)
+  -- 1 row per campaign × targeting × target_action (GROUP BY), then collapse bid actions per target
   -- ═══════════════════════════════════════════
   INSERT INTO `onyga-482313.OI.FACT_ADS_COACH_ACTIONS`
+  SELECT * FROM (
   SELECT
     campaign_id,
     ANY_VALUE(campaign_name) as campaign_name,
@@ -711,7 +717,18 @@ BEGIN
     ANY_VALUE(launch_decision_trace) as launch_decision_trace
   FROM _base_rows
   WHERE target_action IS NOT NULL
-  GROUP BY campaign_id, targeting, target_action;
+  GROUP BY campaign_id, targeting, target_action
+  )
+  -- Auto-targeting clauses (loose-match etc.) serve multiple ASINs but bid ONCE, and ROAS metrics are
+  -- per-ASIN — so one clause can split into conflicting INCREASE+REDUCE rows. Collapse all bid-exporting
+  -- actions for a target to the single highest-priority one (≤1 bid Update per keyword → no Amazon
+  -- "Duplicate Id"). Non-bid actions (SWITCH_HERO etc.) are partitioned by their own action, so they
+  -- still surface alongside the chosen bid. Single-ASIN keywords already have one bid action → no-op.
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY campaign_id, targeting,
+      CASE WHEN action IN ('INCREASE_BID', 'REDUCE_BID') THEN 'BID' ELSE action END
+    ORDER BY priority_score DESC
+  ) = 1;
 
 
   -- ═══════════════════════════════════════════

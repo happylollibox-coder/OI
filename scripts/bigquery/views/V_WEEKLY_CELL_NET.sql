@@ -1,12 +1,15 @@
 -- V_WEEKLY_CELL_NET — weekly ads net profit/spend per strategy cell. Coacher D.
 -- Grain: parent_name x season(PEAK/OFF, per-product peak) x match_type x intent_class x week_start.
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_WEEKLY_CELL_NET` AS
-WITH camp_parent AS (
+WITH camp_parent AS (   -- campaign -> dominant parent, by the ASIN actually advertised
+  -- (impressions) with campaign-name ASIN fallback. Matches V_ADS_COACH_DATA; the
+  -- campaign-name ASIN alone misfiles Bunny/LolliBall spend under Lollibox.
   SELECT campaign_id, parent_name FROM (
     SELECT a.campaign_id, p.parent_name,
       ROW_NUMBER() OVER (PARTITION BY a.campaign_id ORDER BY SUM(a.Ads_cost) DESC) rn
     FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
-    JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = a.ASIN_BY_CAMPAIGN_NAME
+    JOIN `onyga-482313.OI.DIM_PRODUCT` p
+      ON p.asin = COALESCE(a.most_advertised_asin_impressions, a.ASIN_BY_CAMPAIGN_NAME)
     WHERE a.date >= DATE('2025-09-23') GROUP BY a.campaign_id, p.parent_name
   ) WHERE rn = 1
 ),
