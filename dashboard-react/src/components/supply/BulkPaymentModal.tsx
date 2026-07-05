@@ -24,6 +24,7 @@ import {
   type LovItem,
 } from '../../utils/dataEntry';
 import type { SupplyShipmentRow, SupplyPORow, SupplyOtherPORow } from '../../types';
+import { buildFullPrefill, type PoPayMode } from './bulkPaymentSplit';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -123,6 +124,11 @@ export function BulkPaymentModal({
     initialMode === 'shipments' ? buildShipmentPrefill(shipments) : {},
   );
 
+  // ── PO payment mode (Full = pay each PO's balance; Partial = split a total) ──
+  const [poPayMode, setPoPayMode] = useState<PoPayMode>('full');
+  const [totalPayment, setTotalPayment] = useState('');
+  void totalPayment; // consumed by the Partial-mode task (kept intentionally)
+
   // ── Submission ──
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -168,6 +174,8 @@ export function BulkPaymentModal({
     setMode(m);
     setCheckedIds(new Set());
     setAmounts(m === 'shipments' ? buildShipmentPrefill(shipments) : {});
+    setPoPayMode('full');
+    setTotalPayment('');
   }, [shipments]);
 
   // ── Helpers ──
@@ -192,6 +200,22 @@ export function BulkPaymentModal({
 
   // ── Deduplicated POs (memoised) ──
   const uniquePos = useMemo(() => dedupePos(pos), [pos]);
+
+  // ── Remaining-balance lookup for POs + Other POs (drives Full mode) ──
+  const balanceById = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const p of uniquePos) m[p.purchase_order_id] = Math.max(p.unpaid_manufacturer, 0);
+    for (const op of otherPos) {
+      m[op.other_po_id] = op.payment_status !== 'PAID' ? Math.max(op.total_amount, 0) : 0;
+    }
+    return m;
+  }, [uniquePos, otherPos]);
+
+  // Full mode: amounts are derived from balances, not hand-entered.
+  useEffect(() => {
+    if (mode !== 'pos' || poPayMode !== 'full') return;
+    setAmounts(buildFullPrefill(Array.from(checkedIds), balanceById));
+  }, [mode, poPayMode, checkedIds, balanceById]);
 
   // ── Submit ──
   const handleSubmit = useCallback(
@@ -480,6 +504,32 @@ export function BulkPaymentModal({
             />
           </div>
 
+          {/* ── PO Full/Partial toggle ── */}
+          {mode === 'pos' && (
+            <div className="flex flex-col gap-1.5">
+              <span className={labelCls}>Pay POs</span>
+              <div className="flex gap-2">
+                {(['full', 'partial'] as PoPayMode[]).map((pm) => {
+                  const selected = poPayMode === pm;
+                  return (
+                    <button
+                      key={pm}
+                      type="button"
+                      onClick={() => setPoPayMode(pm)}
+                      className={`flex-1 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/50 ${
+                        selected
+                          ? 'border-blue-500/60 bg-blue-500/15 text-blue-400'
+                          : 'border-border bg-surface text-muted hover:text-heading hover:border-border-strong'
+                      }`}
+                    >
+                      {pm === 'full' ? 'Full (each PO balance)' : 'Partial (split a total)'}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* ── Candidate Grid ── */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
@@ -520,6 +570,7 @@ export function BulkPaymentModal({
                   amounts={amounts}
                   onToggle={toggleCheck}
                   onAmount={setAmount}
+                  readOnly={mode === 'pos' && poPayMode === 'full'}
                 />
               )}
             </div>
@@ -674,6 +725,7 @@ function POCandidateGrid({
   amounts,
   onToggle,
   onAmount,
+  readOnly,
 }: {
   uniquePos: Array<{ purchase_order_id: string; manufacturer_name: string; unpaid_manufacturer: number }>;
   otherPos: SupplyOtherPORow[];
@@ -681,6 +733,7 @@ function POCandidateGrid({
   amounts: Record<string, string>;
   onToggle: (id: string) => void;
   onAmount: (id: string, val: string) => void;
+  readOnly?: boolean;
 }) {
   if (uniquePos.length === 0 && otherPos.length === 0) {
     return (
@@ -745,13 +798,14 @@ function POCandidateGrid({
                   type="number"
                   step="any"
                   min="0"
+                  readOnly={readOnly}
                   value={amounts[id] ?? ''}
                   onChange={(e) => {
                     if (!checkedIds.has(id)) onToggle(id);
                     onAmount(id, e.target.value);
                   }}
                   placeholder="0.00"
-                  className="w-24 rounded border border-border bg-card px-2 py-1 text-xs text-right text-heading focus:outline-none focus:ring-1 focus:ring-blue-500/50 font-mono"
+                  className={`w-24 rounded border border-border bg-card px-2 py-1 text-xs text-right text-heading focus:outline-none focus:ring-1 focus:ring-blue-500/50 font-mono ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                 />
               </td>
             </tr>
@@ -797,13 +851,14 @@ function POCandidateGrid({
                   type="number"
                   step="any"
                   min="0"
+                  readOnly={readOnly}
                   value={amounts[id] ?? ''}
                   onChange={(e) => {
                     if (!checkedIds.has(id)) onToggle(id);
                     onAmount(id, e.target.value);
                   }}
                   placeholder="0.00"
-                  className="w-24 rounded border border-border bg-card px-2 py-1 text-xs text-right text-heading focus:outline-none focus:ring-1 focus:ring-blue-500/50 font-mono"
+                  className={`w-24 rounded border border-border bg-card px-2 py-1 text-xs text-right text-heading focus:outline-none focus:ring-1 focus:ring-blue-500/50 font-mono ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                 />
               </td>
             </tr>
