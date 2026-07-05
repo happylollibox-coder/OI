@@ -24,7 +24,7 @@ import {
   type LovItem,
 } from '../../utils/dataEntry';
 import type { SupplyShipmentRow, SupplyPORow, SupplyOtherPORow } from '../../types';
-import { buildFullPrefill, type PoPayMode } from './bulkPaymentSplit';
+import { splitEqually, buildFullPrefill, type PoPayMode } from './bulkPaymentSplit';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -127,7 +127,6 @@ export function BulkPaymentModal({
   // ── PO payment mode (Full = pay each PO's balance; Partial = split a total) ──
   const [poPayMode, setPoPayMode] = useState<PoPayMode>('full');
   const [totalPayment, setTotalPayment] = useState('');
-  void totalPayment; // consumed by the Partial-mode task (kept intentionally)
 
   // ── Submission ──
   const [submitting, setSubmitting] = useState(false);
@@ -211,11 +210,27 @@ export function BulkPaymentModal({
     return m;
   }, [uniquePos, otherPos]);
 
+  // ── Allocation warnings (Partial mode; non-blocking) ──
+  const partialTarget = parseFloat(totalPayment);
+  const hasPartialTarget = mode === 'pos' && poPayMode === 'partial' && isFinite(partialTarget) && partialTarget > 0;
+  const sumMismatch = hasPartialTarget && Math.abs(runningTotal - partialTarget) > 0.01;
+  const overpayIds = Array.from(checkedIds).filter((id) => {
+    const v = parseFloat(amounts[id] ?? '');
+    return mode === 'pos' && !isNaN(v) && v > (balanceById[id] ?? 0) + 0.01;
+  });
+
   // Full mode: amounts are derived from balances, not hand-entered.
   useEffect(() => {
     if (mode !== 'pos' || poPayMode !== 'full') return;
     setAmounts(buildFullPrefill(Array.from(checkedIds), balanceById));
   }, [mode, poPayMode, checkedIds, balanceById]);
+
+  // Partial mode: split the entered total equally across checked POs.
+  // Deps are total + checked set only, so editing one field does not re-split.
+  useEffect(() => {
+    if (mode !== 'pos' || poPayMode !== 'partial') return;
+    setAmounts(splitEqually(parseFloat(totalPayment), Array.from(checkedIds)));
+  }, [mode, poPayMode, totalPayment, checkedIds]);
 
   // ── Submit ──
   const handleSubmit = useCallback(
@@ -527,6 +542,25 @@ export function BulkPaymentModal({
                   );
                 })}
               </div>
+              {poPayMode === 'partial' && (
+                <div className="flex flex-col gap-1 mt-2">
+                  <label className={labelCls}>
+                    Total Payment <span className="text-negative">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={totalPayment}
+                    onChange={(e) => setTotalPayment(e.target.value)}
+                    placeholder="0.00"
+                    className={inputCls}
+                  />
+                  <span className="text-[10px] text-faint">
+                    Split equally across selected POs. Adjust any amount below.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -544,6 +578,26 @@ export function BulkPaymentModal({
                 </span>
               )}
             </div>
+
+            {hasPartialTarget && (
+              <div className="text-[10px] font-mono text-muted">
+                Allocated{' '}
+                <span className={sumMismatch ? 'text-amber-400 font-semibold' : 'text-emerald-400 font-semibold'}>
+                  {fmtAmt(runningTotal)}
+                </span>{' '}
+                of {fmtAmt(partialTarget)}
+              </div>
+            )}
+            {sumMismatch && (
+              <div className="text-[10px] text-amber-400">
+                Allocated amounts don't add up to the total payment.
+              </div>
+            )}
+            {overpayIds.length > 0 && (
+              <div className="text-[10px] text-amber-400">
+                {overpayIds.length} PO{overpayIds.length !== 1 ? 's' : ''} allocated more than the remaining balance (prepayment).
+              </div>
+            )}
 
             <div
               className="rounded-lg border border-border overflow-hidden"
