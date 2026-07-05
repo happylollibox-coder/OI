@@ -1014,7 +1014,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-md text-xs font-semibold text-white transition-colors"
               >
                 <Plus size={14} />
-                Bulk Pay
+                Pay Multiple POs
               </button>
               <button
                 onClick={() => setShowNewPayment(true)}
