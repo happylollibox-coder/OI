@@ -19,7 +19,6 @@ import PaymentDetailDrawer from '../components/supply/PaymentDetailDrawer';
 import { NewPOModal } from '../components/supply/NewPOModal';
 import { NewOtherPOModal } from '../components/supply/NewOtherPOModal';
 import { NewShipmentModal } from '../components/supply/NewShipmentModal';
-import { NewPaymentModal } from '../components/supply/NewPaymentModal';
 import { BulkPaymentModal } from '../components/supply/BulkPaymentModal';
 import { CostsReportTab } from '../components/supply/CostsReportTab';
 import { dataEntry, type PODetail, type ShipmentDetail, type PaymentDetail } from '../utils/dataEntry';
@@ -344,7 +343,6 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   // ── Payment write-through override layer (table stays on Cube; writes go via Flask) ──
   const [paymentOverrides, setPaymentOverrides] = useState<Record<string, SupplyPaymentRow[]>>({});
   const [deletedPaymentIds, setDeletedPaymentIds] = useState<Set<string>>(new Set());
-  const [showNewPayment, setShowNewPayment] = useState(false);
   const [showBulkPayment, setShowBulkPayment] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<SupplyPaymentRow | null>(null);
 
@@ -530,16 +528,6 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   }, [data.supply_payments, paymentOverrides, deletedPaymentIds]);
 
   /* ─── Payment write-through handlers ─── */
-  const handleNewPaymentSaved = useCallback(async (id: string) => {
-    try {
-      const d = await dataEntry.getPayment(id);
-      setPaymentOverrides(p => ({ ...p, [id]: mapPaymentDetailToRows(d, []) }));
-    } catch {
-      // Non-fatal: new payment will appear on next Cube refresh
-    }
-    setShowNewPayment(false);
-  }, []);
-
   const handlePaymentDrawerChanged = useCallback((detail: PaymentDetail | null) => {
     if (!selectedPayment) return;
     if (detail === null) {
@@ -860,7 +848,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" style={{ zoom: 1.1 }}>
       {/* ─── HEADER ─── */}
       <div className="flex items-center justify-between">
         <div>
@@ -1015,13 +1003,6 @@ export function SupplyPage({ data }: { data: DashboardData }) {
               >
                 <Plus size={14} />
                 Pay Multiple POs
-              </button>
-              <button
-                onClick={() => setShowNewPayment(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-md text-xs font-semibold text-white transition-colors"
-              >
-                <Plus size={14} />
-                New Payment
               </button>
             </>
           )}
@@ -1187,9 +1168,6 @@ export function SupplyPage({ data }: { data: DashboardData }) {
       )}
       {showNewShipment && (
         <NewShipmentModal onClose={() => setShowNewShipment(false)} onSaved={handleNewShipmentSaved} />
-      )}
-      {showNewPayment && (
-        <NewPaymentModal onClose={() => setShowNewPayment(false)} onSaved={handleNewPaymentSaved} />
       )}
       {showBulkPayment && (
         <BulkPaymentModal

@@ -68,19 +68,39 @@ function buildShipmentPrefill(shipments: SupplyShipmentRow[]): Record<string, st
  * Deduplicate PO rows by purchase_order_id, summing unpaid_manufacturer.
  * Multiple product lines share the same PO.
  */
-function dedupePos(pos: SupplyPORow[]): Array<{ purchase_order_id: string; manufacturer_name: string; unpaid_manufacturer: number }> {
-  const seen = new Map<string, { purchase_order_id: string; manufacturer_name: string; unpaid_manufacturer: number }>();
+interface DedupedPo {
+  purchase_order_id: string;
+  manufacturer_name: string;
+  unpaid_manufacturer: number;
+  order_date: string;
+  products: string;
+  units: number;
+}
+
+function dedupePos(pos: SupplyPORow[]): DedupedPo[] {
+  const seen = new Map<string, DedupedPo>();
+  const productsById = new Map<string, Set<string>>();
   for (const p of pos) {
     const id = p.purchase_order_id;
     if (seen.has(id)) {
-      seen.get(id)!.unpaid_manufacturer += Math.max(p.unpaid_manufacturer, 0);
+      const e = seen.get(id)!;
+      e.unpaid_manufacturer += Math.max(p.unpaid_manufacturer, 0);
+      e.units += p.quantity || 0;
     } else {
       seen.set(id, {
         purchase_order_id: id,
         manufacturer_name: p.manufacturer_name,
         unpaid_manufacturer: Math.max(p.unpaid_manufacturer, 0),
+        order_date: p.order_date,
+        products: '',
+        units: p.quantity || 0,
       });
+      productsById.set(id, new Set());
     }
+    if (p.product_name) productsById.get(id)!.add(p.product_name);
+  }
+  for (const [id, entry] of seen) {
+    entry.products = Array.from(productsById.get(id) ?? []).join(', ');
   }
   return Array.from(seen.values());
 }
@@ -696,10 +716,16 @@ function ShipmentCandidateGrid({
         <tr className="border-b border-border bg-surface">
           <th className="w-8 px-3 py-2" />
           <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Shipment ID
+            Date
           </th>
           <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
             Products
+          </th>
+          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
+            Type
+          </th>
+          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
+            Warehouse ID
           </th>
           <th className="text-right px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
             Unpaid
@@ -716,6 +742,7 @@ function ShipmentCandidateGrid({
           return (
             <tr
               key={s.shipment_id}
+              title={s.shipment_id}
               className={`border-b border-border/50 transition-colors cursor-pointer ${
                 checked ? 'bg-blue-500/5' : 'hover:bg-white/[.02]'
               }`}
@@ -730,16 +757,17 @@ function ShipmentCandidateGrid({
                   className="accent-blue-500 cursor-pointer"
                 />
               </td>
-              <td className="px-3 py-2.5">
-                <span className="font-mono text-subtle font-medium">
-                  {s.shipment_id}
-                </span>
-                {s.shipment_date && (
-                  <span className="ml-2 text-faint text-[10px]">{s.shipment_date}</span>
-                )}
+              <td className="px-3 py-2.5 text-muted whitespace-nowrap">
+                {s.shipment_date || '—'}
               </td>
-              <td className="px-3 py-2.5 text-muted max-w-[200px] truncate" title={s.products_list}>
+              <td className="px-3 py-2.5 text-subtle max-w-[200px] truncate" title={s.products_list}>
                 {s.products_list || '—'}
+              </td>
+              <td className="px-3 py-2.5 text-muted whitespace-nowrap">
+                {s.shipment_type || '—'}
+              </td>
+              <td className="px-3 py-2.5 font-mono text-muted truncate max-w-[120px]">
+                {s.tracking_number || '—'}
               </td>
               <td className="px-3 py-2.5 text-right font-mono">
                 <span className={unpaid > 0.01 ? 'text-orange-400 font-semibold' : 'text-emerald-400'}>
@@ -781,7 +809,7 @@ function POCandidateGrid({
   onAmount,
   readOnly,
 }: {
-  uniquePos: Array<{ purchase_order_id: string; manufacturer_name: string; unpaid_manufacturer: number }>;
+  uniquePos: DedupedPo[];
   otherPos: SupplyOtherPORow[];
   checkedIds: Set<string>;
   amounts: Record<string, string>;
@@ -800,7 +828,13 @@ function POCandidateGrid({
         <tr className="border-b border-border bg-surface">
           <th className="w-8 px-3 py-2" />
           <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            PO ID
+            Date
+          </th>
+          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
+            Product
+          </th>
+          <th className="text-right px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
+            Units
           </th>
           <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
             Manufacturer / Supplier
@@ -820,6 +854,7 @@ function POCandidateGrid({
           return (
             <tr
               key={id}
+              title={id}
               className={`border-b border-border/50 transition-colors cursor-pointer ${
                 checked ? 'bg-blue-500/5' : 'hover:bg-white/[.02]'
               }`}
@@ -834,12 +869,16 @@ function POCandidateGrid({
                   className="accent-blue-500 cursor-pointer"
                 />
               </td>
-              <td className="px-3 py-2.5">
-                <span className="font-mono text-subtle font-medium truncate max-w-[180px] block">
-                  {id}
-                </span>
+              <td className="px-3 py-2.5 text-muted whitespace-nowrap">
+                {p.order_date || '—'}
               </td>
-              <td className="px-3 py-2.5 text-muted truncate max-w-[160px]">
+              <td className="px-3 py-2.5 text-subtle font-medium truncate max-w-[200px]">
+                {p.products || '—'}
+              </td>
+              <td className="px-3 py-2.5 text-right font-mono text-muted">
+                {p.units ? p.units.toLocaleString() : '—'}
+              </td>
+              <td className="px-3 py-2.5 text-muted truncate max-w-[140px]">
                 {p.manufacturer_name || '—'}
               </td>
               <td className="px-3 py-2.5 text-right font-mono">
@@ -872,6 +911,7 @@ function POCandidateGrid({
           return (
             <tr
               key={`other_${id}`}
+              title={id}
               className={`border-b border-border/50 transition-colors cursor-pointer ${
                 checked ? 'bg-blue-500/5' : 'hover:bg-white/[.02]'
               }`}
@@ -886,14 +926,15 @@ function POCandidateGrid({
                   className="accent-blue-500 cursor-pointer"
                 />
               </td>
-              <td className="px-3 py-2.5">
-                <div className="font-mono text-subtle font-medium truncate max-w-[180px]">
-                  {id}
-                </div>
-                <div className="text-[10px] text-faint">Other PO</div>
+              <td className="px-3 py-2.5 text-muted whitespace-nowrap">
+                {op.order_date || '—'}
               </td>
-              <td className="px-3 py-2.5 text-muted truncate max-w-[160px]">
-                {op.supplier_name || op.service_type || '—'}
+              <td className="px-3 py-2.5 text-subtle font-medium truncate max-w-[200px]">
+                {op.service_type || 'Other PO'}
+              </td>
+              <td className="px-3 py-2.5 text-right font-mono text-faint">—</td>
+              <td className="px-3 py-2.5 text-muted truncate max-w-[140px]">
+                {op.supplier_name || '—'}
               </td>
               <td className="px-3 py-2.5 text-right font-mono">
                 <span className={unpaid > 0.01 ? 'text-purple-400 font-semibold' : 'text-emerald-400'}>
