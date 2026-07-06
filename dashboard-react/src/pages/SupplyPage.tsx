@@ -1277,10 +1277,9 @@ function POTable({ rows, sort, onSort, onSelectPO }: {
       <thead>
         <tr className="border-b border-border bg-surface/50">
           <SortHeader label="Date" field="order_date" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
-          <SortHeader label="Ready By" field="expected_ready_date" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
-          <SortHeader label="PO ID" field="purchase_order_id" sortField={sort.field} sortDir={sort.dir} onSort={onSort} align="left" />
-          <SortHeader label="Manufacturer" field="manufacturer_name" sortField={sort.field} sortDir={sort.dir} onSort={onSort} align="left" />
           <SortHeader label="Product" field="product_name" sortField={sort.field} sortDir={sort.dir} onSort={onSort} align="left" />
+          <SortHeader label="Ready By" field="expected_ready_date" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
+          <SortHeader label="Manufacturer" field="manufacturer_name" sortField={sort.field} sortDir={sort.dir} onSort={onSort} align="left" />
           <SortHeader label="Qty" field="quantity" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Remain" field="remaining_to_ship" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Ready" field="ready_quantity" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
@@ -1289,6 +1288,7 @@ function POTable({ rows, sort, onSort, onSelectPO }: {
           <SortHeader label="Paid" field="total_paid" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Unpaid" field="unpaid_manufacturer" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Status" field="payment_status" sortField={sort.field} sortDir={sort.dir} onSort={onSort} align="left" />
+          <SortHeader label="PO ID" field="purchase_order_id" sortField={sort.field} sortDir={sort.dir} onSort={onSort} align="left" />
         </tr>
       </thead>
       <tbody>
@@ -1300,22 +1300,9 @@ function POTable({ rows, sort, onSort, onSelectPO }: {
           <Fragment key={r.purchase_order_id}>
           <tr className="border-b border-border/50 hover:bg-white/[.02] transition-colors">
             <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{fmtDate(r.order_date)}</td>
-            <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{fmtDate(r.expected_ready_date)}</td>
-            <td className="px-4 py-2.5 text-xs font-mono whitespace-nowrap">
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => onSelectPO(r)}
-                  className="text-blue-400 hover:text-blue-300 hover:underline underline-offset-2 transition-colors flex items-center gap-1 cursor-pointer"
-                  title={`View details: ${r.purchase_order_id}`}
-                >
-                  <Eye size={12} className="shrink-0 opacity-60" />
-                  <span className="truncate max-w-[200px]">{r.purchase_order_id}</span>
-                </button>
-                <CopyButton text={r.purchase_order_id} />
-              </div>
-            </td>
-            <td className="px-4 py-2.5 text-subtle text-xs">{r.manufacturer_name}</td>
             <td className="px-4 py-2.5 text-subtle text-xs font-medium max-w-[200px] truncate" title={r.product_name}>{r.product_name}</td>
+            <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{fmtDate(r.expected_ready_date)}</td>
+            <td className="px-4 py-2.5 text-subtle text-xs">{r.manufacturer_name}</td>
             <td className="px-4 py-2.5 text-right text-subtle font-mono text-xs">{r.quantity.toLocaleString()}</td>
             <td className="px-4 py-2.5 text-right font-mono text-xs">
               <span className={r.remaining_to_ship > 0 ? 'text-amber-400 font-medium' : 'text-muted'}>
@@ -1323,7 +1310,7 @@ function POTable({ rows, sort, onSort, onSelectPO }: {
               </span>
             </td>
             <td className="px-4 py-2.5 text-right font-mono text-xs group relative">
-              <InlineReadyCell 
+              <InlineReadyCell
                 poId={r.purchase_order_id}
                 productId={r.product_id}
                 initialQuantity={r.ready_quantity || 0}
@@ -1340,13 +1327,26 @@ function POTable({ rows, sort, onSort, onSelectPO }: {
               </span>
             </td>
             <td className="px-4 py-2.5"><StatusBadge status={r.payment_status} /></td>
+            <td className="px-4 py-2.5 text-xs font-mono whitespace-nowrap">
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => onSelectPO(r)}
+                  className="text-blue-400 hover:text-blue-300 hover:underline underline-offset-2 transition-colors flex items-center gap-1 cursor-pointer"
+                  title={`View details: ${r.purchase_order_id}`}
+                >
+                  <Eye size={12} className="shrink-0 opacity-60" />
+                  <span className="truncate max-w-[200px]">{r.purchase_order_id}</span>
+                </button>
+                <CopyButton text={r.purchase_order_id} />
+              </div>
+            </td>
           </tr>
           </Fragment>
         )})}
       </tbody>
       <tfoot>
         <tr className="border-t border-border bg-surface/30">
-          <td colSpan={5} className="px-4 py-2.5 text-xs font-semibold text-faint uppercase">{rows.length} POs</td>
+          <td colSpan={4} className="px-4 py-2.5 text-xs font-semibold text-faint uppercase">{rows.length} POs</td>
           <td className="px-4 py-2.5 text-right text-heading font-semibold font-mono text-xs">
             {rows.reduce((s, r) => s + r.quantity, 0).toLocaleString()}
           </td>
@@ -1368,6 +1368,7 @@ function POTable({ rows, sort, onSort, onSelectPO }: {
           <td className="px-4 py-2.5 text-right text-red-400 font-semibold font-mono text-xs">
             {fmtFull$(rows.reduce((s, r) => s + Math.max(r.unpaid_manufacturer, 0), 0))}
           </td>
+          <td></td>
           <td></td>
         </tr>
       </tfoot>
@@ -1397,11 +1398,12 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: SupplyPaymentRow[]; allPos: SupplyPORow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void; onSelectPayment: (p: SupplyPaymentRow) => void }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Hierarchy is collapsed by default; a payment expands only when in this set.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   if (rows.length === 0) return <div className="p-8 text-center text-muted text-sm">No payments match filters</div>;
 
   const toggleGroup = (paymentId: string) => {
-    setCollapsed(prev => {
+    setExpanded(prev => {
       const next = new Set(prev);
       if (next.has(paymentId)) next.delete(paymentId); else next.add(paymentId);
       return next;
@@ -1414,13 +1416,14 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
       <thead>
         <tr className="border-b border-border bg-surface/50">
           <SortHeader label="Date" field="payment_date" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
+          <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Products</th>
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Vendor</th>
-          <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Payment ID</th>
           <SortHeader label="Amount" field="payment_amount" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Bank Fee" field="bank_fee" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <SortHeader label="Total" field="total_amount" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Currency</th>
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Method</th>
+          <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Payment ID</th>
         </tr>
       </thead>
       <tbody>
@@ -1434,7 +1437,8 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
             .filter(Boolean) as SupplyPORow[];
           const hasLinkedPOs = linkedPos.length > 0;
           const payKey = r.payment_id || `pay_${i}`;
-          const isOpen = !collapsed.has(payKey);
+          const isOpen = expanded.has(payKey);
+          const productsLabel = Array.from(new Set(linkedPos.map(p => p.product_name).filter(Boolean))).join(', ');
 
           return (
             <Fragment key={payKey}>
@@ -1453,7 +1457,13 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
                     {fmtDate(r.payment_date)}
                   </div>
                 </td>
+                <td className="px-4 py-2.5 text-subtle text-xs max-w-[220px] truncate" title={productsLabel}>{productsLabel || '—'}</td>
                 <td className="px-4 py-2.5 text-subtle text-xs">{r.vendor_name}</td>
+                <td className={`px-4 py-2.5 text-right font-mono text-xs font-semibold ${r.payment_amount < 0 ? 'text-red-400' : 'text-heading'}`}>{fmtFull$(r.payment_amount)}</td>
+                <td className="px-4 py-2.5 text-right text-amber-400 font-mono text-xs">{r.bank_fee > 0 ? fmtFull$(r.bank_fee) : '—'}</td>
+                <td className="px-4 py-2.5 text-right text-blue-400 font-mono text-xs font-semibold">{fmtFull$(r.total_amount)}</td>
+                <td className="px-4 py-2.5 text-xs text-muted">{r.currency}</td>
+                <td className="px-4 py-2.5 text-xs text-muted">{r.payment_method || '—'}</td>
                 <td className="px-4 py-2.5 text-xs font-mono whitespace-nowrap max-w-[280px]">
                   <div className="flex items-center gap-2">
                     {r.payment_id ? (
@@ -1471,11 +1481,6 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
                     {r.payment_id && <CopyButton text={r.payment_id} />}
                   </div>
                 </td>
-                <td className={`px-4 py-2.5 text-right font-mono text-xs font-semibold ${r.payment_amount < 0 ? 'text-red-400' : 'text-heading'}`}>{fmtFull$(r.payment_amount)}</td>
-                <td className="px-4 py-2.5 text-right text-amber-400 font-mono text-xs">{r.bank_fee > 0 ? fmtFull$(r.bank_fee) : '—'}</td>
-                <td className="px-4 py-2.5 text-right text-blue-400 font-mono text-xs font-semibold">{fmtFull$(r.total_amount)}</td>
-                <td className="px-4 py-2.5 text-xs text-muted">{r.currency}</td>
-                <td className="px-4 py-2.5 text-xs text-muted">{r.payment_method || '—'}</td>
               </tr>
               {/* ── Linked PO Lines (Children) ── */}
               {hasLinkedPOs && isOpen && linkedPos.map(po => (
@@ -1506,7 +1511,7 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
                       <span className={Math.max(po.unpaid_manufacturer, 0) > 0.01 ? 'text-red-400' : 'text-emerald-400'}>{fmtFull$(Math.max(po.unpaid_manufacturer, 0))}</span>
                     </div>
                   </td>
-                  <td colSpan={2} className="px-4 py-1.5">
+                  <td colSpan={3} className="px-4 py-1.5">
                     <StatusBadge status={po.payment_status} />
                   </td>
                 </tr>
@@ -1529,6 +1534,7 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
           <td className="px-4 py-3 text-right text-blue-400 font-bold font-mono text-xs">
             {fmtFull$(rows.reduce((s, r) => s + r.total_amount, 0))}
           </td>
+          <td></td>
           <td></td>
           <td></td>
         </tr>
