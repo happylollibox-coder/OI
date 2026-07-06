@@ -1,5 +1,43 @@
 import { describe, it, expect } from 'vitest';
-import { splitEqually, buildFullPrefill, sortPos, type SortablePo } from './bulkPaymentSplit';
+import { splitEqually, buildFullPrefill, sortPos, sortShipments, type SortablePo, type SortableShipment } from './bulkPaymentSplit';
+
+const ship = (o: Partial<SortableShipment>): SortableShipment => ({
+  shipment_date: '2025-01-01',
+  products_list: '',
+  shipment_type: '',
+  tracking_number: null,
+  unpaid_to_shipment: 0,
+  ...o,
+});
+
+describe('sortShipments', () => {
+  const rows = [
+    ship({ shipment_date: '2025-03-01', products_list: 'B', shipment_type: 'AIR', tracking_number: 'WH3', unpaid_to_shipment: 5 }),
+    ship({ shipment_date: '2025-01-01', products_list: 'A', shipment_type: 'SLOW_SEA', tracking_number: 'WH1', unpaid_to_shipment: 500 }),
+    ship({ shipment_date: '2025-02-01', products_list: 'C', shipment_type: 'FAST_SEA', tracking_number: null, unpaid_to_shipment: 50 }),
+  ];
+
+  it('sorts by date ascending', () => {
+    expect(sortShipments(rows, { key: 'date', dir: 'asc' }).map((r) => r.shipment_date))
+      .toEqual(['2025-01-01', '2025-02-01', '2025-03-01']);
+  });
+
+  it('sorts by unpaid descending', () => {
+    expect(sortShipments(rows, { key: 'unpaid', dir: 'desc' }).map((r) => r.unpaid_to_shipment))
+      .toEqual([500, 50, 5]);
+  });
+
+  it('sorts by warehouse id, treating null as empty', () => {
+    expect(sortShipments(rows, { key: 'warehouse', dir: 'asc' }).map((r) => r.tracking_number))
+      .toEqual([null, 'WH1', 'WH3']);
+  });
+
+  it('does not mutate the input array', () => {
+    const copy = [...rows];
+    sortShipments(rows, { key: 'type', dir: 'desc' });
+    expect(rows).toEqual(copy);
+  });
+});
 
 const po = (o: Partial<SortablePo>): SortablePo => ({
   order_date: '2025-01-01',

@@ -71,6 +71,44 @@ export function sortPos<T extends SortablePo>(rows: T[], sort: PoSort): T[] {
   return [...rows].sort((a, b) => cmp(a, b) * dir);
 }
 
+/** Sortable columns of the shipment candidate grid. */
+export type ShipmentSortKey = 'date' | 'products' | 'type' | 'warehouse' | 'unpaid';
+export interface ShipmentSort {
+  key: ShipmentSortKey;
+  dir: 'asc' | 'desc';
+}
+
+/** Minimal shape sortShipments needs — matches SupplyShipmentRow fields. */
+export interface SortableShipment {
+  shipment_date: string;
+  products_list: string;
+  shipment_type: string;
+  tracking_number: string | null;
+  unpaid_to_shipment: number;
+}
+
+/** Return a new array of shipments sorted by the given column/direction. Pure. */
+export function sortShipments<T extends SortableShipment>(rows: T[], sort: ShipmentSort): T[] {
+  const dir = sort.dir === 'asc' ? 1 : -1;
+  const cmp = (a: T, b: T): number => {
+    switch (sort.key) {
+      case 'date':
+        return a.shipment_date < b.shipment_date ? -1 : a.shipment_date > b.shipment_date ? 1 : 0;
+      case 'products':
+        return a.products_list.localeCompare(b.products_list);
+      case 'type':
+        return a.shipment_type.localeCompare(b.shipment_type);
+      case 'warehouse':
+        return (a.tracking_number ?? '').localeCompare(b.tracking_number ?? '');
+      case 'unpaid':
+        return a.unpaid_to_shipment - b.unpaid_to_shipment;
+      default:
+        return 0;
+    }
+  };
+  return [...rows].sort((a, b) => cmp(a, b) * dir);
+}
+
 /**
  * Prefill each id with its remaining balance as a 2-decimal string.
  * Missing or non-positive balances become '0.00'.

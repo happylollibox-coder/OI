@@ -24,7 +24,7 @@ import {
   type LovItem,
 } from '../../utils/dataEntry';
 import type { SupplyShipmentRow, SupplyPORow, SupplyOtherPORow } from '../../types';
-import { splitEqually, buildFullPrefill, sortPos, type PoPayMode, type PoSort, type PoSortKey } from './bulkPaymentSplit';
+import { splitEqually, buildFullPrefill, sortPos, sortShipments, type PoPayMode, type PoSort, type PoSortKey, type ShipmentSort, type ShipmentSortKey } from './bulkPaymentSplit';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -160,6 +160,16 @@ export function BulkPaymentModal({
     );
   }, []);
 
+  // ── Shipment grid sort (default date ascending) ──
+  const [shipSort, setShipSort] = useState<ShipmentSort>({ key: 'date', dir: 'asc' });
+  const toggleShipSort = useCallback((key: ShipmentSortKey) => {
+    setShipSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: 'asc' },
+    );
+  }, []);
+
   // ── Submission ──
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -241,10 +251,10 @@ export function BulkPaymentModal({
     () => otherPos.filter((op) => !unpaidOnly || (op.payment_status !== 'PAID' && op.total_amount > 0.01)),
     [otherPos, unpaidOnly],
   );
-  // Shipments: unpaid-only hides already-paid shipments (is_paid → unpaid_to_shipment = 0).
+  // Shipments: unpaid-only hides already-paid shipments (is_paid → unpaid_to_shipment = 0), then sort.
   const displayShipments = useMemo(
-    () => (unpaidOnly ? shipments.filter((s) => s.unpaid_to_shipment > 0.01) : shipments),
-    [shipments, unpaidOnly],
+    () => sortShipments(unpaidOnly ? shipments.filter((s) => s.unpaid_to_shipment > 0.01) : shipments, shipSort),
+    [shipments, unpaidOnly, shipSort],
   );
 
   // ── Remaining-balance lookup for POs + Other POs (drives Full mode) ──
@@ -673,6 +683,8 @@ export function BulkPaymentModal({
                   amounts={amounts}
                   onToggle={toggleCheck}
                   onAmount={setAmount}
+                  sort={shipSort}
+                  onSort={toggleShipSort}
                 />
               ) : (
                 <POCandidateGrid
@@ -738,37 +750,44 @@ function ShipmentCandidateGrid({
   amounts,
   onToggle,
   onAmount,
+  sort,
+  onSort,
 }: {
   shipments: SupplyShipmentRow[];
   checkedIds: Set<string>;
   amounts: Record<string, string>;
   onToggle: (id: string) => void;
   onAmount: (id: string, val: string) => void;
+  sort: ShipmentSort;
+  onSort: (key: ShipmentSortKey) => void;
 }) {
   if (shipments.length === 0) {
     return (
       <div className="p-6 text-center text-muted text-xs">No shipments match this filter</div>
     );
   }
+  const thBase =
+    'px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider cursor-pointer select-none hover:text-heading transition-colors';
+  const arrow = (key: ShipmentSortKey) => (sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '');
   return (
     <table className="w-full text-xs">
       <thead className="sticky top-0 z-10">
         <tr className="border-b border-border bg-surface">
           <th className="w-8 px-3 py-2" />
-          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Date
+          <th className={`text-left ${thBase}`} onClick={() => onSort('date')}>
+            Date{arrow('date')}
           </th>
-          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Products
+          <th className={`text-left ${thBase}`} onClick={() => onSort('products')}>
+            Products{arrow('products')}
           </th>
-          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Type
+          <th className={`text-left ${thBase}`} onClick={() => onSort('type')}>
+            Type{arrow('type')}
           </th>
-          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Warehouse ID
+          <th className={`text-left ${thBase}`} onClick={() => onSort('warehouse')}>
+            Warehouse ID{arrow('warehouse')}
           </th>
-          <th className="text-right px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Unpaid
+          <th className={`text-right ${thBase}`} onClick={() => onSort('unpaid')}>
+            Unpaid{arrow('unpaid')}
           </th>
           <th className="text-right px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
             Amount
