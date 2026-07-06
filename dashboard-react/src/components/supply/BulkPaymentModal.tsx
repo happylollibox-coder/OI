@@ -58,8 +58,9 @@ const fmtAmt = (v: number) =>
 function buildShipmentPrefill(shipments: SupplyShipmentRow[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const s of shipments) {
-    const v = s.unpaid_to_shipment > 0 ? s.unpaid_to_shipment : s.cost_shipped > 0 ? s.cost_shipped : 0;
-    if (v > 0) out[s.shipment_id] = String(v);
+    // Only prefill the actual unpaid balance. Paid shipments (unpaid_to_shipment = 0)
+    // get no prefill — previously they fell back to cost_shipped, which is wrong.
+    if (s.unpaid_to_shipment > 0) out[s.shipment_id] = String(s.unpaid_to_shipment);
   }
   return out;
 }
@@ -239,6 +240,11 @@ export function BulkPaymentModal({
   const displayOtherPos = useMemo(
     () => otherPos.filter((op) => !unpaidOnly || (op.payment_status !== 'PAID' && op.total_amount > 0.01)),
     [otherPos, unpaidOnly],
+  );
+  // Shipments: unpaid-only hides already-paid shipments (is_paid → unpaid_to_shipment = 0).
+  const displayShipments = useMemo(
+    () => (unpaidOnly ? shipments.filter((s) => s.unpaid_to_shipment > 0.01) : shipments),
+    [shipments, unpaidOnly],
   );
 
   // ── Remaining-balance lookup for POs + Other POs (drives Full mode) ──
@@ -613,17 +619,15 @@ export function BulkPaymentModal({
                 <span className="text-negative">*</span>
               </span>
               <div className="flex items-center gap-3">
-                {mode === 'pos' && (
-                  <label className="flex items-center gap-1.5 text-[10px] text-muted cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={unpaidOnly}
-                      onChange={(e) => setUnpaidOnly(e.target.checked)}
-                      className="accent-blue-500 cursor-pointer"
-                    />
-                    Unpaid only
-                  </label>
-                )}
+                <label className="flex items-center gap-1.5 text-[10px] text-muted cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={unpaidOnly}
+                    onChange={(e) => setUnpaidOnly(e.target.checked)}
+                    className="accent-blue-500 cursor-pointer"
+                  />
+                  Unpaid only
+                </label>
                 {checkedIds.size > 0 && (
                   <span className="text-[10px] text-blue-400 font-semibold">
                     {checkedIds.size} selected · Total:{' '}
@@ -664,7 +668,7 @@ export function BulkPaymentModal({
             >
               {mode === 'shipments' ? (
                 <ShipmentCandidateGrid
-                  shipments={shipments}
+                  shipments={displayShipments}
                   checkedIds={checkedIds}
                   amounts={amounts}
                   onToggle={toggleCheck}
@@ -743,7 +747,7 @@ function ShipmentCandidateGrid({
 }) {
   if (shipments.length === 0) {
     return (
-      <div className="p-6 text-center text-muted text-xs">No shipments available</div>
+      <div className="p-6 text-center text-muted text-xs">No shipments match this filter</div>
     );
   }
   return (
