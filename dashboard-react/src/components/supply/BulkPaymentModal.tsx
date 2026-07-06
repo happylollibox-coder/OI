@@ -24,7 +24,7 @@ import {
   type LovItem,
 } from '../../utils/dataEntry';
 import type { SupplyShipmentRow, SupplyPORow, SupplyOtherPORow } from '../../types';
-import { splitEqually, buildFullPrefill, type PoPayMode } from './bulkPaymentSplit';
+import { splitEqually, buildFullPrefill, sortPos, type PoPayMode, type PoSort, type PoSortKey } from './bulkPaymentSplit';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -148,6 +148,17 @@ export function BulkPaymentModal({
   const [poPayMode, setPoPayMode] = useState<PoPayMode>('full');
   const [totalPayment, setTotalPayment] = useState('');
 
+  // ── PO grid: sort (default date ascending) + unpaid-only filter (default on) ──
+  const [poSort, setPoSort] = useState<PoSort>({ key: 'date', dir: 'asc' });
+  const [unpaidOnly, setUnpaidOnly] = useState(true);
+  const togglePoSort = useCallback((key: PoSortKey) => {
+    setPoSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: 'asc' },
+    );
+  }, []);
+
   // ── Submission ──
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -219,6 +230,16 @@ export function BulkPaymentModal({
 
   // ── Deduplicated POs (memoised) ──
   const uniquePos = useMemo(() => dedupePos(pos), [pos]);
+
+  // ── Display list: filter to unpaid (optional) then sort by the chosen column ──
+  const displayPos = useMemo(
+    () => sortPos(uniquePos.filter((p) => !unpaidOnly || p.unpaid_manufacturer > 0.01), poSort),
+    [uniquePos, unpaidOnly, poSort],
+  );
+  const displayOtherPos = useMemo(
+    () => otherPos.filter((op) => !unpaidOnly || (op.payment_status !== 'PAID' && op.total_amount > 0.01)),
+    [otherPos, unpaidOnly],
+  );
 
   // ── Remaining-balance lookup for POs + Other POs (drives Full mode) ──
   const balanceById = useMemo(() => {
@@ -591,12 +612,25 @@ export function BulkPaymentModal({
                 {mode === 'shipments' ? 'Shipments' : 'Purchase Orders'}{' '}
                 <span className="text-negative">*</span>
               </span>
-              {checkedIds.size > 0 && (
-                <span className="text-[10px] text-blue-400 font-semibold">
-                  {checkedIds.size} selected · Total:{' '}
-                  <span className="font-mono">{fmtAmt(runningTotal)}</span>
-                </span>
-              )}
+              <div className="flex items-center gap-3">
+                {mode === 'pos' && (
+                  <label className="flex items-center gap-1.5 text-[10px] text-muted cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={unpaidOnly}
+                      onChange={(e) => setUnpaidOnly(e.target.checked)}
+                      className="accent-blue-500 cursor-pointer"
+                    />
+                    Unpaid only
+                  </label>
+                )}
+                {checkedIds.size > 0 && (
+                  <span className="text-[10px] text-blue-400 font-semibold">
+                    {checkedIds.size} selected · Total:{' '}
+                    <span className="font-mono">{fmtAmt(runningTotal)}</span>
+                  </span>
+                )}
+              </div>
             </div>
 
             {hasPartialTarget && (
@@ -638,13 +672,15 @@ export function BulkPaymentModal({
                 />
               ) : (
                 <POCandidateGrid
-                  uniquePos={uniquePos}
-                  otherPos={otherPos}
+                  uniquePos={displayPos}
+                  otherPos={displayOtherPos}
                   checkedIds={checkedIds}
                   amounts={amounts}
                   onToggle={toggleCheck}
                   onAmount={setAmount}
                   readOnly={mode === 'pos' && poPayMode === 'full'}
+                  sort={poSort}
+                  onSort={togglePoSort}
                 />
               )}
             </div>
@@ -808,6 +844,8 @@ function POCandidateGrid({
   onToggle,
   onAmount,
   readOnly,
+  sort,
+  onSort,
 }: {
   uniquePos: DedupedPo[];
   otherPos: SupplyOtherPORow[];
@@ -816,31 +854,36 @@ function POCandidateGrid({
   onToggle: (id: string) => void;
   onAmount: (id: string, val: string) => void;
   readOnly?: boolean;
+  sort: PoSort;
+  onSort: (key: PoSortKey) => void;
 }) {
   if (uniquePos.length === 0 && otherPos.length === 0) {
     return (
-      <div className="p-6 text-center text-muted text-xs">No purchase orders available</div>
+      <div className="p-6 text-center text-muted text-xs">No purchase orders match this filter</div>
     );
   }
+  const thBase =
+    'px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider cursor-pointer select-none hover:text-heading transition-colors';
+  const arrow = (key: PoSortKey) => (sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '');
   return (
     <table className="w-full text-xs">
       <thead className="sticky top-0 z-10">
         <tr className="border-b border-border bg-surface">
           <th className="w-8 px-3 py-2" />
-          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Date
+          <th className={`text-left ${thBase}`} onClick={() => onSort('date')}>
+            Date{arrow('date')}
           </th>
-          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Product
+          <th className={`text-left ${thBase}`} onClick={() => onSort('product')}>
+            Product{arrow('product')}
           </th>
-          <th className="text-right px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Units
+          <th className={`text-right ${thBase}`} onClick={() => onSort('units')}>
+            Units{arrow('units')}
           </th>
-          <th className="text-left px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Manufacturer / Supplier
+          <th className={`text-left ${thBase}`} onClick={() => onSort('manufacturer')}>
+            Manufacturer / Supplier{arrow('manufacturer')}
           </th>
-          <th className="text-right px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
-            Unpaid
+          <th className={`text-right ${thBase}`} onClick={() => onSort('unpaid')}>
+            Unpaid{arrow('unpaid')}
           </th>
           <th className="text-right px-3 py-2 text-[10px] font-semibold text-faint uppercase tracking-wider">
             Amount

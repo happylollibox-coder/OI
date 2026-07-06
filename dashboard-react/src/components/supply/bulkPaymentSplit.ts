@@ -30,6 +30,47 @@ export function splitEqually(total: number, ids: string[]): Record<string, strin
   return out;
 }
 
+/** Sortable columns of the PO candidate grid. */
+export type PoSortKey = 'date' | 'product' | 'units' | 'manufacturer' | 'unpaid';
+export interface PoSort {
+  key: PoSortKey;
+  dir: 'asc' | 'desc';
+}
+
+/** Minimal shape sortPos needs — matches the deduped PO rows. */
+export interface SortablePo {
+  order_date: string;
+  products: string;
+  units: number;
+  manufacturer_name: string;
+  unpaid_manufacturer: number;
+}
+
+/**
+ * Return a new array sorted by the given column/direction. Pure, stable-ish
+ * (relies on Array.prototype.sort). Dates are ISO strings so compare lexically.
+ */
+export function sortPos<T extends SortablePo>(rows: T[], sort: PoSort): T[] {
+  const dir = sort.dir === 'asc' ? 1 : -1;
+  const cmp = (a: T, b: T): number => {
+    switch (sort.key) {
+      case 'date':
+        return a.order_date < b.order_date ? -1 : a.order_date > b.order_date ? 1 : 0;
+      case 'product':
+        return a.products.localeCompare(b.products);
+      case 'units':
+        return a.units - b.units;
+      case 'manufacturer':
+        return a.manufacturer_name.localeCompare(b.manufacturer_name);
+      case 'unpaid':
+        return a.unpaid_manufacturer - b.unpaid_manufacturer;
+      default:
+        return 0;
+    }
+  };
+  return [...rows].sort((a, b) => cmp(a, b) * dir);
+}
+
 /**
  * Prefill each id with its remaining balance as a 2-decimal string.
  * Missing or non-positive balances become '0.00'.
