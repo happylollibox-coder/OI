@@ -1553,8 +1553,8 @@ function ShipmentsTable({ rows, sort, onSort, onSelectShipment }: { rows: Supply
       <thead>
         <tr className="border-b border-border bg-surface/50">
           <SortHeader label="Ship Date" field="shipment_date" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
-          <SortHeader label="Arrival" field="estimated_arrival_date" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Products</th>
+          <SortHeader label="Arrival" field="estimated_arrival_date" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Type</th>
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-faint uppercase tracking-wider">Warehouse ID</th>
           <SortHeader label="Qty" field="total_quantity_shipped" sortField={sort.field} sortDir={sort.dir} onSort={onSort} />
@@ -1576,8 +1576,8 @@ function ShipmentsTable({ rows, sort, onSort, onSelectShipment }: { rows: Supply
                 <span>{fmtDate(r.shipment_date)}</span>
               </button>
             </td>
-            <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{r.estimated_arrival_date ? fmtDate(r.estimated_arrival_date) : '—'}</td>
             <td className="px-4 py-2.5 text-subtle text-xs font-medium max-w-[250px] truncate" title={r.products_list}>{r.products_list || '—'}</td>
+            <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{r.estimated_arrival_date ? fmtDate(r.estimated_arrival_date) : '—'}</td>
             <td className="px-4 py-2.5 text-xs text-muted">{r.shipment_type || '—'}</td>
             <td className="px-4 py-2.5 text-xs text-muted font-mono whitespace-nowrap" title={r.tracking_number || ''}>{r.tracking_number || '—'}</td>
             <td className="px-4 py-2.5 text-right text-subtle font-mono text-xs">{r.total_quantity_shipped.toLocaleString()}</td>
