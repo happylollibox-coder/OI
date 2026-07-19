@@ -203,8 +203,138 @@ views:
   - name: "V_SEARCH_TERM_OPPORTUNITIES"
     description: "Search term opportunity analysis"
 
+  - name: "V_TARGET_DAILY"
+    description: "Target×day across BOTH targeting reports — keywords AND auto groups (close/loose-match, substitutes, complements) plus product/ASIN targets. Exists because V_KEYWORD_DAILY sources only targeting_keyword_report and so returns ZERO rows for Automatic campaigns; the launch ramp needs auto targets. target_type = KEYWORD/AUTO/PRODUCT. Carries campaign_budget (the actual daily budget on Amazon that day). Sources are disjoint and their keyword_id spaces do not collide."
+    source_files: ["scripts/bigquery/views/V_TARGET_DAILY.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+
+  - name: "V_CAMPAIGN_ROLE"
+    description: "THE canonical Coverage-role definition — one row per campaign: AUTO / EXACT / BROAD / PHRASE / COMPETITOR / SB_VIDEO / BRAND_DEFENSE / PRODUCT_DEFENSE / OTHER, first-match-wins by strategy_id then campaign_type then dominant targeting_type (90d, by clicks). Lifted out of the camp_role CTE inlined in /api/coverage so the Coverage page and the Weekly Run strategy split share one rule. Normalizes targeting_type case (FACT_AMAZON_ADS holds both 'broad' and 'BROAD'); the Flask original matched 'Automatic'/'ASIN'/'Category' case-sensitively. is_offense_role flags the six non-defense roles."
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_ROLE.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - DIM_EXPERIMENT_CAMPAIGN
+      - DIM_EXPERIMENT
+
+  - name: "V_BUDGET_STEP1_STRATEGY"
+    description: "One row per Coverage role for the Weekly Run Step-1 'Budget by strategy' split — the sibling of V_BUDGET_STEP1_FAMILY, grouped by strategy_role instead of parent_name. Offense sub-roles only (brand/product defense have their own PPC modes and panels). Rolled up from V_BUDGET_STEP1_CAMPAIGN so the split and the step-2 campaign table read the same per-campaign new_budget and cannot disagree. Spend-weighted CPC. Cube: StrategyBudgetStep1."
+    source_files: ["scripts/bigquery/views/V_BUDGET_STEP1_STRATEGY.sql"]
+    dependencies:
+      - V_BUDGET_STEP1_CAMPAIGN
+      - FACT_AMAZON_ADS
+      - DE_BUDGET_CONFIG
+
+  - name: "V_BUDGET_STEP1_AGE"
+    description: "One row per age bucket (NEW <=20d / 1-3MO / 4-9MO / 10MO+) for the Weekly Run Step-1 'Budget by age' split — sibling of V_BUDGET_STEP1_STRATEGY, grouped by age_bucket. Same columns (n_campaigns, losing/margin/winning spend by 7d net ROAS tier, spend-weighted CPC, ads net profit/day, current + new budget). Rolled up from V_BUDGET_STEP1_CAMPAIGN so it can't disagree with the step-2 table; drives the age filter over step 2 (budget) and step 4 (bids). Tiers: losing net ROAS < margin_roas_threshold (0.8), margin 0.8-2.0, winning >= boost_roas_threshold (2.0). Cube: AgeBudgetStep1."
+    source_files: ["scripts/bigquery/views/V_BUDGET_STEP1_AGE.sql"]
+    dependencies:
+      - V_BUDGET_STEP1_CAMPAIGN
+      - FACT_AMAZON_ADS
+      - DE_BUDGET_CONFIG
+
+  - name: "V_CAMPAIGN_LAUNCH_RAMP"
+    description: "Launch protocol for a campaign's first launch_ramp_days (20) days, replacing the LAUNCH_* branch of V_ADS_COACH. Starts $10/day + $1.00 bid; on each day AMAZON REPORTED THE CAMPAIGN OUT OF BUDGET (campaign_history.serving_status = CAMPAIGN_OUT_OF_BUDGET, per America/Los_Angeles day — last_updated_date is Fivetran UTC and must be converted), every target over launch_click_trigger clicks cuts its bid by launch_bid_cut_pct and a trailing-ROAS-over-launch_raise_roas campaign raises budget by launch_budget_raise_pct. 2026-07-17: the gate was spend >= budget, which under-fired 57% of out-of-budget days — Amazon stops serving at ~91-99% of budget (no room for another click), targeting_report.campaign_budget_amount RESTATES history with the CURRENT budget, and Amazon borrows across days so spend reaches ~2x budget. Falls back to the old proxy only for the ~7% of campaign-days with no status row. target_bid is capped at LEAST(ladder, current_bid) — the ladder may only ever cut; uncapped it RAISED 52 of 55 targets (+33% avg) because $1.00 is a prescription for campaigns launched at $1.00, not an observation. Pure replay of observed history — no scheduled job. Self-arresting: cuts only fire on out-of-budget days, so starved delivery stops the ladder. Grain: (campaign, target); a campaign with no spend yet emits one row with keyword_id NULL. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_LAUNCH_RAMP.sql"]
+    dependencies:
+      - V_TARGET_DAILY
+      - FACT_AMAZON_ADS
+      - V_SRC_AmazonAds_campaign_history
+      - DE_BUDGET_CONFIG
+
+  - name: "V_LAUNCH_PHASE1"
+    description: "Phase-1 launch controller for a campaign's first 20 days — supersedes the bid/budget ladder in V_CAMPAIGN_LAUNCH_RAMP. Purpose: get a new campaign STABLE (spends budget across the day, not by lunchtime) and PROFITABLE by day 20, then hand to the coacher. Grain (campaign, target). Signals: roas_1d (today), eq3 (equal-weight mean of last-3 daily net ROAS ignoring <3-click days, pooled fallback), pct_dark (Amazon CAMPAIGN_OUT_OF_BUDGET share, LA day). Anchors 'today' on the last FULLY-ELAPSED day (LEAST(MAX(date), yesterday)) so an incomplete current day never reads as false zeros. BID (clamp $0.20-$1.50): starving(dark<=10% & spend<=60%)→×1.10; CUT only if eq3<0.9 AND roas_1d<0.9 →×0.8 (both must be bad — a proven or recovering keyword is spared); strong eq3>1.5→×1.3; weak roas_1d>1.2→×1.15. BUDGET: dark<=10% → cut toward floor (eq3<0.6 ×0.6, eq3<0.9 ×0.9) or hold; dark>10% → raise to LEAST(budget/%active, cap) with cap 3× (strong eq3>1.5) / 2× (weak roas_1d>1.2). No negate inside 20 days. Pure replay, no scheduled job. Consumed by tools/build_launch_phase1_bulksheet.py. Phase-1 tuning constants inline (k CTE) pending migration to DE_BUDGET_CONFIG. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    source_files: ["scripts/bigquery/views/V_LAUNCH_PHASE1.sql"]
+    dependencies:
+      - V_CAMPAIGN_LAUNCH_RAMP
+      - V_TARGET_DAILY
+      - FACT_AMAZON_ADS
+      - V_SRC_AmazonAds_campaign_history
+      - DE_BUDGET_CONFIG
+
+  - name: "V_LAUNCH_CARD_DAILY"
+    description: "Per (launch campaign, target, day) measures for the Weekly Run New-campaigns card: last 3 complete days of Spend, Clicks, CTR, units, net ROAS per target. Launch campaigns only (those in V_LAUNCH_PHASE1). Cube: LaunchCardDaily."
+    source_files: ["scripts/bigquery/views/V_LAUNCH_CARD_DAILY.sql"]
+    dependencies:
+      - V_LAUNCH_PHASE1
+      - FACT_AMAZON_ADS
+
+  - name: "V_LAUNCH_TERM_NEGATIVES"
+    description: "Search terms to negate inside a launch-window campaign (phase 1): >= launch_negate_clicks (15) cumulative clicks with 0 orders. Grain (campaign, matched_target, search_term). Phase 1 keeps the KEYWORD alive (idles, waits for a sale) but prunes the dead QUERY — negating the search term as a Campaign Negative Exact stops the bleed without killing the keyword. Emits NEGATE_TERM. Consumed by the Weekly Run 'Budget by age' NEW bucket Apply-all and tools/build_launch_phase1_bulksheet.py. Caveat: Amazon negative sync is frozen, so a term may already be negated. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    source_files: ["scripts/bigquery/views/V_LAUNCH_TERM_NEGATIVES.sql"]
+    dependencies:
+      - V_LAUNCH_PHASE1
+      - FACT_AMAZON_ADS
+      - DE_BUDGET_CONFIG
+
+  - name: "V_RUN_TARGET"
+    description: "One row per (campaign, target) for the merged Weekly Run step-4 card — keywords AND auto groups (close/loose/substitutes), NEW campaigns AND mature, so the card reads one source. Each target carries two measure windows with CPC · clicks · TOS% · units · net ROAS: row2 (recent) = last day for NEW / last 7d for mature; row3 (trend) = mean of the 2 days before last for NEW / last 28d for mature (+ a peak window for mature). Windows match the engines' decision signals. Measures from FACT_AMAZON_ADS; TOS% impression-weighted from V_TARGET_DAILY. Unified bid suggestion/action/reason: V_LAUNCH_PHASE1 for NEW, V_WEEKLY_RUN_KEYWORD for mature keywords (mature auto groups have no coacher verdict yet → measures only). Materialized as T_RUN_TARGET (heavy coacher join); cube RunTarget reads the T_. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    source_files: ["scripts/bigquery/views/V_RUN_TARGET.sql"]
+    dependencies:
+      - V_LAUNCH_PHASE1
+      - V_WEEKLY_RUN_KEYWORD
+      - V_TARGET_DAILY
+      - FACT_AMAZON_ADS
+      - DIM_US_HOLIDAYS
+
+  - name: "V_SB_LAUNCH_CAMPAIGN"
+    description: "CAMPAIGN-LEVEL measures for Sponsored-Brands (incl. video) launch campaigns, from fivetran-hl.amazon_ads.sb_campaign_report — the ONLY complete + current SB source (per-keyword sb_keyword_report died 2025-12-29; FACT_AMAZON_ADS undercounts SB at every grain, e.g. VIDEO-BALL FACT 8 clk/60 impr vs true 14/388). One row per SB launch campaign with r2 (anchor day) + r3 (prior 2 days) windows of spend/CPC/clicks/CTR/TOS(top_of_search_impression_share)/ACoS + net-ROAS ESTIMATE (sales×(1−cost_per_unit/list_price) via mapped ASIN; SB report has no units/COGS). Card renders these as a campaign-level row with NO per-target drill-down. Cube: SbLaunchCampaign. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    source_files: ["scripts/bigquery/views/V_SB_LAUNCH_CAMPAIGN.sql"]
+    dependencies:
+      - V_LAUNCH_PHASE1
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+      - DIM_COSTS_HISTORY
+      - FN_ADS_ANCHOR_CAP
+
+  - name: "V_SB_LAUNCH_KEYWORD"
+    description: "PER-KEYWORD drill for Sponsored-Brands launch campaigns. Keyword list + bid + match from fivetran-hl.amazon_ads.sb_keyword (config table, current); per-keyword clicks/spend/sales from sb_search_term_report (current, keyword_id grain) — these reconcile exactly to the campaign totals. r2 (anchor day) + r3 (prior 2 days) windows of clicks/spend/CPC/sales + net-ROAS estimate. ⚠️ NO per-keyword impressions/CTR: sb_search_term_report is search-term grain so per-keyword impressions undercount (Amazon only reports impr for clicked terms) — the campaign card (V_SB_LAUNCH_CAMPAIGN) keeps the true CTR/impr. Every enabled keyword shows (LEFT JOIN) with its bid even at 0 activity. Cube: SbLaunchKeyword. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    source_files: ["scripts/bigquery/views/V_SB_LAUNCH_KEYWORD.sql"]
+    dependencies:
+      - V_LAUNCH_PHASE1
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+      - DIM_COSTS_HISTORY
+      - FN_ADS_ANCHOR_CAP
+
+  - name: "V_RUN_SEARCH_TERM"
+    description: "Search terms under each NEW-campaign target (level 3 of the Weekly Run card): one row per (campaign, keyword_id, search_term) over the last 28 days, from search-term-grain FACT_AMAZON_ADS. Carries clicks/orders/units/spend/sales/net_roas/acos + is_negate (>=15 clicks, 0 orders) + is_winner (orders>0). The card groups these per keyword into Spenders (by spend) · Winners (by net ROAS) · Negates, top 3 + other. Cube: RunSearchTerm. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    source_files: ["scripts/bigquery/views/V_RUN_SEARCH_TERM.sql"]
+    dependencies:
+      - V_LAUNCH_PHASE1
+      - FACT_AMAZON_ADS
+
+  - name: "V_PRICE_COST_TIER"
+    description: "Empirical per-unit sale-price → true-COGS lookup. Learns from V_SRC_AmazonAds_purchased_product (last 180d): for each observed unit price, the units-weighted TRUE landed cost of what was actually purchased at that price. Solves the advertised-vs-purchased COGS bug (a box ad drives a cheaper ball sale, but FACT charges the box cost) WITHOUT the purchased report's ~31% coverage gap or units/attribution mismatch — every FACT row has a price. Validated: cuts per-unit COGS error from $2.74 (advertised) to $0.49, 98% within $2. tier_cost is a drop-in COGS for any FACT row at that price; cost_spread flags ambiguous tiers (e.g. $13.99 Bunny/LolliBall — cost-harmless). Prices <3 units dropped → caller falls back to advertised cost."
+    source_files: ["scripts/bigquery/views/V_PRICE_COST_TIER.sql"]
+    dependencies:
+      - V_SRC_AmazonAds_purchased_product
+      - DIM_COSTS_HISTORY
+      - DIM_PRODUCT
+
+  - name: "V_ADS_COST_CORRECTED"
+    description: "Correct per-unit ad COGS from the PURCHASED product (not the advertised one), at (date, campaign_id, ad_group_id, keyword_id) grain, from V_SRC_AmazonAds_purchased_product. correct_cost_per_unit = units-weighted mean cost of what was actually purchased; drop-in replacement for FACT_AMAZON_ADS.TOTAL_COST_PER_UNIT. NOTE: the purchased report under-covers (~31% of FACT units absent) and is 14-day attribution vs FACT's higher count — prefer V_PRICE_COST_TIER (price-based, 100% coverage) for the production correction; this view is the report-based reference / diff source. Not yet wired into FACT."
+    source_files: ["scripts/bigquery/views/V_ADS_COST_CORRECTED.sql"]
+    dependencies:
+      - V_SRC_AmazonAds_purchased_product
+      - DIM_COSTS_HISTORY
+
+  - name: "T_PRICE_COST_TIER"
+    description: "Materialized snapshot of V_PRICE_COST_TIER (the sale-price → true-COGS lookup). Exists because V_PRICE_COST_TIER is a view WITH aggregation — joining it inside V_ADS_NET_CORRECTED and then re-aggregating triggers BigQuery 'aggregations of aggregations'. Small (~22 rows). Refresh from V_PRICE_COST_TIER whenever costs/prices shift (fold into SP_REFRESH_CUBE_TABLES)."
+    source_files: []
+    dependencies:
+      - V_PRICE_COST_TIER
+
+  - name: "V_ADS_NET_CORRECTED"
+    description: "Row-level (per FACT_AMAZON_ADS row) ad gross profit with COGS costed by the PRODUCT ACTUALLY SOLD — corrected_cost_per_unit = T_PRICE_COST_TIER.tier_cost matched on sale price (Ads_sales/Ads_units), else the current advertised cost. Exposes gross_profit_now beside gross_profit_corrected (+ price_matched flag) so the card can show current vs corrected net ROAS side by side, non-destructively. Row-level so consumers SUM in one step. Diagnostic (28d, spend>=$3): ~17% of targets move >=0.2x net ROAS, 28 flip across breakeven, account total ~flat (-$599). Not yet wired into FACT/coacher. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md / [[project_ads_cogs_price_imputation]]."
+    source_files: ["scripts/bigquery/views/V_ADS_NET_CORRECTED.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - T_PRICE_COST_TIER
+
   - name: "V_KEYWORD_DAILY"
-    description: "Keyword×day from targeting_keyword_report — true impressions incl no-traffic, top-of-search share, set bid; feeds coacher TOS signals"
+    description: "Keyword×day from targeting_keyword_report — true impressions incl no-traffic, top-of-search share, set bid; feeds coacher TOS signals. NOTE: keywords only — auto targets are invisible here; use V_TARGET_DAILY for a grain that includes them."
     source_files: ["scripts/bigquery/views/V_KEYWORD_DAILY.sql"]
     dependencies:
       - FACT_AMAZON_ADS
@@ -218,7 +348,7 @@ views:
       - DE_PRODUCT_STRATEGY_PROFILE
 
   - name: "V_WEEKLY_CELL_NET"
-    description: "Weekly ads net profit/spend per strategy cell (parent x season x match x intent x week); per-product peak. Coacher D base for trend/review/learnings."
+    description: "Weekly ads net profit/spend per strategy cell (parent x season x match x intent x campaign_type x ad_format x week); per-product peak. Coacher D base for trend/review/learnings + per-format plan capacity caps."
     source_files: ["scripts/bigquery/views/V_WEEKLY_CELL_NET.sql"]
     dependencies:
       - FACT_AMAZON_ADS
@@ -292,6 +422,14 @@ views:
     dependencies:
       - DE_PRODUCT_PHRASE_NEGATIVES
       - V_PRODUCT_FAMILY_MAP
+
+  - name: "V_LAUNCH_NEGATIVES"
+    description: "Negative phrases a new campaign must launch with, per (strategy_id, parent_name). Defense strategies excluded here, not in the frontend. Consumed by the DoPage bulksheet generator."
+    source_files: ["scripts/bigquery/views/V_LAUNCH_NEGATIVES.sql"]
+    cube_schema: "cube/schema/LaunchNegatives.js"
+    dependencies:
+      - V_PRODUCT_PHRASE_NEGATIVES
+      - DIM_STRATEGY_TEMPLATE
 
   - name: "V_SEARCH_TERM_SEGMENT"
     description: "Search term segmentation"
@@ -381,6 +519,60 @@ views:
     description: "Campaign-level aggregation of ads coach data"
     source_files: ["scripts/bigquery/views/V_ADS_COACH_CAMPAIGN.sql"]
 
+  # ── Budget waterfall + daily optimizer (spec: docs/superpowers/specs/2026-07-05-weekly-run-budget-waterfall.md) ──
+  - name: "V_CAMPAIGN_FAMILY_MAP"
+    description: "Single family attribution for every ENABLED campaign (DE_CAMPAIGN_FAMILY override ∪ dominant-ASIN ∪ 'Unknown'). Coverage guarantee for the budget waterfall — no enabled campaign falls out."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_FAMILY_MAP.sql"]
+  - name: "V_FAMILY_NET_PROFIT_7D"
+    description: "Family split weight = daily-avg net profit over the last 7 FULL-DATA days (anchored on the organic watermark). Product families use real business net profit (incl organic); Store/Unknown fall back to ads net profit."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_FAMILY_NET_PROFIT_7D.sql"]
+  - name: "V_FAMILY_BUDGET_ALLOCATION"
+    description: "Total daily budget → per-family daily budget: floor + winners-take-the-rest by weight; DE_PRODUCT_BUDGET source='MANUAL_DAILY' overrides. Sums to total_daily_budget."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_FAMILY_BUDGET_ALLOCATION.sql"]
+  - name: "V_CAMPAIGN_BUDGET_BASE"
+    description: "Dual-pool per-campaign daily budget (PPC offense/defense toggle). DEFENSE pool = BRAND_DEFENSE only (own the brand SERP); splits defense_total_daily (across families by brand-defense spend) by spend. OFFENSE pool = everything else INCLUDING PRODUCT_DEFENSE — product-defense is carved out first at a fixed $30 learning floor (product_defense_floor_daily, cross-sell ROI-managed), then regular offense splits the rest of the family's OFFENSE budget (V_FAMILY_BUDGET_ALLOCATION) by trailing-4w ads net profit. is_defense = brand-defense only. Offense may exceed the family offense budget by pd floors on losing families. is_defense + is_floor flags."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_BUDGET_BASE.sql"]
+  - name: "V_CAMPAIGN_DAILY_MOVE"
+    description: "Daily out-of-budget optimizer on the last full-data day: <0.8 net ROAS→BID_CUT, 0.8-2.5→+10%, ≥2.5→+30%; targets normalized to the family cap (reallocate within cap)."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_DAILY_MOVE.sql"]
+  - name: "V_CAMPAIGN_BID_CUT"
+    description: "Worst-keyword bid cuts (−bid_cut_pct) for BID_CUT campaigns: keywords with negative net (net_proxy) and ≥15 clicks over 8wk. Feeds the existing REDUCE_BID apply path."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_BID_CUT.sql"]
+  - name: "V_BUDGET_TOTAL_SUGGESTION"
+    description: "Profit-shaped suggested total for the Step-1 dial: margin-or-winning (net ROAS≥0.8) campaigns' daily spend + the current margin/new split %, so the UI computes suggested_total = margin_spend/(chosen proven% ÷100). Default proven% = current; 80% best-practice preset (80/20 rule). Context: ceilings, net profit, current setting."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_BUDGET_TOTAL_SUGGESTION.sql"]
+  - name: "V_BUDGET_STEP1_FAMILY"
+    description: "One row per family for the Weekly Run Step-1 panel: current allocation + the weight inputs (net profit, floor), so the UI shows the split and recomputes it client-side as Ori changes the total. Cube: FamilyBudgetStep1."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_BUDGET_STEP1_FAMILY.sql"]
+  - name: "V_BUDGET_STEP1_CAMPAIGN"
+    description: "One row per enabled campaign for the Weekly Run per-family Step-2 Budget table: the waterfall's per-campaign allocation (new_budget = V_CAMPAIGN_BUDGET_BASE.base_daily, dual-pool) + last-7-full-days perf (net ROAS, net profit, spend, CPC), tiered NEW/WINNING/MARGIN/LOSING, is_defense flag so the PPC toggle filters offense/defense. tier=NEW wins over the ROAS tiers for campaigns inside their launch-ramp grace (launch_ramp_days=20) — they have no verdict yet, and their new_budget comes from V_CAMPAIGN_LAUNCH_RAMP, not the waterfall (ramp_day/ramp_days carry 'day N of 20'). strategy_role carries the Coverage role for the step-1 strategy split. Cube: CampaignBudgetStep1."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_BUDGET_STEP1_CAMPAIGN.sql"]
+  - name: "V_BUDGET_ROLE_FAMILY"
+    description: "One row per (family, role) for the Weekly Run Step-1 defense-type panels (BRAND_DEFENSE + PRODUCT_DEFENSE). Allocation (weight for the dial split), spend/current/allocated budgets, ads net ROAS + net profit/day, n campaigns, n_underbid (BRAND_DEFENSE only: keywords bidding below 1.5x CPC via V_KEYWORD_DAILY). Cube: RoleBudgetFamily. Superseded V_BUDGET_DEFENSE_FAMILY (still present, brand-only)."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_BUDGET_ROLE_FAMILY.sql"]
+  - name: "V_BUDGET_DEFENSE_FAMILY"
+    description: "DEPRECATED (superseded by V_BUDGET_ROLE_FAMILY). One row per family with defense campaigns: defense allocation, spend/current/allocated, ads net ROAS + net profit/day, n_underbid. Cube: DefenseBudgetFamily."
+  - name: "V_CAMPAIGN_HALO"
+    description: "Per-campaign organic-halo forecast (v2, role-weighted by clicks). Family halo (business net profit incl organic − ad net profit, from V_BUDGET_STEP1_FAMILY) split across campaigns by weighted clicks; weight = DE_HALO_WEIGHTS by strategy (discovery ~1.0 → brand-defense ~0.15). est_halo_day feeds V_BUDGET_STEP1_CAMPAIGN.est_halo / net_incl_halo."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_HALO.sql"]
+  - name: "DE_HALO_WEIGHTS"
+    description: "Tunable per-strategy halo weights (how much NEW organic demand a click creates): HUNTER/LOW_COST_DISCOVERY 1.0, conquest 0.7, EXACT_BOOST 0.5, PRODUCT_DEFENSE 0.3, BRAND_DEFENSE 0.15. Read by V_CAMPAIGN_HALO."
+    type: "table"
+    source_files: []
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_BUDGET_DEFENSE_FAMILY.sql"]
+
   - name: "V_ADS_COACH_DECISION"
     description: "Decision engine — applies thresholds to coach data for action recommendations"
     source_files: ["scripts/bigquery/views/V_ADS_COACH_DECISION.sql"]
@@ -415,6 +607,17 @@ views:
     description: "Pre-ranked top 10 winners + top 10 losers by keyword target per week (net profit). Mirrors V_ADS_FOCUS_TERMS but groups by targeting (bid keyword) instead of search_term."
     source_files: ["scripts/bigquery/views/V_ADS_FOCUS_KEYWORDS.sql"]
     dependencies:
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+
+  - name: "V_INTENT_KEYWORDS"
+    description: "Terms matched to intent THEMES (DE_INTENT_THEMES) and ranked within (parent_name x intent_key) by FACT_RESEARCH_RANKED.rank; is_top10 flags the campaign keyword set (<=10). Grain parent_name x intent_key x query_text — family-grain, matching the campaign grain (only AUTO is per product). Carries the 90d ads money signal per (family x intent) over ALL matched terms (ads_spend/ads_clicks/ads_orders/ads_net_roas). is_relevant decides the campaign set, first rule wins: (1) DE_FAMILY_INTENT_OVERRIDE.force_relevant, (2) TIME_BASED always (rank is zeroed off-season; season_start/season_end from DIM_US_HOLIDAYS govern), (3) PROFIT gate — drop when ads_clicks>=100 AND ads_net_roas<1.0 (rank is FIT not profit: LolliME/school = rank 63 but 0.27x on 613 clicks), (4) FIT gate family_best_rank>=60. relevance_reason exposes the trace. Feeds the Research intents panel + Brand Spotlight and (later) intent campaign build. SOP: architecture/INTENT_CAMPAIGN_MODEL.md"
+    source_files: ["scripts/bigquery/views/V_INTENT_KEYWORDS.sql"]
+    dependencies:
+      - FACT_RESEARCH_RANKED
+      - DE_INTENT_THEMES
+      - DE_FAMILY_INTENT_OVERRIDE
+      - DIM_US_HOLIDAYS
       - FACT_AMAZON_ADS
       - DIM_PRODUCT
 
@@ -467,7 +670,7 @@ views:
       - DIM_US_HOLIDAYS_PRODUCT_FAMILY
 
   - name: "V_FORECAST_DEMAND"
-    description: "Holiday-driven per-product demand forecast with 3-phase model-based forecasting for new products. Phase 1 (cold start) uses model product's daily rate × seasonality. Phase 2 (hybrid) uses own trailing 14d rate × model seasonality. Phase 3 uses standard family-level forecast."
+    description: "Holiday-driven per-product demand forecast with 3-phase model-based forecasting for new products. Phase 1 (cold start) uses model product's daily rate × seasonality. Phase 2 (hybrid) uses own trailing 14d rate × model seasonality. Phase 3 uses standard family-level forecast. First-year guard (2026-07-15): when the family YoY lift blows up (raw_lift >= 3, i.e. last-year 56d denominator was a launch-period near-zero), the capped 2.0x lift is replaced by run_rate/offseason_base so the curve is anchored to the recent 28d run-rate instead of over-projecting."
     source_files: ["scripts/bigquery/views/V_FORECAST_DEMAND.sql"]
     dependencies:
       - T_UNIFIED_DAILY
@@ -475,6 +678,13 @@ views:
       - V_PRODUCT_LAUNCH_MODEL
       - V_PRODUCT_SEASONALITY_INDEX
       - DE_NEW_PRODUCT_MODEL
+
+  - name: "V_HOUSE_SEASONALITY"
+    description: "Volume-weighted calendar-month seasonality blended across mature products (>=540 days history, num_days>=15 per month). The fallback 'real calendar' for new-product forecasting when the chosen donor is too young (<2yr) to define its own seasonality. Index 1.0 = average month; Dec ~4.3x. Consumed by V_LAUNCH_RAMP and V_FORECAST_DEMAND."
+    source_files: ["scripts/bigquery/views/V_HOUSE_SEASONALITY.sql"]
+    dependencies:
+      - V_PRODUCT_SEASONALITY_INDEX
+      - T_UNIFIED_DAILY
 
   - name: "V_PRODUCT_LAUNCH_MODEL"
     description: "Auto-computed first-year sales patterns per product (month 1-12 from launch date). Used as the menu of available launch models for new product forecasting."
@@ -841,6 +1051,21 @@ tables:
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE/DE_PEAK_OVERRIDES.sql"]
 
+  - name: "DE_PEAK_RELEVANCE_OVERRIDE"
+    description: "Manual override of V_PEAK_RELEVANCE.is_relevant_peak per (family, holiday). Injects/overrides at the CANONICAL relevance layer so it flows to BOTH the OFF/PEAK season split (V_WEEKLY_CELL_NET → plan seasonal net columns) AND the coach (family_season + BLITZ). Fixes peaks the 90-day maturity gate drops (LolliME/Bottle Christmas). Preferred over DE_PEAK_OVERRIDES (which only reaches the coach)."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_PEAK_RELEVANCE_OVERRIDE.sql"]
+
+  - name: "DE_BUDGET_CONFIG"
+    description: "Knobs for the Weekly Run budget waterfall + daily optimizer (total_daily_budget=700, family_floor_daily=10, margin/boost/close ROAS thresholds, increase %s, out-of-budget util). Keyed like DE_COACH_THRESHOLDS; Ori-editable without a deploy. Spec: docs/superpowers/specs/2026-07-05-weekly-run-budget-waterfall.md"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_BUDGET_CONFIG.sql"]
+
+  - name: "DE_CAMPAIGN_FAMILY"
+    description: "campaign_id→family override for the coacher's ASIN-blind campaigns. Video/SB/Store campaigns report most_advertised_asin='Unknown' → no DIM_PRODUCT match → V_ADS_COACH_DATA's inner asin_economics JOIN drops them. Supplies parent_name directly as a fallback when the ASIN yields no family. 'Store' is a virtual family (whole-store brand campaigns, no product ASIN)."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_CAMPAIGN_FAMILY.sql"]
+
   - name: "DE_NEGATIVE_KEYWORDS"
     description: "Warehouse-owned negative-keyword registry (replaces frozen Fivetran negative_keyword sync). Seeded from an Amazon bulksheet download via tools/load_negatives_seed.py; maintained by SP_SYNC_NEGATIVES from FACT_PPC_CHANGE_LOG."
     type: "data_entry"
@@ -944,7 +1169,7 @@ tables:
     source_files: ["scripts/bigquery/tables/DE_PRODUCT_MAIN_KEYWORDS.sql"]
 
   - name: "DE_PRODUCT_STRATEGY_PROFILE"
-    description: "Per parent x season x match-type bid strategy the coacher steers toward (derived + editable)"
+    description: "Per parent x season x match-type x campaign_type x ad_format bid strategy the coacher steers toward (derived + editable). Two layers: coarse rows (campaign_type=ad_format='ALL') are the pooled fallback; fine rows split by SP/SB and SB creative type (BRAND_VIDEO/PRODUCT_COLLECTION) and steer only where conclusive."
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_PRODUCT_STRATEGY_PROFILE.sql"]
 
@@ -952,6 +1177,16 @@ tables:
     description: "Manual override of keyword intent class (BRAND/PRODUCT/GENERIC) for the coacher strategy"
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_KEYWORD_INTENT_OVERRIDE.sql"]
+
+  - name: "DE_FAMILY_INTENT_OVERRIDE"
+    description: "Per-(family x intent theme) manual relevance override — beats the automatic fit+profit gates in V_INTENT_KEYWORDS. force_relevant FALSE = never suggest this intent for this family, TRUE = always suggest (even with no data). Exists because DE_INTENT_THEMES.is_active is GLOBAL and can't say 'school is wrong for LolliME but fine for Lollibox'. Absent row = let the gates decide. SOP: architecture/INTENT_CAMPAIGN_MODEL.md"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_FAMILY_INTENT_OVERRIDE.sql"]
+
+  - name: "DE_INTENT_THEMES"
+    description: "Registry of intent THEMES (birthday, easter, beauty, journal…) — the grouping unit for intent-grouped campaigns (family x match-type x intent). GENERIC vs TIME_BASED; match rule = AND over match_occasion/match_holiday/match_product_type/match_age_group/match_keyword_regex against FACT_RESEARCH_RANKED; TIME_BASED links holiday_name -> DIM_US_HOLIDAYS for start/pause dates. NOT the same as the BRAND/PRODUCT/GENERIC keyword intent class (V_KEYWORD_INTENT_CLASS). SOP: architecture/INTENT_CAMPAIGN_MODEL.md"
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_INTENT_THEMES.sql"]
 
   - name: "DE_PROBE_LOG"
     description: "Tracks each keyword probe's decision budget (15 clicks / 14 days): ACTIVE/GRADUATED/EXHAUSTED. Coacher C close-the-loop, refreshed by SP_REFRESH_PROBE_LOG."
@@ -963,8 +1198,13 @@ tables:
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_PRODUCT_BUDGET.sql"]
 
+  - name: "DE_PRODUCT_BOM"
+    description: "Per-product Bill of Materials for the Price Calculator (one row per ASIN). bom_json holds volume tiers + component per-unit prices. Written by Flask /api/products/bom."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_PRODUCT_BOM.sql"]
+
   - name: "DE_WEEKLY_PLAN"
-    description: "Per-cell weekly plan (history-retained): purpose + success_metric + expected_value + spend_mode + status. Coacher D, written by tools/weekly_plan."
+    description: "Per-cell weekly plan (history-retained) at parent x season x match x intent x campaign_type x ad_format grain: purpose + success_metric + expected_value + spend_mode + status + target_cpc. Coacher D, written by tools/weekly_plan."
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_WEEKLY_PLAN.sql"]
 
@@ -1432,6 +1672,11 @@ stored_procedures:
 # ═══════════════════════════════════════════════════════════════
 
 functions:
+  - name: "FN_ADS_ANCHOR_CAP"
+    description: "Calendar cutoff for the launch controller's 'last complete day' anchor (LA-time ads data). Returns YESTERDAY (LA) normally, but the CURRENT LA day once it's within its last 2 hours (hour>=22) — sales are effectively done by then (Ori 2026-07-18), so the day counts as complete enough and can be the anchor, instead of waiting for LA midnight. Used by V_LAUNCH_PHASE1, V_RUN_TARGET, V_RUN_SEARCH_TERM, V_LAUNCH_CARD_DAILY as LEAST(MAX(date), FN_ADS_ANCHOR_CAP())."
+    source_files: ["scripts/bigquery/functions/FN_ADS_ANCHOR_CAP.sql"]
+    type: "sql_udf"
+
   - name: "FN_EXTRACT_SEGMENTS"
     description: "Single source of truth for search-term segment extraction (gender, age_group, occasion, holiday). Consumed by V_SQP_QUERY_WEEKLY, V_RESEARCH_RANKED, SP_DERIVE_PRODUCT_SEGMENTS, segment-reasoning endpoint."
     source_files: ["scripts/bigquery/functions/FN_EXTRACT_SEGMENTS.sql"]
