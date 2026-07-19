@@ -279,7 +279,7 @@ views:
       - DIM_US_HOLIDAYS
 
   - name: "V_SB_LAUNCH_CAMPAIGN"
-    description: "CAMPAIGN-LEVEL measures for Sponsored-Brands (incl. video) launch campaigns, from fivetran-hl.amazon_ads.sb_campaign_report — the ONLY complete + current SB source (per-keyword sb_keyword_report died 2025-12-29; FACT_AMAZON_ADS undercounts SB at every grain, e.g. VIDEO-BALL FACT 8 clk/60 impr vs true 14/388). One row per SB launch campaign with r2 (anchor day) + r3 (prior 2 days) windows of spend/CPC/clicks/CTR/TOS(top_of_search_impression_share)/ACoS + net-ROAS ESTIMATE (sales×(1−cost_per_unit/list_price) via mapped ASIN; SB report has no units/COGS). Card renders these as a campaign-level row with NO per-target drill-down. Cube: SbLaunchCampaign. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    description: "CAMPAIGN-LEVEL measures + BUDGET suggestion for Sponsored-Brands (incl. video) launch campaigns. Measures from sb_campaign_report (only complete + current SB source; per-keyword sb_keyword_report died 2025-12-29; FACT undercounts SB, e.g. VIDEO-BALL FACT 8 clk/60 impr vs true 14/388). r2 (anchor) + r3 (prior 2d) windows of spend/CPC/clicks/CTR/ACoS + net-ROAS ESTIMATE (sales×(1−cost/list_price) via mapped ASIN). TOS NULL (the SB field is placement mix ~86%, not the competitive IS Amazon shows <5%); units NULL. BUDGET suggestion runs the SAME logic as V_LAUNCH_PHASE1 on SB-native signals: budget + %dark from sb_campaign_history, spend + campaign net ROAS from sb_campaign_report (V_LAUNCH_PHASE1 gives SB NULL budget + undercounted FACT spend). Cube: SbLaunchCampaign. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
     source_files: ["scripts/bigquery/views/V_SB_LAUNCH_CAMPAIGN.sql"]
     dependencies:
       - V_LAUNCH_PHASE1
@@ -288,9 +288,9 @@ views:
       - DIM_COSTS_HISTORY
       - FN_ADS_ANCHOR_CAP
 
-  - name: "V_SB_LAUNCH_KEYWORD"
-    description: "PER-KEYWORD drill for Sponsored-Brands launch campaigns. Keyword list + bid + match from fivetran-hl.amazon_ads.sb_keyword (config table, current); per-keyword clicks/spend/sales from sb_search_term_report (current, keyword_id grain) — these reconcile exactly to the campaign totals. r2 (anchor day) + r3 (prior 2 days) windows of clicks/spend/CPC/sales + net-ROAS estimate. ⚠️ NO per-keyword impressions/CTR: sb_search_term_report is search-term grain so per-keyword impressions undercount (Amazon only reports impr for clicked terms) — the campaign card (V_SB_LAUNCH_CAMPAIGN) keeps the true CTR/impr. Every enabled keyword shows (LEFT JOIN) with its bid even at 0 activity. Cube: SbLaunchKeyword. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
-    source_files: ["scripts/bigquery/views/V_SB_LAUNCH_KEYWORD.sql"]
+  - name: "V_SB_LAUNCH_TARGET"
+    description: "PER-TARGET drill + BID suggestion for Sponsored-Brands launch campaigns — keyword-targeted AND product-targeted, one row per target (mirrors SP's RunTarget). Keyword arm: list+bid from sb_keyword, clicks/spend/sales from sb_search_term_report. Product arm: list+bid from sb_product_target, perf+label from sb_target_report. Runs the SAME launch-controller BID logic as V_LAUNCH_PHASE1 (identical k constants + CASE order: NO_BID→STARVE→PROBE→CUT→dark HOLD→BRAKE→RAISE_STRONG→RAISE_WEAK→HOLD) on SB-native signals (%dark+budget from sb_campaign_history, campaign net ROAS from sb_campaign_report). r2 (anchor)+r3 (prior 2d) clicks/spend/CPC/sales + net-ROAS est. ⚠️ NO per-target impr/CTR in drill (keyword impr undercount at search-term grain; kept uniform) — campaign header keeps true CTR. Cube: SbLaunchTarget. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    source_files: ["scripts/bigquery/views/V_SB_LAUNCH_TARGET.sql"]
     dependencies:
       - V_LAUNCH_PHASE1
       - FACT_AMAZON_ADS
@@ -684,6 +684,13 @@ views:
     source_files: ["scripts/bigquery/views/V_HOUSE_SEASONALITY.sql"]
     dependencies:
       - V_PRODUCT_SEASONALITY_INDEX
+      - T_UNIFIED_DAILY
+
+  - name: "V_LAUNCH_RAMP"
+    description: "Donor launch-growth curve by product age, de-seasonalized against V_HOUSE_SEASONALITY so it is pure growth (Christmas stripped). Normalized to age 1 = 1.0, monotonic, held flat after plateau age 6. One row per (donor_product, launch_age_month). A new product inherits its DE_NEW_PRODUCT_MODEL donor's ramp shape by its own age in V_FORECAST_DEMAND (Phase 1 & 2). LolliME ramps ~2.24x by month 6; a flat donor (Bottle) stays ~1.0."
+    source_files: ["scripts/bigquery/views/V_LAUNCH_RAMP.sql"]
+    dependencies:
+      - V_HOUSE_SEASONALITY
       - T_UNIFIED_DAILY
 
   - name: "V_PRODUCT_LAUNCH_MODEL"
