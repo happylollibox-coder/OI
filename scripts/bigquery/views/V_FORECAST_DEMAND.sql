@@ -548,7 +548,8 @@ model_forecast AS (
   LEFT JOIN model_first_month mfm ON mfm.product = g.model_product
   LEFT JOIN phase1_split p1s ON p1s.family = g.family AND p1s.model_product = g.model_product
   LEFT JOIN `onyga-482313.OI.V_LAUNCH_RAMP` r_now
-    ON r_now.donor_product = g.model_product AND r_now.launch_age_month = g.age_now
+    ON r_now.donor_product = g.model_product
+    AND r_now.launch_age_month = CASE WHEN g.forecast_phase = 'PHASE_1' THEN 1 ELSE g.age_now END
   LEFT JOIN `onyga-482313.OI.V_LAUNCH_RAMP` r_f
     ON r_f.donor_product = g.model_product AND r_f.launch_age_month = g.age_f
   LEFT JOIN donor_plateau dp ON dp.donor_product = g.model_product
@@ -569,6 +570,7 @@ model_based AS (
     CAST(NULL AS INT64)   AS family_forecast_units,
     CAST(NULL AS FLOAT64) AS product_share,
     CASE
+      WHEN mf.estimated_start_selling_date IS NULL THEN 0
       WHEN mf.estimated_start_selling_date IS NOT NULL
         AND DATE(mf.forecast_year, mf.forecast_month, 1)
             < DATE_TRUNC(mf.estimated_start_selling_date, MONTH)
