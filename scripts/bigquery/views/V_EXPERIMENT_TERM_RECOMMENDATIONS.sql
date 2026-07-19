@@ -547,7 +547,7 @@ active_term_rows AS (
 
       -- R6: PROMOTE from broad/auto → exact
       -- total_orders ≥ 4, weighted_total_net_roas ≥ 1.4, SQP volume > 1500, not already exact
-      WHEN eta.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+      WHEN eta.strategy_id = 'INTENT'
         AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
         AND COALESCE(sqp.sqp_search_volume, 0) > 1500
         AND ate.search_term IS NULL THEN 'PROMOTE_TO_EXACT'
@@ -617,7 +617,7 @@ active_term_rows AS (
         'promote_check' as id,
         'Scale Up Check' as label,
         'Total Ord >= 4 & SQP Vol > 1500 & Not in Exact' as rule,
-        (eta.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+        (eta.strategy_id = 'INTENT'
          AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
          AND COALESCE(sqp.sqp_search_volume, 0) > 1500
          AND ate.search_term IS NULL) as pass,
@@ -668,7 +668,7 @@ active_term_rows AS (
         WHEN SAFE_DIVIDE((eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) < 0.5
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN NULL
         -- Exclude PROMOTE_TO_EXACT
-        WHEN eta.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+        WHEN eta.strategy_id = 'INTENT'
           AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
           AND COALESCE(sqp.sqp_search_volume, 0) > 1500
           AND ate.search_term IS NULL THEN NULL
@@ -747,7 +747,7 @@ active_term_rows AS (
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN NULL
         WHEN SAFE_DIVIDE((eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) < 0.5
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN NULL
-        WHEN eta.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+        WHEN eta.strategy_id = 'INTENT'
           AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
           AND COALESCE(sqp.sqp_search_volume, 0) > 1500
           AND ate.search_term IS NULL THEN NULL
@@ -794,7 +794,7 @@ active_term_rows AS (
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN eta.ads_spend * 10
         WHEN SAFE_DIVIDE(eta.ads_orders * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) < 0.5
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN eta.ads_spend * 5
-        WHEN eta.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+        WHEN eta.strategy_id = 'INTENT'
           AND eta.ads_orders >= 4 AND ate.search_term IS NULL
           THEN eta.ads_orders * 50.0
         -- INCREASE_BID priority based on ROAS gap
@@ -814,7 +814,7 @@ active_term_rows AS (
           THEN CONCAT('Only $', CAST(ROUND(eta.ads_spend, 2) AS STRING), ' Ads Spend(8w). Need more data.')
         WHEN eta.ads_orders = 0 AND GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders) = 0 AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0
           THEN CONCAT(CAST(eta.ads_clicks AS STRING), ' Clicks on "', eta.search_term, '" with zero Orders. (Active in last 3 days).')
-        WHEN eta.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+        WHEN eta.strategy_id = 'INTENT'
           AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
           AND COALESCE(sqp.sqp_search_volume, 0) > 1500
           AND ate.search_term IS NULL
@@ -954,10 +954,10 @@ opportunity_rows AS (
     'Unassigned' as portfolio_name,  -- Opportunities have no campaign → no portfolio
     CASE
       WHEN tc.experiment_segment = 'BRAND' THEN 'BRAND_DEFENSE'
-      WHEN tc.intent_segment = 'COMPETITOR' THEN 'CATEGORY_CONQUEST'
+      WHEN tc.intent_segment = 'COMPETITOR' THEN 'COMPETITOR'
       WHEN sp.sqp_purchases >= 3 AND sp.sqp_weeks >= 2 THEN 'EXACT_BOOST'
       WHEN sp.sqp_purchases >= 2 THEN 'EXACT_BOOST'
-      ELSE 'HUNTER'
+      ELSE 'INTENT'
     END as strategy_id,
     CAST(NULL AS STRING) as strategy_name,
     COALESCE(th.hero_asin, sp.asin) as asin,
@@ -1177,14 +1177,14 @@ phase_overridden AS (
       -- Campaign keeps running, but stops matching seasonal keywords
       WHEN c.peak_phase = 'POST_PEAK'
         AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-        AND c.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+        AND c.strategy_id = 'INTENT'
         AND c.action NOT IN ('NEGATE', 'NOT_TARGETED')
         THEN 'NEGATE'
       -- POST_PEAK + EXACT/CONQUEST (dedicated seasonal campaigns): NEGATE seasonal terms
       -- These campaigns are seasonal-specific — negate until next year
       WHEN c.peak_phase = 'POST_PEAK'
         AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-        AND c.strategy_id IN ('EXACT_BOOST', 'COMPETITOR_CONQUEST')
+        AND c.strategy_id IN ('EXACT_BOOST', 'COMPETITOR')
         AND c.action NOT IN ('NEGATE', 'NOT_TARGETED')
         THEN 'NEGATE'
       -- POST_PEAK + DEFENSE (brand/product): keep at KEEP (bid reduction is on target)

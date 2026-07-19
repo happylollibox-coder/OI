@@ -1408,6 +1408,37 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 20.4: Sync owned negative registries from our change-log (depends on FACT_PPC_CHANGE_LOG)
+  -- Folds every negative we've uploaded into DE_NEGATIVE_KEYWORDS / DE_NEGATIVE_TARGETS so the coach's
+  -- NEGATE offers stop re-suggesting terms already negated in Amazon (kills the "already exists" bounces).
+  -- Flask also calls this live on change-log insert; this is the daily safety net for when Flask was off
+  -- or an upload wasn't logged in real time. Idempotent MERGE — cheap. MUST run before the coach/cube
+  -- refresh below so the fresh registry is reflected in the materialized T_WEEKLY_RUN_NEGATIVE offers.
+  -- ============================================
+  SET procedure_name = 'SP_SYNC_NEGATIVES';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SYNC_NEGATIVES`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 20.5: Materialize Ads Coach Actions (depends on FACT_AMAZON_ADS + experiments)
   -- Populates FACT_ADS_COACH_ACTIONS with 4 INSERT statements at natural grain
   -- ============================================

@@ -12,7 +12,7 @@
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_REFRESH_RESEARCH_RECOMMENDATIONS`()
 BEGIN
-  DECLARE wk DATE DEFAULT DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY));
+  DECLARE wk DATE DEFAULT DATE_TRUNC(CURRENT_DATE(), WEEK(SUNDAY));
 
   -- ── Step A: status maintenance — a rec is ADVERTISED once we run a keyword of
   -- its own match type on it (per-type 7-day keyword spend, from FACT_RESEARCH_RANKED).

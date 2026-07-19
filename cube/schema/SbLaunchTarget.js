@@ -1,0 +1,29 @@
+// Cube: SbLaunchTarget — per-target drill + bid suggestion for Sponsored-Brands launch campaigns, from
+// V_SB_LAUNCH_TARGET. Covers keyword-targeted AND product-targeted SB (one row per target, like SP's RunTarget).
+// Bid suggestion runs the same launch-controller logic as V_LAUNCH_PHASE1 on SB-native signals. NO per-target
+// impr/CTR (undercounted at keyword grain). The card renders these as an expandable list under the SB campaign.
+cube(`SbLaunchTarget`, {
+  sql: `SELECT campaign_id, target_id, ad_group_id, target_text, target_type, match_type, bid, suggested_bid, bid_action,
+               r2_clk, r2_spend, r2_cpc, r2_sales, r2_roas,
+               r3_clk, r3_spend, r3_cpc, r3_sales, r3_roas
+        FROM \`onyga-482313.OI.V_SB_LAUNCH_TARGET\``,
+
+  refreshKey: { every: `30 minutes` },
+  measures: { count: { type: `count` } },
+
+  dimensions: {
+    targetId:    { sql: `target_id`,   type: `string`, primaryKey: true },
+    campaignId:  { sql: `campaign_id`,  type: `string` },
+    adGroupId:   { sql: `ad_group_id`,  type: `string` },
+    targetText:  { sql: `target_text`,  type: `string` },
+    targetType:  { sql: `target_type`,  type: `string` },
+    matchType:   { sql: `match_type`,   type: `string` },
+    bid:         { sql: `bid`,          type: `number` },
+    suggestedBid:{ sql: `suggested_bid`,type: `number` },
+    bidAction:   { sql: `bid_action`,   type: `string` },
+    r2Clk: { sql: `r2_clk`, type: `number` }, r2Spend: { sql: `r2_spend`, type: `number` }, r2Cpc: { sql: `r2_cpc`, type: `number` },
+    r2Sales: { sql: `r2_sales`, type: `number` }, r2Roas: { sql: `r2_roas`, type: `number` },
+    r3Clk: { sql: `r3_clk`, type: `number` }, r3Spend: { sql: `r3_spend`, type: `number` }, r3Cpc: { sql: `r3_cpc`, type: `number` },
+    r3Sales: { sql: `r3_sales`, type: `number` }, r3Roas: { sql: `r3_roas`, type: `number` },
+  },
+});

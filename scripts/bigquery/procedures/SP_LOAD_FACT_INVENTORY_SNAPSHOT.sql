@@ -10,6 +10,8 @@
 --     FBA            = afn_fulfillable + afn_reserved - pending_customer_orders
 --                      (units in Amazon's warehouses, excluding already-sold units)
 --     In Transit     = afn_inbound_shipped + afn_inbound_receiving (Amazon-reported pipeline)
+--     In Transit AWD = qty on PENDING manufacturer shipments bound for AWD ("AWD" in the
+--                      shipment id/type) — en route factory→AWD, upstream of "AWD" & "In Transit"
 --     AWD            = Amazon Warehousing & Distribution units (comes from V_UNIFIED)
 --     In Production  = quantity_remaining_at_manufacturer (still being manufactured)
 --     MFR Ready      = quantity_remaining_at_manufacturer (manufacturing complete, awaiting shipment)
@@ -98,7 +100,30 @@ BEGIN
     GROUP BY 1, 2
   ) pay
     ON po.purchase_order_id = pay.purchase_order_id AND d.Date = pay.Date
-  GROUP BY 1, 2, 4;
+  GROUP BY 1, 2, 4
+
+  UNION ALL
+
+  -- In Transit AWD: units on PENDING manufacturer shipments bound for Amazon AWD (Amazon
+  -- Warehousing & Distribution) — identified by "AWD" in the destination warehouse id
+  -- (tracking_number, e.g. 'AWD', 'AWD-STARR'); other codes (IND9, LAS1, …) are FBA centers.
+  -- En route (factory → AWD), UPSTREAM of the "AWD" (in-warehouse) and FBA "In Transit" buckets.
+  -- Current day only. Excludes received shipments AND non-AWD shipments, so it does not
+  -- double-count with FBA/AWD (received) or MFR Ready (still at manufacturer).
+  SELECT
+    CURRENT_DATE() AS Date,
+    po.product_asin AS ASIN,
+    SUM(sl.quantity_shipped) AS quantity_balance,
+    'In Transit AWD' AS source_type,
+    CAST(NULL AS FLOAT64) AS cogs_amount,
+    CAST(NULL AS FLOAT64) AS sell_amount,
+    CAST(NULL AS FLOAT64) AS paid_amount
+  FROM `onyga-482313.OI.DE_SHIPMENT_LINES` sl
+  JOIN `onyga-482313.OI.DE_PURCHASE_ORDERS` po ON po.purchase_order_id = sl.purchase_order_id
+  JOIN `onyga-482313.OI.DE_MANUFACTURER_SHIPMENTS` s ON s.shipment_id = sl.shipment_id
+  WHERE s.shipment_status = 'PENDING' AND po.product_asin IS NOT NULL
+    AND UPPER(s.tracking_number) LIKE '%AWD%'  -- destination warehouse = AWD (not an FBA FC code)
+  GROUP BY po.product_asin;
 
   -- Insert data ensuring rows per Date/ASIN (FBA, AWD, In Transit, MFR Ready, In Production)
   INSERT INTO `onyga-482313.OI.FACT_INVENTORY_SNAPSHOT` (
@@ -120,6 +145,7 @@ BEGIN
     SELECT 'FBA' AS source_type UNION ALL
     SELECT 'AWD' UNION ALL
     SELECT 'In Transit' UNION ALL
+    SELECT 'In Transit AWD' UNION ALL
     SELECT 'MFR Ready' UNION ALL
     SELECT 'In Production'
   ),

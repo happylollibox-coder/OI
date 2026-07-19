@@ -36,8 +36,8 @@ BEGIN
       Reporting_Date AS ob_date,
       
       -- Week boundaries
-      DATE_TRUNC(Reporting_Date, WEEK(MONDAY)) AS week_start_date,
-      DATE_ADD(DATE_TRUNC(Reporting_Date, WEEK(MONDAY)), INTERVAL 6 DAY) AS week_end_date,
+      DATE_TRUNC(Reporting_Date, WEEK(SUNDAY)) AS week_start_date,
+      DATE_ADD(DATE_TRUNC(Reporting_Date, WEEK(SUNDAY)), INTERVAL 6 DAY) AS week_end_date,
       
       -- Performance Metrics
       Impressions_ASIN_Count AS impressions,

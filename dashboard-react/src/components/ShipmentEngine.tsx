@@ -198,9 +198,10 @@ export function useShipmentHistory() {
           const eta = String(r['ShipmentLineDashboard.estimatedArrivalDate'] ?? '').split('T')[0];
           const shipDate = String(r['ShipmentLineDashboard.shipmentDate'] ?? '').split('T')[0];
           if (!product || qty <= 0) continue;
-          // Classify as arrived if status says so, OR if ETA has already passed (stale PENDING)
-          const etaPassed = eta && eta <= new Date().toISOString().split('T')[0];
-          if (['PUT_AWAY', 'RECEIVED', 'INSPECTED'].includes(status) || etaPassed) {
+          // Arrival is user-confirmed only — status must be one of the received states.
+          // ETA passing no longer implies arrival (a past-ETA shipment stays "in transit"
+          // until someone marks it received).
+          if (['PUT_AWAY', 'RECEIVED', 'INSPECTED'].includes(status)) {
             arr.push({ product, type, qty, date: shipDate });
           } else {
             trans.push({ product, type, qty, eta, ship_date: shipDate });

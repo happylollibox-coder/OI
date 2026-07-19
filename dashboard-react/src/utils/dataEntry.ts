@@ -68,6 +68,31 @@ export interface EscalationActionInput {
   snooze_days?: number;
 }
 
+// Coacher Weekly Run — one row per current-week family + workflow status.
+export interface WeeklyRunRow {
+  parent_name: string;
+  week_start: string;
+  status: 'PENDING' | 'APPROVED' | 'DONE';
+  approved_at: string | null;
+  done_at: string | null;
+  note: string | null;
+  cells: number;
+  scale_cells: number;
+  planned_spend: number;
+  forward_ads_net: number | null;
+  purposes: string;
+  has_escalation: boolean;
+  escalation_severity: string | null;
+  escalation_net: number | null;
+  opportunity_score: number;
+}
+export interface WeeklyRunActionInput {
+  parent_name: string;
+  week_start: string;
+  note?: string;
+  actions_queued?: number;
+}
+
 export interface CreateShipmentInput {
   shipment_date: string;
   shipment_type: string;
@@ -170,6 +195,15 @@ export const dataEntry = {
   },
   postEscalationAction: (b: EscalationActionInput) =>
     json<{ success: boolean }>('/api/coach/escalation-action', { method: 'POST', body: JSON.stringify(b) }),
+  // Coacher Weekly Run — family-by-family workflow (served fresh by Flask).
+  getWeeklyRun: async (): Promise<WeeklyRunRow[]> => {
+    const r = await json<{ success?: boolean; data?: WeeklyRunRow[] }>('/api/coach/weekly-run', { method: 'GET' });
+    return Array.isArray(r) ? r : (r.data ?? []);
+  },
+  approveWeeklyRun: (b: WeeklyRunActionInput) =>
+    json<{ success: boolean }>('/api/coach/weekly-run/approve', { method: 'POST', body: JSON.stringify(b) }),
+  doneWeeklyRun: (b: WeeklyRunActionInput) =>
+    json<{ success: boolean }>('/api/coach/weekly-run/done', { method: 'POST', body: JSON.stringify(b) }),
   bulkCreateShipmentPayments: (b: {
     shipment_ids: string[];
     amounts: number[];

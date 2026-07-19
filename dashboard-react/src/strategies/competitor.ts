@@ -1,12 +1,14 @@
 import { Sword } from 'lucide-react';
 import type { StrategyMeta } from './types';
 
-export const COMPETITOR_CONQUEST: StrategyMeta = {
-  id: 'COMPETITOR_CONQUEST',
-  label: 'Competitor Conquest',
+// COMPETITOR — renamed from COMPETITOR_CONQUEST on 2026-07-17, and absorbed CATEGORY_CONQUEST, whose
+// campaigns were doing ASIN conquest rather than category targeting despite the name.
+export const COMPETITOR: StrategyMeta = {
+  id: 'COMPETITOR',
+  label: 'Competitor',
   icon: Sword,
   color: '#ef4444',
-  goal: 'Target competitor brand terms and product listings to capture their traffic.',
+  goal: 'Target competitor brand terms, product listings and categories to capture their traffic.',
   expectedOutcome: 'Win clicks from competitor searches. Expect lower conv rate than brand/exact (3-8%) but new customer acquisition.',
   keyMetrics: ['Clicks on competitor terms', 'Conv rate vs baseline', 'Cost per acquisition', 'ROAS'],
   chartMeasureIds: ['conv_rate', 'net_roas', 'orders', 'spend'],

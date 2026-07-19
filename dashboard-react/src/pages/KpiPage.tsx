@@ -168,7 +168,7 @@ function saveSpecials(ids: SpecialCardId[]) {
 }
 
 /* ── Measure card types ── */
-type MeasureCardId = 'pnl_total' | 'pnl_per_unit' | 'daily_avg' | 'plan' | 'plan_trend' | 'ppc';
+export type MeasureCardId = 'pnl_total' | 'pnl_per_unit' | 'daily_avg' | 'plan' | 'plan_trend' | 'ppc';
 
 interface MeasureCardDef {
   id: MeasureCardId;
@@ -2848,7 +2848,7 @@ function SortableParetoCard({ def, items, isSqp, isProduct, isUnits, isCpcBucket
    Measures Section — P&L per Unit, Daily Averages, Stock
    ═══════════════════════════════════════════════════════════════════ */
 
-function MeasuresSection({ data, family, product, currentPeriod, periodMode, periodType, measureIds }: {
+export function MeasuresSection({ data, family, product, currentPeriod, periodMode, periodType, measureIds }: {
   data: DashboardData; family: string | null; product: string | null; currentPeriod: string; periodMode: string; periodType: string; measureIds: MeasureCardId[];
 }) {
   const measures = useMemo(() => {

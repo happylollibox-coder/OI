@@ -421,6 +421,7 @@ ads_8w AS (
     SUM(fa.Ads_clicks) as ads_clicks_8w,
     SUM(fa.Ads_impressions) as ads_impressions_8w,
     SUM(fa.Ads_sales) as ads_sales_8w,
+    SUM(fa.GROSS_PROFIT) as ads_gp_8w,
     COUNT(DISTINCT fa.date) as ads_days_8w,
     MIN(fa.date) as first_seen_8w,
     MAX(fa.date) as last_seen_8w,
@@ -467,7 +468,8 @@ ads_1w AS (
     SUM(fa.Ads_units) as ads_units_1w,
     SUM(fa.Ads_clicks) as ads_clicks_1w,
     SUM(fa.Ads_impressions) as ads_impressions_1w,
-    SUM(fa.Ads_sales) as ads_sales_1w
+    SUM(fa.Ads_sales) as ads_sales_1w,
+    SUM(fa.GROSS_PROFIT) as ads_gp_1w
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY)
                      AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
@@ -487,7 +489,8 @@ ads_4w AS (
     SUM(fa.Ads_orders) as ads_orders_4w,
     SUM(fa.Ads_units) as ads_units_4w,
     SUM(fa.Ads_clicks) as ads_clicks_4w,
-    SUM(fa.Ads_sales) as ads_sales_4w
+    SUM(fa.Ads_sales) as ads_sales_4w,
+    SUM(fa.GROSS_PROFIT) as ads_gp_4w
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY)
                      AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
@@ -510,12 +513,27 @@ target_rollup AS (
     SUM(ads_clicks_8w) as target_clicks_8w,
     SUM(ads_impressions_8w) as target_impressions_8w,
     SUM(ads_sales_8w) as target_sales_8w,
+    SUM(ads_gp_8w) as target_gp_8w,
     COUNT(DISTINCT search_term) as target_search_term_count,
     SUM(ads_clicks_recent_5d) as target_clicks_recent_5d,
     -- Latest keyword status for this target (take the most recent non-null status)
     ANY_VALUE(ad_keyword_status HAVING MAX last_seen_8w) as target_keyword_status
   FROM ads_8w
   GROUP BY 1, 2, 3, 4
+),
+
+-- 12-MONTH clicks per KEYWORD TEXT (targeting), across all campaigns/keyword-ids — the DATA-SUFFICIENCY
+-- signal ("do we know this keyword?"). Keyed on the text, not keyword_id, because ids churn on
+-- restructures and would undercount a keyword's real history. A proven-but-off-season keyword (e.g. a
+-- seasonal winner quiet in the trailing 8w) still clears the gate here, so it's never mislabelled
+-- "insufficient data" — the recent windows (1w/4w) decide what to DO, this only decides IF we can decide.
+target_12mo AS (
+  SELECT LOWER(targeting) AS targeting_lc,
+    SUM(Ads_clicks) AS term_clicks_12mo
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+  WHERE date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 365 DAY)
+    AND targeting IS NOT NULL AND targeting != ''
+  GROUP BY 1
 ),
 
 -- Target rollup 1w: for weighted ROAS at target level
@@ -525,7 +543,8 @@ target_rollup_1w AS (
     SUM(ads_spend_1w) as target_spend_1w,
     SUM(ads_orders_1w) as target_orders_1w,
     SUM(ads_units_1w) as target_units_1w,
-    SUM(ads_sales_1w) as target_sales_1w
+    SUM(ads_sales_1w) as target_sales_1w,
+    SUM(ads_gp_1w) as target_gp_1w
   FROM ads_1w
   GROUP BY 1, 2, 3
 ),
@@ -538,7 +557,8 @@ target_rollup_4w AS (
     SUM(ads_orders_4w) as target_orders_4w,
     SUM(ads_clicks_4w) as target_clicks_4w,
     SUM(ads_units_4w) as target_units_4w,
-    SUM(ads_sales_4w) as target_sales_4w
+    SUM(ads_sales_4w) as target_sales_4w,
+    SUM(ads_gp_4w) as target_gp_4w
   FROM ads_4w
   GROUP BY 1, 2, 3
 ),
@@ -551,7 +571,7 @@ clause_rollup_4w AS (
     SUM(a4.ads_clicks_4w) as clause_clicks_4w,
     SUM(a4.ads_orders_4w) as clause_orders_4w,
     SUM(a4.ads_spend_4w) as clause_spend_4w,
-    SUM(COALESCE(ae.margin_per_unit, 0) * COALESCE(a4.ads_units_4w, 0)) as clause_net_profit_4w
+    SUM(COALESCE(a4.ads_gp_4w, 0)) as clause_net_profit_4w
   FROM ads_4w a4
   JOIN asin_economics ae ON a4.asin = ae.asin
   GROUP BY 1, 2
@@ -567,7 +587,8 @@ target_rollup_lag AS (
     SUM(fa.Ads_cost) as target_lag_spend,
     SUM(fa.Ads_orders) as target_lag_orders,
     SUM(fa.Ads_units) as target_lag_units,
-    SUM(fa.Ads_sales) as target_lag_sales
+    SUM(fa.Ads_sales) as target_lag_sales,
+    SUM(fa.GROSS_PROFIT) as target_lag_gp
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   LEFT JOIN (
     SELECT keyword_id, keyword_text FROM (
@@ -595,7 +616,8 @@ ads_lag AS (
     SUM(fa.Ads_cost) as lag_spend,
     SUM(fa.Ads_orders) as lag_orders,
     SUM(fa.Ads_units) as lag_units,
-    SUM(fa.Ads_sales) as lag_sales
+    SUM(fa.Ads_sales) as lag_sales,
+    SUM(fa.GROSS_PROFIT) as lag_gp
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   LEFT JOIN (
     SELECT keyword_id, keyword_text FROM (
@@ -624,7 +646,8 @@ ads_3d AS (
     SUM(fa.Ads_orders) as ads_orders_3d,
     SUM(fa.Ads_units) as ads_units_3d,
     SUM(fa.Ads_clicks) as ads_clicks_3d,
-    SUM(fa.Ads_sales) as ads_sales_3d
+    SUM(fa.Ads_sales) as ads_sales_3d,
+    SUM(fa.GROSS_PROFIT) as ads_gp_3d
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 3 DAY)
                      AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
@@ -644,7 +667,8 @@ ads_14d AS (
     SUM(fa.Ads_orders) as ads_orders_14d,
     SUM(fa.Ads_units) as ads_units_14d,
     SUM(fa.Ads_clicks) as ads_clicks_14d,
-    SUM(fa.Ads_sales) as ads_sales_14d
+    SUM(fa.Ads_sales) as ads_sales_14d,
+    SUM(fa.GROSS_PROFIT) as ads_gp_14d
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
                      AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
@@ -668,17 +692,20 @@ ads_offseason AS (
     SUM(fa.Ads_orders) as os_orders_8w,
     SUM(fa.Ads_units) as os_units_8w,
     SUM(fa.Ads_sales) as os_sales_8w,
+    SUM(fa.GROSS_PROFIT) as os_gp_8w,
     SUM(fa.Ads_clicks) as os_clicks_8w,
     -- 4w off-season
     SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_4w,
     SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_4w,
     SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_4w,
     SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_4w,
     -- 1w off-season
     SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_1w,
     SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_1w,
     SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_1w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_1w
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_1w
 
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   -- Keyword text lookup for SBV campaigns
@@ -710,14 +737,17 @@ target_rollup_offseason AS (
     SUM(os_orders_8w) as target_os_orders_8w,
     SUM(os_units_8w) as target_os_units_8w,
     SUM(os_sales_8w) as target_os_sales_8w,
+    SUM(os_gp_8w) as target_os_gp_8w,
     SUM(os_spend_4w) as target_os_spend_4w,
     SUM(os_orders_4w) as target_os_orders_4w,
     SUM(os_units_4w) as target_os_units_4w,
     SUM(os_sales_4w) as target_os_sales_4w,
+    SUM(os_gp_4w) as target_os_gp_4w,
     SUM(os_spend_1w) as target_os_spend_1w,
     SUM(os_orders_1w) as target_os_orders_1w,
     SUM(os_units_1w) as target_os_units_1w,
-    SUM(os_sales_1w) as target_os_sales_1w
+    SUM(os_sales_1w) as target_os_sales_1w,
+    SUM(os_gp_1w) as target_os_gp_1w
   FROM ads_offseason
   GROUP BY 1, 2, 3
 ),
@@ -749,6 +779,7 @@ ads_lifetime AS (
     SUM(fa.Ads_units) as lt_units,
     SUM(fa.Ads_clicks) as lt_clicks,
     SUM(fa.Ads_sales) as lt_sales,
+    SUM(fa.GROSS_PROFIT) as lt_gp,
     COUNT(DISTINCT fa.date) as lt_days,
     MIN(fa.date) as lt_first_seen,
     MAX(fa.date) as lt_last_seen
@@ -768,7 +799,8 @@ ads_ly_peak AS (
     SUM(fa.Ads_units) as ly_units,
     SUM(fa.Ads_clicks) as ly_clicks,
     SUM(fa.Ads_impressions) as ly_impressions,
-    SUM(fa.Ads_sales) as ly_sales
+    SUM(fa.Ads_sales) as ly_sales,
+    SUM(fa.GROSS_PROFIT) as ly_gp
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   CROSS JOIN ly_holiday lyh
   WHERE fa.date >= lyh.pre_season_start AND fa.date <= lyh.holiday_date
@@ -791,6 +823,7 @@ ads_ty_14d AS (
     SUM(fa.Ads_orders) as ty14_orders,
     SUM(fa.Ads_units) as ty14_units,
     SUM(fa.Ads_sales) as ty14_sales,
+    SUM(fa.GROSS_PROFIT) as ty14_gp,
     SUM(fa.Ads_clicks) as ty14_clicks
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
@@ -809,6 +842,7 @@ ads_last_peak AS (
     SUM(fa.Ads_orders) as lp_orders,
     SUM(fa.Ads_units) as lp_units,
     SUM(fa.Ads_sales) as lp_sales,
+    SUM(fa.GROSS_PROFIT) as lp_gp,
     SUM(fa.Ads_clicks) as lp_clicks
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   CROSS JOIN last_completed_peak lcp
@@ -827,6 +861,7 @@ ads_ly_same_holiday AS (
     SUM(fa.Ads_orders) as lysh_orders,
     SUM(fa.Ads_units) as lysh_units,
     SUM(fa.Ads_sales) as lysh_sales,
+    SUM(fa.GROSS_PROFIT) as lysh_gp,
     SUM(fa.Ads_clicks) as lysh_clicks
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   CROSS JOIN ly_same_holiday_peak lyshp
@@ -869,6 +904,12 @@ q4_seasonal_detection AS (
         AND h.holiday_name IN ('Black Friday', 'Cyber Monday', 'Christmas')
         AND fa.date BETWEEN h.boost_start AND h.cooldown_start
     ) THEN fa.Ads_units ELSE 0 END) as q4_units,
+    SUM(CASE WHEN EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND h.holiday_name IN ('Black Friday', 'Cyber Monday', 'Christmas')
+        AND fa.date BETWEEN h.boost_start AND h.cooldown_start
+    ) THEN fa.GROSS_PROFIT ELSE 0 END) as q4_gp,
     -- Off-season metrics (NOT in any BOOST+PEAK of any gift_season holiday)
     SUM(CASE WHEN NOT EXISTS (
       SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
@@ -884,7 +925,12 @@ q4_seasonal_detection AS (
       SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
       WHERE h.category = 'gift_season'
         AND fa.date BETWEEN h.boost_start AND h.cooldown_end
-    ) THEN fa.Ads_sales ELSE 0 END) as os_sales
+    ) THEN fa.Ads_sales ELSE 0 END) as os_sales,
+    SUM(CASE WHEN NOT EXISTS (
+      SELECT 1 FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h
+      WHERE h.category = 'gift_season'
+        AND fa.date BETWEEN h.boost_start AND h.cooldown_end
+    ) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   WHERE fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 18 MONTH)
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
@@ -899,7 +945,8 @@ target_rollup_hotseason AS (
     SUM(t14.ty14_spend) as target_ty14_spend,
     SUM(t14.ty14_orders) as target_ty14_orders,
     SUM(t14.ty14_units) as target_ty14_units,
-    SUM(t14.ty14_sales) as target_ty14_sales
+    SUM(t14.ty14_sales) as target_ty14_sales,
+    SUM(t14.ty14_gp) as target_ty14_gp
   FROM ads_ty_14d t14
   GROUP BY 1, 2
 ),
@@ -910,7 +957,8 @@ target_rollup_last_peak AS (
     SUM(lp_spend) as target_lp_spend,
     SUM(lp_orders) as target_lp_orders,
     SUM(lp_units) as target_lp_units,
-    SUM(lp_sales) as target_lp_sales
+    SUM(lp_sales) as target_lp_sales,
+    SUM(lp_gp) as target_lp_gp
   FROM ads_last_peak
   GROUP BY 1, 2
 ),
@@ -1111,14 +1159,29 @@ probe_state AS (   -- active probe per keyword (graduated/exhausted ones drop ou
   SELECT keyword_id, status AS probe_status
   FROM `onyga-482313.OI.DE_PROBE_LOG` WHERE status = 'ACTIVE'
 ),
-wk_plan AS (   -- this week's plan target per cell (Coacher D) → so each action explains its week target
-  SELECT parent_name, season, match_type, intent_class,
+wk_plan AS (   -- this week's plan target per cell (Coacher D) → so each action explains its week target.
+  -- Per-format grain (campaign_type × ad_format) so a keyword picks up ITS format slice's purpose.
+  SELECT parent_name, season, match_type, intent_class, campaign_type, ad_format,
          ANY_VALUE(purpose) AS purpose, ANY_VALUE(objective) AS objective,
          ANY_VALUE(success_metric) AS success_metric, ANY_VALUE(expected_value) AS expected_value
   FROM `onyga-482313.OI.DE_WEEKLY_PLAN`
   WHERE horizon = 'CURRENT'
-    AND week_start = DATE_TRUNC(CURRENT_DATE('America/Los_Angeles'), WEEK(MONDAY))
-  GROUP BY parent_name, season, match_type, intent_class
+    AND week_start = DATE_TRUNC(CURRENT_DATE('America/Los_Angeles'), WEEK(SUNDAY))
+  GROUP BY parent_name, season, match_type, intent_class, campaign_type, ad_format
+),
+sb_ad_creative AS (   -- SB ad-group -> creative_type (unique per ad group); mirrors the ad_format
+  -- grain in DE_PRODUCT_STRATEGY_PROFILE so a keyword resolves to its own format's band.
+  SELECT ad_group_id,
+    -- fall back to the campaign name when the source creative_type is NULL (some SB video campaigns
+    -- don't populate it, e.g. FRESH-VIDEO/EXACT). '%VIDEO%' in the name is always video (validated).
+    COALESCE(
+      MAX(creative_type),
+      CASE WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%VIDEO%'      THEN 'BRAND_VIDEO'
+           WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%COLLECTION%' THEN 'PRODUCT_COLLECTION' END
+    ) AS creative_type
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_sb_ad_report`
+  WHERE cost > 0
+  GROUP BY ad_group_id
 ),
 
 -- =============================================
@@ -1134,6 +1197,9 @@ active_term_data AS (
     a8.ad_group_id,
     a8.campaign_name,
     a8.campaign_type,
+    -- ad_format: SB creative type (BRAND_VIDEO / PRODUCT_COLLECTION / …); SP → 'NA'. Mirrors the
+    -- DE_PRODUCT_STRATEGY_PROFILE grain so each keyword picks up its own format-specific band.
+    CASE WHEN a8.campaign_type = 'SB' THEN COALESCE(sbc.creative_type, 'NA') ELSE 'NA' END as ad_format,
     a8.portfolio_name,
     a8.asin,
     ae.product_short_name,
@@ -1167,13 +1233,12 @@ active_term_data AS (
     ROUND(SAFE_DIVIDE(a8.ads_spend_8w, NULLIF(a8.ads_clicks_8w, 0)), 2) as ads_cpc_8w,
     ROUND(SAFE_DIVIDE(a8.ads_orders_8w, NULLIF(a8.ads_clicks_8w, 0)) * 100, 2) as ads_cvr_pct_8w,
     ROUND(SAFE_DIVIDE(a8.ads_spend_8w, NULLIF(a8.ads_orders_8w, 0)), 2) as ads_cost_per_order_8w,
+    -- Profit numerators = actual GROSS_PROFIT (sales − landed cost, price-aware) from FACT_AMAZON_ADS
     ROUND(
-      COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * a8.ads_units_8w - a8.ads_spend_8w,
+      COALESCE(a8.ads_gp_8w, 0) - a8.ads_spend_8w,
     2) as ads_net_profit_8w,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * a8.ads_units_8w,
+      COALESCE(a8.ads_gp_8w, 0),
       NULLIF(a8.ads_spend_8w, 0)
     ), 2) as ads_net_roas_8w,
 
@@ -1184,8 +1249,7 @@ active_term_data AS (
     COALESCE(a1.ads_clicks_1w, 0) as ads_clicks_1w,
     COALESCE(a1.ads_impressions_1w, 0) as ads_impressions_1w,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a1.ads_sales_1w, NULLIF(a1.ads_orders_1w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * COALESCE(a1.ads_units_1w, 0),
+      COALESCE(a1.ads_gp_1w, 0),
       NULLIF(COALESCE(a1.ads_spend_1w, 0), 0)
     ), 2) as ads_net_roas_1w,
 
@@ -1195,8 +1259,7 @@ active_term_data AS (
     COALESCE(a4.ads_units_4w, 0) as ads_units_4w,
     COALESCE(a4.ads_clicks_4w, 0) as ads_clicks_4w,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a4.ads_sales_4w, NULLIF(a4.ads_orders_4w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * COALESCE(a4.ads_units_4w, 0),
+      COALESCE(a4.ads_gp_4w, 0),
       NULLIF(COALESCE(a4.ads_spend_4w, 0), 0)
     ), 2) as ads_net_roas_4w,
 
@@ -1207,36 +1270,30 @@ active_term_data AS (
         WHEN COALESCE(a1.ads_spend_1w, 0) > 0 AND COALESCE(a4.ads_spend_4w, 0) > 0
         THEN
           SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a1.ads_sales_1w, NULLIF(a1.ads_orders_1w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * COALESCE(a1.ads_units_1w, 0),
+            COALESCE(a1.ads_gp_1w, 0),
             NULLIF(COALESCE(a1.ads_spend_1w, 0), 0)
           ) * 0.5
           + SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a4.ads_sales_4w, NULLIF(a4.ads_orders_4w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * COALESCE(a4.ads_units_4w, 0),
+            COALESCE(a4.ads_gp_4w, 0),
             NULLIF(COALESCE(a4.ads_spend_4w, 0), 0)
           ) * 0.3
           + SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * a8.ads_units_8w,
+            COALESCE(a8.ads_gp_8w, 0),
             NULLIF(a8.ads_spend_8w, 0)
           ) * 0.2
         WHEN COALESCE(a1.ads_spend_1w, 0) = 0 AND COALESCE(a4.ads_spend_4w, 0) > 0
         THEN
           SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a4.ads_sales_4w, NULLIF(a4.ads_orders_4w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * COALESCE(a4.ads_units_4w, 0),
+            COALESCE(a4.ads_gp_4w, 0),
             NULLIF(COALESCE(a4.ads_spend_4w, 0), 0)
           ) * 0.625
           + SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * a8.ads_units_8w,
+            COALESCE(a8.ads_gp_8w, 0),
             NULLIF(a8.ads_spend_8w, 0)
           ) * 0.375
         ELSE
           SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-              * a8.ads_units_8w,
+            COALESCE(a8.ads_gp_8w, 0),
             NULLIF(a8.ads_spend_8w, 0)
           )
       END
@@ -1249,8 +1306,7 @@ active_term_data AS (
     COALESCE(a3.ads_orders_3d, 0) as ads_orders_3d,
     COALESCE(a3.ads_units_3d, 0) as ads_units_3d,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a3.ads_sales_3d, NULLIF(a3.ads_orders_3d, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * COALESCE(a3.ads_units_3d, 0),
+      COALESCE(a3.ads_gp_3d, 0),
       NULLIF(COALESCE(a3.ads_spend_3d, 0), 0)
     ), 2) as ads_net_roas_3d,
 
@@ -1258,8 +1314,7 @@ active_term_data AS (
     ROUND(COALESCE(a14.ads_spend_14d, 0), 2) as ads_spend_14d,
     COALESCE(a14.ads_orders_14d, 0) as ads_orders_14d,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a14.ads_sales_14d, NULLIF(a14.ads_orders_14d, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * COALESCE(a14.ads_units_14d, 0),
+      COALESCE(a14.ads_gp_14d, 0),
       NULLIF(COALESCE(a14.ads_spend_14d, 0), 0)
     ), 2) as ads_net_roas_14d,
 
@@ -1270,19 +1325,22 @@ active_term_data AS (
     COALESCE(tr.target_spend_8w, a8.ads_spend_8w) as target_spend_8w,
     COALESCE(tr.target_orders_8w, a8.ads_orders_8w) as target_orders_8w,
     COALESCE(tr.target_clicks_8w, a8.ads_clicks_8w) as target_clicks_8w,
+    -- 12-month clicks for this keyword text (data-sufficiency gate); falls back to the 8w target clicks
+    -- when there's no text match (e.g. product/auto targets) so we never gate on a missing lookup.
+    COALESCE(t12.term_clicks_12mo, tr.target_clicks_8w, a8.ads_clicks_8w) as term_clicks_12mo,
     COALESCE(tr.target_impressions_8w, a8.ads_impressions_8w) as target_impressions_8w,
     COALESCE(tr.target_search_term_count, 1) as target_search_term_count,
     COALESCE(tr.target_clicks_recent_5d, a8.ads_clicks_recent_5d) as target_clicks_recent_5d,
     -- Target keyword status: ENABLED/PAUSED/ARCHIVED (from latest FACT row)
     COALESCE(tr.target_keyword_status, UPPER(a8.ad_keyword_status)) as target_keyword_status,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_units_8w, a8.ads_units_8w),
+      COALESCE(tr.target_gp_8w, a8.ads_gp_8w, 0),
       NULLIF(COALESCE(tr.target_spend_8w, a8.ads_spend_8w), 0)
     ), 2) as target_net_roas_8w,
 
     -- Target 1w raw Net ROAS (for BLITZ BOOST target decisions)
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, 0) * COALESCE(tr1.target_units_1w, 0),
+      COALESCE(tr1.target_gp_1w, 0),
       NULLIF(COALESCE(tr1.target_spend_1w, 0), 0)
     ), 2) as target_net_roas_1w,
 
@@ -1293,30 +1351,30 @@ active_term_data AS (
         WHEN COALESCE(tr1.target_spend_1w, 0) > 0 AND COALESCE(tr4.target_spend_4w, 0) > 0
         THEN
           SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr1.target_units_1w, 0),
+            COALESCE(tr1.target_gp_1w, 0),
             NULLIF(COALESCE(tr1.target_spend_1w, 0), 0)
           ) * 0.5
           + SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr4.target_units_4w, 0),
+            COALESCE(tr4.target_gp_4w, 0),
             NULLIF(COALESCE(tr4.target_spend_4w, 0), 0)
           ) * 0.3
           + SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_units_8w, a8.ads_units_8w),
+            COALESCE(tr.target_gp_8w, a8.ads_gp_8w, 0),
             NULLIF(COALESCE(tr.target_spend_8w, a8.ads_spend_8w), 0)
           ) * 0.2
         WHEN COALESCE(tr1.target_spend_1w, 0) = 0 AND COALESCE(tr4.target_spend_4w, 0) > 0
         THEN
           SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr4.target_units_4w, 0),
+            COALESCE(tr4.target_gp_4w, 0),
             NULLIF(COALESCE(tr4.target_spend_4w, 0), 0)
           ) * 0.625
           + SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_units_8w, a8.ads_units_8w),
+            COALESCE(tr.target_gp_8w, a8.ads_gp_8w, 0),
             NULLIF(COALESCE(tr.target_spend_8w, a8.ads_spend_8w), 0)
           ) * 0.375
         ELSE
           SAFE_DIVIDE(
-            COALESCE(ae.margin_per_unit, 0) * COALESCE(tr.target_units_8w, a8.ads_units_8w),
+            COALESCE(tr.target_gp_8w, a8.ads_gp_8w, 0),
             NULLIF(COALESCE(tr.target_spend_8w, a8.ads_spend_8w), 0)
           )
       END
@@ -1325,13 +1383,13 @@ active_term_data AS (
     -- ═══ Lag Window Safety Check (last 3 days excluded by 4-day lag) ═══
     -- If this ROAS is high, REDUCE_BID should be deferred to MONITOR
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, 0) * COALESCE(trl.target_lag_units, 0),
+      COALESCE(trl.target_lag_gp, 0),
       NULLIF(COALESCE(trl.target_lag_spend, 0), 0)
     ), 2) as target_lag_net_roas,
 
     -- Term-level lag ROAS (search_term grain) — safety check before NEGATE_TERM
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, 0) * COALESCE(alag.lag_units, 0),
+      COALESCE(alag.lag_gp, 0),
       NULLIF(COALESCE(alag.lag_spend, 0), 0)
     ), 2) as ads_lag_net_roas,
 
@@ -1340,7 +1398,7 @@ active_term_data AS (
 
     -- Search-term level off-season 1w Net ROAS (simple, no weighting)
     ROUND(SAFE_DIVIDE(
-      ae.margin_per_unit * COALESCE(aos.os_units_1w, 0),
+      COALESCE(aos.os_gp_1w, 0),
       NULLIF(COALESCE(aos.os_spend_1w, 0), 0)
     ), 2) as ads_net_roas_1w_os,
 
@@ -1350,21 +1408,21 @@ active_term_data AS (
         WHEN COALESCE(aos.os_spend_8w, 0) = 0 THEN NULL  -- no off-season data
         WHEN COALESCE(aos.os_spend_1w, 0) > 0 AND COALESCE(aos.os_spend_4w, 0) > 0
         THEN
-          SAFE_DIVIDE(ae.margin_per_unit * COALESCE(aos.os_units_1w, 0), NULLIF(aos.os_spend_1w, 0)) * 0.5
-          + SAFE_DIVIDE(ae.margin_per_unit * COALESCE(aos.os_units_4w, 0), NULLIF(aos.os_spend_4w, 0)) * 0.3
-          + SAFE_DIVIDE(ae.margin_per_unit * aos.os_units_8w, NULLIF(aos.os_spend_8w, 0)) * 0.2
+          SAFE_DIVIDE(COALESCE(aos.os_gp_1w, 0), NULLIF(aos.os_spend_1w, 0)) * 0.5
+          + SAFE_DIVIDE(COALESCE(aos.os_gp_4w, 0), NULLIF(aos.os_spend_4w, 0)) * 0.3
+          + SAFE_DIVIDE(COALESCE(aos.os_gp_8w, 0), NULLIF(aos.os_spend_8w, 0)) * 0.2
         WHEN COALESCE(aos.os_spend_1w, 0) = 0 AND COALESCE(aos.os_spend_4w, 0) > 0
         THEN
-          SAFE_DIVIDE(ae.margin_per_unit * COALESCE(aos.os_units_4w, 0), NULLIF(aos.os_spend_4w, 0)) * 0.625
-          + SAFE_DIVIDE(ae.margin_per_unit * aos.os_units_8w, NULLIF(aos.os_spend_8w, 0)) * 0.375
+          SAFE_DIVIDE(COALESCE(aos.os_gp_4w, 0), NULLIF(aos.os_spend_4w, 0)) * 0.625
+          + SAFE_DIVIDE(COALESCE(aos.os_gp_8w, 0), NULLIF(aos.os_spend_8w, 0)) * 0.375
         ELSE
-          SAFE_DIVIDE(ae.margin_per_unit * aos.os_units_8w, NULLIF(aos.os_spend_8w, 0))
+          SAFE_DIVIDE(COALESCE(aos.os_gp_8w, 0), NULLIF(aos.os_spend_8w, 0))
       END
     , 2) as ads_weighted_net_roas_offseason,
 
     -- Target level off-season 1w Net ROAS (simple, no weighting)
     ROUND(SAFE_DIVIDE(
-      ae.margin_per_unit * COALESCE(tros.target_os_units_1w, 0),
+      COALESCE(tros.target_os_gp_1w, 0),
       NULLIF(COALESCE(tros.target_os_spend_1w, 0), 0)
     ), 2) as target_net_roas_1w_os,
 
@@ -1374,15 +1432,15 @@ active_term_data AS (
         WHEN COALESCE(tros.target_os_spend_8w, 0) = 0 THEN NULL  -- no off-season data
         WHEN COALESCE(tros.target_os_spend_1w, 0) > 0 AND COALESCE(tros.target_os_spend_4w, 0) > 0
         THEN
-          SAFE_DIVIDE(ae.margin_per_unit * COALESCE(tros.target_os_units_1w, 0), NULLIF(tros.target_os_spend_1w, 0)) * 0.5
-          + SAFE_DIVIDE(ae.margin_per_unit * COALESCE(tros.target_os_units_4w, 0), NULLIF(tros.target_os_spend_4w, 0)) * 0.3
-          + SAFE_DIVIDE(ae.margin_per_unit * tros.target_os_units_8w, NULLIF(tros.target_os_spend_8w, 0)) * 0.2
+          SAFE_DIVIDE(COALESCE(tros.target_os_gp_1w, 0), NULLIF(tros.target_os_spend_1w, 0)) * 0.5
+          + SAFE_DIVIDE(COALESCE(tros.target_os_gp_4w, 0), NULLIF(tros.target_os_spend_4w, 0)) * 0.3
+          + SAFE_DIVIDE(COALESCE(tros.target_os_gp_8w, 0), NULLIF(tros.target_os_spend_8w, 0)) * 0.2
         WHEN COALESCE(tros.target_os_spend_1w, 0) = 0 AND COALESCE(tros.target_os_spend_4w, 0) > 0
         THEN
-          SAFE_DIVIDE(ae.margin_per_unit * COALESCE(tros.target_os_units_4w, 0), NULLIF(tros.target_os_spend_4w, 0)) * 0.625
-          + SAFE_DIVIDE(ae.margin_per_unit * tros.target_os_units_8w, NULLIF(tros.target_os_spend_8w, 0)) * 0.375
+          SAFE_DIVIDE(COALESCE(tros.target_os_gp_4w, 0), NULLIF(tros.target_os_spend_4w, 0)) * 0.625
+          + SAFE_DIVIDE(COALESCE(tros.target_os_gp_8w, 0), NULLIF(tros.target_os_spend_8w, 0)) * 0.375
         ELSE
-          SAFE_DIVIDE(ae.margin_per_unit * tros.target_os_units_8w, NULLIF(tros.target_os_spend_8w, 0))
+          SAFE_DIVIDE(COALESCE(tros.target_os_gp_8w, 0), NULLIF(tros.target_os_spend_8w, 0))
       END
     , 2) as target_weighted_net_roas_offseason,
 
@@ -1398,9 +1456,9 @@ active_term_data AS (
     ROUND(
       SAFE_DIVIDE(
         -- Sum of available component ROAS values
-        COALESCE(SAFE_DIVIDE(ae.margin_per_unit * t14.ty14_units, NULLIF(t14.ty14_spend, 0)), 0)
-        + COALESCE(SAFE_DIVIDE(ae.margin_per_unit * lysh.lysh_units, NULLIF(lysh.lysh_spend, 0)), 0)
-        + COALESCE(SAFE_DIVIDE(ae.margin_per_unit * alp.lp_units, NULLIF(alp.lp_spend, 0)), 0),
+        COALESCE(SAFE_DIVIDE(COALESCE(t14.ty14_gp, 0), NULLIF(t14.ty14_spend, 0)), 0)
+        + COALESCE(SAFE_DIVIDE(COALESCE(lysh.lysh_gp, 0), NULLIF(lysh.lysh_spend, 0)), 0)
+        + COALESCE(SAFE_DIVIDE(COALESCE(alp.lp_gp, 0), NULLIF(alp.lp_spend, 0)), 0),
         -- Number of components that had data (denominator)
         NULLIF(
           CASE WHEN t14.ty14_spend > 0 THEN 1 ELSE 0 END
@@ -1413,9 +1471,9 @@ active_term_data AS (
     -- Target level hot-season ROAS
     ROUND(
       SAFE_DIVIDE(
-        COALESCE(SAFE_DIVIDE(ae.margin_per_unit * trh.target_ty14_units, NULLIF(trh.target_ty14_spend, 0)), 0)
-        + COALESCE(SAFE_DIVIDE(ae.margin_per_unit * lysh.lysh_units, NULLIF(lysh.lysh_spend, 0)), 0)
-        + COALESCE(SAFE_DIVIDE(ae.margin_per_unit * trlp.target_lp_units, NULLIF(trlp.target_lp_spend, 0)), 0),
+        COALESCE(SAFE_DIVIDE(COALESCE(trh.target_ty14_gp, 0), NULLIF(trh.target_ty14_spend, 0)), 0)
+        + COALESCE(SAFE_DIVIDE(COALESCE(lysh.lysh_gp, 0), NULLIF(lysh.lysh_spend, 0)), 0)
+        + COALESCE(SAFE_DIVIDE(COALESCE(trlp.target_lp_gp, 0), NULLIF(trlp.target_lp_spend, 0)), 0),
         NULLIF(
           CASE WHEN trh.target_ty14_spend > 0 THEN 1 ELSE 0 END
           + CASE WHEN lysh.lysh_spend > 0 THEN 1 ELSE 0 END
@@ -1429,14 +1487,14 @@ active_term_data AS (
     COALESCE(q4s.q4_orders, 0) as q4_peak_orders,
     COALESCE(q4s.q4_units, 0) as q4_peak_units,
     ROUND(COALESCE(q4s.q4_spend, 0), 2) as q4_peak_spend,
-    ROUND(SAFE_DIVIDE(ae.margin_per_unit * q4s.q4_orders, NULLIF(q4s.q4_spend, 0)), 2) as q4_peak_net_roas,
+    ROUND(SAFE_DIVIDE(COALESCE(q4s.q4_gp, 0), NULLIF(q4s.q4_spend, 0)), 2) as q4_peak_net_roas,
     COALESCE(q4s.os_orders, 0) as q4_os_orders,
     ROUND(COALESCE(q4s.os_spend, 0), 2) as q4_os_spend,
-    ROUND(SAFE_DIVIDE(ae.margin_per_unit * q4s.os_orders, NULLIF(q4s.os_spend, 0)), 2) as q4_os_net_roas,
+    ROUND(SAFE_DIVIDE(COALESCE(q4s.os_gp, 0), NULLIF(q4s.os_spend, 0)), 2) as q4_os_net_roas,
     -- Auto-detection flag: q4_roas > 1.2 AND os_roas < 0.7 AND q4_orders >= 3
     CASE WHEN q4s.q4_orders >= 3
-      AND SAFE_DIVIDE(ae.margin_per_unit * q4s.q4_orders, NULLIF(q4s.q4_spend, 0)) > 1.2
-      AND COALESCE(SAFE_DIVIDE(ae.margin_per_unit * q4s.os_orders, NULLIF(q4s.os_spend, 0)), 0) < 0.7
+      AND SAFE_DIVIDE(COALESCE(q4s.q4_gp, 0), NULLIF(q4s.q4_spend, 0)) > 1.2
+      AND COALESCE(SAFE_DIVIDE(COALESCE(q4s.os_gp, 0), NULLIF(q4s.os_spend, 0)), 0) < 0.7
       THEN TRUE ELSE FALSE
     END as is_q4_seasonal,
 
@@ -1471,8 +1529,7 @@ active_term_data AS (
     lt.lt_first_seen,
     lt.lt_last_seen,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, SAFE_DIVIDE(a8.ads_sales_8w, NULLIF(a8.ads_orders_8w, 0)) - COALESCE(ae.total_cost_per_unit, 0))
-        * COALESCE(lt.lt_units, a8.ads_units_8w),
+      COALESCE(lt.lt_gp, a8.ads_gp_8w, 0),
       NULLIF(COALESCE(lt.lt_spend, a8.ads_spend_8w), 0)
     ), 2) as lt_net_roas,
 
@@ -1485,7 +1542,7 @@ active_term_data AS (
     ROUND(SAFE_DIVIDE(COALESCE(lyp.ly_spend, 0), NULLIF(COALESCE(lyp.ly_clicks, 0), 0)), 2) as ly_cpc,
     ROUND(SAFE_DIVIDE(COALESCE(lyp.ly_orders, 0), NULLIF(COALESCE(lyp.ly_clicks, 0), 0)) * 100, 2) as ly_cvr_pct,
     ROUND(SAFE_DIVIDE(
-      COALESCE(ae.margin_per_unit, 0) * COALESCE(lyp.ly_units, 0),
+      COALESCE(lyp.ly_gp, 0),
       NULLIF(COALESCE(lyp.ly_spend, 0), 0)
     ), 2) as ly_net_roas,
 
@@ -1596,14 +1653,27 @@ active_term_data AS (
     -- Profile: one row per (parent × season × match_type) from DE_PRODUCT_STRATEGY_PROFILE.
     -- Join is many-to-one → never multiplies rows.
     COALESCE(fs.profile_season, 'OFF') as profile_season,
-    psp.enabled        as profile_enabled,
-    psp.cpc_target     as profile_cpc_target,
-    psp.cpc_min        as profile_cpc_min,
-    psp.cpc_max        as profile_cpc_max,
-    psp.confidence     as profile_confidence,
-    psp.source         as profile_source,
-    -- profile_steers = true when the evidence is conclusive or the user set it manually
-    (psp.source IN ('MANUAL','BORROWED') OR psp.confidence = 'CONCLUSIVE') as profile_steers,
+    -- Effective band: prefer the format-specific (fine) row when ITS evidence steers, else fall back
+    -- to the pooled coarse (ALL/ALL) row — so a keyword only gets a format-specific band where that
+    -- format has conclusive proof, and never loses its band otherwise. (pspf = fine, psp = coarse.)
+    CASE WHEN COALESCE(pspf.source IN ('MANUAL','BORROWED') OR pspf.confidence = 'CONCLUSIVE', FALSE)
+         THEN pspf.enabled    ELSE psp.enabled    END as profile_enabled,
+    CASE WHEN COALESCE(pspf.source IN ('MANUAL','BORROWED') OR pspf.confidence = 'CONCLUSIVE', FALSE)
+         THEN pspf.cpc_target ELSE psp.cpc_target END as profile_cpc_target,
+    CASE WHEN COALESCE(pspf.source IN ('MANUAL','BORROWED') OR pspf.confidence = 'CONCLUSIVE', FALSE)
+         THEN pspf.cpc_min    ELSE psp.cpc_min    END as profile_cpc_min,
+    CASE WHEN COALESCE(pspf.source IN ('MANUAL','BORROWED') OR pspf.confidence = 'CONCLUSIVE', FALSE)
+         THEN pspf.cpc_max    ELSE psp.cpc_max    END as profile_cpc_max,
+    CASE WHEN COALESCE(pspf.source IN ('MANUAL','BORROWED') OR pspf.confidence = 'CONCLUSIVE', FALSE)
+         THEN pspf.confidence ELSE psp.confidence END as profile_confidence,
+    CASE WHEN COALESCE(pspf.source IN ('MANUAL','BORROWED') OR pspf.confidence = 'CONCLUSIVE', FALSE)
+         THEN pspf.source     ELSE psp.source     END as profile_source,
+    -- the format this keyword's band came from ('ALL' when it fell back to the coarse fallback)
+    CASE WHEN COALESCE(pspf.source IN ('MANUAL','BORROWED') OR pspf.confidence = 'CONCLUSIVE', FALSE)
+         THEN pspf.ad_format  ELSE 'ALL'          END as profile_ad_format,
+    -- profile_steers = true when either the fine or the coarse band has steering evidence
+    (COALESCE(pspf.source IN ('MANUAL','BORROWED') OR pspf.confidence = 'CONCLUSIVE', FALSE)
+     OR (psp.source IN ('MANUAL','BORROWED') OR psp.confidence = 'CONCLUSIVE')) as profile_steers,
     -- intent_class: BRAND / PRODUCT / GENERIC (from V_KEYWORD_INTENT_CLASS; default GENERIC)
     COALESCE(kic.intent_class, 'GENERIC') as intent_class,
     -- cell coordinates exposed for V_STRATEGY_GAPS (Coacher C) — identical to the psp join below,
@@ -1648,6 +1718,7 @@ active_term_data AS (
   LEFT JOIN ads_14d a14 ON a8.campaign_id = a14.campaign_id AND a8.search_term = a14.search_term AND a8.asin = a14.asin AND a8.targeting = a14.targeting
   LEFT JOIN ads_4w a4 ON a8.campaign_id = a4.campaign_id AND a8.search_term = a4.search_term AND a8.asin = a4.asin AND a8.targeting = a4.targeting
   LEFT JOIN target_rollup tr ON a8.campaign_id = tr.campaign_id AND a8.targeting = tr.targeting AND a8.keyword_id = tr.keyword_id AND a8.asin = tr.asin
+  LEFT JOIN target_12mo t12 ON LOWER(a8.targeting) = t12.targeting_lc
   LEFT JOIN target_rollup_1w tr1 ON a8.campaign_id = tr1.campaign_id AND a8.targeting = tr1.targeting AND a8.asin = tr1.asin
   LEFT JOIN target_rollup_4w tr4 ON a8.campaign_id = tr4.campaign_id AND a8.targeting = tr4.targeting AND a8.asin = tr4.asin
   LEFT JOIN clause_rollup_4w cr4 ON a8.campaign_id = cr4.campaign_id AND a8.targeting = cr4.targeting
@@ -1694,6 +1765,11 @@ active_term_data AS (
   LEFT JOIN `onyga-482313.OI.V_KEYWORD_INTENT_CLASS` kic
     ON kic.parent_name = ae.parent_name
    AND kic.keyword_text = LOWER(a8.targeting)
+  -- SB ad-group → creative_type, so the fine profile join can resolve this keyword's ad_format
+  LEFT JOIN sb_ad_creative sbc ON sbc.ad_group_id = a8.ad_group_id
+  -- Coarse (pooled ALL/ALL) profile — the guaranteed fallback. The campaign_type/ad_format = 'ALL'
+  -- predicate is REQUIRED now that the table also holds fine rows sharing the 4 cell keys; without
+  -- it this join would match coarse + every fine row and fan out the grain.
   LEFT JOIN `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE` psp
     ON psp.parent_name = ae.parent_name
    AND psp.season = COALESCE(fs.profile_season, 'OFF')
@@ -1708,6 +1784,25 @@ active_term_data AS (
         WHEN 'CATEGORY'      THEN 'CATEGORY'
         ELSE UPPER(a8.targeting_type)
       END
+   AND psp.campaign_type = 'ALL' AND psp.ad_format = 'ALL'
+  -- Fine (campaign_type × ad_format) profile — matched on all six cell keys; steers only where its
+  -- own evidence is conclusive (see the profile_* CASE block above). Unique per key → no fan-out.
+  LEFT JOIN `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE` pspf
+    ON pspf.parent_name = ae.parent_name
+   AND pspf.season = COALESCE(fs.profile_season, 'OFF')
+   AND pspf.intent_class = COALESCE(kic.intent_class, 'GENERIC')
+   AND pspf.match_type = CASE UPPER(a8.targeting_type)
+        WHEN 'BROAD'         THEN 'BROAD'
+        WHEN 'EXACT'         THEN 'EXACT'
+        WHEN 'PHRASE'        THEN 'PHRASE'
+        WHEN 'AUTOMATIC'     THEN 'AUTO'
+        WHEN 'ASIN'          THEN 'PRODUCT'
+        WHEN 'ASIN EXPANDED' THEN 'PRODUCT'
+        WHEN 'CATEGORY'      THEN 'CATEGORY'
+        ELSE UPPER(a8.targeting_type)
+      END
+   AND pspf.campaign_type = a8.campaign_type
+   AND pspf.ad_format = CASE WHEN a8.campaign_type = 'SB' THEN COALESCE(sbc.creative_type, 'NA') ELSE 'NA' END
   -- TOS 8w: one row per keyword_id → many-to-one, no fan-out
   LEFT JOIN tos_8w t8w ON t8w.keyword_id = CAST(a8.keyword_id AS STRING)
   -- PROBE inputs (Coacher C): per-match launch CPC + donor reachability + active-probe state
@@ -1735,6 +1830,8 @@ active_term_data AS (
         WHEN 'BROAD' THEN 'BROAD' WHEN 'EXACT' THEN 'EXACT' WHEN 'PHRASE' THEN 'PHRASE'
         WHEN 'AUTOMATIC' THEN 'AUTO' WHEN 'ASIN' THEN 'PRODUCT' WHEN 'ASIN EXPANDED' THEN 'PRODUCT'
         WHEN 'CATEGORY' THEN 'CATEGORY' ELSE UPPER(a8.targeting_type) END
+   AND wkp.campaign_type = a8.campaign_type
+   AND wkp.ad_format = CASE WHEN a8.campaign_type = 'SB' THEN COALESCE(sbc.creative_type, 'NA') ELSE 'NA' END
 ),
 
 -- =============================================
@@ -1778,6 +1875,7 @@ opportunity_data AS (
     CAST(NULL AS STRING) as ad_group_id,
     CAST(NULL AS STRING) as campaign_name,
     CAST(NULL AS STRING) as campaign_type,
+    CAST(NULL AS STRING) as ad_format,
     'Unassigned' as portfolio_name,  -- Opportunities have no campaign → no portfolio
     COALESCE(th.hero_asin, sp.asin) as asin,
     COALESCE(th.hero_product_name, ae.product_short_name) as product_short_name,
@@ -1788,10 +1886,10 @@ opportunity_data AS (
     -- Suggest strategy based on segment
     CASE
       WHEN tc.experiment_segment = 'BRAND' THEN 'BRAND_DEFENSE'
-      WHEN tc.intent_segment = 'COMPETITOR' THEN 'CATEGORY_CONQUEST'
+      WHEN tc.intent_segment = 'COMPETITOR' THEN 'COMPETITOR'
       WHEN sp.sqp_purchases >= 3 AND sp.sqp_weeks >= 2 THEN 'EXACT_BOOST'
       WHEN sp.sqp_purchases >= 2 THEN 'EXACT_BOOST'
-      ELSE 'HUNTER'
+      ELSE 'INTENT'
     END as strategy_id,
     CAST(NULL AS STRING) as strategy_name,
     -- Target keyword (N/A for opportunities)
@@ -1817,7 +1915,7 @@ opportunity_data AS (
     0.0 as ads_spend_14d, 0 as ads_orders_14d, CAST(NULL AS FLOAT64) as ads_net_roas_14d,
     0 as ads_clicks_recent_5d,
     -- Target rollup (zeros for opportunity)
-    0.0 as target_spend_8w, 0 as target_orders_8w, 0 as target_clicks_8w,
+    0.0 as target_spend_8w, 0 as target_orders_8w, 0 as target_clicks_8w, 0 as term_clicks_12mo,
     0 as target_impressions_8w, 0 as target_search_term_count, 0 as target_clicks_recent_5d,
     CAST(NULL AS STRING) as target_keyword_status,
     CAST(NULL AS FLOAT64) as target_net_roas_8w,
@@ -1938,6 +2036,7 @@ opportunity_data AS (
     CAST(NULL AS FLOAT64) as profile_cpc_max,
     CAST(NULL AS STRING)  as profile_confidence,
     CAST(NULL AS STRING)  as profile_source,
+    CAST(NULL AS STRING)  as profile_ad_format,
     CAST(NULL AS BOOL)    as profile_steers,
     CAST(NULL AS STRING)  as intent_class,
     CAST(NULL AS STRING)  as season,

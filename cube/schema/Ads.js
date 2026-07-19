@@ -105,6 +105,16 @@ cube(`Ads`, {
       type: `string`,
       description: `Keyword identifier`,
     },
+    targeting: {
+      sql: `targeting`,
+      type: `string`,
+      description: `Keyword / targeting text (SB keyword_ids are normalized to -1, so this is the real keyword grain)`,
+    },
+    targetingType: {
+      sql: `targeting_type`,
+      type: `string`,
+      description: `Targeting type (e.g. keyword match type, auto targeting)`,
+    },
     mostAdvertisedAsin: {
       sql: `most_advertised_asin_impressions`,
       type: `string`,

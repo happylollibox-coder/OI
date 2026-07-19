@@ -12,7 +12,10 @@ const STORAGE_KEY = 'oi_view_mode';
 // Pages considered "fully baked" — the only ones a regular user sees.
 // Based on the PPC specialist audit grades + page maturity; edit freely.
 export const USER_VISIBLE_PAGES: PageId[] = [
-  'home', 'thisweek', 'actions', 'do', 'ads', 'kwds', 'strategies', 'learn', 'sqp', 'supply', 'alerts',
+  'home', 'weeklyrun', 'actions', 'do', 'ads', 'kwds', 'strategies', 'learn', 'sqp', 'supply', 'alerts',
+  // 'plan' shows only its top inventory & sales overview to simple users; the simulator/tables below are admin-gated inside PlanPage.
+  'plan',
+  'products',
 ];
 
 export function isPageVisible(page: PageId, mode: ViewMode): boolean {

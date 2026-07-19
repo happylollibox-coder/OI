@@ -15,7 +15,9 @@ import { familyForRow, rowMatchesFamily } from './adsHierarchy.helpers';
 import { withWindow, buildCampaignDailyIndex, buildTermWeeklyIndex, seriesFor, fillSeries, TERM_KEY, daysBetween, weeksBetween } from './adsTrend.helpers';
 import { MiniTrend } from '../components/MiniTrend';
 import { ChevronRight, ChevronDown, TrendingDown, AlertTriangle, Zap, GripVertical } from 'lucide-react';
-import { usePageSummary } from '../components/PageSummaryBar';
+import { AdsKpiPanel } from '../components/ads/AdsKpiPanel';
+import { AdsCampaignTable } from '../components/ads/AdsCampaignTable';
+import { AdsWindowProvider } from '../components/ads/adsWindow';
 
 const HIERARCHY_OPTIONS = [
   { id: 'portfolio', label: 'Portfolio' },
@@ -621,13 +623,6 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
 
   const termsForCampaign = (campId: string) => searchTerms.filter(t => t.campaign_id === campId).sort((a, b) => b.spend - a.spend);
 
-  const totalRoas = totals.spend > 0 ? totals.sales / totals.spend : 0;
-  // Net Profit = Sales − COGS − Spend (matches trend chart formula)
-  const totalNetProfit = totals.gross_profit !== 0
-    ? totals.gross_profit - totals.spend  // gross_profit = sales - cogs from row finalize
-    : totals.sales - totals.cogs - totals.spend;
-  const totalNetRoas = totals.spend > 0 ? totalNetProfit / totals.spend : 0;
-  const totalWasted = drainers.reduce((s, d) => s + (d.spend_4w || 0), 0);
   const resolvedCount = drainers.filter(d => (d as any)._resolved).length;
   const activeBleeders = drainers.filter(d => !(d as any)._resolved);
 
@@ -666,25 +661,6 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     return filters.periodMode === 'weeks' ? weekRangeLabelCapped(period, perfMaxDate) : period;
   }, [hasWeekStart, filters.periodMode, filters.specificPeriod, effectivePeriod]);
 
-  const totalCvr = totals.clicks > 0 ? (totals.orders * 100) / totals.clicks : 0;
-  const totalCtr = totals.impressions > 0 ? (totals.clicks * 100) / totals.impressions : 0;
-
-  usePageSummary({
-    title: 'Ads',
-    items: [
-      { label: 'Spend', value: fM(totals.spend) },
-      { label: 'Orders', value: fOrd(totals.orders) },
-      { label: 'Sales', value: fM(totals.sales) },
-      { label: 'ROAS', value: fR(totalRoas), color: totalRoas >= 1 ? 'green' : 'red' },
-      { label: 'Net Profit', value: fM(totalNetProfit), color: totalNetProfit >= 0 ? 'green' : 'red' },
-      { label: 'Net ROAS', value: fR(totalNetRoas), color: totalNetRoas >= 1 ? 'green' : 'red' },
-      { label: 'CPC', value: fCpc(totals.clicks > 0 ? totals.spend / totals.clicks : 0) },
-      { label: 'CVR', value: fP(totalCvr) },
-      { label: 'CTR', value: fP(totalCtr) },
-      { label: 'Wasted', value: fM(totalWasted), color: 'red' },
-    ],
-  });
-
   return (
     <div className="animate-in">
       <h1 className="text-[22px] font-extrabold tracking-tight mb-1">Ads Performance</h1>
@@ -704,7 +680,12 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
         </button>
       </div>
 
-      {/* KPIs shown in PageSummaryBar above */}
+      {/* KPI cards + per-strategy campaign drill-down — Cube-backed, share one date window */}
+      <AdsWindowProvider>
+        <AdsKpiPanel />
+        <AdsCampaignTable />
+      </AdsWindowProvider>
+
 
       {/* Weekly Ads Trend — dynamic with measure selector */}
       <AdsTrendChart rawRows={rawRows} familyFilter={familyFilter} expCampaignIds={expCampaignIds} periodTrend={filters.periodTrend} holidays={data.holidays || []} perfMaxDate={perfMaxDate} />

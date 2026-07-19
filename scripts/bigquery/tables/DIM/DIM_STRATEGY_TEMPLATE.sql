@@ -91,7 +91,7 @@ VALUES
    TRUE),
 
   -- 2. Hunter / Competitor Conquest
-  ('HUNTER',
+  ('INTENT',
    'Hunter',
    'Target competitor brand names and high-converting competitor product keywords to capture their traffic.',
    'SP', 'BROAD', 'UP_AND_DOWN',
@@ -113,7 +113,7 @@ VALUES
    TRUE),
 
   -- 4. Category Conquest
-  ('CATEGORY_CONQUEST',
+  ('COMPETITOR',
    'Category Conquest',
    'Broad and auto targeting to discover new high-potential keywords in your product category.',
    'SP', 'AUTO', 'DOWN_ONLY',
@@ -157,7 +157,7 @@ VALUES
    TRUE),
 
   -- 8. Low-Cost Discovery
-  ('LOW_COST_DISCOVERY',
+  ('INTENT',
    'Low-Cost Discovery',
    'Auto campaigns with low bids to find converting keywords at minimal cost. The net for catching long-tail opportunities.',
    'SP', 'AUTO', 'DOWN_ONLY',

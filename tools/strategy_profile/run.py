@@ -31,7 +31,12 @@ def run():
     base["match_type"] = base["targeting_type"].map(normalize_match_type)
     cpc_by_pm = (base[base["clicks"] > 0]
                  .groupby(["parent_name", "match_type"])["cpc"].median().to_dict())
-    prof = fill_gaps(prof, cpc_by_pm)
+    # Borrow operates on the COARSE (ALL/ALL) layer only — that's the pooled fallback grain that
+    # gaps/probe also key on. Fine (campaign_type × ad_format) rows pass through untouched; a sparse
+    # fine cell simply doesn't steer and the engine falls back to the borrowed coarse band.
+    coarse = fill_gaps(prof[prof["campaign_type"] == "ALL"].copy(), cpc_by_pm)
+    fine = prof[prof["campaign_type"] != "ALL"].copy()
+    prof = pd.concat([coarse, fine], ignore_index=True)
     mk = derive_main_keywords(base, intent=intent)
     load_table(prof, "DE_PRODUCT_STRATEGY_PROFILE", replace_sources=("DERIVED", "BORROWED"))
     load_table(mk, "DE_PRODUCT_MAIN_KEYWORDS")

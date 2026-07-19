@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, Fragment } from 'react';
-import { Rocket, Save, AlertCircle, CheckCircle, RefreshCw, Database, Calculator, DollarSign, Percent, TrendingUp, Target, Zap, ChevronDown, ChevronUp, Layers, X, Plus } from 'lucide-react';
+import { Rocket, Save, AlertCircle, CheckCircle, RefreshCw, Database, Calculator, DollarSign, Percent, TrendingUp, Target, Zap, ChevronDown, ChevronUp, Layers, X, Plus, BarChart3 } from 'lucide-react';
 import { useUnifiedData } from '../hooks/useUnifiedData';
 import type { DashboardData } from '../types';
 import { apiFetch } from '../utils/apiFetch';
+import { MeasuresSection, type MeasureCardId } from './KpiPage';
 
 // --- Margin Presets ---
 const MARGIN_PRESETS = [
@@ -16,11 +17,10 @@ const DEFAULT_STORAGE_PER_UNIT = 0.20;       // $0.20/unit/month avg across cata
 const DEFAULT_AWD_TO_FBA_PER_UNIT = 0.30;    // AWD → FBA inbound transport estimate
 const DEFAULT_REFUND_RATE_PCT = 3;            // ~3% of price lost to refunds/returns
 
-function PriceCalculator({ data, selectedProduct }: { data: DashboardData; selectedProduct: string }) {
+function PriceCalculator({ data, selectedProduct, cogs, setCogs }: { data: DashboardData; selectedProduct: string; cogs: string; setCogs: (v: string) => void }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
-  
-  // Core costs
-  const [cogs, setCogs] = useState<string>('');
+
+  // Core costs (cogs is lifted to ProductsPage so the separate BOM panel can set it)
   const [shipping, setShipping] = useState<string>('');
   const [pickPack, setPickPack] = useState<string>('');
   const [referralPct, setReferralPct] = useState<string>('15');
@@ -33,63 +33,6 @@ function PriceCalculator({ data, selectedProduct }: { data: DashboardData; selec
   // Margin
   const [marginPreset, setMarginPreset] = useState<string>('standard');
   const [targetMarginPct, setTargetMarginPct] = useState<string>('25');
-
-  // Bill of Materials — build COGS from component prices at volume tiers
-  const [showBom, setShowBom] = useState(false);
-  const [bomTiers, setBomTiers] = useState<string[]>(['500', '1000', '3000']);
-  const [bomActiveTier, setBomActiveTier] = useState<number>(1); // index into bomTiers
-  const [bomRows, setBomRows] = useState<{ id: string; name: string; prices: string[] }[]>([]);
-
-  const [bomSaving, setBomSaving] = useState(false);
-  const [bomSaved, setBomSaved] = useState(false);
-
-  const addBomRow = () => setBomRows(r => [...r, { id: crypto.randomUUID(), name: '', prices: bomTiers.map(() => '') }]);
-  const updateBomRow = (id: string, patch: Partial<{ name: string; prices: string[] }>) =>
-    setBomRows(r => r.map(row => row.id === id ? { ...row, ...patch } : row));
-  const removeBomRow = (id: string) => setBomRows(r => r.filter(row => row.id !== id));
-
-  // Load the saved per-product BOM when a product is selected (server-backed, per ASIN)
-  useEffect(() => {
-    if (!selectedProduct) { setBomRows([]); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiFetch(`/api/products/bom?asin=${encodeURIComponent(selectedProduct)}`);
-        if (!res.ok) return;
-        const d = await res.json();
-        if (cancelled) return;
-        if (d.bom_json) {
-          const parsed = JSON.parse(d.bom_json);
-          if (Array.isArray(parsed.tiers) && parsed.tiers.length) setBomTiers(parsed.tiers.map(String));
-          setBomActiveTier(typeof parsed.activeTier === 'number' ? parsed.activeTier : 1);
-          setBomRows((parsed.components || []).map((c: { name?: string; prices?: number[] }) =>
-            ({ id: crypto.randomUUID(), name: c.name || '', prices: (c.prices || []).map(String) })));
-        } else {
-          setBomRows([]); // no saved BOM for this product
-        }
-      } catch { /* ignore */ }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProduct]);
-
-  const saveBom = async () => {
-    if (!selectedProduct) return;
-    setBomSaving(true);
-    try {
-      const bom_json = JSON.stringify({
-        tiers: bomTiers.map(t => parseFloat(t) || 0),
-        activeTier: bomActiveTier,
-        components: bomRows.map(r => ({ name: r.name, prices: r.prices.map(p => parseFloat(p) || 0) })),
-      });
-      const res = await apiFetch('/api/products/bom', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ asin: selectedProduct, bom_json }),
-      });
-      if (res.ok) { setBomSaved(true); setTimeout(() => setBomSaved(false), 3000); }
-    } catch { /* ignore */ }
-    finally { setBomSaving(false); }
-  };
 
   // Handle product selection to auto-fill defaults
   useEffect(() => {
@@ -156,11 +99,6 @@ function PriceCalculator({ data, selectedProduct }: { data: DashboardData; selec
   const curNetProfit = currentPrice ? currentPrice - (fixedCosts + curReferralFee + curRefundCost) : 0;
   const curMargin = currentPrice && currentPrice > 0 ? (curNetProfit / currentPrice) * 100 : 0;
 
-  // BOM totals: per-tier sum of component prices (per-unit), + order total at the active tier
-  const bomTierTotals = bomTiers.map((_, ti) => bomRows.reduce((s, row) => s + (parseFloat(row.prices[ti]) || 0), 0));
-  const bomPerUnit = bomTierTotals[bomActiveTier] || 0;
-  const bomActiveQty = parseFloat(bomTiers[bomActiveTier]) || 0;
-  const bomOrderTotal = bomPerUnit * bomActiveQty;
 
   // Cost breakdown for visual
   const costItems = [
@@ -234,112 +172,6 @@ function PriceCalculator({ data, selectedProduct }: { data: DashboardData; selec
               <CostInput label="Pick & Pack (FBA)" value={pickPack} onChange={setPickPack} prefix="$" />
               <CostInput label="Referral Fee" value={referralPct} onChange={setReferralPct} suffix="%" />
             </div>
-          </div>
-
-          {/* Bill of Materials (collapsible) — build COGS from component prices per volume tier */}
-          <div>
-            <button
-              onClick={() => setShowBom(!showBom)}
-              className="flex items-center gap-1 text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wider hover:text-[var(--color-text)] transition-colors mb-2"
-            >
-              {showBom ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-              <Layers className="w-3.5 h-3.5" />
-              Bill of Materials
-              <span className="text-[var(--color-text-muted)] normal-case ml-1">(build COGS from components)</span>
-              {bomRows.length > 0 && <span className="text-green-500 normal-case ml-1 font-mono">· ${bomPerUnit.toFixed(2)}/unit @ {bomActiveQty}</span>}
-            </button>
-            {showBom && (
-              <div className="animate-in slide-in-from-top-1 duration-200 border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-bg-primary)]">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-[var(--color-text-muted)]">
-                        <th className="text-left font-medium pb-1.5 pr-2">Component</th>
-                        {bomTiers.map((qty, ti) => (
-                          <th key={ti} className="pb-1.5 px-1 text-center">
-                            <div className="text-[9px] uppercase tracking-wider mb-0.5">units</div>
-                            <input type="number" min="0" value={qty}
-                              onChange={e => setBomTiers(t => t.map((v, i) => i === ti ? e.target.value : v))}
-                              className={`w-16 bg-[var(--color-bg-elevated)] border rounded px-1 py-1 text-center text-xs focus:outline-none ${bomActiveTier === ti ? 'border-green-500' : 'border-[var(--color-border)]'}`} />
-                          </th>
-                        ))}
-                        <th className="w-6" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bomRows.map(row => (
-                        <tr key={row.id}>
-                          <td className="pr-2 py-0.5">
-                            <input value={row.name} placeholder="e.g. Bunny Doll"
-                              onChange={e => updateBomRow(row.id, { name: e.target.value })}
-                              className="w-full min-w-[90px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded px-2 py-1 text-xs focus:outline-none focus:border-green-500" />
-                          </td>
-                          {bomTiers.map((_, ti) => (
-                            <td key={ti} className="px-1 py-0.5">
-                              <div className="relative">
-                                <span className="absolute left-1.5 top-1 text-[var(--color-text-muted)] text-[10px]">$</span>
-                                <input type="number" step="0.01" value={row.prices[ti] ?? ''} placeholder="0"
-                                  onChange={e => updateBomRow(row.id, { prices: row.prices.map((p, i) => i === ti ? e.target.value : p) })}
-                                  className={`w-16 bg-[var(--color-bg-elevated)] border rounded pl-4 pr-1 py-1 text-center text-xs focus:outline-none ${bomActiveTier === ti ? 'border-green-500/50' : 'border-[var(--color-border)]'}`} />
-                              </div>
-                            </td>
-                          ))}
-                          <td className="py-0.5 text-center">
-                            <button onClick={() => removeBomRow(row.id)} className="text-[var(--color-text-muted)] hover:text-red-500" title="Remove">
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      {/* Totals row — click a tier's total to pick the active volume */}
-                      <tr className="border-t border-[var(--color-border)]">
-                        <td className="pt-1.5 pr-2 text-[var(--color-text-secondary)] font-semibold">Total /unit</td>
-                        {bomTierTotals.map((tot, ti) => (
-                          <td key={ti} className="pt-1.5 px-1 text-center">
-                            <button onClick={() => setBomActiveTier(ti)} title="Use this volume"
-                              className={`w-16 rounded px-1 py-0.5 font-mono font-semibold border ${bomActiveTier === ti ? 'border-green-500 bg-green-500/10 text-green-500' : 'border-transparent text-[var(--color-text-secondary)] hover:border-[var(--color-border)]'}`}>
-                              ${tot.toFixed(2)}
-                            </button>
-                          </td>
-                        ))}
-                        <td />
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div className="flex items-center justify-between mt-2 gap-2 flex-wrap">
-                  <div className="flex items-center gap-3">
-                    <button onClick={addBomRow} className="flex items-center gap-1 text-xs text-green-500 hover:text-green-400 font-medium">
-                      <Plus className="w-3.5 h-3.5" /> Add component
-                    </button>
-                    {selectedProduct ? (
-                      <button onClick={saveBom} disabled={bomSaving}
-                        className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                          bomSaved ? 'bg-green-500/15 text-green-400 border border-green-500/40'
-                          : 'border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'}`}>
-                        <Save className="w-3.5 h-3.5" />
-                        {bomSaving ? 'Saving…' : bomSaved ? 'Saved ✓' : 'Save BOM'}
-                      </button>
-                    ) : (
-                      <span className="text-[10px] text-[var(--color-text-muted)]">Load a product to save its BOM</span>
-                    )}
-                  </div>
-                  {bomRows.length > 0 && (
-                    <div className="flex items-center gap-3 text-xs">
-                      <span className="text-[var(--color-text-muted)]">
-                        At <span className="text-[var(--color-text)] font-medium">{bomActiveQty}</span> units:{' '}
-                        <span className="text-[var(--color-text)] font-mono font-semibold">${bomPerUnit.toFixed(2)}</span>/unit ·{' '}
-                        <span className="text-[var(--color-text)] font-mono">${bomOrderTotal.toFixed(2)}</span> total
-                      </span>
-                      <button onClick={() => setCogs(String(Math.round(bomPerUnit * 1e4) / 1e4))}
-                        className="bg-green-500 hover:bg-green-600 text-white px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap">
-                        Use as COGS →
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Additional Costs (collapsible) */}
@@ -457,6 +289,197 @@ function CostInput({ label, value, onChange, prefix, suffix, hint }: {
         {suffix && <span className="absolute right-2.5 top-[7px] text-[var(--color-text-secondary)] text-xs">{suffix}</span>}
       </div>
       {hint && <span className="text-[9px] text-[var(--color-text-muted)]">{hint}</span>}
+    </div>
+  );
+}
+
+// ─── Bill of Materials panel — build COGS from per-component volume breakpoints ───
+// Standalone panel (below the P&L card). Persists per-ASIN via /api/products/bom.
+// Each component has its OWN units + price at each of N breakpoints. Pick a breakpoint →
+// COGS/unit = Σ (qty per finished unit × that breakpoint's price). "Use as COGS" → onUseCogs.
+type BomTier = { units: string; price: string };
+type BomRow = { id: string; name: string; qty: string; tiers: BomTier[] };
+const BOM_TIERS = 3;
+const defaultBomTiers = (): BomTier[] => [{ units: '500', price: '' }, { units: '1000', price: '' }, { units: '3000', price: '' }];
+
+function BomPanel({ selectedProduct, onUseCogs }: { selectedProduct: string; onUseCogs: (perUnit: number) => void }) {
+  const [bomActiveTier, setBomActiveTier] = useState<number>(1); // breakpoint index
+  const [bomRows, setBomRows] = useState<BomRow[]>([]);
+  const [bomSaving, setBomSaving] = useState(false);
+  const [bomSaved, setBomSaved] = useState(false);
+
+  const addBomRow = () => setBomRows(r => [...r, { id: crypto.randomUUID(), name: '', qty: '1', tiers: defaultBomTiers() }]);
+  const updateRow = (id: string, patch: Partial<Pick<BomRow, 'name' | 'qty'>>) =>
+    setBomRows(r => r.map(row => row.id === id ? { ...row, ...patch } : row));
+  const updateTier = (id: string, ti: number, patch: Partial<BomTier>) =>
+    setBomRows(r => r.map(row => row.id === id ? { ...row, tiers: row.tiers.map((t, i) => i === ti ? { ...t, ...patch } : t) } : row));
+  const removeBomRow = (id: string) => setBomRows(r => r.filter(row => row.id !== id));
+
+  // Load — handles the new per-component-tier format AND migrates the old shared-tier format.
+  useEffect(() => {
+    if (!selectedProduct) { setBomRows([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch(`/api/products/bom?asin=${encodeURIComponent(selectedProduct)}`);
+        if (!res.ok) return;
+        const d = await res.json();
+        if (cancelled) return;
+        if (!d.bom_json) { setBomRows([]); return; }
+        const parsed = JSON.parse(d.bom_json);
+        setBomActiveTier(typeof parsed.activeTier === 'number' ? parsed.activeTier : 1);
+        const shared: number[] = Array.isArray(parsed.tiers) ? parsed.tiers : []; // old shared tiers
+        setBomRows((parsed.components || []).map((c: { name?: string; qty?: number; tiers?: { units?: number; price?: number }[]; prices?: number[] }) => {
+          let tiers: BomTier[];
+          if (Array.isArray(c.tiers) && c.tiers.length && typeof c.tiers[0] === 'object') {
+            tiers = c.tiers.map(t => ({ units: t.units != null ? String(t.units) : '', price: t.price != null ? String(t.price) : '' }));
+          } else {
+            const prices = Array.isArray(c.prices) ? c.prices : [];
+            const n = Math.max(shared.length, prices.length, BOM_TIERS);
+            tiers = Array.from({ length: n }, (_, i) => ({ units: shared[i] != null ? String(shared[i]) : '', price: prices[i] != null ? String(prices[i]) : '' }));
+          }
+          return { id: crypto.randomUUID(), name: c.name || '', qty: c.qty != null ? String(c.qty) : '1', tiers };
+        }));
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProduct]);
+
+  const saveBom = async () => {
+    if (!selectedProduct) return;
+    setBomSaving(true);
+    try {
+      const bom_json = JSON.stringify({
+        activeTier: bomActiveTier,
+        components: bomRows.map(r => ({
+          name: r.name, qty: parseFloat(r.qty) || 0,
+          tiers: r.tiers.map(t => ({ units: parseFloat(t.units) || 0, price: parseFloat(t.price) || 0 })),
+        })),
+      });
+      const res = await apiFetch('/api/products/bom', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asin: selectedProduct, bom_json }),
+      });
+      if (res.ok) { setBomSaved(true); setTimeout(() => setBomSaved(false), 3000); }
+    } catch { /* ignore */ }
+    finally { setBomSaving(false); }
+  };
+
+  // Total /unit at breakpoint ti = Σ (qty per finished unit × the component's price at that breakpoint)
+  const bomTierTotals = Array.from({ length: BOM_TIERS }, (_, ti) =>
+    bomRows.reduce((s, row) => s + (parseFloat(row.qty) || 0) * (parseFloat(row.tiers[ti]?.price) || 0), 0));
+  const bomPerUnit = bomTierTotals[bomActiveTier] || 0;
+
+  return (
+    <div className="bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded-xl p-5 shadow-sm">
+      <h3 className="font-semibold text-lg flex items-center gap-2 mb-4 text-[var(--color-text)]">
+        <Layers className="w-5 h-5 text-green-500" />
+        Bill of Materials
+        <span className="text-xs font-normal text-[var(--color-text-muted)] ml-1">Each component's own units + price per breakpoint</span>
+        {bomRows.length > 0 && <span className="ml-auto text-sm text-green-500 font-mono">${bomPerUnit.toFixed(2)}/unit · break {bomActiveTier + 1}</span>}
+      </h3>
+      <div className="border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-bg-primary)]">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[var(--color-text-muted)]">
+                <th className="text-left font-medium pb-1.5 pr-2">Component</th>
+                <th className="font-medium pb-1.5 px-1 text-center w-14"><div className="text-[9px] uppercase tracking-wider" title="How many of this component go into one finished unit">Qty/unit</div></th>
+                {Array.from({ length: BOM_TIERS }).map((_, ti) => (
+                  <th key={ti} className="pb-1.5 px-1 text-center">
+                    <button onClick={() => setBomActiveTier(ti)} title="Use this breakpoint"
+                      className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${bomActiveTier === ti ? 'bg-green-500/15 text-green-500 font-bold' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+                      {bomActiveTier === ti ? '● ' : ''}Break {ti + 1}
+                    </button>
+                    <div className="text-[8px] text-[var(--color-text-muted)] mt-0.5 normal-case">units · $/unit</div>
+                  </th>
+                ))}
+                <th className="w-6" />
+              </tr>
+            </thead>
+            <tbody>
+              {bomRows.map(row => (
+                <tr key={row.id}>
+                  <td className="pr-2 py-0.5 align-top">
+                    <input value={row.name} placeholder="e.g. Bunny Doll"
+                      onChange={e => updateRow(row.id, { name: e.target.value })}
+                      className="w-full min-w-[90px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded px-2 py-1 text-xs focus:outline-none focus:border-green-500" />
+                  </td>
+                  <td className="px-1 py-0.5 align-top">
+                    <input type="number" step="1" min="0" value={row.qty} placeholder="1"
+                      onChange={e => updateRow(row.id, { qty: e.target.value })}
+                      className="w-14 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded px-1 py-1 text-center text-xs focus:outline-none focus:border-green-500" />
+                  </td>
+                  {row.tiers.map((t, ti) => (
+                    <td key={ti} className={`px-1 py-0.5 align-top ${bomActiveTier === ti ? 'bg-green-500/5' : ''}`}>
+                      <div className="flex flex-col gap-1">
+                        <input type="number" min="0" value={t.units} placeholder="units"
+                          onChange={e => updateTier(row.id, ti, { units: e.target.value })}
+                          className="w-16 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded px-1 py-1 text-center text-xs focus:outline-none focus:border-green-500" />
+                        <div className="relative">
+                          <span className="absolute left-1.5 top-1 text-[var(--color-text-muted)] text-[10px]">$</span>
+                          <input type="number" step="0.01" value={t.price} placeholder="0"
+                            onChange={e => updateTier(row.id, ti, { price: e.target.value })}
+                            className={`w-16 bg-[var(--color-bg-elevated)] border rounded pl-4 pr-1 py-1 text-center text-xs focus:outline-none ${bomActiveTier === ti ? 'border-green-500/50' : 'border-[var(--color-border)]'}`} />
+                        </div>
+                      </div>
+                    </td>
+                  ))}
+                  <td className="py-0.5 text-center align-top">
+                    <button onClick={() => removeBomRow(row.id)} className="text-[var(--color-text-muted)] hover:text-red-500" title="Remove">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {/* Totals row — click a breakpoint total to make it active */}
+              <tr className="border-t border-[var(--color-border)]">
+                <td colSpan={2} className="pt-1.5 pr-2 text-[var(--color-text-secondary)] font-semibold">Total /unit (qty × price)</td>
+                {bomTierTotals.map((tot, ti) => (
+                  <td key={ti} className="pt-1.5 px-1 text-center">
+                    <button onClick={() => setBomActiveTier(ti)} title="Use this breakpoint"
+                      className={`w-16 rounded px-1 py-0.5 font-mono font-semibold border ${bomActiveTier === ti ? 'border-green-500 bg-green-500/10 text-green-500' : 'border-transparent text-[var(--color-text-secondary)] hover:border-[var(--color-border)]'}`}>
+                      ${tot.toFixed(2)}
+                    </button>
+                  </td>
+                ))}
+                <td />
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center justify-between mt-2 gap-2 flex-wrap">
+          <div className="flex items-center gap-3">
+            <button onClick={addBomRow} className="flex items-center gap-1 text-xs text-green-500 hover:text-green-400 font-medium">
+              <Plus className="w-3.5 h-3.5" /> Add component
+            </button>
+            {selectedProduct ? (
+              <button onClick={saveBom} disabled={bomSaving}
+                className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                  bomSaved ? 'bg-green-500/15 text-green-400 border border-green-500/40'
+                  : 'border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'}`}>
+                <Save className="w-3.5 h-3.5" />
+                {bomSaving ? 'Saving…' : bomSaved ? 'Saved ✓' : 'Save BOM'}
+              </button>
+            ) : (
+              <span className="text-[10px] text-[var(--color-text-muted)]">Load a product to save its BOM</span>
+            )}
+          </div>
+          {bomRows.length > 0 && (
+            <div className="flex items-center gap-3 text-xs">
+              <span className="text-[var(--color-text-muted)]">
+                Breakpoint <span className="text-[var(--color-text)] font-medium">{bomActiveTier + 1}</span>:{' '}
+                <span className="text-[var(--color-text)] font-mono font-semibold">${bomPerUnit.toFixed(2)}</span>/unit COGS
+              </span>
+              <button onClick={() => onUseCogs(bomPerUnit)}
+                className="bg-green-500 hover:bg-green-600 text-white px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap">
+                Use as COGS →
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -866,6 +889,18 @@ export function ProductsPage({ data }: { data: DashboardData }) {
   const [triggering, setTriggering] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
+  // Shared product selection — drives BOTH the Price Calculator and the P&L per Unit card.
+  const [selectedProduct, setSelectedProduct] = useState<string>('');
+  // COGS is lifted here so the separate BOM panel's "Use as COGS" can set the calculator's COGS.
+  const [cogs, setCogs] = useState<string>('');
+  const [pnlPeriodMode, setPnlPeriodMode] = useState<'weeks' | 'month'>('weeks');
+  const pnlPeriod = useMemo(() => {
+    const w = pnlPeriodMode === 'weeks';
+    const rows = (w ? data.weekly_trends : data.monthly_trends) || [];
+    const keys = rows.map(r => (w ? r.week_start : (r.month_start || '').slice(0, 7)) || '').filter(Boolean).sort();
+    return keys[keys.length - 1] || '';
+  }, [data, pnlPeriodMode]);
+
   const fetchAssignments = async () => {
     setLoading(true);
     try {
@@ -954,10 +989,54 @@ export function ProductsPage({ data }: { data: DashboardData }) {
         <p className="text-[var(--color-text-muted)] mt-1">Manage product catalog, edit attributes, and model pricing profitability.</p>
       </div>
 
-      {/* 2. Calculator (top of page) */}
-      <PriceCalculator data={data} />
+      {/* 2. Shared product picker — drives both the calculator and the P&L per Unit card */}
+      <div className="bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded-xl px-5 py-3 shadow-sm flex items-center gap-3 flex-wrap">
+        <label className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">Product</label>
+        <select
+          className="flex-1 min-w-[220px] bg-[var(--color-bg-primary)] border border-[var(--color-border)] text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-green-500 transition-colors"
+          value={selectedProduct}
+          onChange={(e) => setSelectedProduct(e.target.value)}
+        >
+          <option value="">-- Manual Entry (no product) --</option>
+          {data.products?.map(p => (
+            <option key={p.asin} value={p.asin}>{p.product_short_name} ({p.asin})</option>
+          ))}
+        </select>
+      </div>
 
-      {/* 3. Product attributes table */}
+      {/* 3. P&L per Unit — real economics for the selected product (above the calculator) */}
+      <div className="bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded-xl p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-lg flex items-center gap-2 text-[var(--color-text)]">
+            <BarChart3 className="w-5 h-5 text-violet-400" />
+            P&L per Unit
+            <span className="text-xs font-normal text-[var(--color-text-muted)] ml-1">Actual economics · {pnlPeriodMode === 'weeks' ? 'latest week' : 'latest month'}</span>
+          </h3>
+          <div className="flex rounded-lg border border-[var(--color-border)] overflow-hidden text-xs font-semibold">
+            {([['Week', 'weeks'], ['Month', 'month']] as const).map(([lbl, val]) => (
+              <button key={val} onClick={() => setPnlPeriodMode(val)}
+                className={`px-3 py-1 transition-colors ${pnlPeriodMode === val ? 'bg-violet-500/20 text-violet-300' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </div>
+        {selectedProduct ? (
+          <MeasuresSection data={data} family={null} product={selectedProduct}
+            currentPeriod={pnlPeriod} periodMode={pnlPeriodMode} periodType="current"
+            measureIds={['pnl_per_unit'] as MeasureCardId[]} />
+        ) : (
+          <p className="text-sm text-[var(--color-text-muted)]">Pick a product above to see its actual per-unit P&L.</p>
+        )}
+      </div>
+
+      {/* 4. Calculator */}
+      <PriceCalculator data={data} selectedProduct={selectedProduct} cogs={cogs} setCogs={setCogs} />
+
+      {/* 5. Bill of Materials — build COGS from components (writes to the calculator's COGS) */}
+      <BomPanel selectedProduct={selectedProduct} onUseCogs={(v) => setCogs(String(Math.round(v * 1e4) / 1e4))} />
+
+      {/* 6. Product attributes table */}
       <ProductAttributesTable data={data} />
 
       {/* 4. Launch Models section */}

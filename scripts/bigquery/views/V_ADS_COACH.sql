@@ -208,9 +208,18 @@ coach_data AS (
     COALESCE(tp_sm.bleeder_fit_rank, tp_gm.bleeder_fit_rank, tp_sg.bleeder_fit_rank, tp_gg.bleeder_fit_rank, 50) as th_bleeder_fit_rank,
     COALESCE(tp_sm.bleeder_reduce_pct, tp_gm.bleeder_reduce_pct, tp_sg.bleeder_reduce_pct, tp_gg.bleeder_reduce_pct, 0.4) as th_bleeder_reduce_pct,
     COALESCE(tp_sm.bleeder_min_clicks, tp_gm.bleeder_min_clicks, tp_sg.bleeder_min_clicks, tp_gg.bleeder_min_clicks, 20) as th_bleeder_min_clicks,
-    -- Strategy template max bid: clamp to profile band ONLY for MANUAL suggestions (Prime Day blast-radius fix).
-    -- Mirrors the strategy_bid_min change above — derived cells fall back to template max.
-    COALESCE(IF(d.profile_source = 'MANUAL', d.profile_cpc_max, NULL), stmpl.recommended_bid_max) as strategy_bid_max,
+    -- Strategy template max bid. The per-product profitable band (profile_cpc_target) RAISES this
+    -- ceiling when the strategy-wide template max is set below it — otherwise a too-low template max
+    -- clamps a profitable keyword below its own band, turning an INCREASE-toward-band into a bid CUT
+    -- (band-wins, per the bid-to-band design). Only ever raises the max: the increase tiers already
+    -- cap the bid at the band, so this never lets a bid exceed it.
+    -- Ceiling extends to cpc_max (the profitable EDGE) when known — the increase tiers still cap at
+    -- the band internally, so ordinary raises stop at cpc_target; only the PROBE-ABOVE-BAND branch
+    -- (which itself caps at cpc_max) uses the extra headroom.
+    IF(COALESCE(IF(d.profile_source = 'MANUAL', d.profile_cpc_max, NULL), stmpl.recommended_bid_max) IS NOT NULL
+         AND COALESCE(d.profile_cpc_max, d.profile_cpc_target) IS NOT NULL,
+       GREATEST(COALESCE(IF(d.profile_source = 'MANUAL', d.profile_cpc_max, NULL), stmpl.recommended_bid_max), COALESCE(d.profile_cpc_max, d.profile_cpc_target)),
+       COALESCE(IF(d.profile_source = 'MANUAL', d.profile_cpc_max, NULL), stmpl.recommended_bid_max)) as strategy_bid_max,
     rr.cpc_30d AS research_cpc_30d,
     rr.cpc_12m AS research_cpc_12m,
     -- Mode-aware target ROAS:
@@ -390,6 +399,71 @@ campaign_budget_metrics AS (
   WHERE d.recommendation_type = 'ACTIVE_TERM'
     AND UPPER(d.campaign_state) = 'ENABLED'
   GROUP BY d.campaign_id
+),
+
+-- ─── Campaign budget windows (Ori's 2026-07-03 budget redesign) ───
+-- Campaign-grain weekly net-ROAS windows + capacity/history signals, straight from FACT so the
+-- decision inputs EQUAL the numbers shown on the Weekly Run campaign row (same formulas, LA tz).
+-- Also: first activity (grace), historical peak performance (STOP protection + BLITZ), and the
+-- same-window-last-year band (BLITZ "same holiday LY" — dates align YoY within the ±7d band).
+peak_days_all AS (
+  SELECT DISTINCT d AS date
+  FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h, UNNEST(GENERATE_DATE_ARRAY(h.boost_start, h.cooldown_end)) d
+  WHERE h.category IN ('gift_season', 'prime_event')
+),
+camp_windows AS (
+  SELECT
+    fa.campaign_id,
+    MIN(fa.date) AS first_activity,
+    -- weekly windows (this wk = 7d, prev wk = days 8-14, 4w = 28d)
+    ROUND(SUM(IF(fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY), fa.Ads_cost, 0)), 2) AS w1_spend,
+    ROUND(SAFE_DIVIDE(
+      SUM(IF(fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY), fa.GROSS_PROFIT, 0)),
+      NULLIF(SUM(IF(fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY), fa.Ads_cost, 0)), 0)), 2) AS w1_roas,
+    ROUND(SAFE_DIVIDE(
+      SUM(IF(fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
+             AND fa.date < DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY), fa.GROSS_PROFIT, 0)),
+      NULLIF(SUM(IF(fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
+             AND fa.date < DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY), fa.Ads_cost, 0)), 0)), 2) AS pw_roas,
+    ROUND(SAFE_DIVIDE(
+      SUM(IF(fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY), fa.GROSS_PROFIT, 0)),
+      NULLIF(SUM(IF(fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY), fa.Ads_cost, 0)), 0)), 2) AS w4_roas,
+    -- grace-guard lifetime stats (campaign younger than 14d → 14d window == lifetime)
+    ROUND(SUM(IF(fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY), fa.Ads_cost, 0)), 2) AS spend_14d,
+    SUM(IF(fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY), fa.Ads_orders, 0)) AS orders_14d,
+    -- historical PEAK performance (all gift-season/prime windows ever)
+    ROUND(SUM(IF(pk.date IS NOT NULL, fa.Ads_cost, 0)), 2) AS peak_spend,
+    ROUND(SAFE_DIVIDE(SUM(IF(pk.date IS NOT NULL, fa.GROSS_PROFIT, 0)),
+                      NULLIF(SUM(IF(pk.date IS NOT NULL, fa.Ads_cost, 0)), 0)), 2) AS peak_roas,
+    ROUND(SAFE_DIVIDE(SUM(IF(pk.date IS NOT NULL, fa.Ads_cost, 0)),
+                      NULLIF(COUNT(DISTINCT IF(pk.date IS NOT NULL AND fa.Ads_cost > 0, fa.date, NULL)), 0)), 2) AS peak_daily_spend,
+    -- same window last year (today-371 .. today-357): "same holiday LY" proxy
+    ROUND(SUM(IF(fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 371 DAY)
+                             AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 357 DAY), fa.Ads_cost, 0)), 2) AS ly_spend,
+    ROUND(SAFE_DIVIDE(
+      SUM(IF(fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 371 DAY)
+                         AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 357 DAY), fa.GROSS_PROFIT, 0)),
+      NULLIF(SUM(IF(fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 371 DAY)
+                                AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 357 DAY), fa.Ads_cost, 0)), 0)), 2) AS ly_roas,
+    ROUND(SAFE_DIVIDE(
+      SUM(IF(fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 371 DAY)
+                         AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 357 DAY), fa.Ads_cost, 0)),
+      NULLIF(COUNT(DISTINCT IF(fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 371 DAY)
+                                           AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 357 DAY)
+                               AND fa.Ads_cost > 0, fa.date, NULL)), 0)), 2) AS ly_daily_spend
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  LEFT JOIN peak_days_all pk ON pk.date = fa.date
+  -- complete days only — today's partial/unsettled attribution would bias the weekly ROAS mix down
+  WHERE fa.date < CURRENT_DATE('America/Los_Angeles')
+  GROUP BY fa.campaign_id
+),
+-- families currently in a pre-peak ramp (relevant holiday approaching) — protects NULL-peak
+-- campaigns from STOP so they can prove themselves at their first peak
+prepeak_families AS (
+  SELECT DISTINCT fhr.parent_name
+  FROM family_holiday_relevance fhr
+  JOIN active_holidays ah ON ah.holiday_name = fhr.holiday_name
+  WHERE ah.today_phase IN ('PRE_PEAK', 'BOOST')
 ),
 
 -- ═══════════════════════════════════════════════════════
@@ -633,16 +707,16 @@ SELECT
     WHEN d.strategy_id IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE') THEN 'MONITOR'
 
     -- ═══ CATEGORY_CONQUEST / COMPETITOR_CONQUEST: aggressive thresholds ═══
-    WHEN d.strategy_id IN ('CATEGORY_CONQUEST', 'COMPETITOR_CONQUEST')
+    WHEN d.strategy_id IN ('COMPETITOR', 'COMPETITOR')
       AND d.ads_orders_8w = 0 AND d.ads_clicks_8w >= d.th_min_clicks
       AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_TERM'
     -- Lag safety: if lag ROAS > 1.3, defer CONQUEST negate to MONITOR
     -- NEGATE uses 12-month lifetime ROAS — if no LT data, don't negate
-    WHEN d.strategy_id IN ('CATEGORY_CONQUEST', 'COMPETITOR_CONQUEST')
+    WHEN d.strategy_id IN ('COMPETITOR', 'COMPETITOR')
       AND d.lt_net_roas IS NOT NULL AND d.lt_net_roas < d.th_negate_roas
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
       AND COALESCE(d.ads_lag_net_roas, 0) > 1.3 THEN 'MONITOR'
-    WHEN d.strategy_id IN ('CATEGORY_CONQUEST', 'COMPETITOR_CONQUEST')
+    WHEN d.strategy_id IN ('COMPETITOR', 'COMPETITOR')
       AND d.lt_net_roas IS NOT NULL AND d.lt_net_roas < d.th_negate_roas
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_TERM'
 
@@ -663,7 +737,7 @@ SELECT
     -- should not be promoted during off-season — wait for the right BLITZ phase
     WHEN d.coach_mode != 'BLITZ'
       AND d.is_holiday_seasonal = TRUE
-      AND d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+      AND d.strategy_id = 'INTENT'
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       AND d.ads_weighted_net_roas_offseason IS NOT NULL AND d.ads_weighted_net_roas_offseason >= d.th_promote_min_roas
       AND NOT d.already_in_exact_boost
@@ -671,7 +745,7 @@ SELECT
 
     -- Promote to exact (hunter/discovery with consistent conversions)
     -- Uses mode-aware ROAS (off-season for GUARDIAN)
-    WHEN d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+    WHEN d.strategy_id = 'INTENT'
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       AND d.ads_weighted_net_roas_offseason IS NOT NULL AND d.ads_weighted_net_roas_offseason >= d.th_promote_min_roas
       AND NOT d.already_in_exact_boost
@@ -747,15 +821,20 @@ SELECT
       AND d.profile_enabled = FALSE AND d.profile_steers
       AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
       AND (d.target_roas >= d.th_scale_up_roas OR d.target_roas >= d.th_profitable_roas)
-      AND d.eff_orders_for_bid >= 2
+      AND d.eff_orders_for_bid >= 1
       THEN 'MONITOR_TARGET'
 
     -- ═══ DEFENSE BID-RAISE: control the auction, make terms expensive for competitors ═══
     -- BRAND_DEFENSE (brand search terms): bid up toward the ceiling while we're NOT already
     --   dominating (SQP impression share < cutoff). Once dominating, a higher bid won't move it.
+    --   BRAND-INTENT ONLY: the moat is the brand terms. A GENERIC term inside a defense campaign
+    --   (e.g. "teen girl gifts" in BRAND-STORE) can never be "dominated" — the unconditional raise
+    --   just buys generic traffic expensively, past its band and regardless of ROAS. Non-brand terms
+    --   fall to the defense catch-all below → MONITOR (hold, never raise; BLITZ handles peak re-raise).
     -- PRODUCT_DEFENSE (ASIN targeting on own detail pages): no SQP signal exists for detail-page
     --   slots → bid up toward the ceiling unconditionally to occupy our own listings.
     WHEN d.strategy_id = 'BRAND_DEFENSE'
+      AND d.intent_class = 'BRAND'
       AND COALESCE(d.current_bid, 0) < d.th_bid_cap
       AND COALESCE(d.impression_share_pct, 0) < d.th_defense_dominate_is
       THEN 'INCREASE_BID'
@@ -764,7 +843,13 @@ SELECT
       THEN 'INCREASE_BID'
     WHEN d.strategy_id IN ('PRODUCT_DEFENSE', 'BRAND_DEFENSE') THEN 'MONITOR_TARGET'
 
-    WHEN d.target_clicks_8w < d.th_min_clicks THEN 'MONITOR_TARGET'
+    -- ═══ DATA-SUFFICIENCY GATE (12-month): "do we KNOW this keyword?" ═══
+    -- Uses 12-month clicks by keyword text, NOT the trailing 8w — a proven-but-off-season keyword
+    -- (e.g. a seasonal winner quiet in the last 8w) has abundant history and must not be treated as
+    -- "insufficient data". Below 15 lifetime-ish clicks → still gathering; hold. Above → the recent
+    -- windows (1w direction, 4w confidence) below decide what to DO. Dormant keywords that clear this
+    -- gate still fall to HOLD downstream (the reduce/bleeder tiers need recent orders/clicks to fire).
+    WHEN COALESCE(d.term_clicks_12mo, d.target_clicks_8w, 0) < 15 THEN 'MONITOR_TARGET'
 
     -- SWITCH_HERO: wrong ASIN at TARGET level (Bug #5 fix: moved from term-level)
     -- Case 1: zero orders with current ASIN + hero exists + enough clicks at target level
@@ -791,24 +876,40 @@ SELECT
     WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
       AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
       AND GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 1.0  -- profitable AT peak only
-      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1)
       AND DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= 14
       AND NOT (d.current_phase IN ('BOOST', 'PEAK') AND d.days_since_last_bid_change < 3)
       THEN 'INCREASE_BID'
     WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
       AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
-      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1)
       THEN 'MONITOR_TARGET'
 
     -- STOP_TARGET: all terms under target have 0 orders + enough clicks → entire target is bad
     WHEN d.target_orders_8w = 0 AND d.target_clicks_8w >= d.th_min_clicks
       AND d.target_clicks_recent_5d > 0 THEN 'STOP_TARGET'
 
+    -- ═══ STOP_TARGET — PEAK-LOSER (Ori 2026-07-03): a keyword that RAN at its peak with real spend
+    -- and got orders, but LOST money even at its BEST peak (best net ROAS < 1.0), and isn't converting
+    -- now either (0 orders/8w) → a proven loser everywhere, NOT a seasonal winner to protect for the
+    -- season. Stop it (reversible pause). Covers the DORMANT case the tier above misses (it needs
+    -- recent clicks). The PEAK RE-INCREASE block above already spared genuine peak winners (best ≥ 1.0),
+    -- and defense is exempt. GUARDIAN (off-season) only + 7-day gate; ≥$25 peak spend so a single fluke
+    -- click can't trip it. Mirrored as a hold-safe NULL bid (STOP carries no bid change).
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND COALESCE(d.target_orders_8w, 0) = 0
+      AND (COALESCE(d.q4_peak_orders, 0) + COALESCE(d.ly_orders, 0)) >= 1
+      AND (COALESCE(d.q4_peak_spend, 0) + COALESCE(d.ly_spend, 0)) >= 25
+      AND GREATEST(COALESCE(d.q4_peak_net_roas, 0), COALESCE(d.ly_net_roas, 0)) < 1.0
+      AND d.days_since_last_bid_change >= 7
+      THEN 'STOP_TARGET'
+
     -- ═══ SEASONAL GUARD: GUARDIAN should NOT increase bids on seasonal targets ═══
     -- Targets containing holiday names (easter, valentine, mothers day, etc.)
     -- are capped at KEEP_TARGET during off-season to prevent wasteful scaling
     WHEN d.coach_mode = 'GUARDIAN'
-      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
       AND d.is_holiday_seasonal = TRUE
       THEN 'KEEP_TARGET'
 
@@ -821,7 +922,7 @@ SELECT
     -- Blocks INCREASE_BID for campaigns created less than 14 days ago.
     -- Amazon's algorithm needs time to find optimal placements.
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
-      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
       THEN 'WARMUP_MONITOR'
 
     -- ═══ MONEY BLEEDER (fit): 0 orders (4w) + real spend + enough clicks + research-fit → REDUCE_BID ═══
@@ -851,14 +952,53 @@ SELECT
     WHEN d.target_tos_share IS NOT NULL
          AND d.tos_target_pct IS NOT NULL
          AND d.target_tos_share >= d.tos_target_pct
-         AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+         AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
          AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
       THEN 'MONITOR_TARGET'
+
+    -- ═══ SWEET-SPOT RAISE (Ori 2026-07-04): a winner still returning ≥2× net ROAS (last 7 days, confirmed
+    -- by ≥1 order) at/above its band is bid UP beyond the band toward the hard cap to capture more volume.
+    -- The controller lets ROAS drift down into the 1.5–2× sweet spot; the PULLBACK tier below reels it
+    -- back if it falls under 1.5×. Generalises the old starved-only probe (the ceiling is now the hard
+    -- bid cap, not the band edge; the outer scored clamp lifts strategy_bid_max→th_bid_cap for these).
+    -- GUARDIAN only; defense exempt (own raise logic); 7-day frequency gate. Mirrored in recommended_bid + pct.
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND d.strategy_id IS NOT NULL AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND d.profile_cpc_target IS NOT NULL
+      AND COALESCE(d.current_bid, 0) >= d.profile_cpc_target
+      AND COALESCE(d.current_bid, 0) < d.th_bid_cap
+      AND COALESCE(d.target_net_roas_1w, 0) >= 2   -- ≥2× implies ad sales (GP>0), so no separate order guard needed
+      AND d.days_since_last_bid_change >= 7
+      THEN 'INCREASE_BID'
+
+    -- ═══ SWEET-SPOT PULLBACK (Ori 2026-07-04): a keyword pushed ABOVE its band whose last-7-days net ROAS has
+    -- fallen below the 1.5× sweet-spot floor (but is still profitable — true losers are cut by the tiers
+    -- above) is eased back toward the band target. GUARDIAN; defense exempt; 7-day gate. recommended_bid
+    -- steps it down toward profile_cpc_target. Mirrored in recommended_bid + pct.
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND d.strategy_id IS NOT NULL AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND d.profile_cpc_target IS NOT NULL
+      AND COALESCE(d.current_bid, 0) > d.profile_cpc_target
+      AND d.target_net_roas_1w IS NOT NULL
+      AND d.target_net_roas_1w >= d.th_profitable_roas AND d.target_net_roas_1w < 1.5
+      AND d.days_since_last_bid_change >= 7
+      THEN 'REDUCE_BID'
+
+    -- ═══ BID-TO-BAND CEILING: profitable keyword already AT/ABOVE its target CPC band → hold ═══
+    -- The per-product×season profitable band (profile_cpc_target) is the gravity ceiling: a winner
+    -- below it steps up toward it (tiers below, capped at the band); one already at/above it holds —
+    -- don't bid past the profitable band (the CPC study: spend above the band turns net-negative).
+    -- Defense (own moat) + peak re-increase (handled above) + the probe (above) are exempt. Mirrors recommended_bid.
+    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
+      AND d.profile_cpc_target IS NOT NULL
+      AND COALESCE(d.current_bid, 0) >= d.profile_cpc_target
+      AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      THEN 'KEEP_TARGET'
 
     -- ═══ FREQUENCY GATE: prevent too-frequent bid changes ═══
     -- GUARDIAN: weekly (7d), COOLDOWN: daily (1d), BLITZ BOOST: every 3d, BLITZ PEAK: every 3d
     -- BOOST ramps fast (3d) so bids are already high when PEAK starts.
-    WHEN d.target_roas >= d.th_scale_up_roas AND d.eff_orders_for_bid >= 2
+    WHEN d.target_roas >= d.th_scale_up_roas AND d.eff_orders_for_bid >= 1
       AND NOT (
         (d.coach_mode = 'GUARDIAN' AND d.days_since_last_bid_change < 7 AND NOT (d.days_since_last_bid_change >= 3 AND COALESCE(d.ads_net_roas_3d, 0) >= 2.0))
         OR (d.coach_mode = 'COOLDOWN' AND d.days_since_last_bid_change < 1)
@@ -866,9 +1006,12 @@ SELECT
         OR (d.coach_mode = 'BLITZ' AND d.current_phase = 'PEAK' AND d.days_since_last_bid_change < 3)
       )
       THEN 'INCREASE_BID'
-    WHEN d.target_roas >= d.th_scale_up_roas AND d.eff_orders_for_bid >= 2 THEN 'MONITOR_TARGET'
-    -- Profitable tier: ROAS ≥ profitable_threshold → increase bid
-    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+    WHEN d.target_roas >= d.th_scale_up_roas AND d.eff_orders_for_bid >= 1 THEN 'MONITOR_TARGET'
+    -- Profitable (MODERATE-strong) tier: 1w ≥ profitable but < scale-up → RAISE only if the 4-week
+    -- CONFIRMS it (4w ≥ profitable). A moderately-strong 1w with a weak 4w is an unconfirmed spike →
+    -- fall through to MONITOR. (Very-strong 1w ≥ scale-up already raised above, regardless of 4w.)
+    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
+      AND COALESCE(d.target_net_roas_4w, 0) >= d.th_profitable_roas
       AND NOT (
         (d.coach_mode = 'GUARDIAN' AND d.days_since_last_bid_change < 7 AND NOT (d.days_since_last_bid_change >= 3 AND COALESCE(d.ads_net_roas_3d, 0) >= 2.0))
         OR (d.coach_mode = 'COOLDOWN' AND d.days_since_last_bid_change < 1)
@@ -876,7 +1019,7 @@ SELECT
         OR (d.coach_mode = 'BLITZ' AND d.current_phase = 'PEAK' AND d.days_since_last_bid_change < 3)
       )
       THEN 'INCREASE_BID'
-    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2 THEN 'MONITOR_TARGET'
+    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1 THEN 'MONITOR_TARGET'
     -- ═══ PEAK PROTECTION: handled higher up (PEAK RE-INCREASE block, before the bleeder/reduce tiers)
     -- so a proven peak-plan winner (peak_rec = INCREASE) is bid UP or HELD, never cut — for dormant AND
     -- active terms. (Replaces the earlier orders>0-only hold, which sat here and could still let a
@@ -885,6 +1028,15 @@ SELECT
     -- Safety: if the lag window (last 3 days, excluded by 4-day lag) shows strong ROAS, defer to MONITOR
     WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0
       AND COALESCE(d.target_lag_net_roas, 0) > 1.3 THEN 'MONITOR_TARGET'
+    -- ═══ TRAILING-WINDOW WINNER BRAKE: don't cut a proven winner on a noisy 1-week window ═══
+    -- The reduce signal (target_roas) is the 1-week net ROAS, which is mostly zeros for a
+    -- low-volume keyword — one empty week reads as a "loss". If the trailing 4-week is still
+    -- clearly profitable (≥1.5× with a real order), this is a winner having a quiet week:
+    -- HOLD (MONITOR_TARGET) and wait for the recent window to give a real signal, rather than
+    -- cut on noise. Mirrored in recommended_bid + bid_change_pct so all three stay in sync.
+    WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0
+      AND COALESCE(d.target_net_roas_4w, 0) >= 1.5 AND COALESCE(d.target_orders_4w, 0) >= 1
+      THEN 'MONITOR_TARGET'
     WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0
       AND NOT (
         (d.coach_mode = 'GUARDIAN' AND d.days_since_last_bid_change < 7)
@@ -1026,6 +1178,7 @@ SELECT
         -- Defense: mirror the DEFENSE BID-RAISE branches in target_action (~line 592) so the
         -- summary matches the action — raise to dominate when not yet dominant / below the ceiling, else monitor.
         WHEN d.strategy_id = 'BRAND_DEFENSE'
+          AND d.intent_class = 'BRAND'
           AND COALESCE(d.current_bid, 0) < d.th_bid_cap
           AND COALESCE(d.impression_share_pct, 0) < d.th_defense_dominate_is
           THEN CONCAT('🛡 Defense — impression share ',
@@ -1035,6 +1188,8 @@ SELECT
         WHEN d.strategy_id = 'PRODUCT_DEFENSE'
           AND COALESCE(d.current_bid, 0) < d.th_bid_cap
           THEN '🛡 Defense — bid up toward the ceiling to occupy our own detail pages.'
+        WHEN d.strategy_id = 'BRAND_DEFENSE' AND d.intent_class != 'BRAND'
+          THEN '🔒 Defense campaign, but this is not a brand term — the moat raise only applies to brand terms. Holding.'
         WHEN d.strategy_id IN ('PRODUCT_DEFENSE', 'BRAND_DEFENSE')
           THEN '🔒 Defense — already dominating (or at bid ceiling), monitoring only.'
         -- PEAK RE-INCREASE / HOLD: proven peak-plan winner — mirrors the PEAK RE-INCREASE block in
@@ -1042,7 +1197,7 @@ SELECT
         WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
           AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
           AND GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 1.0  -- profitable AT peak only
-          AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+          AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1)
           AND DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= 14
           AND NOT (d.current_phase IN ('BOOST', 'PEAK') AND d.days_since_last_bid_change < 3)
           THEN CONCAT('📈 Peak plan winner — last peak ROAS ',
@@ -1051,7 +1206,7 @@ SELECT
                ' peak orders). Weak now → re-increase bid to its peak-competitive level to capture peak demand.')
         WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
           AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
-          AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+          AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1)
           THEN CONCAT('📈 Peak plan winner — last peak ROAS ',
                CAST(ROUND(GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)), 2) AS STRING),
                '. Holding bid (recent change or warmup) — never cut a proven peak winner during BLITZ.')
@@ -1070,6 +1225,14 @@ SELECT
                ' threshold → would reduce bid, but recent 3d ROAS (',
                CAST(ROUND(COALESCE(d.target_lag_net_roas, 0), 2) AS STRING),
                ') shows improvement. Deferring.')
+        -- Trailing-window winner brake: 1-week looks weak but 4-week is still strong → hold
+        WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0
+          AND COALESCE(d.target_net_roas_4w, 0) >= 1.5 AND COALESCE(d.target_orders_4w, 0) >= 1
+          THEN CONCAT('🛟 1-week ROAS ', CAST(ROUND(COALESCE(d.target_roas, 0), 2) AS STRING),
+               ' looks weak, but trailing 4-week is still ',
+               CAST(ROUND(COALESCE(d.target_net_roas_4w, 0), 2) AS STRING),
+               '× (', CAST(d.target_orders_4w AS STRING), ' order', IF(d.target_orders_4w = 1, '', 's'),
+               '). Proven winner having a quiet week — hold the bid, wait for a real signal.')
         -- ROAS below reduce threshold + frequency gate blocked
         WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0
           AND ((d.coach_mode = 'GUARDIAN' AND d.days_since_last_bid_change < 7)
@@ -1086,7 +1249,7 @@ SELECT
                ' → reduce bid.')
         -- Warmup guard: new campaign in learning period
         WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
-          AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+          AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
           THEN CONCAT('🌱 New campaign (',
                CAST(DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) AS STRING),
                'd old). Algorithm needs 14 days to find optimal placements. ROAS ',
@@ -1095,7 +1258,7 @@ SELECT
                CAST(14 - DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) AS STRING),
                ' more days.')
         -- Scale-up tier, frequency gate blocked
-        WHEN d.target_roas >= d.th_scale_up_roas AND d.eff_orders_for_bid >= 2
+        WHEN d.target_roas >= d.th_scale_up_roas AND d.eff_orders_for_bid >= 1
           AND ((d.coach_mode = 'GUARDIAN' AND d.days_since_last_bid_change < 7)
             OR (d.coach_mode = 'COOLDOWN' AND d.days_since_last_bid_change < 1)
             OR (d.coach_mode = 'BLITZ' AND d.current_phase = 'BOOST' AND d.days_since_last_bid_change < 3)
@@ -1104,11 +1267,11 @@ SELECT
                ' qualifies for bid increase, but last change was ',
                CAST(d.days_since_last_bid_change AS STRING), 'd ago. Waiting.')
         -- Scale-up tier → INCREASE_BID
-        WHEN d.target_roas >= d.th_scale_up_roas AND d.eff_orders_for_bid >= 2
+        WHEN d.target_roas >= d.th_scale_up_roas AND d.eff_orders_for_bid >= 1
           THEN CONCAT('🚀 Strong ROAS ', CAST(ROUND(COALESCE(d.target_roas, 0), 2) AS STRING),
                ' with ', CAST(d.target_orders_8w AS STRING), ' orders → increase bid.')
         -- Profitable tier, frequency gate blocked
-        WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+        WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
           AND ((d.coach_mode = 'GUARDIAN' AND d.days_since_last_bid_change < 7)
             OR (d.coach_mode = 'COOLDOWN' AND d.days_since_last_bid_change < 1)
             OR (d.coach_mode = 'BLITZ' AND d.current_phase = 'BOOST' AND d.days_since_last_bid_change < 3)
@@ -1117,7 +1280,7 @@ SELECT
                ' qualifies for bid increase, but last change was ',
                CAST(d.days_since_last_bid_change AS STRING), 'd ago. Waiting.')
         -- Profitable tier → INCREASE_BID
-        WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+        WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
           THEN CONCAT('📈 Profitable ROAS ', CAST(ROUND(COALESCE(d.target_roas, 0), 2) AS STRING),
                ' with ', CAST(d.target_orders_8w AS STRING), ' orders → increase bid.')
         -- Dead zone (between reduce and profitable)
@@ -1172,7 +1335,7 @@ SELECT
     -- STOP/INCREASE/REDUCE/KEEP on targets are target-level
     WHEN d.target_orders_8w = 0 AND d.target_clicks_8w >= d.th_min_clicks
       AND d.target_clicks_recent_5d > 0 THEN 'TARGET'
-    WHEN d.eff_orders_for_bid >= 2 THEN 'TARGET'
+    WHEN d.eff_orders_for_bid >= 1 THEN 'TARGET'
     WHEN d.target_orders_8w > 0 THEN 'TARGET'
     ELSE 'TERM'
   END as recommendation_object,
@@ -1191,8 +1354,10 @@ SELECT
     -- 🚫 PAUSED: suppress bid recommendations for non-enabled campaigns
     WHEN UPPER(d.campaign_state) != 'ENABLED' AND d.campaign_state IS NOT NULL THEN NULL
 
-    -- 🛡 DEFENSE bid: step toward the ceiling (mirrors the defense raise in target_action)
+    -- 🛡 DEFENSE bid: step toward the ceiling (mirrors the defense raise in target_action).
+    -- BRAND-intent only — generic terms in defense campaigns hold (see target_action comment).
     WHEN d.strategy_id = 'BRAND_DEFENSE'
+      AND d.intent_class = 'BRAND'
       AND COALESCE(d.current_bid, 0) < d.th_bid_cap
       AND COALESCE(d.impression_share_pct, 0) < d.th_defense_dominate_is
       THEN LEAST(GREATEST(d.current_bid * 1.5, d.current_bid + 0.20), d.th_bid_cap)
@@ -1228,13 +1393,13 @@ SELECT
     WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
       AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
       AND GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 1.0  -- profitable AT peak only
-      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1)
       AND DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= 14
       AND NOT (d.current_phase IN ('BOOST', 'PEAK') AND d.days_since_last_bid_change < 3)
       THEN d.peak_reincrease_bid
     WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
       AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
-      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1)
       THEN NULL
     -- Money bleeder (fit): aggressive -BLEEDER_REDUCE_PCT cut. The CPC floor only applies when the
     -- term's CPC is BELOW the current bid (its purpose: keep the bid competitive enough to win some
@@ -1257,12 +1422,12 @@ SELECT
       THEN GREATEST(d.current_bid * 0.70, 0.10)
     -- SEASONAL GUARD: no bid increase for seasonal targets in GUARDIAN mode
     WHEN d.coach_mode = 'GUARDIAN'
-      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
       AND d.is_holiday_seasonal = TRUE
       THEN NULL
     -- WARMUP GUARD: no bid increase for new campaigns (< 14 days)
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
-      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
       THEN NULL
     -- PROBE: bid to the per-match-type launch CPC (p50 real CPC for this parent×match), capped (Coacher C)
     WHEN d.is_probe_cell
@@ -1272,17 +1437,50 @@ SELECT
          AND COALESCE(d.probe_status, 'ACTIVE') = 'ACTIVE'
          AND COALESCE(d.current_bid, 0) < d.probe_launch_cpc
       THEN ROUND(LEAST(d.probe_launch_cpc, 2.0), 2)
+    -- SWEET-SPOT RAISE (mirrors target_action): ≥2× (last 7 days) winner at/above band → step +15% (min +$0.05)
+    -- beyond the band, capped at the hard bid cap (the outer scored clamp permits above-band for these).
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND d.strategy_id IS NOT NULL AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND d.profile_cpc_target IS NOT NULL
+      AND COALESCE(d.current_bid, 0) >= d.profile_cpc_target
+      AND COALESCE(d.current_bid, 0) < d.th_bid_cap
+      AND COALESCE(d.target_net_roas_1w, 0) >= 2   -- ≥2× implies ad sales (GP>0), so no separate order guard needed
+      AND d.days_since_last_bid_change >= 7
+      THEN ROUND(LEAST(GREATEST(d.current_bid * 1.15, d.current_bid + 0.05), d.th_bid_cap), 2)
+    -- SWEET-SPOT PULLBACK (mirrors target_action): above-band keyword under 1.5× → step −15% toward the
+    -- band target, floored at profile_cpc_target so it settles at the band (the sweet-spot equilibrium).
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND d.strategy_id IS NOT NULL AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND d.profile_cpc_target IS NOT NULL
+      AND COALESCE(d.current_bid, 0) > d.profile_cpc_target
+      AND d.target_net_roas_1w IS NOT NULL
+      AND d.target_net_roas_1w >= d.th_profitable_roas AND d.target_net_roas_1w < 1.5
+      AND d.days_since_last_bid_change >= 7
+      THEN ROUND(GREATEST(d.current_bid * 0.85, d.profile_cpc_target), 2)
+    -- BID-TO-BAND CEILING (mirrors target_action): profitable keyword at/above its band → hold (no bid).
+    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
+      AND d.profile_cpc_target IS NOT NULL
+      AND COALESCE(d.current_bid, 0) >= d.profile_cpc_target
+      AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      THEN NULL
     -- ═══ MODE-AWARE INCREASE: BLITZ aggressive ↑ · GUARDIAN gentle ↑ · COOLDOWN minimal ↑ ═══
-    WHEN d.target_roas >= 5.0 AND d.eff_orders_for_bid >= 2
-      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.50 WHEN 'GUARDIAN' THEN 1.10 WHEN 'COOLDOWN' THEN 1.05 ELSE 1.40 END, GREATEST(d.margin_per_unit * 0.5, 0.30))
-    WHEN d.target_roas >= 3.0 AND d.eff_orders_for_bid >= 2
-      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.40 WHEN 'GUARDIAN' THEN 1.08 WHEN 'COOLDOWN' THEN 1.05 ELSE 1.30 END, GREATEST(d.margin_per_unit * 0.5, 0.30))
-    WHEN d.target_roas >= 2.0 AND d.eff_orders_for_bid >= 2
-      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.30 WHEN 'GUARDIAN' THEN 1.05 WHEN 'COOLDOWN' THEN 1.03 ELSE 1.20 END, GREATEST(d.margin_per_unit * 0.5, 0.30))
-    WHEN d.target_roas >= 1.5 AND d.eff_orders_for_bid >= 2
-      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.20 WHEN 'GUARDIAN' THEN 1.05 WHEN 'COOLDOWN' THEN 1.03 ELSE 1.10 END, GREATEST(d.margin_per_unit * 0.5, 0.30))
-    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
-      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.10 WHEN 'GUARDIAN' THEN 1.03 WHEN 'COOLDOWN' THEN 1.03 ELSE 1.05 END, GREATEST(d.margin_per_unit * 0.5, 0.30))
+    -- (below-band winners only — at/above-band held above; the band caps each tier so steps stop at the band)
+    WHEN d.target_roas >= 5.0 AND d.eff_orders_for_bid >= 1
+      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.50 WHEN 'GUARDIAN' THEN 1.10 WHEN 'COOLDOWN' THEN 1.05 ELSE 1.40 END, GREATEST(d.margin_per_unit * 0.5, 0.30), COALESCE(d.profile_cpc_target, GREATEST(d.margin_per_unit * 0.5, 0.30)))
+    WHEN d.target_roas >= 3.0 AND d.eff_orders_for_bid >= 1
+      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.40 WHEN 'GUARDIAN' THEN 1.08 WHEN 'COOLDOWN' THEN 1.05 ELSE 1.30 END, GREATEST(d.margin_per_unit * 0.5, 0.30), COALESCE(d.profile_cpc_target, GREATEST(d.margin_per_unit * 0.5, 0.30)))
+    WHEN d.target_roas >= 2.0 AND d.eff_orders_for_bid >= 1
+      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.30 WHEN 'GUARDIAN' THEN 1.05 WHEN 'COOLDOWN' THEN 1.03 ELSE 1.20 END, GREATEST(d.margin_per_unit * 0.5, 0.30), COALESCE(d.profile_cpc_target, GREATEST(d.margin_per_unit * 0.5, 0.30)))
+    WHEN d.target_roas >= 1.5 AND d.eff_orders_for_bid >= 1
+      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.20 WHEN 'GUARDIAN' THEN 1.05 WHEN 'COOLDOWN' THEN 1.03 ELSE 1.10 END, GREATEST(d.margin_per_unit * 0.5, 0.30), COALESCE(d.profile_cpc_target, GREATEST(d.margin_per_unit * 0.5, 0.30)))
+    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
+      AND COALESCE(d.target_net_roas_4w, 0) >= d.th_profitable_roas   -- 4w confidence (mirrors target_action moderate-strong tier)
+      THEN LEAST(d.current_bid * CASE d.coach_mode WHEN 'BLITZ' THEN 1.10 WHEN 'GUARDIAN' THEN 1.03 WHEN 'COOLDOWN' THEN 1.03 ELSE 1.05 END, GREATEST(d.margin_per_unit * 0.5, 0.30), COALESCE(d.profile_cpc_target, GREATEST(d.margin_per_unit * 0.5, 0.30)))
+    -- TRAILING-WINDOW WINNER BRAKE (mirrors target_action): trailing 4-week still clearly
+    -- profitable (≥1.5× with a real order) → HOLD (no cut); the 1-week reduce signal is noise.
+    WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0
+      AND COALESCE(d.target_net_roas_4w, 0) >= 1.5 AND COALESCE(d.target_orders_4w, 0) >= 1
+      THEN NULL
     -- ═══ MODE-AWARE REDUCE: COOLDOWN aggressive ↓ · GUARDIAN gentle ↓ · BLITZ easy ↓ (protect peak) ═══
     WHEN d.target_roas < 0.3 AND d.target_orders_8w > 0
       THEN GREATEST(d.current_bid * CASE d.coach_mode WHEN 'COOLDOWN' THEN 0.50 WHEN 'GUARDIAN' THEN 0.85 WHEN 'BLITZ' THEN 0.80 ELSE 0.65 END, 0.10)
@@ -1300,8 +1498,9 @@ SELECT
     WHEN d.current_bid IS NULL OR d.current_bid = 0 THEN NULL
     -- 🚫 PAUSED: no bid change for non-enabled campaigns
     WHEN UPPER(d.campaign_state) != 'ENABLED' AND d.campaign_state IS NOT NULL THEN NULL
-    -- 🛡 DEFENSE: % toward the ceiling (mirrors the defense raise in recommended_bid)
+    -- 🛡 DEFENSE: % toward the ceiling (mirrors the defense raise in recommended_bid; BRAND-intent only)
     WHEN d.strategy_id = 'BRAND_DEFENSE'
+      AND d.intent_class = 'BRAND'
       AND COALESCE(d.current_bid, 0) < d.th_bid_cap
       AND COALESCE(d.impression_share_pct, 0) < d.th_defense_dominate_is
       THEN (LEAST(GREATEST(d.current_bid * 1.5, d.current_bid + 0.20), d.th_bid_cap) / NULLIF(d.current_bid, 0) - 1) * 100
@@ -1321,31 +1520,55 @@ SELECT
     WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
       AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
       AND GREATEST(COALESCE(d.ly_net_roas, 0), COALESCE(d.q4_peak_net_roas, 0)) >= 1.0  -- profitable AT peak only
-      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1)
       AND DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= 14
       AND NOT (d.current_phase IN ('BOOST', 'PEAK') AND d.days_since_last_bid_change < 3)
       THEN (d.peak_reincrease_bid / NULLIF(d.current_bid, 0) - 1) * 100
     WHEN d.coach_mode = 'BLITZ' AND d.peak_rec = 'INCREASE'
       AND COALESCE(d.target_keyword_status, 'ENABLED') = 'ENABLED'
-      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2)
+      AND NOT (d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1)
       THEN NULL
     WHEN d.target_orders_8w = 0 AND d.target_clicks_8w >= d.th_min_clicks
       AND d.target_clicks_recent_5d > 0 THEN -30
     -- SEASONAL GUARD: 0% change for seasonal targets in GUARDIAN
     WHEN d.coach_mode = 'GUARDIAN'
-      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
       AND d.is_holiday_seasonal = TRUE
       THEN 0
     -- WARMUP GUARD: 0% change for new campaigns (< 14 days)
     WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
-      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2
+      AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
       THEN 0
+    -- SWEET-SPOT RAISE % (mirrors recommended_bid): exact % of the +15%/min-+$0.05 step, capped at the cap.
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND d.strategy_id IS NOT NULL AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND d.profile_cpc_target IS NOT NULL
+      AND COALESCE(d.current_bid, 0) >= d.profile_cpc_target
+      AND COALESCE(d.current_bid, 0) < d.th_bid_cap
+      AND COALESCE(d.target_net_roas_1w, 0) >= 2   -- ≥2× implies ad sales (GP>0), so no separate order guard needed
+      AND d.days_since_last_bid_change >= 7
+      THEN (LEAST(GREATEST(d.current_bid * 1.15, d.current_bid + 0.05), d.th_bid_cap) / NULLIF(d.current_bid, 0) - 1) * 100
+    -- SWEET-SPOT PULLBACK % (mirrors recommended_bid): exact % of the −15% step toward the band target.
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND d.strategy_id IS NOT NULL AND d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
+      AND d.profile_cpc_target IS NOT NULL
+      AND COALESCE(d.current_bid, 0) > d.profile_cpc_target
+      AND d.target_net_roas_1w IS NOT NULL
+      AND d.target_net_roas_1w >= d.th_profitable_roas AND d.target_net_roas_1w < 1.5
+      AND d.days_since_last_bid_change >= 7
+      THEN (GREATEST(d.current_bid * 0.85, d.profile_cpc_target) / NULLIF(d.current_bid, 0) - 1) * 100
     -- Mode-aware % (mirrors recommended_bid; COOLDOWN reduce handled by the block above)
-    WHEN d.target_roas >= 5.0 AND d.eff_orders_for_bid >= 2 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 50 WHEN 'GUARDIAN' THEN 10 WHEN 'COOLDOWN' THEN 5 ELSE 40 END
-    WHEN d.target_roas >= 3.0 AND d.eff_orders_for_bid >= 2 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 40 WHEN 'GUARDIAN' THEN 8 WHEN 'COOLDOWN' THEN 5 ELSE 30 END
-    WHEN d.target_roas >= 2.0 AND d.eff_orders_for_bid >= 2 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 30 WHEN 'GUARDIAN' THEN 5 WHEN 'COOLDOWN' THEN 3 ELSE 20 END
-    WHEN d.target_roas >= 1.5 AND d.eff_orders_for_bid >= 2 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 20 WHEN 'GUARDIAN' THEN 5 WHEN 'COOLDOWN' THEN 3 ELSE 10 END
-    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 10 WHEN 'GUARDIAN' THEN 3 WHEN 'COOLDOWN' THEN 3 ELSE 5 END
+    WHEN d.target_roas >= 5.0 AND d.eff_orders_for_bid >= 1 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 50 WHEN 'GUARDIAN' THEN 10 WHEN 'COOLDOWN' THEN 5 ELSE 40 END
+    WHEN d.target_roas >= 3.0 AND d.eff_orders_for_bid >= 1 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 40 WHEN 'GUARDIAN' THEN 8 WHEN 'COOLDOWN' THEN 5 ELSE 30 END
+    WHEN d.target_roas >= 2.0 AND d.eff_orders_for_bid >= 1 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 30 WHEN 'GUARDIAN' THEN 5 WHEN 'COOLDOWN' THEN 3 ELSE 20 END
+    WHEN d.target_roas >= 1.5 AND d.eff_orders_for_bid >= 1 THEN CASE d.coach_mode WHEN 'BLITZ' THEN 20 WHEN 'GUARDIAN' THEN 5 WHEN 'COOLDOWN' THEN 3 ELSE 10 END
+    WHEN d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
+      AND COALESCE(d.target_net_roas_4w, 0) >= d.th_profitable_roas   -- 4w confidence (mirrors target_action / recommended_bid)
+      THEN CASE d.coach_mode WHEN 'BLITZ' THEN 10 WHEN 'GUARDIAN' THEN 3 WHEN 'COOLDOWN' THEN 3 ELSE 5 END
+    -- TRAILING-WINDOW WINNER BRAKE (mirrors target_action / recommended_bid): strong 4w → hold (no cut).
+    WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0
+      AND COALESCE(d.target_net_roas_4w, 0) >= 1.5 AND COALESCE(d.target_orders_4w, 0) >= 1
+      THEN NULL
     WHEN d.target_roas < 0.3 AND d.target_orders_8w > 0 THEN CASE d.coach_mode WHEN 'COOLDOWN' THEN -50 WHEN 'GUARDIAN' THEN -15 WHEN 'BLITZ' THEN -20 ELSE -35 END
     WHEN d.target_roas < 0.5 AND d.target_orders_8w > 0 THEN CASE d.coach_mode WHEN 'COOLDOWN' THEN -40 WHEN 'GUARDIAN' THEN -10 WHEN 'BLITZ' THEN -15 ELSE -25 END
     WHEN d.target_roas < d.th_reduce_bid_roas AND d.target_orders_8w > 0 THEN CASE d.coach_mode WHEN 'COOLDOWN' THEN -25 WHEN 'GUARDIAN' THEN -7 WHEN 'BLITZ' THEN -10 ELSE -15 END
@@ -1367,7 +1590,7 @@ SELECT
     -- (NEGATE_TERM removed — no cross-campaign consolidation)
 
     -- Promote to exact
-    WHEN d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+    WHEN d.strategy_id = 'INTENT'
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       AND NOT d.already_in_exact_boost AND d.sqp_amazon_search_volume_8w >= d.th_promote_min_sqp_vol
       THEN d.ads_orders_8w * 50.0
@@ -1378,7 +1601,7 @@ SELECT
       THEN d.ads_orders_8w * 30.0
 
     -- Increase bid (HUNTER/LOW_COST strong targets)
-    WHEN d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+    WHEN d.strategy_id = 'INTENT'
       AND d.ads_orders_8w >= 2 AND d.ads_net_roas_8w >= d.th_scale_up_roas
       THEN d.ads_orders_8w * 20.0
 
@@ -1439,13 +1662,13 @@ SELECT
         CONCAT(' | roas=', CAST(COALESCE(d.ads_net_roas_8w, 0) AS STRING),
           ' campaign_type=', COALESCE(d.campaign_type, '?'),
           CASE
-            WHEN d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+            WHEN d.strategy_id = 'INTENT'
               AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64) AND NOT d.already_in_exact_boost
               AND d.sqp_amazon_search_volume_8w >= d.th_promote_min_sqp_vol
               THEN CONCAT(' sqp_vol=', CAST(ROUND(d.sqp_amazon_search_volume_8w, 0) AS STRING), '>=', CAST(CAST(d.th_promote_min_sqp_vol AS INT64) AS STRING), ' [PROMOTE]')
             WHEN d.strategy_id = 'EXACT_BOOST' AND d.ads_net_roas_8w >= d.th_scale_up_roas
               THEN ' [SCALE_UP]'
-            WHEN d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+            WHEN d.strategy_id = 'INTENT'
               AND d.ads_orders_8w >= 2 AND d.ads_net_roas_8w >= d.th_scale_up_roas
               THEN ' [INCREASE_BID]'
             WHEN CASE
@@ -1532,7 +1755,7 @@ SELECT
     -- SEASONAL TERM GUARD (non-BLITZ): profitable seasonal term held for next BLITZ
     WHEN d.coach_mode != 'BLITZ'
       AND d.is_holiday_seasonal = TRUE
-      AND d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+      AND d.strategy_id = 'INTENT'
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       THEN CONCAT('🛡 Seasonal term "', d.search_term, '" is profitable (',
                    CAST(d.ads_orders_8w AS STRING), ' orders, ROAS ',
@@ -1545,9 +1768,20 @@ SELECT
                    ') but promotion blocked — seasonal terms can only be promoted during BLITZ. ',
                    'Will auto-promote next season.')
 
-    -- Insufficient data (clicks-based)
-    WHEN d.ads_clicks_8w < d.th_min_clicks
-      THEN CONCAT(CAST(d.ads_clicks_8w AS STRING), ' clicks(8w) — need at least ',
+    -- No strategy mapped: the bid decision is blocked on mapping, NOT on click volume.
+    -- Surface that explicitly (a keyword can have plenty of clicks yet sit unmanaged) instead
+    -- of the misleading "need N clicks" message. Mirrors target_action = NEEDS_STRATEGY.
+    WHEN d.strategy_id IS NULL
+      THEN CONCAT('No strategy assigned to this campaign — assign one (Campaign Mapping) so the coach can manage it. (',
+                   CAST(COALESCE(d.target_clicks_8w, 0) AS STRING), ' clicks, ',
+                   CAST(COALESCE(d.target_orders_8w, 0) AS STRING), ' orders in 8w.)')
+
+    -- Insufficient data (clicks-based). Uses target_clicks_8w (the whole keyword), NOT
+    -- ads_clicks_8w (one search-term slice) — the bid gate is keyword-level (see target_action
+    -- line ~767), so the reason must judge the same total or it under-reports a busy keyword
+    -- (e.g. shows "9 clicks" for a keyword with 120).
+    WHEN COALESCE(d.target_clicks_8w, d.ads_clicks_8w) < d.th_min_clicks
+      THEN CONCAT(CAST(COALESCE(d.target_clicks_8w, d.ads_clicks_8w) AS STRING), ' clicks(8w) — need at least ',
                    CAST(CAST(d.th_min_clicks AS INT64) AS STRING), ' clicks for ', COALESCE(d.strategy_id, 'this strategy'), '.')
 
     -- EXACT_BOOST specific reasons
@@ -1570,11 +1804,18 @@ SELECT
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
       THEN CONCAT(CAST(d.ads_clicks_8w AS STRING), ' clicks(8w) on "', d.search_term,
                    '" with zero orders. Still receiving clicks (', CAST(d.ads_clicks_recent_5d AS STRING), ' in 5d).',
+                   -- WHY switch: the hero converts on THIS search where the current ad gets 0 orders, so the
+                   -- term may not be wasted spend — it's the wrong product/colour. Show the evidence (hero CVR).
                    CASE WHEN d.hero_asin IS NOT NULL AND NOT d.is_hero_match
-                        THEN CONCAT(' [WRONG ASIN: switch to ', COALESCE(d.hero_product_name, ''), ']') ELSE '' END)
+                        THEN CONCAT(' [WRONG ASIN: ', COALESCE(d.hero_product_name, 'another variant'),
+                          CASE WHEN COALESCE(d.hero_ads_cvr_pct, d.hero_sqp_cvr_pct, 0) > 0
+                            THEN CONCAT(' converts ', CAST(ROUND(COALESCE(d.hero_ads_cvr_pct, d.hero_sqp_cvr_pct), 1) AS STRING),
+                                        '% on this search vs 0 orders on the ad you run — switch the ad to it]')
+                            ELSE ' is the better-converting variant here — switch the ad to it]' END)
+                        ELSE '' END)
 
     -- PROMOTE (with SQP volume check) — uses mode-aware ROAS
-    WHEN d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+    WHEN d.strategy_id = 'INTENT'
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       AND CASE
            WHEN d.coach_mode IN ('GUARDIAN', 'COOLDOWN') THEN d.ads_net_roas_1w_os
@@ -1612,7 +1853,7 @@ SELECT
                    CAST(ROUND(COALESCE(d.ads_net_profit_8w, 0), 0) AS STRING), '. Keep targeting — check TARGET for bid recommendation.')
 
     -- INCREASE_BID (HUNTER/LOW_COST strong targets)
-    WHEN d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+    WHEN d.strategy_id = 'INTENT'
       AND d.ads_orders_8w >= 2 AND d.ads_net_roas_8w >= d.th_scale_up_roas
       THEN CONCAT('Target performing well: ', CAST(d.ads_orders_8w AS STRING),
                    ' orders (8w), ROAS ', CAST(d.ads_net_roas_8w AS STRING), ' (8w)',
@@ -1700,52 +1941,103 @@ SELECT
 
     WHEN d.current_budget IS NULL THEN NULL
 
-    -- ═══ GUARDIAN MODE ═══
-    -- OUT OF BUDGET + PROFITABLE → increase (with frequency gate: every 3d)
+    -- ═══ BUDGET REDESIGN (Ori 2026-07-03): budget follows ACTUAL use × recent weekly performance ═══
+    -- Precedence: defense floor → 14d grace (with zero-order guard) → stop → contain → formula.
+    -- Weekly windows (cw.*) are the SAME formulas the dashboard row shows (GROSS_PROFIT/spend, LA tz).
+
+    -- 1 · DEFENSE: high budget, never managed. Below $100 → one-time floor to $100; else hands off.
+    WHEN d.strategy_id IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE') AND d.current_budget < 100
+      THEN 'DEFENSE_BUDGET_FLOOR'
+    WHEN d.strategy_id IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE') THEN 'BUDGET_OK'
+
+    -- 2 · GRACE: first 14 days untouched — except a broken launch (>$25 spent, ZERO orders) is
+    --     contained at $10/day so it can't burn its full budget for two weeks.
+    WHEN DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), cw.first_activity, DAY) < 14
+      AND COALESCE(cw.spend_14d, 0) > 25 AND COALESCE(cw.orders_14d, 0) = 0
+      AND d.current_budget > 10
+      THEN 'GUARDIAN_BUDGET_CONTAIN'
+    WHEN DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), cw.first_activity, DAY) < 14 THEN 'BUDGET_OK'
+
+    -- 3 · STOP: strong-bad — losing hard now (w1<0.5), over a month (4w<0.7), AND no peak redemption
+    --     (peak<0.7; NULL peak = unprotected UNLESS the family is in a pre-peak ramp — let it prove
+    --     itself at its first peak). Real spend only (8w > $25, this wk ≥ $5). GUARDIAN only.
     WHEN d.coach_mode = 'GUARDIAN'
-      AND COALESCE(cbm.camp_budget_util_pct, 0) >= 90
-      AND COALESCE(cbm.camp_effective_roas, 0) >= 1.1
+      AND COALESCE(cw.w1_roas, 99) < 0.5 AND COALESCE(cw.w4_roas, 99) < 0.7
+      AND COALESCE(cw.peak_roas, 0) < 0.7
+      AND NOT (COALESCE(cw.peak_spend, 0) < 5 AND ppf.parent_name IS NOT NULL)
+      AND COALESCE(cbm.camp_spend_8w, 0) > 25 AND COALESCE(cw.w1_spend, 0) >= 5
       AND d.days_since_last_budget_change >= 3
+      THEN 'CAMPAIGN_STOP'
+
+    -- 4 · CONTAIN: strong-losing — two bad weeks in a row (w1<0.5, prev<0.7) → cap at $10/day.
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND COALESCE(cw.w1_roas, 99) < 0.5 AND COALESCE(cw.pw_roas, 99) < 0.7
+      AND COALESCE(cw.w1_spend, 0) >= 5 AND d.current_budget > 10
+      AND d.days_since_last_budget_change >= 3
+      THEN 'GUARDIAN_BUDGET_CONTAIN'
+
+    -- 5 · FORMULA (GUARDIAN): budget = actual daily spend × clamp(0.5·w1 + 0.5·prev, 0.5, 1.5).
+    --     Direction = formula vs current; the ±$2/±10% deadband is applied in the final SELECT.
+    WHEN d.coach_mode = 'GUARDIAN' AND COALESCE(cw.w1_spend, 0) >= 5
+      AND d.days_since_last_budget_change >= 3
+      AND ROUND((cw.w1_spend / 7.0) * LEAST(GREATEST(
+            0.5 * cw.w1_roas + 0.5 * COALESCE(cw.pw_roas, cw.w1_roas), 0.5), 1.5), 0) > d.current_budget
       THEN 'GUARDIAN_BUDGET_INCREASE'
-    -- LOSING → decrease (with frequency gate: every 3d)
-    WHEN d.coach_mode = 'GUARDIAN'
-      AND COALESCE(cbm.camp_effective_roas, 0) < 0.9
-      AND COALESCE(cbm.camp_spend_8w, 0) > 25
+    WHEN d.coach_mode = 'GUARDIAN' AND COALESCE(cw.w1_spend, 0) >= 5
       AND d.days_since_last_budget_change >= 3
+      AND ROUND((cw.w1_spend / 7.0) * LEAST(GREATEST(
+            0.5 * cw.w1_roas + 0.5 * COALESCE(cw.pw_roas, cw.w1_roas), 0.5), 1.5), 0) < d.current_budget
       THEN 'GUARDIAN_BUDGET_DECREASE'
-    -- GUARDIAN: no action needed (or frequency gate not met)
     WHEN d.coach_mode = 'GUARDIAN' THEN 'BUDGET_OK'
 
-    -- ═══ BLITZ MODE ═══
-    -- Frequency gate: BOOST=3d, PEAK=1d
-    -- OUT OF BUDGET + PROFITABLE → aggressive increase
+    -- ═══ BLITZ: budget from same-holiday-LAST-YEAR (±7d band, dates align YoY) → else historical
+    --     peak → else the formula with 3× headroom. Losing DURING the peak itself still trims. ═══
     WHEN d.coach_mode = 'BLITZ'
-      AND COALESCE(cbm.camp_budget_util_pct, 0) >= 90
-      AND COALESCE(cbm.camp_effective_roas, 0) >= 1.1
-      AND (
-        (d.current_phase = 'BOOST' AND d.days_since_last_budget_change >= 3)
-        OR (d.current_phase = 'PEAK' AND d.days_since_last_budget_change >= 1)
-        OR d.current_phase NOT IN ('BOOST', 'PEAK')  -- PRE_PEAK: no extra gate
-      )
-      THEN 'BLITZ_BUDGET_INCREASE'
-    -- LOSING → reduce even in BLITZ
-    WHEN d.coach_mode = 'BLITZ'
-      AND COALESCE(cbm.camp_effective_roas, 0) < 0.9
-      AND COALESCE(cbm.camp_spend_8w, 0) > 25
+      AND COALESCE(cw.w1_roas, 99) < 0.5 AND COALESCE(cw.pw_roas, 99) < 0.7
+      AND COALESCE(cw.w1_spend, 0) >= 5 AND d.current_budget > 10
       AND (
         (d.current_phase = 'BOOST' AND d.days_since_last_budget_change >= 3)
         OR (d.current_phase = 'PEAK' AND d.days_since_last_budget_change >= 1)
         OR d.current_phase NOT IN ('BOOST', 'PEAK')
       )
+      THEN 'GUARDIAN_BUDGET_CONTAIN'
+    WHEN d.coach_mode = 'BLITZ'
+      AND (
+        (d.current_phase = 'BOOST' AND d.days_since_last_budget_change >= 3)
+        OR (d.current_phase = 'PEAK' AND d.days_since_last_budget_change >= 1)
+        OR d.current_phase NOT IN ('BOOST', 'PEAK')
+      )
+      AND COALESCE(
+            IF(COALESCE(cw.ly_spend, 0) > 25,
+               ROUND(cw.ly_daily_spend * LEAST(GREATEST(cw.ly_roas, 0.7), 3.0), 0), NULL),
+            IF(COALESCE(cw.peak_spend, 0) > 25,
+               ROUND(cw.peak_daily_spend * LEAST(GREATEST(cw.peak_roas, 0.7), 3.0), 0), NULL),
+            IF(COALESCE(cw.w1_spend, 0) >= 5,
+               ROUND((cw.w1_spend / 7.0) * LEAST(GREATEST(
+                 0.5 * cw.w1_roas + 0.5 * COALESCE(cw.pw_roas, cw.w1_roas), 0.5), 3.0), 0), NULL)
+          ) > d.current_budget
+      THEN 'BLITZ_BUDGET_INCREASE'
+    WHEN d.coach_mode = 'BLITZ'
+      AND (
+        (d.current_phase = 'BOOST' AND d.days_since_last_budget_change >= 3)
+        OR (d.current_phase = 'PEAK' AND d.days_since_last_budget_change >= 1)
+        OR d.current_phase NOT IN ('BOOST', 'PEAK')
+      )
+      AND COALESCE(
+            IF(COALESCE(cw.ly_spend, 0) > 25,
+               ROUND(cw.ly_daily_spend * LEAST(GREATEST(cw.ly_roas, 0.7), 3.0), 0), NULL),
+            IF(COALESCE(cw.peak_spend, 0) > 25,
+               ROUND(cw.peak_daily_spend * LEAST(GREATEST(cw.peak_roas, 0.7), 3.0), 0), NULL),
+            IF(COALESCE(cw.w1_spend, 0) >= 5,
+               ROUND((cw.w1_spend / 7.0) * LEAST(GREATEST(
+                 0.5 * cw.w1_roas + 0.5 * COALESCE(cw.pw_roas, cw.w1_roas), 0.5), 3.0), 0), NULL)
+          ) < d.current_budget
       THEN 'BLITZ_BUDGET_DECREASE'
-    -- BLITZ: no action needed (or frequency gate not met)
     WHEN d.coach_mode = 'BLITZ' THEN 'BUDGET_OK'
 
-    -- ═══ COOLDOWN MODE ═══
+    -- ═══ COOLDOWN: straight reverse to the pre-peak budget (Ori: "cooldown should reverse peak budget") ═══
     WHEN d.coach_mode = 'COOLDOWN' AND d.pre_peak_budget IS NULL THEN NULL
     WHEN d.coach_mode = 'COOLDOWN' AND d.current_budget <= d.pre_peak_budget THEN 'BUDGET_OK'
-    WHEN d.coach_mode = 'COOLDOWN' AND COALESCE(ppc.pp_campaign_net_roas, 0) >= 0.8 THEN 'COOLDOWN_BUDGET_MONITOR'
-    WHEN d.coach_mode = 'COOLDOWN' AND COALESCE(ppc.pp_campaign_net_roas, 0) >= 0.6 THEN 'COOLDOWN_BUDGET_REDUCE'
     WHEN d.coach_mode = 'COOLDOWN' THEN 'RESTORE_BUDGET_PRE_PEAK'
 
     ELSE NULL
@@ -1765,35 +2057,61 @@ SELECT
   cbm.camp_spend_8w as camp_total_spend_8w,
   cbm.camp_orders_8w as camp_total_orders_8w,
 
-  -- ─── Budget recommendation (all modes) ───
+  -- ─── Budget recommendation (mirrors budget_action precedence EXACTLY — 2026-07-03 redesign) ───
   CASE
     WHEN d.current_budget IS NULL THEN NULL
 
-    -- GUARDIAN: +10% for profitable out-of-budget, -15% for losing
-    WHEN d.coach_mode = 'GUARDIAN'
-      AND COALESCE(cbm.camp_budget_util_pct, 0) >= 90
-      AND COALESCE(cbm.camp_effective_roas, 0) >= 1.1
-      THEN ROUND(d.current_budget * 1.10, 0)
-    WHEN d.coach_mode = 'GUARDIAN'
-      AND COALESCE(cbm.camp_effective_roas, 0) < 0.9
-      AND COALESCE(cbm.camp_spend_8w, 0) > 25
-      THEN ROUND(d.current_budget * 0.85, 0)
+    -- 1 · DEFENSE floor
+    WHEN d.strategy_id IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE') AND d.current_budget < 100 THEN 100
+    WHEN d.strategy_id IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE') THEN NULL
 
-    -- BLITZ: +20% for aggressive scaling, -10% for bad performers
-    WHEN d.coach_mode = 'BLITZ'
-      AND COALESCE(cbm.camp_budget_util_pct, 0) >= 90
-      AND COALESCE(cbm.camp_effective_roas, 0) >= 1.1
-      THEN ROUND(d.current_budget * 1.20, 0)
-    WHEN d.coach_mode = 'BLITZ'
-      AND COALESCE(cbm.camp_effective_roas, 0) < 0.9
-      AND COALESCE(cbm.camp_spend_8w, 0) > 25
-      THEN ROUND(d.current_budget * 0.90, 0)
+    -- 2 · GRACE (zero-order bleed guard → $10; otherwise untouched)
+    WHEN DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), cw.first_activity, DAY) < 14
+      AND COALESCE(cw.spend_14d, 0) > 25 AND COALESCE(cw.orders_14d, 0) = 0
+      AND d.current_budget > 10
+      THEN 10
+    WHEN DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), cw.first_activity, DAY) < 14 THEN NULL
 
-    -- COOLDOWN: 3-tier restore logic
+    -- 3 · STOP → no budget value (it's a pause, exported as a campaign State row)
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND COALESCE(cw.w1_roas, 99) < 0.5 AND COALESCE(cw.w4_roas, 99) < 0.7
+      AND COALESCE(cw.peak_roas, 0) < 0.7
+      AND NOT (COALESCE(cw.peak_spend, 0) < 5 AND ppf.parent_name IS NOT NULL)
+      AND COALESCE(cbm.camp_spend_8w, 0) > 25 AND COALESCE(cw.w1_spend, 0) >= 5
+      AND d.days_since_last_budget_change >= 3
+      THEN NULL
+
+    -- 4 · CONTAIN → $10
+    WHEN d.coach_mode = 'GUARDIAN'
+      AND COALESCE(cw.w1_roas, 99) < 0.5 AND COALESCE(cw.pw_roas, 99) < 0.7
+      AND COALESCE(cw.w1_spend, 0) >= 5 AND d.current_budget > 10
+      AND d.days_since_last_budget_change >= 3
+      THEN 10
+
+    -- 5 · FORMULA (GUARDIAN): actual daily spend × clamp(0.5·w1 + 0.5·prev, 0.5, 1.5)
+    WHEN d.coach_mode = 'GUARDIAN' AND COALESCE(cw.w1_spend, 0) >= 5
+      THEN GREATEST(ROUND((cw.w1_spend / 7.0) * LEAST(GREATEST(
+             0.5 * cw.w1_roas + 0.5 * COALESCE(cw.pw_roas, cw.w1_roas), 0.5), 1.5), 0), 1)
+
+    -- BLITZ: same-holiday-LY → historical peak → formula with 3× headroom (losing-in-peak → $10)
+    WHEN d.coach_mode = 'BLITZ'
+      AND COALESCE(cw.w1_roas, 99) < 0.5 AND COALESCE(cw.pw_roas, 99) < 0.7
+      AND COALESCE(cw.w1_spend, 0) >= 5 AND d.current_budget > 10
+      THEN 10
+    WHEN d.coach_mode = 'BLITZ'
+      THEN COALESCE(
+             IF(COALESCE(cw.ly_spend, 0) > 25,
+                ROUND(cw.ly_daily_spend * LEAST(GREATEST(cw.ly_roas, 0.7), 3.0), 0), NULL),
+             IF(COALESCE(cw.peak_spend, 0) > 25,
+                ROUND(cw.peak_daily_spend * LEAST(GREATEST(cw.peak_roas, 0.7), 3.0), 0), NULL),
+             IF(COALESCE(cw.w1_spend, 0) >= 5,
+                ROUND((cw.w1_spend / 7.0) * LEAST(GREATEST(
+                  0.5 * cw.w1_roas + 0.5 * COALESCE(cw.pw_roas, cw.w1_roas), 0.5), 3.0), 0), NULL)
+           )
+
+    -- COOLDOWN: straight reverse to pre-peak
     WHEN d.coach_mode = 'COOLDOWN' AND d.pre_peak_budget IS NULL THEN NULL
     WHEN d.coach_mode = 'COOLDOWN' AND d.current_budget <= d.pre_peak_budget THEN NULL
-    WHEN d.coach_mode = 'COOLDOWN' AND COALESCE(ppc.pp_campaign_net_roas, 0) >= 0.8 THEN NULL
-    WHEN d.coach_mode = 'COOLDOWN' AND COALESCE(ppc.pp_campaign_net_roas, 0) >= 0.6 THEN ROUND(d.current_budget * 0.90, 0)
     WHEN d.coach_mode = 'COOLDOWN' THEN d.pre_peak_budget
 
     ELSE NULL
@@ -1830,9 +2148,9 @@ SELECT
         WHEN d.ads_clicks_8w < d.th_min_clicks AND d.recommendation_type != 'OPPORTUNITY' THEN 'MAINTAIN'
         -- Bid increase on profitable targets
         WHEN d.target_roas >= d.th_scale_up_roas
-             AND d.eff_orders_for_bid >= 2 THEN 'SCALE_WINNERS'
+             AND d.eff_orders_for_bid >= 1 THEN 'SCALE_WINNERS'
         -- Promote to exact
-        WHEN d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+        WHEN d.strategy_id = 'INTENT'
              AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
              AND NOT d.already_in_exact_boost THEN 'PROMOTE_TERMS'
         -- Heavy loss even in blitz → cost control
@@ -1860,12 +2178,12 @@ SELECT
              AND d.target_orders_8w > 0 THEN 'OPTIMIZE_BIDS'
         -- Warmup: new campaigns (< 14 days) → MAINTAIN until algorithm matures
         WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
-             AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 2 THEN 'MAINTAIN'
+             AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1 THEN 'MAINTAIN'
         -- Bid increase on winners
         WHEN d.target_roas >= d.th_scale_up_roas
-             AND d.eff_orders_for_bid >= 2 THEN 'SCALE_WINNERS'
+             AND d.eff_orders_for_bid >= 1 THEN 'SCALE_WINNERS'
         -- Promote to exact (blocked for seasonal terms — only BLITZ promotes seasonal)
-        WHEN d.strategy_id IN ('HUNTER', 'LOW_COST_DISCOVERY')
+        WHEN d.strategy_id = 'INTENT'
              AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
              AND NOT d.already_in_exact_boost
              AND d.sqp_amazon_search_volume_8w >= d.th_promote_min_sqp_vol
@@ -1897,12 +2215,14 @@ SELECT
   -- ─── Strategy reasoning (plain-language "why" per strategy — the bar varies, so explain it) ───
   CASE
     WHEN d.strategy_id IS NULL THEN 'No strategy assigned to this campaign — assign one so the coach can manage it.'
+    WHEN d.strategy_id = 'BRAND_DEFENSE' AND d.intent_class != 'BRAND' THEN
+      'Defense campaign, but this is NOT a brand term — the moat raise only applies to brand terms; this one holds (peaks handled by BLITZ).'
     WHEN d.strategy_id = 'BRAND_DEFENSE' THEN CONCAT(
       'Brand defense — bid high to own the placement and make competitors overpay; not optimized for our ROAS. Impression share ',
       CAST(ROUND(COALESCE(d.impression_share_pct, 0), 0) AS STRING), '% vs ',
       CAST(CAST(d.th_defense_dominate_is AS INT64) AS STRING), '% dominate cutoff.')
     WHEN d.strategy_id = 'PRODUCT_DEFENSE' THEN 'Product defense — keep our own ASINs on our own detail pages so shoppers see only our options; bid up toward the ceiling.'
-    WHEN d.strategy_id = 'HUNTER' THEN CONCAT('Discovery — only scale once it is ad-profitable (net ROAS >= ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x); net ROAS is ads-only, breakeven 1.0.')
+    WHEN d.strategy_id = 'INTENT' THEN CONCAT('Discovery — only scale once it is ad-profitable (net ROAS >= ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x); net ROAS is ads-only, breakeven 1.0.')
     WHEN d.strategy_id = 'SEASONAL_PUSH' THEN CONCAT('Seasonal — keep warm at >= ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x so peak-proven terms stay live for the next peak.')
     WHEN d.strategy_id = 'NEW_LAUNCH' THEN CONCAT('New launch — push for clicks early (bar ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x) to learn before optimizing.')
     ELSE CONCAT('Scales when net ROAS >= ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x (ads-only; breakeven 1.0).')
@@ -1934,6 +2254,8 @@ LEFT JOIN (
 ) ae ON d.asin = ae.ae_asin
 LEFT JOIN pp_campaign_metrics ppc ON d.campaign_id = ppc.campaign_id
 LEFT JOIN campaign_budget_metrics cbm ON d.campaign_id = cbm.campaign_id
+LEFT JOIN camp_windows cw ON d.campaign_id = cw.campaign_id
+LEFT JOIN prepeak_families ppf ON LOWER(d.parent_name) = LOWER(ppf.parent_name)
 LEFT JOIN seasonal_campaign_holiday sch ON d.campaign_id = sch.campaign_id
 LEFT JOIN ly_peak_campaign_roas lypr ON sch.seasonal_peak_name = lypr.holiday_name
 ),
@@ -1950,7 +2272,15 @@ scored AS (
     CASE WHEN days_since_last_suggestion < 3 AND target_action != 'STOP_TARGET'
          THEN 'KEEP_TARGET' ELSE target_action END AS target_action,
     CASE WHEN days_since_last_suggestion_camp < 3
-         THEN 'BUDGET_OK' ELSE budget_action END AS budget_action,
+         THEN 'BUDGET_OK'
+         -- Deadband (2026-07-03): formula-driven moves smaller than ±$2 AND ±10% are churn, not
+         -- decisions — suppress. Absolute moves (stop/contain/floor/restore) bypass the deadband.
+         WHEN budget_action IN ('GUARDIAN_BUDGET_INCREASE', 'GUARDIAN_BUDGET_DECREASE',
+                                'BLITZ_BUDGET_INCREASE', 'BLITZ_BUDGET_DECREASE')
+           AND recommended_budget IS NOT NULL AND current_budget IS NOT NULL
+           AND ABS(recommended_budget - current_budget) < GREATEST(2, 0.10 * current_budget)
+         THEN 'BUDGET_OK'
+         ELSE budget_action END AS budget_action,
     -- B2 fix: finalize recommended_bid here, where target_action is referenceable.
     -- recommended_bid (from scored_raw) is now the RAW bid. Apply the upper clamp always; apply the
     -- lower floor (strategy_bid_min) ONLY for bid-UP intents — never floor a REDUCE_BID/STOP_TARGET/
@@ -1961,7 +2291,17 @@ scored AS (
       CASE WHEN target_action IN ('REDUCE_BID', 'STOP_TARGET', 'MONITOR_TARGET')
            THEN recommended_bid
            ELSE GREATEST(recommended_bid, strategy_bid_min) END,
-      COALESCE(strategy_bid_max, th_bid_cap), th_bid_cap), 2) AS recommended_bid
+      -- DEFENSE EXEMPTION (Ori 2026-07-02): defense bids may exceed the band/template max — the moat
+      -- is bought at whatever it costs, aggressively (raise formula is ×1.5 / +$0.20 per step), capped
+      -- ONLY by the hard th_bid_cap ($2). All other strategies stay clamped to strategy_bid_max
+      -- (= GREATEST(template max, band) per band-wins).
+      CASE WHEN strategy_id IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE') THEN th_bid_cap
+           -- SWEET-SPOT (Ori 2026-07-04): a GUARDIAN winner still returning ≥2× net ROAS (last 7 days) may bid
+           -- BEYOND its band toward the hard cap — the SWEET-SPOT PULLBACK tier reels it back under 1.5×.
+           -- Without this, the band (strategy_bid_max) would clamp the raise straight back to the edge.
+           WHEN coach_mode = 'GUARDIAN' AND COALESCE(target_net_roas_1w, 0) >= 2 THEN th_bid_cap
+           ELSE COALESCE(strategy_bid_max, th_bid_cap) END,
+      th_bid_cap), 2) AS recommended_bid
   ) FROM scored_raw
 )
 

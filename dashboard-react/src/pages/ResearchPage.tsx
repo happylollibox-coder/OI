@@ -12,8 +12,12 @@ import {
 import { mapResearchRow } from './research/mapRow';
 import { mapRecommendationsByType } from './research/mapRecommendation';
 import { FamilyTabs } from './research/FamilyTabs';
+import { TimeWindowLegend } from './research/TimeWindowLegend';
 import { FamilyInfoCard } from './research/FamilyInfoCard';
 import { RecommendationsCard } from './research/RecommendationsCard';
+import { ProductCompetitorsCard } from './research/ProductCompetitorsCard';
+import { IntentsPanel } from './research/IntentsPanel';
+import { BrandSpotlightCard } from './research/BrandSpotlightCard';
 import { ConversionCurveCard } from './research/ConversionCurveCard';
 import { ResultsTable } from './research/ResultsTable';
 import { apiFetch } from '../utils/apiFetch';
@@ -339,11 +343,17 @@ export function ResearchPage() {
 
   // ─── Save manual segment overrides (MERGE upsert server-side) ──
   const onSaveSegments = useCallback(async (queryText: string, segs: Record<string, string | null>) => {
-    await apiFetch('/api/research/update-segments', {
+    // Verify the write actually landed — a silent optimistic update previously made a failed save
+    // (expired token / backend error) look successful, which read as "not saving to DB".
+    const res = await apiFetch('/api/research/update-segments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query_text: queryText, ...segs }),
     });
+    const body = await res.json().catch(() => ({} as { success?: boolean; error?: string }));
+    if (!res.ok || body?.success === false) {
+      throw new Error(res.status === 401 ? 'session expired — reload to re-login' : (body?.error || `save failed (HTTP ${res.status})`));
+    }
     setResults(prev => prev.map(r =>
       r.query_text === queryText ? { ...r, ...segs } as ResearchRow : r
     ));
@@ -356,6 +366,11 @@ export function ResearchPage() {
   return (
     <>
       <Section title="Keyword Research">
+        {/* The page has NO single time window — each panel measures over a different span.
+            Spelling them out beats letting a number be read against the wrong period.
+            Sources: segment-reasoning/segment-terms (no date filter), V_RESEARCH_TERMS (104w),
+            V_INTENT_KEYWORDS (90d / last season), product-competitors (180d). */}
+        <TimeWindowLegend />
         <FamilyTabs
           products={products}
           selected={selectedProduct}
@@ -371,8 +386,17 @@ export function ResearchPage() {
           />
         )}
 
+        {selectedProduct && <IntentsPanel selectedProduct={selectedProduct} />}
+
+        {/* Cross-family — not scoped to the selected family */}
+        <BrandSpotlightCard />
+
         {selectedProduct && (
           <RecommendationsCard recs={recommendations} selectedProduct={selectedProduct} />
+        )}
+
+        {selectedProduct && (
+          <ProductCompetitorsCard selectedProduct={selectedProduct} />
         )}
 
         {/* ─── Season Selector ─── */}

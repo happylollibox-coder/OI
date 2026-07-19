@@ -70,6 +70,7 @@ export function ResultsTable({
   const [editingTerm, setEditingTerm] = useState<string | null>(null);
   const [editSegments, setEditSegments] = useState<Record<string, string | null>>({});
   const [savingSegment, setSavingSegment] = useState(false);
+  const [segErr, setSegErr] = useState<string | null>(null);
   // Cluster collapse state — all clusters start collapsed (user sees summaries first)
   const [openClusters, setOpenClusters] = useState<Set<string>>(new Set());
   const toggleCluster = (key: string) => setOpenClusters(prev => {
@@ -615,23 +616,24 @@ export function ResultsTable({
                               <button
                                 disabled={savingSegment}
                                 onClick={async () => {
-                                  setSavingSegment(true);
+                                  setSavingSegment(true); setSegErr(null);
                                   try {
                                     await onSaveSegments(row.query_text, editSegments);
                                     setEditingTerm(null);
-                                  } catch (e) { console.error(e); }
+                                  } catch (e) { setSegErr(e instanceof Error ? e.message : 'save failed'); }
                                   finally { setSavingSegment(false); }
                                 }}
                                 className="inline-flex items-center gap-1 px-2 py-0.5 text-[9px] font-bold bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30 transition-colors"
                               >
-                                <Check size={9} /> Save
+                                <Check size={9} /> {savingSegment ? 'Saving…' : 'Save'}
                               </button>
                               <button
-                                onClick={() => setEditingTerm(null)}
+                                onClick={() => { setEditingTerm(null); setSegErr(null); }}
                                 className="px-2 py-0.5 text-[9px] text-muted hover:text-red-400 transition-colors"
                               >
                                 Cancel
                               </button>
+                              {segErr && <span className="text-[9px] text-red-400">✗ {segErr}</span>}
                             </div>
                           </td>
                         </tr>

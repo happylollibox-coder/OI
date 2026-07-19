@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE` (
   parent_name     STRING NOT NULL,
   season          STRING NOT NULL,          -- PEAK / OFF
   match_type      STRING NOT NULL,          -- BROAD/EXACT/PHRASE/AUTO/PRODUCT
+  campaign_type   STRING,                   -- ALL (coarse fallback) / SP / SB
+  ad_format       STRING,                   -- ALL (coarse) / NA (SP, or SB w/o creative) / SB creative type (BRAND_VIDEO, PRODUCT_COLLECTION, …)
   enabled         BOOL NOT NULL,            -- FALSE => suppress bid-up (when confidence=CONCLUSIVE)
   cpc_target      FLOAT64,
   cpc_min         FLOAT64,

@@ -145,8 +145,9 @@ comparison AS (
     ON p.holiday_name = b.holiday_name
     AND p.holiday_date = b.holiday_date
     AND p.family = b.family
-)
+),
 
+computed AS (
 SELECT
   holiday_name,
   holiday_date,
@@ -216,4 +217,29 @@ SELECT
   END AS reason
 
 FROM comparison
+)
+
+-- Apply DE_PEAK_RELEVANCE_OVERRIDE: override is_relevant_peak on existing rows, and INJECT rows for
+-- (family, holiday) pairs the data-driven check dropped entirely (e.g. LolliME/Bottle Christmas —
+-- excluded by the 90-day pre-peak maturity gate because ads launched near the LY peak).
+SELECT c.* REPLACE (COALESCE(ov.is_relevant_peak, c.is_relevant_peak) AS is_relevant_peak)
+FROM computed c
+LEFT JOIN `onyga-482313.OI.DE_PEAK_RELEVANCE_OVERRIDE` ov
+  ON LOWER(ov.family) = LOWER(c.family) AND ov.holiday_name = c.holiday_name
+
+UNION ALL
+
+SELECT
+  h.holiday_name, h.holiday_date, ov.family,
+  CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64),
+  CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
+  CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64),
+  CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
+  CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
+  ov.is_relevant_peak,
+  'MANUAL', 'MANUAL_OVERRIDE', 'Forced relevant peak via DE_PEAK_RELEVANCE_OVERRIDE'
+FROM `onyga-482313.OI.DE_PEAK_RELEVANCE_OVERRIDE` ov
+JOIN holidays h ON h.holiday_name = ov.holiday_name
+WHERE ov.is_relevant_peak
+  AND NOT EXISTS (SELECT 1 FROM computed c WHERE LOWER(c.family) = LOWER(ov.family) AND ov.holiday_name = c.holiday_name)
 ORDER BY holiday_date DESC, family

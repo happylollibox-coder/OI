@@ -123,7 +123,8 @@ export function NewShipmentModal({ onClose, onSaved }: NewShipmentModalProps) {
         const defDel = dels.find((d) => d.is_default);
         if (defDel) setDeliverer(defDel.value_id);
 
-        const types: LovItem[] = lovs['SHIPMENT_TYPE'] ?? [];
+        // AWD_SLOW_SEA is a plan-engine routing type, not a manual choice — hide it here.
+        const types: LovItem[] = (lovs['SHIPMENT_TYPE'] ?? []).filter((t) => t.value_id !== 'AWD_SLOW_SEA');
         setShipmentTypes(types);
         const defType = types.find((t) => t.is_default);
         if (defType) setShipmentType(defType.value_id);

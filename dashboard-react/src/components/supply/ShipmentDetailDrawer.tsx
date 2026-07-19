@@ -266,6 +266,10 @@ export default function ShipmentDetailDrawer({ shipment, onClose, onChanged }: S
   };
 
   const saveHeader = () => {
+    if (hEta.trim() === '') {
+      setActionError('Estimated arrival date is required.');
+      return;
+    }
     const body: Record<string, unknown> = {
       deliverer: hDeliverer,
       shipment_date: hShipmentDate,
@@ -274,8 +278,8 @@ export default function ShipmentDetailDrawer({ shipment, onClose, onChanged }: S
       tracking_number: hTracking,
       notes: hNotes,
       is_paid: hIsPaid,
+      estimated_arrival_date: hEta,
     };
-    if (hEta.trim() !== '') body.estimated_arrival_date = hEta;
     if (hCostShipped.trim() !== '') body.cost_shipped = num(hCostShipped);
     if (hAmazonCommission.trim() !== '') body.amazon_commission = num(hAmazonCommission);
     if (hKgPrice.trim() !== '') body.kg_price = num(hKgPrice);
@@ -393,8 +397,8 @@ export default function ShipmentDetailDrawer({ shipment, onClose, onChanged }: S
                   <input type="date" className={inputCls} value={hShipmentDate ? hShipmentDate.slice(0, 10) : ''} onChange={(e) => setHShipmentDate(e.target.value)} />
                 </div>
                 <div className="flex flex-col gap-1">
-                  <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Est. Arrival</label>
-                  <input type="date" className={inputCls} value={hEta ? hEta.slice(0, 10) : ''} onChange={(e) => setHEta(e.target.value)} />
+                  <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Est. Arrival <span className="text-red-400">*</span></label>
+                  <input type="date" required className={`${inputCls} ${hEta.trim() === '' ? 'border-red-500/60' : ''}`} value={hEta ? hEta.slice(0, 10) : ''} onChange={(e) => setHEta(e.target.value)} />
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Type</label>

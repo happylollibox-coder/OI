@@ -107,8 +107,10 @@ export function CreateShipmentModal({
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
-          setTypeOptions(data);
-          if (!defaultType) setShipmentType(data.find((m: any) => m.is_default)?.value_id || data[0].value_id);
+          // AWD_SLOW_SEA is a plan-engine routing type, not a manual choice — hide it here.
+          const types = data.filter((m: any) => m.value_id !== 'AWD_SLOW_SEA');
+          setTypeOptions(types);
+          if (!defaultType) setShipmentType(types.find((m: any) => m.is_default)?.value_id || types[0]?.value_id);
         }
       })
       .catch(console.error);

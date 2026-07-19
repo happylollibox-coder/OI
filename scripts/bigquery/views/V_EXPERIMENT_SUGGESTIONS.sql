@@ -214,7 +214,7 @@ strategy_segment_map AS (
   -- ACTIVITY segment (sleepover, party): exact + discovery
   SELECT 'EXACT_BOOST', 'ACTIVITY' UNION ALL
   SELECT 'TOS_DOMINATION', 'ACTIVITY' UNION ALL
-  SELECT 'LOW_COST_DISCOVERY', 'ACTIVITY' UNION ALL
+  SELECT 'INTENT', 'ACTIVITY' UNION ALL
 
   -- BIRTHDAY_KIDS: proven high-intent, core audience
   SELECT 'EXACT_BOOST', 'BIRTHDAY_KIDS' UNION ALL
@@ -225,8 +225,8 @@ strategy_segment_map AS (
   SELECT 'TOS_DOMINATION', 'BIRTHDAY_TEEN' UNION ALL
 
   -- BIRTHDAY_GENERAL: discovery for birthday terms without age
-  SELECT 'HUNTER', 'BIRTHDAY_GENERAL' UNION ALL
-  SELECT 'LOW_COST_DISCOVERY', 'BIRTHDAY_GENERAL' UNION ALL
+  SELECT 'INTENT', 'BIRTHDAY_GENERAL' UNION ALL
+  SELECT 'INTENT', 'BIRTHDAY_GENERAL' UNION ALL
 
   -- SEASONAL occasions: push strategies during ramp-up windows
   SELECT 'SEASONAL_PUSH', 'CHRISTMAS' UNION ALL
@@ -244,10 +244,10 @@ strategy_segment_map AS (
   SELECT 'TOS_DOMINATION', 'GIFT_TEEN' UNION ALL
 
   -- GIFT_GENERAL: broad discovery for generic gift terms
-  SELECT 'HUNTER', 'GIFT_GENERAL' UNION ALL
-  SELECT 'LOW_COST_DISCOVERY', 'GIFT_GENERAL' UNION ALL
-  SELECT 'CATEGORY_CONQUEST', 'GIFT_GENERAL' UNION ALL
-  SELECT 'CATEGORY_CONQUEST', 'GIFT_KIDS' UNION ALL
+  SELECT 'INTENT', 'GIFT_GENERAL' UNION ALL
+  SELECT 'INTENT', 'GIFT_GENERAL' UNION ALL
+  SELECT 'COMPETITOR', 'GIFT_GENERAL' UNION ALL
+  SELECT 'COMPETITOR', 'GIFT_KIDS' UNION ALL
 
   -- NEW_LAUNCH: applies to all segments (filtered by product age in scoring)
   SELECT 'NEW_LAUNCH', 'BRAND' UNION ALL
@@ -417,12 +417,12 @@ raw_suggestions AS (
              THEN 200 ELSE 0 END
 
       -- LOW_COST_DISCOVERY: boost when many high-volume unproven terms exist
-      + CASE WHEN s.strategy_id = 'LOW_COST_DISCOVERY'
+      + CASE WHEN s.strategy_id = 'INTENT'
              AND COALESCE(aso.high_volume_unproven_count, 0) >= 3
              THEN 75 + LEAST(COALESCE(aso.high_volume_unproven_count, 0) * 5, 50)  -- Up to +125
              ELSE 0 END
       -- LOW_COST_DISCOVERY: penalty if ASIN already has many proven terms (use EXACT_BOOST instead)
-      - CASE WHEN s.strategy_id = 'LOW_COST_DISCOVERY'
+      - CASE WHEN s.strategy_id = 'INTENT'
              AND COALESCE(aso.proven_term_count, 0) >= 5
              THEN 100 ELSE 0 END
 

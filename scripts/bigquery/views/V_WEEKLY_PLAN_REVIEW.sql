@@ -4,7 +4,7 @@ WITH tol AS (
   SELECT COALESCE(MAX(IF(threshold_key='WEEKLY_PLAN_ON_PLAN_TOL', threshold_value, NULL)), 0.90) AS on_plan_tol
   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
 ),
-last_wk AS (SELECT DATE_TRUNC(DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY), WEEK(MONDAY)) AS wk),
+last_wk AS (SELECT DATE_TRUNC(DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY), WEEK(SUNDAY)) AS wk),
 plan AS (
   SELECT * FROM `onyga-482313.OI.DE_WEEKLY_PLAN`
   WHERE week_start = (SELECT wk FROM last_wk)

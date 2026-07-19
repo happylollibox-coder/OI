@@ -1075,6 +1075,20 @@ export interface PhraseNegativeRow {
   sample_terms?: { search_term: string; ads_spend_8w: number; ads_orders_8w: number; ads_clicks_8w: number }[];
 }
 
+// The curated negatives a NEW campaign launches with, from V_LAUNCH_NEGATIVES.
+// Keyed on strategy × family because a campaign being scaffolded has no id yet.
+// Distinct from PhraseNegativeRow, which is the spend-based coach negative.
+// BRAND_DEFENSE / PRODUCT_DEFENSE never appear here — the view drops them.
+export interface LaunchNegativeRow {
+  strategy_id: string;
+  parent_name: string;
+  phrase: string;
+  match_type: string;
+  bulksheet_match_type: string;
+  source: string;
+  origin_level: string;
+}
+
 export interface ExperimentEvaluationRow {
   experiment_id: string;
   experiment_name: string;
@@ -1339,7 +1353,7 @@ export interface DashboardData {
   keyword_predictions: StrategicPrediction[];
   brand_strength_weekly: BrandStrengthWeeklyRow[];
   coach_phrase_negatives: PhraseNegativeRow[];
-  phrase_negatives: PhraseNegativeRow[];
+  launch_negatives: LaunchNegativeRow[];
   hot_signals: HotSignalRow[];
   ads_focus_terms: AdsFocusTermRow[];
   ads_focus_keywords: AdsFocusKeywordRow[];
@@ -1373,7 +1387,7 @@ export interface DashboardData {
   };
 }
 
-export type PageId = 'home' | 'actions' | 'peak' | 'family' | 'sqp' | 'learn' | 'kwds' | 'log' | 'health' | 'experiment' | 'ads' | 'strategies' | 'admin' | 'do' | 'brand' | 'plan' | 'supply' | 'alerts' | 'products' | 'kpi' | 'research' | 'thisweek';
+export type PageId = 'home' | 'actions' | 'peak' | 'family' | 'sqp' | 'learn' | 'kwds' | 'log' | 'health' | 'experiment' | 'ads' | 'strategies' | 'admin' | 'do' | 'brand' | 'plan' | 'supply' | 'alerts' | 'products' | 'kpi' | 'research' | 'weeklyrun' | 'coverage';
 
 export interface BrandStrengthWeeklyRow {
   week_start_date: string;

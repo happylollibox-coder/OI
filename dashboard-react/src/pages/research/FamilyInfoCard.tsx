@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { FamilyInfo, SegmentReason, SegmentReasoning } from './types';
+import type { FamilyInfo, SegmentReason, SegmentReasoning, SegmentTerm } from './types';
+import { fM, fR } from '../../utils';
 import { apiFetch } from '../../utils/apiFetch';
 
 interface FamilyInfoCardProps {
@@ -32,6 +33,27 @@ const colorBorder: Record<string, string> = {
 export function FamilyInfoCard({ familyInfo, selectedProduct, segmentReasoning, onRefreshFamily }: FamilyInfoCardProps) {
   const [showPerProduct, setShowPerProduct] = useState(false);
   const segs = familyInfo.summary.segments || {};
+
+  // Segment → search-term drill-down popup: which terms roll up into a segment's numbers.
+  const [termPopup, setTermPopup] = useState<{ segType: string; segLabel: string; segValue: string } | null>(null);
+  const [terms, setTerms] = useState<SegmentTerm[] | null>(null);
+  const [loadingTerms, setLoadingTerms] = useState(false);
+
+  const openTerms = async (segType: string, segLabel: string, segValue: string) => {
+    setTermPopup({ segType, segLabel, segValue });
+    setTerms(null);
+    setLoadingTerms(true);
+    try {
+      const res = await apiFetch(
+        `/api/research/segment-terms?family=${encodeURIComponent(selectedProduct)}` +
+        `&segment_type=${encodeURIComponent(segType)}&segment_value=${encodeURIComponent(segValue)}`);
+      const j = await res.json();
+      setTerms(Array.isArray(j.terms) ? j.terms : []);
+    } catch { setTerms([]); }
+    finally { setLoadingTerms(false); }
+  };
+  // net ROAS = gross profit ÷ ad spend → breakeven at 1.0 (below 1 loses money).
+  const roasTone = (v: number | null) => v == null ? 'text-subtle' : v >= 1 ? 'text-emerald-400' : 'text-red-400';
 
   const postSegments = async (body: Record<string, string | null>) => {
     await apiFetch('/api/research/product-segments', {
@@ -100,11 +122,12 @@ export function FamilyInfoCard({ familyInfo, selectedProduct, segmentReasoning, 
                   return (
                     <span
                       key={v}
-                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-medium ${colorMap[sd.color]} group`}
-                      title={reasonItem ? `${reasonItem.pct}% of purchases (${reasonItem.orders} orders) · ${reasonItem.clicks_per_sale ?? '?'} clicks/sale` : 'Manually set'}
+                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${colorMap[sd.color]} group`}
+                      title={reasonItem ? `${reasonItem.pct}% of purchases (${reasonItem.orders} orders) · ${reasonItem.clicks_per_sale ?? '?'} clicks/sale · net ROAS ${reasonItem.net_roas ?? '?'}x` : 'Manually set'}
                     >
                       {v}
-                      {reasonItem && <span className="text-[7px] opacity-60">{reasonItem.pct}%</span>}
+                      {reasonItem && <span className="text-[9px] opacity-60">{reasonItem.pct}% · {reasonItem.orders} ord</span>}
+                      {reasonItem?.net_roas != null && <span onClick={() => openTerms(sd.key, sd.label, v)} className={`text-[9px] font-semibold cursor-pointer hover:underline ${roasTone(reasonItem.net_roas)}`} title="Click for the search terms behind this">{reasonItem.net_roas}x</span>}
                       <button
                         onClick={() => removeSegValue(sd.dbKey, val || '', v)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-400 ml-0.5"
@@ -133,19 +156,19 @@ export function FamilyInfoCard({ familyInfo, selectedProduct, segmentReasoning, 
                 />
               </div>
               {/* Reasoning: show uncaptured values from ad data */}
-              {reasoning.filter(r => !items.includes(r.value)).length > 0 && (
+              {reasoning.filter(r => !items.includes(r.value) && r.orders > 5).length > 0 && (
                 <div className="flex items-center gap-1 ml-2">
-                  <span className="text-[7px] text-muted">also in ads:</span>
+                  <span className="text-[10px] text-muted">also in ads:</span>
                   {reasoning
                     .filter(r => !items.includes(r.value))
                     .map(r => (
                       <button
                         key={r.value}
                         onClick={() => addSegValue(sd.dbKey, val, r.value)}
-                        className={`px-1 py-0 rounded text-[7px] opacity-40 hover:opacity-100 border border-dashed ${colorBorder[sd.color]} transition-opacity`}
-                        title={`${r.pct}% of purchases (${r.orders} orders) · ${r.clicks_per_sale ?? '?'} clicks/sale — click to add`}
+                        className={`px-1.5 py-0.5 rounded text-[10px] opacity-60 hover:opacity-100 border border-dashed ${colorBorder[sd.color]} transition-opacity`}
+                        title={`${r.pct}% of purchases (${r.orders} orders) · ${r.clicks_per_sale ?? '?'} clicks/sale · net ROAS ${r.net_roas ?? '?'}x — click to add`}
                       >
-                        +{r.value} ({r.pct}%)
+                        +{r.value} ({r.pct}% · {r.orders} ord){r.net_roas != null && <span onClick={(e) => { e.stopPropagation(); openTerms(sd.key, sd.label, r.value); }} className={`cursor-pointer hover:underline ${roasTone(r.net_roas)}`} title="Click for the search terms behind this"> {r.net_roas}x</span>}
                       </button>
                     ))}
                 </div>
@@ -230,7 +253,7 @@ export function FamilyInfoCard({ familyInfo, selectedProduct, segmentReasoning, 
                         // Per-ASIN reasoning suggestions
                         const byAsin = segmentReasoning?.by_asin || {};
                         const asinReasoning: SegmentReason[] = byAsin[p.asin]?.[sd.key] || [];
-                        const uncaptured = asinReasoning.filter(r => !pItems.includes(r.value));
+                        const uncaptured = asinReasoning.filter(r => !pItems.includes(r.value) && r.orders > 5);
 
                         return (
                           <td key={sd.key} className="py-1.5 pl-3">
@@ -244,13 +267,14 @@ export function FamilyInfoCard({ familyInfo, selectedProduct, segmentReasoning, 
                                 return (
                                   <span
                                     key={v}
-                                    className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-[7px] font-medium ${colorMap[sd.color]} group ${isExtra ? 'ring-1 ring-white/10' : ''}`}
+                                    className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium ${colorMap[sd.color]} group ${isExtra ? 'ring-1 ring-white/10' : ''}`}
                                     title={reasonItem
-                                      ? `${reasonItem.pct}% of this product's orders (${reasonItem.orders}) · ${reasonItem.clicks_per_sale ?? '?'} clicks/sale`
+                                      ? `${reasonItem.pct}% of this product's orders (${reasonItem.orders}) · ${reasonItem.clicks_per_sale ?? '?'} clicks/sale · net ROAS ${reasonItem.net_roas ?? '?'}x`
                                       : isExtra ? 'Product-specific (manually set)' : 'Same as parent'}
                                   >
                                     {v}
-                                    {reasonItem && <span className="text-[6px] opacity-50">{reasonItem.pct}%</span>}
+                                    {reasonItem && <span className="text-[8px] opacity-50">{reasonItem.pct}% · {reasonItem.orders} ord</span>}
+                                    {reasonItem?.net_roas != null && <span className={`text-[8px] font-semibold ${reasonItem.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}`}>{reasonItem.net_roas}x</span>}
                                     <button
                                       onClick={() => removeProductSeg(sd.dbKey, pVal || '', v)}
                                       className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-400"
@@ -265,10 +289,10 @@ export function FamilyInfoCard({ familyInfo, selectedProduct, segmentReasoning, 
                                     <button
                                       key={r.value}
                                       onClick={() => addProductSeg(sd.dbKey, pVal, r.value)}
-                                      className={`px-0.5 py-0 rounded text-[6px] opacity-30 hover:opacity-100 border border-dashed ${colorBorder[sd.color]} transition-opacity`}
-                                      title={`${r.pct}% of this product's orders (${r.orders}) · ${r.clicks_per_sale ?? '?'} clicks/sale — click to add`}
+                                      className={`px-1 py-0 rounded text-[8px] opacity-50 hover:opacity-100 border border-dashed ${colorBorder[sd.color]} transition-opacity`}
+                                      title={`${r.pct}% of this product's orders (${r.orders}) · ${r.clicks_per_sale ?? '?'} clicks/sale · net ROAS ${r.net_roas ?? '?'}x — click to add`}
                                     >
-                                      +{r.value} {r.pct}%
+                                      +{r.value} {r.pct}% · {r.orders} ord{r.net_roas != null && <span className={r.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}> {r.net_roas}x</span>}
                                     </button>
                                   ))}
                                 </>
@@ -302,6 +326,53 @@ export function FamilyInfoCard({ familyInfo, selectedProduct, segmentReasoning, 
           </div>
         )}
       </div>
+
+      {/* Segment → search-term drill-down */}
+      {termPopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setTermPopup(null)}>
+          <div className="bg-card border border-border rounded-xl shadow-2xl max-w-[660px] w-[92%] max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+              <div className="text-sm font-semibold">
+                <span className="text-muted">{termPopup.segLabel}:</span> {termPopup.segValue}
+                <span className="text-faint text-xs ml-2 font-normal">search terms behind the numbers</span>
+              </div>
+              <button onClick={() => setTermPopup(null)} className="text-faint hover:text-text text-xl leading-none px-1">×</button>
+            </div>
+            <div className="overflow-auto">
+              {loadingTerms ? (
+                <div className="p-10 text-center text-muted text-sm">Loading…</div>
+              ) : !terms || terms.length === 0 ? (
+                <div className="p-10 text-center text-muted text-sm">No ad search terms for this segment.</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-surface z-10">
+                    <tr className="text-faint text-left border-b border-border">
+                      <th className="px-3 py-2 font-semibold">Search Term</th>
+                      <th className="px-3 py-2 text-right font-semibold">Spend</th>
+                      <th className="px-3 py-2 text-right font-semibold">Orders</th>
+                      <th className="px-3 py-2 text-right font-semibold">Clicks</th>
+                      <th className="px-3 py-2 text-right font-semibold">CPS</th>
+                      <th className="px-3 py-2 text-right font-semibold">Net ROAS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {terms.map(t => (
+                      <tr key={t.search_term} className="border-b border-border-faint hover:bg-surface/40">
+                        <td className="px-3 py-1.5 truncate max-w-[240px]" title={t.search_term}>{t.search_term}</td>
+                        <td className="px-3 py-1.5 text-right font-mono">{fM(t.spend)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono text-subtle">{t.orders}</td>
+                        <td className="px-3 py-1.5 text-right font-mono text-subtle">{t.clicks}</td>
+                        <td className="px-3 py-1.5 text-right font-mono text-subtle">{t.clicks_per_sale ?? '—'}</td>
+                        <td className={`px-3 py-1.5 text-right font-mono font-semibold ${roasTone(t.net_roas)}`}>{t.net_roas != null ? fR(t.net_roas) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

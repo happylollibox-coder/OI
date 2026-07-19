@@ -12,7 +12,8 @@
 --   5. Transit days sourced from DE_LIST_OF_VALUES (Invariant #10: no hardcoded values)
 --
 -- Dependencies:
---   V_FORECAST_DEMAND, DE_PLAN_STRATEGY, DIM_PRODUCT,
+--   FACT_FORECAST_DEMAND (materialized; load via SP_LOAD_FACT_FORECAST_DEMAND before this),
+--   DE_PLAN_STRATEGY, DIM_PRODUCT,
 --   FACT_INVENTORY_SNAPSHOT, V_SRC_sales_and_traffic_business_sku_report_daily,
 --   DE_PURCHASE_ORDERS, DE_SHIPMENT_LINES, V_ADS_EFFICIENCY_PROFILE,
 --   V_PRODUCT_FAMILY_MAP
@@ -107,7 +108,11 @@ total_demand_base AS (
   SELECT fd.product,
     MAX(fd.forecast_phase) AS forecast_phase,
     SUM(fd.forecast_units * (0.5 + 0.5 * COALESCE(m.multiplier, 1.0))) AS demand_base
-  FROM `onyga-482313.OI.V_FORECAST_DEMAND` fd
+  -- Read the materialized table (NOT the raw V_FORECAST_DEMAND view) so the planner
+  -- doesn't inline-expand the heavy forecast view — the whole reason FACT_FORECAST_DEMAND
+  -- exists. monthly_forecast below already reads the table; this CTE was the last leak
+  -- and was tipping SP_GENERATE_ALERTS over the optimizer memory limit.
+  FROM `onyga-482313.OI.FACT_FORECAST_DEMAND` fd
   LEFT JOIN multipliers m ON fd.forecast_month = m.forecast_month
   WHERE (fd.forecast_year = EXTRACT(YEAR FROM CURRENT_DATE()) AND fd.forecast_month >= EXTRACT(MONTH FROM CURRENT_DATE()))
      OR (fd.forecast_year = EXTRACT(YEAR FROM CURRENT_DATE()) + 1 AND fd.forecast_month <= 2)

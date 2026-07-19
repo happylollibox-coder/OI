@@ -32,6 +32,8 @@ export interface DoQueueItem {
   // Budget actions
   current_budget?: number | null;
   recommended_budget?: number | null;
+  // Campaign-level actions (rename) — the new campaign name for CAMPAIGN_RENAME rows
+  new_campaign_name?: string;
   // Close-the-loop snapshot (FACT_PPC_CHANGE_LOG)
   coach_mode?: string;     // GUARDIAN / COOLDOWN / BLITZ at decision time
   source?: 'COACH' | 'MANUAL';
@@ -50,6 +52,12 @@ interface DoQueueContextValue {
   uploadedItems: DoQueueItem[];
   addItem: (item: Omit<DoQueueItem, 'id' | 'addedAt'>) => void;
   removeItem: (id: string) => void;
+  // Self-heal: backfill ad_group_id on already-queued keyword rows from a fresh
+  // {keyword_id -> ad_group_id} lookup. Items queued before the ad-group fix carry
+  // an empty ad_group_id frozen in localStorage; Amazon rejects SB keyword updates
+  // without it. Called from the Weekly Run page on load so a stale queue repairs
+  // itself without the user having to clear + re-add.
+  backfillAdGroups: (lookup: Record<string, string>) => void;
   clearCampaign: (campaign: string) => void;
   clearAll: () => void;
   hasItem: (search_term: string, action: string, campaign: string, targeting?: string) => boolean;
@@ -277,6 +285,20 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
     setItems(prev => prev.filter(p => p.id !== id));
   }, []);
 
+  const backfillAdGroups = useCallback((lookup: Record<string, string>) => {
+    setItems(prev => {
+      let changed = false;
+      const next = prev.map(p => {
+        if ((!p.ad_group_id) && p.keyword_id && lookup[p.keyword_id]) {
+          changed = true;
+          return { ...p, ad_group_id: lookup[p.keyword_id] };
+        }
+        return p;
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
   const clearCampaign = useCallback((campaign: string) => {
     setItems(prev => prev.filter(p => p.campaign !== campaign));
   }, []);
@@ -363,6 +385,18 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
 
   const retryPendingSync = useCallback(() => { void flushLog(); }, [flushLog]);
 
+  // Log NEGATIVES to the registry at export time (Ori 2026-07-03). Negatives are idempotent, and the
+  // whole point of the registry is to stop re-suggesting an already-applied one — so we don't wait for
+  // the manual "Uploaded to Amazon" step (often skipped), which is how already-applied negates kept
+  // bouncing as "already exists". flushLog → /api/ppc-change-log → SP_SYNC_NEGATIVES folds them into
+  // DE_NEGATIVE_KEYWORDS / DE_NEGATIVE_TARGETS. Deduped against sent keys, so re-exporting won't double
+  // log, and a later mark-uploaded of the same item is a no-op. Scoped to negate/stop actions ONLY —
+  // bid/budget changes still log on upload (a bid logged-but-not-applied would corrupt the scorecard).
+  const logExportedNegatives = useCallback((exported: DoQueueItem[]) => {
+    const negs = exported.filter(i => i.action.startsWith('NEGATE') || i.action === 'STOP_TERM');
+    if (negs.length) void flushLog(negs);
+  }, [flushLog]);
+
   const cleanupUploaded = useCallback((currentActions: { search_term: string; campaign_id: string }[]) => {
     if (!uploadedItems.length || !currentActions.length) return;
     const actionSet = new Set(
@@ -381,11 +415,11 @@ export function DoQueueProvider({ children }: { children: React.ReactNode }) {
   // Memoize context value to prevent unnecessary re-renders
   const value = useMemo(() => ({
     items, doneItems, uploadedItems,
-    addItem, removeItem, clearCampaign, clearAll, hasItem,
+    addItem, removeItem, backfillAdGroups, clearCampaign, clearAll, hasItem,
     markDone, undoDone, clearDone,
     markAllUploaded, undoUploaded, clearUploaded, isUploaded, isDone, cleanupUploaded,
-    pendingSyncCount: pendingSync.length, retryPendingSync,
-  }), [items, doneItems, uploadedItems, addItem, removeItem, clearCampaign, clearAll, hasItem, markDone, undoDone, clearDone, markAllUploaded, undoUploaded, clearUploaded, isUploaded, isDone, cleanupUploaded, pendingSync, retryPendingSync]);
+    pendingSyncCount: pendingSync.length, retryPendingSync, logExportedNegatives,
+  }), [items, doneItems, uploadedItems, addItem, removeItem, backfillAdGroups, clearCampaign, clearAll, hasItem, markDone, undoDone, clearDone, markAllUploaded, undoUploaded, clearUploaded, isUploaded, isDone, cleanupUploaded, pendingSync, retryPendingSync, logExportedNegatives]);
 
   return (
     <DoQueueContext.Provider value={value}>

@@ -28,13 +28,13 @@ VALUES
 -- =============================================
 -- CATEGORY_CONQUEST: Steal share from competitor brand terms
 -- =============================================
-('CATEGORY_CONQUEST', 1, 'SP', 'AUTO', 'DOWN_ONLY',
+('COMPETITOR', 1, 'SP', 'AUTO', 'DOWN_ONLY',
   0.25, 0.75, 10.0, 0, 0,
   'Auto targeting competitor ASINs and close-match terms',
   '{PRODUCT}-SP/AUTO (Conquest)',
   TRUE, 'Let Amazon match to competitor pages and related searches.'),
 
-('CATEGORY_CONQUEST', 2, 'SB_VIDEO', 'BROAD', 'DOWN_ONLY',
+('COMPETITOR', 2, 'SB_VIDEO', 'BROAD', 'DOWN_ONLY',
   0.30, 0.80, 10.0, 0, 0,
   'Video ads on competitor search terms',
   '{PRODUCT}-VIDEO/BROAD (Conquest)',
@@ -64,13 +64,13 @@ VALUES
 -- =============================================
 -- HUNTER: Discover new converting keywords via broad match
 -- =============================================
-('HUNTER', 1, 'SP', 'BROAD', 'UP_AND_DOWN',
+('INTENT', 1, 'SP', 'BROAD', 'UP_AND_DOWN',
   0.50, 1.50, 10.0, 200, 100,
   'SP broad match to discover new converting terms',
   '{PRODUCT}-SP/BROAD (Hunter)',
   TRUE, 'UP_AND_DOWN lets Amazon adjust bids for high-converting placements.'),
 
-('HUNTER', 2, 'SB_VIDEO', 'BROAD', 'UP_AND_DOWN',
+('INTENT', 2, 'SB_VIDEO', 'BROAD', 'UP_AND_DOWN',
   0.40, 1.20, 10.0, 0, 0,
   'SB Video broad to test visual engagement on new terms',
   '{PRODUCT}-VIDEO/BROAD (Hunter)',
@@ -79,7 +79,7 @@ VALUES
 -- =============================================
 -- LOW_COST_DISCOVERY: Cheap keyword discovery via auto
 -- =============================================
-('LOW_COST_DISCOVERY', 1, 'SP', 'AUTO', 'DOWN_ONLY',
+('INTENT', 1, 'SP', 'AUTO', 'DOWN_ONLY',
   0.10, 0.35, 10.0, 0, 0,
   'SP Auto for ultra-low-cost keyword discovery',
   '{PRODUCT}-SP/AUTO (Discovery)',

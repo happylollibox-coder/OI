@@ -197,24 +197,14 @@ def clear_data_cache():
 
 
 def auto_close_received_shipments():
-    """Auto-close shipments whose ETA has passed and that have been paid.
-    Called after payment insertion so shipment status updates immediately."""
-    try:
-        client.query(f"""
-            UPDATE `{SHIPMENTS_TABLE}` s
-            SET shipment_status = 'RECEIVED'
-            WHERE s.estimated_arrival_date <= CURRENT_DATE()
-              AND s.shipment_status NOT IN ('RECEIVED', 'INSPECTED', 'PUT_AWAY')
-              AND (
-                s.is_paid = TRUE
-                OR EXISTS (
-                  SELECT 1 FROM `{PAYMENTS_TABLE}` p
-                  WHERE p.shipment_id = s.shipment_id
-                )
-              )
-        """).result()
-    except Exception as e:
-        print(f"Auto-close shipments error (non-blocking): {e}")
+    """DISABLED — arrival is now user-confirmed only.
+
+    Previously auto-flipped shipments to 'RECEIVED' once their ETA had passed and
+    they were paid. Per product decision, a shipment is marked RECEIVED only when a
+    user explicitly does so (Home brief / Supply shipments tab / detail drawer).
+    Kept as a no-op so existing call sites don't need to change. Existing RECEIVED
+    history is left untouched."""
+    return
 
 
 def sync_shipment_paid_status(shipment_ids):
@@ -2514,6 +2504,122 @@ def api_update_product_costs():
     except Exception as e:
         import traceback
         print(f"Error updating product costs: {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/products/bom', methods=['GET'])
+def api_get_product_bom():
+    """Return the saved Bill of Materials (JSON string) for a product, or null if none."""
+    try:
+        asin = request.args.get('asin')
+        if not asin:
+            return jsonify({'success': False, 'error': 'Missing required param: asin'}), 400
+        query = f"""
+        SELECT bom_json
+        FROM `{PROJECT_ID}.{DATASET_ID}.DE_PRODUCT_BOM`
+        WHERE asin = @asin
+        LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("asin", "STRING", asin)
+        ])
+        rows = list(client.query(query, job_config=job_config).result())
+        return jsonify({'success': True, 'bom_json': rows[0]['bom_json'] if rows else None})
+    except Exception as e:
+        import traceback
+        print(f"Error fetching product BOM: {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/products/bom', methods=['POST'])
+def api_save_product_bom():
+    """Upsert the Bill of Materials (JSON string) for a product (one row per ASIN)."""
+    try:
+        data = request.json
+        if not data or not data.get('asin'):
+            return jsonify({'success': False, 'error': 'Missing required field: asin'}), 400
+        asin = data['asin']
+        bom_json = data.get('bom_json')  # JSON string, or None to clear
+        user_email = session.get('user', {}).get('email', 'dashboard')
+        query = f"""
+        MERGE `{PROJECT_ID}.{DATASET_ID}.DE_PRODUCT_BOM` T
+        USING (SELECT @asin AS asin) S
+        ON T.asin = S.asin
+        WHEN MATCHED THEN UPDATE SET
+            bom_json = @bom_json, updated_at = CURRENT_TIMESTAMP(), updated_by = @user
+        WHEN NOT MATCHED THEN INSERT (asin, bom_json, updated_at, updated_by)
+            VALUES (@asin, @bom_json, CURRENT_TIMESTAMP(), @user)
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("asin", "STRING", asin),
+            bigquery.ScalarQueryParameter("bom_json", "STRING", bom_json),
+            bigquery.ScalarQueryParameter("user", "STRING", user_email),
+        ])
+        client.query(query, job_config=job_config).result()
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        print(f"Error saving product BOM: {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/products/bulk-update-attributes', methods=['POST'])
+def api_bulk_update_product_attributes():
+    """Bulk-set a single manually-managed DIM_PRODUCT logistics field across a list of ASINs
+    (used by the Products page family-level bulk edit). Field is validated against an allowlist,
+    so it is safe to interpolate into the UPDATE statement.
+
+    These fields are preserved by SP_MERGE_PRODUCT_DIM, so a direct UPDATE is safe.
+    """
+    # field name -> BigQuery type
+    ALLOWED_FIELDS = {
+        'package_quantity': 'INT64',
+        'manufacture_day': 'INT64',
+        'shipment_days': 'INT64',
+        'manuf_upfront_percentage': 'FLOAT64',  # stored as a fraction (0.3 / 0.4)
+        'share_carton_in_family': 'BOOL',
+    }
+    try:
+        data = request.json or {}
+        asins = data.get('asins')
+        field = data.get('field')
+        value = data.get('value')
+
+        if not asins or not isinstance(asins, list):
+            return jsonify({'success': False, 'error': 'Missing required field: asins (non-empty list)'}), 400
+        if field not in ALLOWED_FIELDS:
+            return jsonify({'success': False, 'error': f'Invalid field. Allowed: {", ".join(ALLOWED_FIELDS)}'}), 400
+        if value is None:
+            return jsonify({'success': False, 'error': 'Missing value'}), 400
+
+        # Drop empties/dupes from the ASIN list
+        asins = sorted({a for a in asins if a})
+        if not asins:
+            return jsonify({'success': False, 'error': 'No valid ASINs provided'}), 400
+
+        bq_type = ALLOWED_FIELDS[field]
+        if bq_type == 'INT64':
+            coerced = int(value)
+        elif bq_type == 'FLOAT64':
+            coerced = float(value)
+        else:  # BOOL
+            coerced = value if isinstance(value, bool) else str(value).strip().lower() in ('true', '1', 'yes')
+
+        query = f"""
+        UPDATE `{PROJECT_ID}.{DATASET_ID}.DIM_PRODUCT`
+        SET {field} = @value, updated_at = CURRENT_TIMESTAMP()
+        WHERE asin IN UNNEST(@asins)
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("asins", "STRING", asins),
+            bigquery.ScalarQueryParameter("value", bq_type, coerced),
+        ])
+        job = client.query(query, job_config=job_config)
+        job.result()
+
+        clear_data_cache()
+        return jsonify({'success': True, 'updated': job.num_dml_affected_rows})
+    except Exception as e:
+        import traceback
+        print(f"Error bulk-updating product attributes: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/awd_target', methods=['POST'])
@@ -5071,6 +5177,89 @@ def api_thresholds_update():
         return jsonify({'error': str(e)}), 500
 
 # ═══════════════════════════════════════════════════════════════
+# BUDGET WATERFALL API (Weekly Run Step 1)
+# ═══════════════════════════════════════════════════════════════
+
+@app.route('/api/budget', methods=['POST'])
+def api_budget_update():
+    """Persist the Weekly Run Step-1 budget: the total daily budget and per-family MANUAL_DAILY overrides.
+    Body JSON:
+      { "total_daily_budget": 469,                 # optional — writes DE_BUDGET_CONFIG.total_daily_budget
+        "family_overrides": { "Lollibox": 250 } }   # optional — the FULL set of MANUAL_DAILY family overrides
+    The overrides map is authoritative: existing MANUAL_DAILY rows are cleared and replaced, so removing a
+    family from the map clears its override. Read by V_FAMILY_BUDGET_ALLOCATION (source='MANUAL_DAILY' wins).
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON body provided'}), 400
+        user_email = session.get('user', {}).get('email', 'unknown')
+
+        # 1) total daily budget -> DE_BUDGET_CONFIG
+        total = data.get('total_daily_budget')
+        if total is not None:
+            q = """
+                UPDATE `{project}.{dataset}.DE_BUDGET_CONFIG`
+                SET config_value = @total, updated_at = CURRENT_TIMESTAMP(), updated_by = @user
+                WHERE config_key = 'total_daily_budget'
+            """.format(project=PROJECT_ID, dataset=DATASET_ID)
+            job = client.query(q, job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter("total", "FLOAT64", float(total)),
+                bigquery.ScalarQueryParameter("user", "STRING", user_email),
+            ]))
+            job.result()
+            if job.errors:
+                return jsonify({'error': str(job.errors)}), 500
+
+        # 1b) role pool caps -> DE_BUDGET_CONFIG (PPC pools: brand defense + product defense)
+        for _key in ('defense_total_daily', 'product_defense_total_daily'):
+            _val = data.get(_key)
+            if _val is None:
+                continue
+            q = """
+                UPDATE `{project}.{dataset}.DE_BUDGET_CONFIG`
+                SET config_value = @total, updated_at = CURRENT_TIMESTAMP(), updated_by = @user
+                WHERE config_key = @key
+            """.format(project=PROJECT_ID, dataset=DATASET_ID)
+            job = client.query(q, job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter("total", "FLOAT64", float(_val)),
+                bigquery.ScalarQueryParameter("key", "STRING", _key),
+                bigquery.ScalarQueryParameter("user", "STRING", user_email),
+            ]))
+            job.result()
+            if job.errors:
+                return jsonify({'error': str(job.errors)}), 500
+
+        # 2) per-family overrides -> DE_PRODUCT_BUDGET (source='MANUAL_DAILY'); posted map is authoritative
+        if 'family_overrides' in data:
+            overrides = data.get('family_overrides') or {}
+            client.query("DELETE FROM `{project}.{dataset}.DE_PRODUCT_BUDGET` WHERE source='MANUAL_DAILY'".format(
+                project=PROJECT_ID, dataset=DATASET_ID)).result()
+            items = [(str(f), float(v)) for f, v in overrides.items()]
+            if items:
+                values = ", ".join(
+                    "(@fam{i}, CURRENT_DATE(), @val{i}, 'MANUAL_DAILY', CURRENT_TIMESTAMP(), @user)".format(i=i)
+                    for i in range(len(items)))
+                ins = """
+                    INSERT INTO `{project}.{dataset}.DE_PRODUCT_BUDGET`
+                      (parent_name, week_start, weekly_budget, source, updated_at, updated_by)
+                    VALUES {values}
+                """.format(project=PROJECT_ID, dataset=DATASET_ID, values=values)
+                params = [bigquery.ScalarQueryParameter("user", "STRING", user_email)]
+                for i, (fam, val) in enumerate(items):
+                    params.append(bigquery.ScalarQueryParameter("fam{}".format(i), "STRING", fam))
+                    params.append(bigquery.ScalarQueryParameter("val{}".format(i), "FLOAT64", val))
+                job = client.query(ins, job_config=bigquery.QueryJobConfig(query_parameters=params))
+                job.result()
+                if job.errors:
+                    return jsonify({'error': str(job.errors)}), 500
+
+        clear_data_cache()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ═══════════════════════════════════════════════════════════════
 # PRODUCT STRATEGY PROFILE API
 # ═══════════════════════════════════════════════════════════════
 
@@ -6980,15 +7169,15 @@ def get_mapping_coverage():
 # ═══════════════════════════════════════════════
 
 # Canonical option lists for the dropdowns (validated server-side on assign)
-MAPPING_FAMILIES = ['Bottle', 'Bunny', 'Fresh', 'LolliBall', 'LolliME', 'Lollibox']
-MAPPING_STRATEGIES = ['BRAND_DEFENSE', 'CATEGORY_CONQUEST', 'COMPETITOR_CONQUEST',
-                      'EXACT_BOOST', 'HUNTER', 'LOW_COST_DISCOVERY', 'PRODUCT_DEFENSE']
+MAPPING_FAMILIES = ['Bottle', 'Bunny', 'Fresh', 'LolliBall', 'LolliME', 'Lollibox', 'Store']
+MAPPING_STRATEGIES = ['BRAND_DEFENSE', 'COMPETITOR', 'COMPETITOR',
+                      'EXACT_BOOST', 'INTENT', 'PRODUCT_DEFENSE']
 # Human-readable strategy label for generated experiment names
 _STRATEGY_LABEL = {
-    'EXACT_BOOST': 'Exact Boost', 'HUNTER': 'Broad Hunter',
-    'LOW_COST_DISCOVERY': 'Auto Discovery', 'BRAND_DEFENSE': 'Brand Defense',
-    'PRODUCT_DEFENSE': 'Product Defense', 'COMPETITOR_CONQUEST': 'Competitor Conquest',
-    'CATEGORY_CONQUEST': 'Category Conquest',
+    'EXACT_BOOST': 'Exact Boost', 'INTENT': 'Broad Hunter',
+    'INTENT': 'Auto Discovery', 'BRAND_DEFENSE': 'Brand Defense',
+    'PRODUCT_DEFENSE': 'Product Defense', 'COMPETITOR': 'Competitor Conquest',
+    'COMPETITOR': 'Category Conquest',
 }
 
 
@@ -8019,7 +8208,6 @@ def _get_coach_escalations():
     return [dict(row) for row in client.query(query).result()]
 
 @app.route('/api/coach/escalations', methods=['GET'])
-@login_required
 def api_coach_escalations():
     """This Week escalations + their handled (ack/snooze) state — Coacher E."""
     try:
@@ -8028,7 +8216,6 @@ def api_coach_escalations():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/coach/escalation-action', methods=['POST'])
-@login_required
 def api_coach_escalation_action():
     """Record an Ack/Snooze on a This Week escalation — Coacher E (all logic in backend)."""
     try:
@@ -8058,6 +8245,76 @@ def api_coach_escalation_action():
         if job.errors:
             return jsonify({'success': False, 'error': str(job.errors)}), 500
         clear_cache('_get_coach_escalations')
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ─── Coacher: Weekly Run — per-family×week workflow status (approve / done) ──
+WEEKLY_RUN_TABLE = f"{PROJECT_ID}.{DATASET_ID}.DE_WEEKLY_RUN"
+
+@cache_result(ttl_seconds=60)
+def _get_weekly_run():
+    query = f"""
+        SELECT parent_name, week_start, status, approved_at, done_at, note,
+               cells, scale_cells, planned_spend, forward_ads_net, purposes,
+               has_escalation, escalation_severity, escalation_net, opportunity_score
+        FROM `{PROJECT_ID}.{DATASET_ID}.V_WEEKLY_RUN`
+        ORDER BY opportunity_score DESC
+    """
+    return [dict(row) for row in client.query(query).result()]
+
+@app.route('/api/coach/weekly-run', methods=['GET'])
+def api_coach_weekly_run():
+    """Weekly Run — one row per current-week family (plan summary + status + opportunity)."""
+    try:
+        return jsonify({'success': True, 'data': _get_weekly_run()})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+def _weekly_run_upsert(data, new_status):
+    parent = data.get('parent_name')
+    week_start = data.get('week_start')
+    if not parent or not week_start:
+        return None, 'parent_name and week_start required'
+    now = datetime.utcnow().isoformat()
+    row = {
+        'parent_name': parent, 'week_start': week_start, 'status': new_status,
+        'approved_at': now if new_status in ('APPROVED', 'DONE') else None,
+        'done_at': now if new_status == 'DONE' else None,
+        'note': (data.get('note') or None),
+        'actions_queued': int(data.get('actions_queued', 0) or 0),
+        'updated_at': now, 'updated_by': session.get('user', {}).get('email', 'dashboard'),
+    }
+    job_config = bigquery.LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_APPEND)
+    job = client.load_table_from_json([row], WEEKLY_RUN_TABLE, job_config=job_config)
+    job.result()
+    return job.errors, None
+
+@app.route('/api/coach/weekly-run/approve', methods=['POST'])
+def api_coach_weekly_run_approve():
+    """Record family plan approval for the current week."""
+    try:
+        errors, err = _weekly_run_upsert(request.get_json() or {}, 'APPROVED')
+        if err:
+            return jsonify({'success': False, 'error': err}), 400
+        if errors:
+            return jsonify({'success': False, 'error': str(errors)}), 500
+        clear_cache('_get_weekly_run')
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/coach/weekly-run/done', methods=['POST'])
+def api_coach_weekly_run_done():
+    """Record that a family's actions were uploaded to Amazon (workflow done)."""
+    try:
+        errors, err = _weekly_run_upsert(request.get_json() or {}, 'DONE')
+        if err:
+            return jsonify({'success': False, 'error': err}), 400
+        if errors:
+            return jsonify({'success': False, 'error': str(errors)}), 500
+        clear_cache('_get_weekly_run')
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -8387,9 +8644,21 @@ def research_top_terms():
         rr_cols, rr_join = _research_ranked_select(parent, alias='t')
         order_by = ("rr.rank DESC NULLS LAST, t.market_purchases DESC NULLS LAST"
                     if parent else "t.market_purchases DESC NULLS LAST")
+        # Manual segment overrides (DE_SEARCH_TERM_SEGMENTS, set via /update-segments) win at READ
+        # time via COALESCE — so a fix surfaces immediately, not only after the daily
+        # SP_REFRESH_RESEARCH_RANKED bakes it into FACT_RESEARCH_TERMS. (NULL override = keep derived.)
         sql = f"""
-        SELECT t.*, {rr_cols}
+        SELECT
+          t.* EXCEPT(gender, age_group, occasion, cost_tier, product_type, brand),
+          COALESCE(o.gender, t.gender)             AS gender,
+          COALESCE(o.age_group, t.age_group)       AS age_group,
+          COALESCE(o.occasion, t.occasion)         AS occasion,
+          COALESCE(o.cost_tier, t.cost_tier)       AS cost_tier,
+          COALESCE(o.product_type, t.product_type) AS product_type,
+          COALESCE(o.brand, t.brand)               AS brand,
+          {rr_cols}
         FROM `onyga-482313`.OI.FACT_RESEARCH_TERMS t
+        LEFT JOIN `onyga-482313`.OI.DE_SEARCH_TERM_SEGMENTS o ON o.query_text = t.query_text
         {rr_join}
         ORDER BY {order_by}
         LIMIT 5000
@@ -8467,6 +8736,557 @@ def research_recommendations():
         return jsonify(out)
     except Exception as e:
         print(f"Error in research_recommendations: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/product-competitors', methods=['GET'])
+def research_product_competitors():
+    """SP product-targeting (ASIN targeting) opportunities for a family, split by
+    whether the TARGET product is our own brand (cross-sell / defense) or an
+    external competitor. 'High conversion' = CVR (orders / clicks) with a
+    min-click gate so 1-click flukes don't surface. Own vs external is decided
+    by whether the target ASIN maps to a real family in DIM_PRODUCT
+    (parent_name IS NOT NULL) — note DIM_PRODUCT also holds harvested competitor
+    ASINs with a NULL parent_name, so presence-in-table alone is not "own".
+    Returns { "BRAND": [...], "NON_BRAND": [...] } ranked by CVR desc.
+    """
+    parent = (request.args.get('parent') or '').strip()
+    if not parent:
+        return jsonify({'error': 'parent is required'}), 400
+    try:
+        sql = """
+        WITH pt AS (
+          SELECT
+            REGEXP_EXTRACT(a.targeting, r'"([A-Z0-9]{10})"') AS target_asin,
+            SUM(a.Ads_clicks) AS clicks,
+            SUM(a.Ads_orders) AS orders,
+            ROUND(SUM(a.Ads_cost), 2) AS spend,
+            SUM(a.GROSS_PROFIT) AS gp
+          FROM `onyga-482313`.OI.FACT_AMAZON_ADS a
+          JOIN `onyga-482313`.OI.DIM_PRODUCT p
+            ON COALESCE(a.most_advertised_asin_impressions, a.ASIN_BY_CAMPAIGN_NAME) = p.asin
+          WHERE a.targeting_type IN ('ASIN', 'ASIN Expanded')
+            AND p.parent_name = @parent AND p.is_active = true
+            AND a.Ads_clicks > 0
+            AND a.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 180 DAY)
+          GROUP BY 1
+          HAVING SUM(a.Ads_clicks) >= 15 AND SUM(a.Ads_orders) > 0
+        )
+        SELECT
+          pt.target_asin,
+          (d.parent_name IS NOT NULL) AS is_own,
+          d.parent_name AS own_parent,
+          d.color        AS own_color,
+          pt.clicks, pt.orders, pt.spend,
+          ROUND(SAFE_DIVIDE(pt.orders, pt.clicks) * 100, 1) AS cvr_pct,
+          ROUND(SAFE_DIVIDE(pt.gp, NULLIF(pt.spend, 0)), 2)  AS net_roas
+        FROM pt
+        LEFT JOIN `onyga-482313`.OI.DIM_PRODUCT d ON d.asin = pt.target_asin
+        WHERE pt.target_asin IS NOT NULL
+        ORDER BY cvr_pct DESC
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('parent', 'STRING', parent)
+        ])
+        out = {'BRAND': [], 'NON_BRAND': []}
+        for row in client.query(sql, job_config=jc).result():
+            d = dict(row)
+            bucket = 'BRAND' if d.pop('is_own') else 'NON_BRAND'
+            out[bucket].append(d)
+        return jsonify(out)
+    except Exception as e:
+        print(f"Error in research_product_competitors: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/intents', methods=['GET'])
+def research_intents():
+    """Intent themes relevant to a family + their top-10 keywords (sub-project B.1).
+
+    Reads V_INTENT_KEYWORDS (grain parent_name x intent_key x query_text). Only
+    is_relevant intents are returned — that's the campaign set:
+      GENERIC    -> family's best term rank >= 60
+      TIME_BASED -> always (rank is zeroed off-season; the season window governs)
+    TIME_BASED rows carry season_start/season_end (DIM_US_HOLIDAYS current-or-next).
+    SOP: architecture/INTENT_CAMPAIGN_MODEL.md §A.3 / §B.1
+    """
+    parent = (request.args.get('parent') or '').strip()
+    if not parent:
+        return jsonify({'error': 'parent is required'}), 400
+    try:
+        # Everything (money signal, profit gate, override, relevance) is computed in
+        # V_INTENT_KEYWORDS — this endpoint only shapes it for the UI. Ori 2026-07-16.
+        sql = """
+        SELECT
+          intent_key, label, intent_type, cross_family,
+          ANY_VALUE(family_best_rank) AS family_best_rank,
+          ANY_VALUE(holiday_name) AS holiday_name,
+          CAST(ANY_VALUE(season_start) AS STRING) AS season_start,
+          CAST(ANY_VALUE(season_end) AS STRING) AS season_end,
+          -- SP IS the headline: an intent campaign is Sponsored Products (Exact/Broad/Phrase/
+          -- Competitor). SB Video / SB Collection are separate brand-lane campaigns and live in
+          -- Brand Spotlight. Blended is kept only as context. Ori 2026-07-16.
+          ANY_VALUE(ads_sp_spend)    AS ads_spend,
+          ANY_VALUE(ads_sp_clicks)   AS ads_clicks,
+          ANY_VALUE(ads_orders)      AS ads_orders,
+          ANY_VALUE(ads_sp_net_roas) AS ads_net_roas,
+          ANY_VALUE(ads_spend)       AS ads_blended_spend,
+          ANY_VALUE(ads_net_roas)    AS ads_blended_net_roas,
+          CAST(ANY_VALUE(ads_window_start) AS STRING) AS ads_window_start,
+          CAST(ANY_VALUE(ads_window_end) AS STRING) AS ads_window_end,
+          ANY_VALUE(ads_used_fallback) AS ads_used_fallback,
+          -- per-format money: blended net ROAS hides big gaps (LolliME/tween-christmas-gift
+          -- blends to 0.94 but SB_VIDEO is 1.25 and SP is 0.40)
+          ANY_VALUE(ads_sp_spend)  AS ads_sp_spend,  ANY_VALUE(ads_sp_net_roas)  AS ads_sp_net_roas,
+          ANY_VALUE(ads_sbv_spend) AS ads_sbv_spend, ANY_VALUE(ads_sbv_net_roas) AS ads_sbv_net_roas,
+          ANY_VALUE(ads_sbc_spend) AS ads_sbc_spend, ANY_VALUE(ads_sbc_net_roas) AS ads_sbc_net_roas,
+          ANY_VALUE(relevance_reason) AS relevance_reason,
+          -- effective_rank, not rank: seasonal terms are all rank 0 out of season (holiday
+          -- gate). effective_rank is the same formula ungated, and is the ordering key.
+          ARRAY_AGG(STRUCT(query_text AS term, effective_rank AS rank, overall_fit AS fit,
+                           weekly_market_purchases AS demand,
+                           term_spend, term_net_roas)
+                    ORDER BY rn) AS terms
+        FROM `onyga-482313`.OI.V_INTENT_KEYWORDS
+        WHERE parent_name = @parent AND is_top10 AND is_relevant
+        GROUP BY intent_key, label, intent_type, cross_family
+        ORDER BY intent_type, ads_spend DESC NULLS LAST, family_best_rank DESC
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('parent', 'STRING', parent)
+        ])
+        intents = [dict(r) for r in client.query(sql, job_config=jc).result()]
+        return jsonify({'parent': parent, 'intents': intents})
+    except Exception as e:
+        print(f"Error in research_intents: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/brand-spotlight', methods=['GET'])
+def research_brand_spotlight():
+    """Cross-family intent view (sub-project B.2) — the suggestion feed for brand-store
+    campaigns. Per intent theme, aggregated across ALL families: which families rank for
+    it, the combined top terms, and the best rank achieved. Intents shared by several
+    families are the brand-store candidates.
+    SOP: architecture/INTENT_CAMPAIGN_MODEL.md §B.2
+    """
+    try:
+        sql = """
+        WITH rel AS (
+          SELECT * FROM `onyga-482313`.OI.V_INTENT_KEYWORDS
+          WHERE is_relevant AND is_top10
+        ),
+        -- PRODUCT SUGGESTION (Ori 2026-07-16): which products should actually run in this
+        -- intent's (brand-store) campaign — the top 3 by ads net ROAS that clear breakeven.
+        -- Measured on the intent's own window (seasonal -> its last season). MIN_PROD_CLICKS=20
+        -- keeps 1-click flukes out; PROFITABLE = net ROAS >= 1.0 ("above marginal").
+        -- NOTE: per-ASIN attribution uses FACT_AMAZON_ADS's advertised-asin link
+        -- COALESCE(most_advertised_asin_impressions, ASIN_BY_CAMPAIGN_NAME) — the only source
+        -- with asin AND search_term. It is approximate for multi-ASIN campaigns.
+        intent_terms AS (
+          SELECT DISTINCT intent_key, LOWER(query_text) AS term,
+            ANY_VALUE(ads_window_start) OVER (PARTITION BY intent_key) AS ws,
+            ANY_VALUE(ads_window_end)   OVER (PARTITION BY intent_key) AS we
+          FROM rel
+        ),
+        prod_ads AS (
+          SELECT t.intent_key, p.product_short_name, p.parent_name,
+            SUM(a.Ads_cost) AS cost, SUM(a.GROSS_PROFIT) AS gp,
+            SUM(a.Ads_clicks) AS clicks, SUM(a.Ads_orders) AS orders
+          FROM intent_terms t
+          JOIN `onyga-482313`.OI.FACT_AMAZON_ADS a
+            ON LOWER(a.search_term) = t.term
+           AND a.date BETWEEN t.ws AND t.we
+           AND a.Ads_clicks > 0
+          JOIN `onyga-482313`.OI.DIM_PRODUCT p
+            ON COALESCE(a.most_advertised_asin_impressions, a.ASIN_BY_CAMPAIGN_NAME) = p.asin
+          WHERE p.parent_name IS NOT NULL AND p.is_active = true
+          GROUP BY 1, 2, 3
+        ),
+        top_products AS (
+          SELECT intent_key,
+            ARRAY_AGG(STRUCT(product_short_name AS product, parent_name AS family,
+                             ROUND(cost, 2) AS spend, clicks, orders, net_roas)
+                      ORDER BY net_roas DESC LIMIT 3) AS top_products
+          FROM (
+            SELECT intent_key, product_short_name, parent_name, cost, clicks, orders,
+              ROUND(SAFE_DIVIDE(gp, NULLIF(cost, 0)), 2) AS net_roas
+            FROM prod_ads
+            WHERE clicks >= 20
+          )
+          WHERE net_roas >= 1.0
+          GROUP BY 1
+        ),
+        fams AS (
+          SELECT intent_key, label, intent_type, cross_family,
+            COUNT(DISTINCT parent_name) AS n_families,
+            ARRAY_AGG(DISTINCT parent_name ORDER BY parent_name) AS families,
+            MAX(family_best_rank) AS best_rank,
+            CAST(ANY_VALUE(season_start) AS STRING) AS season_start,
+            CAST(ANY_VALUE(season_end) AS STRING) AS season_end,
+            SUM(weekly_market_purchases) AS demand
+          FROM rel GROUP BY 1, 2, 3, 4
+        ),
+        -- Brand lane money per intent: SB Video and SB Collection are their own campaigns
+        -- (Ori 2026-07-16) — summed across families, since brand-store is cross-family.
+        sb_money AS (
+          SELECT intent_key,
+            ROUND(SUM(sbv_spend), 2) AS sbv_spend, SUM(sbv_clicks) AS sbv_clicks,
+            ROUND(SAFE_DIVIDE(SUM(sbv_gp), NULLIF(SUM(sbv_spend), 0)), 2) AS sbv_net_roas,
+            ROUND(SUM(sbc_spend), 2) AS sbc_spend, SUM(sbc_clicks) AS sbc_clicks,
+            ROUND(SAFE_DIVIDE(SUM(sbc_gp), NULLIF(SUM(sbc_spend), 0)), 2) AS sbc_net_roas
+          FROM (
+            SELECT DISTINCT parent_name, intent_key,
+              ads_sbv_spend AS sbv_spend, ads_sbv_clicks AS sbv_clicks,
+              ads_sbv_spend * ads_sbv_net_roas AS sbv_gp,
+              ads_sbc_spend AS sbc_spend, ads_sbc_clicks AS sbc_clicks,
+              ads_sbc_spend * ads_sbc_net_roas AS sbc_gp
+            FROM rel
+          ) GROUP BY 1
+        ),
+        terms AS (
+          SELECT intent_key,
+            ARRAY_AGG(STRUCT(term, rank) ORDER BY rank DESC, term LIMIT 8) AS top_terms
+          FROM (
+            SELECT intent_key, query_text AS term, MAX(rank) AS rank
+            FROM rel GROUP BY 1, 2
+          ) GROUP BY 1
+        )
+        SELECT f.intent_key, f.label, f.intent_type, f.cross_family, f.n_families,
+               f.families, f.best_rank, f.season_start, f.season_end, f.demand,
+               t.top_terms, tp.top_products,
+               sb.sbv_spend, sb.sbv_clicks, sb.sbv_net_roas,
+               sb.sbc_spend, sb.sbc_clicks, sb.sbc_net_roas
+        FROM fams f
+        LEFT JOIN terms t USING (intent_key)
+        LEFT JOIN top_products tp USING (intent_key)
+        LEFT JOIN sb_money sb USING (intent_key)
+        ORDER BY f.n_families DESC, f.best_rank DESC, f.intent_key
+        """
+        rows = [dict(r) for r in client.query(sql).result()]
+        return jsonify({'intents': rows})
+    except Exception as e:
+        print(f"Error in research_brand_spotlight: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/coverage', methods=['GET'])
+def ads_coverage_scan():
+    """Per-product ad-coverage scan (sub-project F, Phase 1 = role level).
+    For every active own product x expected role: does an ENABLED campaign exist?
+    Emphasises MISSING (0 enabled) and REDUNDANT (>1 enabled), and returns
+    net ROAS / clicks / impressions / units so Ori can judge whether to skip a role.
+
+    Design notes (see architecture/INTENT_CAMPAIGN_MODEL.md §F):
+    - The asin<->campaign link uses V_SRC_AmazonAds_advertised_product.advertised_asin
+      (authoritative). FACT_AMAZON_ADS's COALESCE(most_advertised_asin..., ASIN_BY_CAMPAIGN_NAME)
+      mis-attributes campaigns across families, so it is used ONLY at campaign grain
+      (to read campaign_type / targeting_type), never to attribute an ASIN.
+    - Role = strategy_id (DIM_EXPERIMENT_CAMPAIGN -> DIM_EXPERIMENT) for Defense/Conquest,
+      else campaign_type (SP/SB) + dominant targeting_type. First match wins.
+    - net ROAS = (units x gross_profit_per_unit) / cost, using the canonical per-ASIN
+      price (V_DIM_LISTING_CURRENT) minus TOTAL_COST_PER_UNIT (DIM_COSTS_HISTORY) —
+      same formula as /api/research/family-info.
+    """
+    ROLES = ['AUTO', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE', 'EXACT', 'BROAD', 'PHRASE', 'COMPETITOR', 'SB_VIDEO']
+    try:
+        days = int(request.args.get('days', 90))
+    except ValueError:
+        days = 90
+    try:
+        sql = """
+        WITH prod AS (
+          SELECT dp.asin, dp.parent_name, dp.product_short_name,
+            ROUND(lc.price - COALESCE(ch.TOTAL_COST_PER_UNIT, 0), 2) AS gp_per_unit
+          FROM `onyga-482313`.OI.DIM_PRODUCT dp
+          LEFT JOIN (
+            SELECT asin1, price FROM `onyga-482313`.OI.V_DIM_LISTING_CURRENT
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY asin1 ORDER BY price DESC) = 1
+          ) lc ON lc.asin1 = dp.asin
+          LEFT JOIN (
+            SELECT asin, TOTAL_COST_PER_UNIT FROM `onyga-482313`.OI.DIM_COSTS_HISTORY
+            WHERE end_date IS NULL OR end_date >= CURRENT_DATE()
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY asin ORDER BY start_date DESC) = 1
+          ) ch ON ch.asin = dp.asin
+          WHERE dp.parent_name IS NOT NULL AND dp.is_active = true
+        ),
+        camp_state AS (
+          SELECT campaign_id,
+            ARRAY_AGG(state ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state,
+            ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS campaign_name
+          FROM `onyga-482313`.OI.V_SRC_AmazonAds_campaign_history GROUP BY 1
+        ),
+        camp_strategy AS (
+          SELECT ec.campaign_id, ANY_VALUE(e.strategy_id) AS strategy_id
+          FROM `onyga-482313`.OI.DIM_EXPERIMENT_CAMPAIGN ec
+          JOIN `onyga-482313`.OI.DIM_EXPERIMENT e USING (experiment_id)
+          GROUP BY 1
+        ),
+        camp_sig AS (
+          SELECT campaign_id, ANY_VALUE(campaign_type) AS campaign_type,
+            ARRAY_AGG(targeting_type ORDER BY clicks DESC LIMIT 1)[OFFSET(0)] AS targeting_type
+          FROM (
+            SELECT campaign_id, campaign_type, targeting_type, SUM(Ads_clicks) AS clicks
+            FROM `onyga-482313`.OI.FACT_AMAZON_ADS
+            WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
+            GROUP BY 1, 2, 3
+          ) GROUP BY 1
+        ),
+        camp_role AS (
+          SELECT cs.campaign_id, CASE
+            WHEN st.strategy_id = 'BRAND_DEFENSE' THEN 'BRAND_DEFENSE'
+            WHEN st.strategy_id = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE'
+            WHEN cs.campaign_type = 'SB' THEN 'SB_VIDEO'
+            WHEN cs.targeting_type = 'Automatic' THEN 'AUTO'
+            WHEN st.strategy_id IN ('COMPETITOR', 'COMPETITOR')
+              OR cs.targeting_type IN ('ASIN', 'ASIN Expanded', 'Category') THEN 'COMPETITOR'
+            WHEN UPPER(cs.targeting_type) = 'EXACT' THEN 'EXACT'
+            WHEN UPPER(cs.targeting_type) = 'BROAD' THEN 'BROAD'
+            WHEN UPPER(cs.targeting_type) = 'PHRASE' THEN 'PHRASE'
+            ELSE 'OTHER' END AS role
+          FROM camp_sig cs LEFT JOIN camp_strategy st USING (campaign_id)
+        ),
+        adv AS (
+          SELECT advertised_asin AS asin, campaign_id,
+            SUM(impressions) AS impressions, SUM(clicks) AS clicks,
+            SUM(cost) AS cost, SUM(units_7d) AS units
+          FROM `onyga-482313`.OI.V_SRC_AmazonAds_advertised_product
+          WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
+          GROUP BY 1, 2
+        )
+        SELECT p.parent_name, p.product_short_name, p.asin, cr.role,
+          COUNTIF(cst.state = 'ENABLED') AS n_enabled,
+          COUNT(DISTINCT adv.campaign_id) AS n_any,
+          SUM(adv.impressions) AS impressions, SUM(adv.clicks) AS clicks,
+          SUM(adv.units) AS units, ROUND(SUM(adv.cost), 2) AS cost,
+          ANY_VALUE(p.gp_per_unit) AS gp_per_unit,
+          ROUND(SAFE_DIVIDE(SUM(adv.units) * ANY_VALUE(p.gp_per_unit), NULLIF(SUM(adv.cost), 0)), 2) AS net_roas,
+          STRING_AGG(DISTINCT IF(cst.state = 'ENABLED', cst.campaign_name, NULL), ' | ') AS enabled_campaigns
+        FROM prod p
+        JOIN adv ON adv.asin = p.asin
+        JOIN camp_role cr ON cr.campaign_id = adv.campaign_id
+        LEFT JOIN camp_state cst ON cst.campaign_id = adv.campaign_id
+        GROUP BY 1, 2, 3, 4
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('days', 'INT64', days)
+        ])
+        rows = [dict(r) for r in client.query(sql, job_config=jc).result()]
+
+        # Pivot into a product x role grid. A role with no row at all = never advertised.
+        by_asin = {}
+        for r in rows:
+            a = r['asin']
+            if a not in by_asin:
+                by_asin[a] = {
+                    'asin': a, 'parent_name': r['parent_name'],
+                    'product_short_name': r['product_short_name'], 'cells': {},
+                }
+            by_asin[a]['cells'][r['role']] = {
+                'n_enabled': r['n_enabled'], 'n_any': r['n_any'],
+                'impressions': r['impressions'], 'clicks': r['clicks'],
+                'units': r['units'], 'cost': r['cost'], 'net_roas': r['net_roas'],
+                'campaigns': r['enabled_campaigns'],
+            }
+
+        products = []
+        for p in by_asin.values():
+            cells = {}
+            for role in ROLES:
+                c = p['cells'].get(role)
+                if not c or c['n_enabled'] == 0:
+                    status = 'missing'
+                elif c['n_enabled'] > 1:
+                    status = 'redundant'
+                else:
+                    status = 'ok'
+                cells[role] = {
+                    'status': status,
+                    'n_enabled': (c or {}).get('n_enabled', 0),
+                    'n_any': (c or {}).get('n_any', 0),
+                    'impressions': (c or {}).get('impressions', 0),
+                    'clicks': (c or {}).get('clicks', 0),
+                    'units': (c or {}).get('units', 0),
+                    'net_roas': (c or {}).get('net_roas'),
+                    'campaigns': (c or {}).get('campaigns'),
+                }
+            p['cells'] = cells
+            p['n_missing'] = sum(1 for c in cells.values() if c['status'] == 'missing')
+            p['n_redundant'] = sum(1 for c in cells.values() if c['status'] == 'redundant')
+            products.append(p)
+
+        products.sort(key=lambda x: (x['parent_name'] or '', x['product_short_name'] or ''))
+
+        # ── Roll up to the grain each role actually lives at (see §"Campaign grain"):
+        #    AUTO = per product · BRAND_DEFENSE + offense roles = per family ·
+        #    PRODUCT_DEFENSE = store (cross-family).
+        def agg(cells):
+            """Merge a list of raw role-cells into one, summing metrics."""
+            n_enabled = sum(c['n_enabled'] for c in cells)
+            n_any = sum(c['n_any'] for c in cells)
+            imp = sum(c['impressions'] or 0 for c in cells)
+            clk = sum(c['clicks'] or 0 for c in cells)
+            un = sum(c['units'] or 0 for c in cells)
+            cost = sum(c['cost'] or 0 for c in cells)
+            gp = sum((c['units'] or 0) * (c['gp_per_unit'] or 0) for c in cells)
+            # raw SQL rows carry `enabled_campaigns`; already-pivoted cells carry `campaigns`
+            names = sorted({
+                n for c in cells
+                for n in ((c.get('enabled_campaigns') or c.get('campaigns') or '').split(' | '))
+                if n
+            })
+            return {
+                'status': 'missing' if n_enabled == 0 else ('redundant' if n_enabled > 1 else 'ok'),
+                'n_enabled': n_enabled, 'n_any': n_any,
+                'impressions': imp, 'clicks': clk, 'units': un,
+                'net_roas': round(gp / cost, 2) if cost else None,
+                'campaigns': ' | '.join(names) or None,
+            }
+
+        # store-grain: PRODUCT_DEFENSE across every family
+        pd_cells = [c for c in rows if c['role'] == 'PRODUCT_DEFENSE']
+        store = {
+            'label': 'Store (cross-family)',
+            'roles': {'PRODUCT_DEFENSE': agg(pd_cells) if pd_cells else agg([])},
+        }
+        store['complete'] = store['roles']['PRODUCT_DEFENSE']['status'] == 'ok'
+
+        # family-grain: BRAND_DEFENSE + offense roles; AUTO stays per product
+        FAMILY_ROLES = ['BRAND_DEFENSE', 'COMPETITOR', 'EXACT', 'BROAD', 'PHRASE', 'SB_VIDEO']
+        fams = {}
+        for r in rows:
+            fams.setdefault(r['parent_name'], [])
+        for r in rows:
+            fams[r['parent_name']].append(r)
+
+        families = []
+        for fam, frows in fams.items():
+            froles = {}
+            for role in FAMILY_ROLES:
+                cells = [c for c in frows if c['role'] == role]
+                froles[role] = agg(cells) if cells else agg([])
+            fam_products = [p for p in products if p['parent_name'] == fam]
+            autos = [{
+                'asin': p['asin'],
+                'product_short_name': p['product_short_name'],
+                **p['cells']['AUTO'],
+            } for p in fam_products]
+            n_auto_missing = sum(1 for a in autos if a['status'] == 'missing')
+            n_role_missing = sum(1 for c in froles.values() if c['status'] == 'missing')
+            n_redundant = (sum(1 for c in froles.values() if c['status'] == 'redundant')
+                           + sum(1 for a in autos if a['status'] == 'redundant'))
+            families.append({
+                'family': fam,
+                'roles': froles,
+                'autos': autos,
+                'n_auto_missing': n_auto_missing,
+                'n_role_missing': n_role_missing,
+                'n_missing': n_auto_missing + n_role_missing,
+                'n_redundant': n_redundant,
+                'complete': (n_auto_missing + n_role_missing + n_redundant) == 0,
+            })
+        families.sort(key=lambda f: f['family'] or '')
+
+        return jsonify({
+            'roles': ROLES, 'family_roles': FAMILY_ROLES, 'days': days,
+            'store': store, 'families': families,
+        })
+    except Exception as e:
+        print(f"Error in ads_coverage_scan: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/rec-explain', methods=['GET'])
+def research_rec_explain():
+    """Explain a recommendation's opaque count by listing the underlying terms.
+    BROAD  -> the ASIN co-occurrence cluster (terms shoppers who searched the seed
+              also bought under) with market sales — the "N terms" behind the badge.
+    PHRASE -> every search term the phrase keyword covers (contains all its key
+              tokens, whole-word / plural-tolerant) — the "covers N" behind the badge.
+    Reconstructs the same logic as SP_REFRESH_RESEARCH_RECOMMENDATIONS; counts are
+    LIVE so they can drift a little from the weekly snapshot badge.
+    """
+    parent = (request.args.get('parent') or '').strip()
+    keyword = (request.args.get('keyword') or '').strip()
+    rec_type = (request.args.get('rec_type') or '').strip().upper()
+    if not parent or not keyword or rec_type not in ('BROAD', 'PHRASE'):
+        return jsonify({'error': 'parent, keyword and rec_type (BROAD|PHRASE) required'}), 400
+    try:
+        if rec_type == 'BROAD':
+            sql = """
+            WITH cands AS (
+              SELECT LOWER(query_text) AS q
+              FROM `onyga-482313`.OI.V_RESEARCH_RECOMMENDATION_CANDIDATES
+              WHERE rec_type = 'BROAD' AND parent_name = @parent
+            ),
+            seed_asins AS (
+              SELECT DISTINCT sq.ASIN
+              FROM `onyga-482313`.OI.FACT_SEARCH_QUERY sq
+              WHERE LOWER(sq.query_text) = LOWER(@seed)
+                AND sq.week_start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 104 WEEK)
+            ),
+            members AS (
+              SELECT DISTINCT LOWER(sq2.query_text) AS member
+              FROM `onyga-482313`.OI.FACT_SEARCH_QUERY sq2
+              JOIN seed_asins sa ON sq2.ASIN = sa.ASIN
+              WHERE sq2.week_start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 104 WEEK)
+                AND sq2.query_text != 'OTHER'
+                AND LOWER(sq2.query_text) IN (SELECT q FROM cands)
+              UNION DISTINCT SELECT LOWER(@seed)
+            )
+            SELECT m.member AS term,
+                   CAST(COALESCE(rt.market_purchases, 0) AS INT64) AS sales,
+                   r.overall_fit AS fit
+            FROM members m
+            LEFT JOIN `onyga-482313`.OI.FACT_RESEARCH_TERMS rt ON LOWER(rt.query_text) = m.member
+            LEFT JOIN `onyga-482313`.OI.FACT_RESEARCH_RANKED r
+              ON r.parent_name = @parent AND LOWER(r.query_text) = m.member
+            ORDER BY sales DESC
+            LIMIT 200
+            """
+        else:  # PHRASE
+            sql = """
+            WITH seed_tokens AS (
+              SELECT w AS tok
+              FROM UNNEST(SPLIT(REGEXP_REPLACE(LOWER(@seed), r'[^a-z0-9]+', ' '), ' ')) w
+              WHERE w NOT IN ('a','an','the','for','and','or','of','to','in','on','at','by','is','it','my','with')
+                AND w != ''
+            ),
+            ntok AS (SELECT COUNT(*) AS n FROM seed_tokens),
+            fam_terms AS (
+              SELECT DISTINCT LOWER(query_text) AS term,
+                REGEXP_REPLACE(
+                  CONCAT(' ', REGEXP_REPLACE(LOWER(query_text), r'[^a-z0-9]+', ' '), ' '), r's ', ' '
+                ) AS norm_term
+              FROM `onyga-482313`.OI.FACT_RESEARCH_TERMS WHERE query_text != 'OTHER'
+            ),
+            matched AS (
+              SELECT ft.term, COUNT(DISTINCT st.tok) AS n_matched
+              FROM seed_tokens st
+              JOIN fam_terms ft
+                ON STRPOS(ft.norm_term, CONCAT(' ', REGEXP_REPLACE(st.tok, r's$', ''), ' ')) > 0
+              GROUP BY ft.term
+            )
+            SELECT m.term AS term,
+                   CAST(COALESCE(rt.market_purchases, 0) AS INT64) AS sales,
+                   r.overall_fit AS fit
+            FROM matched m
+            CROSS JOIN ntok
+            LEFT JOIN `onyga-482313`.OI.FACT_RESEARCH_TERMS rt ON LOWER(rt.query_text) = m.term
+            LEFT JOIN `onyga-482313`.OI.FACT_RESEARCH_RANKED r
+              ON r.parent_name = @parent AND LOWER(r.query_text) = m.term
+            WHERE m.n_matched = ntok.n
+            ORDER BY sales DESC
+            LIMIT 200
+            """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('parent', 'STRING', parent),
+            bigquery.ScalarQueryParameter('seed', 'STRING', keyword),
+        ])
+        members = [dict(row) for row in client.query(sql, job_config=jc).result()]
+        return jsonify({'rec_type': rec_type, 'keyword': keyword, 'members': members})
+    except Exception as e:
+        print(f"Error in research_rec_explain: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -8800,6 +9620,8 @@ def segment_reasoning():
             a.search_term,
             a.Ads_orders,
             a.Ads_clicks,
+            a.Ads_cost,
+            a.GROSS_PROFIT,
             -- Single-source taxonomy (FN_EXTRACT_SEGMENTS) + canonical
             -- product_type vocabulary (DE_PRODUCT_TYPE_KEYWORDS)
             `onyga-482313`.OI.FN_EXTRACT_SEGMENTS(a.search_term).gender    AS gender,
@@ -8842,43 +9664,51 @@ def segment_reasoning():
           'gender' AS segment_type, gender AS segment_value,
           SUM(Ads_orders) AS orders,
           ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(t.total_orders)) * 100, 1) AS pct,
-          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1) AS clicks_per_sale
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1) AS clicks_per_sale,
+          ROUND(SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)), 2) AS net_roas
         FROM tagged, totals t WHERE gender IS NOT NULL GROUP BY gender
         UNION ALL
         SELECT '_PARENT', 'age_group', age_group, SUM(Ads_orders),
           ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(t.total_orders)) * 100, 1),
-          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1),
+          ROUND(SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)), 2)
         FROM tagged, totals t WHERE age_group IS NOT NULL GROUP BY age_group
         UNION ALL
         SELECT '_PARENT', 'occasion', occasion, SUM(Ads_orders),
           ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(t.total_orders)) * 100, 1),
-          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1),
+          ROUND(SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)), 2)
         FROM tagged, totals t WHERE occasion IS NOT NULL GROUP BY occasion
         UNION ALL
         SELECT '_PARENT', 'product_type', product_type, SUM(Ads_orders),
           ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(t.total_orders)) * 100, 1),
-          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1),
+          ROUND(SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)), 2)
         FROM tagged, totals t WHERE product_type IS NOT NULL GROUP BY product_type
         UNION ALL
         -- Per-ASIN aggregation
         SELECT tagged.asin, 'gender', gender, SUM(Ads_orders),
           ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(atot.total_orders)) * 100, 1),
-          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1),
+          ROUND(SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)), 2)
         FROM tagged JOIN asin_totals atot ON tagged.asin = atot.asin WHERE gender IS NOT NULL GROUP BY tagged.asin, gender
         UNION ALL
         SELECT tagged.asin, 'age_group', age_group, SUM(Ads_orders),
           ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(atot.total_orders)) * 100, 1),
-          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1),
+          ROUND(SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)), 2)
         FROM tagged JOIN asin_totals atot ON tagged.asin = atot.asin WHERE age_group IS NOT NULL GROUP BY tagged.asin, age_group
         UNION ALL
         SELECT tagged.asin, 'occasion', occasion, SUM(Ads_orders),
           ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(atot.total_orders)) * 100, 1),
-          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1),
+          ROUND(SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)), 2)
         FROM tagged JOIN asin_totals atot ON tagged.asin = atot.asin WHERE occasion IS NOT NULL GROUP BY tagged.asin, occasion
         UNION ALL
         SELECT tagged.asin, 'product_type', product_type, SUM(Ads_orders),
           ROUND(SAFE_DIVIDE(SUM(Ads_orders), MAX(atot.total_orders)) * 100, 1),
-          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1)
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), SUM(Ads_orders)), 1),
+          ROUND(SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)), 2)
         FROM tagged JOIN asin_totals atot ON tagged.asin = atot.asin WHERE product_type IS NOT NULL GROUP BY tagged.asin, product_type
         ORDER BY asin, segment_type, orders DESC
         """
@@ -8899,6 +9729,7 @@ def segment_reasoning():
                 'orders': row['orders'],
                 'pct': row['pct'],
                 'clicks_per_sale': row.get('clicks_per_sale'),
+                'net_roas': row.get('net_roas'),
             }
             if asin == '_PARENT':
                 if st not in grouped:
@@ -8915,6 +9746,79 @@ def segment_reasoning():
         return jsonify(grouped)
     except Exception as e:
         print(f"Error in segment_reasoning: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/research/segment-terms', methods=['GET'])
+def segment_terms():
+    """Search-term breakdown behind one segment value — the ad search terms whose
+    performance rolls up into that segment's numbers (net ROAS, %, clicks/sale).
+    Powers the segment drill-down popup on the Research page.
+    """
+    family = request.args.get('family', '')
+    seg_type = request.args.get('segment_type', '')
+    seg_value = request.args.get('segment_value', '')
+    # Whitelist the segment column (interpolated into SQL) — never trust the raw param.
+    seg_col = {'gender': 'gender', 'age_group': 'age_group',
+               'occasion': 'occasion', 'product_type': 'product_type'}.get(seg_type)
+    if not family or not seg_col or not seg_value:
+        return jsonify({'error': 'family, valid segment_type, and segment_value required'}), 400
+    try:
+        sql = f"""
+        WITH tagged AS (
+          SELECT
+            a.search_term,
+            a.Ads_orders, a.Ads_clicks, a.Ads_cost, a.GROSS_PROFIT,
+            `onyga-482313`.OI.FN_EXTRACT_SEGMENTS(a.search_term).gender    AS gender,
+            `onyga-482313`.OI.FN_EXTRACT_SEGMENTS(a.search_term).age_group AS age_group,
+            `onyga-482313`.OI.FN_EXTRACT_SEGMENTS(a.search_term).occasion  AS occasion,
+            ptl.product_type
+          FROM `onyga-482313`.OI.FACT_AMAZON_ADS a
+          JOIN `onyga-482313`.OI.DIM_PRODUCT p
+            ON COALESCE(a.most_advertised_asin_impressions, a.ASIN_BY_CAMPAIGN_NAME) = p.asin
+          LEFT JOIN (
+            SELECT
+              t.search_term,
+              ARRAY_AGG(ptk.product_type ORDER BY ptk.priority ASC, LENGTH(ptk.keyword) DESC LIMIT 1)[OFFSET(0)] AS product_type
+            FROM (
+              SELECT DISTINCT a2.search_term
+              FROM `onyga-482313`.OI.FACT_AMAZON_ADS a2
+              JOIN `onyga-482313`.OI.DIM_PRODUCT p2
+                ON COALESCE(a2.most_advertised_asin_impressions, a2.ASIN_BY_CAMPAIGN_NAME) = p2.asin
+              WHERE a2.Ads_clicks > 0 AND p2.parent_name = @family AND p2.is_active = true
+            ) t
+            CROSS JOIN `onyga-482313.OI.DE_PRODUCT_TYPE_KEYWORDS` ptk
+            WHERE REGEXP_CONTAINS(LOWER(t.search_term), CONCAT(r'(?:^|\\W)', ptk.keyword, r'(?:\\W|$)'))
+            GROUP BY t.search_term
+          ) ptl ON ptl.search_term = a.search_term
+          WHERE a.Ads_clicks > 0
+            AND p.parent_name = @family
+            AND p.is_active = true
+        )
+        SELECT
+          search_term,
+          SUM(Ads_orders) AS orders,
+          SUM(Ads_clicks) AS clicks,
+          ROUND(SUM(Ads_cost), 2) AS spend,
+          ROUND(SUM(GROSS_PROFIT), 2) AS gross_profit,
+          ROUND(SAFE_DIVIDE(SUM(Ads_clicks), NULLIF(SUM(Ads_orders), 0)), 1) AS clicks_per_sale,
+          ROUND(SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)), 2) AS net_roas
+        FROM tagged
+        WHERE {seg_col} = @segment_value
+        GROUP BY search_term
+        HAVING SUM(Ads_clicks) > 0
+        ORDER BY spend DESC
+        LIMIT 200
+        """
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('family', 'STRING', family),
+            bigquery.ScalarQueryParameter('segment_value', 'STRING', seg_value),
+        ])
+        results = client.query(sql, job_config=jc).result()
+        rows = [dict(row) for row in results]
+        return jsonify({'segment_type': seg_type, 'segment_value': seg_value, 'terms': rows})
+    except Exception as e:
+        print(f"Error in segment_terms: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ==========================================

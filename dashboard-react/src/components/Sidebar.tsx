@@ -1,4 +1,4 @@
-import { Home, Zap, Mountain, BarChart2, Search, GraduationCap, ClipboardList, HeartPulse, Target, Megaphone, Settings, Sun, Moon, CheckSquare, Shield, Calculator, Package, Bell, Rocket, LayoutDashboard, TrendingUp, Eye, EyeOff, CalendarClock } from 'lucide-react';
+import { Home, Zap, Mountain, BarChart2, Search, GraduationCap, ClipboardList, HeartPulse, Target, Megaphone, Settings, Sun, Moon, CheckSquare, Shield, Calculator, Package, Bell, Rocket, LayoutDashboard, TrendingUp, CalendarClock, ListChecks } from 'lucide-react';
 import { useViewMode, isPageVisible } from '../hooks/useViewMode';
 import type { PageId, FamilyName } from '../types';
 
@@ -19,7 +19,7 @@ const NAV_GROUPS: NavGroup[] = [
     header: 'Overview',
     items: [
       { page: 'home', icon: <Home size={16} />, label: 'HOME' },
-      { page: 'thisweek', icon: <CalendarClock size={16} />, label: 'THIS WEEK' },
+      { page: 'weeklyrun', icon: <ListChecks size={16} />, label: 'WEEKLY RUN' },
       { page: 'actions', icon: <Zap size={16} />, label: 'ACTIONS' },
       { page: 'do', icon: <CheckSquare size={16} />, label: 'DO' },
       { page: 'peak', icon: <Mountain size={16} />, label: 'PEAK' },
@@ -40,6 +40,7 @@ const NAV_GROUPS: NavGroup[] = [
       { page: 'learn', icon: <GraduationCap size={16} />, label: 'LEARN' },
       { page: 'kwds', icon: <Search size={16} />, label: 'KEYWORDS' },
       { page: 'research', icon: <TrendingUp size={16} />, label: 'RESEARCH' },
+      { page: 'coverage', icon: <HeartPulse size={16} />, label: 'COVERAGE' },
       { page: 'log', icon: <ClipboardList size={16} />, label: 'LOG' },
     ],
   },
@@ -62,7 +63,7 @@ export function Sidebar({ activePage, activeFamily, onNav, themeMode, onToggleTh
   alertBadge?: { critical: number; warning: number; total: number };
   adminBadge?: 'error' | 'ok' | null;
 }) {
-  const { mode: viewMode, isAdmin, toggle: toggleViewMode } = useViewMode();
+  const { mode: viewMode } = useViewMode();
   const visibleGroups = NAV_GROUPS
     .map(g => ({ ...g, items: g.items.filter(i => isPageVisible(i.page, viewMode)) }))
     .filter(g => g.items.length > 0);
@@ -112,17 +113,6 @@ export function Sidebar({ activePage, activeFamily, onNav, themeMode, onToggleTh
 
       <div className="flex-1" />
       <div className="h-px bg-border mx-3 my-1" />
-      <button
-        onClick={toggleViewMode}
-        className="flex flex-col items-center justify-center w-[58px] mx-auto py-2 text-[8px] font-semibold uppercase tracking-widest text-faint hover:text-muted transition-all duration-300"
-        title={isAdmin ? 'Admin view: all pages & diagnostics. Click for simple view.' : 'Simple view: curated pages only. Click for admin view.'}
-      >
-        {isAdmin
-          ? <Eye size={14} className="mb-1 text-violet-400" />
-          : <EyeOff size={14} className="mb-1 text-faint" />
-        }
-        <span className="leading-none">{isAdmin ? 'ADMIN' : 'SIMPLE'}</span>
-      </button>
       {onToggleTheme && (
         <>
           <button

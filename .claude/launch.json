@@ -9,7 +9,11 @@
         "dev"
       ],
       "cwd": "/Users/ori/Develop/OI/dashboard-react",
-      "port": 5173
+      "port": 3000,
+      "env": {
+        "PORT": "3000"
+      },
+      "autoPort": false
     },
     {
       "name": "Dashboard Backend",

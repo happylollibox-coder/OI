@@ -32,7 +32,25 @@ BEGIN
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_ADS_COACH_CAMPAIGN` AS SELECT * FROM `onyga-482313.OI.V_ADS_COACH_CAMPAIGN`;
   
   -- 5. Ads Coach Actions — SKIPPED (Cube reads FACT_ADS_COACH_ACTIONS directly, already materialized by SP_REFRESH_ADS_COACH_ACTIONS)
-  
+
+  -- 5a. Coacher F apply set — deduped keyword bids (heavy V_ADS_COACH dedup; materialize so Weekly Run loads fast)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_COACH_APPLY` AS SELECT * FROM `onyga-482313.OI.V_COACH_APPLY`;
+
+  -- 5b. Coacher F apply set — campaign daily-budget changes
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_COACH_CAMPAIGN_BUDGET` AS SELECT * FROM `onyga-482313.OI.V_COACH_CAMPAIGN_BUDGET`;
+
+  -- 5c. Weekly Run — complete campaign attribution (depends on 5b); 5d keywords; 5e product (depends on 5c)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_WEEKLY_RUN_CAMPAIGN` AS SELECT * FROM `onyga-482313.OI.V_WEEKLY_RUN_CAMPAIGN`;
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_WEEKLY_RUN_KEYWORD`  AS SELECT * FROM `onyga-482313.OI.V_WEEKLY_RUN_KEYWORD`;
+  -- price→true-COGS tier lookup — MUST refresh before T_RUN_TARGET (which joins it for corrected net ROAS)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_PRICE_COST_TIER`    AS SELECT * FROM `onyga-482313.OI.V_PRICE_COST_TIER`;
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_RUN_TARGET`         AS SELECT * FROM `onyga-482313.OI.V_RUN_TARGET`;   -- merged step-4 card (keywords + auto groups, new + mature)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_WEEKLY_RUN_PRODUCT`  AS SELECT * FROM `onyga-482313.OI.V_WEEKLY_RUN_PRODUCT`;
+  -- 5f. Weekly Run — NEGATE_TERM recommendations (level 3 under keywords)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_WEEKLY_RUN_NEGATIVE` AS SELECT * FROM `onyga-482313.OI.V_WEEKLY_RUN_NEGATIVE`;
+  -- 5g. Weekly plan cells + last-wk net + trailing actual CPC (heavy double FACT scan → materialize)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_WEEKLY_PLAN_CELL` AS SELECT * FROM `onyga-482313.OI.V_WEEKLY_PLAN_CELL`;
+
   -- 6. Ads Coach Phrase Negatives
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_ADS_COACH_PHRASE_NEGATIVES` AS SELECT * FROM `onyga-482313.OI.V_ADS_COACH_PHRASE_NEGATIVES`;
   
@@ -69,5 +87,8 @@ BEGIN
 
   -- 17. Product Phrase Negatives (curated per-product negative phrases)
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_PRODUCT_PHRASE_NEGATIVES` AS SELECT * FROM `onyga-482313.OI.V_PRODUCT_PHRASE_NEGATIVES`;
+
+  -- 18. Launch Negatives (phrases a new campaign launches with, per strategy × family)
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_LAUNCH_NEGATIVES` AS SELECT * FROM `onyga-482313.OI.V_LAUNCH_NEGATIVES`;
 
 END;

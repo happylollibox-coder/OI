@@ -148,6 +148,18 @@ export interface SegmentReason {
   pct: number;
   orders: number;
   clicks_per_sale: number | null;
+  net_roas: number | null;
+}
+
+/** One search term behind a segment (drill-down popup). */
+export interface SegmentTerm {
+  search_term: string;
+  orders: number;
+  clicks: number;
+  spend: number;
+  gross_profit: number;
+  clicks_per_sale: number | null;
+  net_roas: number | null;
 }
 
 /** Parent-level reasoning keyed by segment type, plus per-ASIN breakdown. */

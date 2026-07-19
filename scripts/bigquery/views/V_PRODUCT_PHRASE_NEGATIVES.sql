@@ -105,14 +105,17 @@ combined AS (
   SELECT * FROM product_level
 )
 
-SELECT DISTINCT
+-- One row per (family, phrase, match_type). A phrase curated at both _ALL and family
+-- level used to survive twice here, because DISTINCT included origin_level — Amazon
+-- rejects duplicate negatives within a campaign. Most specific level wins.
+SELECT
   c.effective_parent_name,
   c.phrase,
   c.match_type,
   c.source,
   c.origin_level
 FROM combined c
-ORDER BY
-  c.effective_parent_name,
-  c.match_type,
-  c.phrase;
+QUALIFY ROW_NUMBER() OVER (
+  PARTITION BY c.effective_parent_name, c.phrase, c.match_type
+  ORDER BY CASE c.origin_level WHEN 'PRODUCT' THEN 1 WHEN 'FAMILY' THEN 2 ELSE 3 END
+) = 1;

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brief Wizard v2</title>
+<style>
+  :root{ --bg:#0c1018; --card:#141a26; --border:#242b3a; --text:#e6ebf3; --mut:#8b97ad; --faint:#5f6b80; --blue:#5b8def; }
+  *{box-sizing:border-box;}
+  body{ margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; padding:22px;}
+  .mono{font-family:'Fira Code',ui-monospace,monospace;}
+  .up{color:#34d399;} .dn{color:#f87171;} .mut{color:var(--mut);} .faint{color:var(--faint);}
+  h2{font-size:18px;margin:0 0 4px;} .subtitle{color:var(--mut);font-size:13px;margin:0 0 16px;}
+  .bw{max-width:960px;margin:0 auto;}
+
+  /* MAIN TOGGLE = family selector */
+  .famtabs{display:flex;gap:6px;flex-wrap:wrap;background:rgba(255,255,255,.025);border:1px solid var(--border);border-radius:12px;padding:6px;margin-bottom:14px;}
+  .ft{flex:1;min-width:90px;font-size:13px;font-weight:600;padding:9px 8px;border-radius:8px;color:var(--mut);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:all .12s;}
+  .ft:hover{color:var(--text);}
+  .ft.on{background:var(--blue);color:#fff;box-shadow:0 2px 10px rgba(91,141,239,.35);}
+  .ft .dot{width:7px;height:7px;border-radius:50%;}
+  .d-risk{background:#f87171;} .d-warn{background:#fbbf24;} .d-good{background:#34d399;} .d-flat{background:#5f6b80;}
+  .ft.on .dot{box-shadow:0 0 0 2px rgba(255,255,255,.25);}
+
+  .card{border:1px solid var(--border);border-radius:14px;background:var(--card);overflow:hidden;min-height:280px;}
+  .card-hd{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+  .card-hd .fname{font-size:17px;font-weight:700;}
+  /* date toggle now INSIDE the card */
+  .datetoggle{display:inline-flex;gap:2px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:8px;padding:3px;}
+  .datetoggle span{font-size:11px;padding:4px 9px;border-radius:6px;color:var(--mut);cursor:pointer;}
+  .datetoggle span.on{background:rgba(91,141,239,.9);color:#fff;}
+  .period{font-size:11px;color:var(--faint);}
+  .detail-toggle{margin-left:auto;font-size:11px;color:var(--mut);cursor:pointer;user-select:none;}
+  .detail-toggle b{color:#9dbcff;}
+
+  .kpis{display:flex;gap:10px;padding:14px 18px 4px;flex-wrap:wrap;}
+  .kpi{flex:1;min-width:96px;border:1px solid var(--border);border-radius:9px;padding:8px 10px;}
+  .kpi .l{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);}
+  .kpi .v{font-size:17px;font-weight:700;}
+  .kpi .d{font-size:11px;}
+
+  .body{display:grid;grid-template-columns:1fr 270px;gap:14px;padding:14px 18px 18px;}
+  .panel h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);}
+  .read{font-size:13.5px;line-height:1.55;margin:0 0 12px;}
+  .prod{display:flex;gap:8px;font-size:12.5px;padding:6px 0;border-top:1px dashed rgba(255,255,255,.07);}
+  .prod:first-child{border-top:none;}
+  .prod .pn{color:#cdd6e4;min-width:104px;font-weight:500;}
+  .prod .pv{color:var(--mut);}
+  .att{display:flex;gap:8px;align-items:flex-start;font-size:12px;padding:7px 0;border-top:1px solid rgba(255,255,255,.06);}
+  .att:first-of-type{border-top:none;}
+  .att .tx{color:#bfc9da;line-height:1.4;} .att .tx b{color:var(--text);}
+  .none{color:var(--faint);font-size:12px;padding:8px 0;}
+
+  .nav{display:flex;justify-content:space-between;align-items:center;margin-top:12px;}
+  .navbtn{font-size:13px;padding:7px 15px;border:1px solid var(--border);border-radius:8px;color:var(--text);background:rgba(255,255,255,.03);cursor:pointer;}
+  .navbtn:hover{border-color:var(--blue);} .navbtn:disabled{opacity:.35;cursor:default;}
+</style>
+</head>
+<body>
+<div class="bw">
+  <h2>Family is the main toggle · date window lives inside</h2>
+  <p class="subtitle">Pick a family up top (the primary control). Inside its card, switch the date window — the comparison label updates to match. Sample data.</p>
+
+  <!-- MAIN TOGGLE: family -->
+  <div class="famtabs" id="famtabs"></div>
+
+  <div class="card" id="card"></div>
+
+  <div class="nav">
+    <button class="navbtn" id="back">←</button>
+    <span class="faint mono" id="counter"></span>
+    <button class="navbtn" id="next">→</button>
+  </div>
+
+  <p class="faint" style="margin-top:14px;font-size:12px;">Still open: keep an <b>Overview/All</b> tab first (shown here), or just families? And should steady families (Bunny) stay greyed or drop out?</p>
+</div>
+
+<script>
+const DATEMODES = [['today','Today · Ads'],['yday','Yesterday'],['7d','7 days'],['30d','30 days']];
+const PERIOD_LABEL = { today:'Today so far · ads only · vs 7-day avg', yday:'Wed Jun 18 · vs 7-day avg', '7d':'Jun 12–18 · vs prior 7 days', '30d':'May 20 – Jun 18 · vs prior 30 days' };
+
+const FAMS = [
+  { name:'All', dot:'d-good', overview:true },
+  { name:'Lollibox', dot:'d-good', kpis:[['Sales','+14%','up'],['Net Profit','+18%','up'],['Net ROAS','+0.6x','up'],['Organic','+2pt','up']],
+    read:'Best day in two weeks — sales up and profit up even faster. Ads pulling their weight.',
+    prods:[['Box Classic','sales <b class="up">+16%</b>, profit <b class="up">+21%</b> — main driver'],['Box Mini','sales <b class="up">+9%</b>, margin steady']], att:[] },
+  { name:'LolliME', dot:'d-warn', kpis:[['Sales','+1%','flat'],['Net Profit','−7%','dn'],['Net ROAS','−0.4x','dn'],['Organic','−4pt','dn']],
+    read:'Sales flat but margin slipping as ad spend climbs — getting more ads-dependent.',
+    prods:[['Mint 12-pk','spend <b class="dn">+22%</b>, sales flat → ROAS <b class="dn">−0.4x</b>'],['Mint single','no real change']],
+    att:[['🟠','<b>1 coach action</b> — reduce bid on Mint 12-pk'],['🟡','Organic share <b class="dn">−4pt</b> — watch']] },
+  { name:'Bottle', dot:'d-risk', kpis:[['Sales','−5%','dn'],['Net Profit','−4%','dn'],['Net ROAS','+0.1x','flat'],['Organic','+1pt','flat']],
+    read:'Sales easing as stock runs thin. The dip looks supply-driven, not demand.',
+    prods:[['Truth bottle','sales <b class="dn">−6%</b> — running low']],
+    att:[['🔴','<b>Truth bottle</b> out of stock in <b>~4 days</b>']] },
+  { name:'Bunny', dot:'d-flat', kpis:[['Sales','+0.5%','flat'],['Net Profit','+1%','flat'],['Net ROAS','0','flat'],['Organic','0','flat']],
+    read:'No material change vs the comparison window.', prods:[], att:[], steady:true },
+];
+
+let famIdx = 0, dateMode = 'yday';
+const tabsEl = document.getElementById('famtabs'), card = document.getElementById('card');
+
+function renderTabs(){
+  tabsEl.innerHTML = FAMS.map((f,i)=>`<div class="ft ${i===famIdx?'on':''}" onclick="goFam(${i})"><span class="dot ${f.dot}"></span>${f.name}</div>`).join('');
+}
+function dcls(t){return t==='up'?'up':t==='dn'?'dn':'mut';}
+function arr(t){return t==='up'?'▲':t==='dn'?'▼':'■';}
+function dateToggleHTML(){
+  return `<div class="datetoggle mono">${DATEMODES.map(([k,l])=>`<span class="${k===dateMode?'on':''}" onclick="goDate('${k}')">${l}</span>`).join('')}</div>
+          <span class="period mono">${PERIOD_LABEL[dateMode]}</span>`;
+}
+function renderCard(){
+  const f = FAMS[famIdx];
+  if(f.overview){
+    card.innerHTML = `
+      <div class="card-hd"><span class="fname">All families</span>${dateToggleHTML()}</div>
+      <div class="body">
+        <div class="panel"><h4>The read</h4>
+          <p class="read"><b class="up">Profit +9%</b> vs the window, carried by <b>Lollibox</b>. Ads a touch more efficient. <b>LolliME</b> margin softening, and <b class="dn">2 families face out-of-stock risk</b>. Pick a family above for detail.</p></div>
+        <div class="panel"><h4>Needs attention</h4>
+          <div class="att"><span>🔴</span><span class="tx"><b>Bottle</b> — OOS ~4d</span></div>
+          <div class="att"><span>🔴</span><span class="tx"><b>Fresh</b> — OOS ~6d</span></div>
+          <div class="att"><span>🟠</span><span class="tx"><b>3 coach actions</b> pending</span></div>
+          <div class="att"><span>🟡</span><span class="tx"><b>LolliME</b> more ads-dependent</span></div>
+        </div>
+      </div>`;
+    return;
+  }
+  const kpis = f.kpis.map(([l,v,t])=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d ${dcls(t)}">${arr(t)} ${t==='flat'?'~flat':t==='up'?'up':'down'}</div></div>`).join('');
+  const prods = f.prods.length ? f.prods.map(([n,v])=>`<div class="prod"><span class="pn">${n}</span><span class="pv">${v}</span></div>`).join('') : `<div class="none">All products steady — nothing moved.</div>`;
+  const att = f.att.length ? f.att.map(([ic,tx])=>`<div class="att"><span>${ic}</span><span class="tx">${tx}</span></div>`).join('') : `<div class="none">Nothing flagged. ✓</div>`;
+  card.innerHTML = `
+    <div class="card-hd"><span class="fname">${f.name}</span>${dateToggleHTML()}<span class="detail-toggle">plain · <b>numbers</b></span></div>
+    <div class="kpis">${kpis}</div>
+    <div class="body">
+      <div class="panel"><h4>What moved</h4><p class="read">${f.read}</p>${prods}</div>
+      <div class="panel"><h4>Needs attention</h4>${att}</div>
+    </div>`;
+}
+function goFam(i){ famIdx=Math.max(0,Math.min(FAMS.length-1,i)); renderTabs(); renderCard(); upd(); }
+function goDate(k){ dateMode=k; renderCard(); }
+function upd(){ document.getElementById('counter').textContent = `${famIdx+1} / ${FAMS.length}`;
+  document.getElementById('back').disabled=famIdx===0; document.getElementById('next').disabled=famIdx===FAMS.length-1; }
+document.getElementById('back').onclick=()=>goFam(famIdx-1);
+document.getElementById('next').onclick=()=>goFam(famIdx+1);
+renderTabs(); renderCard(); upd();
+</script>
+</body>
+</html>

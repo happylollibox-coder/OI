@@ -3,19 +3,17 @@ import type { StrategyMeta } from './types';
 import { ALL_CHART_MEASURES } from './chartMeasures';
 import { EXACT_BOOST } from './exactBoost';
 import { BRAND_DEFENSE } from './brandDefense';
-import { CATEGORY_CONQUEST } from './categoryConquest';
-import { COMPETITOR_CONQUEST } from './competitorConquest';
-import { HUNTER } from './hunter';
-import { LOW_COST_DISCOVERY } from './lowCostDiscovery';
+import { COMPETITOR } from './competitor';
+import { INTENT } from './intent';
 import { PRODUCT_DEFENSE } from './productDefense';
 
+// Consolidated 2026-07-17 (MIGRATE_STRATEGY_CONSOLIDATION): HUNTER + LOW_COST_DISCOVERY → INTENT,
+// COMPETITOR_CONQUEST → COMPETITOR, CATEGORY_CONQUEST removed (folded into COMPETITOR).
 const STRATEGIES: StrategyMeta[] = [
   EXACT_BOOST,
   BRAND_DEFENSE,
-  CATEGORY_CONQUEST,
-  COMPETITOR_CONQUEST,
-  HUNTER,
-  LOW_COST_DISCOVERY,
+  COMPETITOR,
+  INTENT,
   PRODUCT_DEFENSE,
 ];
 

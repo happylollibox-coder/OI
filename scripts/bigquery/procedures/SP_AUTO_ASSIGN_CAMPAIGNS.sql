@@ -67,11 +67,11 @@ BEGIN
       WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'PRODUCT.?DEF') THEN 'PRODUCT_DEFENSE'
       WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'\bBOOST\b') THEN 'EXACT_BOOST'
       WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'/EXACT\b|[- ]EXACT\b') THEN 'EXACT_BOOST'
-      WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'CONQUEST|COPYCAT') THEN 'COMPETITOR_CONQUEST'
-      WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'SP/AUTO\b|AUTO.*DISCOVERY|DISCOVERY') THEN 'LOW_COST_DISCOVERY'
-      WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'BROAD|PHRASE|HUNTER|STORE') THEN 'HUNTER'
-      WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'/PT\b') THEN 'COMPETITOR_CONQUEST'
-      ELSE 'HUNTER'  -- Default: broad discovery
+      WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'CONQUEST|COPYCAT') THEN 'COMPETITOR'
+      WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'SP/AUTO\b|AUTO.*DISCOVERY|DISCOVERY') THEN 'INTENT'
+      WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'BROAD|PHRASE|HUNTER|STORE') THEN 'INTENT'
+      WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'/PT\b') THEN 'COMPETITOR'
+      ELSE 'INTENT'  -- Default: broad discovery
     END as inferred_strategy,
 
     -- Infer family prefix from campaign name
@@ -127,11 +127,11 @@ BEGIN
       ' - ',
       CASE u.inferred_strategy
         WHEN 'EXACT_BOOST' THEN 'Exact Boost'
-        WHEN 'HUNTER' THEN 'Broad Hunter'
-        WHEN 'LOW_COST_DISCOVERY' THEN 'Auto Discovery'
+        WHEN 'INTENT' THEN 'Broad Hunter'
+        WHEN 'INTENT' THEN 'Auto Discovery'
         WHEN 'BRAND_DEFENSE' THEN 'Brand Defense'
         WHEN 'PRODUCT_DEFENSE' THEN 'Product Defense'
-        WHEN 'COMPETITOR_CONQUEST' THEN 'Competitor Conquest'
+        WHEN 'COMPETITOR' THEN 'Competitor Conquest'
         ELSE u.inferred_strategy
       END,
       CASE WHEN u.keyword_theme IS NOT NULL

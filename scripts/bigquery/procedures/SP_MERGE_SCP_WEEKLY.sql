@@ -31,8 +31,8 @@ BEGIN
       EXTRACT(YEAR FROM Reporting_Date) AS Year,
       EXTRACT(WEEK FROM Reporting_Date) AS Week,
       Reporting_Date AS ob_date,
-      DATE_TRUNC(Reporting_Date, WEEK(MONDAY)) AS week_start_date,
-      DATE_ADD(DATE_TRUNC(Reporting_Date, WEEK(MONDAY)), INTERVAL 6 DAY) AS week_end_date,
+      DATE_TRUNC(Reporting_Date, WEEK(SUNDAY)) AS week_start_date,
+      DATE_ADD(DATE_TRUNC(Reporting_Date, WEEK(SUNDAY)), INTERVAL 6 DAY) AS week_end_date,
       
       -- Performance Metrics (matching STG_SCP_WEEKLY naming convention)
       Impressions_Impressions AS impressions,

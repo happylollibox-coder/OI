@@ -6,12 +6,14 @@ import { usePageSummary } from '../components/PageSummaryBar';
 import { fM, fP, fOrd, ACTION_META } from '../utils';
 import { termGrain, termGrainShort } from '../coachActuals';
 import { useDoQueue, type DoQueueItem } from '../hooks/useDoQueue';
+import { mergeUpdateRows } from './bulksheetDedup';
+import { cubeLoad } from '../hooks/useCubeData';
 import { DecisionScorecard } from '../components/DecisionScorecard';
 import { Copy, Check, Trash2, X, ChevronDown, ChevronRight, CheckCircle2, RotateCcw, ExternalLink, Download, Upload, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { DashboardData } from '../types';
 
 /* ─── Action ordering: urgent first ─── */
-const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'STOP_SEASONAL', 'NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT', 'REDUCE_BID', 'RESTORE_PRE_PEAK', 'REDUCE_TO_BASELINE', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'COOLDOWN_MONITOR', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'ADD_CROSS_SELL_TARGET', 'START_TERM', 'GUARDIAN_BUDGET_INCREASE', 'GUARDIAN_BUDGET_DECREASE', 'BLITZ_BUDGET_INCREASE', 'BLITZ_BUDGET_DECREASE', 'MONITOR_TARGET', 'KEEP', 'MONITOR'];
+const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'STOP_SEASONAL', 'CAMPAIGN_PAUSE', 'NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT', 'REDUCE_BID', 'RESTORE_PRE_PEAK', 'REDUCE_TO_BASELINE', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'COOLDOWN_MONITOR', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'ADD_CROSS_SELL_TARGET', 'ADD_PRODUCT_AD', 'START_TERM', 'GUARDIAN_BUDGET_INCREASE', 'GUARDIAN_BUDGET_DECREASE', 'GUARDIAN_BUDGET_CONTAIN', 'DEFENSE_BUDGET_FLOOR', 'RESTORE_BUDGET_PRE_PEAK', 'BLITZ_BUDGET_INCREASE', 'BLITZ_BUDGET_DECREASE', 'MONITOR_TARGET', 'KEEP', 'MONITOR'];
 
 const ACTION_COLORS: Record<string, string> = {
   STOP_TERM: '#ef4444', STOP_TARGET: '#ef4444', STOP_SEASONAL: '#ef4444',
@@ -19,9 +21,10 @@ const ACTION_COLORS: Record<string, string> = {
   REDUCE_BID: '#f59e0b', RESTORE_PRE_PEAK: '#ef4444', REDUCE_TO_BASELINE: '#f59e0b',
   FIX_HERO: '#f59e0b', SWITCH_HERO: '#f59e0b',
   KEEP_TARGET: '#22c55e', INCREASE_BID: '#22c55e', COOLDOWN_MONITOR: '#6b7280',
-  PROMOTE_TO_EXACT: '#3b82f6', ADD_CROSS_SELL_TARGET: '#3b82f6', START_TERM: '#a855f7',
+  PROMOTE_TO_EXACT: '#3b82f6', ADD_CROSS_SELL_TARGET: '#3b82f6', ADD_PRODUCT_AD: '#3b82f6', START_TERM: '#a855f7',
   GUARDIAN_BUDGET_INCREASE: '#22c55e', BLITZ_BUDGET_INCREASE: '#22c55e',
   GUARDIAN_BUDGET_DECREASE: '#ef4444', BLITZ_BUDGET_DECREASE: '#f59e0b',
+  GUARDIAN_BUDGET_CONTAIN: '#ef4444', DEFENSE_BUDGET_FLOOR: '#3b82f6', RESTORE_BUDGET_PRE_PEAK: '#f59e0b', CAMPAIGN_PAUSE: '#ef4444',
   MONITOR_TARGET: '#71717a', BUDGET_OK: '#71717a',
   // Legacy fallbacks
   STOP: '#ef4444', NEGATE: '#ef4444', KEEP: '#22c55e', BOOST: '#22c55e',
@@ -304,6 +307,14 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       };
     }
 
+    if (item.action === 'ADD_PRODUCT_AD') {
+      // Advertise the hero (best-converting) variant in the keyword's own ad group (SP only).
+      return {
+        icon: '🎨',
+        lines: [`Add ${item.product || 'hero variant'}${item.asin ? ` (${item.asin})` : ''} as Product Ad in ${campName} — show the winning variant for this ad group's terms`],
+      };
+    }
+
     if (item.action === 'ADD_CROSS_SELL_TARGET') {
       // Mirror the export: all values come from the PRODUCT_DEFENSE template.
       const tmpls = data.strategy_campaign_templates || [];
@@ -407,8 +418,33 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
   };
 
   /* ─── Export Amazon Bulksheet v2.0 XLSX ─── */
-  const exportBulksheet = () => {
+  const exportBulksheet = async () => {
     if (!doQueue.items.length) return;
+
+    // Stale-queue self-heal AT THE SOURCE (the export). SB keyword Update rows REQUIRE
+    // an Ad Group Id; items queued before the ad-group fix carry an empty one frozen in
+    // localStorage. Resolve any missing ad_group_id from the coach keyword cube by
+    // keyword_id so the bulksheet never ships a blank Ad Group Id — regardless of which
+    // page queued the item or whether Weekly Run was opened first.
+    const agOverride: Record<string, string> = {};
+    const missingKwIds = Array.from(new Set(
+      doQueue.items.filter(i => i.keyword_id && !i.ad_group_id).map(i => i.keyword_id),
+    ));
+    if (missingKwIds.length) {
+      try {
+        const agRows = await cubeLoad({
+          dimensions: ['CoachRunKeyword.id', 'CoachRunKeyword.adGroupId'],
+          filters: [{ member: 'CoachRunKeyword.id', operator: 'equals', values: missingKwIds }],
+        });
+        for (const r of agRows as Record<string, unknown>[]) {
+          const kid = String(r['CoachRunKeyword.id'] ?? '');
+          const ag = String(r['CoachRunKeyword.adGroupId'] ?? '');
+          if (kid && ag) agOverride[kid] = ag;
+        }
+        if (Object.keys(agOverride).length) doQueue.backfillAdGroups(agOverride); // persist for queue UI / next time
+      } catch { /* cube unreachable — fall through; bid rows below still get item.ad_group_id */ }
+    }
+
     import('xlsx').then((XLSX) => {
       // ═══ Brand Asset Config (fetched dynamically from DIM_PRODUCT_CREATIVES via Cube.js) ═══
       let defaultBrandEntityId = '';
@@ -474,6 +510,38 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       const skuByAsin = new Map<string, string>(
         (data.products || []).filter(r => r.asin && r.sku).map(r => [r.asin, r.sku])
       );
+      const famByAsin = new Map<string, string>(
+        (data.products || []).filter(r => r.asin && r.parent_name).map(r => [r.asin, r.parent_name])
+      );
+
+      // ═══ Launch negatives — every new campaign ships with its family's curated fences ═══
+      // Rows come from V_LAUNCH_NEGATIVES via the LaunchNegatives cube, already resolved
+      // (_ALL + family) and already stripped of BRAND_DEFENSE / PRODUCT_DEFENSE. Do NOT
+      // filter by strategy here beyond the lookup key — the exclusion is the view's job.
+      // Campaign-scope negatives, so no Ad Group ID: Entity carries the scope.
+      const pushLaunchNegatives = (
+        rows: Record<string, string>[], campName: string, strategyId: string, asin: string, product: string,
+      ) => {
+        const family = famByAsin.get(asin);
+        if (!family) {
+          console.warn('[Bulksheet] no family for', product, '— launching', campName, 'WITHOUT negatives');
+          return;
+        }
+        const phrases = (data.launch_negatives || []).filter(
+          n => n.strategy_id === strategyId && n.parent_name === family
+        );
+        if (!phrases.length) {
+          console.warn('[Bulksheet] no launch negatives for', strategyId, '/', family, '—', campName);
+          return;
+        }
+        for (const n of phrases) {
+          rows.push({
+            'Product': 'Sponsored Products', 'Entity': 'Campaign Negative Keyword', 'Operation': 'Create',
+            'Campaign ID': campName, 'Campaign Name': campName,
+            'Keyword Text': n.phrase, 'Match Type': n.bulksheet_match_type, 'State': 'ENABLED',
+          });
+        }
+      };
 
       // ═══ Helper: detect Product Targeting entities (ASIN targets + AUTO groups) ═══
       const AUTO_TARGETING_GROUPS = new Set(['close-match', 'loose-match', 'substitutes', 'complements']);
@@ -541,13 +609,15 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       for (const item of doQueue.items) {
         const campId = item.campaign_id || '';
         const campName = item.campaign || '';
-        const adGroupId = item.ad_group_id || '';
+        const adGroupId = item.ad_group_id || agOverride[item.keyword_id] || '';
 
         // Determine if this is an SB campaign (Sponsored Brands / Video)
         const ct = (item.campaign_type || '').toUpperCase();
         const cn = campName.toUpperCase();
+        // Name fallback ('SBS' included) only covers stale queue items — fresh items carry the real
+        // campaign_type ('SP'/'SB' from FACT) since 2026-07-02, which is authoritative.
         const isSB = ct === 'SB' || ct === 'SBV' || ct.includes('BRAND') || ct.includes('VIDEO')
-          || cn.includes('SBV') || cn.includes('VIDEO') || cn.includes('STORE');
+          || (ct === '' && (cn.includes('SBV') || cn.includes('SBS') || cn.includes('VIDEO') || cn.includes('STORE')));
 
         const spBase: Record<string, string> = {
           'Product': 'Sponsored Products',
@@ -815,6 +885,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
               'Campaign ID': spCampName, 'Campaign Name': spCampName,
               'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
               'Ad Group Default Bid': bid, 'State': 'ENABLED' });
+            pushLaunchNegatives(spRows, spCampName, 'EXACT_BOOST', asin, item.product);
             spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Keyword', 'Operation': 'Create',
               'Campaign ID': spCampName, 'Campaign Name': spCampName,
               'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
@@ -926,6 +997,9 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
                 'Campaign ID': xsCampName, 'Campaign Name': xsCampName,
                 'Ad Group ID': xsAdGroupName, 'Ad Group Name': xsAdGroupName,
                 'Ad Group Default Bid': bid, 'State': 'ENABLED' });
+              // No launch negatives here by design: this is PRODUCT_DEFENSE, and the curated
+              // list negates brand terms — exactly the traffic a defense campaign exists to buy.
+              // V_LAUNCH_NEGATIVES drops defense strategies, so a lookup would return nothing anyway.
               spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Targeting', 'Operation': 'Create',
                 'Campaign ID': xsCampName, 'Campaign Name': xsCampName,
                 'Ad Group ID': xsAdGroupName, 'Ad Group Name': xsAdGroupName,
@@ -971,13 +1045,14 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
               'Campaign ID': spCampName, 'Campaign Name': spCampName,
               'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
               'Ad Group Default Bid': bid, 'State': 'ENABLED' });
+            pushLaunchNegatives(spRows, spCampName, 'SEASONAL_PUSH', asin, item.product);
             spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Product Ad', 'Operation': 'Create',
               'Campaign ID': spCampName, 'Campaign Name': spCampName,
               'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
               ...(sku ? { 'SKU': sku } : asin ? { 'ASIN (Informational only)': asin } : {}),
               'State': 'ENABLED' });
           }
-          
+
           // Add the specific term to the Exact Ad Group
           spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Keyword', 'Operation': 'Create',
             'Campaign ID': spCampName, 'Campaign Name': spCampName,
@@ -986,15 +1061,28 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         // ═══════════════════════════════════════════════════════════
         // BUDGET actions — Campaign entity Update with new Daily Budget
         // ═══════════════════════════════════════════════════════════
-        } else if (item.action.includes('BUDGET_INCREASE') || item.action.includes('BUDGET_DECREASE')) {
+        // Any budget-carrying action (INCREASE/DECREASE/CONTAIN/DEFENSE_FLOOR/RESTORE) exports a
+        // Campaign Update budget row — previously only INCREASE/DECREASE matched, silently dropping
+        // RESTORE_BUDGET_PRE_PEAK rows.
+        } else if (item.action.includes('BUDGET') && item.action !== 'BUDGET_OK' && item.recommended_budget != null) {
           const recBudget = item.recommended_budget;
           if (recBudget != null) {
-            spRows.push({
-              ...spBase,
-              'Entity': 'Campaign',
-              'Operation': 'Update',
-              'Daily Budget': String(recBudget),
-            });
+            // SB campaigns (Video/Store) must update their budget on the SB sheet — the SP processor
+            // can't find an SB campaign id and rejects the row ("Could not find campaign", report 12).
+            // SB uses 'Campaign Id' + 'Budget'; SP uses 'Campaign ID' + 'Daily Budget'.
+            if (isSB) {
+              sbRows.push({
+                'Product': 'Sponsored Brands', 'Entity': 'Campaign', 'Operation': 'Update',
+                'Campaign Id': campId, 'Budget': String(recBudget),
+              });
+            } else {
+              spRows.push({
+                ...spBase,
+                'Entity': 'Campaign',
+                'Operation': 'Update',
+                'Daily Budget': String(recBudget),
+              });
+            }
           }
         // ═══ REMOVE_NEGATIVE — archive an existing negative keyword (conflict removal) ═══
         // Keyed by the real Amazon Keyword ID; State=archived removes the block.
@@ -1012,23 +1100,59 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             'Match Type': mtDisplay,
             'State': 'archived',
           });
+
+        // ═══ CAMPAIGN-LEVEL actions (rename / pause / enable) — Campaign entity Update row ═══
+        // Identified by Campaign Id; renames write the editable 'Campaign Name' (NOT the
+        // "(Informational only)" column). Prepare-only — exported for the user to upload.
+        } else if (item.action === 'CAMPAIGN_RENAME' || item.action === 'CAMPAIGN_PAUSE' || item.action === 'CAMPAIGN_ENABLE') {
+          const isRename = item.action === 'CAMPAIGN_RENAME';
+          const stateVal = item.action === 'CAMPAIGN_PAUSE' ? 'paused' : 'enabled';
+          const campChange = isRename ? { 'Campaign Name': item.new_campaign_name || '' } : { 'State': stateVal };
+          if (isSB) {
+            sbRows.push({ 'Product': 'Sponsored Brands', 'Entity': 'Campaign', 'Operation': 'Update', 'Campaign Id': campId, ...campChange });
+          } else {
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Campaign', 'Operation': 'Update', 'Campaign ID': campId, ...campChange });
+          }
+
+        // ═══ ADD_PRODUCT_AD — advertise the hero (best-converting) variant in this ad group ═══
+        // The "switch to the right colour" action: add item.asin as a Product Ad in the keyword's own
+        // ad group so the winning variant shows for its search terms (paired with — but separate from —
+        // a negate). SP ONLY — SB ads carry ASINs in the creative, a Product-Ad row would be rejected,
+        // so SB-queued items are skipped here (the button is also hidden on SB rows).
+        } else if (item.action === 'ADD_PRODUCT_AD' && item.asin && adGroupId && !isSB) {
+          const heroSku = skuByAsin.get(item.asin) || '';
+          spRows.push({
+            'Product': 'Sponsored Products', 'Entity': 'Product Ad', 'Operation': 'Create',
+            'Campaign ID': campId, 'Ad Group ID': adGroupId,
+            ...(heroSku ? { 'SKU': heroSku } : { 'ASIN (Informational only)': item.asin }),
+            'State': 'enabled',
+          });
         }
       }
 
       if (!spRows.length && !sbRows.length) return;
 
+      // ═══ Collapse Update rows that share an entity id into ONE row ═══
+      // Amazon voids the ENTIRE sheet for a "Duplicate Id": a budget change + rename on the same
+      // campaign (report 10), or a keyword queued for a bid change + a stray blank-bid row for the
+      // same keyword_id (report 17 — the queue dedups on search_term|action, not keyword_id). One
+      // Update row carries every field at once, so mergeUpdateRows keeps one row per entity and lets
+      // a real Bid beat a blank one. See ./bulksheetDedup.ts (mirrors V_COACH_APPLY, but on the XLSX).
+      const spRowsOut = mergeUpdateRows(spRows);
+      const sbRowsOut = mergeUpdateRows(sbRows);
+
       const wb = XLSX.utils.book_new();
       // SP sheet
-      if (spRows.length) {
-        const spData = [SP_HEADERS, ...spRows.map(row => SP_HEADERS.map(h => row[h] || ''))];
+      if (spRowsOut.length) {
+        const spData = [SP_HEADERS, ...spRowsOut.map(row => SP_HEADERS.map(h => row[h] || ''))];
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(spData), 'Sponsored Products Campaigns');
       }
       // SB sheets — split between legacy (neg keywords) and V4 (new campaigns)
-      if (sbRows.length) {
+      if (sbRowsOut.length) {
         // Legacy SB sheet: negative keywords on existing campaigns
-        const sbLegacyRows = sbRows.filter(r => r['Entity'] === 'Negative Keyword');
+        const sbLegacyRows = sbRowsOut.filter(r => r['Entity'] === 'Negative Keyword');
         // V4 Multi Ad Group sheet: new campaign creation (Campaign, Ad Group, Video Ad, Keyword)
-        const sbV4Rows = sbRows.filter(r => r['Entity'] !== 'Negative Keyword');
+        const sbV4Rows = sbRowsOut.filter(r => r['Entity'] !== 'Negative Keyword');
 
         if (sbLegacyRows.length) {
           const sbLegacyData = [SB_HEADERS, ...sbLegacyRows.map(row => SB_HEADERS.map(h => row[h] || ''))];
@@ -1040,6 +1164,10 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         }
       }
       XLSX.writeFile(wb, `amazon_bulksheet_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      // Log the negatives in this export to the owned registry immediately (don't wait for the manual
+      // "Uploaded to Amazon" step). Keeps DE_NEGATIVE_KEYWORDS/TARGETS current so already-applied
+      // negatives stop re-surfacing as "already exists" bounces. Idempotent + deduped server-side.
+      doQueue.logExportedNegatives(doQueue.items);
     });
   };
 

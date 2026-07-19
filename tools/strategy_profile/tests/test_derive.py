@@ -81,6 +81,36 @@ def test_derive_profile_groups_by_intent_and_brand_is_enabled():
     assert brand.enabled == True                # BRAND always enabled (defense) despite negative net
 
 
+def test_derive_profile_emits_coarse_and_fine_layers():
+    # Same cell (Fresh OFF BROAD GENERIC) split across two SB creative formats + one SP row.
+    rows = []
+    for cpc, net in [(0.35, 40.0)]*6:
+        rows.append(("Fresh","EVERYDAY_2026-01","broad","GENERIC","SB","PRODUCT_COLLECTION",cpc,net,40,2,"bath a"))
+    for cpc, net in [(0.55, 30.0)]*6:
+        rows.append(("Fresh","EVERYDAY_2026-01","broad","GENERIC","SB","BRAND_VIDEO",cpc,net,40,2,"bath b"))
+    for cpc, net in [(0.45, -5.0)]*3:
+        rows.append(("Fresh","EVERYDAY_2026-01","broad","GENERIC","SP","NA",cpc,net,20,0,"bath c"))
+    df = pd.DataFrame(rows, columns=["parent_name","calendar_segment","targeting_type","intent_class",
+                                     "campaign_type","ad_format","cpc","net_profit","clicks","orders","targeting"])
+    prof = derive_profile(df)
+    # exactly one coarse (ALL/ALL) row, pooling all three sources
+    coarse = prof[(prof.campaign_type=="ALL") & (prof.ad_format=="ALL")]
+    assert len(coarse) == 1
+    # fine rows: one per (campaign_type, ad_format); never campaign_type=ALL
+    fine = prof[prof.campaign_type != "ALL"]
+    assert set(zip(fine.campaign_type, fine.ad_format)) == {("SB","PRODUCT_COLLECTION"),("SB","BRAND_VIDEO"),("SP","NA")}
+    assert (fine.campaign_type != "ALL").all()
+    # the two SB formats land on different bands (the whole point of the split)
+    coll = fine[(fine.campaign_type=="SB") & (fine.ad_format=="PRODUCT_COLLECTION")].iloc[0]
+    vid  = fine[(fine.campaign_type=="SB") & (fine.ad_format=="BRAND_VIDEO")].iloc[0]
+    assert coll.cpc_target != vid.cpc_target
+
+def test_derive_profile_without_campaign_type_is_coarse_only():
+    # A base lacking campaign_type/ad_format must behave exactly as before: coarse rows only.
+    prof = derive_profile(_base())
+    assert (prof.campaign_type == "ALL").all() and (prof.ad_format == "ALL").all()
+
+
 from tools.strategy_profile.load import to_json_rows
 
 def test_to_json_rows_stamps_audit_fields():

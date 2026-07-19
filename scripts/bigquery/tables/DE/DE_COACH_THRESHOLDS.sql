@@ -91,15 +91,15 @@ VALUES
   ('WASTED_SPEND_THRESHOLD', 'BRAND_DEFENSE', 'GUARDIAN', 5, '$5 with 0 orders on brand = something is wrong', 1, 1, 'SEED'),
 
   -- GUARDIAN x CATEGORY_CONQUEST
-  ('BID_CAP_SUGGESTION', 'CATEGORY_CONQUEST', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
-  ('INSUFFICIENT_DATA_CLICKS', 'CATEGORY_CONQUEST', 'GUARDIAN', 15, 'Standard click count for category terms', 1, 1, 'SEED'),
-  ('NEGATE_ROAS_THRESHOLD', 'CATEGORY_CONQUEST', 'GUARDIAN', 0.3, 'Lenient — new category terms start slow', 1, 1, 'SEED'),
-  ('PROFITABLE_ROAS', 'CATEGORY_CONQUEST', 'GUARDIAN', 1.1, 'Accept lower ROAS if SQP share is growing', 1, 1, 'MANUAL'),
-  ('SCALE_UP_ROAS', 'CATEGORY_CONQUEST', 'GUARDIAN', 1, 'If profitable on category term, invest more', 1, 1, 'SEED'),
-  ('WASTED_SPEND_THRESHOLD', 'CATEGORY_CONQUEST', 'GUARDIAN', 20, 'Category terms need more time to prove out', 1.5, 1, 'SEED'),
+  ('BID_CAP_SUGGESTION', 'COMPETITOR', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
+  ('INSUFFICIENT_DATA_CLICKS', 'COMPETITOR', 'GUARDIAN', 15, 'Standard click count for category terms', 1, 1, 'SEED'),
+  ('NEGATE_ROAS_THRESHOLD', 'COMPETITOR', 'GUARDIAN', 0.3, 'Lenient — new category terms start slow', 1, 1, 'SEED'),
+  ('PROFITABLE_ROAS', 'COMPETITOR', 'GUARDIAN', 1.1, 'Accept lower ROAS if SQP share is growing', 1, 1, 'MANUAL'),
+  ('SCALE_UP_ROAS', 'COMPETITOR', 'GUARDIAN', 1, 'If profitable on category term, invest more', 1, 1, 'SEED'),
+  ('WASTED_SPEND_THRESHOLD', 'COMPETITOR', 'GUARDIAN', 20, 'Category terms need more time to prove out', 1.5, 1, 'SEED'),
 
   -- GUARDIAN x COMPETITOR_CONQUEST
-  ('BID_CAP_SUGGESTION', 'COMPETITOR_CONQUEST', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
+  ('BID_CAP_SUGGESTION', 'COMPETITOR', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
 
   -- GUARDIAN x EXACT_BOOST
   ('BID_CAP_SUGGESTION', 'EXACT_BOOST', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
@@ -113,26 +113,26 @@ VALUES
   ('WASTED_SPEND_THRESHOLD', 'EXACT_BOOST', 'GUARDIAN', 25, 'Proven keywords — short dry spells happen', 1.5, 1.5, 'SEED'),
 
   -- GUARDIAN x HUNTER
-  ('BID_CAP_SUGGESTION', 'HUNTER', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
-  ('INSUFFICIENT_DATA_CLICKS', 'HUNTER', 'GUARDIAN', 15, 'Standard discovery click count', 1, 1, 'SEED'),
-  ('NEGATE_ROAS_THRESHOLD', 'HUNTER', 'GUARDIAN', 0.3, 'Lenient — discovery accepts low ROAS initially', 1, 1, 'SEED'),
-  ('NEGATE_SPEND_THRESHOLD', 'HUNTER', 'GUARDIAN', 15, 'Quick negate — dont pour money into dead-end terms', 1.5, 1, 'SEED'),
-  ('PROFITABLE_ROAS', 'HUNTER', 'GUARDIAN', 1.1, 'Profitable at 0.7x when accounting for organic halo', 1, 1, 'MANUAL'),
-  ('PROMOTE_MIN_SQP_VOLUME', 'HUNTER', 'GUARDIAN', 500, 'Min SQP weekly search volume for HUNTER promote', 1, 1, 'coach_v2'),
-  ('REDUCE_BID_ROAS', 'HUNTER', 'GUARDIAN', 0.5, 'Lower bar since discovery ROAS is naturally lower', 1, 1, 'SEED'),
-  ('SCALE_UP_ROAS', 'HUNTER', 'GUARDIAN', 2, 'Hunter at 1.0x = winner → graduate to Exact Boost', 1, 1, 'MANUAL'),
-  ('SCALE_UP_SPEND_CAP', 'HUNTER', 'GUARDIAN', 30, 'Dont over-invest — graduate to Exact instead', 1.5, 1, 'SEED'),
-  ('WASTED_SPEND_THRESHOLD', 'HUNTER', 'GUARDIAN', 10, 'Discovery terms should prove themselves faster', 1.5, 1, 'SEED'),
+  ('BID_CAP_SUGGESTION', 'INTENT', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
+  ('INSUFFICIENT_DATA_CLICKS', 'INTENT', 'GUARDIAN', 15, 'Standard discovery click count', 1, 1, 'SEED'),
+  ('NEGATE_ROAS_THRESHOLD', 'INTENT', 'GUARDIAN', 0.3, 'Lenient — discovery accepts low ROAS initially', 1, 1, 'SEED'),
+  ('NEGATE_SPEND_THRESHOLD', 'INTENT', 'GUARDIAN', 15, 'Quick negate — dont pour money into dead-end terms', 1.5, 1, 'SEED'),
+  ('PROFITABLE_ROAS', 'INTENT', 'GUARDIAN', 1.1, 'Profitable at 0.7x when accounting for organic halo', 1, 1, 'MANUAL'),
+  ('PROMOTE_MIN_SQP_VOLUME', 'INTENT', 'GUARDIAN', 500, 'Min SQP weekly search volume for HUNTER promote', 1, 1, 'coach_v2'),
+  ('REDUCE_BID_ROAS', 'INTENT', 'GUARDIAN', 0.5, 'Lower bar since discovery ROAS is naturally lower', 1, 1, 'SEED'),
+  ('SCALE_UP_ROAS', 'INTENT', 'GUARDIAN', 2, 'Hunter at 1.0x = winner → graduate to Exact Boost', 1, 1, 'MANUAL'),
+  ('SCALE_UP_SPEND_CAP', 'INTENT', 'GUARDIAN', 30, 'Dont over-invest — graduate to Exact instead', 1.5, 1, 'SEED'),
+  ('WASTED_SPEND_THRESHOLD', 'INTENT', 'GUARDIAN', 10, 'Discovery terms should prove themselves faster', 1.5, 1, 'SEED'),
 
   -- GUARDIAN x LOW_COST_DISCOVERY
-  ('BID_CAP_SUGGESTION', 'LOW_COST_DISCOVERY', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
-  ('INSUFFICIENT_DATA_CLICKS', 'LOW_COST_DISCOVERY', 'GUARDIAN', 10, 'At low CPCs, 10 clicks = $1-3 spend', 1, 1, 'SEED'),
-  ('NEGATE_ROAS_THRESHOLD', 'LOW_COST_DISCOVERY', 'GUARDIAN', 0.5, 'Standard for discovery', 1, 1, 'SEED'),
-  ('NEGATE_SPEND_THRESHOLD', 'LOW_COST_DISCOVERY', 'GUARDIAN', 8, 'Quick trigger — $8 with no value = negate', 1, 1, 'SEED'),
-  ('PROFITABLE_ROAS', 'LOW_COST_DISCOVERY', 'GUARDIAN', 1.1, 'At these CPCs, even 0.5x may be worthwhile', 1, 1, 'MANUAL'),
-  ('PROMOTE_MIN_SQP_VOLUME', 'LOW_COST_DISCOVERY', 'GUARDIAN', 250, 'Lower bar for low-cost discovery keywords', 1, 1, 'coach_v2'),
-  ('SCALE_UP_ROAS', 'LOW_COST_DISCOVERY', 'GUARDIAN', 1.5, 'Any term at 1.0x → promote out of discovery', 1, 1, 'SEED'),
-  ('WASTED_SPEND_THRESHOLD', 'LOW_COST_DISCOVERY', 'GUARDIAN', 5, 'Very low tolerance — cheap discovery', 1, 1, 'SEED'),
+  ('BID_CAP_SUGGESTION', 'INTENT', 'GUARDIAN', 2, 'Bid cap suggestion based on experiment CPC analysis', 1, 1, 'AUTO_SUGGEST'),
+  ('INSUFFICIENT_DATA_CLICKS', 'INTENT', 'GUARDIAN', 10, 'At low CPCs, 10 clicks = $1-3 spend', 1, 1, 'SEED'),
+  ('NEGATE_ROAS_THRESHOLD', 'INTENT', 'GUARDIAN', 0.5, 'Standard for discovery', 1, 1, 'SEED'),
+  ('NEGATE_SPEND_THRESHOLD', 'INTENT', 'GUARDIAN', 8, 'Quick trigger — $8 with no value = negate', 1, 1, 'SEED'),
+  ('PROFITABLE_ROAS', 'INTENT', 'GUARDIAN', 1.1, 'At these CPCs, even 0.5x may be worthwhile', 1, 1, 'MANUAL'),
+  ('PROMOTE_MIN_SQP_VOLUME', 'INTENT', 'GUARDIAN', 250, 'Lower bar for low-cost discovery keywords', 1, 1, 'coach_v2'),
+  ('SCALE_UP_ROAS', 'INTENT', 'GUARDIAN', 1.5, 'Any term at 1.0x → promote out of discovery', 1, 1, 'SEED'),
+  ('WASTED_SPEND_THRESHOLD', 'INTENT', 'GUARDIAN', 5, 'Very low tolerance — cheap discovery', 1, 1, 'SEED'),
 
   -- GUARDIAN x NEW_LAUNCH
   ('INSUFFICIENT_DATA_CLICKS', 'NEW_LAUNCH', 'GUARDIAN', 15, 'Standard click count', 1, 1, 'SEED'),

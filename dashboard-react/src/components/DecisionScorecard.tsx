@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Card } from './Card';
 import { Badge, ActionBadge } from './Badge';
+import { useDoQueue } from '../hooks/useDoQueue';
 import { cubeLoad } from '../hooks/useCubeData';
 import { fM, fR, fCpc, fmt } from '../utils';
 import { splitOutcomes } from './decisionScorecard.helpers';
@@ -20,6 +21,13 @@ interface OutcomeRow {
   search_term: string;
   targeting: string;
   campaign_name: string;
+  // identifiers for the revert action (queue a bid Update back to old_bid)
+  keyword_id: string;
+  match_type: string;
+  campaign_id: string;
+  ad_group_id: string;
+  campaign_type: string;
+  product: string;
   coach_mode: string;
   source: string;
   old_bid: number | null;
@@ -62,6 +70,8 @@ async function loadOutcomes(): Promise<OutcomeRow[]> {
       'PpcActionOutcomes.changeId', 'PpcActionOutcomes.appliedAt',
       'PpcActionOutcomes.action', 'PpcActionOutcomes.actionGroup', 'PpcActionOutcomes.verdict',
       'PpcActionOutcomes.searchTerm', 'PpcActionOutcomes.targeting', 'PpcActionOutcomes.campaignName',
+      'PpcActionOutcomes.keywordId', 'PpcActionOutcomes.matchType', 'PpcActionOutcomes.campaignId',
+      'PpcActionOutcomes.adGroupId', 'PpcActionOutcomes.campaignType', 'PpcActionOutcomes.product',
       'PpcActionOutcomes.coachMode', 'PpcActionOutcomes.source',
       'PpcActionOutcomes.oldBid', 'PpcActionOutcomes.newBid',
       'PpcActionOutcomes.oldBudget', 'PpcActionOutcomes.newBudget',
@@ -90,6 +100,12 @@ async function loadOutcomes(): Promise<OutcomeRow[]> {
     search_term: String(r['PpcActionOutcomes.searchTerm'] ?? ''),
     targeting: String(r['PpcActionOutcomes.targeting'] ?? ''),
     campaign_name: String(r['PpcActionOutcomes.campaignName'] ?? ''),
+    keyword_id: String(r['PpcActionOutcomes.keywordId'] ?? ''),
+    match_type: String(r['PpcActionOutcomes.matchType'] ?? ''),
+    campaign_id: String(r['PpcActionOutcomes.campaignId'] ?? ''),
+    ad_group_id: String(r['PpcActionOutcomes.adGroupId'] ?? ''),
+    campaign_type: String(r['PpcActionOutcomes.campaignType'] ?? ''),
+    product: String(r['PpcActionOutcomes.product'] ?? ''),
     coach_mode: String(r['PpcActionOutcomes.coachMode'] ?? ''),
     source: String(r['PpcActionOutcomes.source'] ?? 'COACH'),
     old_bid: numOrNull(r['PpcActionOutcomes.oldBid']),
@@ -229,8 +245,29 @@ function OutcomeDetail({ r }: { r: OutcomeRow }) {
 
 /* ─── One scorecard row (click to expand the 7-day detail) ─── */
 function ScorecardRow({ r, open, onToggle }: { r: OutcomeRow; open: boolean; onToggle: () => void }) {
+  const doQueue = useDoQueue();
   const meta = VERDICT_META[r.verdict];
   const Icon = meta.icon;
+  // Close the loop on a failed raise: a BID_UP graded WORSE offers a one-click revert to the old bid
+  // (queued like any bid change → next bulksheet). Verdict comes from the backend scorecard; this is
+  // just the actuator.
+  const canRevert = r.action_group === 'BID_UP' && r.verdict === 'WORSE'
+    && r.old_bid != null && r.new_bid != null && !!r.keyword_id;
+  const revertQueued = canRevert && doQueue.items.some(i =>
+    i.action === 'REDUCE_BID' && i.keyword_id === r.keyword_id && i.campaign_id === r.campaign_id && i.recommended_bid === r.old_bid);
+  const toggleRevert = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const ex = doQueue.items.find(i =>
+      i.action === 'REDUCE_BID' && i.keyword_id === r.keyword_id && i.campaign_id === r.campaign_id && i.recommended_bid === r.old_bid);
+    if (ex) { doQueue.removeItem(ex.id); return; }
+    doQueue.addItem({
+      search_term: r.search_term, action: 'REDUCE_BID', campaign: r.campaign_name, campaign_id: r.campaign_id,
+      ad_group_id: r.ad_group_id, targeting: r.targeting || r.search_term, keyword_id: r.keyword_id,
+      match_type: r.match_type, target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0,
+      current_bid: r.new_bid, recommended_bid: r.old_bid, campaign_type: r.campaign_type,
+      product: r.product, spend: 0, orders: 0, cpc: 0, conv_rate: 0, source: 'MANUAL',
+    });
+  };
   const entity = r.targeting || r.search_term || '(campaign-level)';
   const bidChange = r.new_bid != null
     ? `${r.old_bid != null ? `$${r.old_bid.toFixed(2)}→` : ''}$${r.new_bid.toFixed(2)}`
@@ -288,6 +325,13 @@ function ScorecardRow({ r, open, onToggle }: { r: OutcomeRow; open: boolean; onT
         <span className="text-subtle flex-1 min-w-0 truncate" title={verdictSentence(r)}>
           {verdictSentence(r)}
         </span>
+        {canRevert && (
+          <button onClick={toggleRevert}
+            title={`this raise didn't pay off — queue a bid Update back to $${r.old_bid!.toFixed(2)}`}
+            className={`text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded border ${revertQueued ? 'border-emerald-500/40 text-emerald-400' : 'border-amber-500/50 text-amber-400 hover:bg-amber-500/10'}`}>
+            {revertQueued ? '✓ revert queued' : `revert → $${r.old_bid!.toFixed(2)}`}
+          </button>
+        )}
         {r.expected_impact_weekly != null && r.target_status && r.target_status !== 'NO_TARGET' && (
           <span title={targetTooltip} className={`text-[9px] font-mono shrink-0 px-1.5 py-0.5 rounded border cursor-help ${
             r.target_status === 'TARGET_MET'

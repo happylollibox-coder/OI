@@ -1,0 +1,99 @@
+<style>
+  .bw { max-width: 960px; margin: 0 auto; }
+  .mono { font-family:'Fira Code',ui-monospace,monospace; }
+  .up{color:#34d399;} .dn{color:#f87171;} .mut{color:#8b97ad;} .faint{color:#5f6b80;}
+  .card { border:1px solid #2a2f3a; border-radius:12px; background:rgba(255,255,255,.015); overflow:hidden; }
+  .card-hd { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid #2a2f3a; }
+  .card-hd h3 { margin:0; font-size:13px; }
+  .toggle { display:inline-flex; gap:2px; background:rgba(255,255,255,.04); border:1px solid #2a2f3a; border-radius:8px; padding:3px; }
+  .toggle span { font-size:11px; padding:4px 9px; border-radius:6px; color:#8b97ad; cursor:pointer; }
+  .toggle span.on { background:#5b8def; color:#fff; }
+  .period { margin-left:auto; font-size:11px; color:#5f6b80; }
+
+  .twocol { display:grid; grid-template-columns:1fr 280px; gap:14px; padding:14px; }
+  .panel h4 { margin:0 0 10px; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:#8b97ad; display:flex; align-items:center; gap:6px;}
+  .headline { font-size:14px; line-height:1.55; margin:0 0 14px; padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,.06); }
+
+  .fam { border-top:1px solid rgba(255,255,255,.05); }
+  .fam:first-of-type{border-top:none;}
+  .famrow { display:flex; align-items:flex-start; gap:8px; padding:8px 0; cursor:pointer; }
+  .chev { color:#5f6b80; font-size:11px; margin-top:3px; width:10px; }
+  .famname { font-weight:600; min-width:80px; font-size:13px; }
+  .famsay { color:#a9b4c7; font-size:12.5px; line-height:1.45; flex:1; }
+  .chip { display:inline-block; font-size:10px; padding:1px 7px; border-radius:10px; margin-left:5px; white-space:nowrap;}
+  .chip.risk{background:rgba(248,113,113,.15);color:#f87171;} .chip.warn{background:rgba(251,191,36,.15);color:#fbbf24;} .chip.good{background:rgba(52,211,153,.15);color:#34d399;}
+  .prods { padding:2px 0 8px 26px; }
+  .prod { display:flex; gap:8px; font-size:12px; color:#9fab c0; padding:4px 0; border-top:1px dashed rgba(255,255,255,.06); }
+  .prod .pn{ color:#cdd6e4; min-width:96px;}
+  .prod .pv{ color:#8b97ad; }
+  .steady { font-size:11px; color:#5f6b80; padding:9px 0 2px; border-top:1px solid rgba(255,255,255,.05); cursor:pointer;}
+
+  .att { display:flex; gap:8px; align-items:flex-start; font-size:12px; padding:7px 0; border-top:1px solid rgba(255,255,255,.05); }
+  .att:first-of-type{border-top:none;}
+  .att .ic{ font-size:13px; margin-top:1px;}
+  .att .tx{ color:#bfc9da; line-height:1.4;}
+  .att .tx b{ color:#e6ebf3;}
+  .actbtn{ margin-top:10px; width:100%; text-align:center; font-size:11px; padding:7px; border:1px solid #5b8def; color:#9dbcff; border-radius:7px; background:rgba(91,141,239,.08); cursor:pointer;}
+  .detail-toggle{ font-size:11px; color:#7d8aa0; cursor:pointer; user-select:none;}
+  .detail-toggle b{color:#9dbcff;}
+</style>
+
+<div class="bw">
+<h2>Split view, refined — per-family read + attention list</h2>
+<p class="subtitle">Left = the per-family read (each family expands to the products that actually moved). Right = cross-cutting "needs attention". The <b>plain ⇄ numbers</b> link is the "see detailed explanation" control. Click to confirm, or tell me what to change.</p>
+
+<div class="card" data-choice="split-v2" onclick="toggleSelect(this)">
+  <div class="card-hd">
+    <div class="toggle mono"><span>Today · Ads</span><span class="on">Yesterday</span><span>7 days</span><span>30 days</span></div>
+    <span class="period mono">Wed Jun 18 vs 7-day avg</span>
+  </div>
+
+  <div class="twocol">
+    <!-- LEFT: per-family read -->
+    <div class="panel">
+      <h4>The read <span class="detail-toggle" style="margin-left:auto;">plain · <b>numbers</b></span></h4>
+      <p class="headline"><b class="up">Profit +9%</b> vs the 7-day average, carried by <b>Lollibox</b>. Ads a touch more efficient. <b>LolliME</b> margin softening, and <b class="dn">2 families face out-of-stock risk</b>.</p>
+
+      <!-- Family 1 expanded -->
+      <div class="fam">
+        <div class="famrow"><span class="chev">▾</span><span class="famname">Lollibox</span>
+          <span class="famsay">Best day in two weeks — sales up, profit up faster.<span class="chip good">NP +18%</span><span class="chip good">ROAS ↑</span></span></div>
+        <div class="prods">
+          <div class="prod"><span class="pn">Box Classic</span><span class="pv">sales <b class="up">+16%</b>, profit <b class="up">+21%</b> — main driver</span></div>
+          <div class="prod"><span class="pn">Box Mini</span><span class="pv">sales <b class="up">+9%</b>, steady margin</span></div>
+        </div>
+      </div>
+
+      <!-- Family 2 expanded -->
+      <div class="fam">
+        <div class="famrow"><span class="chev">▾</span><span class="famname">LolliME</span>
+          <span class="famsay">Sales flat but margin slipping as ad spend climbs.<span class="chip warn">TACoS +3pt</span></span></div>
+        <div class="prods">
+          <div class="prod"><span class="pn">Mint 12-pk</span><span class="pv">spend <b class="dn">+22%</b>, sales flat → ROAS <b class="dn">−0.4x</b></span></div>
+          <div class="prod"><span class="pn">Mint single</span><span class="pv">no real change</span></div>
+        </div>
+      </div>
+
+      <!-- Family 3 collapsed -->
+      <div class="fam">
+        <div class="famrow"><span class="chev">▸</span><span class="famname">Bottle</span>
+          <span class="famsay">Sales easing as stock runs thin.<span class="chip risk">OOS ~4d</span></span></div>
+      </div>
+
+      <div class="steady">▸ 2 steady families hidden (Fresh, Bunny) — no material change</div>
+    </div>
+
+    <!-- RIGHT: needs attention -->
+    <div class="panel">
+      <h4>Needs attention</h4>
+      <div class="att"><span class="ic">🔴</span><span class="tx"><b>Bottle</b> — Truth bottle out of stock in <b>~4 days</b></span></div>
+      <div class="att"><span class="ic">🔴</span><span class="tx"><b>Fresh</b> — stocks out in <b>~6 days</b>, no inbound</span></div>
+      <div class="att"><span class="ic">🟠</span><span class="tx"><b>3 coach actions</b> pending — 2 reduce-bid, 1 negate</span></div>
+      <div class="att"><span class="ic">🟡</span><span class="tx"><b>LolliME</b> getting more ads-dependent (organic <b class="dn">−4pt</b>)</span></div>
+      <div class="actbtn">Review actions →</div>
+    </div>
+  </div>
+</div>
+
+<p class="faint" style="margin-top:16px;font-size:12px;">Questions I still have: (1) should the <b>headline</b> stay one sentence, or be a tweetable line + a "details" expander? (2) on the right, do you want OOS to show <b>days of cover</b> or a <b>date</b>?</p>
+</div>

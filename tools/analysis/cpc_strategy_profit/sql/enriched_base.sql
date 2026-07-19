@@ -26,6 +26,19 @@ tos_bid AS (                 -- campaign TOS bid-adjustment % (current setting s
   SELECT campaign_id, MAX(top_of_search_pct) AS tos_bid_adj_pct
   FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` GROUP BY campaign_id
 ),
+ag_fmt AS (                  -- SB ad-group -> creative_type (verified unique per ad group)
+  SELECT ad_group_id,
+    -- fall back to the campaign name when the source creative_type is NULL (some SB video campaigns
+    -- don't populate it, e.g. FRESH-VIDEO/EXACT). '%VIDEO%' in the name is always video (validated).
+    COALESCE(
+      MAX(creative_type),
+      CASE WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%VIDEO%'      THEN 'BRAND_VIDEO'
+           WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%COLLECTION%' THEN 'PRODUCT_COLLECTION' END
+    ) AS creative_type
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_sb_ad_report`
+  WHERE cost > 0
+  GROUP BY ad_group_id
+),
 cal AS (                     -- one calendar segment per LA-local date
   SELECT d AS date,
     COALESCE(MAX(CASE
@@ -65,6 +78,10 @@ SELECT
   cp.parent_name,
   ads.date, ads.campaign_id, ads.ad_group_id, ads.target_key,
   ads.targeting, ads.targeting_type, ads.campaign_type,
+  -- ad_format: SB creative type (BRAND_VIDEO / PRODUCT_COLLECTION / …); SP has none → 'NA'.
+  -- 'NA' also stands in for any SB ad group with no reported creative_type, so the band grain
+  -- never carries a NULL that would break the engine's equality join.
+  CASE WHEN ads.campaign_type = 'SB' THEN COALESCE(f.creative_type, 'NA') ELSE 'NA' END AS ad_format,
   ads.clicks, ads.cost, ads.orders, ads.units, ads.sales, ads.gross_profit,
   (ads.gross_profit - ads.cost)          AS net_profit,
   SAFE_DIVIDE(ads.cost, ads.clicks)      AS cpc,
@@ -74,6 +91,7 @@ SELECT
 FROM ads
 JOIN camp_parent cp ON cp.campaign_id = ads.campaign_id
 JOIN cal           ON cal.date = ads.date
+LEFT JOIN ag_fmt f ON f.ad_group_id = ads.ad_group_id
 LEFT JOIN tos      ON tos.campaign_id = ads.campaign_id AND tos.report_date = ads.date
 LEFT JOIN tos_bid tb ON tb.campaign_id = ads.campaign_id
 WHERE cp.parent_name IS NOT NULL

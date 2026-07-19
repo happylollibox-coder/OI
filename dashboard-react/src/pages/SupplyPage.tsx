@@ -18,6 +18,8 @@ import ShipmentDetailDrawer from '../components/supply/ShipmentDetailDrawer';
 import PaymentDetailDrawer from '../components/supply/PaymentDetailDrawer';
 import { NewPOModal } from '../components/supply/NewPOModal';
 import { NewOtherPOModal } from '../components/supply/NewOtherPOModal';
+import { MarkReceivedButton, useMarkReceived, isDueToReceive, todayISO } from '../components/supply/shipmentReceive';
+import { ShipmentsToReceive } from '../components/supply/ShipmentsToReceive';
 import { NewShipmentModal } from '../components/supply/NewShipmentModal';
 import { BulkPaymentModal } from '../components/supply/BulkPaymentModal';
 import { CostsReportTab } from '../components/supply/CostsReportTab';
@@ -518,6 +520,18 @@ export function SupplyPage({ data }: { data: DashboardData }) {
     }
   }, [selectedShipment, data.supply_shipments]);
 
+  /* ─── One-click "Mark received" from the shipments table ─── */
+  const { markReceived, toastNode: shipmentReceiveToast } = useMarkReceived();
+  const handleMarkShipmentReceived = useCallback((r: SupplyShipmentRow) => {
+    const id = r.shipment_id;
+    const prev = r.shipment_status;
+    markReceived(id, prev, {
+      onOptimistic: () => setShipmentOverrides(p => ({ ...p, [id]: [{ ...r, shipment_status: 'RECEIVED', is_open: false }] })),
+      onRevert: () => setShipmentOverrides(p => ({ ...p, [id]: [{ ...r, shipment_status: prev, is_open: true }] })),
+      label: `Received: ${r.products_list || id}`,
+    });
+  }, [markReceived]);
+
   /* ─── Effective Payment list: Cube base + Flask write-through overrides ─── */
   const effectivePayments = useMemo(() => {
     const base = (data.supply_payments || []).filter(r => !deletedPaymentIds.has(r.payment_id));
@@ -857,6 +871,9 @@ export function SupplyPage({ data }: { data: DashboardData }) {
         </div>
       </div>
 
+      {/* ─── ARRIVAL NUDGE: shipments due to receive (renders nothing when none are due) ─── */}
+      <ShipmentsToReceive />
+
       {/* ─── SUMMARY CARDS ─── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <SummaryCard
@@ -1073,7 +1090,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
               { label: 'Remaining', value: fmtFull$(totalShipUnpaid), color: totalShipUnpaid > 0 ? 'var(--color-orange, #fb923c)' : 'var(--color-emerald, #34d399)' },
             ]} />
             <div className="rounded-xl border border-border overflow-x-auto">
-              <ShipmentsTable rows={filteredShipments} sort={shipSort} onSort={toggleSort(setShipSort)} onSelectShipment={setSelectedShipment} />
+              <ShipmentsTable rows={filteredShipments} sort={shipSort} onSort={toggleSort(setShipSort)} onSelectShipment={setSelectedShipment} onMarkReceived={handleMarkShipmentReceived} />
             </div>
           </>
         );
@@ -1140,6 +1157,9 @@ export function SupplyPage({ data }: { data: DashboardData }) {
           onChanged={handleDrawerChanged}
         />
       )}
+
+      {/* Undo toast for one-click "Mark received" */}
+      {shipmentReceiveToast}
 
       {/* ─── Shipment detail drawer (Flask-backed edits) ─── */}
       {selectedShipment && (
@@ -1546,8 +1566,19 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
 /* ═══════════════════════════════════════════════════════════════
  * SHIPMENTS TABLE
  * ═══════════════════════════════════════════════════════════════ */
-function ShipmentsTable({ rows, sort, onSort, onSelectShipment }: { rows: SupplyShipmentRow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void; onSelectShipment: (s: SupplyShipmentRow) => void }) {
+// Warehouse codes that are Amazon Warehousing & Distribution (AWD), not FBA fulfillment centers.
+// The "Warehouse ID" column holds the destination code (stored in tracking_number). Codes that literally
+// contain "AWD" (e.g. AWD, AWD-STARR) are AWD; plus explicit AWD facilities that aren't obvious (IUTE).
+const AWD_WAREHOUSES = new Set(['IUTE']);
+const isAwdWarehouse = (code: string | null | undefined): boolean => {
+  if (!code) return false;
+  const c = code.trim().toUpperCase();
+  return c.includes('AWD') || AWD_WAREHOUSES.has(c);
+};
+
+function ShipmentsTable({ rows, sort, onSort, onSelectShipment, onMarkReceived }: { rows: SupplyShipmentRow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void; onSelectShipment: (s: SupplyShipmentRow) => void; onMarkReceived: (s: SupplyShipmentRow) => void }) {
   if (rows.length === 0) return <div className="p-8 text-center text-muted text-sm">No shipments match filters</div>;
+  const today = todayISO();
   return (
     <table className="w-full text-sm">
       <thead>
@@ -1579,7 +1610,12 @@ function ShipmentsTable({ rows, sort, onSort, onSelectShipment }: { rows: Supply
             <td className="px-4 py-2.5 text-subtle text-xs font-medium max-w-[250px] truncate" title={r.products_list}>{r.products_list || '—'}</td>
             <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap text-right">{r.estimated_arrival_date ? fmtDate(r.estimated_arrival_date) : '—'}</td>
             <td className="px-4 py-2.5 text-xs text-muted">{r.shipment_type || '—'}</td>
-            <td className="px-4 py-2.5 text-xs text-muted font-mono whitespace-nowrap" title={r.tracking_number || ''}>{r.tracking_number || '—'}</td>
+            <td className="px-4 py-2.5 text-xs text-muted font-mono whitespace-nowrap" title={r.tracking_number || ''}>
+              {r.tracking_number || '—'}
+              {isAwdWarehouse(r.tracking_number) && (
+                <span className="ml-1.5 px-1 py-0 rounded text-[9px] font-semibold bg-purple-500/15 text-purple-400 align-middle">AWD</span>
+              )}
+            </td>
             <td className="px-4 py-2.5 text-right text-subtle font-mono text-xs">{r.total_quantity_shipped.toLocaleString()}</td>
             <td className="px-4 py-2.5 text-right text-subtle font-mono text-xs">{r.cost_shipped > 0 ? fmtFull$(r.cost_shipped) : '—'}</td>
             <td className="px-4 py-2.5 text-right font-mono text-xs">
@@ -1587,7 +1623,14 @@ function ShipmentsTable({ rows, sort, onSort, onSelectShipment }: { rows: Supply
                 {fmtFull$(Math.max(r.unpaid_to_shipment, 0))}
               </span>
             </td>
-            <td className="px-4 py-2.5"><ShipmentStatusBadge status={r.shipment_status} /></td>
+            <td className="px-4 py-2.5">
+              <div className="flex items-center gap-2">
+                <ShipmentStatusBadge status={r.shipment_status} />
+                {isDueToReceive(r.shipment_status, r.estimated_arrival_date, today) && (
+                  <MarkReceivedButton small onClick={() => onMarkReceived(r)} />
+                )}
+              </div>
+            </td>
           </tr>
         ))}
       </tbody>

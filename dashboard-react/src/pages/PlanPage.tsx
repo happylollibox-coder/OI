@@ -9,6 +9,9 @@ import { composeMonthlyPlan, aggregateAdsTargetSpend, buildEffectiveProjs, month
 import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
+import { useViewMode } from '../hooks/useViewMode';
+import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid, Legend, LabelList, ReferenceLine } from 'recharts';
+import { CHART_GRID, CHART_AXIS_TICK, CHART_TOOLTIP_STYLE } from '../chartTheme';
 
 export const renderDeltaNode = (base: number, cmp: number, mode: 'currency' | 'number' | 'multiplier' = 'currency', inverseGood: boolean = false, className: string = '') => {
   if (base === 0 && cmp === 0) return null;
@@ -584,7 +587,7 @@ function runSim(families: FamilyBaseline[], mults: Record<string, Record<string,
         }
         const baseDemand = rawDemand * (growthOverrides[v.name] ?? 1.0);
         const adjFactor = (1 - v.adsShare) + v.adsShare * mult;
-        
+
         // Apply error diffusion to ensure sum of integers matches exact float target
         const exactDemand = baseDemand * adjFactor + (roundCarry[v.name] ?? 0);
         const demand = Math.round(exactDemand);
@@ -1304,7 +1307,10 @@ export function PlanPage({ data }: { data: DashboardData }) {
       if (totalDemandBase > 0) {
         const sold = parentGetSold(v.asin, v.name);
         const targetForecast = Math.max(0, qty - sold);
-        result[name] = targetForecast / totalDemandBase;
+        // Never let a manual order scale demand BELOW the natural forecast: a stale/low
+        // order (e.g. set before the forecast was corrected upward) must not hide the true
+        // "stay on current ad path" projection. Orders may only scale demand up, never down.
+        result[name] = Math.max(growthOverrides[name] ?? 1.0, targetForecast / totalDemandBase);
       }
     }
     return result;
@@ -1704,6 +1710,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
   // Read global family/product filter from header.
   // Filter display data only — plan save/load always uses full `families`.
   const { filters } = useFilters();
+  const { isAdmin } = useViewMode();
 
   const filteredFamilies = useMemo(() => {
     let ff = families;
@@ -1783,6 +1790,13 @@ export function PlanPage({ data }: { data: DashboardData }) {
 
   return (
     <div className="space-y-6">
+      {/* Always-visible inventory & sales overview (non-admin summary).
+          Forward numbers come from the DATA forecast (demandMap = base V_FORECAST_DEMAND),
+          NOT the plan sim — the plan (with overrides) is admin-only, below. */}
+      <PlanOverviewSection families={filteredFamilies} demandMap={demandMap}
+        actuals2026Full={actuals2026Full} actuals2025Full={actuals2025Full} />
+
+      {isAdmin && (<>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Calculator className="text-blue-400" size={22} />
@@ -2118,19 +2132,19 @@ export function PlanPage({ data }: { data: DashboardData }) {
               color={b.ytdNp >= 0 ? 'emerald' : 'red'} 
               deltaNode={useCompare ? renderDelta(b.ytdNp, c.ytdNp) : null}
             />
-            <Kpi 
-              label="Forecast Profit" 
-              tip="Σ (Revenue − COGS − Ad Spend)\nSimulated forecast" 
-              value={fK(b.totals.netProfit)} 
-              sub="Apr–Feb sim" 
-              color={b.totals.netProfit >= 0 ? 'emerald' : 'red'} 
+            <Kpi
+              label="Plan Profit"
+              tip="Σ (Revenue − COGS − Ad Spend)\nYour plan = data forecast + overrides (growth / spend / order)"
+              value={fK(b.totals.netProfit)}
+              sub="Apr–Feb plan"
+              color={b.totals.netProfit >= 0 ? 'emerald' : 'red'}
               deltaNode={useCompare ? renderDelta(b.totals.netProfit, c.totals.netProfit) : null}
             />
-            <Kpi 
-              label="Est. EOY Profit" 
-              tip="YTD Net Profit + Forecast Profit\nFull-year outlook" 
-              value={fK(b.ytdNp + b.totals.netProfit)} 
-              sub="YTD + Forecast" 
+            <Kpi
+              label="Est. EOY Profit"
+              tip="YTD Net Profit + Plan Profit\nFull-year outlook"
+              value={fK(b.ytdNp + b.totals.netProfit)}
+              sub="YTD + Plan"
               color={(b.ytdNp + b.totals.netProfit) >= 0 ? 'emerald' : 'red'} 
               hl 
               deltaNode={useCompare ? renderDelta(b.ytdNp + b.totals.netProfit, c.ytdNp + c.totals.netProfit) : null}
@@ -2228,6 +2242,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
                 demandMap={demandMap}
                 ytdNp={ytdProfit.byFamily[f.family] ?? 0}
                 growthOverrides={effectiveGrowth}
+                runRateMap={runRateMap}
                 planned={isPlanned(f.family)}
                 onToggle={() => setExpanded(isExp ? null : f.family)}
                 baseCmp={baseStats?.byFamily?.[f.family]}
@@ -2404,11 +2419,234 @@ export function PlanPage({ data }: { data: DashboardData }) {
       )}
 
       <CashflowSection projs={projs} families={filteredFamilies} planId={activePlan?.plan_id ?? null} />
+      </>)}
     </div>
   );
 }
 
-function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, planned, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
+// ─── Inventory & Sales Overview ───────────────────────────
+// Always-visible top section (shown to simple + admin). Everything below it on the
+// Plan page is admin-only. Aggregates respect the global PARENT/PRODUCT filter via
+// the `families` prop (= filteredFamilies).
+type ActualsMap = Map<string, Map<number, { units: number; revenue: number; cogs: number; adCost: number }>>;
+function StatCard({ label, value, sub, tint, valueColor }: {
+  label: string; value: string; sub?: string; tint?: string; valueColor?: string;
+}) {
+  return (
+    <div className="flex flex-col rounded-xl border border-border overflow-hidden">
+      <div className={`px-4 py-3 ${tint ?? 'bg-card'}`}>
+        <div className="text-[12px] font-semibold uppercase tracking-wide text-text mb-1.5 truncate">{label}</div>
+        <div className={`text-[26px] font-bold font-mono leading-none tracking-tight ${valueColor ?? 'text-text'}`}>{value}</div>
+        {sub && <div className="text-[10px] uppercase tracking-wider text-faint mt-1.5 truncate">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+function PlanOverviewSection({ families, demandMap, actuals2026Full, actuals2025Full }: {
+  families: FamilyBaseline[]; demandMap: ForecastDemandMap; actuals2026Full: ActualsMap; actuals2025Full: ActualsMap;
+}) {
+  const s = useMemo(() => {
+    // Pipeline units by source
+    const src: Record<string, number> = {};
+    let totalUnits = 0;
+    for (const f of families) {
+      totalUnits += f.inventory;
+      for (const [k, q] of Object.entries(f.inventoryBySource)) src[k] = (src[k] ?? 0) + q;
+    }
+    const fba = src['FBA'] ?? 0, awd = src['AWD'] ?? 0, inTransit = src['In Transit'] ?? 0;
+    const inTransitAwd = src['In Transit AWD'] ?? 0, mfrReady = src['MFR Ready'] ?? 0, inProd = src['In Production'] ?? 0;
+
+    // ── Forward demand = the DATA FORECAST (base V_FORECAST_DEMAND via demandMap), NOT the plan sim.
+    // No growth/spend/order overrides — this is the current-data path and moves every run.
+    // Sum per-variation so a PRODUCT filter narrows it (families = filteredFamilies).
+    const today = new Date();
+    const remDays = Math.max(1, MONTHS[0].days - today.getDate() + 1); // current month = remaining days only
+    const monthlyDemand = MONTHS.map((mo, i) => {
+      const key = mo.year * 100 + mo.month;
+      let d = families.reduce((sum, f) =>
+        sum + f.variations.reduce((vs, v) => vs + (demandMap[v.name]?.[key] ?? 0), 0), 0);
+      if (i === 0) d *= remDays / mo.days;
+      return d;
+    });
+    let forecastThisYear = 0, forecastNextYear = 0;
+    for (let i = 0; i < MONTHS.length; i++) {
+      if (MONTHS[i].year >= PLAN_END_YEAR) forecastNextYear += monthlyDemand[i]; else forecastThisYear += monthlyDemand[i];
+    }
+    const forecastRemaining = forecastThisYear + forecastNextYear;
+
+    // Days of cover for the at-/inbound-to-Amazon pool against the data-forecast demand
+    let rem = fba + awd + inTransit, coverDays = 0;
+    for (let i = 0; i < MONTHS.length; i++) {
+      if (rem <= 0) break;
+      const d = monthlyDemand[i];
+      const days = i === 0 ? remDays : MONTHS[i].days;
+      if (rem >= d) { rem -= d; coverDays += days; }
+      else { coverDays += Math.round(days * (d > 0 ? rem / d : 0)); rem = 0; }
+    }
+    const coverCapped = rem > 0; // stock outlasts the forecast horizon
+
+    // Units sold — restrict actuals to the filtered products
+    const prodSet = new Set<string>();
+    for (const f of families) for (const v of f.variations) prodSet.add(v.name);
+    const now = new Date();
+    const curMo = now.getMonth(); // 0-11
+    const curFrac = now.getDate() / new Date(now.getFullYear(), curMo + 1, 0).getDate();
+    const sumMonths = (m: ActualsMap, weight: (mo: number) => number) => {
+      let t = 0;
+      for (const [prod, byMo] of m.entries()) {
+        if (!prodSet.has(prod)) continue;
+        for (const [mo, d] of byMo.entries()) t += (d.units ?? 0) * weight(mo);
+      }
+      return t;
+    };
+    const soldYtd = sumMonths(actuals2026Full, () => 1);           // 2026 has only YTD months populated
+    const soldPrevFull = sumMonths(actuals2025Full, () => 1);       // full prior year
+    const soldPrevYtd = sumMonths(actuals2025Full, mo => mo < curMo ? 1 : mo === curMo ? curFrac : 0); // same date range
+
+    return {
+      fba, awd, inTransit, inTransitAwd, mfrReady, inProd, totalUnits, coverDays, coverCapped,
+      forecastRemaining: Math.round(forecastRemaining),
+      forecastThisYear: Math.round(forecastThisYear), forecastNextYear: Math.round(forecastNextYear),
+      soldYtd: Math.round(soldYtd), soldPrevYtd: Math.round(soldPrevYtd),
+      soldRestPrev: Math.round(soldPrevFull - soldPrevYtd), // prior year from today → year-end (complement of YTD prev)
+      toOrder: Math.round(forecastRemaining - totalUnits),
+    };
+  }, [families, demandMap, actuals2026Full, actuals2025Full]);
+
+  // Full-year monthly comparison: this year (actual → forecast) vs last year (actual).
+  const chartBase = useMemo(() => {
+    const prodSet = new Set<string>();
+    for (const f of families) for (const v of f.variations) prodSet.add(v.name);
+    const now = new Date();
+    const curMo = now.getMonth(); // 0-11
+    const remFrac = (Math.max(1, new Date(now.getFullYear(), curMo + 1, 0).getDate() - now.getDate() + 1)) / new Date(now.getFullYear(), curMo + 1, 0).getDate();
+    const ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return ABBR.map((label, m) => {
+      let actual = 0, forecast = 0, prev = 0;
+      for (const prod of prodSet) {
+        actual += actuals2026Full.get(prod)?.get(m)?.units ?? 0;               // 2026 actual (0 for future months)
+        prev += actuals2025Full.get(prod)?.get(m)?.units ?? 0;                 // 2025 actual
+        const fc = demandMap[prod]?.[currentYearStatic * 100 + (m + 1)] ?? 0;  // 2026 data forecast
+        if (m > curMo) forecast += fc;                                         // future month → full forecast
+        else if (m === curMo) forecast += fc * remFrac;                        // current → remaining (actual has MTD)
+        // past months: forecast stays 0 (actual covers them)
+      }
+      return { month: label, actual: Math.round(actual), forecast: Math.round(forecast), prev: Math.round(prev) };
+    });
+  }, [families, demandMap, actuals2026Full, actuals2025Full]);
+
+  // Projected stock runway: current total stock declining by each forward month's forecast
+  // demand (data path). OOS = first month it hits zero. Independent of the cumulative toggle.
+  const stockProj = useMemo(() => {
+    const currentStock = s.totalUnits;
+    const curMo = new Date().getMonth();
+    let stock = currentStock, oosIdx = -1;
+    const arr = chartBase.map((d, m) => {
+      if (m < curMo) return null;                       // no runway for past months
+      stock -= d.forecast;                              // consume this month's forecast demand
+      if (oosIdx === -1 && stock <= 0) oosIdx = m;      // first month stock is exhausted
+      return Math.max(0, Math.round(stock));
+    });
+    return { arr, oosIdx, currentStock };
+  }, [chartBase, s.totalUnits]);
+
+  const [cumulative, setCumulative] = useState(false);
+  const chart = useMemo(() => {
+    const base = cumulative
+      ? (() => { let ca = 0, cf = 0, cp = 0; return chartBase.map(d => { ca += d.actual; cf += d.forecast; cp += d.prev; return { month: d.month, actual: ca, forecast: cf, prev: cp }; }); })()
+      : chartBase;
+    return base.map((d, m) => ({ ...d, stockLeft: stockProj.arr[m], tyTotal: d.actual + d.forecast }));
+  }, [chartBase, cumulative, stockProj]);
+  const oosMonth = stockProj.oosIdx >= 0 ? chartBase[stockProj.oosIdx].month : null;
+
+  const u = (n: number) => fmt(Math.round(n));
+  const prevYr = currentYearStatic - 1;
+  // Compact label: hide zeros, abbreviate ≥1000 (e.g. 1.1k) so 12×3 labels stay legible
+  const kLabel = (v: number) => !v || v <= 0 ? '' : v >= 1000 ? (v / 1000).toFixed(1).replace('.0', '') + 'k' : String(Math.round(v));
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-faint mb-2">Inventory pipeline · units</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
+          <StatCard label="FBA" value={u(s.fba)} sub="At Amazon" />
+          <StatCard label="AWD" value={u(s.awd)} sub="Amazon warehouse" />
+          <StatCard label="In Transit" value={u(s.inTransit)}
+            sub={`${s.coverDays}${s.coverCapped ? 'd+' : 'd'} cover · FBA+AWD+In Transit`} />
+          <StatCard label="In Transit AWD" value={u(s.inTransitAwd)} sub="Inbound to AWD" />
+          <StatCard label="Manufacturer" value={u(s.mfrReady)} sub="MFR ready" />
+          <StatCard label="In Production" value={u(s.inProd)} sub="Being made" />
+          <StatCard label="Total units" value={u(s.totalUnits)} sub="All stages" tint="bg-emerald-500/[.09]" />
+        </div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-faint mb-2">Units sold</div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <StatCard label="Sold YTD" value={u(s.soldYtd)} sub={`${currentYearStatic} to date`} />
+          <StatCard label="Sold YTD · prev year" value={u(s.soldPrevYtd)} sub={`${prevYr} · same date range`} />
+          <StatCard label={`Sold · rest of ${prevYr}`} value={u(s.soldRestPrev)} sub={`${prevYr} · today → year-end`} />
+        </div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-faint mb-2">Forecast &amp; order</div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <StatCard label={`Forecast · rest of ${currentYearStatic}`} value={u(s.forecastThisYear)} sub={`Now → Dec '${String(currentYearStatic).slice(2)}`} />
+          <StatCard label={`Forecast · Jan+Feb '${String(PLAN_END_YEAR).slice(2)}`} value={u(s.forecastNextYear)} sub={`${PLAN_END_YEAR} carry-in`} />
+          <StatCard label="To order" value={u(s.toOrder)}
+            sub={s.toOrder > 0 ? 'Forecast − total stock · buy this' : 'Covered by stock on hand'}
+            tint={s.toOrder > 0 ? 'bg-red-500/[.22]' : 'bg-emerald-500/[.22]'}
+            valueColor={s.toOrder > 0 ? 'text-red-500' : 'text-emerald-500'} />
+        </div>
+      </div>
+      {/* Full-year monthly comparison — this year (actual + forecast) vs last year */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[10px] uppercase tracking-wider text-faint">
+            {currentYearStatic} actual + forecast vs {prevYr} · monthly units{cumulative ? ' · cumulative' : ''}
+            {oosMonth
+              ? <span className="text-red-400 font-semibold normal-case tracking-normal"> · OOS {oosMonth} '{String(currentYearStatic).slice(2)}</span>
+              : <span className="text-emerald-400 font-semibold normal-case tracking-normal"> · stock covers {currentYearStatic}</span>}
+          </div>
+          <div className="flex rounded-lg border border-border overflow-hidden text-[10px] font-semibold">
+            {([['Regular', false], ['Cumulative', true]] as const).map(([lbl, val]) => (
+              <button key={lbl} onClick={() => setCumulative(val)}
+                className={`px-2.5 py-1 transition-colors ${cumulative === val ? 'bg-blue-500/20 text-blue-300' : 'text-muted hover:text-heading'}`}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-xl border border-border bg-card p-3">
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={chart} margin={{ top: 16, right: 8, bottom: 0, left: -12 }} barGap={2}>
+              <CartesianGrid {...CHART_GRID} vertical={false} />
+              <XAxis dataKey="month" tick={CHART_AXIS_TICK} axisLine={false} tickLine={false} />
+              <YAxis tick={CHART_AXIS_TICK} axisLine={false} tickLine={false} width={44} tickFormatter={(v: number) => kLabel(v)} />
+              {/* Hidden right axis so the stock runway (large) doesn't squash the monthly bars */}
+              <YAxis yAxisId="stock" orientation="right" hide domain={[0, Math.max(1, stockProj.currentStock)]} />
+              <RTooltip contentStyle={CHART_TOOLTIP_STYLE(11)} formatter={(v: number, name: string) => [fmt(v), name]} />
+              <Legend wrapperStyle={{ fontSize: 10 }} iconType="circle" iconSize={8} />
+              {oosMonth && <ReferenceLine x={oosMonth} stroke="var(--color-negative)" strokeDasharray="4 3"
+                label={{ value: 'OOS', position: 'insideTop', fill: 'var(--color-negative)', fontSize: 9, fontWeight: 700 }} />}
+              <Bar dataKey="actual" stackId="ty" name={`${currentYearStatic} actual`} fill="var(--color-positive)" />
+              <Bar dataKey="forecast" stackId="ty" name={`${currentYearStatic} forecast`} fill="#60a5fa" radius={[3, 3, 0, 0]}>
+                {/* One combined 2026 total (actual + forecast) atop the stack */}
+                <LabelList dataKey="tyTotal" position="top" formatter={kLabel} style={{ fill: '#2563eb', fontSize: 11, fontWeight: 700 }} />
+              </Bar>
+              <Bar dataKey="prev" name={`${prevYr} actual`} fill="#94a3b8" radius={[3, 3, 0, 0]}>
+                <LabelList dataKey="prev" position="top" formatter={kLabel} style={{ fill: '#64748b', fontSize: 11, fontWeight: 700 }} />
+              </Bar>
+              <Line yAxisId="stock" type="monotone" dataKey="stockLeft" name="Stock left" stroke="#f59e0b"
+                strokeWidth={2} strokeDasharray="5 3" dot={{ r: 2, fill: '#f59e0b' }} connectNulls={false} isAnimationActive={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpend, simNetRoas, prQty, prLanded, actuals2026Full, actuals2025Full, forecastMap, adsEfficiency, metaMap, seasonMap, demandMap, ytdNp, growthOverrides, runRateMap, planned, onToggle, onWizard, baseCmp, baseCmpType, baseCmpProjs, baseCmpSnapshot, tgtCmp, tgtCmpType, tgtCmpProjs, tgtCmpSnapshot, useCompare }: {
   f: FamilyBaseline; oos: string | null; wks: number; isExp: boolean; projs: MonthProj[];
   simUnits: number; simNetProfit: number; simAdSpend: number; simNetRoas: number;
   prQty: number; prLanded: number;
@@ -2420,6 +2658,7 @@ function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpe
   demandMap: ForecastDemandMap;
   ytdNp: number;
   growthOverrides: Record<string, number>;
+  runRateMap: Map<string, { unitsPerDay: number; spendPerDay: number }>;
   planned: boolean;
   forecastMap: ForecastRoasMap;
   onToggle: () => void; onWizard: () => void;
@@ -2583,7 +2822,10 @@ function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpe
                 <span className="flex items-center gap-1.5 tabular-nums flex-shrink-0">
                   <span className={v.yoyGrowth >= 1 ? 'text-emerald-400' : 'text-red-400'}>{v.yoyGrowth.toFixed(2)}×</span>
                   <span className="text-faint">·</span>
-                  {v.dailyOrders.toFixed(1)}/d
+                  {/* Stock-corrected run rate over complete weeks (not the single latest, possibly-partial week). */}
+                  <Tip text={`Units/day — stock-corrected run rate over complete weeks (skips out-of-stock weeks). Not the single latest week, which can read 0 mid-week.`}>
+                    <span>{(runRateMap.get(v.name)?.unitsPerDay ?? 0).toFixed(1)}/d</span>
+                  </Tip>
                   <span className="text-faint">·</span>
                   <Tip text={`Demand growth for ${v.name} (set in the wizard)\n0% = forecast as-is\n+10% = 10% more demand`}>
                     <span className="inline-flex items-center gap-0.5">
@@ -2713,7 +2955,9 @@ function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpe
           {tab !== 'cmpUnits' && tab !== 'lastYear' && (
             <div className="text-[9px] text-faint mb-1 flex flex-wrap gap-x-3 gap-y-0.5">
               <span><span className="text-amber-400 font-semibold">Actual</span> = 2026 YTD</span>
-              <span><span className="text-cyan-400 font-semibold">Forecast</span> = your plan</span>
+              <span><span className="text-blue-400 font-semibold">Forecast</span> = data path (base model)</span>
+              <span><span className="text-amber-300 font-semibold">Plan</span> = forecast + your overrides (growth / spend / order)</span>
+              <span><span className="text-violet-400 font-semibold">Best path</span> = max-profit spend</span>
               <span><span className="text-purple-400 font-semibold">2025</span> = last year</span>
             </div>
           )}
@@ -2942,13 +3186,66 @@ function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpe
                     if (mi) varFcByMonth.set(mi.year === 2026 ? mi.month - 1 : mi.month + 11, { units: vd.demand, revenue: vd.revenue, cogs: vd.cogs, adSpend: vd.adSpend });
                   }
 
+                  // In-progress month: show the FULL month = sold-so-far (MTD actuals) + remaining
+                  // forecast, so it's comparable to actuals and other months. (The buy plan still
+                  // orders only the remaining days — this is display-only.)
+                  {
+                    const cur = varFcByMonth.get(currentMonthIdx);
+                    const a = currentMonthIdx <= 11 ? actuals2026Full.get(v.name)?.get(currentMonthIdx) : undefined;
+                    if (cur && a) varFcByMonth.set(currentMonthIdx, { units: cur.units + a.units, revenue: cur.revenue + a.revenue, cogs: cur.cogs + a.cogs, adSpend: cur.adSpend + a.adCost });
+                  }
+
+                  // ── FORECAST (data) row — pure V_FORECAST_DEMAND, NO plan overrides.
+                  // Same current-month treatment as the Plan row (MTD actual + remaining), so the
+                  // only difference vs Plan is the growth / spend / order overrides.
+                  const remDaysD = Math.max(1, MONTHS[0].days - new Date().getDate() + 1);
+                  const varDataByMonth: Map<number, { units: number; revenue: number; cogs: number; adSpend: number }> = new Map();
+                  for (let i = 0; i < 14; i++) {
+                    const yr = i <= 11 ? 2026 : 2027;
+                    const mo = i <= 11 ? i + 1 : i - 11;
+                    let units = demandMap[v.name]?.[yr * 100 + mo] ?? 0;
+                    if (i === currentMonthIdx) units *= remDaysD / MONTHS[0].days; // current month = remaining days
+                    if (units <= 0 && i !== currentMonthIdx) continue;
+                    const rev = units * v.price, cogs = units * v.cogs;
+                    const baseRoas = forecastMap[f.family]?.[mo]?.roas ?? 2.0;
+                    varDataByMonth.set(i, { units, revenue: rev, cogs, adSpend: baseRoas > 0 ? rev / baseRoas : 0 });
+                  }
+                  {
+                    const curD = varDataByMonth.get(currentMonthIdx);
+                    const aD = currentMonthIdx <= 11 ? actuals2026Full.get(v.name)?.get(currentMonthIdx) : undefined;
+                    if (curD && aD) varDataByMonth.set(currentMonthIdx, { units: curD.units + aD.units, revenue: curD.revenue + aD.revenue, cogs: curD.cogs + aD.cogs, adSpend: curD.adSpend + aD.adCost });
+                  }
+                  let varDataTotal = 0;
+                  rows.push(
+                    <tr key={v.name + '-forecast-data'} className="border-b border-blue-500/10 bg-blue-500/5">
+                      <td className="py-1 px-1.5 font-medium text-blue-300/80">
+                        <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ background: PROD_COLORS[v.name] ?? '#666' }} />{v.name}</span>
+                      </td>
+                      <td className="py-1 px-1.5 text-blue-400 font-medium">Forecast</td>
+                      {allMonthIdx.map(i => {
+                        const fd = varDataByMonth.get(i);
+                        const isPast = i < currentMonthIdx;
+                        if (tab === 'netRoas') {
+                          const roas = fd && fd.adSpend > 0 ? (fd.revenue - fd.cogs) / fd.adSpend : null;
+                          return <td key={i} className={`text-right py-1 px-1.5 tabular-nums font-medium ${colorVal(roas, isPast)}`}>{roas !== null ? fmtVal(roas) : '—'}</td>;
+                        }
+                        const val = fd ? getVal(fd, tab) : null;
+                        if (val !== null) varDataTotal += val;
+                        return <td key={i} className={`text-right py-1 px-1.5 tabular-nums font-medium ${colorVal(val, isPast)}`}>{val !== null ? fmtVal(val) : '—'}</td>;
+                      })}
+                      <td className="text-right py-1 px-1.5 tabular-nums font-medium text-blue-300/80">
+                        {tab === 'netRoas' ? '—' : tab === 'units' ? fmt(Math.round(varDataTotal)) : fK(varDataTotal)}
+                      </td>
+                    </tr>
+                  );
+
                   let varFcTotal = 0;
                   rows.push(
                     <tr key={v.name + '-forecast'} className="border-b border-amber-500/10 bg-amber-500/5">
                       <td className="py-1 px-1.5 font-medium text-amber-300/80">
                         <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ background: PROD_COLORS[v.name] ?? '#666' }} />{v.name}</span>
                       </td>
-                      <td className="py-1 px-1.5 text-amber-400 font-medium">Target Plan</td>
+                      <td className="py-1 px-1.5 text-amber-400 font-medium">Plan</td>
                       {allMonthIdx.map(i => {
                         if (tab === 'netRoas') {
                           const fd = varFcByMonth.get(i);
@@ -2968,6 +3265,44 @@ function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpe
                       })}
                       <td className="text-right py-1 px-1.5 tabular-nums font-medium text-amber-300/80">
                         {tab === 'netRoas' ? '—' : tab === 'units' ? fmt(Math.round(varFcTotal)) : fK(varFcTotal)}
+                      </td>
+                    </tr>
+                  );
+
+                  // BEST PATH row — the max-net-profit spend level (Ads Model "Target"), applied
+                  // per variation by scaling the current path by the family's best/current ratio
+                  // for each month. Shows "if we spent optimally, here's what each month looks like."
+                  const eff = adsEfficiency[f.family] || {};
+                  const varBestByMonth: Map<number, { units: number; revenue: number; cogs: number; adSpend: number }> = new Map();
+                  const bAsp = v.asp > 0 ? v.asp : f.asp;
+                  const bCpu = v.costPerUnit > 0 ? v.costPerUnit : f.costPerUnit;
+                  varFcByMonth.forEach((cur, i) => {
+                    const e = i <= 11 ? eff[i + 1] : undefined; // best-path data is 2026-forward; 2027 → no reallocation
+                    const uR = e && e.currentForecastUnits > 0 ? e.forecastUnits / e.currentForecastUnits : 1;
+                    const sR = e && e.currentSpend > 0 ? e.suggestedSpend / e.currentSpend : 1;
+                    const units = cur.units * uR;
+                    varBestByMonth.set(i, { units, revenue: units * bAsp, cogs: units * bCpu, adSpend: cur.adSpend * sR });
+                  });
+                  let varBestTotal = 0;
+                  rows.push(
+                    <tr key={v.name + '-best'} className="border-b border-violet-500/10 bg-violet-500/5">
+                      <td className="py-1 px-1.5 font-medium text-violet-300/80">
+                        <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ background: PROD_COLORS[v.name] ?? '#666' }} />{v.name}</span>
+                      </td>
+                      <td className="py-1 px-1.5 text-violet-400 font-medium">Best path</td>
+                      {allMonthIdx.map(i => {
+                        const fd = varBestByMonth.get(i);
+                        const isPast = i < currentMonthIdx;
+                        if (tab === 'netRoas') {
+                          const roas = fd && fd.adSpend > 0 ? (fd.revenue - fd.cogs) / fd.adSpend : null;
+                          return <td key={i} className={`text-right py-1 px-1.5 tabular-nums font-medium ${colorVal(roas, isPast)}`}>{roas !== null ? fmtVal(roas) : '—'}</td>;
+                        }
+                        const val = fd ? getVal(fd, tab) : null;
+                        if (val !== null) varBestTotal += val;
+                        return <td key={i} className={`text-right py-1 px-1.5 tabular-nums font-medium ${colorVal(val, isPast)}`}>{val !== null ? fmtVal(val) : '—'}</td>;
+                      })}
+                      <td className="text-right py-1 px-1.5 tabular-nums font-medium text-violet-300/80">
+                        {tab === 'netRoas' ? '—' : tab === 'units' ? fmt(Math.round(varBestTotal)) : fK(varBestTotal)}
                       </td>
                     </tr>
                   );
@@ -3056,7 +3391,9 @@ function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpe
                 let gRev = 0, gCogs = 0, gAd = 0, gSum = 0;
                 const monthVals: { val: number | null; isFuture: boolean; hasData: boolean }[] = [];
                 for (const i of allMonthIdx) {
-                  const isFuture = i >= currentMonth && i < 12;
+                  // Match the per-family Actual row: the current month is shown (partial MTD),
+                  // only strictly-later months are future. Keeps Total = sum of family rows.
+                  const isFuture = i < 12 ? i > currentMonth : true;
                   let sumRev = 0, sumCogs = 0, sumAd = 0, sum = 0;
                   let hasData = false;
                   for (const vn of allVariantNames) {
@@ -3092,7 +3429,50 @@ function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpe
                 );
               }
 
-              // Total Forecast
+              // Total Forecast (data) — pure V_FORECAST_DEMAND across variants, NO overrides.
+              if (tab !== 'lastYear') {
+                const cmIdx = MONTHS[0].year === 2026 ? MONTHS[0].month - 1 : MONTHS[0].month + 11;
+                const remD = Math.max(1, MONTHS[0].days - new Date().getDate() + 1);
+                let gRev = 0, gCogs = 0, gAd = 0, gSum = 0;
+                const monthVals: { val: number | null; isPast: boolean; hasData: boolean }[] = [];
+                for (const i of allMonthIdx) {
+                  const isPast = i < cmIdx;
+                  const yr = i <= 11 ? 2026 : 2027;
+                  const mo = i <= 11 ? i + 1 : i - 11;
+                  let units = 0, rev = 0, cogs = 0;
+                  for (const v of sortedVariants) {
+                    let u = demandMap[v.name]?.[yr * 100 + mo] ?? 0;
+                    if (i === cmIdx) u = u * (remD / MONTHS[0].days) + (actuals2026Full.get(v.name)?.get(i)?.units ?? 0);
+                    units += u; rev += u * v.price; cogs += u * v.cogs;
+                  }
+                  const baseRoas = forecastMap[f.family]?.[mo]?.roas ?? 2.0;
+                  const adSpend = baseRoas > 0 ? rev / baseRoas : 0;
+                  const hasData = units > 0;
+                  let val: number | null = null;
+                  if (hasData) {
+                    val = tab === 'units' ? units : tab === 'revenue' ? rev : tab === 'adSpend' ? adSpend
+                      : tab === 'netProfit' ? rev - cogs - adSpend : tab === 'netRoas' ? computeRoas(rev, cogs, adSpend) : units;
+                  }
+                  if (hasData && !isPast) { gRev += rev; gCogs += cogs; gAd += adSpend; if (tab !== 'netRoas' && val !== null) gSum += val; }
+                  monthVals.push({ val, isPast, hasData });
+                }
+                totalRows.push(
+                  <tr key="total-forecast-data" className="border-b border-blue-500/10 bg-blue-500/5 font-bold">
+                    <td className="py-1.5 px-1.5 text-blue-300">Total</td>
+                    <td className="py-1.5 px-1.5 text-blue-400">Forecast</td>
+                    {monthVals.map((mv, i) => (
+                      <td key={i} className={`text-right py-1.5 px-1.5 tabular-nums ${mv.isPast ? 'text-faint/30' : !mv.hasData ? 'text-faint/50' : colorVal(mv.val, false) || 'text-blue-300'}`}>
+                        {mv.val !== null ? fmtVal(mv.val) : '—'}
+                      </td>
+                    ))}
+                    <td className="text-right py-1.5 px-1.5 tabular-nums text-blue-300">
+                      {tab === 'netRoas' ? fmtVal(computeRoas(gRev, gCogs, gAd)) : fmtVal(gSum)}
+                    </td>
+                  </tr>
+                );
+              }
+
+              // Total Plan (sim = forecast + overrides)
               if (tab !== 'lastYear') {
                 let gRev = 0, gCogs = 0, gAd = 0, gSum = 0;
                 const monthVals: { val: number | null; isPast: boolean; hasData: boolean }[] = [];
@@ -3149,7 +3529,7 @@ function FamilyRow({ f, oos, wks, isExp, projs, simUnits, simNetProfit, simAdSpe
                 totalRows.push(
                   <tr key="total-forecast" className="border-b border-cyan-500/10 bg-cyan-500/5 font-bold">
                     <td className="py-1.5 px-1.5 text-cyan-300">Total</td>
-                    <td className="py-1.5 px-1.5 text-cyan-400">Forecast</td>
+                    <td className="py-1.5 px-1.5 text-cyan-400">Plan</td>
                     {monthVals.map((mv, i) => (
                       <td key={i} className={`text-right py-1.5 px-1.5 tabular-nums ${mv.isPast ? 'text-faint/30' : !mv.hasData ? 'text-faint/50' : colorVal(mv.val, false) || 'text-cyan-300'}`}>
                         {mv.val !== null ? fmtVal(mv.val) : '—'}

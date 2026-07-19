@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { cubeLoad } from '../hooks/useCubeData';
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell, LabelList, ReferenceLine, Legend } from 'recharts';
 import { SeasonalReferenceLines, getXLabels } from '../components/SeasonalReferenceLines';
 import type { DashboardData, FamilyName, TrendRow, Ads7dRow, SupplyChainRow } from '../types';
@@ -7,7 +8,7 @@ import { ChevronRight, ChevronDown } from 'lucide-react';
 import { Card } from '../components/Card';
 import { ChangesSummaryCell } from '../components/ChangesSummaryCell';
 import { Section } from '../components/Section';
-import { Badge, RoasBadge, ActionBadge } from '../components/Badge';
+import { Badge, RoasBadge } from '../components/Badge';
 import { Empty } from '../components/Empty';
 import { SortTh, useSort, MEASURE_TIPS } from '../components/Tooltip';
 import { DashboardSummary } from '../components/DashboardSummary';
@@ -21,6 +22,7 @@ import { MEASURE_META, type TrendMeasure } from '../constants';
 import { MeasureSelector, useMeasureSelection, type MeasureDef } from '../components/MeasureSelector';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { apiFetch } from '../utils/apiFetch';
+import { useViewMode } from '../hooks/useViewMode';
 
 const ALL_MEASURES: TrendMeasure[] = ['sales', 'ad_cost', 'cogs', 'net_profit', 'net_roas', 'orders', 'units', 'clicks', 'sessions', 'organic_pct', 'payment'];
 
@@ -48,7 +50,7 @@ const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'np_per_unit', label: 'NP/Unit', tip: 'Net Profit divided by total units sold — your north-star metric', group: 'PnL' },
   { id: 'net_roas', label: 'Net ROAS', tip: MEASURE_TIPS.net_roas, group: 'Ads' },
   { id: 'ads_roas', label: 'Ads ROAS', tip: 'Ads Sales / Ads Spend — gross advertising return', group: 'Ads', defaultVisible: false },
-  { id: 'ads_net_profit', label: 'Ads Net Profit', tip: 'Ads-attributed net profit: Ads Sales − COGS on ads units − Ads Spend (direct, excludes organic halo)', group: 'Ads', defaultVisible: false },
+  { id: 'ads_net_profit', label: 'Ads Net Profit', tip: 'Ads-attributed net profit (coacher source): ads GROSS_PROFIT − ads spend, most_advertised attribution. Matches This Week for the same dates (Home weeks are Sun–Sat vs coacher Mon–Sun).', group: 'Ads', defaultVisible: false },
   { id: 'tacos', label: 'TACoS', tip: 'Total Ads Cost of Sales — Ads Spend / Total Sales — measures ad dependency', group: 'Ads' },
   { id: 'pct_ads_spend', label: '% Total Ads Spend', tip: 'Percentage of total ads spend', group: 'Ads', defaultVisible: true },
   { id: 'pct_net_profit', label: '% Total Net Profit', tip: 'Percentage of total net profit', group: 'PnL', defaultVisible: true },
@@ -101,6 +103,7 @@ function getChangesStatus(d: { sd: number; cd: number; pd: number; roasDelta: nu
 }
 
 export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: string, f?: FamilyName) => void }) {
+  const { isAdmin } = useViewMode();
   const { filters, setFilter } = useFilters();
   const periodMode = filters.periodMode;
   const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
@@ -112,6 +115,20 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   const [approvedAwds, setApprovedAwds] = useState<Set<string>>(new Set());
   const [expandedFamily, setExpandedFamily] = useState<FamilyName | null>(null);
   const [familyCols, setFamilyCols] = useMeasureSelection('home_family', FAMILY_TABLE_COLUMNS);
+  // Coacher ads net per family x week (same source as This Week / Weekly Run) — so the
+  // family table's "Ads Net Profit" is byte-identical to the coacher, not a frontend re-roll.
+  const [coachWeekNet, setCoachWeekNet] = useState<{ parent: string; week: string; net: number }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    cubeLoad({ dimensions: ['CoachFamilyWeekNet.parentName', 'CoachFamilyWeekNet.weekStart', 'CoachFamilyWeekNet.adsNet'] })
+      .then(rows => { if (alive) setCoachWeekNet((rows as Record<string, unknown>[]).map(r => ({
+        parent: String(r['CoachFamilyWeekNet.parentName'] ?? ''),
+        week: String(r['CoachFamilyWeekNet.weekStart'] ?? ''),
+        net: Number(r['CoachFamilyWeekNet.adsNet'] ?? 0),
+      }))); })
+      .catch(() => { /* coacher net optional — falls back to frontend roll-up */ });
+    return () => { alive = false; };
+  }, []);
   const visibleFamilyCols = useMemo(() => FAMILY_TABLE_COLUMNS.filter(c => familyCols.has(c.id)), [familyCols]);
   const urgentActions = useMemo(() => (data.actions || []).filter(a => a.action === 'REDUCE_BID' || a.action === 'NEGATE_TERM').length, [data.actions]);
 
@@ -357,6 +374,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     const spendMap: Record<string, number> = {};
     const salesMap: Record<string, number> = {};
     const unitsMap: Record<string, number> = {};
+    const grossMap: Record<string, number> = {};   // ads GROSS_PROFIT (= Ads_sales − ads_units×per-unit cost), coacher source
     ads7d.forEach(r => {
       let name = r.product_short_name || campaignToProduct[r.campaign_id];
       const campName = String(r.campaign_name || campaignIdToName[r.campaign_id] || '');
@@ -373,8 +391,9 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       spendMap[key] = (spendMap[key] || 0) + (r.spend || 0);
       salesMap[key] = (salesMap[key] || 0) + (r.sales || 0);
       unitsMap[key] = (unitsMap[key] || 0) + (r.orders || 0);
+      grossMap[key] = (grossMap[key] || 0) + (r.gross_profit || 0);
     });
-    return { spend: spendMap, sales: salesMap, units: unitsMap };
+    return { spend: spendMap, sales: salesMap, units: unitsMap, gross: grossMap };
   }, [data.ads_7d_summary, data.ads_7d, data.products, data.campaign_search_terms, periodMode, expCampaignIds, filters.keyword, filters.seasonality, filters.product, pk]);
 
   const productToFamily = useMemo(() => {
@@ -1225,10 +1244,16 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     const familyAds = famRecord<number>(() => 0);
     const familyAdsSales = famRecord<number>(() => 0);
     const familyAdsUnits = famRecord<number>(() => 0);
+    const familyAdsGross = famRecord<number>(() => 0);   // ads GROSS_PROFIT per family (coacher source)
     for (const [key, val] of Object.entries(adsDataByProductAndPeriod.spend)) {
       const [name, period] = key.split('|');
       const fam = productToFamily[name] || ((FAM_KEYS as string[]).includes(name) ? name as FamilyName : null);
       if (fam && latest.some(p => periodKey(p, periodMode) === period)) familyAds[fam] += val;
+    }
+    for (const [key, val] of Object.entries(adsDataByProductAndPeriod.gross)) {
+      const [name, period] = key.split('|');
+      const fam = productToFamily[name] || ((FAM_KEYS as string[]).includes(name) ? name as FamilyName : null);
+      if (fam && latest.some(p => periodKey(p, periodMode) === period)) familyAdsGross[fam] += val;
     }
     for (const [key, val] of Object.entries(adsDataByProductAndPeriod.sales)) {
       const [name, period] = key.split('|');
@@ -1240,6 +1265,14 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const fam = productToFamily[name] || ((FAM_KEYS as string[]).includes(name) ? name as FamilyName : null);
       if (fam && latest.some(p => periodKey(p, periodMode) === period)) familyAdsUnits[fam] += val;
     }
+    // Coacher ads net per family for the displayed period — authoritative, identical to
+    // This Week / Weekly Run (V_FAMILY_WEEK_ADS_NET = V_WEEKLY_CELL_NET rolled to family×week).
+    const familyCoachNet: Record<string, number> = {};
+    for (const w of coachWeekNet) {
+      if (latest.some(p => periodKey(p, periodMode) === periodKey(w.week, periodMode))) {
+        familyCoachNet[w.parent] = (familyCoachNet[w.parent] ?? 0) + w.net;
+      }
+    }
 
     return families.map(fam => {
       const famRows = srcAll.filter(r => r.product_type === fam);
@@ -1250,7 +1283,12 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const familyName = famFromType(fam) as FamilyName | null;
       const curAdsSales = familyName ? familyAdsSales[familyName] : 0;
       const curAdsUnits = familyName ? familyAdsUnits[familyName] : 0;
-      const curWithAds = { ...cur, ads_sales: curAdsSales, ads_units: Math.round(curAdsUnits) };
+      // Ads net = ads GROSS_PROFIT − ads spend, both from the ads source (most_advertised) —
+      // the coacher's exact ads-net definition (matches This Week for the same date range).
+      const ads_net = (familyName != null && familyName in familyCoachNet)
+        ? familyCoachNet[familyName]
+        : (familyName ? familyAdsGross[familyName] - familyAds[familyName] : 0);
+      const curWithAds = { ...cur, ads_sales: curAdsSales, ads_units: Math.round(curAdsUnits), ads_net };
       const net_roas = curWithAds.ad_cost ? (curWithAds.sales - curWithAds.cogs) / curWithAds.ad_cost : 0;
       const organic_pct = cur.orders > 0
         ? (curRows.reduce((s, r) => s + ((r.organic_pct || 0) * (r.orders || 0)), 0) / cur.orders)
@@ -1323,7 +1361,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         next_30d_planned: supply?.next_30d ?? 0, next_31_60d_planned: supply?.next_31_60 ?? 0, next_61_90d_planned: supply?.next_61_90 ?? 0,
       };
     });
-  }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, periodMode, kpiWeek, kpiPrevWeek, filters.family, filters.product, filters.specificPeriod, filters.seasonality, pk, adsDataByProductAndPeriod, productToFamily, amazonFeeRate, storageCostLookup, supplyByFamily]);
+  }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, periodMode, kpiWeek, kpiPrevWeek, filters.family, filters.product, filters.specificPeriod, filters.seasonality, pk, adsDataByProductAndPeriod, productToFamily, amazonFeeRate, storageCostLookup, supplyByFamily, coachWeekNet]);
 
   const variationByFamily = useMemo(() => {
     const sqp = data.sqp_weekly || [];
@@ -1420,7 +1458,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, periodMode, kpiWeek, kpiPrevWeek, effectivePrevTotals, filters.family, filters.product, filters.seasonality, pk, adsSpendByFamilyAndPeriod]);
 
   const variationPnlByFamily = useMemo(() => {
-    if (!kpiWeek) return famRecord(() => []) as Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]>;
+    if (!kpiWeek) return famRecord(() => []) as Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number }[]>;
     type Row = { product_type: string; asin: string; product_short_name: string; week_start?: string; month_start?: string; sales: number; ad_cost: number; cogs: number; net_profit: number; orders: number; units?: number; clicks?: number; sessions?: number; organic_pct?: number };
     const src = periodMode === 'weeks' ? (data.weekly_trends_by_asin || []) : (data.monthly_trends_by_asin || []);
     const dateKey = periodMode === 'weeks' ? 'week_start' : 'month_start';
@@ -1429,7 +1467,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       if (periodMode === 'weeks') return v === kpiWeek;
       return periodKey(v, periodMode) === kpiWeek;
     };
-    const result: Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[]> = famRecord(() => []);
+    const result: Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number }[]> = famRecord(() => []);
     const tempMap: Record<FamilyName, Map<string, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; orders: number; units: number; clicks: number; sessions: number; organic_pct_weighted: number }>> = famRecord(() => new Map());
     src.forEach((r: Row) => {
       const fam = famFromType(r.product_type) as FamilyName | null;
@@ -1490,6 +1528,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           ad_orders: 0,
           ads_sales: adsDataByProductAndPeriod.sales[`${productName}|${periodKey_}`] || 0,
           ads_units: Math.round(adsDataByProductAndPeriod.units[`${productName}|${periodKey_}`] || 0),
+          ads_net: (adsDataByProductAndPeriod.gross[`${productName}|${periodKey_}`] || 0) - (adsDataByProductAndPeriod.spend[`${productName}|${periodKey_}`] || 0),
         });
       });
     });
@@ -1506,7 +1545,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         asin: sc.asin, product_short_name: sc.product_short_name || sc.asin,
         sales: 0, cogs: 0, ad_cost: 0, storage_cost: 0, net_profit: 0, net_roas: 0,
         orders: 0, units: 0, clicks: 0, sessions: 0, organic_pct: 0, organic_units: 0,
-        ad_orders: 0, ads_sales: 0, ads_units: 0,
+        ad_orders: 0, ads_sales: 0, ads_units: 0, ads_net: 0,
       });
     }
     (Object.keys(result) as FamilyName[]).forEach(fam => {
@@ -1516,9 +1555,9 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   }, [data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, data.supply_chain, asinToFamily, periodMode, kpiWeek, filters.family, filters.product, adsDataByProductAndPeriod, storageCostLookup]);
 
   const pnlByAsin = useMemo(() => {
-    const map = new Map<string, { payment: number; storage_cost: number; sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }>();
-    (Object.values(variationPnlByFamily) as { asin: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number }[][]).flat().forEach(v => {
-      if (v.asin) map.set(v.asin, { payment: 0, storage_cost: v.storage_cost, sales: v.sales, cogs: v.cogs, ad_cost: v.ad_cost, net_profit: v.net_profit, net_roas: v.net_roas, orders: v.orders, units: v.units ?? 0, clicks: v.clicks, sessions: v.sessions ?? 0, organic_pct: v.organic_pct, organic_units: v.organic_units ?? 0, ad_orders: v.ad_orders ?? 0, ads_sales: v.ads_sales ?? 0, ads_units: v.ads_units ?? 0 });
+    const map = new Map<string, { payment: number; storage_cost: number; sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number }>();
+    (Object.values(variationPnlByFamily) as { asin: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number }[][]).flat().forEach(v => {
+      if (v.asin) map.set(v.asin, { payment: 0, storage_cost: v.storage_cost, sales: v.sales, cogs: v.cogs, ad_cost: v.ad_cost, net_profit: v.net_profit, net_roas: v.net_roas, orders: v.orders, units: v.units ?? 0, clicks: v.clicks, sessions: v.sessions ?? 0, organic_pct: v.organic_pct, organic_units: v.organic_units ?? 0, ad_orders: v.ad_orders ?? 0, ads_sales: v.ads_sales ?? 0, ads_units: v.ads_units ?? 0, ads_net: v.ads_net ?? 0 });
     });
     return map;
   }, [variationPnlByFamily]);
@@ -1880,12 +1919,14 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
 
   return (
     <div className="animate-in">
-      <HomeBrief data={data} onNav={onNav} />
+      <HomeBrief data={data} onNav={onNav} simple={!isAdmin} />
       {periodIncomplete && (
         <div className="mb-3 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5 text-[11px] text-amber-400 font-mono">
           Perf data through {perfMaxDate} — current period not complete, scores/comparisons suppressed
         </div>
       )}
+      {/* Simple view hides the heavy analytics (trend chart, metric selector, per-family table) — admin only. */}
+      {isAdmin && (<>
       <div className="flex items-center justify-between gap-2 mb-1 px-1">
         <div className="font-mono text-[14px] font-semibold text-muted truncate">{headline || ''}</div>
         {/* Total | /day — divides additive measures by the days in each period (elapsed days
@@ -2069,17 +2110,18 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                           ad_orders,
                           ads_sales: pnl?.ads_sales ?? 0,
                           ads_units: pnl?.ads_units ?? 0,
+                          ads_net: pnl?.ads_net ?? 0,
                         };
                       });
                   // Per-day: scale variation flow fields by the current period's day-count (ratios untouched).
                   const vars = famDiv > 1
-                    ? varsRaw.map(v => ({ ...v, sales: v.sales / famDiv, cogs: v.cogs / famDiv, ad_cost: v.ad_cost / famDiv, net_profit: v.net_profit / famDiv, orders: v.orders / famDiv, units: v.units / famDiv, clicks: v.clicks / famDiv, sessions: v.sessions / famDiv, organic_units: v.organic_units / famDiv, ad_orders: v.ad_orders / famDiv, ads_sales: (v.ads_sales ?? 0) / famDiv, ads_units: (v.ads_units ?? 0) / famDiv }))
+                    ? varsRaw.map(v => ({ ...v, sales: v.sales / famDiv, cogs: v.cogs / famDiv, ad_cost: v.ad_cost / famDiv, net_profit: v.net_profit / famDiv, orders: v.orders / famDiv, units: v.units / famDiv, clicks: v.clicks / famDiv, sessions: v.sessions / famDiv, organic_units: v.organic_units / famDiv, ad_orders: v.ad_orders / famDiv, ads_sales: (v.ads_sales ?? 0) / famDiv, ads_units: (v.ads_units ?? 0) / famDiv, ads_net: (v.ads_net ?? 0) / famDiv }))
                     : varsRaw;
                   const famChanges = f ? changesByFamily.find(c => c.family === f) : null;
                   const varChanges = f ? (changesByVariation[f] || []) : [];
                   const positiveCount = varChanges.filter(v => v.pd > 0).length;
                   const totalCount = varChanges.length;
-                  const renderCell = (key: string, isVar: boolean, v?: { sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; product_short_name?: string; asin?: string }) => {
+                  const renderCell = (key: string, isVar: boolean, v?: { sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number; product_short_name?: string; asin?: string }) => {
                     if (key === 'family' && !isVar) return (
                       <td key={key} className="px-3 py-2 font-semibold">
                         <span className="inline-flex items-center gap-1">
@@ -2100,7 +2142,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                         pct_ads_spend: <td key="pct_ads_spend" className="px-3 py-2 text-right font-mono text-[11px] text-faint">{hasPnl && totalFamilyAdCost > 0 ? fP((v.ad_cost / totalFamilyAdCost) * 100) : '—'}</td>,
                         pct_net_profit: <td key="pct_net_profit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl && totalFamilyNetProfit !== 0 ? ((v.net_profit / totalFamilyNetProfit) * 100 < 0 ? 'text-red-400' : 'text-emerald-400') : 'text-faint'}`}>{hasPnl && totalFamilyNetProfit !== 0 ? fP((v.net_profit / totalFamilyNetProfit) * 100) : '—'}</td>,
                         ads_sales: <td key="ads_sales" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fM(v.ads_sales ?? 0) : '—'}</td>,
-                        ads_net_profit: (() => { const anp = (v.ads_sales ?? 0) - ((v.units ?? 0) > 0 ? v.cogs * ((v.ads_units ?? 0) / v.units) : 0) - v.ad_cost; return <td key="ads_net_profit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl ? (anp > 0 ? 'text-emerald-400' : anp < 0 ? 'text-red-400' : '') : 'text-faint'}`}>{hasPnl ? fM(anp) : '—'}</td>; })(),
+                        ads_net_profit: <td key="ads_net_profit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl ? ((v.ads_net ?? 0) > 0 ? 'text-emerald-400' : (v.ads_net ?? 0) < 0 ? 'text-red-400' : '') : 'text-faint'}`}>{hasPnl ? fM(v.ads_net ?? 0) : '—'}</td>,
                         ads_units: <td key="ads_units" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fmt(v.ads_units ?? 0) : '—'}</td>,
                         net_profit: <td key="net_profit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl ? (v.net_profit > 0 ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold') : 'text-faint'}`}>{hasPnl ? fM(v.net_profit) : '—'}</td>,
                         np_per_unit: <td key="np_per_unit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl && (v.units ?? 0) > 0 ? (v.net_profit / v.units > 0 ? 'text-emerald-400' : 'text-red-400') : 'text-faint'}`}>{hasPnl && (v.units ?? 0) > 0 ? fM(v.net_profit / v.units) : '—'}</td>,
@@ -2191,7 +2233,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                       sales_change: <td key="sales_change" className="px-3 py-2"><ChangesSummaryCell data={famChanges ?? { status: r.sales_change > 0 ? 'Sales up' : r.sales_change < 0 ? 'Sales down' : 'Flat vs previous period', sd: r.sales_change ?? 0, cd: 0, pd: 0, roasDelta: 0, orgDelta: 0 }} positiveCount={totalCount > 0 ? positiveCount : undefined} totalCount={totalCount > 0 ? totalCount : undefined} /></td>,
                       // Summable / derivable family-level aggregates (previously rendered as "—").
                       ads_sales: <td key="ads_sales" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fM(r.ads_sales ?? 0)}</td>,
-                      ads_net_profit: (() => { const anp = (r.ads_sales ?? 0) - ((r.units ?? 0) > 0 ? r.cogs * ((r.ads_units ?? 0) / r.units) : 0) - r.ad_cost; return <td key="ads_net_profit" className={`px-3 py-2 text-right font-mono text-[11px] font-medium ${anp > 0 ? 'text-emerald-400' : anp < 0 ? 'text-red-400' : 'text-faint'}`}>{fM(anp)}</td>; })(),
+                      ads_net_profit: <td key="ads_net_profit" className={`px-3 py-2 text-right font-mono text-[11px] font-medium ${(r.ads_net ?? 0) > 0 ? 'text-emerald-400' : (r.ads_net ?? 0) < 0 ? 'text-red-400' : 'text-faint'}`}>{fM(r.ads_net ?? 0)}</td>,
                       ads_units: <td key="ads_units" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fmt(r.ads_units ?? 0)}</td>,
                       payment: <td key="payment" className="px-3 py-2 text-right font-mono text-[11px] font-bold text-sky-400">{fM(r.payment ?? 0)}</td>,
                       storage_cost: <td key="storage_cost" className="px-3 py-2 text-right font-mono text-[11px] text-amber-400">{(r.storage_cost ?? 0) !== 0 ? fM(r.storage_cost) : '—'}</td>,
@@ -2236,6 +2278,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                     ad_cost: acc.ad_cost + r.ad_cost,
                     ads_sales: acc.ads_sales + (r.ads_sales || 0),
                     ads_units: acc.ads_units + (r.ads_units || 0),
+                    ads_net: acc.ads_net + (r.ads_net || 0),
                     net_profit: acc.net_profit + r.net_profit,
                     orders: acc.orders + r.orders,
                     units: acc.units + (r.units || 0),
@@ -2243,7 +2286,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                     sessions: acc.sessions + (r.sessions || 0),
                     organic_units: acc.organic_units + r.organic_units,
                     ad_orders: acc.ad_orders + r.ad_orders,
-                  }), { sales: 0, cogs: 0, ad_cost: 0, ads_sales: 0, ads_units: 0, net_profit: 0, orders: 0, units: 0, clicks: 0, sessions: 0, organic_units: 0, ad_orders: 0 });
+                  }), { sales: 0, cogs: 0, ad_cost: 0, ads_sales: 0, ads_units: 0, ads_net: 0, net_profit: 0, orders: 0, units: 0, clicks: 0, sessions: 0, organic_units: 0, ad_orders: 0 });
                   const net_roas = tot.ad_cost ? (tot.sales - tot.cogs) / tot.ad_cost : 0;
                   const organic_pct = tot.units > 0 ? (tot.organic_units / tot.units) * 100 : 0;
                   const totalCells: Record<string, React.ReactNode> = {
@@ -2254,7 +2297,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                     ad_cost: <td key="ad_cost" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fM(tot.ad_cost)}</td>,
                     pct_ads_spend: <td key="pct_ads_spend" className="px-3 py-2 text-right font-mono text-[11px] font-bold">100%</td>,
                     ads_sales: <td key="ads_sales" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fM(tot.ads_sales)}</td>,
-                    ads_net_profit: (() => { const anp = tot.ads_sales - (tot.units > 0 ? tot.cogs * (tot.ads_units / tot.units) : 0) - tot.ad_cost; return <td key="ads_net_profit" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${anp > 0 ? 'text-emerald-400' : anp < 0 ? 'text-red-400' : 'text-faint'}`}>{fM(anp)}</td>; })(),
+                    ads_net_profit: <td key="ads_net_profit" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${tot.ads_net > 0 ? 'text-emerald-400' : tot.ads_net < 0 ? 'text-red-400' : 'text-faint'}`}>{fM(tot.ads_net)}</td>,
                     ads_units: <td key="ads_units" className="px-3 py-2 text-right font-mono text-[11px] font-bold">{fmt(tot.ads_units)}</td>,
                     net_profit: <td key="net_profit" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${tot.net_profit > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fM(tot.net_profit)}</td>,
                     pct_net_profit: <td key="pct_net_profit" className="px-3 py-2 text-right font-mono text-[11px] font-bold">100%</td>,
@@ -2284,55 +2327,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           </div>
         ) : <Empty message="No trend data" />}
       </Section>
+      </>)}
 
-      {/* Actions Summary */}
-      {(() => {
-        const filteredActsCount = Object.values(grouped).reduce((s, arr) => s + arr.length, 0);
-        return (
-          <Section title="Actions To Do" count={filteredActsCount > 0 ? `${filteredActsCount} pending` : undefined} filterItems={formatSectionFilters(filters)}>
-            {!filteredActsCount ? <Empty icon="✓" message="No pending actions" /> : (
-              <div className="space-y-3.5">
-                {([
-                  { k: 'urgent', t: 'Urgent', v: 'red' },
-                  { k: 'growth', t: 'Growth', v: 'green' },
-                  { k: 'experiment', t: 'Experiments', v: 'blue' },
-                  { k: 'fix', t: 'Fix', v: 'amber' },
-                ] as const).map(({ k, t, v }) => {
-              const items = grouped[k];
-              if (!items.length) return null;
-              return (
-                <div key={k}>
-                  <Badge variant={v} className="mb-2">{t} ({items.length})</Badge>
-                  {items.slice(0, 3).map((a, i) => (
-                    <Card key={i} onClick={() => onNav('actions')} className="!p-3 mb-1">
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-[10px] text-faint">{i + 1}</span>
-                          <strong className="text-xs text-blue-400">"{a.search_term || '--'}"</strong>
-                          <span className="text-[11px] text-subtle">{a.product_short_name || ''}</span>
-                        </div>
-                        <ActionBadge action={a.action} />
-                      </div>
-                      {a.reason && <div className="text-[11px] text-subtle mt-1 pl-5 truncate">{a.reason}</div>}
-                      <div className="flex gap-3 mt-1 pl-5 text-[10px] font-mono text-faint">
-                        {(a.spend || a.ads_spend) ? <span>Spend: {fM(a.spend || a.ads_spend || 0)}</span> : null}
-                        {(a.orders || a.ads_orders) ? <span>Orders: {fOrd(a.orders || a.ads_orders || 0)}</span> : null}
-                        {a.net_roas ? <span>ROAS: {fR(a.net_roas)}</span> : null}
-                      </div>
-                    </Card>
-                  ))}
-                  {items.length > 3 && (
-                    <div className="text-[11px] text-faint pl-5 cursor-pointer hover:text-blue-400" onClick={() => onNav('actions')}>
-                      + {items.length - 3} more →
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Section>
-      );})()}
       {/* Upcoming */}
       <Section title="Near Future" filterItems={formatSectionFilters(filters)}>
         {!(data.upcoming || []).length ? <Empty message="No upcoming events" /> : (

@@ -7,6 +7,9 @@
  */
 import { useState, useEffect } from 'react';
 import type { DatasetName } from './data/datasetTypes';
+import type { AdsKpiProductRow, UnifiedKpiProductRow } from '../components/ads/adsKpiPanel.helpers';
+import type { CampaignRow, KeywordRow, SearchTermRow } from '../components/ads/adsCampaignTable.helpers';
+import { strategyLabel } from '../components/ads/adsCampaignTable.helpers';
 import type {
   Ads7dRow,
   SqpWeeklyRow,
@@ -42,6 +45,7 @@ import type {
   StrategicPrediction,
   BrandStrengthWeeklyRow,
   PhraseNegativeRow,
+  LaunchNegativeRow,
   ProductCreativeRow,
   HotSignalRow,
   StorageCostRow,
@@ -1186,6 +1190,187 @@ async function loadDailyTrendsByAsinFromCube(): Promise<DailyTrendByAsinRow[]> {
   })).filter(r => r.date);
 }
 
+/**
+ * Ads-page KPI panel — ad-attributed metrics per product for an arbitrary date range.
+ * Grouped by Product so the panel can filter to the current selection client-side and
+ * still compute the all-products %Spend denominator. Powers <AdsKpiPanel/>.
+ */
+export async function loadAdsKpiByProduct(start: string, end: string): Promise<AdsKpiProductRow[]> {
+  const rows = await cubeLoad({
+    measures: ['Ads.spend', 'Ads.sales', 'Ads.orders', 'Ads.clicks', 'Ads.impressions', 'Ads.grossProfit'],
+    dimensions: ['Product.parentName', 'Product.asin', 'Product.productShortName'],
+    timeDimensions: [{ dimension: 'Ads.date', dateRange: [start, end] }],
+    limit: 5000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    parentName: String(r['Product.parentName'] ?? ''),
+    asin: String(r['Product.asin'] ?? ''),
+    productShortName: String(r['Product.productShortName'] ?? ''),
+    spend: Number(r['Ads.spend'] ?? 0),
+    sales: Number(r['Ads.sales'] ?? 0),
+    orders: Number(r['Ads.orders'] ?? 0),
+    clicks: Number(r['Ads.clicks'] ?? 0),
+    impressions: Number(r['Ads.impressions'] ?? 0),
+    grossProfit: Number(r['Ads.grossProfit'] ?? 0),
+  }));
+}
+
+/**
+ * Ads-page KPI panel — total / unit-economics metrics per product for a date range.
+ * Source of truth for TACOS, profit/unit, ppc/unit and Best Child (total net profit).
+ */
+export async function loadUnifiedKpiByProduct(start: string, end: string): Promise<UnifiedKpiProductRow[]> {
+  const rows = await cubeLoad({
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.grossMargin', 'UnifiedPerformance.units'],
+    dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.asin', 'UnifiedPerformance.productShortName'],
+    timeDimensions: [{ dimension: 'UnifiedPerformance.date', dateRange: [start, end] }],
+    limit: 50000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    family: String(r['UnifiedPerformance.family'] ?? ''),
+    asin: String(r['UnifiedPerformance.asin'] ?? ''),
+    productShortName: String(r['UnifiedPerformance.productShortName'] ?? ''),
+    sales: Number(r['UnifiedPerformance.sales'] ?? 0),
+    adCost: Number(r['UnifiedPerformance.adCost'] ?? 0),
+    grossMargin: Number(r['UnifiedPerformance.grossMargin'] ?? 0),
+    units: Number(r['UnifiedPerformance.units'] ?? 0),
+  }));
+}
+
+// ─── Ads-page Strategy → Campaign → Keyword → Search-term drill-down ─────────
+const ADS_BASE_MEASURES = ['Ads.spend', 'Ads.orders', 'Ads.sales', 'Ads.clicks', 'Ads.impressions', 'Ads.grossProfit'];
+const adsBase = (r: Record<string, unknown>) => ({
+  spend: Number(r['Ads.spend'] ?? 0),
+  orders: Number(r['Ads.orders'] ?? 0),
+  sales: Number(r['Ads.sales'] ?? 0),
+  clicks: Number(r['Ads.clicks'] ?? 0),
+  impressions: Number(r['Ads.impressions'] ?? 0),
+  grossProfit: Number(r['Ads.grossProfit'] ?? 0),
+});
+
+/** Global PARENT/PRODUCT filters as Ads→Product join filters (Product.parentName = family, Product.asin = product). */
+function adsProductFilters(family?: string | null, product?: string | null): object[] {
+  const f: object[] = [];
+  if (family) f.push({ member: 'Product.parentName', operator: 'equals', values: [family] });
+  if (product) f.push({ member: 'Product.asin', operator: 'equals', values: [product] });
+  return f;
+}
+
+/** campaign_id → assigned strategy (experiment name). Unmapped campaigns are simply absent. */
+export async function loadCampaignStrategyMap(): Promise<Record<string, string>> {
+  const rows = await cubeLoad({
+    dimensions: ['ExperimentCampaign.campaignId', 'Experiment.experimentName'],
+    limit: 10000,
+  });
+  const map: Record<string, string> = {};
+  for (const r of rows as Record<string, unknown>[]) {
+    const cid = r['ExperimentCampaign.campaignId'] ? String(r['ExperimentCampaign.campaignId']) : '';
+    const name = r['Experiment.experimentName'] ? String(r['Experiment.experimentName']) : '';
+    if (cid && name) map[cid] = strategyLabel(name); // strategy only — drop the product prefix
+  }
+  return map;
+}
+
+/** Campaign-grain ad metrics for a date range, scoped to the global family/product filter.
+ * Aggregated to one row per campaign_id (name/type can vary across the window, which would
+ * otherwise split a campaign into rows). */
+export async function loadAdsCampaigns(start: string, end: string, family?: string | null, product?: string | null): Promise<CampaignRow[]> {
+  const rows = await cubeLoad({
+    measures: ADS_BASE_MEASURES,
+    dimensions: ['Ads.campaignId', 'Ads.campaignName', 'Ads.campaignType'],
+    filters: adsProductFilters(family, product),
+    timeDimensions: [{ dimension: 'Ads.date', dateRange: [start, end] }],
+    limit: 5000,
+  });
+  const byId = new Map<string, CampaignRow>();
+  for (const r of rows as Record<string, unknown>[]) {
+    const campaignId = String(r['Ads.campaignId'] ?? '');
+    if (!campaignId) continue;
+    const b = adsBase(r);
+    const existing = byId.get(campaignId);
+    if (existing) {
+      existing.spend += b.spend; existing.orders += b.orders; existing.sales += b.sales;
+      existing.clicks += b.clicks; existing.impressions += b.impressions; existing.grossProfit += b.grossProfit;
+    } else {
+      byId.set(campaignId, {
+        campaignId,
+        campaignName: String(r['Ads.campaignName'] ?? campaignId),
+        campaignType: r['Ads.campaignType'] ? String(r['Ads.campaignType']) : null,
+        ...b,
+      });
+    }
+  }
+  return [...byId.values()];
+}
+
+const normMatch = (s: string) => s.trim().toUpperCase();
+
+/**
+ * Keyword-grain ad metrics for one campaign + date range. The keyword grain is the
+ * `targeting` text (FACT_AMAZON_ADS keyword_id is a different id space than the bid source and is
+ * normalized to -1 for SB). The set bid is joined from KeywordBid on keyword text + match type.
+ */
+export async function loadAdsKeywords(campaignId: string, start: string, end: string, family?: string | null, product?: string | null): Promise<KeywordRow[]> {
+  const metrics = await cubeLoad({
+    measures: ADS_BASE_MEASURES,
+    dimensions: ['Ads.targeting', 'Ads.targetingType'],
+    filters: [{ member: 'Ads.campaignId', operator: 'equals', values: [campaignId] }, ...adsProductFilters(family, product)],
+    timeDimensions: [{ dimension: 'Ads.date', dateRange: [start, end] }],
+    limit: 5000,
+  });
+  const rows = (metrics as Record<string, unknown>[]).map(r => ({
+    targeting: r['Ads.targeting'] ? String(r['Ads.targeting']) : '',
+    matchType: r['Ads.targetingType'] ? normMatch(String(r['Ads.targetingType'])) : '',
+    bid: null as number | null,
+    ...adsBase(r),
+  })).filter(r => r.targeting);
+
+  // Join bids on keyword text + match type (best-effort; missing → null).
+  const texts = [...new Set(rows.map(r => r.targeting))];
+  if (texts.length) {
+    const bids = await cubeLoad({
+      dimensions: ['KeywordBid.keywordText', 'KeywordBid.matchType', 'KeywordBid.keywordBid'],
+      filters: [{ member: 'KeywordBid.keywordText', operator: 'equals', values: texts }],
+      limit: 10000,
+    });
+    const byTextMatch = new Map<string, number>();
+    const byText = new Map<string, number>();
+    for (const b of bids as Record<string, unknown>[]) {
+      const text = b['KeywordBid.keywordText'] ? String(b['KeywordBid.keywordText']) : '';
+      const match = b['KeywordBid.matchType'] ? normMatch(String(b['KeywordBid.matchType'])) : '';
+      const bid = b['KeywordBid.keywordBid'] != null ? Number(b['KeywordBid.keywordBid']) : null;
+      if (!text || bid == null) continue;
+      byTextMatch.set(`${text}|${match}`, bid);
+      if (!byText.has(text)) byText.set(text, bid);
+    }
+    for (const r of rows) {
+      r.bid = byTextMatch.get(`${r.targeting}|${r.matchType}`) ?? byText.get(r.targeting) ?? null;
+    }
+  }
+  return rows;
+}
+
+/** Search-term-grain ad metrics for one campaign + keyword (targeting text) + date range.
+ *  Bid is inherited from the parent keyword by the caller. */
+export async function loadAdsSearchTerms(campaignId: string, targeting: string, start: string, end: string, family?: string | null, product?: string | null): Promise<SearchTermRow[]> {
+  const rows = await cubeLoad({
+    measures: ADS_BASE_MEASURES,
+    dimensions: ['Ads.searchTerm'],
+    filters: [
+      { member: 'Ads.campaignId', operator: 'equals', values: [campaignId] },
+      { member: 'Ads.targeting', operator: 'equals', values: [targeting] },
+      ...adsProductFilters(family, product),
+    ],
+    timeDimensions: [{ dimension: 'Ads.date', dateRange: [start, end] }],
+    limit: 5000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    searchTerm: r['Ads.searchTerm'] ? String(r['Ads.searchTerm']) : '(no term)',
+    bid: null,
+    ...adsBase(r),
+  }));
+}
+
 /** MonthlyTrendsByAsin → monthly_trends_by_asin (via UnifiedPerformance) */
 async function loadMonthlyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
   const rows = await cubeLoad({
@@ -2210,6 +2395,28 @@ async function loadAdsFocusKeywordsFromCube(): Promise<import('../types').AdsFoc
     return [];
   }
 }
+// Curated launch negatives, keyed strategy × family. Defense strategies are already
+// filtered out by V_LAUNCH_NEGATIVES — don't re-filter here.
+async function loadLaunchNegativesFromCube(): Promise<LaunchNegativeRow[]> {
+  const rows = await cubeLoad({
+    dimensions: [
+      'LaunchNegatives.strategyId', 'LaunchNegatives.parentName', 'LaunchNegatives.phrase',
+      'LaunchNegatives.matchType', 'LaunchNegatives.bulksheetMatchType',
+      'LaunchNegatives.source', 'LaunchNegatives.originLevel',
+    ],
+    limit: 50000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    strategy_id: String(r['LaunchNegatives.strategyId'] ?? ''),
+    parent_name: String(r['LaunchNegatives.parentName'] ?? ''),
+    phrase: String(r['LaunchNegatives.phrase'] ?? ''),
+    match_type: String(r['LaunchNegatives.matchType'] ?? ''),
+    bulksheet_match_type: String(r['LaunchNegatives.bulksheetMatchType'] ?? ''),
+    source: String(r['LaunchNegatives.source'] ?? ''),
+    origin_level: String(r['LaunchNegatives.originLevel'] ?? ''),
+  }));
+}
+
 async function loadPhraseNegativesFromCube(): Promise<PhraseNegativeRow[]> {
   const rows = await cubeLoad({
     dimensions: [
@@ -2495,6 +2702,7 @@ export const DATASET_LOADERS: Record<DatasetName, () => Promise<unknown>> = {
   keyword_predictions: loadPredictionsFromCube,
   brand_strength_weekly: loadBrandStrengthFromCube,
   coach_phrase_negatives: loadPhraseNegativesFromCube,
+  launch_negatives: loadLaunchNegativesFromCube,
   hot_signals: loadHotSignalsFromCube,
   storage_costs: loadStorageCostsFromCube,
   supply_chain: loadSupplyChainFromCube,

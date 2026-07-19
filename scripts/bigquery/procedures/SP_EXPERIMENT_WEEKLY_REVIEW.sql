@@ -24,7 +24,7 @@ BEGIN
   DECLARE rec_count INT64 DEFAULT 0;
 
   -- Set week start to Monday of current week
-  SET current_week_start = DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY));
+  SET current_week_start = DATE_TRUNC(CURRENT_DATE(), WEEK(SUNDAY));
 
   -- Delete any existing recommendations for this week (idempotent)
   DELETE FROM `onyga-482313.OI.FACT_EXPERIMENT_RECOMMENDATIONS`
@@ -411,9 +411,9 @@ BEGIN
         -- Proven organic but no ads: use EXACT_BOOST
         WHEN opp.opportunity_type = 'PROVEN_ORGANIC_NO_ADS' THEN 'EXACT_BOOST'
         -- High volume organic only: use CATEGORY_CONQUEST
-        WHEN opp.opportunity_type = 'ORGANIC_ONLY_HIGH_VOLUME' THEN 'CATEGORY_CONQUEST'
+        WHEN opp.opportunity_type = 'ORGANIC_ONLY_HIGH_VOLUME' THEN 'COMPETITOR'
         -- Default: LOW_COST_DISCOVERY
-        ELSE 'LOW_COST_DISCOVERY'
+        ELSE 'INTENT'
       END as suggested_strategy_id,
       h.holiday_name as upcoming_holiday,
       h.holiday_date as holiday_date

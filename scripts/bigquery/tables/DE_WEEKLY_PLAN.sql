@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.DE_WEEKLY_PLAN` (
   season              STRING,         -- PEAK | OFF
   match_type          STRING,
   intent_class        STRING,
+  campaign_type       STRING,         -- SP | SB (fine plan grain; ALL only on legacy rows)
+  ad_format           STRING,         -- NA (SP/SB-no-creative) | BRAND_VIDEO | PRODUCT_COLLECTION | …
   purpose             STRING,         -- SCALE | MAP | PROBE | DEFEND | CUT | HOLD
   objective           STRING,
   success_metric      STRING,         -- NET_PROFIT | CLICKS | TOS_SHARE | SPEND_DOWN | HOLD

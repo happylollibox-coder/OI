@@ -9,7 +9,7 @@ WITH thr AS (
     COALESCE(MAX(IF(threshold_key='ESCALATION_TREND_WEEKS',  threshold_value, NULL)), 8)   AS trend_weeks
   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
 ),
-last_wk AS (SELECT DATE_TRUNC(DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY), WEEK(MONDAY)) AS wk),
+last_wk AS (SELECT DATE_TRUNC(DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY), WEEK(SUNDAY)) AS wk),
 prod_net AS (
   SELECT parent_name, week_start, SUM(net_profit) AS net
   FROM `onyga-482313.OI.V_WEEKLY_CELL_NET` GROUP BY 1, 2

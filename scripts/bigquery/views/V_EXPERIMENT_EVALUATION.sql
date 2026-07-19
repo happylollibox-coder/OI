@@ -120,7 +120,7 @@ graduated_per_exp AS (
   JOIN `onyga-482313.OI.DIM_EXPERIMENT` e ON ec.experiment_id = e.experiment_id
   JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa ON ec.campaign_id = fa.campaign_id
   LEFT JOIN exact_boost_terms ebt ON LOWER(fa.search_term) = ebt.search_term
-  WHERE e.strategy_id IN ('LOW_COST_DISCOVERY', 'HUNTER', 'CATEGORY_CONQUEST')
+  WHERE e.strategy_id IN ('INTENT', 'COMPETITOR')
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND fa.Ads_orders > 0
   GROUP BY ec.experiment_id
@@ -247,7 +247,7 @@ SELECT
 
   -- CHECK 4: Discovery converting
   CASE
-    WHEN e.strategy_id NOT IN ('LOW_COST_DISCOVERY', 'HUNTER', 'CATEGORY_CONQUEST') THEN 'N/A'
+    WHEN e.strategy_id NOT IN ('INTENT', 'COMPETITOR') THEN 'N/A'
     WHEN COALESCE(ep.converting_terms, 0) >= 10 THEN 'PASS'
     WHEN COALESCE(ep.converting_terms, 0) >= 3 THEN 'PARTIAL'
     ELSE 'FAIL'
@@ -255,7 +255,7 @@ SELECT
 
   -- CHECK 5: Terms graduated
   CASE
-    WHEN e.strategy_id NOT IN ('LOW_COST_DISCOVERY', 'HUNTER', 'CATEGORY_CONQUEST') THEN 'N/A'
+    WHEN e.strategy_id NOT IN ('INTENT', 'COMPETITOR') THEN 'N/A'
     WHEN COALESCE(gpe.terms_graduated, 0) >= 3 THEN 'PASS'
     WHEN COALESCE(gpe.terms_graduated, 0) > 0 THEN 'PARTIAL'
     ELSE 'FAIL'

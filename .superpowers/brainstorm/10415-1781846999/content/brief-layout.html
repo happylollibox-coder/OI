@@ -1,0 +1,91 @@
+<style>
+  .brief-wrap { max-width: 920px; margin: 0 auto; }
+  .opt { border:1px solid var(--border, #2a2f3a); border-radius:12px; padding:0; margin-bottom:22px; overflow:hidden; cursor:pointer; transition:all .15s; background:rgba(255,255,255,0.015); }
+  .opt:hover { border-color:#5b8def; }
+  .opt.selected { border-color:#5b8def; box-shadow:0 0 0 2px rgba(91,141,239,.35); }
+  .opt-hd { display:flex; align-items:center; gap:10px; padding:10px 16px; background:rgba(255,255,255,0.04); border-bottom:1px solid var(--border,#2a2f3a); }
+  .opt-hd .ltr { width:22px;height:22px;border-radius:6px;background:#5b8def;color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px; }
+  .opt-hd h3 { margin:0; font-size:14px; }
+  .opt-hd .tag { margin-left:auto;font-size:11px;color:#7d8aa0; }
+  .demo { padding:16px 18px; font-size:13px; line-height:1.5; }
+  .mono { font-family:'Fira Code',ui-monospace,monospace; }
+  .up { color:#34d399; } .dn { color:#f87171; } .mut{color:#8b97ad;} .faint{color:#5f6b80;}
+  .toggle { display:inline-flex; gap:2px; background:rgba(255,255,255,.04); border:1px solid #2a2f3a; border-radius:8px; padding:3px; margin-bottom:12px; }
+  .toggle span { font-size:11px; padding:4px 9px; border-radius:6px; color:#8b97ad; }
+  .toggle span.on { background:#5b8def; color:#fff; }
+  .headline { font-size:15px; line-height:1.55; margin:0 0 10px; }
+  .famline { display:flex; align-items:flex-start; gap:8px; padding:7px 0; border-top:1px solid rgba(255,255,255,.05); }
+  .chev { color:#5f6b80; font-size:11px; margin-top:2px; }
+  .famname { font-weight:600; min-width:78px; }
+  .chip { display:inline-block; font-size:10px; padding:1px 7px; border-radius:10px; margin-right:5px; }
+  .chip.risk{background:rgba(248,113,113,.15);color:#f87171;} .chip.warn{background:rgba(251,191,36,.15);color:#fbbf24;} .chip.good{background:rgba(52,211,153,.15);color:#34d399;}
+  .prod { padding:4px 0 4px 22px; font-size:12px; color:#a9b4c7; border-top:1px dashed rgba(255,255,255,.05); }
+  .twocol { display:grid; grid-template-columns:1fr 260px; gap:16px; }
+  .panel { border:1px solid #2a2f3a; border-radius:8px; padding:12px; }
+  .panel h4 { margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:#8b97ad; }
+  .att { display:flex; gap:7px; align-items:center; font-size:12px; padding:5px 0; }
+  .chips-row { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
+</style>
+
+<div class="brief-wrap">
+<h2>How should the Brief read &amp; expand?</h2>
+<p class="subtitle">Same data, three structures. All start collapsed (short &amp; simple) and expand to detail. Click the one that fits how you'd read it each morning. Sample numbers.</p>
+
+<!-- OPTION A -->
+<div class="opt" data-choice="a" onclick="toggleSelect(this)">
+  <div class="opt-hd"><span class="ltr">A</span><h3>Narrative brief — reads like a written note</h3><span class="tag">recommended</span></div>
+  <div class="demo">
+    <div class="toggle mono"><span>Today · Ads</span><span class="on">Yesterday</span><span>7 days</span><span>30 days</span></div>
+    <p class="headline">Yesterday vs the 7-day average: <b class="up">profit up 9%</b>, carried by <b>Lollibox</b>. Ads got a touch more efficient. <b class="dn">2 families are at out-of-stock risk.</b></p>
+    <div class="famline"><span class="chev">▸</span><span class="famname">Lollibox</span><span class="mut">Sales <b class="up">+14%</b>, profit <b class="up">+18%</b> — best day in 2 weeks. <span class="chip good">ROAS ↑</span></span></div>
+    <div class="famline"><span class="chev">▾</span><span class="famname">LolliME</span><span class="mut">Flat sales, but <b class="dn">margin slipping</b> as ad spend climbs. <span class="chip warn">TACoS ↑</span></span></div>
+    <div class="prod">• Mint 12-pk — spend <b class="dn">+22%</b>, sales flat → ROAS <b class="dn">−0.4x</b>. Worth a look.</div>
+    <div class="prod">• Mint single — steady, no change.</div>
+    <div class="famline"><span class="chev">▸</span><span class="famname">Bottle</span><span class="mut"><span class="chip risk">OOS 4d</span> Truth bottle stocks out in ~4 days at current pace.</span></div>
+    <p class="faint" style="margin:10px 0 0;font-size:11px;">Families with no real change are hidden. ▾ = expanded to products.</p>
+  </div>
+</div>
+
+<!-- OPTION B -->
+<div class="opt" data-choice="b" onclick="toggleSelect(this)">
+  <div class="opt-hd"><span class="ltr">B</span><h3>Scannable — headline + attention chips + family table</h3><span class="tag">most dashboard-like</span></div>
+  <div class="demo">
+    <div class="toggle mono"><span>Today · Ads</span><span class="on">Yesterday</span><span>7 days</span><span>30 days</span></div>
+    <p class="headline"><b class="up">Profit +9%</b> vs 7-day avg · Ads efficiency improving · <b>2 OOS risks</b></p>
+    <div class="chips-row">
+      <span class="chip risk">⚠ Bottle OOS ~4d</span>
+      <span class="chip risk">⚠ Fresh OOS ~6d</span>
+      <span class="chip warn">LolliME margin ↓</span>
+      <span class="chip good">Lollibox profit ↑18%</span>
+      <span class="chip warn">3 coach actions pending</span>
+    </div>
+    <div class="famline"><span class="chev">▸</span><span class="famname">Lollibox</span><span class="mono mut">Sales <b class="up">+14%</b> · NP <b class="up">+18%</b> · ROAS <b class="up">+0.6x</b></span></div>
+    <div class="famline"><span class="chev">▸</span><span class="famname">LolliME</span><span class="mono mut">Sales <b>+1%</b> · NP <b class="dn">−7%</b> · TACoS <b class="dn">+3pt</b></span></div>
+    <div class="famline"><span class="chev">▸</span><span class="famname">Bottle</span><span class="mono mut">Sales <b class="dn">−5%</b> · NP <b class="dn">−4%</b> · <span class="chip risk">OOS 4d</span></span></div>
+  </div>
+</div>
+
+<!-- OPTION C -->
+<div class="opt" data-choice="c" onclick="toggleSelect(this)">
+  <div class="opt-hd"><span class="ltr">C</span><h3>Split — narrative brief beside an action list</h3><span class="tag">read + act</span></div>
+  <div class="demo">
+    <div class="toggle mono"><span>Today · Ads</span><span class="on">Yesterday</span><span>7 days</span><span>30 days</span></div>
+    <div class="twocol">
+      <div class="panel">
+        <h4>The read</h4>
+        <p class="headline" style="font-size:13px;"><b class="up">Profit up 9%</b> vs 7-day avg, led by Lollibox. Ads slightly more efficient. LolliME margin softening.</p>
+        <div class="famline"><span class="chev">▸</span><span class="famname">Lollibox</span><span class="mut">+14% sales, profit best in 2 wks</span></div>
+        <div class="famline"><span class="chev">▸</span><span class="famname">LolliME</span><span class="mut">flat sales, margin slipping</span></div>
+      </div>
+      <div class="panel">
+        <h4>Needs attention</h4>
+        <div class="att"><span class="chip risk">OOS</span> Bottle ~4d</div>
+        <div class="att"><span class="chip risk">OOS</span> Fresh ~6d</div>
+        <div class="att"><span class="chip warn">Act</span> 3 coach actions</div>
+        <div class="att"><span class="chip warn">Watch</span> LolliME TACoS ↑</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>

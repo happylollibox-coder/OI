@@ -9,7 +9,7 @@ export type DatasetName =
   | 'experiment_weekly' | 'experiment_campaigns' | 'campaign_search_terms' | 'campaign_search_terms_weekly'
   | 'experiment_templates' | 'holidays' | 'coach_decisions' | 'actions'
   | 'coach_campaigns' | 'experiment_evaluations' | 'keyword_predictions'
-  | 'brand_strength_weekly' | 'coach_phrase_negatives' | 'hot_signals' | 'storage_costs'
+  | 'brand_strength_weekly' | 'coach_phrase_negatives' | 'launch_negatives' | 'hot_signals' | 'storage_costs'
   | 'supply_chain' | 'supply_pos' | 'supply_payments' | 'supply_shipments'
   | 'peak_relevance' | 'peak_keyword_recs' | 'peak_stuck_campaigns' | 'family_occasions' | 'coach_strategy' | 'ads_focus_terms'
   | 'ads_focus_keywords' | 'campaign_launch_perf' | 'campaign_launch_monthly'

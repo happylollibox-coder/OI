@@ -110,3 +110,23 @@ _Generated from 6,602 regime-segments across 4 parents; 133/192 cells statistica
 - `.tmp/cpc_strategy/charts/npd_by_strategy_Fresh.png`
 - `.tmp/cpc_strategy/charts/npd_by_strategy_LolliME.png`
 - `.tmp/cpc_strategy/charts/npd_by_strategy_Lollibox.png`
+
+---
+
+## Addendum 2026-07-04 — band grain split by campaign_type + ad_format
+
+**Finding.** The pooled CPC band hid a systematic bias: **Sponsored Brands VIDEO ads convert profitably at a higher CPC than PRODUCT_COLLECTION**, across every family. Because collection carries far more click volume, the pooled band was dragged toward collection and **under-bid video**.
+
+| family | BRAND_VIDEO avg target | PRODUCT_COLLECTION avg target |
+|---|---:|---:|
+| Fresh | $0.55 | $0.35 |
+| LolliME | $0.57 | $0.43 |
+| Lollibox | $0.75 | $0.45 |
+
+Focus cell — **LolliME · OFF · BROAD · generic** (net profit by $0.10 CPC bin): PRODUCT_COLLECTION peaks at **$0.35** (+$266), BRAND_VIDEO peaks at **$0.45** (+$107) and stays profitable to $0.75. Sponsored Products BROAD·generic is negligible for LolliME (11 kw-days, 0 orders). STORE_SPOTLIGHT is absent from Happy Lolli's data — only BRAND_VIDEO + PRODUCT_COLLECTION carry volume.
+
+**Change.** `DE_PRODUCT_STRATEGY_PROFILE` grain extended from `parent × season × match × intent` to **`… × campaign_type × ad_format`**, emitted as two layers:
+- **Coarse** rows tagged `campaign_type = ad_format = 'ALL'` — the pooled band, unchanged. Guaranteed fallback; the unit `borrow.py` + `V_STRATEGY_GAPS` operate on.
+- **Fine** rows split by SP/SB and SB creative type (`BRAND_VIDEO` / `PRODUCT_COLLECTION` / `NA`).
+
+`V_ADS_COACH_DATA` joins both (`psp` coarse pinned to `ALL/ALL` to avoid fan-out; `pspf` fine on all six keys via `V_SRC_AmazonAds_sb_ad_report` → `ad_group_id` → `creative_type`) and uses the **fine band only where its own evidence is CONCLUSIVE**, else the coarse fallback (`profile_ad_format` records which). No keyword loses its band; ~99% resolve to a fine band, ~310 fall back to coarse.

@@ -64,6 +64,12 @@ export interface FamilyView {
   approxNote?: string;
   read: string;
   kpis: MetricDelta[];
+  /** Net profit for the family-selector card (primary measure). */
+  netProfit: MetricDelta;
+  /** Units sold for the family-selector card (secondary measure). */
+  unitsSold: MetricDelta;
+  /** Conversion rate for the family-selector card (unit-session %, or ads CVR in Today mode). */
+  convRate: MetricDelta;
   products: ProductMove[];
   attention: AttentionItem[];
 }
@@ -79,6 +85,12 @@ export interface BriefModel {
   todayEnabled: boolean;
   todayDisabledReason?: string;
   overview: OverviewView;
+  /** Aggregate "what moved" across every family — shown on the All tab. */
+  allKpis: MetricDelta[];
+  /** Whole-book net profit + units for the All card in the family selector. */
+  allNetProfit: MetricDelta;
+  allUnitsSold: MetricDelta;
+  allConvRate: MetricDelta;
   families: FamilyView[];
 }
 
@@ -260,6 +272,12 @@ const adsCpc = (a: Agg) => a.clicks ? a.ads_spend / a.clicks : 0;
 const organicPct = (a: Agg) =>
   a.units ? Math.max(0, (a.organic_units / a.units) * 100)
   : a.orders ? Math.max(0, ((a.orders - a.ads_orders) / a.orders) * 100) : 0;
+// Conversion rate for the family cards. Full-P&L modes use the Amazon unit-session
+// rate (ordered units / sessions); ads-only (Today) has no sessions yet, so it falls
+// back to ads conversion (ad orders / clicks). Expressed as a percentage.
+const convRate = (a: Agg, adsOnly: boolean) =>
+  adsOnly ? (a.clicks ? (a.ads_orders / a.clicks) * 100 : 0)
+          : (a.sessions ? (a.units / a.sessions) * 100 : 0);
 
 /* ── Per-family KPI deltas ───────────────────────────────────────────────── */
 
@@ -281,6 +299,19 @@ function familyKpis(cur: Agg, base: Agg, scale: number, adsOnly: boolean, th: Br
     classifyDelta('ad_cost', 'Ad Spend', cur.ad_cost, base.ad_cost * scale, 'money', th),
     classifyDelta('cpc', 'CPC', cpc(cur), cpc(base), 'money', th),
   ];
+}
+
+// Net profit + units for the family-selector cards. In ads-only (Today) mode there is
+// no P&L yet, so units falls back to ad orders and net profit stays at its ads value (0).
+function cardStats(cur: Agg, base: Agg, scale: number, adsOnly: boolean, th: BriefThresholds): { netProfit: MetricDelta; unitsSold: MetricDelta; convRate: MetricDelta } {
+  const unitsCur = adsOnly ? cur.ads_orders : cur.units;
+  const unitsBase = adsOnly ? base.ads_orders : base.units;
+  return {
+    netProfit: classifyDelta('net_profit', 'Net Profit', cur.net_profit, base.net_profit * scale, 'money', th),
+    unitsSold: classifyDelta('units', 'Units', unitsCur, unitsBase * scale, 'int', th),
+    // Ratio — compare current vs base directly (no window scaling), like Net ROAS / Organic %.
+    convRate: classifyDelta('conv_rate', 'Conv Rate', convRate(cur, adsOnly), convRate(base, adsOnly), 'pct', th),
+  };
 }
 
 /* ── OOS risk ────────────────────────────────────────────────────────────── */
@@ -528,6 +559,7 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
     }
 
     const kpis = familyKpis(cur, base, win.baseScale, win.adsOnly, th);
+    const cards = cardStats(cur, base, win.baseScale, win.adsOnly, th);
     const oos = familyOosRisks(data.supply_chain || [], data.asin_oos_days || [], asinToFamily, family, th);
     const coach = coachActionsForFamily(data.actions || [], family);
     const products_ = win.adsOnly
@@ -543,6 +575,9 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
       approxNote: win.peak ? approxNote : undefined,
       read: familyRead(kpis, oos, win.adsOnly),
       kpis,
+      netProfit: cards.netProfit,
+      unitsSold: cards.unitsSold,
+      convRate: cards.convRate,
       products: products_,
       attention: familyAttention(kpis, oos, coach.count, coach.urgent),
     };
@@ -552,12 +587,30 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
   const order: Record<Health, number> = { risk: 0, warn: 1, good: 2, flat: 3 };
   views.sort((a, b) => (Number(a.steady) - Number(b.steady)) || (order[a.health] - order[b.health]) || a.family.localeCompare(b.family));
 
+  // Aggregate "All families" KPIs (whole book, every family summed) for the All tab.
+  const allAgg = (cs: string, ce: string): Agg => {
+    if (w.adsOnly) { const a = emptyAgg(); addAds(a, ads, productToFamily, null, cs, ce); return a; }
+    return sumByAsin(byAsin, null, cs, ce);
+  };
+  const allCur = allAgg(w.curStart, w.curEnd);
+  let allBase = allAgg(w.baseStart, w.baseEnd);
+  if (w.peak && allBase.rows === 0 && allCur.rows > 0) {
+    const win2 = resolveWindow(mode, perfMax, adsMax, null, now);
+    allBase = sumByAsin(byAsin, null, win2.baseStart, win2.baseEnd);
+  }
+  const allKpis = familyKpis(allCur, allBase, w.baseScale, w.adsOnly, th);
+  const allCards = cardStats(allCur, allBase, w.baseScale, w.adsOnly, th);
+
   return {
     dateMode: mode,
     periodLabel: w.label,
     todayEnabled,
     todayDisabledReason: todayEnabled ? undefined : 'No ads-only day yet — ads data is not ahead of the orders date',
     overview: buildOverview(views, w.adsOnly),
+    allKpis,
+    allNetProfit: allCards.netProfit,
+    allUnitsSold: allCards.unitsSold,
+    allConvRate: allCards.convRate,
     families: views,
   };
 }
@@ -593,11 +646,15 @@ function buildOverview(views: FamilyView[], adsOnly: boolean): OverviewView {
 
 /* ── Display formatters (re-exported for the component) ──────────────────── */
 
-export function formatMetric(m: MetricDelta): string {
-  if (m.kind === 'money') return fM(m.cur);
-  if (m.kind === 'ratio') return fR(m.cur);
-  if (m.kind === 'pct') return fP(m.cur);
-  return Math.round(m.cur).toLocaleString();
+// Additive metrics (window sums) can be shown as a per-day average by passing a
+// divisor = number of days. Rates/averages (CPC, ROAS, Organic %) never divide.
+export function formatMetric(m: MetricDelta, perDayDivisor = 1): string {
+  const additive = (m.kind === 'money' || m.kind === 'int') && m.key !== 'cpc';
+  const v = additive ? m.cur / perDayDivisor : m.cur;
+  if (m.kind === 'money') return fM(v);
+  if (m.kind === 'ratio') return fR(v);
+  if (m.kind === 'pct') return fP(v);
+  return Math.round(v).toLocaleString();
 }
 
 export function formatDelta(m: MetricDelta): string {

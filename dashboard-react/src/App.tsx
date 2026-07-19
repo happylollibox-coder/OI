@@ -39,7 +39,8 @@ const AlertsPage = lazy(() => import('./pages/AlertsPage').then(m => ({ default:
 const ProductsPage = lazy(() => import('./pages/ProductsPage').then(m => ({ default: m.ProductsPage })));
 const KpiPage = lazy(() => import('./pages/KpiPage').then(m => ({ default: m.KpiPage })));
 const ResearchPage = lazy(() => import('./pages/ResearchPage').then(m => ({ default: m.ResearchPage })));
-const ThisWeekPage = lazy(() => import('./pages/ThisWeekPage').then(m => ({ default: m.ThisWeekPage })));
+const CoveragePage = lazy(() => import('./pages/CoveragePage').then(m => ({ default: m.CoveragePage })));
+const WeeklyRunPage = lazy(() => import('./pages/WeeklyRunPage').then(m => ({ default: m.WeeklyRunPage })));
 
 export default function App() {
   return (
@@ -152,7 +153,7 @@ function AppInner() {
   const renderPage = () => {
     switch (visiblePage) {
       case 'home': return <HomePage data={data} onNav={navigate} />;
-      case 'thisweek': return <ThisWeekPage />;
+      case 'weeklyrun': return <WeeklyRunPage onNav={navigate} />;
       case 'actions': return <ActionsPage data={data} matchAction={gt.matchAction} />;
       case 'peak': return <PeakPage data={data} />;
       case 'family': return filters.family ? <FamilyPage data={data} family={filters.family} onNavExperiment={(eid: string) => navigate('experiment', undefined, eid)} /> : <HomePage data={data} onNav={navigate} />;
@@ -173,6 +174,7 @@ function AppInner() {
       case 'products': return <ProductsPage data={data} />;
       case 'kpi': return <KpiPage data={data} />;
       case 'research': return <ResearchPage />;
+      case 'coverage': return <CoveragePage />;
       default: return <HomePage data={data} onNav={navigate} />;
     }
   };

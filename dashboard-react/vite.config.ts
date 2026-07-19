@@ -41,7 +41,8 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    // Honor a harness/CLI-assigned PORT (e.g. multiple dev servers); default 3000 (matches .claude/launch.json).
+    port: process.env.PORT ? Number(process.env.PORT) : 3000,
     strictPort: true,
     proxy: {
       // Local Flask data-entry app (launch.json pins it to 5050; macOS AirPlay owns 5000).
