@@ -70,7 +70,26 @@ SELECT
   mr.num_days,
   ROUND(mr.daily_rate, 2) AS daily_rate,
   ROUND(aa.avg_daily_rate, 2) AS avg_daily_rate,
-  -- Seasonality index: this month vs annual average
-  ROUND(SAFE_DIVIDE(mr.daily_rate, NULLIF(aa.avg_daily_rate, 0)), 3) AS seasonality_index
+  -- Seasonality index: this month vs annual average. Thin months (<15 qualifying
+  -- days after the 60-day launch exclusion) are unreliable — a month sampled from
+  -- only a few days produces noise (e.g. LolliME Aug = 2 days -> 0.251). Fall back
+  -- to the product's mean index over its trustworthy (>=15-day) months.
+  ROUND(
+    CASE
+      WHEN mr.num_days >= 15
+        THEN SAFE_DIVIDE(mr.daily_rate, NULLIF(aa.avg_daily_rate, 0))
+      ELSE COALESCE(gm.good_month_mean_index, 1.0)
+    END, 3) AS seasonality_index
 FROM monthly_rates mr
-JOIN annual_avg aa ON mr.product = aa.product;
+JOIN annual_avg aa ON mr.product = aa.product
+LEFT JOIN (
+  SELECT product,
+    AVG(SAFE_DIVIDE(daily_rate, NULLIF(prod_avg, 0))) AS good_month_mean_index
+  FROM (
+    SELECT m.product, m.daily_rate,
+      (SELECT avg_daily_rate FROM annual_avg a WHERE a.product = m.product) AS prod_avg
+    FROM monthly_rates m
+    WHERE m.num_days >= 15
+  )
+  GROUP BY product
+) gm ON gm.product = mr.product;
