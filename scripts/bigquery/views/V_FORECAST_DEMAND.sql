@@ -139,15 +139,40 @@ yoy_lift AS (
                    AND DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY), units, 0)),
       NULLIF(SUM(IF(date BETWEEN DATE_SUB(DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR), INTERVAL 56 DAY)
                          AND DATE_SUB(DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR), INTERVAL 1 DAY), units, 0)), 0)
-    ) AS raw_lift
+    ) AS raw_lift,
+    -- Last-year 56-day denominator, to detect a near-zero (launch/first-year) baseline.
+    SUM(IF(date BETWEEN DATE_SUB(DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR), INTERVAL 56 DAY)
+                  AND DATE_SUB(DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR), INTERVAL 1 DAY), units, 0)) AS ly_56d_units
+  FROM `onyga-482313.OI.T_UNIFIED_DAILY`
+  WHERE family IS NOT NULL
+  GROUP BY 1
+),
+-- A6b: Recent trailing run-rate (28 complete days, ending 3 days back to clear the 1-2d data lag).
+-- Anchor for first-year families whose YoY denominator is a launch-period near-zero.
+run_rate AS (
+  SELECT family,
+    SAFE_DIVIDE(
+      SUM(IF(date BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY), units, 0)),
+      28.0
+    ) AS daily_rate
   FROM `onyga-482313.OI.T_UNIFIED_DAILY`
   WHERE family IS NOT NULL
   GROUP BY 1
 ),
 family_lift AS (
   SELECT f.family,
-    -- Direct clamped value (no sqrt dampening — trust 8-week actuals)
-    ROUND(GREATEST(0.70, LEAST(2.00, COALESCE(yl.raw_lift, 1.0))), 3) AS sqrt_lift,
+    CASE
+      -- FIRST-YEAR / launch-baseline guard: when the YoY ratio blows up (raw_lift >= 3) the last-year
+      -- denominator was a launch-period near-zero, so the clamped 2.0x lift over-projects. Anchor to the
+      -- recent run-rate instead: lift = run_rate / historical offseason base — this re-levels the whole
+      -- curve so off-season ≈ run_rate and peaks scale proportionally, keeping last year's seasonal shape.
+      WHEN COALESCE(yl.raw_lift, 0) >= 3.0
+           AND COALESCE(rr.daily_rate, 0) > 0
+           AND COALESCE(osg.daily_rate, 0) > 0
+        THEN ROUND(LEAST(3.0, GREATEST(0.30, rr.daily_rate / osg.daily_rate)), 3)
+      -- Direct clamped value (no sqrt dampening — trust 8-week actuals)
+      ELSE ROUND(GREATEST(0.70, LEAST(2.00, COALESCE(yl.raw_lift, 1.0))), 3)
+    END AS sqrt_lift,
     ROUND(COALESCE(yl.raw_lift, 1.0), 3) AS raw_lift
   FROM (
     SELECT DISTINCT fm.family
@@ -156,6 +181,8 @@ family_lift AS (
     WHERE dp.is_active = true AND dp.oi_is_active = true AND fm.family IS NOT NULL AND fm.family NOT IN ('BFF 1', 'Popsicle')
   ) f
   LEFT JOIN yoy_lift yl ON f.family = yl.family
+  LEFT JOIN run_rate rr ON f.family = rr.family
+  LEFT JOIN offseason_global osg ON f.family = osg.family
 ),
 
 -- A7: Tag future dates with holiday + days_before
@@ -299,66 +326,90 @@ product_phases AS (
   LEFT JOIN product_history ph ON ap.family = ph.family AND ap.product = ph.product
 ),
 
--- B3: Classify products as existing vs new
--- Exclude products that are actually assigned to a model AND are in Phase 1/2
-product_classification AS (
-  SELECT
-    pp.family,
-    pp.product,
-    pp.history_days,
-    pp.total_units,
-    pp.first_sale_date AS first_seen,
-    pp.estimated_start_selling_date,
-    CASE
-      WHEN pp.total_units = 0 THEN TRUE
-      ELSE FALSE
-    END AS is_new_product,
-    CASE
-      WHEN pp.total_units = 0 THEN TRUE
-      WHEN pp.history_days < 60 THEN TRUE
-      ELSE FALSE
-    END AS is_draft
-  FROM product_phases pp
-  WHERE pp.forecast_phase = 'PHASE_3' OR pp.model_product IS NULL
+-- B2b: Families that have a real historical envelope (family_forecast > 0).
+-- Only these carve their forecast among variations by share; envelope-less
+-- (brand-new) families fall through to the model-based cold start (Part D).
+family_has_envelope AS (
+  SELECT family FROM family_forecast GROUP BY family HAVING MAX(family_forecast_units) > 0
 ),
 
-
--- B4: Compute base shares for existing products (historical share within family)
-existing_shares AS (
-  SELECT
-    family, product, total_units,
-    SAFE_DIVIDE(total_units, SUM(total_units) OVER (PARTITION BY family)) AS base_share
-  FROM product_classification
-  WHERE NOT is_new_product AND total_units > 0
+-- B3: Trailing daily rates per product (the "recent rate" signal)
+--   < 90 days old (or not yet steady) → trailing 7d (last week, responsive)
+--   ≥ 90 days AND steady              → trailing 28d (locked "determined daily units")
+trailing_7d AS (
+  SELECT product_short_name AS product, SAFE_DIVIDE(SUM(units), 7.0) AS rate7
+  FROM `onyga-482313.OI.T_UNIFIED_DAILY`
+  WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+  GROUP BY 1
 ),
-
--- B5: Count new products per family for cannibalization
-new_product_counts AS (
-  SELECT family, COUNT(*) AS num_new
-  FROM product_classification
-  WHERE is_new_product
+trailing_28d AS (
+  SELECT product_short_name AS product, SAFE_DIVIDE(SUM(units), 28.0) AS rate28
+  FROM `onyga-482313.OI.T_UNIFIED_DAILY`
+  WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 28 DAY)
   GROUP BY 1
 ),
 
--- B6: Apply cannibalization rule
+-- B4: Week-to-week variance over the last 12 weeks → coefficient of variation.
+-- Used as the stability gate for graduating from the 7d to the 28d rate.
+product_weekly_cov AS (
+  SELECT product, SAFE_DIVIDE(STDDEV(wk_units), NULLIF(AVG(wk_units), 0)) AS cov
+  FROM (
+    SELECT product_short_name AS product, DATE_TRUNC(date, WEEK) AS wk, SUM(units) AS wk_units
+    FROM `onyga-482313.OI.T_UNIFIED_DAILY`
+    WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 84 DAY)
+    GROUP BY 1, 2
+  )
+  GROUP BY 1
+),
+
+-- B5: Recent daily rate per product, with the 7d→28d graduation rule.
+--   is_stable = ≥1 year old, OR ≥90 days old with low week-to-week variance (CoV < 0.30).
+--   Stable products use the smooth 28d rate ("determined daily units"); still-maturing
+--   products use the responsive 7d rate (falling back to 28d, then the launch model for a
+--   brand-new SKU that hasn't sold yet). Established products are never dropped to 7d.
+product_recent_rate AS (
+  SELECT
+    family, product, estimated_start_selling_date, age_days, is_stable,
+    COALESCE(
+      CASE
+        WHEN is_stable THEN rate28
+        ELSE COALESCE(NULLIF(rate7, 0), rate28, CASE WHEN age_days < 90 THEN lm_rate END)
+      END, 0) AS recent_daily_rate
+  FROM (
+    SELECT
+      pp.family,
+      pp.product,
+      pp.estimated_start_selling_date,
+      DATE_DIFF(CURRENT_DATE(), pp.estimated_start_selling_date, DAY) AS age_days,
+      (DATE_DIFF(CURRENT_DATE(), pp.estimated_start_selling_date, DAY) >= 365
+         OR (DATE_DIFF(CURRENT_DATE(), pp.estimated_start_selling_date, DAY) >= 90
+             AND COALESCE(cov.cov, 999) < 0.30)) AS is_stable,
+      t7.rate7,
+      t28.rate28,
+      lm.daily_rate AS lm_rate
+    FROM product_phases pp
+    LEFT JOIN trailing_7d t7 ON t7.product = pp.product
+    LEFT JOIN trailing_28d t28 ON t28.product = pp.product
+    LEFT JOIN product_weekly_cov cov ON cov.product = pp.product
+    LEFT JOIN `onyga-482313.OI.V_PRODUCT_LAUNCH_MODEL` lm
+      ON lm.product = pp.model_product AND lm.month_num = 2
+    JOIN family_has_envelope fhe ON fhe.family = pp.family
+  )
+),
+
+-- B6: Carve-out shares — each variation's recent rate ÷ the family's total recent
+-- rate. New colors take share FROM the envelope (cannibalize) instead of adding on top.
 product_shares AS (
   SELECT
-    pc.family, pc.product, pc.is_new_product, pc.is_draft,
-    pc.estimated_start_selling_date,
-    es.base_share * GREATEST(0, 1 - 0.10 * COALESCE(npc.num_new, 0)) AS product_share
-  FROM product_classification pc
-  JOIN existing_shares es ON pc.family = es.family AND pc.product = es.product
-  LEFT JOIN new_product_counts npc ON pc.family = npc.family
-  WHERE NOT pc.is_new_product
-
-  UNION ALL
-
-  SELECT
-    pc.family, pc.product, pc.is_new_product, pc.is_draft,
-    pc.estimated_start_selling_date,
-    0.10 AS product_share
-  FROM product_classification pc
-  WHERE pc.is_new_product
+    prr.family,
+    prr.product,
+    prr.estimated_start_selling_date,
+    prr.is_stable,
+    SAFE_DIVIDE(prr.recent_daily_rate,
+                NULLIF(SUM(prr.recent_daily_rate) OVER (PARTITION BY prr.family), 0)) AS product_share,
+    (prr.age_days < 90) AS is_new_product,
+    (NOT prr.is_stable) AS is_draft
+  FROM product_recent_rate prr
 ),
 
 
@@ -375,8 +426,7 @@ family_based AS (
     ff.family_forecast_units,
     ROUND(ps.product_share, 4) AS product_share,
     CASE
-      WHEN ps.is_new_product
-        AND ps.estimated_start_selling_date IS NOT NULL
+      WHEN ps.estimated_start_selling_date IS NOT NULL
         AND DATE(ff.yr, ff.mo, 1) < DATE_TRUNC(ps.estimated_start_selling_date, MONTH)
       THEN 0
       ELSE ROUND(ff.family_forecast_units * ps.product_share)
@@ -388,7 +438,8 @@ family_based AS (
     ff.offseason_days,
     ff.peak_holidays,
     'PHASE_3' AS forecast_phase,
-    CAST(NULL AS STRING) AS model_product
+    CAST(NULL AS STRING) AS model_product,
+    ps.is_stable
   FROM family_forecast ff
   JOIN product_shares ps ON ff.family = ps.family
 ),
@@ -407,94 +458,148 @@ phase1_split AS (
   GROUP BY 1, 2
 ),
 
--- D2: Model product's seasonality index (calendar month shape)
-model_seasonality AS (
-  SELECT product, calendar_month, seasonality_index
-  FROM `onyga-482313.OI.V_PRODUCT_SEASONALITY_INDEX`
+-- D-const: reasonableness-cap knobs (guard B) + plateau reference
+model_const AS (
+  SELECT 2.0 AS ramp_ceil, 5.0 AS season_ceil, 120 AS thin_history_days
 ),
 
--- D3: Model product's first-month daily rate (for Phase 1 cold start)
-model_first_month AS (
-  SELECT product, daily_rate AS month1_daily_rate
-  FROM `onyga-482313.OI.V_PRODUCT_LAUNCH_MODEL`
-  WHERE month_num = 2  -- Use month 2 (first full month, month 1 is partial)
+-- D1: current-date anchors
+now_ref AS (
+  SELECT EXTRACT(YEAR FROM CURRENT_DATE()) AS cur_yr,
+         EXTRACT(MONTH FROM CURRENT_DATE()) AS cur_mo,
+         DATE_TRUNC(CURRENT_DATE(), MONTH) AS cur_month_start
 ),
 
--- D4: Trailing 14-day daily rate per product (for Phase 2)
+-- D2: anchor daily rate per model product.
+--   Phase 2 -> own trailing-14d rate; Phase 1 -> donor month-1 rate / phase1 split.
 trailing_14d AS (
-  SELECT
-    product_short_name AS product,
-    SAFE_DIVIDE(SUM(units), 14.0) AS trailing_daily_rate
+  SELECT product_short_name AS product, SAFE_DIVIDE(SUM(units), 14.0) AS trailing_daily_rate
   FROM `onyga-482313.OI.T_UNIFIED_DAILY`
   WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)
   GROUP BY 1
 ),
-
--- D5: Model-based monthly forecast
--- Phase 1: model_daily_rate × seasonality_index × days_in_month
--- Phase 2: own_trailing_14d_rate × seasonality_index × days_in_month
-model_forecast AS (
-  SELECT
-    mp.product,
-    mp.family,
-    tf.yr AS forecast_year,
-    tf.mo AS forecast_month,
-    mp.forecast_phase,
-    mp.model_product,
-    mp.estimated_start_selling_date,
-    -- Base daily rate depends on phase
-    CASE
-      WHEN mp.forecast_phase = 'PHASE_1'
-        THEN COALESCE(SAFE_DIVIDE(mfm.month1_daily_rate, p1s.phase1_product_count), 0)
-      WHEN mp.forecast_phase = 'PHASE_2'
-        THEN COALESCE(t14.trailing_daily_rate, mfm.month1_daily_rate, 0)
-      ELSE 0
-    END AS base_daily_rate,
-    -- Seasonality index from the model product
-    COALESCE(ms.seasonality_index, 1.0) AS seasonality_index,
-    -- Days in this forecast month
-    DATE_DIFF(
-      DATE_ADD(DATE(tf.yr, tf.mo, 1), INTERVAL 1 MONTH),
-      DATE(tf.yr, tf.mo, 1),
-      DAY
-    ) AS days_in_month
-  FROM product_phases mp
-  CROSS JOIN (
-    SELECT DISTINCT yr, mo FROM tagged_future
-  ) tf
-  LEFT JOIN model_seasonality ms
-    ON ms.product = mp.model_product AND ms.calendar_month = tf.mo
-  LEFT JOIN model_first_month mfm ON mfm.product = mp.model_product
-  LEFT JOIN phase1_split p1s ON p1s.family = mp.family AND p1s.model_product = mp.model_product
-  LEFT JOIN trailing_14d t14 ON t14.product = mp.product
-  WHERE mp.forecast_phase IN ('PHASE_1', 'PHASE_2') AND mp.model_product IS NOT NULL
+model_first_month AS (
+  SELECT product, daily_rate AS month1_daily_rate
+  FROM `onyga-482313.OI.V_PRODUCT_LAUNCH_MODEL`
+  WHERE month_num = 2
 ),
 
--- D6: Final model-based output
+-- D3: donor plateau ramp (for target ages beyond the donor's known ages)
+donor_plateau AS (
+  SELECT donor_product, MAX(ramp_factor) AS plateau_ramp
+  FROM `onyga-482313.OI.V_LAUNCH_RAMP` GROUP BY 1
+),
+
+-- D4: donor maturity — donor uses its OWN seasonality only if it has >=730 days
+-- of history; else fall back to house blend. (Today only Lollibox qualifies.)
+donor_maturity AS (
+  SELECT product_short_name AS donor,
+    DATE_DIFF(CURRENT_DATE(), MIN(date), DAY) >= 730 AS donor_is_mature
+  FROM `onyga-482313.OI.T_UNIFIED_DAILY`
+  WHERE units > 0 AND product_short_name IS NOT NULL
+  GROUP BY 1
+),
+
+-- D5: per-product own history length (gates guard B)
+product_history_days AS (
+  SELECT product_short_name AS product, DATE_DIFF(MAX(date), MIN(date), DAY) AS hist_days
+  FROM `onyga-482313.OI.T_UNIFIED_DAILY`
+  WHERE units > 0 GROUP BY 1
+),
+
+-- D6: month grid x phase-1/2 products (envelope-less families only, as before)
+model_grid AS (
+  SELECT mp.product, mp.family, mp.model_product, mp.forecast_phase,
+    mp.estimated_start_selling_date,
+    tf.yr AS forecast_year, tf.mo AS forecast_month,
+    DATE_DIFF(DATE_TRUNC(CURRENT_DATE(), MONTH),
+              DATE_TRUNC(mp.estimated_start_selling_date, MONTH), MONTH) + 1 AS age_now,
+    DATE_DIFF(DATE(tf.yr, tf.mo, 1),
+              DATE_TRUNC(mp.estimated_start_selling_date, MONTH), MONTH) + 1 AS age_f,
+    DATE_DIFF(DATE_ADD(DATE(tf.yr, tf.mo, 1), INTERVAL 1 MONTH), DATE(tf.yr, tf.mo, 1), DAY) AS days_in_month
+  FROM product_phases mp
+  CROSS JOIN (SELECT DISTINCT yr, mo FROM tagged_future) tf
+  LEFT JOIN family_has_envelope fhe ON fhe.family = mp.family
+  WHERE mp.forecast_phase IN ('PHASE_1', 'PHASE_2') AND mp.model_product IS NOT NULL
+    AND fhe.family IS NULL
+),
+
+-- D7: assemble factors
+model_forecast AS (
+  SELECT
+    g.product, g.family, g.model_product, g.forecast_phase,
+    g.estimated_start_selling_date, g.forecast_year, g.forecast_month, g.days_in_month,
+    g.age_now, g.age_f,
+    CASE
+      WHEN g.forecast_phase = 'PHASE_1'
+        THEN COALESCE(SAFE_DIVIDE(mfm.month1_daily_rate, p1s.phase1_product_count), 0)
+      ELSE COALESCE(t14.trailing_daily_rate, mfm.month1_daily_rate, 0)
+    END AS anchor_rate,
+    COALESCE(r_now.ramp_factor, dp.plateau_ramp, 1.0) AS ramp_now,
+    COALESCE(r_f.ramp_factor,   dp.plateau_ramp, 1.0) AS ramp_f,
+    COALESCE(CASE WHEN dm.donor_is_mature THEN own_now.seasonality_index END,
+             hs_now.house_season_index, 1.0) AS season_now,
+    COALESCE(CASE WHEN dm.donor_is_mature THEN own_f.seasonality_index END,
+             hs_f.house_season_index, 1.0) AS season_f,
+    COALESCE(ph.hist_days, 0) AS hist_days
+  FROM model_grid g
+  CROSS JOIN now_ref nr
+  LEFT JOIN trailing_14d t14 ON t14.product = g.product
+  LEFT JOIN model_first_month mfm ON mfm.product = g.model_product
+  LEFT JOIN phase1_split p1s ON p1s.family = g.family AND p1s.model_product = g.model_product
+  LEFT JOIN `onyga-482313.OI.V_LAUNCH_RAMP` r_now
+    ON r_now.donor_product = g.model_product AND r_now.launch_age_month = g.age_now
+  LEFT JOIN `onyga-482313.OI.V_LAUNCH_RAMP` r_f
+    ON r_f.donor_product = g.model_product AND r_f.launch_age_month = g.age_f
+  LEFT JOIN donor_plateau dp ON dp.donor_product = g.model_product
+  LEFT JOIN donor_maturity dm ON dm.donor = g.model_product
+  LEFT JOIN `onyga-482313.OI.V_PRODUCT_SEASONALITY_INDEX` own_now
+    ON own_now.product = g.model_product AND own_now.calendar_month = nr.cur_mo
+  LEFT JOIN `onyga-482313.OI.V_PRODUCT_SEASONALITY_INDEX` own_f
+    ON own_f.product = g.model_product AND own_f.calendar_month = g.forecast_month
+  LEFT JOIN `onyga-482313.OI.V_HOUSE_SEASONALITY` hs_now ON hs_now.calendar_month = nr.cur_mo
+  LEFT JOIN `onyga-482313.OI.V_HOUSE_SEASONALITY` hs_f ON hs_f.calendar_month = g.forecast_month
+  LEFT JOIN product_history_days ph ON ph.product = g.product
+),
+
+-- D8: final model-based output (same columns as family_based)
 model_based AS (
   SELECT
-    mf.product,
-    mf.family,
-    mf.forecast_year,
-    mf.forecast_month,
-    CAST(NULL AS INT64) AS family_forecast_units,
+    mf.product, mf.family, mf.forecast_year, mf.forecast_month,
+    CAST(NULL AS INT64)   AS family_forecast_units,
     CAST(NULL AS FLOAT64) AS product_share,
-    -- Zero forecast before launch date
     CASE
       WHEN mf.estimated_start_selling_date IS NOT NULL
         AND DATE(mf.forecast_year, mf.forecast_month, 1)
             < DATE_TRUNC(mf.estimated_start_selling_date, MONTH)
       THEN 0
-      ELSE ROUND(mf.base_daily_rate * mf.seasonality_index * mf.days_in_month)
+      ELSE (
+        SELECT
+          CASE
+            WHEN mf.hist_days < mc.thin_history_days
+              THEN LEAST(
+                     ROUND(mf.anchor_rate
+                           * LEAST(SAFE_DIVIDE(mf.ramp_f, NULLIF(mf.ramp_now,0)), mc.ramp_ceil)
+                           * SAFE_DIVIDE(mf.season_f, NULLIF(mf.season_now,0))
+                           * mf.days_in_month),
+                     ROUND(mc.season_ceil * mf.anchor_rate * mf.days_in_month))
+            ELSE ROUND(mf.anchor_rate
+                       * SAFE_DIVIDE(mf.ramp_f, NULLIF(mf.ramp_now,0))
+                       * SAFE_DIVIDE(mf.season_f, NULLIF(mf.season_now,0))
+                       * mf.days_in_month)
+          END
+        FROM model_const mc
+      )
     END AS forecast_units,
-    TRUE AS is_new_product,
-    TRUE AS is_draft,
+    TRUE  AS is_new_product,
+    TRUE  AS is_draft,
     CAST(NULL AS FLOAT64) AS sqrt_lift,
-    0 AS peak_days,
+    0     AS peak_days,
     CAST(mf.days_in_month AS INT64) AS offseason_days,
     CAST(NULL AS STRING) AS peak_holidays,
     mf.forecast_phase,
-    mf.model_product
+    mf.model_product,
+    FALSE AS is_stable
   FROM model_forecast mf
 ),
 
