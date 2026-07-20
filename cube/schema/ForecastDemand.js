@@ -1,10 +1,17 @@
-// Cube: ForecastDemand - from V_FORECAST_DEMAND
+// Cube: ForecastDemand - from FACT_FORECAST_DEMAND (materialized V_FORECAST_DEMAND)
 // Family-level daily-ramp demand forecast with per-product share split
 // Includes cannibalization for new variants and peak/offseason indicators
+//
+// Reads the FACT table, NOT the V_ view: V_FORECAST_DEMAND takes ~45-70s to
+// evaluate (launch-ramp model + Parts A-C), which made the Plan page hang on
+// every cold-cache load. FACT_FORECAST_DEMAND is the same rows materialized by
+// SP_LOAD_FACT_FORECAST_DEMAND and carries every column this cube uses, so the
+// query drops to a fast table scan. Freshness now follows that procedure's run.
+// Matches the house pattern: cubes read materialized tables, not views.
 cube(`ForecastDemand`, {
   sql: `
     SELECT f.*, fm.family_color_hex AS color_hex
-    FROM \`onyga-482313.OI.V_FORECAST_DEMAND\` f
+    FROM \`onyga-482313.OI.FACT_FORECAST_DEMAND\` f
     LEFT JOIN (SELECT DISTINCT family, family_color_hex FROM \`onyga-482313.OI.V_PRODUCT_FAMILY_MAP\`) fm
       ON f.family = fm.family
   `,
