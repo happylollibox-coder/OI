@@ -312,10 +312,15 @@ product_phases AS (
     ph.first_seen AS first_sale_date,
     COALESCE(ph.history_days, 0) AS history_days,
     COALESCE(ph.total_units, 0) AS total_units,
-    -- Phase classification (automatic based on true product age)
+    -- Phase classification (automatic based on true product age).
+    -- PHASE_1 cutoff is 20 days: before that a product has too little of its own
+    -- data and is anchored to the donor's launch rate (shared across the family's
+    -- Phase-1 SKUs, so siblings all forecast identically). At 20 days it graduates
+    -- to PHASE_2 and anchors on its OWN trailing rate, so variations differentiate
+    -- by how they are actually selling. Lowered 30 -> 20 on 2026-07-19.
     CASE
       WHEN ap.estimated_start_selling_date IS NULL
-        OR DATE_DIFF(CURRENT_DATE(), ap.estimated_start_selling_date, DAY) < 30
+        OR DATE_DIFF(CURRENT_DATE(), ap.estimated_start_selling_date, DAY) < 20
         THEN 'PHASE_1'
       WHEN DATE_DIFF(CURRENT_DATE(), ap.estimated_start_selling_date, DAY) < 365
         THEN 'PHASE_2'
