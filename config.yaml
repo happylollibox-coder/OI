@@ -218,6 +218,18 @@ views:
       - DIM_EXPERIMENT_CAMPAIGN
       - DIM_EXPERIMENT
 
+  - name: "V_COVERAGE_CAMPAIGN"
+    description: "Coverage-cockpit reconciler: per target cell, what SHOULD exist vs what DOES (live enabled campaigns), classified through V_CAMPAIGN_ROLE.strategy_category (the 6-strategy lens: AUTO / INTENT / EXACT_BOOST / COMPETITOR / BRAND_DEFENSE / PRODUCT_DEFENSE). Emits one row per target cell at its natural grain (column `grain`): AUTO = ASIN (one per own sellable ASIN), INTENT / BRAND_DEFENSE / COMPETITOR / EXACT_BOOST = FAMILY (one per own family), PRODUCT_DEFENSE = STORE (one row, parent_name NULL). LEFT JOINs from the target universe (DIM_PRODUCT where parent_name IS NOT NULL AND is_active) so zero-campaign cells still appear with n_enabled=0. Reuses ads_coverage_scan() assembly (gp_per_unit, camp state, advertised_product asin<->campaign link, 90d metric window). expected=TRUE for AUTO/INTENT/BRAND_DEFENSE/PRODUCT_DEFENSE, FALSE for COMPETITOR/EXACT_BOOST. status: suppressed -> 'suppressed'; not-expected -> none/redundant/ok; expected -> missing/redundant/ok. DE_COVERAGE_EXPECTATION (active, on parent_name+strategy) sets `suppressed`. Grain-only: NO campaign->intent linkage in the live account."
+    source_files: ["scripts/bigquery/views/V_COVERAGE_CAMPAIGN.sql"]
+    dependencies:
+      - V_CAMPAIGN_ROLE
+      - DIM_PRODUCT
+      - V_DIM_LISTING_CURRENT
+      - DIM_COSTS_HISTORY
+      - V_SRC_AmazonAds_campaign_history
+      - V_SRC_AmazonAds_advertised_product
+      - DE_COVERAGE_EXPECTATION
+
   - name: "V_BUDGET_STEP1_STRATEGY"
     description: "One row per Coverage role for the Weekly Run Step-1 'Budget by strategy' split — the sibling of V_BUDGET_STEP1_FAMILY, grouped by strategy_role instead of parent_name. Offense sub-roles only (brand/product defense have their own PPC modes and panels). Rolled up from V_BUDGET_STEP1_CAMPAIGN so the split and the step-2 campaign table read the same per-campaign new_budget and cannot disagree. Spend-weighted CPC. Cube: StrategyBudgetStep1."
     source_files: ["scripts/bigquery/views/V_BUDGET_STEP1_STRATEGY.sql"]
