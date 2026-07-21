@@ -2,8 +2,20 @@ import { useEffect, useState } from 'react';
 import { apiFetch } from '../utils/apiFetch';
 import { fShort, fR } from '../utils';
 
+interface Tile {
+  defined: number;
+  missing: number;
+  redundant: number;
+  informational: number;
+  suppressed: number;
+}
 interface Cell {
-  status: 'ok' | 'missing' | 'redundant';
+  grain: 'ASIN' | 'FAMILY' | 'STORE';
+  parent_name: string | null;
+  asin: string | null;
+  product_short_name: string | null;
+  strategy: string;
+  expected: boolean;
   n_enabled: number;
   n_any: number;
   impressions: number;
@@ -11,35 +23,33 @@ interface Cell {
   units: number;
   net_roas: number | null;
   campaigns: string | null;
+  suppressed: boolean;
+  status: 'ok' | 'missing' | 'redundant' | 'none' | 'suppressed';
 }
-interface AutoRow extends Cell { asin: string; product_short_name: string; }
-interface Family {
-  family: string;
-  roles: Record<string, Cell>;
-  autos: AutoRow[];
-  n_auto_missing: number;
-  n_role_missing: number;
-  n_missing: number;
-  n_redundant: number;
-  complete: boolean;
+interface WorkflowData {
+  strategies: string[];
+  tiles: Record<string, Tile>;
+  cells: Cell[];
 }
-interface Store { label: string; roles: Record<string, Cell>; complete: boolean; }
-interface CoverageData { family_roles: string[]; days: number; store: Store; families: Family[]; }
 
-const ROLE_LABEL: Record<string, string> = {
+const STRAT_LABEL: Record<string, string> = {
   AUTO: 'Auto',
+  INTENT: 'Intent',
+  EXACT_BOOST: 'Exact Boost',
+  COMPETITOR: 'Competitor',
   BRAND_DEFENSE: 'Brand Defense',
   PRODUCT_DEFENSE: 'Product Defense',
-  EXACT: 'Exact',
-  BROAD: 'Broad',
-  PHRASE: 'Phrase',
-  COMPETITOR: 'Competitor',
-  SB_VIDEO: 'SB / Video',
 };
 
 function StatusPill({ c }: { c: Cell }) {
-  const tone = c.status === 'ok' ? 'text-emerald-400' : c.status === 'redundant' ? 'text-amber-400' : 'text-red-400';
-  const label = c.status === 'ok' ? '✓ defined' : c.status === 'redundant' ? `⚠ ${c.n_enabled} campaigns` : '✗ to do';
+  const map: Record<Cell['status'], { tone: string; label: string }> = {
+    ok: { tone: 'text-emerald-400', label: '✓ defined' },
+    missing: { tone: 'text-red-400', label: '✗ to do' },
+    redundant: { tone: 'text-amber-400', label: `⚠ ${c.n_enabled} campaigns` },
+    none: { tone: 'text-faint', label: '– not running' },
+    suppressed: { tone: 'text-subtle', label: '⊘ not expected' },
+  };
+  const { tone, label } = map[c.status];
   return <span className={`${tone} font-semibold text-[10px]`}>{label}</span>;
 }
 
@@ -53,16 +63,54 @@ function Metrics({ c }: { c: Cell }) {
   );
 }
 
-/** Ad coverage scan at each role's own grain (architecture/INTENT_CAMPAIGN_MODEL.md §F):
- *  Auto = per product · Brand Defense + offense = per family · Product Defense = store.
- *  All status/role logic lives in /api/coverage (BigQuery); this only renders. */
+/** Strategy roll-up tile — defined / to-do / redundant across a strategy's coverage cells.
+ *  Border tone: red if anything to do, else amber if redundant, else emerald. */
+export function StrategyTile({ name, t, open, onOpen }: { name: string; t: Tile; open: boolean; onOpen: () => void }) {
+  const tone = t.missing > 0
+    ? 'border-red-500/40 bg-red-500/10 hover:bg-red-500/20'
+    : t.redundant > 0
+      ? 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
+      : 'border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20';
+  return (
+    <button
+      onClick={onOpen}
+      className={`rounded-lg border px-4 py-3 text-left min-w-[150px] transition ${tone} ${open ? 'ring-2 ring-blue-400/60' : ''}`}
+    >
+      <div className="text-xs font-bold text-heading">{STRAT_LABEL[name] ?? name}</div>
+      <div className="mt-1 text-[10px] font-semibold">
+        <span className="text-emerald-400">✓ {t.defined} defined</span>
+        {t.missing > 0 && <><span className="text-faint"> · </span><span className="text-red-400">✗ {t.missing} to do</span></>}
+        {t.redundant > 0 && <><span className="text-faint"> · </span><span className="text-amber-400">⚠ {t.redundant} redundant</span></>}
+        {t.informational > 0 && <><span className="text-faint"> · </span><span className="text-faint">{t.informational} idle</span></>}
+      </div>
+    </button>
+  );
+}
+
+const STATUS_ORDER: Record<Cell['status'], number> = {
+  missing: 0,
+  redundant: 1,
+  ok: 2,
+  none: 3,
+  suppressed: 4,
+};
+
+function cellLabel(c: Cell): string {
+  if (c.grain === 'STORE') return 'Store';
+  if (c.grain === 'FAMILY') return c.parent_name || c.asin || '—';
+  return c.product_short_name || c.parent_name || c.asin || '—';
+}
+
+/** Daily-workflow coverage cockpit (rung 1): six strategy tiles rolling up
+ *  defined / to-do / redundant, each expandable to its coverage cells.
+ *  All status/roll-up logic lives in /api/daily-workflow (BigQuery); this only renders. */
 export function CoveragePage() {
-  const [data, setData] = useState<CoverageData | null>(null);
+  const [data, setData] = useState<WorkflowData | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [open, setOpen] = useState<string | null>(null); // family name or '__STORE__'
+  const [open, setOpen] = useState<string | null>(null); // strategy name
 
   useEffect(() => {
-    apiFetch('/api/coverage')
+    apiFetch('/api/daily-workflow')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(d => (d.error ? setErr(d.error) : setData(d)))
       .catch(e => setErr(String(e)));
@@ -71,119 +119,55 @@ export function CoveragePage() {
   if (err) return <div className="p-6 text-sm text-red-400">Coverage scan failed: {err}</div>;
   if (!data) return <div className="p-6 text-sm text-muted">Scanning ad coverage…</div>;
 
-  const btnTone = (complete: boolean, nMissing: number) =>
-    complete ? 'border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20'
-      : nMissing > 0 ? 'border-red-500/40 bg-red-500/10 hover:bg-red-500/20'
-      : 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20';
-
-  const openFam = data.families.find(f => f.family === open);
-  const openStore = open === '__STORE__';
+  const openCells = open
+    ? data.cells
+        .filter(c => c.strategy === open)
+        .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status])
+    : [];
 
   return (
     <div className="p-4">
       <div className="flex items-center gap-3 mb-4">
-        <h1 className="text-lg font-bold text-heading">🩺 Ad Coverage Scan</h1>
-        <span className="text-[11px] text-muted">last {data.days}d · green = everything defined · click to see the mapping</span>
+        <h1 className="text-lg font-bold text-heading">🗂️ Daily Workflow — Coverage</h1>
+        <span className="text-[11px] text-muted">green = everything defined · click a strategy to see the mapping</span>
       </div>
 
       <div className="flex flex-wrap gap-2 mb-2">
-        {/* Store button — Product Defense is cross-family */}
-        <button
-          onClick={() => setOpen(o => (o === '__STORE__' ? null : '__STORE__'))}
-          className={`rounded-lg border px-4 py-3 text-left min-w-[150px] transition ${btnTone(data.store.complete, data.store.roles.PRODUCT_DEFENSE?.status === 'missing' ? 1 : 0)} ${open === '__STORE__' ? 'ring-2 ring-blue-400/60' : ''}`}
-        >
-          <div className="text-xs font-bold text-heading">🏬 Store</div>
-          <div className="text-[9px] text-muted">cross-family · Product Defense</div>
-          <div className="mt-1"><StatusPill c={data.store.roles.PRODUCT_DEFENSE} /></div>
-        </button>
-
-        {data.families.map(f => (
-          <button
-            key={f.family}
-            onClick={() => setOpen(o => (o === f.family ? null : f.family))}
-            className={`rounded-lg border px-4 py-3 text-left min-w-[150px] transition ${btnTone(f.complete, f.n_missing)} ${open === f.family ? 'ring-2 ring-blue-400/60' : ''}`}
-          >
-            <div className="text-xs font-bold text-heading">{f.family}</div>
-            <div className="text-[9px] text-muted">{f.autos.length} products</div>
-            <div className="mt-1 text-[10px] font-semibold">
-              {f.complete
-                ? <span className="text-emerald-400">✓ all defined</span>
-                : <>
-                    {f.n_missing > 0 && <span className="text-red-400">{f.n_missing} to do</span>}
-                    {f.n_missing > 0 && f.n_redundant > 0 && <span className="text-faint"> · </span>}
-                    {f.n_redundant > 0 && <span className="text-amber-400">{f.n_redundant} redundant</span>}
-                  </>}
-            </div>
-          </button>
+        {data.strategies.map(s => (
+          <StrategyTile
+            key={s}
+            name={s}
+            t={data.tiles[s] ?? { defined: 0, missing: 0, redundant: 0, informational: 0, suppressed: 0 }}
+            open={open === s}
+            onOpen={() => setOpen(o => (o === s ? null : s))}
+          />
         ))}
       </div>
 
-      {(openFam || openStore) && (
+      {open && (
         <div className="mt-3 border border-border/40 rounded-lg bg-white/[0.01] max-w-[860px]">
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/20 bg-white/[0.02]">
             <div className="text-sm font-semibold">
-              {openStore ? '🏬 Store — cross-family' : openFam!.family}
+              {STRAT_LABEL[open] ?? open}
               <span className="text-faint text-xs ml-2 font-normal">mapping — done vs to do</span>
             </div>
             <button onClick={() => setOpen(null)} className="text-faint hover:text-text text-lg leading-none px-1" title="Collapse">×</button>
           </div>
 
-          <div className="p-4 space-y-4 text-xs">
-            {openStore ? (
-              <Section title="Product Defense — store, cross-family">
-                <RoleRow role="PRODUCT_DEFENSE" c={data.store.roles.PRODUCT_DEFENSE} />
-              </Section>
+          <div className="p-4 text-xs">
+            {openCells.length === 0 ? (
+              <div className="text-faint text-[10px]">No coverage cells for this strategy.</div>
             ) : (
-              <>
-                <Section title="Family campaigns (family × match-type × intent)">
-                  {data.family_roles.map(role => (
-                    <RoleRow key={role} role={role} c={openFam!.roles[role]} />
-                  ))}
-                  <div className="text-[9px] text-faint mt-2">
-                    Intent-level checks (per family × match-type × intent) arrive with the intent model — this is family-level presence for now.
-                  </div>
-                </Section>
-
-                <Section title={`Auto — per product (${openFam!.autos.length})`}>
-                  {openFam!.autos.map(a => (
-                    <div key={a.asin} className="flex items-center gap-2 py-1 border-b border-border-faint last:border-0">
-                      <span className="text-heading truncate max-w-[170px]" title={a.asin}>{a.product_short_name || a.asin}</span>
-                      <span className="ml-auto"><Metrics c={a} /></span>
-                      <span className="w-[92px] text-right"><StatusPill c={a} /></span>
-                    </div>
-                  ))}
-                </Section>
-              </>
+              openCells.map((c, i) => (
+                <div key={`${c.grain}-${c.asin ?? c.parent_name ?? i}`} className="flex items-center gap-2 py-1 border-b border-border-faint last:border-0">
+                  <span className="text-heading truncate max-w-[200px]" title={c.asin ?? undefined}>{cellLabel(c)}</span>
+                  <span className="ml-auto"><Metrics c={c} /></span>
+                  <span className="w-[100px] text-right"><StatusPill c={c} /></span>
+                </div>
+              ))
             )}
           </div>
         </div>
-      )}
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="text-[9px] text-faint uppercase tracking-wide mb-1">{title}</div>
-      <div className="bg-surface rounded p-2">{children}</div>
-    </div>
-  );
-}
-
-function RoleRow({ role, c }: { role: string; c: Cell }) {
-  return (
-    <div className="py-1 border-b border-border-faint last:border-0">
-      <div className="flex items-center gap-2">
-        <span className="text-heading font-medium">{ROLE_LABEL[role] ?? role}</span>
-        <span className="ml-auto"><Metrics c={c} /></span>
-        <span className="w-[92px] text-right"><StatusPill c={c} /></span>
-      </div>
-      {c.campaigns && (
-        <div className="text-[9px] text-muted mt-0.5 pl-1 truncate" title={c.campaigns}>{c.campaigns}</div>
-      )}
-      {!c.campaigns && c.n_any > 0 && (
-        <div className="text-[9px] text-faint mt-0.5 pl-1">{c.n_any} paused/archived with history</div>
       )}
     </div>
   );
