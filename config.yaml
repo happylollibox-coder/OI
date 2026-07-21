@@ -611,7 +611,7 @@ views:
       - DIM_PRODUCT
 
   - name: "V_INTENT_KEYWORDS"
-    description: "Terms matched to intent THEMES (DE_INTENT_THEMES) and ranked within (parent_name x intent_key) by FACT_RESEARCH_RANKED.rank; is_top10 flags the campaign keyword set (<=10). Grain parent_name x intent_key x query_text — family-grain, matching the campaign grain (only AUTO is per product). Carries the 90d ads money signal per (family x intent) over ALL matched terms (ads_spend/ads_clicks/ads_orders/ads_net_roas). is_relevant decides the campaign set, first rule wins: (1) DE_FAMILY_INTENT_OVERRIDE.force_relevant, (2) TIME_BASED always (rank is zeroed off-season; season_start/season_end from DIM_US_HOLIDAYS govern), (3) PROFIT gate — drop when ads_clicks>=100 AND ads_net_roas<1.0 (rank is FIT not profit: LolliME/school = rank 63 but 0.27x on 613 clicks), (4) FIT gate family_best_rank>=60. relevance_reason exposes the trace. Feeds the Research intents panel + Brand Spotlight and (later) intent campaign build. SOP: architecture/INTENT_CAMPAIGN_MODEL.md"
+    description: "Terms matched to intent THEMES (DE_INTENT_THEMES) and ranked within (parent_name x intent_key) by FACT_RESEARCH_RANKED.rank; is_top10 flags the campaign keyword set (<=10). Grain parent_name x intent_key x query_text — family-grain, matching the campaign grain (only AUTO is per product). Carries the 90d ads money signal per (family x intent) over ALL matched terms (ads_spend/ads_clicks/ads_orders/ads_net_roas). is_relevant decides the campaign set, first rule wins: (1) DE_FAMILY_INTENT_OVERRIDE.force_relevant, (2) TIME_BASED always (rank is zeroed off-season; season_start/season_end from DIM_US_HOLIDAYS govern), (3) PROFIT gate — drop when ads_clicks>=100 AND ads_net_roas<1.0 (rank is FIT not profit: LolliME/school = rank 63 but 0.27x on 613 clicks), (4) FIT gate family_best_rank>=60. relevance_reason exposes the trace. Own-brand terms are excluded up front (anti-join on DIM_BRAND_PHRASES) — brand belongs to Brand Defense, not generic/competitive intents. Feeds the Research intents panel + Brand Spotlight and (later) intent campaign build. SOP: architecture/INTENT_CAMPAIGN_MODEL.md"
     source_files: ["scripts/bigquery/views/V_INTENT_KEYWORDS.sql"]
     dependencies:
       - FACT_RESEARCH_RANKED
@@ -620,6 +620,7 @@ views:
       - DIM_US_HOLIDAYS
       - FACT_AMAZON_ADS
       - DIM_PRODUCT
+      - DIM_BRAND_PHRASES
 
   - name: "V_BRAND_KEYWORD_CLASSIFICATION"
     description: "Classifies keywords as brand, competitor, or generic"
@@ -1184,6 +1185,11 @@ tables:
     description: "Manual override of keyword intent class (BRAND/PRODUCT/GENERIC) for the coacher strategy"
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_KEYWORD_INTENT_OVERRIDE.sql"]
+
+  - name: "DE_COVERAGE_EXPECTATION"
+    description: "Opt-out rows to suppress false 'missing' coverage cells in the daily-workflow cockpit."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_COVERAGE_EXPECTATION.sql"]
 
   - name: "DE_FAMILY_INTENT_OVERRIDE"
     description: "Per-(family x intent theme) manual relevance override — beats the automatic fit+profit gates in V_INTENT_KEYWORDS. force_relevant FALSE = never suggest this intent for this family, TRUE = always suggest (even with no data). Exists because DE_INTENT_THEMES.is_active is GLOBAL and can't say 'school is wrong for LolliME but fine for Lollibox'. Absent row = let the gates decide. SOP: architecture/INTENT_CAMPAIGN_MODEL.md"
