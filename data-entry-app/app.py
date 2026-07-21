@@ -8845,7 +8845,7 @@ def research_intents():
           -- gate). effective_rank is the same formula ungated, and is the ordering key.
           ARRAY_AGG(STRUCT(query_text AS term, effective_rank AS rank, overall_fit AS fit,
                            weekly_market_purchases AS demand,
-                           term_spend, term_net_roas)
+                           term_spend, term_clicks, term_net_roas)
                     ORDER BY rn) AS terms
         FROM `onyga-482313`.OI.V_INTENT_KEYWORDS
         WHERE parent_name = @parent AND is_top10 AND is_relevant
@@ -9193,6 +9193,40 @@ def ads_coverage_scan():
         })
     except Exception as e:
         print(f"Error in ads_coverage_scan: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/daily-workflow')
+@login_required
+@cache_result(ttl_seconds=300)
+def daily_workflow():
+    """Coverage cockpit tree — read-only pass-through of V_COVERAGE_CAMPAIGN.
+
+    The view already emits final reconciled cells (one row per coverage cell,
+    with a resolved `status`). This endpoint just serves the cells plus a
+    per-strategy tile roll-up of the status counts, so the cockpit UI can render
+    the strategy tiles + cell tree without re-deriving anything client-side.
+    """
+    STRATS = ['AUTO', 'INTENT', 'EXACT_BOOST', 'COMPETITOR', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE']
+    try:
+        sql = ("SELECT grain, parent_name, asin, product_short_name, strategy, expected, "
+               "n_enabled, n_any, impressions, clicks, units, net_roas, campaigns, suppressed, status "
+               "FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN`")
+        rows = [dict(r) for r in client.query(sql).result()]
+
+        def tile(s):
+            cs = [r for r in rows if r['strategy'] == s]
+            return {
+                'defined':       sum(1 for r in cs if r['status'] == 'ok'),
+                'missing':       sum(1 for r in cs if r['status'] == 'missing'),
+                'redundant':     sum(1 for r in cs if r['status'] == 'redundant'),
+                'informational': sum(1 for r in cs if r['status'] == 'none'),
+                'suppressed':    sum(1 for r in cs if r['status'] == 'suppressed'),
+            }
+
+        return jsonify({'strategies': STRATS, 'tiles': {s: tile(s) for s in STRATS}, 'cells': rows})
+    except Exception as e:
+        print(f"Error in daily_workflow: {e}")
         return jsonify({'error': str(e)}), 500
 
 
