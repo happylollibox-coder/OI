@@ -29,7 +29,7 @@ prod AS (
     WHERE end_date IS NULL OR end_date >= CURRENT_DATE()
     QUALIFY ROW_NUMBER() OVER (PARTITION BY asin ORDER BY start_date DESC) = 1
   ) ch ON ch.asin = dp.asin
-  WHERE dp.parent_name IS NOT NULL AND dp.is_active = true
+  WHERE dp.parent_name IS NOT NULL AND dp.parent_name != 'UNKNOWN' AND dp.is_active = true
 ),
 fams AS (
   SELECT DISTINCT parent_name FROM prod
