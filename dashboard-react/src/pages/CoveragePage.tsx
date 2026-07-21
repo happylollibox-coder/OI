@@ -25,11 +25,25 @@ interface Cell {
   campaigns: string | null;
   suppressed: boolean;
   status: 'ok' | 'missing' | 'redundant' | 'none' | 'suppressed';
+  reason: string;
+  cell_key: string;
+}
+interface DetailCampaign {
+  campaign_name: string;
+  state: string | null;
+  is_enabled: boolean;
+  impressions: number;
+  clicks: number;
+  units: number;
+  ad_spend: number;
+  net_roas: number | null;
+  last_seen: string;
 }
 interface WorkflowData {
   strategies: string[];
   tiles: Record<string, Tile>;
   cells: Cell[];
+  detail: Record<string, DetailCampaign[]>;
 }
 
 const STRAT_LABEL: Record<string, string> = {
@@ -87,6 +101,35 @@ export function StrategyTile({ name, t, open, onOpen }: { name: string; t: Tile;
   );
 }
 
+/** State badge for a campaign in the evidence list. */
+function StateBadge({ state }: { state: string | null }) {
+  const map: Record<string, { cls: string; label: string }> = {
+    ENABLED: { cls: 'bg-emerald-500/15 text-emerald-400', label: 'ENABLED' },
+    PAUSED: { cls: 'bg-white/[0.06] text-subtle', label: 'PAUSED' },
+    ARCHIVED: { cls: 'bg-white/[0.03] text-faint', label: 'ARCHIVED' },
+  };
+  const m = state ? map[state] : undefined;
+  const cls = m?.cls ?? 'bg-white/[0.03] text-faint';
+  const label = m?.label ?? (state ?? '—');
+  return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${cls}`}>{label}</span>;
+}
+
+/** One campaign in a cell's evidence list: state badge · name · right-aligned metrics. */
+export function CampaignEvidenceRow({ c }: { c: DetailCampaign }) {
+  return (
+    <div className="flex items-center gap-1.5 py-0.5">
+      <StateBadge state={c.state} />
+      <span className="truncate text-[10px] text-muted" title={c.campaign_name}>{c.campaign_name}</span>
+      <span className="ml-auto shrink-0 text-[9px] tabular-nums text-faint">
+        {c.net_roas != null && (
+          <span className={c.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{fR(c.net_roas)}</span>
+        )}
+        {c.net_roas != null && ' · '}{fShort(c.clicks)} clk · {c.units}u · ${c.ad_spend.toFixed(0)}
+      </span>
+    </div>
+  );
+}
+
 const STATUS_ORDER: Record<Cell['status'], number> = {
   missing: 0,
   redundant: 1,
@@ -108,6 +151,7 @@ export function CoveragePage() {
   const [data, setData] = useState<WorkflowData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null); // strategy name
+  const [openCell, setOpenCell] = useState<string | null>(null); // expanded cell_key
 
   useEffect(() => {
     apiFetch('/api/daily-workflow')
@@ -158,13 +202,37 @@ export function CoveragePage() {
             {openCells.length === 0 ? (
               <div className="text-faint text-[10px]">No coverage cells for this strategy.</div>
             ) : (
-              openCells.map((c, i) => (
-                <div key={`${c.grain}-${c.asin ?? c.parent_name ?? i}`} className="flex items-center gap-2 py-1 border-b border-border-faint last:border-0">
-                  <span className="text-heading truncate max-w-[200px]" title={c.asin ?? undefined}>{cellLabel(c)}</span>
-                  <span className="ml-auto"><Metrics c={c} /></span>
-                  <span className="w-[100px] text-right"><StatusPill c={c} /></span>
-                </div>
-              ))
+              openCells.map((c, i) => {
+                const isOpen = openCell === c.cell_key;
+                const campaigns = data.detail?.[c.cell_key];
+                return (
+                  <div key={c.cell_key || `${c.grain}-${c.asin ?? c.parent_name ?? i}`} className="border-b border-border-faint last:border-0">
+                    <button
+                      onClick={() => setOpenCell(k => (k === c.cell_key ? null : c.cell_key))}
+                      className="flex w-full items-center gap-2 py-1 text-left hover:bg-white/[0.02]"
+                    >
+                      <span className="text-faint text-[9px] w-2 shrink-0">{isOpen ? '▾' : '▸'}</span>
+                      <span className="text-heading truncate max-w-[200px]" title={c.asin ?? undefined}>{cellLabel(c)}</span>
+                      <span className="ml-auto"><Metrics c={c} /></span>
+                      <span className="w-[100px] text-right"><StatusPill c={c} /></span>
+                    </button>
+                    {isOpen && (
+                      <div className="pl-4 pb-2 pt-0.5">
+                        {c.reason && (
+                          <div className="text-muted italic text-[11px] mb-1.5">💡 {c.reason}</div>
+                        )}
+                        {campaigns && campaigns.length > 0 ? (
+                          campaigns.map((cmp, j) => (
+                            <CampaignEvidenceRow key={`${cmp.campaign_name}-${j}`} c={cmp} />
+                          ))
+                        ) : (
+                          <div className="text-faint text-[10px]">no campaigns</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
