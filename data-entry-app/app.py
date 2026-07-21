@@ -9197,7 +9197,6 @@ def ads_coverage_scan():
 
 
 @app.route('/api/daily-workflow')
-@login_required
 @cache_result(ttl_seconds=300)
 def daily_workflow():
     """Coverage cockpit tree — read-only pass-through of V_COVERAGE_CAMPAIGN.
