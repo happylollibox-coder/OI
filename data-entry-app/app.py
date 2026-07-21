@@ -9206,12 +9206,26 @@ def daily_workflow():
     per-strategy tile roll-up of the status counts, so the cockpit UI can render
     the strategy tiles + cell tree without re-deriving anything client-side.
     """
+    from collections import defaultdict
     STRATS = ['AUTO', 'INTENT', 'EXACT_BOOST', 'COMPETITOR', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE']
     try:
-        sql = ("SELECT grain, parent_name, asin, product_short_name, strategy, expected, "
-               "n_enabled, n_any, impressions, clicks, units, net_roas, campaigns, suppressed, status "
+        sql = ("SELECT grain, cell_key, parent_name, asin, product_short_name, strategy, expected, "
+               "n_enabled, n_any, impressions, clicks, units, net_roas, campaigns, suppressed, status, reason "
                "FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN`")
         rows = [dict(r) for r in client.query(sql).result()]
+
+        # ── S2 VERIFY: per-campaign evidence, grouped by cell_key ──
+        detail_rows = [dict(r) for r in client.query(
+            "SELECT cell_key, campaign_name, state, is_enabled, impressions, clicks, units, "
+            "ad_spend, net_roas, last_seen FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN_DETAIL`"
+        ).result()]
+        detail = defaultdict(list)
+        for d in detail_rows:
+            if d.get('last_seen') is not None:
+                d['last_seen'] = str(d['last_seen'])
+            detail[d['cell_key']].append(d)
+        for k in detail:
+            detail[k].sort(key=lambda c: (0 if c.get('is_enabled') else 1, -(c.get('clicks') or 0)))
 
         def tile(s):
             cs = [r for r in rows if r['strategy'] == s]
@@ -9223,7 +9237,8 @@ def daily_workflow():
                 'suppressed':    sum(1 for r in cs if r['status'] == 'suppressed'),
             }
 
-        return jsonify({'strategies': STRATS, 'tiles': {s: tile(s) for s in STRATS}, 'cells': rows})
+        return jsonify({'strategies': STRATS, 'tiles': {s: tile(s) for s in STRATS},
+                        'cells': rows, 'detail': dict(detail)})
     except Exception as e:
         print(f"Error in daily_workflow: {e}")
         return jsonify({'error': str(e)}), 500

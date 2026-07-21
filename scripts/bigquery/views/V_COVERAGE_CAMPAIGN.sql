@@ -115,6 +115,7 @@ suppress AS (
 )
 SELECT
   t.grain,
+  t.cell_key AS cell_key,
   t.parent_name,
   t.asin,
   t.product_short_name,
