@@ -138,7 +138,27 @@ SELECT
       CASE WHEN COALESCE(l.n_enabled, 0) = 0 THEN 'missing'
            WHEN l.n_enabled > 1 THEN 'redundant'
            ELSE 'ok' END
-  END AS status
+  END AS status,
+  -- ── S2 VERIFY: plain-English reason per cell (label = product / family / Store) ──
+  CASE
+    WHEN COALESCE(sp.suppressed, FALSE)
+      THEN CONCAT('Marked not-expected for ', COALESCE(t.product_short_name, t.parent_name, 'Store'), '.')
+    -- 'missing' = expected AND no enabled campaign
+    WHEN t.expected AND COALESCE(l.n_enabled, 0) = 0 AND COALESCE(l.n_any, 0) > 0
+      THEN CONCAT('No enabled ', t.strategy, ' campaign for ', COALESCE(t.product_short_name, t.parent_name, 'Store'),
+                  ' — ', CAST(COALESCE(l.n_any, 0) AS STRING), ' paused/archived in history (was running, now off).')
+    WHEN t.expected AND COALESCE(l.n_enabled, 0) = 0 AND COALESCE(l.n_any, 0) = 0
+      THEN CONCAT('No ', t.strategy, ' campaign ever built for ', COALESCE(t.product_short_name, t.parent_name, 'Store'), '.')
+    WHEN COALESCE(l.n_enabled, 0) > 1
+      THEN CONCAT(CAST(l.n_enabled AS STRING), ' enabled ', t.strategy, ' campaigns competing for ',
+                  COALESCE(t.product_short_name, t.parent_name, 'Store'), ' — consider consolidating.')
+    WHEN COALESCE(l.n_enabled, 0) = 1
+      THEN CONCAT('1 enabled ', t.strategy, ' campaign for ', COALESCE(t.product_short_name, t.parent_name, 'Store'),
+                  IFNULL(CONCAT(', ', FORMAT('%.2f', l.net_roas), 'x net ROAS (90d).'), '.'))
+    -- 'none' = not-expected AND no enabled campaign
+    ELSE CONCAT('No ', t.strategy, ' campaign for ', COALESCE(t.product_short_name, t.parent_name, 'Store'),
+                ' — optional, not flagged as missing.')
+  END AS reason
 FROM target t
 LEFT JOIN live_agg l USING (cell_key)
 LEFT JOIN suppress sp

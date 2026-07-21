@@ -1,0 +1,83 @@
+-- V_COVERAGE_CAMPAIGN_DETAIL — S2 VERIFY evidence: one row per (cell_key × campaign)
+--
+-- The per-campaign evidence behind each V_COVERAGE_CAMPAIGN cell. Reuses the SAME
+-- assembly + cell_key logic as V_COVERAGE_CAMPAIGN but does NOT aggregate to the cell —
+-- keeps one row per (cell, campaign) so the endpoint can show which campaigns exist,
+-- their live state, 90-day metrics, and when each was last seen. Join back to the cell
+-- via cell_key. Only campaigns whose strategy_category maps to one of the 6 strategies
+-- (AUTO / INTENT / EXACT_BOOST / COMPETITOR / BRAND_DEFENSE / PRODUCT_DEFENSE) are kept;
+-- OTHER / NULL (cell_key NULL) are dropped.
+CREATE OR REPLACE VIEW `onyga-482313.OI.V_COVERAGE_CAMPAIGN_DETAIL` AS
+WITH
+-- ── Own sellable products (target universe) + per-ASIN gross profit per unit ──
+prod AS (
+  SELECT dp.asin, dp.parent_name, dp.product_short_name,
+    ROUND(lc.price - COALESCE(ch.TOTAL_COST_PER_UNIT, 0), 2) AS gp_per_unit
+  FROM `onyga-482313`.OI.DIM_PRODUCT dp
+  LEFT JOIN (
+    SELECT asin1, price FROM `onyga-482313`.OI.V_DIM_LISTING_CURRENT
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY asin1 ORDER BY price DESC) = 1
+  ) lc ON lc.asin1 = dp.asin
+  LEFT JOIN (
+    SELECT asin, TOTAL_COST_PER_UNIT FROM `onyga-482313`.OI.DIM_COSTS_HISTORY
+    WHERE end_date IS NULL OR end_date >= CURRENT_DATE()
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY asin ORDER BY start_date DESC) = 1
+  ) ch ON ch.asin = dp.asin
+  WHERE dp.parent_name IS NOT NULL AND dp.parent_name != 'UNKNOWN' AND dp.is_active = true
+),
+-- ── Latest campaign state + display name ──
+camp_state AS (
+  SELECT campaign_id,
+    ARRAY_AGG(state ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state,
+    ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS campaign_name
+  FROM `onyga-482313`.OI.V_SRC_AmazonAds_campaign_history GROUP BY 1
+),
+-- ── Authoritative asin<->campaign link + 90-day metrics (per campaign) ──
+adv AS (
+  SELECT advertised_asin AS asin, campaign_id,
+    SUM(impressions) AS impressions, SUM(clicks) AS clicks,
+    SUM(cost) AS cost, SUM(units_7d) AS units,
+    MAX(date) AS last_seen
+  FROM `onyga-482313`.OI.V_SRC_AmazonAds_advertised_product
+  WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+  GROUP BY 1, 2
+),
+-- ── Live rows: one per (own asin, campaign) with strategy_category + cell_key ──
+live_base AS (
+  SELECT
+    p.parent_name, p.gp_per_unit,
+    vcr.strategy_category,
+    adv.campaign_id, cst.state, cst.campaign_name,
+    adv.impressions, adv.clicks, adv.cost, adv.units, adv.last_seen,
+    CASE
+      WHEN vcr.strategy_category = 'AUTO' THEN CONCAT('AUTO|', p.asin)
+      WHEN vcr.strategy_category = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE|__STORE__'
+      WHEN vcr.strategy_category IN ('INTENT', 'BRAND_DEFENSE', 'COMPETITOR', 'EXACT_BOOST')
+        THEN CONCAT(vcr.strategy_category, '|', p.parent_name)
+      ELSE NULL  -- OTHER / unclassified: not a target cell, dropped below
+    END AS cell_key
+  FROM prod p
+  JOIN adv ON adv.asin = p.asin
+  JOIN `onyga-482313`.OI.V_CAMPAIGN_ROLE vcr ON vcr.campaign_id = adv.campaign_id
+  LEFT JOIN camp_state cst ON cst.campaign_id = adv.campaign_id
+)
+-- ── One row per (cell_key × campaign): a campaign can serve several ASINs in the same
+--    cell (e.g. an AUTO cell is one ASIN, but family cells span ASINs) — aggregate the
+--    per-ASIN advertised rows back up to the (cell, campaign) pair. ──
+SELECT
+  cell_key,
+  ANY_VALUE(parent_name) AS parent_name,
+  strategy_category AS strategy,
+  campaign_id,
+  ANY_VALUE(campaign_name) AS campaign_name,
+  ANY_VALUE(state) AS state,
+  ANY_VALUE(state) = 'ENABLED' AS is_enabled,
+  CAST(SUM(impressions) AS INT64) AS impressions,
+  CAST(SUM(clicks) AS INT64) AS clicks,
+  CAST(SUM(units) AS INT64) AS units,
+  ROUND(SUM(cost), 2) AS ad_spend,
+  ROUND(SAFE_DIVIDE(SUM(units * gp_per_unit), NULLIF(SUM(cost), 0)), 2) AS net_roas,
+  MAX(last_seen) AS last_seen
+FROM live_base
+WHERE cell_key IS NOT NULL
+GROUP BY cell_key, strategy_category, campaign_id

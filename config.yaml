@@ -230,6 +230,17 @@ views:
       - V_SRC_AmazonAds_advertised_product
       - DE_COVERAGE_EXPECTATION
 
+  - name: "V_COVERAGE_CAMPAIGN_DETAIL"
+    description: "S2 VERIFY evidence for the coverage cockpit: one row per (cell_key × campaign) — the per-campaign backing behind each V_COVERAGE_CAMPAIGN cell. Reuses the SAME assembly + cell_key logic as V_COVERAGE_CAMPAIGN but does NOT aggregate to the cell; keeps per-campaign so the endpoint can list which campaigns exist for a cell, their latest state (ENABLED/PAUSED/ARCHIVED from V_SRC_AmazonAds_campaign_history), is_enabled, 90d impressions/clicks/units/ad_spend/net_roas, and last_seen (max date in the 90d window). Join back to the cell via cell_key. Only campaigns whose V_CAMPAIGN_ROLE.strategy_category maps to one of the 6 strategies are kept (OTHER/NULL dropped). No ordering guaranteed — the endpoint sorts."
+    source_files: ["scripts/bigquery/views/V_COVERAGE_CAMPAIGN_DETAIL.sql"]
+    dependencies:
+      - V_CAMPAIGN_ROLE
+      - DIM_PRODUCT
+      - V_DIM_LISTING_CURRENT
+      - DIM_COSTS_HISTORY
+      - V_SRC_AmazonAds_campaign_history
+      - V_SRC_AmazonAds_advertised_product
+
   - name: "V_BUDGET_STEP1_STRATEGY"
     description: "One row per Coverage role for the Weekly Run Step-1 'Budget by strategy' split — the sibling of V_BUDGET_STEP1_FAMILY, grouped by strategy_role instead of parent_name. Offense sub-roles only (brand/product defense have their own PPC modes and panels). Rolled up from V_BUDGET_STEP1_CAMPAIGN so the split and the step-2 campaign table read the same per-campaign new_budget and cannot disagree. Spend-weighted CPC. Cube: StrategyBudgetStep1."
     source_files: ["scripts/bigquery/views/V_BUDGET_STEP1_STRATEGY.sql"]
