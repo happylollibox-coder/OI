@@ -606,6 +606,22 @@ views:
       - FACT_AMAZON_ADS
       - DIM_PRODUCT
 
+  - name: "V_STRATEGY_CAMPAIGN_PERF"
+    description: "Per current campaign: resolved strategy + lifetime ads perf + active flag."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_STRATEGY_CAMPAIGN_PERF.sql"]
+    dependencies:
+      - V_CAMPAIGN_STRATEGY_RESOLVED
+      - FACT_AMAZON_ADS
+
+  - name: "V_STRATEGY_CAMPAIGN_WEEKLY"
+    description: "Campaign×week ads perf with resolved strategy (Sunday weeks)."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_STRATEGY_CAMPAIGN_WEEKLY.sql"]
+    dependencies:
+      - V_CAMPAIGN_STRATEGY_RESOLVED
+      - FACT_AMAZON_ADS
+
   # ── Budget waterfall + daily optimizer (spec: docs/superpowers/specs/2026-07-05-weekly-run-budget-waterfall.md) ──
   - name: "V_CAMPAIGN_FAMILY_MAP"
     description: "Single family attribution for every ENABLED campaign (DE_CAMPAIGN_FAMILY override ∪ dominant-ASIN ∪ 'Unknown'). Coverage guarantee for the budget waterfall — no enabled campaign falls out."
