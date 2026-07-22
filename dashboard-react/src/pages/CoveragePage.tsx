@@ -195,7 +195,12 @@ function MappingRow({ c, families, strategies, pending, onSave }: {
         : '';
   const [family, setFamily] = useState(initFamily);
   const [strategy, setStrategy] = useState(initStrategy);
-  const canSave = !!family && !!strategy && !pending;
+  // Snapshot the initial defaults once (lazy initializer, evaluated on mount only)
+  // so "changed?" is measured against mount-time values, not the live edits.
+  // A row left at its defaults keeps Save disabled.
+  const [initial] = useState(() => ({ family: initFamily, strategy: initStrategy }));
+  const changed = family !== initial.family || strategy !== initial.strategy;
+  const canSave = changed && !!family && !!strategy && !pending;
   const selCls = 'text-[10px] bg-surface border border-border-faint rounded px-1.5 py-1 text-muted';
   return (
     <div className="flex items-center gap-2 border-b border-border-faint py-1.5 last:border-0">
@@ -314,24 +319,24 @@ export function StrategyTile({ name, t, stat, open, onOpen }: { name: string; t:
   );
 }
 
-/** Replaces the UNMAPPED strategy tile: a ⚙ Configure button that opens the
- *  campaign-mapping modal. Amber toned with a count pill when unmapped>0, else neutral. */
+/** Small top-right header button that opens the campaign-mapping modal.
+ *  Amber toned with a count badge when unmapped>0, else neutral. */
 function ConfigureButton({ count, onClick }: { count: number; onClick: () => void }) {
   const active = count > 0;
   const tone = active
-    ? 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
-    : 'border-border-faint bg-surface hover:bg-white/[0.04]';
+    ? 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400'
+    : 'border-border-faint bg-surface hover:bg-white/[0.04] text-muted';
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 rounded-lg border px-4 py-3 min-w-[150px] transition ${tone}`}
+      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition ${tone}`}
       title="Configure campaign → strategy mapping"
     >
-      <span className="text-base leading-none">⚙</span>
-      <span className="text-xs font-bold text-heading">Configure</span>
+      <span className="leading-none">⚙</span>
+      <span className="font-semibold">Configure</span>
       {active
-        ? <span className="ml-auto rounded-full bg-amber-500/20 px-2 py-px text-[10px] font-bold tabular-nums text-amber-400">{count}</span>
-        : <span className="ml-auto text-[10px] text-faint tabular-nums">0</span>}
+        ? <span className="rounded-full bg-amber-500/20 px-1.5 py-px text-[9px] font-bold tabular-nums text-amber-400">{count}</span>
+        : <span className="text-[9px] text-faint tabular-nums">0</span>}
     </button>
   );
 }
@@ -812,7 +817,7 @@ export function CoveragePage() {
   const [mapData, setMapData] = useState<MappingData | null>(null); // lazily-fetched mapping list
   const [mapLoading, setMapLoading] = useState(false);
   const [mapPending, setMapPending] = useState<Set<string>>(new Set()); // campaign_ids of in-flight assigns
-  const [onlyUnmapped, setOnlyUnmapped] = useState(false); // modal filter toggle
+  const [onlyUnmapped, setOnlyUnmapped] = useState(true); // modal filter toggle (default: only unmapped)
   const [monthsData, setMonthsData] = useState<Record<string, MonthRow[]> | null>(null);
   const [monthsLoading, setMonthsLoading] = useState(false);
   const [openCampaigns, setOpenCampaigns] = useState<Set<string>>(new Set()); // expanded campaign_ids
@@ -974,9 +979,15 @@ export function CoveragePage() {
 
   return (
     <div className="p-4">
-      <div className="flex items-center gap-3 mb-4">
-        <h1 className="text-lg font-bold text-heading">🗂️ Daily Workflow — Coverage</h1>
-        <span className="text-[11px] text-muted">green = everything defined · click a strategy to see the mapping</span>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-bold text-heading">🗂️ Daily Workflow — Coverage</h1>
+          <span className="text-[11px] text-muted">green = everything defined · click a strategy to see the mapping</span>
+        </div>
+        <ConfigureButton
+          count={data.tiles['UNMAPPED']?.informational ?? 0}
+          onClick={() => { setConfigOpen(true); ensureMapping(); }}
+        />
       </div>
 
       <div className="flex flex-col md:flex-row gap-3">
@@ -993,23 +1004,15 @@ export function CoveragePage() {
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap gap-2 mb-2">
-            {data.strategies.map(s => (
-              s === 'UNMAPPED' ? (
-                <ConfigureButton
-                  key={s}
-                  count={data.tiles['UNMAPPED']?.informational ?? 0}
-                  onClick={() => { setConfigOpen(true); ensureMapping(); }}
-                />
-              ) : (
-                <StrategyTile
-                  key={s}
-                  name={s}
-                  t={data.tiles[s] ?? { defined: 0, missing: 0, redundant: 0, informational: 0, suppressed: 0 }}
-                  stat={data.strategy_stats?.[s]}
-                  open={open === s}
-                  onOpen={() => setOpen(o => (o === s ? null : s))}
-                />
-              )
+            {data.strategies.filter(s => s !== 'UNMAPPED').map(s => (
+              <StrategyTile
+                key={s}
+                name={s}
+                t={data.tiles[s] ?? { defined: 0, missing: 0, redundant: 0, informational: 0, suppressed: 0 }}
+                stat={data.strategy_stats?.[s]}
+                open={open === s}
+                onOpen={() => setOpen(o => (o === s ? null : s))}
+              />
             ))}
           </div>
 
