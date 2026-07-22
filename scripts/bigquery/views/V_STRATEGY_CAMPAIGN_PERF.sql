@@ -1,5 +1,7 @@
 -- V_STRATEGY_CAMPAIGN_PERF: per current campaign, resolved strategy + lifetime ads perf.
--- Grain: one row per campaign_id. active = had spend in the last 30 days.
+-- Grain: one row per campaign_id that has EVER spent (spend > 0 filter, added 2026-07-22 —
+-- excludes ~961 never-spent historical campaigns that would otherwise be noise / blow past
+-- the frontend row limit). active = had spend in the last 30 days.
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_STRATEGY_CAMPAIGN_PERF` AS
 WITH perf AS (
   SELECT
@@ -28,4 +30,5 @@ SELECT
   p.net_roas, p.conv_rate, p.cpc, p.last_date,
   COALESCE(p.is_active, FALSE) AS is_active
 FROM `onyga-482313.OI.V_CAMPAIGN_STRATEGY_RESOLVED` r
-LEFT JOIN perf p USING (campaign_id);
+LEFT JOIN perf p USING (campaign_id)
+WHERE COALESCE(p.spend, 0) > 0;
