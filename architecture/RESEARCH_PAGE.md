@@ -51,6 +51,13 @@ V_RESEARCH_TERMS    V_RESEARCH_RANKED  ◄── V_CONVERSION_CURVE, DIM_PRODUCT
      age token, contains "girl", defaults to 8-14, and wrongly lands in the
      8-14 birthday intent/tween campaigns. After editing the age regexes,
      re-run `SP_REFRESH_RESEARCH_RANKED` to re-tag `FACT_RESEARCH_RANKED.age_group`.
+   - **Age-birthday intent routing (Ori 2026-07-22):** the age-specific birthday intent
+     themes in `DE_INTENT_THEMES` (`kid-/tween-/teen-birthday-gift`, `age-8-14-birthday-gift`)
+     match on **age_group + occasion=Birthday only** — the `\bgifts?\b` requirement was
+     dropped so a term like "12 year old girl birthday" (no "gift") routes to its age bucket
+     (tween) instead of falling through to generic `birthday`. This means correct `age_group`
+     tagging here is what drives age-birthday campaign routing; the generic no-age
+     `birthday-gift` theme still requires the gift word. See `INTENT_CAMPAIGN_MODEL.md` §A.2c.
 2. **Product-type vocabulary** lives ONLY in `DE_PRODUCT_TYPE_KEYWORDS`
    (values like `Food & Treats`, `Bath & Spa`, `Journal & Diary`). Any product_type
    tagging must use the keyword-lookup join (priority ASC, longest keyword wins).

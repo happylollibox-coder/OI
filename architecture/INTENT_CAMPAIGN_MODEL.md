@@ -121,6 +121,20 @@ bidding against each other.
 - **Compound intents added (6):** `birthday-gift`, `christmas-gift`, `easter-gift`, `tween-birthday-gift`, `tween-christmas-gift`, `tween-easter-gift` (`tween-gift` already existed). 47 themes total.
 - Result: **0 terms with >1 intent**. `gift` for LolliME went $1,901 → $546 and its ROAS *improved* 1.57 → 1.83 — the old number was an average masking two different intents.
 
+**Age-birthday intents route on age + occasion only — no "gift" word required (Ori 2026-07-22).**
+The four age-specific birthday themes (`kid-birthday-gift`, `tween-birthday-gift`, `teen-birthday-gift`,
+`age-8-14-birthday-gift`) had `match_keyword_regex=r'\bgifts?\b'`, so an age + Birthday term *without*
+"gift" (e.g. "12 year old girl birthday", "14 year old girl birthday") failed the AND and fell through to
+generic `birthday` (occasion-only). Fix: **`match_keyword_regex` set to NULL** on those four themes so
+**"N year old … birthday" routes by age** — 12→`tween-birthday-gift`, 14→`teen-birthday-gift`,
+8→`kid-birthday-gift`. Their specificity drops 3→2 (occasion + age), but they still beat generic `birthday`
+(spec 1) on specificity and beat the no-age `birthday-gift` catch-all (spec 2) on `priority` (5 < 15).
+The generic `birthday-gift` theme keeps its regex — it is the no-age gift catch-all. This is a live edit to the
+`DE_INTENT_THEMES` data-entry table (the rows have no repo seed file — the DDL at
+`scripts/bigquery/tables/DE_INTENT_THEMES.sql` is CREATE-only; the table is the source of truth).
+Blast radius (Lollibox): generic `birthday` 265→6; the age buckets absorbed them
+(kid 118→163, teen 185→248, tween 232→324).
+
 **`effective_rank` — seasonal terms are rankable again.** `V_RESEARCH_RANKED` sets
 `rank = 0 when (holiday IS NOT NULL AND NOT is_holiday_active)`, else `ROUND(AVG(overall_fit, purchase_rank))`.
 Out of season every holiday term is rank 0, so ordering by rank silently fell through to the demand
@@ -134,6 +148,19 @@ term rides in on pure volume (easter candy: fit 0 + purchase_rank 100 → effect
 A fit-0 term is by definition irrelevant to the family and must never enter a campaign. Removes
 **136/792 (17%)** of keyword slots; starves **no** GENERIC intent (3 TIME_BASED go empty — correct:
 no relevant terms ⇒ no campaign). LolliME/easter now leads with *"easter for teen girls"* (fit 30, 837 demand).
+
+**Brand exclusion — own-brand terms never enter an intent (Ori 2026-07-21).** An intent *is* its
+SP campaign (Exact/Broad/Phrase/Competitor); bidding on your own brand name there just pays for
+traffic that converts organically and fights **Brand Defense**, which owns brand. Own-brand terms
+were leaking into generic themes (e.g. cross-family **Gift Sets** carried *"purple lollibox"*,
+*"white lollibox"*, *"happy lolli care package 12 year old girl"*), inflating theme ranks and
+polluting the Brand-Spotlight suggestion feed. Fix: anti-join the `matched` CTE against
+**`DIM_BRAND_PHRASES`** (`STRPOS(term, phrase) > 0`) — the maintained own-brand phrase table, where
+every phrase contains a brand root (`lolli`/`lollime`/`lollibox`/`happy lolli`, per
+`SP_ACCUMULATE_BRAND_PHRASES`), so a substring match is unambiguously brand and can't swallow a
+generic term. Same match pattern as `V_SEARCH_TERM_SEGMENT`. This governs both the Intents panel and
+Brand Spotlight, since both read `V_INTENT_KEYWORDS`. Competitor-brand exclusion (e.g. "pretty me")
+is **not** covered here — no competitor list feeds this pipeline yet (open item).
 
 ### A.2d The PEAK principle (Ori 2026-07-16) ✅ BUILT
 
