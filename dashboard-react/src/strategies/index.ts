@@ -6,15 +6,20 @@ import { BRAND_DEFENSE } from './brandDefense';
 import { COMPETITOR } from './competitor';
 import { INTENT } from './intent';
 import { PRODUCT_DEFENSE } from './productDefense';
+import { AUTO } from './auto';
+import { UNCLASSIFIED } from './unclassified';
 
 // Consolidated 2026-07-17 (MIGRATE_STRATEGY_CONSOLIDATION): HUNTER + LOW_COST_DISCOVERY → INTENT,
 // COMPETITOR_CONQUEST → COMPETITOR, CATEGORY_CONQUEST removed (folded into COMPETITOR).
+// AUTO + UNCLASSIFIED added 2026-07-22 for the campaign-first Strategy page.
 const STRATEGIES: StrategyMeta[] = [
   EXACT_BOOST,
   BRAND_DEFENSE,
   COMPETITOR,
   INTENT,
   PRODUCT_DEFENSE,
+  AUTO,
+  UNCLASSIFIED,
 ];
 
 export const STRATEGY_META: Record<string, StrategyMeta> = Object.fromEntries(
