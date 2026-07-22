@@ -1150,6 +1150,11 @@ tables:
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE/DE_CAMPAIGN_FAMILY.sql"]
 
+  - name: "DE_CAMPAIGN_STRATEGY"
+    description: "Manual per-campaign strategy override (Admin Campaign Strategy panel). Highest precedence in V_CAMPAIGN_STRATEGY_RESOLVED."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_CAMPAIGN_STRATEGY.sql"]
+
   - name: "DE_NEGATIVE_KEYWORDS"
     description: "Warehouse-owned negative-keyword registry (replaces frozen Fivetran negative_keyword sync). Seeded from an Amazon bulksheet download via tools/load_negatives_seed.py; maintained by SP_SYNC_NEGATIVES from FACT_PPC_CHANGE_LOG."
     type: "data_entry"
