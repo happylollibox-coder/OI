@@ -262,6 +262,37 @@ function cellLabel(c: Cell): string {
   return c.product_short_name || c.parent_name || c.asin || '—';
 }
 
+export interface FamilyGroup {
+  family: string;
+  cells: Cell[];
+  missingCount: number;
+}
+
+/** Group a strategy's coverage cells by parent_name (null → "Store").
+ *  Groups ordered by # of 'missing' cells DESC, then family name; cells within
+ *  a group keep the status sort (missing → redundant → ok → none → suppressed). */
+// eslint-disable-next-line react-refresh/only-export-components
+export function groupByFamily(cells: Cell[]): FamilyGroup[] {
+  const byFamily = new Map<string, Cell[]>();
+  for (const c of cells) {
+    const family = c.parent_name ?? 'Store';
+    const arr = byFamily.get(family);
+    if (arr) arr.push(c);
+    else byFamily.set(family, [c]);
+  }
+  const groups: FamilyGroup[] = [];
+  for (const [family, groupCells] of byFamily) {
+    const sorted = [...groupCells].sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
+    groups.push({
+      family,
+      cells: sorted,
+      missingCount: sorted.filter(c => c.status === 'missing').length,
+    });
+  }
+  groups.sort((a, b) => b.missingCount - a.missingCount || a.family.localeCompare(b.family));
+  return groups;
+}
+
 /** Daily-workflow coverage cockpit (rung 1): six strategy tiles rolling up
  *  defined / to-do / redundant, each expandable to its coverage cells.
  *  All status/roll-up logic lives in /api/daily-workflow (BigQuery); this only renders. */
@@ -272,6 +303,37 @@ export function CoveragePage() {
   const [openCell, setOpenCell] = useState<string | null>(null); // expanded cell_key
   const [kwData, setKwData] = useState<Record<string, FamilyKeywords> | null>(null);
   const [kwLoading, setKwLoading] = useState(false);
+  const [pendingCell, setPendingCell] = useState<string | null>(null); // cell_key of in-flight suppress toggle
+
+  async function toggleSuppress(c: Cell, active: boolean) {
+    if (pendingCell) return;
+    setPendingCell(c.cell_key);
+    try {
+      const res = await apiFetch('/api/coverage-expectation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent_name: c.parent_name,
+          asin: c.asin,
+          strategy: c.strategy,
+          active,
+          reason: active ? 'marked not needed in cockpit' : 'restored expectation in cockpit',
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (!json.ok) throw new Error('server rejected expectation write');
+      const wf = await apiFetch('/api/daily-workflow');
+      if (!wf.ok) throw new Error(`HTTP ${wf.status}`);
+      const fresh = await wf.json();
+      if (fresh.error) throw new Error(fresh.error);
+      setData(fresh);
+    } catch (e) {
+      console.warn('coverage expectation toggle failed', e);
+    } finally {
+      setPendingCell(null);
+    }
+  }
 
   function ensureKeywords() {
     if (kwData !== null || kwLoading) return;
@@ -293,11 +355,8 @@ export function CoveragePage() {
   if (err) return <div className="p-6 text-sm text-red-400">Coverage scan failed: {err}</div>;
   if (!data) return <div className="p-6 text-sm text-muted">Scanning ad coverage…</div>;
 
-  const openCells = open
-    ? data.cells
-        .filter(c => c.strategy === open)
-        .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status])
-    : [];
+  const openGroups = open ? groupByFamily(data.cells.filter(c => c.strategy === open)) : [];
+  const openCellCount = openGroups.reduce((n, g) => n + g.cells.length, 0);
 
   return (
     <div className="p-4">
@@ -329,46 +388,79 @@ export function CoveragePage() {
           </div>
 
           <div className="p-4 text-xs">
-            {openCells.length === 0 ? (
+            {openCellCount === 0 ? (
               <div className="text-faint text-[10px]">No coverage cells for this strategy.</div>
             ) : (
-              openCells.map((c, i) => {
-                const isOpen = openCell === c.cell_key;
-                const campaigns = data.detail?.[c.cell_key];
-                return (
-                  <div key={c.cell_key || `${c.grain}-${c.asin ?? c.parent_name ?? i}`} className="border-b border-border-faint last:border-0">
-                    <button
-                      onClick={() => {
-                        setOpenCell(k => (k === c.cell_key ? null : c.cell_key));
-                        if (c.strategy === 'INTENT') ensureKeywords();
-                      }}
-                      className="flex w-full items-center gap-2 py-1 text-left hover:bg-white/[0.02]"
-                    >
-                      <span className="text-faint text-[9px] w-2 shrink-0">{isOpen ? '▾' : '▸'}</span>
-                      <span className="text-heading truncate max-w-[200px]" title={c.asin ?? undefined}>{cellLabel(c)}</span>
-                      <span className="ml-auto"><Metrics c={c} /></span>
-                      <span className="w-[100px] text-right"><StatusPill c={c} /></span>
-                    </button>
-                    {isOpen && (
-                      <div className="pl-4 pb-2 pt-0.5">
-                        {c.reason && (
-                          <div className="text-muted italic text-[11px] mb-1.5">💡 {c.reason}</div>
-                        )}
-                        {campaigns && campaigns.length > 0 ? (
-                          campaigns.map((cmp, j) => (
-                            <CampaignEvidenceRow key={`${cmp.campaign_name}-${j}`} c={cmp} />
-                          ))
-                        ) : (
-                          <div className="text-faint text-[10px]">no campaigns</div>
-                        )}
-                        {c.strategy === 'INTENT' && (
-                          <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} />
-                        )}
-                      </div>
+              openGroups.map(group => (
+                <div key={group.family} className="mb-2 last:mb-0">
+                  <div className="flex items-center gap-1.5 px-0.5 pb-0.5 pt-1">
+                    <span className="text-muted uppercase text-[10px] font-semibold tracking-wide">{group.family}</span>
+                    {group.missingCount > 0 && (
+                      <span className="text-red-400 text-[10px] font-semibold">{group.missingCount} to do</span>
                     )}
                   </div>
-                );
-              })
+                  {group.cells.map((c, i) => {
+                    const isOpen = openCell === c.cell_key;
+                    const campaigns = data.detail?.[c.cell_key];
+                    const isPending = pendingCell === c.cell_key;
+                    return (
+                      <div key={c.cell_key || `${c.grain}-${c.asin ?? c.parent_name ?? i}`} className="border-b border-border-faint last:border-0">
+                        <div className="flex w-full items-center gap-2 py-1 hover:bg-white/[0.02]">
+                          <button
+                            onClick={() => {
+                              setOpenCell(k => (k === c.cell_key ? null : c.cell_key));
+                              if (c.strategy === 'INTENT') ensureKeywords();
+                            }}
+                            className="flex flex-1 min-w-0 items-center gap-2 text-left"
+                          >
+                            <span className="text-faint text-[9px] w-2 shrink-0">{isOpen ? '▾' : '▸'}</span>
+                            <span className="text-heading truncate max-w-[200px]" title={c.asin ?? undefined}>{cellLabel(c)}</span>
+                            <span className="ml-auto"><Metrics c={c} /></span>
+                            <span className="w-[100px] text-right"><StatusPill c={c} /></span>
+                          </button>
+                          {c.status === 'missing' && (
+                            <button
+                              onClick={() => toggleSuppress(c, true)}
+                              disabled={isPending}
+                              className="shrink-0 text-faint hover:text-muted text-[10px] disabled:opacity-40"
+                              title="Mark this cell as not needing a campaign"
+                            >
+                              {isPending ? '…' : '⊘ not needed'}
+                            </button>
+                          )}
+                          {c.status === 'suppressed' && (
+                            <button
+                              onClick={() => toggleSuppress(c, false)}
+                              disabled={isPending}
+                              className="shrink-0 text-faint hover:text-muted text-[10px] disabled:opacity-40"
+                              title="Restore this cell as expected coverage"
+                            >
+                              {isPending ? '…' : '↩ expect'}
+                            </button>
+                          )}
+                        </div>
+                        {isOpen && (
+                          <div className="pl-4 pb-2 pt-0.5">
+                            {c.reason && (
+                              <div className="text-muted italic text-[11px] mb-1.5">💡 {c.reason}</div>
+                            )}
+                            {campaigns && campaigns.length > 0 ? (
+                              campaigns.map((cmp, j) => (
+                                <CampaignEvidenceRow key={`${cmp.campaign_name}-${j}`} c={cmp} />
+                              ))
+                            ) : (
+                              <div className="text-faint text-[10px]">no campaigns</div>
+                            )}
+                            {c.strategy === 'INTENT' && (
+                              <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))
             )}
           </div>
         </div>

@@ -1,5 +1,43 @@
 import { render, screen } from '@testing-library/react';
-import { StrategyTile, CampaignEvidenceRow, KeywordRow } from './CoveragePage';
+import { StrategyTile, CampaignEvidenceRow, KeywordRow, groupByFamily } from './CoveragePage';
+
+function cell(over: Partial<Parameters<typeof groupByFamily>[0][number]> = {}) {
+  return {
+    grain: 'ASIN' as const,
+    parent_name: 'LolliME',
+    asin: 'B01',
+    product_short_name: 'Journal',
+    strategy: 'AUTO',
+    expected: true,
+    n_enabled: 0,
+    n_any: 0,
+    impressions: 0,
+    clicks: 0,
+    units: 0,
+    net_roas: null,
+    campaigns: null,
+    suppressed: false,
+    status: 'ok' as const,
+    reason: '',
+    cell_key: 'k',
+    ...over,
+  };
+}
+
+test('groupByFamily clusters cells by parent_name and labels null as Store', () => {
+  const groups = groupByFamily([
+    cell({ parent_name: 'LolliME', asin: 'B01', cell_key: 'a', status: 'ok' }),
+    cell({ parent_name: 'Bottle', asin: 'B02', cell_key: 'b', status: 'missing' }),
+    cell({ parent_name: 'LolliME', asin: 'B03', cell_key: 'c', status: 'missing' }),
+    cell({ parent_name: null, asin: null, cell_key: 'd', status: 'ok', grain: 'STORE' }),
+  ]);
+  // LolliME (1 missing) and Bottle (1 missing) sort before Store (0 missing); tie broken by name
+  expect(groups.map(g => g.family)).toEqual(['Bottle', 'LolliME', 'Store']);
+  const lollime = groups.find(g => g.family === 'LolliME')!;
+  expect(lollime.cells.map(c => c.cell_key)).toEqual(['c', 'a']); // missing sorts before ok
+  expect(lollime.missingCount).toBe(1);
+  expect(groups.find(g => g.family === 'Store')!.family).toBe('Store');
+});
 test('tile shows defined + to-do counts', () => {
   render(<StrategyTile name="INTENT" t={{defined:1,missing:2,redundant:3,informational:0,suppressed:0}} open={false} onOpen={()=>{}} />);
   expect(screen.getByText(/1 defined/)).toBeInTheDocument();
