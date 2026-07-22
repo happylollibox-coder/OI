@@ -108,10 +108,10 @@ target AS (
 ),
 -- ── Manual suppression overrides (deduped to one row per cell) ──
 suppress AS (
-  SELECT parent_name, strategy, TRUE AS suppressed
+  SELECT parent_name, asin, strategy, TRUE AS suppressed
   FROM `onyga-482313`.OI.DE_COVERAGE_EXPECTATION
   WHERE is_active
-  GROUP BY parent_name, strategy
+  GROUP BY parent_name, asin, strategy
 )
 SELECT
   t.grain,
@@ -164,4 +164,5 @@ FROM target t
 LEFT JOIN live_agg l USING (cell_key)
 LEFT JOIN suppress sp
   ON sp.parent_name IS NOT DISTINCT FROM t.parent_name
+ AND sp.asin IS NOT DISTINCT FROM t.asin
  AND sp.strategy = t.strategy

@@ -219,7 +219,7 @@ views:
       - DIM_EXPERIMENT
 
   - name: "V_COVERAGE_CAMPAIGN"
-    description: "Coverage-cockpit reconciler: per target cell, what SHOULD exist vs what DOES (live enabled campaigns), classified through V_CAMPAIGN_ROLE.strategy_category (the 6-strategy lens: AUTO / INTENT / EXACT_BOOST / COMPETITOR / BRAND_DEFENSE / PRODUCT_DEFENSE). Emits one row per target cell at its natural grain (column `grain`): AUTO = ASIN (one per own sellable ASIN), INTENT / BRAND_DEFENSE / COMPETITOR / EXACT_BOOST = FAMILY (one per own family), PRODUCT_DEFENSE = STORE (one row, parent_name NULL). LEFT JOINs from the target universe (DIM_PRODUCT where parent_name IS NOT NULL AND is_active) so zero-campaign cells still appear with n_enabled=0. Reuses ads_coverage_scan() assembly (gp_per_unit, camp state, advertised_product asin<->campaign link, 90d metric window). expected=TRUE for AUTO/INTENT/BRAND_DEFENSE/PRODUCT_DEFENSE, FALSE for COMPETITOR/EXACT_BOOST. status: suppressed -> 'suppressed'; not-expected -> none/redundant/ok; expected -> missing/redundant/ok. DE_COVERAGE_EXPECTATION (active, on parent_name+strategy) sets `suppressed`. Grain-only: NO campaign->intent linkage in the live account."
+    description: "Coverage-cockpit reconciler: per target cell, what SHOULD exist vs what DOES (live enabled campaigns), classified through V_CAMPAIGN_ROLE.strategy_category (the 6-strategy lens: AUTO / INTENT / EXACT_BOOST / COMPETITOR / BRAND_DEFENSE / PRODUCT_DEFENSE). Emits one row per target cell at its natural grain (column `grain`): AUTO = ASIN (one per own sellable ASIN), INTENT / BRAND_DEFENSE / COMPETITOR / EXACT_BOOST = FAMILY (one per own family), PRODUCT_DEFENSE = STORE (one row, parent_name NULL). LEFT JOINs from the target universe (DIM_PRODUCT where parent_name IS NOT NULL AND is_active) so zero-campaign cells still appear with n_enabled=0. Reuses ads_coverage_scan() assembly (gp_per_unit, camp state, advertised_product asin<->campaign link, 90d metric window). expected=TRUE for AUTO/INTENT/BRAND_DEFENSE/PRODUCT_DEFENSE, FALSE for COMPETITOR/EXACT_BOOST. status: suppressed -> 'suppressed'; not-expected -> none/redundant/ok; expected -> missing/redundant/ok. DE_COVERAGE_EXPECTATION (active, matched on parent_name+asin+strategy, all via IS NOT DISTINCT FROM) sets `suppressed` — AUTO suppression targets a single ASIN, family/store suppression has asin NULL. Grain-only: NO campaign->intent linkage in the live account."
     source_files: ["scripts/bigquery/views/V_COVERAGE_CAMPAIGN.sql"]
     dependencies:
       - V_CAMPAIGN_ROLE
@@ -1219,7 +1219,7 @@ tables:
     source_files: ["scripts/bigquery/tables/DE_KEYWORD_INTENT_OVERRIDE.sql"]
 
   - name: "DE_COVERAGE_EXPECTATION"
-    description: "Opt-out rows to suppress false 'missing' coverage cells in the daily-workflow cockpit."
+    description: "Opt-out rows to suppress false 'missing' coverage cells in the daily-workflow cockpit. Written by POST /api/coverage-expectation (idempotent upsert per natural key strategy+parent_name+asin). scope_grain = ASIN_STRATEGY (asin set, AUTO cells), FAMILY_STRATEGY (parent_name set, asin NULL) or STORE_STRATEGY (both NULL); is_active FALSE / absent row = not suppressed."
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_COVERAGE_EXPECTATION.sql"]
 

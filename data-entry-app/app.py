@@ -9244,6 +9244,82 @@ def daily_workflow():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/coverage-expectation', methods=['POST'])
+def coverage_expectation():
+    """Write a coverage-suppression override for one cell (mark NOT NEEDED / un-mark).
+
+    Body: { parent_name (str|null), asin (str|null), strategy (str, required),
+            active (bool), reason (str|optional) }.
+    Idempotent per natural key (strategy, parent_name, asin): deletes any existing
+    rows for the key, then inserts one active row when active=true. active=false
+    just clears the suppression (tombstone by absence). Backs the cockpit
+    "mark not needed" toggle over V_COVERAGE_CAMPAIGN.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        strategy = data.get('strategy')
+        if not strategy:
+            return jsonify({'error': 'strategy is required'}), 400
+        parent_name = data.get('parent_name')
+        asin = data.get('asin')
+        active = bool(data.get('active'))
+        reason = data.get('reason')
+
+        scope_grain = ('ASIN_STRATEGY' if asin
+                       else ('STORE_STRATEGY' if parent_name is None else 'FAMILY_STRATEGY'))
+
+        # updated_by: session email if present, else the email claim on the API JWT, else 'cockpit'
+        updated_by = session.get('user', {}).get('email')
+        if not updated_by:
+            try:
+                auth = request.headers.get('Authorization', '')
+                tok = auth[7:] if auth.startswith('Bearer ') else auth
+                updated_by = jwt.decode(tok, CUBEJS_API_SECRET, algorithms=['HS256']).get('email', 'cockpit')
+            except Exception:
+                updated_by = 'cockpit'
+
+        table = '`onyga-482313.OI.DE_COVERAGE_EXPECTATION`'
+        key_params = [
+            bigquery.ScalarQueryParameter('strategy', 'STRING', strategy),
+            bigquery.ScalarQueryParameter('parent_name', 'STRING', parent_name),
+            bigquery.ScalarQueryParameter('asin', 'STRING', asin),
+        ]
+
+        # 1) Delete any existing rows for the natural key (idempotent upsert).
+        del_q = (f"DELETE FROM {table} WHERE strategy = @strategy "
+                 "AND parent_name IS NOT DISTINCT FROM @parent_name "
+                 "AND asin IS NOT DISTINCT FROM @asin")
+        client.query(del_q, job_config=bigquery.QueryJobConfig(query_parameters=key_params)).result()
+
+        # 2) Insert one active row when suppression is being turned on.
+        if active:
+            row = {
+                'id': uuid.uuid4().hex,
+                'scope_grain': scope_grain,
+                'parent_name': parent_name,
+                'strategy': strategy,
+                'asin': asin,
+                'intent_key': None,
+                'match_type': None,
+                'is_active': True,
+                'reason': reason,
+                'updated_by': updated_by,
+                'updated_at': datetime.now().isoformat(),
+            }
+            job = client.load_table_from_json(
+                [row], 'onyga-482313.OI.DE_COVERAGE_EXPECTATION',
+                job_config=bigquery.LoadJobConfig(write_disposition='WRITE_APPEND'))
+            job.result()
+            if job.errors:
+                return jsonify({'error': str(job.errors)}), 500
+
+        clear_data_cache()
+        return jsonify({'ok': True, 'active': active})
+    except Exception as e:
+        print(f"Error in coverage_expectation: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/coverage-keywords')
 @cache_result(ttl_seconds=300)
 def coverage_keywords():
