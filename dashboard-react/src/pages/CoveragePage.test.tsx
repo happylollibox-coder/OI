@@ -57,13 +57,18 @@ test('evidence row shows campaign name and state', () => {
   expect(screen.getByText('ENABLED')).toBeInTheDocument();
 });
 test('keyword row: running shows spend and rank', () => {
-  render(<KeywordRow k={{parent_name:'LolliME',match_type:'PHRASE',keyword_text:'cute diary',is_running:true,is_enabled:true,is_recommended:false,clicks:31,cost:30,net_profit:5,research_rank:82,overall_fit:80,is_relevant:true,ads_net_roas:2.12,rec_type:null,last_seen:'2026-07-21',status:'running',cpc:0.97,profit_state:'profitable',intent_key:'journal-diary',intent_label:'Journal / diary'}} />);
+  render(<KeywordRow k={{parent_name:'LolliME',match_type:'PHRASE',keyword_text:'cute diary',is_running:true,is_enabled:true,is_recommended:false,clicks:31,cost:30,net_profit:5,research_rank:82,overall_fit:80,is_relevant:true,ads_net_roas:2.12,rec_type:null,last_seen:'2026-07-21',status:'running',cpc:0.97,profit_state:'profitable',intent_key:'journal-diary',intent_label:'Journal / diary',is_brand:false,brand_name:null}} />);
   expect(screen.getByText(/cute diary/)).toBeInTheDocument();
   expect(screen.getByText(/rank 82/)).toBeInTheDocument();
 });
 test('keyword row: orphan shows reason', () => {
-  render(<KeywordRow k={{parent_name:'Lollibox',match_type:'BROAD',keyword_text:'mystery box for girls',is_running:true,is_enabled:true,is_recommended:false,clicks:22,cost:21,net_profit:-21,research_rank:23,overall_fit:40,is_relevant:false,ads_net_roas:null,rec_type:null,last_seen:'2026-07-20',status:'orphan',cpc:0.95,profit_state:'unprofitable',intent_key:null,intent_label:null}} />);
+  render(<KeywordRow k={{parent_name:'Lollibox',match_type:'BROAD',keyword_text:'mystery box for girls',is_running:true,is_enabled:true,is_recommended:false,clicks:22,cost:21,net_profit:-21,research_rank:23,overall_fit:40,is_relevant:false,ads_net_roas:null,rec_type:null,last_seen:'2026-07-20',status:'orphan',cpc:0.95,profit_state:'unprofitable',intent_key:null,intent_label:null,is_brand:false,brand_name:null}} />);
   expect(screen.getByText(/not relevant/)).toBeInTheDocument();
+});
+// brand keyword row still renders (component is mode-agnostic; filtering happens in KeywordPanel)
+test('brand keyword row renders', () => {
+  render(<KeywordRow k={{parent_name:'LolliME',match_type:'PHRASE',keyword_text:'happy lolli journal',is_running:true,is_enabled:true,is_recommended:false,clicks:6,cost:3,net_profit:0,research_rank:15,overall_fit:40,is_relevant:true,ads_net_roas:null,rec_type:null,last_seen:'2026-07-20',status:'running',cpc:0.49,profit_state:'unknown',intent_key:null,intent_label:null,is_brand:true,brand_name:'Happy Lolli'}} />);
+  expect(screen.getByText(/happy lolli journal/)).toBeInTheDocument();
 });
 test('profit rollup shows counts and net split', () => {
   render(<ProfitRollup s={{total:22,profitable:2,net_profit_profitable:116,net_profit_unprofitable:-979}} />);

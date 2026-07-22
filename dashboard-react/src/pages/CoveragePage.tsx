@@ -97,6 +97,8 @@ interface KeywordRowData {
   profit_state: string;
   intent_key: string | null;
   intent_label: string | null;
+  is_brand: boolean;
+  brand_name: string | null;
 }
 interface FamilyKeywords {
   counts: { running: number; missing: number; orphan: number; paused: number };
@@ -383,15 +385,32 @@ function matchGroupsOf(rows: KeywordRowData[]): { mt: string; rows: KeywordRowDa
     .sort((a, b) => (MATCH_ORDER[a.mt] ?? 9) - (MATCH_ORDER[b.mt] ?? 9) || a.mt.localeCompare(b.mt));
 }
 
-/** Keyword-level coverage for an INTENT family cell — grouped by intent, then match type. */
-function KeywordPanel({ family, data, loading }: { family: string | null; data: Record<string, FamilyKeywords> | null; loading: boolean }) {
+/** Status sections for the brand-mode keyword panel, in display order. */
+const BRAND_STATUS_SECTIONS: { status: string; label: string }[] = [
+  { status: 'orphan', label: 'Review' },
+  { status: 'missing', label: 'Missing' },
+  { status: 'running', label: 'Running' },
+  { status: 'paused', label: 'Paused' },
+];
+
+/** Keyword-level coverage for a family cell.
+ *  mode='intent' (default): exclude own-brand terms, group by intent → match type.
+ *  mode='brand': keep only own-brand terms, group by status (Review → Missing → Running → Paused),
+ *  no intent/match nesting. The summary count line is always computed from the filtered set. */
+function KeywordPanel({ family, data, loading, mode = 'intent' }: { family: string | null; data: Record<string, FamilyKeywords> | null; loading: boolean; mode?: 'intent' | 'brand' }) {
   const [openIntents, setOpenIntents] = useState<Set<string>>(new Set());
   if (loading && !data) return <div className="mt-2 text-faint text-[10px]">loading keywords…</div>;
   const fam = data?.[family ?? ''];
   if (!fam) return <div className="mt-2 text-faint text-[10px]">no keyword data</div>;
 
-  const { counts, keywords } = fam;
-  const intentGroups = groupByIntent(keywords);
+  const filtered = fam.keywords.filter(k => (mode === 'brand' ? k.is_brand : !k.is_brand));
+  const counts = { running: 0, missing: 0, orphan: 0, paused: 0 };
+  for (const k of filtered) {
+    if (k.status === 'running') counts.running++;
+    else if (k.status === 'missing') counts.missing++;
+    else if (k.status === 'orphan') counts.orphan++;
+    else if (k.status === 'paused') counts.paused++;
+  }
 
   function toggle(key: string) {
     setOpenIntents(prev => {
@@ -401,6 +420,39 @@ function KeywordPanel({ family, data, loading }: { family: string | null; data: 
       return next;
     });
   }
+
+  if (mode === 'brand') {
+    if (filtered.length === 0) {
+      return <div className="mt-2 text-faint text-[10px]">no brand keywords</div>;
+    }
+    return (
+      <div className="mt-2 rounded border border-border-faint bg-surface/40 p-2">
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="text-[11px] font-semibold text-heading">Brand keywords</span>
+          <span className="text-[10px] tabular-nums">
+            {counts.running > 0 && <span className="text-emerald-400">✓ {counts.running} running</span>}
+            {counts.missing > 0 && <>{counts.running > 0 && <span className="text-faint"> · </span>}<span className="text-red-400">✗ {counts.missing} missing</span></>}
+            {counts.orphan > 0 && <>{(counts.running > 0 || counts.missing > 0) && <span className="text-faint"> · </span>}<span className="text-amber-400">⚠ {counts.orphan} review</span></>}
+            {counts.paused > 0 && <>{(counts.running > 0 || counts.missing > 0 || counts.orphan > 0) && <span className="text-faint"> · </span>}<span className="text-faint">⏸ {counts.paused} paused</span></>}
+          </span>
+        </div>
+        {BRAND_STATUS_SECTIONS.map(sec => {
+          const rows = filtered.filter(k => k.status === sec.status);
+          if (rows.length === 0) return null;
+          return (
+            <div key={sec.status} className="mt-1">
+              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-faint">{sec.label}</div>
+              {rows.map((k, i) => (
+                <KeywordRow key={`${k.match_type}-${k.keyword_text}-${i}`} k={k} />
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const intentGroups = groupByIntent(filtered);
 
   return (
     <div className="mt-2 rounded border border-border-faint bg-surface/40 p-2">
@@ -704,7 +756,7 @@ export function CoveragePage() {
                           <button
                             onClick={() => {
                               setOpenCell(k => (k === c.cell_key ? null : c.cell_key));
-                              if (c.strategy === 'INTENT' || c.strategy === 'EXACT_BOOST') ensureKeywords();
+                              if (c.strategy === 'INTENT' || c.strategy === 'EXACT_BOOST' || c.strategy === 'BRAND_DEFENSE') ensureKeywords();
                             }}
                             className="flex flex-1 min-w-0 items-center gap-2 text-left"
                           >
@@ -754,7 +806,10 @@ export function CoveragePage() {
                               <div className="text-faint text-[10px]">no campaigns</div>
                             )}
                             {(c.strategy === 'INTENT' || c.strategy === 'EXACT_BOOST') && (
-                              <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} />
+                              <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} mode="intent" />
+                            )}
+                            {c.strategy === 'BRAND_DEFENSE' && (
+                              <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} mode="brand" />
                             )}
                           </div>
                         )}
