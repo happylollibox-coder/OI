@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { StrategyTile, CampaignEvidenceRow, KeywordRow, ProfitChip, ProfitRollup, MonthRow, groupByFamily } from './CoveragePage';
+import { StrategyTile, CampaignEvidenceRow, KeywordRow, ProfitChip, ProfitRollup, MonthRow, KwMonthRow, groupByFamily } from './CoveragePage';
 
 function cell(over: Partial<Parameters<typeof groupByFamily>[0][number]> = {}) {
   return {
@@ -84,6 +84,11 @@ test('month row shows month and net profit', () => {
   render(<MonthRow m={{month:'2026-05-01', impressions:1000, clicks:170, spend:148, units:17, net_profit:58, net_roas:1.39}} />);
   expect(screen.getByText(/2026-05/)).toBeInTheDocument();
   expect(screen.getByText(/1\.39x/)).toBeInTheDocument();
+});
+test('keyword month row shows month and spend', () => {
+  render(<KwMonthRow m={{month:'2026-03-01', clicks:710, spend:943, units:21, impressions:66272}} />);
+  expect(screen.getByText(/2026-03/)).toBeInTheDocument();
+  expect(screen.getByText(/710 clk/)).toBeInTheDocument();
 });
 test('profit chip renders verdict', () => {
   const { rerender } = render(<ProfitChip state="profitable" />);

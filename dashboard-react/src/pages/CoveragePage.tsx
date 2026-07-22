@@ -105,6 +105,26 @@ interface FamilyKeywords {
   missing_shown: number;
   missing_total: number;
   keywords: KeywordRowData[];
+  intents?: Record<string, { suggested: boolean; wtd_net_roas: number | null; spend: number; label: string }>;
+}
+
+/** One month in a keyword's 12-month drill (raw shape from /api/keyword-months). */
+export interface KwMonthRow {
+  month: string;
+  clicks: number;
+  spend: number;
+  units: number;
+  impressions: number;
+}
+
+/** Threaded bundle for per-keyword month drill: cache (keyed by family → keyword_key),
+ *  a per-family loading probe, the expanded keyword_key set, and toggle/ensure handlers. */
+interface KwMonthsCtx {
+  data: Record<string, Record<string, KwMonthRow[]>> | null;
+  loading: (family: string) => boolean;
+  expanded: Set<string>;
+  toggle: (key: string) => void;
+  ensure: (family: string) => void;
 }
 
 const STRAT_LABEL: Record<string, string> = {
@@ -272,6 +292,16 @@ export function CampaignEvidenceRow({
   );
 }
 
+/** One month in a keyword's 12-month drill: "{YYYY-MM} · ${spend} · {clicks} clk · {units}u". */
+export function KwMonthRow({ m }: { m: KwMonthRow }) {
+  return (
+    <div className="flex items-center gap-1 py-px text-[9px] tabular-nums text-faint">
+      <span className="w-[42px] shrink-0 text-muted">{m.month.slice(0, 7)}</span>
+      <span>· ${m.spend.toFixed(0)} · {m.clicks} clk · {m.units}u</span>
+    </div>
+  );
+}
+
 /** Tiny match-type chip (EXACT/PHRASE/BROAD) with a faint tint. */
 function MatchChip({ mt }: { mt: string }) {
   const tint: Record<string, string> = {
@@ -283,44 +313,69 @@ function MatchChip({ mt }: { mt: string }) {
   return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${cls}`}>{mt}</span>;
 }
 
-/** One keyword in a family's coverage list: match chip + text, right-aligned status-appropriate metrics. */
-export function KeywordRow({ k }: { k: KeywordRowData }) {
+/** One keyword in a family's coverage list: expander chevron + match chip + text, right-aligned
+ *  status-appropriate metrics. Expands to a lazy-loaded 12-month drill (most-recent month first).
+ *  When no `months` ctx is supplied it renders inert (chevron shown, click is a no-op). */
+export function KeywordRow({ k, family, months }: { k: KeywordRowData; family?: string | null; months?: KwMonthsCtx }) {
   const showPerf = k.status === 'running' || k.status === 'orphan' || k.status === 'paused';
+  const kwKey = `${k.match_type}|${k.keyword_text}`;
+  const fam = family ?? undefined;
+  const isOpen = months?.expanded.has(kwKey) ?? false;
+  const monthRows = fam && months?.data ? months.data[fam]?.[kwKey] : undefined;
+  const isLoading = fam && months ? months.loading(fam) : false;
+  const recentFirst = monthRows ? [...monthRows].sort((a, b) => b.month.localeCompare(a.month)) : undefined;
   return (
-    <div className="flex items-center gap-1.5 border-b border-border-faint py-0.5 last:border-0">
-      <MatchChip mt={k.match_type} />
-      <span className="truncate text-[11px] text-muted" title={k.keyword_text}>{k.keyword_text}</span>
-      <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[10px] tabular-nums text-faint">
-        {k.status === 'running' && (
-          <span>
-            ${k.cost.toFixed(0)} spend · {k.clicks} clk
-            {k.research_rank != null && ` · rank ${k.research_rank}`}
-            {k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}
-            {k.ads_net_roas != null && (
-              <>
-                {' · '}
-                <span className={k.ads_net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{k.ads_net_roas.toFixed(2)}x</span>
-              </>
-            )}
-          </span>
-        )}
-        {k.status === 'orphan' && (
-          <span className="inline-flex items-center gap-1">
-            <span>${k.cost.toFixed(0)} spend · {k.clicks} clk{k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}</span>
-            <span className={`rounded px-1 py-px text-[9px] font-semibold ${k.is_relevant === false ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'}`}>
-              {k.is_relevant === false ? 'not relevant' : 'no research rank'}
+    <div className="border-b border-border-faint last:border-0">
+      <button
+        onClick={() => { if (fam) months?.ensure(fam); months?.toggle(kwKey); }}
+        className="flex w-full items-center gap-1.5 py-0.5 text-left hover:bg-white/[0.02]"
+      >
+        <span className="w-2 shrink-0 text-[9px] text-faint">{isOpen ? '▾' : '▸'}</span>
+        <MatchChip mt={k.match_type} />
+        <span className="truncate text-[11px] text-muted" title={k.keyword_text}>{k.keyword_text}</span>
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[10px] tabular-nums text-faint">
+          {k.status === 'running' && (
+            <span>
+              ${k.cost.toFixed(0)} spend · {k.clicks} clk
+              {k.research_rank != null && ` · rank ${k.research_rank}`}
+              {k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}
+              {k.ads_net_roas != null && (
+                <>
+                  {' · '}
+                  <span className={k.ads_net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{k.ads_net_roas.toFixed(2)}x</span>
+                </>
+              )}
             </span>
-          </span>
-        )}
-        {k.status === 'missing' && (
-          <span className="inline-flex items-center gap-1">
-            <span>rank {k.research_rank ?? '—'}</span>
-            {k.rec_type === 'BRAND' && <span className="rounded bg-blue-500/15 px-1 py-px text-[9px] font-semibold text-blue-400">BRAND</span>}
-          </span>
-        )}
-        {k.status === 'paused' && <span className="text-faint">${k.cost.toFixed(0)} spend{k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}</span>}
-        {showPerf && <ProfitChip state={k.profit_state} />}
-      </span>
+          )}
+          {k.status === 'orphan' && (
+            <span className="inline-flex items-center gap-1">
+              <span>${k.cost.toFixed(0)} spend · {k.clicks} clk{k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}</span>
+              <span className={`rounded px-1 py-px text-[9px] font-semibold ${k.is_relevant === false ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'}`}>
+                {k.is_relevant === false ? 'not relevant' : 'no research rank'}
+              </span>
+            </span>
+          )}
+          {k.status === 'missing' && (
+            <span className="inline-flex items-center gap-1">
+              <span>rank {k.research_rank ?? '—'}</span>
+              {k.rec_type === 'BRAND' && <span className="rounded bg-blue-500/15 px-1 py-px text-[9px] font-semibold text-blue-400">BRAND</span>}
+            </span>
+          )}
+          {k.status === 'paused' && <span className="text-faint">${k.cost.toFixed(0)} spend{k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}</span>}
+          {showPerf && <ProfitChip state={k.profit_state} />}
+        </span>
+      </button>
+      {isOpen && (
+        <div className="pl-4 pb-1">
+          {recentFirst && recentFirst.length > 0 ? (
+            recentFirst.map((m, i) => <KwMonthRow key={`${m.month}-${i}`} m={m} />)
+          ) : isLoading ? (
+            <div className="text-faint text-[9px]">loading…</div>
+          ) : (
+            <div className="text-faint text-[9px]">no monthly data</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -397,7 +452,7 @@ const BRAND_STATUS_SECTIONS: { status: string; label: string }[] = [
  *  mode='intent' (default): exclude own-brand terms, group by intent → match type.
  *  mode='brand': keep only own-brand terms, group by status (Review → Missing → Running → Paused),
  *  no intent/match nesting. The summary count line is always computed from the filtered set. */
-function KeywordPanel({ family, data, loading, mode = 'intent' }: { family: string | null; data: Record<string, FamilyKeywords> | null; loading: boolean; mode?: 'intent' | 'brand' }) {
+function KeywordPanel({ family, data, loading, mode = 'intent', months }: { family: string | null; data: Record<string, FamilyKeywords> | null; loading: boolean; mode?: 'intent' | 'brand'; months?: KwMonthsCtx }) {
   const [openIntents, setOpenIntents] = useState<Set<string>>(new Set());
   if (loading && !data) return <div className="mt-2 text-faint text-[10px]">loading keywords…</div>;
   const fam = data?.[family ?? ''];
@@ -443,7 +498,7 @@ function KeywordPanel({ family, data, loading, mode = 'intent' }: { family: stri
             <div key={sec.status} className="mt-1">
               <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-faint">{sec.label}</div>
               {rows.map((k, i) => (
-                <KeywordRow key={`${k.match_type}-${k.keyword_text}-${i}`} k={k} />
+                <KeywordRow key={`${k.match_type}-${k.keyword_text}-${i}`} k={k} family={family} months={months} />
               ))}
             </div>
           );
@@ -453,6 +508,44 @@ function KeywordPanel({ family, data, loading, mode = 'intent' }: { family: stri
   }
 
   const intentGroups = groupByIntent(filtered);
+  const intentsMap = fam.intents ?? {};
+  // Partition by the family's suggestion map: a group is "suggested" only when its
+  // intent has an entry with suggested===true; everything else (false, or no entry —
+  // e.g. the Other/unclassified bucket) falls to the not-suggested section.
+  const suggestedGroups = intentGroups.filter(g => intentsMap[g.key]?.suggested === true);
+  const notSuggestedGroups = intentGroups.filter(g => intentsMap[g.key]?.suggested !== true);
+
+  const renderGroup = (g: IntentGroup) => {
+    const isOpen = openIntents.has(g.key);
+    const roas = intentsMap[g.key]?.wtd_net_roas;
+    return (
+      <div key={g.key} className="mt-1">
+        <button onClick={() => toggle(g.key)} className="flex w-full items-center gap-1.5 py-0.5 text-left hover:bg-white/[0.02]">
+          <span className="w-2 shrink-0 text-[9px] text-faint">{isOpen ? '▾' : '▸'}</span>
+          <span className="truncate text-[11px] font-semibold text-heading">{g.label}</span>
+          <span className="ml-auto shrink-0 text-[9px] tabular-nums">
+            {roas != null && <span className={`mr-1.5 ${roas >= 1.1 ? 'text-emerald-400' : 'text-red-400'}`}>{roas.toFixed(2)}x</span>}
+            {g.counts.running > 0 && <span className="text-emerald-400">✓{g.counts.running} </span>}
+            {g.counts.missing > 0 && <span className="text-red-400">✗{g.counts.missing} </span>}
+            {g.counts.orphan > 0 && <span className="text-amber-400">⚠{g.counts.orphan} </span>}
+            {g.counts.paused > 0 && <span className="text-faint">⏸{g.counts.paused}</span>}
+          </span>
+        </button>
+        {isOpen && (
+          <div className="pl-4">
+            {matchGroupsOf(g.rows).map(mg => (
+              <div key={mg.mt} className="mt-1">
+                <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-faint">{mg.mt}</div>
+                {mg.rows.map((k, i) => (
+                  <KeywordRow key={`${k.match_type}-${k.keyword_text}-${i}`} k={k} family={family} months={months} />
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="mt-2 rounded border border-border-faint bg-surface/40 p-2">
@@ -465,35 +558,18 @@ function KeywordPanel({ family, data, loading, mode = 'intent' }: { family: stri
           {counts.paused > 0 && <>{(counts.running > 0 || counts.missing > 0 || counts.orphan > 0) && <span className="text-faint"> · </span>}<span className="text-faint">⏸ {counts.paused} paused</span></>}
         </span>
       </div>
-      {intentGroups.map(g => {
-        const isOpen = openIntents.has(g.key);
-        return (
-          <div key={g.key} className="mt-1">
-            <button onClick={() => toggle(g.key)} className="flex w-full items-center gap-1.5 py-0.5 text-left hover:bg-white/[0.02]">
-              <span className="w-2 shrink-0 text-[9px] text-faint">{isOpen ? '▾' : '▸'}</span>
-              <span className="truncate text-[11px] font-semibold text-heading">{g.label}</span>
-              <span className="ml-auto shrink-0 text-[9px] tabular-nums">
-                {g.counts.running > 0 && <span className="text-emerald-400">✓{g.counts.running} </span>}
-                {g.counts.missing > 0 && <span className="text-red-400">✗{g.counts.missing} </span>}
-                {g.counts.orphan > 0 && <span className="text-amber-400">⚠{g.counts.orphan} </span>}
-                {g.counts.paused > 0 && <span className="text-faint">⏸{g.counts.paused}</span>}
-              </span>
-            </button>
-            {isOpen && (
-              <div className="pl-4">
-                {matchGroupsOf(g.rows).map(mg => (
-                  <div key={mg.mt} className="mt-1">
-                    <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-faint">{mg.mt}</div>
-                    {mg.rows.map((k, i) => (
-                      <KeywordRow key={`${k.match_type}-${k.keyword_text}-${i}`} k={k} />
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {suggestedGroups.length > 0 && (
+        <div className="mb-1">
+          <div className="mb-0.5 mt-1 text-[10px] font-semibold text-emerald-400">✅ Suggested intents</div>
+          {suggestedGroups.map(renderGroup)}
+        </div>
+      )}
+      {notSuggestedGroups.length > 0 && (
+        <div>
+          <div className="mb-0.5 mt-1 text-[10px] font-semibold text-faint">⊘ Not-suggested intents</div>
+          {notSuggestedGroups.map(renderGroup)}
+        </div>
+      )}
     </div>
   );
 }
@@ -612,6 +688,9 @@ export function CoveragePage() {
   const [monthsData, setMonthsData] = useState<Record<string, MonthRow[]> | null>(null);
   const [monthsLoading, setMonthsLoading] = useState(false);
   const [openCampaigns, setOpenCampaigns] = useState<Set<string>>(new Set()); // expanded campaign_ids
+  const [kwMonthsData, setKwMonthsData] = useState<Record<string, Record<string, KwMonthRow[]>> | null>(null); // family → keyword_key → months
+  const [kwMonthsLoading, setKwMonthsLoading] = useState<Set<string>>(new Set()); // families with an in-flight fetch
+  const [openKw, setOpenKw] = useState<Set<string>>(new Set()); // expanded keyword_keys
 
   async function toggleSuppress(c: Cell, active: boolean) {
     if (pendingCell) return;
@@ -672,6 +751,27 @@ export function CoveragePage() {
     });
   }
 
+  /** Lazy-load a family's per-keyword 12-month drill once; cache keyed by family. */
+  function ensureKwMonths(family: string) {
+    if (!family) return;
+    if (kwMonthsData?.[family] || kwMonthsLoading.has(family)) return;
+    setKwMonthsLoading(prev => new Set(prev).add(family));
+    apiFetch(`/api/keyword-months?family=${encodeURIComponent(family)}`)
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(json => setKwMonthsData(prev => ({ ...(prev ?? {}), [family]: json.months ?? {} })))
+      .catch(() => setKwMonthsData(prev => ({ ...(prev ?? {}), [family]: {} })))
+      .finally(() => setKwMonthsLoading(prev => { const next = new Set(prev); next.delete(family); return next; }));
+  }
+
+  function toggleKw(key: string) {
+    setOpenKw(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   useEffect(() => {
     apiFetch('/api/daily-workflow')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -690,6 +790,13 @@ export function CoveragePage() {
   const openGroups = open ? groupByFamily(data.cells.filter(c => c.strategy === open && familyMatch(c))) : [];
   const openCellCount = openGroups.reduce((n, g) => n + g.cells.length, 0);
   const familyEntries = buildFamilyEntries(data.family_stats);
+  const kwMonthsCtx: KwMonthsCtx = {
+    data: kwMonthsData,
+    loading: (f: string) => kwMonthsLoading.has(f),
+    expanded: openKw,
+    toggle: toggleKw,
+    ensure: ensureKwMonths,
+  };
 
   return (
     <div className="p-4">
@@ -806,10 +913,10 @@ export function CoveragePage() {
                               <div className="text-faint text-[10px]">no campaigns</div>
                             )}
                             {(c.strategy === 'INTENT' || c.strategy === 'EXACT_BOOST') && (
-                              <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} mode="intent" />
+                              <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} mode="intent" months={kwMonthsCtx} />
                             )}
                             {c.strategy === 'BRAND_DEFENSE' && (
-                              <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} mode="brand" />
+                              <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} mode="brand" months={kwMonthsCtx} />
                             )}
                           </div>
                         )}
