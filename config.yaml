@@ -595,6 +595,17 @@ views:
     description: "Campaign-level aggregation of ads coach data"
     source_files: ["scripts/bigquery/views/V_ADS_COACH_CAMPAIGN.sql"]
 
+  - name: "V_CAMPAIGN_STRATEGY_RESOLVED"
+    description: "Per current campaign resolved strategy_id (override>mapping>Automatic>name>UNCLASSIFIED)."
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_STRATEGY_RESOLVED.sql"]
+    dependencies:
+      - DIM_CAMPAIGN
+      - V_CAMPAIGN_MAPPING_STATUS
+      - DE_CAMPAIGN_STRATEGY
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+
   # ── Budget waterfall + daily optimizer (spec: docs/superpowers/specs/2026-07-05-weekly-run-budget-waterfall.md) ──
   - name: "V_CAMPAIGN_FAMILY_MAP"
     description: "Single family attribution for every ENABLED campaign (DE_CAMPAIGN_FAMILY override ∪ dominant-ASIN ∪ 'Unknown'). Coverage guarantee for the budget waterfall — no enabled campaign falls out."
