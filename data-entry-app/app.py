@@ -9207,7 +9207,7 @@ def daily_workflow():
     the strategy tiles + cell tree without re-deriving anything client-side.
     """
     from collections import defaultdict
-    STRATS = ['AUTO', 'INTENT', 'EXACT_BOOST', 'COMPETITOR', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE']
+    STRATS = ['AUTO', 'INTENT', 'EXACT_BOOST', 'COMPETITOR', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE', 'UNMAPPED']
     try:
         sql = ("SELECT grain, cell_key, parent_name, asin, product_short_name, strategy, expected, "
                "n_enabled, n_any, impressions, clicks, units, cost, cpc, net_roas, profit_state, "
@@ -9227,6 +9227,39 @@ def daily_workflow():
             detail[d['cell_key']].append(d)
         for k in detail:
             detail[k].sort(key=lambda c: (0 if c.get('is_enabled') else 1, -(c.get('clicks') or 0)))
+
+        # ── UNMAPPED guard: campaigns not classified into any of the 6 strategies ──
+        # V_COVERAGE_CAMPAIGN drops strategy_category='OTHER'/unmatched, so this surfaces
+        # them as synthetic CAMPAIGN-grain cells under a 7th 'UNMAPPED' strategy.
+        unmapped = [dict(r) for r in client.query(
+            "SELECT campaign_id, campaign_name, parent_name, state, is_enabled, impressions, "
+            "clicks, units, cost, net_roas, cpc, last_seen, profit_state "
+            "FROM `onyga-482313.OI.V_COVERAGE_UNMAPPED`"
+        ).result()]
+        for u in unmapped:
+            name = u.get('campaign_name') or str(u['campaign_id'])
+            rows.append({
+                'grain': 'CAMPAIGN',
+                'cell_key': f"UNMAPPED|{u['campaign_id']}",
+                'parent_name': u.get('parent_name'),
+                'asin': None,
+                'product_short_name': name,
+                'strategy': 'UNMAPPED',
+                'expected': False,
+                'n_enabled': 1 if u.get('is_enabled') else 0,
+                'n_any': 1,
+                'impressions': u.get('impressions') or 0,
+                'clicks': u.get('clicks') or 0,
+                'units': u.get('units') or 0,
+                'cost': u.get('cost') or 0,
+                'cpc': u.get('cpc'),
+                'net_roas': u.get('net_roas'),
+                'campaigns': name,
+                'suppressed': False,
+                'status': 'unmapped',
+                'profit_state': u.get('profit_state'),
+                'reason': f"Campaign '{name}' is not mapped to a strategy.",
+            })
 
         def tile(s):
             cs = [r for r in rows if r['strategy'] == s]
@@ -9259,6 +9292,37 @@ def daily_workflow():
         for s in sorted({r['strategy'] for r in p7d if r['strategy']}):
             strategy_stats[s] = profit_rollup([r for r in p7d if r['strategy'] == s])
 
+        # ── UNMAPPED strategy_stats: 7-day P&L over unmapped campaign_ids ──
+        # PROFIT7D excludes OTHER/unmatched, so compute it here (same logic: advertised_product
+        # last 7d × gp_per_unit − cost, per unmapped campaign with spend>0 in the window).
+        unmapped_ids = [u['campaign_id'] for u in unmapped]
+        if unmapped_ids:
+            u7d = [dict(r) for r in client.query(
+                "WITH prod AS ("
+                "  SELECT dp.asin, ROUND(lc.price - COALESCE(ch.TOTAL_COST_PER_UNIT, 0), 2) AS gp_per_unit"
+                "  FROM `onyga-482313.OI.DIM_PRODUCT` dp"
+                "  LEFT JOIN (SELECT asin1, price FROM `onyga-482313.OI.V_DIM_LISTING_CURRENT` "
+                "    QUALIFY ROW_NUMBER() OVER (PARTITION BY asin1 ORDER BY price DESC) = 1) lc ON lc.asin1 = dp.asin"
+                "  LEFT JOIN (SELECT asin, TOTAL_COST_PER_UNIT FROM `onyga-482313.OI.DIM_COSTS_HISTORY` "
+                "    WHERE end_date IS NULL OR end_date >= CURRENT_DATE() "
+                "    QUALIFY ROW_NUMBER() OVER (PARTITION BY asin ORDER BY start_date DESC) = 1) ch ON ch.asin = dp.asin"
+                "  WHERE dp.parent_name IS NOT NULL AND dp.parent_name != 'UNKNOWN' AND dp.is_active = true)"
+                " SELECT ap.campaign_id, "
+                "   SUM(ap.units_7d * COALESCE(p.gp_per_unit, 0)) - SUM(ap.cost) AS net_profit, "
+                "   (SUM(ap.units_7d * COALESCE(p.gp_per_unit, 0)) - SUM(ap.cost)) >= 0 AS profitable "
+                " FROM `onyga-482313.OI.V_SRC_AmazonAds_advertised_product` ap "
+                " LEFT JOIN prod p ON p.asin = ap.advertised_asin "
+                " WHERE ap.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) "
+                "   AND ap.campaign_id IN UNNEST(@ids) "
+                " GROUP BY ap.campaign_id HAVING SUM(ap.cost) > 0",
+                job_config=bigquery.QueryJobConfig(query_parameters=[
+                    bigquery.ArrayQueryParameter('ids', 'STRING', unmapped_ids)])
+            ).result()]
+            strategy_stats['UNMAPPED'] = profit_rollup(u7d)
+        else:
+            strategy_stats['UNMAPPED'] = {'total': 0, 'profitable': 0,
+                                          'net_profit_profitable': 0, 'net_profit_unprofitable': 0}
+
         # family_stats: profit rollup per family + coverage counts from the already-loaded cells.
         # Store/Product-Defense cells have parent_name NULL -> bucketed under '__STORE__'.
         fam_keys = set()
@@ -9285,7 +9349,12 @@ def daily_workflow():
                                    if r['expected'] and r['status'] == 'ok')
             family_stats[fam] = stats
 
-        return jsonify({'strategies': STRATS, 'tiles': {s: tile(s) for s in STRATS},
+        tiles = {s: tile(s) for s in STRATS}
+        # UNMAPPED cells have no defined/missing/redundant semantics — surface as informational.
+        tiles['UNMAPPED'] = {'defined': 0, 'missing': 0, 'redundant': 0,
+                             'informational': len(unmapped), 'suppressed': 0}
+
+        return jsonify({'strategies': STRATS, 'tiles': tiles,
                         'cells': rows, 'detail': dict(detail),
                         'strategy_stats': strategy_stats, 'family_stats': family_stats})
     except Exception as e:

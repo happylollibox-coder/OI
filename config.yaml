@@ -251,6 +251,18 @@ views:
       - DIM_COSTS_HISTORY
       - V_SRC_AmazonAds_advertised_product
 
+  - name: "V_COVERAGE_UNMAPPED"
+    description: "Coverage-cockpit guard tile (7th 'strategy': UNMAPPED). One row per campaign that does NOT classify into any of the 6 strategies — surfaces unclassified ad spend the cockpit otherwise drops (it INNER-joins V_CAMPAIGN_ROLE and discards strategy_category='OTHER'/unmatched). UNMAPPED = a campaign with 90d advertised activity whose V_CAMPAIGN_ROLE.strategy_category (LEFT JOIN) is NULL or 'OTHER', UNION any 'OTHER' campaign with no 90d activity (dormant unclassified, metrics 0/NULL). Reuses the same prod (own sellable ASINs + gp_per_unit), camp_state (latest state+name from V_SRC_AmazonAds_campaign_history), and adv (advertised_product asin<->campaign link, 90d window) building blocks as V_COVERAGE_CAMPAIGN. Columns: campaign_id, campaign_name, parent_name (ANY_VALUE own family via advertised_asin→DIM_PRODUCT, may be NULL), state, is_enabled (state='ENABLED'), impressions, clicks, units (SUM units_7d), cost, net_roas (SUM(units_7d*gp_per_unit)/cost), cpc, last_seen, profit_state (clicks<10 or net_roas NULL → unknown; >= GLOBAL PROFITABLE_ROAS floor → profitable else unprofitable). Backs /api/daily-workflow UNMAPPED tile + cells."
+    source_files: ["scripts/bigquery/views/V_COVERAGE_UNMAPPED.sql"]
+    dependencies:
+      - V_CAMPAIGN_ROLE
+      - DIM_PRODUCT
+      - V_DIM_LISTING_CURRENT
+      - DIM_COSTS_HISTORY
+      - V_SRC_AmazonAds_campaign_history
+      - V_SRC_AmazonAds_advertised_product
+      - DE_COACH_THRESHOLDS
+
   - name: "V_COVERAGE_CAMPAIGN_MONTHLY"
     description: "Per (campaign_id × month) 12-month P&L for the cockpit's per-campaign monthly drill. One row per (campaign_id, month) over the LAST 12 MONTHS from V_SRC_AmazonAds_advertised_product joined to prod (own sellable ASINs + gp_per_unit). units_7d is click-attributed per day so SUM over the window is correct. Columns: campaign_id, month (DATE, DATE_TRUNC to MONTH), impressions, clicks, spend (SUM cost), units (SUM units_7d), net_profit (SUM units_7d*gp_per_unit − SUM cost), net_roas (margin/spend, ROUND 2). Backs GET /api/campaign-months."
     source_files: ["scripts/bigquery/views/V_COVERAGE_CAMPAIGN_MONTHLY.sql"]
