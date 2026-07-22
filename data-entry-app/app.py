@@ -9210,14 +9210,15 @@ def daily_workflow():
     STRATS = ['AUTO', 'INTENT', 'EXACT_BOOST', 'COMPETITOR', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE']
     try:
         sql = ("SELECT grain, cell_key, parent_name, asin, product_short_name, strategy, expected, "
-               "n_enabled, n_any, impressions, clicks, units, net_roas, campaigns, suppressed, status, reason "
+               "n_enabled, n_any, impressions, clicks, units, cost, cpc, net_roas, profit_state, "
+               "campaigns, suppressed, status, reason "
                "FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN`")
         rows = [dict(r) for r in client.query(sql).result()]
 
         # ── S2 VERIFY: per-campaign evidence, grouped by cell_key ──
         detail_rows = [dict(r) for r in client.query(
             "SELECT cell_key, campaign_name, state, is_enabled, impressions, clicks, units, "
-            "ad_spend, net_roas, last_seen FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN_DETAIL`"
+            "ad_spend, cpc, net_roas, profit_state, last_seen FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN_DETAIL`"
         ).result()]
         detail = defaultdict(list)
         for d in detail_rows:
@@ -9339,7 +9340,8 @@ def coverage_keywords():
     from collections import defaultdict
     try:
         sql = ("SELECT parent_name, match_type, keyword_text, is_running, is_enabled, is_recommended, "
-               "clicks, cost, net_profit, research_rank, overall_fit, is_relevant, ads_net_roas, "
+               "clicks, cost, cpc, net_profit, research_rank, overall_fit, is_relevant, ads_net_roas, "
+               "profit_state, intent_key, intent_label, "
                "rec_type, CAST(last_seen AS STRING) AS last_seen, status "
                "FROM `onyga-482313.OI.V_COVERAGE_KEYWORD`")
         rows = [dict(r) for r in client.query(sql).result()]

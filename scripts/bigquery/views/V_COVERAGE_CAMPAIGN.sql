@@ -76,6 +76,7 @@ live_agg AS (
     CAST(SUM(impressions) AS INT64) AS impressions,
     CAST(SUM(clicks) AS INT64) AS clicks,
     CAST(SUM(units) AS INT64) AS units,
+    SUM(cost) AS cost,
     ROUND(SAFE_DIVIDE(SUM(units * gp_per_unit), NULLIF(SUM(cost), 0)), 2) AS net_roas,
     STRING_AGG(DISTINCT IF(state = 'ENABLED', campaign_name, NULL), ' | ') AS campaigns
   FROM live_base
@@ -112,6 +113,13 @@ suppress AS (
   FROM `onyga-482313`.OI.DE_COVERAGE_EXPECTATION
   WHERE is_active
   GROUP BY parent_name, asin, strategy
+),
+-- ── Per-strategy PROFITABLE_ROAS floor (dedup GLOBAL dupes with MAX) ──
+floors AS (
+  SELECT strategy_id, MAX(CAST(threshold_value AS FLOAT64)) AS v
+  FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
+  WHERE threshold_key = 'PROFITABLE_ROAS'
+  GROUP BY strategy_id
 )
 SELECT
   t.grain,
@@ -126,7 +134,20 @@ SELECT
   COALESCE(l.impressions, 0) AS impressions,
   COALESCE(l.clicks, 0) AS clicks,
   COALESCE(l.units, 0) AS units,
+  COALESCE(l.cost, 0) AS cost,
+  ROUND(SAFE_DIVIDE(l.cost, NULLIF(l.clicks, 0)), 2) AS cpc,
   l.net_roas,
+  -- ── PROFIT VERDICT: ads-net-ROAS vs per-strategy floor (clicks<10 → unknown) ──
+  CASE
+    WHEN COALESCE(l.clicks, 0) < 10 THEN 'unknown'
+    WHEN l.net_roas IS NULL THEN 'unknown'
+    WHEN l.net_roas >= COALESCE(fl.v, (
+      SELECT MAX(CAST(threshold_value AS FLOAT64))
+      FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
+      WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id = 'GLOBAL'
+    )) THEN 'profitable'
+    ELSE 'unprofitable'
+  END AS profit_state,
   l.campaigns,
   COALESCE(sp.suppressed, FALSE) AS suppressed,
   CASE
@@ -162,6 +183,7 @@ SELECT
   END AS reason
 FROM target t
 LEFT JOIN live_agg l USING (cell_key)
+LEFT JOIN floors fl ON fl.strategy_id = t.strategy
 LEFT JOIN suppress sp
   ON sp.parent_name IS NOT DISTINCT FROM t.parent_name
  AND sp.asin IS NOT DISTINCT FROM t.asin

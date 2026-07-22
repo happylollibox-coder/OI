@@ -75,6 +75,14 @@ intent_rel AS (
   WHERE parent_name IS NOT NULL AND query_text IS NOT NULL
   GROUP BY parent_name, LOWER(query_text)
 ),
+-- ── INTENT routing: specificity-routed intent per (family, term), one row each ──
+kw_intent AS (
+  SELECT parent_name, LOWER(query_text) AS keyword_text,
+         ANY_VALUE(intent_key) AS intent_key, ANY_VALUE(label) AS intent_label
+  FROM `onyga-482313.OI.V_INTENT_KEYWORDS`
+  WHERE parent_name IS NOT NULL AND query_text IS NOT NULL
+  GROUP BY parent_name, LOWER(query_text)
+),
 -- ── Universe: every (family, match, term) that is running OR recommended ──
 keys AS (
   SELECT DISTINCT parent_name, match_type, keyword_text
@@ -93,11 +101,25 @@ SELECT
   (m.keyword_text IS NOT NULL) AS is_recommended,
   COALESCE(r.clicks, 0) AS clicks,
   r.cost,
+  ROUND(SAFE_DIVIDE(r.cost, NULLIF(r.clicks, 0)), 2) AS cpc,
   r.net_profit,
   rel.research_rank,
   rel.overall_fit,
   ir.is_relevant,
   ir.ads_net_roas,
+  ki.intent_key,
+  ki.intent_label,
+  -- ── PROFIT VERDICT: ads-net-ROAS vs INTENT floor (clicks<10 → unknown) ──
+  CASE
+    WHEN COALESCE(r.clicks, 0) < 10 THEN 'unknown'
+    WHEN ir.ads_net_roas IS NULL THEN 'unknown'
+    WHEN ir.ads_net_roas >= (
+      SELECT MAX(CAST(threshold_value AS FLOAT64))
+      FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
+      WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id = 'INTENT'
+    ) THEN 'profitable'
+    ELSE 'unprofitable'
+  END AS profit_state,
   m.rec_type,
   r.last_seen,
   CASE
@@ -120,3 +142,5 @@ LEFT JOIN relevance  rel ON rel.parent_name = k.parent_name
                         AND rel.keyword_text = k.keyword_text
 LEFT JOIN intent_rel ir  ON ir.parent_name = k.parent_name
                         AND ir.keyword_text = k.keyword_text
+LEFT JOIN kw_intent  ki  ON ki.parent_name = k.parent_name
+                        AND ki.keyword_text = k.keyword_text

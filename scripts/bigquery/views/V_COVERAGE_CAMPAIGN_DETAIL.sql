@@ -60,6 +60,13 @@ live_base AS (
   JOIN adv ON adv.asin = p.asin
   JOIN `onyga-482313`.OI.V_CAMPAIGN_ROLE vcr ON vcr.campaign_id = adv.campaign_id
   LEFT JOIN camp_state cst ON cst.campaign_id = adv.campaign_id
+),
+-- ── Per-strategy PROFITABLE_ROAS floor (dedup GLOBAL dupes with MAX) ──
+floors AS (
+  SELECT strategy_id, MAX(CAST(threshold_value AS FLOAT64)) AS v
+  FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
+  WHERE threshold_key = 'PROFITABLE_ROAS'
+  GROUP BY strategy_id
 )
 -- ── One row per (cell_key × campaign): a campaign can serve several ASINs in the same
 --    cell (e.g. an AUTO cell is one ASIN, but family cells span ASINs) — aggregate the
@@ -76,8 +83,21 @@ SELECT
   CAST(SUM(clicks) AS INT64) AS clicks,
   CAST(SUM(units) AS INT64) AS units,
   ROUND(SUM(cost), 2) AS ad_spend,
+  ROUND(SAFE_DIVIDE(SUM(cost), NULLIF(SUM(clicks), 0)), 2) AS cpc,
   ROUND(SAFE_DIVIDE(SUM(units * gp_per_unit), NULLIF(SUM(cost), 0)), 2) AS net_roas,
+  -- ── PROFIT VERDICT: ads-net-ROAS vs per-strategy floor (clicks<10 → unknown) ──
+  CASE
+    WHEN SUM(clicks) < 10 THEN 'unknown'
+    WHEN ROUND(SAFE_DIVIDE(SUM(units * gp_per_unit), NULLIF(SUM(cost), 0)), 2) IS NULL THEN 'unknown'
+    WHEN ROUND(SAFE_DIVIDE(SUM(units * gp_per_unit), NULLIF(SUM(cost), 0)), 2) >= COALESCE(ANY_VALUE(fl.v), (
+      SELECT MAX(CAST(threshold_value AS FLOAT64))
+      FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
+      WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id = 'GLOBAL'
+    )) THEN 'profitable'
+    ELSE 'unprofitable'
+  END AS profit_state,
   MAX(last_seen) AS last_seen
 FROM live_base
+LEFT JOIN floors fl ON fl.strategy_id = live_base.strategy_category
 WHERE cell_key IS NOT NULL
 GROUP BY cell_key, strategy_category, campaign_id
