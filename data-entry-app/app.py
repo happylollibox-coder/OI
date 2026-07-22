@@ -9279,7 +9279,10 @@ def daily_workflow():
                          and (is_store or r['parent_name'] == fam)]
             stats['planned'] = sum(1 for r in fam_cells
                                    if r['expected'] and r['status'] != 'suppressed')
-            stats['defined'] = sum(1 for r in fam_cells if r['status'] == 'ok')
+            # defined counts only PLANNED cells that are covered, so defined <= planned
+            # (not-expected Competitor/Exact-Boost 'ok' cells are bonus coverage, not "planned")
+            stats['defined'] = sum(1 for r in fam_cells
+                                   if r['expected'] and r['status'] == 'ok')
             family_stats[fam] = stats
 
         return jsonify({'strategies': STRATS, 'tiles': {s: tile(s) for s in STRATS},
