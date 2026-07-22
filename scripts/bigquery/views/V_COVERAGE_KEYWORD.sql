@@ -41,7 +41,7 @@ missing AS (
     parent_name,
     LOWER(query_text) AS keyword_text,
     match_type,
-    MIN(rank) AS rec_rank,               -- best (lowest) rank across dupes
+    MAX(rank) AS rec_rank,               -- best rank across dupes (higher rank = higher priority)
     ANY_VALUE(rec_type) AS rec_type
   FROM `onyga-482313.OI.FACT_RESEARCH_RECOMMENDATIONS`
   WHERE status = 'NEW'
