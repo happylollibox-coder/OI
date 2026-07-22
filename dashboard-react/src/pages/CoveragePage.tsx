@@ -46,6 +46,31 @@ interface WorkflowData {
   detail: Record<string, DetailCampaign[]>;
 }
 
+interface KeywordRowData {
+  parent_name: string;
+  match_type: string;
+  keyword_text: string;
+  is_running: boolean;
+  is_enabled: boolean;
+  is_recommended: boolean;
+  clicks: number;
+  cost: number;
+  net_profit: number;
+  research_rank: number | null;
+  overall_fit: number | null;
+  is_relevant: boolean | null;
+  ads_net_roas: number | null;
+  rec_type: string | null;
+  last_seen: string | null;
+  status: string;
+}
+interface FamilyKeywords {
+  counts: { running: number; missing: number; orphan: number; paused: number };
+  missing_shown: number;
+  missing_total: number;
+  keywords: KeywordRowData[];
+}
+
 const STRAT_LABEL: Record<string, string> = {
   AUTO: 'Auto',
   INTENT: 'Intent',
@@ -130,6 +155,99 @@ export function CampaignEvidenceRow({ c }: { c: DetailCampaign }) {
   );
 }
 
+/** Tiny match-type chip (EXACT/PHRASE/BROAD) with a faint tint. */
+function MatchChip({ mt }: { mt: string }) {
+  const tint: Record<string, string> = {
+    EXACT: 'bg-emerald-500/10 text-emerald-400',
+    PHRASE: 'bg-blue-500/10 text-blue-400',
+    BROAD: 'bg-amber-500/10 text-amber-400',
+  };
+  const cls = tint[mt] ?? 'bg-white/[0.05] text-faint';
+  return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${cls}`}>{mt}</span>;
+}
+
+/** One keyword in a family's coverage list: match chip + text, right-aligned status-appropriate metrics. */
+export function KeywordRow({ k }: { k: KeywordRowData }) {
+  return (
+    <div className="flex items-center gap-1.5 border-b border-border-faint py-0.5 last:border-0">
+      <MatchChip mt={k.match_type} />
+      <span className="truncate text-[11px] text-muted" title={k.keyword_text}>{k.keyword_text}</span>
+      <span className="ml-auto shrink-0 text-[10px] tabular-nums text-faint">
+        {k.status === 'running' && (
+          <>
+            ${k.cost.toFixed(0)} spend · {k.clicks} clk
+            {k.research_rank != null && ` · rank ${k.research_rank}`}
+            {k.ads_net_roas != null && (
+              <>
+                {' · '}
+                <span className={k.ads_net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{k.ads_net_roas.toFixed(2)}x</span>
+              </>
+            )}
+          </>
+        )}
+        {k.status === 'orphan' && (
+          <span className="inline-flex items-center gap-1">
+            <span>${k.cost.toFixed(0)} spend · {k.clicks} clk</span>
+            <span className={`rounded px-1 py-px text-[9px] font-semibold ${k.is_relevant === false ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'}`}>
+              {k.is_relevant === false ? 'not relevant' : 'no research rank'}
+            </span>
+          </span>
+        )}
+        {k.status === 'missing' && (
+          <span className="inline-flex items-center gap-1">
+            <span>rank {k.research_rank ?? '—'}</span>
+            {k.rec_type === 'BRAND' && <span className="rounded bg-blue-500/15 px-1 py-px text-[9px] font-semibold text-blue-400">BRAND</span>}
+          </span>
+        )}
+        {k.status === 'paused' && <span className="text-faint">${k.cost.toFixed(0)} spend</span>}
+      </span>
+    </div>
+  );
+}
+
+/** Keyword-level coverage for an INTENT family cell — status-grouped, honest metrics only. */
+function KeywordPanel({ family, data, loading }: { family: string | null; data: Record<string, FamilyKeywords> | null; loading: boolean }) {
+  if (loading && !data) return <div className="mt-2 text-faint text-[10px]">loading keywords…</div>;
+  const fam = data?.[family ?? ''];
+  if (!fam) return <div className="mt-2 text-faint text-[10px]">no keyword data</div>;
+
+  const { counts, keywords } = fam;
+  const groups: { key: string; header: string; rows: KeywordRowData[]; cap?: number }[] = [
+    { key: 'orphan', header: '⚠ Review (off-strategy waste)', rows: keywords.filter(k => k.status === 'orphan') },
+    { key: 'missing', header: '✗ Missing (top opportunities)', rows: keywords.filter(k => k.status === 'missing') },
+    { key: 'running', header: '✓ Running', rows: keywords.filter(k => k.status === 'running'), cap: 15 },
+    { key: 'paused', header: '⏸ Paused', rows: keywords.filter(k => k.status === 'paused') },
+  ];
+
+  return (
+    <div className="mt-2 rounded border border-border-faint bg-surface/40 p-2">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="text-[11px] font-semibold text-heading">Keywords</span>
+        <span className="text-[10px] tabular-nums">
+          {counts.running > 0 && <span className="text-emerald-400">✓ {counts.running} running</span>}
+          {counts.missing > 0 && <>{counts.running > 0 && <span className="text-faint"> · </span>}<span className="text-red-400">✗ {counts.missing} missing</span></>}
+          {counts.orphan > 0 && <>{(counts.running > 0 || counts.missing > 0) && <span className="text-faint"> · </span>}<span className="text-amber-400">⚠ {counts.orphan} review</span></>}
+          {counts.paused > 0 && <>{(counts.running > 0 || counts.missing > 0 || counts.orphan > 0) && <span className="text-faint"> · </span>}<span className="text-faint">⏸ {counts.paused} paused</span></>}
+        </span>
+      </div>
+      {groups.map(g => {
+        if (g.rows.length === 0) return null;
+        const shown = g.cap && g.rows.length > g.cap ? g.rows.slice(0, g.cap) : g.rows;
+        const extra = g.cap && g.rows.length > g.cap ? g.rows.length - g.cap : 0;
+        return (
+          <div key={g.key} className="mt-1.5">
+            <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-faint">{g.header}</div>
+            {shown.map((k, i) => (
+              <KeywordRow key={`${k.match_type}-${k.keyword_text}-${i}`} k={k} />
+            ))}
+            {extra > 0 && <div className="py-0.5 text-[10px] text-muted">+{extra} more</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 const STATUS_ORDER: Record<Cell['status'], number> = {
   missing: 0,
   redundant: 1,
@@ -152,6 +270,18 @@ export function CoveragePage() {
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null); // strategy name
   const [openCell, setOpenCell] = useState<string | null>(null); // expanded cell_key
+  const [kwData, setKwData] = useState<Record<string, FamilyKeywords> | null>(null);
+  const [kwLoading, setKwLoading] = useState(false);
+
+  function ensureKeywords() {
+    if (kwData !== null || kwLoading) return;
+    setKwLoading(true);
+    apiFetch('/api/coverage-keywords')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(json => setKwData(json.families ?? {}))
+      .catch(() => setKwData({}))
+      .finally(() => setKwLoading(false));
+  }
 
   useEffect(() => {
     apiFetch('/api/daily-workflow')
@@ -208,7 +338,10 @@ export function CoveragePage() {
                 return (
                   <div key={c.cell_key || `${c.grain}-${c.asin ?? c.parent_name ?? i}`} className="border-b border-border-faint last:border-0">
                     <button
-                      onClick={() => setOpenCell(k => (k === c.cell_key ? null : c.cell_key))}
+                      onClick={() => {
+                        setOpenCell(k => (k === c.cell_key ? null : c.cell_key));
+                        if (c.strategy === 'INTENT') ensureKeywords();
+                      }}
                       className="flex w-full items-center gap-2 py-1 text-left hover:bg-white/[0.02]"
                     >
                       <span className="text-faint text-[9px] w-2 shrink-0">{isOpen ? '▾' : '▸'}</span>
@@ -227,6 +360,9 @@ export function CoveragePage() {
                           ))
                         ) : (
                           <div className="text-faint text-[10px]">no campaigns</div>
+                        )}
+                        {c.strategy === 'INTENT' && (
+                          <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} />
                         )}
                       </div>
                     )}
