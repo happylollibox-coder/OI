@@ -35,7 +35,7 @@ export const PAGE_DATASETS: Record<PageId, DatasetName[]> = {
   experiment: ['budget_health', 'change_log', 'experiment_weekly', 'experiments', 'holidays',
     'keyword_product_map', 'peak'],
   strategies: ['experiment_campaigns', 'experiment_templates', 'experiment_weekly', 'holidays',
-    'keyword_product_map', 'peak'],
+    'keyword_product_map', 'peak', 'strategy_campaigns', 'strategy_campaign_weekly'],
   learn: ['actions', 'experiment_templates', 'experiment_weekly', 'learnings', 'peak_relevance'],
   supply: ['supply_payments', 'supply_pos', 'supply_shipments'],
   plan: ['monthly_trends', 'products', 'weekly_trends_by_asin'],

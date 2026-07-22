@@ -15,6 +15,7 @@ export type DatasetName =
   | 'ads_focus_keywords' | 'campaign_launch_perf' | 'campaign_launch_monthly'
   | 'plan_ads_targets' | 'asin_oos_days' | 'negative_conflicts'
   | 'strategy_campaign_templates' | 'coach_cross_sell' | 'negative_keywords'
+  | 'strategy_campaigns' | 'strategy_campaign_weekly'
   | 'cubeMeta' | 'dataFreshness';
 
 export type Status = 'idle' | 'loading' | 'ready' | 'error';

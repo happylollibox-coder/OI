@@ -1312,6 +1312,28 @@ export interface StrategyCampaignTemplateRow {
   is_required: boolean;
 }
 
+export interface StrategyCampaignRow {
+  campaign_id: string;
+  campaign_name: string;
+  campaign_type: string | null;
+  parent_name: string | null;
+  strategy_id: string;
+  strategy_source: string;
+  is_active: boolean;
+  spend: number; orders: number; clicks: number; impressions: number; sales: number;
+  net_roas: number | null; conv_rate: number | null; cpc: number | null;
+  last_date: string | null;
+}
+export interface StrategyCampaignWeeklyRow {
+  week_start: string;
+  campaign_id: string;
+  campaign_name: string | null;
+  parent_name: string | null;
+  strategy_id: string;
+  spend: number; orders: number; clicks: number; impressions: number; sales: number;
+  net_roas: number | null;
+}
+
 export interface DashboardData {
   summary: SummaryRow[];
   legacy_actions_deprecated: LegacyActionRow[];
@@ -1345,6 +1367,8 @@ export interface DashboardData {
   holidays: HolidayRow[];
   experiment_templates: ExperimentTemplateRow[];
   strategy_campaign_templates: StrategyCampaignTemplateRow[];
+  strategy_campaigns: StrategyCampaignRow[];
+  strategy_campaign_weekly: StrategyCampaignWeeklyRow[];
   coach_decisions: CoachDecisionRow[];
   coach_cross_sell: CoachCrossSellRow[];
   actions: ActionRow[];
