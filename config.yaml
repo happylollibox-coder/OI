@@ -241,6 +241,25 @@ views:
       - V_SRC_AmazonAds_campaign_history
       - V_SRC_AmazonAds_advertised_product
 
+  - name: "V_COVERAGE_CAMPAIGN_PROFIT7D"
+    description: "Per-campaign 7-day P&L for the coverage cockpit. One row per campaign_id with spend>0 in the LAST 7 DAYS, classified through V_CAMPAIGN_ROLE.strategy_category (6-strategy lens; OTHER/NULL dropped). Reuses the same prod (own sellable ASINs + gp_per_unit) + adv (advertised_product asin<->campaign link, 7d window) building blocks as V_COVERAGE_CAMPAIGN. units_7d is click-attributed per day so SUM over the window is correct. Columns: campaign_id, parent_name (ANY_VALUE — one family per campaign in practice), strategy, clicks, spend (SUM cost), units (SUM units_7d), margin (SUM units_7d*gp_per_unit), net_profit (margin−spend), profitable (net_profit>=0). Backs /api/daily-workflow strategy_stats + family_stats profit rollups."
+    source_files: ["scripts/bigquery/views/V_COVERAGE_CAMPAIGN_PROFIT7D.sql"]
+    dependencies:
+      - V_CAMPAIGN_ROLE
+      - DIM_PRODUCT
+      - V_DIM_LISTING_CURRENT
+      - DIM_COSTS_HISTORY
+      - V_SRC_AmazonAds_advertised_product
+
+  - name: "V_COVERAGE_CAMPAIGN_MONTHLY"
+    description: "Per (campaign_id × month) 12-month P&L for the cockpit's per-campaign monthly drill. One row per (campaign_id, month) over the LAST 12 MONTHS from V_SRC_AmazonAds_advertised_product joined to prod (own sellable ASINs + gp_per_unit). units_7d is click-attributed per day so SUM over the window is correct. Columns: campaign_id, month (DATE, DATE_TRUNC to MONTH), impressions, clicks, spend (SUM cost), units (SUM units_7d), net_profit (SUM units_7d*gp_per_unit − SUM cost), net_roas (margin/spend, ROUND 2). Backs GET /api/campaign-months."
+    source_files: ["scripts/bigquery/views/V_COVERAGE_CAMPAIGN_MONTHLY.sql"]
+    dependencies:
+      - DIM_PRODUCT
+      - V_DIM_LISTING_CURRENT
+      - DIM_COSTS_HISTORY
+      - V_SRC_AmazonAds_advertised_product
+
   - name: "V_COVERAGE_KEYWORD"
     description: "Coverage-cockpit reconciler, Stage 3 (S3 rung): one row per (parent_name × match_type × keyword_text). Reconciles RUNNING keywords (V_KEYWORD_DAILY, last 90d, rolled to family×keyword×match: SUM clicks/cost, SUM net_proxy AS net_profit, latest ad_keyword_status, MAX date last_seen, campaign_ids) against RECOMMENDED-but-not-advertised keywords (FACT_RESEARCH_RECOMMENDATIONS latest week_start, status='NEW': best/MIN rank, rec_type), enriched with relevance (FACT_RESEARCH_RANKED MAX rank/overall_fit per family×term, match-agnostic) and the intent-theme flag (V_INTENT_KEYWORDS is_relevant + ads_net_roas, match-agnostic). Universe = DISTINCT keys from running UNION missing (families with recs but no live keywords still appear, e.g. Bunny/LolliBall). net_profit = SUM(V_KEYWORD_DAILY.net_proxy) = sales_14d − ad cost: AFTER ad cost but NOT true net profit (no COGS; sales_14d is 14d-rolling) — directional earn-vs-waste signal only. status CASE (MODERATE orphan rule, Ori 2026-07-21): running+enabled AND (is_relevant=FALSE OR research_rank IS NULL) -> 'orphan'; running+enabled -> 'running'; running+not-enabled -> 'paused'; not-running+recommended -> 'missing'; else 'other'. cell_key = CONCAT('INTENT|', parent_name) so keyword coverage attaches to the Intent family cell."
     source_files: ["scripts/bigquery/views/V_COVERAGE_KEYWORD.sql"]

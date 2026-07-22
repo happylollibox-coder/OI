@@ -9238,10 +9238,79 @@ def daily_workflow():
                 'suppressed':    sum(1 for r in cs if r['status'] == 'suppressed'),
             }
 
+        # ── 7-day per-campaign P&L rollups (strategy + family) ──
+        p7d = [dict(r) for r in client.query(
+            "SELECT campaign_id, parent_name, strategy, clicks, spend, units, margin, "
+            "net_profit, profitable FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN_PROFIT7D`"
+        ).result()]
+
+        def profit_rollup(subset):
+            return {
+                'total': len(subset),
+                'profitable': sum(1 for r in subset if r['profitable']),
+                'net_profit_profitable': round(sum(
+                    (r['net_profit'] or 0) for r in subset if (r['net_profit'] or 0) >= 0)),
+                'net_profit_unprofitable': round(sum(
+                    (r['net_profit'] or 0) for r in subset if (r['net_profit'] or 0) < 0)),
+            }
+
+        # strategy_stats: one entry per strategy present in the 7d P&L
+        strategy_stats = {}
+        for s in sorted({r['strategy'] for r in p7d if r['strategy']}):
+            strategy_stats[s] = profit_rollup([r for r in p7d if r['strategy'] == s])
+
+        # family_stats: profit rollup per family + coverage counts from the already-loaded cells.
+        # Store/Product-Defense cells have parent_name NULL -> bucketed under '__STORE__'.
+        fam_keys = set()
+        for r in p7d:
+            fam_keys.add(r['parent_name'] if r['parent_name'] is not None else '__STORE__')
+        for r in rows:
+            fam_keys.add(r['parent_name'] if r['parent_name'] is not None else '__STORE__')
+
+        family_stats = {}
+        for fam in sorted(fam_keys):
+            is_store = (fam == '__STORE__')
+            subset = [r for r in p7d
+                      if (r['parent_name'] is None) == is_store
+                      and (is_store or r['parent_name'] == fam)]
+            stats = profit_rollup(subset)
+            fam_cells = [r for r in rows
+                         if (r['parent_name'] is None) == is_store
+                         and (is_store or r['parent_name'] == fam)]
+            stats['planned'] = sum(1 for r in fam_cells
+                                   if r['expected'] and r['status'] != 'suppressed')
+            stats['defined'] = sum(1 for r in fam_cells if r['status'] == 'ok')
+            family_stats[fam] = stats
+
         return jsonify({'strategies': STRATS, 'tiles': {s: tile(s) for s in STRATS},
-                        'cells': rows, 'detail': dict(detail)})
+                        'cells': rows, 'detail': dict(detail),
+                        'strategy_stats': strategy_stats, 'family_stats': family_stats})
     except Exception as e:
         print(f"Error in daily_workflow: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaign-months')
+@cache_result(ttl_seconds=300)
+def campaign_months():
+    """Per-campaign 12-month P&L drill — grouped pass-through of V_COVERAGE_CAMPAIGN_MONTHLY.
+
+    Returns { months: { campaign_id: [ {month, impressions, clicks, spend, units,
+    net_profit, net_roas}, ... ] } } so the cockpit can chart a campaign's monthly
+    trend when a coverage cell is expanded.
+    """
+    from collections import defaultdict
+    try:
+        sql = ("SELECT campaign_id, CAST(month AS STRING) AS month, impressions, clicks, "
+               "spend, units, net_profit, net_roas "
+               "FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN_MONTHLY` ORDER BY campaign_id, month")
+        grouped = defaultdict(list)
+        for r in client.query(sql).result():
+            d = dict(r)
+            grouped[d['campaign_id']].append(d)
+        return jsonify({'months': dict(grouped)})
+    except Exception as e:
+        print(f"Error in campaign_months: {e}")
         return jsonify({'error': str(e)}), 500
 
 
