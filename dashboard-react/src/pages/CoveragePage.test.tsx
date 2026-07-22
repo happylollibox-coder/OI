@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { StrategyTile, CampaignEvidenceRow, KeywordRow, ProfitChip, ProfitRollup, MonthRow, KwMonthRow, groupByFamily } from './CoveragePage';
+import { StrategyTile, CampaignEvidenceRow, KeywordRow, ProfitChip, ProfitRollup, MonthRow, KwMonthRow, groupByFamily, parseCampaignId } from './CoveragePage';
 
 function cell(over: Partial<Parameters<typeof groupByFamily>[0][number]> = {}) {
   return {
@@ -101,6 +101,10 @@ test('keyword month row shows month and spend', () => {
 test('month row shows cpc', () => {
   render(<MonthRow m={{month:'2026-03-01', impressions:1000, clicks:100, spend:50, units:5, net_profit:10, net_roas:1.2}} />);
   expect(screen.getByText(/\$0\.50 cpc/)).toBeInTheDocument();
+});
+test('parseCampaignId pulls the id out of an UNMAPPED cell_key', () => {
+  expect(parseCampaignId('UNMAPPED|1234567890')).toBe('1234567890');
+  expect(parseCampaignId('UNMAPPED')).toBe('');
 });
 test('profit chip renders verdict', () => {
   const { rerender } = render(<ProfitChip state="profitable" />);
