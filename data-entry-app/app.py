@@ -9244,6 +9244,58 @@ def daily_workflow():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/coverage-keywords')
+@cache_result(ttl_seconds=300)
+def coverage_keywords():
+    """Keyword-level coverage — read-only pass-through of V_COVERAGE_KEYWORD.
+
+    Backs the lazy-loaded "Keywords" panel under the Intent family cells of the
+    coverage cockpit. One row per parent_name x match_type x keyword_text. Groups
+    by family, rolls up status counts, and orders keywords so waste (orphan) and
+    the best-fit gaps (missing) surface first. `net_profit` is a directional-only
+    14d-rolling proxy summed over 90d (inflated) — passed through but never used
+    to sort or score; the honest metrics are cost, clicks, research_rank,
+    is_relevant, ads_net_roas.
+    """
+    from collections import defaultdict
+    try:
+        sql = ("SELECT parent_name, match_type, keyword_text, is_running, is_enabled, is_recommended, "
+               "clicks, cost, net_profit, research_rank, overall_fit, is_relevant, ads_net_roas, "
+               "rec_type, CAST(last_seen AS STRING) AS last_seen, status "
+               "FROM `onyga-482313.OI.V_COVERAGE_KEYWORD`")
+        rows = [dict(r) for r in client.query(sql).result()]
+
+        fams = defaultdict(lambda: {'counts': {'running': 0, 'missing': 0, 'orphan': 0, 'paused': 0},
+                                    'keywords': []})
+        for r in rows:
+            f = fams[r['parent_name']]
+            if r['status'] in f['counts']:
+                f['counts'][r['status']] += 1
+            f['keywords'].append(r)
+
+        # sort within each family: orphan first (waste), then missing (best rank
+        # first), then running (highest spend first), then paused; cap missing to
+        # top 20 by research_rank.
+        order = {'orphan': 0, 'missing': 1, 'running': 2, 'paused': 3, 'other': 4}
+        out = {}
+        for fam, d in fams.items():
+            kws = d['keywords']
+            missing = sorted([k for k in kws if k['status'] == 'missing'],
+                             key=lambda k: (k['research_rank'] is None, -(k['research_rank'] or 0)))[:20]
+            others = [k for k in kws if k['status'] != 'missing']
+            kept = others + missing
+            kept.sort(key=lambda k: (order.get(k['status'], 9),
+                                     -(k['cost'] or 0) if k['status'] in ('running', 'orphan', 'paused') else 0,
+                                     (k['research_rank'] is None, -(k['research_rank'] or 0))))
+            out[fam] = {'counts': d['counts'], 'keywords': kept,
+                        'missing_shown': len(missing),
+                        'missing_total': sum(1 for k in kws if k['status'] == 'missing')}
+        return jsonify({'families': out})
+    except Exception as e:
+        print(f"Error in coverage_keywords: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/research/rec-explain', methods=['GET'])
 def research_rec_explain():
     """Explain a recommendation's opaque count by listing the underlying terms.
