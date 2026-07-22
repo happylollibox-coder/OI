@@ -9314,6 +9314,9 @@ def coverage_expectation():
                 return jsonify({'error': str(job.errors)}), 500
 
         clear_data_cache()
+        # Evict the cockpit's cached responses so a refetch reflects the new suppression
+        clear_cache('daily_workflow')
+        clear_cache('coverage_keywords')
         return jsonify({'ok': True, 'active': active})
     except Exception as e:
         print(f"Error in coverage_expectation: {e}")
