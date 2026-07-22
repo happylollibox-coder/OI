@@ -81,7 +81,7 @@ mapped AS (
   SELECT DISTINCT CAST(ec.campaign_id AS STRING) AS campaign_id
   FROM `onyga-482313`.OI.DIM_EXPERIMENT_CAMPAIGN ec
   JOIN `onyga-482313`.OI.DIM_EXPERIMENT e USING (experiment_id)
-  WHERE e.strategy_id IN ('INTENT','EXACT_BOOST','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE')
+  WHERE e.strategy_id IN ('AUTO','INTENT','EXACT_BOOST','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE')
 ),
 -- ── Active campaigns (90d) whose role is NULL or 'OTHER' → UNMAPPED ──
 active_unmapped AS (

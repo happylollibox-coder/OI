@@ -7170,10 +7170,11 @@ def get_mapping_coverage():
 
 # Canonical option lists for the dropdowns (validated server-side on assign)
 MAPPING_FAMILIES = ['Bottle', 'Bunny', 'Fresh', 'LolliBall', 'LolliME', 'Lollibox', 'Store']
-MAPPING_STRATEGIES = ['BRAND_DEFENSE', 'COMPETITOR', 'COMPETITOR',
+MAPPING_STRATEGIES = ['AUTO', 'BRAND_DEFENSE', 'COMPETITOR',
                       'EXACT_BOOST', 'INTENT', 'PRODUCT_DEFENSE']
 # Human-readable strategy label for generated experiment names
 _STRATEGY_LABEL = {
+    'AUTO': 'Auto Discovery',
     'EXACT_BOOST': 'Exact Boost', 'INTENT': 'Broad Hunter',
     'INTENT': 'Auto Discovery', 'BRAND_DEFENSE': 'Brand Defense',
     'PRODUCT_DEFENSE': 'Product Defense', 'COMPETITOR': 'Competitor Conquest',
@@ -7298,6 +7299,9 @@ def assign_campaign_mapping():
             ])).result()
 
         clear_data_cache()
+        # Evict the cockpit caches so a re-mapped campaign moves out of Unmapped immediately
+        clear_cache('daily_workflow')
+        clear_cache('coverage_keywords')
         return jsonify({
             'success': True,
             'campaign_id': campaign_id,

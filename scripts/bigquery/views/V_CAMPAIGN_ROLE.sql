@@ -49,6 +49,7 @@ SELECT
   CASE
     WHEN st.strategy_id = 'BRAND_DEFENSE'   THEN 'BRAND_DEFENSE'
     WHEN st.strategy_id = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE'
+    WHEN st.strategy_id = 'AUTO'            THEN 'AUTO'  -- explicit AUTO assignment (manual mapping)
     WHEN UPPER(cs.campaign_type) = 'SB'     THEN 'SB_VIDEO'
     WHEN UPPER(cs.targeting_type) = 'AUTOMATIC' THEN 'AUTO'
     -- COMPETITOR absorbed CATEGORY_CONQUEST + COMPETITOR_CONQUEST (MIGRATE_STRATEGY_CONSOLIDATION,
@@ -73,6 +74,7 @@ SELECT
   CASE
     WHEN st.strategy_id = 'BRAND_DEFENSE'   THEN 'BRAND_DEFENSE'
     WHEN st.strategy_id = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE'
+    WHEN st.strategy_id = 'AUTO'            THEN 'AUTO'  -- explicit AUTO assignment beats targeting inference
     WHEN UPPER(cs.targeting_type) = 'AUTOMATIC' THEN 'AUTO'
     WHEN st.strategy_id = 'EXACT_BOOST'     THEN 'EXACT_BOOST'
     WHEN st.strategy_id IN ('COMPETITOR', 'CATEGORY_CONQUEST', 'COMPETITOR_CONQUEST')
