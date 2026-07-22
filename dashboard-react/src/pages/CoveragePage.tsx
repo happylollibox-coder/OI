@@ -10,7 +10,7 @@ interface Tile {
   suppressed: number;
 }
 interface Cell {
-  grain: 'ASIN' | 'FAMILY' | 'STORE';
+  grain: 'ASIN' | 'FAMILY' | 'STORE' | 'CAMPAIGN';
   parent_name: string | null;
   asin: string | null;
   product_short_name: string | null;
@@ -24,7 +24,7 @@ interface Cell {
   net_roas: number | null;
   campaigns: string | null;
   suppressed: boolean;
-  status: 'ok' | 'missing' | 'redundant' | 'none' | 'suppressed';
+  status: 'ok' | 'missing' | 'redundant' | 'none' | 'suppressed' | 'unmapped';
   reason: string;
   cell_key: string;
   cost: number;
@@ -134,6 +134,7 @@ const STRAT_LABEL: Record<string, string> = {
   COMPETITOR: 'Competitor',
   BRAND_DEFENSE: 'Brand Defense',
   PRODUCT_DEFENSE: 'Product Defense',
+  UNMAPPED: 'Unmapped',
 };
 
 function StatusPill({ c }: { c: Cell }) {
@@ -143,6 +144,7 @@ function StatusPill({ c }: { c: Cell }) {
     redundant: { tone: 'text-amber-400', label: `⚠ ${c.n_enabled} campaigns` },
     none: { tone: 'text-faint', label: '– not running' },
     suppressed: { tone: 'text-subtle', label: '⊘ not expected' },
+    unmapped: { tone: 'text-amber-400', label: '⊙ unmapped' },
   };
   const { tone, label } = map[c.status];
   return <span className={`${tone} font-semibold text-[10px]`}>{label}</span>;
@@ -192,11 +194,16 @@ function Metrics({ c }: { c: Cell }) {
 /** Strategy roll-up tile — defined / to-do / redundant across a strategy's coverage cells.
  *  Border tone: red if anything to do, else amber if redundant, else emerald. */
 export function StrategyTile({ name, t, stat, open, onOpen }: { name: string; t: Tile; stat?: StrategyStat; open: boolean; onOpen: () => void }) {
-  const tone = t.missing > 0
-    ? 'border-red-500/40 bg-red-500/10 hover:bg-red-500/20'
-    : t.redundant > 0
-      ? 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
-      : 'border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20';
+  const isUnmapped = name === 'UNMAPPED';
+  const tone = isUnmapped
+    ? (t.informational > 0
+        ? 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
+        : 'border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20')
+    : t.missing > 0
+      ? 'border-red-500/40 bg-red-500/10 hover:bg-red-500/20'
+      : t.redundant > 0
+        ? 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
+        : 'border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20';
   return (
     <button
       onClick={onOpen}
@@ -204,10 +211,18 @@ export function StrategyTile({ name, t, stat, open, onOpen }: { name: string; t:
     >
       <div className="text-xs font-bold text-heading">{STRAT_LABEL[name] ?? name}</div>
       <div className="mt-1 text-[10px] font-semibold">
-        <span className="text-emerald-400">✓ {t.defined} defined</span>
-        {t.missing > 0 && <><span className="text-faint"> · </span><span className="text-red-400">✗ {t.missing} to do</span></>}
-        {t.redundant > 0 && <><span className="text-faint"> · </span><span className="text-amber-400">⚠ {t.redundant} redundant</span></>}
-        {t.informational > 0 && <><span className="text-faint"> · </span><span className="text-faint">{t.informational} idle</span></>}
+        {isUnmapped ? (
+          t.informational > 0
+            ? <span className="text-amber-400">{t.informational} unmapped</span>
+            : <span className="text-faint">none unmapped</span>
+        ) : (
+          <>
+            <span className="text-emerald-400">✓ {t.defined} defined</span>
+            {t.missing > 0 && <><span className="text-faint"> · </span><span className="text-red-400">✗ {t.missing} to do</span></>}
+            {t.redundant > 0 && <><span className="text-faint"> · </span><span className="text-amber-400">⚠ {t.redundant} redundant</span></>}
+            {t.informational > 0 && <><span className="text-faint"> · </span><span className="text-faint">{t.informational} idle</span></>}
+          </>
+        )}
       </div>
       <ProfitRollup s={stat ?? ZERO_STAT} />
     </button>
@@ -580,6 +595,7 @@ const STATUS_ORDER: Record<Cell['status'], number> = {
   ok: 2,
   none: 3,
   suppressed: 4,
+  unmapped: 5,
 };
 
 function cellLabel(c: Cell): string {

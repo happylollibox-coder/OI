@@ -51,6 +51,14 @@ test('informational strategy shows no to-do', () => {
   expect(screen.queryByText(/to do/)).toBeNull();
   expect(screen.getByText(/4 idle/)).toBeInTheDocument();
 });
+test('unmapped tile shows count', () => {
+  render(<StrategyTile name="UNMAPPED" t={{defined:0,missing:0,redundant:0,informational:8,suppressed:0}} open={false} onOpen={()=>{}} />);
+  expect(screen.getByText(/8 unmapped/)).toBeInTheDocument();
+});
+test('unmapped tile with zero shows none unmapped', () => {
+  render(<StrategyTile name="UNMAPPED" t={{defined:0,missing:0,redundant:0,informational:0,suppressed:0}} open={false} onOpen={()=>{}} />);
+  expect(screen.getByText(/none unmapped/)).toBeInTheDocument();
+});
 test('evidence row shows campaign name and state', () => {
   render(<CampaignEvidenceRow c={{campaign_id:'123', campaign_name:'ME-SP/PHRASE (Mint)', state:'ENABLED', is_enabled:true, impressions:100, clicks:12, units:3, ad_spend:9, net_roas:1.8, last_seen:'2026-07-21', cpc:0.75, profit_state:'profitable'}} />);
   expect(screen.getByText(/ME-SP\/PHRASE/)).toBeInTheDocument();
