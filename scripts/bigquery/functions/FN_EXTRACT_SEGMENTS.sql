@@ -12,7 +12,10 @@
 --   brand        → needs DIM_PRODUCT (table refs don't belong in a scalar UDF)
 --
 -- Regexes are the canonical set (formerly V_SQP_QUERY_WEEKLY lines 52-101),
--- including the `girls → 8-14` default. Edit ONLY here.
+-- including the `girls → 8-14` default. A baby/toddler guard runs FIRST
+-- among the age WHENs so terms like "1st birthday", "1-2 year old",
+-- "toddler", "infant" tag 0-2 (Baby) instead of falling through to the
+-- `girls → 8-14` default. Edit ONLY here.
 -- SOP: architecture/RESEARCH_PAGE.md
 -- =============================================
 CREATE OR REPLACE FUNCTION `onyga-482313`.OI.FN_EXTRACT_SEGMENTS(query_text STRING)
@@ -26,7 +29,11 @@ AS (STRUCT(
   END,
   -- age_group (order matters: specific ranges before generic kid words)
   CASE
-    WHEN REGEXP_CONTAINS(LOWER(query_text), r'\b(baby|infant|newborn)\b') THEN '0-2 (Baby)'
+    -- baby guard FIRST: "1st/2nd birthday", "1-2 year old", baby/infant/newborn
+    -- must win before the `girls → 8-14` default below catches these baby terms.
+    WHEN REGEXP_CONTAINS(LOWER(query_text),
+         r'\b(1st|first|2nd|second)\s+birthday\b|\b[12]\s*(?:year|yr|yo)s?\s*old\b|\b(baby|infant|newborn)\b')
+         THEN '0-2 (Baby)'
     WHEN REGEXP_CONTAINS(LOWER(query_text), r'\b(toddler)\b') THEN '2-4 (Toddler)'
     WHEN REGEXP_CONTAINS(LOWER(query_text), r'(\b1[0-2]\s*(?:year|yr|yo|th|old|\+)|1[0-2]-1[0-4]|\b[89]-1[0-2]\b|\b10-1[0-3]\b|\b8-12\b|\b9-12\b|\b10-12\b|\b10-13\b|\btween\b|\btweens\b|\bpreteen\b|\bages?\s*1[0-2]\b|gift.{0,15}\b1[0-2]\b|\b1[0-2]\b.{0,5}girl|\b1[0-2]\b.{0,5}boy)') THEN '10-12 (Tween)'
     WHEN REGEXP_CONTAINS(LOWER(query_text), r'(\b1[3-7]\s*(?:year|yr|yo|th|old|\+)|1[3-7]-1[4-9]|\bteen\b|\bteens\b|\bteenage\b|\bteenager\b|\bteenagers\b|\bages?\s*1[3-7]\b|\bsweet 16\b|\bsweet sixteen\b|\bquinceanera\b)') THEN '13-17 (Teen)'

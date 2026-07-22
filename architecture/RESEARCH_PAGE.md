@@ -43,6 +43,14 @@ V_RESEARCH_TERMS    V_RESEARCH_RANKED  ◄── V_CONVERSION_CURVE, DIM_PRODUCT
    `FN_EXTRACT_SEGMENTS`. Consumers: `V_SQP_QUERY_WEEKLY`, `V_RESEARCH_RANKED`
    (ads-only terms), `SP_DERIVE_PRODUCT_SEGMENTS`, `/api/research/segment-reasoning`.
    Never copy the regexes inline.
+   - **Baby/toddler age guard:** the age CASE has a `girls? → 8-14` catch-all default.
+     A baby guard runs FIRST among the age WHENs so `1st/2nd birthday`,
+     `1-2 year old`, and `baby|infant|newborn` tag `0-2 (Baby)` (and `toddler`
+     keeps its own `2-4 (Toddler)` rule) instead of falling through to the
+     `8-14` girls-default. Without it, e.g. "1st birthday girl gifts" has no
+     age token, contains "girl", defaults to 8-14, and wrongly lands in the
+     8-14 birthday intent/tween campaigns. After editing the age regexes,
+     re-run `SP_REFRESH_RESEARCH_RANKED` to re-tag `FACT_RESEARCH_RANKED.age_group`.
 2. **Product-type vocabulary** lives ONLY in `DE_PRODUCT_TYPE_KEYWORDS`
    (values like `Food & Treats`, `Bath & Spa`, `Journal & Diary`). Any product_type
    tagging must use the keyword-lookup join (priority ASC, longest keyword wins).
