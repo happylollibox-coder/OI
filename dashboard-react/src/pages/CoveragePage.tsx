@@ -137,51 +137,86 @@ const STRAT_LABEL: Record<string, string> = {
   UNMAPPED: 'Unmapped',
 };
 
-/** Families assignable to an unmapped campaign in the cockpit. */
-const MAP_FAMILIES = ['Bottle', 'Bunny', 'Fresh', 'LolliBall', 'LolliME', 'Lollibox', 'Store'];
-/** Assignable strategies (Auto lets the backend auto-detect from targeting). */
-const MAP_STRATEGIES: { value: string; label: string }[] = [
-  { value: 'AUTO', label: 'Auto' },
-  { value: 'INTENT', label: 'Intent' },
-  { value: 'EXACT_BOOST', label: 'Exact Boost' },
-  { value: 'COMPETITOR', label: 'Competitor' },
-  { value: 'BRAND_DEFENSE', label: 'Brand Defense' },
-  { value: 'PRODUCT_DEFENSE', label: 'Product Defense' },
-];
-
 /** Pull the campaign_id out of an UNMAPPED cell_key ('UNMAPPED|<campaign_id>'). */
 // eslint-disable-next-line react-refresh/only-export-components
 export function parseCampaignId(cellKey: string): string {
   return cellKey.split('|')[1] ?? '';
 }
 
-/** Inline family/strategy selects + Map button for an unmapped campaign cell.
- *  Manages its own two select values (family defaults to the cell's parent_name
- *  when it's a known family). Rendered as a SIBLING of the row's expand button.
- *  Clicks are stopped from bubbling so the selects don't toggle the row. */
-function MappingControl({ c, pending, onAssign }: { c: Cell; pending: boolean; onAssign: (family: string, strategy: string) => void }) {
-  const defaultFamily = MAP_FAMILIES.includes(c.parent_name ?? '') ? (c.parent_name as string) : '';
-  const [family, setFamily] = useState(defaultFamily);
-  const [strategy, setStrategy] = useState('');
-  const canMap = !!family && !!strategy && !pending;
-  const selCls = 'text-[10px] bg-surface border border-border-faint rounded px-1 py-px text-muted';
+/** One campaign in the mapping modal (from GET /api/admin/campaign-mapping). */
+interface MappingCampaign {
+  campaign_id: string;
+  campaign_name: string;
+  spend_60d: number;
+  current_experiment_id: string | null;
+  current_experiment_name: string | null;
+  current_strategy_id: string | null;
+  suggested_family: string | null;
+  suggested_strategy: string | null;
+  suggested_experiment_id: string | null;
+  confidence: number | null;
+  source: string | null;
+}
+interface MappingData {
+  campaigns: MappingCampaign[];
+  families: string[];
+  strategies: string[];
+}
+
+/** Current-strategy indicator for a campaign row: amber "unmapped" when null,
+ *  else a faint pill with the human label (STRAT_LABEL; unknown ids shown raw). */
+export function CurrentStrategyPill({ id }: { id: string | null }) {
+  if (id == null) {
+    return <span className="shrink-0 rounded px-1.5 py-px text-[10px] font-semibold bg-amber-500/15 text-amber-400">unmapped</span>;
+  }
   return (
-    <div className="flex shrink-0 items-center gap-1" onClick={e => e.stopPropagation()}>
+    <span className="shrink-0 rounded px-1.5 py-px text-[10px] font-semibold bg-white/[0.05] text-faint">
+      {STRAT_LABEL[id] ?? id}
+    </span>
+  );
+}
+
+/** One campaign row in the mapping modal: name + 60d spend + current-strategy pill,
+ *  then family/strategy selects + Save. Local select state defaults from the
+ *  current mapping (strategy) and the backend suggestion (family/strategy fallback). */
+function MappingRow({ c, families, strategies, pending, onSave }: {
+  c: MappingCampaign;
+  families: string[];
+  strategies: string[];
+  pending: boolean;
+  onSave: (family: string, strategy: string) => void;
+}) {
+  const initFamily = c.suggested_family && families.includes(c.suggested_family) ? c.suggested_family : '';
+  const initStrategy =
+    c.current_strategy_id && strategies.includes(c.current_strategy_id)
+      ? c.current_strategy_id
+      : c.suggested_strategy && strategies.includes(c.suggested_strategy)
+        ? c.suggested_strategy
+        : '';
+  const [family, setFamily] = useState(initFamily);
+  const [strategy, setStrategy] = useState(initStrategy);
+  const canSave = !!family && !!strategy && !pending;
+  const selCls = 'text-[10px] bg-surface border border-border-faint rounded px-1.5 py-1 text-muted';
+  return (
+    <div className="flex items-center gap-2 border-b border-border-faint py-1.5 last:border-0">
+      <span className="min-w-0 flex-1 truncate text-[11px] text-heading" title={c.campaign_name}>{c.campaign_name}</span>
+      <span className="shrink-0 text-[10px] tabular-nums text-faint">${c.spend_60d.toFixed(0)}</span>
+      <CurrentStrategyPill id={c.current_strategy_id} />
       <select value={family} onChange={e => setFamily(e.target.value)} className={selCls} title="Family">
         <option value="">family…</option>
-        {MAP_FAMILIES.map(f => <option key={f} value={f}>{f}</option>)}
+        {families.map(f => <option key={f} value={f}>{f}</option>)}
       </select>
       <select value={strategy} onChange={e => setStrategy(e.target.value)} className={selCls} title="Strategy">
         <option value="">strategy…</option>
-        {MAP_STRATEGIES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+        {strategies.map(s => <option key={s} value={s}>{STRAT_LABEL[s] ?? s}</option>)}
       </select>
       <button
-        onClick={() => onAssign(family, strategy)}
-        disabled={!canMap}
-        className="shrink-0 rounded border border-border-faint px-1.5 py-px text-[10px] text-muted hover:text-heading disabled:opacity-40"
-        title="Map this campaign to a strategy"
+        onClick={() => onSave(family, strategy)}
+        disabled={!canSave}
+        className="shrink-0 rounded border border-border-faint px-2 py-1 text-[10px] text-muted hover:text-heading disabled:opacity-40"
+        title="Assign this campaign to a strategy"
       >
-        {pending ? '…' : 'Map'}
+        {pending ? '…' : 'Save'}
       </button>
     </div>
   );
@@ -275,6 +310,28 @@ export function StrategyTile({ name, t, stat, open, onOpen }: { name: string; t:
         )}
       </div>
       <ProfitRollup s={stat ?? ZERO_STAT} />
+    </button>
+  );
+}
+
+/** Replaces the UNMAPPED strategy tile: a ⚙ Configure button that opens the
+ *  campaign-mapping modal. Amber toned with a count pill when unmapped>0, else neutral. */
+function ConfigureButton({ count, onClick }: { count: number; onClick: () => void }) {
+  const active = count > 0;
+  const tone = active
+    ? 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
+    : 'border-border-faint bg-surface hover:bg-white/[0.04]';
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 rounded-lg border px-4 py-3 min-w-[150px] transition ${tone}`}
+      title="Configure campaign → strategy mapping"
+    >
+      <span className="text-base leading-none">⚙</span>
+      <span className="text-xs font-bold text-heading">Configure</span>
+      {active
+        ? <span className="ml-auto rounded-full bg-amber-500/20 px-2 py-px text-[10px] font-bold tabular-nums text-amber-400">{count}</span>
+        : <span className="ml-auto text-[10px] text-faint tabular-nums">0</span>}
     </button>
   );
 }
@@ -751,7 +808,11 @@ export function CoveragePage() {
   const [kwData, setKwData] = useState<Record<string, FamilyKeywords> | null>(null);
   const [kwLoading, setKwLoading] = useState(false);
   const [pendingCell, setPendingCell] = useState<string | null>(null); // cell_key of in-flight suppress toggle
-  const [mappingPending, setMappingPending] = useState<Set<string>>(new Set()); // cell_keys of in-flight campaign-mapping assigns
+  const [configOpen, setConfigOpen] = useState(false); // campaign-mapping modal open
+  const [mapData, setMapData] = useState<MappingData | null>(null); // lazily-fetched mapping list
+  const [mapLoading, setMapLoading] = useState(false);
+  const [mapPending, setMapPending] = useState<Set<string>>(new Set()); // campaign_ids of in-flight assigns
+  const [onlyUnmapped, setOnlyUnmapped] = useState(false); // modal filter toggle
   const [monthsData, setMonthsData] = useState<Record<string, MonthRow[]> | null>(null);
   const [monthsLoading, setMonthsLoading] = useState(false);
   const [openCampaigns, setOpenCampaigns] = useState<Set<string>>(new Set()); // expanded campaign_ids
@@ -789,11 +850,26 @@ export function CoveragePage() {
     }
   }
 
-  /** Map an unmapped campaign to a family+strategy, then refetch so it re-classifies. */
-  async function assignMapping(c: Cell, family: string, strategy: string) {
-    const campaign_id = parseCampaignId(c.cell_key);
-    if (!campaign_id || !family || !strategy || mappingPending.has(c.cell_key)) return;
-    setMappingPending(prev => new Set(prev).add(c.cell_key));
+  /** Lazily fetch the full campaign-mapping list once (called when Configure opens). */
+  function ensureMapping() {
+    if (mapData !== null || mapLoading) return;
+    setMapLoading(true);
+    apiFetch('/api/admin/campaign-mapping')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(json => setMapData({
+        campaigns: json.campaigns ?? [],
+        families: json.families ?? [],
+        strategies: json.strategies ?? [],
+      }))
+      .catch(() => setMapData({ campaigns: [], families: [], strategies: [] }))
+      .finally(() => setMapLoading(false));
+  }
+
+  /** Assign (or re-assign) a campaign to a family+strategy, then refetch the mapping
+   *  list (modal rows) and the workflow (badge). Per-row pending tracked by campaign_id. */
+  async function saveMapping(campaign_id: string, family: string, strategy: string) {
+    if (!campaign_id || !family || !strategy || mapPending.has(campaign_id)) return;
+    setMapPending(prev => new Set(prev).add(campaign_id));
     try {
       const res = await apiFetch('/api/admin/campaign-mapping/assign', {
         method: 'POST',
@@ -803,15 +879,20 @@ export function CoveragePage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'server rejected mapping');
+      const m = await apiFetch('/api/admin/campaign-mapping');
+      if (m.ok) {
+        const mj = await m.json();
+        if (mj.success) setMapData({ campaigns: mj.campaigns ?? [], families: mj.families ?? [], strategies: mj.strategies ?? [] });
+      }
       const wf = await apiFetch('/api/daily-workflow');
-      if (!wf.ok) throw new Error(`HTTP ${wf.status}`);
-      const fresh = await wf.json();
-      if (fresh.error) throw new Error(fresh.error);
-      setData(fresh);
+      if (wf.ok) {
+        const fresh = await wf.json();
+        if (!fresh.error) setData(fresh);
+      }
     } catch (e) {
       console.warn('campaign mapping assign failed', e);
     } finally {
-      setMappingPending(prev => { const next = new Set(prev); next.delete(c.cell_key); return next; });
+      setMapPending(prev => { const next = new Set(prev); next.delete(campaign_id); return next; });
     }
   }
 
@@ -913,14 +994,22 @@ export function CoveragePage() {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap gap-2 mb-2">
             {data.strategies.map(s => (
-              <StrategyTile
-                key={s}
-                name={s}
-                t={data.tiles[s] ?? { defined: 0, missing: 0, redundant: 0, informational: 0, suppressed: 0 }}
-                stat={data.strategy_stats?.[s]}
-                open={open === s}
-                onOpen={() => setOpen(o => (o === s ? null : s))}
-              />
+              s === 'UNMAPPED' ? (
+                <ConfigureButton
+                  key={s}
+                  count={data.tiles['UNMAPPED']?.informational ?? 0}
+                  onClick={() => { setConfigOpen(true); ensureMapping(); }}
+                />
+              ) : (
+                <StrategyTile
+                  key={s}
+                  name={s}
+                  t={data.tiles[s] ?? { defined: 0, missing: 0, redundant: 0, informational: 0, suppressed: 0 }}
+                  stat={data.strategy_stats?.[s]}
+                  open={open === s}
+                  onOpen={() => setOpen(o => (o === s ? null : s))}
+                />
+              )
             ))}
           </div>
 
@@ -985,13 +1074,6 @@ export function CoveragePage() {
                               {isPending ? '…' : '↩ expect'}
                             </button>
                           )}
-                          {c.status === 'unmapped' && (
-                            <MappingControl
-                              c={c}
-                              pending={mappingPending.has(c.cell_key)}
-                              onAssign={(family, strategy) => assignMapping(c, family, strategy)}
-                            />
-                          )}
                         </div>
                         {isOpen && (
                           <div className="pl-4 pb-2 pt-0.5">
@@ -1031,6 +1113,58 @@ export function CoveragePage() {
       )}
         </div>
       </div>
+
+      {configOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setConfigOpen(false)}
+        >
+          <div
+            className="bg-card border border-border rounded-lg max-w-[820px] w-[92%] max-h-[85vh] overflow-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="sticky top-0 flex items-start justify-between border-b border-border bg-card px-4 py-3">
+              <div>
+                <div className="text-sm font-bold text-heading">Campaign Mapping</div>
+                <div className="text-[11px] text-muted">assign campaigns to strategies</div>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1 text-[11px] text-muted">
+                  <input type="checkbox" checked={onlyUnmapped} onChange={e => setOnlyUnmapped(e.target.checked)} />
+                  show only unmapped
+                </label>
+                <button
+                  onClick={() => setConfigOpen(false)}
+                  className="px-1 text-lg leading-none text-faint hover:text-heading"
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div className="p-3">
+              {mapLoading && !mapData ? (
+                <div className="py-4 text-center text-[11px] text-faint">loading…</div>
+              ) : (() => {
+                const rows = (mapData?.campaigns ?? []).filter(c => (onlyUnmapped ? c.current_strategy_id == null : true));
+                if (rows.length === 0) {
+                  return <div className="py-4 text-center text-[11px] text-faint">no campaigns</div>;
+                }
+                return rows.map(c => (
+                  <MappingRow
+                    key={c.campaign_id}
+                    c={c}
+                    families={mapData?.families ?? []}
+                    strategies={mapData?.strategies ?? []}
+                    pending={mapPending.has(c.campaign_id)}
+                    onSave={(family, strategy) => saveMapping(c.campaign_id, family, strategy)}
+                  />
+                ));
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
