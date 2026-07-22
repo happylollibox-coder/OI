@@ -72,12 +72,16 @@ floor AS (
   FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
   WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id = 'GLOBAL'
 ),
--- ── Campaigns that already carry a strategy assignment (DIM_EXPERIMENT_CAMPAIGN).
---    Excluded below so mapping a campaign removes it from Unmapped immediately, even
---    if it's dormant (V_CAMPAIGN_ROLE is 90d-activity-gated and won't reflect it). ──
+-- ── Campaigns mapped to a VALID strategy (DIM_EXPERIMENT_CAMPAIGN → DIM_EXPERIMENT
+--    with a real strategy_id). Excluded below so mapping a campaign removes it from
+--    Unmapped immediately, even when dormant (V_CAMPAIGN_ROLE is 90d-activity-gated).
+--    A campaign mapped to a strategy_less experiment (strategy_id NULL) is NOT excluded
+--    — it's effectively unmapped and still needs a real strategy. ──
 mapped AS (
-  SELECT DISTINCT CAST(campaign_id AS STRING) AS campaign_id
-  FROM `onyga-482313`.OI.DIM_EXPERIMENT_CAMPAIGN
+  SELECT DISTINCT CAST(ec.campaign_id AS STRING) AS campaign_id
+  FROM `onyga-482313`.OI.DIM_EXPERIMENT_CAMPAIGN ec
+  JOIN `onyga-482313`.OI.DIM_EXPERIMENT e USING (experiment_id)
+  WHERE e.strategy_id IN ('INTENT','EXACT_BOOST','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE')
 ),
 -- ── Active campaigns (90d) whose role is NULL or 'OTHER' → UNMAPPED ──
 active_unmapped AS (
