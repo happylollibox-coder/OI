@@ -370,17 +370,17 @@ seg_fit_calc AS (
       WHEN fs.seg_age_group IS NULL OR fs.seg_age_group = '' THEN NULL
       WHEN st.age_group IS NULL THEN 0
       WHEN STRPOS(CONCAT(',', fs.seg_age_group, ','), CONCAT(',', st.age_group, ',')) > 0 THEN 30
-      -- Kid ↔ Tween adjacency at 80%
-      WHEN st.age_group = '5-9 (Kid)' AND STRPOS(CONCAT(',', fs.seg_age_group, ','), ',10-12 (Tween),') > 0 THEN 24
-      WHEN st.age_group = '10-12 (Tween)' AND STRPOS(CONCAT(',', fs.seg_age_group, ','), ',5-9 (Kid),') > 0 THEN 24
+      -- Kid ↔ Tween adjacency at 80% (boundary shifted 2026-07-22: Kid 5-7, Tween 8-12)
+      WHEN st.age_group = '5-7 (Kid)' AND STRPOS(CONCAT(',', fs.seg_age_group, ','), ',8-12 (Tween),') > 0 THEN 24
+      WHEN st.age_group = '8-12 (Tween)' AND STRPOS(CONCAT(',', fs.seg_age_group, ','), ',5-7 (Kid),') > 0 THEN 24
       -- 8-14 overlaps Kid, Tween, and lower Teen → adjacent to all three
       WHEN st.age_group = '8-14' AND (
-        STRPOS(CONCAT(',', fs.seg_age_group, ','), ',5-9 (Kid),') > 0
-        OR STRPOS(CONCAT(',', fs.seg_age_group, ','), ',10-12 (Tween),') > 0
+        STRPOS(CONCAT(',', fs.seg_age_group, ','), ',5-7 (Kid),') > 0
+        OR STRPOS(CONCAT(',', fs.seg_age_group, ','), ',8-12 (Tween),') > 0
         OR STRPOS(CONCAT(',', fs.seg_age_group, ','), ',13-17 (Teen),') > 0
       ) THEN 24
       -- Family has 8-14 and term has Kid/Tween/Teen → adjacent
-      WHEN STRPOS(CONCAT(',', fs.seg_age_group, ','), ',8-14,') > 0 AND st.age_group IN ('5-9 (Kid)', '10-12 (Tween)', '13-17 (Teen)') THEN 24
+      WHEN STRPOS(CONCAT(',', fs.seg_age_group, ','), ',8-14,') > 0 AND st.age_group IN ('5-7 (Kid)', '8-12 (Tween)', '13-17 (Teen)') THEN 24
       ELSE -1
     END AS age_score,
 

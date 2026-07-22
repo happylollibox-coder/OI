@@ -16,6 +16,12 @@
 -- among the age WHENs so terms like "1st birthday", "1-2 year old",
 -- "toddler", "infant" tag 0-2 (Baby) instead of falling through to the
 -- `girls → 8-14` default. Edit ONLY here.
+--
+-- 2026-07-22: Kid/Tween boundary shifted. Kid = 5-7 (label '5-7 (Kid)'),
+-- Tween = 8-12 (label '8-12 (Tween)'). 8-9yo terms now tag Tween (were Kid).
+-- Tween WHEN runs BEFORE Kid, so 8/9 single-ages match Tween first.
+-- Downstream that must stay aligned to these strings: V_RESEARCH_RANKED age
+-- fit-score adjacency, DE_INTENT_THEMES.match_age_group, DIM_PRODUCT.seg_age_group.
 -- SOP: architecture/RESEARCH_PAGE.md
 -- =============================================
 CREATE OR REPLACE FUNCTION `onyga-482313`.OI.FN_EXTRACT_SEGMENTS(query_text STRING)
@@ -35,10 +41,10 @@ AS (STRUCT(
          r'\b(1st|first|2nd|second)\s+birthday\b|\b[12]\s*(?:year|yr|yo)s?\s*old\b|\b(baby|infant|newborn)\b')
          THEN '0-2 (Baby)'
     WHEN REGEXP_CONTAINS(LOWER(query_text), r'\b(toddler)\b') THEN '2-4 (Toddler)'
-    WHEN REGEXP_CONTAINS(LOWER(query_text), r'(\b1[0-2]\s*(?:year|yr|yo|th|old|\+)|1[0-2]-1[0-4]|\b[89]-1[0-2]\b|\b10-1[0-3]\b|\b8-12\b|\b9-12\b|\b10-12\b|\b10-13\b|\btween\b|\btweens\b|\bpreteen\b|\bages?\s*1[0-2]\b|gift.{0,15}\b1[0-2]\b|\b1[0-2]\b.{0,5}girl|\b1[0-2]\b.{0,5}boy)') THEN '10-12 (Tween)'
+    WHEN REGEXP_CONTAINS(LOWER(query_text), r'(\b(?:[89]|1[0-2])\s*(?:year|yr|yo|th|old|\+)|1[0-2]-1[0-4]|\b[89]-1[0-2]\b|\b8-1[0-2]\b|\b10-1[0-3]\b|\b8-12\b|\b9-12\b|\b10-12\b|\b10-13\b|\btween\b|\btweens\b|\bpreteen\b|\bages?\s*(?:[89]|1[0-2])\b|gift.{0,15}\b(?:[89]|1[0-2])\b|\b(?:[89]|1[0-2])\b.{0,5}girl|\b(?:[89]|1[0-2])\b.{0,5}boy)') THEN '8-12 (Tween)'
     WHEN REGEXP_CONTAINS(LOWER(query_text), r'(\b1[3-7]\s*(?:year|yr|yo|th|old|\+)|1[3-7]-1[4-9]|\bteen\b|\bteens\b|\bteenage\b|\bteenager\b|\bteenagers\b|\bages?\s*1[3-7]\b|\bsweet 16\b|\bsweet sixteen\b|\bquinceanera\b)') THEN '13-17 (Teen)'
     WHEN REGEXP_CONTAINS(LOWER(query_text), r'(\b18\s*(?:year|yr|th|old|\+)|\badult\b|\bwomen\b|\bwoman\b|\bmen\b|\bman\b|\bcollege\b|\bfor her\b|\bfor him\b|\bmom\b|\bdad\b|\bwife\b|\bhusband\b|\bgirlfriend\b|\bboyfriend\b|\bmadre\b|\bmama\b|\bpapa\b)') THEN '18+ (Adult)'
-    WHEN REGEXP_CONTAINS(LOWER(query_text), r'(\b[3-9]\s*(?:year|yr|yo|th|old|\+)|\b[3-9]-[5-9]\b|\b[5-9]-1[0-2]\b|\bages?\s*[3-9]\b|\bkid\b|\bkids\b|\bchild\b|\bchildren\b)') THEN '5-9 (Kid)'
+    WHEN REGEXP_CONTAINS(LOWER(query_text), r'(\b[3-7]\s*(?:year|yr|yo|th|old|\+)|\b[3-7]-[5-7]\b|\bages?\s*[3-7]\b|\bkid\b|\bkids\b|\bchild\b|\bchildren\b)') THEN '5-7 (Kid)'
     WHEN REGEXP_CONTAINS(LOWER(query_text), r'\bgirls?\b') THEN '8-14'
     ELSE NULL
   END,

@@ -51,6 +51,16 @@ V_RESEARCH_TERMS    V_RESEARCH_RANKED  ◄── V_CONVERSION_CURVE, DIM_PRODUCT
      age token, contains "girl", defaults to 8-14, and wrongly lands in the
      8-14 birthday intent/tween campaigns. After editing the age regexes,
      re-run `SP_REFRESH_RESEARCH_RANKED` to re-tag `FACT_RESEARCH_RANKED.age_group`.
+   - **Kid/Tween boundary shift (Ori 2026-07-22):** Kid = **5-7** (label `5-7 (Kid)`),
+     Tween = **8-12** (label `8-12 (Tween)`) — moved from Kid 5-9 / Tween 10-12 so 8-9yo
+     terms (standard tween range) stop mis-tagging as Kid. The Tween WHEN runs BEFORE
+     Kid in the CASE, so 8/9 single-ages match Tween first. The **label strings changed**,
+     so every place that stores or matches them had to move together, or joins break:
+     `FN_EXTRACT_SEGMENTS` (emits), `V_RESEARCH_RANKED` age fit-score adjacency (hardcoded
+     strings), `DE_INTENT_THEMES.match_age_group`, `DIM_PRODUCT.seg_age_group`, and manual
+     overrides in `DE_SEARCH_TERM_SEGMENTS`. Re-tag path: `UPDATE` those data tables to the
+     new strings, then `CALL SP_REFRESH_RESEARCH_RANKED()` (and `SP_DERIVE_PRODUCT_SEGMENTS`
+     for any NULL product segs).
    - **Age-birthday intent routing (Ori 2026-07-22):** the age-specific birthday intent
      themes in `DE_INTENT_THEMES` (`kid-/tween-/teen-birthday-gift`, `age-8-14-birthday-gift`)
      match on **age_group + occasion=Birthday only** — the `\bgifts?\b` requirement was
@@ -93,7 +103,8 @@ Per-field points vs family `DIM_PRODUCT.seg_*` (CSV values, merged across ASINs)
 | occasion | +10 | — | +0 | skipped | cap 10 |
 | product_type | +30 | — | +0 (`General` = unknown) | skipped | cap 10 |
 
-Age adjacency: `5-9 (Kid)` ↔ `10-12 (Tween)`; `8-14` ↔ Kid/Tween/Teen (both directions).
+Age adjacency: `5-7 (Kid)` ↔ `8-12 (Tween)`; `8-14` ↔ Kid/Tween/Teen (both directions).
+(Kid/Tween boundary shifted 2026-07-22 — see Invariant #1.)
 Explanation columns: `gender_score`, `age_score`, `occasion_score`, `pt_score`
 (-1 encodes mismatch pre-cap).
 
