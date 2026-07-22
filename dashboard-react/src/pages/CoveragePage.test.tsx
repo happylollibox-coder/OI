@@ -90,6 +90,10 @@ test('keyword month row shows month and spend', () => {
   expect(screen.getByText(/2026-03/)).toBeInTheDocument();
   expect(screen.getByText(/710 clk/)).toBeInTheDocument();
 });
+test('month row shows cpc', () => {
+  render(<MonthRow m={{month:'2026-03-01', impressions:1000, clicks:100, spend:50, units:5, net_profit:10, net_roas:1.2}} />);
+  expect(screen.getByText(/\$0\.50 cpc/)).toBeInTheDocument();
+});
 test('profit chip renders verdict', () => {
   const { rerender } = render(<ProfitChip state="profitable" />);
   expect(screen.getByText(/profit/i)).toBeInTheDocument();

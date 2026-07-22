@@ -227,7 +227,7 @@ function StateBadge({ state }: { state: string | null }) {
   return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${cls}`}>{label}</span>;
 }
 
-/** One month in a campaign's 12-month drill: "{YYYY-MM} · ${spend} · {clicks} clk · {units}u · {roas}x · ±$profit". */
+/** One month in a campaign's 12-month drill: "{YYYY-MM} · ${spend} · {clicks} clk · ${cpc} cpc · {units}u · {roas}x · ±$profit". */
 export function MonthRow({ m }: { m: MonthRow }) {
   const roasTone = m.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400';
   const profTone = m.net_profit >= 0 ? 'text-emerald-400' : 'text-red-400';
@@ -237,7 +237,7 @@ export function MonthRow({ m }: { m: MonthRow }) {
   return (
     <div className="flex items-center gap-1 py-px text-[9px] tabular-nums text-faint">
       <span className="w-[42px] shrink-0 text-muted">{m.month.slice(0, 7)}</span>
-      <span>· ${m.spend.toFixed(0)} · {m.clicks} clk · {m.units}u ·</span>
+      <span className="whitespace-nowrap">· ${m.spend.toFixed(0)} · {m.clicks} clk · ${(m.clicks > 0 ? m.spend / m.clicks : 0).toFixed(2)} cpc · {m.units}u ·</span>
       <span className={roasTone}>{m.net_roas.toFixed(2)}x</span>
       <span>·</span>
       <span className={profTone}>{prof}</span>
@@ -292,12 +292,12 @@ export function CampaignEvidenceRow({
   );
 }
 
-/** One month in a keyword's 12-month drill: "{YYYY-MM} · ${spend} · {clicks} clk · {units}u". */
+/** One month in a keyword's 12-month drill: "{YYYY-MM} · ${spend} · {clicks} clk · ${cpc} cpc · {units}u". */
 export function KwMonthRow({ m }: { m: KwMonthRow }) {
   return (
     <div className="flex items-center gap-1 py-px text-[9px] tabular-nums text-faint">
       <span className="w-[42px] shrink-0 text-muted">{m.month.slice(0, 7)}</span>
-      <span>· ${m.spend.toFixed(0)} · {m.clicks} clk · {m.units}u</span>
+      <span className="whitespace-nowrap">· ${m.spend.toFixed(0)} · {m.clicks} clk · ${(m.clicks > 0 ? m.spend / m.clicks : 0).toFixed(2)} cpc · {m.units}u</span>
     </div>
   );
 }
