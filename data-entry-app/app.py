@@ -9413,7 +9413,7 @@ def coverage_keywords():
     try:
         sql = ("SELECT parent_name, match_type, keyword_text, is_running, is_enabled, is_recommended, "
                "clicks, cost, cpc, net_profit, research_rank, overall_fit, is_relevant, ads_net_roas, "
-               "profit_state, intent_key, intent_label, "
+               "profit_state, intent_key, intent_label, brand_name, is_brand, "
                "rec_type, CAST(last_seen AS STRING) AS last_seen, status "
                "FROM `onyga-482313.OI.V_COVERAGE_KEYWORD`")
         rows = [dict(r) for r in client.query(sql).result()]

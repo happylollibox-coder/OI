@@ -59,7 +59,8 @@ relevance AS (
     parent_name,
     LOWER(query_text) AS keyword_text,
     CAST(MAX(rank) AS INT64) AS research_rank,
-    CAST(MAX(overall_fit) AS FLOAT64) AS overall_fit
+    CAST(MAX(overall_fit) AS FLOAT64) AS overall_fit,
+    ANY_VALUE(brand) AS brand_name          -- brand NAME per family×term (NULL = generic)
   FROM `onyga-482313.OI.FACT_RESEARCH_RANKED`
   WHERE parent_name IS NOT NULL AND query_text IS NOT NULL
   GROUP BY parent_name, LOWER(query_text)
@@ -105,6 +106,9 @@ SELECT
   r.net_profit,
   rel.research_rank,
   rel.overall_fit,
+  rel.brand_name AS brand_name,
+  -- own-brand: ranked term is our brand, OR it's a BRAND-type recommendation (brand terms → Brand Defense only)
+  COALESCE((rel.brand_name = 'Happy Lolli') OR (m.rec_type = 'BRAND'), FALSE) AS is_brand,
   ir.is_relevant,
   ir.ads_net_roas,
   ki.intent_key,
