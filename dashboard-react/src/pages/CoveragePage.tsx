@@ -44,12 +44,27 @@ interface DetailCampaign {
   cpc: number | null;
   profit_state: string;
 }
+interface StrategyStat {
+  total: number;
+  profitable: number;
+  net_profit_profitable: number;
+  net_profit_unprofitable: number;
+}
+interface FamilyStat extends StrategyStat {
+  defined: number;
+  planned: number;
+}
+const ZERO_STAT: StrategyStat = { total: 0, profitable: 0, net_profit_profitable: 0, net_profit_unprofitable: 0 };
 interface WorkflowData {
   strategies: string[];
   tiles: Record<string, Tile>;
   cells: Cell[];
   detail: Record<string, DetailCampaign[]>;
+  strategy_stats?: Record<string, StrategyStat>;
+  family_stats?: Record<string, FamilyStat>;
 }
+
+const STORE_KEY = '__STORE__';
 
 interface KeywordRowData {
   parent_name: string;
@@ -112,6 +127,22 @@ export function ProfitChip({ state }: { state: string }) {
   return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${m.cls}`}>{m.label}</span>;
 }
 
+/** Compact last-7-day P&L roll-up: "{profitable}/{total} profit · +$X · −$Y".
+ *  Emerald net-profit and red net-loss are each omitted when 0; empty spend → "no spend (7d)". */
+export function ProfitRollup({ s }: { s: StrategyStat }) {
+  if (!s.total) return <div className="mt-0.5 text-[9px] text-faint">no spend (7d)</div>;
+  const gain = Math.round(s.net_profit_profitable);
+  const loss = Math.round(Math.abs(s.net_profit_unprofitable));
+  return (
+    <div className="mt-0.5 text-[9px] tabular-nums text-muted">
+      <span className="text-faint">7d: </span>
+      <span>{s.profitable}/{s.total} profit</span>
+      {gain !== 0 && <span className="text-emerald-400"> · +${gain}</span>}
+      {loss !== 0 && <span className="text-red-400"> · −${loss}</span>}
+    </div>
+  );
+}
+
 function Metrics({ c }: { c: Cell }) {
   if (!c.clicks) return <span className="text-faint text-[9px]">no data</span>;
   return (
@@ -128,7 +159,7 @@ function Metrics({ c }: { c: Cell }) {
 
 /** Strategy roll-up tile — defined / to-do / redundant across a strategy's coverage cells.
  *  Border tone: red if anything to do, else amber if redundant, else emerald. */
-export function StrategyTile({ name, t, open, onOpen }: { name: string; t: Tile; open: boolean; onOpen: () => void }) {
+export function StrategyTile({ name, t, stat, open, onOpen }: { name: string; t: Tile; stat?: StrategyStat; open: boolean; onOpen: () => void }) {
   const tone = t.missing > 0
     ? 'border-red-500/40 bg-red-500/10 hover:bg-red-500/20'
     : t.redundant > 0
@@ -146,6 +177,7 @@ export function StrategyTile({ name, t, open, onOpen }: { name: string; t: Tile;
         {t.redundant > 0 && <><span className="text-faint"> · </span><span className="text-amber-400">⚠ {t.redundant} redundant</span></>}
         {t.informational > 0 && <><span className="text-faint"> · </span><span className="text-faint">{t.informational} idle</span></>}
       </div>
+      <ProfitRollup s={stat ?? ZERO_STAT} />
     </button>
   );
 }
@@ -404,6 +436,60 @@ export function groupByFamily(cells: Cell[]): FamilyGroup[] {
   return groups;
 }
 
+interface FamilyEntry {
+  key: string; // family key: real parent_name, or STORE_KEY, or 'ALL'
+  label: string;
+  stat: FamilyStat;
+}
+
+/** Build the ordered family-button list: ALL (summed) first, real families alpha,
+ *  then the Store bucket (__STORE__) last. Missing per-family fields default to zero. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildFamilyEntries(familyStats: Record<string, FamilyStat> | undefined): FamilyEntry[] {
+  const stats = familyStats ?? {};
+  const all: FamilyStat = { total: 0, profitable: 0, net_profit_profitable: 0, net_profit_unprofitable: 0, defined: 0, planned: 0 };
+  const real: FamilyEntry[] = [];
+  let store: FamilyEntry | null = null;
+  for (const [k, s] of Object.entries(stats)) {
+    const stat: FamilyStat = {
+      total: s.total ?? 0,
+      profitable: s.profitable ?? 0,
+      net_profit_profitable: s.net_profit_profitable ?? 0,
+      net_profit_unprofitable: s.net_profit_unprofitable ?? 0,
+      defined: s.defined ?? 0,
+      planned: s.planned ?? 0,
+    };
+    all.total += stat.total;
+    all.profitable += stat.profitable;
+    all.net_profit_profitable += stat.net_profit_profitable;
+    all.net_profit_unprofitable += stat.net_profit_unprofitable;
+    all.defined += stat.defined;
+    all.planned += stat.planned;
+    if (k === STORE_KEY) store = { key: STORE_KEY, label: 'Store', stat };
+    else real.push({ key: k, label: k, stat });
+  }
+  real.sort((a, b) => a.label.localeCompare(b.label));
+  const entries: FamilyEntry[] = [{ key: 'ALL', label: 'All', stat: all }, ...real];
+  if (store) entries.push(store);
+  return entries;
+}
+
+/** One family button in the left panel: name + defined/planned + 7d profit roll-up. */
+function FamilyButton({ entry, selected, onSelect }: { entry: FamilyEntry; selected: boolean; onSelect: () => void }) {
+  const { defined, planned } = entry.stat;
+  const dpTone = defined >= planned ? 'text-emerald-400' : 'text-red-400';
+  return (
+    <button
+      onClick={onSelect}
+      className={`w-full rounded-lg border px-3 py-2 text-left transition border-border-faint bg-surface hover:bg-white/[0.04] ${selected ? 'ring-2 ring-blue-400/60' : ''}`}
+    >
+      <div className="text-xs font-bold text-heading">{entry.label}</div>
+      <div className={`mt-0.5 text-[10px] font-semibold tabular-nums ${dpTone}`}>{defined}/{planned} defined</div>
+      <ProfitRollup s={entry.stat} />
+    </button>
+  );
+}
+
 /** Daily-workflow coverage cockpit (rung 1): six strategy tiles rolling up
  *  defined / to-do / redundant, each expandable to its coverage cells.
  *  All status/roll-up logic lives in /api/daily-workflow (BigQuery); this only renders. */
@@ -411,6 +497,7 @@ export function CoveragePage() {
   const [data, setData] = useState<WorkflowData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null); // strategy name
+  const [selectedFamily, setSelectedFamily] = useState<string | null>(null); // null = ALL; else parent_name or STORE_KEY
   const [openCell, setOpenCell] = useState<string | null>(null); // expanded cell_key
   const [kwData, setKwData] = useState<Record<string, FamilyKeywords> | null>(null);
   const [kwLoading, setKwLoading] = useState(false);
@@ -466,8 +553,14 @@ export function CoveragePage() {
   if (err) return <div className="p-6 text-sm text-red-400">Coverage scan failed: {err}</div>;
   if (!data) return <div className="p-6 text-sm text-muted">Scanning ad coverage…</div>;
 
-  const openGroups = open ? groupByFamily(data.cells.filter(c => c.strategy === open)) : [];
+  const familyMatch = (c: Cell): boolean => {
+    if (selectedFamily === null) return true; // ALL
+    if (selectedFamily === STORE_KEY) return c.parent_name === null;
+    return c.parent_name === selectedFamily;
+  };
+  const openGroups = open ? groupByFamily(data.cells.filter(c => c.strategy === open && familyMatch(c))) : [];
   const openCellCount = openGroups.reduce((n, g) => n + g.cells.length, 0);
+  const familyEntries = buildFamilyEntries(data.family_stats);
 
   return (
     <div className="p-4">
@@ -476,17 +569,31 @@ export function CoveragePage() {
         <span className="text-[11px] text-muted">green = everything defined · click a strategy to see the mapping</span>
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-2">
-        {data.strategies.map(s => (
-          <StrategyTile
-            key={s}
-            name={s}
-            t={data.tiles[s] ?? { defined: 0, missing: 0, redundant: 0, informational: 0, suppressed: 0 }}
-            open={open === s}
-            onOpen={() => setOpen(o => (o === s ? null : s))}
-          />
-        ))}
-      </div>
+      <div className="flex flex-col md:flex-row gap-3">
+        <div className="flex w-full shrink-0 flex-col gap-2 md:w-[170px] md:min-w-[170px]">
+          {familyEntries.map(entry => (
+            <FamilyButton
+              key={entry.key}
+              entry={entry}
+              selected={entry.key === 'ALL' ? selectedFamily === null : selectedFamily === entry.key}
+              onSelect={() => setSelectedFamily(entry.key === 'ALL' ? null : entry.key)}
+            />
+          ))}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap gap-2 mb-2">
+            {data.strategies.map(s => (
+              <StrategyTile
+                key={s}
+                name={s}
+                t={data.tiles[s] ?? { defined: 0, missing: 0, redundant: 0, informational: 0, suppressed: 0 }}
+                stat={data.strategy_stats?.[s]}
+                open={open === s}
+                onOpen={() => setOpen(o => (o === s ? null : s))}
+              />
+            ))}
+          </div>
 
       {open && (
         <div className="mt-3 border border-border/40 rounded-lg bg-white/[0.01] max-w-[860px]">
@@ -576,6 +683,8 @@ export function CoveragePage() {
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 }

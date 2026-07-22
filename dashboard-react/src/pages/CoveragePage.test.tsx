@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { StrategyTile, CampaignEvidenceRow, KeywordRow, ProfitChip, groupByFamily } from './CoveragePage';
+import { StrategyTile, CampaignEvidenceRow, KeywordRow, ProfitChip, ProfitRollup, groupByFamily } from './CoveragePage';
 
 function cell(over: Partial<Parameters<typeof groupByFamily>[0][number]> = {}) {
   return {
@@ -64,6 +64,16 @@ test('keyword row: running shows spend and rank', () => {
 test('keyword row: orphan shows reason', () => {
   render(<KeywordRow k={{parent_name:'Lollibox',match_type:'BROAD',keyword_text:'mystery box for girls',is_running:true,is_enabled:true,is_recommended:false,clicks:22,cost:21,net_profit:-21,research_rank:23,overall_fit:40,is_relevant:false,ads_net_roas:null,rec_type:null,last_seen:'2026-07-20',status:'orphan',cpc:0.95,profit_state:'unprofitable',intent_key:null,intent_label:null}} />);
   expect(screen.getByText(/not relevant/)).toBeInTheDocument();
+});
+test('profit rollup shows counts and net split', () => {
+  render(<ProfitRollup s={{total:22,profitable:2,net_profit_profitable:116,net_profit_unprofitable:-979}} />);
+  expect(screen.getByText(/2\/22 profit/)).toBeInTheDocument();
+  expect(screen.getByText(/\+\$116/)).toBeInTheDocument();
+  expect(screen.getByText(/979/)).toBeInTheDocument();
+});
+test('profit rollup shows no-spend for empty', () => {
+  render(<ProfitRollup s={{total:0,profitable:0,net_profit_profitable:0,net_profit_unprofitable:0}} />);
+  expect(screen.getByText(/no spend/)).toBeInTheDocument();
 });
 test('profit chip renders verdict', () => {
   const { rerender } = render(<ProfitChip state="profitable" />);
