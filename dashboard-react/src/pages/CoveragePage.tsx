@@ -32,6 +32,7 @@ interface Cell {
   profit_state: string;
 }
 interface DetailCampaign {
+  campaign_id: string;
   campaign_name: string;
   state: string | null;
   is_enabled: boolean;
@@ -43,6 +44,15 @@ interface DetailCampaign {
   last_seen: string;
   cpc: number | null;
   profit_state: string;
+}
+interface MonthRow {
+  month: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  units: number;
+  net_profit: number;
+  net_roas: number;
 }
 interface StrategyStat {
   total: number;
@@ -195,22 +205,67 @@ function StateBadge({ state }: { state: string | null }) {
   return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${cls}`}>{label}</span>;
 }
 
-/** One campaign in a cell's evidence list: state badge · name · right-aligned metrics. */
-export function CampaignEvidenceRow({ c }: { c: DetailCampaign }) {
+/** One month in a campaign's 12-month drill: "{YYYY-MM} · ${spend} · {clicks} clk · {units}u · {roas}x · ±$profit". */
+export function MonthRow({ m }: { m: MonthRow }) {
+  const roasTone = m.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400';
+  const profTone = m.net_profit >= 0 ? 'text-emerald-400' : 'text-red-400';
+  const prof = m.net_profit >= 0
+    ? `+$${Math.round(m.net_profit)}`
+    : `−$${Math.round(Math.abs(m.net_profit))}`;
   return (
-    <div className="flex items-center gap-1.5 py-0.5">
-      <StateBadge state={c.state} />
-      <span className="truncate text-[10px] text-muted" title={c.campaign_name}>{c.campaign_name}</span>
-      <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[9px] tabular-nums text-faint">
-        <span>
-          {c.net_roas != null && (
-            <span className={c.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{fR(c.net_roas)}</span>
-          )}
-          {c.net_roas != null && ' · '}{fShort(c.clicks)} clk · {c.units}u · ${c.ad_spend.toFixed(0)}
-          {c.cpc != null && ` · $${c.cpc.toFixed(2)} cpc`}
+    <div className="flex items-center gap-1 py-px text-[9px] tabular-nums text-faint">
+      <span className="w-[42px] shrink-0 text-muted">{m.month.slice(0, 7)}</span>
+      <span>· ${m.spend.toFixed(0)} · {m.clicks} clk · {m.units}u ·</span>
+      <span className={roasTone}>{m.net_roas.toFixed(2)}x</span>
+      <span>·</span>
+      <span className={profTone}>{prof}</span>
+    </div>
+  );
+}
+
+/** One campaign in a cell's evidence list: expander chevron · state badge · name · right-aligned
+ *  metrics. Expands to reveal a lazy-loaded 12-month P&L drill (most-recent month first). */
+export function CampaignEvidenceRow({
+  c, months, monthsLoading = false, isOpen = false, onToggle,
+}: {
+  c: DetailCampaign;
+  months?: MonthRow[];
+  monthsLoading?: boolean;
+  isOpen?: boolean;
+  onToggle?: () => void;
+}) {
+  const recentFirst = months ? [...months].reverse() : undefined;
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center gap-1.5 py-0.5 text-left hover:bg-white/[0.02]"
+      >
+        <span className="w-2 shrink-0 text-[9px] text-faint">{isOpen ? '▾' : '▸'}</span>
+        <StateBadge state={c.state} />
+        <span className="truncate text-[10px] text-muted" title={c.campaign_name}>{c.campaign_name}</span>
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[9px] tabular-nums text-faint">
+          <span>
+            {c.net_roas != null && (
+              <span className={c.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{fR(c.net_roas)}</span>
+            )}
+            {c.net_roas != null && ' · '}{fShort(c.clicks)} clk · {c.units}u · ${c.ad_spend.toFixed(0)}
+            {c.cpc != null && ` · $${c.cpc.toFixed(2)} cpc`}
+          </span>
+          <ProfitChip state={c.profit_state} />
         </span>
-        <ProfitChip state={c.profit_state} />
-      </span>
+      </button>
+      {isOpen && (
+        <div className="pl-4 pb-1">
+          {monthsLoading && !recentFirst ? (
+            <div className="text-faint text-[9px]">loading…</div>
+          ) : recentFirst && recentFirst.length > 0 ? (
+            recentFirst.map((m, i) => <MonthRow key={`${m.month}-${i}`} m={m} />)
+          ) : (
+            <div className="text-faint text-[9px]">no monthly data</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -502,6 +557,9 @@ export function CoveragePage() {
   const [kwData, setKwData] = useState<Record<string, FamilyKeywords> | null>(null);
   const [kwLoading, setKwLoading] = useState(false);
   const [pendingCell, setPendingCell] = useState<string | null>(null); // cell_key of in-flight suppress toggle
+  const [monthsData, setMonthsData] = useState<Record<string, MonthRow[]> | null>(null);
+  const [monthsLoading, setMonthsLoading] = useState(false);
+  const [openCampaigns, setOpenCampaigns] = useState<Set<string>>(new Set()); // expanded campaign_ids
 
   async function toggleSuppress(c: Cell, active: boolean) {
     if (pendingCell) return;
@@ -541,6 +599,25 @@ export function CoveragePage() {
       .then(json => setKwData(json.families ?? {}))
       .catch(() => setKwData({}))
       .finally(() => setKwLoading(false));
+  }
+
+  function ensureMonths() {
+    if (monthsData !== null || monthsLoading) return;
+    setMonthsLoading(true);
+    apiFetch('/api/campaign-months')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(json => setMonthsData(json.months ?? {}))
+      .catch(() => setMonthsData({}))
+      .finally(() => setMonthsLoading(false));
+  }
+
+  function toggleCampaign(id: string) {
+    setOpenCampaigns(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -627,7 +704,7 @@ export function CoveragePage() {
                           <button
                             onClick={() => {
                               setOpenCell(k => (k === c.cell_key ? null : c.cell_key));
-                              if (c.strategy === 'INTENT') ensureKeywords();
+                              if (c.strategy === 'INTENT' || c.strategy === 'EXACT_BOOST') ensureKeywords();
                             }}
                             className="flex flex-1 min-w-0 items-center gap-2 text-left"
                           >
@@ -664,12 +741,19 @@ export function CoveragePage() {
                             )}
                             {campaigns && campaigns.length > 0 ? (
                               campaigns.map((cmp, j) => (
-                                <CampaignEvidenceRow key={`${cmp.campaign_name}-${j}`} c={cmp} />
+                                <CampaignEvidenceRow
+                                  key={`${cmp.campaign_name}-${j}`}
+                                  c={cmp}
+                                  months={monthsData?.[cmp.campaign_id]}
+                                  monthsLoading={monthsLoading}
+                                  isOpen={openCampaigns.has(cmp.campaign_id)}
+                                  onToggle={() => { toggleCampaign(cmp.campaign_id); ensureMonths(); }}
+                                />
                               ))
                             ) : (
                               <div className="text-faint text-[10px]">no campaigns</div>
                             )}
-                            {c.strategy === 'INTENT' && (
+                            {(c.strategy === 'INTENT' || c.strategy === 'EXACT_BOOST') && (
                               <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} />
                             )}
                           </div>

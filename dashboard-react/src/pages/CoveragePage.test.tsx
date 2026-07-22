@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { StrategyTile, CampaignEvidenceRow, KeywordRow, ProfitChip, ProfitRollup, groupByFamily } from './CoveragePage';
+import { StrategyTile, CampaignEvidenceRow, KeywordRow, ProfitChip, ProfitRollup, MonthRow, groupByFamily } from './CoveragePage';
 
 function cell(over: Partial<Parameters<typeof groupByFamily>[0][number]> = {}) {
   return {
@@ -52,7 +52,7 @@ test('informational strategy shows no to-do', () => {
   expect(screen.getByText(/4 idle/)).toBeInTheDocument();
 });
 test('evidence row shows campaign name and state', () => {
-  render(<CampaignEvidenceRow c={{campaign_name:'ME-SP/PHRASE (Mint)', state:'ENABLED', is_enabled:true, impressions:100, clicks:12, units:3, ad_spend:9, net_roas:1.8, last_seen:'2026-07-21', cpc:0.75, profit_state:'profitable'}} />);
+  render(<CampaignEvidenceRow c={{campaign_id:'123', campaign_name:'ME-SP/PHRASE (Mint)', state:'ENABLED', is_enabled:true, impressions:100, clicks:12, units:3, ad_spend:9, net_roas:1.8, last_seen:'2026-07-21', cpc:0.75, profit_state:'profitable'}} />);
   expect(screen.getByText(/ME-SP\/PHRASE/)).toBeInTheDocument();
   expect(screen.getByText('ENABLED')).toBeInTheDocument();
 });
@@ -74,6 +74,11 @@ test('profit rollup shows counts and net split', () => {
 test('profit rollup shows no-spend for empty', () => {
   render(<ProfitRollup s={{total:0,profitable:0,net_profit_profitable:0,net_profit_unprofitable:0}} />);
   expect(screen.getByText(/no spend/)).toBeInTheDocument();
+});
+test('month row shows month and net profit', () => {
+  render(<MonthRow m={{month:'2026-05-01', impressions:1000, clicks:170, spend:148, units:17, net_profit:58, net_roas:1.39}} />);
+  expect(screen.getByText(/2026-05/)).toBeInTheDocument();
+  expect(screen.getByText(/1\.39x/)).toBeInTheDocument();
 });
 test('profit chip renders verdict', () => {
   const { rerender } = render(<ProfitChip state="profitable" />);

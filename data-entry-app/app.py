@@ -9217,7 +9217,7 @@ def daily_workflow():
 
         # ── S2 VERIFY: per-campaign evidence, grouped by cell_key ──
         detail_rows = [dict(r) for r in client.query(
-            "SELECT cell_key, campaign_name, state, is_enabled, impressions, clicks, units, "
+            "SELECT cell_key, campaign_id, campaign_name, state, is_enabled, impressions, clicks, units, "
             "ad_spend, cpc, net_roas, profit_state, last_seen FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN_DETAIL`"
         ).result()]
         detail = defaultdict(list)
