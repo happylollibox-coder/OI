@@ -139,8 +139,9 @@ const STRAT_LABEL: Record<string, string> = {
 
 /** Families assignable to an unmapped campaign in the cockpit. */
 const MAP_FAMILIES = ['Bottle', 'Bunny', 'Fresh', 'LolliBall', 'LolliME', 'Lollibox', 'Store'];
-/** Assignable strategies (Auto is auto-detected from targeting, not assignable). */
+/** Assignable strategies (Auto lets the backend auto-detect from targeting). */
 const MAP_STRATEGIES: { value: string; label: string }[] = [
+  { value: 'AUTO', label: 'Auto' },
   { value: 'INTENT', label: 'Intent' },
   { value: 'EXACT_BOOST', label: 'Exact Boost' },
   { value: 'COMPETITOR', label: 'Competitor' },
