@@ -57,6 +57,8 @@ import type {
   SupplyPaymentRow,
   SupplyShipmentRow,
   AsinOosDaysRow,
+  StrategyCampaignRow,
+  StrategyCampaignWeeklyRow,
 } from '../types';
 
 // In dev, always try Cube via proxy even if env not loaded
@@ -1577,6 +1579,58 @@ async function loadSqpVolume4wFromCube(): Promise<Record<string, number>> {
   return out;
 }
 
+/** V_STRATEGY_CAMPAIGN_PERF → strategy_campaigns */
+async function loadStrategyCampaignsFromCube(): Promise<StrategyCampaignRow[]> {
+  const rows = await cubeLoad({
+    dimensions: ['StrategyCampaign.campaignId','StrategyCampaign.campaignName','StrategyCampaign.campaignType',
+      'StrategyCampaign.parentName','StrategyCampaign.strategyId','StrategyCampaign.strategySource',
+      'StrategyCampaign.isActive','StrategyCampaign.netRoas','StrategyCampaign.convRate','StrategyCampaign.cpc','StrategyCampaign.lastDate'],
+    measures: ['StrategyCampaign.spend','StrategyCampaign.orders','StrategyCampaign.clicks','StrategyCampaign.impressions','StrategyCampaign.sales'],
+    limit: 1000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    campaign_id: String(r['StrategyCampaign.campaignId'] ?? ''),
+    campaign_name: String(r['StrategyCampaign.campaignName'] ?? ''),
+    campaign_type: r['StrategyCampaign.campaignType'] ? String(r['StrategyCampaign.campaignType']) : null,
+    parent_name: r['StrategyCampaign.parentName'] ? String(r['StrategyCampaign.parentName']) : null,
+    strategy_id: String(r['StrategyCampaign.strategyId'] ?? 'UNCLASSIFIED'),
+    strategy_source: String(r['StrategyCampaign.strategySource'] ?? ''),
+    is_active: r['StrategyCampaign.isActive'] === true || r['StrategyCampaign.isActive'] === 'true',
+    spend: Number(r['StrategyCampaign.spend'] ?? 0),
+    orders: Number(r['StrategyCampaign.orders'] ?? 0),
+    clicks: Number(r['StrategyCampaign.clicks'] ?? 0),
+    impressions: Number(r['StrategyCampaign.impressions'] ?? 0),
+    sales: Number(r['StrategyCampaign.sales'] ?? 0),
+    net_roas: r['StrategyCampaign.netRoas'] != null ? Number(r['StrategyCampaign.netRoas']) : null,
+    conv_rate: r['StrategyCampaign.convRate'] != null ? Number(r['StrategyCampaign.convRate']) : null,
+    cpc: r['StrategyCampaign.cpc'] != null ? Number(r['StrategyCampaign.cpc']) : null,
+    last_date: r['StrategyCampaign.lastDate'] ? String(r['StrategyCampaign.lastDate']) : null,
+  }));
+}
+
+/** V_STRATEGY_CAMPAIGN_WEEKLY → strategy_campaign_weekly */
+async function loadStrategyCampaignWeeklyFromCube(): Promise<StrategyCampaignWeeklyRow[]> {
+  const rows = await cubeLoad({
+    dimensions: ['StrategyCampaignWeekly.weekStart','StrategyCampaignWeekly.campaignId','StrategyCampaignWeekly.campaignName',
+      'StrategyCampaignWeekly.parentName','StrategyCampaignWeekly.strategyId'],
+    measures: ['StrategyCampaignWeekly.spend','StrategyCampaignWeekly.orders','StrategyCampaignWeekly.clicks','StrategyCampaignWeekly.impressions','StrategyCampaignWeekly.sales'],
+    limit: 50000,
+  });
+  return (rows as Record<string, unknown>[]).map(r => ({
+    week_start: r['StrategyCampaignWeekly.weekStart'] ? fmtDate(r['StrategyCampaignWeekly.weekStart']) : '',
+    campaign_id: String(r['StrategyCampaignWeekly.campaignId'] ?? ''),
+    campaign_name: r['StrategyCampaignWeekly.campaignName'] ? String(r['StrategyCampaignWeekly.campaignName']) : null,
+    parent_name: r['StrategyCampaignWeekly.parentName'] ? String(r['StrategyCampaignWeekly.parentName']) : null,
+    strategy_id: String(r['StrategyCampaignWeekly.strategyId'] ?? 'UNCLASSIFIED'),
+    spend: Number(r['StrategyCampaignWeekly.spend'] ?? 0),
+    orders: Number(r['StrategyCampaignWeekly.orders'] ?? 0),
+    clicks: Number(r['StrategyCampaignWeekly.clicks'] ?? 0),
+    impressions: Number(r['StrategyCampaignWeekly.impressions'] ?? 0),
+    sales: Number(r['StrategyCampaignWeekly.sales'] ?? 0),
+    net_roas: null,
+  }));
+}
+
 /** ExperimentCampaign + Ads → experiment_campaigns */
 async function loadExperimentCampaignsFromCube(): Promise<ExperimentCampaignRow[]> {
   const rows = await cubeLoad({
@@ -2691,6 +2745,8 @@ export const DATASET_LOADERS: Record<DatasetName, () => Promise<unknown>> = {
   drivers: loadDriversFromCube,
   experiment_weekly: loadExperimentWeeklyFromCube,
   experiment_campaigns: loadExperimentCampaignsFromCube,
+  strategy_campaigns: loadStrategyCampaignsFromCube,
+  strategy_campaign_weekly: loadStrategyCampaignWeeklyFromCube,
   campaign_search_terms: loadCampaignSearchTermsFromCube,
   campaign_search_terms_weekly: loadCampaignSearchTermsWeeklyFromCube,
   experiment_templates: loadExperimentTemplatesFromCube,
