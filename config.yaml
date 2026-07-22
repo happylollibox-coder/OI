@@ -269,6 +269,19 @@ views:
       - FACT_RESEARCH_RANKED
       - V_INTENT_KEYWORDS
 
+  - name: "V_COVERAGE_INTENT"
+    description: "Per (parent_name × intent_key) 'is this intent suggested?' flag for the coverage cockpit keyword panel — lets the frontend split suggested vs not-suggested intents. Built from V_INTENT_KEYWORDS (is_relevant only, parent+intent not null), rolled to the intent: n_kws (COUNT DISTINCT query_text), spend (ROUND SUM ads_spend), wtd_net_roas (spend-weighted SUM(ads_net_roas*ads_spend)/SUM(ads_spend)). suggested rule (Ori 2026-07-22, 'profit, else research fit'): a RUNNING intent (spend>0) is suggested only if profitable — wtd_net_roas >= the INTENT PROFITABLE_ROAS floor from DE_COACH_THRESHOLDS (=1.1, matching GUARDIAN); a NOT-YET-RUNNING intent (spend=0) is TRUE because research routed keywords there => research-recommended. NOTE: ads_spend/ads_net_roas in V_INTENT_KEYWORDS are intent-level aggregates replicated across query_text rows, so `spend` is inflated by the keyword count (directional magnitude only); the replication cancels in wtd_net_roas so the ROAS and suggested flag are correct."
+    source_files: ["scripts/bigquery/views/V_COVERAGE_INTENT.sql"]
+    dependencies:
+      - V_INTENT_KEYWORDS
+      - DE_COACH_THRESHOLDS
+
+  - name: "V_COVERAGE_KEYWORD_MONTHLY"
+    description: "Per (parent_name × match_type × keyword_text × month) 12-month trend for the coverage cockpit keyword-panel drill. From V_KEYWORD_DAILY over the last 12 months (date >= start of month 11 months ago). keyword_text LOWER'd; keyword_key = CONCAT(match_type,'|',LOWER(keyword_text)) is the stable join key the frontend uses to attach a keyword's monthly rows. Columns: clicks (SUM), spend (ROUND SUM cost), units (CAST SUM(units_14d) AS INT64 — 14d-ROLLING attribution so a monthly SUM is DIRECTIONAL only, overlapping windows), impressions (SUM). Backs GET /api/keyword-months."
+    source_files: ["scripts/bigquery/views/V_COVERAGE_KEYWORD_MONTHLY.sql"]
+    dependencies:
+      - V_KEYWORD_DAILY
+
   - name: "V_BUDGET_STEP1_STRATEGY"
     description: "One row per Coverage role for the Weekly Run Step-1 'Budget by strategy' split — the sibling of V_BUDGET_STEP1_FAMILY, grouped by strategy_role instead of parent_name. Offense sub-roles only (brand/product defense have their own PPC modes and panels). Rolled up from V_BUDGET_STEP1_CAMPAIGN so the split and the step-2 campaign table read the same per-campaign new_budget and cannot disagree. Spend-weighted CPC. Cube: StrategyBudgetStep1."
     source_files: ["scripts/bigquery/views/V_BUDGET_STEP1_STRATEGY.sql"]

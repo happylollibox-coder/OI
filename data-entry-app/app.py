@@ -9317,6 +9317,37 @@ def campaign_months():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/keyword-months')
+@cache_result(ttl_seconds=300)
+def keyword_months():
+    """Per-keyword 12-month trend drill — grouped pass-through of V_COVERAGE_KEYWORD_MONTHLY.
+
+    Optional ?family=<parent_name> filters to that family (else all families). Returns
+    { months: { keyword_key: [ {keyword_key, month, clicks, spend, units, impressions},
+    ... ] } } so the cockpit can chart a keyword's monthly trend when expanded.
+    units is a 14d-rolling attribution summed per month — directional only.
+    """
+    from collections import defaultdict
+    family = request.args.get('family')
+    try:
+        sql = ("SELECT keyword_key, CAST(month AS STRING) AS month, clicks, spend, units, impressions "
+               "FROM `onyga-482313.OI.V_COVERAGE_KEYWORD_MONTHLY` ")
+        params = []
+        if family:
+            sql += "WHERE parent_name = @family "
+            params.append(bigquery.ScalarQueryParameter('family', 'STRING', family))
+        sql += "ORDER BY keyword_key, month"
+        job_config = bigquery.QueryJobConfig(query_parameters=params)
+        grouped = defaultdict(list)
+        for r in client.query(sql, job_config=job_config).result():
+            d = dict(r)
+            grouped[d['keyword_key']].append(d)
+        return jsonify({'months': dict(grouped)})
+    except Exception as e:
+        print(f"Error in keyword_months: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/coverage-expectation', methods=['POST'])
 def coverage_expectation():
     """Write a coverage-suppression override for one cell (mark NOT NEEDED / un-mark).
@@ -9418,6 +9449,20 @@ def coverage_keywords():
                "FROM `onyga-482313.OI.V_COVERAGE_KEYWORD`")
         rows = [dict(r) for r in client.query(sql).result()]
 
+        # Per-family intent "suggested?" map (V_COVERAGE_INTENT) so the frontend can
+        # split suggested vs not-suggested intents. Keyed parent_name -> intent_key.
+        intent_sql = ("SELECT parent_name, intent_key, label, suggested, wtd_net_roas, spend "
+                      "FROM `onyga-482313.OI.V_COVERAGE_INTENT`")
+        fam_intents = defaultdict(dict)
+        for ir in client.query(intent_sql).result():
+            d = dict(ir)
+            fam_intents[d['parent_name']][d['intent_key']] = {
+                'suggested': d['suggested'],
+                'wtd_net_roas': d['wtd_net_roas'],
+                'spend': d['spend'],
+                'label': d['label'],
+            }
+
         fams = defaultdict(lambda: {'counts': {'running': 0, 'missing': 0, 'orphan': 0, 'paused': 0},
                                     'keywords': []})
         for r in rows:
@@ -9442,7 +9487,8 @@ def coverage_keywords():
                                      (k['research_rank'] is None, -(k['research_rank'] or 0))))
             out[fam] = {'counts': d['counts'], 'keywords': kept,
                         'missing_shown': len(missing),
-                        'missing_total': sum(1 for k in kws if k['status'] == 'missing')}
+                        'missing_total': sum(1 for k in kws if k['status'] == 'missing'),
+                        'intents': fam_intents.get(fam, {})}
         return jsonify({'families': out})
     except Exception as e:
         print(f"Error in coverage_keywords: {e}")
