@@ -27,6 +27,9 @@ interface Cell {
   status: 'ok' | 'missing' | 'redundant' | 'none' | 'suppressed';
   reason: string;
   cell_key: string;
+  cost: number;
+  cpc: number | null;
+  profit_state: string;
 }
 interface DetailCampaign {
   campaign_name: string;
@@ -38,6 +41,8 @@ interface DetailCampaign {
   ad_spend: number;
   net_roas: number | null;
   last_seen: string;
+  cpc: number | null;
+  profit_state: string;
 }
 interface WorkflowData {
   strategies: string[];
@@ -63,6 +68,10 @@ interface KeywordRowData {
   rec_type: string | null;
   last_seen: string | null;
   status: string;
+  cpc: number | null;
+  profit_state: string;
+  intent_key: string | null;
+  intent_label: string | null;
 }
 interface FamilyKeywords {
   counts: { running: number; missing: number; orphan: number; paused: number };
@@ -92,12 +101,27 @@ function StatusPill({ c }: { c: Cell }) {
   return <span className={`${tone} font-semibold text-[10px]`}>{label}</span>;
 }
 
+/** At-a-glance profit verdict pill from profit_state. */
+export function ProfitChip({ state }: { state: string }) {
+  const map: Record<string, { cls: string; label: string }> = {
+    profitable: { cls: 'bg-emerald-500/15 text-emerald-400', label: 'profit' },
+    unprofitable: { cls: 'bg-red-500/15 text-red-400', label: 'loss' },
+    unknown: { cls: 'bg-white/[0.05] text-faint', label: '?' },
+  };
+  const m = map[state] ?? map.unknown;
+  return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${m.cls}`}>{m.label}</span>;
+}
+
 function Metrics({ c }: { c: Cell }) {
   if (!c.clicks) return <span className="text-faint text-[9px]">no data</span>;
   return (
-    <span className="text-[9px] tabular-nums text-muted">
-      {c.net_roas != null && <span className={c.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{fR(c.net_roas)}</span>}
-      {' · '}{fShort(c.clicks)} clk · {fShort(c.impressions)} imp · {c.units}u
+    <span className="inline-flex items-center gap-1 text-[9px] tabular-nums text-muted">
+      <span>
+        {c.net_roas != null && <span className={c.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{fR(c.net_roas)}</span>}
+        {' · '}{fShort(c.clicks)} clk · {fShort(c.impressions)} imp · {c.units}u
+        {c.cpc != null && ` · $${c.cpc.toFixed(2)} cpc`}
+      </span>
+      <ProfitChip state={c.profit_state} />
     </span>
   );
 }
@@ -145,11 +169,15 @@ export function CampaignEvidenceRow({ c }: { c: DetailCampaign }) {
     <div className="flex items-center gap-1.5 py-0.5">
       <StateBadge state={c.state} />
       <span className="truncate text-[10px] text-muted" title={c.campaign_name}>{c.campaign_name}</span>
-      <span className="ml-auto shrink-0 text-[9px] tabular-nums text-faint">
-        {c.net_roas != null && (
-          <span className={c.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{fR(c.net_roas)}</span>
-        )}
-        {c.net_roas != null && ' · '}{fShort(c.clicks)} clk · {c.units}u · ${c.ad_spend.toFixed(0)}
+      <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[9px] tabular-nums text-faint">
+        <span>
+          {c.net_roas != null && (
+            <span className={c.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{fR(c.net_roas)}</span>
+          )}
+          {c.net_roas != null && ' · '}{fShort(c.clicks)} clk · {c.units}u · ${c.ad_spend.toFixed(0)}
+          {c.cpc != null && ` · $${c.cpc.toFixed(2)} cpc`}
+        </span>
+        <ProfitChip state={c.profit_state} />
       </span>
     </div>
   );
@@ -168,26 +196,28 @@ function MatchChip({ mt }: { mt: string }) {
 
 /** One keyword in a family's coverage list: match chip + text, right-aligned status-appropriate metrics. */
 export function KeywordRow({ k }: { k: KeywordRowData }) {
+  const showPerf = k.status === 'running' || k.status === 'orphan' || k.status === 'paused';
   return (
     <div className="flex items-center gap-1.5 border-b border-border-faint py-0.5 last:border-0">
       <MatchChip mt={k.match_type} />
       <span className="truncate text-[11px] text-muted" title={k.keyword_text}>{k.keyword_text}</span>
-      <span className="ml-auto shrink-0 text-[10px] tabular-nums text-faint">
+      <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[10px] tabular-nums text-faint">
         {k.status === 'running' && (
-          <>
+          <span>
             ${k.cost.toFixed(0)} spend · {k.clicks} clk
             {k.research_rank != null && ` · rank ${k.research_rank}`}
+            {k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}
             {k.ads_net_roas != null && (
               <>
                 {' · '}
                 <span className={k.ads_net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{k.ads_net_roas.toFixed(2)}x</span>
               </>
             )}
-          </>
+          </span>
         )}
         {k.status === 'orphan' && (
           <span className="inline-flex items-center gap-1">
-            <span>${k.cost.toFixed(0)} spend · {k.clicks} clk</span>
+            <span>${k.cost.toFixed(0)} spend · {k.clicks} clk{k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}</span>
             <span className={`rounded px-1 py-px text-[9px] font-semibold ${k.is_relevant === false ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'}`}>
               {k.is_relevant === false ? 'not relevant' : 'no research rank'}
             </span>
@@ -199,25 +229,91 @@ export function KeywordRow({ k }: { k: KeywordRowData }) {
             {k.rec_type === 'BRAND' && <span className="rounded bg-blue-500/15 px-1 py-px text-[9px] font-semibold text-blue-400">BRAND</span>}
           </span>
         )}
-        {k.status === 'paused' && <span className="text-faint">${k.cost.toFixed(0)} spend</span>}
+        {k.status === 'paused' && <span className="text-faint">${k.cost.toFixed(0)} spend{k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}</span>}
+        {showPerf && <ProfitChip state={k.profit_state} />}
       </span>
     </div>
   );
 }
 
-/** Keyword-level coverage for an INTENT family cell — status-grouped, honest metrics only. */
+const KW_STATUS_SORT: Record<string, number> = { orphan: 0, missing: 1, running: 2, paused: 3 };
+const MATCH_ORDER: Record<string, number> = { EXACT: 0, PHRASE: 1, BROAD: 2 };
+const OTHER_INTENT = '__other__';
+
+interface IntentGroup {
+  key: string;
+  label: string;
+  rows: KeywordRowData[];
+  counts: { running: number; missing: number; orphan: number; paused: number };
+  activity: number;
+  isOther: boolean;
+}
+
+/** Bucket a family's keywords by intent_key (null → "Other / unclassified"),
+ *  sorted by activity (running+missing+orphan) DESC then label; Other always last. */
+function groupByIntent(keywords: KeywordRowData[]): IntentGroup[] {
+  const byIntent = new Map<string, KeywordRowData[]>();
+  for (const k of keywords) {
+    const key = k.intent_key ?? OTHER_INTENT;
+    const arr = byIntent.get(key);
+    if (arr) arr.push(k);
+    else byIntent.set(key, [k]);
+  }
+  const groups: IntentGroup[] = [];
+  for (const [key, rows] of byIntent) {
+    const isOther = key === OTHER_INTENT;
+    const label = isOther ? 'Other / unclassified' : (rows[0].intent_label ?? rows[0].intent_key ?? 'Other / unclassified');
+    const counts = { running: 0, missing: 0, orphan: 0, paused: 0 };
+    for (const r of rows) {
+      if (r.status === 'running') counts.running++;
+      else if (r.status === 'missing') counts.missing++;
+      else if (r.status === 'orphan') counts.orphan++;
+      else if (r.status === 'paused') counts.paused++;
+    }
+    groups.push({ key, label, rows, counts, activity: counts.running + counts.missing + counts.orphan, isOther });
+  }
+  groups.sort((a, b) => {
+    if (a.isOther !== b.isOther) return a.isOther ? 1 : -1;
+    return b.activity - a.activity || a.label.localeCompare(b.label);
+  });
+  return groups;
+}
+
+/** Within an intent, sub-group by match_type (EXACT → PHRASE → BROAD);
+ *  rows within a match ordered orphan → missing → running → paused. */
+function matchGroupsOf(rows: KeywordRowData[]): { mt: string; rows: KeywordRowData[] }[] {
+  const byMatch = new Map<string, KeywordRowData[]>();
+  for (const k of rows) {
+    const arr = byMatch.get(k.match_type);
+    if (arr) arr.push(k);
+    else byMatch.set(k.match_type, [k]);
+  }
+  return [...byMatch.entries()]
+    .map(([mt, rs]) => ({
+      mt,
+      rows: [...rs].sort((a, b) => (KW_STATUS_SORT[a.status] ?? 9) - (KW_STATUS_SORT[b.status] ?? 9)),
+    }))
+    .sort((a, b) => (MATCH_ORDER[a.mt] ?? 9) - (MATCH_ORDER[b.mt] ?? 9) || a.mt.localeCompare(b.mt));
+}
+
+/** Keyword-level coverage for an INTENT family cell — grouped by intent, then match type. */
 function KeywordPanel({ family, data, loading }: { family: string | null; data: Record<string, FamilyKeywords> | null; loading: boolean }) {
+  const [openIntents, setOpenIntents] = useState<Set<string>>(new Set());
   if (loading && !data) return <div className="mt-2 text-faint text-[10px]">loading keywords…</div>;
   const fam = data?.[family ?? ''];
   if (!fam) return <div className="mt-2 text-faint text-[10px]">no keyword data</div>;
 
   const { counts, keywords } = fam;
-  const groups: { key: string; header: string; rows: KeywordRowData[]; cap?: number }[] = [
-    { key: 'orphan', header: '⚠ Review (off-strategy waste)', rows: keywords.filter(k => k.status === 'orphan') },
-    { key: 'missing', header: '✗ Missing (top opportunities)', rows: keywords.filter(k => k.status === 'missing') },
-    { key: 'running', header: '✓ Running', rows: keywords.filter(k => k.status === 'running'), cap: 15 },
-    { key: 'paused', header: '⏸ Paused', rows: keywords.filter(k => k.status === 'paused') },
-  ];
+  const intentGroups = groupByIntent(keywords);
+
+  function toggle(key: string) {
+    setOpenIntents(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   return (
     <div className="mt-2 rounded border border-border-faint bg-surface/40 p-2">
@@ -230,17 +326,32 @@ function KeywordPanel({ family, data, loading }: { family: string | null; data: 
           {counts.paused > 0 && <>{(counts.running > 0 || counts.missing > 0 || counts.orphan > 0) && <span className="text-faint"> · </span>}<span className="text-faint">⏸ {counts.paused} paused</span></>}
         </span>
       </div>
-      {groups.map(g => {
-        if (g.rows.length === 0) return null;
-        const shown = g.cap && g.rows.length > g.cap ? g.rows.slice(0, g.cap) : g.rows;
-        const extra = g.cap && g.rows.length > g.cap ? g.rows.length - g.cap : 0;
+      {intentGroups.map(g => {
+        const isOpen = openIntents.has(g.key);
         return (
-          <div key={g.key} className="mt-1.5">
-            <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-faint">{g.header}</div>
-            {shown.map((k, i) => (
-              <KeywordRow key={`${k.match_type}-${k.keyword_text}-${i}`} k={k} />
-            ))}
-            {extra > 0 && <div className="py-0.5 text-[10px] text-muted">+{extra} more</div>}
+          <div key={g.key} className="mt-1">
+            <button onClick={() => toggle(g.key)} className="flex w-full items-center gap-1.5 py-0.5 text-left hover:bg-white/[0.02]">
+              <span className="w-2 shrink-0 text-[9px] text-faint">{isOpen ? '▾' : '▸'}</span>
+              <span className="truncate text-[11px] font-semibold text-heading">{g.label}</span>
+              <span className="ml-auto shrink-0 text-[9px] tabular-nums">
+                {g.counts.running > 0 && <span className="text-emerald-400">✓{g.counts.running} </span>}
+                {g.counts.missing > 0 && <span className="text-red-400">✗{g.counts.missing} </span>}
+                {g.counts.orphan > 0 && <span className="text-amber-400">⚠{g.counts.orphan} </span>}
+                {g.counts.paused > 0 && <span className="text-faint">⏸{g.counts.paused}</span>}
+              </span>
+            </button>
+            {isOpen && (
+              <div className="pl-4">
+                {matchGroupsOf(g.rows).map(mg => (
+                  <div key={mg.mt} className="mt-1">
+                    <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-faint">{mg.mt}</div>
+                    {mg.rows.map((k, i) => (
+                      <KeywordRow key={`${k.match_type}-${k.keyword_text}-${i}`} k={k} />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}

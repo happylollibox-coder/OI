@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { StrategyTile, CampaignEvidenceRow, KeywordRow, groupByFamily } from './CoveragePage';
+import { StrategyTile, CampaignEvidenceRow, KeywordRow, ProfitChip, groupByFamily } from './CoveragePage';
 
 function cell(over: Partial<Parameters<typeof groupByFamily>[0][number]> = {}) {
   return {
@@ -20,6 +20,9 @@ function cell(over: Partial<Parameters<typeof groupByFamily>[0][number]> = {}) {
     status: 'ok' as const,
     reason: '',
     cell_key: 'k',
+    cost: 0,
+    cpc: null,
+    profit_state: 'unknown',
     ...over,
   };
 }
@@ -49,16 +52,22 @@ test('informational strategy shows no to-do', () => {
   expect(screen.getByText(/4 idle/)).toBeInTheDocument();
 });
 test('evidence row shows campaign name and state', () => {
-  render(<CampaignEvidenceRow c={{campaign_name:'ME-SP/PHRASE (Mint)', state:'ENABLED', is_enabled:true, impressions:100, clicks:12, units:3, ad_spend:9, net_roas:1.8, last_seen:'2026-07-21'}} />);
+  render(<CampaignEvidenceRow c={{campaign_name:'ME-SP/PHRASE (Mint)', state:'ENABLED', is_enabled:true, impressions:100, clicks:12, units:3, ad_spend:9, net_roas:1.8, last_seen:'2026-07-21', cpc:0.75, profit_state:'profitable'}} />);
   expect(screen.getByText(/ME-SP\/PHRASE/)).toBeInTheDocument();
   expect(screen.getByText('ENABLED')).toBeInTheDocument();
 });
 test('keyword row: running shows spend and rank', () => {
-  render(<KeywordRow k={{parent_name:'LolliME',match_type:'PHRASE',keyword_text:'cute diary',is_running:true,is_enabled:true,is_recommended:false,clicks:31,cost:30,net_profit:5,research_rank:82,overall_fit:80,is_relevant:true,ads_net_roas:2.12,rec_type:null,last_seen:'2026-07-21',status:'running'}} />);
+  render(<KeywordRow k={{parent_name:'LolliME',match_type:'PHRASE',keyword_text:'cute diary',is_running:true,is_enabled:true,is_recommended:false,clicks:31,cost:30,net_profit:5,research_rank:82,overall_fit:80,is_relevant:true,ads_net_roas:2.12,rec_type:null,last_seen:'2026-07-21',status:'running',cpc:0.97,profit_state:'profitable',intent_key:'journal-diary',intent_label:'Journal / diary'}} />);
   expect(screen.getByText(/cute diary/)).toBeInTheDocument();
   expect(screen.getByText(/rank 82/)).toBeInTheDocument();
 });
 test('keyword row: orphan shows reason', () => {
-  render(<KeywordRow k={{parent_name:'Lollibox',match_type:'BROAD',keyword_text:'mystery box for girls',is_running:true,is_enabled:true,is_recommended:false,clicks:22,cost:21,net_profit:-21,research_rank:23,overall_fit:40,is_relevant:false,ads_net_roas:null,rec_type:null,last_seen:'2026-07-20',status:'orphan'}} />);
+  render(<KeywordRow k={{parent_name:'Lollibox',match_type:'BROAD',keyword_text:'mystery box for girls',is_running:true,is_enabled:true,is_recommended:false,clicks:22,cost:21,net_profit:-21,research_rank:23,overall_fit:40,is_relevant:false,ads_net_roas:null,rec_type:null,last_seen:'2026-07-20',status:'orphan',cpc:0.95,profit_state:'unprofitable',intent_key:null,intent_label:null}} />);
   expect(screen.getByText(/not relevant/)).toBeInTheDocument();
+});
+test('profit chip renders verdict', () => {
+  const { rerender } = render(<ProfitChip state="profitable" />);
+  expect(screen.getByText(/profit/i)).toBeInTheDocument();
+  rerender(<ProfitChip state="unprofitable" />);
+  expect(screen.getByText(/loss/i)).toBeInTheDocument();
 });
