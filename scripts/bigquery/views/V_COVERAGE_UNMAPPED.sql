@@ -72,6 +72,13 @@ floor AS (
   FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
   WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id = 'GLOBAL'
 ),
+-- ── Campaigns that already carry a strategy assignment (DIM_EXPERIMENT_CAMPAIGN).
+--    Excluded below so mapping a campaign removes it from Unmapped immediately, even
+--    if it's dormant (V_CAMPAIGN_ROLE is 90d-activity-gated and won't reflect it). ──
+mapped AS (
+  SELECT DISTINCT CAST(campaign_id AS STRING) AS campaign_id
+  FROM `onyga-482313`.OI.DIM_EXPERIMENT_CAMPAIGN
+),
 -- ── Active campaigns (90d) whose role is NULL or 'OTHER' → UNMAPPED ──
 active_unmapped AS (
   SELECT a.campaign_id, a.parent_name,
@@ -117,3 +124,4 @@ SELECT
   END AS profit_state
 FROM unmapped u
 LEFT JOIN camp_state cst ON cst.campaign_id = u.campaign_id
+WHERE u.campaign_id NOT IN (SELECT campaign_id FROM mapped)
