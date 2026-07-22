@@ -9354,9 +9354,16 @@ def daily_workflow():
             family_stats[fam] = stats
 
         tiles = {s: tile(s) for s in STRATS}
-        # UNMAPPED cells have no defined/missing/redundant semantics — surface as informational.
+        # UNMAPPED tile is the Configure button's badge — count unmapped campaigns from the
+        # canonical mapping view (V_CAMPAIGN_MAPPING_STATUS) so the badge matches the popup.
+        try:
+            unmapped_badge = list(client.query(
+                "SELECT COUNT(*) AS n FROM `onyga-482313.OI.V_CAMPAIGN_MAPPING_STATUS` "
+                "WHERE current_strategy_id IS NULL").result())[0].n
+        except Exception:
+            unmapped_badge = len(unmapped)
         tiles['UNMAPPED'] = {'defined': 0, 'missing': 0, 'redundant': 0,
-                             'informational': len(unmapped), 'suppressed': 0}
+                             'informational': unmapped_badge, 'suppressed': 0}
 
         return jsonify({'strategies': STRATS, 'tiles': tiles,
                         'cells': rows, 'detail': dict(detail),
