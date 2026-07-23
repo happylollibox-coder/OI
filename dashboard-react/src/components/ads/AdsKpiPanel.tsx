@@ -2,14 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useFilters } from '../../hooks/useFilters';
 import { loadAdsKpiByProduct, loadUnifiedKpiByProduct } from '../../hooks/useCubeData';
 import { fM, fP, fR, fCpc, fOrd, fmt } from '../../utils';
-import { useAdsWindow } from './adsWindow';
+import { useAdsWindow, AdsWindowControls } from './adsWindow';
 import {
   computeKpis,
   daysInRange,
   applyDailyAverage,
   type AdsKpiProductRow,
   type UnifiedKpiProductRow,
-  type DateRangePreset,
 } from './adsKpiPanel.helpers';
 
 type ViewMode = 'total' | 'daily';
@@ -22,13 +21,6 @@ const COLOR: Record<string, string> = {
   red: 'text-red-400',
   muted: 'text-subtle',
 };
-
-const PRESETS: { id: DateRangePreset; label: string }[] = [
-  { id: 'yesterday', label: 'Yesterday' },
-  { id: '7d', label: '7 days' },
-  { id: '30d', label: '30 days' },
-  { id: 'custom', label: 'Custom' },
-];
 
 function Stat({ label, value, color }: { label: string; value: string; color?: Color }) {
   return (
@@ -43,7 +35,7 @@ function Stat({ label, value, color }: { label: string; value: string; color?: C
 
 export function AdsKpiPanel() {
   const { filters } = useFilters();
-  const { range, setRange, start, end, incomplete } = useAdsWindow();
+  const { start, end, incomplete } = useAdsWindow();
   const [mode, setMode] = useState<ViewMode>(() => {
     try { return localStorage.getItem(MODE_KEY) === 'daily' ? 'daily' : 'total'; } catch { return 'total'; }
   });
@@ -103,61 +95,30 @@ export function AdsKpiPanel() {
 
   return (
     <div className="mb-5">
-      {/* Date-range selector */}
-      <div className="flex flex-wrap items-center gap-2 mb-2.5">
-        <span className="text-[10px] uppercase font-bold tracking-wider text-faint mr-1">Window</span>
-        {PRESETS.map(p => (
-          <button
-            key={p.id}
-            onClick={() => setRange(r => ({ ...r, preset: p.id }))}
-            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all ${
-              range.preset === p.id
-                ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
-                : 'text-faint border-border hover:text-muted hover:border-border-strong'
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
-        {range.preset === 'custom' && (
-          <span className="flex items-center gap-1.5">
-            <input
-              type="date"
-              value={range.customStart}
-              max={range.customEnd || undefined}
-              onChange={e => setRange(r => ({ ...r, customStart: e.target.value }))}
-              className="px-2 py-1 rounded-lg text-[11px] font-mono bg-transparent border border-border text-subtle focus:outline-none focus:border-blue-500"
-            />
-            <span className="text-faint text-[11px]">→</span>
-            <input
-              type="date"
-              value={range.customEnd}
-              min={range.customStart || undefined}
-              onChange={e => setRange(r => ({ ...r, customEnd: e.target.value }))}
-              className="px-2 py-1 rounded-lg text-[11px] font-mono bg-transparent border border-border text-subtle focus:outline-none focus:border-blue-500"
-            />
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          {/* Total vs per-day average */}
-          <div className="inline-flex rounded-lg border border-border overflow-hidden">
-            {(['total', 'daily'] as ViewMode[]).map(m => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={`px-2.5 py-1 text-[11px] font-semibold transition-all ${
-                  mode === m ? 'bg-blue-500/15 text-blue-400' : 'text-faint hover:text-muted'
-                }`}
-              >
-                {m === 'total' ? 'Total' : 'Daily avg'}
-              </button>
-            ))}
-          </div>
-          <span className="text-[10px] font-mono text-faint">
-            {loading ? 'Loading…' : `${start} → ${end}`}
-          </span>
-        </div>
-      </div>
+      {/* Date-range selector — shared with the Strategy page (see AdsWindowControls) */}
+      <AdsWindowControls
+        right={
+          <>
+            {/* Total vs per-day average */}
+            <div className="inline-flex rounded-lg border border-border overflow-hidden">
+              {(['total', 'daily'] as ViewMode[]).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`px-2.5 py-1 text-[11px] font-semibold transition-all ${
+                    mode === m ? 'bg-blue-500/15 text-blue-400' : 'text-faint hover:text-muted'
+                  }`}
+                >
+                  {m === 'total' ? 'Total' : 'Daily avg'}
+                </button>
+              ))}
+            </div>
+            <span className="text-[10px] font-mono text-faint">
+              {loading ? 'Loading…' : `${start} → ${end}`}
+            </span>
+          </>
+        }
+      />
 
       {error ? (
         <div className="text-[12px] text-red-400 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20">

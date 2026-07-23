@@ -16,6 +16,9 @@ import { Target, TrendingUp, Sun, Flame, Zap } from 'lucide-react';
 import { STRATEGY_META, DEFAULT_STRATEGY, CHART_MEASURE_META, type ChartMeasureId } from '../strategies';
 import { usePageSummary } from '../components/PageSummaryBar';
 import { groupByStrategy, type StrategyGroup } from './strategiesData';
+import { AdsWindowProvider, AdsWindowControls, useAdsWindow, ADS_PRESETS } from '../components/ads/adsWindow';
+import { loadAdsCampaigns } from '../hooks/useCubeData';
+import type { CampaignRow } from '../components/ads/adsCampaignTable.helpers';
 
 const PHASE_ICONS: Record<SeasonPhase, typeof Sun> = { offseason: Sun, boost: Flame, peak: Zap };
 
@@ -39,7 +42,74 @@ function finishBucket(label: string, d: { spend: number; orders: number; clicks:
 }
 
 export function StrategiesPage({ data }: { data: DashboardData }) {
+  // Own persisted window (key 'strategy_window'), defaulting to Lifetime so the page opens on the
+  // numbers it has always shown. Separate key from the Ads page on purpose — see AdsWindowProvider.
+  return (
+    <AdsWindowProvider storageKey="strategy_window" defaultPreset="lifetime">
+      <StrategiesPageInner data={data} />
+    </AdsWindowProvider>
+  );
+}
+
+function StrategiesPageInner({ data }: { data: DashboardData }) {
   const { filters } = useFilters();
+  const { range, start, end, incomplete } = useAdsWindow();
+  const isLifetime = range.preset === 'lifetime';
+
+  // Windowed campaign perf. Lifetime short-circuits to the pre-aggregated roster rather than
+  // querying a 25-year range. Family/product are NOT pushed into the query — famOk below applies
+  // the same rule the lifetime path uses, so both paths filter identically.
+  const [windowRows, setWindowRows] = useState<CampaignRow[]>([]);
+  const [windowLoading, setWindowLoading] = useState(false);
+  const [windowError, setWindowError] = useState<string | null>(null);
+  useEffect(() => {
+    if (isLifetime || incomplete) return;
+    let cancelled = false;
+    setWindowLoading(true);
+    setWindowError(null);
+    loadAdsCampaigns(start, end, null, null)
+      .then(rows => { if (!cancelled) setWindowRows(rows); })
+      .catch(e => { if (!cancelled) setWindowError(String(e?.message || e)); })
+      .finally(() => { if (!cancelled) setWindowLoading(false); });
+    return () => { cancelled = true; };
+  }, [isLifetime, incomplete, start, end]);
+
+  /** Roster keyed by campaign_id — supplies strategy/family/age to the windowed perf rows. */
+  const roster = useMemo(() => {
+    const m = new Map<string, StrategyCampaignRow>();
+    for (const r of data.strategy_campaigns || []) m.set(r.campaign_id, r);
+    return m;
+  }, [data.strategy_campaigns]);
+
+  /** Windowed rows reshaped as StrategyCampaignRow so the cards and table are agnostic to the
+   * source. Metrics use the same formulas as V_STRATEGY_CAMPAIGN_PERF: net_roas = FN_NET_ROAS(
+   * sales, 0, spend) = sales/spend, conv_rate = orders*100/clicks, cpc = spend/clicks. */
+  const windowCampaigns = useMemo<StrategyCampaignRow[]>(() => {
+    return windowRows.map(c => {
+      const base = roster.get(c.campaignId);
+      return {
+        campaign_id: c.campaignId,
+        campaign_name: c.campaignName || base?.campaign_name || c.campaignId,
+        campaign_type: c.campaignType ?? base?.campaign_type ?? null,
+        parent_name: base?.parent_name ?? null,
+        strategy_id: base?.strategy_id ?? 'UNCLASSIFIED',
+        strategy_source: base?.strategy_source ?? '',
+        age_bucket: base?.age_bucket ?? 'UNKNOWN',
+        age_days: base?.age_days ?? null,
+        // In a window, "active" means it spent inside that window.
+        is_active: c.spend > 0,
+        spend: c.spend,
+        orders: c.orders,
+        clicks: c.clicks,
+        impressions: c.impressions,
+        sales: c.sales,
+        net_roas: c.spend > 0 ? c.sales / c.spend : null,
+        conv_rate: c.clicks > 0 ? (c.orders * 100) / c.clicks : null,
+        cpc: c.clicks > 0 ? c.spend / c.clicks : null,
+        last_date: base?.last_date ?? null,
+      };
+    });
+  }, [windowRows, roster]);
   const perfMaxDate = data._meta?.data_freshness?.performance_max_date || '';
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
   const [activePhase, setActivePhase] = useState<SeasonPhase | null>(null);
@@ -53,12 +123,12 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
       !fam || experimentMatchesFamily(name, fam) || experimentMatchesFamily(parent, fam);
   }, [filters.family]);
 
-  // Campaign roster (lifetime perf) — powers the cards + the campaigns table.
+  // Campaign perf — powers the cards + the campaigns table. Lifetime uses the pre-aggregated
+  // roster; any other window uses the windowed rows above.
   const campaigns = useMemo<StrategyCampaignRow[]>(() => {
-    let rows = data.strategy_campaigns || [];
-    rows = rows.filter(c => famOk(c.campaign_name, c.parent_name));
-    return rows;
-  }, [data.strategy_campaigns, famOk]);
+    const rows = isLifetime ? (data.strategy_campaigns || []) : windowCampaigns;
+    return rows.filter(c => famOk(c.campaign_name, c.parent_name));
+  }, [isLifetime, data.strategy_campaigns, windowCampaigns, famOk]);
 
   const groups = useMemo<StrategyGroup[]>(() => groupByStrategy(campaigns), [campaigns]);
 
@@ -147,7 +217,23 @@ export function StrategiesPage({ data }: { data: DashboardData }) {
         {strategyFilterItems.length > 0 && <FilterInfoIcon items={strategyFilterItems} />}
       </div>
       <p className="text-xs text-subtle mb-1">Every live campaign grouped by its strategy</p>
-      <p className="text-[10px] text-faint font-mono mb-5">{campaigns.length} campaigns · {totalActive} active · lifetime spend</p>
+      <p className="text-[10px] text-faint font-mono mb-3">
+        {campaigns.length} campaigns · {totalActive} active · {isLifetime ? 'lifetime spend' : `${start} → ${end}`}
+      </p>
+
+      {/* Same window control as the Ads page, plus a Lifetime option (the page's original view).
+          Scopes the strategy cards + campaigns table. The phase breakdown and trend below stay on
+          the weekly series — they are seasonal by construction and a 7-day window would empty them. */}
+      <AdsWindowControls
+        presets={['lifetime', ...ADS_PRESETS]}
+        right={windowLoading ? <span className="text-[10px] font-mono text-faint">Loading…</span> : undefined}
+      />
+      {windowError && (
+        <div className="text-[12px] text-red-400 px-3 py-2 mb-3 rounded-lg bg-red-500/10 border border-red-500/20">
+          Failed to load windowed campaigns: {windowError}
+        </div>
+      )}
+      <div className="mb-5" />
 
       {/* Strategy Cards Grid */}
       <div className="grid grid-cols-4 gap-3 mb-6">

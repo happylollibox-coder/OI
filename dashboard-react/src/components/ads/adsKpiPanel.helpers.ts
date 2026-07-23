@@ -150,7 +150,8 @@ export function applyDailyAverage(k: AdsKpis, days: number): AdsKpis {
   };
 }
 
-export type DateRangePreset = 'yesterday' | '7d' | '30d' | 'custom';
+/** 'lifetime' is offered by the Strategy page only — it means "no window", i.e. every day on record. */
+export type DateRangePreset = 'lifetime' | 'yesterday' | '7d' | '30d' | 'custom';
 
 const iso = (d: Date): string => d.toISOString().slice(0, 10);
 const addDays = (d: Date, n: number): Date => {
@@ -171,6 +172,10 @@ export function resolveDateRange(
 ): [string, string] {
   const yesterday = iso(addDays(today, -1));
   switch (preset) {
+    case 'lifetime':
+      // Far enough back to precede any Amazon Ads history we hold. Consumers that can answer
+      // "lifetime" from pre-aggregated rows should short-circuit rather than query this range.
+      return ['2000-01-01', yesterday];
     case 'yesterday':
       return [yesterday, yesterday];
     case '7d':
