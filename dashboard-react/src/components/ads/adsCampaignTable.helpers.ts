@@ -57,22 +57,14 @@ export interface StrategyGroup {
 
 export const UNASSIGNED = 'Unassigned';
 
-/** Reduce an experiment name to its base strategy. Experiment names follow
- * "<Product> - <Strategy> (<qualifier>)"; we drop the leading product prefix (first " - ")
- * AND the trailing " (qualifier)" so variants collapse into one group
- * (e.g. "LolliME - Broad Hunter (10yo)" → "Broad Hunter"). */
-export function strategyLabel(experimentName: string): string {
-  const i = experimentName.indexOf(' - ');
-  const afterProduct = i >= 0 ? experimentName.slice(i + 3) : experimentName;
-  const p = afterProduct.indexOf(' (');
-  const base = p >= 0 ? afterProduct.slice(0, p) : afterProduct;
-  return base.trim();
-}
-
 /**
- * Group campaigns by their assigned strategy (from the campaign→experiment map).
- * Campaigns with no mapping fall under `Unassigned`. Strategies are ordered by
- * total spend desc; campaigns within each strategy by spend desc.
+ * Group campaigns by their resolved strategy_id (from loadCampaignStrategyMap, backed by
+ * V_CAMPAIGN_STRATEGY_RESOLVED). Campaigns the map doesn't cover — it only holds campaigns that
+ * are `is_current` with lifetime spend — fall under `Unassigned`. Strategies are ordered by total
+ * spend desc; campaigns within each strategy by spend desc.
+ *
+ * Note the ids are the canonical enum ('EXACT_BOOST', 'UNCLASSIFIED', …); render them through
+ * STRATEGY_META for a human label.
  */
 export function groupByStrategy(
   campaigns: CampaignRow[],

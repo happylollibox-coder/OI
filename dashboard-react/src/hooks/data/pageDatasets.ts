@@ -29,7 +29,7 @@ export const PAGE_DATASETS: Record<PageId, DatasetName[]> = {
     'coach_phrase_negatives', 'coach_strategy', 'daily_trends', 'hot_signals', 'keyword_predictions',
     'negative_conflicts', 'plan_ads_targets', 'supply_chain'],
   ads: ['ads_7d', 'campaign_search_terms', 'campaign_search_terms_weekly', 'coach_decisions', 'experiment_campaigns', 'holidays',
-    'keyword_product_map', 'peak', 'sqp_volume_4w', 'sqp_weekly'],
+    'keyword_product_map', 'peak', 'sqp_volume_4w', 'sqp_weekly', 'strategy_campaigns'],
   do: ['actions', 'ads_7d', 'coach_campaigns', 'launch_negatives', 'product_creatives', 'products',
     'strategy_campaign_templates', 'supply_chain'],
   experiment: ['budget_health', 'change_log', 'experiment_weekly', 'experiments', 'holidays',

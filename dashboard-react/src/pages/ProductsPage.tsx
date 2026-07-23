@@ -104,7 +104,7 @@ function PriceCalculator({ data, selectedProduct, cogs, setCogs }: { data: Dashb
   const costItems = [
     { label: 'COGS', value: pCogs, color: 'bg-blue-500' },
     { label: 'Shipping', value: pShip, color: 'bg-cyan-500' },
-    { label: 'Pick & Pack', value: pPick, color: 'bg-indigo-500' },
+    { label: 'FBA Fulfillment', value: pPick, color: 'bg-indigo-500' },
     { label: 'Referral Fee', value: referralFee, color: 'bg-orange-500' },
     { label: 'Storage', value: pStorage, color: 'bg-teal-500' },
     { label: 'AWD→FBA', value: pAwdFba, color: 'bg-sky-500' },
@@ -169,7 +169,7 @@ function PriceCalculator({ data, selectedProduct, cogs, setCogs }: { data: Dashb
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <CostInput label="COGS" value={cogs} onChange={setCogs} prefix="$" />
               <CostInput label="Shipping (MFR→US)" value={shipping} onChange={setShipping} prefix="$" />
-              <CostInput label="Pick & Pack (FBA)" value={pickPack} onChange={setPickPack} prefix="$" />
+              <CostInput label="FBA Fulfillment" value={pickPack} onChange={setPickPack} prefix="$" />
               <CostInput label="Referral Fee" value={referralPct} onChange={setReferralPct} suffix="%" />
             </div>
           </div>

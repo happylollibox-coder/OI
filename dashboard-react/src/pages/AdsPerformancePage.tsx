@@ -18,6 +18,7 @@ import { ChevronRight, ChevronDown, TrendingDown, AlertTriangle, Zap, GripVertic
 import { AdsKpiPanel } from '../components/ads/AdsKpiPanel';
 import { AdsCampaignTable } from '../components/ads/AdsCampaignTable';
 import { AdsWindowProvider } from '../components/ads/adsWindow';
+import { STRATEGY_META } from '../strategies';
 
 const HIERARCHY_OPTIONS = [
   { id: 'portfolio', label: 'Portfolio' },
@@ -41,6 +42,10 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   const [includeCurrentWeek, setIncludeCurrentWeek] = useState(false);
   const [bestMinSpend, setBestMinSpend] = useState(3);
   const [campMinClicks, setCampMinClicks] = useState<number | null>(null);
+  /** Page-local strategy scope. Null = all. Applied to every campaign/search-term section below
+   * (and the drill-down); the KPI cards stay account-level — they are product-grain and carry
+   * organic % / net profit, which do not split by an ad strategy. */
+  const [strategyFilter, setStrategyFilter] = useState<string | null>(null);
   const campSort = useSort('spend');
   const ADS_TERMS_COLUMNS: MeasureDef[] = [
     { id: 'search_term', label: 'Search Term', group: 'Info' },
@@ -194,12 +199,42 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
   const familyFilter = filters.family || null;
 
   const allRawRows = data.ads_7d || [];
+
+  /** campaign_id → resolved strategy_id, from the campaign-first strategy view. */
+  const strategyByCampaign = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of data.strategy_campaigns || []) m.set(r.campaign_id, r.strategy_id);
+    return m;
+  }, [data.strategy_campaigns]);
+
+  /** Strategies actually present in this page's ads data, in canonical STRATEGY_META order, with
+   * spend so the chips can show where the money is. Strategies with no campaigns here are omitted
+   * rather than rendered as dead chips. */
+  const strategyOptions = useMemo(() => {
+    const spend = new Map<string, number>();
+    for (const r of allRawRows) {
+      const sid = strategyByCampaign.get(r.campaign_id);
+      if (sid) spend.set(sid, (spend.get(sid) || 0) + (r.spend || 0));
+    }
+    return Object.keys(STRATEGY_META)
+      .filter(id => spend.has(id))
+      .map(id => ({ id, label: STRATEGY_META[id].label, color: STRATEGY_META[id].color, spend: spend.get(id) || 0 }));
+  }, [allRawRows, strategyByCampaign]);
+
   // When includeCurrentWeek is OFF and periodMode is 'weeks', exclude current week from raw rows
   const currentWeekStart = useMemo(() => getCurrentWeekStart(), []);
   const rawRows = useMemo(() => {
-    if (includeCurrentWeek || filters.periodMode !== 'weeks') return allRawRows;
-    return allRawRows.filter(r => !r.week_start || r.week_start < currentWeekStart);
-  }, [allRawRows, includeCurrentWeek, filters.periodMode, currentWeekStart]);
+    let rows = allRawRows;
+    if (!includeCurrentWeek && filters.periodMode === 'weeks') {
+      rows = rows.filter(r => !r.week_start || r.week_start < currentWeekStart);
+    }
+    // Strategy scope is applied here so every downstream section (trend chart, campaigns,
+    // search terms, bleeders, low-conversion) inherits it from one place.
+    if (strategyFilter) {
+      rows = rows.filter(r => strategyByCampaign.get(r.campaign_id) === strategyFilter);
+    }
+    return rows;
+  }, [allRawRows, includeCurrentWeek, filters.periodMode, currentWeekStart, strategyFilter, strategyByCampaign]);
   const hasWeekStart = rawRows.some(r => r.week_start);
 
   const latestWeek = useMemo(() => {
@@ -680,10 +715,46 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
         </button>
       </div>
 
-      {/* KPI cards + per-strategy campaign drill-down — Cube-backed, share one date window */}
+      {/* Strategy scope — narrows every campaign/search-term section below to one strategy. */}
+      {strategyOptions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-5">
+          <span className="text-[10px] text-subtle mr-0.5">Strategy:</span>
+          <button
+            onClick={() => setStrategyFilter(null)}
+            className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-all ${
+              strategyFilter === null
+                ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                : 'text-faint border-border hover:border-border-strong hover:text-muted'
+            }`}
+          >
+            All
+          </button>
+          {strategyOptions.map(o => {
+            const on = strategyFilter === o.id;
+            return (
+              <button
+                key={o.id}
+                onClick={() => setStrategyFilter(on ? null : o.id)}
+                title={`${o.label} — ${fM(o.spend)} in the loaded window`}
+                className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium border transition-all ${
+                  on ? 'text-text' : 'text-faint border-border hover:border-border-strong hover:text-muted'
+                }`}
+                style={on ? { backgroundColor: `${o.color}26`, borderColor: `${o.color}66` } : undefined}
+              >
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: o.color }} />
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* KPI cards + per-strategy campaign drill-down — Cube-backed, share one date window.
+          The KPI cards deliberately ignore the strategy scope: they are product-grain and include
+          organic % / net profit, which have no per-strategy meaning. */}
       <AdsWindowProvider>
         <AdsKpiPanel />
-        <AdsCampaignTable />
+        <AdsCampaignTable strategyFilter={strategyFilter} />
       </AdsWindowProvider>
 
 

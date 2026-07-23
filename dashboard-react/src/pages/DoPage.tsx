@@ -614,10 +614,13 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         // Determine if this is an SB campaign (Sponsored Brands / Video)
         const ct = (item.campaign_type || '').toUpperCase();
         const cn = campName.toUpperCase();
-        // Name fallback ('SBS' included) only covers stale queue items — fresh items carry the real
-        // campaign_type ('SP'/'SB' from FACT) since 2026-07-02, which is authoritative.
+        // campaign_type ('SP'/'SB' from FACT) is authoritative when correct, but some queue sources
+        // fabricate a non-empty value (e.g. CoachHotSignals defaults null -> 'SP'). In this account
+        // the VIDEO-/STORE/SBV/SBS name tokens are unambiguous Sponsored Brands markers (never SP), so
+        // the name check fires UNCONDITIONALLY — a wrong ct='SP' must not misroute an SB campaign onto
+        // the SP sheet, which Amazon rejects as "Could not find campaign with id" (report 20, VIDEO- BALL).
         const isSB = ct === 'SB' || ct === 'SBV' || ct.includes('BRAND') || ct.includes('VIDEO')
-          || (ct === '' && (cn.includes('SBV') || cn.includes('SBS') || cn.includes('VIDEO') || cn.includes('STORE')));
+          || cn.includes('SBV') || cn.includes('SBS') || cn.includes('VIDEO') || cn.includes('STORE');
 
         const spBase: Record<string, string> = {
           'Product': 'Sponsored Products',

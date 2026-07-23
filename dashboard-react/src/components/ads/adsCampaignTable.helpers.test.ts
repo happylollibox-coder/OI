@@ -2,27 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   deriveMetrics,
   groupByStrategy,
-  strategyLabel,
   type CampaignRow,
 } from './adsCampaignTable.helpers';
 
-describe('strategyLabel', () => {
-  it('strips the leading product/family prefix (everything up to the first " - ")', () => {
-    expect(strategyLabel('Fresh Collection - Broad Gift Discovery')).toBe('Broad Gift Discovery');
-    expect(strategyLabel('Happy Lolli - SB Store BROAD Brand Gift Discovery')).toBe('SB Store BROAD Brand Gift Discovery');
-  });
-  it('collapses variants to the base strategy by dropping a trailing " (qualifier)"', () => {
-    expect(strategyLabel('LolliME - Broad Hunter (Birthday Girl, 10yo)')).toBe('Broad Hunter');
-    expect(strategyLabel('LolliME - Broad Hunter (Mint, cute diary)')).toBe('Broad Hunter');
-    expect(strategyLabel('Bottle - Auto Discovery (Discovery)')).toBe('Auto Discovery');
-    expect(strategyLabel('LolliME - Exact Boost (journal kit for girls)')).toBe('Exact Boost');
-  });
-  it('keeps names with no qualifier intact (incl. non-parenthetical suffixes)', () => {
-    expect(strategyLabel('Broad Hunter')).toBe('Broad Hunter');
-    expect(strategyLabel('LolliME - Exact Boost T2')).toBe('Exact Boost T2');
-    expect(strategyLabel('')).toBe('');
-  });
-});
+// strategyLabel() and its tests were removed 2026-07-23: the Ads page no longer derives a strategy
+// by string-parsing experiment names — it reads the resolved strategy_id from StrategyCampaign.
 
 describe('deriveMetrics', () => {
   it('computes cpc, ctr, cvr, acos and net ROAS (grossProfit/spend)', () => {

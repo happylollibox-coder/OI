@@ -9,7 +9,6 @@ import { useState, useEffect } from 'react';
 import type { DatasetName } from './data/datasetTypes';
 import type { AdsKpiProductRow, UnifiedKpiProductRow } from '../components/ads/adsKpiPanel.helpers';
 import type { CampaignRow, KeywordRow, SearchTermRow } from '../components/ads/adsCampaignTable.helpers';
-import { strategyLabel } from '../components/ads/adsCampaignTable.helpers';
 import type {
   Ads7dRow,
   SqpWeeklyRow,
@@ -703,7 +702,9 @@ async function loadHotSignalsFromCube(): Promise<HotSignalRow[]> {
     strategy_name: String(r['CoachHotSignals.strategyName'] ?? ''),
     campaign_id: String(r['CoachHotSignals.campaignId'] ?? ''),
     campaign_name: String(r['CoachHotSignals.campaignName'] ?? ''),
-    campaign_type: String(r['CoachHotSignals.campaignType'] ?? 'SP'),
+    // Don't fabricate 'SP' when null — a wrong non-empty type would misroute an SB campaign onto the
+    // SP bulksheet (Amazon rejects it). Empty lets DoPage's isSB name-check classify correctly.
+    campaign_type: String(r['CoachHotSignals.campaignType'] ?? ''),
     ad_group_id: String(r['CoachHotSignals.adGroupId'] ?? ''),
     spend_3d: Number(r['CoachHotSignals.spend3d'] ?? 0),
     orders_3d: Number(r['CoachHotSignals.orders3d'] ?? 0),
@@ -1047,7 +1048,7 @@ async function loadFamilyOccasionsFromCube(): Promise<import('../types').FamilyO
 /** WeeklyTrends → weekly_trends (via UnifiedPerformance) */
 async function loadWeeklyTrendsFromCube(): Promise<TrendRow[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit', 'UnifiedPerformance.adsGrossProfit', 'UnifiedPerformance.adsNetRoas'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.weekStart'],
     limit: 5000,
   });
@@ -1064,6 +1065,9 @@ async function loadWeeklyTrendsFromCube(): Promise<TrendRow[]> {
     sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
     impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
     net_roas: Number(r['UnifiedPerformance.netRoas'] ?? 0),
+    // ad-attributed (direct, no halo) — the true advertising return; net_roas above is margin-per-ad-$
+    ads_gross_profit: Number(r['UnifiedPerformance.adsGrossProfit'] ?? 0),
+    ads_net_roas: Number(r['UnifiedPerformance.adsNetRoas'] ?? 0),
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
     np_per_unit: Number(r['UnifiedPerformance.npPerUnit'] ?? 0),
@@ -1077,7 +1081,7 @@ async function loadWeeklyTrendsFromCube(): Promise<TrendRow[]> {
 /** MonthlyTrends → monthly_trends (via UnifiedPerformance) */
 async function loadMonthlyTrendsFromCube(): Promise<TrendRow[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit', 'UnifiedPerformance.adsGrossProfit', 'UnifiedPerformance.adsNetRoas'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.monthStart'],
     limit: 5000,
   });
@@ -1094,6 +1098,9 @@ async function loadMonthlyTrendsFromCube(): Promise<TrendRow[]> {
     sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
     impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
     net_roas: Number(r['UnifiedPerformance.netRoas'] ?? 0),
+    // ad-attributed (direct, no halo) — the true advertising return; net_roas above is margin-per-ad-$
+    ads_gross_profit: Number(r['UnifiedPerformance.adsGrossProfit'] ?? 0),
+    ads_net_roas: Number(r['UnifiedPerformance.adsNetRoas'] ?? 0),
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
     np_per_unit: Number(r['UnifiedPerformance.npPerUnit'] ?? 0),
@@ -1131,7 +1138,7 @@ async function loadDailyTrendsFromCube(): Promise<DailyTrendRow[]> {
 /** WeeklyTrendsByAsin → weekly_trends_by_asin (via UnifiedPerformance) */
 async function loadWeeklyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit', 'UnifiedPerformance.adsGrossProfit', 'UnifiedPerformance.adsNetRoas'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.asin', 'UnifiedPerformance.productShortName', 'UnifiedPerformance.weekStart'],
     limit: 5000,
   });
@@ -1150,6 +1157,9 @@ async function loadWeeklyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
     sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
     impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
     net_roas: Number(r['UnifiedPerformance.netRoas'] ?? 0),
+    // ad-attributed (direct, no halo) — the true advertising return; net_roas above is margin-per-ad-$
+    ads_gross_profit: Number(r['UnifiedPerformance.adsGrossProfit'] ?? 0),
+    ads_net_roas: Number(r['UnifiedPerformance.adsNetRoas'] ?? 0),
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
     np_per_unit: Number(r['UnifiedPerformance.npPerUnit'] ?? 0),
@@ -1258,17 +1268,22 @@ function adsProductFilters(family?: string | null, product?: string | null): obj
   return f;
 }
 
-/** campaign_id → assigned strategy (experiment name). Unmapped campaigns are simply absent. */
+/** campaign_id → resolved strategy_id (canonical enum, e.g. 'EXACT_BOOST'). Unmapped campaigns are absent.
+ *
+ * Repointed 2026-07-23 from ExperimentCampaign→Experiment.experimentName to the campaign-first
+ * StrategyCampaign cube. The experiment layer is parked (see the Strategy page pivot): it hid live
+ * campaigns behind experiments, so the Ads page was grouping by free-text experiment names that no
+ * longer matched the Strategy page. Both now read the same resolved strategy. */
 export async function loadCampaignStrategyMap(): Promise<Record<string, string>> {
   const rows = await cubeLoad({
-    dimensions: ['ExperimentCampaign.campaignId', 'Experiment.experimentName'],
+    dimensions: ['StrategyCampaign.campaignId', 'StrategyCampaign.strategyId'],
     limit: 10000,
   });
   const map: Record<string, string> = {};
   for (const r of rows as Record<string, unknown>[]) {
-    const cid = r['ExperimentCampaign.campaignId'] ? String(r['ExperimentCampaign.campaignId']) : '';
-    const name = r['Experiment.experimentName'] ? String(r['Experiment.experimentName']) : '';
-    if (cid && name) map[cid] = strategyLabel(name); // strategy only — drop the product prefix
+    const cid = r['StrategyCampaign.campaignId'] ? String(r['StrategyCampaign.campaignId']) : '';
+    const sid = r['StrategyCampaign.strategyId'] ? String(r['StrategyCampaign.strategyId']) : '';
+    if (cid && sid) map[cid] = sid;
   }
   return map;
 }
@@ -1376,7 +1391,7 @@ export async function loadAdsSearchTerms(campaignId: string, targeting: string, 
 /** MonthlyTrendsByAsin → monthly_trends_by_asin (via UnifiedPerformance) */
 async function loadMonthlyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
   const rows = await cubeLoad({
-    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit'],
+    measures: ['UnifiedPerformance.sales', 'UnifiedPerformance.adCost', 'UnifiedPerformance.cogs', 'UnifiedPerformance.cogsGoods', 'UnifiedPerformance.shippingCost', 'UnifiedPerformance.pickPackCost', 'UnifiedPerformance.referralCost', 'UnifiedPerformance.netProfit', 'UnifiedPerformance.orders', 'UnifiedPerformance.units', 'UnifiedPerformance.clicks', 'UnifiedPerformance.sessions', 'UnifiedPerformance.impressions', 'UnifiedPerformance.netRoas', 'UnifiedPerformance.organicPct', 'UnifiedPerformance.tacos', 'UnifiedPerformance.npPerUnit', 'UnifiedPerformance.adsGrossProfit', 'UnifiedPerformance.adsNetRoas'],
     dimensions: ['UnifiedPerformance.family', 'UnifiedPerformance.asin', 'UnifiedPerformance.productShortName', 'UnifiedPerformance.monthStart'],
     limit: 5000,
   });
@@ -1395,6 +1410,9 @@ async function loadMonthlyTrendsByAsinFromCube(): Promise<TrendRowByAsin[]> {
     sessions: Number(r['UnifiedPerformance.sessions'] ?? 0),
     impressions: Number(r['UnifiedPerformance.impressions'] ?? 0),
     net_roas: Number(r['UnifiedPerformance.netRoas'] ?? 0),
+    // ad-attributed (direct, no halo) — the true advertising return; net_roas above is margin-per-ad-$
+    ads_gross_profit: Number(r['UnifiedPerformance.adsGrossProfit'] ?? 0),
+    ads_net_roas: Number(r['UnifiedPerformance.adsNetRoas'] ?? 0),
     organic_pct: Number(r['UnifiedPerformance.organicPct'] ?? 0),
     tacos: Number(r['UnifiedPerformance.tacos'] ?? 0),
     np_per_unit: Number(r['UnifiedPerformance.npPerUnit'] ?? 0),

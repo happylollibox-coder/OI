@@ -708,13 +708,6 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
               {/* Step 4 — Actions (keywords, negatives & per-campaign budget) */}
               <section className="rounded-xl border border-border bg-card p-4">
                 <div className="text-label font-medium text-muted mb-2">4 · Actions — keywords, negatives &amp; budget</div>
-                {/* New campaigns (0–20d) — launch-controller cards: per-target 3-day measures + budget to approve */}
-                {ppcMode === 'offense' && (selAge === ALL_AGES || selAge === 'NEW') && (
-                  <div className="mb-4">
-                    <div className="text-label text-violet-300 mb-1">New campaigns (first 20 days) — launch controller</div>
-                    <NewCampaignCards product={current.product} />
-                  </div>
-                )}
                 {/* Filter by what's still open vs. already uploaded (inside the 3-day cooldown). Default = Not applied. */}
                 <div className="flex items-center flex-wrap gap-1 mb-3">
                   {([['todo', 'Not applied', appliedCounts.todo], ['done', 'Already applied', appliedCounts.done], ['all', 'All', appliedCounts.all]] as const).map(([val, label, n]) => (
@@ -736,13 +729,20 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                   ))}
                   <span className="text-label text-faint ml-1">— click one to focus; HOLD hidden by default</span>
                 </div>
+                {/* coach logic as a flow chart (strategy toggles) — the engine driving every decision below */}
+                <CoachFlowchart />
+                {/* New campaigns (0–20d) launch-controller cards — co-located directly under the coach logic, above the mature actions */}
+                {ppcMode === 'offense' && (selAge === ALL_AGES || selAge === 'NEW') && (
+                  <div className="mt-3 mb-4">
+                    <div className="text-label text-violet-300 mb-1">New campaigns (first 20 days) — launch controller</div>
+                    <NewCampaignCards product={current.product} actionFilter={actionFilter} />
+                  </div>
+                )}
                 {camps === null ? <div className="text-label text-faint">Loading campaigns…</div>
                   : camps.length === 0 ? <div className="text-label text-subtle">No campaigns for this product.</div>
                   : (() => {
                     return (
                       <>
-                        {/* coach logic as a flow chart (strategy toggles) — the engine driving every decision below */}
-                        <CoachFlowchart />
                         <p className="text-label text-subtle mb-3">Keyword bids &amp; search terms to negate.</p>
                         <div className="flex flex-col gap-4">
                           {camps.filter(campVisible).length === 0 && (

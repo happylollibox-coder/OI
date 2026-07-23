@@ -8,6 +8,7 @@ interface IntentTerm {
   fit: number | null;
   demand: number | null;
   term_spend: number | null;
+  term_clicks: number | null;
   term_net_roas: number | null;
 }
 interface Intent {
@@ -137,6 +138,9 @@ export function IntentsPanel({ selectedProduct }: { selectedProduct: string }) {
                   {t.term_spend ? (
                     <>
                       {' · '}<span className="text-muted">{fM(t.term_spend)}</span>
+                      {(t.term_clicks ?? 0) > 0 && (
+                        <span className="text-faint"> · {fM(t.term_spend / t.term_clicks!)} cpc</span>
+                      )}
                       {t.term_net_roas != null && (
                         <span className={t.term_net_roas >= 1 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
                           {' '}{fR(t.term_net_roas)}

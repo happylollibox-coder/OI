@@ -117,6 +117,7 @@ export const MEASURE_TIPS: Record<string, string> = {
   orders: 'Total units ordered (ads + organic) (Business)',
   clicks: 'Ad clicks from Sponsored Products / Brands / Display (Ads)',
   sessions: 'Product page visits from all traffic sources (Business)',
+  conversion_rate: 'Total Orders ÷ Sessions × 100. Share of product-page visits that placed an order (Business)',
   organic_pct: 'Organic orders ÷ Total orders × 100. Higher = less ads dependency (Business)',
   spend: 'Total ad spend (Ads)',
   ads_spend: 'Total ad spend (Ads)',

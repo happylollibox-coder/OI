@@ -24,7 +24,7 @@ import { usePageSummary } from '../components/PageSummaryBar';
 import { apiFetch } from '../utils/apiFetch';
 import { useViewMode } from '../hooks/useViewMode';
 
-const ALL_MEASURES: TrendMeasure[] = ['sales', 'ad_cost', 'cogs', 'net_profit', 'net_roas', 'orders', 'units', 'clicks', 'sessions', 'organic_pct', 'payment'];
+const ALL_MEASURES: TrendMeasure[] = ['sales', 'ad_cost', 'cogs', 'net_profit', 'net_roas', 'orders', 'units', 'clicks', 'sessions', 'conversion_rate', 'organic_pct', 'payment'];
 
 // All known families (drives inclusion + per-family record initialization). Derived from
 // FAMILIES so new families (Bunny, LolliBall, …) are picked up without code edits.
@@ -48,7 +48,10 @@ const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'ads_units', label: 'Ads Units', tip: 'Units sold attributed to ads campaigns', group: 'Ads', defaultVisible: false },
   { id: 'net_profit', label: 'Net Profit', tip: MEASURE_TIPS.net_profit, group: 'PnL' },
   { id: 'np_per_unit', label: 'NP/Unit', tip: 'Net Profit divided by total units sold — your north-star metric', group: 'PnL' },
-  { id: 'net_roas', label: 'Net ROAS', tip: MEASURE_TIPS.net_roas, group: 'Ads' },
+  // Renamed from "Net ROAS": the numerator is TOTAL gross margin (organic included) over ad spend, so it is
+  // margin-per-ad-dollar, not an advertising return. The true ad return is ads_net_roas below.
+  { id: 'net_roas', label: 'Margin per Ad $', tip: 'TOTAL gross margin (organic included) ÷ ad spend. Efficiency of the whole P&L per ad dollar — NOT an advertising return, since organic margin is credited against ad spend. For the ad return use Ads Net ROAS.', group: 'Ads' },
+  { id: 'ads_net_roas', label: 'Ads Net ROAS', tip: 'Ad-attributed gross profit ÷ ad spend (direct only, no halo) — 1.0× = breakeven. Same definition as the Ads Coach and launch controller.', group: 'Ads' },
   { id: 'ads_roas', label: 'Ads ROAS', tip: 'Ads Sales / Ads Spend — gross advertising return', group: 'Ads', defaultVisible: false },
   { id: 'ads_net_profit', label: 'Ads Net Profit', tip: 'Ads-attributed net profit (coacher source): ads GROSS_PROFIT − ads spend, most_advertised attribution. Matches This Week for the same dates (Home weeks are Sun–Sat vs coacher Mon–Sun).', group: 'Ads', defaultVisible: false },
   { id: 'tacos', label: 'TACoS', tip: 'Total Ads Cost of Sales — Ads Spend / Total Sales — measures ad dependency', group: 'Ads' },
@@ -62,7 +65,7 @@ const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'sessions', label: 'Sessions', tip: 'Total sessions (Business)', group: 'SQP', defaultVisible: false },
   { id: 'organic_pct', label: 'Organic %', tip: MEASURE_TIPS.organic_pct, group: 'SQP' },
   { id: 'sales_change', label: 'Sales vs Prev', tip: MEASURE_TIPS.sales_change, group: 'Info' },
-  { id: 'fba_pick_pack', label: 'FBA Pick&Pack', tip: 'FBA pick & pack fee per unit (from DIM_COSTS_HISTORY)', group: 'PnL', defaultVisible: false },
+  { id: 'fba_pick_pack', label: 'FBA Fulfillment', tip: 'FBA fulfillment fee per unit ACTUALLY CHARGED in this period (period pick_pack_cost ÷ units), not today\'s cost row — so it matches the P&L per Unit card and reconciles with the period totals. Amazon\'s fee varies over time. Covers the whole fulfillment charge (pick & pack + weight handling + surcharges), since Amazon leaves its own pick&pack field empty and we take estimated_fee_total − referral.', group: 'PnL', defaultVisible: false },
   { id: 'fba_referral', label: 'FBA Referral', tip: 'FBA referral fee per unit (from DIM_COSTS_HISTORY)', group: 'PnL', defaultVisible: false },
   { id: 'cost_of_goods', label: 'COGS/Unit', tip: 'Cost of goods per unit (from DIM_COSTS_HISTORY)', group: 'PnL', defaultVisible: false },
   { id: 'shipping_cost_per_unit', label: 'Shipping/Unit', tip: 'Shipping cost per unit (from DIM_COSTS_HISTORY)', group: 'PnL', defaultVisible: false },
@@ -82,7 +85,7 @@ const FAMILY_TABLE_COLUMNS: MeasureDef[] = [
   { id: 'awd_min_defined', label: 'AWD Min (Defined)', tip: 'AWD target min system (and approved)', group: 'Supply Chain', defaultVisible: true },
   { id: 'awd_max_defined', label: 'AWD Max (Defined)', tip: 'AWD target max system (and approved)', group: 'Supply Chain', defaultVisible: true },
 ];
-const AVG_MEASURES = new Set<TrendMeasure>(['net_roas', 'organic_pct']);
+const AVG_MEASURES = new Set<TrendMeasure>(['net_roas', 'organic_pct', 'conversion_rate']);
 const STAGE_LABELS_SHORT: Record<string, string> = { READINESS: 'Readiness', PRE_PEAK: 'Pre Peak', PRE_PEAK_BOOST: 'Boost', PEAK: 'Peak', POST_PEAK: 'Post Peak' };
 
 function getChangesStatus(d: { sd: number; cd: number; pd: number; roasDelta: number; orgDelta: number }): string {
@@ -660,6 +663,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           const lyCg = lyD.cogs?.sum ?? 0;
           lyResolved.ly_ad_cost = lyCo;
           lyResolved.ly_net_profit = lyD.net_profit?.sum ?? (lySl - lyCg - lyCo);
+          lyResolved.ly_conversion_rate = (lyD.sessions?.sum ?? 0) > 0 ? 100 * (lyD.orders?.sum ?? 0) / (lyD.sessions?.sum ?? 1) : 0;
         }
         return {
           label: weekRangeLabelCapped(w, perfMaxDate),
@@ -667,6 +671,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           hasSqp: sqpWeeks.has(w),
           ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: d?.net_profit?.sum ?? (sl - cg - co),
           net_roas: co ? (sl - cg) / co : 0,
+          conversion_rate: (d?.sessions?.sum ?? 0) > 0 ? 100 * (d?.orders?.sum ?? 0) / (d?.sessions?.sum ?? 1) : 0,
           payment: 0,
           ...lyResolved,
         };
@@ -737,6 +742,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
             cyValues.ad_cost = co;
             cyValues.net_profit = d.net_profit?.sum ?? (sl - cg - co);
             cyValues.net_roas = co ? (sl - cg) / co : 0;
+            cyValues.conversion_rate = (d.sessions?.sum ?? 0) > 0 ? 100 * (d.orders?.sum ?? 0) / (d.sessions?.sum ?? 1) : 0;
             const prevMonth = idx > 0 ? monthSlots[idx - 1] : null;
             const prevSales = prevMonth ? (byMonth[prevMonth]?.sales?.sum ?? 0) : 0;
             const prevUnits = prevMonth ? (byMonth[prevMonth]?.__units ?? 0) : 0;
@@ -765,6 +771,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           const lyCg = lyD.cogs?.sum ?? 0;
           lyResolved.ly_ad_cost = lyCo;
           lyResolved.ly_net_profit = lyD.net_profit?.sum ?? (lySl - lyCg - lyCo);
+          lyResolved.ly_conversion_rate = (lyD.sessions?.sum ?? 0) > 0 ? 100 * (lyD.orders?.sum ?? 0) / (lyD.sessions?.sum ?? 1) : 0;
 
           const monthIdx = parseInt(m.slice(5), 10) - 1;
           return { label: MONTH_NAMES[monthIdx] || m, weekKey: m, hasSqp: true, ...cyValues, ...lyResolved } as unknown as typeof rawData[0];
@@ -773,7 +780,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         const months = Object.keys(byMonth).sort();
         const keep = new Set(getPeriodsToInclude(filters.specificPeriod, periodMode, months, pt));
         const entries = Object.entries(byMonth).filter(([m]) => keep.has(m)).sort(([a], [b]) => a.localeCompare(b));
-        rawData = entries.map(([m, d]) => { const r = resolve(d); const co = d.ad_cost?.sum ?? 0; const sl = d.sales?.sum ?? 0; const cg = d.cogs?.sum ?? 0; const np = d.net_profit?.sum ?? (sl - cg - co); const cu = d.__units ?? 0; const mIdx = months.indexOf(m); const prevMk = mIdx > 0 ? months[mIdx - 1] : ''; const prevBucket = prevMk ? byMonth[prevMk] : null; const prevSales = prevBucket?.sales?.sum ?? 0; const prevUnits = prevBucket?.__units ?? 0; const prevAd = prevBucket?.ad_cost?.sum ?? 0; const curMk = m.slice(0, 7); const curSt = curMk ? (storageCostLookup.byMonth[curMk] ?? 0) : 0; const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate); const curNet = sl - co - (cu * amazonFeeRate); return { label: m, weekKey: m, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: np, net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt }; });
+        rawData = entries.map(([m, d]) => { const r = resolve(d); const co = d.ad_cost?.sum ?? 0; const sl = d.sales?.sum ?? 0; const cg = d.cogs?.sum ?? 0; const np = d.net_profit?.sum ?? (sl - cg - co); const cu = d.__units ?? 0; const mIdx = months.indexOf(m); const prevMk = mIdx > 0 ? months[mIdx - 1] : ''; const prevBucket = prevMk ? byMonth[prevMk] : null; const prevSales = prevBucket?.sales?.sum ?? 0; const prevUnits = prevBucket?.__units ?? 0; const prevAd = prevBucket?.ad_cost?.sum ?? 0; const curMk = m.slice(0, 7); const curSt = curMk ? (storageCostLookup.byMonth[curMk] ?? 0) : 0; const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate); const curNet = sl - co - (cu * amazonFeeRate); return { label: m, weekKey: m, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: np, net_roas: co ? (sl - cg) / co : 0, conversion_rate: (d.sessions?.sum ?? 0) > 0 ? 100 * (d.orders?.sum ?? 0) / (d.sessions?.sum ?? 1) : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt }; });
       }
     } else if (periodMode === 'quarter') {
       const byQuarter: Record<string, Bucket> = {};
@@ -805,7 +812,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         }
         const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate);
         const curNet = sl - co - (curUnits * amazonFeeRate);
-        return { label: q, weekKey: q, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: d.net_profit?.sum ?? (sl - cg - co), net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
+        return { label: q, weekKey: q, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: d.net_profit?.sum ?? (sl - cg - co), net_roas: co ? (sl - cg) / co : 0, conversion_rate: (d.sessions?.sum ?? 0) > 0 ? 100 * (d.orders?.sum ?? 0) / (d.sessions?.sum ?? 1) : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
       });
     } else {
       const byYear: Record<string, Bucket> = {};
@@ -832,7 +839,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         }
         const prevNet = prevSales - prevAd - (prevUnits * amazonFeeRate);
         const curNet = sl - co - (curUnits * amazonFeeRate);
-        return { label: y, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: d.net_profit?.sum ?? (sl - cg - co), net_roas: co ? (sl - cg) / co : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
+        return { label: y, hasSqp: true, ...r, sales: sl, cogs: cg, ad_cost: co, net_profit: d.net_profit?.sum ?? (sl - cg - co), net_roas: co ? (sl - cg) / co : 0, conversion_rate: (d.sessions?.sum ?? 0) > 0 ? 100 * (d.orders?.sum ?? 0) / (d.sessions?.sum ?? 1) : 0, payment: 0.5 * prevNet + 0.5 * curNet - curSt, storage_cost: curSt };
       });
     }
 
@@ -1288,7 +1295,11 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       const ads_net = (familyName != null && familyName in familyCoachNet)
         ? familyCoachNet[familyName]
         : (familyName ? familyAdsGross[familyName] - familyAds[familyName] : 0);
-      const curWithAds = { ...cur, ads_sales: curAdsSales, ads_units: Math.round(curAdsUnits), ads_net };
+      // Ads Net ROAS = ad-attributed gross profit ÷ ad spend (1.0 = breakeven). Both sides come from the SAME
+      // ads source (most_advertised) so the ratio is internally consistent — unlike net_roas below, which puts
+      // TOTAL margin (organic included) over ad spend and is therefore margin-per-ad-$, not an ad return.
+      const ads_net_roas = (familyName && familyAds[familyName]) ? familyAdsGross[familyName] / familyAds[familyName] : 0;
+      const curWithAds = { ...cur, ads_sales: curAdsSales, ads_units: Math.round(curAdsUnits), ads_net, ads_net_roas };
       const net_roas = curWithAds.ad_cost ? (curWithAds.sales - curWithAds.cogs) / curWithAds.ad_cost : 0;
       const organic_pct = cur.orders > 0
         ? (curRows.reduce((s, r) => s + ((r.organic_pct || 0) * (r.orders || 0)), 0) / cur.orders)
@@ -1458,8 +1469,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   }, [data.weekly_trends, data.monthly_trends, data.weekly_trends_by_asin, data.monthly_trends_by_asin, periodMode, kpiWeek, kpiPrevWeek, effectivePrevTotals, filters.family, filters.product, filters.seasonality, pk, adsSpendByFamilyAndPeriod]);
 
   const variationPnlByFamily = useMemo(() => {
-    if (!kpiWeek) return famRecord(() => []) as Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number }[]>;
-    type Row = { product_type: string; asin: string; product_short_name: string; week_start?: string; month_start?: string; sales: number; ad_cost: number; cogs: number; net_profit: number; orders: number; units?: number; clicks?: number; sessions?: number; organic_pct?: number };
+    if (!kpiWeek) return famRecord(() => []) as Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number; ads_gross_profit: number; ads_net_roas: number; pick_pack_cost: number }[]>;
+    type Row = { product_type: string; asin: string; product_short_name: string; pick_pack_cost?: number; ads_gross_profit?: number; week_start?: string; month_start?: string; sales: number; ad_cost: number; cogs: number; net_profit: number; orders: number; units?: number; clicks?: number; sessions?: number; organic_pct?: number };
     const src = periodMode === 'weeks' ? (data.weekly_trends_by_asin || []) : (data.monthly_trends_by_asin || []);
     const dateKey = periodMode === 'weeks' ? 'week_start' : 'month_start';
     const matchCur = (r: Row) => {
@@ -1467,8 +1478,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       if (periodMode === 'weeks') return v === kpiWeek;
       return periodKey(v, periodMode) === kpiWeek;
     };
-    const result: Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number }[]> = famRecord(() => []);
-    const tempMap: Record<FamilyName, Map<string, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; orders: number; units: number; clicks: number; sessions: number; organic_pct_weighted: number }>> = famRecord(() => new Map());
+    const result: Record<FamilyName, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number; ads_gross_profit: number; ads_net_roas: number; pick_pack_cost: number }[]> = famRecord(() => []);
+    const tempMap: Record<FamilyName, Map<string, { asin: string; product_short_name: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; orders: number; units: number; clicks: number; sessions: number; organic_pct_weighted: number; ads_gross_profit: number; pick_pack_cost: number }>> = famRecord(() => new Map());
     src.forEach((r: Row) => {
       const fam = famFromType(r.product_type) as FamilyName | null;
       if (!fam || !tempMap[fam] || (filters.family && fam !== filters.family) || (filters.product && r.asin !== filters.product) || !matchCur(r)) return;
@@ -1487,6 +1498,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
         existing.clicks += r.clicks || 0;
         existing.sessions += r.sessions || 0;
         existing.organic_pct_weighted += (r.organic_pct ?? 0) * (r.orders || 0);
+        existing.ads_gross_profit += r.ads_gross_profit || 0;
+        existing.pick_pack_cost += r.pick_pack_cost || 0;
       } else {
         tempMap[fam].set(r.asin, {
           asin: r.asin,
@@ -1501,6 +1514,8 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           clicks: r.clicks || 0,
           sessions: r.sessions || 0,
           organic_pct_weighted: (r.organic_pct ?? 0) * (r.orders || 0),
+          ads_gross_profit: r.ads_gross_profit || 0,
+          pick_pack_cost: r.pick_pack_cost || 0,
         });
       }
     });
@@ -1517,8 +1532,17 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
           cogs: v.cogs,
           ad_cost: adCost,
           storage_cost: v.storage_cost,
-          net_profit: grossMargin - adCost - v.storage_cost,
+          // Net Profit = Sales − landed COGS − Ads. Storage is deliberately EXCLUDED (shown as its own
+          // column) so this matches the canonical cube measure (UnifiedPerformance.netProfit =
+          // gross_margin − ad_cost) used by the KPI/Products P&L cards and the family rows. Previously this
+          // row alone also subtracted storage, so the same week read −68.19 here vs −65.81 everywhere else —
+          // and net_roas (below) never subtracted it, so NP and ROAS disagreed within this row.
+          net_profit: grossMargin - adCost,
           net_roas: adCost ? grossMargin / adCost : 0,
+          // ad-attributed return (no halo). Ratio of sums, never a sum of ratios.
+          ads_gross_profit: v.ads_gross_profit,
+          pick_pack_cost: v.pick_pack_cost,
+          ads_net_roas: adCost ? v.ads_gross_profit / adCost : 0,
           orders: v.orders,
           units: v.units,
           clicks: v.clicks,
@@ -1544,6 +1568,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
       result[fam].push({
         asin: sc.asin, product_short_name: sc.product_short_name || sc.asin,
         sales: 0, cogs: 0, ad_cost: 0, storage_cost: 0, net_profit: 0, net_roas: 0,
+        ads_gross_profit: 0, ads_net_roas: 0, pick_pack_cost: 0,
         orders: 0, units: 0, clicks: 0, sessions: 0, organic_pct: 0, organic_units: 0,
         ad_orders: 0, ads_sales: 0, ads_units: 0, ads_net: 0,
       });
@@ -1555,9 +1580,9 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   }, [data.weekly_trends_by_asin, data.monthly_trends_by_asin, data.products, data.supply_chain, asinToFamily, periodMode, kpiWeek, filters.family, filters.product, adsDataByProductAndPeriod, storageCostLookup]);
 
   const pnlByAsin = useMemo(() => {
-    const map = new Map<string, { payment: number; storage_cost: number; sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number }>();
-    (Object.values(variationPnlByFamily) as { asin: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number }[][]).flat().forEach(v => {
-      if (v.asin) map.set(v.asin, { payment: 0, storage_cost: v.storage_cost, sales: v.sales, cogs: v.cogs, ad_cost: v.ad_cost, net_profit: v.net_profit, net_roas: v.net_roas, orders: v.orders, units: v.units ?? 0, clicks: v.clicks, sessions: v.sessions ?? 0, organic_pct: v.organic_pct, organic_units: v.organic_units ?? 0, ad_orders: v.ad_orders ?? 0, ads_sales: v.ads_sales ?? 0, ads_units: v.ads_units ?? 0, ads_net: v.ads_net ?? 0 });
+    const map = new Map<string, { payment: number; storage_cost: number; sales: number; cogs: number; ad_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number; ads_gross_profit: number; ads_net_roas: number; pick_pack_cost: number }>();
+    (Object.values(variationPnlByFamily) as { asin: string; sales: number; cogs: number; ad_cost: number; storage_cost: number; net_profit: number; net_roas: number; orders: number; units: number; clicks: number; sessions: number; organic_pct: number; organic_units: number; ad_orders: number; ads_sales: number; ads_units: number; ads_net: number; ads_gross_profit: number; ads_net_roas: number; pick_pack_cost: number }[][]).flat().forEach(v => {
+      if (v.asin) map.set(v.asin, { payment: 0, storage_cost: v.storage_cost, sales: v.sales, cogs: v.cogs, ad_cost: v.ad_cost, net_profit: v.net_profit, net_roas: v.net_roas, orders: v.orders, units: v.units ?? 0, clicks: v.clicks, sessions: v.sessions ?? 0, organic_pct: v.organic_pct, organic_units: v.organic_units ?? 0, ad_orders: v.ad_orders ?? 0, ads_sales: v.ads_sales ?? 0, ads_units: v.ads_units ?? 0, ads_net: v.ads_net ?? 0, ads_gross_profit: v.ads_gross_profit ?? 0, ads_net_roas: v.ads_net_roas ?? 0, pick_pack_cost: v.pick_pack_cost ?? 0 });
     });
     return map;
   }, [variationPnlByFamily]);
@@ -1578,7 +1603,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
 
   const changesByVariation = useMemo(() => {
     if (!kpiWeek || !kpiPrevWeek) return famRecord(() => []) as Record<FamilyName, { asin: string; product_short_name: string; sd: number; cd: number; pd: number; roasDelta: number; orgDelta: number; status: string; prevSales: number; prevAdCost: number; prevNetProfit: number }[]>;
-    type Row = { product_type: string; asin: string; product_short_name: string; week_start?: string; month_start?: string; sales: number; ad_cost: number; net_profit: number; orders: number; organic_pct?: number };
+    type Row = { product_type: string; asin: string; product_short_name: string; pick_pack_cost?: number; ads_gross_profit?: number; week_start?: string; month_start?: string; sales: number; ad_cost: number; net_profit: number; orders: number; organic_pct?: number };
     const src = periodMode === 'weeks' ? (data.weekly_trends_by_asin || []) : (data.monthly_trends_by_asin || []);
     const dateKey = periodMode === 'weeks' ? 'week_start' : 'month_start';
 
@@ -1851,7 +1876,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
   // day-count. Ratios (net_roas, organic_pct) and last-year values are handled per surface.
   const trendDataDisplay = useMemo(() => {
     if (!perDay) return trendData;
-    const ADD = ['sales', 'ad_cost', 'cogs', 'net_profit', 'payment', 'storage_cost', 'orders', 'units', 'clicks', 'sessions'];
+    const ADD = ['sales', 'ad_cost', 'cogs', 'net_profit', 'payment', 'storage_cost', 'orders', 'units', 'clicks', 'sessions', 'ads_gross_profit', 'pick_pack_cost'];
     return trendData.map(d => {
       const key = (d as { weekKey?: string }).weekKey || '';
       const dc = Math.max(1, periodDayCount(key, periodMode, perfMaxDate));
@@ -1879,7 +1904,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
     if (!perDay || !base) return base;
     const d = Math.max(1, periodDayCount(kpiWeek, periodMode, perfMaxDate));
     if (d <= 1) return base;
-    const FLOW = ['sales', 'cogs', 'ad_cost', 'ads_sales', 'ads_units', 'net_profit', 'orders', 'units', 'clicks', 'sessions', 'organic_units', 'ad_orders', 'payment', 'storage_cost'];
+    const FLOW = ['sales', 'cogs', 'ad_cost', 'ads_sales', 'ads_units', 'net_profit', 'orders', 'units', 'clicks', 'sessions', 'organic_units', 'ad_orders', 'payment', 'storage_cost', 'ads_gross_profit', 'pick_pack_cost'];
     return base.map(row => {
       const o = { ...row } as Record<string, unknown>;
       for (const k of FLOW) if (typeof o[k] === 'number') o[k] = (o[k] as number) / d;
@@ -2147,6 +2172,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                         net_profit: <td key="net_profit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl ? (v.net_profit > 0 ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold') : 'text-faint'}`}>{hasPnl ? fM(v.net_profit) : '—'}</td>,
                         np_per_unit: <td key="np_per_unit" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl && (v.units ?? 0) > 0 ? (v.net_profit / v.units > 0 ? 'text-emerald-400' : 'text-red-400') : 'text-faint'}`}>{hasPnl && (v.units ?? 0) > 0 ? fM(v.net_profit / v.units) : '—'}</td>,
                         net_roas: <td key="net_roas" className="px-3 py-2 text-right">{hasPnl ? <RoasBadge value={v.net_roas} /> : <span className="text-faint">—</span>}</td>,
+                        ads_net_roas: <td key="ads_net_roas" className="px-3 py-2 text-right">{hasPnl ? <RoasBadge value={v.ad_cost ? ((v as { ads_gross_profit?: number }).ads_gross_profit || 0) / v.ad_cost : 0} /> : <span className="text-faint">—</span>}</td>,
                         tacos: <td key="tacos" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl && v.sales > 0 ? ((v.ad_cost / v.sales) * 100 > 30 ? 'text-red-400' : (v.ad_cost / v.sales) * 100 > 15 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{hasPnl && v.sales > 0 ? fP((v.ad_cost / v.sales) * 100) : '—'}</td>,
                         ads_roas: (() => { const ar = v.ad_cost > 0 ? (v.ads_sales ?? 0) / v.ad_cost : 0; return <td key="ads_roas" className="px-3 py-2 text-right">{hasPnl && ar > 0 ? <RoasBadge value={ar} /> : <span className="text-faint">—</span>}</td>; })(),
                         payment: <td key="payment" className={`px-3 py-2 text-right font-mono text-[11px] ${hasPnl ? 'text-sky-400 font-bold' : 'text-faint'}`}>{hasPnl ? fM((pnlByAsin.get(v.asin!)?.payment ?? 0) / famDiv) : '—'}</td>,
@@ -2159,7 +2185,15 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                         sessions: <td key="sessions" className="px-3 py-2 text-right font-mono text-[11px]">{v.sessions > 0 ? v.sessions.toLocaleString() : '—'}</td>,
                         organic_pct: <td key="organic_pct" className="px-3 py-2 text-right font-mono text-[11px]">{hasPnl ? fP(v.organic_pct) : '—'}</td>,
                         sales_change: <td key="sales_change" className="px-3 py-2">{vc ? <ChangesSummaryCell data={vc} /> : <span className="text-faint">—</span>}</td>,
-                        fba_pick_pack: (() => { const prod = v.asin ? productByAsin.get(v.asin) : undefined; return <td key="fba_pick_pack" className="px-3 py-2 text-right font-mono text-[11px]">{prod ? `$${prod.pick_pack_fee.toFixed(2)}` : '—'}</td>; })(),
+                        // PERIOD-ACTUAL fee per unit (what was actually charged in this period), not today's
+                        // cost row — so it matches the KPI/Products "P&L per Unit" card and reconciles with the
+                        // period totals. Amazon's fee genuinely varies over time (e.g. B0GYLGL2BT was really
+                        // charged $6.02/unit for 2026-07-03..13 before Amazon corrected it to $4.76).
+                        fba_pick_pack: (() => {
+                          const pp = (v as { pick_pack_cost?: number }).pick_pack_cost || 0;
+                          const u = v.units || 0;
+                          return <td key="fba_pick_pack" className="px-3 py-2 text-right font-mono text-[11px]">{u > 0 ? `$${(pp / u).toFixed(2)}` : '—'}</td>;
+                        })(),
                         fba_referral: (() => { const prod = v.asin ? productByAsin.get(v.asin) : undefined; return <td key="fba_referral" className="px-3 py-2 text-right font-mono text-[11px]">{prod ? `$${prod.referral_fee.toFixed(2)}` : '—'}</td>; })(),
                         cost_of_goods: (() => { const prod = v.asin ? productByAsin.get(v.asin) : undefined; return <td key="cost_of_goods" className="px-3 py-2 text-right font-mono text-[11px]">{prod ? `$${prod.cogs.toFixed(2)}` : '—'}</td>; })(),
                         shipping_cost_per_unit: (() => { const prod = v.asin ? productByAsin.get(v.asin) : undefined; return <td key="shipping_cost_per_unit" className="px-3 py-2 text-right font-mono text-[11px]">{prod ? `$${prod.shipping_cost.toFixed(2)}` : '—'}</td>; })(),
@@ -2223,6 +2257,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                       net_profit: <td key="net_profit" className="px-3 py-2 text-right font-mono text-[11px] font-bold text-sky-400">{fM(r.net_profit)}</td>,
                       pct_net_profit: <td key="pct_net_profit" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{totalNetProfit > 0 && r.net_profit > 0 ? fP((r.net_profit / totalNetProfit) * 100) : '—'}</td>,
                       net_roas: <td key="net_roas" className="px-3 py-2 text-right"><RoasBadge value={r.net_roas} /></td>,
+                      ads_net_roas: <td key="ads_net_roas" className="px-3 py-2 text-right"><RoasBadge value={(r as { ads_net_roas?: number }).ads_net_roas || 0} /></td>,
                       tacos: <td key="tacos" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${r.sales > 0 ? ((r.ad_cost / r.sales) * 100 > 30 ? 'text-red-400' : (r.ad_cost / r.sales) * 100 > 15 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{r.sales > 0 ? fP((r.ad_cost / r.sales) * 100) : '—'}</td>,
                       ads_roas: (() => { const ar = r.ad_cost > 0 ? (r.ads_sales || 0) / r.ad_cost : 0; return <td key="ads_roas" className="px-3 py-2 text-right">{ar > 0 ? <RoasBadge value={ar} /> : <span className="text-faint">—</span>}</td>; })(),
                       ad_orders: <td key="ad_orders" className="px-3 py-2 text-right font-mono text-[11px] font-medium">{fmt(r.ad_orders ?? 0)}</td>,
@@ -2303,6 +2338,7 @@ export function HomePage({ data, onNav }: { data: DashboardData; onNav: (p: stri
                     pct_net_profit: <td key="pct_net_profit" className="px-3 py-2 text-right font-mono text-[11px] font-bold">100%</td>,
                     np_per_unit: <td key="np_per_unit" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${tot.units > 0 ? (tot.net_profit / tot.units > 0 ? 'text-emerald-400' : 'text-red-400') : 'text-faint'}`}>{tot.units > 0 ? fM(tot.net_profit / tot.units) : '—'}</td>,
                     net_roas: <td key="net_roas" className="px-3 py-2 text-right"><RoasBadge value={net_roas} /></td>,
+                    ads_net_roas: <td key="ads_net_roas" className="px-3 py-2 text-right"><RoasBadge value={tot.ad_cost ? ((tot as { ads_gross_profit?: number }).ads_gross_profit || 0) / tot.ad_cost : 0} /></td>,
                     tacos: <td key="tacos" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${tot.sales > 0 ? ((tot.ad_cost / tot.sales) * 100 > 30 ? 'text-red-400' : (tot.ad_cost / tot.sales) * 100 > 15 ? 'text-amber-400' : 'text-emerald-400') : 'text-faint'}`}>{tot.sales > 0 ? fP((tot.ad_cost / tot.sales) * 100) : '—'}</td>,
                     ads_roas: (() => { const ar = tot.ad_cost > 0 ? tot.ads_sales / tot.ad_cost : 0; return <td key="ads_roas" className="px-3 py-2 text-right">{ar > 0 ? <RoasBadge value={ar} /> : <span className="text-faint">—</span>}</td>; })(),
                     payment: (() => { const totPayment = familyPeriodDataDisplay.reduce((s, r) => s + (r.payment ?? 0), 0); return <td key="payment" className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${totPayment > 0 ? 'text-sky-400' : 'text-red-400'}`}>{fM(totPayment)}</td>; })(),

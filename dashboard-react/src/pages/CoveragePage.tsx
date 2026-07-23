@@ -54,6 +54,28 @@ interface MonthRow {
   net_profit: number;
   net_roas: number;
 }
+/** One keyword within a (campaign × month) — the third evidence level under a MonthRow. */
+export interface MonthKw {
+  keyword_text: string;
+  match_type: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  cpc: number | null;
+  units: number;
+  net_profit: number;
+  net_roas: number | null;
+  target_cpc: number | null;   // CPC that hits the INTENT floor at THIS month's cvr
+}
+/** Threaded bundle for the per-month keyword drill: cache (campaign_id → month → keywords),
+ *  a per-campaign loading probe, the expanded `${campaign_id}|${month}` set, + handlers. */
+interface MonthKwCtx {
+  data: Record<string, Record<string, MonthKw[]>>;
+  loading: (campaignId: string) => boolean;
+  expanded: Set<string>;
+  toggle: (key: string) => void;
+  ensure: (campaignId: string) => void;
+}
 interface StrategyStat {
   total: number;
   profitable: number;
@@ -72,9 +94,33 @@ interface WorkflowData {
   detail: Record<string, DetailCampaign[]>;
   strategy_stats?: Record<string, StrategyStat>;
   family_stats?: Record<string, FamilyStat>;
+  window?: string;        // echoed back by /api/daily-workflow (today|yesterday|7d|30d|90d|12mo|peak)
+  window_start?: string;  // resolved YYYY-MM-DD (inclusive)
+  window_end?: string;    // resolved YYYY-MM-DD (inclusive)
 }
 
 const STORE_KEY = '__STORE__';
+
+// Time-window choices for the whole cockpit — mirrors the /api/daily-workflow WINDOWS map.
+// Every measure on the page (coverage counts, status, metrics) is computed over the chosen window.
+type CovWindow = 'today' | 'yesterday' | '7d' | '30d' | '90d' | '12mo' | 'peak';
+const COV_WINDOWS: { key: CovWindow; label: string; short: string; hint: string }[] = [
+  { key: 'today',     label: 'Today',     short: 'today', hint: 'ads so far today' },
+  { key: 'yesterday', label: 'Yesterday', short: 'yest',  hint: 'the full prior day' },
+  { key: '7d',        label: '7 days',    short: '7d',    hint: 'trailing 7 days (default)' },
+  { key: '30d',       label: '30 days',   short: '30d',   hint: 'trailing 30 days' },
+  { key: '90d',       label: '90 days',   short: '90d',   hint: 'trailing 90 days' },
+  { key: '12mo',      label: '12 months', short: '12mo',  hint: 'trailing 12 months' },
+  { key: 'peak',      label: 'Peak',      short: 'peak',  hint: 'gift-season days only, over the last 12 months' },
+];
+const winShort = (w: CovWindow): string => COV_WINDOWS.find(x => x.key === w)?.short ?? String(w);
+const COV_WIN_KEY = 'coverage_window';
+const recallWin = (): CovWindow => {
+  try {
+    const v = localStorage.getItem(COV_WIN_KEY) as CovWindow | null;
+    return v && COV_WINDOWS.some(w => w.key === v) ? v : '7d';
+  } catch { return '7d'; }
+};
 
 interface KeywordRowData {
   parent_name: string;
@@ -89,7 +135,9 @@ interface KeywordRowData {
   research_rank: number | null;
   overall_fit: number | null;
   is_relevant: boolean | null;
-  ads_net_roas: number | null;
+  ads_net_roas: number | null;   // intent-level aggregate (NOT per-keyword)
+  net_roas: number | null;       // REAL per-keyword net ROAS (units_7d × family_gp / cost)
+  target_cpc: number | null;     // CPC that lands this keyword on the INTENT net-ROAS floor
   rec_type: string | null;
   last_seen: string | null;
   status: string;
@@ -251,15 +299,16 @@ export function ProfitChip({ state }: { state: string }) {
   return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${m.cls}`}>{m.label}</span>;
 }
 
-/** Compact last-7-day P&L roll-up: "{profitable}/{total} profit · +$X · −$Y".
- *  Emerald net-profit and red net-loss are each omitted when 0; empty spend → "no spend (7d)". */
-export function ProfitRollup({ s }: { s: StrategyStat }) {
-  if (!s.total) return <div className="mt-0.5 text-[9px] text-faint">no spend (7d)</div>;
+/** Compact windowed P&L roll-up: "{win}: {profitable}/{total} profit · +$X · −$Y".
+ *  Emerald net-profit and red net-loss are each omitted when 0; empty spend → "no spend ({win})".
+ *  `win` is the active time-window's short label (7d/30d/90d/12mo/peak/today/yest). */
+export function ProfitRollup({ s, win = '7d' }: { s: StrategyStat; win?: string }) {
+  if (!s.total) return <div className="mt-0.5 text-[9px] text-faint">no spend ({win})</div>;
   const gain = Math.round(s.net_profit_profitable);
   const loss = Math.round(Math.abs(s.net_profit_unprofitable));
   return (
     <div className="mt-0.5 text-[9px] tabular-nums text-muted">
-      <span className="text-faint">7d: </span>
+      <span className="text-faint">{win}: </span>
       <span>{s.profitable}/{s.total} profit</span>
       {gain !== 0 && <span className="text-emerald-400"> · +${gain}</span>}
       {loss !== 0 && <span className="text-red-400"> · −${loss}</span>}
@@ -283,7 +332,7 @@ function Metrics({ c }: { c: Cell }) {
 
 /** Strategy roll-up tile — defined / to-do / redundant across a strategy's coverage cells.
  *  Border tone: red if anything to do, else amber if redundant, else emerald. */
-export function StrategyTile({ name, t, stat, open, onOpen }: { name: string; t: Tile; stat?: StrategyStat; open: boolean; onOpen: () => void }) {
+export function StrategyTile({ name, t, stat, open, onOpen, win }: { name: string; t: Tile; stat?: StrategyStat; open: boolean; onOpen: () => void; win?: string }) {
   const isUnmapped = name === 'UNMAPPED';
   const tone = isUnmapped
     ? (t.informational > 0
@@ -314,7 +363,7 @@ export function StrategyTile({ name, t, stat, open, onOpen }: { name: string; t:
           </>
         )}
       </div>
-      <ProfitRollup s={stat ?? ZERO_STAT} />
+      <ProfitRollup s={stat ?? ZERO_STAT} win={win} />
     </button>
   );
 }
@@ -354,20 +403,86 @@ function StateBadge({ state }: { state: string | null }) {
   return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${cls}`}>{label}</span>;
 }
 
-/** One month in a campaign's 12-month drill: "{YYYY-MM} · ${spend} · {clicks} clk · ${cpc} cpc · {units}u · {roas}x · ±$profit". */
-export function MonthRow({ m }: { m: MonthRow }) {
+/** One keyword within a month drill: match chip + text, then right-aligned metrics
+ *  mirroring the month line (spend · clicks · cpc · units · roas · ±profit). */
+export function MonthKeywordRow({ k }: { k: MonthKw }) {
+  const roas = k.net_roas ?? 0;
+  const roasTone = roas >= 1 ? 'text-emerald-400' : 'text-red-400';
+  const profTone = k.net_profit >= 0 ? 'text-emerald-400' : 'text-red-400';
+  const prof = k.net_profit >= 0
+    ? `+$${Math.round(k.net_profit)}`
+    : `−$${Math.round(Math.abs(k.net_profit))}`;
+  return (
+    <div className="flex items-center gap-1 py-px text-[9px] tabular-nums text-faint">
+      <MatchChip mt={k.match_type} />
+      <span className="truncate max-w-[150px] text-muted" title={k.keyword_text}>{k.keyword_text}</span>
+      <span className="ml-auto whitespace-nowrap">${k.spend.toFixed(0)} · {k.clicks} clk · ${(k.cpc ?? (k.clicks > 0 ? k.spend / k.clicks : 0)).toFixed(2)} cpc · {k.units}u ·</span>
+      <span className={roasTone}>{roas.toFixed(2)}x</span>
+      <span>·</span>
+      <span className={profTone}>{prof}</span>
+      <span>·</span>
+      <span className="text-muted" title="conversion rate = units ÷ clicks">{k.clicks > 0 ? (100 * k.units / k.clicks).toFixed(1) : '0.0'}% cvr</span>
+      {k.target_cpc != null && (
+        <>
+          <span>·</span>
+          <span
+            className={k.cpc != null && k.cpc > k.target_cpc ? 'text-amber-400' : 'text-emerald-400'}
+            title={k.cpc != null && k.cpc > k.target_cpc
+              ? `Lower bid to ~$${k.target_cpc.toFixed(2)} to reach 1.1x net ROAS at this month's cvr`
+              : `Room to bid up to ~$${k.target_cpc.toFixed(2)} at this month's cvr`}
+          >tgt ${k.target_cpc.toFixed(2)}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** One month in a campaign's 12-month drill: "{YYYY-MM} · ${spend} · {clicks} clk · ${cpc} cpc · {units}u · {roas}x · ±$profit".
+ *  When `campaignId` + `kwCtx` are supplied the row becomes expandable → the keywords that drove that month. */
+export function MonthRow({ m, campaignId, kwCtx }: { m: MonthRow; campaignId?: string; kwCtx?: MonthKwCtx }) {
   const roasTone = m.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400';
   const profTone = m.net_profit >= 0 ? 'text-emerald-400' : 'text-red-400';
   const prof = m.net_profit >= 0
     ? `+$${Math.round(m.net_profit)}`
     : `−$${Math.round(Math.abs(m.net_profit))}`;
-  return (
+  const canExpand = !!campaignId && !!kwCtx;
+  const mkey = `${campaignId}|${m.month}`;
+  const isOpen = kwCtx?.expanded.has(mkey) ?? false;
+  const kws = campaignId && kwCtx ? kwCtx.data[campaignId]?.[m.month] : undefined;
+  const sorted = kws ? [...kws].sort((a, b) => b.spend - a.spend) : undefined;
+  const isLoading = campaignId && kwCtx ? kwCtx.loading(campaignId) : false;
+  const line = (
     <div className="flex items-center gap-1 py-px text-[9px] tabular-nums text-faint">
+      {canExpand && <span className="w-2 shrink-0 text-faint">{isOpen ? '▾' : '▸'}</span>}
       <span className="w-[42px] shrink-0 text-muted">{m.month.slice(0, 7)}</span>
       <span className="whitespace-nowrap">· ${m.spend.toFixed(0)} · {m.clicks} clk · ${(m.clicks > 0 ? m.spend / m.clicks : 0).toFixed(2)} cpc · {m.units}u ·</span>
       <span className={roasTone}>{m.net_roas.toFixed(2)}x</span>
       <span>·</span>
       <span className={profTone}>{prof}</span>
+      <span>·</span>
+      <span className="text-muted" title="conversion rate = units ÷ clicks">{m.clicks > 0 ? (100 * m.units / m.clicks).toFixed(1) : '0.0'}% cvr</span>
+    </div>
+  );
+  if (!canExpand) return line;
+  return (
+    <div>
+      <button
+        onClick={() => { kwCtx!.ensure(campaignId!); kwCtx!.toggle(mkey); }}
+        className="block w-full text-left hover:bg-white/[0.02]"
+      >
+        {line}
+      </button>
+      {isOpen && (
+        <div className="pl-4">
+          {sorted && sorted.length > 0 ? (
+            sorted.map((k, i) => <MonthKeywordRow key={`${k.match_type}-${k.keyword_text}-${i}`} k={k} />)
+          ) : isLoading ? (
+            <div className="text-faint text-[9px]">loading…</div>
+          ) : (
+            <div className="text-faint text-[9px]">no keyword data</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -375,13 +490,14 @@ export function MonthRow({ m }: { m: MonthRow }) {
 /** One campaign in a cell's evidence list: expander chevron · state badge · name · right-aligned
  *  metrics. Expands to reveal a lazy-loaded 12-month P&L drill (most-recent month first). */
 export function CampaignEvidenceRow({
-  c, months, monthsLoading = false, isOpen = false, onToggle,
+  c, months, monthsLoading = false, isOpen = false, onToggle, monthKwCtx,
 }: {
   c: DetailCampaign;
   months?: MonthRow[];
   monthsLoading?: boolean;
   isOpen?: boolean;
   onToggle?: () => void;
+  monthKwCtx?: MonthKwCtx;
 }) {
   const recentFirst = months ? [...months].reverse() : undefined;
   return (
@@ -409,7 +525,7 @@ export function CampaignEvidenceRow({
           {monthsLoading && !recentFirst ? (
             <div className="text-faint text-[9px]">loading…</div>
           ) : recentFirst && recentFirst.length > 0 ? (
-            recentFirst.map((m, i) => <MonthRow key={`${m.month}-${i}`} m={m} />)
+            recentFirst.map((m, i) => <MonthRow key={`${m.month}-${i}`} m={m} campaignId={c.campaign_id} kwCtx={monthKwCtx} />)
           ) : (
             <div className="text-faint text-[9px]">no monthly data</div>
           )}
@@ -466,10 +582,21 @@ export function KeywordRow({ k, family, months }: { k: KeywordRowData; family?: 
               ${k.cost.toFixed(0)} spend · {k.clicks} clk
               {k.research_rank != null && ` · rank ${k.research_rank}`}
               {k.cpc != null && ` · $${k.cpc.toFixed(2)} cpc`}
-              {k.ads_net_roas != null && (
+              {k.net_roas != null && (
                 <>
                   {' · '}
-                  <span className={k.ads_net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{k.ads_net_roas.toFixed(2)}x</span>
+                  <span className={k.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{k.net_roas.toFixed(2)}x</span>
+                </>
+              )}
+              {k.target_cpc != null && (
+                <>
+                  {' · '}
+                  <span
+                    className={k.cpc != null && k.cpc > k.target_cpc ? 'text-amber-400' : 'text-emerald-400'}
+                    title={k.cpc != null && k.cpc > k.target_cpc
+                      ? `Lower bid to ~$${k.target_cpc.toFixed(2)} to reach 1.1x net ROAS`
+                      : `Room to bid up to ~$${k.target_cpc.toFixed(2)} at 1.1x net ROAS`}
+                  >tgt ${k.target_cpc.toFixed(2)}</span>
                 </>
               )}
             </span>
@@ -507,6 +634,9 @@ export function KeywordRow({ k, family, months }: { k: KeywordRowData; family?: 
   );
 }
 
+// Strategies whose campaigns target keywords → month rows can drill into keyword breakdowns.
+// AUTO / PRODUCT_DEFENSE are ASIN/auto-targeted (no keywords), so their months stay flat.
+const KEYWORD_STRATEGIES = new Set(['INTENT', 'EXACT_BOOST', 'BRAND_DEFENSE', 'COMPETITOR']);
 const KW_STATUS_SORT: Record<string, number> = { orphan: 0, missing: 1, running: 2, paused: 3 };
 const MATCH_ORDER: Record<string, number> = { EXACT: 0, PHRASE: 1, BROAD: 2 };
 const OTHER_INTENT = '__other__';
@@ -785,8 +915,8 @@ export function buildFamilyEntries(familyStats: Record<string, FamilyStat> | und
   return entries;
 }
 
-/** One family button in the left panel: name + defined/planned + 7d profit roll-up. */
-function FamilyButton({ entry, selected, onSelect }: { entry: FamilyEntry; selected: boolean; onSelect: () => void }) {
+/** One family button in the left panel: name + defined/planned + windowed profit roll-up. */
+function FamilyButton({ entry, selected, onSelect, win }: { entry: FamilyEntry; selected: boolean; onSelect: () => void; win?: string }) {
   const { defined, planned } = entry.stat;
   const dpTone = defined >= planned ? 'text-emerald-400' : 'text-red-400';
   return (
@@ -796,7 +926,7 @@ function FamilyButton({ entry, selected, onSelect }: { entry: FamilyEntry; selec
     >
       <div className="text-xs font-bold text-heading">{entry.label}</div>
       <div className={`mt-0.5 text-[10px] font-semibold tabular-nums ${dpTone}`}>{defined}/{planned} defined</div>
-      <ProfitRollup s={entry.stat} />
+      <ProfitRollup s={entry.stat} win={win} />
     </button>
   );
 }
@@ -804,9 +934,30 @@ function FamilyButton({ entry, selected, onSelect }: { entry: FamilyEntry; selec
 /** Daily-workflow coverage cockpit (rung 1): six strategy tiles rolling up
  *  defined / to-do / redundant, each expandable to its coverage cells.
  *  All status/roll-up logic lives in /api/daily-workflow (BigQuery); this only renders. */
+// Segmented time-window control — same visual language as HomeBrief's DateToggle.
+function CovWindowToggle({ win, onPick }: { win: CovWindow; onPick: (w: CovWindow) => void }) {
+  return (
+    <div className="inline-flex flex-wrap gap-0.5 bg-white/[.04] border border-border rounded-lg p-0.5">
+      {COV_WINDOWS.map(w => {
+        const active = win === w.key;
+        return (
+          <button key={w.key} title={w.hint} onClick={() => onPick(w.key)}
+            className={`text-[11px] font-mono px-2 py-1 rounded-md transition-all
+              ${active ? 'bg-blue-500/90 text-white' : 'text-muted hover:text-text'}`}>
+            {w.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function CoveragePage() {
   const [data, setData] = useState<WorkflowData | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [win, setWin] = useState<CovWindow>(recallWin); // time window governing every measure on the page
+  const wfUrl = `/api/daily-workflow?window=${win}`;
+  const pickWin = (w: CovWindow) => { setWin(w); try { localStorage.setItem(COV_WIN_KEY, w); } catch { /* ignore */ } };
   const [open, setOpen] = useState<string | null>(null); // strategy name
   const [selectedFamily, setSelectedFamily] = useState<string | null>(null); // null = ALL; else parent_name or STORE_KEY
   const [openCell, setOpenCell] = useState<string | null>(null); // expanded cell_key
@@ -824,6 +975,9 @@ export function CoveragePage() {
   const [kwMonthsData, setKwMonthsData] = useState<Record<string, Record<string, KwMonthRow[]>> | null>(null); // family → keyword_key → months
   const [kwMonthsLoading, setKwMonthsLoading] = useState<Set<string>>(new Set()); // families with an in-flight fetch
   const [openKw, setOpenKw] = useState<Set<string>>(new Set()); // expanded keyword_keys
+  const [monthKwData, setMonthKwData] = useState<Record<string, Record<string, MonthKw[]>>>({}); // campaign_id → month → keywords
+  const [monthKwLoading, setMonthKwLoading] = useState<Set<string>>(new Set()); // campaign_ids with an in-flight fetch
+  const [openMonths, setOpenMonths] = useState<Set<string>>(new Set()); // expanded `${campaign_id}|${month}`
 
   async function toggleSuppress(c: Cell, active: boolean) {
     if (pendingCell) return;
@@ -843,7 +997,7 @@ export function CoveragePage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (!json.ok) throw new Error('server rejected expectation write');
-      const wf = await apiFetch('/api/daily-workflow');
+      const wf = await apiFetch(wfUrl);
       if (!wf.ok) throw new Error(`HTTP ${wf.status}`);
       const fresh = await wf.json();
       if (fresh.error) throw new Error(fresh.error);
@@ -889,7 +1043,7 @@ export function CoveragePage() {
         const mj = await m.json();
         if (mj.success) setMapData({ campaigns: mj.campaigns ?? [], families: mj.families ?? [], strategies: mj.strategies ?? [] });
       }
-      const wf = await apiFetch('/api/daily-workflow');
+      const wf = await apiFetch(wfUrl);
       if (wf.ok) {
         const fresh = await wf.json();
         if (!fresh.error) setData(fresh);
@@ -901,14 +1055,21 @@ export function CoveragePage() {
     }
   }
 
-  function ensureKeywords() {
-    if (kwData !== null || kwLoading) return;
+  /** Fetch the keyword panel for a window, replacing whatever is cached. Keyword measures
+   *  (clicks/cost/cpc/net_roas/target_cpc/profit_state) are window-scoped server-side via
+   *  FN_COVERAGE_KEYWORD, so the panel must answer to the same toggle as the tiles. */
+  function fetchKeywords(w: CovWindow) {
     setKwLoading(true);
-    apiFetch('/api/coverage-keywords')
+    apiFetch(`/api/coverage-keywords?window=${w}`)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(json => setKwData(json.families ?? {}))
       .catch(() => setKwData({}))
       .finally(() => setKwLoading(false));
+  }
+
+  function ensureKeywords() {
+    if (kwData !== null || kwLoading) return;
+    fetchKeywords(win);
   }
 
   function ensureMonths() {
@@ -951,12 +1112,46 @@ export function CoveragePage() {
     });
   }
 
-  useEffect(() => {
-    apiFetch('/api/daily-workflow')
+  /** Lazy-load a campaign's per-month keyword breakdown once; cache keyed by campaign_id. */
+  function ensureMonthKw(campaignId: string) {
+    if (!campaignId) return;
+    if (monthKwData[campaignId] || monthKwLoading.has(campaignId)) return;
+    setMonthKwLoading(prev => new Set(prev).add(campaignId));
+    apiFetch(`/api/campaign-keyword-months?campaign_id=${encodeURIComponent(campaignId)}`)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then(d => (d.error ? setErr(d.error) : setData(d)))
-      .catch(e => setErr(String(e)));
-  }, []);
+      .then(json => setMonthKwData(prev => ({ ...prev, [campaignId]: json.months ?? {} })))
+      .catch(() => setMonthKwData(prev => ({ ...prev, [campaignId]: {} })))
+      .finally(() => setMonthKwLoading(prev => { const next = new Set(prev); next.delete(campaignId); return next; }));
+  }
+
+  function toggleMonth(key: string) {
+    setOpenMonths(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    // Re-fetch whenever the window changes. Keep the old data on screen until the new
+    // payload lands (no flip to the "Scanning…" splash) so switching windows feels instant.
+    let cancelled = false;
+    apiFetch(wfUrl)
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(d => { if (!cancelled) (d.error ? setErr(d.error) : setData(d)); })
+      .catch(e => { if (!cancelled) setErr(String(e)); });
+    return () => { cancelled = true; };
+  }, [wfUrl]);
+
+  useEffect(() => {
+    // Keyword measures are window-scoped too, so the panel has to follow the toggle.
+    // It's lazy-loaded, so only refetch when it's already on screen — otherwise
+    // ensureKeywords() will fetch it with the current window on first expand.
+    if (kwData === null) return;
+    fetchKeywords(win);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [win]);
 
   if (err) return <div className="p-6 text-sm text-red-400">Coverage scan failed: {err}</div>;
   if (!data) return <div className="p-6 text-sm text-muted">Scanning ad coverage…</div>;
@@ -976,10 +1171,17 @@ export function CoveragePage() {
     toggle: toggleKw,
     ensure: ensureKwMonths,
   };
+  const monthKwCtx: MonthKwCtx = {
+    data: monthKwData,
+    loading: (id: string) => monthKwLoading.has(id),
+    expanded: openMonths,
+    toggle: toggleMonth,
+    ensure: ensureMonthKw,
+  };
 
   return (
     <div className="p-4">
-      <div className="flex items-center justify-between gap-3 mb-4">
+      <div className="flex items-center justify-between gap-3 mb-2">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-bold text-heading">🗂️ Daily Workflow — Coverage</h1>
           <span className="text-[11px] text-muted">green = everything defined · click a strategy to see the mapping</span>
@@ -990,6 +1192,21 @@ export function CoveragePage() {
         />
       </div>
 
+      {/* Time window — governs every measure below (coverage counts, status, metrics). Default 7 days. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-4">
+        <span className="text-[11px] font-semibold text-muted">Time window</span>
+        <CovWindowToggle win={win} onPick={pickWin} />
+        <span className="text-[11px] text-faint">
+          {data.window_start && data.window_end
+            ? (data.window_start === data.window_end
+                ? data.window_start
+                : `${data.window_start} → ${data.window_end}`)
+            : ''}
+          {win === 'peak' && <span className="text-faint"> · gift-season days only</span>}
+          <span className="text-faint"> · all metrics below reflect this window</span>
+        </span>
+      </div>
+
       <div className="flex flex-col md:flex-row gap-3">
         <div className="flex w-full shrink-0 flex-col gap-2 md:w-[170px] md:min-w-[170px]">
           {familyEntries.map(entry => (
@@ -998,6 +1215,7 @@ export function CoveragePage() {
               entry={entry}
               selected={entry.key === 'ALL' ? selectedFamily === null : selectedFamily === entry.key}
               onSelect={() => setSelectedFamily(entry.key === 'ALL' ? null : entry.key)}
+              win={winShort(win)}
             />
           ))}
         </div>
@@ -1012,6 +1230,7 @@ export function CoveragePage() {
                 stat={data.strategy_stats?.[s]}
                 open={open === s}
                 onOpen={() => setOpen(o => (o === s ? null : s))}
+                win={winShort(win)}
               />
             ))}
           </div>
@@ -1092,6 +1311,7 @@ export function CoveragePage() {
                                   monthsLoading={monthsLoading}
                                   isOpen={openCampaigns.has(cmp.campaign_id)}
                                   onToggle={() => { toggleCampaign(cmp.campaign_id); ensureMonths(); }}
+                                  monthKwCtx={KEYWORD_STRATEGIES.has(c.strategy) ? monthKwCtx : undefined}
                                 />
                               ))
                             ) : (

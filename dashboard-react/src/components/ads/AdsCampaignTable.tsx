@@ -9,6 +9,7 @@ import {
 import { fM, fP, fR, fmt } from '../../utils';
 import { useFilters } from '../../hooks/useFilters';
 import { useAdsWindow } from './adsWindow';
+import { STRATEGY_META } from '../../strategies';
 import {
   deriveMetrics,
   groupByStrategy,
@@ -92,7 +93,7 @@ const sumBase = (rows: AdsRowBase[]): AdsRowBase => rows.reduce(
   { spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0, grossProfit: 0 },
 );
 
-export function AdsCampaignTable() {
+export function AdsCampaignTable({ strategyFilter }: { strategyFilter?: string | null } = {}) {
   const { start, end, incomplete } = useAdsWindow();
   const { filters } = useFilters();
   const family = filters.family;
@@ -135,7 +136,10 @@ export function AdsCampaignTable() {
     return () => { cancelled = true; };
   }, [start, end, incomplete, family, product]);
 
-  const groups = useMemo(() => groupByStrategy(campaigns, strategyMap), [campaigns, strategyMap]);
+  const groups = useMemo(() => {
+    const all = groupByStrategy(campaigns, strategyMap);
+    return strategyFilter ? all.filter(g => g.strategy === strategyFilter) : all;
+  }, [campaigns, strategyMap, strategyFilter]);
 
   const toggleCampaign = (id: string) => {
     const willExpand = !expandedCampaigns.has(id);
@@ -204,7 +208,7 @@ export function AdsCampaignTable() {
                     {/* Strategy header */}
                     <tr className={`bg-surface/60 border-b border-border ${gBase.spend > 0 && deriveMetrics(gBase).netRoas >= 1 ? 'border-l-2 border-l-emerald-500' : 'border-l-2 border-l-transparent'}`}>
                       <td className="px-3 py-1.5">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-blue-400/90">{group.strategy}</span>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-blue-400/90">{STRATEGY_META[group.strategy]?.label ?? group.strategy}</span>
                         <span className="text-faint text-[10px] ml-2">{group.campaigns.length} campaigns</span>
                         <span className={`ml-2 font-mono text-[11px] font-semibold ${gBase.spend <= 0 ? 'text-subtle' : deriveMetrics(gBase).netRoas >= 1 ? 'text-emerald-400' : 'text-red-400'}`} title="Ad net ROAS">{fR(deriveMetrics(gBase).netRoas)}</span>
                       </td>
