@@ -1,14 +1,15 @@
--- V_COVERAGE_CAMPAIGN_DETAIL — S2 VERIFY evidence: one row per (cell_key × campaign)
---
--- The per-campaign evidence behind each V_COVERAGE_CAMPAIGN cell. Reuses the SAME
--- assembly + cell_key logic as V_COVERAGE_CAMPAIGN but does NOT aggregate to the cell —
--- keeps one row per (cell, campaign) so the endpoint can show which campaigns exist,
--- their live state, 90-day metrics, and when each was last seen. Join back to the cell
--- via cell_key. Only campaigns whose strategy_category maps to one of the 6 strategies
--- (AUTO / INTENT / EXACT_BOOST / COMPETITOR / BRAND_DEFENSE / PRODUCT_DEFENSE) are kept;
--- OTHER / NULL (cell_key NULL) are dropped.
-CREATE OR REPLACE VIEW `onyga-482313.OI.V_COVERAGE_CAMPAIGN_DETAIL` AS
+-- FN_COVERAGE_CAMPAIGN_DETAIL(win_start, win_end, peak_only) — S2 VERIFY evidence, windowed.
+-- Table-function version of V_COVERAGE_CAMPAIGN_DETAIL: identical (cell_key × campaign) evidence + profit
+-- verdict, but the per-campaign metrics window is the caller-supplied [win_start, win_end] (peak_only=TRUE
+-- restricts to gift-season days). Gate = "served impressions in the window" (was: last-30d recency gate),
+-- so the evidence list matches FN_COVERAGE_CAMPAIGN cell-for-cell under the same window.
+CREATE OR REPLACE TABLE FUNCTION `onyga-482313.OI.FN_COVERAGE_CAMPAIGN_DETAIL`(win_start DATE, win_end DATE, peak_only BOOL) AS (
 WITH
+peak_dates AS (
+  SELECT DISTINCT d AS date
+  FROM `onyga-482313`.OI.DIM_US_HOLIDAYS h, UNNEST(GENERATE_DATE_ARRAY(h.boost_start, h.cooldown_end)) d
+  WHERE h.category = 'gift_season'
+),
 -- ── Own sellable products (target universe) + per-ASIN gross profit per unit ──
 prod AS (
   SELECT dp.asin, dp.parent_name, dp.product_short_name,
@@ -32,53 +33,57 @@ camp_state AS (
     ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS campaign_name
   FROM `onyga-482313`.OI.V_SRC_AmazonAds_campaign_history GROUP BY 1
 ),
--- ── Authoritative asin<->campaign link + 90-day metrics (per campaign) ──
--- AD-LEVEL RECENCY GATE (mirrors V_COVERAGE_CAMPAIGN): the (asin × campaign) pair is the
--- product-ad; keep it only if it served impressions in the last 30d, so a paused product-ad
--- inside a live campaign drops out of the evidence list instead of showing as an enabled campaign.
+-- ── Authoritative asin<->campaign link + WINDOW metrics (per campaign) ──
+-- Gate = served impressions in the window (a pair dark across the whole window drops out of the evidence).
 adv AS (
   SELECT asin, campaign_id, impressions, clicks, cost, units, last_seen
   FROM (
     SELECT advertised_asin AS asin, campaign_id,
       SUM(impressions) AS impressions, SUM(clicks) AS clicks,
       SUM(cost) AS cost, SUM(units_7d) AS units,
-      MAX(date) AS last_seen,
-      SUM(IF(date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY), impressions, 0)) AS impr_30d
+      MAX(date) AS last_seen
     FROM `onyga-482313`.OI.V_SRC_AmazonAds_advertised_product
-    WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+    WHERE date BETWEEN win_start AND win_end
+      AND (NOT peak_only OR date IN (SELECT date FROM peak_dates))
     GROUP BY 1, 2
   )
-  WHERE impr_30d > 0
+  WHERE impressions > 0
 ),
 -- ── Live rows: one per (own asin, campaign) with strategy_category + cell_key ──
-live_base AS (
-  SELECT
-    p.parent_name, p.gp_per_unit,
-    vcr.strategy_category,
-    adv.campaign_id, cst.state, cst.campaign_name,
-    adv.impressions, adv.clicks, adv.cost, adv.units, adv.last_seen,
-    CASE
-      WHEN vcr.strategy_category = 'AUTO' THEN CONCAT('AUTO|', p.asin)
-      WHEN vcr.strategy_category = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE|__STORE__'
-      WHEN vcr.strategy_category IN ('INTENT', 'BRAND_DEFENSE', 'COMPETITOR', 'EXACT_BOOST')
-        THEN CONCAT(vcr.strategy_category, '|', p.parent_name)
-      ELSE NULL  -- OTHER / unclassified: not a target cell, dropped below
-    END AS cell_key
+-- SP (advertised_product) + SB (FN_COVERAGE_SB) — see FN_COVERAGE_CAMPAIGN for why SB needs its
+-- own source: Sponsored Brands never appear in advertised_product, so they were invisible here too.
+src_rows AS (
+  SELECT p.parent_name, p.asin, p.gp_per_unit, adv.campaign_id,
+         adv.impressions, adv.clicks, adv.cost, adv.units, adv.last_seen
   FROM prod p
   JOIN adv ON adv.asin = p.asin
-  JOIN `onyga-482313`.OI.V_CAMPAIGN_ROLE vcr ON vcr.campaign_id = adv.campaign_id
-  LEFT JOIN camp_state cst ON cst.campaign_id = adv.campaign_id
+  UNION ALL
+  SELECT parent_name, asin, gp_per_unit, campaign_id, impressions, clicks, cost, units, last_seen
+  FROM `onyga-482313`.OI.FN_COVERAGE_SB(win_start, win_end, peak_only)
 ),
--- ── Per-strategy PROFITABLE_ROAS floor (dedup GLOBAL dupes with MAX) ──
+live_base AS (
+  SELECT
+    r.parent_name, r.gp_per_unit,
+    vcr.strategy_category,
+    r.campaign_id, cst.state, cst.campaign_name,
+    r.impressions, r.clicks, r.cost, r.units, r.last_seen,
+    CASE
+      WHEN vcr.strategy_category = 'AUTO' THEN CONCAT('AUTO|', r.asin)
+      WHEN vcr.strategy_category = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE|__STORE__'
+      WHEN vcr.strategy_category IN ('INTENT', 'BRAND_DEFENSE', 'COMPETITOR', 'EXACT_BOOST')
+        THEN CONCAT(vcr.strategy_category, '|', r.parent_name)
+      ELSE NULL
+    END AS cell_key
+  FROM src_rows r
+  JOIN `onyga-482313`.OI.V_CAMPAIGN_ROLE vcr ON vcr.campaign_id = r.campaign_id
+  LEFT JOIN camp_state cst ON cst.campaign_id = r.campaign_id
+),
 floors AS (
   SELECT strategy_id, MAX(CAST(threshold_value AS FLOAT64)) AS v
   FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
   WHERE threshold_key = 'PROFITABLE_ROAS'
   GROUP BY strategy_id
 )
--- ── One row per (cell_key × campaign): a campaign can serve several ASINs in the same
---    cell (e.g. an AUTO cell is one ASIN, but family cells span ASINs) — aggregate the
---    per-ASIN advertised rows back up to the (cell, campaign) pair. ──
 SELECT
   cell_key,
   ANY_VALUE(parent_name) AS parent_name,
@@ -93,7 +98,6 @@ SELECT
   ROUND(SUM(cost), 2) AS ad_spend,
   ROUND(SAFE_DIVIDE(SUM(cost), NULLIF(SUM(clicks), 0)), 2) AS cpc,
   ROUND(SAFE_DIVIDE(SUM(units * gp_per_unit), NULLIF(SUM(cost), 0)), 2) AS net_roas,
-  -- ── PROFIT VERDICT: ads-net-ROAS vs per-strategy floor (clicks<10 → unknown) ──
   CASE
     WHEN SUM(clicks) < 10 THEN 'unknown'
     WHEN ROUND(SAFE_DIVIDE(SUM(units * gp_per_unit), NULLIF(SUM(cost), 0)), 2) IS NULL THEN 'unknown'
@@ -109,3 +113,4 @@ FROM live_base
 LEFT JOIN floors fl ON fl.strategy_id = live_base.strategy_category
 WHERE cell_key IS NOT NULL
 GROUP BY cell_key, strategy_category, campaign_id
+);

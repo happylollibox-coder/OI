@@ -88,6 +88,16 @@ agg AS (
     SUM(IF(in_peak,clk,0)) pk_clk, SUM(IF(in_peak,cost,0)) pk_cost, SUM(IF(in_peak,units,0)) pk_units,
     SUM(IF(in_peak,gp,0)) pk_gp, SUM(IF(in_peak,gp_corr,0)) pk_gp_corr, SUM(IF(in_peak,sales,0)) pk_sales, SUM(IF(in_peak,impr,0)) pk_impr, SUM(IF(in_peak,tos_impr,0)) pk_tosimpr
   FROM w GROUP BY 1,2
+),
+-- 1-day launch cooldown: days since WE last uploaded a change for this target (FACT_PPC_CHANGE_LOG =
+-- authoritative upload time). Mirrors V_WEEKLY_RUN_KEYWORD.last_change. A NEW target changed less than a
+-- day ago is held (its suggestion suppressed) → at most one launch suggestion per target per day.
+last_change AS (
+  SELECT CAST(keyword_id AS STRING) AS keyword_id,
+    DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since_suggestion
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE keyword_id IS NOT NULL AND CAST(keyword_id AS STRING) != ''
+  GROUP BY 1
 )
 SELECT
   a.campaign_id, a.keyword_id, a.target_text, a.targeting_type,
@@ -96,9 +106,13 @@ SELECT
   tl.l.match_type, tl.l.ad_group_id, COALESCE(tl.l.keyword_bid, ag.default_bid) AS current_bid,   -- override wins, else ad-group default
   -- unified bid suggestion + why: launch controller for NEW, coacher for MATURE keywords.
   -- (mature auto groups aren't in the coacher yet → NULL action, measures only.)
-  IF(a.is_new, lp.suggested_bid, mk.recommended_bid) AS suggested_bid,
-  IF(a.is_new, lp.bid_action,    mk.action)          AS bid_action,
-  IF(a.is_new, NULL,             mk.reason)           AS bid_reason,
+  -- 1-day launch cooldown: a NEW target changed <1 day ago is held (suggestion suppressed) so it gets at
+  -- most one suggestion per day; mature keywords keep the coacher's own (3-day) cadence via mk.
+  IF(a.is_new, IF(COALESCE(lc.days_since_suggestion, 99) < 1, NULL,   lp.suggested_bid), mk.recommended_bid) AS suggested_bid,
+  IF(a.is_new, IF(COALESCE(lc.days_since_suggestion, 99) < 1, 'HOLD', lp.bid_action),    mk.action)          AS bid_action,
+  IF(a.is_new, IF(COALESCE(lc.days_since_suggestion, 99) < 1, 'changed today — held (one launch suggestion per day)', NULL), mk.reason) AS bid_reason,
+  -- days since we last uploaded a change for this target — drives the "Already applied" filter (applied = <1d, changed today)
+  IF(a.is_new, lc.days_since_suggestion, mk.days_since_suggestion) AS days_since_suggestion,
   -- row 2 — spend · CPC · clicks · CTR · TOS · units · net ROAS · ACoS (ACoS = spend ÷ sales, like Amazon)
   ROUND(a.r2_cost,2) r2_spend, ROUND(SAFE_DIVIDE(a.r2_cost,NULLIF(a.r2_clk,0)),2) r2_cpc, a.r2_clk,
   ROUND(100*SAFE_DIVIDE(a.r2_clk,NULLIF(a.r2_impr,0)),1) r2_ctr,
@@ -128,4 +142,6 @@ LEFT JOIN ag ON ag.ad_group_id = tl.l.ad_group_id
 LEFT JOIN `onyga-482313.OI.V_LAUNCH_PHASE1` lp
   ON lp.campaign_id = a.campaign_id AND lp.keyword_id = a.keyword_id
 LEFT JOIN `onyga-482313.OI.V_WEEKLY_RUN_KEYWORD` mk
-  ON mk.keyword_id = a.keyword_id;
+  ON mk.keyword_id = a.keyword_id
+LEFT JOIN last_change lc
+  ON lc.keyword_id = a.keyword_id;

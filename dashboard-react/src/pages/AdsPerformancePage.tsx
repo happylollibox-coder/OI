@@ -19,6 +19,7 @@ import { AdsKpiPanel } from '../components/ads/AdsKpiPanel';
 import { AdsCampaignTable } from '../components/ads/AdsCampaignTable';
 import { AdsWindowProvider } from '../components/ads/adsWindow';
 import { STRATEGY_META } from '../strategies';
+import { AGE_LABEL, AGE_ORDER } from './BudgetByAge';
 
 const HIERARCHY_OPTIONS = [
   { id: 'portfolio', label: 'Portfolio' },
@@ -46,6 +47,8 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
    * (and the drill-down); the KPI cards stay account-level — they are product-grain and carry
    * organic % / net profit, which do not split by an ad strategy. */
   const [strategyFilter, setStrategyFilter] = useState<string | null>(null);
+  /** Page-local campaign-age scope (null = all ages). Buckets are the Weekly Run ones. */
+  const [ageFilter, setAgeFilter] = useState<string | null>(null);
   const campSort = useSort('spend');
   const ADS_TERMS_COLUMNS: MeasureDef[] = [
     { id: 'search_term', label: 'Search Term', group: 'Info' },
@@ -200,26 +203,51 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
 
   const allRawRows = data.ads_7d || [];
 
-  /** campaign_id → resolved strategy_id, from the campaign-first strategy view. */
-  const strategyByCampaign = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const r of data.strategy_campaigns || []) m.set(r.campaign_id, r.strategy_id);
+  /** campaign_id → { strategy_id, age_bucket }, from the campaign-first strategy view. */
+  const campaignAttrs = useMemo(() => {
+    const m = new Map<string, { strategy: string; age: string }>();
+    for (const r of data.strategy_campaigns || []) {
+      m.set(r.campaign_id, { strategy: r.strategy_id, age: r.age_bucket || 'UNKNOWN' });
+    }
     return m;
   }, [data.strategy_campaigns]);
 
   /** Strategies actually present in this page's ads data, in canonical STRATEGY_META order, with
    * spend so the chips can show where the money is. Strategies with no campaigns here are omitted
-   * rather than rendered as dead chips. */
+   * rather than rendered as dead chips. Age options work the same way, in AGE_ORDER. */
   const strategyOptions = useMemo(() => {
     const spend = new Map<string, number>();
     for (const r of allRawRows) {
-      const sid = strategyByCampaign.get(r.campaign_id);
-      if (sid) spend.set(sid, (spend.get(sid) || 0) + (r.spend || 0));
+      const a = campaignAttrs.get(r.campaign_id);
+      if (a) spend.set(a.strategy, (spend.get(a.strategy) || 0) + (r.spend || 0));
     }
     return Object.keys(STRATEGY_META)
       .filter(id => spend.has(id))
       .map(id => ({ id, label: STRATEGY_META[id].label, color: STRATEGY_META[id].color, spend: spend.get(id) || 0 }));
-  }, [allRawRows, strategyByCampaign]);
+  }, [allRawRows, campaignAttrs]);
+
+  const ageOptions = useMemo(() => {
+    const spend = new Map<string, number>();
+    for (const r of allRawRows) {
+      const a = campaignAttrs.get(r.campaign_id);
+      if (a) spend.set(a.age, (spend.get(a.age) || 0) + (r.spend || 0));
+    }
+    return AGE_ORDER.filter(id => spend.has(id))
+      .map(id => ({ id, label: AGE_LABEL[id] ?? id, spend: spend.get(id) || 0 }));
+  }, [allRawRows, campaignAttrs]);
+
+  /** Campaigns passing the strategy + age scope, or null when neither is set. Shared by the
+   * ads_7d sections below and the Cube-backed drill-down so both scope identically. */
+  const scopedCampaignIds = useMemo(() => {
+    if (!strategyFilter && !ageFilter) return null;
+    const ids = new Set<string>();
+    for (const [cid, a] of campaignAttrs) {
+      if (strategyFilter && a.strategy !== strategyFilter) continue;
+      if (ageFilter && a.age !== ageFilter) continue;
+      ids.add(cid);
+    }
+    return ids;
+  }, [strategyFilter, ageFilter, campaignAttrs]);
 
   // When includeCurrentWeek is OFF and periodMode is 'weeks', exclude current week from raw rows
   const currentWeekStart = useMemo(() => getCurrentWeekStart(), []);
@@ -228,13 +256,11 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     if (!includeCurrentWeek && filters.periodMode === 'weeks') {
       rows = rows.filter(r => !r.week_start || r.week_start < currentWeekStart);
     }
-    // Strategy scope is applied here so every downstream section (trend chart, campaigns,
+    // Strategy/age scope is applied here so every downstream section (trend chart, campaigns,
     // search terms, bleeders, low-conversion) inherits it from one place.
-    if (strategyFilter) {
-      rows = rows.filter(r => strategyByCampaign.get(r.campaign_id) === strategyFilter);
-    }
+    if (scopedCampaignIds) rows = rows.filter(r => scopedCampaignIds.has(r.campaign_id));
     return rows;
-  }, [allRawRows, includeCurrentWeek, filters.periodMode, currentWeekStart, strategyFilter, strategyByCampaign]);
+  }, [allRawRows, includeCurrentWeek, filters.periodMode, currentWeekStart, scopedCampaignIds]);
   const hasWeekStart = rawRows.some(r => r.week_start);
 
   const latestWeek = useMemo(() => {
@@ -715,10 +741,11 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
         </button>
       </div>
 
-      {/* Strategy scope — narrows every campaign/search-term section below to one strategy. */}
+      {/* Strategy + age scope — narrow every campaign/search-term section below. They compose:
+          picking both shows only campaigns matching the strategy AND the age bucket. */}
       {strategyOptions.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 mb-5">
-          <span className="text-[10px] text-subtle mr-0.5">Strategy:</span>
+        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+          <span className="text-[10px] text-subtle mr-0.5 w-12 shrink-0">Strategy:</span>
           <button
             onClick={() => setStrategyFilter(null)}
             className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-all ${
@@ -748,13 +775,44 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
           })}
         </div>
       )}
+      {ageOptions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-5">
+          <span className="text-[10px] text-subtle mr-0.5 w-12 shrink-0">Age:</span>
+          <button
+            onClick={() => setAgeFilter(null)}
+            className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-all ${
+              ageFilter === null
+                ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                : 'text-faint border-border hover:border-border-strong hover:text-muted'
+            }`}
+          >
+            All
+          </button>
+          {ageOptions.map(o => {
+            const on = ageFilter === o.id;
+            return (
+              <button
+                key={o.id}
+                onClick={() => setAgeFilter(on ? null : o.id)}
+                title={`${o.label} — ${fM(o.spend)} in the loaded window${o.id === 'NEW' ? ' · driven by the launch controller' : ''}`}
+                className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-all ${
+                  on ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                     : 'text-faint border-border hover:border-border-strong hover:text-muted'
+                }`}
+              >
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* KPI cards + per-strategy campaign drill-down — Cube-backed, share one date window.
           The KPI cards deliberately ignore the strategy scope: they are product-grain and include
           organic % / net profit, which have no per-strategy meaning. */}
       <AdsWindowProvider>
         <AdsKpiPanel />
-        <AdsCampaignTable strategyFilter={strategyFilter} />
+        <AdsCampaignTable scopedCampaignIds={scopedCampaignIds} />
       </AdsWindowProvider>
 
 

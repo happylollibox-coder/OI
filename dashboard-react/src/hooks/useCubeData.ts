@@ -1602,6 +1602,7 @@ async function loadStrategyCampaignsFromCube(): Promise<StrategyCampaignRow[]> {
   const rows = await cubeLoad({
     dimensions: ['StrategyCampaign.campaignId','StrategyCampaign.campaignName','StrategyCampaign.campaignType',
       'StrategyCampaign.parentName','StrategyCampaign.strategyId','StrategyCampaign.strategySource',
+      'StrategyCampaign.ageBucket','StrategyCampaign.ageDays',
       'StrategyCampaign.isActive','StrategyCampaign.netRoas','StrategyCampaign.convRate','StrategyCampaign.cpc','StrategyCampaign.lastDate'],
     measures: ['StrategyCampaign.spend','StrategyCampaign.orders','StrategyCampaign.clicks','StrategyCampaign.impressions','StrategyCampaign.sales'],
     limit: 1000,
@@ -1613,6 +1614,8 @@ async function loadStrategyCampaignsFromCube(): Promise<StrategyCampaignRow[]> {
     parent_name: r['StrategyCampaign.parentName'] ? String(r['StrategyCampaign.parentName']) : null,
     strategy_id: String(r['StrategyCampaign.strategyId'] ?? 'UNCLASSIFIED'),
     strategy_source: String(r['StrategyCampaign.strategySource'] ?? ''),
+    age_bucket: String(r['StrategyCampaign.ageBucket'] ?? 'UNKNOWN'),
+    age_days: r['StrategyCampaign.ageDays'] != null ? Number(r['StrategyCampaign.ageDays']) : null,
     is_active: r['StrategyCampaign.isActive'] === true || r['StrategyCampaign.isActive'] === 'true',
     spend: Number(r['StrategyCampaign.spend'] ?? 0),
     orders: Number(r['StrategyCampaign.orders'] ?? 0),

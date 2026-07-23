@@ -4,13 +4,15 @@
 // suggestion (launch controller for new, coacher for mature keywords). Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md.
 cube(`RunTarget`, {
   sql: `SELECT campaign_id, keyword_id, target_text, targeting_type, is_auto_group, is_new, anchor_date,
-               match_type, ad_group_id, current_bid, suggested_bid, bid_action, bid_reason,
+               match_type, ad_group_id, current_bid, suggested_bid, bid_action, bid_reason, days_since_suggestion,
                r2_spend, r2_cpc, r2_clk, r2_ctr, r2_tos, r2_units, r2_roas, r2_roas_corr, r2_impr, r2_acos,
                r3_spend, r3_cpc, r3_clk, r3_ctr, r3_tos, r3_units, r3_roas, r3_roas_corr, r3_impr, r3_acos,
                pk_spend, pk_cpc, pk_clk, pk_ctr, pk_tos, pk_units, pk_roas, pk_roas_corr, pk_acos
         FROM \`onyga-482313.OI.T_RUN_TARGET\``,
 
-  refreshKey: { every: `30 minutes` },
+  // Refresh tied to the SP orchestration — RunTarget reads the materialized T_RUN_TARGET, which IS rebuilt by
+  // SP_REFRESH_CUBE_TABLES, so the stamp is the exact right signal: invalidate when the rebuild completes.
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
   measures: { count: { type: `count` } },
 
   dimensions: {
@@ -27,6 +29,7 @@ cube(`RunTarget`, {
     suggestedBid: { sql: `suggested_bid`, type: `number` },
     bidAction:    { sql: `bid_action`,    type: `string` },
     bidReason:    { sql: `bid_reason`,    type: `string` },
+    daysSinceSuggestion: { sql: `days_since_suggestion`, type: `number` },
     r2Spend: { sql: `r2_spend`, type: `number` }, r2Cpc: { sql: `r2_cpc`, type: `number` }, r2Clk: { sql: `r2_clk`, type: `number` },
     r2Ctr: { sql: `r2_ctr`, type: `number` }, r2Tos: { sql: `r2_tos`, type: `number` }, r2Units: { sql: `r2_units`, type: `number` },
     r2Roas: { sql: `r2_roas`, type: `number` }, r2RoasCorr: { sql: `r2_roas_corr`, type: `number` }, r2Impr: { sql: `r2_impr`, type: `number` }, r2Acos: { sql: `r2_acos`, type: `number` },
@@ -52,3 +55,5 @@ cube(`RunTarget`, {
 // cache-bust v11: true impressions for CTR/TOS (targeting report)
 
 // cache-bust v12: FACT-impression fallback when td missing (SB)
+
+// cache-bust 2026-07-21: bleeder recency gate (BLEED_STALE) — hold 0-sale targets with <4 last-day clicks

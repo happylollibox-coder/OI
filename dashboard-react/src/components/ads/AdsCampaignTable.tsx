@@ -93,7 +93,9 @@ const sumBase = (rows: AdsRowBase[]): AdsRowBase => rows.reduce(
   { spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0, grossProfit: 0 },
 );
 
-export function AdsCampaignTable({ strategyFilter }: { strategyFilter?: string | null } = {}) {
+/** `scopedCampaignIds` is the page's strategy/age scope: when non-null, only these campaigns are
+ * shown (and strategy groups left empty by it disappear). Null means no scope. */
+export function AdsCampaignTable({ scopedCampaignIds }: { scopedCampaignIds?: Set<string> | null } = {}) {
   const { start, end, incomplete } = useAdsWindow();
   const { filters } = useFilters();
   const family = filters.family;
@@ -137,9 +139,9 @@ export function AdsCampaignTable({ strategyFilter }: { strategyFilter?: string |
   }, [start, end, incomplete, family, product]);
 
   const groups = useMemo(() => {
-    const all = groupByStrategy(campaigns, strategyMap);
-    return strategyFilter ? all.filter(g => g.strategy === strategyFilter) : all;
-  }, [campaigns, strategyMap, strategyFilter]);
+    const scoped = scopedCampaignIds ? campaigns.filter(c => scopedCampaignIds.has(c.campaignId)) : campaigns;
+    return groupByStrategy(scoped, strategyMap);
+  }, [campaigns, strategyMap, scopedCampaignIds]);
 
   const toggleCampaign = (id: string) => {
     const willExpand = !expandedCampaigns.has(id);

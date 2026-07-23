@@ -6,7 +6,7 @@ cube(`CoachRunKeyword`, {
           w1_clk_day, w1_cpc, w1_roas, w1_units, w4_clk_day, w4_cpc, w4_roas, w4_units, pk_clk_day, pk_cpc, pk_roas, pk_units,
           action, current_bid, recommended_bid, bid_change_pct, reason, is_action, priority_score
         FROM \`onyga-482313.OI.T_WEEKLY_RUN_KEYWORD\``,
-  refreshKey: { every: `30 minutes` },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
   measures: { count: { type: `count` } },
   dimensions: {
     id: { sql: `keyword_id`, type: `string`, primaryKey: true },

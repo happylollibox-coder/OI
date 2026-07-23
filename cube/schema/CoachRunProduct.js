@@ -3,7 +3,7 @@ cube(`CoachRunProduct`, {
   sql: `SELECT product, campaigns, recent_daily_spend, ads_net_day, ads_net_roas,
           net_profit_day, current_daily_budget, suggested_daily_budget
         FROM \`onyga-482313.OI.T_WEEKLY_RUN_PRODUCT\``,
-  refreshKey: { every: `30 minutes` },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
   measures: { count: { type: `count` } },
   dimensions: {
     id: { sql: `product`, type: `string`, primaryKey: true },

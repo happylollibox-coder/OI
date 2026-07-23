@@ -10,6 +10,9 @@
 cube(`BrandStrengthWeekly`, {
   sql_table: `\`onyga-482313.OI.T_BRAND_STRENGTH_WEEKLY\``,
 
+  // Refresh tied to the SP orchestration (one trigger) — cache invalidates when SP_REFRESH_CUBE_TABLES completes.
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
+
   dimensions: {
     id: {
       sql: `CONCAT(CAST(week_start_date AS STRING), '|', COALESCE(brand_keyword, ''), '|', COALESCE(parent_name, ''))`,

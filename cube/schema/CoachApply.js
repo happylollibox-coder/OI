@@ -7,7 +7,7 @@ cube(`CoachApply`, {
           source_action, reason, priority_score
         FROM \`onyga-482313.OI.T_COACH_APPLY\``,
 
-  refreshKey: { every: `30 minutes` },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
 
   measures: {
     count: { type: `count` },

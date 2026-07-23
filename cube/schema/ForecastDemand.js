@@ -104,3 +104,5 @@ cube(`ForecastDemand`, {
     },
   },
 });
+
+// cache-bust 2026-07-21: FACT_FORECAST_DEMAND reloaded after the family-split fix (Purple 2356→1666 etc.)

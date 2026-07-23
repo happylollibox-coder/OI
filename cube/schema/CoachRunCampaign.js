@@ -7,7 +7,7 @@ cube(`CoachRunCampaign`, {
           util_pct, effective_roas, is_new_campaign, coach_mode, strategy_type, days_since_suggestion,
           needs_strategy, current_strategy_id, suggested_family, suggested_strategy, strategy_role, strategy_category, no_coach_decision, age_bucket
         FROM \`onyga-482313.OI.T_WEEKLY_RUN_CAMPAIGN\``,
-  refreshKey: { every: `30 minutes` },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
   measures: { count: { type: `count` } },
   dimensions: {
     id: { sql: `campaign_id`, type: `string`, primaryKey: true },

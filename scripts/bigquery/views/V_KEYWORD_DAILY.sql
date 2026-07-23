@@ -26,6 +26,7 @@ SELECT
   r.impressions, r.clicks, r.cost, r.cost_per_click,
   r.click_through_rate                AS ctr,
   r.top_of_search_impression_share    AS tos_share,
+  r.units_sold_clicks_7_d             AS units_7d,
   r.units_sold_clicks_14_d            AS units_14d,
   r.sales_14_d                        AS sales_14d,
   r.ad_keyword_status,

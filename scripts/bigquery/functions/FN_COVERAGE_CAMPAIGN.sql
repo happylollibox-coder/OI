@@ -1,20 +1,17 @@
--- V_COVERAGE_CAMPAIGN — coverage-cockpit reconciler (sub-project: owned-negatives / coverage, Stage 1)
---
--- Per (target cell) reconciles what SHOULD exist vs what DOES exist (live enabled campaigns),
--- classified through the 6-strategy lens of V_CAMPAIGN_ROLE.strategy_category (NOT `role`).
---
--- Grain per strategy (there is NO campaign->intent linkage in the live account):
---   AUTO            -> grain='ASIN'   one row per own sellable ASIN
---   INTENT          -> grain='FAMILY' one row per own family   (expected)
---   BRAND_DEFENSE   -> grain='FAMILY' one row per own family   (expected)
---   COMPETITOR      -> grain='FAMILY' one row per own family   (NOT expected -> 'none' when absent)
---   EXACT_BOOST     -> grain='FAMILY' one row per own family   (NOT expected -> 'none' when absent)
---   PRODUCT_DEFENSE -> grain='STORE'  exactly one row (parent_name NULL)
---
--- Assembly reuses ads_coverage_scan() (data-entry-app/app.py ~8974): own-product universe,
--- gp_per_unit, campaign state, advertised_product asin<->campaign link, 90-day metric window.
-CREATE OR REPLACE VIEW `onyga-482313.OI.V_COVERAGE_CAMPAIGN` AS
+-- FN_COVERAGE_CAMPAIGN(win_start, win_end, peak_only) — window-parameterized coverage reconciler.
+-- Table-function version of the former V_COVERAGE_CAMPAIGN: identical cell/status/reason logic, but the
+-- (asin×campaign) metric window is now the caller-supplied [win_start, win_end] (peak_only=TRUE additionally
+-- restricts to gift-season days). The whole view reflects the window: coverage counts, status AND measures.
+--   gate = "served impressions in the window" (a pair with 0 window impressions isn't current coverage FOR that window).
+-- Callers: /api/coverage maps its 7 toggle windows (today/yesterday/7d/30d/90d/12mo/peak) to (start,end,peak_only).
+CREATE OR REPLACE TABLE FUNCTION `onyga-482313.OI.FN_COVERAGE_CAMPAIGN`(win_start DATE, win_end DATE, peak_only BOOL) AS (
 WITH
+-- gift-season days (for peak_only); harmless when peak_only=FALSE.
+peak_dates AS (
+  SELECT DISTINCT d AS date
+  FROM `onyga-482313`.OI.DIM_US_HOLIDAYS h, UNNEST(GENERATE_DATE_ARRAY(h.boost_start, h.cooldown_end)) d
+  WHERE h.category = 'gift_season'
+),
 -- ── Own sellable products (target universe) + per-ASIN gross profit per unit ──
 prod AS (
   SELECT dp.asin, dp.parent_name, dp.product_short_name,
@@ -41,44 +38,56 @@ camp_state AS (
     ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS campaign_name
   FROM `onyga-482313`.OI.V_SRC_AmazonAds_campaign_history GROUP BY 1
 ),
--- ── Authoritative asin<->campaign link + 90-day metrics ──
--- The (asin × campaign) pair IS the product-ad. AD-LEVEL RECENCY GATE: keep a pair only
--- if it served impressions in the last 30d, so a PAUSED product-ad inside a live campaign
--- (e.g. the Pink ad in ME-SP/AUTO (Mint), dark since 2026-05-27, campaign still ENABLED)
--- stops counting as current coverage for that ASIN — it was inflating n_enabled ("2 competing").
--- Amazon has no ad-level state in this feed; 30d-impressions>0 is the "still serving" signal,
--- and matches the 30d console view. Metrics stay 90d for surviving (active) pairs.
+-- ── Authoritative asin<->campaign link + WINDOW metrics ──
+-- The (asin × campaign) pair IS the product-ad. Metrics are aggregated over the selected window
+-- [win_start, win_end] (peak_only additionally restricts to gift-season days). The gate keeps a pair only
+-- if it served impressions IN the window, so a pair dark across the whole window isn't counted as coverage for it.
 adv AS (
   SELECT asin, campaign_id, impressions, clicks, cost, units
   FROM (
     SELECT advertised_asin AS asin, campaign_id,
       SUM(impressions) AS impressions, SUM(clicks) AS clicks,
-      SUM(cost) AS cost, SUM(units_7d) AS units,
-      SUM(IF(date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY), impressions, 0)) AS impr_30d
+      SUM(cost) AS cost, SUM(units_7d) AS units
     FROM `onyga-482313`.OI.V_SRC_AmazonAds_advertised_product
-    WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+    WHERE date BETWEEN win_start AND win_end
+      AND (NOT peak_only OR date IN (SELECT date FROM peak_dates))
     GROUP BY 1, 2
   )
-  WHERE impr_30d > 0
+  WHERE impressions > 0
+),
+-- ── Metric rows, one per (own asin, campaign), from BOTH ad products ──
+--   SP: the advertised_product feed (asin<->campaign is native there).
+--   SB: FN_COVERAGE_SB — Sponsored Brands don't appear in advertised_product at all, so before
+--       this union the whole SB portfolio was invisible to every cell/count/P&L (Ori 2026-07-23).
+--       It attributes units by PURCHASED asin and splits campaign cost pro-rata by units.
+src_rows AS (
+  SELECT p.parent_name, p.asin, p.gp_per_unit, adv.campaign_id,
+         adv.impressions, adv.clicks, adv.cost, adv.units
+  FROM prod p
+  JOIN adv ON adv.asin = p.asin
+  UNION ALL
+  SELECT parent_name, asin, gp_per_unit, campaign_id, impressions, clicks, cost, units
+  FROM `onyga-482313`.OI.FN_COVERAGE_SB(win_start, win_end, peak_only)
 ),
 -- ── Live rows: one per (own asin, campaign) with strategy_category + cell_key ──
 live_base AS (
   SELECT
-    p.parent_name, p.asin, p.gp_per_unit,
+    r.parent_name, r.asin, r.gp_per_unit,
     vcr.strategy_category,
-    adv.campaign_id, cst.state, cst.campaign_name,
-    adv.impressions, adv.clicks, adv.cost, adv.units,
+    r.campaign_id, cst.state, cst.campaign_name,
+    r.impressions, r.clicks, r.cost, r.units,
     CASE
-      WHEN vcr.strategy_category = 'AUTO' THEN CONCAT('AUTO|', p.asin)
+      -- AUTO is ASIN-grain; SB no-conversion rows carry a NULL asin, so CONCAT yields NULL and
+      -- they are dropped rather than inventing a bogus cell (SB is never AUTO in practice).
+      WHEN vcr.strategy_category = 'AUTO' THEN CONCAT('AUTO|', r.asin)
       WHEN vcr.strategy_category = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE|__STORE__'
       WHEN vcr.strategy_category IN ('INTENT', 'BRAND_DEFENSE', 'COMPETITOR', 'EXACT_BOOST')
-        THEN CONCAT(vcr.strategy_category, '|', p.parent_name)
-      ELSE NULL  -- OTHER / unclassified: not a target cell, dropped below
+        THEN CONCAT(vcr.strategy_category, '|', r.parent_name)
+      ELSE NULL
     END AS cell_key
-  FROM prod p
-  JOIN adv ON adv.asin = p.asin
-  JOIN `onyga-482313`.OI.V_CAMPAIGN_ROLE vcr ON vcr.campaign_id = adv.campaign_id
-  LEFT JOIN camp_state cst ON cst.campaign_id = adv.campaign_id
+  FROM src_rows r
+  JOIN `onyga-482313`.OI.V_CAMPAIGN_ROLE vcr ON vcr.campaign_id = r.campaign_id
+  LEFT JOIN camp_state cst ON cst.campaign_id = r.campaign_id
 ),
 live_agg AS (
   SELECT cell_key,
@@ -96,12 +105,10 @@ live_agg AS (
 ),
 -- ── Target universe: every cell that COULD/SHOULD exist, at its grain ──
 target AS (
-  -- AUTO: one row per own sellable ASIN
   SELECT 'ASIN' AS grain, parent_name, asin, product_short_name,
     'AUTO' AS strategy, TRUE AS expected, CONCAT('AUTO|', asin) AS cell_key
   FROM prod
   UNION ALL
-  -- Family strategies (expected: INTENT, BRAND_DEFENSE; not-expected: COMPETITOR, EXACT_BOOST)
   SELECT 'FAMILY' AS grain, f.parent_name, CAST(NULL AS STRING) AS asin,
     CAST(NULL AS STRING) AS product_short_name,
     s.strategy, s.expected, CONCAT(s.strategy, '|', f.parent_name) AS cell_key
@@ -113,19 +120,16 @@ target AS (
     STRUCT('EXACT_BOOST' AS strategy, FALSE AS expected)
   ]) s
   UNION ALL
-  -- PRODUCT_DEFENSE: single store-wide row
   SELECT 'STORE' AS grain, CAST(NULL AS STRING) AS parent_name, CAST(NULL AS STRING) AS asin,
     CAST(NULL AS STRING) AS product_short_name,
     'PRODUCT_DEFENSE' AS strategy, TRUE AS expected, 'PRODUCT_DEFENSE|__STORE__' AS cell_key
 ),
--- ── Manual suppression overrides (deduped to one row per cell) ──
 suppress AS (
   SELECT parent_name, asin, strategy, TRUE AS suppressed
   FROM `onyga-482313`.OI.DE_COVERAGE_EXPECTATION
   WHERE is_active
   GROUP BY parent_name, asin, strategy
 ),
--- ── Per-strategy PROFITABLE_ROAS floor (dedup GLOBAL dupes with MAX) ──
 floors AS (
   SELECT strategy_id, MAX(CAST(threshold_value AS FLOAT64)) AS v
   FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
@@ -148,7 +152,6 @@ SELECT
   COALESCE(l.cost, 0) AS cost,
   ROUND(SAFE_DIVIDE(l.cost, NULLIF(l.clicks, 0)), 2) AS cpc,
   l.net_roas,
-  -- ── PROFIT VERDICT: ads-net-ROAS vs per-strategy floor (clicks<10 → unknown) ──
   CASE
     WHEN COALESCE(l.clicks, 0) < 10 THEN 'unknown'
     WHEN l.net_roas IS NULL THEN 'unknown'
@@ -172,23 +175,20 @@ SELECT
            WHEN l.n_enabled > 1 THEN 'redundant'
            ELSE 'ok' END
   END AS status,
-  -- ── S2 VERIFY: plain-English reason per cell (label = product / family / Store) ──
   CASE
     WHEN COALESCE(sp.suppressed, FALSE)
       THEN CONCAT('Marked not-expected for ', COALESCE(t.product_short_name, t.parent_name, 'Store'), '.')
-    -- 'missing' = expected AND no enabled campaign
     WHEN t.expected AND COALESCE(l.n_enabled, 0) = 0 AND COALESCE(l.n_any, 0) > 0
       THEN CONCAT('No enabled ', t.strategy, ' campaign for ', COALESCE(t.product_short_name, t.parent_name, 'Store'),
-                  ' — ', CAST(COALESCE(l.n_any, 0) AS STRING), ' paused/archived in history (was running, now off).')
+                  ' — ', CAST(COALESCE(l.n_any, 0) AS STRING), ' paused/archived in window.')
     WHEN t.expected AND COALESCE(l.n_enabled, 0) = 0 AND COALESCE(l.n_any, 0) = 0
-      THEN CONCAT('No ', t.strategy, ' campaign ever built for ', COALESCE(t.product_short_name, t.parent_name, 'Store'), '.')
+      THEN CONCAT('No ', t.strategy, ' campaign served in-window for ', COALESCE(t.product_short_name, t.parent_name, 'Store'), '.')
     WHEN COALESCE(l.n_enabled, 0) > 1
       THEN CONCAT(CAST(l.n_enabled AS STRING), ' enabled ', t.strategy, ' campaigns competing for ',
                   COALESCE(t.product_short_name, t.parent_name, 'Store'), ' — consider consolidating.')
     WHEN COALESCE(l.n_enabled, 0) = 1
       THEN CONCAT('1 enabled ', t.strategy, ' campaign for ', COALESCE(t.product_short_name, t.parent_name, 'Store'),
-                  IFNULL(CONCAT(', ', FORMAT('%.2f', l.net_roas), 'x net ROAS (90d).'), '.'))
-    -- 'none' = not-expected AND no enabled campaign
+                  IFNULL(CONCAT(', ', FORMAT('%.2f', l.net_roas), 'x net ROAS.'), '.'))
     ELSE CONCAT('No ', t.strategy, ' campaign for ', COALESCE(t.product_short_name, t.parent_name, 'Store'),
                 ' — optional, not flagged as missing.')
   END AS reason
@@ -199,3 +199,4 @@ LEFT JOIN suppress sp
   ON sp.parent_name IS NOT DISTINCT FROM t.parent_name
  AND sp.asin IS NOT DISTINCT FROM t.asin
  AND sp.strategy = t.strategy
+);

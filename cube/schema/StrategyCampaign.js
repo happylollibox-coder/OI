@@ -18,6 +18,9 @@ cube(`StrategyCampaign`, {
     parentName: { sql: `parent_name`, type: `string` },
     strategyId: { sql: `strategy_id`, type: `string` },
     strategySource: { sql: `strategy_source`, type: `string` },
+    // Age buckets match V_BUDGET_STEP1_CAMPAIGN exactly (NEW <=20d / 1-3MO / 4-9MO / 10MO+ / UNKNOWN).
+    ageDays: { sql: `age_days`, type: `number` },
+    ageBucket: { sql: `age_bucket`, type: `string` },
     isActive: { sql: `is_active`, type: `boolean` },
     netRoas: { sql: `net_roas`, type: `number` },
     convRate: { sql: `conv_rate`, type: `number` },

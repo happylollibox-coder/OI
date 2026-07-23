@@ -3,7 +3,7 @@
 cube(`CampaignLaunchPerf`, {
   sql: `SELECT * FROM \`onyga-482313.OI.T_CAMPAIGN_LAUNCH_PERF\``,
 
-  refreshKey: { every: '1 hour' },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
 
   measures: {
     count: { type: `count`, description: `Number of campaigns` },

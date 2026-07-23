@@ -108,10 +108,36 @@ cube(`UnifiedPerformance`, {
       type: `number`,
       description: `Net profit = SUM(gross_margin) - SUM(ad_cost)`,
     },
+    // ⚠️ NOT an advertising return: the numerator is TOTAL gross margin (organic included), the denominator is
+    // ad spend only. On an organic-heavy product this flatters ads. Surfaced as "Margin per Ad $".
+    // For a true ad return use adsNetRoas below (ad-attributed, direct only — matches the coacher).
     netRoas: {
       sql: `CASE WHEN ${adCost} > 0 THEN ${grossMargin} / ${adCost} ELSE 0 END`,
       type: `number`,
-      description: `Net ROAS = SUM(gross_margin) / SUM(ad_cost)`,
+      description: `Margin per Ad $ = SUM(gross_margin) / SUM(ad_cost). TOTAL margin (organic included) per ad dollar — NOT an ad return; see adsNetRoas.`,
+    },
+    adsGrossProfit: {
+      sql: `ads_gross_profit`,
+      type: `sum`,
+      format: `currency`,
+      description: `Ad-attributed gross profit (direct, no halo) — from FACT_AMAZON_ADS.GROSS_PROFIT`,
+    },
+    adsSales: {
+      sql: `ads_sales`,
+      type: `sum`,
+      format: `currency`,
+      description: `Ad-attributed sales (direct, no halo)`,
+    },
+    adsUnits: {
+      sql: `ads_units`,
+      type: `sum`,
+      description: `Ad-attributed units (direct, no halo)`,
+    },
+    // TRUE advertising return — same definition as the coacher / launch controller (1.0 = breakeven).
+    adsNetRoas: {
+      sql: `CASE WHEN ${adCost} > 0 THEN ${adsGrossProfit} / ${adCost} ELSE 0 END`,
+      type: `number`,
+      description: `Ads Net ROAS = SUM(ads_gross_profit) / SUM(ad_cost). Ad-attributed only (no halo); 1.0 = breakeven.`,
     },
     organicPct: {
       sql: `CASE WHEN ${units} > 0 THEN GREATEST(${organicUnits}, 0) * 100.0 / ${units} ELSE 0 END`,

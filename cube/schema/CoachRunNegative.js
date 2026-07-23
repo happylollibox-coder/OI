@@ -5,7 +5,7 @@ cube(`CoachRunNegative`, {
           match_type, search_term, reason, priority_score, peak_clicks, peak_orders, peak_net, peak_converts,
           hero_asin, hero_product_name, hero_cvr, wrong_asin
         FROM \`onyga-482313.OI.T_WEEKLY_RUN_NEGATIVE\``,
-  refreshKey: { every: `30 minutes` },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
   measures: { count: { type: `count` } },
   dimensions: {
     id: { sql: `id`, type: `string`, primaryKey: true },

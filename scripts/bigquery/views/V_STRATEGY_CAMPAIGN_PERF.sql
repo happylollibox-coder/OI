@@ -21,7 +21,7 @@ WITH perf AS (
 )
 SELECT
   r.campaign_id, r.campaign_name, r.campaign_type, r.parent_name,
-  r.strategy_id, r.strategy_source,
+  r.strategy_id, r.strategy_source, r.age_days, r.age_bucket,
   COALESCE(p.spend, 0) AS spend,
   COALESCE(p.orders, 0) AS orders,
   COALESCE(p.clicks, 0) AS clicks,

@@ -109,7 +109,17 @@
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313`.OI.V_INTENT_KEYWORDS AS
 
-WITH matched AS (
+WITH
+-- Own-brand terms to drop before intents are built (see BRAND EXCLUSION note in `matched`).
+-- Built as an INNER JOIN on a STRPOS predicate, then anti-joined by EQUALITY in `matched`:
+-- a correlated NOT EXISTS on STRPOS is rejected by BigQuery ("ANTISEMI JOIN needs an equality").
+brand_terms AS (
+  SELECT DISTINCT LOWER(r.query_text) AS query_text
+  FROM `onyga-482313.OI.FACT_RESEARCH_RANKED` r
+  JOIN `onyga-482313.OI.DIM_BRAND_PHRASES` bp
+    ON STRPOS(LOWER(r.query_text), LOWER(bp.phrase)) > 0
+),
+matched AS (
   SELECT
     r.parent_name,
     t.intent_key,
@@ -143,6 +153,7 @@ WITH matched AS (
    AND (t.match_age_group    IS NULL OR r.age_group    = t.match_age_group)
    AND (t.match_keyword_regex IS NULL
         OR REGEXP_CONTAINS(LOWER(r.query_text), t.match_keyword_regex))
+  LEFT JOIN brand_terms bt ON bt.query_text = LOWER(r.query_text)
   WHERE r.query_text != 'OTHER'
     -- real demand only: rank on a term with no market purchases is inflated by seg_fit alone
     AND COALESCE(r.weekly_market_purchases, 0) > 0
@@ -152,6 +163,15 @@ WITH matched AS (
     -- "easter candy" (fit 0, 143K demand -> effective_rank 50) into a journal-kit campaign.
     -- Removes 136/792 (17%) of keyword slots; starves no GENERIC intent.
     AND COALESCE(r.overall_fit, 0) > 0
+    -- BRAND EXCLUSION (Ori 2026-07-21): own-brand searches belong to Brand Defense, NOT to
+    -- generic/competitive intent campaigns — an intent is Exact/Broad/Phrase/Competitor SP, and
+    -- bidding on your own name there just pays for organic traffic + fights Defense. Brand terms
+    -- were leaking into themes (Gift Sets carried "purple lollibox", "white lollibox", "happy lolli
+    -- care package 12 year old girl"). `brand_terms` (above) = every research term containing a
+    -- DIM_BRAND_PHRASES phrase; those phrases all carry a brand root (lolli/lollime/lollibox/
+    -- happy lolli, per SP_ACCUMULATE_BRAND_PHRASES) so the match is unambiguously own-brand and
+    -- can't swallow a generic term. Anti-join is by equality (BigQuery rejects a STRPOS NOT EXISTS).
+    AND bt.query_text IS NULL
 ),
 
 -- One term -> one intent: keep only the most specific matching intent per (family, term).

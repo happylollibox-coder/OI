@@ -15,7 +15,9 @@
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_SB_LAUNCH_TARGET` AS
 WITH k AS (
   SELECT 0.10 AS dark_target, 0.60 AS spend_target, 1.5 AS strong_roas, 1.2 AS weak_roas, 0.9 AS cut_roas,
-         0.80 AS bid_cut, 1.30 AS bid_raise_strong, 1.15 AS bid_raise_weak, 1.10 AS bid_starve, 0.20 AS bid_min, 1.50 AS bid_max
+         0.80 AS bid_cut, 1.30 AS bid_raise_strong, 1.15 AS bid_raise_weak, 1.10 AS bid_starve, 1.05 AS bid_probe, 0.20 AS bid_min, 1.50 AS bid_max,
+         -- money-bleeder ladder (0 conversions, scaled by clicks) — same as V_LAUNCH_PHASE1
+         4 AS bleed_watch_clk, 8 AS bleed_trim_clk, 15 AS bleed_cut_clk, 0.80 AS bid_bleed_trim, 0.60 AS bid_bleed_cut
 ),
 wm AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
        FROM `fivetran-hl.amazon_ads.sb_search_term_report`),
@@ -107,7 +109,7 @@ tsig AS (
   SELECT tgt.target_id,
     SUM(IF(d.date=(SELECT d FROM wm), d.clk,0)) r2_clk, SUM(IF(d.date=(SELECT d FROM wm), d.cost,0)) r2_cost, SUM(IF(d.date=(SELECT d FROM wm), d.sales,0)) r2_sales,
     SUM(IF(d.date<(SELECT d FROM wm), d.clk,0)) r3_clk, SUM(IF(d.date<(SELECT d FROM wm), d.cost,0)) r3_cost, SUM(IF(d.date<(SELECT d FROM wm), d.sales,0)) r3_sales,
-    SUM(d.clk) clk3,
+    SUM(d.clk) clk3, COALESCE(SUM(d.sales),0) sales3,
     MAX(IF(d.date=(SELECT d FROM wm), SAFE_DIVIDE(d.sales*(1-COALESCE(pr.cost_ratio,0)), NULLIF(d.cost,0)), NULL)) AS k_roas1,
     COALESCE(
       AVG(IF(d.clk>=3 AND d.date<(SELECT d FROM wm), SAFE_DIVIDE(d.sales*(1-COALESCE(pr.cost_ratio,0)), NULLIF(d.cost,0)), NULL)),
@@ -121,7 +123,7 @@ base AS (
   SELECT tgt.cid AS campaign_id, tgt.target_id, tgt.ad_group_id, tgt.target_text, tgt.target_type, tgt.match_type, tgt.bid,
     COALESCE(s.r2_clk,0) r2_clk, COALESCE(s.r2_cost,0) r2_cost, COALESCE(s.r2_sales,0) r2_sales,
     COALESCE(s.r3_clk,0) r3_clk, COALESCE(s.r3_cost,0) r3_cost, COALESCE(s.r3_sales,0) r3_sales,
-    COALESCE(s.clk3,0) clk3, s.k_roas1, s.k_roas_prev2, pr.cost_ratio,
+    COALESCE(s.clk3,0) clk3, COALESCE(s.sales3,0) sales3, s.k_roas1, s.k_roas_prev2, pr.cost_ratio,
     COALESCE(d.pd,0) pd, cs.spend_today, cb.budget, cs.c_roas1, cs.c_roas_prev2,
     (COALESCE(d.pd,0) <= x.dark_target AND SAFE_DIVIDE(cs.spend_today, cb.budget) <= x.spend_target) AS starving
   FROM tgt
@@ -131,6 +133,14 @@ base AS (
   LEFT JOIN dark d  ON d.cid = tgt.cid
   LEFT JOIN csig cs ON cs.cid = tgt.cid
   LEFT JOIN bud cb  ON cb.cid = tgt.cid
+),
+-- 1-day launch cooldown: hold an SB target's suggestion for a day after we upload a change (one per day).
+last_change AS (
+  SELECT CAST(keyword_id AS STRING) AS target_id,
+    DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since_suggestion
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE keyword_id IS NOT NULL AND CAST(keyword_id AS STRING) != ''
+  GROUP BY 1
 )
 SELECT
   b.campaign_id, b.target_id, b.ad_group_id, b.target_text, b.target_type, b.match_type, b.bid,
@@ -138,28 +148,37 @@ SELECT
   ROUND(SAFE_DIVIDE(b.r2_sales*(1-COALESCE(b.cost_ratio,0)), NULLIF(b.r2_cost,0)),2) r2_roas,
   b.r3_clk, ROUND(b.r3_cost,2) r3_spend, ROUND(SAFE_DIVIDE(b.r3_cost,NULLIF(b.r3_clk,0)),2) r3_cpc, ROUND(b.r3_sales,2) r3_sales,
   ROUND(SAFE_DIVIDE(b.r3_sales*(1-COALESCE(b.cost_ratio,0)), NULLIF(b.r3_cost,0)),2) r3_roas,
-  -- BID SUGGESTION — identical CASE + order to V_LAUNCH_PHASE1
+  -- BID SUGGESTION — identical launch-window model to V_LAUNCH_PHASE1 (Ori, 2026-07-21): FIND THE RIGHT BID, no
+  -- loss-driven cuts during the 20-day launch. < 4 clicks → PROBE +5%; selling → RAISE; >=4 clicks & not selling →
+  -- HOLD. Bleed is stopped by negating non-converting SEARCH TERMS (>=15 clk/0 orders), not by cutting the bid.
+  -- DARK BRAKE retained: capping control (campaign hitting its budget cap), not a loss cut.
   CASE
+    WHEN COALESCE(lc.days_since_suggestion, 99) < 1 THEN NULL   -- 1-day cooldown: changed today → suppress
     WHEN b.bid IS NULL THEN NULL
-    WHEN b.starving THEN ROUND(LEAST(b.bid*x.bid_starve, x.bid_max),2)
-    WHEN b.clk3 < 4 THEN ROUND(LEAST(b.bid*x.bid_raise_weak, x.bid_max),2)
-    WHEN b.k_roas_prev2 < x.cut_roas AND b.k_roas1 < x.cut_roas THEN ROUND(GREATEST(b.bid*x.bid_cut, x.bid_min),2)
+    -- PROBE: < 4 clicks → raise SLOWLY (+5%) to buy traffic and reach a verdict, even when dark
+    WHEN b.clk3 < x.bleed_watch_clk THEN ROUND(LEAST(b.bid*x.bid_probe, x.bid_max),2)
+    -- DARK BRAKE (capping control): profitable target holds, else reduce bid to un-cap
     WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
          AND (b.k_roas1 >= 1.0 OR b.k_roas_prev2 >= 1.0) THEN b.bid
     WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
       THEN ROUND(GREATEST(b.bid*(1 - 0.30*b.pd), x.bid_min),2)
+    -- WINNERS (>=4 clicks & selling): fund them
     WHEN b.k_roas_prev2 > x.strong_roas AND b.k_roas1 > x.strong_roas THEN ROUND(LEAST(b.bid*x.bid_raise_strong, x.bid_max),2)
     WHEN b.k_roas1 > x.weak_roas THEN ROUND(LEAST(b.bid*x.bid_raise_weak, x.bid_max),2)
+    -- everything else (>=4 clicks, not selling): HOLD — bid not cut; bad search terms get negated instead
     ELSE b.bid END AS suggested_bid,
   CASE
+    WHEN COALESCE(lc.days_since_suggestion, 99) < 1 THEN 'HOLD'   -- 1-day cooldown: changed today → held
     WHEN b.bid IS NULL THEN 'NO_BID'
-    WHEN b.starving THEN 'STARVE'
-    WHEN b.clk3 < 4 THEN 'PROBE'
-    WHEN b.k_roas_prev2 < x.cut_roas AND b.k_roas1 < x.cut_roas THEN 'CUT'
+    WHEN b.clk3 < x.bleed_watch_clk THEN 'PROBE'
     WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
          AND (b.k_roas1 >= 1.0 OR b.k_roas_prev2 >= 1.0) THEN 'HOLD'
     WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas THEN 'BRAKE'
     WHEN b.k_roas_prev2 > x.strong_roas AND b.k_roas1 > x.strong_roas THEN 'RAISE_STRONG'
     WHEN b.k_roas1 > x.weak_roas THEN 'RAISE_WEAK'
-    ELSE 'HOLD' END AS bid_action
-FROM base b CROSS JOIN k x;
+    ELSE 'HOLD' END AS bid_action,
+  -- 1-day cooldown reason (mirrors V_RUN_TARGET) so the SB card can show WHY a held target has no suggestion
+  IF(COALESCE(lc.days_since_suggestion, 99) < 1, 'changed today — held (one launch suggestion per day)', NULL) AS bid_reason,
+  lc.days_since_suggestion AS days_since_suggestion   -- drives the "Already applied" filter (applied = <1d, changed today)
+FROM base b CROSS JOIN k x
+LEFT JOIN last_change lc ON lc.target_id = b.target_id;

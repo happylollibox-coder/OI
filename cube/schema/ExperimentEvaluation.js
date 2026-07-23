@@ -10,7 +10,7 @@ cube(`ExperimentEvaluation`, {
     },
   },
 
-  refreshKey: { every: '30 minutes' },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
 
   measures: {
     count: { type: `count`, description: `Number of experiments` },

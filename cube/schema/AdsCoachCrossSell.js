@@ -3,7 +3,7 @@
 cube(`AdsCoachCrossSell`, {
   sql: `SELECT * FROM \`onyga-482313.OI.T_ADS_COACH_CROSSSELL\``,
 
-  refreshKey: { every: '30 minutes' },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
 
   dimensions: {
     pairId:        { sql: `CONCAT(target_asin, '|', advertise_asin)`, type: `string`, primaryKey: true },

@@ -10,7 +10,7 @@ cube(`KeywordStrategyPrediction`, {
     },
   },
 
-  refreshKey: { every: '6 hours' },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
 
   measures: {
     count: {

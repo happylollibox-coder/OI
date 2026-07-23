@@ -6,7 +6,7 @@ cube(`CoachCampaignBudget`, {
           current_budget, recommended_budget, util_pct, is_change
         FROM \`onyga-482313.OI.T_COACH_CAMPAIGN_BUDGET\``,
 
-  refreshKey: { every: `30 minutes` },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
 
   measures: {
     count: { type: `count` },

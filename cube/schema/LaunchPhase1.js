@@ -9,7 +9,8 @@ cube(`LaunchPhase1`, {
                clk3, tgt_roas_1d, tgt_eq3, tgt_roas_prev2, current_bid, suggested_bid, bid_action
         FROM \`onyga-482313.OI.V_LAUNCH_PHASE1\``,
 
-  refreshKey: { every: `10 minutes` },
+  // Refresh tied to the SP orchestration (one trigger) — cache invalidates when SP_REFRESH_CUBE_TABLES completes.
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
 
   measures: { count: { type: `count` } },
 

@@ -8,7 +8,8 @@ cube(`SbLaunchCampaign`, {
                r3_spend, r3_cpc, r3_clk, r3_ctr, r3_tos, r3_roas, r3_acos, r3_impr
         FROM \`onyga-482313.OI.V_SB_LAUNCH_CAMPAIGN\``,
 
-  refreshKey: { every: `30 minutes` },
+  // Refresh tied to the SP orchestration (one trigger) — cache invalidates when SP_REFRESH_CUBE_TABLES completes.
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
   measures: { count: { type: `count` } },
 
   dimensions: {

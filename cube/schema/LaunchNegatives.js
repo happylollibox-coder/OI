@@ -6,7 +6,7 @@
 cube(`LaunchNegatives`, {
   sql: `SELECT *, CONCAT(strategy_id, '|', parent_name, '|', phrase, '|', match_type) as _id FROM \`onyga-482313.OI.T_LAUNCH_NEGATIVES\``,
 
-  refreshKey: { every: '1 hour' },
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
 
   measures: {
     count: { type: `count`, description: `Number of launch negative phrases` },

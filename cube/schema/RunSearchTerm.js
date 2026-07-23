@@ -6,7 +6,8 @@ cube(`RunSearchTerm`, {
                d1_spend, d1_sales, d7_spend, d7_sales, d28_spend, d28_sales
         FROM \`onyga-482313.OI.V_RUN_SEARCH_TERM\``,
 
-  refreshKey: { every: `30 minutes` },
+  // Refresh tied to the SP orchestration (one trigger) — cache invalidates when SP_REFRESH_CUBE_TABLES completes.
+  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
   measures: { count: { type: `count` } },
 
   dimensions: {

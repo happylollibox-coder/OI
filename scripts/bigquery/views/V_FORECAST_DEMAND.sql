@@ -338,17 +338,13 @@ family_has_envelope AS (
   SELECT family FROM family_forecast GROUP BY family HAVING MAX(family_forecast_units) > 0
 ),
 
--- B3: Trailing daily rates per product (the "recent rate" signal)
---   < 90 days old (or not yet steady) → trailing 7d (last week, responsive)
---   ≥ 90 days AND steady              → trailing 28d (locked "determined daily units")
-trailing_7d AS (
-  SELECT product_short_name AS product, SAFE_DIVIDE(SUM(units), 7.0) AS rate7
-  FROM `onyga-482313.OI.T_UNIFIED_DAILY`
-  WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
-  GROUP BY 1
-),
+-- B3: Trailing daily rate per product (the "recent rate" signal).
+-- ONE window (28d) for every product, because this rate is only ever used as a RATIO between
+-- siblings (B6: share = rate ÷ Σ sibling rates). Mixing windows there is apples-to-oranges —
+-- it summed a young product's 7d rate against a mature sibling's 28d rate in one denominator.
+-- `units28` is exposed raw so B5 can divide by the days the product was ACTUALLY selling.
 trailing_28d AS (
-  SELECT product_short_name AS product, SAFE_DIVIDE(SUM(units), 28.0) AS rate28
+  SELECT product_short_name AS product, SAFE_DIVIDE(SUM(units), 28.0) AS rate28, SUM(units) AS units28
   FROM `onyga-482313.OI.T_UNIFIED_DAILY`
   WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 28 DAY)
   GROUP BY 1
@@ -367,19 +363,19 @@ product_weekly_cov AS (
   GROUP BY 1
 ),
 
--- B5: Recent daily rate per product, with the 7d→28d graduation rule.
---   is_stable = ≥1 year old, OR ≥90 days old with low week-to-week variance (CoV < 0.30).
---   Stable products use the smooth 28d rate ("determined daily units"); still-maturing
---   products use the responsive 7d rate (falling back to 28d, then the launch model for a
---   brand-new SKU that hasn't sold yet). Established products are never dropped to 7d.
+-- B5: Recent daily rate per product — ONE basis for everybody: 28d units ÷ days actually selling.
+--   Dividing by days-selling (not a flat 28) is what makes a single window safe for young SKUs:
+--   a colour launched 10 days ago is units÷10, so it is directly comparable to a mature sibling
+--   instead of being diluted ~3× by 18 days it did not exist. That dilution is the ONLY reason the
+--   old code fell back to a 7d rate for non-stable products — and a 7d window on a low-volume SKU
+--   is dominated by noise: one bulk order (Fresh in Purple, 17 units over 2 days, 2026-07-13/14 —
+--   organic, not ad-driven) tripled its share and mis-split the family envelope by ~750 units.
+--   For a stable product (age ≥ 90) the denominator is 28, so its rate is unchanged.
+--   is_stable is retained for reporting/`is_draft`; it no longer switches the rate basis.
 product_recent_rate AS (
   SELECT
     family, product, estimated_start_selling_date, age_days, is_stable,
-    COALESCE(
-      CASE
-        WHEN is_stable THEN rate28
-        ELSE COALESCE(NULLIF(rate7, 0), rate28, CASE WHEN age_days < 90 THEN lm_rate END)
-      END, 0) AS recent_daily_rate
+    COALESCE(NULLIF(rate28_adj, 0), CASE WHEN age_days < 90 THEN lm_rate END, 0) AS recent_daily_rate
   FROM (
     SELECT
       pp.family,
@@ -389,11 +385,15 @@ product_recent_rate AS (
       (DATE_DIFF(CURRENT_DATE(), pp.estimated_start_selling_date, DAY) >= 365
          OR (DATE_DIFF(CURRENT_DATE(), pp.estimated_start_selling_date, DAY) >= 90
              AND COALESCE(cov.cov, 999) < 0.30)) AS is_stable,
-      t7.rate7,
+      -- 28d units ÷ days the product was actually selling (capped at the 28d window, min 1 day).
+      -- NULL start date → assume the full 28 days.
+      SAFE_DIVIDE(
+        t28.units28,
+        LEAST(28.0, GREATEST(COALESCE(DATE_DIFF(CURRENT_DATE(), pp.estimated_start_selling_date, DAY) + 1, 28), 1))
+      ) AS rate28_adj,
       t28.rate28,
       lm.daily_rate AS lm_rate
     FROM product_phases pp
-    LEFT JOIN trailing_7d t7 ON t7.product = pp.product
     LEFT JOIN trailing_28d t28 ON t28.product = pp.product
     LEFT JOIN product_weekly_cov cov ON cov.product = pp.product
     LEFT JOIN `onyga-482313.OI.V_PRODUCT_LAUNCH_MODEL` lm

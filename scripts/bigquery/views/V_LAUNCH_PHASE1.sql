@@ -23,6 +23,14 @@
 --   spend/budget, %active = 1 - pd
 --
 -- BID (per target, clamp $0.20-$1.50). Order matters — first match wins:
+--   MONEY-BLEEDER (0 conversions over the window, scaled by clicks) — checked FIRST, before starving, so a
+--     heavy-spending non-converter is trimmed, NOT raised by the campaign under-spend signal (a campaign can
+--     under-spend in total while one target hogs the budget and converts nothing):
+--       clk3 4-7,  0 sales → HOLD  (BLEED_WATCH — gather, don't raise, don't cut yet)
+--       clk3 >=8,  0 sales → ×0.80 (BLEED_TRIM, -20% — stop the bleed)
+--       clk3 >=15, 0 sales → ×0.60 (BLEED_CUT,  -40% — Ori's decision point)
+--     Keyed on sales3<=0 (0 conversions), NOT net ROAS — a converting-but-unprofitable target still takes the
+--     normal starve/cut path below. clk3<4 (unproven) falls through to PROBE and IS still raised.
 --   starving (pd<=10% AND campaign spend<=60% budget)  → ×1.10   buy traffic even if losing
 --   PROBE: clk3 < 4 (too few clicks to judge)          → ×1.15   raise to buy traffic EVEN IF dark — a
 --                                                                  starved keyword can't be judged/braked;
@@ -75,8 +83,12 @@ WITH cfg AS (
 -- launch_weak_roas, launch_bid_cut/raise_strong/raise_weak/starve, launch_bid_min/max, launch_bud_*).
 k AS (
   SELECT 0.10 AS dark_target, 0.60 AS spend_target, 1.5 AS strong_roas, 1.2 AS weak_roas, 0.9 AS cut_roas, 0.6 AS deep_roas,
-         0.80 AS bid_cut, 1.30 AS bid_raise_strong, 1.15 AS bid_raise_weak, 1.10 AS bid_starve,
-         0.20 AS bid_min, 1.50 AS bid_max, 0.90 AS bud_trim, 0.60 AS bud_cut, 2.0 AS bud_cap_weak, 3.0 AS bud_cap_strong
+         0.80 AS bid_cut, 1.30 AS bid_raise_strong, 1.15 AS bid_raise_weak, 1.10 AS bid_starve, 1.05 AS bid_probe,
+         0.20 AS bid_min, 1.50 AS bid_max, 0.90 AS bud_trim, 0.60 AS bud_cut, 2.0 AS bud_cap_weak, 3.0 AS bud_cap_strong,
+         -- money-bleeder ladder: a target with enough clicks to judge but ZERO conversions is trimmed, scaled by
+         -- clicks — NOT raised by the campaign-level STARVE (a campaign can under-spend in total while one target
+         -- hogs the budget and converts nothing). 4-7 clk: watch (gather); >=8: -20%; >=15 (decision pt): -40%.
+         4 AS bleed_watch_clk, 8 AS bleed_trim_clk, 15 AS bleed_cut_clk, 0.80 AS bid_bleed_trim, 0.60 AS bid_bleed_cut
 ),
 -- Anchor "today" on the last complete LA day, never the current (incomplete) one — at 09:00 the current LA
 -- day has ~10% of its spend and every signal would read as a false zero. FN_ADS_ANCHOR_CAP() = yesterday
@@ -142,7 +154,8 @@ cbud AS (SELECT campaign_id cid, MAX(campaign_budget) budget FROM `onyga-482313.
 tday AS (
   SELECT CAST(a.campaign_id AS STRING) cid, a.targeting, a.date, SUM(a.Ads_clicks) clk,
     SAFE_DIVIDE(SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units), SUM(a.Ads_cost)) roas,
-    SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units) gp, SUM(a.Ads_cost) sp
+    SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units) gp, SUM(a.Ads_cost) sp,
+    SUM(a.Ads_sales) sales
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   LEFT JOIN `onyga-482313.OI.T_PRICE_COST_TIER` pct
     ON a.Ads_units > 0 AND pct.unit_price = ROUND(SAFE_DIVIDE(a.Ads_sales, a.Ads_units), 2)
@@ -150,7 +163,7 @@ tday AS (
   GROUP BY 1, 2, 3
 ),
 tsig AS (
-  SELECT cid, targeting, SUM(clk) clk3,
+  SELECT cid, targeting, SUM(clk) clk3, SUM(IF(date = (SELECT d FROM wm), clk, 0)) clk1, COALESCE(SUM(sales),0) sales3,
     ROUND(AVG(IF(clk >= 3, roas, NULL)), 4) AS eq3_raw,
     ROUND(SAFE_DIVIDE(SUM(gp), NULLIF(SUM(sp),0)), 4) AS pooled3,   -- fallback when no >=3-click day exists
     ROUND(MAX(IF(date = (SELECT d FROM wm), roas, NULL)), 4) AS roas_1d,   -- row 2: last complete day
@@ -177,7 +190,7 @@ base AS (
     cb.budget,
     t.keyword_id, t.ad_group_id, t.target_text, t.target_type, t.match_type,
     COALESCE(t.current_bid, agb.default_bid) AS current_bid,
-    ts.clk3, COALESCE(ts.eq3_raw, ts.pooled3) AS t_eq3, ts.roas_1d AS t_roas1, ts.roas_prev2 AS t_roas_prev2,
+    ts.clk3, COALESCE(ts.clk1,0) AS t_clk1, COALESCE(ts.sales3,0) AS t_sales3, COALESCE(ts.eq3_raw, ts.pooled3) AS t_eq3, ts.roas_1d AS t_roas1, ts.roas_prev2 AS t_roas_prev2,
     (COALESCE(d.pd,0) <= x.dark_target AND SAFE_DIVIDE(cs.spend_today, cb.budget) <= x.spend_target) AS starving
   FROM camp c
   CROSS JOIN k x
@@ -226,32 +239,36 @@ SELECT
   -- BID SUGGESTION (target grain)
   b.keyword_id, b.ad_group_id, b.target_text, b.target_type, b.match_type,
   b.clk3, ROUND(b.t_roas1,2) AS tgt_roas_1d, ROUND(b.t_eq3,2) AS tgt_eq3, ROUND(b.t_roas_prev2,2) AS tgt_roas_prev2, b.current_bid,
+  -- LAUNCH-WINDOW BID MODEL (Ori, 2026-07-21): the purpose is to FIND THE RIGHT BID, not to cut losers.
+  -- During the 20-day launch there are NO loss-driven keyword-bid cuts. A target only ever holds or rises:
+  --   • < 4 clicks (unproven)        → PROBE: raise SLOWLY (+5%) to buy just enough traffic to reach a verdict
+  --   • selling (net ROAS > weak/strong) → RAISE (fund the winner)
+  --   • >= 4 clicks & not selling     → HOLD (do NOT cut the bid)
+  -- The money bleed is stopped at the SEARCH-TERM level instead (negate non-converting terms at >=15 clicks /
+  -- 0 orders — V_RUN_SEARCH_TERM), which surgically kills dead terms while the keyword keeps hunting for winners.
+  -- Phase 2 (day 20+) makes the final keep/cut/negate call once there is enough data. DARK BRAKE is retained:
+  -- it is a CAPPING control (campaign hitting its budget cap), not a loss cut — you must reduce something to un-cap.
   CASE
     WHEN b.current_bid IS NULL THEN NULL
-    WHEN b.starving                                             THEN ROUND(LEAST(b.current_bid*x.bid_starve, x.bid_max),2)
-    -- PROBE: too few clicks (clk3 < 4) to judge → raise to BUY TRAFFIC even if the campaign is dark. Under
-    -- a capped budget this just reallocates the limited spend toward the unproven keyword so it reaches a
-    -- decision faster; overrides the dark-brake/cut/hold below (a starved keyword can't be judged or braked).
-    WHEN COALESCE(b.clk3,0) < 4                                 THEN ROUND(LEAST(b.current_bid*x.bid_raise_weak, x.bid_max),2)
-    WHEN b.t_roas_prev2 < x.cut_roas AND b.t_roas1 < x.cut_roas THEN ROUND(GREATEST(b.current_bid*x.bid_cut, x.bid_min),2)
-    -- DARK BRAKE: campaign capping (dark>10%) but ROAS not good enough to fund more budget → reduce bid to
-    -- spread spend across the day and stop the cap-out, and SUPPRESS raises (a raise while capping makes it
-    -- worse). Reduction scales with darkness: bid × (1 − 0.30·%dark). Floors at bid_min. Placed before the
-    -- raise branches so it overrides them; the losing-target CUT above still wins (a harder cut).
-    -- EXCEPTION: a PROFITABLE target (net ROAS ≥ 1.0 on either recent window) is NOT braked — cutting a good
-    -- spot while capping just starves your best target. It HOLDs (raises still suppressed while dark).
+    -- PROBE: too few clicks (< 4) to judge → raise SLOWLY (+5%) to buy traffic and reach a verdict, even if the
+    -- campaign is dark (a starved keyword can't be judged or braked). Overrides the dark-brake/raise branches below.
+    WHEN COALESCE(b.clk3,0) < x.bleed_watch_clk                THEN ROUND(LEAST(b.current_bid*x.bid_probe, x.bid_max),2)
+    -- DARK BRAKE: campaign capping (dark>10%) but ROAS not good enough to fund more budget → reduce bid to spread
+    -- spend across the day and stop the cap-out, and SUPPRESS raises (a raise while capping makes it worse).
+    -- Reduction scales with darkness: bid × (1 − 0.30·%dark), floored at bid_min. This is capping control, NOT a
+    -- loss cut. EXCEPTION: a PROFITABLE target (net ROAS ≥ 1.0 on either recent window) is NOT braked — it HOLDs.
     WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
          AND (b.t_roas1 >= 1.0 OR b.t_roas_prev2 >= 1.0) THEN b.current_bid
     WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
       THEN ROUND(GREATEST(b.current_bid*(1 - 0.30*b.pd), x.bid_min),2)
+    -- WINNERS (>= 4 clicks & selling): fund them
     WHEN b.t_roas_prev2 > x.strong_roas AND b.t_roas1 > x.strong_roas THEN ROUND(LEAST(b.current_bid*x.bid_raise_strong, x.bid_max),2)
     WHEN b.t_roas1 > x.weak_roas                               THEN ROUND(LEAST(b.current_bid*x.bid_raise_weak, x.bid_max),2)
+    -- everything else (>= 4 clicks, not selling): HOLD — the bid is not cut; bad SEARCH TERMS get negated instead.
     ELSE b.current_bid END AS suggested_bid,
   CASE
     WHEN b.current_bid IS NULL THEN 'NO_BID'
-    WHEN b.starving THEN 'STARVE'
-    WHEN COALESCE(b.clk3,0) < 4 THEN 'PROBE'
-    WHEN b.t_roas_prev2 < x.cut_roas AND b.t_roas1 < x.cut_roas THEN 'CUT'
+    WHEN COALESCE(b.clk3,0) < x.bleed_watch_clk THEN 'PROBE'
     WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
          AND (b.t_roas1 >= 1.0 OR b.t_roas_prev2 >= 1.0) THEN 'HOLD'
     WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas THEN 'BRAKE'

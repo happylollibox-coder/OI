@@ -1319,6 +1319,9 @@ export interface StrategyCampaignRow {
   parent_name: string | null;
   strategy_id: string;
   strategy_source: string;
+  /** Age bucket — NEW / 1-3MO / 4-9MO / 10MO+ / UNKNOWN, same boundaries as the Weekly Run split. */
+  age_bucket: string;
+  age_days: number | null;
   is_active: boolean;
   spend: number; orders: number; clicks: number; impressions: number; sales: number;
   net_roas: number | null; conv_rate: number | null; cpc: number | null;

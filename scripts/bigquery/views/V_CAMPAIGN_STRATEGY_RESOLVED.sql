@@ -67,6 +67,17 @@ map AS (  -- dedupe: V_CAMPAIGN_MAPPING_STATUS fans out on renamed campaigns
 base AS (
   SELECT
     c.campaign_id, c.campaign_name, c.campaign_type,
+    -- Campaign age. Same source (DIM_CAMPAIGN.creation_date), same NY-timezone DATE_DIFF and the same
+    -- <=20 / <=90 / <=270 boundaries as V_BUDGET_STEP1_CAMPAIGN, so the Ads-page age filter and the
+    -- Weekly Run "Budget by age" split always bucket a campaign identically. Keep them in sync.
+    DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(c.creation_date), DAY) AS age_days,
+    CASE
+      WHEN c.creation_date IS NULL THEN 'UNKNOWN'
+      WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(c.creation_date), DAY) <= 20  THEN 'NEW'
+      WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(c.creation_date), DAY) <= 90  THEN '1-3MO'
+      WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(c.creation_date), DAY) <= 270 THEN '4-9MO'
+      ELSE '10MO+'
+    END AS age_bucket,
     UPPER(c.campaign_name) AS nm,
     fam_asin.parent_name AS asin_family,
     t.auto_spend_share,
@@ -145,6 +156,7 @@ final AS (
 )
 SELECT
   campaign_id, campaign_name, campaign_type, parent_name, family_source,
+  age_days, age_bucket,
   auto_spend_share, mapped_strategy, name_strategy, override_strategy_id,
   COALESCE(
     override_strategy_id,

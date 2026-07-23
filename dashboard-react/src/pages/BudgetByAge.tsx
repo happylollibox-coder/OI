@@ -10,7 +10,9 @@ import { fM } from '../utils';
 /** "All ages" = no age filter. Not a real bucket, so never sent to a cube filter. */
 export const ALL_AGES = '__ALL_AGES__';
 
-const AGE_ORDER = ['NEW', '1-3MO', '4-9MO', '10MO+', 'UNKNOWN'];
+/** Canonical bucket order. Shared with the Ads Performance page's age filter so both pages
+ * present the buckets the same way; the bucketing itself is done in SQL. */
+export const AGE_ORDER = ['NEW', '1-3MO', '4-9MO', '10MO+', 'UNKNOWN'];
 export const AGE_LABEL: Record<string, string> = {
   NEW: 'New (0–20 days)', '1-3MO': '1–3 months', '4-9MO': '4–9 months', '10MO+': '10 months+', UNKNOWN: 'Unknown age',
 };

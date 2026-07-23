@@ -53,7 +53,12 @@ ads AS (
     SUM(a.Ads_cost) AS ad_cost,
     SUM(a.Ads_clicks) AS clicks,
     SUM(a.Ads_impressions) AS impressions,
-    SUM(a.Ads_orders) AS ad_orders
+    SUM(a.Ads_orders) AS ad_orders,
+    -- AD-ATTRIBUTED figures (direct only, no halo) — the basis for a true advertising return.
+    -- Distinct from gross_margin below, which is TOTAL margin (organic included). Feeds UnifiedPerformance.adsNetRoas.
+    SUM(a.GROSS_PROFIT) AS ads_gross_profit,
+    SUM(a.Ads_sales) AS ads_sales,
+    SUM(a.Ads_units) AS ads_units
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   WHERE COALESCE(a.most_advertised_asin_impressions, a.advertised_asins, a.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2
@@ -106,7 +111,13 @@ SELECT
   COALESCE(a.clicks, 0) AS clicks,
   COALESCE(a.impressions, 0) AS impressions,
   COALESCE(a.ad_orders, 0) AS ad_orders,
-  -- Pre-computed summable measure for OLAP ratio metrics
+  -- Ad-attributed (direct, no halo) — summable inputs for a true advertising return
+  COALESCE(a.ads_gross_profit, 0) AS ads_gross_profit,
+  COALESCE(a.ads_sales, 0) AS ads_sales,
+  COALESCE(a.ads_units, 0) AS ads_units,
+  -- Pre-computed summable measure for OLAP ratio metrics.
+  -- NOTE: this is TOTAL margin (organic + ads). netRoas divides it by ad_cost, which is margin-per-ad-dollar,
+  -- NOT an advertising return — use adsNetRoas (ads_gross_profit / ad_cost) for that.
   COALESCE(p.sales, 0) - COALESCE(p.cogs, 0) AS gross_margin
 FROM perf p
 FULL OUTER JOIN ads a ON p.asin = a.asin AND p.date = a.date
