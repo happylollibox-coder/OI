@@ -235,6 +235,20 @@ base AS (
 baseN AS (
   SELECT b.*, ROUND(GREATEST(SAFE_DIVIDE(b.budget, COUNT(*) OVER (PARTITION BY b.campaign_id) * 4), 0.20), 2) AS aff_cpc
   FROM base b
+),
+-- target CPC resolved BEFORE the bid CASE so converting keywords can be fitted to it (Ori 2026-07-30)
+withT AS (
+  SELECT b.*,
+    ROUND(COALESCE(IF(b.is_auto OR b.is_pt, NULL, SAFE_DIVIDE(ly.sp, ly.clk)), bd.cpc_target), 2) AS tcpc,
+    CASE WHEN NOT (b.is_auto OR b.is_pt) AND ly.kw IS NOT NULL THEN 'LY'
+         WHEN bd.cpc_target IS NOT NULL THEN 'BAND' END AS tcpc_src
+  FROM baseN b
+  LEFT JOIN ly ON ly.kw = LOWER(TRIM(b.target_text))
+  LEFT JOIN camp_parent cp ON cp.cid = b.campaign_id
+  LEFT JOIN band bd ON bd.parent_name = cp.parent_name
+    AND bd.match_type = CASE WHEN b.is_pt THEN 'PRODUCT' WHEN b.is_auto THEN 'AUTO'
+                             WHEN UPPER(COALESCE(b.match_type,'')) IN ('TARGETING_EXPRESSION','ASIN','ASIN EXPANDED') THEN 'PRODUCT'
+                             ELSE UPPER(COALESCE(b.match_type, '')) END
 )
 SELECT
   b.campaign_id, b.campaign_name, b.pct_dark,
@@ -245,18 +259,19 @@ SELECT
   b.clk2 AS clicks_prev2, ROUND(b.sp2, 2) AS spend_prev2, ROUND(SAFE_DIVIDE(b.sp2, NULLIF(b.clk2,0)), 2) AS cpc_prev2,
   b.units2 AS units_prev2, b.roas_prev2,
   b.converting, b.days_since_change,
-  ROUND(COALESCE(IF(b.is_auto OR b.is_pt, NULL, SAFE_DIVIDE(ly.sp, ly.clk)), bd.cpc_target), 2) AS target_cpc,
-  CASE WHEN NOT (b.is_auto OR b.is_pt) AND ly.kw IS NOT NULL THEN 'LY'
-       WHEN bd.cpc_target IS NOT NULL THEN 'BAND' END AS target_cpc_source,
+  b.tcpc AS target_cpc,
+  b.tcpc_src AS target_cpc_source,
   CASE
     WHEN b.current_bid IS NULL THEN NULL
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN NULL
+    -- CONVERTING while CAPPED (Ori 2026-07-30): never raise the bid — the budget raise buys the
+    -- volume, CHEAPER clicks buy more of it. Enough clicks + bid above what clicks actually cost →
+    -- FIT the bid down to the realized 3d CPC (you keep winning the same auctions, priced honestly).
     WHEN b.converting THEN CASE
-      WHEN b.c_roas_prev2 <= x.strong_roas AND COALESCE(b.c_roas1, 0) <= x.weak_roas THEN NULL   -- hold while capping
-      WHEN COALESCE(b.roas_prev2,0) > x.strong_roas AND COALESCE(b.roas1,0) > x.strong_roas
-        THEN ROUND(LEAST(b.current_bid * x.bid_raise_strong, x.bid_hard_cap), 2)
-      WHEN COALESCE(b.roas1,0) > x.weak_roas
-        THEN ROUND(LEAST(b.current_bid * x.bid_raise_weak, x.bid_hard_cap), 2)
+      WHEN b.clk1 >= x.click_goal_day
+        AND SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)) IS NOT NULL
+        AND b.current_bid > SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)) + 0.05
+        THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0))), 2)
       ELSE NULL END
     -- budget-constrained probing (Ori 2026-07-30): every campaign in this phase is CAPPED, so
     -- under-clicking is a budget artifact — never probe up. Park the tested, trim the eaters.
@@ -271,9 +286,8 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'HOLD'
     WHEN b.converting THEN CASE
-      WHEN b.c_roas_prev2 <= x.strong_roas AND COALESCE(b.c_roas1, 0) <= x.weak_roas THEN 'HOLD'
-      WHEN COALESCE(b.roas_prev2,0) > x.strong_roas AND COALESCE(b.roas1,0) > x.strong_roas THEN 'RAISE_STRONG'
-      WHEN COALESCE(b.roas1,0) > x.weak_roas THEN 'RAISE_WEAK'
+      WHEN b.clk1 >= x.click_goal_day
+        AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05 THEN 'FIT_CPC'
       ELSE 'HOLD' END
     WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
     WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0 THEN 'TRIM_BID'
@@ -284,12 +298,12 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'no bid on record'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'changed today — one suggestion per day'
     WHEN b.converting THEN CASE
-      WHEN b.c_roas_prev2 <= x.strong_roas AND COALESCE(b.c_roas1, 0) <= x.weak_roas
-        THEN 'converting — hold while the campaign caps; the budget raise is the lever'
-      WHEN COALESCE(b.roas_prev2,0) > x.strong_roas AND COALESCE(b.roas1,0) > x.strong_roas
-        THEN 'both windows > 1.5x — fund the winner (+30%, cap $2)'
-      WHEN COALESCE(b.roas1,0) > x.weak_roas THEN 'last day > 1.2x — nudge up (+15%, cap $2)'
-      ELSE 'converting, mid — hold' END
+      WHEN b.clk1 >= x.click_goal_day
+        AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05
+        THEN CONCAT('selling while capping — fit bid down to the real CPC $',
+                    CAST(ROUND(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), 2) AS STRING),
+                    ': budget raise buys volume, cheaper clicks buy more of it (never raise while dark)')
+      ELSE 'converting — hold; the budget raise is the lever while capping' END
     WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05
       THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d with 0 orders — park at $0.25 so the untested keywords get their probe')
     WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0
@@ -298,13 +312,5 @@ SELECT
     WHEN b.clk1 >= x.click_cap_day THEN '6+ clicks yesterday, not converting — slow −5%: cheaper clicks stretch the budget across the day'
     ELSE 'under-clicked because the BUDGET dies, not the bid — held; parking/trimming the eaters frees its probe'
   END AS bid_reason
-FROM baseN b CROSS JOIN k x
-LEFT JOIN ly ON ly.kw = LOWER(TRIM(b.target_text))
-LEFT JOIN camp_parent cp ON cp.cid = b.campaign_id
--- PT/auto match normalization (backtest 2026-07-30): V_TARGET_DAILY says TARGETING_EXPRESSION for
--- asin targets but the band table says PRODUCT — without this map every PT target got NULL target_cpc
-LEFT JOIN band bd ON bd.parent_name = cp.parent_name
-  AND bd.match_type = CASE WHEN b.is_pt THEN 'PRODUCT' WHEN b.is_auto THEN 'AUTO'
-                           WHEN UPPER(COALESCE(b.match_type,'')) IN ('TARGETING_EXPRESSION','ASIN','ASIN EXPANDED') THEN 'PRODUCT'
-                           ELSE UPPER(COALESCE(b.match_type, '')) END
+FROM withT b CROSS JOIN k x
 WHERE b.clk1 > 0 OR b.clk2 > 0;

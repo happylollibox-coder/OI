@@ -202,8 +202,13 @@ SELECT
         WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day  THEN ROUND(GREATEST(b.bid*x.bid_slow, x.bid_min),2)
         ELSE b.bid   -- inside the 4–6 clicks/day band: hold and wait for a sale
       END
-    -- CONVERTING + campaign capping → HOLD (raising while dark makes capping worse)
-    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas THEN b.bid
+    -- CONVERTING + campaign capping → NEVER raise (Ori 2026-07-30): fit down to realized 3d CPC
+    WHEN b.pd > x.dark_target THEN CASE
+      WHEN COALESCE(b.r2_clk,0) >= x.click_goal_day
+        AND SAFE_DIVIDE(b.r2_cost + b.r3_cost, NULLIF(b.clk3,0)) IS NOT NULL
+        AND b.bid > SAFE_DIVIDE(b.r2_cost + b.r3_cost, NULLIF(b.clk3,0)) + 0.05
+        THEN ROUND(GREATEST(b.bid * x.bid_big_trim, SAFE_DIVIDE(b.r2_cost + b.r3_cost, NULLIF(b.clk3,0))), 2)
+      ELSE b.bid END
     -- WINNERS (converting): fund them toward the $2 HARD CAP, not the $1.50 launch cap — a proven
     -- converter has earned the right to bid up past the unproven-target ceiling (Ori 2026-07-24).
     WHEN b.k_roas_prev2 > x.strong_roas AND b.k_roas1 > x.strong_roas THEN ROUND(LEAST(b.bid*x.bid_raise_strong, x.bid_hard_cap),2)
@@ -225,7 +230,9 @@ SELECT
         WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day  THEN 'SLOW'
         ELSE 'HOLD'
       END
-    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas THEN 'HOLD'
+    WHEN b.pd > x.dark_target THEN
+      IF(COALESCE(b.r2_clk,0) >= x.click_goal_day
+         AND b.bid > COALESCE(SAFE_DIVIDE(b.r2_cost + b.r3_cost, NULLIF(b.clk3,0)), b.bid) + 0.05, 'FIT_CPC', 'HOLD')
     WHEN b.k_roas_prev2 > x.strong_roas AND b.k_roas1 > x.strong_roas THEN 'RAISE_STRONG'
     WHEN b.k_roas1 > x.weak_roas THEN 'RAISE_WEAK'
     ELSE 'HOLD' END AS bid_action,

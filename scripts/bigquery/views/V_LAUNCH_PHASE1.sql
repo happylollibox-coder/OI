@@ -196,7 +196,7 @@ tday AS (
   GROUP BY 1, 2, 3
 ),
 tsig AS (
-  SELECT cid, targeting, SUM(clk) clk3, SUM(IF(date = (SELECT d FROM wm), clk, 0)) clk1, COALESCE(SUM(sales),0) sales3,
+  SELECT cid, targeting, SUM(clk) clk3, SUM(sp) sp3, SUM(IF(date = (SELECT d FROM wm), clk, 0)) clk1, COALESCE(SUM(sales),0) sales3,
     -- days the target actually got clicks in the window — the DENOMINATOR for "clicks per day".
     -- Dividing clk3 by a fixed 3 diluted a burst: a target with 6 clicks on ONE day read as 2/day and
     -- was told to raise, when its real rate is 6/day (Ori 2026-07-25). Rate = clk3 / active click-days.
@@ -237,7 +237,7 @@ base AS (
     c.low_budget_cap, c.in_peak,
     t.keyword_id, t.ad_group_id, t.target_text, t.target_type, t.match_type,
     COALESCE(t.current_bid, agb.default_bid) AS current_bid,
-    ts.clk3, COALESCE(ts.clk1,0) AS t_clk1, COALESCE(ts.sales3,0) AS t_sales3, COALESCE(ts.eq3_raw, ts.pooled3) AS t_eq3, ts.roas_1d AS t_roas1, ts.roas_prev2 AS t_roas_prev2,
+    ts.clk3, ROUND(SAFE_DIVIDE(ts.sp3, NULLIF(ts.clk3,0)),2) AS cpc3, COALESCE(ts.clk1,0) AS t_clk1, COALESCE(ts.sales3,0) AS t_sales3, COALESCE(ts.eq3_raw, ts.pooled3) AS t_eq3, ts.roas_1d AS t_roas1, ts.roas_prev2 AS t_roas_prev2,
     COALESCE(t90.clk90, 0) AS clk90, COALESCE(t90.ord90, 0) AS ord90,
     -- clicks/day over active days (the real rate) — drives the click-rate controller instead of clk3/3.
     ROUND(SAFE_DIVIDE(ts.clk3, NULLIF(ts.active_days, 0)), 2) AS clk_rate,
@@ -352,10 +352,12 @@ SELECT
         WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day  THEN ROUND(GREATEST(b.current_bid*x.bid_slow, x.bid_min),2)
         ELSE b.current_bid   -- last day 4–5 clicks: hold and wait for a sale
       END
-    -- ── B) CONVERTING → existing logic ──
-    -- Profitable target in a capping campaign: HOLD (do not raise — raising while dark makes capping worse).
-    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
-      THEN b.current_bid
+    -- ── B) CONVERTING → capped: NEVER raise (Ori 2026-07-30) — fit the bid down to the realized
+    -- 3d CPC when clicks are plentiful; the budget raise buys the volume, cheaper clicks buy more.
+    WHEN b.pd > x.dark_target THEN CASE
+      WHEN COALESCE(b.t_clk1,0) >= x.click_goal_day AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05
+        THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, b.cpc3), 2)
+      ELSE b.current_bid END
     -- WINNERS: fund them. A CONVERTING target raises toward the $2 HARD CAP, not the $1.50 launch cap
     -- (Ori 2026-07-24): the $1.50 cap is a ceiling for UNPROVEN targets; once a target converts it has
     -- earned the right to bid up like the mature coacher. Without this a proven winner whose current bid
@@ -377,7 +379,8 @@ SELECT
         WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day  THEN 'SLOW'
         ELSE 'HOLD'
       END
-    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas THEN 'HOLD'
+    WHEN b.pd > x.dark_target THEN
+      IF(COALESCE(b.t_clk1,0) >= x.click_goal_day AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05, 'FIT_CPC', 'HOLD')
     WHEN b.t_roas_prev2 > x.strong_roas AND b.t_roas1 > x.strong_roas THEN 'RAISE_STRONG'
     WHEN b.t_roas1 > x.weak_roas THEN 'RAISE_WEAK'
     ELSE 'HOLD' END AS bid_action

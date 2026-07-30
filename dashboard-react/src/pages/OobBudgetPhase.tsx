@@ -38,7 +38,7 @@ const ACTION_CLS: Record<string, string> = {
   WATCH: 'text-faint',
 };
 const KW_CLS: Record<string, string> = {
-  PROBE: 'text-emerald-400', SLOW: 'text-amber-400', PARK: 'text-red-400', TRIM_BID: 'text-amber-400',
+  PROBE: 'text-emerald-400', SLOW: 'text-amber-400', PARK: 'text-red-400', TRIM_BID: 'text-amber-400', FIT_CPC: 'text-amber-400',
   RAISE_STRONG: 'text-emerald-400', RAISE_WEAK: 'text-emerald-400',
   HOLD: 'text-muted', NO_BID: 'text-faint',
 };

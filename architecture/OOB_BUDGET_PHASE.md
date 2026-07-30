@@ -51,10 +51,12 @@ mirrors. **Target CPC column** (Ori: "based on time last year if data exists"): 
 (2) else the coacher band `cpc_target` (product × season × match, conclusive ALL/ALL cells
 averaged), (3) else — . Auto clauses/PT skip LY — the clause text is not product-specific.):
 same constants as the launch controller, applied to every OOB campaign regardless of engine —
-- CONVERTING (net ROAS ≥ 1.0 on last day OR prior-2d) is **exempt from the click band** (Ori
-  decision): it follows the ROAS ladder — hold-while-capping unless the campaign itself is strong;
-  both windows > 1.5× → +30%; last day > 1.2× → +15%; cap $2.00. The budget raise is the right
-  lever for a converting keyword in a dark campaign, not a bid cut.
+- CONVERTING (net ROAS ≥ 1.0 on last day OR prior-2d) while CAPPED (Ori 2026-07-30, BOX-VIDEO/PT
+  case): **never raise the bid** — with clicks ≥ the 4-click goal and bid above the realized 3-day
+  CPC, **FIT the bid down to that CPC** (−15%/day, floored at real CPC): "increase budget to $15
+  offers ~5 more clicks, but reducing the bid gets more clicks from the same budget." Both levers
+  fire together: budget raise buys volume, cheaper clicks buy more of it. Otherwise hold. The ROAS
+  ladder raises (+15%/+30% toward $2) survive only in the launch controller's NOT-capped branch.
 - NOT converting → **budget-constrained probing economics** (Ori 2026-07-30: "the under-4-clicks
   is due to low budget not low bid" — 10 keywords × 4 clicks at ~$1 CPC = $40 of probing demand on
   a $10 budget; the purpose is to find a winner who then funds the others). In a dark campaign,
