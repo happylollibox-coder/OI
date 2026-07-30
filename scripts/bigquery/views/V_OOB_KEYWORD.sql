@@ -63,7 +63,7 @@ tsig AS (
 ),
 -- tested clicks per target over 90d — the "has it had its test" evidence for the park rule
 t90 AS (
-  SELECT CAST(a.campaign_id AS STRING) cid, a.targeting, SUM(a.Ads_clicks) clk90
+  SELECT CAST(a.campaign_id AS STRING) cid, a.targeting, SUM(a.Ads_clicks) clk90, SUM(a.Ads_orders) ord90
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   JOIN oob o ON o.campaign_id = CAST(a.campaign_id AS STRING)
   WHERE a.date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AND (SELECT d FROM wm)
@@ -173,11 +173,11 @@ sb_tgtday AS (
   GROUP BY 1, 2
 ),
 sb_t90 AS (
-  SELECT target_id, SUM(clk) clk90 FROM (
-    SELECT keyword_id AS target_id, SUM(clicks) clk FROM `fivetran-hl.amazon_ads.sb_search_term_report`
+  SELECT target_id, SUM(clk) clk90, SUM(conv) ord90 FROM (
+    SELECT keyword_id AS target_id, SUM(clicks) clk, SUM(attributed_conversions_14_d) conv FROM `fivetran-hl.amazon_ads.sb_search_term_report`
     WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 89 DAY) AND (SELECT d FROM wm_sb) GROUP BY 1
     UNION ALL
-    SELECT target_id, SUM(clicks) FROM `fivetran-hl.amazon_ads.sb_target_report`
+    SELECT target_id, SUM(clicks), SUM(attributed_conversions_14_d) FROM `fivetran-hl.amazon_ads.sb_target_report`
     WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 89 DAY) AND (SELECT d FROM wm_sb) GROUP BY 1
   ) GROUP BY 1
 ),
@@ -206,7 +206,7 @@ base AS (
     COALESCE(td.keyword_bid, agb.default_bid) AS current_bid,
     t.clk1, t.sp1, t.units1, t.roas1, t.clk2, t.sp2, t.units2, t.roas_prev2,
     (COALESCE(t.roas1, 0) >= 1.0 OR COALESCE(t.roas_prev2, 0) >= 1.0) AS converting,
-    COALESCE(t90.clk90, 0) AS clk90,
+    COALESCE(t90.clk90, 0) AS clk90, COALESCE(t90.ord90, 0) AS ord90,
     lc.days_since AS days_since_change
   FROM tsig t
   JOIN oob o ON o.campaign_id = t.cid
@@ -221,7 +221,7 @@ base AS (
     t.bid AS current_bid,
     s.clk1, ROUND(s.sp1,2), s.units1, ROUND(s.roas1,2), s.clk2, ROUND(s.sp2,2), s.units2, ROUND(s.roas_prev2,2),
     (COALESCE(s.roas1, 0) >= 1.0 OR COALESCE(s.roas_prev2, 0) >= 1.0) AS converting,
-    COALESCE(s90.clk90, 0),
+    COALESCE(s90.clk90, 0), COALESCE(s90.ord90, 0),
     lc.days_since
   FROM sb_tgt t
   JOIN oob_sb o ON o.campaign_id = t.cid
@@ -260,7 +260,7 @@ SELECT
       ELSE NULL END
     -- budget-constrained probing (Ori 2026-07-30): every campaign in this phase is CAPPED, so
     -- under-clicking is a budget artifact — never probe up. Park the tested, trim the eaters.
-    WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05
+    WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05
       THEN x.bid_park
     WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0
       THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, COALESCE(b.aff_cpc, x.bid_min)), 2)
@@ -275,7 +275,7 @@ SELECT
       WHEN COALESCE(b.roas_prev2,0) > x.strong_roas AND COALESCE(b.roas1,0) > x.strong_roas THEN 'RAISE_STRONG'
       WHEN COALESCE(b.roas1,0) > x.weak_roas THEN 'RAISE_WEAK'
       ELSE 'HOLD' END
-    WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
+    WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
     WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0 THEN 'TRIM_BID'
     WHEN b.clk1 >= x.click_cap_day THEN 'SLOW'
     ELSE 'HOLD'
@@ -290,8 +290,8 @@ SELECT
         THEN 'both windows > 1.5x — fund the winner (+30%, cap $2)'
       WHEN COALESCE(b.roas1,0) > x.weak_roas THEN 'last day > 1.2x — nudge up (+15%, cap $2)'
       ELSE 'converting, mid — hold' END
-    WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05
-      THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d, no sale — park at $0.25 so the untested keywords get their probe')
+    WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05
+      THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d with 0 orders — park at $0.25 so the untested keywords get their probe')
     WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0
       THEN CONCAT('bid eats the capped budget — trim 15%/day toward the affordable CPC $',
                   CAST(b.aff_cpc AS STRING), ' (= budget ÷ targets × 4-click goal)')

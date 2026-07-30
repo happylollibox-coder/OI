@@ -135,11 +135,11 @@ tsig AS (
   GROUP BY 1
 ),
 t90 AS (
-  SELECT target_id, SUM(clk) clk90 FROM (
-    SELECT keyword_id AS target_id, SUM(clicks) clk FROM `fivetran-hl.amazon_ads.sb_search_term_report`
+  SELECT target_id, SUM(clk) clk90, SUM(conv) ord90 FROM (
+    SELECT keyword_id AS target_id, SUM(clicks) clk, SUM(attributed_conversions_14_d) conv FROM `fivetran-hl.amazon_ads.sb_search_term_report`
     WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AND (SELECT d FROM wm) GROUP BY 1
     UNION ALL
-    SELECT target_id, SUM(clicks) FROM `fivetran-hl.amazon_ads.sb_target_report`
+    SELECT target_id, SUM(clicks), SUM(attributed_conversions_14_d) FROM `fivetran-hl.amazon_ads.sb_target_report`
     WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AND (SELECT d FROM wm) GROUP BY 1
   ) GROUP BY 1
 ),
@@ -147,7 +147,7 @@ base AS (
   SELECT tgt.cid AS campaign_id, tgt.target_id, tgt.ad_group_id, tgt.target_text, tgt.target_type, tgt.match_type, tgt.bid,
     COALESCE(s.r2_clk,0) r2_clk, COALESCE(s.r2_cost,0) r2_cost, COALESCE(s.r2_sales,0) r2_sales, COALESCE(s.r2_orders,0) r2_orders,
     COALESCE(s.r3_clk,0) r3_clk, COALESCE(s.r3_cost,0) r3_cost, COALESCE(s.r3_sales,0) r3_sales, COALESCE(s.r3_orders,0) r3_orders,
-    COALESCE(s.clk3,0) clk3, ROUND(SAFE_DIVIDE(s.clk3, NULLIF(s.active_days,0)),2) AS clk_rate, COALESCE(s.sales3,0) sales3, COALESCE(t9.clk90,0) AS clk90, s.k_roas1, s.k_roas_prev2, pr.cost_ratio,
+    COALESCE(s.clk3,0) clk3, ROUND(SAFE_DIVIDE(s.clk3, NULLIF(s.active_days,0)),2) AS clk_rate, COALESCE(s.sales3,0) sales3, COALESCE(t9.clk90,0) AS clk90, COALESCE(t9.ord90,0) AS ord90, s.k_roas1, s.k_roas_prev2, pr.cost_ratio,
     COALESCE(d.pd,0) pd, cs.spend_today, cb.budget, cs.c_roas1, cs.c_roas_prev2,
     (COALESCE(d.pd,0) <= x.dark_target AND SAFE_DIVIDE(cs.spend_today, cb.budget) <= x.spend_target) AS starving
   FROM tgt
@@ -193,7 +193,7 @@ SELECT
       CASE
         -- capped campaign: budget-constrained probing (Ori 2026-07-30)
         WHEN b.pd > x.dark_target THEN CASE
-          WHEN b.clk90 >= x.tested_clk AND b.bid > x.bid_park + 0.05 THEN x.bid_park
+          WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.bid > x.bid_park + 0.05 THEN x.bid_park
           WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.clk3,0) > 0 THEN ROUND(GREATEST(b.bid*x.bid_big_trim, COALESCE(b.aff_cpc, x.bid_min)),2)
           WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day THEN ROUND(GREATEST(b.bid*x.bid_slow, x.bid_min),2)
           ELSE b.bid
@@ -216,7 +216,7 @@ SELECT
     WHEN NOT (COALESCE(b.k_roas1,0) >= 1.0 OR COALESCE(b.k_roas_prev2,0) >= 1.0) THEN
       CASE
         WHEN b.pd > x.dark_target THEN CASE
-          WHEN b.clk90 >= x.tested_clk AND b.bid > x.bid_park + 0.05 THEN 'PARK'
+          WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.bid > x.bid_park + 0.05 THEN 'PARK'
           WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.clk3,0) > 0 THEN 'TRIM_BID'
           WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day THEN 'SLOW'
           ELSE 'HOLD'
