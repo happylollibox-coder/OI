@@ -1,0 +1,46 @@
+// Cube: KeywordLift — the 80/20 portfolio + probe rotation for working campaigns (budget > cap),
+// from V_KEYWORD_LIFT (live read). Spec: architecture/OOB_BUDGET_PHASE.md §"Lever 2B".
+cube(`KeywordLift`, {
+  sql: `SELECT campaign_id, campaign_name, budget, in_peak, w_days, campaign_spend_w, loser_share_pct,
+               active_probes, keyword_id, ad_group_id, target_text, match_type, is_auto, is_pt,
+               current_bid, clicks_w, spend_w, orders_w, roas_w, target_cpc, class,
+               probing, CAST(probe_started AS STRING) probe_started, probe_clicks, probe_roas,
+               action, suggested_bid, reason
+        FROM \`onyga-482313.OI.V_KEYWORD_LIFT\``,
+
+  // Live-view cube: 15-min TTL (view logic iterates; the orchestration stamp doesn't track it)
+  refreshKey: { every: '15 minutes' },
+  measures: { count: { type: `count` } },
+
+  dimensions: {
+    rowId:        { sql: `CONCAT(campaign_id, '|', COALESCE(keyword_id, target_text))`, type: `string`, primaryKey: true },
+    campaignId:   { sql: `campaign_id`,   type: `string` },
+    campaignName: { sql: `campaign_name`, type: `string` },
+    budget:       { sql: `budget`,        type: `number` },
+    inPeak:       { sql: `in_peak`,       type: `boolean` },
+    wDays:        { sql: `w_days`,        type: `number` },
+    campaignSpendW: { sql: `campaign_spend_w`, type: `number` },
+    loserSharePct:  { sql: `loser_share_pct`,  type: `number` },
+    activeProbes:   { sql: `active_probes`,    type: `number` },
+    keywordId:    { sql: `keyword_id`,    type: `string` },
+    adGroupId:    { sql: `ad_group_id`,   type: `string` },
+    targetText:   { sql: `target_text`,   type: `string` },
+    matchType:    { sql: `match_type`,    type: `string` },
+    isAuto:       { sql: `is_auto`,       type: `boolean` },
+    isPt:         { sql: `is_pt`,         type: `boolean` },
+    currentBid:   { sql: `current_bid`,   type: `number` },
+    clicksW:      { sql: `clicks_w`,      type: `number` },
+    spendW:       { sql: `spend_w`,       type: `number` },
+    ordersW:      { sql: `orders_w`,      type: `number` },
+    roasW:        { sql: `roas_w`,        type: `number` },
+    targetCpc:    { sql: `target_cpc`,    type: `number` },
+    kwClass:      { sql: `class`,         type: `string` },
+    probing:      { sql: `probing`,       type: `boolean` },
+    probeStarted: { sql: `probe_started`, type: `string` },
+    probeClicks:  { sql: `probe_clicks`,  type: `number` },
+    probeRoas:    { sql: `probe_roas`,    type: `number` },
+    action:       { sql: `action`,        type: `string` },
+    suggestedBid: { sql: `suggested_bid`, type: `number` },
+    reason:       { sql: `reason`,        type: `string` },
+  },
+});

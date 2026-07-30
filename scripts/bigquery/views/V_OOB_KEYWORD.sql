@@ -233,7 +233,12 @@ base AS (
 -- budget ÷ (targets × 4-click goal), floored at bid_min. Self-scaling: a $10/17-target campaign
 -- trims toward $0.20; a $70/10-target campaign has aff ≈ $1.75 and its bids are left alone.
 baseN AS (
-  SELECT b.*, ROUND(GREATEST(SAFE_DIVIDE(b.budget, COUNT(*) OVER (PARTITION BY b.campaign_id) * 4), 0.20), 2) AS aff_cpc
+  SELECT b.*,
+    ROUND(GREATEST(SAFE_DIVIDE(b.budget, COUNT(*) OVER (PARTITION BY b.campaign_id) * 4), 0.20), 2) AS aff_cpc,
+    -- concentration (Ori 2026-07-30): share of window spend on CONVERTING keywords — when >= 80%
+    -- the campaign is already winner-concentrated and converters glide -5% instead of -15% FIT
+    SAFE_DIVIDE(SUM(IF(b.converting, b.sp1 + b.sp2, 0)) OVER (PARTITION BY b.campaign_id),
+                NULLIF(SUM(b.sp1 + b.sp2) OVER (PARTITION BY b.campaign_id), 0)) AS conv_share
   FROM base b
 ),
 -- target CPC resolved BEFORE the bid CASE so converting keywords can be fitted to it (Ori 2026-07-30)
@@ -268,6 +273,12 @@ SELECT
     -- volume, CHEAPER clicks buy more of it. Enough clicks + bid above what clicks actually cost →
     -- FIT the bid down to the realized 3d CPC (you keep winning the same auctions, priced honestly).
     WHEN b.converting THEN CASE
+      -- campaign already winner-concentrated (>=80% of spend on converters): purpose is MORE
+      -- clicks — glide the 6+-clickers down gently -5%/day (floor: real CPC)
+      WHEN COALESCE(b.conv_share, 0) >= 0.80 THEN
+        IF(b.clk1 > 6 AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05,
+           ROUND(GREATEST(b.current_bid * 0.95, SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0))), 2), NULL)
+      -- mixed campaign: fit the converter to its real CPC -15%/day while the ladder cleans the leak
       WHEN b.clk1 >= x.click_goal_day
         AND SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)) IS NOT NULL
         AND b.current_bid > SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)) + 0.05
@@ -286,6 +297,8 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'HOLD'
     WHEN b.converting THEN CASE
+      WHEN COALESCE(b.conv_share, 0) >= 0.80 THEN
+        IF(b.clk1 > 6 AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05, 'EASE', 'HOLD')
       WHEN b.clk1 >= x.click_goal_day
         AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05 THEN 'FIT_CPC'
       ELSE 'HOLD' END
@@ -298,6 +311,12 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'no bid on record'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'changed today — one suggestion per day'
     WHEN b.converting THEN CASE
+      WHEN COALESCE(b.conv_share, 0) >= 0.80 THEN
+        IF(b.clk1 > 6 AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05,
+           CONCAT('winners take ', CAST(ROUND(100*b.conv_share) AS STRING),
+                  '% of spend — ease -5%/day toward real CPC $', CAST(ROUND(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), 2) AS STRING),
+                  ' to buy MORE clicks from the same budget'),
+           'converting in a winner-concentrated campaign — hold (budget raise is the lever)')
       WHEN b.clk1 >= x.click_goal_day
         AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05
         THEN CONCAT('selling while capping — fit bid down to the real CPC $',

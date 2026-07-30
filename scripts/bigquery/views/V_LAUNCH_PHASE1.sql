@@ -237,7 +237,7 @@ base AS (
     c.low_budget_cap, c.in_peak,
     t.keyword_id, t.ad_group_id, t.target_text, t.target_type, t.match_type,
     COALESCE(t.current_bid, agb.default_bid) AS current_bid,
-    ts.clk3, ROUND(SAFE_DIVIDE(ts.sp3, NULLIF(ts.clk3,0)),2) AS cpc3, COALESCE(ts.clk1,0) AS t_clk1, COALESCE(ts.sales3,0) AS t_sales3, COALESCE(ts.eq3_raw, ts.pooled3) AS t_eq3, ts.roas_1d AS t_roas1, ts.roas_prev2 AS t_roas_prev2,
+    ts.clk3, ts.sp3, ROUND(SAFE_DIVIDE(ts.sp3, NULLIF(ts.clk3,0)),2) AS cpc3, COALESCE(ts.clk1,0) AS t_clk1, COALESCE(ts.sales3,0) AS t_sales3, COALESCE(ts.eq3_raw, ts.pooled3) AS t_eq3, ts.roas_1d AS t_roas1, ts.roas_prev2 AS t_roas_prev2,
     COALESCE(t90.clk90, 0) AS clk90, COALESCE(t90.ord90, 0) AS ord90,
     -- clicks/day over active days (the real rate) — drives the click-rate controller instead of clk3/3.
     ROUND(SAFE_DIVIDE(ts.clk3, NULLIF(ts.active_days, 0)), 2) AS clk_rate,
@@ -255,7 +255,10 @@ base AS (
 -- affordable CPC (Ori 2026-07-30: TRIM floor must not stop at $1) = budget ÷ (targets × 4-click
 -- goal), floored at bid_min. Self-scaling: rich budgets get high aff and are left alone.
 baseN AS (
-  SELECT b.*, ROUND(GREATEST(SAFE_DIVIDE(b.budget, COUNT(*) OVER (PARTITION BY b.campaign_id) * 4), 0.20), 2) AS aff_cpc
+  SELECT b.*, ROUND(GREATEST(SAFE_DIVIDE(b.budget, COUNT(*) OVER (PARTITION BY b.campaign_id) * 4), 0.20), 2) AS aff_cpc,
+    SAFE_DIVIDE(
+      SUM(IF(COALESCE(b.t_roas1,0) >= 1.0 OR COALESCE(b.t_roas_prev2,0) >= 1.0, b.sp3, 0)) OVER (PARTITION BY b.campaign_id),
+      NULLIF(SUM(b.sp3) OVER (PARTITION BY b.campaign_id), 0)) AS conv_share
   FROM base b
 )
 SELECT
@@ -355,6 +358,10 @@ SELECT
     -- ── B) CONVERTING → capped: NEVER raise (Ori 2026-07-30) — fit the bid down to the realized
     -- 3d CPC when clicks are plentiful; the budget raise buys the volume, cheaper clicks buy more.
     WHEN b.pd > x.dark_target THEN CASE
+      -- winner-concentrated (>=80% of spend on converters): glide -5%/day (Ori 2026-07-30)
+      WHEN COALESCE(b.conv_share,0) >= 0.80 THEN
+        IF(COALESCE(b.t_clk1,0) > 6 AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05,
+           ROUND(GREATEST(b.current_bid * 0.95, b.cpc3), 2), b.current_bid)
       WHEN COALESCE(b.t_clk1,0) >= x.click_goal_day AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05
         THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, b.cpc3), 2)
       ELSE b.current_bid END
@@ -379,8 +386,11 @@ SELECT
         WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day  THEN 'SLOW'
         ELSE 'HOLD'
       END
-    WHEN b.pd > x.dark_target THEN
-      IF(COALESCE(b.t_clk1,0) >= x.click_goal_day AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05, 'FIT_CPC', 'HOLD')
+    WHEN b.pd > x.dark_target THEN CASE
+      WHEN COALESCE(b.conv_share,0) >= 0.80 THEN
+        IF(COALESCE(b.t_clk1,0) > 6 AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05, 'EASE', 'HOLD')
+      WHEN COALESCE(b.t_clk1,0) >= x.click_goal_day AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05 THEN 'FIT_CPC'
+      ELSE 'HOLD' END
     WHEN b.t_roas_prev2 > x.strong_roas AND b.t_roas1 > x.strong_roas THEN 'RAISE_STRONG'
     WHEN b.t_roas1 > x.weak_roas THEN 'RAISE_WEAK'
     ELSE 'HOLD' END AS bid_action

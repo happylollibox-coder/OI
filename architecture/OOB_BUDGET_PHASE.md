@@ -24,13 +24,28 @@ Signals: `pct_dark` = share of the anchor day Amazon reported out-of-budget (fro
 net ROAS = corrected gross profit ÷ spend, 1.0 = breakeven (SP from FACT + price-tier COGS; SB
 estimated via the campaign's mapped ASIN cost ratio, same as `V_SB_LAUNCH_CAMPAIGN`).
 
-| condition (first match wins) | action | suggested budget |
-|---|---|---|
-| dark ≤ 10% | WATCH | — (touched the cap but barely; no move) |
-| prev-2d net ROAS ≥ 1.5× | RAISE_STRONG | `LEAST(budget ÷ %active, budget × 3)` — fund full-day demand |
-| last-day net ROAS ≥ 1.2× | RAISE_WEAK | `LEAST(budget ÷ %active, budget × 2)` |
-| prev-2d net ROAS < 0.9× | CUT | `GREATEST(budget × 0.9, $10 floor)` — **−10% per day** toward the floor (Ori 2026-07-30: "lower budget slowly until minimum"; was one −40% jump). Repeated daily while it stays dark and losing; a recovery any day stops the slide. |
-| otherwise (mid 0.9–1.5×) | HOLD | — (budget stays; bids do the work) |
+**Tier split (Ori 2026-07-30 v3):** evidence windows scale with the budget tier — small campaigns
+are judged daily, working campaigns on their working cadence. STRONG needs BOTH windows; CUT needs
+BOTH windows bad (symmetric evidence, no one-day verdicts).
+
+| tier | condition (first match wins) | action | suggested budget |
+|---|---|---|---|
+| all | dark ≤ 10% | WATCH | — |
+| ≤ low-budget cap ($20 off / $30 peak) | last-day ≥ 1.2× AND prev-2d ≥ 1.5× | RAISE_STRONG | `LEAST(budget ÷ %active, ×3)` |
+| | last-day ≥ 1.2× | RAISE_WEAK | `LEAST(budget ÷ %active, ×2)` |
+| | last-day < 0.9× AND prev-2d < 0.9× | CUT | −10%/day toward $10 |
+| | else | HOLD | — |
+| > cap, off-season (7d/28d windows) | 7d ≥ 1.2× AND 28d ≥ 1.5× | RAISE_STRONG | same formulas |
+| | 7d ≥ 1.2× | RAISE_WEAK | |
+| | 7d < 0.9× | CUT | −10%/day toward $10 |
+| | else | HOLD | — |
+| > cap, peak (3d/7d windows) | 3d ≥ 1.2× AND 7d ≥ 1.5× | RAISE_STRONG | |
+| | 3d ≥ 1.2× | RAISE_WEAK | |
+| | 7d < 0.9× | CUT | |
+| | else | HOLD | — |
+
+> cap cadence throttle: re-suggest only when the last budget change is ≥ 7 days old (off-season) /
+≥ 3 days (peak) — the working-campaign rhythm.
 
 `budget ÷ %active` is the projection of what a full serving day would cost — the raise that makes
 the campaign *stop* being dark, which is the phase's goal state: **dark 0%, utilization ~85–100%**.
@@ -90,6 +105,23 @@ differs by construction; the 0-order gate protects harvesting), PT targets exclu
 
 `days_since_budget_change` (from `FACT_PPC_CHANGE_LOG`) is displayed so re-suggestions after a
 fresh change are visibly "just changed".
+
+## Lever 2B — 80/20 portfolio + probe rotation (Ori 2026-07-30, `V_KEYWORD_LIFT`)
+
+Working campaigns only (budget > low-budget cap), SP v1, dark or not. Window W = 7d off-season /
+3d peak. Classes over W (corrected net ROAS): WINNER ≥ 1.1 with ≥ 1 order · MARGINAL 0.7–1.1 with
+orders · LOSER < 0.7 or clicks with 0 orders · IDLE (candidate pool).
+
+**80% of spend to winners:** losers ranked best-first (ROAS desc) keep spending inside a 20%
+exploration allowance; everything beyond it PARKs at $0.25. **1–2 probes at a time**: next
+candidate (anchored first, then LY volume) lifts to `min(1.5 × target CPC, $2)` (fallback:
+winners' avg CPC); the probe episode is STATELESS — measured as FACT activity after the last
+INCREASE_BID upload (change log); bid moves daily during the test (6+ clicks/day no sale → −5%);
+**verdict at 20 episode clicks**: ≥ 1.0× → WINNER_FOUND (joins the 80% pool), else PARK and the
+next 1–2 candidates promote. Goal: every un-parked keyword profitable over W — the best keyword
+per intent at the best bid. Probing keywords are exempt from PARK/TRIM and (by design) from the
+coacher's pullback; this engine's verdicts take precedence for keywords it touched within W.
+Panel: `KeywordLiftPhase.tsx` ("Portfolio 80/20") below the Out-of-budget section.
 
 ## Known caveats
 

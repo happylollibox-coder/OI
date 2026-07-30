@@ -3,21 +3,17 @@
 --
 -- GOAL (Ori 2026-07-30): campaigns should NOT be out of budget — but should use almost all of their
 -- budget. One row per ENABLED campaign (SP AND SB, launch AND working) that Amazon reported
--- CAMPAIGN_OUT_OF_BUDGET at any point on its channel's anchor day, with ONE straightforward budget
--- suggestion. Rules = the launch controller's dark-gated ladder (identical constants to
--- V_LAUNCH_PHASE1.k), applied uniformly to every campaign regardless of engine:
---   dark <= 10%                          → WATCH  (touched the cap but barely — no move)
---   prev-2d net ROAS >= 1.5x             → RAISE_STRONG  LEAST(budget / %active, budget x 3)
---   last-day net ROAS >= 1.2x            → RAISE_WEAK    LEAST(budget / %active, budget x 2)
---   prev-2d net ROAS <  0.9x             → CUT           GREATEST(budget x 0.9, $10 floor)
---     (Ori 2026-07-30: "lower budget slowly until minimum" — 10% steps repeated daily while dark
---      and losing, NOT the launch controller's one-shot -40%; a recovery any day stops the slide)
---   otherwise (mid)                      → HOLD          (budget stays; bids do the work)
+-- CAMPAIGN_OUT_OF_BUDGET at any point on its channel's anchor day, with ONE budget suggestion.
+--
+-- v3 TIER SPLIT (Ori 2026-07-30): evidence windows scale with the budget tier —
+--   budget <= low-budget cap ($20 off / $30 peak): judged daily on last-day + prev-2d
+--   budget >  cap (working): off-season judged on 7d + 28d · peak judged on 3d + 7d,
+--     re-suggested only on the working cadence (last budget change >= 7d off / >= 3d peak)
+-- STRONG needs BOTH windows; CUT needs BOTH windows bad (symmetric evidence, no one-day verdicts).
 --
 -- Status events come from the UNIFIED V_SRC interface (SP∪SB) — never the raw per-channel fivetran
--- tables (an SP-only read missed all 9 dark SB campaigns on 2026-07-29) and never DIM_CAMPAIGN for
--- events (SCD2 samples 3x/day; flips that revert between loads vanish). See
--- architecture/CAMPAIGN_LAUNCH_RAMP.md §"Status source".
+-- tables and never DIM_CAMPAIGN for events (SCD2 samples 3x/day; flips that revert between loads
+-- vanish). See architecture/CAMPAIGN_LAUNCH_RAMP.md §"Status source".
 --
 -- GRAIN: one row per campaign with pct_dark > 0 on its anchor day.
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_OOB_BUDGET_PHASE` AS
@@ -25,33 +21,31 @@ WITH cfg AS (
   SELECT MAX(IF(config_key='campaign_launch_floor_daily', config_value, NULL)) AS floor_daily
   FROM `onyga-482313.OI.DE_BUDGET_CONFIG`
 ),
--- constants — IDENTICAL to V_LAUNCH_PHASE1.k so the phase's suggestion matches the launch engine's
 k AS (
   SELECT 0.10 AS dark_target, 1.5 AS strong_roas, 1.2 AS weak_roas, 0.9 AS cut_roas,
-         -- slow slide (Ori 2026-07-30): -10%/day toward the $10 floor, not the launch -40% one-shot
+         -- slow slide (Ori 2026-07-30): -10%/day toward the $10 floor
          0.90 AS bud_cut, 2.0 AS bud_cap_weak, 3.0 AS bud_cap_strong
 ),
--- each channel anchors on its own last complete day (mirrors the two launch engines)
+season AS (
+  SELECT COUNTIF(CURRENT_DATE('America/New_York') BETWEEN boost_start AND cooldown_end) > 0 AS in_peak
+  FROM `onyga-482313.OI.DIM_US_HOLIDAYS` WHERE category IN ('gift_season', 'prime_event')
+),
+cap AS (SELECT in_peak, IF(in_peak, 30.0, 20.0) AS low_budget_cap FROM season),
 wm_sp AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
           FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
 wm_sb AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
           FROM `fivetran-hl.amazon_ads.sb_campaign_report`),
--- latest identity + budget per campaign
--- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was V_SRC_AmazonAds_campaign_history
+-- latest identity + budget per campaign (consolidated source per prefer-DIM/FACT rule)
 camp AS (
-  SELECT campaign_id,
-    campaign_name,
-    campaign_type AS channel,
-    campaign_state AS state,
-    serving_status,
-    daily_budget AS budget
+  SELECT campaign_id, campaign_name, campaign_type AS channel, campaign_state AS state,
+         serving_status, daily_budget AS budget
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
 ),
 anchor AS (
   SELECT c.campaign_id, IF(c.channel='SB', (SELECT d FROM wm_sb), (SELECT d FROM wm_sp)) AS d
   FROM camp c
 ),
--- %dark on the anchor day — same event-replay method as the launch controllers
+-- %dark on the anchor day — event replay over the unified SP∪SB log
 h AS (
   SELECT s.campaign_id AS cid, DATETIME(s.date,'America/Los_Angeles') AS ts, s.serving_status
   FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history` s
@@ -72,27 +66,32 @@ dark AS (
   FROM sq s JOIN anchor a ON a.campaign_id = s.cid
   GROUP BY 1
 ),
--- SP performance: corrected gross profit (COGS by product actually purchased, price-tier) — same as V_LAUNCH_PHASE1.cday
+-- SP performance over 28d: corrected gross profit (COGS by product actually purchased, price-tier)
 sp_day AS (
   SELECT CAST(a.campaign_id AS STRING) AS cid, a.date,
-    SAFE_DIVIDE(SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units), SUM(a.Ads_cost)) AS roas,
+    SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units) AS gp,
     SUM(a.Ads_cost) AS sp
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   LEFT JOIN `onyga-482313.OI.T_PRICE_COST_TIER` pct
     ON a.Ads_units > 0 AND pct.unit_price = ROUND(SAFE_DIVIDE(a.Ads_sales, a.Ads_units), 2)
-  WHERE a.date BETWEEN DATE_SUB((SELECT d FROM wm_sp), INTERVAL 2 DAY) AND (SELECT d FROM wm_sp)
+  WHERE a.date BETWEEN DATE_SUB((SELECT d FROM wm_sp), INTERVAL 27 DAY) AND (SELECT d FROM wm_sp)
   GROUP BY 1, 2
 ),
 sp_sig AS (
   SELECT cid,
-    ROUND(MAX(IF(date=(SELECT d FROM wm_sp), roas, NULL)), 2) AS roas_1d,
-    -- prev-2d: spend-pooled ratio over the 2 prior days (simple + stable at campaign grain)
-    ROUND(SAFE_DIVIDE(SUM(IF(date<(SELECT d FROM wm_sp), roas*sp, 0)),
-                      NULLIF(SUM(IF(date<(SELECT d FROM wm_sp), sp, 0)), 0)), 2) AS roas_prev2,
-    ROUND(SUM(IF(date=(SELECT d FROM wm_sp), sp, 0)), 2) AS spend_1d
+    ROUND(SAFE_DIVIDE(SUM(IF(date = (SELECT d FROM wm_sp), gp, 0)),
+                      NULLIF(SUM(IF(date = (SELECT d FROM wm_sp), sp, 0)), 0)), 2) AS r1,
+    ROUND(SAFE_DIVIDE(SUM(IF(date < (SELECT d FROM wm_sp) AND date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 2 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date < (SELECT d FROM wm_sp) AND date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 2 DAY), sp, 0)), 0)), 2) AS rprev2,
+    ROUND(SAFE_DIVIDE(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 2 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 2 DAY), sp, 0)), 0)), 2) AS r3,
+    ROUND(SAFE_DIVIDE(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 6 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 6 DAY), sp, 0)), 0)), 2) AS r7,
+    ROUND(SAFE_DIVIDE(SUM(gp), NULLIF(SUM(sp), 0)), 2) AS r28,
+    ROUND(SUM(IF(date = (SELECT d FROM wm_sp), sp, 0)), 2) AS spend_1d
   FROM sp_day GROUP BY 1
 ),
--- SB performance: est net ROAS via the campaign's mapped-ASIN cost ratio — same as V_SB_LAUNCH_CAMPAIGN
+-- SB performance: est net ROAS via the campaign's mapped-ASIN cost ratio
 prod AS (
   SELECT CAST(f.campaign_id AS STRING) AS cid,
     SAFE_DIVIDE(ANY_VALUE(c.cost), NULLIF(ANY_VALUE(p.listing_price_amount), 0)) AS cost_ratio
@@ -106,79 +105,150 @@ prod AS (
 ),
 sb_day AS (
   SELECT CAST(r.campaign_id AS STRING) AS cid, r.report_date AS date,
-    SAFE_DIVIDE(SUM(r.attributed_sales_14_d * (1 - COALESCE(pr.cost_ratio, 0))), NULLIF(SUM(r.cost), 0)) AS roas,
+    SUM(r.attributed_sales_14_d * (1 - COALESCE(pr.cost_ratio, 0))) AS gp,
     SUM(r.cost) AS sp
   FROM `fivetran-hl.amazon_ads.sb_campaign_report` r
   LEFT JOIN prod pr ON pr.cid = CAST(r.campaign_id AS STRING)
-  WHERE r.report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY) AND (SELECT d FROM wm_sb)
+  WHERE r.report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 27 DAY) AND (SELECT d FROM wm_sb)
   GROUP BY 1, 2
 ),
 sb_sig AS (
   SELECT cid,
-    ROUND(MAX(IF(date=(SELECT d FROM wm_sb), roas, NULL)), 2) AS roas_1d,
-    ROUND(SAFE_DIVIDE(SUM(IF(date<(SELECT d FROM wm_sb), roas*sp, 0)),
-                      NULLIF(SUM(IF(date<(SELECT d FROM wm_sb), sp, 0)), 0)), 2) AS roas_prev2,
-    ROUND(SUM(IF(date=(SELECT d FROM wm_sb), sp, 0)), 2) AS spend_1d
+    ROUND(SAFE_DIVIDE(SUM(IF(date = (SELECT d FROM wm_sb), gp, 0)),
+                      NULLIF(SUM(IF(date = (SELECT d FROM wm_sb), sp, 0)), 0)), 2) AS r1,
+    ROUND(SAFE_DIVIDE(SUM(IF(date < (SELECT d FROM wm_sb) AND date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date < (SELECT d FROM wm_sb) AND date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), sp, 0)), 0)), 2) AS rprev2,
+    ROUND(SAFE_DIVIDE(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), sp, 0)), 0)), 2) AS r3,
+    ROUND(SAFE_DIVIDE(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 6 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 6 DAY), sp, 0)), 0)), 2) AS r7,
+    ROUND(SAFE_DIVIDE(SUM(gp), NULLIF(SUM(sp), 0)), 2) AS r28,
+    ROUND(SUM(IF(date = (SELECT d FROM wm_sb), sp, 0)), 2) AS spend_1d
   FROM sb_day GROUP BY 1
 ),
--- days since we last uploaded a budget change (context: a fresh change means "give it a day")
 bc AS (
   SELECT campaign_id, DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at)), DAY) AS days_since_budget_change
   FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
   WHERE action = 'BUDGET_CHANGE'
   GROUP BY 1
+),
+base AS (
+  SELECT
+    c.campaign_id, c.campaign_name, c.channel,
+    IF(lp.campaign_id IS NOT NULL, 'LAUNCH', 'WORKING') AS engine,
+    a.d AS anchor_date,
+    ROUND(c.budget, 2) AS budget,
+    COALESCE(s1.spend_1d, s2.spend_1d) AS spend_1d,
+    d.pd,
+    COALESCE(s1.r1, s2.r1) AS r1, COALESCE(s1.rprev2, s2.rprev2) AS rprev2,
+    COALESCE(s1.r3, s2.r3) AS r3, COALESCE(s1.r7, s2.r7) AS r7, COALESCE(s1.r28, s2.r28) AS r28,
+    bcx.days_since_budget_change AS dsb,
+    kk.low_budget_cap, kk.in_peak,
+    (c.budget <= kk.low_budget_cap) AS is_low_tier,
+    -- working cadence throttle: > cap re-suggests only every 7d (off) / 3d (peak)
+    (c.budget > kk.low_budget_cap AND COALESCE(bcx.days_since_budget_change, 99) < IF(kk.in_peak, 3, 7)) AS throttled
+  FROM camp c
+  CROSS JOIN cap kk
+  JOIN anchor a ON a.campaign_id = c.campaign_id
+  JOIN dark d ON d.cid = c.campaign_id AND d.pd > 0
+  LEFT JOIN sp_sig s1 ON c.channel = 'SP' AND s1.cid = c.campaign_id
+  LEFT JOIN sb_sig s2 ON c.channel = 'SB' AND s2.cid = c.campaign_id
+  LEFT JOIN (SELECT DISTINCT campaign_id FROM `onyga-482313.OI.V_LAUNCH_POPULATION`) lp
+    ON lp.campaign_id = c.campaign_id
+  LEFT JOIN bc bcx ON bcx.campaign_id = c.campaign_id
+  WHERE c.state = 'ENABLED'
+    AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET')
 )
 SELECT
-  c.campaign_id, c.campaign_name, c.channel,
-  IF(lp.campaign_id IS NOT NULL, 'LAUNCH', 'WORKING') AS engine,
-  a.d AS anchor_date,
-  ROUND(c.budget, 2) AS current_budget,
-  COALESCE(sps.spend_1d, sbs.spend_1d) AS spend_1d,
-  ROUND(SAFE_DIVIDE(COALESCE(sps.spend_1d, sbs.spend_1d), c.budget), 2) AS utilization,
-  ROUND(d.pd * 100) AS pct_dark,
-  COALESCE(sps.roas_1d, sbs.roas_1d) AS roas_1d,
-  COALESCE(sps.roas_prev2, sbs.roas_prev2) AS roas_prev2,
-  bcx.days_since_budget_change,
+  b.campaign_id, b.campaign_name, b.channel, b.engine, b.anchor_date,
+  b.budget AS current_budget, b.spend_1d,
+  ROUND(SAFE_DIVIDE(b.spend_1d, b.budget), 2) AS utilization,
+  ROUND(b.pd * 100) AS pct_dark,
+  b.r1 AS roas_1d, b.rprev2 AS roas_prev2, b.r3 AS roas_3d, b.r7 AS roas_7d, b.r28 AS roas_28d,
+  b.dsb AS days_since_budget_change,
+  b.is_low_tier, b.in_peak,
   CASE
-    WHEN d.pd <= x.dark_target THEN 'WATCH'
-    WHEN COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) >= x.strong_roas THEN 'RAISE_STRONG'
-    WHEN COALESCE(sps.roas_1d,   sbs.roas_1d,   0) >= x.weak_roas   THEN 'RAISE_WEAK'
-    WHEN COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) <  x.cut_roas   THEN 'CUT'
-    ELSE 'HOLD'
+    WHEN b.pd <= x.dark_target THEN 'WATCH'
+    WHEN b.is_low_tier THEN CASE
+      WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN 'RAISE_STRONG'
+      WHEN COALESCE(b.r1,0) >= x.weak_roas THEN 'RAISE_WEAK'
+      WHEN COALESCE(b.r1,0) < x.cut_roas AND COALESCE(b.rprev2,0) < x.cut_roas THEN 'CUT'
+      ELSE 'HOLD' END
+    WHEN b.throttled THEN 'HOLD'
+    WHEN NOT b.in_peak THEN CASE
+      WHEN COALESCE(b.r7,0) >= x.weak_roas AND COALESCE(b.r28,0) >= x.strong_roas THEN 'RAISE_STRONG'
+      WHEN COALESCE(b.r7,0) >= x.weak_roas THEN 'RAISE_WEAK'
+      WHEN COALESCE(b.r7,0) < x.cut_roas THEN 'CUT'
+      ELSE 'HOLD' END
+    ELSE CASE
+      WHEN COALESCE(b.r3,0) >= x.weak_roas AND COALESCE(b.r7,0) >= x.strong_roas THEN 'RAISE_STRONG'
+      WHEN COALESCE(b.r3,0) >= x.weak_roas THEN 'RAISE_WEAK'
+      WHEN COALESCE(b.r7,0) < x.cut_roas THEN 'CUT'
+      ELSE 'HOLD' END
   END AS action,
   CASE
-    WHEN d.pd <= x.dark_target THEN NULL
-    WHEN COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) >= x.strong_roas
-      THEN ROUND(LEAST(SAFE_DIVIDE(c.budget, 1 - d.pd), c.budget * x.bud_cap_strong), 2)
-    WHEN COALESCE(sps.roas_1d, sbs.roas_1d, 0) >= x.weak_roas
-      THEN ROUND(LEAST(SAFE_DIVIDE(c.budget, 1 - d.pd), c.budget * x.bud_cap_weak), 2)
-    WHEN COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) < x.cut_roas
-      THEN ROUND(GREATEST(c.budget * x.bud_cut, CAST(cf.floor_daily AS FLOAT64)), 2)
-    ELSE NULL
+    WHEN b.pd <= x.dark_target THEN NULL
+    WHEN b.is_low_tier THEN CASE
+      WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas
+        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_strong), 2)
+      WHEN COALESCE(b.r1,0) >= x.weak_roas
+        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_weak), 2)
+      WHEN COALESCE(b.r1,0) < x.cut_roas AND COALESCE(b.rprev2,0) < x.cut_roas
+        THEN ROUND(GREATEST(b.budget * x.bud_cut, CAST(cf.floor_daily AS FLOAT64)), 2)
+      ELSE NULL END
+    WHEN b.throttled THEN NULL
+    WHEN NOT b.in_peak THEN CASE
+      WHEN COALESCE(b.r7,0) >= x.weak_roas AND COALESCE(b.r28,0) >= x.strong_roas
+        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_strong), 2)
+      WHEN COALESCE(b.r7,0) >= x.weak_roas
+        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_weak), 2)
+      WHEN COALESCE(b.r7,0) < x.cut_roas
+        THEN ROUND(GREATEST(b.budget * x.bud_cut, CAST(cf.floor_daily AS FLOAT64)), 2)
+      ELSE NULL END
+    ELSE CASE
+      WHEN COALESCE(b.r3,0) >= x.weak_roas AND COALESCE(b.r7,0) >= x.strong_roas
+        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_strong), 2)
+      WHEN COALESCE(b.r3,0) >= x.weak_roas
+        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_weak), 2)
+      WHEN COALESCE(b.r7,0) < x.cut_roas
+        THEN ROUND(GREATEST(b.budget * x.bud_cut, CAST(cf.floor_daily AS FLOAT64)), 2)
+      ELSE NULL END
   END AS suggested_budget,
   CASE
-    WHEN d.pd <= x.dark_target
-      THEN CONCAT('Dark ', CAST(ROUND(d.pd*100) AS STRING), '% — barely capped, watch')
-    WHEN COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) >= x.strong_roas
-      THEN CONCAT('Dark ', CAST(ROUND(d.pd*100) AS STRING), '% · prev-2d ',
-                  CAST(COALESCE(sps.roas_prev2, sbs.roas_prev2) AS STRING), 'x → fund full-day demand (cap 3x)')
-    WHEN COALESCE(sps.roas_1d, sbs.roas_1d, 0) >= x.weak_roas
-      THEN CONCAT('Dark ', CAST(ROUND(d.pd*100) AS STRING), '% · last day ',
-                  CAST(COALESCE(sps.roas_1d, sbs.roas_1d) AS STRING), 'x → raise (cap 2x)')
-    WHEN COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) < x.cut_roas
-      THEN CONCAT('Dark ', CAST(ROUND(d.pd*100) AS STRING), '% · prev-2d ',
-                  CAST(COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) AS STRING), 'x losing → step down 10% (floor $10)')
-    ELSE CONCAT('Dark ', CAST(ROUND(d.pd*100) AS STRING), '% · mid ROAS → hold budget, bids do the work')
+    WHEN b.pd <= x.dark_target
+      THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% — barely capped, watch')
+    WHEN b.is_low_tier THEN CASE
+      WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · last day ', CAST(b.r1 AS STRING),
+                    'x AND prev-2d ', CAST(b.rprev2 AS STRING), 'x → fund full-day demand (cap 3x)')
+      WHEN COALESCE(b.r1,0) >= x.weak_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · last day ', CAST(b.r1 AS STRING), 'x → raise (cap 2x)')
+      WHEN COALESCE(b.r1,0) < x.cut_roas AND COALESCE(b.rprev2,0) < x.cut_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · BOTH windows losing (',
+                    CAST(COALESCE(b.r1,0) AS STRING), 'x / ', CAST(COALESCE(b.rprev2,0) AS STRING), 'x) → step down 10% (floor $10)')
+      ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · mixed windows → hold budget, bids do the work') END
+    WHEN b.throttled
+      THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · budget changed ', CAST(b.dsb AS STRING),
+                  'd ago — working cadence (', IF(b.in_peak, '3d in peak', '7d off-season'), ') not due yet')
+    WHEN NOT b.in_peak THEN CASE
+      WHEN COALESCE(b.r7,0) >= x.weak_roas AND COALESCE(b.r28,0) >= x.strong_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d ', CAST(b.r7 AS STRING),
+                    'x AND 28d ', CAST(b.r28 AS STRING), 'x → fund full-day demand (cap 3x)')
+      WHEN COALESCE(b.r7,0) >= x.weak_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d ', CAST(b.r7 AS STRING), 'x → raise (cap 2x)')
+      WHEN COALESCE(b.r7,0) < x.cut_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d ', CAST(COALESCE(b.r7,0) AS STRING), 'x losing → step down 10% (floor $10)')
+      ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d mid → hold budget, bids do the work') END
+    ELSE CASE
+      WHEN COALESCE(b.r3,0) >= x.weak_roas AND COALESCE(b.r7,0) >= x.strong_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 3d ', CAST(b.r3 AS STRING),
+                    'x AND 7d ', CAST(b.r7 AS STRING), 'x (peak) → fund full-day demand (cap 3x)')
+      WHEN COALESCE(b.r3,0) >= x.weak_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 3d ', CAST(b.r3 AS STRING), 'x (peak) → raise (cap 2x)')
+      WHEN COALESCE(b.r7,0) < x.cut_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d ', CAST(COALESCE(b.r7,0) AS STRING), 'x losing (peak) → step down 10% (floor $10)')
+      ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · mid (peak) → hold budget, bids do the work') END
   END AS reason
-FROM camp c
+FROM base b
 CROSS JOIN k x
-CROSS JOIN cfg cf
-JOIN anchor a ON a.campaign_id = c.campaign_id
-JOIN dark d ON d.cid = c.campaign_id AND d.pd > 0
-LEFT JOIN sp_sig sps ON c.channel = 'SP' AND sps.cid = c.campaign_id
-LEFT JOIN sb_sig sbs ON c.channel = 'SB' AND sbs.cid = c.campaign_id
-LEFT JOIN (SELECT DISTINCT campaign_id FROM `onyga-482313.OI.V_LAUNCH_POPULATION`) lp
-  ON lp.campaign_id = c.campaign_id
-LEFT JOIN bc bcx ON bcx.campaign_id = c.campaign_id
-WHERE c.state = 'ENABLED'
-  AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET');
+CROSS JOIN cfg cf;

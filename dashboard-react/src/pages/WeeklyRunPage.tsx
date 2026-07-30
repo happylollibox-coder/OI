@@ -5,6 +5,7 @@ import { ALL_AGES } from './BudgetByAge';
 import { CoachFlowchart } from './CoachFlowchart';
 import { NewCampaignCards } from './NewCampaignCards';
 import { OobBudgetPhase } from './OobBudgetPhase';
+import { KeywordLiftPhase } from './KeywordLiftPhase';
 
 // Sections 2 (per-campaign budget table) & 3 (plan) were removed 2026-07-18 — budget now lives inside
 // each campaign card in section 4. Flip to true to bring the old sections back.
@@ -766,6 +767,7 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                 <CoachFlowchart />
                 {/* out-of-budget technical phase — dark campaigns + one budget suggestion each (V_OOB_BUDGET_PHASE) */}
                 <OobBudgetPhase />
+                <KeywordLiftPhase />
                 {/* New campaigns (0–20d) launch-controller cards — co-located directly under the coach logic, above the mature actions */}
                 {ppcMode === 'offense' && (selAge === ALL_AGES || selAge === 'LOW_BUDGET') && (
                   <div className="mt-3 mb-4">
