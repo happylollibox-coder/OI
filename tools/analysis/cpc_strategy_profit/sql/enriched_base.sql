@@ -26,18 +26,12 @@ tos_bid AS (                 -- campaign TOS bid-adjustment % (current setting s
   SELECT campaign_id, MAX(top_of_search_pct) AS tos_bid_adj_pct
   FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` GROUP BY campaign_id
 ),
-ag_fmt AS (                  -- SB ad-group -> creative_type (verified unique per ad group)
-  SELECT ad_group_id,
-    -- fall back to the campaign name when the source creative_type is NULL (some SB video campaigns
-    -- don't populate it, e.g. FRESH-VIDEO/EXACT). '%VIDEO%' in the name is always video (validated).
-    COALESCE(
-      MAX(creative_type),
-      CASE WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%VIDEO%'      THEN 'BRAND_VIDEO'
-           WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%COLLECTION%' THEN 'PRODUCT_COLLECTION' END
-    ) AS creative_type
-  FROM `onyga-482313.OI.V_SRC_AmazonAds_sb_ad_report`
-  WHERE cost > 0
-  GROUP BY ad_group_id
+ag_fmt AS (                  -- SB ad-group -> creative_type (unique per ad group)
+  -- Canonical derivation (report creative_type + campaign-name fallback) lives in
+  -- SP_LOAD_DIM_AD_GROUP — read it from the dimension, don't re-derive from sb_ad_report.
+  SELECT ad_group_id, creative_type
+  FROM `onyga-482313.OI.DIM_AD_GROUP`
+  WHERE is_current AND creative_type IS NOT NULL
 ),
 cal AS (                     -- one calendar segment per LA-local date
   SELECT d AS date,
