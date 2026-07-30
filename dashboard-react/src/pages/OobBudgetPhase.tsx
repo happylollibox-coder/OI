@@ -314,8 +314,7 @@ export function OobBudgetPhase() {
                         {k.cpc1 != null ? `$${k.cpc1.toFixed(2)}` : '—'}</span>
                       <span className="text-faint">{k.targetCpc != null ? ` /$${k.targetCpc.toFixed(2)}${k.targetCpcSrc === 'LY' ? 'ʸ' : 'ᵇ'}` : ''}</span>
                     </td>
-                    <td className="px-2 text-muted" title="clicks yesterday">{k.clicks1}c</td>
-                    <td className="px-2 text-muted">{k.roas1 != null ? `${k.roas1.toFixed(2)}×` : '—'}</td>
+                    <td className="px-2 text-muted whitespace-nowrap" colSpan={2} title="last day clicks · net ROAS">{k.clicks1}c{k.roas1 != null ? ` ${k.roas1.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-muted" title="prev-2d clicks · net ROAS">{k.clicks2}c{k.roas2 != null ? ` ${k.roas2.toFixed(2)}×` : ''}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${KW_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace('_', ' ')}</td>
                     <td className="px-2">{k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}</td>
