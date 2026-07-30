@@ -43,16 +43,19 @@ prod AS (
     ON c.asin = f.ASIN_BY_CAMPAIGN_NAME
   GROUP BY 1
 ),
--- current daily budget per SB campaign (latest row in sb_campaign_history)
+-- current daily budget per SB campaign — latest event row via the unified V_SRC interface (prefer the
+-- consolidated layer over raw fivetran; 2026-07-30, see architecture/CAMPAIGN_LAUNCH_RAMP.md §"Status source").
+-- campaign_type='SB' keeps this SB-only exactly as before.
 bud AS (
-  SELECT CAST(id AS STRING) cid, ARRAY_AGG(budget ORDER BY last_update_date DESC LIMIT 1)[OFFSET(0)] AS budget
-  FROM `fivetran-hl.amazon_ads.sb_campaign_history` GROUP BY 1
+  SELECT campaign_id cid, ARRAY_AGG(budget ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS budget
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history` WHERE campaign_type='SB' GROUP BY 1
 ),
--- %dark today from sb_campaign_history serving_status (Amazon's own out-of-budget verdict; same method as SP)
+-- %dark today from serving_status events (Amazon's own out-of-budget verdict; same method as SP).
+-- Event log via V_SRC (not DIM_CAMPAIGN: SCD2 samples 3×/day and drops flips that revert between loads).
 h AS (
-  SELECT CAST(id AS STRING) cid, DATETIME(last_update_date, 'America/Los_Angeles') ts, serving_status
-  FROM `fivetran-hl.amazon_ads.sb_campaign_history`
-  WHERE DATE(last_update_date, 'America/Los_Angeles') = (SELECT d FROM wm)
+  SELECT campaign_id cid, DATETIME(date, 'America/Los_Angeles') ts, serving_status
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history`
+  WHERE campaign_type='SB' AND DATE(date, 'America/Los_Angeles') = (SELECT d FROM wm)
 ),
 ev AS (
   SELECT cid, ts, serving_status FROM h
@@ -67,7 +70,10 @@ dark AS (
 -- per-day campaign rows over the 3-day window (measures + est net ROAS signal)
 r AS (
   SELECT CAST(rep.campaign_id AS STRING) cid, rep.report_date date,
-    rep.impressions, rep.clicks, rep.cost, rep.attributed_sales_14_d sales, rep.top_of_search_impression_share tos
+    rep.impressions, rep.clicks, rep.cost, rep.attributed_sales_14_d sales, rep.top_of_search_impression_share tos,
+    -- SB reports ORDERS (attributed_conversions_14_d), never a unit count (units_sold_14_d is NULL) — so the
+    -- card shows orders where SP shows units (Ori 2026-07-25: "no units but net roas 0.94×" — sales, not units).
+    rep.attributed_conversions_14_d orders
   FROM `fivetran-hl.amazon_ads.sb_campaign_report` rep
   WHERE rep.report_date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY) AND (SELECT d FROM wm)
 ),
@@ -75,8 +81,10 @@ agg AS (
   SELECT cid,
     SUM(IF(date=(SELECT d FROM wm), impressions,0)) r2_impr, SUM(IF(date=(SELECT d FROM wm), clicks,0)) r2_clk,
     SUM(IF(date=(SELECT d FROM wm), cost,0)) r2_cost, SUM(IF(date=(SELECT d FROM wm), sales,0)) r2_sales,
+    SUM(IF(date=(SELECT d FROM wm), orders,0)) r2_orders,
     SUM(IF(date<(SELECT d FROM wm), impressions,0)) r3_impr, SUM(IF(date<(SELECT d FROM wm), clicks,0)) r3_clk,
-    SUM(IF(date<(SELECT d FROM wm), cost,0)) r3_cost, SUM(IF(date<(SELECT d FROM wm), sales,0)) r3_sales
+    SUM(IF(date<(SELECT d FROM wm), cost,0)) r3_cost, SUM(IF(date<(SELECT d FROM wm), sales,0)) r3_sales,
+    SUM(IF(date<(SELECT d FROM wm), orders,0)) r3_orders
   FROM r GROUP BY 1
 ),
 -- campaign net-ROAS signals (est), SP-style: roas_1d = last day; roas_prev2 = mean of the 2 prior days
@@ -112,12 +120,12 @@ SELECT
   ROUND(b.r2_cost,2) r2_spend, ROUND(SAFE_DIVIDE(b.r2_cost,NULLIF(b.r2_clk,0)),2) r2_cpc, b.r2_clk,
   ROUND(100*SAFE_DIVIDE(b.r2_clk,NULLIF(b.r2_impr,0)),2) r2_ctr, CAST(NULL AS INT64) r2_tos,
   ROUND(SAFE_DIVIDE(b.r2_sales*(1-COALESCE(b.cost_ratio,0)), NULLIF(b.r2_cost,0)),2) r2_roas,
-  ROUND(100*SAFE_DIVIDE(b.r2_cost,NULLIF(b.r2_sales,0)),0) r2_acos, b.r2_impr,
+  ROUND(100*SAFE_DIVIDE(b.r2_cost,NULLIF(b.r2_sales,0)),0) r2_acos, b.r2_impr, CAST(b.r2_orders AS INT64) r2_orders,
   -- row 3 (prior 2 days)
   ROUND(b.r3_cost,2) r3_spend, ROUND(SAFE_DIVIDE(b.r3_cost,NULLIF(b.r3_clk,0)),2) r3_cpc, b.r3_clk,
   ROUND(100*SAFE_DIVIDE(b.r3_clk,NULLIF(b.r3_impr,0)),2) r3_ctr, CAST(NULL AS INT64) r3_tos,
   ROUND(SAFE_DIVIDE(b.r3_sales*(1-COALESCE(b.cost_ratio,0)), NULLIF(b.r3_cost,0)),2) r3_roas,
-  ROUND(100*SAFE_DIVIDE(b.r3_cost,NULLIF(b.r3_sales,0)),0) r3_acos, b.r3_impr,
+  ROUND(100*SAFE_DIVIDE(b.r3_cost,NULLIF(b.r3_sales,0)),0) r3_acos, b.r3_impr, CAST(b.r3_orders AS INT64) r3_orders,
   -- BUDGET SUGGESTION — identical CASE to V_LAUNCH_PHASE1 (SB behaves like SP)
   CASE
     WHEN b.spend_today IS NULL OR b.current_budget IS NULL THEN b.current_budget

@@ -15,9 +15,13 @@
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_SB_LAUNCH_TARGET` AS
 WITH k AS (
   SELECT 0.10 AS dark_target, 0.60 AS spend_target, 1.5 AS strong_roas, 1.2 AS weak_roas, 0.9 AS cut_roas,
-         0.80 AS bid_cut, 1.30 AS bid_raise_strong, 1.15 AS bid_raise_weak, 1.10 AS bid_starve, 1.05 AS bid_probe, 0.20 AS bid_min, 1.50 AS bid_max,
+         0.80 AS bid_cut, 1.30 AS bid_raise_strong, 1.15 AS bid_raise_weak, 1.10 AS bid_starve, 1.05 AS bid_probe, 0.20 AS bid_min, 1.50 AS bid_max, 2.00 AS bid_hard_cap,
          -- money-bleeder ladder (0 conversions, scaled by clicks) — same as V_LAUNCH_PHASE1
-         4 AS bleed_watch_clk, 8 AS bleed_trim_clk, 15 AS bleed_cut_clk, 0.80 AS bid_bleed_trim, 0.60 AS bid_bleed_cut
+         4 AS bleed_watch_clk, 8 AS bleed_trim_clk, 15 AS bleed_cut_clk, 0.80 AS bid_bleed_trim, 0.60 AS bid_bleed_cut,
+         -- LAUNCH CLICK GOAL (Ori 2026-07-24/25): judged on the LAST COMPLETE DAY's clicks (r2_clk), mirroring
+         -- V_LAUNCH_PHASE1's t_clk1 — "4 clicks a day" = the most recent full day, not a multi-day average.
+         --   r2_clk < 4 → PROBE (+5%) · r2_clk >= 6 → SLOW (−5%, 6+ clicks yesterday, no sale) · 4–5 → HOLD.
+         4 AS click_goal_day, 6 AS click_cap_day, 0.95 AS bid_slow
 ),
 wm AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
        FROM `fivetran-hl.amazon_ads.sb_search_term_report`),
@@ -39,14 +43,17 @@ prod AS (
   GROUP BY 1
 ),
 -- ── campaign signals (SP-identical, SB-native) ──
+-- Budget + status events via the unified V_SRC interface, campaign_type='SB' (prefer the consolidated
+-- layer over raw fivetran; NOT DIM_CAMPAIGN for events — its SCD2 samples 3×/day and drops reverting
+-- flips. 2026-07-30, architecture/CAMPAIGN_LAUNCH_RAMP.md §"Status source").
 bud AS (
-  SELECT CAST(id AS STRING) cid, ARRAY_AGG(budget ORDER BY last_update_date DESC LIMIT 1)[OFFSET(0)] AS budget
-  FROM `fivetran-hl.amazon_ads.sb_campaign_history` GROUP BY 1
+  SELECT campaign_id cid, ARRAY_AGG(budget ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS budget
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history` WHERE campaign_type='SB' GROUP BY 1
 ),
 h AS (
-  SELECT CAST(id AS STRING) cid, DATETIME(last_update_date, 'America/Los_Angeles') ts, serving_status
-  FROM `fivetran-hl.amazon_ads.sb_campaign_history`
-  WHERE DATE(last_update_date, 'America/Los_Angeles') = (SELECT d FROM wm)
+  SELECT campaign_id cid, DATETIME(date, 'America/Los_Angeles') ts, serving_status
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history`
+  WHERE campaign_type='SB' AND DATE(date, 'America/Los_Angeles') = (SELECT d FROM wm)
 ),
 ev AS (
   SELECT cid, ts, serving_status FROM h
@@ -95,21 +102,26 @@ tgt AS (
 ),
 -- ── unified per-day performance (keyword arm from search-term report ∪ product arm from target report) ──
 tgtday AS (
-  SELECT keyword_id AS target_id, report_date date, SUM(clicks) clk, SUM(cost) cost, SUM(attributed_sales_14_d) sales
+  -- SB reports ORDERS (attributed_conversions_14_d), not a unit count — surfaced so the per-target drill shows
+  -- "N orders" driving the net-ROAS estimate instead of a blank units column (Ori 2026-07-25).
+  SELECT keyword_id AS target_id, report_date date, SUM(clicks) clk, SUM(cost) cost, SUM(attributed_sales_14_d) sales, SUM(attributed_conversions_14_d) orders
   FROM `fivetran-hl.amazon_ads.sb_search_term_report`
   WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY) AND (SELECT d FROM wm)
   GROUP BY 1, 2
   UNION ALL
-  SELECT target_id, report_date, SUM(clicks), SUM(cost), SUM(attributed_sales_14_d)
+  SELECT target_id, report_date, SUM(clicks), SUM(cost), SUM(attributed_sales_14_d), SUM(attributed_conversions_14_d)
   FROM `fivetran-hl.amazon_ads.sb_target_report`
   WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY) AND (SELECT d FROM wm)
   GROUP BY 1, 2
 ),
 tsig AS (
   SELECT tgt.target_id,
-    SUM(IF(d.date=(SELECT d FROM wm), d.clk,0)) r2_clk, SUM(IF(d.date=(SELECT d FROM wm), d.cost,0)) r2_cost, SUM(IF(d.date=(SELECT d FROM wm), d.sales,0)) r2_sales,
-    SUM(IF(d.date<(SELECT d FROM wm), d.clk,0)) r3_clk, SUM(IF(d.date<(SELECT d FROM wm), d.cost,0)) r3_cost, SUM(IF(d.date<(SELECT d FROM wm), d.sales,0)) r3_sales,
+    SUM(IF(d.date=(SELECT d FROM wm), d.clk,0)) r2_clk, SUM(IF(d.date=(SELECT d FROM wm), d.cost,0)) r2_cost, SUM(IF(d.date=(SELECT d FROM wm), d.sales,0)) r2_sales, SUM(IF(d.date=(SELECT d FROM wm), d.orders,0)) r2_orders,
+    SUM(IF(d.date<(SELECT d FROM wm), d.clk,0)) r3_clk, SUM(IF(d.date<(SELECT d FROM wm), d.cost,0)) r3_cost, SUM(IF(d.date<(SELECT d FROM wm), d.sales,0)) r3_sales, SUM(IF(d.date<(SELECT d FROM wm), d.orders,0)) r3_orders,
     SUM(d.clk) clk3, COALESCE(SUM(d.sales),0) sales3,
+    -- active click-days = denominator for the real clicks/day rate (a burst on one day must not read as
+    -- clk3/3; mirrors V_LAUNCH_PHASE1, Ori 2026-07-25).
+    COUNT(DISTINCT IF(d.clk > 0, d.date, NULL)) AS active_days,
     MAX(IF(d.date=(SELECT d FROM wm), SAFE_DIVIDE(d.sales*(1-COALESCE(pr.cost_ratio,0)), NULLIF(d.cost,0)), NULL)) AS k_roas1,
     COALESCE(
       AVG(IF(d.clk>=3 AND d.date<(SELECT d FROM wm), SAFE_DIVIDE(d.sales*(1-COALESCE(pr.cost_ratio,0)), NULLIF(d.cost,0)), NULL)),
@@ -121,9 +133,9 @@ tsig AS (
 ),
 base AS (
   SELECT tgt.cid AS campaign_id, tgt.target_id, tgt.ad_group_id, tgt.target_text, tgt.target_type, tgt.match_type, tgt.bid,
-    COALESCE(s.r2_clk,0) r2_clk, COALESCE(s.r2_cost,0) r2_cost, COALESCE(s.r2_sales,0) r2_sales,
-    COALESCE(s.r3_clk,0) r3_clk, COALESCE(s.r3_cost,0) r3_cost, COALESCE(s.r3_sales,0) r3_sales,
-    COALESCE(s.clk3,0) clk3, COALESCE(s.sales3,0) sales3, s.k_roas1, s.k_roas_prev2, pr.cost_ratio,
+    COALESCE(s.r2_clk,0) r2_clk, COALESCE(s.r2_cost,0) r2_cost, COALESCE(s.r2_sales,0) r2_sales, COALESCE(s.r2_orders,0) r2_orders,
+    COALESCE(s.r3_clk,0) r3_clk, COALESCE(s.r3_cost,0) r3_cost, COALESCE(s.r3_sales,0) r3_sales, COALESCE(s.r3_orders,0) r3_orders,
+    COALESCE(s.clk3,0) clk3, ROUND(SAFE_DIVIDE(s.clk3, NULLIF(s.active_days,0)),2) AS clk_rate, COALESCE(s.sales3,0) sales3, s.k_roas1, s.k_roas_prev2, pr.cost_ratio,
     COALESCE(d.pd,0) pd, cs.spend_today, cb.budget, cs.c_roas1, cs.c_roas_prev2,
     (COALESCE(d.pd,0) <= x.dark_target AND SAFE_DIVIDE(cs.spend_today, cb.budget) <= x.spend_target) AS starving
   FROM tgt
@@ -144,36 +156,46 @@ last_change AS (
 )
 SELECT
   b.campaign_id, b.target_id, b.ad_group_id, b.target_text, b.target_type, b.match_type, b.bid,
-  b.r2_clk, ROUND(b.r2_cost,2) r2_spend, ROUND(SAFE_DIVIDE(b.r2_cost,NULLIF(b.r2_clk,0)),2) r2_cpc, ROUND(b.r2_sales,2) r2_sales,
+  b.r2_clk, ROUND(b.r2_cost,2) r2_spend, ROUND(SAFE_DIVIDE(b.r2_cost,NULLIF(b.r2_clk,0)),2) r2_cpc, ROUND(b.r2_sales,2) r2_sales, CAST(b.r2_orders AS INT64) r2_orders,
   ROUND(SAFE_DIVIDE(b.r2_sales*(1-COALESCE(b.cost_ratio,0)), NULLIF(b.r2_cost,0)),2) r2_roas,
-  b.r3_clk, ROUND(b.r3_cost,2) r3_spend, ROUND(SAFE_DIVIDE(b.r3_cost,NULLIF(b.r3_clk,0)),2) r3_cpc, ROUND(b.r3_sales,2) r3_sales,
+  b.r3_clk, ROUND(b.r3_cost,2) r3_spend, ROUND(SAFE_DIVIDE(b.r3_cost,NULLIF(b.r3_clk,0)),2) r3_cpc, ROUND(b.r3_sales,2) r3_sales, CAST(b.r3_orders AS INT64) r3_orders,
   ROUND(SAFE_DIVIDE(b.r3_sales*(1-COALESCE(b.cost_ratio,0)), NULLIF(b.r3_cost,0)),2) r3_roas,
-  -- BID SUGGESTION — identical launch-window model to V_LAUNCH_PHASE1 (Ori, 2026-07-21): FIND THE RIGHT BID, no
-  -- loss-driven cuts during the 20-day launch. < 4 clicks → PROBE +5%; selling → RAISE; >=4 clicks & not selling →
-  -- HOLD. Bleed is stopped by negating non-converting SEARCH TERMS (>=15 clk/0 orders), not by cutting the bid.
-  -- DARK BRAKE retained: capping control (campaign hitting its budget cap), not a loss cut.
+  -- BID SUGGESTION — identical launch-window model to V_LAUNCH_PHASE1 (Ori 2026-07-21; click-rate control
+  -- 2026-07-24). Two regimes split by whether the TARGET converts:
+  --   NOT CONVERTING (net ROAS < 1 both windows) → click-rate control toward 4–6 clicks/day:
+  --     <4/day → +5% · >6/day → −5% · 4–6/day → HOLD and wait for a sale.
+  --     %DARK IS IGNORED here (Ori: "this keyword is not the cause for it being dark") — darkness is a BUDGET
+  --     problem. The >6/day targets ARE the cause of capping, and they are exactly what this lowers.
+  --   CONVERTING (net ROAS >= 1 either window) → pre-existing logic: hold while capping, else RAISE.
+  -- Bleed is stopped by negating non-converting SEARCH TERMS (>=15 clk/0 orders), never by a loss-driven cut.
   CASE
     WHEN COALESCE(lc.days_since_suggestion, 99) < 1 THEN NULL   -- 1-day cooldown: changed today → suppress
     WHEN b.bid IS NULL THEN NULL
-    -- PROBE: < 4 clicks → raise SLOWLY (+5%) to buy traffic and reach a verdict, even when dark
-    WHEN b.clk3 < x.bleed_watch_clk THEN ROUND(LEAST(b.bid*x.bid_probe, x.bid_max),2)
-    -- DARK BRAKE (capping control): profitable target holds, else reduce bid to un-cap
-    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
-         AND (b.k_roas1 >= 1.0 OR b.k_roas_prev2 >= 1.0) THEN b.bid
-    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
-      THEN ROUND(GREATEST(b.bid*(1 - 0.30*b.pd), x.bid_min),2)
-    -- WINNERS (>=4 clicks & selling): fund them
-    WHEN b.k_roas_prev2 > x.strong_roas AND b.k_roas1 > x.strong_roas THEN ROUND(LEAST(b.bid*x.bid_raise_strong, x.bid_max),2)
-    WHEN b.k_roas1 > x.weak_roas THEN ROUND(LEAST(b.bid*x.bid_raise_weak, x.bid_max),2)
+    -- NOT CONVERTING → click-rate control only (no %dark term in this branch)
+    WHEN NOT (COALESCE(b.k_roas1,0) >= 1.0 OR COALESCE(b.k_roas_prev2,0) >= 1.0) THEN
+      CASE
+        WHEN COALESCE(b.r2_clk,0) <  x.click_goal_day THEN ROUND(LEAST(b.bid*x.bid_probe, x.bid_max),2)
+        WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day  THEN ROUND(GREATEST(b.bid*x.bid_slow, x.bid_min),2)
+        ELSE b.bid   -- inside the 4–6 clicks/day band: hold and wait for a sale
+      END
+    -- CONVERTING + campaign capping → HOLD (raising while dark makes capping worse)
+    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas THEN b.bid
+    -- WINNERS (converting): fund them toward the $2 HARD CAP, not the $1.50 launch cap — a proven
+    -- converter has earned the right to bid up past the unproven-target ceiling (Ori 2026-07-24).
+    WHEN b.k_roas_prev2 > x.strong_roas AND b.k_roas1 > x.strong_roas THEN ROUND(LEAST(b.bid*x.bid_raise_strong, x.bid_hard_cap),2)
+    WHEN b.k_roas1 > x.weak_roas THEN ROUND(LEAST(b.bid*x.bid_raise_weak, x.bid_hard_cap),2)
     -- everything else (>=4 clicks, not selling): HOLD — bid not cut; bad search terms get negated instead
     ELSE b.bid END AS suggested_bid,
   CASE
     WHEN COALESCE(lc.days_since_suggestion, 99) < 1 THEN 'HOLD'   -- 1-day cooldown: changed today → held
     WHEN b.bid IS NULL THEN 'NO_BID'
-    WHEN b.clk3 < x.bleed_watch_clk THEN 'PROBE'
-    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas
-         AND (b.k_roas1 >= 1.0 OR b.k_roas_prev2 >= 1.0) THEN 'HOLD'
-    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas THEN 'BRAKE'
+    WHEN NOT (COALESCE(b.k_roas1,0) >= 1.0 OR COALESCE(b.k_roas_prev2,0) >= 1.0) THEN
+      CASE
+        WHEN COALESCE(b.r2_clk,0) <  x.click_goal_day THEN 'PROBE'
+        WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day  THEN 'SLOW'
+        ELSE 'HOLD'
+      END
+    WHEN b.pd > x.dark_target AND b.c_roas_prev2 <= x.strong_roas AND b.c_roas1 <= x.weak_roas THEN 'HOLD'
     WHEN b.k_roas_prev2 > x.strong_roas AND b.k_roas1 > x.strong_roas THEN 'RAISE_STRONG'
     WHEN b.k_roas1 > x.weak_roas THEN 'RAISE_WEAK'
     ELSE 'HOLD' END AS bid_action,

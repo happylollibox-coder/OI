@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { cubeLoad } from '../hooks/useCubeData';
 import { useDoQueue } from '../hooks/useDoQueue';
+import { useRecentApplied } from '../hooks/useRecentApplied';
 import { fM } from '../utils';
 
 // Weekly Run — launch-window (0–20d) campaigns as a collapsible hierarchy:
@@ -20,7 +21,13 @@ const actLabel = (a: string) => a === 'CUT' ? 'cut' : a === 'BRAKE' ? 'brake↓'
 const actCls = (a: string) => (a === 'CUT' || isBleed(a)) ? 'text-red-400' : (a === 'BRAKE' || a === 'BLEED_WATCH' || a === 'BLEED_STALE') ? 'text-amber-400' : isRaise(a) ? 'text-emerald-400' : 'text-faint';
 // short "why" for a launch-controller bid (mature rows carry their own reason)
 const bidWhy = (a: string, reason: string, goodRoas = false,
-  m?: { units: number; clicks: number; roas: number }): string => reason ? reason
+  m?: { units: number; clicks: number; roas: number },
+  cur?: number | null, sug?: number | null): string => reason ? reason
+  // CAPPED: a probe/raise whose suggestion lands BELOW the current bid isn't really raising — the launch
+  // bid cap ($1.50 for unproven targets) is pulling it down. Say so, or the ↑ label contradicts the number.
+  // (Converting winners now raise to the $2 hard cap, so this only fires for still-unproven targets bid high.)
+  : cur != null && sug != null && sug < cur - 0.001 && (a === 'PROBE' || a === 'RAISE_WEAK' || a === 'RAISE_STRONG')
+    ? `held at the launch bid cap $${sug.toFixed(2)} — the current bid $${cur.toFixed(2)} is above the cap for an unproven target`
   : a === 'HOLD' && goodRoas ? 'net ROAS ≥ 1.0× — held (not cut while the campaign caps)'
   : a === 'CUT' ? 'last day & prior-2d both < 0.9×'
   : a === 'BLEED_CUT' ? '≥15 clicks, still no sale — cut 40% (decision point)'
@@ -28,13 +35,16 @@ const bidWhy = (a: string, reason: string, goodRoas = false,
   : a === 'BLEED_WATCH' ? '0 sales so far — hold & watch; trims at 8 clicks, not raised'
   : a === 'BLEED_STALE' ? '0 sales, but under 4 clicks last day — traffic dried up, hold (not cutting on stale clicks)'
   : a === 'BRAKE' ? 'campaign dark >10% & ROAS mid — lower bid to stop capping'
-  : a === 'PROBE' ? 'under 4 clicks — raise slowly (+5%) to buy just enough traffic to reach a verdict (negate dead search terms in parallel)'
+  // Click-rate control for non-converting targets (Ori 2026-07-24): drive every keyword into 4–6 clicks/day,
+  // then wait for a sale. %dark is deliberately not part of this — a keyword isn't the cause of campaign darkness.
+  : a === 'SLOW' ? '6+ clicks/day (over its active days) with no sale — lower slowly (−5%): enough traffic to know it isn’t converting, so stop buying more (and it’s what caps the budget)'
+  : a === 'PROBE' ? 'under 4 clicks/day (over its active days) — raise slowly (+5%) to reach the 4-clicks/day goal, then wait for a sale (negate dead search terms in parallel)'
   : a === 'RAISE_STRONG' ? 'last day & prior-2d both > 1.5× — fund the winner'
   : a === 'RAISE_WEAK' ? 'last day > 1.2×'
   : a === 'STARVE' ? 'under-spending → raise to buy traffic'
   : a === 'NO_BID' ? 'auto group inherits the ad-group default bid'
   // launch never cuts bids on losses: ≥4 clicks with no sale → hold the bid; the dead search terms get negated instead
-  : a === 'HOLD' && m && m.units === 0 && m.clicks >= 4 ? '≥4 clicks, still no sale — held (launch holds the bid, doesn’t cut; dead search terms get negated instead)'
+  : a === 'HOLD' && m && m.units === 0 && m.clicks >= 4 ? '4–5 clicks yesterday, no sale yet — hold and wait for a sale (raises under 4/day, reduces at 6+/day; dead search terms get negated in parallel)'
   // genuine near-breakeven seller (has sales, net ROAS just under/at 1.0×) — hold, don't chase noise
   : a === 'HOLD' && m && m.roas >= 0.9 ? 'in the 0.9–1.2× deadband — hold'
   : 'unknown';
@@ -45,7 +55,7 @@ type Tgt = { keywordId: string; adGroupId: string; text: string; isAuto: boolean
   currentBid: number | null; suggestedBid: number | null; action: string; reason: string; daysSince: number | null;
   r2: number[]; r3: number[]; terms: STerm[] };
 // SB target window measures — clicks/spend/CPC/sales/net-ROAS only (no impressions/CTR — undercounted at grain)
-type SbWin = { clk: number; spend: number; cpc: number; sales: number; roas: number };
+type SbWin = { clk: number; spend: number; cpc: number; sales: number; orders: number; roas: number };
 // one SB target (keyword OR product target) with its launch-controller bid suggestion — behaves like SP
 type SbTgt = { targetId: string; adGroupId: string; text: string; targetType: string; matchType: string;
   bid: number; suggestedBid: number | null; action: string; reason: string; daysSince: number | null; r2: SbWin; r3: SbWin };
@@ -55,8 +65,9 @@ type Camp = { id: string; name: string; day: number; currentBudget: number; sugg
   // launch-controller bid/budget suggestions as SP, on SB-native data (sb_campaign_history + SB reports).
   isSb?: boolean; sbR2?: number[]; sbR3?: number[]; sbTgts?: SbTgt[] };
 
-export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { product?: string | null; actionFilter?: 'todo' | 'done' | 'all' }) {
+export function NewCampaignCards({ product: _product, actionFilter = 'all', onCounts }: { product?: string | null; actionFilter?: 'todo' | 'done' | 'all'; onCounts?: (all: number, done: number) => void }) {
   const doQueue = useDoQueue();
+  const { effectiveDaysSince } = useRecentApplied();  // live 'already applied' from the change-log
   const [camps, setCamps] = useState<Camp[] | null>(null);
   const [drafts, setDrafts] = useState<Record<string, number>>({});
   const [bidDrafts, setBidDrafts] = useState<Record<string, number>>({});
@@ -82,11 +93,11 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
             'RunSearchTerm.d1Spend', 'RunSearchTerm.d1Sales', 'RunSearchTerm.d7Spend', 'RunSearchTerm.d7Sales',
             'RunSearchTerm.d28Spend', 'RunSearchTerm.d28Sales'] }),
           cubeLoad({ dimensions: ['SbLaunchCampaign.campaignId', 'SbLaunchCampaign.currentBudget', 'SbLaunchCampaign.suggestedBudget', 'SbLaunchCampaign.budgetReason', 'SbLaunchCampaign.spendToday', 'SbLaunchCampaign.pctDark',
-            'SbLaunchCampaign.r2Spend', 'SbLaunchCampaign.r2Cpc', 'SbLaunchCampaign.r2Clk', 'SbLaunchCampaign.r2Ctr', 'SbLaunchCampaign.r2Tos', 'SbLaunchCampaign.r2Roas', 'SbLaunchCampaign.r2Acos', 'SbLaunchCampaign.r2Impr',
-            'SbLaunchCampaign.r3Spend', 'SbLaunchCampaign.r3Cpc', 'SbLaunchCampaign.r3Clk', 'SbLaunchCampaign.r3Ctr', 'SbLaunchCampaign.r3Tos', 'SbLaunchCampaign.r3Roas', 'SbLaunchCampaign.r3Acos', 'SbLaunchCampaign.r3Impr'] }),
+            'SbLaunchCampaign.r2Spend', 'SbLaunchCampaign.r2Cpc', 'SbLaunchCampaign.r2Clk', 'SbLaunchCampaign.r2Ctr', 'SbLaunchCampaign.r2Tos', 'SbLaunchCampaign.r2Roas', 'SbLaunchCampaign.r2Acos', 'SbLaunchCampaign.r2Impr', 'SbLaunchCampaign.r2Orders',
+            'SbLaunchCampaign.r3Spend', 'SbLaunchCampaign.r3Cpc', 'SbLaunchCampaign.r3Clk', 'SbLaunchCampaign.r3Ctr', 'SbLaunchCampaign.r3Tos', 'SbLaunchCampaign.r3Roas', 'SbLaunchCampaign.r3Acos', 'SbLaunchCampaign.r3Impr', 'SbLaunchCampaign.r3Orders'] }),
           cubeLoad({ dimensions: ['SbLaunchTarget.campaignId', 'SbLaunchTarget.targetId', 'SbLaunchTarget.adGroupId', 'SbLaunchTarget.targetText', 'SbLaunchTarget.targetType', 'SbLaunchTarget.matchType', 'SbLaunchTarget.bid', 'SbLaunchTarget.suggestedBid', 'SbLaunchTarget.bidAction', 'SbLaunchTarget.bidReason', 'SbLaunchTarget.daysSinceSuggestion',
-            'SbLaunchTarget.r2Clk', 'SbLaunchTarget.r2Spend', 'SbLaunchTarget.r2Cpc', 'SbLaunchTarget.r2Sales', 'SbLaunchTarget.r2Roas',
-            'SbLaunchTarget.r3Clk', 'SbLaunchTarget.r3Spend', 'SbLaunchTarget.r3Cpc', 'SbLaunchTarget.r3Sales', 'SbLaunchTarget.r3Roas'] }),
+            'SbLaunchTarget.r2Clk', 'SbLaunchTarget.r2Spend', 'SbLaunchTarget.r2Cpc', 'SbLaunchTarget.r2Sales', 'SbLaunchTarget.r2Orders', 'SbLaunchTarget.r2Roas',
+            'SbLaunchTarget.r3Clk', 'SbLaunchTarget.r3Spend', 'SbLaunchTarget.r3Cpc', 'SbLaunchTarget.r3Sales', 'SbLaunchTarget.r3Orders', 'SbLaunchTarget.r3Roas'] }),
         ]);
         if (!alive) return;
         const byCamp = new Map<string, Camp>();
@@ -135,7 +146,8 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
         // is placement mix, which contradicts Amazon's <5%) and no unit count. NaN keeps them out honestly.
         const sbMeas = (r: Record<string, unknown>, w: 'r2' | 'r3') => {
           const g = (k: string) => num(r[`SbLaunchCampaign.${w}${k}`]);
-          return [g('Spend'), g('Cpc'), g('Clk'), g('Ctr'), NaN, NaN, g('Roas'), g('Acos'), g('Roas')];
+          // slot 5 = ORDERS for SB (units_sold is NULL; the header labels it "orders"). TOS (slot 4) stays NaN → "—".
+          return [g('Spend'), g('Cpc'), g('Clk'), g('Ctr'), NaN, g('Orders'), g('Roas'), g('Acos'), g('Roas')];
         };
         for (const r of sb as Record<string, unknown>[]) {
           const c = byCamp.get(String(r['SbLaunchCampaign.campaignId'] ?? '')); if (!c) continue;
@@ -151,7 +163,7 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
         // per-target drill under each SB campaign (keyword + product targets, with launch-controller bid suggestions)
         const sbWin = (r: Record<string, unknown>, w: 'r2' | 'r3'): SbWin => ({
           clk: num(r[`SbLaunchTarget.${w}Clk`]), spend: num(r[`SbLaunchTarget.${w}Spend`]),
-          cpc: num(r[`SbLaunchTarget.${w}Cpc`]), sales: num(r[`SbLaunchTarget.${w}Sales`]), roas: num(r[`SbLaunchTarget.${w}Roas`]),
+          cpc: num(r[`SbLaunchTarget.${w}Cpc`]), sales: num(r[`SbLaunchTarget.${w}Sales`]), orders: num(r[`SbLaunchTarget.${w}Orders`]), roas: num(r[`SbLaunchTarget.${w}Roas`]),
         });
         for (const r of sbk as Record<string, unknown>[]) {
           const c = byCamp.get(String(r['SbLaunchTarget.campaignId'] ?? '')); if (!c || !c.isSb) continue;
@@ -174,6 +186,21 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
   }, []);
 
   const shown = useMemo(() => (camps ?? []).filter(c => c.targets.length > 0 || c.suggestedBudget > 0 || c.isSb), [camps]);
+  // Report launch target counts up so WeeklyRunPage's Not-applied/Already-applied/All chips can be
+  // PAGE-WIDE (Ori 2026-07-25) — the top count was mature-only, so a launch upload showed "0 applied"
+  // even though the launch cards below reflected it. all = every launch target; done = already uploaded.
+  // MUST live above the early returns below (hooks run unconditionally); applied check inlined for that reason.
+  const launchCounts = useMemo(() => {
+    const isApp = (id: string, d: number | null) => { const e = effectiveDaysSince(id, d); return e != null && e < 1; };
+    let all = 0, done = 0;
+    for (const c of (camps ?? [])) {
+      for (const t of c.targets) { all++; if (isApp(t.keywordId, t.daysSince)) done++; }
+      for (const t of (c.sbTgts ?? [])) { all++; if (isApp(t.targetId, t.daysSince)) done++; }
+    }
+    return { all, done };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [camps, effectiveDaysSince]);
+  useEffect(() => { onCounts?.(launchCounts.all, launchCounts.done); }, [launchCounts, onCounts]);
   if (!camps) return <div className="text-label text-faint">Loading new campaigns…</div>;
   if (shown.length === 0) return null;
 
@@ -217,14 +244,19 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
 
   // per-campaign "apply all": every actionable bid (action ≠ HOLD/NO_BID) + the budget change (if it differs).
   // Click again once all applied → unapply them all. Clicking an individual applied row still toggles just it.
-  const sugTargets = (c: Camp) => c.targets.filter(t => t.currentBid != null && !['HOLD', 'NO_BID', 'BLEED_WATCH', 'BLEED_STALE'].includes(t.action));
-  const sugSbTargets = (c: Camp) => (c.sbTgts ?? []).filter(t => t.suggestedBid != null && !['HOLD', 'NO_BID', 'BLEED_WATCH', 'BLEED_STALE'].includes(t.action));
-  const budgetSug = (c: Camp) => c.suggestedBudget > 0 && Math.abs(c.suggestedBudget - c.currentBudget) > 0.01;
-  // top Not-applied / Already-applied filter (per target row): "applied" = we uploaded a change today (days_since < 1).
+  // "applied" = we uploaded a change today (days_since < 1). effectiveDaysSince overrides the (cube-materialised,
+  // rebuild-lagged) daysSince with the LIVE change-log value, so a just-uploaded bulksheet registers at once
+  // (Ori 2026-07-25). SP targets key by keywordId, SB by targetId — both are the change-log's keyword_id.
   const appliedToday = (d: number | null) => d != null && d < 1;
-  const inFilter = (d: number | null) => actionFilter === 'done' ? appliedToday(d) : actionFilter === 'todo' ? !appliedToday(d) : true;
-  const visTargets = (c: Camp) => c.targets.filter(t => inFilter(t.daysSince));
-  const visSbTargets = (c: Camp) => (c.sbTgts ?? []).filter(t => inFilter(t.daysSince));
+  const tgtApplied = (t: Tgt) => appliedToday(effectiveDaysSince(t.keywordId, t.daysSince));
+  const sbApplied = (t: SbTgt) => appliedToday(effectiveDaysSince(t.targetId, t.daysSince));
+  // A target still needs applying only if it has a live suggestion AND we haven't already uploaded it.
+  const sugTargets = (c: Camp) => c.targets.filter(t => t.currentBid != null && !['HOLD', 'NO_BID', 'BLEED_WATCH', 'BLEED_STALE'].includes(t.action) && !tgtApplied(t));
+  const sugSbTargets = (c: Camp) => (c.sbTgts ?? []).filter(t => t.suggestedBid != null && !['HOLD', 'NO_BID', 'BLEED_WATCH', 'BLEED_STALE'].includes(t.action) && !sbApplied(t));
+  const budgetSug = (c: Camp) => c.suggestedBudget > 0 && Math.abs(c.suggestedBudget - c.currentBudget) > 0.01;
+  const inFilter = (applied: boolean) => actionFilter === 'done' ? applied : actionFilter === 'todo' ? !applied : true;
+  const visTargets = (c: Camp) => c.targets.filter(t => inFilter(tgtApplied(t)));
+  const visSbTargets = (c: Camp) => (c.sbTgts ?? []).filter(t => inFilter(sbApplied(t)));
   // a card shows under the filter if it has any visible target — or, under Not-applied, a still-pending budget change.
   const cardVisible = (c: Camp) => actionFilter === 'all' ? true
     : ((c.isSb ? visSbTargets(c).length : visTargets(c).length) > 0 ? true
@@ -268,7 +300,8 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
       <thead><tr className="text-faint text-right">
         <th /><th className="font-normal px-2 py-0.5">spend</th><th className="font-normal px-2 py-0.5">clicks</th>
         <th className="font-normal px-2 py-0.5">CPC</th><th className="font-normal px-2 py-0.5">sales</th>
-        <th className="font-normal px-2 py-0.5" title="net ROAS estimate = est. gross profit ÷ ad spend (COGS via list price; SB reports no units)">net ROAS ✓</th>
+        <th className="font-normal px-2 py-0.5" title="attributed orders (SB reports orders, not a unit count)">orders</th>
+        <th className="font-normal px-2 py-0.5" title="net ROAS estimate = est. gross profit ÷ ad spend (COGS via list price; from sales, not units)">net ROAS ✓</th>
       </tr></thead>
       <tbody>{rows.map(r => (
         <tr key={r.label} className="text-right">
@@ -277,6 +310,7 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
           <td className="text-muted px-2">{r.m.clk}</td>
           <td className="text-muted px-2">{r.m.cpc ? `$${r.m.cpc.toFixed(2)}` : '—'}</td>
           <td className="text-muted px-2">${r.m.sales.toFixed(2)}</td>
+          <td className="text-muted px-2">{r.m.orders || '—'}</td>
           <td className={`px-2 ${r.m.clk ? roasCls(r.m.roas) : 'text-faint'}`}>{r.m.clk ? `${r.m.roas.toFixed(2)}×` : '—'}</td>
         </tr>
       ))}</tbody>
@@ -304,11 +338,11 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
   };
 
   // subtle aligned measures table (Amazon-style: spend · CPC · clicks · CTR · TOS · units · net ROAS · ACoS).
-  const MeasTable = ({ rows }: { rows: { label: string; m: number[] }[] }) => (
+  const MeasTable = ({ rows, unitsLabel = 'units' }: { rows: { label: string; m: number[] }[]; unitsLabel?: string }) => (
     <table className="text-label font-mono border-collapse">
       <thead><tr className="text-faint text-right">
         <th /><th className="font-normal px-2 py-0.5">spend</th><th className="font-normal px-2 py-0.5">CPC</th><th className="font-normal px-2 py-0.5">clicks</th>
-        <th className="font-normal px-2 py-0.5">CTR</th><th className="font-normal px-2 py-0.5">TOS</th><th className="font-normal px-2 py-0.5">units</th>
+        <th className="font-normal px-2 py-0.5">CTR</th><th className="font-normal px-2 py-0.5">TOS</th><th className="font-normal px-2 py-0.5" title={unitsLabel === 'orders' ? 'attributed orders (SB reports orders, not a unit count)' : undefined}>{unitsLabel}</th>
         <th className="font-normal px-2 py-0.5" title="net ROAS = gross profit ÷ ad spend (1.0× = breakeven), with COGS charged to the product actually PURCHASED (by sale price), not the advertised one">net ROAS ✓</th>
         <th className="font-normal px-2 py-0.5" title="ad spend ÷ ad sales, like Amazon">ACoS</th>
       </tr></thead>
@@ -403,7 +437,7 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
     <div className="flex flex-col gap-2">
       {shown.filter(cardVisible).map(c => {
         const isOpen = open[c.id];
-        const nAction = c.targets.filter(t => !['HOLD', 'NO_BID', 'BLEED_WATCH', 'BLEED_STALE'].includes(t.action)).length;
+        const nAction = sugTargets(c).length;  // actionable bids still to apply (drops live-applied)
         const nNeg = c.targets.reduce((s, t) => s + t.terms.filter(x => x.isNegate).length, 0);
         return (
           <div key={c.id} className="rounded-lg border border-violet-500/30 bg-violet-500/5 px-3 py-2">
@@ -425,7 +459,7 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
             {/* campaign aggregation — always visible so you can read the campaign at a glance.
                 SB reads campaign-level measures from sb_campaign_report; SP aggregates its targets. */}
             <div className="mt-1 pl-6 overflow-x-auto">
-              <MeasTable rows={c.isSb
+              <MeasTable unitsLabel={c.isSb ? 'orders' : 'units'} rows={c.isSb
                 ? [{ label: 'last day', m: c.sbR2! }, { label: 'prior-2d', m: c.sbR3! }]
                 : [{ label: 'last day', m: aggWin(c.targets, 'r2', c.roas1) }, { label: 'prior-2d', m: aggWin(c.targets, 'r3', c.roasPrev2) }]} />
             </div>
@@ -443,8 +477,12 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
 
             {!c.isSb && isOpen && (
               <div className="mt-2 pl-6 flex flex-col gap-2">
-                {visTargets(c).map(t => {
-                  const bq = bidQueued(t), sq = stopQueued(t);
+                {/* Expanding a card shows its FULL keyword hierarchy — every target, regardless of the
+                    Not-applied/Applied filter (Ori 2026-07-25: a fully-applied card expanded to nothing).
+                    The filter governs which CARDS show + the counts; drilling in reveals everything, with
+                    already-uploaded targets marked ✓. */}
+                {c.targets.map(t => {
+                  const bq = bidQueued(t), sq = stopQueued(t), applied = tgtApplied(t);
                   const tNeg = t.terms.filter(x => x.isNegate).length;   // negate search terms under this group/keyword
                   return (
                     <div key={t.keywordId} className="border-t border-border/20 first:border-t-0 pt-1.5">
@@ -452,6 +490,7 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
                       <div className="flex items-center gap-2 text-label">
                         <span className={`w-12 shrink-0 font-medium ${actCls(t.action)}`}>{actLabel(t.action)}</span>
                         <span className="flex-1 min-w-0 truncate text-muted" title={t.text}>{prettyTarget(t.text)} <span className="text-faint">({t.isAuto ? 'auto' : t.matchType.toLowerCase()})</span></span>
+                        {applied && <span className="text-emerald-400/80 text-[10px] shrink-0" title="already uploaded to Amazon (in the change log)">✓ applied</span>}
                         {tNeg > 0 && <span className="text-red-400 shrink-0" title="search terms to negate under this group — expand ‘search terms’ to review">· {tNeg} to negate</span>}
                         {t.currentBid != null ? <>
                           <span className="text-faint font-mono shrink-0">${t.currentBid.toFixed(2)} → $</span>
@@ -466,7 +505,7 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
                       <div className="pl-14 mt-0.5 overflow-x-auto">
                         <MeasTable rows={[{ label: 'last day', m: t.r2 }, { label: 'prior-2d', m: t.r3 }]} />
                       </div>
-                      <div className="pl-14 text-label text-faint leading-snug">{bidWhy(t.action, t.reason, Math.max(t.r2[8] ?? 0, t.r3[8] ?? 0) >= 1.0, { units: (t.r2[5] ?? 0) + (t.r3[5] ?? 0), clicks: (t.r2[2] ?? 0) + (t.r3[2] ?? 0), roas: Math.max(t.r2[8] ?? 0, t.r3[8] ?? 0) })}</div>
+                      <div className="pl-14 text-label text-faint leading-snug">{bidWhy(t.action, t.reason, Math.max(t.r2[8] ?? 0, t.r3[8] ?? 0) >= 1.0, { units: (t.r2[5] ?? 0) + (t.r3[5] ?? 0), clicks: (t.r2[2] ?? 0) + (t.r3[2] ?? 0), roas: Math.max(t.r2[8] ?? 0, t.r3[8] ?? 0) }, t.currentBid, t.suggestedBid)}</div>
                       {/* level 3 — collapsible search terms (Spenders · Winners · Negates) */}
                       {t.terms.length > 0 && (() => {
                         const to = openTerms[t.keywordId];
@@ -489,13 +528,14 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
               <div className="mt-2 pl-6 flex flex-col gap-2">
                 <div className="text-[11px] text-faint leading-snug">Per-target clicks · spend · sales &amp; bids, with the same launch-controller suggestion as SP (impressions/CTR omitted — undercounted at this grain).</div>
                 {(c.sbTgts ?? []).length === 0 && <div className="text-label text-faint">No enabled targets.</div>}
-                {visSbTargets(c).map(k => {
-                  const bq = !!sbBidItem(k);
+                {(c.sbTgts ?? []).map(k => {
+                  const bq = !!sbBidItem(k), applied = sbApplied(k);
                   return (
                     <div key={k.targetId} className="border-t border-border/20 first:border-t-0 pt-1.5">
                       <div className="flex items-center gap-2 text-label">
                         <span className={`w-12 shrink-0 font-medium ${actCls(k.action)}`}>{actLabel(k.action)}</span>
                         <span className="flex-1 min-w-0 truncate text-muted" title={k.text}>{k.text} <span className="text-faint">({k.targetType === 'PRODUCT' ? 'product' : k.matchType.toLowerCase()})</span></span>
+                        {applied && <span className="text-emerald-400/80 text-[10px] shrink-0" title="already uploaded to Amazon (in the change log)">✓ applied</span>}
                         <span className="text-faint font-mono shrink-0">${k.bid.toFixed(2)} → $</span>
                         <input type="number" min={0} step={0.05} value={Number(sbBidVal(k).toFixed(2))}
                           onChange={e => setBidDrafts(p => ({ ...p, [k.targetId]: Math.max(0, Number(e.target.value) || 0) }))}
@@ -505,7 +545,7 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all' }: { 
                       <div className="pl-14 mt-0.5 overflow-x-auto">
                         <SbKwMeas rows={[{ label: 'last day', m: k.r2 }, { label: 'prior-2d', m: k.r3 }]} />
                       </div>
-                      <div className="pl-14 text-label text-faint leading-snug">{bidWhy(k.action, k.reason, Math.max(k.r2.roas ?? 0, k.r3.roas ?? 0) >= 1.0, { units: ((k.r2.sales ?? 0) + (k.r3.sales ?? 0)) > 0 ? 1 : 0, clicks: (k.r2.clk ?? 0) + (k.r3.clk ?? 0), roas: Math.max(k.r2.roas ?? 0, k.r3.roas ?? 0) })}</div>
+                      <div className="pl-14 text-label text-faint leading-snug">{bidWhy(k.action, k.reason, Math.max(k.r2.roas ?? 0, k.r3.roas ?? 0) >= 1.0, { units: ((k.r2.sales ?? 0) + (k.r3.sales ?? 0)) > 0 ? 1 : 0, clicks: (k.r2.clk ?? 0) + (k.r3.clk ?? 0), roas: Math.max(k.r2.roas ?? 0, k.r3.roas ?? 0) }, k.bid, k.suggestedBid)}</div>
                     </div>
                   );
                 })}

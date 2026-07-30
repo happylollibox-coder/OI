@@ -25,7 +25,13 @@ cube(`KeywordBid`, {
     keywordBid:  { sql: `keyword_bid`,  type: `number`, description: `Latest set bid (USD)` },
   },
 
+  // Restatement-safe key — see the note in Ads.js. Keys on the physical base tables behind
+  // V_KEYWORD_DAILY (both live in fivetran-hl, which the Cloud Run SA can read: it holds
+  // roles/bigquery.dataViewer + jobUser on that project). Amazon restates the report in place:
+  // on 2026-07-23 the 07-14→07-20 window moved cost 1,153.73 -> 1,152.75 and sales_14_d
+  // 2,431.10 -> 2,593.45 across an unchanged 353 rows, with MAX(date) pinned at 2026-07-20.
+  // keyword_history is included because keyword_text / match_type — the cube's grain — come from it.
   refreshKey: {
-    sql: `SELECT MAX(date) FROM \`onyga-482313.OI.V_KEYWORD_DAILY\``,
+    sql: `SELECT MAX(last_modified_time) FROM \`fivetran-hl.amazon_ads.__TABLES__\` WHERE table_id IN ('targeting_keyword_report', 'keyword_history')`,
   },
 });

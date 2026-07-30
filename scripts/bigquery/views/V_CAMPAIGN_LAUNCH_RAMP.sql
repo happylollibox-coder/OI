@@ -86,11 +86,13 @@ day_budget AS (   -- restated (see bug 2) — fallback gate + current_budget rep
 -- 07-15 21:34 — a different rung of the ladder. Fivetran writes on change, so a day may hold several
 -- rows (ENABLED at the midnight reset, OUT_OF_BUDGET when the cap lands); ANY of them being
 -- OUT_OF_BUDGET makes the day count.
+-- Events via the unified V_SRC interface (SP∪SB), not raw fivetran (2026-07-30 rule: prefer the
+-- consolidated layer; see architecture/CAMPAIGN_LAUNCH_RAMP.md §"Status source").
 day_oob AS (
-  SELECT CAST(id AS STRING) AS campaign_id,
-    DATE(last_updated_date, 'America/Los_Angeles') AS date,
+  SELECT campaign_id,
+    DATE(date, 'America/Los_Angeles') AS date,
     LOGICAL_OR(serving_status = 'CAMPAIGN_OUT_OF_BUDGET') AS amazon_oob
-  FROM `fivetran-hl.amazon_ads.campaign_history`
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history`
   GROUP BY 1, 2
 ),
 day AS (

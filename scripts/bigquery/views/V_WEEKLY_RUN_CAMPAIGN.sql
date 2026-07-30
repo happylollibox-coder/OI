@@ -70,6 +70,24 @@ dim_name AS (
   FROM `onyga-482313.OI.DIM_CAMPAIGN`
   WHERE is_current AND campaign_name IS NOT NULL
   GROUP BY 1
+),
+-- Current daily budget per campaign (latest V_TARGET_DAILY row) — drives the MEDIUM/HIGH tier split.
+-- LOW is not derived here: it comes from V_LAUNCH_POPULATION membership (hysteresis + serving_status aware),
+-- so the launch/mature boundary stays defined in exactly one place.
+budtier AS (
+  -- LAST-KNOWN budget over the last 7 days, not the single latest day: a campaign that was simply quiet
+  -- on MAX(date) has no row there and would otherwise fall to UNKNOWN (that mislabelled ~80 campaigns).
+  SELECT campaign_id, ARRAY_AGG(campaign_budget ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS budget_today
+  FROM `onyga-482313.OI.V_TARGET_DAILY`
+  WHERE date >= DATE_SUB((SELECT MAX(date) FROM `onyga-482313.OI.V_TARGET_DAILY`), INTERVAL 7 DAY)
+    AND campaign_budget IS NOT NULL
+  GROUP BY 1
+),
+-- Season-scaled MEDIUM cap (Ori 2026-07-24): off-season $50, peak $100. Above it → HIGH.
+tier_cap AS (
+  SELECT IF(COUNTIF(CURRENT_DATE('America/New_York') BETWEEN boost_start AND cooldown_end) > 0, 100.0, 50.0) AS medium_cap
+  FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
+  WHERE category IN ('gift_season', 'prime_event')
 )
 SELECT
   fact.campaign_id,
@@ -82,13 +100,22 @@ SELECT
   END AS product,
   ROUND(fact.spend_60d / 60.0, 2)                              AS recent_daily_spend,
   ROUND(fact.gp_60d - fact.spend_60d, 2)                       AS ads_net_60d,
-  -- age bucket (matches V_BUDGET_STEP1_CAMPAIGN) so the "Budget by age" filter can gate step-4 keywords
+  -- BUDGET-TIER bucket (Ori 2026-07-24) — the "Budget by age" filter is now budget-type, not age:
+  --   LOW    = governed by the launch controller (V_LAUNCH_POPULATION: ≤$20 off / ≤$30 peak, hysteresis
+  --            + serving_status aware). MUST use that view so the filter chip and the launch/mature
+  --            split agree with V_ADS_COACH.is_new_campaign.
+  --   MEDIUM = graduated, daily budget ≤ the medium cap ($50 off / $100 peak).
+  --   HIGH   = daily budget above the medium cap.
+  --   UNKNOWN= no budget data (never delivered / dormant with no V_TARGET_DAILY row).
+  -- Age is retired as the bucketing axis — "how old is it" and "which engine runs it" are different
+  -- questions, and the engine is what this filter gates. Column name kept for consumer compatibility.
   CASE
-    WHEN dn.created IS NULL THEN 'UNKNOWN'
-    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), dn.created, DAY) <= 20  THEN 'NEW'
-    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), dn.created, DAY) <= 90  THEN '1-3MO'
-    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), dn.created, DAY) <= 270 THEN '4-9MO'
-    ELSE '10MO+' END                                           AS age_bucket,
+    WHEN fact.campaign_id IN (SELECT campaign_id FROM `onyga-482313.OI.V_LAUNCH_POPULATION`) THEN 'LOW_BUDGET'
+    -- live V_TARGET_DAILY budget first; fall back to the coacher's current_budget so a campaign that
+    -- simply had no delivery in the last 7 days is still tiered instead of dumped into UNKNOWN.
+    WHEN COALESCE(bt.budget_today, b.current_budget) IS NULL THEN 'UNKNOWN'
+    WHEN COALESCE(bt.budget_today, b.current_budget) <= (SELECT medium_cap FROM tier_cap) THEN 'MEDIUM_BUDGET'
+    ELSE 'HIGH_BUDGET' END                                     AS age_bucket,
   ROUND(SAFE_DIVIDE(fact.gp_60d, NULLIF(fact.spend_60d, 0)), 2) AS ads_net_roas_60d,
   -- per-campaign net ROAS by window (NULL when the window had no spend)
   ROUND(SAFE_DIVIDE(fact.gp_1w, NULLIF(fact.spend_1w, 0)), 2) AS ads_net_roas_1w,
@@ -146,6 +173,8 @@ LEFT JOIN (
   FROM `onyga-482313.OI.V_CAMPAIGN_MAPPING_STATUS`
   GROUP BY campaign_id
 ) ms USING (campaign_id)
+LEFT JOIN budtier bt ON bt.campaign_id = CAST(fact.campaign_id AS STRING)
+CROSS JOIN tier_cap
 LEFT JOIN `onyga-482313.OI.T_COACH_CAMPAIGN_BUDGET` b ON b.campaign_id = fact.campaign_id
 -- Joined last, with an explicit ON: V_CAMPAIGN_ROLE carries its own campaign_id, which would make the
 -- USING (campaign_id) joins above ambiguous if it entered scope before them.

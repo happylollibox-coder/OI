@@ -4,6 +4,7 @@ import { BudgetStep1, ALL_FAMILIES, ALL_STRATEGIES } from './BudgetStep1';
 import { ALL_AGES } from './BudgetByAge';
 import { CoachFlowchart } from './CoachFlowchart';
 import { NewCampaignCards } from './NewCampaignCards';
+import { OobBudgetPhase } from './OobBudgetPhase';
 
 // Sections 2 (per-campaign budget table) & 3 (plan) were removed 2026-07-18 — budget now lives inside
 // each campaign card in section 4. Flip to true to bring the old sections back.
@@ -11,6 +12,7 @@ const SHOW_STEP_2_3 = false;
 import { RoleBudgetPanel } from './RoleBudgetPanel';
 import { WeeklyBudgetCampaigns } from './WeeklyBudgetCampaigns';
 import { useDoQueue } from '../hooks/useDoQueue';
+import { useRecentApplied } from '../hooks/useRecentApplied';
 import { CampaignManageModal, type ManageCampaign } from '../components/CampaignManageModal';
 import { dataEntry, type WeeklyRunRow } from '../utils/dataEntry';
 import type { FamilyName, PageId } from '../types';
@@ -180,6 +182,13 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
   const [dirFilter, setDirFilter] = useState<string | null>(null);
   const [manageCamp, setManageCamp] = useState<ManageCampaign | null>(null);
   const doQueue = useDoQueue();
+  const { effectiveDaysSince } = useRecentApplied();  // live 'already applied' from the change-log
+  // Launch-card target counts, reported up by NewCampaignCards so the applied chips are PAGE-WIDE.
+  const [launchCts, setLaunchCts] = useState({ all: 0, done: 0 });
+  const reportLaunchCounts = useCallback(
+    (all: number, done: number) => setLaunchCts(p => (p.all === all && p.done === done ? p : { all, done })),
+    [],
+  );
   // Stable callback so the child effect doesn't re-fire every render. Records each family's live
   // campaign total; the Total-budget panel re-sums the grand total across families from this map.
   const handleFamilyTotal = useCallback((fam: string, t: number) => {
@@ -425,6 +434,9 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
   // ✓-applied badge uses). A keyword also stays under "not applied" while it still has terms to negate,
   // since negatives carry no cooldown of their own.
   const isApplied = (days: number | null): boolean => days != null && days < 3;
+  // Effective days-since = MIN(cube value, live change-log value) so a just-uploaded bulksheet registers
+  // immediately instead of waiting for the next cube rebuild (Ori 2026-07-25). kwDss is the per-keyword form.
+  const kwDss = (k: KwRow): number | null => effectiveDaysSince(k.id, k.daysSinceSuggestion);
   const kwVisible = (k: KwRow): boolean => {
     const hasNegs = (negs ?? []).some(n => n.keywordId === k.id);
     const label = kwDir(k).label;
@@ -438,8 +450,8 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
       return false;
     }
     if (actionFilter === 'all') return true;
-    if (actionFilter === 'done') return isApplied(k.daysSinceSuggestion);
-    return !isApplied(k.daysSinceSuggestion) || hasNegs;
+    if (actionFilter === 'done') return isApplied(kwDss(k));
+    return !isApplied(kwDss(k)) || hasNegs;
   };
   // Single-select: click a direction to focus it; click the active one again to clear back to default.
   const pickDir = (d: string) => setDirFilter(prev => (prev === d ? null : d));
@@ -449,12 +461,27 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
   // Keywords in the current strategy slice. The chip counts must respect it too, or "raise 12" would
   // count keywords the strategy filter has hidden from the list below.
   const campById = useMemo(() => Object.fromEntries((camps ?? []).map(c => [c.id, c])), [camps]);
+  // Is the launch-controller section (NewCampaignCards) actually rendered right now? Must mirror the
+  // render condition below. New campaigns are owned by that section, so the mature table below hides
+  // them to avoid showing the same campaign twice (Ori 2026-07-24). Gated on "is it shown" rather than
+  // just membership so a launch campaign can never disappear from BOTH lists under a filter combo.
+  const launchCardsShown = ppcMode === 'offense' && (selAge === ALL_AGES || selAge === 'LOW_BUDGET');
+  // Membership keys off ageBucket (== the launch population), NOT isNewCampaign: the coach flag is NULL
+  // for a low-budget campaign that has no V_ADS_COACH rows yet, which would leak it into the mature
+  // table. ageBucket comes straight from V_LAUNCH_POPULATION, so the two lists agree by construction.
+  const ownedByLaunch = useCallback(
+    (c?: CampRow) => launchCardsShown && c?.ageBucket === 'LOW_BUDGET',
+    [launchCardsShown],
+  );
   const kwInStrategy = useCallback((k: KwRow): boolean => {
     const c = campById[k.campaignId];
+    // Keywords of launch-owned campaigns must leave the mature action chips too, or "raise 12"
+    // would count work that lives in the launch cards above.
+    if (ownedByLaunch(c)) return false;
     if (selAge !== ALL_AGES && (!c || c.ageBucket !== selAge)) return false;
     if (ppcMode !== 'offense' || selStrategy === ALL_STRATEGIES) return true;
     return !!c && c.strategyCategory === selStrategy;
-  }, [ppcMode, selStrategy, selAge, campById]);
+  }, [ppcMode, selStrategy, selAge, campById, ownedByLaunch]);
   const scopedKws = useMemo(() => (kws ?? []).filter(kwInStrategy), [kws, kwInStrategy]);
   const dirCounts = useMemo(() => {
     const c: Record<string, number> = { raise: 0, lower: 0, probe: 0, set: 0, hold: 0 };
@@ -462,11 +489,17 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
     return c;
   }, [scopedKws]);
   const appliedCounts = useMemo(() => {
-    const all = scopedKws.length;
-    const done = scopedKws.filter(k => k.daysSinceSuggestion != null && k.daysSinceSuggestion < 3).length;
+    // PAGE-WIDE: mature keywords + launch targets (only when the launch section is actually shown, matching
+    // the filter's effect). "done" = already uploaded, on both sides, via the live change-log signal.
+    const lc = launchCardsShown ? launchCts : { all: 0, done: 0 };
+    const all = scopedKws.length + lc.all;
+    const done = scopedKws.filter(k => isApplied(kwDss(k))).length + lc.done;
     return { todo: all - done, done, all };
-  }, [scopedKws]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopedKws, effectiveDaysSince, launchCts, launchCardsShown]);
   const campVisible = (c: CampRow): boolean => {
+    // New campaigns live in the launch-controller cards above — never list them twice.
+    if (ownedByLaunch(c)) return false;
     // PPC mode gate — each mode shows ONLY its own role's campaigns (offense / brand-defense / product-defense).
     // (pool gate removed — all pools show; strategy filter narrows)
     // Strategy gate (offense only — the strategy split is an offense-role slice). Keywords nest under
@@ -731,11 +764,13 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                 </div>
                 {/* coach logic as a flow chart (strategy toggles) — the engine driving every decision below */}
                 <CoachFlowchart />
+                {/* out-of-budget technical phase — dark campaigns + one budget suggestion each (V_OOB_BUDGET_PHASE) */}
+                <OobBudgetPhase />
                 {/* New campaigns (0–20d) launch-controller cards — co-located directly under the coach logic, above the mature actions */}
-                {ppcMode === 'offense' && (selAge === ALL_AGES || selAge === 'NEW') && (
+                {ppcMode === 'offense' && (selAge === ALL_AGES || selAge === 'LOW_BUDGET') && (
                   <div className="mt-3 mb-4">
-                    <div className="text-label text-violet-300 mb-1">New campaigns (first 20 days) — launch controller</div>
-                    <NewCampaignCards product={current.product} actionFilter={actionFilter} />
+                    <div className="text-label text-violet-300 mb-1">Low budget — launch controller (≤ $20 · $30 peak)</div>
+                    <NewCampaignCards product={current.product} actionFilter={actionFilter} onCounts={reportLaunchCounts} />
                   </div>
                 )}
                 {camps === null ? <div className="text-label text-faint">Loading campaigns…</div>
@@ -747,7 +782,12 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                         <div className="flex flex-col gap-4">
                           {camps.filter(campVisible).length === 0 && (
                             <div className="text-label text-subtle px-2 py-3">
-                              {actionFilter === 'done' ? 'Nothing applied in the last 3 days.' : 'Nothing left to do — everything is either applied or holding.'}
+                              {/* Don't say "nothing to do" when the campaigns simply moved to the launch
+                                  section above — that reads as a bug. */}
+                              {launchCardsShown && camps.some(c => c.ageBucket === 'LOW_BUDGET') && !camps.some(c => c.ageBucket !== 'LOW_BUDGET')
+                                ? 'Only low-budget campaigns here — they’re managed in the launch controller above.'
+                                : actionFilter === 'done' ? 'Nothing applied in the last 3 days.'
+                                : 'Nothing left to do — everything is either applied or holding.'}
                               {' '}<button onClick={() => setActionFilter('all')} className="text-blue-400 hover:underline">Show all</button>
                             </div>
                           )}

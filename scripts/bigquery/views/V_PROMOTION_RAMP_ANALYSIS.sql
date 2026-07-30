@@ -55,7 +55,7 @@ boost_experiments AS (
     st.recommended_bidding_strategy
   FROM `onyga-482313.OI.DIM_EXPERIMENT` e
   LEFT JOIN `onyga-482313.OI.DIM_STRATEGY_TEMPLATE` st ON e.strategy_id = st.strategy_id
-  WHERE e.strategy_id = 'EXACT_BOOST'
+  WHERE e.strategy_id IN ('PHRASE','EXACT')
 ),
 
 -- Per-keyword daily ads data for EXACT_BOOST campaigns

@@ -436,8 +436,8 @@ ads_8w AS (
   JOIN campaign_experiment ce ON ec.campaign_id = ce.campaign_id AND ec.experiment_id = ce.experiment_id
   JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa
     ON ec.campaign_id = fa.campaign_id
-    AND fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 56 DAY)
-                   AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+    AND fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 59 DAY)
+                   AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
   -- Current campaign metadata — single source of truth
   LEFT JOIN `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` dc_cur ON fa.campaign_id = dc_cur.campaign_id
 
@@ -471,8 +471,8 @@ ads_1w AS (
     SUM(fa.Ads_sales) as ads_sales_1w,
     SUM(fa.GROSS_PROFIT) as ads_gp_1w
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
@@ -492,8 +492,8 @@ ads_4w AS (
     SUM(fa.Ads_sales) as ads_sales_4w,
     SUM(fa.GROSS_PROFIT) as ads_gp_4w
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
@@ -635,7 +635,7 @@ ads_lag AS (
 ),
 
 -- Ads 3d: last 3 complete days (for BLITZ PEAK target decisions)
--- Uses days -6 to -4 (same 4-day attribution lag as all other windows)
+-- Days -6 to -4 — code matches since 2026-07-25 (coacher QA H2); was -3..-1.
 ads_3d AS (
   SELECT
     fa.campaign_id,
@@ -649,8 +649,8 @@ ads_3d AS (
     SUM(fa.Ads_sales) as ads_sales_3d,
     SUM(fa.GROSS_PROFIT) as ads_gp_3d
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 3 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 6 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
@@ -670,8 +670,8 @@ ads_14d AS (
     SUM(fa.Ads_sales) as ads_sales_14d,
     SUM(fa.GROSS_PROFIT) as ads_gp_14d
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 17 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
@@ -695,17 +695,17 @@ ads_offseason AS (
     SUM(fa.GROSS_PROFIT) as os_gp_8w,
     SUM(fa.Ads_clicks) as os_clicks_8w,
     -- 4w off-season
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_4w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_4w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_4w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_4w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 28 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_4w,
     -- 1w off-season
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_1w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_1w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_1w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_1w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_1w
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_1w
 
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   -- Keyword text lookup for SBV campaigns
@@ -717,8 +717,8 @@ ads_offseason AS (
       WHERE is_current = TRUE AND keyword_text IS NOT NULL AND keyword_id IS NOT NULL
     ) WHERE rn = 1
   ) kw_lookup ON fa.keyword_id = kw_lookup.keyword_id
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 56 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 59 DAY)
+                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
     -- EXCLUDE all days that fall within BOOST or PEAK phases
@@ -1080,7 +1080,7 @@ exact_boost_terms AS (
   FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
   JOIN `onyga-482313.OI.DIM_EXPERIMENT` e ON ec.experiment_id = e.experiment_id
   JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa ON ec.campaign_id = fa.campaign_id
-  WHERE e.strategy_id = 'EXACT_BOOST' AND e.status = 'ACTIVE'
+  WHERE e.strategy_id IN ('PHRASE','EXACT') AND e.status = 'ACTIVE'
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
 ),
 
@@ -1171,17 +1171,11 @@ wk_plan AS (   -- this week's plan target per cell (Coacher D) → so each actio
 ),
 sb_ad_creative AS (   -- SB ad-group -> creative_type (unique per ad group); mirrors the ad_format
   -- grain in DE_PRODUCT_STRATEGY_PROFILE so a keyword resolves to its own format's band.
-  SELECT ad_group_id,
-    -- fall back to the campaign name when the source creative_type is NULL (some SB video campaigns
-    -- don't populate it, e.g. FRESH-VIDEO/EXACT). '%VIDEO%' in the name is always video (validated).
-    COALESCE(
-      MAX(creative_type),
-      CASE WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%VIDEO%'      THEN 'BRAND_VIDEO'
-           WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%COLLECTION%' THEN 'PRODUCT_COLLECTION' END
-    ) AS creative_type
-  FROM `onyga-482313.OI.V_SRC_AmazonAds_sb_ad_report`
-  WHERE cost > 0
-  GROUP BY ad_group_id
+  -- Canonical derivation (report creative_type + campaign-name fallback) lives in
+  -- SP_LOAD_DIM_AD_GROUP — read it from the dimension, don't re-derive from sb_ad_report.
+  SELECT ad_group_id, creative_type
+  FROM `onyga-482313.OI.DIM_AD_GROUP`
+  WHERE is_current AND creative_type IS NOT NULL
 ),
 
 -- =============================================
@@ -1887,9 +1881,9 @@ opportunity_data AS (
     CASE
       WHEN tc.experiment_segment = 'BRAND' THEN 'BRAND_DEFENSE'
       WHEN tc.intent_segment = 'COMPETITOR' THEN 'COMPETITOR'
-      WHEN sp.sqp_purchases >= 3 AND sp.sqp_weeks >= 2 THEN 'EXACT_BOOST'
-      WHEN sp.sqp_purchases >= 2 THEN 'EXACT_BOOST'
-      ELSE 'INTENT'
+      WHEN sp.sqp_purchases >= 3 AND sp.sqp_weeks >= 2 THEN 'EXACT'
+      WHEN sp.sqp_purchases >= 2 THEN 'EXACT'
+      ELSE 'BROAD_SP'
     END as strategy_id,
     CAST(NULL AS STRING) as strategy_name,
     -- Target keyword (N/A for opportunities)

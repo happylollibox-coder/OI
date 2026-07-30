@@ -67,6 +67,50 @@ Two sub-projects, built in this order:
    campaign, not only Auto.
 2. **Strategy row** — a role filter in Weekly Run, sharing one role definition with the Coverage page.
 
+## Decision 2026-07-24 — the population is LOW BUDGET, not age (supersedes "first 20 days" below)
+
+The launch controller no longer governs "a campaign's first 20 days". It governs **low-budget** campaigns:
+daily budget **≤ $30 in peak** (inside any gift_season / prime_event boost→cooldown window) or **≤ $20
+off-season**. Age is an arbitrary clock; budget states how much you are willing to risk while a campaign
+is unproven — and unlike age it self-promotes.
+
+**`V_LAUNCH_POPULATION` is the single definition.** Before this, "new" existed in three independent places
+(`V_LAUNCH_PHASE1.camp`, `V_ADS_COACH.is_new_campaign`, `V_WEEKLY_RUN_CAMPAIGN.age_bucket`) which agreed
+only because all three used the same age rule. Under a budget rule they drift, and a campaign then appears
+in BOTH the launch cards and the mature table. All three now read this view.
+
+- **Hysteresis:** membership requires budget ≤ cap for the last 3 complete days. Promotion is immediate;
+  demotion needs 3 consecutive low days, so a campaign cannot oscillate between two engines whose cadences
+  differ (launch = daily, working = weekly / 3-day).
+- **Absence of budget data is not a low budget.** Defaulting a missing budget to 0 swept every dormant
+  campaign into the population (26 → 72). The membership test requires the budget row to exist; brand-new
+  campaigns with no delivery yet are admitted only by an explicit `age < 20d` fallback so they are still
+  coached from day 1.
+
+**Budget promotion is the graduation mechanism** (in `V_LAUNCH_PHASE1`) — there is no separate "graduate"
+rule. The controller raises budget while the campaign performs, and once budget clears the cap the campaign
+drops out of `V_LAUNCH_POPULATION` and the coacher takes over:
+
+| condition | new budget |
+|---|---|
+| using its budget AND prev-2d net ROAS ≥ 1.5× | `GREATEST(budget × 1.50, $20)` |
+| using its budget AND today net ROAS ≥ 1.2×   | `GREATEST(budget × 1.25, $15)` |
+
+The floors stop a proven campaign crawling up in percentage steps. Note off-season the strong floor ($20)
+lands exactly ON the cap, so a strong performer graduates on its **second** good day ($20 → $30).
+
+**The coacher's 14-day warm-up guard is retired.** It blocked `INCREASE_BID` under 14 days old; with a
+budget population a campaign can graduate on day 5 and would then sit unable to raise bids for 9 days —
+penalising exactly the campaigns that earned their way out. ⚠️ The guard is mirrored in **six** sites in
+`V_ADS_COACH` (target_action, trace node, trace text, `recommended_bid`, `bid_change_pct`, summary action);
+they must change together or the action, the bid and the explanation disagree. Left as dead `FALSE`
+branches so it can be switched back on.
+
+**`age_bucket`'s first bucket is now `LOW_BUDGET`** (was `NEW`), sourced from the population. The other
+buckets stay genuinely age-based — "how old is it" and "which engine runs it" are now separate questions.
+
+---
+
 ## Phase 1 — stabilize to profitable (shipped 2026-07-17, `V_LAUNCH_PHASE1`)
 
 The ramp below (`V_CAMPAIGN_LAUNCH_RAMP`) was the first cut. Working through it on live day-1/2 data
@@ -76,6 +120,24 @@ lunchtime — and PROFITABLE, then hand to the normal coacher on day 21.** It do
 20 days: a keyword with no sale yet idles cheaply ($6–$10/day) and either converts or is negated by
 phase 2 on day 21. Live in `scripts/bigquery/views/V_LAUNCH_PHASE1.sql`; bulksheet via
 `tools/build_launch_phase1_bulksheet.py`.
+
+### Status source (decision 2026-07-30 — prefer consolidated sources)
+
+Ori's standing rule: **prefer `DIM_`/`FACT_` (and the `V_SRC_` interface layer) over raw
+`fivetran-hl` reads** — the consolidated sources carry both channels and the enrichment.
+
+- **Serving-status events (dark %):** every dark computation reads
+  `V_SRC_AmazonAds_campaign_history` — the unified SP∪SB event log (`date` = the status-change
+  timestamp). Never the raw `campaign_history` / `sb_campaign_history` tables directly: a raw
+  SP-only read silently missed all 9 out-of-budget SB campaigns on 2026-07-29.
+- **Why not `DIM_CAMPAIGN` for dark %:** it is SCD2 *sampled at load time* (3 loads/day). A status
+  flip that reverts between loads never becomes a version — VIDEO- BALL served 00:20–06:33 on
+  07-28/29 but DIM shows one unbroken OUT_OF_BUDGET version since 07-27, so DIM-derived dark %
+  reads 100% where the truth is 74%. Minute-grain replay requires the event log.
+- **Identity / current state / names:** `V_DIM_CAMPAIGN_CURRENT` (rename-proof, both channels).
+  `V_LAUNCH_POPULATION` keeps reading `V_SRC_` latest-per-campaign rather than the DIM because a
+  brand-new campaign must enter the population the same day it is created ("coached from day 1"),
+  and the DIM's 3×/day load can lag that by up to ~8h.
 
 ### Signals
 
@@ -386,6 +448,24 @@ Once the view exists, `/api/coverage` should read it rather than keep its inline
 
 Per the project constitution, every new BigQuery object goes in `config.yaml`: `V_TARGET_DAILY`,
 `V_CAMPAIGN_LAUNCH_RAMP`, `V_CAMPAIGN_ROLE`.
+
+## Money-bleeder guard (bid CASE, before STARVE)
+
+The campaign-level **STARVE** raise (campaign spent <60% of budget → buy traffic) must not be applied to a
+target that is itself a heavy-spending **non-converter** — a campaign can under-spend in total while one
+target hogs the budget and converts nothing (Ori, on VIDEO- BALL "gift for girls": $11.03 of $14.64, 10
+clicks, 0 sales, yet the controller said "raise"). So a **money-bleeder ladder** sits at the TOP of the bid
+CASE, **before STARVE and CUT**, keyed on `sales3 <= 0` (0 conversions over the window):
+
+| clicks (clk3), 0 sales | action | bid |
+| --- | --- | --- |
+| < 4 | (falls through to) PROBE | ×1.15 — still raised (unproven, buy traffic to judge) |
+| 4–7 | `BLEED_WATCH` | hold (gather; not raised, not cut yet) |
+| ≥ 8 | `BLEED_TRIM` | ×0.80 (−20%, stop the bleed) |
+| ≥ 15 | `BLEED_CUT` | ×0.60 (−40%, Ori's decision point) |
+
+Keyed on 0 conversions, NOT net ROAS — a converting-but-unprofitable target still takes the normal
+STARVE/CUT path. Identical in `V_LAUNCH_PHASE1` (SP) and `V_SB_LAUNCH_TARGET` (SB). Constants in each `k` CTE.
 
 ## Risks
 

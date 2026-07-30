@@ -12,9 +12,15 @@ export const ALL_AGES = '__ALL_AGES__';
 
 /** Canonical bucket order. Shared with the Ads Performance page's age filter so both pages
  * present the buckets the same way; the bucketing itself is done in SQL. */
-export const AGE_ORDER = ['NEW', '1-3MO', '4-9MO', '10MO+', 'UNKNOWN'];
+// Buckets are BUDGET TIERS, not age (Ori 2026-07-24). LOW = launch controller (V_LAUNCH_POPULATION);
+// MEDIUM/HIGH = graduated, split by the season-scaled medium cap ($50 off / $100 peak). The bucketing
+// itself is in SQL (V_WEEKLY_RUN_CAMPAIGN.age_bucket). Column name kept for consumer compatibility.
+export const AGE_ORDER = ['LOW_BUDGET', 'MEDIUM_BUDGET', 'HIGH_BUDGET', 'UNKNOWN'];
 export const AGE_LABEL: Record<string, string> = {
-  NEW: 'New (0–20 days)', '1-3MO': '1–3 months', '4-9MO': '4–9 months', '10MO+': '10 months+', UNKNOWN: 'Unknown age',
+  LOW_BUDGET: 'Low budget · launch controller (≤ $20 · $30 peak)',
+  MEDIUM_BUDGET: 'Medium budget (≤ $50 · $100 peak)',
+  HIGH_BUDGET: 'High budget (> $50 · $100 peak)',
+  UNKNOWN: 'No budget set',
 };
 
 function num(v: unknown): number { const n = Number(v); return Number.isFinite(n) ? n : 0; }
@@ -100,7 +106,7 @@ export function BudgetByAge({ selectedAge, onSelectAge }:
             </tr>
             {rows.map(s => {
               const isSel = selectedAge === s.ageBucket;
-              const isNew = s.ageBucket === 'NEW';
+              const isNew = s.ageBucket === 'LOW_BUDGET';
               return (
                 <tr key={s.ageBucket} onClick={() => onSelectAge?.(s.ageBucket)}
                   className={`border-b border-border/50 cursor-pointer ${isSel ? 'bg-blue-500/10' : 'hover:bg-white/5'}`}>

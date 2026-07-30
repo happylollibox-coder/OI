@@ -505,6 +505,18 @@ ly_peak_campaign_roas AS (
   GROUP BY h_now.holiday_name
 ),
 
+launch_taper AS (
+  -- Latest COMPLETE-week launch-optimizer state per family (V_LAUNCH_OPTIMIZER).
+  -- EXIT/POST phase or a STALLED verdict sanctions LAUNCH_TAPER — the ONE loss-driven
+  -- bid cut allowed on the launch track (Ori 2026-07-26): honeymoon over, bid walks
+  -- down to value. Campaign→family by name token because Bunny/LolliBall are invisible
+  -- to the ASIN_BY_CAMPAIGN_NAME join.
+  SELECT UPPER(REPLACE(family, 'Lolli', '')) AS name_token,
+         taper_bid, phase, verdict
+  FROM `onyga-482313.OI.V_LAUNCH_OPTIMIZER`
+  WHERE is_complete
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY family ORDER BY week_start DESC) = 1
+),
 scored_raw AS (
 SELECT
   d.*,
@@ -528,7 +540,12 @@ SELECT
   -- Young campaigns bid aggressively to buy clicks fast, then re-decide every
   -- LAUNCH_CHECKPOINT_CLICKS clicks; surfaced in the dashboard "New campaigns" section.
   -- ═══════════════════════════════════════════════════════════════════════════
-  (DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < d.th_launch_window_days) as is_new_campaign,
+  -- "Is the launch controller governing this campaign?" — NOT an age test any more (Ori 2026-07-24).
+  -- The population is now LOW BUDGET (peak $30 / off-season $20) and is defined once in
+  -- V_LAUNCH_POPULATION. This flag MUST agree with V_LAUNCH_PHASE1's population, because the dashboard
+  -- uses it to decide whether a campaign belongs to the launch cards or the mature table — if the two
+  -- drift, a campaign appears in BOTH lists (or neither). Name kept for consumer compatibility.
+  (CAST(d.campaign_id AS STRING) IN (SELECT campaign_id FROM `onyga-482313.OI.V_LAUNCH_POPULATION`)) as is_new_campaign,
   -- launch_clicks ≈ lifetime clicks (the 4w window ≈ a <30d campaign's whole life)
   COALESCE(d.target_clicks_4w, d.ads_clicks_4w, 0) as launch_clicks,
   -- Aggressive launch bid: anchor (research CPC) × mult, cold-start chain, capped at ceiling.
@@ -550,32 +567,53 @@ SELECT
     WHEN NULLIF(d.strategy_bid_max, 0) IS NOT NULL THEN 'template'
     ELSE 'cold'
   END as launch_bid_source,
-  -- Lifecycle phase (label only; null off-track)
+  -- Lifecycle phase (label only; null off-track).
+  -- 2026-07-25 (coacher QA H1b): gate on the LAUNCH POPULATION (budget-based,
+  -- V_LAUNCH_POPULATION — the ONE definition), NOT campaign age. The old age gate drifted
+  -- from is_new_campaign exactly as the comment above warned: 9 campaigns aged 66–1122d were
+  -- in-population with NULL launch fields, 5 graduated ones still got launch cuts.
+  -- OPPORTUNITY rows (campaign_id NULL) are explicitly NULL (age test used to leak them to HOLD).
   CASE
-    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= d.th_launch_window_days THEN NULL
+    WHEN d.campaign_id IS NULL THEN NULL
+    WHEN CAST(d.campaign_id AS STRING) NOT IN (SELECT campaign_id FROM `onyga-482313.OI.V_LAUNCH_POPULATION`) THEN NULL
     WHEN COALESCE(d.ads_orders_3d, 0) >= d.th_launch_winner_orders AND COALESCE(d.ads_net_roas_3d, 0) >= d.th_profitable_roas THEN 'WINNER'
-    WHEN COALESCE(d.target_orders_4w, 0) = 0 AND COALESCE(d.target_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'CUT'
+    WHEN COALESCE(d.ads_orders_4w, 0) = 0 AND COALESCE(d.ads_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'BLEED'
     WHEN COALESCE(d.target_orders_4w, 0) >= 1 THEN 'EVALUATE'
     ELSE 'GATHER'
   END as launch_phase,
-  -- The 15-click decision matrix (NULL = not on the launch track)
+  -- Launch decision matrix — 2026-07-25 rewrite per the 2026-07-21 doctrine (coacher QA H1a):
+  -- launch = FIND THE RIGHT BID. NO loss-driven bid cuts inside the launch window.
+  --   <4 clicks             → LAUNCH_PROBE  (+5%, buy the data)
+  --   selling & profitable  → LAUNCH_RAISE
+  --   selling, not yet prof → LAUNCH_HOLD   (never cut a launch on ROAS)
+  --   >=4 clicks, 0 orders  → LAUNCH_HOLD
+  --   bleed control         → LAUNCH_NEGATE on the SEARCH-TERM SLICE (this row IS the term
+  --                           slice: d.ads_*_4w are slice-grain), never a keyword-wide negate
+  --                           off the target rollup, and never a bid cut.
+  -- DARK BRAKE (the one allowed cut) is campaign-level and lives in V_LAUNCH_PHASE1.
+  -- Population gate matches launch_phase/is_new_campaign: budget-based V_LAUNCH_POPULATION.
   CASE
-    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) >= d.th_launch_window_days THEN NULL
+    WHEN d.campaign_id IS NULL THEN NULL
+    WHEN CAST(d.campaign_id AS STRING) NOT IN (SELECT campaign_id FROM `onyga-482313.OI.V_LAUNCH_POPULATION`) THEN NULL
     -- Winner: trailing-window orders at/above the profitable bar → graduate to the normal coacher
     WHEN COALESCE(d.ads_orders_3d, 0) >= d.th_launch_winner_orders AND COALESCE(d.ads_net_roas_3d, 0) >= d.th_profitable_roas THEN 'LAUNCH_GRADUATE'
-    -- Has orders: profitable → hold; unprofitable → reduce. Judged on the TARGET rollup (not the
-    -- per-search-term slice) so SP-Auto auto-clauses aren't under-read. The 3-day no-re-suggest
-    -- cooldown (V_ADS_COACH suppression) prevents churn, so no per-click-batch gate is needed here.
+    -- Phase-gated taper (optimizer EXIT/POST or STALLED, complete weeks only): the one
+    -- sanctioned launch cut. Only targets NOT paying their way — profitable ones still RAISE.
+    WHEN (lt.phase IN ('EXIT', 'POST') OR lt.verdict = 'STALLED')
+         AND COALESCE(d.current_bid, 0) > lt.taper_bid
+         AND COALESCE(d.target_net_roas_4w, 0) < d.th_profitable_roas THEN 'LAUNCH_TAPER'
+    -- Selling (TARGET rollup so SP-Auto auto-clauses aren't under-read): raise if profitable, else hold.
     WHEN COALESCE(d.target_orders_4w, 0) >= 1 THEN
       CASE
-        WHEN COALESCE(d.target_net_roas_4w, 0) >= d.th_profitable_roas THEN 'LAUNCH_HOLD'
-        ELSE 'LAUNCH_REDUCE_BID'
+        WHEN COALESCE(d.target_net_roas_4w, 0) >= d.th_profitable_roas THEN 'LAUNCH_RAISE'
+        ELSE 'LAUNCH_HOLD'
       END
-    -- Zero orders: negate once enough clicks have bled, else reduce past the discovery click bar
-    WHEN COALESCE(d.target_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'LAUNCH_NEGATE'
-    WHEN COALESCE(d.target_clicks_4w, 0) >= 2 * d.th_launch_checkpoint_clicks THEN 'LAUNCH_REDUCE_BID'
+    -- Zero orders: negate the bleeding SEARCH TERM (slice grain), probe if under-clicked, else hold.
+    WHEN COALESCE(d.ads_orders_4w, 0) = 0 AND COALESCE(d.ads_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'LAUNCH_NEGATE'
+    WHEN COALESCE(d.target_clicks_4w, 0) < 4 THEN 'LAUNCH_PROBE'
     ELSE 'LAUNCH_HOLD'
   END as launch_decision,
+  lt.taper_bid AS launch_taper_bid,
 
   -- ─── Signal ───
   CASE
@@ -677,28 +715,28 @@ SELECT
     -- (MOVE_TO_SEASONAL_PUSH removed — seasonal logic simplified)
 
     -- Sub-case B: target = term AND NOT seasonal → bad target, let target_action handle STOP_TARGET
-    WHEN d.strategy_id = 'EXACT_BOOST' AND d.targeting = d.search_term
+    WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.targeting = d.search_term
       AND d.ads_clicks_8w >= d.th_min_clicks
       AND (d.ads_orders_8w = 0 OR d.ads_net_roas_8w < d.th_reduce_bid_roas)
       THEN 'MONITOR'  -- STOP_TARGET fires in target_action column
 
     -- Sub-case C: target ≠ term → negate the search term from this target
-    WHEN d.strategy_id = 'EXACT_BOOST' AND d.ads_orders_8w = 0
+    WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.ads_orders_8w = 0
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_BOOST_SIMILAR_EXACT'
     -- Lag safety: if lag ROAS > 1.3, defer EXACT_BOOST negate to MONITOR
     -- NEGATE_BOOST_SIMILAR_EXACT uses 7d raw ROAS
-    WHEN d.strategy_id = 'EXACT_BOOST'
+    WHEN d.strategy_id IN ('PHRASE','EXACT')
       AND d.ads_net_roas_1w IS NOT NULL AND d.ads_net_roas_1w < d.th_negate_roas
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
       AND COALESCE(d.ads_lag_net_roas, 0) > 1.3 THEN 'MONITOR'
-    WHEN d.strategy_id = 'EXACT_BOOST'
+    WHEN d.strategy_id IN ('PHRASE','EXACT')
       AND d.ads_net_roas_1w IS NOT NULL AND d.ads_net_roas_1w < d.th_negate_roas
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_BOOST_SIMILAR_EXACT'
-    WHEN d.strategy_id = 'EXACT_BOOST'
+    WHEN d.strategy_id IN ('PHRASE','EXACT')
       AND d.ads_net_roas_1w IS NOT NULL AND d.ads_net_roas_1w < d.th_reduce_bid_roas
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
       AND COALESCE(d.ads_lag_net_roas, 0) > 1.3 THEN 'MONITOR'
-    WHEN d.strategy_id = 'EXACT_BOOST'
+    WHEN d.strategy_id IN ('PHRASE','EXACT')
       AND d.ads_net_roas_1w IS NOT NULL AND d.ads_net_roas_1w < d.th_reduce_bid_roas
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_BOOST_SIMILAR_EXACT'
 
@@ -737,7 +775,7 @@ SELECT
     -- should not be promoted during off-season — wait for the right BLITZ phase
     WHEN d.coach_mode != 'BLITZ'
       AND d.is_holiday_seasonal = TRUE
-      AND d.strategy_id = 'INTENT'
+      AND d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       AND d.ads_weighted_net_roas_offseason IS NOT NULL AND d.ads_weighted_net_roas_offseason >= d.th_promote_min_roas
       AND NOT d.already_in_exact_boost
@@ -745,7 +783,7 @@ SELECT
 
     -- Promote to exact (hunter/discovery with consistent conversions)
     -- Uses mode-aware ROAS (off-season for GUARDIAN)
-    WHEN d.strategy_id = 'INTENT'
+    WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       AND d.ads_weighted_net_roas_offseason IS NOT NULL AND d.ads_weighted_net_roas_offseason >= d.th_promote_min_roas
       AND NOT d.already_in_exact_boost
@@ -918,10 +956,16 @@ SELECT
     -- Uses target_keyword_status from V_ADS_COACH_DATA (latest from FACT_AMAZON_ADS).
     WHEN COALESCE(d.target_keyword_status, 'ENABLED') != 'ENABLED' THEN 'TARGET_PAUSED'
 
-    -- ═══ WARMUP GUARD: new campaigns need 14 days for algorithm to learn ═══
-    -- Blocks INCREASE_BID for campaigns created less than 14 days ago.
-    -- Amazon's algorithm needs time to find optimal placements.
-    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
+    -- ═══ WARMUP GUARD — RETIRED (Ori 2026-07-24). Kept as dead branches, not deleted, so it can be
+    -- switched back on by restoring the age test in place of FALSE (6 mirrored sites: this branch, the
+    -- trace node, the trace text, recommended_bid, bid_change_pct and the summary action — they MUST
+    -- change together or the action, the bid and the explanation disagree).
+    -- It used to block INCREASE_BID for campaigns under 14 days old, on the theory that Amazon's
+    -- algorithm needs time to find placements. Retired because the launch population is now LOW BUDGET,
+    -- not age: a campaign graduates by proving itself on budget, and could graduate on day 5 only to sit
+    -- unable to raise bids for another 9 days — the guard would penalise exactly the campaigns that
+    -- earned their way out. The launch controller has already found the bid by then.
+    WHEN FALSE /* warm-up guard RETIRED 2026-07-24 — see WARMUP GUARD note */
       AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
       THEN 'WARMUP_MONITOR'
 
@@ -1163,7 +1207,7 @@ SELECT
         END,
         ',"value":"', CAST(d.days_since_last_bid_change AS STRING), 'd"}'),
       -- 7. Warmup guard pill (campaign age < 14 days)
-      CASE WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
+      CASE WHEN FALSE /* warm-up guard RETIRED 2026-07-24 — see WARMUP GUARD note */
         THEN CONCAT(
           ',{"id":"tgt_warmup","label":"Campaign Age","sql":"campaign_creation_date","rule":"≥ 14d → allow bid increase | < 14d → WARMUP_MONITOR","pass":false',
           ',"value":"', CAST(DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) AS STRING),
@@ -1248,7 +1292,7 @@ SELECT
                ' below ', CAST(ROUND(d.th_reduce_bid_roas, 2) AS STRING),
                ' → reduce bid.')
         -- Warmup guard: new campaign in learning period
-        WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
+        WHEN FALSE /* warm-up guard RETIRED 2026-07-24 — see WARMUP GUARD note */
           AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
           THEN CONCAT('🌱 New campaign (',
                CAST(DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) AS STRING),
@@ -1426,7 +1470,7 @@ SELECT
       AND d.is_holiday_seasonal = TRUE
       THEN NULL
     -- WARMUP GUARD: no bid increase for new campaigns (< 14 days)
-    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
+    WHEN FALSE /* warm-up guard RETIRED 2026-07-24 — see WARMUP GUARD note */
       AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
       THEN NULL
     -- PROBE: bid to the per-match-type launch CPC (p50 real CPC for this parent×match), capped (Coacher C)
@@ -1536,7 +1580,7 @@ SELECT
       AND d.is_holiday_seasonal = TRUE
       THEN 0
     -- WARMUP GUARD: 0% change for new campaigns (< 14 days)
-    WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
+    WHEN FALSE /* warm-up guard RETIRED 2026-07-24 — see WARMUP GUARD note */
       AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1
       THEN 0
     -- SWEET-SPOT RAISE % (mirrors recommended_bid): exact % of the +15%/min-+$0.05 step, capped at the cap.
@@ -1590,18 +1634,18 @@ SELECT
     -- (NEGATE_TERM removed — no cross-campaign consolidation)
 
     -- Promote to exact
-    WHEN d.strategy_id = 'INTENT'
+    WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       AND NOT d.already_in_exact_boost AND d.sqp_amazon_search_volume_8w >= d.th_promote_min_sqp_vol
       THEN d.ads_orders_8w * 50.0
 
     -- Scale up (EXACT_BOOST only)
-    WHEN d.strategy_id = 'EXACT_BOOST' AND d.ads_net_roas_8w >= d.th_scale_up_roas
+    WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.ads_net_roas_8w >= d.th_scale_up_roas
       AND d.ads_orders_8w >= 2
       THEN d.ads_orders_8w * 30.0
 
     -- Increase bid (HUNTER/LOW_COST strong targets)
-    WHEN d.strategy_id = 'INTENT'
+    WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
       AND d.ads_orders_8w >= 2 AND d.ads_net_roas_8w >= d.th_scale_up_roas
       THEN d.ads_orders_8w * 20.0
 
@@ -1662,13 +1706,13 @@ SELECT
         CONCAT(' | roas=', CAST(COALESCE(d.ads_net_roas_8w, 0) AS STRING),
           ' campaign_type=', COALESCE(d.campaign_type, '?'),
           CASE
-            WHEN d.strategy_id = 'INTENT'
+            WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
               AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64) AND NOT d.already_in_exact_boost
               AND d.sqp_amazon_search_volume_8w >= d.th_promote_min_sqp_vol
               THEN CONCAT(' sqp_vol=', CAST(ROUND(d.sqp_amazon_search_volume_8w, 0) AS STRING), '>=', CAST(CAST(d.th_promote_min_sqp_vol AS INT64) AS STRING), ' [PROMOTE]')
-            WHEN d.strategy_id = 'EXACT_BOOST' AND d.ads_net_roas_8w >= d.th_scale_up_roas
+            WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.ads_net_roas_8w >= d.th_scale_up_roas
               THEN ' [SCALE_UP]'
-            WHEN d.strategy_id = 'INTENT'
+            WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
               AND d.ads_orders_8w >= 2 AND d.ads_net_roas_8w >= d.th_scale_up_roas
               THEN ' [INCREASE_BID]'
             WHEN CASE
@@ -1755,7 +1799,7 @@ SELECT
     -- SEASONAL TERM GUARD (non-BLITZ): profitable seasonal term held for next BLITZ
     WHEN d.coach_mode != 'BLITZ'
       AND d.is_holiday_seasonal = TRUE
-      AND d.strategy_id = 'INTENT'
+      AND d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       THEN CONCAT('🛡 Seasonal term "', d.search_term, '" is profitable (',
                    CAST(d.ads_orders_8w AS STRING), ' orders, ROAS ',
@@ -1785,13 +1829,13 @@ SELECT
                    CAST(CAST(d.th_min_clicks AS INT64) AS STRING), ' clicks for ', COALESCE(d.strategy_id, 'this strategy'), '.')
 
     -- EXACT_BOOST specific reasons
-    WHEN d.strategy_id = 'EXACT_BOOST' AND d.ads_orders_8w = 0 AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
+    WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.ads_orders_8w = 0 AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
       THEN CONCAT('Boosted keyword "', d.search_term, '" has ', CAST(d.ads_clicks_8w AS STRING),
                    ' clicks but 0 orders. Stop exact targeting.')
-    WHEN d.strategy_id = 'EXACT_BOOST' AND d.ads_net_roas_8w < d.th_negate_roas AND d.ads_clicks_recent_5d > 0
+    WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.ads_net_roas_8w < d.th_negate_roas AND d.ads_clicks_recent_5d > 0
       THEN CONCAT('Boosted keyword underperforming: Net ROAS ', CAST(d.ads_net_roas_8w AS STRING),
                    ' on $', CAST(ROUND(d.ads_spend_8w, 0) AS STRING), ' spend. Negate exact match.')
-    WHEN d.strategy_id = 'EXACT_BOOST' AND d.ads_net_roas_8w < d.th_reduce_bid_roas AND d.ads_clicks_recent_5d > 0
+    WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.ads_net_roas_8w < d.th_reduce_bid_roas AND d.ads_clicks_recent_5d > 0
       THEN CONCAT('Boosted keyword marginal: Net ROAS ', CAST(d.ads_net_roas_8w AS STRING),
                    ' on ', CAST(d.ads_clicks_8w AS STRING), ' clicks. Negate exact match for "', d.search_term, '".')
 
@@ -1815,7 +1859,7 @@ SELECT
                         ELSE '' END)
 
     -- PROMOTE (with SQP volume check) — uses mode-aware ROAS
-    WHEN d.strategy_id = 'INTENT'
+    WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
       AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
       AND CASE
            WHEN d.coach_mode IN ('GUARDIAN', 'COOLDOWN') THEN d.ads_net_roas_1w_os
@@ -1846,14 +1890,14 @@ SELECT
                      ELSE '' END)
 
     -- SCALE_UP (EXACT_BOOST campaigns)
-    WHEN d.strategy_id = 'EXACT_BOOST' AND d.ads_net_roas_8w >= d.th_scale_up_roas
+    WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.ads_net_roas_8w >= d.th_scale_up_roas
       AND d.ads_orders_8w >= 2
       THEN CONCAT('Strong ROAS ', CAST(d.ads_net_roas_8w AS STRING), ' (8w), ',
                    CAST(d.ads_orders_8w AS STRING), ' orders (8w) in EXACT_BOOST. Profit $',
                    CAST(ROUND(COALESCE(d.ads_net_profit_8w, 0), 0) AS STRING), '. Keep targeting — check TARGET for bid recommendation.')
 
     -- INCREASE_BID (HUNTER/LOW_COST strong targets)
-    WHEN d.strategy_id = 'INTENT'
+    WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
       AND d.ads_orders_8w >= 2 AND d.ads_net_roas_8w >= d.th_scale_up_roas
       THEN CONCAT('Target performing well: ', CAST(d.ads_orders_8w AS STRING),
                    ' orders (8w), ROAS ', CAST(d.ads_net_roas_8w AS STRING), ' (8w)',
@@ -2150,7 +2194,7 @@ SELECT
         WHEN d.target_roas >= d.th_scale_up_roas
              AND d.eff_orders_for_bid >= 1 THEN 'SCALE_WINNERS'
         -- Promote to exact
-        WHEN d.strategy_id = 'INTENT'
+        WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
              AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
              AND NOT d.already_in_exact_boost THEN 'PROMOTE_TERMS'
         -- Heavy loss even in blitz → cost control
@@ -2177,13 +2221,13 @@ SELECT
         WHEN d.target_roas < d.th_reduce_bid_roas
              AND d.target_orders_8w > 0 THEN 'OPTIMIZE_BIDS'
         -- Warmup: new campaigns (< 14 days) → MAINTAIN until algorithm matures
-        WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), DATE(d.campaign_creation_date), DAY) < 14
+        WHEN FALSE /* warm-up guard RETIRED 2026-07-24 — see WARMUP GUARD note */
              AND d.target_roas >= d.th_profitable_roas AND d.eff_orders_for_bid >= 1 THEN 'MAINTAIN'
         -- Bid increase on winners
         WHEN d.target_roas >= d.th_scale_up_roas
              AND d.eff_orders_for_bid >= 1 THEN 'SCALE_WINNERS'
         -- Promote to exact (blocked for seasonal terms — only BLITZ promotes seasonal)
-        WHEN d.strategy_id = 'INTENT'
+        WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
              AND d.ads_orders_8w >= CAST(d.th_promote_min_orders AS INT64)
              AND NOT d.already_in_exact_boost
              AND d.sqp_amazon_search_volume_8w >= d.th_promote_min_sqp_vol
@@ -2222,7 +2266,7 @@ SELECT
       CAST(ROUND(COALESCE(d.impression_share_pct, 0), 0) AS STRING), '% vs ',
       CAST(CAST(d.th_defense_dominate_is AS INT64) AS STRING), '% dominate cutoff.')
     WHEN d.strategy_id = 'PRODUCT_DEFENSE' THEN 'Product defense — keep our own ASINs on our own detail pages so shoppers see only our options; bid up toward the ceiling.'
-    WHEN d.strategy_id = 'INTENT' THEN CONCAT('Discovery — only scale once it is ad-profitable (net ROAS >= ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x); net ROAS is ads-only, breakeven 1.0.')
+    WHEN d.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT') THEN CONCAT('Discovery — only scale once it is ad-profitable (net ROAS >= ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x); net ROAS is ads-only, breakeven 1.0.')
     WHEN d.strategy_id = 'SEASONAL_PUSH' THEN CONCAT('Seasonal — keep warm at >= ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x so peak-proven terms stay live for the next peak.')
     WHEN d.strategy_id = 'NEW_LAUNCH' THEN CONCAT('New launch — push for clicks early (bar ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x) to learn before optimizing.')
     ELSE CONCAT('Scales when net ROAS >= ', CAST(ROUND(d.th_profitable_roas, 2) AS STRING), 'x (ads-only; breakeven 1.0).')
@@ -2238,6 +2282,8 @@ SELECT
   END as bid_ceiling_note
 
 FROM coach_data d
+LEFT JOIN launch_taper lt
+  ON UPPER(d.campaign_name) LIKE CONCAT('%', lt.name_token, '%')
 LEFT JOIN pp_target_metrics pp
   ON d.campaign_id = pp.campaign_id
   AND LOWER(COALESCE(d.targeting, d.search_term)) = LOWER(pp.targeting)
@@ -2315,18 +2361,18 @@ SELECT
       THEN CONCAT('bid set by BID Ceiling ($', CAST(ROUND(scored.th_bid_cap, 2) AS STRING), ')')
     ELSE NULL
   END AS bid_ceiling_note,
-  -- Launch-track bid the coacher would set for this decision (capped at the launch ceiling):
-  --   HOLD   → the aggressive launch bid (establishes/keeps the gather-phase bid)
-  --   REDUCE → current bid −LAUNCH_STEP_DOWN_PCT, floored at the term's own CPC
-  --   NEGATE/GRADUATE/off-track → no bid
+  -- Launch-track bid per the no-loss-cuts doctrine (2026-07-25, coacher QA H1a):
+  --   PROBE → +5% (V_LAUNCH_PHASE1's bid_probe constant; buy the missing clicks)
+  --   RAISE → +15% (bid_raise_weak), capped at the launch ceiling
+  --   HOLD  → keep the CURRENT bid (never silently re-raise to the aggressive launch_bid —
+  --           a selling-but-unprofitable HOLD must not move the bid at all); cold keywords
+  --           with no bid yet get launch_bid.
+  --   NEGATE/GRADUATE/off-track → no bid. There is NO reduce path in a launch window.
   CASE scored.launch_decision
-    WHEN 'LAUNCH_HOLD' THEN scored.launch_bid
-    -- A launch reduce must genuinely LOWER the bid (the point is to choke a bleeder), so it floors at
-    -- a hard $0.05 — NOT the term's CPC, which can sit above the current bid and turn a "reduce" into a raise.
-    WHEN 'LAUNCH_REDUCE_BID' THEN ROUND(GREATEST(
-      COALESCE(scored.current_bid, scored.launch_bid) * (1 - scored.th_launch_step_down_pct),
-      0.05
-    ), 2)
+    WHEN 'LAUNCH_PROBE' THEN ROUND(LEAST(COALESCE(scored.current_bid, scored.launch_bid) * 1.05, scored.th_launch_bid_ceiling), 2)
+    WHEN 'LAUNCH_RAISE' THEN ROUND(LEAST(COALESCE(scored.current_bid, scored.launch_bid) * 1.15, scored.th_launch_bid_ceiling), 2)
+    WHEN 'LAUNCH_HOLD'  THEN COALESCE(scored.current_bid, scored.launch_bid)
+    WHEN 'LAUNCH_TAPER' THEN GREATEST(0.15, scored.launch_taper_bid)
     ELSE NULL
   END AS launch_recommended_bid,
   -- Compact decision-trace for the launch card (NULL when off the track)

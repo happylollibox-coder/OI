@@ -4,8 +4,8 @@
 cube(`SbLaunchCampaign`, {
   sql: `SELECT campaign_id, campaign_name, day_of_ramp, current_budget, suggested_budget, budget_reason, pct_dark, spend_today,
                camp_roas_1d, camp_roas_prev2, CAST(anchor_date AS STRING) anchor_date,
-               r2_spend, r2_cpc, r2_clk, r2_ctr, r2_tos, r2_roas, r2_acos, r2_impr,
-               r3_spend, r3_cpc, r3_clk, r3_ctr, r3_tos, r3_roas, r3_acos, r3_impr
+               r2_spend, r2_cpc, r2_clk, r2_ctr, r2_tos, r2_roas, r2_acos, r2_impr, r2_orders,
+               r3_spend, r3_cpc, r3_clk, r3_ctr, r3_tos, r3_roas, r3_acos, r3_impr, r3_orders
         FROM \`onyga-482313.OI.V_SB_LAUNCH_CAMPAIGN\``,
 
   // Refresh tied to the SP orchestration (one trigger) — cache invalidates when SP_REFRESH_CUBE_TABLES completes.
@@ -26,10 +26,10 @@ cube(`SbLaunchCampaign`, {
     anchorDate:   { sql: `anchor_date`,   type: `string` },
     r2Spend: { sql: `r2_spend`, type: `number` }, r2Cpc: { sql: `r2_cpc`, type: `number` }, r2Clk: { sql: `r2_clk`, type: `number` },
     r2Ctr: { sql: `r2_ctr`, type: `number` }, r2Tos: { sql: `r2_tos`, type: `number` }, r2Roas: { sql: `r2_roas`, type: `number` },
-    r2Acos: { sql: `r2_acos`, type: `number` }, r2Impr: { sql: `r2_impr`, type: `number` },
+    r2Acos: { sql: `r2_acos`, type: `number` }, r2Impr: { sql: `r2_impr`, type: `number` }, r2Orders: { sql: `r2_orders`, type: `number` },
     r3Spend: { sql: `r3_spend`, type: `number` }, r3Cpc: { sql: `r3_cpc`, type: `number` }, r3Clk: { sql: `r3_clk`, type: `number` },
     r3Ctr: { sql: `r3_ctr`, type: `number` }, r3Tos: { sql: `r3_tos`, type: `number` }, r3Roas: { sql: `r3_roas`, type: `number` },
-    r3Acos: { sql: `r3_acos`, type: `number` }, r3Impr: { sql: `r3_impr`, type: `number` },
+    r3Acos: { sql: `r3_acos`, type: `number` }, r3Impr: { sql: `r3_impr`, type: `number` }, r3Orders: { sql: `r3_orders`, type: `number` },
   },
 });
 

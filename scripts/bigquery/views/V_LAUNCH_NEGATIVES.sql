@@ -21,7 +21,7 @@
 -- Usage (bulksheet generation):
 --   SELECT phrase, match_type
 --   FROM V_LAUNCH_NEGATIVES
---   WHERE strategy_id = 'EXACT_BOOST' AND parent_name = 'Lollibox'
+--   WHERE strategy_id IN ('PHRASE','EXACT') AND parent_name = 'Lollibox'
 --
 -- Dependencies: V_PRODUCT_PHRASE_NEGATIVES, DIM_STRATEGY_TEMPLATE
 -- Materialized to: T_LAUNCH_NEGATIVES (via SP_REFRESH_CUBE_TABLES)
