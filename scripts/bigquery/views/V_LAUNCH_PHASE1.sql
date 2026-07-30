@@ -251,6 +251,12 @@ base AS (
   LEFT JOIN agb        ON agb.ad_group_id = CAST(t.ad_group_id AS STRING)
   LEFT JOIN tsig ts    ON ts.cid = c.campaign_id AND ts.targeting = t.target_text
   LEFT JOIN t90       ON t90.cid = c.campaign_id AND t90.targeting = t.target_text
+),
+-- affordable CPC (Ori 2026-07-30: TRIM floor must not stop at $1) = budget ÷ (targets × 4-click
+-- goal), floored at bid_min. Self-scaling: rich budgets get high aff and are left alone.
+baseN AS (
+  SELECT b.*, ROUND(GREATEST(SAFE_DIVIDE(b.budget, COUNT(*) OVER (PARTITION BY b.campaign_id) * 4), 0.20), 2) AS aff_cpc
+  FROM base b
 )
 SELECT
   b.campaign_id, b.campaign_name, b.day_of_ramp,
@@ -338,7 +344,7 @@ SELECT
         -- bids, NEVER probe up (under-clicking here is the budget dying, not the bid too low)
         WHEN b.pd > x.dark_target THEN CASE
           WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05 THEN x.bid_park
-          WHEN b.current_bid > x.big_bid AND COALESCE(b.clk3,0) > 0 THEN ROUND(GREATEST(b.current_bid*x.bid_big_trim, x.big_bid),2)
+          WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.clk3,0) > 0 THEN ROUND(GREATEST(b.current_bid*x.bid_big_trim, COALESCE(b.aff_cpc, x.bid_min)),2)
           WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day THEN ROUND(GREATEST(b.current_bid*x.bid_slow, x.bid_min),2)
           ELSE b.current_bid
         END
@@ -363,7 +369,7 @@ SELECT
       CASE
         WHEN b.pd > x.dark_target THEN CASE
           WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
-          WHEN b.current_bid > x.big_bid AND COALESCE(b.clk3,0) > 0 THEN 'TRIM_BID'
+          WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.clk3,0) > 0 THEN 'TRIM_BID'
           WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day THEN 'SLOW'
           ELSE 'HOLD'
         END
@@ -375,4 +381,4 @@ SELECT
     WHEN b.t_roas_prev2 > x.strong_roas AND b.t_roas1 > x.strong_roas THEN 'RAISE_STRONG'
     WHEN b.t_roas1 > x.weak_roas THEN 'RAISE_WEAK'
     ELSE 'HOLD' END AS bid_action
-FROM base b CROSS JOIN k x CROSS JOIN cfg x2;
+FROM baseN b CROSS JOIN k x CROSS JOIN cfg x2;

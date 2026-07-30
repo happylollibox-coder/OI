@@ -40,7 +40,7 @@ const bidWhy = (a: string, reason: string, goodRoas = false,
   : a === 'SLOW' ? '6+ clicks/day (over its active days) with no sale — lower slowly (−5%): enough traffic to know it isn’t converting, so stop buying more (and it’s what caps the budget)'
   : a === 'PROBE' ? 'under 4 clicks/day (over its active days) — raise slowly (+5%) to reach the 4-clicks/day goal, then wait for a sale (negate dead search terms in parallel)'
   : a === 'PARK' ? 'tested 15+ clicks/90d with no sale — parked at $0.25 so untested keywords get their probe (find the winner, he funds the rest)'
-  : a === 'TRIM_BID' ? 'bid over $1 eats the capped budget (10 kw × 4 clicks at $1 = $40 on $10) — trimmed 15% toward $1'
+  : a === 'TRIM_BID' ? 'bid above the affordable CPC (budget ÷ targets × 4 clicks) eats the capped budget — trimmed 15%/day toward it'
   : a === 'RAISE_STRONG' ? 'last day & prior-2d both > 1.5× — fund the winner'
   : a === 'RAISE_WEAK' ? 'last day > 1.2×'
   : a === 'STARVE' ? 'under-spending → raise to buy traffic'

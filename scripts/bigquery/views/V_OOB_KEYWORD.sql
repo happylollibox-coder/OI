@@ -31,7 +31,7 @@ wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
        FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
 -- the phase's campaign population + campaign-level ROAS signals (for the hold-while-capping test)
 oob AS (
-  SELECT campaign_id, campaign_name, pct_dark, roas_1d AS c_roas1, roas_prev2 AS c_roas_prev2
+  SELECT campaign_id, campaign_name, pct_dark, current_budget AS budget, roas_1d AS c_roas1, roas_prev2 AS c_roas_prev2
   FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
   WHERE channel = 'SP' AND pct_dark > 10
 ),
@@ -122,7 +122,7 @@ lc AS (
 ),
 -- ── SB arm (v2.1): dark SB campaigns' keywords + product targets, from the SB reports ──
 oob_sb AS (
-  SELECT campaign_id, campaign_name, pct_dark, roas_1d AS c_roas1, roas_prev2 AS c_roas_prev2
+  SELECT campaign_id, campaign_name, pct_dark, current_budget AS budget, roas_1d AS c_roas1, roas_prev2 AS c_roas_prev2
   FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
   WHERE channel = 'SB' AND pct_dark > 10
 ),
@@ -198,7 +198,7 @@ sb_tsig AS (
   GROUP BY 1
 ),
 base AS (
-  SELECT o.campaign_id, o.campaign_name, o.pct_dark, o.c_roas1, o.c_roas_prev2,
+  SELECT o.campaign_id, o.campaign_name, o.pct_dark, o.budget, o.c_roas1, o.c_roas_prev2,
     t.targeting AS target_text, td.keyword_id, td.ad_group_id, td.match_type,
     LOWER(t.targeting) IN ('close-match','loose-match','substitutes','complements') AS is_auto,
     LOWER(t.targeting) LIKE 'asin%' AS is_pt,
@@ -215,7 +215,7 @@ base AS (
   LEFT JOIN agb ON agb.ad_group_id = td.ad_group_id
   LEFT JOIN lc ON lc.keyword_id = td.keyword_id
   UNION ALL
-  SELECT o.campaign_id, o.campaign_name, o.pct_dark, o.c_roas1, o.c_roas_prev2,
+  SELECT o.campaign_id, o.campaign_name, o.pct_dark, o.budget, o.c_roas1, o.c_roas_prev2,
     t.target_text, t.target_id AS keyword_id, t.ad_group_id, t.match_type,
     FALSE AS is_auto, t.is_pt, TRUE AS is_sb,
     t.bid AS current_bid,
@@ -228,6 +228,13 @@ base AS (
   JOIN sb_tsig s ON s.target_id = t.target_id
   LEFT JOIN sb_t90 s90 ON s90.target_id = t.target_id
   LEFT JOIN lc ON lc.keyword_id = t.target_id
+),
+-- affordable CPC per campaign (Ori 2026-07-30: "TRIM floor should not stop at $1.00") —
+-- budget ÷ (targets × 4-click goal), floored at bid_min. Self-scaling: a $10/17-target campaign
+-- trims toward $0.20; a $70/10-target campaign has aff ≈ $1.75 and its bids are left alone.
+baseN AS (
+  SELECT b.*, ROUND(GREATEST(SAFE_DIVIDE(b.budget, COUNT(*) OVER (PARTITION BY b.campaign_id) * 4), 0.20), 2) AS aff_cpc
+  FROM base b
 )
 SELECT
   b.campaign_id, b.campaign_name, b.pct_dark,
@@ -255,8 +262,8 @@ SELECT
     -- under-clicking is a budget artifact — never probe up. Park the tested, trim the eaters.
     WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05
       THEN x.bid_park
-    WHEN b.current_bid > x.big_bid AND (b.clk1 + b.clk2) > 0
-      THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, x.big_bid), 2)
+    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0
+      THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, COALESCE(b.aff_cpc, x.bid_min)), 2)
     WHEN b.clk1 >= x.click_cap_day THEN ROUND(GREATEST(b.current_bid * x.bid_slow, x.bid_min), 2)
     ELSE NULL
   END AS suggested_bid,
@@ -269,7 +276,7 @@ SELECT
       WHEN COALESCE(b.roas1,0) > x.weak_roas THEN 'RAISE_WEAK'
       ELSE 'HOLD' END
     WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
-    WHEN b.current_bid > x.big_bid AND (b.clk1 + b.clk2) > 0 THEN 'TRIM_BID'
+    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0 THEN 'TRIM_BID'
     WHEN b.clk1 >= x.click_cap_day THEN 'SLOW'
     ELSE 'HOLD'
   END AS bid_action,
@@ -285,12 +292,13 @@ SELECT
       ELSE 'converting, mid — hold' END
     WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05
       THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d, no sale — park at $0.25 so the untested keywords get their probe')
-    WHEN b.current_bid > x.big_bid AND (b.clk1 + b.clk2) > 0
-      THEN 'bid over $1 eats the capped budget — trim 15% toward $1 (10 kw × 4 clicks at $1 = $40 on a $10 budget)'
+    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0
+      THEN CONCAT('bid eats the capped budget — trim 15%/day toward the affordable CPC $',
+                  CAST(b.aff_cpc AS STRING), ' (= budget ÷ targets × 4-click goal)')
     WHEN b.clk1 >= x.click_cap_day THEN '6+ clicks yesterday, not converting — slow −5%: cheaper clicks stretch the budget across the day'
     ELSE 'under-clicked because the BUDGET dies, not the bid — held; parking/trimming the eaters frees its probe'
   END AS bid_reason
-FROM base b CROSS JOIN k x
+FROM baseN b CROSS JOIN k x
 LEFT JOIN ly ON ly.kw = LOWER(TRIM(b.target_text))
 LEFT JOIN camp_parent cp ON cp.cid = b.campaign_id
 LEFT JOIN band bd ON bd.parent_name = cp.parent_name AND bd.match_type = UPPER(COALESCE(b.match_type, ''))

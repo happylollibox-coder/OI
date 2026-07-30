@@ -166,6 +166,10 @@ last_change AS (
   FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
   WHERE keyword_id IS NOT NULL AND CAST(keyword_id AS STRING) != ''
   GROUP BY 1
+),
+baseN AS (
+  SELECT b.*, ROUND(GREATEST(SAFE_DIVIDE(b.budget, COUNT(*) OVER (PARTITION BY b.campaign_id) * 4), 0.20), 2) AS aff_cpc
+  FROM base b
 )
 SELECT
   b.campaign_id, b.target_id, b.ad_group_id, b.target_text, b.target_type, b.match_type, b.bid,
@@ -190,7 +194,7 @@ SELECT
         -- capped campaign: budget-constrained probing (Ori 2026-07-30)
         WHEN b.pd > x.dark_target THEN CASE
           WHEN b.clk90 >= x.tested_clk AND b.bid > x.bid_park + 0.05 THEN x.bid_park
-          WHEN b.bid > x.big_bid AND COALESCE(b.clk3,0) > 0 THEN ROUND(GREATEST(b.bid*x.bid_big_trim, x.big_bid),2)
+          WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.clk3,0) > 0 THEN ROUND(GREATEST(b.bid*x.bid_big_trim, COALESCE(b.aff_cpc, x.bid_min)),2)
           WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day THEN ROUND(GREATEST(b.bid*x.bid_slow, x.bid_min),2)
           ELSE b.bid
         END
@@ -213,7 +217,7 @@ SELECT
       CASE
         WHEN b.pd > x.dark_target THEN CASE
           WHEN b.clk90 >= x.tested_clk AND b.bid > x.bid_park + 0.05 THEN 'PARK'
-          WHEN b.bid > x.big_bid AND COALESCE(b.clk3,0) > 0 THEN 'TRIM_BID'
+          WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.clk3,0) > 0 THEN 'TRIM_BID'
           WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day THEN 'SLOW'
           ELSE 'HOLD'
         END
@@ -228,5 +232,5 @@ SELECT
   -- 1-day cooldown reason (mirrors V_RUN_TARGET) so the SB card can show WHY a held target has no suggestion
   IF(COALESCE(lc.days_since_suggestion, 99) < 1, 'changed today — held (one launch suggestion per day)', NULL) AS bid_reason,
   lc.days_since_suggestion AS days_since_suggestion   -- drives the "Already applied" filter (applied = <1d, changed today)
-FROM base b CROSS JOIN k x
+FROM baseN b CROSS JOIN k x
 LEFT JOIN last_change lc ON lc.target_id = b.target_id;

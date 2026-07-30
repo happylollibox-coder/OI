@@ -61,8 +61,9 @@ same constants as the launch controller, applied to every OOB campaign regardles
   first match wins:
   1. **tested ≥ 15 clicks over 90d, no sale → PARK at $0.25** — it had its test; free the budget
      for the untested keywords, even if the parked bid gets no clicks.
-  2. **bid > $1.00 with any recent clicks → TRIM −15%/day toward $1.00** — big bids eat the capped
-     budget and starve every other probe.
+  2. **bid above the affordable CPC with any recent clicks → TRIM −15%/day toward it** — the
+     affordable CPC = `budget ÷ (targets × 4-click goal)`, floored $0.20 (Ori: "TRIM floor should
+     not stop at $1.00"). Self-scaling: $10/17 targets → ~$0.20; $70/10 targets → ~$1.75 (left alone).
   3. ≥ 6 clicks yesterday → SLOW −5% (still over-buying traffic).
   4. under 4 clicks → **HOLD, never probe up** — the constraint is budget, not bid. (+5% probing
      survives only in the launch controller's NOT-capped branch.)
