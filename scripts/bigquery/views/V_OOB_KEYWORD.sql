@@ -1,9 +1,11 @@
 -- V_OOB_KEYWORD — keyword layer of the Out-of-budget phase (Weekly Run). Spec: architecture/OOB_BUDGET_PHASE.md §v2.
 --
--- One row per (OOB campaign, SP target) — keywords, auto clauses AND product targets — with a bid
+-- One row per (OOB campaign, target) — SP keywords/auto clauses/product targets AND SB keywords/
+-- product targets (v2.1, Ori 2026-07-30: "i cant see sb keywords as a hierarchy") — with a bid
 -- suggestion built from the SAME constants as the launch controller, applied to every out-of-budget
--- campaign regardless of engine (launch or working). SB campaigns are campaign-level only in this
--- phase; their targets already live on the SB launch track (V_SB_LAUNCH_TARGET).
+-- campaign regardless of engine (launch or working). SP signals from FACT + price-tier COGS; SB from
+-- the SB reports with the est. net ROAS via the campaign's mapped-ASIN cost ratio (same method as
+-- V_SB_LAUNCH_TARGET — sb config mirrors sb_keyword/sb_product_target are minutes-fresh KEEP_RAW).
 --
 -- WHY BIDS AT ALL: a bid cut does not reduce spend — the budget caps spend either way. It lowers
 -- CPC so the SAME budget buys more hours of the day: dark ↓ while utilization stays ~100%, which is
@@ -71,17 +73,117 @@ td AS (
 ),
 agb AS (SELECT ad_group_id, ANY_VALUE(default_bid) default_bid
         FROM `onyga-482313.OI.DIM_AD_GROUP` WHERE is_current GROUP BY 1),
+-- ── target CPC (Ori 2026-07-30: "show also target cpc, based on time last year if data exists") ──
+-- Precedence: (1) the SAME 28 days one year back (364-day offset keeps Sun–Sat weekday alignment),
+-- per keyword TEXT account-wide, needs >= 10 LY clicks to count; (2) else the coacher band
+-- cpc_target (DE_PRODUCT_STRATEGY_PROFILE, product × season × match, coarse ALL/ALL cells averaged
+-- across intents, CONCLUSIVE + enabled only); (3) else NULL. Auto clauses + product targets skip LY
+-- (the clause text is not product-specific across campaigns) — band or nothing.
+ly AS (
+  SELECT LOWER(TRIM(targeting)) AS kw, SUM(Ads_cost) sp, SUM(Ads_clicks) clk
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+  WHERE date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY)
+                 AND DATE_SUB((SELECT d FROM wm), INTERVAL 364 DAY)
+  GROUP BY 1 HAVING SUM(Ads_clicks) >= 10
+),
+season AS (
+  SELECT COUNTIF(CURRENT_DATE('America/New_York') BETWEEN boost_start AND cooldown_end) > 0 AS in_peak
+  FROM `onyga-482313.OI.DIM_US_HOLIDAYS` WHERE category IN ('gift_season', 'prime_event')
+),
+camp_parent AS (
+  SELECT CAST(f.campaign_id AS STRING) cid, ANY_VALUE(p.parent_name) parent_name
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` f
+  JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = f.ASIN_BY_CAMPAIGN_NAME AND p.parent_name IS NOT NULL
+  GROUP BY 1
+),
+band AS (
+  SELECT parent_name, UPPER(match_type) AS match_type, ROUND(AVG(cpc_target), 2) AS cpc_target
+  FROM `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE`, season s
+  WHERE enabled AND cpc_target IS NOT NULL AND confidence = 'CONCLUSIVE'
+    AND COALESCE(campaign_type, 'ALL') = 'ALL' AND COALESCE(ad_format, 'ALL') = 'ALL'
+    AND season = IF(s.in_peak, 'PEAK', 'OFF')
+  GROUP BY 1, 2
+),
 -- 1-day cooldown: did we already upload a change for this keyword?
 lc AS (
   SELECT keyword_id, DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at)), DAY) AS days_since
   FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
   WHERE keyword_id IS NOT NULL GROUP BY 1
 ),
+-- ── SB arm (v2.1): dark SB campaigns' keywords + product targets, from the SB reports ──
+oob_sb AS (
+  SELECT campaign_id, campaign_name, pct_dark, roas_1d AS c_roas1, roas_prev2 AS c_roas_prev2
+  FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
+  WHERE channel = 'SB' AND pct_dark > 10
+),
+wm_sb AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
+          FROM `fivetran-hl.amazon_ads.sb_campaign_report`),
+-- est. COGS ratio per SB campaign via its mapped ASIN (same method as the SB launch views)
+prod AS (
+  SELECT CAST(f.campaign_id AS STRING) AS cid,
+    SAFE_DIVIDE(ANY_VALUE(c.cost), NULLIF(ANY_VALUE(p.listing_price_amount), 0)) AS cost_ratio
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` f
+  LEFT JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = f.ASIN_BY_CAMPAIGN_NAME
+  LEFT JOIN (SELECT asin, TOTAL_COST_PER_UNIT cost FROM (
+      SELECT asin, TOTAL_COST_PER_UNIT, ROW_NUMBER() OVER (PARTITION BY marketplace_id, asin ORDER BY start_date DESC) rn
+      FROM `onyga-482313.OI.DIM_COSTS_HISTORY` WHERE marketplace_id='ATVPDKIKX0DER' AND end_date IS NULL) WHERE rn=1) c
+    ON c.asin = f.ASIN_BY_CAMPAIGN_NAME
+  GROUP BY 1
+),
+sb_ptlabel AS (
+  SELECT target_id, ANY_VALUE(targeting_text) txt
+  FROM `fivetran-hl.amazon_ads.sb_target_report`
+  WHERE report_date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 30 DAY)
+  GROUP BY 1
+),
+sb_tgt AS (
+  SELECT k.id AS target_id, CAST(k.campaign_id AS STRING) cid, CAST(k.ad_group_id AS STRING) ad_group_id,
+    k.keyword_text AS target_text, FALSE AS is_pt, k.match_type, k.bid
+  FROM `fivetran-hl.amazon_ads.sb_keyword` k
+  WHERE NOT k._fivetran_deleted AND k.state='enabled'
+    AND CAST(k.campaign_id AS STRING) IN (SELECT campaign_id FROM oob_sb)
+  UNION ALL
+  SELECT pt.id, CAST(pt.campaign_id AS STRING), CAST(pt.ad_group_id AS STRING),
+    COALESCE(l.txt, 'product target'), TRUE, 'TARGETING_EXPRESSION', pt.bid
+  FROM `fivetran-hl.amazon_ads.sb_product_target` pt
+  LEFT JOIN sb_ptlabel l ON l.target_id = pt.id
+  WHERE NOT pt._fivetran_deleted AND pt.state='enabled'
+    AND CAST(pt.campaign_id AS STRING) IN (SELECT campaign_id FROM oob_sb)
+),
+sb_tgtday AS (
+  SELECT keyword_id AS target_id, report_date date, SUM(clicks) clk, SUM(cost) cost,
+         SUM(attributed_sales_14_d) sales, SUM(attributed_conversions_14_d) orders
+  FROM `fivetran-hl.amazon_ads.sb_search_term_report`
+  WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY) AND (SELECT d FROM wm_sb)
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT target_id, report_date, SUM(clicks), SUM(cost), SUM(attributed_sales_14_d), SUM(attributed_conversions_14_d)
+  FROM `fivetran-hl.amazon_ads.sb_target_report`
+  WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY) AND (SELECT d FROM wm_sb)
+  GROUP BY 1, 2
+),
+sb_tsig AS (
+  SELECT t.target_id,
+    SUM(IF(d.date=(SELECT d FROM wm_sb), d.clk,0)) clk1,
+    SUM(IF(d.date=(SELECT d FROM wm_sb), d.cost,0)) sp1,
+    SUM(IF(d.date=(SELECT d FROM wm_sb), d.orders,0)) units1,
+    MAX(IF(d.date=(SELECT d FROM wm_sb), SAFE_DIVIDE(d.sales*(1-COALESCE(pr.cost_ratio,0)), NULLIF(d.cost,0)), NULL)) AS roas1,
+    SUM(IF(d.date<(SELECT d FROM wm_sb), d.clk,0)) clk2,
+    SUM(IF(d.date<(SELECT d FROM wm_sb), d.cost,0)) sp2,
+    SUM(IF(d.date<(SELECT d FROM wm_sb), d.orders,0)) units2,
+    SAFE_DIVIDE(SUM(IF(d.date<(SELECT d FROM wm_sb), d.sales*(1-COALESCE(pr.cost_ratio,0)), 0)),
+                NULLIF(SUM(IF(d.date<(SELECT d FROM wm_sb), d.cost,0)),0)) AS roas_prev2
+  FROM sb_tgt t
+  LEFT JOIN sb_tgtday d ON d.target_id = t.target_id
+  LEFT JOIN prod pr ON pr.cid = t.cid
+  GROUP BY 1
+),
 base AS (
   SELECT o.campaign_id, o.campaign_name, o.pct_dark, o.c_roas1, o.c_roas_prev2,
     t.targeting AS target_text, td.keyword_id, td.ad_group_id, td.match_type,
     LOWER(t.targeting) IN ('close-match','loose-match','substitutes','complements') AS is_auto,
     LOWER(t.targeting) LIKE 'asin%' AS is_pt,
+    FALSE AS is_sb,
     COALESCE(td.keyword_bid, agb.default_bid) AS current_bid,
     t.clk1, t.sp1, t.units1, t.roas1, t.clk2, t.sp2, t.units2, t.roas_prev2,
     (COALESCE(t.roas1, 0) >= 1.0 OR COALESCE(t.roas_prev2, 0) >= 1.0) AS converting,
@@ -91,16 +193,31 @@ base AS (
   LEFT JOIN td ON td.campaign_id = t.cid AND td.target_text = t.targeting
   LEFT JOIN agb ON agb.ad_group_id = td.ad_group_id
   LEFT JOIN lc ON lc.keyword_id = td.keyword_id
+  UNION ALL
+  SELECT o.campaign_id, o.campaign_name, o.pct_dark, o.c_roas1, o.c_roas_prev2,
+    t.target_text, t.target_id AS keyword_id, t.ad_group_id, t.match_type,
+    FALSE AS is_auto, t.is_pt, TRUE AS is_sb,
+    t.bid AS current_bid,
+    s.clk1, ROUND(s.sp1,2), s.units1, ROUND(s.roas1,2), s.clk2, ROUND(s.sp2,2), s.units2, ROUND(s.roas_prev2,2),
+    (COALESCE(s.roas1, 0) >= 1.0 OR COALESCE(s.roas_prev2, 0) >= 1.0) AS converting,
+    lc.days_since
+  FROM sb_tgt t
+  JOIN oob_sb o ON o.campaign_id = t.cid
+  JOIN sb_tsig s ON s.target_id = t.target_id
+  LEFT JOIN lc ON lc.keyword_id = t.target_id
 )
 SELECT
   b.campaign_id, b.campaign_name, b.pct_dark,
-  b.keyword_id, b.ad_group_id, b.target_text, b.match_type, b.is_auto, b.is_pt,
+  b.keyword_id, b.ad_group_id, b.target_text, b.match_type, b.is_auto, b.is_pt, b.is_sb,
   ROUND(b.current_bid, 2) AS current_bid,
   b.clk1 AS clicks_1d, ROUND(b.sp1, 2) AS spend_1d, ROUND(SAFE_DIVIDE(b.sp1, NULLIF(b.clk1,0)), 2) AS cpc_1d,
   b.units1 AS units_1d, b.roas1 AS roas_1d,
   b.clk2 AS clicks_prev2, ROUND(b.sp2, 2) AS spend_prev2, ROUND(SAFE_DIVIDE(b.sp2, NULLIF(b.clk2,0)), 2) AS cpc_prev2,
   b.units2 AS units_prev2, b.roas_prev2,
   b.converting, b.days_since_change,
+  ROUND(COALESCE(IF(b.is_auto OR b.is_pt, NULL, SAFE_DIVIDE(ly.sp, ly.clk)), bd.cpc_target), 2) AS target_cpc,
+  CASE WHEN NOT (b.is_auto OR b.is_pt) AND ly.kw IS NOT NULL THEN 'LY'
+       WHEN bd.cpc_target IS NOT NULL THEN 'BAND' END AS target_cpc_source,
   CASE
     WHEN b.current_bid IS NULL THEN NULL
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN NULL
@@ -142,4 +259,7 @@ SELECT
     ELSE '4–5 clicks — hold and wait for a sale'
   END AS bid_reason
 FROM base b CROSS JOIN k x
+LEFT JOIN ly ON ly.kw = LOWER(TRIM(b.target_text))
+LEFT JOIN camp_parent cp ON cp.cid = b.campaign_id
+LEFT JOIN band bd ON bd.parent_name = cp.parent_name AND bd.match_type = UPPER(COALESCE(b.match_type, ''))
 WHERE b.clk1 > 0 OR b.clk2 > 0;

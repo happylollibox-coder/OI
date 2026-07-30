@@ -43,7 +43,13 @@ bulksheet flow. Mechanism note (validated in data 2026-07-30): bid cuts do NOT r
 budget caps spend either way; they lower CPC so the same budget serves more of the day. 69% of
 dark-campaign spend sat on 6+-click keywords, so the −5% lever touches most of the money.
 
-**Keyword layer** (`V_OOB_KEYWORD`, SP campaigns; SB targets stay on the SB launch track):
+**Keyword layer** (`V_OOB_KEYWORD` — SP keywords/auto/PT **and SB keywords/product targets**;
+v2.1, Ori: "i cant see sb keywords as a hierarchy". SB signals from the SB reports with the
+est.-net-ROAS cost-ratio method; SB bids from the live sb_keyword / sb_product_target config
+mirrors. **Target CPC column** (Ori: "based on time last year if data exists"): precedence =
+(1) same 28 days one year back (364-day offset keeps weekday alignment; needs ≥10 LY clicks),
+(2) else the coacher band `cpc_target` (product × season × match, conclusive ALL/ALL cells
+averaged), (3) else — . Auto clauses/PT skip LY — the clause text is not product-specific.):
 same constants as the launch controller, applied to every OOB campaign regardless of engine —
 - CONVERTING (net ROAS ≥ 1.0 on last day OR prior-2d) is **exempt from the click band** (Ori
   decision): it follows the ROAS ladder — hold-while-capping unless the campaign itself is strong;
@@ -53,11 +59,15 @@ same constants as the launch controller, applied to every OOB campaign regardles
   · 4–5 → hold · **≥ 6 clicks → −5%** (floor $0.20).
 - 1-day cooldown: a keyword changed < 1 day ago (FACT_PPC_CHANGE_LOG) shows HOLD "changed today".
 
-**Search-term layer** (`V_OOB_SEARCH_TERM`, 28-day window): negate when
-**≥ 10 clicks · 0 orders**, AND the term is not the keyword itself (`term ≠ keyword`, normalized) —
-except: AUTO targets skip the term≠keyword test (every auto term differs by construction; the
-0-order gate does the work so harvesting isn't killed), and PT targets are excluded entirely
-(the "term" is the targeted ASIN). Winners (orders > 0) are shown, never negated.
+**Search-term layer** (`V_OOB_SEARCH_TERM`, SP + SB, TWO windows — Ori 2026-07-30: "to negate
+general big words need to check 3 month data; small volume words 28 days are enough"):
+- **big general word** (≥ 30 clicks over 90 complete days) → negate only on **0 orders over the
+  full 90d** — one order anywhere in 3 months protects it from a bad month;
+- **small word** → negate at **≥ 10 clicks · 0 orders over 28d**;
+plus the structural rules: the term is not the keyword itself (`term ≠ keyword`, normalized —
+applies to MANUAL and SB keywords), AUTO targets skip the term≠keyword test (every auto term
+differs by construction; the 0-order gate protects harvesting), PT targets excluded entirely
+(the "term" is the targeted ASIN). Winners (orders in 90d) are shown, never negated.
 
 `days_since_budget_change` (from `FACT_PPC_CHANGE_LOG`) is displayed so re-suggestions after a
 fresh change are visibly "just changed".

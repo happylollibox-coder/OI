@@ -18,11 +18,13 @@ type Kw = {
   campaignId: string; keywordId: string; adGroupId: string; text: string; matchType: string;
   isAuto: boolean; isPt: boolean; bid: number | null; clicks1: number; spend1: number; cpc1: number | null;
   units1: number; roas1: number | null; clicks2: number; roas2: number | null;
+  targetCpc: number | null; targetCpcSrc: string;
   suggestedBid: number | null; action: string; reason: string;
 };
 type Term = {
   campaignId: string; targetText: string; term: string; kind: string;
-  clicks: number; orders: number; spend: number; netRoas: number | null; isWinner: boolean; isNegate: boolean;
+  clicks: number; orders: number; spend: number; netRoas: number | null;
+  clicks90d: number; spend90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean;
 };
 
 const num = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
@@ -68,6 +70,7 @@ export function OobBudgetPhase() {
           'OobKeyword.matchType', 'OobKeyword.isAuto', 'OobKeyword.isPt', 'OobKeyword.currentBid',
           'OobKeyword.clicks1d', 'OobKeyword.spend1d', 'OobKeyword.cpc1d', 'OobKeyword.units1d', 'OobKeyword.roas1d',
           'OobKeyword.clicksPrev2', 'OobKeyword.roasPrev2',
+          'OobKeyword.targetCpc', 'OobKeyword.targetCpcSource',
           'OobKeyword.suggestedBid', 'OobKeyword.bidAction', 'OobKeyword.bidReason',
         ],
       }),
@@ -75,9 +78,10 @@ export function OobBudgetPhase() {
         dimensions: [
           'OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
           'OobSearchTerm.kind', 'OobSearchTerm.clicks', 'OobSearchTerm.orders', 'OobSearchTerm.spend',
-          'OobSearchTerm.netRoas', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
+          'OobSearchTerm.netRoas', 'OobSearchTerm.clicks90d', 'OobSearchTerm.spend90d',
+          'OobSearchTerm.isBig', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
         ],
-        filters: [{ member: 'OobSearchTerm.clicks', operator: 'gte', values: ['3'] }],
+        filters: [{ member: 'OobSearchTerm.clicks90d', operator: 'gte', values: ['3'] }],
       }),
     ]).then(([bs, ks, ts]) => {
       if (!alive) return;
@@ -115,6 +119,8 @@ export function OobBudgetPhase() {
         roas1: num(r['OobKeyword.roas1d']),
         clicks2: num(r['OobKeyword.clicksPrev2']) ?? 0,
         roas2: num(r['OobKeyword.roasPrev2']),
+        targetCpc: num(r['OobKeyword.targetCpc']),
+        targetCpcSrc: String(r['OobKeyword.targetCpcSource'] ?? ''),
         suggestedBid: num(r['OobKeyword.suggestedBid']),
         action: String(r['OobKeyword.bidAction'] ?? 'HOLD'),
         reason: String(r['OobKeyword.bidReason'] ?? ''),
@@ -128,6 +134,9 @@ export function OobBudgetPhase() {
         orders: num(r['OobSearchTerm.orders']) ?? 0,
         spend: num(r['OobSearchTerm.spend']) ?? 0,
         netRoas: num(r['OobSearchTerm.netRoas']),
+        clicks90d: num(r['OobSearchTerm.clicks90d']) ?? 0,
+        spend90d: num(r['OobSearchTerm.spend90d']) ?? 0,
+        isBig: bool(r['OobSearchTerm.isBig']),
         isWinner: bool(r['OobSearchTerm.isWinner']),
         isNegate: bool(r['OobSearchTerm.isNegate']),
       })));
@@ -166,7 +175,8 @@ export function OobBudgetPhase() {
   const queueKwBid = (r: Row, k: Kw) => doQueue.addItem({
     campaign: r.name, campaign_id: r.id, ad_group_id: k.adGroupId, targeting: k.text, search_term: k.text,
     keyword_id: k.keywordId, match_type: k.isAuto ? 'Automatic' : (k.matchType || '').toUpperCase(),
-    target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0, campaign_type: 'SPONSORED_PRODUCTS',
+    target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0,
+    campaign_type: r.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS',
     product: k.isAuto || k.isPt ? 'Product Targeting' : 'Keyword', spend: 0, orders: 0, cpc: 0, conv_rate: 0,
     action: (k.suggestedBid ?? 0) >= (k.bid ?? 0) ? 'INCREASE_BID' : 'REDUCE_BID',
     current_bid: k.bid, recommended_bid: k.suggestedBid, source: 'COACH',
@@ -174,7 +184,8 @@ export function OobBudgetPhase() {
   const queueNeg = (r: Row, t: Term) => doQueue.addItem({
     search_term: t.term, action: 'NEGATE_TERM', campaign: r.name, campaign_id: r.id, ad_group_id: '',
     targeting: t.term, keyword_id: '', match_type: 'NEGATIVE_EXACT', target_spend_8w: 0, target_orders_8w: 0,
-    target_net_roas_8w: 0, current_bid: null, recommended_bid: null, campaign_type: 'SPONSORED_PRODUCTS', product: 'Keyword',
+    target_net_roas_8w: 0, current_bid: null, recommended_bid: null,
+    campaign_type: r.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS', product: 'Keyword',
     spend: 0, orders: 0, cpc: 0, conv_rate: 0, source: 'COACH',
   });
 
@@ -288,14 +299,20 @@ export function OobBudgetPhase() {
                   const winners = kTerms.filter(t => t.isWinner).length;
                   const kItem = bidItem(k);
                   return (
-                  <Fragment key={`${r.id}|${k.text}`}>
+                  <Fragment key={`${r.id}|${k.keywordId || k.text}`}>
                   <tr className="text-right border-t border-border/20 bg-surface/40">
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
                       <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()})</span></td>
                     <td className="px-2 text-faint whitespace-nowrap">{winners > 0 ? `${winners} winner${winners > 1 ? 's' : ''}` : ''}</td>
                     <td className="px-2 text-muted" title="current bid">{k.bid != null ? `$${k.bid.toFixed(2)}` : '—'}</td>
                     <td className="px-2 text-muted" title="spend yesterday">${k.spend1.toFixed(2)}</td>
-                    <td className="px-2 text-muted" title="CPC yesterday">{k.cpc1 != null ? `$${k.cpc1.toFixed(2)}` : '—'}</td>
+                    <td className="px-2 whitespace-nowrap" title={k.targetCpc != null
+                        ? `CPC yesterday vs target CPC (${k.targetCpcSrc === 'LY' ? 'same 28 days last year' : 'coacher band: product × season × match'})`
+                        : 'CPC yesterday — no target: no last-year data for this keyword and no conclusive band'}>
+                      <span className={k.cpc1 != null && k.targetCpc != null ? (k.cpc1 > k.targetCpc ? 'text-amber-400' : 'text-emerald-400') : 'text-muted'}>
+                        {k.cpc1 != null ? `$${k.cpc1.toFixed(2)}` : '—'}</span>
+                      <span className="text-faint">{k.targetCpc != null ? ` /$${k.targetCpc.toFixed(2)}${k.targetCpcSrc === 'LY' ? 'ʸ' : 'ᵇ'}` : ''}</span>
+                    </td>
                     <td className="px-2 text-muted" title="clicks yesterday">{k.clicks1}c</td>
                     <td className="px-2 text-muted">{k.roas1 != null ? `${k.roas1.toFixed(2)}×` : '—'}</td>
                     <td className="px-2 text-muted" title="prev-2d clicks · net ROAS">{k.clicks2}c{k.roas2 != null ? ` ${k.roas2.toFixed(2)}×` : ''}</td>
@@ -314,10 +331,12 @@ export function OobBudgetPhase() {
                   {negs.map(t => {
                     const nItem = negItem(t);
                     return (
-                    <tr key={`${r.id}|${k.text}|${t.term}`} className="text-right border-t border-border/10">
+                    <tr key={`${r.id}|${k.keywordId || k.text}|${t.term}`} className="text-right border-t border-border/10">
                       <td className="text-left pl-14 pr-2 py-0.5 text-faint whitespace-nowrap">“{t.term}”</td>
                       <td className="px-2 text-faint">{t.kind.toLowerCase()}</td>
-                      <td className="px-2 text-faint" colSpan={2}>{t.clicks} clicks · ${t.spend.toFixed(2)} · 28d</td>
+                      <td className="px-2 text-faint" colSpan={2}>{t.isBig
+                        ? `${t.clicks90d} clicks · $${t.spend90d.toFixed(2)} · 90d`
+                        : `${t.clicks} clicks · $${t.spend.toFixed(2)} · 28d`}</td>
                       <td className="px-2 text-faint" colSpan={2}>0 orders</td>
                       <td className="px-2" colSpan={2} />
                       <td className="px-2 text-left text-red-400">negate</td>
@@ -328,7 +347,9 @@ export function OobBudgetPhase() {
                           {nItem ? '✓' : 'negate'}
                         </button>
                       </td>
-                      <td className="px-2 text-left text-faint whitespace-nowrap">≥10 clicks · 0 orders{t.kind === 'MANUAL' ? ' · not the keyword' : ''}</td>
+                      <td className="px-2 text-left text-faint whitespace-nowrap">{t.isBig
+                          ? 'big general word — 3 months checked, 0 orders'
+                          : '≥10 clicks · 0 orders · 28d'}{['MANUAL', 'SB'].includes(t.kind) ? ' · not the keyword' : ''}</td>
                     </tr>
                   ); })}
                   </Fragment>
