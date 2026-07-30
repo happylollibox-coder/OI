@@ -101,6 +101,11 @@ k AS (
          -- probe — a converging controller, not a loss cut). These are also the keywords that actually cap the
          -- campaign's budget, so this replaces the keyword-level DARK BRAKE.
          4 AS click_goal_day, 6 AS click_cap_day, 0.95 AS bid_slow,
+         -- BUDGET-CONSTRAINED PROBING (Ori 2026-07-30): in a CAPPED campaign under-clicking is a
+         -- budget artifact, not a bid problem ("10 kw × 4 clicks at $1 = $40 on a $10 budget").
+         -- Tested keywords (>=15 clicks/90d, no sale) PARK at $0.25 to fund the untested probes;
+         -- bids > $1 with clicks TRIM -15%/day toward $1; probe-up only when NOT capped.
+         15 AS tested_clk, 0.25 AS bid_park, 1.00 AS big_bid, 0.85 AS bid_big_trim,
          -- BUDGET PROMOTION (Ori 2026-07-24): "when performance is good budget will increase and be more
          -- than low budget, then working campaigns methodology takes over." The launch controller is what
          -- funds a campaign OUT of the low-budget regime — graduation is emergent, not a separate rule:
@@ -206,6 +211,13 @@ tsig AS (
     ), 4) AS roas_prev2
   FROM tday GROUP BY 1, 2
 ),
+-- tested clicks per target over 90d — evidence for the PARK rule (has it had its test?)
+t90 AS (
+  SELECT CAST(campaign_id AS STRING) cid, targeting, SUM(Ads_clicks) clk90
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+  WHERE date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AND (SELECT d FROM wm)
+  GROUP BY 1, 2
+),
 -- targets carry ids from the ramp view (keyword_id / ad_group_id present for auto expressions too)
 tgt AS (
   SELECT campaign_id cid, keyword_id, ANY_VALUE(ad_group_id) ad_group_id, target_text,
@@ -226,6 +238,7 @@ base AS (
     t.keyword_id, t.ad_group_id, t.target_text, t.target_type, t.match_type,
     COALESCE(t.current_bid, agb.default_bid) AS current_bid,
     ts.clk3, COALESCE(ts.clk1,0) AS t_clk1, COALESCE(ts.sales3,0) AS t_sales3, COALESCE(ts.eq3_raw, ts.pooled3) AS t_eq3, ts.roas_1d AS t_roas1, ts.roas_prev2 AS t_roas_prev2,
+    COALESCE(t90.clk90, 0) AS clk90,
     -- clicks/day over active days (the real rate) — drives the click-rate controller instead of clk3/3.
     ROUND(SAFE_DIVIDE(ts.clk3, NULLIF(ts.active_days, 0)), 2) AS clk_rate,
     (COALESCE(d.pd,0) <= x.dark_target AND SAFE_DIVIDE(cs.spend_today, cb.budget) <= x.spend_target) AS starving
@@ -237,6 +250,7 @@ base AS (
   LEFT JOIN tgt t      ON t.cid = c.campaign_id
   LEFT JOIN agb        ON agb.ad_group_id = CAST(t.ad_group_id AS STRING)
   LEFT JOIN tsig ts    ON ts.cid = c.campaign_id AND ts.targeting = t.target_text
+  LEFT JOIN t90       ON t90.cid = c.campaign_id AND t90.targeting = t.target_text
 )
 SELECT
   b.campaign_id, b.campaign_name, b.day_of_ramp,
@@ -320,6 +334,14 @@ SELECT
     -- ── A) NOT CONVERTING → click-rate control only (no %dark term anywhere in this branch) ──
     WHEN NOT (COALESCE(b.t_roas1,0) >= 1.0 OR COALESCE(b.t_roas_prev2,0) >= 1.0) THEN
       CASE
+        -- CAPPED campaign: budget-constrained probing (Ori 2026-07-30) — park tested, trim big
+        -- bids, NEVER probe up (under-clicking here is the budget dying, not the bid too low)
+        WHEN b.pd > x.dark_target THEN CASE
+          WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05 THEN x.bid_park
+          WHEN b.current_bid > x.big_bid AND COALESCE(b.clk3,0) > 0 THEN ROUND(GREATEST(b.current_bid*x.bid_big_trim, x.big_bid),2)
+          WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day THEN ROUND(GREATEST(b.current_bid*x.bid_slow, x.bid_min),2)
+          ELSE b.current_bid
+        END
         WHEN COALESCE(b.t_clk1,0) <  x.click_goal_day THEN ROUND(LEAST(b.current_bid*x.bid_probe, x.bid_max),2)
         WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day  THEN ROUND(GREATEST(b.current_bid*x.bid_slow, x.bid_min),2)
         ELSE b.current_bid   -- last day 4–5 clicks: hold and wait for a sale
@@ -339,6 +361,12 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN NOT (COALESCE(b.t_roas1,0) >= 1.0 OR COALESCE(b.t_roas_prev2,0) >= 1.0) THEN
       CASE
+        WHEN b.pd > x.dark_target THEN CASE
+          WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
+          WHEN b.current_bid > x.big_bid AND COALESCE(b.clk3,0) > 0 THEN 'TRIM_BID'
+          WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day THEN 'SLOW'
+          ELSE 'HOLD'
+        END
         WHEN COALESCE(b.t_clk1,0) <  x.click_goal_day THEN 'PROBE'
         WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day  THEN 'SLOW'
         ELSE 'HOLD'

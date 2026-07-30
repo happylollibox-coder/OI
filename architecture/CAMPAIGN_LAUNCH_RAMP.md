@@ -87,6 +87,18 @@ in BOTH the launch cards and the mature table. All three now read this view.
   campaigns with no delivery yet are admitted only by an explicit `age < 20d` fallback so they are still
   coached from day 1.
 
+**Budget-constrained probing in CAPPED campaigns (Ori 2026-07-30)** — supersedes "probe +5% even
+if dark": in a campaign that is out of budget, under-4-clicks is a **budget artifact, not a bid
+problem** ("we have 10 keywords, we want 4 clicks each = 40 clicks; at ~$1 CPC that is $40 of
+probing demand on a $10 budget"). While `pct_dark > 10%`, the non-converting branch becomes:
+tested ≥ 15 clicks/90d → **PARK at $0.25** (it had its test; free the budget for untested probes,
+even if the parked bid goes quiet) · bid > $1.00 with clicks → **TRIM −15%/day toward $1.00** ·
+≥ 6 clicks yesterday → SLOW −5% · else HOLD (never probe up while capped). Probe +5% survives only
+when the campaign is NOT capped. A found winner automatically becomes **main**: others park/trim,
+the freed budget flows to him, ROAS ladder raises him, profitability triggers the budget promotion.
+Applied identically in `V_LAUNCH_PHASE1`, `V_SB_LAUNCH_TARGET` and `V_OOB_KEYWORD` so the launch
+cards and the Out-of-budget phase can never disagree.
+
 **Budget promotion is the graduation mechanism** (in `V_LAUNCH_PHASE1`) — there is no separate "graduate"
 rule. The controller raises budget while the campaign performs, and once budget clears the cap the campaign
 drops out of `V_LAUNCH_POPULATION` and the coacher takes over:

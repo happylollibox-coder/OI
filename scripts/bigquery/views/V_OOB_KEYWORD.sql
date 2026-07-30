@@ -23,7 +23,9 @@ WITH k AS (
   SELECT 1.5 AS strong_roas, 1.2 AS weak_roas,
          1.30 AS bid_raise_strong, 1.15 AS bid_raise_weak, 1.05 AS bid_probe, 0.95 AS bid_slow,
          0.20 AS bid_min, 1.50 AS bid_max, 2.00 AS bid_hard_cap,
-         4 AS click_goal_day, 6 AS click_cap_day
+         4 AS click_goal_day, 6 AS click_cap_day,
+         -- budget-constrained probing (Ori 2026-07-30): tested keywords park, big bids trim
+         15 AS tested_clk, 0.25 AS bid_park, 1.00 AS big_bid, 0.85 AS bid_big_trim
 ),
 wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
        FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
@@ -58,6 +60,14 @@ tsig AS (
     ROUND(SAFE_DIVIDE(SUM(IF(date < (SELECT d FROM wm), gp, 0)),
                       NULLIF(SUM(IF(date < (SELECT d FROM wm), sp, 0)), 0)), 2) AS roas_prev2
   FROM tday GROUP BY 1, 2
+),
+-- tested clicks per target over 90d — the "has it had its test" evidence for the park rule
+t90 AS (
+  SELECT CAST(a.campaign_id AS STRING) cid, a.targeting, SUM(a.Ads_clicks) clk90
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
+  JOIN oob o ON o.campaign_id = CAST(a.campaign_id AS STRING)
+  WHERE a.date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AND (SELECT d FROM wm)
+  GROUP BY 1, 2
 ),
 -- current bid + ids: latest V_TARGET_DAILY row per (campaign, target); ad-group default as fallback
 td AS (
@@ -162,6 +172,15 @@ sb_tgtday AS (
   WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY) AND (SELECT d FROM wm_sb)
   GROUP BY 1, 2
 ),
+sb_t90 AS (
+  SELECT target_id, SUM(clk) clk90 FROM (
+    SELECT keyword_id AS target_id, SUM(clicks) clk FROM `fivetran-hl.amazon_ads.sb_search_term_report`
+    WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 89 DAY) AND (SELECT d FROM wm_sb) GROUP BY 1
+    UNION ALL
+    SELECT target_id, SUM(clicks) FROM `fivetran-hl.amazon_ads.sb_target_report`
+    WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 89 DAY) AND (SELECT d FROM wm_sb) GROUP BY 1
+  ) GROUP BY 1
+),
 sb_tsig AS (
   SELECT t.target_id,
     SUM(IF(d.date=(SELECT d FROM wm_sb), d.clk,0)) clk1,
@@ -187,9 +206,11 @@ base AS (
     COALESCE(td.keyword_bid, agb.default_bid) AS current_bid,
     t.clk1, t.sp1, t.units1, t.roas1, t.clk2, t.sp2, t.units2, t.roas_prev2,
     (COALESCE(t.roas1, 0) >= 1.0 OR COALESCE(t.roas_prev2, 0) >= 1.0) AS converting,
+    COALESCE(t90.clk90, 0) AS clk90,
     lc.days_since AS days_since_change
   FROM tsig t
   JOIN oob o ON o.campaign_id = t.cid
+  LEFT JOIN t90 ON t90.cid = t.cid AND t90.targeting = t.targeting
   LEFT JOIN td ON td.campaign_id = t.cid AND td.target_text = t.targeting
   LEFT JOIN agb ON agb.ad_group_id = td.ad_group_id
   LEFT JOIN lc ON lc.keyword_id = td.keyword_id
@@ -200,10 +221,12 @@ base AS (
     t.bid AS current_bid,
     s.clk1, ROUND(s.sp1,2), s.units1, ROUND(s.roas1,2), s.clk2, ROUND(s.sp2,2), s.units2, ROUND(s.roas_prev2,2),
     (COALESCE(s.roas1, 0) >= 1.0 OR COALESCE(s.roas_prev2, 0) >= 1.0) AS converting,
+    COALESCE(s90.clk90, 0),
     lc.days_since
   FROM sb_tgt t
   JOIN oob_sb o ON o.campaign_id = t.cid
   JOIN sb_tsig s ON s.target_id = t.target_id
+  LEFT JOIN sb_t90 s90 ON s90.target_id = t.target_id
   LEFT JOIN lc ON lc.keyword_id = t.target_id
 )
 SELECT
@@ -228,7 +251,12 @@ SELECT
       WHEN COALESCE(b.roas1,0) > x.weak_roas
         THEN ROUND(LEAST(b.current_bid * x.bid_raise_weak, x.bid_hard_cap), 2)
       ELSE NULL END
-    WHEN b.clk1 < x.click_goal_day THEN ROUND(LEAST(b.current_bid * x.bid_probe, x.bid_max), 2)
+    -- budget-constrained probing (Ori 2026-07-30): every campaign in this phase is CAPPED, so
+    -- under-clicking is a budget artifact — never probe up. Park the tested, trim the eaters.
+    WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05
+      THEN x.bid_park
+    WHEN b.current_bid > x.big_bid AND (b.clk1 + b.clk2) > 0
+      THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, x.big_bid), 2)
     WHEN b.clk1 >= x.click_cap_day THEN ROUND(GREATEST(b.current_bid * x.bid_slow, x.bid_min), 2)
     ELSE NULL
   END AS suggested_bid,
@@ -240,7 +268,8 @@ SELECT
       WHEN COALESCE(b.roas_prev2,0) > x.strong_roas AND COALESCE(b.roas1,0) > x.strong_roas THEN 'RAISE_STRONG'
       WHEN COALESCE(b.roas1,0) > x.weak_roas THEN 'RAISE_WEAK'
       ELSE 'HOLD' END
-    WHEN b.clk1 < x.click_goal_day THEN 'PROBE'
+    WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
+    WHEN b.current_bid > x.big_bid AND (b.clk1 + b.clk2) > 0 THEN 'TRIM_BID'
     WHEN b.clk1 >= x.click_cap_day THEN 'SLOW'
     ELSE 'HOLD'
   END AS bid_action,
@@ -254,9 +283,12 @@ SELECT
         THEN 'both windows > 1.5x — fund the winner (+30%, cap $2)'
       WHEN COALESCE(b.roas1,0) > x.weak_roas THEN 'last day > 1.2x — nudge up (+15%, cap $2)'
       ELSE 'converting, mid — hold' END
-    WHEN b.clk1 < x.click_goal_day THEN 'under 4 clicks yesterday — probe +5% toward the 4-click goal'
+    WHEN b.clk90 >= x.tested_clk AND b.current_bid > x.bid_park + 0.05
+      THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d, no sale — park at $0.25 so the untested keywords get their probe')
+    WHEN b.current_bid > x.big_bid AND (b.clk1 + b.clk2) > 0
+      THEN 'bid over $1 eats the capped budget — trim 15% toward $1 (10 kw × 4 clicks at $1 = $40 on a $10 budget)'
     WHEN b.clk1 >= x.click_cap_day THEN '6+ clicks yesterday, not converting — slow −5%: cheaper clicks stretch the budget across the day'
-    ELSE '4–5 clicks — hold and wait for a sale'
+    ELSE 'under-clicked because the BUDGET dies, not the bid — held; parking/trimming the eaters frees its probe'
   END AS bid_reason
 FROM base b CROSS JOIN k x
 LEFT JOIN ly ON ly.kw = LOWER(TRIM(b.target_text))

@@ -21,7 +21,10 @@ WITH k AS (
          -- LAUNCH CLICK GOAL (Ori 2026-07-24/25): judged on the LAST COMPLETE DAY's clicks (r2_clk), mirroring
          -- V_LAUNCH_PHASE1's t_clk1 — "4 clicks a day" = the most recent full day, not a multi-day average.
          --   r2_clk < 4 → PROBE (+5%) · r2_clk >= 6 → SLOW (−5%, 6+ clicks yesterday, no sale) · 4–5 → HOLD.
-         4 AS click_goal_day, 6 AS click_cap_day, 0.95 AS bid_slow
+         4 AS click_goal_day, 6 AS click_cap_day, 0.95 AS bid_slow,
+         -- budget-constrained probing (Ori 2026-07-30): in a capped campaign park the tested,
+         -- trim the >$1 eaters, never probe up (under-clicking is the budget dying, not the bid)
+         15 AS tested_clk, 0.25 AS bid_park, 1.00 AS big_bid, 0.85 AS bid_big_trim
 ),
 wm AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
        FROM `fivetran-hl.amazon_ads.sb_search_term_report`),
@@ -131,16 +134,26 @@ tsig AS (
            LEFT JOIN prod pr  ON pr.cid = tgt.cid
   GROUP BY 1
 ),
+t90 AS (
+  SELECT target_id, SUM(clk) clk90 FROM (
+    SELECT keyword_id AS target_id, SUM(clicks) clk FROM `fivetran-hl.amazon_ads.sb_search_term_report`
+    WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AND (SELECT d FROM wm) GROUP BY 1
+    UNION ALL
+    SELECT target_id, SUM(clicks) FROM `fivetran-hl.amazon_ads.sb_target_report`
+    WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AND (SELECT d FROM wm) GROUP BY 1
+  ) GROUP BY 1
+),
 base AS (
   SELECT tgt.cid AS campaign_id, tgt.target_id, tgt.ad_group_id, tgt.target_text, tgt.target_type, tgt.match_type, tgt.bid,
     COALESCE(s.r2_clk,0) r2_clk, COALESCE(s.r2_cost,0) r2_cost, COALESCE(s.r2_sales,0) r2_sales, COALESCE(s.r2_orders,0) r2_orders,
     COALESCE(s.r3_clk,0) r3_clk, COALESCE(s.r3_cost,0) r3_cost, COALESCE(s.r3_sales,0) r3_sales, COALESCE(s.r3_orders,0) r3_orders,
-    COALESCE(s.clk3,0) clk3, ROUND(SAFE_DIVIDE(s.clk3, NULLIF(s.active_days,0)),2) AS clk_rate, COALESCE(s.sales3,0) sales3, s.k_roas1, s.k_roas_prev2, pr.cost_ratio,
+    COALESCE(s.clk3,0) clk3, ROUND(SAFE_DIVIDE(s.clk3, NULLIF(s.active_days,0)),2) AS clk_rate, COALESCE(s.sales3,0) sales3, COALESCE(t9.clk90,0) AS clk90, s.k_roas1, s.k_roas_prev2, pr.cost_ratio,
     COALESCE(d.pd,0) pd, cs.spend_today, cb.budget, cs.c_roas1, cs.c_roas_prev2,
     (COALESCE(d.pd,0) <= x.dark_target AND SAFE_DIVIDE(cs.spend_today, cb.budget) <= x.spend_target) AS starving
   FROM tgt
   CROSS JOIN k x
   LEFT JOIN tsig s  ON s.target_id = tgt.target_id
+  LEFT JOIN t90 t9  ON t9.target_id = tgt.target_id
   LEFT JOIN prod pr ON pr.cid = tgt.cid
   LEFT JOIN dark d  ON d.cid = tgt.cid
   LEFT JOIN csig cs ON cs.cid = tgt.cid
@@ -174,6 +187,13 @@ SELECT
     -- NOT CONVERTING → click-rate control only (no %dark term in this branch)
     WHEN NOT (COALESCE(b.k_roas1,0) >= 1.0 OR COALESCE(b.k_roas_prev2,0) >= 1.0) THEN
       CASE
+        -- capped campaign: budget-constrained probing (Ori 2026-07-30)
+        WHEN b.pd > x.dark_target THEN CASE
+          WHEN b.clk90 >= x.tested_clk AND b.bid > x.bid_park + 0.05 THEN x.bid_park
+          WHEN b.bid > x.big_bid AND COALESCE(b.clk3,0) > 0 THEN ROUND(GREATEST(b.bid*x.bid_big_trim, x.big_bid),2)
+          WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day THEN ROUND(GREATEST(b.bid*x.bid_slow, x.bid_min),2)
+          ELSE b.bid
+        END
         WHEN COALESCE(b.r2_clk,0) <  x.click_goal_day THEN ROUND(LEAST(b.bid*x.bid_probe, x.bid_max),2)
         WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day  THEN ROUND(GREATEST(b.bid*x.bid_slow, x.bid_min),2)
         ELSE b.bid   -- inside the 4–6 clicks/day band: hold and wait for a sale
@@ -191,6 +211,12 @@ SELECT
     WHEN b.bid IS NULL THEN 'NO_BID'
     WHEN NOT (COALESCE(b.k_roas1,0) >= 1.0 OR COALESCE(b.k_roas_prev2,0) >= 1.0) THEN
       CASE
+        WHEN b.pd > x.dark_target THEN CASE
+          WHEN b.clk90 >= x.tested_clk AND b.bid > x.bid_park + 0.05 THEN 'PARK'
+          WHEN b.bid > x.big_bid AND COALESCE(b.clk3,0) > 0 THEN 'TRIM_BID'
+          WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day THEN 'SLOW'
+          ELSE 'HOLD'
+        END
         WHEN COALESCE(b.r2_clk,0) <  x.click_goal_day THEN 'PROBE'
         WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day  THEN 'SLOW'
         ELSE 'HOLD'

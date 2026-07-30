@@ -55,8 +55,19 @@ same constants as the launch controller, applied to every OOB campaign regardles
   decision): it follows the ROAS ladder — hold-while-capping unless the campaign itself is strong;
   both windows > 1.5× → +30%; last day > 1.2× → +15%; cap $2.00. The budget raise is the right
   lever for a converting keyword in a dark campaign, not a bid cut.
-- NOT converting → click band on the last complete day's clicks: **< 4 clicks → +5%** (cap $1.50)
-  · 4–5 → hold · **≥ 6 clicks → −5%** (floor $0.20).
+- NOT converting → **budget-constrained probing economics** (Ori 2026-07-30: "the under-4-clicks
+  is due to low budget not low bid" — 10 keywords × 4 clicks at ~$1 CPC = $40 of probing demand on
+  a $10 budget; the purpose is to find a winner who then funds the others). In a dark campaign,
+  first match wins:
+  1. **tested ≥ 15 clicks over 90d, no sale → PARK at $0.25** — it had its test; free the budget
+     for the untested keywords, even if the parked bid gets no clicks.
+  2. **bid > $1.00 with any recent clicks → TRIM −15%/day toward $1.00** — big bids eat the capped
+     budget and starve every other probe.
+  3. ≥ 6 clicks yesterday → SLOW −5% (still over-buying traffic).
+  4. under 4 clicks → **HOLD, never probe up** — the constraint is budget, not bid. (+5% probing
+     survives only in the launch controller's NOT-capped branch.)
+  A found winner automatically becomes **main**: the others park/trim, the freed budget flows to
+  him, his ROAS ladder raises him, and campaign profitability triggers the budget promotion.
 - 1-day cooldown: a keyword changed < 1 day ago (FACT_PPC_CHANGE_LOG) shows HOLD "changed today".
 
 **Search-term layer** (`V_OOB_SEARCH_TERM`, SP + SB, TWO windows — Ori 2026-07-30: "to negate
