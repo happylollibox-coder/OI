@@ -34,10 +34,11 @@ prod AS (
 ),
 -- ── Latest campaign state + display name ──
 camp_state AS (
+  -- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was V_SRC_AmazonAds_campaign_history
   SELECT campaign_id,
-    ARRAY_AGG(state ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state,
-    ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS campaign_name
-  FROM `onyga-482313`.OI.V_SRC_AmazonAds_campaign_history GROUP BY 1
+    campaign_state AS state,
+    campaign_name
+  FROM `onyga-482313`.OI.V_DIM_CAMPAIGN_CURRENT
 ),
 -- ── Advertised-product rows, last 90d, LEFT JOINed to own products for gp/family ──
 adv AS (
@@ -81,7 +82,7 @@ mapped AS (
   SELECT DISTINCT CAST(ec.campaign_id AS STRING) AS campaign_id
   FROM `onyga-482313`.OI.DIM_EXPERIMENT_CAMPAIGN ec
   JOIN `onyga-482313`.OI.DIM_EXPERIMENT e USING (experiment_id)
-  WHERE e.strategy_id IN ('AUTO','INTENT','EXACT_BOOST','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE')
+  WHERE e.strategy_id IN ('AUTO','BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT','PHRASE','EXACT','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE')
 ),
 -- ── Active campaigns (90d) whose role is NULL or 'OTHER' → UNMAPPED ──
 active_unmapped AS (

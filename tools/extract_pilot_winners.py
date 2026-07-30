@@ -11,11 +11,10 @@ client = bigquery.Client(project="onyga-482313")
 
 QUERY = """
 WITH ad_group_names AS (
-  SELECT
-    ad_group_id,
-    ANY_VALUE(ad_group_name) as ad_group_name
-  FROM `onyga-482313.OI.V_SRC_AmazonAds_ad_group_history`
-  GROUP BY ad_group_id
+  -- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was V_SRC_AmazonAds_ad_group_history
+  SELECT ad_group_id, ad_group_name
+  FROM `onyga-482313.OI.DIM_AD_GROUP`
+  WHERE is_current
 )
 SELECT
   fa.campaign_name,

@@ -10,9 +10,10 @@ WITH camp_parent AS (
   ) WHERE rn = 1
 ),
 kh AS (
-  SELECT CAST(id AS STRING) AS keyword_id,
+  -- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was fivetran-hl.amazon_ads.keyword_history
+  SELECT keyword_id,
          ANY_VALUE(keyword_text) AS keyword_text, ANY_VALUE(match_type) AS match_type
-  FROM `fivetran-hl.amazon_ads.keyword_history` GROUP BY 1
+  FROM `onyga-482313.OI.DIM_KEYWORD` WHERE is_current GROUP BY 1
 )
 SELECT
   r.date,

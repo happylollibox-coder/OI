@@ -27,10 +27,9 @@ prod AS (
 ),
 -- ── Latest campaign state + display name ──
 camp_state AS (
-  SELECT campaign_id,
-    ARRAY_AGG(state ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state,
-    ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS campaign_name
-  FROM `onyga-482313`.OI.V_SRC_AmazonAds_campaign_history GROUP BY 1
+  -- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was V_SRC_AmazonAds_campaign_history
+  SELECT campaign_id, campaign_state AS state, campaign_name
+  FROM `onyga-482313`.OI.V_DIM_CAMPAIGN_CURRENT
 ),
 -- ── Authoritative asin<->campaign link + 90-day metrics (per campaign) ──
 -- AD-LEVEL RECENCY GATE (mirrors V_COVERAGE_CAMPAIGN): the (asin × campaign) pair is the
@@ -60,7 +59,7 @@ live_base AS (
     CASE
       WHEN vcr.strategy_category = 'AUTO' THEN CONCAT('AUTO|', p.asin)
       WHEN vcr.strategy_category = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE|__STORE__'
-      WHEN vcr.strategy_category IN ('INTENT', 'BRAND_DEFENSE', 'COMPETITOR', 'EXACT_BOOST')
+      WHEN vcr.strategy_category IN ('BROAD_SP', 'BROAD_VIDEO', 'BROAD_SPOTLIGHT', 'PHRASE', 'EXACT', 'COMPETITOR', 'BRAND_DEFENSE')
         THEN CONCAT(vcr.strategy_category, '|', p.parent_name)
       ELSE NULL  -- OTHER / unclassified: not a target cell, dropped below
     END AS cell_key

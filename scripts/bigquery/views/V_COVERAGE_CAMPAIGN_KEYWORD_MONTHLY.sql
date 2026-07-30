@@ -75,13 +75,14 @@ camp_gp_final AS (
 floor AS (
   SELECT MAX(CAST(threshold_value AS FLOAT64)) AS v
   FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
-  WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id = 'INTENT'
+  WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
 ),
 -- ── Keyword display text + match type ──
 kh AS (
-  SELECT CAST(id AS STRING) AS keyword_id,
+  -- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was fivetran-hl.amazon_ads.keyword_history
+  SELECT keyword_id,
     ANY_VALUE(keyword_text) AS keyword_text, ANY_VALUE(match_type) AS match_type
-  FROM `fivetran-hl.amazon_ads.keyword_history` GROUP BY 1
+  FROM `onyga-482313`.OI.DIM_KEYWORD WHERE is_current GROUP BY 1
 ),
 -- ── Keyword metrics per (campaign, month, keyword), last 12 months ──
 kwm AS (

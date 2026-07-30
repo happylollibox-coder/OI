@@ -28,10 +28,11 @@ prod AS (
 ),
 -- ── Latest campaign state + display name ──
 camp_state AS (
+  -- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was V_SRC_AmazonAds_campaign_history
   SELECT campaign_id,
-    ARRAY_AGG(state ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state,
-    ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS campaign_name
-  FROM `onyga-482313`.OI.V_SRC_AmazonAds_campaign_history GROUP BY 1
+    campaign_state AS state,
+    campaign_name
+  FROM `onyga-482313`.OI.V_DIM_CAMPAIGN_CURRENT
 ),
 -- ── Advertised-product rows over the window, LEFT JOINed to own products for gp/family ──
 adv AS (
@@ -69,14 +70,19 @@ mapped AS (
   SELECT DISTINCT CAST(ec.campaign_id AS STRING) AS campaign_id
   FROM `onyga-482313`.OI.DIM_EXPERIMENT_CAMPAIGN ec
   JOIN `onyga-482313`.OI.DIM_EXPERIMENT e USING (experiment_id)
-  WHERE e.strategy_id IN ('AUTO','INTENT','EXACT_BOOST','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE')
+  WHERE e.strategy_id IN ('AUTO','BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT','PHRASE','EXACT','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE')
 ),
 active_unmapped AS (
   SELECT a.campaign_id, a.parent_name,
     a.impressions, a.clicks, a.units, a.cost, a.margin, a.last_seen
   FROM adv_agg a
   LEFT JOIN `onyga-482313`.OI.V_CAMPAIGN_ROLE vcr ON vcr.campaign_id = a.campaign_id
-  WHERE vcr.strategy_category IS NULL OR vcr.strategy_category = 'OTHER'
+  -- A campaign whose NAME resolves to a strategy is NOT unmapped — FN_COVERAGE_CAMPAIGN_DETAIL
+  -- now places it in its cell via the same fallback, so listing it here too would double-count a
+  -- brand-new campaign as both covered and unmapped (Ori 2026-07-24).
+  LEFT JOIN `onyga-482313`.OI.V_CAMPAIGN_ROLE_BY_NAME nr ON nr.campaign_id = a.campaign_id
+  WHERE (vcr.strategy_category IS NULL OR vcr.strategy_category = 'OTHER')
+    AND (nr.strategy_category IS NULL OR nr.parent_name IS NULL)
 ),
 dormant_other AS (
   SELECT vcr.campaign_id,
@@ -99,6 +105,11 @@ SELECT
   u.parent_name,
   cst.state,
   cst.state = 'ENABLED' AS is_enabled,
+  -- An ARCHIVED campaign can never need mapping — it's history, not work. The endpoint keeps its
+  -- spend in the P&L rollups (so wide-window money stays truthful) but excludes it from the
+  -- UNMAPPED to-do list + badge. Without this, 12mo/Peak surfaced 42 dead campaigns as "to map"
+  -- (Ori 2026-07-23). NULL state (never seen in campaign_history) is treated as actionable.
+  COALESCE(cst.state, '') = 'ARCHIVED' AS is_archived,
   u.impressions,
   u.clicks,
   u.units,

@@ -36,9 +36,9 @@ BEGIN
     pending.campaign_name,
     REPLACE(pending.notes, 'PENDING AUTO-LINK. ', '') as notes
   FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` pending
-  JOIN `onyga-482313.OI.V_SRC_AmazonAds_campaign_history` ch
+  -- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was V_SRC_AmazonAds_campaign_history (OI_end_date >= CURRENT_TIMESTAMP() current-version filter)
+  JOIN `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` ch
     ON ch.campaign_name = pending.campaign_name
-    AND ch.OI_end_date >= CURRENT_TIMESTAMP()
   WHERE pending.campaign_id LIKE 'PENDING_%'
     -- Don't insert if already linked with real campaign_id
     AND NOT EXISTS (

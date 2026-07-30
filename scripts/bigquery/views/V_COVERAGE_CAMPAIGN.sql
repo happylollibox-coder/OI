@@ -36,10 +36,11 @@ fams AS (
 ),
 -- ── Latest campaign state + display name ──
 camp_state AS (
+  -- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was V_SRC_AmazonAds_campaign_history latest-row ARRAY_AGG
   SELECT campaign_id,
-    ARRAY_AGG(state ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state,
-    ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS campaign_name
-  FROM `onyga-482313`.OI.V_SRC_AmazonAds_campaign_history GROUP BY 1
+    campaign_state AS state,
+    campaign_name
+  FROM `onyga-482313`.OI.V_DIM_CAMPAIGN_CURRENT
 ),
 -- ── Authoritative asin<->campaign link + 90-day metrics ──
 -- The (asin × campaign) pair IS the product-ad. AD-LEVEL RECENCY GATE: keep a pair only
@@ -71,7 +72,7 @@ live_base AS (
     CASE
       WHEN vcr.strategy_category = 'AUTO' THEN CONCAT('AUTO|', p.asin)
       WHEN vcr.strategy_category = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE|__STORE__'
-      WHEN vcr.strategy_category IN ('INTENT', 'BRAND_DEFENSE', 'COMPETITOR', 'EXACT_BOOST')
+      WHEN vcr.strategy_category IN ('BROAD_SP', 'BROAD_VIDEO', 'BROAD_SPOTLIGHT', 'PHRASE', 'EXACT', 'COMPETITOR', 'BRAND_DEFENSE')
         THEN CONCAT(vcr.strategy_category, '|', p.parent_name)
       ELSE NULL  -- OTHER / unclassified: not a target cell, dropped below
     END AS cell_key
@@ -107,10 +108,13 @@ target AS (
     s.strategy, s.expected, CONCAT(s.strategy, '|', f.parent_name) AS cell_key
   FROM fams f
   CROSS JOIN UNNEST([
-    STRUCT('INTENT' AS strategy, TRUE AS expected),
+    STRUCT('BROAD_SP' AS strategy, TRUE AS expected),
+    STRUCT('BROAD_VIDEO' AS strategy, TRUE AS expected),
+    STRUCT('BROAD_SPOTLIGHT' AS strategy, TRUE AS expected),
     STRUCT('BRAND_DEFENSE' AS strategy, TRUE AS expected),
     STRUCT('COMPETITOR' AS strategy, FALSE AS expected),
-    STRUCT('EXACT_BOOST' AS strategy, FALSE AS expected)
+    STRUCT('PHRASE' AS strategy, FALSE AS expected),
+    STRUCT('EXACT' AS strategy, FALSE AS expected)
   ]) s
   UNION ALL
   -- PRODUCT_DEFENSE: single store-wide row
