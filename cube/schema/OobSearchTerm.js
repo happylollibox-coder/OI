@@ -6,7 +6,9 @@ cube(`OobSearchTerm`, {
                net_roas, clicks_90d, orders_90d, spend_90d, term_clicks_90d, term_orders_90d, is_big, term_is_keyword, is_winner, is_negate
         FROM \`onyga-482313.OI.V_OOB_SEARCH_TERM\``,
 
-  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
+  // LIVE-VIEW cube (Ori 2026-07-30 'do we need caching?'): sources change intraday and view fixes
+  // don't move the orchestration stamp — a 15-min TTL bounds staleness; T_-backed cubes keep the stamp.
+  refreshKey: { every: '15 minutes' },
   measures: { count: { type: `count` } },
 
   dimensions: {

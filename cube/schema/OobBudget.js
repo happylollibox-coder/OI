@@ -10,7 +10,9 @@ cube(`OobBudget`, {
 
   // Refresh tied to the SP orchestration (one trigger) — cache invalidates when SP_REFRESH_CUBE_TABLES
   // completes. Live view read, so intra-day status changes appear on the next orchestration stamp.
-  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
+  // LIVE-VIEW cube (Ori 2026-07-30 'do we need caching?'): sources change intraday and view fixes
+  // don't move the orchestration stamp — a 15-min TTL bounds staleness; T_-backed cubes keep the stamp.
+  refreshKey: { every: '15 minutes' },
   measures: { count: { type: `count` } },
 
   dimensions: {
