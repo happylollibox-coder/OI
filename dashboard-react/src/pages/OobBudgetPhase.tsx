@@ -244,16 +244,14 @@ export function OobBudgetPhase() {
           <table className="text-label font-mono border-collapse">
             <thead>
               <tr className="text-faint text-right">
-                <th className="font-normal text-left px-2 py-0.5">campaign</th>
-                <th className="font-normal px-2"></th>
-                <th className="font-normal px-2">budget</th>
-                <th className="font-normal px-2">spent</th>
-                <th className="font-normal px-2" title="spend ÷ budget on the last complete day. SB can exceed 100% — Amazon overdelivers SB up to 2× its daily budget">used</th>
-                <th className="font-normal px-2" title="share of the day Amazon reported CAMPAIGN_OUT_OF_BUDGET">dark</th>
-                <th className="font-normal px-2" title="net ROAS, last complete day (1.0× = breakeven)">last day</th>
-                <th className="font-normal px-2" title="net ROAS, the 2 days before">prev-2d</th>
+                <th className="font-normal text-left px-2 py-0.5">item — campaign ▸ keyword ▸ term</th>
+                <th className="font-normal px-2" title="share of the day Amazon reported CAMPAIGN_OUT_OF_BUDGET (campaign level)">dark</th>
+                <th className="font-normal px-2" title="the current money setting at this level: campaign daily budget (bud) or keyword bid (bid)">now $</th>
+                <th className="font-normal px-2" title="last complete day — campaign: net ROAS · keyword: clicks + net ROAS">last day</th>
+                <th className="font-normal px-2" title="the 2 days before — same format as last day">prev-2d</th>
+                <th className="font-normal px-2" title="keyword CPC yesterday vs target CPC (ʸ = same 28 days last year · ᵇ = coacher band)">CPC/target</th>
                 <th className="font-normal px-2 text-left">action</th>
-                <th className="font-normal px-2">budget →</th>
+                <th className="font-normal px-2" title="suggested new value for the money setting in 'now $'">→ $</th>
                 <th className="font-normal px-2"></th>
                 <th className="font-normal px-2 text-left">why</th>
               </tr>
@@ -271,14 +269,13 @@ export function OobBudgetPhase() {
                       ? <button className="text-faint pr-1" onClick={() => setOpenCamps(o => ({ ...o, [r.id]: !o[r.id] }))}>{expanded ? '▾' : '▸'}</button>
                       : <span className="pr-3" />}
                     {r.name}
+                    <span className="text-faint text-label"> {r.channel}{r.engine === 'LAUNCH' ? ' · launch' : ''} · spent ${r.spend.toFixed(2)}{r.util != null ? <span className={r.util > 1.2 ? 'text-amber-400' : ''} title="spend ÷ budget. SB can exceed 100% — Amazon overdelivers SB up to 2× its daily budget"> · {Math.round(r.util * 100)}%</span> : null}</span>
                   </td>
-                  <td className="px-2 text-faint whitespace-nowrap">{r.channel}{r.engine === 'LAUNCH' ? ' · launch' : ''}</td>
-                  <td className="px-2 text-muted">${r.budget.toFixed(0)}</td>
-                  <td className="px-2 text-muted">${r.spend.toFixed(2)}</td>
-                  <td className={`px-2 ${r.util != null && r.util > 1.2 ? 'text-amber-400' : 'text-muted'}`}>{r.util != null ? `${Math.round(r.util * 100)}%` : '—'}</td>
                   <td className={`px-2 ${r.dark > 10 ? 'text-amber-400' : 'text-muted'}`}>{r.dark.toFixed(0)}%</td>
+                  <td className="px-2 text-muted whitespace-nowrap">${r.budget.toFixed(0)} <span className="text-faint">bud</span></td>
                   <td className="px-2 text-muted">{r.roas1 != null ? `${r.roas1.toFixed(2)}×` : '—'}</td>
                   <td className="px-2 text-muted">{r.roasPrev2 != null ? `${r.roasPrev2.toFixed(2)}×` : '—'}</td>
+                  <td className="px-2" />
                   <td className={`px-2 text-left whitespace-nowrap ${ACTION_CLS[r.action] ?? 'text-muted'}`}>{r.action.toLowerCase().replace('_', ' ')}</td>
                   <td className="px-2">{r.suggested != null ? `$${r.suggested.toFixed(2)}` : '—'}</td>
                   <td className="px-2">
@@ -303,10 +300,11 @@ export function OobBudgetPhase() {
                   <Fragment key={`${r.id}|${k.keywordId || k.text}`}>
                   <tr className="text-right border-t border-border/20 bg-surface/40">
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
-                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()})</span></td>
-                    <td className="px-2 text-faint whitespace-nowrap">{winners > 0 ? `${winners} winner${winners > 1 ? 's' : ''}` : ''}</td>
-                    <td className="px-2 text-muted" title="current bid">{k.bid != null ? `$${k.bid.toFixed(2)}` : '—'}</td>
-                    <td className="px-2 text-muted" title="spend yesterday">${k.spend1.toFixed(2)}</td>
+                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}){winners > 0 ? ` · ${winners} winner${winners > 1 ? 's' : ''}` : ''} · spent ${k.spend1.toFixed(2)}</span></td>
+                    <td className="px-2" />
+                    <td className="px-2 text-muted whitespace-nowrap" title="current bid">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}</td>
+                    <td className="px-2 text-muted whitespace-nowrap" title="last day clicks · net ROAS">{k.clicks1}c{k.roas1 != null ? ` ${k.roas1.toFixed(2)}×` : ' —'}</td>
+                    <td className="px-2 text-muted whitespace-nowrap" title="prev-2d clicks · net ROAS">{k.clicks2}c{k.roas2 != null ? ` ${k.roas2.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 whitespace-nowrap" title={k.targetCpc != null
                         ? `CPC yesterday vs target CPC (${k.targetCpcSrc === 'LY' ? 'same 28 days last year' : 'coacher band: product × season × match'})`
                         : 'CPC yesterday — no target: no last-year data for this keyword and no conclusive band'}>
@@ -314,8 +312,6 @@ export function OobBudgetPhase() {
                         {k.cpc1 != null ? `$${k.cpc1.toFixed(2)}` : '—'}</span>
                       <span className="text-faint">{k.targetCpc != null ? ` /$${k.targetCpc.toFixed(2)}${k.targetCpcSrc === 'LY' ? 'ʸ' : 'ᵇ'}` : ''}</span>
                     </td>
-                    <td className="px-2 text-muted whitespace-nowrap" colSpan={2} title="last day clicks · net ROAS">{k.clicks1}c{k.roas1 != null ? ` ${k.roas1.toFixed(2)}×` : ' —'}</td>
-                    <td className="px-2 text-muted" title="prev-2d clicks · net ROAS">{k.clicks2}c{k.roas2 != null ? ` ${k.roas2.toFixed(2)}×` : ''}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${KW_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace('_', ' ')}</td>
                     <td className="px-2">{k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}</td>
                     <td className="px-2">
@@ -332,15 +328,15 @@ export function OobBudgetPhase() {
                     const nItem = negItem(t);
                     return (
                     <tr key={`${r.id}|${k.keywordId || k.text}|${t.term}`} className="text-right border-t border-border/10">
-                      <td className="text-left pl-14 pr-2 py-0.5 text-faint whitespace-nowrap">“{t.term}”</td>
-                      <td className="px-2 text-faint">{t.kind.toLowerCase()}</td>
-                      <td className="px-2 text-faint" colSpan={2}>{t.isBig
-                        ? `${t.termClicks90d} clicks account-wide · ${t.clicks90d} here · 90d`
-                        : `${t.clicks} clicks · $${t.spend.toFixed(2)} · 28d`}</td>
-                      <td className="px-2 text-faint" colSpan={2}>0 orders</td>
-                      <td className="px-2" colSpan={2} />
-                      <td className="px-2 text-left text-red-400">negate</td>
+                      <td className="text-left pl-14 pr-2 py-0.5 text-faint whitespace-nowrap">“{t.term}” <span>({t.kind.toLowerCase()})</span></td>
                       <td className="px-2" />
+                      <td className="px-2 text-faint">—</td>
+                      <td className="px-2 text-faint whitespace-nowrap" colSpan={2}>{t.isBig
+                        ? `${t.termClicks90d}c acct-wide · ${t.clicks90d}c here · 0 orders · 90d`
+                        : `${t.clicks}c · $${t.spend.toFixed(2)} · 0 orders · 28d`}</td>
+                      <td className="px-2" />
+                      <td className="px-2 text-left text-red-400">negate</td>
+                      <td className="px-2 text-faint">—</td>
                       <td className="px-2">
                         <button onClick={() => { const it = negItem(t); if (it) doQueue.removeItem(it.id); else queueNeg(r, t); }}
                           className={`px-1.5 py-0 rounded border ${nItem ? 'border-emerald-500/40 text-emerald-300' : 'border-red-500/30 text-red-400 hover:bg-red-500/10'}`}>
