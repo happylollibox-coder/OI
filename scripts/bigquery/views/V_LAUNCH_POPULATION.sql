@@ -14,6 +14,10 @@
 -- the same age rule. Under a budget rule they would drift apart, and the dashboard would show a campaign
 -- in BOTH the launch cards and the mature table (or neither). Every consumer must read THIS view.
 --
+-- BUDGET SOURCE (fix 2026-07-30): the DIM_CAMPAIGN SCD2 budget SETTING, not V_TARGET_DAILY delivery
+-- rows. The delivery-gated source only had rows on days a campaign delivered — and only for SP — which
+-- silently dropped aged SB campaigns, dormant SP, and 100%-dark campaigns from the population.
+--
 -- HYSTERESIS (deliberate, prevents thrashing): membership requires the budget to have been at/below the cap
 -- for the last 3 complete days (`budget_max_3d <= cap`), so
 --   • PROMOTION is immediate — one day above the cap graduates the campaign to the working methodology;
@@ -63,13 +67,27 @@ camp AS (
     -- the paused/archived statuses are excluded.
     AND serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET', 'PENDING_START_DATE')
 ),
--- Budget today + the 3-day max that drives the hysteresis.
+-- Budget today + the 3-day max that drives the hysteresis — from the DIM_CAMPAIGN budget SETTING
+-- (SCD2), not delivery data. The previous source, V_TARGET_DAILY.campaign_budget, only has rows on
+-- days a campaign DELIVERED and only for SP — which silently dropped from the population: every SB
+-- campaign older than 20 days, dormant low-budget SP, and campaigns 100% dark from midnight (out of
+-- budget before the first impression — the darkest campaigns were exactly the ones the budget test
+-- couldn't see). The setting exists for every enabled campaign on both channels, regardless of
+-- delivery. budget_max_3d = highest budget in effect at any point in the last 3 complete days
+-- (SCD2 rows overlapping the window), preserving the promotion/demotion hysteresis semantics.
 bud AS (
-  SELECT CAST(campaign_id AS STRING) AS campaign_id,
-    MAX(IF(date = (SELECT d FROM wm), campaign_budget, NULL)) AS budget_today,
-    MAX(campaign_budget) AS budget_max_3d
-  FROM `onyga-482313.OI.V_TARGET_DAILY`
-  WHERE date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY) AND (SELECT d FROM wm)
+  SELECT campaign_id,
+    MAX(IF(is_current, daily_budget, NULL)) AS budget_today,
+    -- window max falls back to the current setting for campaigns whose only SCD2 row began after the
+    -- anchor window (created/changed today) — otherwise a brand-new campaign already in DIM would get
+    -- a NULL window max and be excluded by BOTH membership branches.
+    COALESCE(
+      MAX(IF(effective_from < DATETIME(DATE_ADD(wm.d, INTERVAL 1 DAY))
+             AND COALESCE(effective_to, DATETIME '9999-12-31') >= DATETIME(DATE_SUB(wm.d, INTERVAL 2 DAY)),
+             daily_budget, NULL)),
+      MAX(IF(is_current, daily_budget, NULL))
+    ) AS budget_max_3d
+  FROM `onyga-482313.OI.DIM_CAMPAIGN`, wm
   GROUP BY 1
 )
 SELECT
@@ -84,17 +102,18 @@ SELECT
   k.in_peak,
   c.serving_status,
   -- Why this campaign is in the launch population — surfaced so the card can explain itself.
-  IF(b.campaign_id IS NULL, 'no delivery yet (brand new)', 'budget at/below the low-budget cap') AS launch_reason
+  IF(b.campaign_id IS NULL, 'brand new (not in DIM_CAMPAIGN yet)', 'budget at/below the low-budget cap') AS launch_reason
 FROM camp c
 CROSS JOIN cap k
 LEFT JOIN bud b ON b.campaign_id = c.campaign_id
 WHERE
-  -- Normal case: budget has been at/below the cap for the last 3 complete days.
-  -- `b.campaign_id IS NOT NULL` is load-bearing: without it a campaign with NO budget rows at all
-  -- (long dormant, never delivered) would COALESCE to 0 and be swept in as "low budget" — that alone
-  -- inflated the population from ~26 to 72. No data is NOT evidence of a low budget.
+  -- Normal case: the budget SETTING stayed at/below the cap through the last 3 complete days.
+  -- Every enabled campaign has a DIM_CAMPAIGN row with a real daily_budget (verified: 108/108, both
+  -- channels), so there is no missing-data default to guard against — the old "no data is NOT evidence
+  -- of a low budget" guard belonged to the delivery-gated V_TARGET_DAILY source and is retired with it.
   (b.campaign_id IS NOT NULL AND b.budget_max_3d <= k.low_budget_cap)
-  -- Brand-new campaign with no V_TARGET_DAILY rows yet (created today, nothing delivered): keep it in the
-  -- launch population so it is coached from day 1 instead of falling into a gap between the two engines.
+  -- Brand-new campaign not yet in DIM_CAMPAIGN (SCD2 loads 3×/day; a campaign created minutes ago may
+  -- only exist in the raw event log): keep it in the launch population so it is coached from day 1
+  -- instead of falling into a gap between the two engines.
   OR (b.campaign_id IS NULL AND DATE_DIFF((SELECT d FROM wm), c.created, DAY) < 20)
 ;

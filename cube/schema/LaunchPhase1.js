@@ -9,8 +9,9 @@ cube(`LaunchPhase1`, {
                clk3, tgt_roas_1d, tgt_eq3, tgt_roas_prev2, current_bid, suggested_bid, bid_action
         FROM \`onyga-482313.OI.V_LAUNCH_PHASE1\``,
 
-  // Refresh tied to the SP orchestration (one trigger) — cache invalidates when SP_REFRESH_CUBE_TABLES completes.
-  refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
+  // Live-view cube: 15-min TTL, same as the other launch/OOB cubes — the orchestration stamp doesn't
+  // move on view edits, so population changes (e.g. the 2026-07-30 DIM-budget fix) would sit stale.
+  refreshKey: { every: '15 minutes' },
 
   measures: { count: { type: `count` } },
 

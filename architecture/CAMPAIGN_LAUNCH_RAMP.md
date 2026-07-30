@@ -82,10 +82,17 @@ in BOTH the launch cards and the mature table. All three now read this view.
 - **Hysteresis:** membership requires budget ≤ cap for the last 3 complete days. Promotion is immediate;
   demotion needs 3 consecutive low days, so a campaign cannot oscillate between two engines whose cadences
   differ (launch = daily, working = weekly / 3-day).
-- **Absence of budget data is not a low budget.** Defaulting a missing budget to 0 swept every dormant
-  campaign into the population (26 → 72). The membership test requires the budget row to exist; brand-new
-  campaigns with no delivery yet are admitted only by an explicit `age < 20d` fallback so they are still
-  coached from day 1.
+- **The budget test reads the SETTING, not delivery (fix 2026-07-30).** The original test read
+  `V_TARGET_DAILY.campaign_budget`, which only exists on days a campaign *delivered* — and only for SP.
+  That silently dropped three whole groups from the launch population: every SB campaign older than 20
+  days (no `V_TARGET_DAILY` rows ever — 10 campaigns incl. aged Brand Defense), dormant low-budget SP
+  (no delivery in 3 days → invisible), and campaigns 100% dark from midnight (out of budget before the
+  first impression, so the darkest campaigns were the ones the controller couldn't see). The test now
+  reads `DIM_CAMPAIGN` SCD2: `budget_max_3d` = max `daily_budget` across rows whose effective window
+  overlaps the last 3 complete days. The setting exists for every enabled campaign on both channels, so
+  the old "no data ≠ low budget" guard is no longer needed — its job (don't default missing budgets to
+  0) is done by the DIM row itself. Brand-new campaigns not yet in `DIM_CAMPAIGN` (SCD2 loads 3×/day)
+  keep the explicit `age < 20d` fallback so they are coached from day 1.
 
 **Budget-constrained probing in CAPPED campaigns (Ori 2026-07-30)** — supersedes "probe +5% even
 if dark": in a campaign that is out of budget, under-4-clicks is a **budget artifact, not a bid
