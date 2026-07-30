@@ -301,5 +301,10 @@ SELECT
 FROM baseN b CROSS JOIN k x
 LEFT JOIN ly ON ly.kw = LOWER(TRIM(b.target_text))
 LEFT JOIN camp_parent cp ON cp.cid = b.campaign_id
-LEFT JOIN band bd ON bd.parent_name = cp.parent_name AND bd.match_type = UPPER(COALESCE(b.match_type, ''))
+-- PT/auto match normalization (backtest 2026-07-30): V_TARGET_DAILY says TARGETING_EXPRESSION for
+-- asin targets but the band table says PRODUCT — without this map every PT target got NULL target_cpc
+LEFT JOIN band bd ON bd.parent_name = cp.parent_name
+  AND bd.match_type = CASE WHEN b.is_pt THEN 'PRODUCT' WHEN b.is_auto THEN 'AUTO'
+                           WHEN UPPER(COALESCE(b.match_type,'')) IN ('TARGETING_EXPRESSION','ASIN','ASIN EXPANDED') THEN 'PRODUCT'
+                           ELSE UPPER(COALESCE(b.match_type, '')) END
 WHERE b.clk1 > 0 OR b.clk2 > 0;
