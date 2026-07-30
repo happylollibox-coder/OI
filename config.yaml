@@ -384,7 +384,7 @@ views:
       - DIM_US_HOLIDAYS
 
   - name: "V_OOB_BUDGET_PHASE"
-    description: "Out-of-budget technical phase for the Weekly Run page (below Coach logic). One row per ENABLED campaign (SP+SB, launch AND working) that Amazon reported CAMPAIGN_OUT_OF_BUDGET on its channel's anchor day. Goal (Ori 2026-07-30): campaigns should never be out of budget but use almost all their budget. pct_dark from the unified V_SRC_AmazonAds_campaign_history event log (never raw per-channel fivetran, never DIM_CAMPAIGN — SCD2 samples 3×/day and drops reverting flips). Suggestion = the launch controller's dark-gated ladder applied uniformly: dark≤10% WATCH · prev-2d≥1.5× RAISE_STRONG (÷%active cap 3×) · last-day≥1.2× RAISE_WEAK (cap 2×) · prev-2d<0.9× CUT (×0.6 floor $10) · else HOLD. SP net ROAS corrected via T_PRICE_COST_TIER; SB estimated via mapped-ASIN cost ratio. Cube: OobBudget. Spec: architecture/OOB_BUDGET_PHASE.md."
+    description: "Out-of-budget technical phase for the Weekly Run page (below Coach logic). One row per ENABLED campaign (SP+SB, launch AND working) that Amazon reported CAMPAIGN_OUT_OF_BUDGET on its channel's anchor day. Goal (Ori 2026-07-30): campaigns should never be out of budget but use almost all their budget. pct_dark from the unified V_SRC_AmazonAds_campaign_history event log (never raw per-channel fivetran, never DIM_CAMPAIGN — SCD2 samples 3×/day and drops reverting flips). Suggestion = the launch controller's dark-gated ladder applied uniformly: dark≤10% WATCH · prev-2d≥1.5× RAISE_STRONG (÷%active cap 3×) · last-day≥1.2× RAISE_WEAK (cap 2×) · prev-2d<0.9× CUT (×0.9 — −10%/day slow slide, floor $10; Ori 2026-07-30) · else HOLD. SP net ROAS corrected via T_PRICE_COST_TIER; SB estimated via mapped-ASIN cost ratio. Cube: OobBudget. Spec: architecture/OOB_BUDGET_PHASE.md."
     source_files: ["scripts/bigquery/views/V_OOB_BUDGET_PHASE.sql"]
     dependencies:
       - V_SRC_AmazonAds_campaign_history
@@ -394,6 +394,24 @@ views:
       - DIM_COSTS_HISTORY
       - DE_BUDGET_CONFIG
       - FACT_PPC_CHANGE_LOG
+
+  - name: "V_OOB_KEYWORD"
+    description: "Keyword layer of the Out-of-budget phase (v2). One row per (dark>10% SP campaign, target) — keywords, auto clauses AND product targets — with a bid suggestion from the launch controller's constants applied to every OOB campaign regardless of engine. CONVERTING (net ROAS ≥1.0 either window) is EXEMPT from the click band (Ori 2026-07-30): hold-while-capping unless the campaign is strong, else ROAS ladder (+30%/+15%, cap $2). NOT converting → click band on last-day clicks: <4 PROBE +5% (cap $1.50) · 4–5 HOLD · ≥6 SLOW −5% (floor $0.20). 1-day cooldown via FACT_PPC_CHANGE_LOG. Bid cuts don't cut spend (budget caps it) — they stretch the same budget across the day: dark ↓, utilization stays ~100%. Cube: OobKeyword. Spec: architecture/OOB_BUDGET_PHASE.md §v2."
+    source_files: ["scripts/bigquery/views/V_OOB_KEYWORD.sql"]
+    dependencies:
+      - V_OOB_BUDGET_PHASE
+      - FACT_AMAZON_ADS
+      - T_PRICE_COST_TIER
+      - V_TARGET_DAILY
+      - DIM_AD_GROUP
+      - FACT_PPC_CHANGE_LOG
+
+  - name: "V_OOB_SEARCH_TERM"
+    description: "Search-term layer of the Out-of-budget phase (v2). One row per (dark>10% SP campaign, target, term) over 28 complete days. NEGATE (Ori 2026-07-30): ≥10 clicks AND 0 orders AND term ≠ keyword (normalized) — AUTO clauses skip the term≠keyword test (every auto term differs; the 0-order gate protects harvesting), PT excluded (the term IS the targeted ASIN). Winners (orders>0) surfaced, never negated. Cube: OobSearchTerm. Spec: architecture/OOB_BUDGET_PHASE.md §v2."
+    source_files: ["scripts/bigquery/views/V_OOB_SEARCH_TERM.sql"]
+    dependencies:
+      - V_OOB_BUDGET_PHASE
+      - FACT_AMAZON_ADS
 
   - name: "V_SB_LAUNCH_CAMPAIGN"
     description: "CAMPAIGN-LEVEL measures + BUDGET suggestion for Sponsored-Brands (incl. video) launch campaigns. Measures from sb_campaign_report (only complete + current SB source; per-keyword sb_keyword_report died 2025-12-29; FACT undercounts SB, e.g. VIDEO-BALL FACT 8 clk/60 impr vs true 14/388). r2 (anchor) + r3 (prior 2d) windows of spend/CPC/clicks/CTR/ACoS + net-ROAS ESTIMATE (sales×(1−cost/list_price) via mapped ASIN). TOS NULL (the SB field is placement mix ~86%, not the competitive IS Amazon shows <5%); units NULL. BUDGET suggestion runs the SAME logic as V_LAUNCH_PHASE1 on SB-native signals: budget + %dark from sb_campaign_history, spend + campaign net ROAS from sb_campaign_report (V_LAUNCH_PHASE1 gives SB NULL budget + undercounted FACT spend). Cube: SbLaunchCampaign. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."

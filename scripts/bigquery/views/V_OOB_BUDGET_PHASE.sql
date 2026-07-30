@@ -9,7 +9,9 @@
 --   dark <= 10%                          → WATCH  (touched the cap but barely — no move)
 --   prev-2d net ROAS >= 1.5x             → RAISE_STRONG  LEAST(budget / %active, budget x 3)
 --   last-day net ROAS >= 1.2x            → RAISE_WEAK    LEAST(budget / %active, budget x 2)
---   prev-2d net ROAS <  0.9x             → CUT           GREATEST(budget x 0.6, $10 floor)
+--   prev-2d net ROAS <  0.9x             → CUT           GREATEST(budget x 0.9, $10 floor)
+--     (Ori 2026-07-30: "lower budget slowly until minimum" — 10% steps repeated daily while dark
+--      and losing, NOT the launch controller's one-shot -40%; a recovery any day stops the slide)
 --   otherwise (mid)                      → HOLD          (budget stays; bids do the work)
 --
 -- Status events come from the UNIFIED V_SRC interface (SP∪SB) — never the raw per-channel fivetran
@@ -26,7 +28,8 @@ WITH cfg AS (
 -- constants — IDENTICAL to V_LAUNCH_PHASE1.k so the phase's suggestion matches the launch engine's
 k AS (
   SELECT 0.10 AS dark_target, 1.5 AS strong_roas, 1.2 AS weak_roas, 0.9 AS cut_roas,
-         0.60 AS bud_cut, 2.0 AS bud_cap_weak, 3.0 AS bud_cap_strong
+         -- slow slide (Ori 2026-07-30): -10%/day toward the $10 floor, not the launch -40% one-shot
+         0.90 AS bud_cut, 2.0 AS bud_cap_weak, 3.0 AS bud_cap_strong
 ),
 -- each channel anchors on its own last complete day (mirrors the two launch engines)
 wm_sp AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
@@ -164,7 +167,7 @@ SELECT
                   CAST(COALESCE(sps.roas_1d, sbs.roas_1d) AS STRING), 'x → raise (cap 2x)')
     WHEN COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) < x.cut_roas
       THEN CONCAT('Dark ', CAST(ROUND(d.pd*100) AS STRING), '% · prev-2d ',
-                  CAST(COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) AS STRING), 'x losing → cut 40%, not funded')
+                  CAST(COALESCE(sps.roas_prev2, sbs.roas_prev2, 0) AS STRING), 'x losing → step down 10% (floor $10)')
     ELSE CONCAT('Dark ', CAST(ROUND(d.pd*100) AS STRING), '% · mid ROAS → hold budget, bids do the work')
   END AS reason
 FROM camp c
