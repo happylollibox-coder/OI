@@ -78,7 +78,10 @@ general big words need to check 3 month data; small volume words 28 days are eno
 - **big general word** (≥ 30 clicks over 90 complete days **ACCOUNT-WIDE**, all campaigns SP+SB —
   per-slice volume fragments a big word into "small" pieces; caught by Ori on "teen girl gifts
   trendy stuff": 13 clicks in one slice, 1,326 clicks / 11 orders account-wide) → negate only on
-  **0 orders anywhere in the full 90d**, and only in slices with ≥ 3 clicks/90d here;
+  **0 orders anywhere in the full 90d**, AND (Ori 2026-07-30, the 2-week-old campaign case: "too
+  early to negate — only after real 90 days with at least 25 clicks I will consider") only in
+  campaigns **≥ 90 days old** with **≥ 25 clicks for this word in this campaign** — a young
+  campaign hasn't given a big word its own trial yet;
 - **small word** → negate at **≥ 10 clicks · 0 orders over 28d**;
 plus the structural rules: the term is not the keyword itself (`term ≠ keyword`, normalized —
 applies to MANUAL and SB keywords), AUTO targets skip the term≠keyword test (every auto term

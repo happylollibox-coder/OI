@@ -407,7 +407,7 @@ views:
       - FACT_PPC_CHANGE_LOG
 
   - name: "V_OOB_SEARCH_TERM"
-    description: "Search-term layer of the Out-of-budget phase (v2.2, SP+SB, TWO windows — Ori: big general words need 3-month data, small words 28d). One row per (dark>10% campaign, target, term). NEGATE: big word (≥30 clicks/90d ACCOUNT-WIDE across all campaigns — slice grain fragments big words) → 0 orders anywhere in 90d, flagged only in slices with ≥3 clicks; small word → ≥10 clicks · 0 orders · 28d at the slice; plus term ≠ keyword (MANUAL + SB), AUTO skips the term test, PT excluded. Winners (orders in 90d) surfaced, never negated. Cube: OobSearchTerm. Spec: architecture/OOB_BUDGET_PHASE.md §v2."
+    description: "Search-term layer of the Out-of-budget phase (v2.2, SP+SB, TWO windows — Ori: big general words need 3-month data, small words 28d). One row per (dark>10% campaign, target, term). NEGATE: big word (≥30 clicks/90d ACCOUNT-WIDE — slice grain fragments big words) → 0 orders anywhere in 90d AND campaign ≥90d old AND ≥25 clicks in this campaign (a young campaign hasn't given a big word its own trial); small word → ≥10 clicks · 0 orders · 28d at the slice; plus term ≠ keyword (MANUAL + SB), AUTO skips the term test, PT excluded. Winners (orders in 90d) surfaced, never negated. Cube: OobSearchTerm. Spec: architecture/OOB_BUDGET_PHASE.md §v2."
     source_files: ["scripts/bigquery/views/V_OOB_SEARCH_TERM.sql"]
     dependencies:
       - V_OOB_BUDGET_PHASE

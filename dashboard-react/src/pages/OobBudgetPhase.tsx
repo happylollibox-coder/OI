@@ -344,7 +344,7 @@ export function OobBudgetPhase() {
                         </button>
                       </td>
                       <td className="px-2 text-left text-faint whitespace-nowrap">{t.isBig
-                          ? 'big general word — 0 orders anywhere in 3 months'
+                          ? 'big word — 90 real days · 25+ clicks here · 0 orders anywhere'
                           : '≥10 clicks · 0 orders · 28d'}{['MANUAL', 'SB'].includes(t.kind) ? ' · not the keyword' : ''}</td>
                     </tr>
                   ); })}

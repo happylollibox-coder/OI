@@ -56,6 +56,17 @@ sb_st AS (
 ),
 -- account-wide 90d volume + orders per TERM (all campaigns, both channels) — the "is it a big
 -- general word" test and the big-word order protection both run on THIS, never on the slice.
+-- campaign age (Ori 2026-07-30: a 2-week-old campaign hasn't given a big word its own trial —
+-- "only after real 90 days with at least 25 clicks I will consider")
+camp_age AS (
+  SELECT campaign_id, MIN(first_d) AS first_d FROM (
+    SELECT CAST(campaign_id AS STRING) campaign_id, MIN(date) first_d
+    FROM `onyga-482313.OI.FACT_AMAZON_ADS` GROUP BY 1
+    UNION ALL
+    SELECT CAST(campaign_id AS STRING), MIN(report_date)
+    FROM `fivetran-hl.amazon_ads.sb_campaign_report` GROUP BY 1
+  ) GROUP BY 1
+),
 term_all AS (
   SELECT term, SUM(clk) AS term_clicks_90d, SUM(ord) AS term_orders_90d FROM (
     SELECT LOWER(TRIM(SEARCH_TERM)) AS term, Ads_clicks AS clk, Ads_orders AS ord
@@ -101,10 +112,13 @@ SELECT u.campaign_id, u.keyword_id, u.target_text, u.search_term, u.kind,
   (u.kind != 'PT'
    AND (u.kind = 'AUTO' OR LOWER(TRIM(u.search_term)) != LOWER(TRIM(u.target_text)))
    AND CASE WHEN COALESCE(ta.term_clicks_90d, 0) >= 30
-            -- big word: 3 months, zero orders ANYWHERE account-wide; only flagged in slices with
-            -- real presence here (>=3 clicks/90d) so one stray click doesn't spawn a negate row
-            THEN COALESCE(ta.term_orders_90d, 0) = 0 AND u.clicks_90d >= 3
+            -- big word (Ori 2026-07-30): a young campaign hasn't given it its own trial — negate
+            -- only after REAL 90 days (campaign >= 90d old) AND >= 25 clicks IN THIS campaign,
+            -- with zero orders anywhere account-wide
+            THEN COALESCE(ta.term_orders_90d, 0) = 0 AND u.clicks_90d >= 25
+                 AND ca.first_d <= DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY)
             ELSE u.clicks >= 10 AND u.orders = 0 END) AS is_negate    -- small word: 28 days at this slice are enough
 FROM (SELECT * FROM st UNION ALL SELECT * FROM sb_st) u
 LEFT JOIN term_all ta ON ta.term = LOWER(TRIM(u.search_term))
+LEFT JOIN camp_age ca ON ca.campaign_id = u.campaign_id
 WHERE u.clicks_90d > 0;
