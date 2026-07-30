@@ -2,7 +2,7 @@ import { Target } from 'lucide-react';
 import type { StrategyMeta } from './types';
 
 export const EXACT_BOOST: StrategyMeta = {
-  id: 'EXACT_BOOST',
+  id: 'EXACT',
   label: 'Exact Boost',
   icon: Target,
   color: '#3b82f6',

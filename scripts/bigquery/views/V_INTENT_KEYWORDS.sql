@@ -221,17 +221,12 @@ intent_window AS (
   LEFT JOIN last_season ls ON ls.holiday_name = t.holiday_name
 ),
 
--- SB ad-group -> creative_type. Same derivation as V_WEEKLY_CELL_NET, including its campaign-name
--- fallback (some SB video campaigns don't populate creative_type, e.g. FRESH-VIDEO/EXACT).
+-- SB ad-group -> creative_type. Canonical derivation (report creative_type + campaign-name
+-- fallback, no cost filter) lives in SP_LOAD_DIM_AD_GROUP — read it from the dimension.
 ag_fmt AS (
-  SELECT ad_group_id,
-    COALESCE(
-      MAX(creative_type),
-      CASE WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%VIDEO%'      THEN 'BRAND_VIDEO'
-           WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%COLLECTION%' THEN 'PRODUCT_COLLECTION' END
-    ) AS creative_type
-  FROM `onyga-482313.OI.V_SRC_AmazonAds_sb_ad_report`
-  GROUP BY ad_group_id
+  SELECT ad_group_id, creative_type
+  FROM `onyga-482313.OI.DIM_AD_GROUP`
+  WHERE is_current AND creative_type IS NOT NULL
 ),
 
 -- Every holiday's peak range — used to EXCLUDE peaks from the off-peak fallback baseline.

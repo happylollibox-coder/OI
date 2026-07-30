@@ -391,6 +391,8 @@ export const ACTION_META: Record<string, { label: string; variant: 'red' | 'gree
   PROMOTE_TO_PEAK_PHRASE: { label: 'PROMOTE',       variant: 'purple', group: 'watch',       criteria: 'Phrase is profitable over 1-year window, but highly seasonal. Negate now, promote to Peak Exact.' },
   PROMOTE_TO_EXACT: { label: 'PROMOTE',        variant: 'blue',   group: 'experiment',  criteria: 'Very successful term + high SQP volume — promote to exact match campaign' },
   START_TERM:       { label: 'NEW',            variant: 'purple', group: 'experiment',  criteria: 'Very successful term + high SQP volume — new keyword opportunity' },
+  // ─── Competitor conquest ───
+  ADD_COMPETITOR_TARGET: { label: 'CONQUEST',   variant: 'blue',   group: 'experiment',  criteria: 'Competitor ASIN converted profitably inside Auto/Broad discovery — give it a deliberate Competitor product target instead of leaving it to Auto' },
   // ─── Target Actions ───
   STOP_TARGET:      { label: 'STOP TARGET',    variant: 'red',    group: 'urgent',      criteria: 'All terms under target have 0 orders + enough clicks — stop the entire target' },
   INCREASE_BID:     { label: 'INCREASE BID',   variant: 'green',  group: 'growth',      criteria: 'Target ROAS above threshold — graduated bid increase' },

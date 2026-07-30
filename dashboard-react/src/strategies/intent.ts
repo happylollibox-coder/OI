@@ -8,7 +8,7 @@ import type { StrategyMeta } from './types';
 // Match type is an axis of the campaign grain, not a property of the strategy, so this one strategy
 // spans auto, broad, exact and phrase campaigns alike.
 export const INTENT: StrategyMeta = {
-  id: 'INTENT',
+  id: 'BROAD_SP',
   label: 'Intent',
   icon: Search,
   color: '#10b981',

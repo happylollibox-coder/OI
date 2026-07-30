@@ -4,7 +4,7 @@ Flask web application for entering purchase orders, manufacturer shipments, and 
 Ultra-lean version for small companies
 """
 
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, has_request_context
 from google.cloud import bigquery
 from datetime import datetime, timedelta, date
 import uuid
@@ -158,7 +158,14 @@ def cache_result(ttl_seconds=300):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            # args/kwargs are the ROUTE (path) params only — the QUERY STRING
+            # (?campaign_id=, ?family=, …) is read via request.args and would otherwise
+            # be absent from the key, so every query-param value collided on one cache
+            # entry (first fetch served for all). Fold the query string in when we're in
+            # a request context (helpers called outside one keep the plain key).
             cache_key = f"{func.__name__}:{str(args)}:{str(kwargs)}"
+            if has_request_context() and request.query_string:
+                cache_key += f":{request.query_string.decode()}"
             now = time()
             
             # Check if cached result exists and is still valid
@@ -7170,15 +7177,23 @@ def get_mapping_coverage():
 
 # Canonical option lists for the dropdowns (validated server-side on assign)
 MAPPING_FAMILIES = ['Bottle', 'Bunny', 'Fresh', 'LolliBall', 'LolliME', 'Lollibox', 'Store']
-MAPPING_STRATEGIES = ['AUTO', 'BRAND_DEFENSE', 'COMPETITOR',
-                      'EXACT_BOOST', 'INTENT', 'PRODUCT_DEFENSE']
-# Human-readable strategy label for generated experiment names
+# 9-strategy taxonomy (Ori 2026-07-23). Broad is format-specific — SP / Video / Brand Spotlight are
+# each REQUIRED per family; the old INTENT (100% broad) and EXACT_BOOST (silently half phrase) are gone.
+MAPPING_STRATEGIES = ['AUTO', 'BROAD_SP', 'BROAD_VIDEO', 'BROAD_SPOTLIGHT',
+                      'PHRASE', 'EXACT', 'COMPETITOR', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE']
+# Human-readable strategy label for generated experiment names.
+# (The old dict had duplicate keys — 'INTENT' and 'COMPETITOR' each appeared twice, so the second
+#  silently won and Intent rendered as "Auto Discovery". Fixed here.)
 _STRATEGY_LABEL = {
     'AUTO': 'Auto Discovery',
-    'EXACT_BOOST': 'Exact Boost', 'INTENT': 'Broad Hunter',
-    'INTENT': 'Auto Discovery', 'BRAND_DEFENSE': 'Brand Defense',
-    'PRODUCT_DEFENSE': 'Product Defense', 'COMPETITOR': 'Competitor Conquest',
-    'COMPETITOR': 'Category Conquest',
+    'BROAD_SP': 'Broad SP',
+    'BROAD_VIDEO': 'Broad Video',
+    'BROAD_SPOTLIGHT': 'Broad Spotlight',
+    'PHRASE': 'Phrase',
+    'EXACT': 'Exact',
+    'COMPETITOR': 'Competitor',
+    'BRAND_DEFENSE': 'Brand Defense',
+    'PRODUCT_DEFENSE': 'Product Defense',
 }
 
 
@@ -7310,6 +7325,299 @@ def assign_campaign_mapping():
             'family': family,
             'source': 'manual',
         })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Intent configuration — supervised keyword -> intent theme mapping.
+# Reads V_INTENT_RESOLVED (which applies human-beats-machine precedence) and
+# writes verdicts to DE_SEARCH_TERM_INTENT. See
+# docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md
+# NOTE: no @login_required — dashboard /api endpoints authenticate via the
+# Bearer token + global before_request. A session-cookie redirect would return
+# HTML and break the JSON parse on the client.
+# ---------------------------------------------------------------------------
+
+INTENT_VERDICTS = ('VERIFIED', 'CORRECTED', 'REJECTED')
+
+
+@cache_result(ttl_seconds=3600)
+def _intent_picker_options():
+    """Composed-intent vocabulary for the review dropdown.
+
+    Reads the PHYSICAL table, not V_ADS_SEARCH_TERM_FACETS. The view runs regex over 337k
+    terms and joining it to a year of ads took ~25s, which every page load then waited on.
+    SP_REFRESH_SEARCH_TERM_INTENT already persists the composed key and click counts, so the
+    same answer is available without re-deriving anything. Cached on top of that.
+    """
+    q = """
+    SELECT suggested_intent_key AS intent_key, suggested_intent_key AS label,
+           'COMPOSED' AS intent_type, SUM(clicks_365d) AS clicks
+    FROM `onyga-482313.OI.DE_SEARCH_TERM_INTENT`
+    WHERE suggested_intent_key IS NOT NULL
+    GROUP BY suggested_intent_key
+    HAVING SUM(clicks_365d) >= 100
+    ORDER BY clicks DESC
+    """
+    return [dict(r) for r in client.query(q).result()]
+
+
+@app.route('/api/admin/intent-mapping', methods=['GET'])
+def get_intent_mapping():
+    """Search terms with their machine suggestion and human verdict, biggest volume first.
+
+    Query params:
+      status  — PENDING | VERIFIED | CORRECTED | REJECTED | RECHECK | ALL (default ALL)
+      q       — substring filter on the search term
+      limit   — default 200, max 1000
+    """
+    status = (request.args.get('status') or 'ALL').upper()
+    q = (request.args.get('q') or '').strip().lower()
+    try:
+        limit = min(int(request.args.get('limit', 200)), 1000)
+    except (TypeError, ValueError):
+        limit = 200
+
+    where = ['d.clicks_365d IS NOT NULL']
+    params = [bigquery.ScalarQueryParameter('lim', 'INT64', limit)]
+    # Product- and auto-targeting placements arrive in search_term as bare ASINs
+    # ('b0c23nbz6w') or 'asin="B0..."'. They carry real spend — 6,208 clicks on the
+    # single biggest one — so they would otherwise sit permanently at the top of a page
+    # ordered by volume. Nobody typed them and there is no intent to judge, so they are
+    # hidden unless explicitly asked for.
+    if request.args.get('include_targets') != '1':
+        # Filter on term_kind, not the composed key — the slug changed from 'asin-target' to
+        # 'asin_target' in the facet migration and a key-based filter silently stopped working.
+        where.append("IFNULL(d.suggested_intent_key, '') NOT IN ('asin_target', 'auto_target')")
+    if status != 'ALL':
+        where.append('d.verification_status = @status')
+        params.append(bigquery.ScalarQueryParameter('status', 'STRING', status))
+    if q:
+        where.append('LOWER(d.search_term) LIKE @q')
+        params.append(bigquery.ScalarQueryParameter('q', 'STRING', f'%{q}%'))
+    intent = (request.args.get('intent') or '').strip()
+    if intent:
+        # Filter on the RESOLVED key (verified beats suggested), matching what the row displays.
+        where.append("""COALESCE(
+            CASE WHEN d.verification_status = 'REJECTED' THEN NULL
+                 WHEN d.verification_status IN ('VERIFIED','CORRECTED','RECHECK') THEN d.verified_intent_key
+                 ELSE d.suggested_intent_key END, '') = @intent""")
+        params.append(bigquery.ScalarQueryParameter('intent', 'STRING', intent))
+
+    query = """
+    SELECT
+      d.search_term,
+      -- Same precedence as V_INTENT_RESOLVED. Computed here rather than joining that view,
+      -- because the view expands V_ADS_SEARCH_TERM_FACETS (regex over 337k terms) and made
+      -- a page load take 30s. The physical table already carries everything the page shows.
+      CASE
+        WHEN d.verification_status = 'REJECTED' THEN NULL
+        WHEN d.verification_status IN ('VERIFIED','CORRECTED','RECHECK') THEN d.verified_intent_key
+        ELSE d.suggested_intent_key
+      END                                       AS resolved_intent_key,
+      d.suggested_intent_key                    AS machine_suggestion,
+      d.suggested_facets,
+      d.suggested_specificity                   AS facet_count,
+      d.verified_intent_key,
+      d.verification_status,
+      d.verification_status IN ('VERIFIED','CORRECTED','REJECTED') AS is_human_verified,
+      d.verification_status = 'RECHECK'         AS is_stale,
+      d.verified_by,
+      CAST(d.verified_at AS STRING)             AS verified_at,
+      d.clicks_365d,
+      d.orders_365d,
+      ROUND(d.cost_365d, 2)                     AS cost_365d,
+      ROUND(100 * SAFE_DIVIDE(d.orders_365d, d.clicks_365d), 2) AS cvr_pct
+    FROM `onyga-482313.OI.DE_SEARCH_TERM_INTENT` d
+    WHERE {where}
+    ORDER BY d.clicks_365d DESC, d.search_term
+    LIMIT @lim
+    """.format(where=' AND '.join(where))
+
+    themes = _intent_picker_options()
+
+    counts_query = """
+    SELECT verification_status, COUNT(*) AS terms, SUM(clicks_365d) AS clicks
+    FROM `onyga-482313.OI.DE_SEARCH_TERM_INTENT`
+    WHERE clicks_365d > 0
+    GROUP BY 1
+    """
+
+    try:
+        rows = [dict(r) for r in client.query(
+            query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()]
+        counts = {r['verification_status']: {'terms': r['terms'], 'clicks': r['clicks']}
+                  for r in [dict(x) for x in client.query(counts_query).result()]}
+        return jsonify({'success': True, 'terms': rows, 'themes': themes, 'counts': counts})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/intent-mapping/verify', methods=['POST'])
+def verify_intent_mapping():
+    """Record a human verdict on one search term.
+
+    Body: {search_term, intent_key, status}
+      status VERIFIED  — the suggestion was right (intent_key must equal the suggestion)
+      status CORRECTED — reviewer picked a different theme
+      status REJECTED  — this term has no valid intent (intent_key ignored, stored NULL)
+
+    suggestion_at_verification is stamped with what the machine said RIGHT NOW, so
+    SP_REFRESH_SEARCH_TERM_INTENT can later detect that a rule edit moved underneath
+    this decision and flip the row to RECHECK instead of silently overwriting it.
+    """
+    data = request.get_json(force=True) or {}
+    search_term = data.get('search_term')
+    intent_key = data.get('intent_key')
+    status = (data.get('status') or '').upper()
+
+    if not search_term:
+        return jsonify({'success': False, 'error': 'search_term is required'}), 400
+    if status not in INTENT_VERDICTS:
+        return jsonify({'success': False,
+                        'error': f'status must be one of {", ".join(INTENT_VERDICTS)}'}), 400
+    if status != 'REJECTED' and not intent_key:
+        return jsonify({'success': False,
+                        'error': 'intent_key is required unless status is REJECTED'}), 400
+
+    user_email = session.get('user', {}).get('email', 'dashboard')
+
+    try:
+        if status != 'REJECTED':
+            # Validate against compositions that actually occur in the ads data. A reviewer may
+            # legitimately assign a rare composition (below the 100-click picker threshold), so
+            # the check is existence, not popularity. Legacy single-theme keys still pass — the
+            # 29 verdicts recorded before the migration must remain valid.
+            valid = list(client.query(
+                'SELECT 1 FROM `onyga-482313.OI.V_ADS_SEARCH_TERM_FACETS` '
+                'WHERE intent_key = @k LIMIT 1',
+                job_config=bigquery.QueryJobConfig(query_parameters=[
+                    bigquery.ScalarQueryParameter('k', 'STRING', intent_key)])).result())
+            if not valid:
+                valid = list(client.query(
+                    'SELECT 1 FROM `onyga-482313.OI.DE_INTENT_THEMES` '
+                    'WHERE intent_key = @k AND is_active LIMIT 1',
+                    job_config=bigquery.QueryJobConfig(query_parameters=[
+                        bigquery.ScalarQueryParameter('k', 'STRING', intent_key)])).result())
+            if not valid:
+                return jsonify({'success': False,
+                                'error': f'unknown intent: {intent_key}'}), 400
+
+        job = client.query(
+            """
+            UPDATE `onyga-482313.OI.DE_SEARCH_TERM_INTENT`
+            SET verified_intent_key = IF(@status = 'REJECTED', NULL, @intent_key),
+                verification_status = @status,
+                verified_by = @who,
+                verified_at = CURRENT_TIMESTAMP(),
+                suggestion_at_verification = suggested_intent_key,
+                verified_note = @note,
+                updated_at = CURRENT_TIMESTAMP()
+            WHERE search_term = @term
+            """,
+            job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter('term', 'STRING', search_term),
+                bigquery.ScalarQueryParameter('intent_key', 'STRING', intent_key),
+                bigquery.ScalarQueryParameter('status', 'STRING', status),
+                bigquery.ScalarQueryParameter('who', 'STRING', user_email),
+                bigquery.ScalarQueryParameter('note', 'STRING',
+                                              f'Reviewed in Intent Configuration by {user_email}'),
+            ]))
+        job.result()
+        if job.num_dml_affected_rows == 0:
+            return jsonify({'success': False,
+                            'error': 'term not found — run SP_REFRESH_SEARCH_TERM_INTENT'}), 404
+
+        clear_data_cache()
+        return jsonify({'success': True, 'search_term': search_term,
+                        'intent_key': None if status == 'REJECTED' else intent_key,
+                        'status': status, 'verified_by': user_email})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _intent_month_suggestion(rows):
+    """One-line recommendation for an intent x product, from its 12 monthly cells.
+
+    Reads the model, does not re-derive it. RUN/RUN_THIN/OFF already encode the per-month
+    verdict; this rolls them into a sentence a human can act on. Peak = the month with the
+    highest cvr_hat; trough = lowest among the months that have their own data.
+    """
+    if not rows:
+        return "No model coverage for this intent x product yet."
+    runs = [r for r in rows if r['action'] == 'RUN']
+    offs = [r for r in rows if r['action'] == 'OFF']
+    conf = rows[0].get('confidence')
+    peak = max(rows, key=lambda r: r['cvr_hat'] or 0)
+    MO = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    peak_m = MO[peak['month_of_year']]
+    if conf == 'INSUFFICIENT':
+        return (f"Thin data — the bid is mostly borrowed from the family, not this product's "
+                f"own history. Treat as a probe, not a commitment. Peak looks like {peak_m}.")
+    if len(offs) >= 9:
+        return (f"Mostly OFF ({len(offs)}/12 months) — market clears above breakeven except "
+                f"around {peak_m}. Run only in the peak, negate the rest.")
+    if len(runs) >= 10:
+        return (f"Profitable year-round (RUN {len(runs)}/12). Bid the monthly target; lean in "
+                f"at {peak_m} (CVR {round((peak['cvr_hat'] or 0)*100,1)}%).")
+    return (f"Seasonal — RUN {len(runs)}/12, OFF {len(offs)}/12. Push {peak_m}, pull back in "
+            f"the OFF months rather than holding one flat bid.")
+
+
+@app.route('/api/admin/intent-monthly', methods=['GET'])
+def api_intent_monthly():
+    """12-month curve for an intent, per product, for the click-through popup.
+
+    Query params: intent_key (required), product (optional — filters to one).
+    Returns one block per product that runs the intent, each with 12 monthly rows
+    (cvr, target_cpc, breakeven, net ROAS at the market CPC actually paid) plus a suggestion.
+
+    net_roas_at_market = value_per_click / actual_cpc. NOT net_roas at the target bid, which
+    is a constant 1/profit_share by construction and tells you nothing month to month.
+    """
+    intent_key = (request.args.get('intent_key') or '').strip()
+    product = (request.args.get('product') or '').strip()
+    if not intent_key:
+        return jsonify({'success': False, 'error': 'intent_key is required'}), 400
+
+    params = [bigquery.ScalarQueryParameter('ik', 'STRING', intent_key)]
+    prod_filter = ''
+    if product:
+        prod_filter = 'AND b.product_short_name = @product'
+        params.append(bigquery.ScalarQueryParameter('product', 'STRING', product))
+
+    query = """
+    SELECT b.parent_name, b.product_short_name, b.month_of_year,
+      ROUND(b.cvr_hat, 5)       AS cvr_hat,
+      ROUND(b.gp_per_order, 2)  AS gp_per_order,
+      ROUND(b.value_per_click, 3) AS value_per_click,
+      b.max_bid, b.target_bid, b.actual_cpc,
+      ROUND(SAFE_DIVIDE(b.value_per_click, b.actual_cpc), 2) AS net_roas_at_market,
+      b.action, b.confidence, b.base_clicks
+    FROM `onyga-482313.OI.T_INTENT_BID_BASE` b
+    WHERE b.intent_key = @ik {pf}
+    ORDER BY b.product_short_name, b.month_of_year
+    """.format(pf=prod_filter)
+
+    try:
+        rows = [dict(r) for r in client.query(
+            query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()]
+        by_product = {}
+        for r in rows:
+            by_product.setdefault(r['product_short_name'], []).append(r)
+        blocks = []
+        for prod, months in sorted(by_product.items(),
+                                   key=lambda kv: -(kv[1][0].get('base_clicks') or 0)):
+            blocks.append({
+                'product': prod,
+                'family': months[0]['parent_name'],
+                'base_clicks': months[0].get('base_clicks'),
+                'confidence': months[0].get('confidence'),
+                'suggestion': _intent_month_suggestion(months),
+                'months': months,
+            })
+        return jsonify({'success': True, 'intent_key': intent_key, 'products': blocks})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -9015,10 +9323,9 @@ def ads_coverage_scan():
           WHERE dp.parent_name IS NOT NULL AND dp.is_active = true
         ),
         camp_state AS (
-          SELECT campaign_id,
-            ARRAY_AGG(state ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state,
-            ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS campaign_name
-          FROM `onyga-482313`.OI.V_SRC_AmazonAds_campaign_history GROUP BY 1
+          -- 2026-07-30: consolidated source (V_DIM_CAMPAIGN_CURRENT / DIM_*) per prefer-DIM/FACT rule; was V_SRC_AmazonAds_campaign_history
+          SELECT campaign_id, campaign_state AS state, campaign_name
+          FROM `onyga-482313`.OI.V_DIM_CAMPAIGN_CURRENT
         ),
         camp_strategy AS (
           SELECT ec.campaign_id, ANY_VALUE(e.strategy_id) AS strategy_id
@@ -9200,30 +9507,118 @@ def ads_coverage_scan():
         return jsonify({'error': str(e)}), 500
 
 
+def resolve_coverage_window(win_key=None):
+    """Map a cockpit time-window key -> (win_start, win_end, peak_only) for the FN_COVERAGE_* fns.
+
+    Shared by every windowed coverage endpoint (/api/daily-workflow, /api/coverage-keywords) so
+    the toggle means the same thing everywhere. Reads ?window= when win_key isn't passed;
+    unknown/missing falls back to '7d'. 'peak' = gift-season days within the last 12 months.
+    today = UTC date, matching the CURRENT_DATE() the source views used before parameterization.
+    Returns (key, start, end, peak_only) — the key echoes back what was actually applied.
+    """
+    today = date.today()
+    windows = {
+        'today':     (today, today, False),
+        'yesterday': (today - timedelta(days=1), today - timedelta(days=1), False),
+        '7d':        (today - timedelta(days=7),  today, False),
+        '30d':       (today - timedelta(days=30), today, False),
+        '90d':       (today - timedelta(days=90), today, False),
+        '12mo':      (today - timedelta(days=365), today, False),
+        'peak':      (today - timedelta(days=365), today, True),   # gift-season days in the last 12mo
+    }
+    key = win_key if win_key is not None else request.args.get('window', '7d')
+    if key not in windows:
+        key = '7d'
+    start, end, peak_only = windows[key]
+    return key, start, end, peak_only
+
+
+@app.route('/api/applied-recent')
+@cache_result(ttl_seconds=20)
+def applied_recent():
+    """LIVE 'already applied' signal, straight from FACT_PPC_CHANGE_LOG.
+
+    days_since_suggestion is materialised into the cube T_* tables, which only refresh on the periodic
+    full rebuild — so a bulksheet you just uploaded doesn't show as 'applied' until the next rebuild
+    (Ori 2026-07-25: uploaded 95 changes, dashboard still said 'to change'). This endpoint reads the
+    change-log directly (keyword_id → days since last upload) so the launch cards + mature filter can
+    override the stale cube value with the fresher one. Tiny query, short TTL — reflects an upload in seconds.
+
+    Returns {applied: {"<keyword_id>": days_since}} for anything changed in the last 8 days (covers the
+    launch 1-day cooldown and the mature 3-day cooldown with margin).
+    """
+    try:
+        rows = client.query(
+            "SELECT CAST(keyword_id AS STRING) AS keyword_id, "
+            "  DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at,'America/Los_Angeles')), DAY) AS dss "
+            "FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` "
+            "WHERE keyword_id IS NOT NULL AND CAST(keyword_id AS STRING) != '' "
+            "  AND applied_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 8 DAY) "
+            "GROUP BY 1"
+        ).result()
+        return jsonify({'applied': {r['keyword_id']: r['dss'] for r in rows}})
+    except Exception as e:
+        print(f"Error in applied_recent: {e}")
+        return jsonify({'applied': {}, 'error': str(e)}), 500
+
+
 @app.route('/api/daily-workflow')
 @cache_result(ttl_seconds=300)
 def daily_workflow():
-    """Coverage cockpit tree — read-only pass-through of V_COVERAGE_CAMPAIGN.
+    """Coverage cockpit tree — read-only pass-through of FN_COVERAGE_CAMPAIGN(win).
 
-    The view already emits final reconciled cells (one row per coverage cell,
-    with a resolved `status`). This endpoint just serves the cells plus a
-    per-strategy tile roll-up of the status counts, so the cockpit UI can render
-    the strategy tiles + cell tree without re-deriving anything client-side.
+    The function emits final reconciled cells (one row per coverage cell, with a
+    resolved `status`) over a selectable time window. This endpoint serves the
+    cells plus a per-strategy tile roll-up of the status counts, so the cockpit UI
+    can render the strategy tiles + cell tree without re-deriving anything client-side.
+
+    ?window= today | yesterday | 7d (default) | 30d | 90d | 12mo | peak
+      The window governs EVERY measure on the page — coverage counts, status, and
+      metrics — via the FN_COVERAGE_* table functions (peak = gift-season days in the
+      last 12 months). The *_MONTHLY drill endpoints are separate and stay at 12 months.
     """
     from collections import defaultdict
-    STRATS = ['AUTO', 'INTENT', 'EXACT_BOOST', 'COMPETITOR', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE', 'UNMAPPED']
+    STRATS = ['AUTO', 'BROAD_SP', 'BROAD_VIDEO', 'BROAD_SPOTLIGHT', 'PHRASE', 'EXACT', 'COMPETITOR', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE', 'UNMAPPED']
+    # ── Time window (default 7d) — governs every measure on the page (coverage counts,
+    #    status AND metrics) via the FN_COVERAGE_* table functions. The *_MONTHLY drill
+    #    endpoints are separate and intentionally stay fixed at 12 months.
+    win_key, win_start, win_end, peak_only = resolve_coverage_window()
+
+    def cov_jc():
+        """Fresh job config carrying the window params — one per client.query (can't be reused)."""
+        return bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('ws', 'DATE', win_start),
+            bigquery.ScalarQueryParameter('we', 'DATE', win_end),
+            bigquery.ScalarQueryParameter('pk', 'BOOL', peak_only),
+        ])
     try:
+        # The four FN_COVERAGE_* reads are independent, so run them CONCURRENTLY. Sequentially they
+        # cost ~4x a single round trip (each re-derives prod/listing/costs and, since the SB union,
+        # FN_COVERAGE_SB as well) and made a cold page load ~17s (Ori 2026-07-23).
+        from concurrent.futures import ThreadPoolExecutor
+        def _q(sql_text):
+            return [dict(r) for r in client.query(sql_text, job_config=cov_jc()).result()]
+        _pool = ThreadPoolExecutor(max_workers=4)
+        _f_detail = _pool.submit(_q,
+            "SELECT cell_key, campaign_id, campaign_name, state, is_enabled, impressions, clicks, units, "
+            "ad_spend, cpc, net_roas, net_profit, profit_state, last_seen "
+            "FROM `onyga-482313.OI.FN_COVERAGE_CAMPAIGN_DETAIL`(@ws, @we, @pk)")
+        _f_unmapped = _pool.submit(_q,
+            "SELECT campaign_id, campaign_name, parent_name, state, is_enabled, is_archived, "
+            "impressions, clicks, units, cost, net_roas, cpc, last_seen, profit_state "
+            "FROM `onyga-482313.OI.FN_COVERAGE_UNMAPPED`(@ws, @we, @pk)")
+        _f_profit = _pool.submit(_q,
+            "SELECT campaign_id, parent_name, strategy, clicks, spend, units, margin, "
+            "net_profit, profitable FROM `onyga-482313.OI.FN_COVERAGE_CAMPAIGN_PROFIT`(@ws, @we, @pk)")
+
         sql = ("SELECT grain, cell_key, parent_name, asin, product_short_name, strategy, expected, "
-               "n_enabled, n_any, impressions, clicks, units, cost, cpc, net_roas, profit_state, "
-               "campaigns, suppressed, status, reason "
-               "FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN`")
-        rows = [dict(r) for r in client.query(sql).result()]
+               "n_enabled, n_any, impressions, clicks, units, cost, cpc, net_roas, net_profit, profit_state, "
+               "campaigns, n_dark, dark_campaigns, suppressed, status, reason "
+               "FROM `onyga-482313.OI.FN_COVERAGE_CAMPAIGN`(@ws, @we, @pk)")
+        rows = [dict(r) for r in client.query(sql, job_config=cov_jc()).result()]
 
         # ── S2 VERIFY: per-campaign evidence, grouped by cell_key ──
-        detail_rows = [dict(r) for r in client.query(
-            "SELECT cell_key, campaign_id, campaign_name, state, is_enabled, impressions, clicks, units, "
-            "ad_spend, cpc, net_roas, profit_state, last_seen FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN_DETAIL`"
-        ).result()]
+        detail_rows = _f_detail.result()
         detail = defaultdict(list)
         for d in detail_rows:
             if d.get('last_seen') is not None:
@@ -9235,13 +9630,10 @@ def daily_workflow():
         # ── UNMAPPED guard: campaigns not classified into any of the 6 strategies ──
         # V_COVERAGE_CAMPAIGN drops strategy_category='OTHER'/unmatched, so this surfaces
         # them as synthetic CAMPAIGN-grain cells under a 7th 'UNMAPPED' strategy.
-        unmapped = [dict(r) for r in client.query(
-            "SELECT campaign_id, campaign_name, parent_name, state, is_enabled, impressions, "
-            "clicks, units, cost, net_roas, cpc, last_seen, profit_state "
-            "FROM `onyga-482313.OI.V_COVERAGE_UNMAPPED`"
-        ).result()]
+        unmapped = _f_unmapped.result()
         for u in unmapped:
             name = u.get('campaign_name') or str(u['campaign_id'])
+            archived = bool(u.get('is_archived'))
             rows.append({
                 'grain': 'CAMPAIGN',
                 'cell_key': f"UNMAPPED|{u['campaign_id']}",
@@ -9259,10 +9651,20 @@ def daily_workflow():
                 'cpc': u.get('cpc'),
                 'net_roas': u.get('net_roas'),
                 'campaigns': name,
+                # Archived campaigns are HISTORY, not work: their spend still counts in the P&L
+                # rollups below, but the UI groups them separately and the badge ignores them.
+                # Wide windows (12mo/Peak) otherwise surfaced 42 dead campaigns as "to map".
+                'is_archived': archived,
+                'state': u.get('state'),
                 'suppressed': False,
                 'status': 'unmapped',
                 'profit_state': u.get('profit_state'),
-                'reason': f"Campaign '{name}' is not mapped to a strategy.",
+                'reason': (
+                    f"Campaign '{name}' is ARCHIVED and ran in this window — historical spend only, "
+                    f"nothing to map."
+                    if archived else
+                    f"Campaign '{name}' is not mapped to a strategy."
+                ),
             })
 
         def tile(s):
@@ -9276,10 +9678,7 @@ def daily_workflow():
             }
 
         # ── 7-day per-campaign P&L rollups (strategy + family) ──
-        p7d = [dict(r) for r in client.query(
-            "SELECT campaign_id, parent_name, strategy, clicks, spend, units, margin, "
-            "net_profit, profitable FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN_PROFIT7D`"
-        ).result()]
+        p7d = _f_profit.result()
 
         def profit_rollup(subset):
             return {
@@ -9296,9 +9695,18 @@ def daily_workflow():
         for s in sorted({r['strategy'] for r in p7d if r['strategy']}):
             strategy_stats[s] = profit_rollup([r for r in p7d if r['strategy'] == s])
 
-        # ── UNMAPPED strategy_stats: 7-day P&L over unmapped campaign_ids ──
-        # PROFIT7D excludes OTHER/unmatched, so compute it here (same logic: advertised_product
-        # last 7d × gp_per_unit − cost, per unmapped campaign with spend>0 in the window).
+        # strategy_family_stats: keyed '<strategy>|<family>' so the UI can show a strategy tile's
+        # P&L for the SELECTED family instead of the all-families total (Ori 2026-07-23 — picking
+        # Bottle must scope the tiles too). Free: reuses p7d, no extra query.
+        strategy_family_stats = {}
+        _sf_keys = {(r['strategy'], r['parent_name']) for r in p7d if r['strategy']}
+        for _s, _f in _sf_keys:
+            subset = [r for r in p7d if r['strategy'] == _s and r['parent_name'] == _f]
+            strategy_family_stats[f"{_s}|{_f if _f is not None else '__STORE__'}"] = profit_rollup(subset)
+
+        # ── UNMAPPED strategy_stats: windowed P&L over unmapped campaign_ids ──
+        # FN_COVERAGE_CAMPAIGN_PROFIT excludes OTHER/unmatched, so compute it here (same logic:
+        # advertised_product × gp_per_unit − cost over the selected window, per unmapped campaign with spend>0).
         unmapped_ids = [u['campaign_id'] for u in unmapped]
         if unmapped_ids:
             u7d = [dict(r) for r in client.query(
@@ -9316,11 +9724,18 @@ def daily_workflow():
                 "   (SUM(ap.units_7d * COALESCE(p.gp_per_unit, 0)) - SUM(ap.cost)) >= 0 AS profitable "
                 " FROM `onyga-482313.OI.V_SRC_AmazonAds_advertised_product` ap "
                 " LEFT JOIN prod p ON p.asin = ap.advertised_asin "
-                " WHERE ap.date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) "
+                " WHERE ap.date BETWEEN @ws AND @we "
+                "   AND (NOT @pk OR ap.date IN (SELECT DISTINCT d "
+                "        FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h, "
+                "        UNNEST(GENERATE_DATE_ARRAY(h.boost_start, h.cooldown_end)) d "
+                "        WHERE h.category = 'gift_season')) "
                 "   AND ap.campaign_id IN UNNEST(@ids) "
                 " GROUP BY ap.campaign_id HAVING SUM(ap.cost) > 0",
                 job_config=bigquery.QueryJobConfig(query_parameters=[
-                    bigquery.ArrayQueryParameter('ids', 'STRING', unmapped_ids)])
+                    bigquery.ArrayQueryParameter('ids', 'STRING', unmapped_ids),
+                    bigquery.ScalarQueryParameter('ws', 'DATE', win_start),
+                    bigquery.ScalarQueryParameter('we', 'DATE', win_end),
+                    bigquery.ScalarQueryParameter('pk', 'BOOL', peak_only)])
             ).result()]
             strategy_stats['UNMAPPED'] = profit_rollup(u7d)
         else:
@@ -9361,13 +9776,18 @@ def daily_workflow():
                 "SELECT COUNT(*) AS n FROM `onyga-482313.OI.V_CAMPAIGN_MAPPING_STATUS` "
                 "WHERE current_strategy_id IS NULL").result())[0].n
         except Exception:
-            unmapped_badge = len(unmapped)
+            # Fallback must exclude ARCHIVED — a dead campaign is never a to-do, and in wide
+            # windows they dominate the list (42 of 44 at 12mo).
+            unmapped_badge = sum(1 for u in unmapped if not u.get('is_archived'))
         tiles['UNMAPPED'] = {'defined': 0, 'missing': 0, 'redundant': 0,
                              'informational': unmapped_badge, 'suppressed': 0}
 
         return jsonify({'strategies': STRATS, 'tiles': tiles,
                         'cells': rows, 'detail': dict(detail),
-                        'strategy_stats': strategy_stats, 'family_stats': family_stats})
+                        'strategy_stats': strategy_stats,
+                        'strategy_family_stats': strategy_family_stats, 'family_stats': family_stats,
+                        'window': win_key,
+                        'window_start': str(win_start), 'window_end': str(win_end)})
     except Exception as e:
         print(f"Error in daily_workflow: {e}")
         return jsonify({'error': str(e)}), 500
@@ -9425,6 +9845,77 @@ def keyword_months():
         return jsonify({'months': dict(grouped)})
     except Exception as e:
         print(f"Error in keyword_months: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaign-targets')
+@cache_result(ttl_seconds=120)
+def campaign_targets():
+    """What a campaign is CONFIGURED to target — independent of performance.
+
+    Requires ?campaign_id=<id>. Returns { targets: [ {targeting, match_type, state, bid} ] }.
+
+    WHY: every other drill (month → keyword) is built from FACT/report data, so a campaign that has
+    not served yet shows "no monthly data" and you cannot confirm what you just built (Ori
+    2026-07-24: "i cant see keywords in this campaign"). V_SRC_AmazonAds_keyword is the Amazon
+    CONFIG mirror — it carries keywords AND product targets (match_type='ASIN',
+    keyword_text='asin="B0..."') with their live bid and state, synced within minutes of creation.
+
+    Deduped to the LATEST row per keyword_id: the source is an append-only history, so without the
+    QUALIFY every bid edit would render as a separate target. ARCHIVED rows are dropped (retired
+    targets are not part of the campaign); ENABLED and PAUSED are both shown, state included so the
+    UI can distinguish them.
+    """
+    campaign_id = request.args.get('campaign_id')
+    if not campaign_id:
+        return jsonify({'targets': []})
+    try:
+        sql = """
+            SELECT keyword_text AS targeting, match_type, state, bid
+            FROM `onyga-482313.OI.V_SRC_AmazonAds_keyword`
+            WHERE CAST(campaign_id AS STRING) = @cid
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY date DESC) = 1
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('cid', 'STRING', campaign_id)])
+        rows = [dict(r) for r in client.query(sql, job_config=job_config).result()]
+        rows = [r for r in rows if (r.get('state') or '').upper() != 'ARCHIVED']
+        rows.sort(key=lambda r: (r.get('targeting') or ''))
+        return jsonify({'targets': rows})
+    except Exception as e:
+        app.logger.error(f"campaign_targets failed: {e}")
+        return jsonify({'targets': [], 'error': str(e)}), 200
+
+
+@app.route('/api/campaign-keyword-months')
+@cache_result(ttl_seconds=300)
+def campaign_keyword_months():
+    """Third cockpit evidence level — cell → campaign → month → KEYWORD.
+
+    Requires ?campaign_id=<id>. Returns { months: { "<YYYY-MM-01>": [ {keyword_text,
+    match_type, impressions, clicks, spend, cpc, units, net_profit, net_roas}, ... ] } }
+    so a MonthRow can expand to the keywords that drove that month. Rows are pre-sorted
+    by spend desc within each month. Pass-through of V_COVERAGE_CAMPAIGN_KEYWORD_MONTHLY
+    (keyword units use the same 7d click-attribution as the campaign month drill).
+    """
+    from collections import defaultdict
+    campaign_id = request.args.get('campaign_id')
+    if not campaign_id:
+        return jsonify({'months': {}})
+    try:
+        sql = ("SELECT CAST(month AS STRING) AS month, keyword_text, match_type, impressions, "
+               "clicks, spend, cpc, units, net_profit, net_roas, target_cpc "
+               "FROM `onyga-482313.OI.V_COVERAGE_CAMPAIGN_KEYWORD_MONTHLY` "
+               "WHERE campaign_id = @cid ORDER BY month, spend DESC")
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('cid', 'STRING', campaign_id)])
+        grouped = defaultdict(list)
+        for r in client.query(sql, job_config=job_config).result():
+            d = dict(r)
+            grouped[d['month']].append(d)
+        return jsonify({'months': dict(grouped)})
+    except Exception as e:
+        print(f"Error in campaign_keyword_months: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -9507,27 +9998,223 @@ def coverage_expectation():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/live-campaigns')
+@cache_result(ttl_seconds=60)
+def live_campaigns():
+    """Campaign names that already EXIST on Amazon — the bulksheet's duplicate guard.
+
+    WHY THIS EXISTS: DoPage decides "create a new campaign" vs "just add targets to the existing
+    one" by name (claimNewCampaign). Its previous sources — ads_7d and coach_campaigns — are
+    PERFORMANCE-derived, so a campaign only shows up once it has reported spend, i.e. 1-2 days
+    after creation. Re-exporting inside that window emitted duplicate Create rows (Ori 2026-07-23:
+    a conquest set was uploaded, then re-uploaded under a new name 19 minutes later).
+
+    campaign_history is the Fivetran mirror of Amazon's campaign list and carries a brand-new
+    campaign within minutes, with no performance required — so it closes that window entirely.
+
+    ARCHIVED is excluded on purpose: archiving is how Ori retires a campaign, and Amazon lets the
+    name be reused, so an archived name must NOT block a fresh create. ENABLED + PAUSED do block.
+    60s TTL: this gates a write path, so staleness here costs a duplicate campaign.
+
+    Also returns the REAL numeric campaign_id and its primary ad_group_id. A bulksheet may use a
+    campaign NAME in the ID columns only when the Create row is in the same sheet; for a campaign
+    that already exists Amazon needs the real ids, else the child rows fail "Missing Parent ID" and
+    — because validation is whole-sheet — take the entire upload down with them (Ori 2026-07-24:
+    37 records, 0 applied). The exporter uses these ids when it skips the Create scaffold.
+    """
+    try:
+        rows = list(client.query("""
+            SELECT c.campaign_id, c.name, c.state, ag.ad_group_id
+            FROM (
+              SELECT campaign_id,
+                ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS name,
+                ARRAY_AGG(state         ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state
+              FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history`
+              WHERE campaign_name IS NOT NULL
+              GROUP BY campaign_id
+            ) c
+            -- Primary ad group = most recently seen non-archived one. The cockpit's own campaigns
+            -- have exactly one; for hand-built multi-ad-group campaigns this picks the live one.
+            LEFT JOIN (
+              SELECT CAST(campaign_id AS STRING) AS campaign_id, CAST(ad_group_id AS STRING) AS ad_group_id
+              FROM `onyga-482313.OI.V_SRC_AmazonAds_ad_group_history`
+              WHERE UPPER(COALESCE(state, '')) != 'ARCHIVED'
+              QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY date DESC) = 1
+            ) ag ON ag.campaign_id = c.campaign_id
+            WHERE UPPER(COALESCE(c.state, '')) != 'ARCHIVED'
+        """).result())
+        return jsonify({'campaigns': [
+            {'campaign_id': r['campaign_id'], 'name': r['name'],
+             'state': r['state'], 'ad_group_id': r['ad_group_id']} for r in rows]})
+    except Exception as e:
+        app.logger.error(f"live_campaigns failed: {e}")
+        # Fail CLOSED-ish: an empty list means the caller falls back to its other sources rather
+        # than silently treating every campaign as new.
+        return jsonify({'campaigns': [], 'error': str(e)}), 200
+
+
+@app.route('/api/competitor-targets')
+@cache_result(ttl_seconds=300)
+def competitor_targets():
+    """Competitor evidence: ASIN targets you RUN, plus candidates Auto discovered.
+
+    The Competitor strategy targets products, not keywords, so its cells get this instead of the
+    keyword panel (Ori 2026-07-23). Returns { families: { <family>: {targets:[...], candidates:[...]} } }.
+      targets    — FN_COVERAGE_COMPETITOR_TARGET: what you deliberately target now, with cpc/target_cpc.
+                   ALL targets are returned, not just winners: a family with 8 unprofitable targets
+                   must not render as an empty panel, which would read as "no competitor targeting".
+      candidates — FN_COMPETITOR_CANDIDATE: ASINs Auto/Broad placed against profitably that are NOT
+                   already targeted and are not our own products — i.e. worth promoting.
+    ?window= mirrors /api/daily-workflow so the numbers match the tiles above them.
+    """
+    from collections import defaultdict
+    win_key, win_start, win_end, peak_only = resolve_coverage_window()
+    try:
+        jc = lambda: bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('ws', 'DATE', win_start),
+            bigquery.ScalarQueryParameter('we', 'DATE', win_end),
+            bigquery.ScalarQueryParameter('pk', 'BOOL', peak_only)])
+        fams = defaultdict(lambda: {'targets': [], 'candidates': []})
+        for r in client.query(
+            "SELECT parent_name, target, target_type, clicks, cost, cpc, units, net_roas, target_cpc, is_winner "
+            "FROM `onyga-482313.OI.FN_COVERAGE_COMPETITOR_TARGET`(@ws, @we, @pk) ORDER BY cost DESC",
+            job_config=jc()).result():
+            d = dict(r); fams[d['parent_name']]['targets'].append(d)
+        for r in client.query(
+            "SELECT parent_name, candidate_asin, found_in, clicks, cost, cpc, units, net_roas, target_cpc "
+            "FROM `onyga-482313.OI.FN_COMPETITOR_CANDIDATE`(@ws, @we, @pk) WHERE is_candidate "
+            "ORDER BY net_roas DESC",
+            job_config=jc()).result():
+            d = dict(r); fams[d['parent_name']]['candidates'].append(d)
+        return jsonify({'families': dict(fams), 'window': win_key,
+                        'window_start': str(win_start), 'window_end': str(win_end)})
+    except Exception as e:
+        print(f"Error in competitor_targets: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/competitor-campaign-plan')
+@cache_result(ttl_seconds=300)
+def competitor_campaign_plan():
+    """Competitor candidates grouped into ready-to-create campaigns.
+
+    Read-only pass-through of FN_COMPETITOR_CAMPAIGN_PLAN(win) — the WRITE side of the evidence
+    /api/competitor-targets serves. The function does all the deciding (winner-variation x bid
+    tier grouping, 10-ASIN chunking, suggested bid, campaign naming); this endpoint only nests
+    the flat rows into family -> campaign -> asins so the panel can render the hierarchy without
+    re-deriving anything. Nothing here may add or override a decision.
+
+    Returns { families: { <family>: { variations: [ {variation, variation_label, winner_asin,
+    tiers: [ {tier_code, tier_label, campaigns: [ {…group fields…, asins: [...] } ] } ] } ] } } }.
+
+    ?window= mirrors /api/daily-workflow and /api/competitor-targets so the plan's economics match
+    the tiles and the ASIN evidence above it.
+
+    NOTE no @login_required, deliberately: the dashboard authenticates with a Bearer token via the
+    global before_request, and @login_required would answer a 302 HTML redirect that blows up JSON
+    parsing on the client. Same as /api/coverage and /api/competitor-targets.
+    """
+    win_key, win_start, win_end, peak_only = resolve_coverage_window()
+
+    # Group-level fields are constant across a campaign's ASIN rows — carried on every row by the
+    # function so one read serves both levels. Split here rather than in React (presentation only).
+    GROUP_COLS = (
+        'campaign_key', 'campaign_name', 'sb_campaign_name', 'ad_group_name', 'n_asins',
+        'suggested_bid', 'suggested_bid_sb', 'suggested_bid_raw', 'bid_capped',
+        'group_med_target_cpc', 'group_avg_target_cpc', 'group_max_target_cpc',
+        'daily_budget', 'product_page_pct', 'daily_budget_sb',
+        'group_clicks', 'group_window_cost', 'group_units',
+        'proj_spend', 'proj_margin', 'proj_net_roas',
+    )
+    ASIN_COLS = ('candidate_asin', 'found_in', 'clicks', 'cost', 'cpc', 'units',
+                 'net_roas', 'target_cpc', 'asin_rank')
+    try:
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('ws', 'DATE', win_start),
+            bigquery.ScalarQueryParameter('we', 'DATE', win_end),
+            bigquery.ScalarQueryParameter('pk', 'BOOL', peak_only)])
+        sql = (
+            "SELECT parent_name, winner_variation, variation_label, winner_asin, "
+            "tier_code, tier_label, tier_sort, chunk_index, group_code, "
+            + ", ".join(GROUP_COLS) + ", " + ", ".join(ASIN_COLS) + " "
+            "FROM `onyga-482313.OI.FN_COMPETITOR_CAMPAIGN_PLAN`(@ws, @we, @pk) "
+            "ORDER BY parent_name, winner_variation, tier_sort, chunk_index, asin_rank")
+        rows = [dict(r) for r in client.query(sql, job_config=jc).result()]
+
+        # Nest: family -> variation -> tier -> campaign -> asins. Insertion order is the SQL ORDER BY,
+        # so dicts preserve the intended display order without a second sort.
+        families = {}
+        for r in rows:
+            fam = families.setdefault(r['parent_name'], {'variations': {}})
+            var = fam['variations'].setdefault(r['winner_variation'], {
+                'variation': r['winner_variation'],
+                'variation_label': r['variation_label'],
+                'winner_asin': r['winner_asin'],
+                'tiers': {},
+            })
+            tier = var['tiers'].setdefault(r['tier_code'], {
+                'tier_code': r['tier_code'], 'tier_label': r['tier_label'],
+                'tier_sort': r['tier_sort'], 'campaigns': {},
+            })
+            camp = tier['campaigns'].setdefault(r['campaign_key'], {
+                **{c: r[c] for c in GROUP_COLS},
+                'group_code': r['group_code'], 'chunk_index': r['chunk_index'],
+                'asins': [],
+            })
+            camp['asins'].append({c: r[c] for c in ASIN_COLS})
+
+        # Collapse the keyed dicts to ordered lists for the client.
+        out = {}
+        for fam_name, fam in families.items():
+            out[fam_name] = {'variations': [
+                {**{k: v for k, v in var.items() if k != 'tiers'},
+                 'tiers': [
+                     {**{k: v for k, v in tier.items() if k != 'campaigns'},
+                      'campaigns': list(tier['campaigns'].values())}
+                     for tier in var['tiers'].values()]}
+                for var in fam['variations'].values()]}
+
+        n_campaigns = sum(1 for r in rows if r['asin_rank'] == 1)
+        return jsonify({'families': out, 'n_campaigns': n_campaigns, 'n_asins': len(rows),
+                        'window': win_key, 'window_start': str(win_start),
+                        'window_end': str(win_end)})
+    except Exception as e:
+        print(f"Error in competitor_campaign_plan: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/coverage-keywords')
 @cache_result(ttl_seconds=300)
 def coverage_keywords():
-    """Keyword-level coverage — read-only pass-through of V_COVERAGE_KEYWORD.
+    """Keyword-level coverage — read-only pass-through of FN_COVERAGE_KEYWORD(win).
 
     Backs the lazy-loaded "Keywords" panel under the Intent family cells of the
     coverage cockpit. One row per parent_name x match_type x keyword_text. Groups
     by family, rolls up status counts, and orders keywords so waste (orphan) and
-    the best-fit gaps (missing) surface first. `net_profit` is a directional-only
-    14d-rolling proxy summed over 90d (inflated) — passed through but never used
-    to sort or score; the honest metrics are cost, clicks, research_rank,
-    is_relevant, ads_net_roas.
+    the best-fit gaps (missing) surface first. `net_roas` is the REAL per-keyword
+    ad net ROAS (units_7d × family_gp / cost); `ads_net_roas` is the intent-level
+    aggregate (kept for reference, NOT per-keyword). `net_profit` is a directional
+    14d-rolling proxy (inflated) — passed through but never used to sort or score.
+
+    ?window= today | yesterday | 7d (default) | 30d | 90d | 12mo | peak
+      Same toggle as /api/daily-workflow, so the keyword measures (clicks, cost, cpc,
+      net_roas, target_cpc, profit_state) reflect the SAME period as the tiles above them.
+      Recommendations/relevance are research state and are not windowed.
     """
     from collections import defaultdict
+    win_key, win_start, win_end, peak_only = resolve_coverage_window()
     try:
         sql = ("SELECT parent_name, match_type, keyword_text, is_running, is_enabled, is_recommended, "
-               "clicks, cost, cpc, net_profit, research_rank, overall_fit, is_relevant, ads_net_roas, "
-               "profit_state, intent_key, intent_label, brand_name, is_brand, "
+               "clicks, cost, cpc, net_profit, research_rank, overall_fit, is_relevant, ads_net_roas, net_roas, "
+               "target_cpc, profit_state, intent_key, intent_label, brand_name, is_brand, "
                "rec_type, CAST(last_seen AS STRING) AS last_seen, status "
-               "FROM `onyga-482313.OI.V_COVERAGE_KEYWORD`")
-        rows = [dict(r) for r in client.query(sql).result()]
+               "FROM `onyga-482313.OI.FN_COVERAGE_KEYWORD`(@ws, @we, @pk)")
+        kw_jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter('ws', 'DATE', win_start),
+            bigquery.ScalarQueryParameter('we', 'DATE', win_end),
+            bigquery.ScalarQueryParameter('pk', 'BOOL', peak_only),
+        ])
+        rows = [dict(r) for r in client.query(sql, job_config=kw_jc).result()]
 
         # Per-family intent "suggested?" map (V_COVERAGE_INTENT) so the frontend can
         # split suggested vs not-suggested intents. Keyed parent_name -> intent_key.
@@ -9569,7 +10256,8 @@ def coverage_keywords():
                         'missing_shown': len(missing),
                         'missing_total': sum(1 for k in kws if k['status'] == 'missing'),
                         'intents': fam_intents.get(fam, {})}
-        return jsonify({'families': out})
+        return jsonify({'families': out, 'window': win_key,
+                        'window_start': str(win_start), 'window_end': str(win_end)})
     except Exception as e:
         print(f"Error in coverage_keywords: {e}")
         return jsonify({'error': str(e)}), 500

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '../utils/apiFetch';
+import { useDoQueue } from '../hooks/useDoQueue';
 import { fShort, fR } from '../utils';
 
 interface Tile {
@@ -23,8 +24,14 @@ interface Cell {
   units: number;
   net_roas: number | null;
   campaigns: string | null;
+  // Campaigns that are ENABLED in Amazon but haven't served in 30d. They have no in-window
+  // impressions so they'd otherwise vanish, making a configured cell look 'missing'.
+  n_dark?: number;
+  dark_campaigns?: string | null;
+  is_archived?: boolean;   // UNMAPPED cells only — historical spend, never a to-do
+  state?: string | null;
   suppressed: boolean;
-  status: 'ok' | 'missing' | 'redundant' | 'none' | 'suppressed' | 'unmapped';
+  status: 'ok' | 'missing' | 'redundant' | 'none' | 'suppressed' | 'unmapped' | 'dark';
   reason: string;
   cell_key: string;
   cost: number;
@@ -41,6 +48,7 @@ interface DetailCampaign {
   units: number;
   ad_spend: number;
   net_roas: number | null;
+  net_profit: number | null;
   last_seen: string;
   cpc: number | null;
   profit_state: string;
@@ -51,8 +59,11 @@ interface MonthRow {
   clicks: number;
   spend: number;
   units: number;
-  net_profit: number;
-  net_roas: number;
+  // NULLABLE: both come from SAFE_DIVIDE over cost, so a month with no spend returns NULL —
+  // which is now common, since brand-new campaigns appear with zero metrics (Ori 2026-07-24).
+  // Typed non-null before, so `net_roas.toFixed()` compiled fine and crashed at runtime.
+  net_profit: number | null;
+  net_roas: number | null;
 }
 /** One keyword within a (campaign × month) — the third evidence level under a MonthRow. */
 export interface MonthKw {
@@ -93,6 +104,7 @@ interface WorkflowData {
   cells: Cell[];
   detail: Record<string, DetailCampaign[]>;
   strategy_stats?: Record<string, StrategyStat>;
+  strategy_family_stats?: Record<string, StrategyStat>;  // '<strategy>|<family>'
   family_stats?: Record<string, FamilyStat>;
   window?: string;        // echoed back by /api/daily-workflow (today|yesterday|7d|30d|90d|12mo|peak)
   window_start?: string;  // resolved YYYY-MM-DD (inclusive)
@@ -177,8 +189,11 @@ interface KwMonthsCtx {
 
 const STRAT_LABEL: Record<string, string> = {
   AUTO: 'Auto',
-  INTENT: 'Intent',
-  EXACT_BOOST: 'Exact Boost',
+  BROAD_SP: 'Broad SP',
+  BROAD_VIDEO: 'Broad Video',
+  BROAD_SPOTLIGHT: 'Broad Spotlight',
+  PHRASE: 'Phrase',
+  EXACT: 'Exact',
   COMPETITOR: 'Competitor',
   BRAND_DEFENSE: 'Brand Defense',
   PRODUCT_DEFENSE: 'Product Defense',
@@ -282,10 +297,24 @@ function StatusPill({ c }: { c: Cell }) {
     redundant: { tone: 'text-amber-400', label: `⚠ ${c.n_enabled} campaigns` },
     none: { tone: 'text-faint', label: '– not running' },
     suppressed: { tone: 'text-subtle', label: '⊘ not expected' },
-    unmapped: { tone: 'text-amber-400', label: '⊙ unmapped' },
+    unmapped: { tone: 'text-amber-400', label: c.is_archived ? '⊙ archived' : '⊙ unmapped' },
+    // Configured but not delivering — deliberately NOT 'to do': the campaign exists, so the fix
+    // is budget/bid/eligibility (or archive it), never building a duplicate.
+    dark: { tone: 'text-amber-400', label: '◐ not delivering' },
   };
   const { tone, label } = map[c.status];
-  return <span className={`${tone} font-semibold text-[10px]`}>{label}</span>;
+  return (
+    <span className={`${tone} font-semibold text-[10px]`}>
+      {label}
+      {/* Live cell that ALSO has dark campaigns hanging off it — surfaced so they don't stay invisible. */}
+      {c.status !== 'dark' && (c.n_dark ?? 0) > 0 && (
+        <span className="ml-1 text-amber-400/80 font-normal"
+          title={`Enabled but not delivering (no impressions in 30d): ${c.dark_campaigns ?? ''}`}>
+          · ◐ {c.n_dark} dark
+        </span>
+      )}
+    </span>
+  );
 }
 
 /** At-a-glance profit verdict pill from profit_state. */
@@ -297,6 +326,15 @@ export function ProfitChip({ state }: { state: string }) {
   };
   const m = map[state] ?? map.unknown;
   return <span className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold ${m.cls}`}>{m.label}</span>;
+}
+
+/** Colour a net-ROAS number to AGREE with its ProfitChip. Both key on profit_state, which the
+ *  backend computes against the STRATEGY's own floor (BRAND_DEFENSE = 3.0, DE_COACH_THRESHOLDS),
+ *  not a flat 1.0 — so a 2.31x brand-defense cell no longer prints green beside a red "loss". */
+function roasTone(state: string): string {
+  return state === 'profitable' ? 'text-emerald-400'
+    : state === 'unprofitable' ? 'text-red-400'
+    : 'text-muted';
 }
 
 /** Compact windowed P&L roll-up: "{win}: {profitable}/{total} profit · +$X · −$Y".
@@ -321,7 +359,7 @@ function Metrics({ c }: { c: Cell }) {
   return (
     <span className="inline-flex items-center gap-1 text-[9px] tabular-nums text-muted">
       <span>
-        {c.net_roas != null && <span className={c.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{fR(c.net_roas)}</span>}
+        {c.net_roas != null && <span className={roasTone(c.profit_state)}>{fR(c.net_roas)}</span>}
         {' · '}{fShort(c.clicks)} clk · {fShort(c.impressions)} imp · {c.units}u
         {c.cpc != null && ` · $${c.cpc.toFixed(2)} cpc`}
       </span>
@@ -440,11 +478,14 @@ export function MonthKeywordRow({ k }: { k: MonthKw }) {
 /** One month in a campaign's 12-month drill: "{YYYY-MM} · ${spend} · {clicks} clk · ${cpc} cpc · {units}u · {roas}x · ±$profit".
  *  When `campaignId` + `kwCtx` are supplied the row becomes expandable → the keywords that drove that month. */
 export function MonthRow({ m, campaignId, kwCtx }: { m: MonthRow; campaignId?: string; kwCtx?: MonthKwCtx }) {
-  const roasTone = m.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400';
-  const profTone = m.net_profit >= 0 ? 'text-emerald-400' : 'text-red-400';
-  const prof = m.net_profit >= 0
-    ? `+$${Math.round(m.net_profit)}`
-    : `−$${Math.round(Math.abs(m.net_profit))}`;
+  // A month with no spend has no ROAS and no profit — render '—' rather than a fake 0.00x.
+  const roasTone = m.net_roas == null ? 'text-faint' : m.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400';
+  const profTone = m.net_profit == null ? 'text-faint' : m.net_profit >= 0 ? 'text-emerald-400' : 'text-red-400';
+  const prof = m.net_profit == null
+    ? '—'
+    : m.net_profit >= 0
+      ? `+$${Math.round(m.net_profit)}`
+      : `−$${Math.round(Math.abs(m.net_profit))}`;
   const canExpand = !!campaignId && !!kwCtx;
   const mkey = `${campaignId}|${m.month}`;
   const isOpen = kwCtx?.expanded.has(mkey) ?? false;
@@ -455,8 +496,8 @@ export function MonthRow({ m, campaignId, kwCtx }: { m: MonthRow; campaignId?: s
     <div className="flex items-center gap-1 py-px text-[9px] tabular-nums text-faint">
       {canExpand && <span className="w-2 shrink-0 text-faint">{isOpen ? '▾' : '▸'}</span>}
       <span className="w-[42px] shrink-0 text-muted">{m.month.slice(0, 7)}</span>
-      <span className="whitespace-nowrap">· ${m.spend.toFixed(0)} · {m.clicks} clk · ${(m.clicks > 0 ? m.spend / m.clicks : 0).toFixed(2)} cpc · {m.units}u ·</span>
-      <span className={roasTone}>{m.net_roas.toFixed(2)}x</span>
+      <span className="whitespace-nowrap">· ${(m.spend ?? 0).toFixed(0)} · {m.clicks ?? 0} clk · ${(m.clicks > 0 ? (m.spend ?? 0) / m.clicks : 0).toFixed(2)} cpc · {m.units ?? 0}u ·</span>
+      <span className={roasTone}>{m.net_roas == null ? '—' : `${m.net_roas.toFixed(2)}x`}</span>
       <span>·</span>
       <span className={profTone}>{prof}</span>
       <span>·</span>
@@ -487,6 +528,52 @@ export function MonthRow({ m, campaignId, kwCtx }: { m: MonthRow; campaignId?: s
   );
 }
 
+interface ConfiguredTarget { targeting: string; match_type: string; state: string; bid: number | null; }
+
+/** What a campaign is CONFIGURED to target, for campaigns with no performance yet.
+ *  Every other drill is performance-derived, so a campaign created today drilled to "no monthly
+ *  data" and you could not confirm what it targets (Ori 2026-07-24). Reads the Amazon config
+ *  mirror via /api/campaign-targets — keywords AND product targets, with live bid + state. */
+function ConfiguredTargets({ campaignId }: { campaignId: string }) {
+  const [rows, setRows] = useState<ConfiguredTarget[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch(`/api/campaign-targets?campaign_id=${encodeURIComponent(campaignId)}`);
+        const j = await res.json() as { targets?: ConfiguredTarget[] };
+        if (!cancelled) setRows(j.targets || []);
+      } catch { if (!cancelled) setFailed(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [campaignId]);
+
+  if (failed) return <div className="text-faint text-[9px]">no monthly data</div>;
+  if (rows === null) return <div className="text-faint text-[9px]">loading targets…</div>;
+  if (rows.length === 0) return <div className="text-faint text-[9px]">no monthly data · no targets configured</div>;
+  return (
+    <div>
+      <div className="py-0.5 text-[9px] text-faint">
+        Not delivering yet — showing the {rows.length} target{rows.length === 1 ? '' : 's'} it is configured to run:
+      </div>
+      {rows.map((t, i) => (
+        <div key={`${t.targeting}-${i}`} className="flex items-center gap-1.5 py-px text-[9px] tabular-nums text-faint">
+          <MatchChip mt={t.match_type} />
+          {/* strip Amazon's asin="…" wrapper for display, same as the Do queue */}
+          <span className="truncate text-[10px] text-muted" title={t.targeting}>
+            {t.targeting.replace(/^(asin|asin-expanded|category)="?|"?$/gi, '')}
+          </span>
+          <span className="ml-auto whitespace-nowrap">
+            {t.state !== 'ENABLED' && <span className="text-amber-400">{t.state.toLowerCase()} · </span>}
+            {t.bid != null ? `bid $${t.bid.toFixed(2)}` : 'no bid'}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** One campaign in a cell's evidence list: expander chevron · state badge · name · right-aligned
  *  metrics. Expands to reveal a lazy-loaded 12-month P&L drill (most-recent month first). */
 export function CampaignEvidenceRow({
@@ -512,10 +599,18 @@ export function CampaignEvidenceRow({
         <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[9px] tabular-nums text-faint">
           <span>
             {c.net_roas != null && (
-              <span className={c.net_roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{fR(c.net_roas)}</span>
+              <span className={roasTone(c.profit_state)}>{fR(c.net_roas)}</span>
             )}
-            {c.net_roas != null && ' · '}{fShort(c.clicks)} clk · {c.units}u · ${c.ad_spend.toFixed(0)}
+            {c.net_roas != null && ' · '}{fShort(c.clicks)} clk · {c.units}u · ${c.ad_spend.toFixed(0)} s
             {c.cpc != null && ` · $${c.cpc.toFixed(2)} cpc`}
+            {c.net_profit != null && c.ad_spend > 0 && (
+              <>
+                {' · '}
+                <span className={c.net_profit > 0 ? 'text-emerald-400' : 'text-red-400'}>
+                  {c.net_profit > 0 ? '+' : '−'}${Math.abs(c.net_profit).toFixed(0)} np
+                </span>
+              </>
+            )}
           </span>
           <ProfitChip state={c.profit_state} />
         </span>
@@ -527,7 +622,9 @@ export function CampaignEvidenceRow({
           ) : recentFirst && recentFirst.length > 0 ? (
             recentFirst.map((m, i) => <MonthRow key={`${m.month}-${i}`} m={m} campaignId={c.campaign_id} kwCtx={monthKwCtx} />)
           ) : (
-            <div className="text-faint text-[9px]">no monthly data</div>
+            /* No performance yet (a campaign created today) → show what it is CONFIGURED to
+               target, so the drill still answers "what is in this campaign?". */
+            <ConfiguredTargets campaignId={c.campaign_id} />
           )}
         </div>
       )}
@@ -634,9 +731,281 @@ export function KeywordRow({ k, family, months }: { k: KeywordRowData; family?: 
   );
 }
 
+interface CompTarget {
+  target: string; target_type: string; clicks: number; cost: number;
+  cpc: number | null; units: number; net_roas: number | null; target_cpc: number | null; is_winner: boolean;
+}
+interface CompCandidate {
+  candidate_asin: string; found_in: string; clicks: number; cost: number;
+  cpc: number | null; units: number; net_roas: number | null; target_cpc: number | null;
+}
+interface CompFamily { targets: CompTarget[]; candidates: CompCandidate[]; }
+
+/** One ASIN row — shared by current targets and promotion candidates. */
+function CompRow({ asin, sub, clicks, cost, cpc, units, netRoas, targetCpc }: {
+  asin: string; sub?: string; clicks: number; cost: number;
+  cpc: number | null; units: number; netRoas: number | null; targetCpc: number | null;
+}) {
+  const roas = netRoas ?? 0;
+  return (
+    <div className="flex items-center gap-1.5 border-b border-border-faint py-0.5 last:border-0 text-[10px] tabular-nums text-faint">
+      <span className="shrink-0 rounded bg-white/[0.05] px-1 py-px text-[9px] font-semibold text-muted">ASIN</span>
+      <span className="truncate text-[11px] text-muted" title={asin}>{asin}</span>
+      {sub && <span className="shrink-0 text-[9px] text-faint">via {sub}</span>}
+      <span className="ml-auto whitespace-nowrap">
+        ${Math.round(cost)} · {clicks} clk · ${(cpc ?? 0).toFixed(2)} cpc · {units}u ·{' '}
+        <span className={roas >= 1 ? 'text-emerald-400' : 'text-red-400'}>{roas.toFixed(2)}x</span>
+      </span>
+      {targetCpc != null && (
+        <span
+          className={cpc != null && cpc > targetCpc ? 'text-amber-400' : 'text-emerald-400'}
+          title={cpc != null && cpc > targetCpc
+            ? `Lower bid to ~$${targetCpc.toFixed(2)} to reach the profit floor`
+            : `Room to bid up to ~$${targetCpc.toFixed(2)}`}
+        >tgt ${targetCpc.toFixed(2)}</span>
+      )}
+    </div>
+  );
+}
+
+/** Competitor cells target PRODUCTS, so they get ASIN evidence instead of the keyword panel:
+ *  what you target now, plus ASINs Auto discovered profitably that you don't target yet. */
+export function CompetitorPanel({ family, data, loading }: {
+  family: string | null; data: Record<string, CompFamily> | null; loading: boolean;
+}) {
+  const f = family ? data?.[family] : undefined;
+  if (loading && !data) return <div className="mt-2 text-[10px] text-faint">loading competitor targets…</div>;
+  if (!f || (f.targets.length === 0 && f.candidates.length === 0)) {
+    return <div className="mt-2 text-[10px] text-faint">No competitor ASIN targets in this window.</div>;
+  }
+  const winners = f.targets.filter(t => t.is_winner).length;
+  return (
+    <div className="mt-2 rounded border border-border-faint bg-surface/40 p-2">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="text-[11px] font-semibold text-heading">Competitor ASINs</span>
+        <span className="text-[10px] tabular-nums">
+          <span className="text-muted">{f.targets.length} targeted</span>
+          <span className="text-faint"> · </span>
+          <span className={winners > 0 ? 'text-emerald-400' : 'text-red-400'}>{winners} profitable</span>
+          {f.candidates.length > 0 && (
+            <><span className="text-faint"> · </span>
+              <span className="text-amber-400">{f.candidates.length} to promote</span></>
+          )}
+        </span>
+      </div>
+      {f.targets.length > 0 && (
+        <>
+          <div className="mb-0.5 mt-1 text-[10px] font-semibold text-faint">🎯 Targeted now</div>
+          {f.targets.map((t, i) => (
+            <CompRow key={`${t.target}-${i}`} asin={t.target} clicks={t.clicks} cost={t.cost}
+              cpc={t.cpc} units={t.units} netRoas={t.net_roas} targetCpc={t.target_cpc} />
+          ))}
+        </>
+      )}
+      {f.candidates.length > 0 && (
+        <>
+          <div className="mb-0.5 mt-2 text-[10px] font-semibold text-amber-400">
+            ✨ Discovered by Auto — worth promoting
+          </div>
+          {f.candidates.map((c, i) => (
+            <CompRow key={`${c.candidate_asin}-${i}`} asin={c.candidate_asin} sub={c.found_in}
+              clicks={c.clicks} cost={c.cost} cpc={c.cpc} units={c.units}
+              netRoas={c.net_roas} targetCpc={c.target_cpc} />
+          ))}
+          <div className="mt-1 text-[9px] italic text-faint">
+            Proven on {'>'}=10 clicks only — a promotion shortlist, not certainty. Start nearer the
+            current CPC than the target.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Competitor CAMPAIGN PLAN — the write side of the ASIN evidence above.
+ * Pure presentation: every number, name, band and bid is decided by
+ * FN_COMPETITOR_CAMPAIGN_PLAN and nested by /api/competitor-campaign-plan.
+ * This renders variation → tier → campaign → ASINs and queues bulksheet rows.
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+interface PlanAsin {
+  candidate_asin: string; found_in: string; clicks: number; cost: number;
+  cpc: number | null; units: number; net_roas: number | null; target_cpc: number | null;
+  asin_rank: number;
+}
+interface PlanCampaign {
+  campaign_key: string; campaign_name: string; sb_campaign_name: string; ad_group_name: string;
+  group_code: string; chunk_index: number; n_asins: number;
+  suggested_bid: number; suggested_bid_sb: number; suggested_bid_raw: number; bid_capped: boolean;
+  group_med_target_cpc: number; group_avg_target_cpc: number; group_max_target_cpc: number;
+  daily_budget: number | null; product_page_pct: number | null; daily_budget_sb: number | null;
+  group_clicks: number; group_window_cost: number; group_units: number;
+  proj_spend: number; proj_margin: number; proj_net_roas: number | null;
+  asins: PlanAsin[];
+}
+interface PlanTier { tier_code: string; tier_label: string; tier_sort: number; campaigns: PlanCampaign[]; }
+interface PlanVariation { variation: string; variation_label: string; winner_asin: string; tiers: PlanTier[]; }
+interface PlanFamily { variations: PlanVariation[]; }
+
+/** One planned campaign: collapsed summary row, expands to its ASIN list. */
+function PlanCampaignRow({ camp, variation, winnerAsin, family }: {
+  camp: PlanCampaign; variation: string; winnerAsin: string; family: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const { addItem, hasItem } = useDoQueue();
+  // Queued when every ASIN of the group is already in the queue for this campaign.
+  const queued = camp.asins.every(a => hasItem('', 'ADD_COMPETITOR_TARGET', camp.campaign_name, `asin="${a.candidate_asin}"`));
+  // The SB VIDEO variant is a SEPARATE campaign (sb_campaign_name), queued independently — a family
+  // can run the SP conquest, the video conquest, or both. Deduped on the SB name + action.
+  const queuedSb = camp.asins.every(a => hasItem('', 'ADD_COMPETITOR_TARGET_SB', camp.sb_campaign_name, `asin="${a.candidate_asin}"`));
+
+  // channel = 'SP' → product-target campaign; 'SB' → video campaign on the same targets.
+  const queueChannel = (channel: 'SP' | 'SB') => {
+    const isSB = channel === 'SB';
+    for (const a of camp.asins) {
+      addItem({
+        search_term: '',
+        action: isSB ? 'ADD_COMPETITOR_TARGET_SB' : 'ADD_COMPETITOR_TARGET',
+        // The campaign does not exist yet, so its NAME is its handle all the way through the
+        // bulksheet (Amazon resolves Create rows by the name placed in Campaign ID) — the same
+        // trick the cross-sell / EXACT-boost create paths use.
+        campaign: isSB ? camp.sb_campaign_name : camp.campaign_name,
+        campaign_id: '',
+        ad_group_id: '',
+        ad_group_name: camp.ad_group_name,
+        targeting: `asin="${a.candidate_asin}"`,
+        keyword_id: '',
+        match_type: 'PRODUCT_TARGETING',
+        campaign_type: isSB ? 'SB' : 'SP',
+        product: variation,
+        asin: winnerAsin,          // the variation we advertise ON the competitor's page
+        target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: a.net_roas ?? 0,
+        current_bid: null,
+        recommended_bid: isSB ? camp.suggested_bid_sb : camp.suggested_bid,
+        spend: a.cost, orders: a.units, cpc: a.cpc ?? 0,
+        conv_rate: a.clicks > 0 ? a.units / a.clicks : 0,
+        source: 'COACH',
+      });
+    }
+  };
+
+  return (
+    <div className="border-b border-border-faint last:border-0">
+      <div className="flex items-center gap-1.5 py-0.5">
+        <button onClick={() => setOpen(o => !o)} className="flex flex-1 min-w-0 items-center gap-1.5 text-left">
+          <span className="w-2 shrink-0 text-[9px] text-faint">{open ? '▾' : '▸'}</span>
+          <span className="shrink-0 rounded bg-white/[0.05] px-1 py-px text-[9px] font-semibold text-muted">
+            {camp.group_code}
+          </span>
+          <span className="truncate text-[11px] text-muted" title={camp.campaign_name}>{camp.campaign_name}</span>
+          <span className="ml-auto shrink-0 whitespace-nowrap text-[10px] tabular-nums text-faint">
+            {camp.n_asins} ASIN{camp.n_asins === 1 ? '' : 's'} · bid{' '}
+            <span className={camp.bid_capped ? 'text-amber-400' : 'text-heading'}
+              title={camp.bid_capped
+                ? `Group break-even is $${camp.suggested_bid_raw.toFixed(2)}; capped by the COMPETITOR template's bid ceiling`
+                : `Lowest break-even CPC in the group — every ASIN here still clears the profit floor at this bid`}>
+              ${camp.suggested_bid.toFixed(2)}{camp.bid_capped && ' ▲'}
+            </span>
+            {' · '}~${Math.round(camp.proj_spend)} spend → ${Math.round(camp.proj_margin)} margin{' · '}
+            <span className={(camp.proj_net_roas ?? 0) >= 1 ? 'text-emerald-400' : 'text-red-400'}>
+              {(camp.proj_net_roas ?? 0).toFixed(2)}x
+            </span>
+          </span>
+        </button>
+        <button
+          onClick={() => queueChannel('SP')}
+          disabled={queued}
+          title={queued ? 'SP conquest already in the Do queue' : `Queue the SP product-targeting campaign (${camp.n_asins} target(s)) for the next bulksheet`}
+          className="shrink-0 rounded px-1 py-px text-[9px] font-semibold text-faint hover:text-muted disabled:opacity-40"
+        >
+          {queued ? '✓ queued' : '+ queue'}
+        </button>
+        <button
+          onClick={() => queueChannel('SB')}
+          disabled={queuedSb}
+          title={queuedSb ? 'SB video conquest already in the Do queue' : `Queue the SB VIDEO campaign (${camp.sb_campaign_name}) on the same competitor pages — runs the ${variation} video`}
+          className="shrink-0 rounded px-1 py-px text-[9px] font-semibold text-violet-400/70 hover:text-violet-300 disabled:opacity-40"
+        >
+          {queuedSb ? '✓ video' : '🎬 video'}
+        </button>
+      </div>
+      {open && (
+        <div className="pl-4 pb-1">
+          <div className="py-0.5 text-[9px] text-faint">
+            Ad group “{camp.ad_group_name}” · ${camp.daily_budget ?? '—'}/day
+            {(camp.product_page_pct ?? 0) > 0 && ` · +${camp.product_page_pct}% product page`}
+            {' · '}break-even CPC in group: min ${camp.suggested_bid_raw.toFixed(2)} ·
+            med ${camp.group_med_target_cpc.toFixed(2)} · max ${camp.group_max_target_cpc.toFixed(2)}
+            {' — bidding at the MIN keeps every ASIN above the profit floor.'}
+          </div>
+          {camp.asins.map(a => (
+            <CompRow key={a.candidate_asin} asin={a.candidate_asin} sub={a.found_in}
+              clicks={a.clicks} cost={a.cost} cpc={a.cpc} units={a.units}
+              netRoas={a.net_roas} targetCpc={a.target_cpc} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Variation → tier → campaign tree for one family. */
+export function CompetitorPlanPanel({ family, data, loading }: {
+  family: string | null; data: Record<string, PlanFamily> | null; loading: boolean;
+}) {
+  const f = family ? data?.[family] : undefined;
+  if (loading && !data) return <div className="mt-2 text-[10px] text-faint">building campaign plan…</div>;
+  if (!f || f.variations.length === 0) {
+    return (
+      <div className="mt-2 text-[10px] text-faint">
+        No competitor campaigns to build in this window — nothing cleared the promotion bar.
+      </div>
+    );
+  }
+  const nCampaigns = f.variations.reduce((s, v) => s + v.tiers.reduce((t, x) => t + x.campaigns.length, 0), 0);
+  const nAsins = f.variations.reduce((s, v) => s + v.tiers.reduce((t, x) => t + x.campaigns.reduce((c, y) => c + y.n_asins, 0), 0), 0);
+  return (
+    <div className="mt-2 rounded border border-border-faint bg-surface/40 p-2">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="text-[11px] font-semibold text-heading">🏗 Campaigns to build</span>
+        <span className="text-[10px] tabular-nums text-muted">
+          {nCampaigns} campaign{nCampaigns === 1 ? '' : 's'} · {nAsins} ASINs
+        </span>
+      </div>
+      {f.variations.map(v => (
+        <div key={v.variation} className="mb-1.5 last:mb-0">
+          <div className="text-[10px] font-semibold text-muted">
+            {v.variation_label}
+            <span className="ml-1 font-normal text-faint">
+              — the variation that actually sold on these pages ({v.winner_asin})
+            </span>
+          </div>
+          {v.tiers.map(t => (
+            <div key={t.tier_code} className="pl-2">
+              <div className="mt-0.5 text-[9px] font-semibold uppercase tracking-wide text-faint">{t.tier_label}</div>
+              <div className="pl-1">
+                {t.campaigns.map(c => (
+                  <PlanCampaignRow key={c.campaign_key} camp={c} variation={v.variation}
+                    winnerAsin={v.winner_asin} family={family!} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+      <div className="mt-1 text-[9px] italic text-faint">
+        One campaign per winner variation × bid tier, max 10 ASINs — a campaign shares one bid, so
+        every ASIN in it must want roughly the same one. Queue a campaign, then export the bulksheet
+        from the Do page and upload it to Amazon manually.
+      </div>
+    </div>
+  );
+}
+
 // Strategies whose campaigns target keywords → month rows can drill into keyword breakdowns.
 // AUTO / PRODUCT_DEFENSE are ASIN/auto-targeted (no keywords), so their months stay flat.
-const KEYWORD_STRATEGIES = new Set(['INTENT', 'EXACT_BOOST', 'BRAND_DEFENSE', 'COMPETITOR']);
+const KEYWORD_STRATEGIES = new Set(['BROAD_SP', 'BROAD_VIDEO', 'BROAD_SPOTLIGHT', 'PHRASE', 'EXACT', 'BRAND_DEFENSE']);
 const KW_STATUS_SORT: Record<string, number> = { orphan: 0, missing: 1, running: 2, paused: 3 };
 const MATCH_ORDER: Record<string, number> = { EXACT: 0, PHRASE: 1, BROAD: 2 };
 const OTHER_INTENT = '__other__';
@@ -833,14 +1202,27 @@ function KeywordPanel({ family, data, loading, mode = 'intent', months }: { fami
 
 const STATUS_ORDER: Record<Cell['status'], number> = {
   missing: 0,
-  redundant: 1,
-  ok: 2,
-  none: 3,
-  suppressed: 4,
-  unmapped: 5,
+  dark: 1,          // configured but not delivering — as urgent as missing, listed just after
+  redundant: 2,
+  ok: 3,
+  none: 4,
+  suppressed: 5,
+  unmapped: 6,
 };
 
-function cellLabel(c: Cell): string {
+function cellLabel(c: Cell, byStrategy = false): string {
+  // byStrategy: the family-only view already scopes to one product, so a FAMILY/STORE row titled
+  // with the family name just repeats it. Title it with the strategy and drop the extra hierarchy
+  // level — the row then opens straight to campaigns (Ori 2026-07-23). ASIN-grain (Auto) keeps the
+  // product name, because there a family genuinely has several cells worth telling apart.
+  if (byStrategy) {
+    const st = STRAT_LABEL[c.strategy] ?? c.strategy;
+    if (c.grain === 'FAMILY' || c.grain === 'STORE') return st;
+    // Auto is ASIN-grain, so a family has one cell per variation. Prefix each with the strategy
+    // instead of nesting them under a header — otherwise Auto is the only strategy with a second
+    // level, and the header-less rows that follow it look like they belong to it (Ori 2026-07-23).
+    return `${st} · ${c.product_short_name || c.parent_name || c.asin || '—'}`;
+  }
   if (c.grain === 'STORE') return 'Store';
   if (c.grain === 'FAMILY') return c.parent_name || c.asin || '—';
   return c.product_short_name || c.parent_name || c.asin || '—';
@@ -869,6 +1251,28 @@ export function groupByFamily(cells: Cell[]): FamilyGroup[] {
     const sorted = [...groupCells].sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
     groups.push({
       family,
+      cells: sorted,
+      missingCount: sorted.filter(c => c.status === 'missing').length,
+    });
+  }
+  groups.sort((a, b) => b.missingCount - a.missingCount || a.family.localeCompare(b.family));
+  return groups;
+}
+
+/** Same shape as groupByFamily, but grouped by STRATEGY — used when a family is selected with
+ *  no strategy tile open, so "pick a product" shows everything that product runs, across strategies. */
+export function groupByStrategy(cells: Cell[]): FamilyGroup[] {
+  const byStrategy = new Map<string, Cell[]>();
+  for (const c of cells) {
+    const arr = byStrategy.get(c.strategy);
+    if (arr) arr.push(c);
+    else byStrategy.set(c.strategy, [c]);
+  }
+  const groups: FamilyGroup[] = [];
+  for (const [strategy, groupCells] of byStrategy) {
+    const sorted = [...groupCells].sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
+    groups.push({
+      family: STRAT_LABEL[strategy] ?? strategy,
       cells: sorted,
       missingCount: sorted.filter(c => c.status === 'missing').length,
     });
@@ -969,6 +1373,11 @@ export function CoveragePage() {
   const [mapLoading, setMapLoading] = useState(false);
   const [mapPending, setMapPending] = useState<Set<string>>(new Set()); // campaign_ids of in-flight assigns
   const [onlyUnmapped, setOnlyUnmapped] = useState(true); // modal filter toggle (default: only unmapped)
+  const [compData, setCompData] = useState<Record<string, CompFamily> | null>(null);
+  const [compLoading, setCompLoading] = useState(false);
+  const [planData, setPlanData] = useState<Record<string, PlanFamily> | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [wfRefreshing, setWfRefreshing] = useState(false); // window switch in flight — numbers on screen are stale
   const [monthsData, setMonthsData] = useState<Record<string, MonthRow[]> | null>(null);
   const [monthsLoading, setMonthsLoading] = useState(false);
   const [openCampaigns, setOpenCampaigns] = useState<Set<string>>(new Set()); // expanded campaign_ids
@@ -1067,6 +1476,30 @@ export function CoveragePage() {
       .finally(() => setKwLoading(false));
   }
 
+  /** Competitor ASIN targets + Auto-discovered candidates; window-scoped like the keyword panel. */
+  function fetchCompetitor(w: CovWindow) {
+    setCompLoading(true);
+    apiFetch(`/api/competitor-targets?window=${w}`)
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(json => setCompData(json.families ?? {}))
+      .catch(() => setCompData({}))
+      .finally(() => setCompLoading(false));
+  }
+  /** Competitor campaigns to BUILD — same window as the evidence it is derived from. */
+  function fetchCompetitorPlan(w: CovWindow) {
+    setPlanLoading(true);
+    apiFetch(`/api/competitor-campaign-plan?window=${w}`)
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(json => setPlanData(json.families ?? {}))
+      .catch(() => setPlanData({}))
+      .finally(() => setPlanLoading(false));
+  }
+  function ensureCompetitor() {
+    if (planData === null && !planLoading) fetchCompetitorPlan(win);
+    if (compData !== null || compLoading) return;
+    fetchCompetitor(win);
+  }
+
   function ensureKeywords() {
     if (kwData !== null || kwLoading) return;
     fetchKeywords(win);
@@ -1137,10 +1570,12 @@ export function CoveragePage() {
     // Re-fetch whenever the window changes. Keep the old data on screen until the new
     // payload lands (no flip to the "Scanning…" splash) so switching windows feels instant.
     let cancelled = false;
+    setWfRefreshing(true);
     apiFetch(wfUrl)
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(d => { if (!cancelled) (d.error ? setErr(d.error) : setData(d)); })
-      .catch(e => { if (!cancelled) setErr(String(e)); });
+      .catch(e => { if (!cancelled) setErr(String(e)); })
+      .finally(() => { if (!cancelled) setWfRefreshing(false); });
     return () => { cancelled = true; };
   }, [wfUrl]);
 
@@ -1148,6 +1583,8 @@ export function CoveragePage() {
     // Keyword measures are window-scoped too, so the panel has to follow the toggle.
     // It's lazy-loaded, so only refetch when it's already on screen — otherwise
     // ensureKeywords() will fetch it with the current window on first expand.
+    if (compData !== null) fetchCompetitor(win);
+    if (planData !== null) fetchCompetitorPlan(win);
     if (kwData === null) return;
     fetchKeywords(win);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1161,8 +1598,40 @@ export function CoveragePage() {
     if (selectedFamily === STORE_KEY) return c.parent_name === null;
     return c.parent_name === selectedFamily;
   };
-  const openGroups = open ? groupByFamily(data.cells.filter(c => c.strategy === open && familyMatch(c))) : [];
+  // ARCHIVED campaigns are history, not work — they'd otherwise flood the UNMAPPED drill in wide
+  // windows (42 of 44 at 12mo). Keep them out of the actionable list; their spend still counts in
+  // the P&L rollups, and the count is shown below so nothing is silently hidden.
+  // Picking a product/family with NO strategy open shows EVERYTHING that family runs, across all
+  // strategies (Ori 2026-07-23) — previously this rendered nothing until you also clicked a tile.
+  const familyOnly = !open && selectedFamily !== null;
+  const openScope = open
+    ? data.cells.filter(c => c.strategy === open && familyMatch(c))
+    : familyOnly ? data.cells.filter(familyMatch) : [];
+  const archivedCount = openScope.filter(c => c.is_archived).length;
+  const archivedSpend = openScope.filter(c => c.is_archived).reduce((n, c) => n + (c.cost || 0), 0);
+  const openGroups = familyOnly
+    ? groupByStrategy(openScope.filter(c => !c.is_archived))
+    : groupByFamily(openScope.filter(c => !c.is_archived));
   const openCellCount = openGroups.reduce((n, g) => n + g.cells.length, 0);
+  // Tiles must respect the family filter: picking Bottle should show Bottle's coverage counts and
+  // Bottle's P&L on every strategy tile, not the all-families totals (Ori 2026-07-23).
+  const tilesScoped: Record<string, Tile> = selectedFamily === null
+    ? data.tiles
+    : Object.fromEntries(data.strategies.map(st => {
+        const cs = data.cells.filter(c => c.strategy === st && familyMatch(c) && !c.is_archived);
+        return [st, {
+          defined:       cs.filter(c => c.status === 'ok').length,
+          missing:       cs.filter(c => c.status === 'missing').length,
+          redundant:     cs.filter(c => c.status === 'redundant').length,
+          informational: cs.filter(c => c.status === 'none').length,
+          suppressed:    cs.filter(c => c.status === 'suppressed').length,
+        } as Tile];
+      }));
+  /** Per-strategy P&L for the current family scope (falls back to all-families when ALL). */
+  const statFor = (st: string): StrategyStat | undefined =>
+    selectedFamily === null
+      ? data.strategy_stats?.[st]
+      : data.strategy_family_stats?.[`${st}|${selectedFamily}`];
   const familyEntries = buildFamilyEntries(data.family_stats);
   const kwMonthsCtx: KwMonthsCtx = {
     data: kwMonthsData,
@@ -1197,6 +1666,11 @@ export function CoveragePage() {
         <span className="text-[11px] font-semibold text-muted">Time window</span>
         <CovWindowToggle win={win} onPick={pickWin} />
         <span className="text-[11px] text-faint">
+          {wfRefreshing && (
+            <span className="mr-2 rounded bg-amber-500/15 px-1.5 py-px text-[10px] font-semibold text-amber-400">
+              updating… showing previous window
+            </span>
+          )}
           {data.window_start && data.window_end
             ? (data.window_start === data.window_end
                 ? data.window_start
@@ -1226,8 +1700,8 @@ export function CoveragePage() {
               <StrategyTile
                 key={s}
                 name={s}
-                t={data.tiles[s] ?? { defined: 0, missing: 0, redundant: 0, informational: 0, suppressed: 0 }}
-                stat={data.strategy_stats?.[s]}
+                t={tilesScoped[s] ?? { defined: 0, missing: 0, redundant: 0, informational: 0, suppressed: 0 }}
+                stat={statFor(s)}
                 open={open === s}
                 onOpen={() => setOpen(o => (o === s ? null : s))}
                 win={winShort(win)}
@@ -1235,28 +1709,54 @@ export function CoveragePage() {
             ))}
           </div>
 
-      {open && (
-        <div className="mt-3 border border-border/40 rounded-lg bg-white/[0.01] max-w-[860px]">
+      {/* Stale-window guard: the toggle label flips instantly but the numbers come from the payload,
+          which takes seconds to refetch. Dimming them (plus the "updating…" chip above) makes it
+          obvious the figures below still belong to the PREVIOUS window — otherwise switching to
+          Yesterday and seeing 7-day numbers reads as a broken filter (Ori 2026-07-23). */}
+      {(open || familyOnly) && (
+        <div className={`mt-3 border border-border/40 rounded-lg bg-white/[0.01] max-w-[860px] transition-opacity ${wfRefreshing ? 'opacity-40' : ''}`}>
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/20 bg-white/[0.02]">
             <div className="text-sm font-semibold">
-              {STRAT_LABEL[open] ?? open}
-              <span className="text-faint text-xs ml-2 font-normal">mapping — done vs to do</span>
+              {open
+                ? (STRAT_LABEL[open] ?? open)
+                : (selectedFamily === STORE_KEY ? 'Store' : selectedFamily)}
+              <span className="text-faint text-xs ml-2 font-normal">
+                {open ? 'mapping — done vs to do' : 'all strategies — done vs to do'}
+              </span>
             </div>
-            <button onClick={() => setOpen(null)} className="text-faint hover:text-text text-lg leading-none px-1" title="Collapse">×</button>
+            <button
+              onClick={() => { if (open) setOpen(null); else setSelectedFamily(null); }}
+              className="text-faint hover:text-text text-lg leading-none px-1" title="Collapse">×</button>
           </div>
 
           <div className="p-4 text-xs">
+            {/* Never silently truncate: say what was held back and why. */}
+            {archivedCount > 0 && (
+              <div className="mb-2 rounded border border-border-faint bg-white/[0.02] px-2 py-1 text-[10px] text-faint">
+                ⊙ {archivedCount} archived campaign{archivedCount === 1 ? '' : 's'} ran in this window
+                {archivedSpend > 0 && <> (${Math.round(archivedSpend).toLocaleString()} spend)</>} — hidden
+                from the to-do list because they're closed in Amazon. Their spend still counts in the P&amp;L above.
+              </div>
+            )}
             {openCellCount === 0 ? (
-              <div className="text-faint text-[10px]">No coverage cells for this strategy.</div>
+              <div className="text-faint text-[10px]">
+                {archivedCount > 0
+                  ? `Nothing actionable for ${open ? 'this strategy' : 'this product'} in this window — only archived campaigns.`
+                  : `No coverage cells for ${open ? 'this strategy' : 'this product'}.`}
+              </div>
             ) : (
               openGroups.map(group => (
                 <div key={group.family} className="mb-2 last:mb-0">
-                  <div className="flex items-center gap-1.5 px-0.5 pb-0.5 pt-1">
-                    <span className="text-muted uppercase text-[10px] font-semibold tracking-wide">{group.family}</span>
-                    {group.missingCount > 0 && (
-                      <span className="text-red-400 text-[10px] font-semibold">{group.missingCount} to do</span>
-                    )}
-                  </div>
+                  {/* In the family view a single family-grain cell IS the strategy row, so the
+                      group header would just repeat it. Auto (many ASIN cells) still gets one. */}
+                  {!familyOnly && (
+                    <div className="flex items-center gap-1.5 px-0.5 pb-0.5 pt-1">
+                      <span className="text-muted uppercase text-[10px] font-semibold tracking-wide">{group.family}</span>
+                      {group.missingCount > 0 && (
+                        <span className="text-red-400 text-[10px] font-semibold">{group.missingCount} to do</span>
+                      )}
+                    </div>
+                  )}
                   {group.cells.map((c, i) => {
                     const isOpen = openCell === c.cell_key;
                     const campaigns = data.detail?.[c.cell_key];
@@ -1267,12 +1767,13 @@ export function CoveragePage() {
                           <button
                             onClick={() => {
                               setOpenCell(k => (k === c.cell_key ? null : c.cell_key));
-                              if (c.strategy === 'INTENT' || c.strategy === 'EXACT_BOOST' || c.strategy === 'BRAND_DEFENSE') ensureKeywords();
+                              if (KEYWORD_STRATEGIES.has(c.strategy)) ensureKeywords();
+                              if (c.strategy === 'COMPETITOR') ensureCompetitor();
                             }}
                             className="flex flex-1 min-w-0 items-center gap-2 text-left"
                           >
                             <span className="text-faint text-[9px] w-2 shrink-0">{isOpen ? '▾' : '▸'}</span>
-                            <span className="text-heading truncate max-w-[200px]" title={c.asin ?? undefined}>{cellLabel(c)}</span>
+                            <span className="text-heading truncate max-w-[200px]" title={c.asin ?? undefined}>{cellLabel(c, familyOnly)}</span>
                             <span className="ml-auto"><Metrics c={c} /></span>
                             <span className="w-[100px] text-right"><StatusPill c={c} /></span>
                           </button>
@@ -1299,9 +1800,11 @@ export function CoveragePage() {
                         </div>
                         {isOpen && (
                           <div className="pl-4 pb-2 pt-0.5">
-                            {c.reason && (
-                              <div className="text-muted italic text-[11px] mb-1.5">💡 {c.reason}</div>
-                            )}
+                            {/* The `reason` line was removed as redundant (Ori 2026-07-23): the row's
+                                own status pill already says "⚠ 2 campaigns" / "✗ to do", and the
+                                campaigns it described are listed directly below. It also leaked the
+                                raw enum (BROAD_SPOTLIGHT). `reason` still comes back on the payload
+                                for anything that wants to explain a cell elsewhere. */}
                             {campaigns && campaigns.length > 0 ? (
                               campaigns.map((cmp, j) => (
                                 <CampaignEvidenceRow
@@ -1317,8 +1820,14 @@ export function CoveragePage() {
                             ) : (
                               <div className="text-faint text-[10px]">no campaigns</div>
                             )}
-                            {(c.strategy === 'INTENT' || c.strategy === 'EXACT_BOOST') && (
+                            {(c.strategy !== 'BRAND_DEFENSE' && KEYWORD_STRATEGIES.has(c.strategy)) && (
                               <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} mode="intent" months={kwMonthsCtx} />
+                            )}
+                            {c.strategy === 'COMPETITOR' && (
+                              <>
+                                <CompetitorPanel family={c.parent_name} data={compData} loading={compLoading} />
+                                <CompetitorPlanPanel family={c.parent_name} data={planData} loading={planLoading} />
+                              </>
                             )}
                             {c.strategy === 'BRAND_DEFENSE' && (
                               <KeywordPanel family={c.parent_name} data={kwData} loading={kwLoading} mode="brand" months={kwMonthsCtx} />

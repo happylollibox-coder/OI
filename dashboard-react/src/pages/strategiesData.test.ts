@@ -11,15 +11,15 @@ const mk = (id: string, strat: string, spend: number, sales: number, active = tr
 
 describe('groupByStrategy', () => {
   it('aggregates spend + net ROAS per strategy and counts active campaigns', () => {
-    const g = groupByStrategy([mk('a','AUTO',100,150), mk('b','AUTO',50,0,false), mk('c','INTENT',200,400)]);
+    const g = groupByStrategy([mk('a','AUTO',100,150), mk('b','AUTO',50,0,false), mk('c','BROAD_SP',200,400)]);
     const auto = g.find(s => s.id === 'AUTO')!;
     expect(auto.totalSpend).toBe(150);
     expect(auto.activeCount).toBe(1);
     expect(auto.avgRoas).toBeCloseTo((150 - 150) / 150); // (sales-spend)/spend = 0
-    expect(g.map(s => s.id)).toContain('INTENT');
+    expect(g.map(s => s.id)).toContain('BROAD_SP');
   });
   it('places UNCLASSIFIED last regardless of spend', () => {
-    const g = groupByStrategy([mk('u','UNCLASSIFIED',9999,0), mk('c','INTENT',1,0)]);
+    const g = groupByStrategy([mk('u','UNCLASSIFIED',9999,0), mk('c','BROAD_SP',1,0)]);
     expect(g[g.length - 1].id).toBe('UNCLASSIFIED');
   });
 });

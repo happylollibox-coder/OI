@@ -1,6 +1,6 @@
 import type { StrategyCampaignRow } from '../types';
 
-export const STRATEGY_ORDER = ['EXACT_BOOST','INTENT','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE','AUTO','UNCLASSIFIED'];
+export const STRATEGY_ORDER = ['EXACT','PHRASE','BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE','AUTO','UNCLASSIFIED'];
 
 export interface StrategyGroup {
   id: string;

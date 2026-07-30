@@ -8,12 +8,14 @@ import { termGrain, termGrainShort } from '../coachActuals';
 import { useDoQueue, type DoQueueItem } from '../hooks/useDoQueue';
 import { mergeUpdateRows } from './bulksheetDedup';
 import { cubeLoad } from '../hooks/useCubeData';
+import { apiFetch } from '../utils/apiFetch';
+import { buildCompetitorSpRows, buildCompetitorSbRows, type CompetitorItem, type CompetitorCtx } from './competitorBulksheet';
 import { DecisionScorecard } from '../components/DecisionScorecard';
 import { Copy, Check, Trash2, X, ChevronDown, ChevronRight, CheckCircle2, RotateCcw, ExternalLink, Download, Upload, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { DashboardData } from '../types';
 
 /* ─── Action ordering: urgent first ─── */
-const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'STOP_SEASONAL', 'CAMPAIGN_PAUSE', 'NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT', 'REDUCE_BID', 'RESTORE_PRE_PEAK', 'REDUCE_TO_BASELINE', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'COOLDOWN_MONITOR', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'ADD_CROSS_SELL_TARGET', 'ADD_PRODUCT_AD', 'START_TERM', 'GUARDIAN_BUDGET_INCREASE', 'GUARDIAN_BUDGET_DECREASE', 'GUARDIAN_BUDGET_CONTAIN', 'DEFENSE_BUDGET_FLOOR', 'RESTORE_BUDGET_PRE_PEAK', 'BLITZ_BUDGET_INCREASE', 'BLITZ_BUDGET_DECREASE', 'MONITOR_TARGET', 'KEEP', 'MONITOR'];
+const ACTION_ORDER = ['STOP_TERM', 'STOP_TARGET', 'STOP_SEASONAL', 'CAMPAIGN_PAUSE', 'NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT', 'REDUCE_BID', 'RESTORE_PRE_PEAK', 'REDUCE_TO_BASELINE', 'FIX_HERO', 'SWITCH_HERO', 'KEEP_TARGET', 'COOLDOWN_MONITOR', 'INCREASE_BID', 'PROMOTE_TO_EXACT', 'ADD_CROSS_SELL_TARGET', 'ADD_COMPETITOR_TARGET', 'ADD_COMPETITOR_TARGET_SB', 'ADD_PRODUCT_AD', 'START_TERM', 'GUARDIAN_BUDGET_INCREASE', 'GUARDIAN_BUDGET_DECREASE', 'GUARDIAN_BUDGET_CONTAIN', 'DEFENSE_BUDGET_FLOOR', 'RESTORE_BUDGET_PRE_PEAK', 'BLITZ_BUDGET_INCREASE', 'BLITZ_BUDGET_DECREASE', 'MONITOR_TARGET', 'KEEP', 'MONITOR'];
 
 const ACTION_COLORS: Record<string, string> = {
   STOP_TERM: '#ef4444', STOP_TARGET: '#ef4444', STOP_SEASONAL: '#ef4444',
@@ -21,7 +23,7 @@ const ACTION_COLORS: Record<string, string> = {
   REDUCE_BID: '#f59e0b', RESTORE_PRE_PEAK: '#ef4444', REDUCE_TO_BASELINE: '#f59e0b',
   FIX_HERO: '#f59e0b', SWITCH_HERO: '#f59e0b',
   KEEP_TARGET: '#22c55e', INCREASE_BID: '#22c55e', COOLDOWN_MONITOR: '#6b7280',
-  PROMOTE_TO_EXACT: '#3b82f6', ADD_CROSS_SELL_TARGET: '#3b82f6', ADD_PRODUCT_AD: '#3b82f6', START_TERM: '#a855f7',
+  PROMOTE_TO_EXACT: '#3b82f6', ADD_CROSS_SELL_TARGET: '#3b82f6', ADD_COMPETITOR_TARGET: '#3b82f6', ADD_COMPETITOR_TARGET_SB: '#8b5cf6', ADD_PRODUCT_AD: '#3b82f6', START_TERM: '#a855f7',
   GUARDIAN_BUDGET_INCREASE: '#22c55e', BLITZ_BUDGET_INCREASE: '#22c55e',
   GUARDIAN_BUDGET_DECREASE: '#ef4444', BLITZ_BUDGET_DECREASE: '#f59e0b',
   GUARDIAN_BUDGET_CONTAIN: '#ef4444', DEFENSE_BUDGET_FLOOR: '#3b82f6', RESTORE_BUDGET_PRE_PEAK: '#f59e0b', CAMPAIGN_PAUSE: '#ef4444',
@@ -33,6 +35,17 @@ const ACTION_COLORS: Record<string, string> = {
 
 /* ─── Actions that show TARGETS (keywords) instead of search terms ─── */
 const TARGET_LEVEL_ACTIONS = new Set(['INCREASE_BID', 'REDUCE_BID', 'STOP_TARGET', 'KEEP_TARGET', 'MONITOR_TARGET', 'SCALE_UP', 'BOOST', 'COOLDOWN_MONITOR', 'REDUCE_TO_BASELINE', 'RESTORE_PRE_PEAK', 'NEGATE_BOOST_SIMILAR_EXACT']);
+
+/* ─── Actions whose instruction is CAMPAIGN-level, not row-level ───
+   The conquest plan queues one row per competitor ASIN, but all rows in a group create a
+   SINGLE campaign (that is what the export emits: one Campaign row + N Product Targeting
+   rows). Repeating the create-campaign instruction on every row read as N campaigns.
+   These render the instruction once in the group header; rows carry only their own ASIN. */
+const CAMPAIGN_LEVEL_ACTIONS = new Set(['ADD_COMPETITOR_TARGET', 'ADD_COMPETITOR_TARGET_SB']);
+
+/* Amazon wraps product targets as `asin="B0..."` / `category="..."`. Strip for display. */
+const targetLabel = (targeting?: string | null) =>
+  (targeting || '').replace(/^(asin|asin-expanded|category)="?|"?$/gi, '').trim();
 
 interface ActionGroup {
   action: string;
@@ -56,6 +69,15 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
   const [copiedCampaign, setCopiedCampaign] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
   const [showUploaded, setShowUploaded] = useState(false);
+  // Two-click confirm for destructive/bulk actions. window.confirm() is suppressed in the
+  // embedded browser (returns false with no dialog), so a confirm()-gated button silently
+  // no-ops (Ori 2026-07-23: "Uploaded to Amazon" did nothing). First click arms the action and
+  // relabels the button; a second click within 3s runs it. No native dialog involved.
+  const [armed, setArmed] = useState<string | null>(null);
+  const armedClick = (key: string, run: () => void) => {
+    if (armed === key) { setArmed(null); run(); }
+    else { setArmed(key); setTimeout(() => setArmed(a => (a === key ? null : a)), 3000); }
+  };
 
   /* ─── Auto-cleanup: remove uploaded items when no longer in data.actions ─── */
   useEffect(() => {
@@ -274,8 +296,8 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
     if (item.action === 'PROMOTE_TO_EXACT') {
       // Mirror the export: all values come from the EXACT_BOOST template, not hardcoded.
       const tmpls = data.strategy_campaign_templates || [];
-      const spTmpl = tmpls.find(t => t.strategy_id === 'EXACT_BOOST' && t.ad_format === 'SP');
-      const videoTmpl = tmpls.find(t => t.strategy_id === 'EXACT_BOOST' && t.ad_format === 'SB_VIDEO');
+      const spTmpl = tmpls.find(t => t.strategy_id === 'EXACT' && t.ad_format === 'SP');
+      const videoTmpl = tmpls.find(t => t.strategy_id === 'EXACT' && t.ad_format === 'SB_VIDEO');
       const bidMin = spTmpl?.bid_min ?? 0.5;
       const bidMax = spTmpl?.bid_max ?? 2.0;
       const bid = item.cpc ? `$${Math.min(bidMax, Math.max(bidMin, +(item.cpc * 1.1).toFixed(2))).toFixed(2)}` : `$${bidMin.toFixed(2)}`;
@@ -332,6 +354,43 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       };
     }
 
+    if (item.action === 'ADD_COMPETITOR_TARGET') {
+      // Mirror the export exactly: the plan decided the name, group and bid; the template
+      // supplies budget + placement. Nothing is computed here.
+      const tmpls = data.strategy_campaign_templates || [];
+      const spTmpl = tmpls.find(t => t.strategy_id === 'COMPETITOR' && t.ad_format === 'SP');
+      const bid = item.recommended_bid != null ? `$${item.recommended_bid.toFixed(2)}` : '—';
+      const budget = spTmpl?.daily_budget ?? null;
+      // Campaign-level (see CAMPAIGN_LEVEL_ACTIONS): rendered once per group, so it names no
+      // single competitor ASIN — the targeted ASINs are the rows underneath.
+      return {
+        icon: '⚔️',
+        lines: [
+          `Create SP product-targeting campaign (COMPETITOR) — ${campName}`,
+          `Advertise ${item.product} on the competitor product pages listed below`,
+          `  Bid: ${bid} · Budget: ${budget != null ? `$${budget}/day` : '—'} · product-page boost`,
+        ],
+      };
+    }
+
+    if (item.action === 'ADD_COMPETITOR_TARGET_SB') {
+      // SB Video conquest. The plan already decided the campaign, group and bid; the SB_VIDEO
+      // template supplies budget. The video creative is the family-grain asset from
+      // DIM_PRODUCT_CREATIVES (Ori 2026-07-23: use the LolliME family video for Pink).
+      const tmpls = data.strategy_campaign_templates || [];
+      const sbTmpl = tmpls.find(t => t.strategy_id === 'COMPETITOR' && t.ad_format === 'SB_VIDEO');
+      const bid = item.recommended_bid != null ? `$${item.recommended_bid.toFixed(2)}` : '—';
+      const budget = sbTmpl?.daily_budget ?? null;
+      return {
+        icon: '🎬',
+        lines: [
+          `Create SB VIDEO conquest campaign (COMPETITOR) — ${campName}`,
+          `Run the ${item.product} video on the competitor product pages listed below`,
+          `  Bid: ${bid} · Budget: ${budget != null ? `$${budget}/day` : '—'} · video creative`,
+        ],
+      };
+    }
+
     if (item.action === 'START_TERM' || item.action === 'START') {
       return {
         icon: '✨',
@@ -368,6 +427,9 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
   const renderSearchTermRow = (item: DoQueueItem, indent = false) => {
     const instruction = getActionInstruction(item);
     const grain = (item.search_term || item.targeting) ? termGrain(item) : null;
+    // Campaign-level actions show their instruction once in the group header (see
+    // CAMPAIGN_LEVEL_ACTIONS), so the row is just the target it adds.
+    const campaignScoped = CAMPAIGN_LEVEL_ACTIONS.has(item.action);
     return (
     <div key={item.id} className={indent ? 'pl-8' : ''}>
       <div
@@ -386,7 +448,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           title="View in Actions page"
         >
           {grain && <span className="text-[8px] font-mono uppercase tracking-wider text-faint shrink-0 px-1 py-px rounded border border-border" title={grain}>{termGrainShort(grain)}</span>}
-          {item.search_term || item.campaign || '--'}
+          {item.search_term || targetLabel(item.targeting) || item.campaign || '--'}
           <ExternalLink size={9} className="opacity-0 group-hover:opacity-50" />
         </button>
         <div className="flex-1" />
@@ -402,17 +464,19 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           <X size={11} />
         </button>
       </div>
-      {/* Action instruction */}
-      <div className={`px-4 pb-2 ${indent ? '' : 'pl-12'}`}>
-        <div className="flex items-start gap-1.5 text-[10px] text-subtle/70 font-mono leading-relaxed bg-inset rounded-md px-2.5 py-1.5 border border-border-faint">
-          <span className="shrink-0">{instruction.icon}</span>
-          <div className="flex flex-col gap-px">
-            {instruction.lines.map((line, i) => (
-              <span key={i} className={line.startsWith('  ') ? 'pl-3 text-faint' : ''}>{line}</span>
-            ))}
+      {/* Action instruction — omitted when it belongs to the campaign, not the row */}
+      {!campaignScoped && (
+        <div className={`px-4 pb-2 ${indent ? '' : 'pl-12'}`}>
+          <div className="flex items-start gap-1.5 text-[10px] text-subtle/70 font-mono leading-relaxed bg-inset rounded-md px-2.5 py-1.5 border border-border-faint">
+            <span className="shrink-0">{instruction.icon}</span>
+            <div className="flex flex-col gap-px">
+              {instruction.lines.map((line, i) => (
+                <span key={i} className={line.startsWith('  ') ? 'pl-3 text-faint' : ''}>{line}</span>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
     );
   };
@@ -444,6 +508,33 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         if (Object.keys(agOverride).length) doQueue.backfillAdGroups(agOverride); // persist for queue UI / next time
       } catch { /* cube unreachable — fall through; bid rows below still get item.ad_group_id */ }
     }
+
+    // ═══ Campaigns that already exist on Amazon, fetched FRESH at export time ═══
+    // The dedup guard below also reads ads_7d / coach_campaigns, but those only know a campaign
+    // once it has reported spend (1-2 days). /api/live-campaigns reads campaign_history, which
+    // carries a brand-new campaign within minutes — closing the window in which a re-export would
+    // emit duplicate Create rows for a campaign uploaded earlier the same day (Ori 2026-07-23).
+    // Fetched here, not from `data`, so it reflects the moment of export, not page load.
+    let liveCampaignNames: string[] = [];
+    // name (UPPERCASED) -> real Amazon ids. Needed because a bulksheet may use a campaign NAME in
+    // the ID columns ONLY when its Create row is in the same sheet; for an already-live campaign
+    // the child rows must carry the real numeric ids or Amazon rejects them "Missing Parent ID"
+    // and fails the WHOLE sheet (Ori 2026-07-24: 37 records, 0 applied).
+    const liveIds = new Map<string, { campaign_id: string; ad_group_id: string }>();
+    try {
+      const res = await apiFetch('/api/live-campaigns');
+      if (res.ok) {
+        const j = await res.json() as { campaigns?: { name?: string; campaign_id?: string; ad_group_id?: string }[] };
+        for (const c of (j.campaigns || [])) {
+          if (!c?.name) continue;
+          liveCampaignNames.push(c.name);
+          if (c.campaign_id) {
+            liveIds.set(c.name.trim().toUpperCase(),
+              { campaign_id: String(c.campaign_id), ad_group_id: String(c.ad_group_id || '') });
+          }
+        }
+      }
+    } catch { /* Flask unreachable — fall back to the performance-derived sources below */ }
 
     import('xlsx').then((XLSX) => {
       // ═══ Brand Asset Config (fetched dynamically from DIM_PRODUCT_CREATIVES via Cube.js) ═══
@@ -591,6 +682,9 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       for (const c of (data.coach_campaigns || [])) {
         if (c.campaign_name) existingCampaigns.add(normCamp(c.campaign_name));
       }
+      // Live from campaign_history (see the fetch above) — the only source that knows about a
+      // campaign created today, before it has reported any spend.
+      for (const n of liveCampaignNames) existingCampaigns.add(normCamp(n));
       // Returns true only if this campaign is new (not already live AND not already
       // queued earlier in this export). Registers the name so later rows dedup too.
       const createdInExport = new Set<string>();
@@ -600,6 +694,25 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         createdInExport.add(key);
         return true;
       };
+
+      // ═══ Shared context for the (tested) competitor row builders ═══
+      // isLiveOnAmazon must reflect ONLY campaigns that exist on Amazon — never one created by an
+      // earlier row of this same export, or every target after the first would be dropped.
+      const scaffoldedCampaigns = new Set<string>();
+      const competitorCtx = (): CompetitorCtx => ({
+        spTemplate: findTemplate('COMPETITOR', 'SP') ?? null,
+        sbTemplate: findTemplate('COMPETITOR', 'SB_VIDEO') ?? null,
+        liveIds,
+        isLiveOnAmazon: (name: string) => existingCampaigns.has(normCamp(name)),
+        scaffolded: scaffoldedCampaigns,
+        videoAssetFor: (prefix: string) => VIDEO_MEDIA_IDS[prefix] || '',
+        portfolioFor: (prefix: string) => PORTFOLIO_MAP[prefix] || '',
+        skuFor: (asin: string) => skuByAsin.get(asin) || '',
+        brandEntityId: BRAND_ENTITY_ID,
+        brandName: BRAND_NAME,
+        startDate: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
+        formatPTExpression,
+      });
 
       // ═══ Campaign-creation defaults come from DIM_STRATEGY_CAMPAIGN_TEMPLATE (no hardcoding) ═══
       const campaignTemplates = data.strategy_campaign_templates || [];
@@ -843,8 +956,8 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         } else if (item.action === 'PROMOTE_TO_EXACT') {
           // EXACT_BOOST recipe — budget / TOS / bid bounds all sourced from
           // DIM_STRATEGY_CAMPAIGN_TEMPLATE (no hardcoded defaults).
-          const spTmpl = findTemplate('EXACT_BOOST', 'SP');
-          const videoTmpl = findTemplate('EXACT_BOOST', 'SB_VIDEO');
+          const spTmpl = findTemplate('EXACT', 'SP');
+          const videoTmpl = findTemplate('EXACT', 'SB_VIDEO');
           const bidMin = spTmpl?.bid_min ?? 0.5;
           const bidMax = spTmpl?.bid_max ?? 2.0;
           const bid = item.cpc
@@ -888,7 +1001,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
               'Campaign ID': spCampName, 'Campaign Name': spCampName,
               'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
               'Ad Group Default Bid': bid, 'State': 'ENABLED' });
-            pushLaunchNegatives(spRows, spCampName, 'EXACT_BOOST', asin, item.product);
+            pushLaunchNegatives(spRows, spCampName, 'EXACT', asin, item.product);
             spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Keyword', 'Operation': 'Create',
               'Campaign ID': spCampName, 'Campaign Name': spCampName,
               'Ad Group ID': spAdGroupName, 'Ad Group Name': spAdGroupName,
@@ -1014,6 +1127,43 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
                 'State': 'ENABLED' });
             }
           }
+        } else if (item.action === 'ADD_COMPETITOR_TARGET') {
+          // TIER 2: ADD_COMPETITOR_TARGET — conquest. Advertise OUR winner variation on a
+          // COMPETITOR's detail page via an SP product-targeting campaign.
+          //
+          // Everything that could be a judgement call was already decided in BigQuery by
+          // FN_COMPETITOR_CAMPAIGN_PLAN and carried on the queue item: the campaign name, the ad
+          // group name, the grouping (winner variation x bid tier, max 10 ASINs) and the bid
+          // (group MIN(target_cpc), already clamped into the COMPETITOR template's bounds). This
+          // branch only renders those decisions as bulksheet rows — it must not re-derive a name,
+          // a bid or a group, or the sheet and the plan will drift.
+          //
+          // Multiple queue items share one campaign (one item per targeted ASIN). claimNewCampaign
+          // makes the campaign-level rows fire exactly once; the Product Targeting row fires per item.
+          //
+          // MANUAL UPLOAD ONLY — nothing here calls an Amazon write API.
+          // Row building lives in competitorBulksheet.ts so it can be unit-tested — three
+          // production uploads were rejected by Amazon on mechanics this branch used to own.
+          const r = buildCompetitorSpRows(item as CompetitorItem, competitorCtx());
+          spRows.push(...r.spRows);
+          r.warnings.forEach(w => console.warn('[Bulksheet] conquest:', w));
+        } else if (item.action === 'ADD_COMPETITOR_TARGET_SB') {
+          // TIER 2 (video): SB VIDEO conquest — run OUR winner-variation video on a COMPETITOR's
+          // detail page. Same plan-decided name/group/bid as the SP conquest branch above; the only
+          // extra ingredient is the video creative, which comes from DIM_PRODUCT_CREATIVES.
+          //
+          // The creative is FAMILY-grain (one video per family), so a Pink campaign runs the LolliME
+          // family video (Ori 2026-07-23 chose this over waiting for a Pink-specific asset). The
+          // Creative ASIN — the product the ad links to — is still the winner variation (item.asin),
+          // so the click lands on the Pink listing even though the clip is the family video.
+          //
+          // SB rows go on the sbRows sheet (Amazon rejects SB entities on the SP sheet). Mirrors the
+          // proven VIDEO/EXACT-boost create path, swapping its Keyword row for Product Targeting rows.
+          // MANUAL UPLOAD ONLY — nothing here calls an Amazon write API.
+          // Same tested builder — see competitorBulksheet.ts.
+          const rv = buildCompetitorSbRows(item as CompetitorItem, competitorCtx());
+          sbRows.push(...rv.sbRows);
+          rv.warnings.forEach(w => console.warn('[Bulksheet] video conquest:', w));
         } else if (item.action === 'PROMOTE_TO_PEAK_PHRASE') {
           // Seasonal Peak Campaign Strategy
           const bid = '1.50'; // Aggressive default bid for Peak Seasonal
@@ -1218,20 +1368,17 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             <Download size={11} /> Export Bulksheet
           </button>
           <button
-            onClick={() => {
-              if (confirm('Mark all queued items as uploaded to Amazon? This will hide them from the Actions page.')) {
-                doQueue.markAllUploaded();
-              }
-            }}
+            onClick={() => armedClick('upload', doQueue.markAllUploaded)}
+            title="Mark all queued items as uploaded to Amazon (hides them from the Actions page)"
             className="text-[10px] px-2.5 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/15 transition-colors font-semibold flex items-center gap-1"
           >
-            <Upload size={11} /> Uploaded to Amazon ✓
+            <Upload size={11} /> {armed === 'upload' ? 'Click to confirm' : 'Uploaded to Amazon ✓'}
           </button>
           <button
-            onClick={() => { if (confirm('Clear all queued tasks?')) doQueue.clearAll(); }}
+            onClick={() => armedClick('clearAll', doQueue.clearAll)}
             className="text-[10px] px-2.5 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/15 transition-colors font-semibold flex items-center gap-1"
           >
-            <Trash2 size={11} /> Clear All
+            <Trash2 size={11} /> {armed === 'clearAll' ? 'Click to confirm' : 'Clear All'}
           </button>
         </div>
       )}
@@ -1285,6 +1432,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
                   {group.actionGroups.map(ag => {
                     const color = ACTION_COLORS[ag.action] || '#71717a';
                     const isTargetLevel = TARGET_LEVEL_ACTIONS.has(ag.action);
+                    const isCampaignScoped = CAMPAIGN_LEVEL_ACTIONS.has(ag.action);
 
                     return (
                       <div key={ag.action} className="border-b border-border-faint last:border-0">
@@ -1296,10 +1444,29 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
                           <span className="text-[10px] text-subtle font-mono">
                             {isTargetLevel
                               ? `${ag.targets.length} target${ag.targets.length !== 1 ? 's' : ''}`
-                              : `${ag.items.length} keyword${ag.items.length !== 1 ? 's' : ''}`
+                              : isCampaignScoped
+                                ? `${ag.items.length} competitor ASIN${ag.items.length !== 1 ? 's' : ''} · 1 campaign`
+                                : `${ag.items.length} keyword${ag.items.length !== 1 ? 's' : ''}`
                             }
                           </span>
                         </div>
+
+                        {/* Campaign-level instruction: stated once, not once per row */}
+                        {isCampaignScoped && ag.items.length > 0 && (() => {
+                          const instruction = getActionInstruction(ag.items[0]);
+                          return (
+                            <div className="px-4 pt-2">
+                              <div className="flex items-start gap-1.5 text-[10px] text-subtle/70 font-mono leading-relaxed bg-inset rounded-md px-2.5 py-1.5 border border-border-faint">
+                                <span className="shrink-0">{instruction.icon}</span>
+                                <div className="flex flex-col gap-px">
+                                  {instruction.lines.map((line, i) => (
+                                    <span key={i} className={line.startsWith('  ') ? 'pl-3 text-faint' : ''}>{line}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
 
                         {/* Content: Target rows (for bid ops) or flat keyword rows (for search-term ops) */}
                         <div className="divide-y divide-border-faint">
@@ -1380,10 +1547,10 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             <div className="flex-1" />
             {showDone && (
               <button
-                onClick={(e) => { e.stopPropagation(); if (confirm('Clear done log?')) doQueue.clearDone(); }}
+                onClick={(e) => { e.stopPropagation(); armedClick('clearDone', doQueue.clearDone); }}
                 className="text-[10px] px-2 py-1 rounded-md border border-border text-faint hover:text-red-400 hover:border-red-500/30 transition-all font-normal"
               >
-                Clear Done
+                {armed === 'clearDone' ? 'Click to confirm' : 'Clear Done'}
               </button>
             )}
           </button>
@@ -1440,10 +1607,10 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             <div className="flex-1" />
             {showUploaded && (
               <button
-                onClick={(e) => { e.stopPropagation(); if (confirm('Clear uploaded log?')) doQueue.clearUploaded(); }}
+                onClick={(e) => { e.stopPropagation(); armedClick('clearUploaded', doQueue.clearUploaded); }}
                 className="text-[10px] px-2 py-1 rounded-md border border-border text-faint hover:text-red-400 hover:border-red-500/30 transition-all font-normal"
               >
-                Clear Uploaded
+                {armed === 'clearUploaded' ? 'Click to confirm' : 'Clear Uploaded'}
               </button>
             )}
           </button>

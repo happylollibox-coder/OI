@@ -10,6 +10,10 @@ export interface DoQueueItem {
   campaign: string;
   campaign_id: string;
   ad_group_id: string;
+  // Ad group NAME for actions that CREATE a campaign (the group doesn't exist yet, so it has no
+  // id — Amazon resolves Create rows by the name written into the id column). Set by the
+  // competitor campaign plan, which names campaigns + ad groups in SQL so React never invents one.
+  ad_group_name?: string;
   // Tier 1 (bid changes): the actual keyword + its ID + match type
   targeting: string;       // The keyword text (e.g., "truth or dare") — differs from search_term for broad/phrase
   keyword_id: string;      // Amazon keyword ID — required for Update operations

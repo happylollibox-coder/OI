@@ -210,6 +210,13 @@ views:
       - FACT_AMAZON_ADS
       - DIM_PRODUCT
 
+  - name: "V_CAMPAIGN_ROLE_BY_NAME"
+    description: "FALLBACK role classification derived from the CAMPAIGN NAME, for campaigns V_CAMPAIGN_ROLE cannot classify yet. V_CAMPAIGN_ROLE reads ad DATA and is 90d-activity-gated, so a campaign created today is absent from it whether or not it has begun delivering — which made brand-new campaigns vanish from the coverage cockpit for 1-2 days and made their cells read 'missing', inviting duplicate builds (Ori 2026-07-24). Safe to parse because the cockpit generates these names itself ({PREFIX}-{FORMAT}/{TARGETING} (qualifiers) — see FN_COMPETITOR_CAMPAIGN_PLAN). Emits campaign_id, campaign_name, state, parent_name (DE_CAMPAIGN_FAMILY override else the account's short prefix: BOX/ME/BALL/BOTTLE/FRESH/BUNNY) and strategy_category. CONTRACT: fallback only, NEVER an override — callers prefer V_CAMPAIGN_ROLE and consult this only when the role is missing. Unrecognised names yield NULL and are skipped, never guessed into a cell. AUTO is deliberately not derived (its cell_key is per-ASIN and a non-delivering campaign has no ASIN). Consumed by FN_COVERAGE_CAMPAIGN_DETAIL (places new campaigns in their cell as ENABLED with 0 impressions) and FN_COVERAGE_UNMAPPED (stops them double-listing as unmapped)."
+    source_files: ["scripts/bigquery/views/V_CAMPAIGN_ROLE_BY_NAME.sql"]
+    dependencies:
+      - V_SRC_AmazonAds_campaign_history
+      - DE_CAMPAIGN_FAMILY
+
   - name: "V_CAMPAIGN_ROLE"
     description: "THE canonical Coverage-role definition — one row per campaign: AUTO / EXACT / BROAD / PHRASE / COMPETITOR / SB_VIDEO / BRAND_DEFENSE / PRODUCT_DEFENSE / OTHER, first-match-wins by strategy_id then campaign_type then dominant targeting_type (90d, by clicks). Lifted out of the camp_role CTE inlined in /api/coverage so the Coverage page and the Weekly Run strategy split share one rule. Normalizes targeting_type case (FACT_AMAZON_ADS holds both 'broad' and 'BROAD'); the Flask original matched 'Automatic'/'ASIN'/'Category' case-sensitively. is_offense_role flags the six non-defense roles."
     source_files: ["scripts/bigquery/views/V_CAMPAIGN_ROLE.sql"]
@@ -272,8 +279,17 @@ views:
       - DIM_COSTS_HISTORY
       - V_SRC_AmazonAds_advertised_product
 
+  - name: "V_COVERAGE_CAMPAIGN_KEYWORD_MONTHLY"
+    description: "Third cockpit evidence level (cell → campaign → month → KEYWORD): one row per (campaign_id × month × keyword_id) over the LAST 12 MONTHS from the targeting_keyword_report feed. Backs a MonthRow expanding to the keywords that drove that month. Metrics kept consistent with V_COVERAGE_CAMPAIGN_MONTHLY: spend/clicks/impressions/cpc are additive raw columns; units = units_sold_clicks_7_d (same 7d click-attribution as the campaign month drill). net_profit/net_roas use a gp_per_unit at CAMPAIGN grain — a units-weighted blend of the campaign's own advertised ASINs (from advertised_product), falling back to family-avg gp when the campaign sold nothing (keyword feed has no ASIN; families are gp-tight). NOTE: keyword units are a subset of the campaign total (auto/product targeting isn't keyword-attributed) so they do NOT reconcile to the month row. Columns: campaign_id, month, keyword_text, match_type, impressions, clicks, spend, cpc, units, net_profit, net_roas. Backs GET /api/campaign-keyword-months?campaign_id=<id>."
+    source_files: ["scripts/bigquery/views/V_COVERAGE_CAMPAIGN_KEYWORD_MONTHLY.sql"]
+    dependencies:
+      - DIM_PRODUCT
+      - V_DIM_LISTING_CURRENT
+      - DIM_COSTS_HISTORY
+      - V_SRC_AmazonAds_advertised_product
+
   - name: "V_COVERAGE_KEYWORD"
-    description: "Coverage-cockpit reconciler, Stage 3 (S3 rung): one row per (parent_name × match_type × keyword_text). Reconciles RUNNING keywords (V_KEYWORD_DAILY, last 90d, rolled to family×keyword×match: SUM clicks/cost, SUM net_proxy AS net_profit, latest ad_keyword_status, MAX date last_seen, campaign_ids) against RECOMMENDED-but-not-advertised keywords (FACT_RESEARCH_RECOMMENDATIONS latest week_start, status='NEW': best/MIN rank, rec_type), enriched with relevance (FACT_RESEARCH_RANKED MAX rank/overall_fit per family×term, match-agnostic) and the intent-theme flag (V_INTENT_KEYWORDS is_relevant + ads_net_roas, match-agnostic). Universe = DISTINCT keys from running UNION missing (families with recs but no live keywords still appear, e.g. Bunny/LolliBall). net_profit = SUM(V_KEYWORD_DAILY.net_proxy) = sales_14d − ad cost: AFTER ad cost but NOT true net profit (no COGS; sales_14d is 14d-rolling) — directional earn-vs-waste signal only. status CASE (MODERATE orphan rule, Ori 2026-07-21): running+enabled AND (is_relevant=FALSE OR research_rank IS NULL) -> 'orphan'; running+enabled -> 'running'; running+not-enabled -> 'paused'; not-running+recommended -> 'missing'; else 'other'. cell_key = CONCAT('INTENT|', parent_name) so keyword coverage attaches to the Intent family cell."
+    description: "THIN 90-DAY WRAPPER over FN_COVERAGE_KEYWORD(CURRENT_DATE-90, CURRENT_DATE, FALSE) — kept only for ad-hoc queries at the historical default. All logic lives in the table function (edit FN_COVERAGE_KEYWORD.sql, not this view, or they drift); /api/coverage-keywords calls the FN directly with the cockpit's selected window. Original semantics: coverage-cockpit reconciler, Stage 3 (S3 rung): one row per (parent_name × match_type × keyword_text). Reconciles RUNNING keywords (V_KEYWORD_DAILY, last 90d, rolled to family×keyword×match: SUM clicks/cost, SUM net_proxy AS net_profit, latest ad_keyword_status, MAX date last_seen, campaign_ids) against RECOMMENDED-but-not-advertised keywords (FACT_RESEARCH_RECOMMENDATIONS latest week_start, status='NEW': best/MIN rank, rec_type), enriched with relevance (FACT_RESEARCH_RANKED MAX rank/overall_fit per family×term, match-agnostic) and the intent-theme flag (V_INTENT_KEYWORDS is_relevant + ads_net_roas, match-agnostic). Universe = DISTINCT keys from running UNION missing (families with recs but no live keywords still appear, e.g. Bunny/LolliBall). net_roas = REAL per-keyword ad net ROAS = SUM(units_7d) × family_gp / SUM(cost) (units_7d=units_sold_clicks_7_d; family_gp=AVG gp/unit of family's active ASINs) — replaces the display of ads_net_roas (an INTENT/family aggregate stamped identically on every keyword, Ori 2026-07-22); drives profit_state (vs INTENT floor, clicks<10→unknown). target_cpc = the CPC that lands the keyword on the INTENT net-ROAS floor given its own cvr + gross profit = units_7d × family_gp / (clicks × floor) = cvr × gp / floor (NULL when clicks<10; below current cpc → cut bid, above → room to raise). net_profit = SUM(V_KEYWORD_DAILY.net_proxy) = sales_14d − ad cost: directional earn-vs-waste only (14d-rolling, no COGS). status CASE (MODERATE orphan rule, Ori 2026-07-21): running+enabled AND (is_relevant=FALSE OR research_rank IS NULL) -> 'orphan'; running+enabled -> 'running'; running+not-enabled -> 'paused'; not-running+recommended -> 'missing'; else 'other'. cell_key = CONCAT('INTENT|', parent_name) so keyword coverage attaches to the Intent family cell."
     source_files: ["scripts/bigquery/views/V_COVERAGE_KEYWORD.sql"]
     dependencies:
       - V_KEYWORD_DAILY
@@ -319,8 +335,21 @@ views:
       - V_SRC_AmazonAds_campaign_history
       - DE_BUDGET_CONFIG
 
+  - name: "V_LAUNCH_OPTIMIZER"
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_LAUNCH_OPTIMIZER.sql"]
+    description: "Launch-phase tracker per new family x week (first sale within 180d) — the monthly-cockpit launch module. Phases SETUP wk0-1 / RANK wk2-7 (honeymoon, no loss cuts) / EXIT wk8-11 (taper to value bids, fix margin) / POST. Verdicts on complete LA weeks only: ON_TRACK / BEHIND / STALLED (units <=90% prior-3wk avg AND absolute organic units flat — share is denominator-gameable). Emits value_per_click + taper_bid (0.7x, floor 0.15) from trailing-28d family CVR x GP/order, margin_flag when GP/order < $6 (ads can never work — fix price/bundle), weekly_budget_rec (STALLED -> x0.3 badge floor, EXIT -> x0.7/wk). Coacher reacts via phase-gated LAUNCH_TAPER (the one sanctioned loss cut). Created 2026-07-26 for Bunny/LolliBall."
+  - name: "V_LAUNCH_POPULATION"
+    description: "THE single definition of which campaigns the launch controller governs (Ori 2026-07-24). The population is LOW BUDGET, not age: a campaign is in the launch regime while its daily budget is at/below the low-budget cap — PEAK (inside any gift_season/prime_event boost→cooldown window) $30/day, OFF-SEASON $20/day. Replaces the old 'first 20 days' age gate: age is an arbitrary clock, budget states how much you're willing to risk while a campaign is unproven, and it self-promotes (V_LAUNCH_PHASE1's budget ladder raises budget on good performance until it clears the cap, at which point the campaign graduates to the working-campaign methodology in V_ADS_COACH). EXISTS BECAUSE 'new' was previously defined in 3 independent places (V_LAUNCH_PHASE1.camp, V_ADS_COACH.is_new_campaign, V_WEEKLY_RUN_CAMPAIGN.age_bucket) that agreed only because all used the same age rule — under a budget rule they drift and the dashboard shows a campaign in BOTH the launch cards and the mature table. HYSTERESIS: membership needs budget at/below the cap for the last 3 complete days (budget_max_3d), so promotion is immediate but demotion needs 3 consecutive low days — prevents oscillation between two engines with different cadences (launch daily vs working weekly/3-day). Brand-new campaigns with no V_TARGET_DAILY rows yet are included when age<20d so they are coached from day 1. NOTE: a campaign with NO budget rows must not be treated as low-budget (COALESCE to 0 inflated the population 26→72) — the WHERE requires the budget row to exist. SERVING_STATUS (2026-07-24): membership requires the latest serving_status IN (CAMPAIGN_STATUS_ENABLED, CAMPAIGN_OUT_OF_BUDGET, PENDING_START_DATE), not just state=ENABLED — this drops ENDED/PAUSED/ARCHIVED campaigns whose stale change-log STATE row still reads ENABLED (Ori confirmed the 4 BOX campaigns are archived yet show state=ENABLED / serving_status=ENDED). Also exposes medium_budget_cap ($50 off / $100 peak) so V_WEEKLY_RUN_CAMPAIGN splits MEDIUM vs HIGH tiers from one source. Columns: campaign_id, campaign_name, created, age_days, budget_today, budget_max_3d, low_budget_cap, medium_budget_cap, in_peak, serving_status, launch_reason. Consumers: V_LAUNCH_PHASE1.camp, V_ADS_COACH.is_new_campaign, V_WEEKLY_RUN_CAMPAIGN.age_bucket (LOW tier + dashboard launch-vs-mature split)."
+    source_files: ["scripts/bigquery/views/V_LAUNCH_POPULATION.sql"]
+    dependencies:
+      - V_SRC_AmazonAds_campaign_history
+      - V_TARGET_DAILY
+      - DIM_US_HOLIDAYS
+      - FACT_AMAZON_ADS
+
   - name: "V_LAUNCH_PHASE1"
-    description: "Phase-1 launch controller for a campaign's first 20 days — supersedes the bid/budget ladder in V_CAMPAIGN_LAUNCH_RAMP. Purpose: get a new campaign STABLE (spends budget across the day, not by lunchtime) and PROFITABLE by day 20, then hand to the coacher. Grain (campaign, target). Signals: roas_1d (today), eq3 (equal-weight mean of last-3 daily net ROAS ignoring <3-click days, pooled fallback), pct_dark (Amazon CAMPAIGN_OUT_OF_BUDGET share, LA day). Anchors 'today' on the last FULLY-ELAPSED day (LEAST(MAX(date), yesterday)) so an incomplete current day never reads as false zeros. BID (clamp $0.20-$1.50): starving(dark<=10% & spend<=60%)→×1.10; CUT only if eq3<0.9 AND roas_1d<0.9 →×0.8 (both must be bad — a proven or recovering keyword is spared); strong eq3>1.5→×1.3; weak roas_1d>1.2→×1.15. BUDGET: dark<=10% → cut toward floor (eq3<0.6 ×0.6, eq3<0.9 ×0.9) or hold; dark>10% → raise to LEAST(budget/%active, cap) with cap 3× (strong eq3>1.5) / 2× (weak roas_1d>1.2). No negate inside 20 days. Pure replay, no scheduled job. Consumed by tools/build_launch_phase1_bulksheet.py. Phase-1 tuning constants inline (k CTE) pending migration to DE_BUDGET_CONFIG. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
+    description: "Phase-1 launch controller — population is now LOW BUDGET (see V_LAUNCH_POPULATION), no longer the first 20 days — supersedes the bid/budget ladder in V_CAMPAIGN_LAUNCH_RAMP. Purpose: get a new campaign STABLE (spends budget across the day, not by lunchtime) and PROFITABLE by day 20, then hand to the coacher. Grain (campaign, target). Signals: roas_1d (today), eq3 (equal-weight mean of last-3 daily net ROAS ignoring <3-click days, pooled fallback), pct_dark (Amazon CAMPAIGN_OUT_OF_BUDGET share, LA day). Anchors 'today' on the last FULLY-ELAPSED day (LEAST(MAX(date), yesterday)) so an incomplete current day never reads as false zeros. BID (clamp $0.20-$1.50): starving(dark<=10% & spend<=60%)→×1.10; CUT only if eq3<0.9 AND roas_1d<0.9 →×0.8 (both must be bad — a proven or recovering keyword is spared); strong eq3>1.5→×1.3; weak roas_1d>1.2→×1.15. BUDGET: dark<=10% → cut toward floor (eq3<0.6 ×0.6, eq3<0.9 ×0.9) or hold; dark>10% → raise to LEAST(budget/%active, cap) with cap 3× (strong eq3>1.5) / 2× (weak roas_1d>1.2). No negate inside 20 days. Pure replay, no scheduled job. Consumed by tools/build_launch_phase1_bulksheet.py. Phase-1 tuning constants inline (k CTE) pending migration to DE_BUDGET_CONFIG. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
     source_files: ["scripts/bigquery/views/V_LAUNCH_PHASE1.sql"]
     dependencies:
       - V_CAMPAIGN_LAUNCH_RAMP
@@ -353,6 +382,18 @@ views:
       - V_TARGET_DAILY
       - FACT_AMAZON_ADS
       - DIM_US_HOLIDAYS
+
+  - name: "V_OOB_BUDGET_PHASE"
+    description: "Out-of-budget technical phase for the Weekly Run page (below Coach logic). One row per ENABLED campaign (SP+SB, launch AND working) that Amazon reported CAMPAIGN_OUT_OF_BUDGET on its channel's anchor day. Goal (Ori 2026-07-30): campaigns should never be out of budget but use almost all their budget. pct_dark from the unified V_SRC_AmazonAds_campaign_history event log (never raw per-channel fivetran, never DIM_CAMPAIGN — SCD2 samples 3×/day and drops reverting flips). Suggestion = the launch controller's dark-gated ladder applied uniformly: dark≤10% WATCH · prev-2d≥1.5× RAISE_STRONG (÷%active cap 3×) · last-day≥1.2× RAISE_WEAK (cap 2×) · prev-2d<0.9× CUT (×0.6 floor $10) · else HOLD. SP net ROAS corrected via T_PRICE_COST_TIER; SB estimated via mapped-ASIN cost ratio. Cube: OobBudget. Spec: architecture/OOB_BUDGET_PHASE.md."
+    source_files: ["scripts/bigquery/views/V_OOB_BUDGET_PHASE.sql"]
+    dependencies:
+      - V_SRC_AmazonAds_campaign_history
+      - V_LAUNCH_POPULATION
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+      - DIM_COSTS_HISTORY
+      - DE_BUDGET_CONFIG
+      - FACT_PPC_CHANGE_LOG
 
   - name: "V_SB_LAUNCH_CAMPAIGN"
     description: "CAMPAIGN-LEVEL measures + BUDGET suggestion for Sponsored-Brands (incl. video) launch campaigns. Measures from sb_campaign_report (only complete + current SB source; per-keyword sb_keyword_report died 2025-12-29; FACT undercounts SB, e.g. VIDEO-BALL FACT 8 clk/60 impr vs true 14/388). r2 (anchor) + r3 (prior 2d) windows of spend/CPC/clicks/CTR/ACoS + net-ROAS ESTIMATE (sales×(1−cost/list_price) via mapped ASIN). TOS NULL (the SB field is placement mix ~86%, not the competitive IS Amazon shows <5%); units NULL. BUDGET suggestion runs the SAME logic as V_LAUNCH_PHASE1 on SB-native signals: budget + %dark from sb_campaign_history, spend + campaign net ROAS from sb_campaign_report (V_LAUNCH_PHASE1 gives SB NULL budget + undercounted FACT spend). Cube: SbLaunchCampaign. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."
@@ -410,7 +451,7 @@ views:
       - T_PRICE_COST_TIER
 
   - name: "V_KEYWORD_DAILY"
-    description: "Keyword×day from targeting_keyword_report — true impressions incl no-traffic, top-of-search share, set bid; feeds coacher TOS signals. NOTE: keywords only — auto targets are invisible here; use V_TARGET_DAILY for a grain that includes them."
+    description: "Keyword×day from targeting_keyword_report — true impressions incl no-traffic, top-of-search share, set bid; feeds coacher TOS signals. Has units_7d (units_sold_clicks_7_d, clean click-attributed) + units_14d + sales_14d + net_proxy. NOTE: keywords only — auto targets are invisible here; use V_TARGET_DAILY for a grain that includes them."
     source_files: ["scripts/bigquery/views/V_KEYWORD_DAILY.sql"]
     dependencies:
       - FACT_AMAZON_ADS
@@ -725,6 +766,78 @@ views:
       - DIM_PRODUCT
       - DIM_BRAND_PHRASES
 
+  - name: "V_ADS_SEARCH_TERM_INTENT"
+    description: "Intent theme for every search term that has ACTUALLY RUN IN ADS. Grain: one row per distinct FACT_AMAZON_ADS.search_term. Companion to V_INTENT_KEYWORDS, which resolves themes over FACT_RESEARCH_RANKED.query_text (the research/SQP universe) — only 6.8% of the 201,054 distinct ads search terms exist there and only 11.1% of ads clicks carried a real occasion, and the missed tail is the BETTER traffic (LolliME back-to-school Aug 1 - Sep 28 2025: tagged terms 2.22% CVR / $0.20 GP-per-click vs untagged school terms 4.53% / $0.72). Matches on DE_INTENT_THEMES.match_ads_regex (added 2026-07-24) against LOWER(search_term), AND match_keyword_regex when non-null and different — so christmas-gift needs both the christmas pattern and \\bgifts?\\b. Themes with a NULL match_ads_regex never match here (attribute-only themes can't be read from raw text). SPECIFICITY ROUTING, one term gets exactly ONE theme: ads_specificity DESC (1, +1 when match_keyword_regex adds a second condition), then priority ASC, then intent_key. back-to-school sits at priority 25, NOT 10, because its bare \\bschool\\b arm is greedy — at 10 it stole 'high school grad party gifts' from graduation and 'middle school girl halloween gift basket' from halloween. Phase 0 of the intent-CVR work. SOP: docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md"
+    source_files: ["scripts/bigquery/views/V_ADS_SEARCH_TERM_INTENT.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - DE_INTENT_THEMES
+
+  - name: "V_INTENT_COVERAGE"
+    description: "The Phase 0 gate: how much of real ads traffic carries an intent theme, per (parent_name x intent_key) over the trailing 365 days, with FAMILY_TOTAL and ACCOUNT_TOTAL rollups. ALWAYS FILTER ON row_type ('THEME' | 'UNCLASSIFIED' | 'FAMILY_TOTAL' | 'ACCOUNT_TOTAL') — GROUPING SETS puts three kinds of row in one result and the genuinely-unclassified bucket also carries a NULL intent_key. pct_classified went 11.1% -> 70.32% when V_ADS_SEARCH_TERM_INTENT shipped 2026-07-24 (Lollibox 73.0, LolliME 63.0, Fresh 83.1, Bottle 53.7); Phase 1 (the product x intent CVR curve that sets base bids) is gated on >= 60%. Also the regression surface for DE_INTENT_THEMES rule edits. Carries cvr_pct / cpc / gp_per_click per theme so an intent's economics are readable directly. SOP: docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md"
+    source_files: ["scripts/bigquery/views/V_INTENT_COVERAGE.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - V_ADS_SEARCH_TERM_INTENT
+      - DIM_PRODUCT
+
+  - name: "V_INTENT_CVR_CURVE"
+    description: "12-month CVR curve per (product_short_name x intent_key x month_of_year 1-12), learned from the ads signal. Phase 1 of the intent-CVR work. MULTIPLICATIVE, not a lookup: cvr_hat = base_cvr(product,intent) x season_index(intent,month). Direct cells are far too sparse — at product x intent x month only 25% clear 100 clicks — so each factor is estimated where its data is densest. base_cvr is Beta-binomial shrunk (orders + k*parent)/(clicks + k) up product x intent -> family x intent -> intent -> global. season_index shrinks intent x month toward that intent's own all-month rate and DIVIDES by it, so no seasonal signal lands on exactly 1.00 (the honest default) and every product x intent gets all 12 months whether or not it ran. Season is pooled ACROSS products on purpose: back-to-school is a property of the intent, not of the journal, and pooling gives the shape ~10x the data. k values are DE_COACH_THRESHOLDS strategy_id='INTENT' INTENT_CVR_BASE_PRIOR_CLICKS (200) / INTENT_CVR_SEASON_PRIOR_CLICKS (500) — how much thin cells are trusted is a data decision. READ confidence AND base_self_weight (= clicks/(clicks+k), the share of base_cvr that is the cell's own evidence rather than its family's) BEFORE ACTING. Learned back-to-school shape: Jul 0.68, Aug 1.45, Sep 1.11, Dec 1.46. SOP: docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md"
+    source_files: ["scripts/bigquery/views/V_INTENT_CVR_CURVE.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - V_ADS_SEARCH_TERM_INTENT
+      - DIM_PRODUCT
+      - DE_COACH_THRESHOLDS
+
+  - name: "V_INTENT_BID_BASE"
+    description: "ADVISORY base bid per (product_short_name x intent_key x month_of_year). Nothing here writes to a campaign — coach wiring is Phase 2. value_per_click = cvr_hat x gp_per_order = a click's expected gross margin. TWO DIFFERENT NUMBERS, do not collapse them: max_bid = value_per_click is the BREAKEVEN CEILING (pay more and the click loses money); target_bid = value_per_click x INTENT_BID_PROFIT_SHARE (0.70) is the bid that also hits the margin goal. The first cut of this view conflated them and mislabelled money-losing months as 'tighten'. action: OFF when value_per_click < INTENT_BID_FLOOR or actual_cpc >= value_per_click (market clears above breakeven); RUN_THIN when actual_cpc is between target and breakeven (profitable but under goal — a judgement call, not a cut); RUN otherwise, including no_market_read=TRUE cells that have never run. gp_per_order comes from FACT_AMAZON_ADS.GROSS_PROFIT/Ads_orders per product over 365d with a family fallback (gp_is_family_fallback flags it) — the SAME table as the CVR numerator, because mixing in V_UNIFIED_DAILY margin would compare two attribution grains. Worked example, Purple LolliME x back-to-school: OFF eleven months, RUN_THIN in August alone (max 0.41 / target 0.29 / market 0.38). SOP: docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md"
+    source_files: ["scripts/bigquery/views/V_INTENT_BID_BASE.sql"]
+    dependencies:
+      - V_INTENT_CVR_CURVE
+      - V_ADS_SEARCH_TERM_INTENT
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+      - DE_COACH_THRESHOLDS
+
+  - name: "V_INTENT_RESOLVED"
+    description: "THE read model for search-term -> intent. Everything downstream reads this — never DE_SEARCH_TERM_INTENT and never V_ADS_SEARCH_TERM_INTENT directly. One row per search_term. PRECEDENCE, human always beats machine: REJECTED -> NULL (a decision that the term has no intent, distinct from PENDING-with-no-match); VERIFIED/CORRECTED -> verified_intent_key; RECHECK -> verified_intent_key STILL wins (the suggestion changed under a settled decision, so the human's last word stands until re-reviewed) with is_stale=TRUE; PENDING -> suggested_intent_key. Terms absent from DE_SEARCH_TERM_INTENT (new since the last SP run) fall through to the live suggestion, so nothing is invisible while the refresh catches up. intent_type/holiday_name/intent_label are looked up from the RESOLVED intent, not the suggestion — a correction onto a TIME_BASED theme must carry that theme's season window downstream. Consumed by V_INTENT_CVR_CURVE, V_INTENT_BID_BASE, V_INTENT_COVERAGE. SOP: docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md"
+    source_files: ["scripts/bigquery/views/V_INTENT_RESOLVED.sql"]
+    dependencies:
+      - V_ADS_SEARCH_TERM_INTENT
+      - DE_SEARCH_TERM_INTENT
+      - DE_INTENT_THEMES
+
+  - name: "V_INTENT_REVIEW_QUEUE"
+    description: "What to review next in DE_SEARCH_TERM_INTENT, hardest-money-first. One row per search_term needing attention (PENDING or RECHECK, >=5 clicks). 201,139 distinct ads terms exist and 42,445 are needed to cover 80% of clicks, so reviewing everything is NOT the goal — covering the money is (1,662 terms cover 50%). review_reason in priority order: RECHECK (a rule edit changed the machine's mind about something already settled — always first), UNMATCHED (real spend, no theme — each one is a rule gap), AMBIGUOUS (>1 theme matched, worth confirming the specificity/priority tie-break), HIGH_SPEND (>=$20, unambiguous but material), ROUTINE. EXCLUDES asin-target and auto-target: those are matched deterministically from string shape, there is no judgement to add, and at $61k of spend they would otherwise sit permanently at the top. SOP: docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md"
+    source_files: ["scripts/bigquery/views/V_INTENT_REVIEW_QUEUE.sql"]
+    dependencies:
+      - DE_SEARCH_TERM_INTENT
+      - DE_INTENT_THEMES
+
+  - name: "V_ADS_SEARCH_TERM_FACETS"
+    description: "Intent as a COMPOSITION of orthogonal facets, one row per distinct FACT_AMAZON_ADS.search_term. Ori 2026-07-24: intent should be built from the Research page's dimensions plus customer budget. Replaces the winner-takes-all model in V_ADS_SEARCH_TERM_INTENT, which picked ONE theme by specificity then priority and so had to discard facts that were all true at once — \"gifts for girls 8-12 deals\" is tween AND gift AND deal-seeker, and \"cheap birthday gifts for a 10 year old\" lost its price signal entirely to tween-birthday-gift. FACETS: gender/age_group/occasion/holiday from FN_EXTRACT_SEGMENTS (the canonical extractor shared with Research — DE_INTENT_THEMES.match_ads_age_regex duplicates it and should converge onto this); product_type from DE_PRODUCT_TYPE_KEYWORDS (priority ASC then longest keyword, same join as V_RESEARCH_RANKED); budget_tier + price_ceiling from FN_EXTRACT_BUDGET; is_gift boolean. term_kind (KEYWORD | BRAND | COMPETITOR | ASIN_TARGET | AUTO_TARGET) separates queries from placements — only the two TARGET kinds get NULL facets, because BRAND and COMPETITOR are still real queries typed by real people. intent_key is a DERIVED slug (budget-age-holiday-occasion-product_type-gift, fixed order) for legibility and joins; THE FACETS ARE THE TRUTH and downstream should prefer them. facet_count replaces the old specificity tie-break as an honest confidence signal. Coverage 2026-07-24: 99.0% of keyword clicks carry >=1 facet, avg 2.76 facets/term. SOP: docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md"
+    source_files: ["scripts/bigquery/views/V_ADS_SEARCH_TERM_FACETS.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - FN_EXTRACT_SEGMENTS
+      - FN_EXTRACT_BUDGET
+      - DE_PRODUCT_TYPE_KEYWORDS
+      - DE_INTENT_THEMES
+
+  - name: "T_INTENT_CVR_CURVE"
+    description: "Materialized V_INTENT_CVR_CURVE (product x intent_key x month_of_year). Rebuilt by SP_REFRESH_SEARCH_TERM_INTENT after the DE merge — the view chain costs ~27k CPU-seconds per scan (regex over 337k terms), which broke a 3-way UNION at the on-demand CPU cap on 2026-07-25; consumers read this table for pennies. Includes the 90-day launch-ramp season quarantine (obs.in_launch_ramp excluded from season_index pooling only — LolliME's Jul-Sep 2025 launch shifted the Aug index 1.058->0.921 when it landed). Grid plan Phase 0.3."
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_SEARCH_TERM_INTENT.sql"]
+    dependencies:
+      - V_INTENT_CVR_CURVE
+
+  - name: "T_INTENT_BID_BASE"
+    description: "Materialized V_INTENT_BID_BASE with the ratified FOUR-band assignment (RUN >= PROFITABLE_ROAS 1.1 / VELOCITY >= VELOCITY_ROAS 0.7 / MARGINAL >= INTENT_HOPELESS_ROAS 0.5, OFF-unless-PROBE / OFF below — every boundary a DE_COACH_THRESHOLDS row, none hard-coded). New columns vs the pre-band view: max_cpc_run, max_cpc_velocity (willingness to pay per band), expected_net_roas_at_market. action = raw band; hysteresis and the velocity-pace condition are STATEFUL and live in the month-plan generator/checkpoint, NOT here. Verified: White Lollibox x tween-girl-gift Jun/Jul/Aug = VELOCITY (0.83-1.08), Dec RUN 1.58; Mint RUN with Dec $1.11 target. Consumed by /api/admin/intent-monthly (repointed 2026-07-25) and grid Phases 2+. Rebuilt by SP_REFRESH_SEARCH_TERM_INTENT. Grid plan Phase 0.2/0.3."
+    source_files: ["scripts/bigquery/views/V_INTENT_BID_BASE.sql", "scripts/bigquery/procedures/SP_REFRESH_SEARCH_TERM_INTENT.sql", "scripts/bigquery/migrations/2026-07-25_intent_band_thresholds.sql"]
+    dependencies:
+      - V_INTENT_BID_BASE
+      - DE_COACH_THRESHOLDS
+
   - name: "V_BRAND_KEYWORD_CLASSIFICATION"
     description: "Classifies keywords as brand, competitor, or generic"
     source_files: ["scripts/bigquery/views/V_BRAND_KEYWORD_CLASSIFICATION.sql"]
@@ -987,9 +1100,9 @@ tables:
     source_files: ["scripts/bigquery/tables/DIM/DIM_CAMPAIGN.sql"]
 
   - name: "DIM_AD_GROUP"
-    description: "SCD2 ad group dimension with default bid tracking"
+    description: "SCD2 ad group dimension with default bid tracking + Type-1 creative_type (canonical SB ad_group->creative_type derivation; consumers read it here, not from sb_ad_report)"
     type: "dimension"
-    source_files: ["scripts/bigquery/tables/DIM/DIM_AD_GROUP.sql"]
+    source_files: ["scripts/bigquery/tables/DIM/DIM_AD_GROUP.sql", "scripts/bigquery/migrations/2026-07-30_dim_ad_group_creative_type.sql"]
 
   - name: "DIM_LISTING_HISTORY"
     description: "SCD2 listing pricing history — tracks price/business price/quantity pricing changes per listing"
@@ -1152,6 +1265,11 @@ tables:
     source_files: ["scripts/bigquery/tables/FACT/FACT_FORECAST_DEMAND.sql"]
 
   # ── DE_ Data Entry Tables ──
+  - name: "DE_COMPETITOR_BID_TIER"
+    description: "Tunable bid bands over target_cpc for the COMPETITOR campaign plan (FN_COMPETITOR_CAMPAIGN_PLAN). An Amazon campaign shares ONE bid, so candidates are grouped into bands whose members all want roughly the same bid. Columns: tier_code ('A'..'E', also the campaign-name token), tier_label, min_target_cpc (INCLUSIVE), max_target_cpc (EXCLUSIVE), sort_order, description. NULL min = open bottom, NULL max = open top. Bands seeded 2026-07-23 from the REAL candidate distribution across all families: A >=2.00 / B 1.40-1.99 / C 1.00-1.39 / D 0.80-0.99 / E <0.80 (n=14/19/31/27/36 at 12mo). The originally-proposed 2.50/1.75/1.25 split was degenerate — 69% of candidates fell in one band spanning a 3.7x bid range, which is exactly what tiering exists to prevent. Ori-editable without a deploy."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE/DE_COMPETITOR_BID_TIER.sql"]
+
   - name: "DE_COACH_THRESHOLDS"
     description: "User-editable thresholds for the Ads Coach decision engine, per strategy and product family"
     type: "data_entry"
@@ -1305,9 +1423,24 @@ tables:
     source_files: ["scripts/bigquery/tables/DE_FAMILY_INTENT_OVERRIDE.sql"]
 
   - name: "DE_INTENT_THEMES"
-    description: "Registry of intent THEMES (birthday, easter, beauty, journal…) — the grouping unit for intent-grouped campaigns (family x match-type x intent). GENERIC vs TIME_BASED; match rule = AND over match_occasion/match_holiday/match_product_type/match_age_group/match_keyword_regex against FACT_RESEARCH_RANKED; TIME_BASED links holiday_name -> DIM_US_HOLIDAYS for start/pause dates. NOT the same as the BRAND/PRODUCT/GENERIC keyword intent class (V_KEYWORD_INTENT_CLASS). SOP: architecture/INTENT_CAMPAIGN_MODEL.md"
+    description: "Registry of intent THEMES (birthday, easter, beauty, journal…) — the grouping unit for intent-grouped campaigns (family x match-type x intent). GENERIC vs TIME_BASED; match rule = AND over match_occasion/match_holiday/match_product_type/match_age_group/match_keyword_regex against FACT_RESEARCH_RANKED; TIME_BASED links holiday_name -> DIM_US_HOLIDAYS for start/pause dates. NOT the same as the BRAND/PRODUCT/GENERIC keyword intent class (V_KEYWORD_INTENT_CLASS). ALSO carries match_ads_regex and match_ads_age_regex (added 2026-07-24): patterns matched against LOWER(FACT_AMAZON_ADS.search_term) so a theme can be recognised from the words a shopper typed rather than from research attributes. Consumed only by V_ADS_SEARCH_TERM_INTENT; V_INTENT_KEYWORDS ignores it. Editing priority here changes routing there. Deliberate values: back-to-school 25 not 10 (its bare \bschool\b arm is greedy); asin/auto-target 1, brand 2, competitor 3, budget/budget-gift 4 (price intent is the strongest CVR predictor in the account — 1.47% vs 3.99%, 0.90 GP-ROAS vs 1.33 — so it resolves ahead of every topical theme); age-8-14-* demoted to 6 (occasion compounds) and 40 (bare gift) so the named Kid/Tween/Teen bands win; kid/tween/teen-gift 39 so they beat plain gift at 40. match_ads_age_regex is the THIRD independent condition — it is what makes tween-birthday-gift specificity 3 and lets it beat birthday-gift on merit rather than a tie-break. Without an ads-side age pattern the 24 age compounds could never match at all, because match_age_group is a FACT_RESEARCH_RANKED attribute that does not exist on the ads side. SOP: architecture/INTENT_CAMPAIGN_MODEL.md + docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md"
     type: "data_entry"
     source_files: ["scripts/bigquery/tables/DE_INTENT_THEMES.sql"]
+
+  - name: "DE_SEARCH_TERM_INTENT"
+    description: "Supervised search-term -> intent theme mapping. Physical and editable, because a view has nowhere to put a human decision and any rule edit silently rewrites history. THE CONTRACT: suggested_* belongs to the automation and SP_REFRESH_SEARCH_TERM_INTENT overwrites it freely; verified_* belongs to the reviewer and the SP NEVER overwrites it. When the automation changes its mind about an already-verified row, the SP defers to neither side — it flips verification_status to RECHECK and leaves both values for a human to settle (drift detected by comparing suggested_intent_key to suggestion_at_verification). verification_status: PENDING (never reviewed, falls back to the suggestion) | VERIFIED | CORRECTED (reviewer chose differently) | REJECTED (no valid intent — verified_intent_key IS NULL ON PURPOSE, distinct from PENDING where NULL just means nobody looked) | RECHECK. REJECTED rows are deliberately not re-flagged on drift: 'this term has no intent' is a statement about the term, not the rule. Read via V_INTENT_RESOLVED, review via V_INTENT_REVIEW_QUEUE. 337,061 rows at creation 2026-07-24."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_SEARCH_TERM_INTENT.sql"]
+
+  - name: "SP_REFRESH_SEARCH_TERM_INTENT"
+    description: "Keeps DE_SEARCH_TERM_INTENT in step with the ads term universe and the current DE_INTENT_THEMES rules WITHOUT destroying a human verdict. MERGEs new terms in as PENDING, refreshes suggestions and 365d impact counters on existing rows, then flips any VERIFIED/CORRECTED row whose suggestion no longer matches suggestion_at_verification to RECHECK (IS DISTINCT FROM, so a NULL on either side counts as a change). Idempotent, safe to schedule. Verified 2026-07-24 by deactivating a theme: 9 of 26 verified rows flipped to RECHECK, V_INTENT_RESOLVED kept serving the human answer with is_stale=TRUE, and the other 17 were untouched."
+    type: "procedure"
+    source_files: ["scripts/bigquery/procedures/SP_REFRESH_SEARCH_TERM_INTENT.sql"]
+
+  - name: "DE_INTENT_CAMPAIGN"
+    description: "Intent-campaign-grid registry: campaign_id <-> (product_short_name, intent_key, rung, tier, state). Grid plan Phase 1.1 (spec 2026-07-25). NAMES ARE NOT KEYS — campaign_name_at_creation is display-only; rows insert PENDING_UPLOAD with the name as placeholder id and a reconciliation job locks the numeric campaign_id at FACT first-sight (ME-AUTO rename trap + LolliBall ASIN-join invisibility both motivate this). rung enum BROAD_SP|EXACT|PHRASE|BROAD_VIDEO|BROAD_SPOTLIGHT matches CoveragePage STRAT_LABEL keys exactly. Demotion = PAUSED_DEMOTED, never delete. Populated by tools/intent_grid/absorb_existing.py (--apply after Ori confirms the .tmp proposals CSV) and the Tier-A/launch/graduation builders."
+    type: "data_entry"
+    source_files: ["scripts/bigquery/tables/DE_INTENT_CAMPAIGN.sql"]
 
   - name: "DE_PROBE_LOG"
     description: "Tracks each keyword probe's decision budget (15 clicks / 14 days): ACTIVE/GRADUATED/EXHAUSTED. Coacher C close-the-loop, refreshed by SP_REFRESH_PROBE_LOG."
@@ -1623,7 +1756,7 @@ stored_procedures:
     source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_CAMPAIGN.sql"]
 
   - name: "SP_LOAD_DIM_AD_GROUP"
-    description: "SCD2 load for ad group dimension with default bid tracking"
+    description: "SCD2 load for ad group dimension with default bid tracking; also derives+refreshes Type-1 creative_type from V_SRC_AmazonAds_sb_ad_report (campaign-name fallback, no cost filter)"
     source_files: ["scripts/bigquery/procedures/SP_LOAD_DIM_AD_GROUP.sql"]
 
   - name: "SP_LOAD_DIM_LISTING_HISTORY"
@@ -1803,10 +1936,60 @@ functions:
     source_files: ["scripts/bigquery/functions/FN_EXTRACT_SEGMENTS.sql"]
     type: "sql_udf"
 
+  - name: "FN_EXTRACT_BUDGET"
+    description: "The SIXTH query facet: what the SHOPPER said about their budget. Companion to FN_EXTRACT_SEGMENTS. Returns STRUCT<budget_tier STRING, price_ceiling FLOAT64>. NOT the same as FACT_RESEARCH_RANKED.price_bucket, which is OUR price vs the market (A. Cheaper … E. Way above) — this is the customer's own stated constraint read from their words. Tiers: UNDER_N (explicit ceiling, wins over vague words so \"cheap gifts under $20\" is UNDER_N), DEAL_SEEKER (deals/cheap/bargain, no number), PREMIUM (luxury/high-end/splurge), NULL. price_ceiling is populated only for UNDER_N and is anchored on the price phrasing so \"gifts under 10 dollars for 12 year old girls\" reads 10, not 12. Measured 2026-07-24 — a monotonic ladder: PREMIUM 4.47% CVR / $0.885 GP-per-click / 1.77 GP-ROAS, no budget language 3.70% / $0.653 / 1.30, DEAL_SEEKER 1.74% / $0.335 / 1.04, UNDER_N 1.17% / $0.269 / 0.77 (loses money). Edit ONLY here. Consumed by V_ADS_SEARCH_TERM_FACETS."
+    source_files: ["scripts/bigquery/functions/FN_EXTRACT_BUDGET.sql"]
+    type: "sql_udf"
+
   - name: "FN_FETCH_EXCHANGE_RATES"
     description: "Remote function to fetch exchange rates via Cloud Function"
     source_files: ["scripts/bigquery/functions/FN_FETCH_EXCHANGE_RATES.sql"]
     type: "remote_function"
+
+  - name: "FN_COVERAGE_CAMPAIGN"
+    description: "Window-parameterized table function behind the coverage cockpit tree. FN_COVERAGE_CAMPAIGN(win_start DATE, win_end DATE, peak_only BOOL) — table-function version of V_COVERAGE_CAMPAIGN with identical cell/status/reason logic, but the (asin×campaign) metric window is the caller-supplied [win_start, win_end] and peak_only=TRUE restricts to gift-season days (DIM_US_HOLIDAYS category='gift_season'). The whole result reflects the window: coverage counts, status AND measures. Gate = 'served impressions in the window' (a pair with 0 window impressions isn't coverage FOR that window). Called by /api/daily-workflow, which maps its 7 toggle windows (today/yesterday/7d/30d/90d/12mo/peak) to (start,end,peak_only). DARK (2026-07-23): also emits n_dark + dark_campaigns — campaigns state=ENABLED that served NO impressions in the last 30d. Because the window gate drops them, such a campaign would otherwise vanish and its cell read 'missing' as if nothing were configured (inviting a duplicate build); status becomes 'dark' when n_enabled=0 AND n_dark>0. Delivery check uses FACT_AMAZON_ADS (covers SP **and** SB — advertised_product omits Sponsored Brands, so checking it alone flags the whole SB portfolio as dark); cell link uses the EXPLICIT mapping (DIM_EXPERIMENT_CAMPAIGN→DIM_EXPERIMENT + DE_CAMPAIGN_FAMILY) because V_CAMPAIGN_ROLE is 90d-activity-gated and blind to these. 'Dark' is judged on the last 30d regardless of the selected window: window governs money, current state governs work."
+    source_files: ["scripts/bigquery/functions/FN_COVERAGE_CAMPAIGN.sql"]
+    type: "table_function"
+
+  - name: "FN_COVERAGE_CAMPAIGN_DETAIL"
+    description: "Window-parameterized table function for the coverage cockpit's S2 VERIFY evidence (one row per cell_key × campaign). FN_COVERAGE_CAMPAIGN_DETAIL(win_start DATE, win_end DATE, peak_only BOOL) — table-function version of V_COVERAGE_CAMPAIGN_DETAIL; same evidence + profit verdict, metrics over [win_start, win_end] (peak_only restricts to gift-season days). Gate = served impressions in the window, so evidence matches FN_COVERAGE_CAMPAIGN cell-for-cell under the same window. Called by /api/daily-workflow."
+    source_files: ["scripts/bigquery/functions/FN_COVERAGE_CAMPAIGN_DETAIL.sql"]
+    type: "table_function"
+
+  - name: "FN_COVERAGE_UNMAPPED"
+    description: "Window-parameterized table function for the coverage cockpit UNMAPPED guard tile. FN_COVERAGE_UNMAPPED(win_start DATE, win_end DATE, peak_only BOOL) — table-function version of V_COVERAGE_UNMAPPED; campaigns not classified into any of the 6 strategies, advertised activity aggregated over [win_start, win_end] (peak_only restricts to gift-season days). Dormant 'OTHER' campaigns (no activity in the window) still surfaced. Called by /api/daily-workflow. is_archived (2026-07-23): flags state='ARCHIVED'. An archived campaign can never need mapping — in wide windows they dominated the list (42 of 44 at 12mo). The endpoint keeps their spend in the P&L rollups (wide-window money stays truthful) but excludes them from the to-do list + badge; the UI shows a count of what was held back rather than silently hiding it."
+    source_files: ["scripts/bigquery/functions/FN_COVERAGE_UNMAPPED.sql"]
+    type: "table_function"
+
+  - name: "FN_COVERAGE_CAMPAIGN_PROFIT"
+    description: "Window-parameterized table function for the coverage cockpit's per-campaign P&L (strategy/family profit split). FN_COVERAGE_CAMPAIGN_PROFIT(win_start DATE, win_end DATE, peak_only BOOL) — windowed replacement for V_COVERAGE_CAMPAIGN_PROFIT7D; one row per campaign with spend>0 in [win_start, win_end] (peak_only restricts to gift-season days), same 6-strategy lens. At win=7d it matches V_COVERAGE_CAMPAIGN_PROFIT7D exactly. Columns: campaign_id, parent_name, strategy, clicks, spend, units, margin, net_profit, profitable. Called by /api/daily-workflow."
+    source_files: ["scripts/bigquery/functions/FN_COVERAGE_CAMPAIGN_PROFIT.sql"]
+    type: "table_function"
+
+  - name: "FN_COVERAGE_SB"
+    description: "Sponsored Brands rows for the coverage cockpit. FN_COVERAGE_SB(win_start DATE, win_end DATE, peak_only BOOL) — emits rows shaped like FN_COVERAGE_CAMPAIGN's live_base source (parent_name, asin, gp_per_unit, campaign_id, impressions, clicks, cost, units, last_seen) so the SP and SB paths can be UNIONed. EXISTS BECAUSE every other coverage fn links asin<->campaign via V_SRC_AmazonAds_advertised_product = the Sponsored PRODUCTS report; SB campaigns never appear there, so the whole SB portfolio (16 enabled, ~$27.5k/90d) was invisible to every cell/count/P&L (Ori 2026-07-23). units/sales come from fivetran-hl.amazon_ads.sb_purchased_product (the ONLY SB table Fivetran populates with units — units_sold_14_d is present-but-NULL on sb_campaign_report/ad_group/keyword/ad/placement and all-zero on target_report), giving REAL per-purchased-ASIN attribution; attribution_type='Promoted' only ('Brand Halo' would double-count other products). cost/clicks/impressions come from sb_campaign_report (campaign grain only) and are allocated across the window's purchased ASINs PRO-RATA BY UNITS so allocated cost sums back to campaign cost exactly (verified $0.00 diff). Campaigns that spent but converted nothing in the window emit one full-cost row with units=0 against their home family (dominant purchased family, else DE_CAMPAIGN_FAMILY) so short windows don't silently drop spend. NOTE purchased_asin is the ASIN actually bought, a different basis than the SP side's advertised ASIN. Consumed by FN_COVERAGE_CAMPAIGN, FN_COVERAGE_CAMPAIGN_DETAIL, FN_COVERAGE_CAMPAIGN_PROFIT."
+    source_files: ["scripts/bigquery/functions/FN_COVERAGE_SB.sql"]
+    type: "table_function"
+
+  - name: "FN_COVERAGE_KEYWORD"
+    description: "Window-parameterized table function for the coverage cockpit's KEYWORD panel. FN_COVERAGE_KEYWORD(win_start DATE, win_end DATE, peak_only BOOL) — windowed version of V_COVERAGE_KEYWORD (which is now a thin 90d wrapper over this; edit rules HERE, not there). Every RUNNING measure is aggregated over [win_start, win_end] (peak_only restricts to gift-season days): clicks, cost, cpc, units_7d, net_roas, target_cpc, profit_state — so the cockpit's Time-window toggle governs keyword metrics the same way FN_COVERAGE_CAMPAIGN governs cells. MISSING (recommendations), relevance and intent routing are NOT windowed (research state, not period performance). net_roas = SUM(units_7d) × family_gp / SUM(cost); target_cpc = cvr × family_gp / INTENT floor = units_7d × gp / (clicks × floor), NULL under 10 in-window clicks. Grain: parent_name × match_type × keyword_text. Called by /api/coverage-keywords?window=."
+    source_files: ["scripts/bigquery/functions/FN_COVERAGE_KEYWORD.sql"]
+    type: "table_function"
+
+  - name: "FN_COVERAGE_COMPETITOR_TARGET"
+    description: "Competitor ASIN targets you ALREADY run. FN_COVERAGE_COMPETITOR_TARGET(win_start DATE, win_end DATE, peak_only BOOL) — one row per (parent_name × target), where target is the ASIN / category string stripped out of FACT_AMAZON_ADS.targeting. The COMPETITOR strategy targets PRODUCTS not keywords, so its coverage cells get this instead of the keyword panel (Ori 2026-07-23). Only ASIN / ASIN EXPANDED / CATEGORY targeting rows, and only campaigns whose V_CAMPAIGN_ROLE.strategy_category = 'COMPETITOR', so keyword spend can never leak in. net_roas = SUM(units) × family_gp / SUM(cost); target_cpc = units × gp / (clicks × COMPETITOR PROFITABLE_ROAS floor), NULL under 10 in-window clicks; is_winner = net_roas >= 1. Family comes from V_SRC_AmazonAds_advertised_product (the authoritative asin<->campaign link) — FACT_AMAZON_ADS's own ASIN columns mis-attribute across families. Called by /api/competitor-targets."
+    source_files: ["scripts/bigquery/functions/FN_COVERAGE_COMPETITOR_TARGET.sql"]
+    type: "table_function"
+
+  - name: "FN_COMPETITOR_CANDIDATE"
+    description: "Competitor ASINs to PROMOTE. FN_COMPETITOR_CANDIDATE(win_start DATE, win_end DATE, peak_only BOOL) — one row per (parent_name × candidate ASIN) discovered as a raw-ASIN SEARCH TERM inside DISCOVERY campaigns (V_CAMPAIGN_ROLE.strategy_category IN AUTO/BROAD_SP/BROAD_VIDEO/BROAD_SPOTLIGHT). Auto ads land on other people's product pages, so their search terms include the ASINs of those pages; one that converts profitably deserves a deliberate Competitor target. EXCLUDES our own ASINs (that would be cross-sell/Product Defense, i.e. attacking ourselves) and ASINs already targeted by a COMPETITOR campaign. is_candidate = clicks >= 10 AND net_roas >= the COMPETITOR PROFITABLE_ROAS floor (COALESCEd to GLOBAL). winner_variation/winner_asin = which of OUR variations actually SOLD on that placement, used by FN_COMPETITOR_CAMPAIGN_PLAN to group campaigns. DETERMINISM FIX 2026-07-23: the winner was picked with ANY_VALUE, which is non-deterministic — 49 of 62 LolliME (family × ASIN × variation) rows had 2+ candidates and the same window returned Purple 16/Mint 13/Pink 5 on one run and Mint 34/0/0 on another. Now picked by a fully-ordered ROW_NUMBER (units DESC, clicks DESC, cost DESC, name); every candidate ASIN has units>0 under exactly ONE variation, so units alone decides it. Called by /api/competitor-targets and FN_COMPETITOR_CAMPAIGN_PLAN."
+    source_files: ["scripts/bigquery/functions/FN_COMPETITOR_CANDIDATE.sql"]
+    type: "table_function"
+
+  - name: "FN_COMPETITOR_CAMPAIGN_PLAN"
+    description: "Competitor candidates grouped into ready-to-create campaigns — the WRITE side of FN_COMPETITOR_CANDIDATE. FN_COMPETITOR_CAMPAIGN_PLAN(win_start DATE, win_end DATE, peak_only BOOL). Grain: one row per (parent_name × winner_variation × tier_code × chunk_index × candidate_asin), each carrying its group's campaign fields so a client can list ASINs or GROUP BY campaign_key without a second query. GROUPING = winner_variation × bid tier, max 10 ASINs: by VARIATION because a campaign advertises a product (SB video creative shows one variation, and the variation that already sold on that page is the one that wins it); by TIER (DE_COMPETITOR_BID_TIER) because a campaign shares ONE bid; chunk size from DE_COACH_THRESHOLDS.COMPETITOR_MAX_ASINS_PER_CAMPAIGN. Chunked by target_cpc DESC with a fully-ordered tiebreak, so membership is STABLE across refreshes. EXISTING WINNERS ARE EXCLUDED: opening a new campaign against an ASIN you already target makes your own campaigns bid against each other; rebalancing an existing target is a bid UPDATE and already ships via V_ADS_COACH -> Do queue. suggested_bid = group MIN(target_cpc), the only bid at which EVERY member still clears the profit floor (at MEDIAN 33/127 candidates and at AVG 52/127 would bid above their own break-even; at MIN, zero), then clamped into the COMPETITOR template's [bid_min, bid_max]; suggested_bid_raw + bid_capped expose when the $2 ceiling binds. proj_spend = suggested_bid × window clicks, proj_margin = SUM(net_roas × cost) (= SUM(units) × family_gp, same basis as net_roas), proj_net_roas = the ratio — directional, not a forecast. Campaign names follow the live convention derived from V_SRC_AmazonAds_campaign_history: {PREFIX}-SP/PT (Conquest, {Variation}, {Tier}{n}). Budgets/bid bounds come from DIM_STRATEGY_CAMPAIGN_TEMPLATE strategy_id='COMPETITOR'. Called by /api/competitor-campaign-plan; consumed by the DoPage bulksheet ADD_COMPETITOR_TARGET branch."
+    source_files: ["scripts/bigquery/functions/FN_COMPETITOR_CAMPAIGN_PLAN.sql"]
+    type: "table_function"
 
 # ═══════════════════════════════════════════════════════════════
 # CLOUD FUNCTIONS

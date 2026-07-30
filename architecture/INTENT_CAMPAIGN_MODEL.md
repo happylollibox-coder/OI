@@ -1,6 +1,6 @@
 # Intent-Grouped Campaign Model — Design (Sub-projects A + B)
 
-**Status:** DESIGN / pending Ori review · 2026-07-16
+**Status:** SUPERSEDED (campaign portion) by `INTENT_CAMPAIGN_GRID.md` 2026-07-25 · was DESIGN / pending Ori review · 2026-07-16
 **Scope of this doc:** A (intent-theme model) + B (Research page determination + cross-family Brand Spotlight). C–E outlined for context only.
 
 ## Campaign grain (governing rule — Ori 2026-07-16)

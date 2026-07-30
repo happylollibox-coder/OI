@@ -105,7 +105,7 @@ intent_rel AS (
 floor AS (
   SELECT MAX(CAST(threshold_value AS FLOAT64)) AS v
   FROM `onyga-482313`.OI.DE_COACH_THRESHOLDS
-  WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id = 'INTENT'
+  WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id = 'BROAD_SP'
 ),
 -- ── INTENT routing: specificity-routed intent per (family, term), one row each ──
 kw_intent AS (
@@ -173,7 +173,7 @@ SELECT
     WHEN (r.keyword_text IS NULL) AND (m.keyword_text IS NOT NULL) THEN 'missing'
     ELSE 'other'
   END AS status,
-  CONCAT('INTENT|', k.parent_name) AS cell_key
+  CONCAT('BROAD_SP|', k.parent_name) AS cell_key
 FROM keys k
 LEFT JOIN running    r  ON r.parent_name = k.parent_name
                        AND r.match_type  = k.match_type

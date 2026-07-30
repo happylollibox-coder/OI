@@ -24,7 +24,7 @@ SELECT
       THEN ROUND(SAFE_DIVIDE(SUM(ads_net_roas * ads_spend), NULLIF(SUM(ads_spend), 0)), 2)
            >= (SELECT MAX(CAST(threshold_value AS FLOAT64))
                FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
-               WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id = 'INTENT')
+               WHERE threshold_key = 'PROFITABLE_ROAS' AND strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT'))
     ELSE TRUE
   END AS suggested
 FROM `onyga-482313.OI.V_INTENT_KEYWORDS`
