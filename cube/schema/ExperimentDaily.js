@@ -87,8 +87,11 @@ cube(`ExperimentDaily`, {
     },
   },
 
+  // Restatement-safe key — see the note in Ads.js. This table restates at a CONSTANT row count:
+  // on 2026-07-23 ads_all_cost moved 533,718.38 -> 535,361.51 across 7,384 rows both before and
+  // after, with MAX(snapshot_date) pinned at 2026-07-23. Neither MAX() nor COUNT(*) sees that.
   refreshKey: {
-    sql: `SELECT MAX(snapshot_date) FROM \`onyga-482313.OI.FACT_EXPERIMENT_DAILY\``,
+    sql: `SELECT last_modified_time FROM \`onyga-482313.OI.__TABLES__\` WHERE table_id = 'FACT_EXPERIMENT_DAILY'`,
   },
 
   preAggregations: {

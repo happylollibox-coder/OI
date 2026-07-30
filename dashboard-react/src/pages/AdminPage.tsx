@@ -6,6 +6,7 @@ import { usePageSummary } from '../components/PageSummaryBar';
 import { Badge } from '../components/Badge';
 import { NegativePhrases } from '../components/NegativePhrases';
 import { CampaignMapping } from '../components/CampaignMapping';
+import { IntentMapping } from '../components/IntentMapping';
 import { apiFetch } from '../utils/apiFetch';
 
 interface PipelineTask {
@@ -133,6 +134,10 @@ export function AdminPage() {
 
       <Section title="Campaign Mapping" count="Campaign → Strategy / Family">
         <CampaignMapping />
+      </Section>
+
+      <Section title="Intent Configuration" count="Keyword → Intent Theme">
+        <IntentMapping />
       </Section>
 
       <Section title="Negative Phrases" count={`Per-Product Keyword Negatives`}>

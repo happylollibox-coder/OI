@@ -67,7 +67,7 @@ camp_map AS (
       ROW_NUMBER() OVER (
         PARTITION BY ec.campaign_id
         ORDER BY
-          IF(e.strategy_id IN ('AUTO','INTENT','EXACT_BOOST','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE'), 0, 1),
+          IF(e.strategy_id IN ('AUTO','BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT','PHRASE','EXACT','COMPETITOR','BRAND_DEFENSE','PRODUCT_DEFENSE'), 0, 1),
           IF(STARTS_WITH(COALESCE(ec.notes, ''), 'manual:'), 0, 1),
           ec.experiment_id
       ) AS rn
@@ -94,13 +94,13 @@ enriched AS (
     CASE
       WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'BRAND.?DEF') THEN 'BRAND_DEFENSE'
       WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'PRODUCT.?DEF') THEN 'PRODUCT_DEFENSE'
-      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'\bBOOST\b') THEN 'EXACT_BOOST'
-      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'/EXACT\b|[- ]EXACT\b') THEN 'EXACT_BOOST'
-      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'CONQUEST|COPYCAT') THEN 'COMPETITOR_CONQUEST'
-      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'SP/AUTO\b|AUTO.*DISCOVERY|DISCOVERY') THEN 'LOW_COST_DISCOVERY'
-      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'BROAD|PHRASE|HUNTER|STORE') THEN 'HUNTER'
-      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'/PT\b') THEN 'COMPETITOR_CONQUEST'
-      ELSE 'HUNTER'
+      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'\bBOOST\b') THEN 'EXACT'
+      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'/EXACT\b|[- ]EXACT\b') THEN 'EXACT'
+      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'CONQUEST|COPYCAT') THEN 'COMPETITOR'
+      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'SP/AUTO\b|AUTO.*DISCOVERY|DISCOVERY') THEN 'AUTO'
+      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'BROAD|PHRASE|HUNTER|STORE') THEN 'BROAD_SP'
+      WHEN REGEXP_CONTAINS(UPPER(b.campaign_name), r'/PT\b') THEN 'COMPETITOR'
+      ELSE 'BROAD_SP'
     END AS suggested_strategy,
 
     -- did the name match an EXPLICIT strategy (i.e. not the ELSE default)?

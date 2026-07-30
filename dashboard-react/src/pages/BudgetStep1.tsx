@@ -27,7 +27,7 @@ export const STRATEGY_LABEL: Record<string, string> = {
   EXACT_BOOST: 'Exact Boost', BRAND_DEFENSE: 'Brand Defense', PRODUCT_DEFENSE: 'Product Defense',
   COMPETITOR: 'Competitors', INTENT: 'Intent', AUTO: 'Auto', OTHER: 'Other',
 };
-const STRATEGY_ORDER = ['EXACT_BOOST', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE', 'COMPETITOR', 'INTENT', 'AUTO', 'OTHER'];
+const STRATEGY_ORDER = ['EXACT', 'PHRASE', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE', 'COMPETITOR', 'BROAD_SP', 'BROAD_VIDEO', 'BROAD_SPOTLIGHT', 'AUTO', 'OTHER'];
 
 type StratRow = {
   strategyRole: string; nCampaigns: number; losing: number; margin: number; winning: number; total: number;

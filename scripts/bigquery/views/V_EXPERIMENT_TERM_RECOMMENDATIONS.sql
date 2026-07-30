@@ -251,7 +251,7 @@ already_targeted_exact AS (
   WHERE e.status = 'ACTIVE'
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND (
-      e.strategy_id = 'EXACT_BOOST'
+      e.strategy_id IN ('PHRASE','EXACT')
       OR (
         e.strategy_id = 'BRAND_DEFENSE'
         AND (
@@ -339,20 +339,36 @@ campaign_config_ag AS (
 ),
 
 -- Negative keywords blacklist per campaign (ad-group + campaign level)
--- NOTE: Fivetran negative tables still stale as of Jan 2026 — using them directly
+-- Primary source: owned DE_NEGATIVE_KEYWORDS (live — seeded from bulksheet, kept current by
+-- SP_SYNC_NEGATIVES; covers both CAMPAIGN and AD_GROUP levels). The Fivetran negative-keyword
+-- sync is frozen since 2026-01-03, so the interface view V_SRC_AmazonAds_negative_keyword is
+-- only a pre-freeze backstop: deduped to the latest row per negative_id, and any pair DE
+-- already tracks (in any state) is dropped so a DE REMOVED verdict beats stale Fivetran rows.
+-- Same source pattern as V_ADS_NEGATIVE_CONFLICTS.
 -- DEDUPED: UNION DISTINCT to avoid duplicate join keys causing fan-out
 campaign_negatives AS (
   SELECT DISTINCT
     CAST(campaign_id AS STRING) AS campaign_id,
-    LOWER(keyword_text) as neg_keyword
-  FROM `fivetran-hl.amazon_ads.negative_keyword_history`
+    LOWER(TRIM(keyword_text)) as neg_keyword
+  FROM `onyga-482313.OI.DE_NEGATIVE_KEYWORDS`
   WHERE state = 'ENABLED'
   UNION DISTINCT
-  SELECT DISTINCT
-    CAST(campaign_id AS STRING) AS campaign_id,
-    LOWER(keyword_text) as neg_keyword
-  FROM `fivetran-hl.amazon_ads.campaign_negative_keyword_history`
-  WHERE state = 'ENABLED'
+  SELECT DISTINCT s.campaign_id, s.neg_keyword
+  FROM (
+    SELECT
+      campaign_id,
+      LOWER(TRIM(keyword_text)) AS neg_keyword,
+      ROW_NUMBER() OVER (PARTITION BY negative_id ORDER BY _fivetran_synced DESC) AS rn
+    FROM `onyga-482313.OI.V_SRC_AmazonAds_negative_keyword`
+  ) s
+  LEFT JOIN (
+    SELECT DISTINCT
+      CAST(campaign_id AS STRING) AS campaign_id,
+      LOWER(TRIM(keyword_text)) AS neg_keyword
+    FROM `onyga-482313.OI.DE_NEGATIVE_KEYWORDS`
+  ) d
+    ON d.campaign_id = s.campaign_id AND d.neg_keyword = s.neg_keyword
+  WHERE s.rn = 1 AND d.campaign_id IS NULL
 ),
 
 -- Auto-targeting bids per campaign (close-match, substitutes, etc.)
@@ -532,7 +548,7 @@ active_term_rows AS (
 
       -- R4: EXACT_BOOST with < 20 clicks all-time → keep (bid decision on target)
       -- "I promoted this to exact. Give it 20 clicks before judging."
-      WHEN eta.strategy_id = 'EXACT_BOOST'
+      WHEN eta.strategy_id IN ('PHRASE','EXACT')
         AND eta.ads_clicks < 20
         AND eta.ads_clicks_recent > 0
         THEN 'KEEP'
@@ -541,13 +557,13 @@ active_term_rows AS (
       -- Override INCREASE_BID/KEEP: switch product before scaling
       WHEN th.hero_asin IS NOT NULL
         AND COALESCE(eta.asin = th.hero_asin, FALSE) = FALSE
-        AND eta.strategy_id = 'EXACT_BOOST'
+        AND eta.strategy_id IN ('PHRASE','EXACT')
         AND eta.ads_clicks >= 15
         THEN 'SWITCH_HERO'
 
       -- R6: PROMOTE from broad/auto → exact
       -- total_orders ≥ 4, weighted_total_net_roas ≥ 1.4, SQP volume > 1500, not already exact
-      WHEN eta.strategy_id = 'INTENT'
+      WHEN eta.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
         AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
         AND COALESCE(sqp.sqp_search_volume, 0) > 1500
         AND ate.search_term IS NULL THEN 'PROMOTE_TO_EXACT'
@@ -617,7 +633,7 @@ active_term_rows AS (
         'promote_check' as id,
         'Scale Up Check' as label,
         'Total Ord >= 4 & SQP Vol > 1500 & Not in Exact' as rule,
-        (eta.strategy_id = 'INTENT'
+        (eta.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
          AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
          AND COALESCE(sqp.sqp_search_volume, 0) > 1500
          AND ate.search_term IS NULL) as pass,
@@ -668,7 +684,7 @@ active_term_rows AS (
         WHEN SAFE_DIVIDE((eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) < 0.5
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN NULL
         -- Exclude PROMOTE_TO_EXACT
-        WHEN eta.strategy_id = 'INTENT'
+        WHEN eta.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
           AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
           AND COALESCE(sqp.sqp_search_volume, 0) > 1500
           AND ate.search_term IS NULL THEN NULL
@@ -680,10 +696,10 @@ active_term_rows AS (
         -- Exclude SWITCH_HERO
         WHEN th.hero_asin IS NOT NULL
           AND COALESCE(eta.asin = th.hero_asin, FALSE) = FALSE
-          AND eta.strategy_id = 'EXACT_BOOST'
+          AND eta.strategy_id IN ('PHRASE','EXACT')
           AND eta.ads_clicks >= 15 THEN NULL
         -- EXACT_BOOST needs volume: +20% (clicks < 20 all-time)
-        WHEN eta.strategy_id = 'EXACT_BOOST'
+        WHEN eta.strategy_id IN ('PHRASE','EXACT')
           AND eta.ads_clicks < 20
           AND eta.ads_clicks_recent > 0
           THEN LEAST(
@@ -747,7 +763,7 @@ active_term_rows AS (
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN NULL
         WHEN SAFE_DIVIDE((eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) < 0.5
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN NULL
-        WHEN eta.strategy_id = 'INTENT'
+        WHEN eta.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
           AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
           AND COALESCE(sqp.sqp_search_volume, 0) > 1500
           AND ate.search_term IS NULL THEN NULL
@@ -759,10 +775,10 @@ active_term_rows AS (
         -- Exclude SWITCH_HERO
         WHEN th.hero_asin IS NOT NULL
           AND COALESCE(eta.asin = th.hero_asin, FALSE) = FALSE
-          AND eta.strategy_id = 'EXACT_BOOST'
+          AND eta.strategy_id IN ('PHRASE','EXACT')
           AND eta.ads_clicks >= 15 THEN NULL
         -- EXACT_BOOST volume rule: fixed +20% (clicks < 20 all-time)
-        WHEN eta.strategy_id = 'EXACT_BOOST'
+        WHEN eta.strategy_id IN ('PHRASE','EXACT')
           AND eta.ads_clicks < 20
           AND eta.ads_clicks_recent > 0
           THEN 20.0
@@ -794,7 +810,7 @@ active_term_rows AS (
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN eta.ads_spend * 10
         WHEN SAFE_DIVIDE(eta.ads_orders * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) < 0.5
           AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0 THEN eta.ads_spend * 5
-        WHEN eta.strategy_id = 'INTENT'
+        WHEN eta.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
           AND eta.ads_orders >= 4 AND ate.search_term IS NULL
           THEN eta.ads_orders * 50.0
         -- INCREASE_BID priority based on ROAS gap
@@ -814,7 +830,7 @@ active_term_rows AS (
           THEN CONCAT('Only $', CAST(ROUND(eta.ads_spend, 2) AS STRING), ' Ads Spend(8w). Need more data.')
         WHEN eta.ads_orders = 0 AND GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders) = 0 AND eta.ads_clicks >= 20 AND eta.ads_clicks_recent > 0
           THEN CONCAT(CAST(eta.ads_clicks AS STRING), ' Clicks on "', eta.search_term, '" with zero Orders. (Active in last 3 days).')
-        WHEN eta.strategy_id = 'INTENT'
+        WHEN eta.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
           AND (eta.ads_orders + GREATEST(0, COALESCE(sqp.sqp_purchases, 0) - eta.ads_orders)) >= 4
           AND COALESCE(sqp.sqp_search_volume, 0) > 1500
           AND ate.search_term IS NULL
@@ -834,7 +850,7 @@ active_term_rows AS (
                        '. Promote to EXACT_BOOST based on organic demand.')
         WHEN th.hero_asin IS NOT NULL
           AND COALESCE(eta.asin = th.hero_asin, FALSE) = FALSE
-          AND eta.strategy_id = 'EXACT_BOOST'
+          AND eta.strategy_id IN ('PHRASE','EXACT')
           AND eta.ads_clicks >= 15
           THEN CONCAT('Wrong ASIN: Switch from ', ue.product_short_name, ' to ', th.hero_product_name, ' (hero) for "', eta.search_term, '".')
         WHEN SAFE_DIVIDE(eta.ads_orders * ue.margin_per_unit, NULLIF(eta.ads_spend, 0)) >= 1.2
@@ -955,9 +971,9 @@ opportunity_rows AS (
     CASE
       WHEN tc.experiment_segment = 'BRAND' THEN 'BRAND_DEFENSE'
       WHEN tc.intent_segment = 'COMPETITOR' THEN 'COMPETITOR'
-      WHEN sp.sqp_purchases >= 3 AND sp.sqp_weeks >= 2 THEN 'EXACT_BOOST'
-      WHEN sp.sqp_purchases >= 2 THEN 'EXACT_BOOST'
-      ELSE 'INTENT'
+      WHEN sp.sqp_purchases >= 3 AND sp.sqp_weeks >= 2 THEN 'EXACT'
+      WHEN sp.sqp_purchases >= 2 THEN 'EXACT'
+      ELSE 'BROAD_SP'
     END as strategy_id,
     CAST(NULL AS STRING) as strategy_name,
     COALESCE(th.hero_asin, sp.asin) as asin,
@@ -1177,14 +1193,14 @@ phase_overridden AS (
       -- Campaign keeps running, but stops matching seasonal keywords
       WHEN c.peak_phase = 'POST_PEAK'
         AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-        AND c.strategy_id = 'INTENT'
+        AND c.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
         AND c.action NOT IN ('NEGATE', 'NOT_TARGETED')
         THEN 'NEGATE'
       -- POST_PEAK + EXACT/CONQUEST (dedicated seasonal campaigns): NEGATE seasonal terms
       -- These campaigns are seasonal-specific — negate until next year
       WHEN c.peak_phase = 'POST_PEAK'
         AND c.occasion IN ('VALENTINES', 'EASTER', 'CHRISTMAS', 'BACK_TO_SCHOOL')
-        AND c.strategy_id IN ('EXACT_BOOST', 'COMPETITOR')
+        AND c.strategy_id IN ('PHRASE','EXACT','COMPETITOR')
         AND c.action NOT IN ('NEGATE', 'NOT_TARGETED')
         THEN 'NEGATE'
       -- POST_PEAK + DEFENSE (brand/product): keep at KEEP (bid reduction is on target)

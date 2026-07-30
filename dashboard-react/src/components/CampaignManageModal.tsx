@@ -15,7 +15,7 @@ import { useDoQueue } from '../hooks/useDoQueue';
 // The per-keyword family still comes from each ad's ASIN; the mapping just sets the strategy so
 // the engine manages it. camp.product is already 'Store' for these, so the modal pre-selects it.
 const FAMILIES = ['Bottle', 'Bunny', 'Fresh', 'LolliBall', 'LolliME', 'Lollibox', 'Store'];
-const STRATEGIES = ['BRAND_DEFENSE', 'COMPETITOR', 'EXACT_BOOST', 'INTENT', 'PRODUCT_DEFENSE'];
+const STRATEGIES = ['AUTO', 'BROAD_SP', 'BROAD_VIDEO', 'BROAD_SPOTLIGHT', 'PHRASE', 'EXACT', 'COMPETITOR', 'BRAND_DEFENSE', 'PRODUCT_DEFENSE'];
 
 export type ManageCampaign = {
   id: string;

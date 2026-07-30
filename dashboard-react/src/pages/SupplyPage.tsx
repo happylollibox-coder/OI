@@ -520,6 +520,23 @@ export function SupplyPage({ data }: { data: DashboardData }) {
     }
   }, [selectedShipment, data.supply_shipments]);
 
+  /* ─── Inline cost edit from the shipments table ───
+   * Writes the shipment header `cost_shipped`, then re-fetches the authoritative
+   * detail and merges it through the same override layer the drawer uses.
+   * NOTE: update_shipment (Flask) always rewrites is_paid/paid_date, so we
+   * echo the row's current paid state to avoid silently un-paying a shipment. */
+  const handleShipmentCostSaved = useCallback(async (row: SupplyShipmentRow, newCost: number) => {
+    const id = row.shipment_id;
+    const body: Record<string, unknown> = { cost_shipped: newCost, is_paid: row.is_paid };
+    if (row.is_paid && row.paid_date) body.paid_date = row.paid_date;
+    await dataEntry.updateShipmentHeader(id, body);
+    const d = await dataEntry.getShipment(id);
+    setShipmentOverrides(p => ({
+      ...p,
+      [id]: mapShipmentDetailToRows(d, (data.supply_shipments || []).filter(r => r.shipment_id === id)),
+    }));
+  }, [data.supply_shipments]);
+
   /* ─── One-click "Mark received" from the shipments table ─── */
   const { markReceived, toastNode: shipmentReceiveToast } = useMarkReceived();
   const handleMarkShipmentReceived = useCallback((r: SupplyShipmentRow) => {
@@ -1090,7 +1107,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
               { label: 'Remaining', value: fmtFull$(totalShipUnpaid), color: totalShipUnpaid > 0 ? 'var(--color-orange, #fb923c)' : 'var(--color-emerald, #34d399)' },
             ]} />
             <div className="rounded-xl border border-border overflow-x-auto">
-              <ShipmentsTable rows={filteredShipments} sort={shipSort} onSort={toggleSort(setShipSort)} onSelectShipment={setSelectedShipment} onMarkReceived={handleMarkShipmentReceived} />
+              <ShipmentsTable rows={filteredShipments} sort={shipSort} onSort={toggleSort(setShipSort)} onSelectShipment={setSelectedShipment} onMarkReceived={handleMarkShipmentReceived} onCostSaved={handleShipmentCostSaved} />
             </div>
           </>
         );
@@ -1576,7 +1593,82 @@ const isAwdWarehouse = (code: string | null | undefined): boolean => {
   return c.includes('AWD') || AWD_WAREHOUSES.has(c);
 };
 
-function ShipmentsTable({ rows, sort, onSort, onSelectShipment, onMarkReceived }: { rows: SupplyShipmentRow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void; onSelectShipment: (s: SupplyShipmentRow) => void; onMarkReceived: (s: SupplyShipmentRow) => void }) {
+/* ─── Inline-editable shipment cost cell (click to edit, Enter saves) ───
+ * Writes the shipment header cost_shipped via onSave; the parent merges the
+ * re-fetched detail back through the shipment override layer. */
+function InlineShipmentCostCell({ row, onSave }: { row: SupplyShipmentRow; onSave: (row: SupplyShipmentRow, newCost: number) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [inputVal, setInputVal] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const startEdit = () => {
+    setInputVal(row.cost_shipped > 0 ? String(row.cost_shipped) : '');
+    setError(null);
+    setEditing(true);
+  };
+  const cancel = () => { setEditing(false); setError(null); };
+
+  const save = async () => {
+    const trimmed = inputVal.trim();
+    const parsed = trimmed === '' ? 0 : parseFloat(trimmed);
+    if (Number.isNaN(parsed) || parsed < 0) { setError('Enter a valid amount'); return; }
+    if (parsed === row.cost_shipped) { setEditing(false); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(row, parsed);
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <div className="flex flex-col items-end gap-0.5">
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            step="0.01"
+            value={inputVal}
+            onChange={e => setInputVal(e.target.value)}
+            className="w-24 bg-black/40 border border-border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-blue-500 font-mono"
+            autoFocus
+            onKeyDown={e => { if (e.key === 'Enter') void save(); if (e.key === 'Escape') cancel(); }}
+            disabled={saving}
+            placeholder="0.00"
+          />
+          {saving ? (
+            <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-1" />
+          ) : (
+            <>
+              <button onClick={() => void save()} className="text-emerald-400 hover:text-emerald-300 p-0.5 bg-surface rounded" title="Save (Enter)"><Check size={14} /></button>
+              <button onClick={cancel} className="text-muted hover:text-red-400 p-0.5 bg-surface rounded" title="Cancel (Esc)"><X size={14} /></button>
+            </>
+          )}
+        </div>
+        {error && <span className="text-[10px] text-red-400 max-w-[160px] text-right">{error}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="group inline-flex items-center justify-end gap-1 min-w-[48px] min-h-[22px] rounded px-1 -mx-1 cursor-pointer hover:bg-white/5 transition-colors"
+      onClick={startEdit}
+      title="Click to edit shipment cost"
+    >
+      <span className={row.cost_shipped > 0 ? 'text-subtle font-mono text-xs' : 'text-muted text-xs group-hover:text-subtle'}>
+        {row.cost_shipped > 0 ? fmtFull$(row.cost_shipped) : '—'}
+      </span>
+    </div>
+  );
+}
+
+function ShipmentsTable({ rows, sort, onSort, onSelectShipment, onMarkReceived, onCostSaved }: { rows: SupplyShipmentRow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void; onSelectShipment: (s: SupplyShipmentRow) => void; onMarkReceived: (s: SupplyShipmentRow) => void; onCostSaved: (row: SupplyShipmentRow, newCost: number) => Promise<void> }) {
   if (rows.length === 0) return <div className="p-8 text-center text-muted text-sm">No shipments match filters</div>;
   const today = todayISO();
   return (
@@ -1617,7 +1709,9 @@ function ShipmentsTable({ rows, sort, onSort, onSelectShipment, onMarkReceived }
               )}
             </td>
             <td className="px-4 py-2.5 text-right text-subtle font-mono text-xs">{r.total_quantity_shipped.toLocaleString()}</td>
-            <td className="px-4 py-2.5 text-right text-subtle font-mono text-xs">{r.cost_shipped > 0 ? fmtFull$(r.cost_shipped) : '—'}</td>
+            <td className="px-4 py-2.5 text-right">
+              <InlineShipmentCostCell row={r} onSave={onCostSaved} />
+            </td>
             <td className="px-4 py-2.5 text-right font-mono text-xs">
               <span className={r.unpaid_to_shipment > 0.01 ? 'text-orange-400 font-semibold' : 'text-emerald-400'}>
                 {fmtFull$(Math.max(r.unpaid_to_shipment, 0))}

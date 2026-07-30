@@ -71,7 +71,7 @@ BEGIN
       WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'SP/AUTO\b|AUTO.*DISCOVERY|DISCOVERY') THEN 'INTENT'
       WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'BROAD|PHRASE|HUNTER|STORE') THEN 'INTENT'
       WHEN REGEXP_CONTAINS(UPPER(ac.campaign_name), r'/PT\b') THEN 'COMPETITOR'
-      ELSE 'INTENT'  -- Default: broad discovery
+      ELSE 'BROAD_SP'  -- Default: broad discovery
     END as inferred_strategy,
 
     -- Infer family prefix from campaign name

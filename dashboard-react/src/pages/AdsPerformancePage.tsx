@@ -794,7 +794,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
               <button
                 key={o.id}
                 onClick={() => setAgeFilter(on ? null : o.id)}
-                title={`${o.label} — ${fM(o.spend)} in the loaded window${o.id === 'NEW' ? ' · driven by the launch controller' : ''}`}
+                title={`${o.label} — ${fM(o.spend)} in the loaded window${o.id === 'LOW_BUDGET' ? ' · driven by the launch controller' : ''}`}
                 className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-all ${
                   on ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
                      : 'text-faint border-border hover:border-border-strong hover:text-muted'

@@ -170,4 +170,25 @@ VALUES
   0.75, 2.50, 10.0, 0, 0,
   'SB Video exact for the video slot above organic results',
   '{PRODUCT}-VIDEO/EXACT (TOS)',
-  TRUE, 'SP wins the top ad row, SB Video wins the video slot. Double presence.');
+  TRUE, 'SP wins the top ad row, SB Video wins the video slot. Double presence.'),
+
+-- =============================================
+-- COMPETITOR: conquest on competitor ASINs (9-strategy taxonomy)
+-- Added 2026-07-23 with the competitor campaign-creation path. Read by
+-- FN_COMPETITOR_CAMPAIGN_PLAN and by DoPage's ADD_COMPETITOR_TARGET bulksheet branch, so the
+-- writer never hardcodes a budget or bid bound. Mirrors
+-- scripts/bigquery/migrations/2026-07-23_COMPETITOR_CAMPAIGN_TEMPLATE.sql — keep the two in sync.
+-- bid_max 2.00 deliberately matches the account's BID_CAP_SUGGESTION/COMPETITOR ceiling; the plan
+-- publishes the uncapped break-even as suggested_bid_raw so a capped target stays visible.
+-- =============================================
+('COMPETITOR', 1, 'SP', 'PRODUCT_TARGETING', 'DOWN_ONLY',
+  0.25, 2.00, 10.0, 0, 200,
+  'SP product targeting on competitor ASINs proven profitable in Auto/Broad discovery',
+  '{PRODUCT}-SP/PT (Competitors, {VARIATION}, {TIER})',
+  TRUE, 'One campaign per winner variation x bid tier, max 10 ASINs. Bid = group MIN(target_cpc) so every ASIN in the campaign clears the profit floor. DOWN_ONLY: conquest clicks are dear, do not let Amazon bid up.'),
+
+('COMPETITOR', 2, 'SB_VIDEO', 'PRODUCT_TARGETING', 'DOWN_ONLY',
+  0.25, 1.50, 10.0, 0, 0,
+  'SB Video on competitor detail pages - the creative features the winner variation',
+  '{PRODUCT}-VIDEO/PT (Competitors, {VARIATION}, {TIER})',
+  FALSE, 'Optional. Needs a video asset for the winner variation (DIM_PRODUCT_CREATIVES is family-grain today, so the writer does not emit these yet). Grouping by winner variation exists precisely so one video fits every ASIN in the campaign.');

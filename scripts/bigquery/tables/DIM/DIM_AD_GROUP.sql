@@ -31,6 +31,16 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.DIM_AD_GROUP` (
   last_updated_date TIMESTAMP,
   _fivetran_synced TIMESTAMP,
 
+  -- Derived attribute (Type 1 — refreshed in place, no version cut on change).
+  -- SB creative type from V_SRC_AmazonAds_sb_ad_report (BRAND_VIDEO / PRODUCT_COLLECTION /
+  -- VIDEO / STORE_SPOTLIGHT / …), with a campaign-name fallback ('%VIDEO%' / '%COLLECTION%')
+  -- for SB ad groups whose source creative_type is NULL. NULL for SP ad groups.
+  -- Canonical derivation lives in SP_LOAD_DIM_AD_GROUP; consumers must read it from here,
+  -- not re-derive from the report (was copy-pasted in 4 views, consolidated 2026-07-30).
+  -- Live table got this column via ALTER TABLE ADD COLUMN (migration
+  -- 2026-07-30_dim_ad_group_creative_type.sql), so it sits LAST in the live schema.
+  creative_type STRING,
+
   -- SCD Type 2 columns (DATETIME precision from source date column)
   effective_from DATETIME NOT NULL,
   effective_to DATETIME,
@@ -46,6 +56,8 @@ CLUSTER BY campaign_id, ad_group_id, is_current;
 -- Business key: ad_group_id
 -- Tracked fields trigger a new version when changed:
 --   ad_group_name, state, serving_status, default_bid
+-- Derived Type-1 attribute (updated in place across ALL versions, never cuts one):
+--   creative_type — SB creative type from V_SRC_AmazonAds_sb_ad_report
 --
 -- SCD2 timing:
 -- - effective_from = DATETIME(date) from source view (last_updated_date)

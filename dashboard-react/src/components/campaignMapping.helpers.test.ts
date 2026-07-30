@@ -34,10 +34,10 @@ describe('needsMapping', () => {
 describe('approveAllEligible', () => {
   it('includes only needs-mapping rows with a complete suggestion', () => {
     const rows: CampaignMappingRow[] = [
-      { ...base, campaign_id: 'a', source: 'unmapped', suggested_family: 'Bottle', suggested_strategy: 'INTENT' },
+      { ...base, campaign_id: 'a', source: 'unmapped', suggested_family: 'Bottle', suggested_strategy: 'BROAD_SP' },
       { ...base, campaign_id: 'b', source: 'default', suggested_family: 'Fresh', suggested_strategy: null },
-      { ...base, campaign_id: 'c', source: 'manual', suggested_family: 'Bottle', suggested_strategy: 'INTENT' },
-      { ...base, campaign_id: 'd', source: 'unmapped', suggested_family: null, suggested_strategy: 'INTENT' },
+      { ...base, campaign_id: 'c', source: 'manual', suggested_family: 'Bottle', suggested_strategy: 'BROAD_SP' },
+      { ...base, campaign_id: 'd', source: 'unmapped', suggested_family: null, suggested_strategy: 'BROAD_SP' },
     ];
     expect(approveAllEligible(rows).map(r => r.campaign_id)).toEqual(['a']);
   });
@@ -45,7 +45,7 @@ describe('approveAllEligible', () => {
 
 describe('friendlyStrategy', () => {
   it('maps known ids to labels', () => {
-    expect(friendlyStrategy('EXACT_BOOST')).toBe('Exact Boost');
+    expect(friendlyStrategy('EXACT')).toBe('Exact');
   });
   it('falls back to the raw id for unknown', () => {
     expect(friendlyStrategy('WEIRD_NEW_STRAT')).toBe('WEIRD_NEW_STRAT');

@@ -158,7 +158,11 @@ cube(`Summary`, {
     },
   },
 
+  // Restatement-safe key — see the note in Ads.js. T_UNIFIED_DAILY inherits the Ads restatement:
+  // between the 2026-07-22 06:00Z and 12:00Z rebuilds ad_cost moved 715,174.30 -> 715,265.68 with
+  // MAX(date) pinned at 2026-07-21. The CONCAT(MAX(date), COUNT(*)) key used by UnifiedPerformance
+  // caught this one only because the row count also moved; last_modified_time does not rely on that.
   refreshKey: {
-    sql: `SELECT MAX(date) FROM \`onyga-482313.OI.T_UNIFIED_DAILY\``,
+    sql: `SELECT last_modified_time FROM \`onyga-482313.OI.__TABLES__\` WHERE table_id = 'T_UNIFIED_DAILY'`,
   },
 });

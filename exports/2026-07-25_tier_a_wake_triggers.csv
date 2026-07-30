@@ -1,0 +1,12 @@
+campaign,action,date,condition,bid_note
+"BOX-SP/BROAD (teen-girl, White)",STARTS,2026-08-01,band VEL 1.07; Sep RUN 1.29,
+"BOX-SP/BROAD (implied_low-teen-girl-gift, White)",RESUME,2026-11-01,warm-up before Dec surge (4.83% CVR),re-bid 0.31 Nov / 0.63 Dec
+"BOX-SP/BROAD (tween-girl-christmas-gift, White)",RESUME,2026-10-01,Christmas boost_start + BOX behind floor,
+"BOX-SP/BROAD (teen-girl-christmas-gift, White)",RESUME,2026-10-20,Oct band OFF 0.40 overrides boost_start; wake = Nov RUN minus 14d warm-up,re-bid 0.20
+"BOX-SP/BROAD (teen-gift, White)",RESUME,2026-10-01,ONLY IF BOX still behind velocity floor (band VEL 0.91),
+"BOX-SP/EXACT (teen-gift, White)",RESUME,2026-10-01,wake WITH its Broad (fence otherwise blocks 'pre teen gift boxes'),
+"BOX-SP/BROAD (implied_low-tween-girl, White)",RESUME,2026-11-01,ONLY IF 2 consecutive checkpoints hold VEL band AND behind floor (0.73 is borderline),re-bid 0.26 Dec
+"BOX-SP/BROAD (tween-girl-toys, White)",RESUME,2026-11-01,November = its one RUN month (1.13),re-bid 0.17
+"BOTTLE-SP/BROAD (tween-girl-gift, Truth)",PAUSE,2026-09-01,Sep band MARGINAL 0.64 — mandatory rider on its OPEN_NOW,
+"BOTTLE-SP/BROAD (tween-girl-gift, Truth)",RESUME,2026-10-01,Oct RUN 1.38 into Q4 core (Dec 7.65% CVR),
+FRESH legacy Hunter broad (migration item),DECIDE,2026-08-15,"legacy FRESH Hunter ~$1,015/30d @ $0.77 overlaps new FRESH Broad @ 0.62 cap — reprice or pause in migration",

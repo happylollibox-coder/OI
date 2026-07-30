@@ -59,7 +59,8 @@ cube(`AdsFocusKeywords`, {
     },
   },
 
+  // Restatement-safe key — see the note in Ads.js. MAX(date) misses in-place rewrites.
   refreshKey: {
-    sql: `SELECT MAX(date) FROM \`onyga-482313.OI.FACT_AMAZON_ADS\``,
+    sql: `SELECT last_modified_time FROM \`onyga-482313.OI.__TABLES__\` WHERE table_id = 'FACT_AMAZON_ADS'`,
   },
 });

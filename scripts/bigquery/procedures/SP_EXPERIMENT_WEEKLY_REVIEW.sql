@@ -413,7 +413,7 @@ BEGIN
         -- High volume organic only: use CATEGORY_CONQUEST
         WHEN opp.opportunity_type = 'ORGANIC_ONLY_HIGH_VOLUME' THEN 'COMPETITOR'
         -- Default: LOW_COST_DISCOVERY
-        ELSE 'INTENT'
+        ELSE 'BROAD_SP'
       END as suggested_strategy_id,
       h.holiday_name as upcoming_holiday,
       h.holiday_date as holiday_date

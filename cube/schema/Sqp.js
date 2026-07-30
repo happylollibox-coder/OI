@@ -110,8 +110,11 @@ cube(`Sqp`, {
     },
   },
 
+  // Restatement-safe key — see the note in Ads.js. Amazon backfills the open week IN PLACE:
+  // on 2026-07-23 week 2026-07-18 went from 8,065 to 8,835 rows with ADS_Clicks 11,969 -> 11,961,
+  // ADS_Orders 435 -> 443 and ORGANIC_ORDERS 99 -> 63, all while MAX(Reporting_Date) stayed 07-18.
   refreshKey: {
-    sql: `SELECT MAX(Reporting_Date) FROM \`onyga-482313.OI.FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY\``,
+    sql: `SELECT last_modified_time FROM \`onyga-482313.OI.__TABLES__\` WHERE table_id = 'FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY'`,
   },
 
   preAggregations: {

@@ -7,8 +7,11 @@ import { useState } from 'react';
 
 type Strat = { key: string; label: string; bar: number; note?: string };
 const STRATS: Strat[] = [
-  { key: 'EXACT_BOOST', label: 'Exact Boost', bar: 1.1 },
-  { key: 'INTENT', label: 'Intent', bar: 1.1, note: '≈0.7× once organic halo is counted' },
+  { key: 'EXACT', label: 'Exact', bar: 1.1 },
+  { key: 'PHRASE', label: 'Phrase', bar: 1.1 },
+  { key: 'BROAD_SP', label: 'Broad SP', bar: 1.1, note: '≈0.7× once organic halo is counted' },
+  { key: 'BROAD_VIDEO', label: 'Broad Video', bar: 1.1 },
+  { key: 'BROAD_SPOTLIGHT', label: 'Broad Spotlight', bar: 1.1 },
   { key: 'COMPETITOR', label: 'Competitors', bar: 1.1, note: 'accept lower if SQP share is growing' },
   { key: 'BRAND_DEFENSE', label: 'Brand Defense', bar: 3.0, note: 'own the brand SERP — below 3× underperforms' },
   { key: 'PRODUCT_DEFENSE', label: 'Product Defense', bar: 2.0, note: 'high-intent clicks must convert' },
@@ -27,7 +30,7 @@ const Arrow = () => <div className="text-faint text-center text-label leading-no
 
 export function CoachFlowchart() {
   const [open, setOpen] = useState(false);
-  const [sel, setSel] = useState('EXACT_BOOST');
+  const [sel, setSel] = useState('EXACT');
   const s = STRATS.find(x => x.key === sel)!;
 
   return (

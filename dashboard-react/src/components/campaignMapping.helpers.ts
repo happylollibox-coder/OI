@@ -26,13 +26,23 @@ export interface MappingCoverageCheck {
 
 // Mirrors data-entry-app/app.py `_STRATEGY_LABEL`.
 export const STRATEGY_LABELS: Record<string, string> = {
-  EXACT_BOOST: 'Exact Boost',
-  HUNTER: 'Broad Hunter',
-  LOW_COST_DISCOVERY: 'Auto Discovery',
+  // Current 9-strategy taxonomy (Ori 2026-07-23)
+  AUTO: 'Auto',
+  BROAD_SP: 'Broad SP',
+  BROAD_VIDEO: 'Broad Video',
+  BROAD_SPOTLIGHT: 'Broad Spotlight',
+  PHRASE: 'Phrase',
+  EXACT: 'Exact',
+  COMPETITOR: 'Competitor',
   BRAND_DEFENSE: 'Brand Defense',
   PRODUCT_DEFENSE: 'Product Defense',
-  COMPETITOR_CONQUEST: 'Competitor Conquest',
-  CATEGORY_CONQUEST: 'Category Conquest',
+  // Retired ids — kept so historical rows still render a human label instead of a raw enum.
+  EXACT_BOOST: 'Exact Boost (retired)',
+  INTENT: 'Intent (retired)',
+  HUNTER: 'Broad Hunter (retired)',
+  LOW_COST_DISCOVERY: 'Auto Discovery (retired)',
+  COMPETITOR_CONQUEST: 'Competitor Conquest (retired)',
+  CATEGORY_CONQUEST: 'Category Conquest (retired)',
 };
 
 const UNMAPPED_SOURCES = new Set(['unmapped', 'default']);

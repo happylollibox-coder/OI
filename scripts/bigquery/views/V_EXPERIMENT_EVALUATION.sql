@@ -107,7 +107,7 @@ exact_boost_terms AS (
   FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
   JOIN `onyga-482313.OI.DIM_EXPERIMENT` e ON ec.experiment_id = e.experiment_id
   JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa ON ec.campaign_id = fa.campaign_id
-  WHERE e.strategy_id = 'EXACT_BOOST' AND e.status IN ('ACTIVE', 'PAUSED')
+  WHERE e.strategy_id IN ('PHRASE','EXACT') AND e.status IN ('ACTIVE', 'PAUSED')
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
 ),
 
@@ -120,7 +120,7 @@ graduated_per_exp AS (
   JOIN `onyga-482313.OI.DIM_EXPERIMENT` e ON ec.experiment_id = e.experiment_id
   JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa ON ec.campaign_id = fa.campaign_id
   LEFT JOIN exact_boost_terms ebt ON LOWER(fa.search_term) = ebt.search_term
-  WHERE e.strategy_id IN ('INTENT', 'COMPETITOR')
+  WHERE e.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT','COMPETITOR')
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND fa.Ads_orders > 0
   GROUP BY ec.experiment_id
@@ -232,7 +232,7 @@ SELECT
   CASE
     WHEN ep.total_spend IS NULL OR ep.total_spend < 10 THEN 'NO_DATA'
     WHEN e.strategy_id = 'BRAND_DEFENSE' AND SAFE_DIVIDE(ep.total_sales, ep.total_spend) >= 5.0 THEN 'PASS'
-    WHEN e.strategy_id = 'EXACT_BOOST' AND SAFE_DIVIDE(ep.total_sales, ep.total_spend) >= 2.0 THEN 'PASS'
+    WHEN e.strategy_id IN ('PHRASE','EXACT') AND SAFE_DIVIDE(ep.total_sales, ep.total_spend) >= 2.0 THEN 'PASS'
     WHEN SAFE_DIVIDE(ep.total_sales, ep.total_spend) >= 1.5 THEN 'PASS'
     WHEN SAFE_DIVIDE(ep.total_sales, ep.total_spend) >= 1.0 THEN 'PARTIAL'
     ELSE 'FAIL'
@@ -247,7 +247,7 @@ SELECT
 
   -- CHECK 4: Discovery converting
   CASE
-    WHEN e.strategy_id NOT IN ('INTENT', 'COMPETITOR') THEN 'N/A'
+    WHEN e.strategy_id NOT IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT','COMPETITOR') THEN 'N/A'
     WHEN COALESCE(ep.converting_terms, 0) >= 10 THEN 'PASS'
     WHEN COALESCE(ep.converting_terms, 0) >= 3 THEN 'PARTIAL'
     ELSE 'FAIL'
@@ -255,7 +255,7 @@ SELECT
 
   -- CHECK 5: Terms graduated
   CASE
-    WHEN e.strategy_id NOT IN ('INTENT', 'COMPETITOR') THEN 'N/A'
+    WHEN e.strategy_id NOT IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT','COMPETITOR') THEN 'N/A'
     WHEN COALESCE(gpe.terms_graduated, 0) >= 3 THEN 'PASS'
     WHEN COALESCE(gpe.terms_graduated, 0) > 0 THEN 'PARTIAL'
     ELSE 'FAIL'
@@ -271,7 +271,7 @@ SELECT
 
   -- CHECK 7: CVR (exact strategies)
   CASE
-    WHEN e.strategy_id NOT IN ('EXACT_BOOST', 'BRAND_DEFENSE') THEN 'N/A'
+    WHEN e.strategy_id NOT IN ('PHRASE','EXACT','BRAND_DEFENSE') THEN 'N/A'
     WHEN ep.total_clicks IS NULL OR ep.total_clicks < 20 THEN 'NO_DATA'
     WHEN SAFE_DIVIDE(ep.total_orders, ep.total_clicks) * 100 >= 5.0 THEN 'PASS'
     WHEN SAFE_DIVIDE(ep.total_orders, ep.total_clicks) * 100 >= 2.0 THEN 'PARTIAL'

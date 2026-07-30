@@ -23,21 +23,47 @@
 -- must never be used to attribute an ASIN — only to read campaign_type / targeting_type.
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_CAMPAIGN_ROLE` AS
 WITH camp_strategy AS (
-  SELECT CAST(ec.campaign_id AS STRING) AS campaign_id, ANY_VALUE(e.strategy_id) AS strategy_id
+  -- is_manual: the Configure modal stamps notes with 'manual:' when a human assigns a campaign.
+  -- That flag is what lets a DELIBERATE override beat derivation, while stale bulk-migrated rows
+  -- (no note) stay ignored — see the strategy_category CASE below.
+  SELECT CAST(ec.campaign_id AS STRING) AS campaign_id,
+    ANY_VALUE(e.strategy_id) AS strategy_id,
+    LOGICAL_OR(STARTS_WITH(COALESCE(ec.notes, ''), 'manual:')) AS is_manual
   FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
   JOIN `onyga-482313.OI.DIM_EXPERIMENT` e USING (experiment_id)
   GROUP BY 1
 ),
+-- SB creative format per campaign, from the REAL creative_type. Ori 2026-07-23 made Broad
+-- format-specific (Broad Video / Broad Spotlight are each required per family), so this decides
+-- which Broad cell an SB campaign lands in. Resolves 16/16 enabled SB campaigns; camp_sig carries
+-- a campaign-name fallback for anything this misses.
+sb_format AS (
+  -- Campaign-grain rollup of DIM_AD_GROUP.creative_type (canonical derivation in
+  -- SP_LOAD_DIM_AD_GROUP — report creative_type + campaign-name fallback, no cost filter).
+  SELECT campaign_id,
+    CASE WHEN fmt IN ('BRAND_VIDEO', 'VIDEO') THEN 'VIDEO'
+         WHEN fmt IN ('PRODUCT_COLLECTION', 'STORE_SPOTLIGHT') THEN 'SPOTLIGHT' END AS sb_format
+  FROM (
+    SELECT campaign_id, MAX(creative_type) AS fmt
+    FROM `onyga-482313.OI.DIM_AD_GROUP`
+    WHERE is_current AND creative_type IS NOT NULL
+    GROUP BY 1
+  )
+),
 camp_sig AS (   -- campaign_type + the targeting type that took the most clicks (last 90d)
   SELECT campaign_id,
-    ANY_VALUE(campaign_type) AS campaign_type,
-    ARRAY_AGG(targeting_type IGNORE NULLS ORDER BY clicks DESC LIMIT 1)[SAFE_OFFSET(0)] AS targeting_type
+    -- LOGICAL_OR, not ANY_VALUE: a campaign can have mixed/renamed rows in FACT_AMAZON_ADS and
+    -- ANY_VALUE would pick non-deterministically, silently dropping SB campaigns into BROAD_SP.
+    IF(LOGICAL_OR(UPPER(campaign_type) = 'SB'), 'SB', ANY_VALUE(campaign_type)) AS campaign_type,
+    ARRAY_AGG(targeting_type IGNORE NULLS ORDER BY clicks DESC LIMIT 1)[SAFE_OFFSET(0)] AS targeting_type,
+    CASE WHEN REGEXP_CONTAINS(UPPER(ANY_VALUE(campaign_name)), r'COLLECTION|SPOTLIGHT|SBS|STORE')
+           THEN 'SPOTLIGHT' ELSE 'VIDEO' END AS sb_format_by_name
   FROM (
-    SELECT CAST(campaign_id AS STRING) AS campaign_id, campaign_type, targeting_type,
+    SELECT CAST(campaign_id AS STRING) AS campaign_id, campaign_type, targeting_type, campaign_name,
            SUM(Ads_clicks) AS clicks
     FROM `onyga-482313.OI.FACT_AMAZON_ADS`
     WHERE date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 90 DAY)
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
   )
   GROUP BY campaign_id
 )
@@ -71,16 +97,38 @@ SELECT
   -- STRATEGY grain for the Weekly Run "Budget by strategy" split (cross-pool, Ori 2026-07-18): the
   -- campaign's assigned STRATEGY, not the match-type coverage role above. Auto is split out from Intent
   -- by targeting type; the two defenses are explicit assignments and win over targeting.
+  -- ── STRATEGY (9-value taxonomy, Ori 2026-07-23) ──────────────────────────────────────────
+  -- Replaces the old INTENT / EXACT_BOOST pair, which conflated things that behave differently:
+  --   INTENT was 100% broad-match, and is now split BY FORMAT (BROAD_SP / BROAD_VIDEO /
+  --     BROAD_SPOTLIGHT) because all three are required per family and perform very differently.
+  --   EXACT_BOOST was silently HALF PHRASE (4 phrase + 4 exact campaigns) — split into PHRASE and
+  --     EXACT, which carry different bids and different scaling accuracy (~70% vs ~90%).
+  -- Match type + format are DERIVED from the ad data, so Broad/Phrase/Exact need no manual mapping.
+  -- Explicit assignment only wins for the four that CANNOT be derived from targeting (the defenses,
+  -- Auto, Competitor) plus any new-taxonomy value set by hand. Legacy 'INTENT'/'EXACT_BOOST' rows
+  -- are deliberately NOT honoured — they fall through to derivation, which supersedes them.
   CASE
-    WHEN st.strategy_id = 'BRAND_DEFENSE'   THEN 'BRAND_DEFENSE'
-    WHEN st.strategy_id = 'PRODUCT_DEFENSE' THEN 'PRODUCT_DEFENSE'
-    WHEN st.strategy_id = 'AUTO'            THEN 'AUTO'  -- explicit AUTO assignment beats targeting inference
+    -- Explicit assignment always wins for the four that cannot be derived from targeting data.
+    WHEN st.strategy_id IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE', 'AUTO', 'COMPETITOR')
+      THEN st.strategy_id
+    -- Broad/Phrase/Exact ARE derivable, so a stored value only wins when a human set it on purpose
+    -- (notes 'manual:%'). That keeps stale BULK-MIGRATED rows from overriding the ad data — which
+    -- had silently put SB video campaigns like FRESH-VIDEO/ BROAD into BROAD_SP — while still
+    -- letting Ori reclassify a campaign by hand in the Configure modal and have it STICK
+    -- (before this, a manual Phrase override was ignored and snapped back to the derived value).
+    WHEN st.is_manual AND st.strategy_id IN ('BROAD_SP', 'BROAD_VIDEO', 'BROAD_SPOTLIGHT', 'PHRASE', 'EXACT')
+      THEN st.strategy_id
+    WHEN st.strategy_id IN ('CATEGORY_CONQUEST', 'COMPETITOR_CONQUEST') THEN 'COMPETITOR'
     WHEN UPPER(cs.targeting_type) = 'AUTOMATIC' THEN 'AUTO'
-    WHEN st.strategy_id = 'EXACT_BOOST'     THEN 'EXACT_BOOST'
-    WHEN st.strategy_id IN ('COMPETITOR', 'CATEGORY_CONQUEST', 'COMPETITOR_CONQUEST')
-      OR UPPER(cs.targeting_type) IN ('ASIN', 'ASIN EXPANDED', 'CATEGORY') THEN 'COMPETITOR'
-    WHEN st.strategy_id = 'INTENT'          THEN 'INTENT'
+    WHEN UPPER(cs.targeting_type) IN ('ASIN', 'ASIN EXPANDED', 'CATEGORY') THEN 'COMPETITOR'
+    WHEN UPPER(cs.targeting_type) = 'BROAD' THEN
+      CASE WHEN UPPER(cs.campaign_type) = 'SB' AND COALESCE(sf.sb_format, cs.sb_format_by_name) = 'SPOTLIGHT' THEN 'BROAD_SPOTLIGHT'
+           WHEN UPPER(cs.campaign_type) = 'SB'                                THEN 'BROAD_VIDEO'
+           ELSE 'BROAD_SP' END
+    WHEN UPPER(cs.targeting_type) = 'PHRASE' THEN 'PHRASE'
+    WHEN UPPER(cs.targeting_type) = 'EXACT'  THEN 'EXACT'
     ELSE 'OTHER'
   END AS strategy_category
 FROM camp_sig cs
-LEFT JOIN camp_strategy st USING (campaign_id);
+LEFT JOIN camp_strategy st USING (campaign_id)
+LEFT JOIN sb_format sf USING (campaign_id);

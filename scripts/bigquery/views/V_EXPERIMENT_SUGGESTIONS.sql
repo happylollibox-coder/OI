@@ -212,21 +212,21 @@ strategy_segment_map AS (
   SELECT 'RETARGETING', 'PRODUCT' UNION ALL
 
   -- ACTIVITY segment (sleepover, party): exact + discovery
-  SELECT 'EXACT_BOOST', 'ACTIVITY' UNION ALL
+  SELECT 'EXACT', 'ACTIVITY' UNION ALL
   SELECT 'TOS_DOMINATION', 'ACTIVITY' UNION ALL
-  SELECT 'INTENT', 'ACTIVITY' UNION ALL
+  SELECT 'BROAD_SP', 'ACTIVITY' UNION ALL
 
   -- BIRTHDAY_KIDS: proven high-intent, core audience
-  SELECT 'EXACT_BOOST', 'BIRTHDAY_KIDS' UNION ALL
+  SELECT 'EXACT', 'BIRTHDAY_KIDS' UNION ALL
   SELECT 'TOS_DOMINATION', 'BIRTHDAY_KIDS' UNION ALL
 
   -- BIRTHDAY_TEEN: test audience for birthday terms
-  SELECT 'EXACT_BOOST', 'BIRTHDAY_TEEN' UNION ALL
+  SELECT 'EXACT', 'BIRTHDAY_TEEN' UNION ALL
   SELECT 'TOS_DOMINATION', 'BIRTHDAY_TEEN' UNION ALL
 
   -- BIRTHDAY_GENERAL: discovery for birthday terms without age
-  SELECT 'INTENT', 'BIRTHDAY_GENERAL' UNION ALL
-  SELECT 'INTENT', 'BIRTHDAY_GENERAL' UNION ALL
+  SELECT 'BROAD_SP', 'BIRTHDAY_GENERAL' UNION ALL
+  SELECT 'BROAD_SP', 'BIRTHDAY_GENERAL' UNION ALL
 
   -- SEASONAL occasions: push strategies during ramp-up windows
   SELECT 'SEASONAL_PUSH', 'CHRISTMAS' UNION ALL
@@ -236,16 +236,16 @@ strategy_segment_map AS (
   SELECT 'SEASONAL_PUSH', 'GRADUATION' UNION ALL
 
   -- GIFT_KIDS: general gift shoppers looking for kids
-  SELECT 'EXACT_BOOST', 'GIFT_KIDS' UNION ALL
+  SELECT 'EXACT', 'GIFT_KIDS' UNION ALL
   SELECT 'TOS_DOMINATION', 'GIFT_KIDS' UNION ALL
 
   -- GIFT_TEEN: general gift shoppers looking for teens
-  SELECT 'EXACT_BOOST', 'GIFT_TEEN' UNION ALL
+  SELECT 'EXACT', 'GIFT_TEEN' UNION ALL
   SELECT 'TOS_DOMINATION', 'GIFT_TEEN' UNION ALL
 
   -- GIFT_GENERAL: broad discovery for generic gift terms
-  SELECT 'INTENT', 'GIFT_GENERAL' UNION ALL
-  SELECT 'INTENT', 'GIFT_GENERAL' UNION ALL
+  SELECT 'BROAD_SP', 'GIFT_GENERAL' UNION ALL
+  SELECT 'BROAD_SP', 'GIFT_GENERAL' UNION ALL
   SELECT 'COMPETITOR', 'GIFT_GENERAL' UNION ALL
   SELECT 'COMPETITOR', 'GIFT_KIDS' UNION ALL
 
@@ -403,26 +403,26 @@ raw_suggestions AS (
              THEN 200 ELSE 0 END
 
       -- EXACT_BOOST: boost when ASIN has proven terms (3+ orders, 2+ weeks, big market)
-      + CASE WHEN s.strategy_id = 'EXACT_BOOST'
+      + CASE WHEN s.strategy_id IN ('PHRASE','EXACT')
              AND COALESCE(aso.proven_term_count, 0) >= 2
              THEN 100 + LEAST(COALESCE(aso.proven_term_count, 0) * 10, 50)  -- Up to +150
              ELSE 0 END
       -- EXACT_BOOST: bonus for high-intent segment (high amazon conversion)
-      + CASE WHEN s.strategy_id = 'EXACT_BOOST'
+      + CASE WHEN s.strategy_id IN ('PHRASE','EXACT')
              AND COALESCE(aso.avg_amazon_conversion_rate_pct, 0) > 8
              THEN 30 ELSE 0 END
       -- EXACT_BOOST: penalty if ASIN has no proven terms (not yet earned)
-      - CASE WHEN s.strategy_id = 'EXACT_BOOST'
+      - CASE WHEN s.strategy_id IN ('PHRASE','EXACT')
              AND COALESCE(aso.proven_term_count, 0) = 0
              THEN 200 ELSE 0 END
 
       -- LOW_COST_DISCOVERY: boost when many high-volume unproven terms exist
-      + CASE WHEN s.strategy_id = 'INTENT'
+      + CASE WHEN s.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
              AND COALESCE(aso.high_volume_unproven_count, 0) >= 3
              THEN 75 + LEAST(COALESCE(aso.high_volume_unproven_count, 0) * 5, 50)  -- Up to +125
              ELSE 0 END
       -- LOW_COST_DISCOVERY: penalty if ASIN already has many proven terms (use EXACT_BOOST instead)
-      - CASE WHEN s.strategy_id = 'INTENT'
+      - CASE WHEN s.strategy_id IN ('BROAD_SP','BROAD_VIDEO','BROAD_SPOTLIGHT')
              AND COALESCE(aso.proven_term_count, 0) >= 5
              THEN 100 ELSE 0 END
 

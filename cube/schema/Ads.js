@@ -122,8 +122,12 @@ cube(`Ads`, {
     },
   },
 
+  // Amazon restates the last several days IN PLACE, so a MAX(date) watermark does not move
+  // when the numbers change and Cube keeps serving the pre-restatement total (2026-07-23:
+  // 7,479.41 vs 7,617.77 for the same week). Key on the table's last-modified time instead —
+  // a free metadata read that flips on every SP_LOAD rewrite.
   refreshKey: {
-    sql: `SELECT MAX(date) FROM \`onyga-482313.OI.FACT_AMAZON_ADS\``,
+    sql: `SELECT last_modified_time FROM \`onyga-482313.OI.__TABLES__\` WHERE table_id = 'FACT_AMAZON_ADS'`,
   },
 
   preAggregations: {
