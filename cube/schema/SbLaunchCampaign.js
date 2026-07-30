@@ -36,3 +36,5 @@ cube(`SbLaunchCampaign`, {
 // cache-bust v2: TOS nulled — sb_campaign_report's top_of_search field is placement mix (86%), not competitive IS (<5%)
 
 // cache-bust v3: budget suggestion (SB-native signals) + camp roas dims
+
+// cache-bust 2026-07-30c: budget-constrained probing (PARK 90d-orders evidence fix, affordable-CPC trim, no probe while capped)

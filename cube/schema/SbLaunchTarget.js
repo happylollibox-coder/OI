@@ -36,3 +36,5 @@ cube(`SbLaunchTarget`, {
 // cache-bust v2: money-bleeder ladder (0-conversion targets trimmed by clicks, not raised by STARVE)
 
 // cache-bust 2026-07-21: bleeder recency gate (BLEED_STALE)
+
+// cache-bust 2026-07-30c: budget-constrained probing (PARK 90d-orders evidence fix, affordable-CPC trim, no probe while capped)

@@ -32,3 +32,5 @@ cube(`OobSearchTerm`, {
     isNegate:   { sql: `is_negate`,   type: `boolean` },
   },
 });
+
+// cache-bust 2026-07-30c: budget-constrained probing (PARK 90d-orders evidence fix, affordable-CPC trim, no probe while capped)
