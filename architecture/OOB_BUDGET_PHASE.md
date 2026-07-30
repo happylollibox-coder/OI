@@ -61,8 +61,10 @@ same constants as the launch controller, applied to every OOB campaign regardles
 
 **Search-term layer** (`V_OOB_SEARCH_TERM`, SP + SB, TWO windows — Ori 2026-07-30: "to negate
 general big words need to check 3 month data; small volume words 28 days are enough"):
-- **big general word** (≥ 30 clicks over 90 complete days) → negate only on **0 orders over the
-  full 90d** — one order anywhere in 3 months protects it from a bad month;
+- **big general word** (≥ 30 clicks over 90 complete days **ACCOUNT-WIDE**, all campaigns SP+SB —
+  per-slice volume fragments a big word into "small" pieces; caught by Ori on "teen girl gifts
+  trendy stuff": 13 clicks in one slice, 1,326 clicks / 11 orders account-wide) → negate only on
+  **0 orders anywhere in the full 90d**, and only in slices with ≥ 3 clicks/90d here;
 - **small word** → negate at **≥ 10 clicks · 0 orders over 28d**;
 plus the structural rules: the term is not the keyword itself (`term ≠ keyword`, normalized —
 applies to MANUAL and SB keywords), AUTO targets skip the term≠keyword test (every auto term

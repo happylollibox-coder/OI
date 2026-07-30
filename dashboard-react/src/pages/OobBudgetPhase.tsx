@@ -24,7 +24,7 @@ type Kw = {
 type Term = {
   campaignId: string; targetText: string; term: string; kind: string;
   clicks: number; orders: number; spend: number; netRoas: number | null;
-  clicks90d: number; spend90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean;
+  clicks90d: number; spend90d: number; termClicks90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean;
 };
 
 const num = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
@@ -79,7 +79,7 @@ export function OobBudgetPhase() {
           'OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
           'OobSearchTerm.kind', 'OobSearchTerm.clicks', 'OobSearchTerm.orders', 'OobSearchTerm.spend',
           'OobSearchTerm.netRoas', 'OobSearchTerm.clicks90d', 'OobSearchTerm.spend90d',
-          'OobSearchTerm.isBig', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
+          'OobSearchTerm.termClicks90d', 'OobSearchTerm.isBig', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
         ],
         filters: [{ member: 'OobSearchTerm.clicks90d', operator: 'gte', values: ['3'] }],
       }),
@@ -136,6 +136,7 @@ export function OobBudgetPhase() {
         netRoas: num(r['OobSearchTerm.netRoas']),
         clicks90d: num(r['OobSearchTerm.clicks90d']) ?? 0,
         spend90d: num(r['OobSearchTerm.spend90d']) ?? 0,
+        termClicks90d: num(r['OobSearchTerm.termClicks90d']) ?? 0,
         isBig: bool(r['OobSearchTerm.isBig']),
         isWinner: bool(r['OobSearchTerm.isWinner']),
         isNegate: bool(r['OobSearchTerm.isNegate']),
@@ -335,7 +336,7 @@ export function OobBudgetPhase() {
                       <td className="text-left pl-14 pr-2 py-0.5 text-faint whitespace-nowrap">“{t.term}”</td>
                       <td className="px-2 text-faint">{t.kind.toLowerCase()}</td>
                       <td className="px-2 text-faint" colSpan={2}>{t.isBig
-                        ? `${t.clicks90d} clicks · $${t.spend90d.toFixed(2)} · 90d`
+                        ? `${t.termClicks90d} clicks account-wide · ${t.clicks90d} here · 90d`
                         : `${t.clicks} clicks · $${t.spend.toFixed(2)} · 28d`}</td>
                       <td className="px-2 text-faint" colSpan={2}>0 orders</td>
                       <td className="px-2" colSpan={2} />
@@ -348,7 +349,7 @@ export function OobBudgetPhase() {
                         </button>
                       </td>
                       <td className="px-2 text-left text-faint whitespace-nowrap">{t.isBig
-                          ? 'big general word — 3 months checked, 0 orders'
+                          ? 'big general word — 0 orders anywhere in 3 months'
                           : '≥10 clicks · 0 orders · 28d'}{['MANUAL', 'SB'].includes(t.kind) ? ' · not the keyword' : ''}</td>
                     </tr>
                   ); })}

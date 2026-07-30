@@ -3,7 +3,7 @@
 // PT excluded). Spec: architecture/OOB_BUDGET_PHASE.md §v2.
 cube(`OobSearchTerm`, {
   sql: `SELECT campaign_id, keyword_id, target_text, search_term, kind, clicks, orders, spend, sales,
-               net_roas, clicks_90d, orders_90d, spend_90d, is_big, term_is_keyword, is_winner, is_negate
+               net_roas, clicks_90d, orders_90d, spend_90d, term_clicks_90d, term_orders_90d, is_big, term_is_keyword, is_winner, is_negate
         FROM \`onyga-482313.OI.V_OOB_SEARCH_TERM\``,
 
   refreshKey: { sql: `SELECT MAX(finished_at) FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\` WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK'` },
@@ -24,6 +24,8 @@ cube(`OobSearchTerm`, {
     clicks90d:  { sql: `clicks_90d`,  type: `number` },
     orders90d:  { sql: `orders_90d`,  type: `number` },
     spend90d:   { sql: `spend_90d`,   type: `number` },
+    termClicks90d: { sql: `term_clicks_90d`, type: `number` },
+    termOrders90d: { sql: `term_orders_90d`, type: `number` },
     isBig:      { sql: `is_big`,      type: `boolean` },
     termIsKeyword: { sql: `term_is_keyword`, type: `boolean` },
     isWinner:   { sql: `is_winner`,   type: `boolean` },
