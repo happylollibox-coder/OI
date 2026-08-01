@@ -45,20 +45,24 @@ camps AS (
 -- window W performance per (campaign, target) — corrected GP (price-tier COGS)
 kwW AS (
   SELECT CAST(a.campaign_id AS STRING) cid, a.targeting,
-    SUM(a.Ads_clicks) clk_w, SUM(a.Ads_cost) sp_w, SUM(a.Ads_orders) ord_w,
-    SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units) gp_w,
+    SUM(IF(a.date > DATE_SUB((SELECT d FROM wm), INTERVAL k.w_days DAY), a.Ads_clicks, 0)) clk_w,
+    SUM(IF(a.date > DATE_SUB((SELECT d FROM wm), INTERVAL k.w_days DAY), a.Ads_cost, 0)) sp_w,
+    SUM(IF(a.date > DATE_SUB((SELECT d FROM wm), INTERVAL k.w_days DAY), a.Ads_orders, 0)) ord_w,
+    SUM(IF(a.date > DATE_SUB((SELECT d FROM wm), INTERVAL k.w_days DAY), a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units, 0)) gp_w,
     SUM(IF(a.date = (SELECT d FROM wm), a.Ads_clicks, 0)) clk1,
-    SUM(IF(a.date = (SELECT d FROM wm), a.Ads_cost, 0)) sp1,
-    SUM(IF(a.date = (SELECT d FROM wm), a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units, 0)) gp1,
-    SUM(IF(a.date < (SELECT d FROM wm) AND a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY), a.Ads_clicks, 0)) clk_p2,
-    SUM(IF(a.date < (SELECT d FROM wm) AND a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY), a.Ads_cost, 0)) sp_p2,
-    SUM(IF(a.date < (SELECT d FROM wm) AND a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY), a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units, 0)) gp_p2
+    -- panel windows (Ori 2026-08-01: 'last 7 days' + 'prev 21 days, day 8 till 28')
+    SUM(IF(a.date > DATE_SUB((SELECT d FROM wm), INTERVAL 7 DAY), a.Ads_clicks, 0)) clk7,
+    SUM(IF(a.date > DATE_SUB((SELECT d FROM wm), INTERVAL 7 DAY), a.Ads_cost, 0)) sp7,
+    SUM(IF(a.date > DATE_SUB((SELECT d FROM wm), INTERVAL 7 DAY), a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units, 0)) gp7,
+    SUM(IF(a.date <= DATE_SUB((SELECT d FROM wm), INTERVAL 7 DAY), a.Ads_clicks, 0)) clk8_28,
+    SUM(IF(a.date <= DATE_SUB((SELECT d FROM wm), INTERVAL 7 DAY), a.Ads_cost, 0)) sp8_28,
+    SUM(IF(a.date <= DATE_SUB((SELECT d FROM wm), INTERVAL 7 DAY), a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units, 0)) gp8_28
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   JOIN camps c ON c.campaign_id = CAST(a.campaign_id AS STRING)
   CROSS JOIN cap k
   LEFT JOIN `onyga-482313.OI.T_PRICE_COST_TIER` pct
     ON a.Ads_units > 0 AND pct.unit_price = ROUND(SAFE_DIVIDE(a.Ads_sales, a.Ads_units), 2)
-  WHERE a.date > DATE_SUB((SELECT d FROM wm), INTERVAL k.w_days DAY)
+  WHERE a.date > DATE_SUB((SELECT d FROM wm), INTERVAL 28 DAY)
   GROUP BY 1, 2
 ),
 -- full target list (idle keywords included — the candidate pool), ids + current bid
@@ -162,8 +166,8 @@ base AS (
     COALESCE(td.keyword_bid, agb.default_bid) AS current_bid,
     COALESCE(w.clk_w, 0) clk_w, COALESCE(w.sp_w, 0) sp_w, COALESCE(w.ord_w, 0) ord_w,
     ROUND(SAFE_DIVIDE(w.gp_w, NULLIF(w.sp_w, 0)), 2) AS roas_w, COALESCE(w.clk1, 0) clk1,
-    ROUND(SAFE_DIVIDE(w.gp1, NULLIF(w.sp1, 0)), 2) AS roas1,
-    COALESCE(w.clk_p2, 0) clk_p2, ROUND(SAFE_DIVIDE(w.gp_p2, NULLIF(w.sp_p2, 0)), 2) AS roas_p2,
+    COALESCE(w.clk7, 0) clk7, ROUND(SAFE_DIVIDE(w.gp7, NULLIF(w.sp7, 0)), 2) AS roas7,
+    COALESCE(w.clk8_28, 0) clk8_28, ROUND(SAFE_DIVIDE(w.gp8_28, NULLIF(w.sp8_28, 0)), 2) AS roas8_28,
     COALESCE(n90.clk90, 0) clk90, COALESCE(n90.ord90, 0) ord90, n90.roas90,
     li.inc_date, li.probe_bid,
     COALESCE(ep.ep_clk, 0) ep_clk, ROUND(SAFE_DIVIDE(ep.ep_gp, NULLIF(ep.ep_sp, 0)), 2) AS ep_roas,
@@ -296,19 +300,22 @@ sb_day AS (
 ),
 sb_kwW AS (
   SELECT t.keyword_id,
-    SUM(d.clk) clk_w, SUM(d.sp) sp_w, SUM(d.ord) ord_w,
-    SUM(d.sales * (1 - COALESCE(pr.cost_ratio, 0))) gp_w,
+    SUM(IF(d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL k.w_days DAY), d.clk, 0)) clk_w,
+    SUM(IF(d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL k.w_days DAY), d.sp, 0)) sp_w,
+    SUM(IF(d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL k.w_days DAY), d.ord, 0)) ord_w,
+    SUM(IF(d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL k.w_days DAY), d.sales * (1 - COALESCE(pr.cost_ratio, 0)), 0)) gp_w,
     SUM(IF(d.date = (SELECT d FROM sb_wm), d.clk, 0)) clk1,
-    SUM(IF(d.date = (SELECT d FROM sb_wm), d.sp, 0)) sp1,
-    SUM(IF(d.date = (SELECT d FROM sb_wm), d.sales * (1 - COALESCE(pr.cost_ratio, 0)), 0)) gp1,
-    SUM(IF(d.date < (SELECT d FROM sb_wm) AND d.date >= DATE_SUB((SELECT d FROM sb_wm), INTERVAL 2 DAY), d.clk, 0)) clk_p2,
-    SUM(IF(d.date < (SELECT d FROM sb_wm) AND d.date >= DATE_SUB((SELECT d FROM sb_wm), INTERVAL 2 DAY), d.sp, 0)) sp_p2,
-    SUM(IF(d.date < (SELECT d FROM sb_wm) AND d.date >= DATE_SUB((SELECT d FROM sb_wm), INTERVAL 2 DAY), d.sales * (1 - COALESCE(pr.cost_ratio, 0)), 0)) gp_p2
+    SUM(IF(d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL 7 DAY), d.clk, 0)) clk7,
+    SUM(IF(d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL 7 DAY), d.sp, 0)) sp7,
+    SUM(IF(d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL 7 DAY), d.sales * (1 - COALESCE(pr.cost_ratio, 0)), 0)) gp7,
+    SUM(IF(d.date <= DATE_SUB((SELECT d FROM sb_wm), INTERVAL 7 DAY), d.clk, 0)) clk8_28,
+    SUM(IF(d.date <= DATE_SUB((SELECT d FROM sb_wm), INTERVAL 7 DAY), d.sp, 0)) sp8_28,
+    SUM(IF(d.date <= DATE_SUB((SELECT d FROM sb_wm), INTERVAL 7 DAY), d.sales * (1 - COALESCE(pr.cost_ratio, 0)), 0)) gp8_28
   FROM sb_td t
   JOIN sb_day d ON d.target_id = t.keyword_id
   CROSS JOIN cap k
   LEFT JOIN sb_prod pr ON pr.cid = t.campaign_id
-  WHERE d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL k.w_days DAY)
+  WHERE d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL 28 DAY)
     AND d.date <= (SELECT d FROM sb_wm)
   GROUP BY 1
 ),
@@ -370,8 +377,8 @@ sb_base AS (
     COALESCE(t.keyword_bid, agb.default_bid) AS current_bid,
     COALESCE(w.clk_w, 0) clk_w, COALESCE(w.sp_w, 0) sp_w, COALESCE(w.ord_w, 0) ord_w,
     ROUND(SAFE_DIVIDE(w.gp_w, NULLIF(w.sp_w, 0)), 2) AS roas_w, COALESCE(w.clk1, 0) clk1,
-    ROUND(SAFE_DIVIDE(w.gp1, NULLIF(w.sp1, 0)), 2) AS roas1,
-    COALESCE(w.clk_p2, 0) clk_p2, ROUND(SAFE_DIVIDE(w.gp_p2, NULLIF(w.sp_p2, 0)), 2) AS roas_p2,
+    COALESCE(w.clk7, 0) clk7, ROUND(SAFE_DIVIDE(w.gp7, NULLIF(w.sp7, 0)), 2) AS roas7,
+    COALESCE(w.clk8_28, 0) clk8_28, ROUND(SAFE_DIVIDE(w.gp8_28, NULLIF(w.sp8_28, 0)), 2) AS roas8_28,
     COALESCE(n90.clk90, 0) clk90, COALESCE(n90.ord90, 0) ord90, n90.roas90,
     li.inc_date, li.probe_bid,
     COALESCE(ep.ep_clk, 0) ep_clk, ROUND(SAFE_DIVIDE(ep.ep_gp, NULLIF(ep.ep_sp, 0)), 2) AS ep_roas,
@@ -448,8 +455,8 @@ SELECT
   a.clk_w AS clicks_w, ROUND(a.sp_w, 2) AS spend_w, a.ord_w AS orders_w, a.roas_w,
   a.tcpc AS target_cpc, a.class,
   a.probing, a.inc_date AS probe_started, a.ep_clk AS probe_clicks, a.ep_roas AS probe_roas,
-  CAST(a.clk1 AS INT64) AS clicks_1d, a.roas1 AS roas_1d,
-  CAST(a.clk_p2 AS INT64) AS clicks_prev2, a.roas_p2 AS roas_prev2,
+  CAST(a.clk7 AS INT64) AS clicks_7d, a.roas7 AS roas_7d,
+  CAST(a.clk8_28 AS INT64) AS clicks_8_28, a.roas8_28 AS roas_8_28,
   a.pct_dark, a.capped, a.slots, a.seat_rank,
   CASE
     -- probe verdicts first
@@ -535,8 +542,8 @@ SELECT
   CAST(a.clk_w AS INT64) AS clicks_w, ROUND(a.sp_w, 2) AS spend_w, CAST(a.ord_w AS INT64) AS orders_w, a.roas_w,
   a.tcpc AS target_cpc, a.class,
   a.probing, a.inc_date AS probe_started, CAST(a.ep_clk AS INT64) AS probe_clicks, a.ep_roas AS probe_roas,
-  CAST(a.clk1 AS INT64) AS clicks_1d, a.roas1 AS roas_1d,
-  CAST(a.clk_p2 AS INT64) AS clicks_prev2, a.roas_p2 AS roas_prev2,
+  CAST(a.clk7 AS INT64) AS clicks_7d, a.roas7 AS roas_7d,
+  CAST(a.clk8_28 AS INT64) AS clicks_8_28, a.roas8_28 AS roas_8_28,
   a.pct_dark, a.capped, a.slots, a.seat_rank,
   CASE
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN 'WINNER_FOUND'

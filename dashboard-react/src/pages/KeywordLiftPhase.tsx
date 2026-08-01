@@ -14,7 +14,7 @@ type Row = {
   keywordId: string; adGroupId: string; text: string; matchType: string;
   isAuto: boolean; isPt: boolean; bid: number | null;
   clicksW: number; kwSpendW: number; ordersW: number; roasW: number | null;
-  clicks1d: number; roas1d: number | null; clicksPrev2: number; roasPrev2: number | null;
+  clicks7d: number; roas7d: number | null; clicks828: number; roas828: number | null;
   pctDark: number; slots: number; seatRank: number;
   targetCpc: number | null; kwClass: string; probing: boolean;
   probeClicks: number; probeRoas: number | null;
@@ -102,7 +102,7 @@ export function KeywordLiftPhase() {
         'KeywordLift.clicksW', 'KeywordLift.spendW', 'KeywordLift.ordersW', 'KeywordLift.roasW',
         'KeywordLift.targetCpc', 'KeywordLift.kwClass', 'KeywordLift.probing',
         'KeywordLift.probeClicks', 'KeywordLift.probeRoas',
-        'KeywordLift.clicks1d', 'KeywordLift.roas1d', 'KeywordLift.clicksPrev2', 'KeywordLift.roasPrev2',
+        'KeywordLift.clicks7d', 'KeywordLift.roas7d', 'KeywordLift.clicks828', 'KeywordLift.roas828',
         'KeywordLift.pctDark', 'KeywordLift.slots', 'KeywordLift.seatRank',
         'KeywordLift.action', 'KeywordLift.suggestedBid', 'KeywordLift.reason',
       ],
@@ -133,10 +133,10 @@ export function KeywordLiftPhase() {
         probing: bool(r['KeywordLift.probing']),
         probeClicks: num(r['KeywordLift.probeClicks']) ?? 0,
         probeRoas: num(r['KeywordLift.probeRoas']),
-        clicks1d: num(r['KeywordLift.clicks1d']) ?? 0,
-        roas1d: num(r['KeywordLift.roas1d']),
-        clicksPrev2: num(r['KeywordLift.clicksPrev2']) ?? 0,
-        roasPrev2: num(r['KeywordLift.roasPrev2']),
+        clicks7d: num(r['KeywordLift.clicks7d']) ?? 0,
+        roas7d: num(r['KeywordLift.roas7d']),
+        clicks828: num(r['KeywordLift.clicks828']) ?? 0,
+        roas828: num(r['KeywordLift.roas828']),
         pctDark: num(r['KeywordLift.pctDark']) ?? 0,
         slots: num(r['KeywordLift.slots']) ?? 1,
         seatRank: num(r['KeywordLift.seatRank']) ?? 99,
@@ -241,8 +241,8 @@ export function KeywordLiftPhase() {
                 <th className="font-normal text-left px-2 py-0.5">item — campaign ▸ keyword</th>
                 <th className="font-normal px-2" title="share of the day out of budget (campaign) — Portfolio campaigns are ≤10% by ownership; losers % shown in the campaign meta">dark</th>
                 <th className="font-normal px-2">now $</th>
-                <th className="font-normal px-2" title="last complete day — keyword: clicks + net ROAS">last day</th>
-                <th className="font-normal px-2" title="the 2 days before — same format as last day">prev-2d</th>
+                <th className="font-normal px-2" title="last 7 complete days — clicks + net ROAS">last 7d</th>
+                <th className="font-normal px-2" title="the 21 days before (day 8 till 28) — same format">8–28d</th>
                 <th className="font-normal px-2" title="target CPC (last-year / band)">CPC/target</th>
                 <th className="font-normal px-2 text-left">action</th>
                 <th className="font-normal px-2">→ $</th>
@@ -285,8 +285,8 @@ export function KeywordLiftPhase() {
                       <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}) · <span className={CLASS_CLS[k.kwClass] ?? ''}>{k.kwClass.toLowerCase()}</span> · spent ${k.kwSpendW.toFixed(2)}</span></td>
                     <td className="px-2" />
                     <td className="px-2 text-muted whitespace-nowrap">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}</td>
-                    <td className="px-2 text-muted whitespace-nowrap">{k.clicks1d}c{k.roas1d != null ? ` ${k.roas1d.toFixed(2)}×` : ' —'}</td>
-                    <td className="px-2 text-muted whitespace-nowrap">{k.clicksPrev2}c{k.roasPrev2 != null ? ` ${k.roasPrev2.toFixed(2)}×` : ' —'}</td>
+                    <td className="px-2 text-muted whitespace-nowrap">{k.clicks7d}c{k.roas7d != null ? ` ${k.roas7d.toFixed(2)}×` : ' —'}</td>
+                    <td className="px-2 text-muted whitespace-nowrap">{k.clicks828}c{k.roas828 != null ? ` ${k.roas828.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-faint">{k.targetCpc != null ? `$${k.targetCpc.toFixed(2)}` : '—'}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${ACT_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace(/_/g, ' ')}</td>
                     <td className="px-2">{k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}</td>
