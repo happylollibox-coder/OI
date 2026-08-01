@@ -118,6 +118,13 @@ band AS (
     AND season = IF(s.in_peak, 'PEAK', 'OFF')
   GROUP BY 1, 2
 ),
+-- Portfolio 80/20 probe protection (same rule as the coacher suppression, ADS_COACH_DECISION_MATRIX
+-- §Safety Guards): keywords mid-probe-episode (or imminent PROBE_START) are owned by the lift
+-- engine — the seat model must not park/trim/brake them mid-test; verdict comes at 20 clicks.
+lift_probes AS (
+  SELECT DISTINCT keyword_id FROM `onyga-482313.OI.V_KEYWORD_LIFT`
+  WHERE probing OR action = 'PROBE_START'
+),
 -- 1-day cooldown: did we already upload a change for this keyword?
 lc AS (
   SELECT keyword_id, DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at)), DAY) AS days_since
@@ -294,6 +301,7 @@ seats AS (
 ),
 seats2 AS (
   SELECT s.*,
+    s.keyword_id IS NOT NULL AND s.keyword_id IN (SELECT keyword_id FROM lift_probes) AS is_lift_probe,
     ROW_NUMBER() OVER (PARTITION BY s.campaign_id
       ORDER BY IF(s.seat_rank <= s.slots AND COALESCE(s.current_bid, 0) <= 0.30 AND NOT s.tested_loser, 0, 1),
                s.seat_rank) AS act_rank
@@ -314,6 +322,8 @@ SELECT
   CASE
     WHEN b.current_bid IS NULL THEN NULL
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN NULL
+    -- mid-probe keyword: the Portfolio 80/20 engine owns it — no seat-model action mid-test
+    WHEN b.is_lift_probe THEN NULL
     -- tested loser: permanent park (had its 15-click trial, no sale)
     WHEN b.tested_loser AND b.current_bid > x.bid_park + 0.05 THEN x.bid_park
     WHEN b.tested_loser THEN NULL
@@ -358,6 +368,7 @@ SELECT
   CASE
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'HOLD'
+    WHEN b.is_lift_probe THEN 'HOLD'
     WHEN b.tested_loser THEN IF(b.current_bid > x.bid_park + 0.05, 'PARK', 'HOLD')
     WHEN b.seat_rank > b.slots THEN IF(b.current_bid > 0.30, 'PARK_WAIT', 'HOLD')
     WHEN b.current_bid <= 0.30
@@ -376,6 +387,7 @@ SELECT
   CASE
     WHEN b.current_bid IS NULL THEN 'no bid on record'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'changed today — one suggestion per day'
+    WHEN b.is_lift_probe THEN 'probe in flight — the Portfolio 80/20 engine owns this keyword until its 20-click verdict'
     WHEN b.tested_loser
       THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d with 0 orders — permanent park; its seat goes to the next candidate')
     WHEN b.seat_rank > b.slots THEN
