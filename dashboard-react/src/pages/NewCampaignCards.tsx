@@ -190,7 +190,9 @@ export function NewCampaignCards({ product: _product, actionFilter = 'all', onCo
     return () => { alive = false; };
   }, []);
 
-  const shown = useMemo(() => (camps ?? []).filter(c => c.targets.length > 0 || c.suggestedBudget > 0 || c.isSb), [camps]);
+  // SINGLE-HOME rule (Ori 2026-08-01): a capping campaign (dark > 10%) is owned by the
+  // Out-of-budget section above (seat model) — its card returns here once darkness clears.
+  const shown = useMemo(() => (camps ?? []).filter(c => (c.targets.length > 0 || c.suggestedBudget > 0 || c.isSb) && (c.pctDark ?? 0) <= 10), [camps]);
   // Report launch target counts up so WeeklyRunPage's Not-applied/Already-applied/All chips can be
   // PAGE-WIDE (Ori 2026-07-25) — the top count was mature-only, so a launch upload showed "0 applied"
   // even though the launch cards below reflected it. all = every launch target; done = already uploaded.

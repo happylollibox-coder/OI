@@ -142,6 +142,25 @@ const STRATEGY_ORDER: Record<string, number> = { SCALE: 0, MARGIN: 1, CUT: 2 };
 export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: FamilyName) => void }) {
   const [products, setProducts] = useState<ProductRow[] | null>(null);
   const [runByName, setRunByName] = useState<Record<string, WeeklyRunRow>>({});
+  // SINGLE-HOME rule (Ori 2026-08-01: "each campaign and his keywords should be shown once"):
+  // campaigns owned by an engine section above (Out-of-budget dark>10% or Portfolio 80/20) are
+  // hidden from the SCALE/MARGIN/CUT coacher list — EXCEPT when they have pending negates, which
+  // have no other surface on this page yet.
+  const [engineOwned, setEngineOwned] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      cubeLoad({ dimensions: ['OobBudget.campaignId', 'OobBudget.pctDark'] }).catch(() => []),
+      cubeLoad({ dimensions: ['KeywordLift.campaignId'] }).catch(() => []),
+    ]).then(([oob, lift]) => {
+      if (!alive) return;
+      const ids = new Set<string>();
+      for (const r of oob as Record<string, unknown>[]) if ((Number(r['OobBudget.pctDark']) || 0) > 10) ids.add(String(r['OobBudget.campaignId'] ?? ''));
+      for (const r of lift as Record<string, unknown>[]) ids.add(String(r['KeywordLift.campaignId'] ?? ''));
+      setEngineOwned(ids);
+    });
+    return () => { alive = false; };
+  }, []);
   const [week, setWeek] = useState('');
   const [sel, setSel] = useState<string | null>(null);
   // Strategy (Coverage role) filter — independent of the family pick; the two intersect.
@@ -501,6 +520,9 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
   const campVisible = (c: CampRow): boolean => {
     // New campaigns live in the launch-controller cards above — never list them twice.
     if (ownedByLaunch(c)) return false;
+    // Engine-owned campaigns (OOB seat model / Portfolio 80/20) are shown there — single home.
+    // Exception: pending negates keep the campaign visible here (their only surface on this page).
+    if (engineOwned.has(c.id) && !(negs ?? []).some(n => n.campaignId === c.id)) return false;
     // PPC mode gate — each mode shows ONLY its own role's campaigns (offense / brand-defense / product-defense).
     // (pool gate removed — all pools show; strategy filter narrows)
     // Strategy gate (offense only — the strategy split is an offense-role slice). Keywords nest under

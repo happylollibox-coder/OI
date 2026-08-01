@@ -103,7 +103,11 @@ export function OobBudgetPhase() {
         reason: String(r['OobBudget.reason'] ?? ''),
       }));
       mapped.sort((a, b) => b.dark - a.dark);
-      setRows(mapped);
+      // SINGLE-HOME rule (Ori 2026-08-01: "each campaign should be shown once"): this section OWNS
+      // campaigns that are capping (dark > 10%) — the seat model manages their bids here. Campaigns
+      // at dark ≤ 10% (WATCH) stay in their engine home (Portfolio 80/20 / launch cards) instead of
+      // appearing twice.
+      setRows(mapped.filter(r => r.dark > 10));
       setKws((ks as Record<string, unknown>[]).map(r => ({
         campaignId: String(r['OobKeyword.campaignId'] ?? ''),
         keywordId: String(r['OobKeyword.keywordId'] ?? ''),

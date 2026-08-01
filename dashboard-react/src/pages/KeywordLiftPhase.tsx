@@ -38,8 +38,18 @@ export function KeywordLiftPhase() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [failed, setFailed] = useState(false);
 
+  const [oobIds, setOobIds] = useState<Set<string>>(new Set());
   useEffect(() => {
     let alive = true;
+    // SINGLE-HOME rule (Ori 2026-08-01): capping campaigns (dark > 10%) are owned by the
+    // Out-of-budget section — hide them here; they return when darkness clears.
+    cubeLoad({ dimensions: ['OobBudget.campaignId', 'OobBudget.pctDark'] }).then(rs => {
+      if (!alive) return;
+      const ids = new Set((rs as Record<string, unknown>[])
+        .filter(r => (Number(r['OobBudget.pctDark']) || 0) > 10)
+        .map(r => String(r['OobBudget.campaignId'] ?? '')));
+      setOobIds(ids);
+    }).catch(e => console.error('[lift] oob ownership fetch failed:', e));
     cubeLoad({
       dimensions: [
         'KeywordLift.campaignId', 'KeywordLift.campaignName', 'KeywordLift.channel', 'KeywordLift.budget', 'KeywordLift.wDays',
@@ -106,14 +116,14 @@ export function KeywordLiftPhase() {
     current_bid: r.bid, recommended_bid: r.suggestedBid, source: 'COACH',
   });
 
-  const sugs = useMemo(() => (rows ?? []).filter(actionable), [rows]);
+  const sugs = useMemo(() => (rows ?? []).filter(r => actionable(r) && !oobIds.has(r.campaignId)), [rows, oobIds]);
   const allApplied = sugs.length > 0 && sugs.every(r => !!bidItem(r));
   const applyAll = () => {
     if (allApplied) sugs.forEach(r => { const it = bidItem(r); if (it) doQueue.removeItem(it.id); });
     else sugs.forEach(r => { if (!bidItem(r)) queueBid(r); });
   };
 
-  const camps = [...byCamp.values()];
+  const camps = [...byCamp.values()].filter(g => !oobIds.has(g[0]?.campaignId ?? ''));
   const nParks = sugs.filter(r => r.action === 'PARK').length;
   const nProbes = sugs.filter(r => r.action.startsWith('PROBE')).length;
   const nFound = (rows ?? []).filter(r => r.action === 'WINNER_FOUND').length;
