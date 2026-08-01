@@ -21,7 +21,10 @@
 --   DIM_EXPERIMENT, DIM_EXPERIMENT_CAMPAIGN, DIM_STRATEGY_TEMPLATE,
 --   FACT_AMAZON_ADS, FACT_SEARCH_QUERY,
 --   DIM_PRODUCT, DIM_COSTS_HISTORY, V_SEARCH_TERM_SEGMENT,
---   V_PARENT_HERO_ASIN
+--   V_PARENT_HERO_ASIN, DIM_KEYWORD, DIM_AD_GROUP, DIM_CAMPAIGN, DIM_TIME,
+--   V_CAMPAIGN_PLACEMENT_BIDDING, V_PEAK_RELEVANCE,
+--   DE_NEGATIVE_KEYWORDS (live negatives authority),
+--   V_SRC_AmazonAds_negative_keyword (frozen pre-2026-01-03 backstop)
 --
 -- Project: onyga-482313
 -- Dataset: OI
@@ -342,9 +345,10 @@ campaign_config_ag AS (
 -- Primary source: owned DE_NEGATIVE_KEYWORDS (live — seeded from bulksheet, kept current by
 -- SP_SYNC_NEGATIVES; covers both CAMPAIGN and AD_GROUP levels). The Fivetran negative-keyword
 -- sync is frozen since 2026-01-03, so the interface view V_SRC_AmazonAds_negative_keyword is
--- only a pre-freeze backstop: deduped to the latest row per negative_id, and any pair DE
+-- only a pre-freeze backstop (SP ad-group + SP campaign + SB negatives, ENABLED regardless of
+-- serving status): deduped to the latest row per negative_id, and any pair DE
 -- already tracks (in any state) is dropped so a DE REMOVED verdict beats stale Fivetran rows.
--- Same source pattern as V_ADS_NEGATIVE_CONFLICTS.
+-- Same primary source as V_ADS_NEGATIVE_CONFLICTS (which skips the frozen backstop).
 -- DEDUPED: UNION DISTINCT to avoid duplicate join keys causing fan-out
 campaign_negatives AS (
   SELECT DISTINCT

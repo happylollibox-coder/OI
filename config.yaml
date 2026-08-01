@@ -32,7 +32,7 @@ views:
     source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_keyword.sql"]
 
   - name: "V_SRC_AmazonAds_negative_keyword"
-    description: "Negative keyword management"
+    description: "Frozen (2026-01-03) Fivetran negatives backstop: SP ad-group + SP campaign-level + SB negative keywords, ENABLED any serving status. DE_NEGATIVE_KEYWORDS is the live authority."
     source_files: ["scripts/bigquery/interface_views/V_SRC_AmazonAds_negative_keyword.sql"]
 
   - name: "V_SRC_AmazonAds_purchased_product"
@@ -172,7 +172,26 @@ views:
     description: "Experiment summary dashboard view"
 
   - name: "V_EXPERIMENT_TERM_RECOMMENDATIONS"
-    description: "Term-level recommendations from experiments (hybrid weighted ROAS)"
+    description: "Term-level recommendations from experiments (hybrid weighted ROAS). Already-negated blacklist = DE_NEGATIVE_KEYWORDS (live authority) + V_SRC_AmazonAds_negative_keyword (frozen pre-2026-01-03 Fivetran backstop, DE verdicts take precedence)."
+    source_files: ["scripts/bigquery/views/V_EXPERIMENT_TERM_RECOMMENDATIONS.sql"]
+    dependencies:
+      - DIM_EXPERIMENT
+      - DIM_EXPERIMENT_CAMPAIGN
+      - DIM_STRATEGY_TEMPLATE
+      - FACT_AMAZON_ADS
+      - FACT_SEARCH_QUERY
+      - DIM_PRODUCT
+      - DIM_COSTS_HISTORY
+      - DIM_KEYWORD
+      - DIM_AD_GROUP
+      - DIM_CAMPAIGN
+      - DIM_TIME
+      - V_SEARCH_TERM_SEGMENT
+      - V_PARENT_HERO_ASIN
+      - V_CAMPAIGN_PLACEMENT_BIDDING
+      - V_PEAK_RELEVANCE
+      - DE_NEGATIVE_KEYWORDS
+      - V_SRC_AmazonAds_negative_keyword
 
   - name: "V_PROMOTION_RAMP_ANALYSIS"
     description: "Tracks promoted keyword ramp-up: milestones, weekly metrics, starting config, verdict"
