@@ -57,14 +57,20 @@ kwW AS (
 ),
 -- full target list (idle keywords included — the candidate pool), ids + current bid
 td AS (
+  -- CONFIG TRUTH (Ori 2026-08-01): every ENABLED SP target from DIM_KEYWORD current rows —
+  -- keywords, product targets AND auto clauses, including dormant ones with no recent delivery.
+  -- Sourcing from V_TARGET_DAILY (delivery days only) silently dropped 14 enabled keywords that
+  -- had not delivered recently — exactly the candidate/queue pool the engines exist to manage.
+  -- One row per (campaign, target text): highest-bid copy wins (text is the FACT perf grain).
   SELECT campaign_id, target_text, keyword_id, ad_group_id, match_type, keyword_bid
   FROM (
-    SELECT CAST(campaign_id AS STRING) campaign_id, target_text, CAST(keyword_id AS STRING) keyword_id,
-           CAST(ad_group_id AS STRING) ad_group_id, match_type, keyword_bid,
-           ROW_NUMBER() OVER (PARTITION BY CAST(campaign_id AS STRING), target_text
-                              ORDER BY date DESC, keyword_bid DESC NULLS LAST) rn
-    FROM `onyga-482313.OI.V_TARGET_DAILY`
-    WHERE date >= DATE_SUB((SELECT d FROM wm), INTERVAL 13 DAY)
+    SELECT CAST(campaign_id AS STRING) campaign_id, keyword_text AS target_text,
+           CAST(keyword_id AS STRING) keyword_id, CAST(ad_group_id AS STRING) ad_group_id,
+           match_type, bid AS keyword_bid,
+           ROW_NUMBER() OVER (PARTITION BY CAST(campaign_id AS STRING), keyword_text
+                              ORDER BY bid DESC NULLS LAST, keyword_id) rn
+    FROM `onyga-482313.OI.DIM_KEYWORD`
+    WHERE is_current AND UPPER(state) = 'ENABLED'
   ) WHERE rn = 1
 ),
 agb AS (SELECT ad_group_id, ANY_VALUE(default_bid) default_bid
