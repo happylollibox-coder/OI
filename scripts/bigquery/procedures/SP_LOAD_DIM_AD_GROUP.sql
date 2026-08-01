@@ -47,11 +47,14 @@ BEGIN
   SELECT CAST(ad_group_id AS STRING) AS ad_group_id,
     -- fall back to the campaign name when the source creative_type is NULL (some SB video
     -- campaigns don't populate it, e.g. FRESH-VIDEO/EXACT). '%VIDEO%' in the name is always
-    -- video (validated).
+    -- video (validated). Store-spotlight ads carry NO creative_type in sb_ad_report at all
+    -- (verified 2026-08-01: STORE-SPOTLIGHT's 5 rows all NULL — the enum only emits
+    -- BRAND_VIDEO/PRODUCT_COLLECTION/VIDEO), so the name is the only signal for them.
     COALESCE(
       MAX(creative_type),
       CASE WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%VIDEO%'      THEN 'BRAND_VIDEO'
-           WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%COLLECTION%' THEN 'PRODUCT_COLLECTION' END
+           WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%COLLECTION%' THEN 'PRODUCT_COLLECTION'
+           WHEN UPPER(ANY_VALUE(campaign_name)) LIKE '%SPOTLIGHT%'  THEN 'STORE_SPOTLIGHT' END
     ) AS creative_type
   FROM `onyga-482313.OI.V_SRC_AmazonAds_sb_ad_report`
   GROUP BY ad_group_id;
