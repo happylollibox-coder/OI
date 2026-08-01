@@ -8,11 +8,22 @@
 -- Project: onyga-482313
 -- Dataset: OI
 --
+-- COGS: price-tier imputation (approved pattern from V_ADS_NET_CORRECTED, spec
+-- [[project_ads_cogs_price_imputation]]). The advertised-ASIN cost chain charges the WRONG
+-- product's cost on ~80% of ad-attributed units (cross-product sales) and the wrong PRICE TIER
+-- on discounted sales. The observed per-unit sale price (Ads_sales/Ads_units) identifies the
+-- tier actually sold; T_PRICE_COST_TIER.tier_cost (units-weighted true cost at that price,
+-- learned from the purchased-product report) takes precedence over the advertised chain.
+-- Unmatched prices (deep coupon/bundle, ~4% of units) fall back to the advertised chain.
+-- NOTE: T_PRICE_COST_TIER is refreshed by SP_REFRESH_CUBE_TABLES, which runs AFTER this SP in
+-- SP_ORCHESTRATE_DAILY_REFRESH — this load reads the previous cycle's tier map (acceptable:
+-- the map is a 180-day rolling aggregate and moves only when costs/prices change).
+--
 -- =============================================
 
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_FACT_AMAZON_ADS`()
 OPTIONS (
-  description = "Load FACT_AMAZON_ADS with data from STG_AMAZON_ADS using TRUNCATE + INSERT. Adds Ads_key field."
+  description = "Load FACT_AMAZON_ADS with data from STG_AMAZON_ADS using TRUNCATE + INSERT. Adds Ads_key field. COGS = price-tier imputation via T_PRICE_COST_TIER (sale price identifies the product actually sold), falling back to the advertised-ASIN DIM_COSTS_HISTORY chain."
 )
 BEGIN
   -- Declare variables for logging
@@ -88,9 +99,10 @@ BEGIN
     ads.units,
     ads.cost,
     ads.sales,
-    -- Cost fallback chain: purchased ASIN → impressions ASIN → single advertised ASIN
-    COALESCE(cost_purchased.TOTAL_COST_PER_UNIT, cost_impressions.TOTAL_COST_PER_UNIT, cost_advertised.TOTAL_COST_PER_UNIT) AS TOTAL_COST_PER_UNIT,
-    ads.sales - COALESCE(cost_purchased.TOTAL_COST_PER_UNIT, cost_impressions.TOTAL_COST_PER_UNIT, cost_advertised.TOTAL_COST_PER_UNIT, 0) * ads.units AS GROSS_PROFIT,
+    -- Cost chain: price-tier imputation (product actually sold, by sale price) →
+    -- purchased ASIN → impressions ASIN → single advertised ASIN
+    COALESCE(tier.tier_cost, cost_purchased.TOTAL_COST_PER_UNIT, cost_impressions.TOTAL_COST_PER_UNIT, cost_advertised.TOTAL_COST_PER_UNIT) AS TOTAL_COST_PER_UNIT,
+    ads.sales - COALESCE(tier.tier_cost, cost_purchased.TOTAL_COST_PER_UNIT, cost_impressions.TOTAL_COST_PER_UNIT, cost_advertised.TOTAL_COST_PER_UNIT, 0) * ads.units AS GROSS_PROFIT,
     ads.placement_type,
     ads.num_st_in_date_keyword,
     ads.num_ad_groups_for_st,
@@ -138,6 +150,11 @@ BEGIN
       END
     ) AS Ads_key
   FROM `onyga-482313.OI.STG_AMAZON_ADS` ads
+  -- 0th priority: price-tier imputation — match the observed per-unit sale price to the
+  -- empirical price→cost map (same join as V_ADS_NET_CORRECTED; T_PRICE_COST_TIER grain is
+  -- one row per unit_price, so no fan-out). Rows with 0 units keep the advertised chain.
+  LEFT JOIN `onyga-482313.OI.T_PRICE_COST_TIER` tier
+    ON ads.units > 0 AND tier.unit_price = ROUND(SAFE_DIVIDE(ads.sales, ads.units), 2)
   -- 1st priority: cost from the ASIN that actually got purchased
   LEFT JOIN cost_deduped cost_purchased ON cost_purchased.asin = ads.most_advertised_asin_purchased
     AND ads.date >= cost_purchased.start_date

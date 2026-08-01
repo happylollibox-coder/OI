@@ -784,6 +784,15 @@ views:
     dependencies:
       - DIM_CAMPAIGN
 
+  - name: "V_DIM_CAMPAIGN_FAMILY"
+    description: "THE canonical campaign→family source — one row per campaign_id for ALL campaigns in V_DIM_CAMPAIGN_CURRENT (any state). Precedence: DE_CAMPAIGN_FAMILY manual override wins (4 measured manual-vs-chain disagreements 2026-08-01, all ASIN-blind brand/video campaigns), else asin_chain = dominant own-product family by lifetime spend (per-row family prefers most_advertised_asin_impressions, falls back to name-parsed ASIN_BY_CAMPAIGN_NAME at FAMILY level — recovers video/SB rows whose impressions-ASIN is the literal 'Unknown'), else NULL (no 'Unknown' catch-all; callers pick their own fallback). family_source = manual|asin_chain|NULL; asin_chain_parent_name exposed for override audits. Rename-proof: keyed on campaign_id, behavioral ASIN preferred. New family rollups must read this view instead of parsing campaign_name or re-joining the ASIN chain."
+    source_files: ["scripts/bigquery/views/V_DIM_CAMPAIGN_FAMILY.sql"]
+    dependencies:
+      - V_DIM_CAMPAIGN_CURRENT
+      - DE_CAMPAIGN_FAMILY
+      - FACT_AMAZON_ADS
+      - DIM_PRODUCT
+
   - name: "V_DIM_LISTING_CURRENT"
     description: "Current listing pricing — one row per listing from SCD2 DIM_LISTING_HISTORY."
     source_files: ["scripts/bigquery/views/V_DIM_LISTING_CURRENT.sql"]
@@ -1764,8 +1773,16 @@ stored_procedures:
     description: "Weekly top-up of FACT_RESEARCH_RECOMMENDATIONS — broad co-occurrence clusters, phrase coverage, dedup vs history, 5 new/type/family/week, NEW→ADVERTISED status (called by SP_ORCHESTRATE_DAILY_REFRESH after SP_REFRESH_RESEARCH_RANKED)"
     source_files: ["scripts/bigquery/procedures/SP_REFRESH_RESEARCH_RECOMMENDATIONS.sql"]
 
+  - name: "FACT_ADS_ADVERTISED_DAILY"
+    description: "Advertised-ASIN-grain daily ads fact (SP only — Amazon publishes no advertised-ASIN report for SB, ~42% of spend; SD negligible). Grain: date x ad_id x advertised_asin (verified unique). Source: advertised_product_report via V_SRC_AmazonAds_advertised_product. TRUE impressions (FACT_AMAZON_ADS term grain undercounts ~3x), exact per-ASIN spend, 14d orders/units/sales split same-SKU vs other-SKU (halo, 42-88%/ASIN) + 7d trio. History from 2025-09-23. Partitioned by date, clustered advertised_asin/campaign_id/ad_group_id. Spend runs ~1.4% under FACT SP totals (report reconciliation noise — do not scale). Loaded by SP_LOAD_FACT_ADS_ADVERTISED_DAILY, orchestrated as Task 16.6."
+    source_files: ["scripts/bigquery/tables/FACT/FACT_ADS_ADVERTISED_DAILY.sql"]
+
+  - name: "SP_LOAD_FACT_ADS_ADVERTISED_DAILY"
+    description: "Idempotent MERGE load of FACT_ADS_ADVERTISED_DAILY from V_SRC_AmazonAds_advertised_product. reload_days NULL = 30-day rolling window (LA-anchored); 10000 = full history. Window-scoped NOT MATCHED BY SOURCE delete handles Fivetran restatements. Names enriched from DIM_CAMPAIGN/DIM_AD_GROUP current rows. Scheduled: SP_ORCHESTRATE_DAILY_REFRESH Task 16.6 (added 2026-08-01)."
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_FACT_ADS_ADVERTISED_DAILY.sql"]
+
   - name: "SP_FACT_AMAZON_ADS"
-    description: "Build FACT_AMAZON_ADS from staging"
+    description: "Build FACT_AMAZON_ADS from staging. REPO FILE AHEAD OF LIVE (2026-08-01): the repo version wires price-tier COGS imputation (COALESCE(T_PRICE_COST_TIER.tier_cost on ROUND(sales/units,2), purchased→impressions→single-advertised DIM_COSTS_HISTORY chain)) per the approved V_ADS_NET_CORRECTED pattern — NOT yet deployed; live routine still charges the advertised chain. Measured restatement Feb–Jul 2026: account COGS −$1,423 (−0.54%) but LolliME +$1,334 (ad GP over-credited today) vs Lollibox −$1,730 / Fresh −$976. Deploying = execute the file; next run restates ALL history (TRUNCATE+INSERT) → then T_ rebuild + cube stamp. Awaiting Ori's approval of the family-level deltas."
     source_files: ["scripts/bigquery/procedures/SP_FACT_AMAZON_ADS.sql"]
 
   - name: "SP_LOAD_STG_AMAZON_PERFORMANCE"
