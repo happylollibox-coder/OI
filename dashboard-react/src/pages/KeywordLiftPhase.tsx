@@ -9,7 +9,7 @@ import { useDoQueue } from '../hooks/useDoQueue';
 // as the OOB panel). Spec: architecture/OOB_BUDGET_PHASE.md §"Lever 2B".
 
 type Row = {
-  campaignId: string; campaignName: string; budget: number; wDays: number;
+  campaignId: string; campaignName: string; channel: string; budget: number; wDays: number;
   spendW: number; loserShare: number | null; activeProbes: number;
   keywordId: string; adGroupId: string; text: string; matchType: string;
   isAuto: boolean; isPt: boolean; bid: number | null;
@@ -42,7 +42,7 @@ export function KeywordLiftPhase() {
     let alive = true;
     cubeLoad({
       dimensions: [
-        'KeywordLift.campaignId', 'KeywordLift.campaignName', 'KeywordLift.budget', 'KeywordLift.wDays',
+        'KeywordLift.campaignId', 'KeywordLift.campaignName', 'KeywordLift.channel', 'KeywordLift.budget', 'KeywordLift.wDays',
         'KeywordLift.campaignSpendW', 'KeywordLift.loserSharePct', 'KeywordLift.activeProbes',
         'KeywordLift.keywordId', 'KeywordLift.adGroupId', 'KeywordLift.targetText', 'KeywordLift.matchType',
         'KeywordLift.isAuto', 'KeywordLift.isPt', 'KeywordLift.currentBid',
@@ -56,6 +56,7 @@ export function KeywordLiftPhase() {
       setRows((rs as Record<string, unknown>[]).map(r => ({
         campaignId: String(r['KeywordLift.campaignId'] ?? ''),
         campaignName: String(r['KeywordLift.campaignName'] ?? ''),
+        channel: String(r['KeywordLift.channel'] ?? 'SP'),
         budget: num(r['KeywordLift.budget']) ?? 0,
         wDays: num(r['KeywordLift.wDays']) ?? 7,
         spendW: num(r['KeywordLift.campaignSpendW']) ?? 0,
@@ -98,7 +99,8 @@ export function KeywordLiftPhase() {
     campaign: r.campaignName, campaign_id: r.campaignId, ad_group_id: r.adGroupId, targeting: r.text,
     search_term: r.text, keyword_id: r.keywordId,
     match_type: r.isAuto ? 'Automatic' : (r.matchType || '').toUpperCase(),
-    target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0, campaign_type: 'SPONSORED_PRODUCTS',
+    target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0,
+    campaign_type: r.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS',
     product: r.isAuto || r.isPt ? 'Product Targeting' : 'Keyword', spend: 0, orders: 0, cpc: 0, conv_rate: 0,
     action: (r.suggestedBid ?? 0) >= (r.bid ?? 0) ? 'INCREASE_BID' : 'REDUCE_BID',
     current_bid: r.bid, recommended_bid: r.suggestedBid, source: 'COACH',
@@ -164,7 +166,7 @@ export function KeywordLiftPhase() {
                   <td className="text-left px-2 py-0.5 text-body whitespace-nowrap">
                     <button className="text-faint pr-1" onClick={() => setOpenCamps(o => ({ ...o, [c.campaignId]: !o[c.campaignId] }))}>{expanded ? '▾' : '▸'}</button>
                     {c.campaignName}
-                    <span className="text-faint text-label"> $ {c.budget.toFixed(0)} bud · spent ${c.spendW.toFixed(2)}/{c.wDays}d · {c.activeProbes} probing</span>
+                    <span className="text-faint text-label"> {c.channel} · $ {c.budget.toFixed(0)} bud · spent ${c.spendW.toFixed(2)}/{c.wDays}d · {c.activeProbes} probing</span>
                   </td>
                   <td className={`px-2 ${(c.loserShare ?? 0) > 20 ? 'text-amber-400' : 'text-emerald-400'}`}>{c.loserShare != null ? `${c.loserShare.toFixed(0)}%` : '—'}</td>
                   <td className="px-2" colSpan={5} />

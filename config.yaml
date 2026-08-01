@@ -414,7 +414,7 @@ views:
       - FACT_AMAZON_ADS
 
   - name: "V_KEYWORD_LIFT"
-    description: "80/20 portfolio + probe rotation for WORKING campaigns (budget > low-budget cap), SP v1 (Ori 2026-07-30). Window W = 7d off / 3d peak. Classes: WINNER >=1.1 w/ order · MARGINAL 0.7-1.1 · LOSER <0.7 or 0-order clicks · IDLE. 80% of spend to winners: losers beyond the 20% allowance PARK $0.25 (best-first cum-sum keeps the tail); 1-2 PROBES at a time lifted to min(1.5x target CPC, $2) (fallback winners avg CPC), stateless episodes via last INCREASE_BID in FACT_PPC_CHANGE_LOG, verdict at 20 episode clicks (>=1.0x -> WINNER_FOUND else PARK), daily -5% descent while probing per the click methodology. Cube: KeywordLift (15-min TTL). Spec: architecture/OOB_BUDGET_PHASE.md §Lever 2B."
+    description: "80/20 portfolio + probe rotation for WORKING campaigns (budget > low-budget cap), SP + SB v2 (Ori 2026-07-30; `channel` column routes the panel to the SP/SB bulksheet tab). Window W = 7d off / 3d peak. Classes: WINNER >=1.1 w/ order · MARGINAL 0.7-1.1 · LOSER <0.7 or 0-order clicks · IDLE. 80% of spend to winners: losers beyond the 20% allowance PARK $0.25 (best-first cum-sum keeps the tail); 1-2 PROBES at a time lifted to min(1.5x target CPC, $2) (fallback winners avg CPC), stateless episodes via last INCREASE_BID in FACT_PPC_CHANGE_LOG, verdict at 20 episode clicks (>=1.0x -> WINNER_FOUND else PARK), daily -5% descent while probing per the click methodology; cand_rank tie-broken by target_text so the probe pick is deterministic across refreshes. SB arm mirrors SP on SB-native sources (like V_SB_LAUNCH_TARGET): targets+bids from sb_keyword/sb_product_target config mirrors; perf from sb_search_term_report ∪ sb_target_report (NOT sb_keyword_report — dead 2025-12-29); net ROAS estimated sales x (1 - mapped-ASIN cost_ratio) / spend; target CPC = LY same-28d -> FINE band (SB x ad_format via DIM_AD_GROUP.creative_type x match) -> coarse ALL/ALL band; capped guard BOTH arms (v3): no PROBE_START while the campaign caps (dark > 10% on the channel anchor day, budget artifact). Cube: KeywordLift (15-min TTL). Spec: architecture/OOB_BUDGET_PHASE.md §Lever 2B."
     source_files: ["scripts/bigquery/views/V_KEYWORD_LIFT.sql"]
     dependencies:
       - V_DIM_CAMPAIGN_CURRENT
@@ -425,6 +425,10 @@ views:
       - FACT_PPC_CHANGE_LOG
       - DE_PRODUCT_STRATEGY_PROFILE
       - DIM_US_HOLIDAYS
+      - DIM_PRODUCT
+      - DIM_COSTS_HISTORY
+      - V_SRC_AmazonAds_campaign_history
+      - FN_ADS_ANCHOR_CAP
 
   - name: "V_SB_LAUNCH_CAMPAIGN"
     description: "CAMPAIGN-LEVEL measures + BUDGET suggestion for Sponsored-Brands (incl. video) launch campaigns. Measures from sb_campaign_report (only complete + current SB source; per-keyword sb_keyword_report died 2025-12-29; FACT undercounts SB, e.g. VIDEO-BALL FACT 8 clk/60 impr vs true 14/388). r2 (anchor) + r3 (prior 2d) windows of spend/CPC/clicks/CTR/ACoS + net-ROAS ESTIMATE (sales×(1−cost/list_price) via mapped ASIN). TOS NULL (the SB field is placement mix ~86%, not the competitive IS Amazon shows <5%); units NULL. BUDGET suggestion runs the SAME logic as V_LAUNCH_PHASE1 on SB-native signals: budget + %dark from sb_campaign_history, spend + campaign net ROAS from sb_campaign_report (V_LAUNCH_PHASE1 gives SB NULL budget + undercounted FACT spend). Cube: SbLaunchCampaign. Spec: architecture/CAMPAIGN_LAUNCH_RAMP.md."

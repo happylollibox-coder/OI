@@ -108,9 +108,9 @@ fresh change are visibly "just changed".
 
 ## Lever 2B — 80/20 portfolio + probe rotation (Ori 2026-07-30, `V_KEYWORD_LIFT`)
 
-Working campaigns only (budget > low-budget cap), SP v1, dark or not. Window W = 7d off-season /
-3d peak. Classes over W (corrected net ROAS): WINNER ≥ 1.1 with ≥ 1 order · MARGINAL 0.7–1.1 with
-orders · LOSER < 0.7 or clicks with 0 orders · IDLE (candidate pool).
+Working campaigns only (budget > low-budget cap), SP **and SB** (v2 2026-07-30), dark or not.
+Window W = 7d off-season / 3d peak. Classes over W (corrected net ROAS): WINNER ≥ 1.1 with ≥ 1
+order · MARGINAL 0.7–1.1 with orders · LOSER < 0.7 or clicks with 0 orders · IDLE (candidate pool).
 
 **80% of spend to winners:** losers ranked best-first (ROAS desc) keep spending inside a 20%
 exploration allowance; everything beyond it PARKs at $0.25. **1–2 probes at a time**: next
@@ -121,7 +121,37 @@ INCREASE_BID upload (change log); bid moves daily during the test (6+ clicks/day
 next 1–2 candidates promote. Goal: every un-parked keyword profitable over W — the best keyword
 per intent at the best bid. Probing keywords are exempt from PARK/TRIM and (by design) from the
 coacher's pullback; this engine's verdicts take precedence for keywords it touched within W.
-Panel: `KeywordLiftPhase.tsx` ("Portfolio 80/20") below the Out-of-budget section.
+Panel: `KeywordLiftPhase.tsx` ("Portfolio 80/20") below the Out-of-budget section; rows route to
+the SP/SB bulksheet tab by the view's `channel` column.
+
+**SB arm (v2, 2026-07-30).** Coverage audit 2026-07-30: 9 enabled SB working campaigns
+(~$2,525/wk — e.g. ME-VIDEO/EXACT $200, FRESH-VIDEO/BROAD $100, ME-VIDEO/BROAD Hunter $53) had
+NO keyword engine — not dark (outside the OOB phase), budget > cap (off the launch controller),
+and V_KEYWORD_LIFT was SP-only. Same classes / 20% allowance / probe machinery on SB-native
+sources, the way `V_SB_LAUNCH_TARGET` mirrors `V_LAUNCH_PHASE1`:
+
+- **Population:** `V_DIM_CAMPAIGN_CURRENT` `campaign_type='SB'`, ENABLED + serving
+  (ENABLED / OUT_OF_BUDGET), budget > cap — same predicate as the SP arm.
+- **Targets + live bids:** the minutes-fresh config mirrors `sb_keyword` ∪ `sb_product_target`
+  (enabled, not deleted; SB has no auto clauses); ad-group `default_bid` fallback as SP.
+- **Performance:** `sb_search_term_report` (keyword_id grain) ∪ `sb_target_report` (target
+  grain) — **NOT `sb_keyword_report`** (died 2025-12-29; `sb_product_target_report` does not
+  exist). Anchor day = sb_search_term_report watermark (per-channel anchors, same as this phase).
+- **Net ROAS:** the SB ESTIMATE `sales × (1 − mapped-ASIN cost_ratio) ÷ spend` — SB reports have
+  no per-unit COGS (same method as all SB views). Orders = `attributed_conversions_14_d`.
+- **Target CPC precedence:** LY same-28d (keyword text, account-wide, ≥10 LY clicks) → the FINE
+  band cell (`campaign_type='SB'` × ad_format via `DIM_AD_GROUP.creative_type` × match,
+  CONCLUSIVE) → the coarse ALL/ALL band. Product targets skip LY (band or nothing).
+- **Probe episodes:** stateless, same as SP — last INCREASE_BID in `FACT_PPC_CHANGE_LOG`
+  (keyword_id holds the SB target id), 14d lookback, episode evidence = SB report activity after
+  the upload date, verdict at 20 episode clicks.
+- **Capped guard — both arms (v3 2026-07-30; SB-only in v2):** `PROBE_START` requires the
+  campaign NOT capping (dark ≤ 10% on the anchor day, from the channel's own event log — SB
+  anchored on its report watermark, SP on FACT's `wm`) — in a capped campaign under-clicking is
+  the budget dying, not the bid; probing up is a budget artifact (the no-loss-cuts rule). Idle
+  keywords there show IDLE "capped — probes held". Running probes still get verdicts and the
+  −5% descent. The SP gap was latent when closed: on 2026-07-30 no SP PROBE_START sat in a dark
+  campaign (BOX-SP/AUTO (White), 22% dark, had 0 probe starts).
 
 ## Known caveats
 

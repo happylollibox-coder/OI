@@ -13,6 +13,19 @@
 -- (FACT_PPC_CHANGE_LOG) within the last 14 days; test evidence = FACT activity AFTER that date.
 -- Verdict at 20 episode clicks: net ROAS >= 1.0 → WINNER_FOUND (joins the 80% pool), else PARK.
 -- While testing, the keyword is exempt from PARK here and (by design) from the coacher's pullback.
+--
+-- v2 (2026-07-30): + SB ARM — the same machinery on SB-native sources, the way V_SB_LAUNCH_TARGET
+-- mirrors V_LAUNCH_PHASE1. Targets + live bids from the sb_keyword / sb_product_target config
+-- mirrors; performance from sb_search_term_report (keyword grain) ∪ sb_target_report (product
+-- targets) — NOT sb_keyword_report (died 2025-12-29; sb_product_target_report does not exist);
+-- net ROAS is the SB ESTIMATE sales × (1 − mapped-ASIN cost_ratio) ÷ spend (SB has no per-unit
+-- COGS). Target-CPC precedence: LY same-28d → FINE band (SB × ad_format via DIM_AD_GROUP
+-- creative_type × match) → coarse ALL/ALL band. Capped guard: PROBE_START requires the campaign
+-- NOT capping (dark ≤ 10% on the anchor day) — probing a capped campaign is a budget artifact.
+-- `channel` ('SP'/'SB') routes panel rows to the right bulksheet tab.
+--
+-- v3 (2026-07-30): capped guard mirrored into the SP arm (sp_h/sp_ev/sp_sqd/sp_dark on SP
+-- campaign_history events, anchored at FACT's watermark `wm`) — both arms now gate PROBE_START.
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_KEYWORD_LIFT` AS
 WITH season AS (
   SELECT COUNTIF(CURRENT_DATE('America/New_York') BETWEEN boost_start AND cooldown_end) > 0 AS in_peak
@@ -100,6 +113,23 @@ band AS (
     AND season = IF(s.in_peak, 'PEAK', 'OFF')
   GROUP BY 1, 2
 ),
+-- dark % on the SP anchor day (event log, same construction as the SB arm below) — the probe gate (v3)
+sp_h AS (
+  SELECT campaign_id cid, DATETIME(date, 'America/Los_Angeles') ts, serving_status
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history`
+  WHERE campaign_type = 'SP' AND DATE(date, 'America/Los_Angeles') = (SELECT d FROM wm)
+    AND campaign_id IN (SELECT campaign_id FROM camps)
+),
+sp_ev AS (
+  SELECT cid, ts, serving_status FROM sp_h
+  UNION ALL SELECT DISTINCT cid, DATETIME((SELECT d FROM wm), TIME '00:00:00'), 'CAMPAIGN_STATUS_ENABLED' FROM sp_h
+),
+sp_sqd AS (SELECT cid, ts, serving_status, LEAD(ts) OVER (PARTITION BY cid ORDER BY ts) nxt FROM sp_ev),
+sp_dark AS (
+  SELECT cid, SUM(IF(serving_status = 'CAMPAIGN_OUT_OF_BUDGET',
+    DATETIME_DIFF(COALESCE(nxt, DATETIME(DATE_ADD((SELECT d FROM wm), INTERVAL 1 DAY))), ts, MINUTE), 0)) / 1440.0 AS pd
+  FROM sp_sqd GROUP BY 1
+),
 base AS (
   SELECT c.campaign_id, c.campaign_name, c.budget,
     td.target_text, td.keyword_id, td.ad_group_id, td.match_type,
@@ -113,7 +143,8 @@ base AS (
     COALESCE(ep.ep_ord, 0) ep_ord,
     ROUND(COALESCE(IF(LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements')
                       OR LOWER(td.target_text) LIKE 'asin%', NULL, l.ly_cpc), bd.cpc_target), 2) AS tcpc,
-    COALESCE(l.ly_clk, 0) AS ly_clk
+    COALESCE(l.ly_clk, 0) AS ly_clk,
+    COALESCE(dk.pd, 0) > 0.10 AS capped
   FROM camps c
   JOIN td ON td.campaign_id = c.campaign_id
   LEFT JOIN agb ON agb.ad_group_id = td.ad_group_id
@@ -126,6 +157,7 @@ base AS (
     AND bd.match_type = CASE WHEN LOWER(td.target_text) LIKE 'asin%' THEN 'PRODUCT'
                              WHEN LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements') THEN 'AUTO'
                              ELSE UPPER(COALESCE(td.match_type, '')) END
+  LEFT JOIN sp_dark dk ON dk.cid = c.campaign_id
 ),
 classed AS (
   SELECT b.*,
@@ -160,11 +192,185 @@ agg AS (
     -- candidate rank for probe promotion: anchored first, then LY volume, then least-tested
     ROW_NUMBER() OVER (PARTITION BY c.campaign_id
       ORDER BY IF(c.class = 'IDLE' AND NOT c.probing AND NOT c.probe_done, 0, 1),
-               IF(c.tcpc IS NOT NULL, 0, 1), c.ly_clk DESC, c.clk_w ASC) AS cand_rank
+               IF(c.tcpc IS NOT NULL, 0, 1), c.ly_clk DESC, c.clk_w ASC, c.target_text) AS cand_rank
   FROM classed c
+),
+-- ═══════════ SB ARM (v2 2026-07-30) — same machinery on SB-native sources ═══════════
+sb_camps AS (
+  SELECT c.campaign_id, c.campaign_name, c.daily_budget AS budget
+  FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c, cap k
+  WHERE c.campaign_type = 'SB' AND c.campaign_state = 'ENABLED'
+    AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET')
+    AND c.daily_budget > k.low_cap
+),
+-- per-channel anchor: the SB reports' own watermark (FACT undercounts SB; reports refresh intraday,
+-- so W and episode windows are bounded ABOVE at the anchor too — FACT only holds complete days)
+sb_wm AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
+          FROM `fivetran-hl.amazon_ads.sb_search_term_report`),
+-- est. COGS ratio per campaign via its mapped ASIN (same method as V_SB_LAUNCH_TARGET — SB reports
+-- carry no per-unit COGS, so net ROAS is estimated as sales × (1 − cost_ratio) ÷ spend)
+sb_prod AS (
+  SELECT CAST(f.campaign_id AS STRING) cid,
+    SAFE_DIVIDE(ANY_VALUE(c.cost), NULLIF(ANY_VALUE(p.listing_price_amount), 0)) AS cost_ratio
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` f
+  LEFT JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = f.ASIN_BY_CAMPAIGN_NAME
+  LEFT JOIN (SELECT asin, TOTAL_COST_PER_UNIT cost FROM (
+      SELECT asin, TOTAL_COST_PER_UNIT, ROW_NUMBER() OVER (PARTITION BY marketplace_id, asin ORDER BY start_date DESC) rn
+      FROM `onyga-482313.OI.DIM_COSTS_HISTORY` WHERE marketplace_id='ATVPDKIKX0DER' AND end_date IS NULL) WHERE rn=1) c
+    ON c.asin = f.ASIN_BY_CAMPAIGN_NAME
+  GROUP BY 1
+),
+sb_ptlabel AS (   -- product-target label from the target report (the config mirror has no text)
+  SELECT target_id, ANY_VALUE(targeting_text) txt
+  FROM `fivetran-hl.amazon_ads.sb_target_report`
+  WHERE report_date >= DATE_SUB((SELECT d FROM sb_wm), INTERVAL 30 DAY)
+  GROUP BY 1
+),
+-- full target list from the minutes-fresh config mirrors (keywords ∪ product targets; SB has no
+-- auto clauses) — idle keywords included, they are the probe candidate pool
+sb_td AS (
+  SELECT k.id AS keyword_id, CAST(k.campaign_id AS STRING) campaign_id, CAST(k.ad_group_id AS STRING) ad_group_id,
+    k.keyword_text AS target_text, FALSE AS is_pt, k.match_type, k.bid AS keyword_bid
+  FROM `fivetran-hl.amazon_ads.sb_keyword` k
+  WHERE NOT k._fivetran_deleted AND k.state = 'enabled'
+    AND CAST(k.campaign_id AS STRING) IN (SELECT campaign_id FROM sb_camps)
+  UNION ALL
+  SELECT pt.id, CAST(pt.campaign_id AS STRING), CAST(pt.ad_group_id AS STRING),
+    COALESCE(l.txt, 'product target'), TRUE, 'TARGETING_EXPRESSION', pt.bid
+  FROM `fivetran-hl.amazon_ads.sb_product_target` pt
+  LEFT JOIN sb_ptlabel l ON l.target_id = pt.id
+  WHERE NOT pt._fivetran_deleted AND pt.state = 'enabled'
+    AND CAST(pt.campaign_id AS STRING) IN (SELECT campaign_id FROM sb_camps)
+),
+-- per-day performance: keyword arm from the search-term report (keyword_id grain) ∪ product arm
+-- from the target report — NOT sb_keyword_report (dead since 2025-12-29)
+sb_day AS (
+  SELECT keyword_id AS target_id, report_date date, SUM(clicks) clk, SUM(cost) sp,
+         SUM(attributed_sales_14_d) sales, SUM(attributed_conversions_14_d) ord
+  FROM `fivetran-hl.amazon_ads.sb_search_term_report`
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT target_id, report_date, SUM(clicks), SUM(cost), SUM(attributed_sales_14_d), SUM(attributed_conversions_14_d)
+  FROM `fivetran-hl.amazon_ads.sb_target_report`
+  GROUP BY 1, 2
+),
+sb_kwW AS (
+  SELECT t.keyword_id,
+    SUM(d.clk) clk_w, SUM(d.sp) sp_w, SUM(d.ord) ord_w,
+    SUM(d.sales * (1 - COALESCE(pr.cost_ratio, 0))) gp_w,
+    SUM(IF(d.date = (SELECT d FROM sb_wm), d.clk, 0)) clk1
+  FROM sb_td t
+  JOIN sb_day d ON d.target_id = t.keyword_id
+  CROSS JOIN cap k
+  LEFT JOIN sb_prod pr ON pr.cid = t.campaign_id
+  WHERE d.date > DATE_SUB((SELECT d FROM sb_wm), INTERVAL k.w_days DAY)
+    AND d.date <= (SELECT d FROM sb_wm)
+  GROUP BY 1
+),
+sb_episode AS (
+  SELECT t.keyword_id,
+    SUM(d.clk) ep_clk, SUM(d.sp) ep_sp, SUM(d.ord) ep_ord,
+    SUM(d.sales * (1 - COALESCE(pr.cost_ratio, 0))) ep_gp
+  FROM sb_td t
+  JOIN lastinc li ON li.keyword_id = t.keyword_id
+  JOIN sb_day d ON d.target_id = t.keyword_id
+  LEFT JOIN sb_prod pr ON pr.cid = t.campaign_id
+  WHERE d.date > li.inc_date AND d.date <= (SELECT d FROM sb_wm)
+  GROUP BY 1
+),
+sb_adfmt AS (   -- ad-group → SB creative type (BRAND_VIDEO / PRODUCT_COLLECTION / …): the profile's
+  -- ad_format grain. Canonical derivation lives in SP_LOAD_DIM_AD_GROUP — read the dimension.
+  SELECT ad_group_id, ANY_VALUE(creative_type) creative_type
+  FROM `onyga-482313.OI.DIM_AD_GROUP` WHERE is_current AND creative_type IS NOT NULL GROUP BY 1
+),
+sb_band AS (   -- FINE band cell: SB × ad_format × match (CONCLUSIVE); coarse ALL/ALL is the fallback
+  SELECT parent_name, UPPER(ad_format) AS ad_format, UPPER(match_type) AS match_type,
+         ROUND(AVG(cpc_target), 2) AS cpc_target
+  FROM `onyga-482313.OI.DE_PRODUCT_STRATEGY_PROFILE`, season s
+  WHERE enabled AND cpc_target IS NOT NULL AND confidence = 'CONCLUSIVE'
+    AND campaign_type = 'SB' AND COALESCE(ad_format, 'NA') != 'ALL'
+    AND season = IF(s.in_peak, 'PEAK', 'OFF')
+  GROUP BY 1, 2, 3
+),
+-- dark % on the SB anchor day (event log, same construction as V_SB_LAUNCH_TARGET) — the probe gate
+sb_h AS (
+  SELECT campaign_id cid, DATETIME(date, 'America/Los_Angeles') ts, serving_status
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history`
+  WHERE campaign_type = 'SB' AND DATE(date, 'America/Los_Angeles') = (SELECT d FROM sb_wm)
+    AND campaign_id IN (SELECT campaign_id FROM sb_camps)
+),
+sb_ev AS (
+  SELECT cid, ts, serving_status FROM sb_h
+  UNION ALL SELECT DISTINCT cid, DATETIME((SELECT d FROM sb_wm), TIME '00:00:00'), 'CAMPAIGN_STATUS_ENABLED' FROM sb_h
+),
+sb_sqd AS (SELECT cid, ts, serving_status, LEAD(ts) OVER (PARTITION BY cid ORDER BY ts) nxt FROM sb_ev),
+sb_dark AS (
+  SELECT cid, SUM(IF(serving_status = 'CAMPAIGN_OUT_OF_BUDGET',
+    DATETIME_DIFF(COALESCE(nxt, DATETIME(DATE_ADD((SELECT d FROM sb_wm), INTERVAL 1 DAY))), ts, MINUTE), 0)) / 1440.0 AS pd
+  FROM sb_sqd GROUP BY 1
+),
+sb_base AS (
+  SELECT c.campaign_id, c.campaign_name, c.budget,
+    t.target_text, t.keyword_id, t.ad_group_id, t.match_type,
+    FALSE AS is_auto, t.is_pt,
+    COALESCE(t.keyword_bid, agb.default_bid) AS current_bid,
+    COALESCE(w.clk_w, 0) clk_w, COALESCE(w.sp_w, 0) sp_w, COALESCE(w.ord_w, 0) ord_w,
+    ROUND(SAFE_DIVIDE(w.gp_w, NULLIF(w.sp_w, 0)), 2) AS roas_w, COALESCE(w.clk1, 0) clk1,
+    li.inc_date, li.probe_bid,
+    COALESCE(ep.ep_clk, 0) ep_clk, ROUND(SAFE_DIVIDE(ep.ep_gp, NULLIF(ep.ep_sp, 0)), 2) AS ep_roas,
+    COALESCE(ep.ep_ord, 0) ep_ord,
+    ROUND(COALESCE(IF(t.is_pt, NULL, l.ly_cpc), fb.cpc_target, bd.cpc_target), 2) AS tcpc,
+    COALESCE(l.ly_clk, 0) AS ly_clk,
+    COALESCE(dk.pd, 0) > 0.10 AS capped
+  FROM sb_camps c
+  JOIN sb_td t ON t.campaign_id = c.campaign_id
+  LEFT JOIN agb ON agb.ad_group_id = t.ad_group_id
+  LEFT JOIN sb_kwW w ON w.keyword_id = t.keyword_id
+  LEFT JOIN lastinc li ON li.keyword_id = t.keyword_id
+  LEFT JOIN sb_episode ep ON ep.keyword_id = t.keyword_id
+  LEFT JOIN ly l ON l.kw = LOWER(TRIM(t.target_text))
+  LEFT JOIN camp_parent cp ON cp.cid = c.campaign_id
+  LEFT JOIN sb_adfmt af ON af.ad_group_id = t.ad_group_id
+  LEFT JOIN sb_band fb ON fb.parent_name = cp.parent_name
+    AND fb.ad_format = UPPER(COALESCE(af.creative_type, 'NA'))
+    AND fb.match_type = IF(t.is_pt, 'PRODUCT', UPPER(COALESCE(t.match_type, '')))
+  LEFT JOIN band bd ON bd.parent_name = cp.parent_name
+    AND bd.match_type = IF(t.is_pt, 'PRODUCT', UPPER(COALESCE(t.match_type, '')))
+  LEFT JOIN sb_dark dk ON dk.cid = c.campaign_id
+),
+sb_classed AS (
+  SELECT b.*,
+    CASE
+      WHEN b.ord_w >= 1 AND COALESCE(b.roas_w, 0) >= 1.1 THEN 'WINNER'
+      WHEN b.ord_w >= 1 AND COALESCE(b.roas_w, 0) >= 0.7 THEN 'MARGINAL'
+      WHEN b.clk_w > 0 THEN 'LOSER'
+      ELSE 'IDLE'
+    END AS class,
+    (b.inc_date IS NOT NULL
+     AND b.inc_date > DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
+     AND b.ep_clk < 20) AS probing,
+    (b.inc_date IS NOT NULL
+     AND b.inc_date > DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
+     AND b.ep_clk >= 20) AS probe_done
+  FROM sb_base b
+),
+sb_agg AS (
+  SELECT c.*,
+    SUM(c.sp_w) OVER (PARTITION BY c.campaign_id) AS camp_sp,
+    SUM(IF(c.class = 'LOSER', c.sp_w, 0)) OVER (PARTITION BY c.campaign_id) AS loser_sp,
+    SUM(IF(c.probing, 1, 0)) OVER (PARTITION BY c.campaign_id) AS active_probes,
+    ROUND(SAFE_DIVIDE(SUM(IF(c.class IN ('WINNER','MARGINAL'), c.sp_w, 0)) OVER (PARTITION BY c.campaign_id),
+                      NULLIF(SUM(IF(c.class IN ('WINNER','MARGINAL'), c.clk_w, 0)) OVER (PARTITION BY c.campaign_id), 0)), 2) AS win_cpc,
+    SUM(IF(c.class = 'LOSER' AND NOT c.probing, c.sp_w, 0))
+      OVER (PARTITION BY c.campaign_id ORDER BY IF(c.class = 'LOSER' AND NOT c.probing, COALESCE(c.roas_w, 0), 999) DESC, c.sp_w
+            ROWS UNBOUNDED PRECEDING) AS loser_cum_sp,
+    ROW_NUMBER() OVER (PARTITION BY c.campaign_id
+      ORDER BY IF(c.class = 'IDLE' AND NOT c.probing AND NOT c.probe_done, 0, 1),
+               IF(c.tcpc IS NOT NULL, 0, 1), c.ly_clk DESC, c.clk_w ASC, c.target_text) AS cand_rank
+  FROM sb_classed c
 )
 SELECT
-  a.campaign_id, a.campaign_name, ROUND(a.budget, 0) AS budget,
+  a.campaign_id, a.campaign_name, 'SP' AS channel, ROUND(a.budget, 0) AS budget,
   (SELECT in_peak FROM season) AS in_peak, (SELECT w_days FROM cap) AS w_days,
   ROUND(a.camp_sp, 2) AS campaign_spend_w,
   ROUND(100 * SAFE_DIVIDE(a.loser_sp, NULLIF(a.camp_sp, 0))) AS loser_share_pct,
@@ -187,7 +393,7 @@ SELECT
     WHEN a.class = 'LOSER' AND a.loser_cum_sp > 0.20 * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     -- idle pool: promote the next candidates into probes when slots are free
-    WHEN a.class = 'IDLE' AND a.active_probes < 2 AND a.cand_rank <= (2 - a.active_probes)
+    WHEN a.class = 'IDLE' AND NOT a.capped AND a.active_probes < 2 AND a.cand_rank <= (2 - a.active_probes)
          AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL THEN 'PROBE_START'
     ELSE 'IDLE'
   END AS action,
@@ -199,7 +405,7 @@ SELECT
     WHEN a.class IN ('WINNER','MARGINAL') THEN NULL
     WHEN a.class = 'LOSER' AND a.loser_cum_sp > 0.20 * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
     WHEN a.class = 'LOSER' THEN NULL
-    WHEN a.class = 'IDLE' AND a.active_probes < 2 AND a.cand_rank <= (2 - a.active_probes)
+    WHEN a.class = 'IDLE' AND NOT a.capped AND a.active_probes < 2 AND a.cand_rank <= (2 - a.active_probes)
          AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
       THEN ROUND(LEAST(COALESCE(1.5 * a.tcpc, a.win_cpc), 2.00), 2)
     ELSE NULL
@@ -220,6 +426,8 @@ SELECT
     WHEN a.class = 'LOSER' AND a.loser_cum_sp > 0.20 * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
       THEN 'loser beyond the 20% exploration budget — park $0.25 (spend goes to the winners)'
     WHEN a.class = 'LOSER' THEN 'loser inside the 20% allowance — keep gathering'
+    WHEN a.class = 'IDLE' AND a.capped
+      THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
     WHEN a.class = 'IDLE' AND a.active_probes < 2 AND a.cand_rank <= (2 - a.active_probes)
          AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
       THEN CONCAT('next probe candidate — lift to $',
@@ -227,4 +435,70 @@ SELECT
                   ' (', IF(a.tcpc IS NOT NULL, '1.5x target CPC', "winners' avg CPC"), '), verdict at 20 clicks')
     ELSE 'idle — waiting for a probe slot'
   END AS reason
-FROM agg a;
+FROM agg a
+UNION ALL
+-- ── SB block: identical action grammar, incl. the capped PROBE_START gate (both arms since v3;
+--    probing a dark campaign is a budget artifact — the no-loss-cuts rule; running probes still
+--    get verdicts and the −5% descent); net ROAS is the cost-ratio ESTIMATE ──
+SELECT
+  a.campaign_id, a.campaign_name, 'SB' AS channel, ROUND(a.budget, 0) AS budget,
+  (SELECT in_peak FROM season) AS in_peak, (SELECT w_days FROM cap) AS w_days,
+  ROUND(a.camp_sp, 2) AS campaign_spend_w,
+  ROUND(100 * SAFE_DIVIDE(a.loser_sp, NULLIF(a.camp_sp, 0))) AS loser_share_pct,
+  a.active_probes,
+  a.keyword_id, a.ad_group_id, a.target_text, a.match_type, a.is_auto, a.is_pt,
+  ROUND(a.current_bid, 2) AS current_bid,
+  CAST(a.clk_w AS INT64) AS clicks_w, ROUND(a.sp_w, 2) AS spend_w, CAST(a.ord_w AS INT64) AS orders_w, a.roas_w,
+  a.tcpc AS target_cpc, a.class,
+  a.probing, a.inc_date AS probe_started, CAST(a.ep_clk AS INT64) AS probe_clicks, a.ep_roas AS probe_roas,
+  CASE
+    WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN 'WINNER_FOUND'
+    WHEN a.probe_done THEN 'PARK'
+    WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN 'PROBE_ADJUST'
+    WHEN a.probing THEN 'PROBE_WAIT'
+    WHEN a.class IN ('WINNER','MARGINAL') THEN 'KEEP'
+    WHEN a.class = 'LOSER' AND a.loser_cum_sp > 0.20 * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
+    WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
+    WHEN a.class = 'IDLE' AND NOT a.capped AND a.active_probes < 2 AND a.cand_rank <= (2 - a.active_probes)
+         AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL THEN 'PROBE_START'
+    ELSE 'IDLE'
+  END AS action,
+  CASE
+    WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN NULL
+    WHEN a.probe_done THEN 0.25
+    WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
+    WHEN a.probing THEN NULL
+    WHEN a.class IN ('WINNER','MARGINAL') THEN NULL
+    WHEN a.class = 'LOSER' AND a.loser_cum_sp > 0.20 * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
+    WHEN a.class = 'LOSER' THEN NULL
+    WHEN a.class = 'IDLE' AND NOT a.capped AND a.active_probes < 2 AND a.cand_rank <= (2 - a.active_probes)
+         AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
+      THEN ROUND(LEAST(COALESCE(1.5 * a.tcpc, a.win_cpc), 2.00), 2)
+    ELSE NULL
+  END AS suggested_bid,
+  CASE
+    WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0
+      THEN CONCAT('probe verdict: ', CAST(a.ep_clk AS STRING), ' clicks at ', CAST(COALESCE(a.ep_roas,0) AS STRING),
+                  'x — WINNER found; joins the 80% pool, FIT/ROAS logic takes over')
+    WHEN a.probe_done
+      THEN CONCAT('probe verdict: ', CAST(a.ep_clk AS STRING), ' clicks at ', CAST(COALESCE(a.ep_roas,0) AS STRING),
+                  'x — not profitable, park $0.25 and promote the next candidate')
+    WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0
+      THEN CONCAT('probing (', CAST(a.ep_clk AS STRING), '/20 clicks) — 6+ clicks yesterday, no sale yet: -5% daily descent')
+    WHEN a.probing
+      THEN CONCAT('probing (', CAST(a.ep_clk AS STRING), '/20 clicks since ', CAST(a.inc_date AS STRING), ') — let the test run')
+    WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign (est. net ROAS)')
+    WHEN a.class = 'MARGINAL' THEN CONCAT('marginal: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x — in the 80% pool, watch (est. net ROAS)')
+    WHEN a.class = 'LOSER' AND a.loser_cum_sp > 0.20 * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
+      THEN 'loser beyond the 20% exploration budget — park $0.25 (spend goes to the winners)'
+    WHEN a.class = 'LOSER' THEN 'loser inside the 20% allowance — keep gathering'
+    WHEN a.class = 'IDLE' AND a.capped
+      THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
+    WHEN a.class = 'IDLE' AND a.active_probes < 2 AND a.cand_rank <= (2 - a.active_probes)
+         AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
+      THEN CONCAT('next probe candidate — lift to $',
+                  CAST(ROUND(LEAST(COALESCE(1.5 * a.tcpc, a.win_cpc), 2.00), 2) AS STRING),
+                  ' (', IF(a.tcpc IS NOT NULL, '1.5x target CPC', "winners' avg CPC"), '), verdict at 20 clicks')
+    ELSE 'idle — waiting for a probe slot'
+  END AS reason
+FROM sb_agg a;
