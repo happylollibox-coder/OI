@@ -170,8 +170,6 @@ SELECT
   b.is_low_tier, b.in_peak,
   CASE
     WHEN b.pd <= x.dark_target THEN 'WATCH'
-    -- GRADUATION RULE (Ori 2026-08-01): 7d profitable on a small budget -> straight to $31
-    WHEN COALESCE(b.r7, 0) > 1.0 AND b.budget < 30 THEN 'RAISE_STRONG'
     WHEN b.is_low_tier THEN CASE
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN 'RAISE_STRONG'
       WHEN COALESCE(b.r1,0) >= x.weak_roas THEN 'RAISE_WEAK'
@@ -191,7 +189,6 @@ SELECT
   END AS action,
   CASE
     WHEN b.pd <= x.dark_target THEN NULL
-    WHEN COALESCE(b.r7, 0) > 1.0 AND b.budget < 30 THEN 31.0
     WHEN b.is_low_tier THEN CASE
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas
         THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_strong), 2)

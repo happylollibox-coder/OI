@@ -485,12 +485,10 @@ SELECT
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
   a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense,
-  -- GRADUATION BUDGET RULE (Ori 2026-08-01): profitable week on a small budget -> lift past the
-  -- low-budget cap. camp 7d net ROAS > 1.0 AND budget < $30 -> suggest $31.
-  CASE WHEN a.camp_roas7 > 1.0 AND a.budget < 30 THEN 31.0 END AS suggested_budget,
-  CASE WHEN a.camp_roas7 > 1.0 AND a.budget < 30
-       THEN CONCAT('7d ', CAST(a.camp_roas7 AS STRING), 'x profitable on $', CAST(CAST(a.budget AS INT64) AS STRING),
-                   ' — raise to $31 (graduate past the low-budget cap)') END AS budget_reason,
+  -- (budget suggestion hooks — the 2026-08-01 graduation rule ran as a ONE-TIME bulksheet, not a
+  -- standing rule; columns kept for future campaign-grain budget logic)
+  CAST(NULL AS FLOAT64) AS suggested_budget,
+  CAST(NULL AS STRING) AS budget_reason,
   CASE
     -- probe verdicts first
     WHEN a.is_defense THEN 'DEFENSE'
@@ -584,12 +582,10 @@ SELECT
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
   a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense,
-  -- GRADUATION BUDGET RULE (Ori 2026-08-01): profitable week on a small budget -> lift past the
-  -- low-budget cap. camp 7d net ROAS > 1.0 AND budget < $30 -> suggest $31.
-  CASE WHEN a.camp_roas7 > 1.0 AND a.budget < 30 THEN 31.0 END AS suggested_budget,
-  CASE WHEN a.camp_roas7 > 1.0 AND a.budget < 30
-       THEN CONCAT('7d ', CAST(a.camp_roas7 AS STRING), 'x profitable on $', CAST(CAST(a.budget AS INT64) AS STRING),
-                   ' — raise to $31 (graduate past the low-budget cap)') END AS budget_reason,
+  -- (budget suggestion hooks — the 2026-08-01 graduation rule ran as a ONE-TIME bulksheet, not a
+  -- standing rule; columns kept for future campaign-grain budget logic)
+  CAST(NULL AS FLOAT64) AS suggested_budget,
+  CAST(NULL AS STRING) AS budget_reason,
   CASE
     WHEN a.is_defense THEN 'DEFENSE'
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN 'WINNER_FOUND'

@@ -212,10 +212,11 @@ hierarchies — campaign, keyword, search term/negate)."
 
 ## v5 — graduation budget rule + Brand defense section (Ori 2026-08-01)
 
-- **Graduation budget rule:** campaign 7d net ROAS > 1.0 AND budget < $30 → suggest **$31** (past
-  both season caps). Implemented in V_KEYWORD_LIFT (campaign grain, Portfolio/Defense rows; wins
-  over the launch-ladder fallback) AND as a top-priority branch in V_OOB_BUDGET_PHASE's dark
-  ladder (RAISE_STRONG → $31).
+- **Graduation budget fix (ONE-TIME, 2026-08-01):** campaign 7d net ROAS > 1.0 AND budget < $30
+  → $31 (past both season caps). Ori: "this suppose to be one time bulksheet" — executed as a
+  10-campaign bulksheet (8 SP + 2 SB, .tmp/budget_graduation_onetime_20260801.xlsx), NOT a
+  standing rule. The engines' campaign-grain suggested_budget/budget_reason columns remain as
+  NULL hooks for future budget logic; ongoing budgets run on the existing ladders.
 - **Brand defense is its own section** (campaigns named '%Brand Defense%'): excluded from
   Out-of-budget and Portfolio displays. The moat doctrine enforced in data: defense keywords get
   action DEFENSE (never parked/probed by ROAS — the coacher defense mode owns bids, raising
