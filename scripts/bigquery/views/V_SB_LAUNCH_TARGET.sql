@@ -197,8 +197,12 @@ SELECT
         -- capped campaign: budget-constrained probing (Ori 2026-07-30)
         WHEN b.pd > x.dark_target THEN CASE
           WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.bid > x.bid_park + 0.05 THEN x.bid_park
-          WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.clk3,0) > 0 THEN ROUND(GREATEST(b.bid*x.bid_big_trim, COALESCE(b.aff_cpc, x.bid_min)),2)
-          WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day THEN ROUND(GREATEST(b.bid*x.bid_slow, x.bid_min),2)
+          -- TRIM needs real evidence (4+ clicks yesterday, Ori 2026-08-01); step max(15%, 30% x dark)
+          WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.r2_clk,0) >= x.click_goal_day
+            THEN ROUND(GREATEST(b.bid * LEAST(x.bid_big_trim, 1 - 0.30 * b.pd), COALESCE(b.aff_cpc, x.bid_min)),2)
+          -- DARK_BRAKE: campaign-wide, dark-proportional step max(5%, 30% x dark), daily, floor $0.20
+          WHEN COALESCE(b.clk3,0) > 0 AND b.bid > x.bid_min + 0.05
+            THEN ROUND(GREATEST(b.bid * LEAST(x.bid_slow, 1 - 0.30 * b.pd), x.bid_min),2)
           ELSE b.bid
         END
         WHEN COALESCE(b.r2_clk,0) <  x.click_goal_day THEN ROUND(LEAST(b.bid*x.bid_probe, x.bid_max),2)
@@ -228,8 +232,8 @@ SELECT
       CASE
         WHEN b.pd > x.dark_target THEN CASE
           WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.bid > x.bid_park + 0.05 THEN 'PARK'
-          WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.clk3,0) > 0 THEN 'TRIM_BID'
-          WHEN COALESCE(b.r2_clk,0) >= x.click_cap_day THEN 'SLOW'
+          WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.r2_clk,0) >= x.click_goal_day THEN 'TRIM_BID'
+          WHEN COALESCE(b.clk3,0) > 0 AND b.bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
           ELSE 'HOLD'
         END
         WHEN COALESCE(b.r2_clk,0) <  x.click_goal_day THEN 'PROBE'

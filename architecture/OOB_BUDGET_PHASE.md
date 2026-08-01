@@ -78,12 +78,21 @@ same constants as the launch controller, applied to every OOB campaign regardles
   first match wins:
   1. **tested ≥ 15 clicks over 90d, no sale → PARK at $0.25** — it had its test; free the budget
      for the untested keywords, even if the parked bid gets no clicks.
-  2. **bid above the affordable CPC with any recent clicks → TRIM −15%/day toward it** — the
-     affordable CPC = `budget ÷ (targets × 4-click goal)`, floored $0.20 (Ori: "TRIM floor should
-     not stop at $1.00"). Self-scaling: $10/17 targets → ~$0.20; $70/10 targets → ~$1.75 (left alone).
-  3. ≥ 6 clicks yesterday → SLOW −5% (still over-buying traffic).
-  4. under 4 clicks → **HOLD, never probe up** — the constraint is budget, not bid. (+5% probing
-     survives only in the launch controller's NOT-capped branch.)
+  2. **bid above the affordable CPC with REAL evidence (≥ 4 clicks yesterday) → TRIM toward it** —
+     the affordable CPC = `budget ÷ (targets × 4-click goal)`, floored $0.20 (Ori: "TRIM floor
+     should not stop at $1.00"). Step = `max(15%, 30% × dark)` per day. Evidence gate added
+     2026-08-01 (Ori: "cheap gift for girl has only 1 click but action is reduce bid due to bid
+     eats the budget") — 1–2 clicks is NOT proof the keyword eats the budget; those rows fall to
+     the campaign-wide brake below.
+  3. **any clicked keyword above the $0.20 floor → DARK_BRAKE** (2026-08-01, replaces flat SLOW
+     −5%): the bid lever against darkness is CAMPAIGN-WIDE and proportional — step =
+     `max(5%, 30% × dark)` per day (68% dark → −20%/day; 82% → −25%/day), re-fires every day the
+     campaign stays capped, floor $0.20 — Ori: "bid should be reduced with more than 5% and
+     continue reducing until dark is 0%" (single-keyword BOX-VIDEO/PT case) and "no keyword is the
+     eater — the campaign bleeds from many small bids" (VIDEO- COMP/BALL case). The brake stops
+     when the campaign leaves the dark set (dark ≤ 10%, the phase's WATCH tolerance).
+  4. zero clicks in both windows → **HOLD, never probe up** — the constraint is budget, not bid.
+     (+5% probing survives only in the launch controller's NOT-capped branch.)
   A found winner automatically becomes **main**: the others park/trim, the freed budget flows to
   him, his ROAS ladder raises him, and campaign profitability triggers the budget promotion.
 - 1-day cooldown: a keyword changed < 1 day ago (FACT_PPC_CHANGE_LOG) shows HOLD "changed today".

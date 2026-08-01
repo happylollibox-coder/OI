@@ -288,9 +288,17 @@ SELECT
     -- under-clicking is a budget artifact — never probe up. Park the tested, trim the eaters.
     WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05
       THEN x.bid_park
-    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0
-      THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, COALESCE(b.aff_cpc, x.bid_min)), 2)
-    WHEN b.clk1 >= x.click_cap_day THEN ROUND(GREATEST(b.current_bid * x.bid_slow, x.bid_min), 2)
+    -- TRIM needs REAL evidence (Ori 2026-08-01: "only 1 click but action is reduce bid due to bid
+    -- eats the budget") — 4+ clicks yesterday proves this keyword actually consumes the budget.
+    -- Step scales with darkness: max(15%, 30% x dark) per day.
+    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND b.clk1 >= x.click_goal_day
+      THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100), COALESCE(b.aff_cpc, x.bid_min)), 2)
+    -- DARK_BRAKE (Ori 2026-08-01, replaces flat SLOW -5%): the bid lever against darkness is
+    -- CAMPAIGN-WIDE and proportional — every clicked keyword steps down max(5%, 30% x dark) per
+    -- day, re-firing daily while the campaign stays capped, floor $0.20. No single keyword is
+    -- "the eater"; the campaign bleeds from many bids collectively.
+    WHEN (b.clk1 + b.clk2) > 0 AND b.current_bid > x.bid_min + 0.05
+      THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100), x.bid_min), 2)
     ELSE NULL
   END AS suggested_bid,
   CASE
@@ -303,8 +311,8 @@ SELECT
         AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05 THEN 'FIT_CPC'
       ELSE 'HOLD' END
     WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
-    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0 THEN 'TRIM_BID'
-    WHEN b.clk1 >= x.click_cap_day THEN 'SLOW'
+    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND b.clk1 >= x.click_goal_day THEN 'TRIM_BID'
+    WHEN (b.clk1 + b.clk2) > 0 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
     ELSE 'HOLD'
   END AS bid_action,
   CASE
@@ -325,11 +333,15 @@ SELECT
       ELSE 'converting — hold; the budget raise is the lever while capping' END
     WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05
       THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d with 0 orders — park at $0.25 so the untested keywords get their probe')
-    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND (b.clk1 + b.clk2) > 0
-      THEN CONCAT('bid eats the capped budget — trim 15%/day toward the affordable CPC $',
-                  CAST(b.aff_cpc AS STRING), ' (= budget ÷ targets × 4-click goal)')
-    WHEN b.clk1 >= x.click_cap_day THEN '6+ clicks yesterday, not converting — slow −5%: cheaper clicks stretch the budget across the day'
-    ELSE 'under-clicked because the BUDGET dies, not the bid — held; parking/trimming the eaters frees its probe'
+    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND b.clk1 >= x.click_goal_day
+      THEN CONCAT('bid eats the capped budget (', CAST(b.clk1 AS STRING), ' clicks yesterday) — trim ',
+                  CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
+                  '%/day toward the affordable CPC $', CAST(b.aff_cpc AS STRING), ' (= budget ÷ targets × 4-click goal)')
+    WHEN (b.clk1 + b.clk2) > 0 AND b.current_bid > x.bid_min + 0.05
+      THEN CONCAT('campaign ', CAST(CAST(b.pct_dark AS INT64) AS STRING), '% dark — brake all bids ',
+                  CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
+                  '%/day (max of 5%, 30%×dark) until the budget survives the day · floor $0.20')
+    ELSE 'no clicks in 3 days, or bid already at the $0.20 floor — hold'
   END AS bid_reason
 FROM withT b CROSS JOIN k x
 WHERE b.clk1 > 0 OR b.clk2 > 0;
