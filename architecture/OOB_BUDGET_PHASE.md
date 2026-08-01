@@ -224,3 +224,8 @@ hierarchies — campaign, keyword, search term/negate)."
   (never negate brand terms in defense). The only lever on the panel is BUDGET (incl. the
   graduation rule). Partition: OOB (dark, non-defense) + Portfolio (healthy, non-defense) +
   Brand defense (all 8) = 108 servable.
+- **2×2 layout (Ori 2026-08-01):** the two engine surfaces render split by budget tier —
+  "Low budget — out of budget" (dark, ≤ cap) · "Portfolio 80/20 — out of budget" (dark, > cap) ·
+  "Low budget" (healthy, ≤ cap) · "Portfolio 80/20" (healthy, > cap) · "Brand defense".
+  Presentational only (tier prop on the panel components); engines unchanged. Partition verified
+  15 + 4 + 61 + 20 + 8 = 108.

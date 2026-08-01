@@ -36,7 +36,7 @@ const CLASS_CLS: Record<string, string> = {
   WINNER: 'text-emerald-400', MARGINAL: 'text-amber-400', LOSER: 'text-red-400', IDLE: 'text-faint',
 };
 
-export function KeywordLiftPhase() {
+export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
   const doQueue = useDoQueue();
   const [open, setOpen] = useState(false);
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
@@ -184,7 +184,25 @@ export function KeywordLiftPhase() {
     current_bid: r.bid, recommended_bid: r.suggestedBid, source: 'COACH',
   });
 
-  const sugs = useMemo(() => (rows ?? []).filter(r => actionable(r) && !oobIds.has(r.campaignId)), [rows, oobIds]);
+  const lowCap = (rows ?? [])[0]?.wDays === 3 ? 30 : 20;   // peak cap $30, off-season $20
+  const camps = [...byCamp.values()].filter(g => {
+    const c = g[0];
+    if (!c || oobIds.has(c.campaignId) || c.isDefense) return false;
+    return tier === 'LOW' ? c.budget <= lowCap : c.budget > lowCap;
+  });
+  const campIds = new Set(camps.map(g => g[0].campaignId));
+  const visNegs = negs.filter(n => campIds.has(n.campaignId));
+
+  const budgetItem = (id: string) => doQueue.items.find(i => i.action === 'BUDGET_CHANGE' && i.campaign_id === id);
+  const budgetSug = (c: Row): Bud | null => {
+    // GRADUATION RULE (view-computed, Ori 2026-08-01) wins; the launch budget ladder is the fallback
+    if (c.vSuggestedBudget != null && Math.abs(c.vSuggestedBudget - c.budget) > 0.01)
+      return { budget: c.budget, suggested: c.vSuggestedBudget, reason: c.vBudgetReason };
+    const b = budMap.get(c.campaignId); return b && b.suggested != null && Math.abs(b.suggested - b.budget) > 0.01 ? b : null;
+  };
+  const budSugs = useMemo(() => camps.map(g => g[0]).filter(c => budgetSug(c)), [camps, budMap]);
+
+  const sugs = (rows ?? []).filter(r => actionable(r) && campIds.has(r.campaignId));
   const allApplied = sugs.length > 0 && sugs.every(r => !!bidItem(r));
   const applyAll = () => {
     if (allApplied) {
@@ -198,16 +216,6 @@ export function KeywordLiftPhase() {
     }
   };
 
-  const camps = [...byCamp.values()].filter(g => !oobIds.has(g[0]?.campaignId ?? '') && !g[0]?.isDefense);
-  const visNegs = useMemo(() => negs.filter(n => !oobIds.has(n.campaignId) && byCamp.has(n.campaignId)), [negs, oobIds, byCamp]);
-  const budgetItem = (id: string) => doQueue.items.find(i => i.action === 'BUDGET_CHANGE' && i.campaign_id === id);
-  const budgetSug = (c: Row): Bud | null => {
-    // GRADUATION RULE (view-computed, Ori 2026-08-01) wins; the launch budget ladder is the fallback
-    if (c.vSuggestedBudget != null && Math.abs(c.vSuggestedBudget - c.budget) > 0.01)
-      return { budget: c.budget, suggested: c.vSuggestedBudget, reason: c.vBudgetReason };
-    const b = budMap.get(c.campaignId); return b && b.suggested != null && Math.abs(b.suggested - b.budget) > 0.01 ? b : null;
-  };
-  const budSugs = useMemo(() => camps.map(g => g[0]).filter(c => budgetSug(c)), [camps, budMap]);
   const queueBudget = (c: Row) => {
     const b = budMap.get(c.campaignId); if (!b || b.suggested == null) return;
     doQueue.addItem({
@@ -238,7 +246,7 @@ export function KeywordLiftPhase() {
       <div className="flex items-center gap-1">
         <button className="text-label flex items-center gap-1 flex-1 min-w-0" onClick={() => setOpen(o => !o)}>
           <span className="text-faint">{open ? '▾' : '▸'}</span>
-          <span className="font-medium text-sky-300">Portfolio 80/20</span>
+          <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : 'Portfolio 80/20'}</span>
           <span className="text-faint truncate">
             {failed ? '— unavailable' : rows
               ? `— ${camps.length} working campaigns · ${nParks} parks · ${nProbes} probes · ${nFound} winners found · ${visNegs.length} negates`

@@ -10,7 +10,7 @@ import { useDoQueue } from '../hooks/useDoQueue';
 // Spec: architecture/OOB_BUDGET_PHASE.md.
 
 type Row = {
-  id: string; name: string; channel: string; engine: string; isDefense: boolean; budget: number; spend: number;
+  id: string; name: string; channel: string; engine: string; isDefense: boolean; isLowTier: boolean; budget: number; spend: number;
   util: number | null; dark: number; roas1: number | null; roasPrev2: number | null;
   daysSince: number | null; action: string; suggested: number | null; reason: string;
 };
@@ -44,7 +44,7 @@ const KW_CLS: Record<string, string> = {
   HOLD: 'text-muted', NO_BID: 'text-faint',
 };
 
-export function OobBudgetPhase() {
+export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
   const doQueue = useDoQueue();
   const [open, setOpen] = useState(false);
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
@@ -58,7 +58,7 @@ export function OobBudgetPhase() {
     Promise.all([
       cubeLoad({
         dimensions: [
-          'OobBudget.campaignId', 'OobBudget.campaignName', 'OobBudget.channel', 'OobBudget.engine', 'OobBudget.isDefense',
+          'OobBudget.campaignId', 'OobBudget.campaignName', 'OobBudget.channel', 'OobBudget.engine', 'OobBudget.isDefense', 'OobBudget.isLowTier',
           'OobBudget.currentBudget', 'OobBudget.spend1d', 'OobBudget.utilization',
           'OobBudget.pctDark', 'OobBudget.roas1d', 'OobBudget.roasPrev2',
           'OobBudget.daysSinceBudgetChange', 'OobBudget.action',
@@ -93,6 +93,7 @@ export function OobBudgetPhase() {
         channel: String(r['OobBudget.channel'] ?? ''),
         engine: String(r['OobBudget.engine'] ?? ''),
         isDefense: r['OobBudget.isDefense'] === true || r['OobBudget.isDefense'] === 'true',
+        isLowTier: r['OobBudget.isLowTier'] === true || r['OobBudget.isLowTier'] === 'true',
         budget: num(r['OobBudget.currentBudget']) ?? 0,
         spend: num(r['OobBudget.spend1d']) ?? 0,
         util: num(r['OobBudget.utilization']),
@@ -110,7 +111,7 @@ export function OobBudgetPhase() {
       // at dark ≤ 10% (WATCH) stay in their engine home (Portfolio 80/20 / launch cards) instead of
       // appearing twice.
       // defense campaigns live in their own section (Ori 2026-08-01)
-      setRows(mapped.filter(r => r.dark > 10 && !r.isDefense));
+      setRows(mapped.filter(r => r.dark > 10 && !r.isDefense && (tier === 'LOW' ? r.isLowTier : !r.isLowTier)));
       setKws((ks as Record<string, unknown>[]).map(r => ({
         campaignId: String(r['OobKeyword.campaignId'] ?? ''),
         keywordId: String(r['OobKeyword.keywordId'] ?? ''),
@@ -232,7 +233,7 @@ export function OobBudgetPhase() {
       <div className="flex items-center gap-1">
         <button className="text-label flex items-center gap-1 flex-1 min-w-0" onClick={() => setOpen(o => !o)}>
           <span className="text-faint">{open ? '▾' : '▸'}</span>
-          <span className="font-medium text-rose-300">Out of budget</span>
+          <span className="font-medium text-rose-300">{tier === 'LOW' ? 'Low budget — out of budget' : 'Portfolio 80/20 — out of budget'}</span>
           <span className="text-faint truncate">
             {failed ? '— unavailable' : rows
               ? `— ${n} dark yesterday · ${nMoves} budget moves · ${allSuggestions.bids.length} bids · ${allSuggestions.negs.length} negates`

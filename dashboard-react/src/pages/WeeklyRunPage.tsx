@@ -789,8 +789,11 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                 {/* coach logic as a flow chart (strategy toggles) — the engine driving every decision below */}
                 <CoachFlowchart />
                 {/* out-of-budget technical phase — dark campaigns + one budget suggestion each (V_OOB_BUDGET_PHASE) */}
-                <OobBudgetPhase />
-                <KeywordLiftPhase />
+                {/* 2x2 split (Ori 2026-08-01): state (dark / healthy) x tier (low budget / working) */}
+                <OobBudgetPhase tier="LOW" />
+                <OobBudgetPhase tier="HIGH" />
+                <KeywordLiftPhase tier="LOW" />
+                <KeywordLiftPhase tier="HIGH" />
                 <BrandDefensePhase />
                 {/* Launch-controller cards DISSOLVED (Ori 2026-08-01): low-budget campaigns live in the
                     Portfolio 80/20 (seat mechanism) or Out-of-budget while dark; the launch BUDGET engine
