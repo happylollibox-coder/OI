@@ -84,7 +84,8 @@ same constants as the launch controller, applied to every OOB campaign regardles
      2026-08-01 (Ori: "cheap gift for girl has only 1 click but action is reduce bid due to bid
      eats the budget") — 1–2 clicks is NOT proof the keyword eats the budget; those rows fall to
      the campaign-wide brake below.
-  3. **any clicked keyword above the $0.20 floor → DARK_BRAKE** (2026-08-01, replaces flat SLOW
+  3. **any keyword that clicked YESTERDAY, above the $0.20 floor → DARK_BRAKE** (Ori 2026-08-01:
+     never brake a keyword that did not click — its bid did not eat the budget) (2026-08-01, replaces flat SLOW
      −5%): the bid lever against darkness is CAMPAIGN-WIDE and proportional — step =
      `max(5%, 30% × dark)` per day (68% dark → −20%/day; 82% → −25%/day), re-fires every day the
      campaign stays capped, floor $0.20 — Ori: "bid should be reduced with more than 5% and

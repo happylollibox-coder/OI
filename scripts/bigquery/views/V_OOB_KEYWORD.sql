@@ -297,7 +297,9 @@ SELECT
     -- CAMPAIGN-WIDE and proportional — every clicked keyword steps down max(5%, 30% x dark) per
     -- day, re-firing daily while the campaign stays capped, floor $0.20. No single keyword is
     -- "the eater"; the campaign bleeds from many bids collectively.
-    WHEN (b.clk1 + b.clk2) > 0 AND b.current_bid > x.bid_min + 0.05
+    -- only keywords that clicked YESTERDAY (Ori 2026-08-01: never brake a keyword that did not
+    -- click — its bid did not eat the budget; it just loses its chance to ever test)
+    WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05
       THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100), x.bid_min), 2)
     ELSE NULL
   END AS suggested_bid,
@@ -312,7 +314,7 @@ SELECT
       ELSE 'HOLD' END
     WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
     WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND b.clk1 >= x.click_goal_day THEN 'TRIM_BID'
-    WHEN (b.clk1 + b.clk2) > 0 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
+    WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
     ELSE 'HOLD'
   END AS bid_action,
   CASE
@@ -337,11 +339,11 @@ SELECT
       THEN CONCAT('bid eats the capped budget (', CAST(b.clk1 AS STRING), ' clicks yesterday) — trim ',
                   CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
                   '%/day toward the affordable CPC $', CAST(b.aff_cpc AS STRING), ' (= budget ÷ targets × 4-click goal)')
-    WHEN (b.clk1 + b.clk2) > 0 AND b.current_bid > x.bid_min + 0.05
+    WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05
       THEN CONCAT('campaign ', CAST(CAST(b.pct_dark AS INT64) AS STRING), '% dark — brake all bids ',
                   CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
                   '%/day (max of 5%, 30%×dark) until the budget survives the day · floor $0.20')
-    ELSE 'no clicks in 3 days, or bid already at the $0.20 floor — hold'
+    ELSE 'no clicks yesterday (its bid did not eat the budget) or already at the $0.20 floor — hold'
   END AS bid_reason
 FROM withT b CROSS JOIN k x
 WHERE b.clk1 > 0 OR b.clk2 > 0;

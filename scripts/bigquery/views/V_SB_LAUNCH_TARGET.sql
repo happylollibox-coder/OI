@@ -201,7 +201,7 @@ SELECT
           WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.r2_clk,0) >= x.click_goal_day
             THEN ROUND(GREATEST(b.bid * LEAST(x.bid_big_trim, 1 - 0.30 * b.pd), COALESCE(b.aff_cpc, x.bid_min)),2)
           -- DARK_BRAKE: campaign-wide, dark-proportional step max(5%, 30% x dark), daily, floor $0.20
-          WHEN COALESCE(b.clk3,0) > 0 AND b.bid > x.bid_min + 0.05
+          WHEN COALESCE(b.r2_clk,0) >= 1 AND b.bid > x.bid_min + 0.05
             THEN ROUND(GREATEST(b.bid * LEAST(x.bid_slow, 1 - 0.30 * b.pd), x.bid_min),2)
           ELSE b.bid
         END
@@ -233,7 +233,7 @@ SELECT
         WHEN b.pd > x.dark_target THEN CASE
           WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.bid > x.bid_park + 0.05 THEN 'PARK'
           WHEN b.bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.r2_clk,0) >= x.click_goal_day THEN 'TRIM_BID'
-          WHEN COALESCE(b.clk3,0) > 0 AND b.bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
+          WHEN COALESCE(b.r2_clk,0) >= 1 AND b.bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
           ELSE 'HOLD'
         END
         WHEN COALESCE(b.r2_clk,0) <  x.click_goal_day THEN 'PROBE'
