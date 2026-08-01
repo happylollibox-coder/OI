@@ -106,6 +106,25 @@ from the term/target/budget decisions above — it has its own view and grain.
 
 **Scope**: Applies only to target-level bid actions (`INCREASE_BID`, `REDUCE_BID`). Campaign-level `CAMPAIGN_PAUSED` (based on `campaign_state`) is checked separately and takes priority.
 
+### 🧪 Lift-Probe Suppression (NEW — 2026-08-01)
+
+**Problem**: The 80/20 portfolio engine (`V_KEYWORD_LIFT`, spec `OOB_BUDGET_PHASE.md` §Lever 2B) runs
+stateless 20-click probe experiments on working-campaign keywords. The coacher, judging the same
+keywords on 4w/8w windows, was emitting `REDUCE_BID` / `STOP_TARGET` on keywords **mid-probe**
+(verified live 2026-08-01: a REDUCE on a 'mystery box for girls' probe and a STOP on a mid-test
+auto clause) — killing a test before its 20-click verdict wastes the entire test spend.
+
+**Solution**: in `V_ADS_COACH.scored` (same masking pattern as the 3-day cooldown), keywords the
+lift engine currently owns — `V_KEYWORD_LIFT WHERE probing OR action = 'PROBE_START'` (both
+channels) — get `target_action → 'KEEP_TARGET'` and bid-type `action → 'KEEP'`. A boolean
+`is_lift_probe` column is exposed for the decision trace / UI.
+
+**Scope**: bid actions only, and **unlike the cooldown, `STOP_TARGET` is also masked** (stopping a
+probe mid-episode defeats the test). Term-grain negation (`NEGATE_TERM` / `STOP_TERM`) still passes
+— per the no-loss-cuts doctrine, bleed is handled at the SEARCH-TERM level and does not fight the
+probe. Suppression ends automatically when the episode reaches its verdict (probing=FALSE and no
+PROBE_START row) — `WINNER_FOUND` keywords return to normal coacher governance.
+
 ---
 
 ## Decision Trace (JSON chips)

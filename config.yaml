@@ -570,8 +570,11 @@ views:
     source_files: ["scripts/bigquery/views/V_ADS_NEGATIVE_CONFLICTS.sql"]
 
   - name: "V_ADS_COACH"
-    description: "Single source of truth for all action decisions. Thin logic layer referencing V_ADS_COACH_DATA."
+    description: "Single source of truth for all action decisions. Thin logic layer referencing V_ADS_COACH_DATA. Lift-probe suppression (2026-08-01): keywords owned by V_KEYWORD_LIFT (probing OR PROBE_START, both channels) get bid actions masked to KEEP/KEEP_TARGET incl. STOP_TARGET (killing a mid-test probe defeats the 20-click experiment); term-grain NEGATE_TERM/STOP_TERM still pass; is_lift_probe column exposed. Spec: ADS_COACH_DECISION_MATRIX.md \u00a7Safety Guards."
     source_files: ["scripts/bigquery/views/V_ADS_COACH.sql"]
+    dependencies:
+      - V_ADS_COACH_DATA
+      - V_KEYWORD_LIFT
 
   - name: "V_ADS_COACH_PHRASE_NEGATIVES"
     description: "N-gram phrase analysis — identifies common phrases across unprofitable search terms for phrase-level negation."

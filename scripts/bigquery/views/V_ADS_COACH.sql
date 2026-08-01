@@ -2311,11 +2311,32 @@ LEFT JOIN ly_peak_campaign_roas lypr ON sch.seasonal_peak_name = lypr.holiday_na
 -- (days_since_last_suggestion[_camp] sourced from FACT_PPC_CHANGE_LOG in
 -- V_ADS_COACH_DATA — the authoritative upload time, unlike the lagging SCD2 history).
 -- Safety valve: STOP_TARGET / NEGATE_TERM / STOP_TERM on a clear loser still pass.
+--
+-- ─── Lift-probe suppression (2026-08-01, ADS_COACH_DECISION_MATRIX.md §Safety Guards) ─────────
+-- Keywords the 80/20 lift engine currently owns (mid-probe episode, or the imminent PROBE_START
+-- candidate) are off-limits to coacher bid actions: a REDUCE/STOP mid-test kills a 20-click
+-- experiment before its verdict and wastes the test spend. Unlike the cooldown, STOP_TARGET is
+-- ALSO masked; term-grain negation still passes (bleed is handled at the search-term level).
+-- Single source of truth: V_KEYWORD_LIFT (both channels). Ends automatically at the verdict.
+lift_probes AS (
+  SELECT DISTINCT keyword_id
+  FROM `onyga-482313.OI.V_KEYWORD_LIFT`
+  WHERE probing OR action = 'PROBE_START'
+),
+scored_flagged AS (
+  SELECT *,
+    (keyword_id IS NOT NULL AND keyword_id IN (SELECT keyword_id FROM lift_probes)) AS is_lift_probe
+  FROM scored_raw
+),
 scored AS (
   SELECT * REPLACE(
-    CASE WHEN days_since_last_suggestion < 3 AND action NOT IN ('NEGATE_TERM', 'STOP_TERM')
+    CASE WHEN is_lift_probe AND action NOT IN ('NEGATE_TERM', 'STOP_TERM')
+         THEN 'KEEP'
+         WHEN days_since_last_suggestion < 3 AND action NOT IN ('NEGATE_TERM', 'STOP_TERM')
          THEN 'KEEP' ELSE action END AS action,
-    CASE WHEN days_since_last_suggestion < 3 AND target_action != 'STOP_TARGET'
+    CASE WHEN is_lift_probe
+         THEN 'KEEP_TARGET'
+         WHEN days_since_last_suggestion < 3 AND target_action != 'STOP_TARGET'
          THEN 'KEEP_TARGET' ELSE target_action END AS target_action,
     CASE WHEN days_since_last_suggestion_camp < 3
          THEN 'BUDGET_OK'
@@ -2348,7 +2369,7 @@ scored AS (
            WHEN coach_mode = 'GUARDIAN' AND COALESCE(target_net_roas_1w, 0) >= 2 THEN th_bid_cap
            ELSE COALESCE(strategy_bid_max, th_bid_cap) END,
       th_bid_cap), 2) AS recommended_bid
-  ) FROM scored_raw
+  ) FROM scored_flagged
 )
 
 SELECT
