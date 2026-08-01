@@ -14,6 +14,19 @@ Scope:
     (lolli/lollibox/lollime), which is exactly what defense campaigns exist to buy
   - Sponsored Products only -- the SB negative-keyword entity format is unverified
 
+Already-negated exclusion: the Fivetran negative_keyword sync froze 2026-01-03, so
+"already negated" = frozen `V_SRC_AmazonAds_negative_keyword` UNION the warehouse-owned
+`DE_NEGATIVE_KEYWORDS` registry (the authority since the freeze). Any (campaign, term)
+pair already enabled as a negative there -- at either campaign or ad-group level, any
+match type -- is skipped, so the sheet neither re-adds existing negatives nor misses
+ones added since the freeze.
+
+Own-keyword conflict guard: a campaign-level negative phrase that appears inside one of
+the campaign's own ENABLED bidded keywords (DIM_KEYWORD, is_current) would block the
+campaign's own targeting -- e.g. family phrase 'cute' vs a campaign bidding 'cute diary'.
+Those rows are skipped and reported; the curated list is family-wide, the keyword set is
+per-campaign, and the keyword wins.
+
 Usage:
     /usr/bin/python3 tools/backfill_campaign_negatives.py [--out PATH]
 
@@ -120,15 +133,68 @@ def fetch_negatives():
     return by_family
 
 
+def fetch_existing_negatives():
+    # "Already negated" = frozen Fivetran snapshot UNION the warehouse-owned registry
+    # (DE_NEGATIVE_KEYWORDS is the authority for negatives added after 2026-01-03).
+    # Grain: (campaign_id, lowered term), any level / any match type — if the term is
+    # already negated anywhere in the campaign we don't re-add it; Amazon rejects true
+    # duplicates and a phrase-vs-exact upgrade is out of scope for a backfill.
+    # Fivetran carries mixed-case states ('ENABLED'/'enabled'); DE uses 'ENABLED'.
+    rows = bq(f"""
+        SELECT DISTINCT campaign_id, LOWER(TRIM(keyword_text)) AS kw
+        FROM (
+          SELECT campaign_id, keyword_text, state
+          FROM `{PROJECT}.OI.V_SRC_AmazonAds_negative_keyword`
+          UNION ALL
+          SELECT campaign_id, keyword_text, state
+          FROM `{PROJECT}.OI.DE_NEGATIVE_KEYWORDS`
+        )
+        WHERE UPPER(state) = 'ENABLED' AND keyword_text IS NOT NULL
+    """)
+    existing = defaultdict(set)
+    for r in rows:
+        existing[r['campaign_id']].add(r['kw'])
+    return existing
+
+
+def fetch_bidded_keywords():
+    # The campaign's own ENABLED positive keywords -- a negative phrase contained in one
+    # of these would block the campaign's own targeting. DIM_KEYWORD is the consolidated
+    # (still-syncing) keyword source; is_current gives latest state.
+    rows = bq(f"""
+        SELECT DISTINCT campaign_id, LOWER(TRIM(keyword_text)) AS kw
+        FROM `{PROJECT}.OI.DIM_KEYWORD`
+        WHERE is_current AND UPPER(state) = 'ENABLED'
+          AND UPPER(COALESCE(match_type, '')) NOT LIKE '%NEGATIVE%'
+          AND keyword_text IS NOT NULL
+    """)
+    bidded = defaultdict(set)
+    for r in rows:
+        bidded[r['campaign_id']].add(r['kw'])
+    return bidded
+
+
+def conflicts_with_bidded(phrase, match_type, bidded_kws):
+    # Amazon negative phrase blocks any search term containing the phrase as a
+    # contiguous word sequence; negative exact blocks only the exact term.
+    if match_type == 'Negative Exact':
+        return phrase in bidded_kws
+    pat = re.compile(r'(^|\s)' + re.escape(phrase) + r'(\s|$)')
+    return any(pat.search(kw) for kw in bidded_kws)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--out', default='exports/backfill_campaign_negatives.xlsx')
+    ap.add_argument('--out', default='.tmp/backfill_campaign_negatives.xlsx')
     args = ap.parse_args()
 
     campaigns = fetch_campaigns()
     negatives = fetch_negatives()
+    existing = fetch_existing_negatives()
+    bidded = fetch_bidded_keywords()
 
-    rows, included, skipped = [], [], []
+    rows, included, skipped, conflicts = [], [], [], []
+    total_already = 0
 
     for c in campaigns:
         name, cid = c['campaign_name'], c['campaign_id']
@@ -149,8 +215,21 @@ def main():
             skipped.append((name, f'no family resolved (map={c.get("parent_name")})'))
             continue
 
-        phrases = negatives[fam]
-        for phrase, match_type in phrases:
+        already = existing.get(cid, set())
+        campaign_kws = bidded.get(cid, set())
+        emitted = set()  # defensive (campaign, term) dedupe within the sheet
+        n_new, n_already = 0, 0
+        for phrase, match_type in negatives[fam]:
+            key = phrase.strip().lower()
+            if key in already:
+                n_already += 1
+                continue
+            if key in emitted:
+                continue
+            if conflicts_with_bidded(key, match_type, campaign_kws):
+                conflicts.append((name, key, sorted(campaign_kws)[:3]))
+                continue
+            emitted.add(key)
             rows.append({
                 'Product': 'Sponsored Products',
                 'Entity': 'Campaign Negative Keyword',
@@ -161,7 +240,12 @@ def main():
                 'Match Type': MATCH_TYPE_MAP[match_type],
                 'State': 'ENABLED',
             })
-        included.append((name, fam, source, len(phrases)))
+            n_new += 1
+        total_already += n_already
+        if n_new == 0:
+            skipped.append((name, f'all {n_already} family negatives already present'))
+            continue
+        included.append((name, fam, source, n_new, n_already))
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -171,13 +255,18 @@ def main():
         ws.append([r.get(h, '') for h in SP_HEADERS])
     wb.save(args.out)
 
-    print(f"\n{'CAMPAIGN':<52} {'FAMILY':<10} {'VIA':<12} ROWS")
-    for name, fam, source, n in included:
-        print(f"{name[:50]:<52} {fam:<10} {source:<12} {n}")
+    print(f"\n{'CAMPAIGN':<52} {'FAMILY':<10} {'VIA':<12} {'NEW':>4} {'HAVE':>5}")
+    for name, fam, source, n_new, n_already in included:
+        print(f"{name[:50]:<52} {fam:<10} {source:<12} {n_new:>4} {n_already:>5}")
     print(f"\nSkipped ({len(skipped)}):")
     for name, why in skipped:
         print(f"  {name[:50]:<52} {why}")
-    print(f"\n{len(rows)} negative rows across {len(included)} campaigns → {args.out}")
+    if conflicts:
+        print(f"\nOwn-keyword conflicts dropped ({len(conflicts)}):")
+        for name, phrase, _ in conflicts:
+            print(f"  {name[:50]:<52} '{phrase}' appears in a bidded keyword")
+    print(f"\n{len(rows)} negative rows across {len(included)} campaigns "
+          f"({total_already} already negated, {len(conflicts)} own-keyword conflicts) → {args.out}")
 
 
 if __name__ == '__main__':

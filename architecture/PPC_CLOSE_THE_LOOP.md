@@ -185,3 +185,13 @@ premise right", not a counterfactual. Bid/budget/promote verdicts are true pre/p
 |---|---|
 | 2026-06-11 | Initial design + implementation (table, view, endpoint, DO-page wiring, Cube, scorecard). |
 | 2026-06-16 | **Idempotent ingestion**: deterministic `change_id` + staging-table `MERGE` (no more duplicate-logged rows); client mount-flush now dedups. **`UNNEGATE` action_group**: `REMOVE_NEGATIVE`/`REMOVE_CONFLICTING_NEGATIVE` now scored term-scoped (did the re-allowed term convert?) instead of falling into campaign-level `OTHER`. |
+
+
+## Launch-negatives backfill (tools/backfill_campaign_negatives.py)
+
+New campaigns ship with no negative keywords. `tools/backfill_campaign_negatives.py` regenerates a catch-up bulksheet (ENABLED SP campaigns created after 2026-01-03; defense campaigns and SB excluded) from the curated family lists in `V_PRODUCT_PHRASE_NEGATIVES`. Two guards run before a row is emitted:
+
+1. **Already-negated exclusion** — "already negated" = the frozen Fivetran snapshot `V_SRC_AmazonAds_negative_keyword` (sync frozen 2026-01-03, last update 2025-12-31) UNION the warehouse-owned `DE_NEGATIVE_KEYWORDS` registry (the authority since the freeze). Any enabled (campaign, term) pair in that union — either level, any match type — is skipped, so the sheet neither re-adds existing negatives nor misses ones added since the freeze.
+2. **Own-keyword conflict guard** — a negative phrase contained as a contiguous word sequence inside one of the campaign's own ENABLED bidded keywords (`DIM_KEYWORD`, `is_current`) is dropped and printed under "Own-keyword conflicts dropped", since uploading it would block the campaign's own targeting.
+
+Output goes to `.tmp/` and is prepare-only — never auto-uploaded. Regenerate fresh immediately before any upload (the sheet goes stale as campaigns and negations change), and review the conflict list plus any negative that blocks a term with historical orders before uploading.

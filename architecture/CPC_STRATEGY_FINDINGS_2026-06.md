@@ -130,3 +130,12 @@ Focus cell — **LolliME · OFF · BROAD · generic** (net profit by $0.10 CPC b
 - **Fine** rows split by SP/SB and SB creative type (`BRAND_VIDEO` / `PRODUCT_COLLECTION` / `NA`).
 
 `V_ADS_COACH_DATA` joins both (`psp` coarse pinned to `ALL/ALL` to avoid fan-out; `pspf` fine on all six keys via `V_SRC_AmazonAds_sb_ad_report` → `ad_group_id` → `creative_type`) and uses the **fine band only where its own evidence is CONCLUSIVE**, else the coarse fallback (`profile_ad_format` records which). No keyword loses its band; ~99% resolve to a fine band, ~310 fall back to coarse.
+
+## Manual band-cell fills (2026-08-01, claude-do-all)
+
+Three missing band cells were filled directly in `DE_PRODUCT_STRATEGY_PROFILE` from realized CPC history (Ori-approved), with `source='derived-from-realized-cpc 2026-08-01'`: Lollibox OFF PRODUCT ALL/ALL (0.65 / 0.30-0.70, CONCLUSIVE, 4,835 clk), Fresh OFF PRODUCT ALL/ALL (0.55 / 0.40-0.60, WEAK, 148 clk), Fresh PEAK PRODUCT ALL/ALL (0.45 / 0.40-0.60, WEAK, 93 clk), plus the first SB STORE_SPOTLIGHT fine cell Lollibox OFF BROAD (0.35 / 0.20-0.50, WEAK, 32 clk). Method: converting-target-day spend-weighted median CPC, snapped down to the nearest net-profit-positive $0.10 bin midpoint; min/max = contiguous net-positive bin run (derive.py `best_cpc_band` convention).
+
+**Rules for any future manual/agent band fill:**
+1. **Never plain-INSERT a cell that already has a row.** `V_ADS_COACH_DATA` joins the profile on the 6-part key (parent, season, match, intent, campaign_type, ad_format) assuming at most one row per key; a duplicate key fans out every matching keyword row in the coach. Use MERGE (update-when-matched) and re-check `GROUP BY key HAVING COUNT(*)>1` = 0 after writing.
+2. **Custom-source rows survive the refresh tool but the tool re-emits the same cells.** `tools/strategy_profile/load.py` deletes only `source IN ('DERIVED','BORROWED')` before reloading, and `derive_profile` emits every cell with data - so the next `tools/strategy_profile/run.py` will recreate DERIVED/BORROWED rows on top of any custom-source (or MANUAL) key, reintroducing the fan-out. After each refresh, dedupe those keys (keep the reviewed row) until the tool learns to skip keys held by non-DERIVED sources.
+3. WEAK rows are invisible to `V_KEYWORD_LIFT`/`V_OOB_KEYWORD` band joins (CONCLUSIVE-only, enabled-only). A WEAK fill positions the cell for review in Admin but does not steer until confidence is raised or volume accrues.
