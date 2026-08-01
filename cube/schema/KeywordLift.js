@@ -5,6 +5,7 @@ cube(`KeywordLift`, {
                active_probes, keyword_id, ad_group_id, target_text, match_type, is_auto, is_pt,
                current_bid, clicks_w, spend_w, orders_w, roas_w, target_cpc, class,
                probing, CAST(probe_started AS STRING) probe_started, probe_clicks, probe_roas,
+               clicks_1d, roas_1d, clicks_prev2, roas_prev2, pct_dark, capped, slots, seat_rank,
                action, suggested_bid, reason
         FROM \`onyga-482313.OI.V_KEYWORD_LIFT\``,
 
@@ -40,6 +41,14 @@ cube(`KeywordLift`, {
     probeStarted: { sql: `probe_started`, type: `string` },
     probeClicks:  { sql: `probe_clicks`,  type: `number` },
     probeRoas:    { sql: `probe_roas`,    type: `number` },
+    clicks1d:     { sql: `clicks_1d`,     type: `number` },
+    roas1d:       { sql: `roas_1d`,       type: `number` },
+    clicksPrev2:  { sql: `clicks_prev2`,  type: `number` },
+    roasPrev2:    { sql: `roas_prev2`,    type: `number` },
+    pctDark:      { sql: `pct_dark`,      type: `number` },
+    capped:       { sql: `capped`,        type: `boolean` },
+    slots:        { sql: `slots`,         type: `number` },
+    seatRank:     { sql: `seat_rank`,     type: `number` },
     action:       { sql: `action`,        type: `string` },
     suggestedBid: { sql: `suggested_bid`, type: `number` },
     reason:       { sql: `reason`,        type: `string` },

@@ -14,6 +14,8 @@ type Row = {
   keywordId: string; adGroupId: string; text: string; matchType: string;
   isAuto: boolean; isPt: boolean; bid: number | null;
   clicksW: number; kwSpendW: number; ordersW: number; roasW: number | null;
+  clicks1d: number; roas1d: number | null; clicksPrev2: number; roasPrev2: number | null;
+  pctDark: number; slots: number; seatRank: number;
   targetCpc: number | null; kwClass: string; probing: boolean;
   probeClicks: number; probeRoas: number | null;
   action: string; suggestedBid: number | null; reason: string;
@@ -39,6 +41,8 @@ export function KeywordLiftPhase() {
   const [failed, setFailed] = useState(false);
 
   type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; termClicks90: number; isBig: boolean };
+  type Bud = { budget: number; suggested: number | null; reason: string };
+  const [budMap, setBudMap] = useState<Map<string, Bud>>(new Map());
   const [negs, setNegs] = useState<Neg[]>([]);
   const [oobIds, setOobIds] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -52,6 +56,24 @@ export function KeywordLiftPhase() {
         .map(r => String(r['OobBudget.campaignId'] ?? '')));
       setOobIds(ids);
     }).catch(e => console.error('[lift] oob ownership fetch failed:', e));
+    // campaign budget suggestions — the launch controller's budget ladder lives on (Ori 2026-08-01:
+    // "the launch controller cards should be part of Portfolio 80/20"): its BUDGET engine feeds the
+    // campaign rows here; its bid logic is superseded by the seat mechanism.
+    Promise.all([
+      cubeLoad({ dimensions: ['LaunchPhase1.campaignId', 'LaunchPhase1.currentBudget', 'LaunchPhase1.suggestedBudget', 'LaunchPhase1.budgetReason'] }).catch(() => []),
+      cubeLoad({ dimensions: ['SbLaunchCampaign.campaignId', 'SbLaunchCampaign.currentBudget', 'SbLaunchCampaign.suggestedBudget', 'SbLaunchCampaign.budgetReason'] }).catch(() => []),
+    ]).then(([sp, sb]) => {
+      if (!alive) return;
+      const m = new Map<string, Bud>();
+      for (const [rows2, pre] of [[sp, 'LaunchPhase1'], [sb, 'SbLaunchCampaign']] as const) {
+        for (const r of rows2 as Record<string, unknown>[]) {
+          const id = String(r[`${pre}.campaignId`] ?? '');
+          if (!id || m.has(id)) continue;
+          m.set(id, { budget: num(r[`${pre}.currentBudget`]) ?? 0, suggested: num(r[`${pre}.suggestedBudget`]), reason: String(r[`${pre}.budgetReason`] ?? '') });
+        }
+      }
+      setBudMap(m);
+    });
     // negates layer (Ori 2026-08-01): the same two-window negate doctrine, for working campaigns —
     // kills the tier-list negate exception so each campaign truly shows once.
     cubeLoad({
@@ -80,6 +102,8 @@ export function KeywordLiftPhase() {
         'KeywordLift.clicksW', 'KeywordLift.spendW', 'KeywordLift.ordersW', 'KeywordLift.roasW',
         'KeywordLift.targetCpc', 'KeywordLift.kwClass', 'KeywordLift.probing',
         'KeywordLift.probeClicks', 'KeywordLift.probeRoas',
+        'KeywordLift.clicks1d', 'KeywordLift.roas1d', 'KeywordLift.clicksPrev2', 'KeywordLift.roasPrev2',
+        'KeywordLift.pctDark', 'KeywordLift.slots', 'KeywordLift.seatRank',
         'KeywordLift.action', 'KeywordLift.suggestedBid', 'KeywordLift.reason',
       ],
     }).then(rs => {
@@ -109,6 +133,13 @@ export function KeywordLiftPhase() {
         probing: bool(r['KeywordLift.probing']),
         probeClicks: num(r['KeywordLift.probeClicks']) ?? 0,
         probeRoas: num(r['KeywordLift.probeRoas']),
+        clicks1d: num(r['KeywordLift.clicks1d']) ?? 0,
+        roas1d: num(r['KeywordLift.roas1d']),
+        clicksPrev2: num(r['KeywordLift.clicksPrev2']) ?? 0,
+        roasPrev2: num(r['KeywordLift.roasPrev2']),
+        pctDark: num(r['KeywordLift.pctDark']) ?? 0,
+        slots: num(r['KeywordLift.slots']) ?? 1,
+        seatRank: num(r['KeywordLift.seatRank']) ?? 99,
         action: String(r['KeywordLift.action'] ?? 'IDLE'),
         suggestedBid: num(r['KeywordLift.suggestedBid']),
         reason: String(r['KeywordLift.reason'] ?? ''),
@@ -124,7 +155,7 @@ export function KeywordLiftPhase() {
     return m;
   }, [rows]);
 
-  const actionable = (r: Row) => r.suggestedBid != null && r.keywordId !== '' && ['PARK', 'PROBE_START', 'PROBE_ADJUST'].includes(r.action);
+  const actionable = (r: Row) => r.suggestedBid != null && r.keywordId !== '' && ['PARK', 'PARK_WAIT', 'PROBE_START', 'PROBE_ADJUST'].includes(r.action);
   const bidItem = (r: Row) => doQueue.items.find(i => i.keyword_id === r.keywordId && ['INCREASE_BID', 'REDUCE_BID'].includes(i.action));
   const queueBid = (r: Row) => doQueue.addItem({
     campaign: r.campaignName, campaign_id: r.campaignId, ad_group_id: r.adGroupId, targeting: r.text,
@@ -143,14 +174,29 @@ export function KeywordLiftPhase() {
     if (allApplied) {
       sugs.forEach(r => { const it = bidItem(r); if (it) doQueue.removeItem(it.id); });
       visNegs.forEach(n => { const it = negItem(n); if (it) doQueue.removeItem(it.id); });
+      budSugs.forEach(c => { const it = budgetItem(c.campaignId); if (it) doQueue.removeItem(it.id); });
     } else {
       sugs.forEach(r => { if (!bidItem(r)) queueBid(r); });
       visNegs.forEach(n => { if (!negItem(n)) queueNeg(n); });
+      budSugs.forEach(c => { if (!budgetItem(c.campaignId)) queueBudget(c); });
     }
   };
 
   const camps = [...byCamp.values()].filter(g => !oobIds.has(g[0]?.campaignId ?? ''));
   const visNegs = useMemo(() => negs.filter(n => !oobIds.has(n.campaignId) && byCamp.has(n.campaignId)), [negs, oobIds, byCamp]);
+  const budgetItem = (id: string) => doQueue.items.find(i => i.action === 'BUDGET_CHANGE' && i.campaign_id === id);
+  const budgetSug = (c: Row) => { const b = budMap.get(c.campaignId); return b && b.suggested != null && Math.abs(b.suggested - b.budget) > 0.01 ? b : null; };
+  const budSugs = useMemo(() => camps.map(g => g[0]).filter(c => budgetSug(c)), [camps, budMap]);
+  const queueBudget = (c: Row) => {
+    const b = budMap.get(c.campaignId); if (!b || b.suggested == null) return;
+    doQueue.addItem({
+      search_term: `__budget__${c.campaignId}`, action: 'BUDGET_CHANGE', campaign: c.campaignName, campaign_id: c.campaignId,
+      ad_group_id: '', targeting: '', keyword_id: '', match_type: '', target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0,
+      current_bid: null, recommended_bid: null,
+      campaign_type: c.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS', product: '',
+      spend: 0, orders: 0, cpc: 0, conv_rate: 0, current_budget: b.budget, recommended_budget: b.suggested, source: 'COACH',
+    });
+  };
   const negItem = (n: Neg) => doQueue.items.find(i => i.action === 'NEGATE_TERM' && i.campaign_id === n.campaignId && i.search_term === n.term);
   const queueNeg = (n: Neg) => {
     const c = (byCamp.get(n.campaignId) ?? [])[0];
@@ -183,7 +229,7 @@ export function KeywordLiftPhase() {
           <button onClick={applyAll}
             title={allApplied ? 'unapply all portfolio suggestions' : 'queue every park and probe bid'}
             className={`text-label px-2 py-0.5 rounded border shrink-0 ${allApplied ? 'border-emerald-500/40 text-emerald-300' : 'border-sky-500/40 text-sky-300 hover:bg-sky-500/10'}`}>
-            {allApplied ? `✓ applied ${sugs.length + visNegs.length}` : `apply all ${sugs.length + visNegs.length}`}
+            {allApplied ? `✓ applied ${sugs.length + visNegs.length + budSugs.length}` : `apply all ${sugs.length + visNegs.length + budSugs.length}`}
           </button>
         )}
       </div>
@@ -193,11 +239,11 @@ export function KeywordLiftPhase() {
             <thead>
               <tr className="text-faint text-right">
                 <th className="font-normal text-left px-2 py-0.5">item — campaign ▸ keyword</th>
-                <th className="font-normal px-2" title="share of window spend on loser keywords — target ≤ 20%">losers</th>
+                <th className="font-normal px-2" title="share of the day out of budget (campaign) — Portfolio campaigns are ≤10% by ownership; losers % shown in the campaign meta">dark</th>
                 <th className="font-normal px-2">now $</th>
-                <th className="font-normal px-2" title="window W performance: clicks · net ROAS">window W</th>
-                <th className="font-normal px-2" title="probe test progress: clicks since the probe bid / 20">probe</th>
-                <th className="font-normal px-2" title="target CPC (last-year / band)">target</th>
+                <th className="font-normal px-2" title="last complete day — keyword: clicks + net ROAS">last day</th>
+                <th className="font-normal px-2" title="the 2 days before — same format as last day">prev-2d</th>
+                <th className="font-normal px-2" title="target CPC (last-year / band)">CPC/target</th>
                 <th className="font-normal px-2 text-left">action</th>
                 <th className="font-normal px-2">→ $</th>
                 <th className="font-normal px-2"></th>
@@ -214,13 +260,22 @@ export function KeywordLiftPhase() {
                   <td className="text-left px-2 py-0.5 text-body whitespace-nowrap">
                     <button className="text-faint pr-1" onClick={() => setOpenCamps(o => ({ ...o, [c.campaignId]: !o[c.campaignId] }))}>{expanded ? '▾' : '▸'}</button>
                     {c.campaignName}
-                    <span className="text-faint text-label"> {c.channel} · $ {c.budget.toFixed(0)} bud · spent ${c.spendW.toFixed(2)}/{c.wDays}d · {c.activeProbes} probing</span>
+                    <span className="text-faint text-label"> {c.channel} · {c.slots} seats · spent ${c.spendW.toFixed(2)}/{c.wDays}d · {c.activeProbes} probing · losers {c.loserShare != null ? `${c.loserShare.toFixed(0)}%` : '—'}</span>
                   </td>
-                  <td className={`px-2 ${(c.loserShare ?? 0) > 20 ? 'text-amber-400' : 'text-emerald-400'}`}>{c.loserShare != null ? `${c.loserShare.toFixed(0)}%` : '—'}</td>
-                  <td className="px-2" colSpan={5} />
-                  <td className="px-2" />
-                  <td className="px-2" />
-                  <td className="px-2 text-left text-faint whitespace-nowrap">{(c.loserShare ?? 0) > 20 ? 'losers over the 20% budget — parking the worst' : 'split healthy'}</td>
+                  <td className={`px-2 ${c.pctDark > 10 ? 'text-amber-400' : 'text-faint'}`}>{c.pctDark.toFixed(0)}%</td>
+                  <td className="px-2 text-muted whitespace-nowrap">${c.budget.toFixed(0)} <span className="text-faint">bud</span></td>
+                  <td className="px-2" colSpan={3} />
+                  <td className={`px-2 text-left whitespace-nowrap ${budgetSug(c) ? 'text-emerald-400' : 'text-muted'}`}>{budgetSug(c) ? 'budget' : 'hold'}</td>
+                  <td className="px-2">{budgetSug(c) ? `$${budgetSug(c)!.suggested!.toFixed(2)}` : '—'}</td>
+                  <td className="px-2">
+                    {budgetSug(c) && (
+                      <button onClick={() => { const it = budgetItem(c.campaignId); if (it) doQueue.removeItem(it.id); else queueBudget(c); }}
+                        className={`px-1.5 py-0 rounded border ${budgetItem(c.campaignId) ? 'border-emerald-500/40 text-emerald-300' : 'border-border text-muted hover:bg-surface'}`}>
+                        {budgetItem(c.campaignId) ? '✓' : 'budget'}
+                      </button>
+                    )}
+                  </td>
+                  <td className="px-2 text-left text-faint whitespace-nowrap">{budMap.get(c.campaignId)?.reason || ((c.loserShare ?? 0) > 20 ? 'losers over the 20% budget — parking the worst' : 'split healthy')}</td>
                 </tr>
                 {expanded && kws.map(k => {
                   const it = bidItem(k);
@@ -230,8 +285,8 @@ export function KeywordLiftPhase() {
                       <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}) · <span className={CLASS_CLS[k.kwClass] ?? ''}>{k.kwClass.toLowerCase()}</span> · spent ${k.kwSpendW.toFixed(2)}</span></td>
                     <td className="px-2" />
                     <td className="px-2 text-muted whitespace-nowrap">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}</td>
-                    <td className="px-2 text-muted whitespace-nowrap">{k.clicksW}c{k.roasW != null ? ` ${k.roasW.toFixed(2)}×` : ' —'}</td>
-                    <td className="px-2 text-muted whitespace-nowrap">{k.probing || k.probeClicks >= 20 ? `${k.probeClicks}/20${k.probeRoas != null ? ` ${k.probeRoas.toFixed(2)}×` : ''}` : '—'}</td>
+                    <td className="px-2 text-muted whitespace-nowrap">{k.clicks1d}c{k.roas1d != null ? ` ${k.roas1d.toFixed(2)}×` : ' —'}</td>
+                    <td className="px-2 text-muted whitespace-nowrap">{k.clicksPrev2}c{k.roasPrev2 != null ? ` ${k.roasPrev2.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-faint">{k.targetCpc != null ? `$${k.targetCpc.toFixed(2)}` : '—'}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${ACT_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace(/_/g, ' ')}</td>
                     <td className="px-2">{k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}</td>

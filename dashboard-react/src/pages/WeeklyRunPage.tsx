@@ -790,13 +790,9 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                 {/* out-of-budget technical phase — dark campaigns + one budget suggestion each (V_OOB_BUDGET_PHASE) */}
                 <OobBudgetPhase />
                 <KeywordLiftPhase />
-                {/* New campaigns (0–20d) launch-controller cards — co-located directly under the coach logic, above the mature actions */}
-                {ppcMode === 'offense' && (selAge === ALL_AGES || selAge === 'LOW_BUDGET') && (
-                  <div className="mt-3 mb-4">
-                    <div className="text-label text-violet-300 mb-1">Low budget — launch controller (≤ $20 · $30 peak)</div>
-                    <NewCampaignCards product={current.product} actionFilter={actionFilter} onCounts={reportLaunchCounts} />
-                  </div>
-                )}
+                {/* Launch-controller cards DISSOLVED (Ori 2026-08-01): low-budget campaigns live in the
+                    Portfolio 80/20 (seat mechanism) or Out-of-budget while dark; the launch BUDGET engine
+                    feeds the Portfolio campaign rows. NewCampaignCards is retired from this page. */}
                 {camps === null ? <div className="text-label text-faint">Loading campaigns…</div>
                   : camps.length === 0 ? <div className="text-label text-subtle">No campaigns for this product.</div>
                   : (() => {

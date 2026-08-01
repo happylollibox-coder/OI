@@ -188,3 +188,24 @@ sources, the way `V_SB_LAUNCH_TARGET` mirrors `V_LAUNCH_PHASE1`:
   launch controller — this phase only covers campaigns that actually went dark.
 - Anchor day per channel: SP anchors on FACT's watermark, SB on `sb_campaign_report`'s — each
   channel is judged on its own last complete day, mirroring the two launch engines.
+
+## v4 — the Portfolio absorbs the launch controller (Ori 2026-08-01)
+
+"The launch controller cards should also be part of Out of budget or Portfolio 80/20 with the seat
+mechanism. Format of Portfolio 80/20 should be the same as Out of budget (actions on the 3
+hierarchies — campaign, keyword, search term/negate)."
+
+- **Two sections only.** Out of budget owns every campaign capping (dark > 10%); the **Portfolio
+  80/20 owns every healthy enabled campaign — ANY budget, both channels** (V_KEYWORD_LIFT v4
+  dropped the budget > cap population filter). The launch-controller card section is retired from
+  the Weekly Run page. Partition verified: 19 OOB + 89 Portfolio = 108 servable campaigns.
+- **Seat mechanism everywhere:** slots = max(1, round(budget/$4)) in the Portfolio too — seats
+  ranked proven (roas90/class, probes protected) → mid-tests by clicks → anchored candidates;
+  tested losers (≥15 clk/90d, 0 orders) permanently park; beyond-seat rows PARK_WAIT $0.25;
+  PROBE_START requires a free seat AND the 1–2-probe pace AND not capped.
+- **Same grammar:** the Portfolio panel renders the OOB columns (item | dark | now $ | last day |
+  prev-2d | CPC/target | action | → $ | apply | why) on three levels — campaign rows carry the
+  launch controller's BUDGET engine output (V_LAUNCH_PHASE1 / V_SB_LAUNCH_CAMPAIGN suggestions;
+  the launch controller lives on as the budget engine, its bid logic superseded by seats),
+  keyword rows carry the seat/probe verdicts with last-day and prev-2d windows, term rows carry
+  the two-window negates (V_OOB_SEARCH_TERM engine='LIFT').
