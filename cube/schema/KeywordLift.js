@@ -5,7 +5,7 @@ cube(`KeywordLift`, {
                active_probes, keyword_id, ad_group_id, target_text, match_type, is_auto, is_pt,
                current_bid, clicks_w, spend_w, orders_w, roas_w, target_cpc, class,
                probing, CAST(probe_started AS STRING) probe_started, probe_clicks, probe_roas,
-               clicks_7d, roas_7d, clicks_8_28, roas_8_28, pct_dark, capped, slots, seat_rank,
+               clicks_7d, roas_7d, clicks_8_28, roas_8_28, camp_clicks_7d, camp_roas_7d, camp_clicks_8_28, camp_roas_8_28, pct_dark, capped, slots, seat_rank,
                action, suggested_bid, reason
         FROM \`onyga-482313.OI.V_KEYWORD_LIFT\``,
 
@@ -45,6 +45,10 @@ cube(`KeywordLift`, {
     roas7d:       { sql: `roas_7d`,       type: `number` },
     clicks828:    { sql: `clicks_8_28`,   type: `number` },
     roas828:      { sql: `roas_8_28`,     type: `number` },
+    campClicks7d: { sql: `camp_clicks_7d`,  type: `number` },
+    campRoas7d:   { sql: `camp_roas_7d`,    type: `number` },
+    campClicks828:{ sql: `camp_clicks_8_28`, type: `number` },
+    campRoas828:  { sql: `camp_roas_8_28`,   type: `number` },
     pctDark:      { sql: `pct_dark`,      type: `number` },
     capped:       { sql: `capped`,        type: `boolean` },
     slots:        { sql: `slots`,         type: `number` },

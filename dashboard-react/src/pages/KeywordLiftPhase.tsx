@@ -15,6 +15,7 @@ type Row = {
   isAuto: boolean; isPt: boolean; bid: number | null;
   clicksW: number; kwSpendW: number; ordersW: number; roasW: number | null;
   clicks7d: number; roas7d: number | null; clicks828: number; roas828: number | null;
+  campClicks7d: number; campRoas7d: number | null; campClicks828: number; campRoas828: number | null;
   pctDark: number; slots: number; seatRank: number;
   targetCpc: number | null; kwClass: string; probing: boolean;
   probeClicks: number; probeRoas: number | null;
@@ -103,6 +104,7 @@ export function KeywordLiftPhase() {
         'KeywordLift.targetCpc', 'KeywordLift.kwClass', 'KeywordLift.probing',
         'KeywordLift.probeClicks', 'KeywordLift.probeRoas',
         'KeywordLift.clicks7d', 'KeywordLift.roas7d', 'KeywordLift.clicks828', 'KeywordLift.roas828',
+        'KeywordLift.campClicks7d', 'KeywordLift.campRoas7d', 'KeywordLift.campClicks828', 'KeywordLift.campRoas828',
         'KeywordLift.pctDark', 'KeywordLift.slots', 'KeywordLift.seatRank',
         'KeywordLift.action', 'KeywordLift.suggestedBid', 'KeywordLift.reason',
       ],
@@ -137,6 +139,10 @@ export function KeywordLiftPhase() {
         roas7d: num(r['KeywordLift.roas7d']),
         clicks828: num(r['KeywordLift.clicks828']) ?? 0,
         roas828: num(r['KeywordLift.roas828']),
+        campClicks7d: num(r['KeywordLift.campClicks7d']) ?? 0,
+        campRoas7d: num(r['KeywordLift.campRoas7d']),
+        campClicks828: num(r['KeywordLift.campClicks828']) ?? 0,
+        campRoas828: num(r['KeywordLift.campRoas828']),
         pctDark: num(r['KeywordLift.pctDark']) ?? 0,
         slots: num(r['KeywordLift.slots']) ?? 1,
         seatRank: num(r['KeywordLift.seatRank']) ?? 99,
@@ -264,7 +270,9 @@ export function KeywordLiftPhase() {
                   </td>
                   <td className={`px-2 ${c.pctDark > 10 ? 'text-amber-400' : 'text-faint'}`}>{c.pctDark.toFixed(0)}%</td>
                   <td className="px-2 text-muted whitespace-nowrap">${c.budget.toFixed(0)} <span className="text-faint">bud</span></td>
-                  <td className="px-2" colSpan={3} />
+                  <td className="px-2 text-muted whitespace-nowrap">{c.campClicks7d}c{c.campRoas7d != null ? ` ${c.campRoas7d.toFixed(2)}×` : ' —'}</td>
+                  <td className="px-2 text-muted whitespace-nowrap">{c.campClicks828}c{c.campRoas828 != null ? ` ${c.campRoas828.toFixed(2)}×` : ' —'}</td>
+                  <td className="px-2" />
                   <td className={`px-2 text-left whitespace-nowrap ${budgetSug(c) ? 'text-emerald-400' : 'text-muted'}`}>{budgetSug(c) ? 'budget' : 'hold'}</td>
                   <td className="px-2">{budgetSug(c) ? `$${budgetSug(c)!.suggested!.toFixed(2)}` : '—'}</td>
                   <td className="px-2">

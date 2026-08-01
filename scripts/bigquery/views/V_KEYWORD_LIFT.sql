@@ -167,7 +167,9 @@ base AS (
     COALESCE(w.clk_w, 0) clk_w, COALESCE(w.sp_w, 0) sp_w, COALESCE(w.ord_w, 0) ord_w,
     ROUND(SAFE_DIVIDE(w.gp_w, NULLIF(w.sp_w, 0)), 2) AS roas_w, COALESCE(w.clk1, 0) clk1,
     COALESCE(w.clk7, 0) clk7, ROUND(SAFE_DIVIDE(w.gp7, NULLIF(w.sp7, 0)), 2) AS roas7,
+    COALESCE(w.sp7, 0) sp7, COALESCE(w.gp7, 0) gp7,
     COALESCE(w.clk8_28, 0) clk8_28, ROUND(SAFE_DIVIDE(w.gp8_28, NULLIF(w.sp8_28, 0)), 2) AS roas8_28,
+    COALESCE(w.sp8_28, 0) sp8_28, COALESCE(w.gp8_28, 0) gp8_28,
     COALESCE(n90.clk90, 0) clk90, COALESCE(n90.ord90, 0) ord90, n90.roas90,
     li.inc_date, li.probe_bid,
     COALESCE(ep.ep_clk, 0) ep_clk, ROUND(SAFE_DIVIDE(ep.ep_gp, NULLIF(ep.ep_sp, 0)), 2) AS ep_roas,
@@ -213,6 +215,12 @@ classed AS (
 agg AS (
   SELECT c.*,
     SUM(c.sp_w) OVER (PARTITION BY c.campaign_id) AS camp_sp,
+    SUM(c.clk7) OVER (PARTITION BY c.campaign_id) AS camp_clk7,
+    ROUND(SAFE_DIVIDE(SUM(c.gp7) OVER (PARTITION BY c.campaign_id),
+                      NULLIF(SUM(c.sp7) OVER (PARTITION BY c.campaign_id), 0)), 2) AS camp_roas7,
+    SUM(c.clk8_28) OVER (PARTITION BY c.campaign_id) AS camp_clk8_28,
+    ROUND(SAFE_DIVIDE(SUM(c.gp8_28) OVER (PARTITION BY c.campaign_id),
+                      NULLIF(SUM(c.sp8_28) OVER (PARTITION BY c.campaign_id), 0)), 2) AS camp_roas8_28,
     SUM(IF(c.class = 'LOSER', c.sp_w, 0)) OVER (PARTITION BY c.campaign_id) AS loser_sp,
     SUM(IF(c.probing, 1, 0)) OVER (PARTITION BY c.campaign_id) AS active_probes,
     -- winners' avg CPC — the probe entry fallback anchor
@@ -378,7 +386,9 @@ sb_base AS (
     COALESCE(w.clk_w, 0) clk_w, COALESCE(w.sp_w, 0) sp_w, COALESCE(w.ord_w, 0) ord_w,
     ROUND(SAFE_DIVIDE(w.gp_w, NULLIF(w.sp_w, 0)), 2) AS roas_w, COALESCE(w.clk1, 0) clk1,
     COALESCE(w.clk7, 0) clk7, ROUND(SAFE_DIVIDE(w.gp7, NULLIF(w.sp7, 0)), 2) AS roas7,
+    COALESCE(w.sp7, 0) sp7, COALESCE(w.gp7, 0) gp7,
     COALESCE(w.clk8_28, 0) clk8_28, ROUND(SAFE_DIVIDE(w.gp8_28, NULLIF(w.sp8_28, 0)), 2) AS roas8_28,
+    COALESCE(w.sp8_28, 0) sp8_28, COALESCE(w.gp8_28, 0) gp8_28,
     COALESCE(n90.clk90, 0) clk90, COALESCE(n90.ord90, 0) ord90, n90.roas90,
     li.inc_date, li.probe_bid,
     COALESCE(ep.ep_clk, 0) ep_clk, ROUND(SAFE_DIVIDE(ep.ep_gp, NULLIF(ep.ep_sp, 0)), 2) AS ep_roas,
@@ -423,6 +433,12 @@ sb_classed AS (
 sb_agg AS (
   SELECT c.*,
     SUM(c.sp_w) OVER (PARTITION BY c.campaign_id) AS camp_sp,
+    SUM(c.clk7) OVER (PARTITION BY c.campaign_id) AS camp_clk7,
+    ROUND(SAFE_DIVIDE(SUM(c.gp7) OVER (PARTITION BY c.campaign_id),
+                      NULLIF(SUM(c.sp7) OVER (PARTITION BY c.campaign_id), 0)), 2) AS camp_roas7,
+    SUM(c.clk8_28) OVER (PARTITION BY c.campaign_id) AS camp_clk8_28,
+    ROUND(SAFE_DIVIDE(SUM(c.gp8_28) OVER (PARTITION BY c.campaign_id),
+                      NULLIF(SUM(c.sp8_28) OVER (PARTITION BY c.campaign_id), 0)), 2) AS camp_roas8_28,
     SUM(IF(c.class = 'LOSER', c.sp_w, 0)) OVER (PARTITION BY c.campaign_id) AS loser_sp,
     SUM(IF(c.probing, 1, 0)) OVER (PARTITION BY c.campaign_id) AS active_probes,
     ROUND(SAFE_DIVIDE(SUM(IF(c.class IN ('WINNER','MARGINAL'), c.sp_w, 0)) OVER (PARTITION BY c.campaign_id),
@@ -457,6 +473,8 @@ SELECT
   a.probing, a.inc_date AS probe_started, a.ep_clk AS probe_clicks, a.ep_roas AS probe_roas,
   CAST(a.clk7 AS INT64) AS clicks_7d, a.roas7 AS roas_7d,
   CAST(a.clk8_28 AS INT64) AS clicks_8_28, a.roas8_28 AS roas_8_28,
+  CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
+  CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
   a.pct_dark, a.capped, a.slots, a.seat_rank,
   CASE
     -- probe verdicts first
@@ -544,6 +562,8 @@ SELECT
   a.probing, a.inc_date AS probe_started, CAST(a.ep_clk AS INT64) AS probe_clicks, a.ep_roas AS probe_roas,
   CAST(a.clk7 AS INT64) AS clicks_7d, a.roas7 AS roas_7d,
   CAST(a.clk8_28 AS INT64) AS clicks_8_28, a.roas8_28 AS roas_8_28,
+  CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
+  CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
   a.pct_dark, a.capped, a.slots, a.seat_rank,
   CASE
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN 'WINNER_FOUND'
