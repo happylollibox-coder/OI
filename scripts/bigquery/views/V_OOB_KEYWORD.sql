@@ -63,9 +63,13 @@ tsig AS (
 ),
 -- tested clicks per target over 90d — the "has it had its test" evidence for the park rule
 t90 AS (
-  SELECT CAST(a.campaign_id AS STRING) cid, a.targeting, SUM(a.Ads_clicks) clk90, SUM(a.Ads_orders) ord90
+  SELECT CAST(a.campaign_id AS STRING) cid, a.targeting, SUM(a.Ads_clicks) clk90, SUM(a.Ads_orders) ord90,
+    ROUND(SAFE_DIVIDE(SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT) * a.Ads_units),
+                      NULLIF(SUM(a.Ads_cost), 0)), 2) AS roas90
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   JOIN oob o ON o.campaign_id = CAST(a.campaign_id AS STRING)
+  LEFT JOIN `onyga-482313.OI.T_PRICE_COST_TIER` pct
+    ON a.Ads_units > 0 AND pct.unit_price = ROUND(SAFE_DIVIDE(a.Ads_sales, a.Ads_units), 2)
   WHERE a.date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AND (SELECT d FROM wm)
   GROUP BY 1, 2
 ),
@@ -173,11 +177,13 @@ sb_tgtday AS (
   GROUP BY 1, 2
 ),
 sb_t90 AS (
-  SELECT target_id, SUM(clk) clk90, SUM(conv) ord90 FROM (
-    SELECT keyword_id AS target_id, SUM(clicks) clk, SUM(attributed_conversions_14_d) conv FROM `fivetran-hl.amazon_ads.sb_search_term_report`
+  SELECT target_id, SUM(clk) clk90, SUM(conv) ord90, SUM(sp) sp90, SUM(sales) sales90 FROM (
+    SELECT keyword_id AS target_id, SUM(clicks) clk, SUM(attributed_conversions_14_d) conv,
+           SUM(cost) sp, SUM(attributed_sales_14_d) sales FROM `fivetran-hl.amazon_ads.sb_search_term_report`
     WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 89 DAY) AND (SELECT d FROM wm_sb) GROUP BY 1
     UNION ALL
-    SELECT target_id, SUM(clicks), SUM(attributed_conversions_14_d) FROM `fivetran-hl.amazon_ads.sb_target_report`
+    SELECT target_id, SUM(clicks), SUM(attributed_conversions_14_d), SUM(cost), SUM(attributed_sales_14_d)
+    FROM `fivetran-hl.amazon_ads.sb_target_report`
     WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 89 DAY) AND (SELECT d FROM wm_sb) GROUP BY 1
   ) GROUP BY 1
 ),
@@ -198,20 +204,26 @@ sb_tsig AS (
   GROUP BY 1
 ),
 base AS (
+  -- SEAT MODEL (Ori 2026-08-01): drive from the FULL current target list (td), not just targets
+  -- that clicked recently — the queue includes zero-click keywords sitting at full bids, which
+  -- were previously invisible to this view ("lottery tickets" stealing the odd click).
   SELECT o.campaign_id, o.campaign_name, o.pct_dark, o.budget, o.c_roas1, o.c_roas_prev2,
-    t.targeting AS target_text, td.keyword_id, td.ad_group_id, td.match_type,
-    LOWER(t.targeting) IN ('close-match','loose-match','substitutes','complements') AS is_auto,
-    LOWER(t.targeting) LIKE 'asin%' AS is_pt,
+    td.target_text, td.keyword_id, td.ad_group_id, td.match_type,
+    LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements') AS is_auto,
+    LOWER(td.target_text) LIKE 'asin%' AS is_pt,
     FALSE AS is_sb,
     COALESCE(td.keyword_bid, agb.default_bid) AS current_bid,
-    t.clk1, t.sp1, t.units1, t.roas1, t.clk2, t.sp2, t.units2, t.roas_prev2,
+    COALESCE(t.clk1, 0) clk1, COALESCE(t.sp1, 0) sp1, COALESCE(t.units1, 0) units1, t.roas1,
+    COALESCE(t.clk2, 0) clk2, COALESCE(t.sp2, 0) sp2, COALESCE(t.units2, 0) units2, t.roas_prev2,
     (COALESCE(t.roas1, 0) >= 1.0 OR COALESCE(t.roas_prev2, 0) >= 1.0) AS converting,
     COALESCE(t90.clk90, 0) AS clk90, COALESCE(t90.ord90, 0) AS ord90,
+    -- recent corrected net ROAS over the full 90d — the seat-priority ranking metric
+    t90.roas90,
     lc.days_since AS days_since_change
-  FROM tsig t
-  JOIN oob o ON o.campaign_id = t.cid
-  LEFT JOIN t90 ON t90.cid = t.cid AND t90.targeting = t.targeting
-  LEFT JOIN td ON td.campaign_id = t.cid AND td.target_text = t.targeting
+  FROM td
+  JOIN oob o ON o.campaign_id = td.campaign_id
+  LEFT JOIN tsig t ON t.cid = td.campaign_id AND t.targeting = td.target_text
+  LEFT JOIN t90 ON t90.cid = td.campaign_id AND t90.targeting = td.target_text
   LEFT JOIN agb ON agb.ad_group_id = td.ad_group_id
   LEFT JOIN lc ON lc.keyword_id = td.keyword_id
   UNION ALL
@@ -222,11 +234,13 @@ base AS (
     s.clk1, ROUND(s.sp1,2), s.units1, ROUND(s.roas1,2), s.clk2, ROUND(s.sp2,2), s.units2, ROUND(s.roas_prev2,2),
     (COALESCE(s.roas1, 0) >= 1.0 OR COALESCE(s.roas_prev2, 0) >= 1.0) AS converting,
     COALESCE(s90.clk90, 0), COALESCE(s90.ord90, 0),
+    ROUND(SAFE_DIVIDE(s90.sales90 * (1 - COALESCE(pr.cost_ratio, 0)), NULLIF(s90.sp90, 0)), 2) AS roas90,
     lc.days_since
   FROM sb_tgt t
   JOIN oob_sb o ON o.campaign_id = t.cid
   JOIN sb_tsig s ON s.target_id = t.target_id
   LEFT JOIN sb_t90 s90 ON s90.target_id = t.target_id
+  LEFT JOIN prod pr ON pr.cid = t.cid
   LEFT JOIN lc ON lc.keyword_id = t.target_id
 ),
 -- affordable CPC per campaign (Ori 2026-07-30: "TRIM floor should not stop at $1.00") —
@@ -254,6 +268,36 @@ withT AS (
     AND bd.match_type = CASE WHEN b.is_pt THEN 'PRODUCT' WHEN b.is_auto THEN 'AUTO'
                              WHEN UPPER(COALESCE(b.match_type,'')) IN ('TARGETING_EXPRESSION','ASIN','ASIN EXPANDED') THEN 'PRODUCT'
                              ELSE UPPER(COALESCE(b.match_type, '')) END
+),
+-- ── SEAT MODEL (Ori 2026-08-01, "lets do it") ──────────────────────────────────────────────
+-- slots = max(1, round(budget/4)) — $4/day buys one keyword its 4-click trial ($10 → 3 seats).
+-- Seat ranking: converters by recent (90d corrected) net ROAS — winner is always main — then
+-- mid-tests by clicks-so-far (finish what you started), then untested candidates (target-CPC
+-- anchored first). Tested losers (>=15 clk/90d, 0 orders) are never seated. Beyond-seat rows
+-- queue at $0.25 (the test pauses, not dies). When a seat frees, the next candidate ACTIVATEs
+-- at min(1.5 x target CPC, $1.50) (fallback: per-seat affordable), paced at
+-- max(1, floor(0.20 x budget / 4)) activations/day — 80% of any raise keeps feeding winners.
+seats AS (
+  SELECT b.*,
+    GREATEST(1, CAST(ROUND(b.budget / 4) AS INT64)) AS slots,
+    ROUND(GREATEST(SAFE_DIVIDE(b.budget, GREATEST(1, CAST(ROUND(b.budget / 4) AS INT64)) * 4), 0.20), 2) AS seat_cpc,
+    (b.clk90 >= 15 AND b.ord90 = 0) AS tested_loser,
+    ROW_NUMBER() OVER (PARTITION BY b.campaign_id ORDER BY
+      IF(b.clk90 >= 15 AND b.ord90 = 0, 1, 0),
+      IF(b.converting OR COALESCE(b.roas90, 0) >= 1.0, 0, 1),
+      COALESCE(b.roas90, 0) DESC,
+      IF(b.clk90 > 0, 0, 1),
+      b.clk90 DESC,
+      IF(b.tcpc IS NOT NULL, 0, 1),
+      b.target_text) AS seat_rank
+  FROM withT b
+),
+seats2 AS (
+  SELECT s.*,
+    ROW_NUMBER() OVER (PARTITION BY s.campaign_id
+      ORDER BY IF(s.seat_rank <= s.slots AND COALESCE(s.current_bid, 0) <= 0.30 AND NOT s.tested_loser, 0, 1),
+               s.seat_rank) AS act_rank
+  FROM seats s
 )
 SELECT
   b.campaign_id, b.campaign_name, b.pct_dark,
@@ -266,9 +310,19 @@ SELECT
   b.converting, b.days_since_change,
   b.tcpc AS target_cpc,
   b.tcpc_src AS target_cpc_source,
+  b.slots, b.seat_rank, b.seat_cpc,
   CASE
     WHEN b.current_bid IS NULL THEN NULL
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN NULL
+    -- tested loser: permanent park (had its 15-click trial, no sale)
+    WHEN b.tested_loser AND b.current_bid > x.bid_park + 0.05 THEN x.bid_park
+    WHEN b.tested_loser THEN NULL
+    -- beyond the seats: queue at $0.25 — the test pauses, not dies (seat model, Ori 2026-08-01)
+    WHEN b.seat_rank > b.slots THEN IF(b.current_bid > 0.30, x.bid_park, NULL)
+    -- seated after being parked: ACTIVATE at the probe entry bid, paced by the 20% rule
+    WHEN b.current_bid <= 0.30
+      THEN IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)),
+              ROUND(LEAST(COALESCE(1.5 * b.tcpc, b.seat_cpc), x.bid_max), 2), NULL)
     -- CONVERTING while CAPPED (Ori 2026-07-30): never raise the bid — the budget raise buys the
     -- volume, CHEAPER clicks buy more of it. Enough clicks + bid above what clicks actually cost →
     -- FIT the bid down to the realized 3d CPC (you keep winning the same auctions, priced honestly).
@@ -284,15 +338,13 @@ SELECT
         AND b.current_bid > SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)) + 0.05
         THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0))), 2)
       ELSE NULL END
-    -- budget-constrained probing (Ori 2026-07-30): every campaign in this phase is CAPPED, so
-    -- under-clicking is a budget artifact — never probe up. Park the tested, trim the eaters.
-    WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05
-      THEN x.bid_park
-    -- TRIM needs REAL evidence (Ori 2026-08-01: "only 1 click but action is reduce bid due to bid
-    -- eats the budget") — 4+ clicks yesterday proves this keyword actually consumes the budget.
-    -- Step scales with darkness: max(15%, 30% x dark) per day.
-    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND b.clk1 >= x.click_goal_day
-      THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100), COALESCE(b.aff_cpc, x.bid_min)), 2)
+    -- seated PROVEN keyword (90d corrected net ROAS >= 1.0): holds its seat untouched — the
+    -- budget raise is the lever for winners, never the brake (approved example: seat 2 at 1.03x)
+    WHEN COALESCE(b.roas90, 0) >= 1.0 THEN NULL
+    -- seated mid-test: trial economics against the PER-SEAT affordable (budget / slots / 4 clicks).
+    -- TRIM needs REAL evidence (Ori 2026-08-01) — 4+ clicks yesterday; step max(15%, 30% x dark).
+    WHEN b.current_bid > b.seat_cpc + 0.05 AND b.clk1 >= x.click_goal_day
+      THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100), b.seat_cpc), 2)
     -- DARK_BRAKE (Ori 2026-08-01, replaces flat SLOW -5%): the bid lever against darkness is
     -- CAMPAIGN-WIDE and proportional — every clicked keyword steps down max(5%, 30% x dark) per
     -- day, re-firing daily while the campaign stays capped, floor $0.20. No single keyword is
@@ -306,20 +358,37 @@ SELECT
   CASE
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'HOLD'
+    WHEN b.tested_loser THEN IF(b.current_bid > x.bid_park + 0.05, 'PARK', 'HOLD')
+    WHEN b.seat_rank > b.slots THEN IF(b.current_bid > 0.30, 'PARK_WAIT', 'HOLD')
+    WHEN b.current_bid <= 0.30
+      THEN IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)), 'ACTIVATE', 'HOLD')
     WHEN b.converting THEN CASE
       WHEN COALESCE(b.conv_share, 0) >= 0.80 THEN
         IF(b.clk1 > 6 AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05, 'EASE', 'HOLD')
       WHEN b.clk1 >= x.click_goal_day
         AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05 THEN 'FIT_CPC'
       ELSE 'HOLD' END
-    WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
-    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND b.clk1 >= x.click_goal_day THEN 'TRIM_BID'
+    WHEN COALESCE(b.roas90, 0) >= 1.0 THEN 'HOLD'
+    WHEN b.current_bid > b.seat_cpc + 0.05 AND b.clk1 >= x.click_goal_day THEN 'TRIM_BID'
     WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
     ELSE 'HOLD'
   END AS bid_action,
   CASE
     WHEN b.current_bid IS NULL THEN 'no bid on record'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'changed today — one suggestion per day'
+    WHEN b.tested_loser
+      THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d with 0 orders — permanent park; its seat goes to the next candidate')
+    WHEN b.seat_rank > b.slots THEN
+      IF(b.converting OR COALESCE(b.roas90, 0) >= 1.0,
+         CONCAT('proven (', CAST(COALESCE(b.roas90, 0) AS STRING), 'x 90d) but the budget funds only ',
+                CAST(b.slots AS STRING), ' seats — queue #', CAST(b.seat_rank - b.slots AS STRING)),
+         CONCAT('queue #', CAST(b.seat_rank - b.slots AS STRING), ' of the waiting line — ',
+                CAST(b.slots AS STRING), ' seats (budget ÷ $4); its test resumes when a seat frees'))
+    WHEN b.current_bid <= 0.30 THEN
+      IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)),
+         CONCAT('seat freed — ACTIVATE at ', IF(b.tcpc IS NOT NULL, '1.5x target CPC', 'the per-seat affordable'),
+                ' to resume its test (', CAST(b.clk90 AS STRING), '/', CAST(x.tested_clk AS STRING), ' clicks so far)'),
+         'seat ready — activates on a coming day (20% pace: 80% of the budget keeps feeding the winners)')
     WHEN b.converting THEN CASE
       WHEN COALESCE(b.conv_share, 0) >= 0.80 THEN
         IF(b.clk1 > 6 AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05,
@@ -333,17 +402,16 @@ SELECT
                     CAST(ROUND(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), 2) AS STRING),
                     ': budget raise buys volume, cheaper clicks buy more of it (never raise while dark)')
       ELSE 'converting — hold; the budget raise is the lever while capping' END
-    WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05
-      THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d with 0 orders — park at $0.25 so the untested keywords get their probe')
-    WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND b.clk1 >= x.click_goal_day
+    WHEN COALESCE(b.roas90, 0) >= 1.0
+      THEN CONCAT('proven ', CAST(b.roas90 AS STRING), 'x over 90d — holds its seat; the budget raise is the lever, not the brake')
+    WHEN b.current_bid > b.seat_cpc + 0.05 AND b.clk1 >= x.click_goal_day
       THEN CONCAT('bid eats the capped budget (', CAST(b.clk1 AS STRING), ' clicks yesterday) — trim ',
                   CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
-                  '%/day toward the affordable CPC $', CAST(b.aff_cpc AS STRING), ' (= budget ÷ targets × 4-click goal)')
+                  '%/day toward the seat CPC $', CAST(b.seat_cpc AS STRING), ' (= budget ÷ seats ÷ 4-click goal)')
     WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05
       THEN CONCAT('campaign ', CAST(CAST(b.pct_dark AS INT64) AS STRING), '% dark — brake all bids ',
                   CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
                   '%/day (max of 5%, 30%×dark) until the budget survives the day · floor $0.20')
     ELSE 'no clicks yesterday (its bid did not eat the budget) or already at the $0.20 floor — hold'
   END AS bid_reason
-FROM withT b CROSS JOIN k x
-WHERE b.clk1 > 0 OR b.clk2 > 0;
+FROM seats2 b CROSS JOIN k x;

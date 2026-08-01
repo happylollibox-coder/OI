@@ -76,6 +76,22 @@ same constants as the launch controller, applied to every OOB campaign regardles
   is due to low budget not low bid" — 10 keywords × 4 clicks at ~$1 CPC = $40 of probing demand on
   a $10 budget; the purpose is to find a winner who then funds the others). In a dark campaign,
   first match wins:
+
+  **SEAT MODEL (Ori 2026-08-01, "lets do it" — supersedes spreading the budget over every target):**
+  a capped campaign can only afford to TEST `slots = max(1, round(budget ÷ $4))` keywords at once
+  ($10 → 3 seats, $20 → 5, $30 → 8; ~$4/day buys one keyword its 4-click trial). Seats are ranked:
+  **(1) converting keywords by recent net ROAS** (winner is always main), **(2) mid-test keywords by
+  clicks-so-far** (finish what you started), **(3) untested candidates** by target-CPC-anchored /
+  LY-volume rank. Tested losers (≥15 clk/90d, 0 orders) are never seated. Everything beyond the
+  seats **PARK_WAITs at $0.25 in a queue** — its test pauses, not dies. When a seat frees (a test
+  reaches its 15-click verdict) the next candidate **ACTIVATEs** at `min(1.5 × target CPC, $1.50)`
+  (fallback: the per-seat affordable CPC). Growth is paced by the 20% rule: at most
+  `max(1, floor(0.20 × budget ÷ $4))` activations per day — 80% of any budget raise keeps feeding
+  the winners. The per-seat affordable CPC = `budget ÷ (slots × 4)` (≈$0.83 on $10/3 seats)
+  replaces the old all-targets affordable as the TRIM target: real trial economics, not a number
+  diluted by ten idle bids. Real example (ME-SP/PT Competitors Mint C1, $10, 10 targets): 90d spend
+  $115 — $72 went to two tested losers while the two converters took $32; the seat model gives the
+  3 seats to the 1.23× winner, the 1.03× marginal and the 7/15 mid-test, queues 5, parks the rest.
   1. **tested ≥ 15 clicks over 90d, no sale → PARK at $0.25** — it had its test; free the budget
      for the untested keywords, even if the parked bid gets no clicks.
   2. **bid above the affordable CPC with REAL evidence (≥ 4 clicks yesterday) → TRIM toward it** —

@@ -345,30 +345,17 @@ SELECT
       CASE
         -- CAPPED campaign: budget-constrained probing (Ori 2026-07-30) — park tested, trim big
         -- bids, NEVER probe up (under-clicking here is the budget dying, not the bid too low)
-        WHEN b.pd > x.dark_target THEN CASE
-          WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05 THEN x.bid_park
-          -- TRIM needs real evidence (4+ clicks yesterday, Ori 2026-08-01); step max(15%, 30% x dark)
-          WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.t_clk1,0) >= x.click_goal_day
-            THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_big_trim, 1 - 0.30 * b.pd), COALESCE(b.aff_cpc, x.bid_min)),2)
-          -- DARK_BRAKE: campaign-wide, dark-proportional step max(5%, 30% x dark), daily, floor $0.20
-          WHEN COALESCE(b.t_clk1,0) >= 1 AND b.current_bid > x.bid_min + 0.05
-            THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_slow, 1 - 0.30 * b.pd), x.bid_min),2)
-          ELSE b.current_bid
-        END
+        -- CAPPED: the Out-of-budget phase owns keyword bids while dark (SEAT MODEL, Ori
+        -- 2026-08-01) — single owner, so the launch card and the OOB panel can never disagree.
+        WHEN b.pd > x.dark_target THEN b.current_bid
         WHEN COALESCE(b.t_clk1,0) <  x.click_goal_day THEN ROUND(LEAST(b.current_bid*x.bid_probe, x.bid_max),2)
         WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day  THEN ROUND(GREATEST(b.current_bid*x.bid_slow, x.bid_min),2)
         ELSE b.current_bid   -- last day 4–5 clicks: hold and wait for a sale
       END
     -- ── B) CONVERTING → capped: NEVER raise (Ori 2026-07-30) — fit the bid down to the realized
     -- 3d CPC when clicks are plentiful; the budget raise buys the volume, cheaper clicks buy more.
-    WHEN b.pd > x.dark_target THEN CASE
-      -- winner-concentrated (>=80% of spend on converters): glide -5%/day (Ori 2026-07-30)
-      WHEN COALESCE(b.conv_share,0) >= 0.80 THEN
-        IF(COALESCE(b.t_clk1,0) > 6 AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05,
-           ROUND(GREATEST(b.current_bid * 0.95, b.cpc3), 2), b.current_bid)
-      WHEN COALESCE(b.t_clk1,0) >= x.click_goal_day AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05
-        THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, b.cpc3), 2)
-      ELSE b.current_bid END
+    -- CONVERTING while capped: also owned by the OOB seat model (excess converters queue there)
+    WHEN b.pd > x.dark_target THEN b.current_bid
     -- WINNERS: fund them. A CONVERTING target raises toward the $2 HARD CAP, not the $1.50 launch cap
     -- (Ori 2026-07-24): the $1.50 cap is a ceiling for UNPROVEN targets; once a target converts it has
     -- earned the right to bid up like the mature coacher. Without this a proven winner whose current bid
@@ -380,21 +367,12 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN NOT (COALESCE(b.t_roas1,0) >= 1.0 OR COALESCE(b.t_roas_prev2,0) >= 1.0) THEN
       CASE
-        WHEN b.pd > x.dark_target THEN CASE
-          WHEN b.clk90 >= x.tested_clk AND b.ord90 = 0 AND b.current_bid > x.bid_park + 0.05 THEN 'PARK'
-          WHEN b.current_bid > COALESCE(b.aff_cpc, x.big_bid) + 0.05 AND COALESCE(b.t_clk1,0) >= x.click_goal_day THEN 'TRIM_BID'
-          WHEN COALESCE(b.t_clk1,0) >= 1 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
-          ELSE 'HOLD'
-        END
+        WHEN b.pd > x.dark_target THEN 'DEFER_OOB'
         WHEN COALESCE(b.t_clk1,0) <  x.click_goal_day THEN 'PROBE'
         WHEN COALESCE(b.t_clk1,0) >= x.click_cap_day  THEN 'SLOW'
         ELSE 'HOLD'
       END
-    WHEN b.pd > x.dark_target THEN CASE
-      WHEN COALESCE(b.conv_share,0) >= 0.80 THEN
-        IF(COALESCE(b.t_clk1,0) > 6 AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05, 'EASE', 'HOLD')
-      WHEN COALESCE(b.t_clk1,0) >= x.click_goal_day AND b.cpc3 IS NOT NULL AND b.current_bid > b.cpc3 + 0.05 THEN 'FIT_CPC'
-      ELSE 'HOLD' END
+    WHEN b.pd > x.dark_target THEN 'DEFER_OOB'
     WHEN b.t_roas_prev2 > x.strong_roas AND b.t_roas1 > x.strong_roas THEN 'RAISE_STRONG'
     WHEN b.t_roas1 > x.weak_roas THEN 'RAISE_WEAK'
     ELSE 'HOLD' END AS bid_action

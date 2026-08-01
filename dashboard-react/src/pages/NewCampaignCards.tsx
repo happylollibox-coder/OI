@@ -39,6 +39,7 @@ const bidWhy = (a: string, reason: string, goodRoas = false,
   // then wait for a sale. %dark is deliberately not part of this — a keyword isn't the cause of campaign darkness.
   : a === 'SLOW' ? '6+ clicks/day (over its active days) with no sale — lower slowly (−5%): enough traffic to know it isn’t converting, so stop buying more (and it’s what caps the budget)'
   : a === 'DARK_BRAKE' ? 'campaign is capping — all clicked bids brake max(5%, 30%×dark) per day, every day, until the budget survives the day (floor $0.20); no single keyword is “the eater”'
+  : a === 'DEFER_OOB' ? 'campaign is capping — its keyword bids are managed by the SEAT MODEL in the Out-of-budget phase above (budget ÷ $4 seats, queue, activate); apply them there'
   : a === 'PROBE' ? 'under 4 clicks/day (over its active days) — raise slowly (+5%) to reach the 4-clicks/day goal, then wait for a sale (negate dead search terms in parallel)'
   : a === 'FIT_CPC' ? 'selling while the campaign caps — bid fitted down to the real CPC: the budget raise buys volume, cheaper clicks buy more of it (never raise while dark)'
   : a === 'PARK' ? 'tested 15+ clicks/90d with no sale — parked at $0.25 so untested keywords get their probe (find the winner, he funds the rest)'
