@@ -23,7 +23,7 @@ type Kw = {
 };
 type Term = {
   campaignId: string; targetText: string; term: string; kind: string;
-  clicks: number; orders: number; spend: number; netRoas: number | null;
+  clicks: number; orders: number; spend: number; spend1d: number; netRoas: number | null;
   clicks90d: number; spend90d: number; termClicks90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean;
 };
 
@@ -78,7 +78,7 @@ export function OobBudgetPhase() {
       cubeLoad({
         dimensions: [
           'OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
-          'OobSearchTerm.kind', 'OobSearchTerm.clicks', 'OobSearchTerm.orders', 'OobSearchTerm.spend',
+          'OobSearchTerm.kind', 'OobSearchTerm.clicks', 'OobSearchTerm.orders', 'OobSearchTerm.spend', 'OobSearchTerm.spend1d',
           'OobSearchTerm.netRoas', 'OobSearchTerm.clicks90d', 'OobSearchTerm.spend90d',
           'OobSearchTerm.termClicks90d', 'OobSearchTerm.isBig', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
         ],
@@ -139,6 +139,7 @@ export function OobBudgetPhase() {
         clicks: num(r['OobSearchTerm.clicks']) ?? 0,
         orders: num(r['OobSearchTerm.orders']) ?? 0,
         spend: num(r['OobSearchTerm.spend']) ?? 0,
+        spend1d: num(r['OobSearchTerm.spend1d']) ?? 0,
         netRoas: num(r['OobSearchTerm.netRoas']),
         clicks90d: num(r['OobSearchTerm.clicks90d']) ?? 0,
         spend90d: num(r['OobSearchTerm.spend90d']) ?? 0,
@@ -278,7 +279,7 @@ export function OobBudgetPhase() {
                     <span className="text-faint text-label"> {r.channel}{r.engine === 'LAUNCH' ? ' · launch' : ''} · spent ${r.spend.toFixed(2)}{r.util != null ? <span className={r.util > 1.2 ? 'text-amber-400' : ''} title="spend ÷ budget. SB can exceed 100% — Amazon overdelivers SB up to 2× its daily budget"> · {Math.round(r.util * 100)}%</span> : null}</span>
                   </td>
                   <td className={`px-2 ${r.dark > 10 ? 'text-amber-400' : 'text-muted'}`}>{r.dark.toFixed(0)}%</td>
-                  <td className="px-2 text-muted whitespace-nowrap">${r.budget.toFixed(0)} <span className="text-faint">bud</span></td>
+                  <td className="px-2 text-muted whitespace-nowrap">${r.budget.toFixed(0)} <span className="text-faint">bud</span> <span className="text-faint" title="spent yesterday">· ${r.spend.toFixed(2)}</span></td>
                   <td className="px-2 text-muted">{r.roas1 != null ? `${r.roas1.toFixed(2)}×` : '—'}</td>
                   <td className="px-2 text-muted">{r.roasPrev2 != null ? `${r.roasPrev2.toFixed(2)}×` : '—'}</td>
                   <td className="px-2" />
@@ -308,7 +309,7 @@ export function OobBudgetPhase() {
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
                       <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}){winners > 0 ? ` · ${winners} winner${winners > 1 ? 's' : ''}` : ''} · spent ${k.spend1.toFixed(2)}</span></td>
                     <td className="px-2" />
-                    <td className="px-2 text-muted whitespace-nowrap" title="current bid">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}</td>
+                    <td className="px-2 text-muted whitespace-nowrap" title="current bid">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}<span className="text-faint" title="spent yesterday"> · ${k.spend1.toFixed(2)}</span></td>
                     <td className="px-2 text-muted whitespace-nowrap" title="last day clicks · net ROAS">{k.clicks1}c{k.roas1 != null ? ` ${k.roas1.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-muted whitespace-nowrap" title="prev-2d clicks · net ROAS">{k.clicks2}c{k.roas2 != null ? ` ${k.roas2.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 whitespace-nowrap" title={k.targetCpc != null
@@ -336,7 +337,7 @@ export function OobBudgetPhase() {
                     <tr key={`${r.id}|${k.keywordId || k.text}|${t.term}`} className="text-right border-t border-border/10">
                       <td className="text-left pl-14 pr-2 py-0.5 text-faint whitespace-nowrap">“{t.term}” <span>({t.kind.toLowerCase()})</span></td>
                       <td className="px-2" />
-                      <td className="px-2 text-faint">—</td>
+                      <td className="px-2 text-faint whitespace-nowrap" title="spent yesterday">{t.spend1d > 0 ? `$${t.spend1d.toFixed(2)}` : '—'}</td>
                       <td className="px-2 text-faint whitespace-nowrap" colSpan={2}>{t.isBig
                         ? `${t.termClicks90d}c acct-wide · ${t.clicks90d}c here · 0 orders · 90d`
                         : `${t.clicks}c · $${t.spend.toFixed(2)} · 0 orders · 28d`}</td>

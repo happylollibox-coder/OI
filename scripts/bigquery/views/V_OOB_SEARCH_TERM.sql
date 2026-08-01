@@ -54,6 +54,7 @@ sb_st AS (
     SUM(IF(r.report_date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 27 DAY), r.clicks, 0)) AS clicks,
     SUM(IF(r.report_date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 27 DAY), r.attributed_conversions_14_d, 0)) AS orders,
     SUM(IF(r.report_date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 27 DAY), r.cost, 0)) AS spend,
+    SUM(IF(r.report_date = (SELECT d FROM wm_sb), r.cost, 0)) AS spend_1d,
     SUM(IF(r.report_date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 27 DAY), r.attributed_sales_14_d, 0)) AS sales,
     -- gross ROAS only for SB terms (no per-term COGS estimate; the negate rule keys on clicks/orders)
     CAST(NULL AS FLOAT64) AS gp,
@@ -101,6 +102,7 @@ st AS (
     SUM(IF(a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 27 DAY), a.Ads_clicks, 0)) AS clicks,
     SUM(IF(a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 27 DAY), a.Ads_orders, 0)) AS orders,
     SUM(IF(a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 27 DAY), a.Ads_cost, 0)) AS spend,
+    SUM(IF(a.date = (SELECT d FROM wm), a.Ads_cost, 0)) AS spend_1d,
     SUM(IF(a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 27 DAY), a.Ads_sales, 0)) AS sales,
     SUM(IF(a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 27 DAY), a.GROSS_PROFIT, 0)) AS gp,
     SUM(a.Ads_clicks) AS clicks_90d, SUM(a.Ads_orders) AS orders_90d, SUM(a.Ads_cost) AS spend_90d
@@ -111,7 +113,7 @@ st AS (
   GROUP BY 1, 2, 3, 4, 5
 )
 SELECT u.campaign_id, COALESCE(e.engine, e2.engine) AS engine, u.keyword_id, u.target_text, u.search_term, u.kind,
-  u.clicks, u.orders, ROUND(u.spend, 2) AS spend, ROUND(u.sales, 2) AS sales,
+  u.clicks, u.orders, ROUND(u.spend, 2) AS spend, ROUND(u.spend_1d, 2) AS spend_1d, ROUND(u.sales, 2) AS sales,
   ROUND(SAFE_DIVIDE(u.gp, NULLIF(u.spend, 0)), 2) AS net_roas,
   u.clicks_90d, u.orders_90d, ROUND(u.spend_90d, 2) AS spend_90d,
   COALESCE(ta.term_clicks_90d, 0) AS term_clicks_90d,

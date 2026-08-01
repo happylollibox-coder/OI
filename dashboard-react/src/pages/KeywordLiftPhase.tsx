@@ -16,6 +16,7 @@ type Row = {
   clicksW: number; kwSpendW: number; ordersW: number; roasW: number | null;
   clicks7d: number; roas7d: number | null; clicks828: number; roas828: number | null;
   campClicks7d: number; campRoas7d: number | null; campClicks828: number; campRoas828: number | null;
+  spend1d: number; campSpend1d: number;
   pctDark: number; slots: number; seatRank: number;
   targetCpc: number | null; kwClass: string; probing: boolean;
   probeClicks: number; probeRoas: number | null;
@@ -41,7 +42,7 @@ export function KeywordLiftPhase() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [failed, setFailed] = useState(false);
 
-  type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; termClicks90: number; isBig: boolean };
+  type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; termClicks90: number; isBig: boolean; spend1d: number };
   type Bud = { budget: number; suggested: number | null; reason: string };
   const [budMap, setBudMap] = useState<Map<string, Bud>>(new Map());
   const [negs, setNegs] = useState<Neg[]>([]);
@@ -79,7 +80,7 @@ export function KeywordLiftPhase() {
     // kills the tier-list negate exception so each campaign truly shows once.
     cubeLoad({
       dimensions: ['OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
-        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.termClicks90d', 'OobSearchTerm.isBig'],
+        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.termClicks90d', 'OobSearchTerm.isBig', 'OobSearchTerm.spend1d'],
       filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT'] },
                 { member: 'OobSearchTerm.isNegate', operator: 'equals', values: ['true'] }],
     }).then(ts => {
@@ -92,6 +93,7 @@ export function KeywordLiftPhase() {
         clicks90: num(r['OobSearchTerm.clicks90d']) ?? 0,
         termClicks90: num(r['OobSearchTerm.termClicks90d']) ?? 0,
         isBig: r['OobSearchTerm.isBig'] === true || r['OobSearchTerm.isBig'] === 'true',
+        spend1d: num(r['OobSearchTerm.spend1d']) ?? 0,
       })));
     }).catch(() => {});
     cubeLoad({
@@ -105,6 +107,7 @@ export function KeywordLiftPhase() {
         'KeywordLift.probeClicks', 'KeywordLift.probeRoas',
         'KeywordLift.clicks7d', 'KeywordLift.roas7d', 'KeywordLift.clicks828', 'KeywordLift.roas828',
         'KeywordLift.campClicks7d', 'KeywordLift.campRoas7d', 'KeywordLift.campClicks828', 'KeywordLift.campRoas828',
+        'KeywordLift.spend1d', 'KeywordLift.campSpend1d',
         'KeywordLift.pctDark', 'KeywordLift.slots', 'KeywordLift.seatRank',
         'KeywordLift.action', 'KeywordLift.suggestedBid', 'KeywordLift.reason',
       ],
@@ -143,6 +146,8 @@ export function KeywordLiftPhase() {
         campRoas7d: num(r['KeywordLift.campRoas7d']),
         campClicks828: num(r['KeywordLift.campClicks828']) ?? 0,
         campRoas828: num(r['KeywordLift.campRoas828']),
+        spend1d: num(r['KeywordLift.spend1d']) ?? 0,
+        campSpend1d: num(r['KeywordLift.campSpend1d']) ?? 0,
         pctDark: num(r['KeywordLift.pctDark']) ?? 0,
         slots: num(r['KeywordLift.slots']) ?? 1,
         seatRank: num(r['KeywordLift.seatRank']) ?? 99,
@@ -269,7 +274,7 @@ export function KeywordLiftPhase() {
                     <span className="text-faint text-label"> {c.channel} · {c.slots} seats · spent ${c.spendW.toFixed(2)}/{c.wDays}d · {c.activeProbes} probing · losers {c.loserShare != null ? `${c.loserShare.toFixed(0)}%` : '—'}</span>
                   </td>
                   <td className={`px-2 ${c.pctDark > 10 ? 'text-amber-400' : 'text-faint'}`}>{c.pctDark.toFixed(0)}%</td>
-                  <td className="px-2 text-muted whitespace-nowrap">${c.budget.toFixed(0)} <span className="text-faint">bud</span></td>
+                  <td className="px-2 text-muted whitespace-nowrap">${c.budget.toFixed(0)} <span className="text-faint">bud</span> <span className="text-faint" title="spent yesterday">· ${c.campSpend1d.toFixed(2)}</span></td>
                   <td className="px-2 text-muted whitespace-nowrap">{c.campClicks7d}c{c.campRoas7d != null ? ` ${c.campRoas7d.toFixed(2)}×` : ' —'}</td>
                   <td className="px-2 text-muted whitespace-nowrap">{c.campClicks828}c{c.campRoas828 != null ? ` ${c.campRoas828.toFixed(2)}×` : ' —'}</td>
                   <td className="px-2" />
@@ -292,7 +297,7 @@ export function KeywordLiftPhase() {
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
                       <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}) · <span className={CLASS_CLS[k.kwClass] ?? ''}>{k.kwClass.toLowerCase()}</span> · spent ${k.kwSpendW.toFixed(2)}</span></td>
                     <td className="px-2" />
-                    <td className="px-2 text-muted whitespace-nowrap">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}</td>
+                    <td className="px-2 text-muted whitespace-nowrap">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}<span className="text-faint" title="spent yesterday"> · ${k.spend1d.toFixed(2)}</span></td>
                     <td className="px-2 text-muted whitespace-nowrap">{k.clicks7d}c{k.roas7d != null ? ` ${k.roas7d.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-muted whitespace-nowrap">{k.clicks828}c{k.roas828 != null ? ` ${k.roas828.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-faint">{k.targetCpc != null ? `$${k.targetCpc.toFixed(2)}` : '—'}</td>
@@ -315,7 +320,9 @@ export function KeywordLiftPhase() {
                   <tr key={`${c.campaignId}|neg|${n.term}`} className="text-right border-t border-border/20 bg-surface/40">
                     <td className="text-left pl-12 pr-2 py-0.5 text-muted whitespace-nowrap">{n.term}
                       <span className="text-faint"> · term under "{n.targetText}" ({n.kind.toLowerCase()})</span></td>
-                    <td className="px-2" colSpan={5} />
+                    <td className="px-2" />
+                    <td className="px-2 text-faint whitespace-nowrap" title="spent yesterday">{n.spend1d > 0 ? `$${n.spend1d.toFixed(2)}` : '—'}</td>
+                    <td className="px-2" colSpan={3} />
                     <td className="px-2 text-left text-red-400 whitespace-nowrap">negate</td>
                     <td className="px-2" />
                     <td className="px-2">
