@@ -426,7 +426,7 @@ views:
       - FACT_PPC_CHANGE_LOG
 
   - name: "V_OOB_SEARCH_TERM"
-    description: "Search-term layer of the Out-of-budget phase (v2.2, SP+SB, TWO windows — Ori: big general words need 3-month data, small words 28d). One row per (dark>10% campaign, target, term). NEGATE: big word (≥30 clicks/90d ACCOUNT-WIDE — slice grain fragments big words) → 0 orders anywhere in 90d AND campaign ≥90d old AND ≥25 clicks in this campaign (a young campaign hasn't given a big word its own trial); small word → ≥10 clicks · 0 orders · 28d at the slice; plus term ≠ keyword (MANUAL + SB), AUTO skips the term test, PT excluded. Winners (orders in 90d) surfaced, never negated. Cube: OobSearchTerm. Spec: architecture/OOB_BUDGET_PHASE.md §v2."
+    description: "Search-term layer of the Out-of-budget phase (v2.2, SP+SB, TWO windows — Ori: big general words need 3-month data, small words 28d). One row per (dark>10% campaign, target, term). NEGATE: big word (≥30 clicks/90d ACCOUNT-WIDE — slice grain fragments big words) → 0 orders anywhere in 90d AND campaign ≥90d old AND ≥25 clicks in this campaign (a young campaign hasn't given a big word its own trial); small word → ≥10 clicks · 0 orders · 28d at the slice; plus term ≠ keyword (MANUAL + SB), AUTO skips the term test, PT excluded. Winners (orders in 90d) surfaced, never negated. Cube: OobSearchTerm. Spec: architecture/OOB_BUDGET_PHASE.md §v2. GENERALIZED 2026-08-01: population = dark campaigns (engine='OOB') UNION healthy working campaigns from V_KEYWORD_LIFT (engine='LIFT') — the negates layer in the Portfolio 80/20 panel; each panel filters its engine."
     source_files: ["scripts/bigquery/views/V_OOB_SEARCH_TERM.sql"]
     dependencies:
       - V_OOB_BUDGET_PHASE
@@ -1782,7 +1782,7 @@ stored_procedures:
     source_files: ["scripts/bigquery/procedures/SP_LOAD_FACT_ADS_ADVERTISED_DAILY.sql"]
 
   - name: "SP_FACT_AMAZON_ADS"
-    description: "Build FACT_AMAZON_ADS from staging. REPO FILE AHEAD OF LIVE (2026-08-01): the repo version wires price-tier COGS imputation (COALESCE(T_PRICE_COST_TIER.tier_cost on ROUND(sales/units,2), purchased→impressions→single-advertised DIM_COSTS_HISTORY chain)) per the approved V_ADS_NET_CORRECTED pattern — NOT yet deployed; live routine still charges the advertised chain. Measured restatement Feb–Jul 2026: account COGS −$1,423 (−0.54%) but LolliME +$1,334 (ad GP over-credited today) vs Lollibox −$1,730 / Fresh −$976. Deploying = execute the file; next run restates ALL history (TRUNCATE+INSERT) → then T_ rebuild + cube stamp. Awaiting Ori's approval of the family-level deltas."
+    description: "Build FACT_AMAZON_ADS from staging. REPO FILE AHEAD OF LIVE (2026-08-01): the repo version wires price-tier COGS imputation (COALESCE(T_PRICE_COST_TIER.tier_cost on ROUND(sales/units,2), purchased→impressions→single-advertised DIM_COSTS_HISTORY chain)) per the approved V_ADS_NET_CORRECTED pattern — NOT yet deployed; live routine still charges the advertised chain. Measured restatement Feb–Jul 2026: account COGS −$1,423 (−0.54%) but LolliME +$1,334 (ad GP over-credited today) vs Lollibox −$1,730 / Fresh −$976. Deploying = execute the file; next run restates ALL history (TRUNCATE+INSERT) → then T_ rebuild + cube stamp. DEPLOYED 2026-08-01 (Ori-approved): FACT rebuilt, COGS -$1,412 / GP +$1,412 Feb-Jul, rows unchanged; T_ rebuild + cube stamp refreshed."
     source_files: ["scripts/bigquery/procedures/SP_FACT_AMAZON_ADS.sql"]
 
   - name: "SP_LOAD_STG_AMAZON_PERFORMANCE"

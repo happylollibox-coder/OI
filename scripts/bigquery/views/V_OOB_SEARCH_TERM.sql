@@ -19,16 +19,27 @@
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_OOB_SEARCH_TERM` AS
 WITH wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
             FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
+-- Population (Ori 2026-08-01, negates layer in Portfolio 80/20): dark campaigns (engine='OOB')
+-- UNION healthy working campaigns from the lift engine (engine='LIFT') — the same two-window
+-- negate doctrine applies to both; each panel filters its own engine.
 oob AS (
-  SELECT campaign_id FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
+  SELECT campaign_id, 'OOB' AS engine FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
   WHERE channel = 'SP' AND pct_dark > 10
+  UNION DISTINCT
+  SELECT DISTINCT l.campaign_id, 'LIFT' FROM `onyga-482313.OI.V_KEYWORD_LIFT` l
+  WHERE l.channel = 'SP' AND l.campaign_id NOT IN (
+    SELECT campaign_id FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE` WHERE pct_dark > 10)
 ),
 -- SB arm (v2.1): dark SB campaigns' keyword-targeted search terms from sb_search_term_report.
 -- kind='SB' behaves like MANUAL for the negate rule (SB keywords are all manual match types);
 -- product-targeted SB rows live in sb_target_report where the "term" is the ASIN — excluded, like PT.
 oob_sb AS (
-  SELECT campaign_id FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
+  SELECT campaign_id, 'OOB' AS engine FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
   WHERE channel = 'SB' AND pct_dark > 10
+  UNION DISTINCT
+  SELECT DISTINCT l.campaign_id, 'LIFT' FROM `onyga-482313.OI.V_KEYWORD_LIFT` l
+  WHERE l.channel = 'SB' AND l.campaign_id NOT IN (
+    SELECT campaign_id FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE` WHERE pct_dark > 10)
 ),
 wm_sb AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
           FROM `fivetran-hl.amazon_ads.sb_campaign_report`),
@@ -99,7 +110,7 @@ st AS (
     AND a.date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AND (SELECT d FROM wm)
   GROUP BY 1, 2, 3, 4, 5
 )
-SELECT u.campaign_id, u.keyword_id, u.target_text, u.search_term, u.kind,
+SELECT u.campaign_id, COALESCE(e.engine, e2.engine) AS engine, u.keyword_id, u.target_text, u.search_term, u.kind,
   u.clicks, u.orders, ROUND(u.spend, 2) AS spend, ROUND(u.sales, 2) AS sales,
   ROUND(SAFE_DIVIDE(u.gp, NULLIF(u.spend, 0)), 2) AS net_roas,
   u.clicks_90d, u.orders_90d, ROUND(u.spend_90d, 2) AS spend_90d,
@@ -119,6 +130,8 @@ SELECT u.campaign_id, u.keyword_id, u.target_text, u.search_term, u.kind,
                  AND ca.first_d <= DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY)
             ELSE u.clicks >= 10 AND u.orders = 0 END) AS is_negate    -- small word: 28 days at this slice are enough
 FROM (SELECT * FROM st UNION ALL SELECT * FROM sb_st) u
+LEFT JOIN oob e ON e.campaign_id = u.campaign_id
+LEFT JOIN oob_sb e2 ON e2.campaign_id = u.campaign_id
 LEFT JOIN term_all ta ON ta.term = LOWER(TRIM(u.search_term))
 LEFT JOIN camp_age ca ON ca.campaign_id = u.campaign_id
 WHERE u.clicks_90d > 0;

@@ -82,7 +82,8 @@ export function OobBudgetPhase() {
           'OobSearchTerm.netRoas', 'OobSearchTerm.clicks90d', 'OobSearchTerm.spend90d',
           'OobSearchTerm.termClicks90d', 'OobSearchTerm.isBig', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
         ],
-        filters: [{ member: 'OobSearchTerm.clicks90d', operator: 'gte', values: ['3'] }],
+        filters: [{ member: 'OobSearchTerm.clicks90d', operator: 'gte', values: ['3'] },
+                  { member: 'OobSearchTerm.engine', operator: 'equals', values: ['OOB'] }],
       }),
     ]).then(([bs, ks, ts]) => {
       if (!alive) return;

@@ -2,7 +2,7 @@
 // read). 28-day window; is_negate = ≥10 clicks · 0 orders · term ≠ keyword (AUTO skips the term test,
 // PT excluded). Spec: architecture/OOB_BUDGET_PHASE.md §v2.
 cube(`OobSearchTerm`, {
-  sql: `SELECT campaign_id, keyword_id, target_text, search_term, kind, clicks, orders, spend, sales,
+  sql: `SELECT campaign_id, engine, keyword_id, target_text, search_term, kind, clicks, orders, spend, sales,
                net_roas, clicks_90d, orders_90d, spend_90d, term_clicks_90d, term_orders_90d, is_big, term_is_keyword, is_winner, is_negate
         FROM \`onyga-482313.OI.V_OOB_SEARCH_TERM\``,
 
@@ -14,6 +14,7 @@ cube(`OobSearchTerm`, {
   dimensions: {
     rowId:      { sql: `CONCAT(campaign_id, '|', target_text, '|', search_term)`, type: `string`, primaryKey: true },
     campaignId: { sql: `campaign_id`, type: `string` },
+    engine:     { sql: `engine`,      type: `string` },   // 'OOB' | 'LIFT' — which panel owns the campaign
     keywordId:  { sql: `keyword_id`,  type: `string` },
     targetText: { sql: `target_text`, type: `string` },
     searchTerm: { sql: `search_term`, type: `string` },

@@ -521,8 +521,8 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
     // New campaigns live in the launch-controller cards above — never list them twice.
     if (ownedByLaunch(c)) return false;
     // Engine-owned campaigns (OOB seat model / Portfolio 80/20) are shown there — single home.
-    // Exception: pending negates keep the campaign visible here (their only surface on this page).
-    if (engineOwned.has(c.id) && !(negs ?? []).some(n => n.campaignId === c.id)) return false;
+    // (The negate exception is gone: both engine panels now carry their own negates layer.)
+    if (engineOwned.has(c.id)) return false;
     // PPC mode gate — each mode shows ONLY its own role's campaigns (offense / brand-defense / product-defense).
     // (pool gate removed — all pools show; strategy filter narrows)
     // Strategy gate (offense only — the strategy split is an offense-role slice). Keywords nest under

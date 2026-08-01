@@ -38,6 +38,8 @@ export function KeywordLiftPhase() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [failed, setFailed] = useState(false);
 
+  type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; termClicks90: number; isBig: boolean };
+  const [negs, setNegs] = useState<Neg[]>([]);
   const [oobIds, setOobIds] = useState<Set<string>>(new Set());
   useEffect(() => {
     let alive = true;
@@ -50,6 +52,25 @@ export function KeywordLiftPhase() {
         .map(r => String(r['OobBudget.campaignId'] ?? '')));
       setOobIds(ids);
     }).catch(e => console.error('[lift] oob ownership fetch failed:', e));
+    // negates layer (Ori 2026-08-01): the same two-window negate doctrine, for working campaigns —
+    // kills the tier-list negate exception so each campaign truly shows once.
+    cubeLoad({
+      dimensions: ['OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
+        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.termClicks90d', 'OobSearchTerm.isBig'],
+      filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT'] },
+                { member: 'OobSearchTerm.isNegate', operator: 'equals', values: ['true'] }],
+    }).then(ts => {
+      if (!alive) return;
+      setNegs((ts as Record<string, unknown>[]).map(r => ({
+        campaignId: String(r['OobSearchTerm.campaignId'] ?? ''),
+        targetText: String(r['OobSearchTerm.targetText'] ?? ''),
+        term: String(r['OobSearchTerm.searchTerm'] ?? ''),
+        kind: String(r['OobSearchTerm.kind'] ?? ''),
+        clicks90: num(r['OobSearchTerm.clicks90d']) ?? 0,
+        termClicks90: num(r['OobSearchTerm.termClicks90d']) ?? 0,
+        isBig: r['OobSearchTerm.isBig'] === true || r['OobSearchTerm.isBig'] === 'true',
+      })));
+    }).catch(() => {});
     cubeLoad({
       dimensions: [
         'KeywordLift.campaignId', 'KeywordLift.campaignName', 'KeywordLift.channel', 'KeywordLift.budget', 'KeywordLift.wDays',
@@ -119,11 +140,28 @@ export function KeywordLiftPhase() {
   const sugs = useMemo(() => (rows ?? []).filter(r => actionable(r) && !oobIds.has(r.campaignId)), [rows, oobIds]);
   const allApplied = sugs.length > 0 && sugs.every(r => !!bidItem(r));
   const applyAll = () => {
-    if (allApplied) sugs.forEach(r => { const it = bidItem(r); if (it) doQueue.removeItem(it.id); });
-    else sugs.forEach(r => { if (!bidItem(r)) queueBid(r); });
+    if (allApplied) {
+      sugs.forEach(r => { const it = bidItem(r); if (it) doQueue.removeItem(it.id); });
+      visNegs.forEach(n => { const it = negItem(n); if (it) doQueue.removeItem(it.id); });
+    } else {
+      sugs.forEach(r => { if (!bidItem(r)) queueBid(r); });
+      visNegs.forEach(n => { if (!negItem(n)) queueNeg(n); });
+    }
   };
 
   const camps = [...byCamp.values()].filter(g => !oobIds.has(g[0]?.campaignId ?? ''));
+  const visNegs = useMemo(() => negs.filter(n => !oobIds.has(n.campaignId) && byCamp.has(n.campaignId)), [negs, oobIds, byCamp]);
+  const negItem = (n: Neg) => doQueue.items.find(i => i.action === 'NEGATE_TERM' && i.campaign_id === n.campaignId && i.search_term === n.term);
+  const queueNeg = (n: Neg) => {
+    const c = (byCamp.get(n.campaignId) ?? [])[0];
+    doQueue.addItem({
+      search_term: n.term, action: 'NEGATE_TERM', campaign: c?.campaignName ?? '', campaign_id: n.campaignId, ad_group_id: '',
+      targeting: n.term, keyword_id: '', match_type: 'NEGATIVE_EXACT', target_spend_8w: 0, target_orders_8w: 0,
+      target_net_roas_8w: 0, current_bid: null, recommended_bid: null,
+      campaign_type: c?.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS', product: 'Keyword',
+      spend: 0, orders: 0, cpc: 0, conv_rate: 0, source: 'COACH',
+    });
+  };
   const nParks = sugs.filter(r => r.action === 'PARK').length;
   const nProbes = sugs.filter(r => r.action.startsWith('PROBE')).length;
   const nFound = (rows ?? []).filter(r => r.action === 'WINNER_FOUND').length;
@@ -136,7 +174,7 @@ export function KeywordLiftPhase() {
           <span className="font-medium text-sky-300">Portfolio 80/20</span>
           <span className="text-faint truncate">
             {failed ? '— unavailable' : rows
-              ? `— ${camps.length} working campaigns · ${nParks} parks · ${nProbes} probes · ${nFound} winners found`
+              ? `— ${camps.length} working campaigns · ${nParks} parks · ${nProbes} probes · ${nFound} winners found · ${visNegs.length} negates`
               : '— loading…'}
             {' '}· goal: 80% of spend on winners, 1–2 probes hunting the next one
           </span>
@@ -145,7 +183,7 @@ export function KeywordLiftPhase() {
           <button onClick={applyAll}
             title={allApplied ? 'unapply all portfolio suggestions' : 'queue every park and probe bid'}
             className={`text-label px-2 py-0.5 rounded border shrink-0 ${allApplied ? 'border-emerald-500/40 text-emerald-300' : 'border-sky-500/40 text-sky-300 hover:bg-sky-500/10'}`}>
-            {allApplied ? `✓ applied ${sugs.length}` : `apply all ${sugs.length}`}
+            {allApplied ? `✓ applied ${sugs.length + visNegs.length}` : `apply all ${sugs.length + visNegs.length}`}
           </button>
         )}
       </div>
@@ -206,6 +244,28 @@ export function KeywordLiftPhase() {
                       )}
                     </td>
                     <td className="px-2 text-left text-faint whitespace-nowrap">{k.reason}</td>
+                  </tr>
+                ); })}
+                {expanded && visNegs.filter(n => n.campaignId === c.campaignId).map(n => {
+                  const it = negItem(n);
+                  return (
+                  <tr key={`${c.campaignId}|neg|${n.term}`} className="text-right border-t border-border/20 bg-surface/40">
+                    <td className="text-left pl-12 pr-2 py-0.5 text-muted whitespace-nowrap">{n.term}
+                      <span className="text-faint"> · term under "{n.targetText}" ({n.kind.toLowerCase()})</span></td>
+                    <td className="px-2" colSpan={5} />
+                    <td className="px-2 text-left text-red-400 whitespace-nowrap">negate</td>
+                    <td className="px-2" />
+                    <td className="px-2">
+                      <button onClick={() => { const x = negItem(n); if (x) doQueue.removeItem(x.id); else queueNeg(n); }}
+                        className={`px-1.5 py-0 rounded border ${it ? 'border-emerald-500/40 text-emerald-300' : 'border-border text-muted hover:bg-surface'}`}>
+                        {it ? '✓' : 'neg'}
+                      </button>
+                    </td>
+                    <td className="px-2 text-left text-faint whitespace-nowrap">
+                      {n.isBig
+                        ? `big word — ${n.termClicks90} clicks account-wide, 0 orders anywhere in 90d (>=25 in this campaign)`
+                        : `${n.clicks90} clicks · 0 orders in 28d at this slice`}
+                    </td>
                   </tr>
                 ); })}
                 </Fragment>
