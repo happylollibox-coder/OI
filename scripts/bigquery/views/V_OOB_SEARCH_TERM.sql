@@ -43,6 +43,12 @@ oob_sb AS (
 ),
 wm_sb AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
           FROM `fivetran-hl.amazon_ads.sb_campaign_report`),
+-- NEVER negate inside defense campaigns (Ori doctrine: negate brand terms everywhere EXCEPT
+-- defense — brand traffic is the point of the moat). Defense is its own page section.
+defense AS (
+  SELECT campaign_id FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
+  WHERE LOWER(campaign_name) LIKE '%brand defense%'
+),
 sb_kw AS (
   SELECT id, keyword_text FROM `fivetran-hl.amazon_ads.sb_keyword` WHERE NOT _fivetran_deleted
 ),
@@ -136,4 +142,5 @@ LEFT JOIN oob e ON e.campaign_id = u.campaign_id
 LEFT JOIN oob_sb e2 ON e2.campaign_id = u.campaign_id
 LEFT JOIN term_all ta ON ta.term = LOWER(TRIM(u.search_term))
 LEFT JOIN camp_age ca ON ca.campaign_id = u.campaign_id
-WHERE u.clicks_90d > 0;
+WHERE u.clicks_90d > 0
+  AND u.campaign_id NOT IN (SELECT campaign_id FROM defense);

@@ -6,6 +6,7 @@ import { CoachFlowchart } from './CoachFlowchart';
 import { NewCampaignCards } from './NewCampaignCards';
 import { OobBudgetPhase } from './OobBudgetPhase';
 import { KeywordLiftPhase } from './KeywordLiftPhase';
+import { BrandDefensePhase } from './BrandDefensePhase';
 
 // Sections 2 (per-campaign budget table) & 3 (plan) were removed 2026-07-18 — budget now lives inside
 // each campaign card in section 4. Flip to true to bring the old sections back.
@@ -790,6 +791,7 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                 {/* out-of-budget technical phase — dark campaigns + one budget suggestion each (V_OOB_BUDGET_PHASE) */}
                 <OobBudgetPhase />
                 <KeywordLiftPhase />
+                <BrandDefensePhase />
                 {/* Launch-controller cards DISSOLVED (Ori 2026-08-01): low-budget campaigns live in the
                     Portfolio 80/20 (seat mechanism) or Out-of-budget while dark; the launch BUDGET engine
                     feeds the Portfolio campaign rows. NewCampaignCards is retired from this page. */}

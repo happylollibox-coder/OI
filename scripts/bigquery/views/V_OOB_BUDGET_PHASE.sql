@@ -38,7 +38,8 @@ wm_sb AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) 
 -- latest identity + budget per campaign (consolidated source per prefer-DIM/FACT rule)
 camp AS (
   SELECT campaign_id, campaign_name, campaign_type AS channel, campaign_state AS state,
-         serving_status, daily_budget AS budget
+         serving_status, daily_budget AS budget,
+         LOWER(campaign_name) LIKE '%brand defense%' AS is_defense
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
 ),
 anchor AS (
@@ -134,7 +135,7 @@ bc AS (
 ),
 base AS (
   SELECT
-    c.campaign_id, c.campaign_name, c.channel,
+    c.campaign_id, c.campaign_name, c.channel, c.is_defense,
     IF(lp.campaign_id IS NOT NULL, 'LAUNCH', 'WORKING') AS engine,
     a.d AS anchor_date,
     ROUND(c.budget, 2) AS budget,
@@ -160,7 +161,7 @@ base AS (
     AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET')
 )
 SELECT
-  b.campaign_id, b.campaign_name, b.channel, b.engine, b.anchor_date,
+  b.campaign_id, b.campaign_name, b.channel, b.engine, b.anchor_date, b.is_defense,
   b.budget AS current_budget, b.spend_1d,
   ROUND(SAFE_DIVIDE(b.spend_1d, b.budget), 2) AS utilization,
   ROUND(b.pd * 100) AS pct_dark,
@@ -169,6 +170,8 @@ SELECT
   b.is_low_tier, b.in_peak,
   CASE
     WHEN b.pd <= x.dark_target THEN 'WATCH'
+    -- GRADUATION RULE (Ori 2026-08-01): 7d profitable on a small budget -> straight to $31
+    WHEN COALESCE(b.r7, 0) > 1.0 AND b.budget < 30 THEN 'RAISE_STRONG'
     WHEN b.is_low_tier THEN CASE
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN 'RAISE_STRONG'
       WHEN COALESCE(b.r1,0) >= x.weak_roas THEN 'RAISE_WEAK'
@@ -188,6 +191,7 @@ SELECT
   END AS action,
   CASE
     WHEN b.pd <= x.dark_target THEN NULL
+    WHEN COALESCE(b.r7, 0) > 1.0 AND b.budget < 30 THEN 31.0
     WHEN b.is_low_tier THEN CASE
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas
         THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_strong), 2)

@@ -17,7 +17,8 @@ type Row = {
   clicks7d: number; roas7d: number | null; clicks828: number; roas828: number | null;
   campClicks7d: number; campRoas7d: number | null; campClicks828: number; campRoas828: number | null;
   spend1d: number; campSpend1d: number;
-  pctDark: number; slots: number; seatRank: number;
+  pctDark: number; slots: number; seatRank: number; isDefense: boolean;
+  vSuggestedBudget: number | null; vBudgetReason: string;
   targetCpc: number | null; kwClass: string; probing: boolean;
   probeClicks: number; probeRoas: number | null;
   action: string; suggestedBid: number | null; reason: string;
@@ -109,6 +110,7 @@ export function KeywordLiftPhase() {
         'KeywordLift.campClicks7d', 'KeywordLift.campRoas7d', 'KeywordLift.campClicks828', 'KeywordLift.campRoas828',
         'KeywordLift.spend1d', 'KeywordLift.campSpend1d',
         'KeywordLift.pctDark', 'KeywordLift.slots', 'KeywordLift.seatRank',
+        'KeywordLift.isDefense', 'KeywordLift.suggestedBudget', 'KeywordLift.budgetReason',
         'KeywordLift.action', 'KeywordLift.suggestedBid', 'KeywordLift.reason',
       ],
     }).then(rs => {
@@ -151,6 +153,9 @@ export function KeywordLiftPhase() {
         pctDark: num(r['KeywordLift.pctDark']) ?? 0,
         slots: num(r['KeywordLift.slots']) ?? 1,
         seatRank: num(r['KeywordLift.seatRank']) ?? 99,
+        isDefense: r['KeywordLift.isDefense'] === true || r['KeywordLift.isDefense'] === 'true',
+        vSuggestedBudget: num(r['KeywordLift.suggestedBudget']),
+        vBudgetReason: String(r['KeywordLift.budgetReason'] ?? ''),
         action: String(r['KeywordLift.action'] ?? 'IDLE'),
         suggestedBid: num(r['KeywordLift.suggestedBid']),
         reason: String(r['KeywordLift.reason'] ?? ''),
@@ -193,10 +198,15 @@ export function KeywordLiftPhase() {
     }
   };
 
-  const camps = [...byCamp.values()].filter(g => !oobIds.has(g[0]?.campaignId ?? ''));
+  const camps = [...byCamp.values()].filter(g => !oobIds.has(g[0]?.campaignId ?? '') && !g[0]?.isDefense);
   const visNegs = useMemo(() => negs.filter(n => !oobIds.has(n.campaignId) && byCamp.has(n.campaignId)), [negs, oobIds, byCamp]);
   const budgetItem = (id: string) => doQueue.items.find(i => i.action === 'BUDGET_CHANGE' && i.campaign_id === id);
-  const budgetSug = (c: Row) => { const b = budMap.get(c.campaignId); return b && b.suggested != null && Math.abs(b.suggested - b.budget) > 0.01 ? b : null; };
+  const budgetSug = (c: Row): Bud | null => {
+    // GRADUATION RULE (view-computed, Ori 2026-08-01) wins; the launch budget ladder is the fallback
+    if (c.vSuggestedBudget != null && Math.abs(c.vSuggestedBudget - c.budget) > 0.01)
+      return { budget: c.budget, suggested: c.vSuggestedBudget, reason: c.vBudgetReason };
+    const b = budMap.get(c.campaignId); return b && b.suggested != null && Math.abs(b.suggested - b.budget) > 0.01 ? b : null;
+  };
   const budSugs = useMemo(() => camps.map(g => g[0]).filter(c => budgetSug(c)), [camps, budMap]);
   const queueBudget = (c: Row) => {
     const b = budMap.get(c.campaignId); if (!b || b.suggested == null) return;

@@ -209,3 +209,17 @@ hierarchies — campaign, keyword, search term/negate)."
   the launch controller lives on as the budget engine, its bid logic superseded by seats),
   keyword rows carry the seat/probe verdicts with last-day and prev-2d windows, term rows carry
   the two-window negates (V_OOB_SEARCH_TERM engine='LIFT').
+
+## v5 — graduation budget rule + Brand defense section (Ori 2026-08-01)
+
+- **Graduation budget rule:** campaign 7d net ROAS > 1.0 AND budget < $30 → suggest **$31** (past
+  both season caps). Implemented in V_KEYWORD_LIFT (campaign grain, Portfolio/Defense rows; wins
+  over the launch-ladder fallback) AND as a top-priority branch in V_OOB_BUDGET_PHASE's dark
+  ladder (RAISE_STRONG → $31).
+- **Brand defense is its own section** (campaigns named '%Brand Defense%'): excluded from
+  Out-of-budget and Portfolio displays. The moat doctrine enforced in data: defense keywords get
+  action DEFENSE (never parked/probed by ROAS — the coacher defense mode owns bids, raising
+  toward the $2 hard cap), and defense campaigns are excluded from V_OOB_SEARCH_TERM entirely
+  (never negate brand terms in defense). The only lever on the panel is BUDGET (incl. the
+  graduation rule). Partition: OOB (dark, non-defense) + Portfolio (healthy, non-defense) +
+  Brand defense (all 8) = 108 servable.

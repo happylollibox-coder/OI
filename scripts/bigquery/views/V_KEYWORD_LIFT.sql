@@ -35,7 +35,8 @@ cap AS (SELECT in_peak, IF(in_peak, 30.0, 20.0) AS low_cap, IF(in_peak, 3, 7) AS
 wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
        FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
 camps AS (
-  SELECT c.campaign_id, c.campaign_name, c.daily_budget AS budget
+  SELECT c.campaign_id, c.campaign_name, c.daily_budget AS budget,
+    LOWER(c.campaign_name) LIKE '%brand defense%' AS is_defense
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c, cap k
   -- v4 (Ori 2026-08-01): ANY budget — the Portfolio absorbs the launch controller; low-budget
   -- healthy campaigns run the same seat mechanism (slots = budget/$4). OOB owns them while dark.
@@ -160,7 +161,7 @@ sp_dark AS (
   FROM sp_sqd GROUP BY 1
 ),
 base AS (
-  SELECT c.campaign_id, c.campaign_name, c.budget,
+  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense,
     td.target_text, td.keyword_id, td.ad_group_id, td.match_type,
     LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements') AS is_auto,
     LOWER(td.target_text) LIKE 'asin%' AS is_pt,
@@ -253,7 +254,8 @@ agg AS (
 ),
 -- ═══════════ SB ARM (v2 2026-07-30) — same machinery on SB-native sources ═══════════
 sb_camps AS (
-  SELECT c.campaign_id, c.campaign_name, c.daily_budget AS budget
+  SELECT c.campaign_id, c.campaign_name, c.daily_budget AS budget,
+    LOWER(c.campaign_name) LIKE '%brand defense%' AS is_defense
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c, cap k
   WHERE c.campaign_type = 'SB' AND c.campaign_state = 'ENABLED'
     AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET')
@@ -383,7 +385,7 @@ sb_dark AS (
   FROM sb_sqd GROUP BY 1
 ),
 sb_base AS (
-  SELECT c.campaign_id, c.campaign_name, c.budget,
+  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense,
     t.target_text, t.keyword_id, t.ad_group_id, t.match_type,
     FALSE AS is_auto, t.is_pt,
     COALESCE(t.keyword_bid, agb.default_bid) AS current_bid,
@@ -482,9 +484,16 @@ SELECT
   ROUND(a.sp1, 2) AS spend_1d, ROUND(a.camp_sp1, 2) AS camp_spend_1d,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
-  a.pct_dark, a.capped, a.slots, a.seat_rank,
+  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense,
+  -- GRADUATION BUDGET RULE (Ori 2026-08-01): profitable week on a small budget -> lift past the
+  -- low-budget cap. camp 7d net ROAS > 1.0 AND budget < $30 -> suggest $31.
+  CASE WHEN a.camp_roas7 > 1.0 AND a.budget < 30 THEN 31.0 END AS suggested_budget,
+  CASE WHEN a.camp_roas7 > 1.0 AND a.budget < 30
+       THEN CONCAT('7d ', CAST(a.camp_roas7 AS STRING), 'x profitable on $', CAST(CAST(a.budget AS INT64) AS STRING),
+                   ' — raise to $31 (graduate past the low-budget cap)') END AS budget_reason,
   CASE
     -- probe verdicts first
+    WHEN a.is_defense THEN 'DEFENSE'
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN 'WINNER_FOUND'
     WHEN a.probe_done THEN 'PARK'
     -- active probes: daily movement by the click methodology
@@ -506,6 +515,7 @@ SELECT
     ELSE 'IDLE'
   END AS action,
   CASE
+    WHEN a.is_defense THEN NULL
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN NULL
     WHEN a.probe_done THEN 0.25
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
@@ -522,6 +532,7 @@ SELECT
     ELSE NULL
   END AS suggested_bid,
   CASE
+    WHEN a.is_defense THEN 'brand defense — the moat is bought at whatever it costs; bids run on the coacher defense mode, never parked by ROAS'
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0
       THEN CONCAT('probe verdict: ', CAST(a.ep_clk AS STRING), ' clicks at ', CAST(COALESCE(a.ep_roas,0) AS STRING),
                   'x — WINNER found; joins the 80% pool, FIT/ROAS logic takes over')
@@ -572,8 +583,15 @@ SELECT
   ROUND(a.sp1, 2) AS spend_1d, ROUND(a.camp_sp1, 2) AS camp_spend_1d,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
-  a.pct_dark, a.capped, a.slots, a.seat_rank,
+  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense,
+  -- GRADUATION BUDGET RULE (Ori 2026-08-01): profitable week on a small budget -> lift past the
+  -- low-budget cap. camp 7d net ROAS > 1.0 AND budget < $30 -> suggest $31.
+  CASE WHEN a.camp_roas7 > 1.0 AND a.budget < 30 THEN 31.0 END AS suggested_budget,
+  CASE WHEN a.camp_roas7 > 1.0 AND a.budget < 30
+       THEN CONCAT('7d ', CAST(a.camp_roas7 AS STRING), 'x profitable on $', CAST(CAST(a.budget AS INT64) AS STRING),
+                   ' — raise to $31 (graduate past the low-budget cap)') END AS budget_reason,
   CASE
+    WHEN a.is_defense THEN 'DEFENSE'
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN 'WINNER_FOUND'
     WHEN a.probe_done THEN 'PARK'
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN 'PROBE_ADJUST'
@@ -591,6 +609,7 @@ SELECT
     ELSE 'IDLE'
   END AS action,
   CASE
+    WHEN a.is_defense THEN NULL
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN NULL
     WHEN a.probe_done THEN 0.25
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
@@ -607,6 +626,7 @@ SELECT
     ELSE NULL
   END AS suggested_bid,
   CASE
+    WHEN a.is_defense THEN 'brand defense — the moat is bought at whatever it costs; bids run on the coacher defense mode, never parked by ROAS'
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0
       THEN CONCAT('probe verdict: ', CAST(a.ep_clk AS STRING), ' clicks at ', CAST(COALESCE(a.ep_roas,0) AS STRING),
                   'x — WINNER found; joins the 80% pool, FIT/ROAS logic takes over')
