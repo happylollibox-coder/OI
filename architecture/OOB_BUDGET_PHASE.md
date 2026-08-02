@@ -595,3 +595,12 @@ Weekly Run — they counted suggestions with no surface and misread as un-applie
   keywords in the 6 in-season BTS campaigns bid $0.75-0.88 — under the $1 won't-move line —
   lifted to $1.00 (12 SP + 6 SB rows, seasonal_bid_floor_1usd.xlsx delivered). Parked/queued
   rows stay at $0.25; probes already enter at the $1 floor.
+
+### v19.2 — manual bid entry (Ori 2026-08-02)
+
+Every keyword row's "→ $" cell in the OOB and Portfolio tables is now clickable: it opens an
+inline input (prefilled with the suggestion, else the current bid, else $1), **Enter queues
+the bid** (Esc/blur cancels; min $0.02). The queued item carries source='MANUAL' and shows
+as "$X.XX ✎" in the cell; re-entering replaces the previous item. Manual items ride the same
+DO-queue -> bulksheet -> change-log path as engine suggestions, so cooldowns and the applied
+state treat them identically.

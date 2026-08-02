@@ -64,6 +64,8 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
   const [open, setOpen] = useState(false);
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
   const [openWinners, setOpenWinners] = useState<Record<string, boolean>>({});
+  // manual bid entry (Ori 2026-08-02): click the → $ cell on any keyword row to type a bid
+  const [editBid, setEditBid] = useState<{ key: string; value: string } | null>(null);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [kws, setKws] = useState<Kw[]>([]);
   const [terms, setTerms] = useState<Term[]>([]);
@@ -210,15 +212,25 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
     campaign_type: r.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS', product: '',
     spend: 0, orders: 0, cpc: 0, conv_rate: 0, current_budget: r.budget, recommended_budget: r.suggested, source: 'COACH',
   });
-  const queueKwBid = (r: Row, k: Kw) => doQueue.addItem({
-    campaign: r.name, campaign_id: r.id, ad_group_id: k.adGroupId, targeting: k.text, search_term: k.text,
-    keyword_id: k.keywordId, match_type: k.isAuto ? 'Automatic' : (k.matchType || '').toUpperCase(),
-    target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0,
-    campaign_type: r.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS',
-    product: k.isAuto || k.isPt ? 'Product Targeting' : 'Keyword', spend: 0, orders: 0, cpc: 0, conv_rate: 0,
-    action: (k.suggestedBid ?? 0) >= (k.bid ?? 0) ? 'INCREASE_BID' : 'REDUCE_BID',
-    current_bid: k.bid, recommended_bid: k.suggestedBid, source: 'COACH',
-  });
+  const queueKwBid = (r: Row, k: Kw, manualBid?: number) => {
+    const newBid = manualBid ?? k.suggestedBid;
+    const prev = bidItem(k);
+    if (prev) doQueue.removeItem(prev.id);
+    doQueue.addItem({
+      campaign: r.name, campaign_id: r.id, ad_group_id: k.adGroupId, targeting: k.text, search_term: k.text,
+      keyword_id: k.keywordId, match_type: k.isAuto ? 'Automatic' : (k.matchType || '').toUpperCase(),
+      target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0,
+      campaign_type: r.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS',
+      product: k.isAuto || k.isPt ? 'Product Targeting' : 'Keyword', spend: 0, orders: 0, cpc: 0, conv_rate: 0,
+      action: (newBid ?? 0) >= (k.bid ?? 0) ? 'INCREASE_BID' : 'REDUCE_BID',
+      current_bid: k.bid, recommended_bid: newBid, source: manualBid != null ? 'MANUAL' : 'COACH',
+    });
+  };
+  const commitManual = (r: Row, k: Kw) => {
+    const v = parseFloat(editBid?.value ?? '');
+    if (!isNaN(v) && v >= 0.02 && k.keywordId) queueKwBid(r, k, Math.round(v * 100) / 100);
+    setEditBid(null);
+  };
   // SB negatives REQUIRE an Ad Group Id (upload report 29): one row per ad group the term ran in.
   const queueNeg = (r: Row, t: Term) => (t.adGroupIds ? t.adGroupIds.split(',') : ['']).forEach(ag => doQueue.addItem({
     search_term: t.term, action: 'NEGATE_TERM', campaign: r.name, campaign_id: r.id, ad_group_id: ag,
@@ -362,7 +374,21 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                     </td>
                     <td className={`px-2 text-left whitespace-nowrap ${ROLE_CLS[k.role] ?? 'text-faint'}`} title={ROLE_TIP[k.role] ?? ''}>{k.role.toLowerCase()}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${KW_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace('_', ' ')}</td>
-                    <td className="px-2">{k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}</td>
+                    <td className="px-2">
+                      {editBid?.key === `${r.id}|${k.keywordId}` ? (
+                        <input autoFocus type="number" step="0.01" min="0.02" value={editBid.value}
+                          onChange={e => setEditBid({ key: editBid.key, value: e.target.value })}
+                          onKeyDown={e => { if (e.key === 'Enter') commitManual(r, k); if (e.key === 'Escape') setEditBid(null); }}
+                          onBlur={() => setEditBid(null)}
+                          className="w-16 px-1 py-0 text-right font-mono bg-surface border border-blue-500/50 rounded" />
+                      ) : (
+                        <button title="click to set a bid manually (Enter queues it)"
+                          onClick={() => k.keywordId && setEditBid({ key: `${r.id}|${k.keywordId}`, value: (k.suggestedBid ?? k.bid ?? 1).toFixed(2) })}
+                          className="hover:text-blue-300">
+                          {bidItem(k)?.source === 'MANUAL' ? `$${bidItem(k)!.recommended_bid?.toFixed(2)} ✎` : k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}
+                        </button>
+                      )}
+                    </td>
                     <td className="px-2">
                       {bidSug(k) && (
                         <button onClick={() => { const it = bidItem(k); if (it) doQueue.removeItem(it.id); else queueKwBid(r, k); }}
