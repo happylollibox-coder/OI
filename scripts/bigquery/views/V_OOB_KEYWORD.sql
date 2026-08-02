@@ -346,7 +346,8 @@ SELECT
     -- seated after being parked: ACTIVATE at the probe entry bid, paced by the 20% rule
     WHEN b.current_bid <= 0.30
       THEN IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)),
-              ROUND(LEAST(COALESCE(1.5 * b.tcpc, b.seat_cpc), x.bid_max), 2), NULL)
+              -- $1 SEAT-ENTRY FLOOR (Ori 2026-08-02: "i wont move if not")
+              ROUND(LEAST(GREATEST(COALESCE(1.5 * b.tcpc, b.seat_cpc), 1.00), x.bid_max), 2), NULL)
     -- CONVERTING while CAPPED (Ori 2026-07-30): never raise the bid — the budget raise buys the
     -- volume, CHEAPER clicks buy more of it. Enough clicks + bid above what clicks actually cost →
     -- FIT the bid down to the realized 3d CPC (you keep winning the same auctions, priced honestly).
@@ -413,7 +414,7 @@ SELECT
     WHEN b.current_bid <= 0.30 THEN
       IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)),
          CONCAT(IF(b.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''),
-                'seat freed — ACTIVATE at ', IF(b.tcpc IS NOT NULL, '1.5x target CPC', 'the per-seat affordable'),
+                'seat freed — ACTIVATE at ', IF(b.tcpc IS NOT NULL AND 1.5 * b.tcpc >= 1.00, '1.5x target CPC', 'the $1 seat-entry floor'),
                 ' to resume its test (', CAST(b.clk90 AS STRING), '/', CAST(x.tested_clk AS STRING), ' clicks so far)'),
          'seat ready — activates on a coming day (20% pace: 80% of the budget keeps feeding the winners)')
     WHEN b.converting THEN CASE

@@ -328,3 +328,19 @@ Paused campaigns come from a new live-view cube `CampaignDim` on V_DIM_CAMPAIGN_
 (campaign_state / is_seasonal / is_defense flags; ARCHIVED excluded everywhere).
 Keyword-grain `seasonal_now` (v8) is unchanged and independent — a seasonal KEYWORD can live in
 any campaign; a seasonal CAMPAIGN is a homing/display concept.
+
+## v10 — $1 seat-entry floor (Ori 2026-08-02)
+
+Ori: "when starting a seat minimum bid should be 1 dollar (i wont move if not)."
+
+Every seat-entry bid is floored at **$1.00** — below that the keyword simply doesn't move
+(no impressions, the test never produces data):
+- `V_KEYWORD_LIFT` PROBE_START: `min(max(coalesce(1.5×target, winners-avg-CPC, $1), $1), $2)`.
+  The anchor REQUIREMENT is gone — a keyword with no LY target, no band cell and no winner CPC
+  now enters at the $1 floor instead of never starting (this unfroze MINT-SP/EXACT,
+  MINT-VIDEO/EXACT and FRESH-VIDEO/EXACT, which had $0 spend in-season because no probe could
+  ever fire).
+- `V_OOB_KEYWORD` ACTIVATE: `min(max(coalesce(1.5×target, per-seat affordable), $1), $1.50)`.
+- The floor applies to ENTRIES only. Once clicks flow, the evidence-based reductions
+  (probe -5%/day descent, EASE/CUT_TO_TARGET, TRIM, DARK_BRAKE) may go below $1 — real CPC
+  data outranks the no-movement heuristic.

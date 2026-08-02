@@ -553,7 +553,7 @@ SELECT
     -- idle pool: promote the next candidates into probes when slots are free
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
-         AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL THEN 'PROBE_START'
+         THEN 'PROBE_START'
     ELSE 'IDLE'
   END AS action,
   CASE
@@ -573,8 +573,9 @@ SELECT
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
-         AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
-      THEN ROUND(LEAST(COALESCE(1.5 * a.tcpc, a.win_cpc), 2.00), 2)
+      -- $1 SEAT-ENTRY FLOOR (Ori 2026-08-02: "i wont move if not") — also the anchorless entry:
+      -- no LY target, no band, no winner CPC -> enter at the $1 floor instead of never starting
+      THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
     ELSE NULL
   END AS suggested_bid,
   CASE
@@ -606,10 +607,12 @@ SELECT
     WHEN a.class = 'IDLE' AND a.capped
       THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
     WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
-         AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
       THEN CONCAT(IF(a.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''), 'next probe candidate — lift to $',
-                  CAST(ROUND(LEAST(COALESCE(1.5 * a.tcpc, a.win_cpc), 2.00), 2) AS STRING),
-                  ' (', IF(a.tcpc IS NOT NULL, '1.5x target CPC', "winners' avg CPC"), '), verdict at 20 clicks')
+                  CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) AS STRING),
+                  ' (', CASE WHEN a.tcpc IS NOT NULL AND 1.5 * a.tcpc >= 1.00 THEN '1.5x target CPC'
+                             WHEN COALESCE(a.win_cpc, 0) >= 1.00 AND a.tcpc IS NULL THEN "winners' avg CPC"
+                             ELSE '$1 seat-entry floor — will not move below it' END,
+                  '), verdict at 20 clicks')
     ELSE 'idle — waiting for a probe slot'
   END AS reason
 FROM agg a
@@ -666,7 +669,7 @@ SELECT
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
-         AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL THEN 'PROBE_START'
+         THEN 'PROBE_START'
     ELSE 'IDLE'
   END AS action,
   CASE
@@ -686,8 +689,9 @@ SELECT
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
-         AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
-      THEN ROUND(LEAST(COALESCE(1.5 * a.tcpc, a.win_cpc), 2.00), 2)
+      -- $1 SEAT-ENTRY FLOOR (Ori 2026-08-02: "i wont move if not") — also the anchorless entry:
+      -- no LY target, no band, no winner CPC -> enter at the $1 floor instead of never starting
+      THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
     ELSE NULL
   END AS suggested_bid,
   CASE
@@ -719,10 +723,12 @@ SELECT
     WHEN a.class = 'IDLE' AND a.capped
       THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
     WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
-         AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
       THEN CONCAT(IF(a.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''), 'next probe candidate — lift to $',
-                  CAST(ROUND(LEAST(COALESCE(1.5 * a.tcpc, a.win_cpc), 2.00), 2) AS STRING),
-                  ' (', IF(a.tcpc IS NOT NULL, '1.5x target CPC', "winners' avg CPC"), '), verdict at 20 clicks')
+                  CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) AS STRING),
+                  ' (', CASE WHEN a.tcpc IS NOT NULL AND 1.5 * a.tcpc >= 1.00 THEN '1.5x target CPC'
+                             WHEN COALESCE(a.win_cpc, 0) >= 1.00 AND a.tcpc IS NULL THEN "winners' avg CPC"
+                             ELSE '$1 seat-entry floor — will not move below it' END,
+                  '), verdict at 20 clicks')
     ELSE 'idle — waiting for a probe slot'
   END AS reason
 FROM sb_agg a;
