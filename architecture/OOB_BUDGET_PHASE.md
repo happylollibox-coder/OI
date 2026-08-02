@@ -431,3 +431,11 @@ as the SB launch views). `net_roas_90d` exposed. The account-wide-orders arm is 
 (an order elsewhere does not make THIS slice a winner). Negation is untouched — the negate
 bars still key on 0 orders, so an ordered-but-under-1.1x term is neither winner nor negate:
 it just keeps gathering. At deploy: 167 order-but-under-bar terms demoted.
+
+**Winners hierarchy (same day):** keyword rows in the OOB and Portfolio tables carry a
+collapsed "▸ N winners" toggle (emerald) — expanding lists the winning terms under that
+keyword: term · kind · 90d clicks · orders · net ROAS, "earns >=1.1x net over 90d — never
+negated". OobSearchTerm cube gained netRoas90d; the Portfolio panel fetches engine='LIFT'
+is_winner terms alongside its negates. Display-only (winners have no action — they're the
+evidence layer; e.g. a 7d-loser keyword showing 5 terms at 6-48x/90d reads very differently
+than its class alone).

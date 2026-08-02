@@ -24,7 +24,7 @@ type Kw = {
 type Term = {
   campaignId: string; targetText: string; term: string; kind: string;
   clicks: number; orders: number; spend: number; spend1d: number; netRoas: number | null;
-  clicks90d: number; spend90d: number; termClicks90d: number; marketPurchases90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean;
+  clicks90d: number; orders90d: number; spend90d: number; netRoas90d: number | null; termClicks90d: number; marketPurchases90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean;
 };
 
 const num = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
@@ -48,6 +48,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
   const doQueue = useDoQueue();
   const [open, setOpen] = useState(false);
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
+  const [openWinners, setOpenWinners] = useState<Record<string, boolean>>({});
   const [rows, setRows] = useState<Row[] | null>(null);
   const [kws, setKws] = useState<Kw[]>([]);
   const [terms, setTerms] = useState<Term[]>([]);
@@ -79,7 +80,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
         dimensions: [
           'OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
           'OobSearchTerm.kind', 'OobSearchTerm.clicks', 'OobSearchTerm.orders', 'OobSearchTerm.spend', 'OobSearchTerm.spend1d',
-          'OobSearchTerm.netRoas', 'OobSearchTerm.clicks90d', 'OobSearchTerm.spend90d',
+          'OobSearchTerm.netRoas', 'OobSearchTerm.netRoas90d', 'OobSearchTerm.clicks90d', 'OobSearchTerm.orders90d', 'OobSearchTerm.spend90d',
           'OobSearchTerm.termClicks90d', 'OobSearchTerm.marketPurchases90d', 'OobSearchTerm.isBig', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
         ],
         filters: [{ member: 'OobSearchTerm.clicks90d', operator: 'gte', values: ['3'] },
@@ -151,6 +152,8 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
         spend1d: num(r['OobSearchTerm.spend1d']) ?? 0,
         netRoas: num(r['OobSearchTerm.netRoas']),
         clicks90d: num(r['OobSearchTerm.clicks90d']) ?? 0,
+        orders90d: num(r['OobSearchTerm.orders90d']) ?? 0,
+        netRoas90d: num(r['OobSearchTerm.netRoas90d']),
         spend90d: num(r['OobSearchTerm.spend90d']) ?? 0,
         termClicks90d: num(r['OobSearchTerm.termClicks90d']) ?? 0,
         marketPurchases90d: num(r['OobSearchTerm.marketPurchases90d']) ?? 0,
@@ -311,13 +314,21 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                 {expanded && camKws.map(k => {
                   const kTerms = termsByKw.get(`${r.id}|${k.text}`) ?? [];
                   const negs = kTerms.filter(t => t.isNegate);
-                  const winners = kTerms.filter(t => t.isWinner).length;
+                  const kWins = kTerms.filter(t => t.isWinner);
+                  const wKey = `${r.id}|${k.text}`;
+                  const wOpen = !!openWinners[wKey];
                   const kItem = bidItem(k);
                   return (
                   <Fragment key={`${r.id}|${k.keywordId || k.text}`}>
                   <tr className="text-right border-t border-border/20 bg-surface/40">
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
-                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}){k.seatRank <= k.slots ? <span className="text-sky-300"> · seat {k.seatRank}/{k.slots}</span> : <span className="text-faint"> · queue #{k.seatRank - k.slots}</span>}{winners > 0 ? ` · ${winners} winner${winners > 1 ? 's' : ''}` : ''} · spent ${k.spend1.toFixed(2)}</span></td>
+                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}){k.seatRank <= k.slots ? <span className="text-sky-300"> · seat {k.seatRank}/{k.slots}</span> : <span className="text-faint"> · queue #{k.seatRank - k.slots}</span>}{''} · spent ${k.spend1.toFixed(2)}</span>
+                      {kWins.length > 0 && (
+                        <button onClick={() => setOpenWinners(o => ({ ...o, [wKey]: !o[wKey] }))}
+                          className="text-emerald-400 pl-1" title="winning search terms (>= 1.1x net ROAS over 90d) — click to expand">
+                          {wOpen ? '▾' : '▸'} {kWins.length} winner{kWins.length > 1 ? 's' : ''}
+                        </button>
+                      )}</td>
                     <td className="px-2" />
                     <td className="px-2 text-muted whitespace-nowrap" title="current bid">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}<span className="text-faint" title="spent yesterday"> · ${k.spend1.toFixed(2)}</span></td>
                     <td className="px-2 text-muted whitespace-nowrap" title="last day clicks · net ROAS">{k.clicks1}c{k.roas1 != null ? ` ${k.roas1.toFixed(2)}×` : ' —'}</td>
@@ -341,6 +352,19 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                     </td>
                     <td className="px-2 text-left text-faint whitespace-nowrap">{k.reason}</td>
                   </tr>
+                  {wOpen && kWins.map(t => (
+                    <tr key={`${wKey}|win|${t.term}`} className="text-right border-t border-border/10">
+                      <td className="text-left pl-14 pr-2 py-0.5 text-faint whitespace-nowrap">“{t.term}” <span>({t.kind.toLowerCase()})</span></td>
+                      <td className="px-2" />
+                      <td className="px-2 text-faint whitespace-nowrap" title="spent yesterday">{t.spend1d > 0 ? `$${t.spend1d.toFixed(2)}` : '—'}</td>
+                      <td className="px-2 text-faint whitespace-nowrap" colSpan={2}>{t.clicks90d}c · {t.orders90d} ord /90d</td>
+                      <td className="px-2" />
+                      <td className="px-2 text-left text-emerald-400 whitespace-nowrap">winner {t.netRoas90d != null ? `${t.netRoas90d.toFixed(2)}×` : ''}</td>
+                      <td className="px-2 text-faint">—</td>
+                      <td className="px-2" />
+                      <td className="px-2 text-left text-faint whitespace-nowrap">earns ≥1.1× net over 90d — never negated</td>
+                    </tr>
+                  ))}
                   {negs.map(t => {
                     const nItem = negItem(t);
                     return (

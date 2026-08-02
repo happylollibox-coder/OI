@@ -41,10 +41,13 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
   const doQueue = useDoQueue();
   const [open, setOpen] = useState(false);
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
+  const [openWinners, setOpenWinners] = useState<Record<string, boolean>>({});
   const [rows, setRows] = useState<Row[] | null>(null);
   const [failed, setFailed] = useState(false);
 
   type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; marketPurchases90: number; isBig: boolean; spend1d: number };
+  type WinTerm = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; orders90: number; roas90: number | null };
+  const [winTerms, setWinTerms] = useState<WinTerm[]>([]);
   type Bud = { budget: number; suggested: number | null; reason: string };
   const [budMap, setBudMap] = useState<Map<string, Bud>>(new Map());
   const [negs, setNegs] = useState<Neg[]>([]);
@@ -97,6 +100,24 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
         marketPurchases90: num(r['OobSearchTerm.marketPurchases90d']) ?? 0,
         isBig: r['OobSearchTerm.isBig'] === true || r['OobSearchTerm.isBig'] === 'true',
         spend1d: num(r['OobSearchTerm.spend1d']) ?? 0,
+      })));
+    }).catch(() => {});
+    // winners hierarchy (Ori 2026-08-02): terms that EARN 1.1x/90d, collapsed under their keyword
+    cubeLoad({
+      dimensions: ['OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
+        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.orders90d', 'OobSearchTerm.netRoas90d'],
+      filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT'] },
+                { member: 'OobSearchTerm.isWinner', operator: 'equals', values: ['true'] }],
+    }).then(ts => {
+      if (!alive) return;
+      setWinTerms((ts as Record<string, unknown>[]).map(r => ({
+        campaignId: String(r['OobSearchTerm.campaignId'] ?? ''),
+        targetText: String(r['OobSearchTerm.targetText'] ?? ''),
+        term: String(r['OobSearchTerm.searchTerm'] ?? ''),
+        kind: String(r['OobSearchTerm.kind'] ?? ''),
+        clicks90: num(r['OobSearchTerm.clicks90d']) ?? 0,
+        orders90: num(r['OobSearchTerm.orders90d']) ?? 0,
+        roas90: num(r['OobSearchTerm.netRoas90d']),
       })));
     }).catch(() => {});
     cubeLoad({
@@ -318,10 +339,20 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                 </tr>
                 {expanded && kws.map(k => {
                   const it = bidItem(k);
+                  const kWins = winTerms.filter(w => w.campaignId === c.campaignId && w.targetText === k.text);
+                  const wKey = `${c.campaignId}|${k.text}`;
+                  const wOpen = !!openWinners[wKey];
                   return (
-                  <tr key={`${c.campaignId}|${k.keywordId || k.text}`} className="text-right border-t border-border/20 bg-surface/40">
+                  <Fragment key={`${c.campaignId}|${k.keywordId || k.text}`}>
+                  <tr className="text-right border-t border-border/20 bg-surface/40">
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
-                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}) · <span className={CLASS_CLS[k.kwClass] ?? ''}>{k.kwClass.toLowerCase()}</span>{k.seatRank <= k.slots ? <span className="text-sky-300"> · seat {k.seatRank}/{k.slots}</span> : <span className="text-faint"> · queue #{k.seatRank - k.slots}</span>}{k.seasonalNow && <span className="text-sky-400"> · seasonal</span>} · spent ${k.kwSpendW.toFixed(2)}</span></td>
+                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}) · <span className={CLASS_CLS[k.kwClass] ?? ''}>{k.kwClass.toLowerCase()}</span>{k.seatRank <= k.slots ? <span className="text-sky-300"> · seat {k.seatRank}/{k.slots}</span> : <span className="text-faint"> · queue #{k.seatRank - k.slots}</span>}{k.seasonalNow && <span className="text-sky-400"> · seasonal</span>} · spent ${k.kwSpendW.toFixed(2)}</span>
+                      {kWins.length > 0 && (
+                        <button onClick={() => setOpenWinners(o => ({ ...o, [wKey]: !o[wKey] }))}
+                          className="text-emerald-400 pl-1" title="winning search terms (>= 1.1x net ROAS over 90d) — click to expand">
+                          {wOpen ? '▾' : '▸'} {kWins.length} winner{kWins.length > 1 ? 's' : ''}
+                        </button>
+                      )}</td>
                     <td className="px-2" />
                     <td className="px-2 text-muted whitespace-nowrap">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}<span className="text-faint" title="spent yesterday"> · ${k.spend1d.toFixed(2)}</span></td>
                     <td className="px-2 text-muted whitespace-nowrap">{k.clicks7d}c{k.roas7d != null ? ` ${k.roas7d.toFixed(2)}×` : ' —'}</td>
@@ -339,6 +370,18 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                     </td>
                     <td className="px-2 text-left text-faint whitespace-nowrap">{k.reason}</td>
                   </tr>
+                  {wOpen && kWins.map(w => (
+                    <tr key={`${wKey}|${w.term}`} className="text-right border-t border-border/10">
+                      <td className="text-left pl-14 pr-2 py-0.5 text-faint whitespace-nowrap">“{w.term}” <span>({w.kind.toLowerCase()})</span></td>
+                      <td className="px-2" /><td className="px-2" />
+                      <td className="px-2 text-faint whitespace-nowrap" colSpan={2}>{w.clicks90}c · {w.orders90} ord /90d</td>
+                      <td className="px-2" />
+                      <td className="px-2 text-left text-emerald-400 whitespace-nowrap">winner {w.roas90 != null ? `${w.roas90.toFixed(2)}×` : ''}</td>
+                      <td className="px-2" /><td className="px-2" />
+                      <td className="px-2 text-left text-faint whitespace-nowrap">earns ≥1.1× net over 90d — never negated</td>
+                    </tr>
+                  ))}
+                  </Fragment>
                 ); })}
                 {expanded && visNegs.filter(n => n.campaignId === c.campaignId).map(n => {
                   const it = negItem(n);
