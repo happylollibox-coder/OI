@@ -707,3 +707,13 @@ AUTO_TRIM floor lowered $0.30 -> **$0.20** (matching the OOB engine's bid_min), 
 lowered > $0.35 -> **> $0.25** so every step is still genuinely downward (0.85 x $0.26 =
 $0.22 >= floor). Research-mode RESEARCH_EASE keeps its $0.30 floor (antennae stay a notch
 warmer). 27 -> 32 AUTO_TRIMs; zero upward, zero below-floor.
+
+### v24.3 — honest labels for evidence-complete floored autos (Ori: "why research if there was 19c")
+
+An auto LOSER with >= 4 clicks whose bid already sits at/below the $0.25 trim gate was
+falling into the "4-click trial — keep gathering" fall-through — a lie for a clause with 19
+clicks of verdict. Now: reason = "evidence in — N clicks this window with no profit and the
+bid already at the floor: negate its bad terms, nothing left to trim"; role = **ANTENNA**
+(alive cheap, its terms are the information). The ANTENNA tooltip now covers both research
+keywords (seed new broads) and floored auto clauses (feed the negate layer). TRIAL is
+reserved for genuinely under-4-click clauses.

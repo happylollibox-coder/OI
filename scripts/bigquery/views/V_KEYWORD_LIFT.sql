@@ -638,6 +638,8 @@ SELECT
     WHEN a.is_auto THEN CASE
       WHEN SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)) >= 1.1 AND (a.clk7 + a.clk8_28) >= 4 THEN 'FUNDER'
       WHEN a.class IN ('WINNER', 'MARGINAL') THEN 'WATCH'
+      -- evidence in + bid at the floor: it is an antenna now — alive cheap, terms are the info
+      WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) <= 0.25 THEN 'ANTENNA'
       WHEN a.class = 'LOSER' THEN 'TRIAL' ELSE 'IDLE' END
     WHEN a.seat_rank > a.slots THEN 'QUEUED'
     -- FUNDER is judged on 28 DAYS (Ori 2026-08-02) — a stable financier, not a hot week;
@@ -767,6 +769,8 @@ SELECT
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4
+      THEN CONCAT('evidence in — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no profit and the bid already at the floor: negate its bad terms, nothing left to trim')
     WHEN a.is_auto AND a.class = 'LOSER' THEN 'auto clause in its 4-click trial — keep gathering; negate bad terms as they show'
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))
@@ -831,6 +835,8 @@ SELECT
     WHEN a.is_auto THEN CASE
       WHEN SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)) >= 1.1 AND (a.clk7 + a.clk8_28) >= 4 THEN 'FUNDER'
       WHEN a.class IN ('WINNER', 'MARGINAL') THEN 'WATCH'
+      -- evidence in + bid at the floor: it is an antenna now — alive cheap, terms are the info
+      WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) <= 0.25 THEN 'ANTENNA'
       WHEN a.class = 'LOSER' THEN 'TRIAL' ELSE 'IDLE' END
     WHEN a.seat_rank > a.slots THEN 'QUEUED'
     -- FUNDER is judged on 28 DAYS (Ori 2026-08-02) — a stable financier, not a hot week;
@@ -955,6 +961,8 @@ SELECT
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign (est. net ROAS)')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4
+      THEN CONCAT('evidence in — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no profit and the bid already at the floor: negate its bad terms, nothing left to trim')
     WHEN a.is_auto AND a.class = 'LOSER' THEN 'auto clause in its 4-click trial — keep gathering; negate bad terms as they show'
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))

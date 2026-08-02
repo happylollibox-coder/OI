@@ -50,7 +50,7 @@ const ROLE_TIP: Record<string, string> = {
   TRIAL: 'still in its 4-click trial — 1 click does not break; no park or cut until 4 clicks of evidence.',
   PARKED: 'loser beyond the 20% (40% peak) exploration allowance — parked $0.25; returns through the seat queue.',
   RETIRED: 'tested ≥ 15 clicks/90d with 0 orders — permanent park; only its season (a last-year order in this same 28d window) revives it.',
-  ANTENNA: 'research mode — a loser kept alive cheap (−15%/day, floor $0.30): its winning search terms seed new broad keywords.',
+  ANTENNA: 'kept alive cheap at the floor — its search terms are the information: negate the bad ones, harvest the winners (research keywords seed new broads; auto clauses feed the negate layer).',
   QUEUED: 'beyond the seats (budget ÷ $4) — waits at $0.25; the test resumes when a seat frees.',
   IDLE: 'seated but every probe slot is busy (2 off-season / 4 peak) — first in line when a verdict lands.',
   DEFENSE: 'the moat — never ROAS-parked, never negated; budget is the only lever.',
