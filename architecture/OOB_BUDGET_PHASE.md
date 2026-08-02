@@ -690,3 +690,13 @@ last 7 days, 8-28 days (in peak 3 days and 4-14 days)."
   clicks_3d/roas_3d/clicks_4_14/roas_4_14 + campaign rollups in V_KEYWORD_LIFT, both arms).
 - Partition after: 19 auto + 15 lowOOB + 4 portOOB + 38 low + 18 port + 8 defense +
   1 seasonalOOB + 5 seasonalLow + 0 seasonal = 108.
+
+### v24.1 — no probe semantics on autos at all (Ori 2026-08-02, "why is it probe?")
+
+The probe framework treats ANY logged INCREASE_BID within 14 days as an episode. The old
+click-rate controller's +5% PROBE raises (Jul 22/25) had therefore left 33 auto clauses
+across 15 campaigns labeled role PROBE — some with phantom "episodes" at 170/20 clicks.
+Fix: `probing` / `probe_done` are gated `AND NOT is_auto` in both arms — a bid increase on
+an auto clause is just a raise. Auto clauses now always resolve through the v23 doctrine
+(AUTO_TRIM / KEEP_TAIL / KEEP / IDLE, roles FUNDER/WATCH/TRIAL/IDLE); 0 probe artifacts
+remain. 27 AUTO_TRIMs, 20 keep-tails live.

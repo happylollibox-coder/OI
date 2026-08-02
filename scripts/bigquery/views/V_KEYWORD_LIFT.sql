@@ -262,11 +262,12 @@ classed AS (
       ELSE 'IDLE'
     END AS class,
     -- active probe: raised within 14d and still under 20 episode clicks
-    (b.inc_date IS NOT NULL
+    -- AUTOS EXCLUDED (v24.1): a raise on an auto clause is just a raise, not an experiment
+    (b.inc_date IS NOT NULL AND NOT b.is_auto
      AND b.inc_date > DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
      AND b.ep_clk < 20) AS probing,
     -- probe just finished its 20 clicks — verdict due
-    (b.inc_date IS NOT NULL
+    (b.inc_date IS NOT NULL AND NOT b.is_auto
      AND b.inc_date > DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
      AND b.ep_clk >= 20) AS probe_done
   FROM base b
@@ -543,10 +544,11 @@ sb_classed AS (
       WHEN b.clk_w > 0 THEN 'LOSER'
       ELSE 'IDLE'
     END AS class,
-    (b.inc_date IS NOT NULL
+    -- AUTOS EXCLUDED (v24.1): a raise on an auto clause is just a raise, not an experiment
+    (b.inc_date IS NOT NULL AND NOT b.is_auto
      AND b.inc_date > DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
      AND b.ep_clk < 20) AS probing,
-    (b.inc_date IS NOT NULL
+    (b.inc_date IS NOT NULL AND NOT b.is_auto
      AND b.inc_date > DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
      AND b.ep_clk >= 20) AS probe_done
   FROM sb_base b
