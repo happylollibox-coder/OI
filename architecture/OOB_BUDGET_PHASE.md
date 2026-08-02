@@ -229,3 +229,15 @@ hierarchies — campaign, keyword, search term/negate)."
   "Low budget" (healthy, ≤ cap) · "Portfolio 80/20" (healthy, > cap) · "Brand defense".
   Presentational only (tier prop on the panel components); engines unchanged. Partition verified
   15 + 4 + 61 + 20 + 8 = 108.
+
+## v6 — Ori's tuning round (2026-08-01)
+
+| knob | value |
+|---|---|
+| Loser allowance | **20% off-season / 40% peak** |
+| Max probes per campaign | **2 off-season / 4 peak** |
+| Dark ladder, working tier | STRONG ×1.5 @ prev-2d ≥ 1.5 AND today ≥ 1.2 · WEAK ×1.25 @ today ≥ 1.2 · CUT @ evidence (7d off / 3d peak) < 0.6 AND today < 0.6 → GREATEST(×0.8, floor) |
+| Dark ladder, low tier | STRONG ×2 · WEAK ×1.5 (same conditions) · CUT @ prev-2d < 0.6 AND today < 0.6 → GREATEST(×0.8, floor) |
+| Budget floor | **$10 off-season / $15 peak** |
+| Healthy campaigns (all tiers) | ONE budget rule: W AND today both < 0.6 → −20% to the floor (raises belong to the dark ladder — a healthy campaign is not hitting its cap). Brand Defense EXCLUDED from the auto-cut (moat doctrine); flag to include. |
+| Raise formulas | fixed multipliers (the budget ÷ %active projection retired) |

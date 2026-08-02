@@ -168,51 +168,38 @@ SELECT
   b.r1 AS roas_1d, b.rprev2 AS roas_prev2, b.r3 AS roas_3d, b.r7 AS roas_7d, b.r28 AS roas_28d,
   b.dsb AS days_since_budget_change,
   b.is_low_tier, b.in_peak,
+  -- ═══ BUDGET LADDER v4 (Ori 2026-08-01 tuning) ═══
+  -- Both tiers key raises on TODAY + PREV-2D. Low tier raises harder (x2/x1.5) than working
+  -- (x1.5/x1.25). Cuts need BOTH the tier's evidence window AND today under 0.6x -> -20% with a
+  -- seasonal floor ($10 off / $15 peak). Evidence window: low = prev-2d · working = 7d off / 3d peak.
   CASE
     WHEN b.pd <= x.dark_target THEN 'WATCH'
     WHEN b.is_low_tier THEN CASE
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN 'RAISE_STRONG'
       WHEN COALESCE(b.r1,0) >= x.weak_roas THEN 'RAISE_WEAK'
-      WHEN COALESCE(b.r1,0) < x.cut_roas AND COALESCE(b.rprev2,0) < x.cut_roas THEN 'CUT'
+      WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6 THEN 'CUT'
       ELSE 'HOLD' END
     WHEN b.throttled THEN 'HOLD'
-    WHEN NOT b.in_peak THEN CASE
-      WHEN COALESCE(b.r7,0) >= x.weak_roas AND COALESCE(b.r28,0) >= x.strong_roas THEN 'RAISE_STRONG'
-      WHEN COALESCE(b.r7,0) >= x.weak_roas THEN 'RAISE_WEAK'
-      WHEN COALESCE(b.r7,0) < x.cut_roas THEN 'CUT'
-      ELSE 'HOLD' END
     ELSE CASE
-      WHEN COALESCE(b.r3,0) >= x.weak_roas AND COALESCE(b.r7,0) >= x.strong_roas THEN 'RAISE_STRONG'
-      WHEN COALESCE(b.r3,0) >= x.weak_roas THEN 'RAISE_WEAK'
-      WHEN COALESCE(b.r7,0) < x.cut_roas THEN 'CUT'
+      WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN 'RAISE_STRONG'
+      WHEN COALESCE(b.r1,0) >= x.weak_roas THEN 'RAISE_WEAK'
+      WHEN COALESCE(IF(b.in_peak, b.r3, b.r7),0) < 0.6 AND COALESCE(b.r1,0) < 0.6 THEN 'CUT'
       ELSE 'HOLD' END
   END AS action,
   CASE
     WHEN b.pd <= x.dark_target THEN NULL
     WHEN b.is_low_tier THEN CASE
-      WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas
-        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_strong), 2)
-      WHEN COALESCE(b.r1,0) >= x.weak_roas
-        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_weak), 2)
-      WHEN COALESCE(b.r1,0) < x.cut_roas AND COALESCE(b.rprev2,0) < x.cut_roas
-        THEN ROUND(GREATEST(b.budget * x.bud_cut, CAST(cf.floor_daily AS FLOAT64)), 2)
+      WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN ROUND(b.budget * 2.0, 2)
+      WHEN COALESCE(b.r1,0) >= x.weak_roas THEN ROUND(b.budget * 1.5, 2)
+      WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6
+        THEN ROUND(GREATEST(b.budget * 0.8, IF(b.in_peak, 15.0, 10.0)), 2)
       ELSE NULL END
     WHEN b.throttled THEN NULL
-    WHEN NOT b.in_peak THEN CASE
-      WHEN COALESCE(b.r7,0) >= x.weak_roas AND COALESCE(b.r28,0) >= x.strong_roas
-        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_strong), 2)
-      WHEN COALESCE(b.r7,0) >= x.weak_roas
-        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_weak), 2)
-      WHEN COALESCE(b.r7,0) < x.cut_roas
-        THEN ROUND(GREATEST(b.budget * x.bud_cut, CAST(cf.floor_daily AS FLOAT64)), 2)
-      ELSE NULL END
     ELSE CASE
-      WHEN COALESCE(b.r3,0) >= x.weak_roas AND COALESCE(b.r7,0) >= x.strong_roas
-        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_strong), 2)
-      WHEN COALESCE(b.r3,0) >= x.weak_roas
-        THEN ROUND(LEAST(SAFE_DIVIDE(b.budget, 1 - b.pd), b.budget * x.bud_cap_weak), 2)
-      WHEN COALESCE(b.r7,0) < x.cut_roas
-        THEN ROUND(GREATEST(b.budget * x.bud_cut, CAST(cf.floor_daily AS FLOAT64)), 2)
+      WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN ROUND(b.budget * 1.5, 2)
+      WHEN COALESCE(b.r1,0) >= x.weak_roas THEN ROUND(b.budget * 1.25, 2)
+      WHEN COALESCE(IF(b.in_peak, b.r3, b.r7),0) < 0.6 AND COALESCE(b.r1,0) < 0.6
+        THEN ROUND(GREATEST(b.budget * 0.8, IF(b.in_peak, 15.0, 10.0)), 2)
       ELSE NULL END
   END AS suggested_budget,
   CASE
@@ -220,35 +207,28 @@ SELECT
       THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% — barely capped, watch')
     WHEN b.is_low_tier THEN CASE
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · last day ', CAST(b.r1 AS STRING),
-                    'x AND prev-2d ', CAST(b.rprev2 AS STRING), 'x → fund full-day demand (cap 3x)')
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today ', CAST(b.r1 AS STRING),
+                    'x AND prev-2d ', CAST(b.rprev2 AS STRING), 'x → strong raise ×2')
       WHEN COALESCE(b.r1,0) >= x.weak_roas
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · last day ', CAST(b.r1 AS STRING), 'x → raise (cap 2x)')
-      WHEN COALESCE(b.r1,0) < x.cut_roas AND COALESCE(b.rprev2,0) < x.cut_roas
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · BOTH windows losing (',
-                    CAST(COALESCE(b.r1,0) AS STRING), 'x / ', CAST(COALESCE(b.rprev2,0) AS STRING), 'x) → step down 10% (floor $10)')
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today ', CAST(b.r1 AS STRING), 'x → raise ×1.5')
+      WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today AND prev-2d both under 0.6x → cut 20% (floor $',
+                    CAST(CAST(IF(b.in_peak,15,10) AS INT64) AS STRING), ')')
       ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · mixed windows → hold budget, bids do the work') END
     WHEN b.throttled
       THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · budget changed ', CAST(b.dsb AS STRING),
                   'd ago — working cadence (', IF(b.in_peak, '3d in peak', '7d off-season'), ') not due yet')
-    WHEN NOT b.in_peak THEN CASE
-      WHEN COALESCE(b.r7,0) >= x.weak_roas AND COALESCE(b.r28,0) >= x.strong_roas
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d ', CAST(b.r7 AS STRING),
-                    'x AND 28d ', CAST(b.r28 AS STRING), 'x → fund full-day demand (cap 3x)')
-      WHEN COALESCE(b.r7,0) >= x.weak_roas
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d ', CAST(b.r7 AS STRING), 'x → raise (cap 2x)')
-      WHEN COALESCE(b.r7,0) < x.cut_roas
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d ', CAST(COALESCE(b.r7,0) AS STRING), 'x losing → step down 10% (floor $10)')
-      ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d mid → hold budget, bids do the work') END
     ELSE CASE
-      WHEN COALESCE(b.r3,0) >= x.weak_roas AND COALESCE(b.r7,0) >= x.strong_roas
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 3d ', CAST(b.r3 AS STRING),
-                    'x AND 7d ', CAST(b.r7 AS STRING), 'x (peak) → fund full-day demand (cap 3x)')
-      WHEN COALESCE(b.r3,0) >= x.weak_roas
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 3d ', CAST(b.r3 AS STRING), 'x (peak) → raise (cap 2x)')
-      WHEN COALESCE(b.r7,0) < x.cut_roas
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · 7d ', CAST(COALESCE(b.r7,0) AS STRING), 'x losing (peak) → step down 10% (floor $10)')
-      ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · mid (peak) → hold budget, bids do the work') END
+      WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today ', CAST(b.r1 AS STRING),
+                    'x AND prev-2d ', CAST(b.rprev2 AS STRING), 'x → strong raise ×1.5')
+      WHEN COALESCE(b.r1,0) >= x.weak_roas
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today ', CAST(b.r1 AS STRING), 'x → raise ×1.25')
+      WHEN COALESCE(IF(b.in_peak, b.r3, b.r7),0) < 0.6 AND COALESCE(b.r1,0) < 0.6
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · ', IF(b.in_peak,'3d','7d'), ' ',
+                    CAST(COALESCE(IF(b.in_peak, b.r3, b.r7),0) AS STRING), 'x AND today under 0.6x → cut 20% (floor $',
+                    CAST(CAST(IF(b.in_peak,15,10) AS INT64) AS STRING), ')')
+      ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · evidence mid → hold budget, bids do the work') END
   END AS reason
 FROM base b
 CROSS JOIN k x

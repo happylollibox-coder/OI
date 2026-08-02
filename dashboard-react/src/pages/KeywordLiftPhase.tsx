@@ -195,10 +195,11 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
 
   const budgetItem = (id: string) => doQueue.items.find(i => i.action === 'BUDGET_CHANGE' && i.campaign_id === id);
   const budgetSug = (c: Row): Bud | null => {
-    // GRADUATION RULE (view-computed, Ori 2026-08-01) wins; the launch budget ladder is the fallback
+    // SINGLE SOURCE (Ori 2026-08-01 tuning, knob #5): healthy campaigns get ONE budget rule —
+    // the view-computed loss cut (W AND today < 0.6x → −20%, seasonal floor). No launch fallback.
     if (c.vSuggestedBudget != null && Math.abs(c.vSuggestedBudget - c.budget) > 0.01)
       return { budget: c.budget, suggested: c.vSuggestedBudget, reason: c.vBudgetReason };
-    const b = budMap.get(c.campaignId); return b && b.suggested != null && Math.abs(b.suggested - b.budget) > 0.01 ? b : null;
+    return null;
   };
   const budSugs = useMemo(() => camps.map(g => g[0]).filter(c => budgetSug(c)), [camps, budMap]);
 
