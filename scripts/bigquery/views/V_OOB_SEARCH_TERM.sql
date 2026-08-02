@@ -75,6 +75,18 @@ defense AS (
 sb_kw AS (
   SELECT id, keyword_text FROM `fivetran-hl.amazon_ads.sb_keyword` WHERE NOT _fivetran_deleted
 ),
+-- est. COGS ratio per campaign via its mapped ASIN — for the SB term-winner net-ROAS bar (v15)
+prod AS (
+  SELECT CAST(f.campaign_id AS STRING) AS cid,
+    SAFE_DIVIDE(ANY_VALUE(c.cost), NULLIF(ANY_VALUE(p.listing_price_amount), 0)) AS cost_ratio
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` f
+  LEFT JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = f.ASIN_BY_CAMPAIGN_NAME
+  LEFT JOIN (SELECT asin, TOTAL_COST_PER_UNIT cost FROM (
+      SELECT asin, TOTAL_COST_PER_UNIT, ROW_NUMBER() OVER (PARTITION BY marketplace_id, asin ORDER BY start_date DESC) rn
+      FROM `onyga-482313.OI.DIM_COSTS_HISTORY` WHERE marketplace_id='ATVPDKIKX0DER' AND end_date IS NULL) WHERE rn=1) c
+    ON c.asin = f.ASIN_BY_CAMPAIGN_NAME
+  GROUP BY 1
+),
 sb_st AS (
   SELECT CAST(r.campaign_id AS STRING) AS campaign_id,
     CAST(r.keyword_id AS STRING) AS keyword_id,
@@ -85,11 +97,14 @@ sb_st AS (
     SUM(IF(r.report_date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 27 DAY), r.cost, 0)) AS spend,
     SUM(IF(r.report_date = (SELECT d FROM wm_sb), r.cost, 0)) AS spend_1d,
     SUM(IF(r.report_date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 27 DAY), r.attributed_sales_14_d, 0)) AS sales,
-    -- gross ROAS only for SB terms (no per-term COGS estimate; the negate rule keys on clicks/orders)
+    -- gross ROAS only for SB terms at the 28d slice (negate rule keys on clicks/orders);
+    -- 90d gp ESTIMATED via the campaign cost ratio — feeds the term-winner net-ROAS bar (v15)
     CAST(NULL AS FLOAT64) AS gp,
+    SUM(r.attributed_sales_14_d * (1 - COALESCE(pr.cost_ratio, 0))) AS gp_90d,
     SUM(r.clicks) AS clicks_90d, SUM(r.attributed_conversions_14_d) AS orders_90d, SUM(r.cost) AS spend_90d
   FROM `fivetran-hl.amazon_ads.sb_search_term_report` r
   JOIN oob_sb o ON o.campaign_id = CAST(r.campaign_id AS STRING)
+  LEFT JOIN prod pr ON pr.cid = CAST(r.campaign_id AS STRING)
   LEFT JOIN sb_kw k ON k.id = r.keyword_id
   WHERE r.query_term IS NOT NULL AND r.query_term != ''
     AND r.report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 89 DAY) AND (SELECT d FROM wm_sb)
@@ -134,6 +149,7 @@ st AS (
     SUM(IF(a.date = (SELECT d FROM wm), a.Ads_cost, 0)) AS spend_1d,
     SUM(IF(a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 27 DAY), a.Ads_sales, 0)) AS sales,
     SUM(IF(a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 27 DAY), a.GROSS_PROFIT, 0)) AS gp,
+    SUM(a.GROSS_PROFIT) AS gp_90d,
     SUM(a.Ads_clicks) AS clicks_90d, SUM(a.Ads_orders) AS orders_90d, SUM(a.Ads_cost) AS spend_90d
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   JOIN oob o ON o.campaign_id = CAST(a.campaign_id AS STRING)
@@ -153,7 +169,10 @@ SELECT u.campaign_id, COALESCE(e.engine, e2.engine) AS engine, u.keyword_id, u.t
   (sq.q IS NOT NULL AND NOT sq.has_90d) AS sqp_wait,
   COALESCE(sq.market_purchases_90d, 0) AS market_purchases_90d,
   (LOWER(TRIM(u.search_term)) = LOWER(TRIM(u.target_text))) AS term_is_keyword,
-  (u.orders_90d > 0 OR COALESCE(ta.term_orders_90d, 0) > 0) AS is_winner,
+  -- v15 (Ori 2026-08-02): a winning term must EARN it — >= 1.1x net ROAS at this slice over
+  -- 90d (same bar as the keyword WINNER class), not merely an order somewhere
+  (COALESCE(SAFE_DIVIDE(u.gp_90d, NULLIF(u.spend_90d, 0)), 0) >= 1.1) AS is_winner,
+  ROUND(SAFE_DIVIDE(u.gp_90d, NULLIF(u.spend_90d, 0)), 2) AS net_roas_90d,
   (u.kind != 'PT'
    AND (u.kind = 'AUTO' OR LOWER(TRIM(u.search_term)) != LOWER(TRIM(u.target_text)))
    -- SQP-listed term without 90 days of market history: WAIT — no negate of either kind

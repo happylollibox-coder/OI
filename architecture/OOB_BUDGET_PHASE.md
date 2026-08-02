@@ -418,3 +418,16 @@ Rule (`V_OOB_KEYWORD`): **a probe only keeps its bid while it holds a seat.**
 OOB, Portfolio (all tiers incl. Seasonal) and Brand-defense tables now show `seat i/M` (sky)
 or `queue #k` (faint) on each keyword — OobKeyword cube gained slots/seatRank dims.
 Paused-history tables excluded (no seats while paused).
+
+## v15 — term winners must earn 1.1x (Ori 2026-08-02)
+
+Trigger: asin="B09V45RH3Q" showed "1 winner" for a term with 3 orders at 0.84x net ROAS —
+"winner" meant only "an order exists somewhere in 90d".
+
+Rule (`V_OOB_SEARCH_TERM.is_winner`): a winning search term needs **>= 1.1x net ROAS at
+this slice over 90d** — the same bar as the keyword WINNER class. SP terms use real
+GROSS_PROFIT; SB terms estimate net via the campaign cost ratio (new prod CTE, same method
+as the SB launch views). `net_roas_90d` exposed. The account-wide-orders arm is dropped
+(an order elsewhere does not make THIS slice a winner). Negation is untouched — the negate
+bars still key on 0 orders, so an ordered-but-under-1.1x term is neither winner nor negate:
+it just keeps gathering. At deploy: 167 order-but-under-bar terms demoted.
