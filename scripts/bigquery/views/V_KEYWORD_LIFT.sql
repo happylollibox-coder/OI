@@ -525,8 +525,9 @@ SELECT
     WHEN a.probing OR a.probe_done THEN 'PROBE'
     WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN 'RETIRED'
     WHEN a.seat_rank > a.slots THEN 'QUEUED'
-    WHEN a.class = 'WINNER' THEN 'FUNDER'
-    WHEN a.class = 'MARGINAL' THEN 'WATCH'
+    -- FUNDER is judged on 28 DAYS (Ori 2026-08-02) — a stable financier, not a hot week
+    WHEN SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)) >= 1.1 THEN 'FUNDER'
+    WHEN a.class IN ('WINNER', 'MARGINAL') THEN 'WATCH'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'PARKED'
     WHEN a.class = 'LOSER' THEN 'TRIAL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
@@ -684,8 +685,9 @@ SELECT
     WHEN a.probing OR a.probe_done THEN 'PROBE'
     WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN 'RETIRED'
     WHEN a.seat_rank > a.slots THEN 'QUEUED'
-    WHEN a.class = 'WINNER' THEN 'FUNDER'
-    WHEN a.class = 'MARGINAL' THEN 'WATCH'
+    -- FUNDER is judged on 28 DAYS (Ori 2026-08-02) — a stable financier, not a hot week
+    WHEN SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)) >= 1.1 THEN 'FUNDER'
+    WHEN a.class IN ('WINNER', 'MARGINAL') THEN 'WATCH'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'PARKED'
     WHEN a.class = 'LOSER' THEN 'TRIAL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots

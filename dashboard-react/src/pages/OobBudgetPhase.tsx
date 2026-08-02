@@ -45,9 +45,18 @@ const KW_CLS: Record<string, string> = {
 };
 
 const ROLE_CLS: Record<string, string> = {
-  FUNDER: 'text-emerald-400', WATCH: 'text-amber-400', PROBE: 'text-sky-300', CANDIDATE: 'text-sky-300',
+  WINNER: 'text-emerald-400', WATCH: 'text-amber-400', PROBE: 'text-sky-300', CANDIDATE: 'text-sky-300',
   TRIAL: 'text-muted', PARKED: 'text-red-400', RETIRED: 'text-red-400', QUEUED: 'text-faint',
   IDLE: 'text-faint', DEFENSE: 'text-violet-400',
+};
+const ROLE_TIP: Record<string, string> = {
+  WINNER: 'net ROAS ≥ 1.0 over the LAST 3 DAYS — always seated first; while the campaign caps its lever is the budget raise, never a bid raise (EASE/FIT price its clicks honestly).',
+  WATCH: 'proven over 90 days but cold in the last 3 — holds its seat, monitored.',
+  PROBE: 'mid-test under the Portfolio engine — keeps its probe bid while it holds a seat; beyond the seats it pauses at $0.25.',
+  CANDIDATE: 'parked and holding a seat — ACTIVATEs at max($1, min(1.5× target, $1.50)), paced by the 20% rule (80% of any raise keeps feeding winners).',
+  TRIAL: 'seated mid-test gathering clicks — TRIM/DARK_BRAKE only with real evidence (≥ 4 clicks / clicked yesterday).',
+  RETIRED: 'tested ≥ 15 clicks/90d with 0 orders — permanent park; its seat goes to the next candidate (seasonal revival exempts).',
+  QUEUED: 'beyond the seats (budget ÷ $4) — waits at $0.25 in the queue; the test resumes when a seat frees.',
 };
 
 export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) {
@@ -349,7 +358,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                         {k.cpc1 != null ? `$${k.cpc1.toFixed(2)}` : '—'}</span>
                       <span className="text-faint">{k.targetCpc != null ? ` /$${k.targetCpc.toFixed(2)}${k.targetCpcSrc === 'LY' ? 'ʸ' : 'ᵇ'}` : ''}</span>
                     </td>
-                    <td className={`px-2 text-left whitespace-nowrap ${ROLE_CLS[k.role] ?? 'text-faint'}`}>{k.role.toLowerCase()}</td>
+                    <td className={`px-2 text-left whitespace-nowrap ${ROLE_CLS[k.role] ?? 'text-faint'}`} title={ROLE_TIP[k.role] ?? ''}>{k.role.toLowerCase()}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${KW_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace('_', ' ')}</td>
                     <td className="px-2">{k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}</td>
                     <td className="px-2">

@@ -339,7 +339,10 @@ SELECT
     WHEN b.tested_loser AND NOT b.is_lift_probe THEN 'RETIRED'
     WHEN b.seat_rank > b.slots THEN 'QUEUED'
     WHEN COALESCE(b.current_bid, 0) > 0 AND b.current_bid <= 0.30 THEN 'CANDIDATE'
-    WHEN b.converting OR COALESCE(b.roas90, 0) >= 1.0 THEN 'FUNDER'
+    -- OOB has WINNERS not funders (Ori 2026-08-02): net ROAS >= 1.0 over the LAST 3 DAYS,
+    -- always seated first; 90d-proven but cold in the last 3 -> WATCH (holds its seat)
+    WHEN b.converting THEN 'WINNER'
+    WHEN COALESCE(b.roas90, 0) >= 1.0 THEN 'WATCH'
     ELSE 'TRIAL'
   END AS role,
   CASE

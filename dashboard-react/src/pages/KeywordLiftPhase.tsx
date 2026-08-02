@@ -38,6 +38,18 @@ const ROLE_CLS: Record<string, string> = {
   TRIAL: 'text-muted', PARKED: 'text-red-400', RETIRED: 'text-red-400', QUEUED: 'text-faint',
   IDLE: 'text-faint', DEFENSE: 'text-violet-400',
 };
+const ROLE_TIP: Record<string, string> = {
+  FUNDER: 'funds the campaign — net ROAS ≥ 1.1× over the last 28 DAYS (a stable financier, not a hot week). Never pulled down by the target; raises are earned via the coacher sweet-spot.',
+  WATCH: 'earning on the recent window (winner/marginal class) but not funder-grade over 28d — monitored: glides down toward target when above it, up (+10%/day) in season when far below.',
+  PROBE: 'mid-test — owns its bid everywhere until the 20-click verdict: ≥ 1.0× → winner, else park $0.25 and the next candidate promotes.',
+  CANDIDATE: 'next probe — lifts to max($1, min(1.5× target, $2)) when applied; seasonal keywords jump this queue.',
+  TRIAL: 'still in its 4-click trial — 1 click does not break; no park or cut until 4 clicks of evidence.',
+  PARKED: 'loser beyond the 20% (40% peak) exploration allowance — parked $0.25; returns through the seat queue.',
+  RETIRED: 'tested ≥ 15 clicks/90d with 0 orders — permanent park; only its season (a last-year order in this same 28d window) revives it.',
+  QUEUED: 'beyond the seats (budget ÷ $4) — waits at $0.25; the test resumes when a seat frees.',
+  IDLE: 'seated but every probe slot is busy (2 off-season / 4 peak) — first in line when a verdict lands.',
+  DEFENSE: 'the moat — never ROAS-parked, never negated; budget is the only lever.',
+};
 const CLASS_CLS: Record<string, string> = {
   WINNER: 'text-emerald-400', MARGINAL: 'text-amber-400', LOSER: 'text-red-400', IDLE: 'text-faint',
 };
@@ -366,7 +378,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                     <td className="px-2 text-muted whitespace-nowrap">{k.clicks7d}c{k.roas7d != null ? ` ${k.roas7d.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-muted whitespace-nowrap">{k.clicks828}c{k.roas828 != null ? ` ${k.roas828.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-faint">{k.targetCpc != null ? `$${k.targetCpc.toFixed(2)}` : '—'}</td>
-                    <td className={`px-2 text-left whitespace-nowrap ${ROLE_CLS[k.role] ?? 'text-faint'}`}>{k.role.toLowerCase()}</td>
+                    <td className={`px-2 text-left whitespace-nowrap ${ROLE_CLS[k.role] ?? 'text-faint'}`} title={ROLE_TIP[k.role] ?? ''}>{k.role.toLowerCase()}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${ACT_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace(/_/g, ' ')}</td>
                     <td className="px-2">{k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}</td>
                     <td className="px-2">

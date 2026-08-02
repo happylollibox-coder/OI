@@ -525,3 +525,19 @@ Cross-cutting: dark > 10% moves the whole campaign to OOB ownership (launch/Port
 defer); the negate layer works at TERM grain independent of keyword roles (winners >= 1.1x
 never negated); every bid entry respects the $1 seat floor; every reduction needs evidence
 (4 clicks) except the probe's own descent.
+
+### v16.2 — role definition fixes + hover tooltips (Ori 2026-08-02)
+
+Ori: "in OOB there is no funders only Winner (winner is net roas >= 1.0 for the last 3 days),
+always seated first. FUNDER — the window is 28 days. Add tooltips to roles."
+
+- **OOB role WINNER** (replaces FUNDER there): net ROAS >= 1.0 over the LAST 3 DAYS
+  (`converting` = >= 1.0 on the last-day or prev-2d window) — always seated first.
+  90d-proven but cold in the last 3 days -> **WATCH** (holds its seat, monitored).
+- **Portfolio FUNDER is judged on 28 DAYS**: net ROAS >= 1.1 over the combined 7d + 8-28d
+  windows — a stable financier, not a hot week. W-window earners (WINNER/MARGINAL class)
+  that are not funder-grade on 28d -> WATCH. Actions stay class-driven (W window) — a role
+  FUNDER with action `cut to target` is exactly the tension the column exists to surface.
+- Every role cell now carries a hover tooltip with its full logic (per engine — the OOB and
+  Portfolio texts differ where the definitions differ).
+Mix after the fix: Portfolio 60 FUNDER / 33 WATCH (was 51/21); OOB 22 WINNER / 15 WATCH.
