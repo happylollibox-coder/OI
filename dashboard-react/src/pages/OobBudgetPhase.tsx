@@ -24,7 +24,7 @@ type Kw = {
 type Term = {
   campaignId: string; targetText: string; term: string; kind: string;
   clicks: number; orders: number; spend: number; spend1d: number; netRoas: number | null;
-  clicks90d: number; orders90d: number; spend90d: number; netRoas90d: number | null; termClicks90d: number; marketPurchases90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean;
+  clicks90d: number; orders90d: number; spend90d: number; netRoas90d: number | null; termClicks90d: number; marketPurchases90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean; adGroupIds: string;
 };
 
 const num = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
@@ -95,7 +95,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
         dimensions: [
           'OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
           'OobSearchTerm.kind', 'OobSearchTerm.clicks', 'OobSearchTerm.orders', 'OobSearchTerm.spend', 'OobSearchTerm.spend1d',
-          'OobSearchTerm.netRoas', 'OobSearchTerm.netRoas90d', 'OobSearchTerm.clicks90d', 'OobSearchTerm.orders90d', 'OobSearchTerm.spend90d',
+          'OobSearchTerm.netRoas', 'OobSearchTerm.netRoas90d', 'OobSearchTerm.clicks90d', 'OobSearchTerm.orders90d', 'OobSearchTerm.spend90d', 'OobSearchTerm.adGroupIds',
           'OobSearchTerm.termClicks90d', 'OobSearchTerm.marketPurchases90d', 'OobSearchTerm.isBig', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
         ],
         filters: [{ member: 'OobSearchTerm.clicks90d', operator: 'gte', values: ['3'] },
@@ -170,6 +170,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
         clicks90d: num(r['OobSearchTerm.clicks90d']) ?? 0,
         orders90d: num(r['OobSearchTerm.orders90d']) ?? 0,
         netRoas90d: num(r['OobSearchTerm.netRoas90d']),
+        adGroupIds: String(r['OobSearchTerm.adGroupIds'] ?? ''),
         spend90d: num(r['OobSearchTerm.spend90d']) ?? 0,
         termClicks90d: num(r['OobSearchTerm.termClicks90d']) ?? 0,
         marketPurchases90d: num(r['OobSearchTerm.marketPurchases90d']) ?? 0,
@@ -218,13 +219,14 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
     action: (k.suggestedBid ?? 0) >= (k.bid ?? 0) ? 'INCREASE_BID' : 'REDUCE_BID',
     current_bid: k.bid, recommended_bid: k.suggestedBid, source: 'COACH',
   });
-  const queueNeg = (r: Row, t: Term) => doQueue.addItem({
-    search_term: t.term, action: 'NEGATE_TERM', campaign: r.name, campaign_id: r.id, ad_group_id: '',
+  // SB negatives REQUIRE an Ad Group Id (upload report 29): one row per ad group the term ran in.
+  const queueNeg = (r: Row, t: Term) => (t.adGroupIds ? t.adGroupIds.split(',') : ['']).forEach(ag => doQueue.addItem({
+    search_term: t.term, action: 'NEGATE_TERM', campaign: r.name, campaign_id: r.id, ad_group_id: ag,
     targeting: t.term, keyword_id: '', match_type: 'NEGATIVE_EXACT', target_spend_8w: 0, target_orders_8w: 0,
     target_net_roas_8w: 0, current_bid: null, recommended_bid: null,
     campaign_type: r.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS', product: 'Keyword',
     spend: 0, orders: 0, cpc: 0, conv_rate: 0, source: 'COACH',
-  });
+  }));
 
   const allSuggestions = useMemo(() => {
     if (!rows) return { budgets: [] as Row[], bids: [] as { r: Row; k: Kw }[], negs: [] as { r: Row; t: Term }[] };

@@ -101,7 +101,8 @@ sb_st AS (
     -- 90d gp ESTIMATED via the campaign cost ratio — feeds the term-winner net-ROAS bar (v15)
     CAST(NULL AS FLOAT64) AS gp,
     SUM(r.attributed_sales_14_d * (1 - COALESCE(pr.cost_ratio, 0))) AS gp_90d,
-    SUM(r.clicks) AS clicks_90d, SUM(r.attributed_conversions_14_d) AS orders_90d, SUM(r.cost) AS spend_90d
+    SUM(r.clicks) AS clicks_90d, SUM(r.attributed_conversions_14_d) AS orders_90d, SUM(r.cost) AS spend_90d,
+    STRING_AGG(DISTINCT CAST(r.ad_group_id AS STRING), ',') AS ad_group_ids
   FROM `fivetran-hl.amazon_ads.sb_search_term_report` r
   JOIN oob_sb o ON o.campaign_id = CAST(r.campaign_id AS STRING)
   LEFT JOIN prod pr ON pr.cid = CAST(r.campaign_id AS STRING)
@@ -150,7 +151,10 @@ st AS (
     SUM(IF(a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 27 DAY), a.Ads_sales, 0)) AS sales,
     SUM(IF(a.date >= DATE_SUB((SELECT d FROM wm), INTERVAL 27 DAY), a.GROSS_PROFIT, 0)) AS gp,
     SUM(a.GROSS_PROFIT) AS gp_90d,
-    SUM(a.Ads_clicks) AS clicks_90d, SUM(a.Ads_orders) AS orders_90d, SUM(a.Ads_cost) AS spend_90d
+    SUM(a.Ads_clicks) AS clicks_90d, SUM(a.Ads_orders) AS orders_90d, SUM(a.Ads_cost) AS spend_90d,
+    -- the ad groups where this term actually ran under this keyword — SB negatives REQUIRE an
+    -- Ad Group Id (Amazon rejects campaign-level SB negatives: upload report 29, 9 rows)
+    STRING_AGG(DISTINCT CAST(a.ad_group_id AS STRING), ',') AS ad_group_ids
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   JOIN oob o ON o.campaign_id = CAST(a.campaign_id AS STRING)
   WHERE a.SEARCH_TERM IS NOT NULL AND a.SEARCH_TERM != ''
@@ -160,7 +164,7 @@ st AS (
 SELECT u.campaign_id, COALESCE(e.engine, e2.engine) AS engine, u.keyword_id, u.target_text, u.search_term, u.kind,
   u.clicks, u.orders, ROUND(u.spend, 2) AS spend, ROUND(u.spend_1d, 2) AS spend_1d, ROUND(u.sales, 2) AS sales,
   ROUND(SAFE_DIVIDE(u.gp, NULLIF(u.spend, 0)), 2) AS net_roas,
-  u.clicks_90d, u.orders_90d, ROUND(u.spend_90d, 2) AS spend_90d,
+  u.clicks_90d, u.orders_90d, ROUND(u.spend_90d, 2) AS spend_90d, u.ad_group_ids,
   COALESCE(ta.term_clicks_90d, 0) AS term_clicks_90d,
   COALESCE(ta.term_orders_90d, 0) AS term_orders_90d,
   -- BIG word (Ori 2026-08-01): the MARKET buys it — >1,000 Amazon purchases in 90d per SQP,

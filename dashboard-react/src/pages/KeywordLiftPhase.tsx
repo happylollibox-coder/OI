@@ -62,7 +62,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
   const [rows, setRows] = useState<Row[] | null>(null);
   const [failed, setFailed] = useState(false);
 
-  type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; marketPurchases90: number; isBig: boolean; spend1d: number };
+  type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; marketPurchases90: number; isBig: boolean; spend1d: number; adGroupIds: string };
   type WinTerm = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; orders90: number; roas90: number | null };
   const [winTerms, setWinTerms] = useState<WinTerm[]>([]);
   type Bud = { budget: number; suggested: number | null; reason: string };
@@ -103,7 +103,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
     // kills the tier-list negate exception so each campaign truly shows once.
     cubeLoad({
       dimensions: ['OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
-        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.marketPurchases90d', 'OobSearchTerm.isBig', 'OobSearchTerm.spend1d'],
+        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.marketPurchases90d', 'OobSearchTerm.isBig', 'OobSearchTerm.spend1d', 'OobSearchTerm.adGroupIds'],
       filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT'] },
                 { member: 'OobSearchTerm.isNegate', operator: 'equals', values: ['true'] }],
     }).then(ts => {
@@ -117,6 +117,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
         marketPurchases90: num(r['OobSearchTerm.marketPurchases90d']) ?? 0,
         isBig: r['OobSearchTerm.isBig'] === true || r['OobSearchTerm.isBig'] === 'true',
         spend1d: num(r['OobSearchTerm.spend1d']) ?? 0,
+        adGroupIds: String(r['OobSearchTerm.adGroupIds'] ?? ''),
       })));
     }).catch(() => {});
     // winners hierarchy (Ori 2026-08-02): terms that EARN 1.1x/90d, collapsed under their keyword
@@ -276,13 +277,16 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
   const negItem = (n: Neg) => doQueue.items.find(i => i.action === 'NEGATE_TERM' && i.campaign_id === n.campaignId && i.search_term === n.term);
   const queueNeg = (n: Neg) => {
     const c = (byCamp.get(n.campaignId) ?? [])[0];
-    doQueue.addItem({
-      search_term: n.term, action: 'NEGATE_TERM', campaign: c?.campaignName ?? '', campaign_id: n.campaignId, ad_group_id: '',
+    // SB negatives REQUIRE an Ad Group Id (upload report 29): one row per ad group the term
+    // ran in. SP falls back to Campaign Negative Keyword when the id is empty.
+    const ags = n.adGroupIds ? n.adGroupIds.split(',') : [''];
+    ags.forEach(ag => doQueue.addItem({
+      search_term: n.term, action: 'NEGATE_TERM', campaign: c?.campaignName ?? '', campaign_id: n.campaignId, ad_group_id: ag,
       targeting: n.term, keyword_id: '', match_type: 'NEGATIVE_EXACT', target_spend_8w: 0, target_orders_8w: 0,
       target_net_roas_8w: 0, current_bid: null, recommended_bid: null,
       campaign_type: c?.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS', product: 'Keyword',
       spend: 0, orders: 0, cpc: 0, conv_rate: 0, source: 'COACH',
-    });
+    }));
   };
   const nParks = sugs.filter(r => r.action === 'PARK').length;
   const nProbes = sugs.filter(r => r.action.startsWith('PROBE')).length;

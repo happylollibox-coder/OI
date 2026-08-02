@@ -555,3 +555,16 @@ seats** — the winner + one; everything else queues. "After a few sales the bud
 increase" — that's the existing budget ladder (STRONG/WEAK raises on the ROAS windows):
 sales -> budget raise -> the premium is absorbed and the seats come back. seat_cpc uses the
 same corrected slot count. At deploy: 5 Portfolio campaigns lost 8 phantom seats.
+
+## v18 — SB negatives carry their Ad Group Id (upload report 29, Ori 2026-08-02)
+
+Amazon rejected 9 of 158 rows: SB Negative Keyword Create requires an **Ad Group Id**
+(SB has no campaign-level negatives), and the negate pipeline never carried one.
+
+Fix end-to-end: `V_OOB_SEARCH_TERM` exposes `ad_group_ids` (STRING_AGG of the ad groups the
+term actually RAN in under that keyword, both arms — grain unchanged so the negate bars are
+untouched); cube dim `adGroupIds`; the panels' queueNeg fans out **one queue item per ad
+group** (SP with empty id still falls back to Campaign Negative Keyword). A multi-ad-group
+SB campaign (BOX-SBS By Age, 12 ad groups) negates the term in every ad group where it
+fired. One-time repair: the 9 rejected terms were re-issued as 17 rows with real ad-group
+ids (sb_negatives_reupload.xlsx, delivered for manual upload).
