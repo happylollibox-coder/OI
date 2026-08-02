@@ -464,3 +464,64 @@ Cubes KeywordLift/OobKeyword gained `role`; the OOB and Portfolio tables show it
 before `action` (colored: funder emerald · watch amber · probe/candidate sky · parked/retired
 red · queued/idle faint). Portfolio mix at deploy: 196 QUEUED · 102 PROBE · 78 PARKED ·
 51 FUNDER · 45 TRIAL · 41 IDLE · 30 RETIRED · 28 DEFENSE · 27 CANDIDATE · 21 WATCH.
+
+### v16.1 — per-role logic (the full life of a keyword)
+
+**FUNDER** — enter: net ROAS >= 1.1x with an order in W (Portfolio) / converting >= 1.0x on a
+recent window or 90d-proven (OOB). Always seated first (converters ranked by 90d corrected
+net ROAS — the winner is main). While healthy: KEEP — the target NEVER pulls it down; raises
+are earned via the coacher sweet-spot (>= 2x on 1w, stepping toward $2, ceiling = personal LY
+x1.5 else band); seasonal_now + bid < 60% of target -> RAISE_TO_TARGET +10%/day. While the
+campaign caps: never raised (the budget raise buys volume) — winner-concentrated campaigns
+EASE -5%/day toward real CPC, mixed campaigns FIT_CPC -15%/day (>= 4 clicks evidence).
+Exit: stops converting -> WATCH -> TRIAL chain as windows roll.
+
+**WATCH** — enter: MARGINAL, 0.7-1.1x (has orders). Seated by rank; KEEP by default.
+Bid > target + $0.05 -> EASE_TO_TARGET (max(bid x0.95, target)/day). seasonal_now + bid
+< 60% of target -> RAISE_TO_TARGET. Never parked (orders protect it).
+Exit: >= 1.1x -> FUNDER · < 0.7x / orders dry -> TRIAL/PARKED chain.
+
+**PROBE** — enter: PROBE_START applied (episode = last INCREASE_BID in the change log, 14d).
+Owns its bid EVERYWHERE (coacher masks to KEEP; OOB defers while it holds a seat). During:
+> 6 clicks/day with no sale -> -5%/day descent; verdict at 20 episode clicks: >= 1.0x ->
+WINNER_FOUND -> FUNDER, else park $0.25 and the next candidate is promoted. While the
+campaign caps it keeps its bid ONLY while seated — beyond the seats the probe pauses
+(QUEUED, $0.25) and resumes via ACTIVATE. Never permanent-parked mid-test.
+
+**CANDIDATE** — enter (Portfolio): IDLE + seated + a free probe slot inside the pace
+(2 off-season / 4 peak active probes per campaign); cand_rank: seasonal_now first, then
+target-anchored, then LY-click history. Enter (OOB): parked bid <= $0.30 holding a seat,
+next in the ACTIVATE pace (max(1, floor(20% x budget / 4))/day — 80% of any raise keeps
+feeding winners). Action: PROBE_START / ACTIVATE at max($1, min(1.5 x target, $2 / $1.50))
+— the $1 floor; no anchor needed. Becomes PROBE the day the lift is applied.
+
+**TRIAL** — enter: LOSER class still inside its evidence trial — under 4 clicks in W, or
+within the loser allowance. KEEP_TAIL: keep gathering, 1 click does not break. With >= 4
+clicks and bid > target + $0.05 -> CUT_TO_TARGET (straight to target, still seated).
+Exit: converts -> WATCH/FUNDER · >= 4 clicks and the allowance burns -> PARKED ·
+15 clicks/90d with 0 orders -> RETIRED.
+
+**PARKED** — enter: LOSER with >= 4 clicks in W whose cumulative spend exceeds the loser
+allowance (20% off / 40% peak of campaign W spend; best-first cum-sum keeps the best tail).
+PARK $0.25 — temporary. Return: the seat queue (-> CANDIDATE -> PROBE when a seat frees);
+seasonal_now jumps the queue.
+
+**RETIRED** — enter: >= 15 clicks/90d with 0 orders AND NOT seasonal_now. Permanent park
+$0.25; its seat goes to the next candidate. Only two ways back: seasonal revival (an LY
+order enters the sliding same-28d window) or the 90d click window decaying under 15.
+
+**QUEUED** — enter: seat_rank > slots (slots = max(1, round(budget / $4))). PARK_WAIT $0.25
+— the test pauses, not dies. Includes paused probes while the campaign caps. Exit: a seat
+frees (funder retires, budget raise adds slots, probe verdict lands) -> ACTIVATE at the
+paced rate -> CANDIDATE.
+
+**IDLE** — seated but the probe pace is exhausted (all 2/4 slots busy). No action; first in
+line when a probe verdict lands.
+
+**DEFENSE** — campaign name '%brand defense%'. The moat: never ROAS-parked, never negated,
+bids run on the coacher defense mode (to $2); budget is the only Weekly Run lever.
+
+Cross-cutting: dark > 10% moves the whole campaign to OOB ownership (launch/Portfolio views
+defer); the negate layer works at TERM grain independent of keyword roles (winners >= 1.1x
+never negated); every bid entry respects the $1 seat floor; every reduction needs evidence
+(4 clicks) except the probe's own descent.
