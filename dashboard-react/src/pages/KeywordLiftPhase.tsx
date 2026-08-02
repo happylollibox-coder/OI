@@ -322,13 +322,16 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
   };
 
   const queueBudget = (c: Row) => {
-    const b = budMap.get(c.campaignId); if (!b || b.suggested == null) return;
+    // SINGLE SOURCE (fix, Ori 2026-08-02 'budget without a v'): queue the SAME suggestion the
+    // row displays — budgetSug (view-computed) — not the legacy launch-cube map, which lacks
+    // most campaigns and made both apply-all and the budget button silently no-op.
+    const sug = budgetSug(c); if (!sug || sug.suggested == null) return;
     doQueue.addItem({
       search_term: `__budget__${c.campaignId}`, action: 'BUDGET_CHANGE', campaign: c.campaignName, campaign_id: c.campaignId,
       ad_group_id: '', targeting: '', keyword_id: '', match_type: '', target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0,
       current_bid: null, recommended_bid: null,
       campaign_type: c.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS', product: '',
-      spend: 0, orders: 0, cpc: 0, conv_rate: 0, current_budget: b.budget, recommended_budget: b.suggested, source: 'COACH',
+      spend: 0, orders: 0, cpc: 0, conv_rate: 0, current_budget: sug.budget, recommended_budget: sug.suggested, source: 'COACH',
     });
   };
   const negItem = (n: Neg) => doQueue.items.find(i => i.action === 'NEGATE_TERM' && i.campaign_id === n.campaignId && i.search_term === n.term);
