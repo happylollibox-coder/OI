@@ -34,7 +34,7 @@ const bool = (v: unknown): boolean => v === true || v === 'true';
 const ACT_CLS: Record<string, string> = {
   KEEP: 'text-emerald-400', WINNER_FOUND: 'text-emerald-400', PROBE_START: 'text-emerald-400',
   PROBE_ADJUST: 'text-amber-400', PROBE_WAIT: 'text-muted', KEEP_TAIL: 'text-muted',
-  EASE_TO_TARGET: 'text-amber-400', CUT_TO_TARGET: 'text-red-400', RAISE_TO_TARGET: 'text-emerald-400', RESEARCH_EASE: 'text-violet-400', AUTO_TRIM: 'text-amber-400', AUTO_RAISE: 'text-emerald-400',
+  EASE_TO_TARGET: 'text-amber-400', CUT_TO_TARGET: 'text-red-400', RAISE_TO_TARGET: 'text-emerald-400', RESEARCH_EASE: 'text-violet-400', AUTO_TRIM: 'text-amber-400', AUTO_RAISE: 'text-emerald-400', AUTO_BRAKE: 'text-amber-400', AUTO_FIT: 'text-amber-400',
   PARK: 'text-red-400', IDLE: 'text-faint',
 };
 const ROLE_CLS: Record<string, string> = {
@@ -246,7 +246,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
     return m;
   }, [rows]);
 
-  const actionable = (r: Row) => r.suggestedBid != null && r.keywordId !== '' && ['PARK', 'PARK_WAIT', 'PROBE_START', 'PROBE_ADJUST', 'EASE_TO_TARGET', 'CUT_TO_TARGET', 'RAISE_TO_TARGET', 'RESEARCH_EASE', 'AUTO_TRIM', 'AUTO_RAISE'].includes(r.action);
+  const actionable = (r: Row) => r.suggestedBid != null && r.keywordId !== '' && ['PARK', 'PARK_WAIT', 'PROBE_START', 'PROBE_ADJUST', 'EASE_TO_TARGET', 'CUT_TO_TARGET', 'RAISE_TO_TARGET', 'RESEARCH_EASE', 'AUTO_TRIM', 'AUTO_RAISE', 'AUTO_BRAKE', 'AUTO_FIT'].includes(r.action);
   const bidItem = (r: Row) => doQueue.items.find(i => i.keyword_id === r.keywordId && ['INCREASE_BID', 'REDUCE_BID'].includes(i.action));
   const queueBid = (r: Row, manualBid?: number) => {
     const newBid = manualBid ?? r.suggestedBid;
@@ -442,7 +442,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
                       </button>
                     )}
                   </td>
-                  <td className="px-2 text-left text-faint whitespace-nowrap">{budMap.get(c.campaignId)?.reason || ((c.loserShare ?? 0) > 20 ? 'losers over the 20% budget — parking the worst' : 'split healthy')}</td>
+                  <td className="px-2 text-left text-faint whitespace-nowrap">{budMap.get(c.campaignId)?.reason || (c.pctDark > 10 ? `dark ${c.pctDark.toFixed(0)}% · mixed windows — the bid brakes carry it today` : (c.loserShare ?? 0) > 20 ? 'losers over the 20% budget — parking the worst' : 'split healthy')}</td>
                 </tr>
                 {expanded && kws.map(k => {
                   const it = bidItem(k);

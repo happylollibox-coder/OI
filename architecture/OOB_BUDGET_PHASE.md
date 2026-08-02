@@ -726,3 +726,21 @@ below the $2 cap -> **AUTO_RAISE +15%/day toward $2**. While capped the budget r
 the only lever (never bid up into darkness). Trigger row: ME-SP/AUTO (Purple) substitutes,
 14.43x on 8 clicks at $0.28 -> $0.32. 5 raises live at deploy; invariants clean (none
 capped, none under-evidenced, none above cap, all genuinely upward).
+
+### v24.5 — dark autos must raise or trim (Ori: "if dark% > 0 then must be a raise or trim")
+
+Dark autos lost the OOB ladder + dark-brake when they moved into the Auto section (v24) —
+a 49%-dark campaign read "hold — split healthy". Restored inside the Auto section:
+- **Dark-auto budget ladder** (campaign grain, in V_KEYWORD_LIFT): capped auto campaigns get
+  the OOB ladder — STRONG x2/x1.5 @ today >= 1.2 AND prev-2d >= 1.5 · WEAK x1.5/x1.25 @
+  today >= 1.2 · CUT x0.8 (floor $10/$15) @ both windows < 0.6. (No day-throttle here —
+  the 1-day change-log cooldown still applies at apply time.)
+- **AUTO_BRAKE**: capped + clicked-yesterday non-winner clause -> step max(5%, 30% x dark)/day,
+  floor $0.20.
+- **AUTO_FIT**: capped WINNER clause with >= 4 clicks yesterday and bid > real CPC + $0.05 ->
+  fit -5%/day toward the real CPC (never raise while dark).
+- Panel fallback for dark campaigns without a budget move now says "dark N% · mixed windows"
+  instead of "split healthy".
+Result: 11/12 capped autos act. The honest residue (BOX-SP/AUTO Pink): winner already bid
+BELOW its real CPC ($0.58 vs $0.62), second winner at 1 click, losers floored at $0.25 —
+every move is evidence-blocked; the market is already braking it.

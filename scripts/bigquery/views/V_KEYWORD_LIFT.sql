@@ -659,14 +659,34 @@ SELECT
   -- not-capped campaign is the loss cut — evidence window (W) AND today both under 0.6x ->
   -- -20% with the seasonal floor ($10 off / $15 peak). Raises belong to the dark ladder
   -- (a healthy campaign is not hitting its cap, a raise buys nothing).
-  CASE WHEN NOT a.is_defense AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
+  CASE
+    -- DARK-AUTO LADDER (Ori 2026-08-02: "if dark > 0 then must be a raise or trim") — the OOB
+    -- budget ladder, brought into the Auto section for its capped campaigns:
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) >= 1.2 AND COALESCE(a.camp_roas_prev2, 0) >= 1.5
+      THEN ROUND(a.budget * IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 2.0, 1.5), 2)
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) >= 1.2
+      THEN ROUND(a.budget * IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 1.5, 1.25), 2)
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) < 0.6 AND COALESCE(a.camp_roas_prev2, 0) < 0.6
+        AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
+      THEN ROUND(GREATEST(a.budget * 0.8, (SELECT IF(in_peak, 15.0, 10.0) FROM season)), 2)
+    WHEN NOT a.is_defense AND NOT (a.is_auto_campaign AND a.capped) AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
         AND a.camp_sp > 0 AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
-       THEN ROUND(GREATEST(a.budget * 0.8, (SELECT IF(in_peak, 15.0, 10.0) FROM season)), 2) END AS suggested_budget,
-  CASE WHEN NOT a.is_defense AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
+      THEN ROUND(GREATEST(a.budget * 0.8, (SELECT IF(in_peak, 15.0, 10.0) FROM season)), 2)
+  END AS suggested_budget,
+  CASE
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) >= 1.2 AND COALESCE(a.camp_roas_prev2, 0) >= 1.5
+      THEN CONCAT('dark ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% while converting strong (today ', CAST(COALESCE(a.camp_roas_1d,0) AS STRING), 'x, prev-2d ', CAST(COALESCE(a.camp_roas_prev2,0) AS STRING), 'x) — raise the cap')
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) >= 1.2
+      THEN CONCAT('dark ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% while converting (today ', CAST(COALESCE(a.camp_roas_1d,0) AS STRING), 'x) — raise the cap')
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) < 0.6 AND COALESCE(a.camp_roas_prev2, 0) < 0.6
+        AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
+      THEN CONCAT('dark ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% AND losing both windows — cut 20%; the brakes trim the clicked clauses')
+    WHEN NOT a.is_defense AND NOT (a.is_auto_campaign AND a.capped) AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
         AND a.camp_sp > 0 AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
-       THEN CONCAT('W ', CAST(COALESCE(a.camp_roas_w,0) AS STRING), 'x AND today ',
+      THEN CONCAT('W ', CAST(COALESCE(a.camp_roas_w,0) AS STRING), 'x AND today ',
                    CAST(COALESCE(a.camp_roas_1d,0) AS STRING), 'x — both losing → cut 20% (floor $',
-                   CAST(CAST((SELECT IF(in_peak, 15, 10) FROM season) AS INT64) AS STRING), ')') END AS budget_reason,
+                   CAST(CAST((SELECT IF(in_peak, 15, 10) FROM season) AS INT64) AS STRING), ')')
+  END AS budget_reason,
   CASE
     -- probe verdicts first
     WHEN a.is_defense THEN 'DEFENSE'
@@ -690,6 +710,11 @@ SELECT
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
     -- bids when performance is good. Winner clause with real evidence, campaign not capped:
     -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
+    -- AUTO_BRAKE (Ori 2026-08-02): while a campaign caps, every clicked non-winner clause
+    -- steps down max(5%, 30% x dark)/day — dark must produce a raise or a trim, never a hold
+    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+         AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05 THEN 'AUTO_FIT'
+    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_BRAKE'
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_RAISE'
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
@@ -727,6 +752,11 @@ SELECT
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
+    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+         AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
+      THEN ROUND(GREATEST(a.current_bid * 0.95, SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0))), 2)
+    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
+      THEN ROUND(GREATEST(a.current_bid * LEAST(0.95, 1 - 0.30 * a.pct_dark / 100), 0.20), 2)
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(a.current_bid * 1.15, 2.00), 2)
     WHEN a.class = 'WINNER' THEN NULL
@@ -772,6 +802,11 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+         AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
+      THEN CONCAT('selling while capped — fit toward the real CPC $', CAST(ROUND(SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)), 2) AS STRING), ': the budget raise buys volume, cheaper clicks buy more of it')
+    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
+      THEN CONCAT('campaign ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% dark — brake ', CAST(CAST(ROUND(100 * (1 - LEAST(0.95, 1 - 0.30 * a.pct_dark / 100))) AS INT64) AS STRING), '%/day (dark must produce a raise or a trim, never a hold)')
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('auto clause performing — ', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x on ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks: raise +15%/day toward $2 (good terms deserve more traffic)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign')
@@ -864,14 +899,34 @@ SELECT
   -- not-capped campaign is the loss cut — evidence window (W) AND today both under 0.6x ->
   -- -20% with the seasonal floor ($10 off / $15 peak). Raises belong to the dark ladder
   -- (a healthy campaign is not hitting its cap, a raise buys nothing).
-  CASE WHEN NOT a.is_defense AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
+  CASE
+    -- DARK-AUTO LADDER (Ori 2026-08-02: "if dark > 0 then must be a raise or trim") — the OOB
+    -- budget ladder, brought into the Auto section for its capped campaigns:
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) >= 1.2 AND COALESCE(a.camp_roas_prev2, 0) >= 1.5
+      THEN ROUND(a.budget * IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 2.0, 1.5), 2)
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) >= 1.2
+      THEN ROUND(a.budget * IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 1.5, 1.25), 2)
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) < 0.6 AND COALESCE(a.camp_roas_prev2, 0) < 0.6
+        AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
+      THEN ROUND(GREATEST(a.budget * 0.8, (SELECT IF(in_peak, 15.0, 10.0) FROM season)), 2)
+    WHEN NOT a.is_defense AND NOT (a.is_auto_campaign AND a.capped) AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
         AND a.camp_sp > 0 AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
-       THEN ROUND(GREATEST(a.budget * 0.8, (SELECT IF(in_peak, 15.0, 10.0) FROM season)), 2) END AS suggested_budget,
-  CASE WHEN NOT a.is_defense AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
+      THEN ROUND(GREATEST(a.budget * 0.8, (SELECT IF(in_peak, 15.0, 10.0) FROM season)), 2)
+  END AS suggested_budget,
+  CASE
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) >= 1.2 AND COALESCE(a.camp_roas_prev2, 0) >= 1.5
+      THEN CONCAT('dark ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% while converting strong (today ', CAST(COALESCE(a.camp_roas_1d,0) AS STRING), 'x, prev-2d ', CAST(COALESCE(a.camp_roas_prev2,0) AS STRING), 'x) — raise the cap')
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) >= 1.2
+      THEN CONCAT('dark ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% while converting (today ', CAST(COALESCE(a.camp_roas_1d,0) AS STRING), 'x) — raise the cap')
+    WHEN a.is_auto_campaign AND a.capped AND COALESCE(a.camp_roas_1d, 0) < 0.6 AND COALESCE(a.camp_roas_prev2, 0) < 0.6
+        AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
+      THEN CONCAT('dark ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% AND losing both windows — cut 20%; the brakes trim the clicked clauses')
+    WHEN NOT a.is_defense AND NOT (a.is_auto_campaign AND a.capped) AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
         AND a.camp_sp > 0 AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
-       THEN CONCAT('W ', CAST(COALESCE(a.camp_roas_w,0) AS STRING), 'x AND today ',
+      THEN CONCAT('W ', CAST(COALESCE(a.camp_roas_w,0) AS STRING), 'x AND today ',
                    CAST(COALESCE(a.camp_roas_1d,0) AS STRING), 'x — both losing → cut 20% (floor $',
-                   CAST(CAST((SELECT IF(in_peak, 15, 10) FROM season) AS INT64) AS STRING), ')') END AS budget_reason,
+                   CAST(CAST((SELECT IF(in_peak, 15, 10) FROM season) AS INT64) AS STRING), ')')
+  END AS budget_reason,
   CASE
     WHEN a.is_defense THEN 'DEFENSE'
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN 'WINNER_FOUND'
@@ -892,6 +947,11 @@ SELECT
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
     -- bids when performance is good. Winner clause with real evidence, campaign not capped:
     -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
+    -- AUTO_BRAKE (Ori 2026-08-02): while a campaign caps, every clicked non-winner clause
+    -- steps down max(5%, 30% x dark)/day — dark must produce a raise or a trim, never a hold
+    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+         AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05 THEN 'AUTO_FIT'
+    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_BRAKE'
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_RAISE'
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
@@ -927,6 +987,11 @@ SELECT
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
+    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+         AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
+      THEN ROUND(GREATEST(a.current_bid * 0.95, SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0))), 2)
+    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
+      THEN ROUND(GREATEST(a.current_bid * LEAST(0.95, 1 - 0.30 * a.pct_dark / 100), 0.20), 2)
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(a.current_bid * 1.15, 2.00), 2)
     WHEN a.class = 'WINNER' THEN NULL
@@ -972,6 +1037,11 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+         AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
+      THEN CONCAT('selling while capped — fit toward the real CPC $', CAST(ROUND(SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)), 2) AS STRING), ': the budget raise buys volume, cheaper clicks buy more of it')
+    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
+      THEN CONCAT('campaign ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% dark — brake ', CAST(CAST(ROUND(100 * (1 - LEAST(0.95, 1 - 0.30 * a.pct_dark / 100))) AS INT64) AS STRING), '%/day (dark must produce a raise or a trim, never a hold)')
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('auto clause performing — ', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x on ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks: raise +15%/day toward $2 (good terms deserve more traffic)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign (est. net ROAS)')
