@@ -258,6 +258,10 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
       allSuggestions.budgets.forEach(r => { const it = budgetItem(r); if (it) doQueue.removeItem(it.id); });
       allSuggestions.bids.forEach(({ k }) => { const it = bidItem(k); if (it) doQueue.removeItem(it.id); });
       allSuggestions.negs.forEach(({ t }) => { const it = negItem(t); if (it) doQueue.removeItem(it.id); });
+      // unapply also clears MANUAL bids in this section's campaigns (sections are disjoint)
+      const secIds = new Set((rows ?? []).map(r => r.id));
+      doQueue.items.filter(i => ['INCREASE_BID', 'REDUCE_BID'].includes(i.action) && secIds.has(i.campaign_id))
+        .forEach(i => doQueue.removeItem(i.id));
     } else {
       allSuggestions.budgets.forEach(r => { if (!budgetItem(r)) queueBudget(r); });
       allSuggestions.bids.forEach(({ r, k }) => { if (!bidItem(k)) queueKwBid(r, k); });

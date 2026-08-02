@@ -269,6 +269,10 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
       sugs.forEach(r => { const it = bidItem(r); if (it) doQueue.removeItem(it.id); });
       visNegs.forEach(n => { const it = negItem(n); if (it) doQueue.removeItem(it.id); });
       budSugs.forEach(c => { const it = budgetItem(c.campaignId); if (it) doQueue.removeItem(it.id); });
+      // unapply also clears MANUAL bids in this section's campaigns (Ori 2026-08-02: "unapplied
+      // did not effect the override manual bid") — sections are disjoint, so campaign scope is safe
+      doQueue.items.filter(i => ['INCREASE_BID', 'REDUCE_BID'].includes(i.action) && campIds.has(i.campaign_id))
+        .forEach(i => doQueue.removeItem(i.id));
     } else {
       sugs.forEach(r => { if (!bidItem(r)) queueBid(r); });
       visNegs.forEach(n => { if (!negItem(n)) queueNeg(n); });
