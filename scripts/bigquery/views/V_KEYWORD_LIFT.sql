@@ -541,6 +541,12 @@ SELECT
     -- SEAT MECHANISM (Ori 2026-08-01): beyond the budget/$4 seats -> queue at $0.25
     WHEN a.seat_rank > a.slots THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK_WAIT', 'IDLE')
     -- the 80% pool
+    -- SEASON RAMP (Ori 2026-08-02): its season is arriving (seasonal_now) and the bid sits
+    -- under 60% of the current LY-anchored target — glide UP toward target (+10%/day, min 5c),
+    -- never above it from this rule. WINNER/MARGINAL only (orders prove the season is real);
+    -- losers re-enter through the probe path at 1.5x target instead.
+    WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
+         AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc THEN 'RAISE_TO_TARGET'
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
     -- TO the target bid. Winners are never pulled down.
@@ -568,6 +574,9 @@ SELECT
     WHEN a.probing THEN NULL
     WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
     WHEN a.seat_rank > a.slots THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
+    WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
+         AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
+      THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
     WHEN a.class = 'WINNER' THEN NULL
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
@@ -599,6 +608,10 @@ SELECT
     WHEN a.seat_rank > a.slots
       THEN CONCAT('queue #', CAST(a.seat_rank - a.slots AS STRING), ' — ', CAST(a.slots AS STRING),
                   ' seats (budget ÷ $4); its test resumes when a seat frees')
+    WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
+         AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
+      THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
+                  CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign')
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))
@@ -665,6 +678,12 @@ SELECT
     WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK', 'IDLE')
     -- SEAT MECHANISM (Ori 2026-08-01): beyond the budget/$4 seats -> queue at $0.25
     WHEN a.seat_rank > a.slots THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK_WAIT', 'IDLE')
+    -- SEASON RAMP (Ori 2026-08-02): its season is arriving (seasonal_now) and the bid sits
+    -- under 60% of the current LY-anchored target — glide UP toward target (+10%/day, min 5c),
+    -- never above it from this rule. WINNER/MARGINAL only (orders prove the season is real);
+    -- losers re-enter through the probe path at 1.5x target instead.
+    WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
+         AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc THEN 'RAISE_TO_TARGET'
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
     -- TO the target bid. Winners are never pulled down.
@@ -690,6 +709,9 @@ SELECT
     WHEN a.probing THEN NULL
     WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
     WHEN a.seat_rank > a.slots THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
+    WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
+         AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
+      THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
     WHEN a.class = 'WINNER' THEN NULL
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
@@ -721,6 +743,10 @@ SELECT
     WHEN a.seat_rank > a.slots
       THEN CONCAT('queue #', CAST(a.seat_rank - a.slots AS STRING), ' — ', CAST(a.slots AS STRING),
                   ' seats (budget ÷ $4); its test resumes when a seat frees')
+    WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
+         AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
+      THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
+                  CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign (est. net ROAS)')
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))

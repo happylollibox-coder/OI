@@ -382,3 +382,19 @@ Display-only — nothing spends while paused, no actions, no apply buttons.
   ROAS via mapped-ASIN cost ratio). Population is now the FULL paused set from DIM (68), not
   the coacher table's 44 — campaigns with zero rows in T_WEEKLY_RUN_CAMPAIGN appear too.
   The ⋯ manage button of the legacy list is retired with it (mapping lives in Admin).
+
+## v13 — season ramp: RAISE_TO_TARGET (Ori 2026-08-02)
+
+The gap (Ori's "gift for girl" December example): a keyword ticking along at its June bid
+($0.50) keeps that bid straight through December even when the LY-anchored target rises to
+$1.20 — the target only caps raises and drives reductions. Strong winners get coacher raises
+and parked/idle keywords re-enter via probes at 1.5x target, but the in-between keyword
+(running, a few clicks, not strong) quietly starves through its own season.
+
+Rule (`V_KEYWORD_LIFT`, both arms): **RAISE_TO_TARGET** when `seasonal_now` (its season is
+arriving — LY same-window orders) AND class WINNER or MARGINAL (orders prove the season)
+AND bid < 60% of the current target → glide UP `min(max(bid×1.10, bid+$0.05), target)` per
+day. Never above target from this rule (beyond-target raises stay earned via the coacher);
+losers excluded (they'd lose faster at higher CPCs — the probe path is their way back).
+$0.50 → $1.20 takes ~10 days at this pace. Panel: emerald action, apply button queues the
+raise. At deploy: 2 live ramps (both under-bid seasonal converters at $0.20–0.30 bids).
