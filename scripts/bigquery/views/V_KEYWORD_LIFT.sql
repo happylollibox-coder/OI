@@ -258,7 +258,11 @@ agg AS (
     -- SEAT MECHANISM (Ori 2026-08-01, Portfolio absorbs the launch controller): slots = budget/$4;
     -- seats to proven keywords (roas90/class) then mid-tests then anchored candidates; tested
     -- losers never seated; beyond-seat rows queue at $0.25 until a seat frees.
-    GREATEST(1, CAST(ROUND(c.budget / 4) AS INT64)) AS slots,
+    -- COST-AWARE SEATS (Ori 2026-08-02, ME-SP/PT B2 case): the $4 seat assumes $1 clicks — a
+    -- winner bidding $1.56 takes a $6.24 seat. Winners' bid premium above $1 (x 4 clicks) is
+    -- subtracted from the budget before dividing; after a few sales the budget ladder raises
+    -- the budget and the seats come back.
+    GREATEST(1, CAST(ROUND(GREATEST(0, c.budget - SUM(IF(c.class = 'WINNER', GREATEST(0, 4 * (COALESCE(c.current_bid, 0) - 1)), 0)) OVER (PARTITION BY c.campaign_id)) / 4) AS INT64)) AS slots,
     ROW_NUMBER() OVER (PARTITION BY c.campaign_id ORDER BY
       IF(c.clk90 >= 15 AND c.ord90 = 0 AND NOT c.probing AND NOT c.probe_done AND NOT c.seasonal_now, 1, 0),
       IF(c.class IN ('WINNER','MARGINAL') OR COALESCE(c.roas90, 0) >= 1.0 OR c.probing OR c.probe_done, 0, 1),
@@ -486,7 +490,8 @@ sb_agg AS (
       ORDER BY IF(c.class = 'IDLE' AND NOT c.probing AND NOT c.probe_done, 0, 1),
                IF(c.seasonal_now, 0, 1),
                IF(c.tcpc IS NOT NULL, 0, 1), c.ly_clk DESC, c.clk_w ASC, c.target_text) AS cand_rank,
-    GREATEST(1, CAST(ROUND(c.budget / 4) AS INT64)) AS slots,
+    -- cost-aware seats (Ori 2026-08-02): winners' bid premium above $1 shrinks the seat count
+    GREATEST(1, CAST(ROUND(GREATEST(0, c.budget - SUM(IF(c.class = 'WINNER', GREATEST(0, 4 * (COALESCE(c.current_bid, 0) - 1)), 0)) OVER (PARTITION BY c.campaign_id)) / 4) AS INT64)) AS slots,
     ROW_NUMBER() OVER (PARTITION BY c.campaign_id ORDER BY
       IF(c.clk90 >= 15 AND c.ord90 = 0 AND NOT c.probing AND NOT c.probe_done AND NOT c.seasonal_now, 1, 0),
       IF(c.class IN ('WINNER','MARGINAL') OR COALESCE(c.roas90, 0) >= 1.0 OR c.probing OR c.probe_done, 0, 1),

@@ -541,3 +541,17 @@ always seated first. FUNDER — the window is 28 days. Add tooltips to roles."
 - Every role cell now carries a hover tooltip with its full logic (per engine — the OOB and
   Portfolio texts differ where the definitions differ).
 Mix after the fix: Portfolio 60 FUNDER / 33 WATCH (was 51/21); OOB 22 WINNER / 15 WATCH.
+
+## v17 — cost-aware seats (Ori 2026-08-02)
+
+Trigger (ME-SP/PT B2): $10 budget -> 3 seats by the flat budget/$4 math, but seat 1 is a
+WINNER bidding $1.56 whose 4-click day costs $6.24 — the third seat was phantom money
+(its keyword sat at $0 spend).
+
+Rule (both engines): **the $4 seat assumes $1 clicks — winners pay for their real seat.**
+`slots = max(1, round((budget − winner_premium) / 4))` where winner_premium =
+SUM over WINNER/converting keywords of `max(0, 4 × (bid − $1))`. B2: (10 − 2.24)/4 = **2
+seats** — the winner + one; everything else queues. "After a few sales the budget will
+increase" — that's the existing budget ladder (STRONG/WEAK raises on the ROAS windows):
+sales -> budget raise -> the premium is absorbed and the seats come back. seat_cpc uses the
+same corrected slot count. At deploy: 5 Portfolio campaigns lost 8 phantom seats.

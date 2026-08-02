@@ -299,8 +299,11 @@ withT AS (
 -- max(1, floor(0.20 x budget / 4)) activations/day — 80% of any raise keeps feeding winners.
 seats AS (
   SELECT b.*,
-    GREATEST(1, CAST(ROUND(b.budget / 4) AS INT64)) AS slots,
-    ROUND(GREATEST(SAFE_DIVIDE(b.budget, GREATEST(1, CAST(ROUND(b.budget / 4) AS INT64)) * 4), 0.20), 2) AS seat_cpc,
+    -- COST-AWARE SEATS (Ori 2026-08-02): the $4 seat assumes $1 clicks — a WINNER's bid premium
+    -- above $1 (x 4 clicks) comes off the budget before dividing. ME-SP/PT B2: $10 budget with a
+    -- $1.56 winner -> (10 - 2.24)/4 = 2 seats, not 3. Sales raise the budget, seats come back.
+    GREATEST(1, CAST(ROUND(GREATEST(0, b.budget - SUM(IF(b.converting, GREATEST(0, 4 * (COALESCE(b.current_bid, 0) - 1)), 0)) OVER (PARTITION BY b.campaign_id)) / 4) AS INT64)) AS slots,
+    ROUND(GREATEST(SAFE_DIVIDE(b.budget, GREATEST(1, CAST(ROUND(GREATEST(0, b.budget - SUM(IF(b.converting, GREATEST(0, 4 * (COALESCE(b.current_bid, 0) - 1)), 0)) OVER (PARTITION BY b.campaign_id)) / 4) AS INT64)) * 4), 0.20), 2) AS seat_cpc,
     (b.clk90 >= 15 AND b.ord90 = 0 AND NOT b.seasonal_now) AS tested_loser,
     ROW_NUMBER() OVER (PARTITION BY b.campaign_id ORDER BY
       IF(b.clk90 >= 15 AND b.ord90 = 0 AND NOT b.seasonal_now, 1, 0),
