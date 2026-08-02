@@ -333,6 +333,15 @@ SELECT
   b.tcpc AS target_cpc,
   b.tcpc_src AS target_cpc_source,
   b.slots, b.seat_rank, b.seat_cpc, b.seasonal_now,
+  -- ROLE (Ori 2026-08-02): the keyword's job in the campaign economy (see V_KEYWORD_LIFT)
+  CASE
+    WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN 'PROBE'
+    WHEN b.tested_loser AND NOT b.is_lift_probe THEN 'RETIRED'
+    WHEN b.seat_rank > b.slots THEN 'QUEUED'
+    WHEN COALESCE(b.current_bid, 0) > 0 AND b.current_bid <= 0.30 THEN 'CANDIDATE'
+    WHEN b.converting OR COALESCE(b.roas90, 0) >= 1.0 THEN 'FUNDER'
+    ELSE 'TRIAL'
+  END AS role,
   CASE
     WHEN b.current_bid IS NULL THEN NULL
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN NULL

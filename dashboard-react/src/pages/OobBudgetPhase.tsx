@@ -15,7 +15,7 @@ type Row = {
   daysSince: number | null; action: string; suggested: number | null; reason: string;
 };
 type Kw = {
-  campaignId: string; keywordId: string; adGroupId: string; text: string; matchType: string; slots: number; seatRank: number;
+  campaignId: string; keywordId: string; adGroupId: string; text: string; matchType: string; slots: number; seatRank: number; role: string;
   isAuto: boolean; isPt: boolean; bid: number | null; clicks1: number; spend1: number; cpc1: number | null;
   units1: number; roas1: number | null; clicks2: number; roas2: number | null;
   targetCpc: number | null; targetCpcSrc: string;
@@ -42,6 +42,12 @@ const KW_CLS: Record<string, string> = {
   PARK_WAIT: 'text-sky-300', ACTIVATE: 'text-emerald-400', DEFER_OOB: 'text-faint',
   RAISE_STRONG: 'text-emerald-400', RAISE_WEAK: 'text-emerald-400',
   HOLD: 'text-muted', NO_BID: 'text-faint',
+};
+
+const ROLE_CLS: Record<string, string> = {
+  FUNDER: 'text-emerald-400', WATCH: 'text-amber-400', PROBE: 'text-sky-300', CANDIDATE: 'text-sky-300',
+  TRIAL: 'text-muted', PARKED: 'text-red-400', RETIRED: 'text-red-400', QUEUED: 'text-faint',
+  IDLE: 'text-faint', DEFENSE: 'text-violet-400',
 };
 
 export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) {
@@ -72,7 +78,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
           'OobKeyword.matchType', 'OobKeyword.isAuto', 'OobKeyword.isPt', 'OobKeyword.currentBid',
           'OobKeyword.clicks1d', 'OobKeyword.spend1d', 'OobKeyword.cpc1d', 'OobKeyword.units1d', 'OobKeyword.roas1d',
           'OobKeyword.clicksPrev2', 'OobKeyword.roasPrev2',
-          'OobKeyword.targetCpc', 'OobKeyword.targetCpcSource', 'OobKeyword.slots', 'OobKeyword.seatRank',
+          'OobKeyword.targetCpc', 'OobKeyword.targetCpcSource', 'OobKeyword.slots', 'OobKeyword.seatRank', 'OobKeyword.role',
           'OobKeyword.suggestedBid', 'OobKeyword.bidAction', 'OobKeyword.bidReason',
         ],
       }),
@@ -125,6 +131,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
         matchType: String(r['OobKeyword.matchType'] ?? ''),
         slots: num(r['OobKeyword.slots']) ?? 1,
         seatRank: num(r['OobKeyword.seatRank']) ?? 99,
+        role: String(r['OobKeyword.role'] ?? ''),
         isAuto: bool(r['OobKeyword.isAuto']),
         isPt: bool(r['OobKeyword.isPt']),
         bid: num(r['OobKeyword.currentBid']),
@@ -270,6 +277,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                 <th className="font-normal px-2" title="last complete day — campaign: net ROAS · keyword: clicks + net ROAS">last day</th>
                 <th className="font-normal px-2" title="the 2 days before — same format as last day">prev-2d</th>
                 <th className="font-normal px-2" title="keyword CPC yesterday vs target CPC (ʸ = same 28 days last year · ᵇ = coacher band)">CPC/target</th>
+                <th className="font-normal px-2 text-left" title="the keyword's job in the campaign economy">role</th>
                 <th className="font-normal px-2 text-left">action</th>
                 <th className="font-normal px-2" title="suggested new value for the money setting in 'now $'">→ $</th>
                 <th className="font-normal px-2"></th>
@@ -295,6 +303,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                   <td className="px-2 text-muted whitespace-nowrap">${r.budget.toFixed(0)} <span className="text-faint">bud</span> <span className="text-faint" title="spent yesterday">· ${r.spend.toFixed(2)}</span></td>
                   <td className="px-2 text-muted">{r.roas1 != null ? `${r.roas1.toFixed(2)}×` : '—'}</td>
                   <td className="px-2 text-muted">{r.roasPrev2 != null ? `${r.roasPrev2.toFixed(2)}×` : '—'}</td>
+                  <td className="px-2" />
                   <td className="px-2" />
                   <td className={`px-2 text-left whitespace-nowrap ${ACTION_CLS[r.action] ?? 'text-muted'}`}>{r.action.toLowerCase().replace('_', ' ')}</td>
                   <td className="px-2">{r.suggested != null ? `$${r.suggested.toFixed(2)}` : '—'}</td>
@@ -340,6 +349,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                         {k.cpc1 != null ? `$${k.cpc1.toFixed(2)}` : '—'}</span>
                       <span className="text-faint">{k.targetCpc != null ? ` /$${k.targetCpc.toFixed(2)}${k.targetCpcSrc === 'LY' ? 'ʸ' : 'ᵇ'}` : ''}</span>
                     </td>
+                    <td className={`px-2 text-left whitespace-nowrap ${ROLE_CLS[k.role] ?? 'text-faint'}`}>{k.role.toLowerCase()}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${KW_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace('_', ' ')}</td>
                     <td className="px-2">{k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}</td>
                     <td className="px-2">
@@ -358,7 +368,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                       <td className="px-2" />
                       <td className="px-2 text-faint whitespace-nowrap" title="spent yesterday">{t.spend1d > 0 ? `$${t.spend1d.toFixed(2)}` : '—'}</td>
                       <td className="px-2 text-faint whitespace-nowrap" colSpan={2}>{t.clicks90d}c · {t.orders90d} ord /90d</td>
-                      <td className="px-2" />
+                      <td className="px-2" /><td className="px-2" />
                       <td className="px-2 text-left text-emerald-400 whitespace-nowrap">winner {t.netRoas90d != null ? `${t.netRoas90d.toFixed(2)}×` : ''}</td>
                       <td className="px-2 text-faint">—</td>
                       <td className="px-2" />
@@ -375,7 +385,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                       <td className="px-2 text-faint whitespace-nowrap" colSpan={2}>{t.isBig
                         ? `${t.marketPurchases90d.toLocaleString()} mkt purchases/90d · ${t.clicks90d}c here · 0 orders`
                         : `${t.clicks}c · $${t.spend.toFixed(2)} · 0 orders · 28d`}</td>
-                      <td className="px-2" />
+                      <td className="px-2" /><td className="px-2" />
                       <td className="px-2 text-left text-red-400">negate</td>
                       <td className="px-2 text-faint">—</td>
                       <td className="px-2">

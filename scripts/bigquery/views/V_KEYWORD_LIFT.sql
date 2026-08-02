@@ -516,6 +516,25 @@ SELECT
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
   a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.is_seasonal, a.seasonal_now,
+  -- ROLE (Ori 2026-08-02): the keyword's job in the campaign economy, one word.
+  -- FUNDER pays for everything · WATCH earns but thin · PROBE mid-test · CANDIDATE next up
+  -- · TRIAL gathering its 4 clicks · PARKED allowance-parked (can return) · RETIRED tested
+  -- loser (permanent, seasonal revival exempts) · QUEUED beyond the seats · IDLE waiting
+  CASE
+    WHEN a.is_defense THEN 'DEFENSE'
+    WHEN a.probing OR a.probe_done THEN 'PROBE'
+    WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN 'RETIRED'
+    WHEN a.seat_rank > a.slots THEN 'QUEUED'
+    WHEN a.class = 'WINNER' THEN 'FUNDER'
+    WHEN a.class = 'MARGINAL' THEN 'WATCH'
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'PARKED'
+    WHEN a.class = 'LOSER' THEN 'TRIAL'
+    WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
+         AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season)
+         AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes) THEN 'CANDIDATE'
+    ELSE 'IDLE'
+  END AS role,
+
   -- HEALTHY-CAMPAIGN BUDGET RULE (Ori 2026-08-01 tuning, knob #5): the only budget move for a
   -- not-capped campaign is the loss cut — evidence window (W) AND today both under 0.6x ->
   -- -20% with the seasonal floor ($10 off / $15 peak). Raises belong to the dark ladder
@@ -656,6 +675,25 @@ SELECT
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
   a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.is_seasonal, a.seasonal_now,
+  -- ROLE (Ori 2026-08-02): the keyword's job in the campaign economy, one word.
+  -- FUNDER pays for everything · WATCH earns but thin · PROBE mid-test · CANDIDATE next up
+  -- · TRIAL gathering its 4 clicks · PARKED allowance-parked (can return) · RETIRED tested
+  -- loser (permanent, seasonal revival exempts) · QUEUED beyond the seats · IDLE waiting
+  CASE
+    WHEN a.is_defense THEN 'DEFENSE'
+    WHEN a.probing OR a.probe_done THEN 'PROBE'
+    WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN 'RETIRED'
+    WHEN a.seat_rank > a.slots THEN 'QUEUED'
+    WHEN a.class = 'WINNER' THEN 'FUNDER'
+    WHEN a.class = 'MARGINAL' THEN 'WATCH'
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'PARKED'
+    WHEN a.class = 'LOSER' THEN 'TRIAL'
+    WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
+         AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season)
+         AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes) THEN 'CANDIDATE'
+    ELSE 'IDLE'
+  END AS role,
+
   -- HEALTHY-CAMPAIGN BUDGET RULE (Ori 2026-08-01 tuning, knob #5): the only budget move for a
   -- not-capped campaign is the loss cut — evidence window (W) AND today both under 0.6x ->
   -- -20% with the seasonal floor ($10 off / $15 peak). Raises belong to the dark ladder

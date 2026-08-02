@@ -439,3 +439,28 @@ negated". OobSearchTerm cube gained netRoas90d; the Portfolio panel fetches engi
 is_winner terms alongside its negates. Display-only (winners have no action — they're the
 evidence layer; e.g. a 7d-loser keyword showing 5 terms at 6-48x/90d reads very differently
 than its class alone).
+
+## v16 — keyword ROLE column (Ori 2026-08-02)
+
+Ori: "add a role column — each keyword role in campaign like Funder, Candidate,…"
+
+Both engine views expose `role` — the keyword's job in the campaign economy, one word,
+derived from the same state as the actions (never contradicts them):
+
+| role | meaning |
+|---|---|
+| FUNDER | winner/converter — pays for everything; never pulled down |
+| WATCH | marginal earner (0.7–1.1x) — monitored, EASE/RAISE glides apply |
+| PROBE | mid-test under the Portfolio's 20-click episode |
+| CANDIDATE | next up — seated with a probe slot (Portfolio) / awaiting ACTIVATE (OOB) |
+| TRIAL | gathering its 4-click trial — 1 click does not break |
+| PARKED | allowance-parked loser (can return via seat queue) |
+| RETIRED | tested loser (>= 15 clk/90d, 0 orders) — permanent, seasonal revival exempts |
+| QUEUED | beyond the seats — waiting line |
+| IDLE | seated but no probe slot free |
+| DEFENSE | the moat (Portfolio arm only) |
+
+Cubes KeywordLift/OobKeyword gained `role`; the OOB and Portfolio tables show it as a column
+before `action` (colored: funder emerald · watch amber · probe/candidate sky · parked/retired
+red · queued/idle faint). Portfolio mix at deploy: 196 QUEUED · 102 PROBE · 78 PARKED ·
+51 FUNDER · 45 TRIAL · 41 IDLE · 30 RETIRED · 28 DEFENSE · 27 CANDIDATE · 21 WATCH.

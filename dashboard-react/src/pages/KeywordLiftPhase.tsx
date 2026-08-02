@@ -21,7 +21,7 @@ type Row = {
   vSuggestedBudget: number | null; vBudgetReason: string;
   targetCpc: number | null; kwClass: string; probing: boolean;
   probeClicks: number; probeRoas: number | null;
-  action: string; suggestedBid: number | null; reason: string;
+  role: string; action: string; suggestedBid: number | null; reason: string;
 };
 
 const num = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
@@ -32,6 +32,11 @@ const ACT_CLS: Record<string, string> = {
   PROBE_ADJUST: 'text-amber-400', PROBE_WAIT: 'text-muted', KEEP_TAIL: 'text-muted',
   EASE_TO_TARGET: 'text-amber-400', CUT_TO_TARGET: 'text-red-400', RAISE_TO_TARGET: 'text-emerald-400',
   PARK: 'text-red-400', IDLE: 'text-faint',
+};
+const ROLE_CLS: Record<string, string> = {
+  FUNDER: 'text-emerald-400', WATCH: 'text-amber-400', PROBE: 'text-sky-300', CANDIDATE: 'text-sky-300',
+  TRIAL: 'text-muted', PARKED: 'text-red-400', RETIRED: 'text-red-400', QUEUED: 'text-faint',
+  IDLE: 'text-faint', DEFENSE: 'text-violet-400',
 };
 const CLASS_CLS: Record<string, string> = {
   WINNER: 'text-emerald-400', MARGINAL: 'text-amber-400', LOSER: 'text-red-400', IDLE: 'text-faint',
@@ -134,7 +139,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
         'KeywordLift.spend1d', 'KeywordLift.campSpend1d',
         'KeywordLift.pctDark', 'KeywordLift.slots', 'KeywordLift.seatRank',
         'KeywordLift.isDefense', 'KeywordLift.isSeasonal', 'KeywordLift.seasonalNow', 'KeywordLift.suggestedBudget', 'KeywordLift.budgetReason',
-        'KeywordLift.action', 'KeywordLift.suggestedBid', 'KeywordLift.reason',
+        'KeywordLift.role', 'KeywordLift.action', 'KeywordLift.suggestedBid', 'KeywordLift.reason',
       ],
     }).then(rs => {
       if (!alive) return;
@@ -181,6 +186,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
         seasonalNow: r['KeywordLift.seasonalNow'] === true || r['KeywordLift.seasonalNow'] === 'true',
         vSuggestedBudget: num(r['KeywordLift.suggestedBudget']),
         vBudgetReason: String(r['KeywordLift.budgetReason'] ?? ''),
+        role: String(r['KeywordLift.role'] ?? ''),
         action: String(r['KeywordLift.action'] ?? 'IDLE'),
         suggestedBid: num(r['KeywordLift.suggestedBid']),
         reason: String(r['KeywordLift.reason'] ?? ''),
@@ -302,6 +308,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                 <th className="font-normal px-2" title="last 7 complete days — clicks + net ROAS">last 7d</th>
                 <th className="font-normal px-2" title="the 21 days before (day 8 till 28) — same format">8–28d</th>
                 <th className="font-normal px-2" title="target CPC (last-year / band)">CPC/target</th>
+                <th className="font-normal px-2 text-left" title="the keyword's job in the campaign economy">role</th>
                 <th className="font-normal px-2 text-left">action</th>
                 <th className="font-normal px-2">→ $</th>
                 <th className="font-normal px-2"></th>
@@ -324,6 +331,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                   <td className="px-2 text-muted whitespace-nowrap">${c.budget.toFixed(0)} <span className="text-faint">bud</span> <span className="text-faint" title="spent yesterday">· ${c.campSpend1d.toFixed(2)}</span></td>
                   <td className="px-2 text-muted whitespace-nowrap">{c.campClicks7d}c{c.campRoas7d != null ? ` ${c.campRoas7d.toFixed(2)}×` : ' —'}</td>
                   <td className="px-2 text-muted whitespace-nowrap">{c.campClicks828}c{c.campRoas828 != null ? ` ${c.campRoas828.toFixed(2)}×` : ' —'}</td>
+                  <td className="px-2" />
                   <td className="px-2" />
                   <td className={`px-2 text-left whitespace-nowrap ${budgetSug(c) ? 'text-emerald-400' : 'text-muted'}`}>{budgetSug(c) ? 'budget' : 'hold'}</td>
                   <td className="px-2">{budgetSug(c) ? `$${budgetSug(c)!.suggested!.toFixed(2)}` : '—'}</td>
@@ -358,6 +366,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                     <td className="px-2 text-muted whitespace-nowrap">{k.clicks7d}c{k.roas7d != null ? ` ${k.roas7d.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-muted whitespace-nowrap">{k.clicks828}c{k.roas828 != null ? ` ${k.roas828.toFixed(2)}×` : ' —'}</td>
                     <td className="px-2 text-faint">{k.targetCpc != null ? `$${k.targetCpc.toFixed(2)}` : '—'}</td>
+                    <td className={`px-2 text-left whitespace-nowrap ${ROLE_CLS[k.role] ?? 'text-faint'}`}>{k.role.toLowerCase()}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${ACT_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace(/_/g, ' ')}</td>
                     <td className="px-2">{k.suggestedBid != null ? `$${k.suggestedBid.toFixed(2)}` : '—'}</td>
                     <td className="px-2">
@@ -375,7 +384,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                       <td className="text-left pl-14 pr-2 py-0.5 text-faint whitespace-nowrap">“{w.term}” <span>({w.kind.toLowerCase()})</span></td>
                       <td className="px-2" /><td className="px-2" />
                       <td className="px-2 text-faint whitespace-nowrap" colSpan={2}>{w.clicks90}c · {w.orders90} ord /90d</td>
-                      <td className="px-2" />
+                      <td className="px-2" /><td className="px-2" />
                       <td className="px-2 text-left text-emerald-400 whitespace-nowrap">winner {w.roas90 != null ? `${w.roas90.toFixed(2)}×` : ''}</td>
                       <td className="px-2" /><td className="px-2" />
                       <td className="px-2 text-left text-faint whitespace-nowrap">earns ≥1.1× net over 90d — never negated</td>
@@ -391,7 +400,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                       <span className="text-faint"> · term under "{n.targetText}" ({n.kind.toLowerCase()})</span></td>
                     <td className="px-2" />
                     <td className="px-2 text-faint whitespace-nowrap" title="spent yesterday">{n.spend1d > 0 ? `$${n.spend1d.toFixed(2)}` : '—'}</td>
-                    <td className="px-2" colSpan={3} />
+                    <td className="px-2" colSpan={4} />
                     <td className="px-2 text-left text-red-400 whitespace-nowrap">negate</td>
                     <td className="px-2" />
                     <td className="px-2">
