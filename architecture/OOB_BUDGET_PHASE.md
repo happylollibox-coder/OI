@@ -717,3 +717,12 @@ bid already at the floor: negate its bad terms, nothing left to trim"; role = **
 (alive cheap, its terms are the information). The ANTENNA tooltip now covers both research
 keywords (seed new broads) and floored auto clauses (feed the negate layer). TRIAL is
 reserved for genuinely under-4-click clauses.
+
+### v24.4 — AUTO_RAISE: the third auto lever (Ori: "why is this not raised")
+
+The auto doctrine's raise lever is now in the section itself: an auto WINNER clause
+(>= 1.1x with an order in W) with **>= 4 clicks of evidence**, in a **not-capped** campaign,
+below the $2 cap -> **AUTO_RAISE +15%/day toward $2**. While capped the budget raise stays
+the only lever (never bid up into darkness). Trigger row: ME-SP/AUTO (Purple) substitutes,
+14.43x on 8 clicks at $0.28 -> $0.32. 5 raises live at deploy; invariants clean (none
+capped, none under-evidenced, none above cap, all genuinely upward).

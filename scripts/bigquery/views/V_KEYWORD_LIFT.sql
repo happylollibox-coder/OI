@@ -687,6 +687,10 @@ SELECT
     -- losers re-enter through the probe path at 1.5x target instead.
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc THEN 'RAISE_TO_TARGET'
+    -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
+    -- bids when performance is good. Winner clause with real evidence, campaign not capped:
+    -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
+    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_RAISE'
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
     -- -15%/day (floor $0.30), the real lever is negating bad terms; targets are advisory here.
@@ -723,6 +727,8 @@ SELECT
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
+    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
+      THEN ROUND(LEAST(a.current_bid * 1.15, 2.00), 2)
     WHEN a.class = 'WINNER' THEN NULL
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
@@ -766,6 +772,8 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
+      THEN CONCAT('auto clause performing — ', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x on ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks: raise +15%/day toward $2 (good terms deserve more traffic)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
@@ -881,6 +889,10 @@ SELECT
     -- losers re-enter through the probe path at 1.5x target instead.
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc THEN 'RAISE_TO_TARGET'
+    -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
+    -- bids when performance is good. Winner clause with real evidence, campaign not capped:
+    -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
+    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_RAISE'
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
     -- -15%/day (floor $0.30), the real lever is negating bad terms; targets are advisory here.
@@ -915,6 +927,8 @@ SELECT
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
+    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
+      THEN ROUND(LEAST(a.current_bid * 1.15, 2.00), 2)
     WHEN a.class = 'WINNER' THEN NULL
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
@@ -958,6 +972,8 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
+      THEN CONCAT('auto clause performing — ', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x on ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks: raise +15%/day toward $2 (good terms deserve more traffic)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign (est. net ROAS)')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
