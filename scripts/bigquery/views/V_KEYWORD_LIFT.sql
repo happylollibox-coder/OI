@@ -39,8 +39,24 @@ camps AS (
     LOWER(c.campaign_name) LIKE '%brand defense%' AS is_defense,
     -- v9 (Ori 2026-08-02): seasonal campaigns get their own Weekly Run home — name-based like
     -- is_defense ('prime'/'season' deliberately not matched, too ambiguous)
-    REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal
-  FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c, cap k
+    REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal,
+    -- v19: is the campaign's OWN season running right now (pre-season start -> cooldown end)?
+    ah.holiday_name IS NOT NULL AS season_active
+  FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c
+  LEFT JOIN (SELECT DISTINCT holiday_name FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
+             WHERE CURRENT_DATE('America/New_York') BETWEEN pre_season_start AND COALESCE(cooldown_end, holiday_date)) ah
+    ON ah.holiday_name = CASE
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|santa|advent') THEN 'Christmas'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'valentine') THEN "Valentine's Day"
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'easter') THEN 'Easter'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'halloween') THEN 'Halloween'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'thanksgiving') THEN 'Thanksgiving'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'black friday|bfcm') THEN 'Black Friday'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'cyber monday') THEN 'Cyber Monday'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'back to school') THEN 'Back to School'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'mother.?s day') THEN "Mother's Day"
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'father.?s day') THEN "Father's Day"
+    END, cap k
   -- v4 (Ori 2026-08-01): ANY budget — the Portfolio absorbs the launch controller; low-budget
   -- healthy campaigns run the same seat mechanism (slots = budget/$4). OOB owns them while dark.
   WHERE c.campaign_type = 'SP' AND c.campaign_state = 'ENABLED'
@@ -168,7 +184,7 @@ sp_dark AS (
   FROM sp_sqd GROUP BY 1
 ),
 base AS (
-  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal,
+  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal, c.season_active,
     td.target_text, td.keyword_id, td.ad_group_id, td.match_type,
     LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements') AS is_auto,
     LOWER(td.target_text) LIKE 'asin%' AS is_pt,
@@ -281,8 +297,24 @@ sb_camps AS (
     LOWER(c.campaign_name) LIKE '%brand defense%' AS is_defense,
     -- v9 (Ori 2026-08-02): seasonal campaigns get their own Weekly Run home — name-based like
     -- is_defense ('prime'/'season' deliberately not matched, too ambiguous)
-    REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal
-  FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c, cap k
+    REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal,
+    -- v19: is the campaign's OWN season running right now (pre-season start -> cooldown end)?
+    ah.holiday_name IS NOT NULL AS season_active
+  FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c
+  LEFT JOIN (SELECT DISTINCT holiday_name FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
+             WHERE CURRENT_DATE('America/New_York') BETWEEN pre_season_start AND COALESCE(cooldown_end, holiday_date)) ah
+    ON ah.holiday_name = CASE
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|santa|advent') THEN 'Christmas'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'valentine') THEN "Valentine's Day"
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'easter') THEN 'Easter'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'halloween') THEN 'Halloween'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'thanksgiving') THEN 'Thanksgiving'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'black friday|bfcm') THEN 'Black Friday'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'cyber monday') THEN 'Cyber Monday'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'back to school') THEN 'Back to School'
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'mother.?s day') THEN "Mother's Day"
+      WHEN REGEXP_CONTAINS(LOWER(c.campaign_name), r'father.?s day') THEN "Father's Day"
+    END, cap k
   WHERE c.campaign_type = 'SB' AND c.campaign_state = 'ENABLED'
     AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET')
 ),
@@ -412,7 +444,7 @@ sb_dark AS (
   FROM sb_sqd GROUP BY 1
 ),
 sb_base AS (
-  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal,
+  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal, c.season_active,
     t.target_text, t.keyword_id, t.ad_group_id, t.match_type,
     FALSE AS is_auto, t.is_pt,
     COALESCE(t.keyword_bid, agb.default_bid) AS current_bid,
@@ -536,8 +568,8 @@ SELECT
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'PARKED'
     WHEN a.class = 'LOSER' THEN 'TRIAL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
-         AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season)
-         AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes) THEN 'CANDIDATE'
+         AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season))
+         AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes) THEN 'CANDIDATE'
     ELSE 'IDLE'
   END AS role,
 
@@ -587,7 +619,7 @@ SELECT
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     -- idle pool: promote the next candidates into probes when slots are free
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
-         AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
+         AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
          THEN 'PROBE_START'
     ELSE 'IDLE'
   END AS action,
@@ -610,7 +642,7 @@ SELECT
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
-         AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
+         AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
       -- $1 SEAT-ENTRY FLOOR (Ori 2026-08-02: "i wont move if not") — also the anchorless entry:
       -- no LY target, no band, no winner CPC -> enter at the $1 floor instead of never starting
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
@@ -650,7 +682,7 @@ SELECT
     WHEN a.class = 'LOSER' THEN CONCAT('loser inside the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% allowance — keep gathering')
     WHEN a.class = 'IDLE' AND a.capped
       THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
-    WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
+    WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
       THEN CONCAT(IF(a.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''), 'next probe candidate — lift to $',
                   CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) AS STRING),
                   ' (', CASE WHEN a.tcpc IS NOT NULL AND 1.5 * a.tcpc >= 1.00 THEN '1.5x target CPC'
@@ -696,8 +728,8 @@ SELECT
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'PARKED'
     WHEN a.class = 'LOSER' THEN 'TRIAL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
-         AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season)
-         AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes) THEN 'CANDIDATE'
+         AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season))
+         AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes) THEN 'CANDIDATE'
     ELSE 'IDLE'
   END AS role,
 
@@ -742,7 +774,7 @@ SELECT
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
-         AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
+         AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
          THEN 'PROBE_START'
     ELSE 'IDLE'
   END AS action,
@@ -765,7 +797,7 @@ SELECT
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
-         AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
+         AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
       -- $1 SEAT-ENTRY FLOOR (Ori 2026-08-02: "i wont move if not") — also the anchorless entry:
       -- no LY target, no band, no winner CPC -> enter at the $1 floor instead of never starting
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
@@ -805,7 +837,7 @@ SELECT
     WHEN a.class = 'LOSER' THEN CONCAT('loser inside the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% allowance — keep gathering')
     WHEN a.class = 'IDLE' AND a.capped
       THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
-    WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
+    WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
       THEN CONCAT(IF(a.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''), 'next probe candidate — lift to $',
                   CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) AS STRING),
                   ' (', CASE WHEN a.tcpc IS NOT NULL AND 1.5 * a.tcpc >= 1.00 THEN '1.5x target CPC'

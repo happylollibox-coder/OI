@@ -568,3 +568,22 @@ group** (SP with empty id still falls back to Campaign Negative Keyword). A mult
 SB campaign (BOX-SBS By Age, 12 ad groups) negates the term in every ad group where it
 fired. One-time repair: the 9 rejected terms were re-issued as 17 rows with real ad-group
 ids (sb_negatives_reupload.xlsx, delivered for manual upload).
+
+## v19 — in-season campaigns probe every seat (Ori 2026-08-02)
+
+Trigger (MINT-VIDEO/EXACT BTS): a keyword held seat 3/3 but sat IDLE "waiting for a probe
+slot" — the off-season probe pace (2) throttled a seasonal campaign in the middle of its own
+season. Two compounding causes: (1) `in_peak` only fires for gift_season/prime_event, so
+category back_to_school never gets the 4-probe peak pace; (2) budget seats and probe pace
+are separate throttles, and for a short seasonal window the pace throttle is pure waste.
+
+Rule (`V_KEYWORD_LIFT`): a campaign gets `season_active` (its OWN holiday's window is
+running: pre_season_start -> cooldown_end, name-token -> DIM_US_HOLIDAYS map). When
+`is_seasonal AND season_active`, the probe cap becomes **the seat count** — every funded
+seat may probe at once (each at the $1 entry floor); the budget already caps the risk.
+Evergreen campaigns keep the 2 off / 4 peak pace. At deploy: MINT-VIDEO 3/3, MINT-SP/EXACT
+3/3, FRESH-VIDEO 3/3 probing (FRESH-SP arms hold funder/trial seats; MINT-SP/BROAD is
+capped -> OOB owns it); zero non-seasonal campaigns exceed pace 2.
+
+(Also this session: the retired coacher list's "Not applied / action" chips removed from
+Weekly Run — they counted suggestions with no surface and misread as un-applied uploads.)
