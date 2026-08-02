@@ -390,8 +390,9 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                       )}
                     </td>
                     <td className="px-2">
-                      {bidSug(k) && (
+                      {(bidSug(k) || kItem) && (
                         <button onClick={() => { const it = bidItem(k); if (it) doQueue.removeItem(it.id); else queueKwBid(r, k); }}
+                          title={kItem ? 'queued — click to remove' : 'queue this bid'}
                           className={`px-1.5 py-0 rounded border ${kItem ? 'border-emerald-500/40 text-emerald-300' : 'border-border text-muted hover:bg-surface'}`}>
                           {kItem ? '✓' : 'bid'}
                         </button>

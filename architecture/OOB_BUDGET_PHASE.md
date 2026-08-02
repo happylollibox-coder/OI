@@ -603,4 +603,5 @@ inline input (prefilled with the suggestion, else the current bid, else $1), **E
 the bid** (Esc/blur cancels; min $0.02). The queued item carries source='MANUAL' and shows
 as "$X.XX ✎" in the cell; re-entering replaces the previous item. Manual items ride the same
 DO-queue -> bulksheet -> change-log path as engine suggestions, so cooldowns and the applied
-state treat them identically.
+state treat them identically. The ✓ queue-toggle shows on any row with a queued item — engine
+OR manual — so a hand-set bid can be reviewed and un-queued like any suggestion.

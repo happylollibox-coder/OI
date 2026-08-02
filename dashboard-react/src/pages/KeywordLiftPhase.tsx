@@ -412,8 +412,9 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                       )}
                     </td>
                     <td className="px-2">
-                      {actionable(k) && (
+                      {(actionable(k) || it) && (
                         <button onClick={() => { const x = bidItem(k); if (x) doQueue.removeItem(x.id); else queueBid(k); }}
+                          title={it ? 'queued — click to remove' : 'queue this bid'}
                           className={`px-1.5 py-0 rounded border ${it ? 'border-emerald-500/40 text-emerald-300' : 'border-border text-muted hover:bg-surface'}`}>
                           {it ? '✓' : 'bid'}
                         </button>
