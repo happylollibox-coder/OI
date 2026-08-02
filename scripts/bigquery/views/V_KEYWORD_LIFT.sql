@@ -36,7 +36,10 @@ wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
        FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
 camps AS (
   SELECT c.campaign_id, c.campaign_name, c.daily_budget AS budget,
-    LOWER(c.campaign_name) LIKE '%brand defense%' AS is_defense
+    LOWER(c.campaign_name) LIKE '%brand defense%' AS is_defense,
+    -- v9 (Ori 2026-08-02): seasonal campaigns get their own Weekly Run home — name-based like
+    -- is_defense ('prime'/'season' deliberately not matched, too ambiguous)
+    REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c, cap k
   -- v4 (Ori 2026-08-01): ANY budget — the Portfolio absorbs the launch controller; low-budget
   -- healthy campaigns run the same seat mechanism (slots = budget/$4). OOB owns them while dark.
@@ -165,7 +168,7 @@ sp_dark AS (
   FROM sp_sqd GROUP BY 1
 ),
 base AS (
-  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense,
+  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal,
     td.target_text, td.keyword_id, td.ad_group_id, td.match_type,
     LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements') AS is_auto,
     LOWER(td.target_text) LIKE 'asin%' AS is_pt,
@@ -271,7 +274,10 @@ agg AS (
 -- ═══════════ SB ARM (v2 2026-07-30) — same machinery on SB-native sources ═══════════
 sb_camps AS (
   SELECT c.campaign_id, c.campaign_name, c.daily_budget AS budget,
-    LOWER(c.campaign_name) LIKE '%brand defense%' AS is_defense
+    LOWER(c.campaign_name) LIKE '%brand defense%' AS is_defense,
+    -- v9 (Ori 2026-08-02): seasonal campaigns get their own Weekly Run home — name-based like
+    -- is_defense ('prime'/'season' deliberately not matched, too ambiguous)
+    REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c, cap k
   WHERE c.campaign_type = 'SB' AND c.campaign_state = 'ENABLED'
     AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET')
@@ -402,7 +408,7 @@ sb_dark AS (
   FROM sb_sqd GROUP BY 1
 ),
 sb_base AS (
-  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense,
+  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal,
     t.target_text, t.keyword_id, t.ad_group_id, t.match_type,
     FALSE AS is_auto, t.is_pt,
     COALESCE(t.keyword_bid, agb.default_bid) AS current_bid,
@@ -509,7 +515,7 @@ SELECT
   ROUND(a.sp1, 2) AS spend_1d, ROUND(a.camp_sp1, 2) AS camp_spend_1d,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
-  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.seasonal_now,
+  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.is_seasonal, a.seasonal_now,
   -- HEALTHY-CAMPAIGN BUDGET RULE (Ori 2026-08-01 tuning, knob #5): the only budget move for a
   -- not-capped campaign is the loss cut — evidence window (W) AND today both under 0.6x ->
   -- -20% with the seasonal floor ($10 off / $15 peak). Raises belong to the dark ladder
@@ -627,7 +633,7 @@ SELECT
   ROUND(a.sp1, 2) AS spend_1d, ROUND(a.camp_sp1, 2) AS camp_spend_1d,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
-  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.seasonal_now,
+  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.is_seasonal, a.seasonal_now,
   -- HEALTHY-CAMPAIGN BUDGET RULE (Ori 2026-08-01 tuning, knob #5): the only budget move for a
   -- not-capped campaign is the loss cut — evidence window (W) AND today both under 0.6x ->
   -- -20% with the seasonal floor ($10 off / $15 peak). Raises belong to the dark ladder

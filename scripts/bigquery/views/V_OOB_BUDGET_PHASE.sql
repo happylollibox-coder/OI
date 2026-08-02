@@ -39,7 +39,9 @@ wm_sb AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) 
 camp AS (
   SELECT campaign_id, campaign_name, campaign_type AS channel, campaign_state AS state,
          serving_status, daily_budget AS budget,
-         LOWER(campaign_name) LIKE '%brand defense%' AS is_defense
+         LOWER(campaign_name) LIKE '%brand defense%' AS is_defense,
+         -- v9 (Ori 2026-08-02): seasonal campaigns get their own Weekly Run sections
+         REGEXP_CONTAINS(LOWER(campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
 ),
 anchor AS (
@@ -135,7 +137,7 @@ bc AS (
 ),
 base AS (
   SELECT
-    c.campaign_id, c.campaign_name, c.channel, c.is_defense,
+    c.campaign_id, c.campaign_name, c.channel, c.is_defense, c.is_seasonal,
     IF(lp.campaign_id IS NOT NULL, 'LAUNCH', 'WORKING') AS engine,
     a.d AS anchor_date,
     ROUND(c.budget, 2) AS budget,
@@ -161,7 +163,7 @@ base AS (
     AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET')
 )
 SELECT
-  b.campaign_id, b.campaign_name, b.channel, b.engine, b.anchor_date, b.is_defense,
+  b.campaign_id, b.campaign_name, b.channel, b.engine, b.anchor_date, b.is_defense, b.is_seasonal,
   b.budget AS current_budget, b.spend_1d,
   ROUND(SAFE_DIVIDE(b.spend_1d, b.budget), 2) AS utilization,
   ROUND(b.pd * 100) AS pct_dark,

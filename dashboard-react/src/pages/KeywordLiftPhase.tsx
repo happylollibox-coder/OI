@@ -17,7 +17,7 @@ type Row = {
   clicks7d: number; roas7d: number | null; clicks828: number; roas828: number | null;
   campClicks7d: number; campRoas7d: number | null; campClicks828: number; campRoas828: number | null;
   spend1d: number; campSpend1d: number;
-  pctDark: number; slots: number; seatRank: number; isDefense: boolean; seasonalNow: boolean;
+  pctDark: number; slots: number; seatRank: number; isDefense: boolean; isSeasonal: boolean; seasonalNow: boolean;
   vSuggestedBudget: number | null; vBudgetReason: string;
   targetCpc: number | null; kwClass: string; probing: boolean;
   probeClicks: number; probeRoas: number | null;
@@ -37,7 +37,7 @@ const CLASS_CLS: Record<string, string> = {
   WINNER: 'text-emerald-400', MARGINAL: 'text-amber-400', LOSER: 'text-red-400', IDLE: 'text-faint',
 };
 
-export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
+export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) {
   const doQueue = useDoQueue();
   const [open, setOpen] = useState(false);
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
@@ -49,6 +49,29 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
   const [budMap, setBudMap] = useState<Map<string, Bud>>(new Map());
   const [negs, setNegs] = useState<Neg[]>([]);
   const [oobIds, setOobIds] = useState<Set<string>>(new Set());
+  // v9 (Ori 2026-08-02): the Seasonal section also lists PAUSED seasonal campaigns (display-only,
+  // revival visibility — e.g. the Easter 2026 boosts). CampaignDim = V_DIM_CAMPAIGN_CURRENT flags.
+  type PausedCamp = { id: string; name: string; channel: string; budget: number };
+  const [pausedSeasonal, setPausedSeasonal] = useState<PausedCamp[]>([]);
+  useEffect(() => {
+    if (tier !== 'SEASONAL') return;
+    let alive = true;
+    cubeLoad({
+      dimensions: ['CampaignDim.campaignId', 'CampaignDim.campaignName', 'CampaignDim.channel', 'CampaignDim.dailyBudget'],
+      filters: [{ member: 'CampaignDim.state', operator: 'equals', values: ['PAUSED'] },
+                { member: 'CampaignDim.isSeasonal', operator: 'equals', values: ['true'] },
+                { member: 'CampaignDim.isDefense', operator: 'equals', values: ['false'] }],
+    }).then(rs => {
+      if (!alive) return;
+      setPausedSeasonal((rs as Record<string, unknown>[]).map(r => ({
+        id: String(r['CampaignDim.campaignId'] ?? ''),
+        name: String(r['CampaignDim.campaignName'] ?? ''),
+        channel: String(r['CampaignDim.channel'] ?? 'SP'),
+        budget: num(r['CampaignDim.dailyBudget']) ?? 0,
+      })));
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [tier]);
   useEffect(() => {
     let alive = true;
     // SINGLE-HOME rule (Ori 2026-08-01): capping campaigns (dark > 10%) are owned by the
@@ -111,7 +134,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
         'KeywordLift.campClicks7d', 'KeywordLift.campRoas7d', 'KeywordLift.campClicks828', 'KeywordLift.campRoas828',
         'KeywordLift.spend1d', 'KeywordLift.campSpend1d',
         'KeywordLift.pctDark', 'KeywordLift.slots', 'KeywordLift.seatRank',
-        'KeywordLift.isDefense', 'KeywordLift.seasonalNow', 'KeywordLift.suggestedBudget', 'KeywordLift.budgetReason',
+        'KeywordLift.isDefense', 'KeywordLift.isSeasonal', 'KeywordLift.seasonalNow', 'KeywordLift.suggestedBudget', 'KeywordLift.budgetReason',
         'KeywordLift.action', 'KeywordLift.suggestedBid', 'KeywordLift.reason',
       ],
     }).then(rs => {
@@ -155,6 +178,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
         slots: num(r['KeywordLift.slots']) ?? 1,
         seatRank: num(r['KeywordLift.seatRank']) ?? 99,
         isDefense: r['KeywordLift.isDefense'] === true || r['KeywordLift.isDefense'] === 'true',
+        isSeasonal: r['KeywordLift.isSeasonal'] === true || r['KeywordLift.isSeasonal'] === 'true',
         seasonalNow: r['KeywordLift.seasonalNow'] === true || r['KeywordLift.seasonalNow'] === 'true',
         vSuggestedBudget: num(r['KeywordLift.suggestedBudget']),
         vBudgetReason: String(r['KeywordLift.budgetReason'] ?? ''),
@@ -190,6 +214,9 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
   const camps = [...byCamp.values()].filter(g => {
     const c = g[0];
     if (!c || oobIds.has(c.campaignId) || c.isDefense) return false;
+    // v9 (Ori 2026-08-02): seasonal campaigns get their own section, any tier.
+    if (tier === 'SEASONAL') return c.isSeasonal;
+    if (c.isSeasonal) return false;
     return tier === 'LOW' ? c.budget <= lowCap : c.budget > lowCap;
   });
   const campIds = new Set(camps.map(g => g[0].campaignId));
@@ -249,10 +276,10 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
       <div className="flex items-center gap-1">
         <button className="text-label flex items-center gap-1 flex-1 min-w-0" onClick={() => setOpen(o => !o)}>
           <span className="text-faint">{open ? '▾' : '▸'}</span>
-          <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : 'Portfolio 80/20'}</span>
+          <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : tier === 'SEASONAL' ? 'Seasonal' : 'Portfolio 80/20'}</span>
           <span className="text-faint truncate">
             {failed ? '— unavailable' : rows
-              ? `— ${camps.length} working campaigns · ${nParks} parks · ${nProbes} probes · ${nFound} winners found · ${visNegs.length} negates`
+              ? `— ${camps.length} working campaigns${tier === 'SEASONAL' && pausedSeasonal.length ? ` · ${pausedSeasonal.length} paused for their season` : ''} · ${nParks} parks · ${nProbes} probes · ${nFound} winners found · ${visNegs.length} negates`
               : '— loading…'}
             {' '}· goal: 80% of spend on winners, 1–2 probes hunting the next one
           </span>
@@ -363,6 +390,18 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
               ); })}
             </tbody>
           </table>
+          {tier === 'SEASONAL' && pausedSeasonal.length > 0 && (
+            <div className="mt-2 text-label">
+              <div className="text-faint mb-1">paused — waiting for their season (re-enable in Amazon when it nears):</div>
+              {pausedSeasonal.map(p => (
+                <div key={p.id} className="flex items-center gap-2 px-2 py-0.5 font-mono">
+                  <span className="text-amber-400">⏸</span>
+                  <span className="text-muted">{p.name}</span>
+                  <span className="text-faint">{p.channel} · ${p.budget.toFixed(0)} bud · paused</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

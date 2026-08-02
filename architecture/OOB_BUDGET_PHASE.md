@@ -295,3 +295,36 @@ campaigns 3. if target < bid and net ROAS is marginal reduce slowly toward the t
 **Dark campaigns** (directive 2 — no code change): a Portfolio campaign that goes dark > 10%
 is already caught by the single-home rule — it moves to the Out-of-budget section next refresh
 and the OOB ladder + seat model own its budget and bids until darkness clears.
+
+## v9 — seasonal campaigns get their own home (Ori 2026-08-02)
+
+Ori: "seasonal campaigns should be also separated (seasonal and seasonal out of budget); in
+seasonal also show paused seasonal campaigns; other (paused not seasonal campaigns)."
+
+**`is_seasonal` (campaign grain, both engine views — V_KEYWORD_LIFT + V_OOB_BUDGET_PHASE):**
+name-based, mirroring `is_defense`:
+`REGEXP_CONTAINS(LOWER(campaign_name), 'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday')`.
+'prime'/'season' deliberately NOT matched (too ambiguous — archived 'jewelry prime' etc.).
+Current live set: 6 enabled '(Back to School)' campaigns + 2 paused '(Boost, Easter 2026)'.
+
+**Weekly Run sections (single home, priority defense > seasonal > tier):**
+1–4. The 2×2 (Low budget / Portfolio 80/20 × out-of-budget / healthy) now EXCLUDES seasonal
+   campaigns (`NOT is_seasonal`), as it already excludes defense.
+5. Brand defense — unchanged; a campaign that is both defense and seasonal stays here (the moat
+   outranks the season).
+6. **Seasonal — out of budget** — enabled seasonal campaigns dark > 10%, full OOB grammar
+   (budget ladder + seat model + negates), any tier.
+7. **Seasonal** — enabled healthy seasonal campaigns, full Portfolio grammar (any tier), PLUS
+   **paused seasonal campaigns** as display rows (name + PAUSED badge + budget + season note) so
+   e.g. the Easter 2026 boosts stay visible for revival when their season nears. Paused rows are
+   display-only — no bid/budget actions (nothing serves).
+8. **Other — paused** — replaces the legacy SCALE/MARGIN/CUT coacher list, which by v8 contained
+   EXACTLY the 44 paused campaigns (engines own every enabled+serving campaign, so only paused
+   ones leaked through). Now explicitly: paused AND NOT seasonal, collapsed by default, keeps the
+   manage (map/rename/pause) button and trailing 28d/net-per-day stats, sorted by net/day so
+   profitable-when-paused revival candidates surface first.
+
+Paused campaigns come from a new live-view cube `CampaignDim` on V_DIM_CAMPAIGN_CURRENT
+(campaign_state / is_seasonal / is_defense flags; ARCHIVED excluded everywhere).
+Keyword-grain `seasonal_now` (v8) is unchanged and independent — a seasonal KEYWORD can live in
+any campaign; a seasonal CAMPAIGN is a homing/display concept.

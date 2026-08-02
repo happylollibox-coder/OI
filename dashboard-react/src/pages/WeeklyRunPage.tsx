@@ -148,17 +148,22 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
   // hidden from the SCALE/MARGIN/CUT coacher list — EXCEPT when they have pending negates, which
   // have no other surface on this page yet.
   const [engineOwned, setEngineOwned] = useState<Set<string>>(new Set());
+  // v9 (Ori 2026-08-02): seasonal campaigns (enabled OR paused) have their own sections above —
+  // the paused list below is "Other — paused, NOT seasonal". Flag comes from the backend (CampaignDim).
+  const [seasonalIds, setSeasonalIds] = useState<Set<string>>(new Set());
   useEffect(() => {
     let alive = true;
     Promise.all([
       cubeLoad({ dimensions: ['OobBudget.campaignId', 'OobBudget.pctDark'] }).catch(() => []),
       cubeLoad({ dimensions: ['KeywordLift.campaignId'] }).catch(() => []),
-    ]).then(([oob, lift]) => {
+      cubeLoad({ dimensions: ['CampaignDim.campaignId'], filters: [{ member: 'CampaignDim.isSeasonal', operator: 'equals', values: ['true'] }] }).catch(() => []),
+    ]).then(([oob, lift, seas]) => {
       if (!alive) return;
       const ids = new Set<string>();
       for (const r of oob as Record<string, unknown>[]) if ((Number(r['OobBudget.pctDark']) || 0) > 10) ids.add(String(r['OobBudget.campaignId'] ?? ''));
       for (const r of lift as Record<string, unknown>[]) ids.add(String(r['KeywordLift.campaignId'] ?? ''));
       setEngineOwned(ids);
+      setSeasonalIds(new Set((seas as Record<string, unknown>[]).map(r => String(r['CampaignDim.campaignId'] ?? ''))));
     });
     return () => { alive = false; };
   }, []);
@@ -524,6 +529,8 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
     // Engine-owned campaigns (OOB seat model / Portfolio 80/20) are shown there — single home.
     // (The negate exception is gone: both engine panels now carry their own negates layer.)
     if (engineOwned.has(c.id)) return false;
+    // v9: seasonal campaigns (incl. paused) live in the Seasonal sections above.
+    if (seasonalIds.has(c.id)) return false;
     // PPC mode gate — each mode shows ONLY its own role's campaigns (offense / brand-defense / product-defense).
     // (pool gate removed — all pools show; strategy filter narrows)
     // Strategy gate (offense only — the strategy split is an offense-role slice). Keywords nest under
@@ -795,6 +802,9 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                 <KeywordLiftPhase tier="LOW" />
                 <KeywordLiftPhase tier="HIGH" />
                 <BrandDefensePhase />
+                {/* v9 (Ori 2026-08-02): seasonal campaigns separated — OOB + healthy (incl. paused seasonal) */}
+                <OobBudgetPhase tier="SEASONAL" />
+                <KeywordLiftPhase tier="SEASONAL" />
                 {/* Launch-controller cards DISSOLVED (Ori 2026-08-01): low-budget campaigns live in the
                     Portfolio 80/20 (seat mechanism) or Out-of-budget while dark; the launch BUDGET engine
                     feeds the Portfolio campaign rows. NewCampaignCards is retired from this page. */}
@@ -803,7 +813,7 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                   : (() => {
                     return (
                       <>
-                        <p className="text-label text-subtle mb-3">Keyword bids &amp; search terms to negate.</p>
+                        <p className="text-label text-subtle mb-3">Other — paused campaigns (not seasonal). Nothing spends here; manage ⋯ to map / rename / revive. Sorted by net $/day when active — revival candidates first.</p>
                         <div className="flex flex-col gap-4">
                           {camps.filter(campVisible).length === 0 && (
                             <div className="text-label text-subtle px-2 py-3">
@@ -816,17 +826,18 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                               {' '}<button onClick={() => setActionFilter('all')} className="text-blue-400 hover:underline">Show all</button>
                             </div>
                           )}
-                          {(['SCALE', 'MARGIN', 'CUT'] as const).map(stype => {
-                            const group = camps.filter(c => c.strategyType === stype && campVisible(c));
+                          {(['OTHER'] as const).map(stype => {
+                            // v9: the engines own every enabled campaign and seasonal live above, so
+                            // this list is exactly the paused non-seasonal campaigns — one bucket,
+                            // profitable-when-paused first (revival candidates).
+                            const group = camps.filter(campVisible)
+                              .sort((a, b) => (b.adsNet60d ?? -Infinity) - (a.adsNet60d ?? -Infinity));
                             if (!group.length) return null;
-                            const sm = STRATEGY_META[stype];
-                            const groupSpend = group.reduce((s, c) => s + (c.recentDailySpend ?? 0), 0);
                             return (
                               <div key={stype} className="flex flex-col gap-1.5">
-                                {/* H0 — strategic bucket */}
-                                <div className={`flex items-baseline gap-2 pl-2 border-l-2 ${sm.border}`}>
-                                  <span className={`text-body font-semibold ${sm.cls}`}>{sm.label}</span>
-                                  <span className="text-label text-faint">{group.length} campaign{group.length > 1 ? 's' : ''} · {sm.desc} · spend {fM(groupSpend)}/day</span>
+                                <div className="flex items-baseline gap-2 pl-2 border-l-2 border-border">
+                                  <span className="text-body font-semibold text-muted">OTHER</span>
+                                  <span className="text-label text-faint">{group.length} paused campaign{group.length > 1 ? 's' : ''} · not seasonal · figures are trailing (from before the pause)</span>
                                 </div>
                           {group.map(c => {
                             const ckws = (kws ?? []).filter(k => k.campaignId === c.id && kwVisible(k)).sort((a, b) => Number(b.isAction) - Number(a.isAction) || b.priority - a.priority);
@@ -934,7 +945,7 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                             );
                           })}
                         </div>
-                        <p className="text-label text-subtle mt-3">Grouped by <span className="text-muted">SCALE / MARGIN / CUT</span>. Campaign = header (budgets are in step 2). Level 2 = keywords (why each changes or holds). Level 3 = <span className="text-red-400">search terms to negate</span>.</p>
+                        <p className="text-label text-subtle mt-3">Every enabled campaign is managed in the engine sections above (Out-of-budget / Portfolio 80/20 / Brand defense / Seasonal); this list is only what's paused and not seasonal.</p>
                       </>
                     );
                   })()}

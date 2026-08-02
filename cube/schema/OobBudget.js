@@ -3,7 +3,7 @@
 // channel's anchor day, with dark %, utilization, net-ROAS windows and ONE budget suggestion (the
 // launch controller's dark-gated ladder applied uniformly). Spec: architecture/OOB_BUDGET_PHASE.md.
 cube(`OobBudget`, {
-  sql: `SELECT campaign_id, campaign_name, channel, engine, is_defense, CAST(anchor_date AS STRING) anchor_date,
+  sql: `SELECT campaign_id, campaign_name, channel, engine, is_defense, is_seasonal, CAST(anchor_date AS STRING) anchor_date,
                current_budget, spend_1d, utilization, pct_dark, roas_1d, roas_prev2,
                days_since_budget_change, is_low_tier, action, suggested_budget, reason
         FROM \`onyga-482313.OI.V_OOB_BUDGET_PHASE\``,
@@ -21,6 +21,7 @@ cube(`OobBudget`, {
     channel:       { sql: `channel`,       type: `string` },
     engine:        { sql: `engine`,        type: `string` },
     isDefense:     { sql: `is_defense`,    type: `boolean` },
+    isSeasonal:    { sql: `is_seasonal`,   type: `boolean` },
     isLowTier:     { sql: `is_low_tier`,   type: `boolean` },
     anchorDate:    { sql: `anchor_date`,   type: `string` },
     currentBudget: { sql: `current_budget`,type: `number` },
