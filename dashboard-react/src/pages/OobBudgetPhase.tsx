@@ -24,7 +24,7 @@ type Kw = {
 type Term = {
   campaignId: string; targetText: string; term: string; kind: string;
   clicks: number; orders: number; spend: number; spend1d: number; netRoas: number | null;
-  clicks90d: number; spend90d: number; termClicks90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean;
+  clicks90d: number; spend90d: number; termClicks90d: number; marketPurchases90d: number; isBig: boolean; isWinner: boolean; isNegate: boolean;
 };
 
 const num = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
@@ -80,7 +80,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
           'OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
           'OobSearchTerm.kind', 'OobSearchTerm.clicks', 'OobSearchTerm.orders', 'OobSearchTerm.spend', 'OobSearchTerm.spend1d',
           'OobSearchTerm.netRoas', 'OobSearchTerm.clicks90d', 'OobSearchTerm.spend90d',
-          'OobSearchTerm.termClicks90d', 'OobSearchTerm.isBig', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
+          'OobSearchTerm.termClicks90d', 'OobSearchTerm.marketPurchases90d', 'OobSearchTerm.isBig', 'OobSearchTerm.isWinner', 'OobSearchTerm.isNegate',
         ],
         filters: [{ member: 'OobSearchTerm.clicks90d', operator: 'gte', values: ['3'] },
                   { member: 'OobSearchTerm.engine', operator: 'equals', values: ['OOB'] }],
@@ -147,6 +147,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
         clicks90d: num(r['OobSearchTerm.clicks90d']) ?? 0,
         spend90d: num(r['OobSearchTerm.spend90d']) ?? 0,
         termClicks90d: num(r['OobSearchTerm.termClicks90d']) ?? 0,
+        marketPurchases90d: num(r['OobSearchTerm.marketPurchases90d']) ?? 0,
         isBig: bool(r['OobSearchTerm.isBig']),
         isWinner: bool(r['OobSearchTerm.isWinner']),
         isNegate: bool(r['OobSearchTerm.isNegate']),
@@ -342,7 +343,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
                       <td className="px-2" />
                       <td className="px-2 text-faint whitespace-nowrap" title="spent yesterday">{t.spend1d > 0 ? `$${t.spend1d.toFixed(2)}` : '—'}</td>
                       <td className="px-2 text-faint whitespace-nowrap" colSpan={2}>{t.isBig
-                        ? `${t.termClicks90d}c acct-wide · ${t.clicks90d}c here · 0 orders · 90d`
+                        ? `${t.marketPurchases90d.toLocaleString()} mkt purchases/90d · ${t.clicks90d}c here · 0 orders`
                         : `${t.clicks}c · $${t.spend.toFixed(2)} · 0 orders · 28d`}</td>
                       <td className="px-2" />
                       <td className="px-2 text-left text-red-400">negate</td>

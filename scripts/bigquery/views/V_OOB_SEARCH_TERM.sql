@@ -43,6 +43,29 @@ oob_sb AS (
 ),
 wm_sb AS (SELECT LEAST(MAX(report_date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
           FROM `fivetran-hl.amazon_ads.sb_campaign_report`),
+-- SQP market view per query (Ori 2026-08-01 negate redesign): BIG word = the MARKET buys it —
+-- > 1,000 total purchases on Amazon in the last 90 days per SQP, AND SQP has >= 90 days of
+-- history on the term. A term in SQP with less history = WAIT (no negate of either kind until
+-- the market data matures). Terms Amazon never shows us in SQP take the small-word bar.
+sqp_mw AS (SELECT MAX(week_start_date) mw FROM `onyga-482313.OI.FACT_SEARCH_QUERY`),
+sqp AS (
+  SELECT LOWER(query_text) q, MIN(week_start_date) first_w
+  FROM `onyga-482313.OI.FACT_SEARCH_QUERY` GROUP BY 1
+),
+sqp_win AS (
+  SELECT s.q,
+    s.first_w <= DATE_SUB((SELECT mw FROM sqp_mw), INTERVAL 84 DAY) AS has_90d,
+    COALESCE(w.p90, 0) AS market_purchases_90d
+  FROM sqp s
+  LEFT JOIN (
+    SELECT q, SUM(p) p90 FROM (
+      SELECT LOWER(query_text) q, week_start_date, MAX(TOTAL_PURCHASES) p
+      FROM `onyga-482313.OI.FACT_SEARCH_QUERY`
+      WHERE week_start_date > (SELECT DATE_SUB(mw, INTERVAL 91 DAY) FROM sqp_mw)
+      GROUP BY 1, 2
+    ) GROUP BY q
+  ) w ON w.q = s.q
+),
 -- NEVER negate inside defense campaigns (Ori doctrine: negate brand terms everywhere EXCEPT
 -- defense — brand traffic is the point of the moat). Defense is its own page section.
 defense AS (
@@ -124,23 +147,32 @@ SELECT u.campaign_id, COALESCE(e.engine, e2.engine) AS engine, u.keyword_id, u.t
   u.clicks_90d, u.orders_90d, ROUND(u.spend_90d, 2) AS spend_90d,
   COALESCE(ta.term_clicks_90d, 0) AS term_clicks_90d,
   COALESCE(ta.term_orders_90d, 0) AS term_orders_90d,
-  -- BIG general word = sustained ACCOUNT-WIDE volume over 3 months → judged account-wide
-  (COALESCE(ta.term_clicks_90d, 0) >= 30) AS is_big,
+  -- BIG word (Ori 2026-08-01): the MARKET buys it — >1,000 Amazon purchases in 90d per SQP,
+  -- with >= 90 days of SQP history on the term
+  (sq.q IS NOT NULL AND sq.has_90d AND sq.market_purchases_90d > 1000) AS is_big,
+  (sq.q IS NOT NULL AND NOT sq.has_90d) AS sqp_wait,
+  COALESCE(sq.market_purchases_90d, 0) AS market_purchases_90d,
   (LOWER(TRIM(u.search_term)) = LOWER(TRIM(u.target_text))) AS term_is_keyword,
   (u.orders_90d > 0 OR COALESCE(ta.term_orders_90d, 0) > 0) AS is_winner,
   (u.kind != 'PT'
    AND (u.kind = 'AUTO' OR LOWER(TRIM(u.search_term)) != LOWER(TRIM(u.target_text)))
-   AND CASE WHEN COALESCE(ta.term_clicks_90d, 0) >= 30
+   -- SQP-listed term without 90 days of market history: WAIT — no negate of either kind
+   AND NOT (sq.q IS NOT NULL AND NOT sq.has_90d)
+   AND CASE WHEN sq.q IS NOT NULL AND sq.has_90d AND sq.market_purchases_90d > 1000
             -- big word (Ori 2026-07-30): a young campaign hasn't given it its own trial — negate
             -- only after REAL 90 days (campaign >= 90d old) AND >= 25 clicks IN THIS campaign,
             -- with zero orders anywhere account-wide
-            THEN COALESCE(ta.term_orders_90d, 0) = 0 AND u.clicks_90d >= 25
+            -- big word: the campaign is >= 90 days old, gave it >= 25 clicks of its OWN trial,
+            -- and THIS campaign has no sales on it (Ori 2026-08-01)
+            THEN u.orders_90d = 0 AND u.clicks_90d >= 25
                  AND ca.first_d <= DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY)
-            ELSE u.clicks >= 10 AND u.orders = 0 END) AS is_negate    -- small word: 28 days at this slice are enough
+            -- small word (everything else): 15 clicks · 0 sales · 28 days at this slice
+            ELSE u.clicks >= 15 AND u.orders = 0 END) AS is_negate
 FROM (SELECT * FROM st UNION ALL SELECT * FROM sb_st) u
 LEFT JOIN oob e ON e.campaign_id = u.campaign_id
 LEFT JOIN oob_sb e2 ON e2.campaign_id = u.campaign_id
 LEFT JOIN term_all ta ON ta.term = LOWER(TRIM(u.search_term))
+LEFT JOIN sqp_win sq ON sq.q = LOWER(TRIM(u.search_term))
 LEFT JOIN camp_age ca ON ca.campaign_id = u.campaign_id
 WHERE u.clicks_90d > 0
   AND u.campaign_id NOT IN (SELECT campaign_id FROM defense);

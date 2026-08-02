@@ -241,3 +241,24 @@ hierarchies — campaign, keyword, search term/negate)."
 | Budget floor | **$10 off-season / $15 peak** |
 | Healthy campaigns (all tiers) | ONE budget rule: W AND today both < 0.6 → −20% to the floor (raises belong to the dark ladder — a healthy campaign is not hitting its cap). Brand Defense EXCLUDED from the auto-cut (moat doctrine); flag to include. |
 | Raise formulas | fixed multipliers (the budget ÷ %active projection retired) |
+
+## v7 — negate bars on SQP market data (Ori 2026-08-01)
+
+> "big word is a search term with more than 1000 sells for amazon in last 90 days [per SQP] and
+> sqp have 90 days data on it and this campaign is at least 90 days old, and this campaign gave
+> it ≥25 clicks of its own trial and this campaign have no sells then negate. if exist in sqp but
+> do not has 90 days of data — wait. Small word — everything else: 15 clicks, 0 sales, 28 days."
+
+- **BIG word** = the MARKET buys it: > **1,000 Amazon purchases in 90 days** per SQP
+  (`FACT_SEARCH_QUERY.TOTAL_PURCHASES`, deduped per query-week), **and** SQP history on the term
+  spans ≥ 90 days. Negate only when: campaign ≥ 90 days old AND ≥ 25 clicks of its own trial AND
+  **this campaign** has no sales on the term (the account-wide-orders test is retired — a term
+  converting elsewhere may still be negated here).
+- **SQP-WAIT**: term exists in SQP with < 90 days of history → no negate of either kind until the
+  market data matures (~1,790 term rows protected on day one).
+- **SMALL word** (everything else, incl. terms Amazon never surfaces in SQP): **15 clicks**
+  (raised from 10) · 0 sales · 28 days at this slice.
+- Unchanged guards: term ≠ keyword · AUTO skips the same-word test · PT excluded · never in
+  Brand Defense.
+- First run: OOB 25 negates (9 big + 16 small) · Portfolio 29 (6 big + 23 small); sample big
+  negate: 'gifts for 10 year old girl' — 5,949 market purchases/90d, 37 clicks here, 0 sales.

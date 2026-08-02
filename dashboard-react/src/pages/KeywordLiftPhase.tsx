@@ -43,7 +43,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [failed, setFailed] = useState(false);
 
-  type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; termClicks90: number; isBig: boolean; spend1d: number };
+  type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; marketPurchases90: number; isBig: boolean; spend1d: number };
   type Bud = { budget: number; suggested: number | null; reason: string };
   const [budMap, setBudMap] = useState<Map<string, Bud>>(new Map());
   const [negs, setNegs] = useState<Neg[]>([]);
@@ -81,7 +81,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
     // kills the tier-list negate exception so each campaign truly shows once.
     cubeLoad({
       dimensions: ['OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
-        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.termClicks90d', 'OobSearchTerm.isBig', 'OobSearchTerm.spend1d'],
+        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.marketPurchases90d', 'OobSearchTerm.isBig', 'OobSearchTerm.spend1d'],
       filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT'] },
                 { member: 'OobSearchTerm.isNegate', operator: 'equals', values: ['true'] }],
     }).then(ts => {
@@ -92,7 +92,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
         term: String(r['OobSearchTerm.searchTerm'] ?? ''),
         kind: String(r['OobSearchTerm.kind'] ?? ''),
         clicks90: num(r['OobSearchTerm.clicks90d']) ?? 0,
-        termClicks90: num(r['OobSearchTerm.termClicks90d']) ?? 0,
+        marketPurchases90: num(r['OobSearchTerm.marketPurchases90d']) ?? 0,
         isBig: r['OobSearchTerm.isBig'] === true || r['OobSearchTerm.isBig'] === 'true',
         spend1d: num(r['OobSearchTerm.spend1d']) ?? 0,
       })));
@@ -352,8 +352,8 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' }) {
                     </td>
                     <td className="px-2 text-left text-faint whitespace-nowrap">
                       {n.isBig
-                        ? `big word — ${n.termClicks90} clicks account-wide, 0 orders anywhere in 90d (>=25 in this campaign)`
-                        : `${n.clicks90} clicks · 0 orders in 28d at this slice`}
+                        ? `big word — ${n.marketPurchases90.toLocaleString()} Amazon purchases/90d (SQP), full 90d trial here, no sales`
+                        : `small word — ${n.clicks90} clicks · 0 sales here`}
                     </td>
                   </tr>
                 ); })}
