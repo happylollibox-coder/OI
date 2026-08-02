@@ -2318,15 +2318,33 @@ LEFT JOIN ly_peak_campaign_roas lypr ON sch.seasonal_peak_name = lypr.holiday_na
 -- experiment before its verdict and wastes the test spend. Unlike the cooldown, STOP_TARGET is
 -- ALSO masked; term-grain negation still passes (bleed is handled at the search-term level).
 -- Single source of truth: V_KEYWORD_LIFT (both channels). Ends automatically at the verdict.
+-- Personal seasonal bid ceiling (Ori 2026-08-01: "the coacher should also use the full
+-- resolution — personal LY target first, band fallback"). Same construction as every engine:
+-- the SAME 28 days one year back (364-day offset keeps weekday alignment), per keyword TEXT
+-- account-wide, needs >= 10 LY clicks. Ceiling = LY target x 1.5 (the probe-entry headroom
+-- multiplier), so entries and ceilings share one seasonal anchor that moves DAILY; the band
+-- (2-season cell) is the fallback where no LY history exists.
+ly_ceiling AS (
+  SELECT LOWER(TRIM(targeting)) AS ly_kw,
+    ROUND(SAFE_DIVIDE(SUM(Ads_cost), SUM(Ads_clicks)) * 1.5, 2) AS ly_bid_ceiling
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+  WHERE date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 392 DAY)
+                 AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 365 DAY)
+  GROUP BY 1 HAVING SUM(Ads_clicks) >= 10
+),
 lift_probes AS (
   SELECT DISTINCT keyword_id
   FROM `onyga-482313.OI.V_KEYWORD_LIFT`
   WHERE probing OR action = 'PROBE_START'
 ),
 scored_flagged AS (
-  SELECT *,
-    (keyword_id IS NOT NULL AND keyword_id IN (SELECT keyword_id FROM lift_probes)) AS is_lift_probe
-  FROM scored_raw
+  SELECT sr.*,
+    (sr.keyword_id IS NOT NULL AND sr.keyword_id IN (SELECT keyword_id FROM lift_probes)) AS is_lift_probe,
+    -- personal ceiling only for real keyword text (auto clauses / PTs are not product-specific)
+    IF(LOWER(COALESCE(sr.targeting, '')) IN ('close-match','loose-match','substitutes','complements')
+       OR LOWER(COALESCE(sr.targeting, '')) LIKE 'asin%', NULL, lyc.ly_bid_ceiling) AS ly_bid_ceiling
+  FROM scored_raw sr
+  LEFT JOIN ly_ceiling lyc ON lyc.ly_kw = LOWER(TRIM(sr.targeting))
 ),
 scored AS (
   SELECT * REPLACE(
@@ -2367,7 +2385,9 @@ scored AS (
            -- BEYOND its band toward the hard cap — the SWEET-SPOT PULLBACK tier reels it back under 1.5×.
            -- Without this, the band (strategy_bid_max) would clamp the raise straight back to the edge.
            WHEN coach_mode = 'GUARDIAN' AND COALESCE(target_net_roas_1w, 0) >= 2 THEN th_bid_cap
-           ELSE COALESCE(strategy_bid_max, th_bid_cap) END,
+           -- FULL RESOLUTION (Ori 2026-08-01): the keyword's own seasonal LY ceiling wins over the
+           -- 2-season band cell — ceilings now move daily with the calendar, like probe entries
+           ELSE COALESCE(ly_bid_ceiling, strategy_bid_max, th_bid_cap) END,
       th_bid_cap), 2) AS recommended_bid
   ) FROM scored_flagged
 )

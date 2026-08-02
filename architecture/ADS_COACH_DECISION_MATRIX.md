@@ -255,3 +255,14 @@ Net ROAS used for all bid decisions is **ads-only** (`margin_per_unit × ad-attr
 | 2026-04-13 | Added lag window safety check (3-day look-ahead) for REDUCE_BID and ROAS-based NEGATE_EXACT. |
 | 2026-04-13 | Fixed deploy script: V_ADS_COACH was read but never deployed to BigQuery. |
 | 2026-04-13 | Added paused target guard: INCREASE_BID/REDUCE_BID only fire for ENABLED keywords. Paused/archived → TARGET_PAUSED. |
+
+### 📅 Full-Resolution Bid Ceiling (2026-08-01)
+
+Ori: "The coacher should also use the full resolution (personal LY target first, band fallback)."
+The raise clamp's ceiling is now `COALESCE(personal LY ceiling, strategy_bid_max, th_bid_cap)`
+where the personal ceiling = the keyword's own same-28-days-last-year CPC (364-day offset,
+≥10 LY clicks, account-wide by text, auto clauses/PTs excluded) **× 1.5** — the same headroom
+multiplier probe entries use, so entries and ceilings share one seasonal anchor that moves
+daily. The band (OFF/PEAK cell) remains the fallback for keywords without LY history. Defense
+and GUARDIAN sweet-spot (≥2× 1w) still bypass to the $2 hard cap; reduces untouched.
+Live 2026-08-01: 114/520 coached keywords carry a personal ceiling; 0 inverted raises.
