@@ -7,6 +7,7 @@ import { NewCampaignCards } from './NewCampaignCards';
 import { OobBudgetPhase } from './OobBudgetPhase';
 import { KeywordLiftPhase } from './KeywordLiftPhase';
 import { BrandDefensePhase } from './BrandDefensePhase';
+import { PausedHistoryPhase } from './PausedHistoryPhase';
 
 // Sections 2 (per-campaign budget table) & 3 (plan) were removed 2026-07-18 — budget now lives inside
 // each campaign card in section 4. Flip to true to bring the old sections back.
@@ -805,150 +806,15 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                 {/* v9 (Ori 2026-08-02): seasonal campaigns separated — OOB + healthy (incl. paused seasonal) */}
                 <OobBudgetPhase tier="SEASONAL" />
                 <KeywordLiftPhase tier="SEASONAL" />
+                {/* v12 (Ori 2026-08-02): paused campaigns in the Seasonal table grammar, historic
+                    measures only — Seasonal Paused shows ONLY the relevant season's last occurrence */}
+                <PausedHistoryPhase variant="SEASONAL_PAUSED" />
                 {/* Launch-controller cards DISSOLVED (Ori 2026-08-01): low-budget campaigns live in the
                     Portfolio 80/20 (seat mechanism) or Out-of-budget while dark; the launch BUDGET engine
                     feeds the Portfolio campaign rows. NewCampaignCards is retired from this page. */}
-                {camps === null ? <div className="text-label text-faint">Loading campaigns…</div>
-                  : camps.length === 0 ? <div className="text-label text-subtle">No campaigns for this product.</div>
-                  : (() => {
-                    return (
-                      <>
-                        <p className="text-label text-subtle mb-3">Other — paused campaigns (not seasonal). Nothing spends here; manage ⋯ to map / rename / revive. Sorted by net $/day when active — revival candidates first.</p>
-                        <div className="flex flex-col gap-4">
-                          {camps.filter(campVisible).length === 0 && (
-                            <div className="text-label text-subtle px-2 py-3">
-                              {/* Don't say "nothing to do" when the campaigns simply moved to the launch
-                                  section above — that reads as a bug. */}
-                              {launchCardsShown && camps.some(c => c.ageBucket === 'LOW_BUDGET') && !camps.some(c => c.ageBucket !== 'LOW_BUDGET')
-                                ? 'Only low-budget campaigns here — they’re managed in the launch controller above.'
-                                : actionFilter === 'done' ? 'Nothing applied in the last 3 days.'
-                                : 'Nothing left to do — everything is either applied or holding.'}
-                              {' '}<button onClick={() => setActionFilter('all')} className="text-blue-400 hover:underline">Show all</button>
-                            </div>
-                          )}
-                          {(['OTHER'] as const).map(stype => {
-                            // v9: the engines own every enabled campaign and seasonal live above, so
-                            // this list is exactly the paused non-seasonal campaigns — one bucket,
-                            // profitable-when-paused first (revival candidates).
-                            const group = camps.filter(campVisible)
-                              .sort((a, b) => (b.adsNet60d ?? -Infinity) - (a.adsNet60d ?? -Infinity));
-                            if (!group.length) return null;
-                            return (
-                              <div key={stype} className="flex flex-col gap-1.5">
-                                <div className="flex items-baseline gap-2 pl-2 border-l-2 border-border">
-                                  <span className="text-body font-semibold text-muted">OTHER</span>
-                                  <span className="text-label text-faint">{group.length} paused campaign{group.length > 1 ? 's' : ''} · not seasonal · figures are trailing (from before the pause)</span>
-                                </div>
-                          {group.map(c => {
-                            const ckws = (kws ?? []).filter(k => k.campaignId === c.id && kwVisible(k)).sort((a, b) => Number(b.isAction) - Number(a.isAction) || b.priority - a.priority);
-                            const actCount = ckws.filter(k => k.isAction).length;
-                            const cNegCount = (negs ?? []).filter(n => n.campaignId === c.id).length;
-                            const open = openCamp[c.id] ?? false;
-                            return (
-                              <div key={c.id} className="rounded-lg border border-border/70">
-                                {/* H1 — campaign header (budget is in step 2; here it groups the keyword actions) */}
-                                <div className="flex items-center gap-2 px-2 py-1.5">
-                                  <button onClick={() => setOpenCamp(p => ({ ...p, [c.id]: !open }))} className="text-faint w-4 shrink-0" title={ckws.length ? 'keywords' : 'no keywords'}>{ckws.length ? (open ? '▾' : '▸') : '·'}</button>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-body text-muted truncate" title={c.campaignName}>{c.campaignName}</div>
-                                    <div className="text-label text-faint leading-snug">{c.needsStrategy && <button onClick={() => openManage(c)} className="text-amber-400 hover:underline mr-1" title="this campaign has no strategy — the coach can't manage it until you assign one">⚠ assign strategy ·</button>}{ckws.length ? `${ckws.length} kw${actCount ? `, ${actCount} to change` : ''}` : 'no keywords'}{cNegCount ? <span className="text-red-400">, {cNegCount} to negate</span> : ''}</div>
-                                    {/* per-campaign net ROAS (GROSS_PROFIT/spend) by window — context for the keyword calls below */}
-                                    <div className="text-label font-mono leading-snug mt-0.5" title="net ROAS = gross profit ÷ ad spend, by window">
-                                      <span className="text-faint">net ROAS </span>
-                                      <span className="text-faint">7d </span><RoasCell v={c.roas1w} />
-                                      <span className="text-faint"> · 14d </span><RoasCell v={c.roasPrev1w} />
-                                      <span className="text-faint"> · 28d </span><RoasCell v={c.roas4w} />
-                                      <span className="text-faint"> · spend </span><span className="text-muted">{fM(c.recentDailySpend)}/day</span>
-                                      {c.adsNet60d != null && <><span className="text-faint"> · net </span><span className={npCls(c.adsNet60d / 60)} title="ads net profit per day (60-day average, matching spend)">{fM(c.adsNet60d / 60)}/day</span></>}
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center gap-1 shrink-0 text-label">
-                                    <AppliedDays sug={c.daysSinceSuggestion} chg={null} />
-                                    <button onClick={() => openManage(c)} className="px-1.5 py-0.5 rounded border border-border text-muted hover:bg-white/5" title="manage — map / rename / pause">⋯</button>
-                                  </div>
-                                </div>
-                                {/* H2 — keywords */}
-                                {open && ckws.length > 0 && (
-                                  <div className="border-t border-border/50 px-2 py-1 text-label">
-                                    {ckws.map(k => {
-                                      const d = kwDir(k);
-                                      const kq = !!bidQueuedItem(k);
-                                      const sq = !!stopQueuedItem(k);
-                                      const kNegs = (negs ?? []).filter(n => n.keywordId === k.id);
-                                      // Coacher suggested a change (raise/trim/probe) → its new bid pre-fills the input.
-                                      const suggests = d.label !== 'hold' && k.newBid != null;
-                                      return (
-                                        <div key={k.id} className="border-t border-border/30 first:border-t-0 py-1.5">
-                                          <div className="flex items-center gap-2">
-                                            <span className={`font-medium ${d.cls} w-10 shrink-0`}>{d.label}</span>
-                                            <span className="text-muted flex-1 min-w-0 truncate" title={k.targeting}>{k.targeting} <span className="text-faint">({k.matchType.toLowerCase()})</span>{kNegs.length > 0 && <span className="text-red-400"> · {kNegs.length} to negate</span>}</span>
-                                            <AppliedDays sug={k.daysSinceSuggestion} chg={k.daysSinceChange} />
-                                            {defenseUnderBid(k) && <span className="font-mono shrink-0 text-red-400" title={`bid is below 1.5× CPC ($${defenseMinBid(k)?.toFixed(2)}) — raise to own page 1 and make it costly for competitors`}>⚠ &lt;1.5×CPC</span>}
-                                            {k.targetCpc != null && <span className="font-mono shrink-0 underline text-blue-400/80" title="plan-approved target CPC (the band the bid steers toward)">tgt ${k.targetCpc.toFixed(2)}</span>}
-                                            {/* Manual bid override — editable on every row, even when the coacher holds. Pre-filled with
-                                                the coacher's suggested bid if it proposed one, else the current bid. */}
-                                            <span className="text-faint font-mono shrink-0" title="current bid">{k.currentBid != null ? `$${k.currentBid.toFixed(2)}` : '—'}</span>
-                                            <span className="text-faint shrink-0">→ $</span>
-                                            <input type="number" min={0} step={0.05}
-                                              value={Number((kwBidValue(k) ?? 0).toFixed(2))}
-                                              onChange={e => setKwBidDraft(p => ({ ...p, [k.id]: Math.max(0, Number(e.target.value) || 0) }))}
-                                              title={suggests ? "coacher's suggested bid — edit to override" : 'set a manual bid'}
-                                              className={`w-[4.5rem] font-mono rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500/40 bg-surface/40 border ${suggests ? 'border-blue-500/40 text-blue-300' : 'border-border'}`} />
-                                            <button onClick={() => toggleKwQ(k, c.campaignName)} title="queue this bid" className={`px-2 py-0.5 rounded border shrink-0 ${kq ? 'border-emerald-500/40 text-emerald-400' : 'border-border text-muted hover:bg-white/5'}`}>{kq ? '✓' : 'bid'}</button>
-                                            <button onClick={() => toggleStopQ(k, c.campaignName)} title="stop (pause) this keyword/target so it stops spending" className={`px-2 py-0.5 rounded border shrink-0 ${sq ? 'border-emerald-500/40 text-emerald-400' : 'border-red-500/40 text-red-400 hover:bg-red-500/10'}`}>{sq ? '✓' : 'stop'}</button>
-                                          </div>
-                                          <div className="pl-12 pr-2 mt-0.5 leading-snug flex flex-wrap gap-x-3" title="clicks/day · CPC · net ROAS · units sold, by window">
-                                            {([['7d', k.w1ClkDay, k.w1Cpc, k.w1Roas, k.w1Units], ['28d', k.w4ClkDay, k.w4Cpc, k.w4Roas, k.w4Units], ['peak', k.pkClkDay, k.pkCpc, k.pkRoas, k.pkUnits]] as [string, number | null, number | null, number | null, number | null][]).map(([label, cd, cpc, ro, u]) => (
-                                              <span key={label}><span className="text-faint">{label} </span>{cd != null ? <span className="text-muted">{cd}/d</span> : <span className="text-faint">—</span>}{cpc != null ? <> · <span className="text-muted">${cpc.toFixed(2)}</span></> : ''}{ro != null ? <> · <span className={roasCls(ro)}>{ro.toFixed(2)}×</span></> : ''}{u != null && u > 0 ? <> · <span className="text-muted" title="units sold in this window">{u}u</span></> : ''}</span>
-                                            ))}
-                                          </div>
-                                          <div className="text-faint pl-12 pr-2 leading-snug">{kwReason(k)}</div>
-                                          {/* H3 — non-converting search terms to negate */}
-                                          {kNegs.length > 0 && (
-                                            <div className="pl-12 pr-2 mt-1 flex flex-col gap-1">
-                                              {kNegs.map(n => {
-                                                const nq = !!queuedItem(n.searchTerm, 'NEGATE_TERM', n.campaignName);
-                                                const peak = n.peakConverts
-                                                  ? <span className="text-amber-400">⚠ peak: {n.peakOrders} order{n.peakOrders === 1 ? '' : 's'} · <span className={npCls(n.peakNet)}>{fM(n.peakNet)}</span> net — converts at peak, consider keeping (seasonal)</span>
-                                                  : (n.peakClicks ?? 0) > 0
-                                                    ? <span className="text-faint">peak: 0 orders on {n.peakClicks} clicks — dead at peak too ✓</span>
-                                                    : <span className="text-faint">no peak history</span>;
-                                                return (
-                                                  <div key={n.id} className={`flex items-start gap-2 border-l-2 pl-2 ${n.peakConverts ? 'border-amber-500/40' : 'border-red-500/30'}`}>
-                                                    <span className={`font-medium w-12 shrink-0 ${n.peakConverts ? 'text-amber-400' : 'text-red-400'}`}>negate</span>
-                                                    <div className="min-w-0 flex-1">
-                                                      <div className="text-muted break-words" title={n.searchTerm}>“{n.searchTerm}”</div>
-                                                      <div className="text-faint leading-snug">{n.reason}</div>
-                                                      <div className="leading-snug">{peak}</div>
-                                                    </div>
-                                                    <div className="flex flex-col gap-1 shrink-0 items-end">
-                                                      <button onClick={() => toggleNegQ(n, c.campaignType)} className={`px-2 py-0.5 rounded border ${nq ? 'border-emerald-500/40 text-emerald-400' : n.peakConverts ? 'border-amber-500/50 text-amber-400 hover:bg-amber-500/10' : 'border-red-500/40 text-red-400 hover:bg-red-500/10'}`}>{nq ? '✓' : 'negate'}</button>
-                                                      {/* SP only — SB ads use creative ASINs, a Product-Ad row would be rejected */}
-                                                      {c.campaignType !== 'SB' && n.wrongAsin && n.heroAsin && (() => { const hq = heroAdQueued(n); return (
-                                                        <button onClick={() => toggleHeroAdQ(n, c.campaignType)} title={`add ${n.heroProductName} (${n.heroCvr}% CVR here) as a product ad in this ad group — shows the right colour instead of negating`} className={`px-2 py-0.5 rounded border whitespace-nowrap ${hq ? 'border-emerald-500/40 text-emerald-400' : 'border-blue-500/40 text-blue-400 hover:bg-blue-500/10'}`}>{hq ? '✓' : `+ ${n.heroProductName}`}</button>
-                                                      ); })()}
-                                                    </div>
-                                                  </div>
-                                                );
-                                              })}
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <p className="text-label text-subtle mt-3">Every enabled campaign is managed in the engine sections above (Out-of-budget / Portfolio 80/20 / Brand defense / Seasonal); this list is only what's paused and not seasonal.</p>
-                      </>
-                    );
-                  })()}
+                {/* v12: Other — paused non-seasonal campaigns, last month / 3 months / year
+                    (replaces the legacy coacher list, which held exactly the paused campaigns) */}
+                <PausedHistoryPhase variant="OTHER" />
               </section>
 
               {/* Step 5 — Upload */}

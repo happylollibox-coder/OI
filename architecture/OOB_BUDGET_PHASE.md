@@ -360,3 +360,25 @@ break; keep gathering". The permanent park (15 clk/90d) and the probe verdict (2
 are unchanged — this gate only stops under-evidence in-window reductions.
 Effect at deploy: 22 keywords portfolio-wide moved from PARK/CUT to in-trial KEEP_TAIL;
 49 allowance parks and 5 cuts (all >= 4 clicks) stand.
+
+## v12 — paused sections in the Seasonal grammar, historic-only (Ori 2026-08-02)
+
+Ori: "other format should be like Seasonal but only with historic measures (last month, last
+3 month, last year); also add Seasonal Paused and show only the performance of the relevant
+season last year."
+
+New view **`V_PAUSED_CAMPAIGN_HISTORY`** (cube `PausedHistory`, panel `PausedHistoryPhase`):
+paused campaigns at (campaign, target) grain from FACT history + campaign rollup rows.
+Display-only — nothing spends while paused, no actions, no apply buttons.
+
+- **Seasonal Paused** (after Seasonal): paused seasonal campaigns, ONE column — the relevant
+  season's most recent occurrence (name token → DIM_US_HOLIDAYS holiday; window
+  pre_season_start → COALESCE(cooldown_end, holiday_date)). E.g. the Easter 2026 boosts show
+  their actual Easter-2026 run (BOX-SP 639c · $574 · 0.71× · 17 ord; the keyword rows expose
+  the revival candidates — "easter baskets for teens" 1.85×). Replaces the v9 inline ⏸ rows
+  in the Seasonal section.
+- **Other** (bottom, replaces the legacy SCALE/MARGIN/CUT list entirely): paused non-seasonal
+  campaigns with last month · last 3 months · last year columns (clicks · spend · est. net
+  ROAS via mapped-ASIN cost ratio). Population is now the FULL paused set from DIM (68), not
+  the coacher table's 44 — campaigns with zero rows in T_WEEKLY_RUN_CAMPAIGN appear too.
+  The ⋯ manage button of the legacy list is retired with it (mapping lives in Admin).

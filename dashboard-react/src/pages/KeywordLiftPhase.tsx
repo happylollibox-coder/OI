@@ -49,29 +49,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
   const [budMap, setBudMap] = useState<Map<string, Bud>>(new Map());
   const [negs, setNegs] = useState<Neg[]>([]);
   const [oobIds, setOobIds] = useState<Set<string>>(new Set());
-  // v9 (Ori 2026-08-02): the Seasonal section also lists PAUSED seasonal campaigns (display-only,
-  // revival visibility — e.g. the Easter 2026 boosts). CampaignDim = V_DIM_CAMPAIGN_CURRENT flags.
-  type PausedCamp = { id: string; name: string; channel: string; budget: number };
-  const [pausedSeasonal, setPausedSeasonal] = useState<PausedCamp[]>([]);
-  useEffect(() => {
-    if (tier !== 'SEASONAL') return;
-    let alive = true;
-    cubeLoad({
-      dimensions: ['CampaignDim.campaignId', 'CampaignDim.campaignName', 'CampaignDim.channel', 'CampaignDim.dailyBudget'],
-      filters: [{ member: 'CampaignDim.state', operator: 'equals', values: ['PAUSED'] },
-                { member: 'CampaignDim.isSeasonal', operator: 'equals', values: ['true'] },
-                { member: 'CampaignDim.isDefense', operator: 'equals', values: ['false'] }],
-    }).then(rs => {
-      if (!alive) return;
-      setPausedSeasonal((rs as Record<string, unknown>[]).map(r => ({
-        id: String(r['CampaignDim.campaignId'] ?? ''),
-        name: String(r['CampaignDim.campaignName'] ?? ''),
-        channel: String(r['CampaignDim.channel'] ?? 'SP'),
-        budget: num(r['CampaignDim.dailyBudget']) ?? 0,
-      })));
-    }).catch(() => {});
-    return () => { alive = false; };
-  }, [tier]);
+  // (v12: paused seasonal campaigns moved to their own "Seasonal Paused" section — PausedHistoryPhase)
   useEffect(() => {
     let alive = true;
     // SINGLE-HOME rule (Ori 2026-08-01): capping campaigns (dark > 10%) are owned by the
@@ -279,7 +257,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
           <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : tier === 'SEASONAL' ? 'Seasonal' : 'Portfolio 80/20'}</span>
           <span className="text-faint truncate">
             {failed ? '— unavailable' : rows
-              ? `— ${camps.length} working campaigns${tier === 'SEASONAL' && pausedSeasonal.length ? ` · ${pausedSeasonal.length} paused for their season` : ''} · ${nParks} parks · ${nProbes} probes · ${nFound} winners found · ${visNegs.length} negates`
+              ? `— ${camps.length} working campaigns · ${nParks} parks · ${nProbes} probes · ${nFound} winners found · ${visNegs.length} negates`
               : '— loading…'}
             {' '}· goal: 80% of spend on winners, 1–2 probes hunting the next one
           </span>
@@ -390,18 +368,6 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
               ); })}
             </tbody>
           </table>
-          {tier === 'SEASONAL' && pausedSeasonal.length > 0 && (
-            <div className="mt-2 text-label">
-              <div className="text-faint mb-1">paused — waiting for their season (re-enable in Amazon when it nears):</div>
-              {pausedSeasonal.map(p => (
-                <div key={p.id} className="flex items-center gap-2 px-2 py-0.5 font-mono">
-                  <span className="text-amber-400">⏸</span>
-                  <span className="text-muted">{p.name}</span>
-                  <span className="text-faint">{p.channel} · ${p.budget.toFixed(0)} bud · paused</span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
     </div>
