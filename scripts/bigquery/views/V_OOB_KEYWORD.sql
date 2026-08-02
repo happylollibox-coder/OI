@@ -100,11 +100,15 @@ agb AS (SELECT ad_group_id, ANY_VALUE(default_bid) default_bid
 -- across intents, CONCLUSIVE + enabled only); (3) else NULL. Auto clauses + product targets skip LY
 -- (the clause text is not product-specific across campaigns) — band or nothing.
 ly AS (
-  SELECT LOWER(TRIM(targeting)) AS kw, SUM(Ads_cost) sp, SUM(Ads_clicks) clk
+  -- ly_cpc (personal target anchor) still needs >= 10 LY clicks for quality; ly_ord (the
+  -- seasonal-revival signal) counts from the first LY order in this same 28d window last year.
+  SELECT LOWER(TRIM(targeting)) AS kw,
+         IF(SUM(Ads_clicks) >= 10, ROUND(SAFE_DIVIDE(SUM(Ads_cost), SUM(Ads_clicks)), 2), NULL) AS ly_cpc,
+         SUM(Ads_orders) AS ly_ord
   FROM `onyga-482313.OI.FACT_AMAZON_ADS`
   WHERE date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY)
                  AND DATE_SUB((SELECT d FROM wm), INTERVAL 364 DAY)
-  GROUP BY 1 HAVING SUM(Ads_clicks) >= 10
+  GROUP BY 1 HAVING SUM(Ads_clicks) >= 10 OR SUM(Ads_orders) >= 1
 ),
 season AS (
   SELECT COUNTIF(CURRENT_DATE('America/New_York') BETWEEN boost_start AND cooldown_end) > 0 AS in_peak
@@ -271,9 +275,12 @@ baseN AS (
 -- target CPC resolved BEFORE the bid CASE so converting keywords can be fitted to it (Ori 2026-07-30)
 withT AS (
   SELECT b.*,
-    ROUND(COALESCE(IF(b.is_auto OR b.is_pt, NULL, SAFE_DIVIDE(ly.sp, ly.clk)), bd.cpc_target), 2) AS tcpc,
-    CASE WHEN NOT (b.is_auto OR b.is_pt) AND ly.kw IS NOT NULL THEN 'LY'
-         WHEN bd.cpc_target IS NOT NULL THEN 'BAND' END AS tcpc_src
+    ROUND(COALESCE(IF(b.is_auto OR b.is_pt, NULL, ly.ly_cpc), bd.cpc_target), 2) AS tcpc,
+    CASE WHEN NOT (b.is_auto OR b.is_pt) AND ly.ly_cpc IS NOT NULL THEN 'LY'
+         WHEN bd.cpc_target IS NOT NULL THEN 'BAND' END AS tcpc_src,
+    -- SEASONAL REVIVAL (Ori 2026-08-01): sold in this same 28d window LAST YEAR -> its season is
+    -- arriving; it is never permanent-parked and jumps the candidate queue for a seat
+    COALESCE(ly.ly_ord, 0) >= 1 AND NOT (b.is_auto OR b.is_pt) AS seasonal_now
   FROM baseN b
   LEFT JOIN ly ON ly.kw = LOWER(TRIM(b.target_text))
   LEFT JOIN camp_parent cp ON cp.cid = b.campaign_id
@@ -294,10 +301,11 @@ seats AS (
   SELECT b.*,
     GREATEST(1, CAST(ROUND(b.budget / 4) AS INT64)) AS slots,
     ROUND(GREATEST(SAFE_DIVIDE(b.budget, GREATEST(1, CAST(ROUND(b.budget / 4) AS INT64)) * 4), 0.20), 2) AS seat_cpc,
-    (b.clk90 >= 15 AND b.ord90 = 0) AS tested_loser,
+    (b.clk90 >= 15 AND b.ord90 = 0 AND NOT b.seasonal_now) AS tested_loser,
     ROW_NUMBER() OVER (PARTITION BY b.campaign_id ORDER BY
-      IF(b.clk90 >= 15 AND b.ord90 = 0, 1, 0),
+      IF(b.clk90 >= 15 AND b.ord90 = 0 AND NOT b.seasonal_now, 1, 0),
       IF(b.converting OR COALESCE(b.roas90, 0) >= 1.0, 0, 1),
+      IF(b.seasonal_now, 0, 1),
       COALESCE(b.roas90, 0) DESC,
       IF(b.clk90 > 0, 0, 1),
       b.clk90 DESC,
@@ -324,7 +332,7 @@ SELECT
   b.converting, b.days_since_change,
   b.tcpc AS target_cpc,
   b.tcpc_src AS target_cpc_source,
-  b.slots, b.seat_rank, b.seat_cpc,
+  b.slots, b.seat_rank, b.seat_cpc, b.seasonal_now,
   CASE
     WHEN b.current_bid IS NULL THEN NULL
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN NULL
@@ -404,7 +412,8 @@ SELECT
                 CAST(b.slots AS STRING), ' seats (budget ÷ $4); its test resumes when a seat frees'))
     WHEN b.current_bid <= 0.30 THEN
       IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)),
-         CONCAT('seat freed — ACTIVATE at ', IF(b.tcpc IS NOT NULL, '1.5x target CPC', 'the per-seat affordable'),
+         CONCAT(IF(b.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''),
+                'seat freed — ACTIVATE at ', IF(b.tcpc IS NOT NULL, '1.5x target CPC', 'the per-seat affordable'),
                 ' to resume its test (', CAST(b.clk90 AS STRING), '/', CAST(x.tested_clk AS STRING), ' clicks so far)'),
          'seat ready — activates on a coming day (20% pace: 80% of the budget keeps feeding the winners)')
     WHEN b.converting THEN CASE

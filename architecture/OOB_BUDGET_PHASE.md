@@ -262,3 +262,36 @@ hierarchies — campaign, keyword, search term/negate)."
   Brand Defense.
 - First run: OOB 25 negates (9 big + 16 small) · Portfolio 29 (6 big + 23 small); sample big
   negate: 'gifts for 10 year old girl' — 5,949 market purchases/90d, 37 clicks here, 0 sales.
+
+## v8 — seasonal revival + target-vs-bid reductions (Ori 2026-08-02)
+
+Ori: "1. implement the seasonal revival rule 2. the out of budget methodology should catch dark
+campaigns 3. if target < bid and net ROAS is marginal reduce slowly toward the target bid
+4. if target < bid and net ROAS is loosing reduce to the target bid."
+
+**Seasonal revival** (`seasonal_now`, both engines — `V_KEYWORD_LIFT` + `V_OOB_KEYWORD`):
+- Signal: the keyword TEXT (account-wide) had **≥ 1 ad order in this same 28-day window last
+  year** (364-day offset, the same `ly` CTE that anchors the personal target CPC). Auto clauses
+  and product targets excluded. The window slides daily, so "christmas gift for girl" flips
+  seasonal in late October automatically and flips back after the season.
+- Effect: a `seasonal_now` keyword is **never permanent-parked as a tested loser** (the
+  ≥15 clk/90d · 0-order park is gated `AND NOT seasonal_now`) and **jumps the candidate queue** —
+  seat_rank and cand_rank order it right after the proven/converting keys, so it takes the next
+  freed seat and probe slot. ACTIVATE/probe reasons carry a "SEASONAL REVIVAL" prefix.
+- The `ly` CTE gate widened: `HAVING clicks >= 10 OR orders >= 1` — the CPC anchor (`ly_cpc`)
+  still requires ≥ 10 LY clicks (quality), but a 4-click 2-order LY seller now revives.
+- Current-season evidence still wins: a revived keyword that loses NOW can still hit the loser
+  allowance PARK — LY signal opens the door, this year's clicks decide.
+
+**Target-vs-bid reductions** (`V_KEYWORD_LIFT`, both arms — bid > target_cpc + $0.05):
+- `MARGINAL` (0.7–1.1×): action **EASE_TO_TARGET** — glide `max(bid × 0.95, tcpc)` per day
+  (slow reduction toward the target; the −5%/day grammar shared with OOB EASE).
+- `LOSER` (inside the allowance): action **CUT_TO_TARGET** — suggested_bid = `tcpc` in one step.
+- `WINNER`: untouched — established doctrine, real results own winning bids; the target
+  only governs entries and raise ceilings, never pulls a winner down.
+- Ordering: the allowance PARK still fires first for losers beyond the 20/40% pool; only the
+  kept tail gets CUT_TO_TARGET. Both actions dedupe against the 1-day cooldown as usual.
+
+**Dark campaigns** (directive 2 — no code change): a Portfolio campaign that goes dark > 10%
+is already caught by the single-home rule — it moves to the Out-of-budget section next refresh
+and the OOB ladder + seat model own its budget and bids until darkness clears.

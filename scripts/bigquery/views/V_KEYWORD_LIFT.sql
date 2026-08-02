@@ -111,12 +111,15 @@ episode AS (
 ),
 -- target CPC (probe entry anchor): LY same-28d-last-year else band (keywords only)
 ly AS (
-  SELECT LOWER(TRIM(targeting)) AS kw, ROUND(SAFE_DIVIDE(SUM(Ads_cost), SUM(Ads_clicks)), 2) AS ly_cpc,
-         SUM(Ads_clicks) AS ly_clk
+  -- ly_cpc (the personal target anchor) still needs >= 10 LY clicks for quality; ly_ord (the
+  -- seasonal-revival signal) counts from the first LY order — a 4-click 2-order LY seller revives.
+  SELECT LOWER(TRIM(targeting)) AS kw,
+         IF(SUM(Ads_clicks) >= 10, ROUND(SAFE_DIVIDE(SUM(Ads_cost), SUM(Ads_clicks)), 2), NULL) AS ly_cpc,
+         SUM(Ads_clicks) AS ly_clk, SUM(Ads_orders) AS ly_ord
   FROM `onyga-482313.OI.FACT_AMAZON_ADS`
   WHERE date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY)
                  AND DATE_SUB((SELECT d FROM wm), INTERVAL 364 DAY)
-  GROUP BY 1 HAVING SUM(Ads_clicks) >= 10
+  GROUP BY 1 HAVING SUM(Ads_clicks) >= 10 OR SUM(Ads_orders) >= 1
 ),
 camp_parent AS (
   SELECT CAST(f.campaign_id AS STRING) cid, ANY_VALUE(p.parent_name) parent_name
@@ -181,6 +184,11 @@ base AS (
     ROUND(COALESCE(IF(LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements')
                       OR LOWER(td.target_text) LIKE 'asin%', NULL, l.ly_cpc), bd.cpc_target), 2) AS tcpc,
     COALESCE(l.ly_clk, 0) AS ly_clk,
+    -- SEASONAL REVIVAL (Ori 2026-08-01): it SOLD in this same 28-day window last year — its
+    -- season is arriving; exempt from the tested-loser bar and jump the seat queue
+    COALESCE(l.ly_ord, 0) >= 1
+      AND NOT (LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements')
+               OR LOWER(td.target_text) LIKE 'asin%') AS seasonal_now,
     COALESCE(dk.pd, 0) > 0.10 AS capped,
     ROUND(COALESCE(dk.pd, 0) * 100) AS pct_dark
   FROM camps c
@@ -242,14 +250,17 @@ agg AS (
     -- candidate rank for probe promotion: anchored first, then LY volume, then least-tested
     ROW_NUMBER() OVER (PARTITION BY c.campaign_id
       ORDER BY IF(c.class = 'IDLE' AND NOT c.probing AND NOT c.probe_done, 0, 1),
+               IF(c.seasonal_now, 0, 1),
                IF(c.tcpc IS NOT NULL, 0, 1), c.ly_clk DESC, c.clk_w ASC, c.target_text) AS cand_rank,
     -- SEAT MECHANISM (Ori 2026-08-01, Portfolio absorbs the launch controller): slots = budget/$4;
     -- seats to proven keywords (roas90/class) then mid-tests then anchored candidates; tested
     -- losers never seated; beyond-seat rows queue at $0.25 until a seat frees.
     GREATEST(1, CAST(ROUND(c.budget / 4) AS INT64)) AS slots,
     ROW_NUMBER() OVER (PARTITION BY c.campaign_id ORDER BY
-      IF(c.clk90 >= 15 AND c.ord90 = 0 AND NOT c.probing AND NOT c.probe_done, 1, 0),
+      IF(c.clk90 >= 15 AND c.ord90 = 0 AND NOT c.probing AND NOT c.probe_done AND NOT c.seasonal_now, 1, 0),
       IF(c.class IN ('WINNER','MARGINAL') OR COALESCE(c.roas90, 0) >= 1.0 OR c.probing OR c.probe_done, 0, 1),
+      -- seasonal revival: sold in this window last year -> jumps the queue as its season arrives
+      IF(c.seasonal_now, 0, 1),
       COALESCE(c.roas90, 0) DESC,
       IF(c.clk90 > 0, 0, 1),
       c.clk90 DESC,
@@ -408,6 +419,7 @@ sb_base AS (
     COALESCE(ep.ep_ord, 0) ep_ord,
     ROUND(COALESCE(IF(t.is_pt, NULL, l.ly_cpc), fb.cpc_target, bd.cpc_target), 2) AS tcpc,
     COALESCE(l.ly_clk, 0) AS ly_clk,
+    COALESCE(l.ly_ord, 0) >= 1 AND NOT t.is_pt AS seasonal_now,
     COALESCE(dk.pd, 0) > 0.10 AS capped,
     ROUND(COALESCE(dk.pd, 0) * 100) AS pct_dark
   FROM sb_camps c
@@ -466,11 +478,14 @@ sb_agg AS (
             ROWS UNBOUNDED PRECEDING) AS loser_cum_sp,
     ROW_NUMBER() OVER (PARTITION BY c.campaign_id
       ORDER BY IF(c.class = 'IDLE' AND NOT c.probing AND NOT c.probe_done, 0, 1),
+               IF(c.seasonal_now, 0, 1),
                IF(c.tcpc IS NOT NULL, 0, 1), c.ly_clk DESC, c.clk_w ASC, c.target_text) AS cand_rank,
     GREATEST(1, CAST(ROUND(c.budget / 4) AS INT64)) AS slots,
     ROW_NUMBER() OVER (PARTITION BY c.campaign_id ORDER BY
-      IF(c.clk90 >= 15 AND c.ord90 = 0 AND NOT c.probing AND NOT c.probe_done, 1, 0),
+      IF(c.clk90 >= 15 AND c.ord90 = 0 AND NOT c.probing AND NOT c.probe_done AND NOT c.seasonal_now, 1, 0),
       IF(c.class IN ('WINNER','MARGINAL') OR COALESCE(c.roas90, 0) >= 1.0 OR c.probing OR c.probe_done, 0, 1),
+      -- seasonal revival: sold in this window last year -> jumps the queue as its season arrives
+      IF(c.seasonal_now, 0, 1),
       COALESCE(c.roas90, 0) DESC,
       IF(c.clk90 > 0, 0, 1),
       c.clk90 DESC,
@@ -494,7 +509,7 @@ SELECT
   ROUND(a.sp1, 2) AS spend_1d, ROUND(a.camp_sp1, 2) AS camp_spend_1d,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
-  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense,
+  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.seasonal_now,
   -- HEALTHY-CAMPAIGN BUDGET RULE (Ori 2026-08-01 tuning, knob #5): the only budget move for a
   -- not-capped campaign is the loss cut — evidence window (W) AND today both under 0.6x ->
   -- -20% with the seasonal floor ($10 off / $15 peak). Raises belong to the dark ladder
@@ -516,13 +531,18 @@ SELECT
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN 'PROBE_ADJUST'
     WHEN a.probing THEN 'PROBE_WAIT'
     -- tested loser (>=15 clicks/90d, no sale): permanent park — its seat frees for the next test
-    WHEN a.clk90 >= 15 AND a.ord90 = 0 THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK', 'IDLE')
+    WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK', 'IDLE')
     -- SEAT MECHANISM (Ori 2026-08-01): beyond the budget/$4 seats -> queue at $0.25
     WHEN a.seat_rank > a.slots THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK_WAIT', 'IDLE')
     -- the 80% pool
-    WHEN a.class IN ('WINNER','MARGINAL') THEN 'KEEP'
+    WHEN a.class = 'WINNER' THEN 'KEEP'
+    -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
+    -- TO the target bid. Winners are never pulled down.
+    WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'EASE_TO_TARGET'
+    WHEN a.class = 'MARGINAL' THEN 'KEEP'
     -- losers beyond the 20% allowance → park (worst first; the cum-sum keeps the best within it)
     WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
+    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     -- idle pool: promote the next candidates into probes when slots are free
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
@@ -536,10 +556,14 @@ SELECT
     WHEN a.probe_done THEN 0.25
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
     WHEN a.probing THEN NULL
-    WHEN a.clk90 >= 15 AND a.ord90 = 0 THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
+    WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
     WHEN a.seat_rank > a.slots THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
-    WHEN a.class IN ('WINNER','MARGINAL') THEN NULL
+    WHEN a.class = 'WINNER' THEN NULL
+    WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
+      THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
+    WHEN a.class = 'MARGINAL' THEN NULL
     WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
+    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
@@ -559,21 +583,25 @@ SELECT
       THEN CONCAT('probing (', CAST(a.ep_clk AS STRING), '/20 clicks) — 6+ clicks yesterday, no sale yet: -5% daily descent')
     WHEN a.probing
       THEN CONCAT('probing (', CAST(a.ep_clk AS STRING), '/20 clicks since ', CAST(a.inc_date AS STRING), ') — let the test run')
-    WHEN a.clk90 >= 15 AND a.ord90 = 0
+    WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now
       THEN CONCAT('tested ', CAST(a.clk90 AS STRING), ' clicks/90d with 0 orders — permanent park; its seat goes to the next candidate')
     WHEN a.seat_rank > a.slots
       THEN CONCAT('queue #', CAST(a.seat_rank - a.slots AS STRING), ' — ', CAST(a.slots AS STRING),
                   ' seats (budget ÷ $4); its test resumes when a seat frees')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign')
+    WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
+      THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))
     WHEN a.class = 'MARGINAL' THEN CONCAT('marginal: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x — in the 80% pool, watch')
     WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
       THEN CONCAT('loser beyond the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% exploration budget — park $0.25 (spend goes to the winners)')
+    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
+      THEN CONCAT('losing at ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — straight to the target bid $', CAST(a.tcpc AS STRING))
     WHEN a.class = 'LOSER' THEN CONCAT('loser inside the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% allowance — keep gathering')
     WHEN a.class = 'IDLE' AND a.capped
       THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
     WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
          AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
-      THEN CONCAT('next probe candidate — lift to $',
+      THEN CONCAT(IF(a.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''), 'next probe candidate — lift to $',
                   CAST(ROUND(LEAST(COALESCE(1.5 * a.tcpc, a.win_cpc), 2.00), 2) AS STRING),
                   ' (', IF(a.tcpc IS NOT NULL, '1.5x target CPC', "winners' avg CPC"), '), verdict at 20 clicks')
     ELSE 'idle — waiting for a probe slot'
@@ -599,7 +627,7 @@ SELECT
   ROUND(a.sp1, 2) AS spend_1d, ROUND(a.camp_sp1, 2) AS camp_spend_1d,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
-  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense,
+  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.seasonal_now,
   -- HEALTHY-CAMPAIGN BUDGET RULE (Ori 2026-08-01 tuning, knob #5): the only budget move for a
   -- not-capped campaign is the loss cut — evidence window (W) AND today both under 0.6x ->
   -- -20% with the seasonal floor ($10 off / $15 peak). Raises belong to the dark ladder
@@ -619,11 +647,16 @@ SELECT
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN 'PROBE_ADJUST'
     WHEN a.probing THEN 'PROBE_WAIT'
     -- tested loser (>=15 clicks/90d, no sale): permanent park — its seat frees for the next test
-    WHEN a.clk90 >= 15 AND a.ord90 = 0 THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK', 'IDLE')
+    WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK', 'IDLE')
     -- SEAT MECHANISM (Ori 2026-08-01): beyond the budget/$4 seats -> queue at $0.25
     WHEN a.seat_rank > a.slots THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK_WAIT', 'IDLE')
-    WHEN a.class IN ('WINNER','MARGINAL') THEN 'KEEP'
+    WHEN a.class = 'WINNER' THEN 'KEEP'
+    -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
+    -- TO the target bid. Winners are never pulled down.
+    WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'EASE_TO_TARGET'
+    WHEN a.class = 'MARGINAL' THEN 'KEEP'
     WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
+    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
@@ -636,10 +669,14 @@ SELECT
     WHEN a.probe_done THEN 0.25
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
     WHEN a.probing THEN NULL
-    WHEN a.clk90 >= 15 AND a.ord90 = 0 THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
+    WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
     WHEN a.seat_rank > a.slots THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
-    WHEN a.class IN ('WINNER','MARGINAL') THEN NULL
+    WHEN a.class = 'WINNER' THEN NULL
+    WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
+      THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
+    WHEN a.class = 'MARGINAL' THEN NULL
     WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
+    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
@@ -659,21 +696,25 @@ SELECT
       THEN CONCAT('probing (', CAST(a.ep_clk AS STRING), '/20 clicks) — 6+ clicks yesterday, no sale yet: -5% daily descent')
     WHEN a.probing
       THEN CONCAT('probing (', CAST(a.ep_clk AS STRING), '/20 clicks since ', CAST(a.inc_date AS STRING), ') — let the test run')
-    WHEN a.clk90 >= 15 AND a.ord90 = 0
+    WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now
       THEN CONCAT('tested ', CAST(a.clk90 AS STRING), ' clicks/90d with 0 orders — permanent park; its seat goes to the next candidate')
     WHEN a.seat_rank > a.slots
       THEN CONCAT('queue #', CAST(a.seat_rank - a.slots AS STRING), ' — ', CAST(a.slots AS STRING),
                   ' seats (budget ÷ $4); its test resumes when a seat frees')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign (est. net ROAS)')
+    WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
+      THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))
     WHEN a.class = 'MARGINAL' THEN CONCAT('marginal: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x — in the 80% pool, watch (est. net ROAS)')
     WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
       THEN CONCAT('loser beyond the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% exploration budget — park $0.25 (spend goes to the winners)')
+    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
+      THEN CONCAT('losing at ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — straight to the target bid $', CAST(a.tcpc AS STRING))
     WHEN a.class = 'LOSER' THEN CONCAT('loser inside the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% allowance — keep gathering')
     WHEN a.class = 'IDLE' AND a.capped
       THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
     WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
          AND COALESCE(a.tcpc, a.win_cpc) IS NOT NULL
-      THEN CONCAT('next probe candidate — lift to $',
+      THEN CONCAT(IF(a.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''), 'next probe candidate — lift to $',
                   CAST(ROUND(LEAST(COALESCE(1.5 * a.tcpc, a.win_cpc), 2.00), 2) AS STRING),
                   ' (', IF(a.tcpc IS NOT NULL, '1.5x target CPC', "winners' avg CPC"), '), verdict at 20 clicks')
     ELSE 'idle — waiting for a probe slot'

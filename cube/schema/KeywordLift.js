@@ -56,6 +56,7 @@ cube(`KeywordLift`, {
     slots:        { sql: `slots`,         type: `number` },
     seatRank:     { sql: `seat_rank`,     type: `number` },
     isDefense:    { sql: `is_defense`,    type: `boolean` },
+    seasonalNow:  { sql: `seasonal_now`,  type: `boolean` },
     suggestedBudget: { sql: `suggested_budget`, type: `number` },
     budgetReason: { sql: `budget_reason`, type: `string` },
     action:       { sql: `action`,        type: `string` },
