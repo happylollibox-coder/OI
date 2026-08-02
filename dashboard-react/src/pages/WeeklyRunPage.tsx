@@ -781,6 +781,8 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                 <CoachFlowchart />
                 {/* out-of-budget technical phase — dark campaigns + one budget suggestion each (V_OOB_BUDGET_PHASE) */}
                 {/* 2x2 split (Ori 2026-08-01): state (dark / healthy) x tier (low budget / working) */}
+                {/* v24 (Ori 2026-08-02): auto campaigns first — their own single home */}
+                <KeywordLiftPhase tier="AUTO" />
                 <OobBudgetPhase tier="LOW" />
                 <OobBudgetPhase tier="HIGH" />
                 <KeywordLiftPhase tier="LOW" />

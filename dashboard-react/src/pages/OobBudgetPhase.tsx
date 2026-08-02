@@ -10,7 +10,7 @@ import { useDoQueue } from '../hooks/useDoQueue';
 // Spec: architecture/OOB_BUDGET_PHASE.md.
 
 type Row = {
-  id: string; name: string; channel: string; engine: string; isDefense: boolean; isSeasonal: boolean; isLowTier: boolean; budget: number; spend: number;
+  id: string; name: string; channel: string; engine: string; isDefense: boolean; isSeasonal: boolean; isAutoCampaign: boolean; isLowTier: boolean; budget: number; spend: number;
   util: number | null; dark: number; roas1: number | null; roasPrev2: number | null;
   daysSince: number | null; action: string; suggested: number | null; reason: string;
 };
@@ -76,7 +76,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
     Promise.all([
       cubeLoad({
         dimensions: [
-          'OobBudget.campaignId', 'OobBudget.campaignName', 'OobBudget.channel', 'OobBudget.engine', 'OobBudget.isDefense', 'OobBudget.isSeasonal', 'OobBudget.isLowTier',
+          'OobBudget.campaignId', 'OobBudget.campaignName', 'OobBudget.channel', 'OobBudget.engine', 'OobBudget.isDefense', 'OobBudget.isSeasonal', 'OobBudget.isAutoCampaign', 'OobBudget.isLowTier',
           'OobBudget.currentBudget', 'OobBudget.spend1d', 'OobBudget.utilization',
           'OobBudget.pctDark', 'OobBudget.roas1d', 'OobBudget.roasPrev2',
           'OobBudget.daysSinceBudgetChange', 'OobBudget.action',
@@ -112,6 +112,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
         engine: String(r['OobBudget.engine'] ?? ''),
         isDefense: r['OobBudget.isDefense'] === true || r['OobBudget.isDefense'] === 'true',
         isSeasonal: r['OobBudget.isSeasonal'] === true || r['OobBudget.isSeasonal'] === 'true',
+        isAutoCampaign: r['OobBudget.isAutoCampaign'] === true || r['OobBudget.isAutoCampaign'] === 'true',
         isLowTier: r['OobBudget.isLowTier'] === true || r['OobBudget.isLowTier'] === 'true',
         budget: num(r['OobBudget.currentBudget']) ?? 0,
         spend: num(r['OobBudget.spend1d']) ?? 0,
@@ -131,7 +132,8 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
       // appearing twice.
       // defense campaigns live in their own section (Ori 2026-08-01)
       // v9 (Ori 2026-08-02): seasonal campaigns have their own OOB section, any tier.
-      setRows(mapped.filter(r => r.dark > 10 && !r.isDefense &&
+      // v24: auto campaigns live in the Auto section — never here, dark or not.
+      setRows(mapped.filter(r => r.dark > 10 && !r.isDefense && !r.isAutoCampaign &&
         (tier === 'SEASONAL' ? r.isSeasonal
           : !r.isSeasonal && (tier === 'LOW' ? r.isLowTier : !r.isLowTier))));
       setKws((ks as Record<string, unknown>[]).map(r => ({

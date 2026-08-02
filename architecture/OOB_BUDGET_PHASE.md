@@ -673,3 +673,20 @@ engines now treat `is_auto` rows accordingly:
 - Roles for autos: FUNDER / WATCH / TRIAL / IDLE (+PROBE for legacy in-flight); seat badges
   hidden on auto rows (seat mechanics do not apply to a fixed 4).
 23 AUTO_TRIMs live at deploy; 0 auto parks/queues/retires in either engine.
+
+## v24 — the Auto section (Ori 2026-08-02)
+
+"Separate auto campaigns. It should be above Low budget — out of budget, and window should be
+last 7 days, 8-28 days (in peak 3 days and 4-14 days)."
+
+- **`is_auto_campaign`** (data-truth, both campaign-grain views): the campaign's current
+  config contains an enabled auto clause (close/loose-match, substitutes, complements) —
+  no name regex needed; Amazon autos are structurally pure.
+- **One home, first on the page**: the Auto section (KeywordLiftPhase tier=AUTO) sits ABOVE
+  Low budget — out of budget and holds ALL 19 auto campaigns — dark or healthy (the OOB
+  sections exclude autos; the 2x2 and seasonal tiers exclude autos). v23's auto doctrine
+  runs inside it: AUTO_TRIM / KEEP / negate, never park.
+- **Windows**: off-season last 7d + 8-28d; in peak **last 3d + 4-14d** (new keyword-grain
+  clicks_3d/roas_3d/clicks_4_14/roas_4_14 + campaign rollups in V_KEYWORD_LIFT, both arms).
+- Partition after: 19 auto + 15 lowOOB + 4 portOOB + 38 low + 18 port + 8 defense +
+  1 seasonalOOB + 5 seasonalLow + 0 seasonal = 108.

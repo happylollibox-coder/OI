@@ -17,6 +17,8 @@ type Row = {
   clicks7d: number; roas7d: number | null; clicks828: number; roas828: number | null;
   clicks1d: number; roas1d: number | null; clicksPrev2: number; roasPrev2: number | null;
   campClicks1d: number; campRoas1d: number | null; campClicksPrev2: number; campRoasPrev2: number | null;
+  clicks3d: number; roas3d: number | null; clicks414: number; roas414: number | null; isAutoCampaign: boolean;
+  campClicks3d: number; campRoas3d: number | null; campClicks414: number; campRoas414: number | null;
   campClicks7d: number; campRoas7d: number | null; campClicks828: number; campRoas828: number | null;
   spend1d: number; campSpend1d: number;
   pctDark: number; slots: number; seatRank: number; isDefense: boolean; isSeasonal: boolean; isResearch: boolean; seasonalNow: boolean;
@@ -57,7 +59,7 @@ const CLASS_CLS: Record<string, string> = {
   WINNER: 'text-emerald-400', MARGINAL: 'text-amber-400', LOSER: 'text-red-400', IDLE: 'text-faint',
 };
 
-export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' | 'SEASONAL_LOW' }) {
+export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' | 'SEASONAL_LOW' | 'AUTO' }) {
   const doQueue = useDoQueue();
   const [open, setOpen] = useState(false);
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
@@ -157,6 +159,8 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
         'KeywordLift.clicks7d', 'KeywordLift.roas7d', 'KeywordLift.clicks828', 'KeywordLift.roas828',
         'KeywordLift.clicks1d', 'KeywordLift.roas1d', 'KeywordLift.clicksPrev2', 'KeywordLift.roasPrev2',
         'KeywordLift.campClicks1d', 'KeywordLift.campRoas1d', 'KeywordLift.campClicksPrev2', 'KeywordLift.campRoasPrev2',
+        'KeywordLift.clicks3d', 'KeywordLift.roas3d', 'KeywordLift.clicks414', 'KeywordLift.roas414', 'KeywordLift.isAutoCampaign',
+        'KeywordLift.campClicks3d', 'KeywordLift.campRoas3d', 'KeywordLift.campClicks414', 'KeywordLift.campRoas414',
         'KeywordLift.campClicks7d', 'KeywordLift.campRoas7d', 'KeywordLift.campClicks828', 'KeywordLift.campRoas828',
         'KeywordLift.spend1d', 'KeywordLift.campSpend1d',
         'KeywordLift.pctDark', 'KeywordLift.slots', 'KeywordLift.seatRank',
@@ -198,6 +202,15 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
         campRoas1d: num(r['KeywordLift.campRoas1d']),
         campClicksPrev2: num(r['KeywordLift.campClicksPrev2']) ?? 0,
         campRoasPrev2: num(r['KeywordLift.campRoasPrev2']),
+        clicks3d: num(r['KeywordLift.clicks3d']) ?? 0,
+        roas3d: num(r['KeywordLift.roas3d']),
+        clicks414: num(r['KeywordLift.clicks414']) ?? 0,
+        roas414: num(r['KeywordLift.roas414']),
+        isAutoCampaign: r['KeywordLift.isAutoCampaign'] === true || r['KeywordLift.isAutoCampaign'] === 'true',
+        campClicks3d: num(r['KeywordLift.campClicks3d']) ?? 0,
+        campRoas3d: num(r['KeywordLift.campRoas3d']),
+        campClicks414: num(r['KeywordLift.campClicks414']) ?? 0,
+        campRoas414: num(r['KeywordLift.campRoas414']),
         clicks7d: num(r['KeywordLift.clicks7d']) ?? 0,
         roas7d: num(r['KeywordLift.roas7d']),
         clicks828: num(r['KeywordLift.clicks828']) ?? 0,
@@ -259,9 +272,17 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
   const lowCap = (rows ?? [])[0]?.wDays === 3 ? 30 : 20;   // peak cap $30, off-season $20
   // low-budget tiers read at launch cadence — last day + prev-2d, the OOB format (Ori 2026-08-02)
   const fast = tier === 'LOW' || tier === 'SEASONAL_LOW';
+  // AUTO section (Ori 2026-08-02): 7d + 8-28d off-season; 3d + 4-14d in peak
+  const auto = tier === 'AUTO';
+  const inPeak = (rows ?? [])[0]?.wDays === 3;
+  const autoPeak = auto && inPeak;
   const camps = [...byCamp.values()].filter(g => {
     const c = g[0];
-    if (!c || oobIds.has(c.campaignId) || c.isDefense) return false;
+    if (!c || c.isDefense) return false;
+    // v24 (Ori 2026-08-02): auto campaigns have ONE home — the Auto section — dark or not.
+    if (tier === 'AUTO') return c.isAutoCampaign;
+    if (c.isAutoCampaign) return false;
+    if (oobIds.has(c.campaignId)) return false;
     // v9 + v20 (Ori 2026-08-02): seasonal campaigns get their own sections, split by tier
     // like the evergreen 2x2 ("separate seasonal to seasonal low budget and seasonal").
     if (tier === 'SEASONAL') return c.isSeasonal && c.budget > lowCap;
@@ -348,12 +369,12 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
       <div className="flex items-center gap-1">
         <button className="text-label flex items-center gap-1 flex-1 min-w-0" onClick={() => setOpen(o => !o)}>
           <span className="text-faint">{open ? '▾' : '▸'}</span>
-          <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : tier === 'SEASONAL' ? 'Seasonal' : tier === 'SEASONAL_LOW' ? 'Seasonal low budget' : 'Portfolio 80/20'}</span>
+          <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : tier === 'SEASONAL' ? 'Seasonal' : tier === 'SEASONAL_LOW' ? 'Seasonal low budget' : tier === 'AUTO' ? 'Auto' : 'Portfolio 80/20'}</span>
           <span className="text-faint truncate">
             {failed ? '— unavailable' : rows
               ? `— ${camps.length} working campaigns · ${nParks} parks · ${nProbes} probes · ${nFound} winners found · ${visNegs.length} negates`
               : '— loading…'}
-            {' '}· goal: 80% of spend on winners, 1–2 probes hunting the next one
+            {' '}· {auto ? 'goal: 4 fixed groups per campaign — negate bad terms, trim weak clauses, raise winners' : 'goal: 80% of spend on winners, 1–2 probes hunting the next one'}
           </span>
         </button>
         {rows && sugs.length > 0 && (
@@ -372,7 +393,10 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
                 <th className="font-normal text-left px-2 py-0.5">item — campaign ▸ keyword</th>
                 <th className="font-normal px-2" title="share of the day out of budget (campaign) — Portfolio campaigns are ≤10% by ownership; losers % shown in the campaign meta">dark</th>
                 <th className="font-normal px-2">now $</th>
-                {fast ? (<>
+                {autoPeak ? (<>
+                  <th className="font-normal px-2" title="last 3 complete days — clicks + net ROAS (peak windows)">last 3d</th>
+                  <th className="font-normal px-2" title="day 4 till 14 — same format">4–14d</th>
+                </>) : fast ? (<>
                   <th className="font-normal px-2" title="last complete day — clicks + net ROAS">last day</th>
                   <th className="font-normal px-2" title="the 2 days before — same format">prev-2d</th>
                 </>) : (<>
@@ -401,8 +425,8 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
                   </td>
                   <td className={`px-2 ${c.pctDark > 10 ? 'text-amber-400' : 'text-faint'}`}>{c.pctDark.toFixed(0)}%</td>
                   <td className="px-2 text-muted whitespace-nowrap">${c.budget.toFixed(0)} <span className="text-faint">bud</span> <span className="text-faint" title="spent yesterday">· ${c.campSpend1d.toFixed(2)}</span></td>
-                  <td className="px-2 text-muted whitespace-nowrap">{fast ? <>{c.campClicks1d}c{c.campRoas1d != null ? ` ${c.campRoas1d.toFixed(2)}×` : ' —'}</> : <>{c.campClicks7d}c{c.campRoas7d != null ? ` ${c.campRoas7d.toFixed(2)}×` : ' —'}</>}</td>
-                  <td className="px-2 text-muted whitespace-nowrap">{fast ? <>{c.campClicksPrev2}c{c.campRoasPrev2 != null ? ` ${c.campRoasPrev2.toFixed(2)}×` : ' —'}</> : <>{c.campClicks828}c{c.campRoas828 != null ? ` ${c.campRoas828.toFixed(2)}×` : ' —'}</>}</td>
+                  <td className="px-2 text-muted whitespace-nowrap">{autoPeak ? <>{c.campClicks3d}c{c.campRoas3d != null ? ` ${c.campRoas3d.toFixed(2)}×` : ' —'}</> : fast ? <>{c.campClicks1d}c{c.campRoas1d != null ? ` ${c.campRoas1d.toFixed(2)}×` : ' —'}</> : <>{c.campClicks7d}c{c.campRoas7d != null ? ` ${c.campRoas7d.toFixed(2)}×` : ' —'}</>}</td>
+                  <td className="px-2 text-muted whitespace-nowrap">{autoPeak ? <>{c.campClicks414}c{c.campRoas414 != null ? ` ${c.campRoas414.toFixed(2)}×` : ' —'}</> : fast ? <>{c.campClicksPrev2}c{c.campRoasPrev2 != null ? ` ${c.campRoasPrev2.toFixed(2)}×` : ' —'}</> : <>{c.campClicks828}c{c.campRoas828 != null ? ` ${c.campRoas828.toFixed(2)}×` : ' —'}</>}</td>
                   <td className="px-2" />
                   <td className="px-2" />
                   <td className={`px-2 text-left whitespace-nowrap ${budgetSug(c) ? 'text-emerald-400' : 'text-muted'}`}>{budgetSug(c) ? 'budget' : 'hold'}</td>
@@ -435,8 +459,8 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
                       )}</td>
                     <td className="px-2" />
                     <td className="px-2 text-muted whitespace-nowrap">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}<span className="text-faint" title="spent yesterday"> · ${k.spend1d.toFixed(2)}</span></td>
-                    <td className="px-2 text-muted whitespace-nowrap">{fast ? <>{k.clicks1d}c{k.roas1d != null ? ` ${k.roas1d.toFixed(2)}×` : ' —'}</> : <>{k.clicks7d}c{k.roas7d != null ? ` ${k.roas7d.toFixed(2)}×` : ' —'}</>}</td>
-                    <td className="px-2 text-muted whitespace-nowrap">{fast ? <>{k.clicksPrev2}c{k.roasPrev2 != null ? ` ${k.roasPrev2.toFixed(2)}×` : ' —'}</> : <>{k.clicks828}c{k.roas828 != null ? ` ${k.roas828.toFixed(2)}×` : ' —'}</>}</td>
+                    <td className="px-2 text-muted whitespace-nowrap">{autoPeak ? <>{k.clicks3d}c{k.roas3d != null ? ` ${k.roas3d.toFixed(2)}×` : ' —'}</> : fast ? <>{k.clicks1d}c{k.roas1d != null ? ` ${k.roas1d.toFixed(2)}×` : ' —'}</> : <>{k.clicks7d}c{k.roas7d != null ? ` ${k.roas7d.toFixed(2)}×` : ' —'}</>}</td>
+                    <td className="px-2 text-muted whitespace-nowrap">{autoPeak ? <>{k.clicks414}c{k.roas414 != null ? ` ${k.roas414.toFixed(2)}×` : ' —'}</> : fast ? <>{k.clicksPrev2}c{k.roasPrev2 != null ? ` ${k.roasPrev2.toFixed(2)}×` : ' —'}</> : <>{k.clicks828}c{k.roas828 != null ? ` ${k.roas828.toFixed(2)}×` : ' —'}</>}</td>
                     <td className="px-2 text-faint">{k.targetCpc != null ? `$${k.targetCpc.toFixed(2)}` : '—'}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${ROLE_CLS[k.role] ?? 'text-faint'}`} title={ROLE_TIP[k.role] ?? ''}>{k.role.toLowerCase()}</td>
                     <td className={`px-2 text-left whitespace-nowrap ${ACT_CLS[k.action] ?? 'text-muted'}`}>{k.action.toLowerCase().replace(/_/g, ' ')}</td>

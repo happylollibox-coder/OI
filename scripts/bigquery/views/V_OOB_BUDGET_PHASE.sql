@@ -41,7 +41,12 @@ camp AS (
          serving_status, daily_budget AS budget,
          LOWER(campaign_name) LIKE '%brand defense%' AS is_defense,
          -- v9 (Ori 2026-08-02): seasonal campaigns get their own Weekly Run sections
-         REGEXP_CONTAINS(LOWER(campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal
+         REGEXP_CONTAINS(LOWER(campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal,
+         -- v24 (Ori 2026-08-02): auto campaigns have their own Weekly Run section (data-truth:
+         -- an enabled auto clause exists in the campaign's current config)
+         CAST(campaign_id AS STRING) IN (SELECT DISTINCT CAST(campaign_id AS STRING) FROM `onyga-482313.OI.DIM_KEYWORD`
+                         WHERE is_current AND UPPER(state) = 'ENABLED'
+                           AND LOWER(keyword_text) IN ('close-match','loose-match','substitutes','complements')) AS is_auto_campaign
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
 ),
 anchor AS (
@@ -137,7 +142,7 @@ bc AS (
 ),
 base AS (
   SELECT
-    c.campaign_id, c.campaign_name, c.channel, c.is_defense, c.is_seasonal,
+    c.campaign_id, c.campaign_name, c.channel, c.is_defense, c.is_seasonal, c.is_auto_campaign,
     IF(lp.campaign_id IS NOT NULL, 'LAUNCH', 'WORKING') AS engine,
     a.d AS anchor_date,
     ROUND(c.budget, 2) AS budget,
@@ -163,7 +168,7 @@ base AS (
     AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET')
 )
 SELECT
-  b.campaign_id, b.campaign_name, b.channel, b.engine, b.anchor_date, b.is_defense, b.is_seasonal,
+  b.campaign_id, b.campaign_name, b.channel, b.engine, b.anchor_date, b.is_defense, b.is_seasonal, b.is_auto_campaign,
   b.budget AS current_budget, b.spend_1d,
   ROUND(SAFE_DIVIDE(b.spend_1d, b.budget), 2) AS utilization,
   ROUND(b.pd * 100) AS pct_dark,
