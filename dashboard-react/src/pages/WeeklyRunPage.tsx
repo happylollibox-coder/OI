@@ -773,27 +773,10 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
               {/* Step 4 — Actions (keywords, negatives & per-campaign budget) */}
               <section className="rounded-xl border border-border bg-card p-4">
                 <div className="text-label font-medium text-muted mb-2">4 · Actions — keywords, negatives &amp; budget</div>
-                {/* Filter by what's still open vs. already uploaded (inside the 3-day cooldown). Default = Not applied. */}
-                <div className="flex items-center flex-wrap gap-1 mb-3">
-                  {([['todo', 'Not applied', appliedCounts.todo], ['done', 'Already applied', appliedCounts.done], ['all', 'All', appliedCounts.all]] as const).map(([val, label, n]) => (
-                    <button key={val} onClick={() => setActionFilter(val)}
-                      className={`text-label px-2.5 py-1 rounded-md border ${actionFilter === val ? 'border-blue-500/50 bg-blue-500/10 text-blue-300' : 'border-border text-muted hover:bg-white/5'}`}>
-                      {label} <span className="font-mono opacity-60">{n}</span>
-                    </button>
-                  ))}
-                  <span className="text-label text-faint ml-1">— what’s left to do vs. already uploaded (3-day cooldown)</span>
-                </div>
-                {/* Action filter — which keyword directions to show. Default = all except HOLD. */}
-                <div className="flex items-center flex-wrap gap-1 mb-3">
-                  <span className="text-label text-faint mr-1">action</span>
-                  {KW_DIRECTIONS.map(d => (
-                    <button key={d} onClick={() => pickDir(d)}
-                      className={`text-label px-2.5 py-1 rounded-md border ${dirFilter === d ? 'border-blue-500/50 bg-blue-500/10 text-blue-300' : 'border-border text-muted hover:bg-white/5'}`}>
-                      {d} <span className="font-mono opacity-60">{dirCounts[d]}</span>
-                    </button>
-                  ))}
-                  <span className="text-label text-faint ml-1">— click one to focus; HOLD hidden by default</span>
-                </div>
+                {/* v19: the "Not applied / action" chips counted the RETIRED coacher list's parallel
+                    suggestions (raise/lower/hold from T_WEEKLY_RUN_KEYWORD), which no longer render —
+                    after an upload they kept saying "not applied" and misled (upload report 29 session).
+                    Each engine section below carries its own live apply state (✓ applied N). */}
                 {/* coach logic as a flow chart (strategy toggles) — the engine driving every decision below */}
                 <CoachFlowchart />
                 {/* out-of-budget technical phase — dark campaigns + one budget suggestion each (V_OOB_BUDGET_PHASE) */}
