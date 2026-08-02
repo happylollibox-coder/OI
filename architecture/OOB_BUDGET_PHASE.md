@@ -700,3 +700,10 @@ Fix: `probing` / `probe_done` are gated `AND NOT is_auto` in both arms — a bid
 an auto clause is just a raise. Auto clauses now always resolve through the v23 doctrine
 (AUTO_TRIM / KEEP_TAIL / KEEP / IDLE, roles FUNDER/WATCH/TRIAL/IDLE); 0 probe artifacts
 remain. 27 AUTO_TRIMs, 20 keep-tails live.
+
+### v24.2 — auto trim floor $0.20 (Ori 2026-08-02, "make minimum 0.2")
+
+AUTO_TRIM floor lowered $0.30 -> **$0.20** (matching the OOB engine's bid_min), gate
+lowered > $0.35 -> **> $0.25** so every step is still genuinely downward (0.85 x $0.26 =
+$0.22 >= floor). Research-mode RESEARCH_EASE keeps its $0.30 floor (antennae stay a notch
+warmer). 27 -> 32 AUTO_TRIMs; zero upward, zero below-floor.

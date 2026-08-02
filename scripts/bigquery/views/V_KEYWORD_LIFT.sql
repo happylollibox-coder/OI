@@ -688,7 +688,7 @@ SELECT
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
     -- -15%/day (floor $0.30), the real lever is negating bad terms; targets are advisory here.
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.35 THEN 'AUTO_TRIM'
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_TRIM'
     WHEN a.is_auto THEN IF(a.class = 'MARGINAL', 'KEEP', IF(a.class = 'LOSER', 'KEEP_TAIL', 'IDLE'))
     -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
     -- TO the target bid. Winners are never pulled down.
@@ -712,7 +712,7 @@ SELECT
   CASE
     WHEN a.is_defense THEN NULL
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN NULL
-    WHEN a.probe_done AND a.is_auto THEN ROUND(GREATEST(a.current_bid * 0.85, 0.30), 2)
+    WHEN a.probe_done AND a.is_auto THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.probe_done THEN 0.25
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
     WHEN a.probing THEN NULL
@@ -722,8 +722,8 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
     WHEN a.class = 'WINNER' THEN NULL
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.35
-      THEN ROUND(GREATEST(a.current_bid * 0.85, 0.30), 2)
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
+      THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.is_auto THEN NULL
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
@@ -765,8 +765,8 @@ SELECT
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign')
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.35
-      THEN 'auto clause underperforming — trim -15%/day (floor $0.30); the real lever is negating its bad terms'
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
+      THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
     WHEN a.is_auto AND a.class = 'LOSER' THEN 'auto clause in its 4-click trial — keep gathering; negate bad terms as they show'
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))
@@ -878,7 +878,7 @@ SELECT
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
     -- -15%/day (floor $0.30), the real lever is negating bad terms; targets are advisory here.
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.35 THEN 'AUTO_TRIM'
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_TRIM'
     WHEN a.is_auto THEN IF(a.class = 'MARGINAL', 'KEEP', IF(a.class = 'LOSER', 'KEEP_TAIL', 'IDLE'))
     -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
     -- TO the target bid. Winners are never pulled down.
@@ -900,7 +900,7 @@ SELECT
   CASE
     WHEN a.is_defense THEN NULL
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN NULL
-    WHEN a.probe_done AND a.is_auto THEN ROUND(GREATEST(a.current_bid * 0.85, 0.30), 2)
+    WHEN a.probe_done AND a.is_auto THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.probe_done THEN 0.25
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
     WHEN a.probing THEN NULL
@@ -910,8 +910,8 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
     WHEN a.class = 'WINNER' THEN NULL
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.35
-      THEN ROUND(GREATEST(a.current_bid * 0.85, 0.30), 2)
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
+      THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.is_auto THEN NULL
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
@@ -953,8 +953,8 @@ SELECT
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign (est. net ROAS)')
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.35
-      THEN 'auto clause underperforming — trim -15%/day (floor $0.30); the real lever is negating its bad terms'
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
+      THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
     WHEN a.is_auto AND a.class = 'LOSER' THEN 'auto clause in its 4-click trial — keep gathering; negate bad terms as they show'
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))
