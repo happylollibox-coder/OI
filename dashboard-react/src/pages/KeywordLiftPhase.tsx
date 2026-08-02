@@ -39,8 +39,8 @@ const ROLE_CLS: Record<string, string> = {
   IDLE: 'text-faint', DEFENSE: 'text-violet-400',
 };
 const ROLE_TIP: Record<string, string> = {
-  FUNDER: 'funds the campaign — net ROAS ≥ 1.1× over the last 28 DAYS (a stable financier, not a hot week). Never pulled down by the target; raises are earned via the coacher sweet-spot.',
-  WATCH: 'earning on the recent window (winner/marginal class) but not funder-grade over 28d — monitored: glides down toward target when above it, up (+10%/day) in season when far below.',
+  FUNDER: 'funds the campaign — net ROAS ≥ 1.1× over the last 28 DAYS with ≥ 4 clicks of evidence (a stable financier, not one lucky click). Never pulled down by the target; raises are earned via the coacher sweet-spot.',
+  WATCH: 'earning but not funder-grade over 28d (below 1.1× or under 4 clicks) — monitored: glides down toward target when above it, up (+10%/day) in season when far below.',
   PROBE: 'mid-test — owns its bid everywhere until the 20-click verdict: ≥ 1.0× → winner, else park $0.25 and the next candidate promotes.',
   CANDIDATE: 'next probe — lifts to max($1, min(1.5× target, $2)) when applied; seasonal keywords jump this queue.',
   TRIAL: 'still in its 4-click trial — 1 click does not break; no park or cut until 4 clicks of evidence.',

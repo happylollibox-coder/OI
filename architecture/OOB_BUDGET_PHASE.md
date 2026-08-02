@@ -587,3 +587,11 @@ capped -> OOB owns it); zero non-seasonal campaigns exceed pace 2.
 
 (Also this session: the retired coacher list's "Not applied / action" chips removed from
 Weekly Run — they counted suggestions with no surface and misread as un-applied uploads.)
+
+### v19.1 — funder needs evidence + one-time $1 seasonal bid floor (Ori 2026-08-02)
+- FUNDER requires **>= 4 clicks over the 28d** on top of the 1.1x bar ("only 1 click can't
+  be funder") — a 1-click 4.5x keyword is WATCH until it has evidence. 60 -> 57 funders.
+- ONE-TIME bulksheet (NOT a standing rule, like the $31 graduation sheet): the 18 seated
+  keywords in the 6 in-season BTS campaigns bid $0.75-0.88 — under the $1 won't-move line —
+  lifted to $1.00 (12 SP + 6 SB rows, seasonal_bid_floor_1usd.xlsx delivered). Parked/queued
+  rows stay at $0.25; probes already enter at the $1 floor.
