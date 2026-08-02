@@ -358,7 +358,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                   <Fragment key={`${r.id}|${k.keywordId || k.text}`}>
                   <tr className="text-right border-t border-border/20 bg-surface/40">
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
-                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}){k.seatRank <= k.slots ? <span className="text-sky-300"> · seat {k.seatRank}/{k.slots}</span> : <span className="text-faint"> · queue #{k.seatRank - k.slots}</span>}{''} · spent ${k.spend1.toFixed(2)}</span>
+                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}){k.isAuto ? null : k.seatRank <= k.slots ? <span className="text-sky-300"> · seat {k.seatRank}/{k.slots}</span> : <span className="text-faint"> · queue #{k.seatRank - k.slots}</span>}{''} · spent ${k.spend1.toFixed(2)}</span>
                       {kWins.length > 0 && (
                         <button onClick={() => setOpenWinners(o => ({ ...o, [wKey]: !o[wKey] }))}
                           className="text-emerald-400 pl-1" title="winning search terms (>= 1.1x net ROAS over 90d) — click to expand">

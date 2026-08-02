@@ -346,6 +346,11 @@ SELECT
   -- ROLE (Ori 2026-08-02): the keyword's job in the campaign economy (see V_KEYWORD_LIFT)
   CASE
     WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN 'PROBE'
+    -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never retired/queued; trim + negate
+    WHEN b.is_auto THEN CASE
+      WHEN b.converting THEN 'WINNER'
+      WHEN COALESCE(b.roas90, 0) >= 1.0 THEN 'WATCH'
+      ELSE 'TRIAL' END
     WHEN b.tested_loser AND NOT b.is_lift_probe THEN 'RETIRED'
     WHEN b.seat_rank > b.slots THEN 'QUEUED'
     WHEN COALESCE(b.current_bid, 0) > 0 AND b.current_bid <= 0.30 THEN 'CANDIDATE'
@@ -364,10 +369,10 @@ SELECT
     -- A mid-probe keyword never permanent-parks (its 20-click verdict outranks the 15-click bar).
     WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN NULL
     -- tested loser: permanent park (had its 15-click trial, no sale)
-    WHEN b.tested_loser AND NOT b.is_lift_probe AND b.current_bid > x.bid_park + 0.05 THEN x.bid_park
-    WHEN b.tested_loser AND NOT b.is_lift_probe THEN NULL
+    WHEN b.tested_loser AND NOT b.is_lift_probe AND NOT b.is_auto AND b.current_bid > x.bid_park + 0.05 THEN x.bid_park
+    WHEN b.tested_loser AND NOT b.is_lift_probe AND NOT b.is_auto THEN NULL
     -- beyond the seats: queue at $0.25 — the test pauses, not dies (seat model, Ori 2026-08-01)
-    WHEN b.seat_rank > b.slots THEN IF(b.current_bid > 0.30, x.bid_park, NULL)
+    WHEN b.seat_rank > b.slots AND NOT b.is_auto THEN IF(b.current_bid > 0.30, x.bid_park, NULL)
     -- seated after being parked: ACTIVATE at the probe entry bid, paced by the 20% rule
     WHEN b.current_bid <= 0.30
       THEN IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)),
@@ -409,8 +414,8 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'HOLD'
     WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN 'HOLD'
-    WHEN b.tested_loser AND NOT b.is_lift_probe THEN IF(b.current_bid > x.bid_park + 0.05, 'PARK', 'HOLD')
-    WHEN b.seat_rank > b.slots THEN IF(b.current_bid > 0.30, 'PARK_WAIT', 'HOLD')
+    WHEN b.tested_loser AND NOT b.is_lift_probe AND NOT b.is_auto THEN IF(b.current_bid > x.bid_park + 0.05, 'PARK', 'HOLD')
+    WHEN b.seat_rank > b.slots AND NOT b.is_auto THEN IF(b.current_bid > 0.30, 'PARK_WAIT', 'HOLD')
     WHEN b.current_bid <= 0.30
       THEN IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)), 'ACTIVATE', 'HOLD')
     WHEN b.converting THEN CASE
@@ -428,9 +433,9 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'no bid on record'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'changed today — one suggestion per day'
     WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN 'probe in flight — holds a seat until its 20-click verdict (the Portfolio 80/20 engine owns the bid)'
-    WHEN b.tested_loser AND NOT b.is_lift_probe
+    WHEN b.tested_loser AND NOT b.is_lift_probe AND NOT b.is_auto
       THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d with 0 orders — permanent park; its seat goes to the next candidate')
-    WHEN b.seat_rank > b.slots THEN
+    WHEN b.seat_rank > b.slots AND NOT b.is_auto THEN
       IF(b.converting OR COALESCE(b.roas90, 0) >= 1.0,
          CONCAT('proven (', CAST(COALESCE(b.roas90, 0) AS STRING), 'x 90d) but the budget funds only ',
                 CAST(b.slots AS STRING), ' seats — queue #', CAST(b.seat_rank - b.slots AS STRING)),

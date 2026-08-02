@@ -650,3 +650,26 @@ ly_cpc; thresholds (2 / 25% / 421d) are tunable.
   Panel: "+ broad" button on orphan winner rows queues ADD_KEYWORD (broad, $1 entry floor,
   the term's own ad group); DoPage exports Keyword Create rows on the matching SP/SB sheet.
 - Campaign header shows "· research"; role tooltip explains ANTENNA.
+
+## v23 — auto-campaign doctrine (Ori 2026-08-02)
+
+Ori: "in automatic campaigns no need to park — it is always 4 groups; purpose is to negate
+not-good search terms, reduce bid for not-performing keywords and increase bids when
+performance is good; targets are less good here because it is general."
+
+Auto clauses (close/loose-match, substitutes, complements) are 4 FIXED antennae — there is
+no bench behind them, so parking one just kills a quarter of the discovery surface. Both
+engines now treat `is_auto` rows accordingly:
+- **Never PARK / PARK_WAIT / RETIRED / QUEUED / probe-started.** Failed probe verdicts on
+  autos TRIM instead of park (in-flight legacy probes finish their episodes untouched).
+- **AUTO_TRIM** (Portfolio): LOSER clause with >= 4 clicks in W -> -15%/day, floor $0.30 —
+  "reduce bid for not performing". Under 4 clicks: KEEP_TAIL (1 click does not break).
+- **Raises stay earned**: winners KEEP; the coacher sweet-spot owns increases.
+- **Targets advisory**: autos excluded from EASE/CUT/RAISE_TO_TARGET (the clause is general —
+  a per-term target does not describe it). While capped, OOB TRIM_BID/DARK_BRAKE still apply
+  (evidence-gated reductions ARE the auto lever).
+- **Negation is the primary lever** — unchanged: auto terms flow through the negate layer
+  (AUTO skips the term!=keyword test) and the winners hierarchy shows harvest material.
+- Roles for autos: FUNDER / WATCH / TRIAL / IDLE (+PROBE for legacy in-flight); seat badges
+  hidden on auto rows (seat mechanics do not apply to a fixed 4).
+23 AUTO_TRIMs live at deploy; 0 auto parks/queues/retires in either engine.
