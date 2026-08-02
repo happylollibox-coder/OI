@@ -617,3 +617,14 @@ tier). Layout is now: 2x2 evergreen + Brand defense + Seasonal-OOB + Seasonal lo
 Seasonal + Seasonal Paused + Other. All six BTS campaigns sit in Seasonal low budget today;
 the working tier fills as the budget ladder graduates them. (Also fixed: the "N winners
 found" header counter is now scoped to the section's campaigns.)
+
+## v21 — low-budget tiers read at launch cadence (Ori 2026-08-02)
+
+"Seasonal low budget, Low budget should be based on 1 day and prev 2 days like out of budget
+format": the two low-budget Portfolio sections now show **last day** and **prev-2d** window
+columns (the OOB grammar) instead of 7d / 8-28d — a $10 campaign's story changes daily, not
+weekly. The working tiers (Portfolio 80/20, Seasonal) keep 7d / 8-28d. V_KEYWORD_LIFT gained
+keyword-grain clicks_1d/roas_1d/clicks_prev2/roas_prev2 + campaign rollups (camp_clicks_1d/
+camp_roas_1d/camp_clicks_prev2/camp_roas_prev2), both arms; KeywordLift cube exposes them.
+DISPLAY-ONLY: the engine's classes/actions still run on W and 28d — the columns changed, not
+the judgment windows.

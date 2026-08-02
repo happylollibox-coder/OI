@@ -5,7 +5,7 @@ cube(`KeywordLift`, {
                active_probes, keyword_id, ad_group_id, target_text, match_type, is_auto, is_pt,
                current_bid, clicks_w, spend_w, orders_w, roas_w, target_cpc, class,
                probing, CAST(probe_started AS STRING) probe_started, probe_clicks, probe_roas,
-               clicks_7d, roas_7d, clicks_8_28, roas_8_28, spend_1d, camp_spend_1d, camp_clicks_7d, camp_roas_7d, camp_clicks_8_28, camp_roas_8_28, pct_dark, capped, slots, seat_rank, is_defense, is_seasonal, seasonal_now, role, suggested_budget, budget_reason,
+               clicks_7d, roas_7d, clicks_8_28, roas_8_28, spend_1d, camp_spend_1d, camp_clicks_7d, camp_roas_7d, camp_clicks_8_28, camp_roas_8_28, clicks_1d, roas_1d, clicks_prev2, roas_prev2, camp_clicks_1d, camp_roas_1d, camp_clicks_prev2, camp_roas_prev2, pct_dark, capped, slots, seat_rank, is_defense, is_seasonal, seasonal_now, role, suggested_budget, budget_reason,
                action, suggested_bid, reason
         FROM \`onyga-482313.OI.V_KEYWORD_LIFT\``,
 
@@ -51,6 +51,14 @@ cube(`KeywordLift`, {
     campRoas7d:   { sql: `camp_roas_7d`,    type: `number` },
     campClicks828:{ sql: `camp_clicks_8_28`, type: `number` },
     campRoas828:  { sql: `camp_roas_8_28`,   type: `number` },
+    clicks1d:     { sql: `clicks_1d`,     type: `number` },
+    roas1d:       { sql: `roas_1d`,       type: `number` },
+    clicksPrev2:  { sql: `clicks_prev2`,  type: `number` },
+    roasPrev2:    { sql: `roas_prev2`,    type: `number` },
+    campClicks1d: { sql: `camp_clicks_1d`, type: `number` },
+    campRoas1d:   { sql: `camp_roas_1d`,   type: `number` },
+    campClicksPrev2: { sql: `camp_clicks_prev2`, type: `number` },
+    campRoasPrev2:   { sql: `camp_roas_prev2`,   type: `number` },
     pctDark:      { sql: `pct_dark`,      type: `number` },
     capped:       { sql: `capped`,        type: `boolean` },
     slots:        { sql: `slots`,         type: `number` },
