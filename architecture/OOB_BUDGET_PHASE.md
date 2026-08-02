@@ -344,3 +344,19 @@ Every seat-entry bid is floored at **$1.00** — below that the keyword simply d
 - The floor applies to ENTRIES only. Once clicks flow, the evidence-based reductions
   (probe -5%/day descent, EASE/CUT_TO_TARGET, TRIM, DARK_BRAKE) may go below $1 — real CPC
   data outranks the no-movement heuristic.
+
+## v11 — 4-click trial gate on loser reductions (Ori 2026-08-02)
+
+Trigger case: FRESH-SP/BROAD (Back to School), day 1 of spend ($3.10, 3 clicks). The 20%
+loser allowance is spend-share math — on a newborn campaign the allowance is cents, so the
+first 1–2 clicks blew through it and both spending keywords were PARKed while the only
+0-click keyword got the probe. That contradicts "1 click do not break", the TRIM evidence
+bar (>=4 clicks), and finish-what-you-started.
+
+Rule (`V_KEYWORD_LIFT`, both arms): a LOSER can be **allowance-PARKed or CUT_TO_TARGET only
+with >= 4 clicks in the window W** — the same evidence bar as TRIM. Under 4 clicks it is
+KEEP_TAIL with reason "still in its 4-click trial (N clicks so far) — 1 click does not
+break; keep gathering". The permanent park (15 clk/90d) and the probe verdict (20 clicks)
+are unchanged — this gate only stops under-evidence in-window reductions.
+Effect at deploy: 22 keywords portfolio-wide moved from PARK/CUT to in-trial KEEP_TAIL;
+49 allowance parks and 5 cuts (all >= 4 clicks) stand.

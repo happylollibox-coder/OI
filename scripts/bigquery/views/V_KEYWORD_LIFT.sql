@@ -547,8 +547,12 @@ SELECT
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'EASE_TO_TARGET'
     WHEN a.class = 'MARGINAL' THEN 'KEEP'
     -- losers beyond the 20% allowance → park (worst first; the cum-sum keeps the best within it)
-    WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
-    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
+    -- 4-CLICK TRIAL GATE (Ori 2026-08-02, FRESH-SP/BROAD BTS case): "1 click do not break" —
+    -- a loser can only be allowance-parked or cut-to-target once it has >= 4 clicks in W (the
+    -- same evidence bar as TRIM). Under that it is still in its trial: KEEP_TAIL, keep gathering.
+    -- (Without the gate, a day-1 campaign's 20% allowance is cents and first clicks park instantly.)
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     -- idle pool: promote the next candidates into probes when slots are free
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
@@ -568,8 +572,8 @@ SELECT
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
     WHEN a.class = 'MARGINAL' THEN NULL
-    WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
-    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
@@ -599,7 +603,9 @@ SELECT
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))
     WHEN a.class = 'MARGINAL' THEN CONCAT('marginal: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x — in the 80% pool, watch')
-    WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
+    WHEN a.class = 'LOSER' AND a.clk_w < 4
+      THEN CONCAT('still in its 4-click trial (', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks so far) — 1 click does not break; keep gathering')
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
       THEN CONCAT('loser beyond the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% exploration budget — park $0.25 (spend goes to the winners)')
     WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('losing at ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — straight to the target bid $', CAST(a.tcpc AS STRING))
@@ -664,8 +670,12 @@ SELECT
     -- TO the target bid. Winners are never pulled down.
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'EASE_TO_TARGET'
     WHEN a.class = 'MARGINAL' THEN 'KEEP'
-    WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
-    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
+    -- 4-CLICK TRIAL GATE (Ori 2026-08-02, FRESH-SP/BROAD BTS case): "1 click do not break" —
+    -- a loser can only be allowance-parked or cut-to-target once it has >= 4 clicks in W (the
+    -- same evidence bar as TRIM). Under that it is still in its trial: KEEP_TAIL, keep gathering.
+    -- (Without the gate, a day-1 campaign's 20% allowance is cents and first clicks park instantly.)
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
@@ -684,8 +694,8 @@ SELECT
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
     WHEN a.class = 'MARGINAL' THEN NULL
-    WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
-    WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < (SELECT IF(in_peak, 4, 2) FROM season) AND a.cand_rank <= ((SELECT IF(in_peak, 4, 2) FROM season) - a.active_probes)
@@ -715,7 +725,9 @@ SELECT
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('marginal ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — glide -5%/day toward $', CAST(a.tcpc AS STRING))
     WHEN a.class = 'MARGINAL' THEN CONCAT('marginal: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x — in the 80% pool, watch (est. net ROAS)')
-    WHEN a.class = 'LOSER' AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
+    WHEN a.class = 'LOSER' AND a.clk_w < 4
+      THEN CONCAT('still in its 4-click trial (', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks so far) — 1 click does not break; keep gathering')
+    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
       THEN CONCAT('loser beyond the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% exploration budget — park $0.25 (spend goes to the winners)')
     WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('losing at ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — straight to the target bid $', CAST(a.tcpc AS STRING))
