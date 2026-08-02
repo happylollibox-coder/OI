@@ -72,6 +72,19 @@ defense AS (
   SELECT campaign_id FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
   WHERE LOWER(campaign_name) LIKE '%brand defense%'
 ),
+-- RESEARCH MODE (Ori 2026-08-02): Hunter/Discovery campaigns harvest terms — a winning term
+-- with no keyword of its own becomes an ADD_KEYWORD (broad) suggestion
+research AS (
+  SELECT CAST(campaign_id AS STRING) campaign_id FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
+  WHERE REGEXP_CONTAINS(LOWER(campaign_name), r'hunter|discovery|research')
+),
+kw_texts AS (
+  SELECT CAST(campaign_id AS STRING) campaign_id, LOWER(TRIM(keyword_text)) txt
+  FROM `onyga-482313.OI.DIM_KEYWORD` WHERE is_current AND UPPER(state) = 'ENABLED' GROUP BY 1, 2
+  UNION DISTINCT
+  SELECT CAST(campaign_id AS STRING), LOWER(TRIM(keyword_text))
+  FROM `fivetran-hl.amazon_ads.sb_keyword` WHERE NOT _fivetran_deleted AND state = 'enabled' GROUP BY 1, 2
+),
 sb_kw AS (
   SELECT id, keyword_text FROM `fivetran-hl.amazon_ads.sb_keyword` WHERE NOT _fivetran_deleted
 ),
@@ -177,6 +190,12 @@ SELECT u.campaign_id, COALESCE(e.engine, e2.engine) AS engine, u.keyword_id, u.t
   -- 90d (same bar as the keyword WINNER class), not merely an order somewhere
   (COALESCE(SAFE_DIVIDE(u.gp_90d, NULLIF(u.spend_90d, 0)), 0) >= 1.1) AS is_winner,
   ROUND(SAFE_DIVIDE(u.gp_90d, NULLIF(u.spend_90d, 0)), 2) AS net_roas_90d,
+  -- research mode: winner term lacking its own enabled keyword -> suggest ADD as broad
+  (rsr.campaign_id IS NOT NULL
+   AND COALESCE(SAFE_DIVIDE(u.gp_90d, NULLIF(u.spend_90d, 0)), 0) >= 1.1
+   AND NOT (LOWER(TRIM(u.search_term)) = LOWER(TRIM(u.target_text)))
+   AND kt.txt IS NULL
+   AND NOT REGEXP_CONTAINS(u.search_term, r'^b0[a-z0-9]{8}$')) AS is_add_candidate,
   (u.kind != 'PT'
    AND (u.kind = 'AUTO' OR LOWER(TRIM(u.search_term)) != LOWER(TRIM(u.target_text)))
    -- SQP-listed term without 90 days of market history: WAIT — no negate of either kind
@@ -197,5 +216,7 @@ LEFT JOIN oob_sb e2 ON e2.campaign_id = u.campaign_id
 LEFT JOIN term_all ta ON ta.term = LOWER(TRIM(u.search_term))
 LEFT JOIN sqp_win sq ON sq.q = LOWER(TRIM(u.search_term))
 LEFT JOIN camp_age ca ON ca.campaign_id = u.campaign_id
+LEFT JOIN research rsr ON rsr.campaign_id = CAST(u.campaign_id AS STRING)
+LEFT JOIN kw_texts kt ON kt.campaign_id = CAST(u.campaign_id AS STRING) AND kt.txt = LOWER(TRIM(u.search_term))
 WHERE u.clicks_90d > 0
   AND u.campaign_id NOT IN (SELECT campaign_id FROM defense);

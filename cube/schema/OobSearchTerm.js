@@ -3,7 +3,7 @@
 // PT excluded). Spec: architecture/OOB_BUDGET_PHASE.md §v2.
 cube(`OobSearchTerm`, {
   sql: `SELECT campaign_id, engine, keyword_id, target_text, search_term, kind, clicks, orders, spend, spend_1d, sales,
-               net_roas, net_roas_90d, clicks_90d, orders_90d, spend_90d, ad_group_ids, term_clicks_90d, term_orders_90d, is_big, sqp_wait, market_purchases_90d, term_is_keyword, is_winner, is_negate
+               net_roas, net_roas_90d, clicks_90d, orders_90d, spend_90d, ad_group_ids, term_clicks_90d, term_orders_90d, is_big, sqp_wait, market_purchases_90d, term_is_keyword, is_winner, is_add_candidate, is_negate
         FROM \`onyga-482313.OI.V_OOB_SEARCH_TERM\``,
 
   // LIVE-VIEW cube (Ori 2026-07-30 'do we need caching?'): sources change intraday and view fixes
@@ -37,6 +37,7 @@ cube(`OobSearchTerm`, {
     marketPurchases90d: { sql: `market_purchases_90d`, type: `number` },
     termIsKeyword: { sql: `term_is_keyword`, type: `boolean` },
     isWinner:   { sql: `is_winner`,   type: `boolean` },
+    isAddCandidate: { sql: `is_add_candidate`, type: `boolean` },
     isNegate:   { sql: `is_negate`,   type: `boolean` },
   },
 });

@@ -5,7 +5,7 @@ cube(`KeywordLift`, {
                active_probes, keyword_id, ad_group_id, target_text, match_type, is_auto, is_pt,
                current_bid, clicks_w, spend_w, orders_w, roas_w, target_cpc, class,
                probing, CAST(probe_started AS STRING) probe_started, probe_clicks, probe_roas,
-               clicks_7d, roas_7d, clicks_8_28, roas_8_28, spend_1d, camp_spend_1d, camp_clicks_7d, camp_roas_7d, camp_clicks_8_28, camp_roas_8_28, clicks_1d, roas_1d, clicks_prev2, roas_prev2, camp_clicks_1d, camp_roas_1d, camp_clicks_prev2, camp_roas_prev2, pct_dark, capped, slots, seat_rank, is_defense, is_seasonal, seasonal_now, role, suggested_budget, budget_reason,
+               clicks_7d, roas_7d, clicks_8_28, roas_8_28, spend_1d, camp_spend_1d, camp_clicks_7d, camp_roas_7d, camp_clicks_8_28, camp_roas_8_28, clicks_1d, roas_1d, clicks_prev2, roas_prev2, camp_clicks_1d, camp_roas_1d, camp_clicks_prev2, camp_roas_prev2, pct_dark, capped, slots, seat_rank, is_defense, is_seasonal, is_research, seasonal_now, role, suggested_budget, budget_reason,
                action, suggested_bid, reason
         FROM \`onyga-482313.OI.V_KEYWORD_LIFT\``,
 
@@ -65,6 +65,7 @@ cube(`KeywordLift`, {
     seatRank:     { sql: `seat_rank`,     type: `number` },
     isDefense:    { sql: `is_defense`,    type: `boolean` },
     isSeasonal:   { sql: `is_seasonal`,   type: `boolean` },
+    isResearch:   { sql: `is_research`,   type: `boolean` },
     seasonalNow:  { sql: `seasonal_now`,  type: `boolean` },
     role:         { sql: `role`,          type: `string` },
     suggestedBudget: { sql: `suggested_budget`, type: `number` },

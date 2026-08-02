@@ -742,6 +742,25 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           'Campaign Name (Informational only)': campName,
         };
 
+        // ADD_KEYWORD (research mode, Ori 2026-08-02): a winning term becomes a new BROAD
+        // keyword — Keyword Create rows on the matching sheet, $1 entry floor default.
+        if (item.action === 'ADD_KEYWORD') {
+          const addBid = String((item.recommended_bid ?? 1).toFixed ? (item.recommended_bid ?? 1).toFixed(2) : item.recommended_bid ?? 1);
+          if (isSB) {
+            sbRows.push({
+              'Product': 'Sponsored Brands', 'Entity': 'Keyword', 'Operation': 'Create',
+              'Campaign Id': campId, 'Ad Group Id': adGroupId, 'Campaign Name': campName,
+              'Keyword Text': item.search_term, 'Match Type': 'broad', 'Bid': addBid, 'State': 'enabled',
+            });
+          } else {
+            spRows.push({
+              ...spBase, 'Entity': 'Keyword', 'Operation': 'Create',
+              'Keyword Text': item.search_term, 'Match Type': 'BROAD', 'Bid': addBid, 'State': 'ENABLED',
+            });
+          }
+          continue;
+        }
+
         // ═══════════════════════════════════════════════════════════
         // TIER 2: Per-SEARCH-TERM actions (Create operations)
         // Uses: item.search_term as Keyword Text

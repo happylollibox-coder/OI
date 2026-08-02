@@ -100,15 +100,22 @@ agb AS (SELECT ad_group_id, ANY_VALUE(default_bid) default_bid
 -- across intents, CONCLUSIVE + enabled only); (3) else NULL. Auto clauses + product targets skip LY
 -- (the clause text is not product-specific across campaigns) — band or nothing.
 ly AS (
-  -- ly_cpc (personal target anchor) still needs >= 10 LY clicks for quality; ly_ord (the
-  -- seasonal-revival signal) counts from the first LY order in this same 28d window last year.
+  -- ly_cpc: >= 10 clicks in the LY same-28d window. seasonal = CONCENTRATION (Ori 2026-08-02):
+  -- >= 2 window orders AND >= 25% of the LY YEAR's orders in the window (uniform ~8%).
   SELECT LOWER(TRIM(targeting)) AS kw,
-         IF(SUM(Ads_clicks) >= 10, ROUND(SAFE_DIVIDE(SUM(Ads_cost), SUM(Ads_clicks)), 2), NULL) AS ly_cpc,
-         SUM(Ads_orders) AS ly_ord
+         IF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_clicks, 0)) >= 10,
+            ROUND(SAFE_DIVIDE(SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_cost, 0)),
+                              SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_clicks, 0))), 2), NULL) AS ly_cpc,
+         SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_orders, 0)) AS ly_ord,
+         SUM(Ads_orders) AS ly_year_ord,
+         -- launch-artifact guard: concentration only means SEASON if the keyword existed at
+         -- least a month before the window (else all history sits inside it by construction)
+         MIN(IF(Ads_clicks > 0, date, NULL)) AS ly_first
   FROM `onyga-482313.OI.FACT_AMAZON_ADS`
-  WHERE date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY)
+  WHERE date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 728 DAY)
                  AND DATE_SUB((SELECT d FROM wm), INTERVAL 364 DAY)
-  GROUP BY 1 HAVING SUM(Ads_clicks) >= 10 OR SUM(Ads_orders) >= 1
+  GROUP BY 1 HAVING SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_clicks, 0)) >= 10
+             OR SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_orders, 0)) >= 1
 ),
 season AS (
   SELECT COUNTIF(CURRENT_DATE('America/New_York') BETWEEN boost_start AND cooldown_end) > 0 AS in_peak
@@ -280,7 +287,7 @@ withT AS (
          WHEN bd.cpc_target IS NOT NULL THEN 'BAND' END AS tcpc_src,
     -- SEASONAL REVIVAL (Ori 2026-08-01): sold in this same 28d window LAST YEAR -> its season is
     -- arriving; it is never permanent-parked and jumps the candidate queue for a seat
-    COALESCE(ly.ly_ord, 0) >= 1 AND NOT (b.is_auto OR b.is_pt) AS seasonal_now
+    COALESCE(ly.ly_ord, 0) >= 2 AND SAFE_DIVIDE(ly.ly_ord, NULLIF(ly.ly_year_ord, 0)) >= 0.25 AND ly.ly_first <= DATE_SUB((SELECT d FROM wm), INTERVAL 421 DAY) AND NOT (b.is_auto OR b.is_pt) AS seasonal_now
   FROM baseN b
   LEFT JOIN ly ON ly.kw = LOWER(TRIM(b.target_text))
   LEFT JOIN camp_parent cp ON cp.cid = b.campaign_id

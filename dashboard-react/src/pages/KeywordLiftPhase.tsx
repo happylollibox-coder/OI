@@ -19,7 +19,7 @@ type Row = {
   campClicks1d: number; campRoas1d: number | null; campClicksPrev2: number; campRoasPrev2: number | null;
   campClicks7d: number; campRoas7d: number | null; campClicks828: number; campRoas828: number | null;
   spend1d: number; campSpend1d: number;
-  pctDark: number; slots: number; seatRank: number; isDefense: boolean; isSeasonal: boolean; seasonalNow: boolean;
+  pctDark: number; slots: number; seatRank: number; isDefense: boolean; isSeasonal: boolean; isResearch: boolean; seasonalNow: boolean;
   vSuggestedBudget: number | null; vBudgetReason: string;
   targetCpc: number | null; kwClass: string; probing: boolean;
   probeClicks: number; probeRoas: number | null;
@@ -32,12 +32,12 @@ const bool = (v: unknown): boolean => v === true || v === 'true';
 const ACT_CLS: Record<string, string> = {
   KEEP: 'text-emerald-400', WINNER_FOUND: 'text-emerald-400', PROBE_START: 'text-emerald-400',
   PROBE_ADJUST: 'text-amber-400', PROBE_WAIT: 'text-muted', KEEP_TAIL: 'text-muted',
-  EASE_TO_TARGET: 'text-amber-400', CUT_TO_TARGET: 'text-red-400', RAISE_TO_TARGET: 'text-emerald-400',
+  EASE_TO_TARGET: 'text-amber-400', CUT_TO_TARGET: 'text-red-400', RAISE_TO_TARGET: 'text-emerald-400', RESEARCH_EASE: 'text-violet-400',
   PARK: 'text-red-400', IDLE: 'text-faint',
 };
 const ROLE_CLS: Record<string, string> = {
   FUNDER: 'text-emerald-400', WATCH: 'text-amber-400', PROBE: 'text-sky-300', CANDIDATE: 'text-sky-300',
-  TRIAL: 'text-muted', PARKED: 'text-red-400', RETIRED: 'text-red-400', QUEUED: 'text-faint',
+  TRIAL: 'text-muted', PARKED: 'text-red-400', RETIRED: 'text-red-400', QUEUED: 'text-faint', ANTENNA: 'text-violet-400',
   IDLE: 'text-faint', DEFENSE: 'text-violet-400',
 };
 const ROLE_TIP: Record<string, string> = {
@@ -48,6 +48,7 @@ const ROLE_TIP: Record<string, string> = {
   TRIAL: 'still in its 4-click trial — 1 click does not break; no park or cut until 4 clicks of evidence.',
   PARKED: 'loser beyond the 20% (40% peak) exploration allowance — parked $0.25; returns through the seat queue.',
   RETIRED: 'tested ≥ 15 clicks/90d with 0 orders — permanent park; only its season (a last-year order in this same 28d window) revives it.',
+  ANTENNA: 'research mode — a loser kept alive cheap (−15%/day, floor $0.30): its winning search terms seed new broad keywords.',
   QUEUED: 'beyond the seats (budget ÷ $4) — waits at $0.25; the test resumes when a seat frees.',
   IDLE: 'seated but every probe slot is busy (2 off-season / 4 peak) — first in line when a verdict lands.',
   DEFENSE: 'the moat — never ROAS-parked, never negated; budget is the only lever.',
@@ -67,7 +68,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
   const [failed, setFailed] = useState(false);
 
   type Neg = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; marketPurchases90: number; isBig: boolean; spend1d: number; adGroupIds: string };
-  type WinTerm = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; orders90: number; roas90: number | null };
+  type WinTerm = { campaignId: string; targetText: string; term: string; kind: string; clicks90: number; orders90: number; roas90: number | null; isAddCandidate: boolean; adGroupIds: string };
   const [winTerms, setWinTerms] = useState<WinTerm[]>([]);
   type Bud = { budget: number; suggested: number | null; reason: string };
   const [budMap, setBudMap] = useState<Map<string, Bud>>(new Map());
@@ -127,7 +128,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
     // winners hierarchy (Ori 2026-08-02): terms that EARN 1.1x/90d, collapsed under their keyword
     cubeLoad({
       dimensions: ['OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
-        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.orders90d', 'OobSearchTerm.netRoas90d'],
+        'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.orders90d', 'OobSearchTerm.netRoas90d', 'OobSearchTerm.isAddCandidate', 'OobSearchTerm.adGroupIds'],
       filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT'] },
                 { member: 'OobSearchTerm.isWinner', operator: 'equals', values: ['true'] }],
     }).then(ts => {
@@ -140,6 +141,8 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
         clicks90: num(r['OobSearchTerm.clicks90d']) ?? 0,
         orders90: num(r['OobSearchTerm.orders90d']) ?? 0,
         roas90: num(r['OobSearchTerm.netRoas90d']),
+        isAddCandidate: r['OobSearchTerm.isAddCandidate'] === true || r['OobSearchTerm.isAddCandidate'] === 'true',
+        adGroupIds: String(r['OobSearchTerm.adGroupIds'] ?? ''),
       })));
     }).catch(() => {});
     cubeLoad({
@@ -157,7 +160,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
         'KeywordLift.campClicks7d', 'KeywordLift.campRoas7d', 'KeywordLift.campClicks828', 'KeywordLift.campRoas828',
         'KeywordLift.spend1d', 'KeywordLift.campSpend1d',
         'KeywordLift.pctDark', 'KeywordLift.slots', 'KeywordLift.seatRank',
-        'KeywordLift.isDefense', 'KeywordLift.isSeasonal', 'KeywordLift.seasonalNow', 'KeywordLift.suggestedBudget', 'KeywordLift.budgetReason',
+        'KeywordLift.isDefense', 'KeywordLift.isSeasonal', 'KeywordLift.isResearch', 'KeywordLift.seasonalNow', 'KeywordLift.suggestedBudget', 'KeywordLift.budgetReason',
         'KeywordLift.role', 'KeywordLift.action', 'KeywordLift.suggestedBid', 'KeywordLift.reason',
       ],
     }).then(rs => {
@@ -210,6 +213,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
         seatRank: num(r['KeywordLift.seatRank']) ?? 99,
         isDefense: r['KeywordLift.isDefense'] === true || r['KeywordLift.isDefense'] === 'true',
         isSeasonal: r['KeywordLift.isSeasonal'] === true || r['KeywordLift.isSeasonal'] === 'true',
+        isResearch: r['KeywordLift.isResearch'] === true || r['KeywordLift.isResearch'] === 'true',
         seasonalNow: r['KeywordLift.seasonalNow'] === true || r['KeywordLift.seasonalNow'] === 'true',
         vSuggestedBudget: num(r['KeywordLift.suggestedBudget']),
         vBudgetReason: String(r['KeywordLift.budgetReason'] ?? ''),
@@ -229,7 +233,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
     return m;
   }, [rows]);
 
-  const actionable = (r: Row) => r.suggestedBid != null && r.keywordId !== '' && ['PARK', 'PARK_WAIT', 'PROBE_START', 'PROBE_ADJUST', 'EASE_TO_TARGET', 'CUT_TO_TARGET', 'RAISE_TO_TARGET'].includes(r.action);
+  const actionable = (r: Row) => r.suggestedBid != null && r.keywordId !== '' && ['PARK', 'PARK_WAIT', 'PROBE_START', 'PROBE_ADJUST', 'EASE_TO_TARGET', 'CUT_TO_TARGET', 'RAISE_TO_TARGET', 'RESEARCH_EASE'].includes(r.action);
   const bidItem = (r: Row) => doQueue.items.find(i => i.keyword_id === r.keywordId && ['INCREASE_BID', 'REDUCE_BID'].includes(i.action));
   const queueBid = (r: Row, manualBid?: number) => {
     const newBid = manualBid ?? r.suggestedBid;
@@ -307,6 +311,21 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
     });
   };
   const negItem = (n: Neg) => doQueue.items.find(i => i.action === 'NEGATE_TERM' && i.campaign_id === n.campaignId && i.search_term === n.term);
+  const addItemFor = (w: { campaignId: string; term: string }) =>
+    doQueue.items.find(i => i.action === 'ADD_KEYWORD' && i.campaign_id === w.campaignId && i.search_term === w.term);
+  // research mode (Ori 2026-08-02): a winning term with no keyword of its own becomes a new
+  // BROAD keyword at the $1 entry floor — the engine proposing exactly the manual playbook
+  const queueAdd = (w: WinTerm) => {
+    const c = (byCamp.get(w.campaignId) ?? [])[0];
+    doQueue.addItem({
+      search_term: w.term, action: 'ADD_KEYWORD', campaign: c?.campaignName ?? '', campaign_id: w.campaignId,
+      ad_group_id: (w.adGroupIds || '').split(',')[0] || '', targeting: w.term, keyword_id: '',
+      match_type: 'BROAD', target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0,
+      current_bid: null, recommended_bid: 1.00,
+      campaign_type: c?.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS', product: 'Keyword',
+      spend: 0, orders: 0, cpc: 0, conv_rate: 0, source: 'COACH',
+    });
+  };
   const queueNeg = (n: Neg) => {
     const c = (byCamp.get(n.campaignId) ?? [])[0];
     // SB negatives REQUIRE an Ad Group Id (upload report 29): one row per ad group the term
@@ -378,7 +397,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
                   <td className="text-left px-2 py-0.5 text-body whitespace-nowrap">
                     <button className="text-faint pr-1" onClick={() => setOpenCamps(o => ({ ...o, [c.campaignId]: !o[c.campaignId] }))}>{expanded ? '▾' : '▸'}</button>
                     {c.campaignName}
-                    <span className="text-faint text-label"> {c.channel} · {c.slots} seats · spent ${c.spendW.toFixed(2)}/{c.wDays}d · {c.activeProbes} probing · losers {c.loserShare != null ? `${c.loserShare.toFixed(0)}%` : '—'}</span>
+                    <span className="text-faint text-label"> {c.channel}{c.isResearch && <span className="text-violet-400"> · research</span>} · {c.slots} seats · spent ${c.spendW.toFixed(2)}/{c.wDays}d · {c.activeProbes} probing · losers {c.loserShare != null ? `${c.loserShare.toFixed(0)}%` : '—'}</span>
                   </td>
                   <td className={`px-2 ${c.pctDark > 10 ? 'text-amber-400' : 'text-faint'}`}>{c.pctDark.toFixed(0)}%</td>
                   <td className="px-2 text-muted whitespace-nowrap">${c.budget.toFixed(0)} <span className="text-faint">bud</span> <span className="text-faint" title="spent yesterday">· ${c.campSpend1d.toFixed(2)}</span></td>
@@ -455,7 +474,16 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
                       <td className="px-2" /><td className="px-2" />
                       <td className="px-2 text-left text-emerald-400 whitespace-nowrap">winner {w.roas90 != null ? `${w.roas90.toFixed(2)}×` : ''}</td>
                       <td className="px-2" /><td className="px-2" />
-                      <td className="px-2 text-left text-faint whitespace-nowrap">earns ≥1.1× net over 90d — never negated</td>
+                      <td className="px-2 text-left text-faint whitespace-nowrap">earns ≥1.1× net over 90d — never negated{w.isAddCandidate && <span className="text-violet-400"> · no keyword of its own</span>}</td>
+                      <td className="px-2">
+                        {w.isAddCandidate && (
+                          <button onClick={() => { const it = addItemFor(w); if (it) doQueue.removeItem(it.id); else queueAdd(w); }}
+                            title="add this winning term as a new BROAD keyword at $1 (research mode)"
+                            className={`px-1.5 py-0 rounded border whitespace-nowrap ${addItemFor(w) ? 'border-emerald-500/40 text-emerald-300' : 'border-violet-500/40 text-violet-400 hover:bg-violet-500/10'}`}>
+                            {addItemFor(w) ? '✓' : '+ broad'}
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   </Fragment>

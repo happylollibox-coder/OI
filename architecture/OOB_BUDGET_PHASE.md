@@ -628,3 +628,25 @@ keyword-grain clicks_1d/roas_1d/clicks_prev2/roas_prev2 + campaign rollups (camp
 camp_roas_1d/camp_clicks_prev2/camp_roas_prev2), both arms; KeywordLift cube exposes them.
 DISPLAY-ONLY: the engine's classes/actions still run on W and 28d — the columns changed, not
 the judgment windows.
+
+## v22 — research mode + honest seasonal (Ori 2026-08-02, "build it")
+
+**Seasonal concentration** (replaces v8's one-order bar; both engines): `seasonal_now` now
+requires **>= 2 LY same-28d-window orders AND >= 25% of the keyword's LY-YEAR orders in the
+window AND first LY activity >= 30 days before the window** (launch-artifact guard — a
+keyword born inside the window has 100% share by construction). 74 -> 20 seasonal keywords;
+the 1-order badges ("9 year old girl birthday gifts", 1 of 6) are gone; survivors have real
+measured concentration. ly CTEs widened to the full LY year (728-364d) with window-scoped
+ly_cpc; thresholds (2 / 25% / 421d) are tunable.
+
+**Research mode** (formalizes Ori's manual play: "added new broad keywords based on winners
++ reduce bids of existing"): `is_research` = campaign name matches hunter|discovery|research.
+- Losers beyond the allowance -> **RESEARCH_EASE** (glide -15%/day, floor $0.30) instead of
+  PARK $0.25 — the antenna stays alive; role **ANTENNA** (violet). Tested-loser permanent
+  park (15 clk/90d, 0 orders) unchanged even in research.
+- **ADD_KEYWORD suggestions**: V_OOB_SEARCH_TERM.is_add_candidate — a winning term (>= 1.1x
+  /90d) in a research campaign with NO enabled keyword of its own (SP DIM_KEYWORD + SB
+  sb_keyword anti-join by equality; ASINs excluded). 1,274 candidates at deploy (best 188x).
+  Panel: "+ broad" button on orphan winner rows queues ADD_KEYWORD (broad, $1 entry floor,
+  the term's own ad group); DoPage exports Keyword Create rows on the matching SP/SB sheet.
+- Campaign header shows "· research"; role tooltip explains ANTENNA.

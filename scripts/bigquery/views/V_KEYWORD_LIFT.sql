@@ -40,6 +40,9 @@ camps AS (
     -- v9 (Ori 2026-08-02): seasonal campaigns get their own Weekly Run home — name-based like
     -- is_defense ('prime'/'season' deliberately not matched, too ambiguous)
     REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal,
+    -- RESEARCH MODE (Ori 2026-08-02): Hunter/Discovery campaigns are term-harvesting antennae —
+    -- losers glide low instead of parking; winner terms without a keyword suggest ADD_KEYWORD
+    REGEXP_CONTAINS(LOWER(c.campaign_name), r'hunter|discovery|research') AS is_research,
     -- v19: is the campaign's OWN season running right now (pre-season start -> cooldown end)?
     ah.holiday_name IS NOT NULL AS season_active
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c
@@ -134,15 +137,25 @@ episode AS (
 ),
 -- target CPC (probe entry anchor): LY same-28d-last-year else band (keywords only)
 ly AS (
-  -- ly_cpc (the personal target anchor) still needs >= 10 LY clicks for quality; ly_ord (the
-  -- seasonal-revival signal) counts from the first LY order — a 4-click 2-order LY seller revives.
+  -- ly_cpc (the personal target anchor): >= 10 clicks in the LY same-28d window for quality.
+  -- ly_ord + ly_year_ord feed the SEASONAL CONCENTRATION test (Ori 2026-08-02: one LY order
+  -- can't make a season — birthday keywords sell year-round): the window's share of the LY
+  -- YEAR's orders must be >= 25% (uniform = ~8%) with >= 2 window orders.
   SELECT LOWER(TRIM(targeting)) AS kw,
-         IF(SUM(Ads_clicks) >= 10, ROUND(SAFE_DIVIDE(SUM(Ads_cost), SUM(Ads_clicks)), 2), NULL) AS ly_cpc,
-         SUM(Ads_clicks) AS ly_clk, SUM(Ads_orders) AS ly_ord
+         IF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_clicks, 0)) >= 10,
+            ROUND(SAFE_DIVIDE(SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_cost, 0)),
+                              SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_clicks, 0))), 2), NULL) AS ly_cpc,
+         SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_clicks, 0)) AS ly_clk,
+         SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_orders, 0)) AS ly_ord,
+         SUM(Ads_orders) AS ly_year_ord,
+         -- launch-artifact guard: concentration only means SEASON if the keyword existed at
+         -- least a month before the window (else all history sits inside it by construction)
+         MIN(IF(Ads_clicks > 0, date, NULL)) AS ly_first
   FROM `onyga-482313.OI.FACT_AMAZON_ADS`
-  WHERE date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY)
+  WHERE date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 728 DAY)
                  AND DATE_SUB((SELECT d FROM wm), INTERVAL 364 DAY)
-  GROUP BY 1 HAVING SUM(Ads_clicks) >= 10 OR SUM(Ads_orders) >= 1
+  GROUP BY 1 HAVING SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_clicks, 0)) >= 10
+             OR SUM(IF(date >= DATE_SUB((SELECT d FROM wm), INTERVAL 391 DAY), Ads_orders, 0)) >= 1
 ),
 camp_parent AS (
   SELECT CAST(f.campaign_id AS STRING) cid, ANY_VALUE(p.parent_name) parent_name
@@ -188,7 +201,7 @@ sp_dark AS (
   FROM sp_sqd GROUP BY 1
 ),
 base AS (
-  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal, c.season_active,
+  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal, c.season_active, c.is_research,
     td.target_text, td.keyword_id, td.ad_group_id, td.match_type,
     LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements') AS is_auto,
     LOWER(td.target_text) LIKE 'asin%' AS is_pt,
@@ -210,7 +223,8 @@ base AS (
     COALESCE(l.ly_clk, 0) AS ly_clk,
     -- SEASONAL REVIVAL (Ori 2026-08-01): it SOLD in this same 28-day window last year — its
     -- season is arriving; exempt from the tested-loser bar and jump the seat queue
-    COALESCE(l.ly_ord, 0) >= 1
+    COALESCE(l.ly_ord, 0) >= 2 AND SAFE_DIVIDE(l.ly_ord, NULLIF(l.ly_year_ord, 0)) >= 0.25
+      AND l.ly_first <= DATE_SUB((SELECT d FROM wm), INTERVAL 421 DAY)
       AND NOT (LOWER(td.target_text) IN ('close-match','loose-match','substitutes','complements')
                OR LOWER(td.target_text) LIKE 'asin%') AS seasonal_now,
     COALESCE(dk.pd, 0) > 0.10 AS capped,
@@ -307,6 +321,9 @@ sb_camps AS (
     -- v9 (Ori 2026-08-02): seasonal campaigns get their own Weekly Run home — name-based like
     -- is_defense ('prime'/'season' deliberately not matched, too ambiguous)
     REGEXP_CONTAINS(LOWER(c.campaign_name), r'christmas|xmas|valentine|easter|halloween|thanksgiving|black friday|bfcm|cyber monday|back to school|mother.?s day|father.?s day|santa|advent|holiday') AS is_seasonal,
+    -- RESEARCH MODE (Ori 2026-08-02): Hunter/Discovery campaigns are term-harvesting antennae —
+    -- losers glide low instead of parking; winner terms without a keyword suggest ADD_KEYWORD
+    REGEXP_CONTAINS(LOWER(c.campaign_name), r'hunter|discovery|research') AS is_research,
     -- v19: is the campaign's OWN season running right now (pre-season start -> cooldown end)?
     ah.holiday_name IS NOT NULL AS season_active
   FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c
@@ -456,7 +473,7 @@ sb_dark AS (
   FROM sb_sqd GROUP BY 1
 ),
 sb_base AS (
-  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal, c.season_active,
+  SELECT c.campaign_id, c.campaign_name, c.budget, c.is_defense, c.is_seasonal, c.season_active, c.is_research,
     t.target_text, t.keyword_id, t.ad_group_id, t.match_type,
     FALSE AS is_auto, t.is_pt,
     COALESCE(t.keyword_bid, agb.default_bid) AS current_bid,
@@ -474,7 +491,7 @@ sb_base AS (
     COALESCE(ep.ep_ord, 0) ep_ord,
     ROUND(COALESCE(IF(t.is_pt, NULL, l.ly_cpc), fb.cpc_target, bd.cpc_target), 2) AS tcpc,
     COALESCE(l.ly_clk, 0) AS ly_clk,
-    COALESCE(l.ly_ord, 0) >= 1 AND NOT t.is_pt AS seasonal_now,
+    COALESCE(l.ly_ord, 0) >= 2 AND SAFE_DIVIDE(l.ly_ord, NULLIF(l.ly_year_ord, 0)) >= 0.25 AND l.ly_first <= DATE_SUB((SELECT d FROM sb_wm), INTERVAL 421 DAY) AND NOT t.is_pt AS seasonal_now,
     COALESCE(dk.pd, 0) > 0.10 AS capped,
     ROUND(COALESCE(dk.pd, 0) * 100) AS pct_dark
   FROM sb_camps c
@@ -573,7 +590,7 @@ SELECT
   a.camp_clk2 AS camp_clicks_prev2, a.camp_roas_prev2,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
-  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.is_seasonal, a.seasonal_now,
+  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.is_seasonal, a.is_research, a.seasonal_now,
   -- ROLE (Ori 2026-08-02): the keyword's job in the campaign economy, one word.
   -- FUNDER pays for everything · WATCH earns but thin · PROBE mid-test · CANDIDATE next up
   -- · TRIAL gathering its 4 clicks · PARKED allowance-parked (can return) · RETIRED tested
@@ -587,6 +604,7 @@ SELECT
     -- and it needs EVIDENCE: >= 4 clicks in the 28d ("only 1 click can't be funder")
     WHEN SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)) >= 1.1 AND (a.clk7 + a.clk8_28) >= 4 THEN 'FUNDER'
     WHEN a.class IN ('WINNER', 'MARGINAL') THEN 'WATCH'
+    WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'ANTENNA'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'PARKED'
     WHEN a.class = 'LOSER' THEN 'TRIAL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
@@ -636,6 +654,7 @@ SELECT
     -- a loser can only be allowance-parked or cut-to-target once it has >= 4 clicks in W (the
     -- same evidence bar as TRIM). Under that it is still in its trial: KEEP_TAIL, keep gathering.
     -- (Without the gate, a day-1 campaign's 20% allowance is cents and first clicks park instantly.)
+    WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35 THEN 'RESEARCH_EASE'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
@@ -660,6 +679,8 @@ SELECT
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
     WHEN a.class = 'MARGINAL' THEN NULL
+    WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35
+      THEN ROUND(GREATEST(a.current_bid * 0.85, 0.30), 2)
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
@@ -697,6 +718,8 @@ SELECT
     WHEN a.class = 'MARGINAL' THEN CONCAT('marginal: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x — in the 80% pool, watch')
     WHEN a.class = 'LOSER' AND a.clk_w < 4
       THEN CONCAT('still in its 4-click trial (', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks so far) — 1 click does not break; keep gathering')
+    WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35
+      THEN 'research mode — the antenna stays alive: glide -15%/day, floor $0.30 (its winning terms seed new keywords)'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
       THEN CONCAT('loser beyond the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% exploration budget — park $0.25 (spend goes to the winners)')
     WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
@@ -738,7 +761,7 @@ SELECT
   a.camp_clk2 AS camp_clicks_prev2, a.camp_roas_prev2,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
-  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.is_seasonal, a.seasonal_now,
+  a.pct_dark, a.capped, a.slots, a.seat_rank, a.is_defense, a.is_seasonal, a.is_research, a.seasonal_now,
   -- ROLE (Ori 2026-08-02): the keyword's job in the campaign economy, one word.
   -- FUNDER pays for everything · WATCH earns but thin · PROBE mid-test · CANDIDATE next up
   -- · TRIAL gathering its 4 clicks · PARKED allowance-parked (can return) · RETIRED tested
@@ -752,6 +775,7 @@ SELECT
     -- and it needs EVIDENCE: >= 4 clicks in the 28d ("only 1 click can't be funder")
     WHEN SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)) >= 1.1 AND (a.clk7 + a.clk8_28) >= 4 THEN 'FUNDER'
     WHEN a.class IN ('WINNER', 'MARGINAL') THEN 'WATCH'
+    WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'ANTENNA'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp THEN 'PARKED'
     WHEN a.class = 'LOSER' THEN 'TRIAL'
     WHEN a.class = 'IDLE' AND NOT a.capped AND a.seat_rank <= a.slots
@@ -797,6 +821,7 @@ SELECT
     -- a loser can only be allowance-parked or cut-to-target once it has >= 4 clicks in W (the
     -- same evidence bar as TRIM). Under that it is still in its trial: KEEP_TAIL, keep gathering.
     -- (Without the gate, a day-1 campaign's 20% allowance is cents and first clicks park instantly.)
+    WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35 THEN 'RESEARCH_EASE'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
@@ -820,6 +845,8 @@ SELECT
     WHEN a.class = 'MARGINAL' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, a.tcpc), 2)
     WHEN a.class = 'MARGINAL' THEN NULL
+    WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35
+      THEN ROUND(GREATEST(a.current_bid * 0.85, 0.30), 2)
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
@@ -857,6 +884,8 @@ SELECT
     WHEN a.class = 'MARGINAL' THEN CONCAT('marginal: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x — in the 80% pool, watch (est. net ROAS)')
     WHEN a.class = 'LOSER' AND a.clk_w < 4
       THEN CONCAT('still in its 4-click trial (', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks so far) — 1 click does not break; keep gathering')
+    WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35
+      THEN 'research mode — the antenna stays alive: glide -15%/day, floor $0.30 (its winning terms seed new keywords)'
     WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
       THEN CONCAT('loser beyond the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% exploration budget — park $0.25 (spend goes to the winners)')
     WHEN a.class = 'LOSER' AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
