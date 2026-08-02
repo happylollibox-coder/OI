@@ -321,7 +321,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
                   return (
                   <tr key={`${c.campaignId}|${k.keywordId || k.text}`} className="text-right border-t border-border/20 bg-surface/40">
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
-                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}) · <span className={CLASS_CLS[k.kwClass] ?? ''}>{k.kwClass.toLowerCase()}</span>{k.seasonalNow && <span className="text-sky-400"> · seasonal</span>} · spent ${k.kwSpendW.toFixed(2)}</span></td>
+                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}) · <span className={CLASS_CLS[k.kwClass] ?? ''}>{k.kwClass.toLowerCase()}</span>{k.seatRank <= k.slots ? <span className="text-sky-300"> · seat {k.seatRank}/{k.slots}</span> : <span className="text-faint"> · queue #{k.seatRank - k.slots}</span>}{k.seasonalNow && <span className="text-sky-400"> · seasonal</span>} · spent ${k.kwSpendW.toFixed(2)}</span></td>
                     <td className="px-2" />
                     <td className="px-2 text-muted whitespace-nowrap">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}<span className="text-faint" title="spent yesterday"> · ${k.spend1d.toFixed(2)}</span></td>
                     <td className="px-2 text-muted whitespace-nowrap">{k.clicks7d}c{k.roas7d != null ? ` ${k.roas7d.toFixed(2)}×` : ' —'}</td>

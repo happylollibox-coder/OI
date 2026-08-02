@@ -337,10 +337,13 @@ SELECT
     WHEN b.current_bid IS NULL THEN NULL
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN NULL
     -- mid-probe keyword: the Portfolio 80/20 engine owns it — no seat-model action mid-test
-    WHEN b.is_lift_probe THEN NULL
+    -- v14 (Ori 2026-08-02 "should those be parked?"): a probe only keeps its bid while it HOLDS
+    -- A SEAT — beyond the seats it queues at $0.25 like any mid-test (test pauses, not dies).
+    -- A mid-probe keyword never permanent-parks (its 20-click verdict outranks the 15-click bar).
+    WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN NULL
     -- tested loser: permanent park (had its 15-click trial, no sale)
-    WHEN b.tested_loser AND b.current_bid > x.bid_park + 0.05 THEN x.bid_park
-    WHEN b.tested_loser THEN NULL
+    WHEN b.tested_loser AND NOT b.is_lift_probe AND b.current_bid > x.bid_park + 0.05 THEN x.bid_park
+    WHEN b.tested_loser AND NOT b.is_lift_probe THEN NULL
     -- beyond the seats: queue at $0.25 — the test pauses, not dies (seat model, Ori 2026-08-01)
     WHEN b.seat_rank > b.slots THEN IF(b.current_bid > 0.30, x.bid_park, NULL)
     -- seated after being parked: ACTIVATE at the probe entry bid, paced by the 20% rule
@@ -383,8 +386,8 @@ SELECT
   CASE
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'HOLD'
-    WHEN b.is_lift_probe THEN 'HOLD'
-    WHEN b.tested_loser THEN IF(b.current_bid > x.bid_park + 0.05, 'PARK', 'HOLD')
+    WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN 'HOLD'
+    WHEN b.tested_loser AND NOT b.is_lift_probe THEN IF(b.current_bid > x.bid_park + 0.05, 'PARK', 'HOLD')
     WHEN b.seat_rank > b.slots THEN IF(b.current_bid > 0.30, 'PARK_WAIT', 'HOLD')
     WHEN b.current_bid <= 0.30
       THEN IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)), 'ACTIVATE', 'HOLD')
@@ -402,14 +405,15 @@ SELECT
   CASE
     WHEN b.current_bid IS NULL THEN 'no bid on record'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'changed today — one suggestion per day'
-    WHEN b.is_lift_probe THEN 'probe in flight — the Portfolio 80/20 engine owns this keyword until its 20-click verdict'
-    WHEN b.tested_loser
+    WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN 'probe in flight — holds a seat until its 20-click verdict (the Portfolio 80/20 engine owns the bid)'
+    WHEN b.tested_loser AND NOT b.is_lift_probe
       THEN CONCAT('tested ', CAST(b.clk90 AS STRING), ' clicks/90d with 0 orders — permanent park; its seat goes to the next candidate')
     WHEN b.seat_rank > b.slots THEN
       IF(b.converting OR COALESCE(b.roas90, 0) >= 1.0,
          CONCAT('proven (', CAST(COALESCE(b.roas90, 0) AS STRING), 'x 90d) but the budget funds only ',
                 CAST(b.slots AS STRING), ' seats — queue #', CAST(b.seat_rank - b.slots AS STRING)),
-         CONCAT('queue #', CAST(b.seat_rank - b.slots AS STRING), ' of the waiting line — ',
+         CONCAT(IF(b.is_lift_probe, 'probe pauses — beyond the seats while the campaign caps; ', ''),
+                'queue #', CAST(b.seat_rank - b.slots AS STRING), ' of the waiting line — ',
                 CAST(b.slots AS STRING), ' seats (budget ÷ $4); its test resumes when a seat frees'))
     WHEN b.current_bid <= 0.30 THEN
       IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)),

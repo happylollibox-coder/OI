@@ -15,7 +15,7 @@ type Row = {
   daysSince: number | null; action: string; suggested: number | null; reason: string;
 };
 type Kw = {
-  campaignId: string; keywordId: string; adGroupId: string; text: string; matchType: string;
+  campaignId: string; keywordId: string; adGroupId: string; text: string; matchType: string; slots: number; seatRank: number;
   isAuto: boolean; isPt: boolean; bid: number | null; clicks1: number; spend1: number; cpc1: number | null;
   units1: number; roas1: number | null; clicks2: number; roas2: number | null;
   targetCpc: number | null; targetCpcSrc: string;
@@ -71,7 +71,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
           'OobKeyword.matchType', 'OobKeyword.isAuto', 'OobKeyword.isPt', 'OobKeyword.currentBid',
           'OobKeyword.clicks1d', 'OobKeyword.spend1d', 'OobKeyword.cpc1d', 'OobKeyword.units1d', 'OobKeyword.roas1d',
           'OobKeyword.clicksPrev2', 'OobKeyword.roasPrev2',
-          'OobKeyword.targetCpc', 'OobKeyword.targetCpcSource',
+          'OobKeyword.targetCpc', 'OobKeyword.targetCpcSource', 'OobKeyword.slots', 'OobKeyword.seatRank',
           'OobKeyword.suggestedBid', 'OobKeyword.bidAction', 'OobKeyword.bidReason',
         ],
       }),
@@ -122,6 +122,8 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
         adGroupId: String(r['OobKeyword.adGroupId'] ?? ''),
         text: String(r['OobKeyword.targetText'] ?? ''),
         matchType: String(r['OobKeyword.matchType'] ?? ''),
+        slots: num(r['OobKeyword.slots']) ?? 1,
+        seatRank: num(r['OobKeyword.seatRank']) ?? 99,
         isAuto: bool(r['OobKeyword.isAuto']),
         isPt: bool(r['OobKeyword.isPt']),
         bid: num(r['OobKeyword.currentBid']),
@@ -315,7 +317,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                   <Fragment key={`${r.id}|${k.keywordId || k.text}`}>
                   <tr className="text-right border-t border-border/20 bg-surface/40">
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
-                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}){winners > 0 ? ` · ${winners} winner${winners > 1 ? 's' : ''}` : ''} · spent ${k.spend1.toFixed(2)}</span></td>
+                      <span className="text-faint"> ({k.isAuto ? 'auto' : k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}){k.seatRank <= k.slots ? <span className="text-sky-300"> · seat {k.seatRank}/{k.slots}</span> : <span className="text-faint"> · queue #{k.seatRank - k.slots}</span>}{winners > 0 ? ` · ${winners} winner${winners > 1 ? 's' : ''}` : ''} · spent ${k.spend1.toFixed(2)}</span></td>
                     <td className="px-2" />
                     <td className="px-2 text-muted whitespace-nowrap" title="current bid">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}<span className="text-faint" title="spent yesterday"> · ${k.spend1.toFixed(2)}</span></td>
                     <td className="px-2 text-muted whitespace-nowrap" title="last day clicks · net ROAS">{k.clicks1}c{k.roas1 != null ? ` ${k.roas1.toFixed(2)}×` : ' —'}</td>

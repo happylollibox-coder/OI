@@ -13,7 +13,7 @@ import { useDoQueue } from '../hooks/useDoQueue';
 
 type Row = {
   campaignId: string; campaignName: string; channel: string; budget: number;
-  keywordId: string; text: string; matchType: string; isPt: boolean; bid: number | null;
+  keywordId: string; text: string; matchType: string; isPt: boolean; bid: number | null; slots: number; seatRank: number;
   spend1d: number; campSpend1d: number; pctDark: number;
   clicks7d: number; roas7d: number | null; clicks828: number; roas828: number | null;
   campClicks7d: number; campRoas7d: number | null; campClicks828: number; campRoas828: number | null;
@@ -34,6 +34,7 @@ export function BrandDefensePhase() {
       dimensions: [
         'KeywordLift.campaignId', 'KeywordLift.campaignName', 'KeywordLift.channel', 'KeywordLift.budget',
         'KeywordLift.keywordId', 'KeywordLift.targetText', 'KeywordLift.matchType', 'KeywordLift.isPt',
+        'KeywordLift.slots', 'KeywordLift.seatRank',
         'KeywordLift.currentBid', 'KeywordLift.spend1d', 'KeywordLift.campSpend1d', 'KeywordLift.pctDark',
         'KeywordLift.clicks7d', 'KeywordLift.roas7d', 'KeywordLift.clicks828', 'KeywordLift.roas828',
         'KeywordLift.campClicks7d', 'KeywordLift.campRoas7d', 'KeywordLift.campClicks828', 'KeywordLift.campRoas828',
@@ -50,6 +51,8 @@ export function BrandDefensePhase() {
         keywordId: String(r['KeywordLift.keywordId'] ?? ''),
         text: String(r['KeywordLift.targetText'] ?? ''),
         matchType: String(r['KeywordLift.matchType'] ?? ''),
+        slots: num(r['KeywordLift.slots']) ?? 1,
+        seatRank: num(r['KeywordLift.seatRank']) ?? 99,
         isPt: r['KeywordLift.isPt'] === true || r['KeywordLift.isPt'] === 'true',
         bid: num(r['KeywordLift.currentBid']),
         spend1d: num(r['KeywordLift.spend1d']) ?? 0,
@@ -160,7 +163,7 @@ export function BrandDefensePhase() {
                 {expanded && kws.map(k => (
                   <tr key={`${c.campaignId}|${k.keywordId || k.text}`} className="text-right border-t border-border/20 bg-surface/40">
                     <td className="text-left pl-8 pr-2 py-0.5 text-muted whitespace-nowrap">{k.text}
-                      <span className="text-faint"> ({k.isPt ? 'PT' : (k.matchType || '').toLowerCase()})</span></td>
+                      <span className="text-faint"> ({k.isPt ? 'PT' : (k.matchType || '').toLowerCase()}){k.seatRank <= k.slots ? <span className="text-sky-300"> · seat {k.seatRank}/{k.slots}</span> : <span className="text-faint"> · queue #{k.seatRank - k.slots}</span>}</span></td>
                     <td className="px-2" />
                     <td className="px-2 text-muted whitespace-nowrap">{k.bid != null ? <>${k.bid.toFixed(2)} <span className="text-faint">bid</span></> : '—'}<span className="text-faint" title="spent yesterday"> · ${k.spend1d.toFixed(2)}</span></td>
                     <td className="px-2 text-muted whitespace-nowrap">{k.clicks7d}c{k.roas7d != null ? ` ${k.roas7d.toFixed(2)}×` : ' —'}</td>

@@ -398,3 +398,23 @@ day. Never above target from this rule (beyond-target raises stay earned via the
 losers excluded (they'd lose faster at higher CPCs — the probe path is their way back).
 $0.50 → $1.20 takes ~10 days at this pace. Panel: emerald action, apply button queues the
 raise. At deploy: 2 live ramps (both under-bid seasonal converters at $0.20–0.30 bids).
+
+## v14 — probes compete for seats + seat status everywhere (Ori 2026-08-02)
+
+Trigger (the "why are there 4 seats" case, ME-SP/PT B2 + VIDEO- BALL): in-flight Portfolio
+probes were blanket-exempt from the OOB seat model ("probe in flight — hold"), so a 3-seat
+campaign could carry 5 full bids while 70%+ dark, and the visible queue started at #3
+because the probes silently occupied #1–#2.
+
+Rule (`V_OOB_KEYWORD`): **a probe only keeps its bid while it holds a seat.**
+- Seated probe (seat_rank ≤ slots): HOLD, untouched — "probe in flight — holds a seat until
+  its 20-click verdict" (the Portfolio engine still owns the bid; no TRIM/DARK_BRAKE).
+- Beyond-seat probe: **PARK_WAIT $0.25** like any mid-test — "probe pauses — beyond the seats
+  while the campaign caps"; it resumes via ACTIVATE when a seat frees or darkness clears.
+- A mid-probe keyword still never permanent-parks (tested_loser gated `AND NOT is_lift_probe`
+  — the 20-click verdict outranks the 15-click bar).
+
+**Seat status on every keyword row** (Ori: "for all tables add keyword seat status"): the
+OOB, Portfolio (all tiers incl. Seasonal) and Brand-defense tables now show `seat i/M` (sky)
+or `queue #k` (faint) on each keyword — OobKeyword cube gained slots/seatRank dims.
+Paused-history tables excluded (no seats while paused).

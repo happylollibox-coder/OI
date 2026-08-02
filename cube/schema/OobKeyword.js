@@ -5,7 +5,7 @@ cube(`OobKeyword`, {
   sql: `SELECT campaign_id, campaign_name, pct_dark, keyword_id, ad_group_id, target_text, match_type,
                is_auto, is_pt, is_sb, current_bid, clicks_1d, spend_1d, cpc_1d, units_1d, roas_1d,
                clicks_prev2, spend_prev2, cpc_prev2, units_prev2, roas_prev2,
-               converting, days_since_change, target_cpc, target_cpc_source, suggested_bid, bid_action, bid_reason
+               converting, days_since_change, target_cpc, target_cpc_source, slots, seat_rank, suggested_bid, bid_action, bid_reason
         FROM \`onyga-482313.OI.V_OOB_KEYWORD\``,
 
   // Same stamp as the other launch-track cubes: invalidate when the orchestration completes.
@@ -41,6 +41,8 @@ cube(`OobKeyword`, {
     daysSinceChange: { sql: `days_since_change`, type: `number` },
     targetCpc:   { sql: `target_cpc`,   type: `number` },
     targetCpcSource: { sql: `target_cpc_source`, type: `string` },
+    slots:        { sql: `slots`,        type: `number` },
+    seatRank:     { sql: `seat_rank`,    type: `number` },
     suggestedBid:{ sql: `suggested_bid`, type: `number` },
     bidAction:   { sql: `bid_action`,   type: `string` },
     bidReason:   { sql: `bid_reason`,   type: `string` },
