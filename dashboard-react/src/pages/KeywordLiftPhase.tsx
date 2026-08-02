@@ -54,7 +54,7 @@ const CLASS_CLS: Record<string, string> = {
   WINNER: 'text-emerald-400', MARGINAL: 'text-amber-400', LOSER: 'text-red-400', IDLE: 'text-faint',
 };
 
-export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) {
+export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' | 'SEASONAL_LOW' }) {
   const doQueue = useDoQueue();
   const [open, setOpen] = useState(false);
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
@@ -244,8 +244,10 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
   const camps = [...byCamp.values()].filter(g => {
     const c = g[0];
     if (!c || oobIds.has(c.campaignId) || c.isDefense) return false;
-    // v9 (Ori 2026-08-02): seasonal campaigns get their own section, any tier.
-    if (tier === 'SEASONAL') return c.isSeasonal;
+    // v9 + v20 (Ori 2026-08-02): seasonal campaigns get their own sections, split by tier
+    // like the evergreen 2x2 ("separate seasonal to seasonal low budget and seasonal").
+    if (tier === 'SEASONAL') return c.isSeasonal && c.budget > lowCap;
+    if (tier === 'SEASONAL_LOW') return c.isSeasonal && c.budget <= lowCap;
     if (c.isSeasonal) return false;
     return tier === 'LOW' ? c.budget <= lowCap : c.budget > lowCap;
   });
@@ -306,14 +308,14 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }
   };
   const nParks = sugs.filter(r => r.action === 'PARK').length;
   const nProbes = sugs.filter(r => r.action.startsWith('PROBE')).length;
-  const nFound = (rows ?? []).filter(r => r.action === 'WINNER_FOUND').length;
+  const nFound = (rows ?? []).filter(r => r.action === 'WINNER_FOUND' && campIds.has(r.campaignId)).length;
 
   return (
     <div className="mb-3 rounded-md border border-border bg-surface/30 px-3 py-2">
       <div className="flex items-center gap-1">
         <button className="text-label flex items-center gap-1 flex-1 min-w-0" onClick={() => setOpen(o => !o)}>
           <span className="text-faint">{open ? '▾' : '▸'}</span>
-          <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : tier === 'SEASONAL' ? 'Seasonal' : 'Portfolio 80/20'}</span>
+          <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : tier === 'SEASONAL' ? 'Seasonal' : tier === 'SEASONAL_LOW' ? 'Seasonal low budget' : 'Portfolio 80/20'}</span>
           <span className="text-faint truncate">
             {failed ? '— unavailable' : rows
               ? `— ${camps.length} working campaigns · ${nParks} parks · ${nProbes} probes · ${nFound} winners found · ${visNegs.length} negates`

@@ -788,6 +788,7 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                 <BrandDefensePhase />
                 {/* v9 (Ori 2026-08-02): seasonal campaigns separated — OOB + healthy (incl. paused seasonal) */}
                 <OobBudgetPhase tier="SEASONAL" />
+                <KeywordLiftPhase tier="SEASONAL_LOW" />
                 <KeywordLiftPhase tier="SEASONAL" />
                 {/* v12 (Ori 2026-08-02): paused campaigns in the Seasonal table grammar, historic
                     measures only — Seasonal Paused shows ONLY the relevant season's last occurrence */}

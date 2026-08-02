@@ -607,3 +607,13 @@ state treat them identically. The ✓ queue-toggle shows on any row with a queue
 OR manual — so a hand-set bid can be reviewed and un-queued like any suggestion. The
 section-level "✓ applied N" unapply ALSO clears manual bids scoped to that section's
 campaigns (sections are disjoint, so campaign scope is exact).
+
+## v20 — Seasonal split by tier (Ori 2026-08-02)
+
+"Separate seasonal to seasonal low budget and seasonal": the healthy Seasonal section splits
+like the evergreen 2x2 — **Seasonal low budget** (budget <= the low cap, $20 off / $30 peak)
+and **Seasonal** (working tier above it). Seasonal — out of budget stays one section (any
+tier). Layout is now: 2x2 evergreen + Brand defense + Seasonal-OOB + Seasonal low budget +
+Seasonal + Seasonal Paused + Other. All six BTS campaigns sit in Seasonal low budget today;
+the working tier fills as the budget ladder graduates them. (Also fixed: the "N winners
+found" header counter is now scoped to the section's campaigns.)
