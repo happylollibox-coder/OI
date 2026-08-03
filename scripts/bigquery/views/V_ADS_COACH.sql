@@ -2333,9 +2333,10 @@ ly_ceiling AS (
   GROUP BY 1 HAVING SUM(Ads_clicks) >= 10
 ),
 lift_probes AS (
-  SELECT DISTINCT keyword_id
-  FROM `onyga-482313.OI.V_KEYWORD_LIFT`
-  WHERE probing OR action = 'PROBE_START'
+  -- reads the T_ snapshot (refreshed at the top of SP_REFRESH_CUBE_TABLES) — inlining
+  -- V_KEYWORD_LIFT here made every coach materialization re-plan the entire engine view
+  -- and blew BigQuery's planner (2026-08-03)
+  SELECT keyword_id FROM `onyga-482313.OI.T_LIFT_PROBES`
 ),
 scored_flagged AS (
   SELECT sr.*,

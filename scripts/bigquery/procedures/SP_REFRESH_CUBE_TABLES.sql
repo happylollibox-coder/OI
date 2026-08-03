@@ -16,6 +16,13 @@ OPTIONS (
   description = "Creates physical snapshot tables (T_*) from logical analytics views (V_*) for fast querying in Cube.js."
 )
 BEGIN
+  -- 0. Lift probe set — materialized FIRST so the coach chain never inlines the (large)
+  -- V_KEYWORD_LIFT: planning it once here is fine; re-expanding it inside every coach
+  -- T_ table blew query planning ("too many subqueries", 2026-08-03).
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_LIFT_PROBES` AS
+    SELECT DISTINCT keyword_id FROM `onyga-482313.OI.V_KEYWORD_LIFT`
+    WHERE probing OR action = 'PROBE_START';
+
   -- 1. Unified Daily
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_UNIFIED_DAILY` AS SELECT * FROM `onyga-482313.OI.V_UNIFIED_DAILY`;
   
