@@ -761,3 +761,18 @@ something. We need at least 30 clicks a week. In this case we should lift the bi
   episode, so the data it buys resolves into real verdicts. Keywords already at/above the
   anchor hold with the honest reason "under the 30-click/week decision floor (Nc/7d)".
 - 29 VOLUME_LIFTs at deploy; zero invalid (none capped/auto/downward/above $2).
+
+## v26 — CUT_TO_BREAKEVEN: economics name the bid (Ori 2026-08-03)
+
+Ori (BUNNY-VIDEO case): "those keywords are not [weekly] losers — last 28 days they have
+more than 30 clicks and net ROAS is poor. Reduce bids by the rate of clicks per sale: if 30
+clicks create one sale and margin is $3, the bid should be 3/30."
+
+margin-per-sale ÷ clicks-per-sale = **28d net profit ÷ 28d clicks** — the realized value of
+one click. Rule (`V_KEYWORD_LIFT`, both arms): a non-WINNER keyword (not auto/defense) with
+**>= 30 clicks over 28d** and 28d net ROAS < 1.0, bidding above its profit-per-click ->
+**CUT_TO_BREAKEVEN** = max(gp28/clk28, $0.02). Keyword-grain 28d evidence outranks the
+weekly volume floor (such keywords are EXCLUDED from VOLUME_LIFT — they need their verdict,
+not more traffic) and outranks research ease. Zero-sale 30+click keywords compute to the
+$0.02 floor — economics' version of a park (the 15clk/90d permanent park still follows).
+49 cuts at deploy; invariants clean (all downward, none under $0.02, all >= 30 clicks).

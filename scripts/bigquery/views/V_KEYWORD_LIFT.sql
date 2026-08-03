@@ -707,11 +707,20 @@ SELECT
     -- losers re-enter through the probe path at 1.5x target instead.
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc THEN 'RAISE_TO_TARGET'
+    -- BREAKEVEN CUT (Ori 2026-08-03): a keyword with >= 30 clicks over 28d IS decidable at its
+    -- own grain — and its economics name the bid: margin per sale ÷ clicks per sale = 28d
+    -- profit per click ("30 clicks per sale x $3 margin -> bid $0.10"). Poor 28d net ROAS
+    -- (< 1.0) with the bid above that breakeven -> cut TO it (floor $0.02). Outranks the
+    -- volume lift and research ease — accumulated keyword evidence beats both.
+    WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
+         AND (a.clk7 + a.clk8_28) >= 30
+         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 1.0
+         AND COALESCE(a.current_bid, 0) > GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02) + 0.05 THEN 'CUT_TO_BREAKEVEN'
     -- VOLUME FLOOR (Ori 2026-08-03): under ~30 clicks/week a campaign cannot decide anything —
     -- classes are noise. Seated keywords below the entry anchor LIFT to it (max($1, min(1.5x
     -- target, $2))) to buy decision-grade traffic; parks/cuts above are volume-gated.
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
-         AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'VOLUME_LIFT'
+         AND (a.clk7 + a.clk8_28) < 30 AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'VOLUME_LIFT'
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
     -- bids when performance is good. Winner clause with real evidence, campaign not capped:
     -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
@@ -757,6 +766,10 @@ SELECT
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
+    WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
+         AND (a.clk7 + a.clk8_28) >= 30
+         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 1.0
+         AND COALESCE(a.current_bid, 0) > GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02) + 0.05 THEN ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2)
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
@@ -810,6 +823,13 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+    WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
+         AND (a.clk7 + a.clk8_28) >= 30
+         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 1.0
+         AND COALESCE(a.current_bid, 0) > GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02) + 0.05
+      THEN CONCAT('breakeven economics — ', CAST(CAST(a.clk7 + a.clk8_28 AS INT64) AS STRING), ' clicks earned $',
+                  CAST(ROUND(a.gp7 + a.gp8_28, 2) AS STRING), ' net over 28d → the click is worth $',
+                  CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) AS STRING), ': cut to it')
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data')
@@ -957,11 +977,20 @@ SELECT
     -- losers re-enter through the probe path at 1.5x target instead.
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc THEN 'RAISE_TO_TARGET'
+    -- BREAKEVEN CUT (Ori 2026-08-03): a keyword with >= 30 clicks over 28d IS decidable at its
+    -- own grain — and its economics name the bid: margin per sale ÷ clicks per sale = 28d
+    -- profit per click ("30 clicks per sale x $3 margin -> bid $0.10"). Poor 28d net ROAS
+    -- (< 1.0) with the bid above that breakeven -> cut TO it (floor $0.02). Outranks the
+    -- volume lift and research ease — accumulated keyword evidence beats both.
+    WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
+         AND (a.clk7 + a.clk8_28) >= 30
+         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 1.0
+         AND COALESCE(a.current_bid, 0) > GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02) + 0.05 THEN 'CUT_TO_BREAKEVEN'
     -- VOLUME FLOOR (Ori 2026-08-03): under ~30 clicks/week a campaign cannot decide anything —
     -- classes are noise. Seated keywords below the entry anchor LIFT to it (max($1, min(1.5x
     -- target, $2))) to buy decision-grade traffic; parks/cuts above are volume-gated.
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
-         AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'VOLUME_LIFT'
+         AND (a.clk7 + a.clk8_28) < 30 AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'VOLUME_LIFT'
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
     -- bids when performance is good. Winner clause with real evidence, campaign not capped:
     -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
@@ -1005,6 +1034,10 @@ SELECT
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
+    WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
+         AND (a.clk7 + a.clk8_28) >= 30
+         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 1.0
+         AND COALESCE(a.current_bid, 0) > GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02) + 0.05 THEN ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2)
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
@@ -1058,6 +1091,13 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+    WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
+         AND (a.clk7 + a.clk8_28) >= 30
+         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 1.0
+         AND COALESCE(a.current_bid, 0) > GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02) + 0.05
+      THEN CONCAT('breakeven economics — ', CAST(CAST(a.clk7 + a.clk8_28 AS INT64) AS STRING), ' clicks earned $',
+                  CAST(ROUND(a.gp7 + a.gp8_28, 2) AS STRING), ' net over 28d → the click is worth $',
+                  CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) AS STRING), ': cut to it')
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data')
