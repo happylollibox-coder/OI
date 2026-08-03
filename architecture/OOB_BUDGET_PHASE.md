@@ -776,3 +776,14 @@ weekly volume floor (such keywords are EXCLUDED from VOLUME_LIFT — they need t
 not more traffic) and outranks research ease. Zero-sale 30+click keywords compute to the
 $0.02 floor — economics' version of a park (the 15clk/90d permanent park still follows).
 49 cuts at deploy; invariants clean (all downward, none under $0.02, all >= 30 clicks).
+
+### v26.1 — breakeven cut is the aggressive lever (Ori 2026-08-03)
+
+Ori: "zero-sale cases go to the standard $0.25 queue-park; this should be fired only when
+>= 30 clicks over 28 days AND ads net ROAS < 0.4 — this is an aggressive change."
+
+- Bar tightened: CUT_TO_BREAKEVEN requires 28d net ROAS **< 0.4x** (was < 1.0) — reserved
+  for clearly-bleeding keywords; 49 -> 12 cuts.
+- Zero-profit split: >= 30 clicks/28d with **no net profit** -> standard **PARK $0.25**
+  (the seat queue owns any comeback), not a $0.02 economic corpse; keywords WITH profit cut
+  to their true profit-per-click (floor $0.02 stays for tiny-margin sellers).
