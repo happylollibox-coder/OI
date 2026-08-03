@@ -744,3 +744,20 @@ a 49%-dark campaign read "hold — split healthy". Restored inside the Auto sect
 Result: 11/12 capped autos act. The honest residue (BOX-SP/AUTO Pink): winner already bid
 BELOW its real CPC ($0.58 vs $0.62), second winner at 1 click, losers floored at $0.25 —
 every move is evidence-blocked; the market is already braking it.
+
+## v25 — the 30-click weekly decision floor + VOLUME_LIFT (Ori 2026-08-03)
+
+Ori (ME-VIDEO/EXACT tween-girl case, 8 clicks/wk): "8 clicks a week is not enough to decide
+something. We need at least 30 clicks a week. In this case we should lift the bid."
+
+- **Decision floor**: the WINDOW-based reductions (allowance PARK, CUT_TO_TARGET,
+  EASE_TO_TARGET) require the CAMPAIGN to have **>= 30 clicks in the last 7 days** — under
+  that, weekly classes are noise and no window verdict fires. Keyword-grain ACCUMULATED
+  evidence still decides regardless of weekly volume: the 15-click/90d permanent park and
+  20-click probe verdicts stand (a 46-click/90d tested loser IS a decision).
+- **VOLUME_LIFT**: in an under-floor campaign (not capped, not auto, not defense), every
+  SEATED non-probing keyword bidding below the entry anchor (max($1, min(1.5x target, $2)))
+  lifts TO the anchor — buy decision-grade traffic. The lift starts a normal 20-click
+  episode, so the data it buys resolves into real verdicts. Keywords already at/above the
+  anchor hold with the honest reason "under the 30-click/week decision floor (Nc/7d)".
+- 29 VOLUME_LIFTs at deploy; zero invalid (none capped/auto/downward/above $2).
