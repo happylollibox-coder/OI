@@ -1111,3 +1111,20 @@ illegal SB bid. Three layers, so it cannot recur:
   covers MANUAL hand-set bids too.
 Corrected re-upload sheet delivered (sb_bid_floor_reupload.xlsx, 1 row at $0.25); the
 other 146 rows of the 2026-08-04 upload landed.
+
+### v27.13 — NUDGE_UP: no clicks need a nudge up (Ori 2026-08-04)
+
+Ori (LOW section, seated keywords at $0.33-$0.57 with 0c yesterday): "no clicks need a
+nudge up."
+
+The last stuck case: a SEATED low-tier keyword priced out of the auction — no clicks, no
+evidence, nothing ever fires. Rule (`V_KEYWORD_LIFT`, both arms, after VOLUME_LIFT):
+low-tier (budget <= cap), seated, not auto/defense/capped, **under the 4-click trial bar
+over 1d + prev-2d**, bid > $0.30 and more than 5c under the entry anchor -> **NUDGE_UP
++5%/day** (min +2c) **toward the entry anchor** (max($1, min(1.5x target, $2)) — never
+past it). VOLUME_LIFT still outranks it (under-floor campaigns jump to the anchor in one
+step; the nudge is the patient version for campaigns above their floor).
+Also fixed in passing: the VOLUME_LIFT bid/reason branches were missing the clk28<30
+guard the action branch has — a NUDGE_UP row could inherit the anchor-jump formula
+(BOX-COMPETE $0.54 -> $1.00 instead of $0.57). All three CASEs aligned.
+10 nudge-ups at deploy; 0 too-clicky / downward / out-of-scope / beyond-seat.

@@ -34,7 +34,7 @@ const bool = (v: unknown): boolean => v === true || v === 'true';
 const ACT_CLS: Record<string, string> = {
   KEEP: 'text-emerald-400', WINNER_FOUND: 'text-emerald-400', PROBE_START: 'text-emerald-400',
   PROBE_ADJUST: 'text-amber-400', PROBE_WAIT: 'text-muted', KEEP_TAIL: 'text-muted',
-  EASE_TO_TARGET: 'text-amber-400', CUT_TO_TARGET: 'text-red-400', RAISE_TO_TARGET: 'text-emerald-400', RESEARCH_EASE: 'text-violet-400', AUTO_TRIM: 'text-amber-400', AUTO_NUDGE: 'text-emerald-400', AUTO_DAY_RAISE: 'text-emerald-400', AUTO_DAY_TRIM: 'text-amber-400', AUTO_RAISE: 'text-emerald-400', AUTO_BRAKE: 'text-amber-400', AUTO_FIT: 'text-amber-400', VOLUME_LIFT: 'text-emerald-400', CUT_TO_BREAKEVEN: 'text-red-400', APPLIED_HOLD: 'text-emerald-300/60',
+  EASE_TO_TARGET: 'text-amber-400', CUT_TO_TARGET: 'text-red-400', RAISE_TO_TARGET: 'text-emerald-400', RESEARCH_EASE: 'text-violet-400', AUTO_TRIM: 'text-amber-400', AUTO_NUDGE: 'text-emerald-400', AUTO_DAY_RAISE: 'text-emerald-400', AUTO_DAY_TRIM: 'text-amber-400', AUTO_RAISE: 'text-emerald-400', AUTO_BRAKE: 'text-amber-400', AUTO_FIT: 'text-amber-400', VOLUME_LIFT: 'text-emerald-400', NUDGE_UP: 'text-emerald-400', CUT_TO_BREAKEVEN: 'text-red-400', APPLIED_HOLD: 'text-emerald-300/60',
   PARK: 'text-red-400', IDLE: 'text-faint',
 };
 const ROLE_CLS: Record<string, string> = {
@@ -247,7 +247,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
     return m;
   }, [rows]);
 
-  const actionable = (r: Row) => r.suggestedBid != null && r.keywordId !== '' && ['PARK', 'PARK_WAIT', 'PROBE_START', 'PROBE_ADJUST', 'EASE_TO_TARGET', 'CUT_TO_TARGET', 'RAISE_TO_TARGET', 'RESEARCH_EASE', 'AUTO_TRIM', 'AUTO_NUDGE', 'AUTO_DAY_RAISE', 'AUTO_DAY_TRIM', 'AUTO_RAISE', 'AUTO_BRAKE', 'AUTO_FIT', 'VOLUME_LIFT', 'CUT_TO_BREAKEVEN'].includes(r.action);
+  const actionable = (r: Row) => r.suggestedBid != null && r.keywordId !== '' && ['PARK', 'PARK_WAIT', 'PROBE_START', 'PROBE_ADJUST', 'EASE_TO_TARGET', 'CUT_TO_TARGET', 'RAISE_TO_TARGET', 'RESEARCH_EASE', 'AUTO_TRIM', 'AUTO_NUDGE', 'AUTO_DAY_RAISE', 'AUTO_DAY_TRIM', 'AUTO_RAISE', 'AUTO_BRAKE', 'AUTO_FIT', 'VOLUME_LIFT', 'NUDGE_UP', 'CUT_TO_BREAKEVEN'].includes(r.action);
   const bidItem = (r: Row) => doQueue.items.find(i => i.keyword_id === r.keywordId && ['INCREASE_BID', 'REDUCE_BID'].includes(i.action));
   const queueBid = (r: Row, manualBid?: number) => {
     const newBid = manualBid ?? r.suggestedBid;

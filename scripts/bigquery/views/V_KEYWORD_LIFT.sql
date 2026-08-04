@@ -774,6 +774,13 @@ SELECT
     -- target, $2))) to buy decision-grade traffic; parks/cuts above are volume-gated.
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND (a.clk7 + a.clk8_28) < 30 AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'VOLUME_LIFT'
+    -- NUDGE_UP (Ori 2026-08-04, "no clicks need a nudge up"): a seated low-tier keyword with
+    -- essentially no clicks (under the 4-click trial bar over 1d+prev-2d) is priced out of
+    -- visibility — no clicks, no evidence, stuck. Nudge +5%/day toward the entry anchor.
+    WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'NUDGE_UP'
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
     -- bids when performance is good. Winner clause with real evidence, campaign not capped:
     -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
@@ -850,8 +857,14 @@ SELECT
          AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.90, SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2)
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
+         AND (a.clk7 + a.clk8_28) < 30
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
+    WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
+      THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.01), 2.00), 2)
@@ -929,10 +942,17 @@ SELECT
                   FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x: glide -10%/day toward the per-click worth $',
                   CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) AS STRING), ' (floor $0.15)')
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
+         AND (a.clk7 + a.clk8_28) < 30
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season),
            CONCAT('campaign under the 13-click/3d decision floor (', CAST(COALESCE(a.camp_clk3, 0) AS STRING), 'c/3d) — lift to the entry anchor to buy decision data'),
            CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data'))
+    WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
+      THEN CONCAT('invisible — ', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
+                  ': the bid is priced out of the auction; nudge +5%/day toward the entry anchor $', CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) AS STRING), ' until it buys data')
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted yesterday — ', CAST(CAST(a.clk1 AS INT64) AS STRING), ' clicks, net +$', FORMAT('%.2f', a.gp1 - a.sp1), ': low-budget auto reacts daily, raise +5% (cap $2)')
@@ -1123,6 +1143,13 @@ SELECT
     -- target, $2))) to buy decision-grade traffic; parks/cuts above are volume-gated.
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND (a.clk7 + a.clk8_28) < 30 AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'VOLUME_LIFT'
+    -- NUDGE_UP (Ori 2026-08-04, "no clicks need a nudge up"): a seated low-tier keyword with
+    -- essentially no clicks (under the 4-click trial bar over 1d+prev-2d) is priced out of
+    -- visibility — no clicks, no evidence, stuck. Nudge +5%/day toward the entry anchor.
+    WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'NUDGE_UP'
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
     -- bids when performance is good. Winner clause with real evidence, campaign not capped:
     -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
@@ -1197,8 +1224,14 @@ SELECT
          AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.90, SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2)
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
+         AND (a.clk7 + a.clk8_28) < 30
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
+    WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
+      THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.01), 2.00), 2)
@@ -1276,10 +1309,17 @@ SELECT
                   FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x: glide -10%/day toward the per-click worth $',
                   CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) AS STRING), ' (floor $0.15)')
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
+         AND (a.clk7 + a.clk8_28) < 30
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season),
            CONCAT('campaign under the 13-click/3d decision floor (', CAST(COALESCE(a.camp_clk3, 0) AS STRING), 'c/3d) — lift to the entry anchor to buy decision data'),
            CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data'))
+    WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
+      THEN CONCAT('invisible — ', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
+                  ': the bid is priced out of the auction; nudge +5%/day toward the entry anchor $', CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) AS STRING), ' until it buys data')
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted yesterday — ', CAST(CAST(a.clk1 AS INT64) AS STRING), ' clicks, net +$', FORMAT('%.2f', a.gp1 - a.sp1), ': low-budget auto reacts daily, raise +5% (cap $2)')
