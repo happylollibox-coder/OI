@@ -927,3 +927,25 @@ budget any negate terms".
   home. Both KeywordLiftPhase term fetches now read engine IN (LIFT, OOB); campIds
   scoping keeps non-auto dark campaigns in their OOB sections. Auto low budget 0 -> 3
   negates, Auto 1 -> 6 at deploy.
+
+### v27.6 — Auto low budget: the 7-day window is gone entirely (Ori 2026-08-04)
+
+Ori (on the Brave loose-match weekly-trim explanation): "this should be based on prev
+day" + "make sure auto low budget is not using 7 days window at all."
+
+Low-budget autos are now governed by the day windows ALONE — no weekly rule can touch
+them (`V_KEYWORD_LIFT`, both arms, budget <= low cap):
+
+- **AUTO_DAY_RAISE**: yesterday net-profitable after spend (gp1 > sp1), ANY click count
+  (was >= 3 — the 1-click 5.93x day now raises, per the original nudge directive) -> +5%.
+- **AUTO_DAY_TRIM**: no profit yesterday AND prev-2d, >= 10 combined clicks -> -5%.
+- Everything else HOLDS with a day-based reason: "sold yesterday under spend (0.53x) —
+  not a raise, not a cut" / "sold in prev-2d (11.44x) — day windows mixed, tomorrow
+  decides" / "N clicks over 3d, no sales, under the 10-click day bar" / "quiet".
+- Weekly AUTO_RAISE / AUTO_NUDGE / AUTO_TRIM and the class-driven capped mechanics
+  AUTO_FIT / AUTO_BRAKE are gated to budget > cap (big autos keep the v23/v24 doctrine;
+  AUTO_NUDGE lives on there for starving 4-29-click clauses).
+- Panel: the weekly class chip (winner/loser) is hidden on AUTO_LOW rows — it was the
+  last 7d artifact in the section.
+Invariants at deploy: 0 weekly actions and 0 weekly reason texts on low autos; 4 day
+raises + 10 day trims; BOTTLE spec rows unchanged.

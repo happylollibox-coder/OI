@@ -761,23 +761,26 @@ SELECT
     -- conversion in EITHER window blocks the trim. These outrank the weekly auto rules and
     -- the capped mechanics — the budget ladder owns the cap, the bid follows yesterday.
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_DAY_RAISE'
+         AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_DAY_RAISE'
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
          AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0) THEN 'AUTO_DAY_TRIM'
-    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05 THEN 'AUTO_FIT'
-    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_BRAKE'
-    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_RAISE'
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_BRAKE'
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_RAISE'
+    -- LOW-AUTO FALLBACK (Ori 2026-08-04: "make sure auto low budget is not using 7 days
+    -- window at all"): anything the day rules didn't decide HOLDS — no weekly class verdicts.
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) THEN IF(a.clk1 + a.clk2 > 0, 'KEEP', 'IDLE')
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
     -- -15%/day (floor $0.30), the real lever is negating bad terms; targets are advisory here.
     -- AUTO_NUDGE (Ori 2026-08-04, BUNNY Brave close-match): on starving clicks (under the
     -- 30-click weekly floor) a trim compounds into silence — fewer impressions, no new evidence,
     -- stuck. If the clause CONVERTED in the last 3 days, feed the signal instead: +5%/day.
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
          AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_NUDGE'
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_TRIM'
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_TRIM'
     WHEN a.is_auto THEN IF(a.class = 'MARGINAL', 'KEEP', IF(a.class = 'LOSER', 'KEEP_TAIL', 'IDLE'))
     -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
     -- TO the target bid. Winners are never pulled down.
@@ -823,24 +826,25 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
+         AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.01), 2.00), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
          AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0)
       THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
-    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0))), 2)
-    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
       THEN ROUND(GREATEST(a.current_bid * LEAST(0.95, 1 - 0.30 * a.pct_dark / 100), 0.20), 2)
-    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(a.current_bid * 1.15, 2.00), 2)
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) THEN NULL
     WHEN a.class = 'WINNER' THEN NULL
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
          AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(a.current_bid * 1.05, 2.00), 2)
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.is_auto THEN NULL
     WHEN a.class = 'MARGINAL' AND COALESCE(a.camp_clk7, 0) >= 30 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
@@ -900,24 +904,32 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data')
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
+         AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted yesterday — ', CAST(CAST(a.clk1 AS INT64) AS STRING), ' clicks, net +$', FORMAT('%.2f', a.gp1 - a.sp1), ': low-budget auto reacts daily, raise +5% (cap $2)')
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
          AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0)
       THEN CONCAT('no profit yesterday or prev-2d (', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks) — low-budget auto reacts daily: trim -5% (floor $0.20); negate the bad terms')
-    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
       THEN CONCAT('selling while capped — fit toward the real CPC $', CAST(ROUND(SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)), 2) AS STRING), ': the budget raise buys volume, cheaper clicks buy more of it')
-    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
       THEN CONCAT('campaign ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% dark — brake ', CAST(CAST(ROUND(100 * (1 - LEAST(0.95, 1 - 0.30 * a.pct_dark / 100))) AS INT64) AS STRING), '%/day (dark must produce a raise or a trim, never a hold)')
-    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('auto clause performing — ', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x on ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks: raise +15%/day toward $2 (good terms deserve more traffic)')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.gp1 > 0
+      THEN CONCAT('sold yesterday under spend (', FORMAT('%.2f', COALESCE(SAFE_DIVIDE(a.gp1, NULLIF(a.sp1, 0)), 0)), 'x net) — not a raise, not a cut: hold, tomorrow decides')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.gp2 > 0
+      THEN CONCAT('sold in prev-2d (', FORMAT('%.2f', COALESCE(SAFE_DIVIDE(a.gp2, NULLIF(a.sp2, 0)), 0)), 'x net) — day windows mixed: hold, tomorrow decides')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND (a.clk1 + a.clk2) > 0
+      THEN CONCAT(CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d, no sales, under the 10-click day bar — gathering at daily grain')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+      THEN 'quiet — no clicks yesterday or prev-2d'
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign')
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
          AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted in the last 3 days on starving clicks (', CAST(CAST(a.clk_w AS INT64) AS STRING), 'c this window, under the 30-click floor) — a trim would freeze it: nudge +5%/day so the sale can prove itself')
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN CONCAT('auto clause underperforming — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ', FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x this week (full evidence, over the 30-click floor): trim -15%/day (floor $0.20); the real lever is negating its bad terms')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4
       THEN CONCAT('evidence in — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no profit and the bid already at the floor: negate its bad terms, nothing left to trim')
@@ -1084,23 +1096,26 @@ SELECT
     -- conversion in EITHER window blocks the trim. These outrank the weekly auto rules and
     -- the capped mechanics — the budget ladder owns the cap, the bid follows yesterday.
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_DAY_RAISE'
+         AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_DAY_RAISE'
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
          AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0) THEN 'AUTO_DAY_TRIM'
-    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05 THEN 'AUTO_FIT'
-    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_BRAKE'
-    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_RAISE'
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_BRAKE'
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_RAISE'
+    -- LOW-AUTO FALLBACK (Ori 2026-08-04: "make sure auto low budget is not using 7 days
+    -- window at all"): anything the day rules didn't decide HOLDS — no weekly class verdicts.
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) THEN IF(a.clk1 + a.clk2 > 0, 'KEEP', 'IDLE')
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
     -- -15%/day (floor $0.30), the real lever is negating bad terms; targets are advisory here.
     -- AUTO_NUDGE (Ori 2026-08-04, BUNNY Brave close-match): on starving clicks (under the
     -- 30-click weekly floor) a trim compounds into silence — fewer impressions, no new evidence,
     -- stuck. If the clause CONVERTED in the last 3 days, feed the signal instead: +5%/day.
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
          AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_NUDGE'
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_TRIM'
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_TRIM'
     WHEN a.is_auto THEN IF(a.class = 'MARGINAL', 'KEEP', IF(a.class = 'LOSER', 'KEEP_TAIL', 'IDLE'))
     -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
     -- TO the target bid. Winners are never pulled down.
@@ -1144,24 +1159,25 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
+         AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.01), 2.00), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
          AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0)
       THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
-    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0))), 2)
-    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
       THEN ROUND(GREATEST(a.current_bid * LEAST(0.95, 1 - 0.30 * a.pct_dark / 100), 0.20), 2)
-    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(a.current_bid * 1.15, 2.00), 2)
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) THEN NULL
     WHEN a.class = 'WINNER' THEN NULL
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
          AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(a.current_bid * 1.05, 2.00), 2)
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.is_auto THEN NULL
     WHEN a.class = 'MARGINAL' AND COALESCE(a.camp_clk7, 0) >= 30 AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
@@ -1221,24 +1237,32 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data')
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
+         AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted yesterday — ', CAST(CAST(a.clk1 AS INT64) AS STRING), ' clicks, net +$', FORMAT('%.2f', a.gp1 - a.sp1), ': low-budget auto reacts daily, raise +5% (cap $2)')
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
          AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0)
       THEN CONCAT('no profit yesterday or prev-2d (', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks) — low-budget auto reacts daily: trim -5% (floor $0.20); negate the bad terms')
-    WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
       THEN CONCAT('selling while capped — fit toward the real CPC $', CAST(ROUND(SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)), 2) AS STRING), ': the budget raise buys volume, cheaper clicks buy more of it')
-    WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25
       THEN CONCAT('campaign ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% dark — brake ', CAST(CAST(ROUND(100 * (1 - LEAST(0.95, 1 - 0.30 * a.pct_dark / 100))) AS INT64) AS STRING), '%/day (dark must produce a raise or a trim, never a hold)')
-    WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('auto clause performing — ', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x on ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks: raise +15%/day toward $2 (good terms deserve more traffic)')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.gp1 > 0
+      THEN CONCAT('sold yesterday under spend (', FORMAT('%.2f', COALESCE(SAFE_DIVIDE(a.gp1, NULLIF(a.sp1, 0)), 0)), 'x net) — not a raise, not a cut: hold, tomorrow decides')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.gp2 > 0
+      THEN CONCAT('sold in prev-2d (', FORMAT('%.2f', COALESCE(SAFE_DIVIDE(a.gp2, NULLIF(a.sp2, 0)), 0)), 'x net) — day windows mixed: hold, tomorrow decides')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND (a.clk1 + a.clk2) > 0
+      THEN CONCAT(CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d, no sales, under the 10-click day bar — gathering at daily grain')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+      THEN 'quiet — no clicks yesterday or prev-2d'
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign (est. net ROAS)')
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
          AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted in the last 3 days on starving clicks (', CAST(CAST(a.clk_w AS INT64) AS STRING), 'c this window, under the 30-click floor) — a trim would freeze it: nudge +5%/day so the sale can prove itself')
-    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
+    WHEN a.is_auto AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season) AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN CONCAT('auto clause underperforming — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ', FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x this week (full evidence, over the 30-click floor): trim -15%/day (floor $0.20); the real lever is negating its bad terms')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4
       THEN CONCAT('evidence in — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no profit and the bid already at the floor: negate its bad terms, nothing left to trim')
