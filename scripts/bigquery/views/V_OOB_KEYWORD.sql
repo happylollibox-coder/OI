@@ -369,6 +369,7 @@ SELECT
     -- every keyword that clicked unprofitably yesterday; only 90d-proven seats and keywords
     -- that PAID yesterday keep their bid (winners never pulled down).
     WHEN b.pct_dark > 10 AND COALESCE(b.c_roas1, 0) < 1.2 AND COALESCE(b.roas90, 0) < 1.0
+         AND b.seat_rank <= b.slots
          AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > x.bid_min + 0.05
       THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100), x.bid_min), 2)
     -- mid-probe keyword: the Portfolio 80/20 engine owns it — no seat-model action mid-test
@@ -422,6 +423,7 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'HOLD'
     WHEN b.pct_dark > 10 AND COALESCE(b.c_roas1, 0) < 1.2 AND COALESCE(b.roas90, 0) < 1.0
+         AND b.seat_rank <= b.slots
          AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
     WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN 'HOLD'
     WHEN b.tested_loser AND NOT b.is_lift_probe AND NOT b.is_auto THEN IF(b.current_bid > x.bid_park + 0.05, 'PARK', 'HOLD')
@@ -443,6 +445,7 @@ SELECT
     WHEN b.current_bid IS NULL THEN 'no bid on record'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'changed today — one suggestion per day'
     WHEN b.pct_dark > 10 AND COALESCE(b.c_roas1, 0) < 1.2 AND COALESCE(b.roas90, 0) < 1.0
+         AND b.seat_rank <= b.slots
          AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > x.bid_min + 0.05
       THEN CONCAT('campaign ', CAST(CAST(b.pct_dark AS INT64) AS STRING), '% dark and no budget raise coming (yesterday blended ',
                   FORMAT('%.2f', COALESCE(b.c_roas1, 0)), 'x, under the 1.2x raise gate) — bids own the dark: brake ',

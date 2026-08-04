@@ -996,3 +996,16 @@ keywords (their bid did not eat the budget).
 VIDEO- BALL at deploy: tween girl $0.70->$0.55 (8c 0.00x), probe $1.03->$0.81,
 gift-for-girls 1.58x holds. Fleet: 28 brakes; 0 wrong-direction / no-click / paying.
 View-only change (BQ live; panel already styles DARK_BRAKE).
+
+### v27.8.1 — the queue's answer is the park, not the brake (Ori 2026-08-04)
+
+Ori (BUNNY-VIDEO/BROAD Hunter, $20, 40% dark): "I see 8 keywords active but only 5 have
+seats — then this budget can hold."
+
+Right, and it exposed a v27.8 bug: the dark-no-raise brake sat AHEAD of the beyond-seat
+PARK_WAIT branch, so queued keywords that clicked yesterday got the gentle -N%/day brake
+instead of the immediate $0.25 queue park. Yesterday the 5 seats spent $5.15 while the
+7 queued keywords spent $17.93 — the queue was the entire cap. Fix: DARK_BRAKE requires
+`seat_rank <= slots`; beyond-seat rows always fall through to PARK_WAIT $0.25.
+After: queue #1-7 all PARK_WAIT $0.25 (~$18/day freed — the budget holds its 5 seats),
+seats 2-3 brake, the 1.83x winner holds. Fleet: 0 beyond-seat brakes remain.
