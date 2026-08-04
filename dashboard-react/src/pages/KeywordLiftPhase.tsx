@@ -112,7 +112,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
     cubeLoad({
       dimensions: ['OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
         'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.marketPurchases90d', 'OobSearchTerm.isBig', 'OobSearchTerm.spend1d', 'OobSearchTerm.adGroupIds'],
-      filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT'] },
+      filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT', 'OOB'] },
                 { member: 'OobSearchTerm.isNegate', operator: 'equals', values: ['true'] }],
     }).then(ts => {
       if (!alive) return;
@@ -132,7 +132,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
     cubeLoad({
       dimensions: ['OobSearchTerm.campaignId', 'OobSearchTerm.targetText', 'OobSearchTerm.searchTerm',
         'OobSearchTerm.kind', 'OobSearchTerm.clicks90d', 'OobSearchTerm.orders90d', 'OobSearchTerm.netRoas90d', 'OobSearchTerm.isAddCandidate', 'OobSearchTerm.adGroupIds'],
-      filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT'] },
+      filters: [{ member: 'OobSearchTerm.engine', operator: 'equals', values: ['LIFT', 'OOB'] },
                 { member: 'OobSearchTerm.isWinner', operator: 'equals', values: ['true'] }],
     }).then(ts => {
       if (!alive) return;

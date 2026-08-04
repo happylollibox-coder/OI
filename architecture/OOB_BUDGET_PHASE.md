@@ -910,3 +910,20 @@ blocks). 2 raises + 10 trims fleet-wide; invariants clean (0 non-auto, 0 over-bu
   bare "hold —" with no explanation. Cell now prefers: active suggestion reason ->
   view budget_reason (incl. "budget applied $X — waiting for Amazon sync") -> legacy map
   -> generic fallbacks.
+
+### v27.5.1 — dark-auto terms come home + trim states its evidence (Ori 2026-08-04)
+
+Ori: "why this do not have auto nudge" (Brave loose-match) + "can't see in auto low
+budget any negate terms".
+
+- **Nudge question**: working as designed — loose-match has 37 clicks this week (over
+  the 30-click floor): the week is FULL evidence, 0.64x earns the honest trim; the nudge
+  only protects starving clauses (4-29 clicks). But the AUTO_LOW display shows 1d/prev-2d
+  only, so the AUTO_TRIM reason now states its weekly basis: "37 clicks at 0.64x this
+  week (full evidence, over the 30-click floor): trim -15%/day".
+- **Negates were orphaned**: dark auto campaigns' terms carry engine='OOB'
+  (V_OOB_SEARCH_TERM population rule), but v24 evicted autos from the OOB sections and
+  the Auto panels fetched engine='LIFT' only — 8 negates (+ dark-auto winners) had no
+  home. Both KeywordLiftPhase term fetches now read engine IN (LIFT, OOB); campIds
+  scoping keeps non-auto dark campaigns in their OOB sections. Auto low budget 0 -> 3
+  negates, Auto 1 -> 6 at deploy.

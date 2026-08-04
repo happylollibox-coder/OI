@@ -918,7 +918,7 @@ SELECT
          AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted in the last 3 days on starving clicks (', CAST(CAST(a.clk_w AS INT64) AS STRING), 'c this window, under the 30-click floor) — a trim would freeze it: nudge +5%/day so the sale can prove itself')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
-      THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
+      THEN CONCAT('auto clause underperforming — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ', FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x this week (full evidence, over the 30-click floor): trim -15%/day (floor $0.20); the real lever is negating its bad terms')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4
       THEN CONCAT('evidence in — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no profit and the bid already at the floor: negate its bad terms, nothing left to trim')
     WHEN a.is_auto AND a.class = 'LOSER' THEN 'auto clause in its 4-click trial — keep gathering; negate bad terms as they show'
@@ -1239,7 +1239,7 @@ SELECT
          AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted in the last 3 days on starving clicks (', CAST(CAST(a.clk_w AS INT64) AS STRING), 'c this window, under the 30-click floor) — a trim would freeze it: nudge +5%/day so the sale can prove itself')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
-      THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
+      THEN CONCAT('auto clause underperforming — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ', FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x this week (full evidence, over the 30-click floor): trim -15%/day (floor $0.20); the real lever is negating its bad terms')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4
       THEN CONCAT('evidence in — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no profit and the bid already at the floor: negate its bad terms, nothing left to trim')
     WHEN a.is_auto AND a.class = 'LOSER' THEN 'auto clause in its 4-click trial — keep gathering; negate bad terms as they show'
