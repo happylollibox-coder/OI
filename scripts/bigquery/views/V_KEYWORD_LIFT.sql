@@ -602,7 +602,30 @@ sb_agg AS (
       IF(c.tcpc IS NOT NULL, 0, 1),
       c.target_text) AS seat_rank
   FROM sb_classed c
-)
+),
+-- APPLIED-HOLD (Ori 2026-08-04, "i already applied and approved this today why is it shown
+-- again"): bulksheet uploads land in FACT_PPC_CHANGE_LOG immediately, but the config mirrors
+-- (DIM_KEYWORD / sb config) lag Fivetran by 1-2 days — so the engine re-derives the SAME
+-- daily-ladder step from the stale bid and invites a double-apply. Hold the row instead:
+-- last applied change within 48h, and (applied TODAY — one ladder step per day — or the
+-- applied value has not reached the config yet).
+applied AS (
+  SELECT CAST(campaign_id AS STRING) cid, LOWER(TRIM(targeting)) tgt,
+         ARRAY_AGG(STRUCT(applied_at AS ts, new_bid) ORDER BY applied_at DESC LIMIT 1)[OFFSET(0)] last
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE applied_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR)
+    AND action IN ('INCREASE_BID', 'REDUCE_BID') AND new_bid IS NOT NULL
+  GROUP BY 1, 2
+),
+applied_bud AS (
+  SELECT CAST(campaign_id AS STRING) cid,
+         ARRAY_AGG(STRUCT(applied_at AS ts, new_budget) ORDER BY applied_at DESC LIMIT 1)[OFFSET(0)] last
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE applied_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR)
+    AND action = 'BUDGET_CHANGE' AND new_budget IS NOT NULL
+  GROUP BY 1
+),
+out AS (
 SELECT
   a.campaign_id, a.campaign_name, 'SP' AS channel, ROUND(a.budget, 0) AS budget,
   (SELECT in_peak FROM season) AS in_peak, (SELECT w_days FROM cap) AS w_days,
@@ -1195,4 +1218,30 @@ SELECT
                   '), verdict at 20 clicks')
     ELSE 'idle — waiting for a probe slot'
   END AS reason
-FROM sb_agg a;
+FROM sb_agg a
+)
+SELECT o.* EXCEPT (bid_hold, bud_hold) REPLACE (
+  IF(bid_hold, 'APPLIED_HOLD', o.action) AS action,
+  IF(bid_hold, NULL, o.suggested_bid) AS suggested_bid,
+  IF(bid_hold, CONCAT('applied $', FORMAT('%.2f', ap.last.new_bid), ' at ',
+       FORMAT_TIMESTAMP('%b %d %H:%M', ap.last.ts, 'America/Los_Angeles'),
+       ' — step done; suggestions resume when the new bid syncs from Amazon'), o.reason) AS reason,
+  IF(bud_hold, NULL, o.suggested_budget) AS suggested_budget,
+  IF(bud_hold, CONCAT('budget applied $', FORMAT('%.2f', ab.last.new_budget), ' at ',
+       FORMAT_TIMESTAMP('%b %d %H:%M', ab.last.ts, 'America/Los_Angeles'),
+       ' — waiting for Amazon sync'), o.budget_reason) AS budget_reason
+)
+FROM (
+  SELECT o0.*,
+    ap.last IS NOT NULL AND o0.suggested_bid IS NOT NULL AND
+      (DATE(ap.last.ts, 'America/Los_Angeles') = CURRENT_DATE('America/Los_Angeles')
+       OR ABS(COALESCE(ap.last.new_bid, -1) - COALESCE(o0.current_bid, -1)) > 0.005) AS bid_hold,
+    ab.last IS NOT NULL AND o0.suggested_budget IS NOT NULL AND
+      (DATE(ab.last.ts, 'America/Los_Angeles') = CURRENT_DATE('America/Los_Angeles')
+       OR ABS(COALESCE(ab.last.new_budget, -1) - o0.budget) > 0.01) AS bud_hold
+  FROM out o0
+  LEFT JOIN applied ap ON ap.cid = CAST(o0.campaign_id AS STRING) AND ap.tgt = o0.target_text
+  LEFT JOIN applied_bud ab ON ab.cid = CAST(o0.campaign_id AS STRING)
+) o
+LEFT JOIN applied ap ON ap.cid = CAST(o.campaign_id AS STRING) AND ap.tgt = o.target_text
+LEFT JOIN applied_bud ab ON ab.cid = CAST(o.campaign_id AS STRING);

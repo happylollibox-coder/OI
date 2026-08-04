@@ -34,7 +34,7 @@ const bool = (v: unknown): boolean => v === true || v === 'true';
 const ACT_CLS: Record<string, string> = {
   KEEP: 'text-emerald-400', WINNER_FOUND: 'text-emerald-400', PROBE_START: 'text-emerald-400',
   PROBE_ADJUST: 'text-amber-400', PROBE_WAIT: 'text-muted', KEEP_TAIL: 'text-muted',
-  EASE_TO_TARGET: 'text-amber-400', CUT_TO_TARGET: 'text-red-400', RAISE_TO_TARGET: 'text-emerald-400', RESEARCH_EASE: 'text-violet-400', AUTO_TRIM: 'text-amber-400', AUTO_NUDGE: 'text-emerald-400', AUTO_RAISE: 'text-emerald-400', AUTO_BRAKE: 'text-amber-400', AUTO_FIT: 'text-amber-400', VOLUME_LIFT: 'text-emerald-400', CUT_TO_BREAKEVEN: 'text-red-400',
+  EASE_TO_TARGET: 'text-amber-400', CUT_TO_TARGET: 'text-red-400', RAISE_TO_TARGET: 'text-emerald-400', RESEARCH_EASE: 'text-violet-400', AUTO_TRIM: 'text-amber-400', AUTO_NUDGE: 'text-emerald-400', AUTO_RAISE: 'text-emerald-400', AUTO_BRAKE: 'text-amber-400', AUTO_FIT: 'text-amber-400', VOLUME_LIFT: 'text-emerald-400', CUT_TO_BREAKEVEN: 'text-red-400', APPLIED_HOLD: 'text-emerald-300/60',
   PARK: 'text-red-400', IDLE: 'text-faint',
 };
 const ROLE_CLS: Record<string, string> = {

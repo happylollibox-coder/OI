@@ -854,3 +854,24 @@ stuck. So on LOW-VOLUME auto clauses, a recent conversion outranks the weekly lo
 - Capped campaigns keep AUTO_BRAKE priority — never nudge into dark.
 - At deploy: 2 nudges (BUNNY Brave close-match $0.71->$0.75, BUNNY Birthday close-match
   $0.52->$0.55), invariants clean (all 4-29 clicks, uncapped, upward, <= $2).
+
+### v27.4 — APPLIED_HOLD: one ladder step per day, survive the sync lag (Ori 2026-08-04)
+
+Ori: "I already applied and approved this today — why is it shown again?"
+
+Bulksheet uploads land in FACT_PPC_CHANGE_LOG immediately, but the config mirrors
+(DIM_KEYWORD / sb config) lag Fivetran by 1-2 days. The engine kept reading the STALE bid
+and re-derived the same daily-ladder step — inviting a double-apply (-15% on top of -15%).
+
+Fix (`V_KEYWORD_LIFT`, wrapper over both arms): a row whose last logged change is within
+48h shows **APPLIED_HOLD** (suggested_bid NULL, reason "applied $X at <ts> — step done;
+suggestions resume when the new bid syncs from Amazon") when EITHER:
+- the change was applied **today** (one ladder step per day, even if already synced), OR
+- the applied value has **not reached the config yet** (bid mismatch > half a cent).
+
+Same overlay for campaign budgets: applied BUDGET_CHANGE within 48h -> suggested_budget
+NULL, budget_reason "budget applied $X at <ts> — waiting for Amazon sync". Held rows drop
+out of "apply all N" automatically (no suggested value). Once Fivetran syncs, the ladder
+resumes FROM the new bid — each day's step is a genuine next step.
+At deploy: 17 bid holds (exactly the 00:58 upload) + today's budget moves held; 0 invalid.
+Known gap: V_OOB_KEYWORD / V_OOB_BUDGET_PHASE don't have the overlay yet.
