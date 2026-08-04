@@ -787,3 +787,20 @@ Ori: "zero-sale cases go to the standard $0.25 queue-park; this should be fired 
 - Zero-profit split: >= 30 clicks/28d with **no net profit** -> standard **PARK $0.25**
   (the seat queue owns any comeback), not a $0.02 economic corpse; keywords WITH profit cut
   to their true profit-per-click (floor $0.02 stays for tiny-margin sellers).
+
+## v27 — Auto splits by tier: Auto low budget / Auto (Ori 2026-08-04)
+
+Ori: "lets split auto to auto low budget, Auto."
+
+Same tier split every other section already has, applied to autos. Display-only —
+`KeywordLiftPhase` gains tier `AUTO_LOW`:
+
+- **Auto low budget** = auto campaigns with budget <= the low cap ($20 off-peak / $30 peak).
+- **Auto** = auto campaigns above the cap.
+- Render order: Auto low budget, then Auto — both above Low budget — out of budget
+  (autos keep first position on the page).
+- Everything else about the auto doctrine is unchanged and shared by both tiers: 4 fixed
+  clauses, never park/probe/queue, 7d/8-28d windows (3d/4-14d in peak), AUTO_TRIM /
+  AUTO_RAISE / AUTO_BRAKE / AUTO_FIT + search-term negates, dark-auto budget ladder.
+- No view/cube change — the split reads the existing `budget` + `is_auto_campaign`
+  dimensions. Partition at deploy: 10 + 9 = the same 19 autos, single-home preserved.

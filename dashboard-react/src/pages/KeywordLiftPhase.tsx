@@ -59,7 +59,7 @@ const CLASS_CLS: Record<string, string> = {
   WINNER: 'text-emerald-400', MARGINAL: 'text-amber-400', LOSER: 'text-red-400', IDLE: 'text-faint',
 };
 
-export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' | 'SEASONAL_LOW' | 'AUTO' }) {
+export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' | 'SEASONAL_LOW' | 'AUTO' | 'AUTO_LOW' }) {
   const doQueue = useDoQueue();
   const [open, setOpen] = useState(false);
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
@@ -273,14 +273,16 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
   // low-budget tiers read at launch cadence — last day + prev-2d, the OOB format (Ori 2026-08-02)
   const fast = tier === 'LOW' || tier === 'SEASONAL_LOW';
   // AUTO section (Ori 2026-08-02): 7d + 8-28d off-season; 3d + 4-14d in peak
-  const auto = tier === 'AUTO';
+  const auto = tier === 'AUTO' || tier === 'AUTO_LOW';
   const inPeak = (rows ?? [])[0]?.wDays === 3;
   const autoPeak = auto && inPeak;
   const camps = [...byCamp.values()].filter(g => {
     const c = g[0];
     if (!c || c.isDefense) return false;
-    // v24 (Ori 2026-08-02): auto campaigns have ONE home — the Auto section — dark or not.
-    if (tier === 'AUTO') return c.isAutoCampaign;
+    // v24 + v27 (Ori 2026-08-03): auto campaigns have ONE home — the Auto sections, split by
+    // tier like everything else — dark or not.
+    if (tier === 'AUTO') return c.isAutoCampaign && c.budget > lowCap;
+    if (tier === 'AUTO_LOW') return c.isAutoCampaign && c.budget <= lowCap;
     if (c.isAutoCampaign) return false;
     if (oobIds.has(c.campaignId)) return false;
     // v9 + v20 (Ori 2026-08-02): seasonal campaigns get their own sections, split by tier
@@ -372,7 +374,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
       <div className="flex items-center gap-1">
         <button className="text-label flex items-center gap-1 flex-1 min-w-0" onClick={() => setOpen(o => !o)}>
           <span className="text-faint">{open ? '▾' : '▸'}</span>
-          <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : tier === 'SEASONAL' ? 'Seasonal' : tier === 'SEASONAL_LOW' ? 'Seasonal low budget' : tier === 'AUTO' ? 'Auto' : 'Portfolio 80/20'}</span>
+          <span className="font-medium text-sky-300">{tier === 'LOW' ? 'Low budget' : tier === 'SEASONAL' ? 'Seasonal' : tier === 'SEASONAL_LOW' ? 'Seasonal low budget' : tier === 'AUTO' ? 'Auto' : tier === 'AUTO_LOW' ? 'Auto low budget' : 'Portfolio 80/20'}</span>
           <span className="text-faint truncate">
             {failed ? '— unavailable' : rows
               ? `— ${camps.length} working campaigns · ${nParks} parks · ${nProbes} probes · ${nFound} winners found · ${visNegs.length} negates`
