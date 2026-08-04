@@ -949,3 +949,27 @@ them (`V_KEYWORD_LIFT`, both arms, budget <= low cap):
   last 7d artifact in the section.
 Invariants at deploy: 0 weekly actions and 0 weekly reason texts on low autos; 4 day
 raises + 10 day trims; BOTTLE spec rows unchanged.
+
+## v27.7 — ALL low-budget tiers decide on last day + prev-2d (Ori 2026-08-04)
+
+Ori: "make sure all low budget types time window is based on last day and 2-3 days
+(including the decision logic)."
+
+The OOB sections already complied (1d/prev-2d budget ladder, 3-day winners, 1-day trims,
+90d evidence). The gap was `V_KEYWORD_LIFT`'s LOW / SEASONAL_LOW tiers — classes and the
+80/20 allowance ran on the weekly window. Fix = **W-rebase at the `base` layer**: for
+campaigns with budget <= the low cap (not defense), W IS 3 DAYS (last day + days 2-3) —
+`clk_w/sp_w/ord_w/roas_w/gp_w` swap to the 3d columns (new `ord3` in both kwW arms), so
+class, the 20% loser allowance, seat economics (win_cpc), loser share, EASE/CUT/RAISE_TO_
+TARGET and the 4-click trial gate ALL inherit the short window with zero duplicated logic.
+
+- Weekly camp floor (30 clicks/7d) exempts low campaigns; the under-floor trigger
+  (VOLUME_LIFT + honest holds) pro-rates to **13 clicks/3d**; floor texts say which.
+- Winner reasons name the true window ("1.71x over 3d — funds the campaign").
+- Big-budget tiers (budget > cap): nothing changes — every decision still weekly.
+- Keyword-grain accumulation evidence stays at its own grain by design: 90d proven/parks,
+  probe episodes (click-count), CUT_TO_BREAKEVEN 28d — those are not "the weekly window".
+- Panel: fast tiers' campaign meta reads "spent $X/3d".
+Invariants at deploy: 291 low rows all have clicks_w == 1d + prev-2d; 263 big rows all
+still 7d; 0 weekly reason texts on low rows; machinery intact (38 window reductions,
+19 VOLUME_LIFTs, parks/probes/queues normal).
