@@ -22,7 +22,7 @@ CREATE OR REPLACE VIEW `onyga-482313.OI.V_OOB_KEYWORD` AS
 WITH k AS (
   SELECT 1.5 AS strong_roas, 1.2 AS weak_roas,
          1.30 AS bid_raise_strong, 1.15 AS bid_raise_weak, 1.05 AS bid_probe, 0.95 AS bid_slow,
-         0.20 AS bid_min, 1.50 AS bid_max, 2.00 AS bid_hard_cap,
+         0.20 AS bid_min, 1.50 AS bid_max, 2.00 AS bid_hard_cap,  -- SP floor; SB floors at $0.25 (platform minBid) via IF(is_sb,...) at every use
          4 AS click_goal_day, 6 AS click_cap_day,
          -- budget-constrained probing (Ori 2026-07-30): tested keywords park, big bids trim
          15 AS tested_clk, 0.25 AS bid_park, 1.00 AS big_bid, 0.85 AS bid_big_trim
@@ -392,8 +392,8 @@ SELECT
     -- that PAID yesterday keep their bid (winners never pulled down).
     WHEN b.pct_dark > 10 AND COALESCE(b.c_roas1, 0) < 1.2 AND COALESCE(b.roas90, 0) < 1.0
          AND b.seat_rank <= b.slots
-         AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > x.bid_min + 0.05
-      THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100), x.bid_min), 2)
+         AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > IF(b.is_sb, 0.25, x.bid_min) + 0.05
+      THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100), IF(b.is_sb, 0.25, x.bid_min)), 2)
     -- mid-probe keyword: the Portfolio 80/20 engine owns it — no seat-model action mid-test
     -- v14 (Ori 2026-08-02 "should those be parked?"): a probe only keeps its bid while it HOLDS
     -- A SEAT — beyond the seats it queues at $0.25 like any mid-test (test pauses, not dies).
@@ -437,8 +437,8 @@ SELECT
     -- "the eater"; the campaign bleeds from many bids collectively.
     -- only keywords that clicked YESTERDAY (Ori 2026-08-01: never brake a keyword that did not
     -- click — its bid did not eat the budget; it just loses its chance to ever test)
-    WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05
-      THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100), x.bid_min), 2)
+    WHEN b.clk1 >= 1 AND b.current_bid > IF(b.is_sb, 0.25, x.bid_min) + 0.05
+      THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100), IF(b.is_sb, 0.25, x.bid_min)), 2)
     ELSE NULL
   END AS suggested_bid,
   CASE
@@ -448,7 +448,7 @@ SELECT
          AND b.queue_sp1 >= GREATEST(0.10 * b.budget, 1.0) THEN 'HOLD'
     WHEN b.pct_dark > 10 AND COALESCE(b.c_roas1, 0) < 1.2 AND COALESCE(b.roas90, 0) < 1.0
          AND b.seat_rank <= b.slots
-         AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
+         AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > IF(b.is_sb, 0.25, x.bid_min) + 0.05 THEN 'DARK_BRAKE'
     WHEN b.is_lift_probe AND b.seat_rank <= b.slots THEN 'HOLD'
     WHEN b.tested_loser AND NOT b.is_lift_probe AND NOT b.is_auto THEN IF(b.current_bid > x.bid_park + 0.05, 'PARK', 'HOLD')
     WHEN b.seat_rank > b.slots AND NOT b.is_auto THEN IF(b.current_bid > 0.30, 'PARK_WAIT', 'HOLD')
@@ -462,7 +462,7 @@ SELECT
       ELSE 'HOLD' END
     WHEN COALESCE(b.roas90, 0) >= 1.0 THEN 'HOLD'
     WHEN b.current_bid > b.seat_cpc + 0.05 AND b.ev_clk >= x.click_goal_day THEN 'TRIM_BID'
-    WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
+    WHEN b.clk1 >= 1 AND b.current_bid > IF(b.is_sb, 0.25, x.bid_min) + 0.05 THEN 'DARK_BRAKE'
     ELSE 'HOLD'
   END AS bid_action,
   CASE
@@ -474,7 +474,7 @@ SELECT
                   FORMAT('%.2f', b.queue_sp1), ' yesterday beyond the seats — park those first (frees the budget); the seat brake waits its turn')
     WHEN b.pct_dark > 10 AND COALESCE(b.c_roas1, 0) < 1.2 AND COALESCE(b.roas90, 0) < 1.0
          AND b.seat_rank <= b.slots
-         AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > x.bid_min + 0.05
+         AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > IF(b.is_sb, 0.25, x.bid_min) + 0.05
       THEN CONCAT('campaign ', CAST(CAST(b.pct_dark AS INT64) AS STRING), '% dark and no budget raise coming (yesterday blended ',
                   FORMAT('%.2f', COALESCE(b.c_roas1, 0)), 'x, under the 1.2x raise gate) — bids own the dark: brake ',
                   CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
@@ -515,7 +515,7 @@ SELECT
       THEN CONCAT('bid eats the capped budget (', CAST(b.ev_clk AS STRING), IF(b.is_low_tier, ' clicks yesterday', ' clicks/7d'), ') — trim ',
                   CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
                   '%/day toward the seat CPC $', CAST(b.seat_cpc AS STRING), ' (= budget ÷ seats ÷ 4-click goal)')
-    WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05
+    WHEN b.clk1 >= 1 AND b.current_bid > IF(b.is_sb, 0.25, x.bid_min) + 0.05
       THEN CONCAT('campaign ', CAST(CAST(b.pct_dark AS INT64) AS STRING), '% dark — brake all bids ',
                   CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_slow, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
                   '%/day (max of 5%, 30%×dark) until the budget survives the day · floor $0.20')

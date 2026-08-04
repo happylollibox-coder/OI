@@ -838,10 +838,10 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         // Keywords     → Entity: Keyword + Keyword ID + Match Type
         // ═══════════════════════════════════════════════════════════
         } else if (item.action === 'REDUCE_BID') {
-          // Use coach recommended bid, fallback to CPC × 0.70
-          const bid = item.recommended_bid
-            ? String(item.recommended_bid)
-            : (item.cpc ? String(Math.max(0.02, +(item.cpc * 0.7).toFixed(2))) : '');
+          // Use coach recommended bid, fallback to CPC × 0.70.
+          // SB platform floor (upload report 30): Amazon rejects SB bids under $0.25.
+          const bidNum = item.recommended_bid ?? (item.cpc ? Math.max(0.02, +(item.cpc * 0.7).toFixed(2)) : null);
+          const bid = bidNum != null ? String(isSB ? Math.max(0.25, bidNum) : bidNum) : '';
           const isAsin = isProductTargeting(item);
           console.log('[Bulksheet] REDUCE_BID', { keyword_id: item.keyword_id, match_type: item.match_type, targeting: item.targeting, isAsin, bid, isSB });
           if (isSB) {
@@ -923,10 +923,9 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           }
 
         } else if (item.action === 'INCREASE_BID' || item.action === 'BOOST' || item.action === 'SCALE_UP') {
-          // Use coach recommended bid, fallback to CPC × 1.25
-          const bid = item.recommended_bid
-            ? String(item.recommended_bid)
-            : (item.cpc ? String(+(item.cpc * 1.25).toFixed(2)) : '');
+          // Use coach recommended bid, fallback to CPC × 1.25. SB floor $0.25 (report 30).
+          const bidNum = item.recommended_bid ?? (item.cpc ? +(item.cpc * 1.25).toFixed(2) : null);
+          const bid = bidNum != null ? String(isSB ? Math.max(0.25, bidNum) : bidNum) : '';
           const isAsin = isProductTargeting(item);
           console.log('[Bulksheet] INCREASE_BID', { keyword_id: item.keyword_id, match_type: item.match_type, targeting: item.targeting, isAsin, bid, isSB });
           if (isSB) {

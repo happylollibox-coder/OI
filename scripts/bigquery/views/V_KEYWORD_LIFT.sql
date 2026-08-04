@@ -1342,7 +1342,13 @@ FROM sb_agg a
 )
 SELECT o.* EXCEPT (bid_hold, bud_hold) REPLACE (
   IF(bid_hold, 'APPLIED_HOLD', o.action) AS action,
-  IF(bid_hold, NULL, o.suggested_bid) AS suggested_bid,
+  -- SB PLATFORM FLOOR (Ori 2026-08-04, report 30): Amazon rejects SB bids under $0.25
+  -- (minBid). Clamp every SB suggestion up to $0.25; if the clamp would not be a real move
+  -- (current bid already at/under the floor), suppress the suggestion instead.
+  IF(bid_hold, NULL,
+     IF(o.channel = 'SB' AND o.suggested_bid IS NOT NULL AND o.suggested_bid < 0.25,
+        IF(COALESCE(o.current_bid, 0) > 0.30, 0.25, NULL),
+        o.suggested_bid)) AS suggested_bid,
   IF(bid_hold, CONCAT('applied $', FORMAT('%.2f', ap.last.new_bid), ' at ',
        FORMAT_TIMESTAMP('%b %d %H:%M', ap.last.ts, 'America/Los_Angeles'),
        ' — step done; suggestions resume when the new bid syncs from Amazon'), o.reason) AS reason,

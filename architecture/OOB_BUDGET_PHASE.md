@@ -1096,3 +1096,18 @@ shape (`V_KEYWORD_LIFT`, both arms):
 
 19 cuts at deploy; invariants clean (0 under $0.15 / upward / steeper than 10%/day /
 not-losing). The asked-for case: $0.40 at 0.81x -> $0.36 toward $0.30.
+
+### v27.12.1 — SB platform bid floor $0.25 (Ori 2026-08-04, upload report 30)
+
+Amazon rejected 1 of 147 rows: SB keyword bid $0.10 — "minBid: 0.25". SB keywords have a
+$0.25 platform minimum (SP allows $0.02); the old $0.02-floor breakeven cut generated an
+illegal SB bid. Three layers, so it cannot recur:
+
+- `V_KEYWORD_LIFT`: SB-arm suggestions clamp to $0.25 at the overlay choke point; if the
+  clamp would not be a real move (current bid <= $0.30) the suggestion is suppressed.
+- `V_OOB_KEYWORD`: bid_min is channel-aware — IF(is_sb, 0.25, $0.20) at all 8 floor/gate
+  sites (DARK_BRAKE etc. never step an SB bid under $0.25).
+- `DoPage` export: SB Update rows clamp Math.max(0.25, bid) in both bid builders —
+  covers MANUAL hand-set bids too.
+Corrected re-upload sheet delivered (sb_bid_floor_reupload.xlsx, 1 row at $0.25); the
+other 146 rows of the 2026-08-04 upload landed.
