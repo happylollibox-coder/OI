@@ -746,6 +746,12 @@ SELECT
     -- under 60% of the current LY-anchored target — glide UP toward target (+10%/day, min 5c),
     -- never above it from this rule. WINNER/MARGINAL only (orders prove the season is real);
     -- losers re-enter through the probe path at 1.5x target instead.
+    -- v27.11 (Ori 2026-08-04, "why it is not raised toward target?"): the mirror of
+    -- EASE_TO_TARGET — a WINNER earning below its target price glides UP toward it, +10%/day,
+    -- never past it (the target is the LY/band market price — the built-in ceiling). Not
+    -- while capped (never raise into dark), not autos (own doctrine), not defense.
+    WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05 THEN 'RAISE_TO_TARGET'
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc THEN 'RAISE_TO_TARGET'
     -- BREAKEVEN CUT (Ori 2026-08-03): a keyword with >= 30 clicks over 28d IS decidable at its
@@ -831,6 +837,9 @@ SELECT
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
+    WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05
+      THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND (a.clk7 + a.clk8_28) >= 30
          AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
@@ -904,6 +913,10 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+    WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05
+      THEN CONCAT('winner (', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x) earning under its target price — raise +10%/day toward $',
+                  CAST(a.tcpc AS STRING), ' (never past it; beyond target only via the coacher)')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND (a.clk7 + a.clk8_28) >= 30
          AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
@@ -1085,6 +1098,12 @@ SELECT
     -- under 60% of the current LY-anchored target — glide UP toward target (+10%/day, min 5c),
     -- never above it from this rule. WINNER/MARGINAL only (orders prove the season is real);
     -- losers re-enter through the probe path at 1.5x target instead.
+    -- v27.11 (Ori 2026-08-04, "why it is not raised toward target?"): the mirror of
+    -- EASE_TO_TARGET — a WINNER earning below its target price glides UP toward it, +10%/day,
+    -- never past it (the target is the LY/band market price — the built-in ceiling). Not
+    -- while capped (never raise into dark), not autos (own doctrine), not defense.
+    WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05 THEN 'RAISE_TO_TARGET'
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc THEN 'RAISE_TO_TARGET'
     -- BREAKEVEN CUT (Ori 2026-08-03): a keyword with >= 30 clicks over 28d IS decidable at its
@@ -1168,6 +1187,9 @@ SELECT
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
+    WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05
+      THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND (a.clk7 + a.clk8_28) >= 30
          AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
@@ -1241,6 +1263,10 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
                   CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+    WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
+         AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05
+      THEN CONCAT('winner (', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x) earning under its target price — raise +10%/day toward $',
+                  CAST(a.tcpc AS STRING), ' (never past it; beyond target only via the coacher)')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND (a.clk7 + a.clk8_28) >= 30
          AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4

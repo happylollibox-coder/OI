@@ -1055,3 +1055,22 @@ budget view and exposed.
 
 The ratchet is intentional: money moves toward converting campaigns the same day; money
 leaves only on a bad week. Brakes and negates own the in-between.
+
+### v27.11 — RAISE_TO_TARGET generalized: winners glide up to their price (Ori 2026-08-04)
+
+Ori ("why it is not raised toward target?" -> "what about RAISE_TO_TARGET"): the v13
+season ramp was the ONLY path that raised a bid toward its target — seasonal_now + bid
+under 60% of target. That left the asymmetry: MARGINALs EASE down to target, WINNERs
+below target had no mirror.
+
+General rule (`V_KEYWORD_LIFT`, both arms, ahead of the seasonal ramp): class **WINNER**
+(weekly for big tiers, 3d for low per v27.7), not auto / defense / capped (never raise
+into dark), target known, **bid < target − $0.05** -> **+10%/day toward target, never
+past it** (same glide formula as the season ramp; beyond target stays coacher-only).
+Seats and probes outrank the ramp (beyond-seat winners still queue-park first).
+
+7 ramps at deploy, invariants clean (0 over-target / downward / bad-scope): the asked-for
+keyword $0.40->$0.45 toward $0.50, plus real catches — a 4.48x winner on 80 clicks
+bidding $0.19 against a $0.45 target, a 2.86x at $0.37 vs $0.59.
+Cadence note: RAISE_TO_TARGET belongs to the STABLE bucket in the proposed maturity
+cadence (winners step weekly / 3d peak) once that layer ships.
