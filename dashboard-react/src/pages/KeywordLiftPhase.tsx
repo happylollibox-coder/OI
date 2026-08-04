@@ -272,11 +272,11 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
 
   const lowCap = (rows ?? [])[0]?.wDays === 3 ? 30 : 20;   // peak cap $30, off-season $20
   // low-budget tiers read at launch cadence — last day + prev-2d, the OOB format (Ori 2026-08-02)
-  const fast = tier === 'LOW' || tier === 'SEASONAL_LOW';
+  const fast = tier === 'LOW' || tier === 'SEASONAL_LOW' || tier === 'AUTO_LOW';  // v27.2: auto-low reads at launch cadence too
   // AUTO section (Ori 2026-08-02): 7d + 8-28d off-season; 3d + 4-14d in peak
   const auto = tier === 'AUTO' || tier === 'AUTO_LOW';
   const inPeak = (rows ?? [])[0]?.wDays === 3;
-  const autoPeak = auto && inPeak;
+  const autoPeak = tier === 'AUTO' && inPeak;  // AUTO_LOW stays on 1d/prev-2d even in peak
   const camps = [...byCamp.values()].filter(g => {
     const c = g[0];
     if (!c || c.isDefense) return false;

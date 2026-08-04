@@ -821,3 +821,13 @@ The manual-bid pattern, applied to campaign budgets — both `KeywordLiftPhase` 
 - Re-editing replaces the queued item (one budget row per campaign).
 - Section unapply clears MANUAL budgets along with MANUAL bids (campaign-scoped sweep
   now covers BUDGET_CHANGE).
+
+### v27.2 — Auto low budget reads at launch cadence (Ori 2026-08-04)
+
+Ori: "auto low budget time window should be 1 day and 2-3 days."
+
+Same display cadence the other low-budget tiers got in v21: the **Auto low budget**
+section shows **last day + prev-2d** (days 2-3) instead of 7d/8-28d — small budgets
+move daily, so the table should read at daily grain. Applies in peak too (the 3d/4-14d
+peak pair now belongs to the big-budget Auto section only). Display-only — the engine's
+AUTO_TRIM/AUTO_RAISE/AUTO_BRAKE/AUTO_FIT decisions still run on the W windows.
