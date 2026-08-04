@@ -875,3 +875,28 @@ out of "apply all N" automatically (no suggested value). Once Fivetran syncs, th
 resumes FROM the new bid — each day's step is a genuine next step.
 At deploy: 17 bid holds (exactly the 00:58 upload) + today's budget moves held; 0 invalid.
 Known gap: V_OOB_KEYWORD / V_OOB_BUDGET_PHASE don't have the overlay yet.
+
+### v27.5 — low-budget autos react daily (Ori 2026-08-04)
+
+Ori (BOTTLE-SP/AUTO): "in auto low budget you should focus on short term windows (prev
+day, 2-3 prev days) and react base on it. In this case you should raise the bid a bit for
+complements, close-match. Trim a bit loose-match."
+
+Small-budget autos live day to day — the weekly windows react too slowly. New day rules
+(`V_KEYWORD_LIFT`, both arms, campaign budget <= low cap $20/$30 peak), which OUTRANK the
+weekly auto rules and the capped mechanics (the budget ladder owns the cap; the bid
+follows yesterday):
+
+- **AUTO_DAY_RAISE**: >= 3 clicks yesterday AND net-profitable AFTER ad spend
+  (gp1 > sp1 — 0.53x "conversions" don't count) -> +5%/day, cap $2.
+- **AUTO_DAY_TRIM**: no profit yesterday AND no profit prev-2d, >= 10 combined clicks
+  -> -5%/day, floor $0.20. A conversion in EITHER window blocks the trim (the
+  substitutes case: dead yesterday but 11x in prev-2d -> hold).
+- Neither fires -> fall through to the weekly auto doctrine (trim/raise/nudge/fit/brake).
+- Steps are deliberately half the weekly ladder (5% vs 15%) — daily windows are noisy,
+  so daily steps are small; APPLIED_HOLD (v27.4) enforces one step per day.
+
+BOTTLE at deploy = the directive verbatim: complements $0.55->$0.58, close-match
+$0.26->$0.27 (raises), loose-match $0.24->$0.23 (trim), substitutes KEEP (prev-2d 11.44x
+blocks). 2 raises + 10 trims fleet-wide; invariants clean (0 non-auto, 0 over-budget-cap,
+0 wrong-direction, 0 raises under 1.0x).

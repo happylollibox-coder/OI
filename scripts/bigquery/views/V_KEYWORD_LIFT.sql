@@ -754,6 +754,17 @@ SELECT
     -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
     -- AUTO_BRAKE (Ori 2026-08-02): while a campaign caps, every clicked non-winner clause
     -- steps down max(5%, 30% x dark)/day — dark must produce a raise or a trim, never a hold
+    -- LOW-BUDGET AUTO DAY RULES (Ori 2026-08-04, BOTTLE-SP/AUTO): "in auto low budget you
+    -- should focus on short term windows (prev day, 2-3 prev days) and react base on it."
+    -- Converted yesterday (>=3 clicks, net profit) -> raise a bit (+5%, cap $2). No profit
+    -- yesterday AND prev-2d on >=10 combined clicks -> trim a bit (-5%, floor $0.20). A
+    -- conversion in EITHER window blocks the trim. These outrank the weekly auto rules and
+    -- the capped mechanics — the budget ladder owns the cap, the bid follows yesterday.
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_DAY_RAISE'
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
+         AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0) THEN 'AUTO_DAY_TRIM'
     WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05 THEN 'AUTO_FIT'
     WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_BRAKE'
@@ -811,6 +822,13 @@ SELECT
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
+      THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.01), 2.00), 2)
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
+         AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0)
+      THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
     WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0))), 2)
@@ -881,6 +899,13 @@ SELECT
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
+      THEN CONCAT('converted yesterday — ', CAST(CAST(a.clk1 AS INT64) AS STRING), ' clicks, net +$', FORMAT('%.2f', a.gp1 - a.sp1), ': low-budget auto reacts daily, raise +5% (cap $2)')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
+         AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0)
+      THEN CONCAT('no profit yesterday or prev-2d (', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks) — low-budget auto reacts daily: trim -5% (floor $0.20); negate the bad terms')
     WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
       THEN CONCAT('selling while capped — fit toward the real CPC $', CAST(ROUND(SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)), 2) AS STRING), ': the budget raise buys volume, cheaper clicks buy more of it')
@@ -1052,6 +1077,17 @@ SELECT
     -- +15%/day toward the $2 cap. (While capped, the budget raise is the lever, never the bid.)
     -- AUTO_BRAKE (Ori 2026-08-02): while a campaign caps, every clicked non-winner clause
     -- steps down max(5%, 30% x dark)/day — dark must produce a raise or a trim, never a hold
+    -- LOW-BUDGET AUTO DAY RULES (Ori 2026-08-04, BOTTLE-SP/AUTO): "in auto low budget you
+    -- should focus on short term windows (prev day, 2-3 prev days) and react base on it."
+    -- Converted yesterday (>=3 clicks, net profit) -> raise a bit (+5%, cap $2). No profit
+    -- yesterday AND prev-2d on >=10 combined clicks -> trim a bit (-5%, floor $0.20). A
+    -- conversion in EITHER window blocks the trim. These outrank the weekly auto rules and
+    -- the capped mechanics — the budget ladder owns the cap, the bid follows yesterday.
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_DAY_RAISE'
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
+         AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0) THEN 'AUTO_DAY_TRIM'
     WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05 THEN 'AUTO_FIT'
     WHEN a.is_auto AND a.capped AND a.class != 'WINNER' AND a.clk1 >= 1 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_BRAKE'
@@ -1107,6 +1143,13 @@ SELECT
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
+      THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.01), 2.00), 2)
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
+         AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0)
+      THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
     WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
       THEN ROUND(GREATEST(a.current_bid * 0.95, SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0))), 2)
@@ -1177,6 +1220,13 @@ SELECT
     WHEN NOT a.is_auto AND NOT a.capped AND COALESCE(a.camp_clk7, 0) < 30 AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.clk1 >= 3 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
+      THEN CONCAT('converted yesterday — ', CAST(CAST(a.clk1 AS INT64) AS STRING), ' clicks, net +$', FORMAT('%.2f', a.gp1 - a.sp1), ': low-budget auto reacts daily, raise +5% (cap $2)')
+    WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
+         AND a.gp1 <= 0 AND a.gp2 <= 0 AND (a.clk1 + a.clk2) >= 10
+         AND ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2) < COALESCE(a.current_bid, 0)
+      THEN CONCAT('no profit yesterday or prev-2d (', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks) — low-budget auto reacts daily: trim -5% (floor $0.20); negate the bad terms')
     WHEN a.is_auto AND a.capped AND a.class = 'WINNER' AND a.clk1 >= 4
          AND COALESCE(a.current_bid, 0) > SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)) + 0.05
       THEN CONCAT('selling while capped — fit toward the real CPC $', CAST(ROUND(SAFE_DIVIDE(a.sp1, NULLIF(a.clk1, 0)), 2) AS STRING), ': the budget raise buys volume, cheaper clicks buy more of it')
