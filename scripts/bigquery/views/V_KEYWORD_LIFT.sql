@@ -738,6 +738,11 @@ SELECT
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
     -- -15%/day (floor $0.30), the real lever is negating bad terms; targets are advisory here.
+    -- AUTO_NUDGE (Ori 2026-08-04, BUNNY Brave close-match): on starving clicks (under the
+    -- 30-click weekly floor) a trim compounds into silence — fewer impressions, no new evidence,
+    -- stuck. If the clause CONVERTED in the last 3 days, feed the signal instead: +5%/day.
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+         AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_NUDGE'
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_TRIM'
     WHEN a.is_auto THEN IF(a.class = 'MARGINAL', 'KEEP', IF(a.class = 'LOSER', 'KEEP_TAIL', 'IDLE'))
     -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
@@ -791,6 +796,9 @@ SELECT
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(a.current_bid * 1.15, 2.00), 2)
     WHEN a.class = 'WINNER' THEN NULL
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+         AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
+      THEN ROUND(LEAST(a.current_bid * 1.05, 2.00), 2)
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.is_auto THEN NULL
@@ -858,6 +866,9 @@ SELECT
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('auto clause performing — ', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x on ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks: raise +15%/day toward $2 (good terms deserve more traffic)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign')
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+         AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
+      THEN CONCAT('converted in the last 3 days on starving clicks (', CAST(CAST(a.clk_w AS INT64) AS STRING), 'c this window, under the 30-click floor) — a trim would freeze it: nudge +5%/day so the sale can prove itself')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4
@@ -1025,6 +1036,11 @@ SELECT
     WHEN a.class = 'WINNER' THEN 'KEEP'
     -- AUTO DOCTRINE (Ori 2026-08-02): 4 fixed clauses — never parked; underperformers TRIM
     -- -15%/day (floor $0.30), the real lever is negating bad terms; targets are advisory here.
+    -- AUTO_NUDGE (Ori 2026-08-04, BUNNY Brave close-match): on starving clicks (under the
+    -- 30-click weekly floor) a trim compounds into silence — fewer impressions, no new evidence,
+    -- stuck. If the clause CONVERTED in the last 3 days, feed the signal instead: +5%/day.
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+         AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00 THEN 'AUTO_NUDGE'
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25 THEN 'AUTO_TRIM'
     WHEN a.is_auto THEN IF(a.class = 'MARGINAL', 'KEEP', IF(a.class = 'LOSER', 'KEEP_TAIL', 'IDLE'))
     -- target < bid (Ori 2026-08-01): MARGINAL glides -5%/day toward target; LOSING goes straight
@@ -1076,6 +1092,9 @@ SELECT
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN ROUND(LEAST(a.current_bid * 1.15, 2.00), 2)
     WHEN a.class = 'WINNER' THEN NULL
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+         AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
+      THEN ROUND(LEAST(a.current_bid * 1.05, 2.00), 2)
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.is_auto THEN NULL
@@ -1143,6 +1162,9 @@ SELECT
     WHEN a.is_auto AND a.class = 'WINNER' AND a.clk_w >= 4 AND NOT a.capped AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('auto clause performing — ', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x on ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks: raise +15%/day toward $2 (good terms deserve more traffic)')
     WHEN a.class = 'WINNER' THEN CONCAT('winner: ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x over ', CAST((SELECT w_days FROM cap) AS STRING), 'd — funds the campaign (est. net ROAS)')
+    WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.clk_w < 30 AND NOT a.capped
+         AND (a.gp1 > 0 OR a.gp3 > 0) AND COALESCE(a.current_bid, 0) < 2.00
+      THEN CONCAT('converted in the last 3 days on starving clicks (', CAST(CAST(a.clk_w AS INT64) AS STRING), 'c this window, under the 30-click floor) — a trim would freeze it: nudge +5%/day so the sale can prove itself')
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4 AND COALESCE(a.current_bid, 0) > 0.25
       THEN 'auto clause underperforming — trim -15%/day (floor $0.20); the real lever is negating its bad terms'
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4

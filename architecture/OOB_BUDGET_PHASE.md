@@ -831,3 +831,26 @@ section shows **last day + prev-2d** (days 2-3) instead of 7d/8-28d — small bu
 move daily, so the table should read at daily grain. Applies in peak too (the 3d/4-14d
 peak pair now belongs to the big-budget Auto section only). Display-only — the engine's
 AUTO_TRIM/AUTO_RAISE/AUTO_BRAKE/AUTO_FIT decisions still run on the W windows.
+
+### v27.3 — AUTO_NUDGE: feed the starving converter (Ori 2026-08-04)
+
+Ori (BUNNY Brave close-match — 1c 5.93x yesterday, 24c 0.24x/7d, would-be AUTO_TRIM):
+"the problem in this scenario: last days' clicks are very low — if you trim it, it will
+be stuck. It is better to increase 5% the one that converted."
+
+At starving click rates the trim compounds into silence: a lower bid buys fewer
+impressions, the weekly window never accumulates new evidence, the clause trims again —
+stuck. So on LOW-VOLUME auto clauses, a recent conversion outranks the weekly loser class:
+
+- **AUTO_NUDGE** (`V_KEYWORD_LIFT`, both arms, before AUTO_TRIM): auto clause, class
+  LOSER, **4 <= W clicks < 30** (under the 30-click weekly decision floor — the same bar
+  that gates other weekly reductions), **not capped**, **converted in the last 3 days**
+  (gp1 > 0 OR gp3 > 0 — the sale must be net-profitable), bid < $2
+  -> bid x 1.05/day, cap $2. Reason: "converted in the last 3 days on starving clicks
+  (Nc this window, under the 30-click floor) — a trim would freeze it: nudge +5%/day so
+  the sale can prove itself".
+- AUTO_TRIM still owns: starving clauses that did NOT convert recently, and >=30-click
+  clauses whose week is decided (enough volume for the trim verdict to be honest).
+- Capped campaigns keep AUTO_BRAKE priority — never nudge into dark.
+- At deploy: 2 nudges (BUNNY Brave close-match $0.71->$0.75, BUNNY Birthday close-match
+  $0.52->$0.55), invariants clean (all 4-29 clicks, uncapped, upward, <= $2).
