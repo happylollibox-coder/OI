@@ -1074,3 +1074,25 @@ keyword $0.40->$0.45 toward $0.50, plus real catches — a 4.48x winner on 80 cl
 bidding $0.19 against a $0.45 target, a 2.86x at $0.37 vs $0.59.
 Cadence note: RAISE_TO_TARGET belongs to the STABLE bucket in the proposed maturity
 cadence (winners step weekly / 3d peak) once that layer ships.
+
+### v27.12 — breakeven cut: W window, glide, $0.15 floor (Ori 2026-08-04)
+
+Ori: "cut to breakeven should be based on last 7 days (or 3 days in peak). If ads net
+ROAS on last 7 days is 0.81x and bid is 0.40 then cut to breakeven should be about 10%
+decrease of bid." + "cut to breakeven minimum should be 0.15."
+
+The v26.1 shape (28d window, straight to profit-per-click, floor $0.02) produced corpse
+bids ($0.40 -> $0.07) on keywords whose CURRENT week was only mildly under water. New
+shape (`V_KEYWORD_LIFT`, both arms):
+
+- **Window = W** (7d off / 3d peak — and low tiers' W is already 3d per v27.7).
+- **Clicks gate**: >= 30 per 7d window / >= 13 per 3d window.
+- **Trigger**: non-WINNER (not auto/defense), W net ROAS **< 1.0** with net profit > 0.
+  (The old < 0.4 extreme bar guarded an aggressive jump; a gentle glide needs only
+  "losing".)
+- **Action**: glide **-10%/day** toward the window's profit-per-click
+  (gp_w / clk_w), **floor $0.15** — never a one-shot cut to the bone.
+- Zero-profit windows (>= gate clicks, gp_w <= 0) still PARK $0.25.
+
+19 cuts at deploy; invariants clean (0 under $0.15 / upward / steeper than 10%/day /
+not-losing). The asked-for case: $0.40 at 0.81x -> $0.36 toward $0.30.

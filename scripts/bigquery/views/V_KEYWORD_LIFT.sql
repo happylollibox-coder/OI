@@ -759,15 +759,16 @@ SELECT
     -- profit per click ("30 clicks per sale x $3 margin -> bid $0.10"). Poor 28d net ROAS
     -- (< 1.0) with the bid above that breakeven -> cut TO it (floor $0.02). Outranks the
     -- volume lift and research ease — accumulated keyword evidence beats both.
+    -- v27.12 (Ori 2026-08-04): breakeven economics moved to the W WINDOW (7d off / 3d peak;
+    -- low tiers' W is already 3d) and softened to a GLIDE — -10%/day toward the window's
+    -- profit-per-click, floor $0.15. Zero-profit windows still park $0.25.
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) > 0
-         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) + 0.05 THEN 'CUT_TO_BREAKEVEN'
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) + 0.05 THEN 'CUT_TO_BREAKEVEN'
     -- VOLUME FLOOR (Ori 2026-08-03): under ~30 clicks/week a campaign cannot decide anything —
     -- classes are noise. Seated keywords below the entry anchor LIFT to it (max($1, min(1.5x
     -- target, $2))) to buy decision-grade traffic; parks/cuts above are volume-gated.
@@ -841,14 +842,13 @@ SELECT
          AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) > 0
-         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) + 0.05 THEN ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2)
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) + 0.05
+      THEN ROUND(GREATEST(a.current_bid * 0.90, SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2)
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
@@ -918,19 +918,16 @@ SELECT
       THEN CONCAT('winner (', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x) earning under its target price — raise +10%/day toward $',
                   CAST(a.tcpc AS STRING), ' (never past it; beyond target only via the coacher)')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) <= 0 AND COALESCE(a.current_bid, 0) > 0.30
-      THEN CONCAT(CAST(CAST(a.clk7 + a.clk8_28 AS INT64) AS STRING), ' clicks over 28d with no net profit at ',
-                  CAST(COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) AS STRING), 'x — park $0.25; the seat queue owns any comeback')
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30
+      THEN CONCAT(CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no net profit — park $0.25; the seat queue owns any comeback')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) > 0
-         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) + 0.05
-      THEN CONCAT('breakeven economics — ', CAST(CAST(a.clk7 + a.clk8_28 AS INT64) AS STRING), ' clicks earned $',
-                  CAST(ROUND(a.gp7 + a.gp8_28, 2) AS STRING), ' net over 28d → the click is worth $',
-                  CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) AS STRING), ': cut to it')
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) + 0.05
+      THEN CONCAT('under breakeven this window — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ',
+                  FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x: glide -10%/day toward the per-click worth $',
+                  CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) AS STRING), ' (floor $0.15)')
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season),
@@ -1111,15 +1108,16 @@ SELECT
     -- profit per click ("30 clicks per sale x $3 margin -> bid $0.10"). Poor 28d net ROAS
     -- (< 1.0) with the bid above that breakeven -> cut TO it (floor $0.02). Outranks the
     -- volume lift and research ease — accumulated keyword evidence beats both.
+    -- v27.12 (Ori 2026-08-04): breakeven economics moved to the W WINDOW (7d off / 3d peak;
+    -- low tiers' W is already 3d) and softened to a GLIDE — -10%/day toward the window's
+    -- profit-per-click, floor $0.15. Zero-profit windows still park $0.25.
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) > 0
-         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) + 0.05 THEN 'CUT_TO_BREAKEVEN'
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) + 0.05 THEN 'CUT_TO_BREAKEVEN'
     -- VOLUME FLOOR (Ori 2026-08-03): under ~30 clicks/week a campaign cannot decide anything —
     -- classes are noise. Seated keywords below the entry anchor LIFT to it (max($1, min(1.5x
     -- target, $2))) to buy decision-grade traffic; parks/cuts above are volume-gated.
@@ -1191,14 +1189,13 @@ SELECT
          AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) > 0
-         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) + 0.05 THEN ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2)
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) + 0.05
+      THEN ROUND(GREATEST(a.current_bid * 0.90, SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2)
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
@@ -1268,19 +1265,16 @@ SELECT
       THEN CONCAT('winner (', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x) earning under its target price — raise +10%/day toward $',
                   CAST(a.tcpc AS STRING), ' (never past it; beyond target only via the coacher)')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) <= 0 AND COALESCE(a.current_bid, 0) > 0.30
-      THEN CONCAT(CAST(CAST(a.clk7 + a.clk8_28 AS INT64) AS STRING), ' clicks over 28d with no net profit at ',
-                  CAST(COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) AS STRING), 'x — park $0.25; the seat queue owns any comeback')
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30
+      THEN CONCAT(CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no net profit — park $0.25; the seat queue owns any comeback')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
-         AND (a.clk7 + a.clk8_28) >= 30
-         AND COALESCE(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.sp7 + a.sp8_28, 0)), 0) < 0.4
-         AND (a.gp7 + a.gp8_28) > 0
-         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) + 0.05
-      THEN CONCAT('breakeven economics — ', CAST(CAST(a.clk7 + a.clk8_28 AS INT64) AS STRING), ' clicks earned $',
-                  CAST(ROUND(a.gp7 + a.gp8_28, 2) AS STRING), ' net over 28d → the click is worth $',
-                  CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.02), 2) AS STRING), ': cut to it')
+         AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR (SELECT in_peak FROM season), 13, 30)
+         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.current_bid, 0) > ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) + 0.05
+      THEN CONCAT('under breakeven this window — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ',
+                  FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x: glide -10%/day toward the per-click worth $',
+                  CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp_w_raw, NULLIF(a.clk_w, 0)), 0.15), 2) AS STRING), ' (floor $0.15)')
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season),
