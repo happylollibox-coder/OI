@@ -197,6 +197,7 @@ SELECT u.campaign_id, COALESCE(e.engine, e2.engine) AS engine, u.keyword_id, u.t
    AND kt.txt IS NULL
    AND NOT REGEXP_CONTAINS(u.search_term, r'^b0[a-z0-9]{8}$')) AS is_add_candidate,
   (u.kind != 'PT'
+   AND ng.cid IS NULL
    AND (u.kind = 'AUTO' OR LOWER(TRIM(u.search_term)) != LOWER(TRIM(u.target_text)))
    -- SQP-listed term without 90 days of market history: WAIT — no negate of either kind
    AND NOT (sq.q IS NOT NULL AND NOT sq.has_90d)
@@ -218,5 +219,11 @@ LEFT JOIN sqp_win sq ON sq.q = LOWER(TRIM(u.search_term))
 LEFT JOIN camp_age ca ON ca.campaign_id = u.campaign_id
 LEFT JOIN research rsr ON rsr.campaign_id = CAST(u.campaign_id AS STRING)
 LEFT JOIN kw_texts kt ON kt.campaign_id = CAST(u.campaign_id AS STRING) AND kt.txt = LOWER(TRIM(u.search_term))
+-- already negated via OI (upload report 31: "NegativeKeyword already exists") — the Fivetran
+-- negatives sync is frozen, so the CHANGE LOG is how we see our own applied negates; a logged
+-- NEGATE_TERM permanently retires the suggestion (negatives are forever).
+LEFT JOIN (SELECT DISTINCT CAST(campaign_id AS STRING) cid, LOWER(TRIM(search_term)) term
+           FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` WHERE action = 'NEGATE_TERM') ng
+  ON ng.cid = CAST(u.campaign_id AS STRING) AND ng.term = LOWER(TRIM(u.search_term))
 WHERE u.clicks_90d > 0
   AND u.campaign_id NOT IN (SELECT campaign_id FROM defense);

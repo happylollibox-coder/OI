@@ -1148,3 +1148,22 @@ days — a verdict without evidence. Now:
   20-click probe episodes decide at their own grain.
 The flagged row: CUT_TO_TARGET $0.55 -> NUDGE_UP $0.85. Fleet: 0 low-tier window
 verdicts under 10 clicks.
+
+### v27.14 — starving probes lift to $1; applied negates retire (Ori 2026-08-04)
+
+Two rules from today's field reports:
+
+**Starving probes** (Ori: "if last day probe is with less than 2 clicks need to raise it
+to 1 bid"): an in-flight probe with **< 2 clicks yesterday** and bid under $0.95 lifts
+straight to the **$1 entry floor** (PROBE_ADJUST) — at 1 click/day the 20-click verdict
+never arrives. 77 lifts at deploy (mostly $0.25-$0.84 competitor-PT probes with 0-click
+days); 0 too-clicky, 0 already-at-$1. APPLIED_HOLD paces it to one lift per day.
+
+**Applied negates** (upload report 31: 2 of 32 rows rejected "NegativeKeyword already
+exists"): the Fivetran negatives sync is frozen (2026-01-03), so the engine could not
+see its own applied negates and re-suggested them forever — duplicate Create rows across
+batches. `V_OOB_SEARCH_TERM` now retires is_negate permanently for any (campaign, term)
+with a logged NEGATE_TERM in FACT_PPC_CHANGE_LOG (campaign-scoped: the same term can
+still be negated elsewhere). The 2 rejected terms now False everywhere; 0 applied-dupes
+fleet-wide; 3 genuinely-new negates remain. No re-upload needed for report 31 — the 2
+"failures" were already-achieved end states.

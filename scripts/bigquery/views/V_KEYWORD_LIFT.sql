@@ -735,6 +735,9 @@ SELECT
     WHEN a.probe_done AND a.is_auto THEN 'AUTO_TRIM'
     WHEN a.probe_done THEN 'PARK'
     -- active probes: daily movement by the click methodology
+    -- STARVING PROBE (Ori 2026-08-04, "if last day probe is with less than 2 clicks need to
+    -- raise it to 1 bid"): under 2 clicks/day the 20-click verdict never arrives — lift to $1.
+    WHEN a.probing AND a.clk1 < 2 AND COALESCE(a.current_bid, 0) < 0.95 THEN 'PROBE_ADJUST'
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN 'PROBE_ADJUST'
     WHEN a.probing THEN 'PROBE_WAIT'
     -- tested loser (>=15 clicks/90d, no sale): permanent park — its seat frees for the next test
@@ -838,6 +841,7 @@ SELECT
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN NULL
     WHEN a.probe_done AND a.is_auto THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.probe_done THEN 0.25
+    WHEN a.probing AND a.clk1 < 2 AND COALESCE(a.current_bid, 0) < 0.95 THEN 1.00
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
     WHEN a.probing THEN NULL
     WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now AND NOT a.is_auto THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
@@ -913,6 +917,9 @@ SELECT
     WHEN a.probe_done
       THEN CONCAT('probe verdict: ', CAST(a.ep_clk AS STRING), ' clicks at ', CAST(COALESCE(a.ep_roas,0) AS STRING),
                   'x — not profitable, park $0.25 and promote the next candidate')
+    WHEN a.probing AND a.clk1 < 2 AND COALESCE(a.current_bid, 0) < 0.95
+      THEN CONCAT('probe starving — ', CAST(a.clk1 AS STRING), ' click(s) yesterday at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
+                  ': lift to the $1 entry floor so the 20-click verdict (', CAST(a.ep_clk AS STRING), '/20 so far) actually arrives')
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0
       THEN CONCAT('probing (', CAST(a.ep_clk AS STRING), '/20 clicks) — 6+ clicks yesterday, no sale yet: -5% daily descent')
     WHEN a.probing
@@ -1105,6 +1112,9 @@ SELECT
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN 'WINNER_FOUND'
     WHEN a.probe_done AND a.is_auto THEN 'AUTO_TRIM'
     WHEN a.probe_done THEN 'PARK'
+    -- STARVING PROBE (Ori 2026-08-04, "if last day probe is with less than 2 clicks need to
+    -- raise it to 1 bid"): under 2 clicks/day the 20-click verdict never arrives — lift to $1.
+    WHEN a.probing AND a.clk1 < 2 AND COALESCE(a.current_bid, 0) < 0.95 THEN 'PROBE_ADJUST'
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN 'PROBE_ADJUST'
     WHEN a.probing THEN 'PROBE_WAIT'
     -- tested loser (>=15 clicks/90d, no sale): permanent park — its seat frees for the next test
@@ -1205,6 +1215,7 @@ SELECT
     WHEN a.probe_done AND COALESCE(a.ep_roas, 0) >= 1.0 THEN NULL
     WHEN a.probe_done AND a.is_auto THEN ROUND(GREATEST(a.current_bid * 0.85, 0.20), 2)
     WHEN a.probe_done THEN 0.25
+    WHEN a.probing AND a.clk1 < 2 AND COALESCE(a.current_bid, 0) < 0.95 THEN 1.00
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0 THEN ROUND(GREATEST(a.current_bid * 0.95, 0.20), 2)
     WHEN a.probing THEN NULL
     WHEN a.clk90 >= 15 AND a.ord90 = 0 AND NOT a.seasonal_now AND NOT a.is_auto THEN IF(COALESCE(a.current_bid, 0) > 0.30, 0.25, NULL)
@@ -1280,6 +1291,9 @@ SELECT
     WHEN a.probe_done
       THEN CONCAT('probe verdict: ', CAST(a.ep_clk AS STRING), ' clicks at ', CAST(COALESCE(a.ep_roas,0) AS STRING),
                   'x — not profitable, park $0.25 and promote the next candidate')
+    WHEN a.probing AND a.clk1 < 2 AND COALESCE(a.current_bid, 0) < 0.95
+      THEN CONCAT('probe starving — ', CAST(a.clk1 AS STRING), ' click(s) yesterday at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
+                  ': lift to the $1 entry floor so the 20-click verdict (', CAST(a.ep_clk AS STRING), '/20 so far) actually arrives')
     WHEN a.probing AND a.clk1 > 6 AND a.ep_ord = 0
       THEN CONCAT('probing (', CAST(a.ep_clk AS STRING), '/20 clicks) — 6+ clicks yesterday, no sale yet: -5% daily descent')
     WHEN a.probing
