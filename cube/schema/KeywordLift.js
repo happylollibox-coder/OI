@@ -84,3 +84,4 @@ cube(`KeywordLift`, {
     reason:       { sql: `reason`,        type: `string` },
   },
 });
+

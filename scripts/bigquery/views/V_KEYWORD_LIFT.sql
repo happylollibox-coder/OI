@@ -1288,7 +1288,7 @@ FROM (
        OR ABS(COALESCE(ap.last.new_bid, -1) - COALESCE(o0.current_bid, -1)) > 0.005) AS bid_hold,
     ab.last IS NOT NULL AND o0.suggested_budget IS NOT NULL AND
       (DATE(ab.last.ts, 'America/Los_Angeles') = CURRENT_DATE('America/Los_Angeles')
-       OR ABS(COALESCE(ab.last.new_budget, -1) - o0.budget) > 0.01) AS bud_hold
+       OR ABS(COALESCE(ab.last.new_budget, -1) - o0.budget) > 0.51) AS bud_hold  -- o0.budget is display-rounded to $1
   FROM out o0
   LEFT JOIN applied ap ON ap.cid = CAST(o0.campaign_id AS STRING) AND ap.tgt = o0.target_text
   LEFT JOIN applied_bud ab ON ab.cid = CAST(o0.campaign_id AS STRING)

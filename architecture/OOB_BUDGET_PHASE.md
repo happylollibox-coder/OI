@@ -900,3 +900,13 @@ BOTTLE at deploy = the directive verbatim: complements $0.55->$0.58, close-match
 $0.26->$0.27 (raises), loose-match $0.24->$0.23 (trim), substitutes KEEP (prev-2d 11.44x
 blocks). 2 raises + 10 trims fleet-wide; invariants clean (0 non-auto, 0 over-budget-cap,
 0 wrong-direction, 0 raises under 1.0x).
+
+### v27.4.1 — applied-hold fixes (Ori 2026-08-04, "can't see the recommendation")
+
+- Budget-hold sync test compared the applied budget against the DISPLAY-ROUNDED budget
+  ($14 vs $14.02 -> false "not synced", suggestion suppressed up to 48h after the value
+  had already synced). Tolerance widened to $0.51 (covers the $1 rounding).
+- The campaign "why" cell never showed the view's budget_reason — held rows displayed a
+  bare "hold —" with no explanation. Cell now prefers: active suggestion reason ->
+  view budget_reason (incl. "budget applied $X — waiting for Amazon sync") -> legacy map
+  -> generic fallbacks.

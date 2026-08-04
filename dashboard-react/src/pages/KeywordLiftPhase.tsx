@@ -469,7 +469,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
                       </button>
                     )}
                   </td>
-                  <td className="px-2 text-left text-faint whitespace-nowrap">{budMap.get(c.campaignId)?.reason || (c.pctDark > 10 ? `dark ${c.pctDark.toFixed(0)}% · mixed windows — the bid brakes carry it today` : (c.loserShare ?? 0) > 20 ? 'losers over the 20% budget — parking the worst' : 'split healthy')}</td>
+                  <td className="px-2 text-left text-faint whitespace-nowrap">{budgetSug(c)?.reason || c.vBudgetReason || budMap.get(c.campaignId)?.reason || (c.pctDark > 10 ? `dark ${c.pctDark.toFixed(0)}% · mixed windows — the bid brakes carry it today` : (c.loserShare ?? 0) > 20 ? 'losers over the 20% budget — parking the worst' : 'split healthy')}</td>
                 </tr>
                 {expanded && kws.map(k => {
                   const it = bidItem(k);
