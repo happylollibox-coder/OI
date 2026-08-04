@@ -775,11 +775,11 @@ SELECT
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND (a.clk7 + a.clk8_28) < 30 AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'VOLUME_LIFT'
     -- NUDGE_UP (Ori 2026-08-04, "no clicks need a nudge up"): a seated low-tier keyword with
-    -- essentially no clicks (under the 4-click trial bar over 1d+prev-2d) is priced out of
+    -- essentially no clicks (under the 10-click day bar over 1d+prev-2d) is priced out of
     -- visibility — no clicks, no evidence, stuck. Nudge +5%/day toward the entry anchor.
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'NUDGE_UP'
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
     -- bids when performance is good. Winner clause with real evidence, campaign not capped:
@@ -824,8 +824,8 @@ SELECT
     -- same evidence bar as TRIM). Under that it is still in its trial: KEEP_TAIL, keep gathering.
     -- (Without the gate, a day-1 campaign's 20% allowance is cents and first clicks park instantly.)
     WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35 THEN 'RESEARCH_EASE'
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     -- idle pool: promote the next candidates into probes when slots are free
     WHEN a.class = 'IDLE' AND NOT a.is_auto AND NOT a.capped AND a.seat_rank <= a.slots
@@ -862,7 +862,7 @@ SELECT
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
@@ -892,8 +892,8 @@ SELECT
     WHEN a.class = 'MARGINAL' THEN NULL
     WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35
       THEN ROUND(GREATEST(a.current_bid * 0.85, 0.30), 2)
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.is_auto AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
@@ -949,7 +949,7 @@ SELECT
            CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data'))
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN CONCAT('invisible — ', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
                   ': the bid is priced out of the auction; nudge +5%/day toward the entry anchor $', CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) AS STRING), ' until it buys data')
@@ -995,7 +995,7 @@ SELECT
       THEN CONCAT('still in its 4-click trial (', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks so far) — 1 click does not break; keep gathering')
     WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35
       THEN 'research mode — the antenna stays alive: glide -15%/day, floor $0.30 (its winning terms seed new keywords)'
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
       THEN CONCAT('loser beyond the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% exploration budget — park $0.25 (spend goes to the winners)')
     WHEN a.class = 'LOSER' AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('losing at ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — straight to the target bid $', CAST(a.tcpc AS STRING))
@@ -1144,11 +1144,11 @@ SELECT
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND (a.clk7 + a.clk8_28) < 30 AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'VOLUME_LIFT'
     -- NUDGE_UP (Ori 2026-08-04, "no clicks need a nudge up"): a seated low-tier keyword with
-    -- essentially no clicks (under the 4-click trial bar over 1d+prev-2d) is priced out of
+    -- essentially no clicks (under the 10-click day bar over 1d+prev-2d) is priced out of
     -- visibility — no clicks, no evidence, stuck. Nudge +5%/day toward the entry anchor.
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) THEN 'NUDGE_UP'
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
     -- bids when performance is good. Winner clause with real evidence, campaign not capped:
@@ -1192,8 +1192,8 @@ SELECT
     -- same evidence bar as TRIM). Under that it is still in its trial: KEEP_TAIL, keep gathering.
     -- (Without the gate, a day-1 campaign's 20% allowance is cents and first clicks park instantly.)
     WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35 THEN 'RESEARCH_EASE'
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     WHEN a.class = 'IDLE' AND NOT a.is_auto AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
@@ -1229,7 +1229,7 @@ SELECT
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
@@ -1259,8 +1259,8 @@ SELECT
     WHEN a.class = 'MARGINAL' THEN NULL
     WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35
       THEN ROUND(GREATEST(a.current_bid * 0.85, 0.30), 2)
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN a.tcpc
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.is_auto AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
@@ -1316,7 +1316,7 @@ SELECT
            CONCAT('campaign under the 30-click/week decision floor (', CAST(COALESCE(a.camp_clk7, 0) AS STRING), 'c/7d) — lift to the entry anchor to buy decision data'))
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 4
+         AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2)
       THEN CONCAT('invisible — ', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
                   ': the bid is priced out of the auction; nudge +5%/day toward the entry anchor $', CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 1.00), 2.00), 2) AS STRING), ' until it buys data')
@@ -1362,7 +1362,7 @@ SELECT
       THEN CONCAT('still in its 4-click trial (', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks so far) — 1 click does not break; keep gathering')
     WHEN a.is_research AND a.class = 'LOSER' AND a.clk_w >= 4 AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.35
       THEN 'research mode — the antenna stays alive: glide -15%/day, floor $0.30 (its winning terms seed new keywords)'
-    WHEN a.class = 'LOSER' AND a.clk_w >= 4 AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
+    WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30
       THEN CONCAT('loser beyond the ', CAST(CAST((SELECT IF(in_peak, 40, 20) FROM season) AS INT64) AS STRING), '% exploration budget — park $0.25 (spend goes to the winners)')
     WHEN a.class = 'LOSER' AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05
       THEN CONCAT('losing at ', CAST(COALESCE(a.roas_w,0) AS STRING), 'x with bid above target — straight to the target bid $', CAST(a.tcpc AS STRING))

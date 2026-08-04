@@ -1128,3 +1128,23 @@ Also fixed in passing: the VOLUME_LIFT bid/reason branches were missing the clk2
 guard the action branch has — a NUDGE_UP row could inherit the anchor-jump formula
 (BOX-COMPETE $0.54 -> $1.00 instead of $0.57). All three CASEs aligned.
 10 nudge-ups at deploy; 0 too-clicky / downward / out-of-scope / beyond-seat.
+
+### v27.13.1 — low-tier window verdicts need the 10-click day bar (Ori 2026-08-04)
+
+Ori (trial keyword, $0.81 bid, 1c + 4c over 3d, was CUT_TO_TARGET $0.55): "it needs
+nudge up."
+
+The v11 4-click trial gate was calibrated for 7-day windows; after the v27.7 rebase a
+low-tier keyword could catch a window verdict (PARK / CUT_TO_TARGET) on 4-5 clicks in 3
+days — a verdict without evidence. Now:
+
+- Low-tier window verdicts (allowance PARK, CUT_TO_TARGET) require **>= 10 clicks in the
+  3d window** (the established 10-click day bar); big tiers keep the 4-click gate on
+  their 7d window.
+- **NUDGE_UP widens to everything under the 10-click day bar** (was < 4) — an under-
+  anchor seated keyword that hasn't reached decision volume keeps buying data at
+  +5%/day instead of catching a thin cut.
+- Accumulation verdicts are untouched by the bar (by design): 90d permanent parks and
+  20-click probe episodes decide at their own grain.
+The flagged row: CUT_TO_TARGET $0.55 -> NUDGE_UP $0.85. Fleet: 0 low-tier window
+verdicts under 10 clicks.
