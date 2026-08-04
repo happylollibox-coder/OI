@@ -1030,3 +1030,28 @@ reason "budget applied $X at <ts> — waiting for Amazon sync". 12 holds at depl
 invalid; the low tier (which never had a guard) gets the same protection.
 Remaining known gap: V_OOB_KEYWORD bid rows have days_since_change<1 ("changed today")
 but no config-sync test — acceptable (bids sync fast and the 1-day gate holds the line).
+
+## v27.10 — Portfolio-OOB asymmetric windows: fast levers daily, verdicts weekly (Ori 2026-08-04)
+
+Ori: "portfolio 80/20 OOB — increase budget, dark brake keyword should be short term
+window. Other actions should be regular window (7 days, 8-28 days)." + correction: the
+raise is guarded by the regular windows — chronic bleeders don't get raises.
+
+Match the window to the cost of being wrong. Working tier (budget > cap) only; low tiers
+stay fully short-window (v27.7):
+
+`V_OOB_BUDGET_PHASE` — CHRONIC FIRST: **7d AND 8-28d both under 0.6x** (peak: 3d AND
+4-14d; new r8_28/r4_14 window cols, both channels) -> **CUT 20%** (floor $10/$15) — a hot
+yesterday inside a chronic bleeder is noise, no raise. Otherwise raises fire on the SHORT
+windows (today >= 1.2x -> x1.25 · + prev-2d >= 1.5x -> x1.5). Else hold. First pass:
+BOX-VIDEO/PT $29 -> $23.20 (7d 0.41x AND 8-28d 0x — the campaign Ori flagged), Hunter
+Gift-for-Girl keeps RAISE_STRONG on a 2.21x week; mixed-evidence campaigns hold.
+
+`V_OOB_KEYWORD` — deliberate actions (**EASE / FIT_CPC / TRIM_BID**) for working-tier
+campaigns judge on **7d clicks + 7d realized CPC** (daily ranges widened 3d -> 7d, both
+arms; prev-2d bounds pinned explicitly; ev_clk/ev_cpc tier-aware aliases). **DARK_BRAKE
+stays on yesterday for every tier** — the emergency lever. is_low_tier threaded from the
+budget view and exposed.
+
+The ratchet is intentional: money moves toward converting campaigns the same day; money
+leaves only on a bad week. Brakes and negates own the in-between.

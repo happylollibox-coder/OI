@@ -107,6 +107,10 @@ sp_sig AS (
                       NULLIF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 2 DAY), sp, 0)), 0)), 2) AS r3,
     ROUND(SAFE_DIVIDE(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 6 DAY), gp, 0)),
                       NULLIF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 6 DAY), sp, 0)), 0)), 2) AS r7,
+    ROUND(SAFE_DIVIDE(SUM(IF(date < DATE_SUB((SELECT d FROM wm_sp), INTERVAL 6 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date < DATE_SUB((SELECT d FROM wm_sp), INTERVAL 6 DAY), sp, 0)), 0)), 2) AS r8_28,
+    ROUND(SAFE_DIVIDE(SUM(IF(date < DATE_SUB((SELECT d FROM wm_sp), INTERVAL 2 DAY) AND date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 13 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date < DATE_SUB((SELECT d FROM wm_sp), INTERVAL 2 DAY) AND date >= DATE_SUB((SELECT d FROM wm_sp), INTERVAL 13 DAY), sp, 0)), 0)), 2) AS r4_14,
     ROUND(SAFE_DIVIDE(SUM(gp), NULLIF(SUM(sp), 0)), 2) AS r28,
     ROUND(SUM(IF(date = (SELECT d FROM wm_sp), sp, 0)), 2) AS spend_1d
   FROM sp_day GROUP BY 1
@@ -142,6 +146,10 @@ sb_sig AS (
                       NULLIF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), sp, 0)), 0)), 2) AS r3,
     ROUND(SAFE_DIVIDE(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 6 DAY), gp, 0)),
                       NULLIF(SUM(IF(date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 6 DAY), sp, 0)), 0)), 2) AS r7,
+    ROUND(SAFE_DIVIDE(SUM(IF(date < DATE_SUB((SELECT d FROM wm_sb), INTERVAL 6 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date < DATE_SUB((SELECT d FROM wm_sb), INTERVAL 6 DAY), sp, 0)), 0)), 2) AS r8_28,
+    ROUND(SAFE_DIVIDE(SUM(IF(date < DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY) AND date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 13 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date < DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY) AND date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 13 DAY), sp, 0)), 0)), 2) AS r4_14,
     ROUND(SAFE_DIVIDE(SUM(gp), NULLIF(SUM(sp), 0)), 2) AS r28,
     ROUND(SUM(IF(date = (SELECT d FROM wm_sb), sp, 0)), 2) AS spend_1d
   FROM sb_day GROUP BY 1
@@ -162,6 +170,7 @@ base AS (
     d.pd,
     COALESCE(s1.r1, s2.r1) AS r1, COALESCE(s1.rprev2, s2.rprev2) AS rprev2,
     COALESCE(s1.r3, s2.r3) AS r3, COALESCE(s1.r7, s2.r7) AS r7, COALESCE(s1.r28, s2.r28) AS r28,
+    COALESCE(s1.r8_28, s2.r8_28) AS r8_28, COALESCE(s1.r4_14, s2.r4_14) AS r4_14,
     bcx.days_since_budget_change AS dsb,
     kk.low_budget_cap, kk.in_peak,
     (c.budget <= kk.low_budget_cap) AS is_low_tier
@@ -197,10 +206,13 @@ SELECT
       WHEN COALESCE(b.r1,0) >= x.weak_roas THEN 'RAISE_WEAK'
       WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6 THEN 'CUT'
       ELSE 'HOLD' END
+    -- v27.10 (Ori 2026-08-04): working tier = asymmetric windows. CHRONIC first — regular
+    -- windows (7d AND 8-28d, peak 3d AND 4-14d) both under 0.6x -> CUT (a hot yesterday inside
+    -- a chronic bleeder is noise; no raise). Otherwise raises fire on the SHORT windows.
     ELSE CASE
+      WHEN COALESCE(IF(b.in_peak, b.r3, b.r7), 0) < 0.6 AND COALESCE(IF(b.in_peak, b.r4_14, b.r8_28), 0) < 0.6 THEN 'CUT'
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN 'RAISE_STRONG'
       WHEN COALESCE(b.r1,0) >= x.weak_roas THEN 'RAISE_WEAK'
-      WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6 THEN 'CUT'
       ELSE 'HOLD' END
   END AS action,
   CASE
@@ -212,10 +224,10 @@ SELECT
         THEN ROUND(GREATEST(b.budget * 0.8, IF(b.in_peak, 15.0, 10.0)), 2)
       ELSE NULL END
     ELSE CASE
+      WHEN COALESCE(IF(b.in_peak, b.r3, b.r7), 0) < 0.6 AND COALESCE(IF(b.in_peak, b.r4_14, b.r8_28), 0) < 0.6
+        THEN ROUND(GREATEST(b.budget * 0.8, IF(b.in_peak, 15.0, 10.0)), 2)
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN ROUND(b.budget * 1.5, 2)
       WHEN COALESCE(b.r1,0) >= x.weak_roas THEN ROUND(b.budget * 1.25, 2)
-      WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6
-        THEN ROUND(GREATEST(b.budget * 0.8, IF(b.in_peak, 15.0, 10.0)), 2)
       ELSE NULL END
   END AS suggested_budget,
   CASE
@@ -232,14 +244,16 @@ SELECT
                     CAST(CAST(IF(b.in_peak,15,10) AS INT64) AS STRING), ')')
       ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · mixed windows → hold budget, bids do the work') END
     ELSE CASE
+      WHEN COALESCE(IF(b.in_peak, b.r3, b.r7), 0) < 0.6 AND COALESCE(IF(b.in_peak, b.r4_14, b.r8_28), 0) < 0.6
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · chronic — ', IF(b.in_peak, '3d ', '7d '),
+                    CAST(COALESCE(IF(b.in_peak, b.r3, b.r7), 0) AS STRING), 'x AND ', IF(b.in_peak, '4-14d ', '8-28d '),
+                    CAST(COALESCE(IF(b.in_peak, b.r4_14, b.r8_28), 0) AS STRING), 'x both under 0.6x → cut 20% (floor $',
+                    CAST(CAST(IF(b.in_peak,15,10) AS INT64) AS STRING), '); no raise into a chronic bleeder')
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas
         THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today ', CAST(b.r1 AS STRING),
                     'x AND prev-2d ', CAST(b.rprev2 AS STRING), 'x → strong raise ×1.5')
       WHEN COALESCE(b.r1,0) >= x.weak_roas
         THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today ', CAST(b.r1 AS STRING), 'x → raise ×1.25')
-      WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today AND prev-2d both under 0.6x → cut 20% (floor $',
-                    CAST(CAST(IF(b.in_peak,15,10) AS INT64) AS STRING), ')')
       ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · evidence mid → hold budget, bids do the work') END
   END AS reason
 FROM base b

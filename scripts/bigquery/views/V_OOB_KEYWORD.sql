@@ -31,7 +31,7 @@ wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
        FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
 -- the phase's campaign population + campaign-level ROAS signals (for the hold-while-capping test)
 oob AS (
-  SELECT campaign_id, campaign_name, pct_dark, current_budget AS budget, roas_1d AS c_roas1, roas_prev2 AS c_roas_prev2
+  SELECT campaign_id, campaign_name, pct_dark, current_budget AS budget, roas_1d AS c_roas1, roas_prev2 AS c_roas_prev2, is_low_tier
   FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
   WHERE channel = 'SP' AND pct_dark > 10
 ),
@@ -44,7 +44,7 @@ tday AS (
   JOIN oob o ON o.campaign_id = CAST(a.campaign_id AS STRING)
   LEFT JOIN `onyga-482313.OI.T_PRICE_COST_TIER` pct
     ON a.Ads_units > 0 AND pct.unit_price = ROUND(SAFE_DIVIDE(a.Ads_sales, a.Ads_units), 2)
-  WHERE a.date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY) AND (SELECT d FROM wm)
+  WHERE a.date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL 6 DAY) AND (SELECT d FROM wm)
   GROUP BY 1, 2, 3
 ),
 tsig AS (
@@ -54,11 +54,12 @@ tsig AS (
     SUM(IF(date = (SELECT d FROM wm), units, 0)) AS units1,
     ROUND(SAFE_DIVIDE(SUM(IF(date = (SELECT d FROM wm), gp, 0)),
                       NULLIF(SUM(IF(date = (SELECT d FROM wm), sp, 0)), 0)), 2) AS roas1,
-    SUM(IF(date < (SELECT d FROM wm), clk, 0)) AS clk2,
-    SUM(IF(date < (SELECT d FROM wm), sp, 0)) AS sp2,
-    SUM(IF(date < (SELECT d FROM wm), units, 0)) AS units2,
-    ROUND(SAFE_DIVIDE(SUM(IF(date < (SELECT d FROM wm), gp, 0)),
-                      NULLIF(SUM(IF(date < (SELECT d FROM wm), sp, 0)), 0)), 2) AS roas_prev2
+    SUM(IF(date < (SELECT d FROM wm) AND date >= DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY), clk, 0)) AS clk2,
+    SUM(IF(date < (SELECT d FROM wm) AND date >= DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY), sp, 0)) AS sp2,
+    SUM(IF(date < (SELECT d FROM wm) AND date >= DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY), units, 0)) AS units2,
+    ROUND(SAFE_DIVIDE(SUM(IF(date < (SELECT d FROM wm) AND date >= DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY), gp, 0)),
+                      NULLIF(SUM(IF(date < (SELECT d FROM wm) AND date >= DATE_SUB((SELECT d FROM wm), INTERVAL 2 DAY), sp, 0)), 0)), 2) AS roas_prev2,
+    SUM(clk) AS clk7, SUM(sp) AS sp7
   FROM tday GROUP BY 1, 2
 ),
 -- tested clicks per target over 90d — the "has it had its test" evidence for the park rule
@@ -150,7 +151,7 @@ lc AS (
 ),
 -- ── SB arm (v2.1): dark SB campaigns' keywords + product targets, from the SB reports ──
 oob_sb AS (
-  SELECT campaign_id, campaign_name, pct_dark, current_budget AS budget, roas_1d AS c_roas1, roas_prev2 AS c_roas_prev2
+  SELECT campaign_id, campaign_name, pct_dark, current_budget AS budget, roas_1d AS c_roas1, roas_prev2 AS c_roas_prev2, is_low_tier
   FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
   WHERE channel = 'SB' AND pct_dark > 10
 ),
@@ -192,12 +193,12 @@ sb_tgtday AS (
   SELECT keyword_id AS target_id, report_date date, SUM(clicks) clk, SUM(cost) cost,
          SUM(attributed_sales_14_d) sales, SUM(attributed_conversions_14_d) orders
   FROM `fivetran-hl.amazon_ads.sb_search_term_report`
-  WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY) AND (SELECT d FROM wm_sb)
+  WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 6 DAY) AND (SELECT d FROM wm_sb)
   GROUP BY 1, 2
   UNION ALL
   SELECT target_id, report_date, SUM(clicks), SUM(cost), SUM(attributed_sales_14_d), SUM(attributed_conversions_14_d)
   FROM `fivetran-hl.amazon_ads.sb_target_report`
-  WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY) AND (SELECT d FROM wm_sb)
+  WHERE report_date BETWEEN DATE_SUB((SELECT d FROM wm_sb), INTERVAL 6 DAY) AND (SELECT d FROM wm_sb)
   GROUP BY 1, 2
 ),
 sb_t90 AS (
@@ -217,11 +218,12 @@ sb_tsig AS (
     SUM(IF(d.date=(SELECT d FROM wm_sb), d.cost,0)) sp1,
     SUM(IF(d.date=(SELECT d FROM wm_sb), d.orders,0)) units1,
     MAX(IF(d.date=(SELECT d FROM wm_sb), SAFE_DIVIDE(d.sales*(1-COALESCE(pr.cost_ratio,0)), NULLIF(d.cost,0)), NULL)) AS roas1,
-    SUM(IF(d.date<(SELECT d FROM wm_sb), d.clk,0)) clk2,
-    SUM(IF(d.date<(SELECT d FROM wm_sb), d.cost,0)) sp2,
-    SUM(IF(d.date<(SELECT d FROM wm_sb), d.orders,0)) units2,
-    SAFE_DIVIDE(SUM(IF(d.date<(SELECT d FROM wm_sb), d.sales*(1-COALESCE(pr.cost_ratio,0)), 0)),
-                NULLIF(SUM(IF(d.date<(SELECT d FROM wm_sb), d.cost,0)),0)) AS roas_prev2
+    SUM(IF(d.date<(SELECT d FROM wm_sb) AND d.date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), d.clk,0)) clk2,
+    SUM(IF(d.date<(SELECT d FROM wm_sb) AND d.date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), d.cost,0)) sp2,
+    SUM(IF(d.date<(SELECT d FROM wm_sb) AND d.date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), d.orders,0)) units2,
+    SUM(d.clk) AS clk7, SUM(d.cost) AS sp7,
+    SAFE_DIVIDE(SUM(IF(d.date<(SELECT d FROM wm_sb) AND d.date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), d.sales*(1-COALESCE(pr.cost_ratio,0)), 0)),
+                NULLIF(SUM(IF(d.date<(SELECT d FROM wm_sb) AND d.date >= DATE_SUB((SELECT d FROM wm_sb), INTERVAL 2 DAY), d.cost,0)),0)) AS roas_prev2
   FROM sb_tgt t
   LEFT JOIN sb_tgtday d ON d.target_id = t.target_id
   LEFT JOIN prod pr ON pr.cid = t.cid
@@ -239,6 +241,7 @@ base AS (
     COALESCE(td.keyword_bid, agb.default_bid) AS current_bid,
     COALESCE(t.clk1, 0) clk1, COALESCE(t.sp1, 0) sp1, COALESCE(t.units1, 0) units1, t.roas1,
     COALESCE(t.clk2, 0) clk2, COALESCE(t.sp2, 0) sp2, COALESCE(t.units2, 0) units2, t.roas_prev2,
+    COALESCE(t.clk7, 0) clk7, COALESCE(t.sp7, 0) sp7, o.is_low_tier,
     (COALESCE(t.roas1, 0) >= 1.0 OR COALESCE(t.roas_prev2, 0) >= 1.0) AS converting,
     COALESCE(t90.clk90, 0) AS clk90, COALESCE(t90.ord90, 0) AS ord90,
     -- recent corrected net ROAS over the full 90d — the seat-priority ranking metric
@@ -256,6 +259,7 @@ base AS (
     FALSE AS is_auto, t.is_pt, TRUE AS is_sb,
     t.bid AS current_bid,
     s.clk1, ROUND(s.sp1,2), s.units1, ROUND(s.roas1,2), s.clk2, ROUND(s.sp2,2), s.units2, ROUND(s.roas_prev2,2),
+    COALESCE(s.clk7, 0), COALESCE(s.sp7, 0), o.is_low_tier,
     (COALESCE(s.roas1, 0) >= 1.0 OR COALESCE(s.roas_prev2, 0) >= 1.0) AS converting,
     COALESCE(s90.clk90, 0), COALESCE(s90.ord90, 0),
     ROUND(SAFE_DIVIDE(s90.sales90 * (1 - COALESCE(pr.cost_ratio, 0)), NULLIF(s90.sp90, 0)), 2) AS roas90,
@@ -336,11 +340,17 @@ seats2pre AS (
 -- eat budget, the parks are the cure — seated brakes wait until the parks land.
 seats3 AS (
   SELECT s.*,
-    SUM(IF(s.seat_rank > s.slots, COALESCE(s.sp1, 0), 0)) OVER (PARTITION BY s.campaign_id) AS queue_sp1
+    SUM(IF(s.seat_rank > s.slots, COALESCE(s.sp1, 0), 0)) OVER (PARTITION BY s.campaign_id) AS queue_sp1,
+    -- v27.10 (Ori 2026-08-04): deliberate keyword actions (EASE / FIT_CPC / TRIM_BID) judge on
+    -- the REGULAR window for working-tier campaigns — 7d clicks + 7d realized CPC; low tier
+    -- keeps the short windows (v27.7). DARK_BRAKE stays on yesterday for every tier.
+    IF(s.is_low_tier, s.clk1, s.clk7) AS ev_clk,
+    IF(s.is_low_tier, SAFE_DIVIDE(s.sp1 + s.sp2, NULLIF(s.clk1 + s.clk2, 0)),
+                      SAFE_DIVIDE(s.sp7, NULLIF(s.clk7, 0))) AS ev_cpc
   FROM seats2pre s
 )
 SELECT
-  b.campaign_id, b.campaign_name, b.pct_dark,
+  b.campaign_id, b.campaign_name, b.pct_dark, b.is_low_tier,
   b.keyword_id, b.ad_group_id, b.target_text, b.match_type, b.is_auto, b.is_pt, b.is_sb,
   ROUND(b.current_bid, 2) AS current_bid,
   b.clk1 AS clicks_1d, ROUND(b.sp1, 2) AS spend_1d, ROUND(SAFE_DIVIDE(b.sp1, NULLIF(b.clk1,0)), 2) AS cpc_1d,
@@ -406,20 +416,20 @@ SELECT
       -- campaign already winner-concentrated (>=80% of spend on converters): purpose is MORE
       -- clicks — glide the 6+-clickers down gently -5%/day (floor: real CPC)
       WHEN COALESCE(b.conv_share, 0) >= 0.80 THEN
-        IF(b.clk1 > 6 AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05,
-           ROUND(GREATEST(b.current_bid * 0.95, SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0))), 2), NULL)
+        IF(b.ev_clk > 6 AND b.current_bid > COALESCE(b.ev_cpc, b.current_bid) + 0.05,
+           ROUND(GREATEST(b.current_bid * 0.95, b.ev_cpc), 2), NULL)
       -- mixed campaign: fit the converter to its real CPC -15%/day while the ladder cleans the leak
-      WHEN b.clk1 >= x.click_goal_day
-        AND SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)) IS NOT NULL
-        AND b.current_bid > SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)) + 0.05
-        THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0))), 2)
+      WHEN b.ev_clk >= x.click_goal_day
+        AND b.ev_cpc IS NOT NULL
+        AND b.current_bid > b.ev_cpc + 0.05
+        THEN ROUND(GREATEST(b.current_bid * x.bid_big_trim, b.ev_cpc), 2)
       ELSE NULL END
     -- seated PROVEN keyword (90d corrected net ROAS >= 1.0): holds its seat untouched — the
     -- budget raise is the lever for winners, never the brake (approved example: seat 2 at 1.03x)
     WHEN COALESCE(b.roas90, 0) >= 1.0 THEN NULL
     -- seated mid-test: trial economics against the PER-SEAT affordable (budget / slots / 4 clicks).
     -- TRIM needs REAL evidence (Ori 2026-08-01) — 4+ clicks yesterday; step max(15%, 30% x dark).
-    WHEN b.current_bid > b.seat_cpc + 0.05 AND b.clk1 >= x.click_goal_day
+    WHEN b.current_bid > b.seat_cpc + 0.05 AND b.ev_clk >= x.click_goal_day
       THEN ROUND(GREATEST(b.current_bid * LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100), b.seat_cpc), 2)
     -- DARK_BRAKE (Ori 2026-08-01, replaces flat SLOW -5%): the bid lever against darkness is
     -- CAMPAIGN-WIDE and proportional — every clicked keyword steps down max(5%, 30% x dark) per
@@ -446,12 +456,12 @@ SELECT
       THEN IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)), 'ACTIVATE', 'HOLD')
     WHEN b.converting THEN CASE
       WHEN COALESCE(b.conv_share, 0) >= 0.80 THEN
-        IF(b.clk1 > 6 AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05, 'EASE', 'HOLD')
-      WHEN b.clk1 >= x.click_goal_day
-        AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05 THEN 'FIT_CPC'
+        IF(b.ev_clk > 6 AND b.current_bid > COALESCE(b.ev_cpc, b.current_bid) + 0.05, 'EASE', 'HOLD')
+      WHEN b.ev_clk >= x.click_goal_day
+        AND b.current_bid > COALESCE(b.ev_cpc, b.current_bid) + 0.05 THEN 'FIT_CPC'
       ELSE 'HOLD' END
     WHEN COALESCE(b.roas90, 0) >= 1.0 THEN 'HOLD'
-    WHEN b.current_bid > b.seat_cpc + 0.05 AND b.clk1 >= x.click_goal_day THEN 'TRIM_BID'
+    WHEN b.current_bid > b.seat_cpc + 0.05 AND b.ev_clk >= x.click_goal_day THEN 'TRIM_BID'
     WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
     ELSE 'HOLD'
   END AS bid_action,
@@ -488,21 +498,21 @@ SELECT
          'seat ready — activates on a coming day (20% pace: 80% of the budget keeps feeding the winners)')
     WHEN b.converting THEN CASE
       WHEN COALESCE(b.conv_share, 0) >= 0.80 THEN
-        IF(b.clk1 > 6 AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05,
+        IF(b.ev_clk > 6 AND b.current_bid > COALESCE(b.ev_cpc, b.current_bid) + 0.05,
            CONCAT('winners take ', CAST(ROUND(100*b.conv_share) AS STRING),
-                  '% of spend — ease -5%/day toward real CPC $', CAST(ROUND(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), 2) AS STRING),
+                  '% of spend — ease -5%/day toward real CPC $', CAST(ROUND(b.ev_cpc, 2) AS STRING),
                   ' to buy MORE clicks from the same budget'),
            'converting in a winner-concentrated campaign — hold (budget raise is the lever)')
-      WHEN b.clk1 >= x.click_goal_day
-        AND b.current_bid > COALESCE(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), b.current_bid) + 0.05
+      WHEN b.ev_clk >= x.click_goal_day
+        AND b.current_bid > COALESCE(b.ev_cpc, b.current_bid) + 0.05
         THEN CONCAT('selling while capping — fit bid down to the real CPC $',
-                    CAST(ROUND(SAFE_DIVIDE(b.sp1 + b.sp2, NULLIF(b.clk1 + b.clk2, 0)), 2) AS STRING),
+                    CAST(ROUND(b.ev_cpc, 2) AS STRING),
                     ': budget raise buys volume, cheaper clicks buy more of it (never raise while dark)')
       ELSE 'converting — hold; the budget raise is the lever while capping' END
     WHEN COALESCE(b.roas90, 0) >= 1.0
       THEN CONCAT('proven ', CAST(b.roas90 AS STRING), 'x over 90d — holds its seat; the budget raise is the lever, not the brake')
-    WHEN b.current_bid > b.seat_cpc + 0.05 AND b.clk1 >= x.click_goal_day
-      THEN CONCAT('bid eats the capped budget (', CAST(b.clk1 AS STRING), ' clicks yesterday) — trim ',
+    WHEN b.current_bid > b.seat_cpc + 0.05 AND b.ev_clk >= x.click_goal_day
+      THEN CONCAT('bid eats the capped budget (', CAST(b.ev_clk AS STRING), IF(b.is_low_tier, ' clicks yesterday', ' clicks/7d'), ') — trim ',
                   CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
                   '%/day toward the seat CPC $', CAST(b.seat_cpc AS STRING), ' (= budget ÷ seats ÷ 4-click goal)')
     WHEN b.clk1 >= 1 AND b.current_bid > x.bid_min + 0.05
