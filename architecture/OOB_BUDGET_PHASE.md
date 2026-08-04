@@ -804,3 +804,20 @@ Same tier split every other section already has, applied to autos. Display-only 
   AUTO_RAISE / AUTO_BRAKE / AUTO_FIT + search-term negates, dark-auto budget ladder.
 - No view/cube change — the split reads the existing `budget` + `is_auto_campaign`
   dimensions. Partition at deploy: 10 + 9 = the same 19 autos, single-home preserved.
+
+### v27.1 — manual budget override (Ori 2026-08-04)
+
+Ori: "add an option to change budget manually as well."
+
+The manual-bid pattern, applied to campaign budgets — both `KeywordLiftPhase` and
+`OobBudgetPhase`:
+
+- The budget $ cell on every campaign row is clickable — input opens, Enter queues a
+  BUDGET_CHANGE with `source: 'MANUAL'` (floor $1, Amazon's minimum), Esc/blur cancels.
+- Works on **hold** rows too: a manual budget bypasses the suggestion gate, so any
+  campaign can take a hand-set budget, not just ones the engine flagged.
+- Queued manual budgets display as `$X ✎`; the ✓ button appears whenever a budget item
+  is queued (suggested or manual) and unqueues it.
+- Re-editing replaces the queued item (one budget row per campaign).
+- Section unapply clears MANUAL budgets along with MANUAL bids (campaign-scoped sweep
+  now covers BUDGET_CHANGE).

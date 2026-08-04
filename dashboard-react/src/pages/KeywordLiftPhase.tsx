@@ -66,6 +66,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
   const [openWinners, setOpenWinners] = useState<Record<string, boolean>>({});
   // manual bid entry (Ori 2026-08-02): click the → $ cell on any keyword row to type a bid
   const [editBid, setEditBid] = useState<{ key: string; value: string } | null>(null);
+  const [editBudget, setEditBudget] = useState<{ key: string; value: string } | null>(null);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -314,7 +315,7 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
       budSugs.forEach(c => { const it = budgetItem(c.campaignId); if (it) doQueue.removeItem(it.id); });
       // unapply also clears MANUAL bids in this section's campaigns (Ori 2026-08-02: "unapplied
       // did not effect the override manual bid") — sections are disjoint, so campaign scope is safe
-      doQueue.items.filter(i => ['INCREASE_BID', 'REDUCE_BID'].includes(i.action) && campIds.has(i.campaign_id))
+      doQueue.items.filter(i => ['INCREASE_BID', 'REDUCE_BID', 'BUDGET_CHANGE'].includes(i.action) && campIds.has(i.campaign_id))
         .forEach(i => doQueue.removeItem(i.id));
     } else {
       sugs.forEach(r => { if (!bidItem(r)) queueBid(r); });
@@ -323,18 +324,28 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
     }
   };
 
-  const queueBudget = (c: Row) => {
+  const queueBudget = (c: Row, manualBudget?: number) => {
     // SINGLE SOURCE (fix, Ori 2026-08-02 'budget without a v'): queue the SAME suggestion the
     // row displays — budgetSug (view-computed) — not the legacy launch-cube map, which lacks
     // most campaigns and made both apply-all and the budget button silently no-op.
-    const sug = budgetSug(c); if (!sug || sug.suggested == null) return;
+    // Manual budgets (Ori 2026-08-04) bypass the suggestion gate — any campaign can take one.
+    const newBudget = manualBudget ?? budgetSug(c)?.suggested;
+    if (newBudget == null) return;
+    const prev = budgetItem(c.campaignId);
+    if (prev) doQueue.removeItem(prev.id);
     doQueue.addItem({
       search_term: `__budget__${c.campaignId}`, action: 'BUDGET_CHANGE', campaign: c.campaignName, campaign_id: c.campaignId,
       ad_group_id: '', targeting: '', keyword_id: '', match_type: '', target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0,
       current_bid: null, recommended_bid: null,
       campaign_type: c.channel === 'SB' ? 'SPONSORED_BRANDS' : 'SPONSORED_PRODUCTS', product: '',
-      spend: 0, orders: 0, cpc: 0, conv_rate: 0, current_budget: sug.budget, recommended_budget: sug.suggested, source: 'COACH',
+      spend: 0, orders: 0, cpc: 0, conv_rate: 0, current_budget: c.budget, recommended_budget: newBudget,
+      source: manualBudget != null ? 'MANUAL' : 'COACH',
     });
+  };
+  const commitManualBudget = (c: Row) => {
+    const v = parseFloat(editBudget?.value ?? '');
+    if (!isNaN(v) && v >= 1) queueBudget(c, Math.round(v * 100) / 100);  // Amazon budget floor $1
+    setEditBudget(null);
   };
   const negItem = (n: Neg) => doQueue.items.find(i => i.action === 'NEGATE_TERM' && i.campaign_id === n.campaignId && i.search_term === n.term);
   const addItemFor = (w: { campaignId: string; term: string }) =>
@@ -435,9 +446,23 @@ export function KeywordLiftPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' |
                   <td className="px-2" />
                   <td className="px-2" />
                   <td className={`px-2 text-left whitespace-nowrap ${budgetSug(c) ? 'text-emerald-400' : 'text-muted'}`}>{budgetSug(c) ? 'budget' : 'hold'}</td>
-                  <td className="px-2">{budgetSug(c) ? `$${budgetSug(c)!.suggested!.toFixed(2)}` : '—'}</td>
                   <td className="px-2">
-                    {budgetSug(c) && (
+                    {editBudget?.key === c.campaignId ? (
+                      <input autoFocus type="number" step="1" min="1" value={editBudget.value}
+                        onChange={e => setEditBudget({ key: c.campaignId, value: e.target.value })}
+                        onKeyDown={e => { if (e.key === 'Enter') commitManualBudget(c); if (e.key === 'Escape') setEditBudget(null); }}
+                        onBlur={() => setEditBudget(null)}
+                        className="w-16 px-1 py-0 text-right font-mono bg-surface border border-blue-500/50 rounded" />
+                    ) : (
+                      <button title="click to set a budget manually (Enter queues it)"
+                        onClick={() => setEditBudget({ key: c.campaignId, value: Number(budgetItem(c.campaignId)?.recommended_budget ?? budgetSug(c)?.suggested ?? c.budget).toFixed(2) })}
+                        className="hover:text-blue-300">
+                        {budgetItem(c.campaignId)?.source === 'MANUAL' ? `$${budgetItem(c.campaignId)!.recommended_budget?.toFixed(2)} ✎` : budgetSug(c) ? `$${budgetSug(c)!.suggested!.toFixed(2)}` : '—'}
+                      </button>
+                    )}
+                  </td>
+                  <td className="px-2">
+                    {(budgetSug(c) || budgetItem(c.campaignId)) && (
                       <button onClick={() => { const it = budgetItem(c.campaignId); if (it) doQueue.removeItem(it.id); else queueBudget(c); }}
                         className={`px-1.5 py-0 rounded border ${budgetItem(c.campaignId) ? 'border-emerald-500/40 text-emerald-300' : 'border-border text-muted hover:bg-surface'}`}>
                         {budgetItem(c.campaignId) ? '✓' : 'budget'}
