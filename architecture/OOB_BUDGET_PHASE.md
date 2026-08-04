@@ -1009,3 +1009,24 @@ instead of the immediate $0.25 queue park. Yesterday the 5 seats spent $5.15 whi
 `seat_rank <= slots`; beyond-seat rows always fall through to PARK_WAIT $0.25.
 After: queue #1-7 all PARK_WAIT $0.25 (~$18/day freed — the budget holds its 5 seats),
 seats 2-3 brake, the 1.83x winner holds. Fleet: 0 beyond-seat brakes remain.
+
+## v27.9 — working-tier dark reacts on short windows too (Ori 2026-08-04)
+
+Ori (BOX-VIDEO/PT, dark 52%, held by "working cadence 7d not due yet"): "this should have
+the short term window logic not 7 days."
+
+`V_OOB_BUDGET_PHASE`: the working-cadence throttle (budget re-suggested only every 7d
+off / 3d peak) and the working cut-evidence window (7d off / 3d peak) are REMOVED — both
+tiers are judged daily on **today + prev-2d**, differing only in ladder multipliers (low
+x2/x1.5 · working x1.5/x1.25, same 0.6x symmetric cut, same floors). First unthrottled
+pass: BOX-SP/AUTO White 69% dark converting 1.38x -> RAISE x1.25 $70->$87.50 (the cadence
+had been sitting on it for days); Hunter Gift-for-Girl -> RAISE_STRONG $46->$69.75.
+
+Removing the throttle exposed that it had been accidentally masking re-suggestions of
+APPLIED moves — so the **APPLIED_HOLD overlay (v27.4 doctrine) now covers this view too**:
+last BUDGET_CHANGE within 48h + (applied today OR value not yet in config, $0.51
+tolerance for the $1-rounded budget) -> action APPLIED_HOLD, suggestion suppressed,
+reason "budget applied $X at <ts> — waiting for Amazon sync". 12 holds at deploy, 0
+invalid; the low tier (which never had a guard) gets the same protection.
+Remaining known gap: V_OOB_KEYWORD bid rows have days_since_change<1 ("changed today")
+but no config-sync test — acceptable (bids sync fast and the 1-day gate holds the line).

@@ -323,13 +323,21 @@ seats AS (
       b.target_text) AS seat_rank
   FROM withT b
 ),
-seats2 AS (
+seats2pre AS (
   SELECT s.*,
     s.keyword_id IS NOT NULL AND s.keyword_id IN (SELECT keyword_id FROM lift_probes) AS is_lift_probe,
     ROW_NUMBER() OVER (PARTITION BY s.campaign_id
       ORDER BY IF(s.seat_rank <= s.slots AND COALESCE(s.current_bid, 0) <= 0.30 AND NOT s.tested_loser, 0, 1),
                s.seat_rank) AS act_rank
   FROM seats s
+),
+-- v27.8.2 (Ori 2026-08-04, BUNNY-VIDEO: "if I park so many keywords I free budget — no need
+-- to dark brake as well"): how much the QUEUE spent yesterday. While beyond-seat rows still
+-- eat budget, the parks are the cure — seated brakes wait until the parks land.
+seats3 AS (
+  SELECT s.*,
+    SUM(IF(s.seat_rank > s.slots, COALESCE(s.sp1, 0), 0)) OVER (PARTITION BY s.campaign_id) AS queue_sp1
+  FROM seats2pre s
 )
 SELECT
   b.campaign_id, b.campaign_name, b.pct_dark,
@@ -363,6 +371,10 @@ SELECT
   CASE
     WHEN b.current_bid IS NULL THEN NULL
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN NULL
+    -- QUEUE OWNS THE DARK (v27.8.2): beyond-seat rows still spending — park those first,
+    -- the seat brake waits its turn (one medicine at a time).
+    WHEN b.pct_dark > 10 AND b.seat_rank <= b.slots AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0
+         AND b.queue_sp1 >= GREATEST(0.10 * b.budget, 1.0) THEN NULL
     -- DARK, NO RAISE COMING (Ori 2026-08-04, VIDEO- BALL 72% dark): the converting/probe holds
     -- assume "the budget raise is the lever" — but when yesterday's blended ROAS is under the
     -- ladder's 1.2x raise gate the budget is cutting/floored and the BIDS own the dark. Brake
@@ -422,6 +434,8 @@ SELECT
   CASE
     WHEN b.current_bid IS NULL THEN 'NO_BID'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'HOLD'
+    WHEN b.pct_dark > 10 AND b.seat_rank <= b.slots AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0
+         AND b.queue_sp1 >= GREATEST(0.10 * b.budget, 1.0) THEN 'HOLD'
     WHEN b.pct_dark > 10 AND COALESCE(b.c_roas1, 0) < 1.2 AND COALESCE(b.roas90, 0) < 1.0
          AND b.seat_rank <= b.slots
          AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > x.bid_min + 0.05 THEN 'DARK_BRAKE'
@@ -444,6 +458,10 @@ SELECT
   CASE
     WHEN b.current_bid IS NULL THEN 'no bid on record'
     WHEN COALESCE(b.days_since_change, 99) < 1 THEN 'changed today — one suggestion per day'
+    WHEN b.pct_dark > 10 AND b.seat_rank <= b.slots AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0
+         AND b.queue_sp1 >= GREATEST(0.10 * b.budget, 1.0)
+      THEN CONCAT('dark ', CAST(CAST(b.pct_dark AS INT64) AS STRING), '% but the queue spent $',
+                  FORMAT('%.2f', b.queue_sp1), ' yesterday beyond the seats — park those first (frees the budget); the seat brake waits its turn')
     WHEN b.pct_dark > 10 AND COALESCE(b.c_roas1, 0) < 1.2 AND COALESCE(b.roas90, 0) < 1.0
          AND b.seat_rank <= b.slots
          AND b.clk1 >= 1 AND COALESCE(b.roas1, 0) < 1.0 AND b.current_bid > x.bid_min + 0.05
@@ -493,4 +511,4 @@ SELECT
                   '%/day (max of 5%, 30%×dark) until the budget survives the day · floor $0.20')
     ELSE 'no clicks yesterday (its bid did not eat the budget) or already at the $0.20 floor — hold'
   END AS bid_reason
-FROM seats2 b CROSS JOIN k x;
+FROM seats3 b CROSS JOIN k x;

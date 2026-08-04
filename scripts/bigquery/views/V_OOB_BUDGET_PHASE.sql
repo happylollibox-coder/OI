@@ -5,10 +5,10 @@
 -- budget. One row per ENABLED campaign (SP AND SB, launch AND working) that Amazon reported
 -- CAMPAIGN_OUT_OF_BUDGET at any point on its channel's anchor day, with ONE budget suggestion.
 --
--- v3 TIER SPLIT (Ori 2026-07-30): evidence windows scale with the budget tier —
---   budget <= low-budget cap ($20 off / $30 peak): judged daily on last-day + prev-2d
---   budget >  cap (working): off-season judged on 7d + 28d · peak judged on 3d + 7d,
---     re-suggested only on the working cadence (last budget change >= 7d off / >= 3d peak)
+-- v3 TIER SPLIT (Ori 2026-07-30) -> v27.9 (Ori 2026-08-04, "this should have the short term
+-- window logic not 7 days"): BOTH tiers are judged daily on last-day + prev-2d — the working
+-- cadence throttle and the 7d/3d working cut window are GONE. Tiers differ only in ladder
+-- multipliers (low x2/x1.5 · working x1.5/x1.25).
 -- STRONG needs BOTH windows; CUT needs BOTH windows bad (symmetric evidence, no one-day verdicts).
 --
 -- Status events come from the UNIFIED V_SRC interface (SP∪SB) — never the raw per-channel fivetran
@@ -17,7 +17,19 @@
 --
 -- GRAIN: one row per campaign with pct_dark > 0 on its anchor day.
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_OOB_BUDGET_PHASE` AS
-WITH cfg AS (
+WITH applied_bud AS (
+  -- APPLIED-HOLD (v27.9, same doctrine as V_KEYWORD_LIFT v27.4): a budget change applied
+  -- within 48h suppresses re-suggestion while (applied TODAY — one ladder step per day — or
+  -- the value has not reached the config yet). The removed working-cadence throttle was
+  -- accidentally masking this; now every tier needs the honest hold.
+  SELECT CAST(campaign_id AS STRING) cid,
+         ARRAY_AGG(STRUCT(applied_at AS ts, new_budget) ORDER BY applied_at DESC LIMIT 1)[OFFSET(0)] last
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE applied_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR)
+    AND action = 'BUDGET_CHANGE' AND new_budget IS NOT NULL
+  GROUP BY 1
+),
+cfg AS (
   SELECT MAX(IF(config_key='campaign_launch_floor_daily', config_value, NULL)) AS floor_daily
   FROM `onyga-482313.OI.DE_BUDGET_CONFIG`
 ),
@@ -152,9 +164,7 @@ base AS (
     COALESCE(s1.r3, s2.r3) AS r3, COALESCE(s1.r7, s2.r7) AS r7, COALESCE(s1.r28, s2.r28) AS r28,
     bcx.days_since_budget_change AS dsb,
     kk.low_budget_cap, kk.in_peak,
-    (c.budget <= kk.low_budget_cap) AS is_low_tier,
-    -- working cadence throttle: > cap re-suggests only every 7d (off) / 3d (peak)
-    (c.budget > kk.low_budget_cap AND COALESCE(bcx.days_since_budget_change, 99) < IF(kk.in_peak, 3, 7)) AS throttled
+    (c.budget <= kk.low_budget_cap) AS is_low_tier
   FROM camp c
   CROSS JOIN cap kk
   JOIN anchor a ON a.campaign_id = c.campaign_id
@@ -166,7 +176,8 @@ base AS (
   LEFT JOIN bc bcx ON bcx.campaign_id = c.campaign_id
   WHERE c.state = 'ENABLED'
     AND c.serving_status IN ('CAMPAIGN_STATUS_ENABLED', 'CAMPAIGN_OUT_OF_BUDGET')
-)
+),
+out AS (
 SELECT
   b.campaign_id, b.campaign_name, b.channel, b.engine, b.anchor_date, b.is_defense, b.is_seasonal, b.is_auto_campaign,
   b.budget AS current_budget, b.spend_1d,
@@ -186,11 +197,10 @@ SELECT
       WHEN COALESCE(b.r1,0) >= x.weak_roas THEN 'RAISE_WEAK'
       WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6 THEN 'CUT'
       ELSE 'HOLD' END
-    WHEN b.throttled THEN 'HOLD'
     ELSE CASE
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN 'RAISE_STRONG'
       WHEN COALESCE(b.r1,0) >= x.weak_roas THEN 'RAISE_WEAK'
-      WHEN COALESCE(IF(b.in_peak, b.r3, b.r7),0) < 0.6 AND COALESCE(b.r1,0) < 0.6 THEN 'CUT'
+      WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6 THEN 'CUT'
       ELSE 'HOLD' END
   END AS action,
   CASE
@@ -201,11 +211,10 @@ SELECT
       WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6
         THEN ROUND(GREATEST(b.budget * 0.8, IF(b.in_peak, 15.0, 10.0)), 2)
       ELSE NULL END
-    WHEN b.throttled THEN NULL
     ELSE CASE
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas THEN ROUND(b.budget * 1.5, 2)
       WHEN COALESCE(b.r1,0) >= x.weak_roas THEN ROUND(b.budget * 1.25, 2)
-      WHEN COALESCE(IF(b.in_peak, b.r3, b.r7),0) < 0.6 AND COALESCE(b.r1,0) < 0.6
+      WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6
         THEN ROUND(GREATEST(b.budget * 0.8, IF(b.in_peak, 15.0, 10.0)), 2)
       ELSE NULL END
   END AS suggested_budget,
@@ -222,21 +231,34 @@ SELECT
         THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today AND prev-2d both under 0.6x → cut 20% (floor $',
                     CAST(CAST(IF(b.in_peak,15,10) AS INT64) AS STRING), ')')
       ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · mixed windows → hold budget, bids do the work') END
-    WHEN b.throttled
-      THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · budget changed ', CAST(b.dsb AS STRING),
-                  'd ago — working cadence (', IF(b.in_peak, '3d in peak', '7d off-season'), ') not due yet')
     ELSE CASE
       WHEN COALESCE(b.r1,0) >= x.weak_roas AND COALESCE(b.rprev2,0) >= x.strong_roas
         THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today ', CAST(b.r1 AS STRING),
                     'x AND prev-2d ', CAST(b.rprev2 AS STRING), 'x → strong raise ×1.5')
       WHEN COALESCE(b.r1,0) >= x.weak_roas
         THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today ', CAST(b.r1 AS STRING), 'x → raise ×1.25')
-      WHEN COALESCE(IF(b.in_peak, b.r3, b.r7),0) < 0.6 AND COALESCE(b.r1,0) < 0.6
-        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · ', IF(b.in_peak,'3d','7d'), ' ',
-                    CAST(COALESCE(IF(b.in_peak, b.r3, b.r7),0) AS STRING), 'x AND today under 0.6x → cut 20% (floor $',
+      WHEN COALESCE(b.r1,0) < 0.6 AND COALESCE(b.rprev2,0) < 0.6
+        THEN CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · today AND prev-2d both under 0.6x → cut 20% (floor $',
                     CAST(CAST(IF(b.in_peak,15,10) AS INT64) AS STRING), ')')
       ELSE CONCAT('Dark ', CAST(ROUND(b.pd*100) AS STRING), '% · evidence mid → hold budget, bids do the work') END
   END AS reason
 FROM base b
 CROSS JOIN k x
-CROSS JOIN cfg cf;
+CROSS JOIN cfg cf
+)
+SELECT o.* REPLACE (
+  IF(hold, 'APPLIED_HOLD', o.action) AS action,
+  IF(hold, NULL, o.suggested_budget) AS suggested_budget,
+  IF(hold, CONCAT('budget applied $', FORMAT('%.2f', ab.last.new_budget), ' at ',
+       FORMAT_TIMESTAMP('%b %d %H:%M', ab.last.ts, 'America/Los_Angeles'),
+       ' — waiting for Amazon sync'), o.reason) AS reason
+)
+FROM (
+  SELECT o0.*,
+    ab0.last IS NOT NULL AND o0.suggested_budget IS NOT NULL AND
+      (DATE(ab0.last.ts, 'America/Los_Angeles') = CURRENT_DATE('America/Los_Angeles')
+       OR ABS(COALESCE(ab0.last.new_budget, -1) - o0.current_budget) > 0.51) AS hold
+  FROM out o0
+  LEFT JOIN applied_bud ab0 ON ab0.cid = CAST(o0.campaign_id AS STRING)
+) o
+LEFT JOIN applied_bud ab ON ab.cid = CAST(o.campaign_id AS STRING);
