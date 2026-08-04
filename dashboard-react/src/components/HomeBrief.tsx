@@ -66,6 +66,9 @@ export function HomeBrief({ data, onNav, simple = false }: { data: DashboardData
 
   // Comparison caption for the card trends — reuse the "vs …" clause from the period label.
   const compareLabel = model.periodLabel.split('·').map(s => s.trim()).find(s => s.toLowerCase().startsWith('vs')) || 'vs prior period';
+  // Today mode: the card's net profit is ads net profit compared against yesterday's,
+  // not the 7-day average the rest of the card uses.
+  const npCaption = effMode === 'today' ? 'Ads net profit · vs yesterday' : undefined;
 
   return (
     <div className="mb-3 bg-card border border-border rounded-lg overflow-hidden backdrop-blur-xl">
@@ -80,12 +83,12 @@ export function HomeBrief({ data, onNav, simple = false }: { data: DashboardData
       {/* MAIN TOGGLE: All summary on its own first row, then a card per family */}
       <div className="p-4 border-b border-border bg-white/[.015]">
         <AllCard label="All" netProfit={model.allNetProfit} unitsSold={model.allUnitsSold} convRate={model.allConvRate}
-          divisor={divisor} compareLabel={compareLabel} active={famKey === 'All'} onClick={() => setFamP('All')} />
+          divisor={divisor} compareLabel={compareLabel} npCaption={npCaption} active={famKey === 'All'} onClick={() => setFamP('All')} />
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mt-4">
           {model.families.map(f => (
             <FamilyCard key={f.family} label={stripLolli(f.family)} dot={f.health} steady={f.steady}
               netProfit={f.netProfit} unitsSold={f.unitsSold} convRate={f.convRate} divisor={divisor} compareLabel={compareLabel}
-              active={famKey === f.family} onClick={() => setFamP(f.family)} />
+              npCaption={npCaption} active={famKey === f.family} onClick={() => setFamP(f.family)} />
           ))}
         </div>
       </div>
@@ -107,11 +110,11 @@ const dualTint = (npGood: boolean, uGood: boolean) =>
   : npGood ? 'bg-emerald-500/[.09]' : 'bg-red-500/[.09]';
 const txt = (good: boolean) => good ? 'text-emerald-500' : 'text-red-500';
 
-type CardProps = { label: string; dot?: Health; netProfit: MetricDelta; unitsSold: MetricDelta; convRate: MetricDelta; divisor?: number; compareLabel: string; active: boolean; steady?: boolean; onClick: () => void };
+type CardProps = { label: string; dot?: Health; netProfit: MetricDelta; unitsSold: MetricDelta; convRate: MetricDelta; divisor?: number; compareLabel: string; npCaption?: string; active: boolean; steady?: boolean; onClick: () => void };
 
 // Wide "All" summary card — its own first row, laid out horizontally so it reads
 // distinctly from the per-family cards below. Whole card tinted by the net-profit sign.
-function AllCard({ label, netProfit, unitsSold, convRate, divisor = 1, compareLabel, active, onClick }: CardProps) {
+function AllCard({ label, netProfit, unitsSold, convRate, divisor = 1, compareLabel, npCaption, active, onClick }: CardProps) {
   return (
     <button onClick={onClick}
       className={`w-full flex items-center gap-x-8 gap-y-3 flex-wrap rounded-xl border px-5 py-4 text-left transition-all duration-200 ${dualTint(netProfit.cur > 0, unitsSold.deltaPct > 0)}
@@ -126,7 +129,7 @@ function AllCard({ label, netProfit, unitsSold, convRate, divisor = 1, compareLa
             <span className={`text-[30px] font-bold font-mono leading-none tracking-tight ${txt(netProfit.cur > 0)}`}>{formatMetric(netProfit, divisor)}</span>
             <span className={`text-[14px] font-mono font-semibold ${txt(netProfit.deltaPct > 0)}`}>{trendArrow(netProfit)} {formatDelta(netProfit)}</span>
           </div>
-          <div className="text-[10px] uppercase tracking-wider text-faint mt-1">Net profit</div>
+          <div className="text-[10px] uppercase tracking-wider text-faint mt-1">{npCaption ?? 'Net profit'}</div>
         </div>
         <div className="w-px self-stretch bg-border/70 hidden sm:block" />
         <div>
@@ -151,7 +154,7 @@ function AllCard({ label, netProfit, unitsSold, convRate, divisor = 1, compareLa
 
 // Family card (Option 4 — colored hero band): a net-profit hero band tinted green/red
 // by the profit value, with the family name + trend, over a neutral units footer.
-function FamilyCard({ label, netProfit, unitsSold, convRate, divisor = 1, compareLabel, active, onClick }: CardProps) {
+function FamilyCard({ label, netProfit, unitsSold, convRate, divisor = 1, compareLabel, npCaption, active, onClick }: CardProps) {
   return (
     <button onClick={onClick}
       className={`flex flex-col rounded-xl border overflow-hidden text-left transition-all duration-200
@@ -172,7 +175,7 @@ function FamilyCard({ label, netProfit, unitsSold, convRate, divisor = 1, compar
           <span className={`text-[26px] font-bold font-mono leading-none tracking-tight ${txt(netProfit.cur > 0)}`}>{formatMetric(netProfit, divisor)}</span>
           <span className={`text-[13px] font-mono font-semibold ${txt(netProfit.deltaPct > 0)}`}>{trendArrow(netProfit)} {formatDelta(netProfit)}</span>
         </div>
-        <div className="text-[10px] uppercase tracking-wider text-faint mt-1.5">Net profit · {compareLabel}</div>
+        <div className="text-[10px] uppercase tracking-wider text-faint mt-1.5">{npCaption ?? `Net profit · ${compareLabel}`}</div>
       </div>
       {/* Units footer — neutral, with its own coloured trend */}
       <div className="flex items-baseline justify-between px-4 py-2.5 border-t border-border bg-card">

@@ -133,10 +133,11 @@ function makeData(): DashboardData {
   dt.push(dba('Bottle', 'Truth bottle', 'A3', '2026-06-18', { sales: 300, ad_cost: 40, cogs: 90, net_profit: 80, orders: 15, units: 15, organic_units: 9, ad_orders: 6 }));
   for (let d = 11; d <= 17; d++) dt.push(dba('Bottle', 'Truth bottle', 'A3', `2026-06-${d}`, { sales: 320, ad_cost: 40, cogs: 96, net_profit: 85, orders: 16, units: 16, organic_units: 10, ad_orders: 6 }));
 
-  // ads_7d — only used by Today mode.
+  // ads_7d — only used by Today mode. 06-19 is the ads-only "Today"; 06-18 is its yesterday.
   const a7: Ads7dRow[] = [];
-  a7.push(ads('Box Classic', 'Lollibox', '2026-06-18', { spend: 100, sales: 700, orders: 20 }));
-  for (let d = 11; d <= 17; d++) a7.push(ads('Box Classic', 'Lollibox', `2026-06-${d}`, { spend: 100, sales: 560, orders: 20 }));
+  a7.push(ads('Box Classic', 'Lollibox', '2026-06-19', { spend: 50, sales: 300, orders: 10, cogs: 90 }));
+  a7.push(ads('Box Classic', 'Lollibox', '2026-06-18', { spend: 100, sales: 700, orders: 20, cogs: 210 }));
+  for (let d = 11; d <= 17; d++) a7.push(ads('Box Classic', 'Lollibox', `2026-06-${d}`, { spend: 100, sales: 560, orders: 20, cogs: 168 }));
 
   return {
     daily_trends_by_asin: dt,
@@ -219,6 +220,17 @@ describe('buildBriefModel', () => {
     expect(lolli.adsOnly).toBe(true);
     expect(lolli.kpis.some(k => k.key === 'net_profit')).toBe(false);
     expect(lolli.kpis.some(k => k.key === 'ads_roas')).toBe(true);
+  });
+
+  it('today card net profit = ads net profit (sales − COGS − spend) vs yesterday', () => {
+    const m = buildBriefModel(makeData(), 'today' as DateMode, NOW);
+    const lolli = m.families.find(f => f.family === 'Lollibox')!;
+    expect(lolli.netProfit.label).toBe('Ads Net Profit');
+    expect(lolli.netProfit.cur).toBeCloseTo(160);  // today 06-19: 300 − 90 − 50
+    expect(lolli.netProfit.base).toBeCloseTo(390); // yesterday 06-18: 700 − 210 − 100
+    // The All card follows the same rule (Box is the only family with ads rows).
+    expect(m.allNetProfit.cur).toBeCloseTo(160);
+    expect(m.allNetProfit.base).toBeCloseTo(390);
   });
 });
 

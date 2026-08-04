@@ -66,6 +66,10 @@ export interface FamilyView {
   kpis: MetricDelta[];
   /** Net profit for the family-selector card (primary measure). */
   netProfit: MetricDelta;
+  /** Ads net profit (ads sales − tier COGS − ads spend) for the card's metric toggle.
+   *  Today mode: identical to netProfit (vs yesterday). Other modes: ads-only aggs
+   *  over the same comparison windows. */
+  netProfitAds: MetricDelta;
   /** Units sold for the family-selector card (secondary measure). */
   unitsSold: MetricDelta;
   /** Conversion rate for the family-selector card (unit-session %, or ads CVR in Today mode). */
@@ -89,6 +93,7 @@ export interface BriefModel {
   allKpis: MetricDelta[];
   /** Whole-book net profit + units for the All card in the family selector. */
   allNetProfit: MetricDelta;
+  allNetProfitAds: MetricDelta;
   allUnitsSold: MetricDelta;
   allConvRate: MetricDelta;
   families: FamilyView[];
@@ -138,6 +143,10 @@ function addAds(a: Agg, adsRows: Ads7dRow[], productToFamily: Record<string, str
     a.ads_sales += r.sales || 0;
     a.ads_orders += r.orders || 0;
     a.clicks += r.clicks || 0;
+    a.cogs += r.cogs || 0;
+    // Ads net profit — ad-attributed only (no organic/repeat halo): ads sales − tier COGS − ads spend.
+    a.net_profit += (r.sales || 0) - (r.cogs || 0) - (r.spend || 0);
+    a.rows += 1;
   }
 }
 
@@ -302,12 +311,14 @@ function familyKpis(cur: Agg, base: Agg, scale: number, adsOnly: boolean, th: Br
 }
 
 // Net profit + units for the family-selector cards. In ads-only (Today) mode there is
-// no P&L yet, so units falls back to ad orders and net profit stays at its ads value (0).
-function cardStats(cur: Agg, base: Agg, scale: number, adsOnly: boolean, th: BriefThresholds): { netProfit: MetricDelta; unitsSold: MetricDelta; convRate: MetricDelta } {
+// no P&L yet, so units falls back to ad orders and net profit is the ad-attributed ads
+// net profit (ads sales − tier COGS − ads spend), compared against YESTERDAY's ads net
+// profit (npBase/npScale override) — a like-for-like single ads day, not the 7-day avg.
+function cardStats(cur: Agg, base: Agg, scale: number, adsOnly: boolean, th: BriefThresholds, npBase: Agg = base, npScale: number = scale): { netProfit: MetricDelta; unitsSold: MetricDelta; convRate: MetricDelta } {
   const unitsCur = adsOnly ? cur.ads_orders : cur.units;
   const unitsBase = adsOnly ? base.ads_orders : base.units;
   return {
-    netProfit: classifyDelta('net_profit', 'Net Profit', cur.net_profit, base.net_profit * scale, 'money', th),
+    netProfit: classifyDelta('net_profit', adsOnly ? 'Ads Net Profit' : 'Net Profit', cur.net_profit, npBase.net_profit * npScale, 'money', th),
     unitsSold: classifyDelta('units', 'Units', unitsCur, unitsBase * scale, 'int', th),
     // Ratio — compare current vs base directly (no window scaling), like Net ROAS / Organic %.
     convRate: classifyDelta('conv_rate', 'Conv Rate', convRate(cur, adsOnly), convRate(base, adsOnly), 'pct', th),
@@ -550,6 +561,8 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
     };
     const cur = aggFor(w.curStart, w.curEnd);
     let base = aggFor(w.baseStart, w.baseEnd);
+    // Ads-only (Today): the card's net profit compares against yesterday's ads net profit.
+    const yday = w.adsOnly ? aggFor(addDays(w.curStart, -1), addDays(w.curStart, -1)) : null;
 
     // Peak fallback: no LY rows for this family → revert to the prior-window baseline.
     let win = w;
@@ -559,7 +572,9 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
     }
 
     const kpis = familyKpis(cur, base, win.baseScale, win.adsOnly, th);
-    const cards = cardStats(cur, base, win.baseScale, win.adsOnly, th);
+    const cards = yday
+      ? cardStats(cur, base, win.baseScale, true, th, yday, 1)
+      : cardStats(cur, base, win.baseScale, win.adsOnly, th);
     const oos = familyOosRisks(data.supply_chain || [], data.asin_oos_days || [], asinToFamily, family, th);
     const coach = coachActionsForFamily(data.actions || [], family);
     const products_ = win.adsOnly
@@ -599,7 +614,10 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
     allBase = sumByAsin(byAsin, null, win2.baseStart, win2.baseEnd);
   }
   const allKpis = familyKpis(allCur, allBase, w.baseScale, w.adsOnly, th);
-  const allCards = cardStats(allCur, allBase, w.baseScale, w.adsOnly, th);
+  const allYday = w.adsOnly ? allAgg(addDays(w.curStart, -1), addDays(w.curStart, -1)) : null;
+  const allCards = allYday
+    ? cardStats(allCur, allBase, w.baseScale, true, th, allYday, 1)
+    : cardStats(allCur, allBase, w.baseScale, w.adsOnly, th);
 
   return {
     dateMode: mode,
