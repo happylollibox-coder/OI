@@ -973,3 +973,26 @@ TARGET and the 4-click trial gate ALL inherit the short window with zero duplica
 Invariants at deploy: 291 low rows all have clicks_w == 1d + prev-2d; 263 big rows all
 still 7d; 0 weekly reason texts on low rows; machinery intact (38 window reductions,
 19 VOLUME_LIFTs, parks/probes/queues normal).
+
+### v27.8 — dark with no raise coming: bids own the dark (Ori 2026-08-04)
+
+Ori (VIDEO- BALL SB, launch, $10 floor): "this campaign has 72% dark but there is no bid
+trim."
+
+The hole: every hold in the seat model leaned on "the budget raise is the lever while
+capping" — but nothing checked whether a raise was actually coming. VIDEO- BALL: budget
+verdict CUT at the $10 floor (both windows under 0.6x), converting seats + probe all
+HOLD -> 72% dark, 102% spend, nothing moves. Dark must produce a raise or a trim.
+
+Fix (`V_OOB_KEYWORD`, all 3 CASEs, ahead of the probe/converting/proven exemptions):
+**campaign dark > 10% AND yesterday blended net ROAS under the ladder's 1.2x raise gate**
+(c_roas1 — the exact budget-ladder input) -> every keyword that clicked UNPROFITABLY
+yesterday (clk1 >= 1, roas_1d < 1.0) DARK_BRAKEs max(5%, 30% x dark)/day toward $0.20 —
+including 3d-converting seats with a dead yesterday and IN-FLIGHT PROBES (a probe stops
+hiding behind its verdict when the campaign is drowning). Exempt: 90d-proven seats
+(winners never pulled down), keywords that PAID yesterday (roas_1d >= 1), no-click
+keywords (their bid did not eat the budget).
+
+VIDEO- BALL at deploy: tween girl $0.70->$0.55 (8c 0.00x), probe $1.03->$0.81,
+gift-for-girls 1.58x holds. Fleet: 28 brakes; 0 wrong-direction / no-click / paying.
+View-only change (BQ live; panel already styles DARK_BRAKE).
