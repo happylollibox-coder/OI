@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { cubeLoad } from './useCubeData';
 
 export interface InventoryMaps {
-  stockMap: Record<string, number>;    // FBA + AWD, for consumers that want one pooled number
+  stockMap: Record<string, number>;    // FBA + AWD only, for consumers that want one pooled sellable number; excludes MFR Ready / In Production because that stock isn't sellable yet
   fbaMap: Record<string, number>;
   awdMap: Record<string, number>;
   mfrReadyMap: Record<string, number>;
@@ -31,17 +31,18 @@ export function mapInventoryRows(rows: Record<string, unknown>[]): InventoryMaps
 }
 
 /** Latest InventorySnapshot, folded per source. One query shared by all consumers. */
-export function useInventorySnapshot(): InventoryMaps & { loading: boolean; snapshotDate: string | null } {
+export function useInventorySnapshot(): InventoryMaps & { loading: boolean; snapshotDate: string | null; error: string | null } {
   const [maps, setMaps] = useState<InventoryMaps>(EMPTY);
   const [snapshotDate, setSnapshotDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         const dateRows = await cubeLoad({ measures: ['InventorySnapshot.latestSnapshotDate'] });
         const latestDate = (dateRows as Record<string, unknown>[])[0]?.['InventorySnapshot.latestSnapshotDate'];
-        if (!latestDate) { setLoading(false); return; }
+        if (!latestDate) { setError('No inventory snapshot available'); setLoading(false); return; }
 
         const rows = await cubeLoad({
           measures: ['InventorySnapshot.totalUnits'],
@@ -52,10 +53,11 @@ export function useInventorySnapshot(): InventoryMaps & { loading: boolean; snap
         setSnapshotDate(String(latestDate));
       } catch (e) {
         console.warn('[useInventorySnapshot] load failed', e);
+        setError(e instanceof Error ? e.message : 'Inventory snapshot load failed');
       }
       setLoading(false);
     })();
   }, []);
 
-  return { ...maps, loading, snapshotDate };
+  return { ...maps, loading, snapshotDate, error };
 }
