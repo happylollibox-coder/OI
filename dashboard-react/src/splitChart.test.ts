@@ -140,4 +140,24 @@ describe('reduceSeriesToWeeks', () => {
 
     expect(rows.map(r => r.weekStart)).toEqual(['2026-08-03', '2026-08-17']);
   });
+
+  it('sorts out-of-order input before bucketing — rows come out chronological with the true last-day value', () => {
+    const window = { start: new Date(2026, 7, 3), end: new Date(2026, 7, 16) }; // two full weeks
+    // fbaUnits counts down 114, 113, ... one per date in calendar order, so each day's
+    // value is unique and "last day of the week" is unambiguous however the input is ordered.
+    const inOrder = [
+      ['2026-08-03', 114], ['2026-08-04', 113], ['2026-08-05', 112], ['2026-08-06', 111],
+      ['2026-08-07', 110], ['2026-08-08', 109], ['2026-08-09', 108], // last day of week 1
+      ['2026-08-10', 107], ['2026-08-11', 106], ['2026-08-12', 105], ['2026-08-13', 104],
+      ['2026-08-14', 103], ['2026-08-15', 102], ['2026-08-16', 101], // last day of week 2
+    ] as const;
+    // Deliberately reversed: 8/16 arrives first in the array, 8/03 arrives last.
+    const series: SeriesDay[] = [...inOrder].reverse().map(([date, fbaUnits]) => day(date, { fbaUnits }));
+
+    const rows = reduceSeriesToWeeks(series, window);
+
+    expect(rows.map(r => r.weekStart)).toEqual(['2026-08-03', '2026-08-10']);
+    expect(rows[0].fbaStock).toBe(108); // 8/09 — last day of week 1, not 8/16 (array's first element)
+    expect(rows[1].fbaStock).toBe(101); // 8/16 — last day of week 2, not 8/10 (array's last element)
+  });
 });

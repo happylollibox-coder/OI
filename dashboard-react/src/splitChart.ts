@@ -22,9 +22,9 @@ export interface SplitChartWindow {
  *
  * Starts four days before `today` so the operator can see where they are
  * coming from, not just where the plan goes next. Ends at whichever is
- * later — the calendar year end, or `today + docTarget` days — because a
- * `docTarget`-day-of-cover decision is meaningless if the chart cannot show
- * `docTarget` days of runway: near year end, a window that stopped at
+ * later — the calendar year end, or `today + targetDoc` days — because a
+ * `targetDoc`-day-of-cover decision is meaningless if the chart cannot show
+ * `targetDoc` days of runway: near year end, a window that stopped at
  * Dec 31 would cut the DOC line off long before it said anything.
  *
  * The engine (`fbaAwdSplit.ts`) deliberately computes further out than this
@@ -33,19 +33,29 @@ export interface SplitChartWindow {
  * not an artifact of the forecast running out exactly where the chart
  * happens to stop.
  *
- * When `today + docTarget` lands exactly on year end, the two candidates
+ * When `today + targetDoc` lands exactly on year end, the two candidates
  * are the same date, so there is nothing to actually pick between; ties
  * resolve to year end.
+ *
+ * Param name matches `SplitInput.targetDoc` in `fbaAwdSplit.ts` — same
+ * number, same name, so the panel can pass it straight through.
  */
-export function splitChartWindow(today: Date, docTarget = 100): SplitChartWindow {
+export function splitChartWindow(today: Date, targetDoc = 100): SplitChartWindow {
   const day = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const start = addDays(day, -4);
   const yearEnd = new Date(day.getFullYear(), 11, 31);
-  const horizonEnd = addDays(day, docTarget);
+  const horizonEnd = addDays(day, targetDoc);
   const end = horizonEnd > yearEnd ? horizonEnd : yearEnd;
   return { start, end };
 }
 
+/**
+ * Deliberately speaks the chart's "stock" vocabulary (`fbaStock`, `awdStock`,
+ * `fbaDoc`) rather than the engine's "units" vocabulary (`SeriesDay.fbaUnits`,
+ * `awdUnits`, `doc`) — a stock line shows a balance, not a unit count, and
+ * the DOC field is prefixed to say which pool it reads. `docCapped` keeps
+ * its engine name since there's no chart-specific term for it.
+ */
 export interface SplitWeekRow {
   weekLabel: string;
   weekStart: string; // YYYY-MM-DD (Monday)

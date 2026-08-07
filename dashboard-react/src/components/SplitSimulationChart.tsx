@@ -40,15 +40,20 @@ function LegendBtn({ active, color, label, onClick }: { active: boolean; color: 
 
 /**
  * Declared outside the chart component (not inline in render) so Recharts
- * can clone it with fresh `active`/`label` props on every hover without
- * remounting it. `rows`/`showAwd`/`showDoc` ride along as ordinary props
- * rather than closures.
+ * can clone it with fresh `active`/`payload` props on every hover without
+ * remounting it. `showAwd`/`showDoc` ride along as ordinary props rather
+ * than closures.
+ *
+ * Reads the hovered row straight off `payload[0].payload` instead of
+ * re-deriving it by matching `label` (== `weekLabel`, "MMM DD" with no
+ * year) against `rows` — `weekLabel` repeats once the window spans more
+ * than ~364 days, which would silently show the wrong week's data.
  */
-function SplitTooltip({ active, label, rows, showAwd, showDoc }: {
-  active?: boolean; label?: string; rows: SplitWeekRow[]; showAwd: boolean; showDoc: boolean;
+function SplitTooltip({ active, payload, showAwd, showDoc }: {
+  active?: boolean; payload?: Array<{ payload: SplitWeekRow }>; showAwd: boolean; showDoc: boolean;
 }) {
   if (!active) return null;
-  const row = rows.find(r => r.weekLabel === label);
+  const row = payload?.[0]?.payload;
   if (!row) return null;
   return (
     <div className="text-[11px] space-y-1 p-2.5 rounded-lg shadow-lg" style={CHART_TOOLTIP_STYLE(11)}>
@@ -107,7 +112,7 @@ export function SplitSimulationChart({ rows, targetDoc, oosLabel }: SplitSimulat
             yAxisId="doc" orientation="right" tick={CHART_AXIS_TICK} tickLine={false} axisLine={false}
             domain={[0, 'auto']} width={34} tickFormatter={(v: number) => `${v}d`}
           />
-          <RTooltip content={<SplitTooltip rows={rows} showAwd={showAwd} showDoc={showDoc} />} cursor={{ fill: 'var(--color-border-faint)' }} />
+          <RTooltip content={<SplitTooltip showAwd={showAwd} showDoc={showDoc} />} cursor={{ fill: 'var(--color-border-faint)' }} />
 
           <ReferenceLine
             yAxisId="stock" y={0} stroke="var(--color-negative)" strokeWidth={1.5} strokeDasharray="4 4"
