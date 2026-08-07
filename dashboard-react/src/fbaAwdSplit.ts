@@ -70,11 +70,32 @@ const OVERSTOCK_TOLERANCE = 0.10;
 
 const DAY_MS = 86_400_000;
 
+/**
+ * Stock already on the water to AWD. Owned, landing in the reserve, and able to
+ * feed a transfer into FBA once — and not one day before — it lands.
+ *
+ * `arrivalDate` is optional because the authority for this quantity is Amazon's
+ * inventory snapshot, which reports a quantity and no date. An undated tranche
+ * is placed at AWD_SLOW_SEA transit from today and the assumption is stated on
+ * `SplitPlan.assumptions`, never buried.
+ */
+export interface AwdInboundTranche {
+  units: number;
+  /** Local YYYY-MM-DD. Omit when the source does not know. */
+  arrivalDate?: string;
+}
+
 export interface SplitInput {
   cartons: number;
   packageQuantity: number;
   fbaOnHand: number;
   awdOnHand: number;
+  /**
+   * Stock in transit to AWD. Counted in the combined position because it is
+   * owned, and joined to the transfer pool at its arrival date so it can never
+   * feed a transfer early. Absent means none, not unknown.
+   */
+  awdInbound?: AwdInboundTranche[];
   shipments: ProjectionShipment[];
   curve: DemandCurve;
   transitDays: TransitDayMap;
@@ -163,6 +184,12 @@ export interface SplitPlan {
   fbaOosDate: string | null;
   leftoverAwdUnits: number;
   warnings: string[];
+  /**
+   * Things the engine had to decide for itself because the input did not say.
+   * Separate from `warnings`: nothing here is wrong, but every line is a place
+   * the plan would move if the real figure turned up.
+   */
+  assumptions: string[];
 }
 
 const fail = (error: string): SplitPlan => ({
@@ -172,7 +199,7 @@ const fail = (error: string): SplitPlan => ({
   sellableDate: '', walkWindow: null,
   fbaDocAtArrival: { days: 0, capped: false },
   combinedDocAtArrival: { days: 0, capped: false }, fbaOosDate: null,
-  leftoverAwdUnits: 0, warnings: [],
+  leftoverAwdUnits: 0, warnings: [], assumptions: [],
 });
 
 /** Midnight of the same local day, so every date in the engine is comparable. */
@@ -183,6 +210,32 @@ function startOfDay(d: Date): Date {
 /** Whole days between two local midnights. Rounds, so DST hours never leak in. */
 function daysBetween(later: Date, earlier: Date): number {
   return Math.round((later.getTime() - earlier.getTime()) / DAY_MS);
+}
+
+/**
+ * Days `planSplit` walks beyond today. A year, plus the combined target: a
+ * forward DOC reading at the last day shown needs `totalTargetDoc` days of
+ * demand beyond it, and transfers run past year-end.
+ */
+export function walkHorizonDays(totalTargetDoc: number): number {
+  return 365 + totalTargetDoc;
+}
+
+/**
+ * The span `planSplit` will walk for these inputs, statable BEFORE a plan
+ * exists. The ledger has to judge "did this arrival land inside the modelled
+ * window?" in order to decide which shipments the engine is even given — a
+ * chicken-and-egg the panel used to dodge by reading `plan.walkWindow` after
+ * the fact. `planSplit` builds its series from `walkHorizonDays` too, and a
+ * test pins the two together, so the window judged and the window walked cannot
+ * drift apart.
+ */
+export function plannedWalkWindow(today: Date, totalTargetDoc: number): { from: string; to: string } {
+  const from = startOfDay(today);
+  return {
+    from: localDateKey(from),
+    to: localDateKey(addDays(from, walkHorizonDays(totalTargetDoc))),
+  };
 }
 
 /** Ship dates snap to Wednesday, matching the plan engine's ship_wednesday convention. */
@@ -342,6 +395,7 @@ export function planSplit(input: SplitInput): SplitPlan {
     cartons, packageQuantity: pkg, fbaOnHand, awdOnHand, shipments, curve,
     transitDays, fbaInboundBufferDays: buffer, fbaTargetDoc, totalTargetDoc, methodOverride,
   } = input;
+  const awdInboundRows = input.awdInbound ?? [];
 
   if (!Number.isFinite(pkg) || pkg <= 0) return fail('Invalid package quantity — cannot convert cartons to units.');
   if (!Number.isFinite(cartons) || cartons <= 0) return fail('Enter a number of cartons greater than zero.');
@@ -353,6 +407,9 @@ export function planSplit(input: SplitInput): SplitPlan {
   }
   if (!Number.isFinite(fbaOnHand) || fbaOnHand < 0) return fail('FBA on-hand units must be zero or more.');
   if (!Number.isFinite(awdOnHand) || awdOnHand < 0) return fail('AWD on-hand units must be zero or more.');
+  if (awdInboundRows.some(t => !Number.isFinite(t.units) || t.units < 0)) {
+    return fail('AWD in-transit units must be zero or more.');
+  }
   if (!Number.isFinite(buffer) || buffer < 0) return fail('FBA inbound buffer days must be zero or more.');
   // The transit map comes off a network response, so a dropped LOV row must not
   // silently become a zero-day leg that lands the day it ships.
@@ -370,14 +427,15 @@ export function planSplit(input: SplitInput): SplitPlan {
   const today = startOfDay(input.today);
   const units = Math.round(cartons * pkg);
   const warnings: string[] = [];
+  const assumptions: string[] = [];
   const inbound = confirmedFbaInbound(shipments);
   const shipDate = nextWednesday(today);
   const docCap = totalTargetDoc * DOC_CAP_MULTIPLE;
 
-  // Horizon must outrun the display window, which follows the combined target:
-  // forward DOC at the last shown week needs totalTargetDoc days of demand
-  // beyond it, and transfers run past year-end.
-  const horizonDays = 365 + totalTargetDoc;
+  // Horizon must outrun the display window, which follows the combined target.
+  // Shared with `plannedWalkWindow` so a caller can state this span before the
+  // plan exists without re-deriving it.
+  const horizonDays = walkHorizonDays(totalTargetDoc);
   const oos = firstOosDate(fbaOnHand, inbound, curve, today, horizonDays);
 
   const selected = selectFbaMethod(shipDate, oos, transitDays, buffer);
@@ -404,6 +462,29 @@ export function planSplit(input: SplitInput): SplitPlan {
   const awdTransit = transitDays.AWD_SLOW_SEA;
   const awdArrival = addDays(shipDate, awdTransit);
   const transferTransit = transitDays.AWD_TRANSFER;
+
+  // Stock already on the water to AWD. It joins the same dated pool the batch's
+  // AWD leg does, so a transfer can never be ordered against units still at
+  // sea. Where the source gives no date — the inventory snapshot reports a
+  // quantity only — assume this engine's own AWD_SLOW_SEA leg from today and
+  // say so, rather than assuming it is available now (which would let a
+  // transfer be ordered against goods that have not landed).
+  const assumedAwdArrival = addDays(today, awdTransit);
+  const awdInboundTranches: PoolTranche[] = [];
+  let assumedAwdInboundUnits = 0;
+  for (const t of awdInboundRows) {
+    if (!(t.units > 0)) continue;
+    const dated = parseLocalDate(t.arrivalDate);
+    if (dated) awdInboundTranches.push({ availableFrom: startOfDay(dated), units: t.units, note: 'AWD in transit' });
+    else assumedAwdInboundUnits += t.units;
+  }
+  if (assumedAwdInboundUnits > 0) {
+    awdInboundTranches.push({ availableFrom: assumedAwdArrival, units: assumedAwdInboundUnits, note: 'AWD in transit' });
+    assumptions.push(`${assumedAwdInboundUnits} units already in transit to AWD carry no arrival date, so they are assumed to land ${localDateKey(assumedAwdArrival)} — ${methodCaption('AWD_SLOW_SEA')} (${awdTransit}d) from today. They count towards the combined position from now, but nothing can be transferred out of them before that date.`);
+  }
+  // Landing order: what is at AWD now, then what is at sea, then the batch —
+  // so `draw` empties the oldest stock first.
+  const awdInboundUnits = awdInboundTranches.reduce((s, t) => s + t.units, 0);
 
   // The FBA leg is sized to fbaTargetDoc — the days that must be LIVE — and not
   // to the combined target: fbaTargetDoc DOC at the sellable date means holding
@@ -436,8 +517,10 @@ export function planSplit(input: SplitInput): SplitPlan {
 
   // The combined position: everything owned that is either live at FBA or
   // waiting at AWD. AWD stock is not sellable, but it is stock — leaving it out
-  // would read as a shortfall the operator has already paid for.
-  const combinedAtSellable = stockAtSellable + awdOnHand + awdUnits;
+  // would read as a shortfall the operator has already paid for. Stock still on
+  // the water to AWD is owned on exactly the same terms as the batch's own AWD
+  // leg, which is counted here too; omitting it would over-order the reserve.
+  const combinedAtSellable = stockAtSellable + awdOnHand + awdUnits + awdInboundUnits;
   const combinedDocAtArrival: DocReading = combinedAtSellable > 0
     ? docFromStock(combinedAtSellable, fbaSellable, curve, docCap)
     : { days: 0, capped: false };
@@ -509,6 +592,7 @@ export function planSplit(input: SplitInput): SplitPlan {
     batchArrival: fbaUnits > 0 ? { date: fbaSellable, units: fbaUnits, note: 'FBA batch' } : null,
     pool: [
       { availableFrom: today, units: awdOnHand },
+      ...awdInboundTranches,
       ...(awdUnits > 0 ? [{ availableFrom: awdArrival, units: awdUnits, note: 'AWD batch' }] : []),
     ].filter(t => t.units > 0),
   });
@@ -534,6 +618,7 @@ export function planSplit(input: SplitInput): SplitPlan {
     fbaOosDate: oos ? localDateKey(oos) : null,
     leftoverAwdUnits: leftover,
     warnings,
+    assumptions,
   };
 }
 

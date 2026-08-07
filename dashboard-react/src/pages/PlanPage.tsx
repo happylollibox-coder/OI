@@ -1812,6 +1812,8 @@ export function PlanPage({ data }: { data: DashboardData }) {
         fbaMap={shipmentData.inventory.fbaMap}
         awdMap={shipmentData.inventory.awdMap}
         mfrReadyMap={shipmentData.inventory.mfrReadyMap}
+        inTransitFbaMap={shipmentData.inventory.inTransitFbaMap}
+        inTransitAwdMap={shipmentData.inventory.inTransitAwdMap}
         shipmentsByProduct={shipmentsByProduct}
         demandMap={demandMap}
         seasonMap={seasonMap}

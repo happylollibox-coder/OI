@@ -823,6 +823,104 @@ describe('planSplit — the 12,000-unit batch', () => {
   });
 });
 
+// ─── Stock already on the water to AWD ──────────────────────
+//
+// The inventory snapshot reports a quantity and no date, so an undated tranche
+// lands at AWD_SLOW_SEA from today: 2026-08-07 + 63 = 2026-10-09. It is owned
+// from now (so it counts in the combined position) but unusable until then (so
+// no transfer may be ordered against it earlier).
+describe('planSplit — inbound AWD stock', () => {
+  const LANDS = '2026-10-09';
+
+  it('counts it in the combined position exactly as AWD stock on hand would be', () => {
+    // 600-unit batch: 450 live at FBA, 150 to the AWD leg, plus 2,000 owned
+    // elsewhere = 2,600 units from 2026-09-18, which at 10/day is 260 days.
+    const inTransit = planSplit({ ...base, cartons: 60, awdInbound: [{ units: 2_000 }] });
+    const onHand = planSplit({ ...base, cartons: 60, awdOnHand: 2_000 });
+    const neither = planSplit({ ...base, cartons: 60 });
+
+    expect(inTransit.combinedDocAtArrival).toEqual({ days: 260, capped: false });
+    expect(inTransit.combinedDocAtArrival).toEqual(onHand.combinedDocAtArrival);
+    expect(neither.combinedDocAtArrival).toEqual({ days: 60, capped: false });
+    // FBA is untouched by it — it is not sellable, and it is not even at AWD yet.
+    expect(inTransit.fbaDocAtArrival).toEqual(neither.fbaDocAtArrival);
+    expect(inTransit.legs.find(l => l.destination === 'FBA')!.units).toBe(450);
+  });
+
+  it('states the arrival it had to assume instead of burying it', () => {
+    const plan = planSplit({ ...base, cartons: 60, awdInbound: [{ units: 2_000 }] });
+    expect(plan.assumptions).toHaveLength(1);
+    expect(plan.assumptions[0]).toMatch(/2000 units already in transit to AWD carry no arrival date/);
+    expect(plan.assumptions[0]).toMatch(new RegExp(`assumed to land ${LANDS}`));
+    expect(plan.assumptions[0]).toMatch(/AWD Slow Sea \(63d\) from today/);
+    // An assumption is not a warning: nothing here is wrong.
+    expect(plan.warnings.join(' ')).not.toMatch(/assumed to land/);
+  });
+
+  it('says nothing when the caller supplied a real arrival date', () => {
+    const plan = planSplit({ ...base, cartons: 60, awdInbound: [{ units: 600, arrivalDate: '2026-09-01' }] });
+    expect(plan.assumptions).toEqual([]);
+    const landing = plan.series.find(d => d.date === '2026-09-01')!;
+    expect(landing.awdUnits).toBe(600);
+    expect(landing.arrivalNote).toContain('AWD in transit');
+  });
+
+  it('never lets a transfer be ordered before the stock has landed at AWD', () => {
+    // A 300-unit batch against a 450-unit live target goes entirely to FBA, so
+    // the AWD leg is empty and the only pool is the 5,000 units at sea. They are
+    // unusable until 2026-10-09 (a Friday), so the earliest Monday that can
+    // order against them is 2026-10-12.
+    const plan = planSplit({ ...base, cartons: 30, awdInbound: [{ units: 5_000 }] });
+    expect(plan.legs.find(l => l.destination === 'AWD')).toBeUndefined();
+    expect(plan.transfers.length).toBeGreaterThan(0);
+    expect(plan.transfers[0].orderDate).toBe('2026-10-12');
+    for (const t of plan.transfers) {
+      expect(t.orderDate >= LANDS).toBe(true);
+      expect(t.arrivalDate > t.orderDate).toBe(true);
+    }
+    // Held back, not ignored: the same units already at AWD move from the first
+    // Monday, because FBA is empty from day one and the pool is right there.
+    const onHand = planSplit({ ...base, cartons: 30, awdOnHand: 5_000 });
+    expect(onHand.transfers[0].orderDate).toBe('2026-08-10');
+    expect(onHand.transfers[0].orderDate < plan.transfers[0].orderDate).toBe(true);
+  });
+
+  it('conserves the pool once the new tranche is part of it', () => {
+    const plan = planSplit({ ...base, cartons: 400, awdOnHand: 2_500, awdInbound: [{ units: 1_000 }] });
+    const pool = 2_500 + 1_000 + (plan.legs.find(l => l.destination === 'AWD')?.units ?? 0);
+    const moved = plan.transfers.reduce((s, t) => s + t.units, 0);
+    expect(pool).toBe(7_050); // 2,500 on hand + 1,000 at sea + 3,550 of the batch
+    expect(moved).toBeGreaterThan(0);
+    expect(moved + plan.leftoverAwdUnits).toBe(pool);
+    expect(Math.min(...plan.series.map(d => d.awdUnits))).toBeGreaterThanOrEqual(0);
+  });
+
+  it('shows the tranche landing in the AWD balance on the day it lands, not before', () => {
+    const plan = planSplit({ ...base, cartons: 30, fbaOnHand: 50_000, awdInbound: [{ units: 5_000 }] });
+    const on = (d: string) => plan.series.find(s => s.date === d)!;
+    expect(on('2026-10-08').awdUnits).toBe(0);
+    expect(on(LANDS).awdUnits).toBe(5_000);
+    expect(on(LANDS).arrivalNote).toContain('AWD in transit');
+  });
+
+  it('treats an absent, empty or zero tranche list as no inbound AWD stock at all', () => {
+    const none = planSplit({ ...base, cartons: 60 });
+    for (const awdInbound of [[], [{ units: 0 }]]) {
+      const plan = planSplit({ ...base, cartons: 60, awdInbound });
+      expect(plan.combinedDocAtArrival).toEqual(none.combinedDocAtArrival);
+      expect(plan.assumptions).toEqual([]);
+      expect(plan.transfers).toEqual(none.transfers);
+    }
+  });
+
+  it('refuses a negative in-transit quantity rather than crediting the reserve', () => {
+    const plan = planSplit({ ...base, cartons: 60, awdInbound: [{ units: -100 }] });
+    expect(plan.ok).toBe(false);
+    expect(plan.error).toMatch(/AWD in-transit units/i);
+    expect(plan.legs).toEqual([]);
+  });
+});
+
 describe('planSplit — the two shortfalls are different problems', () => {
   it('calls out the live level when the batch cannot even fill FBA', () => {
     // 300 units against a 450-unit live target, nothing left for the reserve.

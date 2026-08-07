@@ -1,11 +1,16 @@
 // Advisory FBA/AWD split panel. Reads the engine (`fbaAwdSplit.ts`), shows the
 // operator what to ship where — and, in the calculation ledger, every input the
 // recommendation was built from, including the shipments that were EXCLUDED and
-// why. Nothing here writes: no BigQuery rows, no bulksheet, no automation.
+// why, and the ones Amazon's own inventory snapshot cut down to size.
+// Nothing here writes: no BigQuery rows, no bulksheet, no automation.
 //
-// Layout only. Arithmetic and partitioning live in `splitPanelData.ts`.
+// Layout only. Arithmetic, partitioning and reconciliation live in
+// `splitPanelData.ts`; the split itself lives in `fbaAwdSplit.ts`.
 import { useMemo, useState } from 'react';
-import { planSplit, methodCaption, type FbaMethod, type SplitLeg, type TransferRow } from '../fbaAwdSplit';
+import {
+  planSplit, plannedWalkWindow, methodCaption,
+  type FbaMethod, type SplitLeg, type TransferRow,
+} from '../fbaAwdSplit';
 import { splitChartWindow, reduceSeriesToWeeks } from '../splitChart';
 import { SplitSimulationChart } from './SplitSimulationChart';
 import { useShipmentConstants } from '../hooks/useShipmentConstants';
@@ -13,9 +18,11 @@ import type { ProjectionShipment } from '../stockProjection';
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from '../planTypes';
 import {
   FBA_TARGET_DOC, TOTAL_TARGET_DOC, OFFERED_FBA_METHODS, docLabel, resolveBatchInput,
-  narrowTransitDays, partitionShipmentsForLedger, countedInboundUnits, transitLedgerEntries, statusCaption,
+  narrowTransitDays, partitionShipmentsForLedger, transitLedgerEntries, statusCaption,
   groupProductsByFamily, resolveFamilySelection,
-  buildDemandCurve, buildDemandLedger, type LedgerShipment,
+  reconcileInboundWithSnapshot, dispositionNote, awdInboundFromSnapshot,
+  buildDemandCurve, buildDemandLedger,
+  type LedgerShipment, type InboundDisposition, type ReconciledInboundRow,
 } from '../splitPanelData';
 import { fmt } from '../utils';
 
@@ -24,6 +31,13 @@ export interface FbaAwdSplitPanelProps {
   fbaMap: Record<string, number>;
   awdMap: Record<string, number>;
   mfrReadyMap: Record<string, number>;
+  /**
+   * Amazon's own count of stock on the water, per product. Absent means the
+   * figure is unavailable — which is NOT the same as zero, and the
+   * reconciliation says so rather than deleting every inbound shipment.
+   */
+  inTransitFbaMap?: Record<string, number>;
+  inTransitAwdMap?: Record<string, number>;
   shipmentsByProduct: Record<string, ProjectionShipment[]>;
   demandMap: ForecastDemandMap;
   seasonMap: MonthSeasonMap;
@@ -100,6 +114,51 @@ function ShipmentLedgerTable({ rows, greyed }: { rows: LedgerShipment[]; greyed:
             </td>
           </tr>
         ))}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * A trimmed or dropped row must not read like an excluded one: the shipment is
+ * confirmed, FBA-bound and in-window, and it is Amazon's count that overrode
+ * it. Colour plus an explicit badge, on its own table.
+ */
+const DISPOSITION_BADGE: Record<InboundDisposition, { label: string; color: string }> = {
+  KEPT: { label: 'Kept', color: 'var(--color-text)' },
+  TRIMMED: { label: 'Trimmed', color: 'var(--color-warning)' },
+  DROPPED: { label: 'Dropped', color: 'var(--color-negative)' },
+};
+
+function ReconciledLedgerTable({ rows }: { rows: ReconciledInboundRow[] }) {
+  if (!rows.length) {
+    return <div className="text-[10px] text-subtle italic">None.</div>;
+  }
+  return (
+    <table className="w-full">
+      <thead>
+        <tr>
+          <th className={TH}>Arrival</th><th className={TH}>Records say</th><th className={TH}>Counted</th>
+          <th className={TH}>Dest</th><th className={TH}>Status</th>
+          <th className={TH}>Verdict</th><th className={TH}>Effect</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => {
+          const badge = DISPOSITION_BADGE[r.disposition];
+          return (
+            <tr key={`${r.row.arrivalDate}-${r.row.status}-${i}`} className="border-t border-border/10"
+              style={r.disposition === 'DROPPED' ? { opacity: 0.6 } : undefined}>
+              <td className={TD}>{r.row.arrivalDate || '—'}</td>
+              <td className={TD}>{fmt(r.recordUnits)}</td>
+              <td className={TD} style={{ color: badge.color }}>{fmt(r.countedUnits)}</td>
+              <td className={TD}>{r.row.destination}</td>
+              <td className={TD}>{statusCaption(r.row.status)}</td>
+              <td className="py-1 pr-3 text-[10px] font-bold" style={{ color: badge.color }}>{badge.label}</td>
+              <td className="py-1 text-[10px] text-muted">{dispositionNote(r)}</td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -221,6 +280,21 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
     metaMap: props.metaMap, growthOverrides: props.growthOverrides,
   }), [product, props.demandMap, props.seasonMap, props.metaMap, props.growthOverrides]);
 
+  // The window the engine will walk, stated by the engine itself before the
+  // plan exists — the ledger has to partition shipments in order to decide what
+  // the engine is given, so it cannot wait for `plan.walkWindow`.
+  const plannedWindow = useMemo(() => plannedWalkWindow(today, TOTAL_TARGET_DOC), [today]);
+  const shipLedger = useMemo(() => partitionShipmentsForLedger(shipments, plannedWindow), [shipments, plannedWindow]);
+
+  // Amazon's snapshot is the authority on how much is inbound; the records are
+  // the authority on when. Reconcile before planning, never after.
+  const snapshotInboundFba = props.inTransitFbaMap?.[product];
+  const snapshotInboundAwd = props.inTransitAwdMap?.[product];
+  const reconciliation = useMemo(
+    () => reconcileInboundWithSnapshot(shipLedger.counted, snapshotInboundFba),
+    [shipLedger, snapshotInboundFba]);
+  const awdInbound = useMemo(() => awdInboundFromSnapshot(snapshotInboundAwd), [snapshotInboundAwd]);
+
   // planSplit walks 465 days, so it is memoized on exactly what it reads.
   const plan = useMemo(() => {
     if (!product || !narrowing.ok) return null;
@@ -228,13 +302,14 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
       cartons: batch.cartons, packageQuantity: batch.packageQuantity,
       fbaOnHand: fbaMap[product] ?? 0,
       awdOnHand: awdMap[product] ?? 0,
-      shipments, curve,
+      awdInbound,
+      shipments: reconciliation.shipments, curve,
       transitDays: narrowing.transitDays,
       fbaInboundBufferDays: constants.fbaInboundBufferDays,
       today, fbaTargetDoc: FBA_TARGET_DOC, totalTargetDoc: TOTAL_TARGET_DOC,
       methodOverride: methodChoice === 'AUTO' ? undefined : methodChoice,
     });
-  }, [product, narrowing, batch, fbaMap, awdMap, shipments, curve,
+  }, [product, narrowing, batch, fbaMap, awdMap, awdInbound, reconciliation, curve,
     constants.fbaInboundBufferDays, today, methodChoice]);
 
   // The window follows the COMBINED target — it is about seeing the whole
@@ -246,7 +321,6 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
   // it from `plan.series`, or trimming that series for display would silently
   // start labelling in-window arrivals as beyond-horizon.
   const walk = plan?.ok ? plan.walkWindow : null;
-  const shipLedger = useMemo(() => partitionShipmentsForLedger(shipments, walk), [shipments, walk]);
   const demandRows = useMemo(() => walk ? buildDemandLedger(curve, walk.from, walk.to) : [], [walk, curve]);
 
   if (!products.length) {
@@ -368,9 +442,24 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
                 <div className={`${LABEL} mb-1`}>On hand (never pooled)</div>
                 <KV label="FBA — sellable now" value={`${fmt(fbaMap[product] ?? 0)} units`} source="InventorySnapshot" />
                 <KV label="AWD — reserve, not sellable" value={`${fmt(awdMap[product] ?? 0)} units`} source="InventorySnapshot" />
+                <KV label="In transit to FBA — Amazon's own count"
+                  value={reconciliation.snapshotUnits === null ? 'unavailable' : `${fmt(reconciliation.snapshotUnits)} units`}
+                  source="InventorySnapshot" />
+                <KV label="In transit to AWD — lands in the reserve"
+                  value={snapshotInboundAwd === undefined ? 'unavailable' : `${fmt(snapshotInboundAwd)} units`}
+                  source="InventorySnapshot" />
                 <KV label="Ready at manufacturer" value={`${fmt(readyUnits)} units`} source="InventorySnapshot" />
                 <KV label="Snapshot date" value={snapshotDate ?? 'unknown'} source="InventorySnapshot" />
               </div>
+
+              {plan.assumptions.length > 0 && (
+                <div>
+                  <div className={`${LABEL} mb-1`}>Assumed, because the data did not say</div>
+                  {plan.assumptions.map((a, i) => (
+                    <div key={i} className="text-[10px] text-muted leading-snug py-0.5">{a}</div>
+                  ))}
+                </div>
+              )}
 
               <div>
                 <div className={`${LABEL} mb-1`}>Cartons → units</div>
@@ -396,9 +485,10 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
 
               <div>
                 <div className={`${LABEL} mb-1`}>
-                  Inbound shipments counted — {fmt(shipLedger.counted.length)} totalling {fmt(countedInboundUnits(shipLedger))} units, arriving between {walk?.from} and {walk?.to} (the period this plan models)
+                  Inbound shipments counted — {fmt(reconciliation.rows.filter(r => r.countedUnits > 0).length)} totalling {fmt(reconciliation.countedUnits)} units, arriving between {walk?.from} and {walk?.to} (the period this plan models)
                 </div>
-                <ShipmentLedgerTable rows={shipLedger.counted} greyed={false} />
+                <div className="text-[10px] text-muted leading-snug mb-1.5">{reconciliation.summary}</div>
+                <ReconciledLedgerTable rows={reconciliation.rows} />
               </div>
 
               <div>

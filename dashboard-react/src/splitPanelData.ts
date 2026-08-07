@@ -7,7 +7,7 @@
 // is checked against the engine's own filter rather than eyeballed.
 import {
   FBA_METHODS, destinationOf,
-  type DocReading, type TransitDayMap,
+  type AwdInboundTranche, type DocReading, type TransitDayMap,
 } from './fbaAwdSplit';
 import {
   CONFIRMED_STATUSES, EXCLUDED_STATUSES, MONTH_ABBR,
@@ -305,9 +305,159 @@ export function partitionShipmentsForLedger(
   return { counted, excluded };
 }
 
-/** Units the projection actually adds — the counted rows only. */
-export function countedInboundUnits(ledger: ShipmentLedger): number {
-  return ledger.counted.reduce((s, r) => s + r.qty, 0);
+// ─── Reconciling the records against Amazon's own count ─────
+
+/**
+ * Thousands separators without touching Intl — the same string on every
+ * machine, so the summary sentence is testable by hand.
+ */
+const n = (v: number): string => Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+/** What the reconciliation did with one shipment row. */
+export type InboundDisposition = 'KEPT' | 'TRIMMED' | 'DROPPED';
+
+export interface ReconciledInboundRow {
+  row: LedgerShipment;
+  disposition: InboundDisposition;
+  /** What the shipment record claims. */
+  recordUnits: number;
+  /** What the engine is actually given: the record for KEPT, less for TRIMMED, zero for DROPPED. */
+  countedUnits: number;
+}
+
+export interface InboundReconciliation {
+  /** Hand this to `planSplit` in place of the raw shipment list. */
+  shipments: ProjectionShipment[];
+  /**
+   * Every row the ledger would otherwise have counted, LATEST ARRIVAL FIRST —
+   * the order the apportionment walked, so the rule reads straight off the table.
+   */
+  rows: ReconciledInboundRow[];
+  /** Units the shipment records claim across those rows. */
+  recordUnits: number;
+  /** Amazon's figure, or null when it was unavailable — never silently zero. */
+  snapshotUnits: number | null;
+  /** Units the projection is actually given. Equals min(records, snapshot) when the snapshot is known. */
+  countedUnits: number;
+  /** Record units the snapshot does not support, and which were therefore removed. */
+  removedUnits: number;
+  /** Snapshot units no record explains. Reported, never invented into the projection. */
+  unexplainedUnits: number;
+  /** One line naming the record total, the snapshot total and the gap. */
+  summary: string;
+}
+
+/** Latest arrival first. Stable, so rows sharing a date keep their input order. */
+function byLatestArrivalFirst(rows: LedgerShipment[]): LedgerShipment[] {
+  return [...rows].sort((a, b) =>
+    a.arrivalDate < b.arrivalDate ? 1 : a.arrivalDate > b.arrivalDate ? -1 : 0);
+}
+
+/**
+ * Reconcile the inbound-to-FBA shipment records against Amazon's own in-transit
+ * count, and return the rows the engine should actually walk.
+ *
+ * WHY THIS EXISTS. `SHIPMENT_STATUS` carries a real `IN_TRANSIT` value that
+ * nothing sets; a shipment gets `PENDING` on creation and keeps it until
+ * someone marks it received. Everything not-yet-received therefore reads as
+ * being on the water, including records entered and never dispatched and stale
+ * rows nobody closed. On one product the records claimed 2,868 units inbound
+ * against Amazon's 1,020. Believing more is inbound than really is inflates
+ * projected FBA on hand, which shrinks the FBA leg — under-ordering, in Q4.
+ *
+ * THE RULE. Amazon is the authority on HOW MUCH; the records are the authority
+ * on WHEN. So keep rows from the LATEST arrival date backwards until the
+ * snapshot total is met, trimming the last one partially if it straddles the
+ * line, and drop whatever is left unaccounted for. Three reasons, in order:
+ * the total must match Amazon; nothing in the data says WHICH individual
+ * records are the stale ones; and of the two ways to be wrong about timing,
+ * assuming stock arrives LATER is the safe one — assuming it arrives sooner
+ * inflates cover and under-orders, which is the failure that hurts.
+ *
+ * An absent or unreadable snapshot figure means "unverified", never "zero
+ * inbound": the records are used unchanged and the summary says the snapshot
+ * was unavailable. Reading a missing figure as zero would delete every inbound
+ * shipment and oversize the batch just as blindly in the other direction.
+ */
+export function reconcileInboundWithSnapshot(
+  counted: LedgerShipment[],
+  snapshotUnits: number | null | undefined,
+): InboundReconciliation {
+  const ordered = byLatestArrivalFirst(counted);
+  const recordUnits = counted.reduce((s, r) => s + r.qty, 0);
+
+  if (!Number.isFinite(snapshotUnits) || (snapshotUnits as number) < 0) {
+    return {
+      shipments: ordered.map(r => r.shipment),
+      rows: ordered.map(r => ({
+        row: r, disposition: 'KEPT' as const, recordUnits: r.qty, countedUnits: r.qty,
+      })),
+      recordUnits, snapshotUnits: null, countedUnits: recordUnits,
+      removedUnits: 0, unexplainedUnits: 0,
+      summary: `Amazon's in-transit figure is unavailable, so all ${n(recordUnits)} units the shipment records claim are counted unchanged. Nothing was reconciled — this inbound figure is unverified.`,
+    };
+  }
+
+  const snapshot = snapshotUnits as number;
+  const rows: ReconciledInboundRow[] = [];
+  const shipments: ProjectionShipment[] = [];
+  let used = 0;
+
+  for (const r of ordered) {
+    const take = Math.min(r.qty, Math.max(0, snapshot - used));
+    used += take;
+    rows.push({
+      row: r,
+      disposition: take === r.qty ? 'KEPT' : take > 0 ? 'TRIMMED' : 'DROPPED',
+      recordUnits: r.qty,
+      countedUnits: take,
+    });
+    // A trimmed row goes to the engine at its trimmed size; an untouched one is
+    // passed by reference, so the engine sees the very object the ledger shows.
+    if (take > 0) shipments.push(take === r.shipment.qty ? r.shipment : { ...r.shipment, qty: take });
+  }
+
+  const removedUnits = recordUnits - used;
+  const unexplainedUnits = Math.max(0, snapshot - recordUnits);
+  const count = (d: InboundDisposition) => rows.filter(r => r.disposition === d).length;
+
+  const summary = removedUnits > 0
+    ? `Shipment records claim ${n(recordUnits)} units inbound to FBA; Amazon's snapshot says ${n(snapshot)}. The snapshot is the authority on quantity, so ${n(removedUnits)} units were removed from the projection, latest arrival first — ${count('KEPT')} kept whole, ${count('TRIMMED')} trimmed, ${count('DROPPED')} dropped.`
+    : unexplainedUnits > 0
+      ? `Shipment records claim ${n(recordUnits)} units inbound to FBA; Amazon's snapshot says ${n(snapshot)}. Every record is counted, and ${n(unexplainedUnits)} units Amazon reports have no shipment record behind them — Amazon knows about stock the records do not. They are NOT added to the projection, because nothing here says when they land.`
+      : `Shipment records claim ${n(recordUnits)} units inbound to FBA and Amazon's snapshot agrees. Nothing was changed.`;
+
+  return {
+    shipments, rows, recordUnits, snapshotUnits: snapshot, countedUnits: used,
+    removedUnits, unexplainedUnits, summary,
+  };
+}
+
+/**
+ * What one reconciled row did, in the operator's language. A trimmed or dropped
+ * row is a different thing from an excluded one — the shipment is confirmed,
+ * FBA-bound and in-window, and it is Amazon's count that overrides it — so it
+ * never borrows an `EXCLUSION_REASONS` string.
+ */
+export function dispositionNote(r: ReconciledInboundRow): string {
+  const day = r.row.arrivalDate || 'an unreadable date';
+  switch (r.disposition) {
+    case 'KEPT':
+      return `Adds ${n(r.countedUnits)} units to FBA on ${day}`;
+    case 'TRIMMED':
+      return `Trimmed to ${n(r.countedUnits)} of ${n(r.recordUnits)} units on ${day} — Amazon's in-transit total runs out inside this shipment`;
+    case 'DROPPED':
+      return `Dropped — Amazon's in-transit total is already met by later arrivals, so these ${n(r.recordUnits)} units are not counted`;
+  }
+}
+
+/**
+ * Stock in transit to AWD, as the engine's pool tranche. The snapshot reports a
+ * quantity and no date, so no date is invented here — the engine fills it with
+ * its own AWD_SLOW_SEA transit and states the assumption on the plan.
+ */
+export function awdInboundFromSnapshot(units: number | null | undefined): AwdInboundTranche[] {
+  return Number.isFinite(units) && (units as number) > 0 ? [{ units: units as number }] : [];
 }
 
 // ─── Demand curve assembly ──────────────────────────────────

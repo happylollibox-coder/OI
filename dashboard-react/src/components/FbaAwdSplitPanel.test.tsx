@@ -69,6 +69,47 @@ describe('FbaAwdSplitPanel', () => {
     expect(screen.getByText(/Inbound shipments counted — 1 totalling 500 units/)).toBeInTheDocument();
   });
 
+  it('trims a shipment record down to Amazon"s in-transit figure, and says so', () => {
+    // The records claim 500 units landing 2026-09-10; Amazon says 200 are on
+    // the water. The row survives at 200, and the ledger shows both numbers.
+    render(<FbaAwdSplitPanel {...baseProps} inTransitFbaMap={{ 'Pink Lollibox': 200 }} />);
+    expect(screen.getByText(/Inbound shipments counted — 1 totalling 200 units/)).toBeInTheDocument();
+    expect(screen.getByText(/records claim 500 units inbound to FBA; Amazon's snapshot says 200/)).toBeInTheDocument();
+    expect(screen.getByText(/300 units were removed from the projection, latest arrival first/)).toBeInTheDocument();
+    expect(screen.getByText('Trimmed')).toBeInTheDocument();
+    expect(screen.getByText(/Trimmed to 200 of 500 units on 2026-09-10/)).toBeInTheDocument();
+  });
+
+  it('marks a dropped row as its own verdict, not as an exclusion', () => {
+    // A trimmed or dropped row is confirmed, FBA-bound and in-window — it is
+    // Amazon's count that overrode it, which is a different thing from the
+    // reasons in the excluded table and must not be dressed up as one.
+    render(<FbaAwdSplitPanel {...baseProps} inTransitFbaMap={{ 'Pink Lollibox': 0 }} />);
+    expect(screen.getByText(/Inbound shipments counted — 0 totalling 0 units/)).toBeInTheDocument();
+    expect(screen.getByText('Dropped')).toBeInTheDocument();
+    expect(screen.getByText(/Amazon's in-transit total is already met by later arrivals/)).toBeInTheDocument();
+    // Still greyed out separately for the genuinely-excluded suggestion.
+    expect(screen.getByText(/Suggested, not approved/)).toBeInTheDocument();
+  });
+
+  it('says the snapshot was unavailable rather than reading a missing figure as zero', () => {
+    render(<FbaAwdSplitPanel {...baseProps} />);
+    expect(screen.getByText(/Inbound shipments counted — 1 totalling 500 units/)).toBeInTheDocument();
+    expect(screen.getByText(/Amazon's in-transit figure is unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(/this inbound figure is unverified/)).toBeInTheDocument();
+    expect(screen.getByText('Kept')).toBeInTheDocument();
+    expect(screen.getByText(/Adds 500 units to FBA on 2026-09-10/)).toBeInTheDocument();
+  });
+
+  it('counts stock on the water to AWD and states the arrival date it assumed', () => {
+    render(<FbaAwdSplitPanel {...baseProps} inTransitAwdMap={{ 'Pink Lollibox': 1056 }} />);
+    expect(screen.getByText(/Assumed, because the data did not say/)).toBeInTheDocument();
+    // today 2026-08-07 + AWD Slow Sea 63d = 2026-10-09.
+    expect(screen.getByText(/1056 units already in transit to AWD carry no arrival date/)).toBeInTheDocument();
+    expect(screen.getByText(/assumed to land 2026-10-09 — AWD Slow Sea \(63d\) from today/)).toBeInTheDocument();
+    expect(screen.getByText(/In transit to AWD — lands in the reserve/)).toBeInTheDocument();
+  });
+
   it('never offers Air as an FBA route', () => {
     render(<FbaAwdSplitPanel {...baseProps} />);
     const options = screen.getAllByRole('option').map(o => o.textContent);

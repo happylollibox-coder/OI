@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import type { MonthSeasonInfo, ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from './planTypes';
 import type { DemandCurve, ProjectionShipment } from './stockProjection';
-import { confirmedFbaInbound, planSplit, type SplitInput } from './fbaAwdSplit';
+import { confirmedFbaInbound, planSplit, plannedWalkWindow, type SplitInput } from './fbaAwdSplit';
 import {
   FBA_TARGET_DOC, TOTAL_TARGET_DOC, REQUIRED_TRANSIT_KEYS, EXCLUSION_REASONS,
   cartonPrefill, unitsFromCartons, docLabel, narrowTransitDays, resolveBatchInput,
   partitionShipmentsForLedger, buildDemandCurve, buildDemandLedger, transitLedgerEntries,
   groupProductsByFamily, resolveFamilySelection,
+  reconcileInboundWithSnapshot, dispositionNote, awdInboundFromSnapshot,
 } from './splitPanelData';
 
 describe('the two cover targets', () => {
@@ -341,6 +342,17 @@ describe('the engine states its own walk window', () => {
   it('is null when there is no plan to have a window', () => {
     expect(planSplit({ ...input, cartons: 0 }).walkWindow).toBeNull();
   });
+
+  it('states the same window BEFORE the plan exists, which is what the ledger needs', () => {
+    // The ledger has to know the window in order to decide which shipments the
+    // engine is even given — it cannot wait for `plan.walkWindow`. This pins the
+    // two together so the window judged and the window walked cannot drift.
+    expect(plannedWalkWindow(input.today, input.totalTargetDoc)).toEqual(planSplit(input).walkWindow);
+    expect(plannedWalkWindow(input.today, input.totalTargetDoc)).toEqual({ from: '2026-08-07', to: '2027-11-15' });
+
+    const shorter = { ...input, fbaTargetDoc: 20, totalTargetDoc: 30 };
+    expect(plannedWalkWindow(shorter.today, shorter.totalTargetDoc)).toEqual(planSplit(shorter).walkWindow);
+  });
 });
 
 describe('the ledger agrees with what the engine measurably did', () => {
@@ -399,6 +411,245 @@ describe('the ledger agrees with what the engine measurably did', () => {
     const { counted } = partitionShipmentsForLedger([soon], withSoon.walkWindow);
     expect(counted).toHaveLength(1);
     expect(counted[0].exclusionReason).toBeNull();
+  });
+});
+
+describe('reconcileInboundWithSnapshot', () => {
+  const WINDOW = { from: '2026-08-07', to: '2027-11-15' };
+  const rec = (qty: number, arrival: string): ProjectionShipment =>
+    ({ qty, arrival_date: arrival, status: 'transit', route: 'SLOW_SEA' });
+  /** The rows the ledger would otherwise count — built through the real partition. */
+  const countedRows = (rows: ProjectionShipment[]) =>
+    partitionShipmentsForLedger(rows, WINDOW).counted;
+
+  // 1,400 units of records across four arrivals, latest 2026-11-01.
+  const RECORDS = [rec(400, '2026-08-20'), rec(500, '2026-09-10'), rec(300, '2026-10-01'), rec(200, '2026-11-01')];
+
+  it('keeps latest first, trims the row that straddles the total, and drops the rest', () => {
+    // Snapshot 600. Walking back from the latest arrival: 11-01 takes 200
+    // (running 200), 10-01 takes 300 (running 500), 09-10 has only 100 of
+    // headroom left so it is trimmed from 500 to 100, and 08-20 gets nothing.
+    const got = reconcileInboundWithSnapshot(countedRows(RECORDS), 600);
+
+    expect(got.rows.map(r => [r.row.arrivalDate, r.disposition, r.countedUnits])).toEqual([
+      ['2026-11-01', 'KEPT', 200],
+      ['2026-10-01', 'KEPT', 300],
+      ['2026-09-10', 'TRIMMED', 100],
+      ['2026-08-20', 'DROPPED', 0],
+    ]);
+    expect(got.recordUnits).toBe(1400);
+    expect(got.snapshotUnits).toBe(600);
+    expect(got.countedUnits).toBe(600);
+    expect(got.removedUnits).toBe(800);
+    expect(got.unexplainedUnits).toBe(0);
+  });
+
+  it('hands the engine the trimmed quantities, not the recorded ones', () => {
+    const got = reconcileInboundWithSnapshot(countedRows(RECORDS), 600);
+    expect(got.shipments.map(s => [s.arrival_date, s.qty])).toEqual([
+      ['2026-11-01', 200], ['2026-10-01', 300], ['2026-09-10', 100],
+    ]);
+    expect(got.shipments.reduce((s, x) => s + x.qty, 0)).toBe(600);
+  });
+
+  it('names the record total, the snapshot total and the gap in one line', () => {
+    const said = reconcileInboundWithSnapshot(countedRows(RECORDS), 600).summary;
+    expect(said).toMatch(/records claim 1,400 units inbound to FBA/);
+    expect(said).toMatch(/Amazon's snapshot says 600/);
+    expect(said).toMatch(/800 units were removed/);
+    expect(said).toMatch(/2 kept whole, 1 trimmed, 1 dropped/);
+  });
+
+  it('leaves the record objects untouched, so the ledger and the engine agree', () => {
+    const rows = countedRows(RECORDS);
+    const got = reconcileInboundWithSnapshot(rows, 600);
+    // A kept row is passed by reference; only a trimmed one is a copy.
+    expect(got.shipments[0]).toBe(rows.find(r => r.arrivalDate === '2026-11-01')!.shipment);
+    expect(got.shipments[2]).not.toBe(rows.find(r => r.arrivalDate === '2026-09-10')!.shipment);
+    expect(RECORDS.map(s => s.qty)).toEqual([400, 500, 300, 200]);
+  });
+
+  it('conserves units: what is counted plus what was removed is what the records claimed', () => {
+    for (const snapshot of [0, 137, 600, 1399, 1400]) {
+      const got = reconcileInboundWithSnapshot(countedRows(RECORDS), snapshot);
+      expect(got.countedUnits + got.removedUnits).toBe(got.recordUnits);
+      expect(got.rows.reduce((s, r) => s + r.countedUnits, 0)).toBe(got.countedUnits);
+      expect(got.shipments.reduce((s, x) => s + x.qty, 0)).toBe(got.countedUnits);
+    }
+  });
+
+  it('changes nothing when the snapshot matches the records exactly', () => {
+    const got = reconcileInboundWithSnapshot(countedRows(RECORDS), 1400);
+    expect(got.rows.every(r => r.disposition === 'KEPT')).toBe(true);
+    expect(got.countedUnits).toBe(1400);
+    expect(got.removedUnits).toBe(0);
+    expect(got.unexplainedUnits).toBe(0);
+    expect(got.summary).toMatch(/Amazon's snapshot agrees\. Nothing was changed\./);
+  });
+
+  it('keeps every row when the snapshot is larger, and reports the surplus rather than inventing it', () => {
+    // Amazon knows about 600 units no shipment record explains. They are named,
+    // not added: nothing here says when they would land.
+    const got = reconcileInboundWithSnapshot(countedRows(RECORDS), 2000);
+    expect(got.rows.every(r => r.disposition === 'KEPT')).toBe(true);
+    expect(got.countedUnits).toBe(1400);
+    expect(got.removedUnits).toBe(0);
+    expect(got.unexplainedUnits).toBe(600);
+    expect(got.summary).toMatch(/600 units Amazon reports have no shipment record behind them/);
+    expect(got.summary).toMatch(/NOT added to the projection/);
+  });
+
+  it('drops everything when the snapshot says nothing is on the water', () => {
+    const got = reconcileInboundWithSnapshot(countedRows(RECORDS), 0);
+    expect(got.rows.every(r => r.disposition === 'DROPPED')).toBe(true);
+    expect(got.shipments).toEqual([]);
+    expect(got.countedUnits).toBe(0);
+    expect(got.removedUnits).toBe(1400);
+    expect(got.snapshotUnits).toBe(0);
+  });
+
+  it('falls back to the records unchanged when the snapshot is unavailable — never to zero', () => {
+    // A missing figure means "unverified". Reading it as zero would delete every
+    // inbound shipment and oversize the batch just as blindly.
+    for (const missing of [undefined, null, NaN, -5]) {
+      const got = reconcileInboundWithSnapshot(countedRows(RECORDS), missing);
+      expect(got.snapshotUnits).toBeNull();
+      expect(got.countedUnits).toBe(1400);
+      expect(got.removedUnits).toBe(0);
+      expect(got.rows.every(r => r.disposition === 'KEPT')).toBe(true);
+      expect(got.shipments).toHaveLength(4);
+      expect(got.summary).toMatch(/in-transit figure is unavailable/);
+      expect(got.summary).toMatch(/unverified/);
+    }
+  });
+
+  it('still orders an unavailable-snapshot fallback latest first, so the table reads the same either way', () => {
+    const got = reconcileInboundWithSnapshot(countedRows(RECORDS), undefined);
+    expect(got.rows.map(r => r.row.arrivalDate))
+      .toEqual(['2026-11-01', '2026-10-01', '2026-09-10', '2026-08-20']);
+  });
+
+  it('handles no rows at all', () => {
+    expect(reconcileInboundWithSnapshot([], 500)).toMatchObject({
+      shipments: [], rows: [], recordUnits: 0, countedUnits: 0,
+      removedUnits: 0, unexplainedUnits: 500,
+    });
+    expect(reconcileInboundWithSnapshot([], 0).summary).toMatch(/claim 0 units inbound to FBA and Amazon's snapshot agrees/);
+    expect(reconcileInboundWithSnapshot([], undefined).snapshotUnits).toBeNull();
+  });
+
+  it('breaks a same-day tie by input order, so the result is reproducible', () => {
+    const sameDay = [rec(100, '2026-09-10'), rec(100, '2026-09-10'), rec(100, '2026-09-10')];
+    const got = reconcileInboundWithSnapshot(countedRows(sameDay), 150);
+    expect(got.rows.map(r => [r.recordUnits, r.disposition, r.countedUnits])).toEqual([
+      [100, 'KEPT', 100], [100, 'TRIMMED', 50], [100, 'DROPPED', 0],
+    ]);
+  });
+
+  it('says what happened per row, without borrowing an exclusion reason', () => {
+    const notes = reconcileInboundWithSnapshot(countedRows(RECORDS), 600).rows.map(dispositionNote);
+    expect(notes[0]).toBe('Adds 200 units to FBA on 2026-11-01');
+    expect(notes[2]).toMatch(/Trimmed to 100 of 500 units on 2026-09-10/);
+    expect(notes[3]).toMatch(/^Dropped — /);
+    const reasons = Object.values(EXCLUSION_REASONS);
+    for (const note of notes) expect(reasons).not.toContain(note);
+  });
+});
+
+describe('reconcileInboundWithSnapshot — the Mint LolliME case that prompted this', () => {
+  // Real DE_MANUFACTURER_SHIPMENTS lines for Mint LolliME, all status PENDING —
+  // which `useShipmentHistory` reads as "in transit" because nothing ever sets
+  // the IN_TRANSIT the LOV offers. 17 lines claim 2,868 units; six of them are
+  // past-dated and the ledger already excludes those, leaving 11 lines and
+  // 1,548 units in the window. Amazon's own snapshot says 1,020.
+  const WINDOW = { from: '2026-08-07', to: '2027-11-15' };
+  const line = (qty: number, arrival: string): ProjectionShipment =>
+    ({ qty, arrival_date: arrival, status: 'transit', route: 'SLOW_SEA' });
+
+  const ALL_LINES = [
+    line(360, '2026-07-15'), line(156, '2026-07-20'), line(276, '2026-07-20'), line(180, '2026-07-20'),
+    line(180, '2026-07-29'), line(168, '2026-07-31'),
+    line(36, '2026-08-12'), line(48, '2026-08-12'), line(48, '2026-08-12'), line(48, '2026-08-12'), line(72, '2026-08-12'),
+    line(96, '2026-08-26'), line(120, '2026-08-26'), line(156, '2026-08-26'), line(696, '2026-08-26'),
+    line(108, '2026-08-26'), line(120, '2026-08-26'),
+  ];
+
+  it("trims 1,548 recorded units down to Amazon's 1,020", () => {
+    const ledger = partitionShipmentsForLedger(ALL_LINES, WINDOW);
+    expect(ALL_LINES.reduce((s, l) => s + l.qty, 0)).toBe(2868);
+    expect(ledger.counted).toHaveLength(11);
+    expect(ledger.excluded).toHaveLength(6);   // the six past-dated lines
+    expect(ledger.counted.reduce((s, r) => s + r.qty, 0)).toBe(1548);
+
+    const got = reconcileInboundWithSnapshot(ledger.counted, 1020);
+    // Latest first: the 08-26 group takes 96 + 120 + 156 = 372, the 696-unit
+    // line straddles the 1,020 line and is trimmed to 648, and everything
+    // earlier — the last two 08-26 lines and all five 08-12 lines — is dropped.
+    expect(got.rows.map(r => [r.recordUnits, r.disposition, r.countedUnits])).toEqual([
+      [96, 'KEPT', 96], [120, 'KEPT', 120], [156, 'KEPT', 156], [696, 'TRIMMED', 648],
+      [108, 'DROPPED', 0], [120, 'DROPPED', 0],
+      [36, 'DROPPED', 0], [48, 'DROPPED', 0], [48, 'DROPPED', 0], [48, 'DROPPED', 0], [72, 'DROPPED', 0],
+    ]);
+    expect(got.countedUnits).toBe(1020);
+    expect(got.removedUnits).toBe(528);
+    expect(got.summary).toMatch(/records claim 1,548 units inbound to FBA; Amazon's snapshot says 1,020/);
+    expect(got.summary).toMatch(/3 kept whole, 1 trimmed, 7 dropped/);
+  });
+
+  it('leaves the FBA leg bigger, because less stock is believed inbound', () => {
+    // 5,000-unit batch, nothing at FBA, flat 10/day demand. FBA is empty today
+    // so the method escalates and the batch is sellable 2026-09-18; 45 days of
+    // cover from there is 450 units.
+    const FLAT: Record<number, number> = {
+      202608: 300, 202609: 300, 202610: 310, 202611: 300, 202612: 310, 202701: 310,
+      202702: 280, 202703: 310, 202704: 300, 202705: 310, 202706: 300, 202707: 310,
+      202708: 310, 202709: 300, 202710: 310, 202711: 300, 202712: 310,
+    };
+    const input: SplitInput = {
+      cartons: 500, packageQuantity: 10, fbaOnHand: 0, awdOnHand: 0, shipments: [],
+      curve: { productDemand: FLAT, familySeason: {}, growth: 1 },
+      transitDays: { FAST_SEA: 27, SLOW_SEA: 33, AWD_SLOW_SEA: 63, AWD_TRANSFER: 14 },
+      fbaInboundBufferDays: 10, today: new Date(2026, 7, 7),
+      fbaTargetDoc: 45, totalTargetDoc: 100,
+    };
+    const records = [
+      { qty: 300, arrival_date: '2026-09-10', status: 'transit' as const, route: 'SLOW_SEA' },
+      { qty: 200, arrival_date: '2026-09-15', status: 'transit' as const, route: 'SLOW_SEA' },
+    ];
+    const counted = partitionShipmentsForLedger(records, plannedWalkWindow(input.today, 100)).counted;
+
+    // Believing all 500: both land before 09-18, and 8 days of demand burn from
+    // the first arrival — 500 − 80 = 420 on hand, so only 30 units are needed.
+    const believed = planSplit({ ...input, shipments: reconcileInboundWithSnapshot(counted, undefined).shipments });
+    expect(believed.onHandAtSellable).toBe(420);
+    expect(believed.legs.find(l => l.destination === 'FBA')!.units).toBe(30);
+
+    // Amazon says 200. The later row survives whole, the 300 is dropped: 200
+    // lands 09-15 and burns 3 days = 170 on hand, so 280 units are needed.
+    // Not the full 300 difference — for five of those days FBA is simply dark,
+    // and unmet demand is lost rather than eating the reserve.
+    const reconciled = planSplit({ ...input, shipments: reconcileInboundWithSnapshot(counted, 200).shipments });
+    expect(reconciled.onHandAtSellable).toBe(170);
+    expect(reconciled.legs.find(l => l.destination === 'FBA')!.units).toBe(280);
+
+    // The whole point: less believed inbound means a BIGGER shipment to FBA.
+    expect(reconciled.legs.find(l => l.destination === 'FBA')!.units)
+      .toBeGreaterThan(believed.legs.find(l => l.destination === 'FBA')!.units);
+    expect(reconciled.units).toBe(believed.units); // and the batch is unchanged
+  });
+});
+
+describe('awdInboundFromSnapshot', () => {
+  it('carries the quantity and deliberately no date', () => {
+    expect(awdInboundFromSnapshot(1056)).toEqual([{ units: 1056 }]);
+  });
+
+  it('yields nothing for zero, missing or unreadable figures', () => {
+    expect(awdInboundFromSnapshot(0)).toEqual([]);
+    expect(awdInboundFromSnapshot(undefined)).toEqual([]);
+    expect(awdInboundFromSnapshot(null)).toEqual([]);
+    expect(awdInboundFromSnapshot(NaN)).toEqual([]);
+    expect(awdInboundFromSnapshot(-10)).toEqual([]);
   });
 });
 
