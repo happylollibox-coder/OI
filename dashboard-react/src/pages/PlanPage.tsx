@@ -10,6 +10,7 @@ import { Tip } from '../components/Tooltip';
 import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
 import { useViewMode } from '../hooks/useViewMode';
+import { useInventorySnapshot } from '../hooks/useInventorySnapshot';
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid, Legend, LabelList, ReferenceLine } from 'recharts';
 import { CHART_GRID, CHART_AXIS_TICK, CHART_TOOLTIP_STYLE } from '../chartTheme';
 
@@ -696,59 +697,12 @@ function ReplenishmentFlowWrapper({ orderOverrides, salesSummary, demandMap, sea
   const { activePOs, loading: poLoading, reloadPOs, updatePoEtaOptimistic } = useActivePurchaseOrders();
 
   // Load stock map, MFR Ready, and MFR In Prod per product from InventorySnapshot
-  const [stockMap, setStockMap] = useState<Record<string, number>>({});
-  const [fbaMap, setFbaMap] = useState<Record<string, number>>({});
-  const [awdMap, setAwdMap] = useState<Record<string, number>>({});
-  const [mfrReadyMap, setMfrReadyMap] = useState<Record<string, number>>({});
-  const [mfrInProdMap, setMfrInProdMap] = useState<Record<string, number>>({});
-  const [stockLoading, setStockLoading] = useState(true);
-  useEffect(() => {
-    (async () => {
-      try {
-        // First get latest snapshot date to avoid summing across ALL historical dates
-        const dateRows = await cubeLoad({ measures: ['InventorySnapshot.latestSnapshotDate'] });
-        const latestDate = (dateRows as Record<string, unknown>[])[0]?.['InventorySnapshot.latestSnapshotDate'];
-        if (!latestDate) { setStockLoading(false); return; }
-
-        const rows = await cubeLoad({
-          measures: ['InventorySnapshot.totalUnits'],
-          dimensions: ['InventorySnapshot.productShortName', 'InventorySnapshot.sourceType'],
-          filters: [{ member: 'InventorySnapshot.date', operator: 'equals', values: [String(latestDate)] }],
-        });
-        const map: Record<string, number> = {};
-        const fba: Record<string, number> = {};
-        const awd: Record<string, number> = {};
-        const readyMap: Record<string, number> = {};
-        const inProdMap: Record<string, number> = {};
-        for (const r of rows as Record<string, unknown>[]) {
-          const product = String(r['InventorySnapshot.productShortName'] ?? '');
-          const source = String(r['InventorySnapshot.sourceType'] ?? '');
-          const units = Number(r['InventorySnapshot.totalUnits'] ?? 0);
-          if (!product) continue;
-          if (source === 'FBA') {
-            map[product] = (map[product] || 0) + units;
-            fba[product] = (fba[product] || 0) + units;
-          }
-          if (source === 'AWD') {
-            map[product] = (map[product] || 0) + units;
-            awd[product] = (awd[product] || 0) + units;
-          }
-          if (source === 'MFR Ready') {
-            readyMap[product] = (readyMap[product] || 0) + units;
-          }
-          if (source === 'In Production') {
-            inProdMap[product] = (inProdMap[product] || 0) + units;
-          }
-        }
-        setStockMap(map);
-        setFbaMap(fba);
-        setAwdMap(awd);
-        setMfrReadyMap(readyMap);
-        setMfrInProdMap(inProdMap);
-      } catch (e) { console.warn('[ReplenishmentFlow] stock load failed', e); }
-      setStockLoading(false);
-    })();
-  }, []);
+  const {
+    stockMap, fbaMap, awdMap, mfrReadyMap, mfrInProdMap,
+    loading: stockLoading, snapshotDate,
+  } = useInventorySnapshot();
+  // snapshotDate reserved for the FBA/AWD split panel (Task 7); not consumed yet.
+  void snapshotDate;
 
 
   const fullYearlyPlanMap = useMemo(() => {
