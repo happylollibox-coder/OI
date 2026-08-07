@@ -22,29 +22,34 @@ export interface SplitChartWindow {
  *
  * Starts four days before `today` so the operator can see where they are
  * coming from, not just where the plan goes next. Ends at whichever is
- * later — the calendar year end, or `today + targetDoc` days — because a
- * `targetDoc`-day-of-cover decision is meaningless if the chart cannot show
- * `targetDoc` days of runway: near year end, a window that stopped at
- * Dec 31 would cut the DOC line off long before it said anything.
+ * later — the calendar year end, or `today + totalTargetDoc` days — because
+ * a cover decision is meaningless if the chart cannot show the runway it
+ * was made against: near year end, a window that stopped at Dec 31 would
+ * cut the DOC line off long before it said anything.
+ *
+ * The COMBINED target, not the FBA one: the window is about seeing the whole
+ * position — FBA plus the AWD reserve behind it — settle out. Following the
+ * shorter FBA level would stop the chart while most of the batch is still at
+ * sea, which is precisely the part the operator is being asked to approve.
  *
  * The engine (`fbaAwdSplit.ts`) deliberately computes further out than this
- * window — its horizon is `365 + targetDoc` days — so that the DOC reading
- * near the window's right edge is a genuine forward-looking calculation,
- * not an artifact of the forecast running out exactly where the chart
- * happens to stop.
+ * window — its horizon is `365 + totalTargetDoc` days — so that the DOC
+ * reading near the window's right edge is a genuine forward-looking
+ * calculation, not an artifact of the forecast running out exactly where the
+ * chart happens to stop.
  *
- * When `today + targetDoc` lands exactly on year end, the two candidates
+ * When `today + totalTargetDoc` lands exactly on year end, the two candidates
  * are the same date, so there is nothing to actually pick between; ties
  * resolve to year end.
  *
- * Param name matches `SplitInput.targetDoc` in `fbaAwdSplit.ts` — same
+ * Param name matches `SplitInput.totalTargetDoc` in `fbaAwdSplit.ts` — same
  * number, same name, so the panel can pass it straight through.
  */
-export function splitChartWindow(today: Date, targetDoc = 100): SplitChartWindow {
+export function splitChartWindow(today: Date, totalTargetDoc = 100): SplitChartWindow {
   const day = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const start = addDays(day, -4);
   const yearEnd = new Date(day.getFullYear(), 11, 31);
-  const horizonEnd = addDays(day, targetDoc);
+  const horizonEnd = addDays(day, totalTargetDoc);
   const end = horizonEnd > yearEnd ? horizonEnd : yearEnd;
   return { start, end };
 }

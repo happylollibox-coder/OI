@@ -17,11 +17,28 @@ import {
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from './planTypes';
 
 /**
- * The operating rule: FBA holds 100 days of cover. A level maintained over
- * time, not a one-time top-up — which is why the panel shows a transfer
- * schedule and not just a single shipment.
+ * Days of cover held LIVE at FBA. Not the whole position.
+ *
+ * The physical floor is 30 days: AWD → FBA transfer transit (14d) plus the FBA
+ * inbound buffer (10d) plus up to 6 days of Monday-only ordering cadence — the
+ * time from "FBA is running low" to units being sellable. Below that the
+ * reserve cannot arrive in time and is useless. 45 is that floor plus margin
+ * for demand running hot, receiving running slow, and absorbing one missed
+ * transfer cycle at the ~21-day merge cadence the engine actually schedules at.
+ *
+ * A level maintained over time, not a one-time top-up — which is why the panel
+ * shows a transfer schedule and not just a single shipment.
  */
-export const TARGET_DOC = 100;
+export const FBA_TARGET_DOC = 45;
+
+/**
+ * Days of cover FBA and AWD hold TOGETHER — the operating rule's 100 days.
+ * AWD holds the balance (100 − 45 = 55 days) as a cheap bulk reserve. Sizing
+ * the FBA leg to this number instead of `FBA_TARGET_DOC` is the modelling error
+ * these two constants exist to keep apart: it sent 11,760 of a 12,000-unit
+ * batch into the expensive warehouse, right through Q4.
+ */
+export const TOTAL_TARGET_DOC = 100;
 
 // ─── Cartons ↔ units ────────────────────────────────────────
 

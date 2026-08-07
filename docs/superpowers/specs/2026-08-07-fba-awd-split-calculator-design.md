@@ -4,6 +4,28 @@
 **Page:** Plan (`dashboard-react/src/pages/PlanPage.tsx`)
 **Status:** Design approved, pending implementation plan
 
+> **Amendment — 2026-08-07, after the first live batch.** Everything below that
+> reads "FBA holds 100 DOC" is **wrong** and was implemented as written: on a real
+> 12,000-unit batch it sent 11,760 units to FBA and 240 to AWD, putting the whole
+> batch in the expensive warehouse through Q4.
+>
+> The 100 days describe the **combined FBA + AWD position**, not the FBA leg.
+> Two levels, named apart in the engine as `fbaTargetDoc` and `totalTargetDoc`:
+>
+> - **FBA holds 45 days LIVE** (`FBA_TARGET_DOC`). The physical floor is 30 days —
+>   AWD→FBA transit (14d) + FBA inbound buffer (10d) + up to 6d of Monday-only
+>   ordering cadence — below which the reserve cannot arrive in time at all. 45 is
+>   that floor plus margin for hot demand, slow receiving, and one missed transfer
+>   cycle at the ~21-day merge cadence.
+> - **FBA + AWD hold 100 days together** (`TOTAL_TARGET_DOC`); AWD holds the 55-day
+>   balance cheaply, and transfers restore FBA to 45, not to 100.
+>
+> Read every "100 DOC" below as `totalTargetDoc`, and every "size the FBA leg to it"
+> as `fbaTargetDoc`. Known gap this exposes: when AWD is **empty** at plan time, the
+> reserve is 63d at sea + 24d transfer lead = 87 days from being sellable, so a
+> 45-day FBA leg leaves a hole the old 100-day leg papered over. See
+> `fbaAwdSplit.test.ts` → "the reserve cannot cover a cold start".
+
 ## Problem
 
 When a batch of a product is ready at the manufacturer, there is no tool that answers:

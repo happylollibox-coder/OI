@@ -20,7 +20,13 @@ const DOC_COLOR = '#f59e0b';
 
 export interface SplitSimulationChartProps {
   rows: SplitWeekRow[];
-  targetDoc: number;
+  /**
+   * The LIVE level, not the combined one. The plotted DOC series is FBA-only
+   * (`SplitWeekRow.fbaDoc`), so a reference line at the combined target would
+   * draw a line the series is never meant to reach and read as a permanent
+   * shortfall.
+   */
+  fbaTargetDoc: number;
   /** When set, shows an OOS warning in the header — the caller decides if/when FBA runs dry. */
   oosLabel?: string;
 }
@@ -75,7 +81,7 @@ function SplitTooltip({ active, payload, showAwd, showDoc }: {
   );
 }
 
-export function SplitSimulationChart({ rows, targetDoc, oosLabel }: SplitSimulationChartProps) {
+export function SplitSimulationChart({ rows, fbaTargetDoc, oosLabel }: SplitSimulationChartProps) {
   const [showAwd, setShowAwd] = useState(true);
   const [showDoc, setShowDoc] = useState(true);
 
@@ -119,8 +125,8 @@ export function SplitSimulationChart({ rows, targetDoc, oosLabel }: SplitSimulat
             label={{ value: 'OOS', position: 'right', fill: 'var(--color-negative)', fontSize: 9 }}
           />
           <ReferenceLine
-            yAxisId="doc" y={targetDoc} ifOverflow="extendDomain" stroke="var(--color-warning)" strokeWidth={1.5} strokeDasharray="4 4"
-            label={{ value: `${targetDoc}d DOC`, position: 'insideTopLeft', fill: 'var(--color-warning)', fontSize: 9, offset: 5 }}
+            yAxisId="doc" y={fbaTargetDoc} ifOverflow="extendDomain" stroke="var(--color-warning)" strokeWidth={1.5} strokeDasharray="4 4"
+            label={{ value: `${fbaTargetDoc}d FBA target`, position: 'insideTopLeft', fill: 'var(--color-warning)', fontSize: 9, offset: 5 }}
           />
 
           {showAwd && (

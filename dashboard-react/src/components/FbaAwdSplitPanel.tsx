@@ -12,7 +12,7 @@ import { useShipmentConstants } from '../hooks/useShipmentConstants';
 import type { ProjectionShipment } from '../stockProjection';
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from '../planTypes';
 import {
-  TARGET_DOC, OFFERED_FBA_METHODS, docLabel, resolveBatchInput,
+  FBA_TARGET_DOC, TOTAL_TARGET_DOC, OFFERED_FBA_METHODS, docLabel, resolveBatchInput,
   narrowTransitDays, partitionShipmentsForLedger, countedInboundUnits, transitLedgerEntries, statusCaption,
   groupProductsByFamily, resolveFamilySelection,
   buildDemandCurve, buildDemandLedger, type LedgerShipment,
@@ -231,14 +231,16 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
       shipments, curve,
       transitDays: narrowing.transitDays,
       fbaInboundBufferDays: constants.fbaInboundBufferDays,
-      today, targetDoc: TARGET_DOC,
+      today, fbaTargetDoc: FBA_TARGET_DOC, totalTargetDoc: TOTAL_TARGET_DOC,
       methodOverride: methodChoice === 'AUTO' ? undefined : methodChoice,
     });
   }, [product, narrowing, batch, fbaMap, awdMap, shipments, curve,
     constants.fbaInboundBufferDays, today, methodChoice]);
 
+  // The window follows the COMBINED target — it is about seeing the whole
+  // position land, and most of the batch is still at sea at 45 days.
   const chartRows = useMemo(
-    () => (plan?.ok ? reduceSeriesToWeeks(plan.series, splitChartWindow(today, TARGET_DOC)) : []),
+    () => (plan?.ok ? reduceSeriesToWeeks(plan.series, splitChartWindow(today, TOTAL_TARGET_DOC)) : []),
     [plan, today]);
   // The engine states its own window at plan time; the panel must not re-derive
   // it from `plan.series`, or trimming that series for display would silently
@@ -260,7 +262,9 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
     <div className={CARD}>
       <div className="flex items-baseline justify-between mb-3">
         <div className={LABEL}>FBA / AWD Split — advisory, nothing is sent</div>
-        <div className="text-[9px] text-subtle">Target {TARGET_DOC} days of cover at FBA</div>
+        <div className="text-[9px] text-subtle">
+          Target {FBA_TARGET_DOC} days live at FBA · {TOTAL_TARGET_DOC} days FBA + AWD combined
+        </div>
       </div>
 
       {/* ── Inputs ── */}
@@ -336,18 +340,20 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
             {plan.legs.map((leg, i) => <LegCard key={`${leg.destination}-${i}`} leg={leg} />)}
             <div className="text-[10px] text-muted">
               FBA cover on the sellable date: <span className="font-mono text-[color:var(--color-text)]">{docLabel(plan.fbaDocAtArrival)}</span>
-              {' '}against a {TARGET_DOC}-day target.
+              {' '}against a {FBA_TARGET_DOC}-day live target; FBA and AWD together{' '}
+              <span className="font-mono text-[color:var(--color-text)]">{docLabel(plan.combinedDocAtArrival)}</span>
+              {' '}against {TOTAL_TARGET_DOC}.
               {plan.fbaOosDate && <> FBA runs out <span className="font-mono" style={{ color: 'var(--color-negative)' }}>{plan.fbaOosDate}</span> without it.</>}
             </div>
           </Section>
 
-          <Section title="Then transfer AWD → FBA to hold the level">
+          <Section title={`Then transfer AWD → FBA to hold ${FBA_TARGET_DOC} days live`}>
             <TransferTable rows={plan.transfers} />
           </Section>
 
           {chartRows.length > 0 && (
             <div className={`${CARD} mb-2`}>
-              <SplitSimulationChart rows={chartRows} targetDoc={TARGET_DOC} oosLabel={plan.fbaOosDate ?? undefined} />
+              <SplitSimulationChart rows={chartRows} fbaTargetDoc={FBA_TARGET_DOC} oosLabel={plan.fbaOosDate ?? undefined} />
             </div>
           )}
 
@@ -376,10 +382,11 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
               <div>
                 <div className={`${LABEL} mb-1`}>Sizing the FBA leg</div>
                 <KV label="Sellable at FBA (arrival + inbound buffer)" value={plan.sellableDate} source="Split engine" />
-                <KV label={`Units for ${TARGET_DOC} days of cover from that date`} value={fmt(plan.targetUnits)} source="Split engine" />
+                <KV label={`Units for ${FBA_TARGET_DOC} days live at FBA from that date`} value={fmt(plan.targetUnits)} source="Split engine" />
                 <KV label="Projected FBA on hand at that date" value={fmt(plan.onHandAtSellable)} source="Split engine" />
                 <KV label="Still short after this batch" value={fmt(plan.shortfallUnits)} source="Split engine" />
                 <KV label="FBA cover on the sellable date" value={docLabel(plan.fbaDocAtArrival)} source="Split engine" />
+                <KV label="FBA + AWD cover on the same date" value={docLabel(plan.combinedDocAtArrival)} source="Split engine" />
                 <KV label="Ship date (next Wednesday)" value={plan.shipDate} source="Split engine" />
                 <KV label="Method chosen automatically" value={methodCaption(plan.autoMethod)} source="Split engine" />
                 <KV label="Overridden by the operator" value={plan.methodOverridden ? 'Yes' : 'No'} source="Operator input" />
@@ -411,7 +418,9 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
                     value={`${fmt(t.days)} days`} source="DE_LIST_OF_VALUES" />
                 ))}
                 <KV label="FBA inbound processing buffer" value={`${fmt(constants.fbaInboundBufferDays)} days`} source="DE_LIST_OF_VALUES" />
-                <KV label="FBA days-of-cover target" value={`${TARGET_DOC} days`} source="Operating rule" />
+                <KV label="FBA days-of-cover target (live, sellable)" value={`${FBA_TARGET_DOC} days`} source="Operating rule" />
+                <KV label="FBA + AWD days-of-cover target (combined)" value={`${TOTAL_TARGET_DOC} days`} source="Operating rule" />
+                <KV label="AWD share of the combined target" value={`${TOTAL_TARGET_DOC - FBA_TARGET_DOC} days`} source="Operating rule" />
               </div>
             </div>
           </details>

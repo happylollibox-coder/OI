@@ -3,15 +3,28 @@ import type { MonthSeasonInfo, ForecastDemandMap, ForecastMetaMap, MonthSeasonMa
 import type { DemandCurve, ProjectionShipment } from './stockProjection';
 import { confirmedFbaInbound, planSplit, type SplitInput } from './fbaAwdSplit';
 import {
-  TARGET_DOC, REQUIRED_TRANSIT_KEYS, EXCLUSION_REASONS,
+  FBA_TARGET_DOC, TOTAL_TARGET_DOC, REQUIRED_TRANSIT_KEYS, EXCLUSION_REASONS,
   cartonPrefill, unitsFromCartons, docLabel, narrowTransitDays, resolveBatchInput,
   partitionShipmentsForLedger, buildDemandCurve, buildDemandLedger, transitLedgerEntries,
   groupProductsByFamily, resolveFamilySelection,
 } from './splitPanelData';
 
-describe('TARGET_DOC', () => {
-  it('is the 100-day FBA cover level the operating rule names', () => {
-    expect(TARGET_DOC).toBe(100);
+describe('the two cover targets', () => {
+  it('holds 100 days across FBA and AWD, of which 45 are live at FBA', () => {
+    expect(FBA_TARGET_DOC).toBe(45);
+    expect(TOTAL_TARGET_DOC).toBe(100);
+  });
+
+  it('keeps the live level above the physical floor a transfer needs to land', () => {
+    // AWD → FBA transit (14) + FBA inbound buffer (10) + up to 6 days of
+    // Monday-only ordering cadence = 30 days from "running low" to sellable.
+    // A live level at or under that cannot be restored from the reserve.
+    expect(FBA_TARGET_DOC).toBeGreaterThan(14 + 10 + 6);
+  });
+
+  it('leaves the balance to AWD rather than double-counting it', () => {
+    expect(TOTAL_TARGET_DOC - FBA_TARGET_DOC).toBe(55);
+    expect(FBA_TARGET_DOC).toBeLessThan(TOTAL_TARGET_DOC);
   });
 });
 
@@ -179,7 +192,8 @@ describe('narrowTransitDays', () => {
 });
 
 describe('partitionShipmentsForLedger', () => {
-  // The engine walks 2026-08-07 .. 2027-11-15 for today = 2026-08-07, targetDoc = 100.
+  // The engine walks 2026-08-07 .. 2027-11-15 for today = 2026-08-07 — 365 days
+  // plus the 100-day combined target its horizon follows.
   const WINDOW = { from: '2026-08-07', to: '2027-11-15' };
 
   const inTransitFba: ProjectionShipment = { qty: 500, arrival_date: '2026-09-10', status: 'transit', route: 'FAST_SEA' };
@@ -310,7 +324,8 @@ describe('the engine states its own walk window', () => {
       familySeason: {}, growth: 1,
     },
     transitDays: { FAST_SEA: 27, SLOW_SEA: 33, AWD_SLOW_SEA: 63, AWD_TRANSFER: 14 },
-    fbaInboundBufferDays: 10, today: new Date(2026, 7, 7), targetDoc: 100,
+    fbaInboundBufferDays: 10, today: new Date(2026, 7, 7),
+    fbaTargetDoc: 45, totalTargetDoc: 100,
   };
 
   it('spans the series it produced', () => {
@@ -339,7 +354,8 @@ describe('the ledger agrees with what the engine measurably did', () => {
     cartons: 100, packageQuantity: 10, fbaOnHand: 50_000, awdOnHand: 0, shipments: [],
     curve: { productDemand: FLAT, familySeason: {}, growth: 1 },
     transitDays: { FAST_SEA: 27, SLOW_SEA: 33, AWD_SLOW_SEA: 63, AWD_TRANSFER: 14 },
-    fbaInboundBufferDays: 10, today: new Date(2026, 7, 7), targetDoc: 100,
+    fbaInboundBufferDays: 10, today: new Date(2026, 7, 7),
+    fbaTargetDoc: 45, totalTargetDoc: 100,
   };
   const onDay = (y: number, m: number, d: number) => new Date(y, m - 1, d).toISOString();
 

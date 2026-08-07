@@ -49,6 +49,14 @@ describe('FbaAwdSplitPanel', () => {
     expect(screen.getByText(/Suggested, not approved/)).toBeInTheDocument();
   });
 
+  it('shows both cover levels, so neither can be mistaken for the other', () => {
+    render(<FbaAwdSplitPanel {...baseProps} />);
+    expect(screen.getByText(/Target 45 days live at FBA · 100 days FBA \+ AWD combined/)).toBeInTheDocument();
+    expect(screen.getByText(/against a 45-day live target/)).toBeInTheDocument();
+    expect(screen.getByText(/FBA \+ AWD cover on the same date/)).toBeInTheDocument();
+    expect(screen.getByText(/AWD share of the combined target/)).toBeInTheDocument();
+  });
+
   it('shows a past-dated delivery as excluded, never as counted', () => {
     // today = 2026-08-07, so this arrival is behind the start of the engine's walk:
     // walkFba reads no key before today, so it contributes nothing to the projection.
