@@ -13,7 +13,7 @@ import type { ProjectionShipment } from '../stockProjection';
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from '../planTypes';
 import {
   TARGET_DOC, OFFERED_FBA_METHODS, docLabel, resolveBatchInput,
-  narrowTransitDays, partitionShipmentsForLedger, countedInboundUnits, transitLedgerEntries, walkWindowOf,
+  narrowTransitDays, partitionShipmentsForLedger, countedInboundUnits, transitLedgerEntries, statusCaption,
   buildDemandCurve, buildDemandLedger, type LedgerShipment,
 } from '../splitPanelData';
 import { fmt } from '../utils';
@@ -93,7 +93,7 @@ function ShipmentLedgerTable({ rows, greyed }: { rows: LedgerShipment[]; greyed:
             <td className={TD}>{r.arrivalDate || '—'}</td>
             <td className={TD}>{fmt(r.qty)}</td>
             <td className={TD}>{r.destination}</td>
-            <td className={TD}>{r.status}</td>
+            <td className={TD}>{statusCaption(r.status)}</td>
             <td className="py-1 text-[10px] text-muted">
               {r.exclusionReason ?? `Adds ${fmt(r.qty)} units to FBA on ${r.arrivalDate}`}
             </td>
@@ -165,8 +165,8 @@ function TransferTable({ rows }: { rows: TransferRow[] }) {
     <table className="w-full">
       <thead>
         <tr>
-          <th className={TH}>Order</th><th className={TH}>Arrives</th><th className={TH}>Units</th>
-          <th className={TH}>Cartons</th><th className={TH}>DOC before</th><th className={TH}>DOC after</th>
+          <th className={TH}>Order on</th><th className={TH}>Arrives</th><th className={TH}>Units</th>
+          <th className={TH}>Cartons</th><th className={TH}>Cover before</th><th className={TH}>Cover after</th>
         </tr>
       </thead>
       <tbody>
@@ -232,8 +232,10 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
   const chartRows = useMemo(
     () => (plan?.ok ? reduceSeriesToWeeks(plan.series, splitChartWindow(today, TARGET_DOC)) : []),
     [plan, today]);
-  // One definition of "the days the engine actually walked", shared by both ledgers.
-  const walk = useMemo(() => walkWindowOf(plan?.ok ? plan.series : []), [plan]);
+  // The engine states its own window at plan time; the panel must not re-derive
+  // it from `plan.series`, or trimming that series for display would silently
+  // start labelling in-window arrivals as beyond-horizon.
+  const walk = plan?.ok ? plan.walkWindow : null;
   const shipLedger = useMemo(() => partitionShipmentsForLedger(shipments, walk), [shipments, walk]);
   const demandRows = useMemo(() => walk ? buildDemandLedger(curve, walk.from, walk.to) : [], [walk, curve]);
 
@@ -355,7 +357,8 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
 
               <div>
                 <div className={`${LABEL} mb-1`}>Sizing the FBA leg</div>
-                <KV label={`Units for ${TARGET_DOC} DOC from the sellable date`} value={fmt(plan.targetUnits)} source="Split engine" />
+                <KV label="Sellable at FBA (arrival + inbound buffer)" value={plan.sellableDate} source="Split engine" />
+                <KV label={`Units for ${TARGET_DOC} days of cover from that date`} value={fmt(plan.targetUnits)} source="Split engine" />
                 <KV label="Projected FBA on hand at that date" value={fmt(plan.onHandAtSellable)} source="Split engine" />
                 <KV label="Still short after this batch" value={fmt(plan.shortfallUnits)} source="Split engine" />
                 <KV label="FBA cover on the sellable date" value={docLabel(plan.fbaDocAtArrival)} source="Split engine" />
@@ -368,7 +371,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
 
               <div>
                 <div className={`${LABEL} mb-1`}>
-                  Inbound counted — {fmt(shipLedger.counted.length)} totalling {fmt(countedInboundUnits(shipLedger))} units, inside the walked window {walk?.from} → {walk?.to}
+                  Inbound shipments counted — {fmt(shipLedger.counted.length)} totalling {fmt(countedInboundUnits(shipLedger))} units, arriving between {walk?.from} and {walk?.to} (the period this plan models)
                 </div>
                 <ShipmentLedgerTable rows={shipLedger.counted} greyed={false} />
               </div>

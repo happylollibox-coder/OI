@@ -6,7 +6,6 @@ import {
   TARGET_DOC, REQUIRED_TRANSIT_KEYS, EXCLUSION_REASONS,
   cartonPrefill, unitsFromCartons, docLabel, narrowTransitDays, resolveBatchInput,
   partitionShipmentsForLedger, buildDemandCurve, buildDemandLedger, transitLedgerEntries,
-  walkWindowOf,
 } from './splitPanelData';
 
 describe('TARGET_DOC', () => {
@@ -299,14 +298,32 @@ describe('partitionShipmentsForLedger — the walked-window edges', () => {
   });
 });
 
-describe('walkWindowOf', () => {
-  it('takes the first and last day of the engine series', () => {
-    expect(walkWindowOf([{ date: '2026-08-07' }, { date: '2026-08-08' }, { date: '2027-11-15' }]))
-      .toEqual({ from: '2026-08-07', to: '2027-11-15' });
+describe('the engine states its own walk window', () => {
+  // The panel reads plan.walkWindow rather than re-deriving it from plan.series.
+  // This pins the invariant that made that safe: the stated window is exactly
+  // the span of the series the engine walked.
+  const input: SplitInput = {
+    cartons: 100, packageQuantity: 10, fbaOnHand: 50_000, awdOnHand: 0, shipments: [],
+    curve: {
+      productDemand: { 202608: 300, 202609: 300, 202610: 310, 202611: 300, 202612: 310 },
+      familySeason: {}, growth: 1,
+    },
+    transitDays: { FAST_SEA: 27, SLOW_SEA: 33, AWD_SLOW_SEA: 63, AWD_TRANSFER: 14 },
+    fbaInboundBufferDays: 10, today: new Date(2026, 7, 7), targetDoc: 100,
+  };
+
+  it('spans the series it produced', () => {
+    const plan = planSplit(input);
+    expect(plan.ok).toBe(true);
+    expect(plan.series.length).toBeGreaterThan(0);
+    expect(plan.walkWindow).toEqual({
+      from: plan.series[0].date,
+      to: plan.series[plan.series.length - 1].date,
+    });
   });
 
-  it('is null when there is no series to read', () => {
-    expect(walkWindowOf([])).toBeNull();
+  it('is null when there is no plan to have a window', () => {
+    expect(planSplit({ ...input, cartons: 0 }).walkWindow).toBeNull();
   });
 });
 
@@ -336,7 +353,7 @@ describe('the ledger agrees with what the engine measurably did', () => {
     expect(withPast.onHandAtSellable).toBe(49_528);
     expect(withPast.legs).toEqual(without.legs);
 
-    const { counted, excluded } = partitionShipmentsForLedger([past], walkWindowOf(withPast.series));
+    const { counted, excluded } = partitionShipmentsForLedger([past], withPast.walkWindow);
     expect(counted).toEqual([]);
     expect(excluded[0].exclusionReason).toBe(EXCLUSION_REASONS.ALREADY_LANDED);
   });
@@ -351,7 +368,7 @@ describe('the ledger agrees with what the engine measurably did', () => {
     expect(withBeyond.onHandAtSellable).toBe(plan.onHandAtSellable);
     expect(withBeyond.series.map(s => s.fbaUnits)).toEqual(plan.series.map(s => s.fbaUnits));
 
-    const { counted, excluded } = partitionShipmentsForLedger([beyond], walkWindowOf(withBeyond.series));
+    const { counted, excluded } = partitionShipmentsForLedger([beyond], withBeyond.walkWindow);
     expect(counted).toEqual([]);
     expect(excluded[0].exclusionReason).toBe(EXCLUSION_REASONS.BEYOND_HORIZON);
   });
@@ -362,7 +379,7 @@ describe('the ledger agrees with what the engine measurably did', () => {
     // 9,000 units land before the sellable date, so on-hand there is 9,000 higher.
     expect(withSoon.onHandAtSellable).toBe(49_528 + 9_000);
 
-    const { counted } = partitionShipmentsForLedger([soon], walkWindowOf(withSoon.series));
+    const { counted } = partitionShipmentsForLedger([soon], withSoon.walkWindow);
     expect(counted).toHaveLength(1);
     expect(counted[0].exclusionReason).toBeNull();
   });

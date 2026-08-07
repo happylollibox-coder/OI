@@ -11,7 +11,7 @@ import {
 } from './fbaAwdSplit';
 import {
   CONFIRMED_STATUSES, EXCLUDED_STATUSES, MONTH_ABBR,
-  dailyDemandOn, daysInMonth, localDateKey,
+  dailyDemandOn, daysInMonth, localDateKey, parseLocalDate,
   type DemandCurve, type ProjectionShipment, type ShipmentStatus,
 } from './stockProjection';
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from './planTypes';
@@ -170,6 +170,26 @@ export const EXCLUSION_REASONS = {
   BEYOND_HORIZON: 'Arrives after the projection horizon ends — outside the window this plan models',
 } as const;
 
+export type ExclusionReason = typeof EXCLUSION_REASONS[keyof typeof EXCLUSION_REASONS];
+
+/**
+ * Shipment statuses in the operator's language. The raw values are internal
+ * identifiers — `po_needed` with its underscore is not something to put in
+ * front of someone reading a shipment plan.
+ */
+const STATUS_CAPTIONS: Record<string, string> = {
+  transit: 'In transit',
+  approved: 'Approved',
+  scheduled: 'Scheduled',
+  suggested: 'Suggested',
+  arrived: 'Arrived',
+  po: 'On a PO',
+  po_needed: 'PO needed',
+};
+
+export const statusCaption = (s: string): string =>
+  STATUS_CAPTIONS[s] ?? s.replace(/_/g, ' ');
+
 export interface LedgerShipment {
   shipment: ProjectionShipment;
   qty: number;
@@ -178,7 +198,7 @@ export interface LedgerShipment {
   status: ShipmentStatus;
   destination: 'FBA' | 'AWD';
   /** null on a counted row; the reason string on an excluded one. */
-  exclusionReason: string | null;
+  exclusionReason: ExclusionReason | null;
 }
 
 export interface ShipmentLedger {
@@ -186,20 +206,26 @@ export interface ShipmentLedger {
   excluded: LedgerShipment[];
 }
 
-/** The window the engine's walk actually covers, read off the series it produced. */
+/**
+ * The window the engine's walk actually covers. The engine states this on
+ * `SplitPlan.walkWindow` at plan time — the panel must not re-derive it from
+ * `plan.series`, or a future display-trim of that series would silently start
+ * labelling in-window arrivals as beyond-horizon.
+ */
 export interface WalkWindow { from: string; to: string }
 
 /**
- * The day key the engine files this arrival under — `localDateKey(new Date(...))`,
+ * The day key the engine files this arrival under — `localDateKey(parseLocalDate(...))`,
  * exactly what `arrivalsByDay` builds its map from. Deriving it the same way is
- * what lets the window comparison below be true rather than approximately true:
- * a `2026-09-10T00:00:00Z` arrival is a different local day in a timezone behind
- * UTC, and the ledger must agree with the walk, not with the raw string.
+ * what lets the window comparison below be true rather than approximately true.
+ *
+ * `parseLocalDate` rather than `new Date` matters: arrivals arrive as bare
+ * `YYYY-MM-DD`, which `new Date` reads as UTC midnight — a day earlier anywhere
+ * west of Greenwich, including the America/Los_Angeles the warehouse data runs on.
  */
 function arrivalKey(s: ProjectionShipment): string | null {
-  if (!s.arrival_date) return null;
-  const d = new Date(s.arrival_date);
-  return isNaN(d.getTime()) ? null : localDateKey(d);
+  const d = parseLocalDate(s.arrival_date);
+  return d ? localDateKey(d) : null;
 }
 
 /**
@@ -210,7 +236,7 @@ function arrivalKey(s: ProjectionShipment): string | null {
  * `window` is null only when there is no plan to have a window — no window
  * judgement is made in that case, and the panel renders no ledger anyway.
  */
-function exclusionReasonFor(s: ProjectionShipment, window: WalkWindow | null): string | null {
+function exclusionReasonFor(s: ProjectionShipment, window: WalkWindow | null): ExclusionReason | null {
   if (EXCLUDED_STATUSES.has(s.status)) return EXCLUSION_REASONS.PO;
   const destination = destinationOf(s);
   if (!CONFIRMED_STATUSES.has(s.status)) {
@@ -262,11 +288,6 @@ export function partitionShipmentsForLedger(
   return { counted, excluded };
 }
 
-/** The engine's walk window, taken from the series it produced. Null when there is no plan. */
-export function walkWindowOf(series: Array<{ date: string }>): WalkWindow | null {
-  return series.length ? { from: series[0].date, to: series[series.length - 1].date } : null;
-}
-
 /** Units the projection actually adds — the counted rows only. */
 export function countedInboundUnits(ledger: ShipmentLedger): number {
   return ledger.counted.reduce((s, r) => s + r.qty, 0);
@@ -313,15 +334,6 @@ export interface DemandLedgerRow {
   peakDailyUnits: number;     // equals the offseason rate when no peak weighting applies
 }
 
-/** Parse a `YYYY-MM-DD` key as a local date. Returns null when it will not parse. */
-function parseDateKey(key: string): Date | null {
-  const parts = (key || '').split('-').map(Number);
-  if (parts.length !== 3 || parts.some(n => !Number.isFinite(n))) return null;
-  const [y, m, d] = parts;
-  const date = new Date(y, m - 1, d);
-  return isNaN(date.getTime()) ? null : date;
-}
-
 /**
  * Monthly forecast figures across the horizon, with growth applied and the
  * family's peak-day weighting shown per month.
@@ -333,8 +345,8 @@ function parseDateKey(key: string): Date | null {
  * is the horizon planned.
  */
 export function buildDemandLedger(curve: DemandCurve, from: string, to: string): DemandLedgerRow[] {
-  const start = parseDateKey(from);
-  const end = parseDateKey(to);
+  const start = parseLocalDate(from);
+  const end = parseLocalDate(to);
   if (!start || !end || end < start) return [];
 
   const rows: DemandLedgerRow[] = [];

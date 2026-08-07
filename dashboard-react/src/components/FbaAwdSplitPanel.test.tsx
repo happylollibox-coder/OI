@@ -58,7 +58,7 @@ describe('FbaAwdSplitPanel', () => {
     expect(screen.getByText(/Arrival date has already passed/)).toBeInTheDocument();
     expect(screen.queryByText(/Adds 9,000 units to FBA/)).not.toBeInTheDocument();
     // The counted total is the in-window shipment alone, not 9,500.
-    expect(screen.getByText(/Inbound counted — 1 totalling 500 units/)).toBeInTheDocument();
+    expect(screen.getByText(/Inbound shipments counted — 1 totalling 500 units/)).toBeInTheDocument();
   });
 
   it('never offers Air as an FBA route', () => {
