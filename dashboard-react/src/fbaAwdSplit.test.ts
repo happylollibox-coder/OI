@@ -3,7 +3,7 @@ import type { MonthSeasonInfo } from './planTypes';
 import type { DemandCurve, ProjectionShipment } from './stockProjection';
 import {
   planSplit, nextWednesday, selectFbaMethod, destinationOf, confirmedFbaInbound,
-  docFromStock, createAwdPool,
+  docFromStock, createAwdPool, METHOD_CAPTIONS,
   type SplitInput, type FbaMethod,
 } from './fbaAwdSplit';
 
@@ -202,7 +202,7 @@ describe('planSplit — transfers', () => {
     expect(plan.transfers).toEqual([]);
   });
 
-  it('keeps transfer arrivals at least 14 days apart after merging', () => {
+  it('keeps transfer arrivals at least 14 days apart when the pool allows merging', () => {
     const plan = planSplit({ ...base, cartons: 2000, awdOnHand: 20_000 });
     expect(plan.transfers.length).toBeGreaterThan(1);
     for (const t of plan.transfers) expect(parseKey(t.orderDate).getDay()).toBe(1); // Monday
@@ -349,6 +349,7 @@ describe('planSplit — constants and guards', () => {
     delete partial.AWD_SLOW_SEA;
     const plan = planSplit({ ...base, transitDays: partial as SplitInput['transitDays'] });
     expect(plan.ok).toBe(false);
+    expect(plan.error).toMatch(/missing or non-positive/i);
     expect(plan.error).toMatch(/AWD Slow Sea/);
     expect(plan.legs).toEqual([]);
   });
@@ -457,6 +458,14 @@ describe('planSplit — reasons that match the arithmetic', () => {
       expect(leg.reason).not.toMatch(/FAST_SEA|SLOW_SEA|AWD_TRANSFER/);
     }
   });
+
+  // A caption that hardcodes a day count outlives the LOV that moved it — the
+  // export said "AWD Slow Sea 60 Days" long after AWD_SLOW_SEA became 63.
+  it('keeps day counts out of the captions themselves', () => {
+    for (const caption of Object.values(METHOD_CAPTIONS)) {
+      expect(caption).not.toMatch(/\d/);
+    }
+  });
 });
 
 describe('planSplit — daily series', () => {
@@ -514,5 +523,154 @@ describe('planSplit — a plan with nothing to warn about', () => {
   it('reports days of cover at arrival, flagging a saturated reading', () => {
     expect(planSplit(base).fbaDocAtArrival).toEqual({ days: 100, capped: false });
     expect(planSplit({ ...base, fbaOnHand: 50_000 }).fbaDocAtArrival).toEqual({ days: 400, capped: true });
+  });
+});
+
+/** Units ordered by date D must never exceed pool landed by D, on any date. */
+function assertPoolNeverOverdrawn(plan: ReturnType<typeof planSplit>, awdOnHand: number) {
+  const landedByDate = (d: string) => {
+    const awdLeg = plan.legs.find(l => l.destination === 'AWD');
+    return awdOnHand + (awdLeg && awdLeg.arrivalDate <= d ? awdLeg.units : 0);
+  };
+  for (const t of plan.transfers) {
+    const orderedByThen = plan.transfers
+      .filter(x => x.orderDate <= t.orderDate)
+      .reduce((s, x) => s + x.units, 0);
+    expect(orderedByThen).toBeLessThanOrEqual(landedByDate(t.orderDate));
+  }
+}
+
+describe('planSplit — the pool is never overdrawn', () => {
+  // Regression: merging used to fold a later week's draw into an earlier row,
+  // dating the move before the goods had landed at AWD. The row read
+  // "2026-10-12: 160u" while AWD held 100, and the series went to -60.
+  const straddle = { ...base, fbaOnHand: 1000, awdOnHand: 500, cartons: 100 };
+
+  it('never dates a move before the stock is at AWD', () => {
+    const plan = planSplit(straddle);
+    expect(plan.transfers.length).toBeGreaterThan(1);
+    assertPoolNeverOverdrawn(plan, 500);
+  });
+
+  it('never lets the AWD balance go negative', () => {
+    for (const cartons of [100, 500, 2000]) {
+      const plan = planSplit({ ...straddle, cartons });
+      const lowest = Math.min(...plan.series.map(d => d.awdUnits));
+      expect(lowest).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('splits rather than merges when the draws straddle a pool arrival', () => {
+    const plan = planSplit(straddle);
+    const awdLanding = plan.legs.find(l => l.destination === 'AWD')!.arrivalDate;
+    // The row that could not absorb the later draw stays at its own size, and
+    // the remainder becomes its own executable row after the batch lands.
+    const after = plan.transfers.filter(t => t.orderDate > awdLanding);
+    expect(after.length).toBeGreaterThan(0);
+    for (const t of plan.transfers) {
+      expect(t.arrivalDate > t.orderDate).toBe(true);
+    }
+  });
+
+  it('still conserves the pool through a split', () => {
+    const plan = planSplit(straddle);
+    const pool = 500 + (plan.legs.find(l => l.destination === 'AWD')?.units ?? 0);
+    const moved = plan.transfers.reduce((s, t) => s + t.units, 0);
+    expect(moved + plan.leftoverAwdUnits).toBe(pool);
+  });
+});
+
+describe('planSplit — transfers respect the carton multiple against a ragged pool', () => {
+  it('rounds every transfer to whole cartons even when the pool is not a multiple', () => {
+    // 353 units at pkg 7 leaves a 3-unit remainder that can never move.
+    const plan = planSplit({ ...base, packageQuantity: 7, awdOnHand: 353, cartons: 100 });
+    expect(plan.transfers.length).toBeGreaterThan(0);
+    for (const t of plan.transfers) {
+      expect(t.units % 7).toBe(0);
+      expect(t.cartons * 7).toBe(t.units);
+    }
+    const movedFromOnHand = Math.min(
+      plan.transfers.reduce((s, t) => s + t.units, 0), 353);
+    expect(353 - movedFromOnHand).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('planSplit — timezone safety', () => {
+  const ship = (date: string) => [{
+    qty: 900, arrival_date: date, status: 'transit' as const, route: 'PO→MFR→FBA',
+  }];
+
+  it('reads a bare YYYY-MM-DD as a local date, not UTC midnight', () => {
+    // Sellable is 2026-09-18. A shipment dated the 19th lands AFTER it and must
+    // not count; parsed as UTC it would read as the 18th west of Greenwich and
+    // divert 900 units to AWD purely because of the viewer's clock.
+    const plan = planSplit({ ...base, cartons: 500, shipments: ship('2026-09-19') });
+    expect(plan.onHandAtSellable).toBe(0);
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(1000);
+  });
+
+  it('counts a shipment landing exactly on the sellable date', () => {
+    const plan = planSplit({ ...base, cartons: 500, shipments: ship('2026-09-18') });
+    expect(plan.onHandAtSellable).toBe(900);
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(100);
+  });
+});
+
+describe('planSplit — transit days must be positive', () => {
+  it('rejects a zero transit rather than shipping and arriving the same day', () => {
+    const plan = planSplit({ ...base, transitDays: { ...base.transitDays, AWD_SLOW_SEA: 0 } });
+    expect(plan.ok).toBe(false);
+    expect(plan.error).toMatch(/missing or non-positive/i);
+  });
+
+  it('rejects a negative transit rather than arriving before it ships', () => {
+    expect(planSplit({ ...base, transitDays: { ...base.transitDays, SLOW_SEA: -33 } }).ok).toBe(false);
+    expect(planSplit({ ...base, transitDays: { ...base.transitDays, AWD_TRANSFER: -14 } }).ok).toBe(false);
+  });
+});
+
+describe('planSplit — ledger prose agrees with the structured fields', () => {
+  it('states a subtraction that actually holds', () => {
+    const seasonal = { productDemand: FLAT, familySeason: SEASON, growth: 1.0 };
+    const plan = planSplit({ ...base, cartons: 500, curve: seasonal, fbaOnHand: 427 });
+    const reason = plan.legs.find(l => l.destination === 'FBA')!.reason;
+    const m = /is (\d+) units of demand \(through [\d-]+\), less (\d+) projected on hand = (\d+) needed/.exec(reason)!;
+    expect(m).toBeTruthy();
+    const [, target, onHand, need] = m.map(Number);
+    expect(target - onHand).toBe(need);           // the prose adds up
+    expect(target).toBe(plan.targetUnits);        // and matches the fields beside it
+    expect(onHand).toBe(plan.onHandAtSellable);
+  });
+});
+
+describe('planSplit — the panel’s anchors', () => {
+  it('names the date the ledger is keyed to, even with no FBA leg', () => {
+    // Well stocked, so FBA never runs out and the cheapest route wins:
+    // 2026-08-12 + 33 + 10. The empty-FBA base case escalates and lands sooner.
+    const allAwd = planSplit({ ...base, fbaOnHand: 50_000 });
+    expect(allAwd.legs.find(l => l.destination === 'FBA')).toBeUndefined();
+    expect(allAwd.sellableDate).toBe('2026-09-24');
+    expect(planSplit(base).sellableDate).toBe('2026-09-18');
+  });
+
+  it('reports the window the series actually spans', () => {
+    const plan = planSplit({ ...base, cartons: 800 });
+    expect(plan.walkWindow).toEqual({ from: '2026-08-07', to: '2027-11-15' });
+    expect(plan.walkWindow!.from).toBe(plan.series[0].date);
+    expect(plan.walkWindow!.to).toBe(plan.series[plan.series.length - 1].date);
+    expect(planSplit({ ...base, cartons: 0 }).walkWindow).toBeNull();
+  });
+
+  it('measures cover at arrival from the sellable date, not the dock date', () => {
+    // Non-flat curve so the 10-day inbound buffer visibly changes the reading:
+    // measuring from the 09-08 dock date instead of 09-18 gives a different DOC.
+    const seasonal = { productDemand: FLAT, familySeason: SEASON, growth: 1.0 };
+    const plan = planSplit({ ...base, cartons: 500, curve: seasonal, fbaOnHand: 300 });
+    const fba = plan.legs.find(l => l.destination === 'FBA')!;
+    const stock = plan.onHandAtSellable + fba.units;
+    expect(docFromStock(stock, parseKey(fba.sellableDate), seasonal, 400))
+      .toEqual(plan.fbaDocAtArrival);
+    expect(docFromStock(stock, parseKey(fba.arrivalDate), seasonal, 400))
+      .not.toEqual(plan.fbaDocAtArrival);
   });
 });

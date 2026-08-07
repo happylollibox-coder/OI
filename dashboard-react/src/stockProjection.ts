@@ -60,6 +60,22 @@ export function localDateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/**
+ * Parse a date string as a LOCAL date. `new Date('2026-09-19')` is UTC
+ * midnight, which reads back as the 18th anywhere west of UTC — and OI's
+ * FACT_/V_ layer runs America/Los_Angeles, so production sits on the wrong
+ * side of that. Bare YYYY-MM-DD is built field by field; anything else falls
+ * through to the platform parser. Returns null for anything unparseable.
+ */
+export function parseLocalDate(raw: string | null | undefined): Date | null {
+  if (!raw) return null;
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
+  const d = ymd
+    ? new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]))
+    : new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 export const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export function fmtWeekLabel(d: Date): string {
@@ -156,8 +172,8 @@ export function buildWeeklyProjection(p: ProjectionParams): ProjectionWeek[] {
   const arrivalByWeek = new Map<string, { confirmed: number; total: number; dates: Set<string> }>();
   for (const sh of shipments) {
     if (EXCLUDED_STATUSES.has(sh.status)) continue;
-    const arrDate = sh.arrival_date ? new Date(sh.arrival_date) : null;
-    if (!arrDate || isNaN(arrDate.getTime())) continue;
+    const arrDate = parseLocalDate(sh.arrival_date);
+    if (!arrDate) continue;
     const key = localDateKey(getMonday(arrDate));
     const entry = arrivalByWeek.get(key) || { confirmed: 0, total: 0, dates: new Set<string>() };
     entry.total += sh.qty;

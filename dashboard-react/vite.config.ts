@@ -65,5 +65,10 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test-setup.ts',
     include: ['src/**/*.test.{ts,tsx}'],
+    // Pinned west of UTC on purpose. Date handling that parses bare
+    // YYYY-MM-DD as UTC reads back a day early anywhere west of Greenwich,
+    // and OI's FACT_/V_ layer runs America/Los_Angeles — so this class of bug
+    // must fail here rather than in production.
+    env: { TZ: 'America/Los_Angeles' },
   },
 })

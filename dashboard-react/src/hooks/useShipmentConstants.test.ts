@@ -29,6 +29,11 @@ describe('parseTransitDays', () => {
     expect(days).toEqual({ FAST_SEA: 27 });
   });
 
+  it('skips zero and negative days, which would arrive on or before the ship date', () => {
+    const days = parseTransitDays([lov('FAST_SEA', '27'), lov('ZERO', '0'), lov('BACKWARDS', '-14')]);
+    expect(days).toEqual({ FAST_SEA: 27 });
+  });
+
   it('returns an empty map for no rows', () => {
     expect(parseTransitDays([])).toEqual({});
   });

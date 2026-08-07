@@ -32,7 +32,10 @@ export function parseTransitDays(rows: LovRow[]): Record<string, number> {
   for (const r of rows) {
     if (!r.value_id || isBlank(r.attr1_value)) continue;
     const n = Number(r.attr1_value);
-    if (!Number.isFinite(n)) continue;
+    // A transit of 0 arrives the day it ships and a negative one arrives before
+    // it ships. Drop them here so the failure surfaces at the source rather
+    // than as a silently shifted schedule downstream.
+    if (!Number.isFinite(n) || n <= 0) continue;
     out[r.value_id] = n;
   }
   return out;

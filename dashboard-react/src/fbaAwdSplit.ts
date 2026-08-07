@@ -6,7 +6,7 @@
 // Modelling note: unmet demand is lost, not backlogged. Stock floors at zero.
 import {
   addDays, localDateKey, getMonday, demandOverWindow, dailyDemandOn,
-  CONFIRMED_STATUSES, EXCLUDED_STATUSES,
+  CONFIRMED_STATUSES, EXCLUDED_STATUSES, parseLocalDate,
   type DemandCurve, type ProjectionShipment,
 } from './stockProjection';
 
@@ -27,9 +27,9 @@ const REQUIRED_TRANSIT_KEYS: readonly string[] = [...FBA_METHODS, 'AWD_SLOW_SEA'
 
 /**
  * Operator-facing names for the transit tokens. This is the shared home for
- * them — ShipmentEngine.tsx still carries a private copy that should import
- * from here instead. Note its copy says "AWD Slow Sea 60 Days" while the LOV
- * value is 63, so the day count is deliberately left out of these captions.
+ * them — the engine and the Excel export in ShipmentEngine.tsx both read here.
+ * Day counts are deliberately left out: a caption saying "60 Days" outlived the
+ * LOV moving to 63. Callers that want the number read it off `transitDays`.
  */
 export const METHOD_CAPTIONS: Record<string, string> = {
   AIR: 'Air',
@@ -119,6 +119,10 @@ export interface SplitPlan {
   autoMethod: FbaMethod;
   methodOverridden: boolean;
   shipDate: string;
+  /** The date targetUnits and onHandAtSellable are keyed to — readable even with no FBA leg. */
+  sellableDate: string;
+  /** Span of the series actually built, so the panel never infers it by reading `series`. */
+  walkWindow: { from: string; to: string } | null;
   fbaDocAtArrival: DocReading;
   fbaOosDate: string | null;
   leftoverAwdUnits: number;
@@ -129,6 +133,7 @@ const fail = (error: string): SplitPlan => ({
   ok: false, error, units: 0, legs: [], transfers: [], series: [],
   targetUnits: 0, onHandAtSellable: 0, shortfallUnits: 0,
   autoMethod: 'SLOW_SEA', methodOverridden: false, shipDate: '',
+  sellableDate: '', walkWindow: null,
   fbaDocAtArrival: { days: 0, capped: false }, fbaOosDate: null,
   leftoverAwdUnits: 0, warnings: [],
 });
@@ -168,8 +173,8 @@ interface Arrival { date: Date; units: number; note?: string }
 function shipmentArrivals(shipments: ProjectionShipment[], note?: string): Arrival[] {
   const out: Arrival[] = [];
   for (const s of shipments) {
-    const a = new Date(s.arrival_date);
-    if (isNaN(a.getTime())) continue;
+    const a = parseLocalDate(s.arrival_date);
+    if (!a) continue;
     out.push({ date: startOfDay(a), units: s.qty, note });
   }
   return out;
@@ -306,9 +311,11 @@ export function planSplit(input: SplitInput): SplitPlan {
   if (!Number.isFinite(buffer) || buffer < 0) return fail('FBA inbound buffer days must be zero or more.');
   // The transit map comes off a network response, so a dropped LOV row must not
   // silently become a zero-day leg that lands the day it ships.
-  const missing = REQUIRED_TRANSIT_KEYS.filter(k => !Number.isFinite(transitDays?.[k]));
-  if (missing.length) {
-    return fail(`Missing shipment transit days for ${missing.map(methodCaption).join(', ')} — check the SHIPMENT_TYPE list of values.`);
+  // Zero is as wrong as absent: a 0-day leg arrives the day it ships, and a
+  // negative one arrives before it ships. Both silently move the schedule.
+  const badTransit = REQUIRED_TRANSIT_KEYS.filter(k => !(transitDays?.[k] > 0));
+  if (badTransit.length) {
+    return fail(`Missing or non-positive shipment transit days for ${badTransit.map(methodCaption).join(', ')} — check the SHIPMENT_TYPE list of values.`);
   }
   // growth scales every day of the curve, so growth 0 is as blank as an empty forecast.
   if (!(curve.growth > 0) || Object.values(curve.productDemand).every(v => !v)) {
@@ -352,6 +359,10 @@ export function planSplit(input: SplitInput): SplitPlan {
   const target = demandOverWindow(fbaSellable, addDays(fbaSellable, targetDoc), curve);
   const onHandAtSellable = projectedFbaAt(fbaSellable, fbaOnHand, inbound, curve, today);
   const needUnits = Math.max(0, target - onHandAtSellable);
+  // Round once and derive, so prose and the structured fields beside it agree.
+  const targetShown = Math.round(target);
+  const onHandShown = Math.round(onHandAtSellable);
+  const needShown = Math.max(0, targetShown - onHandShown);
   const batchUnits = floorToCartons(units, pkg);
   const fbaUnits = Math.min(floorToCartons(needUnits, pkg), batchUnits);
   const awdUnits = units - fbaUnits;
@@ -380,9 +391,9 @@ export function planSplit(input: SplitInput): SplitPlan {
 
   const legs: SplitLeg[] = [];
   if (fbaUnits > 0) {
-    const ledger = `${targetDoc} DOC from ${localDateKey(fbaSellable)} is ${Math.round(target)} units of demand (through ${localDateKey(lastCoveredDay)}), less ${Math.round(onHandAtSellable)} projected on hand = ${Math.round(needUnits)} needed`;
+    const ledger = `${targetDoc} DOC from ${localDateKey(fbaSellable)} is ${targetShown} units of demand (through ${localDateKey(lastCoveredDay)}), less ${onHandShown} projected on hand = ${needShown} needed`;
     const sizing = batchIsBinding
-      ? `The batch only holds ${units} units, so all of it goes to FBA and still lands ${Math.round(needUnits) - fbaUnits} units short of target.`
+      ? `The batch only holds ${units} units, so all of it goes to FBA and still lands ${needShown - fbaUnits} units short of target.`
       : `Rounded down to whole cartons: ${fbaUnits / pkg} × ${pkg} = ${fbaUnits} units.`;
     legs.push({
       destination: 'FBA', units: fbaUnits, cartons: fbaUnits / pkg, method,
@@ -420,12 +431,16 @@ export function planSplit(input: SplitInput): SplitPlan {
 
   return {
     ok: true, units, legs, transfers, series,
-    targetUnits: Math.round(target),
-    onHandAtSellable: Math.round(onHandAtSellable),
-    shortfallUnits: Math.round(Math.max(0, needUnits - fbaUnits)),
+    targetUnits: targetShown,
+    onHandAtSellable: onHandShown,
+    shortfallUnits: Math.max(0, needShown - fbaUnits),
     autoMethod: selected.method,
     methodOverridden: override !== undefined,
     shipDate: localDateKey(shipDate),
+    sellableDate: localDateKey(fbaSellable),
+    walkWindow: series.length
+      ? { from: series[0].date, to: series[series.length - 1].date }
+      : null,
     fbaDocAtArrival: docAtArrival,
     fbaOosDate: oos ? localDateKey(oos) : null,
     leftoverAwdUnits: leftover,
@@ -547,6 +562,28 @@ export function scheduleTransfers(
     if (docBefore.days >= targetDoc) continue;
 
     const need = demandOverWindow(arrival, addDays(arrival, targetDoc), curve) - before;
+
+    // Merging folds this week's move into the previous row, which means it
+    // ships on THAT row's earlier order date. Only legal if the stock had
+    // already landed at AWD by then — otherwise the row would instruct moving
+    // goods that are still at sea. When they straddle a pool arrival we split
+    // instead, so every row stays executable exactly as written.
+    const prev = emitted[emitted.length - 1];
+    const inMergeWindow = prev !== undefined
+      && daysBetween(arrival, prev.arrival) <= TRANSFER_MERGE_WINDOW_DAYS;
+    const mergeQty = inMergeWindow
+      ? floorToCartons(Math.min(need, awd.availableAt(prev!.orderDate)), pkg)
+      : 0;
+
+    if (inMergeWindow && mergeQty > 0) {
+      const drawn = awd.draw(prev!.orderDate, mergeQty);
+      if (drawn > 0) {
+        prev!.units += drawn;
+        onHandCache = null; // the projection must see these units
+        continue;
+      }
+    }
+
     const qty = floorToCartons(Math.min(need, awd.availableAt(orderDate)), pkg);
     if (qty <= 0) continue;
 
@@ -554,12 +591,6 @@ export function scheduleTransfers(
     if (drawn <= 0) continue;
     onHandCache = null; // the projection must see these units
 
-    const prev = emitted[emitted.length - 1];
-    if (prev && daysBetween(arrival, prev.arrival) <= TRANSFER_MERGE_WINDOW_DAYS) {
-      // Same move, pulled forward to the earlier landing date.
-      prev.units += drawn;
-      continue;
-    }
     emitted.push({ orderDate, arrival, units: drawn, docBefore });
   }
 

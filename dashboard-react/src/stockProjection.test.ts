@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { MonthSeasonInfo } from './planTypes';
 import {
   buildWeeklyProjection, demandOverWindow, forwardDoc, dailyDemandOn,
+  parseLocalDate, localDateKey,
   type DemandCurve,
 } from './stockProjection';
 
@@ -18,6 +19,25 @@ const DEMAND: Record<number, number> = {
 
 const NOW = new Date(2026, 7, 7);   // 2026-08-07
 const END = new Date(2027, 2, 29);  // 2027-03-29
+
+describe('parseLocalDate', () => {
+  it('reads a bare YYYY-MM-DD as local midnight, not UTC midnight', () => {
+    // The whole point: `new Date('2026-09-19')` is UTC and reads back as the
+    // 18th anywhere west of Greenwich. Tests run pinned to America/Los_Angeles.
+    expect(parseLocalDate('2026-09-19')).toEqual(new Date(2026, 8, 19));
+    expect(localDateKey(parseLocalDate('2026-09-19')!)).toBe('2026-09-19');
+  });
+
+  it('still parses a timestamped string', () => {
+    expect(localDateKey(parseLocalDate('2026-09-19T13:45:00')!)).toBe('2026-09-19');
+  });
+
+  it('returns null for empty or unparseable input', () => {
+    expect(parseLocalDate('')).toBeNull();
+    expect(parseLocalDate(null)).toBeNull();
+    expect(parseLocalDate('not a date')).toBeNull();
+  });
+});
 
 describe('buildWeeklyProjection', () => {
   const curve: DemandCurve = { productDemand: DEMAND, familySeason: SEASON, growth: 1.0 };
