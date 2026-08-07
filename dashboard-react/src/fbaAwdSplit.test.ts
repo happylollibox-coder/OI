@@ -37,11 +37,13 @@ const base: SplitInput = {
   transitDays: { FAST_SEA: 27, SLOW_SEA: 33, AWD_SLOW_SEA: 63, AWD_TRANSFER: 14 },
   fbaInboundBufferDays: 10,
   today: TODAY,
-  // 45 days LIVE at FBA, 100 across FBA + AWD. On the flat curve that is 450
-  // and 1000 units from the 2026-09-18 sellable date. Transfers are ordered
-  // when cover falls to 30 — the Seller Central min — and restore the 45.
+  // Four levels. A direct delivery fills FBA to 60 days; transfers are ordered
+  // when cover falls to 30 — the Seller Central min — and restore 45, the max.
+  // FBA and AWD hold 100 together. On the flat curve, from the 2026-09-18
+  // sellable date, those are 600 / 450 / 1000 units respectively.
   fbaTargetDoc: 45,
   fbaReorderDoc: 30,
+  fbaBatchDoc: 60,
   totalTargetDoc: 100,
 };
 
@@ -130,8 +132,8 @@ describe('shipment classification', () => {
 });
 
 describe('planSplit — sizing', () => {
-  it('sends everything to FBA when the batch cannot even fill the live level', () => {
-    // 10 units/day => 45 DOC needs 450 units live at FBA. Batch is 300.
+  it('sends everything to FBA when the batch cannot even fill the delivery level', () => {
+    // 10 units/day => the 60-day delivery fill needs 600 units at FBA. Batch is 300.
     const plan = planSplit({ ...base, cartons: 30, fbaOnHand: 0 });
     expect(plan.ok).toBe(true);
     const fba = plan.legs.find(l => l.destination === 'FBA')!;
@@ -149,18 +151,32 @@ describe('planSplit — sizing', () => {
     expect(plan.warnings.join(' ')).toMatch(/already at or above/i);
   });
 
-  it('splits a large batch between both destinations, sizing FBA to the live level only', () => {
+  it('splits a large batch between both destinations, sizing FBA to the delivery fill only', () => {
     const plan = planSplit({ ...base, cartons: 500, fbaOnHand: 0 });
     const fba = plan.legs.find(l => l.destination === 'FBA')!;
     const awd = plan.legs.find(l => l.destination === 'AWD')!;
-    // 45 DOC from 2026-09-18 is exactly 450 units on the flat curve; the other
-    // 4,550 sit at AWD, where storage is cheap. Sized to the 100-day combined
-    // target the FBA leg would have been 1,000 — this is the whole fix.
-    expect(fba.units).toBe(450);
-    expect(awd.units).toBe(4550);
-    expect(plan.targetUnits).toBe(450);
+    // 60 DOC from 2026-09-18 is exactly 600 units on the flat curve — 13 days
+    // of September, 31 of October and 16 of November at 10/day. The other 4,400
+    // sit at AWD, where storage is cheap. Sized to the 100-day combined target
+    // the FBA leg would have been 1,000 — this is the whole original fix.
+    expect(fba.units).toBe(600);
+    expect(awd.units).toBe(4400);
+    expect(plan.targetUnits).toBe(600);
     expect(plan.onHandAtSellable).toBe(0);
     expect(plan.shortfallUnits).toBe(0);
+  });
+
+  it('sizes the FBA leg to the DELIVERY level, never to the transfer level', () => {
+    // The distinction the fourth level exists for. Same batch, same curve: the
+    // free manufacturer → FBA leg lands 60 days of cover, not the 45 a paid
+    // move out of AWD would restore. 150 units — 15 days — is what the deeper
+    // fill buys, and it is the gap between the two levels on the flat curve.
+    const plan = planSplit({ ...base, cartons: 500 });
+    const asIfTransfer = planSplit({ ...base, cartons: 500, fbaBatchDoc: base.fbaTargetDoc });
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(600);
+    expect(asIfTransfer.legs.find(l => l.destination === 'FBA')!.units).toBe(450);
+    expect(plan.fbaDocAtArrival).toEqual({ days: 60, capped: false });
+    expect(asIfTransfer.fbaDocAtArrival).toEqual({ days: 45, capped: false });
   });
 
   it('rounds the FBA leg down to whole cartons', () => {
@@ -324,28 +340,28 @@ describe('planSplit — daily evaluation', () => {
 });
 
 describe('planSplit — seasonality', () => {
-  // Same batch and same 45-day window (2026-09-18 → 2026-11-01), but November's
+  // Same batch and same 60-day window (2026-09-18 → 2026-11-16), but November's
   // demand is concentrated into its last 12 days (BFCM). The window catches
-  // only Nov 1, which pays the below-average offseason rate of 300/42 = 7.14
-  // rather than the flat 10, so the requirement lands just under the flat-curve
-  // 450. Monthly totals are identical either way.
+  // Nov 1-16, all of which pay the below-average offseason rate of 300/42 =
+  // 7.14 rather than the flat 10, so the requirement lands under the flat-curve
+  // 600. Monthly totals are identical either way.
   const seasonal: DemandCurve = { productDemand: FLAT, familySeason: SEASON, growth: 1.0 };
 
   it('sizes the FBA leg off the daily curve, not the monthly average', () => {
     const flat = planSplit({ ...base, cartons: 500 });
     const peaky = planSplit({ ...base, cartons: 500, curve: seasonal });
-    expect(flat.legs.find(l => l.destination === 'FBA')!.units).toBe(450);
-    // 13x10 + 31x10 + 7.14 = 447.14 -> 44 cartons -> 440 units.
-    expect(peaky.legs.find(l => l.destination === 'FBA')!.units).toBe(440);
+    expect(flat.legs.find(l => l.destination === 'FBA')!.units).toBe(600);
+    // 13x10 + 31x10 + 16x(300/42) = 130 + 310 + 114.29 = 554.29 -> 55 cartons -> 550.
+    expect(peaky.legs.find(l => l.destination === 'FBA')!.units).toBe(550);
   });
 
   it('does not cry "too small" over a sub-carton rounding remainder', () => {
-    // target 447.14 floors to 440, leaving a 7.14-unit remnant — not a shortfall.
-    const exact = planSplit({ ...base, cartons: 44, curve: seasonal });
+    // target 554.29 floors to 550, leaving a 4.29-unit remnant — not a shortfall.
+    const exact = planSplit({ ...base, cartons: 55, curve: seasonal });
     expect(exact.legs.find(l => l.destination === 'AWD')).toBeUndefined();
     expect(exact.warnings.join(' ')).not.toMatch(/too small/i);
-    // A genuine three-carton gap against the flat curve's 450 still warns.
-    const short = planSplit({ ...base, cartons: 42 });
+    // A genuine three-carton gap against the flat curve's 600 still warns.
+    const short = planSplit({ ...base, cartons: 57 });
     expect(short.warnings.join(' ')).toMatch(/too small/i);
   });
 });
@@ -393,25 +409,25 @@ describe('planSplit — inbound shipments', () => {
   const inbound = (qty: number, status: ProjectionShipment['status'], route: string): ProjectionShipment[] =>
     [{ qty, arrival_date: '2026-09-01', status, route }];
 
-  it('counts confirmed FBA-bound stock against the live target', () => {
+  it('counts confirmed FBA-bound stock against the delivery fill', () => {
     // 300 land 2026-09-01; 170 units of demand burn before the batch is
-    // sellable on 09-18, leaving 130 on hand against the 450 live target.
+    // sellable on 09-18, leaving 130 on hand against the 600-unit delivery fill.
     const plan = planSplit({ ...base, shipments: inbound(300, 'transit', 'PO→MFR→FBA') });
     expect(plan.onHandAtSellable).toBe(130);
-    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(320);
-    expect(plan.legs.find(l => l.destination === 'AWD')!.units).toBe(680);
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(470);
+    expect(plan.legs.find(l => l.destination === 'AWD')!.units).toBe(530);
   });
 
   it('does not count AWD-bound stock as FBA cover', () => {
     const plan = planSplit({ ...base, shipments: inbound(900, 'transit', 'MFR→AWD') });
     expect(plan.onHandAtSellable).toBe(0);
-    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(450);
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(600);
   });
 
   it('ignores unconfirmed shipments', () => {
     const plan = planSplit({ ...base, shipments: inbound(900, 'suggested', 'PO→MFR→FBA') });
     expect(plan.onHandAtSellable).toBe(0);
-    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(450);
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(600);
   });
 });
 
@@ -442,15 +458,17 @@ describe('planSplit — constants and guards', () => {
     expect(planSplit({ ...base, fbaTargetDoc: 0 }).error).toMatch(/FBA target days of cover/i);
   });
 
-  it('refuses a combined target below the FBA target, which would ask AWD to hold negative days', () => {
-    const plan = planSplit({ ...base, fbaTargetDoc: 45, totalTargetDoc: 30 });
+  it('refuses a combined target below the batch fill, which would ask AWD to hold negative days', () => {
+    const plan = planSplit({ ...base, fbaTargetDoc: 45, fbaBatchDoc: 60, totalTargetDoc: 30 });
     expect(plan.ok).toBe(false);
     expect(plan.error).toMatch(/combined target days of cover/i);
     expect(plan.legs).toEqual([]);
   });
 
-  it('accepts a combined target equal to the FBA target — a reserve of zero days is coherent', () => {
-    const plan = planSplit({ ...base, cartons: 500, fbaTargetDoc: 45, totalTargetDoc: 45 });
+  it('accepts a combined target equal to the batch fill — a reserve of zero days is coherent', () => {
+    const plan = planSplit({
+      ...base, cartons: 500, fbaTargetDoc: 45, fbaBatchDoc: 45, totalTargetDoc: 45,
+    });
     expect(plan.ok).toBe(true);
     expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(450);
     expect(plan.legs.find(l => l.destination === 'AWD')!.reason).toMatch(/reserve carries no days of its own/i);
@@ -459,6 +477,69 @@ describe('planSplit — constants and guards', () => {
   it('refuses negative on-hand figures', () => {
     expect(planSplit({ ...base, fbaOnHand: -1 }).error).toMatch(/FBA on-hand/i);
     expect(planSplit({ ...base, awdOnHand: -1 }).error).toMatch(/AWD on-hand/i);
+  });
+});
+
+// ─── The four levels must stack in one order ────────────────
+//
+//   0 < fbaReorderDoc < fbaTargetDoc <= fbaBatchDoc <= totalTargetDoc
+//
+// Each link is a physical claim, not a convention. Cover falls TO the reorder
+// point, so it must sit under the level a move restores; a delivery costs no
+// transfer handling, so it can never stop shallower than a paid move would;
+// and the pair cannot be asked to hold less than one of its halves already does.
+describe('planSplit — the four-level ordering guard', () => {
+  const ok = (over: Partial<SplitInput>) => planSplit({ ...base, ...over });
+
+  it('accepts the levels in their intended order', () => {
+    expect(ok({}).ok).toBe(true);
+    // And accepts both ends collapsed: a delivery that fills exactly to the
+    // transfer target, and one that fills the whole combined position.
+    expect(ok({ fbaBatchDoc: 45 }).ok).toBe(true);
+    expect(ok({ fbaBatchDoc: 100 }).ok).toBe(true);
+  });
+
+  it('refuses a reorder point at or below zero — nothing would ever trigger a move', () => {
+    expect(ok({ fbaReorderDoc: 0 }).ok).toBe(false);
+    expect(ok({ fbaReorderDoc: 0 }).error).toMatch(/FBA reorder days of cover/i);
+    expect(ok({ fbaReorderDoc: -5 }).error).toMatch(/FBA reorder days of cover/i);
+  });
+
+  it('refuses a reorder point at or above the transfer target — every day would trigger', () => {
+    expect(ok({ fbaReorderDoc: 45 }).error).toMatch(/FBA reorder days of cover/i);
+    expect(ok({ fbaReorderDoc: 50 }).error).toMatch(/FBA reorder days of cover/i);
+  });
+
+  it('refuses a batch fill below the transfer target — the free leg cannot be the shallow one', () => {
+    const plan = ok({ fbaBatchDoc: 44 });
+    expect(plan.ok).toBe(false);
+    expect(plan.error).toMatch(/batch fill days of cover/i);
+    expect(plan.error).toMatch(/no transfer handling/i);
+    expect(plan.legs).toEqual([]);
+  });
+
+  it('refuses a batch fill above the combined target — the reserve would owe days', () => {
+    const plan = ok({ fbaBatchDoc: 101 });
+    expect(plan.ok).toBe(false);
+    expect(plan.error).toMatch(/combined target days of cover/i);
+    expect(plan.legs).toEqual([]);
+  });
+
+  it('refuses a non-finite batch fill rather than sizing the leg off NaN', () => {
+    expect(ok({ fbaBatchDoc: NaN }).error).toMatch(/batch fill days of cover/i);
+    expect(ok({ fbaBatchDoc: Infinity }).ok).toBe(false);
+  });
+
+  it('rejects, never silently reorders: each bad arrangement fails on its own message', () => {
+    // Four distinct complaints, so the operator is told which relationship broke.
+    const messages = [
+      ok({ fbaTargetDoc: 0 }).error,
+      ok({ fbaReorderDoc: 45 }).error,
+      ok({ fbaBatchDoc: 30 }).error,
+      ok({ totalTargetDoc: 50 }).error,
+    ];
+    expect(new Set(messages).size).toBe(4);
+    expect(messages.every(m => typeof m === 'string' && m.length > 0)).toBe(true);
   });
 });
 
@@ -509,52 +590,78 @@ describe('planSplit — reasons that match the arithmetic', () => {
   it('says the batch is the binding constraint instead of stating a false equation', () => {
     const plan = planSplit({ ...base, cartons: 30 });
     const reason = plan.legs.find(l => l.destination === 'FBA')!.reason;
-    expect(reason).toMatch(/450 units of demand/);
+    expect(reason).toMatch(/600 units of demand/);
     expect(reason).toMatch(/batch only holds 300 units/i);
-    expect(reason).toMatch(/150 units short of target/i);
-    expect(plan.shortfallUnits).toBe(150);
+    expect(reason).toMatch(/300 units short of target/i);
+    expect(plan.shortfallUnits).toBe(300);
   });
 
   it('names the carton rounding when that is what bit', () => {
     const seasonal = { productDemand: FLAT, familySeason: SEASON, growth: 1.0 };
     const plan = planSplit({ ...base, cartons: 500, curve: seasonal });
     const reason = plan.legs.find(l => l.destination === 'FBA')!.reason;
-    // 447 needed -> 44 cartons -> 440 units.
-    expect(reason).toMatch(/447 needed/);
-    expect(reason).toMatch(/44 × 10 = 440 units/);
+    // 554 needed -> 55 cartons -> 550 units.
+    expect(reason).toMatch(/554 needed/);
+    expect(reason).toMatch(/55 × 10 = 550 units/);
+  });
+
+  it('names the DELIVERY level in the FBA leg ledger, not the transfer level', () => {
+    // The sentence has to say which of the four levels produced the number
+    // beside it, or the ledger reads as though a transfer had been sized.
+    const reason = planSplit({ ...base, cartons: 500 }).legs.find(l => l.destination === 'FBA')!.reason;
+    expect(reason).toMatch(/60 DOC from 2026-09-18 is 600 units of demand \(through 2026-11-16\)/);
+    expect(reason).not.toMatch(/45 DOC/);
   });
 
   it('explains the AWD leg on its own terms when nothing goes to FBA', () => {
     const plan = planSplit({ ...base, fbaOnHand: 50_000 });
     const reason = plan.legs.find(l => l.destination === 'AWD')!.reason;
     expect(reason).not.toMatch(/remainder/i);
-    expect(reason).toMatch(/already at or above 45 DOC/i);
+    expect(reason).toMatch(/already at or above 60 DOC/i);
     expect(reason).toMatch(/AWD Slow Sea is the default AWD route \(63d\)/);
     // The transfer lead is AWD_TRANSFER alone — door to sellable, with no FBA
     // inbound buffer added on top of it.
     expect(reason).toMatch(/takes 14d door to sellable/);
     expect(reason).not.toMatch(/10d inbound/);
+    // Transfers are untouched by the deeper delivery fill: still ordered at the
+    // reorder point, still sized to the transfer target.
     expect(reason).toMatch(/ordered when cover falls to 30 days and sized to restore 45/);
   });
 
   it('says what the AWD leg holds and against which target, not just that it is what is left', () => {
-    // 55-day AWD share of the 100-day combined target, measured from the AWD
-    // leg's own 2026-10-14 landing: 55 x 10 = 550 units on the flat curve.
+    // The reserve's share is the combined target LESS THE DELIVERY FILL — 100 −
+    // 60 = 40 days — because both legs come out of one batch and this delivery
+    // already put 60 days at FBA. Measured from the AWD leg's own 2026-10-14
+    // landing: 40 x 10 = 400 units on the flat curve.
     const plan = planSplit({ ...base, cartons: 500 });
     const reason = plan.legs.find(l => l.destination === 'AWD')!.reason;
     expect(reason).not.toMatch(/remainder/i);
-    expect(reason).toMatch(/55-day AWD share of the 100-day combined target/);
-    expect(reason).toMatch(/550 units of demand from 2026-10-14/);
-    // 4,550 against a 550-unit share — it covers it, and says by how much.
+    expect(reason).toMatch(/40-day AWD share of the 100-day combined target/);
+    expect(reason).toMatch(/400 units of demand from 2026-10-14/);
+    // 4,400 against a 400-unit share — it covers it, and says by how much.
     expect(reason).toMatch(/4000 units to spare/);
+    // And it says where the 40 came from, so the subtraction is checkable.
+    expect(reason).toMatch(/what is left once this delivery puts 60 days at FBA/);
   });
 
   it('says how far short the AWD leg falls when the reserve is underfilled', () => {
-    // 600-unit batch: 450 live at FBA leaves 150 for a 550-unit reserve share.
-    const plan = planSplit({ ...base, cartons: 60 });
+    // 650-unit batch: 600 fill FBA to 60 days, leaving 50 for a 400-unit share.
+    const plan = planSplit({ ...base, cartons: 65 });
     const reason = plan.legs.find(l => l.destination === 'AWD')!.reason;
-    expect(reason).toMatch(/Holds 150 of the 550 units/);
-    expect(reason).toMatch(/400 short of it/);
+    expect(reason).toMatch(/Holds 50 of the 400 units/);
+    expect(reason).toMatch(/350 short of it/);
+  });
+
+  it('keeps the reserve share consistent with the combined target arithmetic', () => {
+    // The regression guard for prose drift. Whatever the delivery fill is, the
+    // share the sentence claims plus that fill must be the combined target —
+    // otherwise a perfectly sized batch would read as overstock.
+    for (const fbaBatchDoc of [45, 60, 80]) {
+      const plan = planSplit({ ...base, cartons: 500, fbaBatchDoc });
+      const reason = plan.legs.find(l => l.destination === 'AWD')!.reason;
+      const share = Number(/(\d+)-day AWD share of the (\d+)-day combined target/.exec(reason)![1]);
+      expect(share + fbaBatchDoc).toBe(base.totalTargetDoc);
+    }
   });
 
   it('names the cheaper option it rejected when it escalates', () => {
@@ -593,14 +700,14 @@ describe('planSplit — daily series', () => {
     const plan = planSplit({ ...base, cartons: 800 });
     const batchDay = plan.series.find(d => d.arrivalNote === 'FBA batch')!;
     expect(batchDay.date).toBe('2026-09-18');
-    expect(batchDay.arrivals).toBe(450);
-    expect(batchDay.fbaUnits).toBe(450);
-    expect(batchDay.doc).toBe(45); // exactly the live target, by construction
+    expect(batchDay.arrivals).toBe(600);
+    expect(batchDay.fbaUnits).toBe(600);
+    expect(batchDay.doc).toBe(60); // exactly the delivery fill, by construction
     expect(batchDay.docCapped).toBe(false);
 
     const awdDay = plan.series.find(d => d.arrivalNote === 'AWD batch')!;
     expect(awdDay.date).toBe('2026-10-14');
-    expect(awdDay.awdUnits).toBe(7550);
+    expect(awdDay.awdUnits).toBe(7400);
   });
 
   it('moves units out of AWD on the order date and into FBA on arrival', () => {
@@ -622,31 +729,36 @@ describe('planSplit — daily series', () => {
 });
 
 describe('planSplit — a plan with nothing to warn about', () => {
-  it('says nothing when the batch fills FBA to the live level and the pair to the combined one', () => {
+  it('says nothing when the batch fills FBA to the delivery level and the pair to the combined one', () => {
     // 600 on hand runs to 2026-10-06, so the cheapest route lands in time and
-    // the sellable date is 09-24. 128 units survive to it; +320 makes 448 live
-    // (44 DOC), and the 550 sent to AWD bring the pair to 998 — two units under
-    // the 1,000 the 100-day combined target asks for, which is inside a carton.
+    // the sellable date is 09-24. 128 units survive to it; the 60-day fill from
+    // 09-24 is 7x10 + 31x10 + 22x10 = 600 units, so 472 are needed and 470
+    // whole cartons go. That makes 598 live (59 DOC), and the 400 sent to AWD
+    // bring the pair to 998 — two units under the 1,000 the 100-day combined
+    // target asks for, which is inside a carton.
     const plan = planSplit({ ...base, cartons: 87, fbaOnHand: 600 });
     expect(plan.warnings).toEqual([]);
     expect(plan.legs.find(l => l.destination === 'FBA')!.method).toBe('SLOW_SEA');
-    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(320);
-    expect(plan.legs.find(l => l.destination === 'AWD')!.units).toBe(550);
-    expect(plan.fbaDocAtArrival).toEqual({ days: 44, capped: false });
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(470);
+    expect(plan.legs.find(l => l.destination === 'AWD')!.units).toBe(400);
+    expect(plan.fbaDocAtArrival).toEqual({ days: 59, capped: false });
     expect(plan.combinedDocAtArrival).toEqual({ days: 99, capped: false });
-    // Three moves at the min/max cadence empty the 550-unit reserve: each is
-    // ordered as cover reaches 30 and restores what the pool can still afford.
+    // Three moves at the min/max cadence empty the 400-unit reserve. The first
+    // can only be ordered once the AWD leg lands on 10-14; by its 10-28 landing
+    // FBA is down to 258 units (25 DOC), and 190 whole cartons is what the
+    // 45-day transfer target asks for. Each later move fires as cover reaches
+    // 30 again, 14 days apart, restoring what the pool can still afford.
     expect(plan.transfers.map(t => [t.orderDate, t.arrivalDate, t.units])).toEqual([
-      ['2026-10-14', '2026-10-28', 340],
+      ['2026-10-14', '2026-10-28', 190],
       ['2026-10-28', '2026-11-11', 140],
       ['2026-11-11', '2026-11-25', 70],
     ]);
-    expect(plan.transfers.reduce((s, t) => s + t.units, 0)).toBe(550);
+    expect(plan.transfers.reduce((s, t) => s + t.units, 0)).toBe(400);
     expect(plan.leftoverAwdUnits).toBe(0);
   });
 
   it('reports days of cover at arrival, flagging a saturated reading', () => {
-    expect(planSplit(base).fbaDocAtArrival).toEqual({ days: 45, capped: false });
+    expect(planSplit(base).fbaDocAtArrival).toEqual({ days: 60, capped: false });
     expect(planSplit({ ...base, fbaOnHand: 50_000 }).fbaDocAtArrival).toEqual({ days: 400, capped: true });
   });
 });
@@ -709,8 +821,8 @@ describe('planSplit — the pool is never overdrawn', () => {
 describe('planSplit — transfers respect the carton multiple against a ragged pool', () => {
   it('rounds every transfer to whole cartons even when the pool is not a multiple', () => {
     // 353 units at pkg 7 leaves a 3-unit remainder that can never move. 60
-    // cartons = 420 units, under the 450 live target, so the whole batch goes
-    // to FBA and the pool stays exactly the ragged 353 on hand.
+    // cartons = 420 units, under the 600-unit delivery fill, so the whole batch
+    // goes to FBA and the pool stays exactly the ragged 353 on hand.
     const plan = planSplit({ ...base, packageQuantity: 7, awdOnHand: 353, cartons: 60 });
     expect(plan.transfers.length).toBeGreaterThan(0);
     for (const t of plan.transfers) {
@@ -734,13 +846,13 @@ describe('planSplit — timezone safety', () => {
     // divert 200 units to AWD purely because of the viewer's clock.
     const plan = planSplit({ ...base, cartons: 500, shipments: ship('2026-09-19') });
     expect(plan.onHandAtSellable).toBe(0);
-    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(450);
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(600);
   });
 
   it('counts a shipment landing exactly on the sellable date', () => {
     const plan = planSplit({ ...base, cartons: 500, shipments: ship('2026-09-18') });
     expect(plan.onHandAtSellable).toBe(200);
-    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(250);
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(400);
   });
 });
 
@@ -790,11 +902,11 @@ describe('planSplit — the panel’s anchors', () => {
   });
 
   it('reports the combined position alongside the live one', () => {
-    // 5,000-unit batch, nothing on hand: 450 live at FBA (45 DOC) and 4,550 at
+    // 5,000-unit batch, nothing on hand: 600 live at FBA (60 DOC) and 4,400 at
     // AWD. The pair is 5,000 units from 2026-09-18, which at 10/day is 400 days
     // — the cap, so the reading says so rather than claiming a precise 500.
     const plan = planSplit({ ...base, cartons: 500 });
-    expect(plan.fbaDocAtArrival).toEqual({ days: 45, capped: false });
+    expect(plan.fbaDocAtArrival).toEqual({ days: 60, capped: false });
     expect(plan.combinedDocAtArrival).toEqual({ days: 400, capped: true });
   });
 
@@ -804,29 +916,32 @@ describe('planSplit — the panel’s anchors', () => {
     const withReserve = planSplit({ ...base, cartons: 60, awdOnHand: 2_000 });
     const without = planSplit({ ...base, cartons: 60 });
     expect(withReserve.fbaDocAtArrival).toEqual(without.fbaDocAtArrival);
-    // 450 live + 150 to AWD + 2,000 on hand = 2,600 units at 10/day = 260 days.
+    // The 600-unit batch fills FBA to exactly 60 days and nothing is left for
+    // the AWD leg, so 600 live + 2,000 on hand = 2,600 units at 10/day = 260 days.
     expect(withReserve.combinedDocAtArrival).toEqual({ days: 260, capped: false });
     expect(without.combinedDocAtArrival).toEqual({ days: 60, capped: false });
   });
 
   it('measures cover at arrival from the sellable date, not the dock date', () => {
-    // A curve that steps — 10/day in September, 20/day in October — so the
-    // 10-day inbound buffer visibly changes the reading: 760 units read 45 days
-    // from the 09-18 sellable date but 49 from the 09-08 dock date, because the
-    // earlier window spends more of itself on cheap September days.
+    // A curve that steps — 10/day in September, 20/day in October, 60/day in
+    // November — so the 10-day inbound buffer visibly changes the reading. The
+    // 60-day fill from the 09-18 sellable date is 13x10 + 31x20 + 16x60 = 1,710
+    // units; read from the 09-08 dock date the same stock lasts 68 days,
+    // because it starts by spending ten cheap September days and then runs out
+    // partway through expensive November instead of on its last day.
     const step: DemandCurve = {
-      productDemand: { ...FLAT, 202609: 300, 202610: 620, 202611: 300 },
+      productDemand: { ...FLAT, 202609: 300, 202610: 620, 202611: 1800 },
       familySeason: {}, growth: 1.0,
     };
     const plan = planSplit({ ...base, cartons: 500, curve: step, fbaOnHand: 300 });
     const fba = plan.legs.find(l => l.destination === 'FBA')!;
     const stock = plan.onHandAtSellable + fba.units;
-    expect(stock).toBe(760); // 13x10 + 31x20 + 1x10
+    expect(stock).toBe(1710); // 13x10 + 31x20 + 16x60
     expect(docFromStock(stock, parseKey(fba.sellableDate), step, 400))
       .toEqual(plan.fbaDocAtArrival);
     expect(docFromStock(stock, parseKey(fba.arrivalDate), step, 400))
-      .not.toEqual(plan.fbaDocAtArrival);
-    expect(plan.fbaDocAtArrival).toEqual({ days: 45, capped: false });
+      .toEqual({ days: 68, capped: false });
+    expect(plan.fbaDocAtArrival).toEqual({ days: 60, capped: false });
   });
 });
 
@@ -853,9 +968,9 @@ const realBatch: SplitInput = {
 
 describe('planSplit — the 12,000-unit batch', () => {
   it('sized the FBA leg at 11,760 of 12,000 when FBA was sized to the combined target', () => {
-    // The bug, reproduced through the new API: point the FBA leg at the 100-day
-    // number and the expensive warehouse takes 98% of the batch.
-    const old = planSplit({ ...realBatch, fbaTargetDoc: 100 });
+    // The bug, reproduced through the new API: point the delivery fill at the
+    // 100-day number and the expensive warehouse takes 98% of the batch.
+    const old = planSplit({ ...realBatch, fbaTargetDoc: 100, fbaBatchDoc: 100 });
     expect(old.ok).toBe(true);
     expect(old.targetUnits).toBe(12_000);          // 100 x 120
     expect(old.onHandAtSellable).toBe(240);
@@ -863,7 +978,7 @@ describe('planSplit — the 12,000-unit batch', () => {
     expect(old.legs.find(l => l.destination === 'AWD')!.units).toBe(240);
   });
 
-  it('sends 5,160 to FBA and 6,840 to AWD once FBA is sized to the live level', () => {
+  it('sends 6,960 to FBA and 5,040 to AWD once FBA is sized to the delivery fill', () => {
     const plan = planSplit(realBatch);
     expect(plan.ok).toBe(true);
     expect(plan.units).toBe(12_000);
@@ -871,27 +986,30 @@ describe('planSplit — the 12,000-unit batch', () => {
 
     const fba = plan.legs.find(l => l.destination === 'FBA')!;
     const awd = plan.legs.find(l => l.destination === 'AWD')!;
-    // 45 x 120 = 5,400 live, less the 240 already there = 5,160 (430 cartons).
-    expect(plan.targetUnits).toBe(5_400);
+    // 60 x 120 = 7,200 at FBA, less the 240 already there = 6,960 (580 cartons).
+    expect(plan.targetUnits).toBe(7_200);
     expect(plan.onHandAtSellable).toBe(240);
-    expect(fba.units).toBe(5_160);
-    expect(fba.cartons).toBe(430);
-    expect(awd.units).toBe(6_840);
-    expect(awd.cartons).toBe(570);
+    expect(fba.units).toBe(6_960);
+    expect(fba.cartons).toBe(580);
+    expect(awd.units).toBe(5_040);
+    expect(awd.cartons).toBe(420);
 
-    // 6,600 units moved out of the expensive warehouse, and AWD now holds the
-    // bulk — the whole point of the change.
-    expect(11_760 - fba.units).toBe(6_600);
-    expect(awd.units).toBeGreaterThan(fba.units);
+    // 4,800 units still kept out of the expensive warehouse against the
+    // original bug — the deeper fill spends 1,800 of the 6,600 the 45-day
+    // sizing saved, and buys 15 transfer-free days with it.
+    expect(11_760 - fba.units).toBe(4_800);
+    expect(planSplit({ ...realBatch, fbaBatchDoc: 45 })
+      .legs.find(l => l.destination === 'FBA')!.units).toBe(5_160);
     expect(fba.units + awd.units).toBe(plan.units);
   });
 
-  it('lands 45 days live at FBA and 102 across the pair', () => {
+  it('lands 60 days at FBA and 102 across the pair', () => {
     const plan = planSplit(realBatch);
-    // 240 + 5,160 = 5,400 = 45 days at 120/day.
-    expect(plan.fbaDocAtArrival).toEqual({ days: 45, capped: false });
+    // 240 + 6,960 = 7,200 = 60 days at 120/day.
+    expect(plan.fbaDocAtArrival).toEqual({ days: 60, capped: false });
     // The pair is 12,240 units = 102 days — the whole batch plus what survived
-    // at FBA, against a 100-day combined target.
+    // at FBA, against a 100-day combined target. Unchanged by the split: moving
+    // the line between the legs cannot move their sum.
     expect(plan.combinedDocAtArrival).toEqual({ days: 102, capped: false });
     // 102 against 100 is carton quantisation, not overstock: it stays quiet.
     expect(plan.warnings.join(' ')).not.toMatch(/overstock/i);
@@ -909,7 +1027,7 @@ describe('planSplit — inbound AWD stock', () => {
   const LANDS = '2026-10-09';
 
   it('counts it in the combined position exactly as AWD stock on hand would be', () => {
-    // 600-unit batch: 450 live at FBA, 150 to the AWD leg, plus 2,000 owned
+    // 600-unit batch: all 600 fill FBA to its 60-day level, plus 2,000 owned
     // elsewhere = 2,600 units from 2026-09-18, which at 10/day is 260 days.
     const inTransit = planSplit({ ...base, cartons: 60, awdInbound: [{ units: 2_000 }] });
     const onHand = planSplit({ ...base, cartons: 60, awdOnHand: 2_000 });
@@ -920,7 +1038,7 @@ describe('planSplit — inbound AWD stock', () => {
     expect(neither.combinedDocAtArrival).toEqual({ days: 60, capped: false });
     // FBA is untouched by it — it is not sellable, and it is not even at AWD yet.
     expect(inTransit.fbaDocAtArrival).toEqual(neither.fbaDocAtArrival);
-    expect(inTransit.legs.find(l => l.destination === 'FBA')!.units).toBe(450);
+    expect(inTransit.legs.find(l => l.destination === 'FBA')!.units).toBe(600);
   });
 
   it('states the arrival it had to assume instead of burying it', () => {
@@ -942,7 +1060,7 @@ describe('planSplit — inbound AWD stock', () => {
   });
 
   it('never lets a transfer be ordered before the stock has landed at AWD', () => {
-    // A 300-unit batch against a 450-unit live target goes entirely to FBA, so
+    // A 300-unit batch against a 600-unit delivery fill goes entirely to FBA, so
     // the AWD leg is empty and the only pool is the 5,000 units at sea. They are
     // unusable until 2026-10-09, and with daily evaluation that landing day is
     // itself the first day a move can be ordered against them.
@@ -965,7 +1083,7 @@ describe('planSplit — inbound AWD stock', () => {
     const plan = planSplit({ ...base, cartons: 400, awdOnHand: 2_500, awdInbound: [{ units: 1_000 }] });
     const pool = 2_500 + 1_000 + (plan.legs.find(l => l.destination === 'AWD')?.units ?? 0);
     const moved = plan.transfers.reduce((s, t) => s + t.units, 0);
-    expect(pool).toBe(7_050); // 2,500 on hand + 1,000 at sea + 3,550 of the batch
+    expect(pool).toBe(6_900); // 2,500 on hand + 1,000 at sea + 3,400 of the batch
     expect(moved).toBeGreaterThan(0);
     expect(moved + plan.leftoverAwdUnits).toBe(pool);
     expect(Math.min(...plan.series.map(d => d.awdUnits))).toBeGreaterThanOrEqual(0);
@@ -997,9 +1115,14 @@ describe('planSplit — inbound AWD stock', () => {
   });
 });
 
-describe('planSplit — the two shortfalls are different problems', () => {
-  it('calls out the live level when the batch cannot even fill FBA', () => {
-    // 300 units against a 450-unit live target, nothing left for the reserve.
+describe('planSplit — the three shortfalls are different problems', () => {
+  it('calls out the TRANSFER target when the batch cannot even reach it', () => {
+    // 300 units. The 45-day transfer target asks for 450 from 2026-09-18, so
+    // FBA lands at 30 days — under the level a move out of AWD would have
+    // restored — and nothing is left for the reserve to send. A stockout risk,
+    // and it is quoted against the 45-day level it names: 450 − 300 = 150 units
+    // and 45 − 30 = 15 days. Never the 60-day gap, which would print 300 units
+    // beside a 15-day figure and add up to nothing.
     const plan = planSplit({ ...base, cartons: 30 });
     const said = plan.warnings.join(' ');
     expect(said).toMatch(/too small to put 45 days live at FBA/);
@@ -1008,20 +1131,48 @@ describe('planSplit — the two shortfalls are different problems', () => {
     // Not the reorder message — this one is urgent and must not be diluted.
     expect(said).not.toMatch(/combined target/);
     expect(said).not.toMatch(/reorder/i);
+    // And not the 60-day complaint: a batch this small has a bigger problem.
+    expect(said).not.toMatch(/fill FBA to 60 days/);
   });
 
-  it('calls out the combined position when FBA is covered but the pair is thin', () => {
-    // 600 units: 450 go live at FBA, 150 reach AWD, so the pair holds 600 of
-    // the 1,000 units the 100-day combined target asks for.
+  it('calls out the DELIVERY fill when the batch clears 45 but misses 60', () => {
+    // 500 units: FBA lands at 50 days, comfortably above the 45 a transfer
+    // restores, so nothing is at risk — the batch simply stopped short of the
+    // free fill and the first paid move comes sooner. 600 − 500 = 100 units,
+    // 60 − 50 = 10 days.
+    const plan = planSplit({ ...base, cartons: 50 });
+    const said = plan.warnings.join(' ');
+    expect(plan.fbaDocAtArrival).toEqual({ days: 50, capped: false });
+    expect(said).toMatch(/too small to fill FBA to 60 days/);
+    expect(said).toMatch(/short by 100 units \(~10 days\)/);
+    expect(said).toMatch(/clears the 45-day transfer target/);
+    // Explicitly NOT the stockout message: cover is fine, this costs money.
+    expect(said).not.toMatch(/stockout risk/);
+    expect(said).not.toMatch(/45 days live at FBA/);
+  });
+
+  it('calls out the combined position when FBA is filled but the pair is thin', () => {
+    // 600 units: all of them fill FBA to its 60-day level and nothing reaches
+    // AWD, so the pair holds 600 of the 1,000 units the 100-day combined
+    // target asks for.
     const plan = planSplit({ ...base, cartons: 60 });
     const said = plan.warnings.join(' ');
-    expect(said).toMatch(/FBA is covered to 45 days/);
+    expect(said).toMatch(/FBA is covered to 60 days/);
     expect(said).toMatch(/hold 60 days against the 100-day combined target/);
     expect(said).toMatch(/short by 400 units \(~40 days\)/);
     expect(said).toMatch(/Reorder/);
-    // Not the stockout message — FBA is fine, this is a next-batch signal.
+    // Neither of the FBA messages — FBA is filled, this is a next-batch signal.
     expect(said).not.toMatch(/too small/i);
     expect(said).not.toMatch(/stockout risk/);
+  });
+
+  it('reports the delivery-fill gap and the combined gap together when both are real', () => {
+    // 500 units short-fills FBA AND leaves the pair at half the combined
+    // target. Neither is urgent, so neither is suppressed — the mutual
+    // exclusion exists to protect the stockout message, and there isn't one.
+    const said = planSplit({ ...base, cartons: 50 }).warnings.join(' ');
+    expect(said).toMatch(/too small to fill FBA to 60 days/);
+    expect(said).toMatch(/hold 50 days against the 100-day combined target/);
   });
 
   it('calls the pair overstock once it runs materially past the combined target', () => {
@@ -1071,7 +1222,7 @@ describe('planSplit — a 45-day buffer through a peak ramp', () => {
   // warning by construction — that is the fixture, not a finding.)
   const ramp: SplitInput = {
     ...base,
-    cartons: 500,
+    cartons: 1000,
     packageQuantity: 12,
     fbaOnHand: 12_000,
     awdOnHand: 60_000,
@@ -1084,25 +1235,31 @@ describe('planSplit — a 45-day buffer through a peak ramp', () => {
     const plan = planSplit(ramp);
     // Slow Sea lands in time (FBA runs to 2026-11-01), so sellable is 09-24.
     expect(plan.sellableDate).toBe('2026-09-24');
-    // 45 days from 09-24 = 7x100 + 31x200 + 7x300 = 9,000, less the 7,200
-    // still on hand = 1,800 live; the other 4,200 go to the reserve.
+    // 60 days from 09-24 = 7x100 + 31x200 + 18x300 + 4x600 = 700 + 6,200 +
+    // 5,400 + 2,400 = 14,700, less the 7,200 still on hand = 7,500 to FBA; the
+    // other 4,500 of the 12,000-unit batch go to the reserve.
     expect(plan.onHandAtSellable).toBe(7_200);
-    expect(plan.targetUnits).toBe(9_000);
-    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(1_800);
-    expect(plan.legs.find(l => l.destination === 'AWD')!.units).toBe(4_200);
-    expect(plan.fbaDocAtArrival).toEqual({ days: 45, capped: false });
+    expect(plan.targetUnits).toBe(14_700);
+    expect(plan.legs.find(l => l.destination === 'FBA')!.units).toBe(7_500);
+    expect(plan.legs.find(l => l.destination === 'AWD')!.units).toBe(4_500);
+    expect(plan.fbaDocAtArrival).toEqual({ days: 60, capped: false });
   });
 
   it('holds off until cover actually reaches the reorder point, then moves', () => {
     const plan = planSplit(ramp);
-    // Every day from 08-07 sees more than 30 days of cover at its landing date,
-    // so nothing is ordered. 09-25 is the first day whose landing date — 10-09,
-    // fourteen days on — reads exactly 30, and the move restores the 45.
+    // 14,700 units covers 09-24 through 11-22 exactly, so cover at a landing
+    // date X is simply the days from X to 11-22 — it first reads 30 on 10-24,
+    // which is 14 days after 10-10. Nothing is ordered before that.
+    //
+    // The move restores the 45-day TRANSFER target, not the 60-day delivery
+    // fill: 45 days from 10-24 is 8x200 + 12,600 + 7x400 = 17,000 units against
+    // 9,400 on hand, so 7,600 are needed and 633 whole cartons — 7,596 — move.
+    // The 4-unit carton remainder is what leaves cover at 44 rather than 45.
     expect(plan.transfers[0]).toMatchObject({
-      orderDate: '2026-09-25', arrivalDate: '2026-10-09', units: 5_700,
+      orderDate: '2026-10-10', arrivalDate: '2026-10-24', units: 7_596,
     });
     expect(plan.transfers[0].docBefore.days).toBe(30);
-    expect(plan.transfers[0].docAfter.days).toBe(45);
+    expect(plan.transfers[0].docAfter.days).toBe(44);
   });
 
   it('never runs FBA dry through the ramp', () => {
@@ -1138,10 +1295,13 @@ describe('planSplit — a cold start, now that the cadence is gone', () => {
     const on = (date: string) => plan.series.find(d => d.date === date)!;
 
     expect(plan.legs.find(l => l.destination === 'AWD')!.arrivalDate).toBe('2026-10-14');
-    // Ordered the very day it lands at AWD, sellable 14 days later — five days
-    // before the 5,400 units at FBA would have run out on 11-02.
+    // The 60-day fill puts 7,200 units at FBA on 09-18, which at 120/day lasts
+    // to 11-16 — so the handover is no longer tight at all. The first move is
+    // still ordered the very day the reserve lands, because by its 10-28
+    // landing FBA is down to 2,400 units (20 DOC), under the 30-day reorder
+    // point. It is sized to the 45-day transfer target: 5,400 − 2,400 = 3,000.
     expect(plan.transfers[0]).toMatchObject({
-      orderDate: '2026-10-14', arrivalDate: '2026-10-28', units: 4_800,
+      orderDate: '2026-10-14', arrivalDate: '2026-10-28', units: 3_000,
     });
     expect(on('2026-10-28').fbaUnits).toBe(5_400);  // restored to the 45-day level
     expect(on('2026-11-02').fbaUnits).toBe(4_800);  // where the old plan read zero

@@ -49,15 +49,29 @@ describe('FbaAwdSplitPanel', () => {
     expect(screen.getByText(/Suggested, not approved/)).toBeInTheDocument();
   });
 
-  it('shows all three cover levels, so none can be mistaken for another', () => {
+  it('shows all four cover levels, so none can be mistaken for another', () => {
     render(<FbaAwdSplitPanel {...baseProps} />);
-    // Max, min and combined — the pair the operator set in Seller Central plus
-    // what FBA and AWD hold together.
-    expect(screen.getByText(/Target 45 days live at FBA \(reorder at 30\) · 100 days FBA \+ AWD combined/)).toBeInTheDocument();
-    expect(screen.getByText(/against a 45-day live target/)).toBeInTheDocument();
+    // Header, on two lines rather than one four-number sentence: what this
+    // delivery does, then what the ongoing transfers and the pair do.
+    expect(screen.getByText(/This delivery fills FBA to 60 days/)).toBeInTheDocument();
+    expect(screen.getByText(/Then transfers order at 30, restore to 45 · 100 days FBA \+ AWD combined/)).toBeInTheDocument();
+    // And in the body, each level next to the decision it governs.
+    expect(screen.getByText(/against the 60-day delivery fill/)).toBeInTheDocument();
     expect(screen.getByText(/order at 30 days of cover, restore to 45/)).toBeInTheDocument();
     expect(screen.getByText(/FBA \+ AWD cover on the same date/)).toBeInTheDocument();
-    expect(screen.getByText(/AWD share of the combined target/)).toBeInTheDocument();
+  });
+
+  it('names what each of the four levels governs in the ledger, and the reserve share they leave', () => {
+    // The four numbers are close together and would be indistinguishable as a
+    // bare list of day counts, so each is labelled by the decision it drives.
+    render(<FbaAwdSplitPanel {...baseProps} />);
+    expect(screen.getByText(/ORDERS a transfer at this level \(Seller Central min\)/)).toBeInTheDocument();
+    expect(screen.getByText(/a TRANSFER is sized to restore this level \(Seller Central max\)/)).toBeInTheDocument();
+    expect(screen.getByText(/a DIRECT delivery from the manufacturer fills to this level/)).toBeInTheDocument();
+    expect(screen.getByText(/FBA \+ AWD cover together — the COMBINED position/)).toBeInTheDocument();
+    // 100 − 60, not 100 − 45: the share left once a delivery has filled FBA.
+    expect(screen.getByText(/AWD share of the combined target \(what is left once a delivery fills FBA\)/)).toBeInTheDocument();
+    expect(screen.getByText('40 days')).toBeInTheDocument();
   });
 
   it('names the transfer lead as door-to-sellable, with no inbound buffer on top', () => {

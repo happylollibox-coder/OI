@@ -17,7 +17,7 @@ import { useShipmentConstants } from '../hooks/useShipmentConstants';
 import type { ProjectionShipment } from '../stockProjection';
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from '../planTypes';
 import {
-  FBA_TARGET_DOC, FBA_REORDER_DOC, TOTAL_TARGET_DOC,
+  FBA_TARGET_DOC, FBA_REORDER_DOC, FBA_BATCH_DOC, TOTAL_TARGET_DOC, AWD_RESERVE_DOC,
   OFFERED_FBA_METHODS, OFFERED_AWD_METHODS, docLabel, resolveBatchInput,
   narrowTransitDays, partitionShipmentsForLedger, transitLedgerEntries, statusCaption,
   groupProductsByFamily, resolveFamilySelection,
@@ -311,7 +311,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
       transitDays: narrowing.transitDays,
       fbaInboundBufferDays: constants.fbaInboundBufferDays,
       today, fbaTargetDoc: FBA_TARGET_DOC, fbaReorderDoc: FBA_REORDER_DOC,
-      totalTargetDoc: TOTAL_TARGET_DOC,
+      fbaBatchDoc: FBA_BATCH_DOC, totalTargetDoc: TOTAL_TARGET_DOC,
       methodOverride: methodChoice === 'AUTO' ? undefined : methodChoice,
       awdMethodOverride: awdMethodChoice,
     });
@@ -340,10 +340,16 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
 
   return (
     <div className={CARD}>
-      <div className="flex items-baseline justify-between mb-3">
+      {/* Four levels, on two lines. One sentence carrying four numbers reads as
+          a list of quantities; split by what each governs, it reads as a rule:
+          what a delivery does, then what the ongoing transfers do. */}
+      <div className="flex items-baseline justify-between gap-4 mb-3">
         <div className={LABEL}>FBA / AWD Split — advisory, nothing is sent</div>
-        <div className="text-[9px] text-subtle">
-          Target {FBA_TARGET_DOC} days live at FBA (reorder at {FBA_REORDER_DOC}) · {TOTAL_TARGET_DOC} days FBA + AWD combined
+        <div className="text-[9px] text-subtle text-right leading-relaxed">
+          <div>This delivery fills FBA to {FBA_BATCH_DOC} days</div>
+          <div>
+            Then transfers order at {FBA_REORDER_DOC}, restore to {FBA_TARGET_DOC} · {TOTAL_TARGET_DOC} days FBA + AWD combined
+          </div>
         </div>
       </div>
 
@@ -428,7 +434,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
             {plan.legs.map((leg, i) => <LegCard key={`${leg.destination}-${i}`} leg={leg} />)}
             <div className="text-[10px] text-muted">
               FBA cover on the sellable date: <span className="font-mono text-[color:var(--color-text)]">{docLabel(plan.fbaDocAtArrival)}</span>
-              {' '}against a {FBA_TARGET_DOC}-day live target; FBA and AWD together{' '}
+              {' '}against the {FBA_BATCH_DOC}-day delivery fill; FBA and AWD together{' '}
               <span className="font-mono text-[color:var(--color-text)]">{docLabel(plan.combinedDocAtArrival)}</span>
               {' '}against {TOTAL_TARGET_DOC}.
               {plan.fbaOosDate && <> FBA runs out <span className="font-mono" style={{ color: 'var(--color-negative)' }}>{plan.fbaOosDate}</span> without it.</>}
@@ -441,7 +447,13 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
 
           {chartRows.length > 0 && (
             <div className={`${CARD} mb-2`}>
-              <SplitSimulationChart rows={chartRows} fbaTargetDoc={FBA_TARGET_DOC} oosLabel={plan.fbaOosDate ?? undefined} />
+              <SplitSimulationChart
+                rows={chartRows}
+                fbaTargetDoc={FBA_TARGET_DOC}
+                fbaReorderDoc={FBA_REORDER_DOC}
+                fbaBatchDoc={FBA_BATCH_DOC}
+                oosLabel={plan.fbaOosDate ?? undefined}
+              />
             </div>
           )}
 
@@ -485,7 +497,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
               <div>
                 <div className={`${LABEL} mb-1`}>Sizing the FBA leg</div>
                 <KV label="Sellable at FBA (arrival + inbound buffer)" value={plan.sellableDate} source="Split engine" />
-                <KV label={`Units for ${FBA_TARGET_DOC} days live at FBA from that date`} value={fmt(plan.targetUnits)} source="Split engine" />
+                <KV label={`Units to fill FBA to ${FBA_BATCH_DOC} days from that date`} value={fmt(plan.targetUnits)} source="Split engine" />
                 <KV label="Projected FBA on hand at that date" value={fmt(plan.onHandAtSellable)} source="Split engine" />
                 <KV label="Still short after this batch" value={fmt(plan.shortfallUnits)} source="Split engine" />
                 <KV label="FBA cover on the sellable date" value={docLabel(plan.fbaDocAtArrival)} source="Split engine" />
@@ -525,10 +537,14 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
                 <KV label="FBA inbound processing buffer (manufacturer → FBA only)" value={`${fmt(constants.fbaInboundBufferDays)} days`} source="DE_LIST_OF_VALUES" />
                 <KV label="AWD → FBA transfer lead (door to sellable, no buffer on top)"
                   value={`${fmt(narrowing.transitDays.AWD_TRANSFER)} days`} source="DE_LIST_OF_VALUES" />
-                <KV label="FBA days-of-cover reorder point (min — orders a transfer)" value={`${FBA_REORDER_DOC} days`} source="Operating rule" />
-                <KV label="FBA days-of-cover target (live, sellable)" value={`${FBA_TARGET_DOC} days`} source="Operating rule" />
-                <KV label="FBA + AWD days-of-cover target (combined)" value={`${TOTAL_TARGET_DOC} days`} source="Operating rule" />
-                <KV label="AWD share of the combined target" value={`${TOTAL_TARGET_DOC - FBA_TARGET_DOC} days`} source="Operating rule" />
+                {/* All four levels, each labelled by the decision it governs.
+                    They are close together in value and would otherwise be
+                    indistinguishable in a list of day counts. */}
+                <KV label="FBA cover — ORDERS a transfer at this level (Seller Central min)" value={`${FBA_REORDER_DOC} days`} source="Operating rule" />
+                <KV label="FBA cover — a TRANSFER is sized to restore this level (Seller Central max)" value={`${FBA_TARGET_DOC} days`} source="Operating rule" />
+                <KV label="FBA cover — a DIRECT delivery from the manufacturer fills to this level" value={`${FBA_BATCH_DOC} days`} source="Operating rule" />
+                <KV label="FBA + AWD cover together — the COMBINED position" value={`${TOTAL_TARGET_DOC} days`} source="Operating rule" />
+                <KV label="AWD share of the combined target (what is left once a delivery fills FBA)" value={`${AWD_RESERVE_DOC} days`} source="Operating rule" />
               </div>
             </div>
           </details>

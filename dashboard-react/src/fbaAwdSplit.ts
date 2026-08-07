@@ -2,11 +2,31 @@
 // manufacturer, decide how much goes to FBA now, how much to AWD, by which
 // method, and what AWD->FBA transfers hold FBA at its DOC target.
 //
-// Three levels, deliberately named apart. `fbaTargetDoc` is what must be LIVE at
-// FBA — only enough to survive until a transfer from AWD can land, because FBA
-// storage is expensive and roughly triples in Q4. `fbaReorderDoc` is the level
-// cover is allowed to fall to before a transfer is ordered: min and max, the
-// pair the operator sets in Seller Central (architecture/SOP_AWD_REPLENISHMENT.md).
+// FOUR levels, deliberately named apart, because each governs a different
+// decision and mistaking one for another is the class of bug this file exists
+// to prevent.
+//
+//   fbaReorderDoc  — cover ORDERS a transfer here (Seller Central MIN)
+//   fbaTargetDoc   — a TRANSFER restores to here (Seller Central MAX)
+//   fbaBatchDoc    — a DIRECT manufacturer delivery FILLS FBA to here
+//   totalTargetDoc — FBA and AWD hold this TOGETHER
+//
+// `fbaTargetDoc` is what a move out of AWD puts back: only enough to survive
+// until the next transfer can land, because FBA storage is expensive and
+// roughly triples in Q4, and because every transferred unit pays outbound
+// processing plus per-cubic-foot freight. `fbaReorderDoc` is the level cover is
+// allowed to fall to before that move is ordered — min and max, the pair the
+// operator sets in Seller Central (architecture/SOP_AWD_REPLENISHMENT.md).
+//
+// `fbaBatchDoc` sits ABOVE `fbaTargetDoc` on purpose. A leg travelling direct
+// from the manufacturer to FBA pays no transfer handling at all — the freight
+// is being paid anyway — so the marginal cost of landing deeper is storage
+// alone. Filling only to `fbaTargetDoc` starts the drain at exactly the level a
+// transfer restores, reaching the reorder point in `fbaTargetDoc -
+// fbaReorderDoc` days and paying handling almost at once for stock that could
+// have travelled free. See `FBA_BATCH_DOC` in splitPanelData.ts for the
+// per-unit arithmetic.
+//
 // `totalTargetDoc` is what FBA and AWD hold TOGETHER; AWD holds the balance
 // cheaply. Sizing the FBA leg to the combined number is the bug this split
 // exists to prevent: it sent a 12,000-unit batch 11,760/240 into the expensive
@@ -142,13 +162,17 @@ export interface SplitInput {
   fbaInboundBufferDays: number;
   today: Date;
   /**
-   * Days of cover held LIVE at FBA — the MAX limit, what a transfer restores
+   * Days of cover held LIVE at FBA — the MAX limit, what a TRANSFER restores
    * to. Not the whole position: only enough to survive until the next transfer
    * from AWD can land. The physical floor is the `AWD_TRANSFER` lead and
    * nothing else: transfers are evaluated every day, so there is no ordering
    * cadence to add on top, and the FBA inbound buffer is not part of it either
    * — `AWD_TRANSFER` is already door to SELLABLE. Below that lead the reserve
    * cannot arrive in time and is useless.
+   *
+   * NOT what sizes the batch's FBA leg — that is `fbaBatchDoc`. This level is
+   * deliberately the tighter of the two, because every unit it moves has paid
+   * transfer handling to get there.
    */
   fbaTargetDoc: number;
   /**
@@ -161,8 +185,25 @@ export interface SplitInput {
    */
   fbaReorderDoc: number;
   /**
+   * Days of cover a DIRECT manufacturer → FBA delivery leaves FBA holding. The
+   * only thing this sizes is the batch's FBA leg.
+   *
+   * Above `fbaTargetDoc` on purpose: the direct leg is the one route into FBA
+   * that pays no transfer handling, so filling it deeper buys transfer-free
+   * days for storage cost alone. Landing at exactly `fbaTargetDoc` would start
+   * the drain at the level a transfer restores and order one within
+   * `fbaTargetDoc - fbaReorderDoc` days.
+   *
+   * Must sit between `fbaTargetDoc` and `totalTargetDoc` inclusive: below the
+   * transfer target a delivery would land FBA under the level a move puts it
+   * back to, and above the combined target it would fill FBA past what FBA and
+   * AWD are meant to hold together, leaving the reserve a negative share.
+   */
+  fbaBatchDoc: number;
+  /**
    * Days of cover FBA and AWD hold TOGETHER. AWD holds the balance
-   * (`totalTargetDoc - fbaTargetDoc` days) at a fraction of FBA's storage cost.
+   * (`totalTargetDoc - fbaBatchDoc` days — the share left once a delivery has
+   * filled FBA to `fbaBatchDoc`) at a fraction of FBA's storage cost.
    */
   totalTargetDoc: number;
   methodOverride?: FbaMethod;
@@ -229,13 +270,14 @@ export interface SplitPlan {
   sellableDate: string;
   /** Span of the series actually built, so the panel never infers it by reading `series`. */
   walkWindow: { from: string; to: string } | null;
-  /** Cover from FBA alone at the sellable date — the sellable position, read against `fbaTargetDoc`. */
+  /** Cover from FBA alone at the sellable date — the sellable position, read against `fbaBatchDoc`. */
   fbaDocAtArrival: DocReading;
   /**
    * Cover from FBA and AWD together at the same date, read against
    * `totalTargetDoc`. AWD is counted at full value: it is owned stock, just not
-   * sellable until it is transferred. The pair is the point — ~45 at FBA and
-   * ~100 combined is the plan working, and either number alone hides that.
+   * sellable until it is transferred. The pair is the point — ~60 at FBA on the
+   * day a delivery lands and ~100 combined is the plan working, and either
+   * number alone hides that.
    */
   combinedDocAtArrival: DocReading;
   fbaOosDate: string | null;
@@ -452,7 +494,7 @@ export function planSplit(input: SplitInput): SplitPlan {
   const {
     cartons, packageQuantity: pkg, fbaOnHand, awdOnHand, shipments, curve,
     transitDays, fbaInboundBufferDays: buffer, fbaTargetDoc, fbaReorderDoc,
-    totalTargetDoc, methodOverride, awdMethodOverride,
+    fbaBatchDoc, totalTargetDoc, methodOverride, awdMethodOverride,
   } = input;
   const awdInboundRows = input.awdInbound ?? [];
 
@@ -465,10 +507,18 @@ export function planSplit(input: SplitInput): SplitPlan {
   if (!Number.isFinite(fbaReorderDoc) || fbaReorderDoc <= 0 || fbaReorderDoc >= fbaTargetDoc) {
     return fail('FBA reorder days of cover must be greater than zero and below the FBA target — cover falls to the reorder point, and a transfer restores it to the target.');
   }
-  // AWD holds the balance between the two, so a combined target under the FBA
-  // one asks the reserve to hold a negative number of days — not a plan.
-  if (!Number.isFinite(totalTargetDoc) || totalTargetDoc < fbaTargetDoc) {
-    return fail('Combined target days of cover must be at least the FBA target — AWD holds the balance between them.');
+  // A delivery fills FBA to the batch level, and a transfer only ever puts it
+  // back to the target. A batch level UNDER the target would mean a fresh
+  // delivery leaves FBA below where a move out of AWD would have restored it —
+  // the direct leg is the cheap route, so it can never be the shallower one.
+  if (!Number.isFinite(fbaBatchDoc) || fbaBatchDoc < fbaTargetDoc) {
+    return fail('Batch fill days of cover must be at least the FBA target — a manufacturer delivery pays no transfer handling, so it can never leave FBA below the level a paid AWD → FBA move restores it to.');
+  }
+  // AWD holds the balance left once a delivery has filled FBA, so a combined
+  // target under the batch level asks the reserve to hold a negative number of
+  // days — not a plan.
+  if (!Number.isFinite(totalTargetDoc) || totalTargetDoc < fbaBatchDoc) {
+    return fail('Combined target days of cover must be at least the batch fill — AWD holds the balance between them, and a delivery filling FBA past the combined target would leave the reserve a negative share.');
   }
   if (!Number.isFinite(fbaOnHand) || fbaOnHand < 0) return fail('FBA on-hand units must be zero or more.');
   if (!Number.isFinite(awdOnHand) || awdOnHand < 0) return fail('AWD on-hand units must be zero or more.');
@@ -525,7 +575,7 @@ export function planSplit(input: SplitInput): SplitPlan {
   const fbaTransit = transitDays[method];
   const fbaArrival = addDays(shipDate, fbaTransit);
   const fbaSellable = addDays(fbaArrival, buffer);
-  const lastCoveredDay = addDays(fbaSellable, fbaTargetDoc - 1);
+  const lastCoveredDay = addDays(fbaSellable, fbaBatchDoc - 1);
 
   // The AWD leg's route is selectable in the same way the FBA leg's is, and
   // guarded the same way: AIR is in the injected transit map and must never
@@ -567,10 +617,12 @@ export function planSplit(input: SplitInput): SplitPlan {
   // so `draw` empties the oldest stock first.
   const awdInboundUnits = awdInboundTranches.reduce((s, t) => s + t.units, 0);
 
-  // The FBA leg is sized to fbaTargetDoc — the days that must be LIVE — and not
-  // to the combined target: fbaTargetDoc DOC at the sellable date means holding
-  // exactly the demand of the next fbaTargetDoc days, and no more.
-  const target = demandOverWindow(fbaSellable, addDays(fbaSellable, fbaTargetDoc), curve);
+  // The FBA leg is sized to fbaBatchDoc — how full a DIRECT delivery leaves FBA
+  // — and to neither of the other two levels. Not the combined target, which
+  // would put the whole batch in the expensive warehouse; and not fbaTargetDoc,
+  // which is what a PAID move out of AWD restores to and would have this free
+  // leg stop exactly where the drain toward the reorder point begins.
+  const target = demandOverWindow(fbaSellable, addDays(fbaSellable, fbaBatchDoc), curve);
   const onHandAtSellable = projectedFbaAt(fbaSellable, fbaOnHand, inbound, curve, today);
   const needUnits = Math.max(0, target - onHandAtSellable);
   // Round once and derive, so prose and the structured fields beside it agree.
@@ -585,7 +637,17 @@ export function planSplit(input: SplitInput): SplitPlan {
   // The AWD leg is not a leftover. It holds the balance of the combined target,
   // measured from its OWN arrival date — that is when the reserve starts
   // covering anything, and it lands weeks after the FBA leg does.
-  const reserveDoc = totalTargetDoc - fbaTargetDoc;
+  //
+  // The balance is against `fbaBatchDoc`, not `fbaTargetDoc`. Both legs come
+  // out of the same batch and the combined target is a claim about that batch's
+  // landed position: this delivery puts `fbaBatchDoc` days at FBA, so the share
+  // left for the reserve is `totalTargetDoc - fbaBatchDoc`. Keeping the old
+  // `totalTargetDoc - fbaTargetDoc` share would size the pair to
+  // `totalTargetDoc + (fbaBatchDoc - fbaTargetDoc)` days while the overstock
+  // check below still measures against `totalTargetDoc` — a well-sized batch
+  // would read as overstock, and the sentence would claim a share the split
+  // never produced.
+  const reserveDoc = totalTargetDoc - fbaBatchDoc;
   const reserveTarget = reserveDoc > 0
     ? demandOverWindow(awdArrival, addDays(awdArrival, reserveDoc), curve)
     : 0;
@@ -608,23 +670,52 @@ export function planSplit(input: SplitInput): SplitPlan {
   const totalTargetUnits = demandOverWindow(fbaSellable, addDays(fbaSellable, totalTargetDoc), curve);
 
   if (fbaUnits === 0) {
-    warnings.push(`FBA is already at or above ${fbaTargetDoc} DOC on ${localDateKey(fbaSellable)} — the whole batch goes to AWD.`);
+    warnings.push(`FBA is already at or above ${fbaBatchDoc} DOC on ${localDateKey(fbaSellable)} — the whole batch goes to AWD.`);
   }
-  // Two different shortfalls that must never share a message. Failing to put
-  // fbaTargetDoc days LIVE is a stockout risk and needs a faster, bigger
-  // shipment; holding less than totalTargetDoc across both is a reorder signal
-  // with weeks of runway to act in. Anything under a carton is the
-  // rounding-down remainder in either case, not a real shortfall.
+  // THREE different shortfalls that must never share a message, because they
+  // are three different events with three different responses.
+  //
+  //  1. Missing `fbaTargetDoc` with nothing reaching the reserve is a STOCKOUT
+  //     RISK: the delivery lands FBA below the level a move out of AWD would
+  //     have restored, and there is no AWD stock to move. Needs a faster,
+  //     bigger shipment.
+  //  2. Missing `fbaBatchDoc` while still clearing `fbaTargetDoc` costs MONEY,
+  //     not stock. Cover is safe; the free direct leg simply stopped short, so
+  //     the first paid transfer comes sooner than it needed to.
+  //  3. Holding less than `totalTargetDoc` across both is a REORDER signal with
+  //     weeks of runway to act in.
+  //
+  // Anything under a carton is the rounding-down remainder in any of the three,
+  // not a real shortfall.
   const fbaShortfall = needUnits - fbaUnits;
-  const fbaIsShort = awdUnits === 0 && fbaShortfall > pkg;
-  if (fbaIsShort) {
+  const missedBatchFill = awdUnits === 0 && fbaShortfall > pkg;
+  // Measured in its own units. `fbaShortfall` is the gap to `fbaBatchDoc`, so
+  // quoting it beside the `fbaTargetDoc` level would print a subtraction that
+  // does not hold — the exact prose drift this file has been bitten by before.
+  const transferTargetUnits = demandOverWindow(fbaSellable, addDays(fbaSellable, fbaTargetDoc), curve);
+  const belowTransferTarget = missedBatchFill && docAtArrival.days < fbaTargetDoc;
+
+  if (belowTransferTarget) {
     const shortDays = Math.max(0, fbaTargetDoc - docAtArrival.days);
-    warnings.push(`Batch is too small to put ${fbaTargetDoc} days live at FBA — short by ${Math.round(fbaShortfall)} units (~${shortDays} days), and none of it reaches the AWD reserve. FBA is the only sellable position, so this is a stockout risk.`);
+    const shortUnits = Math.round(Math.max(0, transferTargetUnits - stockAtSellable));
+    warnings.push(`Batch is too small to put ${fbaTargetDoc} days live at FBA — the level an AWD → FBA move restores to — short by ${shortUnits} units (~${shortDays} days), and none of it reaches the AWD reserve. FBA is the only sellable position, so this is a stockout risk.`);
   } else {
+    // Not exclusive with the combined check below, unlike the stockout case:
+    // this one is not urgent, so there is nothing to dilute, and staying silent
+    // about the reserve would hide that a batch which went entirely to FBA left
+    // the pair short as well.
+    if (missedBatchFill) {
+      const shortDays = Math.max(0, fbaBatchDoc - docAtArrival.days);
+      warnings.push(`Batch is too small to fill FBA to ${fbaBatchDoc} days — short by ${Math.round(fbaShortfall)} units (~${shortDays} days). Cover still clears the ${fbaTargetDoc}-day transfer target, so nothing is at risk; the first AWD → FBA transfer just comes sooner, and its handling is the cost a direct delivery would have avoided.`);
+    }
     const combinedShortfall = totalTargetUnits - combinedAtSellable;
     if (combinedShortfall > pkg) {
       const shortDays = Math.max(0, totalTargetDoc - combinedDocAtArrival.days);
-      warnings.push(`FBA is covered to ${fbaTargetDoc} days, but FBA and AWD together hold ${docDays(combinedDocAtArrival)} days against the ${totalTargetDoc}-day combined target — short by ${Math.round(combinedShortfall)} units (~${shortDays} days). Reorder to refill the reserve; nothing goes out of stock over this.`);
+      // The FBA figure is the reading the engine measured, not the level it was
+      // aiming at: a batch that fell a rounding remainder short, or one that
+      // landed on FBA already deep in stock, would otherwise be described as
+      // sitting at a level it is not sitting at.
+      warnings.push(`FBA is covered to ${docDays(docAtArrival)} days, but FBA and AWD together hold ${docDays(combinedDocAtArrival)} days against the ${totalTargetDoc}-day combined target — short by ${Math.round(combinedShortfall)} units (~${shortDays} days). Reorder to refill the reserve; nothing goes out of stock over this.`);
     } else if (combinedAtSellable > totalTargetUnits * (1 + OVERSTOCK_TOLERANCE)) {
       warnings.push(`FBA and AWD together hold ${docDays(combinedDocAtArrival)} days against the ${totalTargetDoc}-day combined target — ${Math.round(combinedAtSellable - totalTargetUnits)} units beyond it. Past the target this is overstock, not prudence: cash and storage sitting in the reserve.`);
     }
@@ -632,7 +723,7 @@ export function planSplit(input: SplitInput): SplitPlan {
 
   const legs: SplitLeg[] = [];
   if (fbaUnits > 0) {
-    const ledger = `${fbaTargetDoc} DOC from ${localDateKey(fbaSellable)} is ${targetShown} units of demand (through ${localDateKey(lastCoveredDay)}), less ${onHandShown} projected on hand = ${needShown} needed`;
+    const ledger = `${fbaBatchDoc} DOC from ${localDateKey(fbaSellable)} is ${targetShown} units of demand (through ${localDateKey(lastCoveredDay)}), less ${onHandShown} projected on hand = ${needShown} needed`;
     const sizing = batchIsBinding
       ? `The batch only holds ${units} units, so all of it goes to FBA and still lands ${needShown - fbaUnits} units short of target.`
       : `Rounded down to whole cartons: ${fbaUnits / pkg} × ${pkg} = ${fbaUnits} units.`;
@@ -646,7 +737,7 @@ export function planSplit(input: SplitInput): SplitPlan {
   if (awdUnits > 0) {
     const origin = fbaUnits > 0
       ? `The batch beyond the ${fbaUnits} units going live at FBA.`
-      : `FBA is already at or above ${fbaTargetDoc} DOC on ${localDateKey(fbaSellable)}, so none of this batch is needed there yet.`;
+      : `FBA is already at or above ${fbaBatchDoc} DOC on ${localDateKey(fbaSellable)}, so none of this batch is needed there yet.`;
     // Say what the reserve is holding and against which target. "What is left
     // over" is not a purpose, and reading it as one is how the FBA leg came to
     // be sized at the combined number in the first place.
@@ -654,10 +745,10 @@ export function planSplit(input: SplitInput): SplitPlan {
     // it" can never appear next to a claim that it is short.
     const spare = awdUnits - reserveShown;
     const holds = reserveDoc <= 0
-      ? `The combined target is the FBA target, so the reserve carries no days of its own — this is stock held ahead of the next batch.`
+      ? `The combined target is the level a delivery already fills FBA to, so the reserve carries no days of its own — this is stock held ahead of the next batch.`
       : spare >= 0
-        ? `Holds the ${reserveDoc}-day AWD share of the ${totalTargetDoc}-day combined target — ${reserveShown} units of demand from ${localDateKey(awdArrival)}${spare > 0 ? `, with ${spare} units to spare` : ', exactly'}.`
-        : `Holds ${awdUnits} of the ${reserveShown} units the ${reserveDoc}-day AWD share of the ${totalTargetDoc}-day combined target asks for from ${localDateKey(awdArrival)} — ${-spare} short of it.`;
+        ? `Holds the ${reserveDoc}-day AWD share of the ${totalTargetDoc}-day combined target — what is left once this delivery puts ${fbaBatchDoc} days at FBA — ${reserveShown} units of demand from ${localDateKey(awdArrival)}${spare > 0 ? `, with ${spare} units to spare` : ', exactly'}.`
+        : `Holds ${awdUnits} of the ${reserveShown} units the ${reserveDoc}-day AWD share of the ${totalTargetDoc}-day combined target asks for from ${localDateKey(awdArrival)} — the share left once this delivery puts ${fbaBatchDoc} days at FBA — ${-spare} short of it.`;
     // The route sentence names how it was picked, so a manual choice is never
     // mistaken for the engine's own recommendation.
     const route = awdOverride

@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip as RTooltip,
-  ResponsiveContainer, CartesianGrid, ReferenceLine,
+  ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceArea,
 } from 'recharts';
 import { CHART_GRID, CHART_AXIS_TICK, CHART_TOOLTIP_STYLE } from '../chartTheme';
 import { fmt } from '../utils';
@@ -21,12 +21,16 @@ const DOC_COLOR = '#f59e0b';
 export interface SplitSimulationChartProps {
   rows: SplitWeekRow[];
   /**
-   * The LIVE level, not the combined one. The plotted DOC series is FBA-only
-   * (`SplitWeekRow.fbaDoc`), so a reference line at the combined target would
-   * draw a line the series is never meant to reach and read as a permanent
-   * shortfall.
+   * The level a transfer restores to — the top of the band below. FBA-ONLY
+   * levels, never the combined target: the plotted DOC series is FBA-only
+   * (`SplitWeekRow.fbaDoc`), so a mark at the combined target would draw a line
+   * the series is never meant to reach and read as a permanent shortfall.
    */
   fbaTargetDoc: number;
+  /** The level a transfer is ordered at — the bottom of the band. */
+  fbaReorderDoc: number;
+  /** The level a direct delivery fills FBA to — the one line above the band. */
+  fbaBatchDoc: number;
   /** When set, shows an OOS warning in the header — the caller decides if/when FBA runs dry. */
   oosLabel?: string;
 }
@@ -81,7 +85,29 @@ function SplitTooltip({ active, payload, showAwd, showDoc }: {
   );
 }
 
-export function SplitSimulationChart({ rows, fbaTargetDoc, oosLabel }: SplitSimulationChartProps) {
+/**
+ * WHAT THE DOC AXIS IS MARKED WITH, AND WHY IT IS A BAND PLUS ONE LINE.
+ *
+ * Three FBA levels now govern the plan, and the DOC series visits all of them:
+ * a delivery spikes it to `fbaBatchDoc`, after which it sawtooths between
+ * `fbaReorderDoc` (where a move is ordered) and `fbaTargetDoc` (where that move
+ * puts it back).
+ *
+ * Three separate reference lines would be three labels stacked in the same
+ * corner of a 200px-tall chart, and the operator would still have to work out
+ * which two of them belong together. The band collapses the pair that IS a
+ * range into the shape it actually draws — inside the band is the operating
+ * rule working, below it is late, and the sawtooth reads at a glance. The
+ * single line above it is the one level that is not a range: where a direct
+ * delivery leaves FBA, and the only reason the series ever sits that high.
+ *
+ * Two marks, not three, and neither is decoration: without the band the
+ * sawtooth has no visible floor or ceiling, and without the line the spike
+ * after a delivery looks like an error.
+ */
+export function SplitSimulationChart({
+  rows, fbaTargetDoc, fbaReorderDoc, fbaBatchDoc, oosLabel,
+}: SplitSimulationChartProps) {
   const [showAwd, setShowAwd] = useState(true);
   const [showDoc, setShowDoc] = useState(true);
 
@@ -124,9 +150,18 @@ export function SplitSimulationChart({ rows, fbaTargetDoc, oosLabel }: SplitSimu
             yAxisId="stock" y={0} stroke="var(--color-negative)" strokeWidth={1.5} strokeDasharray="4 4"
             label={{ value: 'OOS', position: 'right', fill: 'var(--color-negative)', fontSize: 9 }}
           />
+          <ReferenceArea
+            yAxisId="doc" y1={fbaReorderDoc} y2={fbaTargetDoc} ifOverflow="extendDomain"
+            fill="var(--color-warning)" fillOpacity={0.10}
+            stroke="var(--color-warning)" strokeOpacity={0.45} strokeWidth={1} strokeDasharray="4 4"
+            label={{
+              value: `${fbaReorderDoc}–${fbaTargetDoc}d transfer band`,
+              position: 'insideBottomLeft', fill: 'var(--color-warning)', fontSize: 9, offset: 4,
+            }}
+          />
           <ReferenceLine
-            yAxisId="doc" y={fbaTargetDoc} ifOverflow="extendDomain" stroke="var(--color-warning)" strokeWidth={1.5} strokeDasharray="4 4"
-            label={{ value: `${fbaTargetDoc}d FBA target`, position: 'insideTopLeft', fill: 'var(--color-warning)', fontSize: 9, offset: 5 }}
+            yAxisId="doc" y={fbaBatchDoc} ifOverflow="extendDomain" stroke="var(--color-warning)" strokeWidth={1.5} strokeDasharray="4 4"
+            label={{ value: `${fbaBatchDoc}d delivery fill`, position: 'insideTopLeft', fill: 'var(--color-warning)', fontSize: 9, offset: 5 }}
           />
 
           {showAwd && (

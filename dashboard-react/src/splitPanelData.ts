@@ -33,6 +33,9 @@ import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from './planT
  *
  * A level maintained over time, not a one-time top-up — which is why the panel
  * shows a transfer schedule and not just a single shipment.
+ *
+ * This is what a TRANSFER restores to. It is NOT how full a direct delivery
+ * from the manufacturer leaves FBA — that is `FBA_BATCH_DOC`, and it is higher.
  */
 export const FBA_TARGET_DOC = 45;
 
@@ -51,13 +54,54 @@ export const FBA_TARGET_DOC = 45;
 export const FBA_REORDER_DOC = 30;
 
 /**
+ * Days of cover a DIRECT manufacturer → FBA delivery leaves FBA holding. The
+ * only thing this governs is the size of the batch's FBA leg — a transfer is
+ * still ordered at `FBA_REORDER_DOC` and still sized to `FBA_TARGET_DOC`.
+ *
+ * WHY IT IS HIGHER THAN THE TRANSFER TARGET. The two routes into FBA do not
+ * cost the same. A manufacturer → FBA leg pays NO transfer handling: the
+ * freight is being paid to move the batch regardless, and the only question is
+ * which door it stops at. A move out of AWD pays outbound processing plus
+ * per-cubic-foot freight — about $0.39 a unit for this product — every time.
+ *
+ * Filling only to `FBA_TARGET_DOC` lands FBA at exactly the level a transfer
+ * restores, so cover starts draining immediately and reaches the 30-day reorder
+ * point in roughly 15 days. The operator then pays transfer handling almost at
+ * once, for stock that could have travelled direct for free. Filling to 60 buys
+ * about 30 days before the first transfer fires.
+ *
+ * THE ECONOMICS. What the extra depth costs is the FBA-over-AWD storage
+ * premium: about $0.04 per unit per month off-peak, about $0.35 in Q4. What it
+ * saves is $0.39 of transfer handling, once. Off-peak that is overwhelmingly
+ * worth it — roughly ten months of held storage before the premium catches the
+ * handling saved. In Q4 it is roughly break-even at about a month of held time,
+ * which is about how long the extra 15 days of cover is actually held. So the
+ * deeper fill is a clear win most of the year and a wash at peak, never a loss.
+ *
+ * It stops at 60 rather than going further because `TOTAL_TARGET_DOC` is the
+ * ceiling on the whole position: every day added here is a day taken off the
+ * AWD reserve's share, and past that the premium compounds with nothing left to
+ * save.
+ */
+export const FBA_BATCH_DOC = 60;
+
+/**
  * Days of cover FBA and AWD hold TOGETHER — the operating rule's 100 days.
- * AWD holds the balance (100 − 45 = 55 days) as a cheap bulk reserve. Sizing
- * the FBA leg to this number instead of `FBA_TARGET_DOC` is the modelling error
- * these two constants exist to keep apart: it sent 11,760 of a 12,000-unit
- * batch into the expensive warehouse, right through Q4.
+ * AWD holds the balance left once a delivery has filled FBA (100 − 60 = 40
+ * days) as a cheap bulk reserve. Sizing the FBA leg to this number instead of
+ * `FBA_BATCH_DOC` is the modelling error these constants exist to keep apart:
+ * it sent 11,760 of a 12,000-unit batch into the expensive warehouse, right
+ * through Q4.
  */
 export const TOTAL_TARGET_DOC = 100;
+
+/**
+ * The AWD leg's share of the combined target: what is left for the reserve once
+ * a delivery has put `FBA_BATCH_DOC` days at FBA. Derived here rather than
+ * written down, so the ledger can never print a share the split does not
+ * produce — `planSplit` computes the same subtraction.
+ */
+export const AWD_RESERVE_DOC = TOTAL_TARGET_DOC - FBA_BATCH_DOC;
 
 // ─── Cartons ↔ units ────────────────────────────────────────
 

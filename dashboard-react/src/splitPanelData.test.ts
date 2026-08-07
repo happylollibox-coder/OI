@@ -3,14 +3,15 @@ import type { MonthSeasonInfo, ForecastDemandMap, ForecastMetaMap, MonthSeasonMa
 import type { DemandCurve, ProjectionShipment } from './stockProjection';
 import { confirmedFbaInbound, planSplit, plannedWalkWindow, type SplitInput } from './fbaAwdSplit';
 import {
-  FBA_TARGET_DOC, FBA_REORDER_DOC, TOTAL_TARGET_DOC, REQUIRED_TRANSIT_KEYS, EXCLUSION_REASONS,
+  FBA_TARGET_DOC, FBA_REORDER_DOC, FBA_BATCH_DOC, TOTAL_TARGET_DOC, AWD_RESERVE_DOC,
+  REQUIRED_TRANSIT_KEYS, EXCLUSION_REASONS,
   cartonPrefill, unitsFromCartons, docLabel, narrowTransitDays, resolveBatchInput,
   partitionShipmentsForLedger, buildDemandCurve, buildDemandLedger, transitLedgerEntries,
   groupProductsByFamily, resolveFamilySelection,
   reconcileInboundWithSnapshot, dispositionNote, awdInboundFromSnapshot,
 } from './splitPanelData';
 
-describe('the two cover targets', () => {
+describe('the four cover levels', () => {
   // The AWD → FBA lead as DE_LIST_OF_VALUES supplies it: door to SELLABLE, so
   // no FBA inbound buffer on top, and — now that transfers are evaluated daily
   // rather than on Mondays — no ordering cadence on top either. It is the whole
@@ -18,27 +19,46 @@ describe('the two cover targets', () => {
   // move without this file needing to.
   const AWD_TRANSFER_LEAD = 14;
 
-  it('holds 100 days across FBA and AWD, of which 45 are live at FBA', () => {
-    expect(FBA_TARGET_DOC).toBe(45);
-    expect(TOTAL_TARGET_DOC).toBe(100);
+  it('holds 100 days across FBA and AWD, of which a delivery puts 60 at FBA', () => {
     expect(FBA_REORDER_DOC).toBe(30);
+    expect(FBA_TARGET_DOC).toBe(45);
+    expect(FBA_BATCH_DOC).toBe(60);
+    expect(TOTAL_TARGET_DOC).toBe(100);
   });
 
-  it('stacks the three levels in the only order that can work', () => {
+  it('stacks the four levels in the only order that can work', () => {
     // Not a magic sum — a chain of relationships, each of which has to hold.
     //
     // A transfer is ordered the day cover reaches the reorder point and lands
     // AWD_TRANSFER days later, so the reorder point must be above that lead or
-    // the move arrives after the shelf is already empty. The live target must
-    // be above the reorder point, because that difference is what a move buys
-    // back — equal levels would trigger every single day.
+    // the move arrives after the shelf is already empty. The transfer target
+    // must be above the reorder point, because that difference is what a move
+    // buys back — equal levels would trigger every single day. The delivery
+    // fill must be at or above the transfer target, because the direct leg pays
+    // no transfer handling and can never be the shallower of the two routes.
+    // And the combined target caps the lot: every day of delivery fill is a day
+    // off the reserve's share.
     expect(FBA_REORDER_DOC).toBeGreaterThan(AWD_TRANSFER_LEAD);
     expect(FBA_TARGET_DOC).toBeGreaterThan(FBA_REORDER_DOC);
+    expect(FBA_BATCH_DOC).toBeGreaterThanOrEqual(FBA_TARGET_DOC);
+    expect(TOTAL_TARGET_DOC).toBeGreaterThanOrEqual(FBA_BATCH_DOC);
+  });
+
+  it('buys transfer-free days with the gap between the delivery fill and the transfer target', () => {
+    // The whole reason the fourth level exists. Landing at the transfer target
+    // would reach the reorder point in FBA_TARGET_DOC − FBA_REORDER_DOC days;
+    // landing at the delivery fill doubles that, at storage cost only.
+    expect(FBA_TARGET_DOC - FBA_REORDER_DOC).toBe(15);
+    expect(FBA_BATCH_DOC - FBA_REORDER_DOC).toBe(30);
   });
 
   it('leaves the balance to AWD rather than double-counting it', () => {
-    expect(TOTAL_TARGET_DOC - FBA_TARGET_DOC).toBe(55);
-    expect(FBA_TARGET_DOC).toBeLessThan(TOTAL_TARGET_DOC);
+    // The reserve's share is measured against the DELIVERY fill, because that
+    // is where a landed batch actually leaves FBA. Deriving it keeps the ledger
+    // from ever printing a share the split does not produce.
+    expect(AWD_RESERVE_DOC).toBe(40);
+    expect(FBA_BATCH_DOC + AWD_RESERVE_DOC).toBe(TOTAL_TARGET_DOC);
+    expect(FBA_BATCH_DOC).toBeLessThan(TOTAL_TARGET_DOC);
   });
 });
 
@@ -339,7 +359,7 @@ describe('the engine states its own walk window', () => {
     },
     transitDays: { FAST_SEA: 27, SLOW_SEA: 33, AWD_SLOW_SEA: 63, AWD_TRANSFER: 14 },
     fbaInboundBufferDays: 10, today: new Date(2026, 7, 7),
-    fbaTargetDoc: 45, fbaReorderDoc: 30, totalTargetDoc: 100,
+    fbaTargetDoc: 45, fbaReorderDoc: 30, fbaBatchDoc: 60, totalTargetDoc: 100,
   };
 
   it('spans the series it produced', () => {
@@ -363,9 +383,13 @@ describe('the engine states its own walk window', () => {
     expect(plannedWalkWindow(input.today, input.totalTargetDoc)).toEqual(planSplit(input).walkWindow);
     expect(plannedWalkWindow(input.today, input.totalTargetDoc)).toEqual({ from: '2026-08-07', to: '2027-11-15' });
 
-    // A reorder point must stay strictly under the FBA target, so it shrinks
-    // with it — 30 against a 20-day target would be rejected outright.
-    const shorter = { ...input, fbaTargetDoc: 20, fbaReorderDoc: 12, totalTargetDoc: 30 };
+    // The four levels move together or not at all: a reorder point must stay
+    // strictly under the transfer target, and the delivery fill between that
+    // target and the combined one. 30 against a 20-day target, or a 60-day fill
+    // against a 30-day combined target, would be rejected outright.
+    const shorter = {
+      ...input, fbaTargetDoc: 20, fbaReorderDoc: 12, fbaBatchDoc: 25, totalTargetDoc: 30,
+    };
     expect(plannedWalkWindow(shorter.today, shorter.totalTargetDoc)).toEqual(planSplit(shorter).walkWindow);
   });
 });
@@ -382,7 +406,7 @@ describe('the ledger agrees with what the engine measurably did', () => {
     curve: { productDemand: FLAT, familySeason: {}, growth: 1 },
     transitDays: { FAST_SEA: 27, SLOW_SEA: 33, AWD_SLOW_SEA: 63, AWD_TRANSFER: 14 },
     fbaInboundBufferDays: 10, today: new Date(2026, 7, 7),
-    fbaTargetDoc: 45, fbaReorderDoc: 30, totalTargetDoc: 100,
+    fbaTargetDoc: 45, fbaReorderDoc: 30, fbaBatchDoc: 60, totalTargetDoc: 100,
   };
   const onDay = (y: number, m: number, d: number) => new Date(y, m - 1, d).toISOString();
 
@@ -613,8 +637,8 @@ describe('reconcileInboundWithSnapshot — the Mint LolliME case that prompted t
 
   it('leaves the FBA leg bigger, because less stock is believed inbound', () => {
     // 5,000-unit batch, nothing at FBA, flat 10/day demand. FBA is empty today
-    // so the method escalates and the batch is sellable 2026-09-18; 45 days of
-    // cover from there is 450 units.
+    // so the method escalates and the batch is sellable 2026-09-18; the 60-day
+    // delivery fill from there is 600 units.
     const FLAT: Record<number, number> = {
       202608: 300, 202609: 300, 202610: 310, 202611: 300, 202612: 310, 202701: 310,
       202702: 280, 202703: 310, 202704: 300, 202705: 310, 202706: 300, 202707: 310,
@@ -625,7 +649,7 @@ describe('reconcileInboundWithSnapshot — the Mint LolliME case that prompted t
       curve: { productDemand: FLAT, familySeason: {}, growth: 1 },
       transitDays: { FAST_SEA: 27, SLOW_SEA: 33, AWD_SLOW_SEA: 63, AWD_TRANSFER: 14 },
       fbaInboundBufferDays: 10, today: new Date(2026, 7, 7),
-      fbaTargetDoc: 45, fbaReorderDoc: 30, totalTargetDoc: 100,
+      fbaTargetDoc: 45, fbaReorderDoc: 30, fbaBatchDoc: 60, totalTargetDoc: 100,
     };
     const records = [
       { qty: 300, arrival_date: '2026-09-10', status: 'transit' as const, route: 'SLOW_SEA' },
@@ -634,18 +658,18 @@ describe('reconcileInboundWithSnapshot — the Mint LolliME case that prompted t
     const counted = partitionShipmentsForLedger(records, plannedWalkWindow(input.today, 100)).counted;
 
     // Believing all 500: both land before 09-18, and 8 days of demand burn from
-    // the first arrival — 500 − 80 = 420 on hand, so only 30 units are needed.
+    // the first arrival — 500 − 80 = 420 on hand, so only 180 units are needed.
     const believed = planSplit({ ...input, shipments: reconcileInboundWithSnapshot(counted, undefined).shipments });
     expect(believed.onHandAtSellable).toBe(420);
-    expect(believed.legs.find(l => l.destination === 'FBA')!.units).toBe(30);
+    expect(believed.legs.find(l => l.destination === 'FBA')!.units).toBe(180);
 
     // Amazon says 200. The later row survives whole, the 300 is dropped: 200
-    // lands 09-15 and burns 3 days = 170 on hand, so 280 units are needed.
+    // lands 09-15 and burns 3 days = 170 on hand, so 430 units are needed.
     // Not the full 300 difference — for five of those days FBA is simply dark,
     // and unmet demand is lost rather than eating the reserve.
     const reconciled = planSplit({ ...input, shipments: reconcileInboundWithSnapshot(counted, 200).shipments });
     expect(reconciled.onHandAtSellable).toBe(170);
-    expect(reconciled.legs.find(l => l.destination === 'FBA')!.units).toBe(280);
+    expect(reconciled.legs.find(l => l.destination === 'FBA')!.units).toBe(430);
 
     // The whole point: less believed inbound means a BIGGER shipment to FBA.
     expect(reconciled.legs.find(l => l.destination === 'FBA')!.units)
