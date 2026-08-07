@@ -11,6 +11,8 @@ import { fM, fK, fP, fmt } from '../utils';
 import { useFilters, famFromType } from '../hooks/useFilters';
 import { useViewMode } from '../hooks/useViewMode';
 import { useInventorySnapshot } from '../hooks/useInventorySnapshot';
+import { FbaAwdSplitPanel } from '../components/FbaAwdSplitPanel';
+import type { ProjectionShipment } from '../stockProjection';
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid, Legend, LabelList, ReferenceLine } from 'recharts';
 import { CHART_GRID, CHART_AXIS_TICK, CHART_TOOLTIP_STYLE } from '../chartTheme';
 
@@ -680,7 +682,31 @@ function waveLabel(oos: string | null): { label: string; color: string } {
 
 // ─── Main Component ──────────────────────────────────────
 // ─── New: Wrapper for SP-backed Replenishment Flow + Card UI ──────
-function ReplenishmentFlowWrapper({ orderOverrides, salesSummary, demandMap, seasonMap, metaMap, growthOverrides, products, projs, unconstrainedForecastMap }: {
+/**
+ * The shipment + inventory reads the Plan page needs. Bundled into one hook and
+ * called once by PlanPage, because both the FBA/AWD split panel (above the
+ * simulator) and the replenishment flow (below it) read the same data — and
+ * mounting the hooks in each would fire every query twice.
+ */
+function usePlanShipmentData() {
+  const { suggestions, loading: sugLoading, reload: reloadSugg } = useShipmentPlan();
+  const { scheduled, loading: schLoading, reload: reloadSched } = useScheduledShipments();
+  const { arrived, inTransit, loading: histLoading } = useShipmentHistory();
+  const { activePOs, loading: poLoading, reloadPOs, updatePoEtaOptimistic } = useActivePurchaseOrders();
+  const inventory = useInventorySnapshot();
+
+  return {
+    suggestions, scheduled, arrived, inTransit, activePOs,
+    reloadSugg, reloadSched, reloadPOs, updatePoEtaOptimistic,
+    inventory,
+    loading: sugLoading || schLoading || histLoading || poLoading || inventory.loading,
+  };
+}
+
+type PlanShipmentData = ReturnType<typeof usePlanShipmentData>;
+
+function ReplenishmentFlowWrapper({ shipmentData, orderOverrides, salesSummary, demandMap, seasonMap, metaMap, growthOverrides, products, projs, unconstrainedForecastMap }: {
+  shipmentData: PlanShipmentData;
   orderOverrides: Record<string, number>;
   salesSummary: {asin: string; product_name: string; sold: number}[];
   demandMap: ForecastDemandMap;
@@ -691,18 +717,11 @@ function ReplenishmentFlowWrapper({ orderOverrides, salesSummary, demandMap, sea
   projs: MonthProj[];
   unconstrainedForecastMap: Record<string, number>;
 }) {
-  const { suggestions, loading: sugLoading, reload: reloadSugg } = useShipmentPlan();
-  const { scheduled, loading: schLoading, reload: reloadSched } = useScheduledShipments();
-  const { arrived, inTransit, loading: histLoading } = useShipmentHistory();
-  const { activePOs, loading: poLoading, reloadPOs, updatePoEtaOptimistic } = useActivePurchaseOrders();
-
-  // Load stock map, MFR Ready, and MFR In Prod per product from InventorySnapshot
   const {
-    stockMap, fbaMap, awdMap, mfrReadyMap, mfrInProdMap,
-    loading: stockLoading, snapshotDate,
-  } = useInventorySnapshot();
-  // snapshotDate reserved for the FBA/AWD split panel (Task 7); not consumed yet.
-  void snapshotDate;
+    suggestions, scheduled, arrived, inTransit, activePOs,
+    reloadSugg, reloadSched, reloadPOs, updatePoEtaOptimistic,
+    inventory: { stockMap, fbaMap, awdMap, mfrReadyMap, mfrInProdMap },
+  } = shipmentData;
 
 
   const fullYearlyPlanMap = useMemo(() => {
@@ -733,7 +752,7 @@ function ReplenishmentFlowWrapper({ orderOverrides, salesSummary, demandMap, sea
     return map;
   }, [products, projs, orderOverrides, salesSummary, stockMap]);
 
-  const loading = sugLoading || schLoading || histLoading || stockLoading || poLoading;
+  const loading = shipmentData.loading;
 
   const handleAction = useCallback(() => {
     // Small delay to allow BigQuery streaming buffer to settle
@@ -856,6 +875,7 @@ export function useActivePurchaseOrders() {
 }
 
 export function PlanPage({ data }: { data: DashboardData }) {
+  const shipmentData = usePlanShipmentData();
   const { inv, loading } = useInventoryData();
   const { forecastMap, loading: fcLoading } = useForecastRoas();
   const { demandMap, metaMap, seasonMap, loading: dmLoading } = useForecastDemand();
@@ -1732,6 +1752,42 @@ export function PlanPage({ data }: { data: DashboardData }) {
     return data.products.filter(p => filteredAsins.has(p.asin));
   }, [data.products, filteredAsins]);
 
+  // ─── FBA/AWD split panel inputs ───────────────────────────
+  // Shipments in the shape the split engine reads. Destination is derived from
+  // `route` (the in-transit feed carries it as `type`), matching how the rest of
+  // the shipment engine tells an AWD-bound leg from an FBA-bound one.
+  const shipmentsByProduct = useMemo(() => {
+    const map: Record<string, ProjectionShipment[]> = {};
+    const add = (product: string, s: ProjectionShipment) => {
+      if (!product) return;
+      (map[product] ||= []).push(s);
+    };
+    for (const s of shipmentData.inTransit) {
+      add(s.product, { qty: s.qty, arrival_date: s.eta, status: 'transit', route: s.type });
+    }
+    for (const s of shipmentData.scheduled) {
+      add(s.product, {
+        qty: s.ship_qty, arrival_date: s.arrival_date,
+        status: s.status === 'SCHEDULED' ? 'scheduled' : 'approved',
+        route: s.route,
+      });
+    }
+    for (const s of shipmentData.suggestions) {
+      add(s.product, { qty: s.ship_qty, arrival_date: s.arrival_date, status: 'suggested', route: s.route });
+    }
+    return map;
+  }, [shipmentData.inTransit, shipmentData.scheduled, shipmentData.suggestions]);
+
+  const splitProducts = useMemo(
+    () => filteredProducts
+      .map(p => ({
+        product: String(p.product_short_name || p.product || ''),
+        packageQuantity: Number(p.package_quantity ?? 0),
+      }))
+      .filter(p => p.product)
+      .sort((a, b) => a.product.localeCompare(b.product)),
+    [filteredProducts]);
+
   const curDaily = filteredFamilies.reduce((s, f) => s + f.dailySpend, 0);
   const simDaily = filteredFamilies.reduce((s, f) => {
     const famMults = mults[f.family];
@@ -1751,6 +1807,20 @@ export function PlanPage({ data }: { data: DashboardData }) {
         actuals2026Full={actuals2026Full} actuals2025Full={actuals2025Full} />
 
       {isAdmin && (<>
+      <FbaAwdSplitPanel
+        products={splitProducts}
+        fbaMap={shipmentData.inventory.fbaMap}
+        awdMap={shipmentData.inventory.awdMap}
+        mfrReadyMap={shipmentData.inventory.mfrReadyMap}
+        shipmentsByProduct={shipmentsByProduct}
+        demandMap={demandMap}
+        seasonMap={seasonMap}
+        metaMap={metaMap}
+        growthOverrides={effectiveGrowth}
+        snapshotDate={shipmentData.inventory.snapshotDate}
+        inventoryError={shipmentData.inventory.error}
+      />
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Calculator className="text-blue-400" size={22} />
@@ -2365,7 +2435,7 @@ export function PlanPage({ data }: { data: DashboardData }) {
         onResetOverrides={() => setOrderOverrides({})} />
 
       {/* ─── New: Replenishment Flow + Shipment Cards (SP-backed) ─── */}
-      <ReplenishmentFlowWrapper orderOverrides={orderOverrides} salesSummary={salesSummary} demandMap={demandMap} seasonMap={seasonMap} metaMap={metaMap} growthOverrides={effectiveGrowth} products={filteredProducts} projs={projs} unconstrainedForecastMap={unconstrainedForecastMap} />
+      <ReplenishmentFlowWrapper shipmentData={shipmentData} orderOverrides={orderOverrides} salesSummary={salesSummary} demandMap={demandMap} seasonMap={seasonMap} metaMap={metaMap} growthOverrides={effectiveGrowth} products={filteredProducts} projs={projs} unconstrainedForecastMap={unconstrainedForecastMap} />
 
       {activePlan?.status === 'APPROVED' && (
         <PlanVsRealityPanel families={filteredFamilies} snapshot={activeSnapshot} actuals2026Full={actuals2026Full}
