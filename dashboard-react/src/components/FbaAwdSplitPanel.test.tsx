@@ -49,12 +49,31 @@ describe('FbaAwdSplitPanel', () => {
     expect(screen.getByText(/Suggested, not approved/)).toBeInTheDocument();
   });
 
-  it('shows both cover levels, so neither can be mistaken for the other', () => {
+  it('shows all three cover levels, so none can be mistaken for another', () => {
     render(<FbaAwdSplitPanel {...baseProps} />);
-    expect(screen.getByText(/Target 45 days live at FBA · 100 days FBA \+ AWD combined/)).toBeInTheDocument();
+    // Max, min and combined — the pair the operator set in Seller Central plus
+    // what FBA and AWD hold together.
+    expect(screen.getByText(/Target 45 days live at FBA \(reorder at 30\) · 100 days FBA \+ AWD combined/)).toBeInTheDocument();
     expect(screen.getByText(/against a 45-day live target/)).toBeInTheDocument();
+    expect(screen.getByText(/order at 30 days of cover, restore to 45/)).toBeInTheDocument();
     expect(screen.getByText(/FBA \+ AWD cover on the same date/)).toBeInTheDocument();
     expect(screen.getByText(/AWD share of the combined target/)).toBeInTheDocument();
+  });
+
+  it('names the transfer lead as door-to-sellable, with no inbound buffer on top', () => {
+    // The lead is the LOV's AWD_TRANSFER alone. The FBA inbound buffer belongs
+    // to a leg arriving at FBA direct from the manufacturer and must not read
+    // as though it were added to an internal AWD → FBA move.
+    render(<FbaAwdSplitPanel {...baseProps} />);
+    expect(screen.getByText(/AWD → FBA transfer lead \(door to sellable, no buffer on top\)/)).toBeInTheDocument();
+    expect(screen.getByText(/FBA inbound processing buffer \(manufacturer → FBA only\)/)).toBeInTheDocument();
+  });
+
+  it('offers the AWD leg its own route picker, and never Air on it either', () => {
+    render(<FbaAwdSplitPanel {...baseProps} />);
+    const options = screen.getAllByRole('option').map(o => o.textContent);
+    expect(options).toContain('AWD Slow Sea');
+    expect(options.some(o => /^Air$/.test(o ?? ''))).toBe(false);
   });
 
   it('shows a past-dated delivery as excluded, never as counted', () => {

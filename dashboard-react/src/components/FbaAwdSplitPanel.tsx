@@ -9,7 +9,7 @@
 import { useMemo, useState } from 'react';
 import {
   planSplit, plannedWalkWindow, methodCaption,
-  type FbaMethod, type SplitLeg, type TransferRow,
+  type AwdMethod, type FbaMethod, type SplitLeg, type TransferRow,
 } from '../fbaAwdSplit';
 import { splitChartWindow, reduceSeriesToWeeks } from '../splitChart';
 import { SplitSimulationChart } from './SplitSimulationChart';
@@ -17,7 +17,8 @@ import { useShipmentConstants } from '../hooks/useShipmentConstants';
 import type { ProjectionShipment } from '../stockProjection';
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from '../planTypes';
 import {
-  FBA_TARGET_DOC, TOTAL_TARGET_DOC, OFFERED_FBA_METHODS, docLabel, resolveBatchInput,
+  FBA_TARGET_DOC, FBA_REORDER_DOC, TOTAL_TARGET_DOC,
+  OFFERED_FBA_METHODS, OFFERED_AWD_METHODS, docLabel, resolveBatchInput,
   narrowTransitDays, partitionShipmentsForLedger, transitLedgerEntries, statusCaption,
   groupProductsByFamily, resolveFamilySelection,
   reconcileInboundWithSnapshot, dispositionNote, awdInboundFromSnapshot,
@@ -254,6 +255,9 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
   const [selected, setSelected] = useState('');
   const [entered, setEntered] = useState<{ product: string; value: string } | null>(null);
   const [methodChoice, setMethodChoice] = useState<'AUTO' | FbaMethod>('AUTO');
+  // The AWD leg has no auto pick to fall back to — there is nothing to escalate
+  // against, since the reserve is not what runs out — so the default IS a route.
+  const [awdMethodChoice, setAwdMethodChoice] = useState<AwdMethod>(OFFERED_AWD_METHODS[0]);
 
   const constants = useShipmentConstants();
   const narrowing = useMemo(() => narrowTransitDays(constants.transitDays), [constants.transitDays]);
@@ -306,11 +310,13 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
       shipments: reconciliation.shipments, curve,
       transitDays: narrowing.transitDays,
       fbaInboundBufferDays: constants.fbaInboundBufferDays,
-      today, fbaTargetDoc: FBA_TARGET_DOC, totalTargetDoc: TOTAL_TARGET_DOC,
+      today, fbaTargetDoc: FBA_TARGET_DOC, fbaReorderDoc: FBA_REORDER_DOC,
+      totalTargetDoc: TOTAL_TARGET_DOC,
       methodOverride: methodChoice === 'AUTO' ? undefined : methodChoice,
+      awdMethodOverride: awdMethodChoice,
     });
   }, [product, narrowing, batch, fbaMap, awdMap, awdInbound, reconciliation, curve,
-    constants.fbaInboundBufferDays, today, methodChoice]);
+    constants.fbaInboundBufferDays, today, methodChoice, awdMethodChoice]);
 
   // The window follows the COMBINED target — it is about seeing the whole
   // position land, and most of the batch is still at sea at 45 days.
@@ -337,7 +343,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
       <div className="flex items-baseline justify-between mb-3">
         <div className={LABEL}>FBA / AWD Split — advisory, nothing is sent</div>
         <div className="text-[9px] text-subtle">
-          Target {FBA_TARGET_DOC} days live at FBA · {TOTAL_TARGET_DOC} days FBA + AWD combined
+          Target {FBA_TARGET_DOC} days live at FBA (reorder at {FBA_REORDER_DOC}) · {TOTAL_TARGET_DOC} days FBA + AWD combined
         </div>
       </div>
 
@@ -375,6 +381,14 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
             onChange={e => setMethodChoice(e.target.value as 'AUTO' | FbaMethod)}>
             <option value="AUTO">Auto (cheapest that lands in time)</option>
             {OFFERED_FBA_METHODS.map(m => <option key={m} value={m}>{methodCaption(m)}</option>)}
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className={LABEL}>AWD method</span>
+          <select className={INPUT} value={awdMethodChoice}
+            onChange={e => setAwdMethodChoice(e.target.value as AwdMethod)}>
+            {OFFERED_AWD_METHODS.map(m => <option key={`awd-${m}`} value={m}>{methodCaption(m)}</option>)}
           </select>
         </label>
 
@@ -421,7 +435,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
             </div>
           </Section>
 
-          <Section title={`Then transfer AWD → FBA to hold ${FBA_TARGET_DOC} days live`}>
+          <Section title={`Then transfer AWD → FBA — order at ${FBA_REORDER_DOC} days of cover, restore to ${FBA_TARGET_DOC}`}>
             <TransferTable rows={plan.transfers} />
           </Section>
 
@@ -479,6 +493,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
                 <KV label="Ship date (next Wednesday)" value={plan.shipDate} source="Split engine" />
                 <KV label="Method chosen automatically" value={methodCaption(plan.autoMethod)} source="Split engine" />
                 <KV label="Overridden by the operator" value={plan.methodOverridden ? 'Yes' : 'No'} source="Operator input" />
+                <KV label="AWD leg route" value={methodCaption(plan.awdMethod)} source="Operator input" />
                 <KV label="First day FBA runs dry without this batch" value={plan.fbaOosDate ?? 'never inside the horizon'} source="Split engine" />
                 <KV label="Left at AWD at the end of the horizon" value={`${fmt(plan.leftoverAwdUnits)} units`} source="Split engine" />
               </div>
@@ -507,7 +522,10 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
                   <KV key={t.key} label={`${methodCaption(t.key)} transit${t.used ? '' : ' (listed, never offered here)'}`}
                     value={`${fmt(t.days)} days`} source="DE_LIST_OF_VALUES" />
                 ))}
-                <KV label="FBA inbound processing buffer" value={`${fmt(constants.fbaInboundBufferDays)} days`} source="DE_LIST_OF_VALUES" />
+                <KV label="FBA inbound processing buffer (manufacturer → FBA only)" value={`${fmt(constants.fbaInboundBufferDays)} days`} source="DE_LIST_OF_VALUES" />
+                <KV label="AWD → FBA transfer lead (door to sellable, no buffer on top)"
+                  value={`${fmt(narrowing.transitDays.AWD_TRANSFER)} days`} source="DE_LIST_OF_VALUES" />
+                <KV label="FBA days-of-cover reorder point (min — orders a transfer)" value={`${FBA_REORDER_DOC} days`} source="Operating rule" />
                 <KV label="FBA days-of-cover target (live, sellable)" value={`${FBA_TARGET_DOC} days`} source="Operating rule" />
                 <KV label="FBA + AWD days-of-cover target (combined)" value={`${TOTAL_TARGET_DOC} days`} source="Operating rule" />
                 <KV label="AWD share of the combined target" value={`${TOTAL_TARGET_DOC - FBA_TARGET_DOC} days`} source="Operating rule" />

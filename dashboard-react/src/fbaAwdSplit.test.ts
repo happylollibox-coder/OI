@@ -38,8 +38,10 @@ const base: SplitInput = {
   fbaInboundBufferDays: 10,
   today: TODAY,
   // 45 days LIVE at FBA, 100 across FBA + AWD. On the flat curve that is 450
-  // and 1000 units from the 2026-09-18 sellable date.
+  // and 1000 units from the 2026-09-18 sellable date. Transfers are ordered
+  // when cover falls to 30 — the Seller Central min — and restore the 45.
   fbaTargetDoc: 45,
+  fbaReorderDoc: 30,
   totalTargetDoc: 100,
 };
 
@@ -207,22 +209,23 @@ describe('planSplit — transfers', () => {
     expect(plan.transfers).toEqual([]);
   });
 
-  it('keeps transfer arrivals at least 14 days apart when the pool allows merging', () => {
+  it('orders on any day of the week, not only Mondays', () => {
+    // The weekly walk this replaced could only order on a Monday, which delayed
+    // every move by up to six days for no reason an AWD → FBA transfer has.
     const plan = planSplit({ ...base, cartons: 2000, awdOnHand: 20_000 });
     expect(plan.transfers.length).toBeGreaterThan(1);
-    for (const t of plan.transfers) expect(parseKey(t.orderDate).getDay()).toBe(1); // Monday
-    for (let i = 1; i < plan.transfers.length; i++) {
-      const gap = (new Date(plan.transfers[i].arrivalDate).getTime()
-        - new Date(plan.transfers[i - 1].arrivalDate).getTime()) / 86400000;
-      expect(gap).toBeGreaterThan(14);
-    }
+    const weekdays = new Set(plan.transfers.map(t => parseKey(t.orderDate).getDay()));
+    expect(weekdays.size).toBeGreaterThan(1);
   });
 
   it('reports leftover pool units when the AWD stock outlasts the horizon', () => {
     const plan = planSplit({ ...base, cartons: 10, awdOnHand: 1_000_000 });
     const moved = plan.transfers.reduce((s, t) => s + t.units, 0);
-    expect(moved).toBe(2_910);              // all the curve's demand ever asks for
-    expect(plan.leftoverAwdUnits).toBe(997_090);
+    expect(moved).toBe(3_030);              // all the curve's demand ever asks for
+    expect(plan.leftoverAwdUnits).toBe(996_970);
+    // The 100-unit batch is under the live target, so all of it goes to FBA and
+    // the pool is exactly the million already at AWD.
+    expect(moved + plan.leftoverAwdUnits).toBe(1_000_000);
     expect(plan.warnings.join(' ')).toMatch(/remain at AWD/i);
   });
 });
@@ -252,6 +255,71 @@ describe('planSplit — transfer invariants', () => {
       expect(t.docBefore.days).toBeLessThan(base.fbaTargetDoc);
       expect(t.docAfter.days).toBeGreaterThan(t.docBefore.days);
     }
+  });
+});
+
+// ─── Daily evaluation, and why it does not stutter ──────────
+//
+// The scheduler used to walk Mondays. It now walks every day, which runs the
+// trigger seven times as often — so the thing that has to hold is that a move,
+// once scheduled, is visible to the very next day's reading. `scheduleTransfers`
+// drops its on-hand cache the instant the pool is drawn, so `stockAt` re-walks
+// with the new arrival in it and tomorrow sees cover back near the target. If it
+// did not, every day after the first trigger would see the same shortfall and
+// order the same move again — a burst of duplicates instead of a schedule.
+describe('planSplit — daily evaluation', () => {
+  /** A million units at AWD, so the pool never binds and only the trigger is under test. */
+  const deepPool: SplitInput = { ...base, cartons: 10, awdOnHand: 1_000_000 };
+  /** Whole days between two local midnights — rounded, so a DST hour never leaks in. */
+  const gapDays = (a: string, b: string) =>
+    Math.round((parseKey(b).getTime() - parseKey(a).getTime()) / 86_400_000);
+  /** Cover a move buys back: it restores the target from the reorder point. */
+  const RESTORED = base.fbaTargetDoc - base.fbaReorderDoc; // 15
+
+  it('emits a handful of moves across the horizon, not one per day', () => {
+    const plan = planSplit(deepPool);
+    expect(plan.transfers.length).toBeGreaterThan(1);
+    // 466 modelled days. At one move per `RESTORED` days the schedule cannot
+    // exceed ~31 rows; a loop that re-fired daily would emit hundreds.
+    expect(plan.transfers.length).toBeLessThanOrEqual(Math.ceil(466 / RESTORED));
+  });
+
+  it('separates consecutive moves by the cover a move buys back', () => {
+    const plan = planSplit(deepPool);
+    for (let i = 1; i < plan.transfers.length; i++) {
+      const prev = plan.transfers[i - 1];
+      const next = plan.transfers[i];
+      // One day of slack for flooring the move to whole cartons, which can
+      // leave the restored level a day under the target. Never the 1-day gap a
+      // duplicate would show.
+      expect(gapDays(prev.orderDate, next.orderDate)).toBeGreaterThanOrEqual(RESTORED - 1);
+      expect(gapDays(prev.arrivalDate, next.arrivalDate)).toBeGreaterThanOrEqual(RESTORED - 1);
+    }
+  });
+
+  it('leaves cover above the reorder point, which is what stops the next day re-ordering', () => {
+    const plan = planSplit(deepPool);
+    expect(plan.transfers.length).toBeGreaterThan(1);
+    for (const t of plan.transfers) {
+      expect(t.docBefore.days).toBeLessThanOrEqual(base.fbaReorderDoc);
+      expect(t.docAfter.days).toBeGreaterThan(base.fbaReorderDoc);
+    }
+  });
+
+  it('never issues two moves on the same day', () => {
+    for (const input of [deepPool, { ...base, cartons: 800 }, { ...base, cartons: 30, awdInbound: [{ units: 5_000 }] }]) {
+      const plan = planSplit(input);
+      const dates = plan.transfers.map(t => t.orderDate);
+      expect(new Set(dates).size).toBe(dates.length);
+    }
+  });
+
+  it('orders on the day cover crosses, not on the following Monday', () => {
+    // TODAY is a Friday and FBA is empty from day one, so the move is due
+    // immediately. The weekly walk could not act until Monday the 10th.
+    const plan = planSplit({ ...base, cartons: 30, awdOnHand: 5_000 });
+    expect(plan.transfers[0].orderDate).toBe('2026-08-07');
+    expect(parseKey(plan.transfers[0].orderDate).getDay()).toBe(5); // Friday
   });
 });
 
@@ -461,8 +529,12 @@ describe('planSplit — reasons that match the arithmetic', () => {
     const reason = plan.legs.find(l => l.destination === 'AWD')!.reason;
     expect(reason).not.toMatch(/remainder/i);
     expect(reason).toMatch(/already at or above 45 DOC/i);
-    expect(reason).toMatch(/only AWD route \(63d\)/);
-    expect(reason).toMatch(/14d transit plus 10d inbound/);
+    expect(reason).toMatch(/AWD Slow Sea is the default AWD route \(63d\)/);
+    // The transfer lead is AWD_TRANSFER alone — door to sellable, with no FBA
+    // inbound buffer added on top of it.
+    expect(reason).toMatch(/takes 14d door to sellable/);
+    expect(reason).not.toMatch(/10d inbound/);
+    expect(reason).toMatch(/ordered when cover falls to 30 days and sized to restore 45/);
   });
 
   it('says what the AWD leg holds and against which target, not just that it is what is left', () => {
@@ -562,11 +634,14 @@ describe('planSplit — a plan with nothing to warn about', () => {
     expect(plan.legs.find(l => l.destination === 'AWD')!.units).toBe(550);
     expect(plan.fbaDocAtArrival).toEqual({ days: 44, capped: false });
     expect(plan.combinedDocAtArrival).toEqual({ days: 99, capped: false });
-    // One transfer, merged out of three consecutive weeks, empties the reserve.
-    expect(plan.transfers).toHaveLength(1);
-    expect(plan.transfers[0]).toMatchObject({
-      orderDate: '2026-10-19', arrivalDate: '2026-11-12', units: 550,
-    });
+    // Three moves at the min/max cadence empty the 550-unit reserve: each is
+    // ordered as cover reaches 30 and restores what the pool can still afford.
+    expect(plan.transfers.map(t => [t.orderDate, t.arrivalDate, t.units])).toEqual([
+      ['2026-10-14', '2026-10-28', 340],
+      ['2026-10-28', '2026-11-11', 140],
+      ['2026-11-11', '2026-11-25', 70],
+    ]);
+    expect(plan.transfers.reduce((s, t) => s + t.units, 0)).toBe(550);
     expect(plan.leftoverAwdUnits).toBe(0);
   });
 
@@ -591,9 +666,11 @@ function assertPoolNeverOverdrawn(plan: ReturnType<typeof planSplit>, awdOnHand:
 }
 
 describe('planSplit — the pool is never overdrawn', () => {
-  // Regression: merging used to fold a later week's draw into an earlier row,
+  // Regression: a merge window used to fold a later draw into an earlier row,
   // dating the move before the goods had landed at AWD. The row read
-  // "2026-10-12: 160u" while AWD held 100, and the series went to -60.
+  // "2026-10-12: 160u" while AWD held 100, and the series went to -60. The fold
+  // is gone entirely; `createAwdPool` dating every tranche is now the only thing
+  // standing between the schedule and that bug, so it is pinned here directly.
   const straddle = { ...base, fbaOnHand: 1000, awdOnHand: 500, cartons: 100 };
 
   it('never dates a move before the stock is at AWD', () => {
@@ -610,19 +687,18 @@ describe('planSplit — the pool is never overdrawn', () => {
     }
   });
 
-  it('splits rather than merges when the draws straddle a pool arrival', () => {
+  it('keeps every row executable exactly as written', () => {
     const plan = planSplit(straddle);
     const awdLanding = plan.legs.find(l => l.destination === 'AWD')!.arrivalDate;
-    // The row that could not absorb the later draw stays at its own size, and
-    // the remainder becomes its own executable row after the batch lands.
-    const after = plan.transfers.filter(t => t.orderDate > awdLanding);
-    expect(after.length).toBeGreaterThan(0);
+    // Moves continue past the batch's own landing, and none of them arrives
+    // before it was ordered.
+    expect(plan.transfers.filter(t => t.orderDate > awdLanding).length).toBeGreaterThan(0);
     for (const t of plan.transfers) {
       expect(t.arrivalDate > t.orderDate).toBe(true);
     }
   });
 
-  it('still conserves the pool through a split', () => {
+  it('still conserves the pool across the whole schedule', () => {
     const plan = planSplit(straddle);
     const pool = 500 + (plan.legs.find(l => l.destination === 'AWD')?.units ?? 0);
     const moved = plan.transfers.reduce((s, t) => s + t.units, 0);
@@ -868,20 +944,20 @@ describe('planSplit — inbound AWD stock', () => {
   it('never lets a transfer be ordered before the stock has landed at AWD', () => {
     // A 300-unit batch against a 450-unit live target goes entirely to FBA, so
     // the AWD leg is empty and the only pool is the 5,000 units at sea. They are
-    // unusable until 2026-10-09 (a Friday), so the earliest Monday that can
-    // order against them is 2026-10-12.
+    // unusable until 2026-10-09, and with daily evaluation that landing day is
+    // itself the first day a move can be ordered against them.
     const plan = planSplit({ ...base, cartons: 30, awdInbound: [{ units: 5_000 }] });
     expect(plan.legs.find(l => l.destination === 'AWD')).toBeUndefined();
     expect(plan.transfers.length).toBeGreaterThan(0);
-    expect(plan.transfers[0].orderDate).toBe('2026-10-12');
+    expect(plan.transfers[0].orderDate).toBe(LANDS);
     for (const t of plan.transfers) {
       expect(t.orderDate >= LANDS).toBe(true);
       expect(t.arrivalDate > t.orderDate).toBe(true);
     }
-    // Held back, not ignored: the same units already at AWD move from the first
-    // Monday, because FBA is empty from day one and the pool is right there.
+    // Held back, not ignored: the same units already at AWD move from today,
+    // because FBA is empty from day one and the pool is right there.
     const onHand = planSplit({ ...base, cartons: 30, awdOnHand: 5_000 });
-    expect(onHand.transfers[0].orderDate).toBe('2026-08-10');
+    expect(onHand.transfers[0].orderDate).toBe('2026-08-07');
     expect(onHand.transfers[0].orderDate < plan.transfers[0].orderDate).toBe(true);
   });
 
@@ -971,7 +1047,8 @@ describe('planSplit — the two shortfalls are different problems', () => {
 // ─── Does 45 days survive a peak ramp? ──────────────────────
 //
 // The thinnest a 45-day buffer ever gets, in units, is during a steep ramp into
-// peak — exactly when the ~21-day merge cadence has the least slack. Demand
+// peak — exactly when the transfer lead has the least slack, because 45 days of
+// cover measured today buys fewer than 45 days once the ramp steepens. Demand
 // quadruples from 100/day in September to 800/day on Christmas peak days, with
 // every rate an exact integer so the arithmetic is checkable:
 //   Sep 3,000/30 = 100    Oct 6,200/31 = 200
@@ -989,8 +1066,8 @@ const RAMP_SEASON: Record<number, MonthSeasonInfo> = {
 
 describe('planSplit — a 45-day buffer through a peak ramp', () => {
   // AWD is deliberately deep, so the pool never binds and the only question
-  // left is the one being asked: can a 45-day level, restored at the merge
-  // cadence, carry FBA through a ramp? (The deep reserve trips the overstock
+  // left is the one being asked: can a 45-day level, ordered at 30 and restored
+  // daily, carry FBA through a ramp? (The deep reserve trips the overstock
   // warning by construction — that is the fixture, not a finding.)
   const ramp: SplitInput = {
     ...base,
@@ -1016,17 +1093,16 @@ describe('planSplit — a 45-day buffer through a peak ramp', () => {
     expect(plan.fbaDocAtArrival).toEqual({ days: 45, capped: false });
   });
 
-  it('orders the first transfer three weeks out and merges the next two into it', () => {
+  it('holds off until cover actually reaches the reorder point, then moves', () => {
     const plan = planSplit(ramp);
-    // Mondays 08-10..08-31 all see 45+ days at their arrival date, so nothing
-    // is ordered. Monday 09-07 lands 10-01 into 8,300 units against 10,400 of
-    // forward demand: order 2,100. The next two Mondays land 10-08 and 10-15,
-    // both inside the 14-day merge window, adding 3,000 and 4,200 to the same
-    // row — 9,300 in one move, ordered against stock already at AWD.
+    // Every day from 08-07 sees more than 30 days of cover at its landing date,
+    // so nothing is ordered. 09-25 is the first day whose landing date — 10-09,
+    // fourteen days on — reads exactly 30, and the move restores the 45.
     expect(plan.transfers[0]).toMatchObject({
-      orderDate: '2026-09-07', arrivalDate: '2026-10-01', units: 9_300,
+      orderDate: '2026-09-25', arrivalDate: '2026-10-09', units: 5_700,
     });
-    expect(plan.transfers[0].docBefore.days).toBe(38);
+    expect(plan.transfers[0].docBefore.days).toBe(30);
+    expect(plan.transfers[0].docAfter.days).toBe(45);
   });
 
   it('never runs FBA dry through the ramp', () => {
@@ -1036,54 +1112,58 @@ describe('planSplit — a 45-day buffer through a peak ramp', () => {
     expect(Math.min(...through.map(d => d.fbaUnits))).toBeGreaterThan(0);
   });
 
-  it('holds cover above the 30-day physical floor for the whole ramp', () => {
-    // 30 days is transfer transit (14) + inbound buffer (10) + up to 6 days of
-    // Monday-only cadence: below it the reserve cannot arrive in time at all.
-    // Restoring to 45 days measured against FORWARD demand is what makes this
-    // hold — the level self-scales as the ramp steepens.
+  it('holds cover at or above the reorder point for the whole ramp', () => {
+    // The reorder point is the level cover is allowed to fall to, and the
+    // AWD_TRANSFER lead is the floor under THAT — the time a move needs to
+    // land. Restoring to 45 days measured against FORWARD demand is what makes
+    // this hold: the level self-scales as the ramp steepens.
     const plan = planSplit(ramp);
     const ramping = plan.series.filter(d => d.date >= '2026-10-01' && d.date <= '2026-12-31');
-    expect(Math.min(...ramping.map(d => d.doc))).toBeGreaterThanOrEqual(30);
+    expect(Math.min(...ramping.map(d => d.doc))).toBeGreaterThanOrEqual(base.fbaReorderDoc);
+    expect(base.fbaReorderDoc).toBeGreaterThan(base.transitDays.AWD_TRANSFER);
   });
 });
 
-describe('planSplit — the reserve cannot cover a cold start', () => {
-  // A finding, not an assertion that this is fine. When AWD is EMPTY at plan
-  // time, the reserve is 63d at sea plus a 24d transfer lead away from being
-  // sellable — 87 days — while the FBA leg only holds 45. The old 100-day FBA
-  // leg papered over that gap; sizing FBA to 45 exposes it.
-  it('leaves FBA at zero for ten days on the 12,000-unit batch', () => {
+describe('planSplit — a cold start, now that the cadence is gone', () => {
+  // A finding, and a changed one. When AWD is EMPTY at plan time the reserve is
+  // 63d at sea before it can feed anything, while the FBA leg only holds 45 —
+  // so the handover is tight either way. What used to turn tight into a
+  // stockout was the schedule, not the arithmetic: the batch reached AWD on
+  // 10-14, the walk could not order until Monday the 19th, and a lead that
+  // wrongly added the FBA inbound buffer put it on the shelf 11-12 — ten days
+  // after FBA had emptied. Ordering the day the stock lands and paying only the
+  // AWD_TRANSFER lead closes that window completely.
+  it('no longer strands FBA at zero while the reserve waits for a Monday', () => {
     const plan = planSplit(realBatch);
     const on = (date: string) => plan.series.find(d => d.date === date)!;
 
-    // 5,400 units at 120/day cover 2026-09-18 through 2026-11-01, then stop.
-    expect(on('2026-11-01').fbaUnits).toBe(120);
-    expect(on('2026-11-02').fbaUnits).toBe(0);
-
-    // The batch reaches AWD on 10-14, the first Monday after that is 10-19,
-    // and 14d transit + 10d inbound puts it on the shelf 11-12. The next two
-    // Mondays land inside the merge window and fold in (840 + 600), so the
-    // whole reserve moves in one row rather than the 5,400 that restores 45
-    // days on its own.
     expect(plan.legs.find(l => l.destination === 'AWD')!.arrivalDate).toBe('2026-10-14');
-    expect(plan.transfers).toHaveLength(1);
+    // Ordered the very day it lands at AWD, sellable 14 days later — five days
+    // before the 5,400 units at FBA would have run out on 11-02.
     expect(plan.transfers[0]).toMatchObject({
-      orderDate: '2026-10-19', arrivalDate: '2026-11-12', units: 6_840,
+      orderDate: '2026-10-14', arrivalDate: '2026-10-28', units: 4_800,
     });
-    expect(on('2026-11-12').fbaUnits).toBe(6_840);
+    expect(on('2026-10-28').fbaUnits).toBe(5_400);  // restored to the 45-day level
+    expect(on('2026-11-02').fbaUnits).toBe(4_800);  // where the old plan read zero
 
-    const dark = plan.series.filter(d => d.fbaUnits === 0 && d.date >= '2026-09-18' && d.date <= '2026-12-31');
-    expect(dark.map(d => d.date)).toEqual([
-      '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06',
-      '2026-11-07', '2026-11-08', '2026-11-09', '2026-11-10', '2026-11-11',
-    ]);
-    // 10 days x 120/day of demand the plan cannot serve.
-    expect(dark.length * 120).toBe(1_200);
+    const dark = plan.series.filter(d => d.fbaUnits === 0 && d.date >= '2026-09-18' && d.date <= '2026-11-30');
+    expect(dark).toEqual([]);
+  });
+
+  it('still runs dry when the position itself is too small, and says exactly when', () => {
+    // 5,280 at FBA plus a 12,000-unit batch is 17,280 units, which at 120/day
+    // is 144 days from 2026-08-07. No schedule can conjure more: FBA empties on
+    // 2026-12-29 because the whole position is spent, not because a move was
+    // late, and nothing is left at AWD to send.
+    const plan = planSplit(realBatch);
+    const dark = plan.series.filter(d => d.fbaUnits === 0 && d.date <= '2026-12-31');
+    expect(dark.map(d => d.date)).toEqual(['2026-12-29', '2026-12-30', '2026-12-31']);
+    expect(plan.leftoverAwdUnits).toBe(0);
   });
 
   it('does not arise once AWD already holds stock, which is the steady state', () => {
-    // Same batch, but 3,000 units already at AWD: transfers can be ordered from
-    // the first Monday, so the 45-day level is restored before it runs out.
+    // Same batch, but 3,000 units already at AWD: a transfer can be ordered
+    // from day one, so the 45-day level is restored before it runs out.
     const plan = planSplit({ ...realBatch, awdOnHand: 3_000 });
     const dark = plan.series.filter(d => d.fbaUnits === 0 && d.date <= '2026-12-31');
     expect(dark).toEqual([]);

@@ -6,7 +6,7 @@
 // it can be tested without React — and so the ledger's view of "what counted"
 // is checked against the engine's own filter rather than eyeballed.
 import {
-  FBA_METHODS, destinationOf,
+  AWD_METHODS, FBA_METHODS, destinationOf,
   type AwdInboundTranche, type DocReading, type TransitDayMap,
 } from './fbaAwdSplit';
 import {
@@ -17,19 +17,38 @@ import {
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from './planTypes';
 
 /**
- * Days of cover held LIVE at FBA. Not the whole position.
+ * Days of cover held LIVE at FBA — the MAX limit set in Seller Central
+ * (architecture/SOP_AWD_REPLENISHMENT.md). Not the whole position.
  *
- * The physical floor is 30 days: AWD → FBA transfer transit (14d) plus the FBA
- * inbound buffer (10d) plus up to 6 days of Monday-only ordering cadence — the
- * time from "FBA is running low" to units being sellable. Below that the
- * reserve cannot arrive in time and is useless. 45 is that floor plus margin
- * for demand running hot, receiving running slow, and absorbing one missed
- * transfer cycle at the ~21-day merge cadence the engine actually schedules at.
+ * The physical floor is the LOV's `AWD_TRANSFER` lead, and nothing else. That
+ * value is door to SELLABLE, so it carries no FBA inbound buffer on top; and
+ * transfers are evaluated every day, so there is no ordering cadence on top
+ * either. It is the whole time from "FBA is running low" to units being
+ * sellable, and below it the reserve cannot arrive in time and is useless. The
+ * number is deliberately not written here — the engine reads it off the LOV at
+ * runtime, and a day count in a comment outlives the value it describes.
+ *
+ * 45 is that floor plus margin for demand running hot, receiving running slow,
+ * and absorbing one missed transfer cycle.
  *
  * A level maintained over time, not a one-time top-up — which is why the panel
  * shows a transfer schedule and not just a single shipment.
  */
 export const FBA_TARGET_DOC = 45;
+
+/**
+ * Days of cover at which an AWD → FBA transfer is ordered — the MIN limit set
+ * in Seller Central alongside the 45-day max. Cover runs down to 30 and a
+ * transfer brings it back to 45; between the two nothing moves, which is what
+ * stops FBA storage filling up on a dribble of small moves. Also the level
+ * below which Amazon starts pooling stock into fewer fulfilment centres,
+ * costing delivery speed — so it is a floor for two independent reasons.
+ *
+ * It has to sit clear of the physical floor `FBA_TARGET_DOC` describes — the
+ * `AWD_TRANSFER` lead — because that gap is the only room a move ordered here
+ * has to land in before the shelf is empty.
+ */
+export const FBA_REORDER_DOC = 30;
 
 /**
  * Days of cover FBA and AWD hold TOGETHER — the operating rule's 100 days.
@@ -152,6 +171,12 @@ export function narrowTransitDays(raw: Record<string, number> | undefined | null
 
 /** Methods the panel may offer. AIR is absent from `FBA_METHODS` and stays absent. */
 export const OFFERED_FBA_METHODS = FBA_METHODS;
+
+/**
+ * Routes the panel may offer for the AWD leg. AIR is absent from `AWD_METHODS`
+ * for the same reason it is absent from `FBA_METHODS`, and stays absent.
+ */
+export const OFFERED_AWD_METHODS = AWD_METHODS;
 
 export interface TransitLedgerEntry { key: string; days: number; used: boolean }
 

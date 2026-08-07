@@ -2,17 +2,20 @@
 // manufacturer, decide how much goes to FBA now, how much to AWD, by which
 // method, and what AWD->FBA transfers hold FBA at its DOC target.
 //
-// Two levels, deliberately named apart. `fbaTargetDoc` is what must be LIVE at
+// Three levels, deliberately named apart. `fbaTargetDoc` is what must be LIVE at
 // FBA — only enough to survive until a transfer from AWD can land, because FBA
-// storage is expensive and roughly triples in Q4. `totalTargetDoc` is what FBA
-// and AWD hold TOGETHER; AWD holds the balance cheaply. Sizing the FBA leg to
-// the combined number is the bug this split exists to prevent: it sent a
-// 12,000-unit batch 11,760/240 into the expensive warehouse.
+// storage is expensive and roughly triples in Q4. `fbaReorderDoc` is the level
+// cover is allowed to fall to before a transfer is ordered: min and max, the
+// pair the operator sets in Seller Central (architecture/SOP_AWD_REPLENISHMENT.md).
+// `totalTargetDoc` is what FBA and AWD hold TOGETHER; AWD holds the balance
+// cheaply. Sizing the FBA leg to the combined number is the bug this split
+// exists to prevent: it sent a 12,000-unit batch 11,760/240 into the expensive
+// warehouse.
 //
 // Advisory only: nothing here writes, and nothing here is a commitment.
 // Modelling note: unmet demand is lost, not backlogged. Stock floors at zero.
 import {
-  addDays, localDateKey, getMonday, demandOverWindow, dailyDemandOn,
+  addDays, localDateKey, demandOverWindow, dailyDemandOn,
   CONFIRMED_STATUSES, EXCLUDED_STATUSES, parseLocalDate,
   type DemandCurve, type ProjectionShipment,
 } from './stockProjection';
@@ -21,6 +24,20 @@ export type FbaMethod = 'SLOW_SEA' | 'FAST_SEA';
 
 /** Cheapest first. AIR is deliberately absent — never auto-selected, never offered. */
 export const FBA_METHODS: readonly FbaMethod[] = ['SLOW_SEA', 'FAST_SEA'];
+
+/**
+ * Routes the AWD leg may take. `AWD_SLOW_SEA` is the default and the cheapest;
+ * the two sea routes are the same ones the FBA leg uses, on the assumption that
+ * a batch can be sent to AWD by them. AIR is absent here for the same reason it
+ * is absent from `FBA_METHODS`: the operator excluded it outright.
+ */
+export type AwdMethod = 'AWD_SLOW_SEA' | 'SLOW_SEA' | 'FAST_SEA';
+
+/** Default first, then the sea routes. AIR is deliberately absent. */
+export const AWD_METHODS: readonly AwdMethod[] = ['AWD_SLOW_SEA', 'SLOW_SEA', 'FAST_SEA'];
+
+/** What the AWD leg takes when nothing overrides it. */
+export const DEFAULT_AWD_METHOD: AwdMethod = 'AWD_SLOW_SEA';
 
 /**
  * Transit days by shipment method, read from DE_LIST_OF_VALUES at runtime.
@@ -48,8 +65,31 @@ export const METHOD_CAPTIONS: Record<string, string> = {
 
 export const methodCaption = (m: string): string => METHOD_CAPTIONS[m] ?? m;
 
-/** Transfers landing this close together are one move, not two. */
-const TRANSFER_MERGE_WINDOW_DAYS = 14;
+/**
+ * NO MERGE WINDOW. There used to be one — transfers landing within 14 days of
+ * each other were folded into a single earlier row — and it is gone on purpose.
+ *
+ * It existed to stop a weekly dribble, and both things that caused the dribble
+ * are gone: the trigger is now a genuine reorder point rather than "anything
+ * under target", and the walk is daily rather than weekly. What is left is a
+ * move every `fbaTargetDoc - fbaReorderDoc` days, which is the operating rule
+ * working, not a dribble.
+ *
+ * Kept, it now DISTORTS. Folding a later move onto an earlier row back-dates it
+ * by up to the window, so the stock lands up to a fortnight before it is needed
+ * and leaves FBA sitting at `fbaTargetDoc + window` days of cover — measured at
+ * 58 against a 45-day target on the flat fixture. 45 is the MAX limit set in
+ * Seller Central; Amazon physically stops pulling there, so a plan showing 58 is
+ * not merely expensive, it is not executable. And it bought nothing: across
+ * every fixture the engine is tested on, removing it left the count of days FBA
+ * spends at zero completely unchanged.
+ *
+ * The invariant it needed care around — never move stock that has not landed at
+ * AWD — is not its to enforce and never was: `createAwdPool` dates every tranche
+ * and `draw(orderDate, …)` cannot reach past that date. Removing the fold
+ * removes the one path that could ever have dated a move earlier than the day it
+ * was decided on.
+ */
 
 /**
  * How far `docFromStock` will count before giving up. Four times the COMBINED
@@ -102,18 +142,32 @@ export interface SplitInput {
   fbaInboundBufferDays: number;
   today: Date;
   /**
-   * Days of cover held LIVE at FBA. Not the whole position: only enough to
-   * survive until a transfer from AWD can land. The physical floor is
-   * AWD_TRANSFER transit + the FBA inbound buffer + the Monday-only ordering
-   * cadence — below that the reserve cannot arrive in time and is useless.
+   * Days of cover held LIVE at FBA — the MAX limit, what a transfer restores
+   * to. Not the whole position: only enough to survive until the next transfer
+   * from AWD can land. The physical floor is the `AWD_TRANSFER` lead and
+   * nothing else: transfers are evaluated every day, so there is no ordering
+   * cadence to add on top, and the FBA inbound buffer is not part of it either
+   * — `AWD_TRANSFER` is already door to SELLABLE. Below that lead the reserve
+   * cannot arrive in time and is useless.
    */
   fbaTargetDoc: number;
+  /**
+   * Days of cover at which a transfer is ORDERED — the MIN limit. Cover is
+   * allowed to fall to here and no further; crossing down through it with stock
+   * at AWD triggers a move sized to restore `fbaTargetDoc`. Must sit strictly
+   * between zero and `fbaTargetDoc`: at or above the target every day would
+   * trigger, and at zero nothing ever would. It should also sit above the
+   * `AWD_TRANSFER` lead, or the move it orders lands after the shelf is empty.
+   */
+  fbaReorderDoc: number;
   /**
    * Days of cover FBA and AWD hold TOGETHER. AWD holds the balance
    * (`totalTargetDoc - fbaTargetDoc` days) at a fraction of FBA's storage cost.
    */
   totalTargetDoc: number;
   methodOverride?: FbaMethod;
+  /** Route for the AWD leg. Out-of-band values fall back to the default and warn. */
+  awdMethodOverride?: AwdMethod;
 }
 
 /** A days-of-cover reading. `capped` means the walk hit its cap — render "400+". */
@@ -167,6 +221,9 @@ export interface SplitPlan {
   shortfallUnits: number;
   autoMethod: FbaMethod;
   methodOverridden: boolean;
+  /** Route the AWD leg took, stated even when nothing went to AWD. */
+  awdMethod: AwdMethod;
+  awdMethodOverridden: boolean;
   shipDate: string;
   /** The date targetUnits and onHandAtSellable are keyed to — readable even with no FBA leg. */
   sellableDate: string;
@@ -195,7 +252,8 @@ export interface SplitPlan {
 const fail = (error: string): SplitPlan => ({
   ok: false, error, units: 0, legs: [], transfers: [], series: [],
   targetUnits: 0, onHandAtSellable: 0, shortfallUnits: 0,
-  autoMethod: 'SLOW_SEA', methodOverridden: false, shipDate: '',
+  autoMethod: 'SLOW_SEA', methodOverridden: false,
+  awdMethod: DEFAULT_AWD_METHOD, awdMethodOverridden: false, shipDate: '',
   sellableDate: '', walkWindow: null,
   fbaDocAtArrival: { days: 0, capped: false },
   combinedDocAtArrival: { days: 0, capped: false }, fbaOosDate: null,
@@ -393,13 +451,20 @@ export function docFromStock(stock: number, from: Date, curve: DemandCurve, maxD
 export function planSplit(input: SplitInput): SplitPlan {
   const {
     cartons, packageQuantity: pkg, fbaOnHand, awdOnHand, shipments, curve,
-    transitDays, fbaInboundBufferDays: buffer, fbaTargetDoc, totalTargetDoc, methodOverride,
+    transitDays, fbaInboundBufferDays: buffer, fbaTargetDoc, fbaReorderDoc,
+    totalTargetDoc, methodOverride, awdMethodOverride,
   } = input;
   const awdInboundRows = input.awdInbound ?? [];
 
   if (!Number.isFinite(pkg) || pkg <= 0) return fail('Invalid package quantity — cannot convert cartons to units.');
   if (!Number.isFinite(cartons) || cartons <= 0) return fail('Enter a number of cartons greater than zero.');
   if (!Number.isFinite(fbaTargetDoc) || fbaTargetDoc <= 0) return fail('FBA target days of cover must be greater than zero.');
+  // Min and max, in that order. A reorder point at or above the target would
+  // trigger a transfer every single day — the level is never above it — and one
+  // at or below zero can never be crossed, so no transfer would ever be ordered.
+  if (!Number.isFinite(fbaReorderDoc) || fbaReorderDoc <= 0 || fbaReorderDoc >= fbaTargetDoc) {
+    return fail('FBA reorder days of cover must be greater than zero and below the FBA target — cover falls to the reorder point, and a transfer restores it to the target.');
+  }
   // AWD holds the balance between the two, so a combined target under the FBA
   // one asks the reserve to hold a negative number of days — not a plan.
   if (!Number.isFinite(totalTargetDoc) || totalTargetDoc < fbaTargetDoc) {
@@ -454,14 +519,30 @@ export function planSplit(input: SplitInput): SplitPlan {
     warnings.push(`FBA runs out ${selected.lateDays} day(s) before the fastest allowed method can land. Stockout is unavoidable from this batch alone.`);
   }
 
+  // Only a leg arriving at FBA DIRECT from the manufacturer pays the inbound
+  // buffer. AWD_TRANSFER already covers getting stock sellable at FBA, so the
+  // transfer lead below is that transit alone.
   const fbaTransit = transitDays[method];
   const fbaArrival = addDays(shipDate, fbaTransit);
   const fbaSellable = addDays(fbaArrival, buffer);
   const lastCoveredDay = addDays(fbaSellable, fbaTargetDoc - 1);
 
-  const awdTransit = transitDays.AWD_SLOW_SEA;
+  // The AWD leg's route is selectable in the same way the FBA leg's is, and
+  // guarded the same way: AIR is in the injected transit map and must never
+  // become a plan just because a string reached here un-narrowed.
+  const awdOverride = awdMethodOverride && AWD_METHODS.includes(awdMethodOverride)
+    ? awdMethodOverride : undefined;
+  const awdMethod: AwdMethod = awdOverride ?? DEFAULT_AWD_METHOD;
+  if (awdMethodOverride && !awdOverride) {
+    warnings.push(`Ignored the requested AWD method "${methodCaption(awdMethodOverride)}" — not an AWD route this engine offers. Used ${methodCaption(awdMethod)} instead.`);
+  }
+  const awdTransit = transitDays[awdMethod];
   const awdArrival = addDays(shipDate, awdTransit);
   const transferTransit = transitDays.AWD_TRANSFER;
+  // Stock already on the water to AWD went by the default route, whatever the
+  // batch's leg is being sent by — changing this batch's route must not move
+  // the assumed landing date of goods that shipped weeks ago.
+  const awdSlowSeaTransit = transitDays.AWD_SLOW_SEA;
 
   // Stock already on the water to AWD. It joins the same dated pool the batch's
   // AWD leg does, so a transfer can never be ordered against units still at
@@ -469,7 +550,7 @@ export function planSplit(input: SplitInput): SplitPlan {
   // quantity only — assume this engine's own AWD_SLOW_SEA leg from today and
   // say so, rather than assuming it is available now (which would let a
   // transfer be ordered against goods that have not landed).
-  const assumedAwdArrival = addDays(today, awdTransit);
+  const assumedAwdArrival = addDays(today, awdSlowSeaTransit);
   const awdInboundTranches: PoolTranche[] = [];
   let assumedAwdInboundUnits = 0;
   for (const t of awdInboundRows) {
@@ -480,7 +561,7 @@ export function planSplit(input: SplitInput): SplitPlan {
   }
   if (assumedAwdInboundUnits > 0) {
     awdInboundTranches.push({ availableFrom: assumedAwdArrival, units: assumedAwdInboundUnits, note: 'AWD in transit' });
-    assumptions.push(`${assumedAwdInboundUnits} units already in transit to AWD carry no arrival date, so they are assumed to land ${localDateKey(assumedAwdArrival)} — ${methodCaption('AWD_SLOW_SEA')} (${awdTransit}d) from today. They count towards the combined position from now, but nothing can be transferred out of them before that date.`);
+    assumptions.push(`${assumedAwdInboundUnits} units already in transit to AWD carry no arrival date, so they are assumed to land ${localDateKey(assumedAwdArrival)} — ${methodCaption('AWD_SLOW_SEA')} (${awdSlowSeaTransit}d) from today. They count towards the combined position from now, but nothing can be transferred out of them before that date.`);
   }
   // Landing order: what is at AWD now, then what is at sea, then the batch —
   // so `draw` empties the oldest stock first.
@@ -577,17 +658,25 @@ export function planSplit(input: SplitInput): SplitPlan {
       : spare >= 0
         ? `Holds the ${reserveDoc}-day AWD share of the ${totalTargetDoc}-day combined target — ${reserveShown} units of demand from ${localDateKey(awdArrival)}${spare > 0 ? `, with ${spare} units to spare` : ', exactly'}.`
         : `Holds ${awdUnits} of the ${reserveShown} units the ${reserveDoc}-day AWD share of the ${totalTargetDoc}-day combined target asks for from ${localDateKey(awdArrival)} — ${-spare} short of it.`;
+    // The route sentence names how it was picked, so a manual choice is never
+    // mistaken for the engine's own recommendation.
+    const route = awdOverride
+      ? `${methodCaption(awdMethod)} chosen manually (${awdTransit}d, default is ${methodCaption(DEFAULT_AWD_METHOD)})`
+      : `${methodCaption(awdMethod)} is the default AWD route (${awdTransit}d)`;
     legs.push({
-      destination: 'AWD', units: awdUnits, cartons: awdUnits / pkg, method: 'AWD_SLOW_SEA',
+      destination: 'AWD', units: awdUnits, cartons: awdUnits / pkg, method: awdMethod,
       shipDate: localDateKey(shipDate), transitDays: awdTransit,
       arrivalDate: localDateKey(awdArrival), sellableDate: localDateKey(awdArrival),
-      reason: `${origin} ${holds} ${methodCaption('AWD_SLOW_SEA')} is the only AWD route (${awdTransit}d), landing ${localDateKey(awdArrival)}. Not sellable there — each transfer into FBA adds ${transferTransit}d transit plus ${buffer}d inbound processing.`,
+      reason: `${origin} ${holds} ${route}, landing ${localDateKey(awdArrival)}. Not sellable there — each transfer into FBA takes ${transferTransit}d door to sellable, ordered when cover falls to ${fbaReorderDoc} days and sized to restore ${fbaTargetDoc}.`,
     });
   }
 
   const { transfers, leftover, series } = scheduleTransfers({
-    curve, today, horizonDays, fbaTargetDoc, pkg, docCap,
-    transferLeadDays: transferTransit + buffer,
+    curve, today, horizonDays, fbaTargetDoc, fbaReorderDoc, pkg, docCap,
+    // Door to sellable for an AWD → FBA transfer is AWD_TRANSFER alone. The FBA
+    // inbound buffer is NOT added on top: it belongs to a leg arriving at FBA
+    // direct from the manufacturer, and AWD_TRANSFER already covers receiving.
+    transferLeadDays: transferTransit,
     fbaOnHand, inbound,
     batchArrival: fbaUnits > 0 ? { date: fbaSellable, units: fbaUnits, note: 'FBA batch' } : null,
     pool: [
@@ -608,6 +697,8 @@ export function planSplit(input: SplitInput): SplitPlan {
     shortfallUnits: Math.max(0, needShown - fbaUnits),
     autoMethod: selected.method,
     methodOverridden: override !== undefined,
+    awdMethod,
+    awdMethodOverridden: awdOverride !== undefined,
     shipDate: localDateKey(shipDate),
     sellableDate: localDateKey(fbaSellable),
     walkWindow: series.length
@@ -670,8 +761,11 @@ interface TransferParams {
   horizonDays: number;
   /** Transfers restore the LIVE level, not the combined one — AWD keeps the balance. */
   fbaTargetDoc: number;
+  /** Cover at or below this on the landing date is what orders a transfer. */
+  fbaReorderDoc: number;
   pkg: number;
   docCap: number;
+  /** Door to sellable for an AWD → FBA move: AWD_TRANSFER, with no inbound buffer on top. */
   transferLeadDays: number;
   fbaOnHand: number;
   inbound: ProjectionShipment[];
@@ -682,21 +776,42 @@ interface TransferParams {
 interface PlannedTransfer { orderDate: Date; arrival: Date; units: number; docBefore: DocReading }
 
 /**
- * Walk weekly. At each week, look ahead by the transfer lead time: if FBA DOC
- * would be under `fbaTargetDoc` by the time a transfer ordered that week could
- * land, order one sized to restore that level, capped by the pool available on
- * the order date and floored to whole cartons. A transfer landing within
- * TRANSFER_MERGE_WINDOW_DAYS of the previous one is folded into it, so the
- * output is roughly monthly moves rather than a weekly dribble.
+ * Walk DAILY. On each day, look ahead by the transfer lead time: if FBA DOC
+ * would be AT OR BELOW `fbaReorderDoc` by the time a transfer ordered that day
+ * could land, order one sized to restore `fbaTargetDoc` at that landing date,
+ * capped by the pool available on the order date and floored to whole cartons.
+ *
+ * Daily, not weekly. An AWD → FBA move is internal — nothing waits for a
+ * sailing — so the transfer is ordered on the day cover actually crosses down
+ * through the reorder point, not on the next Monday after it. The weekly walk
+ * this replaced borrowed the plan engine's `ship_wednesday` cadence, which
+ * governs manufacturer shipments and has no bearing here; it cost up to six
+ * days of avoidable delay and put a cadence term into the physical floor that
+ * does not exist.
+ *
+ * Min and max, the operating rule the operator has set in Seller Central: cover
+ * is allowed to run down to the reorder point and no further, and a move brings
+ * it back to the target. Firing at the target instead — which this used to do —
+ * makes every single day a trigger, because the level is under the target on
+ * all but the day a transfer lands. Nothing is merged; see the note where the
+ * merge window used to be defined.
+ *
+ * Evaluating seven times as often is only safe because a scheduled move is
+ * visible to the very next day's reading: `onHandCache` is dropped the instant
+ * the pool is drawn, so `stockAt` re-walks with the new arrival in it and
+ * tomorrow sees cover back at the target rather than ordering the same move
+ * again. `planSplit — daily evaluation` pins that.
  *
  * Every unit drawn from the pool lands in an emitted transfer: the projection
  * reads its arrivals straight off `emitted`, so the two can never drift apart.
+ * A move is only ever drawn from stock that has landed at AWD by its order
+ * date — `createAwdPool` dates every tranche and `draw` will not reach past it.
  */
 export function scheduleTransfers(
   p: TransferParams,
 ): { transfers: TransferRow[]; leftover: number; series: SeriesDay[] } {
   const {
-    curve, today, horizonDays, fbaTargetDoc, pkg, docCap,
+    curve, today, horizonDays, fbaTargetDoc, fbaReorderDoc, pkg, docCap,
     transferLeadDays, fbaOnHand, inbound, batchArrival, pool,
   } = p;
   const emitted: PlannedTransfer[] = [];
@@ -723,42 +838,24 @@ export function scheduleTransfers(
     return arr[Math.min(Math.max(i, 0), arr.length - 1)];
   };
 
-  // Orders are placed on Mondays, never in the past.
-  const firstMonday = getMonday(today) < today ? addDays(getMonday(today), 7) : getMonday(today);
-  const weeks = Math.floor((horizonDays - daysBetween(firstMonday, today)) / 7);
-
-  for (let w = 0; w < weeks; w++) {
-    const orderDate = addDays(firstMonday, w * 7);
+  // Every day from today forward. Never in the past: the walk starts at today.
+  for (let day = 0; day <= horizonDays; day++) {
+    const orderDate = addDays(today, day);
     const arrival = addDays(orderDate, transferLeadDays);
     if (daysBetween(arrival, today) > horizonDays) break; // would land past what we model
 
     const before = stockAt(arrival);
     const docBefore = docFromStock(before, arrival, curve, docCap);
-    if (docBefore.days >= fbaTargetDoc) continue;
+    // Crossing DOWN THROUGH the reorder point is the trigger; sitting between it
+    // and the target is the level doing its job and is left alone.
+    if (docBefore.days > fbaReorderDoc) continue;
 
     const need = demandOverWindow(arrival, addDays(arrival, fbaTargetDoc), curve) - before;
 
-    // Merging folds this week's move into the previous row, which means it
-    // ships on THAT row's earlier order date. Only legal if the stock had
-    // already landed at AWD by then — otherwise the row would instruct moving
-    // goods that are still at sea. When they straddle a pool arrival we split
-    // instead, so every row stays executable exactly as written.
-    const prev = emitted[emitted.length - 1];
-    const inMergeWindow = prev !== undefined
-      && daysBetween(arrival, prev.arrival) <= TRANSFER_MERGE_WINDOW_DAYS;
-    const mergeQty = inMergeWindow
-      ? floorToCartons(Math.min(need, awd.availableAt(prev!.orderDate)), pkg)
-      : 0;
-
-    if (inMergeWindow && mergeQty > 0) {
-      const drawn = awd.draw(prev!.orderDate, mergeQty);
-      if (drawn > 0) {
-        prev!.units += drawn;
-        onHandCache = null; // the projection must see these units
-        continue;
-      }
-    }
-
+    // Never more than has actually landed at AWD by the order date. This is the
+    // whole of the "do not move stock that is still at sea" rule: `availableAt`
+    // and `draw` both filter the pool by `availableFrom <= orderDate`, and no
+    // row is ever dated earlier than the day it was decided on.
     const qty = floorToCartons(Math.min(need, awd.availableAt(orderDate)), pkg);
     if (qty <= 0) continue;
 
@@ -769,7 +866,7 @@ export function scheduleTransfers(
     emitted.push({ orderDate, arrival, units: drawn, docBefore });
   }
 
-  // docAfter is read from the finished plan, so merges are already reflected.
+  // docAfter is read from the FINISHED plan, so it reflects every later move too.
   const transfers: TransferRow[] = emitted.map(e => ({
     orderDate: localDateKey(e.orderDate),
     arrivalDate: localDateKey(e.arrival),
