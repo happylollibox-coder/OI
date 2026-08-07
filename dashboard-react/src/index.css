@@ -16,6 +16,7 @@
   --color-border-faint:    rgba(39,39,42,0.3);
 
   /* ── Text ─────────────────────────── */
+  --color-heading:         #fafafa;  /* strongest text — pairs with --color-text; used by `text-heading` */
   --color-text:            #fafafa;
   --color-muted:           #a1a1aa;
   --color-subtle:          #71717a;
@@ -216,6 +217,7 @@ tr.family-row:hover {
   --color-border-faint:    rgba(0,0,0,0.08);
 
   /* ── Text — Apple's dark slate, never pure black ── */
+  --color-heading:         #1d1d1f;
   --color-text:            #1d1d1f;
   --color-muted:           #636366;
   --color-subtle:          #7c7c80;
