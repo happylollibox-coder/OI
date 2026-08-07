@@ -10,6 +10,7 @@ import type { ShipmentPlanFactRow, ScheduledShipmentRow, UnifiedShipmentRow } fr
 import { Section } from '../components/Section';
 import { fmt } from '../utils';
 import { apiFetch } from '../utils/apiFetch';
+import { buildWeeklyProjection, type ProjectionWeek } from '../stockProjection';
 
 
 // ─── Forecast types (mirror from PlanPage) ────────────────
@@ -1398,48 +1399,6 @@ export function ReplenishmentFlowSection({ yearlyPlanMap, unconstrainedForecastM
 // Uses peak-day weighting for Oct–Dec to distribute demand unevenly
 // ═══════════════════════════════════════════════════════════
 
-interface ProjectionWeek {
-  week: string;       // YYYY-MM-DD (Monday)
-  weekLabel: string;  // Short label for x-axis
-  stock: number;      // Projected stock at end of week (with suggested)
-  confirmedStock: number; // Without suggested shipments
-  arrivals: number;   // Units arriving this week (all sources)
-  confirmedArrivals: number; // Only in-transit + approved
-  demand: number;     // Weekly demand consumed
-  isPeak: boolean;
-  arrivalDates: string[]; // Actual arrival dates within this week
-  doc: number;        // Days of Cover (confirmed stock)
-  docSuggested: number; // Days of Cover (confirmed + suggested stock)
-  actualSales?: number; // Actual units sold this week (past weeks only)
-  actualSalesLY?: number; // Last year same-week actual sales
-}
-
-function getMonday(d: Date): Date {
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  return new Date(d.getFullYear(), d.getMonth(), diff);
-}
-
-function addDays(d: Date, n: number): Date {
-  const r = new Date(d);
-  r.setDate(r.getDate() + n);
-  return r;
-}
-
-/** Format a local Date as YYYY-MM-DD without timezone shift (unlike toISOString which converts to UTC) */
-function localDateKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function fmtWeekLabel(d: Date): string {
-  const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
-  return `${mo} ${d.getDate()}`;
-}
-
-function daysInMonth(year: number, month: number): number {
-  return new Date(year, month + 1, 0).getDate();
-}
-
 function StockProjectionChart({ product, currentStock, allShipments, demandMap, seasonMap, metaMap, growthOverrides, timelineMinDate, weeklySales, weeklySalesLY }: {
   product: string;
   currentStock: number;
@@ -1454,157 +1413,28 @@ function StockProjectionChart({ product, currentStock, allShipments, demandMap, 
 }) {
   const data = useMemo<ProjectionWeek[]>(() => {
     const now = new Date();
-    // Start from the timeline's minDate to align x-axes
     const startRef = timelineMinDate ? new Date(Math.min(timelineMinDate, now.getTime())) : now;
-    const startMonday = getMonday(startRef);
-    const currentMonday = getMonday(now);
     const yearEnd = new Date(now.getFullYear(), 11, 31);
-    // Extend timeline 13 weeks past year-end or last shipment arrival for DOC look-ahead
     const lastArrival = allShipments.reduce((max, s) => {
       const t = s.arrival_date ? new Date(s.arrival_date).getTime() : 0;
       return t > max ? t : max;
     }, 0);
     const endDate = new Date(Math.max(yearEnd.getTime(), lastArrival) + 13 * 7 * 86400000);
-    const weeks: ProjectionWeek[] = [];
 
-    // Get product's forecast data (product → yearMonth → units)
-    const productDemand = demandMap[product] || {};
-    const family = metaMap[product]?.family;
-    const familySeason = family ? (seasonMap[family] || {}) : {};
-
-    // Build arrival map: week_monday → { confirmed, total, dates }
-    const arrivalByWeek = new Map<string, { confirmed: number; total: number; dates: Set<string> }>();
-    for (const sh of allShipments) {
-      if (sh.status === 'po_needed' || sh.status === 'po') continue; // PO completion = at manufacturer, not warehouse arrival
-      const arrDate = sh.arrival_date ? new Date(sh.arrival_date) : null;
-      if (!arrDate || isNaN(arrDate.getTime())) continue;
-      const monday = getMonday(arrDate);
-      const key = localDateKey(monday);
-      const entry = arrivalByWeek.get(key) || { confirmed: 0, total: 0, dates: new Set<string>() };
-      entry.total += sh.qty;
-      if (sh.status === 'transit' || sh.status === 'approved' || sh.status === 'scheduled') {
-        entry.confirmed += sh.qty;
-      }
-      // Track the actual arrival date for display
-      const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][arrDate.getMonth()];
-      entry.dates.add(`${mo} ${arrDate.getDate()}`);
-      arrivalByWeek.set(key, entry);
-    }
-
-    // Calculate weekly demand per month using peak-day weighting
-    // Peak days have ~2x the daily demand rate of offseason days within the same month
-    // This gives us a weighted daily rate for each day type
-    function weeklyDemand(weekStart: Date): { demand: number; isPeak: boolean } {
-      let totalDemand = 0;
-      let hasPeak = false;
-
-      // For each day in this week (Mon-Sun), determine its month and allocate demand
-      for (let d = 0; d < 7; d++) {
-        const day = addDays(weekStart, d);
-        if (day > endDate) break;
-        const yr = day.getFullYear();
-        const mo = day.getMonth(); // 0-based
-        const yearMonth = yr * 100 + (mo + 1); // yyyyMM key
-        const rawMonthUnits = productDemand[yearMonth] || 0;
-        // Apply growth override to match the Plan page's adjusted forecast
-        const growthFactor = growthOverrides?.[product] ?? 1.0;
-        const monthUnits = rawMonthUnits * growthFactor;
-        if (monthUnits <= 0) continue;
-
-        const totalDaysInMo = daysInMonth(yr, mo);
-        const season = familySeason[yearMonth];
-        const peakDays = season?.peakDays ?? 0;
-        const offDays = season?.offseasonDays ?? (totalDaysInMo - peakDays);
-
-        if (peakDays > 0 && offDays > 0) {
-          // Weight: peak days get 2x demand rate vs offseason days
-          // totalUnits = peakDays * rate * 2 + offDays * rate
-          // rate = totalUnits / (peakDays * 2 + offDays)
-          const rate = monthUnits / (peakDays * 2 + offDays);
-          // Is this specific day a peak day? (Oct-Dec holiday periods)
-          // Simple heuristic: last N days of month = peak_days (holiday rush tends toward month end)
-          const dayOfMonth = day.getDate();
-          const isPeakDay = dayOfMonth > (totalDaysInMo - peakDays);
-          totalDemand += isPeakDay ? rate * 2 : rate;
-          if (isPeakDay) hasPeak = true;
-        } else {
-          // Even distribution
-          totalDemand += monthUnits / totalDaysInMo;
-        }
-      }
-
-      return { demand: Math.round(totalDemand), isPeak: hasPeak };
-    }
-
-    // Build weekly projection
-    let runningConfirmed = currentStock;
-    let runningTotal = currentStock;
-    let weekStart = new Date(startMonday);
-
-    // Pass 1: Build weekly stock levels (DOC placeholder = 0)
-    while (weekStart <= endDate) {
-      const key = localDateKey(weekStart);
-      const isPast = weekStart < currentMonday;
-      const { demand: rawDemand, isPeak } = weeklyDemand(weekStart);
-      const demand = isPast ? 0 : rawDemand;
-      const arrival = arrivalByWeek.get(key) || { confirmed: 0, total: 0, dates: new Set<string>() };
-      const adjArrivalConf = isPast ? 0 : arrival.confirmed;
-      const adjArrivalTotal = isPast ? 0 : arrival.total;
-
-      runningConfirmed = runningConfirmed - demand + adjArrivalConf;
-      runningTotal = runningTotal - demand + adjArrivalTotal;
-
-      weeks.push({
-        week: key,
-        weekLabel: fmtWeekLabel(weekStart),
-        stock: Math.max(0, Math.round(runningTotal)),
-        confirmedStock: Math.max(0, Math.round(runningConfirmed)),
-        arrivals: isPast ? 0 : arrival.total,
-        confirmedArrivals: isPast ? 0 : arrival.confirmed,
-        demand,
-        isPeak,
-        arrivalDates: isPast ? [] : [...arrival.dates],
-        doc: 0,
-        docSuggested: 0,
-        actualSales: weeklySales?.[key],
-        actualSalesLY: weeklySalesLY?.[key],
-      });
-
-      weekStart = addDays(weekStart, 7);
-    }
-
-    // Pass 2: Forward-looking DOC — simulate forward from each week
-    // counting days until stock runs out using future varying demand
-    for (let i = 0; i < weeks.length; i++) {
-      const w = weeks[i];
-      // DOC for confirmed stock
-      let remConf = Math.max(0, w.confirmedStock);
-      let daysConf = 0;
-      for (let j = i; j < weeks.length && remConf > 0; j++) {
-        const futDemand = weeks[j].demand;
-        if (futDemand <= 0) { daysConf += 7; continue; }
-        const dailyD = futDemand / 7;
-        const daysThisWeek = Math.min(7, remConf / dailyD);
-        daysConf += daysThisWeek;
-        remConf -= futDemand;
-      }
-      w.doc = Math.min(Math.round(daysConf), 365);
-
-      // DOC for suggested stock
-      let remSugg = Math.max(0, w.stock);
-      let daysSugg = 0;
-      for (let j = i; j < weeks.length && remSugg > 0; j++) {
-        const futDemand = weeks[j].demand;
-        if (futDemand <= 0) { daysSugg += 7; continue; }
-        const dailyD = futDemand / 7;
-        const daysThisWeek = Math.min(7, remSugg / dailyD);
-        daysSugg += daysThisWeek;
-        remSugg -= futDemand;
-      }
-      w.docSuggested = Math.min(Math.round(daysSugg), 365);
-    }
-
-    return weeks;
+    return buildWeeklyProjection({
+      currentStock,
+      shipments: allShipments,
+      curve: {
+        productDemand: demandMap[product] || {},
+        familySeason: metaMap[product]?.family ? (seasonMap[metaMap[product].family] || {}) : {},
+        growth: growthOverrides?.[product] ?? 1.0,
+      },
+      startDate: startRef,
+      endDate,
+      now,
+      weeklySales,
+      weeklySalesLY,
+    });
   }, [product, currentStock, allShipments, demandMap, seasonMap, metaMap, growthOverrides, timelineMinDate, weeklySales, weeklySalesLY]);
 
   const [showConfirmed, setShowConfirmed] = useState(true);
