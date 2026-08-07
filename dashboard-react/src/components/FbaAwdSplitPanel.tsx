@@ -13,7 +13,7 @@ import type { ProjectionShipment } from '../stockProjection';
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from '../planTypes';
 import {
   TARGET_DOC, OFFERED_FBA_METHODS, docLabel, resolveBatchInput,
-  narrowTransitDays, partitionShipmentsForLedger, countedInboundUnits, transitLedgerEntries,
+  narrowTransitDays, partitionShipmentsForLedger, countedInboundUnits, transitLedgerEntries, walkWindowOf,
   buildDemandCurve, buildDemandLedger, type LedgerShipment,
 } from '../splitPanelData';
 import { fmt } from '../utils';
@@ -232,19 +232,16 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
   const chartRows = useMemo(
     () => (plan?.ok ? reduceSeriesToWeeks(plan.series, splitChartWindow(today, TARGET_DOC)) : []),
     [plan, today]);
-  const shipLedger = useMemo(() => partitionShipmentsForLedger(shipments), [shipments]);
-  const demandRows = useMemo(() => {
-    if (!plan?.ok || !plan.series.length) return [];
-    return buildDemandLedger(curve, plan.series[0].date, plan.series[plan.series.length - 1].date);
-  }, [plan, curve]);
+  // One definition of "the days the engine actually walked", shared by both ledgers.
+  const walk = useMemo(() => walkWindowOf(plan?.ok ? plan.series : []), [plan]);
+  const shipLedger = useMemo(() => partitionShipmentsForLedger(shipments, walk), [shipments, walk]);
+  const demandRows = useMemo(() => walk ? buildDemandLedger(curve, walk.from, walk.to) : [], [walk, curve]);
 
   if (!products.length) {
     return (
       <div className={CARD}>
         <div className={LABEL}>FBA / AWD Split</div>
-        <div className="text-[11px] text-muted mt-2">
-          No products to plan — this panel needs at least one product with a package quantity.
-        </div>
+        <div className="text-[11px] text-muted mt-2">No products to plan — this panel needs at least one product with a package quantity.</div>
       </div>
     );
   }
@@ -371,7 +368,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
 
               <div>
                 <div className={`${LABEL} mb-1`}>
-                  Inbound shipments counted — {fmt(shipLedger.counted.length)} totalling {fmt(countedInboundUnits(shipLedger))} units
+                  Inbound counted — {fmt(shipLedger.counted.length)} totalling {fmt(countedInboundUnits(shipLedger))} units, inside the walked window {walk?.from} → {walk?.to}
                 </div>
                 <ShipmentLedgerTable rows={shipLedger.counted} greyed={false} />
               </div>

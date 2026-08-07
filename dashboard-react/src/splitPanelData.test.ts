@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { MonthSeasonInfo, ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from './planTypes';
 import type { DemandCurve, ProjectionShipment } from './stockProjection';
-import { confirmedFbaInbound } from './fbaAwdSplit';
+import { confirmedFbaInbound, planSplit, type SplitInput } from './fbaAwdSplit';
 import {
   TARGET_DOC, REQUIRED_TRANSIT_KEYS, EXCLUSION_REASONS,
   cartonPrefill, unitsFromCartons, docLabel, narrowTransitDays, resolveBatchInput,
   partitionShipmentsForLedger, buildDemandCurve, buildDemandLedger, transitLedgerEntries,
+  walkWindowOf,
 } from './splitPanelData';
 
 describe('TARGET_DOC', () => {
@@ -178,6 +179,9 @@ describe('narrowTransitDays', () => {
 });
 
 describe('partitionShipmentsForLedger', () => {
+  // The engine walks 2026-08-07 .. 2027-11-15 for today = 2026-08-07, targetDoc = 100.
+  const WINDOW = { from: '2026-08-07', to: '2027-11-15' };
+
   const inTransitFba: ProjectionShipment = { qty: 500, arrival_date: '2026-09-10', status: 'transit', route: 'FAST_SEA' };
   const approvedNoRoute: ProjectionShipment = { qty: 300, arrival_date: '2026-10-01', status: 'approved' };
   const scheduledAwd: ProjectionShipment = { qty: 200, arrival_date: '2026-09-20', status: 'scheduled', route: 'AWD_SLOW_SEA' };
@@ -188,42 +192,55 @@ describe('partitionShipmentsForLedger', () => {
   const badDate: ProjectionShipment = { qty: 70, arrival_date: '', status: 'transit', route: 'SLOW_SEA' };
 
   const ALL = [inTransitFba, approvedNoRoute, scheduledAwd, suggested, po, poNeeded, arrived, badDate];
+  const split = (rows: ProjectionShipment[]) => partitionShipmentsForLedger(rows, WINDOW);
 
-  it('counts only confirmed, FBA-bound shipments with a readable arrival date', () => {
-    const { counted } = partitionShipmentsForLedger(ALL);
+  it('counts only confirmed, FBA-bound shipments landing inside the walked window', () => {
+    const { counted } = split(ALL);
     expect(counted.map(r => r.shipment)).toEqual([inTransitFba, approvedNoRoute]);
     expect(counted.map(r => r.qty)).toEqual([500, 300]);
     expect(counted.every(r => r.exclusionReason === null)).toBe(true);
   });
 
   it('reads destination off the route, defaulting a routeless shipment to FBA', () => {
-    const { counted } = partitionShipmentsForLedger(ALL);
-    expect(counted.map(r => r.destination)).toEqual(['FBA', 'FBA']);
+    expect(split(ALL).counted.map(r => r.destination)).toEqual(['FBA', 'FBA']);
   });
 
   it('excludes everything else, in input order, each with its own reason', () => {
-    const { excluded } = partitionShipmentsForLedger(ALL);
-    expect(excluded.map(r => [r.shipment, r.exclusionReason])).toEqual([
+    expect(split(ALL).excluded.map(r => [r.shipment, r.exclusionReason])).toEqual([
       [scheduledAwd, EXCLUSION_REASONS.AWD_BOUND],
       [suggested, EXCLUSION_REASONS.UNAPPROVED],
       [po, EXCLUSION_REASONS.PO],
       [poNeeded, EXCLUSION_REASONS.PO],
-      [arrived, EXCLUSION_REASONS.ARRIVED],
+      [arrived, EXCLUSION_REASONS.ARRIVED_FBA],
       [badDate, EXCLUSION_REASONS.NO_ARRIVAL_DATE],
     ]);
+  });
+
+  it('says AWD, not FBA, for an arrived AWD-bound shipment', () => {
+    // It is inside the AWD on-hand figure; claiming FBA would be untrue.
+    const arrivedAwd: ProjectionShipment = { qty: 800, arrival_date: '2026-07-01', status: 'arrived', route: 'AWD_SLOW_SEA' };
+    expect(split([arrivedAwd]).excluded[0].exclusionReason).toBe(EXCLUSION_REASONS.ARRIVED_AWD);
   });
 
   it('does not silently drop a confirmed shipment the engine would ignore for a bad date', () => {
     // The engine's own filter keeps `badDate` (confirmed, FBA-bound) and then drops it
     // inside the projection because the date will not parse. The ledger must SHOW that.
     expect(confirmedFbaInbound(ALL)).toEqual([inTransitFba, approvedNoRoute, badDate]);
-    const { counted, excluded } = partitionShipmentsForLedger(ALL);
+    const { counted, excluded } = split(ALL);
     expect(counted).toHaveLength(2);
     expect(excluded.map(r => r.shipment)).toContain(badDate);
   });
 
+  it('excludes a zero or negative quantity — arrivalsByDay skips it, so it adds nothing', () => {
+    const empty: ProjectionShipment = { qty: 0, arrival_date: '2026-09-10', status: 'transit', route: 'SLOW_SEA' };
+    const negative: ProjectionShipment = { qty: -40, arrival_date: '2026-09-10', status: 'transit', route: 'SLOW_SEA' };
+    expect(split([empty, negative]).counted).toEqual([]);
+    expect(split([empty, negative]).excluded.map(r => r.exclusionReason))
+      .toEqual([EXCLUSION_REASONS.NO_UNITS, EXCLUSION_REASONS.NO_UNITS]);
+  });
+
   it('accounts for every shipment exactly once — nothing is dropped without a reason', () => {
-    const { counted, excluded } = partitionShipmentsForLedger(ALL);
+    const { counted, excluded } = split(ALL);
     const seen = [...counted, ...excluded].map(r => r.shipment);
     expect(seen).toHaveLength(ALL.length);
     for (const s of ALL) expect(seen.filter(x => x === s)).toHaveLength(1);
@@ -232,17 +249,122 @@ describe('partitionShipmentsForLedger', () => {
   it('reports a PO reason ahead of anything else, since a PO is not shipped at all', () => {
     // po_needed + AWD route: still "at the manufacturer" is the honest headline.
     const awdPo: ProjectionShipment = { qty: 10, arrival_date: '2026-12-01', status: 'po_needed', route: 'AWD_SLOW_SEA' };
-    const { excluded } = partitionShipmentsForLedger([awdPo]);
-    expect(excluded[0].exclusionReason).toBe(EXCLUSION_REASONS.PO);
+    expect(split([awdPo]).excluded[0].exclusionReason).toBe(EXCLUSION_REASONS.PO);
   });
 
-  it('carries status and arrival date through for display', () => {
-    const { counted } = partitionShipmentsForLedger([inTransitFba]);
-    expect(counted[0]).toMatchObject({ status: 'transit', arrivalDate: '2026-09-10', qty: 500, destination: 'FBA' });
+  it('carries status and the arrival day the engine will use, for display', () => {
+    expect(split([inTransitFba]).counted[0])
+      .toMatchObject({ status: 'transit', arrivalDate: '2026-09-10', qty: 500, destination: 'FBA' });
   });
 
   it('returns two empty lists for no shipments', () => {
-    expect(partitionShipmentsForLedger([])).toEqual({ counted: [], excluded: [] });
+    expect(split([])).toEqual({ counted: [], excluded: [] });
+  });
+
+  it('makes no window judgement when there is no plan, so nothing is mislabelled', () => {
+    const stale: ProjectionShipment = { qty: 900, arrival_date: '2020-01-01', status: 'transit', route: 'SLOW_SEA' };
+    expect(partitionShipmentsForLedger([stale], null).counted).toHaveLength(1);
+  });
+});
+
+describe('partitionShipmentsForLedger — the walked-window edges', () => {
+  const WINDOW = { from: '2026-08-07', to: '2027-11-15' };
+  /** An arrival_date that reads back as this exact local day in any timezone. */
+  const onDay = (y: number, m: number, d: number) => new Date(y, m - 1, d).toISOString();
+  const shipmentOn = (iso: string): ProjectionShipment =>
+    ({ qty: 1000, arrival_date: iso, status: 'transit', route: 'SLOW_SEA' });
+  const reasonFor = (iso: string) =>
+    partitionShipmentsForLedger([shipmentOn(iso)], WINDOW).excluded[0]?.exclusionReason ?? null;
+
+  it('counts an arrival on the first walked day', () => {
+    expect(reasonFor(onDay(2026, 8, 7))).toBeNull();
+  });
+
+  it('excludes an arrival one day before the walk starts', () => {
+    expect(reasonFor(onDay(2026, 8, 6))).toBe(EXCLUSION_REASONS.ALREADY_LANDED);
+  });
+
+  it('counts an arrival on the last walked day', () => {
+    expect(reasonFor(onDay(2027, 11, 15))).toBeNull();
+  });
+
+  it('excludes an arrival one day after the walk ends', () => {
+    expect(reasonFor(onDay(2027, 11, 16))).toBe(EXCLUSION_REASONS.BEYOND_HORIZON);
+  });
+
+  it('files a timestamped arrival under the local day the engine uses, not the raw string', () => {
+    // localDateKey(new Date(iso)) is exactly what `arrivalsByDay` keys on.
+    const row = partitionShipmentsForLedger([shipmentOn(onDay(2026, 9, 10))], WINDOW).counted[0];
+    expect(row.arrivalDate).toBe('2026-09-10');
+  });
+});
+
+describe('walkWindowOf', () => {
+  it('takes the first and last day of the engine series', () => {
+    expect(walkWindowOf([{ date: '2026-08-07' }, { date: '2026-08-08' }, { date: '2027-11-15' }]))
+      .toEqual({ from: '2026-08-07', to: '2027-11-15' });
+  });
+
+  it('is null when there is no series to read', () => {
+    expect(walkWindowOf([])).toBeNull();
+  });
+});
+
+describe('the ledger agrees with what the engine measurably did', () => {
+  // Flat 300/month ~ 10/day, matching the engine's own test fixture.
+  const FLAT: Record<number, number> = {
+    202608: 300, 202609: 300, 202610: 310, 202611: 300, 202612: 310, 202701: 310,
+    202702: 280, 202703: 310, 202704: 300, 202705: 310, 202706: 300, 202707: 310,
+    202708: 310, 202709: 300, 202710: 310, 202711: 300, 202712: 310,
+  };
+  const base: SplitInput = {
+    cartons: 100, packageQuantity: 10, fbaOnHand: 50_000, awdOnHand: 0, shipments: [],
+    curve: { productDemand: FLAT, familySeason: {}, growth: 1 },
+    transitDays: { FAST_SEA: 27, SLOW_SEA: 33, AWD_SLOW_SEA: 63, AWD_TRANSFER: 14 },
+    fbaInboundBufferDays: 10, today: new Date(2026, 7, 7), targetDoc: 100,
+  };
+  const onDay = (y: number, m: number, d: number) => new Date(y, m - 1, d).toISOString();
+
+  it('never counts a past-dated arrival, because the engine measurably ignores it', () => {
+    const past: ProjectionShipment = { qty: 9000, arrival_date: onDay(2026, 6, 1), status: 'transit', route: 'SLOW_SEA' };
+    const without = planSplit(base);
+    const withPast = planSplit({ ...base, shipments: [past] });
+
+    // Measured: the 9,000 units move nothing. walkFba starts at today and reads no
+    // earlier key, so the stock is presumed already inside the fbaOnHand snapshot.
+    expect(withPast.onHandAtSellable).toBe(without.onHandAtSellable);
+    expect(withPast.onHandAtSellable).toBe(49_528);
+    expect(withPast.legs).toEqual(without.legs);
+
+    const { counted, excluded } = partitionShipmentsForLedger([past], walkWindowOf(withPast.series));
+    expect(counted).toEqual([]);
+    expect(excluded[0].exclusionReason).toBe(EXCLUSION_REASONS.ALREADY_LANDED);
+  });
+
+  it('never counts an arrival past the end of the walk, for the same measured reason', () => {
+    const plan = planSplit(base);
+    const lastDay = plan.series[plan.series.length - 1].date;
+    const [y, m, d] = lastDay.split('-').map(Number);
+    const beyond: ProjectionShipment = { qty: 9000, arrival_date: onDay(y, m, d + 1), status: 'transit', route: 'SLOW_SEA' };
+
+    const withBeyond = planSplit({ ...base, shipments: [beyond] });
+    expect(withBeyond.onHandAtSellable).toBe(plan.onHandAtSellable);
+    expect(withBeyond.series.map(s => s.fbaUnits)).toEqual(plan.series.map(s => s.fbaUnits));
+
+    const { counted, excluded } = partitionShipmentsForLedger([beyond], walkWindowOf(withBeyond.series));
+    expect(counted).toEqual([]);
+    expect(excluded[0].exclusionReason).toBe(EXCLUSION_REASONS.BEYOND_HORIZON);
+  });
+
+  it('still counts an in-window arrival, which the engine measurably does use', () => {
+    const soon: ProjectionShipment = { qty: 9000, arrival_date: onDay(2026, 9, 10), status: 'transit', route: 'SLOW_SEA' };
+    const withSoon = planSplit({ ...base, shipments: [soon] });
+    // 9,000 units land before the sellable date, so on-hand there is 9,000 higher.
+    expect(withSoon.onHandAtSellable).toBe(49_528 + 9_000);
+
+    const { counted } = partitionShipmentsForLedger([soon], walkWindowOf(withSoon.series));
+    expect(counted).toHaveLength(1);
+    expect(counted[0].exclusionReason).toBeNull();
   });
 });
 

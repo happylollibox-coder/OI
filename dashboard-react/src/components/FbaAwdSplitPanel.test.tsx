@@ -49,6 +49,18 @@ describe('FbaAwdSplitPanel', () => {
     expect(screen.getByText(/Suggested, not approved/)).toBeInTheDocument();
   });
 
+  it('shows a past-dated delivery as excluded, never as counted', () => {
+    // today = 2026-08-07, so this arrival is behind the start of the engine's walk:
+    // walkFba reads no key before today, so it contributes nothing to the projection.
+    const past = { qty: 9000, arrival_date: '2026-06-01', status: 'transit' as const, route: 'SLOW_SEA' };
+    render(<FbaAwdSplitPanel {...baseProps}
+      shipmentsByProduct={{ 'Pink Lollibox': [...SHIPMENTS, past] }} />);
+    expect(screen.getByText(/Arrival date has already passed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Adds 9,000 units to FBA/)).not.toBeInTheDocument();
+    // The counted total is the in-window shipment alone, not 9,500.
+    expect(screen.getByText(/Inbound counted — 1 totalling 500 units/)).toBeInTheDocument();
+  });
+
   it('never offers Air as an FBA route', () => {
     render(<FbaAwdSplitPanel {...baseProps} />);
     const options = screen.getAllByRole('option').map(o => o.textContent);

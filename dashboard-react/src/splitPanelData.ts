@@ -11,7 +11,7 @@ import {
 } from './fbaAwdSplit';
 import {
   CONFIRMED_STATUSES, EXCLUDED_STATUSES, MONTH_ABBR,
-  dailyDemandOn, daysInMonth,
+  dailyDemandOn, daysInMonth, localDateKey,
   type DemandCurve, type ProjectionShipment, type ShipmentStatus,
 } from './stockProjection';
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from './planTypes';
@@ -161,14 +161,19 @@ export function transitLedgerEntries(transitDays: Record<string, number>): Trans
 export const EXCLUSION_REASONS = {
   PO: 'PO — still at manufacturer',
   UNAPPROVED: 'Suggested, not approved',
-  ARRIVED: 'Already arrived — already inside the FBA on-hand figure',
+  ARRIVED_FBA: 'Already arrived — already inside the FBA on-hand figure',
+  ARRIVED_AWD: 'Already arrived at AWD — already inside the AWD on-hand figure',
   AWD_BOUND: 'AWD-bound — lands in reserve, not sellable at FBA',
+  NO_UNITS: 'No units on the shipment — nothing for the projection to add',
   NO_ARRIVAL_DATE: 'No readable arrival date — the projection cannot place it',
+  ALREADY_LANDED: 'Arrival date has already passed — assumed to be inside the FBA on-hand figure, not counted a second time',
+  BEYOND_HORIZON: 'Arrives after the projection horizon ends — outside the window this plan models',
 } as const;
 
 export interface LedgerShipment {
   shipment: ProjectionShipment;
   qty: number;
+  /** The day the engine places it, not the raw field — they differ for a timestamp. */
   arrivalDate: string;
   status: ShipmentStatus;
   destination: 'FBA' | 'AWD';
@@ -181,17 +186,44 @@ export interface ShipmentLedger {
   excluded: LedgerShipment[];
 }
 
-const hasReadableArrival = (s: ProjectionShipment): boolean =>
-  !!s.arrival_date && !isNaN(new Date(s.arrival_date).getTime());
+/** The window the engine's walk actually covers, read off the series it produced. */
+export interface WalkWindow { from: string; to: string }
 
-/** First reason that applies, most fundamental first: not shipped > not committed > not FBA > not placeable. */
-function exclusionReasonFor(s: ProjectionShipment): string | null {
+/**
+ * The day key the engine files this arrival under — `localDateKey(new Date(...))`,
+ * exactly what `arrivalsByDay` builds its map from. Deriving it the same way is
+ * what lets the window comparison below be true rather than approximately true:
+ * a `2026-09-10T00:00:00Z` arrival is a different local day in a timezone behind
+ * UTC, and the ledger must agree with the walk, not with the raw string.
+ */
+function arrivalKey(s: ProjectionShipment): string | null {
+  if (!s.arrival_date) return null;
+  const d = new Date(s.arrival_date);
+  return isNaN(d.getTime()) ? null : localDateKey(d);
+}
+
+/**
+ * First reason that applies, most fundamental first: not shipped > not
+ * committed > not FBA > nothing in it > cannot be placed > lands outside the
+ * modelled window.
+ *
+ * `window` is null only when there is no plan to have a window — no window
+ * judgement is made in that case, and the panel renders no ledger anyway.
+ */
+function exclusionReasonFor(s: ProjectionShipment, window: WalkWindow | null): string | null {
   if (EXCLUDED_STATUSES.has(s.status)) return EXCLUSION_REASONS.PO;
+  const destination = destinationOf(s);
   if (!CONFIRMED_STATUSES.has(s.status)) {
-    return s.status === 'arrived' ? EXCLUSION_REASONS.ARRIVED : EXCLUSION_REASONS.UNAPPROVED;
+    if (s.status !== 'arrived') return EXCLUSION_REASONS.UNAPPROVED;
+    // Destination qualifies the reason: an arrived AWD shipment is in the AWD figure.
+    return destination === 'AWD' ? EXCLUSION_REASONS.ARRIVED_AWD : EXCLUSION_REASONS.ARRIVED_FBA;
   }
-  if (destinationOf(s) !== 'FBA') return EXCLUSION_REASONS.AWD_BOUND;
-  if (!hasReadableArrival(s)) return EXCLUSION_REASONS.NO_ARRIVAL_DATE;
+  if (destination !== 'FBA') return EXCLUSION_REASONS.AWD_BOUND;
+  if (!(s.qty > 0)) return EXCLUSION_REASONS.NO_UNITS;
+  const key = arrivalKey(s);
+  if (!key) return EXCLUSION_REASONS.NO_ARRIVAL_DATE;
+  if (window && key < window.from) return EXCLUSION_REASONS.ALREADY_LANDED;
+  if (window && key > window.to) return EXCLUSION_REASONS.BEYOND_HORIZON;
   return null;
 }
 
@@ -199,22 +231,28 @@ function exclusionReasonFor(s: ProjectionShipment): string | null {
  * Split the product's shipments into the ones the projection counted and the
  * ones it did not.
  *
- * The counted list is `confirmedFbaInbound` — the engine's own filter — minus
- * anything whose arrival date will not parse, because the engine silently
- * discards those inside `shipmentArrivals`. That last case is the reason this
- * function exists rather than the panel calling `confirmedFbaInbound` directly:
- * a shipment the operator can see in the plan but that contributes nothing is
- * exactly the kind of omission the ledger is for.
+ * "Counted" is a stronger claim than `confirmedFbaInbound`: it means the units
+ * actually moved the projection. The engine drops three further classes of
+ * shipment silently, inside `shipmentArrivals` / `arrivalsByDay` / `walkFba` —
+ * an unparseable date, a non-positive quantity, and an arrival outside the
+ * walked window. `walkFba` starts at today and reads no key before it, so a
+ * past-dated arrival contributes nothing; that is correct, because such stock
+ * is presumed to be inside the live `fbaOnHand` snapshot already and adding it
+ * again would double-count. The ledger's job is to say so out loud. Printing
+ * "adds 9,000 units" for a delivery the walk never saw would invite confidence
+ * instead of a question — worse than the silent omission this exists to prevent.
  */
-export function partitionShipmentsForLedger(shipments: ProjectionShipment[]): ShipmentLedger {
+export function partitionShipmentsForLedger(
+  shipments: ProjectionShipment[], window: WalkWindow | null,
+): ShipmentLedger {
   const counted: LedgerShipment[] = [];
   const excluded: LedgerShipment[] = [];
   for (const shipment of shipments) {
-    const exclusionReason = exclusionReasonFor(shipment);
+    const exclusionReason = exclusionReasonFor(shipment, window);
     const row: LedgerShipment = {
       shipment,
       qty: shipment.qty,
-      arrivalDate: shipment.arrival_date,
+      arrivalDate: arrivalKey(shipment) ?? shipment.arrival_date,
       status: shipment.status,
       destination: destinationOf(shipment),
       exclusionReason,
@@ -222,6 +260,11 @@ export function partitionShipmentsForLedger(shipments: ProjectionShipment[]): Sh
     (exclusionReason === null ? counted : excluded).push(row);
   }
   return { counted, excluded };
+}
+
+/** The engine's walk window, taken from the series it produced. Null when there is no plan. */
+export function walkWindowOf(series: Array<{ date: string }>): WalkWindow | null {
+  return series.length ? { from: series[0].date, to: series[series.length - 1].date } : null;
 }
 
 /** Units the projection actually adds — the counted rows only. */
