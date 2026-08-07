@@ -383,3 +383,47 @@ export function buildDemandLedger(curve: DemandCurve, from: string, to: string):
 
   return rows;
 }
+
+// ─── Family → product selection ─────────────────────────────
+
+export interface FamilyGrouping {
+  /** Families present, alphabetical. Products with no family land under `UNGROUPED_FAMILY`. */
+  families: string[];
+  byFamily: Record<string, Array<{ product: string; packageQuantity: number }>>;
+}
+
+export const UNGROUPED_FAMILY = 'Other';
+
+/**
+ * Group the product list by family so the panel can ask for a family first.
+ * With 30+ products across four families, a flat list is a scroll hunt; the
+ * family is how the operator already thinks about a batch.
+ */
+export function groupProductsByFamily(
+  products: Array<{ product: string; packageQuantity: number }>,
+  familyOf: (product: string) => string | undefined,
+): FamilyGrouping {
+  const byFamily: FamilyGrouping['byFamily'] = {};
+  for (const p of products) {
+    const family = familyOf(p.product) || UNGROUPED_FAMILY;
+    (byFamily[family] ||= []).push(p);
+  }
+  for (const list of Object.values(byFamily)) list.sort((a, b) => a.product.localeCompare(b.product));
+  return { families: Object.keys(byFamily).sort(), byFamily };
+}
+
+/**
+ * Keep the family/product pair coherent as either changes: an unknown family
+ * falls back to the first one, and a product that is not in the chosen family
+ * falls back to that family's first product. Returns the pair actually in use.
+ */
+export function resolveFamilySelection(
+  grouping: FamilyGrouping,
+  wantedFamily: string,
+  wantedProduct: string,
+): { family: string; product: string } {
+  const family = grouping.byFamily[wantedFamily] ? wantedFamily : (grouping.families[0] ?? '');
+  const list = grouping.byFamily[family] ?? [];
+  const product = list.some(p => p.product === wantedProduct) ? wantedProduct : (list[0]?.product ?? '');
+  return { family, product };
+}

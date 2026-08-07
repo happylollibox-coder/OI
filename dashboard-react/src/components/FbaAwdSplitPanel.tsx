@@ -14,6 +14,7 @@ import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from '../plan
 import {
   TARGET_DOC, OFFERED_FBA_METHODS, docLabel, resolveBatchInput,
   narrowTransitDays, partitionShipmentsForLedger, countedInboundUnits, transitLedgerEntries, statusCaption,
+  groupProductsByFamily, resolveFamilySelection,
   buildDemandCurve, buildDemandLedger, type LedgerShipment,
 } from '../splitPanelData';
 import { fmt } from '../utils';
@@ -190,6 +191,7 @@ function TransferTable({ rows }: { rows: TransferRow[] }) {
 export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
   const { products, fbaMap, awdMap, mfrReadyMap, shipmentsByProduct, snapshotDate, inventoryError } = props;
 
+  const [selectedFamily, setSelectedFamily] = useState('');
   const [selected, setSelected] = useState('');
   const [entered, setEntered] = useState<{ product: string; value: string } | null>(null);
   const [methodChoice, setMethodChoice] = useState<'AUTO' | FbaMethod>('AUTO');
@@ -198,8 +200,14 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
   const narrowing = useMemo(() => narrowTransitDays(constants.transitDays), [constants.transitDays]);
   const today = useMemo(() => props.today ?? new Date(), [props.today]);
 
-  // Selection falls back to the first product rather than going stale if the list changes.
-  const product = products.some(p => p.product === selected) ? selected : (products[0]?.product ?? '');
+  // Family first, then product within it — 30+ products across four families is
+  // a scroll hunt otherwise, and the family is how a batch is thought about.
+  const grouping = useMemo(
+    () => groupProductsByFamily(products, p => props.metaMap[p]?.family),
+    [products, props.metaMap]);
+  // Both selections fall back rather than going stale when the list changes.
+  const { family, product } = resolveFamilySelection(grouping, selectedFamily, selected);
+  const familyProducts = grouping.byFamily[family] ?? [];
   // Switching product drops back to that product's own prefill, never carrying the last one over.
   const typed = entered && entered.product === product ? entered.value : '';
   const batch = useMemo(
@@ -258,9 +266,19 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
       {/* ── Inputs ── */}
       <div className="flex flex-wrap items-end gap-4 mb-3">
         <label className="flex flex-col gap-1">
+          <span className={LABEL}>Family</span>
+          <select
+            className={INPUT} value={family}
+            onChange={e => { setSelectedFamily(e.target.value); setSelected(''); }}
+          >
+            {grouping.families.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1">
           <span className={LABEL}>Product</span>
           <select className={INPUT} value={product} onChange={e => setSelected(e.target.value)}>
-            {products.map(p => <option key={p.product} value={p.product}>{p.product}</option>)}
+            {familyProducts.map(p => <option key={p.product} value={p.product}>{p.product}</option>)}
           </select>
         </label>
 

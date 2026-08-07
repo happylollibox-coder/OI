@@ -6,6 +6,7 @@ import {
   TARGET_DOC, REQUIRED_TRANSIT_KEYS, EXCLUSION_REASONS,
   cartonPrefill, unitsFromCartons, docLabel, narrowTransitDays, resolveBatchInput,
   partitionShipmentsForLedger, buildDemandCurve, buildDemandLedger, transitLedgerEntries,
+  groupProductsByFamily, resolveFamilySelection,
 } from './splitPanelData';
 
 describe('TARGET_DOC', () => {
@@ -496,5 +497,46 @@ describe('buildDemandLedger', () => {
     const curve: DemandCurve = { productDemand: FLAT, familySeason: {}, growth: 1 };
     expect(buildDemandLedger(curve, '2026-10-01', '2026-08-01')).toEqual([]);
     expect(buildDemandLedger(curve, '', '2026-08-01')).toEqual([]);
+  });
+});
+
+describe('family → product selection', () => {
+  const products = [
+    { product: 'Pink Lollibox', packageQuantity: 12 },
+    { product: 'Blue Lollibox', packageQuantity: 12 },
+    { product: 'Hug Bunny', packageQuantity: 24 },
+    { product: 'Orphan Item', packageQuantity: 6 },
+  ];
+  const familyOf = (p: string) =>
+    ({ 'Pink Lollibox': 'Lollibox', 'Blue Lollibox': 'Lollibox', 'Hug Bunny': 'Bunny' } as Record<string, string>)[p];
+
+  it('groups by family, sorts both levels, and parks familyless products under Other', () => {
+    const g = groupProductsByFamily(products, familyOf);
+    expect(g.families).toEqual(['Bunny', 'Lollibox', 'Other']);
+    expect(g.byFamily.Lollibox.map(p => p.product)).toEqual(['Blue Lollibox', 'Pink Lollibox']);
+    expect(g.byFamily.Other.map(p => p.product)).toEqual(['Orphan Item']);
+  });
+
+  it('keeps a valid pair as chosen', () => {
+    const g = groupProductsByFamily(products, familyOf);
+    expect(resolveFamilySelection(g, 'Lollibox', 'Pink Lollibox'))
+      .toEqual({ family: 'Lollibox', product: 'Pink Lollibox' });
+  });
+
+  it('falls back to the first family when the wanted one is unknown', () => {
+    const g = groupProductsByFamily(products, familyOf);
+    expect(resolveFamilySelection(g, '', '').family).toBe('Bunny');
+  });
+
+  it('drops a product that does not belong to the chosen family', () => {
+    const g = groupProductsByFamily(products, familyOf);
+    // Hug Bunny is real, but not a Lollibox — the family wins.
+    expect(resolveFamilySelection(g, 'Lollibox', 'Hug Bunny'))
+      .toEqual({ family: 'Lollibox', product: 'Blue Lollibox' });
+  });
+
+  it('yields empty strings rather than throwing on an empty catalogue', () => {
+    const g = groupProductsByFamily([], familyOf);
+    expect(resolveFamilySelection(g, 'Lollibox', 'Anything')).toEqual({ family: '', product: '' });
   });
 });
