@@ -154,7 +154,7 @@ export function projectedFbaAt(
 ): number {
   const from = startOfDay(today);
   const days = daysBetween(startOfDay(when), from);
-  if (days <= 0) return Math.max(0, fbaOnHand);
+  if (days < 0) return Math.max(0, fbaOnHand);
   return walkFba(fbaOnHand, shipmentArrivals(inbound), curve, from, days).onHand[days];
 }
 
@@ -375,6 +375,7 @@ export function scheduleTransfers(p: TransferParams): { transfers: TransferRow[]
   for (let w = 0; w < weeks; w++) {
     const orderDate = addDays(firstMonday, w * 7);
     const arrival = addDays(orderDate, transferLeadDays);
+    if (daysBetween(arrival, today) > horizonDays) break; // would land past what we model
 
     const before = stockAt(arrival);
     const docBefore = docFromStock(before, arrival, curve, targetDoc * 4);
