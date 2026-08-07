@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { MonthSeasonInfo } from './planTypes';
 import {
-  buildWeeklyProjection, demandOverWindow, forwardDoc,
+  buildWeeklyProjection, demandOverWindow, forwardDoc, dailyDemandOn,
   type DemandCurve,
 } from './stockProjection';
 
@@ -101,6 +101,30 @@ describe('demandOverWindow', () => {
   it('returns zero for months with no forecast', () => {
     const total = demandOverWindow(new Date(2028, 0, 1), new Date(2028, 1, 1), curve);
     expect(total).toBe(0);
+  });
+});
+
+describe('dailyDemandOn', () => {
+  const curve: DemandCurve = { productDemand: DEMAND, familySeason: SEASON, growth: 1.0 };
+
+  it('rates a late-October (peak) day at 2x an early-October (offseason) day', () => {
+    // SEASON[202610] = { peakDays: 10, offseasonDays: 21 } — October has 31 days,
+    // so days 22-31 are peak. Expected numbers come straight from the documented
+    // formula (rate = monthUnits / (peakDays*2 + offDays)), not from the function
+    // under test.
+    const monthUnits = DEMAND[202610]; // 1400
+    const offRate = monthUnits / (10 * 2 + 21); // 1400 / 41
+    const peakRate = offRate * 2;
+
+    const offDay = dailyDemandOn(new Date(2026, 9, 5), curve);   // Oct 5 — offseason
+    const peakDay = dailyDemandOn(new Date(2026, 9, 25), curve); // Oct 25 — peak
+
+    expect(offDay.isPeak).toBe(false);
+    expect(offDay.units).toBeCloseTo(offRate, 10);
+
+    expect(peakDay.isPeak).toBe(true);
+    expect(peakDay.units).toBeCloseTo(peakRate, 10);
+    expect(peakDay.units).toBeCloseTo(offDay.units * 2, 10);
   });
 });
 

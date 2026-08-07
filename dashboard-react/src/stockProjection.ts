@@ -38,10 +38,10 @@ export interface DemandCurve {
 }
 
 /** Real, committed movements. Everything else is a proposal. */
-export const CONFIRMED_STATUSES: ReadonlySet<string> = new Set(['transit', 'approved', 'scheduled']);
+export const CONFIRMED_STATUSES: ReadonlySet<ShipmentStatus> = new Set(['transit', 'approved', 'scheduled']);
 
 /** PO completion means goods sit at the manufacturer, not in a warehouse. */
-export const EXCLUDED_STATUSES: ReadonlySet<string> = new Set(['po_needed', 'po']);
+export const EXCLUDED_STATUSES: ReadonlySet<ShipmentStatus> = new Set(['po_needed', 'po']);
 
 export function getMonday(d: Date): Date {
   const day = d.getDay();
