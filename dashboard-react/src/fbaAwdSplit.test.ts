@@ -3,7 +3,7 @@ import type { MonthSeasonInfo } from './planTypes';
 import type { DemandCurve, ProjectionShipment } from './stockProjection';
 import {
   planSplit, nextWednesday, selectFbaMethod, destinationOf, confirmedFbaInbound,
-  type SplitInput,
+  type SplitInput, type FbaMethod,
 } from './fbaAwdSplit';
 
 const SEASON: Record<number, MonthSeasonInfo> = {
@@ -17,7 +17,7 @@ const FLAT: Record<number, number> = {
   202701: 310, 202702: 280, 202703: 310, 202704: 300, 202705: 310, 202706: 300,
 };
 
-const CURVE: DemandCurve = { productDemand: FLAT, familySeason: SEASON, growth: 1.0 };
+const CURVE: DemandCurve = { productDemand: FLAT, familySeason: {}, growth: 1.0 };
 const TODAY = new Date(2026, 7, 7); // Friday 2026-08-07
 
 const base: SplitInput = {
@@ -237,5 +237,66 @@ describe('planSplit — transfer invariants', () => {
       expect(t.docBefore).toBeLessThan(base.targetDoc);
       expect(t.docAfter).toBeGreaterThan(t.docBefore);
     }
+  });
+});
+
+describe('planSplit — seasonality', () => {
+  // Same batch and same 100-day window (2026-09-18 → 2026-12-26), but December's
+  // demand is concentrated into its last 15 days. The window catches only 10 of
+  // them and pays below-average rates for Dec 1–16, so the requirement lands
+  // just under the flat-curve 1000. Monthly totals are identical either way.
+  const seasonal: DemandCurve = { productDemand: FLAT, familySeason: SEASON, growth: 1.0 };
+
+  it('sizes the FBA leg off the daily curve, not the monthly average', () => {
+    const flat = planSplit({ ...base, cartons: 500 });
+    const peaky = planSplit({ ...base, cartons: 500, curve: seasonal });
+    expect(flat.legs.find(l => l.destination === 'FBA')!.units).toBe(1000);
+    expect(peaky.legs.find(l => l.destination === 'FBA')!.units).toBe(980);
+  });
+
+  it('does not cry "too small" over a sub-carton rounding remainder', () => {
+    // target 982.6 floors to 980, leaving a 2.6-unit remnant — not a shortfall.
+    const exact = planSplit({ ...base, cartons: 98, curve: seasonal });
+    expect(exact.legs.find(l => l.destination === 'AWD')).toBeUndefined();
+    expect(exact.warnings.join(' ')).not.toMatch(/too small/i);
+    // A genuine two-carton gap still warns.
+    const short = planSplit({ ...base, cartons: 98 });
+    expect(short.warnings.join(' ')).toMatch(/too small/i);
+  });
+});
+
+describe('planSplit — method override safety', () => {
+  it('warns about an unavoidable stockout even when the method was overridden', () => {
+    // FBA is empty today, so even FAST_SEA lands ~42 days late. Overriding to
+    // the slower method makes that worse, never better.
+    const plan = planSplit({ ...base, cartons: 500, methodOverride: 'SLOW_SEA' });
+    expect(plan.warnings.join(' ')).toMatch(/unavoidable/i);
+    const fba = plan.legs.find(l => l.destination === 'FBA')!;
+    expect(fba.method).toBe('SLOW_SEA');
+    expect(fba.reason).toMatch(/chosen manually/i);
+    expect(fba.reason).toMatch(/unavoidable stockout/i);
+  });
+
+  it('ignores an override naming a method that is not on offer', () => {
+    // AIR really is in the injected transit map, so without a membership check
+    // this would quietly produce a 10-day air plan for a route Ori banned.
+    const plan = planSplit({
+      ...base,
+      cartons: 500,
+      transitDays: { ...base.transitDays, AIR: 10 },
+      methodOverride: 'AIR' as unknown as FbaMethod,
+    });
+    const fba = plan.legs.find(l => l.destination === 'FBA')!;
+    expect(fba.method).toBe('FAST_SEA'); // the auto pick, not AIR
+    expect(fba.transitDays).toBe(27);
+    expect(fba.reason).not.toMatch(/chosen manually/i);
+  });
+});
+
+describe('planSplit — growth guard', () => {
+  it('refuses to compute when growth zeroes out the whole curve', () => {
+    const plan = planSplit({ ...base, curve: { ...CURVE, growth: 0 } });
+    expect(plan.ok).toBe(false);
+    expect(plan.error).toMatch(/no demand forecast/i);
   });
 });

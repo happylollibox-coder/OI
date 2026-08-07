@@ -204,7 +204,8 @@ export function planSplit(input: SplitInput): SplitPlan {
 
   if (!Number.isFinite(pkg) || pkg <= 0) return fail('Invalid package quantity — cannot convert cartons to units.');
   if (!Number.isFinite(cartons) || cartons <= 0) return fail('Enter a number of cartons greater than zero.');
-  if (Object.values(curve.productDemand).every(v => !v)) {
+  // growth scales every day of the curve, so growth 0 is as blank as an empty forecast.
+  if (!(curve.growth > 0) || Object.values(curve.productDemand).every(v => !v)) {
     return fail('No demand forecast for this product — cannot compute days of cover.');
   }
 
@@ -220,11 +221,15 @@ export function planSplit(input: SplitInput): SplitPlan {
   const oos = fbaOosDate(fbaOnHand, inbound, curve, today, horizonDays);
 
   const selected = selectFbaMethod(shipDate, oos, transitDays, buffer);
-  const method: FbaMethod = methodOverride ?? selected.method;
-  const methodReason = methodOverride
-    ? `${method} chosen manually (auto pick was ${selected.method})`
+  // An override must name a method we actually offer. AIR is in the injected
+  // transit map, so an un-narrowed string reaching here must not become a plan.
+  const override = methodOverride && FBA_METHODS.includes(methodOverride) ? methodOverride : undefined;
+  const method: FbaMethod = override ?? selected.method;
+  const methodReason = override
+    ? `${method} chosen manually (auto pick was ${selected.method}). ${selected.reason}`
     : selected.reason;
-  if (selected.lateDays > 0 && !methodOverride) {
+  // An override cannot fix a late landing, only make it later — always say so.
+  if (selected.lateDays > 0) {
     warnings.push(`FBA runs out ${selected.lateDays} day(s) before the fastest allowed method can land. Stockout is unavoidable from this batch alone.`);
   }
 
@@ -241,8 +246,10 @@ export function planSplit(input: SplitInput): SplitPlan {
   if (fbaUnits === 0) {
     warnings.push(`FBA is already at or above ${targetDoc} DOC on ${localDateKey(fbaSellable)} — the whole batch goes to AWD.`);
   }
-  if (awdUnits === 0 && fbaUnits < target - onHandAtSellable) {
-    const shortUnits = Math.round(target - onHandAtSellable - fbaUnits);
+  // Anything under a carton is the rounding-down remainder, not a real shortfall.
+  const shortfall = target - onHandAtSellable - fbaUnits;
+  if (awdUnits === 0 && shortfall > pkg) {
+    const shortUnits = Math.round(shortfall);
     const shortDays = Math.round(targetDoc * (shortUnits / Math.max(1, target)));
     warnings.push(`Batch is too small to reach ${targetDoc} DOC — short by ${shortUnits} units (~${shortDays} days).`);
   }
