@@ -19,6 +19,16 @@ describe('parseTransitDays', () => {
     expect(days).toEqual({ FAST_SEA: 27 });
   });
 
+  it('skips entries with an empty or whitespace-only value instead of treating it as 0', () => {
+    const days = parseTransitDays([lov('FAST_SEA', '27'), lov('EMPTY', ''), lov('BLANK', '   ')]);
+    expect(days).toEqual({ FAST_SEA: 27 });
+  });
+
+  it('skips entries with a missing value_id', () => {
+    const days = parseTransitDays([lov('FAST_SEA', '27'), { value_id: '', value_caption: '', is_default: false, attr1_value: '99' }]);
+    expect(days).toEqual({ FAST_SEA: 27 });
+  });
+
   it('returns an empty map for no rows', () => {
     expect(parseTransitDays([])).toEqual({});
   });
@@ -31,6 +41,11 @@ describe('parseBufferDays', () => {
 
   it('falls back to the default when absent', () => {
     expect(parseBufferDays([])).toBe(DEFAULT_CONSTANTS.fbaInboundBufferDays);
+  });
+
+  it('falls back to the default when the value is an empty or whitespace-only string', () => {
+    expect(parseBufferDays([lov('FBA_INBOUND_BUFFER_DAYS', '')])).toBe(DEFAULT_CONSTANTS.fbaInboundBufferDays);
+    expect(parseBufferDays([lov('FBA_INBOUND_BUFFER_DAYS', '   ')])).toBe(DEFAULT_CONSTANTS.fbaInboundBufferDays);
   });
 });
 
@@ -79,5 +94,34 @@ describe('useShipmentConstants', () => {
     expect(result.current.loaded).toBe(false);
     expect(result.current.transitDays).toEqual(DEFAULT_CONSTANTS.transitDays);
     expect(result.current.fbaInboundBufferDays).toBe(DEFAULT_CONSTANTS.fbaInboundBufferDays);
+  });
+
+  it('keeps DEFAULT_CONSTANTS and stays not-loaded when SHIPMENT_TYPE rows are well-formed but wrong-shaped (no usable SHIPMENT_DAYS values)', async () => {
+    mockApiFetch
+      .mockResolvedValueOnce(jsonResponse([{}]))
+      .mockResolvedValueOnce(jsonResponse([lov('FBA_INBOUND_BUFFER_DAYS', '10')]));
+
+    const { result } = renderHook(() => useShipmentConstants());
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    expect(result.current.loaded).toBe(false);
+    expect(result.current.transitDays).toEqual(DEFAULT_CONSTANTS.transitDays);
+    expect(result.current.fbaInboundBufferDays).toBe(DEFAULT_CONSTANTS.fbaInboundBufferDays);
+  });
+
+  it('does not hand out a mutable reference to DEFAULT_CONSTANTS.transitDays', async () => {
+    expect(Object.isFrozen(DEFAULT_CONSTANTS.transitDays)).toBe(true);
+
+    mockApiFetch.mockRejectedValueOnce(new Error('network down'));
+    const { result } = renderHook(() => useShipmentConstants());
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    expect(result.current.transitDays).not.toBe(DEFAULT_CONSTANTS.transitDays);
+    expect(result.current.transitDays).toEqual(DEFAULT_CONSTANTS.transitDays);
+
+    // Mutating the hook's returned map must never poison the shared defaults.
+    result.current.transitDays.POISONED = 999;
+    expect(DEFAULT_CONSTANTS.transitDays.POISONED).toBeUndefined();
   });
 });
