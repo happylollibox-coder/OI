@@ -2,7 +2,7 @@
 // and is tested there; this only checks that each of the panel's states puts
 // something honest on screen, and that the whole tree mounts.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import type { ProjectionShipment } from '../stockProjection';
 import { useShipmentConstants } from '../hooks/useShipmentConstants';
 import { FbaAwdSplitPanel } from './FbaAwdSplitPanel';
@@ -81,6 +81,31 @@ describe('FbaAwdSplitPanel', () => {
     render(<FbaAwdSplitPanel {...baseProps} />);
     expect(screen.getByText(/AWD → FBA transfer lead \(door to sellable, no buffer on top\)/)).toBeInTheDocument();
     expect(screen.getByText(/FBA inbound processing buffer \(manufacturer → FBA only\)/)).toBeInTheDocument();
+  });
+
+  it('lets the operator pick how full a delivery leaves FBA, and re-plans on it', () => {
+    // The two fill levels trade transfer handling against FBA storage, so which
+    // one wins is a judgement the operator makes per batch — not a constant.
+    render(<FbaAwdSplitPanel {...baseProps} />);
+
+    const group = screen.getByRole('group', { name: /how full this delivery leaves fba/i });
+    const [sixty, fortyFive] = within(group).getAllByRole('button');
+    expect(sixty).toHaveTextContent('60d');
+    expect(fortyFive).toHaveTextContent('45d');
+    expect(sixty).toHaveAttribute('aria-pressed', 'true');
+
+    expect(screen.getByText(/This delivery fills FBA to 60 days/)).toBeInTheDocument();
+    const at60 = screen.getByText(/Units to fill FBA to 60 days from that date/);
+    expect(at60).toBeInTheDocument();
+
+    fireEvent.click(fortyFive);
+
+    expect(fortyFive).toHaveAttribute('aria-pressed', 'true');
+    expect(sixty).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText(/This delivery fills FBA to 45 days/)).toBeInTheDocument();
+    // The reserve's share is derived from the fill, so it moves with it: a
+    // 45-day fill leaves 55 of the 100-day combined target, not 40.
+    expect(screen.getByText(/55 days/)).toBeInTheDocument();
   });
 
   it('offers the AWD leg its own route picker, and never Air on it either', () => {

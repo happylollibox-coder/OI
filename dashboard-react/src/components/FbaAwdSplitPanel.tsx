@@ -17,7 +17,7 @@ import { useShipmentConstants } from '../hooks/useShipmentConstants';
 import type { ProjectionShipment } from '../stockProjection';
 import type { ForecastDemandMap, ForecastMetaMap, MonthSeasonMap } from '../planTypes';
 import {
-  FBA_TARGET_DOC, FBA_REORDER_DOC, FBA_BATCH_DOC, TOTAL_TARGET_DOC, AWD_RESERVE_DOC,
+  FBA_TARGET_DOC, FBA_REORDER_DOC, FBA_BATCH_DOC, TOTAL_TARGET_DOC,
   OFFERED_FBA_METHODS, OFFERED_AWD_METHODS, docLabel, resolveBatchInput,
   narrowTransitDays, partitionShipmentsForLedger, transitLedgerEntries, statusCaption,
   groupProductsByFamily, resolveFamilySelection,
@@ -258,6 +258,12 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
   // The AWD leg has no auto pick to fall back to — there is nothing to escalate
   // against, since the reserve is not what runs out — so the default IS a route.
   const [awdMethodChoice, setAwdMethodChoice] = useState<AwdMethod>(OFFERED_AWD_METHODS[0]);
+  // How full a direct delivery leaves FBA. 60 avoids paying transfer handling
+  // almost immediately; 45 keeps less stock in the expensive warehouse. Which
+  // wins depends on how long the units would otherwise sit at AWD and whether
+  // that stretch falls in Q4 — so it is the operator's call, not a constant.
+  const [batchDoc, setBatchDoc] = useState<number>(FBA_BATCH_DOC);
+  const reserveDoc = TOTAL_TARGET_DOC - batchDoc;
 
   const constants = useShipmentConstants();
   const narrowing = useMemo(() => narrowTransitDays(constants.transitDays), [constants.transitDays]);
@@ -311,12 +317,12 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
       transitDays: narrowing.transitDays,
       fbaInboundBufferDays: constants.fbaInboundBufferDays,
       today, fbaTargetDoc: FBA_TARGET_DOC, fbaReorderDoc: FBA_REORDER_DOC,
-      fbaBatchDoc: FBA_BATCH_DOC, totalTargetDoc: TOTAL_TARGET_DOC,
+      fbaBatchDoc: batchDoc, totalTargetDoc: TOTAL_TARGET_DOC,
       methodOverride: methodChoice === 'AUTO' ? undefined : methodChoice,
       awdMethodOverride: awdMethodChoice,
     });
   }, [product, narrowing, batch, fbaMap, awdMap, awdInbound, reconciliation, curve,
-    constants.fbaInboundBufferDays, today, methodChoice, awdMethodChoice]);
+    constants.fbaInboundBufferDays, today, methodChoice, awdMethodChoice, batchDoc]);
 
   // The window follows the COMBINED target — it is about seeing the whole
   // position land, and most of the batch is still at sea at 45 days.
@@ -346,7 +352,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
       <div className="flex items-baseline justify-between gap-4 mb-3">
         <div className={LABEL}>FBA / AWD Split — advisory, nothing is sent</div>
         <div className="text-[9px] text-subtle text-right leading-relaxed">
-          <div>This delivery fills FBA to {FBA_BATCH_DOC} days</div>
+          <div>This delivery fills FBA to {batchDoc} days</div>
           <div>
             Then transfers order at {FBA_REORDER_DOC}, restore to {FBA_TARGET_DOC} · {TOTAL_TARGET_DOC} days FBA + AWD combined
           </div>
@@ -389,6 +395,28 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
             {OFFERED_FBA_METHODS.map(m => <option key={m} value={m}>{methodCaption(m)}</option>)}
           </select>
         </label>
+
+        <div className="flex flex-col gap-1">
+          <span className={LABEL}>Fill FBA to</span>
+          <div className="inline-flex rounded border border-border/40 overflow-hidden self-start"
+            role="group" aria-label="How full this delivery leaves FBA">
+            {[FBA_BATCH_DOC, FBA_TARGET_DOC].map(d => (
+              <button
+                key={d} type="button" onClick={() => setBatchDoc(d)} aria-pressed={batchDoc === d}
+                title={d === FBA_BATCH_DOC
+                  ? `${d} days — skips an early transfer and its handling`
+                  : `${d} days — keeps less stock in the expensive warehouse`}
+                className={`px-2.5 py-1 text-[11px] font-mono transition-colors ${
+                  batchDoc === d
+                    ? 'bg-[color:var(--color-text)] text-[color:var(--color-card)]'
+                    : 'text-muted hover:text-[color:var(--color-text)]'
+                }`}
+              >
+                {d}d
+              </button>
+            ))}
+          </div>
+        </div>
 
         <label className="flex flex-col gap-1">
           <span className={LABEL}>AWD method</span>
@@ -434,7 +462,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
             {plan.legs.map((leg, i) => <LegCard key={`${leg.destination}-${i}`} leg={leg} />)}
             <div className="text-[10px] text-muted">
               FBA cover on the sellable date: <span className="font-mono text-[color:var(--color-text)]">{docLabel(plan.fbaDocAtArrival)}</span>
-              {' '}against the {FBA_BATCH_DOC}-day delivery fill; FBA and AWD together{' '}
+              {' '}against the {batchDoc}-day delivery fill; FBA and AWD together{' '}
               <span className="font-mono text-[color:var(--color-text)]">{docLabel(plan.combinedDocAtArrival)}</span>
               {' '}against {TOTAL_TARGET_DOC}.
               {plan.fbaOosDate && <> FBA runs out <span className="font-mono" style={{ color: 'var(--color-negative)' }}>{plan.fbaOosDate}</span> without it.</>}
@@ -451,7 +479,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
                 rows={chartRows}
                 fbaTargetDoc={FBA_TARGET_DOC}
                 fbaReorderDoc={FBA_REORDER_DOC}
-                fbaBatchDoc={FBA_BATCH_DOC}
+                fbaBatchDoc={batchDoc}
                 oosLabel={plan.fbaOosDate ?? undefined}
               />
             </div>
@@ -497,7 +525,7 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
               <div>
                 <div className={`${LABEL} mb-1`}>Sizing the FBA leg</div>
                 <KV label="Sellable at FBA (arrival + inbound buffer)" value={plan.sellableDate} source="Split engine" />
-                <KV label={`Units to fill FBA to ${FBA_BATCH_DOC} days from that date`} value={fmt(plan.targetUnits)} source="Split engine" />
+                <KV label={`Units to fill FBA to ${batchDoc} days from that date`} value={fmt(plan.targetUnits)} source="Split engine" />
                 <KV label="Projected FBA on hand at that date" value={fmt(plan.onHandAtSellable)} source="Split engine" />
                 <KV label="Still short after this batch" value={fmt(plan.shortfallUnits)} source="Split engine" />
                 <KV label="FBA cover on the sellable date" value={docLabel(plan.fbaDocAtArrival)} source="Split engine" />
@@ -542,9 +570,9 @@ export function FbaAwdSplitPanel(props: FbaAwdSplitPanelProps) {
                     indistinguishable in a list of day counts. */}
                 <KV label="FBA cover — ORDERS a transfer at this level (Seller Central min)" value={`${FBA_REORDER_DOC} days`} source="Operating rule" />
                 <KV label="FBA cover — a TRANSFER is sized to restore this level (Seller Central max)" value={`${FBA_TARGET_DOC} days`} source="Operating rule" />
-                <KV label="FBA cover — a DIRECT delivery from the manufacturer fills to this level" value={`${FBA_BATCH_DOC} days`} source="Operating rule" />
+                <KV label="FBA cover — a DIRECT delivery from the manufacturer fills to this level" value={`${batchDoc} days`} source={batchDoc === FBA_BATCH_DOC ? 'Operating rule' : 'Operator input'} />
                 <KV label="FBA + AWD cover together — the COMBINED position" value={`${TOTAL_TARGET_DOC} days`} source="Operating rule" />
-                <KV label="AWD share of the combined target (what is left once a delivery fills FBA)" value={`${AWD_RESERVE_DOC} days`} source="Operating rule" />
+                <KV label="AWD share of the combined target (what is left once a delivery fills FBA)" value={`${reserveDoc} days`} source="Derived from the fill level" />
               </div>
             </div>
           </details>
