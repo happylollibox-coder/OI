@@ -1397,6 +1397,15 @@ views:
       - V_UNIFIED_DAILY
       - FACT_AMAZON_PERFORMANCE_DAILY
 
+  - name: "V_BOOK_ASSIGNMENT"
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_BOOK_ASSIGNMENT.sql"]
+    description: "v27.84 (two-book P&L, 2026-08-19) — which BOOK each family is judged in: HARVEST (established, judged on net profit) or INVEST (a declared launch, judged on improvement inside a bounded sanction). One row per family. HARVEST IS THE DEFAULT AND THAT IS THE POINT: a family becomes INVEST only through a live declaration in DE_LAUNCH_INVESTMENT (CURRENT_DATE America/Los_Angeles <= stop_date), so undeclared spend is Harvest spend and is judged on money like everything else — which makes an undeclared launch immediately visible instead of quietly exempt. Expiry needs no code change: past stop_date the family reverts to Harvest by itself. THE BINDING CONSTRAINT IS daily_investment, THE SPEND RATE (Ori 2026-08-19 'spend rate binds') — that is the number actually sanctioned; monthly_loss_ceiling rides along as a catastrophe backstop only, because a net-profit ceiling on a product that nearly covers its costs almost never fires (measured 2026-08-19: both families ran 1.5-1.8x over sanctioned spend while losing only $259 and $74 against ceilings of $913 and $1,674). takeover_target_organic_units passes through NULL until Ori supplies it — NULL is 'no target on record', never 0. launch_age_months is measured from the family's FIRST SALE in V_UNIFIED_DAILY, not from sanctioned_on (both sanctions were signed 2026-08-13, months after either launch began), using the same first-sale definition as V_LAUNCH_EXEMPTION so the two objects can never disagree about how old a family is; it drives the RAMP vs PROOF selector downstream. Family universe = V_CAMPAIGN_FAMILY_MAP EXCLUDING the literal 'Unknown' fallback, which is not a family but the map's unresolved-campaign sentinel (9 of 97 enabled campaigns on 2026-08-19) and has no row in V_FAMILY_PNL; excluding it makes this view's universe exactly the measurement spine's 6 families. Reads 2026-08-19: Bunny INVEST $30/day through 2026-10-31, LolliBall INVEST $55/day through 2026-11-30, Bottle/Fresh/LolliME/Lollibox HARVEST. Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md §2."
+    dependencies:
+      - V_CAMPAIGN_FAMILY_MAP
+      - V_UNIFIED_DAILY
+      - DE_LAUNCH_INVESTMENT
+
 
 # ═══════════════════════════════════════════════════════════════
 # TABLES
