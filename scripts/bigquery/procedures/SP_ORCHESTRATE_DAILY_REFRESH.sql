@@ -1510,6 +1510,49 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 20.5g-1 (Ori 2026-08-19): Family keyword-bar snapshot. Materializes
+  -- V_FAMILY_BAR into T_FAMILY_BAR, exploded to CAMPAIGN grain (88 of 97 enabled campaigns @
+  -- 2026-08-19; the 9 in the map's 'Unknown' bucket get no row and therefore no bar).
+  --
+  -- WHY A TABLE: the bid engines V_KEYWORD_LIFT and V_OOB_KEYWORD are each AT BigQuery's planning
+  -- ceiling. Inlining one more view into them is the exact move that stopped V_PANEL_OWNERSHIP
+  -- planning outright on 2026-08-17 (fact_oi_cube_table_planner_blowup — never inline a ceiling
+  -- view, read a T_ built earlier in the SP). The engines LEFT JOIN this TABLE on campaign_id, a
+  -- key they already publish, and COALESCE(keyword_bar, 1.0) so an unmapped campaign keeps exactly
+  -- today's behaviour.
+  --
+  -- ORDER IS THE CONTRACT: it must run BEFORE the engine T_ builds of Task 21
+  -- SP_REFRESH_CUBE_TABLES so the engines compile against the bars of the run they are part of,
+  -- and it sits here beside 20.5g because its inputs (V_FAMILY_PNL, V_BOOK_ASSIGNMENT,
+  -- V_CAMPAIGN_FAMILY_MAP -> DIM_CAMPAIGN + FACT_AMAZON_ADS + DIM_PRODUCT) are all loaded far
+  -- upstream by Tasks 1-20.4. It is a tiny idempotent CREATE OR REPLACE.
+  -- Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md §4.
+  -- ============================================
+  SET procedure_name = 'SP_SNAPSHOT_FAMILY_BAR';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_FAMILY_BAR`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 20.6: Materialize Research Ranking (depends on FACT_AMAZON_ADS + FACT_SEARCH_QUERY)
   -- Populates FACT_RESEARCH_TERMS + FACT_RESEARCH_RANKED for the Research page
   -- ============================================
