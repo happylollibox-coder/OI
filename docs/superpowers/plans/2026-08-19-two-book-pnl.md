@@ -22,6 +22,10 @@ These are not style preferences. Each one exists because breaking it broke produ
 4. **Deploy battery, every object, every time:** back up → deploy → before/after flip report → pull-twice determinism.
 5. **`config.yaml` parses today. NEVER append entries to the end of the file** — the tail is inside the `monitoring:` mapping and appending there broke the parse on 2026-08-17. Insert into the `views:` or `tables:` list, then verify with PyYAML.
 6. **Deploy command:** `bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"`. Header lines starting `--` at column 0 are stripped at deploy, so header comments are repo-only.
+7. **Never pipe SQL through plain `cat`.** Any file beginning with `--` makes bq abort with
+   *"FATAL Flags parsing error: Unknown command line flag"* — it reads the comment as a flag. Every
+   assertion file in this plan starts with a `--` comment, so **always** use `grep -v '^--' FILE`,
+   exactly as the deploy command does. (Found the hard way in Task 1.)
 
 ---
 
@@ -88,7 +92,7 @@ FROM want w LEFT JOIN got g USING (family);
 
 ```bash
 cd /Users/ori/Develop/OI
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t1_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t1_assert.sql)"
 ```
 Expected: `Not found: Table onyga-482313:OI.V_FAMILY_PNL`
 
@@ -193,7 +197,7 @@ Expected: `Created onyga-482313.OI.V_FAMILY_PNL`
 - [ ] **Step 5: Run the assertion — it must now pass**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t1_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t1_assert.sql)"
 ```
 Expected: `missing_families 0, np_mismatches 0, roas_mismatches 0, halo_mismatches 0`
 
@@ -231,7 +235,7 @@ open(p,'w').write('\n'.join(lines))
 PY
 python3 -c "import yaml;d=yaml.safe_load(open('config.yaml'));print('PARSES OK, views:',len(d['views']))"
 ```
-Expected: `PARSES OK, views: 204`
+Expected: `PARSES OK` and the view count **one higher than before your edit**. Do not match an absolute number — the working tree carries other uncommitted registrations, so the total drifts.
 
 - [ ] **Step 8: Commit**
 
@@ -242,108 +246,122 @@ git commit -m "feat: V_FAMILY_PNL — family economics including the organic hal
 
 ---
 
-## Task 2: `DE_LAUNCH_INVESTMENT` — the declaration
+## Task 2: `DE_LAUNCH_INVESTMENT` — EXTEND the existing declaration
 
-A launch that is not declared with all three fields is not an investment, it is a leak. That rule is enforced by the table's own NOT NULL constraints.
+> **⚠ THIS TASK WAS REWRITTEN AFTER TASK 1's REVIEW.** The original version created this table.
+> **It already exists, holds real sanctioned data, and `V_LAUNCH_EXEMPTION` reads it today.**
+> `CREATE TABLE IF NOT EXISTS` against it is a **silent no-op**, after which Tasks 3, 6 and 8b would
+> query columns that do not exist and fail only once three more objects had been built on top.
+
+**What is already there** (Ori sanctioned these on 2026-08-13):
+
+| parent_name | daily_investment | stop_date |
+|---|---|---|
+| Bunny | $30.00/day | 2026-10-31 |
+| LolliBall | $55.00/day | 2026-11-30 |
+
+Schema: `parent_name, daily_investment, stop_date, sanctioned_on, note, updated_at, updated_by`.
+`V_LAUNCH_EXEMPTION` computes `exempt_until = LEAST(first sale + 183d, stop_date)` from it.
+
+**The decision: EXTEND, never duplicate.** One declaration, one place. A second declaration table
+would be two sources of truth about the same thing — precisely the defect class this design exists
+to fix. The existing `stop_date` IS the design's end date and `parent_name` IS its family; only two
+fields are genuinely missing.
 
 **Files:**
-- Create: `scripts/bigquery/tables/DE_LAUNCH_INVESTMENT.sql`
-- Modify: `config.yaml` (insert into the `tables:` list)
+- Modify: `scripts/bigquery/tables/DE_LAUNCH_INVESTMENT.sql` (record the ALTER; do not rewrite the CREATE)
+- Modify: `config.yaml` (update the existing entry's description — do NOT add a second entry)
 
 - [ ] **Step 1: Write the failing assertion**
 
 Save as `/tmp/t2_assert.sql`:
 
 ```sql
--- ASSERT: the table exists and refuses an incomplete declaration.
-SELECT COUNT(*) AS col_count,
-       COUNTIF(column_name = 'monthly_loss_ceiling' AND is_nullable = 'NO') AS ceiling_required,
-       COUNTIF(column_name = 'end_date'             AND is_nullable = 'NO') AS end_date_required,
-       COUNTIF(column_name = 'takeover_target_organic_units' AND is_nullable = 'NO') AS target_required
-FROM `onyga-482313.OI`.INFORMATION_SCHEMA.COLUMNS
-WHERE table_name = 'DE_LAUNCH_INVESTMENT';
+-- ASSERT: the two new fields exist, and every pre-existing column and value is untouched.
+SELECT
+  (SELECT COUNTIF(column_name = 'monthly_loss_ceiling')
+     FROM `onyga-482313.OI`.INFORMATION_SCHEMA.COLUMNS
+    WHERE table_name = 'DE_LAUNCH_INVESTMENT')                              AS has_ceiling,
+  (SELECT COUNTIF(column_name = 'takeover_target_organic_units')
+     FROM `onyga-482313.OI`.INFORMATION_SCHEMA.COLUMNS
+    WHERE table_name = 'DE_LAUNCH_INVESTMENT')                              AS has_target,
+  (SELECT COUNT(*) FROM `onyga-482313.OI.DE_LAUNCH_INVESTMENT`)             AS rows_kept,
+  (SELECT COUNTIF(parent_name = 'Bunny'     AND daily_investment = 30.0
+                  AND stop_date = DATE '2026-10-31')
+     FROM `onyga-482313.OI.DE_LAUNCH_INVESTMENT`)                           AS bunny_intact,
+  (SELECT COUNTIF(parent_name = 'LolliBall' AND daily_investment = 55.0
+                  AND stop_date = DATE '2026-11-30')
+     FROM `onyga-482313.OI.DE_LAUNCH_INVESTMENT`)                           AS lolliball_intact;
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [ ] **Step 2: Run it and confirm the new fields are missing**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t2_assert.sql)"
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t2_assert.sql)"
 ```
-Expected: `col_count 0, ceiling_required 0, end_date_required 0, target_required 0`
+Expected: `has_ceiling 0, has_target 0, rows_kept 2, bunny_intact 1, lolliball_intact 1`
 
-- [ ] **Step 3: Write the DDL**
-
-Create `scripts/bigquery/tables/DE_LAUNCH_INVESTMENT.sql`:
-
-```sql
--- =============================================
--- DE_LAUNCH_INVESTMENT — the launch declaration (2026-08-19).
--- Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md §5.
---
--- A DECLARATION REQUIRES ALL THREE FIELDS OR IT IS NOT A DECLARATION. The defect this fixes:
--- ~$5,400/month flowed to Bunny and LolliBall at 0.39-0.49 ads net ROAS with no ceiling, no end date
--- and no success test, so the spend accumulated without anyone deciding and its losses were blended
--- into the engine's scorecard. NOT NULL on all three is the enforcement.
---
--- THE CEILING IS DENOMINATED IN NET PROFIT — the same metric the Harvest book uses
--- (total sales - COGS - ad spend), NOT ad spend and NOT ads-attributed profit. A $2,500 ceiling means
--- the family may lose $2,500 of net profit in a calendar month, whatever it spends to do so.
--- =============================================
-CREATE TABLE IF NOT EXISTS `onyga-482313.OI.DE_LAUNCH_INVESTMENT` (
-  family                        STRING    NOT NULL,
-  monthly_loss_ceiling          FLOAT64   NOT NULL,  -- dollars of NET PROFIT loss allowed per calendar month
-  start_date                    DATE      NOT NULL,
-  end_date                      DATE      NOT NULL,  -- exemption expires here, no code change needed
-  takeover_target_organic_units INT64     NOT NULL,  -- organic units/month that means "it took over"
-  declared_by                   STRING,
-  declared_at                   TIMESTAMP,
-  notes                         STRING
-);
-```
-
-- [ ] **Step 4: Deploy**
+- [ ] **Step 3: Extend the table, additively**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
-  "$(grep -v '^--' scripts/bigquery/tables/DE_LAUNCH_INVESTMENT.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+ALTER TABLE \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\`
+  ADD COLUMN IF NOT EXISTS monthly_loss_ceiling FLOAT64,
+  ADD COLUMN IF NOT EXISTS takeover_target_organic_units INT64"
 ```
-Expected: `Created onyga-482313.OI.DE_LAUNCH_INVESTMENT`
+
+**ADDITIVE ONLY. Never rename, drop or retype an existing column** — `V_LAUNCH_EXEMPTION` reads this
+table live and a rename breaks the launch exemption for both families.
+
+- [ ] **Step 4: Backfill the ceiling from what Ori already sanctioned**
+
+Do not invent a ceiling. The sanctioned daily spend IS the natural loss bound — you cannot lose
+materially more than you spend:
+
+```bash
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+UPDATE \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\`
+SET monthly_loss_ceiling = ROUND(daily_investment * 30.44, 0)
+WHERE monthly_loss_ceiling IS NULL"
+```
+Expected: Bunny → ~913, LolliBall → ~1674.
+
+**Leave `takeover_target_organic_units` NULL.** A take-over target is a business judgement, not
+arithmetic, and it is the one field Ori must still supply. Task 6 must therefore treat a NULL target
+as "PROOF phase cannot be judged yet" rather than as zero.
 
 - [ ] **Step 5: Run the assertion — must pass**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t2_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t2_assert.sql)"
 ```
-Expected: `col_count 8, ceiling_required 1, end_date_required 1, target_required 1`
+Expected: `has_ceiling 1, has_target 1, rows_kept 2, bunny_intact 1, lolliball_intact 1`
 
-- [ ] **Step 6: Verify the table refuses an incomplete declaration**
+- [ ] **Step 6: Prove nothing downstream broke**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
-"INSERT INTO \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\` (family, start_date) VALUES ('TestFamily', DATE '2026-08-01')"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --dry_run \
+  "SELECT COUNT(*) FROM \`onyga-482313.OI.V_LAUNCH_EXEMPTION\`"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
+  "SELECT COUNT(*) AS exemption_rows FROM \`onyga-482313.OI.V_LAUNCH_EXEMPTION\`"
 ```
-Expected: FAILS with a required-column error. This is the enforcement working — do not add a default to make it pass.
+Expected: dry-run validates and the row count is unchanged from before the ALTER. If the exemption
+view breaks, the ALTER was not additive — investigate before going further.
 
-- [ ] **Step 7: Register in config.yaml (tables: list) and commit**
+- [ ] **Step 7: Record the ALTER in the repo file and update config.yaml**
+
+Append the ALTER to `scripts/bigquery/tables/DE_LAUNCH_INVESTMENT.sql` under a dated comment
+explaining that the two-book design extended it and why the fields mean what they mean. Update the
+EXISTING `config.yaml` entry's description to name both new columns. **Do not add a second entry** —
+verify with `grep -c 'DE_LAUNCH_INVESTMENT"' config.yaml`, which must return 1.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-python3 - << 'PY'
-p='config.yaml'; lines=open(p).read().split('\n')
-t=next(i for i,l in enumerate(lines) if l.strip()=='tables:')
-nxt=next(i for i in range(t+1,len(lines)) if lines[i] and not lines[i][0].isspace())
-end=next(i for i in range(nxt-1,t,-1) if lines[i].strip())+1
-entry='''  - name: "DE_LAUNCH_INVESTMENT"
-    type: "table"
-    source_files: ["scripts/bigquery/tables/DE_LAUNCH_INVESTMENT.sql"]
-    description: "The launch declaration (2026-08-19). One row per family in the Invest book. All three of monthly_loss_ceiling, end_date and takeover_target_organic_units are NOT NULL — a launch without all three is not an investment, it is a leak, which is exactly how ~$5,400/month reached Bunny and LolliBall undeclared. The ceiling is denominated in NET PROFIT, not ad spend."'''.split('\n')
-lines[end:end]=['']+entry
-open(p,'w').write('\n'.join(lines))
-PY
-python3 -c "import yaml;d=yaml.safe_load(open('config.yaml'));print('PARSES OK, tables:',len(d['tables']))"
 git add scripts/bigquery/tables/DE_LAUNCH_INVESTMENT.sql config.yaml
-git commit -m "feat: DE_LAUNCH_INVESTMENT — a launch declaration requires ceiling, end date and target"
+git commit -m "feat: extend DE_LAUNCH_INVESTMENT with a net-profit ceiling and take-over target"
 ```
-Expected: `PARSES OK, tables: 128`
 
 ---
 
@@ -370,7 +388,7 @@ FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT`;
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t3_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t3_assert.sql)"
 ```
 Expected: `Not found: Table onyga-482313:OI.V_BOOK_ASSIGNMENT`
 
@@ -424,7 +442,7 @@ LEFT JOIN decl d ON d.family = f.family;
 ```bash
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/views/V_BOOK_ASSIGNMENT.sql)"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t3_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t3_assert.sql)"
 ```
 Expected deploy: `Created onyga-482313.OI.V_BOOK_ASSIGNMENT`
 Expected assert: `bad_book_values 0, invest_without_declaration 0, null_families 0, families 6`
@@ -468,7 +486,7 @@ FROM b;
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t4_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t4_assert.sql)"
 ```
 Expected: `Not found: Table onyga-482313:OI.V_FAMILY_BAR`
 
@@ -551,7 +569,7 @@ LEFT JOIN `onyga-482313.OI.V_BOOK_ASSIGNMENT` b ON b.family = p.family;
 ```bash
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/views/V_FAMILY_BAR.sql)"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t4_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t4_assert.sql)"
 ```
 Expected: all five counters `0`.
 
@@ -609,7 +627,7 @@ FROM `onyga-482313.OI.T_FAMILY_BAR`;
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t5_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t5_assert.sql)"
 ```
 Expected: `Not found: Table onyga-482313:OI.T_FAMILY_BAR`
 
@@ -657,7 +675,7 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/procedures/SP_SNAPSHOT_FAMILY_BAR.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "CALL \`onyga-482313.OI.SP_SNAPSHOT_FAMILY_BAR\`()"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t5_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t5_assert.sql)"
 ```
 Expected: `rows_in_table` = one row per mapped campaign (~106), `null_bars 0`, `null_campaign_ids 0`, `families 6`, `duplicate_campaigns 0`
 
@@ -666,7 +684,7 @@ Expected: `rows_in_table` = one row per mapped campaign (~106), `null_bars 0`, `
 ```bash
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "CALL \`onyga-482313.OI.SP_SNAPSHOT_FAMILY_BAR\`()"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t5_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t5_assert.sql)"
 ```
 Expected: identical counts to Step 4.
 
@@ -728,7 +746,7 @@ FROM `onyga-482313.OI.V_INVEST_STATUS`;
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t6_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t6_assert.sql)"
 ```
 Expected: `Not found: Table onyga-482313:OI.V_INVEST_STATUS`
 
@@ -835,17 +853,18 @@ LEFT JOIN mtd    ON mtd.family = b.family;
 
 - [ ] **Step 4: Deploy and assert with a real declaration**
 
-The view returns zero rows until something is declared, so insert Bunny's declaration to exercise it. These are Ori's real numbers to confirm before running — ceiling $2,500/month, ending 2026-11-30, target 400 organic units/month:
+**Bunny is already declared** (Task 2 extended the existing row: $30/day sanctioned, stop_date
+2026-10-31, ceiling backfilled to ~$913/month). Do NOT insert a new declaration and do NOT invent
+numbers — the earlier draft of this task proposed a $2,500 ceiling and a 2026-11-30 end date, both
+of which contradict what Ori actually sanctioned on 2026-08-13.
+
+`takeover_target_organic_units` is deliberately NULL until Ori supplies it, so the PROOF branch must
+report "target not set" rather than comparing against zero. Verify the view handles that:
 
 ```bash
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/views/V_INVEST_STATUS.sql)"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
-"INSERT INTO \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\`
- (family, monthly_loss_ceiling, start_date, end_date, takeover_target_organic_units, declared_by, declared_at, notes)
- VALUES ('Bunny', 2500.0, DATE '2026-05-24', DATE '2026-11-30', 400, 'Ori', CURRENT_TIMESTAMP(),
-         'First declaration under the two-book design. Ceiling is NET PROFIT loss per calendar month.')"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t6_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t6_assert.sql)"
 ```
 Expected: all five counters `0`.
 
@@ -893,7 +912,7 @@ FROM r;
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t7_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t7_assert.sql)"
 ```
 Expected: `Not found: Table onyga-482313:OI.V_TWO_BOOK_BRIEF`
 
@@ -965,7 +984,7 @@ SELECT * FROM fam UNION ALL SELECT * FROM tot;
 ```bash
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/views/V_TWO_BOOK_BRIEF.sql)"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t7_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t7_assert.sql)"
 ```
 Expected: `bad_books 0, bad_row_kinds 0, total_rows 2, harvest_reconcile_gap 0`
 
@@ -1132,7 +1151,7 @@ JOIN `onyga-482313.OI.V_INVEST_STATUS` i ON i.family = e.parent_name;
 - [ ] **Step 2: Run it and confirm it fails (or returns 0 only because nothing is declared yet)**
 
 ```bash
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t8b_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t8b_assert.sql)"
 ```
 If Task 6 inserted Bunny's declaration and Bunny is inside its window and under ceiling, this may
 already read `0`. That is a weak pass — Step 4 forces the real test.
@@ -1182,7 +1201,7 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
 "UPDATE \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\` SET monthly_loss_ceiling = 1.0 WHERE family='Bunny'"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
 "SELECT family, exemption_live, ceiling_used_pct FROM \`onyga-482313.OI.V_INVEST_STATUS\` WHERE family='Bunny'"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/t8b_assert.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t8b_assert.sql)"
 
 # restore
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
