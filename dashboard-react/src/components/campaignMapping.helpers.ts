@@ -5,6 +5,8 @@ export interface CampaignMappingRow {
   current_experiment_id: string | null;
   current_experiment_name: string | null;
   current_strategy_id: string | null;
+  /** Family of the current experiment ("<Family> - <label>" convention). Optional: older API payloads omit it. */
+  current_family?: string | null;
   suggested_family: string | null;
   suggested_strategy: string | null;
   suggested_experiment_id: string | null;

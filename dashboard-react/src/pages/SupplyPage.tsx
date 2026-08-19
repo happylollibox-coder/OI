@@ -9,8 +9,8 @@
  */
 
 import { useState, useMemo, useCallback, Fragment, useRef, useEffect } from 'react';
-import type { DashboardData, SupplyPORow, SupplyPaymentRow, SupplyShipmentRow } from '../types';
-import { Package, CreditCard, Truck, ChevronDown, ChevronUp, Filter, X, Download, Copy, Check, BarChart3, Eye, Plus, DollarSign } from 'lucide-react';
+import type { DashboardData, SupplyPORow, SupplyPaymentRow, SupplyShipmentRow, SupplyOtherPORow } from '../types';
+import { Package, CreditCard, Truck, ChevronDown, ChevronUp, Filter, X, Download, Copy, Check, BarChart3, Eye, Plus, DollarSign, Receipt, AlertTriangle } from 'lucide-react';
 import XLSX from 'xlsx-js-style';
 import { cubeLoad } from '../hooks/useCubeData';
 import PODetailDrawer from '../components/supply/PODetailDrawer';
@@ -23,6 +23,7 @@ import { ShipmentsToReceive } from '../components/supply/ShipmentsToReceive';
 import { NewShipmentModal } from '../components/supply/NewShipmentModal';
 import { BulkPaymentModal } from '../components/supply/BulkPaymentModal';
 import { CostsReportTab } from '../components/supply/CostsReportTab';
+import { resolvePaymentAllocations, countOrphans, suggestOrphanTarget } from '../components/supply/paymentAllocations';
 import { dataEntry, type PODetail, type ShipmentDetail, type PaymentDetail } from '../utils/dataEntry';
 import { apiFetch } from '../utils/apiFetch';
 
@@ -347,6 +348,25 @@ export function SupplyPage({ data }: { data: DashboardData }) {
   const [deletedPaymentIds, setDeletedPaymentIds] = useState<Set<string>>(new Set());
   const [showBulkPayment, setShowBulkPayment] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<SupplyPaymentRow | null>(null);
+
+  // ── Other-PO ledger (DE_OTHER_PO, via Flask) ──
+  // Payments allocate to Other-POs as well as POs, but `data.supply_other_pos`
+  // has no Cube loader and is always []. Without this, every Other-PO
+  // allocation looks like an orphan. `loaded` gates the orphan warning so a
+  // Flask outage cannot masquerade as missing money.
+  const [otherPos, setOtherPos] = useState<SupplyOtherPORow[]>([]);
+  const [otherPosLoaded, setOtherPosLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    dataEntry.listOtherPOs()
+      .then(rows => {
+        if (cancelled) return;
+        setOtherPos(rows as unknown as SupplyOtherPORow[]);
+        setOtherPosLoaded(true);
+      })
+      .catch(() => { if (!cancelled) setOtherPosLoaded(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Stock snapshot state
   const [snapshotDate, setSnapshotDate] = useState(new Date().toISOString().slice(0, 10));
@@ -1091,7 +1111,7 @@ export function SupplyPage({ data }: { data: DashboardData }) {
       {tab === 'payments' && (() => {
         return (
           <div className="rounded-xl border border-border overflow-x-auto">
-            <PaymentsTable rows={filteredPayments} allPos={allPos} sort={paySort} onSort={toggleSort(setPaySort)} onSelectPayment={setSelectedPayment} />
+            <PaymentsTable rows={filteredPayments} allPos={allPos} allOtherPos={otherPos} otherPosLoaded={otherPosLoaded} sort={paySort} onSort={toggleSort(setPaySort)} onSelectPayment={setSelectedPayment} />
           </div>
         );
       })()}
@@ -1434,7 +1454,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: SupplyPaymentRow[]; allPos: SupplyPORow[]; sort: { field: string; dir: SortDir }; onSort: (field: string) => void; onSelectPayment: (p: SupplyPaymentRow) => void }) {
+function PaymentsTable({ rows, allPos, allOtherPos, otherPosLoaded, sort, onSort, onSelectPayment }: { rows: SupplyPaymentRow[]; allPos: SupplyPORow[]; allOtherPos: SupplyOtherPORow[]; otherPosLoaded: boolean; sort: { field: string; dir: SortDir }; onSort: (field: string) => void; onSelectPayment: (p: SupplyPaymentRow) => void }) {
   // Hierarchy is collapsed by default; a payment expands only when in this set.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   if (rows.length === 0) return <div className="p-8 text-center text-muted text-sm">No payments match filters</div>;
@@ -1465,17 +1485,17 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
       </thead>
       <tbody>
         {rows.map((r, i) => {
-          // Parse linked PO IDs (may be comma-separated)
-          const linkedPoIds = r.purchase_order_id
-            ? r.purchase_order_id.split(',').map(s => s.trim()).filter(Boolean)
-            : [];
-          const linkedPos = linkedPoIds
-            .map(poId => allPos.find(p => p.purchase_order_id === poId))
-            .filter(Boolean) as SupplyPORow[];
-          const hasLinkedPOs = linkedPos.length > 0;
+          // Classify every allocation — POs, Other-POs and orphans alike.
+          // Nothing is dropped: an unmatched id means money that would
+          // otherwise disappear from the expansion with no signal.
+          const allocations = resolvePaymentAllocations(r.purchase_order_id, allPos, allOtherPos, otherPosLoaded);
+          const orphanCount = countOrphans(allocations);
+          const hasLinkedPOs = allocations.length > 0;
           const payKey = r.payment_id || `pay_${i}`;
           const isOpen = expanded.has(payKey);
-          const productsLabel = Array.from(new Set(linkedPos.map(p => p.product_name).filter(Boolean))).join(', ');
+          const productsLabel = Array.from(new Set(allocations.map(a =>
+            a.kind === 'po' ? a.po!.product_name : a.kind === 'other_po' ? a.otherPo!.service_type : null,
+          ).filter(Boolean))).join(', ');
 
           return (
             <Fragment key={payKey}>
@@ -1494,7 +1514,18 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
                     {fmtDate(r.payment_date)}
                   </div>
                 </td>
-                <td className="px-4 py-2.5 text-subtle text-xs max-w-[220px] truncate" title={productsLabel}>{productsLabel || '—'}</td>
+                <td className="px-4 py-2.5 text-subtle text-xs max-w-[220px] truncate" title={productsLabel}>
+                  <div className="flex items-center gap-1.5">
+                    {orphanCount > 0 && (
+                      <AlertTriangle
+                        size={12}
+                        className="text-negative shrink-0"
+                        aria-label={`${orphanCount} orphaned allocation${orphanCount > 1 ? 's' : ''}`}
+                      />
+                    )}
+                    <span className="truncate">{productsLabel || '—'}</span>
+                  </div>
+                </td>
                 <td className="px-4 py-2.5 text-subtle text-xs">{r.vendor_name}</td>
                 <td className={`px-4 py-2.5 text-right font-mono text-xs font-semibold ${r.payment_amount < 0 ? 'text-red-400' : 'text-heading'}`}>{fmtFull$(r.payment_amount)}</td>
                 <td className="px-4 py-2.5 text-right text-amber-400 font-mono text-xs">{r.bank_fee > 0 ? fmtFull$(r.bank_fee) : '—'}</td>
@@ -1519,40 +1550,105 @@ function PaymentsTable({ rows, allPos, sort, onSort, onSelectPayment }: { rows: 
                   </div>
                 </td>
               </tr>
-              {/* ── Linked PO Lines (Children) ── */}
-              {hasLinkedPOs && isOpen && linkedPos.map(po => (
-                <tr key={`${payKey}_${po.purchase_order_id}`} className="border-b border-border/20 hover:bg-white/[.02] transition-colors">
-                  <td colSpan={3} className="px-4 py-1.5 pl-10 border-l-2 border-blue-500/20">
-                    <div className="flex items-center gap-3 text-xs">
-                      <Package size={12} className="text-muted shrink-0" />
-                      <span className="font-mono text-subtle font-medium truncate max-w-[220px]" title={po.purchase_order_id}>{po.purchase_order_id}</span>
-                      <span className="text-faint">·</span>
-                      <span className="text-muted truncate max-w-[150px]" title={po.product_name}>{po.product_name}</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-1.5 text-right font-mono text-[11px]">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span className="text-faint text-[10px]">Cost</span>
-                      <span className="text-subtle">{fmtFull$(po.total_amount)}</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-1.5 text-right font-mono text-[11px]">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span className="text-faint text-[10px]">Paid</span>
-                      <span className="text-emerald-400">{fmtFull$(po.total_paid)}</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-1.5 text-right font-mono text-[11px]">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span className="text-faint text-[10px]">Rem</span>
-                      <span className={Math.max(po.unpaid_manufacturer, 0) > 0.01 ? 'text-red-400' : 'text-emerald-400'}>{fmtFull$(Math.max(po.unpaid_manufacturer, 0))}</span>
-                    </div>
-                  </td>
-                  <td colSpan={3} className="px-4 py-1.5">
-                    <StatusBadge status={po.payment_status} />
-                  </td>
-                </tr>
-              ))}
+              {/* ── Allocation Lines (Children) — POs, Other-POs and orphans ── */}
+              {hasLinkedPOs && isOpen && allocations.map(a => {
+                if (a.kind === 'po') {
+                  const po = a.po!;
+                  return (
+                    <tr key={`${payKey}_${a.id}`} className="border-b border-border/20 hover:bg-white/[.02] transition-colors">
+                      <td colSpan={3} className="px-4 py-1.5 pl-10 border-l-2 border-blue-500/20">
+                        <div className="flex items-center gap-3 text-xs">
+                          <Package size={12} className="text-muted shrink-0" />
+                          <span className="font-mono text-subtle font-medium truncate max-w-[220px]" title={po.purchase_order_id}>{po.purchase_order_id}</span>
+                          <span className="text-faint">·</span>
+                          <span className="text-muted truncate max-w-[150px]" title={po.product_name}>{po.product_name}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-1.5 text-right font-mono text-[11px]">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="text-faint text-[10px]">Cost</span>
+                          <span className="text-subtle">{fmtFull$(po.total_amount)}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-1.5 text-right font-mono text-[11px]">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="text-faint text-[10px]">Paid</span>
+                          <span className="text-emerald-400">{fmtFull$(po.total_paid)}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-1.5 text-right font-mono text-[11px]">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="text-faint text-[10px]">Rem</span>
+                          <span className={Math.max(po.unpaid_manufacturer, 0) > 0.01 ? 'text-red-400' : 'text-emerald-400'}>{fmtFull$(Math.max(po.unpaid_manufacturer, 0))}</span>
+                        </div>
+                      </td>
+                      <td colSpan={3} className="px-4 py-1.5">
+                        <StatusBadge status={po.payment_status} />
+                      </td>
+                    </tr>
+                  );
+                }
+                if (a.kind === 'other_po') {
+                  const opo = a.otherPo!;
+                  return (
+                    <tr key={`${payKey}_${a.id}`} className="border-b border-border/20 hover:bg-white/[.02] transition-colors">
+                      <td colSpan={3} className="px-4 py-1.5 pl-10 border-l-2 border-violet-500/20">
+                        <div className="flex items-center gap-3 text-xs">
+                          <Receipt size={12} className="text-muted shrink-0" />
+                          <span className="font-mono text-subtle font-medium truncate max-w-[220px]" title={opo.other_po_id}>{opo.other_po_id}</span>
+                          <span className="text-faint">·</span>
+                          <span className="text-muted truncate max-w-[150px]" title={opo.service_type}>{opo.service_type}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-1.5 text-right font-mono text-[11px]">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="text-faint text-[10px]">Cost</span>
+                          <span className="text-subtle">{fmtFull$(opo.total_amount)}</span>
+                        </div>
+                      </td>
+                      <td colSpan={2} className="px-4 py-1.5 text-right font-mono text-[11px] text-faint">
+                        {opo.supplier_name}
+                      </td>
+                      <td colSpan={3} className="px-4 py-1.5">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-500/10 text-violet-400 font-semibold uppercase tracking-wider">Other PO</span>
+                      </td>
+                    </tr>
+                  );
+                }
+                if (a.kind === 'unknown') {
+                  // Other-PO ledger unavailable — say so plainly rather than
+                  // accusing a perfectly good allocation of being lost money.
+                  return (
+                    <tr key={`${payKey}_${a.id}`} className="border-b border-border/20">
+                      <td colSpan={3} className="px-4 py-1.5 pl-10 border-l-2 border-border">
+                        <div className="flex items-center gap-3 text-xs">
+                          <Receipt size={12} className="text-faint shrink-0" />
+                          <span className="font-mono text-muted truncate max-w-[220px]" title={a.id}>{a.id}</span>
+                        </div>
+                      </td>
+                      <td colSpan={6} className="px-4 py-1.5 text-[11px] text-faint">
+                        Other-PO ledger unavailable — can't show this allocation's details.
+                      </td>
+                    </tr>
+                  );
+                }
+                // Orphan — the allocation points at a PO that exists in neither ledger.
+                const suggestion = suggestOrphanTarget(a.id, allPos);
+                return (
+                  <tr key={`${payKey}_${a.id}`} className="border-b border-border/20 bg-[var(--color-negative)]/[.04]">
+                    <td colSpan={3} className="px-4 py-1.5 pl-10 border-l-2 border-[var(--color-negative)]/40">
+                      <div className="flex items-center gap-3 text-xs">
+                        <AlertTriangle size={12} className="text-negative shrink-0" />
+                        <span className="font-mono text-negative font-medium truncate max-w-[220px]" title={a.id}>{a.id}</span>
+                      </div>
+                    </td>
+                    <td colSpan={6} className="px-4 py-1.5 text-[11px] text-negative">
+                      Orphaned allocation — no such PO or Other PO, so this amount is missing from every total.
+                      {suggestion && <span className="text-muted"> Likely meant <span className="font-mono">{suggestion}</span>.</span>}
+                    </td>
+                  </tr>
+                );
+              })}
             </Fragment>
           );
         })}

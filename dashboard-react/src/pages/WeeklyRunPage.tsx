@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { cubeLoad } from '../hooks/useCubeData';
+import { cubeLoad, cubeLoadWithMeta } from '../hooks/useCubeData';
 import { BudgetStep1, ALL_FAMILIES, ALL_STRATEGIES } from './BudgetStep1';
 import { ALL_AGES } from './BudgetByAge';
 import { CoachFlowchart } from './CoachFlowchart';
@@ -8,13 +8,19 @@ import { OobBudgetPhase } from './OobBudgetPhase';
 import { KeywordLiftPhase } from './KeywordLiftPhase';
 import { BrandDefensePhase } from './BrandDefensePhase';
 import { PausedHistoryPhase } from './PausedHistoryPhase';
+import { ChangeScorecardPanel } from './ChangeScorecardPanel';
+import { RevivalsPhase } from './RevivalsPhase';
+import { LaunchExemptionPhase } from './LaunchExemptionPhase';
+import { LowStockPhase } from './LowStockPhase';
+import { RunSummaryStrip } from '../components/RunSummaryStrip';
+import { TodayDecisions } from './TodayDecisions';
 
 // Sections 2 (per-campaign budget table) & 3 (plan) were removed 2026-07-18 — budget now lives inside
 // each campaign card in section 4. Flip to true to bring the old sections back.
 const SHOW_STEP_2_3 = false;
 import { RoleBudgetPanel } from './RoleBudgetPanel';
 import { WeeklyBudgetCampaigns } from './WeeklyBudgetCampaigns';
-import { useDoQueue } from '../hooks/useDoQueue';
+import { useDoQueue, findQueuedBid, findQueuedNegates } from '../hooks/useDoQueue';
 import { useRecentApplied } from '../hooks/useRecentApplied';
 import { CampaignManageModal, type ManageCampaign } from '../components/CampaignManageModal';
 import { dataEntry, type WeeklyRunRow } from '../utils/dataEntry';
@@ -166,6 +172,32 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
       setEngineOwned(ids);
       setSeasonalIds(new Set((seas as Record<string, unknown>[]).map(r => String(r['CampaignDim.campaignId'] ?? ''))));
     });
+    return () => { alive = false; };
+  }, []);
+  // defaultOpen source (Ori 2026-08-17: "when there is an open action hierarchy should be Expanded
+  // else collapse by default"): one preflight roll-up decides which engine sections start expanded —
+  // an engine with any open (GO/REVIEW) verdict opens; the rest keep the collapsed default. A user's
+  // own click always wins (the panels' null-until-clicked pattern). On error the map stays {} so
+  // every section keeps today's collapsed default — never guess "open" from a failed query.
+  const [hasOpen, setHasOpen] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await cubeLoadWithMeta({
+          dimensions: ['EnginePreflight.engine', 'EnginePreflight.verdict'],
+          measures: ['EnginePreflight.count'],
+        });
+        if (!alive || res.error) return;
+        const map: Record<string, boolean> = {};
+        for (const r of res.data as Record<string, unknown>[]) {
+          const verdict = String(r['EnginePreflight.verdict'] ?? '');
+          if ((verdict === 'GO' || verdict === 'REVIEW') && (Number(r['EnginePreflight.count']) || 0) > 0)
+            map[String(r['EnginePreflight.engine'] ?? '')] = true;
+        }
+        setHasOpen(map);
+      } catch { /* leave {} — collapsed defaults */ }
+    })();
     return () => { alive = false; };
   }, []);
   const [week, setWeek] = useState('');
@@ -436,8 +468,9 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
   ), [runByName]);
 
   // ── Queue integration (shared Do queue → Upload exports the bulksheet) ──
-  const queuedItem = (search_term: string, action: string, campaign: string) =>
-    doQueue.items.find(i => i.search_term === search_term && i.action === action && i.campaign === campaign);
+  // Queued-state is UNIFIED (Ori 2026-08-17): lookups key on the row's canonical id via the shared
+  // useDoQueue helpers, so an action approved in ANY section/snapshot shows ✓ here too — never
+  // "did this panel queue it".
   // The bid shown in each keyword's input: manual draft > coacher's suggested new bid > current bid.
   // Defense dominance rule: a defense keyword's bid should be ≥ 1.5× its CPC (own the top of page 1,
   // make the term expensive for competitors). CPC = 28d, fallback 7d.
@@ -464,6 +497,18 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
   // Effective days-since = MIN(cube value, live change-log value) so a just-uploaded bulksheet registers
   // immediately instead of waiting for the next cube rebuild (Ori 2026-07-25). kwDss is the per-keyword form.
   const kwDss = (k: KwRow): number | null => effectiveDaysSince(k.id, k.daysSinceSuggestion);
+  // Ori 2026-08-17 ("when there is an open action hierarchy should be Expanded else collapse by
+  // default"), tree level: a campaign carrying at least one OPEN action — an actionable keyword
+  // not in the 3-day applied cooldown, or any pending negate offer — starts expanded. Seeding
+  // spreads prev LAST so the user's own clicks (open or close) always win over the seed.
+  useEffect(() => {
+    if (!kws && !negs) return;
+    const seeded: Record<string, boolean> = {};
+    for (const k of kws ?? []) if (k.isAction && !isApplied(kwDss(k))) seeded[k.campaignId] = true;
+    for (const n of negs ?? []) seeded[n.campaignId] = true;
+    setOpenCamp(prev => ({ ...seeded, ...prev }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kws, negs]);
   const kwVisible = (k: KwRow): boolean => {
     const hasNegs = (negs ?? []).some(n => n.keywordId === k.id);
     const label = kwDir(k).label;
@@ -547,8 +592,11 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
     if (actionFilter === 'done') return isApplied(c.daysSinceSuggestion) || anyKw;
     return !isApplied(c.daysSinceSuggestion) || anyKw;
   };
-  // A queued bid change for this keyword (any direction), matched by keyword_id so text collisions don't matter.
-  const bidQueuedItem = (k: KwRow) => doQueue.items.find(i => i.keyword_id === k.id && ['INCREASE_BID', 'REDUCE_BID', 'PROBE'].includes(i.action));
+  // A queued bid change for this keyword from ANY surface at ANY value, matched by keyword_id via the
+  // shared helper. PROBE is this page's own queue action and is NOT in BID_QUEUE_ACTIONS — the local
+  // fallback keeps a queued probe toggling off instead of double-queuing on the second click.
+  const bidQueuedItem = (k: KwRow) =>
+    findQueuedBid(doQueue.items, k.id) ?? doQueue.items.find(i => i.keyword_id === k.id && i.action === 'PROBE');
   const stopQueuedItem = (k: KwRow) => doQueue.items.find(i => i.keyword_id === k.id && i.action === 'STOP_TARGET');
   const kwItem = (k: KwRow, campaignName: string, bid: number) => {
     // If the queued bid equals the coacher's own suggestion, keep its action+COACH source (clean scorecard
@@ -585,7 +633,13 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
     target_spend_8w: 0, target_orders_8w: 0, target_net_roas_8w: 0, current_bid: null, recommended_bid: null,
     campaign_type: campaignType, product: n.searchTerm, spend: 0, orders: 0, cpc: 0, conv_rate: 0, source: 'COACH' as const,
   });
-  const toggleNegQ = (n: NegRow, campaignType: string) => { const ex = queuedItem(n.searchTerm, 'NEGATE_TERM', n.campaignName); if (ex) doQueue.removeItem(ex.id); else doQueue.addItem(negItem(n, campaignType)); };
+  // Negates key on campaign_id + normalized term (was campaign NAME) — SB splits one term into one
+  // item per ad group, so un-queueing removes EVERY item the helper returns, whatever their origin.
+  const toggleNegQ = (n: NegRow, campaignType: string) => {
+    const ex = findQueuedNegates(doQueue.items, n.campaignId, n.searchTerm);
+    if (ex.length > 0) ex.forEach(i => doQueue.removeItem(i.id));
+    else doQueue.addItem(negItem(n, campaignType));
+  };
   // Separate from negate: add the hero (best-converting) variant as a product ad in the SAME ad group,
   // so the wrong-colour term gets the right product shown instead of just being blocked. One row per
   // (ad group, hero ASIN) — deduped by campaign+ad_group+asin so two terms sharing a hero don't double-add.
@@ -632,6 +686,18 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
           <span className="font-mono text-muted"><span className="text-faint">last 7 days</span> = {last7Range(anchor)}</span>
         </div>
       )}
+
+      {/* ── Phase 6 FRONT PAGE (architecture/WEEKLY_RUN_UX.md) — the 5-minute read sits ABOVE
+          everything: the summary strip (changes · held · unchanged, small-table query) over the
+          unified Today's-decisions feed (T_ENGINE_PREFLIGHT verdicts, grouped by engine in the
+          ownership order). The feed is the read; every section below is the microscope. ── */}
+      <RunSummaryStrip />
+      <TodayDecisions />
+
+      {/* Settled outcome of the changes already made — the retrospective frames the run, so it sits
+          above the budget panel. Collapsed by default; the verdict counts show in its header.
+          Display-only over V_CHANGE_SCORECARD (architecture/PPC_CLOSE_THE_LOOP.md). */}
+      <ChangeScorecardPanel />
 
       {/* PPC pools unified (Ori 2026-07-18): no mode toggle — every pool's campaigns show in one list;
           the cross-pool "Budget by strategy" filter (incl. Brand/Product Defense) narrows step 2 & 4. */}
@@ -779,20 +845,37 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                     Each engine section below carries its own live apply state (✓ applied N). */}
                 {/* coach logic as a flow chart (strategy toggles) — the engine driving every decision below */}
                 <CoachFlowchart />
+                {/* Low stock (Ori 2026-08-13) — criteria 1, HIGHEST priority, above Launch and Revivals.
+                    Families heading for a stock-out, the variation that binds, and the ad spend to pull
+                    first: non-converting money is free to cut but buys ZERO days of cover, and inside a
+                    CAPPED campaign it must be paired with a budget cut or it sells the last stock faster.
+                    Winners are priced, never proposed for a cut. Advisory, display-only.
+                    Spec: architecture/LOW_STOCK_CRITERIA.md. */}
+                <LowStockPhase defaultOpen={hasOpen['LOW_STOCK']} />
+                {/* Launch exemption (Ori 2026-08-13) — families young enough that losing money is the
+                    plan, and the budget cuts the coach is therefore not allowed to make. Sits ABOVE
+                    Revivals per Ori's ordering; collapsed unless it holds an open action. Advisory, display-only.
+                    Spec: architecture/LAUNCH_EXEMPTION.md. */}
+                <LaunchExemptionPhase defaultOpen={hasOpen['LAUNCH']} />
+                {/* Revivals — parked keywords whose SETTLED record now overturns the park
+                    (V_PARK_REVERDICT, running since v27.48 with no surface until now). Sits at the top
+                    of the phase stack so the ready-to-revive count is seen, not buried; collapsed
+                    unless it holds an open action. Advisory, display-only. Spec: architecture/SEASON_CONTEXT_LEDGER.md §7.11. */}
+                <RevivalsPhase defaultOpen={hasOpen['REVERDICT']} />
                 {/* out-of-budget technical phase — dark campaigns + one budget suggestion each (V_OOB_BUDGET_PHASE) */}
                 {/* 2x2 split (Ori 2026-08-01): state (dark / healthy) x tier (low budget / working) */}
                 {/* v24 + v27: auto campaigns first — their own single home, split by tier */}
-                <KeywordLiftPhase tier="AUTO_LOW" />
-                <KeywordLiftPhase tier="AUTO" />
-                <OobBudgetPhase tier="LOW" />
-                <OobBudgetPhase tier="HIGH" />
-                <KeywordLiftPhase tier="LOW" />
-                <KeywordLiftPhase tier="HIGH" />
+                <KeywordLiftPhase tier="AUTO_LOW" defaultOpen={hasOpen['LIFT']} />
+                <KeywordLiftPhase tier="AUTO" defaultOpen={hasOpen['LIFT']} />
+                <OobBudgetPhase tier="LOW" defaultOpen={hasOpen['OOB']} />
+                <OobBudgetPhase tier="HIGH" defaultOpen={hasOpen['OOB']} />
+                <KeywordLiftPhase tier="LOW" defaultOpen={hasOpen['LIFT']} />
+                <KeywordLiftPhase tier="HIGH" defaultOpen={hasOpen['LIFT']} />
                 <BrandDefensePhase />
                 {/* v9 (Ori 2026-08-02): seasonal campaigns separated — OOB + healthy (incl. paused seasonal) */}
-                <OobBudgetPhase tier="SEASONAL" />
-                <KeywordLiftPhase tier="SEASONAL_LOW" />
-                <KeywordLiftPhase tier="SEASONAL" />
+                <OobBudgetPhase tier="SEASONAL" defaultOpen={hasOpen['OOB']} />
+                <KeywordLiftPhase tier="SEASONAL_LOW" defaultOpen={hasOpen['LIFT']} />
+                <KeywordLiftPhase tier="SEASONAL" defaultOpen={hasOpen['LIFT']} />
                 {/* v12 (Ori 2026-08-02): paused campaigns in the Seasonal table grammar, historic
                     measures only — Seasonal Paused shows ONLY the relevant season's last occurrence */}
                 <PausedHistoryPhase variant="SEASONAL_PAUSED" />

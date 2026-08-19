@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CreditCard, X, Pencil, Save, Trash2, AlertCircle, Loader2, Package, Truck } from 'lucide-react';
 import type { SupplyPaymentRow } from '../../types';
 import { dataEntry, type PaymentDetail } from '../../utils/dataEntry';
+import { paymentFinancials, isMultiAllocation, buildPaymentHeaderBody } from './paymentHeader';
 
 /* ── helpers ── */
 const fmtDate = (d: string | null | undefined) => {
@@ -135,18 +136,26 @@ export default function PaymentDetailDrawer({ payment, onClose, onChanged }: Pay
   }, [detail, payment]);
 
   const lines = useMemo(() => detail?.lines ?? [], [detail]);
-  const totalAmount = headerView.payment_amount + headerView.bank_fee;
+
+  // Payment-level money. detail.payment is row 0 of N allocation rows, so its
+  // payment_amount is the FIRST allocation's — never the payment's.
+  const financials = useMemo(
+    () => paymentFinancials(detail?.payment, lines, { payment_amount: payment.payment_amount, bank_fee: payment.bank_fee }),
+    [detail, lines, payment.payment_amount, payment.bank_fee],
+  );
+  const multiAllocation = useMemo(() => isMultiAllocation(detail?.payment, lines), [detail, lines]);
+  const totalAmount = financials.total;
 
   const saveHeader = () => {
-    const body: Record<string, unknown> = {
+    const body = buildPaymentHeaderBody({
       payment_date: hPaymentDate,
       payment_method: hPaymentMethod,
       vendor_name: hVendorName,
       currency: hCurrency,
       notes: hNotes,
-    };
-    if (hPaymentAmount.trim() !== '') body.payment_amount = num(hPaymentAmount);
-    if (hBankFee.trim() !== '') body.bank_fee = num(hBankFee);
+      payment_amount: hPaymentAmount,
+      bank_fee: hBankFee,
+    }, multiAllocation);
     void runWrite(async () => {
       await dataEntry.updatePayment(paymentId, body);
       setEditingHeader(false);
@@ -197,7 +206,7 @@ export default function PaymentDetailDrawer({ payment, onClose, onChanged }: Pay
               <div className="flex items-center gap-3 text-[10px] text-muted mt-0.5">
                 <span>{fmtDate(headerView.payment_date)}</span>
                 <span>·</span>
-                <span>{fmtFull$(headerView.payment_amount)}</span>
+                <span>{fmtFull$(financials.amount)}</span>
                 {headerView.payment_method && <><span>·</span><span>{headerView.payment_method}</span></>}
                 {headerView.currency && <><span>·</span><span>{headerView.currency}</span></>}
               </div>
@@ -249,6 +258,12 @@ export default function PaymentDetailDrawer({ payment, onClose, onChanged }: Pay
               <div className="text-[10px] text-faint uppercase tracking-wider font-semibold flex items-center gap-1.5">
                 <Pencil size={11} /> Edit Payment
               </div>
+              {multiAllocation && (
+                <div className="text-[10px] text-muted flex items-start gap-1.5">
+                  <AlertCircle size={11} className="shrink-0 mt-px" />
+                  <span>Amount and bank fee are per-allocation on a split payment — edit them on the individual lines above.</span>
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="flex flex-col gap-1">
                   <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Vendor</label>
@@ -262,14 +277,18 @@ export default function PaymentDetailDrawer({ payment, onClose, onChanged }: Pay
                   <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Method</label>
                   <input className={inputCls} value={hPaymentMethod} onChange={(e) => setHPaymentMethod(e.target.value)} />
                 </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Amount</label>
-                  <input type="number" step="0.01" className={inputCls} value={hPaymentAmount} onChange={(e) => setHPaymentAmount(e.target.value)} placeholder="0.00" />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Bank Fee</label>
-                  <input type="number" step="0.01" className={inputCls} value={hBankFee} onChange={(e) => setHBankFee(e.target.value)} placeholder="0.00" />
-                </div>
+                {!multiAllocation && (
+                  <>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Amount</label>
+                      <input type="number" step="0.01" className={inputCls} value={hPaymentAmount} onChange={(e) => setHPaymentAmount(e.target.value)} placeholder="0.00" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Bank Fee</label>
+                      <input type="number" step="0.01" className={inputCls} value={hBankFee} onChange={(e) => setHBankFee(e.target.value)} placeholder="0.00" />
+                    </div>
+                  </>
+                )}
                 <div className="flex flex-col gap-1">
                   <label className="text-[9px] text-faint uppercase tracking-wider font-semibold">Currency</label>
                   <input className={inputCls} value={hCurrency} onChange={(e) => setHCurrency(e.target.value)} />
@@ -356,11 +375,11 @@ export default function PaymentDetailDrawer({ payment, onClose, onChanged }: Pay
               <div className="rounded-lg border border-border bg-surface/30 px-3 py-2.5 space-y-1.5 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-muted">Payment Amount</span>
-                  <span className="text-heading font-mono font-semibold">{fmtFull$(headerView.payment_amount)}</span>
+                  <span className="text-heading font-mono font-semibold">{fmtFull$(financials.amount)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted">Bank Fee</span>
-                  <span className="text-heading font-mono">{fmtFull$(headerView.bank_fee)}</span>
+                  <span className="text-heading font-mono">{fmtFull$(financials.bankFee)}</span>
                 </div>
                 <div className="flex items-center justify-between border-t border-border/50 pt-1.5">
                   <span className="text-muted">Total</span>

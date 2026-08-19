@@ -39,6 +39,7 @@ export function ActionBadge({ action }: { action: string }) {
     GUARDIAN_BUDGET_INCREASE: { l: 'BUDGET ↑', v: 'green' }, GUARDIAN_BUDGET_DECREASE: { l: 'BUDGET ↓', v: 'red' },
     BLITZ_BUDGET_INCREASE: { l: 'BLITZ ↑', v: 'green' }, BLITZ_BUDGET_DECREASE: { l: 'BLITZ ↓', v: 'amber' },
     BUDGET_OK: { l: 'BUDGET OK', v: 'muted' },
+    LAUNCH_EXEMPT_HOLD: { l: 'LAUNCH HELD', v: 'blue' },
     // Legacy
     STOP: { l: 'STOP', v: 'red' }, NEGATE: { l: 'NEGATE', v: 'red' },
     BOOST: { l: 'SCALE', v: 'green' }, SCALE_UP: { l: 'SCALE UP', v: 'green' },

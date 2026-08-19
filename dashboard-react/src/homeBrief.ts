@@ -19,6 +19,9 @@ import { addDays, fM, fP, fR, experimentMatchesFamily } from './utils';
 
 export type DateMode = 'today' | 'yday' | '7d' | '30d';
 export type Health = 'risk' | 'warn' | 'good' | 'flat';
+/** Data scope for the brief: full P&L ('total') or ads-attributed only ('ads').
+ *  Today·Ads has no P&L yet, so it is always ads-scoped regardless of this. */
+export type BriefScope = 'total' | 'ads';
 
 export interface BriefThresholds {
   /** Min |Δ%| for an additive ($/count) metric to count as "moved". */
@@ -66,10 +69,6 @@ export interface FamilyView {
   kpis: MetricDelta[];
   /** Net profit for the family-selector card (primary measure). */
   netProfit: MetricDelta;
-  /** Ads net profit (ads sales − tier COGS − ads spend) for the card's metric toggle.
-   *  Today mode: identical to netProfit (vs yesterday). Other modes: ads-only aggs
-   *  over the same comparison windows. */
-  netProfitAds: MetricDelta;
   /** Units sold for the family-selector card (secondary measure). */
   unitsSold: MetricDelta;
   /** Conversion rate for the family-selector card (unit-session %, or ads CVR in Today mode). */
@@ -93,7 +92,6 @@ export interface BriefModel {
   allKpis: MetricDelta[];
   /** Whole-book net profit + units for the All card in the family selector. */
   allNetProfit: MetricDelta;
-  allNetProfitAds: MetricDelta;
   allUnitsSold: MetricDelta;
   allConvRate: MetricDelta;
   families: FamilyView[];
@@ -111,11 +109,14 @@ const emptyAgg = (): Agg => ({ sales: 0, ad_cost: 0, cogs: 0, net_profit: 0, ord
 
 const inRange = (d: string, start: string, end: string) => !!d && d >= start && d <= end;
 
+/** Family of a per-ASIN P&L row — rows with no product_type fall into the Unmapped bucket. */
+const asinFamily = (r: DailyTrendByAsinRow): string => r.product_type || UNMAPPED_FAMILY;
+
 /** Sum family P&L from daily_trends_by_asin (rolled up to family) over [start,end]. */
 function sumByAsin(rows: DailyTrendByAsinRow[], family: string | null, start: string, end: string): Agg {
   const a = emptyAgg();
   for (const r of rows) {
-    if (family && r.product_type !== family) continue;
+    if (family && asinFamily(r) !== family) continue;
     if (!inRange(r.date, start, end)) continue;
     a.sales += r.sales || 0;
     a.ad_cost += r.ad_cost || 0;
@@ -150,17 +151,25 @@ function addAds(a: Agg, adsRows: Ads7dRow[], productToFamily: Record<string, str
   }
 }
 
-function resolveAdsFamily(r: Ads7dRow, productToFamily: Record<string, string>): string | null {
+function resolveAdsFamily(r: Ads7dRow, productToFamily: Record<string, string>): string {
   if (r.parent_name && productToFamily[r.parent_name] === undefined && isFamilyName(r.parent_name)) return r.parent_name;
   if (r.product_short_name && productToFamily[r.product_short_name]) return productToFamily[r.product_short_name];
   if (r.parent_name) return r.parent_name;
   const camp = String(r.campaign_name || '');
   for (const fam of KNOWN_FAMILIES) if (experimentMatchesFamily(camp, fam as never)) return fam;
-  return null;
+  return UNMAPPED_FAMILY;
 }
 
-// Families recognised by the ads campaign-name matcher fallback.
-const KNOWN_FAMILIES = ['Lollibox', 'LolliME', 'Bottle', 'Fresh'];
+/**
+ * Bucket for rows no mapper can place — SB video / Store campaigns whose advertised ASIN is
+ * "Unknown" (so the DIM_PRODUCT join misses) and whose campaign name matches no family.
+ * Surfaced as its own card: without it the family cards silently fail to sum to All.
+ */
+export const UNMAPPED_FAMILY = 'Unmapped';
+
+// Families recognised by the ads campaign-name matcher fallback. Order matters — first match
+// wins, so specific tokens go first and LolliME (which matches a bare "me") goes last.
+const KNOWN_FAMILIES = ['Bunny', 'LolliBall', 'Lollibox', 'Bottle', 'Fresh', 'LolliME'];
 const isFamilyName = (s: string) => KNOWN_FAMILIES.includes(s);
 
 /* ── Window resolution ───────────────────────────────────────────────────── */
@@ -474,6 +483,31 @@ function familyAttention(
   return items;
 }
 
+/** Campaigns whose rows fell into the Unmapped bucket, biggest spend first. */
+function unmappedCampaigns(adsRows: Ads7dRow[], productToFamily: Record<string, string>, start: string, end: string): { name: string; spend: number }[] {
+  const by: Record<string, number> = {};
+  for (const r of adsRows) {
+    if (!inRange(r.date || '', start, end)) continue;
+    if (resolveAdsFamily(r, productToFamily) !== UNMAPPED_FAMILY) continue;
+    const name = r.campaign_name || '(no campaign name)';
+    by[name] = (by[name] || 0) + (r.spend || 0);
+  }
+  return Object.entries(by).map(([name, spend]) => ({ name, spend })).sort((a, b) => b.spend - a.spend);
+}
+
+function unmappedRead(camps: { name: string; spend: number }[]): string {
+  if (!camps.length) return 'Rows with no family — counted in All but on no family card.';
+  const named = camps.slice(0, 3).map(c => c.name).join(', ');
+  const more = camps.length > 3 ? ` +${camps.length - 3} more` : '';
+  return `Not attributed to any family — counted in All but on no family card. Needs mapping: ${named}${more}.`;
+}
+
+function unmappedAttention(camps: { name: string; spend: number }[]): AttentionItem[] {
+  if (!camps.length) return [];
+  const spend = camps.reduce((s, c) => s + c.spend, 0);
+  return [{ level: 'warn', text: `${camps.length} campaign${camps.length > 1 ? 's' : ''} with no family mapping — $${spend.toFixed(2)} spend unattributed` }];
+}
+
 function familyHealth(kpis: MetricDelta[], oos: OosRisk[], coachCount: number): Health {
   if (oos.length) return 'risk';
   const np = kpis.find(m => m.key === 'net_profit'), roas = kpis.find(m => m.key === 'net_roas' || m.key === 'ads_roas');
@@ -524,7 +558,7 @@ function maxDate(rows: { date?: string }[]): string {
   return mx;
 }
 
-export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date = new Date(), th: BriefThresholds = BRIEF_THRESHOLDS): BriefModel {
+export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date = new Date(), th: BriefThresholds = BRIEF_THRESHOLDS, scope: BriefScope = 'total'): BriefModel {
   // Per-ASIN daily P&L is the canonical daily source (rolled up to family). ads_7d (daily,
   // with parent_name) is used only for Today mode, where orders/P&L aren't in yet.
   const byAsin = data.daily_trends_by_asin || [];
@@ -545,86 +579,108 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
   const famSet = new Set<string>();
   for (const r of byAsin) if (r.product_type) famSet.add(r.product_type);
   for (const p of products) if (p.parent_name) famSet.add(p.parent_name);
-  const families = [...famSet].filter(Boolean);
 
   const lyShift = peakShiftDays(data.holidays || [], pk);
-  const w = resolveWindow(mode, perfMax, adsMax, pk, now, lyShift);
+  let w = resolveWindow(mode, perfMax, adsMax, pk, now, lyShift);
+  // Ads scope: every card measure + KPI comes from ads_7d (spend/sales/orders/COGS),
+  // over the same comparison windows. Today mode is always ads-scoped (no P&L yet).
+  const adsScoped = w.adsOnly || scope === 'ads';
+  if (adsScoped && !w.adsOnly) w = { ...w, adsOnly: true, label: w.label.replace(' · vs', ' · ads only · vs') };
   const approxNote = w.peak
     ? `Compared to last-year ${pk?.holiday_name || 'peak'} (aligned to peak date).`
     : undefined;
 
+  const adsAggFor = (family: string | null, cs: string, ce: string): Agg => {
+    const a = emptyAgg(); addAds(a, ads, productToFamily, family, cs, ce); return a;
+  };
+
+  // Every family actually present in the current window gets a card — including Unmapped.
+  // The card set must cover the same rows the All card sums, or the two silently disagree.
+  if (adsScoped) {
+    for (const r of ads) if (inRange(r.date || '', w.curStart, w.curEnd)) famSet.add(resolveAdsFamily(r, productToFamily));
+  } else {
+    for (const r of byAsin) if (inRange(r.date, w.curStart, w.curEnd)) famSet.add(asinFamily(r));
+  }
+  const families = [...famSet].filter(Boolean);
+
   const views: FamilyView[] = families.map(family => {
-    // Today mode (ads-only): family agg from ads_7d. Otherwise: full P&L from by-asin.
+    // Ads scope (Today mode or ads toggle): family agg from ads_7d. Otherwise: full P&L from by-asin.
     const aggFor = (cs: string, ce: string): Agg => {
-      if (w.adsOnly) { const a = emptyAgg(); addAds(a, ads, productToFamily, family, cs, ce); return a; }
+      if (adsScoped) return adsAggFor(family, cs, ce);
       return sumByAsin(byAsin, family, cs, ce);
     };
     const cur = aggFor(w.curStart, w.curEnd);
     let base = aggFor(w.baseStart, w.baseEnd);
-    // Ads-only (Today): the card's net profit compares against yesterday's ads net profit.
-    const yday = w.adsOnly ? aggFor(addDays(w.curStart, -1), addDays(w.curStart, -1)) : null;
+    // Today mode: the card's net profit compares against yesterday's ads net profit.
+    const yday = mode === 'today' ? aggFor(addDays(w.curStart, -1), addDays(w.curStart, -1)) : null;
 
     // Peak fallback: no LY rows for this family → revert to the prior-window baseline.
     let win = w;
     if (w.peak && base.rows === 0 && cur.rows > 0) {
       win = resolveWindow(mode, perfMax, adsMax, null, now);
-      base = sumByAsin(byAsin, family, win.baseStart, win.baseEnd);
+      base = aggFor(win.baseStart, win.baseEnd);
     }
 
-    const kpis = familyKpis(cur, base, win.baseScale, win.adsOnly, th);
+    const kpis = familyKpis(cur, base, win.baseScale, adsScoped, th);
     const cards = yday
       ? cardStats(cur, base, win.baseScale, true, th, yday, 1)
-      : cardStats(cur, base, win.baseScale, win.adsOnly, th);
+      : cardStats(cur, base, win.baseScale, adsScoped, th);
     const oos = familyOosRisks(data.supply_chain || [], data.asin_oos_days || [], asinToFamily, family, th);
     const coach = coachActionsForFamily(data.actions || [], family);
-    const products_ = win.adsOnly
+    const products_ = adsScoped
       ? productMovesAds(ads, productToFamily, family, win, th)
       : productMovesPnl(byAsin, family, win, th);
     const steady = !kpis.some(m => m.moved) && oos.length === 0 && coach.count === 0;
 
+    // Unmapped is a mapping gap, not a family — name the offending campaigns instead of
+    // narrating a trend, and never let it read as "steady".
+    const gap = family === UNMAPPED_FAMILY ? unmappedCampaigns(ads, productToFamily, win.curStart, win.curEnd) : null;
+
     return {
       family,
-      health: familyHealth(kpis, oos, coach.count),
-      steady,
-      adsOnly: win.adsOnly,
+      health: gap ? 'warn' : familyHealth(kpis, oos, coach.count),
+      steady: gap ? false : steady,
+      adsOnly: adsScoped,
       approxNote: win.peak ? approxNote : undefined,
-      read: familyRead(kpis, oos, win.adsOnly),
+      read: gap ? unmappedRead(gap) : familyRead(kpis, oos, adsScoped),
       kpis,
       netProfit: cards.netProfit,
       unitsSold: cards.unitsSold,
       convRate: cards.convRate,
       products: products_,
-      attention: familyAttention(kpis, oos, coach.count, coach.urgent),
+      attention: gap ? unmappedAttention(gap) : familyAttention(kpis, oos, coach.count, coach.urgent),
     };
   });
 
   // Movers first, steady last; within each, risk → warn → good.
   const order: Record<Health, number> = { risk: 0, warn: 1, good: 2, flat: 3 };
-  views.sort((a, b) => (Number(a.steady) - Number(b.steady)) || (order[a.health] - order[b.health]) || a.family.localeCompare(b.family));
+  const isGap = (v: FamilyView) => Number(v.family === UNMAPPED_FAMILY);
+  views.sort((a, b) => (isGap(a) - isGap(b))
+    || (Number(a.steady) - Number(b.steady)) || (order[a.health] - order[b.health]) || a.family.localeCompare(b.family));
 
   // Aggregate "All families" KPIs (whole book, every family summed) for the All tab.
   const allAgg = (cs: string, ce: string): Agg => {
-    if (w.adsOnly) { const a = emptyAgg(); addAds(a, ads, productToFamily, null, cs, ce); return a; }
+    if (adsScoped) return adsAggFor(null, cs, ce);
     return sumByAsin(byAsin, null, cs, ce);
   };
   const allCur = allAgg(w.curStart, w.curEnd);
   let allBase = allAgg(w.baseStart, w.baseEnd);
   if (w.peak && allBase.rows === 0 && allCur.rows > 0) {
     const win2 = resolveWindow(mode, perfMax, adsMax, null, now);
-    allBase = sumByAsin(byAsin, null, win2.baseStart, win2.baseEnd);
+    allBase = allAgg(win2.baseStart, win2.baseEnd);
   }
-  const allKpis = familyKpis(allCur, allBase, w.baseScale, w.adsOnly, th);
-  const allYday = w.adsOnly ? allAgg(addDays(w.curStart, -1), addDays(w.curStart, -1)) : null;
+  const allKpis = familyKpis(allCur, allBase, w.baseScale, adsScoped, th);
+  const allYday = mode === 'today' ? allAgg(addDays(w.curStart, -1), addDays(w.curStart, -1)) : null;
   const allCards = allYday
     ? cardStats(allCur, allBase, w.baseScale, true, th, allYday, 1)
-    : cardStats(allCur, allBase, w.baseScale, w.adsOnly, th);
+    : cardStats(allCur, allBase, w.baseScale, adsScoped, th);
 
   return {
     dateMode: mode,
     periodLabel: w.label,
     todayEnabled,
     todayDisabledReason: todayEnabled ? undefined : 'No ads-only day yet — ads data is not ahead of the orders date',
-    overview: buildOverview(views, w.adsOnly),
+    overview: buildOverview(views, adsScoped, mode === 'today'),
     allKpis,
     allNetProfit: allCards.netProfit,
     allUnitsSold: allCards.unitsSold,
@@ -633,9 +689,9 @@ export function buildBriefModel(data: DashboardData, mode: DateMode, now: Date =
   };
 }
 
-function buildOverview(views: FamilyView[], adsOnly: boolean): OverviewView {
+function buildOverview(views: FamilyView[], adsOnly: boolean, todayMode: boolean): OverviewView {
   const oosFams = views.filter(v => v.health === 'risk');
-  const driver = [...views].filter(v => !v.adsOnly).sort((a, b) => {
+  const driver = [...views].filter(v => !v.adsOnly && v.family !== UNMAPPED_FAMILY).sort((a, b) => {
     const an = a.kpis.find(m => m.key === 'net_profit')?.deltaAbs ?? a.kpis.find(m => m.key === 'ads_sales')?.deltaAbs ?? 0;
     const bn = b.kpis.find(m => m.key === 'net_profit')?.deltaAbs ?? b.kpis.find(m => m.key === 'ads_sales')?.deltaAbs ?? 0;
     return bn - an;
@@ -643,7 +699,8 @@ function buildOverview(views: FamilyView[], adsOnly: boolean): OverviewView {
 
   let headline: string;
   if (adsOnly) {
-    headline = driver ? `Today (ads only): ${driver.family} leading so far.` : 'Today (ads only).';
+    const prefix = todayMode ? 'Today (ads only)' : 'Ads only';
+    headline = driver ? `${prefix}: ${driver.family} leading so far.` : `${prefix}.`;
   } else {
     const totNp = views.reduce((s, v) => s + (v.kpis.find(m => m.key === 'net_profit')?.deltaAbs ?? 0), 0);
     const totBaseNp = views.reduce((s, v) => s + (v.kpis.find(m => m.key === 'net_profit')?.base ?? 0), 0);
@@ -657,6 +714,9 @@ function buildOverview(views: FamilyView[], adsOnly: boolean): OverviewView {
   for (const v of oosFams) for (const a of v.attention.filter(x => x.level === 'risk')) attention.push({ level: 'risk', text: `${v.family}: ${a.text}` });
   const coachTotal = views.reduce((s, v) => s + v.attention.filter(x => x.level === 'warn' && x.text.includes('coach')).length, 0);
   if (coachTotal) attention.push({ level: 'warn', text: `Coach actions pending across ${coachTotal} ${coachTotal > 1 ? 'families' : 'family'}` });
+  // Mapping gaps are a data-quality bug, not a trend — always surface them.
+  const gapView = views.find(v => v.family === UNMAPPED_FAMILY);
+  for (const a of gapView?.attention ?? []) attention.push({ level: 'warn', text: a.text });
   for (const v of views) for (const a of v.attention.filter(x => x.level === 'watch')) attention.push({ level: 'watch', text: `${v.family}: ${a.text}` });
 
   return { headline, attention: attention.slice(0, 6) };

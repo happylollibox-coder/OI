@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { cubeLoad } from '../hooks/useCubeData';
 
 // Weekly Run v12 (Ori 2026-08-02): paused campaigns in the same table grammar as the Seasonal
@@ -40,7 +40,14 @@ export function PausedHistoryPhase({ variant }: { variant: 'SEASONAL_PAUSED' | '
   const [failed, setFailed] = useState(false);
   const seasonal = variant === 'SEASONAL_PAUSED';
 
+  // LAZY SECTION (WEEKLY_RUN_UX.md: "the 17 criteria sections as LAZY drill-downs — a section
+  // fetches ONLY on first expand"). Every section fetching on mount fired ~17 ceiling-view
+  // queries at page open, 40–120s each cold — the "why is it not loading" incident. The front
+  // page carries the first read; this one earns its query on the click.
+  const fetchedRef = useRef(false);
   useEffect(() => {
+    if (!open || fetchedRef.current) return;
+    fetchedRef.current = true;
     let alive = true;
     cubeLoad({
       dimensions: [
@@ -75,7 +82,7 @@ export function PausedHistoryPhase({ variant }: { variant: 'SEASONAL_PAUSED' | '
       })));
     }).catch(e => { console.error('[paused-history] fetch failed:', e); if (alive) setFailed(true); });
     return () => { alive = false; };
-  }, [seasonal]);
+  }, [open, seasonal]);
 
   // campaign rollup rows carry the header; keyword rows nest under them
   const camps = (rows ?? []).filter(r => r.targetText === null)
@@ -95,7 +102,7 @@ export function PausedHistoryPhase({ variant }: { variant: 'SEASONAL_PAUSED' | '
           <span className="text-faint">{open ? '▾' : '▸'}</span>
           <span className="font-medium text-amber-300">{title}</span>
           <span className="text-faint truncate">
-            {failed ? '— unavailable' : rows ? `— ${camps.length} campaigns · ${desc}` : '— loading…'}
+            {failed ? '— unavailable' : rows ? `— ${camps.length} campaigns · ${desc}` : (open || fetchedRef.current) ? '— loading…' : '— expand to load'}
           </span>
         </button>
       </div>

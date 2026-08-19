@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { cubeLoad } from '../hooks/useCubeData';
 import { useDoQueue } from '../hooks/useDoQueue';
 
@@ -28,7 +28,13 @@ export function BrandDefensePhase() {
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
   const [rows, setRows] = useState<Row[] | null>(null);
 
+  // LAZY SECTION (WEEKLY_RUN_UX.md: sections are lazy drill-downs — fetch ONLY on first expand).
+  // On mount this joined ~17 sections all firing ceiling-view queries at page open (40–120s each
+  // cold). The moat's rows load when Ori opens the moat.
+  const fetchedRef = useRef(false);
   useEffect(() => {
+    if (!open || fetchedRef.current) return;
+    fetchedRef.current = true;
     let alive = true;
     cubeLoad({
       dimensions: [
@@ -72,7 +78,7 @@ export function BrandDefensePhase() {
       })));
     }).catch(() => { if (alive) setRows([]); });
     return () => { alive = false; };
-  }, []);
+  }, [open]);
 
   const byCamp = new Map<string, Row[]>();
   for (const r of rows ?? []) { const a = byCamp.get(r.campaignId) ?? []; a.push(r); byCamp.set(r.campaignId, a); }
@@ -102,7 +108,7 @@ export function BrandDefensePhase() {
           <span className="text-faint">{open ? '▾' : '▸'}</span>
           <span className="font-medium text-violet-300">Brand defense</span>
           <span className="text-faint truncate">
-            {rows ? `— ${camps.length} campaigns · the moat: never parked by ROAS, never negated · budget is the lever` : '— loading…'}
+            {rows ? `— ${camps.length} campaigns · the moat: never parked by ROAS, never negated · budget is the lever` : (open || fetchedRef.current) ? '— loading…' : '— expand to load'}
           </span>
         </button>
         {budSugs.length > 0 && (

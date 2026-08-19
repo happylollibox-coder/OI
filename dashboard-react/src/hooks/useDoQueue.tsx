@@ -79,6 +79,9 @@ interface DoQueueContextValue {
   // until synced. retryPendingSync re-attempts the POST.
   pendingSyncCount: number;
   retryPendingSync: () => void;
+  // Log the negatives in an export to DE_NEGATIVE_KEYWORDS/TARGETS at export time (implemented
+  // below since 2026-08; the interface just never declared it, so consumers didn't typecheck).
+  logExportedNegatives: (exported: DoQueueItem[]) => void;
 }
 
 const STORAGE_KEY = 'oi_do_queue';
@@ -437,3 +440,24 @@ export function useDoQueue() {
   if (!ctx) throw new Error('useDoQueue must be inside DoQueueProvider');
   return ctx;
 }
+
+/* ─── Canonical queue identity (2026-08-17, Ori: "if i approve an action in section or
+ * snapshot, visual should show both approve") ─────────────────────────────────────────
+ * One lever, one key, one queue item — REGARDLESS of which surface queued it:
+ *   BID    → keyword_id                 (any bid-changing action)
+ *   BUDGET → campaign_id                (any budget-changing action)
+ *   NEGATE → campaign_id + term text    (no value; SB splits one term into one item per
+ *                                        ad group, so the negate lookup returns them ALL)
+ * Every surface renders its ✓ from these lookups, never from "did I queue it myself".
+ * A row whose key is queued at a DIFFERENT value still shows as queued — with the queued
+ * value visible beside it — because the user's one decision must look decided everywhere. */
+export const BID_QUEUE_ACTIONS = ['INCREASE_BID', 'REDUCE_BID', 'BOOST', 'SCALE_UP', 'PROBE'];
+export const isBudgetQueueAction = (a: string) => a.includes('BUDGET');
+export const normTerm = (t: string) => t.trim().toLowerCase();
+export const findQueuedBid = (items: DoQueueItem[], keywordId: string | null | undefined): DoQueueItem | undefined =>
+  keywordId ? items.find(i => i.keyword_id === keywordId && BID_QUEUE_ACTIONS.includes(i.action)) : undefined;
+export const findQueuedBudget = (items: DoQueueItem[], campaignId: string | null | undefined): DoQueueItem | undefined =>
+  campaignId ? items.find(i => i.campaign_id === campaignId && isBudgetQueueAction(i.action)) : undefined;
+export const findQueuedNegates = (items: DoQueueItem[], campaignId: string, term: string): DoQueueItem[] =>
+  items.filter(i => i.action === 'NEGATE_TERM' && i.campaign_id === campaignId
+    && normTerm(i.search_term) === normTerm(term));

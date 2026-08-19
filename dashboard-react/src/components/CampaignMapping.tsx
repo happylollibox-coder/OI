@@ -71,12 +71,13 @@ export function CampaignMapping() {
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   // Prefill, but only with values the backend will accept (the suggestion engine can
-  // emit non-option values like "UNKNOWN"). Family from the suggestion (the GET payload
-  // has no current_family field); strategy from current mapping, else the suggestion.
-  const validFamily = (f: string | null) => (f && families.includes(f) ? f : '');
+  // emit non-option values like "UNKNOWN"). Family from the CURRENT mapping first —
+  // otherwise a manual mapping the suggester wouldn't pick (e.g. Store) snaps back to
+  // the suggested family after saving and looks rejected. Then the suggestion.
+  const validFamily = (f: string | null | undefined) => (f && families.includes(f) ? f : '');
   const validStrategy = (s: string | null) => (s && strategies.includes(s) ? s : '');
   const editFor = (r: CampaignMappingRow) => edits[r.campaign_id] || {
-    family: validFamily(r.suggested_family),
+    family: validFamily(r.current_family) || validFamily(r.suggested_family),
     strategy: validStrategy(r.current_strategy_id) || validStrategy(r.suggested_strategy),
   };
   const setEdit = (r: CampaignMappingRow, patch: Partial<{ family: string; strategy: string }>) => {

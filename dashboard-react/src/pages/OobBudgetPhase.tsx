@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { cubeLoad } from '../hooks/useCubeData';
-import { useDoQueue } from '../hooks/useDoQueue';
+import { findQueuedBid, findQueuedBudget, findQueuedNegates, useDoQueue } from '../hooks/useDoQueue';
 
 // "Out of budget" technical phase — sits directly below the Coach-logic flowchart on Weekly Run.
 // Goal (Ori 2026-07-30): campaigns should never be out of budget, but use almost all their budget.
@@ -50,8 +50,8 @@ const ROLE_CLS: Record<string, string> = {
   IDLE: 'text-faint', DEFENSE: 'text-violet-400',
 };
 const ROLE_TIP: Record<string, string> = {
-  WINNER: 'net ROAS ≥ 1.0 over the LAST 3 DAYS — always seated first; while the campaign caps its lever is the budget raise, never a bid raise (EASE/FIT price its clicks honestly).',
-  WATCH: 'proven over 90 days but cold in the last 3 — holds its seat, monitored.',
+  WINNER: 'net ROAS ≥ 1.0 over the LAST 3 DAYS — always seated first; while the campaign caps its lever is the budget raise, never a bid raise (EASE/FIT price its clicks honestly). Over 4 clicks yesterday with no sale, a 90d-proven seat still brakes 5%/day.',
+  WATCH: 'proven over 90 days but cold in the last 3 — holds its seat at up to 4 clicks/day; above 4 clicks yesterday the seat exemption stops and the bid brakes a flat 5%/day (paced, not punished — never the 15% mid-test trim).',
   PROBE: 'mid-test under the Portfolio engine — keeps its probe bid while it holds a seat; beyond the seats it pauses at $0.25.',
   CANDIDATE: 'parked and holding a seat — ACTIVATEs at max($1, min(1.5× target, $1.50)), paced by the 20% rule (80% of any raise keeps feeding winners).',
   TRIAL: 'seated mid-test gathering clicks — TRIM/DARK_BRAKE only with real evidence (≥ 4 clicks / clicked yesterday).',
@@ -59,9 +59,12 @@ const ROLE_TIP: Record<string, string> = {
   QUEUED: 'beyond the seats (budget ÷ $4) — waits at $0.25 in the queue; the test resumes when a seat frees.',
 };
 
-export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) {
+export function OobBudgetPhase({ tier, defaultOpen }: { tier: 'LOW' | 'HIGH' | 'SEASONAL'; defaultOpen?: boolean }) {
   const doQueue = useDoQueue();
-  const [open, setOpen] = useState(false);
+  // defaultOpen (Ori 2026-08-17): parent expands sections that hold open actions. null until the
+  // user clicks — so a defaultOpen arriving later can never override an explicit close.
+  const [openState, setOpenState] = useState<boolean | null>(null);
+  const open = openState ?? defaultOpen ?? false;
   const [openCamps, setOpenCamps] = useState<Record<string, boolean>>({});
   const [openWinners, setOpenWinners] = useState<Record<string, boolean>>({});
   // manual bid entry (Ori 2026-08-02): click the → $ cell on any keyword row to type a bid
@@ -72,7 +75,14 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
   const [terms, setTerms] = useState<Term[]>([]);
   const [failed, setFailed] = useState(false);
 
+  // LAZY SECTION (WEEKLY_RUN_UX.md: sections fetch ONLY on first expand). This one alone is THREE
+  // cube queries (campaign + keyword + search-term); with every section fetching on mount the page
+  // fired ~17 ceiling-view queries at open, 40–120s each cold — the "why is it not loading"
+  // incident. The gate defers all three to the first click.
+  const fetchedRef = useRef(false);
   useEffect(() => {
+    if (!open || fetchedRef.current) return;
+    fetchedRef.current = true;
     let alive = true;
     Promise.all([
       cubeLoad({
@@ -185,7 +195,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
       })));
     }).catch(() => { if (alive) setFailed(true); });
     return () => { alive = false; };
-  }, []);
+  }, [open]);
 
   const kwByCamp = useMemo(() => {
     const m = new Map<string, Kw[]>();
@@ -205,9 +215,13 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
   const bidSug = (k: Kw) => k.suggestedBid != null && k.keywordId !== '' && !['HOLD', 'NO_BID'].includes(k.action);
   const campNegs = (id: string) => (kwByCamp.get(id) ?? []).flatMap(k =>
     (termsByKw.get(`${id}|${k.text}`) ?? []).filter(t => t.isNegate));
-  const budgetItem = (r: Row) => doQueue.items.find(i => i.action === 'BUDGET_CHANGE' && i.campaign_id === r.id);
-  const bidItem = (k: Kw) => doQueue.items.find(i => i.keyword_id === k.keywordId && ['INCREASE_BID', 'REDUCE_BID'].includes(i.action));
-  const negItem = (t: Term) => doQueue.items.find(i => i.action === 'NEGATE_TERM' && i.campaign_id === t.campaignId && i.search_term === t.term);
+  // Queued-state lookups on the CANONICAL key (Ori 2026-08-17: "approve in section or snapshot →
+  // visual should show both approve"): shared helpers, so a key queued from ANY surface at ANY
+  // value renders queued here too. negItems returns ALL split items (SB: one per ad group) —
+  // removal must remove them all.
+  const budgetItem = (r: Row) => findQueuedBudget(doQueue.items, r.id);
+  const bidItem = (k: Kw) => findQueuedBid(doQueue.items, k.keywordId);
+  const negItems = (t: Term) => findQueuedNegates(doQueue.items, t.campaignId, t.term);
   const queueBudget = (r: Row, manualBudget?: number) => {
     // Manual budgets (Ori 2026-08-04) bypass the suggestion gate — any campaign can take one.
     const newBudget = manualBudget ?? r.suggested;
@@ -264,24 +278,37 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
     return { budgets, bids, negs };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, kwByCamp, termsByKw]);
+  // Bulk list: a suggestion whose key is already queued (from ANY surface, at ANY value) counts
+  // as DONE, not skipped — only the remainder is applicable. Count and click derive from this
+  // SAME memoised list.
+  const applicable = useMemo(() => ({
+    budgets: allSuggestions.budgets.filter(r => !findQueuedBudget(doQueue.items, r.id)),
+    bids: allSuggestions.bids.filter(({ k }) => !findQueuedBid(doQueue.items, k.keywordId)),
+    negs: allSuggestions.negs.filter(({ t }) => findQueuedNegates(doQueue.items, t.campaignId, t.term).length === 0),
+  }), [allSuggestions, doQueue.items]);
   const nSug = allSuggestions.budgets.length + allSuggestions.bids.length + allSuggestions.negs.length;
-  const allApplied = nSug > 0
-    && allSuggestions.budgets.every(r => !!budgetItem(r))
-    && allSuggestions.bids.every(({ k }) => !!bidItem(k))
-    && allSuggestions.negs.every(({ t }) => !!negItem(t));
+  const nOpen = applicable.budgets.length + applicable.bids.length + applicable.negs.length;
+  const allApplied = nSug > 0 && nOpen === 0;
   const applyAll = () => {
     if (allApplied) {
-      allSuggestions.budgets.forEach(r => { const it = budgetItem(r); if (it) doQueue.removeItem(it.id); });
-      allSuggestions.bids.forEach(({ k }) => { const it = bidItem(k); if (it) doQueue.removeItem(it.id); });
-      allSuggestions.negs.forEach(({ t }) => { const it = negItem(t); if (it) doQueue.removeItem(it.id); });
-      // unapply also clears MANUAL bids in this section's campaigns (sections are disjoint)
-      const secIds = new Set((rows ?? []).map(r => r.id));
-      doQueue.items.filter(i => ['INCREASE_BID', 'REDUCE_BID', 'BUDGET_CHANGE'].includes(i.action) && secIds.has(i.campaign_id))
-        .forEach(i => doQueue.removeItem(i.id));
+      // Bulk unapply is VALUE-EXACT: only items matching what THIS panel queues are removed — a
+      // foreign-valued item (other view / manual edit) goes only via its own row click. Negates
+      // carry no value, so every split item on the key is removed.
+      allSuggestions.budgets.forEach(r => {
+        const it = findQueuedBudget(doQueue.items, r.id);
+        if (it && it.recommended_budget != null && r.suggested != null
+          && Math.abs(it.recommended_budget - r.suggested) <= 0.005) doQueue.removeItem(it.id);
+      });
+      allSuggestions.bids.forEach(({ k }) => {
+        const it = findQueuedBid(doQueue.items, k.keywordId);
+        if (it && it.recommended_bid != null && k.suggestedBid != null
+          && Math.abs(it.recommended_bid - k.suggestedBid) <= 0.005) doQueue.removeItem(it.id);
+      });
+      allSuggestions.negs.forEach(({ t }) => negItems(t).forEach(i => doQueue.removeItem(i.id)));
     } else {
-      allSuggestions.budgets.forEach(r => { if (!budgetItem(r)) queueBudget(r); });
-      allSuggestions.bids.forEach(({ r, k }) => { if (!bidItem(k)) queueKwBid(r, k); });
-      allSuggestions.negs.forEach(({ r, t }) => { if (!negItem(t)) queueNeg(r, t); });
+      applicable.budgets.forEach(r => queueBudget(r));
+      applicable.bids.forEach(({ r, k }) => queueKwBid(r, k));
+      applicable.negs.forEach(({ r, t }) => queueNeg(r, t));
     }
   };
 
@@ -291,21 +318,23 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
   return (
     <div className="mb-3 rounded-md border border-border bg-surface/30 px-3 py-2">
       <div className="flex items-center gap-1">
-        <button className="text-label flex items-center gap-1 flex-1 min-w-0" onClick={() => setOpen(o => !o)}>
+        <button className="text-label flex items-center gap-1 flex-1 min-w-0" onClick={() => setOpenState(!open)}>
           <span className="text-faint">{open ? '▾' : '▸'}</span>
           <span className="font-medium text-rose-300">{tier === 'LOW' ? 'Low budget — out of budget' : tier === 'SEASONAL' ? 'Seasonal — out of budget' : 'Portfolio 80/20 — out of budget'}</span>
           <span className="text-faint truncate">
             {failed ? '— unavailable' : rows
               ? `— ${n} dark yesterday · ${nMoves} budget moves · ${allSuggestions.bids.length} bids · ${allSuggestions.negs.length} negates`
-              : '— loading…'}
+              : (open || fetchedRef.current) ? '— loading…' : '— expand to load'}
             {' '}· goal: never out of budget, spend ~all of it
           </span>
         </button>
         {rows && nSug > 0 && (
           <button onClick={applyAll}
-            title={allApplied ? 'unapply all suggestions in this phase' : 'queue every budget, bid and negation suggestion'}
+            title={allApplied ? 'unapply this phase — removes only this panel’s values; a foreign-valued item goes via its own row'
+              : nOpen < nSug ? `queue the ${nOpen} remaining suggestions — ${nSug - nOpen} already queued`
+              : 'queue every budget, bid and negation suggestion'}
             className={`text-label px-2 py-0.5 rounded border shrink-0 ${allApplied ? 'border-emerald-500/40 text-emerald-300' : 'border-rose-500/40 text-rose-300 hover:bg-rose-500/10'}`}>
-            {allApplied ? `✓ applied ${nSug}` : `apply all ${nSug}`}
+            {allApplied ? `✓ applied ${nSug}` : nOpen < nSug ? `apply ${nOpen} more` : `apply all ${nSug}`}
           </button>
         )}
       </div>
@@ -330,14 +359,22 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
             <tbody>
               {rows.map(r => {
                 const camKws = kwByCamp.get(r.id) ?? [];
-                const expanded = !!openCamps[r.id];
+                // Groups holding at least one still-open (not-yet-queued) suggestion start
+                // expanded (Ori 2026-08-17); a click pins the group — stored value beats the
+                // derived default, so a user collapse survives queue changes.
+                const hasOpenSug = camKws.some(k => bidSug(k) && !bidItem(k))
+                  || campNegs(r.id).some(t => negItems(t).length === 0);
+                const expanded = openCamps[r.id] ?? hasOpenSug;
                 const bItem = budgetItem(r);
+                // Foreign/differing queued value renders beside the ✓ — decided, but at THAT value.
+                const bQVal = bItem?.recommended_budget;
+                const bDiff = bQVal != null && (r.suggested == null || Math.abs(bQVal - r.suggested) > 0.005);
                 return (
                 <Fragment key={r.id}>
                 <tr className="text-right border-t border-border/40">
                   <td className="text-left px-2 py-0.5 text-body whitespace-nowrap">
                     {camKws.length > 0
-                      ? <button className="text-faint pr-1" onClick={() => setOpenCamps(o => ({ ...o, [r.id]: !o[r.id] }))}>{expanded ? '▾' : '▸'}</button>
+                      ? <button className="text-faint pr-1" onClick={() => setOpenCamps(o => ({ ...o, [r.id]: !expanded }))}>{expanded ? '▾' : '▸'}</button>
                       : <span className="pr-3" />}
                     {r.name}
                     <span className="text-faint text-label"> {r.channel}{r.engine === 'LAUNCH' ? ' · launch' : ''} · spent ${r.spend.toFixed(2)}{r.util != null ? <span className={r.util > 1.2 ? 'text-amber-400' : ''} title="spend ÷ budget. SB can exceed 100% — Amazon overdelivers SB up to 2× its daily budget"> · {Math.round(r.util * 100)}%</span> : null}</span>
@@ -367,8 +404,9 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                   <td className="px-2">
                     {(budgetSug(r) || bItem) && (
                       <button onClick={() => { const it = budgetItem(r); if (it) doQueue.removeItem(it.id); else queueBudget(r); }}
+                        title={bItem ? (bDiff && bQVal != null ? `queued from another view at $${bQVal.toFixed(2)} — click to remove it` : 'queued — click to remove') : 'queue this budget'}
                         className={`px-1.5 py-0 rounded border ${bItem ? 'border-emerald-500/40 text-emerald-300' : 'border-border text-muted hover:bg-surface'}`}>
-                        {bItem ? '✓' : 'budget'}
+                        {bItem ? (bDiff && bQVal != null ? `✓ at $${bQVal.toFixed(2)}` : '✓') : 'budget'}
                       </button>
                     )}
                   </td>
@@ -384,6 +422,8 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                   const wKey = `${r.id}|${k.text}`;
                   const wOpen = !!openWinners[wKey];
                   const kItem = bidItem(k);
+                  const kQVal = kItem?.recommended_bid;
+                  const kDiff = kQVal != null && (k.suggestedBid == null || Math.abs(kQVal - k.suggestedBid) > 0.005);
                   return (
                   <Fragment key={`${r.id}|${k.keywordId || k.text}`}>
                   <tr className="text-right border-t border-border/20 bg-surface/40">
@@ -426,9 +466,9 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                     <td className="px-2">
                       {(bidSug(k) || kItem) && (
                         <button onClick={() => { const it = bidItem(k); if (it) doQueue.removeItem(it.id); else queueKwBid(r, k); }}
-                          title={kItem ? 'queued — click to remove' : 'queue this bid'}
+                          title={kItem ? (kDiff && kQVal != null ? `queued from another view at $${kQVal.toFixed(2)} — click to remove it` : 'queued — click to remove') : 'queue this bid'}
                           className={`px-1.5 py-0 rounded border ${kItem ? 'border-emerald-500/40 text-emerald-300' : 'border-border text-muted hover:bg-surface'}`}>
-                          {kItem ? '✓' : 'bid'}
+                          {kItem ? (kDiff && kQVal != null ? `✓ at $${kQVal.toFixed(2)}` : '✓') : 'bid'}
                         </button>
                       )}
                     </td>
@@ -448,7 +488,7 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                     </tr>
                   ))}
                   {negs.map(t => {
-                    const nItem = negItem(t);
+                    const nQueued = negItems(t).length > 0;
                     return (
                     <tr key={`${r.id}|${k.keywordId || k.text}|${t.term}`} className="text-right border-t border-border/10">
                       <td className="text-left pl-14 pr-2 py-0.5 text-faint whitespace-nowrap">“{t.term}” <span>({t.kind.toLowerCase()})</span></td>
@@ -461,9 +501,9 @@ export function OobBudgetPhase({ tier }: { tier: 'LOW' | 'HIGH' | 'SEASONAL' }) 
                       <td className="px-2 text-left text-red-400">negate</td>
                       <td className="px-2 text-faint">—</td>
                       <td className="px-2">
-                        <button onClick={() => { const it = negItem(t); if (it) doQueue.removeItem(it.id); else queueNeg(r, t); }}
-                          className={`px-1.5 py-0 rounded border ${nItem ? 'border-emerald-500/40 text-emerald-300' : 'border-red-500/30 text-red-400 hover:bg-red-500/10'}`}>
-                          {nItem ? '✓' : 'negate'}
+                        <button onClick={() => { const its = negItems(t); if (its.length) its.forEach(i => doQueue.removeItem(i.id)); else queueNeg(r, t); }}
+                          className={`px-1.5 py-0 rounded border ${nQueued ? 'border-emerald-500/40 text-emerald-300' : 'border-red-500/30 text-red-400 hover:bg-red-500/10'}`}>
+                          {nQueued ? '✓' : 'negate'}
                         </button>
                       </td>
                       <td className="px-2 text-left text-faint whitespace-nowrap">{t.isBig

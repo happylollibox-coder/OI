@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveWindow, isPeakWindow, classifyDelta, buildBriefModel, todayStr, peakShiftDays,
+  UNMAPPED_FAMILY,
   type DateMode,
 } from './homeBrief';
 import { addDays } from './utils';
@@ -231,6 +232,86 @@ describe('buildBriefModel', () => {
     // The All card follows the same rule (Box is the only family with ads rows).
     expect(m.allNetProfit.cur).toBeCloseTo(160);
     expect(m.allNetProfit.base).toBeCloseTo(390);
+  });
+
+  it('ads scope switches non-today modes to ads-only measures over the same windows', () => {
+    const m = buildBriefModel(makeData(), 'yday', NOW, undefined, 'ads');
+    const lolli = m.families.find(f => f.family === 'Lollibox')!;
+    expect(lolli.adsOnly).toBe(true);
+    expect(lolli.kpis.some(k => k.key === 'ads_roas')).toBe(true);
+    // Ads NP: 06-18 = 700 − 210 − 100 = 390, vs 7-day avg (560 − 168 − 100 = 292/day).
+    expect(lolli.netProfit.label).toBe('Ads Net Profit');
+    expect(lolli.netProfit.cur).toBeCloseTo(390);
+    expect(lolli.netProfit.base).toBeCloseTo(292);
+    // Units = ad orders in ads scope.
+    expect(lolli.unitsSold.cur).toBe(20);
+    expect(m.allNetProfit.cur).toBeCloseTo(390);
+    expect(m.periodLabel).toContain('ads only');
+  });
+
+  it('total scope (default) keeps full P&L in non-today modes', () => {
+    const m = buildBriefModel(makeData(), 'yday', NOW);
+    const lolli = m.families.find(f => f.family === 'Lollibox')!;
+    expect(lolli.adsOnly).toBe(false);
+    expect(lolli.netProfit.label).toBe('Net Profit');
+    expect(lolli.netProfit.cur).toBeCloseTo(400);
+    expect(lolli.unitsSold.cur).toBe(50);
+  });
+});
+
+/* ── family attribution: SB video / Store rows with no advertised ASIN ──── */
+
+/** makeData() plus the real-world SB rows whose advertised ASIN is "Unknown" (parent_name null). */
+function withUnknownAsinAds(): DashboardData {
+  const d = makeData();
+  const orphan = (name: string, o: Partial<Ads7dRow>) =>
+    ({ ...ads(name, '', '2026-06-19', o), parent_name: null, product_short_name: '' }) as Ads7dRow;
+  d.ads_7d!.push(orphan('VIDEO- BALL', { spend: 62.08, sales: 317.09, orders: 13, cogs: 87.93 }));
+  d.ads_7d!.push(orphan('BUNNY-VIDEO/BROAD (Hunter)', { spend: 7.9, sales: 41.97, orders: 3, cogs: 29.31 }));
+  d.ads_7d!.push(orphan('STORE-SPOTLIGHT (tween-girl-gift)', { spend: 5.22, sales: 27.98, orders: 2, cogs: 19.54 }));
+  return d;
+}
+
+describe('ads family attribution', () => {
+  it('routes VIDEO- BALL to LolliBall and BUNNY-VIDEO to Bunny via the campaign-name fallback', () => {
+    const m = buildBriefModel(withUnknownAsinAds(), 'today' as DateMode, NOW);
+    const ball = m.families.find(f => f.family === 'LolliBall')!;
+    expect(ball).toBeTruthy();
+    expect(ball.netProfit.cur).toBeCloseTo(317.09 - 87.93 - 62.08); // 167.08
+    const bunny = m.families.find(f => f.family === 'Bunny')!;
+    expect(bunny.netProfit.cur).toBeCloseTo(41.97 - 29.31 - 7.9); // 4.76
+  });
+
+  it('LolliME does not swallow ball/bunny campaigns despite its bare "me" matcher', () => {
+    const m = buildBriefModel(withUnknownAsinAds(), 'today' as DateMode, NOW);
+    expect(m.families.find(f => f.family === 'LolliME')).toBeUndefined();
+  });
+
+  it('puts genuinely unattributable rows on their own Unmapped card, named and flagged', () => {
+    const m = buildBriefModel(withUnknownAsinAds(), 'today' as DateMode, NOW);
+    const gap = m.families.find(f => f.family === UNMAPPED_FAMILY)!;
+    expect(gap).toBeTruthy();
+    expect(gap.netProfit.cur).toBeCloseTo(27.98 - 19.54 - 5.22); // 3.22
+    expect(gap.health).toBe('warn');
+    expect(gap.steady).toBe(false);
+    expect(gap.read).toContain('STORE-SPOTLIGHT (tween-girl-gift)');
+    expect(gap.attention.some(a => a.level === 'warn' && /no family mapping/.test(a.text))).toBe(true);
+    // Sorted last — it is a mapping gap, not a family, so it must not displace real families.
+    expect(m.families[m.families.length - 1].family).toBe(UNMAPPED_FAMILY);
+    // And it surfaces in the overview so the gap is impossible to miss.
+    expect(m.overview.attention.some(a => /no family mapping/.test(a.text))).toBe(true);
+  });
+
+  it('family cards sum to the All card — no row belongs to All alone', () => {
+    const m = buildBriefModel(withUnknownAsinAds(), 'today' as DateMode, NOW);
+    const summed = m.families.reduce((s, f) => s + f.netProfit.cur, 0);
+    expect(summed).toBeCloseTo(m.allNetProfit.cur);
+    expect(m.families.reduce((s, f) => s + f.unitsSold.cur, 0)).toBeCloseTo(m.allUnitsSold.cur);
+  });
+
+  it('no Unmapped card when every row maps', () => {
+    const m = buildBriefModel(makeData(), 'today' as DateMode, NOW);
+    expect(m.families.find(f => f.family === UNMAPPED_FAMILY)).toBeUndefined();
   });
 });
 

@@ -13,15 +13,23 @@
 
 const REAUTH_AT_KEY = 'apiFetch_reauth_at';
 
-export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+// noReauthRedirect: for ENRICHMENT calls made inside a user gesture (e.g. the DO page's
+// /api/live-campaigns lookup before building the bulksheet). The 401 bounce below navigates the
+// page away, which silently kills whatever the click was doing — the export died mid-`import('xlsx')`
+// and the user just landed back on Home with no file (Ori 2026-08-12 "export button is not working").
+// Callers that already have a fallback path pass this and handle a 401 like any other failure.
+export type ApiFetchInit = RequestInit & { noReauthRedirect?: boolean };
+
+export async function apiFetch(input: string, init: ApiFetchInit = {}): Promise<Response> {
+  const { noReauthRedirect, ...fetchInit } = init;
   const token = localStorage.getItem('dashboard_token');
-  const headers = new Headers(init.headers || {});
+  const headers = new Headers(fetchInit.headers || {});
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  const res = await fetch(input, { ...init, headers });
+  const res = await fetch(input, { ...fetchInit, headers });
 
-  if (res.status === 401) {
+  if (res.status === 401 && !noReauthRedirect) {
     if (import.meta.env.DEV) {
       // Dev: the bounce would land on the prod dashboard URL — fail loudly and
       // drop the dead token so AuthContext's VITE_DEV_BYPASS_TOKEN fallback

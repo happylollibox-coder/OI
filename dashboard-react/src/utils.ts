@@ -416,6 +416,9 @@ export const ACTION_META: Record<string, { label: string; variant: 'red' | 'gree
   BLITZ_BUDGET_INCREASE:    { label: 'BLITZ BUDGET ↑', variant: 'green', group: 'growth', criteria: 'Blitz: profitable + out of budget — increase 20%' },
   BLITZ_BUDGET_DECREASE:    { label: 'BLITZ BUDGET ↓', variant: 'amber', group: 'urgent', criteria: 'Blitz: losing ROAS — decrease 10%' },
   BUDGET_OK:        { label: 'BUDGET OK',      variant: 'muted',  group: 'watch',       criteria: 'Budget within healthy range — no change needed' },
+  // v27.56 launch exemption — a budget loss-cut the coach was not allowed to make. Label only;
+  // the block itself is decided in V_ADS_COACH against V_LAUNCH_EXEMPTION.
+  LAUNCH_EXEMPT_HOLD: { label: 'LAUNCH HELD',  variant: 'blue',   group: 'watch',       criteria: 'Launch family — budget cut blocked; a launch is supposed to lose money while the right bid is found' },
   // ─── Legacy / passive (term-level, rolled up into target actions) ───
   KEEP:             { label: 'KEEP',           variant: 'green',  group: 'profitable',  criteria: 'Term profitable — passive, bid action is on the target' },
   MONITOR:          { label: 'MONITOR',        variant: 'muted',  group: 'watch',       criteria: 'Not enough data — keep watching' },

@@ -7,7 +7,7 @@ import { fM, fP, fOrd, ACTION_META } from '../utils';
 import { termGrain, termGrainShort } from '../coachActuals';
 import { useDoQueue, type DoQueueItem } from '../hooks/useDoQueue';
 import { mergeUpdateRows } from './bulksheetDedup';
-import { cubeLoad } from '../hooks/useCubeData';
+import { cubeLoad, cubeLoadWithMeta } from '../hooks/useCubeData';
 import { apiFetch } from '../utils/apiFetch';
 import { buildCompetitorSpRows, buildCompetitorSbRows, type CompetitorItem, type CompetitorCtx } from './competitorBulksheet';
 import { DecisionScorecard } from '../components/DecisionScorecard';
@@ -483,7 +483,7 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
 
   /* ─── Export Amazon Bulksheet v2.0 XLSX ─── */
   const exportBulksheet = async () => {
-    if (!doQueue.items.length) return;
+    if (!doQueue.items.length) { alert('Nothing to export — the DO queue is empty.'); return; }
 
     // Stale-queue self-heal AT THE SOURCE (the export). SB keyword Update rows REQUIRE
     // an Ad Group Id; items queued before the ad-group fix carry an empty one frozen in
@@ -496,10 +496,12 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
     ));
     if (missingKwIds.length) {
       try {
+        // noReauthRedirect: enrichment inside a user gesture — a 401 must NOT navigate the page
+        // away mid-export (see the /api/live-campaigns note below); the catch below is the fallback.
         const agRows = await cubeLoad({
           dimensions: ['CoachRunKeyword.id', 'CoachRunKeyword.adGroupId'],
           filters: [{ member: 'CoachRunKeyword.id', operator: 'equals', values: missingKwIds }],
-        });
+        }, { noReauthRedirect: true });
         for (const r of agRows as Record<string, unknown>[]) {
           const kid = String(r['CoachRunKeyword.id'] ?? '');
           const ag = String(r['CoachRunKeyword.adGroupId'] ?? '');
@@ -521,20 +523,103 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
     // the child rows must carry the real numeric ids or Amazon rejects them "Missing Parent ID"
     // and fails the WHOLE sheet (Ori 2026-07-24: 37 records, 0 applied).
     const liveIds = new Map<string, { campaign_id: string; ad_group_id: string }>();
+    // campaign_id -> its portfolio. A Campaign Update row with a BLANK Portfolio ID does not mean
+    // "unchanged" — Amazon reads it as "no portfolio" and detaches the campaign, which is what every
+    // budget export was silently doing (Ori 2026-08-09: 16 campaigns detached at the 12:56 upload).
+    // Campaign rows below echo this value back so the portfolio survives the edit.
+    const portfolioById = new Map<string, string>();
     try {
-      const res = await apiFetch('/api/live-campaigns');
+      // noReauthRedirect: this is ENRICHMENT, never a precondition. A stale dashboard_token made
+      // apiFetch navigate to the Flask re-auth bootstrap mid-click, unloading the page before
+      // import('xlsx') resolved — the export produced no file and dumped the user back on Home
+      // (Ori 2026-08-12 "export button is not working"). On 401 we now fall through to the
+      // performance-derived sources below, exactly like the Flask-unreachable path.
+      const res = await apiFetch('/api/live-campaigns', { noReauthRedirect: true });
       if (res.ok) {
-        const j = await res.json() as { campaigns?: { name?: string; campaign_id?: string; ad_group_id?: string }[] };
+        const j = await res.json() as { campaigns?: { name?: string; campaign_id?: string; ad_group_id?: string; portfolio_id?: string }[] };
         for (const c of (j.campaigns || [])) {
           if (!c?.name) continue;
           liveCampaignNames.push(c.name);
           if (c.campaign_id) {
             liveIds.set(c.name.trim().toUpperCase(),
               { campaign_id: String(c.campaign_id), ad_group_id: String(c.ad_group_id || '') });
+            if (c.portfolio_id) portfolioById.set(String(c.campaign_id), String(c.portfolio_id));
           }
         }
       }
     } catch { /* Flask unreachable — fall back to the performance-derived sources below */ }
+
+    // ═══ ENGINE PREFLIGHT — the standing contradiction gate, fetched FRESH at export time ═══
+    // architecture/ENGINE_PREFLIGHT.md. Manual preflights killed two bad batches in two attempts
+    // (iteration-6; the 27 stale restores of 2026-08-15) — a check that only runs when someone
+    // remembers is not a gate. The SP judges every live instruction on (campaign, keyword, lever)
+    // — single owner, no-op, settled-winner cut, house bid cap — and this export is the contract's
+    // other half: EXCLUDE rows are refused from the sheet, REVIEW rows need a per-item confirm.
+    // Verdicts are ONLY looked up here, never recomputed (one home, one voice). Campaign-create
+    // items carry no verdict ("Honest limits") and pass through unjudged, as does anything queued
+    // after the day's snapshot — no verdict = GO; the next snapshot judges it.
+    const preflightVerdicts = new Map<string, { verdict: string; reason: string; value: number | null }[]>();
+    let preflightUnavailable = false;
+    // Queue action → the SP's lever. BID = the bid-Update branches below (INCREASE/REDUCE_BID,
+    // plus the legacy BOOST/SCALE_UP aliases that share the INCREASE_BID branch — revivals also
+    // queue as INCREASE_BID, so REVIVE-grain verdicts match here too, lever BID). BUDGET = every
+    // budget-carrying action (the same predicate as the budget branch). NEGATE_TERM → NEGATE
+    // (v27.72 — the snapshot carries negates now; the key slot holds the TERM, not a keyword id,
+    // and there is no value to match). Everything else → null, untouched by the gate.
+    const preflightLever = (action: string): 'BID' | 'BUDGET' | 'NEGATE' | null => {
+      if (action === 'INCREASE_BID' || action === 'REDUCE_BID' || action === 'BOOST' || action === 'SCALE_UP') return 'BID';
+      if (action.includes('BUDGET') && action !== 'BUDGET_OK') return 'BUDGET';
+      if (action === 'NEGATE_TERM') return 'NEGATE';
+      return null;
+    };
+    const pfNormTerm = (t: string) => `term|${t.trim().toLowerCase()}`;
+    const pfKey = (campaignId: string, keywordId: string, lever: string) => `${campaignId}|${keywordId}|${lever}`;
+    if (doQueue.items.some(i => preflightLever(i.action) !== null)) {
+      // cubeLoadWithMeta, not cubeLoad: a dead cube and a clean all-GO day both return [] — only
+      // the meta `error` field tells them apart. If the gate can't answer it fails OPEN with a
+      // visible flag (console.warn now, alert after the file below) — Ori's uploads must never be
+      // hostage to a dev server, but exporting unjudged SILENTLY would be worse than no gate.
+      // noReauthRedirect: enrichment inside a user gesture, same as the ad-group fetch above.
+      const pf = await cubeLoadWithMeta({
+        dimensions: [
+          'EnginePreflight.campaignId', 'EnginePreflight.keywordId', 'EnginePreflight.lever',
+          'EnginePreflight.verdict', 'EnginePreflight.verdictReason',
+          // review find (CRITICAL): the values, so a verdict only fires on the item CARRYING the
+          // judged value — an EXCLUDE on the losing engine's $0.32 must not refuse the OWNER's
+          // queued $0.24 on the same (campaign, keyword, lever)
+          'EnginePreflight.suggestedBid', 'EnginePreflight.suggestedBudget',
+          // v27.72: the term, which IS the key for NEGATE rows (they have no keyword_id)
+          'EnginePreflight.targetText',
+        ],
+        filters: [{ member: 'EnginePreflight.verdict', operator: 'equals', values: ['EXCLUDE', 'REVIEW'] }],
+      }, 20, { noReauthRedirect: true });
+      if (pf.error) {
+        preflightUnavailable = true;
+        console.warn('[Bulksheet] preflight unavailable — exporting WITHOUT the gate:', pf.error);
+      } else {
+        for (const r of pf.data as Record<string, unknown>[]) {
+          const v = String(r['EnginePreflight.verdict'] ?? '');
+          if (v !== 'EXCLUDE' && v !== 'REVIEW') continue;
+          const lever = String(r['EnginePreflight.lever'] ?? '');
+          const k = pfKey(
+            String(r['EnginePreflight.campaignId'] ?? ''),
+            lever === 'NEGATE'
+              ? pfNormTerm(String(r['EnginePreflight.targetText'] ?? ''))
+              : String(r['EnginePreflight.keywordId'] ?? ''),   // NULL on budget rows → ''
+            lever,
+          );
+          const sBid = r['EnginePreflight.suggestedBid'];
+          const sBud = r['EnginePreflight.suggestedBudget'];
+          const value = sBid != null && sBid !== '' ? Number(sBid)
+                      : sBud != null && sBud !== '' ? Number(sBud) : null;
+          const list = preflightVerdicts.get(k) ?? [];
+          list.push({ verdict: v, reason: String(r['EnginePreflight.verdictReason'] ?? ''), value });
+          preflightVerdicts.set(k, list);
+        }
+      }
+    }
+    // Refused rows (EXCLUDE hits + declined REVIEWs) — reported after the export, never silent.
+    const preflightRefused: { item: DoQueueItem; reason: string }[] = [];
 
     import('xlsx').then((XLSX) => {
       // ═══ Brand Asset Config (fetched dynamically from DIM_PRODUCT_CREATIVES via Cube.js) ═══
@@ -724,6 +809,43 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         const campName = item.campaign || '';
         const adGroupId = item.ad_group_id || agOverride[item.keyword_id] || '';
 
+        // ENGINE PREFLIGHT gate (see the fetch above). A hit on (campaign, keyword-or-'', lever)
+        // carries the SP's verdict: EXCLUDE never reaches the sheet; REVIEW asks first. A miss is
+        // GO — the row was born after the snapshot, or isn't a judged lever at all.
+        const pfLever = preflightLever(item.action);
+        const pfHits = pfLever
+          ? preflightVerdicts.get(pfKey(campId,
+              pfLever === 'BID' ? (item.keyword_id || '')
+                : pfLever === 'NEGATE' ? pfNormTerm(item.search_term || '')
+                : '',
+              pfLever))
+          : undefined;
+        // review find (CRITICAL): a verdict applies to THIS item only if the item carries the
+        // judged value (±0.005). An item matching the surviving GO value hits nothing and passes.
+        // A judged row with no value (rare) keeps the old key-level behavior — safe direction.
+        const itemVal = pfLever === 'BUDGET'
+          ? (item.recommended_budget ?? null)
+          : (item.recommended_bid ?? null);
+        const pf = pfHits?.find(h => h.value == null || itemVal == null
+          || Math.abs(h.value - itemVal) <= 0.005);
+        if (pf) {
+          if (pf.verdict === 'EXCLUDE') {
+            preflightRefused.push({ item, reason: pf.reason });
+            continue;
+          }
+          // REVIEW: human eyes are the price (settled-winner cuts, >$2 bids — ENGINE_PREFLIGHT.md).
+          // window.confirm returns false with no dialog in the embedded browser (see armedClick
+          // above), so there REVIEW rows fail CLOSED into the refused list — the right direction
+          // for a gate whose whole point is that nothing questionable ships unseen.
+          if (pf.verdict === 'REVIEW') {
+            const pfTarget = item.targeting || item.search_term || (pfLever === 'BUDGET' ? 'daily budget' : item.keyword_id || '—');
+            if (!window.confirm(`PREFLIGHT REVIEW — ${campName} · ${pfTarget}: ${pf.reason}. Export anyway?`)) {
+              preflightRefused.push({ item, reason: `REVIEW declined: ${pf.reason}` });
+              continue;
+            }
+          }
+        }
+
         // Determine if this is an SB campaign (Sponsored Brands / Video)
         const ct = (item.campaign_type || '').toUpperCase();
         const cn = campName.toUpperCase();
@@ -742,10 +864,19 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
           'Campaign Name (Informational only)': campName,
         };
 
+        // Portfolio must ride along on CAMPAIGN-entity Update rows only — it is a campaign-level
+        // attribute, and a blank column there detaches the campaign (see portfolioById above).
+        // Keyword / Product Targeting / Product Ad rows don't carry it, and were never affected.
+        // Blank when unknown (Flask down, or a campaign that genuinely has no portfolio) — no worse
+        // than before, and inventing one would move a campaign into the wrong portfolio.
+        const pfId = portfolioById.get(campId) || '';
+        const spPortfolio: Record<string, string> = pfId ? { 'Portfolio ID': pfId } : {};
+        const sbPortfolio: Record<string, string> = pfId ? { 'Portfolio Id': pfId } : {};
+
         // ADD_KEYWORD (research mode, Ori 2026-08-02): a winning term becomes a new BROAD
         // keyword — Keyword Create rows on the matching sheet, $1 entry floor default.
         if (item.action === 'ADD_KEYWORD') {
-          const addBid = String((item.recommended_bid ?? 1).toFixed ? (item.recommended_bid ?? 1).toFixed(2) : item.recommended_bid ?? 1);
+          const addBid = (item.recommended_bid ?? 1).toFixed(2);
           if (isSB) {
             sbRows.push({
               'Product': 'Sponsored Brands', 'Entity': 'Keyword', 'Operation': 'Create',
@@ -1244,11 +1375,12 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
             if (isSB) {
               sbRows.push({
                 'Product': 'Sponsored Brands', 'Entity': 'Campaign', 'Operation': 'Update',
-                'Campaign Id': campId, 'Budget': String(recBudget),
+                'Campaign Id': campId, ...sbPortfolio, 'Budget': String(recBudget),
               });
             } else {
               spRows.push({
                 ...spBase,
+                ...spPortfolio,
                 'Entity': 'Campaign',
                 'Operation': 'Update',
                 'Daily Budget': String(recBudget),
@@ -1278,11 +1410,11 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         } else if (item.action === 'CAMPAIGN_RENAME' || item.action === 'CAMPAIGN_PAUSE' || item.action === 'CAMPAIGN_ENABLE') {
           const isRename = item.action === 'CAMPAIGN_RENAME';
           const stateVal = item.action === 'CAMPAIGN_PAUSE' ? 'paused' : 'enabled';
-          const campChange = isRename ? { 'Campaign Name': item.new_campaign_name || '' } : { 'State': stateVal };
+          const campChange: Record<string, string> = isRename ? { 'Campaign Name': item.new_campaign_name || '' } : { 'State': stateVal };
           if (isSB) {
-            sbRows.push({ 'Product': 'Sponsored Brands', 'Entity': 'Campaign', 'Operation': 'Update', 'Campaign Id': campId, ...campChange });
+            sbRows.push({ 'Product': 'Sponsored Brands', 'Entity': 'Campaign', 'Operation': 'Update', 'Campaign Id': campId, ...sbPortfolio, ...campChange });
           } else {
-            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Campaign', 'Operation': 'Update', 'Campaign ID': campId, ...campChange });
+            spRows.push({ 'Product': 'Sponsored Products', 'Entity': 'Campaign', 'Operation': 'Update', 'Campaign ID': campId, ...spPortfolio, ...campChange });
           }
 
         // ═══ ADD_PRODUCT_AD — advertise the hero (best-converting) variant in this ad group ═══
@@ -1301,7 +1433,28 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         }
       }
 
-      if (!spRows.length && !sbRows.length) return;
+      // Preflight refusals, one line per row: campaign · target · reason. Shown whether the
+      // export proceeds or comes up empty — a verdict nobody enforces is a comment, and a
+      // refusal nobody SEES is barely better.
+      const refusalLines = () => preflightRefused.map(r => {
+        const t = r.item.targeting || r.item.search_term
+          || (r.item.action.includes('BUDGET') ? 'daily budget' : r.item.keyword_id || '—');
+        return `• ${r.item.campaign || r.item.campaign_id} · ${t} · ${r.reason}`;
+      }).join('\n');
+
+      // Never fail silently (Ori 2026-08-12 "export button is not working"): several queued action
+      // types (KEEP_TARGET, MONITOR_TARGET, COOLDOWN_MONITOR, START_TERM, a BUDGET_* row with a null
+      // recommended_budget…) map to NO bulksheet row, so a queue full of them produced no file, no
+      // error and no explanation — indistinguishable from a broken button. Say so instead.
+      if (!spRows.length && !sbRows.length) {
+        if (preflightRefused.length) {
+          alert(`Nothing to export — ${preflightRefused.length} row(s) refused by preflight (and no other queued item produces a bulksheet row):\n\n${refusalLines()}`);
+          return;
+        }
+        const kinds = Array.from(new Set(doQueue.items.map(i => i.action))).join(', ');
+        alert(`Nothing to export: none of the ${doQueue.items.length} queued item(s) produce a bulksheet row.\n\nQueued actions: ${kinds}\n\nThese are review/monitor actions (or budget rows with no recommended value) — Amazon has nothing to upload for them.`);
+        return;
+      }
 
       // ═══ Collapse Update rows that share an entity id into ONE row ═══
       // Amazon voids the ENTIRE sheet for a "Duplicate Id": a budget change + rename on the same
@@ -1335,6 +1488,16 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         }
       }
       XLSX.writeFile(wb, `amazon_bulksheet_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      // Post-export accounting for the preflight gate. The file is already written — these are
+      // flags, not blockers. Refusals name every row the gate kept out of the sheet; the
+      // unavailable note is the fail-OPEN flag (gate down ≠ gate passed, and it must never
+      // masquerade as either a clean export or a closed gate).
+      if (preflightRefused.length) {
+        alert(`${preflightRefused.length} row(s) refused by preflight (NOT in the exported sheet):\n\n${refusalLines()}`);
+      }
+      if (preflightUnavailable) {
+        alert('⚠ Preflight unavailable — exported WITHOUT the gate (cube unreachable or stale; see console). Verdicts were not checked on this sheet.');
+      }
       // Log the negatives in this export to the owned registry immediately (don't wait for the manual
       // "Uploaded to Amazon" step). Keeps DE_NEGATIVE_KEYWORDS/TARGETS current so already-applied
       // negatives stop re-surfacing as "already exists" bounces. Idempotent + deduped server-side.

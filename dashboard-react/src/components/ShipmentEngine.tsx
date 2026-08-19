@@ -11,6 +11,8 @@ import { Section } from '../components/Section';
 import { fmt } from '../utils';
 import { apiFetch } from '../utils/apiFetch';
 import { buildWeeklyProjection, type ProjectionWeek } from '../stockProjection';
+import { METHOD_CAPTIONS } from '../fbaAwdSplit';
+import { useShipmentConstants } from '../hooks/useShipmentConstants';
 
 
 // ─── Forecast types (mirror from PlanPage) ────────────────
@@ -1700,6 +1702,10 @@ export function ShipmentCardSection({ suggestions, scheduled, activePOs, product
   const [draftShipmentLines, setDraftShipmentLines] = useState<DraftShipmentLine[]>([]);
   const [showShipmentModal, setShowShipmentModal] = useState<GanttGroupItem | false>(false);
 
+  // Transit days for the export's Transit row, read from the SHIPMENT_TYPE LOV
+  // at render time. Must stay above the empty-state return below — it is a hook.
+  const { transitDays } = useShipmentConstants();
+
   // De-duplicate: remove suggestions that already have a matching scheduled/approved row
   const dedupedSuggestions = useMemo(() => {
     const scheduledKeys = new Set(scheduled.map(s => `${s.product}__${s.shipment_type}__${s.ship_wednesday}`));
@@ -1920,12 +1926,12 @@ export function ShipmentCardSection({ suggestions, scheduled, activePOs, product
         return { product: p, label: `[${fam}] ${p}` };
       });
 
-      const TRANSIT_CAPTION_MAP: Record<string, string> = {
-        'AIR': 'Air',
-        'AWD_SLOW_SEA': 'AWD Slow Sea 60 Days',
-        'FAST_SEA': 'Fast Sea',
-        'SLOW_SEA': 'Slow Sea',
-        'AWD_TRANSFER': 'AWD → FBA Transfer'
+      // Captions never carry a day count — the days come from the LOV, so the
+      // two can never drift apart the way "AWD Slow Sea 60 Days" did at 63d.
+      const transitLabel = (id: string): string => {
+        const caption = METHOD_CAPTIONS[id] ?? id;
+        const days = transitDays[id];
+        return Number.isFinite(days) ? `${caption} ${days} Days` : caption;
       };
 
       // Extract metadata per shipment group
@@ -1935,7 +1941,7 @@ export function ShipmentCardSection({ suggestions, scheduled, activePOs, product
         const route = g.rows[0]?.route || '';
         const destination = route.includes('AWD') ? 'AWD' : 'FBA';
         const transitId = g.rows[0]?.transit_type || '';
-        const transitCaption = TRANSIT_CAPTION_MAP[transitId] || transitId;
+        const transitCaption = transitLabel(transitId);
         return {
           type: (g.type_name || '').replace(/_/g, ' '),
           shipDate: shipDates[0],
@@ -2068,7 +2074,7 @@ export function ShipmentCardSection({ suggestions, scheduled, activePOs, product
       console.error("Export to Excel failed:", err);
       alert("Failed to export: " + (err.message || String(err)));
     }
-  }, [groups, productMeta]);
+  }, [groups, productMeta, transitDays]);
 
   // Build aggregated Gantt items (one per group, not per product)
   interface GanttGroupItem {

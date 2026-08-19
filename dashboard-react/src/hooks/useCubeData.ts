@@ -63,15 +63,23 @@ import type {
 // In dev, always try Cube via proxy even if env not loaded
 const CUBE_API = import.meta.env.VITE_CUBE_API_URL || (import.meta.env.DEV ? 'http://localhost:4000' : '');
 
-type CubeLoadResult = { data: unknown[]; lastRefreshTime?: string; usedPreAggregations?: Record<string, unknown> };
+// `error` (added 2026-08-12): every failure path below returns `{data: []}`, so a caller cannot
+// tell "the cube answered with zero rows" from "the cube never answered". Panels that render an
+// empty state then LIE — Revivals said "nothing clears the bar" while 29 rows sat in the view.
+// Existing callers use cubeLoad() and are unaffected; callers that care read this field.
+type CubeLoadResult = { data: unknown[]; lastRefreshTime?: string; usedPreAggregations?: Record<string, unknown>; error?: string };
 
-export async function cubeLoad(query: object): Promise<unknown[]> {
-  const r = await cubeLoadWithMeta(query);
+// noReauthRedirect: for ENRICHMENT queries issued inside a user gesture. The 401 branch below
+// navigates to '/', which silently kills whatever the click was doing (the DO page's bulksheet
+// export died mid-build this way — Ori 2026-08-12). Callers with a fallback pass this and get a
+// thrown error they can catch instead of losing the page.
+export async function cubeLoad(query: object, opts: { noReauthRedirect?: boolean } = {}): Promise<unknown[]> {
+  const r = await cubeLoadWithMeta(query, 20, opts);
   return r.data;
 }
 
-export async function cubeLoadWithMeta(query: object, maxRetries = 20): Promise<CubeLoadResult> {
-  if (!CUBE_API) return { data: [] };
+export async function cubeLoadWithMeta(query: object, maxRetries = 20, opts: { noReauthRedirect?: boolean } = {}): Promise<CubeLoadResult> {
+  if (!CUBE_API) return { data: [], error: 'no cube api configured' };
   const url = `${CUBE_API}/cubejs-api/v1/load?query=${encodeURIComponent(JSON.stringify(query))}`;
   try {
     let retries = 0;
@@ -91,6 +99,7 @@ export async function cubeLoadWithMeta(query: object, maxRetries = 20): Promise<
       if (!res.ok) {
         const text = await res.text();
         if (res.status === 401 || res.status === 403 || text.includes('Authentication required') || text.includes('Invalid token') || text.includes('Invalid dev token')) {
+          if (opts.noReauthRedirect) throw new Error(`Cube auth failed (${res.status}) — caller handles it`);
           console.warn(`[cubeLoad] Authentication failed (${res.status}). Clearing token.`);
           localStorage.removeItem('dashboard_token');
           window.location.href = '/';
@@ -108,7 +117,7 @@ export async function cubeLoadWithMeta(query: object, maxRetries = 20): Promise<
       }
       if (json.error) {
          console.error('[cubeLoad] API returned error:', json.error);
-         break;
+         return { data: [], error: String(json.error) };   // e.g. stale schema: "Member not found"
       }
 
       return {
@@ -117,10 +126,10 @@ export async function cubeLoadWithMeta(query: object, maxRetries = 20): Promise<
         usedPreAggregations: json.usedPreAggregations,
       };
     }
-    return { data: [] };
+    return { data: [], error: 'retries exhausted' };
   } catch (e) {
     if (import.meta.env.DEV) console.warn('[cubeLoad] fetch failed:', e);
-    return { data: [] };
+    return { data: [], error: e instanceof Error ? e.message : String(e) };
   }
 }
 

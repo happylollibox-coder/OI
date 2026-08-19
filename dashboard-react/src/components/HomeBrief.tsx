@@ -9,7 +9,7 @@ import { useMemo, useState } from 'react';
 import type { DashboardData, FamilyName } from '../types';
 import {
   buildBriefModel, formatMetric, formatDelta,
-  type DateMode, type Health, type MetricDelta, type AttentionItem,
+  type DateMode, type BriefScope, type Health, type MetricDelta, type AttentionItem,
 } from '../homeBrief';
 
 const DATE_MODES: { key: DateMode; label: string }[] = [
@@ -44,6 +44,8 @@ export function HomeBrief({ data, onNav, simple = false }: { data: DashboardData
   const [mode, setMode] = useState<DateMode>(() => recall('oi_brief_mode', 'yday') as DateMode);
   const [famKey, setFamKey] = useState<string>(() => recall('oi_brief_family', 'All'));
   const [perDay, setPerDay] = useState<boolean>(() => recall('oi_brief_perday', '0') === '1');
+  // Data-scope toggle — null = automatic (Today·Ads → ads, other windows → total).
+  const [scopeChoice, setScopeChoice] = useState<BriefScope | null>(null);
 
   const fresh = data._meta?.data_freshness;
   const adsMax = fresh?.ads_max_date || '';
@@ -51,10 +53,14 @@ export function HomeBrief({ data, onNav, simple = false }: { data: DashboardData
   // Today is ready when ads data is a day ahead of orders (an ads-only day before orders catch up).
   const todayEnabled = !!adsMax && !!perfMax && adsMax > perfMax;
   const effMode: DateMode = mode === 'today' && !todayEnabled ? 'yday' : mode;
+  // Effective data scope: Today·Ads has no P&L yet so it's locked to ads;
+  // other windows default to total but can be flipped to ads-only.
+  const scope: BriefScope = effMode === 'today' ? 'ads' : (scopeChoice ?? 'total');
 
-  const model = useMemo(() => buildBriefModel(data, effMode), [data, effMode]);
+  const model = useMemo(() => buildBriefModel(data, effMode, undefined, undefined, scope), [data, effMode, scope]);
 
-  const setModeP = (m: DateMode) => { setMode(m); persist('oi_brief_mode', m); };
+  // Switching the date window resets the scope toggle to its automatic default.
+  const setModeP = (m: DateMode) => { setMode(m); setScopeChoice(null); persist('oi_brief_mode', m); };
   const setFamP = (f: string) => { setFamKey(f); persist('oi_brief_family', f); };
   const setPerDayP = (v: boolean) => { setPerDay(v); persist('oi_brief_perday', v ? '1' : '0'); };
 
@@ -66,9 +72,11 @@ export function HomeBrief({ data, onNav, simple = false }: { data: DashboardData
 
   // Comparison caption for the card trends — reuse the "vs …" clause from the period label.
   const compareLabel = model.periodLabel.split('·').map(s => s.trim()).find(s => s.toLowerCase().startsWith('vs')) || 'vs prior period';
-  // Today mode: the card's net profit is ads net profit compared against yesterday's,
-  // not the 7-day average the rest of the card uses.
-  const npCaption = effMode === 'today' ? 'Ads net profit · vs yesterday' : undefined;
+  // Ads scope relabels the profit line; Today mode additionally compares net profit
+  // against yesterday's ads net profit rather than the 7-day average.
+  const npCaption = scope === 'ads'
+    ? (effMode === 'today' ? 'Ads net profit · vs yesterday' : `Ads net profit · ${compareLabel}`)
+    : undefined;
 
   return (
     <div className="mb-3 bg-card border border-border rounded-lg overflow-hidden backdrop-blur-xl">
@@ -76,6 +84,7 @@ export function HomeBrief({ data, onNav, simple = false }: { data: DashboardData
       <div className="flex items-center gap-3 px-4 py-2.5 flex-wrap border-b border-border-faint">
         <span className="text-[15px] font-semibold text-text">{fam ? stripLolli(fam.family) : 'All families'}</span>
         <DateToggle mode={mode} todayEnabled={todayEnabled} reason={model.todayDisabledReason} onPick={setModeP} />
+        <ScopeToggle scope={scope} adsForced={effMode === 'today'} onPick={s => setScopeChoice(s)} />
         <span className="text-[11px] font-mono text-faint">{model.periodLabel}</span>
         {windowDays > 0 && <PerDayToggle perDay={perDay} onPick={setPerDayP} />}
       </div>
@@ -186,6 +195,33 @@ function FamilyCard({ label, netProfit, unitsSold, convRate, divisor = 1, compar
         <span className={`text-[13px] font-mono font-semibold ${txt(unitsSold.deltaPct > 0)}`}>{trendArrow(unitsSold)} {formatDelta(unitsSold)}</span>
       </div>
     </button>
+  );
+}
+
+// Data-scope toggle: Total = full P&L (net profit, all units, session CVR);
+// Ads = ad-attributed only (ads net profit, ad orders, ads CVR). In Today·Ads mode
+// orders aren't in yet, so the toggle is locked to Ads.
+const SCOPE_MODES: { key: BriefScope; label: string }[] = [
+  { key: 'total', label: 'Total' },
+  { key: 'ads', label: 'Ads' },
+];
+
+function ScopeToggle({ scope, adsForced, onPick }: { scope: BriefScope; adsForced: boolean; onPick: (s: BriefScope) => void }) {
+  return (
+    <div className="inline-flex gap-0.5 bg-white/[.04] border border-border rounded-lg p-0.5">
+      {SCOPE_MODES.map(o => {
+        const disabled = adsForced && o.key === 'total';
+        const active = scope === o.key;
+        return (
+          <button key={o.key} disabled={disabled} title={disabled ? 'No P&L for today yet — orders not in' : undefined}
+            onClick={() => !disabled && onPick(o.key)}
+            className={`text-[11px] font-mono px-2 py-1 rounded-md transition-all
+              ${disabled ? 'text-faint/40 cursor-not-allowed' : active ? 'bg-blue-500/90 text-white' : 'text-muted hover:text-text'}`}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
