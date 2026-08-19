@@ -18,11 +18,18 @@ These are not style preferences. Each one exists because breaking it broke produ
 
 1. **Never inline a planner-ceiling view.** `V_LOW_STOCK_ADS`, `V_KEYWORD_LIFT`, `V_OOB_KEYWORD`, `V_CHANGE_SCORECARD` are individually at BigQuery's planning ceiling. On 2026-08-17 `V_PANEL_OWNERSHIP` stopped planning entirely because it inlined one of them. If a consumer needs ceiling-view data, materialize a slice into a `T_` table inside a procedure and join the TABLE.
 2. **Complete-days windows.** `wm` = newest loaded day. The last day stands alone; every multi-day window ends at `wm − 1`. See `feedback_window_convention_complete_days`.
-3. **Blended (sales + ads) measures cut at the ORDERS watermark, never the ads watermark** — ads rows run ~1 day ahead of the business report. Copy the `wm` CTE from `V_FAMILY_NET_PROFIT_7D.sql` verbatim (shown in Task 1).
-4. **Deploy battery, every object, every time:** back up → deploy → before/after flip report → pull-twice determinism.
-5. **`config.yaml` parses today. NEVER append entries to the end of the file** — the tail is inside the `monitoring:` mapping and appending there broke the parse on 2026-08-17. Insert into the `views:` or `tables:` list, then verify with PyYAML.
-6. **Deploy command:** `bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"`. Header lines starting `--` at column 0 are stripped at deploy, so header comments are repo-only.
-7. **Never pipe SQL through plain `cat`.** Any file beginning with `--` makes bq abort with
+3. **THE BINDING CONSTRAINT IS THE SPEND RATE** (Ori 2026-08-19: *"spend rate binds"*).
+   `DE_LAUNCH_INVESTMENT.daily_investment` is the number Ori actually sanctioned ($30/day Bunny,
+   $55/day LolliBall) and it is what the exemption must enforce. `monthly_loss_ceiling` is a
+   CATASTROPHE BACKSTOP behind it, nothing more. WHY: measured 2026-08-19, both families run at
+   1.53x and 1.84x their sanctioned spend while their month-to-date LOSS is only $259 and $74
+   against ceilings of $913 and $1,674 — a net-profit ceiling on a product that nearly covers its
+   costs never fires. The loss ceiling was the wrong denominator; the spend rate is the decision.
+4. **Blended (sales + ads) measures cut at the ORDERS watermark, never the ads watermark** — ads rows run ~1 day ahead of the business report. Copy the `wm` CTE from `V_FAMILY_NET_PROFIT_7D.sql` verbatim (shown in Task 1).
+5. **Deploy battery, every object, every time:** back up → deploy → before/after flip report → pull-twice determinism.
+6. **`config.yaml` parses today. NEVER append entries to the end of the file** — the tail is inside the `monitoring:` mapping and appending there broke the parse on 2026-08-17. Insert into the `views:` or `tables:` list, then verify with PyYAML.
+7. **Deploy command:** `bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"`. Header lines starting `--` at column 0 are stripped at deploy, so header comments are repo-only.
+8. **Never pipe SQL through plain `cat`.** Any file beginning with `--` makes bq abort with
    *"FATAL Flags parsing error: Unknown command line flag"* — it reads the comment as a flag. Every
    assertion file in this plan starts with a `--` comment, so **always** use `grep -v '^--' FILE`,
    exactly as the deploy command does. (Found the hard way in Task 1.)
@@ -381,6 +388,8 @@ SELECT
   COUNTIF(book NOT IN ('HARVEST','INVEST'))                       AS bad_book_values,
   COUNTIF(book = 'INVEST' AND declaration_valid IS NOT TRUE)      AS invest_without_declaration,
   COUNTIF(family IS NULL)                                         AS null_families,
+  COUNTIF(book = 'INVEST' AND daily_investment IS NULL)            AS invest_without_spend_sanction,
+  COUNTIF(book = 'INVEST' AND launch_age_months IS NULL)           AS invest_without_age,
   COUNT(*)                                                        AS families
 FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT`;
 ```
@@ -394,6 +403,16 @@ Expected: `Not found: Table onyga-482313:OI.V_BOOK_ASSIGNMENT`
 
 - [ ] **Step 3: Write the view**
 
+> **⚠ COLUMN NAMES CORRECTED 2026-08-19.** `DE_LAUNCH_INVESTMENT` is a pre-existing table, not one
+> this plan created. Its real schema is `parent_name` / `daily_investment` / `stop_date` /
+> `sanctioned_on` / `note` / `updated_at` / `updated_by`, plus the two columns Task 2 added
+> (`monthly_loss_ceiling`, `takeover_target_organic_units`). There is **no** `family`, `start_date`
+> or `end_date` column — an earlier draft of this task invented all three.
+> Launch AGE comes from the family's first sale, not from the declaration: `sanctioned_on` records
+> when Ori signed it off (2026-08-13 for both), which is months after either launch began. Use the
+> same first-sale definition `V_LAUNCH_EXEMPTION` uses, so the two objects can never disagree about
+> how old a family is.
+
 Create `scripts/bigquery/views/V_BOOK_ASSIGNMENT.sql`:
 
 ```sql
@@ -401,13 +420,20 @@ Create `scripts/bigquery/views/V_BOOK_ASSIGNMENT.sql`:
 -- V_BOOK_ASSIGNMENT — which book each family is in (2026-08-19).
 -- Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md §2.
 --
--- HARVEST IS THE DEFAULT AND THAT IS THE POINT. A family becomes INVEST only through a complete,
--- in-window declaration in DE_LAUNCH_INVESTMENT. Undeclared spend is Harvest spend and is judged on
--- money like everything else — which is what makes an undeclared launch immediately visible instead
--- of quietly exempt.
+-- HARVEST IS THE DEFAULT AND THAT IS THE POINT. A family becomes INVEST only through a live
+-- declaration in DE_LAUNCH_INVESTMENT. Undeclared spend is Harvest spend and is judged on money like
+-- everything else — which is what makes an undeclared launch immediately visible instead of quietly
+-- exempt. Expiry needs no code change: past stop_date the family simply reverts to Harvest.
 --
--- A declaration is VALID only while today is inside [start_date, end_date]. Expiry needs no code
--- change and no cleanup: the family simply reverts to Harvest the day after end_date.
+-- THE BINDING CONSTRAINT IS daily_investment, THE SPEND RATE (Ori 2026-08-19: "spend rate binds").
+-- That is the number actually sanctioned. monthly_loss_ceiling rides along as a catastrophe backstop
+-- because a net-profit ceiling on a product that nearly covers its costs almost never fires —
+-- measured 2026-08-19, both families ran 1.5-1.8x over sanctioned spend while losing only $259 and
+-- $74 against ceilings of $913 and $1,674.
+--
+-- AGE COMES FROM FIRST SALE, NOT FROM THE DECLARATION. sanctioned_on is when Ori signed the
+-- investment off (2026-08-13 for both families), months after either launch actually began. Same
+-- first-sale definition as V_LAUNCH_EXEMPTION / V_PRODUCT_LAUNCH_MODEL so nothing can disagree.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_BOOK_ASSIGNMENT` AS
 WITH fam AS (
@@ -415,26 +441,41 @@ WITH fam AS (
   FROM `onyga-482313.OI.V_CAMPAIGN_FAMILY_MAP`
   WHERE parent_name IS NOT NULL
 ),
+first_sale AS (
+  SELECT family, MIN(date) AS first_sale_date
+  FROM `onyga-482313.OI.V_UNIFIED_DAILY`
+  WHERE units > 0 AND family IS NOT NULL
+  GROUP BY family
+),
 decl AS (
-  SELECT family, monthly_loss_ceiling, start_date, end_date, takeover_target_organic_units,
-         (CURRENT_DATE('America/Los_Angeles') BETWEEN start_date AND end_date) AS in_window
+  SELECT
+    parent_name AS family,
+    daily_investment,                      -- THE binding sanction
+    monthly_loss_ceiling,                  -- catastrophe backstop only
+    takeover_target_organic_units,         -- NULL until Ori supplies it
+    stop_date,
+    sanctioned_on,
+    (CURRENT_DATE('America/Los_Angeles') <= stop_date) AS in_window
   FROM `onyga-482313.OI.DE_LAUNCH_INVESTMENT`
-  -- one live declaration per family; the newest start_date wins if two overlap
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY family ORDER BY start_date DESC) = 1
+  -- one live declaration per family; newest sanction wins if two ever overlap
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY parent_name ORDER BY sanctioned_on DESC) = 1
 )
 SELECT
   f.family,
-  IF(COALESCE(d.in_window, FALSE), 'INVEST', 'HARVEST')                       AS book,
-  COALESCE(d.in_window, FALSE)                                               AS declaration_valid,
+  IF(COALESCE(d.in_window, FALSE), 'INVEST', 'HARVEST')                     AS book,
+  COALESCE(d.in_window, FALSE)                                             AS declaration_valid,
+  d.daily_investment,
   d.monthly_loss_ceiling,
-  d.start_date,
-  d.end_date,
   d.takeover_target_organic_units,
-  -- months since the launch started, which selects the RAMP vs PROOF test in V_INVEST_STATUS
-  IF(d.start_date IS NULL, NULL,
-     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), d.start_date, MONTH))    AS launch_age_months
+  d.stop_date,
+  d.sanctioned_on,
+  fs.first_sale_date,
+  -- RAMP vs PROOF selector in V_INVEST_STATUS, measured from the launch, not the paperwork
+  IF(fs.first_sale_date IS NULL, NULL,
+     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), fs.first_sale_date, MONTH)) AS launch_age_months
 FROM fam f
-LEFT JOIN decl d ON d.family = f.family;
+LEFT JOIN decl d       ON d.family  = f.family
+LEFT JOIN first_sale fs ON fs.family = f.family;
 ```
 
 - [ ] **Step 4: Deploy and assert**
@@ -445,9 +486,18 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t3_assert.sql)"
 ```
 Expected deploy: `Created onyga-482313.OI.V_BOOK_ASSIGNMENT`
-Expected assert: `bad_book_values 0, invest_without_declaration 0, null_families 0, families 6`
+Expected assert: every counter `0`, `families 6`.
 
-All six families read HARVEST at this point — nothing is declared yet. That is correct.
+**Two families read INVEST, not zero** — Bunny and LolliBall were declared on 2026-08-13 and both
+stop_dates are still in the future (2026-10-31, 2026-11-30). An earlier draft of this task expected
+all six to read HARVEST because it assumed the declaration table was empty. Confirm the split:
+
+```bash
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
+"SELECT family, book, daily_investment, stop_date, launch_age_months
+ FROM \`onyga-482313.OI.V_BOOK_ASSIGNMENT\` ORDER BY book, family"
+```
+Expected: Bunny and LolliBall INVEST with their sanctioned rates; the other four HARVEST with NULLs.
 
 - [ ] **Step 5: Register in config.yaml (views: list, same insertion helper as Task 1 Step 7) and commit**
 
