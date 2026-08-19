@@ -79,7 +79,7 @@ fwin AS (  -- per keyword: this-wk (7d), last-4w (28d), peak — clicks, active-
 last_change AS (
   SELECT keyword_id,
     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since_suggestion
-  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
   WHERE keyword_id IS NOT NULL AND keyword_id != ''
   GROUP BY keyword_id
 ),

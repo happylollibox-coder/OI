@@ -34,7 +34,7 @@ BEGIN
         COALESCE(NULLIF(TRIM(search_term), ''), targeting) AS kw_text,
         IF(action LIKE '%PHRASE%', 'NEGATIVE_PHRASE', 'NEGATIVE_EXACT') AS match_type,
         IF(COALESCE(NULLIF(TRIM(ad_group_id), ''), '') = '', 'CAMPAIGN', 'AD_GROUP') AS lvl
-      FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+      FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
       WHERE (action LIKE 'NEGATE%' OR action = 'STOP_TERM')
         AND COALESCE(match_type, '') != 'PRODUCT_TARGETING'
         AND LOWER(COALESCE(targeting, '')) NOT LIKE 'asin=%'
@@ -68,7 +68,7 @@ BEGIN
       SELECT campaign_id, campaign_name, ad_group_id, applied_at, change_id, source AS src,
         COALESCE(targeting, search_term) AS expr,
         IF(COALESCE(NULLIF(TRIM(ad_group_id), ''), '') = '', 'CAMPAIGN', 'AD_GROUP') AS lvl
-      FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+      FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
       WHERE action LIKE 'NEGATE%'
         AND (COALESCE(match_type, '') = 'PRODUCT_TARGETING' OR LOWER(COALESCE(targeting, '')) LIKE 'asin=%')
         AND COALESCE(targeting, search_term) IS NOT NULL
@@ -89,7 +89,7 @@ BEGIN
   UPDATE `onyga-482313.OI.DE_NEGATIVE_KEYWORDS` T
   SET state = 'REMOVED', removed_at = now_ts, updated_at = now_ts
   WHERE T.state = 'ENABLED' AND EXISTS (
-    SELECT 1 FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` c
+    SELECT 1 FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED` c
     WHERE c.action IN ('REMOVE_NEGATIVE', 'REMOVE_CONFLICTING_NEGATIVE')
       AND c.campaign_id = T.campaign_id
       AND LOWER(COALESCE(NULLIF(TRIM(c.search_term), ''), c.targeting)) = LOWER(T.keyword_text)

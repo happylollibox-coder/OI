@@ -2391,6 +2391,68 @@ scored AS (
            ELSE COALESCE(ly_bid_ceiling, strategy_bid_max, th_bid_cap) END,
       th_bid_cap), 2) AS recommended_bid
   ) FROM scored_flagged
+),
+
+-- ═══ LAUNCH EXEMPTION (v27.56, Ori 2026-08-13) — the coach may not loss-cut a launch family ═══
+-- Standing doctrine: "launch = FIND THE RIGHT BID, never loss-cut; bleed via search-term negate."
+-- The launch TRACK above implements that at TARGET grain only — its BUDGET rows carry
+-- launch_phase = NULL, so until now nothing stopped the campaign-budget engine from stopping or
+-- shrinking a family that is SUPPOSED to lose money while its bid is found. On 2026-08-13 that hole
+-- was live: 9 of the 12 budget decisions standing on Bunny (3mo) + LolliBall (2mo) were cuts.
+--
+-- The gate is DATA, not a list: V_LAUNCH_EXEMPTION derives launch membership from each family's own
+-- first sale and expires at the earlier of the 183-day age boundary and Ori's dated stop gate, so a
+-- family leaves the exemption by itself with no code change here.
+--
+-- Placed AFTER the cooldown/deadband REPLACE deliberately: budget_action_suppressed then records
+-- exactly what WOULD have been emitted today, not a decision the cooldown had already masked.
+--
+-- SCOPE: campaign-level ROAS-driven money cuts ONLY. Search-term negation, bid trims, the wake
+-- step-down, LAUNCH_TAPER, budget INCREASES and STOP_SEASONAL (calendar, not profit) all stay live.
+-- GUARDIAN_BUDGET_CONTAIN is blocked only where blocks_contain = TRUE — inside the 14-day grace
+-- window CONTAIN is the BROKEN-LAUNCH guard (>$25 spent, ZERO orders → $10/day), which is a
+-- zero-order waste trim, not a profit verdict, and must survive.
+scored_lx AS (
+  SELECT
+    s.*,
+    (lx.campaign_id IS NOT NULL) AS launch_exempt,
+    lx.family        AS launch_exempt_family,
+    lx.exempt_until  AS launch_exempt_until,
+    lx.exempt_reason AS launch_exempt_reason,
+    (lx.campaign_id IS NOT NULL
+      AND (s.budget_action IN ('CAMPAIGN_STOP', 'GUARDIAN_BUDGET_DECREASE', 'BLITZ_BUDGET_DECREASE',
+                               'COOLDOWN_BUDGET_REDUCE', 'RESTORE_BUDGET_PRE_PEAK')
+           OR (lx.blocks_contain AND s.budget_action = 'GUARDIAN_BUDGET_CONTAIN'))
+    ) AS launch_cut_suppressed,
+    -- SECOND LEAK, closed at the same time: the 3-day cooldown REPLACE above masks the ACTION to
+    -- BUDGET_OK but leaves recommended_budget populated, and V_COACH_CAMPAIGN_BUDGET.is_change keys
+    -- on the NUMBER, not the action. Two LolliBall campaigns (Purple $12->$8, White $19->$9) were
+    -- carrying an exportable downward budget behind a BUDGET_OK label. On an exempt family NO
+    -- downward budget recommendation may be published at all, whatever the action says.
+    (lx.campaign_id IS NOT NULL
+      AND s.recommended_budget IS NOT NULL AND s.current_budget IS NOT NULL
+      AND s.recommended_budget < s.current_budget
+    ) AS launch_down_rec_blocked
+  FROM scored s
+  -- one row per campaign in V_LAUNCH_EXEMPTION (campaign grain by construction) → no fan-out
+  LEFT JOIN `onyga-482313.OI.V_LAUNCH_EXEMPTION` lx
+    ON lx.campaign_id = CAST(s.campaign_id AS STRING)
+),
+scored_exempt AS (
+  SELECT
+    s.* REPLACE(
+      IF(s.launch_cut_suppressed, 'LAUNCH_EXEMPT_HOLD', s.budget_action) AS budget_action,
+      -- the suppressed target budget must NOT stay on the row: is_change / the bulksheet queue key
+      -- on recommended_budget, so leaving it populated would let the very cut we just blocked be
+      -- exported anyway. It is preserved for DISPLAY in budget_suppressed_to below.
+      IF(s.launch_cut_suppressed OR s.launch_down_rec_blocked,
+         CAST(NULL AS FLOAT64), s.recommended_budget) AS recommended_budget
+    ),
+    -- what the coach WOULD have done — NULL unless the exemption actually suppressed something
+    IF(s.launch_cut_suppressed, s.budget_action, NULL) AS budget_action_suppressed,
+    IF(s.launch_cut_suppressed OR s.launch_down_rec_blocked,
+       s.recommended_budget, NULL) AS budget_suppressed_to
+  FROM scored_lx s
 )
 
 SELECT
@@ -2428,4 +2490,6 @@ SELECT
     '{"id":"bid","label":"Launch bid","pass":true,"value":"$', CAST(scored.launch_bid AS STRING), ' (', scored.launch_bid_source, ')"}',
     ']'
   ) ELSE NULL END AS launch_decision_trace
-FROM scored
+-- v27.56: the launch-exemption gate sits between `scored` and the output; aliased back to `scored`
+-- so every reference above is untouched.
+FROM scored_exempt AS scored

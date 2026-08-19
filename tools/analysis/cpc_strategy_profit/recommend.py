@@ -23,7 +23,7 @@ def coacher_recent_moves() -> pd.DataFrame:
            COUNTIF(l.action='INCREASE_BID') AS n_increase,
            COUNTIF(l.action='REDUCE_BID')   AS n_reduce,
            COUNTIF(l.action IN ('NEGATE_TERM','STOP_TARGET')) AS n_cut
-    FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` l
+    FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED` l
     LEFT JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = l.product
     WHERE l.applied_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 DAY)
     GROUP BY p.parent_name

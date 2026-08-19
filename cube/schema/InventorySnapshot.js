@@ -6,6 +6,7 @@ cube(`InventorySnapshot`, {
       agg.source_type,
       agg.quantity_balance,
       agg.COGS_AMOUNT,
+      agg.LANDED_COGS_AMOUNT,
       agg.SELL_AMOUNT,
       agg.PAID_AMOUNT,
       agg.cost_of_goods,
@@ -18,6 +19,7 @@ cube(`InventorySnapshot`, {
         Date, ASIN, source_type,
         SUM(quantity_balance) AS quantity_balance,
         SUM(COGS_AMOUNT) AS COGS_AMOUNT,
+        SUM(LANDED_COGS_AMOUNT) AS LANDED_COGS_AMOUNT,
         SUM(SELL_AMOUNT) AS SELL_AMOUNT,
         SUM(PAID_AMOUNT) AS PAID_AMOUNT,
         SUM(cost_of_goods) AS cost_of_goods,
@@ -40,10 +42,21 @@ cube(`InventorySnapshot`, {
       title: `Total Units`,
     },
 
+    // COGS_AMOUNT is FEE-LOADED: it values stock at
+    // DIM_COSTS_HISTORY.TOTAL_COST_PER_UNIT = manufacturing + freight + Amazon
+    // pick&pack + referral. Right for the profit on a unit that SELLS, wrong for
+    // valuing unsold stock (overstates ~2.25x). For asset / balance-sheet value
+    // use totalLandedCogs. See architecture/FINANCE_SNAPSHOT_EXPORT.md.
     totalCogs: {
       type: `sum`,
       sql: `${CUBE}.COGS_AMOUNT`,
-      title: `COGS Value`,
+      title: `COGS Value (incl. Amazon fees)`,
+    },
+
+    totalLandedCogs: {
+      type: `sum`,
+      sql: `${CUBE}.LANDED_COGS_AMOUNT`,
+      title: `Landed COGS Value`,
     },
 
     totalSellValue: {

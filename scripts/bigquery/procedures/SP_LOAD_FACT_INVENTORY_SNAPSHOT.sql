@@ -7,8 +7,10 @@
 --
 -- Business Logic:
 --   Source types in FACT_INVENTORY_SNAPSHOT:
---     FBA            = afn_fulfillable + afn_reserved - pending_customer_orders
---                      (units in Amazon's warehouses, excluding already-sold units)
+--     FBA            = afn_fulfillable + afn_reserved + afn_fc_transfer
+--                      - pending_customer_orders
+--                      (units in Amazon's warehouses, excluding already-sold units;
+--                       includes units in transfer between FCs — see 2026-08-13 change)
 --     In Transit     = afn_inbound_shipped + afn_inbound_receiving (Amazon-reported pipeline)
 --     In Transit AWD = qty on PENDING manufacturer shipments bound for AWD ("AWD" in the
 --                      shipment id/type) — en route factory→AWD, upstream of "AWD" & "In Transit"
@@ -132,6 +134,7 @@ BEGIN
     quantity_balance,
     source_type,
     COGS_AMOUNT,
+    LANDED_COGS_AMOUNT,
     SELL_AMOUNT,
     PAID_AMOUNT,
     cost_of_goods,
@@ -169,11 +172,23 @@ BEGIN
     c.source_type,
     
     -- Calculate COGS: use 'a.cogs_amount' if provided (Manufacturer), else fallback to standard cost
+    -- NOTE: TOTAL_COST_PER_UNIT is FEE-LOADED — it equals
+    --   cost_of_goods + shipping_cost + FBA_COST_estimated_fee_total
+    -- (Amazon pick&pack + referral). Correct for the profit on a unit that SELLS,
+    -- wrong for valuing unsold stock. See LANDED_COGS_AMOUNT below and
+    -- architecture/FINANCE_SNAPSHOT_EXPORT.md.
     COALESCE(
-      a.cogs_amount, 
+      a.cogs_amount,
       COALESCE(a.quantity_balance, 0) * COALESCE(ch.TOTAL_COST_PER_UNIT, 0)
     ) AS COGS_AMOUNT,
-    
+
+    -- Landed inventory value (2026-08-15): manufacturing + freight only, no
+    -- Amazon selling fees. THIS is the asset / balance-sheet figure. Applies to
+    -- every source_type, including the manufacturer rows, because the PO-side
+    -- cogs_remaining_at_manufacturer is built on the same fee-loaded cost.
+    COALESCE(a.quantity_balance, 0)
+      * (COALESCE(ch.cost_of_goods, 0) + COALESCE(ch.shipping_cost, 0)) AS LANDED_COGS_AMOUNT,
+
     -- Calculate Sell Value: use 'a.sell_amount' if provided, else standard listing price
     COALESCE(
       a.sell_amount,

@@ -49,7 +49,18 @@ decl AS (
     (CURRENT_DATE('America/Los_Angeles') <= stop_date) AS in_window
   FROM `onyga-482313.OI.DE_LAUNCH_INVESTMENT`
   -- one live declaration per family; newest sanction wins if two ever overlap
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY parent_name ORDER BY sanctioned_on DESC) = 1
+  -- TIE-BREAK MUST MATCH V_LAUNCH_EXEMPTION EXACTLY (fixed 2026-08-19 after Task 3 review).
+  -- Both views answer "which declaration is live" off the same table, and the header above claims
+  -- they cannot disagree — so the ordering has to be identical, not merely similar. The table's own
+  -- documented convention is "re-sanctioning = INSERT a row with a later updated_at (latest wins)",
+  -- and V_LAUNCH_EXEMPTION orders by updated_at DESC NULLS LAST, stop_date DESC, daily_investment
+  -- DESC. Ordering by sanctioned_on instead was harmless today (exactly one row per family) but
+  -- would have named a different declaration live the moment Ori inserts a correction — the exact
+  -- disagreement this design exists to prevent. The trailing keys make the pick TOTAL, so it can
+  -- never coin-flip between two rows sharing an updated_at.
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY parent_name
+    ORDER BY updated_at DESC NULLS LAST, stop_date DESC, daily_investment DESC) = 1
 )
 SELECT
   f.family,

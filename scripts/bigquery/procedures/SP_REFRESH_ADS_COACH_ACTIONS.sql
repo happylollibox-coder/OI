@@ -62,11 +62,26 @@ BEGIN
     )
     WHERE rn = 1
   ),
+  -- v27.54 (Ori 2026-08-12: "Coach uses stale prices - fix it"): margin_per_unit was priced off
+  -- DIM_PRODUCT.listing_price_amount, which never tracked three repricings -- LolliBall $18.80 vs
+  -- the real $13.99, Bunny $16.99 vs $13.99, Bottle $29.90 vs $24.90 -- overstating margin by
+  -- +130% / +64% / +57% and manufacturing ~$2,129 of gross profit per 28 days. Now priced off the
+  -- live listing. DEDUPED: V_DIM_LISTING_CURRENT carries 45 rows for 38 ASINs (FBA/DEFAULT variants
+  -- of the same SKU); every duplicate pair was verified to hold the SAME price, so one row per ASIN
+  -- is safe and a naive join would only fan the row count, not change the number. COALESCE keeps
+  -- DIM_PRODUCT as the fallback so an ASIN missing from the listing feed is not silently zeroed.
+  listing_now AS (
+    SELECT asin1 AS asin, MAX(price) AS price
+    FROM `onyga-482313.OI.V_DIM_LISTING_CURRENT`
+    WHERE price IS NOT NULL
+    GROUP BY 1
+  ),
   asin_economics AS (
     SELECT p.asin, p.product_short_name, p.parent_name,
       COALESCE(ch.TOTAL_COST_PER_UNIT, 0) as total_cost_per_unit,
-      p.listing_price_amount - COALESCE(ch.TOTAL_COST_PER_UNIT, 0) as margin_per_unit
+      COALESCE(ln.price, p.listing_price_amount) - COALESCE(ch.TOTAL_COST_PER_UNIT, 0) as margin_per_unit
     FROM `onyga-482313.OI.DIM_PRODUCT` p
+    LEFT JOIN listing_now ln ON ln.asin = p.asin
     LEFT JOIN (
       SELECT asin, TOTAL_COST_PER_UNIT,
         ROW_NUMBER() OVER (PARTITION BY asin ORDER BY end_date DESC NULLS FIRST) as rn
@@ -263,6 +278,11 @@ BEGIN
     ca.target_decision_trace,
     ca.term_decision_trace,
     ca.budget_action,
+    -- v27.56 launch exemption: what the budget engine WOULD have emitted before the exemption
+    -- blocked it (NULL on every other row). Carried only so the BUDGET explanation in Step 5 can
+    -- name the suppressed decision instead of printing the generic fallback sentence.
+    ca.budget_action_suppressed,
+    ca.budget_suppressed_to,
     ca.camp_effective_roas,
     ca.camp_avg_daily_spend,
     ca.camp_budget_util_pct,
@@ -823,6 +843,8 @@ BEGIN
       WHEN budget_action = 'GUARDIAN_BUDGET_DECREASE' THEN 'OPTIMIZE_BIDS'
       WHEN budget_action = 'BLITZ_BUDGET_DECREASE' THEN 'COST_CONTROL'
       WHEN budget_action = 'STOP_SEASONAL' THEN 'ELIMINATE_WASTE'
+      -- v27.56: a launch family's budget is protected, not managed — nothing to do on this row
+      WHEN budget_action = 'LAUNCH_EXEMPT_HOLD' THEN 'MAINTAIN'
       WHEN budget_action = 'COOLDOWN_BUDGET_MONITOR' THEN 'MONITOR_PERFORMANCE'
       WHEN budget_action IN ('COOLDOWN_BUDGET_REDUCE', 'RESTORE_BUDGET_PRE_PEAK') THEN 'NORMALIZE_BIDS'
       ELSE 'MAINTAIN'
@@ -851,6 +873,14 @@ BEGIN
           THEN CONCAT('Even in peak, campaign losing money (ROAS ', CAST(COALESCE(camp_effective_roas, 0) AS STRING),
             ', only ', CAST(COALESCE(camp_budget_util_pct, 0) AS STRING), '% budget used). Reduce 10% from $',
             CAST(ROUND(current_budget, 0) AS STRING), ' to $', CAST(ROUND(COALESCE(recommended_budget, current_budget), 0) AS STRING), '.')
+        WHEN budget_action = 'LAUNCH_EXEMPT_HOLD'
+          THEN CONCAT('LAUNCH EXEMPTION: budget held at $', CAST(ROUND(COALESCE(current_budget, 0), 0) AS STRING),
+            '. The coach would have applied ', COALESCE(budget_action_suppressed, 'a budget cut'),
+            IF(budget_suppressed_to IS NOT NULL,
+               CONCAT(' (to $', CAST(ROUND(budget_suppressed_to, 0) AS STRING), '/day)'), ''),
+            ' — blocked because this is a launch family, which is SUPPOSED to lose money while the right bid is found.',
+            ' Bleed control on a launch is search-term negation and bid trims, never a budget loss-cut.',
+            ' See the Launch exemption panel on Weekly Run for the sanctioned investment and its stop date.')
         WHEN budget_action = 'BUDGET_OK' THEN 'Budget is appropriate for current performance. No change needed.'
         WHEN budget_action = 'COOLDOWN_BUDGET_MONITOR' THEN 'Post-peak budget performing well (Ads ROAS ≥ 0.8). Keep current budget.'
         WHEN budget_action = 'COOLDOWN_BUDGET_REDUCE'

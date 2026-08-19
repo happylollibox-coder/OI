@@ -18,6 +18,10 @@ Fivetran raw tables → SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY → FACT_AMAZON_PE
                                                          └── Cube: Summary (header cards)
 ```
 
+> **Window anchoring:** `V_SUMMARY_7D` (and `V_DATA_FRESHNESS`, `V_PLAN_FORECAST`,
+> `V_FAMILY_NET_PROFIT_7D`) anchor on the **orders watermark** — last Organic date with
+> `SUM(ASIN_SESSIONS) > 0`. See `ORDERS_WATERMARK.md`.
+
 | Dashboard Field | Cube Measure/Dim | BQ View Column | Logic Owner | Source Tables |
 |---|---|---|---|---|
 | Sales | `UnifiedPerformance.sales` | `V_UNIFIED_DAILY.sales` | `SP_LOAD_FACT_AMAZON_PERFORMANCE_DAILY` Step 1 | `V_SRC_sales_and_traffic_business_sku_report_daily.ordered_product_sales_amount` |

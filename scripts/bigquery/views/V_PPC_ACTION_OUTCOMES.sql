@@ -76,7 +76,7 @@ changes AS (
         CASE WHEN c.action LIKE '%INCREASE%' THEN 'BUDGET_UP' ELSE 'BUDGET_DOWN' END
       ELSE 'OTHER'
     END AS action_group
-  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` c
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED` c
   WHERE DATE(c.applied_at, 'America/Los_Angeles')
         >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 180 DAY)
   -- Dedup duplicate-logged changes (the upload path had no idempotency — one logical

@@ -34,16 +34,26 @@ sb_camp AS (
   JOIN (SELECT DISTINCT CAST(campaign_id AS STRING) cid FROM `onyga-482313.OI.FACT_AMAZON_ADS` WHERE campaign_type = 'SB') ct
     ON ct.cid = lp.campaign_id
 ),
+-- v27.67 (Task 1.9): DETERMINISM FIX — the v27.46 pattern from V_OOB_KEYWORD's `prod` CTE. The
+-- old ANY_VALUE(cost)/ANY_VALUE(price) pair could draw cost and price from DIFFERENT arbitrary
+-- ASINs on multi-ASIN campaigns (the documented roas-coin-flip class). The DOMINANT mapped ASIN
+-- (most all-history ad spend, tie-break ASIN string) supplies BOTH — coherently paired.
 prod AS (
-  SELECT CAST(f.campaign_id AS STRING) cid,
-    SAFE_DIVIDE(ANY_VALUE(c.cost), NULLIF(ANY_VALUE(p.listing_price_amount), 0)) AS cost_ratio
-  FROM `onyga-482313.OI.FACT_AMAZON_ADS` f
-  LEFT JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = f.ASIN_BY_CAMPAIGN_NAME
-  LEFT JOIN (SELECT asin, TOTAL_COST_PER_UNIT cost FROM (
-      SELECT asin, TOTAL_COST_PER_UNIT, ROW_NUMBER() OVER (PARTITION BY marketplace_id, asin ORDER BY start_date DESC) rn
-      FROM `onyga-482313.OI.DIM_COSTS_HISTORY` WHERE marketplace_id='ATVPDKIKX0DER' AND end_date IS NULL) WHERE rn=1) c
-    ON c.asin = f.ASIN_BY_CAMPAIGN_NAME
-  GROUP BY 1
+  SELECT cid, SAFE_DIVIDE(cost, NULLIF(price, 0)) AS cost_ratio
+  FROM (
+    SELECT CAST(f.campaign_id AS STRING) AS cid,
+      ANY_VALUE(c.cost) AS cost, ANY_VALUE(p.listing_price_amount) AS price,
+      ROW_NUMBER() OVER (PARTITION BY CAST(f.campaign_id AS STRING)
+                         ORDER BY SUM(f.Ads_cost) DESC,
+                                  f.ASIN_BY_CAMPAIGN_NAME IS NULL, f.ASIN_BY_CAMPAIGN_NAME) AS rn
+    FROM `onyga-482313.OI.FACT_AMAZON_ADS` f
+    LEFT JOIN `onyga-482313.OI.DIM_PRODUCT` p ON p.asin = f.ASIN_BY_CAMPAIGN_NAME
+    LEFT JOIN (SELECT asin, TOTAL_COST_PER_UNIT cost FROM (
+        SELECT asin, TOTAL_COST_PER_UNIT, ROW_NUMBER() OVER (PARTITION BY marketplace_id, asin ORDER BY start_date DESC) rn
+        FROM `onyga-482313.OI.DIM_COSTS_HISTORY` WHERE marketplace_id='ATVPDKIKX0DER' AND end_date IS NULL) WHERE rn=1) c
+      ON c.asin = f.ASIN_BY_CAMPAIGN_NAME
+    GROUP BY cid, f.ASIN_BY_CAMPAIGN_NAME
+  ) WHERE rn = 1
 ),
 -- ── campaign signals (SP-identical, SB-native) ──
 -- Budget + status events via the unified V_SRC interface, campaign_type='SB' (prefer the consolidated
@@ -163,7 +173,7 @@ base AS (
 last_change AS (
   SELECT CAST(keyword_id AS STRING) AS target_id,
     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since_suggestion
-  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
   WHERE keyword_id IS NOT NULL AND CAST(keyword_id AS STRING) != ''
   GROUP BY 1
 ),

@@ -12,7 +12,9 @@ WITH
 -- ad-attributed rows ~1 day ahead of the Seller-Central business report, so its MAX(date)
 -- is the ADS date. Anchoring blended/sales windows there pulls in a partial sales day
 -- (under-counts sales/orders/net) and shifts the prev-7d comparison.
--- Same definition as V_DATA_FRESHNESS + V_PLAN_FORECAST.last_loaded_date.
+-- SUM(ASIN_SESSIONS) > 0 gate: within a Fivetran sync, order rows land before sessions,
+-- so a day with orders but zero sessions is mid-sync (partial). See architecture/ORDERS_WATERMARK.md.
+-- Same definition as V_DATA_FRESHNESS + V_PLAN_FORECAST.last_loaded_date + V_FAMILY_NET_PROFIT_7D.wm.
 date_ranges AS (
   SELECT
     latest_date,
@@ -21,8 +23,13 @@ date_ranges AS (
     DATE_SUB(latest_date, INTERVAL 13 DAY) AS prev_start      -- previous 7d start
   FROM (
     SELECT MAX(date) AS latest_date
-    FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`
-    WHERE Performance_TYPE = 'Organic'
+    FROM (
+      SELECT date
+      FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`
+      WHERE Performance_TYPE = 'Organic'
+      GROUP BY date
+      HAVING SUM(ASIN_SESSIONS) > 0
+    )
   )
 ),
 

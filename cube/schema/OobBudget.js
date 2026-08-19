@@ -5,7 +5,8 @@
 cube(`OobBudget`, {
   sql: `SELECT campaign_id, campaign_name, channel, engine, is_defense, is_seasonal, is_auto_campaign, CAST(anchor_date AS STRING) anchor_date,
                current_budget, spend_1d, utilization, pct_dark, roas_1d, roas_prev2,
-               days_since_budget_change, is_low_tier, action, suggested_budget, reason
+               days_since_budget_change, is_low_tier, action, suggested_budget, reason,
+               is_oob_owned, days_capped_7d
         FROM \`onyga-482313.OI.V_OOB_BUDGET_PHASE\``,
 
   // Refresh tied to the SP orchestration (one trigger) — cache invalidates when SP_REFRESH_CUBE_TABLES
@@ -35,7 +36,10 @@ cube(`OobBudget`, {
     action:        { sql: `action`,        type: `string` },
     suggestedBudget: { sql: `suggested_budget`, type: `number` },
     reason:        { sql: `reason`,        type: `string` },
+    isOobOwned:    { sql: `is_oob_owned`,  type: `boolean` },
+    daysCapped7d:  { sql: `days_capped_7d`, type: `number` },
   },
 });
 
 // cache-bust 2026-07-30c: budget-constrained probing (PARK 90d-orders evidence fix, affordable-CPC trim, no probe while capped)
+// cache-bust 2026-08-09 v27.46: expose is_oob_owned + days_capped_7d (V_CAMPAIGN_CAP_STATE ownership adoption)

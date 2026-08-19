@@ -9,11 +9,15 @@
 --         The Daton source is a POINT-IN-TIME snapshot (no date column),
 --         so we stamp each load with CURRENT_DATE() and accumulate history.
 --
--- Quantity Logic (as of 2026-04-04):
+-- Quantity Logic (as of 2026-08-13):
 --   Ending Warehouse Balance = fba_available_quantity
---     = afn_fulfillable + afn_reserved - pending_customer_orders
+--     = afn_fulfillable + afn_reserved + afn_fc_transfer - pending_customer_orders
 --   This excludes units already sold (customer-order reserved) and
---   excludes inbound_shipped (which are shown as "In Transit" source_type)
+--   excludes inbound_shipped (which are shown as "In Transit" source_type).
+--   FC-transfer units (moving between fulfillment centers) count as at-Amazon stock;
+--   before 2026-08-13 they were omitted, understating FBA by ~14% account-wide.
+--   NOTE: rows written before 2026-08-13 carry the old, lower definition — history
+--   is not backfillable (Daton keeps no per-day fc_transfer trail).
 --
 -- Idempotent: DELETE + INSERT for CURRENT_DATE() to allow safe re-runs.
 --

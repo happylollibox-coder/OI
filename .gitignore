@@ -111,3 +111,6 @@ media/
 
 # Google Ads PMax audit dumps
 exports/pmax_audit_*.json
+
+# Deploy-battery backups (FILE.sql.bak.v27.NN.HHMM) — working artifacts, never source
+*.bak.*

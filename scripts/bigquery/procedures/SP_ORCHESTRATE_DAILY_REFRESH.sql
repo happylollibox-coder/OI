@@ -1510,6 +1510,246 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 20.5b: Coach loop (MUST run after SP_REFRESH_ADS_COACH_ACTIONS)
+  -- SP_REVIEW_WEEKLY_PLAN (plan-vs-actual → DE_WEEKLY_PLAN learnings) +
+  -- SP_REFRESH_PROBE_LOG (probe 15-click/14-day budgets → DE_PROBE_LOG).
+  -- Folded in 2026-08-05 from the retired 'daily_coach_loop' scheduled query, which was
+  -- misconfigured (destination dataset set on a CALL script) and never ran once.
+  -- Both inner SPs are absolute recomputes — idempotent at every orchestrator run.
+  -- ============================================
+  -- ============================================
+  -- Refresh Task 20.5c: Ads restatement snapshot (Ori 2026-08-06 "find the sweet spot that
+  -- data is fully refreshed"). Appends the current spend/sales for the last 16 report dates so
+  -- V_ADS_SETTLE_CURVE can MEASURE how long a day keeps moving instead of us guessing.
+  -- Must run AFTER SP_FACT_AMAZON_ADS so it samples the freshly-loaded values.
+  -- ============================================
+  SET procedure_name = 'SP_SNAPSHOT_ADS_RESTATEMENT';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_ADS_RESTATEMENT`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.5d (v27.41): Season-context verdict snapshot (depends on FACT_AMAZON_ADS).
+  -- MERGEs WIN/LOSS/INSUFFICIENT per (keyword, season-context occurrence) into
+  -- FACT_KEYWORD_SEASON_VERDICT for occurrences fully settled (occurrence_end <= anchor-7).
+  -- Idempotent; feeds cross-occurrence memory. Spec: architecture/SEASON_CONTEXT_LEDGER.md.
+  -- Drives nothing until phase-3 wiring.
+  -- ============================================
+  SET procedure_name = 'SP_SNAPSHOT_SEASON_VERDICT';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_SEASON_VERDICT`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.5d2 (v27.52 FIX 4): HOIST the T_PRICE_COST_TIER rebuild above the settle
+  -- snapshots. DEFECT (measured 2026-08-12): T_PRICE_COST_TIER was rebuilt ONLY inside
+  -- SP_REFRESH_CUBE_TABLES (Task 21, ~07:57Z) — i.e. AFTER 20.5e/20.5f (~07:46Z). Both
+  -- V_PARK_REVERDICT and V_KEYWORD_GUARD compute tier-COGS GP as
+  --   Ads_sales - COALESCE(T_PRICE_COST_TIER.tier_cost, FACT.TOTAL_COST_PER_UNIT) * Ads_units
+  -- so the snapshots ran on YESTERDAY's tier map while the engines (V_KEYWORD_LIFT /
+  -- V_OOB_KEYWORD, and every T_* the cube builds after the rebuild) ran on TODAY's. Same
+  -- keyword, same day, two different settled_roas90: 213 of 606 guard rows differed and 5
+  -- flipped a decision boolean daily, ALL toward under-protection (2 corroborated losers
+  -- published as settled_winner; 3 catastrophic rows published as non-catastrophic, so the
+  -- MANUAL_HOLD catastrophic escape could not fire).
+  -- WHY A HOIST AND NOT A MOVE: 20.5e/20.5f cannot move below Task 21 — SP_REFRESH_CUBE_TABLES
+  -- builds T_LIFT_PROBES (and downstream T_RUN_TARGET / T_COACH_* / T_WEEKLY_RUN_*) from
+  -- V_KEYWORD_LIFT, which reads FACT_KEYWORD_GUARD + FACT_PARK_REVERDICT. Moving the snapshots
+  -- after the cube would put the entire Weekly Run surface a full day behind on settle doctrine.
+  -- The rebuild in SP_REFRESH_CUBE_TABLES STAYS (standalone cube refreshes need it, and it must
+  -- keep preceding T_RUN_TARGET there); this is an idempotent CREATE OR REPLACE of the same
+  -- 21-row map, so the second rebuild inside Task 21 is a no-op re-materialization.
+  -- SAFE HERE: V_PRICE_COST_TIER reads only DIM_COSTS_HISTORY (Task 1.8), DIM_PRODUCT (Task 1)
+  -- and the raw Fivetran purchased-product tables — all settled far upstream; no task between
+  -- this point and Task 21 writes any of them, and none reads T_PRICE_COST_TIER expecting the
+  -- previous cycle's content.
+  -- NOT IN SCOPE (reported, deliberately untouched): SP_FACT_AMAZON_ADS (Task 16) also reads
+  -- the previous cycle's tier map into FACT_AMAZON_ADS.TOTAL_COST_PER_UNIT — documented and
+  -- accepted in that SP's header; it is only the COALESCE fallback here.
+  -- ============================================
+  SET procedure_name = 'REBUILD_T_PRICE_COST_TIER';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CREATE OR REPLACE TABLE `onyga-482313.OI.T_PRICE_COST_TIER` AS
+      SELECT * FROM `onyga-482313.OI.V_PRICE_COST_TIER`;
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.5d3 (v27.80, Ori 2026-08-17): T_CAMPAIGN_PRODUCT_SCOPE — how many of OUR OWN
+  -- products each campaign advertises, and the sole ASIN when it is exactly one. Materialization
+  -- of V_CAMPAIGN_PRODUCT_SCOPE (74 rows @ 2026-08-17: 67 dedicated, 7 shared doorways).
+  --
+  -- WHY IT IS A TABLE AND WHY IT IS BUILT HERE: V_LOW_STOCK_ADS joins it to decide
+  -- serves_only_binding — "is this campaign dedicated to the variation that is running dry?" —
+  -- which is what lets a dedicated campaign brake normally inside a redirect-mode family
+  -- (Ori: "BALL-SP/AUTO (Mint) is auto per product ... only reduce ads by reducing the bid").
+  -- V_LOW_STOCK_ADS has NO measured planning headroom: it stopped planning outright on 2026-08-17
+  -- and cost the whole v27.77 repair, so inlining one more VIEW into it was never an option
+  -- (fact_oi_cube_table_planner_blowup — never inline a ceiling view, read a T_ built earlier).
+  --
+  -- ORDER IS THE CONTRACT: this must run BEFORE anything that reads V_LOW_STOCK_ADS — Task 20.5g
+  -- SP_SNAPSHOT_PANEL_OWNERSHIP (whose step 1 slices the low-stock engine into
+  -- T_LOW_STOCK_CAMPAIGN) and the later SP_SNAPSHOT_ENGINE_PROPOSALS. It sits here, immediately
+  -- after the T_PRICE_COST_TIER hoist, for the same reason that one does: it is a tiny idempotent
+  -- CREATE OR REPLACE whose only job is to be fresh before the snapshots compile against it.
+  -- A MISSING TABLE BREAKS V_LOW_STOCK_ADS OUTRIGHT (the join is not optional), so this task must
+  -- never be removed while that view names it.
+  -- SAFE HERE: V_CAMPAIGN_PRODUCT_SCOPE reads only V_SRC_AmazonAds_advertised_product (straight
+  -- through to Fivetran, no orchestrator task writes it) and DIM_PRODUCT (Task 1, far upstream).
+  -- SP ONLY — Amazon publishes no advertised-product report for Sponsored Brands, so SB/video
+  -- campaigns get no row and every consumer treats a missing row as UNKNOWN, never as dedicated.
+  -- Spec: architecture/LOW_STOCK_CRITERIA.md (v27.80 section).
+  -- ============================================
+  SET procedure_name = 'REBUILD_T_CAMPAIGN_PRODUCT_SCOPE';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CREATE OR REPLACE TABLE `onyga-482313.OI.T_CAMPAIGN_PRODUCT_SCOPE` AS
+      SELECT * FROM `onyga-482313.OI.V_CAMPAIGN_PRODUCT_SCOPE`;
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.5e (v27.48): Park-reverdict snapshot (depends on FACT_AMAZON_ADS, the
+  -- season verdicts of 20.5d and the context gate). Materializes V_PARK_REVERDICT into
+  -- FACT_PARK_REVERDICT — the settled re-judgment of every parked/STOPped/recently-revived
+  -- keyword (REVIVE / CONFIRM_PARK / PENDING_SETTLE / INSUFFICIENT, calibrated revive_bid,
+  -- post-revival settle veto + manual holds). BOTH engines read the snapshot, never the view
+  -- (planner-ceiling doctrine). Ori's rule: "no condemnation before settle, re-judgment at
+  -- settle". Spec: architecture/SEASON_CONTEXT_LEDGER.md §7.
+  -- ============================================
+  SET procedure_name = 'SP_SNAPSHOT_PARK_REVERDICT';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_PARK_REVERDICT`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.5f (v27.48 part 2): Keyword-guard snapshot (depends on FACT_AMAZON_ADS,
+  -- the season verdicts of 20.5d, cap state and the change log; runs AFTER the park reverdict
+  -- of 20.5e so both settle-doctrine snapshots share the same daily frame). Materializes
+  -- V_KEYWORD_GUARD into FACT_KEYWORD_GUARD — per-instance guard signals for BOTH engines:
+  -- channel-aware settled 90d record + settle_ok/settle_due (general settle veto, Cause 1),
+  -- scope lifetime record + LY conv CPC (probe record caps, Cause 2), MANUAL 7d hold with
+  -- catastrophic escape (Cause 3), LY-pacing raise flags + calibrated target (Cause 4).
+  -- Engines read the snapshot, never the view (planner-ceiling doctrine).
+  -- Spec: architecture/SEASON_CONTEXT_LEDGER.md §7.6-7.9.
+  -- ============================================
+  SET procedure_name = 'SP_SNAPSHOT_KEYWORD_GUARD';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_KEYWORD_GUARD`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 20.5g-1 (Ori 2026-08-19): Family keyword-bar snapshot. Materializes
   -- V_FAMILY_BAR into T_FAMILY_BAR, exploded to CAMPAIGN grain (88 of 97 enabled campaigns @
   -- 2026-08-19; the 9 in the map's 'Unknown' bucket get no row and therefore no bar).
@@ -1550,6 +1790,80 @@ BEGIN
     VALUES
       (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
     SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.5g (v27.62, Ori 2026-08-13): Panel-ownership snapshot — the Weekly Run
+  -- single-home ladder (LOW STOCK > LAUNCH > REVIVALS > engines). Materializes
+  -- V_PANEL_OWNERSHIP into FACT_PANEL_OWNERSHIP: one row per ENABLED campaign carrying which
+  -- criteria owns it and, when a FULL claim exists, the defer_action / defer_reason every lower
+  -- panel prints instead of a second, contradictory number.
+  --
+  -- ORDER: it sits HERE, beside 20.5e/20.5f, for the same two reasons they do.
+  --   (a) it depends on FACT_INVENTORY_SNAPSHOT and the ads FACT load — V_PANEL_OWNERSHIP reads
+  --       V_LOW_STOCK_ADS, which reads both — so it must run after them;
+  --   (b) it must run BEFORE Task 21 SP_REFRESH_CUBE_TABLES, because the engine T_ builds compile
+  --       against this table and must see the ownership of the run they are part of. A T_ built
+  --       against yesterday's ownership would put a claimed campaign back in two panels, which is
+  --       the exact defect the object exists to remove.
+  -- Engines and panels read the snapshot, never the view (planner-ceiling doctrine:
+  -- V_PANEL_OWNERSHIP reads V_LOW_STOCK_ADS, which is at BigQuery's planning ceiling).
+  -- Spec: architecture/PANEL_OWNERSHIP.md.
+  -- ============================================
+  SET procedure_name = 'SP_SNAPSHOT_PANEL_OWNERSHIP';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_PANEL_OWNERSHIP`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  SET procedure_name = 'SP_REFRESH_COACH_LOOP';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_REFRESH_COACH_LOOP`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'OK %s completed successfully in %d seconds',
+      procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)
+    ) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'FAIL %s failed: %s (Error at %s)',
+      procedure_name,
+      @@error.message,
+      CAST(CURRENT_TIMESTAMP() AS STRING)
+    ) as log_message;
   END;
 
   -- ============================================
@@ -1735,6 +2049,161 @@ BEGIN
     END;
 
   END IF;
+
+  -- ============================================
+  -- Refresh Task 20.55 (2026-08-19, Ori: "start the holdout"): the randomized holdout arms.
+  -- Assigns an arm to every eligible campaign that does not already have one, and NEVER touches a
+  -- unit already assigned — the procedure's only write is one append-only INSERT anti-joined
+  -- against the rows already there. Running it twice writes nothing the second time.
+  --
+  -- ORDER IS THE CONTRACT: this must run BEFORE the proposal snapshot (20.6) and therefore before
+  -- the preflight gate (20.7). The gate reads DE_HOLDOUT_ASSIGNMENT to EXCLUDE every lever on a
+  -- holdout campaign, and the snapshot must record the engine's opinion about that campaign anyway
+  -- — the recorded-but-blocked proposal IS the trial's counterfactual, the thing that lets the
+  -- readout ask "the engine wanted to cut and the coin said don't, what happened then?". If the
+  -- arms were assigned after the snapshot, a campaign's first day would be judged against no arm.
+  --
+  -- WHY THE TRIAL EXISTS: Ori's question ("the main goal of ads is to make more total dollars that
+  -- we would do without the changes") has no observational answer on this account. Matched
+  -- difference-in-differences was measured on 2026-08-18 and failed outright: a pure SELECTION
+  -- placebo — emulate the engine's ranking, change nothing — reads +$1,505..+$2,445 on the losers
+  -- arm, about 90% of the account's entire 14-day net, and no untouched control pool exists (73.5%
+  -- of active keywords and 85.1% of ad dollars are touched; what is untouched is untouched because
+  -- it is dying). So a control is created by randomization instead. The unit is the CAMPAIGN, not
+  -- the keyword, because Ori's own low-stock doctrine already says a capped campaign's budget is
+  -- spent regardless — holding out a keyword just re-routes its money to its treated neighbours.
+  -- READ architecture/HOLDOUT.md BEFORE TOUCHING ANYTHING HERE, especially the honest limits: the
+  -- trial is a HARM DETECTOR (MDE $2,261 per 14 days), not a value certifier.
+  -- Spec: architecture/HOLDOUT.md.
+  -- ============================================
+  SET procedure_name = 'SP_ASSIGN_HOLDOUT';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_ASSIGN_HOLDOUT`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.6 (2026-08-15, Ori: "i can ask you daily what was planned, what actually
+  -- happened and what are your action items"): Engine-proposal snapshot — writes every live
+  -- engine instruction (LIFT/OOB/LOW_STOCK/LAUNCH/REVERDICT bids, budgets, revivals) into
+  -- FACT_ENGINE_PROPOSALS for today. This is the engine's memory of its own OPINIONS — the
+  -- change log remembers only what was APPLIED, so without this table "did the engine call it
+  -- right?" is only answerable for suggestions that happened to be uploaded, and "Ori did X
+  -- where the engine said Y" (the manual-divergence doctrine) is not answerable at all.
+  -- ORDER: after SP_SNAPSHOT_PANEL_OWNERSHIP (the engines' deferrals read it) and after the
+  -- coach refresh (the launch ladder reads the coach), before Task 21 — so the snapshot records
+  -- the same opinions today's panels will show. Read by V_DAILY_BRIEF.
+  -- Spec: architecture/DAILY_BRIEF.md.
+  -- ============================================
+  SET procedure_name = 'SP_SNAPSHOT_ENGINE_PROPOSALS';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_ENGINE_PROPOSALS`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.7 (2026-08-15, engine-finalization Task 1.1): the standing contradiction
+  -- gate. Judges the proposal snapshot Task 20.6 just wrote — single owner per (campaign,
+  -- keyword, lever) with precedence LOW_STOCK > LAUNCH > OOB > REVERDICT > LIFT, no-ops out,
+  -- settled-winner cuts and >$2 bids to REVIEW — writing T_ENGINE_PREFLIGHT and stamping
+  -- verdict/verdict_reason back onto FACT_ENGINE_PROPOSALS. Reads ONLY snapshot tables, runs in
+  -- seconds. First run: 149 instructions -> 97 GO / 44 EXCLUDE / 8 REVIEW — a 29.5% contradiction
+  -- rate, the same magnitude the one-off iteration-6 audit found, which is the whole argument for
+  -- a STANDING gate. DoPage.exportBulksheet refuses EXCLUDE rows at export time.
+  -- Spec: architecture/ENGINE_PREFLIGHT.md.
+  -- ============================================
+  SET procedure_name = 'SP_ENGINE_PREFLIGHT';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_ENGINE_PREFLIGHT`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 20.8 (2026-08-16, engine-finalization Task 2.1): the keyword state machine —
+  -- one row per (campaign, keyword) with state / owner / next appointment, assembled purely from
+  -- the other snapshots' verdicts (guard, reverdict, panel ownership, today's preflight, change
+  -- log). Two standing invariants (one state per keyword; no keyword without a next appointment,
+  -- DEAD exempt) — V_ENGINE_HEALTH reads them. AFTER 20.7 so PACED_WINNER and the REVIVE-today
+  -- appointment reflect the same day's instructions the panels show.
+  -- Spec: architecture/KEYWORD_STATE.md.
+  -- ============================================
+  SET procedure_name = 'SP_SNAPSHOT_KEYWORD_STATE';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_KEYWORD_STATE`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
 
   -- ============================================
   -- Refresh Task 21: Refresh Cube Tables (T_*)

@@ -11,9 +11,39 @@
 --
 -- Measures come from FACT_AMAZON_ADS (clicks/cost/units/gross profit/impressions); TOS% is impression-
 -- weighted top_of_search_impression_share from V_TARGET_DAILY (FACT has no TOS). Bid suggestion/action is
--- joined from the right engine: V_LAUNCH_PHASE1 for new targets, V_WEEKLY_RUN_KEYWORD for mature keywords
+-- joined from the right engine: T_LAUNCH_PHASE1 for new targets, T_WEEKLY_RUN_KEYWORD for mature keywords
 -- (mature auto groups have no coacher verdict yet, so bid_action is NULL — they show measures only).
 -- Grain: (campaign_id, keyword_id).
+--
+-- ############################################################################
+-- # v27.62 — THE GP RULE: READ FACT_AMAZON_ADS.GROSS_PROFIT. NEVER RECOMPUTE. #
+-- ############################################################################
+-- (Ori 2026-08-13, found by checking the panel against Amazon.) This view used to carry TWO gross
+-- profits: gp (FACT's stored GROSS_PROFIT) and gp_corr, a "corrected" one re-derived here as
+--     Ads_sales - COALESCE(T_PRICE_COST_TIER.tier_cost, TOTAL_COST_PER_UNIT) * Ads_units
+--   LEFT JOIN T_PRICE_COST_TIER pct ON Ads_units > 0
+--     AND pct.unit_price = ROUND(SAFE_DIVIDE(Ads_sales, Ads_units), 2)
+-- The "correction" WAS the corruption, and it is gone. The join looked the cost tier up by an
+-- "implied unit price" of Ads_sales / Ads_units — which is NOT the product's price: Ads_sales
+-- carries HALO sales of OTHER products (~79% purchased-vs-advertised divergence in this account)
+-- while Ads_units does not correspond to them. PROVEN on VIDEO- BALL / 2026-08-12: implied $24.39
+-- for a $13.99 product matched a ~$21.50 tier, overrode the real TOTAL_COST_PER_UNIT of $9.77, and
+-- collapsed GP $229.16 -> $37.17 — a GP-ROAS of 3.69x read as 0.60x, on a campaign Amazon's own
+-- console reports at $331.08 sales / $64.05 spend that day. FACT has charged tier COGS at LOAD time
+-- since 2026-08-01, so re-deriving it here was redundant AND wrong. Consequence for this view:
+-- r2_roas_corr / r3_roas_corr / pk_roas_corr now equal r2_roas / r3_roas / pk_roas on every row.
+-- The columns stay (the cube selects them) but they no longer carry a second opinion.
+-- Same fix, same day: V_LOW_STOCK_ADS (v27.61) and the other seven engine views.
+--
+-- ORDERING: reads the materialized T_WEEKLY_RUN_KEYWORD / T_LAUNCH_PHASE1, NOT their
+-- V_ — all three are built earlier in SP_REFRESH_CUBE_TABLES, so inside the SP the data is identical.
+-- Inlining V_WEEKLY_RUN_KEYWORD re-expands the whole V_ADS_COACH subtree here and blew query planning
+-- ("too many subqueries", 2026-08-13) — the same failure mode T_LIFT_PROBES was created for; V_LAUNCH_PHASE1
+-- was inlined TWICE (new_camp + the bid join), doubling that subtree too. Reading the T_s drops this view
+-- from a plan BigQuery refused to build, to 11 leaf tables / ~148 MB.
+-- Only Cube reads T_RUN_TARGET, so the T_ dependency never surfaces stale to a live consumer — and the
+-- LaunchPhase1 cube + build_launch_phase1_bulksheet.py (which generates the actual uploads) keep reading
+-- the live V_LAUNCH_PHASE1, unaffected.
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_RUN_TARGET` AS
 WITH wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
             FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
@@ -22,7 +52,7 @@ peak_dates AS (
   FROM `onyga-482313.OI.DIM_US_HOLIDAYS` h, UNNEST(GENERATE_DATE_ARRAY(h.boost_start, h.cooldown_end)) d
   WHERE h.category = 'gift_season'
 ),
-new_camp AS (SELECT DISTINCT campaign_id FROM `onyga-482313.OI.V_LAUNCH_PHASE1`),
+new_camp AS (SELECT DISTINCT campaign_id FROM `onyga-482313.OI.T_LAUNCH_PHASE1`),
 -- current ad-group default bid — fallback ONLY when a target has no per-target bid override (e.g. auto
 -- expressions running on the ad-group default). Real per-target bid always wins via COALESCE below.
 ag AS (SELECT CAST(ad_group_id AS STRING) ad_group_id, ANY_VALUE(default_bid) default_bid
@@ -43,6 +73,7 @@ f AS (
     a.targeting AS target_text, UPPER(a.targeting_type) AS targeting_type, a.date,
     (nc.campaign_id IS NOT NULL) AS is_new,
     SUM(a.Ads_clicks) AS clk, SUM(a.Ads_cost) AS cost, SUM(a.Ads_units) AS units,
+    -- THE GP RULE (v27.62): FACT's stored GROSS_PROFIT is the gross profit. There is no second one.
     SUM(a.GROSS_PROFIT) AS gp, SUM(a.Ads_sales) AS sales,
     -- TRUE impressions + TOS come from V_TARGET_DAILY (targeting report), NOT FACT: FACT is search-term grain
     -- and Amazon only reports impressions for terms with activity, so SUM(Ads_impressions) badly UNDERCOUNTS
@@ -50,14 +81,15 @@ f AS (
     -- Fallback to FACT impressions when td is missing (SP data lag, or SB/video campaigns which aren't in the
     -- SP targeting report at all — those need the SB launch track for accurate impressions; FACT keeps CTR≠0).
     COALESCE(ANY_VALUE(td.impressions), SUM(a.Ads_impressions)) AS impr,
-    -- corrected GP: COGS by the product ACTUALLY sold (price-tier), not the advertised one. Per FACT row
-    -- (search-term grain) so the sale price is exact; falls back to current cost when a price has no tier.
-    SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT) * a.Ads_units) AS gp_corr,
+    -- gp_corr WAS a second, "corrected" gross profit that re-derived COGS here. v27.62 killed it: it
+    -- is now the SAME number as gp, kept only so the *_roas_corr output columns (cube RunTarget.js
+    -- r2RoasCorr / r3RoasCorr / pkRoasCorr, NewCampaignCards.tsx) keep their shape. Both roas and
+    -- roas_corr therefore agree on every row now — see THE GP RULE in the header for why the
+    -- "correction" was the corruption. Retire the _corr columns once the cube stops selecting them.
+    SUM(a.GROSS_PROFIT) AS gp_corr,
     ANY_VALUE(COALESCE(td.tos_share,0) * td.impressions) AS tos_impr   -- TOS numerator on TRUE impressions
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   LEFT JOIN new_camp nc ON nc.campaign_id = CAST(a.campaign_id AS STRING)
-  LEFT JOIN `onyga-482313.OI.T_PRICE_COST_TIER` pct
-    ON a.Ads_units > 0 AND pct.unit_price = ROUND(SAFE_DIVIDE(a.Ads_sales, a.Ads_units), 2)
   LEFT JOIN `onyga-482313.OI.V_TARGET_DAILY` td
     ON td.campaign_id = CAST(a.campaign_id AS STRING) AND td.keyword_id = CAST(a.keyword_id AS STRING) AND td.date = a.date
   WHERE a.keyword_id IS NOT NULL
@@ -76,7 +108,16 @@ w AS (
   FROM f
 ),
 agg AS (
-  SELECT campaign_id, keyword_id, ANY_VALUE(target_text) target_text, ANY_VALUE(targeting_type) targeting_type,
+  -- v27.64 (2026-08-15, found by the Phase-0 pull-twice determinism check): ANY_VALUE(target_text)
+  -- coin-flipped on the keyword_id='-1' rows — the group collapses ALL of a campaign's product
+  -- targets / auto clauses into ONE row, and ANY_VALUE picked a different member per pull (38 of
+  -- 40 keyed mismatches between two --nouse_cache pulls; e.g. one campaign's '-1' row alternated
+  -- between 'complements' and an asin=... expression, which also flips is_auto_group downstream).
+  -- Same defect family as fact_oi_any_value_pairing_nondeterminism (v27.46). MIN() is the
+  -- deterministic pick — for a real keyword the group has one text anyway; for the '-1' collapse
+  -- any single member is equally (un)representative, so stability wins. Decision columns were
+  -- byte-stable throughout (they never read target_text); this is display + is_auto_group only.
+  SELECT campaign_id, keyword_id, MIN(target_text) target_text, MIN(targeting_type) targeting_type,
     ANY_VALUE(is_new) is_new, ANY_VALUE(anchor) anchor,
     -- row 2 (recent)
     SUM(IF(in_row2,clk,0)) r2_clk, SUM(IF(in_row2,cost,0)) r2_cost, SUM(IF(in_row2,units,0)) r2_units,
@@ -95,7 +136,7 @@ agg AS (
 last_change AS (
   SELECT CAST(keyword_id AS STRING) AS keyword_id,
     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since_suggestion
-  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
   WHERE keyword_id IS NOT NULL AND CAST(keyword_id AS STRING) != ''
   GROUP BY 1
 )
@@ -139,9 +180,9 @@ SELECT
 FROM agg a
 LEFT JOIN td_last tl ON tl.campaign_id = a.campaign_id AND tl.keyword_id = a.keyword_id
 LEFT JOIN ag ON ag.ad_group_id = tl.l.ad_group_id
-LEFT JOIN `onyga-482313.OI.V_LAUNCH_PHASE1` lp
+LEFT JOIN `onyga-482313.OI.T_LAUNCH_PHASE1` lp
   ON lp.campaign_id = a.campaign_id AND lp.keyword_id = a.keyword_id
-LEFT JOIN `onyga-482313.OI.V_WEEKLY_RUN_KEYWORD` mk
+LEFT JOIN `onyga-482313.OI.T_WEEKLY_RUN_KEYWORD` mk   -- T_, not V_ — see ORDERING note in header
   ON mk.keyword_id = a.keyword_id
 LEFT JOIN last_change lc
   ON lc.keyword_id = a.keyword_id;

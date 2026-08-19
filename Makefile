@@ -1,6 +1,6 @@
 # OI Database Project Makefile
 
-.PHONY: help deploy validate rollback clean test
+.PHONY: help deploy validate rollback clean test export-finance
 
 # Default target
 help:
@@ -15,6 +15,9 @@ help:
 	@echo "Development:"
 	@echo "  test       - Run tests (if any)"
 	@echo "  clean      - Clean temporary files"
+	@echo ""
+	@echo "Exports:"
+	@echo "  export-finance - Export finance snapshot to /Users/ori/budget/data (read-only)"
 	@echo ""
 	@echo "Documentation:"
 	@echo "  docs       - Show documentation files"
@@ -39,6 +42,11 @@ rollback:
 	@echo "WARNING: This will drop all views!"
 	@chmod +x deployment/rollback.sh
 	@./deployment/rollback.sh
+
+# Exports
+export-finance:
+	@echo "Exporting finance snapshot to /Users/ori/budget/data ..."
+	@/usr/bin/python3 tools/export_finance_snapshot.py
 
 # Development commands
 test:

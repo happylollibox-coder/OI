@@ -1,0 +1,4 @@
+-- V_KEYWORD_STATE — thin read surface over FACT_KEYWORD_STATE (2026-08-16, Task 2.1).
+-- Spec: architecture/KEYWORD_STATE.md. NO LOGIC — the states are the SP's.
+CREATE OR REPLACE VIEW `onyga-482313.OI.V_KEYWORD_STATE` AS
+SELECT * FROM `onyga-482313.OI.FACT_KEYWORD_STATE`;

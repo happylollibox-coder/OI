@@ -57,7 +57,7 @@ dom_fam AS (
 last_change AS (
   SELECT campaign_id,
     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since_suggestion
-  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
   WHERE campaign_id IS NOT NULL AND campaign_id != ''
   GROUP BY campaign_id
 ),

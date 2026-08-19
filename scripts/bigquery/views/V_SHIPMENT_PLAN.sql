@@ -1,6 +1,11 @@
 -- V_SHIPMENT_PLAN: Thin classification layer for shipment recommendations
 -- Single source of truth for: shipment type, priority, dates, quantities
 -- Reads all demand/forecast data from V_PLAN_FORECAST (Invariant #9)
+--
+-- Demand basis: the SUPPLY path (supply_demand_90d / supply_daily_rate /
+-- supply_proportional_daily_demand) — the forecast WITHOUT the yearly_plan cap.
+-- Sizing purchase orders off plan-capped demand under-orders exactly the products that
+-- are outselling their plan. See architecture/FORECAST_PLAN_CAP.md.
 -- Transit days from DE_LIST_OF_VALUES (Invariant #10: no hardcoded values)
 --
 -- Shipment Types:
@@ -36,7 +41,7 @@ awd_fba_buffer AS (SELECT 5 AS days),
 replenish AS (
   SELECT p.*
   FROM `onyga-482313.OI.V_PLAN_FORECAST` p
-  WHERE p.daily_rate > 0 AND p.is_emergency = TRUE
+  WHERE p.supply_daily_rate > 0 AND p.is_emergency = TRUE
 ),
 
 -- Q4 bulk: Wednesday ship dates from June 1 → August 31
@@ -64,7 +69,7 @@ SELECT
   -- Last day to ship: OOS date minus SLOW_SEA transit minus AWD→FBA buffer
   DATE_ADD(CURRENT_DATE(), INTERVAL CAST(r.days_until_oos - ss.days - ab.days AS INT64) DAY) AS last_day_to_ship,
   -- Ship qty = what's ready at manufacturer (capped at demand gap)
-  LEAST(r.ready_to_ship, CAST(r.demand_90d - r.available_stock AS INT64)) AS ship_qty,
+  LEAST(r.ready_to_ship, CAST(r.supply_demand_90d - r.available_stock AS INT64)) AS ship_qty,
   r.ready_to_ship AS mfr_ready,
   r.in_production AS mfr_in_prod,
   FALSE AS needs_new_po,
@@ -89,8 +94,8 @@ SELECT
   ss.days AS transit_days,
   CAST(NULL AS INT64) AS shipment_num,
   r.available_stock,
-  r.demand_90d,
-  r.proportional_daily_demand
+  r.supply_demand_90d AS demand_90d,
+  r.supply_proportional_daily_demand AS proportional_daily_demand
 FROM replenish r
 CROSS JOIN slow_sea ss
 CROSS JOIN awd_fba_buffer ab
@@ -108,11 +113,11 @@ SELECT
   DATE_ADD(CURRENT_DATE(), INTERVAL r.days_until_oos DAY) AS oos_date,
   DATE_ADD(CURRENT_DATE(), INTERVAL CAST(r.days_until_oos - ss.days - ab.days AS INT64) DAY) AS last_day_to_ship,
   -- PO qty = shortfall (demand gap minus what's already ready/in-prod)
-  GREATEST(0, CAST(r.demand_90d AS INT64) - r.available_stock - r.ready_to_ship - r.in_production) AS ship_qty,
+  GREATEST(0, CAST(r.supply_demand_90d AS INT64) - r.available_stock - r.ready_to_ship - r.in_production) AS ship_qty,
   0 AS mfr_ready,
   r.in_production AS mfr_in_prod,
   TRUE AS needs_new_po,
-  GREATEST(0, CAST(r.demand_90d AS INT64) - r.available_stock - r.ready_to_ship - r.in_production) AS po_qty,
+  GREATEST(0, CAST(r.supply_demand_90d AS INT64) - r.available_stock - r.ready_to_ship - r.in_production) AS po_qty,
   -- Ship Wednesday: after manufacture_day
   DATE_ADD(
     DATE_ADD(CURRENT_DATE(), INTERVAL r.manufacture_day DAY),
@@ -134,12 +139,12 @@ SELECT
   ss.days AS transit_days,
   CAST(NULL AS INT64) AS shipment_num,
   r.available_stock,
-  r.demand_90d,
-  r.proportional_daily_demand
+  r.supply_demand_90d AS demand_90d,
+  r.supply_proportional_daily_demand AS proportional_daily_demand
 FROM replenish r
 CROSS JOIN slow_sea ss
 CROSS JOIN awd_fba_buffer ab
-WHERE r.ready_to_ship < (r.demand_90d - r.available_stock)
+WHERE r.ready_to_ship < (r.supply_demand_90d - r.available_stock)
   AND r.in_production = 0
 
 UNION ALL
@@ -171,13 +176,13 @@ SELECT
   asea.days AS transit_days,
   CAST(w.shipment_num AS INT64) AS shipment_num,
   p.available_stock,
-  p.demand_90d,
-  p.proportional_daily_demand
+  p.supply_demand_90d AS demand_90d,
+  p.supply_proportional_daily_demand AS proportional_daily_demand
 FROM `onyga-482313.OI.V_PLAN_FORECAST` p
 CROSS JOIN q4_wednesdays w
 CROSS JOIN q4_count c
 CROSS JOIN awd_slow asea
-WHERE p.daily_rate > 0
+WHERE p.supply_daily_rate > 0
   AND p.q4_demand > 0
   AND w.ship_date >= CURRENT_DATE()
 

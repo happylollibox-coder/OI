@@ -17,8 +17,17 @@ BEGIN
   -- ═══════════════════════════════════════════════
   -- 1. Read V_PLAN_FORECAST (single source of truth)
   -- ═══════════════════════════════════════════════
+  -- Demand basis: the SUPPLY path — the forecast WITHOUT the yearly_plan cap. Alerting off
+  -- plan-capped demand overstates days-of-cover and under-sizes reorders on exactly the
+  -- products that are outselling their plan. The supply columns are aliased to the plan
+  -- names here so every rule below reads the uncapped numbers by construction rather than
+  -- by remembering to. See architecture/FORECAST_PLAN_CAP.md.
   CREATE TEMP TABLE tmp_data AS
-  SELECT v.*,
+  SELECT v.* EXCEPT (daily_rate, proportional_daily_demand, fba_doc_walk, sellable_doc_walk),
+         v.supply_daily_rate                AS daily_rate,
+         v.supply_proportional_daily_demand AS proportional_daily_demand,
+         v.supply_fba_doc_walk              AS fba_doc_walk,
+         v.supply_sellable_doc_walk         AS sellable_doc_walk,
          p.manufacturer,
          COALESCE(ch.cost_of_goods, 0.0) AS unit_cost,
          COALESCE(anp.approved_no_po_qty, 0) AS approved_no_po_qty
@@ -38,7 +47,7 @@ BEGIN
     WHERE status = 'APPROVED' AND needs_new_po = TRUE
     GROUP BY asin
   ) anp ON v.asin = anp.asin
-  WHERE v.daily_rate > 0;
+  WHERE v.supply_daily_rate > 0;
 
   -- ═══════════════════════════════════════════════
   -- 2. Build candidate alerts

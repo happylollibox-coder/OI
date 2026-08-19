@@ -35,9 +35,14 @@ wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
 -- Peak = today falls inside any gift-season window (boost → cooldown), matching how peak is defined
 -- across the coacher. Prime-event windows count too: they behave like a gift season for budget.
 season AS (
-  SELECT COUNTIF(CURRENT_DATE('America/New_York') BETWEEN boost_start AND cooldown_end) > 0 AS in_peak
+  -- v27.49 (Ori 2026-08-12): see V_KEYWORD_LIFT — BTS/Halloween failed the category filter AND
+  -- the NULL cooldown_end. This view sets the launch budget cap ($20 off-peak / $30 peak), so the
+  -- miss also moved the launch-population boundary during a live season.
+  SELECT COUNTIF(CURRENT_DATE('America/New_York')
+                 BETWEEN boost_start
+                 AND COALESCE(cooldown_end, DATE_ADD(holiday_date, INTERVAL 3 DAY))) > 0 AS in_peak
   FROM `onyga-482313.OI.DIM_US_HOLIDAYS`
-  WHERE category IN ('gift_season', 'prime_event')
+  WHERE category IN ('gift_season', 'prime_event', 'back_to_school', 'seasonal')
 ),
 -- Season-scaled budget-tier caps (Ori 2026-07-24): low = launch controller; medium/high classify the
 -- graduated campaigns. Peak lifts every band. medium_budget_cap is exposed so V_WEEKLY_RUN_CAMPAIGN can

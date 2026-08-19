@@ -51,6 +51,14 @@ BEGIN
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_WEEKLY_RUN_KEYWORD`  AS SELECT * FROM `onyga-482313.OI.V_WEEKLY_RUN_KEYWORD`;
   -- price→true-COGS tier lookup — MUST refresh before T_RUN_TARGET (which joins it for corrected net ROAS)
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_PRICE_COST_TIER`    AS SELECT * FROM `onyga-482313.OI.V_PRICE_COST_TIER`;
+  -- launch controller snapshot — V_RUN_TARGET references V_LAUNCH_PHASE1 TWICE (new_camp CTE + the bid
+  -- join), so inlining it doubles that subtree into the T_RUN_TARGET plan. Reads T_PRICE_COST_TIER, so it
+  -- MUST come after it (above) and before T_RUN_TARGET (below). The LaunchPhase1 cube and
+  -- build_launch_phase1_bulksheet.py still read the live V_ — this T_ is only for V_RUN_TARGET.
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_LAUNCH_PHASE1`      AS SELECT * FROM `onyga-482313.OI.V_LAUNCH_PHASE1`;
+  -- T_RUN_TARGET reads T_WEEKLY_RUN_KEYWORD + T_PRICE_COST_TIER + T_LAUNCH_PHASE1 (all above), NOT their V_:
+  -- inlining V_WEEKLY_RUN_KEYWORD re-expands V_ADS_COACH here and blows query planning (2026-08-13). Keep
+  -- all three preceding this statement.
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_RUN_TARGET`         AS SELECT * FROM `onyga-482313.OI.V_RUN_TARGET`;   -- merged step-4 card (keywords + auto groups, new + mature)
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_WEEKLY_RUN_PRODUCT`  AS SELECT * FROM `onyga-482313.OI.V_WEEKLY_RUN_PRODUCT`;
   -- 5f. Weekly Run — NEGATE_TERM recommendations (level 3 under keywords)

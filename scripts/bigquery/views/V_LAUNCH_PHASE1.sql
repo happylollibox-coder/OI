@@ -8,9 +8,32 @@
 -- GRAIN: one row per (campaign, target). Budget fields are campaign-level, repeated on every target row
 -- (ANY_VALUE-safe: identical across a campaign's rows). Bid fields are target-level.
 --
--- SIGNALS (all net ROAS = CORRECTED gross profit / Ads_cost; 1.0 = breakeven). "Corrected" = COGS charged to
--- the product ACTUALLY purchased, identified by sale price via T_PRICE_COST_TIER, not the advertised one — so
--- the decision runs on the same net ROAS ✓ the card shows (advertised-vs-purchased COGS bug; [[project_ads_cogs_price_imputation]]):
+-- ############################################################################
+-- # v27.62 — THE GP RULE: READ FACT_AMAZON_ADS.GROSS_PROFIT. NEVER RECOMPUTE. #
+-- ############################################################################
+-- (Ori 2026-08-13, found by checking the panel against Amazon.) Every gross-profit number in this
+-- view is now the STORED FACT_AMAZON_ADS.GROSS_PROFIT column. The old formula
+--     Ads_sales - COALESCE(T_PRICE_COST_TIER.tier_cost, TOTAL_COST_PER_UNIT) * Ads_units
+--   LEFT JOIN T_PRICE_COST_TIER pct ON Ads_units > 0
+--     AND pct.unit_price = ROUND(SAFE_DIVIDE(Ads_sales, Ads_units), 2)
+-- and its join ARE GONE. The join looked the cost tier up by an "implied unit price" of
+-- Ads_sales / Ads_units — which is NOT the product's price: Ads_sales carries HALO sales of OTHER
+-- products (~79% purchased-vs-advertised divergence in this account) while Ads_units does not
+-- correspond to them. PROVEN on VIDEO- BALL / 2026-08-12 — a LAUNCH campaign, judged by this very
+-- view: implied $24.39 for a $13.99 product matched a ~$21.50 tier, overrode the real
+-- TOTAL_COST_PER_UNIT of $9.77, and collapsed GP $229.16 -> $37.17 — a GP-ROAS of 3.69x read as
+-- 0.60x, on a campaign Amazon's own console reports at $331.08 sales / $64.05 spend that day.
+-- Arithmetic: 317.09 - 9.77 x 13 = 229.16 = FACT.GROSS_PROFIT exactly. WHY IT EXISTED: FACT began
+-- charging tier COGS at LOAD time on 2026-08-01; these views predate that and were never updated,
+-- so they re-derived a number that was already correct — and got it wrong. WHY IT HID: account-wide
+-- over 30 days the two agree to ~3% (0.845 vs 0.817). The damage is PER ROW, on exactly the rows a
+-- decision is made about. Same fix, same day: V_LOW_STOCK_ADS (v27.61) and the other seven views.
+-- (The launch doctrine is unchanged by this: launch is FIND THE RIGHT BID, never loss-cut. The fix
+-- only stops the controller from believing a profitable launch day was a loss.)
+--
+-- SIGNALS (all net ROAS = gross profit / Ads_cost; 1.0 = breakeven). Gross profit is FACT's stored
+-- GROSS_PROFIT — COGS charged at load time to the product ACTUALLY purchased, not the advertised one
+-- — so the decision runs on the same net ROAS ✓ the card shows ([[project_ads_cogs_price_imputation]]):
 --   roas_1d   today's net ROAS (reactive)
 --   eq3       equal-weight mean of the last 3 daily net ROAS, ignoring days < 3 clicks (smoothed).
 --             Equal weight, NOT spend-pooled, so one bad day counts at full weight — "strong" means
@@ -156,15 +179,13 @@ dark AS (
     DATETIME_DIFF(COALESCE(nxt, DATETIME(DATE_ADD((SELECT d FROM wm), INTERVAL 1 DAY))), ts, MINUTE), 0)) / 1440.0 AS pd
   FROM sq GROUP BY 1
 ),
--- campaign-day perf over the trailing window. ROAS uses CORRECTED gross profit — COGS charged to the
--- product actually PURCHASED (price-tier), not the advertised one — so the decision matches the card's net ROAS ✓.
+-- campaign-day perf over the trailing window. ROAS uses the STORED FACT_AMAZON_ADS.GROSS_PROFIT
+-- column — see THE GP RULE in the header — so the decision matches the card's net ROAS ✓.
 cday AS (
   SELECT CAST(a.campaign_id AS STRING) cid, a.date, SUM(a.Ads_clicks) clk,
-    SAFE_DIVIDE(SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units), SUM(a.Ads_cost)) roas,
+    SAFE_DIVIDE(SUM(a.GROSS_PROFIT), SUM(a.Ads_cost)) roas,
     SUM(a.Ads_cost) sp
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
-  LEFT JOIN `onyga-482313.OI.T_PRICE_COST_TIER` pct
-    ON a.Ads_units > 0 AND pct.unit_price = ROUND(SAFE_DIVIDE(a.Ads_sales, a.Ads_units), 2)
   WHERE a.date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL (SELECT CAST(roas_days AS INT64)-1 FROM cfg) DAY) AND (SELECT d FROM wm)
   GROUP BY 1, 2
 ),
@@ -183,15 +204,13 @@ camp_sig AS (
   FROM cday GROUP BY 1
 ),
 cbud AS (SELECT campaign_id cid, MAX(campaign_budget) budget FROM `onyga-482313.OI.V_TARGET_DAILY` WHERE date=(SELECT d FROM wm) GROUP BY 1),
--- target-day perf + target signals. ROAS/gp use CORRECTED gross profit (COGS by product actually purchased).
+-- target-day perf + target signals. ROAS/gp read the STORED FACT_AMAZON_ADS.GROSS_PROFIT column.
 tday AS (
   SELECT CAST(a.campaign_id AS STRING) cid, a.targeting, a.date, SUM(a.Ads_clicks) clk,
-    SAFE_DIVIDE(SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units), SUM(a.Ads_cost)) roas,
-    SUM(a.Ads_sales - COALESCE(pct.tier_cost, a.TOTAL_COST_PER_UNIT)*a.Ads_units) gp, SUM(a.Ads_cost) sp,
+    SAFE_DIVIDE(SUM(a.GROSS_PROFIT), SUM(a.Ads_cost)) roas,
+    SUM(a.GROSS_PROFIT) gp, SUM(a.Ads_cost) sp,
     SUM(a.Ads_sales) sales
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
-  LEFT JOIN `onyga-482313.OI.T_PRICE_COST_TIER` pct
-    ON a.Ads_units > 0 AND pct.unit_price = ROUND(SAFE_DIVIDE(a.Ads_sales, a.Ads_units), 2)
   WHERE a.date BETWEEN DATE_SUB((SELECT d FROM wm), INTERVAL (SELECT CAST(roas_days AS INT64)-1 FROM cfg) DAY) AND (SELECT d FROM wm)
   GROUP BY 1, 2, 3
 ),

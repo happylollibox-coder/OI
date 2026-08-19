@@ -85,11 +85,18 @@ ytd_sales AS (
   GROUP BY 1
 ),
 
--- 3b. Last date with loaded sales data (anchor for 30d window)
+-- 3b. Last date with loaded sales data (anchor for 30d window).
+-- Sessions gate skips mid-sync partial days (orders land before sessions).
+-- Same rule as V_SUMMARY_7D / V_DATA_FRESHNESS / V_FAMILY_NET_PROFIT_7D — see architecture/ORDERS_WATERMARK.md.
 last_loaded_date AS (
-  SELECT MAX(DATE) AS last_date
-  FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`
-  WHERE Performance_TYPE = 'Organic'
+  SELECT MAX(date) AS last_date
+  FROM (
+    SELECT date
+    FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`
+    WHERE Performance_TYPE = 'Organic'
+    GROUP BY date
+    HAVING SUM(ASIN_SESSIONS) > 0
+  )
 ),
 
 -- 3c. Last 30 days actual sales per product (anchored to last loaded date, not CURRENT_DATE)
@@ -123,18 +130,33 @@ total_demand_base AS (
 -- Priority: yearly_plan override (back-calculated) → saved growth_json → 1.0
 effective_growth AS (
   SELECT tdb.product,
+    -- The yearly_plan back-calc only applies while the plan still has headroom.
+    -- It used to be GREATEST(yearly_plan - ytd_sold, 0), which drove growth to 0 for any
+    -- product that outsold its plan — zeroing the entire rest of the year's forecast for a
+    -- product that was still selling (Birthday Bunny: 107 sold vs a 98 plan → forecast 0
+    -- while selling 31/month, 2026-08-13). Beating plan now falls through to the normal
+    -- growth path instead of erasing demand.
     CASE
       WHEN o.yearly_plan IS NOT NULL AND tdb.demand_base > 0
-        THEN GREATEST(o.yearly_plan - COALESCE(ys.ytd_sold, 0), 0) / tdb.demand_base
+           AND o.yearly_plan > COALESCE(ys.ytd_sold, 0)
+        THEN (o.yearly_plan - COALESCE(ys.ytd_sold, 0)) / tdb.demand_base
       WHEN pg.growth_rate IS NOT NULL
         THEN pg.growth_rate
       ELSE 1.0
     END AS growth,
     CASE
       WHEN tdb.forecast_phase IN ('PHASE_1', 'PHASE_2') AND o.yearly_plan IS NOT NULL AND tdb.demand_base > 0
-        THEN GREATEST(o.yearly_plan - COALESCE(ys.ytd_sold, 0), 0) / tdb.demand_base
+           AND o.yearly_plan > COALESCE(ys.ytd_sold, 0)
+        THEN (o.yearly_plan - COALESCE(ys.ytd_sold, 0)) / tdb.demand_base
       ELSE COALESCE(pg.growth_rate, 1.0)
     END AS unconstrained_growth,
+    -- Supply-side growth: NEVER the yearly_plan back-calc, at any forecast phase.
+    -- unconstrained_growth deliberately keeps the plan back-calc for PHASE_1/PHASE_2
+    -- (new products, where the plan is a better guide than a family-share forecast), so it
+    -- can't serve the supply columns — under it, Awesome Bunny sold 35 units in 30 days
+    -- while its remaining-year forecast was 10, because a 98-unit plan was 88 spent.
+    -- Supply must see demand, not the budget left to sell it in.
+    COALESCE(pg.growth_rate, 1.0) AS supply_growth,
     tdb.demand_base
   FROM total_demand_base tdb
   LEFT JOIN overrides o ON tdb.product = o.product
@@ -150,7 +172,8 @@ monthly_forecast AS (
     eg.growth AS effective_growth,
     (0.5 + 0.5 * COALESCE(m.multiplier, 1.0)) AS adj_factor,
     ROUND(fd.forecast_units * eg.growth * (0.5 + 0.5 * COALESCE(m.multiplier, 1.0))) AS adjusted_units,
-    ROUND(fd.forecast_units * eg.unconstrained_growth * (0.5 + 0.5 * COALESCE(m.multiplier, 1.0))) AS unconstrained_units
+    ROUND(fd.forecast_units * eg.unconstrained_growth * (0.5 + 0.5 * COALESCE(m.multiplier, 1.0))) AS unconstrained_units,
+    ROUND(fd.forecast_units * eg.supply_growth * (0.5 + 0.5 * COALESCE(m.multiplier, 1.0))) AS supply_units
   FROM `onyga-482313.OI.FACT_FORECAST_DEMAND` fd
   JOIN effective_growth eg ON fd.product = eg.product
   LEFT JOIN multipliers m ON fd.forecast_month = m.forecast_month
@@ -165,7 +188,14 @@ daily_rates AS (
       WHEN forecast_year = EXTRACT(YEAR FROM CURRENT_DATE())
         AND forecast_month = EXTRACT(MONTH FROM CURRENT_DATE())
       THEN adjusted_units / 30.0
-    END), 0) AS daily_rate
+    END), 0) AS daily_rate,
+    -- Supply-side twin: same rate off the uncapped forecast. See the supply_* note
+    -- on demand_windows below for why supply decisions must not read the capped rate.
+    COALESCE(SUM(CASE
+      WHEN forecast_year = EXTRACT(YEAR FROM CURRENT_DATE())
+        AND forecast_month = EXTRACT(MONTH FROM CURRENT_DATE())
+      THEN supply_units / 30.0
+    END), 0) AS supply_daily_rate
   FROM monthly_forecast
   GROUP BY product
 ),
@@ -287,12 +317,14 @@ product_lead AS (
 ),
 
 -- 12. Demand during lead time — walk monthly forecasts proportionally
--- Sums adjusted_units × (overlap_days / days_in_month) for each month
+-- Sums supply_units × (overlap_days / days_in_month) for each month
 -- that overlaps with the [today, today + effective_lead_days] window.
+-- Supply basis (uncapped): this sizes cover during lead time, so a stale yearly plan
+-- must not shrink it. See architecture/FORECAST_PLAN_CAP.md.
 lead_demand AS (
   SELECT mf.product,
     SUM(
-      mf.adjusted_units *
+      mf.supply_units *
       GREATEST(0,
         DATE_DIFF(
           LEAST(DATE_ADD(CURRENT_DATE(), INTERVAL pl.effective_lead_days DAY), mf.month_end),
@@ -302,7 +334,7 @@ lead_demand AS (
       ) / DATE_DIFF(mf.month_end, mf.month_start, DAY)
     ) AS demand_during_lead
   FROM (
-    SELECT product, adjusted_units,
+    SELECT product, supply_units,
       DATE(forecast_year, forecast_month, 1) AS month_start,
       DATE_ADD(DATE(forecast_year, forecast_month, 1), INTERVAL 1 MONTH) AS month_end
     FROM monthly_forecast
@@ -348,57 +380,51 @@ q4_deadline AS (
 ),
 
 -- 14. Proportional demand over next 90 days (for emergency/replenishment check)
--- Uses monthly_forecast adjusted_units prorated by overlap days
+-- Each forecast month contributes the fraction of itself that falls inside the window.
+--
+-- Two parallel sets come out of here:
+--   demand_*        — from adjusted_units, i.e. AFTER the yearly_plan cap. This is the
+--                     PLAN view: what we committed to sell. Financial planning reads it.
+--   supply_demand_* — from unconstrained_units, i.e. the forecast WITHOUT the plan cap.
+--                     Supply decisions read this. A stale yearly_plan otherwise suppresses
+--                     real demand — Fresh in Purple sold 89 in 30 days while the capped
+--                     forecast said 38, because growth back-solved to 0.35 to fit an
+--                     800-unit plan against 1,909 units of actual forecast demand
+--                     (2026-08-13). Sizing AWD targets or days-of-cover off that number
+--                     under-orders exactly the products that are selling best.
 demand_windows AS (
-  SELECT mf.product,
-    SUM(
-      mf.adjusted_units *
-      GREATEST(0, DATE_DIFF(
-        LEAST(DATE_ADD(CURRENT_DATE(), INTERVAL 90 DAY),
-              DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH)),
-        GREATEST(CURRENT_DATE(), DATE(mf.forecast_year, mf.forecast_month, 1)),
-        DAY
-      )) / DATE_DIFF(
-        DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH),
-        DATE(mf.forecast_year, mf.forecast_month, 1), DAY)
-    ) AS demand_90d,
-    SUM(
-      mf.adjusted_units *
-      GREATEST(0, DATE_DIFF(
-        LEAST(DATE_ADD(CURRENT_DATE(), INTERVAL 45 DAY),
-              DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH)),
-        GREATEST(CURRENT_DATE(), DATE(mf.forecast_year, mf.forecast_month, 1)),
-        DAY
-      )) / DATE_DIFF(
-        DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH),
-        DATE(mf.forecast_year, mf.forecast_month, 1), DAY)
-    ) AS demand_45d,
-    SUM(
-      mf.adjusted_units *
-      GREATEST(0, DATE_DIFF(
-        LEAST(DATE_ADD(CURRENT_DATE(), INTERVAL 60 DAY),
-              DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH)),
-        GREATEST(CURRENT_DATE(), DATE(mf.forecast_year, mf.forecast_month, 1)),
-        DAY
-      )) / DATE_DIFF(
-        DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH),
-        DATE(mf.forecast_year, mf.forecast_month, 1), DAY)
-    ) AS demand_60d,
-    SUM(
-      mf.adjusted_units *
-      GREATEST(0, DATE_DIFF(
-        LEAST(DATE_ADD(CURRENT_DATE(), INTERVAL 30 DAY),
-              DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH)),
-        GREATEST(CURRENT_DATE(), DATE(mf.forecast_year, mf.forecast_month, 1)),
-        DAY
-      )) / DATE_DIFF(
-        DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH),
-        DATE(mf.forecast_year, mf.forecast_month, 1), DAY)
-    ) AS demand_30d
-  FROM monthly_forecast mf
-  WHERE DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH) > CURRENT_DATE()
-    AND DATE(mf.forecast_year, mf.forecast_month, 1) < DATE_ADD(CURRENT_DATE(), INTERVAL 90 DAY)
-  GROUP BY mf.product
+  SELECT product,
+    SUM(adjusted_units      * frac_90) AS demand_90d,
+    SUM(adjusted_units      * frac_45) AS demand_45d,
+    SUM(adjusted_units      * frac_60) AS demand_60d,
+    SUM(adjusted_units      * frac_30) AS demand_30d,
+    SUM(supply_units * frac_90) AS supply_demand_90d,
+    SUM(supply_units * frac_45) AS supply_demand_45d,
+    SUM(supply_units * frac_60) AS supply_demand_60d,
+    SUM(supply_units * frac_30) AS supply_demand_30d
+  FROM (
+    SELECT mf.product, mf.adjusted_units, mf.supply_units,
+      GREATEST(0, DATE_DIFF(LEAST(DATE_ADD(CURRENT_DATE(), INTERVAL 30 DAY), mo.month_end),
+                            GREATEST(CURRENT_DATE(), mo.month_start), DAY))
+        / DATE_DIFF(mo.month_end, mo.month_start, DAY) AS frac_30,
+      GREATEST(0, DATE_DIFF(LEAST(DATE_ADD(CURRENT_DATE(), INTERVAL 45 DAY), mo.month_end),
+                            GREATEST(CURRENT_DATE(), mo.month_start), DAY))
+        / DATE_DIFF(mo.month_end, mo.month_start, DAY) AS frac_45,
+      GREATEST(0, DATE_DIFF(LEAST(DATE_ADD(CURRENT_DATE(), INTERVAL 60 DAY), mo.month_end),
+                            GREATEST(CURRENT_DATE(), mo.month_start), DAY))
+        / DATE_DIFF(mo.month_end, mo.month_start, DAY) AS frac_60,
+      GREATEST(0, DATE_DIFF(LEAST(DATE_ADD(CURRENT_DATE(), INTERVAL 90 DAY), mo.month_end),
+                            GREATEST(CURRENT_DATE(), mo.month_start), DAY))
+        / DATE_DIFF(mo.month_end, mo.month_start, DAY) AS frac_90
+    FROM monthly_forecast mf
+    CROSS JOIN UNNEST([STRUCT(
+      DATE(mf.forecast_year, mf.forecast_month, 1) AS month_start,
+      DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH) AS month_end
+    )]) mo
+    WHERE DATE_ADD(DATE(mf.forecast_year, mf.forecast_month, 1), INTERVAL 1 MONTH) > CURRENT_DATE()
+      AND DATE(mf.forecast_year, mf.forecast_month, 1) < DATE_ADD(CURRENT_DATE(), INTERVAL 90 DAY)
+  )
+  GROUP BY product
 ),
 
 -- 14b. Backward demand: forecast for [last_loaded_date - 30, last_loaded_date]
@@ -495,8 +521,9 @@ backward_demand AS (
 ),
 
 -- 15. Q4 demand: Sep current year through Feb next year
+-- Q4 / pre-Q4 demand on the supply basis (uncapped) — these size Q4 bulk shipments.
 q4_demand_cte AS (
-  SELECT product, SUM(adjusted_units) AS q4_demand
+  SELECT product, SUM(supply_units) AS q4_demand
   FROM monthly_forecast
   WHERE (forecast_year = EXTRACT(YEAR FROM CURRENT_DATE()) AND forecast_month >= 9)
      OR (forecast_year = EXTRACT(YEAR FROM CURRENT_DATE()) + 1 AND forecast_month <= 2)
@@ -506,7 +533,7 @@ q4_demand_cte AS (
 -- 16. Pre-Q4 demand: demand from current month through Aug
 -- Used to forecast Sep 1 inventory = current_pipeline - pre_q4_demand
 pre_q4_demand_cte AS (
-  SELECT product, SUM(adjusted_units) AS pre_q4_demand
+  SELECT product, SUM(supply_units) AS pre_q4_demand
   FROM monthly_forecast
   WHERE forecast_year = EXTRACT(YEAR FROM CURRENT_DATE())
     AND forecast_month >= EXTRACT(MONTH FROM CURRENT_DATE())
@@ -531,6 +558,21 @@ monthly_demand_prorated AS (
       )
       ELSE CAST(adjusted_units AS FLOAT64)
     END AS prorated_demand,
+    -- Supply-side twin, uncapped by the yearly plan. Days-of-cover is a supply decision:
+    -- walking stock against plan-capped demand overstates cover on exactly the products
+    -- that are outselling their plan.
+    CASE
+      WHEN forecast_year = EXTRACT(YEAR FROM CURRENT_DATE())
+        AND forecast_month = EXTRACT(MONTH FROM CURRENT_DATE())
+      THEN supply_units * DATE_DIFF(
+        DATE_ADD(DATE(forecast_year, forecast_month, 1), INTERVAL 1 MONTH),
+        CURRENT_DATE(), DAY
+      ) / DATE_DIFF(
+        DATE_ADD(DATE(forecast_year, forecast_month, 1), INTERVAL 1 MONTH),
+        DATE(forecast_year, forecast_month, 1), DAY
+      )
+      ELSE CAST(supply_units AS FLOAT64)
+    END AS supply_prorated_demand,
     CASE
       WHEN forecast_year = EXTRACT(YEAR FROM CURRENT_DATE())
         AND forecast_month = EXTRACT(MONTH FROM CURRENT_DATE())
@@ -552,11 +594,14 @@ monthly_demand_prorated AS (
 cum_demand_walk AS (
   SELECT
     product, forecast_year, forecast_month,
-    prorated_demand, period_days,
+    prorated_demand, supply_prorated_demand, period_days,
     SUM(prorated_demand) OVER w AS cum_demand,
+    SUM(supply_prorated_demand) OVER w AS supply_cum_demand,
     SUM(period_days) OVER w AS cum_days,
     COALESCE(SUM(prorated_demand) OVER (PARTITION BY product ORDER BY forecast_year, forecast_month
       ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS prev_cum_demand,
+    COALESCE(SUM(supply_prorated_demand) OVER (PARTITION BY product ORDER BY forecast_year, forecast_month
+      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS supply_prev_cum_demand,
     COALESCE(SUM(period_days) OVER (PARTITION BY product ORDER BY forecast_year, forecast_month
       ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS prev_cum_days
   FROM monthly_demand_prorated
@@ -585,7 +630,24 @@ doc_walkthrough AS (
         THEN (inv.fba_stock - cd.prev_cum_demand)
              * cd.period_days / cd.prorated_demand
         ELSE cd.period_days END
-    END), 999.0) AS fba_doc_walk
+    END), 999.0) AS fba_doc_walk,
+    -- Supply-side twins: same walk against uncapped demand
+    COALESCE(MIN(CASE WHEN cd.supply_cum_demand >= (inv.fba_stock + inv.awd_stock)
+        AND cd.supply_prev_cum_demand < (inv.fba_stock + inv.awd_stock)
+        AND (inv.fba_stock + inv.awd_stock) > 0 THEN
+      cd.prev_cum_days + CASE WHEN cd.supply_prorated_demand > 0
+        THEN ((inv.fba_stock + inv.awd_stock) - cd.supply_prev_cum_demand)
+             * cd.period_days / cd.supply_prorated_demand
+        ELSE cd.period_days END
+    END), 999.0) AS supply_sellable_doc_walk,
+    COALESCE(MIN(CASE WHEN cd.supply_cum_demand >= inv.fba_stock
+        AND cd.supply_prev_cum_demand < inv.fba_stock
+        AND inv.fba_stock > 0 THEN
+      cd.prev_cum_days + CASE WHEN cd.supply_prorated_demand > 0
+        THEN (inv.fba_stock - cd.supply_prev_cum_demand)
+             * cd.period_days / cd.supply_prorated_demand
+        ELSE cd.period_days END
+    END), 999.0) AS supply_fba_doc_walk
   FROM inventory inv
   JOIN cum_demand_walk cd ON cd.product = inv.product
   GROUP BY inv.product
@@ -709,14 +771,24 @@ SELECT
   CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * (inv.full_lead_days + 30)) ELSE ROUND(COALESCE(dwin.demand_90d, 0)) END AS demand_90d,
   CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate, 2) ELSE ROUND(COALESCE(dwin.demand_90d, 0) / 90, 2) END AS proportional_daily_demand,
 
+  -- Supply-side twins of the four windows above, uncapped by the yearly plan.
+  -- Launching products already bypass the plan cap (launch_daily_rate), so both sets
+  -- agree there; they only diverge once a product has a yearly_plan override.
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * 30) ELSE ROUND(COALESCE(dwin.supply_demand_30d, 0)) END AS supply_demand_30d,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * LEAST(45, inv.full_lead_days + 30)) ELSE ROUND(COALESCE(dwin.supply_demand_45d, 0)) END AS supply_demand_45d,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * LEAST(60, inv.full_lead_days + 30)) ELSE ROUND(COALESCE(dwin.supply_demand_60d, 0)) END AS supply_demand_60d,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate * (inv.full_lead_days + 30)) ELSE ROUND(COALESCE(dwin.supply_demand_90d, 0)) END AS supply_demand_90d,
+  CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.supply_daily_rate, 0) END AS supply_daily_rate,
+  CASE WHEN ls.is_launching THEN ROUND(ls.launch_daily_rate, 2) ELSE ROUND(COALESCE(dwin.supply_demand_90d, 0) / 90, 2) END AS supply_proportional_daily_demand,
+
   -- Days until OOS (using proportional demand, accounts for seasonality)
   CASE
     WHEN ls.is_launching THEN
       CASE WHEN ls.launch_daily_rate > 0
         THEN CAST(FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / ls.launch_daily_rate) AS INT64)
         ELSE 999 END
-    WHEN COALESCE(dwin.demand_90d, 0) > 0
-      THEN CAST(FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / (dwin.demand_90d / 90)) AS INT64)
+    WHEN COALESCE(dwin.supply_demand_90d, 0) > 0
+      THEN CAST(FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / (dwin.supply_demand_90d / 90)) AS INT64)
     ELSE 999
   END AS days_until_oos,
 
@@ -726,8 +798,8 @@ SELECT
       CASE WHEN ls.launch_daily_rate > 0
         THEN CAST(CEIL(GREATEST(0, FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / ls.launch_daily_rate)) / 7.0) AS INT64) + 1
         ELSE 999 END
-    WHEN COALESCE(dwin.demand_90d, 0) > 0
-      THEN CAST(CEIL(GREATEST(0, FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / (dwin.demand_90d / 90))) / 7.0) AS INT64) + 1
+    WHEN COALESCE(dwin.supply_demand_90d, 0) > 0
+      THEN CAST(CEIL(GREATEST(0, FLOOR((inv.fba_stock + inv.in_transit + inv.awd_stock) / (dwin.supply_demand_90d / 90))) / 7.0) AS INT64) + 1
     ELSE 999
   END AS emergency_priority,
 
@@ -736,8 +808,8 @@ SELECT
     WHEN ls.is_launching THEN
       (ls.launch_daily_rate > 0
         AND (inv.fba_stock + inv.in_transit + inv.awd_stock) < ROUND(ls.launch_daily_rate * (inv.full_lead_days + 30)))
-    WHEN COALESCE(dwin.demand_90d, 0) = 0 THEN FALSE
-    WHEN (inv.fba_stock + inv.in_transit + inv.awd_stock) < COALESCE(dwin.demand_90d, 0) THEN TRUE
+    WHEN COALESCE(dwin.supply_demand_90d, 0) = 0 THEN FALSE
+    WHEN (inv.fba_stock + inv.in_transit + inv.awd_stock) < COALESCE(dwin.supply_demand_90d, 0) THEN TRUE
     ELSE FALSE
   END AS is_emergency,
 
@@ -754,16 +826,19 @@ SELECT
   -- DOC walkthrough (month-by-month depletion — accurate with seasonal demand)
   CAST(ROUND(dw.sellable_doc_walk) AS INT64) AS sellable_doc_walk,
   CAST(ROUND(dw.fba_doc_walk) AS INT64) AS fba_doc_walk,
+  CAST(ROUND(dw.supply_sellable_doc_walk) AS INT64) AS supply_sellable_doc_walk,
+  CAST(ROUND(dw.supply_fba_doc_walk) AS INT64) AS supply_fba_doc_walk,
 
-  -- Legacy flat-rate DOC (kept for backward compat)
-  CASE WHEN (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.daily_rate, 0) END) > 0
-    THEN ROUND(inv.fba_stock / (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE dr.daily_rate END), 1) ELSE 999.0
+  -- Legacy flat-rate DOC (kept for backward compat). Supply basis: these gate the
+  -- CREATE_SHIPMENT alert, so they must not be measured against plan-capped demand.
+  CASE WHEN (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.supply_daily_rate, 0) END) > 0
+    THEN ROUND(inv.fba_stock / (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE dr.supply_daily_rate END), 1) ELSE 999.0
   END AS fba_doc,
-  CASE WHEN (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.daily_rate, 0) END) > 0
-    THEN ROUND((inv.fba_stock + inv.in_transit) / (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE dr.daily_rate END), 1) ELSE 999.0
+  CASE WHEN (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.supply_daily_rate, 0) END) > 0
+    THEN ROUND((inv.fba_stock + inv.in_transit) / (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE dr.supply_daily_rate END), 1) ELSE 999.0
   END AS fba_doc_effective,
-  CASE WHEN (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.daily_rate, 0) END) > 0
-    THEN ROUND(inv.total_stock / (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE dr.daily_rate END), 1) ELSE 999.0
+  CASE WHEN (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE COALESCE(dr.supply_daily_rate, 0) END) > 0
+    THEN ROUND(inv.total_stock / (CASE WHEN ls.is_launching THEN ls.launch_daily_rate ELSE dr.supply_daily_rate END), 1) ELSE 999.0
   END AS system_doc,
 
   -- Q4 PO feasibility

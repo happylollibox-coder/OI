@@ -138,6 +138,12 @@ SELECT
   current_experiment_name,
   current_strategy_id,
 
+  -- family of the CURRENT experiment — experiment_name follows the "<Family> - <label>"
+  -- convention (assign endpoint + SP_AUTO_ASSIGN_CAMPAIGNS). Without this the UI can only
+  -- prefill from the SUGGESTION, so a manual mapping to a family the suggester wouldn't
+  -- pick (e.g. Store) looks like it never saved.
+  NULLIF(TRIM(SPLIT(COALESCE(current_experiment_name, ''), ' - ')[SAFE_OFFSET(0)]), '') AS current_family,
+
   -- resolved family suggestion
   COALESCE(prefix_family, fuzzy_family, 'UNKNOWN') AS suggested_family,
   suggested_strategy,

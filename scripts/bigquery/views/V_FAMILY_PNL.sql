@@ -15,10 +15,38 @@
 -- An earlier draft inferred it from unit ratios plus an equal-margin assumption; the measured values
 -- range 1.07 (Fresh) to 1.59 (Bottle), which that assumption would have flattened.
 --
--- WATERMARK: blended sales+ads measures cut at the ORDERS watermark, never the ads watermark (ads
--- rows run ~1 day ahead of the business report). The wm CTE is copied verbatim from
--- V_FAMILY_NET_PROFIT_7D / V_SUMMARY_7D — see architecture/ORDERS_WATERMARK.md. Do not "simplify" it:
--- the sessions gate is what skips mid-sync partial days, where orders land before sessions.
+-- ---------------------------------------------------------------------------------------------
+-- RULING (2026-08-19) — WHICH WATERMARK YOU ARE ENDING ON DECIDES WHETHER YOU DROP ITS LAST DAY.
+-- The house rule "every multi-day window ends at wm - 1" (feedback_window_convention_complete_days)
+-- is TRUE OF THE ADS WATERMARK AND ONLY OF IT. The two watermarks differ in kind:
+--
+--   * ADS watermark — its newest day is PARTIAL. FACT_AMAZON_ADS is only 88-90% loaded at age 1 and
+--     keeps restating for ~3 days (fact_oi_ads_restatement_settle). Nothing in the ads pipeline
+--     removes that half-loaded day, so an ads window MUST end at wm - 1 or it reads a fake dip.
+--
+--   * ORDERS watermark (the one this view uses) — its newest day is COMPLETE BY CONSTRUCTION. The wm
+--     CTE below does not take MAX(date); it takes the newest day that CLEARED THE SESSIONS GATE
+--     (HAVING SUM(ASIN_SESSIONS) > 0). Mid-sync days land orders before sessions, so they score 0
+--     sessions and are excluded by that HAVING — the gate is exactly the partial-day filter that the
+--     ads side lacks. A day that survives it is whole. Ending at wm - 1 here would silently DISCARD
+--     one good, fully-loaded day from every window, which is a real loss, not a safety margin.
+--
+-- So: M3 / M1 / W2 below end AT the orders watermark, on purpose. Do not "fix" this back to wm - 1.
+-- If you ever repoint this view at an ads-watermark source, the wm - 1 rule applies again.
+-- ---------------------------------------------------------------------------------------------
+--
+-- CALENDAR MONTHS ARE COMPLETE MONTHS ONLY (defect fix 2026-08-19). The previous cut emitted the
+-- CURRENT month with period_end = LAST_DAY(month) — '2026-08' claimed to end 2026-08-31 while
+-- holding only the 17 days up to the watermark. Month-over-month consumers (the Invest ramp test,
+-- which asks the one question that matters for a young product: is this launch IMPROVING?) would
+-- have compared 17 days against 30 and declared a working launch dead. Measured at the time:
+-- 2026-06 = 2265 units, 2026-07 = 2662 units, 2026-08 = 2005 units — a pure artefact of day count.
+-- Now: a '%Y-%m' row exists only when its LAST_DAY falls STRICTLY BEFORE the start of the
+-- watermark's month, and the running month is published as a single row labelled 'MTD' whose
+-- period_end IS THE WATERMARK, so it can never be mistaken for a full month from its dates alone.
+-- Belt and braces, every row carries is_complete_period (BOOL) so a consumer cannot get this wrong
+-- by accident: filter is_complete_period for trajectory, read 'MTD' for "so far this month".
+-- BASELINE_MAY_JUL and the M3/M1/W2 rolling windows are complete by construction.
 --
 -- GRAIN: one row per (family, period). Organic sales are measurable at family grain and NOT
 -- attributable to a keyword — that limit is the whole reason the engine bridge (V_FAMILY_BAR) exists
@@ -28,6 +56,8 @@ CREATE OR REPLACE VIEW `onyga-482313.OI.V_FAMILY_PNL` AS
 WITH wm AS (
   -- Sessions gate skips mid-sync partial days (orders land before sessions).
   -- Same rule as V_SUMMARY_7D / V_DATA_FRESHNESS / V_PLAN_FORECAST — architecture/ORDERS_WATERMARK.md.
+  -- This gate is ALSO the reason windows below may end AT wm rather than wm-1: see the RULING in the
+  -- file header. A day that clears HAVING SUM(ASIN_SESSIONS) > 0 is a complete day, not a partial one.
   SELECT MAX(date) AS d
   FROM (
     SELECT date
@@ -37,22 +67,31 @@ WITH wm AS (
     HAVING SUM(ASIN_SESSIONS) > 0
   )
 ),
--- The reporting periods this view publishes. Every window ENDS AT THE WATERMARK (a complete day by
--- construction of wm), so no partial day enters a blended number.
 periods AS (
-  SELECT 'M3'  AS period_label, DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AS period_start, (SELECT d FROM wm) AS period_end UNION ALL
-  SELECT 'M1',                  DATE_SUB((SELECT d FROM wm), INTERVAL 29 DAY),                 (SELECT d FROM wm)              UNION ALL
-  SELECT 'W2',                  DATE_SUB((SELECT d FROM wm), INTERVAL 13 DAY),                 (SELECT d FROM wm)
+  -- Rolling windows. Every one ENDS AT THE ORDERS WATERMARK — complete by construction of wm (the
+  -- sessions gate above), so no partial day enters a blended number. RULING: "windows end at wm-1"
+  -- is the ADS-watermark rule (day-1 ads are 88-90% loaded); it does NOT apply to the orders
+  -- watermark, where ending at wm-1 would silently discard one good, fully-loaded day.
+  SELECT 'M3' AS period_label, DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AS period_start, (SELECT d FROM wm) AS period_end, TRUE AS is_complete_period UNION ALL
+  SELECT 'M1',                  DATE_SUB((SELECT d FROM wm), INTERVAL 29 DAY),                 (SELECT d FROM wm),              TRUE                        UNION ALL
+  SELECT 'W2',                  DATE_SUB((SELECT d FROM wm), INTERVAL 13 DAY),                 (SELECT d FROM wm),              TRUE
 ),
 -- Fixed calendar periods for month-over-month trajectory (the Invest ramp test) and for the
 -- reproducible baseline the acceptance assertion checks.
 cal AS (
-  SELECT FORMAT_DATE('%Y-%m', m) AS period_label, m AS period_start, LAST_DAY(m) AS period_end
+  -- COMPLETE months only: LAST_DAY(m) must fall strictly before the start of the watermark's month.
+  -- The running month is deliberately absent here — it is published as 'MTD' below.
+  SELECT FORMAT_DATE('%Y-%m', m) AS period_label, m AS period_start, LAST_DAY(m) AS period_end, TRUE AS is_complete_period
   FROM UNNEST(GENERATE_DATE_ARRAY(
          DATE_TRUNC(DATE_SUB((SELECT d FROM wm), INTERVAL 365 DAY), MONTH),
          DATE_TRUNC((SELECT d FROM wm), MONTH), INTERVAL 1 MONTH)) m
+  WHERE LAST_DAY(m) < DATE_TRUNC((SELECT d FROM wm), MONTH)
   UNION ALL
-  SELECT 'BASELINE_MAY_JUL', DATE '2026-05-01', DATE '2026-07-31'
+  -- The running month, HONESTLY LABELLED. period_end is the watermark, NOT the month end, so a
+  -- consumer that compares it to a full month can see the shortfall from the dates alone.
+  SELECT 'MTD', DATE_TRUNC((SELECT d FROM wm), MONTH), (SELECT d FROM wm), FALSE
+  UNION ALL
+  SELECT 'BASELINE_MAY_JUL', DATE '2026-05-01', DATE '2026-07-31', TRUE
 ),
 all_periods AS (SELECT * FROM periods UNION ALL SELECT * FROM cal),
 u AS (
@@ -62,6 +101,8 @@ u AS (
 )
 SELECT
   p.period_label, p.period_start, p.period_end,
+  -- FALSE on exactly one row per family ('MTD'). Filter on this for any month-over-month read.
+  p.is_complete_period,
   u.family,
   -- THE GOAL: dollars. Net of COGS (all-in, incl. Amazon fees) and of ad spend.
   ROUND(SUM(u.sales - u.cogs) - SUM(u.ad_cost), 2)                                        AS net_profit,
@@ -79,4 +120,4 @@ SELECT
   (SELECT d FROM wm)                                                                      AS orders_watermark
 FROM all_periods p
 JOIN u ON u.date BETWEEN p.period_start AND p.period_end
-GROUP BY p.period_label, p.period_start, p.period_end, u.family;
+GROUP BY p.period_label, p.period_start, p.period_end, p.is_complete_period, u.family;

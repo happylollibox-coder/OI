@@ -14,9 +14,17 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_INVENTORY_SNAPSHOT` (
   source_type STRING,
   
   -- Additional fields from FACT_PURCHASE_ORDER aggregation
+  -- COGS_AMOUNT is FEE-LOADED: valued at DIM_COSTS_HISTORY.TOTAL_COST_PER_UNIT =
+  -- manufacturing + freight + Amazon pick&pack + referral. Use it for the profit
+  -- on a unit that SELLS, not for valuing unsold stock.
   COGS_AMOUNT FLOAT64,
+  -- Landed value = quantity_balance * (cost_of_goods + shipping_cost). No Amazon
+  -- selling fees. THIS is the asset / balance-sheet figure.
+  -- Added 2026-08-15, migration 2026-08-15_landed_cogs_amount.sql
+  LANDED_COGS_AMOUNT FLOAT64,
   SELL_AMOUNT FLOAT64,
-  
+  PAID_AMOUNT FLOAT64,        -- vendor payments allocated to In Production / MFR Ready
+
   -- Product dimension fields
   cost_of_goods FLOAT64,
   shipping_cost FLOAT64,

@@ -341,21 +341,21 @@ keyword_last_bid_change AS (
 suggestion_by_keyword AS (
   SELECT campaign_id, keyword_id,
     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since
-  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
   WHERE keyword_id IS NOT NULL AND keyword_id != ''
   GROUP BY 1, 2
 ),
 suggestion_by_targeting AS (
   SELECT campaign_id, LOWER(targeting) AS targeting_lc,
     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since
-  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
   WHERE targeting IS NOT NULL AND targeting != ''
   GROUP BY 1, 2
 ),
 suggestion_by_campaign AS (
   SELECT campaign_id,
     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at, 'America/Los_Angeles')), DAY) AS days_since
-  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
   WHERE campaign_id IS NOT NULL AND campaign_id != ''
   GROUP BY 1
 ),

@@ -108,6 +108,15 @@ same constants as the launch controller, applied to every OOB campaign regardles
      continue reducing until dark is 0%" (single-keyword BOX-VIDEO/PT case) and "no keyword is the
      eater — the campaign bleeds from many small bids" (VIDEO- COMP/BALL case). The brake stops
      when the campaign leaves the dark set (dark ≤ 10%, the phase's WATCH tolerance).
+     **v27.65 ZERO-SALE EVIDENCE FLOOR (Task 1.3, 2026-08-16):** the dark-scaled step collapses to
+     the 5% minimum whenever pct_dark reads low — but a campaign OOB-owned on the 7-day hysteresis
+     can sit at 0% dark TODAY while a keyword burns double-digit clicks with zero sales (root case:
+     Ori's "22 clicks and no bid trimming — why?"; measured: BALL Mint substitutes 23c at 0.00×
+     braked 5%/day, 12+ days to the floor at ~$8/day). Every brake LEAST therefore carries a third
+     term: **clk1 ≥ 10 AND roas_1d = 0.00 AND roas90 < 1.0 ⇒ step ≥ 15%**. One shared SQL fragment
+     across all 3 bid arms and all 3 reason mirrors, so the step and the displayed % can never
+     drift. Proven seats (roas90 ≥ 1.0) are exempt — a winner is paced 5%, never punished for one
+     unsettled day (v27.47/v27.63). Deployed 2026-08-16: 4 rows deepened 5%→15%, 234 unchanged.
   4. zero clicks in both windows → **HOLD, never probe up** — the constraint is budget, not bid.
      (+5% probing survives only in the launch controller's NOT-capped branch.)
   A found winner automatically becomes **main**: the others park/trim, the freed budget flows to
@@ -1167,3 +1176,527 @@ with a logged NEGATE_TERM in FACT_PPC_CHANGE_LOG (campaign-scoped: the same term
 still be negated elsewhere). The 2 rejected terms now False everywhere; 0 applied-dupes
 fleet-wide; 3 genuinely-new negates remain. No re-upload needed for report 31 — the 2
 "failures" were already-achieved end states.
+
+### v27.15 — spend past the budget IS out of budget (Ori 2026-08-05)
+
+**Ori:** *"if spend is greater then budget you should consider it out of budget as well"*
+
+The dark clock (`pd`) is time-weighted `CAMPAIGN_OUT_OF_BUDGET` from
+`V_SRC_AmazonAds_campaign_history`. Amazon does not always emit that status — SB overdelivers
+up to 2× its daily budget without ever flipping it, and SP overdelivery lands the same way. The
+old `JOIN dark d ON ... AND d.pd > 0` then dropped those campaigns from this view entirely, so a
+campaign that spent **$82.55 against a $53 budget (156%) displayed `dark 0%`** and was routed to
+the working section as healthy.
+
+**Rule:** a campaign is out of budget when the dark clock fires **OR** it spent at/over its
+budget. Concretely:
+
+- `dark` is a LEFT JOIN; membership is `pd > 0 OR spend_1d >= budget`.
+- `over_budget := spend_1d >= budget` (published as a column).
+- Every ladder gate that read `pd <= dark_target` now reads `pd <= dark_target AND NOT over_budget`,
+  so an over-budget campaign takes a real ladder verdict instead of falling into `WATCH`.
+- `pct_dark` still reports the **measured** clock — it is not inflated with a fabricated
+  percentage. `utilization` carries the over-budget evidence; the reason text says which signal
+  fired.
+
+**Single-home:** the frontend routing rule becomes `pctDark > 10 OR utilization >= 1.0`
+(`KeywordLiftPhase` hides those campaigns; `OobBudgetPhase` owns them), so a newly-detected
+over-budget campaign moves rather than appearing in both sections.
+
+### v27.16 — dark is never a hold: the winner eases gently (Ori 2026-08-05)
+
+**Ori:** *"this is dark>0 therefore you must act · in this case i would decrease bid gently"*
+
+**The deadlock.** A capped campaign with one concentrated winner produced two mutually-deferring
+holds and moved nothing:
+
+| engine | verdict |
+|---|---|
+| `V_OOB_KEYWORD` (winner, `conv_share >= 0.80`) | *"converting in a winner-concentrated campaign — hold (**budget raise is the lever**)"* |
+| `V_OOB_BUDGET_PHASE` (campaign ladder) | *"Dark 24% · evidence mid → hold budget, **bids do the work**"* |
+
+The budget ladder will not raise because the blended evidence is mid (`r1 < 1.2`), and the bid
+branch returned NULL whenever `ev_clk <= 6` **or** `current_bid <= ev_cpc + 0.05`. Meanwhile one
+keyword ate ~80% of a budget that ran out 24% of the day.
+
+**Rule:** when the campaign is dark at all (`pct_dark > 0`) and a converting keyword is
+winner-concentrated, the bid **always** moves — glide it −5%/day. A capped campaign cannot buy
+more clicks with money it does not have, so it buys them with a cheaper CPC.
+
+- Floor: the platform minimum ($0.20 SP / $0.25 SB) — **not** the target CPC. Ori's own example
+  sat at $0.42 against a $0.45 target CPC, i.e. already under target, and still had to move.
+- Never a raise: guarded by `current_bid > floor + 0.01`.
+- The pre-existing `EASE` (enough clicks and bid above realized CPC, floor = realized CPC) is
+  unchanged and still takes precedence; this is the fallback that used to be a hold.
+
+**Still open:** the budget half of Ori's rule — *"one keyword profitable but eaten 80% of budget
+and dark > 30% → a budget raise"*. `V_OOB_BUDGET_PHASE` has no `conv_share` (it is a keyword-grain
+measure), so the raise needs that signal joined in first. Not built.
+
+### v27.17 — volume outranks every deferral (Ori 2026-08-05)
+
+**Ori:** *"bid should be reduced as well above 10 clicks and dark%>0 even if probing can be reduced"*
+
+A keyword burning **16 clicks at 0.00×** in a 43%-dark campaign held its bid, because the
+queue-first deferral (v27.8.2) parked the seat brake while the queue leaked, and probes were
+exempt entirely. Volume that size is real money burnt today.
+
+**Rule:** `clk1 > 10 AND pct_dark > 0 AND roas1 < 1.0` brakes the bid ahead of **both** the
+queue deferral and the mid-probe exemption — a probe that burnt 16 clicks at 0× already has its
+answer. Step = the existing dark step `max(5%, 30% × dark)`, floored at the platform min.
+Winners are still never pulled down (`roas1 < 1.0` gate). **11 keywords** braked on day one.
+
+### v27.18 — the dark brake needs 4 clicks (Ori 2026-08-05)
+
+**Ori:** *"dark break should not be on keywords under 4 clicks"*
+
+`DARK_BRAKE` fired at `clk1 >= 1`. One click is not evidence — it is the same noise the TRIM rule
+already refuses to act on. All three brake branches now gate at `x.click_goal_day` (4), matching
+"TRIM needs REAL evidence" (v-2026-08-01). Verified: 0 brakes remain under 4 clicks.
+
+### v27.47 — the proven-seat exemption stops at 4 clicks (Ori 2026-08-12)
+
+**Ori:** *"clicks>4 , brake 5%"* — pointing at a `WATCH` keyword taking **10 clicks yesterday at
+0.00×**, bid $1.00 against a $0.55 target CPC, which the engine answered with
+`HOLD — "proven 1.xx× over 90d — holds its seat; the budget raise is the lever, not the brake"`.
+
+The 4-click brake bar (v27.18) was never the blocker here — `clk1 >= 4` already passed. The blocker
+was the branch **above** it: `WHEN roas90 >= 1.0 THEN NULL`, an unconditional exemption that let a
+90d-proven keyword spend a capped budget all day on its reputation.
+
+**Rule:** the exemption is now capped by volume, and both outcomes live inside the one branch so a
+proven keyword can never fall through to the harsher mid-test `TRIM_BID`:
+
+| proven keyword (`roas90 >= 1.0`) | action |
+|---|---|
+| `clk1 <= 4` (or bid already at the floor) | **HOLD** — the seat is cheap; the budget raise is the lever |
+| `clk1 > 4` | **DARK_BRAKE, a flat 5%/day** toward the floor — paced, not punished (never the 15% trim) |
+
+5% is exactly what the v27.46-A4 90d-scaled magnitude already gives a `roas90 >= 1.0` keyword, so
+"brake 5%" needed no magnitude change — only the exemption had to yield.
+
+Mirrored in all three ladders (`suggested_bid` / `bid_action` / `bid_reason`) plus the `WATCH` and
+`WINNER` role tooltips in `OobBudgetPhase.tsx`. Verified on deploy (2026-08-12): the two held
+10-click WATCH rows now brake — ME-VIDEO/BROAD "journal kit for girls ages 8-12" $0.78 → $0.74 and
+FRESH-SB\BROAD "16 year old girl gifts" $0.50 → $0.47; every pre-existing DARK_BRAKE row kept its
+step; no proven keyword routes to TRIM_BID.
+
+⚠️ Stale doc fixed in the same pass: `V_OOB_KEYWORD.sql`'s header still described the retired
+`< 4 PROBE · 4–5 HOLD · >= 6 SLOW` band, which lives only in the two LAUNCH engines
+(`V_LAUNCH_PHASE1`, `V_SB_LAUNCH_TARGET`) — this view emits no PROBE/SLOW action at all, and its
+`click_cap_day` (6) constant is dead.
+
+### v27.19 — ACTIVATE is for DORMANT keywords only (Ori 2026-08-05)
+
+**Ori:** *"already have 6 clicks no need to activate and raise bid to 1 because it is already
+active. gentle raise in this case"*
+
+The `current_bid <= 0.30` branch jumped a parked keyword straight to the $1 seat-entry floor —
+a **4× move** — and it was firing on keywords already delivering (6 clicks at 6.15× yesterday).
+The $1 floor is the *anchorless* on-ramp: defensible only with no delivery to price from.
+
+**Rule:** ACTIVATE now requires `clk1 < click_goal_day` (4). A delivering keyword falls through
+to the normal converting / click-band ladder and raises proportionately instead. Verified: 0
+ACTIVATEs remain on keywords with 4+ clicks.
+
+### ⚠️ OPEN — the seat order ignores recent conversion (Ori 2026-08-05)
+
+**Ori:** *"why park this · seems like you should park different keyword"* — on `gift for 12 year
+old`, prev-2d **3 clicks at 11.37×**, converting, being parked $0.45 → $0.25.
+
+`seat_rank` orders by `roas90 DESC` after the converting/proven tier, so **90-day history
+dominates recent conversion**. Observed in one 4-seat campaign:
+
+| rank | keyword | conv? | 1d | prev-2d | seat |
+|---|---|---|---|---|---|
+| 2 | gift for 8+ year old girl | **no** | 0c | 0c (never clicked) | ✅ holds a seat |
+| 4 | girls journals age 10-12 | **no** | 1c 0× | — | ✅ holds a seat |
+| 6 | gift for 12 year old | **yes** | 1c | **3c 11.37×** | ❌ parked |
+| 8 | girls journaling set | **yes** | 1c | **12c 3.51×** | ❌ parked |
+| 9 | journal kit for girls ages 8-12 | **yes** | 0c | **4c 6.41×** | ❌ parked |
+
+Two keywords that have never converted hold seats ahead of three that are converting now.
+NOT FIXED — reshuffling `seat_rank` moves seats in every OOB campaign at once, and the
+recent-vs-90d weighting is Ori's call (a 11.37× on 3 clicks is also thin evidence).
+
+### v27.20 — converting NOW outranks proven-but-quiet in the seat order (Ori 2026-08-05)
+
+**Ori:** *"why park this · seems like you should park different keyword"*, then
+*"why it still want to park this and activate this"*
+
+Both `PARK_WAIT` and `ACTIVATE` are decided by one number — `seat_rank`. Its second key lumped
+"converting NOW" together with "proven over 90d" (`IF(converting OR roas90 >= 1.0, 0, 1)`), and
+the next key sorted inside that group by `roas90 DESC`. So **90-day history decided the seats**
+and a keyword converting today with thin 90d history sank below keywords that had never
+converted at all. Measured, one 4-seat campaign:
+
+| rank | keyword | conv? | 1d | prev-2d | verdict |
+|---|---|---|---|---|---|
+| 2 | gift for 8+ year old girl | **no** | 0c | 0c — *never clicked* | **ACTIVATE → $1.00** |
+| 4 | girls journals age 10-12 | **no** | 1c 0× | — | holds a seat |
+| 6 | gift for 12 year old | **yes** | 1c | **3c 11.37×** | **PARK_WAIT → $0.25** |
+| 8 | girls journaling set | **yes** | 1c | **12c 3.51×** | queued |
+| 9 | journal kit for girls ages 8-12 | **yes** | 0c | **4c 6.41×** | queued |
+
+A keyword that had *never taken a click* was being activated to $1.00 while three live
+converters were parked to $0.25.
+
+**Rule:** a new tier `IF(b.converting, 0, 1)` is inserted directly below the quality group, so
+converting in the last 3 days (net ROAS ≥ 1.0 on last day **or** prior-2d) outranks
+proven-but-quiet. Ties **inside** each group still break on `roas90 DESC`, so this never
+reorders two live converters against each other on thin evidence.
+
+### v27.21 — the window strategies get a LAST DAY column, and it gates clicks (Ori 2026-08-06)
+
+**Ori:** *"in all strategies with 7d, 8–28d window you should also show last day. the meaning of
+last day in those cases is for seated active keywords to gate clicks — meaning if last day no
+clicks that means the bid is too low and we may need to nudge it back up"*
+
+The working tier is judged on **7d / 8–28d** windows, and those windows were the only thing
+shown. But a window cannot refresh on a keyword that never enters the auction: a seated keyword
+priced out of the auction takes 0 clicks, its 7d window ages without new evidence, and it sits
+frozen forever. The last day is the **click gate** that detects it.
+
+`NUDGE_UP` already existed but was gated to the **low tier only**
+(`budget <= low_budget_cap`) and keyed on a 3-day click bar — i.e. it never applied to the very
+strategies that use these windows.
+
+**Rule (both SP and SB arms):** a seated, active, uncapped **working-tier** keyword with
+`clk1 = 0` nudges **+5%/day** toward the entry anchor `max($1, min(1.5×tcpc, $2))`. Guards match
+the low-tier rule: not auto, not defense, not capped (capped → the budget is the lever),
+`current_bid > $0.30` (parked keywords excluded), and only while the bid is still below the
+anchor — so it can never overshoot.
+
+**Display:** the 7d / 8–28d tables now render a `last day` column (campaign row included, to keep
+the columns aligned). A seated keyword showing **0 clicks is amber**, so "priced out" reads
+differently from "quiet day".
+
+### v27.22 — never trim a clause that is already stuck (Ori 2026-08-06)
+
+**Ori:** *"the keyword already stuck"* — on an auto clause showing `0c` yesterday (amber, priced
+out of the auction) whose action was **`auto trim`**.
+
+`AUTO_TRIM` fired on `clk_w >= 4` — clicks over the **window** — with no last-day gate. So a
+clause with 27 window clicks at 0× but **zero clicks yesterday** was told to cut its bid again.
+That is the wrong direction: it is already out of the auction, so the trim has nothing left to
+achieve and only entrenches the invisibility that the v27.21 click gate exists to detect.
+
+**Rule:** `AUTO_TRIM` now also requires `clk1 >= 1` (all six sites — action, value and reason,
+SP and SB arms). No clicks yesterday ⇒ **HOLD**, not a cut.
+
+Deliberately NOT a nudge up: the clause is a genuine LOSER over its window (clicks, no sales),
+so raising it would buy more of a known loss. Holding is the honest verdict — the trim already
+achieved what it could. `AUTO_BRAKE` was checked in the same pass and already carried
+`clk1 >= 1`, so it needed no change.
+
+Verified: 0 `AUTO_TRIM` rows remain on zero-click clauses; 21 keywords now take the last-day
+`NUDGE_UP`.
+
+### v27.26 — a profitable last day vetoes every window move (Ori 2026-08-06)
+
+**Ori:** *"if last day it was profitable and last 7 days doesnt. do not change anything. maybe we
+start a wave. when a not profitable day will occur you can check the 7 days again and decide
+what to do"*
+
+Example row: **32c at 1.42× yesterday** against **260c at 0.47× over the window**. The window
+logic wanted to cut. But the window is history — a profitable day inside a losing window may be
+the turn, and cutting it kills the wave before it forms.
+
+**Rule:** when `clk1 >= 1 AND roas_1d >= 1.0 AND roas_w < 1.0` → **HOLD, change nothing** —
+neither up nor down ("do not change anything" is literal). The window regains authority on the
+next unprofitable day. Placed after the probe branches (probes keep their own 20-click
+lifecycle) and before every window-driven branch, in both SP and SB arms.
+
+Verified: every matching keyword now returns HOLD with no suggested bid.
+
+### v27.28 / v27.29 — output guards from the action audit (Ori 2026-08-06)
+
+Ori: *"i saw 10% of wrong decisions ... investigate each action one by one, do not use logic only
+table data per type"*. Auditing all 650 rows of V_KEYWORD_LIFT per action type found 25 wrong or
+inert rows (~4%; the remaining suspicion was 40 KEEPs on winners, which the data showed are
+1-3-click noise and correctly held). Both fixes live at the OUTPUT layer — one place, not
+scattered across branch sites.
+
+**C1 (v27.28) — never shelve a proven winner.** A keyword its own evidence window calls a winner
+(`clicks_w >= 4 AND roas_w >= 1.0`) can no longer resolve to PARK / PARK_WAIT / IDLE /
+PROBE_WAIT; it becomes WINNER_FOUND with no bid change. v27.27 had fixed this only for
+`probe_done`, and it was still leaking through 15 PROBE_WAIT, 1 PARK_WAIT and 2 IDLE — e.g.
+`journal kit for girls`, **157 clicks at 1.39x**, was being cut $0.75 -> $0.25. The **4-click bar
+is load-bearing**: it keeps 28.65x-on-one-click noise from being promoted.
+
+**C2 (v27.29) — an action that promises a change must carry one.** Any action outside the
+no-change set (HOLD/KEEP/KEEP_TAIL/IDLE/WINNER_FOUND/DEFENSE/APPLIED_HOLD/PROBE_WAIT/
+PROBE_ADJUST) whose final value is NULL or equals the current bid is forced to HOLD. The audit
+found 5 PARKs suggesting the bid they already had and 2 rows labelled cut/raise with no value —
+pure bulksheet noise. Evaluated AFTER the SB $0.25 clamp, so a clamp that erases the move also
+resolves to HOLD.
+
+Verified: 0 winners shelved, 0 no-op actions, WINNER_FOUND 4 -> 19.
+
+**Still open (C3, needs Ori's call):** 26 PROBE_ADJUSTs jumping to $1.00 on zero window clicks
+(one against a $0.55 target CPC); 13 DEFENSE keywords at up to $2.70 with zero delivery.
+
+### v27.33 — the SB minimum bid is PER FORMAT (Ori 2026-08-06, upload reports 32 + 33)
+
+Established by uploading real bulksheets of zero-click keywords and reading Amazon's rejections —
+measured, not assumed:
+
+| format | tested | Amazon's answer |
+|---|---|---|
+| SB `BRAND_VIDEO` / `VIDEO` | $0.15 (r32), $0.20 (r33) | **both rejected**, `minBid: 0.25` |
+| SB `PRODUCT_COLLECTION` / `STORE_SPOTLIGHT` | $0.15 (r32), $0.10 (r33) | **both accepted** |
+| SP | $0.20 (r33) | accepted |
+
+The single `IF(is_sb, 0.25, bid_min)` constant was therefore wrong in both directions: too low for
+nothing, but far too HIGH for every non-video SB campaign — which is what silently stranded
+proven winners below $0.25.
+
+**Implemented:**
+- `V_OOB_KEYWORD`: new `agfmt` CTE (ad_group -> creative_type) and a per-arm `bid_floor`
+  (SP `bid_min`; SB $0.10 for product-collection/store-spotlight, else $0.25). All **18** inline
+  `IF(is_sb, 0.25, bid_min)` sites now read `b.bid_floor`.
+- `V_KEYWORD_LIFT`: all **5** output-clamp sites take the same per-format floor AND now
+  **clamp UP to the floor instead of suppressing**. The old rule dropped the suggestion whenever
+  the clamped value "was not a real move", which is what stranded a winner at a below-floor bid
+  indefinitely.
+- `creative_type` NULL defaults to **$0.25** (conservative): bidding too high is recoverable, a
+  rejected bulksheet row fails silently. Coverage is 40/41 ENABLED SB campaigns; the NULLs are
+  177 archived + 5 paused + 1 enabled.
+
+**Verified:** `teen girl gifts trendy stuff` (BRAND-STORE, product collection, 18c at 4.57x)
+finally resolves **$0.15 -> $0.20, RAISE_TO_TARGET** — the case that exposed the whole chain.
+0 SB suggestions below their format floor; 0 RAISE_TO_TARGET with a null value; 0 winners shelved.
+
+**Live side effects of the experiments:** 11 non-video SB keywords moved to $0.15 (r32), plus
+`tween girls gifts` to $0.10 and one SP product target to $0.20 (r33). All were zero-click.
+
+### v27.34 — never keep FUNDING a proven loser (Ori 2026-08-06, audit #2)
+
+The exact mirror of v27.28. That rule stopped the engine **shelving a proven winner**; nothing
+stopped it **funding a proven loser**. Found by re-running the per-action audit on table data
+after the v27.28-33 fixes — 36 rows across three actions:
+
+| action | leak | worst example |
+|---|---|---|
+| PROBE_WAIT (24 of 69) | sat at a **$1.00** bid awaiting a 20-click verdict already failed | `asin="B0FCFTP2QT"` — 17c at 0.00x, **$23.99 spent** |
+| PROBE_ADJUST (7 of 61) | raised to **$1.00** on losing evidence | `cheap gift for girl` — 31c at 0.00x, **$26.07 spent** |
+| NUDGE_UP (5 of 20) | nudged up keywords with real losing evidence (the nudge exists for INVISIBLE keywords) | `fuzzy diary with lock for girls` — 12c at 0.00x |
+
+**Rule:** `clicks_w >= 4 AND roas_w < 0.6` is a verdict. A keyword meeting it may not hold or take
+a probe-path raise — it parks at $0.25 (clears every per-format floor from v27.33), or HOLDs if
+already at/below that. Output layer, same place as v27.28/29, so no branch can bypass it.
+
+**Verified:** 0 losers still funded, 0 winners shelved (no regression), PARK 9 -> 44.
+All three named examples now park: $1.00 -> $0.25, $1.00 -> $0.25, $0.68 -> $0.25.
+
+**Still open for Ori's call:** PROBE_ADJUST still issues 55 raises to $1.00 in one run (scale +
+collides with "don't activate while dark"); 36 KEEP rows are proven winners with a median 31
+clicks at 1.26x taking no action; DEFENSE holds 28 keywords at ~$2.00 with 13 at zero delivery.
+
+## v27.45 — ONE membership function, ONE bid owner, ONE budget authority (2026-08-08, iteration-5 7.1)
+
+The three engine views disagreed about who owns a capped campaign (iteration-4 D3/D5 +
+iteration-5 3.2/3.7, all verifier-confirmed; ~$5.2k/wk of spend under contradictory or missing
+instructions):
+
+- **A. invisible to the ladder** — `V_OOB_BUDGET_PHASE` membership was an ANCHOR-DAY test
+  (pd>0 OR spend_1d>=budget, v27.15). 25 chronically-capped campaigns ($3,227.04/7d) were
+  invisible because their anchor day came in light — incl. **BOX-SP/PHRASE (Brand Defense)**
+  capped 3 of 7 (doctrine: never starve defense) and **ME-VIDEO/BROAD (Hunter)** at 1.37x
+  GP-ROAS/90d capped 5 of 7 that never saw its RAISE.
+- **B. silent caps** — `V_OOB_KEYWORD` filtered further to `pct_dark > 10`, leaving 12 of the
+  budget view's campaigns outside the bid engine while their budget rows said "bids do the work".
+- **C. double instruction** — `V_KEYWORD_LIFT` had no DEFER_OOB, so capped campaigns took bids
+  from BOTH engines; 6 of 8 OOB suggestions computed from DIM_KEYWORD's STALE bid instead of the
+  last-applied bid (an applied CUT $0.65 flipped into an OOB RAISE $0.75 on 'surprise balls').
+- **D. budget contradiction** — LIFT's own budget column contradicted PHASE on 3 campaigns
+  ($31.7/day); whichever page the user read won.
+
+### 1. `V_CAMPAIGN_CAP_STATE` — the single membership function (new view)
+
+Per ENABLED campaign, per America/Los_Angeles day over the trailing 14 days:
+`capped_day` = **per-day v27.15 dual signal** — >=1 CAMPAIGN_OUT_OF_BUDGET event in
+`V_SRC_AmazonAds_campaign_history` that day OR day spend >= day budget (DIM_CAMPAIGN SCD2
+effective ranges; SP spend FACT_AMAZON_ADS, SB spend sb_campaign_report; per-channel anchors
+`LEAST(MAX(date), FN_ADS_ANCHOR_CAP())`). PARITY: the anchor-day flag reproduced live v27.15
+membership 28/28 exactly.
+
+**`is_oob_owned` = calibrated HYSTERESIS** (read-only calibration 2026-08-08, 14 anchors):
+ENTER when `days_capped_7d >= 2`, EXIT only when `days_capped_7d = 0` (holds while >=1 once
+entered). Implemented STATELESSLY: entry test evaluated over the last 7 anchor days (any day
+with days_capped_7d >= 2 computed at that day, still >= 1 now) — no persisted state; both
+formulations tested identically over 14 anchors. Numbers: **49 owned, $7,306.67/7d (76% of
+ENABLED spend), 15.1 ownership flips/wk** (fixed N>=2: same capture, 27.5 flips/wk; N>=1: 7
+weak-evidence ownerships incl. a 22%-util blip; N>=3: drops silent-cap ME-SP/PT D3 — recreates
+gap B — DISQUALIFIED). Exit-at-0 tail: a campaign that stops capping stays owned up to 7 days
+after its last capped day — the price of stability, and consistent with "OOB owns while dark".
+
+### 2. Who reads it
+
+- **`V_OOB_BUDGET_PHASE`**: membership = `is_oob_owned` (INNER JOIN). pct_dark / over_budget
+  stay the MEASURED anchor-day signals. WATCH now requires `days_capped_7d <= 1` — a campaign
+  capped 2+ of 7 runs the ladder even when its anchor day was light (reason opener restated:
+  "Capped N of last 7 days (anchor day light)"). Output adds `days_capped_7d` + `is_oob_owned`
+  **for the cube to adopt later** (dashboard is local-only; Cube schema + frontend routing are a
+  follow-up — OobBudget cube does not read the new columns yet). DEFENSE GATE on the budget
+  ladder: both CUT branches now carry `NOT is_defense` — never cut a defense budget on ROAS
+  ("never starve defense"; raises and holds still apply). Latent before v27.45 (defense rarely
+  entered PHASE under the anchor-day test), live now that defense membership is persistent.
+- **`V_OOB_KEYWORD`**: population = every PHASE campaign on its channel (`is_oob_owned`, no
+  pct_dark filter). DEFENSE campaigns' keywords appear but NEVER instruct (bid_action `DEFENSE`,
+  no bid). The v27.23 activation gate reads `(pct_dark > 0 OR days_capped_7d >= 2)` so an
+  anchor-light day cannot open the activation door on a chronically capped campaign.
+- **`V_KEYWORD_LIFT`**: rows of owned campaigns emit **`DEFER_OOB`** (no suggested_bid, reason
+  "capped Nd of 7 — out-of-budget engine owns the bids") at the TOP of the output-guard ladder —
+  rows stay visible, they just don't instruct. DEFENSE rows exempt (stay `DEFENSE` — defense
+  bids belong to NEITHER engine; the budget ladder is defense's remedy). `DEFER_OOB` +
+  `APPLIED_HOLD` are no-change actions in the v27.29 no-empty-promises exempt set.
+
+No campaign in both engines' emitting sets, none orphaned: OOB-owned -> V_OOB_KEYWORD emits
+(except defense), LIFT defers; not owned -> absent from V_OOB_KEYWORD entirely, LIFT emits.
+
+### 3. OOB gets the applied-bid doctrine
+
+`V_OOB_KEYWORD` adopts LIFT's v27.4 applied/ap pattern verbatim (outermost wrapper, mirrors
+PHASE's budget hold): last applied INCREASE_BID/REDUCE_BID per (campaign, targeting) within 48h;
+applied TODAY (LA) or applied value not yet reflected in the config bid (|delta| > 0.005) =>
+`bid_action 'APPLIED_HOLD'`, no suggestion. This kills the re-cut-from-stale-base and the
+cut-flips-to-raise failure: while the config lags Fivetran, the row holds; once synced, the
+suggestion computes FROM the applied bid (config == applied).
+
+### 4. Single budget authority
+
+`V_KEYWORD_LIFT.suggested_budget / budget_reason` for campaigns present in `V_OOB_BUDGET_PHASE`
+read PHASE **verbatim** (join on campaign_id; PHASE carries its own applied-hold so LIFT's
+bud_hold is bypassed for them). LIFT's healthy-campaign loss-cut budget rule survives ONLY for
+campaigns not in PHASE. Verified: 0 mismatches account-wide; the 3 contradicting campaigns
+(BOX-SBS/BROAD By Age, BOX-SP/AUTO White, FRESH-SP/BROAD BTS) now show ONE instruction.
+
+### Deployed + verified (2026-08-08)
+
+- Cap state: 109 ENABLED, 49 owned, $7,306/7d governed — matches calibration; BOX-STORE/BROAD
+  (Discovery) correctly loses ownership (1/7, util 22%), LIFT resumes it.
+- PHASE 28 -> 49 rows; ME-VIDEO/BROAD (Hunter) gets RAISE_STRONG $53 -> $79.50; Brand Defense
+  present (HOLD, mixed evidence — visible, never starved silently again).
+- V_OOB_KEYWORD 121 -> 345 rows (49 campaigns; 3 DEFENSE rows never instruct); LIFT 342 of 663
+  rows DEFER_OOB across 48 campaigns (= 49 minus defense).
+- Double-instructed keywords (both engines emitting a bid): 22 -> **0**.
+- Season gates: LIFT context_gate counts byte-identical (548 null / 88 NONE / 27 ENTRY_BLOCK);
+  OOB gate rows grew only by population.
+- All guard suites 0 violations; determinism 2x on all three views.
+
+**Out of scope / follow-ups:** Cube + dashboard routing for `is_oob_owned`/`days_capped_7d`
+(OobBudget cube, Weekly Run sections) — the columns are live on the views, adoption pending.
+`V_OOB_SEARCH_TERM` still routes its OOB/LIFT panels on `pct_dark > 10` (its negate doctrine is
+identical in both panels, so no contradiction — but its "engine" label no longer matches bid
+ownership; align it when the cube adopts cap state).
+→ Both follow-ups closed by §v27.46 below.
+
+## v27.46 — Ownership adoption: search-term panels + cube + dashboard (2026-08-09)
+
+The alignment pass that closes the v27.45 follow-ups. LABEL/POPULATION alignment only — no
+negate-doctrine change, no bid or budget logic touched.
+
+- **`V_OOB_SEARCH_TERM`**: panel routing (`engine` label + OOB membership) switches from the
+  old anchor-day `V_OOB_BUDGET_PHASE.pct_dark > 10` test to `V_CAMPAIGN_CAP_STATE.is_oob_owned`
+  — the same single membership function both bid engines already read (v27.45). The two-window
+  negate doctrine is identical in both panels, so every row keeps its `is_negate`/`is_winner`
+  verdict; only the panel a campaign's terms appear under moves. Measured at deploy: 65,205
+  rows total unchanged; 34 campaigns (30,548 rows) relabel LIFT → OOB — every one of them
+  `is_oob_owned` with `days_capped_7d` 1–7 and anchor-day `pct_dark` ≈ 0 (the silent-cap
+  population v27.45 exists to capture); zero rows move OOB → LIFT (anchor-day dark ⊆ owned,
+  since PHASE membership is already `is_oob_owned`).
+- **OobBudget cube**: exposes `isOobOwned` (boolean) + `daysCapped7d` (number) — passthrough
+  dimensions of the PHASE output columns.
+- **Weekly Run dashboard** (`KeywordLiftPhase.tsx` single-home rule): section ownership now
+  reads the cube's `isOobOwned` flag instead of deriving it client-side as
+  `pctDark > 10 || utilization >= 1.0`. The client-side derivation survives only as a FALLBACK
+  when the flag is absent from the cube response (cube cache lag during rollout); pctDark /
+  utilization remain display values. All decision logic stays in SQL (backend-first doctrine).
+
+## v27.46 guard batch — A4 DARK_BRAKE scaled by 90d reality · A5 budget no-op guard (2026-08-09)
+
+Approved batch (A1–A6); A1/A2/A3/A6 are documented in `SEASON_CONTEXT_LEDGER.md` §5.7. This
+section is the spec for the two items that live in this phase's views.
+
+### A4 — DARK_BRAKE scaled by 90d reality (`V_OOB_KEYWORD` 3 sites + `V_KEYWORD_LIFT` AUTO_BRAKE)
+
+The dark brake's TRIGGERS are unchanged (v27.17 volume override `clk1 > 10`; v27.18 seated
+brake `clk1 >= 4` or click-hog; the flat brake `clk1 >= 4`). Only the MAGNITUDE now reads the
+keyword's settled-ish 90d GP-ROAS (`roas90` — the engines' existing tier-COGS-corrected 90d
+net-ROAS; its unsettled tail UNDERSTATES GP, which only errs toward the harder brake —
+conservative direction):
+
+| 90d record | daily step |
+|---|---|
+| `roas90 >= 1.0` (proven earner) | **minimum ease −5%** (flat; `1 − 0.05`) |
+| `0.6 <= roas90 < 1.0` (middling) | `max(5%, 15% × dark)` |
+| `roas90 < 0.6` OR no 90d data | `max(5%, 30% × dark)` — the pre-v27.46 behavior |
+
+- **"Dark is never a hold"** stands: the −5% minimum always applies; floors unchanged
+  (SP $0.20 / SB per-format v27.33; every site's `GREATEST(..., floor)` untouched).
+- **BLOCK_CUT still outranks:** the season gate's cut veto sits ABOVE the brake in the gated
+  output layer — a WIN-prior-protected row stays vetoed to HOLD exactly as before (A4 edits the
+  branch magnitude in place; the veto layer is untouched). `V_OOB_KEYWORD` exposes `roas90` as
+  an output column for verification.
+- `V_KEYWORD_LIFT` has NO action named DARK_BRAKE anymore (v27.45 DEFER_OOB hands every
+  chronically-capped campaign's bids to OOB). Its one remaining dark-magnitude brake is
+  **AUTO_BRAKE** (capped auto clauses, `max(5%, 30% × dark)`) — the same scaling is applied
+  there (autos are outside the season gate, so only the roas90 tiers apply). Flagged as a
+  judgment call in the deploy report; the trigger (`clk1 >= 1`, non-winner clause) unchanged.
+- TRIM_BID's `max(15%, 30% × dark)` is a TRIM, not the dark brake — deliberately untouched.
+
+### A5 — budget no-op guard (`V_OOB_BUDGET_PHASE`)
+
+v27.29 "no empty promises" for the budget ladder: any CUT/RAISE whose `suggested_budget` equals
+the current budget after floors/rounding (|Δ| < $0.005) resolves to **HOLD** with an honest
+reason — `CUT` landing on the seasonal floor the budget already sits at → "already at the $10/$15
+floor — hold"; any other rounding no-op → "no change after rounding — hold". HOLD carries no
+suggested value. APPLIED_HOLD outranks it (a just-applied change is the more specific truth).
+Measured at deploy: 7 rows converted (all CUT-at-$10-floor).
+
+## v27.50 — the peak judged window is evidence-gated (Ori 2026-08-12)
+
+**Spec of record: `architecture/PEAK_WINDOW_RULE.md`. Read that before touching anything below.**
+
+`V_KEYWORD_LIFT`'s window W is no longer `IF(in_peak, 3, 7)`. Ori's rule: **in peak the engine
+defaults to 3 days, and a 7-day window is granted for an occurrence type ONLY where the same
+occurrence in a prior year was measured to produce better decisions at 7.** The burden of proof
+sits on the slower window — no, thin, ambiguous or conflicting evidence all resolve to 3.
+
+- `V_SEASON_PEAK_GATE` — the gate predicate, written once (v27.49 rule, unchanged; parity verified
+  over 1,827 days, 0 divergent). `season` counts it.
+- `DE_PEAK_WINDOW_OVERRIDE` — the proof, as data: window + verdict + occurrences tested + n + the
+  deciding metric + robustness count + re-measure date, per occurrence type.
+- `V_PEAK_WINDOW_RULE` — one row: today's `in_peak`, `occurrence_type`, `w_days`, `w_days_reason`.
+  `cap` reads `w_days` from it.
+
+Granted 2026-08-12: **XMAS_EARLY, XMAS_PEAK, EASTER → 7.** Everything else — BTS (the live season),
+VDAY, MDAY, GRAD, FDAY, PRIME — **→ 3.** `low_cap`, the 20/40% exploration allowance, probe slots,
+the budget floor, the click bars and the CPC band are all untouched.
+
+**`V_OOB_BUDGET_PHASE` was deliberately NOT changed.** Its own `IF(b.in_peak, b.r3, b.r7)` cut at
+lines 278/292/314, and the `today AND prev-2d` construct at 136–139, are the same 3-vs-7 question
+at budget grain and Ori's rule logically covers them — but they were not measured, so they were not
+moved. Recommendation and the reason it is lower risk (it needs BOTH a short leg and a settled long
+leg to cut, so a fresh-data understatement alone cannot condemn) are in
+`PEAK_WINDOW_RULE.md` §6.1. If a 7-override is ever applied to PHASE it must read
+`V_PEAK_WINDOW_RULE.w_days` so the two engines cannot disagree about the same campaign on the same
+day.
+
+## §v27.70 — the ladder's evidence windows under V_PEAK_WINDOW_RULE (Task 2.3, 2026-08-16)
+
+`in_peak` and the judged-window length now come from `V_PEAK_WINDOW_RULE` — the same
+burden-of-proof source the keyword engines read (3-day default in peak; 7 only for a peak that
+PROVED 7 better on last year's same occurrence; the local v27.49 season CTE is retired — two peak
+definitions in one engine eventually disagree). Every ladder leg reads a named EVIDENCE column
+defined once in `base` (`ev_s`/`ev_p` for raises and the low-tier cut, `evc_s`/`evc_p` for the
+working chronic test, plus their labels): off-peak keeps the deliberate v27.9 shape (today +
+prev-2d; 7d + 8-28d chronic); in peak every leg follows `w_days` (3 ⇒ 3d + 4-14d, 7 ⇒ 7d + 8-28d).
+Reasons print the SAME labels the predicates judge, so the sentence can never describe a window
+the decision did not read. Published: `w_days` column. First deploy (BTS, w=3): 6 of 30 flipped,
+all evidence-WIDENING — 5 HOLD→RAISE_WEAK (a noisy anchor day was blocking raises the 3-day
+window supports, e.g. VIDEO- BALL "last 3d 1.32x → raise ×1.25") and 1 CUT→HOLD (a cut that fired
+on one bad day + prev-2d, unsupported by the peak windows). Downstream note: the published
+`roas_1d`/`roas_prev2` columns are UNCHANGED (display + V_OOB_KEYWORD's raise-gate inputs) — only
+the ladder's own judgment legs moved.

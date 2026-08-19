@@ -29,10 +29,18 @@ WITH sources AS (
 
   UNION ALL
 
-  -- Performance daily
+  -- Performance daily — orders watermark: last COMPLETE day only.
+  -- Sessions gate skips mid-sync partial days (orders land before sessions).
+  -- Same rule as V_SUMMARY_7D / V_PLAN_FORECAST / V_FAMILY_NET_PROFIT_7D — see architecture/ORDERS_WATERMARK.md.
   SELECT 'FACT_AMAZON_PERFORMANCE_DAILY',
          'Amazon Performance',
-         MAX(date),
+         (SELECT MAX(date) FROM (
+            SELECT date
+            FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`
+            WHERE Performance_TYPE = 'Organic'
+            GROUP BY date
+            HAVING SUM(ASIN_SESSIONS) > 0
+         )),
          COUNT(*)
   FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`
   WHERE Performance_TYPE = 'Organic'

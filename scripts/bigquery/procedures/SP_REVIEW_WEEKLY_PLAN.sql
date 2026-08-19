@@ -10,5 +10,13 @@ BEGIN
   FROM `onyga-482313.OI.V_WEEKLY_PLAN_REVIEW` r
   WHERE p.week_start = r.week_start AND p.parent_name = r.parent_name
     AND p.season = r.season AND p.match_type = r.match_type AND p.intent_class = r.intent_class
+    -- purpose + success_metric complete the plan grain: one cell can hold e.g. a CUT
+    -- (SPEND_DOWN) and a SCALE (NET_PROFIT) plan side by side.
+    AND p.purpose = r.purpose AND p.success_metric = r.success_metric
+    -- The generator has appended differing plan VERSIONS for the same cell+purpose
+    -- (different planned_spend / expected_value). Match each row to its own review so
+    -- every version is judged against its own targets (NULL-safe equality).
+    AND COALESCE(p.planned_spend, -1) = COALESCE(r.planned_spend, -1)
+    AND COALESCE(p.expected_value, -1e18) = COALESCE(r.expected_value, -1e18)
     AND r.status IN ('ON_PLAN','OFF_PLAN');
 END;

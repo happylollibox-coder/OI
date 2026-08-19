@@ -6,8 +6,16 @@
 --   • Store / Unknown (no product P&L) → fall back to ads net profit/day
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_FAMILY_NET_PROFIT_7D` AS
 WITH wm AS (
+  -- Sessions gate skips mid-sync partial days (orders land before sessions).
+  -- Same rule as V_SUMMARY_7D / V_DATA_FRESHNESS / V_PLAN_FORECAST — see architecture/ORDERS_WATERMARK.md.
   SELECT MAX(date) AS d
-  FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY` WHERE Performance_TYPE = 'Organic'
+  FROM (
+    SELECT date
+    FROM `onyga-482313.OI.FACT_AMAZON_PERFORMANCE_DAILY`
+    WHERE Performance_TYPE = 'Organic'
+    GROUP BY date
+    HAVING SUM(ASIN_SESSIONS) > 0
+  )
 ),
 fam AS (SELECT DISTINCT parent_name FROM `onyga-482313.OI.V_CAMPAIGN_FAMILY_MAP`),
 product_np AS (   -- product-family real business net profit, avg/day over the 7 full days

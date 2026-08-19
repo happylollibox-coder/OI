@@ -6,7 +6,10 @@
 --
 -- Source Types:
 --   FBA        = From SRC_ACC_INVENTORY_FBA (historical) + V_SRC_FBAInventorySummary (today)
---                Uses fba_available_quantity = fulfillable + reserved - customer_orders
+--                Uses fba_available_quantity
+--                  = fulfillable + reserved + fc_transfer - customer_orders
+--                FC transfer = units moving between fulfillment centers; counted as
+--                "at Amazon" for supply planning (added 2026-08-13).
 --   In Transit = afn_inbound_shipped + afn_inbound_receiving from V_SRC_FBAInventorySummary
 --                Units shipped to Amazon but not yet checked in
 --   AWD        = From SRC_ACC_INVENTORY_AWD (Amazon Warehousing & Distribution)
@@ -21,7 +24,7 @@
 
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_UNIFIED_INVENTORY_SNAPSHOT` AS
 
--- FBA: fulfillable + reserved - customer_order_reserved
+-- FBA: fulfillable + reserved + fc_transfer - customer_order_reserved
 SELECT 
   Date,
   ASIN,

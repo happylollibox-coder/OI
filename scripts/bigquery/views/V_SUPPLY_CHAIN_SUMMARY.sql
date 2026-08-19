@@ -88,9 +88,15 @@ forecast_rate AS (
   SELECT asin, daily_rate, proportional_daily_demand,
     sellable_doc_walk, fba_doc_walk,
     demand_30d, demand_45d, demand_60d, demand_90d,
+    -- Supply-side (uncapped by the yearly plan) — these drive AWD targets, velocity and
+    -- the forward-planned columns. See the supply_* note in V_PLAN_FORECAST.
+    supply_daily_rate, supply_proportional_daily_demand,
+    supply_demand_30d, supply_demand_45d, supply_demand_60d, supply_demand_90d,
+    supply_sellable_doc_walk, supply_fba_doc_walk,
     last_30d_sold, last_30d_planned
   FROM `onyga-482313.OI.V_PLAN_FORECAST`
   WHERE daily_rate > 0 OR proportional_daily_demand > 0 OR last_30d_sold > 0
+     OR supply_daily_rate > 0 OR supply_proportional_daily_demand > 0
 ),
 
 -- Approved AWD Settings
@@ -113,17 +119,18 @@ SELECT
   COALESCE(se.fba_stock_qty, 0)                                   AS fba_stock_qty,
   COALESCE(se.awd_stock_qty, 0)                                   AS awd_stock_qty,
 
-  -- Velocity: use 90-day forward average (smooths seasonal dips)
-  COALESCE(fr.proportional_daily_demand, fr.daily_rate, 0)        AS daily_velocity,
+  -- Velocity: 90-day forward average (smooths seasonal dips), uncapped by the yearly plan
+  COALESCE(fr.supply_proportional_daily_demand, fr.supply_daily_rate, 0) AS daily_velocity,
 
-  -- Days of coverage (walkthrough: month-by-month depletion against forecast)
-  CASE WHEN fr.sellable_doc_walk IS NOT NULL AND fr.sellable_doc_walk < 999
-    THEN CAST(fr.sellable_doc_walk AS INT64) ELSE NULL END        AS days_of_coverage,
-  CASE WHEN fr.fba_doc_walk IS NOT NULL AND fr.fba_doc_walk < 999
-    THEN CAST(fr.fba_doc_walk AS INT64) ELSE NULL END             AS fba_days_of_coverage,
-  CASE WHEN fr.sellable_doc_walk IS NOT NULL AND fr.fba_doc_walk IS NOT NULL
-        AND fr.sellable_doc_walk < 999
-    THEN CAST(GREATEST(fr.sellable_doc_walk - fr.fba_doc_walk, 0) AS INT64)
+  -- Days of coverage (walkthrough: month-by-month depletion against forecast).
+  -- Uncapped: cover measured against plan-capped demand overstates how long stock lasts.
+  CASE WHEN fr.supply_sellable_doc_walk IS NOT NULL AND fr.supply_sellable_doc_walk < 999
+    THEN CAST(fr.supply_sellable_doc_walk AS INT64) ELSE NULL END AS days_of_coverage,
+  CASE WHEN fr.supply_fba_doc_walk IS NOT NULL AND fr.supply_fba_doc_walk < 999
+    THEN CAST(fr.supply_fba_doc_walk AS INT64) ELSE NULL END      AS fba_days_of_coverage,
+  CASE WHEN fr.supply_sellable_doc_walk IS NOT NULL AND fr.supply_fba_doc_walk IS NOT NULL
+        AND fr.supply_sellable_doc_walk < 999
+    THEN CAST(GREATEST(fr.supply_sellable_doc_walk - fr.supply_fba_doc_walk, 0) AS INT64)
     ELSE NULL END                                                  AS awd_days_of_coverage,
 
   ns.next_shipment_date,
@@ -134,12 +141,14 @@ SELECT
   END                                                              AS days_to_next_shipment,
   ns.next_shipment_qty                                             AS next_shipment_qty,
 
-  -- AWD Targets (using exact seasonal demand for next 30/45 days; only show if product has AWD stock or incoming AWD shipment)
+  -- AWD Targets (exact seasonal demand for next 30/45 days; only show if product has AWD
+  -- stock or an incoming AWD shipment). Reads the UNCAPPED demand: a stale yearly plan must
+  -- not shrink a replenishment target for a product that is outselling it.
   CASE WHEN COALESCE(se.awd_stock_qty, 0) > 0 OR COALESCE(ia.awd_incoming_qty, 0) > 0
-    THEN CAST(ROUND(COALESCE(NULLIF(fr.demand_30d, 0), fr.daily_rate * 30, 0)) AS INT64)
+    THEN CAST(ROUND(COALESCE(NULLIF(fr.supply_demand_30d, 0), fr.supply_daily_rate * 30, 0)) AS INT64)
     ELSE NULL END AS awd_target_min,
   CASE WHEN COALESCE(se.awd_stock_qty, 0) > 0 OR COALESCE(ia.awd_incoming_qty, 0) > 0
-    THEN CAST(ROUND(COALESCE(NULLIF(fr.demand_45d, 0), fr.daily_rate * 45, 0)) AS INT64)
+    THEN CAST(ROUND(COALESCE(NULLIF(fr.supply_demand_45d, 0), fr.supply_daily_rate * 45, 0)) AS INT64)
     ELSE NULL END AS awd_target_max,
   awd.approved_min_units                                           AS awd_approved_min,
   awd.approved_max_units                                           AS awd_approved_max,
@@ -149,11 +158,15 @@ SELECT
   CASE 
     WHEN (COALESCE(se.awd_stock_qty, 0) = 0 AND COALESCE(ia.awd_incoming_qty, 0) = 0) THEN NULL
     WHEN awd.approved_max_units IS NOT NULL AND awd.approved_max_units > 0
-    THEN ROUND(ABS(CAST(ROUND(COALESCE(NULLIF(fr.demand_45d, 0), fr.daily_rate * 45, 0)) AS FLOAT64) - awd.approved_max_units) / awd.approved_max_units * 100, 1)
+    THEN ROUND(ABS(CAST(ROUND(COALESCE(NULLIF(fr.supply_demand_45d, 0), fr.supply_daily_rate * 45, 0)) AS FLOAT64) - awd.approved_max_units) / awd.approved_max_units * 100, 1)
     ELSE 100.0 -- Treat as 100% diff if not approved yet
   END                                                              AS awd_diff_pct,
 
-  -- New stock measures requested
+  -- New stock measures requested.
+  -- next_*_planned stay on the PLAN-capped demand on purpose — they are the plan, and
+  -- pairing them with last_30d_planned is how plan-vs-actual is read. The AWD targets
+  -- above deliberately do not: those are supply decisions and read the uncapped demand,
+  -- which is also why awd_target_min no longer duplicates next_30d_planned.
   COALESCE(fr.last_30d_sold, 0)                                    AS last_30d_sold,
   COALESCE(fr.last_30d_planned, 0)                                  AS last_30d_planned,
   COALESCE(fr.demand_30d, 0)                                       AS next_30d_planned,
@@ -174,5 +187,6 @@ WHERE p.marketplace = 'ATVPDKIKX0DER'
   AND p.asin != 'UNKNOWN'
   AND (COALESCE(se.sellable_qty, 0) > 0
     OR COALESCE(it.in_transit_qty, 0) > 0
+    OR COALESCE(fr.supply_proportional_daily_demand, fr.supply_daily_rate, 0) > 0
     OR COALESCE(fr.proportional_daily_demand, fr.daily_rate, 0) > 0
     OR ns.next_shipment_date IS NOT NULL);

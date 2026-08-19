@@ -3626,12 +3626,56 @@ def update_po_line(po_id, product_id, field, value):
     return []
 
 
+def get_po_delete_blockers(po_id):
+    """Rows in other tables that reference this PO by purchase_order_id.
+
+    Nothing enforces referential integrity in BigQuery, and every downstream
+    rollup (V_SUPPLY_ORDERS_DASHBOARD, the Supply page payment expansion)
+    joins on purchase_order_id.  Deleting a PO out from under a payment
+    therefore does not surface an error — it silently drops that money from
+    every total.  Returns {'payments': (count, amount), 'shipment_lines': count}.
+    """
+    query = f"""
+    SELECT
+      (SELECT COUNT(*) FROM `{PAYMENTS_TABLE}` WHERE purchase_order_id = @po_id) AS payment_rows,
+      (SELECT COALESCE(SUM(payment_amount), 0) FROM `{PAYMENTS_TABLE}` WHERE purchase_order_id = @po_id) AS payment_amount,
+      (SELECT COUNT(*) FROM `{SHIPMENT_LINES_TABLE}` WHERE purchase_order_id = @po_id) AS shipment_lines
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
+    )
+    row = list(client.query(query, job_config=job_config).result())[0]
+    return {
+        'payments': (row.payment_rows or 0, float(row.payment_amount or 0)),
+        'shipment_lines': row.shipment_lines or 0,
+    }
+
+
 def _do_delete_po(po_id):
     """Delete an entire PO (all rows) from ORDERS_TABLE.
+
+    Refuses when vendor payments or shipment lines still point at the PO —
+    deleting it would orphan them and silently remove the money from every
+    rollup.  Detach or delete those rows first.
 
     Returns errors_list (empty on success).  Caller is responsible for clear_data_cache().
     Raises on streaming-buffer or other BQ errors so the caller can inspect the exception.
     """
+    blockers = get_po_delete_blockers(po_id)
+    pay_rows, pay_amount = blockers['payments']
+    ship_lines = blockers['shipment_lines']
+    if pay_rows or ship_lines:
+        parts = []
+        if pay_rows:
+            parts.append(f'{pay_rows} vendor payment allocation(s) totalling ${pay_amount:,.2f}')
+        if ship_lines:
+            parts.append(f'{ship_lines} shipment line(s)')
+        return [
+            f'Cannot delete {po_id}: still referenced by ' + ' and '.join(parts) +
+            '. Delete or re-point those first, otherwise the amounts are orphaned '
+            'and silently vanish from the Supply totals.'
+        ]
+
     query = f"""
     DELETE FROM `{ORDERS_TABLE}`
     WHERE purchase_order_id = @po_id
@@ -3896,7 +3940,11 @@ def api_po_delete(po_id):
 def delete_po(po_id):
     """Delete a purchase order"""
     try:
-        _do_delete_po(po_id)
+        errors = _do_delete_po(po_id)
+        if errors:
+            for e in errors:
+                flash(str(e), 'error')
+            return redirect(url_for('po_details', po_id=po_id))
         clear_data_cache()
         flash(f'Purchase Order {po_id} deleted successfully!', 'success')
         return redirect(url_for('index'))
@@ -3927,14 +3975,11 @@ def bulk_delete_pos():
     errors = []
     for po_id in po_ids:
         try:
-            query = f"""
-            DELETE FROM `{ORDERS_TABLE}`
-            WHERE purchase_order_id = @po_id
-            """
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[bigquery.ScalarQueryParameter("po_id", "STRING", po_id)]
-            )
-            client.query(query, job_config=job_config).result()
+            # Route through the helper so the payment/shipment-reference guard applies here too.
+            blocked = _do_delete_po(po_id)
+            if blocked:
+                errors.append(f'{po_id}: {"; ".join(str(x) for x in blocked)}')
+                continue
             deleted += 1
         except Exception as e:
             errors.append(f'{po_id}: {str(e)}')
@@ -7203,6 +7248,7 @@ def get_campaign_mapping():
     query = """
     SELECT campaign_id, campaign_name, spend_60d,
            current_experiment_id, current_experiment_name, current_strategy_id,
+           current_family,
            suggested_family, suggested_strategy, suggested_experiment_id,
            confidence, source
     FROM `onyga-482313.OI.V_CAMPAIGN_MAPPING_STATUS`
@@ -9536,7 +9582,7 @@ def resolve_coverage_window(win_key=None):
 @app.route('/api/applied-recent')
 @cache_result(ttl_seconds=20)
 def applied_recent():
-    """LIVE 'already applied' signal, straight from FACT_PPC_CHANGE_LOG.
+    """LIVE 'already applied' signal from V_PPC_CHANGE_LOG_APPLIED (change log minus FAILED_UPLOAD rows).
 
     days_since_suggestion is materialised into the cube T_* tables, which only refresh on the periodic
     full rebuild — so a bulksheet you just uploaded doesn't show as 'applied' until the next rebuild
@@ -9551,7 +9597,7 @@ def applied_recent():
         rows = client.query(
             "SELECT CAST(keyword_id AS STRING) AS keyword_id, "
             "  DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(DATE(applied_at,'America/Los_Angeles')), DAY) AS dss "
-            "FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` "
+            "FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED` "
             "WHERE keyword_id IS NOT NULL AND CAST(keyword_id AS STRING) != '' "
             "  AND applied_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 8 DAY) "
             "GROUP BY 1"
@@ -10021,14 +10067,23 @@ def live_campaigns():
     that already exists Amazon needs the real ids, else the child rows fail "Missing Parent ID" and
     — because validation is whole-sheet — take the entire upload down with them (Ori 2026-07-24:
     37 records, 0 applied). The exporter uses these ids when it skips the Create scaffold.
+
+    Also returns portfolio_id — the campaign's LAST NON-NULL portfolio. A Campaign Update row with
+    a blank Portfolio ID does not mean "leave it alone": Amazon reads it as "no portfolio" and
+    detaches the campaign. Every budget row the cockpit exported was doing this (Ori 2026-08-09:
+    16 campaigns detached at the 12:56 upload; 51 sitting portfolio-less in total), so the exporter
+    now echoes the current portfolio back on those rows. IGNORE NULLS is the point — the campaigns
+    that need this most are the ones already detached, whose CURRENT portfolio_id is null; the last
+    good value is the one to restore.
     """
     try:
         rows = list(client.query("""
-            SELECT c.campaign_id, c.name, c.state, ag.ad_group_id
+            SELECT c.campaign_id, c.name, c.state, c.portfolio_id, ag.ad_group_id
             FROM (
               SELECT campaign_id,
                 ARRAY_AGG(campaign_name ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS name,
-                ARRAY_AGG(state         ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state
+                ARRAY_AGG(state         ORDER BY date DESC LIMIT 1)[OFFSET(0)] AS state,
+                ARRAY_AGG(portfolio_id IGNORE NULLS ORDER BY date DESC LIMIT 1)[SAFE_OFFSET(0)] AS portfolio_id
               FROM `onyga-482313.OI.V_SRC_AmazonAds_campaign_history`
               WHERE campaign_name IS NOT NULL
               GROUP BY campaign_id
@@ -10045,7 +10100,8 @@ def live_campaigns():
         """).result())
         return jsonify({'campaigns': [
             {'campaign_id': r['campaign_id'], 'name': r['name'],
-             'state': r['state'], 'ad_group_id': r['ad_group_id']} for r in rows]})
+             'state': r['state'], 'ad_group_id': r['ad_group_id'],
+             'portfolio_id': r['portfolio_id']} for r in rows]})
     except Exception as e:
         app.logger.error(f"live_campaigns failed: {e}")
         # Fail CLOSED-ish: an empty list means the caller falls back to its other sources rather
