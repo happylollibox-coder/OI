@@ -23,8 +23,14 @@
 --     which is a COGS-imputation artifact, not a real negative halo — see spec §9.1)
 --   · INVEST families are exempt entirely; they are governed by budget + trajectory, not by a bar
 --
--- WINDOW: the halo is read from V_FAMILY_PNL's settled 90-day period (M3) and this view is
--- materialised MONTHLY by SP_SNAPSHOT_FAMILY_BAR — bids must not chase organic noise day to day.
+-- WINDOW AND CADENCE (corrected 2026-08-19 — the header used to say MONTHLY and the deployment is
+-- DAILY; the deployment is right and the comment was wrong). The halo is read from V_FAMILY_PNL's
+-- settled 90-day M3 window and SP_SNAPSHOT_FAMILY_BAR materialises this view DAILY inside the
+-- orchestrator. That is safe, and the original "monthly" instinct was over-cautious: the fear was
+-- bids chasing organic noise, but a 90-day settled window moves by roughly one day in ninety per
+-- rebuild, so a daily refresh cannot produce a jumpy bar. Daily also removes a second scheduler and
+-- keeps the bars in the same transaction-of-thought as the engines that read them. Read
+-- computed_on if you need to know how fresh a bar actually is.
 --
 -- CALIBRATION IS A STANDING TEST, NOT A ONE-OFF: a family passing its keyword bar must also clear
 -- total net ROAS 1.0. If that ever breaks, the bridge is miscalibrated and the credit is wrong.

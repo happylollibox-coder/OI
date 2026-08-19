@@ -789,7 +789,10 @@ SELECT
   COUNTIF(launch_age_months <= 3 AND phase <> 'RAMP')                   AS ramp_misassigned,
   COUNTIF(launch_age_months > 3  AND phase <> 'PROOF')                  AS proof_misassigned,
   COUNTIF(phase = 'RAMP' AND LOWER(verdict) LIKE '%unprofitab%')        AS ramp_judged_on_profit,
-  COUNTIF(ceiling_breached AND exemption_live)                          AS breach_still_exempt
+  COUNTIF(spend_breached AND exemption_live)                            AS spend_breach_still_exempt,
+  COUNTIF(takeover_target_organic_units IS NULL
+          AND LOWER(verdict) LIKE '%target%'
+          AND LOWER(verdict) NOT LIKE '%not set%')                       AS null_target_judged_as_zero
 FROM `onyga-482313.OI.V_INVEST_STATUS`;
 ```
 
@@ -850,9 +853,18 @@ trend AS (
     MAX(IF(rn=1, net_profit, NULL))     AS np_m0,  MAX(IF(rn=2, net_profit, NULL))     AS np_m1,  MAX(IF(rn=3, net_profit, NULL))     AS np_m2
   FROM ranked WHERE rn <= 3 GROUP BY family
 ),
--- month-to-date net profit against the declared ceiling (ceiling is denominated in NET PROFIT)
+-- MONTH-TO-DATE SPEND RATE — the binding constraint (Ori 2026-08-19: "spend rate binds").
+-- daily_investment is the number Ori actually sanctioned ($30/day Bunny, $55/day LolliBall). The
+-- net-profit ceiling is computed too, but only as a catastrophe backstop: measured 2026-08-19 both
+-- families ran 1.5-1.8x over sanctioned SPEND while their month-to-date LOSS was just $259 and $74
+-- against ceilings of $913 and $1,674 — a loss ceiling on a product that nearly covers its costs
+-- never fires. Enforcing on it would have been enforcement in name only.
 mtd AS (
-  SELECT u.family, ROUND(SUM(u.sales - u.cogs) - SUM(u.ad_cost), 2) AS mtd_net_profit
+  SELECT u.family,
+    ROUND(SUM(u.sales - u.cogs) - SUM(u.ad_cost), 2)                       AS mtd_net_profit,
+    ROUND(SUM(u.ad_cost), 2)                                               AS mtd_spend,
+    COUNT(DISTINCT u.date)                                                 AS mtd_days,
+    ROUND(SAFE_DIVIDE(SUM(u.ad_cost), NULLIF(COUNT(DISTINCT u.date), 0)), 2) AS mtd_spend_per_day
   FROM `onyga-482313.OI.V_UNIFIED_DAILY` u
   WHERE u.date >= DATE_TRUNC(CURRENT_DATE('America/Los_Angeles'), MONTH)
   GROUP BY 1
@@ -861,14 +873,22 @@ SELECT
   b.family,
   b.launch_age_months,
   IF(b.launch_age_months <= 3, 'RAMP', 'PROOF')                                       AS phase,
+  -- THE BINDING SANCTION
+  b.daily_investment,
+  COALESCE(mtd.mtd_spend_per_day, 0)                                                  AS mtd_spend_per_day,
+  ROUND(SAFE_DIVIDE(COALESCE(mtd.mtd_spend_per_day, 0), NULLIF(b.daily_investment, 0)), 2) AS spend_rate_ratio,
+  (COALESCE(mtd.mtd_spend_per_day, 0) > b.daily_investment)                           AS spend_breached,
+  -- the catastrophe backstop, published but NOT enforcing
   b.monthly_loss_ceiling,
   COALESCE(mtd.mtd_net_profit, 0)                                                     AS mtd_net_profit,
   ROUND(100 * SAFE_DIVIDE(-COALESCE(mtd.mtd_net_profit, 0), NULLIF(b.monthly_loss_ceiling, 0)), 1) AS ceiling_used_pct,
   (-COALESCE(mtd.mtd_net_profit, 0) >= b.monthly_loss_ceiling)                        AS ceiling_breached,
-  b.end_date,
-  DATE_DIFF(b.end_date, CURRENT_DATE('America/Los_Angeles'), DAY)                     AS days_left,
-  -- THE EXEMPTION: live only while inside the window AND under the ceiling. The engine stops, not the human.
-  (CURRENT_DATE('America/Los_Angeles') <= b.end_date
+  b.stop_date,
+  DATE_DIFF(b.stop_date, CURRENT_DATE('America/Los_Angeles'), DAY)                    AS days_left,
+  -- THE EXEMPTION: live only while inside the window AND under the SANCTIONED SPEND RATE.
+  -- The engine stops, not the human. Spend rate binds; the loss ceiling is a backstop behind it.
+  (CURRENT_DATE('America/Los_Angeles') <= b.stop_date
+   AND COALESCE(mtd.mtd_spend_per_day, 0) <= b.daily_investment
    AND -COALESCE(mtd.mtd_net_profit, 0) < b.monthly_loss_ceiling)                     AS exemption_live,
   t.org_m2, t.org_m1, t.org_m0,
   t.tnr_m2, t.tnr_m1, t.tnr_m0,
@@ -890,10 +910,13 @@ SELECT
       END
     ELSE
       CASE
+        WHEN b.takeover_target_organic_units IS NULL
+          THEN CONCAT('no take-over target set — ', CAST(t.org_m0 AS STRING),
+                      ' organic units last complete month, but nothing to judge it against')
         WHEN t.org_m0 >= b.takeover_target_organic_units
           THEN CONCAT('took over — ', CAST(t.org_m0 AS STRING), ' organic units against a target of ', CAST(b.takeover_target_organic_units AS STRING))
         ELSE CONCAT('short of target — ', CAST(t.org_m0 AS STRING), ' of ', CAST(b.takeover_target_organic_units AS STRING), ' organic units, ',
-                    CAST(DATE_DIFF(b.end_date, CURRENT_DATE('America/Los_Angeles'), DAY) AS STRING), ' days left')
+                    CAST(DATE_DIFF(b.stop_date, CURRENT_DATE('America/Los_Angeles'), DAY) AS STRING), ' days left')
       END
   END                                                                                 AS verdict
 FROM b
