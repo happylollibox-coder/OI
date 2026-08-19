@@ -1349,7 +1349,8 @@ git commit -m "docs: TWO_BOOK_PNL SOP"
 The feature is done when all of these hold:
 
 1. `V_FAMILY_PNL` reproduces the spec §3 baseline (Task 1 assertion, zero mismatches).
-2. `V_FAMILY_BAR` passes all five safety and calibration assertions (Task 4).
+2. `V_FAMILY_BAR` passes all five safety and calibration assertions (Task 4), and its monthly
+   re-check alarms only on PERMISSIVE disagreements, never conservative ones.
 3. `T_FAMILY_BAR` is rebuilt by the orchestrator before the engine `T_` builds (Task 5 Step 7).
 4. An incomplete launch declaration is refused by the table (Task 2 Step 6).
 5. A RAMP-phase verdict never mentions profitability (Task 6 assertion).

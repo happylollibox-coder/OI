@@ -29,6 +29,29 @@
 -- CALIBRATION IS A STANDING TEST, NOT A ONE-OFF: a family passing its keyword bar must also clear
 -- total net ROAS 1.0. If that ever breaks, the bridge is miscalibrated and the credit is wrong.
 -- =============================================
+-- ── WHAT THE BAR TEST ACTUALLY IS, ALGEBRAICALLY (proved in review, 2026-08-19) ─────────────
+-- V_FAMILY_PNL defines halo_factor = (sales-cogs)/ads_gross_profit, which over a shared ad_cost
+-- denominator is exactly total_net_roas / ads_net_roas. Substitute that into the bar test:
+--     ads >= 1 / (1 + 0.5*(total/ads - 1))
+--  => ads + 0.5*(total - ads) >= 1
+--  => (ads + total) / 2 >= 1
+-- SO THE BAR TEST IS THE ARITHMETIC MEAN of the two ROAS measures against 1.0. The 0.5 credit
+-- literally means "judge the family on the midpoint between what ads earned and what everything
+-- earned". That is a feature, and it makes the safety direction PROVABLE rather than hopeful:
+--   · when the halo is REAL (>1, i.e. total > ads) the mean sits BELOW total, so the bar is
+--     STRICTER than the truth test. It can never be more permissive. This is the conservative
+--     direction we want, guaranteed by algebra rather than by luck.
+--   · a PERMISSIVE disagreement (clears the bar, fails total >= 1.0) is therefore only reachable
+--     when halo < 1 — total profit BELOW ads-attributed profit, which is not physically sensible
+--     and today means the COGS tier imputation on new products. The fix for that is the COGS, never
+--     the bar.
+-- CONSEQUENCE FOR THE STANDING CALIBRATION CHECK: agreement between the bar and total_net_roas is
+-- a DATA COINCIDENCE on any given window, not an identity. Measured across all 84 (family, period)
+-- rows of V_FAMILY_PNL: 10 disagree — 8 CONSERVATIVE (fails bar, clears truth = the engine
+-- under-spends, harmless) and 2 PERMISSIVE, both on halo<1 rows. So only PERMISSIVE breaks are
+-- defects. A monitor that alarms on any disagreement will cry wolf 8 times out of 10.
+-- KNIFE EDGE TO KNOW ABOUT: Bottle's 90d total_net_roas is 0.998 — it fails the truth test by 0.2%,
+-- so its agreement can flip on a small restatement without anything being wrong.
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_FAMILY_BAR` AS
 WITH k AS (
   SELECT
