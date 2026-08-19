@@ -132,11 +132,30 @@ without a decision — becomes conditional on BOTH `today ≤ end_date` AND
 `month-to-date loss < ceiling`. When either fails the family reverts to Harvest rules and its
 halo-adjusted bar applies. **The engine stops, not the human.**
 
-**The take-over test.** Primary metric is **organic units in absolute terms**, with organic *share*
-as context only and net profit as the outcome. Share alone is a trap: it rises when ads units
-collapse, which looks like success and is not. Bunny and LolliBall already sit at ~31% organic —
-comparable to Lollibox's 29.7% — so by share alone they would read "finished" while still losing
-$2,892/month. Growing organic units plus a net-profit line walking toward zero is the real signal.
+**The take-over test has two phases, because the question changes with age** (Ori 2026-08-19:
+*"the question of launch products is are they improving — not are they profitable — in the first 3
+months"*).
+
+**Months 0–3, the RAMP. Judged on TRAJECTORY only. Nothing is required to be positive; everything
+is required to be improving.** Three trends, measured month over month:
+- **organic units** — rising (the primary signal)
+- **total net ROAS** — rising (e.g. 0.43 → 0.55 → 0.68)
+- **net profit** — loss shrinking
+
+The decision rule is *"no improvement across two consecutive months"*, never *"still unprofitable"*.
+A profitable-at-month-2 test would kill every launch that was working.
+
+**Months 3+, the PROOF.** Level starts to matter: the family must be closing on its declared
+take-over target by its end date, and the ceiling and clock enforce themselves per above.
+
+**Why absolute organic units, not share.** Share is a trap: it rises when ads units collapse, which
+looks like success and is not. Bunny and LolliBall already sit at ~31% organic — comparable to
+Lollibox's 29.7% — so by share alone they would read "finished" while still losing $2,892/month.
+
+**A useful consequence: trajectory is robust to a level bias.** Measuring change rather than level
+means a constant COGS misallocation cancels out of the trend — which materially de-risks open item
+§9.1 (LolliBall's implausible 0.87 halo). The bias still corrupts the *level*, so it must be fixed
+before LolliBall is judged in its months-3+ PROOF phase, but it does not block the ramp test.
 
 ## 6. The daily brief
 
@@ -184,8 +203,10 @@ instead of *"the account lost $5,612"* — same money, and the second sentence w
 
 1. **LolliBall's halo factor is 0.87** — total gross profit *below* ads-attributed, which is not
    physically sensible. Almost certainly the COGS tier imputation on new products
-   (`project_ads_cogs_price_imputation`). **Must be resolved before LolliBall's numbers drive any
-   decision.**
+   (`project_ads_cogs_price_imputation`). **Downgraded from blocking to scheduled** by the §5 ramp
+   test: a constant COGS bias cancels out of a month-over-month trend, so it does not corrupt the
+   only judgement LolliBall faces for now. It MUST be fixed before LolliBall reaches its months-3+
+   PROOF phase, where the level is judged.
 2. **Causality is assumed, not proven.** We cannot prove the halo is caused by ads. The 0.5 credit
    is the hedge, and the feedback loop is the test: if lowering a family's bar does not improve its
    net profit over the following quarter, the credit was too generous and gets cut.
