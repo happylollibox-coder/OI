@@ -1406,6 +1406,14 @@ views:
       - V_UNIFIED_DAILY
       - DE_LAUNCH_INVESTMENT
 
+  - name: "V_FAMILY_BAR"
+    type: "view"
+    source_files: ["scripts/bigquery/views/V_FAMILY_BAR.sql"]
+    description: "v27.84 (two-book P&L, 2026-08-19) — THE ENGINE BRIDGE: a family's MEASURED organic halo becomes the per-family bar that the keyword engine judges ads-attributed GP-ROAS against. ADJUST THE BAR, NEVER THE MEASUREMENT: organic sales are measurable at family grain and are NOT attributable to a keyword, so the engine keeps measuring ads-attributed ROAS at keyword grain (the only honest measure there) and what changes is the BAR, set once per family. keyword_bar = 1 / (1 + credit * (halo_factor - 1)) with credit = 0.5, a DECLARED tunable in the k CTE (crediting all organic to ads is wrong because brand search and repeat buyers would happen anyway; crediting none is the pre-2026-08-19 behaviour and is why the engine undervalued rank-building). SAFETY PROPERTIES, all asserted: the credit may only LOWER a bar and never raise one above 1.0 (it can never justify a cut); the bar is FLOORED at 0.60 (verified binding — across the full V_FAMILY_PNL the halo ranges 0.56 to 29.70 and 5 rows would otherwise compute a raw bar as low as 0.066; all clamp to exactly 0.60); where halo_factor <= 1.0 NO credit is given and the bar stays 1.0; INVEST families carry bar_exempt = TRUE and are governed by budget + trajectory instead. CALIBRATION IS A STANDING MONTHLY TEST, NOT A ONE-OFF: every family clearing its keyword bar must also clear total net ROAS 1.0 and vice versa — 0 breaks on the M3 window at deploy. Reads the SETTLED 90-day period (period_label = 'M3') because bids must not chase organic noise day to day; materialised monthly by SP_SNAPSHOT_FAMILY_BAR, and the ENGINES MUST JOIN THAT TABLE, never this view (planner ceiling). Bars 2026-08-19: LolliME 0.88 (running 1.11, clears), Lollibox 0.83 (1.03, clears), Bottle 0.77 (0.63, fails — but halo 1.59 is the account's strongest, which is why the bar is the lowest of the Harvest families), Fresh 0.94 (0.77, fails), Bunny 0.80 and LolliBall 0.93 both exempt (INVEST). Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md §4."
+    dependencies:
+      - V_FAMILY_PNL
+      - V_BOOK_ASSIGNMENT
+
 
 # ═══════════════════════════════════════════════════════════════
 # TABLES
