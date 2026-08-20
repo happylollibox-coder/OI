@@ -9,13 +9,32 @@
 --
 -- THE BINDING CONSTRAINT IS daily_investment, THE SPEND RATE (Ori 2026-08-19: "spend rate binds").
 -- That is the number actually sanctioned. monthly_loss_ceiling rides along as a catastrophe backstop
--- because a net-profit ceiling on a product that nearly covers its costs almost never fires —
--- measured 2026-08-19, both families ran 1.5-1.8x over sanctioned spend while losing only $259 and
--- $74 against ceilings of $913 and $1,674.
+-- because a net-profit ceiling on a product that nearly covers its costs almost never fires. THE
+-- SHAPE IS THE POINT AND IT DOES NOT GO STALE: both families run well OVER their sanctioned daily
+-- spend while consuming only a small fraction of a ceiling denominated in net profit, so the ceiling
+-- stays silent and only the rate binds. (Illustrative, 2026-08-20: 1.61x and 1.94x over rate at
+-- 22.3% and 0.9% of ceilings of $913 and $1,674. These move daily — read V_INVEST_STATUS, never
+-- this comment, and never restore a sanctioned value from a number written in a file.)
 --
 -- AGE COMES FROM FIRST SALE, NOT FROM THE DECLARATION. sanctioned_on is when Ori signed the
--- investment off (2026-08-13 for both families), months after either launch actually began. Same
--- first-sale definition as V_LAUNCH_EXEMPTION / V_PRODUCT_LAUNCH_MODEL so nothing can disagree.
+-- investment off (2026-08-13 for both families), months after either launch actually began.
+--
+-- SAME ANCHOR AS V_LAUNCH_EXEMPTION, DELIBERATELY DIFFERENT UNITS — AND THEY WILL NOT MATCH
+-- (corrected 2026-08-20; this comment used to claim "so nothing can disagree", which was false).
+-- Both views date the launch from the family's first sale in V_UNIFIED_DAILY, so the ANCHOR is
+-- shared and neither can invent a different launch date. The UNITS are not shared and are not meant
+-- to be: this view counts CALENDAR-MONTH boundaries crossed (DATE_DIFF ... MONTH, a whole number),
+-- V_LAUNCH_EXEMPTION divides elapsed days by 30.44 (one decimal). Measured 2026-08-20 the two read
+-- Bunny 3 vs 2.9 and LolliBall 2 vs 1.8. EXPECT A GAP OF UP TO ABOUT A MONTH, in either direction,
+-- and never treat a difference as a defect.
+--
+-- WHY THE CALENDAR COUNT IS RIGHT HERE, AND MUST NOT BE "HARMONISED" TO THE OTHER ONE: this number
+-- selects RAMP vs PROOF in V_INVEST_STATUS, a test that reads COMPLETE CALENDAR MONTHS. Counting
+-- month boundaries lands the change on the 1st, the same grain the measurement uses, instead of
+-- mid-month on an arbitrary day. It is also the pattern already used in V_LOW_STOCK_ADS.sql:860.
+-- THE FLIPS ARE ALREADY DATED, so nobody has to re-derive them by hand: on 2026-09-01 Bunny turns 4
+-- and moves RAMP -> PROOF; on 2026-10-01 LolliBall does. (Under elapsed-days/30.44 the same two
+-- flips would land 2026-08-24 and 2026-09-26, splitting the months they are measured on.)
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_BOOK_ASSIGNMENT` AS
 WITH fam AS (
@@ -25,8 +44,25 @@ WITH fam AS (
   -- row in V_FAMILY_PNL, the measurement spine. Admitting it here would hand the two-book system a
   -- seventh "family" with a book but no P&L to judge it against, and every downstream join would
   -- carry the orphan. Unmapped ad spend is a campaign-MAPPING coverage problem, surfaced by the
-  -- Campaign Mapping panel, not a book to assign. Excluding it makes this view's family universe
-  -- exactly V_FAMILY_PNL's, so the two can never disagree about who exists.
+  -- Campaign Mapping panel, not a book to assign.
+  --
+  -- THIS DOES NOT MAKE THE TWO FAMILY UNIVERSES THE SAME, AND AN EARLIER VERSION OF THIS COMMENT
+  -- CLAIMED IT DID (corrected 2026-08-20). Excluding 'Unknown' removes the ONE sentinel they were
+  -- guaranteed to differ on; it does not align the keys. This view is CAMPAIGN-keyed (through
+  -- V_CAMPAIGN_FAMILY_MAP), ENABLED-campaign-only, override-first and not windowed. V_FAMILY_PNL is
+  -- ASIN-keyed (through DIM_PRODUCT) over a dated window. Two live triggers, both measured
+  -- 2026-08-20:
+  --   · DE_CAMPAIGN_FAMILY overrides 3 campaigns to parent_name 'Store', which is not a value any
+  --     ASIN carries. All 3 are PAUSED today, so 'Store' does not reach this view — enable ONE of
+  --     them and this view publishes a 7th family with a book and no P&L to judge it against. That
+  --     is not a hypothetical: the override rows are already in the table.
+  --   · 4 ASINs with oi_is_active = TRUE carry parent_name NULL, so their sales belong to no family
+  --     on either side.
+  -- Today both sides happen to return the same 6 families. That is today's data, not an invariant.
+  -- V_TWO_BOOK_BRIEF therefore joins the two universes with a FULL OUTER JOIN (review round 1,
+  -- 2026-08-20) so a family present on one side and absent on the other is published rather than
+  -- silently joined away. DO NOT SIMPLIFY THAT JOIN to an inner or left join because the two
+  -- universes "look identical" on the day you check.
   SELECT DISTINCT parent_name AS family
   FROM `onyga-482313.OI.V_CAMPAIGN_FAMILY_MAP`
   WHERE parent_name IS NOT NULL
@@ -50,14 +86,26 @@ decl AS (
   FROM `onyga-482313.OI.DE_LAUNCH_INVESTMENT`
   -- one live declaration per family; newest sanction wins if two ever overlap
   -- TIE-BREAK MUST MATCH V_LAUNCH_EXEMPTION EXACTLY (fixed 2026-08-19 after Task 3 review).
-  -- Both views answer "which declaration is live" off the same table, and the header above claims
-  -- they cannot disagree — so the ordering has to be identical, not merely similar. The table's own
+  -- Both views answer "which declaration is live" off the same table, and about THAT they really
+  -- must not disagree — which declaration is live is a fact, not a unit of measurement — so the
+  -- ordering has to be identical, not merely similar. (Re-verified 2026-08-20: both order by
+  -- updated_at DESC NULLS LAST, stop_date DESC, daily_investment DESC — V_LAUNCH_EXEMPTION.sql:120.
+  -- This is the ONE thing the two views are pinned together on; their family universes and their
+  -- age UNITS are not, see the header.) The table's own
   -- documented convention is "re-sanctioning = INSERT a row with a later updated_at (latest wins)",
   -- and V_LAUNCH_EXEMPTION orders by updated_at DESC NULLS LAST, stop_date DESC, daily_investment
   -- DESC. Ordering by sanctioned_on instead was harmless today (exactly one row per family) but
   -- would have named a different declaration live the moment Ori inserts a correction — the exact
-  -- disagreement this design exists to prevent. The trailing keys make the pick TOTAL, so it can
-  -- never coin-flip between two rows sharing an updated_at.
+  -- disagreement this design exists to prevent. The trailing keys break the tie between two rows
+  -- sharing an updated_at. THEY DO NOT MAKE THE PICK TOTAL, and an earlier version of this comment
+  -- claimed they did (corrected 2026-08-20 in the same sweep that deleted this file's two other
+  -- false invariants). Three rows for one family sharing updated_at AND stop_date AND
+  -- daily_investment would still coin-flip. What saves us is that BOTH views coin-flip the SAME way
+  -- off the same ordering, so they cannot pick different declarations — which is the property that
+  -- actually matters here. Re-checked 2026-08-20: DE_LAUNCH_INVESTMENT holds exactly one row per
+  -- family and one distinct key triple per family, so nothing ties today. If a fully deterministic
+  -- pick is ever needed, add a unique trailing key (e.g. sanctioned_on, then a row identifier) to
+  -- BOTH views in one commit, never to one alone.
   QUALIFY ROW_NUMBER() OVER (
     PARTITION BY parent_name
     ORDER BY updated_at DESC NULLS LAST, stop_date DESC, daily_investment DESC) = 1

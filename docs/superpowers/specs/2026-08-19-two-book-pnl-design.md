@@ -16,7 +16,14 @@
 >    backstop behind it.
 > 2. **§4 cadence: the keyword bar is rebuilt DAILY, not monthly.** `SP_SNAPSHOT_FAMILY_BAR` runs as
 >    orchestrator task 20.5g-1, every day, before the engine `T_` builds. The 90-day input window is
->    still settled; only the refresh cadence differs.
+>    still settled; only the refresh cadence differs. **Why daily is right, and why §4's stated fear
+>    does not apply (added 2026-08-20):** the fear behind "monthly, not daily" was bids chasing
+>    organic noise. The input is a *settled* 90-day window, so one rebuild moves it by roughly one
+>    day in ninety — about 1% of the window — and a bar built on it cannot be jumpy. Daily also
+>    removes a second scheduler and keeps the bars in the same daily pass as the engines that will
+>    read them. Note this is the MATERIALISATION cadence only: the separate clause in §4 calling the
+>    bar-vs-total-net-ROAS calibration a standing **monthly** check is a different cadence, it is
+>    correct, and it stands.
 > 3. **§5 "a declaration requires three fields" is an OPEN QUESTION, not a shipped rule.** Live
 >    production has Bunny and LolliBall in the Invest book with `takeover_target_organic_units` NULL,
 >    deliberately, until Ori supplies the numbers. Task 9 of the plan states both options and is
@@ -130,11 +137,21 @@ therefore work at family grain while the engine decides at keyword grain. The br
 - **Credit is 0.5, and it is a declared tunable.** Crediting all organic to ads is wrong (brand
   search and repeat buyers would happen anyway); crediting none is today's behaviour and is why the
   engine undervalues rank-building. Half is the conservative middle.
-- **Where halo_factor < 1.0, no credit is given** and the bar stays at 1.0.
+- **Where halo_factor is at or below 1.0, no credit is given** and the bar stays at 1.0. (The
+  deployed test is `halo_factor > 1.0` for credit, i.e. `<= 1.0` gets none; behaviourally identical
+  at exactly 1.0, wording aligned 2026-08-20 with `V_FAMILY_BAR.sql`.)
 - The credit can only ever **lower** a bar, never raise one — it cannot be used to justify a cut.
 - The bar is **floored at 0.60**; no halo excuses a catastrophic keyword.
-- Halo factor is computed on a **settled 90-day window** at family grain and refreshed **monthly**,
-  not daily — bids must not chase organic noise.
+- Halo factor is computed on a **settled 90-day window** at family grain and refreshed ~~**monthly**,
+  not daily~~ — bids must not chase organic noise.
+  > **CORRECTION 2026-08-20 — the cadence is DAILY, and this line's rejection of daily by name is
+  > superseded.** `SP_SNAPSHOT_FAMILY_BAR` runs as orchestrator task 20.5g-1 in
+  > `SP_ORCHESTRATE_DAILY_REFRESH`, every day, and has since it was deployed; the deployed
+  > `V_FAMILY_BAR.sql` header was corrected on 2026-08-19 and `config.yaml` on 2026-08-20. The
+  > reasoning above is preserved because the *fear* was legitimate and worth keeping on record — it
+  > is the conclusion that was wrong. A settled 90-day window moves by roughly one day in ninety per
+  > rebuild, about 1% of the window, so a daily refresh cannot make the bar chase noise. The window
+  > itself is unchanged: still settled, still 90 days.
 - **Invest families are exempt** from the bar entirely; they are governed by §5.
 
 **Validation property:** the bar reproduces the total-net-ROAS verdicts at family level (LolliME and
@@ -209,7 +226,7 @@ instead of *"the account lost $5,612"* — same money, and the second sentence w
 | `V_FAMILY_PNL` | family × period: net profit, total net ROAS, ads net ROAS, halo factor, organic units/share. The measurement spine. |
 | `DE_LAUNCH_INVESTMENT` | the declaration: family, monthly ceiling, start/end date, take-over target, declared_by/at. |
 | `V_BOOK_ASSIGNMENT` | family → HARVEST/INVEST, derived from the declaration + dates. Default HARVEST. |
-| `V_FAMILY_BAR` | family → halo factor and keyword bar (settled 90d, monthly refresh, floor 0.60, no credit below 1.0). |
+| `V_FAMILY_BAR` | family → halo factor and keyword bar (settled 90d, ~~monthly refresh~~ **DAILY refresh — correction 2026-08-20, see §4**, floor 0.60, no credit at or below 1.0). |
 | `V_INVEST_STATUS` | budget consumed, days remaining, organic-unit trajectory, exemption live/lifted. |
 | `V_DAILY_BRIEF` (extend) | the two-book brief of §6. |
 | `V_LAUNCH_EXEMPTION` (modify) | exemption conditional on ceiling + end date. |
