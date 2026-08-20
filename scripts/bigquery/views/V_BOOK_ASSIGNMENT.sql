@@ -43,7 +43,9 @@
 -- WHY THE CALENDAR COUNT IS RIGHT HERE, AND MUST NOT BE "HARMONISED" TO THE OTHER ONE: this number
 -- selects RAMP vs PROOF in V_INVEST_STATUS, a test that reads COMPLETE CALENDAR MONTHS. Counting
 -- month boundaries lands the change on the 1st, the same grain the measurement uses, instead of
--- mid-month on an arbitrary day. It is also the pattern already used in V_LOW_STOCK_ADS.sql:860.
+-- mid-month on an arbitrary day. It is also the pattern already used by the family_age_months
+-- expression in V_LOW_STOCK_ADS.sql — grep for the name, never cite a line number, which drifts on
+-- the next edit to that file and then points a reader at something unrelated.
 -- THE FLIP DATE IS A RULE, NOT A DATE TO WRITE DOWN: a family moves RAMP -> PROOF on the FIRST of
 -- the calendar month in which DATE_DIFF(today, first_sale_date, MONTH) reaches 4. Derive it from the
 -- query above. (Under elapsed-days/30.44 the same flip would land mid-month, splitting the very

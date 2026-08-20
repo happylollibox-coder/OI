@@ -111,14 +111,18 @@ as mechanisms with the query that shows them — Standing Rule 0. They are outsi
    families being bought into rank. Ori confirms this is intentional — buying rank until organic
    demand takes over. But no budget, end date or success test was ever declared, so the spend
    accumulated without a decision and its losses were blended into the engine's scorecard. What is
-   flowing today: `SELECT family, daily_investment, spend_per_day, sanction_end_date FROM
-   onyga-482313.OI.V_TWO_BOOK_BRIEF WHERE book='INVEST' AND row_kind='FAMILY'`.
+   flowing today: `SELECT family, daily_investment, spend_per_day_in_rate_window,
+   spend_per_day_last_7_days, sanction_end_date FROM onyga-482313.OI.V_TWO_BOOK_BRIEF
+   WHERE book='INVEST' AND row_kind='FAMILY'`. (The rate is judged on TWO arms and each column
+   carries its window in its name; a bare `spend_per_day` is a column of `V_INVEST_STATUS`, not of
+   the brief, and naming it here did not compile — corrected 2026-08-20, fifth round.)
 3. **An established family can leak, hidden by the blend.** A mature Harvest family that rents
    traffic and builds nothing shows a weak halo and a real dollar loss every window — and nobody
    could see it, because its loss sat inside a blended number that also contained deliberate launch
    spending. Rank the Harvest book on dollars and the leak is the bottom row:
-   `SELECT family, net_profit, ad_spend, total_net_roas FROM onyga-482313.OI.V_TWO_BOOK_BRIEF
-   WHERE book='HARVEST' AND row_kind='FAMILY' ORDER BY net_profit`.
+   `SELECT family, net_profit, ad_spend_in_money_window, total_net_roas FROM
+   onyga-482313.OI.V_TWO_BOOK_BRIEF WHERE book='HARVEST' AND row_kind='FAMILY' ORDER BY net_profit`.
+   (A bare `ad_spend` does not compile against this view — corrected 2026-08-20, fifth round.)
 
 ## 2. The two books
 

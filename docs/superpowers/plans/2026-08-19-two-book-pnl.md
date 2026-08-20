@@ -16,9 +16,15 @@
 
 *Ori's ruling, 2026-08-20, fourth repair round. It REPLACES the round-3 version of this rule, which
 allowed a measured number to stay if it was stamped with an as-of date. Stamping was tried for a
-whole round and it failed: round 3 itself shipped `config.yaml`'s `V_BOOK_ASSIGNMENT` entry saying
-"As of 2026-08-20 that read 1.61x and 1.94x over rate" while the live view that same day read
-otherwise.* **A wrong number under today's date is worse than an undated one: it looks verified.**
+whole round and it failed: round 3 itself shipped `config.yaml`'s `V_BOOK_ASSIGNMENT` entry stating
+two over-rate ratio figures under an "As of" date while the live view that same day read otherwise.*
+**A wrong number under today's date is worse than an undated one: it looks verified.**
+
+*(Fifth round, 2026-08-20: the two figures used to be quoted here verbatim as the illustration, and
+in `config.yaml` and `progress.md` as well. A stale measurement quoted as the exhibit is still a
+stale measurement on the page, and a reader arriving later cannot tell the exhibit from the claim.
+The SHAPE of the defect is what carries the lesson, so the figures are deleted — which is what this
+rule tells every other document to do.)*
 
 **There are two kinds of number, and only one of them is banned.**
 
@@ -1350,9 +1356,11 @@ Expected: `bad_books 0, bad_row_kinds 0, total_rows 2, harvest_reconcile_gap 0`
 
 ```bash
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
-"SELECT book, row_kind, COALESCE(family,'—') family, net_profit, total_net_roas, halo_factor, keyword_bar, verdict
+"SELECT book, row_kind, COALESCE(family,'—') family, net_profit, total_net_roas, verdict
  FROM \`onyga-482313.OI.V_TWO_BOOK_BRIEF\`
  ORDER BY book, row_kind DESC, net_profit DESC"
+# (`halo_factor` and `keyword_bar` are columns of V_FAMILY_BAR, NOT of the brief. The version of
+#  this line that named them on the brief failed to compile — corrected 2026-08-20, fifth round.)
 ```
 Read every verdict string aloud. Each must be a plain sentence a person could act on, with no rule names, no jargon and no bare metric codes. If any reads like engine internals, fix the string before committing.
 
@@ -1616,17 +1624,35 @@ git commit -m "feat: bid engines judge against the per-family halo bar, not a fl
 > that silently produces a cartesian product, and four references to two columns that had been
 > renamed upstream — so the flat claim has been false here once already.
 >
-> **What IS backed:** every statement that reads only objects existing today — Step 1's assertion,
-> Step 2's run of it, the planner dry run above, Step 4's `── 0`/`── 1`/`── 2` reads and the Step 4
-> `── 3` MERGE's dry run, and Step 5 — has been executed or dry-run against live BigQuery.
+> **The two lists below used to OVERLAP, which made the banner contradict itself** (corrected
+> 2026-08-20, fifth round): Step 4's `── 2` reads and Step 5's check were named as backed in one
+> paragraph and as not-backed in the next. The distinction is not *which statements* — it is
+> **statement versus expectation**, and it is drawn that way now.
 >
-> **What is NOT backed, and cannot be:** **everything from Step 3 onwards that reads
-> `V_LAUNCH_EXEMPTION` reads a view that has never been written.** Step 3 is a hand edit to a live
-> engine file; the post-edit view does not exist, so no statement downstream of it can have been
-> validated against the object it will actually run against. That includes Step 3's own dry run of
-> the edited file, Step 4's `bunny_rows` / `bunny_campaigns_still_exempt` check, the `── 3`
-> re-assertion, and Step 5's fail-open check. Steps 3-5 are a *procedure* for finding out whether
-> the edit was safe — that is their purpose — not evidence that it was.
+> **What IS backed — every statement in this task PARSES AND RUNS.** Each was executed, or dry-run
+> where it writes, against live BigQuery on 2026-08-20: the planner dry run above, Step 1's assertion
+> and Step 2's run of it, Step 2's rate read, Step 3's column check and a dry run of
+> `V_LAUNCH_EXEMPTION.sql` **as it stands today**, Step 4's `── 0`/`── 1`/`── 2` reads, the `── 3`
+> MERGE and the `── 4` restore as dry runs, the `── 3` re-assertion, `── 5`, and Step 5. None fails
+> to compile and none names a column that has been renamed away. Re-run them yourself; a statement
+> that ran in someone else's session is a claim in yours.
+>
+> **What is NOT backed, and cannot be — every EXPECTATION about what those statements return after
+> Step 3.** Step 3 is a hand edit to a live engine file, so the post-edit `V_LAUNCH_EXEMPTION` has
+> never existed. The statements read the PRE-edit view today and will read the POST-edit view then,
+> and the values they return are the thing the task exists to find out. So Step 3's dry run of the
+> *edited* file, the `bunny_rows` / `bunny_campaigns_still_exempt` comparison, the `── 3`
+> re-assertion's count and Step 5's fail-open `0` are **unproven expectations attached to proven
+> statements.** Steps 3-5 are a *procedure* for finding out whether the edit was safe — that is their
+> purpose — not evidence that it was.
+>
+> **One expectation was not merely unproven but UNREACHABLE, until it was rewritten this round.**
+> Step 4's expected property 4 promised that raising the sanction would make `protection_qualified`
+> read `true` and drive the assertion to `0`. The deployed gate also requires
+> `sanction_adherence_judged`, which no change to the sanctioned *rate* can satisfy, and the
+> assertion spans every declared family rather than the one this step raises. An operator running the
+> old step would have read `false` and concluded Step 3's edit had failed when nothing had. See Step
+> 4's expectations for what the raise actually controls.
 >
 > The two renames are carried through: `V_INVEST_STATUS.exemption_live` is **`protection_qualified`**
 > and `V_INVEST_STATUS.mtd_spend_per_day` is **`spend_per_day`** (confirm against
@@ -1889,9 +1915,17 @@ trap restore_bunny EXIT INT TERM
 #       count captured BEFORE the Step 3 edit — it must be UNCHANGED, never a multiple of it. Do not
 #       expect a number written in this file; capture your own baseline.
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
-"SELECT family, daily_investment, spend_per_day, spend_rate_ratio, spend_breached,
+"SELECT family, daily_investment, spend_per_day, spend_rate_ratio, spend_breached, spend_breach_arm,
+        sanction_adherence_judged, rate_window_days_before_sanction, short_window_days_before_sanction,
         protection_qualified, rate_window_basis
  FROM \`onyga-482313.OI.V_INVEST_STATUS\` WHERE family='Bunny'"
+#       READ sanction_adherence_judged HERE, BEFORE THE WINDOW OPENS — it decides which of the two
+#       outcomes in `── 3` you are entitled to expect, and it is NOT something raising the sanction
+#       can change. protection_qualified requires a MEASURED non-breach AND a window the sanction
+#       actually covered; the raise moves the first and cannot touch the second. The flag is TRUE
+#       only when at least one of the two rate windows lies wholly on or after sanctioned_on — that
+#       is what the two *_days_before_sanction columns report, and the short (7-day) arm is the one
+#       that clears first, simply by the feed advancing. Capture it now; do not infer it later.
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
 "SELECT COUNT(*) AS bunny_rows, COUNTIF(exempt_active) AS bunny_campaigns_still_exempt
  FROM \`onyga-482313.OI.V_LAUNCH_EXEMPTION\` WHERE family='Bunny'"
@@ -1960,8 +1994,44 @@ the window under it was redefined once):
    task would catch.
 3. `bunny_campaigns_still_exempt` reads `0` — the exemption followed the spend rate down. It equalled
    `bunny_rows` before this task, so anything other than `0` means Step 3's join never took effect.
-4. With the sanction temporarily raised above the measured rate, `protection_qualified` reads `true`
-   and the assertion returns `exemptions_outliving_their_sanction 0`.
+4. With the sanction temporarily raised above the measured rate, **`spend_breached` reads `false`
+   and `spend_breach_arm` empties.** That, and only that, is what the raise controls — it is the
+   clause Step 3 wired the exemption to, and flipping it is the whole point of testing the other
+   direction.
+   **`protection_qualified` follows ONLY IF the `── 2` capture showed `sanction_adherence_judged`
+   TRUE, and the assertion reaching `0` needs more than that again. Do not expect either
+   unconditionally** *(corrected 2026-08-20, fifth round — this line used to promise both flatly, and
+   against the deployed gate that promise is unreachable on a day when the sanction is still too new;
+   an operator who ran the step and read `false` would have concluded Step 3's edit had failed when
+   nothing had)*. Two independent reasons, both structural:
+   - **`protection_qualified` is an AND over eight clauses, and the raise moves one of them.** It
+     also requires `sanction_adherence_judged` — a rate window lying wholly on or after
+     `sanctioned_on`, so that the measured rate can be read as adherence to an agreement rather than
+     as a comparison against one that did not yet exist. A sanction signed part-way through the
+     trailing window is not yet judgeable, and **raising the sanctioned rate does not make it so**;
+     only the feed advancing past `sanctioned_on` does, and the short arm clears first. So:
+     - `── 2` showed `sanction_adherence_judged` **TRUE** → expect `protection_qualified true`.
+     - `── 2` showed it **FALSE** → expect `protection_qualified false`, with `spend_breached`
+       nonetheless flipped to `false`. **That is a PASS, not a failure of Step 3.** The gate is
+       refusing to certify adherence over days the sanction did not cover, which is Ori's ruling
+       working. Re-run `── 2` after the short window has moved wholly past `sanctioned_on` if you
+       want the `true` branch; nothing in this task can hurry it.
+   - **The assertion is account-wide, and this step raises ONE family.** `/tmp/t8b_assert.sql` joins
+     *every* row of `V_LAUNCH_EXEMPTION` to `V_INVEST_STATUS`, so it counts campaigns across all
+     declared families. Raising Bunny alone can only make the count **fall**; it reaches `0` only if
+     every declared family is simultaneously judged and unbreached. Read it as a **strict decrease
+     against the `── 2`/Step 2 baseline**, per family:
+     ```bash
+     bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
+     "SELECT i.family,
+             COUNTIF(e.exempt_active AND NOT i.protection_qualified) AS outliving,
+             COUNTIF(e.exempt_active)                                AS active
+      FROM \`onyga-482313.OI.V_LAUNCH_EXEMPTION\` e
+      JOIN \`onyga-482313.OI.V_INVEST_STATUS\` i ON i.family = e.family
+      GROUP BY 1 ORDER BY 1"
+     ```
+     Bunny's `outliving` is what this step moves; another family's is not, and a non-zero total that
+     is entirely another family's rows is the expected result, not a defect.
 5. After the restore, `sanction_intact` reads `true`.
 
 **If `sanction_intact` is anything but `true`, you have overwritten a number Ori sanctioned. Stop and
@@ -2109,8 +2179,10 @@ ceiling, no end date and no success test, its losses blended into the engine's s
   under 1.0 can be a rounding error apart in dollars or thousands apart, because the ratio says
   nothing about how much was spent to get there. Ranked by ratio you may fix the cheap one; ranked by
   dollars you fix the expensive one, and dollars is the right answer. Read both columns together and
-  rank on the dollars — `SELECT family, net_profit, ad_spend, total_net_roas FROM
+  rank on the dollars — `SELECT family, net_profit, ad_spend_in_money_window, total_net_roas FROM
   onyga-482313.OI.V_TWO_BOOK_BRIEF WHERE book='HARVEST' AND row_kind='FAMILY' ORDER BY net_profit`.
+  (The spend column carries its window in its name; a query naming a bare `ad_spend` on this view
+  does not compile, and this line published one until 2026-08-20.)
   Dollars decide what to work on.
 - **The halo factor is MEASURED** (`total_net_roas / ads_net_roas`), never assumed from unit ratios.
 - **The bar may only LOWER a threshold**, is floored at 0.60, gives no credit below halo 1.0, and
@@ -2224,9 +2296,11 @@ that is the current intent, not a gap to close.
 - **Fresh** — the long-standing Harvest family that loses real money every window. This plan makes it
   visible; deciding what to do about it is Ori's, not the engine's. Size it on the day you act, and
   do not quote a figure from this bullet, which has already carried three:
-  `SELECT family, net_profit, ad_spend, total_net_roas, money_window FROM
+  `SELECT family, net_profit, ad_spend_in_money_window, total_net_roas, money_window FROM
   onyga-482313.OI.V_TWO_BOOK_BRIEF WHERE row_kind='FAMILY' ORDER BY net_profit`.
-  (`halo_factor` is NOT a column of the brief — the version of this query that named it failed to
-  compile. Check column names against `INFORMATION_SCHEMA.COLUMNS` before publishing a query.)
+  (Neither `halo_factor` nor a bare `ad_spend` is a column of the brief. Both were published here and
+  both failed to compile — `halo_factor` corrected in round 4, `ad_spend` in round 5, which is what
+  happens when a column list is repaired by eye instead of against `INFORMATION_SCHEMA.COLUMNS`.
+  Dry-run a query before you write it into a document.)
 - **The randomized holdout** — parked, `architecture/HOLDOUT.md`. Its declared trial window opens
   2026-09-01; if it is not repaired before then, formally abandon it rather than let it run invalid.

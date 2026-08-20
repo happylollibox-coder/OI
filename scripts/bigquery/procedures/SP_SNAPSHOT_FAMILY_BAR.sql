@@ -15,10 +15,13 @@
 --   UNION ALL
 --   SELECT 'ROUTINE', routine_name
 --   FROM `onyga-482313.OI`.INFORMATION_SCHEMA.ROUTINES WHERE ddl            LIKE '%T_FAMILY_BAR%';
--- Run 2026-08-20 it returned exactly two rows, both routines: SP_SNAPSHOT_FAMILY_BAR (this
--- procedure, which writes the table) and SP_ORCHESTRATE_DAILY_REFRESH (which calls it). Zero views.
--- The moment a third row appears, something is reading the bars and this whole comment is out of
--- date. The join is Task 8 of
+-- THE PASS CONDITION IS A PROPERTY, NOT A COUNT SOMEBODY ONCE SAW (Standing Rule 0; this comment
+-- carried an "as of" run result until 2026-08-20, and stamping a measurement with a date was the
+-- practice that round 4 abolished — a date makes a stale number look verified). The property: the
+-- only objects that may mention this table are the WRITER (this procedure) and its CALLER
+-- (SP_ORCHESTRATE_DAILY_REFRESH), and there must be NO VIEWS AT ALL. A view in that output, or any
+-- routine other than those two, means something is reading the bars and this whole comment is out
+-- of date. Run it; do not read a count off this page. The join is Task 8 of
 -- docs/superpowers/plans/2026-08-19-two-book-pnl.md and Task 8 is unbuilt and on hold. Until it
 -- lands, this table is a correctly-built input with no consumer, and the bars change no bid.
 -- WHEN TASK 8 SHIPS, FLIP BOTH SENTENCES TO THE PRESENT TENSE IN THE SAME COMMIT: this comment and

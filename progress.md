@@ -374,10 +374,16 @@ V_LAUNCH_EXEMPTION, and Task 8b is on hold under "release nothing". (2) THE RAMP
 RULE, NOT A DATE: the deployed test is IF(launch_age_months <= 3,'RAMP','PROOF') over
 DATE_DIFF(today, first_sale_date, MONTH), which counts MONTH BOUNDARIES CROSSED, not elapsed 30-day
 periods — so a family flips on the FIRST of the month in which that count reaches 4, never
-mid-month. (Corrected 2026-08-20: this entry originally pinned "~2026-09-24" for Bunny, which is the
-elapsed-days/30.44 answer and not what the deployed view computes; the second correction, which
-pinned the calendar dates instead, has itself now been replaced by the rule. Derive both dates with
-SELECT family, first_sale_date, launch_age_months FROM V_BOOK_ASSIGNMENT.)
+mid-month. (Corrected twice and then a third time, 2026-08-20: this entry first pinned a MID-MONTH
+DATE for Bunny, which is the elapsed-days/30.44 answer and not what the deployed view computes; the
+second correction pinned calendar dates instead; the third replaced both with the rule; and the
+fourth, in round 5, deleted the wrong date itself, because a stale figure quoted as the exhibit of
+its own correction is still a stale figure on the page and a later reader cannot tell the exhibit
+from the claim. Derive the flip date rather than reading one here — it is the 1st of the month in
+which the count below reaches 4:
+  SELECT family, first_sale_date, launch_age_months,
+         DATE_DIFF(DATE_TRUNC(CURRENT_DATE('America/Los_Angeles'), MONTH), first_sale_date, MONTH)
+  FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT` ORDER BY family;)
 takeover_target_organic_units is NULL, so PROOF is a no-op until Ori supplies it. (3) PROOF judges a
 LEVEL, so a launch family's implausible sub-1.0 halo must be fixed before it gets there — and ALWAYS
 NAME THE WINDOW: the sub-1.0 figure is a BASELINE_MAY_JUL halo, and on the M3 window the bar actually
@@ -467,8 +473,8 @@ account_ad_spend_in_neither_book off V_TWO_BOOK_BRIEF's HARVEST TOTAL row.
 ORI'S RULING, NOW STANDING RULE 0 EVERYWHERE (plan, spec, config.yaml convention block, every view
 header in this design): A MEASURED NUMBER DOES NOT GO IN PROSE. Round 3's answer — stamp it with an
 as-of date — was tried for a whole round and FAILED IN THE FILE THAT DEFINED IT: config.yaml's
-V_BOOK_ASSIGNMENT entry shipped "As of 2026-08-20 that read 1.61x and 1.94x over rate" while the live
-view that same day read otherwise. A wrong number under today's date is worse than an undated one
+V_BOOK_ASSIGNMENT entry shipped two over-rate ratio figures under an "As of" date while the live view
+that same day read otherwise. A wrong number under today's date is worse than an undated one
 because it LOOKS VERIFIED. A header, a registry entry, a plan step and a spec paragraph now describe
 the MECHANISM — what is computed, from what, why — and publish the QUERY where a number is needed.
 
@@ -530,6 +536,106 @@ byte-identical, and the other two differ only in indented comment text — all t
 rows to before.
 
 OPEN / DATED: (1) V_INVEST_STATUS.sql and V_TWO_BOOK_BRIEF.sql headers were NOT edited (Tasks K and L
-own them); their surviving pins are reported for a follow-up round. (2) The plan's Standing Rule 0
-quotes the wrong 1.61x/1.94x string verbatim as the example of the defect — deliberately, and it is
-labelled as false, but it is still two numbers on a page.
+own them); their surviving pins are reported for a follow-up round. (2) The plan's Standing Rule 0 quoted the wrong ratio figures
+verbatim as the example of the defect — deliberately, and labelled as false, but still two numbers on
+a page. CLOSED in round 5: the figures are deleted from the plan, from config.yaml's rule block, from
+the V_BOOK_ASSIGNMENT entry and from this journal, and the SHAPE of the defect is what carries the
+lesson instead.
+
+## 2026-08-20 — two-book P&L, repair round 5: the registry, the plan and the queries beside them
+
+THE ROUND'S JOB WAS CONVERGENCE, NOT MORE FIXES. Rounds 1-4 each repaired a real defect and each
+shipped a new self-contradiction. Tasks N and O made the brief's verdict prose mechanical and
+asserted; this task (P) did the same to the documents around it — the registry entry, the plan, the
+spec, this journal — by RUNNING every query they publish instead of reading them.
+
+FOUR PUBLISHED QUERIES DID NOT COMPILE, all against V_TWO_BOOK_BRIEF, all naming columns the view
+does not have. `ad_spend` (the column is `ad_spend_in_money_window`) in the plan's SOP heredoc and in
+its Known follow-ons bullet, and in spec §1; `spend_per_day` (the brief publishes two arms,
+`spend_per_day_in_rate_window` and `spend_per_day_last_7_days`) in spec §1; `halo_factor` and
+`keyword_bar` (columns of V_FAMILY_BAR, not of the brief) in Task 7 Step 5. THE FOLLOW-ONS BULLET IS
+THE LESSON: round 4 repaired `halo_factor` out of that exact query and left `ad_spend` in it, because
+the repair was made by eye rather than by dry-running the result. Every query in the design is now
+dry-run before it is written down, and each fixed line says which round broke it.
+
+A QUERY THAT RAN BUT DID NOT SHOW WHAT ITS SENTENCE CLAIMED. config.yaml's V_TWO_BOOK_BRIEF entry
+introduced July 2026 as the month that read as a loss on one lens and a profit on the other, then
+published a query returning ONE column — the halo-inclusive figure. It cannot show a sign flip. The
+plan's own version of the same evidence publishes both columns and does; the registry entry now uses
+that form. V_FAMILY_PNL has no ads-only profit column, so the ads-only side must be derived from
+ad_spend and ads_net_roas, and the entry says so.
+
+TASK 8b STEP 4'S EXPECTED PROPERTY 4 WAS UNREACHABLE AGAINST THE DEPLOYED GATE. It promised that
+raising Bunny's sanction above the measured rate would make protection_qualified read true and drive
+the assertion to zero. Two structural reasons it cannot, both now written into the step: (a)
+protection_qualified is an AND over eight clauses and the raise moves ONE of them — it also requires
+sanction_adherence_judged, a rate window lying wholly on or after sanctioned_on, and no change to a
+sanctioned RATE can make a window older; only the feed advancing does, and the short arm clears
+first. (b) The assertion joins EVERY declared family, so raising one can only make the count fall.
+The step now reads sanction_adherence_judged BEFORE the exposure window opens, branches the
+expectation on it, states that spend_breached flipping false is what the raise actually controls, and
+publishes a per-family form of the assertion. An operator running the old step would have read
+`false` and concluded the Step 3 edit had failed when nothing had.
+
+TASK 8b'S BANNER CONTRADICTED ITSELF, which is why round 4's qualification did not settle it. Step
+4's `── 2` reads and Step 5's check were named as BACKED in one paragraph and as NOT BACKED in the
+next. The distinction was never which statements — it is STATEMENT versus EXPECTATION. Every
+statement in the task parses and runs against today's objects (all were executed, or dry-run where
+they write, this round). What cannot be backed is any expectation about what they return after Step
+3, because the post-edit V_LAUNCH_EXEMPTION has never existed. Tasks 8's and 9's banners were
+re-read against their own steps and are accurate as they stand.
+
+THE STALE FIGURES QUOTED AS EXHIBITS ARE GONE. Round 4 kept the wrong over-rate ratio string verbatim
+in four places as the illustration of the defect it had just outlawed, and recorded that as an open
+concern. (This paragraph does not repeat them either — a sentence announcing their deletion that
+prints them one line later is the same defect wearing an apology.) A stale measurement quoted as the exhibit is still a stale measurement on
+the page, and a reader arriving later cannot tell the exhibit from the claim. The SHAPE of the defect
+now carries the lesson in all four. The same treatment removed the wrong RAMP->PROOF date this
+journal was still quoting as its own correction; the flip is a rule (the 1st of the month in which
+DATE_DIFF(today, first_sale_date, MONTH) reaches 4) and the entry publishes the query.
+
+TWO CORRECTIONS A VERIFIER ASKED FOR WERE ALREADY CLEAN, and re-deriving them was the only way to
+know. The agree/conservative/permissive split is not written anywhere in the design — round 4 deleted
+it from the V_FAMILY_BAR header, from config.yaml and from this journal, and the header now carries
+the algebra instead. And no document claims unmapped spend sits in "9 unmapped campaigns". The
+underlying fact is worth stating once, because the two populations are easy to conflate: the brief's
+neither-book money resolves to a SINGLE advertised-product key over the settled window, all Sponsored
+Brands, and the brief's verdict branches on that measured count so it speaks in the singular; the
+unresolved-campaign rows in V_CAMPAIGN_FAMILY_MAP are a different population, counted differently.
+Neither number is written down here — SELECT COUNTIF(parent_name='Unknown'), COUNT(*) FROM
+`onyga-482313.OI.V_CAMPAIGN_FAMILY_MAP` for one, account_ad_spend_in_neither_book on the brief's
+HARVEST TOTAL row for the other.
+
+STANDING RULE 0 SWEEP, SECOND PASS, ENUMERATED RATHER THAN SAMPLED. Every numeric token in
+config.yaml's two-book entries, the plan, the spec, this journal's two-book section and the four SQL
+files this task owns was extracted and classified. What survives is declared constants (the
+sanctions, the 0.5 credit, the 0.60 floor, the 1.0 ceiling, the 5e-5 tolerance, the 5% band, the
+100-word cap), arithmetic ON declared constants (the halo 7/3 above which the floor could bite), Task
+1's frozen golden expectation with its tolerances, the spec §1 quarantine box of dated 2026-08-19
+findings that the box itself forbids copying out, and this journal's dated record of what past
+commits contained. Converted or deleted: the four quoted-exhibit ratio figures, the RAMP->PROOF date,
+and SP_SNAPSHOT_FAMILY_BAR.sql's "run 2026-08-20 it returned exactly two rows", which became the
+property it was standing in for (only the writer and its caller may mention T_FAMILY_BAR, and no
+views at all). Line-number pointers into other files were re-verified rather than trusted:
+V_LAUNCH_EXEMPTION.sql:224/:235/:290/:310 are all exact, and Task 8b Step 3 depends on it.
+
+VERIFIED, NOT ASSERTED. config.yaml parses; every two-book object is registered exactly once. Task
+1's golden assertion returns four zeros; Task 7's returns bad_books 0, bad_row_kinds 0, total_rows 2,
+harvest_reconcile_gap 0. V_FAMILY_BAR's clamp query returns rows_clamped 0 and every permissive row
+in the calibration query satisfies halo < 1, which is what the header's algebra says must hold.
+T_FAMILY_BAR has no null bars and no duplicate campaigns, and no mapped campaign is missing from it.
+The INFORMATION_SCHEMA consumer check returns the writer and its caller and no views. Every statement
+in Tasks 8, 8b and 9 was executed or dry-run.
+
+NOTHING IN THE ENGINE WAS TOUCHED. V_LAUNCH_EXEMPTION, V_ADS_COACH and V_COACH_CAMPAIGN_BUDGET are
+unchanged, no held decision was released, Tasks 8/8b/9 remain on hold, and V_TWO_BOOK_BRIEF.sql and
+V_INVEST_STATUS.sql belong to Tasks N and O and were not edited. NO BIGQUERY OBJECT WAS RE-DEPLOYED:
+the only two SQL files touched are SP_SNAPSHOT_FAMILY_BAR.sql and V_BOOK_ASSIGNMENT.sql, and in both
+every changed line is a `--` comment in column 0, which the deploy strips — so the stored definitions
+are byte-identical to what is live and no deploy is owed.
+
+OPEN / DATED: (1) Task 9 still needs Ori's own words on the two-versus-three declaration fields
+before the SOP may be published. (2) T_TWO_BOOK_BRIEF still does not exist and nothing builds it; the
+brief is at the planner ceiling and the first page or Cube consumer must read a materialised copy,
+which has to land BEFORE that consumer, not after the first timeout. (3) Task 8b Step 3's expectations
+remain unproven by construction and will stay that way until the hold is lifted and the edit is made.
