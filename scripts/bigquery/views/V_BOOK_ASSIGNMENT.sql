@@ -100,12 +100,25 @@ decl AS (
   -- sharing an updated_at. THEY DO NOT MAKE THE PICK TOTAL, and an earlier version of this comment
   -- claimed they did (corrected 2026-08-20 in the same sweep that deleted this file's two other
   -- false invariants). Three rows for one family sharing updated_at AND stop_date AND
-  -- daily_investment would still coin-flip. What saves us is that BOTH views coin-flip the SAME way
-  -- off the same ordering, so they cannot pick different declarations — which is the property that
-  -- actually matters here. Re-checked 2026-08-20: DE_LAUNCH_INVESTMENT holds exactly one row per
-  -- family and one distinct key triple per family, so nothing ties today. If a fully deterministic
-  -- pick is ever needed, add a unique trailing key (e.g. sanctioned_on, then a row identifier) to
-  -- BOTH views in one commit, never to one alone.
+  -- daily_investment would still coin-flip. AND THE SHARED ORDERING DOES NOT CLOSE THAT — a previous
+  -- version of this comment said "BOTH views coin-flip the SAME way off the same ordering, so they
+  -- cannot pick different declarations", and that claim is false (corrected 2026-08-20). These are
+  -- two independently planned, independently executed queries. A shared ORDER BY makes them agree on
+  -- the ORDERING; across rows tied on every ordering key it says nothing about WHICH tied row each
+  -- one keeps, and BigQuery promises nothing there. Over a full tie the two views CAN name different
+  -- declarations live. THAT RISK IS STATED, NOT ELIMINATED, and it is left open deliberately: the
+  -- only fix is a unique trailing key added to BOTH views in ONE commit, and V_LAUNCH_EXEMPTION is
+  -- under Ori's 2026-08-20 "release nothing" hold and may not be edited. So the residual stands and
+  -- is written down here rather than papered over. IS IT REACHABLE TODAY? No. Re-derived 2026-08-20
+  -- against the live table: 2 rows, 2 families, 1 row per family, and 0 (parent_name, updated_at,
+  -- stop_date, daily_investment) groups with more than one row — nothing ties, so neither view has a
+  -- choice to make. The risk opens only if Ori ever inserts two rows for one family sharing all three
+  -- ordering keys. Re-run before relying on that:
+  --   SELECT COUNTIF(n > 1) AS tied_groups FROM (SELECT COUNT(*) n
+  --     FROM `onyga-482313.OI.DE_LAUNCH_INVESTMENT`
+  --     GROUP BY parent_name, updated_at, stop_date, daily_investment);
+  -- When the hold lifts, the deterministic fix is a unique trailing key (e.g. sanctioned_on, then a
+  -- row identifier) added to the ORDER BY of BOTH views in one commit, never to one alone.
   QUALIFY ROW_NUMBER() OVER (
     PARTITION BY parent_name
     ORDER BY updated_at DESC NULLS LAST, stop_date DESC, daily_investment DESC) = 1

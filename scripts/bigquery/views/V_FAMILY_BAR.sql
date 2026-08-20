@@ -18,7 +18,19 @@
 --
 -- SAFETY PROPERTIES, each asserted in the acceptance test:
 --   · the credit can only LOWER a bar, never raise one above 1.0 — it can never justify a cut
---   · the bar is FLOORED at 0.60 — no halo excuses a catastrophic keyword
+--   · the bar is FLOORED at 0.60 — no halo excuses a catastrophic keyword. THE FLOOR IS A GUARD,
+--     NOT A LIVE CLAMP, AND SAYING OTHERWISE WAS A DEFECT (corrected 2026-08-20): on the window
+--     this view actually reads, NO ROW CLAMPS. Re-measured 2026-08-20 the six M3 bars are 0.7769,
+--     0.8012, 0.8293, 0.8780, 0.9302, 0.9362 — the lowest sits 0.18 above the floor, and the raw
+--     unclamped bar equals the published bar on all six. The floor bites only above halo 7/3
+--     (1/(1+0.5*(h-1)) < 0.60  <=>  h > 2.3333), and no family's M3 halo is near that. Rows that
+--     WOULD clamp do exist elsewhere in V_FAMILY_PNL — 5 of its 84 (family, period) rows on
+--     2026-08-20, up to halo 30.18 on Bunny's first partial sales month — but this view reads
+--     period_label = 'M3' and nothing else, so those rows are a counterfactual, not a clamp.
+--     Re-run before quoting either number:
+--       SELECT COUNTIF(keyword_bar > 1.0/(1.0+0.5*(halo_factor-1.0)) + 1e-9) AS rows_clamped,
+--              MIN(keyword_bar) AS lowest_bar
+--       FROM `onyga-482313.OI.V_FAMILY_BAR`;
 --   · where halo_factor <= 1.0 NO credit is given and the bar stays 1.0. NO FAMILY IS ON THAT
 --     BRANCH TODAY (measured 2026-08-20 on the window this view actually reads): the lowest M3 halo
 --     is Fresh at 1.14, and every one of the six families is credited. An earlier version of this
@@ -36,8 +48,12 @@
 -- settled 90-day M3 window and SP_SNAPSHOT_FAMILY_BAR materialises this view DAILY inside the
 -- orchestrator. That is safe, and the original "monthly" instinct was over-cautious: the fear was
 -- bids chasing organic noise, but a 90-day settled window moves by roughly one day in ninety per
--- rebuild, so a daily refresh cannot produce a jumpy bar. Daily also removes a second scheduler and
--- keeps the bars in the same transaction-of-thought as the engines that read them. Read
+-- rebuild, so a daily refresh moves a bar by roughly a ninetieth of a day's data. That bounds the
+-- ORDINARY case and it is not an absolute (qualified 2026-08-20): a restatement or a COGS change
+-- that rewrites 90 days at once moves the halo, and therefore the bar, as far as it likes. What is
+-- guaranteed is only the direction — the credit can never raise a bar above 1.0. Daily also removes
+-- a second scheduler and keeps the bars in the same transaction-of-thought as the engines that will
+-- read them. Read
 -- computed_on if you need to know how fresh a bar actually is.
 --
 -- CALIBRATION IS A STANDING TEST, NOT A ONE-OFF, AND IT RUNS IN ONE DIRECTION ONLY: a family that
@@ -65,11 +81,47 @@
 --     and today means the COGS tier imputation on new products. The fix for that is the COGS, never
 --     the bar.
 -- CONSEQUENCE FOR THE STANDING CALIBRATION CHECK: agreement between the bar and total_net_roas is
--- a DATA COINCIDENCE on any given window, not an identity. Re-measured 2026-08-20 across all 84
--- (family, period) rows of V_FAMILY_PNL: 73 agree, 10 disagree — 8 CONSERVATIVE (fails bar, clears
--- truth = the engine under-spends, harmless) and 2 PERMISSIVE, both on halo<1 rows. So only
--- PERMISSIVE breaks are defects. A monitor that alarms on any disagreement will cry wolf 8 times
--- out of 10.
+-- a DATA COINCIDENCE on any given window, not an identity.
+--
+-- THE SPLIT BELOW IS A READING, NOT A CONSTANT. Do not treat it as a pinned expectation and do not
+-- gate anything on it: V_FAMILY_PNL restates for about D+3, several rows sit within a percent of
+-- the 1.000 truth test, and the running-month rows are still filling. An earlier version of this
+-- paragraph pinned "73 agree, 10 disagree — 8 CONSERVATIVE and 2 PERMISSIVE" with no query, no
+-- stated scope and no warning; a reviewer re-measuring it the next day got a different conservative
+-- count and correctly filed the pinned figure as false. RE-RUN THIS BEFORE QUOTING ANY OF IT:
+--
+--   WITH k AS (SELECT 0.5 AS halo_credit, 0.60 AS bar_floor, 1.0 AS bar_ceiling),
+--   b AS (
+--     SELECT p.family, p.period_label, p.is_complete_period, p.ads_net_roas, p.total_net_roas,
+--       CASE WHEN p.halo_factor IS NULL OR p.halo_factor <= 1.0 THEN k.bar_ceiling
+--            ELSE GREATEST(k.bar_floor, LEAST(k.bar_ceiling,
+--                 1.0 / (1.0 + k.halo_credit * (p.halo_factor - 1.0)))) END AS keyword_bar
+--     FROM `onyga-482313.OI.V_FAMILY_PNL` p CROSS JOIN k)
+--   SELECT COUNT(*) rows_scanned,
+--     COUNTIF(ads_net_roas IS NULL OR total_net_roas IS NULL) unjudgeable,
+--     COUNTIF(ads_net_roas IS NOT NULL AND total_net_roas IS NOT NULL
+--             AND (ads_net_roas >= keyword_bar) = (total_net_roas >= 1.0)) agree,
+--     COUNTIF(ads_net_roas IS NOT NULL AND total_net_roas IS NOT NULL
+--             AND ads_net_roas <  keyword_bar AND total_net_roas >= 1.0) conservative,
+--     COUNTIF(ads_net_roas IS NOT NULL AND total_net_roas IS NOT NULL
+--             AND ads_net_roas >= keyword_bar AND total_net_roas <  1.0) permissive
+--   FROM b;                       -- add "WHERE is_complete_period" for the complete-periods scope
+--
+-- SCOPE IS PART OF THE ANSWER AND MUST BE STATED. Run 2026-08-20, both scopes, same query:
+--   · ALL 84 (family, period) rows, INCLUDING the six still-filling MTD rows:
+--       84 scanned, 1 unjudgeable (LolliBall 2026-05, both ROAS NULL), 73 agree,
+--       8 CONSERVATIVE, 2 PERMISSIVE. One of the eight — Fresh MTD — IS a still-filling row.
+--   · COMPLETE PERIODS ONLY (WHERE is_complete_period, the six MTD rows dropped):
+--       78 scanned, 1 unjudgeable, 68 agree, 7 CONSERVATIVE, 2 PERMISSIVE.
+-- Quoting a conservative count without saying which scope produced it is how the last pinned
+-- figure went wrong. The two PERMISSIVE rows are Fresh 2025-08 and Fresh 2025-10, both halo < 1,
+-- and they are the same two under either scope.
+--
+-- WHAT IS STABLE IS THE DIRECTION, NOT THE COUNT: a CONSERVATIVE break (fails bar, clears truth)
+-- means the engine under-spends and is harmless; a PERMISSIVE break (clears bar, fails truth) is
+-- the only kind that says the bridge is miscalibrated, and the algebra above shows it is reachable
+-- only at halo < 1. So a monitor alarms on PERMISSIVE only. One that alarms on any disagreement
+-- fires on a majority of harmless rows and will be ignored inside a week.
 -- KNIFE EDGE, AND IT IS LOADED RIGHT NOW: Bottle's M3 total_net_roas is 0.998 (re-measured
 -- 2026-08-20) — 0.2% under the truth test, while its ads_net_roas 0.63 is well under its bar 0.78.
 -- Ad spend and sales restate for about D+3. A routine restatement lifting Bottle past 1.000 turns

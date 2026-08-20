@@ -55,11 +55,19 @@ report success while having thrown away three commits of fixes.
 | 3 | `V_BOOK_ASSIGNMENT` | SHIPPED | `2d54ebb`, refined in `a8cb5aa` | **SUPERSEDED** — read the file |
 | 4 | `V_FAMILY_BAR` | SHIPPED | `95265bd`, `097d8d7`, `72acbdf` | **SUPERSEDED** — read the file |
 | 5 | `SP_SNAPSHOT_FAMILY_BAR` | SHIPPED | `35b9fa6` | current; only Step 7's ordering check was wrong (fixed) |
-| 6 | `V_INVEST_STATUS` | SHIPPED | `7e32ee2`, `72acbdf`, `0e4e568` | **SUPERSEDED** — read the file |
-| 7 | `V_TWO_BOOK_BRIEF` | SHIPPED | `fa840df`, `9fd1318`, `971751f`, `0a65589` | **SUPERSEDED** — read the file |
+| 6 | `V_INVEST_STATUS` | SHIPPED | `7e32ee2`, `72acbdf`, `0e4e568`, `acbf7be` | **SUPERSEDED** — read the file |
+| 7 | `V_TWO_BOOK_BRIEF` | SHIPPED | `fa840df`, `9fd1318`, `971751f`, `0a65589`, `a1d27aa`, `acbf7be` | **SUPERSEDED** — read the file |
 | 8 | bid engines read the family bar | **ON HOLD** | — | repaired below, deliberately not released |
 | 8b | `V_LAUNCH_EXEMPTION` | **ON HOLD** | — | repaired below, deliberately not released |
 | 9 | `architecture/TWO_BOOK_PNL.md` | **BLOCKED** | — | one standing rule needs Ori's decision first |
+
+**TWO COLUMNS WERE RENAMED ON 2026-08-20 AND THE SUPERSEDED BLOCKS BELOW STILL SHOW THE OLD NAMES.**
+`V_INVEST_STATUS.exemption_live` is now **`protection_qualified`** (one word could not carry both
+"what the sanction rules say" and "what the machine is doing") and `mtd_spend_per_day` is now
+**`spend_per_day`** ("month to date" is false for the ten days of each month when the window falls
+back to the last complete month). Tasks 6 and 7's code blocks are records of what was written on
+2026-08-19 and are not updated; Tasks 8 and 8b, which are meant to be RUN, carry the new names.
+Confirm against `INFORMATION_SCHEMA.COLUMNS` before writing either name.
 
 ### Tasks 8, 8b and 9 are on hold
 
@@ -1174,6 +1182,16 @@ git commit -m "feat: V_TWO_BOOK_BRIEF — Harvest and Invest reported separately
 
 ## Task 8: Wire the bar into the bid engines
 
+> **⚠ ON HOLD — DO NOT RUN. `V_KEYWORD_LIFT` and `V_OOB_KEYWORD` are the LIVE bid engines and are
+> not to be edited (Ori, 2026-08-20: *"Tell the truth now, release nothing."*).**
+> This task is the one that actually moves money: it changes the threshold two live engines cut
+> bids against, on every keyword in the account, the next time the daily orchestrator runs. Tasks 8b
+> and 9 each carry a banner and this one did not, which left the heaviest task in the plan reading
+> as runnable (added 2026-08-20 — Tasks 8b and 9 were banner-checked in the same sweep and this one
+> was missed). The steps below have been repaired so they are safe to execute *if* the hold is ever
+> lifted; every statement written into them was dry-run against live BigQuery on 2026-08-20. They
+> are a repair, not a permission.
+
 The behaviour change. Do this last, and prove what moved.
 
 **Files:**
@@ -1191,6 +1209,17 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
 "SELECT 'LIFT' src, action, COUNT(*) n FROM \`onyga-482313.OI.V_KEYWORD_LIFT\` GROUP BY 1,2 ORDER BY 3 DESC" \
   > /tmp/before_lift.csv
 cat /tmp/before_lift.csv
+
+# The gate in Step 6 compares against THIS capture, not against a number typed into this document.
+# It is the SET of cut arms that reach a bar-exempt campaign — the property Step 3 must not widen.
+# Capture it in the same session, minutes before the edit, or the comparison means nothing.
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
+"SELECT DISTINCT l.action
+ FROM \`onyga-482313.OI.V_KEYWORD_LIFT\` l
+ JOIN \`onyga-482313.OI.T_FAMILY_BAR\` b ON b.campaign_id = CAST(l.campaign_id AS STRING)
+ WHERE l.suggested_bid < l.current_bid AND b.bar_exempt
+ ORDER BY 1" | tail -n +2 > /tmp/before_exempt_arms.csv
+cat /tmp/before_exempt_arms.csv
 ```
 
 - [ ] **Step 2: Find the flat-1.0 breakeven sites**
@@ -1215,8 +1244,14 @@ Add the join to that CTE:
 ```sql
 -- v27.84 (2026-08-19, two-book P&L): the profit bar is now per-family, set from the family's
 -- MEASURED organic halo, because ads-attributed GP-ROAS structurally undervalues any keyword that
--- drives organic sales. Bottle reads 0.60 on ads and 0.95 on total (halo 1.59) — under the old flat
--- 1.0 bar the engine would cut the very keywords carrying it. Reads the TABLE, never V_FAMILY_BAR:
+-- drives organic sales. The worked example, MEASURED ON THE SETTLED 90 DAYS TO 2026-08-17 AND
+-- RE-READ 2026-08-20: Bottle reads 0.6339 on ads-attributed net ROAS and 0.9980 on total net ROAS,
+-- a halo of 1.5744, which sets its bar at 0.7769 — under the old flat 1.0 bar the engine would cut
+-- the very keywords carrying it. THESE FOUR NUMBERS ARE A DATED READING, NOT CONSTANTS: they move
+-- with every rebuild of the settled window, Bottle's total sits 0.2% under 1.000 and will cross it
+-- on a routine restatement, and this comment must not be read as a threshold. Pull
+-- V_FAMILY_PNL WHERE period_label = 'M3' and V_FAMILY_BAR for today's. Reads the TABLE, never
+-- V_FAMILY_BAR:
 -- this view is at BigQuery's planning ceiling and inlining another view is what broke
 -- V_PANEL_OWNERSHIP on 2026-08-17. Six rows, LEFT JOIN, COALESCE to 1.0 so a missing family keeps
 -- exactly the old behaviour — the bar may only ever LOWER the threshold.
@@ -1274,37 +1309,63 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
    AND b.bar_exempt
    AND l.action IN (<the action labels of the breakeven arm you edited in Step 3>)"
 ```
-Expected: `0`.
+Expected: `0`. This is the one statement in Tasks 8 and 8b that carries an unresolved placeholder,
+so it is the one that has NOT been dry-run — substitute the real action labels and dry-run it
+yourself before you rely on the answer. A `0` from a query that failed to name the arm you edited is
+not a pass; it is a query that measured nothing.
 
-Then confirm the OTHER downward levers are still working, and still at their baseline:
+Then confirm this change added no NEW KIND of cut on a bar-exempt family. **Compare the arm SET
+against the capture Step 1 took, not against a number written here:**
 
 ```bash
+BEFORE_ARMS=$(paste -sd, /tmp/before_exempt_arms.csv | sed "s/[^,]*/'&'/g")
+# An EMPTY capture is a legitimate before-state (it happens on a quiet morning), but an empty
+# BigQuery array literal has no type and will not compile. One empty string keeps the array typed
+# STRING and matches no real action, which is exactly the semantics wanted: nothing was there
+# before, so anything after is new.
+BEFORE_ARMS=${BEFORE_ARMS:-"''"}
+echo "arms that reached a bar-exempt campaign before the edit: $BEFORE_ARMS"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
-"SELECT l.action, b.family, COUNT(*) n
- FROM \`onyga-482313.OI.V_KEYWORD_LIFT\` l
- JOIN \`onyga-482313.OI.T_FAMILY_BAR\` b ON b.campaign_id = CAST(l.campaign_id AS STRING)
- WHERE l.suggested_bid < l.current_bid AND b.bar_exempt
- GROUP BY 1,2 ORDER BY 3 DESC"
+"WITH after_arms AS (
+   SELECT DISTINCT l.action
+   FROM \`onyga-482313.OI.V_KEYWORD_LIFT\` l
+   JOIN \`onyga-482313.OI.T_FAMILY_BAR\` b ON b.campaign_id = CAST(l.campaign_id AS STRING)
+   WHERE l.suggested_bid < l.current_bid AND b.bar_exempt),
+ before_arms AS (SELECT * FROM UNNEST([$BEFORE_ARMS]) AS action)
+ SELECT ARRAY_TO_STRING(ARRAY(SELECT action FROM (
+          SELECT action FROM after_arms EXCEPT DISTINCT SELECT action FROM before_arms
+        ) ORDER BY action), ', ') AS new_cut_classes_on_exempt_families"
 ```
-**Baseline measured 2026-08-20, BEFORE this task ran:** four rows —
-`AUTO_DAY_TRIM` LolliBall 2, `AUTO_DAY_TRIM` Bunny 1, `PARK` Bunny 1. **This task must leave that
-count at four.** It is the before AND the after: neither arm contains a breakeven comparison, so
-Step 3's change cannot reach them.
+Expected: an **empty string**. Any arm named here is a class of cut that did not reach a bar-exempt
+family before the edit and does now — that is the failure this step exists to catch, and it is the
+same failure whether it arrives on one row or a hundred. An arm DISAPPEARING is not a failure; the
+test is one-directional on purpose.
 
-> **⚠ DO NOT "FIX" THIS TO ZERO.** The original wording of this step asserted zero bid decreases of
-> **any** kind on bar-exempt campaigns, which has never been achievable: the four rows above come
-> from the automatic daily trim and the seat-queue park, arms that judge on daily pacing and on
-> capacity, not on any profit bar. The only way to force the count to zero is to bolt a `bar_exempt`
-> guard onto both arms across all fourteen Bunny and LolliBall campaigns — and
-> `V_LAUNCH_EXEMPTION.sql:289-290` names exactly those levers as the ones a launch exemption
-> **allows**, because they are the sanctioned way a launch is contained. Doing it would remove the
-> only downward levers left on the two families burning the most money.
+> **⚠ THE OLD GATE WAS A PINNED COUNT AND COULD NOT HOLD. DO NOT PUT ONE BACK.** It read: *"Baseline
+> measured 2026-08-20: four rows — `AUTO_DAY_TRIM` LolliBall 2, `AUTO_DAY_TRIM` Bunny 1, `PARK`
+> Bunny 1. This task must leave that count at four."* Re-running that exact query later **the same
+> day**, with no code change of any kind in between, returned **one row — `AUTO_DAY_TRIM` LolliBall
+> 2.** `V_KEYWORD_LIFT` recomputes from ads data that is 88-90% loaded at age 1 and restates for
+> about D+3 (`fact_oi_ads_restatement_settle`), and the daily-trim and seat-queue arms judge on
+> pacing and capacity, both of which move through the day. So the count is INTRADAY-VOLATILE and no
+> fixed value can gate anything: pinned at four it fails on a morning when nothing is wrong, and a
+> gate that cries wolf gets waved through — which is worse than no gate, because the next person
+> reads a red check as normal. **Gate the PROPERTY, not the population.** The property is "Step 3
+> must not add a new class of cut on a bar-exempt campaign", the capture in Step 1 is the only valid
+> baseline, and it must be taken in the same session as the edit.
 
 **NON-GOAL, stated so nobody removes it later: `AUTO_DAY_TRIM` and `PARK` must keep working on
-Invest families.** The family bar exempts an Invest family from being cut *for missing a profit
-bar*. It does not exempt it from pacing, from capacity, or from any other control. An Invest family
-is judged on sanction adherence and organic trajectory — that is a different question from
-profitability, not a licence to spend without limit.
+Invest families**, and the check above is deliberately written so it never asks them to stop. The
+original wording of this step asserted zero bid decreases of **any** kind on bar-exempt campaigns,
+which has never been achievable: those arms judge on daily pacing and on capacity, not on any profit
+bar, and `V_LAUNCH_EXEMPTION.sql:290` (the `allows` list) names exactly those levers as the ones a launch exemption
+**allows**, because they are the sanctioned way a launch is contained. Forcing them to zero would
+remove the only downward levers left on the two families burning the most money.
+
+The family bar exempts an Invest family from being cut *for missing a profit bar*. It does not exempt
+it from pacing, from capacity, or from any other control. An Invest family is judged on sanction
+adherence and organic trajectory — a different question from profitability, not a licence to spend
+without limit.
 
 - [ ] **Step 7: Pull-twice determinism on both engines**
 
@@ -1334,6 +1395,17 @@ git commit -m "feat: bid engines judge against the per-family halo bar, not a fl
 > Three of them could not run at all as originally written, and the obvious repair to a fourth would
 > have silently widened Bunny's sanctioned backstop by 2.74x. Read the whole task before touching
 > anything.
+>
+> **The "safe to execute" claim above is now backed, and it was not before (2026-08-20).** The
+> previous round wrote that sentence while the task still contained a statement BigQuery refuses to
+> compile, a join that silently produces a cartesian product, and four references to two columns
+> that had been renamed upstream the same day — so the banner was itself a false claim. **Every SQL
+> statement in this task has now been dry-run or executed against live BigQuery on 2026-08-20**, and
+> the two renames are carried through: `V_INVEST_STATUS.exemption_live` is **`protection_qualified`**
+> and `V_INVEST_STATUS.mtd_spend_per_day` is **`spend_per_day`** (confirm against
+> `INFORMATION_SCHEMA.COLUMNS` before you run anything — this task has been wrong about column names
+> twice). If you change a statement here, dry-run the version you actually wrote; a repaired step
+> that nobody ran is a claim, not a repair.
 
 Spec §5 requires the launch exemption to become conditional. Until this task runs, the sanctioned
 spend rate and the end date are **reported** by `V_INVEST_STATUS` and **enforced by nobody** — which
@@ -1387,8 +1459,11 @@ Save as `/tmp/t8b_assert.sql`:
 -- ASSERT: no campaign may hold a live exemption once its family has broken the sanction that
 -- granted it — spending faster than the sanctioned daily rate, or running past the declared end
 -- date. Families with no declaration are unaffected (fail-open).
--- BOTH sides key on `family`. V_LAUNCH_EXEMPTION has no parent_name column.
-SELECT COUNTIF(e.exempt_active AND NOT i.exemption_live) AS exemptions_outliving_their_sanction
+-- BOTH sides key on `family` HERE, because both are the PUBLISHED output columns of two views in
+-- the outer FROM. That is not true inside V_LAUNCH_EXEMPTION's own final SELECT — see Step 3.
+-- The flag is protection_qualified (renamed from exemption_live 2026-08-20; the old name would
+-- fail to compile).
+SELECT COUNTIF(e.exempt_active AND NOT i.protection_qualified) AS exemptions_outliving_their_sanction
 FROM `onyga-482313.OI.V_LAUNCH_EXEMPTION` e
 JOIN `onyga-482313.OI.V_INVEST_STATUS` i ON i.family = e.family;
 ```
@@ -1399,8 +1474,9 @@ JOIN `onyga-482313.OI.V_INVEST_STATUS` i ON i.family = e.family;
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t8b_assert.sql)"
 ```
 
-Expected today: a **non-zero** count. **Measured 2026-08-20 it returns `14`.** Bunny runs at
-$48.35/day against a sanctioned $30 and LolliBall at $106.90 against $55, so `exemption_live` is
+Expected today: a **non-zero** count. **Re-measured 2026-08-20 with the renamed column it returns
+`14` over 14 joined rows.** Bunny runs at $48.35/day against a sanctioned $30 (1.61x) and LolliBall
+at $106.90 against $55 (1.94x), so `protection_qualified` is
 already `false` for both — while `exempt_active` is hardcoded `TRUE`, so all fourteen of their
 campaigns (Bunny 6, LolliBall 8) hold an exemption that has outlived its sanction. That is the
 defect, stated as a number. When this task runs, that 14 must become 0.
@@ -1428,21 +1504,50 @@ exemption, never grant one:
   -- ceiling on a product that nearly covers its costs never fires, so enforcing on it would have
   -- been enforcement in name only. The ceiling stays as a catastrophe backstop behind the rate.
   -- FAIL-OPEN: a family with no declaration row is untouched, so this can only revoke, never grant.
-  COALESCE(inv.exemption_live, TRUE) AS exempt_active,
+  COALESCE(inv.protection_qualified, TRUE) AS exempt_active,
 ```
 
-and add to the final SELECT's FROM chain — **`inv.family = <the outer query's family column>`; this
-view publishes that column as `family`, and `V_INVEST_STATUS` publishes it as `family` too**:
+(`protection_qualified`, not `exemption_live` — renamed upstream 2026-08-20.)
+
+Then add the join to the final SELECT's FROM chain. **Write `rolled.parent_name`. Not `family`:**
 
 ```sql
-LEFT JOIN `onyga-482313.OI.V_INVEST_STATUS` inv ON inv.family = <the outer query's family column>
+FROM rolled
+LEFT JOIN `onyga-482313.OI.V_INVEST_STATUS` inv ON inv.family = rolled.parent_name
 ```
 
-Confirm the outer column's name before you type it:
+> **⚠ `ON inv.family = family` DOES NOT FAIL LOUDLY — IT SILENTLY DOUBLES THE VIEW.** This is the
+> one place in the whole task where the column-name confusion actually bites, and the previous
+> repair still had it backwards (corrected 2026-08-20). The final SELECT reads `FROM rolled`
+> (`V_LAUNCH_EXEMPTION.sql:310`) and only *projects* `parent_name AS family` in its select list
+> (`:224`); the line being replaced is `:235`. A select-list alias is not in scope in a JOIN's `ON` clause, so inside the join
+> `rolled` offers `parent_name` and nothing called `family`. The obvious guess is that a bare
+> `family` therefore raises `Unrecognized name` — **it does not**, and that is the danger.
+> `V_INVEST_STATUS` itself publishes a column called `family`, so a bare `family` in the `ON` clause
+> resolves to `inv.family` and the predicate becomes `inv.family = inv.family` — a tautology, i.e. a
+> cross join. Re-derived 2026-08-20 on a two-row stand-in for `rolled`: `ON inv.family = family`
+> returned **4 rows**, `ON inv.family = rolled.parent_name` returned **2**. At full size that is
+> every launch campaign duplicated once per declared family, each copy taking an arbitrary family's
+> protection state — a wrong answer that compiles, deploys and looks healthy. Confirm both names
+> before you type either:
 
 ```bash
 grep -n "AS family\|parent_name" scripts/bigquery/views/V_LAUNCH_EXEMPTION.sql | tail -6
+bq query --project_id=onyga-482313 --use_legacy_sql=false --format=csv \
+"SELECT table_name, column_name FROM \`onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS\`
+ WHERE table_name IN ('V_INVEST_STATUS','V_LAUNCH_EXEMPTION') AND column_name IN ('family','parent_name')"
 ```
+
+Then dry-run the EDITED FILE before you deploy it — this validates the join without changing
+anything, and it is how the two forms above were told apart:
+
+```bash
+bq query --project_id=onyga-482313 --use_legacy_sql=false --dry_run \
+  "$(grep -v '^--' scripts/bigquery/views/V_LAUNCH_EXEMPTION.sql)"
+```
+Expected: `Query successfully validated.` **A clean validation is necessary and not sufficient** —
+the cartesian form validates too. Also run the row-count check in Step 4 item 2 and confirm the view
+still returns 14 launch-campaign rows, not 28.
 
 - [ ] **Step 4: Deploy, then force the real test on the clause that actually binds**
 
@@ -1468,25 +1573,40 @@ BUNNY_RATE=$(bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_c
 echo "Bunny's live sanctioned daily investment is $BUNNY_RATE — the restore writes back exactly this."
 case "$BUNNY_RATE" in ''|*[!0-9.]*) echo "ABORT: could not read the live sanction. Do not touch the row."; exit 1;; esac
 
-# ── 2. Bunny is ALREADY over its sanctioned rate, so exemption_live is already false. Confirm the
-#       exemption followed it down, which is the whole point of Step 3.
+# ── 2. Bunny is ALREADY over its sanctioned rate, so protection_qualified is already false. Confirm
+#       the exemption followed it down, which is the whole point of Step 3. The row count is also
+#       the guard against the cartesian join Step 3 warns about: 6, never 12.
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
-"SELECT family, daily_investment, mtd_spend_per_day, spend_rate_ratio, spend_breached, exemption_live
+"SELECT family, daily_investment, spend_per_day, spend_rate_ratio, spend_breached,
+        protection_qualified, rate_window_basis
  FROM \`onyga-482313.OI.V_INVEST_STATUS\` WHERE family='Bunny'"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
-"SELECT COUNTIF(exempt_active) AS bunny_campaigns_still_exempt
+"SELECT COUNT(*) AS bunny_rows, COUNTIF(exempt_active) AS bunny_campaigns_still_exempt
  FROM \`onyga-482313.OI.V_LAUNCH_EXEMPTION\` WHERE family='Bunny'"
 
 # ── 3. Flip it the OTHER way: raise the sanctioned rate above the measured rate and confirm the
 #       exemption comes back. Testing only one direction is how the old step passed while measuring
 #       nothing. NOTE the key: parent_name, not family.
+#
+#       THIS IS A MERGE, NOT AN UPDATE, AND THAT IS NOT A STYLE CHOICE. The previous repair wrote
+#         UPDATE DE_LAUNCH_INVESTMENT SET daily_investment = (SELECT ... FROM V_INVEST_STATUS ...)
+#       which BigQuery rejects outright: "Correlated subqueries that reference other tables are not
+#       supported unless they can be de-correlated, such as by transforming them into an efficient
+#       JOIN." (Re-confirmed by dry run 2026-08-20 — it is a hard parse-time refusal, so the step
+#       could never have run.) A MERGE is that JOIN, it reads the live measurement rather than a
+#       literal typed here, and it dry-runs clean (validated 2026-08-20, 72,062,793 bytes).
+#       The IS NOT NULL guards matter: V_INVEST_STATUS deliberately publishes NO rate when the
+#       window has too few loaded ads days (Ori: "when you do not have full window data, do not
+#       show calculate"), and a NULL landing in daily_investment would blank a sanctioned number.
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
-"UPDATE \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\`
-    SET daily_investment = (SELECT CEIL(MAX(mtd_spend_per_day)) + 10
-                            FROM \`onyga-482313.OI.V_INVEST_STATUS\` WHERE family='Bunny')
-  WHERE parent_name='Bunny'"
+"MERGE \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\` t
+ USING (SELECT 'Bunny' AS parent_name, CEIL(MAX(spend_per_day)) + 10 AS test_rate
+        FROM \`onyga-482313.OI.V_INVEST_STATUS\`
+        WHERE family = 'Bunny' AND spend_per_day IS NOT NULL) s
+    ON t.parent_name = s.parent_name
+ WHEN MATCHED AND s.test_rate IS NOT NULL THEN UPDATE SET daily_investment = s.test_rate"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
-"SELECT family, daily_investment, mtd_spend_per_day, exemption_live
+"SELECT family, daily_investment, spend_per_day, protection_qualified
  FROM \`onyga-482313.OI.V_INVEST_STATUS\` WHERE family='Bunny'"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t8b_assert.sql)"
 
@@ -1502,12 +1622,14 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
  FROM \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\` WHERE parent_name='Bunny'"
 ```
 
-Expected, in order: with the sanction at $30/day and Bunny measured at $48.35, `exemption_live` reads
-`false` and `bunny_campaigns_still_exempt` reads `0` — the exemption followed the spend rate down.
-It read `6` before this task, so a `6` here means Step 3's join never took effect.
-With the sanction temporarily raised above the measured rate, `exemption_live` reads `true` and the
-assertion returns `exemptions_outliving_their_sanction 0`. After the restore, `sanction_intact` must
-read `true`.
+Expected, in order: with the sanction at $30/day and Bunny measured at $48.35,
+`protection_qualified` reads `false`, `bunny_rows` reads `6` and `bunny_campaigns_still_exempt` reads
+`0` — the exemption followed the spend rate down. `bunny_campaigns_still_exempt` read `6` before this
+task, so a `6` here means Step 3's join never took effect; and `bunny_rows` above `6` means the join
+went in as a cartesian product (Step 3's warning), which no other check in this task would catch.
+With the sanction temporarily raised above the measured rate, `protection_qualified` reads `true` and
+the assertion returns `exemptions_outliving_their_sanction 0`. After the restore, `sanction_intact`
+must read `true`.
 
 **If `sanction_intact` is anything but `true`, you have overwritten a number Ori sanctioned. Stop and
 put it back: Bunny is $30.00/day, $913.00 monthly backstop, stop date 2026-10-31.**

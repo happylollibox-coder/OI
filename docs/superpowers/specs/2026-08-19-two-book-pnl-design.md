@@ -172,6 +172,24 @@ without a decision — becomes conditional on BOTH `today ≤ end_date` AND
 `month-to-date loss < ceiling`. When either fails the family reverts to Harvest rules and its
 halo-adjusted bar applies. **The engine stops, not the human.**
 
+> **CORRECTION 2026-08-20 — THE SPEND RATE BINDS, NOT THE CEILING. The paragraph above is superseded
+> and is kept only so the reasoning trail survives.** Ori's ruling on 2026-08-19 was *"spend rate
+> binds"*, and the measurement behind it is why: on 2026-08-19 both declared launches ran 1.5–1.8×
+> over their sanctioned daily spend while their month-to-date losses were $259 and $74 against
+> ceilings of $913 and $1,674 — 28% and 4% used. A ceiling denominated in NET PROFIT does not fire on
+> a product that nearly covers its own costs, so a ceiling-only condition would have left both
+> families **fully exempt on the very day they were 1.6× and 1.9× over rate**: enforcement in name
+> only. The live rule is therefore `today ≤ end_date` **AND** `spend rate ≤ daily_investment`, with
+> the monthly loss ceiling demoted to a catastrophe backstop sitting behind the rate. Re-measured
+> 2026-08-20: Bunny $48.35/day against a sanctioned $30, LolliBall $106.90 against $55.
+>
+> **AND "the engine stops, not the human" IS NOT TRUE TODAY — it is the goal, not the state.** Under
+> Ori's 2026-08-20 ruling *"Tell the truth now, release nothing"*, Task 8b is on hold and
+> `V_LAUNCH_EXEMPTION` is not to be edited, so nothing in the engine reads the sanction. Both
+> conditions are **measured and reported** by `V_INVEST_STATUS.protection_qualified` and shown in
+> `V_TWO_BOOK_BRIEF` alongside the dollars of budget cuts the coach is holding — and the only thing
+> that stops a launch today is a person reading that row. The brief says so in plain words.
+
 **The take-over test has two phases, because the question changes with age** (Ori 2026-08-19:
 *"the question of launch products is are they improving — not are they profitable — in the first 3
 months"*).
@@ -229,8 +247,20 @@ instead of *"the account lost $5,612"* — same money, and the second sentence w
 | `V_FAMILY_BAR` | family → halo factor and keyword bar (settled 90d, ~~monthly refresh~~ **DAILY refresh — correction 2026-08-20, see §4**, floor 0.60, no credit at or below 1.0). |
 | `V_INVEST_STATUS` | budget consumed, days remaining, organic-unit trajectory, exemption live/lifted. |
 | `V_DAILY_BRIEF` (extend) | the two-book brief of §6. |
-| `V_LAUNCH_EXEMPTION` (modify) | exemption conditional on ceiling + end date. |
-| engine consumers (modify) | read `V_FAMILY_BAR` instead of a flat 1.0 breakeven. |
+| `V_LAUNCH_EXEMPTION` (modify) | ~~exemption conditional on ceiling + end date~~ **exemption conditional on SPEND RATE + end date — correction 2026-08-20, see §5. NOT BUILT: on hold, this view is not to be edited.** |
+| engine consumers (modify) | read `V_FAMILY_BAR` instead of a flat 1.0 breakeven. **NOT BUILT: on hold — correction 2026-08-20.** |
+
+> **CORRECTION 2026-08-20 — WHAT THIS TABLE ACTUALLY DESCRIBES.** It is a build list, not a status
+> report, and read as a status report it overstates what exists. Two rows above are the same
+> superseded ceiling-only rule §5 corrects; both are struck through rather than rewritten so the
+> reasoning trail survives. Current state: rows 1–5 are shipped (`V_FAMILY_PNL`,
+> `DE_LAUNCH_INVESTMENT`, `V_BOOK_ASSIGNMENT`, `V_FAMILY_BAR`, `V_INVEST_STATUS`). The
+> `V_DAILY_BRIEF` (extend) row was deliberately not taken — a separate `V_TWO_BOOK_BRIEF` was built
+> instead, so the daily brief keeps one responsibility; that deviation is recorded in the plan. The
+> last two rows are **unbuilt and on hold** under *"Tell the truth now, release nothing"*
+> (Ori, 2026-08-20): the launch exemption and the two bid engines are not to be edited, and
+> `T_FAMILY_BAR` is materialised daily but no engine reads it. So the bars change no bid, and the
+> sanction stops nothing, until that hold is lifted.
 
 ## 8. Non-goals
 

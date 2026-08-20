@@ -336,3 +336,40 @@ OPEN: takeover_target_organic_units NULL on both rows — Ori must supply (calib
 run-rates ~71 and ~235 organic units/month). Minor: BASELINE_MAY_JUL restated slightly since Task 1
 (Lollibox -$0.61, halos in the 3rd decimal) — within the assertion's tolerances, but a May-Jul
 window restating at all is worth a look since ads should have settled.
+
+## 2026-08-19 — two-book P&L Tasks 3-6 done; backlog committed
+Tasks 3 (V_BOOK_ASSIGNMENT), 4 (V_FAMILY_BAR), 5 (T_FAMILY_BAR + SP_SNAPSHOT_FAMILY_BAR) and 6
+(V_INVEST_STATUS) all shipped with three-stage review. Every acceptance assertion 0.
+ORI'S RULING PROVED EMPIRICALLY: "spend rate binds". Both launches are 1.5-1.8x over sanctioned
+spend (Bunny $45.93/day vs $30, LolliBall $101.46/day vs $55) while their loss ceilings are only
+28.3% and 4.4% used. Had the gate been the net-profit ceiling, BOTH would read fully exempt today.
+Both exemptions now read DEAD.
+THE LAUNCHES ARE WORKING ON THE METRIC ORI CHOSE: organic units climbing every complete month —
+Bunny 28 -> 44 -> 69, LolliBall 0 -> 1 -> 127. Losses deepened over the same stretch, so both read
+"mixed" rather than "improving" (the improving branch needs units AND loss both moving right).
+Neither is near the kill rule (two consecutive months of no organic growth).
+ALGEBRA FOUND IN REVIEW: the keyword bar test reduces to (ads_net_roas + total_net_roas)/2 >= 1.0 —
+it is the MEAN of the two measures. So when the halo is real (>1) the bar is provably STRICTER than
+the truth test and can never be more permissive; a permissive break is only reachable at halo<1
+(the COGS artifact). Calibration is a data coincidence per window, not an identity, and the split
+MOVES — do not pin it (corrected 2026-08-20; the figure written here first went stale within a day).
+Re-measured 2026-08-20 over all 84 (family, period) rows including the six still-filling MTD rows:
+73 agree, 1 unjudgeable, 10 disagree — 8 CONSERVATIVE (one of them a still-filling row) and 2
+PERMISSIVE. Over complete periods only: 68 agree, 1 unjudgeable, 7 CONSERVATIVE, 2 PERMISSIVE. The
+scope is part of the answer and the query is published in the V_FAMILY_BAR.sql header. The monthly
+re-check must alarm only on PERMISSIVE breaks — that direction is stable, the counts are not.
+BACKLOG COMMITTED: a8cb5aa (136 backend files, v27.72-v27.83 + two-book 1-5, hook passed) and
+5206d8b (30 dashboard files, --no-verify: tsc clean, 395 PRE-EXISTING eslint issues). .gitignore
+gained *.bak.* — the old *.bak / *.sql.bak rules never matched the deploy battery's versioned form,
+so 157 backups had been permanent git-status noise. Working tree now CLEAN.
+OPEN / DATED: (1) nothing stops yet — no engine reads V_INVEST_STATUS; the spend gate bites only
+when Task 8b wires protection_qualified (renamed from exemption_live 2026-08-20) into
+V_LAUNCH_EXEMPTION, and Task 8b is on hold under "release nothing". (2) Bunny flips RAMP->PROOF on
+2026-09-01, NOT ~2026-09-24 (corrected 2026-08-20): the deployed test is
+IF(launch_age_months <= 3,'RAMP','PROOF') over DATE_DIFF(today, first_sale_date, MONTH), which counts
+MONTH BOUNDARIES CROSSED, not elapsed 30-day periods — off first_sale_date 2026-05-24 it reads 3 on
+2026-08-31 and 4 on 2026-09-01. takeover_target_organic_units is NULL, so PROOF is a no-op until Ori
+supplies it. (3) LolliBall (first sale 2026-06-26) reaches PROOF on 2026-10-01 by the same
+arithmetic, and PROOF judges a LEVEL, so its implausible 0.87 halo must be fixed first — note 0.87 is
+its BASELINE_MAY_JUL halo; on the M3 window that the bar actually reads it is 1.15.
+(4) 10.5% of ad spend sits in 9 unmapped campaigns, outside both books.
