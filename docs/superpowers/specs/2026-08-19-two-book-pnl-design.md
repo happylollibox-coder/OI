@@ -3,6 +3,29 @@
 **Date:** 2026-08-19 · **Status:** design approved by Ori, ready for planning
 **Supersedes as priority:** the randomized holdout (built 2026-08-19, parked — see §9)
 
+> **⚠ SUPERSEDED IN PART — three points below no longer describe what is built (2026-08-20).**
+> Read the implementation plan `docs/superpowers/plans/2026-08-19-two-book-pnl.md` alongside this
+> document, and the deployed files in `scripts/bigquery/` ahead of both.
+>
+> 1. **§5 enforcement: the binding clause is the SANCTIONED DAILY SPEND RATE, not the monthly loss
+>    ceiling.** This spec says the exemption becomes conditional on the end date and the
+>    month-to-date loss against the ceiling. Measured 2026-08-19, that ceiling never fires: Bunny and
+>    LolliBall ran at 1.6x and 1.9x their sanctioned daily spend while losing only $204 and $15
+>    against ceilings of $913 and $1,674. Ori's ruling the same day — *"spend rate binds"* — moved
+>    the test onto `DE_LAUNCH_INVESTMENT.daily_investment`. The loss ceiling remains as a catastrophe
+>    backstop behind it.
+> 2. **§4 cadence: the keyword bar is rebuilt DAILY, not monthly.** `SP_SNAPSHOT_FAMILY_BAR` runs as
+>    orchestrator task 20.5g-1, every day, before the engine `T_` builds. The 90-day input window is
+>    still settled; only the refresh cadence differs.
+> 3. **§5 "a declaration requires three fields" is an OPEN QUESTION, not a shipped rule.** Live
+>    production has Bunny and LolliBall in the Invest book with `takeover_target_organic_units` NULL,
+>    deliberately, until Ori supplies the numbers. Task 9 of the plan states both options and is
+>    blocked until he rules. Do not enforce the three-field rule from this document.
+>
+> The §5 illustration of "a $2,500 ceiling" is an example number only. The ceilings Ori actually
+> sanctioned on 2026-08-13 are **$913 for Bunny** and **$1,674 for LolliBall**. Never restore a
+> sanctioned value from a number written in a document — read the live row.
+
 ## 1. The problem, and how we found it
 
 Ori asked a simple question: *"the main goal of ads is to make more total of dollars that we would
