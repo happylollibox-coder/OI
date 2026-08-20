@@ -895,14 +895,15 @@ g2 AS (
                IFNULL(CAST(g.feed_age_days AS STRING), 'an unknown number of'),
                ' days behind, and this family has no advertising row on the last ',
                IFNULL(CAST(g.trailing_silent_days AS STRING), 'unknown number of'),
-               ' days of the window')
+               IF(g.trailing_silent_days = 1, ' day', ' days'), ' of the window')
       WHEN g.account_is_stale THEN
         CONCAT('the account\'s advertising feed is ',
                IFNULL(CAST(g.feed_age_days AS STRING), 'an unknown number of'), ' days behind')
       ELSE
         CONCAT('this family has no advertising row on the last ',
                IFNULL(CAST(g.trailing_silent_days AS STRING), 'unknown number of'),
-               ' days of the window. Those days were delivered by the account, so their zero is ',
+               IF(g.trailing_silent_days = 1, ' day', ' days'),
+               ' of the window. Those days were delivered by the account, so their zero is ',
                'published as a real zero and the rate above is honest — but a family that went quiet ',
                'at the newest end of the window and a family whose own rows have not landed yet look ',
                'identical here, so the window is reported and not certified')
@@ -984,7 +985,7 @@ SELECT
     IF(COALESCE(g.leading_silent_days, 0) > 0,
        CONCAT('. This family has no advertising row on the first ',
               CAST(g.leading_silent_days AS STRING),
-              ' days of the window either. On delivered dates that is a real zero and is divided as ',
+              IF(g.leading_silent_days = 1, ' day', ' days'), ' of the window either. On delivered dates that is a real zero and is divided as ',
               'one, and for a launch that began advertising inside the window it is simply the truth ',
               '— but it is also what a re-labelled history looks like, so check it before acting'), ''),
     '.')
