@@ -120,16 +120,19 @@
 --   protection ACTIVE on all 14 launch campaigns (Bunny 6 to 31 October, LolliBall 8 to 30 November),
 --   because exempt_active is a hardcoded TRUE and the coach's gate keys on campaign presence alone; it
 --   reads neither that flag nor V_INVEST_STATUS.exemption_live. On the strength of that protection the
---   coach was holding 10 budget cuts covering $188.86 a day (Bunny 4 / $59.00, LolliBall 6 / $129.86).
+--   coach was holding 10 budget decisions (Bunny 4, LolliBall 6). Round 3 priced them at $188.86 a
+--   day, which was wrong — see ROUND 4 below; the true figure is $147.86.
 --   So Ori would read "now judged on money", conclude the trimming had started, leave the budgets
 --   alone, and the only instruction on the row asked him to restore a protection nobody had withdrawn.
 --
 --   TWO STATES, NOT ONE, AND BOTH AS NUMBERS. Being over the sanction and being cut are different
 --   facts and this object may never again publish one as the other. protection_qualified is what the
 --   sanction rules say (V_INVEST_STATUS.exemption_live, which fails closed); protection_enforced is
---   what the machine is doing; cuts_the_coach_is_holding and budget_those_cuts_cover are the size of
+--   what the machine is doing; the held decisions and what applying them would free carry the size of
 --   the gap in dollars, on the family row AND on the book total, because that is the number Ori acts
---   on. Every Invest sentence now states both, and states them apart. The old exemption_live column is
+--   on. (Round 3 called the columns "the size of the gap in dollars" while summing something else
+--   entirely — that phrasing is what let the error through, and ROUND 4 below is the correction.)
+--   Every Invest sentence now states both, and states them apart. The old exemption_live column is
 --   gone: one word cannot carry two states, and "live" was the ambiguity itself.
 --   THE ENGINE WAS NOT TOUCHED. Ori 2026-08-20: "Tell the truth now, release nothing." Wiring the
 --   sanction to the coach is Task 8b and Task 8b is not built; until it is, the only thing standing
@@ -149,6 +152,56 @@
 --   can see, and a protection state that cannot be observed must read NULL, never FALSE — "we could
 --   not check" is not "the coach has stopped", and it is the second of those two that would put the
 --   original lie straight back on the page.
+--
+-- 2026-08-20 (ROUND 4) — THE REPAIR ROUND PUBLISHED A NUMBER 28% TOO HIGH, AND TWO SENTENCES THAT
+-- OVERSTATED. Seven findings, every one re-derived against live data before it was touched.
+--
+--   1. THE HELD-CUTS DOLLARS WERE THE WRONG MEASURE (critical, and the wrong figure had already been
+--      handed to Ori). Round 3 summed current_budget over every held decision whatever the decision
+--      was. A held CAMPAIGN_STOP is worth its whole budget; a held GUARDIAN_BUDGET_DECREASE is worth
+--      only current_budget minus the budget the coach wanted. Measured on T_COACH_CAMPAIGN_BUDGET:
+--      Bunny 4 stops $59.00; LolliBall 2 stops $32.50 plus 4 decreases $97.36 -> $41.00, worth $56.36.
+--      TRUE $147.86 a day; PUBLISHED $188.86 — 28% high at book level and 46% high on LolliBall's own
+--      row ($129.86 against $88.86). Priced per decision kind now, and the two kinds are published
+--      and spoken separately, because "stop this campaign" and "trim this budget" are different jobs.
+--      An unsized trim contributes ZERO dollars and is counted instead, so the figure can only run low.
+--      (The action MIX moves intraday — an earlier read saw Bunny 3 stops + 1 decrease. Nothing here
+--      pins the mix; every count and every dollar is read from the table.)
+--   2. "MOST OF WHAT IT EARNS ARRIVES AS ORGANIC SALES" WAS FALSE AT THE GATE THAT SPOKE IT. The gate
+--      is halo >= 1.30, where the organic share of the return is 1 - 1/1.30 = 23% — and the sentence
+--      called that "most". Bottle, the family it fires on, is 36% (halo 1.57). A majority needs halo
+--      above 2.00, which nothing in the account reaches, so raising the gate would have silenced the
+--      warning instead of fixing it. The gate is unchanged; the sentence prints the MEASURED share.
+--   3. "A FAMILY THAT IS PAYING ITS WAY" WAS ASSERTED ON A FAMILY THAT IS NOT. Bottle: net profit
+--      -$7.54 over the window, return 0.998. The verdict rounded 0.998 to "$1.00" and made a
+--      categorical claim on the rounded value. The claim is gone, the ratio can no longer round
+--      itself across $1.00 (it reads "just under $1.00"), and the point that actually mattered — do
+--      not cut this on the ads figure alone — is made without it.
+--   4. THE BAR RULE WAS STATED AND BROKEN IN THE SAME OBJECT. The file said printing a computed bar
+--      would imply a test that is not being applied, blanked it on INVEST, and printed 0.88 / 0.83 /
+--      0.78 / 0.94 on the HARVEST rows — where nothing applies it either, because Task 8 is unbuilt
+--      and on hold. The bar is now published for every family under a name that says what it is:
+--      keyword_bar_computed_not_applied.
+--   5. THE LOSS ALLOWANCE BELONGED TO NO PUBLISHED WINDOW. The row carried money_window and
+--      rate_window; loss_allowance_used_pct was measured over a THIRD span (month-to-date net profit,
+--      cut at the orders watermark). It now carries loss_allowance_window and its name says "so far".
+--   6. organic_units_1_month_ago WAS NOT THE MOST RECENT MONTH. It sat beside organic_units_last_month
+--      reading 44 and 69 on Bunny: "last month" was July and "1 month ago" was June, the opposite of
+--      the plain reading. Relative English cannot carry this; the names are ordinals off the most
+--      recent COMPLETE calendar month.
+--   7. IT IS ONE KEY, NOT "PRODUCTS". The $8,765 that reaches neither book resolves to a SINGLE key
+--      and that key is the literal placeholder 'Unknown' — rows that name no advertised product at
+--      all. "Products that are not carrying a family name" made a one-line mapping gap sound
+--      systemic, and pointed at a fix that cannot work: no product mapping reaches a row with no
+--      product on it. The clause branches on the measured count so it stays true if the shape changes.
+--
+--   NOTHING IN THE ENGINE WAS TOUCHED, AGAIN. Ori 2026-08-20: "Tell the truth now, release nothing."
+--   V_LAUNCH_EXEMPTION, V_ADS_COACH and V_COACH_CAMPAIGN_BUDGET are unchanged, not one held decision
+--   was released, Task 8b is still unbuilt and Task 8 is still on hold. Everything above is a change
+--   to what this object SAYS about what the machine is already doing.
+--   COST: the two new coverage measures read columns that scan already reads (dry run identical at
+--   56,742,327 bytes standalone); counting distinct campaigns there would have cost +14.9 MB and this
+--   view has no room for it.
 -- ---------------------------------------------------------------------------------------------
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_TWO_BOOK_BRIEF` AS
@@ -159,8 +212,17 @@ WITH k AS (
     -- $1,776 just because both ratios sit under 1.0.
     0.05 AS breakeven_band,
     -- Above this measured halo the ads-only number is misleading enough that the verdict says so out
-    -- loud. Bottle reads 1.59 — the strongest in the account — and cutting it on the ads number is
+    -- loud. Bottle reads 1.57 — the strongest in the account — and cutting it on the ads number is
     -- precisely the mistake this whole design exists to prevent.
+    --
+    -- THE GATE STAYS AT 1.30; THE WORD "MOST" HAD TO GO. The verdict behind this gate said "Most of
+    -- what it earns arrives as organic sales", which is a claim about a MAJORITY and the gate does not
+    -- buy one. halo is total return / ads-only return, so the organic share of the total is 1 - 1/halo:
+    -- at the gate that is 23%, and the sentence would have called 23% "most". Bottle itself is 36%
+    -- (halo 1.57), still not most. A majority needs halo above 2.00, which no family in this account
+    -- reaches, so raising the gate there would have silenced the one warning it exists to give. The
+    -- gate is therefore unchanged and the sentence now prints the measured share instead of naming a
+    -- size — organic_share_of_return_pct, computed off this same published halo.
     1.30 AS wide_halo
 ),
 pnl AS (
@@ -201,7 +263,23 @@ cov AS (
   SELECT
     ROUND(SUM(IF(fm.asin IS NULL, a.Ads_cost, 0)), 0)                                AS unattributed_spend,
     ROUND(100 * SAFE_DIVIDE(SUM(IF(fm.asin IS NULL, 0, a.Ads_cost)),
-                            NULLIF(SUM(a.Ads_cost), 0)), 2)                          AS spend_coverage_pct
+                            NULLIF(SUM(a.Ads_cost), 0)), 2)                          AS spend_coverage_pct,
+    -- HOW MANY ADVERTISED PRODUCTS THAT MONEY ACTUALLY COVERS, AND WHICH ONE IF IT IS JUST ONE.
+    -- The sentence used to say "products that are not carrying a family name" — plural, which reads
+    -- as a systemic mapping failure. Re-derived 2026-08-20: it is ONE key, and the key is the literal
+    -- placeholder 'Unknown' that FACT_AMAZON_ADS writes when a row names no advertised product at all
+    -- (all of it Sponsored Brands). That is not a family name missing from a product; it is a row with
+    -- no product on it, which no product mapping can ever reach. The sentence now branches on the
+    -- measured count instead of asserting a shape, so it stays true when the shape changes.
+    -- COSTS NOTHING: both expressions read columns this scan already reads (dry run 56,742,327 bytes
+    -- with and without them). Counting DISTINCT campaign_id here would have cost +14.9 MB and this
+    -- view has no room for it.
+    COUNT(DISTINCT IF(fm.asin IS NULL,
+      COALESCE(a.most_advertised_asin_impressions, a.advertised_asins, a.ASIN_BY_CAMPAIGN_NAME),
+      NULL))                                                                         AS unattributed_products,
+    MIN(IF(fm.asin IS NULL,
+      COALESCE(a.most_advertised_asin_impressions, a.advertised_asins, a.ASIN_BY_CAMPAIGN_NAME),
+      NULL))                                                                         AS unattributed_product_key
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
   CROSS JOIN win w
   -- Same ASIN resolution V_UNIFIED_DAILY applies, so "reached a family" means the same thing here as
@@ -265,14 +343,47 @@ enf AS (
   GROUP BY family
 ),
 held AS (
-  -- What that protection is costing in withheld decisions. budget_action_suppressed records exactly
-  -- what the coach WOULD have done — a campaign stop or a budget decrease — and current_budget is the
-  -- daily money still flowing because it did not. Summed to the family, that is the number to act on.
+  -- What that protection is costing in withheld decisions.
+  --
+  -- A STOP AND A TRIM ARE NOT WORTH THE SAME MONEY, AND ROUND 3 PRICED THEM AS IF THEY WERE. It summed
+  -- current_budget over every held decision, whatever the decision was, and published the answer as
+  -- "the gap in dollars". A held CAMPAIGN_STOP is indeed worth its whole budget: apply it and all of
+  -- that daily money stops. A held GUARDIAN_BUDGET_DECREASE is worth only current_budget MINUS the
+  -- budget the coach wanted (budget_suppressed_to) — the rest keeps running either way. Re-derived
+  -- 2026-08-20 on this table: Bunny 4 stops / $59.00; LolliBall 2 stops / $32.50 plus 4 decreases from
+  -- $97.36 down to $41.00, worth $56.36. TRUE gap $147.86 a day. The published figure was $188.86 —
+  -- 28% too high at book level, and LolliBall's own row was 46% high ($129.86 against a true $88.86).
+  -- Ori has already been given the wrong number once; it is priced per decision kind from here on.
+  --
+  -- PUBLISHED SEPARATELY, because they are different jobs. "Stop these two campaigns" and "trim these
+  -- four budgets" are not one instruction, and a reader deciding what to do by hand needs to know
+  -- which is which before they can do either.
+  --
+  -- NO TARGET ON RECORD MEANS NO DOLLARS, NEVER THE WHOLE BUDGET. COALESCE(budget_suppressed_to, 0)
+  -- would have priced an unsized trim at its full budget — the exact overstatement above, rebuilt. An
+  -- unsized trim contributes ZERO to the money and is counted instead, so the figure can only ever be
+  -- low, and the row says when it is. (None exist today: every decrease carries a target.)
   SELECT
     parent_name                                                                 AS family,
     COUNTIF(launch_exempt)                                                      AS campaigns_protected,
     COUNTIF(budget_action_suppressed IS NOT NULL)                               AS cuts_held,
-    ROUND(SUM(IF(budget_action_suppressed IS NOT NULL, current_budget, 0)), 2)  AS cuts_budget
+    COUNTIF(budget_action_suppressed = 'CAMPAIGN_STOP')                         AS stops_held,
+    COUNTIF(budget_action_suppressed IS NOT NULL
+            AND budget_action_suppressed <> 'CAMPAIGN_STOP')                    AS trims_held,
+    COUNTIF(budget_action_suppressed IS NOT NULL
+            AND budget_action_suppressed <> 'CAMPAIGN_STOP'
+            AND budget_suppressed_to IS NULL)                                   AS trims_unsized,
+    ROUND(SUM(IF(budget_action_suppressed = 'CAMPAIGN_STOP', current_budget, 0)), 2) AS stops_budget,
+    ROUND(SUM(IF(budget_action_suppressed IS NOT NULL
+                 AND budget_action_suppressed <> 'CAMPAIGN_STOP'
+                 AND budget_suppressed_to IS NOT NULL,
+                 GREATEST(current_budget - budget_suppressed_to, 0), 0)), 2)    AS trims_budget,
+    ROUND(SUM(CASE
+                WHEN budget_action_suppressed IS NULL                THEN 0
+                WHEN budget_action_suppressed = 'CAMPAIGN_STOP'      THEN current_budget
+                WHEN budget_suppressed_to IS NULL                    THEN 0
+                ELSE GREATEST(current_budget - budget_suppressed_to, 0)
+              END), 2)                                                          AS cuts_budget
   FROM `onyga-482313.OI.T_COACH_CAMPAIGN_BUDGET`
   GROUP BY parent_name
 ),
@@ -305,12 +416,41 @@ base AS (
     IF(p.net_profit IS NULL, NULL, ROUND(p.ad_spend, 0))                AS ad_spend,
     IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL, ROUND(p.total_net_roas, 2)) AS total_net_roas,
     IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL, ROUND(p.ads_net_roas, 2))   AS ads_net_roas,
+    -- ─── THE RATIO IN WORDS, AND IT MAY NOT ROUND ITSELF ACROSS $1.00 ───
+    -- Bottle's return is 0.998. FORMAT('$%.2f') prints that as "$1.00", and a verdict then read
+    -- "$1.00 back for every ad dollar" beside a 90-day loss of $8 — the rounding said the family
+    -- covered its costs and the dollars said it did not. Rounding may not decide that question, so a
+    -- value on the wrong side of $1.00 that rounds onto it says which side it is on instead. Built
+    -- from the UNROUNDED upstream figure on purpose: the published column is already rounded to 1.00,
+    -- so a test against the published column can no longer see the difference.
+    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL,
+       CASE WHEN p.total_net_roas IS NULL                                   THEN NULL
+            WHEN p.total_net_roas < 1 AND ROUND(p.total_net_roas, 2) >= 1   THEN 'just under $1.00'
+            WHEN p.total_net_roas > 1 AND ROUND(p.total_net_roas, 2) <= 1   THEN 'just over $1.00'
+            ELSE FORMAT('$%.2f', p.total_net_roas) END)                      AS total_net_roas_text,
+    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL,
+       CASE WHEN p.ads_net_roas IS NULL                                     THEN NULL
+            WHEN p.ads_net_roas < 1 AND ROUND(p.ads_net_roas, 2) >= 1       THEN 'just under $1.00'
+            WHEN p.ads_net_roas > 1 AND ROUND(p.ads_net_roas, 2) <= 1       THEN 'just over $1.00'
+            ELSE FORMAT('$%.2f', p.ads_net_roas) END)                        AS ads_net_roas_text,
     IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL, ROUND(p.halo_factor, 2))    AS halo_factor,
+    -- HOW MUCH OF THE RETURN THE ORGANIC SALES SUPPLY, as a whole percent, off the SAME rounded halo
+    -- the row publishes, so the sentence and the column can never disagree. halo = total return / ads
+    -- return, so the organic share of the total is 1 - 1/halo: at halo 1.57 (Bottle) that is 36%, and
+    -- at the 1.30 gate below it is 23%. See the wide_halo note in k for why that arithmetic had to be
+    -- printed rather than described.
+    IF(p.net_profit IS NULL OR p.ad_spend IS NULL OR COALESCE(p.halo_factor, 0) <= 0, NULL,
+       CAST(ROUND(100 * (1 - SAFE_DIVIDE(1, ROUND(p.halo_factor, 2)))) AS INT64))    AS organic_share_of_return_pct,
     IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL, p.organic_pct)              AS organic_pct,
-    -- INVEST families are bar-exempt (V_FAMILY_BAR.bar_exempt): they are governed by budget and
-    -- trajectory, not by a keyword bar. Printing their computed bar on the brief would imply a test
-    -- that is not being applied, so it is blanked here rather than shown and explained away.
-    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', NULL, ROUND(b.keyword_bar, 2)) AS keyword_bar,
+    -- ─── THE BAR IS COMPUTED AND NOTHING APPLIES IT — SAY SO ON EVERY ROW ───
+    -- This file used to state the rule "printing a bar would imply a test that is not being applied",
+    -- blank it on the INVEST rows because those families are bar-exempt (V_FAMILY_BAR.bar_exempt) —
+    -- and then print the bar on the four HARVEST rows, where NO engine applies it either, because
+    -- Task 8 is unbuilt and Ori has it on hold. The rule was stated and broken in the same object.
+    -- Resolved by keeping the number and fixing the claim: the bar is published for EVERY family
+    -- under a name that says what it is. Nothing reads it today. When Task 8 ships and something
+    -- does, rename this column — do not quietly start relying on it under a name that says otherwise.
+    ROUND(b.keyword_bar, 2)                                             AS keyword_bar_computed_not_applied,
     i.phase, i.launch_age_months, i.stop_date,
     i.daily_investment, i.mtd_spend_per_day, i.spend_rate_ratio, i.spend_breached,
     -- THE SANCTIONED RATE, WRITTEN THE WAY IT WAS AGREED. It used to be printed with FORMAT('$%.0f')
@@ -324,6 +464,21 @@ base AS (
     -- exemption_live is NOT carried under its own name any more: it is one of two protection states
     -- and the old name claimed to be both. It is read once, below, as protection_qualified.
     i.ceiling_used_pct, i.days_left,
+    -- ─── THE LOSS ALLOWANCE HAS ITS OWN WINDOW AND IT IS A THIRD ONE ───
+    -- This row already publishes two windows: money_window (the settled 90 days) and rate_window (the
+    -- month to date, ending at the ads watermark). The loss allowance percentage belonged to NEITHER.
+    -- It is month-to-date NET PROFIT against a monthly ceiling, and its money is cut at the ORDERS
+    -- watermark, not the ads one — 1 to 17 August 2026 today, a different span from both. An unnamed
+    -- third window in a grid of two named ones is how a reader compares two numbers that do not cover
+    -- the same days. It comes straight from V_INVEST_STATUS (mtd_money_start / mtd_money_end), which
+    -- reads it from V_FAMILY_PNL rather than recomputing it, so there is no second definition of it.
+    -- AND THE COLUMN NAME SAYS "SO FAR": this is a running month, always a partial one, and a bare
+    -- percentage of a monthly allowance reads as a finished month unless the name refuses to.
+    i.mtd_money_start, i.mtd_money_end,
+    IF(i.ceiling_used_pct IS NULL OR i.mtd_money_start IS NULL OR i.mtd_money_end IS NULL, NULL,
+       CONCAT(FORMAT_DATE('%-d %B', i.mtd_money_start), ' to ',
+              FORMAT_DATE('%-d %B %Y', i.mtd_money_end),
+              ', the part of this month that is measured'))            AS loss_allowance_window,
     i.org_m2, i.org_m1, i.org_m0, i.takeover_target_organic_units,
     -- NULL, not FALSE, when the family is unmeasured: "we did not measure it" is not "it is fine".
     -- COUNTIF and the loss ranking both skip NULLs, so an unmeasured family cannot be quietly
@@ -346,12 +501,19 @@ base AS (
        OR (e.family IS NULL AND h.family IS NULL), NULL,
        COALESCE(e.campaigns_protected, 0) > 0
        OR COALESCE(h.campaigns_protected, 0) > 0)                       AS protection_enforced,
-    -- THE GAP AS A NUMBER. NULL — never 0 — where the coach's budget pass has no row for the family:
-    -- "it is holding nothing" and "we cannot see what it is holding" are different sentences, and
-    -- only one of them is safe to print beside a live protection. Harvest families carry NULL because
-    -- launch protection is not a concept in that book and an unexplained 0 in a grid is noise.
-    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.cuts_held,   NULL)    AS cuts_held,
-    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.cuts_budget, NULL)    AS cuts_budget
+    -- THE GAP AS A NUMBER, PRICED PER DECISION KIND. NULL — never 0 — where the coach's budget pass
+    -- has no row for the family: "it is holding nothing" and "we cannot see what it is holding" are
+    -- different sentences, and only one of them is safe to print beside a live protection. Harvest
+    -- families carry NULL because launch protection is not a concept in that book and an unexplained
+    -- 0 in a grid is noise. The dollars are what applying the held decisions would FREE — a stop
+    -- frees its whole budget, a trim frees only the part the coach wanted removed. See `held`.
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.cuts_held,     NULL)  AS cuts_held,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.stops_held,    NULL)  AS stops_held,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.trims_held,    NULL)  AS trims_held,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.trims_unsized, NULL)  AS trims_unsized,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.stops_budget,  NULL)  AS stops_budget,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.trims_budget,  NULL)  AS trims_budget,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.cuts_budget,   NULL)  AS cuts_budget
   FROM pnl p
   FULL OUTER JOIN `onyga-482313.OI.V_BOOK_ASSIGNMENT` bk ON bk.family = p.family
   LEFT JOIN `onyga-482313.OI.V_FAMILY_BAR`    b ON b.family = COALESCE(p.family, bk.family)
@@ -404,7 +566,12 @@ fam AS (
     b.total_net_roas,
     b.ads_net_roas,
     b.halo_factor,
-    b.keyword_bar,
+    -- The share of the total return that arrives as organic sales rather than through the ads, in
+    -- whole percent: 1 - 1/halo, off the halo column immediately to its left.
+    b.organic_share_of_return_pct,
+    -- COMPUTED, AND NOTHING APPLIES IT — the name is the caveat. Published on every family now,
+    -- Harvest included, because no engine tests any family against it while Task 8 is on hold.
+    b.keyword_bar_computed_not_applied,
     b.organic_pct,
     -- 1 = the biggest real loss in the harvest book, the one the verdict says to fix first.
     b.loss_rank,
@@ -438,20 +605,38 @@ fam AS (
     -- because a column nobody explains is how the last three defects on this object got shipped.
     b.protection_qualified,
     b.protection_enforced,
-    -- The size of that disagreement: decisions the coach computed and did not apply, and the daily
-    -- budget still running because it did not. This is the number to act on.
+    -- The size of that disagreement, SPLIT BY WHAT THE DECISION ACTUALLY IS, because "stop this
+    -- campaign" and "trim this budget" are different jobs and are worth different money. The dollar
+    -- columns are what APPLYING the held decisions would take off the daily budgets — round 3 published
+    -- the full current budget of every held decision instead and overstated the book by 28%.
     b.cuts_held             AS cuts_the_coach_is_holding,
-    b.cuts_budget           AS budget_those_cuts_cover,
-    b.ceiling_used_pct      AS loss_allowance_used_pct,
+    b.stops_held            AS stops_the_coach_is_holding,
+    b.trims_held            AS trims_the_coach_is_holding,
+    b.stops_budget          AS daily_budget_the_held_stops_would_free,
+    b.trims_budget          AS daily_budget_the_held_trims_would_free,
+    b.cuts_budget           AS daily_budget_all_held_cuts_would_free,
+    -- Trims the coach recorded with no target budget on record. They cannot be sized, so they add
+    -- nothing to the dollars above and are counted here instead — the figure can only run low.
+    b.trims_unsized         AS held_trims_with_no_target_on_record,
+    -- MONTH-TO-DATE AND ON ITS OWN WINDOW, which is neither of the other two on this row.
+    b.ceiling_used_pct      AS loss_allowance_used_pct_so_far,
+    b.loss_allowance_window,
     b.days_left             AS days_left_on_sanction,
     -- THE TRAJECTORY, PUBLISHED. Absolute organic units over the last three complete months. This is
     -- the PRIMARY evidence an Invest family is judged on; it was read into the verdict and then
     -- discarded, so anyone charting the ramp or sorting on it had to re-derive it from upstream.
     -- The old names (org_m2 / org_m1 / org_m0) counted DOWN while their values ran FORWARD in time,
-    -- so "0, 1, 126" only read as climbing if you already knew the convention. Now they say it.
-    b.org_m2                AS organic_units_2_months_ago,
-    b.org_m1                AS organic_units_1_month_ago,
-    b.org_m0                AS organic_units_last_month,
+    -- so "0, 1, 126" only read as climbing if you already knew the convention.
+    -- ROUND 2 RENAMED THEM INTO A WORSE AMBIGUITY AND NOBODY READ THE RESULT ALOUD. It shipped
+    -- organic_units_1_month_ago beside organic_units_last_month — and on Bunny those read 44 and 69.
+    -- "Last month" was July; "1 month ago" was JUNE. The plain reading of "1 month ago" is July, so a
+    -- cold reader got the trajectory backwards from the column names alone. Relative English cannot
+    -- carry this: "last" and "1 ago" are the same month in ordinary speech. The names are ORDINALS
+    -- now, counted off the most recent COMPLETE calendar month (upstream: the three most recent months
+    -- whose period_end falls before the start of the current month, newest first).
+    b.org_m2                AS organic_units_3rd_last_complete_month,
+    b.org_m1                AS organic_units_2nd_last_complete_month,
+    b.org_m0                AS organic_units_last_complete_month,
     b.takeover_target_organic_units AS organic_units_to_stand_alone,
     -- Account-level coverage lives on the HARVEST TOTAL row only; a family row has no share of it.
     CAST(NULL AS FLOAT64)   AS unattributed_spend,
@@ -465,8 +650,8 @@ fam AS (
         -- reported, present indicative, as "it has lost its launch protection and is now judged on
         -- money like every other family". Nothing had withdrawn anything. The coach reads
         -- V_LAUNCH_EXEMPTION, whose exempt_active is hardcoded TRUE, and on the strength of it was
-        -- holding 10 budget cuts across $188.86 a day on exactly the two families this sentence told
-        -- Ori were already being trimmed. The rule clause may now only describe the RULE, and the
+        -- holding 10 budget decisions worth $147.86 a day on exactly the two families this sentence
+        -- told Ori were already being trimmed. The rule clause may now only describe the RULE, and the
         -- machine clause must follow it and say what is actually happening — including, in dollars,
         -- what is not.
         -- ───────────────────────────────────────────────────────────────────────────────────
@@ -513,9 +698,35 @@ fam AS (
                 ', and the coach has withdrawn it: this family is now judged on money like every other family.'
               WHEN COALESCE(b.cuts_held, 0) > 0 THEN CONCAT(
                 ', but the coach is not enforcing that yet: it is still holding ',
-                CAST(b.cuts_held AS STRING),
-                IF(b.cuts_held = 1, ' cut on this family, worth ', ' cuts on this family, worth '),
-                FORMAT("$%'d", CAST(ROUND(b.cuts_budget) AS INT64)), ' a day of budget. ',
+                -- NAME THE DECISIONS, THEN PRICE THEM. "6 cuts worth $130 a day" was two errors in one
+                -- clause: it hid that four of those six only trim a budget rather than end a campaign,
+                -- and it priced all six at their full current budget, which read $130 against a true
+                -- $89. What a reader wants to know is what to do and what it is worth.
+                CASE
+                  WHEN COALESCE(b.stops_held, 0) > 0 AND COALESCE(b.trims_held, 0) > 0 THEN CONCAT(
+                    CAST(b.stops_held AS STRING), IF(b.stops_held = 1, ' campaign stop', ' campaign stops'),
+                    ' and ', CAST(b.trims_held AS STRING),
+                    IF(b.trims_held = 1, ' budget trim', ' budget trims'))
+                  WHEN COALESCE(b.stops_held, 0) > 0 THEN CONCAT(
+                    CAST(b.stops_held AS STRING), IF(b.stops_held = 1, ' campaign stop', ' campaign stops'))
+                  ELSE CONCAT(
+                    CAST(b.trims_held AS STRING), IF(b.trims_held = 1, ' budget trim', ' budget trims'))
+                END,
+                ' on this family. Applying them would take ',
+                FORMAT("$%'d", CAST(ROUND(b.cuts_budget) AS INT64)), ' a day off its budgets',
+                IF(COALESCE(b.stops_held, 0) > 0 AND COALESCE(b.trims_held, 0) > 0,
+                   CONCAT(' — ', FORMAT("$%'d", CAST(ROUND(b.stops_budget) AS INT64)),
+                          ' by stopping campaigns and ',
+                          FORMAT("$%'d", CAST(ROUND(b.trims_budget) AS INT64)),
+                          ' by trimming the rest'),
+                   ''),
+                '. ',
+                IF(COALESCE(b.trims_unsized, 0) > 0,
+                   CONCAT(CAST(b.trims_unsized AS STRING),
+                          IF(b.trims_unsized = 1,
+                             ' of those trims has no target budget on record, so the real figure is higher. ',
+                             ' of those trims have no target budget on record, so the real figure is higher. ')),
+                   ''),
                 IF(COALESCE(b.spend_breached, FALSE),
                    CONCAT('Bring spend back to ', b.daily_investment_text,
                           ' a day, or pull those budgets yourself.'),
@@ -608,19 +819,32 @@ fam AS (
 
       WHEN b.net_profit >= 0 THEN CONCAT(
         b.family, ' made ', FORMAT("$%'d", CAST(b.net_profit AS INT64)), ' over the last 90 days on ',
-        FORMAT("$%'d", CAST(b.ad_spend AS INT64)), ' of ad spend — ', FORMAT('$%.2f', b.total_net_roas),
+        FORMAT("$%'d", CAST(b.ad_spend AS INT64)), ' of ad spend — ', b.total_net_roas_text,
         ' back for every ad dollar once the organic sales those ads pull in are counted, against ',
-        FORMAT('$%.2f', b.ads_net_roas), ' counting ads alone. Keep it running.')
+        b.ads_net_roas_text, ' counting ads alone. Keep it running.')
 
+      -- ───────────────────────────────────────────────────────────────────────────────────────
+      -- THE BREAK-EVEN BRANCH MAY NOT CALL A LOSS A PROFIT, AND ROUNDING MAY NOT DECIDE IT.
+      -- This branch fires on a family whose loss is smaller than the breakeven band — real money, just
+      -- too little to be worth a job. On 2026-08-20 that was Bottle: net profit -$7.54, return 0.998.
+      -- The sentence rounded 0.998 to "$1.00" and then asserted, categorically, "a family that is
+      -- paying its way" — on a family a hair SHORT of paying its way, in the same session whose own
+      -- documentation called that 0.998 a known knife edge. The useful point is the one that survives:
+      -- do not cut this on the ads figure. It is made now WITHOUT claiming profitability, the ratio is
+      -- written so it cannot round across $1.00 (total_net_roas_text), and the halo clause prints the
+      -- MEASURED organic share instead of the word "most" — see the wide_halo note in k.
+      -- ───────────────────────────────────────────────────────────────────────────────────────
       WHEN NOT b.real_loss THEN CONCAT(
-        b.family, ' broke even over the last 90 days — down ', FORMAT("$%'d", CAST(-b.net_profit AS INT64)),
-        ' on ', FORMAT("$%'d", CAST(b.ad_spend AS INT64)), ' of ad spend, which is too small to be worth acting on. ',
-        'It brings back ', FORMAT('$%.2f', b.total_net_roas),
+        b.family, ' came within ', FORMAT("$%'d", CAST(-b.net_profit AS INT64)),
+        ' of covering its costs over the last 90 days on ', FORMAT("$%'d", CAST(b.ad_spend AS INT64)),
+        ' of ad spend — a shortfall too small to be worth acting on, but a shortfall, not a profit. ',
+        'It brings back ', b.total_net_roas_text,
         ' for every ad dollar once the organic sales those ads pull in are counted, against ',
-        FORMAT('$%.2f', b.ads_net_roas), ' counting ads alone.',
-        IF(b.wide_halo,
-           CONCAT(' Most of what it earns arrives as organic sales, so cutting it on the ads number alone would ',
-                  'take down a family that is paying its way.'),
+        b.ads_net_roas_text, ' counting ads alone.',
+        IF(b.wide_halo AND b.organic_share_of_return_pct IS NOT NULL,
+           CONCAT(' ', CAST(b.organic_share_of_return_pct AS STRING),
+                  '% of that return comes from the organic sales rather than from the ads themselves, ',
+                  'so the ads-only figure understates it — do not cut it on that figure alone.'),
            ''))
 
       ELSE CONCAT(
@@ -630,9 +854,9 @@ fam AS (
            ' — the biggest loss in the harvest book, so this is the one to fix first. ',
            CONCAT(' — a smaller loss than ', b.worst_family, "'s ",
                   FORMAT("$%'d", CAST(-b.worst_net_profit AS INT64)), ', so it waits behind that one. ')),
-        'It brings back ', FORMAT('$%.2f', b.total_net_roas),
+        'It brings back ', b.total_net_roas_text,
         ' for every ad dollar even after counting the organic sales those ads pull in, against ',
-        FORMAT('$%.2f', b.ads_net_roas), ' counting ads alone.')
+        b.ads_net_roas_text, ' counting ads alone.')
     END                     AS verdict
   FROM ranked b
 ),
@@ -678,7 +902,15 @@ agg AS (
             AND NOT COALESCE(protection_qualified, FALSE))                  AS n_protection_gap,
     -- NULL, not 0, when nothing in the book could be checked — SUM ignores NULLs, and a book of
     -- families the coach's budget pass has never seen must not report "holding nothing".
+    -- SUMMED PER DECISION KIND, so the book total is priced the same way the family rows are: stops at
+    -- their whole budget, trims at only the part the coach wanted removed. Summing current_budget over
+    -- both kinds is what published $188.86 against a true $147.86.
     SUM(cuts_held)                                 AS cuts_held,
+    SUM(stops_held)                                AS stops_held,
+    SUM(trims_held)                                AS trims_held,
+    SUM(trims_unsized)                             AS trims_unsized,
+    SUM(stops_budget)                              AS stops_budget,
+    SUM(trims_budget)                              AS trims_budget,
     SUM(cuts_budget)                               AS cuts_budget,
     ARRAY_AGG(IF(COALESCE(real_loss, FALSE), family, NULL)
               IGNORE NULLS ORDER BY net_profit ASC, family ASC LIMIT 1)[SAFE_OFFSET(0)] AS worst_family,
@@ -712,7 +944,8 @@ tot AS (
     CAST(NULL AS FLOAT64)                            AS total_net_roas,
     CAST(NULL AS FLOAT64)                            AS ads_net_roas,
     CAST(NULL AS FLOAT64)                            AS halo_factor,
-    CAST(NULL AS FLOAT64)                            AS keyword_bar,
+    CAST(NULL AS INT64)                              AS organic_share_of_return_pct,
+    CAST(NULL AS FLOAT64)                            AS keyword_bar_computed_not_applied,
     CAST(NULL AS FLOAT64)                            AS organic_pct,
     CAST(NULL AS INT64)                              AS loss_rank,
     IF(a.mtd_spend_per_day IS NULL, NULL,
@@ -730,14 +963,22 @@ tot AS (
     CAST(NULL AS BOOL)                               AS protection_qualified,
     CAST(NULL AS BOOL)                               AS protection_enforced,
     a.cuts_held                                      AS cuts_the_coach_is_holding,
-    a.cuts_budget                                    AS budget_those_cuts_cover,
-    CAST(NULL AS FLOAT64)                            AS loss_allowance_used_pct,
+    a.stops_held                                     AS stops_the_coach_is_holding,
+    a.trims_held                                     AS trims_the_coach_is_holding,
+    a.stops_budget                                   AS daily_budget_the_held_stops_would_free,
+    a.trims_budget                                   AS daily_budget_the_held_trims_would_free,
+    a.cuts_budget                                    AS daily_budget_all_held_cuts_would_free,
+    a.trims_unsized                                  AS held_trims_with_no_target_on_record,
+    -- A loss allowance is a per-family sanction; a book has no single one, and no window of its own
+    -- for one either.
+    CAST(NULL AS FLOAT64)                            AS loss_allowance_used_pct_so_far,
+    CAST(NULL AS STRING)                             AS loss_allowance_window,
     CAST(NULL AS INT64)                              AS days_left_on_sanction,
     -- A trajectory is a per-family fact; summing organic units across a book would invite exactly the
     -- kind of blended number this object exists to refuse.
-    CAST(NULL AS INT64)                              AS organic_units_2_months_ago,
-    CAST(NULL AS INT64)                              AS organic_units_1_month_ago,
-    CAST(NULL AS INT64)                              AS organic_units_last_month,
+    CAST(NULL AS INT64)                              AS organic_units_3rd_last_complete_month,
+    CAST(NULL AS INT64)                              AS organic_units_2nd_last_complete_month,
+    CAST(NULL AS INT64)                              AS organic_units_last_complete_month,
     CAST(NULL AS INT64)                              AS organic_units_to_stand_alone,
     -- ACCOUNT-LEVEL, BELONGING TO NEITHER BOOK, AND ON THE HARVEST TOTAL ROW ONLY — the one row that
     -- carries the sentence explaining it. Published on both totals it read as $8,765 twice, next to
@@ -793,12 +1034,29 @@ tot AS (
         -- The one clause that stops this page presenting its spend total as the account's
         -- advertising. It used to be the only sentence on the object that told the reader nothing to
         -- do, while its two siblings about this identical root cause both end the same four words.
+        -- AND SAY WHAT IT ACTUALLY IS. This clause used to end "Those ads ran against products that
+        -- are not carrying a family name" — plural, which reads as a scattered mapping failure across
+        -- the catalogue. Re-derived 2026-08-20: ONE key, and the key is the literal placeholder
+        -- 'Unknown' that the ads fact writes when a row names no advertised product at all. That is not
+        -- a product missing its family name; it is a row with no product on it, which no amount of
+        -- product mapping will ever reach. The branch reads the measured count, so it cannot go stale
+        -- into a different lie: one placeholder, one real product, or several, each said plainly.
         IF(c.unattributed_spend > 0,
            CONCAT(' Separately, ', FORMAT("$%'d", CAST(c.unattributed_spend AS INT64)),
                   ' of advertising over the same 90 days — ', FORMAT('%.1f', 100 - c.spend_coverage_pct),
                   '% of everything the account spent — reached no family at all and is in neither book. ',
-                  'Those ads ran against products that are not carrying a family name, so none of the ',
-                  'money on this page accounts for it — check the product mapping.'),
+                  CASE
+                    WHEN c.unattributed_products = 1 AND c.unattributed_product_key = 'Unknown' THEN
+                      CONCAT('None of those ads records the product it was selling: every one of them ',
+                             'carries "Unknown" where the product should be, so no product name can ',
+                             'attach that money to a family. It has to be attributed by campaign instead.')
+                    WHEN c.unattributed_products = 1 THEN
+                      CONCAT('All of it ran against one product that is not carrying a family name — ',
+                             'check the product mapping.')
+                    ELSE
+                      CONCAT('Those ads ran against ', CAST(c.unattributed_products AS STRING),
+                             ' products that are not carrying a family name — check the product mapping.')
+                  END),
            ''))
       ELSE
         CASE
@@ -833,8 +1091,8 @@ tot AS (
             -- families that have an agreed rate, so once one family has none, "every one of them" would
             -- claim more than was checked.
             -- AND SAY ONLY WHAT THE RULE SAYS. This clause read "so none is protected right now" and
-            -- was simply false: the coach was protecting both of them and holding 10 cuts across
-            -- $188.86 a day on the strength of it. Qualifying for protection is what the rate decides;
+            -- was simply false: the coach was protecting both of them and holding 10 decisions worth
+            -- $147.86 a day on the strength of it. Qualifying for protection is what the rate decides;
             -- being protected is what the machine decides, and that is the next clause's job.
             CASE
               WHEN a.n_over_rate = 0          THEN CONCAT('All ', IF(a.n_families = a.n_priced, 'of them', 'of those with a rate on record'),
@@ -853,15 +1111,43 @@ tot AS (
             CASE
               WHEN COALESCE(a.n_enforcement_known, 0) = 0 THEN
                 'Whether the coach is still protecting them could not be checked today — check the launch exemption. '
+              -- PRICED THE SAME WAY THE FAMILY ROWS ARE. This sentence said "10 budget cuts worth $189
+              -- a day", which was the full current budget of every held decision — six of them stops,
+              -- worth their whole budget, and four of them trims, worth only the part being trimmed.
+              -- The true figure is $148. It is the one number on this row Ori acts on, and he was
+              -- handed it 28% high.
               WHEN a.n_protection_gap > 0 AND COALESCE(a.cuts_held, 0) > 0 THEN CONCAT(
                 'The coach is not enforcing that: it is still protecting ',
                 CAST(a.n_protection_gap AS STRING),
                 IF(a.n_protection_gap = 1, ' family that no longer qualifies', ' families that no longer qualify'),
-                ', and it is holding ', CAST(a.cuts_held AS STRING),
-                IF(a.cuts_held = 1, ' budget cut worth ', ' budget cuts worth '),
-                FORMAT("$%'d", CAST(ROUND(a.cuts_budget) AS INT64)),
-                ' a day between them. Nothing is trimming those budgets — bring the rates back inside ',
-                'the sanctions, or pull the budgets yourself. ')
+                ', and it is holding ',
+                CASE
+                  WHEN COALESCE(a.stops_held, 0) > 0 AND COALESCE(a.trims_held, 0) > 0 THEN CONCAT(
+                    CAST(a.stops_held AS STRING), IF(a.stops_held = 1, ' campaign stop', ' campaign stops'),
+                    ' and ', CAST(a.trims_held AS STRING),
+                    IF(a.trims_held = 1, ' budget trim', ' budget trims'))
+                  WHEN COALESCE(a.stops_held, 0) > 0 THEN CONCAT(
+                    CAST(a.stops_held AS STRING), IF(a.stops_held = 1, ' campaign stop', ' campaign stops'))
+                  ELSE CONCAT(
+                    CAST(a.trims_held AS STRING), IF(a.trims_held = 1, ' budget trim', ' budget trims'))
+                END,
+                ' between them. Applying those would take ',
+                FORMAT("$%'d", CAST(ROUND(a.cuts_budget) AS INT64)), ' a day off their budgets',
+                IF(COALESCE(a.stops_held, 0) > 0 AND COALESCE(a.trims_held, 0) > 0,
+                   CONCAT(' — ', FORMAT("$%'d", CAST(ROUND(a.stops_budget) AS INT64)),
+                          ' by stopping campaigns and ',
+                          FORMAT("$%'d", CAST(ROUND(a.trims_budget) AS INT64)),
+                          ' by trimming the rest'),
+                   ''),
+                '. ',
+                IF(COALESCE(a.trims_unsized, 0) > 0,
+                   CONCAT(CAST(a.trims_unsized AS STRING),
+                          IF(a.trims_unsized = 1,
+                             ' of those trims has no target budget on record, so the real figure is higher. ',
+                             ' of those trims have no target budget on record, so the real figure is higher. ')),
+                   ''),
+                'Nothing is touching those budgets today — bring the rates back inside the sanctions, ',
+                'or pull the budgets yourself. ')
               WHEN a.n_protection_gap > 0 THEN CONCAT(
                 'The coach is not enforcing that: it is still protecting ',
                 CAST(a.n_protection_gap AS STRING),
