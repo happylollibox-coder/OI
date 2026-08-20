@@ -21,10 +21,11 @@
 --
 -- THE INVEST ROWS DO NOT CARRY A PROFIT VERDICT. Months 0-3 are judged on improvement, never on
 -- profitability (Ori 2026-08-19: "the question of launch products is are they improving — not are
--- they profitable — in the first 3 months"). So an Invest verdict says three things and no fourth:
--- the spend rate against what was sanctioned, whether the launch protection is still live, and the
--- organic trajectory in absolute units. Its net_profit column is still published — it is the cost of
--- the investment, and the verdict frames it as money agreed to, not as a loss to chase.
+-- they profitable — in the first 3 months"). So an Invest verdict says four things and no fifth: the
+-- spend rate against what was sanctioned, whether the launch still QUALIFIES for protection under
+-- that sanction, whether the coach is actually ENFORCING protection (and what it is holding back if
+-- it is), and the organic trajectory in absolute units. Its net_profit column is still published — it
+-- is the cost of the investment, and the verdict frames it as money agreed to, not as a loss to chase.
 --
 -- WINDOW HONESTY: the P&L columns are the settled 90-day window; the spend rate is MONTH-TO-DATE,
 -- because a rate must be current to bind. The two are deliberately different windows, so every
@@ -110,6 +111,44 @@
 --    removes the fam-to-lr self-join, which squared any future duplicate upstream row into four
 --    identical family rows and two wrong money columns while total_rows sat at 2 looking fine.
 --    THE CEILING IS STILL REAL AND STILL BINDS ON CONSUMERS — see the block above the final SELECT.
+--
+-- 2026-08-20 (ROUND 3) — THE BRIEF CLAIMED AN ENFORCEMENT THAT IS NOT HAPPENING (critical).
+--   Both Invest family rows and the Invest total spoke in the present indicative about an effect no
+--   machine was producing: "it has lost its launch protection and is now judged on money like every
+--   other family", and "Every one of them is over its agreed rate, so none is protected right now."
+--   Verified the same morning: V_LAUNCH_EXEMPTION — the object the coach actually reads — returns
+--   protection ACTIVE on all 14 launch campaigns (Bunny 6 to 31 October, LolliBall 8 to 30 November),
+--   because exempt_active is a hardcoded TRUE and the coach's gate keys on campaign presence alone; it
+--   reads neither that flag nor V_INVEST_STATUS.exemption_live. On the strength of that protection the
+--   coach was holding 10 budget cuts covering $188.86 a day (Bunny 4 / $59.00, LolliBall 6 / $129.86).
+--   So Ori would read "now judged on money", conclude the trimming had started, leave the budgets
+--   alone, and the only instruction on the row asked him to restore a protection nobody had withdrawn.
+--
+--   TWO STATES, NOT ONE, AND BOTH AS NUMBERS. Being over the sanction and being cut are different
+--   facts and this object may never again publish one as the other. protection_qualified is what the
+--   sanction rules say (V_INVEST_STATUS.exemption_live, which fails closed); protection_enforced is
+--   what the machine is doing; cuts_the_coach_is_holding and budget_those_cuts_cover are the size of
+--   the gap in dollars, on the family row AND on the book total, because that is the number Ori acts
+--   on. Every Invest sentence now states both, and states them apart. The old exemption_live column is
+--   gone: one word cannot carry two states, and "live" was the ambiguity itself.
+--   THE ENGINE WAS NOT TOUCHED. Ori 2026-08-20: "Tell the truth now, release nothing." Wiring the
+--   sanction to the coach is Task 8b and Task 8b is not built; until it is, the only thing standing
+--   between an over-sanction launch and the money is a person reading this row, and the row now says
+--   so out loud instead of implying otherwise.
+--
+--   WHERE THE ENFORCEMENT FACT COMES FROM, AND WHY NOT FROM THE OBVIOUS PLACE. This view sits AT
+--   BigQuery's planning ceiling, so every source was measured alone before it was joined.
+--   V_COACH_CAMPAIGN_BUDGET — the view that carries the held decisions — dry-runs at 283,900,961 bytes
+--   and takes ~47s just to PLAN and ~113s to run; inlining it here would have been the same fatal move
+--   that stopped V_PANEL_OWNERSHIP planning on 2026-08-17. Its daily materialisation
+--   T_COACH_CAMPAIGN_BUDGET is 78 rows and 10 KB, built by SP_REFRESH_CUBE_TABLES in the same daily
+--   pass, and carries every column needed — so no new table and no orchestrator change were required.
+--   V_LAUNCH_EXEMPTION is genuinely light (17,551,398 bytes, ~3s) and is the authority the coach reads,
+--   so it is joined directly. Measured: 82,048,475 -> 82,249,465 dry-run bytes (+0.2%), plan 5.7s ->
+--   4.5s. BOTH sources are read, deliberately: either one alone can be silent about a family the other
+--   can see, and a protection state that cannot be observed must read NULL, never FALSE — "we could
+--   not check" is not "the coach has stopped", and it is the second of those two that would put the
+--   original lie straight back on the page.
 -- ---------------------------------------------------------------------------------------------
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_TWO_BOOK_BRIEF` AS
@@ -195,6 +234,48 @@ cov AS (
 -- SUM ignores NULLs, so an unmeasured family can neither move a book total nor open a gap in the
 -- reconciliation — it can only be seen.
 -- ─────────────────────────────────────────────────────────────────────────────────────────────
+-- ─────────────────────────────────────────────────────────────────────────────────────────────
+-- WHAT THE MACHINE IS ACTUALLY DOING — read from the two lightest objects that carry it.
+-- QUALIFYING FOR PROTECTION AND BEING PROTECTED ARE DIFFERENT FACTS. V_INVEST_STATUS answers the
+-- first: is this launch inside the rate, the date and the loss allowance Ori sanctioned. Nothing
+-- reads that answer. The coach's gate keys on a campaign being present in V_LAUNCH_EXEMPTION, whose
+-- exempt_active is a hardcoded TRUE, so a launch keeps its protection however far over sanction it
+-- runs. These two CTEs measure the second fact so the brief can print both and never conflate them.
+--
+-- TWO SOURCES ON PURPOSE, AND NEITHER IS REDUNDANT. V_LAUNCH_EXEMPTION is the authority the coach
+-- reads and it is campaign-complete for protected campaigns (Bunny 6, LolliBall 8 @ 2026-08-20).
+-- T_COACH_CAMPAIGN_BUDGET is where the CONSEQUENCE lives — the decisions the exemption suppressed and
+-- the budget they cover — but it holds only campaigns that reached a budget decision (5 and 6 of those
+-- same campaigns), so it can be silent about a protected campaign the exemption view can see. Reading
+-- both means "no evidence anywhere" stays distinguishable from "evidence that the coach has let go",
+-- which is the whole point: FALSE here would reprint the exact claim this round exists to remove.
+--
+-- WHY THE TABLE AND NOT THE VIEW. V_COACH_CAMPAIGN_BUDGET dry-runs at 283,900,961 bytes, ~47s to plan
+-- and ~113s to run, and this view is already at the planning ceiling. Its daily materialisation is 78
+-- rows / 10 KB and is built by SP_REFRESH_CUBE_TABLES in the same daily pass that feeds everything
+-- else here, so it costs essentially nothing and needs no new object (house pattern for planner
+-- blowups: never inline a ceiling view, read the T_ built earlier in the pass).
+-- THE FIGURES ARE AS OF THAT DAILY BUILD, like every other coach number in the account.
+-- ─────────────────────────────────────────────────────────────────────────────────────────────
+enf AS (
+  -- The exemption the coach reads. A family with no row here has no protected campaign today: the
+  -- upstream view already filters to campaigns still inside their exemption window.
+  SELECT family, COUNTIF(exempt_active) AS campaigns_protected
+  FROM `onyga-482313.OI.V_LAUNCH_EXEMPTION`
+  GROUP BY family
+),
+held AS (
+  -- What that protection is costing in withheld decisions. budget_action_suppressed records exactly
+  -- what the coach WOULD have done — a campaign stop or a budget decrease — and current_budget is the
+  -- daily money still flowing because it did not. Summed to the family, that is the number to act on.
+  SELECT
+    parent_name                                                                 AS family,
+    COUNTIF(launch_exempt)                                                      AS campaigns_protected,
+    COUNTIF(budget_action_suppressed IS NOT NULL)                               AS cuts_held,
+    ROUND(SUM(IF(budget_action_suppressed IS NOT NULL, current_budget, 0)), 2)  AS cuts_budget
+  FROM `onyga-482313.OI.T_COACH_CAMPAIGN_BUDGET`
+  GROUP BY parent_name
+),
 base AS (
   SELECT
     -- HARVEST IS THE DEFAULT (V_BOOK_ASSIGNMENT header). A family with no book row is Harvest, not a
@@ -240,18 +321,44 @@ base AS (
     IF(i.daily_investment = TRUNC(i.daily_investment),
        FORMAT("$%'d", CAST(i.daily_investment AS INT64)),
        FORMAT('$%.2f', i.daily_investment))                             AS daily_investment_text,
-    i.exemption_live, i.ceiling_used_pct, i.days_left,
+    -- exemption_live is NOT carried under its own name any more: it is one of two protection states
+    -- and the old name claimed to be both. It is read once, below, as protection_qualified.
+    i.ceiling_used_pct, i.days_left,
     i.org_m2, i.org_m1, i.org_m0, i.takeover_target_organic_units,
     -- NULL, not FALSE, when the family is unmeasured: "we did not measure it" is not "it is fine".
     -- COUNTIF and the loss ranking both skip NULLs, so an unmeasured family cannot be quietly
     -- counted as healthy — it is named as unmeasured instead, in the total's own sentence.
     IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL,
        (p.net_profit < 0 AND -p.net_profit > k.breakeven_band * p.ad_spend)) AS real_loss,
-    (COALESCE(p.halo_factor, 0) >= k.wide_halo)                         AS wide_halo
+    (COALESCE(p.halo_factor, 0) >= k.wide_halo)                         AS wide_halo,
+    -- ─── THE TWO PROTECTION STATES, KEPT APART ───
+    -- QUALIFIED: what the sanction rules say. exemption_live is already the fail-closed answer —
+    -- protection only on positive evidence of a rate on file, a measured spend at or under it, a loss
+    -- ceiling on file and a measured loss under it. Renamed here because "live" reads as "in force",
+    -- which is precisely the thing it does not mean.
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.exemption_live, NULL)  AS protection_qualified,
+    -- ENFORCED: what the machine is doing. TRUE if either source can see a protected campaign; FALSE
+    -- only when a source has campaigns for this family and none of them is protected; NULL when
+    -- neither source has heard of the family at all. That third state matters more than it looks: a
+    -- missing measurement printed as FALSE would put "the coach has withdrawn it" back on the page,
+    -- which is the sentence this whole round exists to delete.
+    IF(COALESCE(bk.book, 'HARVEST') <> 'INVEST'
+       OR (e.family IS NULL AND h.family IS NULL), NULL,
+       COALESCE(e.campaigns_protected, 0) > 0
+       OR COALESCE(h.campaigns_protected, 0) > 0)                       AS protection_enforced,
+    -- THE GAP AS A NUMBER. NULL — never 0 — where the coach's budget pass has no row for the family:
+    -- "it is holding nothing" and "we cannot see what it is holding" are different sentences, and
+    -- only one of them is safe to print beside a live protection. Harvest families carry NULL because
+    -- launch protection is not a concept in that book and an unexplained 0 in a grid is noise.
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.cuts_held,   NULL)    AS cuts_held,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', h.cuts_budget, NULL)    AS cuts_budget
   FROM pnl p
   FULL OUTER JOIN `onyga-482313.OI.V_BOOK_ASSIGNMENT` bk ON bk.family = p.family
   LEFT JOIN `onyga-482313.OI.V_FAMILY_BAR`    b ON b.family = COALESCE(p.family, bk.family)
   LEFT JOIN `onyga-482313.OI.V_INVEST_STATUS` i ON i.family = COALESCE(p.family, bk.family)
+  -- Both one row per family by construction (GROUP BY family above), so neither can fan the spine out.
+  LEFT JOIN enf  e ON e.family = COALESCE(p.family, bk.family)
+  LEFT JOIN held h ON h.family = COALESCE(p.family, bk.family)
   -- k LAST, and never before the FULL OUTER JOIN: cross-joined earlier, the outer join would null
   -- out the tunables on exactly the book-only rows this fix exists to create.
   CROSS JOIN k
@@ -323,7 +430,18 @@ fam AS (
     b.daily_investment,
     b.mtd_spend_per_day,
     b.spend_rate_ratio      AS times_over_agreed_rate,
-    b.exemption_live,
+    -- ─── THE TWO STATES, PUBLISHED SEPARATELY, AND THE GAP BETWEEN THEM IN DOLLARS ───
+    -- QUALIFIED = has this launch earned protection under the rules Ori set (rate, end date, loss
+    -- allowance). ENFORCED = is the coach actually applying protection to its campaigns. They are
+    -- currently allowed to disagree and on 2026-08-20 they did, on both families: false and true.
+    -- Named so a cold reader cannot read one as the other; the verdict says both out loud as well,
+    -- because a column nobody explains is how the last three defects on this object got shipped.
+    b.protection_qualified,
+    b.protection_enforced,
+    -- The size of that disagreement: decisions the coach computed and did not apply, and the daily
+    -- budget still running because it did not. This is the number to act on.
+    b.cuts_held             AS cuts_the_coach_is_holding,
+    b.cuts_budget           AS budget_those_cuts_cover,
     b.ceiling_used_pct      AS loss_allowance_used_pct,
     b.days_left             AS days_left_on_sanction,
     -- THE TRAJECTORY, PUBLISHED. Absolute organic units over the last three complete months. This is
@@ -341,27 +459,75 @@ fam AS (
     CASE
       -- ───────── INVEST: sanction adherence + trajectory. Never a profit verdict. ─────────
       WHEN b.book = 'INVEST' THEN CONCAT(
+        -- ───────────────────────────────────────────────────────────────────────────────────
+        -- THE RATE, THE RULE, AND THE MACHINE — three clauses, in that order, never merged.
+        -- Until 2026-08-20 this branch collapsed the last two: being over the sanctioned rate was
+        -- reported, present indicative, as "it has lost its launch protection and is now judged on
+        -- money like every other family". Nothing had withdrawn anything. The coach reads
+        -- V_LAUNCH_EXEMPTION, whose exempt_active is hardcoded TRUE, and on the strength of it was
+        -- holding 10 budget cuts across $188.86 a day on exactly the two families this sentence told
+        -- Ori were already being trimmed. The rule clause may now only describe the RULE, and the
+        -- machine clause must follow it and say what is actually happening — including, in dollars,
+        -- what is not.
+        -- ───────────────────────────────────────────────────────────────────────────────────
         CASE
           WHEN b.daily_investment IS NULL THEN CONCAT(
             b.family, ' is in the investment book, but there is no approved daily spend on record for it, ',
             'so nothing is holding it. Write the sanction down or move it back to being judged on money.')
-          WHEN b.spend_breached THEN CONCAT(
-            b.family, ' is spending ', FORMAT('$%.2f', b.mtd_spend_per_day), ' a day so far this month against the ',
-            b.daily_investment_text, ' a day you approved — about ', FORMAT('%.1f', b.spend_rate_ratio),
-            ' times the agreed rate, so it has lost its launch protection and is now judged on money like every ',
-            'other family. Bring spend back to ', b.daily_investment_text, ' a day to restore it.')
-          WHEN b.exemption_live THEN CONCAT(
-            b.family, ' is spending ', FORMAT('$%.2f', b.mtd_spend_per_day), ' a day so far this month, inside the ',
-            b.daily_investment_text, ' a day you approved, so its launch protection holds until ',
-            FORMAT_DATE('%-d %B %Y', b.stop_date), '.')
-          WHEN COALESCE(b.days_left, -1) < 0 THEN CONCAT(
-            b.family, ' is spending ', FORMAT('$%.2f', b.mtd_spend_per_day), ' a day so far this month, inside the ',
-            b.daily_investment_text, ' a day you approved, but the agreed end date has passed, ',
-            'so it is back to being judged on money like every other family.')
           ELSE CONCAT(
-            b.family, ' is spending ', FORMAT('$%.2f', b.mtd_spend_per_day), ' a day so far this month, inside the ',
-            b.daily_investment_text, ' a day you approved, but it has already used up the losses you ',
-            'allowed it this month, so its launch protection has stopped.')
+            -- 1. THE RATE.
+            b.family, ' is spending ', FORMAT('$%.2f', b.mtd_spend_per_day), ' a day so far this month ',
+            CASE
+              WHEN b.spend_breached THEN CONCAT(
+                'against the ', b.daily_investment_text, ' a day you approved — about ',
+                FORMAT('%.1f', b.spend_rate_ratio), ' times the agreed rate. ')
+              WHEN b.spend_breached IS NULL THEN CONCAT(
+                'against the ', b.daily_investment_text, ' a day you approved. ')
+              ELSE CONCAT('inside the ', b.daily_investment_text, ' a day you approved. ')
+            END,
+            -- 2. WHAT THE RULES SAY. Qualification only — no claim about any consequence.
+            CASE
+              WHEN COALESCE(b.spend_breached, FALSE) THEN 'That forfeits its launch protection'
+              WHEN COALESCE(b.protection_qualified, FALSE) THEN
+                CONCAT('It qualifies for launch protection until ', FORMAT_DATE('%-d %B %Y', b.stop_date))
+              WHEN COALESCE(b.days_left, -1) < 0 THEN
+                'The agreed end date has passed, so it no longer qualifies for launch protection'
+              WHEN COALESCE(b.ceiling_used_pct, 0) >= 100 THEN
+                CONCAT('It has already used up the losses you allowed it this month, ',
+                       'so it no longer qualifies for launch protection')
+              ELSE
+                'It does not qualify for launch protection right now, and not everything the sanction needs is on record'
+            END,
+            -- 3. WHAT THE MACHINE IS DOING. This clause is the whole repair. It always speaks, it
+            -- never guesses, and where the two states disagree it carries the size of the gap.
+            CASE
+              WHEN b.protection_enforced IS NULL THEN CONCAT(
+                '. Whether the coach is still protecting it could not be checked today, so do not ',
+                'assume anything is being cut — check the launch exemption.')
+              WHEN COALESCE(b.protection_qualified, FALSE) AND b.protection_enforced THEN
+                ', and the coach is applying it.'
+              WHEN COALESCE(b.protection_qualified, FALSE) THEN CONCAT(
+                ', but the coach is not applying it — this family is being judged on money already. ',
+                'Check the launch exemption.')
+              WHEN NOT b.protection_enforced THEN
+                ', and the coach has withdrawn it: this family is now judged on money like every other family.'
+              WHEN COALESCE(b.cuts_held, 0) > 0 THEN CONCAT(
+                ', but the coach is not enforcing that yet: it is still holding ',
+                CAST(b.cuts_held AS STRING),
+                IF(b.cuts_held = 1, ' cut on this family, worth ', ' cuts on this family, worth '),
+                FORMAT("$%'d", CAST(ROUND(b.cuts_budget) AS INT64)), ' a day of budget. ',
+                IF(COALESCE(b.spend_breached, FALSE),
+                   CONCAT('Bring spend back to ', b.daily_investment_text,
+                          ' a day, or pull those budgets yourself.'),
+                   'Extend the sanction if you still want it, or pull those budgets yourself.'))
+              ELSE CONCAT(
+                ', but the coach is not enforcing that yet: this family is still protected, so no ',
+                'budget cut can reach it — there is simply none queued today. ',
+                IF(COALESCE(b.spend_breached, FALSE),
+                   CONCAT('Bring spend back to ', b.daily_investment_text,
+                          ' a day, or pull its budgets down yourself.'),
+                   'Extend the sanction if you still want it, or pull its budgets down yourself.'))
+            END)
         END,
         CASE
           WHEN b.org_m1 IS NULL THEN ' There is not enough history yet to tell whether organic sales are climbing.'
@@ -382,13 +548,15 @@ fam AS (
         -- still matters when protection has stopped; it is just no longer what is holding the line.
         CASE
           WHEN b.launch_age_months IS NULL THEN ''
-          WHEN b.phase = 'RAMP' AND COALESCE(b.exemption_live, FALSE) THEN CONCAT(
+          WHEN b.phase = 'RAMP' AND COALESCE(b.protection_qualified, FALSE) THEN CONCAT(
             ' It is ', CAST(b.launch_age_months AS STRING), IF(b.launch_age_months = 1, ' month', ' months'),
             ' old, so what matters is whether it is improving, not whether it is profitable yet.')
+          -- "and that has stopped" was the same false claim in a second place: protection had not
+          -- stopped, the family had only stopped EARNING it. The clause now says exactly that, which
+          -- is true whatever the coach is or is not doing.
           WHEN b.phase = 'RAMP' THEN CONCAT(
             ' It is only ', CAST(b.launch_age_months AS STRING), IF(b.launch_age_months = 1, ' month', ' months'),
-            ' old, so the improvement still matters — but launch protection was what kept it off the ',
-            'money test, and that has stopped.')
+            ' old, so the improvement still matters — but it is outside the terms that were protecting it.')
           WHEN b.takeover_target_organic_units IS NULL THEN CONCAT(
             ' It is ', CAST(b.launch_age_months AS STRING), IF(b.launch_age_months = 1, ' month', ' months'),
             ' old and past the early stretch, so it now has to stand on its own organic sales — but you have not ',
@@ -499,6 +667,19 @@ agg AS (
     SUM(IF(daily_investment IS NOT NULL AND mtd_spend_per_day IS NOT NULL, mtd_spend_per_day, NULL)) AS mtd_spend_per_day,
     COUNTIF(real_loss)                             AS n_real_losses,
     COUNTIF(COALESCE(spend_breached, FALSE))       AS n_over_rate,
+    -- ─── THE TWO PROTECTION STATES AT BOOK LEVEL, AND THE GAP BETWEEN THEM ───
+    -- n_protection_gap IS THE HEADLINE NUMBER OF THIS ROUND: families the coach is still protecting
+    -- that no longer qualify for it. It was 2 on 2026-08-20, worth 10 held cuts and $189 a day, while
+    -- this row said "none is protected right now". Counted, not inferred from a sentence.
+    COUNTIF(COALESCE(protection_qualified, FALSE))                          AS n_qualified,
+    COUNTIF(COALESCE(protection_enforced,  FALSE))                          AS n_enforced,
+    COUNTIF(protection_enforced IS NOT NULL)                                AS n_enforcement_known,
+    COUNTIF(COALESCE(protection_enforced, FALSE)
+            AND NOT COALESCE(protection_qualified, FALSE))                  AS n_protection_gap,
+    -- NULL, not 0, when nothing in the book could be checked — SUM ignores NULLs, and a book of
+    -- families the coach's budget pass has never seen must not report "holding nothing".
+    SUM(cuts_held)                                 AS cuts_held,
+    SUM(cuts_budget)                               AS cuts_budget,
     ARRAY_AGG(IF(COALESCE(real_loss, FALSE), family, NULL)
               IGNORE NULLS ORDER BY net_profit ASC, family ASC LIMIT 1)[SAFE_OFFSET(0)] AS worst_family,
     ARRAY_AGG(IF(COALESCE(real_loss, FALSE), net_profit, NULL)
@@ -542,7 +723,14 @@ tot AS (
     a.daily_investment,
     a.mtd_spend_per_day,
     ROUND(SAFE_DIVIDE(a.mtd_spend_per_day, NULLIF(a.daily_investment, 0)), 2) AS times_over_agreed_rate,
-    CAST(NULL AS BOOL)                               AS exemption_live,
+    -- A BOOK IS NOT IN ONE PROTECTION STATE, so these two stay NULL on a total and the counts behind
+    -- them are spoken in the verdict instead. The two columns that DO belong on a total are the held
+    -- decisions and the budget they cover: those add up honestly, they are the number Ori acts on,
+    -- and Harvest sums to NULL rather than 0 because no family in that book contributes one.
+    CAST(NULL AS BOOL)                               AS protection_qualified,
+    CAST(NULL AS BOOL)                               AS protection_enforced,
+    a.cuts_held                                      AS cuts_the_coach_is_holding,
+    a.cuts_budget                                    AS budget_those_cuts_cover,
     CAST(NULL AS FLOAT64)                            AS loss_allowance_used_pct,
     CAST(NULL AS INT64)                              AS days_left_on_sanction,
     -- A trajectory is a per-family fact; summing organic units across a book would invite exactly the
@@ -644,13 +832,50 @@ tot AS (
             -- SAY WHICH FAMILIES THE RATE SENTENCE IS ABOUT. n_over_rate can only be counted over the
             -- families that have an agreed rate, so once one family has none, "every one of them" would
             -- claim more than was checked.
+            -- AND SAY ONLY WHAT THE RULE SAYS. This clause read "so none is protected right now" and
+            -- was simply false: the coach was protecting both of them and holding 10 cuts across
+            -- $188.86 a day on the strength of it. Qualifying for protection is what the rate decides;
+            -- being protected is what the machine decides, and that is the next clause's job.
             CASE
               WHEN a.n_over_rate = 0          THEN CONCAT('All ', IF(a.n_families = a.n_priced, 'of them', 'of those with a rate on record'),
-                                                          ' are inside their agreed rate and still protected. ')
+                                                          ' are inside their agreed rate and still qualify for launch protection. ')
               WHEN a.n_over_rate = a.n_priced THEN CONCAT('Every one ', IF(a.n_families = a.n_priced, 'of them', 'of those with a rate on record'),
-                                                          ' is over its agreed rate, so none is protected right now. ')
+                                                          ' is over its agreed rate, so none of them still qualifies for launch protection. ')
               ELSE CONCAT(CAST(a.n_over_rate AS STRING), ' ', IF(a.n_families = a.n_priced, 'of them', 'of those with a rate on record'),
-                          ' are over their agreed rate and no longer protected. ')
+                          ' are over their agreed rate and no longer qualify for launch protection. ')
+            END,
+            -- ─── WHAT THE COACH IS ACTUALLY DOING ABOUT THAT, IN DOLLARS ───
+            -- The clause that did not exist, and whose absence let the sentence above be read as an
+            -- enforcement report. Nothing withdraws protection today: V_LAUNCH_EXEMPTION hardcodes it
+            -- on and the coach's gate keys on campaign presence alone. Wiring the sanction to the
+            -- engine is Task 8b and Task 8b is not built, so this clause names the gap and hands the
+            -- job to the only enforcer there is — Ori.
+            CASE
+              WHEN COALESCE(a.n_enforcement_known, 0) = 0 THEN
+                'Whether the coach is still protecting them could not be checked today — check the launch exemption. '
+              WHEN a.n_protection_gap > 0 AND COALESCE(a.cuts_held, 0) > 0 THEN CONCAT(
+                'The coach is not enforcing that: it is still protecting ',
+                CAST(a.n_protection_gap AS STRING),
+                IF(a.n_protection_gap = 1, ' family that no longer qualifies', ' families that no longer qualify'),
+                ', and it is holding ', CAST(a.cuts_held AS STRING),
+                IF(a.cuts_held = 1, ' budget cut worth ', ' budget cuts worth '),
+                FORMAT("$%'d", CAST(ROUND(a.cuts_budget) AS INT64)),
+                ' a day between them. Nothing is trimming those budgets — bring the rates back inside ',
+                'the sanctions, or pull the budgets yourself. ')
+              WHEN a.n_protection_gap > 0 THEN CONCAT(
+                'The coach is not enforcing that: it is still protecting ',
+                CAST(a.n_protection_gap AS STRING),
+                IF(a.n_protection_gap = 1, ' family that no longer qualifies', ' families that no longer qualify'),
+                ', so no budget cut can reach ', IF(a.n_protection_gap = 1, 'it', 'them'),
+                ' — there is simply none queued today. Bring the rates back inside the sanctions, ',
+                'or pull the budgets yourself. ')
+              WHEN a.n_enforced < a.n_qualified THEN CONCAT(
+                'The coach is protecting only ', CAST(a.n_enforced AS STRING), ' of the ',
+                CAST(a.n_qualified AS STRING), ' that qualify, so the rest are being judged on money ',
+                'already — check the launch exemption. ')
+              WHEN a.n_enforced = 0 THEN
+                'The coach is not protecting any of them either, so they are being judged on money like every other family. '
+              ELSE 'The coach is applying that protection to all of them. '
             END,
             -- THE COST SENTENCE MUST NOT CANCEL THE RATE SENTENCE ABOVE IT. "Money you agreed to
             -- spend, not a loss to chase" is the right frame for an investment and the WRONG last
@@ -668,8 +893,13 @@ tot AS (
                    'not a loss to chase.',
                    CONCAT('so it is not a loss to chase — but right now they are running ',
                           FORMAT('$%.2f', a.mtd_spend_per_day - a.daily_investment),
-                          ' a day above what you approved, and that part you never agreed to. ',
-                          'Bring the rate back inside the sanction.')))
+                          ' a day above what you approved, and that part you never agreed to.',
+                          -- ...and do not ask for the correction twice. Where the coach is still
+                          -- protecting families that no longer qualify, the clause above has already
+                          -- given the instruction, with the budgets attached; repeating a thinner
+                          -- version of it here is how a reader learns to skim the last sentence.
+                          IF(COALESCE(a.n_protection_gap, 0) > 0, '',
+                             ' Bring the rate back inside the sanction.'))))
               ELSE CONCAT(
                 'They also made ', FORMAT("$%'d", CAST(a.net_profit AS INT64)),
                 ' over the last 90 days while building, ahead of what you agreed to spend on them.')
