@@ -43,55 +43,143 @@
 -- not establish.
 --
 -- ---------------------------------------------------------------------------------------------
--- THE FOUR MECHANICAL RULES THE VERDICTS MUST OBEY.
+-- THE MECHANICAL RULES THE VERDICTS MUST OBEY.
 --
--- Four repair rounds each fixed a real defect and each shipped a NEW self-contradiction in the
+-- Five repair rounds each fixed a real defect and each shipped a NEW self-contradiction in the
 -- prose. Ori has kept the prose format. So the constraints on it are mechanical and ASSERTED, not
 -- stylistic: the next agent to touch a verdict trips a check rather than a reviewer. Every rule
 -- below is enforced by the acceptance query at the foot of this file, which runs against the
 -- DEPLOYED view in a single pass.
 --
--- RULE 1 — NO CONCESSIVE CONNECTIVE INSIDE A VERDICT. Every self-contradiction found so far lived in
---   one: a clause that takes back what the sentence just said. Two independent sentences that each
---   stand alone cannot do that. Split them.
+-- FIRST, HONESTLY, ABOUT WHAT A RULE HERE CAN AND CANNOT BE. A rule that keys on a FIXED LIST OF
+-- WORDS is a TRIPWIRE: it catches the exact evasion that was found last time and nothing else. Round
+-- 5 banned the concessive connectives and round 6 found the same self-contradiction rebuilt out of
+-- "so". A rule that keys on a PUBLISHED COLUMN is a CONSTRAINT: the column is computed from the data
+-- by the same expression the prose is built from, so prose and column cannot disagree without the
+-- check firing, and no rewrite of the sentence can move the column. Rules 5 and 6 are constraints.
+-- Rules 1 and 4 are tripwires with a constraint bolted to each of them, and they are labelled as
+-- such below rather than presented as more than they are.
+--
+-- RULE 1 — NO CONCESSIVE CONNECTIVE INSIDE A VERDICT. TRIPWIRE, AND IT WAS ROUTED AROUND ONCE.
+--   Every self-contradiction found up to round 4 lived in one: a clause that takes back what the
+--   sentence just said. Two independent sentences that each stand alone cannot do that. Split them.
+--   THE FIFTH DID NOT LIVE IN ONE. It used "so" — a consequence connective, which no ban on
+--   concessives reaches, and which cannot be banned because the prose is built out of consequence.
+--   The word list is KEPT, because it costs nothing and it does catch the cheap version. It is NOT
+--   the protection. Rule 5 is, and Rule 5 does not read words at all.
 --   ASSERT: no verdict matches ' but | however| though | still matters| even so| that said'.
 --
--- RULE 2 — A VERDICT MAY NOT ASSERT WHAT ITS UPSTREAM DECLINES TO ASSERT. V_INVEST_STATUS publishes
---   sanction_adherence_judged: FALSE means the agreement is too new for any complete window to lie
---   inside it, so the measured rate against the agreed rate is a COMPARISON and not a finding that
---   the agreement was broken. This object used to convict on exactly those rows ("that forfeits its
---   launch protection", "none of them still qualifies"). Ori's ruling forbids it. When the flag is
---   FALSE the verdict says the true thing: the measured rate is above the agreed rate, this many
---   days of the window sit before the agreement, so it is a comparison — and what the coach is doing
---   is reported as the separate fact it is.
---   The flag is PUBLISHED, and on a TOTAL row it is the fail-closed AND over the priced families, so
+-- RULE 2 — A VERDICT MAY NOT CONVICT WHERE NO WINDOW CARRIES A FINDING. CONSTRAINT, RE-KEYED.
+--   It used to key on sanction_adherence_judged, a PER-FAMILY flag, which was the wrong grain under
+--   Ori's per-window ruling: it withheld the verdict on a short window that WAS wholly inside the
+--   sanction because the long one was not, going quiet exactly where Ori wanted a finding. It now
+--   keys on sanction_breach_finding, the per-window answer, three-valued, published as a column.
+--   The flag is PUBLISHED, and on a TOTAL row it is the fail-closed ALL over the priced families, so
 --   a book cannot convict on the strength of one judged family. A withheld flag never renders as a
 --   pass: on Harvest rows, where the concept does not apply, it is NULL rather than TRUE.
---   ASSERT: COUNTIF(NOT sanction_adherence_judged
---                   AND REGEXP_CONTAINS(verdict, r'forfeits|no longer qualifies|still qualifies')) = 0.
+--   THE ASSERTION KEYS ON A COUNT, NOT ON THE BOOLEAN, AND IT HOLDS AT BOTH GRAINS. A book total may
+--   truthfully say that SOME of its families forfeit protection while the book itself carries no
+--   finding, so testing the total against its own all-or-nothing boolean would forbid a true
+--   sentence. families_with_a_sanction_finding is 1 or 0 on a family row and the count of convicted
+--   families on a total, and the conviction word is licensed by exactly that being above zero.
+--   "No longer qualifies" is deliberately NOT in the pattern: the end-date and loss-ceiling branches
+--   say it about the calendar and the ceiling, which convict nobody of breaking an agreement.
+--   ASSERT: COUNTIF(REGEXP_CONTAINS(verdict, r'forfeit')
+--                   AND COALESCE(families_with_a_sanction_finding, 0) = 0) = 0.
 --
--- RULE 3 — A WORD CAP PER VERDICT. DECLARED CONSTANT: 100 words. It is a reading-time budget, not a
---   measurement of anything: at an ordinary adult silent reading speed of 240 words a minute — the
---   second declared constant of the rule — 100 words is 25 seconds, so the morning read proper, the
---   two TOTAL rows, costs under a minute, and no single row a reader drills into costs more than 25
---   seconds. A word is a whitespace-separated token containing at least one letter or digit, so a
---   bare dash is not a word. The count is published per row as verdict_words, so the rule is
---   checkable without re-deriving the tokeniser.
---   GETTING UNDER IT MEANS CUTTING CONTENT, and what was cut moved into columns, which is what they
---   are for: the second spend window and which arm breached, the sanction date, the first-sale date
---   behind an excluded part month, the trend word. Glosses that restated a column were shortened to
---   the part that is load-bearing — what the ratio divides and where the ad cost sits in it.
---   ASSERT: MAX(verdict_words) <= 100.
+-- RULE 3 — A WORD CAP PER VERDICT, ASSERTED OVER THE LONGEST REACHABLE VERDICT AND NOT OVER TODAY.
+--   DECLARED CONSTANT: 190 words, and it is the LONGEST REACHABLE VERDICT itself, enumerated below.
+--   It is a reading-time budget, not a measurement of anything: at an ordinary adult silent reading
+--   speed of 240 words a minute — the second declared constant of the rule — 190 words is 48 seconds.
+--   THAT IS THE WORST CASE AND IT IS NOT WHAT AN ORDINARY MORNING COSTS; the rows that actually fire are far under it, and verdict_words on the row is how you see
+--   which. A word is a whitespace-separated token containing at least one letter or digit, so a bare
+--   dash is not a word. The count is published per row as verdict_words, so the rule is checkable
+--   without re-deriving the tokeniser.
+--   THE OLD CAP OF 100 WAS BROKEN BY THE CALENDAR AND BY THE DATA, AND THE HEADROOM HID IT. It was
+--   asserted over the rows that happened to fire, which left 7 words of slack against three optional
+--   clauses that each cost more than that when they fire — one of them on a dated event. A cap that
+--   only holds until a clause fires is not a cap.
+--   WORSE: TWO OF THE LISTS IN THE PROSE WERE UNBOUNDED IN THE DATA. Family-name lists and sanction
+--   end-date lists grow one term per family, so NO constant could ever have bounded the verdict.
+--   That is fixed at the source: k.list_terms_max (a DECLARED CONSTANT, 3) is the most terms any
+--   verdict may spell out, past which the sentence gives a count and the whole list is read off the
+--   column beside it (sanction_end_dates, families_inside_break_even_band,
+--   families_with_nothing_measured, families_with_no_approved_rate). Only with those bounds is a
+--   longest reachable verdict a finite thing to measure.
+--   THE ENUMERATION THAT SETS THE CAP — REDO IT WHEN YOU ADD OR WIDEN A CLAUSE. Each slot below is a
+--   CASE or an optional IF in one verdict; the figure is the word count of its longest alternative,
+--   over combinations that are JOINTLY REACHABLE ONLY (the arm clause is forced by the branch chosen
+--   below it; a finding and a comparison cannot be the same arm's verdict; a list is capped at
+--   k.list_terms_max terms). The counts use the same tokeniser as verdict_words.
+--     INVEST FAMILY, comparison path — the longest of the family paths, because the uncovered long
+--       window and the covered short window BOTH get a sentence:
+--         rate 24 + arm 14 + comparison 35 + coach 39 + trajectory 15 + proof 18
+--         + unmeasured-money 23 + stale 15                                            = 183
+--     INVEST FAMILY, finding path:  24 + 12 + 30 + 37 + 15 + 18 + 23 + 15             = 174
+--     INVEST TOTAL, finding path — THE LONGEST VERDICT THIS VIEW CAN PRODUCE:
+--         opening with three end dates 44 + no-end-date 14 + unpriced 18 + arms 17
+--         + finding 28 + coach 39 + unmeasured 15 + stale 15                          = 190
+--     INVEST TOTAL, comparison path 186.  INVEST TOTAL, mixed path 183.
+--     HARVEST FAMILY 86.  HARVEST TOTAL 102.
+--   THE CAP IS THE WORST CASE EXACTLY, WITH NO SLACK, ON PURPOSE. Slack is what let the last cap rot:
+--   100 words of budget against a 93-word maximum looked healthy right up to the day a clause fired.
+--   At zero slack the next clause added to any verdict fails the assertion immediately and the agent
+--   who added it has to redo the arithmetic above and move the constant deliberately. That is the
+--   instrument. The assertion is only the guard.
+--   ASSERT: MAX(verdict_words) <= 190.
 --
--- RULE 4 — NO VERDICT MAY WITHHOLD AND THEN ASSERT ON THE SAME SUBJECT. A row that publishes no
---   trend direction (organic_units_trend IS NULL) may contain no word implying one. The old text
---   said "N organic units in it — which is not enough to call a direction yet" and two sentences
---   later referred to "the improvement": it refused to say whether there was one, then
---   referred to the improvement. The age clause that carried the second half is deleted outright —
---   launch_age_months is a column — and the withholding branch now prints a number and stops.
+-- RULE 4 — NO VERDICT MAY WITHHOLD AND THEN ASSERT ON THE SAME SUBJECT. TRIPWIRE PLUS CONSTRAINT.
+--   A row that publishes no trend direction (organic_units_trend IS NULL) may contain no word
+--   implying one. The old text said "N organic units in it — which is not enough to call a direction
+--   yet" and two sentences later referred to "the improvement": it refused to say whether there was
+--   one, then referred to the improvement. The age clause that carried the second half is deleted
+--   outright — launch_age_months is a column — and the withholding branch prints a number and stops.
+--   THE WORD LIST IS A TRIPWIRE AND CANNOT BE ANYTHING ELSE: a rewrite that says "the second month is
+--   bigger than the first" asserts a direction in words the list does not hold, and no closed list of
+--   stems can be complete over English. Two things are bolted on that do not read words:
+--     (i) THE COLUMN AND THE PROSE MUST AGREE. Where a direction IS published, the verdict must
+--         contain that exact word, so the sentence cannot print one trend and the grid another.
+--     (ii) THE EVIDENCE PATTERN, NOT ONLY THE WORD. The series construction ", then " is what turns
+--         two figures into a claim about direction. A row publishing no direction may not use it.
 --   ASSERT: COUNTIF(organic_units_trend IS NULL
 --                   AND REGEXP_CONTAINS(LOWER(verdict),
---                       r'\b(climb|fall|ris|improv|grow|declin|trend|trajector|momentum|steady|steadily|upward|downward)\w*\b')) = 0.
+--                       r'\b(climb|fall|ris|improv|grow|declin|trend|trajector|momentum|steady|steadily|upward|downward)\w*\b')) = 0
+--       AND COUNTIF(organic_units_trend IS NULL AND STRPOS(verdict, ', then ') > 0) = 0
+--       AND COUNTIF(organic_units_trend IS NOT NULL
+--                   AND STRPOS(verdict, organic_units_trend) = 0) = 0.
+--
+-- RULE 5 — NO VERDICT MAY RETRACT A FINDING AND THEN GIVE AN ORDER ABOUT IT. CONSTRAINT. NEW.
+--   THE FIFTH SELF-CONTRADICTION WAS A SHAPE, NOT A WORD. All three Invest verdicts said the family
+--   was over its approved rate, then said the excess is a comparison and not a finding, then said
+--   "Pull those budgets yourself." Retraction, then order, about the same subject, in one paragraph.
+--   Rule 1 could not reach it and no word list can: the offending sentence contains no marked word at
+--   all, only an imperative verb.
+--   SO THE MOOD IS A FUNCTION OF THE DATA. An ORDER may appear only on a row where
+--   sanction_breach_finding is TRUE — at least one window lying wholly inside the sanction and over
+--   its rate. Everywhere else the coach's held decisions are still named, the dollars are still
+--   priced, and Ori may still act: in the OPTION mood, which states the choice as his rather than as
+--   an instruction resting on a finding that was withdrawn a sentence earlier.
+--   BOTH THE SENTENCE AND THE COLUMN COME FROM ONE EXPRESSION (`voiced`), and the row publishes the
+--   sentence its mood FORBIDS (verdict_forbidden_sentence) so the acceptance query can test the
+--   coupling with no string literal of its own.
+--   WHAT IT DOES NOT CATCH, SAID PLAINLY: a rewrite that invents a NEW imperative instead of editing
+--   k.order_sentence escapes the string half. It cannot escape verdict_action_mood, which is data.
+--   ASSERT: COUNTIF(verdict_forbidden_sentence IS NOT NULL
+--                   AND STRPOS(verdict, verdict_forbidden_sentence) > 0) = 0
+--       AND COUNTIF(verdict_action_mood = 'ORDER'
+--                   AND NOT COALESCE(sanction_finding_published, FALSE)) = 0.
+--
+-- RULE 6 — A FINDING MAY NOT EXIST ON A WINDOW THE SANCTION DOES NOT WHOLLY COVER. CONSTRAINT. NEW.
+--   Ori's ruling of 2026-08-20 in its structural form, testable without reading a single word of
+--   prose. A per-arm finding implies its arm is covered; the row's finding implies at least one arm's
+--   finding; a book's finding implies every priced family's finding.
+--   ASSERT: COUNTIF(sanction_finding_in_rate_window IS NOT NULL
+--                   AND NOT COALESCE(sanction_covers_rate_window, FALSE)) = 0
+--       AND COUNTIF(sanction_finding_in_short_window IS NOT NULL
+--                   AND NOT COALESCE(sanction_covers_short_window, FALSE)) = 0
+--       AND COUNTIF(row_kind = 'FAMILY' AND COALESCE(sanction_breach_finding, FALSE)
+--                   AND NOT (COALESCE(sanction_finding_in_rate_window,  FALSE)
+--                         OR COALESCE(sanction_finding_in_short_window, FALSE))) = 0.
 --
 -- ---------------------------------------------------------------------------------------------
 -- STANDING RULE 0 — DESCRIBE THE MECHANISM, PUBLISH THE QUERY, NEVER PIN A MEASUREMENT.
@@ -198,9 +286,18 @@
 -- the breach test is dual-window and the long-window ratio alone will read below the rate on the day
 -- the short arm fires by itself.
 --
--- A BOOK HAS NO SINGLE END DATE, SO THE COLUMN NAMES NONE. sanction_end_date used to hold MAX over
--- the book, which let the book inherit the more generous of two terms. On a TOTAL row it is NULL and
--- the verdict names every end date the book actually holds.
+-- A BOOK HAS NO SINGLE END DATE, SO THE COLUMN NAMES NONE — AND A SECOND COLUMN NAMES THEM ALL.
+-- sanction_end_date used to hold MAX over the book, which let the book inherit the more generous of
+-- two terms. On a TOTAL row it is NULL.
+-- WHERE EVERY DATE ACTUALLY LIVES, AND WHAT THE VERDICT PROMISES. The header used to claim "the
+-- verdict names every end date the book actually holds" while the code printed the first and the
+-- last joined by "and" — a complete-looking list with the middle terms deleted, true at exactly two
+-- dates and false at three. The CLAIM now matches the CODE, in both directions:
+--   * sanction_end_dates, on the INVEST TOTAL row, holds EVERY distinct end date the priced families
+--     hold, in date order. No bound, no elision. That is the guarantee.
+--   * The VERDICT spells them all out while there are at most k.list_terms_max of them and otherwise
+--     says how many there are and names the column. It never prints a partial list as a whole one.
+-- The same split applies to every other data-shaped list on a total row — see Rule 3.
 --
 -- ---------------------------------------------------------------------------------------------
 -- ACCEPTANCE — ONE PASS OVER THE DEPLOYED VIEW. Run it after every change to this file.
@@ -215,13 +312,27 @@
 --     COUNTIF(verdict IS NULL OR TRIM(verdict) = '')                        AS blank_verdicts,
 --     COUNTIF(REGEXP_CONTAINS(LOWER(verdict),
 --             r' but | however| though | still matters| even so| that said')) AS rule1_concessives,
---     COUNTIF(NOT COALESCE(sanction_adherence_judged, TRUE)
---             AND REGEXP_CONTAINS(verdict,
---                 r'forfeits|no longer qualifies|still qualifies'))         AS rule2_convictions,
+--     COUNTIF(REGEXP_CONTAINS(verdict, r'forfeit')
+--             AND COALESCE(families_with_a_sanction_finding, 0) = 0)        AS rule2_convictions,
 --     MAX(verdict_words)                                                    AS rule3_max_words,
 --     COUNTIF(organic_units_trend IS NULL AND REGEXP_CONTAINS(LOWER(verdict),
 --             r'\b(climb|fall|ris|improv|grow|declin|trend|trajector|momentum|steady|steadily|upward|downward)\w*\b'))
 --                                                                           AS rule4_direction_without_trend,
+--     COUNTIF(organic_units_trend IS NULL AND STRPOS(verdict, ', then ') > 0)
+--                                                                           AS rule4_series_without_trend,
+--     COUNTIF(organic_units_trend IS NOT NULL AND STRPOS(verdict, organic_units_trend) = 0)
+--                                                                           AS rule4_word_column_disagree,
+--     COUNTIF(verdict_forbidden_sentence IS NOT NULL
+--             AND STRPOS(verdict, verdict_forbidden_sentence) > 0)          AS rule5_wrong_mood,
+--     COUNTIF(verdict_action_mood = 'ORDER'
+--             AND NOT COALESCE(sanction_finding_published, FALSE))          AS rule5_order_without_finding,
+--     COUNTIF(sanction_finding_in_rate_window IS NOT NULL
+--             AND NOT COALESCE(sanction_covers_rate_window, FALSE))         AS rule6_finding_off_window_28,
+--     COUNTIF(sanction_finding_in_short_window IS NOT NULL
+--             AND NOT COALESCE(sanction_covers_short_window, FALSE))        AS rule6_finding_off_window_7,
+--     COUNTIF(row_kind = 'FAMILY' AND COALESCE(sanction_breach_finding, FALSE)
+--             AND NOT (COALESCE(sanction_finding_in_rate_window,  FALSE)
+--                   OR COALESCE(sanction_finding_in_short_window, FALSE)))  AS rule6_finding_from_nowhere,
 --     COUNTIF(verdict_words <> ARRAY_LENGTH(REGEXP_EXTRACT_ALL(verdict, r'[^\s]*[A-Za-z0-9][^\s]*')))
 --                                                                           AS word_count_disagrees,
 --     ROUND(SUM(IF(book='HARVEST' AND row_kind='TOTAL',  net_profit, 0))
@@ -232,19 +343,47 @@
 --         - SUM(IF(book='INVEST'  AND row_kind='FAMILY', net_profit, 0)), 2) AS gap_invest_net_profit,
 --     ROUND(SUM(IF(book='INVEST'  AND row_kind='TOTAL',  ad_spend_in_money_window, 0))
 --         - SUM(IF(book='INVEST'  AND row_kind='FAMILY', ad_spend_in_money_window, 0)), 2) AS gap_invest_ad_spend
---   FROM \`onyga-482313.OI.V_TWO_BOOK_BRIEF\`;
+--   FROM `onyga-482313.OI.V_TWO_BOOK_BRIEF`;
 --
 -- PASS = total_rows 2, bad_books 0, bad_row_kinds 0, blank_verdicts 0, rule1_concessives 0,
---        rule2_convictions 0, rule3_max_words <= 100, rule4_direction_without_trend 0,
+--        rule2_convictions 0, rule3_max_words <= 190, rule4_* 0, rule5_* 0, rule6_* 0,
 --        word_count_disagrees 0, all four gaps 0.
 -- DETERMINISM: two consecutive full pulls must be byte-identical.
+--
+-- ---------------------------------------------------------------------------------------------
+-- WHAT THIS VIEW GUARANTEES, AND WHAT IT ONLY DISCLOSES.
+--   GUARANTEED — two book totals and no third, no grand total, by construction (a two-row spine and
+--     no aggregation across `book` anywhere above it).
+--   GUARANTEED — a family with either money column missing contributes to NEITHER book sum and is
+--     named in words, so no total can be complete-looking and short.
+--   GUARANTEED — every sanction figure on a TOTAL row is taken over the PRICED families, and every
+--     count the prose compares is taken over that same set.
+--   GUARANTEED — a book publishes a rate window, a rate and a window phrase only when every priced
+--     family is on one identical window; otherwise all three are NULL and the verdict says so.
+--   GUARANTEED — sanction_end_dates on the INVEST TOTAL holds every distinct end date the book holds.
+--   GUARANTEED — a conviction ("forfeits") appears only where at least one window lies WHOLLY inside
+--     its sanction and is over its rate, and an ORDER appears only on a row carrying such a finding.
+--   DISCLOSED, NOT CLOSED — the LEADING edge of the rate window. Upstream cannot tell a family that
+--     began advertising inside the window from one whose older rows were lost, so a contiguous loss
+--     of older rows still zero-fills the front of the window and lowers the rate. It rides on the row
+--     as family_leading_silent_window_days and is stated in rate_window_basis. Nothing here claims it
+--     is closed.
+--   NOT ASSERTABLE — that no future rewrite invents a new imperative or a new way to assert a
+--     direction. Rules 1 and 4 are word tripwires; Rules 2, 5 and 6 key on published columns and are
+--     the part that cannot be talked around.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_TWO_BOOK_BRIEF` AS
 WITH k AS (
   SELECT
-    -- DECLARED CONSTANT. A loss smaller than this share of the family's OWN ad spend is noise, not a
-    -- job. It is what stops a trivial shortfall reading like a real one just because both ratios sit
-    -- under 1.0.
+    -- DECLARED CONSTANT. A result smaller than this share of the family's OWN ad spend is noise, not
+    -- a job. It is what stops a trivial shortfall reading like a real one just because both ratios
+    -- sit under 1.0.
+    -- THE BAND IS SYMMETRIC IN SIGN, AND IT WAS NOT. It used to gate only the LOSS side: a family
+    -- $77 short on $3,595 of ad spend was called noise, and the same family $77 AHEAD on the same
+    -- spend took the "made money" branch and was told to keep running. Same distance from break-even,
+    -- opposite treatment decided by sign alone — which is the one thing a band is supposed to stop.
+    -- Three states now, decided on |net_profit| against band * ad_spend: real profit, inside the
+    -- band, real loss. See real_profit / inside_band / real_loss in `base`.
     0.05 AS breakeven_band,
     -- DECLARED CONSTANT. Above this measured halo the ads-only number is misleading enough that the
     -- verdict says so out loud. The share of gross profit carrying no ad attribution is 1 - 1/halo,
@@ -253,7 +392,28 @@ WITH k AS (
     -- exists to give. AND THE SHARE IS NOT "ORGANIC": it is gross profit Amazon's ad attribution did
     -- not claim, which is organic demand PLUS ad-driven sales the attribution missed, and nothing
     -- here measures the split.
-    1.30 AS wide_halo
+    1.30 AS wide_halo,
+    -- ─── RULE 5: THE TWO MOODS, EACH WRITTEN ONCE, IN ONE PLACE ───
+    -- The fifth self-contradiction was not a word, it was a SHAPE: the verdict said the family was
+    -- over its approved rate, then said the excess is a comparison and not a finding, then ORDERED
+    -- the budgets pulled. It withdrew the conviction and then acted on it. A ban on "but" did not
+    -- reach it; the prose routed around the list with "so".
+    -- The fix is that the MOOD of the closing sentence is a FUNCTION of whether a finding was
+    -- published, and both the sentence and the column naming its mood come from the same expression
+    -- (`voiced`). An ORDER may be given only where at least one window lies wholly inside the
+    -- sanction and is over it. Otherwise the coach's held budgets are still reported and Ori may
+    -- still act — as an option that is his to take, not as an instruction justified by a finding that
+    -- was withdrawn one sentence earlier.
+    -- THESE TWO STRINGS ARE THE ONLY IMPERATIVE ABOUT BUDGETS IN THE FILE, and the acceptance query
+    -- tests the coupling against them, so a rewrite that changes the wording has to change it here.
+    'Pull those budgets yourself.'                  AS order_sentence,
+    'Those budgets are yours to pull.'              AS option_sentence,
+    -- DECLARED CONSTANT. The most terms a verdict may SPELL OUT of a data-shaped list — family names,
+    -- sanction end dates. Past it the sentence gives the count and the full list is read off the
+    -- column beside it. This is what makes Rule 3 provable at all: without a bound here the verdict
+    -- grows one term per family and no constant cap can hold, which is the same defect as a cap a
+    -- calendar breaks, wearing a different coat.
+    3                                               AS list_terms_max
 ),
 pnl AS (
   -- The window is carried THROUGH TO THE OUTPUT. This view publishes two windows side by side, so a
@@ -454,6 +614,42 @@ base AS (
     IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.sanction_adherence_judged, NULL)
                                                                         AS sanction_adherence_judged,
     i.rate_window_days_before_sanction,
+    i.short_window_days_before_sanction,
+    -- ─── ORI'S PER-WINDOW RULING (2026-08-20), READ, NEVER RE-DERIVED ───
+    -- "Finding on the short window, comparison on the long." A window may carry a FINDING — a verdict
+    -- that the agreement was broken, which forfeits launch protection — only when it lies WHOLLY
+    -- inside the sanction: zero of its days precede sanctioned_on. Otherwise its excess is a
+    -- COMPARISON, stated in full and convicting nobody.
+    -- THE RULE IS PER WINDOW, NOT PER FAMILY, and this object used to apply the family flag
+    -- (sanction_adherence_judged) to both arms at once — stricter than Ori asked for, going quiet on
+    -- the short window on the grounds that the long one was not yet judgeable. Every arm now answers
+    -- for its own days. Whether a given arm is a finding TODAY is a calendar fact and therefore a
+    -- MEASUREMENT: it is not written down anywhere here, it is read off these columns.
+    -- Gated on the book like every other launch concept on this row: on a Harvest family the question
+    -- does not arise, and a flag reading TRUE there would let a Harvest verdict convict under a rule
+    -- that was never applied to it. Three-valued throughout — NULL is "no finding is available",
+    -- never "no breach".
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.sanction_covers_28d_window, NULL)
+                                                                        AS sanction_covers_rate_window,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.sanction_covers_7d_window, NULL)
+                                                                        AS sanction_covers_short_window,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.sanction_finding_28d, NULL)
+                                                                        AS sanction_finding_in_rate_window,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.sanction_finding_7d, NULL)
+                                                                        AS sanction_finding_in_short_window,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.sanction_breach_finding, NULL)
+                                                                        AS sanction_breach_finding,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.sanction_breach_finding_arm, NULL)
+                                                                        AS sanction_breach_finding_window,
+    -- ─── WHY PROTECTION IS BLOCKED, WHEN IT IS NOT THE BREACH AND NOT THE CALENDAR ───
+    -- The verdict used to end a family with adherence judged, no breach and protection FALSE on
+    -- "the sanction is not fully on record", which names a cause that is not the cause. The real
+    -- blockers upstream are a withheld window, a stale or uncertifiable window, and a family that
+    -- does not resolve to exactly one book assignment row. All three ride here so the sentence can
+    -- name the one that actually fired.
+    i.rate_window_data_complete,
+    i.short_window_data_complete,
+    i.book_assignment_rows,
     -- NOT PUBLISHED, used only by the book total: the dollars behind spend_per_day over the same
     -- window, so the INVEST total can compute a rate over the BOOK rather than summing per-family
     -- rates that have each already been rounded to the cent.
@@ -490,10 +686,21 @@ base AS (
               FORMAT_DATE('%-d %B %Y', i.mtd_money_end),
               ', the part of this month that is measured'))            AS loss_allowance_window,
     i.org_m2, i.org_m1, i.org_m0, i.takeover_target_organic_units,
+    -- ─── THE BREAK-EVEN BAND, APPLIED TO BOTH SIDES OF ZERO ───
+    -- Three states off one comparison, |net_profit| against band * ad_spend. The band used to gate
+    -- the loss side only, so the same distance from break-even was "noise" below zero and "made
+    -- money, keep it running" above it. A band that only holds in one direction is not a band, it is
+    -- a floor with a story attached.
     -- NULL, not FALSE, when the family is unmeasured: "we did not measure it" is not "it is fine".
     IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL,
        (p.net_profit < 0 AND -p.net_profit > k.breakeven_band * p.ad_spend)) AS real_loss,
+    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL,
+       (p.net_profit > 0 AND p.net_profit > k.breakeven_band * p.ad_spend))  AS real_profit,
+    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL,
+       (ABS(p.net_profit) <= k.breakeven_band * p.ad_spend))                 AS inside_band,
     (COALESCE(p.halo_factor, 0) >= k.wide_halo)                         AS wide_halo,
+    -- Rule 5's two moods, carried down from `k` so the prose and the acceptance query read one string.
+    k.order_sentence, k.option_sentence,
     -- ─── THE TWO PROTECTION STATES, KEPT APART ───
     -- QUALIFIED: what the sanction rules say (already the fail-closed answer upstream).
     IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.protection_qualified, NULL) AS protection_qualified,
@@ -578,6 +785,45 @@ ranked AS (
                                        ORDER BY t.net_profit ASC, t.family ASC), NULL) AS worst_net_profit
   FROM trended t
 ),
+-- ─────────────────────────────────────────────────────────────────────────────────────────────
+-- RULE 5 — THE MOOD OF THE CLOSING SENTENCE IS A FUNCTION OF WHETHER A FINDING WAS PUBLISHED.
+-- The fifth self-contradiction was a shape, not a word: over the approved rate → "so this is a
+-- comparison and not a finding" → "Pull those budgets yourself." Retraction, then order, about the
+-- same subject, in one paragraph. Round 5's ban on "but" could not reach it; the prose used "so".
+-- A word list cannot carry this, so the constraint is a COUPLING instead: an ORDER may be issued only
+-- on a row where sanction_breach_finding is TRUE — at least one window lying wholly inside the
+-- sanction and over its rate. Everywhere else the held budgets are still named and Ori may still act,
+-- in the OPTION mood: the choice is stated as his, not as an instruction resting on a withdrawn
+-- finding.
+-- BOTH THE SENTENCE AND THE COLUMN THAT NAMES ITS MOOD COME FROM THIS ONE EXPRESSION, so they cannot
+-- drift apart, and the acceptance query tests the coupling in both directions.
+-- WHAT THIS DOES NOT CATCH, SAID PLAINLY: a rewrite that invents a NEW imperative sentence rather
+-- than editing k.order_sentence escapes the string half of the check. What it cannot escape is the
+-- mood column, which is published and which no prose can move.
+-- ─────────────────────────────────────────────────────────────────────────────────────────────
+voiced AS (
+  SELECT
+    r.*,
+    -- TRUE only where a window the sanction wholly covers is over its rate. NULL upstream means "no
+    -- finding is available", which is not a finding, so COALESCE to FALSE is the correct read here
+    -- and it fails in the safe direction: no finding, no order.
+    COALESCE(r.sanction_breach_finding, FALSE)                          AS sanction_finding_published,
+    CASE
+      WHEN r.book <> 'INVEST'                          THEN NULL
+      WHEN COALESCE(r.sanction_breach_finding, FALSE)  THEN 'ORDER'
+      ELSE                                                  'OPTION'
+    END                                                                 AS action_mood,
+    IF(r.book <> 'INVEST', NULL,
+       IF(COALESCE(r.sanction_breach_finding, FALSE), r.order_sentence, r.option_sentence))
+                                                                        AS action_sentence,
+    -- THE SENTENCE THIS ROW'S MOOD FORBIDS. Published so the acceptance query can test the coupling
+    -- with NO string literal of its own: a verdict may never contain the sentence in the mood it was
+    -- refused. Editing the wording in `k` moves the prose and the check together.
+    IF(r.book <> 'INVEST', NULL,
+       IF(COALESCE(r.sanction_breach_finding, FALSE), r.option_sentence, r.order_sentence))
+                                                                        AS forbidden_sentence
+  FROM ranked r
+),
 fam AS (
   SELECT
     b.book,
@@ -624,6 +870,34 @@ fam AS (
     -- the agreed rate is a comparison. NULL on Harvest rows, where the concept does not apply — a
     -- withheld flag must not render downstream as a pass.
     b.sanction_adherence_judged,
+    -- ─── ORI'S PER-WINDOW RULING, PUBLISHED AS COLUMNS AND NOT ONLY AS PROSE ───
+    -- covers_* : does the sanction wholly cover this window (zero pre-sanction days in it).
+    -- finding_*: the per-arm FINDING — TRUE only on a window the sanction covers AND that is over its
+    --            rate. NULL is "no finding is available on this arm", never "this arm is clean".
+    -- The COMPARISON is untouched and still rides beside them as spend_breached_28d /
+    -- spend_breached_7d / spend_breach_window, which is what a reader needs to see the excess on a
+    -- window nobody may be convicted on.
+    -- These roll on the calendar with no code change: a window whose oldest day passes sanctioned_on
+    -- flips covers_* to TRUE by itself, and the finding becomes available on that arm alone.
+    b.sanction_covers_rate_window,
+    b.sanction_covers_short_window,
+    b.sanction_finding_in_rate_window,
+    b.sanction_finding_in_short_window,
+    b.sanction_breach_finding,
+    b.sanction_breach_finding_window,
+    -- Rule 5's coupling, published: whether this row carries a finding at all, and therefore whether
+    -- its closing sentence is allowed to be an order. A consumer branching on the mood never has to
+    -- parse the prose, and the acceptance query checks the two against each other.
+    b.sanction_finding_published,
+    -- HOW MANY FAMILIES ON THIS ROW CARRY A FINDING. On a family row it is 1 or 0; on a book total it
+    -- is the count over the priced families. Rule 2's assertion keys on it, so the conviction word
+    -- can be tested at BOTH grains with one expression: a total may say that some families forfeit
+    -- protection while the BOOK does not, and that sentence is true exactly when this count is > 0.
+    IF(b.book <> 'INVEST', NULL, IF(b.sanction_finding_published, 1, 0))
+                            AS families_with_a_sanction_finding,
+    b.action_mood           AS verdict_action_mood,
+    b.action_sentence       AS verdict_action_sentence,
+    b.forbidden_sentence    AS verdict_forbidden_sentence,
     -- ─── THE TWO PROTECTION STATES, PUBLISHED SEPARATELY ───
     -- QUALIFIED = has this launch earned protection under the rules. ENFORCED = is the coach applying
     -- protection to its campaigns. They are allowed to disagree, and when they do the verdict says
@@ -660,6 +934,17 @@ fam AS (
          ELSE 'mixed' END                                  AS organic_units_trend,
     -- ACCOUNT-LEVEL, BELONGING TO NEITHER BOOK, ON THE HARVEST TOTAL ROW ONLY.
     CAST(NULL AS FLOAT64)   AS account_ad_spend_in_neither_book,
+    -- ─── THE FOUR BOOK-LEVEL LISTS, COMPLETE, ON THE TOTAL ROWS ───
+    -- Rule 3 is a bound on a verdict's LENGTH, and a verdict that spells out a list is as long as the
+    -- list. Every list here is data-shaped — one term per family, one per distinct sanction end date
+    -- — so a constant cap over the prose was never provable: a fifth family broke it exactly the way
+    -- the calendar broke it. The lists live in these columns IN FULL and the verdicts name at most
+    -- three terms before switching to a count. Nothing is withheld; it moved to where a list belongs.
+    -- NULL on family rows: a family has one end date (sanction_end_date) and is not a list.
+    CAST(NULL AS STRING)    AS sanction_end_dates,
+    CAST(NULL AS STRING)    AS families_inside_break_even_band,
+    CAST(NULL AS STRING)    AS families_with_nothing_measured,
+    CAST(NULL AS STRING)    AS families_with_no_approved_rate,
     CASE
       -- ───────── INVEST: sanction adherence + trajectory. Never a profit verdict. ─────────
       WHEN b.book = 'INVEST' THEN CONCAT(
@@ -698,20 +983,80 @@ fam AS (
             -- to lie inside it, so the comparison is stated as a comparison and no protection is
             -- forfeited, lost or retained in words. This branch is the live one today.
             CASE
-              WHEN NOT COALESCE(b.sanction_adherence_judged, FALSE) THEN
+              -- (a) A FINDING. At least one window lies WHOLLY inside the agreement and is over its
+              -- rate, so the agreement was broken over days it actually covered. This is the only
+              -- state in which this object convicts, and it is also the only state in which the
+              -- closing sentence may be an order (Rule 5).
+              WHEN b.sanction_finding_published THEN CONCAT(
+                CASE
+                  WHEN b.sanction_breach_finding_window = 'both windows' THEN
+                    'Both windows lie wholly inside the agreement, so that forfeits its launch protection. '
+                  WHEN b.sanction_breach_finding_window = '28-day window' THEN
+                    CONCAT('Those ', CAST(b.rate_window_days AS STRING),
+                           ' days lie wholly inside the agreement, so that forfeits its launch protection. ')
+                  ELSE
+                    CONCAT('The last ', CAST(b.short_window_days AS STRING),
+                           ' days lie wholly inside the agreement, so that forfeits its launch protection. ')
+                END,
+                -- AND THE OTHER ARM DOES NOT INHERIT THAT STANDING. The short window is a suffix of
+                -- the long one, so the long window is the only arm that can still reach back before
+                -- the agreement. When it does and it is over its rate, its excess is named as the
+                -- comparison it is, in the same breath as the finding on the arm that earned one.
+                IF(NOT COALESCE(b.sanction_covers_rate_window, FALSE)
+                   AND COALESCE(b.spend_breached_28d, FALSE),
+                   CONCAT('The ', CAST(b.rate_window_days AS STRING),
+                          '-day window still reaches back before the agreement, so its excess is a comparison. '),
+                   ''))
+              -- (b) AN EXCESS WITH NO ARM ENTITLED TO A FINDING. State it in full and convict nobody.
+              WHEN COALESCE(b.spend_breached, FALSE) THEN CONCAT(
                 IF(b.rate_window_days_before_sanction IS NULL,
-                   'The agreement does not yet cover a complete window, so this is a comparison and not a finding. ',
+                   'The agreement does not yet wholly cover either window, so this is a comparison and not a finding. ',
                    CONCAT(CAST(b.rate_window_days_before_sanction AS STRING), ' of those ',
-                          CAST(b.rate_window_days AS STRING),
-                          ' days sit before the rate was agreed, so this is a comparison and not a finding. '))
-              WHEN COALESCE(b.spend_breached, FALSE) THEN 'That forfeits its launch protection. '
-              WHEN COALESCE(b.protection_qualified, FALSE) THEN 'It still qualifies for launch protection. '
-              WHEN COALESCE(b.days_left, -1) < 0 THEN
+                          CAST(b.rate_window_days AS STRING), ' days sit before the rate was agreed',
+                          IF(COALESCE(b.short_window_days_before_sanction, 0) > 0,
+                             CONCAT(', and ', CAST(b.short_window_days_before_sanction AS STRING),
+                                    ' of the last ', CAST(b.short_window_days AS STRING),
+                                    ', so both are comparisons and not findings. '),
+                             ', so that excess is a comparison and not a finding. '))),
+                -- The arm that DOES have standing and is clean says so on its own account. Withholding
+                -- the finding is not the same as having nothing to report about that window.
+                IF(COALESCE(b.sanction_covers_short_window, FALSE)
+                   AND b.spend_breached_7d IS NOT NULL AND NOT b.spend_breached_7d,
+                   CONCAT('The last ', CAST(b.short_window_days AS STRING),
+                          ' days lie wholly inside the agreement and are inside the rate. '),
+                   ''))
+              -- (c) NO EXCESS ON EITHER ARM. Say whether protection holds, and when it does not, name
+              -- the test that actually failed.
+              -- THE OLD ELSE NAMED A CAUSE THAT WAS NOT THE CAUSE: a family with no breach and
+              -- protection FALSE fell past a days_left test and a ceiling test into "the sanction is
+              -- not fully on record", when the real blocker upstream is a withheld window day, a rate
+              -- that cannot be certified as current, or a family that does not resolve to one book
+              -- assignment row. Every one of those is on the row now and each has its own sentence.
+              -- ORDER MATTERS AND stop_date COMES FIRST: days_left is derived from it, so a missing
+              -- end date used to read as "the agreed end date has passed".
+              WHEN COALESCE(b.protection_qualified, FALSE) THEN
+                'It still qualifies for launch protection. '
+              WHEN b.stop_date IS NULL THEN
+                'No end date is on record for the sanction, so protection cannot be certified. '
+              WHEN COALESCE(b.days_left, 0) < 0 THEN
                 'The agreed end date has passed, so it no longer qualifies for launch protection. '
               WHEN COALESCE(b.ceiling_used_pct, 0) >= 100 THEN
                 'It has used up the losses allowed this month, so it no longer qualifies for launch protection. '
+              WHEN b.monthly_loss_ceiling IS NULL THEN
+                'No monthly loss ceiling is on record, so protection cannot be certified. '
+              WHEN COALESCE(b.rate_window_is_stale, FALSE) THEN
+                'Its rate is not current, so it does not qualify for launch protection. '
+              WHEN b.rate_window_is_stale IS NULL THEN
+                'Its rate could not be certified as current, so it does not qualify for launch protection. '
+              WHEN NOT COALESCE(b.rate_window_data_complete, FALSE)
+                OR NOT COALESCE(b.short_window_data_complete, FALSE) THEN
+                'A day of one of those windows never arrived, so protection cannot be certified. '
+              WHEN COALESCE(b.book_assignment_rows, 0) <> 1 THEN
+                'It does not resolve to a single book assignment, so protection cannot be certified. '
+              WHEN NOT COALESCE(b.sanction_adherence_judged, FALSE) THEN
+                'No window lies wholly inside the agreement yet, so protection cannot be certified. '
               ELSE
-                'It does not qualify for launch protection, and the sanction is not fully on record. '
+                'It does not qualify for launch protection, and no test on this row says which one it failed. '
             END,
             -- 3. WHAT THE MACHINE IS DOING. It always speaks, it never guesses, and where the two
             -- states disagree it carries the size of the gap in dollars.
@@ -744,9 +1089,12 @@ fam AS (
                              ' of those trims has no target on record, so that figure runs low. ',
                              ' of those trims have no target on record, so that figure runs low. ')),
                    ''),
-                'Pull those budgets yourself.')
-              ELSE
-                'The coach is still protecting it, and no budget cut is queued today. Pull its budgets down yourself.'
+                -- RULE 5. An ORDER here only where a finding was published one clause above; an
+                -- OPTION everywhere else. Same expression that fills verdict_action_mood.
+                b.action_sentence)
+              ELSE CONCAT(
+                'The coach is still protecting it, and no budget cut is queued today. ',
+                b.action_sentence)
             END)
         END,
         -- ─────────────────────────────────────────────────────────────────────────────────────
@@ -845,7 +1193,7 @@ fam AS (
       -- ads_net_roas is glossed the same way and for the same reason: its numerator is
       -- FACT_AMAZON_ADS.GROSS_PROFIT, which is also before ad cost.
       -- ───────────────────────────────────────────────────────────────────────────────────────
-      WHEN b.net_profit >= 0 THEN CONCAT(
+      WHEN b.real_profit THEN CONCAT(
         b.family, ' made ', FORMAT("$%'d", CAST(b.net_profit AS INT64)), ' over ', b.money_window,
         ' on ', FORMAT("$%'d", CAST(b.ad_spend AS INT64)), ' of ad spend. Every ad dollar returns ',
         b.total_net_roas_text, ' of family gross profit before ad cost, attributed or not, and ',
@@ -853,19 +1201,31 @@ fam AS (
 
       -- ───────────────────────────────────────────────────────────────────────────────────────
       -- THE BREAK-EVEN BRANCH MAY NOT CALL A LOSS A PROFIT, AND ROUNDING MAY NOT DECIDE IT.
-      -- It fires on a family whose loss is smaller than the declared breakeven band — real money,
-      -- too little to be worth a job. The sentence used to round a return a hair under 1.00 up to "$1.00" and
+      -- It fires on a family whose result — EITHER SIGN — is smaller than the declared breakeven
+      -- band. The sentence used to round a return a hair under 1.00 up to "$1.00" and
       -- then assert "a family that is paying its way". The claim is gone, the ratio cannot round
       -- across $1.00 (total_net_roas_text), and the point that matters — do not cut this on the
       -- ads-only figure — is made without it. Rule 1: the old "too small to act on, BUT a shortfall"
       -- is two sentences now.
+      -- AND IT NOW FIRES ON BOTH SIDES OF ZERO. It used to be reachable only from below, so a family
+      -- inside the band on the profit side was sent to the "made money, keep it running" branch and a
+      -- family the same distance below it was called noise. Same distance, opposite verdict, decided
+      -- by sign. The branch keeps the sign in the words — ahead of its costs or short of them — and
+      -- says of both that the distance is too small to act on.
       -- ───────────────────────────────────────────────────────────────────────────────────────
-      WHEN NOT b.real_loss THEN CONCAT(
-        b.family, ' came within ', FORMAT("$%'d", CAST(-b.net_profit AS INT64)),
-        ' of covering its costs over ', b.money_window, ' on ',
+      WHEN b.inside_band THEN CONCAT(
+        b.family,
+        IF(b.net_profit >= 0,
+           CONCAT(' finished ', FORMAT("$%'d", CAST(b.net_profit AS INT64)), ' ahead of its costs over '),
+           CONCAT(' came within ', FORMAT("$%'d", CAST(-b.net_profit AS INT64)),
+                  ' of covering its costs over ')),
+        b.money_window, ' on ',
         FORMAT("$%'d", CAST(b.ad_spend AS INT64)),
-        ' of ad spend. That shortfall is too small to be worth acting on. It is a shortfall, not a ',
-        'profit. Every ad dollar returns ', b.total_net_roas_text,
+        ' of ad spend. That is inside the break-even band, so it is too small to be worth acting on. ',
+        IF(b.net_profit >= 0,
+           'It is a margin, not evidence that the family is earning. ',
+           'It is a shortfall, not a profit. '),
+        'Every ad dollar returns ', b.total_net_roas_text,
         ' of family gross profit before ad cost, attributed or not, and ', b.ads_net_roas_text,
         ' counting only ad-attributed gross profit.',
         IF(b.wide_halo AND b.share_of_return_with_no_ad_attribution_pct IS NOT NULL,
@@ -885,7 +1245,7 @@ fam AS (
         ' of family gross profit before ad cost, attributed or not, and ', b.ads_net_roas_text,
         ' counting only ad-attributed gross profit.')
     END                     AS verdict
-  FROM ranked b
+  FROM voiced b
 ),
 -- One aggregate per book. NOTHING here groups across books, and there is no second aggregation above
 -- this: that absence IS the no-grand-total guarantee.
@@ -921,15 +1281,27 @@ agg AS (
     -- A book has no single end date, so it carries the span of them plus a count of the sanctions
     -- with no end date at all. The COLUMN on the total row names none of them — publishing MAX let
     -- the book inherit the more generous of two terms — and the verdict names every one.
-    MIN(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, stop_date, NULL)) AS stop_date_first,
-    MAX(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, stop_date, NULL)) AS stop_date_last,
+    -- EVERY END DATE, NOT THE FIRST AND THE LAST. The header promised "the verdict names every end
+    -- date the book actually holds" and the code printed two joined by "and", which reads as a
+    -- complete enumeration and is one at exactly two dates and no more. With three sanctions on three
+    -- terms it silently dropped the middle one. The distinct dates ride here as an ordered array and
+    -- the verdict lists all of them; the claim and the code now say the same thing.
+    ARRAY_AGG(DISTINCT IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, stop_date, NULL)
+              IGNORE NULLS
+              ORDER BY IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, stop_date, NULL))
+                                                                        AS stop_dates,
     COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL AND stop_date IS NULL) AS n_no_end_date,
     -- ─── THE BOOK'S RATE IS COMPUTED OVER THE BOOK, NOT ADDED UP FROM ROUNDED FAMILY RATES ───
     -- Every term in SUM(spend_per_day) has already been rounded to the cent upstream, so that sum is
     -- a sum of roundings rather than a rate, and the error grows with the number of families. This is
     -- the same arithmetic the family rate uses, one level up: the dollars the book spent inside the
-    -- window over the days in it. The window is a single span shared by every family (derived once
-    -- upstream), so MAX(rate_window_days) is picking a constant, not choosing between rival answers.
+    -- window over the days in it.
+    -- THE DENOMINATOR IS ONLY LEGITIMATE IF EVERY PRICED FAMILY IS ON THE SAME WINDOW, and the code
+    -- comment that used to sit here — "the window is a single span shared by every family, so MAX is
+    -- picking a constant" — stopped being true the day a window could be WITHHELD per family. These
+    -- stay MAX, and every one of them is renamed to say so; `rate_window_shared` below is the test
+    -- that decides whether a pick is a constant, and `tot` publishes NOTHING off these until it
+    -- passes. Withhold, never substitute.
     ROUND(SAFE_DIVIDE(
       SUM(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_spend, NULL)),
       NULLIF(MAX(rate_window_days), 0)), 2)                             AS spend_per_day,
@@ -938,18 +1310,76 @@ agg AS (
       SUM(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL,
              spend_per_day_7d * short_window_days, NULL)),
       NULLIF(MAX(short_window_days), 0)), 2)                            AS spend_per_day_7d,
-    COUNTIF(COALESCE(spend_breached_28d, FALSE))   AS n_over_28d,
-    COUNTIF(COALESCE(spend_breached_7d,  FALSE))   AS n_over_7d,
-    MAX(rate_window_basis)                         AS rate_window_basis,
-    MAX(rate_window_phrase)                        AS rate_window_phrase,
-    MAX(rate_window_start)                         AS rate_window_start,
-    MAX(rate_window_end)                           AS rate_window_end,
-    MAX(rate_window_days)                          AS rate_window_days,
+    -- ─── EVERY SANCTION COUNT IS TAKEN OVER THE PRICED SET, WHICH IS THE SET THE SENTENCE NAMES ───
+    -- These used to count ALL families in the book while n_priced counted only those with both a
+    -- sanction and a rate, and the clause compared the two. With one unpriced family in the book the
+    -- comparison n_over_28d = n_priced could hold on a set that was never counted, and the sentence
+    -- said "all of them" of it. One set now, the priced one, everywhere.
+    COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+            AND COALESCE(spend_breached_28d, FALSE))    AS n_over_28d,
+    COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+            AND COALESCE(spend_breached_7d,  FALSE))    AS n_over_7d,
+    -- ─── ORI'S PER-WINDOW RULING AT BOOK LEVEL, FAIL-CLOSED ───
+    -- A book may be convicted only where EVERY priced family carries a finding of its own. One
+    -- family's finding is not the book's, exactly as one family's sanction is not the book's.
+    COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+            AND COALESCE(sanction_breach_finding, FALSE))               AS n_finding,
+    -- AND THE OTHER SIDE OF THE THREE-VALUED ANSWER. A priced family whose finding is FALSE was
+    -- MEASURED on every window the sanction covers and is inside its rate on all of them. Counting
+    -- only the TRUEs would let "no finding is available" render on a total as "measured, and clean",
+    -- which is the substitution Ori's rule forbids. Both counts, so the total can say TRUE, FALSE or
+    -- nothing at all.
+    COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+            AND sanction_breach_finding IS FALSE)                       AS n_finding_clear,
+    -- The book-level finding, fail-closed and computed ONCE: a book carries a finding only when it
+    -- has priced families and EVERY one of them carries a finding of its own. This is the single
+    -- expression Rule 5's mood, the total's conviction clause and the published columns all read.
+    IF(COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL) = 0, FALSE,
+       COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+               AND COALESCE(sanction_breach_finding, FALSE))
+         = COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL))
+                                                                        AS book_finding_published,
+    COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+            AND COALESCE(sanction_covers_rate_window, FALSE))           AS n_covers_rate_window,
+    COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+            AND COALESCE(sanction_covers_short_window, FALSE))          AS n_covers_short_window,
+    MAX(rate_window_basis)                         AS rate_window_basis_max,
+    MAX(rate_window_phrase)                        AS rate_window_phrase_max,
+    MAX(rate_window_start)                         AS rate_window_start_max,
+    MAX(rate_window_end)                           AS rate_window_end_max,
+    MAX(rate_window_days)                          AS rate_window_days_max,
+    MAX(short_window_days)                         AS short_window_days_max,
+    -- ─── IS THAT PICK A CONSTANT? THE TEST, NOT THE ASSUMPTION ───
+    -- TRUE only when every priced family carries a rate window and they are all the same span with
+    -- the same words. MIN = MAX over a set with no NULLs in it is a unanimity test; the count guard
+    -- is there because MIN and MAX both ignore NULLs, so one withheld window beside one published one
+    -- would otherwise compare equal to itself and pass.
+    IF(COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL) = 0, NULL,
+       COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+               AND rate_window_start IS NOT NULL AND rate_window_end IS NOT NULL
+               AND rate_window_days IS NOT NULL AND short_window_days IS NOT NULL
+               AND rate_window_basis IS NOT NULL AND rate_window_phrase IS NOT NULL)
+         = COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL)
+       AND MIN(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_start, NULL))
+         = MAX(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_start, NULL))
+       AND MIN(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_end, NULL))
+         = MAX(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_end, NULL))
+       AND MIN(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_days, NULL))
+         = MAX(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_days, NULL))
+       AND MIN(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, short_window_days, NULL))
+         = MAX(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, short_window_days, NULL))
+       AND MIN(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_basis, NULL))
+         = MAX(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_basis, NULL))
+       AND MIN(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_phrase, NULL))
+         = MAX(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_phrase, NULL)))
+                                                   AS rate_window_shared,
     -- The honest book-level version of "how much of the window predates the agreement": the SMALLEST
     -- such count over the priced families, spoken as "at least", because the sanctions were not
     -- necessarily agreed on the same day.
     MIN(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL,
            rate_window_days_before_sanction, NULL))                     AS days_before_sanction_min,
+    MIN(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL,
+           short_window_days_before_sanction, NULL))                    AS short_days_before_sanction_min,
     -- ─── RULE 2 AT BOOK LEVEL, FAIL-CLOSED ───
     -- A book may convict only if EVERY priced family in it is judged. LOGICAL_AND over a
     -- COALESCE(..., FALSE) so an unknown counts as unjudged, and NULL when the book has no priced
@@ -963,16 +1393,22 @@ agg AS (
     -- when every input is NULL, which is the honest answer for a book that never had a window.
     LOGICAL_OR(rate_window_is_stale)               AS rate_window_is_stale,
     COUNTIF(real_loss)                             AS n_real_losses,
-    -- real_loss is a THREE-way split — earning, short by less than the breakeven band, losing real
-    -- money — and the total used to use two sides of it and imply the third ("fix that one and the
-    -- rest is working", printed above a row saying it was short of covering its costs). All three are
-    -- counted here so the total describes the remainder instead of implying it.
-    COUNTIF(money_measured AND net_profit >= 0)    AS n_earning,
-    COUNTIF(money_measured AND net_profit < 0 AND NOT COALESCE(real_loss, FALSE)) AS n_small_shortfall,
+    -- A THREE-WAY SPLIT, AND THE MIDDLE STATE NOW REACHES FROM BOTH SIDES OF ZERO. Earning by more
+    -- than the band, inside the band either way, losing by more than the band. The total used to use
+    -- two sides and imply the third ("fix that one and the rest is working", printed above a row
+    -- saying it was short of covering its costs); it also called a family inside the band on the
+    -- profit side "earning", which is the asymmetry the band exists to prevent. All three are counted
+    -- here so the total describes the remainder instead of implying it.
+    COUNTIF(real_profit)                           AS n_earning,
+    COUNTIF(money_measured AND COALESCE(inside_band, FALSE)) AS n_in_band,
     -- Named, and ordered by family so two consecutive pulls are byte-identical.
-    STRING_AGG(IF(money_measured AND net_profit < 0 AND NOT COALESCE(real_loss, FALSE), family, NULL),
-               ' and ' ORDER BY family)            AS small_shortfall_families,
-    COUNTIF(COALESCE(spend_breached, FALSE))       AS n_over_rate,
+    STRING_AGG(IF(money_measured AND COALESCE(inside_band, FALSE), family, NULL),
+               ' and ' ORDER BY family)            AS in_band_families,
+    -- The sign each band family sits on, counted, so the sentence can say "short of" and "ahead of"
+    -- without re-deriving either.
+    COUNTIF(money_measured AND COALESCE(inside_band, FALSE) AND net_profit < 0) AS n_in_band_below,
+    COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+            AND COALESCE(spend_breached, FALSE))   AS n_over_rate,
     COUNTIF(COALESCE(protection_qualified, FALSE))                          AS n_qualified,
     COUNTIF(COALESCE(protection_enforced,  FALSE))                          AS n_enforced,
     COUNTIF(protection_enforced IS NOT NULL)                                AS n_enforcement_known,
@@ -1015,10 +1451,16 @@ tot AS (
     CAST(NULL AS FLOAT64)                            AS ads_net_roas,
     CAST(NULL AS INT64)                              AS share_of_return_with_no_ad_attribution_pct,
     CAST(NULL AS FLOAT64)                            AS organic_share_of_units_pct,
-    -- Same window, same words, same source as the family rows.
-    IF(a.spend_per_day IS NULL, NULL, a.rate_window_basis)              AS rate_window,
-    a.rate_window_start,
-    a.rate_window_end,
+    -- ─── THE BOOK'S WINDOW IS PUBLISHED ONLY IF THE BOOK HAS ONE ───
+    -- These were MAX over the families and were published as the book's window and quoted in the
+    -- book's verdict. A MAX over families is a PICK, not an aggregate, and the comment that justified
+    -- it — the window is one span shared by every family — stopped being true the day a window could
+    -- be withheld for one family and not another. Now: unanimous or nothing, on the same priced set
+    -- the dollars are summed over. When the priced families are not on one window the book has no
+    -- window, no rate and no phrase, and the verdict says so instead of quoting one family's.
+    IF(COALESCE(a.rate_window_shared, FALSE), a.rate_window_basis_max, NULL) AS rate_window,
+    IF(COALESCE(a.rate_window_shared, FALSE), a.rate_window_start_max, NULL) AS rate_window_start,
+    IF(COALESCE(a.rate_window_shared, FALSE), a.rate_window_end_max,   NULL) AS rate_window_end,
     a.rate_window_is_stale,
     CAST(NULL AS INT64)                              AS launch_age_months,
     CAST(NULL AS DATE)                               AS first_sale_date,
@@ -1028,14 +1470,48 @@ tot AS (
     -- book inherit the later of two terms and publish one family's date as the book's.
     CAST(NULL AS DATE)                               AS sanctioned_on,
     CAST(NULL AS DATE)                               AS sanction_end_date,
-    a.spend_per_day                                  AS spend_per_day_in_rate_window,
-    a.spend_per_day_7d                               AS spend_per_day_last_7_days,
+    -- WITHHELD WITH THE WINDOW THEY ARE MEASURED OVER. A book rate whose denominator was picked from
+    -- one family's window is not the book's rate.
+    IF(COALESCE(a.rate_window_shared, FALSE), a.spend_per_day,    NULL) AS spend_per_day_in_rate_window,
+    IF(COALESCE(a.rate_window_shared, FALSE), a.spend_per_day_7d, NULL) AS spend_per_day_last_7_days,
     CASE WHEN a.n_priced IS NULL OR a.n_priced = 0 THEN NULL
          WHEN a.n_over_28d > 0 AND a.n_over_7d > 0 THEN 'both windows'
          WHEN a.n_over_28d > 0                     THEN 'long window'
          WHEN a.n_over_7d  > 0                     THEN 'short window'
          ELSE 'neither window' END                   AS spend_breach_window,
     a.sanction_adherence_judged,
+    -- ─── ORI'S PER-WINDOW RULING AT BOOK LEVEL ───
+    -- A book is not one window's worth of standing. These say how many of the PRICED families have
+    -- each arm wholly inside their own sanction, expressed as the fail-closed all-or-nothing booleans
+    -- the total's verdict is allowed to speak from. NULL when the book has no priced family.
+    IF(COALESCE(a.n_priced, 0) = 0, NULL, a.n_covers_rate_window  = a.n_priced) AS sanction_covers_rate_window,
+    IF(COALESCE(a.n_priced, 0) = 0, NULL, a.n_covers_short_window = a.n_priced) AS sanction_covers_short_window,
+    -- A per-arm finding is a per-family fact; a book carries the aggregate one below and nothing finer.
+    CAST(NULL AS BOOL)                               AS sanction_finding_in_rate_window,
+    CAST(NULL AS BOOL)                               AS sanction_finding_in_short_window,
+    -- THREE-VALUED ON A TOTAL TOO. TRUE only when every priced family carries a finding; FALSE only
+    -- when every priced family was measured on its covered windows and none is over; NULL for every
+    -- mixture and for every book with no priced family. A withheld state may not render as a pass.
+    CASE
+      WHEN COALESCE(a.n_priced, 0) = 0        THEN NULL
+      WHEN a.n_finding       = a.n_priced     THEN TRUE
+      WHEN a.n_finding_clear = a.n_priced     THEN FALSE
+      ELSE NULL
+    END                                              AS sanction_breach_finding,
+    CAST(NULL AS STRING)                             AS sanction_breach_finding_window,
+    COALESCE(a.book_finding_published, FALSE)        AS sanction_finding_published,
+    IF(s.book <> 'INVEST', NULL, COALESCE(a.n_finding, 0)) AS families_with_a_sanction_finding,
+    CASE
+      WHEN s.book <> 'INVEST'                          THEN NULL
+      WHEN COALESCE(a.book_finding_published, FALSE)   THEN 'ORDER'
+      ELSE                                                  'OPTION'
+    END                                              AS verdict_action_mood,
+    IF(s.book <> 'INVEST', NULL,
+       IF(COALESCE(a.book_finding_published, FALSE), k.order_sentence, k.option_sentence))
+                                                     AS verdict_action_sentence,
+    IF(s.book <> 'INVEST', NULL,
+       IF(COALESCE(a.book_finding_published, FALSE), k.option_sentence, k.order_sentence))
+                                                     AS verdict_forbidden_sentence,
     -- A BOOK IS NOT IN ONE PROTECTION STATE, so these two stay NULL on a total and the counts behind
     -- them are spoken in the verdict. The two that DO belong on a total are the held decisions and
     -- the budget they cover: those add up honestly, and Harvest sums to NULL rather than 0 because no
@@ -1059,6 +1535,20 @@ tot AS (
     -- ACCOUNT-LEVEL, BELONGING TO NEITHER BOOK, AND ON THE HARVEST TOTAL ROW ONLY — the one row that
     -- carries the sentence explaining it. On both totals it read as the same money twice.
     IF(s.book = 'HARVEST', c.unattributed_spend, NULL)  AS account_ad_spend_in_neither_book,
+    -- ─── THE FOUR LISTS, COMPLETE, WHATEVER THE VERDICT HAS ROOM TO SAY ───
+    -- The verdicts name at most three terms and then switch to a count, so their length is bounded
+    -- and Rule 3 is provable. These columns carry the whole list either way, so the bound costs the
+    -- reader nothing and the claim in the header is the claim the code keeps.
+    -- GATED ON THE BOOK, like every other concept on these rows. A sanction list on a Harvest total
+    -- and a break-even list on an Invest total would each answer a question that book does not ask —
+    -- and the Invest one would be a profit judgement on the book this design forbids judging on
+    -- profit. The mapping list is the one fact both books share, so it alone rides on both.
+    IF(s.book = 'INVEST',
+       (SELECT STRING_AGG(FORMAT_DATE('%-d %B %Y', d), ', ' ORDER BY d) FROM UNNEST(a.stop_dates) AS d),
+       NULL)                                         AS sanction_end_dates,
+    IF(s.book = 'HARVEST', a.in_band_families, NULL) AS families_inside_break_even_band,
+    a.unmeasured_families                            AS families_with_nothing_measured,
+    IF(s.book = 'INVEST',  a.unpriced_families, NULL) AS families_with_no_approved_rate,
     CASE
       WHEN s.book = 'HARVEST' THEN CONCAT(
         CASE
@@ -1095,14 +1585,16 @@ tot AS (
                 a.worst_family, ' at ',
                 FORMAT("$%'d", CAST(-a.worst_net_profit AS INT64)), ' — start there.')
             END,
-            -- THE REST OF THE BOOK, STATED RATHER THAN LEFT TO BE INFERRED. A family short of its
-            -- costs by less than the breakeven band is neither a job nor a success, and it is the
-            -- state the total used to swallow. Named here, in the same words its own row uses.
+            -- THE REST OF THE BOOK, STATED RATHER THAN LEFT TO BE INFERRED. A family inside the
+            -- breakeven band — EITHER SIDE of it — is neither a job nor a success, and it is the
+            -- state the total used to swallow on one side and call "earning" on the other. Named
+            -- here, in the same words its own row uses, with the sign kept.
             CASE
-              WHEN COALESCE(a.n_small_shortfall, 0) > 0 THEN CONCAT(
-                ' ', a.small_shortfall_families,
-                IF(a.n_small_shortfall = 1, ' is', ' are'), ' also short of covering ',
-                IF(a.n_small_shortfall = 1, 'its', 'their'), ' costs, by too little to act on.',
+              WHEN COALESCE(a.n_in_band, 0) > 0 THEN CONCAT(
+                ' ', IF(a.n_in_band <= k.list_terms_max, a.in_band_families,
+                        CONCAT(CAST(a.n_in_band AS STRING), ' families')),
+                IF(a.n_in_band = 1, ' is', ' are'), ' inside the break-even band, too close to ',
+                'call either way.',
                 IF(COALESCE(a.n_earning, 0) > 0,
                    CONCAT(' The other ', CAST(a.n_earning AS STRING),
                           IF(a.n_earning = 1, ' family is earning.', ' families are earning.')),
@@ -1115,7 +1607,8 @@ tot AS (
             -- A family in this book with nothing measured is not in that total, and the sentence has
             -- to say so or the total reads complete when it is not.
             IF(a.n_families = a.n_measured, '',
-               CONCAT(' ', a.unmeasured_families,
+               CONCAT(' ', IF(a.n_families - a.n_measured <= k.list_terms_max, a.unmeasured_families,
+                              CONCAT(CAST(a.n_families - a.n_measured AS STRING), ' families')),
                       IF(a.n_families - a.n_measured = 1, ' has', ' have'),
                       ' nothing measured, so none of it is in that number. Check the product mapping.')))
         END,
@@ -1146,6 +1639,17 @@ tot AS (
               'You have ', CAST(a.n_families AS STRING), IF(a.n_families = 1, ' family', ' families'),
               ' in the investment book and not one approved daily spend on record. ',
               'Nothing is holding them. Write those sanctions down.')
+          -- WITHHOLD, NEVER SUBSTITUTE. The book rate divides the book's window spend by ONE window
+          -- length. If the priced families are not on one window there is no such length, so there is
+          -- no book rate and no book window phrase to quote, and picking one family's would publish
+          -- that family's sanction as the book's — the defect this round was called to fix, one column
+          -- over from where the last round fixed it.
+          WHEN NOT COALESCE(a.rate_window_shared, FALSE)
+            THEN CONCAT(
+              'The ', CAST(a.n_priced AS STRING),
+              IF(a.n_priced = 1, ' family', ' families'),
+              ' with approved rates are not all on one rate window, so this book has no rate to ',
+              'quote. Read their rows.')
           ELSE CONCAT(
             CAST(a.n_families AS STRING), IF(a.n_families = 1, ' family is', ' families are'),
             ' on approved launch investment',
@@ -1154,7 +1658,9 @@ tot AS (
                   CONCAT('. The ', CAST(a.n_priced AS STRING),
                          ' with approved rates are spending '))),
             FORMAT('$%.2f', a.spend_per_day),
-            ' a day in total ', a.rate_window_phrase, ' against ',
+            -- Reachable only past the rate_window_shared gate above, so this phrase is the one window
+            -- every priced family is on and not a pick between rival ones.
+            ' a day in total ', a.rate_window_phrase_max, ' against ',
             IF(a.daily_investment = TRUNC(a.daily_investment),
                FORMAT("$%'d", CAST(a.daily_investment AS INT64)),
                FORMAT('$%.2f', a.daily_investment)),
@@ -1163,12 +1669,24 @@ tot AS (
             -- A book cannot have one end date, so it names the span it actually has, over the same
             -- priced families the dollars are summed over, and says plainly when a sanction has no
             -- end date at all, because an open-ended one is the one that never stops spending.
+            -- EVERY DATE, NOT TWO OF THEM. The old two-armed form printed first "and" last, which at
+            -- exactly two dates is a complete list and at three or more is a complete-looking list
+            -- with the middle terms deleted. The header claimed the verdict names every end date the
+            -- book holds; this is the code that makes the claim true. The subquery unnests a local
+            -- array, so it costs no scan and cannot correlate to anything outside the row.
             CASE
-              WHEN a.stop_date_first IS NULL THEN ''
-              WHEN a.stop_date_first = a.stop_date_last THEN
-                CONCAT(', running to ', FORMAT_DATE('%-d %B %Y', a.stop_date_last))
-              ELSE CONCAT(', running to ', FORMAT_DATE('%-d %B %Y', a.stop_date_first),
-                          ' and ', FORMAT_DATE('%-d %B %Y', a.stop_date_last))
+              WHEN a.stop_dates IS NULL OR ARRAY_LENGTH(a.stop_dates) = 0 THEN ''
+              WHEN ARRAY_LENGTH(a.stop_dates) = 1 THEN
+                CONCAT(', running to ', FORMAT_DATE('%-d %B %Y', a.stop_dates[SAFE_OFFSET(0)]))
+              WHEN ARRAY_LENGTH(a.stop_dates) > k.list_terms_max THEN
+                CONCAT(', running to ', CAST(ARRAY_LENGTH(a.stop_dates) AS STRING),
+                       ' different end dates, every one of them in sanction_end_dates')
+              ELSE CONCAT(', running to ',
+                (SELECT STRING_AGG(FORMAT_DATE('%-d %B %Y', d), ', ' ORDER BY d)
+                 FROM UNNEST(a.stop_dates) AS d
+                 WHERE d < a.stop_dates[SAFE_OFFSET(ARRAY_LENGTH(a.stop_dates) - 1)]),
+                ' and ',
+                FORMAT_DATE('%-d %B %Y', a.stop_dates[SAFE_OFFSET(ARRAY_LENGTH(a.stop_dates) - 1)]))
             END,
             '. ',
             IF(COALESCE(a.n_no_end_date, 0) = 0, '',
@@ -1177,36 +1695,70 @@ tot AS (
                          ' of those sanctions has no end date, so nothing says when it stops. ',
                          ' of those sanctions have no end date, so nothing says when they stop. '))),
             IF(a.n_families = a.n_priced, '',
-               CONCAT(a.unpriced_families,
+               CONCAT(IF(a.n_families - a.n_priced <= k.list_terms_max, a.unpriced_families,
+                         CONCAT(CAST(a.n_families - a.n_priced AS STRING), ' families')),
                       IF(a.n_families - a.n_priced = 1,
                          ' has no approved rate, so none of its spending is in that figure. ',
                          ' have no approved rates, so none of their spending is in that figure. '))),
             -- WHICH ARM OF THE DUAL-WINDOW TEST THE BOOK IS OVER ON.
+            -- ONE SET, NAMED AND COUNTED. n_over_28d and n_over_7d used to count every family in the
+            -- book while n_priced counted only the families with both a sanction and a rate, and this
+            -- clause compared the two — so with an unpriced family present "all of them" was said of
+            -- a set that was never counted. Both counts are on the priced set now, and the words say
+            -- which set that is whenever it is not the whole book.
             CASE
               WHEN a.n_over_28d = a.n_priced AND a.n_over_7d = a.n_priced THEN
-                'All of them are over their approved rates on both windows. '
+                CONCAT('All ', IF(a.n_families = a.n_priced, 'of them', 'with a rate on record'),
+                       ' are over their approved rates on both windows. ')
               WHEN a.n_over_28d = 0 AND a.n_over_7d = 0 THEN
-                'All of them are inside their approved rates on both windows. '
-              ELSE CONCAT(CAST(a.n_over_28d AS STRING), ' are over on the long window and ',
+                CONCAT('All ', IF(a.n_families = a.n_priced, 'of them', 'with a rate on record'),
+                       ' are inside their approved rates on both windows. ')
+              ELSE CONCAT(CAST(a.n_over_28d AS STRING), ' of the ', CAST(a.n_priced AS STRING),
+                          ' are over on the long window and ',
                           CAST(a.n_over_7d AS STRING), ' on the last 7 days. ')
             END,
-            -- ─── RULE 2 AT BOOK LEVEL ───
-            -- The book may convict only where every priced family is judged. Where the agreement is
-            -- too new for a complete window, the clause states the comparison and stops.
+            -- ─── ORI'S PER-WINDOW RULING AT BOOK LEVEL ───
+            -- A book convicts only when EVERY priced family carries a finding of its own — a window
+            -- lying wholly inside ITS sanction and over ITS rate. Where the excess exists but no
+            -- family has a window with standing, the clause states the comparison and convicts
+            -- nobody. Where some do and some do not, it says how many, and does not round the mixture
+            -- up into a verdict about the book.
             CASE
-              WHEN NOT COALESCE(a.sanction_adherence_judged, FALSE) THEN
+              -- THE BOOK NAMES THE ARM IT CONVICTS ON, and does not promote a finding won on the
+              -- short window into a statement about both. The first draft of this clause said "each
+              -- of those windows lies wholly inside its agreement" directly under a sentence saying
+              -- both windows were over — which reads as a conviction on the long window too, three
+              -- weeks before that window can carry one.
+              WHEN COALESCE(a.book_finding_published, FALSE) THEN CONCAT(
+                CASE
+                  WHEN a.n_covers_rate_window = a.n_priced THEN
+                    'Both windows lie wholly inside those agreements, so '
+                  WHEN a.n_covers_short_window = a.n_priced THEN
+                    CONCAT('The last ', CAST(a.short_window_days_max AS STRING),
+                           ' days lie wholly inside those agreements, so ')
+                  ELSE 'Each is over a window its own agreement wholly covers, so '
+                END,
+                IF(a.n_priced = 1, 'that forfeits its launch protection. ',
+                   'they forfeit their launch protection. '),
+                IF(a.n_covers_rate_window < a.n_priced AND a.n_over_28d > 0,
+                   CONCAT('The ', CAST(a.rate_window_days_max AS STRING),
+                          '-day figure still reaches back before them, so it stays a comparison. '),
+                   ''))
+              WHEN COALESCE(a.n_over_rate, 0) > 0 AND COALESCE(a.n_finding, 0) = 0 THEN
                 IF(a.days_before_sanction_min IS NULL,
-                   'The agreements do not yet cover a complete window, so this is a comparison and not a finding. ',
+                   'No window yet lies wholly inside its agreement, so this is a comparison and not a finding. ',
                    CONCAT('At least ', CAST(a.days_before_sanction_min AS STRING), ' of those ',
-                          CAST(a.rate_window_days AS STRING),
+                          CAST(a.rate_window_days_max AS STRING),
                           ' days sit before the rates were agreed, so this is a comparison and not a finding. '))
-              WHEN a.n_over_rate = 0 THEN
+              WHEN COALESCE(a.n_over_rate, 0) > 0 THEN
+                CONCAT(CAST(a.n_finding AS STRING), ' of them ',
+                       IF(a.n_finding = 1, 'forfeits its', 'forfeit their'),
+                       ' launch protection on a window the agreement wholly covers. ',
+                       'The rest is a comparison. ')
+              WHEN COALESCE(a.n_priced, 0) > 0 AND a.n_qualified = a.n_priced THEN
                 CONCAT('All ', IF(a.n_families = a.n_priced, 'of them', 'with a rate on record'),
                        ' still qualify for launch protection. ')
-              WHEN a.n_over_rate = a.n_priced THEN
-                CONCAT('None ', IF(a.n_families = a.n_priced, 'of them', 'with a rate on record'),
-                       ' still qualifies for launch protection. ')
-              ELSE CONCAT(CAST(a.n_over_rate AS STRING), ' of them no longer qualify for launch protection. ')
+              ELSE ''
             END,
             -- ─── WHAT THE COACH IS ACTUALLY DOING ABOUT THAT, IN DOLLARS ───
             -- Nothing withdraws protection today: V_LAUNCH_EXEMPTION hardcodes it on and the coach's
@@ -1236,16 +1788,20 @@ tot AS (
                              ' of those trims has no target on record, so that figure runs low. ',
                              ' of those trims have no target on record, so that figure runs low. ')),
                    ''),
-                'Pull those budgets yourself.')
+                -- RULE 5. An ORDER only where the book carries a finding; an OPTION otherwise. Same
+                -- expression as verdict_action_mood on this row.
+                IF(COALESCE(a.book_finding_published, FALSE), k.order_sentence, k.option_sentence))
               WHEN COALESCE(a.n_enforced, 0) > 0 THEN CONCAT(
                 'The coach is still protecting ', CAST(a.n_enforced AS STRING),
-                ' of them, and no budget cut is queued today. Pull those budgets yourself.')
+                ' of them, and no budget cut is queued today. ',
+                IF(COALESCE(a.book_finding_published, FALSE), k.order_sentence, k.option_sentence))
               ELSE
                 'The coach is protecting none of them, so they are judged on money like every other family.'
             END,
             -- ...and the families whose money is not in the figures above.
             IF(a.n_families = a.n_measured OR COALESCE(a.n_measured, 0) = 0, '',
-               CONCAT(' ', a.unmeasured_families,
+               CONCAT(' ', IF(a.n_families - a.n_measured <= k.list_terms_max, a.unmeasured_families,
+                              CONCAT(CAST(a.n_families - a.n_measured AS STRING), ' families')),
                       IF(a.n_families - a.n_measured = 1, ' has', ' have'),
                       ' nothing measured, so the money columns leave ',
                       IF(a.n_families - a.n_measured = 1, 'it out.', 'them out.'))),
@@ -1264,6 +1820,8 @@ tot AS (
   -- A one-row aggregate with no GROUP BY, so it returns exactly one row (all-NULL if there is
   -- nothing to measure) and cannot multiply the two TOTAL rows.
   CROSS JOIN cov c
+  -- Rule 5's two moods, the same single row the family rows read them from.
+  CROSS JOIN k
 )
 -- ─────────────────────────────────────────────────────────────────────────────────────────────
 -- THE MORNING READ MUST NOT ARRIVE SHUFFLED. A view cannot force row order. It MUST ship the
