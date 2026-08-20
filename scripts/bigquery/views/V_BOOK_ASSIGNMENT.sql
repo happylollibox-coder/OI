@@ -9,46 +9,53 @@
 --
 -- THE BINDING CONSTRAINT IS daily_investment, THE SPEND RATE (Ori 2026-08-19: "spend rate binds").
 -- That is the number actually sanctioned. monthly_loss_ceiling rides along as a catastrophe backstop
--- because a net-profit ceiling on a product that nearly covers its costs almost never fires. THE
--- SHAPE IS THE POINT AND IT DOES NOT GO STALE: both families run well OVER their sanctioned daily
--- spend while consuming only a small fraction of a ceiling denominated in net profit, so the ceiling
--- stays silent and only the rate binds. THE NUMBERS THAT SHOW IT ARE NOT WRITTEN HERE — they moved
--- twice in two days, once because the rate itself moved and once because the WINDOW under it was
--- replaced (the sanctioned rate went from month-to-date to a trailing 28 complete days on
--- 2026-08-20, which re-scored both families). Run this instead, and never restore a sanctioned
--- value from a number written in a file:
---   SELECT family, daily_investment, spend_per_day, times_over_agreed_rate,
---          loss_allowance_used_pct_so_far, loss_allowance_window, rate_window
---   FROM `onyga-482313.OI.V_TWO_BOOK_BRIEF` WHERE book = 'INVEST' AND row_kind = 'FAMILY';
--- (Run 2026-08-20 it returned Bunny 1.98x over rate at 22.3% of its allowance and LolliBall 1.85x
--- at 0.9% — the shape, over rate and nowhere near the ceiling. AS-OF THAT DATE ONLY: re-run before
--- quoting any of the four numbers.)
+-- only, and WHY IT ALMOST NEVER FIRES IS A PROPERTY OF HOW IT WAS DERIVED, not a reading of a
+-- particular day: the ceiling was backfilled as the sanctioned SPEND rate monthised, and a launch
+-- family with real sales loses far less than it spends, so it is a loose bound by construction. A
+-- family can therefore sit a long way inside its ceiling while running well over its sanctioned
+-- daily rate — which is exactly why the rate is the clause that binds.
+--
+-- NO RATE, RATIO OR CEILING PERCENTAGE IS WRITTEN IN THIS HEADER (Standing Rule 0 — describe the
+-- mechanism, publish the query, never pin a measurement; the figures that used to sit here moved
+-- twice in two days, once because the rate moved and once because the WINDOW under it was replaced).
+-- Run this instead, and NEVER restore a sanctioned value from a number written in a file:
+--   SELECT family, daily_investment, spend_per_day, spend_rate_ratio, ceiling_used_pct,
+--          rate_window_basis, protection_qualified
+--   FROM `onyga-482313.OI.V_INVEST_STATUS`;
+-- (Column names checked against INFORMATION_SCHEMA. This header once published a query naming
+-- times_over_agreed_rate and loss_allowance_used_pct_so_far, which had been renamed away — it did
+-- not fail quietly, it failed to compile.)
 --
 -- AGE COMES FROM FIRST SALE, NOT FROM THE DECLARATION. sanctioned_on is when Ori signed the
--- investment off (2026-08-13 for both families), months after either launch actually began.
+-- investment off (2026-08-13 for both families — a declared date on DE_LAUNCH_INVESTMENT, not a
+-- measurement), months after either launch actually began.
 --
 -- SAME ANCHOR AS V_LAUNCH_EXEMPTION, DELIBERATELY DIFFERENT UNITS — AND THEY WILL NOT MATCH
 -- (corrected 2026-08-20; this comment used to claim "so nothing can disagree", which was false).
 -- Both views date the launch from the family's first sale in V_UNIFIED_DAILY, so the ANCHOR is
 -- shared and neither can invent a different launch date. The UNITS are not shared and are not meant
 -- to be: this view counts CALENDAR-MONTH boundaries crossed (DATE_DIFF ... MONTH, a whole number),
--- V_LAUNCH_EXEMPTION divides elapsed days by 30.44 (one decimal). Measured 2026-08-20 the two read
--- Bunny 3 vs 2.9 and LolliBall 2 vs 1.8. EXPECT A GAP OF UP TO ABOUT A MONTH, in either direction,
--- and never treat a difference as a defect.
+-- V_LAUNCH_EXEMPTION divides elapsed days by 30.44 (one decimal). EXPECT A GAP OF UP TO ABOUT A
+-- MONTH, in either direction, and never treat a difference as a defect. Compare them yourself
+-- rather than reading two numbers out of this comment:
+--   SELECT family, first_sale_date, launch_age_months FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT`;
 --
 -- WHY THE CALENDAR COUNT IS RIGHT HERE, AND MUST NOT BE "HARMONISED" TO THE OTHER ONE: this number
 -- selects RAMP vs PROOF in V_INVEST_STATUS, a test that reads COMPLETE CALENDAR MONTHS. Counting
 -- month boundaries lands the change on the 1st, the same grain the measurement uses, instead of
 -- mid-month on an arbitrary day. It is also the pattern already used in V_LOW_STOCK_ADS.sql:860.
--- THE FLIPS ARE ALREADY DATED, so nobody has to re-derive them by hand: on 2026-09-01 Bunny turns 4
--- and moves RAMP -> PROOF; on 2026-10-01 LolliBall does. (Under elapsed-days/30.44 the same two
--- flips would land 2026-08-24 and 2026-09-26, splitting the months they are measured on.)
+-- THE FLIP DATE IS A RULE, NOT A DATE TO WRITE DOWN: a family moves RAMP -> PROOF on the FIRST of
+-- the calendar month in which DATE_DIFF(today, first_sale_date, MONTH) reaches 4. Derive it from the
+-- query above. (Under elapsed-days/30.44 the same flip would land mid-month, splitting the very
+-- month the trajectory test measures — which is the whole reason this view counts boundaries.)
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_BOOK_ASSIGNMENT` AS
 WITH fam AS (
   -- 'Unknown' is NOT a family. It is the literal fallback V_CAMPAIGN_FAMILY_MAP emits
   -- (COALESCE(cf.parent_name, af.parent_name, 'Unknown')) for a campaign whose family it cannot
-  -- resolve — 9 of 97 enabled campaigns on 2026-08-19. It has no row in V_UNIFIED_DAILY and so no
+  -- resolve. How many campaigns are in that bucket today is a measurement and is not written here;
+  -- count it with SELECT COUNTIF(parent_name = 'Unknown'), COUNT(*) FROM
+  -- `onyga-482313.OI.V_CAMPAIGN_FAMILY_MAP`. It has no row in V_UNIFIED_DAILY and so no
   -- row in V_FAMILY_PNL, the measurement spine. Admitting it here would hand the two-book system a
   -- seventh "family" with a book but no P&L to judge it against, and every downstream join would
   -- carry the orphan. Unmapped ad spend is a campaign-MAPPING coverage problem, surfaced by the
@@ -58,15 +65,17 @@ WITH fam AS (
   -- CLAIMED IT DID (corrected 2026-08-20). Excluding 'Unknown' removes the ONE sentinel they were
   -- guaranteed to differ on; it does not align the keys. This view is CAMPAIGN-keyed (through
   -- V_CAMPAIGN_FAMILY_MAP), ENABLED-campaign-only, override-first and not windowed. V_FAMILY_PNL is
-  -- ASIN-keyed (through DIM_PRODUCT) over a dated window. Two live triggers, both measured
-  -- 2026-08-20:
-  --   · DE_CAMPAIGN_FAMILY overrides 3 campaigns to parent_name 'Store', which is not a value any
-  --     ASIN carries. All 3 are PAUSED today, so 'Store' does not reach this view — enable ONE of
-  --     them and this view publishes a 7th family with a book and no P&L to judge it against. That
-  --     is not a hypothetical: the override rows are already in the table.
-  --   · 4 ASINs with oi_is_active = TRUE carry parent_name NULL, so their sales belong to no family
-  --     on either side.
-  -- Today both sides happen to return the same 6 families. That is today's data, not an invariant.
+  -- ASIN-keyed (through DIM_PRODUCT) over a dated window. TWO LIVE DIVERGENCE MECHANISMS, either of
+  -- which can open on any day:
+  --   · DE_CAMPAIGN_FAMILY can override a campaign to a parent_name that NO ASIN carries. While
+  --     every such campaign is PAUSED the value does not reach this view; enable one and this view
+  --     publishes a family with a book and no P&L to judge it against. That is not a hypothetical —
+  --     override rows of that shape are already in the table.
+  --   · an ASIN with oi_is_active = TRUE can carry parent_name NULL, so its sales belong to no
+  --     family on either side.
+  -- Whether either is open TODAY is a measurement, not an invariant, and it is not written here.
+  -- Check it: SELECT family FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT` against
+  -- SELECT DISTINCT family FROM `onyga-482313.OI.V_FAMILY_PNL` — the two lists may differ.
   -- V_TWO_BOOK_BRIEF therefore joins the two universes with a FULL OUTER JOIN (review round 1,
   -- 2026-08-20) so a family present on one side and absent on the other is published rather than
   -- silently joined away. DO NOT SIMPLIFY THAT JOIN to an inner or left join because the two

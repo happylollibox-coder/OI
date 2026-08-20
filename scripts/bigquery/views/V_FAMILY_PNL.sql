@@ -2,27 +2,34 @@
 -- V_FAMILY_PNL — family economics INCLUDING THE ORGANIC HALO (2026-08-19).
 -- Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md. SOP: architecture/TWO_BOOK_PNL.md.
 --
--- WHY THIS EXISTS: every bid decision was judged on ads-ATTRIBUTED profit, which excludes 30-40% of
--- units. Measured 2026-08-19: Bottle reads 0.60 on ads net ROAS (a disaster the engine would cut)
--- but 0.95 on TOTAL net ROAS, because its halo factor is 1.59 — the strongest in the account.
--- Cutting Bottle's keywords on the ads number destroys the organic demand carrying it.
+-- WHY THIS EXISTS: every bid decision was judged on ads-ATTRIBUTED profit, which excludes a large
+-- share of units. A family can therefore read as a disaster on ads net ROAS and be fine on TOTAL net
+-- ROAS, and the gap between the two IS its halo. Cutting such a family's keywords on the ads number
+-- destroys the organic demand carrying it. NO FAMILY, ROAS OR HALO VALUE IS NAMED IN THIS HEADER
+-- (Standing Rule 0 — describe the mechanism, publish the query, never pin a measurement). See it:
+--   SELECT family, ads_net_roas, total_net_roas, halo_factor, net_profit
+--   FROM `onyga-482313.OI.V_FAMILY_PNL` WHERE period_label = 'M3' ORDER BY halo_factor DESC;
 --
--- NET PROFIT IS A TRUE NET, NOT A GROSS MARGIN. Verified 2026-08-19: V_UNIFIED_DAILY.cogs is all-in
--- (product $54,155 + inbound shipping $14,337 + FBA pick/pack $45,044 + Amazon referral $38,498
--- over May-Jul), so sales - cogs - ad_cost is after Amazon's fees.
+-- NET PROFIT IS A TRUE NET, NOT A GROSS MARGIN. V_UNIFIED_DAILY.cogs is all-in — landed product
+-- cost, inbound shipping, FBA pick/pack AND the Amazon referral fee — so sales - cogs - ad_cost is
+-- after Amazon's fees, not a gross margin dressed up as one. Check the composition against
+-- V_UNIFIED_DAILY rather than against a figure written here.
 --
 -- HALO FACTOR IS MEASURED, NEVER ASSUMED: total_net_roas / ads_net_roas, read straight from dollars.
--- An earlier draft inferred it from unit ratios plus an equal-margin assumption; the measured values
--- range 1.07 (Fresh) to 1.59 (Bottle), which that assumption would have flattened.
+-- An earlier draft inferred it from unit ratios plus an equal-margin assumption. That is the defect
+-- the measured form exists to avoid: the halo differs materially BETWEEN families, and an
+-- equal-margin assumption flattens exactly that spread — which is the only thing the bar reads.
 --
 -- ---------------------------------------------------------------------------------------------
 -- RULING (2026-08-19) — WHICH WATERMARK YOU ARE ENDING ON DECIDES WHETHER YOU DROP ITS LAST DAY.
 -- The house rule "every multi-day window ends at wm - 1" (feedback_window_convention_complete_days)
 -- is TRUE OF THE ADS WATERMARK AND ONLY OF IT. The two watermarks differ in kind:
 --
---   * ADS watermark — its newest day is PARTIAL. FACT_AMAZON_ADS is only 88-90% loaded at age 1 and
---     keeps restating for ~3 days (fact_oi_ads_restatement_settle). Nothing in the ads pipeline
---     removes that half-loaded day, so an ads window MUST end at wm - 1 or it reads a fake dip.
+--   * ADS watermark — its newest day is PARTIAL. FACT_AMAZON_ADS is materially under-loaded at age
+--     1 and keeps restating for the first few days (fact_oi_ads_restatement_settle,
+--     fact_oi_fresh_ads_data_reading_rules — read the loaded share off V_ADS_SETTLE_CURVE rather
+--     than from a percentage typed here). Nothing in the ads pipeline removes that half-loaded day,
+--     so an ads window MUST end at wm - 1 or it reads a fake dip.
 --
 --   * ORDERS watermark (the one this view uses) — its newest day is COMPLETE BY CONSTRUCTION. The wm
 --     CTE below does not take MAX(date); it takes the newest day that CLEARED THE SESSIONS GATE
@@ -36,11 +43,11 @@
 -- ---------------------------------------------------------------------------------------------
 --
 -- CALENDAR MONTHS ARE COMPLETE MONTHS ONLY (defect fix 2026-08-19). The previous cut emitted the
--- CURRENT month with period_end = LAST_DAY(month) — '2026-08' claimed to end 2026-08-31 while
--- holding only the 17 days up to the watermark. Month-over-month consumers (the Invest ramp test,
--- which asks the one question that matters for a young product: is this launch IMPROVING?) would
--- have compared 17 days against 30 and declared a working launch dead. Measured at the time:
--- 2026-06 = 2265 units, 2026-07 = 2662 units, 2026-08 = 2005 units — a pure artefact of day count.
+-- CURRENT month with period_end = LAST_DAY(month), so a month that had only run part-way claimed a
+-- full month's end date. Month-over-month consumers (the Invest ramp test, which asks the one
+-- question that matters for a young product: is this launch IMPROVING?) would have compared a part
+-- month against a whole one and declared a working launch dead — a pure artefact of day count, and
+-- it showed up as a units column falling on exactly the launches the test was built to protect.
 -- Now: a '%Y-%m' row exists only when its LAST_DAY falls STRICTLY BEFORE the start of the
 -- watermark's month, and the running month is published as a single row labelled 'MTD' whose
 -- period_end IS THE WATERMARK, so it can never be mistaken for a full month from its dates alone.
@@ -70,7 +77,7 @@ WITH wm AS (
 periods AS (
   -- Rolling windows. Every one ENDS AT THE ORDERS WATERMARK — complete by construction of wm (the
   -- sessions gate above), so no partial day enters a blended number. RULING: "windows end at wm-1"
-  -- is the ADS-watermark rule (day-1 ads are 88-90% loaded); it does NOT apply to the orders
+  -- is the ADS-watermark rule (day-1 ads are only partly loaded); it does NOT apply to the orders
   -- watermark, where ending at wm-1 would silently discard one good, fully-loaded day.
   SELECT 'M3' AS period_label, DATE_SUB((SELECT d FROM wm), INTERVAL 89 DAY) AS period_start, (SELECT d FROM wm) AS period_end, TRUE AS is_complete_period UNION ALL
   SELECT 'M1',                  DATE_SUB((SELECT d FROM wm), INTERVAL 29 DAY),                 (SELECT d FROM wm),              TRUE                        UNION ALL

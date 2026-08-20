@@ -325,59 +325,66 @@ REVIEW GATES CAUGHT FOUR PLAN DEFECTS, two would have corrupted later tasks:
  3. The plan contradicted its own window rule. Ruled: ads windows end wm-1 (day-1 ads 88-90% loaded);
     blended windows end AT the orders watermark, complete by construction via the sessions gate.
  4. Every assertion piped a '--'-leading file through cat, which makes bq abort. All switched.
-DESIGN FLAW FOUND BY BUILDING IT: monthly_loss_ceiling is denominated in NET PROFIT but derived from
-SPEND, so it almost never binds. Measured today — Bunny $45.93/day actual vs $30 sanctioned (1.53x)
-with MTD loss only $259 against a $913 ceiling; LolliBall $101.46/day vs $55 (1.84x), loss $74
-against $1,674. BOTH FAMILIES ARE 1.5-1.8x OVER THE SPEND ORI ACTUALLY SANCTIONED and the new
-ceiling cannot see it. The binding constraint should be the SPEND RATE (daily_investment), which
-already exists and already flags both OVER_ENVELOPE. Ceiling should be demoted to a catastrophe
-backstop. NEEDS ORI'S RULING before Task 8b wires enforcement.
-OPEN: takeover_target_organic_units NULL on both rows — Ori must supply (calibration only: Aug
-run-rates ~71 and ~235 organic units/month). Minor: BASELINE_MAY_JUL restated slightly since Task 1
-(Lollibox -$0.61, halos in the 3rd decimal) — within the assertion's tolerances, but a May-Jul
-window restating at all is worth a look since ads should have settled.
+DESIGN FLAW FOUND BY BUILDING IT: monthly_loss_ceiling is denominated in NET PROFIT but was derived
+from SPEND (daily_investment * 30.44), so it almost never binds — a launch family with real sales
+loses far less than it spends, which makes the ceiling a loose bound BY CONSTRUCTION. Both declared
+families were running well over the daily spend Ori actually sanctioned while sitting deep inside
+their ceilings, and the ceiling could not see it. The binding constraint should be the SPEND RATE
+(daily_investment), which already exists and already flags both OVER_ENVELOPE. Ceiling should be
+demoted to a catastrophe backstop. NEEDS ORI'S RULING before Task 8b wires enforcement. (The four
+rate/loss figures this entry carried were deleted 2026-08-20 under Standing Rule 0 — read them off
+V_INVEST_STATUS.)
+OPEN: takeover_target_organic_units NULL on both rows — Ori must supply. Minor: BASELINE_MAY_JUL
+restated slightly since Task 1 — within the assertion's tolerances, but a May-Jul window restating at
+all is worth a look since ads should have settled, and it is the reason the spec's frozen baseline
+TABLE was replaced by a query.
 
 ## 2026-08-19 — two-book P&L Tasks 3-6 done; backlog committed
 Tasks 3 (V_BOOK_ASSIGNMENT), 4 (V_FAMILY_BAR), 5 (T_FAMILY_BAR + SP_SNAPSHOT_FAMILY_BAR) and 6
 (V_INVEST_STATUS) all shipped with three-stage review. Every acceptance assertion 0.
-ORI'S RULING PROVED EMPIRICALLY: "spend rate binds". Both launches are 1.5-1.8x over sanctioned
-spend (Bunny $45.93/day vs $30, LolliBall $101.46/day vs $55) while their loss ceilings are only
-28.3% and 4.4% used. Had the gate been the net-profit ceiling, BOTH would read fully exempt today.
-Both exemptions now read DEAD.
-THE LAUNCHES ARE WORKING ON THE METRIC ORI CHOSE: organic units climbing every complete month —
-Bunny 28 -> 44 -> 69, LolliBall 0 -> 1 -> 127. Losses deepened over the same stretch, so both read
-"mixed" rather than "improving" (the improving branch needs units AND loss both moving right).
-Neither is near the kill rule (two consecutive months of no organic growth).
+ORI'S RULING PROVED EMPIRICALLY: "spend rate binds". Both launches were running well over their
+sanctioned daily spend while consuming only a small fraction of a ceiling denominated in net profit;
+had the gate been that ceiling, BOTH would have read fully exempt. Both exemptions read DEAD on the
+rate. (Figures deleted 2026-08-20 under Standing Rule 0 — read them off V_INVEST_STATUS.)
+THE LAUNCHES ARE WORKING ON THE METRIC ORI CHOSE: organic units climbing month over month. Losses
+deepened over the same stretch, so both read "mixed" rather than "improving" (the improving branch
+needs units AND loss both moving right). Neither is near the kill rule (two consecutive months of no
+organic growth). The unit counts RESTATE overnight and are not recorded here; read
+organic_units_*_whole_month off V_TWO_BOOK_BRIEF.
 ALGEBRA FOUND IN REVIEW: the keyword bar test reduces to (ads_net_roas + total_net_roas)/2 >= 1.0 —
 it is the MEAN of the two measures. So when the halo is real (>1) the bar is provably STRICTER than
 the truth test and can never be more permissive; a permissive break is only reachable at halo<1
 (the COGS artifact). Calibration is a data coincidence per window, not an identity, and the split
-MOVES — do not pin it (corrected 2026-08-20; the figure written here first went stale within a day).
-Re-measured 2026-08-20 over all 84 (family, period) rows including the six still-filling MTD rows:
-73 agree, 1 unjudgeable, 10 disagree — 8 CONSERVATIVE (one of them a still-filling row) and 2
-PERMISSIVE. Over complete periods only: 68 agree, 1 unjudgeable, 7 CONSERVATIVE, 2 PERMISSIVE. The
-scope is part of the answer and the query is published in the V_FAMILY_BAR.sql header. The re-check
-must alarm only on PERMISSIVE breaks — that direction is stable, the counts are not. (Corrected
-2026-08-20: this line said "the monthly re-check". THERE IS NO MONTHLY JOB, anywhere — the bar is
-rebuilt daily and the calibration query is run by hand. The word was also removed from config.yaml's
-V_FAMILY_BAR entry the same day. Separately: the counts above are a DATED READING and two
-independent re-runs on 2026-08-20 alone returned different splits, 73/8 and 72/9, with no code change
-between them. Re-run the query before quoting either.)
+MOVES — DO NOT PIN IT. The counts this entry carried were deleted on 2026-08-20 (round 4, Standing
+Rule 0): two independent re-runs of the same published query on 2026-08-20 alone, with no code change
+between them, returned different splits, so any number written here is wrong by the next reader. The
+SCOPE is part of the answer too — run the query both ways, all rows and again with
+WHERE is_complete_period, and say which one you are quoting. The query is published in the
+V_FAMILY_BAR.sql header. The re-check must alarm only on PERMISSIVE breaks — that direction is
+stable, the counts are not. (Also corrected 2026-08-20: this line said "the monthly re-check". THERE
+IS NO MONTHLY JOB, anywhere — the bar is rebuilt daily and the calibration query is run by hand. The
+word was removed from config.yaml's V_FAMILY_BAR entry the same day.)
 BACKLOG COMMITTED: a8cb5aa (136 backend files, v27.72-v27.83 + two-book 1-5, hook passed) and
 5206d8b (30 dashboard files, --no-verify: tsc clean, 395 PRE-EXISTING eslint issues). .gitignore
 gained *.bak.* — the old *.bak / *.sql.bak rules never matched the deploy battery's versioned form,
 so 157 backups had been permanent git-status noise. Working tree now CLEAN.
 OPEN / DATED: (1) nothing stops yet — no engine reads V_INVEST_STATUS; the spend gate bites only
 when Task 8b wires protection_qualified (renamed from exemption_live 2026-08-20) into
-V_LAUNCH_EXEMPTION, and Task 8b is on hold under "release nothing". (2) Bunny flips RAMP->PROOF on
-2026-09-01, NOT ~2026-09-24 (corrected 2026-08-20): the deployed test is
-IF(launch_age_months <= 3,'RAMP','PROOF') over DATE_DIFF(today, first_sale_date, MONTH), which counts
-MONTH BOUNDARIES CROSSED, not elapsed 30-day periods — off first_sale_date 2026-05-24 it reads 3 on
-2026-08-31 and 4 on 2026-09-01. takeover_target_organic_units is NULL, so PROOF is a no-op until Ori
-supplies it. (3) LolliBall (first sale 2026-06-26) reaches PROOF on 2026-10-01 by the same
-arithmetic, and PROOF judges a LEVEL, so its implausible 0.87 halo must be fixed first — note 0.87 is
-its BASELINE_MAY_JUL halo; on the M3 window that the bar actually reads it is 1.15.
-(4) 10.5% of ad spend sits in 9 unmapped campaigns, outside both books.
+V_LAUNCH_EXEMPTION, and Task 8b is on hold under "release nothing". (2) THE RAMP->PROOF FLIP IS A
+RULE, NOT A DATE: the deployed test is IF(launch_age_months <= 3,'RAMP','PROOF') over
+DATE_DIFF(today, first_sale_date, MONTH), which counts MONTH BOUNDARIES CROSSED, not elapsed 30-day
+periods — so a family flips on the FIRST of the month in which that count reaches 4, never
+mid-month. (Corrected 2026-08-20: this entry originally pinned "~2026-09-24" for Bunny, which is the
+elapsed-days/30.44 answer and not what the deployed view computes; the second correction, which
+pinned the calendar dates instead, has itself now been replaced by the rule. Derive both dates with
+SELECT family, first_sale_date, launch_age_months FROM V_BOOK_ASSIGNMENT.)
+takeover_target_organic_units is NULL, so PROOF is a no-op until Ori supplies it. (3) PROOF judges a
+LEVEL, so a launch family's implausible sub-1.0 halo must be fixed before it gets there — and ALWAYS
+NAME THE WINDOW: the sub-1.0 figure is a BASELINE_MAY_JUL halo, and on the M3 window the bar actually
+reads the same family sits on the other side of 1.0.
+(4) A material share of ad spend sits in unmapped campaigns, outside both books. The share MOVES and
+is not recorded here — read account_ad_spend_in_neither_book off V_TWO_BOOK_BRIEF's HARVEST TOTAL
+row against the two book ad_spend totals.
 
 ## 2026-08-20 — two-book P&L, repair round 3: the stale-prose sweep and a standing rule against it
 THE PATTERN, not the individual defects, was the finding. Three repair rounds each fixed real bugs
@@ -392,14 +399,14 @@ never gate anything: gate the PROPERTY, not the population. When you find a stal
 updating 32 to 46 buys one day.
 
 THE ONE THAT PROVED THE RULE: config.yaml and V_FAMILY_BAR.sql both said "on the window this view
-actually reads, NO ROW CLAMPS" and then published a query that returned 4. The view ROUNDs the bar to
-4 decimals and the tolerance was 1e-9, so ordinary rounding read as a clamp. Tolerance is now 5e-5,
-half the rounding grid; re-run 2026-08-20 it returns 0 clamped, lowest_bar 0.7769, 6 rows. A
-published query that contradicts the sentence beside it is worse than no query at all.
+actually reads, NO ROW CLAMPS" and then published a query that returned a NON-ZERO count. The view
+ROUNDs the bar to 4 decimals and the tolerance was 1e-9, so ordinary rounding read as a clamp.
+Tolerance is now 5e-5, half the rounding grid, and the query returns 0 clamped. A published query
+that contradicts the sentence beside it is worse than no query at all.
 
 THE PINNED GATE IS OUT OF THE ACCEPTANCE CRITERIA. Item 8 read "the bar-exempt cut count stays at its
-measured baseline of four" while Task 8 Step 6 carried a warning saying a pinned count could not hold.
-Re-measured 2026-08-20 that query returns ONE row (AUTO_DAY_TRIM, LolliBall, 2 keywords). The item now
+measured baseline" while Task 8 Step 6 carried a warning saying a pinned count could not hold.
+Re-running that query the same day returned a DIFFERENT count. The item now
 gates the property Step 6 actually tests — Step 3 adds no new CLASS of cut reaching a bar-exempt
 campaign, compared against the same-session capture — and says reaching zero would be a FAILURE, since
 it would disable the daily trim and seat-queue park that are the sanctioned way a launch is contained.
@@ -412,11 +419,11 @@ because Step 3 is a hand edit to two live engine files and the post-edit views h
 
 CONFIG'S V_TWO_BOOK_BRIEF ENTRY REWRITTEN FROM THE DEPLOYED OBJECT. It was the first thing the next
 agent reads as ground truth and it was stale nine ways, including the exact overstatement round 2 was
-convened to correct: it published the held-cut budget as $188.86/day (LolliBall $129.86) when the view
-read $147.86 and $88.86. It also described a column that no longer exists, pinned 32 columns against a
-live 48, claimed INVEST families carry keyword_bar = NULL when the column is renamed
-keyword_bar_computed_not_applied and populated on all six, and named three other pre-rename columns.
-Every assertion-result list in it was DELETED rather than updated.
+convened to correct: it published a held-cut budget per day, and its per-family split, that the view
+did not read that morning. It also described a column that no longer existed, pinned a column count
+against a different live one, claimed INVEST families carry a NULL keyword bar when the column had
+been renamed and was populated on every family, and named three other pre-rename columns. Every
+assertion-result list in it was DELETED rather than updated.
 
 TASK 8b STEP 4 IS NOW SAFE TO INTERRUPT. It raises Bunny's sanctioned rate on a LIVE row that
 V_BOOK_ASSIGNMENT and V_LAUNCH_EXEMPTION both read, then restores it — so between the two writes a
@@ -427,29 +434,102 @@ trap on EXIT/INT/TERM, marks where the window opens and closes, and documents th
 
 ALSO CORRECTED, each re-measured first: Task 5 gained a DO-NOT-RE-DEPLOY banner (its block omits the
 "not yet wired" clause, the 'Unknown'-bucket paragraph, and names orchestrator task 20.4 instead of
-20.5g-1) and the STATUS table stopped calling it "current"; Task 5 Step 4's "~106 rows" became a
-property check (T_FAMILY_BAR 88 = mapped non-Unknown campaigns 88, gap 0); Task 7's "thirty-five
-columns" and Task 6's two-commit list became "read it off the object / take it from git"; Task 8 Step
+20.5g-1) and the STATUS table stopped calling it "current"; Task 5 Step 4's pinned row count became a
+property check (the table holds exactly the mapped non-'Unknown' campaigns, gap 0); Task 7's pinned
+column count and Task 6's two-commit list became "read it off the object / take it from git"; Task 8 Step
 3's comment block — which ships VERBATIM into V_KEYWORD_LIFT — stopped pinning Bottle's ROAS and now
 publishes the query instead; the spec's "re-checked monthly" and config.yaml's "STANDING MONTHLY TEST"
 went, because NO MONTHLY JOB EXISTS anywhere in the warehouse.
 
-THE CALIBRATION COUNTS ARE NO LONGER WRITTEN DOWN AT ALL. Re-run 2026-08-20 the published query
-returned 84 scanned / 1 unjudgeable / 73 agree / 8 CONSERVATIVE / 2 PERMISSIVE — which AGREES with the
-header, while round 3's verifier re-ran the same query the same day and got 72 / 9. Both are right:
-Bottle's M3 total net ROAS is 0.998, 0.2% under the truth test, and ad money restates for ~D+3, so one
-row flips intraday. That is the case for publishing the query and not the answer, so the counts are
-gone from both the header and config.yaml and the ALGEBRA is what is carried instead.
+THE CALIBRATION COUNTS ARE NO LONGER WRITTEN DOWN AT ALL. Two runs of the published query on the
+same day, with no code change between them, returned different splits. Both were right: a family
+whose M3 total net ROAS sits a fraction under the 1.000 truth test flips intraday, because ad money
+restates for about D+3. That is the case for publishing the query and not the answer, so the counts
+are gone from the header, from config.yaml and from this entry, and the ALGEBRA is what is carried
+instead.
 
 NOTHING IN THE ENGINE WAS TOUCHED. V_LAUNCH_EXEMPTION, V_ADS_COACH and V_COACH_CAMPAIGN_BUDGET are
 unchanged, no held decision was released, Tasks 8/8b/9 remain on hold. V_FAMILY_BAR and
-V_BOOK_ASSIGNMENT were re-deployed only because their header comments changed; header lines starting
-"--" are stripped at deploy, so both objects are byte-identical to before and the brief still reads 8
-rows, 2 totals, 2 books, 0 blank verdicts.
+V_BOOK_ASSIGNMENT were re-deployed only because their header comments changed; lines starting "--" in
+column 0 are stripped at deploy, and the brief's structural assertions (one total row per book, both
+book reconciliation gaps 0, zero blank verdicts) all still hold.
 
 OPEN / DATED: (1) Task 9's open question — how many fields make a declaration — is REPORTED as ruled
 Option A (two binding fields: sanctioned $/day + end date; the take-over target gates PROOF only) in
 the round-3 brief, but that reached the plan second-hand and Task 9 writes a STANDING RULE. It is
 recorded in the plan in a box, NOT acted on. Confirm with Ori in his own words before publishing the
-SOP. (2) The unmapped-spend share moves: the 2026-08-19 entry above says 10.5% of ad spend in 9
-unmapped campaigns; the brief read 9.3% on 2026-08-20. Read it off the view.
+SOP. (2) The unmapped-spend share MOVES and is deliberately no longer written in either entry — the
+2026-08-19 entry and the brief disagreed by more than a point within a day. Read
+account_ad_spend_in_neither_book off V_TWO_BOOK_BRIEF's HARVEST TOTAL row.
+
+## 2026-08-20 — two-book P&L, repair round 4: stamping failed, so the pins are gone
+
+ORI'S RULING, NOW STANDING RULE 0 EVERYWHERE (plan, spec, config.yaml convention block, every view
+header in this design): A MEASURED NUMBER DOES NOT GO IN PROSE. Round 3's answer — stamp it with an
+as-of date — was tried for a whole round and FAILED IN THE FILE THAT DEFINED IT: config.yaml's
+V_BOOK_ASSIGNMENT entry shipped "As of 2026-08-20 that read 1.61x and 1.94x over rate" while the live
+view that same day read otherwise. A wrong number under today's date is worse than an undated one
+because it LOOKS VERIFIED. A header, a registry entry, a plan step and a spec paragraph now describe
+the MECHANISM — what is computed, from what, why — and publish the QUERY where a number is needed.
+
+THE RULE DISTINGUISHES TWO THINGS, AND THAT DISTINCTION IS THE POINT. A DECLARED CONSTANT is true
+because a person decided it (a sanctioned $30/day, a $913 backstop, a 2026-10-31 stop date, credit
+0.5, floor 0.60, the 28-day window, the 5e-5 tolerance). It may be written down and IT MAY GATE AN
+ASSERTION — Task 8b Step 4's post-restore check on Bunny's sanction is the one thing standing between
+a test that inflates a live sanctioned row and a permanently overwritten number, and a
+"measurements never gate anything" reading would have deleted it. A MEASUREMENT is true only because
+something was computed from data on a day, and it may never be written in prose or gate anything.
+A third case is named so nobody argues it again: a GOLDEN EXPECTATION inside a regression test (Task
+1's May–Jul `want` rows, with tolerances) is legitimate, because inside a test the number is the
+subject; the same number in a sentence is a claim about today.
+
+PUBLISHED QUERIES WERE RUN, NOT ASSUMED — AND THREE OF THEM DID NOT COMPILE. The V_BOOK_ASSIGNMENT
+header, plan Task 8b Step 4 and Task 9's SOP heredoc all published queries naming
+`times_over_agreed_rate` and `loss_allowance_used_pct_so_far` on V_TWO_BOOK_BRIEF; both columns had
+been renamed away in the L round, so the queries failed outright. A fourth named `halo_factor` on the
+brief, which has no such column. All four are repointed and re-run. Column names are now checked
+against INFORMATION_SCHEMA before a query is published, and the rule says so.
+
+TWO QUERIES CONTRADICTED THE SENTENCE ABOVE THEM. Task 9's SOP claimed "the family with the account's
+strongest measured halo also carries its lowest ads-attributed ROAS" and then printed a query whose
+output disagrees — same defect class as round 2's floor query. Replaced by the ALGEBRA, which cannot
+go stale: the bar is 1/(1+0.5*(halo-1)), so a stronger halo always means a lower bar. The other was
+the plan's own bar-eyeball step, which named four bar values; it now checks monotonicity, bounds and
+the ads-vs-total gap instead.
+
+THE COMMENT THAT WOULD HAVE SHIPPED A STALE MEASUREMENT INTO A LIVE ENGINE. Task 8b Step 3's block
+goes VERBATIM into V_LAUNCH_EXEMPTION when the task runs, and it carried month-to-date figures from
+2026-08-19. Task 8 Step 3's block, which ships into V_KEYWORD_LIFT, had been repaired in round 3 by
+replacing the stale figures with LIVE ones — the same defect one day later. Both now carry the
+mechanism only, and both say in the comment that no figure of any vintage may be written there.
+
+ALSO FIXED: config.yaml's V_TWO_BOOK_BRIEF entry named TEN columns the object no longer carries (the
+gap L reported and could not fix under its own file scope); Task 8b's banner claimed every statement
+in the task had been dry-run when nothing downstream of Step 3 reads an object that exists, and now
+says exactly how far the evidence reaches, matching how Task 8's banner was qualified; Task 8b Step 2
+pinned two families' rates as the explanation of a count while the SAME TASK stated different figures
+for them 96 lines later; the spec's §5 correction box stated four rate/loss figures and then claimed
+in the same paragraph that they had been removed; the spec's §3 baseline TABLE was replaced by the
+query over period_label='BASELINE_MAY_JUL' (it had already drifted); Task 6's step expected a verdict
+"against the 400 target" when takeover_target_organic_units is NULL on every row.
+
+MEASURED PIN COUNT OVER THE TWO-BOOK SURFACE — config.yaml's eight two-book entries, the plan, the
+spec and the three view headers this round owns — went 445 -> 91. Method, so it can be re-run rather
+than believed: count numeric tokens matching money / N.NNx ratio / percentage / multi-decimal / >=3-
+digit-count shapes, after stripping ISO dates, commit SHAs and the project id, minus an allowlist of
+DECLARED CONSTANTS. This journal entry is deliberately OUTSIDE that count, because it quotes the
+defect strings it describes. Most of the 91 that remain are the §1 quarantine box in the spec —
+one-off 2026-08-19 analysis findings that no live object restates, kept as the reasoning trail for why
+two whole measurement approaches were abandoned, in a box that says exactly that — plus Task 1's
+frozen golden expectation and the declared sanctions.
+
+NOTHING IN THE ENGINE WAS TOUCHED. V_LAUNCH_EXEMPTION, V_ADS_COACH and V_COACH_CAMPAIGN_BUDGET are
+unchanged, no held decision was released, Tasks 8/8b/9 remain on hold. V_FAMILY_PNL, V_BOOK_ASSIGNMENT
+and V_FAMILY_BAR were re-deployed because their comments changed; V_FAMILY_BAR's stored definition is
+byte-identical, and the other two differ only in indented comment text — all three return identical
+rows to before.
+
+OPEN / DATED: (1) V_INVEST_STATUS.sql and V_TWO_BOOK_BRIEF.sql headers were NOT edited (Tasks K and L
+own them); their surviving pins are reported for a follow-up round. (2) The plan's Standing Rule 0
+quotes the wrong 1.61x/1.94x string verbatim as the example of the defect — deliberately, and it is
+labelled as false, but it is still two numbers on a page.
