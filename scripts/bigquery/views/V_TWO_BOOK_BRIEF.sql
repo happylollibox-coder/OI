@@ -41,9 +41,15 @@
 -- consumer can branch on a frozen ads feed without parsing English.
 --
 -- VERDICTS ARE PLAIN SENTENCES ON PURPOSE. No rule names, no engine internals, no bare metric codes:
--- ROAS is written as "$1.41 back for every ad dollar", the halo as "the organic sales those ads pull
--- in", the exemption as "launch protection". Ori has repeatedly filed unreadable output as a defect
--- against the page, and he is right to. If you add a branch here, read it aloud before you deploy.
+-- ROAS is written as "$1.41 back for every ad dollar", the halo as "counting everything the family
+-- earned, attributed to the ads or not", the exemption as "launch protection". Ori has repeatedly
+-- filed unreadable output as a defect against the page, and he is right to.
+--
+-- PLAIN IS NOT THE SAME AS LOOSE, AND THIS IS WHERE THAT COST SOMETHING. The halo used to be glossed
+-- as "the organic sales those ads pull in" — readable, and a causal claim nothing in this pipeline
+-- measures. Plain English makes a metric easy to describe as MORE than it is; that is the failure
+-- this object keeps having. If you add a branch here, read it aloud before you deploy, and then ask
+-- what the sentence asserts that the arithmetic behind it does not establish.
 --
 -- ---------------------------------------------------------------------------------------------
 -- 2026-08-20 (ROUND 1) — SEVEN REVIEW FINDINGS CLOSED.
@@ -231,6 +237,111 @@
 --   56,742,327 bytes standalone); counting distinct campaigns there would have cost +14.9 MB and this
 --   view has no room for it.
 -- ---------------------------------------------------------------------------------------------
+--
+-- 2026-08-20 (ROUND 6) — THREE SENTENCES CLAIMED MORE THAN THE DATA SUPPORTED, AND SEVEN SMALLER
+-- THINGS DID NOT SAY WHAT THEY MEANT. Nothing in the engine was touched and no held decision was
+-- released; every change here is to what this object SAYS and to how its columns are named.
+--
+--   I1. THE HARVEST VERDICTS ASSERTED A CAUSE NOTHING MEASURES (critical). All three Harvest money
+--       branches glossed total_net_roas as the return "once the organic sales those ads pull in are
+--       counted". total_net_roas is SUM(sales - cogs) / SUM(ad_cost) over the WHOLE family
+--       (V_FAMILY_PNL), so its numerator is 100% of the family's gross profit — including every sale
+--       that would have happened with no advertising. No object in this pipeline decides which
+--       organic sales the ads caused. That is the founding error of this design pointing the other
+--       way: the ads-only lens understated by excluding earned profit, and this sentence overstated
+--       by handing the ads credit for profit nobody showed they produced. Each branch now says what
+--       the ratio is — everything the family earned against what the ads cost, attributed or not —
+--       and the point that matters survives untouched: judged on the ads-only figure alone, a family
+--       carrying the account gets cut.
+--
+--   I2. organic_share_of_return_pct WAS NAMED FOR A CAUSE, NOT A MEASUREMENT. 1 - 1/halo is the share
+--       of family gross profit carrying NO AD ATTRIBUTION: organic demand PLUS every ad-driven sale
+--       the attribution missed. Renamed share_of_return_with_no_ad_attribution_pct.
+--       THE MISSED PART IS NOT SMALL, AND IT WAS RE-DERIVED RATHER THAN QUOTED. Ori's recorded
+--       finding is ~79% of ads-driven purchases being of a different ASIN than the advertised one; on
+--       the settled 90-day window this view actually publishes it measures HIGHER. As of 2026-08-20,
+--       over 20 May to 17 Aug 2026: 4,133 ad orders, 3,569 of them (86.4%) with a purchased ASIN
+--       different from the advertised one, 84.3% of the ad sales dollars; and 25.1% of those orders
+--       (22.9% of the dollars) crossed to a different FAMILY. RE-RUN BEFORE QUOTING ANY OF THESE —
+--       they are one day's measurement, not constants:
+--       THIS QUERY RUNS AS WRITTEN — verified 2026-08-20, and it reproduces all four figures above
+--       plus the window it measured them on. It is written with a CTE and a CROSS JOIN rather than
+--       scalar subqueries in the WHERE, because the scalar form is rejected outright by BigQuery
+--       ("Correlated subqueries that reference other tables are not supported"):
+--         WITH w AS (SELECT MIN(period_start) AS s, MAX(period_end) AS e
+--                    FROM `onyga-482313.OI.V_FAMILY_PNL` WHERE period_label='M3')
+--         SELECT MIN(pp.DATE) AS window_start, MAX(pp.DATE) AS window_end,
+--                SUM(pp.PURCHASED_ORDERS) AS ad_orders,
+--                ROUND(100*SAFE_DIVIDE(SUM(IF(pp.PURCHASED_ASIN<>pp.advertised_asin,pp.PURCHASED_ORDERS,0)),
+--                                      SUM(pp.PURCHASED_ORDERS)),1) AS pct_orders_different_asin,
+--                ROUND(100*SAFE_DIVIDE(SUM(IF(pp.PURCHASED_ASIN<>pp.advertised_asin,pp.PURCHASED_AMOUNT_USD,0)),
+--                                      SUM(pp.PURCHASED_AMOUNT_USD)),1) AS pct_sales_different_asin,
+--                ROUND(100*SAFE_DIVIDE(SUM(IF(fp.family IS DISTINCT FROM fa.family,pp.PURCHASED_ORDERS,0)),
+--                                      SUM(pp.PURCHASED_ORDERS)),1) AS pct_orders_different_family,
+--                ROUND(100*SAFE_DIVIDE(SUM(IF(fp.family IS DISTINCT FROM fa.family,pp.PURCHASED_AMOUNT_USD,0)),
+--                                      SUM(pp.PURCHASED_AMOUNT_USD)),1) AS pct_sales_different_family
+--         FROM `onyga-482313.OI.STG_AmazonAds_purchased_product` pp
+--         CROSS JOIN w
+--         LEFT JOIN `onyga-482313.OI.V_PRODUCT_FAMILY_MAP` fp ON fp.asin = pp.PURCHASED_ASIN
+--         LEFT JOIN `onyga-482313.OI.V_PRODUCT_FAMILY_MAP` fa ON fa.asin = pp.advertised_asin
+--         WHERE pp.DATE BETWEEN w.s AND w.e;
+--       Returned 2026-05-20 / 2026-08-17 / 4133 / 86.4 / 84.3 / 25.1 / 22.9 on 2026-08-20.
+--       WHY THAT MATTERS HERE: V_UNIFIED_DAILY books ad GROSS_PROFIT against the ADVERTISED asin and
+--       books sales and COGS against the PURCHASED asin, so a purchase that crosses families is
+--       credited to one family's ads and one family's revenue. The no-attribution bucket therefore
+--       contains real ad-driven profit, and calling it "organic" was a claim, not a reading.
+--
+--   I3. "AND THE REST IS WORKING" SURVIVED ON THE ROW READ FIRST. Round 4 removed "a family that is
+--       paying its way" from Bottle's own row and left the HARVEST TOTAL — printed above it — saying
+--       "Fresh is the only one losing real money, at $1,776 — fix that one and the rest is working."
+--       "The rest" included Bottle, whose row two lines later says it is short of covering its costs.
+--       real_loss is a THREE-way split (earning / short by less than the breakeven band / losing real
+--       money) and the total was using two sides of it. The counts n_earning and n_small_shortfall
+--       and the names small_shortfall_families are computed in `agg`, the claim is deleted, and the
+--       remainder is now described instead of implied.
+--
+--   I4. SEVEN SMALLER ONES, ALL ACCEPTED:
+--     (a) loss_allowance_used_pct_so_far published a percentage whose denominator was nowhere on the
+--         row. loss_allowance_dollars_for_the_month and loss_so_far_dollars_against_that_allowance
+--         now sit beside it, both already published by V_INVEST_STATUS, so no extra scan.
+--     (b) Bottle's total_net_roas COLUMN read 1.0 beside net_profit -8. Round 4 made the VERDICT
+--         rounding-proof and left the column at ROUND(x,2). Where 2 decimals would land a value on
+--         1.00 from the wrong side, the 4-decimal upstream figure is published instead — more
+--         precision, not a nudged number.
+--     (c) spend_coverage_pct and unattributed_spend are ACCOUNT-wide and sat three columns from
+--         book='HARVEST' under names that did not say so. Renamed
+--         account_ad_spend_reaching_a_family_pct and account_ad_spend_in_neither_book.
+--     (d) organic_pct (organic UNITS / units) sat beside the I2 column, both starting "organic...pct",
+--         neither naming its denominator — and round 2's own implementer misread this one as a share
+--         of sales. It is organic_share_of_units_pct now.
+--     (e) THE TRAJECTORY CLAUSE, three defects: the trend word was decided on the last two months
+--         while three were printed (a V read as "climbing"); the series was called "sales" over a
+--         count of units; and LolliBall's leading 0 was May 2026, a month before its first sale on
+--         2026-06-26 — a zero meaning "not born yet" printed as a measurement, understating the start
+--         and flattering the ramp. The word is decided on every month printed, the sentence says
+--         units at both ends, and pre-existence months are dropped with a clause saying why. The
+--         pre-existence test re-derives no window: launch_age_months is DATE_DIFF(today,
+--         first_sale_date, MONTH) computed upstream, and BigQuery's MONTH difference counts month
+--         boundaries, so it is identically the number of months back that the first-sale month sits.
+--         Verified on all six families 2026-08-20; re-check with:
+--           SELECT family, launch_age_months,
+--                  DATE_DIFF(DATE_TRUNC(CURRENT_DATE('America/Los_Angeles'),MONTH),
+--                            DATE_TRUNC(first_sale_date,MONTH),MONTH) AS months_back
+--           FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT`;
+--     (f) The INVEST total's spend_per_day was a SUM OF ROUNDED per-family rates. It is now the
+--         book's own spend over the book's own window: SUM(rate_window_spend) / rate_window_days.
+--     (g) "The $3,622 they cost over the last 90 days is money you agreed to spend" conflated a NET
+--         PROFIT shortfall with sanctioned SPEND. The sanction is denominated in dollars a day of
+--         spending; the ad spend behind that same window was $9,651 as of 2026-08-20, and nothing
+--         anywhere sanctions a loss. Both figures move with the window — read them off the row, do
+--         not quote them from here. The clause names the spend as the sanctioned quantity and the
+--         shortfall as its consequence, and keeps them apart.
+--
+--   COST: no new source and no new join. The two loss-allowance columns and rate_window_spend come
+--   from V_INVEST_STATUS, which was already joined; everything else is a rename or a rewritten
+--   string. Measure the dry run yourself before adding anything — rule 7 of the house rules, and the
+--   reason this round added two published columns and not five.
+-- ---------------------------------------------------------------------------------------------
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_TWO_BOOK_BRIEF` AS
 WITH k AS (
@@ -245,12 +356,18 @@ WITH k AS (
     --
     -- THE GATE STAYS AT 1.30; THE WORD "MOST" HAD TO GO. The verdict behind this gate said "Most of
     -- what it earns arrives as organic sales", which is a claim about a MAJORITY and the gate does not
-    -- buy one. halo is total return / ads-only return, so the organic share of the total is 1 - 1/halo:
-    -- at the gate that is 23%, and the sentence would have called 23% "most". Bottle itself is 36%
-    -- (halo 1.57), still not most. A majority needs halo above 2.00, which no family in this account
-    -- reaches, so raising the gate there would have silenced the one warning it exists to give. The
-    -- gate is therefore unchanged and the sentence now prints the measured share instead of naming a
-    -- size — organic_share_of_return_pct, computed off this same published halo.
+    -- buy one. halo is total gross profit / ads-attributed gross profit, so the share carrying no ad
+    -- attribution is 1 - 1/halo: at the gate that is 23%, and the sentence would have called 23%
+    -- "most". Bottle itself is 36% (halo 1.57), still not most. A majority needs halo above 2.00,
+    -- which no family in this account reaches, so raising the gate there would have silenced the one
+    -- warning it exists to give. The gate is therefore unchanged and the sentence prints the measured
+    -- share instead of naming a size — share_of_return_with_no_ad_attribution_pct, computed off this
+    -- same published halo.
+    --
+    -- AND THE SHARE IS NOT "ORGANIC". Round 6 renamed the column: 1 - 1/halo is the share of gross
+    -- profit that Amazon's ad attribution did not claim, which is organic demand PLUS ad-driven sales
+    -- the attribution missed. Nothing measures the split. What the gate is for is unchanged — a
+    -- family whose earnings mostly sit outside the ads-only number must not be cut on that number.
     1.30 AS wide_halo
 ),
 pnl AS (
@@ -442,8 +559,26 @@ base AS (
     -- must never happen is a money column here that a book total does not contain.
     IF(p.ad_spend   IS NULL, NULL, ROUND(p.net_profit, 0))              AS net_profit,
     IF(p.net_profit IS NULL, NULL, ROUND(p.ad_spend, 0))                AS ad_spend,
-    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL, ROUND(p.total_net_roas, 2)) AS total_net_roas,
-    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL, ROUND(p.ads_net_roas, 2))   AS ads_net_roas,
+    -- ─── THE COLUMN MAY NOT ROUND ITSELF ONTO $1.00 EITHER ───
+    -- Round 4 made the VERDICT rounding-proof (total_net_roas_text below) and left the COLUMN at
+    -- ROUND(x, 2). Bottle's return is 0.998, so the grid printed 1.0 beside net_profit -8: a reader
+    -- scanning columns — which is what a grid is for — saw breakeven next to a loss, while the
+    -- sentence two lines away said "just under $1.00". Same defect, one row over.
+    -- THE FIX PUBLISHES MORE PRECISION, NOT A NUDGED NUMBER. Where 2 decimals would land the value on
+    -- 1.00 from the wrong side, the 4-decimal upstream figure is published instead (0.998), so the
+    -- column is more exact than before rather than bent toward the answer. Everywhere else it is the
+    -- same 2 decimals it always was. The test is on the UNROUNDED upstream value, as the text
+    -- columns' is, so column and sentence can never disagree about which side of $1.00 this is.
+    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL,
+       CASE WHEN p.total_net_roas IS NULL                                   THEN NULL
+            WHEN p.total_net_roas < 1 AND ROUND(p.total_net_roas, 2) >= 1   THEN ROUND(p.total_net_roas, 4)
+            WHEN p.total_net_roas > 1 AND ROUND(p.total_net_roas, 2) <= 1   THEN ROUND(p.total_net_roas, 4)
+            ELSE ROUND(p.total_net_roas, 2) END)                             AS total_net_roas,
+    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL,
+       CASE WHEN p.ads_net_roas IS NULL                                     THEN NULL
+            WHEN p.ads_net_roas < 1 AND ROUND(p.ads_net_roas, 2) >= 1       THEN ROUND(p.ads_net_roas, 4)
+            WHEN p.ads_net_roas > 1 AND ROUND(p.ads_net_roas, 2) <= 1       THEN ROUND(p.ads_net_roas, 4)
+            ELSE ROUND(p.ads_net_roas, 2) END)                               AS ads_net_roas,
     -- ─── THE RATIO IN WORDS, AND IT MAY NOT ROUND ITSELF ACROSS $1.00 ───
     -- Bottle's return is 0.998. FORMAT('$%.2f') prints that as "$1.00", and a verdict then read
     -- "$1.00 back for every ad dollar" beside a 90-day loss of $8 — the rounding said the family
@@ -462,14 +597,25 @@ base AS (
             WHEN p.ads_net_roas > 1 AND ROUND(p.ads_net_roas, 2) <= 1       THEN 'just over $1.00'
             ELSE FORMAT('$%.2f', p.ads_net_roas) END)                        AS ads_net_roas_text,
     IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL, ROUND(p.halo_factor, 2))    AS halo_factor,
-    -- HOW MUCH OF THE RETURN THE ORGANIC SALES SUPPLY, as a whole percent, off the SAME rounded halo
-    -- the row publishes, so the sentence and the column can never disagree. halo = total return / ads
-    -- return, so the organic share of the total is 1 - 1/halo: at halo 1.57 (Bottle) that is 36%, and
-    -- at the 1.30 gate below it is 23%. See the wide_halo note in k for why that arithmetic had to be
-    -- printed rather than described.
+    -- ─── HOW MUCH OF THE RETURN CARRIES NO AD ATTRIBUTION — AND THAT IS NOT THE SAME AS "ORGANIC" ───
+    -- This was called organic_share_of_return_pct and the name asserted a cause the pipeline does not
+    -- measure. The arithmetic is 1 - 1/halo, where halo = total gross profit / AD-ATTRIBUTED gross
+    -- profit, so what the number actually isolates is the share of the family's gross profit that
+    -- Amazon's ad attribution did not claim. That bucket is organic demand PLUS every ad-driven sale
+    -- the attribution missed, and the missed part is not a rounding error: the ads fact books
+    -- GROSS_PROFIT against the ADVERTISED asin (V_UNIFIED_DAILY `ads` CTE) while sales and COGS are
+    -- keyed to the PURCHASED asin (`perf` CTE), and on the same settled 90-day window this view
+    -- measures, 86.4% of ad orders were for a different asin than the one advertised and 25.1% were
+    -- for a different FAMILY. Re-derive both before quoting them — they are as of 2026-08-20 and the
+    -- query is in the file header.
+    -- Computed off the SAME halo the row publishes, so the sentence and the column cannot disagree.
     IF(p.net_profit IS NULL OR p.ad_spend IS NULL OR COALESCE(p.halo_factor, 0) <= 0, NULL,
-       CAST(ROUND(100 * (1 - SAFE_DIVIDE(1, ROUND(p.halo_factor, 2)))) AS INT64))    AS organic_share_of_return_pct,
-    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL, p.organic_pct)              AS organic_pct,
+       CAST(ROUND(100 * (1 - SAFE_DIVIDE(1, ROUND(p.halo_factor, 2)))) AS INT64))    AS share_of_return_with_no_ad_attribution_pct,
+    -- A DIFFERENT DENOMINATOR AND A DIFFERENT NUMERATOR FROM THE COLUMN ABOVE. This one is organic
+    -- UNITS over total UNITS (V_FAMILY_PNL.organic_pct). It sat beside the column above under two
+    -- names that both began "organic...pct" and neither of which named its denominator, and round 2's
+    -- own implementer read this one as a share of sales. Both names now say what they divide.
+    IF(p.net_profit IS NULL OR p.ad_spend IS NULL, NULL, p.organic_pct)              AS organic_share_of_units_pct,
     -- ─── THE BAR IS COMPUTED AND NOTHING APPLIES IT — SAY SO ON EVERY ROW ───
     -- This file used to state the rule "printing a bar would imply a test that is not being applied",
     -- blank it on the INVEST rows because those families are bar-exempt (V_FAMILY_BAR.bar_exempt) —
@@ -481,6 +627,11 @@ base AS (
     ROUND(b.keyword_bar, 2)                                             AS keyword_bar_computed_not_applied,
     i.phase, i.launch_age_months, i.stop_date,
     i.daily_investment, i.spend_per_day, i.spend_rate_ratio, i.spend_breached,
+    -- NOT PUBLISHED, USED ONLY BY THE BOOK TOTAL. The dollars behind spend_per_day over the same
+    -- window, so the INVEST total can compute a rate over the BOOK — total spend / window days —
+    -- instead of summing per-family rates that have each already been rounded to the cent. See the
+    -- spend_per_day note in `agg`.
+    i.rate_window_spend,
     -- ─── THE RATE WINDOW IS READ, NEVER RE-DERIVED ───
     -- It used to be built here as CONCAT('month to date, from ', the 1st of CURRENT_DATE's month).
     -- That string was a guess dressed as a fact and it was wrong on two counts. It named a start with
@@ -523,6 +674,14 @@ base AS (
     -- AND THE COLUMN NAME SAYS "SO FAR": this is a running month, always a partial one, and a bare
     -- percentage of a monthly allowance reads as a finished month unless the name refuses to.
     i.mtd_money_start, i.mtd_money_end,
+    -- ─── AND THE PERCENTAGE MUST CARRY ITS OWN DENOMINATOR ───
+    -- loss_allowance_used_pct_so_far published 22.3 on Bunny and 0.9 on LolliBall with nothing on the
+    -- row to convert either into money: the allowances are $913 and $1,674, both on record in
+    -- DE_LAUNCH_INVESTMENT, and a reader had to leave the object to find them. Both sides of the
+    -- fraction now ride on the row beside the percentage. They cost no extra scan — V_INVEST_STATUS
+    -- is already joined and already publishes both.
+    i.monthly_loss_ceiling,
+    i.mtd_net_profit,
     IF(i.ceiling_used_pct IS NULL OR i.mtd_money_start IS NULL OR i.mtd_money_end IS NULL, NULL,
        CONCAT(FORMAT_DATE('%-d %B', i.mtd_money_start), ' to ',
               FORMAT_DATE('%-d %B %Y', i.mtd_money_end),
@@ -614,13 +773,18 @@ fam AS (
     b.total_net_roas,
     b.ads_net_roas,
     b.halo_factor,
-    -- The share of the total return that arrives as organic sales rather than through the ads, in
-    -- whole percent: 1 - 1/halo, off the halo column immediately to its left.
-    b.organic_share_of_return_pct,
+    -- The share of the family's gross profit that Amazon's ad attribution did NOT claim, in whole
+    -- percent: 1 - 1/halo, off the halo column immediately to its left. It is not a measure of
+    -- organic demand — nothing here separates organic sales from ad-driven sales the attribution
+    -- missed, and on this window 86.4% of ad orders were for a different asin than the advertised one
+    -- (as of 2026-08-20; re-derive before quoting). See the note on the definition in `base`.
+    b.share_of_return_with_no_ad_attribution_pct,
     -- COMPUTED, AND NOTHING APPLIES IT — the name is the caveat. Published on every family now,
     -- Harvest included, because no engine tests any family against it while Task 8 is on hold.
     b.keyword_bar_computed_not_applied,
-    b.organic_pct,
+    -- ORGANIC UNITS OVER TOTAL UNITS — a different fraction from the column three lines above, which
+    -- is a share of gross profit. Both names now carry their denominator.
+    b.organic_share_of_units_pct,
     -- 1 = the biggest real loss in the harvest book, the one the verdict says to fix first.
     b.loss_rank,
     -- WHICH WINDOW THE RATE COLUMNS BELOW BELONG TO. Deliberately a different, shorter window from
@@ -674,7 +838,15 @@ fam AS (
     -- nothing to the dollars above and are counted here instead — the figure can only run low.
     b.trims_unsized         AS held_trims_with_no_target_on_record,
     -- MONTH-TO-DATE AND ON ITS OWN WINDOW, which is neither of the other two on this row.
+    -- AND THE TWO SIDES OF THE FRACTION SIT BESIDE IT. The percentage alone published 22.3 and 0.9
+    -- with its denominator nowhere on the row: the allowances are on record in DE_LAUNCH_INVESTMENT
+    -- and a reader had to leave the object to turn either figure into money. Now the allowance and
+    -- the loss so far are both here, in dollars, on the same window as the percentage.
     b.ceiling_used_pct      AS loss_allowance_used_pct_so_far,
+    b.monthly_loss_ceiling  AS loss_allowance_dollars_for_the_month,
+    -- The numerator, positive for a loss. NULL where the month's profit is not measured.
+    IF(b.mtd_net_profit IS NULL, NULL, ROUND(-b.mtd_net_profit, 2))
+                            AS loss_so_far_dollars_against_that_allowance,
     b.loss_allowance_window,
     b.days_left             AS days_left_on_sanction,
     -- THE TRAJECTORY, PUBLISHED. Absolute organic units over the last three complete months. This is
@@ -693,9 +865,13 @@ fam AS (
     b.org_m1                AS organic_units_2nd_last_complete_month,
     b.org_m0                AS organic_units_last_complete_month,
     b.takeover_target_organic_units AS organic_units_to_stand_alone,
-    -- Account-level coverage lives on the HARVEST TOTAL row only; a family row has no share of it.
-    CAST(NULL AS FLOAT64)   AS unattributed_spend,
-    CAST(NULL AS FLOAT64)   AS spend_coverage_pct,
+    -- ACCOUNT-LEVEL, AND THE NAMES NOW SAY SO. These two lived on the HARVEST TOTAL row under the
+    -- names unattributed_spend and spend_coverage_pct — three columns from book = 'HARVEST', with
+    -- nothing in either name to stop a reader taking 90.73% for the harvest book's coverage. The
+    -- header explained it; the names did not, and a name is what a grid reader reads. They are
+    -- account-wide figures published on one row because they belong to NEITHER book.
+    CAST(NULL AS FLOAT64)   AS account_ad_spend_in_neither_book,
+    CAST(NULL AS FLOAT64)   AS account_ad_spend_reaching_a_family_pct,
     CASE
       -- ───────── INVEST: sanction adherence + trajectory. Never a profit verdict. ─────────
       WHEN b.book = 'INVEST' THEN CONCAT(
@@ -800,17 +976,65 @@ fam AS (
                    'Extend the sanction if you still want it, or pull its budgets down yourself.'))
             END)
         END,
+        -- ─────────────────────────────────────────────────────────────────────────────────────
+        -- THE TRAJECTORY CLAUSE, AND THREE THINGS IT USED TO GET WRONG.
+        --
+        -- 1. IT DECIDED THE WORD ON TWO MONTHS AND THEN PRINTED THREE. "Climbing" was org_m0 >
+        --    org_m1 and nothing else, so a V — down, then up past the start — read as "climbing"
+        --    beside a series that showed the dip. The word is now decided on every month it prints:
+        --    climbing means each step up, falling means each step down, and a series that turns is
+        --    described as a series that turns rather than collapsed into one direction.
+        -- 2. IT SAID "SALES" OVER A COUNT OF UNITS. org_m0/m1/m2 are organic UNITS
+        --    (V_FAMILY_PNL.organic_units) and the sentence ended in "units" while it began in
+        --    "sales". It says units at both ends now.
+        -- 3. A LEADING ZERO THAT MEANT "NOT BORN YET" READ AS A MEASUREMENT. LolliBall printed
+        --    "0, then 1, then 126" — and its first sale was 2026-06-26, so the 0 is a month in which
+        --    the product did not exist. A zero that means "there was nothing to measure" is not a
+        --    measurement, and putting it at the head of a ramp understates the start and flatters the
+        --    climb. Months before the product existed are dropped and the count in the sentence
+        --    follows what is actually printed.
+        --    HOW THE PRE-EXISTENCE TEST IS MADE WITHOUT RE-DERIVING A WINDOW: launch_age_months is
+        --    DATE_DIFF(today, first_sale_date, MONTH) computed in V_BOOK_ASSIGNMENT, and BigQuery's
+        --    MONTH difference counts month boundaries, so it is identically the number of months back
+        --    that the first-sale MONTH sits. The printed months are 1, 2 and 3 months back
+        --    (org_m0 / org_m1 / org_m2 are the last three COMPLETE calendar months), so org_m2 is a
+        --    month the product existed in exactly when launch_age_months >= 3, and org_m1 exactly
+        --    when it is >= 2. Verified 2026-08-20 on all six families: launch_age_months equals
+        --    DATE_DIFF(DATE_TRUNC(CURRENT_DATE('America/Los_Angeles'), MONTH),
+        --              DATE_TRUNC(first_sale_date, MONTH), MONTH) on every row. Nothing here reads
+        --    CURRENT_DATE; a family with no first sale on record keeps every month it has.
+        -- ─────────────────────────────────────────────────────────────────────────────────────
         CASE
-          WHEN b.org_m1 IS NULL THEN ' There is not enough history yet to tell whether organic sales are climbing.'
+          -- Two months of existence are the minimum for a direction. org_m1 present is not enough on
+          -- its own: if the product did not exist that month, there is one real month, not two.
+          WHEN b.org_m1 IS NULL OR COALESCE(b.launch_age_months, 99) < 2
+            THEN ' There is not enough history yet to tell whether organic units are climbing.'
           ELSE CONCAT(
-            ' Organic sales are ',
-            CASE WHEN b.org_m0 > b.org_m1 THEN 'climbing'
-                 WHEN b.org_m0 < b.org_m1 THEN 'falling'
-                 ELSE 'flat' END,
+            ' Organic units are ',
+            -- THREE PRINTED MONTHS -> decided on all three.
+            IF(b.org_m2 IS NOT NULL AND COALESCE(b.launch_age_months, 99) >= 3,
+               CASE WHEN b.org_m0 = b.org_m1 AND b.org_m1 = b.org_m2            THEN 'flat'
+                    WHEN b.org_m0 > b.org_m1 AND b.org_m1 >= b.org_m2           THEN 'climbing'
+                    WHEN b.org_m0 < b.org_m1 AND b.org_m1 <= b.org_m2           THEN 'falling'
+                    WHEN b.org_m0 > b.org_m1                                    THEN 'up on the month before but not climbing steadily'
+                    WHEN b.org_m0 < b.org_m1                                    THEN 'down on the month before, after rising into it'
+                    ELSE 'level with the month before, but not steady across the three' END,
+               -- TWO PRINTED MONTHS -> two is all there is to decide on.
+               CASE WHEN b.org_m0 > b.org_m1 THEN 'climbing'
+                    WHEN b.org_m0 < b.org_m1 THEN 'falling'
+                    ELSE 'flat' END),
             ' — ',
-            IF(b.org_m2 IS NULL, '', CONCAT(CAST(b.org_m2 AS STRING), ', then ')),
+            IF(b.org_m2 IS NULL OR COALESCE(b.launch_age_months, 99) < 3, '',
+               CONCAT(CAST(b.org_m2 AS STRING), ', then ')),
             CAST(b.org_m1 AS STRING), ', then ', CAST(b.org_m0 AS STRING),
-            ' units over the last ', IF(b.org_m2 IS NULL, 'two', 'three'), ' complete months.')
+            ' units over the last ',
+            IF(b.org_m2 IS NULL OR COALESCE(b.launch_age_months, 99) < 3, 'two', 'three'),
+            ' complete months',
+            -- Say why a month is missing, so a two-month series does not read as missing data.
+            IF(b.org_m2 IS NOT NULL AND COALESCE(b.launch_age_months, 99) < 3,
+               CONCAT('. The month before those is left out because ', b.family,
+                      ' had not sold anything yet.'),
+               '.'))
         END,
         -- THE AGE CLAUSE MUST NOT CANCEL THE SENTENCE ABOVE IT. "It is 2 months old, so what matters
         -- is whether it is improving, not whether it is profitable yet" is TRUE of a protected
@@ -888,11 +1112,28 @@ fam AS (
         '. That is a mapping gap, not a quiet quarter, and it is left out of the harvest total above, ',
         'so that total is not the whole book. Check the product mapping before you trust it.')
 
+      -- ───────────────────────────────────────────────────────────────────────────────────────
+      -- THE RATIO COUNTS EVERYTHING THE FAMILY EARNED. IT DOES NOT COUNT WHAT THE ADS CAUSED.
+      -- Every Harvest branch below used to gloss total_net_roas as "once the organic sales those ads
+      -- pull in are counted" — a causal claim, and nothing in this pipeline measures it.
+      -- total_net_roas is SUM(sales - cogs) / SUM(ad_cost) over the WHOLE family
+      -- (V_FAMILY_PNL.sql), so its numerator is 100% of the family's gross profit, including every
+      -- sale that would have happened with no advertising at all. Nothing anywhere decides which
+      -- organic sales the ads caused; the halo is a measured RATIO, not an attributed effect.
+      -- This is the founding error of this design pointing the other way. The ads-only lens
+      -- understated a family by excluding profit it had earned; "the organic sales those ads pull in"
+      -- overstates by handing the ads credit for profit nobody showed they produced. Both are the
+      -- same mistake — a number described as more than it measured.
+      -- WHAT SURVIVES IS THE POINT THAT MATTERS: judged on the ads-only figure alone, a family that
+      -- is carrying the account gets cut. Every branch says what the ratio is — everything earned
+      -- against what the ads cost, attributed or not — and leaves causation unclaimed.
+      -- ───────────────────────────────────────────────────────────────────────────────────────
       WHEN b.net_profit >= 0 THEN CONCAT(
         b.family, ' made ', FORMAT("$%'d", CAST(b.net_profit AS INT64)), ' over the last 90 days on ',
         FORMAT("$%'d", CAST(b.ad_spend AS INT64)), ' of ad spend — ', b.total_net_roas_text,
-        ' back for every ad dollar once the organic sales those ads pull in are counted, against ',
-        b.ads_net_roas_text, ' counting ads alone. Keep it running.')
+        ' of profit for every ad dollar counting everything the family earned, attributed to the ads ',
+        'or not, against ', b.ads_net_roas_text,
+        ' counting only the sales the ads were credited with. Keep it running.')
 
       -- ───────────────────────────────────────────────────────────────────────────────────────
       -- THE BREAK-EVEN BRANCH MAY NOT CALL A LOSS A PROFIT, AND ROUNDING MAY NOT DECIDE IT.
@@ -902,20 +1143,26 @@ fam AS (
       -- paying its way" — on a family a hair SHORT of paying its way, in the same session whose own
       -- documentation called that 0.998 a known knife edge. The useful point is the one that survives:
       -- do not cut this on the ads figure. It is made now WITHOUT claiming profitability, the ratio is
-      -- written so it cannot round across $1.00 (total_net_roas_text), and the halo clause prints the
-      -- MEASURED organic share instead of the word "most" — see the wide_halo note in k.
+      -- written so it cannot round across $1.00 (total_net_roas_text), and the halo clause prints a
+      -- MEASURED share instead of the word "most" — see the wide_halo note in k.
+      -- THE HALO CLAUSE NAMES WHAT IT MEASURES. It read "36% of that return comes from the organic
+      -- sales rather than from the ads themselves", which is 1 - 1/halo under a description it does
+      -- not fit: that share is gross profit Amazon's ad attribution did not CLAIM, and the missed
+      -- attribution inside it is large — 86.4% of ad orders on this window were for a different asin
+      -- than the advertised one (as of 2026-08-20, re-derive before quoting). The clause states the
+      -- share and stops there; the conclusion it supports is unchanged and does not need the cause.
       -- ───────────────────────────────────────────────────────────────────────────────────────
       WHEN NOT b.real_loss THEN CONCAT(
         b.family, ' came within ', FORMAT("$%'d", CAST(-b.net_profit AS INT64)),
         ' of covering its costs over the last 90 days on ', FORMAT("$%'d", CAST(b.ad_spend AS INT64)),
         ' of ad spend — a shortfall too small to be worth acting on, but a shortfall, not a profit. ',
         'It brings back ', b.total_net_roas_text,
-        ' for every ad dollar once the organic sales those ads pull in are counted, against ',
-        b.ads_net_roas_text, ' counting ads alone.',
-        IF(b.wide_halo AND b.organic_share_of_return_pct IS NOT NULL,
-           CONCAT(' ', CAST(b.organic_share_of_return_pct AS STRING),
-                  '% of that return comes from the organic sales rather than from the ads themselves, ',
-                  'so the ads-only figure understates it — do not cut it on that figure alone.'),
+        ' for every ad dollar counting everything it earned, attributed to the ads or not, against ',
+        b.ads_net_roas_text, ' counting only the sales the ads were credited with.',
+        IF(b.wide_halo AND b.share_of_return_with_no_ad_attribution_pct IS NOT NULL,
+           CONCAT(' ', CAST(b.share_of_return_with_no_ad_attribution_pct AS STRING),
+                  '% of what it earned carries no ad attribution at all, so the ads-only figure ',
+                  'understates what this family is doing — do not cut it on that figure alone.'),
            ''))
 
       ELSE CONCAT(
@@ -926,8 +1173,8 @@ fam AS (
            CONCAT(' — a smaller loss than ', b.worst_family, "'s ",
                   FORMAT("$%'d", CAST(-b.worst_net_profit AS INT64)), ', so it waits behind that one. ')),
         'It brings back ', b.total_net_roas_text,
-        ' for every ad dollar even after counting the organic sales those ads pull in, against ',
-        b.ads_net_roas_text, ' counting ads alone.')
+        ' for every ad dollar even counting everything it earned, attributed to the ads or not, ',
+        'against ', b.ads_net_roas_text, ' counting only the sales the ads were credited with.')
     END                     AS verdict
   FROM ranked b
 ),
@@ -959,7 +1206,19 @@ agg AS (
     -- families outside it are named in words instead of silently thinned out of the money.
     COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL) AS n_priced,
     SUM(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, daily_investment, NULL)) AS daily_investment,
-    SUM(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, spend_per_day,    NULL)) AS spend_per_day,
+    -- ─── THE BOOK'S RATE IS COMPUTED OVER THE BOOK, NOT ADDED UP FROM ROUNDED FAMILY RATES ───
+    -- This was SUM(spend_per_day), and every term in that sum had already been rounded to the cent
+    -- upstream, so the book rate was a sum of roundings rather than a rate: nothing guaranteed it
+    -- equalled the book's own spend over the book's own window, and the error grows with the number
+    -- of families. It is now the same arithmetic the family rate uses, one level up — the dollars the
+    -- book spent inside the window, divided by the days in it. The window is a single span shared by
+    -- every family (derived once upstream), so MAX(rate_window_days) is picking a constant.
+    -- Measured 2026-08-20: the two agree at $161.30 today, because two families rounding by fractions
+    -- of a cent cannot separate them. That agreement is a coincidence of this day's data, not a
+    -- property — re-derive, do not assume it holds.
+    ROUND(SAFE_DIVIDE(
+      SUM(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, rate_window_spend, NULL)),
+      NULLIF(MAX(rate_window_days), 0)), 2)                             AS spend_per_day,
     -- ONE window covers every family in the book — it is derived once upstream, not per family — so
     -- MAX is picking a constant, not choosing between rival answers. Carried onto the total so the
     -- book row names the same days its family rows do.
@@ -974,6 +1233,18 @@ agg AS (
     -- honest answer for a book that never had a window.
     LOGICAL_OR(rate_window_is_stale)               AS rate_window_is_stale,
     COUNTIF(real_loss)                             AS n_real_losses,
+    -- ─── THE OTHER TWO STATES A MEASURED FAMILY CAN BE IN, BECAUSE THE TOTAL SPOKE FOR THEM ───
+    -- The harvest total said "fix that one and the rest is working" while Bottle's own row, printed
+    -- two lines below it, said Bottle was short of covering its costs. "The rest" included Bottle.
+    -- The total is the first thing anyone reads, so a claim it makes about families it does not name
+    -- has to be true of every one of them. real_loss is a THREE-way split, not two: earning, short by
+    -- less than the breakeven band, and losing real money. All three are counted here so the sentence
+    -- can describe the book instead of implying the remainder.
+    COUNTIF(money_measured AND net_profit >= 0)    AS n_earning,
+    COUNTIF(money_measured AND net_profit < 0 AND NOT COALESCE(real_loss, FALSE)) AS n_small_shortfall,
+    -- Named, and ordered by family so two consecutive pulls are byte-identical.
+    STRING_AGG(IF(money_measured AND net_profit < 0 AND NOT COALESCE(real_loss, FALSE), family, NULL),
+               ' and ' ORDER BY family)            AS small_shortfall_families,
     COUNTIF(COALESCE(spend_breached, FALSE))       AS n_over_rate,
     -- ─── THE TWO PROTECTION STATES AT BOOK LEVEL, AND THE GAP BETWEEN THEM ───
     -- n_protection_gap IS THE HEADLINE NUMBER OF THIS ROUND: families the coach is still protecting
@@ -1028,9 +1299,9 @@ tot AS (
     CAST(NULL AS FLOAT64)                            AS total_net_roas,
     CAST(NULL AS FLOAT64)                            AS ads_net_roas,
     CAST(NULL AS FLOAT64)                            AS halo_factor,
-    CAST(NULL AS INT64)                              AS organic_share_of_return_pct,
+    CAST(NULL AS INT64)                              AS share_of_return_with_no_ad_attribution_pct,
     CAST(NULL AS FLOAT64)                            AS keyword_bar_computed_not_applied,
-    CAST(NULL AS FLOAT64)                            AS organic_pct,
+    CAST(NULL AS FLOAT64)                            AS organic_share_of_units_pct,
     CAST(NULL AS INT64)                              AS loss_rank,
     -- Same window, same words, same source as the family rows — never re-derived from today's
     -- calendar, which is what let this string name a month the rate was not measured over.
@@ -1060,6 +1331,8 @@ tot AS (
     -- A loss allowance is a per-family sanction; a book has no single one, and no window of its own
     -- for one either.
     CAST(NULL AS FLOAT64)                            AS loss_allowance_used_pct_so_far,
+    CAST(NULL AS FLOAT64)                            AS loss_allowance_dollars_for_the_month,
+    CAST(NULL AS FLOAT64)                            AS loss_so_far_dollars_against_that_allowance,
     CAST(NULL AS STRING)                             AS loss_allowance_window,
     CAST(NULL AS INT64)                              AS days_left_on_sanction,
     -- A trajectory is a per-family fact; summing organic units across a book would invite exactly the
@@ -1071,8 +1344,8 @@ tot AS (
     -- ACCOUNT-LEVEL, BELONGING TO NEITHER BOOK, AND ON THE HARVEST TOTAL ROW ONLY — the one row that
     -- carries the sentence explaining it. Published on both totals it read as $8,765 twice, next to
     -- an INVEST spend total, with nothing on that row saying what it was.
-    IF(s.book = 'HARVEST', c.unattributed_spend, NULL)  AS unattributed_spend,
-    IF(s.book = 'HARVEST', c.spend_coverage_pct, NULL)  AS spend_coverage_pct,
+    IF(s.book = 'HARVEST', c.unattributed_spend, NULL)  AS account_ad_spend_in_neither_book,
+    IF(s.book = 'HARVEST', c.spend_coverage_pct, NULL)  AS account_ad_spend_reaching_a_family_pct,
     CASE
       WHEN s.book = 'HARVEST' THEN CONCAT(
         CASE
@@ -1102,15 +1375,48 @@ tot AS (
                 IF(a.n_families = a.n_measured,
                    'None of them is losing real money.',
                    'None of the ones with anything measured is losing real money.')
+              -- ─────────────────────────────────────────────────────────────────────────────
+              -- "AND THE REST IS WORKING" WAS A CLAIM ABOUT FAMILIES THIS ROW DOES NOT NAME.
+              -- Round 2 took "a family that is paying its way" off Bottle's own row and left the
+              -- harvest TOTAL saying "fix that one and the rest is working" — printed ABOVE Bottle,
+              -- and the first thing anyone reads. "The rest" included Bottle, whose own row two lines
+              -- later said it was short of covering its costs. The total and the family row said
+              -- opposite things about the same family, and the total said it first.
+              -- The claim is gone. What replaces it is not a hedge: the remainder is COUNTED and
+              -- described, in the clause below, so the total says how many are earning and names the
+              -- ones that are short. real_loss is a three-way split and this sentence now uses all
+              -- three sides of it.
+              -- ─────────────────────────────────────────────────────────────────────────────
               WHEN a.n_real_losses = 1 THEN CONCAT(
                 a.worst_family, ' is the only one losing real money, at ',
                 FORMAT("$%'d", CAST(-a.worst_net_profit AS INT64)),
-                ' — fix that one and the rest is working.')
+                ' — fix that one first.')
               ELSE CONCAT(
                 CAST(a.n_real_losses AS STRING), ' of them are losing real money, and the biggest is ',
                 a.worst_family, ' at ',
                 FORMAT("$%'d", CAST(-a.worst_net_profit AS INT64)),
                 ' — start there, because that is where the dollars are.')
+            END,
+            -- ─── AND THE REST OF THE BOOK, STATED RATHER THAN LEFT TO BE INFERRED ───
+            -- A family short of covering its costs by less than the breakeven band is neither a job
+            -- nor a success, and it is the state the total used to swallow. It is named here, with
+            -- the same words its own row uses, so the two rows cannot disagree; and where every other
+            -- measured family IS earning, the total is free to say so, because then it is true.
+            CASE
+              WHEN COALESCE(a.n_small_shortfall, 0) > 0 THEN CONCAT(
+                ' ', a.small_shortfall_families,
+                IF(a.n_small_shortfall = 1, ' is', ' are'), ' short of covering ',
+                IF(a.n_small_shortfall = 1, 'its', 'their'), ' costs',
+                IF(a.n_real_losses > 0, ' too', ''),
+                ', by too little to be worth acting on.',
+                IF(COALESCE(a.n_earning, 0) > 0,
+                   CONCAT(' The other ', CAST(a.n_earning AS STRING),
+                          IF(a.n_earning = 1, ' family is earning.', ' families are earning.')),
+                   ''))
+              WHEN a.n_real_losses > 0 AND COALESCE(a.n_earning, 0) > 0 THEN CONCAT(
+                ' The other ', CAST(a.n_earning AS STRING),
+                IF(a.n_earning = 1, ' family is earning.', ' families are earning.'))
+              ELSE ''
             END,
             -- A family in this book with nothing measured is not in that total, and the sentence has
             -- to say so out loud or the total reads complete when it is not.
@@ -1256,18 +1562,31 @@ tot AS (
             -- word when they are running above the rate that was agreed: the overspend is precisely
             -- the part nobody approved. The agreement still stands; it just is not what is happening,
             -- and the sentence now ends on the gap and the correction rather than on the comfort.
+            -- AND IT MAY NOT CALL A LOSS A SANCTION. It said "The $3,622 they cost over the last 90
+            -- days is money you agreed to spend" — but $3,622 is NET PROFIT (sales minus COGS minus
+            -- ad cost), and what Ori sanctioned is a SPEND RATE in dollars a day. The two are
+            -- different quantities: the ad spend behind that same window is $9,651, and no
+            -- declaration anywhere says "you may lose $3,622". Calling the loss the agreed thing
+            -- makes any loss look pre-approved however far the spending has run past its rate, which
+            -- is the opposite of what the sanction does. The clause now names the spend as the
+            -- sanctioned quantity, the shortfall as its consequence, and keeps them apart.
             CASE
               WHEN COALESCE(a.n_measured, 0) = 0 OR a.net_profit IS NULL THEN CONCAT(
                 'Nothing they sell is being counted under their family names yet, so there is no ',
                 'measured cost for them over the last 90 days — check the product mapping.')
               WHEN a.net_profit < 0 THEN CONCAT(
-                'The ', FORMAT("$%'d", CAST(-a.net_profit AS INT64)),
-                ' they cost over the last 90 days is money you agreed to spend while they build, ',
+                'What you sanctioned is the spending, not the shortfall: they spent ',
+                FORMAT("$%'d", CAST(a.ad_spend AS INT64)),
+                ' on advertising over the last 90 days and finished ',
+                FORMAT("$%'d", CAST(-a.net_profit AS INT64)), ' behind after costs. ',
                 IF(a.n_over_rate = 0,
-                   'not a loss to chase.',
-                   CONCAT('so it is not a loss to chase — but right now they are running ',
+                   CONCAT('That spending is inside the rates you approved, so the shortfall is the ',
+                          'price of the investment, not a loss to chase.'),
+                   CONCAT('The shortfall is the price of the investment and not a loss to chase — but ',
+                          'right now they are spending ',
                           FORMAT('$%.2f', a.spend_per_day - a.daily_investment),
-                          ' a day above what you approved, and that part you never agreed to.',
+                          ' a day above the rates you approved, and that part of the spending you ',
+                          'never agreed to.',
                           -- ...and do not ask for the correction twice. Where the coach is still
                           -- protecting families that no longer qualify, the clause above has already
                           -- given the instruction, with the budgets attached; repeating a thinner
@@ -1275,15 +1594,16 @@ tot AS (
                           IF(COALESCE(a.n_protection_gap, 0) > 0, '',
                              ' Bring the rate back inside the sanction.'))))
               ELSE CONCAT(
-                'They also made ', FORMAT("$%'d", CAST(a.net_profit AS INT64)),
-                ' over the last 90 days while building, ahead of what you agreed to spend on them.')
+                'They spent ', FORMAT("$%'d", CAST(a.ad_spend AS INT64)),
+                ' on advertising over the last 90 days and still finished ',
+                FORMAT("$%'d", CAST(a.net_profit AS INT64)), ' ahead after costs, while building.')
             END,
             -- ...unless NOTHING in the book is measured, in which case the branch above has already
-            -- said so and there is no "that cost" left for this clause to point at.
+            -- said so and there are no figures left for this clause to point at.
             IF(a.n_families = a.n_measured OR COALESCE(a.n_measured, 0) = 0, '',
                CONCAT(' ', a.unmeasured_families,
                       IF(a.n_families - a.n_measured = 1, ' has', ' have'),
-                      ' nothing measured at all, so none of that cost includes ',
+                      ' nothing measured at all, so neither of those figures includes ',
                       IF(a.n_families - a.n_measured = 1, 'it.', 'them.'))),
             -- Same caveat as the family rows carry, for the same reason: the window holds its full
             -- count of complete days, but it is anchored on the ads feed, and a feed that stops
