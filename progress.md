@@ -356,8 +356,13 @@ MOVES — do not pin it (corrected 2026-08-20; the figure written here first wen
 Re-measured 2026-08-20 over all 84 (family, period) rows including the six still-filling MTD rows:
 73 agree, 1 unjudgeable, 10 disagree — 8 CONSERVATIVE (one of them a still-filling row) and 2
 PERMISSIVE. Over complete periods only: 68 agree, 1 unjudgeable, 7 CONSERVATIVE, 2 PERMISSIVE. The
-scope is part of the answer and the query is published in the V_FAMILY_BAR.sql header. The monthly
-re-check must alarm only on PERMISSIVE breaks — that direction is stable, the counts are not.
+scope is part of the answer and the query is published in the V_FAMILY_BAR.sql header. The re-check
+must alarm only on PERMISSIVE breaks — that direction is stable, the counts are not. (Corrected
+2026-08-20: this line said "the monthly re-check". THERE IS NO MONTHLY JOB, anywhere — the bar is
+rebuilt daily and the calibration query is run by hand. The word was also removed from config.yaml's
+V_FAMILY_BAR entry the same day. Separately: the counts above are a DATED READING and two
+independent re-runs on 2026-08-20 alone returned different splits, 73/8 and 72/9, with no code change
+between them. Re-run the query before quoting either.)
 BACKLOG COMMITTED: a8cb5aa (136 backend files, v27.72-v27.83 + two-book 1-5, hook passed) and
 5206d8b (30 dashboard files, --no-verify: tsc clean, 395 PRE-EXISTING eslint issues). .gitignore
 gained *.bak.* — the old *.bak / *.sql.bak rules never matched the deploy battery's versioned form,
@@ -373,3 +378,78 @@ supplies it. (3) LolliBall (first sale 2026-06-26) reaches PROOF on 2026-10-01 b
 arithmetic, and PROOF judges a LEVEL, so its implausible 0.87 halo must be fixed first — note 0.87 is
 its BASELINE_MAY_JUL halo; on the M3 window that the bar actually reads it is 1.15.
 (4) 10.5% of ad spend sits in 9 unmapped campaigns, outside both books.
+
+## 2026-08-20 — two-book P&L, repair round 3: the stale-prose sweep and a standing rule against it
+THE PATTERN, not the individual defects, was the finding. Three repair rounds each fixed real bugs
+AND left stale pinned numbers behind — in a view header, in config.yaml, in the plan and in the spec.
+So this round wrote a rule and then applied it to itself.
+
+STANDING RULE 0, now at the top of the plan, in config.yaml's convention notes and in the spec:
+A MEASURED NUMBER WRITTEN INTO PROSE IS A LIABILITY. Publish the QUERY, not the answer — and run the
+query before publishing it. If a number must appear in the sentence, stamp it with its as-of date,
+NAME THE WINDOW it was measured on, and say it must be re-run before quoting. A pinned number may
+never gate anything: gate the PROPERTY, not the population. When you find a stale pin, DELETE it —
+updating 32 to 46 buys one day.
+
+THE ONE THAT PROVED THE RULE: config.yaml and V_FAMILY_BAR.sql both said "on the window this view
+actually reads, NO ROW CLAMPS" and then published a query that returned 4. The view ROUNDs the bar to
+4 decimals and the tolerance was 1e-9, so ordinary rounding read as a clamp. Tolerance is now 5e-5,
+half the rounding grid; re-run 2026-08-20 it returns 0 clamped, lowest_bar 0.7769, 6 rows. A
+published query that contradicts the sentence beside it is worse than no query at all.
+
+THE PINNED GATE IS OUT OF THE ACCEPTANCE CRITERIA. Item 8 read "the bar-exempt cut count stays at its
+measured baseline of four" while Task 8 Step 6 carried a warning saying a pinned count could not hold.
+Re-measured 2026-08-20 that query returns ONE row (AUTO_DAY_TRIM, LolliBall, 2 keywords). The item now
+gates the property Step 6 actually tests — Step 3 adds no new CLASS of cut reaching a bar-exempt
+campaign, compared against the same-session capture — and says reaching zero would be a FAILURE, since
+it would disable the daily trim and seat-queue park that are the sanctioned way a launch is contained.
+
+TASK 8'S BANNER STOPPED CLAIMING WHAT TASK 8 REFUTES. It said "every statement written into them was
+dry-run against live BigQuery" three screens above Step 6 saying one statement had not been. The
+banner now states exactly what is and is not backed: Step 6's first query carries an unresolved
+placeholder and does not parse as written, and NOTHING downstream of Step 3 can have been validated,
+because Step 3 is a hand edit to two live engine files and the post-edit views have never existed.
+
+CONFIG'S V_TWO_BOOK_BRIEF ENTRY REWRITTEN FROM THE DEPLOYED OBJECT. It was the first thing the next
+agent reads as ground truth and it was stale nine ways, including the exact overstatement round 2 was
+convened to correct: it published the held-cut budget as $188.86/day (LolliBall $129.86) when the view
+read $147.86 and $88.86. It also described a column that no longer exists, pinned 32 columns against a
+live 48, claimed INVEST families carry keyword_bar = NULL when the column is renamed
+keyword_bar_computed_not_applied and populated on all six, and named three other pre-rename columns.
+Every assertion-result list in it was DELETED rather than updated.
+
+TASK 8b STEP 4 IS NOW SAFE TO INTERRUPT. It raises Bunny's sanctioned rate on a LIVE row that
+V_BOOK_ASSIGNMENT and V_LAUNCH_EXEMPTION both read, then restores it — so between the two writes a
+coach or orchestrator run would see a launch INSIDE its sanction while it is nearly 2x over. The step
+now refuses to open the window while a pipeline run is in flight, writes the restore to
+/tmp/bunny_sanction_restore.sql BEFORE the first write (a shell variable dies with the shell), arms a
+trap on EXIT/INT/TERM, marks where the window opens and closes, and documents the standalone recovery.
+
+ALSO CORRECTED, each re-measured first: Task 5 gained a DO-NOT-RE-DEPLOY banner (its block omits the
+"not yet wired" clause, the 'Unknown'-bucket paragraph, and names orchestrator task 20.4 instead of
+20.5g-1) and the STATUS table stopped calling it "current"; Task 5 Step 4's "~106 rows" became a
+property check (T_FAMILY_BAR 88 = mapped non-Unknown campaigns 88, gap 0); Task 7's "thirty-five
+columns" and Task 6's two-commit list became "read it off the object / take it from git"; Task 8 Step
+3's comment block — which ships VERBATIM into V_KEYWORD_LIFT — stopped pinning Bottle's ROAS and now
+publishes the query instead; the spec's "re-checked monthly" and config.yaml's "STANDING MONTHLY TEST"
+went, because NO MONTHLY JOB EXISTS anywhere in the warehouse.
+
+THE CALIBRATION COUNTS ARE NO LONGER WRITTEN DOWN AT ALL. Re-run 2026-08-20 the published query
+returned 84 scanned / 1 unjudgeable / 73 agree / 8 CONSERVATIVE / 2 PERMISSIVE — which AGREES with the
+header, while round 3's verifier re-ran the same query the same day and got 72 / 9. Both are right:
+Bottle's M3 total net ROAS is 0.998, 0.2% under the truth test, and ad money restates for ~D+3, so one
+row flips intraday. That is the case for publishing the query and not the answer, so the counts are
+gone from both the header and config.yaml and the ALGEBRA is what is carried instead.
+
+NOTHING IN THE ENGINE WAS TOUCHED. V_LAUNCH_EXEMPTION, V_ADS_COACH and V_COACH_CAMPAIGN_BUDGET are
+unchanged, no held decision was released, Tasks 8/8b/9 remain on hold. V_FAMILY_BAR and
+V_BOOK_ASSIGNMENT were re-deployed only because their header comments changed; header lines starting
+"--" are stripped at deploy, so both objects are byte-identical to before and the brief still reads 8
+rows, 2 totals, 2 books, 0 blank verdicts.
+
+OPEN / DATED: (1) Task 9's open question — how many fields make a declaration — is REPORTED as ruled
+Option A (two binding fields: sanctioned $/day + end date; the take-over target gates PROOF only) in
+the round-3 brief, but that reached the plan second-hand and Task 9 writes a STANDING RULE. It is
+recorded in the plan in a box, NOT acted on. Confirm with Ori in his own words before publishing the
+SOP. (2) The unmapped-spend share moves: the 2026-08-19 entry above says 10.5% of ad spend in 9
+unmapped campaigns; the brief read 9.3% on 2026-08-20. Read it off the view.

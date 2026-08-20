@@ -27,9 +27,15 @@
 --     WOULD clamp do exist elsewhere in V_FAMILY_PNL — 5 of its 84 (family, period) rows on
 --     2026-08-20, up to halo 30.18 on Bunny's first partial sales month — but this view reads
 --     period_label = 'M3' and nothing else, so those rows are a counterfactual, not a clamp.
---     Re-run before quoting either number:
---       SELECT COUNTIF(keyword_bar > 1.0/(1.0+0.5*(halo_factor-1.0)) + 1e-9) AS rows_clamped,
---              MIN(keyword_bar) AS lowest_bar
+--     Re-run before quoting either number. THE TOLERANCE IS 5e-5 AND THAT IS NOT ARBITRARY
+--     (corrected 2026-08-20 — the published query used to say 1e-9 and returned 4, i.e. it
+--     contradicted the sentence it was printed under): the SELECT below ROUNDs keyword_bar to 4
+--     decimals, so a published bar sits up to 5e-5 ABOVE its own unrounded value on any row where
+--     rounding went up. At 1e-9 that rounding reads as a clamp on every such row; at 5e-5 — half
+--     of the 1e-4 rounding grid — only a real clamp can trip it. Re-run 2026-08-20: 0 at 5e-5,
+--     4 at 1e-9, lowest_bar 0.7769, 6 rows.
+--       SELECT COUNTIF(keyword_bar > 1.0/(1.0+0.5*(halo_factor-1.0)) + 5e-5) AS rows_clamped,
+--              MIN(keyword_bar) AS lowest_bar, COUNT(*) AS n
 --       FROM `onyga-482313.OI.V_FAMILY_BAR`;
 --   · where halo_factor <= 1.0 NO credit is given and the bar stays 1.0. NO FAMILY IS ON THAT
 --     BRANCH TODAY (measured 2026-08-20 on the window this view actually reads): the lowest M3 halo
@@ -107,15 +113,19 @@
 --             AND ads_net_roas >= keyword_bar AND total_net_roas <  1.0) permissive
 --   FROM b;                       -- add "WHERE is_complete_period" for the complete-periods scope
 --
--- SCOPE IS PART OF THE ANSWER AND MUST BE STATED. Run 2026-08-20, both scopes, same query:
---   · ALL 84 (family, period) rows, INCLUDING the six still-filling MTD rows:
---       84 scanned, 1 unjudgeable (LolliBall 2026-05, both ROAS NULL), 73 agree,
---       8 CONSERVATIVE, 2 PERMISSIVE. One of the eight — Fresh MTD — IS a still-filling row.
---   · COMPLETE PERIODS ONLY (WHERE is_complete_period, the six MTD rows dropped):
---       78 scanned, 1 unjudgeable, 68 agree, 7 CONSERVATIVE, 2 PERMISSIVE.
--- Quoting a conservative count without saying which scope produced it is how the last pinned
--- figure went wrong. The two PERMISSIVE rows are Fresh 2025-08 and Fresh 2025-10, both halo < 1,
--- and they are the same two under either scope.
+-- SCOPE IS PART OF THE ANSWER AND MUST BE STATED — run it BOTH ways (all rows, and again with
+-- "WHERE is_complete_period" to drop the still-filling running-month rows) and say which one you
+-- are quoting. Quoting a conservative count without naming its scope is how the last pinned figure
+-- went wrong.
+-- THE COUNTS ARE DELIBERATELY NOT WRITTEN DOWN HERE ANY MORE (2026-08-20). They were, twice, and
+-- both times they went stale faster than the document: two independent re-runs of the query above
+-- on 2026-08-20 alone returned different splits — one 73 agree / 8 CONSERVATIVE, one 72 / 9 — with
+-- no code change between them. That is the knife edge below doing exactly what it says it will do.
+-- Run the query. Do not quote a count you did not just produce, and do not gate anything on one.
+-- The one structural fact that IS worth carrying is the ALGEBRA above, not a count: a PERMISSIVE
+-- row is reachable only at halo < 1. Every PERMISSIVE row measured on 2026-08-20 was consistent
+-- with that — Fresh 2025-08 and Fresh 2025-10, halos 0.932 and 0.928, the same two under either
+-- scope — i.e. the COGS artifact, not the bridge. Re-run before quoting even that.
 --
 -- WHAT IS STABLE IS THE DIRECTION, NOT THE COUNT: a CONSERVATIVE break (fails bar, clears truth)
 -- means the engine under-spends and is harmless; a PERMISSIVE break (clears bar, fails truth) is

@@ -12,6 +12,33 @@
 
 ---
 
+## STANDING RULE 0 — a measured number written into prose is a liability
+
+*Added 2026-08-20 after the third repair round. Rounds 1, 2 and 3 each fixed real defects and each
+LEFT BEHIND stale pinned numbers — in a view header, in `config.yaml`, in this plan and in the spec.
+The pins are not an accident of carelessness; they are what happens when a document records a
+measurement instead of the way to take one.*
+
+**Do not write a measurement into prose bare. Do one of these two things instead.**
+
+1. **Publish the QUERY, not the answer.** A reader who can run it gets today's number; a reader who
+   quotes a sentence gets last week's. This is always the right choice for anything a decision, a
+   gate or an acceptance item reads. Run the query you publish before you publish it — a query whose
+   result contradicts the sentence beside it is worse than no query at all (that exact defect shipped
+   in `V_FAMILY_BAR.sql`'s floor re-check and was found in round 3).
+2. **If a number really must appear in the sentence, stamp it with its as-of date and say in the
+   same sentence that it must be re-run before quoting.** Name the window it was measured on, too —
+   a figure is stale the moment the window under it is redefined, which is how the sanctioned-rate
+   numbers went wrong when the rate window moved from month-to-date to a trailing 28 days.
+
+**A pinned number may never gate anything.** Not an acceptance item, not a step's pass condition, not
+a monitor. Gate the PROPERTY, not the population — see Task 8 Step 6, where a pinned count of four
+was refuted by re-running the same query the same day with no code change in between.
+
+**When you correct a stale pin, delete it — do not update it.** Replacing 32 with 46 buys one day.
+
+---
+
 ## Non-negotiable house rules (read before Task 1)
 
 These are not style preferences. Each one exists because breaking it broke production in the last week.
@@ -21,10 +48,15 @@ These are not style preferences. Each one exists because breaking it broke produ
 3. **THE BINDING CONSTRAINT IS THE SPEND RATE** (Ori 2026-08-19: *"spend rate binds"*).
    `DE_LAUNCH_INVESTMENT.daily_investment` is the number Ori actually sanctioned ($30/day Bunny,
    $55/day LolliBall) and it is what the exemption must enforce. `monthly_loss_ceiling` is a
-   CATASTROPHE BACKSTOP behind it, nothing more. WHY: measured 2026-08-19, both families run at
-   1.53x and 1.84x their sanctioned spend while their month-to-date LOSS is only $259 and $74
-   against ceilings of $913 and $1,674 — a net-profit ceiling on a product that nearly covers its
-   costs never fires. The loss ceiling was the wrong denominator; the spend rate is the decision.
+   CATASTROPHE BACKSTOP behind it, nothing more. WHY: both families run well over their sanctioned
+   spend while consuming a small fraction of a ceiling denominated in net profit — a net-profit
+   ceiling on a product that nearly covers its costs never fires. The loss ceiling was the wrong
+   denominator; the spend rate is the decision. *(The four figures that used to sit on this line are
+   removed under Standing Rule 0: they were stamped 2026-08-19, and the window under two of them was
+   redefined on 2026-08-20. Read
+   `SELECT family, daily_investment, spend_per_day, spend_rate_ratio, ceiling_used_pct,
+   rate_window_basis FROM onyga-482313.OI.V_INVEST_STATUS` — it returned both families near 2x over
+   rate on 2026-08-20.)*
 4. **Blended (sales + ads) measures cut at the ORDERS watermark, never the ads watermark** — ads rows run ~1 day ahead of the business report. Copy the `wm` CTE from `V_FAMILY_NET_PROFIT_7D.sql` verbatim (shown in Task 1).
 5. **Deploy battery, every object, every time:** back up → deploy → before/after flip report → pull-twice determinism.
 6. **`config.yaml` parses today. NEVER append entries to the end of the file** — the tail is inside the `monitoring:` mapping and appending there broke the parse on 2026-08-17. Insert into the `views:` or `tables:` list, then verify with PyYAML.
@@ -54,20 +86,33 @@ report success while having thrown away three commits of fixes.
 | 2 | `DE_LAUNCH_INVESTMENT` | SHIPPED | `a8cb5aa` | carries its own correction banner; still accurate |
 | 3 | `V_BOOK_ASSIGNMENT` | SHIPPED | `2d54ebb`, refined in `a8cb5aa` | **SUPERSEDED** — read the file |
 | 4 | `V_FAMILY_BAR` | SHIPPED | `95265bd`, `097d8d7`, `72acbdf` | **SUPERSEDED** — read the file |
-| 5 | `SP_SNAPSHOT_FAMILY_BAR` | SHIPPED | `35b9fa6` | current; only Step 7's ordering check was wrong (fixed) |
-| 6 | `V_INVEST_STATUS` | SHIPPED | `7e32ee2`, `72acbdf`, `0e4e568`, `acbf7be` | **SUPERSEDED** — read the file |
-| 7 | `V_TWO_BOOK_BRIEF` | SHIPPED | `fa840df`, `9fd1318`, `971751f`, `0a65589`, `a1d27aa`, `acbf7be` | **SUPERSEDED** — read the file |
+| 5 | `SP_SNAPSHOT_FAMILY_BAR` | SHIPPED | `35b9fa6`, `d0377be` | **SUPERSEDED** — read the file (corrected 2026-08-20: this row said "current") |
+| 6 | `V_INVEST_STATUS` | SHIPPED | `7e32ee2`, `72acbdf`, `0e4e568`, `acbf7be`, `ee193ca` | **SUPERSEDED** — read the file |
+| 7 | `V_TWO_BOOK_BRIEF` | SHIPPED | `fa840df`, `9fd1318`, `971751f`, `0a65589`, `a1d27aa`, `acbf7be`, `ee193ca`, `cc9425d` | **SUPERSEDED** — read the file |
 | 8 | bid engines read the family bar | **ON HOLD** | — | repaired below, deliberately not released |
 | 8b | `V_LAUNCH_EXEMPTION` | **ON HOLD** | — | repaired below, deliberately not released |
 | 9 | `architecture/TWO_BOOK_PNL.md` | **BLOCKED** | — | one standing rule needs Ori's decision first |
 
-**TWO COLUMNS WERE RENAMED ON 2026-08-20 AND THE SUPERSEDED BLOCKS BELOW STILL SHOW THE OLD NAMES.**
+**COLUMNS WERE RENAMED ACROSS 2026-08-20 AND THE SUPERSEDED BLOCKS BELOW STILL SHOW THE OLD NAMES.**
+Two matter to the tasks that are meant to be RUN, so they are named here and nowhere else:
 `V_INVEST_STATUS.exemption_live` is now **`protection_qualified`** (one word could not carry both
-"what the sanction rules say" and "what the machine is doing") and `mtd_spend_per_day` is now
-**`spend_per_day`** ("month to date" is false for the ten days of each month when the window falls
-back to the last complete month). Tasks 6 and 7's code blocks are records of what was written on
-2026-08-19 and are not updated; Tasks 8 and 8b, which are meant to be RUN, carry the new names.
-Confirm against `INFORMATION_SCHEMA.COLUMNS` before writing either name.
+"what the sanction rules say" and "what the machine is doing"), and `mtd_spend_per_day` is now
+**`spend_per_day`** — the rate window stopped being month-to-date and became a trailing span of
+complete days, so "mtd" named a window that no longer exists. Tasks 8 and 8b carry the new names.
+
+**Everything else that was renamed is deliberately NOT listed** (Standing Rule 0). `V_TWO_BOOK_BRIEF`
+in particular has been recolumned twice more since, and any list written here would be a fourth
+generation of stale prose. Tasks 6 and 7's code blocks are records of what was written on 2026-08-19
+and are not updated. **Before you write ANY column name of `V_INVEST_STATUS` or `V_TWO_BOOK_BRIEF`,
+read it off the live object:**
+
+```bash
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
+"SELECT table_name, ordinal_position, column_name
+ FROM \`onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS\`
+ WHERE table_name IN ('V_INVEST_STATUS','V_TWO_BOOK_BRIEF')
+ ORDER BY table_name, ordinal_position"
+```
 
 ### Tasks 8, 8b and 9 are on hold
 
@@ -725,6 +770,41 @@ git commit -m "feat: V_FAMILY_BAR — measured halo becomes a per-family keyword
 
 ## Task 5: `SP_SNAPSHOT_FAMILY_BAR` — materialize for the engines
 
+> **⚠ SHIPPED — THE CODE BLOCK BELOW IS SUPERSEDED. DO NOT RE-DEPLOY IT.**
+> Live in `35b9fa6`, then corrected in `d0377be`. Banner added 2026-08-20: until then this was the
+> only shipped task with no banner, and the STATUS table affirmatively called this block "current",
+> which it is not. **The executable SQL is identical to the deployed procedure — it is the prose that
+> differs, and the prose is the part that would revert.** Diffed against
+> `INFORMATION_SCHEMA.ROUTINES` on 2026-08-20; three material differences, all in comments and in the
+> `OPTIONS(description)`:
+> 1. **The block below has no "not yet wired" clause.** Its description reads as though the engines
+>    already join `T_FAMILY_BAR`. They do not — that is Task 8, Task 8 is unbuilt and on hold, and the
+>    deployed description says so in three sentences. Re-deploying this block would put back the exact
+>    claim `d0377be` was raised to remove: a reader would conclude the halo is already priced into
+>    bids when no bid has moved.
+> 2. **The block below has no `'Unknown'` paragraph.** The deployed version explains that campaigns in
+>    `V_CAMPAIGN_FAMILY_MAP`'s literal `'Unknown'` bucket are deliberately ABSENT from the table, and
+>    that the engines' `LEFT JOIN` + `COALESCE(keyword_bar, 1.0)` therefore leaves them at today's
+>    behaviour. Without it, the missing rows read as a bug.
+> 3. **The orchestrator task number below is wrong.** It says task `20.4`; the deployed description
+>    says `20.5g-1, ahead of task 20.5g SP_SNAPSHOT_PANEL_OWNERSHIP`, which is where the call actually
+>    sits (Step 7 verifies the ordering).
+>
+> Re-take the diff yourself rather than trusting this list:
+> ```bash
+> bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
+>   "SELECT ddl FROM \`onyga-482313.OI\`.INFORMATION_SCHEMA.ROUTINES
+>     WHERE routine_name='SP_SNAPSHOT_FAMILY_BAR'" | tail -n +2 \
+>   > /tmp/sp_deployed.sql
+> diff /tmp/sp_deployed.sql <(grep -v '^--' scripts/bigquery/procedures/SP_SNAPSHOT_FAMILY_BAR.sql)
+> ```
+> Run 2026-08-20 that diff came back with **only** two cosmetic hunks — BigQuery echoes the DDL as
+> `CREATE PROCEDURE` (never `CREATE OR REPLACE`) and `--format=csv` wraps the whole DDL in quotes and
+> doubles the inner ones. Nothing substantive: **the repo file IS the deployment.** The three
+> differences listed above are between the deployment and the CODE BLOCK BELOW, which is a record of
+> what was written on 2026-08-19 and has not been maintained since. Read
+> `scripts/bigquery/procedures/SP_SNAPSHOT_FAMILY_BAR.sql`. It is the authority.
+
 The engines are at the planner ceiling. They must join a TABLE, never this view.
 
 **Files:**
@@ -798,7 +878,26 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "CALL \`onyga-482313.OI.SP_SNAPSHOT_FAMILY_BAR\`()"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t5_assert.sql)"
 ```
-Expected: `rows_in_table` = one row per mapped campaign (~106), `null_bars 0`, `null_campaign_ids 0`, `families 6`, `duplicate_campaigns 0`
+Expected: `null_bars 0`, `null_campaign_ids 0`, `families 6`, `duplicate_campaigns 0`.
+
+`rows_in_table` is **not** pinned here and must not be (Standing Rule 0 — this step used to expect
+"~106 rows" and the table held 88 when that was re-measured on 2026-08-20 — a figure `config.yaml`'s
+own `T_FAMILY_BAR` entry had carried, correctly, since 2026-08-19, so this step had been
+contradicting the registry for a day). The row count is one per ENABLED
+campaign that `V_CAMPAIGN_FAMILY_MAP` resolves to a real family, and campaigns are enabled and
+paused daily, so the count moves on its own. Check the **property** — that the table holds exactly
+the mapped, non-`Unknown` campaigns and nothing else:
+
+```bash
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
+"SELECT (SELECT COUNT(*) FROM \`onyga-482313.OI.T_FAMILY_BAR\`)                              AS rows_in_table,
+        (SELECT COUNT(*) FROM \`onyga-482313.OI.V_CAMPAIGN_FAMILY_MAP\`
+          WHERE parent_name <> 'Unknown')                                                    AS mapped_campaigns,
+        (SELECT COUNT(*) FROM \`onyga-482313.OI.T_FAMILY_BAR\`)
+      - (SELECT COUNT(*) FROM \`onyga-482313.OI.V_CAMPAIGN_FAMILY_MAP\`
+          WHERE parent_name <> 'Unknown')                                                    AS gap"
+```
+Expected: `gap 0`, whatever the two counts happen to be that day.
 
 - [ ] **Step 5: Prove idempotence**
 
@@ -853,7 +952,13 @@ git commit -m "feat: SP_SNAPSHOT_FAMILY_BAR — materialize the bars so engines 
 ## Task 6: `V_INVEST_STATUS` — budget, ramp and proof
 
 > **⚠ SHIPPED — THE CODE BLOCK BELOW IS SUPERSEDED. DO NOT RE-DEPLOY IT.**
-> Live in `7e32ee2`, then corrected in `72acbdf` and `0e4e568`. The block below breaks house rule 2
+> Live in `7e32ee2`, then corrected in `72acbdf`, `0e4e568`, `acbf7be` and `ee193ca` — **and this
+> list is exactly the kind of thing that goes stale** (it named two of those five until 2026-08-20).
+> Take it from git, not from here: `git log --oneline -- scripts/bigquery/views/V_INVEST_STATUS.sql`.
+> The most recent of them, `ee193ca`, replaced the month-to-date spend rate with a trailing window of
+> 28 complete days and DELETED the whole fallback apparatus, so anything below about "last complete
+> month", `is_fallback` or `rate_window_is_last_complete_month` describes an object that no longer
+> exists. The block below breaks house rule 2
 > and house rule 4 in the same CTE: its month-to-date window is `WHERE u.date >= DATE_TRUNC(...)`
 > with **no upper bound**, so it sweeps in today's part-loaded day, divides the spend by a day count
 > that includes it, and reports a spend rate diluted toward compliance — on a view whose entire job
@@ -1053,10 +1158,16 @@ git commit -m "feat: V_INVEST_STATUS — bounded budget, ramp trajectory, proof 
 
 > **⚠ SHIPPED — THE CODE BLOCK BELOW IS SUPERSEDED. RE-DEPLOYING IT WOULD LOSE THREE COMMITS OF
 > FIXES, AND STEP 4'S ASSERTION WOULD STILL SAY IT PASSED.**
-> Live in `fa840df`, then `9fd1318`, `971751f` and `0a65589`. The block below publishes fourteen
-> columns off a LEFT JOIN spine; the deployed view publishes thirty-five off a FULL OUTER JOIN of the
-> two family universes, so a declared family with no measured P&L still appears instead of vanishing
-> from the brief. It also carries the enforcement-gap dollars that the 2026-08-20 ruling required.
+> Live in `fa840df`, then seven more commits — **take the list from git, not from here**
+> (`git log --oneline -- scripts/bigquery/views/V_TWO_BOOK_BRIEF.sql`); this banner named four of
+> them until 2026-08-20. The block below publishes fourteen columns off a LEFT JOIN spine; the
+> deployed view publishes **many more** off a FULL OUTER JOIN of the two family universes, so a
+> declared family with no measured P&L still appears instead of vanishing from the brief. **The
+> column count is deliberately not written here** (Standing Rule 0): this banner said "thirty-five",
+> then the object was recolumned twice more, and it read 48 when that was re-measured on 2026-08-20.
+> Count it yourself —
+> `SELECT COUNT(*) FROM \`onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name='V_TWO_BOOK_BRIEF'`.
+> The deployed view also carries the enforcement-gap dollars that the 2026-08-20 ruling required.
 > The Step 4 assertion cannot protect you here: it checks that the Harvest total reconciles to the
 > Harvest family rows, and with today's six-for-six family coverage the old spine reconciles
 > perfectly, so it would report a clean pass over a reverted view. Read
@@ -1189,8 +1300,26 @@ git commit -m "feat: V_TWO_BOOK_BRIEF — Harvest and Invest reported separately
 > and 9 each carry a banner and this one did not, which left the heaviest task in the plan reading
 > as runnable (added 2026-08-20 — Tasks 8b and 9 were banner-checked in the same sweep and this one
 > was missed). The steps below have been repaired so they are safe to execute *if* the hold is ever
-> lifted; every statement written into them was dry-run against live BigQuery on 2026-08-20. They
-> are a repair, not a permission.
+> lifted. They are a repair, not a permission.
+>
+> **HOW FAR THE "SAFE TO EXECUTE" CLAIM ACTUALLY REACHES (qualified 2026-08-20 — this banner used to
+> say "every statement written into them was dry-run against live BigQuery on 2026-08-20", and Step 6
+> says in its own words that one statement was not).** Two things are NOT dry-run and cannot be:
+> 1. **Step 6's first query carries an unresolved placeholder** — `<the action labels of the
+>    breakeven arm you edited in Step 3>` — so it does not parse as written. Step 6 says so itself.
+>    Substitute the real labels and dry-run it yourself; a `0` from a query that never named the arm
+>    you edited is not a pass, it is a query that measured nothing.
+> 2. **Every statement that reads `V_KEYWORD_LIFT` or `V_OOB_KEYWORD` after Step 3 reads an object
+>    that does not exist yet.** Step 3 is a hand edit to two live engine files. Nothing downstream of
+>    it can have been validated against the post-edit views, because the post-edit views have never
+>    been written. Steps 4-7 are a *procedure* for finding out whether the edit was safe — that is
+>    their whole purpose — not evidence that it was.
+>
+> What IS true: the statements that read only objects existing today (Step 1's capture, Step 4's two
+> planner dry runs, Step 7's determinism pulls) run against live BigQuery as written. Do not upgrade
+> that into a claim about the task as a whole. **A "safe to execute" sentence with nothing behind it
+> is the specific defect the previous round was raised to remove from Task 8b; it must not be written
+> back onto either task.**
 
 The behaviour change. Do this last, and prove what moved.
 
@@ -1244,14 +1373,19 @@ Add the join to that CTE:
 ```sql
 -- v27.84 (2026-08-19, two-book P&L): the profit bar is now per-family, set from the family's
 -- MEASURED organic halo, because ads-attributed GP-ROAS structurally undervalues any keyword that
--- drives organic sales. The worked example, MEASURED ON THE SETTLED 90 DAYS TO 2026-08-17 AND
--- RE-READ 2026-08-20: Bottle reads 0.6339 on ads-attributed net ROAS and 0.9980 on total net ROAS,
--- a halo of 1.5744, which sets its bar at 0.7769 — under the old flat 1.0 bar the engine would cut
--- the very keywords carrying it. THESE FOUR NUMBERS ARE A DATED READING, NOT CONSTANTS: they move
--- with every rebuild of the settled window, Bottle's total sits 0.2% under 1.000 and will cross it
--- on a routine restatement, and this comment must not be read as a threshold. Pull
--- V_FAMILY_PNL WHERE period_label = 'M3' and V_FAMILY_BAR for today's. Reads the TABLE, never
--- V_FAMILY_BAR:
+-- drives organic sales. THE WORKED EXAMPLE IS A QUERY, NOT FOUR NUMBERS (rewritten 2026-08-20 —
+-- this comment ships VERBATIM into a live bid engine, so a stale figure here becomes a stale figure
+-- inside the thing that moves money, and an earlier draft of it already had: it read "Bottle reads
+-- 0.60 on ads and 0.95 on total (halo 1.59)" while the live M3 window read 0.6339 / 0.9980 /
+-- 1.5744). Run this to see the shape for yourself:
+--   SELECT family, ads_net_roas, total_net_roas, halo_factor, keyword_bar, bar_exempt
+--   FROM `onyga-482313.OI.V_FAMILY_BAR` ORDER BY keyword_bar;
+-- The shape it shows — and the reason this join exists — is that the family with the account's
+-- strongest halo carries the LOWEST bar, i.e. the keywords carrying the organic sales are exactly
+-- the ones a flat 1.0 bar would cut hardest. DO NOT COPY A ROW OF THAT OUTPUT INTO THIS COMMENT.
+-- The bars move with every rebuild of the settled window, and at least one family's total net ROAS
+-- sits within a percent of 1.000 and crosses it on a routine restatement. Nothing here is a
+-- threshold. Reads the TABLE, never V_FAMILY_BAR:
 -- this view is at BigQuery's planning ceiling and inlining another view is what broke
 -- V_PANEL_OWNERSHIP on 2026-08-17. Six rows, LEFT JOIN, COALESCE to 1.0 so a missing family keeps
 -- exactly the old behaviour — the bar may only ever LOWER the threshold.
@@ -1293,7 +1427,10 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
 diff /tmp/before_lift.csv /tmp/after_lift.csv || true
 ```
 
-Expected direction: **fewer cuts**, concentrated in high-halo families (Bottle, halo 1.59, bar 0.77). Zero new raises — the bar can only lower a cut threshold, never manufacture a raise. Any new raise means the predicate was inverted somewhere; find it before proceeding.
+Expected direction: **fewer cuts**, concentrated in whichever families carry the highest measured
+halo — read that off `V_FAMILY_BAR ORDER BY keyword_bar` on the day you run this, do not take it
+from a name written here. Zero new raises — the bar can only lower a cut threshold, never manufacture
+a raise. Any new raise means the predicate was inverted somewhere; find it before proceeding.
 
 - [ ] **Step 6: Confirm the breakeven arm never cuts a bar-exempt family**
 
@@ -1560,18 +1697,77 @@ still returns 14 launch-campaign rows, not 28.
 > value from a literal typed into a document.** Read the live row first and write back what you read.
 >
 > This step no longer touches `monthly_loss_ceiling` at all. The ceiling is not the binding clause,
-> so breaching it proves nothing: measured 2026-08-20 Bunny sits at $203.78 of loss against $913 and
-> is nowhere near it, while it is 1.61x over its sanctioned spend rate. The rate is what to test.
+> so breaching it proves nothing — Bunny is a long way inside its ceiling and a long way over its
+> sanctioned rate at the same time, which is the whole reason the rate is what gets tested. Read the
+> two side by side rather than quoting a figure from here (the ones that used to be written in this
+> banner went stale within a day, and again when the rate window itself was redefined):
+> ```bash
+> bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
+> "SELECT family, daily_investment, spend_per_day, times_over_agreed_rate,
+>         loss_allowance_used_pct_so_far, loss_allowance_dollars_for_the_month,
+>         loss_so_far_dollars_against_that_allowance
+>  FROM \`onyga-482313.OI.V_TWO_BOOK_BRIEF\` WHERE book='INVEST' AND row_kind='FAMILY'"
+> ```
+> *(Run 2026-08-20 it returned Bunny 1.98x over rate at 22.3% of its allowance. AS-OF THAT DATE
+> ONLY — re-run before quoting.)*
+
+> **⚠ THIS STEP WRITES AN INFLATED SANCTION TO A LIVE ROW AND LEAVES IT THERE UNTIL THE RESTORE.
+> THAT IS AN EXPOSURE WINDOW, NOT A SCRATCH EDIT** (added 2026-08-20).
+> `DE_LAUNCH_INVESTMENT` is not a fixture. It is read **live** by `V_BOOK_ASSIGNMENT` (which decides
+> which book a family is in) and by `V_LAUNCH_EXEMPTION` (which the coach reads), so between the
+> MERGE in `── 3` and the UPDATE in `── 4` Bunny's sanction reads roughly `measured + $10` instead of
+> the $30/day Ori signed off. Anything that runs in that window — the daily orchestrator, a coach
+> refresh, a person opening the brief — sees a launch that is **inside** its sanction when it is
+> nearly 2x over it, and holds budget cuts it should be releasing. The window is only as short as
+> the three `bq` calls between the two writes, and one of them is an assertion.
+>
+> **Three things make it safe to interrupt. Do not drop any of them.**
+> 1. **The restore is written to disk BEFORE the first write**, as a complete standalone statement.
+>    A shell variable dies with the shell; a file survives a `Ctrl-C`, a dropped connection, a laptop
+>    lid, and the next person.
+> 2. **A `trap` fires the restore on any exit path** — normal, error, or interrupt — so the row is
+>    put back even if the assertion in `── 3` hangs or you kill it.
+> 3. **Nothing runs between the two writes that does not have to.** The assertion is the only thing
+>    that genuinely needs the raised value. Read anything else afterwards.
+>
+> **If you find yourself here after an interrupt and are not sure what state the row is in**, run the
+> restore file on its own and then `── 5`. It is idempotent:
+> ```bash
+> bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/bunny_sanction_restore.sql)"
+> ```
 
 ```bash
+set -o pipefail
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/views/V_LAUNCH_EXEMPTION.sql)"
+
+# ── 0. DO NOT OPEN THE WINDOW WHILE THE DAILY PASS IS RUNNING. If the orchestrator is mid-flight it
+#       will rebuild V_BOOK_ASSIGNMENT and the coach tables off the inflated sanction.
+IN_FLIGHT=$(bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
+"SELECT COUNTIF(finished_at IS NULL) AS orchestrator_in_flight
+ FROM \`onyga-482313.OI.LOG_PIPELINE_RUNS\`
+ WHERE started_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 HOUR)" | tail -1)
+echo "pipeline runs still in flight: $IN_FLIGHT"
+[ "$IN_FLIGHT" = "0" ] || { echo "ABORT: a pipeline run is in flight. Wait for it to finish."; exit 1; }
 
 # ── 1. RECORD the live sanction. This value, and nothing else, is what the restore writes back.
 BUNNY_RATE=$(bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
 "SELECT FORMAT('%.4f', daily_investment) FROM \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\` WHERE parent_name='Bunny'" | tail -1)
 echo "Bunny's live sanctioned daily investment is $BUNNY_RATE — the restore writes back exactly this."
 case "$BUNNY_RATE" in ''|*[!0-9.]*) echo "ABORT: could not read the live sanction. Do not touch the row."; exit 1;; esac
+
+# ── 1a. PERSIST THE RESTORE TO DISK BEFORE ANY WRITE, and arm it on every exit path. This file is
+#        the thing that survives an interrupt; the shell variable is not.
+printf "UPDATE \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\` SET daily_investment = %s WHERE parent_name='Bunny'\n" \
+  "$BUNNY_RATE" > /tmp/bunny_sanction_restore.sql
+cat /tmp/bunny_sanction_restore.sql
+restore_bunny() {
+  echo ">> restoring Bunny's sanctioned rate to $BUNNY_RATE"
+  bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+    "$(cat /tmp/bunny_sanction_restore.sql)" || \
+    echo "!! RESTORE FAILED — run /tmp/bunny_sanction_restore.sql BY HAND NOW. Bunny's sanction is still inflated."
+}
+trap restore_bunny EXIT INT TERM
 
 # ── 2. Bunny is ALREADY over its sanctioned rate, so protection_qualified is already false. Confirm
 #       the exemption followed it down, which is the whole point of Step 3. The row count is also
@@ -1598,6 +1794,8 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
 #       The IS NOT NULL guards matter: V_INVEST_STATUS deliberately publishes NO rate when the
 #       window has too few loaded ads days (Ori: "when you do not have full window data, do not
 #       show calculate"), and a NULL landing in daily_investment would blank a sanctioned number.
+#       ── THE EXPOSURE WINDOW OPENS ON THE NEXT LINE AND CLOSES AT ── 4. Keep it to these three
+#          calls. Do not add a read, do not go and look at the brief, do not step away.
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
 "MERGE \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\` t
  USING (SELECT 'Bunny' AS parent_name, CEIL(MAX(spend_per_day)) + 10 AS test_rate
@@ -1610,9 +1808,12 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
  FROM \`onyga-482313.OI.V_INVEST_STATUS\` WHERE family='Bunny'"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t8b_assert.sql)"
 
-# ── 4. RESTORE from the value recorded in step 1. Self-derived, never a literal.
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
-"UPDATE \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\` SET daily_investment = $BUNNY_RATE WHERE parent_name='Bunny'"
+# ── 4. RESTORE from the value recorded in step 1. Self-derived, never a literal — and it is the
+#       SAME statement the trap holds, so an interrupt anywhere above lands here too. Running it
+#       twice is harmless.
+#       ── THE EXPOSURE WINDOW CLOSES ON THE NEXT LINE.
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat /tmp/bunny_sanction_restore.sql)"
+trap - EXIT INT TERM
 
 # ── 5. POST-RESTORE ASSERTION — the sanction must read exactly what Ori signed off on 2026-08-13.
 #       This is the guard the old step did not have. It must print sanction_intact = true.
@@ -1622,7 +1823,9 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
  FROM \`onyga-482313.OI.DE_LAUNCH_INVESTMENT\` WHERE parent_name='Bunny'"
 ```
 
-Expected, in order: with the sanction at $30/day and Bunny measured at $48.35,
+Expected, in order: with the sanction at its live $30/day and Bunny measured well above it (read
+`spend_per_day` off the `── 2` output — do not expect a figure written here; it has been $45.93,
+$48.35 and $59.29 on three different readings in two days, and the window under it changed once),
 `protection_qualified` reads `false`, `bunny_rows` reads `6` and `bunny_campaigns_still_exempt` reads
 `0` — the exemption followed the spend rate down. `bunny_campaigns_still_exempt` read `6` before this
 task, so a `6` here means Step 3's join never took effect; and `bunny_rows` above `6` means the join
@@ -1696,6 +1899,15 @@ happening to a deliberate launch. Ori would have to supply both targets before t
 acceptable, so Option A is a documentation change and Option B is a code change plus two numbers from
 Ori. Do not pick one. Ask.
 
+> **REPORTED AS RULED, NOT YET CONFIRMED IN THIS REPO (2026-08-20).** The round-3 repair brief carries
+> Ori's standing rulings, and among them: *"Two binding declaration fields: sanctioned $/day + end
+> date. The take-over organic-units target gates PROOF only; a NULL target does not invalidate a
+> declaration."* That is **Option A**, and if it holds, this task's block is lifted and the Option A
+> line is the one to publish. It is recorded here rather than acted on because the ruling reached this
+> plan second-hand and Task 9 writes a STANDING RULE that will outlive everyone who remembers the
+> conversation. **Confirm it with Ori in his own words, then delete this box and the `<<< >>>` marker
+> in the heredoc in the same commit.** Do not publish the SOP off this paragraph alone.
+
 ### Two rules corrected without asking
 
 Both were factually wrong rather than debatable:
@@ -1725,14 +1937,19 @@ cat > architecture/TWO_BOOK_PNL.md << 'DOC'
 
 ## Why
 
-Ads were judged on ads-ATTRIBUTED profit, which excludes 30-40% of units. Measured 2026-08-19:
-July read -$5,612 on that lens and **+$3,682 including the organic halo**. The lens, not the
-business, was the problem.
+Ads were judged on ads-ATTRIBUTED profit, which excludes 30-40% of units. **July 2026, measured
+2026-08-19:** that lens read −$5,612; including the organic halo the same month made **+$3,682**. The
+lens, not the business, was the problem. *(This one pair is a closed historical month and is meant to
+stay fixed — it is the reason this design exists. Everything else below is a live measurement and is
+published as a query, never as a number.)*
 
-Two defects followed from it. **The engine optimized the wrong number** — Bottle reads 0.60 on ads
-net ROAS but 0.95 on total, halo 1.59, so a flat 1.0 bar would cut the keywords carrying it. And
-**deliberate launch investment was invisible and unbounded** — ~$5,400/month to Bunny and LolliBall
-with no ceiling, no end date and no success test, its losses blended into the engine's scorecard.
+Two defects followed from it. **The engine optimized the wrong number** — the family with the
+account's strongest measured halo also carries its lowest ads-attributed ROAS, so a flat 1.0 bar cuts
+exactly the keywords carrying the organic sales. See it for yourself:
+`SELECT family, ads_net_roas, total_net_roas, halo_factor, keyword_bar FROM
+onyga-482313.OI.V_FAMILY_BAR ORDER BY keyword_bar`. And **deliberate launch investment was invisible
+and unbounded** — several thousand dollars a month to Bunny and LolliBall with no ceiling, no end
+date and no success test, its losses blended into the engine's scorecard.
 
 ## The books
 
@@ -1748,8 +1965,12 @@ with no ceiling, no end date and no success test, its losses blended into the en
 
 ## Standing rules
 
-- **Net profit leads, the ratio explains.** Bottle (0.95) and Fresh (0.88) rank identically by
-  ratio and 7x apart in dollars. Dollars decide what to work on.
+- **Net profit leads, the ratio explains.** Two families can sit a rounding error apart on total net
+  ROAS and orders of magnitude apart in dollars — on 2026-08-20 the two Harvest losers read 0.998 and
+  0.87 by ratio, and −$8 and −$1,776 by dollars: the same problem by ratio and two different
+  jobs by dollars. *(As-of that date; re-run before quoting —
+  `SELECT family, net_profit, total_net_roas FROM onyga-482313.OI.V_TWO_BOOK_BRIEF WHERE
+  book='HARVEST' AND row_kind='FAMILY' ORDER BY net_profit`.)* Dollars decide what to work on.
 - **The halo factor is MEASURED** (`total_net_roas / ads_net_roas`), never assumed from unit ratios.
 - **The bar may only LOWER a threshold**, is floored at 0.60, gives no credit below halo 1.0, and
   reads a settled 90-day window. **It is rebuilt EVERY DAY** by `SP_SNAPSHOT_FAMILY_BAR`,
@@ -1757,18 +1978,30 @@ with no ceiling, no end date and no success test, its losses blended into the en
 - **The launch exemption binds on the SANCTIONED DAILY SPEND RATE, not on the monthly loss ceiling.**
   `DE_LAUNCH_INVESTMENT.daily_investment` is the number Ori actually sanctioned and it is the clause
   that decides whether an exemption is still live; the end date is the second clause. The monthly
-  loss ceiling is a catastrophe backstop sitting behind both, and it almost never fires: measured
-  2026-08-19, Bunny and LolliBall ran at 1.6x and 1.9x their sanctioned spend while losing only $204
-  and $15 against ceilings of $913 and $1,674. Enforcing on the ceiling is enforcement in name only.
+  loss ceiling is a catastrophe backstop sitting behind both, and it almost never fires: both
+  launches run well over their sanctioned rate while consuming a small fraction of a ceiling
+  denominated in net profit, so a ceiling-based gate would read both as fully compliant. Enforcing on
+  the ceiling is enforcement in name only. **Check it, do not quote it** — the figures that used to
+  be written into this line went stale twice, once on their own and once when the rate window under
+  them was redefined:
+  `SELECT family, daily_investment, spend_per_day, times_over_agreed_rate,
+  loss_allowance_used_pct_so_far FROM onyga-482313.OI.V_TWO_BOOK_BRIEF WHERE book='INVEST' AND
+  row_kind='FAMILY'`.
 - **Calibration is a standing test:** a family clearing its keyword bar must clear total net ROAS
   1.0. If that breaks, the credit is wrong.
 - **Launches in months 0-3 are judged on IMPROVEMENT, never profitability.** The rule is "no
   improvement two months running", not "still unprofitable".
 - **Absolute organic units, never share** — share rises when ads units collapse.
 - **Blended measures cut at the ORDERS watermark**, never the ads watermark; an ads-only measure such
-  as the month-to-date spend rate cuts at the ads watermark. No window may run to today: the newest
+  as the sanctioned spend rate cuts at the ads watermark. No window may run to today: the newest
   day is only 88-90% loaded, and letting it in dilutes a spend rate toward looking compliant. Every
   column here publishes the window it covers so no reader has to guess.
+- **When the window is not full, WITHHOLD — never substitute** (Ori: *"when you do not have full
+  window data, do not show calculate"*). A different window's answer in the same column is the defect,
+  not the fix. The sanctioned rate is a trailing span of complete days precisely so that it is always
+  full; if the ads feed stops moving under it, the row says so and protection fails closed.
+- **A measured number written into an SOP is a liability.** Publish the query, or stamp the number
+  with its as-of date and say it must be re-run before quoting. Never gate on a pinned count.
 - **Engines join `T_FAMILY_BAR`, never `V_FAMILY_BAR`** — they are at the planner ceiling.
 
 ## What invalidates this
@@ -1807,10 +2040,18 @@ that is the current intent, not a gap to close.
 6. The brief's Harvest total reconciles to its own family rows (Task 7 assertion). ✅
 7. ⏸ ON HOLD — Both bid engines still plan, `V_PANEL_OWNERSHIP` still plans, and both engines pull
    twice byte-identically (Task 8 Steps 4 and 7).
-8. ⏸ ON HOLD — The flip report shows fewer cuts and **zero new raises** (Task 8 Step 5). The
-   bar-exempt cut count stays at its measured baseline of four; it is not required to reach zero, and
-   forcing it to zero would disable the automatic daily trim and the seat-queue park on the two
-   Invest families (Task 8 Step 6).
+8. ⏸ ON HOLD — The flip report shows fewer cuts and **zero new raises** (Task 8 Step 5), and Step 3
+   **adds no new CLASS of cut that reaches a bar-exempt campaign** — the arm SET after the edit
+   contains nothing the Step 1 capture did not already contain (Task 8 Step 6). *No count of
+   bar-exempt cuts gates this item, and none may be written back into it (Standing Rule 0).* This
+   item used to read "the bar-exempt cut count stays at its measured baseline of four"; re-running
+   that query the same day, with no code change in between, returned one row, and the same query run
+   again on 2026-08-20 returned one row. The population is intraday-volatile — `V_KEYWORD_LIFT`
+   recomputes from ads data that is 88-90% loaded at age 1 and its trim and seat-queue arms judge on
+   pacing and capacity, both of which move through the day — while the property is not. Reaching zero
+   is explicitly **not** required and would be a failure, not a pass: it would disable the automatic
+   daily trim and the seat-queue park on the two Invest families, which are the sanctioned way a
+   launch is contained. See the boxed warning in Task 8 Step 6.
 9. ⏸ ON HOLD — Spending faster than the sanctioned daily rate, or running past the declared end date,
    revokes the launch exemption; an undeclared family is untouched by it (Task 8b Steps 4 and 5). The
    monthly loss ceiling is not the test.
@@ -1818,9 +2059,17 @@ that is the current intent, not a gap to close.
 
 ## Known follow-ons (NOT in this plan)
 
-- **LolliBall's 0.87 halo factor** — a COGS imputation artifact. Harmless to the RAMP test (a
-  constant bias cancels out of a trend) but must be fixed before LolliBall reaches PROOF.
-- **Fresh** — 24 months old, halo 1.07, losing $1,497. This plan makes it visible; deciding what to
-  do about it is Ori's, not the engine's.
+- **LolliBall's sub-1.0 halo factor on its early windows** — a COGS imputation artifact. Harmless to
+  the RAMP test (a constant bias cancels out of a trend) but must be fixed before LolliBall reaches
+  PROOF, because PROOF judges a LEVEL. **Note the window**: the 0.87 that this bullet used to quote
+  bare is LolliBall's `BASELINE_MAY_JUL` figure, and on the settled M3 window the bar actually reads
+  it is above 1.0 (1.15 on 2026-08-20). Quoting a halo without naming its window is how a reviewer
+  concluded the no-credit guard was broken when it was not.
+- **Fresh** — the long-standing Harvest family that loses real money every window. This plan makes it
+  visible; deciding what to do about it is Ori's, not the engine's. Size it on the day you act:
+  `SELECT family, net_profit, ad_spend, total_net_roas, halo_factor FROM
+  onyga-482313.OI.V_TWO_BOOK_BRIEF WHERE row_kind='FAMILY' ORDER BY net_profit` — it was −$1,776 on
+  the settled 90 days to 2026-08-17, read 2026-08-20, and this bullet has already carried two other
+  figures.
 - **The randomized holdout** — parked, `architecture/HOLDOUT.md`. If not repaired before its
   2026-09-01 window opens, formally abandon it rather than let it run invalid.

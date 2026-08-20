@@ -12,9 +12,17 @@
 -- because a net-profit ceiling on a product that nearly covers its costs almost never fires. THE
 -- SHAPE IS THE POINT AND IT DOES NOT GO STALE: both families run well OVER their sanctioned daily
 -- spend while consuming only a small fraction of a ceiling denominated in net profit, so the ceiling
--- stays silent and only the rate binds. (Illustrative, 2026-08-20: 1.61x and 1.94x over rate at
--- 22.3% and 0.9% of ceilings of $913 and $1,674. These move daily — read V_INVEST_STATUS, never
--- this comment, and never restore a sanctioned value from a number written in a file.)
+-- stays silent and only the rate binds. THE NUMBERS THAT SHOW IT ARE NOT WRITTEN HERE — they moved
+-- twice in two days, once because the rate itself moved and once because the WINDOW under it was
+-- replaced (the sanctioned rate went from month-to-date to a trailing 28 complete days on
+-- 2026-08-20, which re-scored both families). Run this instead, and never restore a sanctioned
+-- value from a number written in a file:
+--   SELECT family, daily_investment, spend_per_day, times_over_agreed_rate,
+--          loss_allowance_used_pct_so_far, loss_allowance_window, rate_window
+--   FROM `onyga-482313.OI.V_TWO_BOOK_BRIEF` WHERE book = 'INVEST' AND row_kind = 'FAMILY';
+-- (Run 2026-08-20 it returned Bunny 1.98x over rate at 22.3% of its allowance and LolliBall 1.85x
+-- at 0.9% — the shape, over rate and nowhere near the ceiling. AS-OF THAT DATE ONLY: re-run before
+-- quoting any of the four numbers.)
 --
 -- AGE COMES FROM FIRST SALE, NOT FROM THE DECLARATION. sanctioned_on is when Ori signed the
 -- investment off (2026-08-13 for both families), months after either launch actually began.

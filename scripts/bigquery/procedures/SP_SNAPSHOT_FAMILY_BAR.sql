@@ -8,9 +8,17 @@
 -- engines CAN LEFT JOIN it — a table, never the view.
 --
 -- NOT YET WIRED, AND THE PRESENT TENSE HERE WAS A LIE UNTIL 2026-08-20. NO ENGINE READS
--- T_FAMILY_BAR TODAY. Verified 2026-08-20 against INFORMATION_SCHEMA.VIEWS and .ROUTINES: the only
--- two objects in the dataset that mention T_FAMILY_BAR are this procedure, which writes it, and
--- SP_ORCHESTRATE_DAILY_REFRESH, which calls this procedure. The join is Task 8 of
+-- T_FAMILY_BAR TODAY. DO NOT TAKE THAT FROM THIS COMMENT — IT IS THE KIND OF SENTENCE THAT GOES
+-- STALE SILENTLY, AND IT ALREADY DID ONCE. Re-verify it in three seconds:
+--   SELECT 'VIEW' AS kind, table_name AS name
+--   FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS`   WHERE view_definition LIKE '%T_FAMILY_BAR%'
+--   UNION ALL
+--   SELECT 'ROUTINE', routine_name
+--   FROM `onyga-482313.OI`.INFORMATION_SCHEMA.ROUTINES WHERE ddl            LIKE '%T_FAMILY_BAR%';
+-- Run 2026-08-20 it returned exactly two rows, both routines: SP_SNAPSHOT_FAMILY_BAR (this
+-- procedure, which writes the table) and SP_ORCHESTRATE_DAILY_REFRESH (which calls it). Zero views.
+-- The moment a third row appears, something is reading the bars and this whole comment is out of
+-- date. The join is Task 8 of
 -- docs/superpowers/plans/2026-08-19-two-book-pnl.md and Task 8 is unbuilt and on hold. Until it
 -- lands, this table is a correctly-built input with no consumer, and the bars change no bid.
 -- WHEN TASK 8 SHIPS, FLIP BOTH SENTENCES TO THE PRESENT TENSE IN THE SAME COMMIT: this comment and

@@ -3,6 +3,15 @@
 **Date:** 2026-08-19 · **Status:** design approved by Ori, ready for planning
 **Supersedes as priority:** the randomized holdout (built 2026-08-19, parked — see §9)
 
+> **STANDING RULE 0 — a measured number written into prose is a liability** (added 2026-08-20, after
+> a third repair round found stale pinned figures in this spec, in `config.yaml`, in the plan and in
+> a view header). Publish the QUERY, not the answer; or, if a number must appear in the sentence,
+> stamp it with its as-of date, name the window it was measured on, and say it must be re-run before
+> quoting. Never gate anything on a pinned count. **This document is different from the others in one
+> way:** it is a DESIGN RECORD dated 2026-08-19, so the baseline tables in §3 and §6 are deliberately
+> frozen as the evidence that justified the design. Treat every figure in them as historical, never
+> as current, and never copy one forward into an operational document.
+
 > **⚠ SUPERSEDED IN PART — three points below no longer describe what is built (2026-08-20).**
 > Read the implementation plan `docs/superpowers/plans/2026-08-19-two-book-pnl.md` alongside this
 > document, and the deployed files in `scripts/bigquery/` ahead of both.
@@ -21,9 +30,10 @@
 >    organic noise. The input is a *settled* 90-day window, so one rebuild moves it by roughly one
 >    day in ninety — about 1% of the window — and a bar built on it cannot be jumpy. Daily also
 >    removes a second scheduler and keeps the bars in the same daily pass as the engines that will
->    read them. Note this is the MATERIALISATION cadence only: the separate clause in §4 calling the
->    bar-vs-total-net-ROAS calibration a standing **monthly** check is a different cadence, it is
->    correct, and it stands.
+>    read them. Note this is the MATERIALISATION cadence only. **The §4 clause calling the
+>    bar-vs-total-net-ROAS calibration a standing *monthly* check does NOT stand either** (corrected
+>    2026-08-20 — this paragraph used to say it did): no monthly job exists anywhere in the
+>    warehouse, and the calibration query is run by hand. See the corrected note under §4.
 > 3. **§5 "a declaration requires three fields" is an OPEN QUESTION, not a shipped rule.** Live
 >    production has Bunny and LolliBall in the Invest book with `takeover_target_organic_units` NULL,
 >    deliberately, until Ori supplies the numbers. Task 9 of the plan states both options and is
@@ -154,9 +164,19 @@ therefore work at family grain while the engine decides at keyword grain. The br
   > itself is unchanged: still settled, still 90 days.
 - **Invest families are exempt** from the bar entirely; they are governed by §5.
 
-**Validation property:** the bar reproduces the total-net-ROAS verdicts at family level (LolliME and
-Lollibox clear; Fresh and Bottle fall below). This must be re-checked monthly — if a family passes
-its keyword bars while failing total net ROAS, the bridge is miscalibrated.
+**Validation property:** the bar reproduces the total-net-ROAS verdicts at family level — if a family
+passes its keyword bar while failing total net ROAS, the bridge is miscalibrated.
+
+> **CORRECTED 2026-08-20, twice over.** (a) **It is not monthly.** This line said "re-checked
+> monthly"; no monthly job exists anywhere in the warehouse — the bar is rebuilt daily and this check
+> is run by hand. (b) **It is ONE-DIRECTIONAL, and the named families were a snapshot.** Clearing the
+> bar must imply clearing total net ROAS 1.0; the reverse is not required, and a family failing its
+> bar while clearing 1.0 is the bar being STRICTER than the truth, which is the direction the design
+> wants — it must never be alarmed on. Alarm on PERMISSIVE breaks only (clears the bar, fails 1.0),
+> which the algebra in `V_FAMILY_BAR.sql`'s header shows are reachable only where halo < 1. Which
+> families sit on which side moves with the data and is deliberately not written here; the query is
+> published in that header. Run it before quoting any count.
+
 
 ## 5. The Invest book — bounded investment and the take-over test
 
@@ -180,8 +200,13 @@ halo-adjusted bar applies. **The engine stops, not the human.**
 > a product that nearly covers its own costs, so a ceiling-only condition would have left both
 > families **fully exempt on the very day they were 1.6× and 1.9× over rate**: enforcement in name
 > only. The live rule is therefore `today ≤ end_date` **AND** `spend rate ≤ daily_investment`, with
-> the monthly loss ceiling demoted to a catastrophe backstop sitting behind the rate. Re-measured
-> 2026-08-20: Bunny $48.35/day against a sanctioned $30, LolliBall $106.90 against $55.
+> the monthly loss ceiling demoted to a catastrophe backstop sitting behind the rate. **The rate
+> figures that used to sit on this line have been removed** (2026-08-20, Standing Rule 0): they went
+> stale twice — once on their own, and once when the window under them was redefined from month to
+> date to a trailing 28 complete days, which re-scored both families. Read them off the object:
+> `SELECT family, daily_investment, spend_per_day, spend_rate_ratio, rate_window_basis FROM
+> onyga-482313.OI.V_INVEST_STATUS`. Run 2026-08-20 it returned both families near 2× over their
+> sanctioned rate; as-of that date only, re-run before quoting.
 >
 > **AND "the engine stops, not the human" IS NOT TRUE TODAY — it is the goal, not the state.** Under
 > Ori's 2026-08-20 ruling *"Tell the truth now, release nothing"*, Task 8b is on hold and
