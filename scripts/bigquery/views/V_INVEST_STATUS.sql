@@ -1,5 +1,5 @@
 -- =============================================
--- V_INVEST_STATUS — the Invest book: budget consumed, trajectory, exemption state (2026-08-19).
+-- V_INVEST_STATUS — the Invest book: sanctioned spend rate, trajectory, protection state (2026-08-19).
 -- Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md §5.
 --
 -- THE QUESTION CHANGES WITH AGE (Ori 2026-08-19: "the question of launch products is are they
@@ -15,14 +15,35 @@
 --
 -- WHY ABSOLUTE ORGANIC UNITS, NOT SHARE: share is a trap — it rises when ads units collapse, which
 -- looks like success and is not. Bunny and LolliBall already sit at ~31% organic, comparable to
--- Lollibox's 29.7%, so by share alone they would read "finished" while still losing $2,892/month.
+-- Lollibox's 29.7%, so by share alone they would read "finished" while still losing money.
 --
 -- A USEFUL CONSEQUENCE: trajectory is robust to a level bias. A constant COGS misallocation cancels
 -- out of a month-over-month trend, which is why LolliBall's implausible 0.87 halo (spec §9.1) does
 -- not block the ramp test — though it must be fixed before LolliBall reaches PROOF.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_INVEST_STATUS` AS
-WITH b AS (
+WITH
+-- ---------------------------------------------------------------------------------------------
+-- THE DECLARED TUNABLES. Every number the window design rests on is named here, once, so no reader
+-- has to find it inside an expression. Changing one of these changes the measure; nothing else does.
+-- ---------------------------------------------------------------------------------------------
+k AS (
+  SELECT
+    28  AS rate_window_days,        -- the BINDING window: 28 COMPLETE days, always full (see below)
+    7   AS signal_window_days,      -- the DIRECTION signal: 7 complete days. THE GATE NEVER READS IT.
+    3   AS feed_stale_after_days,   -- the ads feed may be this many days behind today before the
+                                    -- window stops being certifiable. Same threshold V_DATA_FRESHNESS
+                                    -- already calls STALE (days_stale > 3), so the two agree.
+    0.20 AS direction_band          -- how far the 7-day rate must sit from the 28-day rate before the
+                                    -- direction word stops saying "steady". Nothing gates on it, but a
+                                    -- word still has to earn itself: the standard error of a 7-day mean
+                                    -- is sigma/sqrt(7), which on the sigmas measured below (as of
+                                    -- 2026-08-20) is $10.93 of a $59.29 Bunny rate and $19.48 of a
+                                    -- $102.01 LolliBall rate — 18% and 19%. Inside 20% the two windows
+                                    -- are not distinguishable, so "rising" or "falling" would be a
+                                    -- claim about noise. Re-derive the sigmas before quoting them.
+),
+b AS (
   SELECT * FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT` WHERE book = 'INVEST'
 ),
 -- the three most recent COMPLETE calendar months, per family, from the measurement spine
@@ -44,189 +65,211 @@ trend AS (
   FROM ranked WHERE rn <= 3 GROUP BY family
 ),
 -- ---------------------------------------------------------------------------------------------
--- TWO MEASURES, TWO WINDOWS, ONE OWNER EACH (defect fix 2026-08-20).
+-- TWO MEASURES, TWO WINDOWS, ONE OWNER EACH.
 --
--- The previous cut computed BOTH the month-to-date money and the month-to-date spend rate here,
--- off one CTE bounded only from below (date >= start of CURRENT_DATE's month). That produced a
--- SECOND month-to-date net profit for the same family and the same month, differing from the one
--- V_FAMILY_PNL already published: LolliBall read -$53.22 here against a settled -$15.28, Bunny
--- -$257.57 against -$203.78. Worse, it subtracted ad spend loaded through the newest ads day from
--- sales complete only to the orders watermark two days earlier -- a blended figure assembled from
--- two different windows, which the house window convention forbids outright.
+--   MONEY (the loss ceiling) -> CALENDAR MONTH TO DATE, read from V_FAMILY_PNL, never recomputed
+--             here. A loss CEILING is a monthly allowance — "$913 in a month" — so a calendar month
+--             is the window it is denominated in, and the running month is the right partial. Its
+--             money is bounded at the ORDERS watermark, complete by construction (the sessions gate
+--             drops mid-sync partial days), so sales, COGS and ad spend inside it end on the same
+--             complete day. One concept, one number, one place. Published with its own window
+--             columns AND its own basis string (loss_ceiling_window_basis) so it can never be read
+--             as the rate window.
 --
---   MONEY  -> V_FAMILY_PNL is now the SOLE owner. Its 'MTD' row is bounded at the ORDERS watermark,
---             which is complete by construction (the sessions gate drops mid-sync partial days), so
---             sales, COGS and ad spend inside it all end on the same complete day. Nothing about the
---             month-to-date money is recomputed in this file. One concept, one number, one place.
+--   RATE (the sanction)      -> A TRAILING WINDOW OF 28 COMPLETE DAYS, computed here.
 --
---   RATE   -> stays here, because it is a different measure with a different job: a spend rate has
---             to be CURRENT to bind on anything, so it may not wait for the orders watermark. It is
---             ads-only, so it takes the ADS watermark and ends at wm - 1: FACT_AMAZON_ADS is only
---             88-90% loaded at age 1 and restates for about three days, and a half-loaded day
---             divided as a whole day drags the rate DOWN, which is the direction that quietly grants
---             a launch the protection it has not earned.
+-- WHY A TRAILING WINDOW AND NOT MONTH TO DATE (defect fix 2026-08-20, third round; Ori's decision).
+-- The sanction is denominated as a RATE — "$30 a day", "$55 a day" — not as a monthly budget. A
+-- month-to-date rate was the wrong shape from the beginning, and every defect found on this measure
+-- came out of that one mistake: on the 1st the month holds one day, so the window had to be special-
+-- cased, and the special case is where the damage lives. The round-2 cut required 11 loaded days and,
+-- below that, SUBSTITUTED THE LAST COMPLETE CALENDAR MONTH's rate into the same columns —
+-- spend_per_day, spend_rate_ratio, spend_breached, protection_qualified. For the first twelve days of
+-- every month the sanction gate therefore reported LAST month's behaviour, and where last month was
+-- compliant a family overspending today read compliant. Measured on real V_UNIFIED_DAILY spend
+-- (2026-08-20): on 3-12 July 2026 that rule published LolliBall at $5.82 a day — June's rate — while
+-- July actually ran $91.11 a day against a $55 sanction. Withholding is not substituting.
 --
--- This is not a second watermark for one number. It is one watermark each for two numbers that must
--- not share a window -- and both windows are published on the row (rate_window_start/_end/_days and
--- _basis, mtd_money_start/_end) so no reader has to guess which days a column covers.
+-- A TRAILING WINDOW IS ALWAYS FULL. No month boundary, no minimum, no fallback, no caveat, no
+-- is_fallback boolean: on every day of every month it holds exactly 28 complete days. There is
+-- nothing left for a substitution rule to do, so there is none.
 --
--- THE DENOMINATOR IS ELAPSED DAYS, NOT DAYS THAT HAVE ROWS. COUNT(DISTINCT date) counts only days
--- with activity, so a genuine zero-spend day vanished from the divisor and inflated the rate.
+-- WHY THE WINDOW CANNOT BE SHORT — the round-2 derivation, which was sound work and is kept because
+-- it is the REASON 28 is safe rather than merely conventional. A rate over n days is the mean of n
+-- daily spends, so its standard error is sigma / sqrt(n). For the gate to SEE a family running 1.6x
+-- its sanctioned rate, the margin it has to clear (0.6 x the sanctioned rate) must be at least two
+-- standard errors wide, which puts a false pass near 1 in 40. That is n >= (2 x sigma / (0.6 x S))^2.
+-- MEASURED 2026-08-20, and every figure below is AS OF THAT DATE — re-run the query before quoting:
 --
--- WHY THE LOSS CEILING IS PUBLISHED BUT NOT ENFORCING: measured 2026-08-20 both families ran 1.6x
--- and 1.9x over their sanctioned SPEND while their month-to-date LOSS was $204 and $15 against
--- ceilings of $913 and $1,674. A loss ceiling on a product that nearly covers its costs never fires.
--- Enforcing on it would have been enforcement in name only; the spend rate is what binds.
+--     WITH e AS (SELECT MAX(IF(ad_cost > 0, date, NULL)) AS d
+--                FROM `onyga-482313.OI.V_UNIFIED_DAILY`),
+--          f AS (SELECT DISTINCT family FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT` WHERE book = 'INVEST'),
+--          g AS (SELECT f.family, day, COALESCE(SUM(u.ad_cost), 0) AS spend
+--                FROM e, UNNEST(GENERATE_DATE_ARRAY(DATE_SUB(e.d, INTERVAL 89 DAY), e.d)) AS day
+--                CROSS JOIN f
+--                LEFT JOIN `onyga-482313.OI.V_UNIFIED_DAILY` u
+--                       ON u.family = f.family AND u.date = day
+--                GROUP BY 1, 2)
+--     SELECT family, ROUND(STDDEV_SAMP(spend), 2) AS sigma FROM g GROUP BY 1
 --
--- ---------------------------------------------------------------------------------------------
--- A RATE NEEDS ENOUGH DAYS TO BE A RATE (defect fix 2026-08-20, second round).
---
--- Ori: "when you do not have full window data, do not show calculate." The round-1 cut bounded the
--- window at the ads watermark and anchored its lower edge on the WATERMARK's month rather than
--- today's, which fixed 1 and 2 September. It NARROWED the month-start cliff; it did not close it,
--- and on one day a month it was measurably worse than the code it replaced. Walking the calendar
--- under the observed lag (FACT_AMAZON_ADS MAX(date) = today - 1, so the last complete ads day is
--- today - 2):
---
---     1st  -> the whole of the previous month.        31 days.  safe
---     2nd  -> the whole of the previous month.        31 days.  safe
---     3rd  -> the 1st, alone.                          1 day.   the old code held 2
---     4th  -> the 1st to the 2nd.                      2 days.
---      ...
---     12th -> the 1st to the 10th.                    10 days.
---
--- A one-day sample is not a rate. Daily spend is nothing like smooth: over the 90 days to 19 August
--- 2026 Bunny ran from $0.00 to $127.82 a day around a mean of $54.75, and LolliBall from $0.00 to
--- $156.91 around $55.69. One quiet day on a family running half again over its sanction reads as
--- compliant, and the gate certifies it.
---
--- THE MINIMUM IS MEASURED, NOT ROUND. A rate over n days is the mean of n daily spends, so its
--- standard error is sigma / sqrt(n). For the gate to SEE a family running 1.6x its sanctioned rate,
--- the margin it has to clear -- 0.6 x the sanctioned rate -- must be at least two standard errors
--- wide, which puts the chance of a false pass near 1 in 40. That is n >= (2 x sigma / (0.6 x S))^2:
+-- (It anchors on the feed rather than on a literal date, so it re-runs correctly on any day. Run
+-- 2026-08-20 over the 90 days to 19 August 2026, it returned exactly the two sigmas below.)
 --
 --     Bunny      sigma $28.91, S $30 -> margin $18 -> n >= (57.82 / 18)^2  = 10.32 -> 11 days
 --     LolliBall  sigma $51.55, S $55 -> margin $33 -> n >= (103.10 / 33)^2 =  9.76 -> 10 days
 --
--- sigma is the sample standard deviation of DAILY family spend over the 90 days to 19 August 2026,
--- zero-filled so a day with no rows counts as $0 rather than dropping out. The binding family sets
--- the rule: MINIMUM_RATE_WINDOW_DAYS = 11.
+-- 28 sits far above that 11-day floor, and it is the house 28-day window, so the ladder here is the
+-- same one the rest of OI reads. The floor is why the window may not be shortened; it is no longer a
+-- minimum anything is tested against, because a trailing window can never fall below its own length.
 --
--- Checked against the data as well as against the normal curve. Rescale each family's last 31 days
--- (a single steady regime, no launch ramp inside it) so its TRUE rate is exactly 1.6x its sanction,
--- then read every rolling window: Bunny's longest falsely-compliant window is 7 days (4.0% of 7-day
--- windows, and none at 8 or more); LolliBall has none at any length. 11 days clears both.
+-- WHAT A TRAILING WINDOW COSTS, STATED RATHER THAN HIDDEN. It lags a step UP. On a launch that
+-- ramps from near zero, the 28-day window still contains the quiet pre-ramp days for four weeks, so
+-- the rate reads lower than the family is spending TODAY. Walked over every day from 1 May to 20
+-- August 2026 on real daily spend (as of 2026-08-20, both INVEST families, 224 family-days): on 9
+-- of them the trailing window read compliant where the old month-to-date window read breached —
+-- Bunny 13-15 June and LolliBall 13-18 July, both inside their launch ramps. That is the honest
+-- trade Ori chose against a rule that reported the WRONG MONTH for twelve days out of every month
+-- and could not be repaired without another special case. The 7-day direction signal below exists
+-- precisely so a ramp is visible while the binding window is still catching up; it is published, it
+-- is named, and the gate does not read it.
 --
--- AND THE RESIDUAL IS STATED, NOT HIDDEN. Run the same rescale across 1 July to 18 August 2026 --
--- a span containing a real level shift, Bunny near $85 a day in July and near $45 in August -- and
--- one 11-day window in 39 still reads compliant, at $29.64 against a $30 sanction. That is the rule
--- meeting its own specification rather than missing it: two standard errors was chosen as about one
--- false pass in forty, and one in thirty-nine is what forty looks like when you count it. A shorter
--- window is worse by exactly the arithmetic above -- at one day it is six in forty-nine, at three
--- days five in forty-seven. Raising the floor further would only widen the stretch of the month that
--- reads last month's rate; it would not make a short window measurable.
+-- HOW THAT WALK IS RE-RUN, because a number in a comment is worth what its method is worth: take
+-- every simulated today, set feed_end = today - lag for lag in 1, 2 and 3 (the observed lag is 1),
+-- build BOTH windows off it — trailing [feed_end - 28, feed_end - 1] against the old
+-- month-to-date-with-an-11-day-fallback — and read each against real daily spend from
+-- V_UNIFIED_DAILY, zero-filled so a day with no rows counts as $0. Over 672 family-days the trailing
+-- window returned exactly ONE window length, 28, at every lag and on every day of the month; the old
+-- one returned 11 to 31 and spent 240 of those 672 family-days describing a DIFFERENT MONTH than the
+-- day it was published on.
 --
--- WHERE THE 11-DAY FLOOR ACTUALLY BINDS: on ONE day of the month, the 13th, where the running month
--- has exactly 11 loaded days. Days 3 to 12 fall back to a whole calendar month, 28 days or more,
--- where the arithmetic above has an enormous margin; from the 14th on, the window only gets longer.
+-- THE DENOMINATOR IS ELAPSED DAYS, NOT DAYS THAT HAVE ROWS. The divisor is the window length, so a
+-- genuine zero-spend day counts as a zero rather than dropping out and inflating the rate.
 --
--- BELOW THE MINIMUM THE RUNNING MONTH PRODUCES NO RATE AT ALL. It falls back to the LAST COMPLETE
--- CALENDAR MONTH -- 28 days or more, and fully loaded, because its final day is older than the ads
--- watermark by at least a day. THE ROW SAYS WHICH IT IS LOOKING AT: rate_window_basis names the span
--- in words and, on the fallback, names it as the last complete month and says why; and
--- rate_window_is_last_complete_month carries the same fact as a boolean for anything that has to
--- branch on it. The gate can no longer certify compliance off a sample too small to judge, and no
--- reader is left to assume the window is the month they happen to be standing in.
+-- WHY THE LOSS CEILING IS PUBLISHED BUT DOES NOT DECIDE ANYTHING: the SHAPE, which does not go
+-- stale, is that both families run well over their sanctioned SPEND while their month-to-date LOSS
+-- sits at a small fraction of a ceiling denominated in net profit — a loss ceiling on a product that
+-- nearly covers its costs never fires. The spend rate is what binds. The ceiling clause survives
+-- inside protection_qualified ONLY as a catastrophe backstop and as a fail-closed test for missing
+-- data: it can make protection harder to earn, never easier.
 --
 -- ---------------------------------------------------------------------------------------------
--- THE WINDOW ENDS ON THE SOURCE THAT IS ACTUALLY SUMMED (defect fix 2026-08-20, second round).
+-- THE WINDOW IS BOUNDED ON THE SOURCE THAT IS ACTUALLY SUMMED.
 --
--- The numerator sums ad_cost from V_UNIFIED_DAILY; the window used to end on FACT_AMAZON_ADS. They
--- agree today, and have agreed on all 710 loaded ads days, but they are not the same set:
--- V_UNIFIED_DAILY's ads leg keeps only rows whose advertised ASIN resolves through
--- COALESCE(most_advertised_asin_impressions, advertised_asins, ASIN_BY_CAMPAIGN_NAME), so a day can
--- land in FACT and reach nothing here. The window would then end on a day the numerator cannot see
--- while the denominator still counted it -- diluting the rate DOWN, the same direction as every
--- other defect on this measure. The end is now the newest day whose spend can actually REACH
--- V_UNIFIED_DAILY, computed with that view's own attribution test.
+-- The numerator sums ad_cost from V_UNIFIED_DAILY, so the newest day of the window is taken from
+-- V_UNIFIED_DAILY too. Earlier cuts read FACT_AMAZON_ADS instead. They agree today, but they are not
+-- the same set: V_UNIFIED_DAILY keeps only rows whose advertised ASIN resolves through
+-- COALESCE(most_advertised_asin_impressions, advertised_asins, ASIN_BY_CAMPAIGN_NAME) AND whose ASIN
+-- joins V_PRODUCT_FAMILY_MAP AND whose date joins DIM_TIME. A day can land in FACT and reach nothing
+-- here. The window would then end on a day the numerator cannot see while the denominator still
+-- counted it — diluting the rate DOWN, the same direction as every defect found on this measure.
 --
 -- AND IT IS CAPPED THE WAY ITS SIBLINGS ARE. V_KEYWORD_CONTEXT_LEDGER:27, V_KEYWORD_CONTEXT_GATE:78
--- and V_SEASON_CONTEXT:37 all read LEAST(MAX(date), FN_ADS_ANCHOR_CAP()); this view read MAX(date)
--- bare. There are no future-dated ads rows today, and a single one would push the window END past
--- the days that exist -- lengthening the denominator over days with no spend in them, which dilutes
--- the rate down yet again. Same guard, same reason, same house pattern.
+-- and V_SEASON_CONTEXT:37 all read LEAST(MAX(date), FN_ADS_ANCHOR_CAP()). A future-dated row would
+-- otherwise push the window END past the days that exist, spending the window's 28 days on days with
+-- no spend in them — the same dilution again.
+--
+-- THE NEWEST LOADED DAY IS NOT IN THE WINDOW. Day-1 ads are 88-90% loaded and restate for about
+-- three days (fact_oi_fresh_ads_data_reading_rules), and a half-loaded day divided as a whole day
+-- drags the rate DOWN. So the window ENDS one day before the feed's newest reachable day.
+--
 -- ---------------------------------------------------------------------------------------------
-ads_src AS (
-  -- ONE pass over FACT_AMAZON_ADS answering the only question the rate needs: what is the newest day
-  -- whose ad spend can reach the numerator this view sums? Capped at FN_ADS_ANCHOR_CAP() so a
-  -- future-dated row can never move it forward.
-  SELECT LEAST(
-           MAX(IF(Ads_cost > 0
-                  AND COALESCE(most_advertised_asin_impressions, advertised_asins,
-                               ASIN_BY_CAMPAIGN_NAME) IS NOT NULL,
-                  date, NULL)),
-           `onyga-482313.OI.FN_ADS_ANCHOR_CAP`())                                    AS reachable_end
-  FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+-- THE STALENESS BOUND: A FROZEN FEED MUST NOT KEEP CERTIFYING A SANCTION.
+--
+-- The window is anchored entirely on the ads feed. If Fivetran stalls, the anchor freezes, the
+-- window slides nowhere, and without a bound this view would publish a rate and a verdict off a
+-- frozen four-week window for as long as the stall lasts — while a launch spent whatever it liked in
+-- the days nobody can see. The bound is the ADS FEED'S AGE against today: ads_feed_age_days =
+-- CURRENT_DATE(LA) - the newest reachable ads day. Normal operation is 1. Stale is more than
+-- feed_stale_after_days = 3, the same threshold V_DATA_FRESHNESS uses for every other source, so OI
+-- has one definition of a stale feed rather than two.
+--
+-- WHAT THE GATE DOES WHEN THE FEED IS STALE: protection_qualified FAILS CLOSED — no protection. A
+-- sanction gate that cannot see current spend must not certify it, and NULL-safety runs the same
+-- way: an unknown staleness is treated as stale. The RATE ITSELF IS STILL PUBLISHED, because it is a
+-- true statement about the days it covers; rate_window_is_stale, ads_feed_last_day and
+-- ads_feed_age_days say plainly how old those days are, and rate_window_basis says it in words.
+-- ---------------------------------------------------------------------------------------------
+u AS (
+  -- ONE bounded pass over the source the numerator sums. The 200-day bound is a scan guard, not a
+  -- measurement choice: it is seven times the 28-day window, so it cannot clip it. A feed frozen for
+  -- longer than 200 days returns no rows at all — every window column NULL, every rate NULL, and
+  -- protection_qualified FALSE, which is the fail-closed direction.
+  SELECT family, date, ad_cost
+  FROM `onyga-482313.OI.V_UNIFIED_DAILY`
+  WHERE date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 200 DAY)
 ),
-rate_edge AS (
-  -- The last COMPLETE day. Day-1 ads are 88-90% loaded (fact_oi_fresh_ads_data_reading_rules), so
-  -- the newest loaded day never enters a rate.
-  SELECT DATE_SUB(reachable_end, INTERVAL 1 DAY) AS d FROM ads_src
-),
-rate_cand AS (
+u_win AS (
+  -- The window edges as ROW-LEVEL constants, so the whole thing is one pass: an unpartitioned
+  -- analytic MAX over the same scan, rather than a second expansion of V_UNIFIED_DAILY to find the
+  -- newest day. feed_end = the newest day whose ad spend actually reaches this view, capped.
+  -- The window lengths come from k, not from literals repeated here: a declared tunable that some
+  -- other line quietly re-states is how two numbers that must be equal stop being equal.
   SELECT
-    11                                                                  AS min_days,
-    DATE_TRUNC(d, MONTH)                                                AS mtd_start,
-    d                                                                   AS mtd_end,
-    DATE_DIFF(d, DATE_TRUNC(d, MONTH), DAY) + 1                         AS mtd_days,
-    DATE_TRUNC(DATE_SUB(DATE_TRUNC(d, MONTH), INTERVAL 1 DAY), MONTH)   AS prev_start,
-    DATE_SUB(DATE_TRUNC(d, MONTH), INTERVAL 1 DAY)                      AS prev_end
-  FROM rate_edge
-),
-rate_win AS (
-  SELECT
-    min_days                                                            AS win_min_days,
-    is_fallback,
-    win_start,
-    win_end,
-    DATE_DIFF(win_end, win_start, DAY) + 1                              AS win_days,
-    -- THE SPAN IN WORDS, for the column a person reads. It names real dates every day of the year,
-    -- so it cannot drift out of agreement with the numbers beside it the way a hand-built
-    -- "month to date, from <the 1st of today's month>" string does the moment the two months differ.
-    CONCAT(
-      IF(DATE_TRUNC(win_start, MONTH) = DATE_TRUNC(win_end, MONTH),
-         FORMAT_DATE('%-d', win_start), FORMAT_DATE('%-d %B', win_start)),
-      ' to ', FORMAT_DATE('%-d %B %Y', win_end), ', ',
-      CAST(DATE_DIFF(win_end, win_start, DAY) + 1 AS STRING), ' days',
-      IF(is_fallback,
-         CONCAT(' — the last complete month, because this month does not yet have enough ',
-                'measured days to give a rate.'),
-         ''))                                                           AS win_basis,
-    -- The same window compressed to a clause that drops into the middle of a sentence: "spending
-    -- $48.35 a day over the 18 days to 18 August 2026". True on every day of the month, including
-    -- the ones where the window is not the month the reader is standing in.
-    CONCAT('over the ', CAST(DATE_DIFF(win_end, win_start, DAY) + 1 AS STRING),
-           ' days to ', FORMAT_DATE('%-d %B %Y', win_end))              AS win_phrase
+    x.family, x.date, x.ad_cost, x.feed_end,
+    DATE_SUB(x.feed_end, INTERVAL 1 DAY)                                 AS win_end,
+    DATE_SUB(x.feed_end, INTERVAL k.rate_window_days   DAY)              AS win_start,
+    DATE_SUB(x.feed_end, INTERVAL k.signal_window_days DAY)              AS sig_start
   FROM (
-    SELECT
-      min_days,
-      mtd_days < min_days                                               AS is_fallback,
-      IF(mtd_days < min_days, prev_start, mtd_start)                    AS win_start,
-      IF(mtd_days < min_days, prev_end,   mtd_end)                      AS win_end
-    FROM rate_cand
-  )
+    SELECT family, date, ad_cost,
+           LEAST(MAX(IF(ad_cost > 0, date, NULL)) OVER (),
+                 `onyga-482313.OI.FN_ADS_ANCHOR_CAP`())                  AS feed_end
+    FROM u
+  ) x
+  CROSS JOIN k
 ),
 spend AS (
-  -- rate_win is one row, so the CROSS JOIN is a constant, not a fan-out. It is joined rather than
-  -- read through scalar subqueries so the window is derived ONCE per reference instead of once per
-  -- column that quotes it.
-  SELECT u.family,
-    ROUND(SUM(u.ad_cost), 2)                                            AS rate_window_spend,
-    ROUND(SAFE_DIVIDE(SUM(u.ad_cost), MAX(w.win_days)), 2)              AS spend_per_day
-  FROM `onyga-482313.OI.V_UNIFIED_DAILY` u
-  CROSS JOIN rate_win w
-  WHERE u.date BETWEEN w.win_start AND w.win_end
-  GROUP BY 1
+  SELECT
+    family,
+    MAX(feed_end)                                                        AS feed_end,
+    MAX(win_start)                                                       AS win_start,
+    MAX(win_end)                                                         AS win_end,
+    MAX(sig_start)                                                       AS sig_start,
+    ROUND(SUM(IF(date BETWEEN win_start AND win_end, ad_cost, 0)), 2)    AS rate_window_spend,
+    ROUND(SUM(IF(date BETWEEN sig_start AND win_end, ad_cost, 0)), 2)    AS signal_window_spend
+  FROM u_win
+  GROUP BY family
+),
+-- The window as ONE row, so every INVEST family publishes the same span even when it has no spend at
+-- all. Derived from `spend` (already grouped, a handful of rows) rather than from V_UNIFIED_DAILY
+-- again, so the heavy source is expanded once. With no rows at all this still returns a single
+-- all-NULL row, which is what keeps the CROSS JOIN below from deleting families.
+rate_win AS (
+  SELECT
+    MAX(feed_end)                                                        AS feed_end,
+    MAX(win_start)                                                       AS win_start,
+    MAX(win_end)                                                         AS win_end,
+    MAX(sig_start)                                                       AS sig_start,
+    DATE_DIFF(MAX(win_end), MAX(win_start), DAY) + 1                     AS win_days,
+    DATE_DIFF(MAX(win_end), MAX(sig_start), DAY) + 1                     AS sig_days,
+    DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(feed_end), DAY)   AS feed_age_days
+  FROM spend
+),
+w AS (
+  SELECT
+    r.*,
+    k.feed_stale_after_days,
+    k.direction_band,
+    (r.feed_age_days > k.feed_stale_after_days)                          AS is_stale,
+    -- THE SPAN IN WORDS, for the column a person reads. Real dates every day of the year, so it can
+    -- never drift out of agreement with the numbers beside it, and it says out loud that this is the
+    -- window the sanction is judged on.
+    CONCAT(
+      FORMAT_DATE('%-d %B', r.win_start), ' to ', FORMAT_DATE('%-d %B %Y', r.win_end), ', ',
+      CAST(r.win_days AS STRING), ' complete days — the window the agreed daily rate is judged on',
+      IF(r.feed_age_days > k.feed_stale_after_days,
+         CONCAT('. The advertising figures have not moved for ', CAST(r.feed_age_days AS STRING),
+                ' days, so this window is out of date and nothing can be certified against it.'),
+         '.'))                                                           AS win_basis,
+    -- The same window compressed to a clause that drops into the middle of a sentence: "spending
+    -- $59.29 a day over the 28 days to 18 August 2026".
+    CONCAT('over the ', CAST(r.win_days AS STRING), ' days to ',
+           FORMAT_DATE('%-d %B %Y', r.win_end))                          AS win_phrase,
+    -- AND THE SIGNAL WINDOW, NAMED SO IT CANNOT BE MISTAKEN FOR THE BINDING ONE.
+    CONCAT(
+      FORMAT_DATE('%-d %B', r.sig_start), ' to ', FORMAT_DATE('%-d %B %Y', r.win_end), ', ',
+      CAST(r.sig_days AS STRING), ' complete days — direction only. Nothing is judged on this window.')
+                                                                         AS sig_basis
+  FROM rate_win r CROSS JOIN k
 ),
 -- THE MONEY, READ NOT RECOMPUTED. One row per family for the running month, bounded at the orders
 -- watermark by the view that owns it.
@@ -240,61 +283,77 @@ SELECT
   b.launch_age_months,
   IF(b.launch_age_months <= 3, 'RAMP', 'PROOF')                                       AS phase,
   -- THE BINDING SANCTION.
-  -- NULL, NEVER ZERO, WHEN THE SPEND IS UNKNOWN (defect fix 2026-08-20). COALESCE(rate, 0) made
-  -- "we have no data for this family" read as "it spent nothing", which is the single most
-  -- flattering reading available and the one that hands out launch protection for free.
+  -- NULL, NEVER ZERO, WHEN THE SPEND IS UNKNOWN. COALESCE(rate, 0) made "we have no data for this
+  -- family" read as "it spent nothing", which is the single most flattering reading available and
+  -- the one that hands out launch protection for free.
   b.daily_investment,
-  -- NOT mtd_spend / mtd_spend_per_day any more. On the days when the running month is too short to
-  -- rate, the window is the last COMPLETE month and "month to date" is simply not what these two
-  -- cover. A name that is only right most of the month is the defect class this round exists to
-  -- close, so the names now say what they are: the spend inside the published rate window, and that
-  -- spend per day of it.
+  -- ─── THE RATE THAT BINDS: 28 complete trailing days. THIS is what the sanction gate reads. ───
   sp.rate_window_spend,
   sp.spend_per_day,
   ROUND(SAFE_DIVIDE(sp.spend_per_day, NULLIF(b.daily_investment, 0)), 2)               AS spend_rate_ratio,
-  -- TRUE means measured over. FALSE means measured under. NULL means NOT MEASURED -- which is not a
+  -- TRUE means measured over. FALSE means measured under. NULL means NOT MEASURED — which is not a
   -- pass, and protection_qualified below refuses to treat it as one.
   (sp.spend_per_day > b.daily_investment)                                              AS spend_breached,
-  -- WHICH DAYS THE RATE COVERS, as dates, as a count, in words, and as the one boolean a consumer
-  -- might have to branch on. Published so a reader can SEE the window rather than assume it is the
-  -- month they are standing in.
+  -- WHICH DAYS THE BINDING RATE COVERS: as dates, as a count, and in two ready-made English forms.
   w.win_start                                                                          AS rate_window_start,
   w.win_end                                                                            AS rate_window_end,
   w.win_days                                                                           AS rate_window_days,
   w.win_basis                                                                          AS rate_window_basis,
   w.win_phrase                                                                         AS rate_window_phrase,
-  w.is_fallback                                                                        AS rate_window_is_last_complete_month,
-  w.win_min_days                                                                       AS rate_window_minimum_days,
-  -- the catastrophe backstop, published but NOT enforcing. Money and its window both come straight
-  -- from V_FAMILY_PNL; nothing here recomputes either.
+  -- ─── THE DIRECTION SIGNAL: 7 complete days, ending on the same day. IT DOES NOT BIND. ───
+  -- Ori approved the ladder shape separately: the long window decides, the short one says which way
+  -- the rate is moving — a launch stepping up shows here weeks before the 28-day mean catches it.
+  -- Nothing in protection_qualified, spend_breached or spend_rate_ratio reads any of these columns,
+  -- and the name of every one of them says so.
+  sp.spend_per_day_7d_signal_only,
+  ROUND(SAFE_DIVIDE(sp.spend_per_day_7d_signal_only, NULLIF(sp.spend_per_day, 0)), 2)  AS spend_rate_direction_ratio,
+  CASE
+    WHEN sp.spend_per_day_7d_signal_only IS NULL OR sp.spend_per_day IS NULL OR sp.spend_per_day = 0 THEN NULL
+    WHEN sp.spend_per_day_7d_signal_only > sp.spend_per_day * (1 + w.direction_band)   THEN 'rising'
+    WHEN sp.spend_per_day_7d_signal_only < sp.spend_per_day * (1 - w.direction_band)   THEN 'falling'
+    ELSE 'steady'
+  END                                                                                  AS spend_rate_direction,
+  w.sig_start                                                                          AS signal_window_start,
+  w.win_end                                                                            AS signal_window_end,
+  w.sig_days                                                                           AS signal_window_days,
+  w.sig_basis                                                                          AS signal_window_basis,
+  -- ─── HOW OLD THE ADS FEED IS, AND WHETHER THAT IS STILL CERTIFIABLE ───
+  w.feed_end                                                                           AS ads_feed_last_day,
+  w.feed_age_days                                                                      AS ads_feed_age_days,
+  w.feed_stale_after_days                                                              AS ads_feed_stale_after_days,
+  COALESCE(w.is_stale, TRUE)                                                           AS rate_window_is_stale,
+  -- ─── THE LOSS CEILING: A DIFFERENT WINDOW, A DIFFERENT JOB, AND IT DOES NOT BIND ───
+  -- Calendar month to date, cut at the ORDERS watermark by V_FAMILY_PNL. Nothing here recomputes it.
+  -- The basis string exists so that a reader holding both windows on one row can never take this for
+  -- the rate window: one is a monthly allowance, the other is a trailing rate.
   b.monthly_loss_ceiling,
   mo.mtd_net_profit,
   mo.mtd_money_start,
   mo.mtd_money_end,
+  IF(mo.mtd_money_start IS NULL OR mo.mtd_money_end IS NULL, NULL,
+     CONCAT(FORMAT_DATE('%-d %B', mo.mtd_money_start), ' to ',
+            FORMAT_DATE('%-d %B %Y', mo.mtd_money_end),
+            ', the part of this calendar month that is measured — a monthly allowance, not the ',
+            'spend-rate window, and not what the sanction is judged on'))               AS loss_ceiling_window_basis,
   ROUND(100 * SAFE_DIVIDE(-mo.mtd_net_profit, NULLIF(b.monthly_loss_ceiling, 0)), 1)   AS ceiling_used_pct,
   (-mo.mtd_net_profit >= b.monthly_loss_ceiling)                                       AS ceiling_breached,
   b.stop_date,
   DATE_DIFF(b.stop_date, CURRENT_DATE('America/Los_Angeles'), DAY)                     AS days_left,
   -- ---------------------------------------------------------------------------------------------
-  -- WHETHER THE LAUNCH QUALIFIES FOR PROTECTION, AND WHAT THAT IS NOT (2026-08-20).
-  -- IT WAS CALLED exemption_live UNTIL THE SECOND ROUND, AND THE NAME WAS THE PROBLEM. "Live" reads
-  -- as "in force", which is the one thing it does not mean: this column says whether a launch has
-  -- EARNED protection under the rules Ori set, never whether any machine is applying it. The brief
-  -- downstream had already renamed its own copy to protection_qualified for exactly that reason,
-  -- which left the ambiguous name alive one join upstream, where a new consumer would meet it first.
-  -- Both names are now the same name.
+  -- WHETHER THE LAUNCH QUALIFIES FOR PROTECTION, AND WHAT THAT IS NOT.
+  -- It was called exemption_live until 2026-08-20 and the name was the problem: "live" reads as "in
+  -- force", which is the one thing it does not mean. This column says whether a launch has EARNED
+  -- protection under the rules Ori set, never whether any machine is applying it.
   --
-  -- This column is a STATEMENT, not yet a control. It says whether a launch is inside its window and
-  -- inside the rate Ori sanctioned. NOTHING READS IT TO STOP ANYTHING: V_LAUNCH_EXEMPTION still
-  -- hardcodes TRUE AS exempt_active, so every launch keeps its protection whatever this says. Wiring
-  -- this to the engine is Task 8b, and Task 8b is not built. Until it is, the only thing standing
-  -- between an over-sanction launch and the money is a person reading this row.
+  -- This column is a STATEMENT, not yet a control. NOTHING READS IT TO STOP ANYTHING:
+  -- V_LAUNCH_EXEMPTION still hardcodes TRUE AS exempt_active, so every launch keeps its protection
+  -- whatever this says. Wiring this to the engine is Task 8b, and Task 8b is not built. Until it is,
+  -- the only thing standing between an over-sanction launch and the money is a person reading it.
   --
-  -- IT FAILS CLOSED. Protection is granted only on POSITIVE evidence of adherence: a sanctioned rate
-  -- on file, a measured spend at or under it, a ceiling on file, and a measured loss under it. Any
-  -- one of those missing and the answer is FALSE -- no protection -- rather than the old behaviour,
-  -- where a missing spend was read as zero spend and the launch kept its protection. A sanction gate that
-  -- cannot see the spend must not certify it: silence is not compliance.
+  -- IT FAILS CLOSED, ON FIVE COUNTS. Protection is granted only on POSITIVE evidence of adherence:
+  -- inside the sanctioned window, a sanctioned rate on file, a measured spend at or under it, a
+  -- ceiling on file with a measured loss under it, and A WINDOW THAT IS STILL CURRENT. Any one of
+  -- those missing and the answer is FALSE. Silence is not compliance, and neither is a frozen feed.
   -- ---------------------------------------------------------------------------------------------
   -- The outer COALESCE closes the last hole: a family with no stop date on file would otherwise
   -- leave the whole chain NULL, and NULL is not FALSE to a consumer that only tests for FALSE.
@@ -303,6 +362,7 @@ SELECT
     AND b.stop_date            IS NOT NULL
     AND b.daily_investment     IS NOT NULL AND sp.spend_per_day  IS NOT NULL
     AND b.monthly_loss_ceiling IS NOT NULL AND mo.mtd_net_profit IS NOT NULL
+    AND NOT COALESCE(w.is_stale, TRUE)
     AND sp.spend_per_day      <= b.daily_investment
     AND -mo.mtd_net_profit     < b.monthly_loss_ceiling, FALSE)                        AS protection_qualified,
   t.org_m2, t.org_m1, t.org_m0,
@@ -335,7 +395,18 @@ SELECT
       END
   END                                                                                 AS verdict
 FROM b
-CROSS JOIN rate_win w
+CROSS JOIN w
 LEFT JOIN trend t  ON t.family  = b.family
-LEFT JOIN spend sp ON sp.family = b.family
+LEFT JOIN (
+  -- The rates, divided by the WINDOW LENGTH rather than by the number of days that happen to carry
+  -- rows, so a zero-spend day is a zero and not an absence.
+  SELECT
+    s.family,
+    s.rate_window_spend,
+    ROUND(SAFE_DIVIDE(s.rate_window_spend,
+                      DATE_DIFF(s.win_end, s.win_start, DAY) + 1), 2)                 AS spend_per_day,
+    ROUND(SAFE_DIVIDE(s.signal_window_spend,
+                      DATE_DIFF(s.win_end, s.sig_start, DAY) + 1), 2)                 AS spend_per_day_7d_signal_only
+  FROM spend s
+) sp ON sp.family = b.family
 LEFT JOIN money mo ON mo.family = b.family;
