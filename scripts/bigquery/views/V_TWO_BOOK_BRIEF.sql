@@ -927,7 +927,13 @@ fam AS (
     IF(b.has_m0, b.org_m0, NULL) AS organic_units_last_whole_month,
     -- THE WORD ITSELF, so the sentence cannot claim a direction the column does not, and so Rule 4
     -- has something mechanical to key on. NULL = no direction is being published.
-    CASE WHEN b.n_steps = 0                                THEN NULL
+    -- GATED ON THE BOOK, like every other launch concept. The organic series is read from
+    -- V_INVEST_STATUS, which holds only Invest families, so a Harvest row's steps are already zero —
+    -- but Rule 4 now asserts that a published direction APPEARS in the verdict, and only the Invest
+    -- verdict prints one. Leaving the gate implicit would make that assertion depend on the shape of
+    -- an upstream universe rather than on this row's book.
+    CASE WHEN b.book <> 'INVEST'                           THEN NULL
+         WHEN b.n_steps = 0                                THEN NULL
          WHEN b.steps_up > 0 AND b.steps_down = 0          THEN 'climbing'
          WHEN b.steps_down > 0 AND b.steps_up = 0          THEN 'falling'
          WHEN b.steps_up = 0 AND b.steps_down = 0          THEN 'flat'
@@ -1409,7 +1415,11 @@ agg AS (
     COUNTIF(money_measured AND COALESCE(inside_band, FALSE) AND net_profit < 0) AS n_in_band_below,
     COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
             AND COALESCE(spend_breached, FALSE))   AS n_over_rate,
-    COUNTIF(COALESCE(protection_qualified, FALSE))                          AS n_qualified,
+    -- Scoped to the priced set like every other sanction count, so the clause that compares it to
+    -- n_priced compares two counts of the same families. Upstream cannot qualify an unpriced family,
+    -- so this changes no number today; it removes the way a future change could.
+    COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL
+            AND COALESCE(protection_qualified, FALSE))                      AS n_qualified,
     COUNTIF(COALESCE(protection_enforced,  FALSE))                          AS n_enforced,
     COUNTIF(protection_enforced IS NOT NULL)                                AS n_enforcement_known,
     -- NULL, not 0, when nothing in the book could be checked — SUM ignores NULLs, and a book of
