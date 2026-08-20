@@ -184,7 +184,7 @@
 -- ---------------------------------------------------------------------------------------------
 -- STANDING RULE 0 — DESCRIBE THE MECHANISM, PUBLISH THE QUERY, NEVER PIN A MEASUREMENT.
 -- (Ori, 2026-08-20.) A DECLARED CONSTANT — a sanctioned $/day, a stop date, the 0.05 breakeven band,
--- the 1.30 halo gate, a 28-day window, the 100-word cap — is true because a person decided it. It may
+-- the 1.30 halo gate, a 28-day window, the word cap Rule 3 declares — is true because a person decided it. It may
 -- be written down and it may gate an assertion. A MEASUREMENT — a rate, a ratio, a ROAS, a halo, a
 -- net profit, a count, a percentage, a BYTE COUNT — is true only because something was computed from
 -- data on a day. It does not go in prose here and it may never gate anything.
@@ -1843,7 +1843,11 @@ tot AS (
 --
 -- verdict_words IS PUBLISHED SO RULE 3 IS CHECKABLE WITHOUT RE-DERIVING THE TOKENISER. A word is a
 -- whitespace-separated token containing at least one letter or digit, so a bare em dash is not one.
--- The cap is a DECLARED CONSTANT of 100 (see the header) and it is asserted, not merely intended.
+-- The cap is a DECLARED CONSTANT and it is asserted, not merely intended. IT IS WRITTEN DOWN IN
+-- EXACTLY ONE PLACE — Rule 3 in the header, where the enumeration that sets it also lives. This line
+-- carried a second copy of the figure until 2026-08-20 (sixth round) and the second copy still read
+-- 100 after Rule 3 had moved to the longest reachable verdict; a constant duplicated into prose
+-- drifts the moment the real one is re-derived. Read the number off Rule 3, never off here.
 --
 -- THE PLANNING CEILING IS REAL AND IT BINDS ON CONSUMERS, NOT ON THIS VIEW.
 -- Reading the view once is healthy. WRAPPING it is not: BigQuery inlines a view at every reference

@@ -639,3 +639,112 @@ before the SOP may be published. (2) T_TWO_BOOK_BRIEF still does not exist and n
 brief is at the planner ceiling and the first page or Cube consumer must read a materialised copy,
 which has to land BEFORE that consumer, not after the first timeout. (3) Task 8b Step 3's expectations
 remain unproven by construction and will stay that way until the hold is lifted and the edit is made.
+
+## 2026-08-20 — two-book P&L, repair round 6: the registry and the headers made true again (Task S)
+
+THE JOB WAS TO RESTATE, NOT TO REBUILD. Tasks Q and R changed the mechanism underneath the documents
+— delivery became a property of the DATE, the sanction verdict became a per-WINDOW answer, the
+verdict rules went from four to six and the word cap moved off its old constant — so this task
+re-derived every number and every guarantee in config.yaml, the plan, the spec, this journal and the
+two view headers Q and R own, against the deployed objects rather than against any report.
+
+NOTHING WAS RE-DEPLOYED AND NOTHING IS OWED. The only SQL file touched is V_TWO_BOOK_BRIEF.sql, and
+both changed lines are `--` comments in column 0, which the deploy strips: `diff` of
+`grep -v '^--'` before and after is empty, so the stored definition is byte-identical to what is
+live. V_INVEST_STATUS.sql was not edited at all.
+
+ORI'S PER-WINDOW RULING IS NOW A STANDING RULE, NOT A COMMIT MESSAGE. It is written into the plan as
+STANDING RULE 1, beside Standing Rule 0, and into the spec as point 4 of the superseded-in-part box
+where the other rulings live: a window may carry a FINDING only when ZERO of its days precede
+sanctioned_on; otherwise its excess is stated in full as a COMPARISON and convicts nobody. Both
+statements carry the WHY (a rate agreed on a date cannot be broken by days before that date), the
+reason it is per window and not per family (the two windows roll clean three weeks apart, so one flag
+is too strict before the long arm clears and too loose after), and the mechanism — with no pinned
+measurement and with the query that takes today's reading.
+
+CONFIG'S BRIEF ENTRY DESCRIBED AN OBJECT THAT NO LONGER EXISTS, and Task R said so in its own report
+rather than leaving it to be found. It carried four verdict rules where six are deployed, a Rule 2
+keyed to a per-FAMILY flag that Ori's ruling replaced, and a word cap that had moved. All rewritten
+from the deployed body, including the honest distinction R built the round on: a rule keyed on a WORD
+LIST is a tripwire and catches only last time's evasion, a rule keyed on a PUBLISHED COLUMN is a
+constraint and cannot be talked around.
+
+THE WORD CAP IS NOW WRITTEN DOWN IN EXACTLY ONE PLACE. It had three copies — Rule 3 in the header,
+the Standing Rule 0 example list in the same header, and a footer comment beside verdict_words — and
+two of them still held the superseded figure after Rule 3 had been re-derived. A declared constant
+duplicated into prose drifts the moment the real one moves, so the two copies were replaced by
+pointers to Rule 3.
+
+TWO PUBLISHED ASSERTIONS DID NOT DO WHAT THE ACCEPTANCE SECTION SAID THEY DID, and both were found by
+RUNNING them rather than reading them. Task 6's assertion names `exemption_live`, renamed to
+`protection_qualified` on 2026-08-20 — it does not fail quietly, it fails to compile
+("Unrecognized name"), while Acceptance item 5 marked it as passing. Task 4's calibration expression
+counts BOTH directions of bar-vs-truth disagreement and returns non-zero against the deployed view,
+while Acceptance item 2 claimed all five of its assertions pass — and alarming on a CONSERVATIVE
+break is the exact thing this design forbids in three other places, because the bar being stricter
+than the truth test is the direction it is meant to err in. The assertion was the stale artifact, not
+the ruling: it now reports conservative breaks and gates on permissive ones, and passes.
+
+A COUNT OF THINGS IN THE CODE IS A MEASUREMENT TOO — added to Standing Rule 0, because this is the
+class round 5 sampled past. A column count, the number of clauses in an AND, the number of rules a
+header enforces: none of them moves when the DATA moves, so they get written down as if declared, and
+every one of them has gone stale here because the CODE moved. Two were live this round:
+`protection_qualified`'s clause count was stated in config.yaml and in the plan and the deployed
+expression does not match it, and the brief's column count has been pinned twice. Both are gone; the
+query is published instead. The stale figures themselves are NOT quoted as exhibits — round 4 tried
+that and round 5 had to delete them again.
+
+A COMMENT THAT SHIPS INTO A LIVE BID ENGINE WAS QUOTING A MEASUREMENT AGAIN. Task 8 Step 3's block
+ships verbatim into V_KEYWORD_LIFT, and it claimed at least one family's total net ROAS "sits within
+a percent of 1.000". Re-measured at family grain on the settled window, the closest family sits
+further out than that — the claim was false on the day it was read, inside the one comment the block
+itself warns must never carry a figure. Replaced by the structural statement and the query. The same
+phrase in config.yaml's V_FAMILY_BAR entry was converted the same way.
+
+LINE-NUMBER POINTERS WERE RE-MEASURED, NOT TRUSTED. V_LAUNCH_EXEMPTION.sql :224 / :235 / :290 / :310
+are all still exact and Task 8b Step 3 depends on them. Task 8 Step 2's two pointers into
+V_KEYWORD_LIFT were NOT exact and are replaced by a grep on the comment text — which is the rule
+V_BOOK_ASSIGNMENT.sql's own header already states for this reason.
+
+EVERY PUBLISHED QUERY IN THE DESIGN WAS RUN, NOT READ. config.yaml's eight two-book entries, both
+view headers, the spec, the plan's task assertions and Task 9's SOP heredoc. Every one compiles and
+every one returns what the sentence beside it claims, with the two exceptions named above. Notable
+agreements re-derived rather than copied: Task 1's golden set still returns four zeros; the brief's
+acceptance query returns total_rows 2, all four reconciliation gaps 0.0, zero blank verdicts and
+zero rule violations across all six rules; the July sign-flip query returns two columns of opposite
+sign; the family-bar query returns the bars in the order its sentence describes; the account-delivery
+agreement query returns zero on both sides; the clamp query returns zero clamped; every PERMISSIVE
+row in the calibration query satisfies halo < 1, which is what the header's algebra requires;
+T_FAMILY_BAR's consumer check returns the writer and its caller and no views at all.
+
+ALL THREE HOLD BANNERS RE-VERIFIED BY DRY RUN. Task 8: Step 1's two captures, Step 4's two planner
+dry runs, Step 6's SECOND query on its empty-capture path and Step 7's determinism statements for
+both engines all validate; Step 6's FIRST query still carries its placeholder and still does not
+parse, exactly as the banner says. V_OOB_KEYWORD plans but takes minutes, which is now written down
+so a slow terminal is not read as a broken view. Task 8b: every statement dry-run again, including
+the MERGE and the restore as dry runs only — nothing was written to DE_LAUNCH_INVESTMENT, whose live
+row still reads the sanction Ori signed. Task 9: still BLOCKED on the same question, and every query
+inside its SOP heredoc runs and matches its caption.
+
+ONE CORNER FOUND IN TASK 8b's EXPECTATIONS AND WRITTEN DOWN RATHER THAN FIXED IN CODE. The `── 3`
+MERGE derives its test rate from the LONG arm alone, while spend_breached is the OR of both arms, so
+the raise clears the gate only while the short-window rate sits under the raised sanction plus the
+derived margin. Today it does; on a steeply ramping family it need not, and an operator would read a
+still-true spend_breached as Step 3 having failed. The expectation now says to read both arms off the
+`── 2` capture first.
+
+CORRECTING ROUND 5's OWN SURVIVOR LIST: its Standing Rule 0 sweep recorded the word cap among the
+declared constants that survive. That figure has since moved, and the entry above it in this journal
+should be read as the record of that round, not as a current statement.
+
+NOTHING IN THE ENGINE WAS TOUCHED. V_LAUNCH_EXEMPTION, V_ADS_COACH and V_COACH_CAMPAIGN_BUDGET are
+unchanged, no held decision was released, Tasks 8/8b remain on hold and Task 9 remains blocked.
+config.yaml parses and every two-book object is registered exactly once.
+
+OPEN / DATED: (1) Task 9 still needs Ori's own words on the two-versus-three declaration fields; the
+two-field ruling has now been reported second-hand in two consecutive rounds and is still not acted
+on, because Task 9 writes a STANDING RULE. (2) T_TWO_BOOK_BRIEF still does not exist and nothing
+builds it. (3) V_FAMILY_BAR.sql's header carries one hedged measurement of the same class fixed
+elsewhere this round ("rows sit within a percent of the 1.000 truth test", true today at the
+all-rows scope); that file belongs to no task this round and was not staged. (4) The leading edge of
+the rate window is still DISCLOSED, NOT CLOSED, upstream and in the brief.

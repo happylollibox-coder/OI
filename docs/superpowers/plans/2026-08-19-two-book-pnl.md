@@ -67,6 +67,67 @@ test working; explain the drift, do not rewrite the expectation.
 
 **When you find a pinned measurement, DELETE it.** Do not update it and do not stamp it.
 
+**A COUNT OF THINGS IN THE CODE IS A MEASUREMENT TOO** *(added 2026-08-20, sixth round)*. A view's
+column count, the number of clauses in an `AND`, the number of rules a header enforces — none of
+these move when the DATA moves, so they read like structure and get written down as if they were
+declared. Every one of them has gone stale in this design anyway, because the CODE moved:
+`V_TWO_BOOK_BRIEF`'s column count was pinned twice and was wrong both times, a round-5 report quoted
+a column count that `INFORMATION_SCHEMA` did not agree with on the day, `protection_qualified`'s
+clause count was written into two documents and the deployed expression does not match it, and the
+number of verdict rules was stated in `config.yaml` after two more had been added. *(No figure from
+any of those is repeated here. Round 4 kept its stale figures on the page "as the exhibit" and round
+5 had to delete them again; the SHAPE is what carries the lesson.)* The test is not "does it move
+with the data", it is **"can I be wrong about this sentence without touching it"**. If yes, publish
+the query — `SELECT COUNT(*) FROM \`onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name =
+'…'` — and delete the number.
+
+---
+
+## STANDING RULE 1 — a finding on the short window, a comparison on the long
+
+*Ori's ruling, 2026-08-20, sixth repair round. It sits beside Standing Rule 0 because it governs
+every verdict this design publishes, and because the previous cut of the rule — one flag per FAMILY —
+was both stricter and looser than what Ori asked for.*
+
+**A window may carry a FINDING — a verdict that the agreed rate was BROKEN, which forfeits launch
+protection — only when ZERO of its days precede `sanctioned_on`. Otherwise its excess is stated in
+full as a COMPARISON, and convicts nobody.**
+
+**WHY.** A rate agreed on a date cannot be broken by days before that date. Both live sanctions were
+signed months after their launches began, so the trailing windows cover long stretches on which no
+rate had been agreed. The spend on those days is a fact and is published; calling it a breach of an
+agreement that did not yet exist is not a defensible verdict, however unflattering the number.
+
+**THE RULE IS PER WINDOW, NOT PER FAMILY,** and that is the correction. The two windows roll clean on
+different days — the short window clears a sanction three weeks before the long one does. Applied to
+the FAMILY, the test is **too strict** before the long window clears (a short window lying wholly
+inside the sanction and over its rate could not be called a breach, so the verdict went quiet exactly
+where Ori wanted one) and **too loose** afterwards (once any window qualified, a sentence about the
+OTHER, part-pre-sanction window read as a finding too). Each arm answers for its own days and no arm
+answers for the other's.
+
+**THE MECHANISM, with no measurement in it.** `V_INVEST_STATUS` publishes, per arm, whether the
+sanction covers the window and whether that arm carries a finding, plus the three-valued OR of the
+two and the name of the arm that fired; `spend_breached` and its two per-arm columns are UNCHANGED
+and remain the COMPARISON. Three-valued throughout: NULL means *not measurable, or not wholly
+covered*, and never *no breach*. `V_TWO_BOOK_BRIEF` reads those columns rather than re-deriving
+anything, gates its conviction word on a COUNT of convicted families, and gates the MOOD of its
+closing sentence on whether a finding was published — so a verdict cannot retract a finding and then
+give an order about it. Both are asserted, not intended: see Rules 2, 5 and 6 in the header of
+`V_TWO_BOOK_BRIEF.sql` and the acceptance query at the foot of that file.
+
+**Which windows are findings and which are comparisons TODAY depends on the calendar and is therefore
+a MEASUREMENT.** It is not written here. Read it:
+
+```sql
+SELECT family, sanctioned_on, rate_window_start, short_window_start,
+       rate_window_days_before_sanction, short_window_days_before_sanction,
+       sanction_covers_28d_window, sanction_covers_7d_window,
+       spend_breached_28d, spend_breached_7d,
+       sanction_finding_28d, sanction_finding_7d, sanction_breach_finding_arm
+FROM `onyga-482313.OI.V_INVEST_STATUS` ORDER BY family
+```
+
 ---
 
 ## Non-negotiable house rules (read before Task 1)
@@ -696,10 +757,26 @@ SELECT
   COUNTIF(keyword_bar < 0.60)                                       AS bars_below_floor,    -- floor 0.60
   COUNTIF(halo_factor < 1.0 AND keyword_bar <> 1.0)                 AS credited_below_one,  -- no credit when halo < 1
   COUNTIF(keyword_bar IS NULL)                                      AS null_bars,
-  -- CALIBRATION: a family clearing its bar must also clear total net ROAS 1.0, and vice versa.
-  COUNTIF((ads_net_roas >= keyword_bar) <> (total_net_roas >= 1.0)) AS calibration_breaks
+  -- CALIBRATION, ONE-DIRECTIONAL. Corrected 2026-08-20, sixth round: this line used to read
+  --   COUNTIF((ads_net_roas >= keyword_bar) <> (total_net_roas >= 1.0)) AS calibration_breaks
+  -- which counts BOTH directions of disagreement, and the design ruled months ago that only one of
+  -- them is a defect. A CONSERVATIVE break (fails the bar, clears 1.0) is the bar being STRICTER
+  -- than the truth test, which is the direction the design WANTS and must never be alarmed on; the
+  -- algebra in V_FAMILY_BAR.sql's header proves the bar test is the arithmetic mean of the two ROAS
+  -- measures against 1.0, so conservative breaks are ordinary. Only a PERMISSIVE break (clears the
+  -- bar, fails 1.0) says the bridge is miscalibrated, and it is reachable only where halo < 1.
+  -- The two-directional form returned a NON-ZERO count against the deployed view on 2026-08-20
+  -- while the Acceptance section claimed this assertion passed — a published query contradicting
+  -- its own caption, the defect class Standing Rule 0 exists to catch.
+  COUNTIF(ads_net_roas <  keyword_bar AND total_net_roas >= 1.0)    AS conservative_reported,
+  COUNTIF(ads_net_roas >= keyword_bar AND total_net_roas <  1.0)    AS calibration_breaks
 FROM b;
 ```
+
+`conservative_reported` is **reported, never gated** — it is a measurement of a harmless population
+that moves with every restatement. `calibration_breaks` is the pass condition and must be `0`; if a
+row ever appears in it, check that it satisfies `halo_factor < 1` (the algebra says it must), and if
+it does not, the bridge and not the COGS is what broke.
 
 - [ ] **Step 2: Run it and confirm it fails**
 
@@ -1050,7 +1127,12 @@ SELECT
   COUNTIF(launch_age_months <= 3 AND phase <> 'RAMP')                   AS ramp_misassigned,
   COUNTIF(launch_age_months > 3  AND phase <> 'PROOF')                  AS proof_misassigned,
   COUNTIF(phase = 'RAMP' AND LOWER(verdict) LIKE '%unprofitab%')        AS ramp_judged_on_profit,
-  COUNTIF(spend_breached AND exemption_live)                            AS spend_breach_still_exempt,
+  -- protection_qualified, NOT exemption_live. Corrected 2026-08-20, sixth round: the column was
+  -- renamed on 2026-08-20 and this line kept the old name for two rounds, so the assertion did not
+  -- fail quietly — it failed to COMPILE ("Unrecognized name: exemption_live") while the Acceptance
+  -- section below marked this task's assertion as passing. Verify every column name against
+  -- INFORMATION_SCHEMA.COLUMNS before writing a query into a document.
+  COUNTIF(spend_breached AND protection_qualified)                      AS spend_breach_still_protected,
   COUNTIF(takeover_target_organic_units IS NULL
           AND LOWER(verdict) LIKE '%target%'
           AND LOWER(verdict) NOT LIKE '%not set%')                       AS null_target_judged_as_zero
@@ -1219,8 +1301,9 @@ Expected: `phase` follows the declared rule `IF(launch_age_months <= 3, 'RAMP', 
 phase a family is in depends on the run date and either answer can be correct — check the rule, not a
 phase written here. **`takeover_target_organic_units` is NULL on every row until Ori supplies one**,
 so a PROOF verdict must report that no take-over target is on record rather than compare against a
-number; a version of this line expected a verdict naming units "against the 400 target", and no such
-target exists. **What must never happen is a RAMP verdict mentioning profitability** — that is the
+number; a version of this line expected a verdict naming units against a numeric target, and no such target
+has ever existed on any row. (The invented figure is not repeated here; a stale number quoted as the
+exhibit is still a stale number on the page.) **What must never happen is a RAMP verdict mentioning profitability** — that is the
 assertion, and it is a property, not a count.
 
 - [ ] **Step 6: Register in config.yaml and commit**
@@ -1399,7 +1482,13 @@ git commit -m "feat: V_TWO_BOOK_BRIEF — Harvest and Invest reported separately
 >
 > What IS true: the statements that read only objects existing today (Step 1's capture, Step 4's two
 > planner dry runs, Step 7's determinism pulls) run against live BigQuery as written. Do not upgrade
-> that into a claim about the task as a whole. **A "safe to execute" sentence with nothing behind it
+> that into a claim about the task as a whole.
+> **RE-VERIFIED 2026-08-20, sixth round, by dry run rather than by re-reading this banner:** Step 1's
+> two captures, Step 4's `V_KEYWORD_LIFT` and `V_PANEL_OWNERSHIP` dry runs, Step 6's SECOND query
+> (with an empty before-capture, i.e. the `''` fallback path) and Step 7's determinism statements for
+> both engines all validate. `V_OOB_KEYWORD` plans, but SLOWLY — its dry run took minutes, not
+> seconds, which is worth knowing before you conclude a hung terminal means a broken view. Step 6's
+> FIRST query still carries its placeholder and still does not parse; the banner above is accurate. **A "safe to execute" sentence with nothing behind it
 > is the specific defect the previous round was raised to remove from Task 8b; it must not be written
 > back onto either task.**
 
@@ -1439,7 +1528,16 @@ cat /tmp/before_exempt_arms.csv
 grep -n "breakeven_roas\|>= 1.0\|< 1.0" scripts/bigquery/views/V_KEYWORD_LIFT.sql | head -20
 ```
 
-The LIFT engine's breakeven arm is documented around lines 1275–1290 (SP) and 1849+ (SB): *"Poor 28d net ROAS (< 1.0) with the bid above that breakeven -> cut TO it."* That literal `1.0` is the flat bar this task replaces.
+The LIFT engine's breakeven arm carries this comment in both the SP and the SB ladder: *"Poor 28d net
+ROAS (< 1.0) with the bid above that breakeven -> cut TO it."* That literal `1.0` is the flat bar this
+task replaces. **Find it by grep, never by line number** *(corrected 2026-08-20, sixth round — this
+line named two line ranges, both off by a line against the file as it stands, and a line number into
+a long engine file drifts on every edit and then points a reader at something unrelated; the
+same rule is already written into `V_BOOK_ASSIGNMENT.sql`'s header for exactly this reason)*:
+
+```bash
+grep -n "Poor 28d net ROAS" scripts/bigquery/views/V_KEYWORD_LIFT.sql
+```
 
 - [ ] **Step 3: Add the bar join and replace the flat 1.0**
 
@@ -1466,8 +1564,13 @@ Add the join to that CTE:
 -- The shape it shows — and the reason this join exists — is that the family with the account's
 -- strongest halo carries the LOWEST bar, i.e. the keywords carrying the organic sales are exactly
 -- the ones a flat 1.0 bar would cut hardest. DO NOT COPY A ROW OF THAT OUTPUT INTO THIS COMMENT.
--- The bars move with every rebuild of the settled window, and at least one family's total net ROAS
--- sits within a percent of 1.000 and crosses it on a routine restatement. Nothing here is a
+-- The bars move with every rebuild of the settled window, and a family whose total net ROAS sits
+-- near the 1.000 truth test crosses it on a routine restatement (ads money restates for about D+3).
+-- HOW NEAR ANY FAMILY IS TODAY IS A MEASUREMENT AND IS NOT WRITTEN HERE: this line claimed "within a
+-- percent" for two rounds and on 2026-08-20 the closest family sat further out than that, in a
+-- comment that ships verbatim into a live bid engine. Take it yourself:
+--   SELECT family, total_net_roas FROM `onyga-482313.OI.V_FAMILY_BAR` ORDER BY ABS(total_net_roas-1.0);
+-- Nothing here is a
 -- threshold. Reads the TABLE, never V_FAMILY_BAR:
 -- this view is at BigQuery's planning ceiling and inlining another view is what broke
 -- V_PANEL_OWNERSHIP on 2026-08-17. Six rows, LEFT JOIN, COALESCE to 1.0 so a missing family keeps
@@ -1636,6 +1739,14 @@ git commit -m "feat: bid engines judge against the per-family halo bar, not a fl
 > MERGE and the `── 4` restore as dry runs, the `── 3` re-assertion, `── 5`, and Step 5. None fails
 > to compile and none names a column that has been renamed away. Re-run them yourself; a statement
 > that ran in someone else's session is a claim in yours.
+> **RE-VERIFIED 2026-08-20, sixth round.** Every statement in this task was dry-run again against
+> today's objects — the planner-ceiling join, Step 1's assertion, Step 2's rate read, Step 3's column
+> check and the dry run of `V_LAUNCH_EXEMPTION.sql` as it stands, Step 4's `── 0`, `── 1`, `── 2`
+> (both reads), the `── 3` MERGE and its two follow-on reads, the `── 4` restore, `── 5`, the
+> per-family form of the assertion, and Step 5. All validate. The two write statements were dry-run
+> ONLY; nothing was written to `DE_LAUNCH_INVESTMENT`, whose live row still reads exactly the
+> sanction Ori signed. The **expectations** below are still unproven and still cannot be proven while
+> the hold stands — see expectation 4, which gained a further caveat this round about the short arm.
 >
 > **What is NOT backed, and cannot be — every EXPECTATION about what those statements return after
 > Step 3.** Step 3 is a hand edit to a live engine file, so the post-edit `V_LAUNCH_EXEMPTION` has
@@ -1998,13 +2109,27 @@ the window under it was redefined once):
    and `spend_breach_arm` empties.** That, and only that, is what the raise controls — it is the
    clause Step 3 wired the exemption to, and flipping it is the whole point of testing the other
    direction.
+   **THE RAISE IS COMPUTED FROM THE LONG ARM ALONE, SO CHECK THE SHORT ARM BEFORE EXPECTING IT TO
+   CLEAR** *(added 2026-08-20, sixth round; not a defect found in the wild, a corner the arithmetic
+   leaves open)*. The `── 3` MERGE sets the test rate to `CEIL(spend_per_day) + 10`, and
+   `spend_per_day` is the 28-day rate. `spend_breached` is the OR of the two arms, and the short arm
+   trips when the 7-day rate exceeds the sanction by more than `breach_margin_per_day`. So the raise
+   clears BOTH arms only while the 7-day rate sits at or under `CEIL(28-day rate) + 10 +
+   breach_margin_per_day`. Read `spend_per_day_7d`, `breach_margin_per_day` and
+   `short_window_breach_threshold_per_day` off the `── 2` capture first. If the family is mid-ramp
+   and the short arm is far above the long one, `spend_breached` can stay `true` after the raise —
+   that is the gate working, not Step 3 failing, and the fix is to read the two arms rather than to
+   raise the test rate until something flips.
    **`protection_qualified` follows ONLY IF the `── 2` capture showed `sanction_adherence_judged`
    TRUE, and the assertion reaching `0` needs more than that again. Do not expect either
    unconditionally** *(corrected 2026-08-20, fifth round — this line used to promise both flatly, and
    against the deployed gate that promise is unreachable on a day when the sanction is still too new;
    an operator who ran the step and read `false` would have concluded Step 3's edit had failed when
    nothing had)*. Two independent reasons, both structural:
-   - **`protection_qualified` is an AND over eight clauses, and the raise moves one of them.** It
+   - **`protection_qualified` is a long AND, and the raise moves one of its clauses.** *(The number
+     of clauses is deliberately not written here — this line said "eight" and `config.yaml` said
+     "eight" while the deployed expression had a different count; a count of things in the code is a
+     measurement, see Standing Rule 0. Read the expression.)* It
      also requires `sanction_adherence_judged` — a rate window lying wholly on or after
      `sanctioned_on`, so that the measured rate can be read as adherence to an agreement rather than
      as a comparison against one that did not yet exist. A sanction signed part-way through the
@@ -2063,9 +2188,16 @@ git commit -m "feat: launch exemption expires on the sanctioned spend rate and t
 
 > **⚠ BLOCKED — DO NOT RUN UNTIL ORI RULES ON THE OPEN QUESTION BELOW.**
 > This task writes `architecture/TWO_BOOK_PNL.md`, a file that does not exist yet and which
-> `V_FAMILY_PNL.sql:3` already cites as its SOP. Whatever it says becomes the standing rule, so it
-> has to be right on the day it lands. Three of its rules were wrong; two are corrected below, and
-> the third is a question only Ori can answer.
+> `V_FAMILY_PNL.sql`'s header already cites as its SOP. Whatever it says becomes the standing rule,
+> so it has to be right on the day it lands. Three of its rules were wrong; two are corrected below,
+> and the third is a question only Ori can answer.
+> **RE-VERIFIED 2026-08-20, sixth round:** the block is still BLOCKED and the blocker is unchanged —
+> Ori's own words on the declaration fields. Every query inside the SOP heredoc was RUN against the
+> live objects this round and each returns what the sentence beside it claims: the July sign-flip
+> query returns two columns of opposite sign; the family-bar query returns the bars in the order the
+> sentence describes, strongest halo carrying the lowest bar; the Harvest ranking query and the
+> `V_INVEST_STATUS` read both compile and return their captions. No line number is cited in the
+> banner any more — `V_FAMILY_PNL.sql:3` was one, and line numbers drift.
 
 ### OPEN QUESTION FOR ORI — how many fields make a declaration?
 
@@ -2254,8 +2386,14 @@ Items 1-6 and 10 are **met** — Tasks 1-7 shipped, see the STATUS table at the 
 that is the current intent, not a gap to close.
 
 1. `V_FAMILY_PNL` reproduces the spec §3 baseline (Task 1 assertion, zero mismatches). ✅
-2. `V_FAMILY_BAR` passes all five safety and calibration assertions (Task 4), and its re-check alarms
-   only on PERMISSIVE disagreements, never conservative ones. ✅
+2. `V_FAMILY_BAR` passes its four safety assertions and the one-directional calibration assertion
+   (Task 4), and its re-check alarms only on PERMISSIVE disagreements, never conservative ones. ✅
+   *(Corrected 2026-08-20, sixth round. This item said "all five safety and calibration assertions"
+   while Task 4 Step 1 still published a `calibration_breaks` expression that counted BOTH
+   directions — and against the deployed view that expression returns non-zero, so the item claimed
+   a pass for a query that fails. The assertion, not the ruling, was the stale artifact: alarming on
+   conservative breaks is the thing this design has forbidden in three other places. Task 4 Step 1
+   now reports conservative breaks and gates on permissive ones.)*
 3. `T_FAMILY_BAR` is rebuilt by the orchestrator before the engine `T_` builds (Task 5 Step 7). ✅
    The pass condition is the ORDERING of the two `CALL` positions in the deployed DDL, not their
    offsets — those move whenever the procedure is edited and are deliberately not recorded here.

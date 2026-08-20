@@ -23,7 +23,7 @@
 > STANDS has had its measurements removed and replaced with the query that produces them. **Never
 > copy a figure out of this document into an operational one.**
 
-> **⚠ SUPERSEDED IN PART — three points below no longer describe what is built (2026-08-20).**
+> **⚠ SUPERSEDED IN PART — four points below no longer describe what is built (2026-08-20).**
 > Read the implementation plan `docs/superpowers/plans/2026-08-19-two-book-pnl.md` alongside this
 > document, and the deployed files in `scripts/bigquery/` ahead of both.
 >
@@ -54,6 +54,30 @@
 >    production has Bunny and LolliBall in the Invest book with `takeover_target_organic_units` NULL,
 >    deliberately, until Ori supplies the numbers. Task 9 of the plan states both options and is
 >    blocked until he rules. Do not enforce the three-field rule from this document.
+> 4. **§5 judgement: A FINDING ON THE SHORT WINDOW, A COMPARISON ON THE LONG — and the rule is PER
+>    WINDOW, not per family** (Ori's ruling, 2026-08-20; Standing Rule 1 in the plan). This spec
+>    describes the sanctioned rate as a single test against a single window. What is built judges two
+>    trailing windows, a long one and a short one, and **a window may carry a FINDING — a verdict that
+>    the agreed rate was BROKEN, which forfeits launch protection — only when ZERO of its days precede
+>    `sanctioned_on`. Otherwise its excess is stated in full as a COMPARISON and convicts nobody.**
+>    WHY: a rate agreed on a date cannot be broken by days before that date, and both live sanctions
+>    were signed months after their launches began, so the trailing windows cover long stretches on
+>    which no rate had been agreed. WHY PER WINDOW: the two windows roll clean on different days — the
+>    short one clears a sanction three weeks before the long one — so a single per-FAMILY flag is
+>    **too strict** before the long window clears (it silenced a verdict on a short window that WAS
+>    wholly inside the sanction and over its rate) and **too loose** afterwards (one qualified window
+>    let a sentence about the other, part-pre-sanction window read as a finding). THE MECHANISM:
+>    `V_INVEST_STATUS` publishes, per arm, whether the sanction covers the window and whether that arm
+>    carries a finding, plus the three-valued OR of the two and the name of the arm that fired;
+>    `spend_breached` and its per-arm columns are unchanged and remain the COMPARISON. NULL means *not
+>    measurable, or not wholly covered*, never *no breach*. `V_TWO_BOOK_BRIEF` reads those columns,
+>    gates its conviction word on a count of convicted families, and gates the mood of its closing
+>    sentence on whether a finding was published, so it cannot retract a finding and then give an
+>    order about it — all asserted by the acceptance query at the foot of `V_TWO_BOOK_BRIEF.sql`.
+>    Which arm is a finding and which a comparison TODAY is a measurement of the calendar and is not
+>    written here: `SELECT family, sanctioned_on, rate_window_days_before_sanction,
+>    short_window_days_before_sanction, sanction_covers_28d_window, sanction_covers_7d_window,
+>    sanction_finding_28d, sanction_finding_7d FROM onyga-482313.OI.V_INVEST_STATUS ORDER BY family`.
 >
 > The §5 illustration of "a $2,500 ceiling" is an example number only. The ceilings Ori actually
 > sanctioned on 2026-08-13 are **$913 for Bunny** and **$1,674 for LolliBall** — DECLARED CONSTANTS
@@ -251,6 +275,12 @@ halo-adjusted bar applies. **The engine stops, not the human.**
 > rate** — enforcement in name only. The live rule is therefore `today ≤ end_date` **AND**
 > `spend rate ≤ daily_investment`, with the monthly loss ceiling demoted to a catastrophe backstop
 > sitting behind the rate.
+>
+> **AND THE RATE IS JUDGED ON TWO WINDOWS, EACH ANSWERING FOR ITS OWN DAYS** (Ori 2026-08-20; the
+> full statement is point 4 of the superseded-in-part box at the top of this document, and Standing
+> Rule 1 in the plan). `spend_breached` is the COMPARISON and fires on either arm. A FINDING — that
+> the agreed rate was BROKEN, forfeiting launch protection — exists only on an arm whose every day
+> falls on or after `sanctioned_on`, and it is decided PER WINDOW, never per family.
 >
 > **NO RATE, RATIO OR CEILING PERCENTAGE APPEARS ON THIS LINE, AND NONE MAY BE ADDED**
 > (Standing Rule 0). The figures that used to sit here went stale twice — once on their own, and once
