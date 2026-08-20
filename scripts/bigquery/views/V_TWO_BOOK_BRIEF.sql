@@ -27,11 +27,18 @@
 -- it is), and the organic trajectory in absolute units. Its net_profit column is still published — it
 -- is the cost of the investment, and the verdict frames it as money agreed to, not as a loss to chase.
 --
--- WINDOW HONESTY: the P&L columns are the settled 90-day window; the spend rate is MONTH-TO-DATE,
--- because a rate must be current to bind. The two are deliberately different windows, so every
--- verdict string says which one it is quoting ("over the last 90 days" vs "so far this month") and
--- both windows ride on the row as money_window and rate_window. Do not silently align them — a
--- 90-day average spend rate would not bind on anything.
+-- WINDOW HONESTY: the P&L columns are the settled 90-day window; the spend rate is the SHORT,
+-- CURRENT window, because a rate must be current to bind. The two are deliberately different
+-- windows, so every verdict string says which one it is quoting ("over the last 90 days" vs the
+-- rate window named in dates), and both windows ride on the row as money_window and rate_window.
+-- Do not silently align them — a 90-day average spend rate would not bind on anything.
+--
+-- AND THE RATE WINDOW IS NOT ALWAYS THIS MONTH. Upstream, a running month with fewer than 11 loaded
+-- ads days cannot produce a rate at all and falls back to the last COMPLETE calendar month, which on
+-- the observed ads lag is the 3rd to the 12th of every month. Nothing here may say "so far this
+-- month": rate_window, rate_window_start/_end/_days and the phrase inside every rate sentence are
+-- all READ from V_INVEST_STATUS, which measured the window, and rate_window_is_last_complete_month
+-- is published so a consumer can branch on it without parsing English.
 --
 -- VERDICTS ARE PLAIN SENTENCES ON PURPOSE. No rule names, no engine internals, no bare metric codes:
 -- ROAS is written as "$1.41 back for every ad dollar", the halo as "the organic sales those ads pull
@@ -43,13 +50,26 @@
 --   1. The spine became a FULL OUTER JOIN of the two family universes, so a declared family with no
 --      measured P&L gets a visible row instead of being joined away behind a confident total.
 --   2. sort_order and loss_rank are published; the morning read no longer arrives shuffled.
---   3. The windows are on the row (money_window / period_start / period_end, and rate_window), not
---      only inside the prose.
+--   3. The windows are on the row (money_window / period_start / period_end, and rate_window with
+--      rate_window_start / _end / _days), not only inside the prose.
 --   4. The advertising that reaches NEITHER book is published and named in the harvest verdict.
 --   5. The NULL branch leads the harvest CASE, so an unmeasured family cannot print a blank line.
 --   6. The raw token 'RAMP' became launch_stage in words; the sanctioned rate stopped rounding
 --      inside the one instruction on the object that tells Ori to do something.
 --   7. The trajectory is projected, and both book totals name the families their money leaves out.
+--
+-- 2026-08-20 (ROUND 4) — THE RATE WINDOW STRING WAS FALSE, AND ITS COMMENT ASSERTED SOMETHING THAT
+-- HAD STOPPED BEING TRUE. rate_window was built here as CONCAT('month to date, from ', the 1st of
+-- CURRENT_DATE's month), under a comment explaining that it named a start and no end "because the
+-- month-to-date rate upstream has no upper bound". The upstream rate had HAD an upper bound since
+-- commit 0e4e568, published as rate_window_start / _end / _days precisely so this could be read
+-- instead of guessed. Today the guess and the fact coincide; on 1 and 2 September the brief would
+-- have printed a September start over an August window. Two earlier rounds flagged it and neither
+-- fixed it. It is now read, not derived — and it had to be, because upstream a running month with
+-- too few loaded days now yields the LAST COMPLETE MONTH, a window the words "month to date"
+-- describe backwards. Every rate sentence takes its phrase from the same source, mtd_spend_per_day
+-- became spend_per_day for the same reason its window string had to change, and where the rate is
+-- last month's, both the family row and the book total say so in words.
 --
 -- 2026-08-20 (ROUND 2) — WHAT THE ADVERSARIAL REVIEW FOUND AFTERWARDS, AND WHAT CHANGED.
 --
@@ -119,7 +139,7 @@
 --   Verified the same morning: V_LAUNCH_EXEMPTION — the object the coach actually reads — returns
 --   protection ACTIVE on all 14 launch campaigns (Bunny 6 to 31 October, LolliBall 8 to 30 November),
 --   because exempt_active is a hardcoded TRUE and the coach's gate keys on campaign presence alone; it
---   reads neither that flag nor V_INVEST_STATUS.exemption_live. On the strength of that protection the
+--   reads neither that flag nor V_INVEST_STATUS.protection_qualified (called exemption_live then). On the strength of that protection the
 --   coach was holding 10 budget decisions (Bunny 4, LolliBall 6). Round 3 priced them at $188.86 a
 --   day, which was wrong — see ROUND 4 below; the true figure is $147.86.
 --   So Ori would read "now judged on money", conclude the trimming had started, leave the budgets
@@ -127,7 +147,7 @@
 --
 --   TWO STATES, NOT ONE, AND BOTH AS NUMBERS. Being over the sanction and being cut are different
 --   facts and this object may never again publish one as the other. protection_qualified is what the
---   sanction rules say (V_INVEST_STATUS.exemption_live, which fails closed); protection_enforced is
+--   sanction rules say (V_INVEST_STATUS.protection_qualified, which fails closed); protection_enforced is
 --   what the machine is doing; the held decisions and what applying them would free carry the size of
 --   the gap in dollars, on the family row AND on the book total, because that is the number Ori acts
 --   on. (Round 3 called the columns "the size of the gap in dollars" while summing something else
@@ -452,7 +472,20 @@ base AS (
     -- does, rename this column — do not quietly start relying on it under a name that says otherwise.
     ROUND(b.keyword_bar, 2)                                             AS keyword_bar_computed_not_applied,
     i.phase, i.launch_age_months, i.stop_date,
-    i.daily_investment, i.mtd_spend_per_day, i.spend_rate_ratio, i.spend_breached,
+    i.daily_investment, i.spend_per_day, i.spend_rate_ratio, i.spend_breached,
+    -- ─── THE RATE WINDOW IS READ, NEVER RE-DERIVED ───
+    -- It used to be built here as CONCAT('month to date, from ', the 1st of CURRENT_DATE's month).
+    -- That string was a guess dressed as a fact and it was wrong on two counts. It named a start with
+    -- no end, on the grounds that the upstream rate had no upper bound — untrue since the upstream
+    -- view began publishing rate_window_start/_end/_days. And it named TODAY's month, while the rate
+    -- is measured to the ads watermark: on 1 and 2 September the brief would have printed a September
+    -- start over an August window. It also could not survive the change immediately upstream, where a
+    -- running month with too few loaded days now falls back to the last COMPLETE month — a window the
+    -- words "month to date" describe backwards. The upstream view publishes the span as dates, as a
+    -- count, and in two ready-made English forms; this object reads them.
+    i.rate_window_start, i.rate_window_end, i.rate_window_days,
+    i.rate_window_basis, i.rate_window_phrase,
+    i.rate_window_is_last_complete_month,
     -- THE SANCTIONED RATE, WRITTEN THE WAY IT WAS AGREED. It used to be printed with FORMAT('$%.0f')
     -- inside the one instruction on the whole object that tells Ori to do something ("Bring spend
     -- back to $55 a day to restore it"). Harmless at $30 and $55; a $27.50 sanction would have
@@ -461,8 +494,10 @@ base AS (
     IF(i.daily_investment = TRUNC(i.daily_investment),
        FORMAT("$%'d", CAST(i.daily_investment AS INT64)),
        FORMAT('$%.2f', i.daily_investment))                             AS daily_investment_text,
-    -- exemption_live is NOT carried under its own name any more: it is one of two protection states
-    -- and the old name claimed to be both. It is read once, below, as protection_qualified.
+    -- The upstream column was called exemption_live until 2026-08-20. This object renamed its own
+    -- copy because "live" reads as "in force", which is the thing it does not mean; the ambiguous
+    -- name then survived one join upstream, where a new consumer would meet it first. Both are now
+    -- protection_qualified, so the rename is no longer a local translation of a misleading name.
     i.ceiling_used_pct, i.days_left,
     -- ─── THE LOSS ALLOWANCE HAS ITS OWN WINDOW AND IT IS A THIRD ONE ───
     -- This row already publishes two windows: money_window (the settled 90 days) and rate_window (the
@@ -487,11 +522,11 @@ base AS (
        (p.net_profit < 0 AND -p.net_profit > k.breakeven_band * p.ad_spend)) AS real_loss,
     (COALESCE(p.halo_factor, 0) >= k.wide_halo)                         AS wide_halo,
     -- ─── THE TWO PROTECTION STATES, KEPT APART ───
-    -- QUALIFIED: what the sanction rules say. exemption_live is already the fail-closed answer —
+    -- QUALIFIED: what the sanction rules say. The upstream column is already the fail-closed answer —
     -- protection only on positive evidence of a rate on file, a measured spend at or under it, a loss
     -- ceiling on file and a measured loss under it. Renamed here because "live" reads as "in force",
     -- which is precisely the thing it does not mean.
-    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.exemption_live, NULL)  AS protection_qualified,
+    IF(COALESCE(bk.book, 'HARVEST') = 'INVEST', i.protection_qualified, NULL) AS protection_qualified,
     -- ENFORCED: what the machine is doing. TRUE if either source can see a protected campaign; FALSE
     -- only when a source has campaigns for this family and none of them is protected; NULL when
     -- neither source has heard of the family at all. That third state matters more than it looks: a
@@ -577,13 +612,18 @@ fam AS (
     b.loss_rank,
     -- WHICH WINDOW THE RATE COLUMNS BELOW BELONG TO. Deliberately a different, shorter window from
     -- the one above: a spend rate has to be current to bind on anything. Both are now on the row, so
-    -- the mismatch is visible to someone reading the grid rather than the sentences. It names a
-    -- start and no end because the month-to-date rate upstream has no upper bound — its end is
-    -- "the latest day loaded", which is not necessarily period_end, and a fabricated end date here
-    -- would be worse than an absent one.
-    IF(b.mtd_spend_per_day IS NULL, NULL,
-       CONCAT('month to date, from ',
-              FORMAT_DATE('%-d %B %Y', DATE_TRUNC(CURRENT_DATE('America/Los_Angeles'), MONTH)))) AS rate_window,
+    -- the mismatch is visible to someone reading the grid rather than the sentences. It names a real
+    -- start AND a real end, in dates, off the upstream columns — no month name is inferred from
+    -- today's calendar, and where the running month was too short to rate, the string says the window
+    -- is last month's and says why.
+    IF(b.spend_per_day IS NULL, NULL, b.rate_window_basis)              AS rate_window,
+    b.rate_window_start,
+    b.rate_window_end,
+    b.rate_window_days,
+    -- TRUE only when the running month had too few loaded days to give a rate at all, so this row's
+    -- rate is last month's. Published as a boolean as well as in words, because a consumer that has
+    -- to branch on it should not have to read English to do it.
+    b.rate_window_is_last_complete_month,
     -- 'RAMP' used to be published raw here — a bare internal token in a grid of plain English.
     -- Same meaning, said the way the verdict already says it.
     CASE b.phase WHEN 'RAMP'  THEN 'in the early stretch'
@@ -595,7 +635,10 @@ fam AS (
     -- fires). Every one of these names itself now: spend_rate_ratio, ceiling_used_pct and days_left
     -- were engine vocabulary sitting in a grid whose stated rule is plain English.
     b.daily_investment,
-    b.mtd_spend_per_day,
+    -- NOT mtd_spend_per_day any more. The window behind it is the running month on most days and the
+    -- last COMPLETE month on the rest, so a name containing "month to date" is false for ten days of
+    -- every month. rate_window above says which days it covers.
+    b.spend_per_day,
     b.spend_rate_ratio      AS times_over_agreed_rate,
     -- ─── THE TWO STATES, PUBLISHED SEPARATELY, AND THE GAP BETWEEN THEM IN DOLLARS ───
     -- QUALIFIED = has this launch earned protection under the rules Ori set (rate, end date, loss
@@ -661,7 +704,12 @@ fam AS (
             'so nothing is holding it. Write the sanction down or move it back to being judged on money.')
           ELSE CONCAT(
             -- 1. THE RATE.
-            b.family, ' is spending ', FORMAT('$%.2f', b.mtd_spend_per_day), ' a day so far this month ',
+            -- "so far this month" was true on most days and false on the rest: the rate is measured
+            -- to the ads watermark, and where the running month is too short to rate it is measured
+            -- over the last COMPLETE month. The phrase comes from the same upstream window the
+            -- rate_window column publishes, so the sentence and the column can never disagree.
+            b.family, ' is spending ', FORMAT('$%.2f', b.spend_per_day), ' a day ',
+            b.rate_window_phrase, ' ',
             CASE
               WHEN b.spend_breached THEN CONCAT(
                 'against the ', b.daily_investment_text, ' a day you approved — about ',
@@ -796,7 +844,16 @@ fam AS (
           ELSE
             CONCAT(' Its sales are being counted but its advertising is not, so none of its cost is in the ',
                    'investment total above — check that its products carry the family name.')
-        END)
+        END,
+        -- WHEN THE RATE IS LAST MONTH'S, SAY SO IN THE SENTENCE, not only in the window column.
+        -- Between the 3rd and the 12th the running month holds too few loaded ads days to give a
+        -- rate at all, so the figure above is measured over the last complete month instead. A reader
+        -- who assumes it is this month's would read a stale rate as a current one — which is the same
+        -- class of error as the window string this round replaced, just made in the reader's head.
+        IF(COALESCE(b.rate_window_is_last_complete_month, FALSE),
+           CONCAT(" That spend figure is last month's: this month does not yet have enough measured ",
+                  'days to give a rate.'),
+           ''))
 
       -- ───────── HARVEST: dollars lead, the ratio explains them. ─────────
       -- NULL FIRST. A harvest family with no measured profit fell through every branch below (NULL >= 0
@@ -886,9 +943,22 @@ agg AS (
     -- old sentence said "3 families spending $X against $Y" while X and Y described 2. Both sides
     -- are now taken over the SAME priced subset, the count of that subset is published, and the
     -- families outside it are named in words instead of silently thinned out of the money.
-    COUNTIF(daily_investment IS NOT NULL AND mtd_spend_per_day IS NOT NULL) AS n_priced,
-    SUM(IF(daily_investment IS NOT NULL AND mtd_spend_per_day IS NOT NULL, daily_investment,   NULL)) AS daily_investment,
-    SUM(IF(daily_investment IS NOT NULL AND mtd_spend_per_day IS NOT NULL, mtd_spend_per_day, NULL)) AS mtd_spend_per_day,
+    COUNTIF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL) AS n_priced,
+    SUM(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, daily_investment, NULL)) AS daily_investment,
+    SUM(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, spend_per_day,    NULL)) AS spend_per_day,
+    -- ONE window covers every family in the book — it is derived once upstream, not per family — so
+    -- MAX is picking a constant, not choosing between rival answers. Carried onto the total so the
+    -- book row names the same days its family rows do.
+    MAX(rate_window_basis)                         AS rate_window_basis,
+    MAX(rate_window_phrase)                        AS rate_window_phrase,
+    MAX(rate_window_start)                         AS rate_window_start,
+    MAX(rate_window_end)                           AS rate_window_end,
+    MAX(rate_window_days)                          AS rate_window_days,
+    -- NOT LOGICAL_OR(COALESCE(..., FALSE)). Coalescing first turns "this book has no rate window at
+    -- all" into a confident FALSE — "no, the rate is not last month's" — on the HARVEST total, which
+    -- has no rate. LOGICAL_OR ignores NULLs and returns NULL when every input is NULL, which is the
+    -- honest answer for a book that never had a window.
+    LOGICAL_OR(rate_window_is_last_complete_month) AS rate_window_is_last_complete_month,
     COUNTIF(real_loss)                             AS n_real_losses,
     COUNTIF(COALESCE(spend_breached, FALSE))       AS n_over_rate,
     -- ─── THE TWO PROTECTION STATES AT BOOK LEVEL, AND THE GAP BETWEEN THEM ───
@@ -919,7 +989,7 @@ agg AS (
     -- Named, not just counted: "one family is missing" sends nobody anywhere. Ordered by family so
     -- the sentence is byte-identical on two consecutive pulls.
     STRING_AGG(IF(money_measured, NULL, family), ' and ' ORDER BY family) AS unmeasured_families,
-    STRING_AGG(IF(daily_investment IS NOT NULL AND mtd_spend_per_day IS NOT NULL, NULL, family),
+    STRING_AGG(IF(daily_investment IS NOT NULL AND spend_per_day IS NOT NULL, NULL, family),
                ' and ' ORDER BY family)                                 AS unpriced_families
   FROM base
   GROUP BY book
@@ -948,14 +1018,18 @@ tot AS (
     CAST(NULL AS FLOAT64)                            AS keyword_bar_computed_not_applied,
     CAST(NULL AS FLOAT64)                            AS organic_pct,
     CAST(NULL AS INT64)                              AS loss_rank,
-    IF(a.mtd_spend_per_day IS NULL, NULL,
-       CONCAT('month to date, from ',
-              FORMAT_DATE('%-d %B %Y', DATE_TRUNC(CURRENT_DATE('America/Los_Angeles'), MONTH)))) AS rate_window,
+    -- Same window, same words, same source as the family rows — never re-derived from today's
+    -- calendar, which is what let this string name a month the rate was not measured over.
+    IF(a.spend_per_day IS NULL, NULL, a.rate_window_basis)              AS rate_window,
+    a.rate_window_start,
+    a.rate_window_end,
+    a.rate_window_days,
+    a.rate_window_is_last_complete_month,
     CAST(NULL AS STRING)                             AS launch_stage,
     CAST(NULL AS INT64)                              AS launch_age_months,
     a.daily_investment,
-    a.mtd_spend_per_day,
-    ROUND(SAFE_DIVIDE(a.mtd_spend_per_day, NULLIF(a.daily_investment, 0)), 2) AS times_over_agreed_rate,
+    a.spend_per_day,
+    ROUND(SAFE_DIVIDE(a.spend_per_day, NULLIF(a.daily_investment, 0)), 2) AS times_over_agreed_rate,
     -- A BOOK IS NOT IN ONE PROTECTION STATE, so these two stay NULL on a total and the counts behind
     -- them are spoken in the verdict instead. The two columns that DO belong on a total are the held
     -- decisions and the budget they cover: those add up honestly, they are the number Ori acts on,
@@ -1075,8 +1149,8 @@ tot AS (
                   '. The one with an approved rate on record is spending ',
                   CONCAT('. The ', CAST(a.n_priced AS STRING),
                          ' with approved rates on record are spending '))),
-            FORMAT('$%.2f', a.mtd_spend_per_day),
-            ' a day in total so far this month against the ',
+            FORMAT('$%.2f', a.spend_per_day),
+            ' a day in total ', a.rate_window_phrase, ' against the ',
             IF(a.daily_investment = TRUNC(a.daily_investment),
                FORMAT("$%'d", CAST(a.daily_investment AS INT64)),
                FORMAT('$%.2f', a.daily_investment)),
@@ -1178,7 +1252,7 @@ tot AS (
                 IF(a.n_over_rate = 0,
                    'not a loss to chase.',
                    CONCAT('so it is not a loss to chase — but right now they are running ',
-                          FORMAT('$%.2f', a.mtd_spend_per_day - a.daily_investment),
+                          FORMAT('$%.2f', a.spend_per_day - a.daily_investment),
                           ' a day above what you approved, and that part you never agreed to.',
                           -- ...and do not ask for the correction twice. Where the coach is still
                           -- protecting families that no longer qualify, the clause above has already
@@ -1196,7 +1270,14 @@ tot AS (
                CONCAT(' ', a.unmeasured_families,
                       IF(a.n_families - a.n_measured = 1, ' has', ' have'),
                       ' nothing measured at all, so none of that cost includes ',
-                      IF(a.n_families - a.n_measured = 1, 'it.', 'them.'))))
+                      IF(a.n_families - a.n_measured = 1, 'it.', 'them.'))),
+            -- Same caveat as the family rows carry, for the same reason: between the 3rd and the
+            -- 12th of a month the running month has too few loaded ads days to give a rate, so the
+            -- spend figure in the sentence above is last month's.
+            IF(COALESCE(a.rate_window_is_last_complete_month, FALSE),
+               CONCAT(" Those spend figures are last month's: this month does not yet have enough ",
+                      'measured days to give a rate.'),
+               ''))
         END
     END                                              AS verdict
   FROM books s
