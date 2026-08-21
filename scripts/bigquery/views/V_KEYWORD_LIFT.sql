@@ -1365,7 +1365,8 @@ SELECT
          AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND a.clk_w >= a.cut_gate
-         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.roas_w, 0) < COALESCE(fb.keyword_bar, 1.0)
+         AND NOT COALESCE(fb.bar_exempt, FALSE) AND a.gp_w_raw > 0
          AND SAFE_DIVIDE(a.sp7 + a.sp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) > SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) * 1.05 AND COALESCE(a.current_bid, 0) > 0.17 THEN 'CUT_TO_BREAKEVEN'
 --     VOLUME FLOOR (Ori 2026-08-03): under ~30 clicks/week a campaign cannot decide anything —
 --     classes are noise. Seated keywords below the entry anchor LIFT to it (max($1, min(1.5x
@@ -1529,7 +1530,8 @@ SELECT
          AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND a.clk_w >= a.cut_gate
-         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.roas_w, 0) < COALESCE(fb.keyword_bar, 1.0)
+         AND NOT COALESCE(fb.bar_exempt, FALSE) AND a.gp_w_raw > 0
          AND SAFE_DIVIDE(a.sp7 + a.sp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) > SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) * 1.05 AND COALESCE(a.current_bid, 0) > 0.17
 --       v27.55: the floor is the platform floor only. The per-click worth is a CPC-scale
 --       quantity and must NOT be used as a bid floor (that is the v27.40 units trap): a bid of
@@ -1708,10 +1710,13 @@ SELECT
       THEN CONCAT(CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no net profit — park $0.25; the seat queue owns any comeback')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND a.clk_w >= a.cut_gate
-         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.roas_w, 0) < COALESCE(fb.keyword_bar, 1.0)
+         AND NOT COALESCE(fb.bar_exempt, FALSE) AND a.gp_w_raw > 0
          AND SAFE_DIVIDE(a.sp7 + a.sp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) > SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) * 1.05 AND COALESCE(a.current_bid, 0) > 0.17
       THEN CONCAT('under breakeven this window — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ',
-                  FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x: glide -10%/day toward the per-click worth $',
+                  FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x against the ',
+                  FORMAT('%.2f', COALESCE(fb.keyword_bar, 1.0)),
+                  'x this family needs to break even: glide -10%/day toward the per-click worth $',
                   CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.15), 2) AS STRING), ' (floor $0.15)')
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND (a.clk7 + a.clk8_28) < 30
@@ -1834,6 +1839,26 @@ SELECT
 --   (t90 / sb_t90, ends wm-1 per Task 4.7) — the longest complete-day pair this view carries.
   CAST(a.clk90 AS INT64) AS clicks_90d, CAST(a.ord90 AS INT64) AS orders_90d
 FROM agg a
+--   v27.100 (two-book P&L): the profit bar this arm cuts against is now the FAMILY's, set from
+--   that family's MEASURED organic halo, because ads-attributed net ROAS structurally undervalues
+--   any keyword that also drives organic sales — a keyword can be carrying a family and still read
+--   below 1.0 on the ads number alone. NO FIGURE OF ANY VINTAGE GOES IN THIS COMMENT: the bars are
+--   rebuilt daily from the settled window and a family sitting near the 1.000 truth test crosses it
+--   on a routine restatement. Run these by hand if you want the shape; neither is a threshold and
+--   nothing in this engine reads either one:
+--     SELECT family, ads_net_roas, total_net_roas, halo_factor, keyword_bar, bar_exempt
+--     FROM `onyga-482313.OI.V_FAMILY_BAR` ORDER BY keyword_bar;
+--     SELECT COUNT(*) AS campaigns, COUNT(DISTINCT family) AS families
+--     FROM `onyga-482313.OI.T_FAMILY_BAR`;
+--   READ THE TABLE, NEVER V_FAMILY_BAR. This view sits at BigQuery's planning ceiling and inlining
+--   another view is what stopped V_PANEL_OWNERSHIP planning on 2026-08-17, so this reads the
+--   materialised T_FAMILY_BAR that SP_SNAPSHOT_FAMILY_BAR rebuilds every day. That table is
+--   CAMPAIGN-grain — one row per enabled campaign that resolves to a real family, carrying that
+--   family's bar — which is why the key is campaign_id: the engines publish campaign_id and neither
+--   publishes a family column.
+--   LEFT JOIN, and the consumer COALESCEs to 1.0, so a campaign with no row is judged exactly as it
+--   is today. The bar may only ever LOWER this threshold, never raise one.
+LEFT JOIN `onyga-482313.OI.T_FAMILY_BAR` fb ON fb.campaign_id = CAST(a.campaign_id AS STRING)
 UNION ALL
 -- ── SB block: identical action grammar, incl. the capped PROBE_START gate (both arms since v3;
 --    probing a dark campaign is a budget artifact — the no-loss-cuts rule; running probes still
@@ -2009,7 +2034,8 @@ SELECT
          AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND a.clk_w >= a.cut_gate
-         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.roas_w, 0) < COALESCE(fb.keyword_bar, 1.0)
+         AND NOT COALESCE(fb.bar_exempt, FALSE) AND a.gp_w_raw > 0
          AND SAFE_DIVIDE(a.sp7 + a.sp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) > SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) * 1.05 AND COALESCE(a.current_bid, 0) > 0.17 THEN 'CUT_TO_BREAKEVEN'
 --     VOLUME FLOOR (Ori 2026-08-03): under ~30 clicks/week a campaign cannot decide anything —
 --     classes are noise. Seated keywords below the entry anchor LIFT to it (max($1, min(1.5x
@@ -2171,7 +2197,8 @@ SELECT
          AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30 THEN 0.25
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND a.clk_w >= a.cut_gate
-         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.roas_w, 0) < COALESCE(fb.keyword_bar, 1.0)
+         AND NOT COALESCE(fb.bar_exempt, FALSE) AND a.gp_w_raw > 0
          AND SAFE_DIVIDE(a.sp7 + a.sp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) > SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) * 1.05 AND COALESCE(a.current_bid, 0) > 0.17
 --       v27.55: the floor is the platform floor only. The per-click worth is a CPC-scale
 --       quantity and must NOT be used as a bid floor (that is the v27.40 units trap): a bid of
@@ -2350,10 +2377,13 @@ SELECT
       THEN CONCAT(CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no net profit — park $0.25; the seat queue owns any comeback')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND a.clk_w >= a.cut_gate
-         AND COALESCE(a.roas_w, 0) < 1.0 AND a.gp_w_raw > 0
+         AND COALESCE(a.roas_w, 0) < COALESCE(fb.keyword_bar, 1.0)
+         AND NOT COALESCE(fb.bar_exempt, FALSE) AND a.gp_w_raw > 0
          AND SAFE_DIVIDE(a.sp7 + a.sp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) > SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)) * 1.05 AND COALESCE(a.current_bid, 0) > 0.17
       THEN CONCAT('under breakeven this window — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ',
-                  FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x: glide -10%/day toward the per-click worth $',
+                  FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x against the ',
+                  FORMAT('%.2f', COALESCE(fb.keyword_bar, 1.0)),
+                  'x this family needs to break even: glide -10%/day toward the per-click worth $',
                   CAST(ROUND(GREATEST(SAFE_DIVIDE(a.gp7 + a.gp8_28, NULLIF(a.clk7 + a.clk8_28, 0)), 0.15), 2) AS STRING), ' (floor $0.15)')
     WHEN NOT a.is_auto AND NOT a.capped AND IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), COALESCE(a.camp_clk3, 0) < 13, COALESCE(a.camp_clk7, 0) < 30) AND NOT a.is_defense AND a.seat_rank <= a.slots
          AND (a.clk7 + a.clk8_28) < 30
@@ -2473,6 +2503,26 @@ SELECT
 --   v27.76 (Task 4.9): same additive 90d pair as the SP arm above — positional twin of the UNION.
   CAST(a.clk90 AS INT64) AS clicks_90d, CAST(a.ord90 AS INT64) AS orders_90d
 FROM sb_agg a
+--   v27.100 (two-book P&L): the profit bar this arm cuts against is now the FAMILY's, set from
+--   that family's MEASURED organic halo, because ads-attributed net ROAS structurally undervalues
+--   any keyword that also drives organic sales — a keyword can be carrying a family and still read
+--   below 1.0 on the ads number alone. NO FIGURE OF ANY VINTAGE GOES IN THIS COMMENT: the bars are
+--   rebuilt daily from the settled window and a family sitting near the 1.000 truth test crosses it
+--   on a routine restatement. Run these by hand if you want the shape; neither is a threshold and
+--   nothing in this engine reads either one:
+--     SELECT family, ads_net_roas, total_net_roas, halo_factor, keyword_bar, bar_exempt
+--     FROM `onyga-482313.OI.V_FAMILY_BAR` ORDER BY keyword_bar;
+--     SELECT COUNT(*) AS campaigns, COUNT(DISTINCT family) AS families
+--     FROM `onyga-482313.OI.T_FAMILY_BAR`;
+--   READ THE TABLE, NEVER V_FAMILY_BAR. This view sits at BigQuery's planning ceiling and inlining
+--   another view is what stopped V_PANEL_OWNERSHIP planning on 2026-08-17, so this reads the
+--   materialised T_FAMILY_BAR that SP_SNAPSHOT_FAMILY_BAR rebuilds every day. That table is
+--   CAMPAIGN-grain — one row per enabled campaign that resolves to a real family, carrying that
+--   family's bar — which is why the key is campaign_id: the engines publish campaign_id and neither
+--   publishes a family column.
+--   LEFT JOIN, and the consumer COALESCEs to 1.0, so a campaign with no row is judged exactly as it
+--   is today. The bar may only ever LOWER this threshold, never raise one.
+LEFT JOIN `onyga-482313.OI.T_FAMILY_BAR` fb ON fb.campaign_id = CAST(a.campaign_id AS STRING)
 )
 -- v27.37: bid_floor and probe_bid are internal working columns (per-format platform floor and the
 -- anchored probe entry bid) — kept out of the published schema like bid_hold / bud_hold.
