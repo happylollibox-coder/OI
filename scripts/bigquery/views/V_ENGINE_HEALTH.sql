@@ -131,7 +131,31 @@ c9 AS (  -- no-op leakage: engines carry their own guards; the gate counts what 
     IF(COUNTIF(verdict_reason LIKE 'no-op%') > 10, 'AMBER', 'GREEN'),
     'v27.29/v27.46 no-op guards should catch these upstream; the gate is the belt'
   FROM pf
+),
+c10 AS (  -- v27.101: view-body headroom — no view may creep up on BigQuery's hard ceiling unseen
+  -- V_KEYWORD_LIFT reached the ceiling with a fraction of a percent to spare and nothing measured
+  -- it, so the discovery came from a change that would not fit. Past the ceiling a view can no
+  -- longer be edited at all, only migrated, and the migration lands under whatever deadline
+  -- happens to expose it. This check fires while the fix is still an edit.
+  --   Declared constants: ceiling 262,144 characters (BigQuery's maximum view query length),
+  --   amber at 70% of it, red at 85%.
+  -- The number is CHARACTERS, matching LENGTH() and BigQuery's own limit — not bytes, which
+  -- overstate any view whose commentary carries non-ASCII text.
+  -- Pre-deploy twin (measures the repo files, before BigQuery ever sees them):
+  --   python3 scripts/bigquery/check_view_body_size.py
+  SELECT 'view_body_headroom',
+    ROUND(MAX(LENGTH(view_definition)) / 262144 * 100, 2),
+    'largest view body as % of the 262,144-character ceiling · amber > 70, red > 85',
+    CASE WHEN MAX(LENGTH(view_definition)) > 262144 * 0.85 THEN 'RED'
+         WHEN MAX(LENGTH(view_definition)) > 262144 * 0.70 THEN 'AMBER'
+         ELSE 'GREEN' END,
+    CONCAT('largest is ',
+           ARRAY_AGG(table_name ORDER BY LENGTH(view_definition) DESC LIMIT 1)[OFFSET(0)],
+           ' — comment markers in column 0 cost nothing (the deploy strips them), indented ones ',
+           'are shipped to BigQuery and charged against the ceiling')
+  FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS`
 )
 SELECT * FROM c1 UNION ALL SELECT * FROM c2 UNION ALL SELECT * FROM c3
 UNION ALL SELECT * FROM c4 UNION ALL SELECT * FROM c5 UNION ALL SELECT * FROM c6
-UNION ALL SELECT * FROM c7 UNION ALL SELECT * FROM c8 UNION ALL SELECT * FROM c9;
+UNION ALL SELECT * FROM c7 UNION ALL SELECT * FROM c8 UNION ALL SELECT * FROM c9
+UNION ALL SELECT * FROM c10;

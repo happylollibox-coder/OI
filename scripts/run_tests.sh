@@ -11,16 +11,28 @@ case "$MODE" in
   all|--mode=all)
     DB_EXIT=0
     DASH_EXIT=0
+    SIZE_EXIT=0
+    echo "=== Checking view-body headroom ==="
+    (cd "$ROOT" && python3 scripts/bigquery/check_view_body_size.py) || SIZE_EXIT=$?
+    echo ""
     echo "=== Running DB tests ==="
     (cd "$ROOT" && python3 scripts/bigquery/tests/run_all_tests.py) || DB_EXIT=$?
     echo ""
     echo "=== Running Dashboard (Playwright) tests ==="
     (cd "$ROOT/dashboard-react" && npm run test) || DASH_EXIT=$?
-    [ $DB_EXIT -ne 0 ] || [ $DASH_EXIT -ne 0 ] && exit 1
+    if [ $SIZE_EXIT -ne 0 ] || [ $DB_EXIT -ne 0 ] || [ $DASH_EXIT -ne 0 ]; then exit 1; fi
     exit 0
     ;;
   db|--mode=db)
-    cd "$ROOT" && python3 scripts/bigquery/tests/run_all_tests.py
+    DB_EXIT=0
+    SIZE_EXIT=0
+    echo "=== Checking view-body headroom ==="
+    (cd "$ROOT" && python3 scripts/bigquery/check_view_body_size.py) || SIZE_EXIT=$?
+    echo ""
+    echo "=== Running DB tests ==="
+    (cd "$ROOT" && python3 scripts/bigquery/tests/run_all_tests.py) || DB_EXIT=$?
+    if [ $SIZE_EXIT -ne 0 ] || [ $DB_EXIT -ne 0 ]; then exit 1; fi
+    exit 0
     ;;
   dashboard|--mode=dashboard)
     cd "$ROOT/dashboard-react" && npm run test
