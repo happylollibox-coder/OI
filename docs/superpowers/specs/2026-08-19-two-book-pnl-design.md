@@ -23,7 +23,10 @@
 > STANDS has had its measurements removed and replaced with the query that produces them. **Never
 > copy a figure out of this document into an operational one.**
 
-> **⚠ SUPERSEDED IN PART — four points below no longer describe what is built (2026-08-20).**
+> **⚠ SUPERSEDED IN PART — the numbered points below no longer describe what is built**
+> (2026-08-20, extended 2026-08-21). *(This line counted the points until 2026-08-21 and said
+> "four" while there were five: a count of things in a DOCUMENT is a count of things in the
+> code by another name, and it goes stale on the edit that adds the next one — Standing Rule 0.)*
 > Read the implementation plan `docs/superpowers/plans/2026-08-19-two-book-pnl.md` alongside this
 > document, and the deployed files in `scripts/bigquery/` ahead of both.
 >
@@ -79,6 +82,29 @@
 >    short_window_days_before_sanction, sanction_covers_28d_window, sanction_covers_7d_window,
 >    sanction_finding_28d, sanction_finding_7d FROM onyga-482313.OI.V_INVEST_STATUS ORDER BY family`.
 >
+> 5. **§5 wording: QUALIFICATION AND FINDING ARE DIFFERENT QUESTIONS, AND BOTH ANSWERS STAND
+>    TOGETHER** (Ori's ruling, 2026-08-21; Standing Rule 2 in the plan). This spec describes the
+>    exemption as one test with one answer. What is built asks two. **`protection_qualified` is
+>    FORWARD-looking — are you inside the terms that grant protection right now — and
+>    `sanction_breach_finding` is BACKWARD-looking — can I say you broke the agreement.** A row may
+>    answer them differently and that is NOT a contradiction to be reconciled. WHY: protection is a
+>    privilege on present terms, while a finding is an accusation about the past that Standing Rule 1
+>    confines to days the agreement covered, so a family can be over its approved rate today (no
+>    qualification) on a window that mostly predates the agreement (no finding). Forcing agreement
+>    loses information either way — derive the finding from qualification and you convict over
+>    uncovered days; derive qualification from the finding and you grant protection to a family
+>    demonstrably over its rate, purely because the accusation is not yet available. **THE DEFECT WAS
+>    PROSE, NOT ARITHMETIC:** the columns were already right and the sentences read as one question.
+>    The verdict must make the split VISIBLE — a forward clause and a backward clause, both spoken on
+>    every priced INVEST row, neither taking the other back. MECHANISM: `V_TWO_BOOK_BRIEF` builds the
+>    forward answer once and publishes it as `verdict_qualification_sentence` so prose and column
+>    cannot drift, splits its grid the same way (`protection_qualified` +
+>    `families_qualified_for_protection` against `sanction_breach_finding` +
+>    `families_with_a_sanction_finding`), and asserts both clauses in the acceptance query at the foot
+>    of its file. Which way each family answers today is a measurement and is not written here:
+>    `SELECT family, protection_qualified, sanction_breach_finding, sanction_breach_finding_arm,
+>    spend_breached, sanction_verdict FROM onyga-482313.OI.V_INVEST_STATUS ORDER BY family`.
+>
 > The §5 illustration of "a $2,500 ceiling" is an example number only. The ceilings Ori actually
 > sanctioned on 2026-08-13 are **$913 for Bunny** and **$1,674 for LolliBall** — DECLARED CONSTANTS
 > on `DE_LAUNCH_INVESTMENT`, which is why they may be written down at all. Never restore a sanctioned
@@ -86,9 +112,14 @@
 
 ## 1. The problem, and how we found it
 
-> **QUARANTINED HISTORICAL ANALYSIS (2026-08-20).** The figures in this section are the findings of
-> three one-off investigations run on 2026-08-19. **No live object restates them**, which is why they
-> are kept rather than replaced with a query: they are the reasoning trail for why two whole
+> **QUARANTINED HISTORICAL ANALYSIS (2026-08-20, narrowed 2026-08-21).** The figures in this section
+> are the findings of one-off investigations run on 2026-08-19. **The box originally covered all
+> three attempts on the premise that no live object restates them. That premise was false for
+> Attempt 3** — `V_FAMILY_PNL` restates exactly that pair, the ads-attributed side of it had already
+> drifted, and the plan's SOP publishes the query for it. Attempt 3's figures have therefore been
+> replaced by that query, and the quarantine now covers **Attempts 1 and 2 only**, where the
+> instruments (a matched difference-in-differences, a GP-ROAS decomposition) exist nowhere in the
+> warehouse and cannot be re-run from a view. Those are kept rather than replaced with a query: they are the reasoning trail for why two whole
 > approaches were abandoned, and deleting them would leave the next reader free to rebuild both.
 > Treat every number below as a dated finding, never as the current state of anything, and **never
 > copy one into a header, a registry entry, a plan step or an SOP.** The current state lives behind
@@ -116,8 +147,19 @@ Tracing the order-value collapse found it concentrated in the largest family, wh
 absorbed two new products selling at $16–17 an order against an original product at $47–54.
 
 **Attempt 3 — Ori's correction: include the organic halo.** Measured on TOTAL sales rather than the
-ads-attributed slice, July made **+$3,682, not −$5,612**. The "collapse" was an artifact of looking
-at a slice that excludes 30–40% of units. The business is profitable; the reporting was not.
+ads-attributed slice, July 2026 came out POSITIVE where the ads-attributed lens read it as a loss.
+The "collapse" was an artifact of looking at a slice that excludes a large share of units. The
+business was profitable; the reporting was not. **THIS IS THE ONE FINDING IN §1 THAT A LIVE OBJECT
+DOES RESTATE, so its figures are not written here** (Standing Rule 0, applied 2026-08-21 — they were,
+and the ads-attributed side had already drifted against the live view, because ads money restates).
+Run it; the two columns must carry OPPOSITE SIGNS, and that sign flip, not either magnitude, is the
+finding:
+
+```sql
+SELECT ROUND(SUM(net_profit), 0)                    AS net_profit_including_halo,
+       ROUND(SUM(ad_spend * (ads_net_roas - 1)), 0)  AS ads_attributed_only
+FROM `onyga-482313.OI.V_FAMILY_PNL` WHERE period_label = '2026-07';
+```
 
 ### The actual defects, once measured correctly
 

@@ -130,6 +130,56 @@ FROM `onyga-482313.OI.V_INVEST_STATUS` ORDER BY family
 
 ---
 
+## STANDING RULE 2 — qualification and finding are DIFFERENT QUESTIONS, and both answers stand together
+
+*Ori's ruling, 2026-08-21, seventh repair round. It sits beside Standing Rules 0 and 1 because it
+governs how every INVEST verdict in this design is WORDED, and because the previous rounds kept
+trying to make one of the two answers follow from the other.*
+
+**`protection_qualified` is FORWARD-looking: are you inside the terms that grant protection RIGHT
+NOW. `sanction_breach_finding` is BACKWARD-looking: can I say you BROKE the agreement. A row may
+answer the two differently, and when it does, that is not a contradiction and must not be "fixed".**
+
+**WHY.** Protection is a privilege extended on terms, and the terms are about the present: a launch
+keeps its exemption while it is inside its declared window and spending at or under the rate Ori
+sanctioned. A finding is an accusation about the past, and Standing Rule 1 says an accusation may
+only rest on days the agreement actually covered. The two therefore come apart in an entirely
+ordinary way, and today they do: a family can be spending above its approved rate — so it does NOT
+qualify for protection now — while most of the window being measured predates the agreement, so
+there is NO finding that the agreement was broken. Both sentences are true at once. Forcing them to
+agree destroys information in whichever direction you force it: make the finding follow
+qualification and you convict families over days no rate had been agreed on, which Standing Rule 1
+forbids; make qualification follow the finding and you hand launch protection to a family that is
+demonstrably over its rate today, on the technicality that you cannot yet convict it of anything.
+**Nobody is entitled to protection merely because the accusation is not yet available.**
+
+**THE DEFECT THIS RULE NAMES IS PROSE, NOT ARITHMETIC.** The columns had it right; the sentences read
+as one question. **The verdict must make the two questions VISIBLY SEPARATE** — a forward clause and
+a backward clause, both spoken on every priced INVEST row, neither taking the other back. A verdict
+that answers the backward question and then falls silent on the forward one reads as an acquittal,
+and a reader takes "no finding" for "still protected", which is the opposite of the truth today.
+
+**THE MECHANISM, with no measurement in it.** `V_INVEST_STATUS` publishes the forward answer as
+`protection_qualified` and the backward answer as `sanction_breach_finding` (three-valued: NULL means
+*not measurable, or not wholly covered*, never *no breach*), plus the per-arm `sanction_finding_28d`
+/ `sanction_finding_7d` and the arm that fired. `V_TWO_BOOK_BRIEF` builds the forward answer ONCE,
+publishes it as `verdict_qualification_sentence` so the prose and the column cannot drift apart, and
+speaks it as its own clause alongside the finding clause on every priced INVEST row; its grid splits
+the same way — `protection_qualified` + `families_qualified_for_protection` against
+`sanction_breach_finding` + `families_with_a_sanction_finding` — and its acceptance query asserts
+that the two clauses are both present and that neither is derived from the other. **Neither view is
+edited by this rule; it records what they must keep doing.**
+
+**Which way each family answers TODAY is a MEASUREMENT and is not written here.** Read it:
+
+```sql
+SELECT family, protection_qualified, sanction_breach_finding, sanction_breach_finding_arm,
+       sanction_covers_28d_window, sanction_covers_7d_window, spend_breached, sanction_verdict
+FROM `onyga-482313.OI.V_INVEST_STATUS` ORDER BY family
+```
+
+---
+
 ## Non-negotiable house rules (read before Task 1)
 
 These are not style preferences. Each one exists because breaking it broke production in the last week.
@@ -267,8 +317,10 @@ Everything else reads this. It must be right before anything is built on it.
 
 Save as `/tmp/t1_assert.sql`. It must FAIL now (view does not exist) and PASS after Step 3.
 
-**A note on the four rows of `want` below, because Standing Rule 0 forbids a measured number in
-prose and this is not prose.** They are a **GOLDEN EXPECTATION inside a regression test**: a
+**A note on the `want` rows below, because Standing Rule 0 forbids a measured number in
+prose and this is not prose.** *(This heading counted them until 2026-08-21. A count of things in
+the code is a measurement too, and it would go stale the moment a family is added to the frozen
+set — so the count is gone and the block below is the authority for how many there are.)* They are a **GOLDEN EXPECTATION inside a regression test**: a
 measurement deliberately frozen on 2026-08-19, whose entire purpose is to detect drift, compared
 under stated tolerances (`np` ±25, `tnr`/`halo` ±0.02). Inside a test the number IS the subject; in
 prose it is a claim about today, which is what the rule bans. Do not copy these values into a
@@ -428,29 +480,140 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
 ```
 Expected: identical hash both times.
 
-- [ ] **Step 7: Register in config.yaml**
+- [ ] **Step 7: Register in config.yaml — IDEMPOTENTLY, and prove uniqueness afterwards**
 
-Insert into the `views:` list (NOT at the end of the file). Verify the anchor first:
+> **⚠ THE OLD FORM OF THIS STEP CORRUPTED THE REGISTRY AND ITS OWN CHECK PASSED ANYWAY**
+> *(found 2026-08-21, seventh repair round)*. It computed an insertion point and unconditionally
+> spliced the entry in, so **re-running it appended a SECOND `V_FAMILY_PNL` entry** — and the
+> verification underneath printed `PARSES OK, views: N` and was accepted, because a **COUNT cannot
+> see a duplicate**: a file with one `V_FAMILY_PNL` and a file with two both parse, and both report
+> a plausible number. A duplicate registry entry is precisely the corruption that survives review —
+> `yaml.safe_load` keeps both list items, every consumer that scans the list sees the object twice,
+> and whichever description is read last silently wins. The duplicate is not on disk today; the
+> mechanism that made it was still in this plan until this round.
+>
+> **Two changes, and every registration step in this plan now uses both.**
+> 1. **The insert is idempotent.** The helper below is REPLACE-OR-INSERT keyed on `name`: if the
+>    section already carries an entry with that name it rewrites that entry in place; only when the
+>    name is absent does it splice. Re-running it is a no-op on an unchanged entry.
+> 2. **The check is a UNIQUENESS TEST, not a count.** It fails, with a non-zero exit status and the
+>    offending names printed, when any name appears twice within a section or across sections. The
+>    object count it prints is *reported, never gated* — it is a measurement of a registry other
+>    sessions are also editing (Standing Rule 0), and no step in this plan may compare it to a
+>    number written down anywhere.
+
+Save the helper once as `/tmp/register_object.py` — **every later registration step in this plan
+calls this same file**:
 
 ```bash
-python3 - << 'PY'
-import re
-p='config.yaml'; lines=open(p).read().split('\n')
-t=next(i for i,l in enumerate(lines) if l.strip()=='tables:')
-end=next(i for i in range(t-1,0,-1) if lines[i].strip() and not lines[i].startswith('#'))+1
-entry = '''  - name: "V_FAMILY_PNL"
+cat > /tmp/register_object.py << 'PY'
+"""REPLACE-OR-INSERT one object into a config.yaml section. Idempotent by `name`.
+Usage: python3 /tmp/register_object.py <section> <name> <entry-file>
+  <section>    views | tables | stored_procedures | functions
+  <name>       the object's name, e.g. V_FAMILY_PNL
+  <entry-file> a file holding the COMPLETE entry, indented exactly as the section's siblings are,
+               starting with the `  - name: "..."` line.
+Never appends at the end of the file (house rule 6: the tail is inside `monitoring:`)."""
+import sys, io
+
+section, name, entry_file = sys.argv[1], sys.argv[2], sys.argv[3]
+entry = [l for l in io.open(entry_file).read().rstrip('\n').split('\n')]
+assert entry[0].lstrip().startswith('- name:') and name in entry[0], \
+    "entry file must begin with the `- name:` line and name the object"
+
+lines = io.open('config.yaml').read().split('\n')
+
+# Section body = from the `section:` key to the next top-level key.
+start = next(i for i, l in enumerate(lines) if l.rstrip() == section + ':')
+end = next((i for i in range(start + 1, len(lines))
+            if lines[i] and not lines[i][0].isspace() and not lines[i].startswith('#')),
+           len(lines))
+
+# Item boundaries inside the section.
+items = [i for i in range(start + 1, end) if lines[i].lstrip().startswith('- name:')]
+target = [i for i in items if ('"%s"' % name) in lines[i] or ("'%s'" % name) in lines[i]
+          or lines[i].split('- name:')[1].strip().strip('"\'') == name]
+
+if len(target) > 1:
+    sys.exit("REFUSING TO EDIT: %r already appears %d times in %s. "
+             "Delete the duplicates by hand first." % (name, len(target), section))
+
+if target:                                   # REPLACE in place
+    s = target[0]
+    e = next((i for i in items if i > s), end)
+    while e > s and not lines[e - 1].strip():
+        e -= 1                               # keep the blank line that separates siblings
+    lines[s:e] = entry
+    action = 'replaced'
+else:                                        # INSERT before the next top-level key
+    e = end
+    while e > start and not lines[e - 1].strip():
+        e -= 1
+    lines[e:e] = [''] + entry
+    action = 'inserted'
+
+io.open('config.yaml', 'w').write('\n'.join(lines))
+print('%s %s in %s' % (action, name, section))
+PY
+```
+
+Write the entry to a file and register it:
+
+```bash
+cat > /tmp/entry_V_FAMILY_PNL.yaml << 'ENTRY'
+  - name: "V_FAMILY_PNL"
     type: "view"
     source_files: ["scripts/bigquery/views/V_FAMILY_PNL.sql"]
     description: "Family economics INCLUDING the organic halo (2026-08-19). One row per (family, period): net_profit (total sales - all-in COGS - ad spend, a true net after Amazon fees), total_net_roas (breakeven exactly 1.0), ads_net_roas (what the engine currently sees), and halo_factor = total/ads MEASURED not assumed. NO HALO OR BASELINE FIGURE IS WRITTEN HERE - publish the query (Standing Rule 0). Cuts at the ORDERS watermark with the sessions gate, never the ads watermark. Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md."
     dependencies:
       - V_UNIFIED_DAILY
-      - FACT_AMAZON_PERFORMANCE_DAILY'''.split('\n')
-lines[end:end] = ['']+entry
-open(p,'w').write('\n'.join(lines))
-PY
-python3 -c "import yaml;d=yaml.safe_load(open('config.yaml'));print('PARSES OK, views:',len(d['views']))"
+      - FACT_AMAZON_PERFORMANCE_DAILY
+ENTRY
+python3 /tmp/register_object.py views V_FAMILY_PNL /tmp/entry_V_FAMILY_PNL.yaml
 ```
-Expected: `PARSES OK` and the view count **one higher than before your edit**. Do not match an absolute number — the working tree carries other uncommitted registrations, so the total drifts.
+
+Then run the **uniqueness test**. Save it once as `/tmp/config_unique.py`; it is the pass condition
+for every registration step in this plan, and it is the only registry check any of them may gate on:
+
+```bash
+cat > /tmp/config_unique.py << 'PY'
+"""config.yaml must PARSE and must carry NO DUPLICATE OBJECT NAME.
+Exit 0 = pass. Exit 1 = a duplicate, printed. The object count is REPORTED, never gated."""
+import sys, collections, yaml
+
+SECTIONS = ['data_sources', 'views', 'tables', 'stored_procedures',
+            'functions', 'cloud_functions']
+d = yaml.safe_load(open('config.yaml'))          # raises on a parse failure - that is the parse test
+print('PARSES OK')
+
+failed, total, seen = False, 0, collections.defaultdict(list)
+for s in SECTIONS:
+    items = d.get(s) or []
+    total += len(items)
+    names = [i.get('name') for i in items]
+    for n, c in collections.Counter(names).items():
+        if c > 1:
+            failed = True
+            print('DUPLICATE within %s: %r appears %d times' % (s, n, c))
+    for n in set(names):
+        seen[n].append(s)          # set(): a within-section dup is reported once, above, not twice
+for n, secs in seen.items():
+    if len(secs) > 1:
+        failed = True
+        print('DUPLICATE across sections: %r in %s' % (n, ', '.join(secs)))
+
+print('UNIQUENESS: %s   (objects counted: %d - reported, not a gate)'
+      % ('FAIL' if failed else 'PASS', total))
+sys.exit(1 if failed else 0)
+PY
+python3 /tmp/config_unique.py; echo "exit=$?"
+```
+Pass condition: `PARSES OK`, `UNIQUENESS: PASS`, `exit=0`. **Run the registration a second time and
+run the test again** — the helper must print `replaced`, the test must still pass, and `git diff
+config.yaml` must show no new lines. That round trip is what proves idempotence; the first run alone
+does not. **Do NOT compare the reported object count against any number** — this plan pins none, the
+working tree carries other sessions' uncommitted registrations, and a count is a measurement that
+cannot detect the failure this step exists to prevent (Standing Rule 0).
 
 - [ ] **Step 8: Commit**
 
@@ -722,7 +885,22 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
 ```
 Expected: Bunny and LolliBall INVEST with their sanctioned rates; the other four HARVEST with NULLs.
 
-- [ ] **Step 5: Register in config.yaml (views: list, same insertion helper as Task 1 Step 7) and commit**
+- [ ] **Step 5: Register in config.yaml (`views:`) — idempotently — and commit**
+
+Use the **idempotent** helper and the **uniqueness** gate from Task 1 Step 7 — never a hand splice,
+and never a view/table COUNT as the check (a count cannot see a duplicate; that is how a second
+`V_FAMILY_PNL` entry once got in and was signed off):
+
+```bash
+cat > /tmp/entry_V_BOOK_ASSIGNMENT.yaml << 'ENTRY'
+  - name: "V_BOOK_ASSIGNMENT"
+    ... the complete entry, indented exactly as its siblings are ...
+ENTRY
+python3 /tmp/register_object.py views V_BOOK_ASSIGNMENT /tmp/entry_V_BOOK_ASSIGNMENT.yaml
+python3 /tmp/register_object.py views V_BOOK_ASSIGNMENT /tmp/entry_V_BOOK_ASSIGNMENT.yaml   # must print `replaced`
+python3 /tmp/config_unique.py; echo "exit=$?"                    # PARSES OK + UNIQUENESS: PASS + exit=0
+git diff --stat config.yaml    # the second run must have added nothing
+```
 
 ```bash
 git add scripts/bigquery/views/V_BOOK_ASSIGNMENT.sql config.yaml
@@ -871,17 +1049,36 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/views/V_FAMILY_BAR.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t4_assert.sql)"
 ```
-Expected: all five counters `0`.
+Expected: **`calibration_breaks` is `0`, and so are the four safety counters**
+(`bars_above_one`, `bars_below_floor`, `credited_below_one`, `null_bars`).
+`conservative_reported` is the sixth column and is **reported, never gated** — it counts a harmless
+population and a non-zero value there is not a failure. *(This line read "all five counters `0`"
+until 2026-08-21. It was wrong on both halves: Step 1 publishes SIX counters, and one of them is
+expected to be non-zero. A count of the columns in a query is a count of things in the CODE, which is
+a MEASUREMENT under Standing Rule 0 — it went stale the moment the sixth column was added, and it
+turned the step's own pass condition into an instruction to alarm on the direction three other places
+in this design forbid alarming on. Gate the NAMED counters, never a tally of them.)*
 
-If `calibration_breaks > 0`, STOP. Print the offending rows and reconcile against spec §4 before continuing — a miscalibrated bridge silently changes every bid decision:
+If `calibration_breaks > 0`, STOP. Print the offending rows and reconcile against spec §4 before
+continuing — a miscalibrated bridge silently changes every bid decision. **The filter is the
+PERMISSIVE direction only**, matching the assertion it diagnoses:
 
 ```bash
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
-"SELECT family, halo_factor, keyword_bar, ads_net_roas, total_net_roas,
-        (ads_net_roas >= keyword_bar) AS passes_bar, (total_net_roas >= 1.0) AS passes_truth
+"SELECT family, halo_factor, keyword_bar, ads_net_roas, total_net_roas
  FROM \`onyga-482313.OI.V_FAMILY_BAR\`
- WHERE (ads_net_roas >= keyword_bar) <> (total_net_roas >= 1.0)"
+ WHERE ads_net_roas >= keyword_bar AND total_net_roas < 1.0"
 ```
+*(Corrected 2026-08-21, seventh round. This query carried the TWO-directional filter
+`(ads_net_roas >= keyword_bar) <> (total_net_roas >= 1.0)` — the exact expression Step 1's assertion
+was rewritten in round 6 to stop using. Run against the deployed view it returns a row, every time,
+for a CONSERVATIVE break that the assertion, the view header and `config.yaml` all say is ordinary
+and must never be alarmed on. So the step said "if `calibration_breaks > 0`, STOP" and then handed
+the operator a query that prints rows when `calibration_breaks` is `0` — a published query
+contradicting the sentence above it, which is the defect Standing Rule 0 exists to catch. Any row
+this narrowed form returns must satisfy `halo_factor < 1`; if one does not, the bridge broke, not the
+COGS. To LOOK at the conservative population — never to gate on it — flip the predicate:
+`WHERE ads_net_roas < keyword_bar AND total_net_roas >= 1.0`.)*
 
 - [ ] **Step 5: Eyeball the bars against the spec table**
 
@@ -899,7 +1096,22 @@ the declared 0.60 floor. (3) **The gap is the point** — `running` (ads-attribu
 (total) wherever the halo exceeds 1.0, and it is that gap the bar exists to price. Whether a
 particular family clears its bar today is a reading; do not write one down.
 
-- [ ] **Step 6: Register in config.yaml and commit**
+- [ ] **Step 6: Register `V_FAMILY_BAR` in config.yaml — idempotently — and commit**
+
+Use the **idempotent** helper and the **uniqueness** gate from Task 1 Step 7 — never a hand splice,
+and never a view/table COUNT as the check (a count cannot see a duplicate; that is how a second
+`V_FAMILY_PNL` entry once got in and was signed off):
+
+```bash
+cat > /tmp/entry_V_FAMILY_BAR.yaml << 'ENTRY'
+  - name: "V_FAMILY_BAR"
+    ... the complete entry, indented exactly as its siblings are ...
+ENTRY
+python3 /tmp/register_object.py views V_FAMILY_BAR /tmp/entry_V_FAMILY_BAR.yaml
+python3 /tmp/register_object.py views V_FAMILY_BAR /tmp/entry_V_FAMILY_BAR.yaml   # must print `replaced`
+python3 /tmp/config_unique.py; echo "exit=$?"                    # PARSES OK + UNIQUENESS: PASS + exit=0
+git diff --stat config.yaml    # the second run must have added nothing
+```
 
 ```bash
 git add scripts/bigquery/views/V_FAMILY_BAR.sql config.yaml
@@ -915,8 +1127,11 @@ git commit -m "feat: V_FAMILY_BAR — measured halo becomes a per-family keyword
 > only shipped task with no banner, and the STATUS table affirmatively called this block "current",
 > which it is not. **The executable SQL is identical to the deployed procedure — it is the prose that
 > differs, and the prose is the part that would revert.** Diffed against
-> `INFORMATION_SCHEMA.ROUTINES` on 2026-08-20; three material differences, all in comments and in the
-> `OPTIONS(description)`:
+> `INFORMATION_SCHEMA.ROUTINES` on 2026-08-20 and again on 2026-08-21. The differences below are all
+> in comments and in the `OPTIONS(description)`. *(This line counted them until 2026-08-21; a count
+> of the items in a list is a count of things in the code by another name and goes stale on the edit
+> that changes one — Standing Rule 0. Re-take the diff with the command underneath rather than
+> trusting the list at all.)*
 > 1. **The block below has no "not yet wired" clause.** Its description reads as though the engines
 >    already join `T_FAMILY_BAR`. They do not — that is Task 8, Task 8 is unbuilt and on hold, and the
 >    deployed description says so in three sentences. Re-deploying this block would put back the exact
@@ -926,9 +1141,13 @@ git commit -m "feat: V_FAMILY_BAR — measured halo becomes a per-family keyword
 >    `V_CAMPAIGN_FAMILY_MAP`'s literal `'Unknown'` bucket are deliberately ABSENT from the table, and
 >    that the engines' `LEFT JOIN` + `COALESCE(keyword_bar, 1.0)` therefore leaves them at today's
 >    behaviour. Without it, the missing rows read as a bug.
-> 3. **The orchestrator task number below is wrong.** It says task `20.4`; the deployed description
->    says `20.5g-1, ahead of task 20.5g SP_SNAPSHOT_PANEL_OWNERSHIP`, which is where the call actually
->    sits (Step 7 verifies the ordering).
+> 3. **The block below carried a wrong orchestrator task number and a wrong row count, both removed
+>    2026-08-21.** It named a task label that does not match the deployed description, and it called
+>    `T_FAMILY_BAR` "Six rows, one per family" — which is a pinned COUNT (a measurement, Standing
+>    Rule 0) and the wrong GRAIN besides: the procedure explodes the view to CAMPAIGN grain, one row
+>    per enabled mapped campaign. Neither the old label nor the deployed one is written here, because
+>    a task label is a fact about code that can be wrong without anyone touching the sentence. Read
+>    the deployed one, and prove the ORDERING rather than the labels, with Step 7's query.
 >
 > Re-take the diff yourself rather than trusting this list:
 > ```bash
@@ -992,7 +1211,16 @@ Create `scripts/bigquery/procedures/SP_SNAPSHOT_FAMILY_BAR.sql`:
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_SNAPSHOT_FAMILY_BAR`()
 OPTIONS (
-  description = "Materializes V_FAMILY_BAR into T_FAMILY_BAR (2026-08-19). Six rows, one per family: the measured halo factor and the keyword bar the bid engines judge ads-attributed GP-ROAS against. Exists because the engines are at BigQuery's planning ceiling and must join a table, never inline the view. Idempotent. Orchestrator task 20.4, before the engine T_ builds. Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md."
+  description = "Materializes V_FAMILY_BAR into T_FAMILY_BAR (2026-08-19), carrying each family's measured halo factor and the keyword bar the bid engines judge ads-attributed GP-ROAS against. Exists because the engines are at BigQuery's planning ceiling and must join a table, never inline the view. Idempotent. Runs in the daily orchestrator before the engine T_ builds. Spec: docs/superpowers/specs/2026-08-19-two-book-pnl-design.md."
+    -- ^ TWO THINGS WERE STRIPPED FROM THIS LINE ON 2026-08-21 AND THE DEPLOYED DESCRIPTION HAS
+    -- NEITHER. It said "Six rows, one per family", which is a pinned COUNT (a measurement under
+    -- Standing Rule 0) and was ALSO the wrong grain: SP_SNAPSHOT_FAMILY_BAR explodes the view to
+    -- CAMPAIGN grain, so T_FAMILY_BAR holds one row per enabled mapped campaign, not one per family.
+    -- And it named orchestrator task "20.4" while every other document in this design says the call
+    -- sits at 20.5g-1; a hard-coded task label is a fact about the code that can be wrong without
+    -- anyone touching the sentence. Read the deployed description and the real call site rather than
+    -- either figure: SELECT ddl FROM `onyga-482313.OI`.INFORMATION_SCHEMA.ROUTINES
+    -- WHERE routine_name IN ('SP_SNAPSHOT_FAMILY_BAR','SP_ORCHESTRATE_DAILY_REFRESH').
 )
 BEGIN
   -- CAMPAIGN GRAIN, deliberately. The bid engines publish campaign_id and NOT family (verified
@@ -1083,7 +1311,29 @@ check compared a comment against a comment and reported the two calls in the WRO
 mis-ordering that
 does not exist. Anyone acting on that reading would have re-ordered a correct orchestrator.
 
-- [ ] **Step 8: Register T_FAMILY_BAR in config.yaml (tables:) and commit**
+- [ ] **Step 8: Register `T_FAMILY_BAR` (`tables:`) and `SP_SNAPSHOT_FAMILY_BAR` (`stored_procedures:`) in config.yaml — idempotently — and commit**
+
+Use the **idempotent** helper and the **uniqueness** gate from Task 1 Step 7 — never a hand splice,
+and never a view/table COUNT as the check (a count cannot see a duplicate; that is how a second
+`V_FAMILY_PNL` entry once got in and was signed off):
+
+```bash
+cat > /tmp/entry_T_FAMILY_BAR.yaml << 'ENTRY'
+  - name: "T_FAMILY_BAR"
+    ... the complete entry, indented exactly as its siblings are ...
+ENTRY
+python3 /tmp/register_object.py tables T_FAMILY_BAR /tmp/entry_T_FAMILY_BAR.yaml
+python3 /tmp/register_object.py tables T_FAMILY_BAR /tmp/entry_T_FAMILY_BAR.yaml   # must print `replaced`
+python3 /tmp/config_unique.py; echo "exit=$?"                    # PARSES OK + UNIQUENESS: PASS + exit=0
+git diff --stat config.yaml    # the second run must have added nothing
+```
+
+Then the procedure, into its own section — `register_object.py` refuses a name that already exists in a DIFFERENT section, so the two cannot collide:
+
+```bash
+python3 /tmp/register_object.py stored_procedures SP_SNAPSHOT_FAMILY_BAR /tmp/entry_SP_SNAPSHOT_FAMILY_BAR.yaml
+python3 /tmp/config_unique.py; echo "exit=$?"
+```
 
 ```bash
 git add scripts/bigquery/procedures/SP_SNAPSHOT_FAMILY_BAR.sql \
@@ -1287,15 +1537,26 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/views/V_INVEST_STATUS.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' /tmp/t6_assert.sql)"
 ```
-Expected: all five counters `0`.
+Expected: `bad_phase`, `ramp_misassigned`, `proof_misassigned`, `ramp_judged_on_profit`,
+`spend_breach_still_protected` and `null_target_judged_as_zero` **all `0`** — name them, do not tally
+them. *(This line said "all five counters" while Step 1 published six; a count of the columns in a
+query is a count of things in the CODE and therefore a MEASUREMENT under Standing Rule 0, and it went
+stale on the edit that added the sixth. Corrected 2026-08-21, seventh round.)*
 
 - [ ] **Step 5: Read the verdict in plain words**
 
 ```bash
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format=csv \
 "SELECT family, phase, launch_age_months, ROUND(mtd_net_profit,0) mtd, ceiling_used_pct,
-        exemption_live, org_m2, org_m1, org_m0, verdict
+        protection_qualified, org_m2, org_m1, org_m0, verdict
  FROM \`onyga-482313.OI.V_INVEST_STATUS\`"
+# (`protection_qualified`, NOT `exemption_live`. The column was renamed on 2026-08-20 and this line
+#  kept the old name for three more rounds: it did not fail quietly, it failed to compile with
+#  "Unrecognized name: exemption_live at [1:89]". Run every query before you write it down, and check
+#  its column names against INFORMATION_SCHEMA.COLUMNS - corrected 2026-08-21, seventh round.
+#  `verdict` IS a column of this view - it was checked against INFORMATION_SCHEMA in the same pass -
+#  and it is the LAUNCH-TRAJECTORY verdict, distinct from `sanction_verdict`, which answers the
+#  spend-rate question. The two are deliberately separate columns; do not collapse them.)
 ```
 Expected: `phase` follows the declared rule `IF(launch_age_months <= 3, 'RAMP', 'PROOF')`, so which
 phase a family is in depends on the run date and either answer can be correct — check the rule, not a
@@ -1306,7 +1567,22 @@ has ever existed on any row. (The invented figure is not repeated here; a stale 
 exhibit is still a stale number on the page.) **What must never happen is a RAMP verdict mentioning profitability** — that is the
 assertion, and it is a property, not a count.
 
-- [ ] **Step 6: Register in config.yaml and commit**
+- [ ] **Step 6: Register `V_INVEST_STATUS` in config.yaml — idempotently — and commit**
+
+Use the **idempotent** helper and the **uniqueness** gate from Task 1 Step 7 — never a hand splice,
+and never a view/table COUNT as the check (a count cannot see a duplicate; that is how a second
+`V_FAMILY_PNL` entry once got in and was signed off):
+
+```bash
+cat > /tmp/entry_V_INVEST_STATUS.yaml << 'ENTRY'
+  - name: "V_INVEST_STATUS"
+    ... the complete entry, indented exactly as its siblings are ...
+ENTRY
+python3 /tmp/register_object.py views V_INVEST_STATUS /tmp/entry_V_INVEST_STATUS.yaml
+python3 /tmp/register_object.py views V_INVEST_STATUS /tmp/entry_V_INVEST_STATUS.yaml   # must print `replaced`
+python3 /tmp/config_unique.py; echo "exit=$?"                    # PARSES OK + UNIQUENESS: PASS + exit=0
+git diff --stat config.yaml    # the second run must have added nothing
+```
 
 ```bash
 git add scripts/bigquery/views/V_INVEST_STATUS.sql config.yaml
@@ -1447,7 +1723,22 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --format
 ```
 Read every verdict string aloud. Each must be a plain sentence a person could act on, with no rule names, no jargon and no bare metric codes. If any reads like engine internals, fix the string before committing.
 
-- [ ] **Step 6: Register in config.yaml and commit**
+- [ ] **Step 6: Register `V_TWO_BOOK_BRIEF` in config.yaml — idempotently — and commit**
+
+Use the **idempotent** helper and the **uniqueness** gate from Task 1 Step 7 — never a hand splice,
+and never a view/table COUNT as the check (a count cannot see a duplicate; that is how a second
+`V_FAMILY_PNL` entry once got in and was signed off):
+
+```bash
+cat > /tmp/entry_V_TWO_BOOK_BRIEF.yaml << 'ENTRY'
+  - name: "V_TWO_BOOK_BRIEF"
+    ... the complete entry, indented exactly as its siblings are ...
+ENTRY
+python3 /tmp/register_object.py views V_TWO_BOOK_BRIEF /tmp/entry_V_TWO_BOOK_BRIEF.yaml
+python3 /tmp/register_object.py views V_TWO_BOOK_BRIEF /tmp/entry_V_TWO_BOOK_BRIEF.yaml   # must print `replaced`
+python3 /tmp/config_unique.py; echo "exit=$?"                    # PARSES OK + UNIQUENESS: PASS + exit=0
+git diff --stat config.yaml    # the second run must have added nothing
+```
 
 ```bash
 git add scripts/bigquery/views/V_TWO_BOOK_BRIEF.sql config.yaml
@@ -1483,12 +1774,22 @@ git commit -m "feat: V_TWO_BOOK_BRIEF — Harvest and Invest reported separately
 > What IS true: the statements that read only objects existing today (Step 1's capture, Step 4's two
 > planner dry runs, Step 7's determinism pulls) run against live BigQuery as written. Do not upgrade
 > that into a claim about the task as a whole.
-> **RE-VERIFIED 2026-08-20, sixth round, by dry run rather than by re-reading this banner:** Step 1's
-> two captures, Step 4's `V_KEYWORD_LIFT` and `V_PANEL_OWNERSHIP` dry runs, Step 6's SECOND query
-> (with an empty before-capture, i.e. the `''` fallback path) and Step 7's determinism statements for
-> both engines all validate. `V_OOB_KEYWORD` plans, but SLOWLY — its dry run took minutes, not
-> seconds, which is worth knowing before you conclude a hung terminal means a broken view. Step 6's
-> FIRST query still carries its placeholder and still does not parse; the banner above is accurate. **A "safe to execute" sentence with nothing behind it
+> **RE-VERIFIED 2026-08-21, seventh round, by dry-running every statement again rather than by
+> re-reading this banner.** What validated: Step 1's two captures; Step 4's `V_KEYWORD_LIFT` and
+> `V_PANEL_OWNERSHIP` planner dry runs; Step 5's flip query; Step 6's SECOND query on the
+> empty-capture (`''`) path; Step 7's determinism statements for BOTH engines; and the three
+> diagnostic queries published inside Step 3's comment block. What FAILED, exactly as this banner
+> says it must: **Step 6's FIRST query, which still carries its placeholder — BigQuery answers
+> `Syntax error: Unexpected "<"`.** What was NOT run at all: Step 4's `CREATE OR REPLACE` of the two
+> engine files, because that is the hold.
+> `V_OOB_KEYWORD` plans, but has been slow to plan on some days — minutes, not seconds — which is
+> worth knowing before you conclude a hung terminal means a broken view.
+> **Two placeholders, not one** (corrected 2026-08-21 — this banner said Step 6's was "the one"):
+> Step 3's join fragment also carries `<the base CTE's campaign_id column>`. That one is deliberate
+> and harmless — Step 3 is an EDIT INSTRUCTION, not a statement to run, and you resolve the
+> placeholder by reading the file. Step 6's is different: it sits inside a statement the step tells
+> you to RUN as a gate, so an operator can execute it, see it fail, and never learn what it was
+> supposed to measure. **A "safe to execute" sentence with nothing behind it
 > is the specific defect the previous round was raised to remove from Task 8b; it must not be written
 > back onto either task.**
 
@@ -1558,7 +1859,14 @@ Add the join to that CTE:
 -- inside the thing that moves money, and an earlier draft of it already had: it named one family's
 -- ads ROAS, total ROAS and halo, and every one of the three was wrong against the window this view
 -- actually reads. The replacement briefly named the LIVE values instead, which is the same defect
--- one day later. NO FIGURE OF ANY VINTAGE GOES IN THIS COMMENT.) Run this to see the shape:
+-- one day later. NO FIGURE OF ANY VINTAGE GOES IN THIS COMMENT — and that ban covers a count of
+-- ROWS as squarely as it covers a ROAS. Repaired again 2026-08-21, seventh round: the tail of
+-- this block had been left mid-sentence by an edit — a line reading "Nothing here is a" broke
+-- straight into "threshold. Reads the TABLE, never V_FAMILY_BAR:" — and the sentence after it
+-- described T_FAMILY_BAR as "Six rows", which is the count of FAMILIES and not of the
+-- CAMPAIGN-grain table this join actually reads. Task 8 is on hold, so neither ever shipped;
+-- both were one execution away from becoming permanent comments inside a live bid engine.)
+-- Run this to see the shape:
 --   SELECT family, ads_net_roas, total_net_roas, halo_factor, keyword_bar, bar_exempt
 --   FROM `onyga-482313.OI.V_FAMILY_BAR` ORDER BY keyword_bar;
 -- The shape it shows — and the reason this join exists — is that the family with the account's
@@ -1570,11 +1878,21 @@ Add the join to that CTE:
 -- percent" for two rounds and on 2026-08-20 the closest family sat further out than that, in a
 -- comment that ships verbatim into a live bid engine. Take it yourself:
 --   SELECT family, total_net_roas FROM `onyga-482313.OI.V_FAMILY_BAR` ORDER BY ABS(total_net_roas-1.0);
--- Nothing here is a
--- threshold. Reads the TABLE, never V_FAMILY_BAR:
--- this view is at BigQuery's planning ceiling and inlining another view is what broke
--- V_PANEL_OWNERSHIP on 2026-08-17. Six rows, LEFT JOIN, COALESCE to 1.0 so a missing family keeps
--- exactly the old behaviour — the bar may only ever LOWER the threshold.
+-- Neither query above is a threshold; both are diagnostics you run by hand, and nothing in this
+-- engine reads either one.
+--
+-- READ THE TABLE, NEVER V_FAMILY_BAR. This view is at BigQuery's planning ceiling and inlining
+-- another view is what stopped V_PANEL_OWNERSHIP planning on 2026-08-17, so the join below reads
+-- the materialised T_FAMILY_BAR, which SP_SNAPSHOT_FAMILY_BAR rebuilds every day.
+-- T_FAMILY_BAR IS CAMPAIGN-GRAIN, not family-grain: one row per ENABLED campaign that
+-- V_CAMPAIGN_FAMILY_MAP resolves to a real family, carrying that family's bar. That is why the join
+-- key is campaign_id and not a family name — the engines publish campaign_id and neither publishes
+-- a family column. HOW MANY ROWS IT HOLDS IS A MEASUREMENT AND IS NOT WRITTEN HERE: campaigns are
+-- enabled and paused daily, so the count moves on its own. Take it yourself if you need it:
+--   SELECT COUNT(*) AS campaigns, COUNT(DISTINCT family) AS families
+--   FROM `onyga-482313.OI.T_FAMILY_BAR`;
+-- LEFT JOIN, and COALESCE to 1.0 so a campaign with no row keeps exactly the old behaviour — the
+-- bar may only ever LOWER the threshold, never raise one.
 LEFT JOIN `onyga-482313.OI.T_FAMILY_BAR` fb
        ON fb.campaign_id = CAST(<the base CTE's campaign_id column> AS STRING)
 ```
@@ -1739,11 +2057,13 @@ git commit -m "feat: bid engines judge against the per-family halo bar, not a fl
 > MERGE and the `── 4` restore as dry runs, the `── 3` re-assertion, `── 5`, and Step 5. None fails
 > to compile and none names a column that has been renamed away. Re-run them yourself; a statement
 > that ran in someone else's session is a claim in yours.
-> **RE-VERIFIED 2026-08-20, sixth round.** Every statement in this task was dry-run again against
+> **RE-VERIFIED 2026-08-21, seventh round.** Every statement in this task was dry-run again against
 > today's objects — the planner-ceiling join, Step 1's assertion, Step 2's rate read, Step 3's column
-> check and the dry run of `V_LAUNCH_EXEMPTION.sql` as it stands, Step 4's `── 0`, `── 1`, `── 2`
-> (both reads), the `── 3` MERGE and its two follow-on reads, the `── 4` restore, `── 5`, the
-> per-family form of the assertion, and Step 5. All validate. The two write statements were dry-run
+> check and the dry run of `V_LAUNCH_EXEMPTION.sql` as it stands, the side-by-side read in Step 4's
+> ceiling banner, Step 4's `── 0`, `── 1`, `── 2` (both reads), the `── 3` MERGE and its follow-on
+> read, the `── 4` restore, `── 5`, the per-family form of the assertion, and Step 5. **All validate;
+> none failed.** Unlike Task 8, this task carries NO unresolved placeholder — every statement in it
+> parses as written. The two write statements were dry-run
 > ONLY; nothing was written to `DE_LAUNCH_INVESTMENT`, whose live row still reads exactly the
 > sanction Ori signed. The **expectations** below are still unproven and still cannot be proven while
 > the hold stands — see expectation 4, which gained a further caveat this round about the short arm.
@@ -2191,12 +2511,15 @@ git commit -m "feat: launch exemption expires on the sanctioned spend rate and t
 > `V_FAMILY_PNL.sql`'s header already cites as its SOP. Whatever it says becomes the standing rule,
 > so it has to be right on the day it lands. Three of its rules were wrong; two are corrected below,
 > and the third is a question only Ori can answer.
-> **RE-VERIFIED 2026-08-20, sixth round:** the block is still BLOCKED and the blocker is unchanged —
-> Ori's own words on the declaration fields. Every query inside the SOP heredoc was RUN against the
-> live objects this round and each returns what the sentence beside it claims: the July sign-flip
-> query returns two columns of opposite sign; the family-bar query returns the bars in the order the
-> sentence describes, strongest halo carrying the lowest bar; the Harvest ranking query and the
-> `V_INVEST_STATUS` read both compile and return their captions. No line number is cited in the
+> **RE-VERIFIED 2026-08-21, seventh round:** the block is still BLOCKED and the blocker is unchanged —
+> Ori's own words on the declaration fields. Every query inside the SOP heredoc was RUN (not
+> dry-run) against the live objects this round and each returns what the sentence beside it claims:
+> the July sign-flip query returns two columns of OPPOSITE SIGN; the family-bar query returns the
+> bars in the order the sentence describes, the strongest halo carrying the lowest bar, and the
+> relation holds monotonically across every row; the Harvest ranking query and the `V_INVEST_STATUS`
+> read both compile and return their captions. **A standing rule was added to the heredoc this round**
+> — Standing Rule 2, qualification and finding are different questions and both answers stand
+> together — and its query was run too. No line number is cited in the
 > banner any more — `V_FAMILY_PNL.sql:3` was one, and line numbers drift.
 
 ### OPEN QUESTION FOR ORI — how many fields make a declaration?
@@ -2337,6 +2660,21 @@ ceiling, no end date and no success test, its losses blended into the engine's s
   a document. The version of this line that named `times_over_agreed_rate` and
   `loss_allowance_used_pct_so_far` on `V_TWO_BOOK_BRIEF` did not fail quietly — both columns had been
   renamed away and it failed to compile.)
+- **Qualification and a finding are DIFFERENT QUESTIONS, and both answers stand together.**
+  `protection_qualified` is FORWARD-looking — is this launch inside the terms that grant protection
+  right now. `sanction_breach_finding` is BACKWARD-looking — can we say it broke the agreement. A
+  family may answer them differently and that is not a contradiction: protection rests on present
+  terms, while a finding is confined to days the agreement actually covered, so a family can be over
+  its approved rate today and still carry no finding because the window mostly predates the
+  agreement. **Never derive one from the other** — do that and you either convict over days no rate
+  had been agreed on, or you hand protection to a family demonstrably over its rate because the
+  accusation is not yet available. **Say both out loud, in two separate clauses, on every priced
+  Invest row.** Silence on the forward question reads as an acquittal, and "no finding" gets taken
+  for "still protected". The brief builds the forward clause once as
+  `verdict_qualification_sentence` so the prose and the column cannot drift, and its grid splits the
+  same way. Read where each family stands — never quote it from here:
+  `SELECT family, protection_qualified, sanction_breach_finding, spend_breached, sanction_verdict
+  FROM onyga-482313.OI.V_INVEST_STATUS ORDER BY family`.
 - **Calibration is a standing test:** a family clearing its keyword bar must clear total net ROAS
   1.0. If that breaks, the credit is wrong.
 - **Launches in months 0-3 are judged on IMPROVEMENT, never profitability.** The rule is "no
@@ -2386,8 +2724,14 @@ Items 1-6 and 10 are **met** — Tasks 1-7 shipped, see the STATUS table at the 
 that is the current intent, not a gap to close.
 
 1. `V_FAMILY_PNL` reproduces the spec §3 baseline (Task 1 assertion, zero mismatches). ✅
-2. `V_FAMILY_BAR` passes its four safety assertions and the one-directional calibration assertion
+2. `V_FAMILY_BAR` passes the named safety assertions — `bars_above_one`, `bars_below_floor`,
+   `credited_below_one`, `null_bars` — and the one-directional `calibration_breaks` assertion
    (Task 4), and its re-check alarms only on PERMISSIVE disagreements, never conservative ones. ✅
+   *(The counters are NAMED, not tallied, from 2026-08-21: this item said "four safety assertions"
+   and Task 4's own step said "all five counters" while the assertion published six — a count of
+   things in the code is a measurement and it had already gone stale. The re-check query beneath
+   Task 4 Step 4 was ALSO still the two-directional form the assertion abandoned in round 6, so it
+   printed a row whenever `calibration_breaks` was 0; both are corrected.)*
    *(Corrected 2026-08-20, sixth round. This item said "all five safety and calibration assertions"
    while Task 4 Step 1 still published a `calibration_breaks` expression that counted BOTH
    directions — and against the deployed view that expression returns non-zero, so the item claimed
@@ -2419,7 +2763,14 @@ that is the current intent, not a gap to close.
 9. ⏸ ON HOLD — Spending faster than the sanctioned daily rate, or running past the declared end date,
    revokes the launch exemption; an undeclared family is untouched by it (Task 8b Steps 4 and 5). The
    monthly loss ceiling is not the test.
-10. `config.yaml` parses and every new object is registered in the correct section. ✅
+10. `config.yaml` **parses AND carries no duplicate object name**, and every new object is
+    registered in the correct section. ✅ The gate is `/tmp/config_unique.py` from Task 1 Step 7 —
+    `PARSES OK`, `UNIQUENESS: PASS`, exit 0. *(Strengthened 2026-08-21: this item was met by a
+    COUNT, and a count cannot see a duplicate. Re-running Task 1's old registration block appended a
+    SECOND `V_FAMILY_PNL` entry and the check underneath it printed a plausible view count and
+    passed. Every registration step in this plan is now idempotent — replace-or-insert keyed on
+    `name` — and gated on uniqueness instead. The object count the gate prints is REPORTED, never
+    compared to anything.)*
 
 ## Known follow-ons (NOT in this plan)
 

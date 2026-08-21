@@ -1,5 +1,76 @@
 # Progress — audit trail
 
+## 2026-08-21 — two-book P&L, seventh repair round, Task W: the plan must not corrupt the registry
+
+**Scope: `config.yaml`, the plan, the spec, this file. No SQL object was edited and nothing was
+deployed.** `V_INVEST_STATUS.sql` and `V_TWO_BOOK_BRIEF.sql` belong to Tasks U and V; the engines
+(`V_LAUNCH_EXEMPTION`, `V_ADS_COACH`, `V_COACH_CAMPAIGN_BUDGET`) stay frozen under *"tell the truth
+now, release nothing"*; Tasks 8, 8b and 9 remain on hold and blocked.
+
+**THE REGISTRATION STEP CORRUPTED THE REGISTRY AND ITS OWN CHECK COULD NOT SEE IT.** Task 1 Step 7
+computed an insertion point and spliced unconditionally, so re-running it appended a SECOND
+`V_FAMILY_PNL` entry — and the verification underneath printed `PARSES OK, views: N` and passed,
+because a COUNT cannot detect a duplicate: both files parse and both report a plausible number.
+Reproduced on a scratch copy this round — the old check still passes on a deliberately duplicated
+file. Two changes, both tested on that copy across all four paths (name present → `replaced`; name
+absent → `inserted`, then `replaced` on re-run with a byte-identical file; duplicate within a
+section → FAIL, exit 1, named; duplicate across sections → FAIL, exit 1, named). `register_object.py`
+is REPLACE-OR-INSERT keyed on `name` and refuses outright to edit a name that already appears twice.
+`config_unique.py` is a uniqueness test with a non-zero exit, and the object count it prints is
+**reported, never gated** — a count is a measurement, and it is the wrong instrument besides. All six
+registration steps in the plan now call both.
+
+**A PUBLISHED QUERY THAT DID NOT COMPILE, AGAIN, AND THE COLUMN HAD BEEN RENAMED FOR THREE ROUNDS.**
+Task 6 Step 5 selected `exemption_live`; BigQuery answers `Unrecognized name: exemption_live at
+[1:89]`. Now `protection_qualified`. Every other query in the plan and the spec was re-run this
+round, not re-read.
+
+**A DIAGNOSTIC THAT CONTRADICTED THE ASSERTION IT DIAGNOSES.** Task 4 Step 4 says *"if
+`calibration_breaks > 0`, STOP"* and then published the TWO-directional filter that round 6 removed
+from the assertion for alarming on the harmless direction. Against the deployed view it returns a row
+while `calibration_breaks` reads 0 — a query contradicting the sentence above it. Narrowed to the
+permissive direction; the conservative form is offered separately, to LOOK at and never to gate on.
+Two steps also expected *"all five counters 0"* against assertions that publish six, one of which is
+expected to be non-zero. The counters are NAMED now, never tallied.
+
+**A GARBLED COMMENT ONE EXECUTION FROM A LIVE BID ENGINE.** Task 8 Step 3's block ships verbatim into
+`V_KEYWORD_LIFT`. An edit had left it mid-sentence — *"Nothing here is a"* breaking into *"threshold.
+Reads the TABLE, never V_FAMILY_BAR:"* — and the sentence after it called `T_FAMILY_BAR` *"Six
+rows"*, which is the count of FAMILIES, not of the CAMPAIGN-grain table the join actually reads, and
+a pinned count besides, inside a comment that forbids pinned figures twice in its own text. Rewritten
+whole and re-read end to end.
+
+**STANDING RULE 2 RECORDED (Ori, 2026-08-21).** Qualification and finding are DIFFERENT questions and
+both answers stand together: `protection_qualified` is FORWARD-looking (inside the terms right now),
+`sanction_breach_finding` is BACKWARD-looking (can we say the agreement was broken, which Standing
+Rule 1 confines to covered days). A row may answer them differently and that is not a contradiction
+to be reconciled — forcing agreement either convicts over days no rate had been agreed on, or hands
+protection to a family demonstrably over its rate because the accusation is not yet available. The
+defect the rule names is PROSE: the columns were already right. Recorded in the plan beside Rules 0
+and 1, in `config.yaml`'s convention header (with Rule 1, which was missing there), in the spec's
+superseded-in-part list, and in the SOP heredoc.
+
+**STANDING RULE 0, FOURTH PASS — the classes earlier passes kept missing.** A count of things in the
+CODE is a measurement (a clause count in `progress.md` that did not match the deployed expression; a
+column tally in two plan steps; a point count in a spec banner; the row count of `want`). A pinned
+hash is a measurement (`V_LAUNCH_EXEMPTION`'s registry entry pinned an MD5 and a row count, and the
+row count no longer matched the live view). **And a quarantine box is only as good as its premise:**
+the spec kept §1's figures on the stated ground that *no live object restates them*, which was false
+for Attempt 3 — `V_FAMILY_PNL` restates exactly that pair, and its ads-attributed side had already
+drifted. Attempt 3 now publishes the query; the quarantine covers Attempts 1 and 2, whose instruments
+exist nowhere in the warehouse. `V_LAUNCH_EXEMPTION`'s entry also carried two measured spend rates
+that no longer matched the live view.
+
+**HOLD BANNERS RE-VERIFIED BY DRY RUN, NOT BY RE-READING THEM.** Every statement in Tasks 8, 8b and 9
+was dry-run against live BigQuery. Task 8b: all validate, no placeholder anywhere. Task 8: all
+validate EXCEPT Step 6's first query, which still carries its placeholder and fails with `Syntax
+error: Unexpected "<"` — the banner said so and it is still true. Task 8's banner also claimed that
+was "the one" placeholder in either task; Step 3's join fragment carries one too, and the banner now
+draws the distinction that matters — Step 3's is an edit instruction you resolve by reading the file,
+Step 6's sits inside a statement the step tells you to RUN as a gate. Task 9's four SOP queries were
+RUN, not dry-run, and each returns what its caption claims. Task 8 Step 4's deploy of the two engine
+files was NOT run: that is the hold.
+
 ## 2026-08-15 — Phase 0 of the engine-finalization plan: v27.62 GP fix VERIFIED
 
 Ten adversarial verification agents (one per GP-edited view + one on the manual-change record).
@@ -519,9 +590,11 @@ in the same paragraph that they had been removed; the spec's §3 baseline TABLE 
 query over period_label='BASELINE_MAY_JUL' (it had already drifted); Task 6's step expected a verdict
 "against the 400 target" when takeover_target_organic_units is NULL on every row.
 
-MEASURED PIN COUNT OVER THE TWO-BOOK SURFACE — config.yaml's eight two-book entries, the plan, the
-spec and the three view headers this round owns — went 445 -> 91. Method, so it can be re-run rather
-than believed: count numeric tokens matching money / N.NNx ratio / percentage / multi-decimal / >=3-
+MEASURED PIN COUNT OVER THE TWO-BOOK SURFACE fell sharply this round. THE BEFORE AND AFTER FIGURES
+ARE NOT WRITTEN HERE (deleted 2026-08-21): they were measurements of a document set that has been
+edited in three rounds since, so nobody can now reproduce either one, and the count of config entries
+beside them is a count of things in the code. The METHOD is the part worth keeping, so it can be
+re-run rather than believed: count numeric tokens matching money / N.NNx ratio / percentage / multi-decimal / >=3-
 digit-count shapes, after stripping ISO dates, commit SHAs and the project id, minus an allowlist of
 DECLARED CONSTANTS. This journal entry is deliberately OUTSIDE that count, because it quotes the
 defect strings it describes. Most of the 91 that remain are the §1 quarantine box in the spec —
@@ -568,7 +641,7 @@ ad_spend and ads_net_roas, and the entry says so.
 TASK 8b STEP 4'S EXPECTED PROPERTY 4 WAS UNREACHABLE AGAINST THE DEPLOYED GATE. It promised that
 raising Bunny's sanction above the measured rate would make protection_qualified read true and drive
 the assertion to zero. Two structural reasons it cannot, both now written into the step: (a)
-protection_qualified is an AND over eight clauses and the raise moves ONE of them — it also requires
+protection_qualified is an AND over many clauses and the raise moves ONE of them (the clause count was pinned at "eight" here until 2026-08-21 and did not match the deployed expression; a count of things in the CODE is a measurement under Standing Rule 0 and rots on the next edit, so it is deleted rather than corrected — the counting query is published in V_INVEST_STATUS.sql's header) — it also requires
 sanction_adherence_judged, a rate window lying wholly on or after sanctioned_on, and no change to a
 sanctioned RATE can make a window older; only the feed advancing does, and the short arm clears
 first. (b) The assertion joins EVERY declared family, so raising one can only make the count fall.
