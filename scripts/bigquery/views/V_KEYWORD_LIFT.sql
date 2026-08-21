@@ -1688,7 +1688,9 @@ SELECT
          AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN CONCAT('invisible — ', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
-                  ': the bid is priced out of the auction; nudge +5%/day toward the entry anchor $', CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING), ' until it buys data')
+                  ': the bid is priced out of the auction; nudge ', FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2) - a.current_bid, NULLIF(a.current_bid, 0)) * 100),
+                  '% to $', FORMAT('%.2f', ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2)), ', walking toward the entry anchor $',
+                  FORMAT('%.2f', ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), ' until it buys data')
     -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies a SILENT keyword is the trigger.
     -- A seated, active keyword that is buying no clicks is priced out of the auction, so the
     -- very windows it is judged on can never refresh -- they just age.
@@ -1701,8 +1703,9 @@ SELECT
          AND a.seat_rank <= a.slots AND COALESCE(a.clk3, 0) = 0
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN CONCAT('no clicks on the last three complete days at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
-                  ' while holding a seat — the windows this keyword is judged on are aging out with nothing fresh arriving to refresh them: nudge +5%/day toward the entry anchor $',
-                  CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING))
+                  ' while holding a seat — the windows this keyword is judged on are aging out with nothing fresh arriving to refresh them: nudge ',
+                  FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2) - a.current_bid, NULLIF(a.current_bid, 0)) * 100), '% to $', FORMAT('%.2f', ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2)),
+                  ', walking toward the entry anchor $', FORMAT('%.2f', ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)))
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted yesterday — ', CAST(CAST(a.clk1 AS INT64) AS STRING), ' clicks, net +$', FORMAT('%.2f', a.gp1 - a.sp1), ': low-budget auto reacts daily, raise +5% (cap $2)')
@@ -2321,7 +2324,9 @@ SELECT
          AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN CONCAT('invisible — ', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
-                  ': the bid is priced out of the auction; nudge +5%/day toward the entry anchor $', CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING), ' until it buys data')
+                  ': the bid is priced out of the auction; nudge ', FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2) - a.current_bid, NULLIF(a.current_bid, 0)) * 100),
+                  '% to $', FORMAT('%.2f', ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2)), ', walking toward the entry anchor $',
+                  FORMAT('%.2f', ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), ' until it buys data')
     -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies a SILENT keyword is the trigger.
     -- A seated, active keyword that is buying no clicks is priced out of the auction, so the
     -- very windows it is judged on can never refresh -- they just age.
@@ -2334,8 +2339,9 @@ SELECT
          AND a.seat_rank <= a.slots AND COALESCE(a.clk3, 0) = 0
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN CONCAT('no clicks on the last three complete days at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
-                  ' while holding a seat — the windows this keyword is judged on are aging out with nothing fresh arriving to refresh them: nudge +5%/day toward the entry anchor $',
-                  CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING))
+                  ' while holding a seat — the windows this keyword is judged on are aging out with nothing fresh arriving to refresh them: nudge ',
+                  FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2) - a.current_bid, NULLIF(a.current_bid, 0)) * 100), '% to $', FORMAT('%.2f', ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2)),
+                  ', walking toward the entry anchor $', FORMAT('%.2f', ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)))
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
       THEN CONCAT('converted yesterday — ', CAST(CAST(a.clk1 AS INT64) AS STRING), ' clicks, net +$', FORMAT('%.2f', a.gp1 - a.sp1), ': low-budget auto reacts daily, raise +5% (cap $2)')
@@ -3044,8 +3050,10 @@ SELECT o.* EXCEPT (bid_hold, bud_hold, bid_floor, probe_bid) REPLACE (
                   'x) pacing ', CAST(CAST(ROUND(100 * COALESCE(g.pace_kw, 0)) AS INT64) AS STRING),
                   '% of its LY same-28d window (', CAST(g.clk28_kw AS STRING), ' vs ', CAST(g.ly_clk28 AS STRING),
                   ' clicks) at $', FORMAT('%.2f', COALESCE(o.current_bid, 0)), ' under LY conv CPC $',
-                  FORMAT('%.2f', COALESCE(g.ly_conv_cpc, 0)), ': glide +10%/day toward the economics target $',
-                  FORMAT('%.2f', g.pace_target_bid),
+                  FORMAT('%.2f', COALESCE(g.ly_conv_cpc, 0)), ': raise ',
+                  FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(o.current_bid * 1.10, o.current_bid + 0.05), g.pace_target_bid), 2) - o.current_bid, NULLIF(o.current_bid, 0)) * 100),
+                  '% to $', FORMAT('%.2f', ROUND(LEAST(GREATEST(o.current_bid * 1.10, o.current_bid + 0.05), g.pace_target_bid), 2)),
+                  ', walking toward the economics target $', FORMAT('%.2f', g.pace_target_bid),
                   ' (band ceiling / settled GP-per-click ÷ 1.2 / 1.5x LY conv CPC, $2 cap) — cheap proven winners must not starve the data that would justify raising them')
     WHEN (COALESCE(rv.reverdict, '') IN ('CONFIRM_PARK', 'REDUNDANT') OR COALESCE(rv.manual_parked_recent, FALSE))
      AND COALESCE(o.current_bid, 0) <= 0.30
