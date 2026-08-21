@@ -22,6 +22,18 @@
 --          separate times in this warehouse.
 --   A10    The band is symmetric and the three judged buckets are exhaustive over the judgeable set,
 --          so nothing falls between "clears", "misses" and "too close".
+--   A11    A shortfall is a shortfall. Computed across all three judged buckets it published a
+--          NEGATIVE number on the account's BEST campaigns — a surplus wearing the wrong name,
+--          which reads as a loss to anyone scanning the column.
+--   A12    Nothing reaches a verdict by falling off the end of the CASE. A campaign whose return
+--          cannot be read used to land in "too close to call" and be published with a confident
+--          sentence about evidence that did not exist.
+--   A13    A band of exactly zero is a claim of certainty. It used to happen to any campaign that
+--          took clicks and produced no orders, because the old band multiplied by a return of zero.
+--   A14    The rewrite that fixed A13 must be ALGEBRAICALLY NEUTRAL wherever a campaign made a
+--          sale — "what an order is worth times the square root of the order count over the spend"
+--          IS "the return over the square root of orders". If this fails, the rewrite moved
+--          verdicts on selling campaigns, which it was never supposed to do.
 -- =============================================================================================
 WITH v AS (SELECT * FROM `onyga-482313.OI.V_CAMPAIGN_MONEY_PLACEMENT`),
 acct AS (SELECT budget_per_day AS b, spend_window AS s, n_campaigns AS n FROM v WHERE row_kind = 'ACCOUNT'),
@@ -49,10 +61,10 @@ UNION ALL SELECT 'A5 no enabled campaign missing from every bucket',
               (SELECT CAST(campaign_id AS STRING) cid FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` WHERE campaign_state='ENABLED') d
               LEFT JOIN (SELECT DISTINCT campaign_id FROM v WHERE row_kind='CAMPAIGN') m ON m.campaign_id = d.cid) = 0, 'PASS', 'FAIL')
 UNION ALL SELECT 'A6 launch rows carry no profitability figure at all',
-       CAST((SELECT COUNTIF(profit_verdict IS NOT NULL OR keyword_bar IS NOT NULL OR gp_roas_window IS NOT NULL
+       CAST((SELECT COUNTIF(profit_verdict IS NOT NULL OR family_bar IS NOT NULL OR gp_roas_window IS NOT NULL
                             OR band_half_width IS NOT NULL OR shortfall_window IS NOT NULL
                             OR gross_profit_window IS NOT NULL) FROM v WHERE bucket_code = 'LAUNCH') AS STRING),
-       IF((SELECT COUNTIF(profit_verdict IS NOT NULL OR keyword_bar IS NOT NULL OR gp_roas_window IS NOT NULL
+       IF((SELECT COUNTIF(profit_verdict IS NOT NULL OR family_bar IS NOT NULL OR gp_roas_window IS NOT NULL
                             OR band_half_width IS NOT NULL OR shortfall_window IS NOT NULL
                             OR gross_profit_window IS NOT NULL) FROM v WHERE bucket_code = 'LAUNCH') = 0, 'PASS', 'FAIL')
 UNION ALL SELECT 'A7 every row carries a sentence',
@@ -67,15 +79,39 @@ UNION ALL SELECT 'A9 unmeasured never reads as losing',
        IF((SELECT COUNTIF(gross_profit_window IS NULL) FROM v WHERE row_kind='CAMPAIGN' AND bucket_code='UNPROFITABLE') = 0, 'PASS', 'FAIL')
 UNION ALL SELECT 'A10 the three judged buckets are exhaustive over the judgeable set',
        CAST((SELECT COUNTIF(NOT (
-              (gp_roas_window - band_half_width >= keyword_bar AND bucket_code='PROFITABLE') OR
-              (gp_roas_window + band_half_width <  keyword_bar AND bucket_code='UNPROFITABLE') OR
-              (gp_roas_window - band_half_width <  keyword_bar AND gp_roas_window + band_half_width >= keyword_bar
+              (gp_roas_window - band_half_width >= family_bar AND bucket_code='PROFITABLE') OR
+              (gp_roas_window + band_half_width <  family_bar AND bucket_code='UNPROFITABLE') OR
+              (gp_roas_window - band_half_width <  family_bar AND gp_roas_window + band_half_width >= family_bar
                AND bucket_code='MARGINAL')))
             FROM v WHERE row_kind='CAMPAIGN' AND bucket_code IN ('PROFITABLE','MARGINAL','UNPROFITABLE')) AS STRING),
        IF((SELECT COUNTIF(NOT (
-              (gp_roas_window - band_half_width >= keyword_bar AND bucket_code='PROFITABLE') OR
-              (gp_roas_window + band_half_width <  keyword_bar AND bucket_code='UNPROFITABLE') OR
-              (gp_roas_window - band_half_width <  keyword_bar AND gp_roas_window + band_half_width >= keyword_bar
+              (gp_roas_window - band_half_width >= family_bar AND bucket_code='PROFITABLE') OR
+              (gp_roas_window + band_half_width <  family_bar AND bucket_code='UNPROFITABLE') OR
+              (gp_roas_window - band_half_width <  family_bar AND gp_roas_window + band_half_width >= family_bar
                AND bucket_code='MARGINAL')))
             FROM v WHERE row_kind='CAMPAIGN' AND bucket_code IN ('PROFITABLE','MARGINAL','UNPROFITABLE')) = 0, 'PASS', 'FAIL')
+UNION ALL SELECT 'A11 a shortfall is never negative and appears only where there is one',
+       CAST((SELECT COUNTIF(shortfall_window < 0
+                            OR (shortfall_window IS NOT NULL AND bucket_code <> 'UNPROFITABLE')) FROM v) AS STRING),
+       IF((SELECT COUNTIF(shortfall_window < 0
+                          OR (shortfall_window IS NOT NULL AND bucket_code <> 'UNPROFITABLE')) FROM v) = 0, 'PASS', 'FAIL')
+UNION ALL SELECT 'A12 no verdict is reached on a return nobody can read',
+       CAST((SELECT COUNTIF(gp_roas_window IS NULL OR band_half_width IS NULL OR family_bar IS NULL)
+             FROM v WHERE row_kind='CAMPAIGN' AND bucket_code IN ('PROFITABLE','MARGINAL','UNPROFITABLE')) AS STRING),
+       IF((SELECT COUNTIF(gp_roas_window IS NULL OR band_half_width IS NULL OR family_bar IS NULL)
+           FROM v WHERE row_kind='CAMPAIGN' AND bucket_code IN ('PROFITABLE','MARGINAL','UNPROFITABLE')) = 0, 'PASS', 'FAIL')
+UNION ALL SELECT 'A13 no judged campaign carries a band of zero',
+       CAST((SELECT COUNTIF(band_half_width <= 0)
+             FROM v WHERE row_kind='CAMPAIGN' AND bucket_code IN ('PROFITABLE','MARGINAL','UNPROFITABLE')) AS STRING),
+       IF((SELECT COUNTIF(band_half_width <= 0)
+           FROM v WHERE row_kind='CAMPAIGN' AND bucket_code IN ('PROFITABLE','MARGINAL','UNPROFITABLE')) = 0, 'PASS', 'FAIL')
+UNION ALL SELECT 'A14 the zero-order rewrite moved no verdict on a campaign that made a sale',
+       CAST((SELECT COUNTIF(ABS(band_half_width
+                                - band_sigmas * dispersion_factor * ABS(gp_roas_window) / SQRT(orders_window)) > 0.001)
+             FROM v WHERE row_kind='CAMPAIGN' AND orders_window > 0
+                     AND bucket_code IN ('PROFITABLE','MARGINAL','UNPROFITABLE')) AS STRING),
+       IF((SELECT COUNTIF(ABS(band_half_width
+                              - band_sigmas * dispersion_factor * ABS(gp_roas_window) / SQRT(orders_window)) > 0.001)
+           FROM v WHERE row_kind='CAMPAIGN' AND orders_window > 0
+                   AND bucket_code IN ('PROFITABLE','MARGINAL','UNPROFITABLE')) = 0, 'PASS', 'FAIL')
 ORDER BY 1;
