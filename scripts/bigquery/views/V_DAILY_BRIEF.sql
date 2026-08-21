@@ -42,6 +42,12 @@ planned AS (
     p.campaign_id, p.keyword_id
   FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS` p, latest
   WHERE p.snapshot_date = latest.d
+    -- v27.98: PLANNED is "what the engine wants DONE today". A row the last-day veto held is the
+    -- engine saying wait, and it is now RECORDED in the proposal table (verdict EXCLUDE, with the
+    -- veto's own sentence) rather than erased — but it belongs in the audit trail, not on the
+    -- morning list, exactly as the table's own header argues about hold rows. This keeps the
+    -- brief byte-identical to what it printed before held rows existed.
+    AND p.hold_source IS NULL
 ),
 
 happened AS (
@@ -64,6 +70,10 @@ happened AS (
     ON p.snapshot_date = DATE(a.applied_at, 'America/Los_Angeles')
    AND p.campaign_id = CAST(a.campaign_id AS STRING)
    AND COALESCE(p.keyword_id, '') = COALESCE(CAST(a.keyword_id AS STRING), '')
+   -- v27.98: a veto-held row is not a plan, so it must not turn a hand change into a "planned"
+   -- one. Without this the detail line would read "engine proposed" followed by nothing, because
+   -- a held row's suggested value is deliberately NULL.
+   AND p.hold_source IS NULL
   LEFT JOIN `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` dc
     ON CAST(dc.campaign_id AS STRING) = CAST(a.campaign_id AS STRING)
   WHERE a.applied_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR)

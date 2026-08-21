@@ -281,7 +281,28 @@ SELECT pub.* EXCEPT (veto_raise, veto_cut, exp_ord_1d) REPLACE (
     WHEN pub.veto_cut THEN CONCAT('yday: ', CAST(pub.clicks_1d AS STRING), 'c at ',
       FORMAT('%.2f', COALESCE(pub.roas_1d, 0)), 'x ⇒ cut waits a day')
     ELSE pub.reason_short END AS reason_short
-)
+),
+  -- ── v27.98 (Ori 2026-08-21): THE VETO STOPS ERASING WHAT IT HELD ──────────────────────────
+  -- Three ADDITIVE columns, NULL on every row the veto did not touch, identical in shape to the
+  -- sibling V_OOB_KEYWORD. Nothing above changes: action still reads HOLD and suggested_bid is
+  -- still NULL, so every existing consumer behaves exactly as it did yesterday.
+  -- THE DEFECT THEY FIX: SP_SNAPSHOT_ENGINE_PROPOSALS takes a row on
+  -- `action NOT IN ('HOLD', ...) AND suggested_bid IS NOT NULL`, and the veto breaks BOTH
+  -- conjuncts, so a vetoed row vanished from FACT_ENGINE_PROPOSALS together with its reason —
+  -- the one suppression in the engine that ERASES rather than LABELS, against the doctrine
+  -- SP_ENGINE_PREFLIGHT states for the holdout arm ("block the export, never the judgement").
+  -- held_bid is deliberately NOT suggested_bid: a value in suggested_bid is an instruction to
+  -- Amazon, and a held row must be unable to become one no matter which consumer reads it.
+  -- hold_source names the ARM: the cut arm is strong evidence (an unfinished day already at/above
+  -- the cut bar can only rise as attribution accrues), the raise arm is weak (46% of at-volume
+  -- rows read exactly 0.00x on a filling day) — an audit that cannot tell them apart cannot judge
+  -- the veto. It also distinguishes a veto hold from a collision / claim / holdout exclusion
+  -- downstream, the way is_holdout already does.
+  IF(pub.veto_raise OR pub.veto_cut, pub.action,        CAST(NULL AS STRING))  AS held_action,
+  IF(pub.veto_raise OR pub.veto_cut, pub.suggested_bid, CAST(NULL AS FLOAT64)) AS held_bid,
+  CASE WHEN pub.veto_raise THEN 'LAST_DAY_VETO_RAISE'
+       WHEN pub.veto_cut   THEN 'LAST_DAY_VETO_CUT'
+       ELSE CAST(NULL AS STRING) END AS hold_source
 FROM (
   SELECT p0.*,
     -- the two veto booleans, computed ONCE — every transformed column reads these, never a re-derivation
@@ -336,10 +357,12 @@ SELECT pub.*,
       'no profit yday or day before (', CAST(COALESCE(pub.clicks_1d, 0) AS STRING), '+',
       CAST(COALESCE(pub.clicks_prev2, 0) AS STRING), ' clicks) ⇒ trim bid to $',
       FORMAT('%.2f', pub.suggested_bid))
-    -- NUDGE_UP on a zero-click day gets its own sentence; else it reads as a raise below
-    WHEN pub.action = 'NUDGE_UP' AND COALESCE(pub.clicks_1d, 0) = 0 THEN CONCAT(
-      '0 clicks yday at $', FORMAT('%.2f', COALESCE(pub.current_bid, 0)), ' ⇒ nudge bid to $',
-      FORMAT('%.2f', pub.suggested_bid), ' to re-enter the auction')
+    -- NUDGE_UP on a silent keyword gets its own sentence; else it reads as a raise below.
+    -- v27.98: silence is the three COMPLETE days, matching the gate — the filling day alone
+    -- said "0 clicks" about keywords that had clicked every day of the preceding week.
+    WHEN pub.action = 'NUDGE_UP' AND COALESCE(pub.clicks_3d, 0) = 0 THEN CONCAT(
+      '0 clicks over the last 3 complete days at $', FORMAT('%.2f', COALESCE(pub.current_bid, 0)),
+      ' ⇒ nudge bid to $', FORMAT('%.2f', pub.suggested_bid), ' so the windows can refresh')
     WHEN pub.action IN ('RAISE_TO_TARGET', 'NUDGE_UP', 'VOLUME_LIFT', 'AUTO_RAISE', 'AUTO_DAY_RAISE', 'KEEP', 'PACE_RAISE') THEN CONCAT(
       CAST(CAST(COALESCE(pub.clicks_w, 0) AS INT64) AS STRING), ' clicks at ',
       FORMAT('%.2f', COALESCE(pub.roas_w, 0)), 'x last ', CAST(pub.w_days AS STRING),
@@ -1127,7 +1150,17 @@ phase_bud AS (
 ),
 out AS (
 SELECT
-  a.campaign_id, a.campaign_name, 'SP' AS channel, ROUND(a.budget, 0) AS budget,
+  -- v27.98 (Ori 2026-08-21): CENTS. The budget was published to whole dollars while every
+  -- suggested_budget arm below multiplies the UNROUNDED figure, so a row that said "cut 20%" and
+  -- was arithmetically a 20% cut printed as -18.10% next to its own sentence, and the same
+  -- campaign read $29.00 here and $29.16 in the sibling budget engine on one snapshot. Two harms,
+  -- one cause. The sharper one: the export gate drops a row when the suggested value sits within
+  -- half a cent of the current one, and on a floor-bound cut ($15.36 -> $15.00) the rounded
+  -- current read $15 and the genuine 36-cent cut was silently binned as a no-op — measured on
+  -- four consecutive snapshots, two campaigns. Publishing cents makes the printed change agree
+  -- with the arithmetic, makes the two engines agree with each other, and lets a small real cut
+  -- reach the export.
+  a.campaign_id, a.campaign_name, 'SP' AS channel, ROUND(a.budget, 2) AS budget,
   (SELECT in_peak FROM season) AS in_peak, (SELECT w_days FROM cap) AS w_days,
   ROUND(a.camp_sp, 2) AS campaign_spend_w,
   ROUND(100 * SAFE_DIVIDE(a.loser_sp, NULLIF(a.camp_sp, 0))) AS loser_share_pct,
@@ -1260,11 +1293,11 @@ SELECT
     WHEN a.seat_rank > a.slots AND NOT a.is_auto THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK_WAIT', 'IDLE')
     -- the 80% pool
     -- SEASON RAMP (Ori 2026-08-02): its season is arriving (seasonal_now) and the bid sits
-    -- under 60% of the current LY-anchored target — glide UP toward target (+10%/day, min 5c),
+    -- under 60% of the current LY-anchored target — glide UP toward target by max(+10%, +5c),
     -- never above it from this rule. WINNER/MARGINAL only (orders prove the season is real);
     -- losers re-enter through the probe path at 1.5x target instead.
     -- v27.11 (Ori 2026-08-04, "why it is not raised toward target?"): the mirror of
-    -- EASE_TO_TARGET — a WINNER earning below its target price glides UP toward it, +10%/day,
+    -- EASE_TO_TARGET — a WINNER earning below its target price glides UP toward it, max(+10%, +5c),
     -- never past it (the target is the LY/band market price — the built-in ceiling). Not
     -- while capped (never raise into dark), not autos (own doctrine), not defense.
     WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
@@ -1310,13 +1343,23 @@ SELECT
          AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) THEN 'NUDGE_UP'
-    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies the LAST DAY is the CLICK GATE.
-    -- A seated, active keyword that took zero clicks yesterday is priced out of the auction,
-    -- so the very window it is judged on can never refresh -- it just ages. Same +5%/day
-    -- nudge as the low tier, keyed on the last day instead of the 3-day click bar.
+    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies a SILENT keyword is the trigger.
+    -- A seated, active keyword that is buying no clicks is priced out of the auction, so the
+    -- very windows it is judged on can never refresh -- they just age. Same +5%/day nudge as
+    -- the low tier.
+    -- v27.98 (Ori 2026-08-21): SILENCE IS NOW MEASURED ON COMPLETE DAYS. Through v27.97 the
+    -- gate was the filling day alone -- the one window in this file that ended AT the
+    -- watermark, on a day that is only 88-90% loaded when the engine runs. Measured: 13.1% of
+    -- steady clickers read zero on the filling day purely on arrival timing, so roughly one
+    -- seated keyword in eight was eligible on any given morning and the proposal did not
+    -- survive an hour: two of the four live rows flipped back to KEEP when a late click
+    -- landed. It also made the sentence untrue -- it said "never enters the auction" about a
+    -- keyword that had clicked on all seven preceding days. The gate is now the three
+    -- COMPLETE days ending the day before the watermark, the same span the reason names, and
+    -- the filling day keeps its house role: a one-way veto that may never drive a move.
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND COALESCE(a.clk1, 0) = 0
+         AND a.seat_rank <= a.slots AND COALESCE(a.clk3, 0) = 0
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN 'NUDGE_UP'
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
@@ -1371,8 +1414,19 @@ SELECT
     WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
     -- idle pool: promote the next candidates into probes when slots are free
+    -- v27.98 (Ori 2026-08-21): THE ENTRY MAY ONLY RAISE — the guard the sibling arm has had
+    -- since v27.70, ported here. The doctrine is stated in the bid arm below and was being
+    -- broken by this one: three live rows said 'lift to $0.54' / 'lift to $0.83' while
+    -- CUTTING the bid 17-46%, because the candidate arm priced the anchored entry
+    -- unconditionally and these keywords were already sitting above it at the legacy $1.00.
+    -- A verb that contradicts its own sign is not a wording problem: the entry is not a
+    -- trim, and pricing a probe DOWN on entry is the trim ladders' business. Predicate
+    -- mirrored across action / value / sentence so the three can never disagree.
     WHEN a.class = 'IDLE' AND NOT a.is_auto AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
+
+         AND ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
+             > COALESCE(a.current_bid, 0) + 0.005
          THEN 'PROBE_START'
     ELSE 'IDLE'
   END AS action,
@@ -1456,13 +1510,23 @@ SELECT
          AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2)
-    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies the LAST DAY is the CLICK GATE.
-    -- A seated, active keyword that took zero clicks yesterday is priced out of the auction,
-    -- so the very window it is judged on can never refresh -- it just ages. Same +5%/day
-    -- nudge as the low tier, keyed on the last day instead of the 3-day click bar.
+    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies a SILENT keyword is the trigger.
+    -- A seated, active keyword that is buying no clicks is priced out of the auction, so the
+    -- very windows it is judged on can never refresh -- they just age. Same +5%/day nudge as
+    -- the low tier.
+    -- v27.98 (Ori 2026-08-21): SILENCE IS NOW MEASURED ON COMPLETE DAYS. Through v27.97 the
+    -- gate was the filling day alone -- the one window in this file that ended AT the
+    -- watermark, on a day that is only 88-90% loaded when the engine runs. Measured: 13.1% of
+    -- steady clickers read zero on the filling day purely on arrival timing, so roughly one
+    -- seated keyword in eight was eligible on any given morning and the proposal did not
+    -- survive an hour: two of the four live rows flipped back to KEEP when a late click
+    -- landed. It also made the sentence untrue -- it said "never enters the auction" about a
+    -- keyword that had clicked on all seven preceding days. The gate is now the three
+    -- COMPLETE days ending the day before the watermark, the same span the reason names, and
+    -- the filling day keeps its house role: a one-way veto that may never drive a move.
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND COALESCE(a.clk1, 0) = 0
+         AND a.seat_rank <= a.slots AND COALESCE(a.clk3, 0) = 0
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
@@ -1521,8 +1585,13 @@ SELECT
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.is_auto AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
+
+         AND ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
+             > COALESCE(a.current_bid, 0) + 0.005
       -- $1 SEAT-ENTRY FLOOR (Ori 2026-08-02: "i wont move if not") — also the anchorless entry:
-      -- no LY target, no band, no winner CPC -> enter at the $1 floor instead of never starting
+      -- no LY target, no band, no winner CPC -> enter at the $1 floor instead of never starting.
+      -- v27.98: guarded — an anchored entry at or below the current bid emits NULL, exactly as
+      -- the arm's own doctrine (three lines up in the header of the probe block) already said.
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
     ELSE NULL
   END AS suggested_bid,
@@ -1579,12 +1648,24 @@ SELECT
                   ' seats (budget ÷ $4); its test resumes when a seat frees')
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
+      -- v27.98: same step, same fix as the winner arm below — the printed percentage is derived
+      -- from the price this row actually proposes, not from a nominal 10%.
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
-                  CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+                  FORMAT('%.2f', a.tcpc), ': raise ',FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2) - a.current_bid, NULLIF(a.current_bid, 0)) * 100), '% to $',
+                  FORMAT('%.2f', ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)),
+                  ' (beyond target only via the coacher)')
     WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05
-      THEN CONCAT('winner (', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x) earning under its target price — raise +10%/day toward $',
-                  CAST(a.tcpc AS STRING), ' (never past it; beyond target only via the coacher)')
+      -- v27.98 (Ori 2026-08-21): the PERCENTAGE IS BUILT FROM THE ROW. The sentence used to say a
+      -- flat "+10%/day" while the step actually taken is the LARGER of +10% and +5c, capped at the
+      -- target — so on every live row the nickel arm won and the move landed at +11.9% to +22.7%.
+      -- The uploaded price was right each time; only the words were wrong, which is the failure
+      -- that makes a correct engine look broken. Deriving the number from the same expression that
+      -- prices the row means the two can never disagree again.
+      THEN CONCAT('winner (', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x) earning under its target price $',
+                  FORMAT('%.2f', a.tcpc), ' — raise ',FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2) - a.current_bid, NULLIF(a.current_bid, 0)) * 100), '% to $',
+                  FORMAT('%.2f', ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)),
+                  ' (never past target; beyond target only via the coacher)')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND a.clk_w >= a.cut_gate
          AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30
@@ -1608,15 +1689,19 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN CONCAT('invisible — ', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
                   ': the bid is priced out of the auction; nudge +5%/day toward the entry anchor $', CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING), ' until it buys data')
-    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies the LAST DAY is the CLICK GATE.
-    -- A seated, active keyword that took zero clicks yesterday is priced out of the auction,
-    -- so the very window it is judged on can never refresh -- it just ages.
+    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies a SILENT keyword is the trigger.
+    -- A seated, active keyword that is buying no clicks is priced out of the auction, so the
+    -- very windows it is judged on can never refresh -- they just age.
+    -- v27.98 (Ori 2026-08-21): silence is measured on the three COMPLETE days, not the filling
+    -- day, and the sentence below now says what is actually true -- the windows are aging out,
+    -- not that the keyword never enters the auction (it clicked on all seven preceding days on
+    -- the row that exposed this).
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND COALESCE(a.clk1, 0) = 0
+         AND a.seat_rank <= a.slots AND COALESCE(a.clk3, 0) = 0
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
-      THEN CONCAT('no clicks yesterday at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
-                  ' while holding a seat — the 7d/8-28d windows cannot refresh on a keyword that never enters the auction: nudge +5%/day toward the entry anchor $',
+      THEN CONCAT('no clicks on the last three complete days at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
+                  ' while holding a seat — the windows this keyword is judged on are aging out with nothing fresh arriving to refresh them: nudge +5%/day toward the entry anchor $',
                   CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING))
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
@@ -1680,6 +1765,9 @@ SELECT
     WHEN a.class = 'IDLE' AND a.capped
       THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
     WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
+
+         AND ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
+             > COALESCE(a.current_bid, 0) + 0.005
       THEN CONCAT(IF(a.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''), 'next probe candidate — lift to $',
                   CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING),
                   -- v27.70 (reviewer A): the label names the anchor that actually priced the
@@ -1689,6 +1777,13 @@ SELECT
                              WHEN a.win_cpc IS NOT NULL THEN "the winners' avg CPC"
                              ELSE '$1 anchorless entry' END,
                   '), verdict at 20 clicks')
+    -- v27.98: the candidate whose bid already clears the entry anchor. It keeps its seat and
+    -- its place in the queue; there is simply nothing to upload, and the sentence says so
+    -- rather than announcing a lift that is really a cut.
+    WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
+      THEN CONCAT('next probe candidate, and its bid $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
+                  ' already sits at or above the $', FORMAT('%.2f', ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)),
+                  ' entry price — the test runs at the price it already has; only the trim ladders may bring a bid down')
     ELSE 'idle — waiting for a probe slot'
   END AS reason,
   -- v27.76 (Task 4.9): the 90d complete-day click/order pair, PUBLISHED (additive) so the last-day
@@ -1702,7 +1797,8 @@ UNION ALL
 --    probing a dark campaign is a budget artifact — the no-loss-cuts rule; running probes still
 --    get verdicts and the −5% descent); net ROAS is the cost-ratio ESTIMATE ──
 SELECT
-  a.campaign_id, a.campaign_name, 'SB' AS channel, ROUND(a.budget, 0) AS budget,
+  -- v27.98: cents, same reason as the SP layer above — one rounding, both output layers.
+  a.campaign_id, a.campaign_name, 'SB' AS channel, ROUND(a.budget, 2) AS budget,
   (SELECT in_peak FROM season) AS in_peak, (SELECT w_days FROM cap) AS w_days,
   ROUND(a.camp_sp, 2) AS campaign_spend_w,
   ROUND(100 * SAFE_DIVIDE(a.loser_sp, NULLIF(a.camp_sp, 0))) AS loser_share_pct,
@@ -1832,11 +1928,11 @@ SELECT
     -- SEAT MECHANISM (Ori 2026-08-01): beyond the budget/$4 seats -> queue at $0.25
     WHEN a.seat_rank > a.slots AND NOT a.is_auto THEN IF(COALESCE(a.current_bid, 0) > 0.30, 'PARK_WAIT', 'IDLE')
     -- SEASON RAMP (Ori 2026-08-02): its season is arriving (seasonal_now) and the bid sits
-    -- under 60% of the current LY-anchored target — glide UP toward target (+10%/day, min 5c),
+    -- under 60% of the current LY-anchored target — glide UP toward target by max(+10%, +5c),
     -- never above it from this rule. WINNER/MARGINAL only (orders prove the season is real);
     -- losers re-enter through the probe path at 1.5x target instead.
     -- v27.11 (Ori 2026-08-04, "why it is not raised toward target?"): the mirror of
-    -- EASE_TO_TARGET — a WINNER earning below its target price glides UP toward it, +10%/day,
+    -- EASE_TO_TARGET — a WINNER earning below its target price glides UP toward it, max(+10%, +5c),
     -- never past it (the target is the LY/band market price — the built-in ceiling). Not
     -- while capped (never raise into dark), not autos (own doctrine), not defense.
     WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
@@ -1882,13 +1978,23 @@ SELECT
          AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) THEN 'NUDGE_UP'
-    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies the LAST DAY is the CLICK GATE.
-    -- A seated, active keyword that took zero clicks yesterday is priced out of the auction,
-    -- so the very window it is judged on can never refresh -- it just ages. Same +5%/day
-    -- nudge as the low tier, keyed on the last day instead of the 3-day click bar.
+    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies a SILENT keyword is the trigger.
+    -- A seated, active keyword that is buying no clicks is priced out of the auction, so the
+    -- very windows it is judged on can never refresh -- they just age. Same +5%/day nudge as
+    -- the low tier.
+    -- v27.98 (Ori 2026-08-21): SILENCE IS NOW MEASURED ON COMPLETE DAYS. Through v27.97 the
+    -- gate was the filling day alone -- the one window in this file that ended AT the
+    -- watermark, on a day that is only 88-90% loaded when the engine runs. Measured: 13.1% of
+    -- steady clickers read zero on the filling day purely on arrival timing, so roughly one
+    -- seated keyword in eight was eligible on any given morning and the proposal did not
+    -- survive an hour: two of the four live rows flipped back to KEEP when a late click
+    -- landed. It also made the sentence untrue -- it said "never enters the auction" about a
+    -- keyword that had clicked on all seven preceding days. The gate is now the three
+    -- COMPLETE days ending the day before the watermark, the same span the reason names, and
+    -- the filling day keeps its house role: a one-way veto that may never drive a move.
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND COALESCE(a.clk1, 0) = 0
+         AND a.seat_rank <= a.slots AND COALESCE(a.clk3, 0) = 0
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN 'NUDGE_UP'
     -- AUTO RAISE (Ori 2026-08-02, "why is this not raised"): the third auto lever — increase
@@ -1941,8 +2047,19 @@ SELECT
     WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.loser_cum_sp > (SELECT IF(in_peak, 0.40, 0.20) FROM season) * a.camp_sp AND COALESCE(a.current_bid, 0) > 0.30 THEN 'PARK'
     WHEN a.class = 'LOSER' AND a.clk_w >= IF(a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season), 10, 4) AND (a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season) OR COALESCE(a.camp_clk7, 0) >= 30) AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > a.tcpc + 0.05 THEN 'CUT_TO_TARGET'
     WHEN a.class = 'LOSER' THEN 'KEEP_TAIL'
+    -- v27.98 (Ori 2026-08-21): THE ENTRY MAY ONLY RAISE — the guard the sibling arm has had
+    -- since v27.70, ported here. The doctrine is stated in the bid arm below and was being
+    -- broken by this one: three live rows said 'lift to $0.54' / 'lift to $0.83' while
+    -- CUTTING the bid 17-46%, because the candidate arm priced the anchored entry
+    -- unconditionally and these keywords were already sitting above it at the legacy $1.00.
+    -- A verb that contradicts its own sign is not a wording problem: the entry is not a
+    -- trim, and pricing a probe DOWN on entry is the trim ladders' business. Predicate
+    -- mirrored across action / value / sentence so the three can never disagree.
     WHEN a.class = 'IDLE' AND NOT a.is_auto AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
+
+         AND ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
+             > COALESCE(a.current_bid, 0) + 0.005
          THEN 'PROBE_START'
     ELSE 'IDLE'
   END AS action,
@@ -2026,13 +2143,23 @@ SELECT
          AND a.seat_rank <= a.slots AND (a.clk1 + a.clk2) < 10
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2)
-    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies the LAST DAY is the CLICK GATE.
-    -- A seated, active keyword that took zero clicks yesterday is priced out of the auction,
-    -- so the very window it is judged on can never refresh -- it just ages. Same +5%/day
-    -- nudge as the low tier, keyed on the last day instead of the 3-day click bar.
+    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies a SILENT keyword is the trigger.
+    -- A seated, active keyword that is buying no clicks is priced out of the auction, so the
+    -- very windows it is judged on can never refresh -- they just age. Same +5%/day nudge as
+    -- the low tier.
+    -- v27.98 (Ori 2026-08-21): SILENCE IS NOW MEASURED ON COMPLETE DAYS. Through v27.97 the
+    -- gate was the filling day alone -- the one window in this file that ended AT the
+    -- watermark, on a day that is only 88-90% loaded when the engine runs. Measured: 13.1% of
+    -- steady clickers read zero on the filling day purely on arrival timing, so roughly one
+    -- seated keyword in eight was eligible on any given morning and the proposal did not
+    -- survive an hour: two of the four live rows flipped back to KEEP when a late click
+    -- landed. It also made the sentence untrue -- it said "never enters the auction" about a
+    -- keyword that had clicked on all seven preceding days. The gate is now the three
+    -- COMPLETE days ending the day before the watermark, the same span the reason names, and
+    -- the filling day keeps its house role: a one-way veto that may never drive a move.
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND COALESCE(a.clk1, 0) = 0
+         AND a.seat_rank <= a.slots AND COALESCE(a.clk3, 0) = 0
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN ROUND(LEAST(GREATEST(a.current_bid * 1.05, a.current_bid + 0.02), ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)), 2)
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
@@ -2091,8 +2218,13 @@ SELECT
     WHEN a.class = 'LOSER' THEN NULL
     WHEN a.class = 'IDLE' AND NOT a.is_auto AND NOT a.capped AND a.seat_rank <= a.slots
          AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
+
+         AND ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
+             > COALESCE(a.current_bid, 0) + 0.005
       -- $1 SEAT-ENTRY FLOOR (Ori 2026-08-02: "i wont move if not") — also the anchorless entry:
-      -- no LY target, no band, no winner CPC -> enter at the $1 floor instead of never starting
+      -- no LY target, no band, no winner CPC -> enter at the $1 floor instead of never starting.
+      -- v27.98: guarded — an anchored entry at or below the current bid emits NULL, exactly as
+      -- the arm's own doctrine (three lines up in the header of the probe block) already said.
       THEN ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
     ELSE NULL
   END AS suggested_bid,
@@ -2149,12 +2281,24 @@ SELECT
                   ' seats (budget ÷ $4); its test resumes when a seat frees')
     WHEN a.class IN ('WINNER','MARGINAL') AND a.seasonal_now AND a.tcpc IS NOT NULL
          AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < 0.60 * a.tcpc
+      -- v27.98: same step, same fix as the winner arm below — the printed percentage is derived
+      -- from the price this row actually proposes, not from a nominal 10%.
       THEN CONCAT('SEASON RAMP — its season is arriving and the bid is under 60% of the current target $',
-                  CAST(a.tcpc AS STRING), ': glide up +10%/day toward it (beyond target only via the coacher)')
+                  FORMAT('%.2f', a.tcpc), ': raise ',FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2) - a.current_bid, NULLIF(a.current_bid, 0)) * 100), '% to $',
+                  FORMAT('%.2f', ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)),
+                  ' (beyond target only via the coacher)')
     WHEN a.class = 'WINNER' AND NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.tcpc IS NOT NULL AND COALESCE(a.current_bid, 0) > 0 AND a.current_bid < a.tcpc - 0.05
-      THEN CONCAT('winner (', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x) earning under its target price — raise +10%/day toward $',
-                  CAST(a.tcpc AS STRING), ' (never past it; beyond target only via the coacher)')
+      -- v27.98 (Ori 2026-08-21): the PERCENTAGE IS BUILT FROM THE ROW. The sentence used to say a
+      -- flat "+10%/day" while the step actually taken is the LARGER of +10% and +5c, capped at the
+      -- target — so on every live row the nickel arm won and the move landed at +11.9% to +22.7%.
+      -- The uploaded price was right each time; only the words were wrong, which is the failure
+      -- that makes a correct engine look broken. Deriving the number from the same expression that
+      -- prices the row means the two can never disagree again.
+      THEN CONCAT('winner (', CAST(COALESCE(a.roas_w, 0) AS STRING), 'x) earning under its target price $',
+                  FORMAT('%.2f', a.tcpc), ' — raise ',FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2) - a.current_bid, NULLIF(a.current_bid, 0)) * 100), '% to $',
+                  FORMAT('%.2f', ROUND(LEAST(GREATEST(a.current_bid * 1.10, a.current_bid + 0.05), a.tcpc), 2)),
+                  ' (never past target; beyond target only via the coacher)')
     WHEN a.class != 'WINNER' AND NOT a.is_auto AND NOT a.is_defense
          AND a.clk_w >= a.cut_gate
          AND a.gp_w_raw <= 0 AND COALESCE(a.current_bid, 0) > 0.30
@@ -2178,15 +2322,19 @@ SELECT
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
       THEN CONCAT('invisible — ', CAST(CAST(a.clk1 + a.clk2 AS INT64) AS STRING), ' clicks over 3d at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
                   ': the bid is priced out of the auction; nudge +5%/day toward the entry anchor $', CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING), ' until it buys data')
-    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies the LAST DAY is the CLICK GATE.
-    -- A seated, active keyword that took zero clicks yesterday is priced out of the auction,
-    -- so the very window it is judged on can never refresh -- it just ages.
+    -- v27.21 (Ori 2026-08-06): in the 7d / 8-28d strategies a SILENT keyword is the trigger.
+    -- A seated, active keyword that is buying no clicks is priced out of the auction, so the
+    -- very windows it is judged on can never refresh -- they just age.
+    -- v27.98 (Ori 2026-08-21): silence is measured on the three COMPLETE days, not the filling
+    -- day, and the sentence below now says what is actually true -- the windows are aging out,
+    -- not that the keyword never enters the auction (it clicked on all seven preceding days on
+    -- the row that exposed this).
     WHEN NOT a.is_auto AND NOT a.is_defense AND NOT a.capped
          AND a.budget > (SELECT IF(in_peak, 30.0, 20.0) FROM season)
-         AND a.seat_rank <= a.slots AND COALESCE(a.clk1, 0) = 0
+         AND a.seat_rank <= a.slots AND COALESCE(a.clk3, 0) = 0
          AND COALESCE(a.current_bid, 0) > 0.30 AND COALESCE(a.current_bid, 0) + 0.05 < ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
-      THEN CONCAT('no clicks yesterday at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
-                  ' while holding a seat — the 7d/8-28d windows cannot refresh on a keyword that never enters the auction: nudge +5%/day toward the entry anchor $',
+      THEN CONCAT('no clicks on the last three complete days at $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
+                  ' while holding a seat — the windows this keyword is judged on are aging out with nothing fresh arriving to refresh them: nudge +5%/day toward the entry anchor $',
                   CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING))
     WHEN a.is_auto AND a.budget <= (SELECT IF(in_peak, 30.0, 20.0) FROM season)
          AND a.clk1 >= 1 AND a.gp1 > a.sp1 AND COALESCE(a.current_bid, 0) < 2.00
@@ -2250,6 +2398,9 @@ SELECT
     WHEN a.class = 'IDLE' AND a.capped
       THEN 'idle — campaign capped (dark > 10%): probes held, a budget artifact not a bid problem'
     WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
+
+         AND ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)
+             > COALESCE(a.current_bid, 0) + 0.005
       THEN CONCAT(IF(a.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''), 'next probe candidate — lift to $',
                   CAST(ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2) AS STRING),
                   -- v27.70 (reviewer A): the label names the anchor that actually priced the
@@ -2259,6 +2410,13 @@ SELECT
                              WHEN a.win_cpc IS NOT NULL THEN "the winners' avg CPC"
                              ELSE '$1 anchorless entry' END,
                   '), verdict at 20 clicks')
+    -- v27.98: the candidate whose bid already clears the entry anchor. It keeps its seat and
+    -- its place in the queue; there is simply nothing to upload, and the sentence says so
+    -- rather than announcing a lift that is really a cut.
+    WHEN a.class = 'IDLE' AND a.seat_rank <= a.slots AND a.active_probes < IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) AND a.cand_rank <= (IF(a.is_seasonal AND a.season_active, a.slots, (SELECT IF(in_peak, 4, 2) FROM season)) - a.active_probes)
+      THEN CONCAT('next probe candidate, and its bid $', FORMAT('%.2f', COALESCE(a.current_bid, 0)),
+                  ' already sits at or above the $', FORMAT('%.2f', ROUND(LEAST(GREATEST(COALESCE(1.5 * a.tcpc, a.win_cpc, 1.00), 0.31), 2.00), 2)),
+                  ' entry price — the test runs at the price it already has; only the trim ladders may bring a bid down')
     ELSE 'idle — waiting for a probe slot'
   END AS reason,
   -- v27.76 (Task 4.9): same additive 90d pair as the SP arm above — positional twin of the UNION.
@@ -2991,11 +3149,17 @@ SELECT o.* EXCEPT (bid_hold, bud_hold, bid_floor, probe_bid) REPLACE (
      AND NOT (ap.last IS NOT NULL
               AND (DATE(ap.last.ts, 'America/Los_Angeles') = CURRENT_DATE('America/Los_Angeles')
                    OR ABS(COALESCE(ap.last.new_bid, -1) - COALESCE(o.current_bid, -1)) > 0.005))
+      -- v27.98 (Ori 2026-08-21): the percentage is derived from the price this arm actually
+      -- fills, not from a nominal "+10%/day". The step is max(+10%, +5c) capped at the target,
+      -- so on a cheap bid the nickel arm wins and the real move is +19% or +23% — the sentence
+      -- said 10% next to a row that plainly moved more. Same expression as the fill below.
       THEN CONCAT('proven winner priced under its target — ',
                   CAST(CAST(COALESCE(o.clicks_w,0) AS INT64) AS STRING), ' clicks at ',
                   FORMAT('%.2f', COALESCE(o.roas_w,0)), 'x on a $', FORMAT('%.2f', o.current_bid),
                   ' bid against a $', FORMAT('%.2f', o.target_cpc),
-                  ' target, and the campaign is not dark: glide +10%/day toward the target',
+                  ' target, and the campaign is not dark: raise ',
+                  FORMAT('%+.1f', SAFE_DIVIDE(ROUND(LEAST(GREATEST(o.current_bid * 1.10, o.current_bid + 0.05), o.target_cpc), 2) - o.current_bid, NULLIF(o.current_bid, 0)) * 100),
+                  '% to $', FORMAT('%.2f', ROUND(LEAST(GREATEST(o.current_bid * 1.10, o.current_bid + 0.05), o.target_cpc), 2)),
                   ' (winners already at/above their target keep holding)')
     -- v27.37 #3a: see the action note above. Same predicate, third ladder.
     WHEN o.action = 'PROBE_ADJUST' AND o.probe_rank > o.probe_pace

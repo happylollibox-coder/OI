@@ -303,7 +303,29 @@ SELECT pub.* EXCEPT (veto_raise, veto_cut) REPLACE (
     WHEN pub.veto_cut THEN CONCAT('yday: ', CAST(pub.clicks_1d AS STRING), 'c at ',
       FORMAT('%.2f', COALESCE(pub.roas_1d, 0)), 'x ⇒ cut waits a day')
     ELSE pub.bid_reason_short END AS bid_reason_short
-)
+),
+  -- ── v27.98 (Ori 2026-08-21): THE VETO STOPS ERASING WHAT IT HELD ──────────────────────────
+  -- Three ADDITIVE columns, NULL on every row the veto did not touch. Nothing above changes:
+  -- bid_action still reads HOLD and suggested_bid is still NULL, so every existing consumer —
+  -- panels, cube, bulksheet builders, the proposal snapshot's own action/value filters — behaves
+  -- exactly as it did yesterday. THE DEFECT THEY FIX: SP_SNAPSHOT_ENGINE_PROPOSALS takes a row
+  -- on `bid_action NOT IN ('HOLD', ...) AND suggested_bid IS NOT NULL`, and the veto breaks BOTH
+  -- conjuncts, so a vetoed row vanished from FACT_ENGINE_PROPOSALS together with its reason. That
+  -- made this the ONE suppression in the engine that ERASES rather than LABELS — against the
+  -- house doctrine SP_ENGINE_PREFLIGHT states for the holdout arm: "the proposal is still
+  -- recorded ... only the verdict says EXCLUDE. Block the export, never the judgement."
+  -- held_bid is deliberately NOT suggested_bid: a value in suggested_bid is an instruction to
+  -- Amazon, and a held row must be unable to become one no matter which consumer reads it.
+  -- hold_source names the ARM, not just the fact — the cut arm is strong evidence (a filling day
+  -- already at/above the cut bar can only rise as attribution accrues) while the raise arm is
+  -- weak (46% of at-volume rows read exactly 0.00x on a filling day), so an audit that cannot
+  -- tell them apart cannot judge the veto at all. It is also what distinguishes a veto hold from
+  -- a collision / claim / holdout exclusion downstream, the way is_holdout already does.
+  IF(pub.veto_raise OR pub.veto_cut, pub.bid_action,     CAST(NULL AS STRING))  AS held_action,
+  IF(pub.veto_raise OR pub.veto_cut, pub.suggested_bid,  CAST(NULL AS FLOAT64)) AS held_bid,
+  CASE WHEN pub.veto_raise THEN 'LAST_DAY_VETO_RAISE'
+       WHEN pub.veto_cut   THEN 'LAST_DAY_VETO_CUT'
+       ELSE CAST(NULL AS STRING) END AS hold_source
 FROM (
   SELECT p1.*,
     -- the two veto booleans, computed ONCE — every transformed column reads these, never a re-derivation
@@ -1214,7 +1236,7 @@ SELECT
                     -- paced, never punished, least of all for ONE unsettled day.
                     IF(b.clk1 >= 10 AND COALESCE(b.roas1, 0) = 0 AND COALESCE(b.roas90, 0) < 1.0,
                        0.85, 1.0)))) AS INT64) AS STRING),
-                  '%/day toward $0.20; this bid spent ', CAST(b.clk1 AS STRING), ' clicks at ',
+                  '%/day toward $', FORMAT('%.2f', b.bid_floor), '; this bid spent ', CAST(b.clk1 AS STRING), ' clicks at ',
                   FORMAT('%.2f', COALESCE(b.roas1, 0)), 'x yesterday',
                   CASE WHEN COALESCE(b.roas90, 0) >= 1.0 THEN ' (90d proven — minimum ease)'
                        -- v27.65: name the zero-sale floor when it is the binding term
@@ -1313,23 +1335,77 @@ SELECT
                   CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_big_trim, 1 - 0.30 * b.pct_dark / 100))) AS INT64) AS STRING),
                   '%/day toward the seat CPC $', CAST(b.seat_cpc AS STRING), ' (= budget ÷ seats ÷ 4-click goal)')
     WHEN b.clk1 >= x.click_goal_day AND b.current_bid > b.bid_floor + 0.05
-      THEN CONCAT('campaign ', CAST(CAST(b.pct_dark AS INT64) AS STRING), '% dark — brake all bids ',
-                  CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_slow,
-                    CASE WHEN COALESCE(b.roas90, 0) >= 1.0 THEN x.bid_slow
-                         WHEN b.roas90 >= 0.6 THEN 1 - 0.15 * b.pct_dark / 100
-                         ELSE 1 - 0.30 * b.pct_dark / 100 END,
-                    -- v27.65 ZERO-SALE EVIDENCE FLOOR (Task 1.3): 10+ clicks yesterday with ZERO
-                    -- sales on an unproven record is evidence, not noise — the step never shrinks
-                    -- below 15% for such a row. Without this, the dark-scaled terms collapse to
-                    -- the 5% minimum whenever pct_dark reads low (BALL Mint substitutes: 23c at
-                    -- 0.00x braked 5%/day at "0% dark" while the campaign sat OOB-owned on 7-day
-                    -- hysteresis — 12+ days to the floor on a keyword burning $8/day). Proven
-                    -- (roas90 >= 1.0) keeps the gentle pace: v27.47/v27.63 doctrine — a winner is
-                    -- paced, never punished, least of all for ONE unsettled day.
-                    IF(b.clk1 >= 10 AND COALESCE(b.roas1, 0) = 0 AND COALESCE(b.roas90, 0) < 1.0,
-                       0.85, 1.0)))) AS INT64) AS STRING),
-                  '%/day (90d-scaled: proven 5% min · 0.6-1.0x max(5%,15%×dark) · else max(5%,30%×dark) · 10+ clicks at 0.00x ⇒ 15% floor)',
-                  ' until the budget survives the day · floor $0.20')
+      -- v27.97 (Ori 2026-08-21, explanation audit) — TEXT ONLY. The predicate, the step and the
+      -- floor are BYTE-IDENTICAL to v27.65; only the sentence changed. THE DEFECT: this is the
+      -- FALL-THROUGH dark brake and its trigger is NOT darkness. A row is here because its
+      -- CAMPAIGN is OOB-owned, and ownership is the DUAL signal — an out-of-budget event OR spend
+      -- >= budget, held on the 7-day hysteresis (fact_oi_spend_over_budget_is_dark: the dark clock
+      -- misses overdelivery entirely). So the anchor-day pct_dark reads 0.0 on a campaign that has
+      -- been capped all week, and the old string opened "campaign 0% dark — brake all bids":
+      -- a ZERO offered as the reason for a brake. It then dumped the rule's formula raw
+      -- ("0.6-1.0x max(5%,15%×dark)") instead of the evidence, so the term that ACTUALLY set the
+      -- rate was invisible — BOX-SBS/BROAD (Hunter, By Age) 2026-08-21 published two rows quoting
+      -- the SAME "0% dark" and braking 5% ("8 year old girl birthday gift", 5 clicks) and 15%
+      -- ("girls gifts age 8-10", 57 clicks). Same stated evidence, different move.
+      -- THE GRAMMAR NOW (house shape, TRIGGER — EVIDENCE ⇒ MOVE, no formulas, no rule names):
+      --   TRIGGER  = the cap evidence that actually fired (days_capped_7d of 7); darkness is named
+      --              ONLY when there IS darkness, never as a zero.
+      --   EVIDENCE = this bid's OWN clicks and sales yesterday — the numbers that differ between
+      --              a 5% row and a 15% row, so two different moves can never quote one fact.
+      --   MOVE     = the step, toward the row's REAL floor. The old string hard-coded "$0.20";
+      --              the arithmetic floors at b.bid_floor, which is $0.25 on SB video/brand and
+      --              $0.10 on SB collection/store — 6 of the 13 live rows were told a wrong number.
+      --   CLOSER   = the term that BOUND the rate, in plain words (zero-sale evidence floor /
+      --              darkness / the 5% minimum), so the rate is always traceable from the sentence.
+      THEN CONCAT(
+        CASE
+          WHEN b.days_capped_7d >= 1 AND b.pct_dark > 0
+            THEN CONCAT('out of budget ', CAST(b.days_capped_7d AS STRING),
+                        ' of the last 7 days and dark ',
+                        CAST(CAST(b.pct_dark AS INT64) AS STRING), '% of yesterday')
+          WHEN b.days_capped_7d >= 1
+            THEN CONCAT('out of budget ', CAST(b.days_capped_7d AS STRING), ' of the last 7 days')
+          WHEN b.pct_dark > 0
+            THEN CONCAT('dark ', CAST(CAST(b.pct_dark AS INT64) AS STRING), '% of yesterday')
+          -- membership is is_oob_owned, so the campaign is capped even when both counters read low
+          ELSE 'the campaign is out of budget'
+        END,
+        ' — ', CAST(b.clk1 AS STRING), ' clicks yesterday ',
+        IF(COALESCE(b.roas1, 0) = 0, 'with no sales',
+           CONCAT('at ', FORMAT('%.2f', b.roas1), 'x')),
+        ' ⇒ brake ',
+        -- UNCHANGED ARITHMETIC — the same LEAST(...) the suggested_bid branch above computes.
+        -- v27.65 ZERO-SALE EVIDENCE FLOOR (Task 1.3): 10+ clicks yesterday with ZERO sales on an
+        -- unproven record is evidence, not noise — the step never shrinks below 15% for such a
+        -- row. Without it the dark-scaled terms collapse to the 5% minimum whenever pct_dark reads
+        -- low (BALL Mint substitutes: 23c at 0.00x braked 5%/day at "0% dark" while the campaign
+        -- sat OOB-owned on 7-day hysteresis — 12+ days to the floor on a keyword burning $8/day).
+        -- Proven (roas90 >= 1.0) keeps the gentle pace: v27.47/v27.63 — a winner is paced, never
+        -- punished, least of all for ONE unsettled day.
+        CAST(CAST(ROUND(100 * (1 - LEAST(x.bid_slow,
+          CASE WHEN COALESCE(b.roas90, 0) >= 1.0 THEN x.bid_slow
+               WHEN b.roas90 >= 0.6 THEN 1 - 0.15 * b.pct_dark / 100
+               ELSE 1 - 0.30 * b.pct_dark / 100 END,
+          IF(b.clk1 >= 10 AND COALESCE(b.roas1, 0) = 0 AND COALESCE(b.roas90, 0) < 1.0,
+             0.85, 1.0)))) AS INT64) AS STRING),
+        '%/day toward $', FORMAT('%.2f', b.bid_floor),
+        -- WHICH TERM BOUND THE RATE, in words. dark_pct = the dark-scaled step in percentage
+        -- points (0 on the proven arm, which takes the flat 5%); zero_pct = 15 when the zero-sale
+        -- floor applies. Whichever is larger is what the reader is told, so a 15% row and a 5% row
+        -- can never close with the same sentence.
+        CASE
+          WHEN b.pct_dark * IF(COALESCE(b.roas90, 0) >= 1.0, 0,
+                               IF(COALESCE(b.roas90, 0) >= 0.6, 0.15, 0.30)) > 5
+               AND b.pct_dark * IF(COALESCE(b.roas90, 0) >= 1.0, 0,
+                                   IF(COALESCE(b.roas90, 0) >= 0.6, 0.15, 0.30))
+                   >= IF(b.clk1 >= 10 AND COALESCE(b.roas1, 0) = 0 AND COALESCE(b.roas90, 0) < 1.0, 15, 0)
+            THEN ' — the step is sized to how much of yesterday the campaign spent dark'
+          WHEN b.clk1 >= 10 AND COALESCE(b.roas1, 0) = 0 AND COALESCE(b.roas90, 0) < 1.0
+            THEN ' — double digit clicks and not one sale is a verdict, so the full 15%, not the gentle 5%'
+          WHEN COALESCE(b.roas1, 0) > 0
+            THEN ' — sales did land, just short of paying, so this is the gentlest daily step'
+          ELSE ' — under 10 clicks is too thin for a zero to be a verdict, so the gentlest daily step'
+        END)
     -- v27.48: parked rows the reverdict keeps parked say so (they fell through every action branch)
     WHEN (b.confirm_park OR b.manual_parked_recent) AND NOT b.is_auto AND b.current_bid <= 0.30
       THEN CONCAT(IF(b.confirm_park, 'CONFIRM_PARK — never resurfaces via the $1 activation: ',

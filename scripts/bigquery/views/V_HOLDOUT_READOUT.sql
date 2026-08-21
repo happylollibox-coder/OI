@@ -125,13 +125,24 @@ out AS (
 -- campaigns too — SP_ENGINE_PREFLIGHT blocks their EXPORT, never their judgement. Without this the
 -- holdout arm would be "campaigns nothing happened to" instead of "campaigns the engine wanted to
 -- move and was forbidden from moving", and the split below would be impossible.
+-- v27.98: the same doctrine now covers the LAST-DAY VETO. Until today a vetoed proposal was
+-- ERASED rather than labelled — the veto rewrites the action to HOLD and NULLs the bid, which
+-- broke the snapshot's filters — so the engine's intent on those keywords was invisible here too.
+-- Held rows are recorded now, with the intended action in held_action and the intended value in
+-- held_bid (never in suggested_bid, which would be an instruction). READING held_bid IS NOT
+-- OPTIONAL: a held row has suggested_bid NULL, so without it every held RAISE would fall to the
+-- ELSE branch and be counted as a BID_DOWN — the trial would split on the opposite of what the
+-- engine wanted. This is also what makes the veto measurable inside a trial that is already
+-- running: a holdout campaign whose engine wanted to raise and was vetoed is still, correctly, a
+-- BID_UP unit.
 prop AS (
   SELECT CAST(p.campaign_id AS STRING) AS unit_id,
     CASE
       WHEN p.grain = 'NEGATE' THEN 'NEGATE'
       WHEN p.grain = 'BUDGET' THEN IF(COALESCE(p.suggested_budget,0) > COALESCE(p.current_budget,0),
                                       'BUDGET_UP', 'BUDGET_DOWN')
-      ELSE IF(COALESCE(p.suggested_bid,0) > COALESCE(p.current_bid,0), 'BID_UP', 'BID_DOWN')
+      ELSE IF(COALESCE(p.held_bid, p.suggested_bid, 0) > COALESCE(p.current_bid,0),
+              'BID_UP', 'BID_DOWN')
     END AS action_class,
     COUNT(*) AS n_prop
   FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS` p, win

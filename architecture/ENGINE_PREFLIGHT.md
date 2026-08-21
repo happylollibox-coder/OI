@@ -98,3 +98,16 @@ a verdict nobody enforces is a comment.
 - The ADD_KEYWORD lever (research-mode "+broad" offers) is now the one unsnapshotted lever.
 - Verdicts also land on `FACT_ENGINE_PROPOSALS.verdict`, so the proposal history doubles as the
   contradiction-rate time series (`V_ENGINE_HEALTH` check #1 reads it).
+- **Veto holds are skipped by the gate (v27.98, 2026-08-21).** Rows carrying `hold_source` — the
+  last-day veto's held proposals, now RECORDED in `FACT_ENGINE_PROPOSALS` instead of erased — do
+  not enter `T_ENGINE_PREFLIGHT`. They are not instructions to judge: they carry no value, so every
+  value test here would read them as no-ops and overwrite the veto's own sentence, and — the real
+  hazard — they would join the single-owner contention as live instructions, where a held OOB row
+  could outrank a real LIFT one and leave the keyword untouched by an engine that was ready to act.
+  Skipping them is also what keeps a held row out of the cube, the decisions feed and
+  `DoPage.exportBulksheet`: it can be read in the history and reach Amazon by no path at all. Their
+  `verdict` (`EXCLUDE`) and `verdict_reason` (the veto's own sentence) are written by
+  `SP_SNAPSHOT_ENGINE_PROPOSALS`; the stamp-back UPDATE excludes them explicitly, so a future
+  join-key change cannot quietly overwrite the sentence. The contradiction rate is therefore
+  unaffected by labelling — a held row is not two engines disagreeing. Spec:
+  `architecture/DAILY_BRIEF.md` §"The last-day veto is recorded, not erased".

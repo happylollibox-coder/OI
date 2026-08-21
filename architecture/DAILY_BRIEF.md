@@ -69,3 +69,72 @@ ORDER BY section_rank, campaign_name;
 - Verdict-vs-proposal attribution (did the ENGINE's own suggestions get CONFIRMED or REVERSED, as
   distinct from all changes?) needs proposal history to accumulate — meaningful from ~2026-08-29
   (first T+14 reads of snapshotted proposals).
+
+## The last-day veto is recorded, not erased (v27.98, 2026-08-21)
+
+Every suppression in the engine LABELS its row: ownership deferral, single-home dedup, no-ops,
+holds and the randomized holdout arm all sit in `FACT_ENGINE_PROPOSALS` with `verdict = 'EXCLUDE'`
+and a plain-language `verdict_reason`. `SP_ENGINE_PREFLIGHT` states the doctrine in its own header
+for the holdout arm — *the proposal is still recorded; only the verdict says EXCLUDE; block the
+export, never the judgement.*
+
+The **last-day veto** (v27.75 / v27.76) was the one place that rule was broken, and not by
+intention: the veto rewrites `action` to `HOLD` and NULLs `suggested_bid`, and the snapshot admits
+a bid row on `action NOT IN ('HOLD', …) AND suggested_bid IS NOT NULL`. A vetoed row failed BOTH
+conjuncts and vanished with its reason. The veto is also the one suppression that acts on a
+proposal the engine ALREADY MADE — it is a *wait*, not a decision not to speak — so its rows are
+precisely the ones worth keeping.
+
+**How a held row is written now.** `V_OOB_KEYWORD` and `V_KEYWORD_LIFT` publish three ADDITIVE
+columns inside the veto's own thin wrapper, NULL on every row it did not touch:
+
+| column | meaning |
+|---|---|
+| `held_action` | the action the engine intended before the veto (`EASE`, `INCREASE_BID`, …) |
+| `held_bid` | the bid it intended — **never** `suggested_bid` |
+| `hold_source` | `LAST_DAY_VETO_RAISE` \| `LAST_DAY_VETO_CUT` |
+
+`action` still reads `HOLD` and `suggested_bid` is still NULL, so every existing reader of those
+columns — panels, cube, the bulksheet builders, the snapshot's own filters — behaves exactly as
+before. `held_bid` is deliberately a separate column because **a value in `suggested_bid` is an
+instruction**, and a held row must be unable to become one by any path.
+
+`SP_SNAPSHOT_ENGINE_PROPOSALS` admits these rows in the SAME scan as the real bids (a separate
+INSERT would re-read a planning-ceiling view for nothing) and stamps `verdict = 'EXCLUDE'` with the
+veto's own sentence as `verdict_reason` — *"yday: 60c at 1.45x ⇒ cut waits a day"*.
+
+**Why the verdict is written by the snapshot and not by the gate.** A held row is not an
+instruction to judge. It carries no value, so every value test in `SP_ENGINE_PREFLIGHT` would read
+it as a no-op and overwrite the veto's sentence with "no change — the suggested value equals the
+current one"; and, far worse, it would enter the single-owner contention as a live instruction,
+where a held OOB row could outrank a real LIFT one and leave the keyword untouched by an engine
+that was ready to act. The gate therefore **skips `hold_source` rows outright**, which is also what
+keeps them out of `T_ENGINE_PREFLIGHT`, the `EnginePreflight` cube, the decisions feed and
+`DoPage.exportBulksheet`. A held row can be read in the history and can reach Amazon by no path.
+
+`V_DAILY_BRIEF` skips them in PLANNED (that section is "what the engine wants DONE today") and in
+the planned/unplanned join (a held row is not a plan). `V_HOLDOUT_READOUT` deliberately DOES read
+them, through `COALESCE(held_bid, suggested_bid, …)` — without that, a held RAISE would fall to the
+ELSE branch and be counted as a `BID_DOWN`, and the trial would split on the opposite of what the
+engine wanted.
+
+### The standing-block question, and the query that answers it
+
+The veto is **stateless** on purpose: there is no "held since" flag, because the daily re-run IS
+the day-after recheck. The failure mode that design is exposed to is a keyword whose filling day
+reads poorly most days being held again, and again — a permanent block wearing a one-day costume,
+which is not the single day's wait that was specified. Labelling turns that from a question needing
+an experiment into a question needing a query:
+
+    scripts/bigquery/queries/REPEAT_VETO_RUNS.sql
+
+It groups held rows into runs of CONSECUTIVE SNAPSHOTS (not calendar days — a day the orchestrator
+did not run is not a day the veto released) per (engine, campaign, keyword), and reports each run's
+start, end, length and arm. Read the arm: a run on `LAST_DAY_VETO_CUT` is the veto working, since
+under-attribution can only make a day look worse and a filling day already at/above the cut bar is
+conservative proof. A lengthening run on `LAST_DAY_VETO_RAISE` is the alarm — that is the raise
+that never comes, on a keyword busy every day, and the remedy is a release rule, not a longer wait.
+
+**Cold start:** held rows exist only from the first snapshot after this change. The six snapshots
+before it carry none, because those rows were erased rather than labelled — so the query is
+answerable for runs of two only from the second snapshot onward.

@@ -15,13 +15,37 @@
 -- The remaining known gap is the ADD_KEYWORD lever (research-mode "+broad" offers) — named in
 -- the SOP, not silently omitted.
 --
+-- ── v27.98 (Ori 2026-08-21): STOP DELETING VETOED PROPOSALS, LABEL THEM ──────────────────────
+-- ONE EXCEPTION to the paragraph above, and it is not a hold at all. The last-day veto
+-- (v27.75/v27.76) does not decline to propose: it takes a proposal the engine ALREADY MADE and
+-- makes it wait a day. It does that by rewriting the action to 'HOLD' and NULLing the bid — which
+-- breaks BOTH conjuncts of the filters below, so the row AND ITS REASON simply vanished. Across
+-- the snapshots taken since this table was born, not one carried a word of veto text.
+-- That made the veto the only suppression in the engine that ERASES instead of LABELLING, against
+-- the doctrine SP_ENGINE_PREFLIGHT states in its own header for the holdout arm: "the proposal is
+-- still recorded ... only the verdict says EXCLUDE. Block the export, never the judgement."
+-- SO: the two bid INSERTs (1 = LIFT, 3 = OOB) now also admit rows carrying hold_source, and write
+--   action = 'HOLD' and suggested_bid = NULL  (unchanged — no consumer of those columns moves)
+--   held_action / held_bid                    (what the engine wanted, additive, never exported)
+--   verdict = 'EXCLUDE'                       (stamped HERE, not by the gate — see below)
+--   verdict_reason = the veto's OWN sentence  ("yday: 23c at 0.00x ⇒ raise waits a day")
+-- IN THE SAME SCAN, deliberately: a separate INSERT per engine would re-read a view that is at
+-- BigQuery's planning ceiling and double this procedure's daily cost for nothing.
+-- WHY THE VERDICT IS WRITTEN HERE AND NOT BY THE GATE: a held row is not an instruction to judge.
+-- It carries no value, so every value test in SP_ENGINE_PREFLIGHT would read it as a no-op, and —
+-- far worse — it would take part in the single-owner contention as a live instruction, where a
+-- held OOB row could outrank a real LIFT one and silence the engine that was actually ready to
+-- act. The gate therefore skips hold_source rows outright, which also keeps them out of
+-- T_ENGINE_PREFLIGHT, the EnginePreflight cube, the decisions feed and DoPage's bulksheet export.
+-- The record lives here; nothing downstream can turn it back into an instruction.
+--
 -- ORDER IN THE ORCHESTRATOR: after SP_SNAPSHOT_PANEL_OWNERSHIP (the engines' deferral reads it)
 -- and after SP_REFRESH_ADS_COACH_ACTIONS (the launch ladder reads the coach), before
 -- SP_REFRESH_CUBE_TABLES — so the snapshot records the same opinions the day's panels will show.
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_SNAPSHOT_ENGINE_PROPOSALS`()
 OPTIONS (
-  description = "Daily engine-proposal snapshot (2026-08-15, negates v27.72). Deletes today's partition of FACT_ENGINE_PROPOSALS and re-inserts every live instruction from V_KEYWORD_LIFT (bids + budgets), V_OOB_KEYWORD, V_OOB_BUDGET_PHASE, V_LOW_STOCK_ADS (TARGET bids + CAMPAIGN budgets), V_LAUNCH_BID_LADDER, V_PARK_REVERDICT (REVIVE), plus NEGATE rows from V_OOB_SEARCH_TERM (OOB+LIFT populations) and V_WEEKLY_RUN_NEGATIVE (COACH). One single-view scan per INSERT (planner-ceiling doctrine). HOLD/WATCH/DEFER rows excluded. Runs in SP_ORCHESTRATE_DAILY_REFRESH after the ownership snapshot, before the cube T_ builds. Spec: architecture/DAILY_BRIEF.md."
+  description = "Daily engine-proposal snapshot (2026-08-15, negates v27.72). Deletes today's partition of FACT_ENGINE_PROPOSALS and re-inserts every live instruction from V_KEYWORD_LIFT (bids + budgets), V_OOB_KEYWORD, V_OOB_BUDGET_PHASE, V_LOW_STOCK_ADS (TARGET bids + CAMPAIGN budgets), V_LAUNCH_BID_LADDER, V_PARK_REVERDICT (REVIVE), plus NEGATE rows from V_OOB_SEARCH_TERM (OOB+LIFT populations) and V_WEEKLY_RUN_NEGATIVE (COACH). One single-view scan per INSERT (planner-ceiling doctrine). HOLD/WATCH/DEFER rows excluded. Runs in SP_ORCHESTRATE_DAILY_REFRESH after the ownership snapshot, before the cube T_ builds. Spec: architecture/DAILY_BRIEF.md. v27.98 (2026-08-21): the LAST-DAY VETO no longer erases what it held. The veto rewrites action to HOLD and NULLs the bid, which broke both conjuncts of the bid filters, so a vetoed proposal vanished with its reason and no snapshot ever carried a word of veto text — the one suppression in the engine that ERASED instead of LABELLING, against the doctrine SP_ENGINE_PREFLIGHT states for the holdout arm (block the export, never the judgement). INSERTs 1 (LIFT) and 3 (OOB) now also admit rows carrying hold_source, IN THE SAME SCAN (a separate INSERT would re-read a planning-ceiling view for nothing), writing held_action/held_bid additively, leaving action=HOLD and suggested_bid=NULL untouched so no existing consumer moves, and stamping verdict=EXCLUDE with the veto's own sentence as verdict_reason. The verdict is written HERE rather than by the gate because a held row is not an instruction to judge: it carries no value, and admitting it to the single-owner contention would let a held row outrank and silence an engine that was ready to act. SP_ENGINE_PREFLIGHT skips hold_source rows, so held rows never reach T_ENGINE_PREFLIGHT, the cube, the decisions feed or the bulksheet export."
 )
 BEGIN
   DECLARE snap DATE DEFAULT CURRENT_DATE('America/Los_Angeles');
@@ -29,14 +53,21 @@ BEGIN
   DELETE FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS` WHERE snapshot_date = snap;
 
   -- 1. LIFT keyword bids (Portfolio 80/20 / Auto / research ladders)
+  --    v27.98: + the rows the last-day veto held. Same scan, additive columns, verdict written
+  --    here (see header). A held row has action = 'HOLD' and suggested_bid = NULL by construction.
   INSERT INTO `onyga-482313.OI.FACT_ENGINE_PROPOSALS`
     (snapshot_date, engine, grain, campaign_id, campaign_name, keyword_id, ad_group_id, target_text,
-     match_type, channel, action, current_bid, suggested_bid, current_budget, suggested_budget, reason, reason_short, season_relax_applied)
+     match_type, channel, action, current_bid, suggested_bid, current_budget, suggested_budget, reason, reason_short, season_relax_applied,
+     held_action, held_bid, hold_source, verdict, verdict_reason)
   SELECT snap, 'LIFT', 'BID', CAST(campaign_id AS STRING), campaign_name,
          CAST(keyword_id AS STRING), CAST(ad_group_id AS STRING), target_text, match_type, channel,
-         action, current_bid, suggested_bid, NULL, NULL, reason, reason_short, CAST(NULL AS BOOL)
+         action, current_bid, suggested_bid, NULL, NULL, reason, reason_short, CAST(NULL AS BOOL),
+         held_action, held_bid, hold_source,
+         IF(hold_source IS NOT NULL, 'EXCLUDE',      CAST(NULL AS STRING)),
+         IF(hold_source IS NOT NULL, reason_short,   CAST(NULL AS STRING))
   FROM `onyga-482313.OI.V_KEYWORD_LIFT`
-  WHERE action NOT IN ('HOLD', 'DEFER_OOB', 'PROBE_WAIT') AND suggested_bid IS NOT NULL;
+  WHERE (action NOT IN ('HOLD', 'DEFER_OOB', 'PROBE_WAIT') AND suggested_bid IS NOT NULL)
+     OR hold_source IS NOT NULL;
 
   -- 2. LIFT campaign budgets (one row per campaign; the view repeats them per keyword row)
   INSERT INTO `onyga-482313.OI.FACT_ENGINE_PROPOSALS`
@@ -55,14 +86,21 @@ BEGIN
                          -- of a campaign carries the SAME campaign-level budget fields
 
   -- 3. OOB keyword bids (the seat model)
+  --    v27.98: + the rows the last-day veto held. Same scan, additive columns, verdict written
+  --    here (see header). A held row has bid_action = 'HOLD' and suggested_bid = NULL.
   INSERT INTO `onyga-482313.OI.FACT_ENGINE_PROPOSALS`
     (snapshot_date, engine, grain, campaign_id, campaign_name, keyword_id, ad_group_id, target_text,
-     match_type, channel, action, current_bid, suggested_bid, current_budget, suggested_budget, reason, reason_short, season_relax_applied)
+     match_type, channel, action, current_bid, suggested_bid, current_budget, suggested_budget, reason, reason_short, season_relax_applied,
+     held_action, held_bid, hold_source, verdict, verdict_reason)
   SELECT snap, 'OOB', 'BID', CAST(campaign_id AS STRING), campaign_name,
          CAST(keyword_id AS STRING), CAST(ad_group_id AS STRING), target_text, match_type, IF(is_sb, 'SB', 'SP'),
-         bid_action, current_bid, suggested_bid, NULL, NULL, bid_reason, bid_reason_short, CAST(NULL AS BOOL)
+         bid_action, current_bid, suggested_bid, NULL, NULL, bid_reason, bid_reason_short, CAST(NULL AS BOOL),
+         held_action, held_bid, hold_source,
+         IF(hold_source IS NOT NULL, 'EXCLUDE',         CAST(NULL AS STRING)),
+         IF(hold_source IS NOT NULL, bid_reason_short,  CAST(NULL AS STRING))
   FROM `onyga-482313.OI.V_OOB_KEYWORD`
-  WHERE bid_action NOT IN ('HOLD', 'APPLIED_HOLD') AND suggested_bid IS NOT NULL;
+  WHERE (bid_action NOT IN ('HOLD', 'APPLIED_HOLD') AND suggested_bid IS NOT NULL)
+     OR hold_source IS NOT NULL;
 
   -- 4. OOB campaign budgets (the budget ladder)
   INSERT INTO `onyga-482313.OI.FACT_ENGINE_PROPOSALS`

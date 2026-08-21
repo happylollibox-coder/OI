@@ -71,6 +71,130 @@ Step 6's sits inside a statement the step tells you to RUN as a gate. Task 9's f
 RUN, not dry-run, and each returns what its caption claims. Task 8 Step 4's deploy of the two engine
 files was NOT run: that is the hold.
 
+## 2026-08-21 — v27.98 the last-day veto is RECORDED, not erased
+
+**The defect.** Every suppression in the engine LABELS its row — ownership deferral, single-home
+dedup, no-ops, holds and the randomized holdout arm all sit in `FACT_ENGINE_PROPOSALS` with
+`verdict='EXCLUDE'` and a plain-language reason. `SP_ENGINE_PREFLIGHT` states the doctrine in its
+own header: *the proposal is still recorded; only the verdict says EXCLUDE; block the export, never
+the judgement.* The **last-day veto** was the one place that rule was broken, and by accident: the
+veto rewrites `action` to `HOLD` and NULLs `suggested_bid`, and the snapshot admits a bid row on
+`action NOT IN ('HOLD', …) AND suggested_bid IS NOT NULL`. The row failed BOTH conjuncts and
+vanished with its reason. Query for the damage:
+
+```sql
+SELECT snapshot_date, COUNT(*) rows_, COUNTIF(verdict_reason LIKE 'yday:%') veto_labelled
+FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS` GROUP BY 1 ORDER BY 1;
+```
+
+**The fix, additive throughout.** `V_OOB_KEYWORD` and `V_KEYWORD_LIFT` publish three new columns
+inside the veto's own thin wrapper, NULL on every row it did not touch: `held_action` (what the
+engine intended), `held_bid` (the value it intended) and `hold_source`
+(`LAST_DAY_VETO_RAISE` | `LAST_DAY_VETO_CUT`). `action` still reads `HOLD` and `suggested_bid` is
+still NULL, so no existing reader moves. `held_bid` is deliberately a separate column: **a value in
+`suggested_bid` is an instruction**, and a held row must be unable to become one by any path.
+`SP_SNAPSHOT_ENGINE_PROPOSALS` takes these rows in the SAME scan as the real bids (a separate
+INSERT would re-read a planning-ceiling view for nothing) and stamps `verdict='EXCLUDE'` with the
+veto's own sentence — *"yday: 60c at 1.45x ⇒ cut waits a day"*.
+
+**Export safety, the part that had to be right.** `SP_ENGINE_PREFLIGHT` now SKIPS `hold_source`
+rows. Two independent reasons: they carry no value, so every value test would read them as no-ops
+and overwrite the veto's sentence; and — the real hazard — they would enter the single-owner
+contention as live instructions, where a held OOB row could outrank a real LIFT one and leave the
+keyword untouched by an engine that was ready to act. Skipping them is also what keeps a held row
+out of `T_ENGINE_PREFLIGHT`, the `EnginePreflight` cube, the decisions feed and
+`DoPage.exportBulksheet`. Consumers checked one by one: the four views that read the proposal
+table, both procedures, the cube, the two React pages that read the gate, and the python bulksheet
+builders (none of which touch the proposal table or the two engine views at all).
+
+**The payoff, verified.** `V_HOLDOUT_READOUT` splits by the engine's INTENDED action class, and it
+keys on PRESENCE in the proposal table, not on verdict — so held rows were invisible to a trial
+already running. Its classifier now reads `COALESCE(held_bid, suggested_bid, 0)`, and that is not
+cosmetic: a held row has `suggested_bid` NULL, so without it every held RAISE fell to the ELSE
+branch and was counted as a `BID_DOWN`. Mechanism proof (the view itself is gated to `NOT_YET`
+until 2027-01-05, and still returns exactly that):
+
+```sql
+WITH p AS (SELECT 'held RAISE' lbl, 0.40 current_bid, CAST(NULL AS FLOAT64) suggested_bid, 0.52 held_bid
+           UNION ALL SELECT 'held CUT', 0.49, NULL, 0.47)
+SELECT lbl,
+  IF(COALESCE(held_bid, suggested_bid, 0) > COALESCE(current_bid, 0), 'BID_UP','BID_DOWN') AS deployed,
+  IF(COALESCE(suggested_bid, 0)           > COALESCE(current_bid, 0), 'BID_UP','BID_DOWN') AS before
+FROM p;
+```
+
+`V_DAILY_BRIEF` skips held rows in PLANNED (that section is what the engine wants DONE today) and
+in the planned/unplanned join, so the brief prints exactly what it printed before.
+
+**The standing-block question needs no experiment now.** The veto is stateless by design — the
+daily re-run IS the day-after recheck — so the same keyword can be held day after day: a permanent
+block wearing a one-day costume. Labelling turns that into a query:
+`scripts/bigquery/queries/REPEAT_VETO_RUNS.sql` groups held rows into runs of CONSECUTIVE SNAPSHOTS
+(not calendar days — a day the orchestrator did not run is not a day the veto released) per
+(engine, campaign, keyword) and reports each run's length and arm. **Read the arm:** a run on the
+CUT arm is the veto working (under-attribution can only make a day look worse, so a filling day
+already at/above the cut bar is conservative proof); a lengthening run on the RAISE arm is the
+alarm, and its remedy is a release rule, not a longer wait.
+
+**Cold start, stated because it bounds the answer:** the six snapshots taken before today carry no
+held rows at all — those rows were erased rather than labelled — so runs of two are only observable
+from the second snapshot after this change.
+
+**Deployed and run end-to-end:** the two engine views, the table (`ALTER … ADD COLUMN IF NOT
+EXISTS`), both procedures, `V_HOLDOUT_READOUT`, `V_DAILY_BRIEF`; then
+`CALL SP_SNAPSHOT_ENGINE_PROPOSALS(); CALL SP_ENGINE_PREFLIGHT();`. Post-run assertions, all
+passing: no held row carries a non-NULL `suggested_bid`; every held row carries `verdict='EXCLUDE'`
+and a `verdict_reason` starting `yday:`; no row in the day's partition has a NULL verdict;
+`T_ENGINE_PREFLIGHT` contains no `HOLD` row; `V_ENGINE_PREFLIGHT` contains none either; PLANNED
+equals the partition minus the held rows. `V_ENGINE_HEALTH` runs green/amber as before, and the
+contradiction rate is unaffected — a held row is not two engines disagreeing.
+
+Backups: `*.bak.v27.98.1120` on every edited file.
+
+## 2026-08-20 — v27.97 DARK_BRAKE reason: quote the signal that actually fired (TEXT ONLY)
+
+`V_OOB_KEYWORD` fall-through dark brake. **No predicate, step, floor or row membership changed** —
+dry run 174,017,613 bytes before and after (identical), and all 13 live DARK_BRAKE rows keep their
+exact suggested bids across the deploy.
+
+**The defect.** That branch fires on `clk1 >= 4 AND bid > floor`, reached because the row's
+CAMPAIGN is OOB-owned — and ownership is the DUAL signal (out-of-budget event OR spend >= budget)
+held on the 7-day hysteresis, so anchor-day `pct_dark` reads 0.0 on a campaign capped all week
+(`fact_oi_spend_over_budget_is_dark`). The string opened **"campaign 0% dark — brake all bids"**:
+a zero offered as the trigger for a brake. It then dumped the rule's formula raw
+("0.6-1.0x max(5%,15%xdark)") in place of evidence, so the term that actually set the rate was
+invisible — BOX-SBS/BROAD (Hunter, By Age) published two rows quoting the SAME "0% dark" and
+braking **5%** ("8 year old girl birthday gift", 5 clicks) and **15%** ("girls gifts age 8-10",
+57 clicks). Same stated evidence, different move.
+
+**Now** — house grammar, TRIGGER — EVIDENCE ⇒ MOVE, no formulas, no rule names:
+> out of budget 7 of the last 7 days — 57 clicks yesterday with no sales ⇒ brake 15%/day toward
+> $0.10 — double digit clicks and not one sale is a verdict, so the full 15%, not the gentle 5%
+
+Trigger = the cap evidence (`days_capped_7d` of 7; darkness named ONLY when `pct_dark > 0`, never
+as a zero). Evidence = this bid's own clicks and sales yesterday. Move = the step toward the row's
+REAL floor, closing with the term that BOUND the rate in plain words, so two different rates can
+never quote one fact.
+
+**Second lie fixed in the same pass:** both dark-brake strings hard-coded `floor $0.20` while the
+arithmetic floors at `b.bid_floor` — $0.25 on SB video/brand, $0.10 on SB collection/store.
+**6 of the 13 live DARK_BRAKE rows were being told a wrong floor.**
+
+**Verified** on all 13 live rows: 0 name a zero as trigger; the 5%/15% pair now states 5 clicks vs
+57 clicks; floors read $0.10 / $0.20 / $0.25 correctly. `bid_reason_short` untouched. The two
+pre-existing good-grammar rows (ME-VIDEO/PT 11% dark, BOX-SP proven 1.37x) are byte-identical.
+
+**Known residue, not touched:** the proven/converting branches print `$0.1` / `$0.2` via
+`CAST(bid_floor AS STRING)` instead of `FORMAT('%.2f', ...)` — right number, ragged formatting.
+
+**FACT_ENGINE_PROPOSALS still holds the old strings** for snapshot_date 2026-08-20 (5 of its 7 GO
+DARK_BRAKE rows). The next `SP_SNAPSHOT_ENGINE_PROPOSALS` run picks up the new text; it was NOT
+re-run here because a standalone re-run deletes the day's partition and blanks all 230 verdicts
+until `SP_ENGINE_PREFLIGHT` follows.
+
+Backups: `V_OOB_KEYWORD.sql.bak.v27.97.0850`, `config.yaml.bak.v27.97.0850`.
+
+
 ## 2026-08-15 — Phase 0 of the engine-finalization plan: v27.62 GP fix VERIFIED
 
 Ten adversarial verification agents (one per GP-edited view + one on the manual-change record).
