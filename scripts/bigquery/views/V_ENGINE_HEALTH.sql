@@ -154,8 +154,40 @@ c10 AS (  -- v27.101: view-body headroom — no view may creep up on BigQuery's 
            ' — comment markers in column 0 cost nothing (the deploy strips them), indented ones ',
            'are shipped to BigQuery and charged against the ceiling')
   FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS`
+),
+c11 AS (  -- v27.102: one keyword, one price, on the day's EXPORTABLE plan
+  -- WHY THIS IS NOT c2. c2 reads T_ENGINE_PREFLIGHT and counts non-EXCLUDE ROWS — it asks whether
+  -- the gate resolved the contention. This reads FACT_ENGINE_PROPOSALS, the table every consumer
+  -- downstream actually reads, and counts distinct exportable PRICES. The difference is the whole
+  -- point: the gate can resolve a contention perfectly and the verdict can still fail to reach the
+  -- reader — because the stamp-back join missed the row, because a row was skipped by the gate and
+  -- left unjudged in the table, or because a consumer never asked for the verdict at all. That
+  -- last one is what happened: the morning brief printed three prices for one keyword out of a
+  -- table the gate had already resolved, and c2 was GREEN the whole time.
+  -- A hand-built bulksheet is copied off that list, so two prices on one keyword is not an
+  -- untidiness — it is the account's bid being decided by which line the eye landed on.
+  -- COUNT(DISTINCT) ignores NULL, so negates (no value) can never trip this.
+  SELECT 'plan_price_ambiguity',
+    CAST(COUNT(*) AS FLOAT64),
+    'keys whose exportable plan carries >1 distinct price today · red > 0',
+    IF(COUNT(*) > 0, 'RED', 'GREEN'),
+    'one keyword, one lever, one price — measured on the proposal table the consumers read, not on the gate table, so a verdict that never reached a reader is visible here'
+  FROM (
+    SELECT campaign_id,
+           IF(grain = 'NEGATE', CONCAT('term|', LOWER(TRIM(COALESCE(target_text, '')))),
+              COALESCE(keyword_id, '')) AS k,
+           CASE grain WHEN 'BUDGET' THEN 'BUDGET' WHEN 'NEGATE' THEN 'NEGATE' ELSE 'BID' END AS lever
+    FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS`
+    WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS`)
+      -- the exportable set, defined exactly as V_DAILY_BRIEF defines it: a held row is not an
+      -- instruction, and an unstamped row fails open into the plan
+      AND hold_source IS NULL
+      AND COALESCE(verdict, 'GO') != 'EXCLUDE'
+    GROUP BY 1, 2, 3
+    HAVING COUNT(DISTINCT COALESCE(suggested_bid, suggested_budget)) > 1
+  )
 )
 SELECT * FROM c1 UNION ALL SELECT * FROM c2 UNION ALL SELECT * FROM c3
 UNION ALL SELECT * FROM c4 UNION ALL SELECT * FROM c5 UNION ALL SELECT * FROM c6
 UNION ALL SELECT * FROM c7 UNION ALL SELECT * FROM c8 UNION ALL SELECT * FROM c9
-UNION ALL SELECT * FROM c10;
+UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11;

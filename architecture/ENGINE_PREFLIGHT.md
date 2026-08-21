@@ -79,6 +79,23 @@ showing the user exactly what was refused and why. `REVIEW` rows export only aft
 per-item confirmation. The generator refusing EXCLUDE rows is the entire point of the object —
 a verdict nobody enforces is a comment.
 
+## The other half of the contract: the verdict has to REACH a reader (v27.102, 2026-08-21)
+
+A verdict nobody enforces is a comment — and so is a verdict nobody *reads*. `V_DAILY_BRIEF`'s
+PLANNED section, the list Ori builds the hand bulksheet from, read `FACT_ENGINE_PROPOSALS` and
+never read the `verdict` column this procedure stamps onto it. Every collision loser appeared on
+the morning list beside the instruction that beat it, at its own price. On one BALL auto target
+three engines each offered a different bid and nothing on any row said which had won.
+
+`ownership_overlaps` was GREEN throughout, correctly: it measures `T_ENGINE_PREFLIGHT`, where the
+contention *was* resolved. **The gate table being right is not the same as the reader being right.**
+So the standing assertion added with the fix measures both — `plan_price_ambiguity` on the proposal
+table (V_ENGINE_HEALTH, deployed) and the same question asked of PLANNED itself
+(`scripts/bigquery/check_one_price_per_key.py`, in `scripts/run_tests.sh`).
+
+Anything new that reads `FACT_ENGINE_PROPOSALS` and shows a value to a human owes the same filter:
+`hold_source IS NULL AND COALESCE(verdict, 'GO') != 'EXCLUDE'`, failing open on an unstamped row.
+
 ## Honest limits
 
 - The gate judges what the snapshot saw. An instruction born after the day's snapshot (a manual

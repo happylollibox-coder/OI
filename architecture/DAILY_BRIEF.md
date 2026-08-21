@@ -10,7 +10,8 @@ purpose is to make it better. meaning if after a change it became worse this is 
 |---|---|
 | `FACT_ENGINE_PROPOSALS` | The engine's memory of its own **opinions** — one row per (day, engine, instruction), applied or not. Partitioned by `snapshot_date`. |
 | `SP_SNAPSHOT_ENGINE_PROPOSALS` | Writes today's partition (delete-today-then-insert, idempotent). One single-view scan per INSERT — planner-ceiling doctrine. Orchestrator Task 20.6. |
-| `V_DAILY_BRIEF` | The one-query answer. Four sections, uniform row shape. |
+| `V_DAILY_BRIEF` | The one-query answer. Five sections, uniform row shape. |
+| `SP_ENGINE_PREFLIGHT` | Not a brief object, but the brief now reads its verdict. Nothing reaches PLANNED that the gate refused. Spec: `architecture/ENGINE_PREFLIGHT.md`. |
 
 ## The daily ritual
 
@@ -20,7 +21,11 @@ FROM `onyga-482313.OI.V_DAILY_BRIEF`
 ORDER BY section_rank, campaign_name;
 ```
 
-- **PLANNED** — the latest snapshot: what the engine wants done today, per engine, verbatim reasons.
+- **PLANNED** — the latest snapshot, **gate-filtered**: what the engine wants done today, per
+  engine, verbatim reasons, **one price per (campaign, keyword, lever)**. A `REVIEW` row is on the
+  list but leads with the gate's caution, because it is exportable only after human eyes.
+- **SKIPPED** — the instructions the gate refused, each with the gate's own plain sentence and the
+  value it wanted. Recorded, never deleted; just not offered as a price to copy.
 - **HAPPENED** — everything applied in the last 48h. `status='planned'` means the engine proposed
   that exact key on the day it was applied; `unplanned` means manual or engine-silent — the raw
   material of the manual-divergence doctrine ("if i change something manually … we need to fix the
@@ -42,6 +47,46 @@ ORDER BY section_rank, campaign_name;
   unlogged drift, its own finding); (3) **conflict flag** — a key any engine instructs in today's
   proposal snapshot demotes to `REVIEW` naming the conflict (single-home: the live engine outranks
   a scorecard remedy; low stock outranks everything).
+
+## One keyword, one price (v27.102, 2026-08-21)
+
+The bulksheet is built **by hand** off PLANNED. So a keyword appearing twice there at two prices
+does not mean the list is untidy — it means the bid that reaches Amazon is decided by which line
+the eye landed on first.
+
+This view read the very table `SP_ENGINE_PREFLIGHT` stamps its verdict onto, and never read the
+verdict column. Every collision loser the gate had already refused was printed in PLANNED beside
+the instruction that beat it, at its own price, with nothing on the row to say it had lost.
+
+The gate was never broken. It resolves every contention to one surviving instruction, and on the
+day this was found the surviving set carried exactly one price per key. It resolved them onto the
+table, and no reader downstream ever asked.
+
+Three places quoted a price; all three now quote the survivor:
+
+1. **PLANNED** lists exportable instructions only — `verdict` `GO` or `REVIEW`, or none at all.
+2. **HAPPENED's** *"the engine proposed N"*. It joined the raw proposal table on
+   (day, campaign, keyword) with no verdict test **and no lever test**, so a hand change on a
+   contended keyword printed once per proposing engine, each line quoting a different number —
+   and a campaign-grain change (`keyword_id` NULL) matched every NEGATE in the campaign, marking
+   hand pauses "planned" on the strength of a search-term block and printing a blank sentence
+   while it did it.
+3. **ACTION_ITEM's** CONFLICT clause, which demotes a scorecard restore to `REVIEW` because "a
+   live engine outranks the remedy". A refused instruction is not a live engine, and the same
+   missing lever test let a search-term block demote a campaign-budget restore.
+
+**Fail open** everywhere: `COALESCE(verdict, 'GO') != 'EXCLUDE'`. A partition written before
+verdicts existed, or one the gate has not stamped yet, still reads as a plan — the brief must not
+go blank because a procedure did not run.
+
+**Standing assertion.** `V_ENGINE_HEALTH.plan_price_ambiguity` asks the question of the proposal
+table (cheap, deployed, on the board). `scripts/bigquery/check_one_price_per_key.py`, wired into
+`scripts/run_tests.sh`, asks it of the proposal table **and of PLANNED itself** — the second is
+what would have caught this, because on the day it was found the table was clean and the list was
+not. Both were proven to fire by re-deploying the pre-change view on purpose.
+
+`section_rank` renumbered, order unchanged: PLANNED 1, SKIPPED 2, HAPPENED 3, VERDICT_NEW 4,
+ACTION_ITEM 5.
 
 ## Honest-reading rules
 
