@@ -43,6 +43,28 @@ AS
 WITH
 
 -- =============================================
+-- THE ADS WATERMARK — where every window in this view now ends.
+--
+-- The ads feed lands a day behind and the newest day arrives only partly loaded, so the
+-- house rule is that a multi-day ads window ends one day behind the newest day the feed
+-- holds, and the newest day itself is never allowed to drive a move.
+--
+-- Before this, every window here was pinned to a fixed four-day step back from today's
+-- calendar date and the watermark was never read at all. Two things went wrong. Days that
+-- were fully loaded were thrown away, so an eight-week window was reporting fewer clicks
+-- for a term than a four-week window elsewhere in the house — which cannot happen. And the
+-- "recent activity" count was a five-day clause sitting inside a window that already
+-- stopped four days back, so it could only ever see two days and reported them under a
+-- five-day name.
+-- =============================================
+ads_wm AS (
+  SELECT
+    MAX(date) AS wm,                                  -- newest day in the feed (veto only)
+    DATE_SUB(MAX(date), INTERVAL 1 DAY) AS win_end    -- every window below ends here
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+),
+
+-- =============================================
 -- Unit economics per ASIN
 -- =============================================
 asin_economics AS (
@@ -399,7 +421,7 @@ campaign_last_budget_change AS (
 -- Ads 8w: per campaign × asin × search_term (+ targeting/keyword_id)
 ads_8w AS (
   SELECT
-    ec.experiment_id,
+    ce.experiment_id,
     fa.campaign_id,
     ANY_VALUE(fa.ad_group_id HAVING MAX fa.date) as ad_group_id,
     -- Current campaign name from V_DIM_CAMPAIGN_CURRENT (prevents rename splits)
@@ -425,19 +447,27 @@ ads_8w AS (
     COUNT(DISTINCT fa.date) as ads_days_8w,
     MIN(fa.date) as first_seen_8w,
     MAX(fa.date) as last_seen_8w,
-    -- Recent 5d bleeding detection
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 5 DAY) THEN fa.Ads_clicks ELSE 0 END) as ads_clicks_recent_5d,
+    -- Recent activity: the 5 complete days that END this window. The window itself now ends
+    -- at the watermark minus one day, so this clause spans a genuine five days; when the
+    -- window stopped four days short of the feed it could only ever reach two of them.
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 4 DAY) THEN fa.Ads_clicks ELSE 0 END) as ads_clicks_recent_5d,
     -- Latest keyword status (ENABLED/PAUSED/ARCHIVED) per search_term
     UPPER(ANY_VALUE(fa.ad_keyword_status HAVING MAX fa.date)) as ad_keyword_status,
     -- Match type (latest) for the per-product strategy profile join
     UPPER(ANY_VALUE(fa.targeting_type HAVING MAX fa.date)) as targeting_type
 
-  FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
-  JOIN campaign_experiment ce ON ec.campaign_id = ce.campaign_id AND ec.experiment_id = ce.experiment_id
+  -- Campaign→experiment mapping, ONCE. campaign_experiment is already built from
+  -- DIM_EXPERIMENT_CAMPAIGN, so joining that table back against it multiplied every ads row by
+  -- the number of mapping rows the campaign has — seven campaigns carry a duplicate mapping row,
+  -- and on those every click and every dollar in this view came out exactly four times too big.
+  -- DISTINCT keeps one row per campaign × experiment no matter how the mapping table is fed.
+  FROM (SELECT DISTINCT campaign_id, experiment_id, experiment_name, strategy_id, strategy_name,
+                        start_date, recommended_bid_max
+        FROM campaign_experiment) ce
+  CROSS JOIN ads_wm w
   JOIN `onyga-482313.OI.FACT_AMAZON_ADS` fa
-    ON ec.campaign_id = fa.campaign_id
-    AND fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 59 DAY)
-                   AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
+    ON ce.campaign_id = fa.campaign_id
+    AND fa.date BETWEEN DATE_SUB(w.win_end, INTERVAL 55 DAY) AND w.win_end
   -- Current campaign metadata — single source of truth
   LEFT JOIN `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` dc_cur ON fa.campaign_id = dc_cur.campaign_id
 
@@ -471,14 +501,14 @@ ads_1w AS (
     SUM(fa.Ads_sales) as ads_sales_1w,
     SUM(fa.GROSS_PROFIT) as ads_gp_1w
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
+  CROSS JOIN ads_wm w
+  WHERE fa.date BETWEEN DATE_SUB(w.win_end, INTERVAL 6 DAY) AND w.win_end
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
 ),
 
--- Ads 4w: last 28 complete days (same attribution lag)
+-- Ads 4w: the 28 complete days ending at the watermark minus one day
 ads_4w AS (
   SELECT
     fa.campaign_id,
@@ -492,8 +522,8 @@ ads_4w AS (
     SUM(fa.Ads_sales) as ads_sales_4w,
     SUM(fa.GROSS_PROFIT) as ads_gp_4w
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
+  CROSS JOIN ads_wm w
+  WHERE fa.date BETWEEN DATE_SUB(w.win_end, INTERVAL 27 DAY) AND w.win_end
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
@@ -598,8 +628,11 @@ target_rollup_lag AS (
       WHERE is_current = TRUE AND keyword_text IS NOT NULL AND keyword_id IS NOT NULL
     ) WHERE rn = 1
   ) kw_lookup ON fa.keyword_id = kw_lookup.keyword_id
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 3 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
+  CROSS JOIN ads_wm w
+  -- The freshest three days the feed holds, the part-loaded newest day included. This reading is
+  -- a ONE-WAY safety valve: it can only hold a negate back, never call for one, so counting a day
+  -- that is still filling can cost nothing but a deferral.
+  WHERE fa.date BETWEEN DATE_SUB(w.wm, INTERVAL 2 DAY) AND w.wm
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3
@@ -649,8 +682,8 @@ ads_3d AS (
     SUM(fa.Ads_sales) as ads_sales_3d,
     SUM(fa.GROSS_PROFIT) as ads_gp_3d
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 6 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
+  CROSS JOIN ads_wm w
+  WHERE fa.date BETWEEN DATE_SUB(w.win_end, INTERVAL 2 DAY) AND w.win_end
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
@@ -670,8 +703,8 @@ ads_14d AS (
     SUM(fa.Ads_sales) as ads_sales_14d,
     SUM(fa.GROSS_PROFIT) as ads_gp_14d
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 17 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
+  CROSS JOIN ads_wm w
+  WHERE fa.date BETWEEN DATE_SUB(w.win_end, INTERVAL 13 DAY) AND w.win_end
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
   GROUP BY 1, 2, 3, 4
@@ -695,17 +728,17 @@ ads_offseason AS (
     SUM(fa.GROSS_PROFIT) as os_gp_8w,
     SUM(fa.Ads_clicks) as os_clicks_8w,
     -- 4w off-season
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_4w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_4w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_4w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_4w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 31 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_4w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_4w,
     -- 1w off-season
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_1w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_1w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_1w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_1w,
-    SUM(CASE WHEN fa.date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 10 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_1w
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 6 DAY) THEN fa.Ads_cost ELSE 0 END) as os_spend_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 6 DAY) THEN fa.Ads_orders ELSE 0 END) as os_orders_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 6 DAY) THEN fa.Ads_units ELSE 0 END) as os_units_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 6 DAY) THEN fa.Ads_sales ELSE 0 END) as os_sales_1w,
+    SUM(CASE WHEN fa.date >= DATE_SUB(w.win_end, INTERVAL 6 DAY) THEN fa.GROSS_PROFIT ELSE 0 END) as os_gp_1w
 
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
   -- Keyword text lookup for SBV campaigns
@@ -717,8 +750,8 @@ ads_offseason AS (
       WHERE is_current = TRUE AND keyword_text IS NOT NULL AND keyword_id IS NOT NULL
     ) WHERE rn = 1
   ) kw_lookup ON fa.keyword_id = kw_lookup.keyword_id
-  WHERE fa.date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 59 DAY)
-                     AND DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 4 DAY)
+  CROSS JOIN ads_wm w
+  WHERE fa.date BETWEEN DATE_SUB(w.win_end, INTERVAL 55 DAY) AND w.win_end
     AND fa.search_term IS NOT NULL AND fa.search_term != ''
     AND COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) IS NOT NULL
     -- EXCLUDE all days that fall within BOOST or PEAK phases
@@ -987,6 +1020,93 @@ sqp_8w AS (
   FROM `onyga-482313.OI.FACT_SEARCH_QUERY` fsq
   WHERE fsq.data_source = 'SQP' AND fsq.week_end_date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 56 DAY)
   GROUP BY 1, 2
+),
+
+-- =============================================
+-- THE GRAIN A NEGATIVE KEYWORD ACTUALLY ACTS ON.
+--
+-- Everything above is sliced by ASIN and by the keyword being bid on. A negative keyword is
+-- not. It is attached to the AD GROUP, and the moment it lands the search term is dead for
+-- every product and every keyword inside that group. Deciding to block a term off one
+-- product's slice therefore throws away whatever the other slices were earning from it.
+--
+-- That is not hypothetical. One term in this account emitted a block off a slice showing 32
+-- clicks and a single order, while a second slice of the very same term in the very same ad
+-- group had 6 clicks, 2 orders and was returning more than twenty-six times its cost. Added
+-- up the way a negative would actually bite, the term was profitable — and only the block
+-- reached the proposal list.
+--
+-- So the evidence a block is judged on is summed across product and keyword FIRST, at
+-- campaign × ad group × search term, and the decision is taken on that. A slice can no
+-- longer put a term on the block list by itself.
+-- =============================================
+negate_grain_slice AS (
+  SELECT
+    fa.campaign_id,
+    fa.ad_group_id,
+    LOWER(fa.search_term) AS search_term,
+    COALESCE(fa.most_advertised_asin_impressions, fa.ASIN_BY_CAMPAIGN_NAME) AS asin,
+    SUM(fa.Ads_cost)     AS spend_8w,
+    SUM(fa.Ads_clicks)   AS clicks_8w,
+    SUM(fa.Ads_orders)   AS orders_8w,
+    SUM(fa.Ads_sales)    AS sales_8w,
+    SUM(fa.GROSS_PROFIT) AS gp_8w,
+    SUM(IF(fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY), fa.Ads_cost, 0))     AS spend_4w,
+    SUM(IF(fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY), fa.Ads_clicks, 0))   AS clicks_4w,
+    SUM(IF(fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY), fa.Ads_orders, 0))   AS orders_4w,
+    SUM(IF(fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY), fa.Ads_sales, 0))    AS sales_4w,
+    SUM(IF(fa.date >= DATE_SUB(w.win_end, INTERVAL 27 DAY), fa.GROSS_PROFIT, 0)) AS gp_4w,
+    SUM(IF(fa.date >= DATE_SUB(w.win_end, INTERVAL  4 DAY), fa.Ads_clicks, 0))   AS clicks_recent_5d
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  CROSS JOIN ads_wm w
+  WHERE fa.date BETWEEN DATE_SUB(w.win_end, INTERVAL 55 DAY) AND w.win_end
+    AND fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND fa.ad_group_id IS NOT NULL
+  GROUP BY 1, 2, 3, 4
+),
+
+negate_grain AS (
+  SELECT
+    g.campaign_id,
+    g.ad_group_id,
+    g.search_term,
+    SUM(g.spend_8w)   AS ng_spend_8w,
+    SUM(g.clicks_8w)  AS ng_clicks_8w,
+    SUM(g.orders_8w)  AS ng_orders_8w,
+    SUM(g.sales_8w)   AS ng_sales_8w,
+    SUM(g.gp_8w)      AS ng_gp_8w,
+    SUM(g.spend_4w)   AS ng_spend_4w,
+    SUM(g.clicks_4w)  AS ng_clicks_4w,
+    SUM(g.orders_4w)  AS ng_orders_4w,
+    SUM(g.sales_4w)   AS ng_sales_4w,
+    SUM(g.gp_4w)      AS ng_gp_4w,
+    SUM(g.clicks_recent_5d) AS ng_clicks_recent_5d,
+    -- Organic purchases on this search across EVERY product the ad group advertises. The old
+    -- "does it sell organically" guard only looked at the one product on the row, so a term
+    -- selling organically under a sibling product was invisible to it.
+    SUM(COALESCE(sq.sqp_orders_8w, 0)) AS ng_sqp_orders_8w
+  FROM negate_grain_slice g
+  LEFT JOIN sqp_8w sq ON sq.search_term = g.search_term AND sq.asin = g.asin
+  GROUP BY 1, 2, 3
+),
+
+-- All-time record for the same grain. The block branches lean on a lifetime return to make
+-- sure a term is a real loser and not just having a quiet eight weeks; that lifetime figure
+-- was ASIN-sliced too, and is now summed the same way the negative bites.
+negate_grain_lifetime AS (
+  SELECT
+    fa.campaign_id,
+    fa.ad_group_id,
+    LOWER(fa.search_term) AS search_term,
+    SUM(fa.Ads_cost)     AS ng_lt_spend,
+    SUM(fa.Ads_clicks)   AS ng_lt_clicks,
+    SUM(fa.Ads_orders)   AS ng_lt_orders,
+    SUM(fa.Ads_sales)    AS ng_lt_sales,
+    SUM(fa.GROSS_PROFIT) AS ng_lt_gp
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` fa
+  WHERE fa.search_term IS NOT NULL AND fa.search_term != ''
+    AND fa.ad_group_id IS NOT NULL
+  GROUP BY 1, 2, 3
 ),
 
 -- SQP LY Peak: Your ASIN + Amazon market measures
@@ -1314,6 +1434,30 @@ active_term_data AS (
 
     -- Recent 5d bleeding check
     a8.ads_clicks_recent_5d,
+
+    -- ─── Block-grain evidence: everything this ad group earned from this search term ───
+    -- Summed across every product and every keyword in the group, because that is exactly
+    -- what a negative keyword switches off. No decision to block may read the sliced columns
+    -- above; they describe one product's share of a term, not the term.
+    COALESCE(ng.ng_clicks_8w, 0)  AS ng_clicks_8w,
+    COALESCE(ng.ng_orders_8w, 0)  AS ng_orders_8w,
+    ROUND(COALESCE(ng.ng_spend_8w, 0), 2) AS ng_spend_8w,
+    ROUND(COALESCE(ng.ng_sales_8w, 0), 2) AS ng_sales_8w,
+    ROUND(COALESCE(ng.ng_gp_8w, 0) - COALESCE(ng.ng_spend_8w, 0), 2) AS ng_net_profit_8w,
+    ROUND(SAFE_DIVIDE(ng.ng_gp_8w, NULLIF(ng.ng_spend_8w, 0)), 2) AS ng_net_roas_8w,
+    COALESCE(ng.ng_clicks_4w, 0)  AS ng_clicks_4w,
+    COALESCE(ng.ng_orders_4w, 0)  AS ng_orders_4w,
+    ROUND(COALESCE(ng.ng_spend_4w, 0), 2) AS ng_spend_4w,
+    ROUND(COALESCE(ng.ng_gp_4w, 0) - COALESCE(ng.ng_spend_4w, 0), 2) AS ng_net_profit_4w,
+    COALESCE(ng.ng_clicks_recent_5d, 0) AS ng_clicks_recent_5d,
+    -- Organic purchases on this search across every product the group advertises, minus what
+    -- the ads themselves booked — the "it sells anyway" guard, now group-wide.
+    GREATEST(0, COALESCE(ng.ng_sqp_orders_8w, 0) - COALESCE(ng.ng_orders_8w, 0)) AS ng_organic_units_8w,
+    COALESCE(nglt.ng_lt_clicks, 0) AS ng_lt_clicks,
+    COALESCE(nglt.ng_lt_orders, 0) AS ng_lt_orders,
+    ROUND(COALESCE(nglt.ng_lt_spend, 0), 2) AS ng_lt_spend,
+    ROUND(COALESCE(nglt.ng_lt_gp, 0) - COALESCE(nglt.ng_lt_spend, 0), 2) AS ng_lt_net_profit,
+    ROUND(SAFE_DIVIDE(nglt.ng_lt_gp, NULLIF(nglt.ng_lt_spend, 0)), 2) AS ng_lt_net_roas,
 
     -- Target keyword rollup (what you actually bid on)
     COALESCE(tr.target_spend_8w, a8.ads_spend_8w) as target_spend_8w,
@@ -1731,6 +1875,11 @@ active_term_data AS (
   LEFT JOIN q4_seasonal_detection q4s ON a8.search_term = q4s.search_term AND a8.asin = q4s.asin
   LEFT JOIN cross_campaign_8w xc ON a8.search_term = xc.search_term AND a8.asin = xc.asin
   LEFT JOIN ads_lifetime lt ON a8.search_term = lt.search_term AND a8.asin = lt.asin
+  -- Block-grain evidence — one row per campaign × ad group × search term, so many-to-one here
+  LEFT JOIN negate_grain ng
+    ON ng.campaign_id = a8.campaign_id AND ng.ad_group_id = a8.ad_group_id AND ng.search_term = a8.search_term
+  LEFT JOIN negate_grain_lifetime nglt
+    ON nglt.campaign_id = a8.campaign_id AND nglt.ad_group_id = a8.ad_group_id AND nglt.search_term = a8.search_term
   LEFT JOIN ads_ly_peak lyp ON a8.search_term = lyp.search_term AND a8.asin = lyp.asin
   LEFT JOIN sqp_8w sq8 ON a8.search_term = sq8.search_term AND a8.asin = sq8.asin
   LEFT JOIN sqp_ly_peak sqlp ON a8.search_term = sqlp.search_term AND a8.asin = sqlp.asin
@@ -1908,6 +2057,14 @@ opportunity_data AS (
     0.0 as ads_spend_3d, 0 as ads_orders_3d, 0 as ads_units_3d, CAST(NULL AS FLOAT64) as ads_net_roas_3d,
     0.0 as ads_spend_14d, 0 as ads_orders_14d, CAST(NULL AS FLOAT64) as ads_net_roas_14d,
     0 as ads_clicks_recent_5d,
+    -- Block-grain evidence: an opportunity row has no campaign and no ad group, so there is
+    -- nothing a negative could act on. Zeros, and no block branch can read them as a loss.
+    0 AS ng_clicks_8w, 0 AS ng_orders_8w, 0.0 AS ng_spend_8w, 0.0 AS ng_sales_8w,
+    0.0 AS ng_net_profit_8w, CAST(NULL AS FLOAT64) AS ng_net_roas_8w,
+    0 AS ng_clicks_4w, 0 AS ng_orders_4w, 0.0 AS ng_spend_4w, 0.0 AS ng_net_profit_4w,
+    0 AS ng_clicks_recent_5d, 0 AS ng_organic_units_8w,
+    0 AS ng_lt_clicks, 0 AS ng_lt_orders, 0.0 AS ng_lt_spend, 0.0 AS ng_lt_net_profit,
+    CAST(NULL AS FLOAT64) AS ng_lt_net_roas,
     -- Target rollup (zeros for opportunity)
     0.0 as target_spend_8w, 0 as target_orders_8w, 0 as target_clicks_8w, 0 as term_clicks_12mo,
     0 as target_impressions_8w, 0 as target_search_term_count, 0 as target_clicks_recent_5d,

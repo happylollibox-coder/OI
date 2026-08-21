@@ -577,7 +577,7 @@ SELECT
     WHEN d.campaign_id IS NULL THEN NULL
     WHEN CAST(d.campaign_id AS STRING) NOT IN (SELECT campaign_id FROM `onyga-482313.OI.V_LAUNCH_POPULATION`) THEN NULL
     WHEN COALESCE(d.ads_orders_3d, 0) >= d.th_launch_winner_orders AND COALESCE(d.ads_net_roas_3d, 0) >= d.th_profitable_roas THEN 'WINNER'
-    WHEN COALESCE(d.ads_orders_4w, 0) = 0 AND COALESCE(d.ads_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'BLEED'
+    WHEN COALESCE(d.ng_orders_4w, 0) = 0 AND COALESCE(d.ng_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'BLEED'
     WHEN COALESCE(d.target_orders_4w, 0) >= 1 THEN 'EVALUATE'
     ELSE 'GATHER'
   END as launch_phase,
@@ -587,9 +587,9 @@ SELECT
   --   selling & profitable  → LAUNCH_RAISE
   --   selling, not yet prof → LAUNCH_HOLD   (never cut a launch on ROAS)
   --   >=4 clicks, 0 orders  → LAUNCH_HOLD
-  --   bleed control         → LAUNCH_NEGATE on the SEARCH-TERM SLICE (this row IS the term
-  --                           slice: d.ads_*_4w are slice-grain), never a keyword-wide negate
-  --                           off the target rollup, and never a bid cut.
+  --   bleed control         → LAUNCH_NEGATE on the SEARCH TERM, judged on the whole ad
+  --                           group's record for that term (the grain a negative keyword
+  --                           actually acts on), never off the target rollup, never a bid cut.
   -- DARK BRAKE (the one allowed cut) is campaign-level and lives in V_LAUNCH_PHASE1.
   -- Population gate matches launch_phase/is_new_campaign: budget-based V_LAUNCH_POPULATION.
   CASE
@@ -608,8 +608,11 @@ SELECT
         WHEN COALESCE(d.target_net_roas_4w, 0) >= d.th_profitable_roas THEN 'LAUNCH_RAISE'
         ELSE 'LAUNCH_HOLD'
       END
-    -- Zero orders: negate the bleeding SEARCH TERM (slice grain), probe if under-clicked, else hold.
-    WHEN COALESCE(d.ads_orders_4w, 0) = 0 AND COALESCE(d.ads_clicks_4w, 0) >= d.th_launch_negate_clicks THEN 'LAUNCH_NEGATE'
+    -- Zero orders: block the bleeding SEARCH TERM, probe if under-clicked, else hold. Judged at
+    -- the grain the negative lands on — the whole ad group's record on this term, not one
+    -- product's slice of it — so a launch can never block a term another product is selling.
+    WHEN COALESCE(d.ng_orders_4w, 0) = 0 AND COALESCE(d.ng_clicks_4w, 0) >= d.th_launch_negate_clicks
+      AND COALESCE(d.ng_lt_net_profit, 0) < 0 THEN 'LAUNCH_NEGATE'
     WHEN COALESCE(d.target_clicks_4w, 0) < 4 THEN 'LAUNCH_PROBE'
     ELSE 'LAUNCH_HOLD'
   END as launch_decision,
@@ -721,24 +724,49 @@ SELECT
       THEN 'MONITOR'  -- STOP_TARGET fires in target_action column
 
     -- Sub-case C: target ≠ term → negate the search term from this target
-    WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.ads_orders_8w = 0
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_BOOST_SIMILAR_EXACT'
+    WHEN d.strategy_id IN ('PHRASE','EXACT') AND d.ng_orders_8w = 0
+      -- Judged on what the AD GROUP earned from this term, because that is what a negative
+      -- keyword switches off: every product and every keyword in the group, at once.
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      -- A block is permanent, so it may never fall on a term that has PAID this ad group over
+      -- its whole life here. A term that earned its keep and is having a bad eight weeks is a
+      -- bid or a season problem, not a term to blacklist for good.
+      AND COALESCE(d.ng_lt_net_profit, 0) < 0
+      THEN 'NEGATE_BOOST_SIMILAR_EXACT'
     -- Lag safety: if lag ROAS > 1.3, defer EXACT_BOOST negate to MONITOR
     -- NEGATE_BOOST_SIMILAR_EXACT uses 7d raw ROAS
     WHEN d.strategy_id IN ('PHRASE','EXACT')
       AND d.ads_net_roas_1w IS NOT NULL AND d.ads_net_roas_1w < d.th_negate_roas
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      AND COALESCE(d.ng_net_profit_8w, 0) < 0
       AND COALESCE(d.ads_lag_net_roas, 0) > 1.3 THEN 'MONITOR'
     WHEN d.strategy_id IN ('PHRASE','EXACT')
       AND d.ads_net_roas_1w IS NOT NULL AND d.ads_net_roas_1w < d.th_negate_roas
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_BOOST_SIMILAR_EXACT'
+      -- Judged on what the AD GROUP earned from this term, because that is what a negative
+      -- keyword switches off: every product and every keyword in the group, at once.
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      AND COALESCE(d.ng_net_profit_8w, 0) < 0
+      -- A block is permanent, so it may never fall on a term that has PAID this ad group over
+      -- its whole life here. A term that earned its keep and is having a bad eight weeks is a
+      -- bid or a season problem, not a term to blacklist for good.
+      AND COALESCE(d.ng_lt_net_profit, 0) < 0
+      THEN 'NEGATE_BOOST_SIMILAR_EXACT'
     WHEN d.strategy_id IN ('PHRASE','EXACT')
       AND d.ads_net_roas_1w IS NOT NULL AND d.ads_net_roas_1w < d.th_reduce_bid_roas
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      AND COALESCE(d.ng_net_profit_8w, 0) < 0
       AND COALESCE(d.ads_lag_net_roas, 0) > 1.3 THEN 'MONITOR'
     WHEN d.strategy_id IN ('PHRASE','EXACT')
       AND d.ads_net_roas_1w IS NOT NULL AND d.ads_net_roas_1w < d.th_reduce_bid_roas
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_BOOST_SIMILAR_EXACT'
+      -- Judged on what the AD GROUP earned from this term, because that is what a negative
+      -- keyword switches off: every product and every keyword in the group, at once.
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      AND COALESCE(d.ng_net_profit_8w, 0) < 0
+      -- A block is permanent, so it may never fall on a term that has PAID this ad group over
+      -- its whole life here. A term that earned its keep and is having a bad eight weeks is a
+      -- bid or a season problem, not a term to blacklist for good.
+      AND COALESCE(d.ng_lt_net_profit, 0) < 0
+      THEN 'NEGATE_BOOST_SIMILAR_EXACT'
 
     -- ═══ BRAND_DEFENSE / PRODUCT_DEFENSE: never negate (NEGATE_ROAS = -999) ═══
     -- These strategies defend position — MONITOR only, no action
@@ -746,17 +774,33 @@ SELECT
 
     -- ═══ CATEGORY_CONQUEST / COMPETITOR_CONQUEST: aggressive thresholds ═══
     WHEN d.strategy_id IN ('COMPETITOR', 'COMPETITOR')
-      AND d.ads_orders_8w = 0 AND d.ads_clicks_8w >= d.th_min_clicks
-      AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_TERM'
+      -- Judged on what the AD GROUP earned from this term, because that is what a negative
+      -- keyword switches off: every product and every keyword in the group, at once.
+      AND d.ng_orders_8w = 0 AND d.ng_clicks_8w >= d.th_min_clicks
+      AND d.ng_clicks_recent_5d > 0
+      -- A block is permanent, so it may never fall on a term that has PAID this ad group over
+      -- its whole life here. A term that earned its keep and is having a bad eight weeks is a
+      -- bid or a season problem, not a term to blacklist for good.
+      AND COALESCE(d.ng_lt_net_profit, 0) < 0
+      THEN 'NEGATE_TERM'
     -- Lag safety: if lag ROAS > 1.3, defer CONQUEST negate to MONITOR
     -- NEGATE uses 12-month lifetime ROAS — if no LT data, don't negate
     WHEN d.strategy_id IN ('COMPETITOR', 'COMPETITOR')
-      AND d.lt_net_roas IS NOT NULL AND d.lt_net_roas < d.th_negate_roas
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
+      AND d.ng_lt_net_roas IS NOT NULL AND d.ng_lt_net_roas < d.th_negate_roas
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      AND COALESCE(d.ng_net_profit_8w, 0) < 0
       AND COALESCE(d.ads_lag_net_roas, 0) > 1.3 THEN 'MONITOR'
     WHEN d.strategy_id IN ('COMPETITOR', 'COMPETITOR')
-      AND d.lt_net_roas IS NOT NULL AND d.lt_net_roas < d.th_negate_roas
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_TERM'
+      -- Judged on what the AD GROUP earned from this term, because that is what a negative
+      -- keyword switches off: every product and every keyword in the group, at once.
+      AND d.ng_lt_net_roas IS NOT NULL AND d.ng_lt_net_roas < d.th_negate_roas
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      AND COALESCE(d.ng_net_profit_8w, 0) < 0
+      -- A block is permanent, so it may never fall on a term that has PAID this ad group over
+      -- its whole life here. A term that earned its keep and is having a bad eight weeks is a
+      -- bid or a season problem, not a term to blacklist for good.
+      AND COALESCE(d.ng_lt_net_profit, 0) < 0
+      THEN 'NEGATE_TERM'
 
     -- ═══ GENERAL LOGIC (HUNTER, LOW_COST_DISCOVERY, others) ═══
 
@@ -766,9 +810,16 @@ SELECT
 
     -- Wasted: 0 orders + 0 SQP organic + enough clicks + still active
     -- Wasted: negate only if lifetime confirms loss
-    WHEN d.ads_orders_8w = 0 AND d.sqp_organic_units_8w = 0
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
-      AND d.lt_net_roas IS NOT NULL THEN 'NEGATE_TERM'
+    WHEN d.ng_orders_8w = 0 AND d.ng_organic_units_8w = 0
+      -- Judged on what the AD GROUP earned from this term, because that is what a negative
+      -- keyword switches off: every product and every keyword in the group, at once.
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      AND d.ng_lt_net_roas IS NOT NULL
+      -- A block is permanent, so it may never fall on a term that has PAID this ad group over
+      -- its whole life here. A term that earned its keep and is having a bad eight weeks is a
+      -- bid or a season problem, not a term to blacklist for good.
+      AND COALESCE(d.ng_lt_net_profit, 0) < 0
+      THEN 'NEGATE_TERM'
 
     -- ═══ SEASONAL TERM GUARD: seasonal terms can only be promoted by BLITZ ═══
     -- Terms containing holiday names (easter, valentine, christmas, etc.)
@@ -795,21 +846,39 @@ SELECT
     -- Heavy loss + still active → negate (uses 12-month lifetime ROAS)
     -- If no LT data, don't negate → MONITOR
     -- Lag safety: if lag ROAS > 1.3, defer to MONITOR
-    WHEN d.lt_net_roas IS NOT NULL AND d.lt_net_roas < d.th_negate_roas
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
+    WHEN d.ng_lt_net_roas IS NOT NULL AND d.ng_lt_net_roas < d.th_negate_roas
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      AND COALESCE(d.ng_net_profit_8w, 0) < 0
       AND COALESCE(d.ads_lag_net_roas, 0) > 1.3 THEN 'MONITOR'
-    WHEN d.lt_net_roas IS NOT NULL AND d.lt_net_roas < d.th_negate_roas
-      AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0 THEN 'NEGATE_TERM'
+    WHEN d.ng_lt_net_roas IS NOT NULL AND d.ng_lt_net_roas < d.th_negate_roas
+      -- Judged on what the AD GROUP earned from this term, because that is what a negative
+      -- keyword switches off: every product and every keyword in the group, at once.
+      AND d.ng_clicks_8w >= d.th_min_clicks AND d.ng_clicks_recent_5d > 0
+      AND COALESCE(d.ng_net_profit_8w, 0) < 0
+      -- A block is permanent, so it may never fall on a term that has PAID this ad group over
+      -- its whole life here. A term that earned its keep and is having a bad eight weeks is a
+      -- bid or a season problem, not a term to blacklist for good.
+      AND COALESCE(d.ng_lt_net_profit, 0) < 0
+      THEN 'NEGATE_TERM'
 
     -- ═══ MONEY BLEEDER (not-fit) catch — stop the bleed ═══
     -- A 0-order (4w) term with real spend ($5+ panel floor) + enough clicks that is NOT a research
     -- fit (rank < BLEEDER_FIT_RANK, or not in research) → NEGATE_TERM. Catches bleeders the
     -- strategy-specific branches let fall through to MONITOR (e.g. no recent-5d clicks / no LT data).
     WHEN d.strategy_id NOT IN ('BRAND_DEFENSE', 'PRODUCT_DEFENSE')
-      AND COALESCE(d.ads_orders_4w, 0) = 0
-      AND COALESCE(d.ads_spend_4w, 0) >= 5
-      AND COALESCE(d.ads_clicks_4w, 0) >= d.th_bleeder_min_clicks
+      -- Judged on what the AD GROUP earned from this term, because that is what a negative
+      -- keyword switches off: every product and every keyword in the group, at once.
+      AND COALESCE(d.ng_orders_4w, 0) = 0
+      AND COALESCE(d.ng_spend_4w, 0) >= 5
+      AND COALESCE(d.ng_clicks_4w, 0) >= d.th_bleeder_min_clicks
       AND COALESCE(d.research_rank, 0) < d.th_bleeder_fit_rank
+      -- and it must not have paid the group back over eight weeks either: a term that earned
+      -- money there is not a bleeder, it is having a quiet month.
+      AND COALESCE(d.ng_net_profit_8w, 0) < 0
+      -- A block is permanent, so it may never fall on a term that has PAID this ad group over
+      -- its whole life here. A term that earned its keep and is having a bad eight weeks is a
+      -- bid or a season problem, not a term to blacklist for good.
+      AND COALESCE(d.ng_lt_net_profit, 0) < 0
       THEN 'NEGATE_TERM'
 
     ELSE 'MONITOR'
@@ -2441,6 +2510,39 @@ scored_lx AS (
 scored_exempt AS (
   SELECT
     s.* REPLACE(
+      -- ═══ THE SENTENCE A BLOCK CARRIES ═══
+      -- A block is permanent and it is taken at ad-group grain, so its sentence must quote the
+      -- ad group's own record for the term — not the one product's slice the row happens to sit
+      -- on, and not a window the clause could never see. Written here, where the final action is
+      -- known, so the words can never drift from the move.
+      CASE
+        WHEN s.action IN ('NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT') AND s.ng_orders_8w = 0
+          THEN CONCAT('"', s.search_term, '" has taken ', CAST(s.ng_clicks_8w AS STRING),
+               ' clicks and $', CAST(CAST(ROUND(s.ng_spend_8w) AS INT64) AS STRING),
+               ' across everything this ad group runs in the last eight weeks and has never once sold',
+               CASE WHEN s.ng_lt_orders = 0 THEN ', and it has never sold here at all' ELSE '' END,
+               '. ',
+               IF(s.ng_clicks_recent_5d > 0,
+                  CONCAT('It is still drawing clicks (', CAST(s.ng_clicks_recent_5d AS STRING),
+                         ' in the last five days)'),
+                  'It has drawn no clicks in the last five days'),
+               ' => block the term for this ad group.')
+        WHEN s.action IN ('NEGATE_TERM', 'NEGATE_BOOST_SIMILAR_EXACT')
+          THEN CONCAT('"', s.search_term, '" is losing this ad group money: ',
+               CAST(s.ng_clicks_8w AS STRING), ' clicks and $',
+               CAST(CAST(ROUND(s.ng_spend_8w) AS INT64) AS STRING), ' spent for ',
+               CAST(s.ng_orders_8w AS STRING), ' orders and $',
+               CAST(CAST(ROUND(s.ng_sales_8w) AS INT64) AS STRING),
+               ' of sales in the last eight weeks, $',
+               CAST(CAST(ROUND(ABS(s.ng_net_profit_8w)) AS INT64) AS STRING),
+               ' behind after cost of goods. ',
+               IF(s.ng_clicks_recent_5d > 0,
+                  CONCAT('It is still drawing clicks (', CAST(s.ng_clicks_recent_5d AS STRING),
+                         ' in the last five days)'),
+                  'It has drawn no clicks in the last five days'),
+               ' => block the term for this ad group.')
+        ELSE s.reason
+      END AS reason,
       IF(s.launch_cut_suppressed, 'LAUNCH_EXEMPT_HOLD', s.budget_action) AS budget_action,
       -- the suppressed target budget must NOT stay on the row: is_change / the bulksheet queue key
       -- on recommended_budget, so leaving it populated would let the very cut we just blocked be
