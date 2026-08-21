@@ -31,9 +31,12 @@
 -- ── THE JUDGED WINDOW: SHORT, AND DELIBERATELY UNSETTLED ────────────────────────────────────────
 -- w_days comes from V_PEAK_WINDOW_RULE — the one place the house decides how long "recent" is
 -- (7 days off peak; 3 in peak unless 7 has been PROVEN better for that occurrence). Today: in peak
--- (BTS), w_days = 3. The window is the last w_days COMPLETE days ending at the ads watermark
--- (MAX(date) in FACT_AMAZON_ADS), not "today − 1": when the 07:40 load is late the whole ladder
--- slides back a day by itself instead of judging a half-loaded day.
+-- (BTS), w_days = 3. The window is the last w_days COMPLETE days, ending the day BEFORE the ads
+-- watermark (MAX(date) in FACT_AMAZON_ADS) — v27.98; through v27.97 it ended ON the watermark and
+-- so judged one day that was still arriving. Anchoring on the watermark rather than on "today − 1"
+-- means that when the 07:40 load is late the whole ladder slides back a day by itself instead of
+-- judging a half-loaded day. The watermark day itself is published as d1_* and may VETO; it may
+-- never drive a move.
 --
 --   ⚠ SETTLE CAVEAT, stated once. A 3-day window is UNSETTLED. SP sales accrue to D+7 and SB to
 --   D+14, so the last day understates GP-ROAS and the band is biased DOWNWARD — toward trimming.
@@ -187,8 +190,19 @@ win AS (
 winx AS (
   SELECT
     w.*,
-    DATE_SUB(w.last_day, INTERVAL w.w_days - 1 DAY) AS window_start,
-    w.last_day                                      AS window_end
+    -- v27.98 (Ori 2026-08-21): COMPLETE DAYS. The judged window is the w_days days ending the day
+    -- BEFORE the watermark, verbatim the shape its sibling V_LOW_STOCK_ADS has run since v27.74.
+    -- It used to end ON the watermark, so a 3-day band was taken on two complete days plus one that
+    -- is only ~62% loaded at the hour the ladder is read, while the sentence on the row said "the
+    -- 3-day window" — the same words the other engines use for the COMPLETE-days span. Nothing on
+    -- the row explained the difference, and the difference was not cosmetic: a keyword whose only
+    -- converting day had not finished arriving read 0.00x and was trimmed. That is the expensive
+    -- direction here, because a launch is never loss-cut — the ladder exists to FIND the right bid,
+    -- so a trim that should not have fired spends real money walking a good bid down.
+    -- The last day is NOT thrown away: it stays keyed separately as d1_* (see `ev`), published on
+    -- every row, and may stand as a one-way veto — it may never DRIVE a move.
+    DATE_SUB(w.last_day, INTERVAL w.w_days DAY) AS window_start,
+    DATE_SUB(w.last_day, INTERVAL 1 DAY)        AS window_end
   FROM win w
 ),
 
