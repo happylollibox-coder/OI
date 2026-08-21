@@ -15,23 +15,50 @@
 -- A guarantee a verifier can break in one query is worse than no guarantee, so these are stated as
 -- narrowly as the code actually supports them.
 --
+--   EVERY CLAIM BELOW WAS BROKEN BY A VERIFIER IN ONE QUERY AT LEAST ONCE. Three of them were broken
+--   because a real corner was omitted from an otherwise-true sentence, which is the pattern this
+--   block exists to stop: each guarantee now states the corner it does NOT cover, in the same breath.
+--
 --   GUARANTEED. When a window's rate is published (rate_window_data_complete TRUE), every DATE in
---     that window arrived in the ACCOUNT's ads feed. Otherwise the rate is NULL and the reason names
---     the missing dates. The two windows are answered independently.
+--     that window arrived in BOTH the account's ads fact AND — account-wide — the family-mapped
+--     daily view the spend is summed from. Otherwise the rate is NULL and the reason names the
+--     missing dates, and says which of the two paths lost them.
+--     THE CORNER IT DOES NOT COVER: agreement is taken ACCOUNT-WIDE. If a date keeps rows for some
+--     families in the mapped path and loses them for others, the date still reads delivered and this
+--     family's loss shows only as its own silence counts below, never as a hole.
 --   GUARANTEED. The rate is always the window's spend divided by the window's LENGTH, never by the
 --     number of days that happened to carry rows. rate_window_days is the declared constant 28 on
 --     every day of every month; nothing shortens or substitutes a window, ever.
+--     NO CORNER KNOWN. A window that reaches outside the scan is withheld, not shortened.
 --   GUARANTEED. A window may be called a FINDING against the sanction only if ZERO of its days
 --     precede sanctioned_on. Per window, not per family.
+--     THE CORNER IT DOES NOT COVER: nothing about WHETHER the rate is over — that is the comparison,
+--     which is published on every measurable window regardless of when the rate was agreed.
 --   GUARANTEED. protection_qualified is granted only on positive evidence and never on a NULL.
---
---   NOT GUARANTEED, AND NOT CLAIMED. That this FAMILY's rows for a delivered date arrived. On a
---     delivered date the ads fact cannot separate "was not advertising" from "rows have not landed".
---     At the NEWEST end of the window — where a feed lag actually shows — this is handled by
---     refusing CERTIFICATION on any trailing silent day, so it cannot become a false pass. At the
---     OLDEST end it is DISCLOSED ONLY: family_leading_silent_window_days and a sentence in
---     rate_window_basis. A re-labelled history still zero-fills the front of the window and this
---     view will divide those zeros as real. It says so rather than calling the class closed.
+--     THE CORNER IT DOES NOT COVER: it is a STATEMENT, not a control. V_LAUNCH_EXEMPTION hardcodes
+--     exempt_active, so nothing stops on a FALSE here. Wiring it is Task 8b and Task 8b is on hold.
+--   GUARANTEED. A trailing silent day cannot become a false pass. Trailing silence is counted INSIDE
+--     the window, from this family's newest row IN THE WINDOW, so no row outside the window can
+--     answer for it; ANY trailing silent day refuses certification and protection_qualified fails
+--     closed. THIS CLAIM WAS FALSE UNTIL THIS ROUND — the count was derived from the family's global
+--     newest row, and since that row normally sits at feed_end, one day AFTER the window ends, the
+--     count read 0 whatever the window looked like. The guard was not weak, it was defeated.
+--     THE CORNER IT DOES NOT COVER: silence in the MIDDLE of the window. On delivered dates that is a
+--     real zero, it is divided as one, and nothing gates on it. family_interior_silent_window_days
+--     publishes it and rate_window_basis says it in words.
+--   GUARANTEED, BUT ONLY OVER PART OF ITS CLASS. Leading silence — no row at the OLDEST end of the
+--     window — refuses certification WHEN this family had a delivered ads row BEFORE the window
+--     started. With a pre-window row on file the silence is a GAP in a history, which is the shape a
+--     re-labelling or a partial backfill makes, and certifying across it is the failure this measure
+--     keeps having. The count, like the trailing one, is now measured inside the window; it used to
+--     be derived from the family's global oldest row, so any surviving older history drove it to 0 —
+--     and that defeated count was offered in this header as the whole defence for the class.
+--     THE CORNER IT DOES NOT COVER, AND IT IS THE REST OF THE CLASS: when NO pre-window row survives,
+--     leading silence is exactly what a launch that began advertising inside the window looks like.
+--     This view cannot tell that from a history truncated at the front, and gating would refuse
+--     protection to every real launch for being new. There it is DISCLOSED and does not gate:
+--     family_leading_silent_window_days, family_advertised_before_window and a sentence in
+--     rate_window_basis are the whole of the defence, and this header does not call the class closed.
 --
 -- ═════════════════════════════════════════════════════════════════════════════════════════════
 -- THE QUESTION CHANGES WITH AGE (Ori 2026-08-19: "the question of launch products is are they
@@ -168,26 +195,49 @@
 --
 -- ---------------------------------------------------------------------------------------------
 -- ONE DEFINITION OF "THE ADS FEED DELIVERED THIS DAY", AND IT IS A PROPERTY OF THE DATE.
+-- IT IS ALSO A CONJUNCTION OF TWO SOURCES, BECAUSE ONE SOURCE CANNOT SEE THE OTHER'S LOSSES (U3).
 --
---     the account's ads fact carries rows for the date  (SUM(Ads_cost) > 0 OR SUM(Ads_impressions) > 0)
+--     the account's ads FACT carries the date           (SUM(Ads_cost) > 0 OR SUM(Ads_impressions) > 0)
+--   AND the account's family-MAPPED daily view carries it (SUM(ad_cost) > 0 OR SUM(impressions) > 0)
 --
--- computed ONCE, in acct_day, and read by everything that needs it: the account anchor, the window's
+-- computed ONCE, in fact_day and mapped_day, and read by everything that needs it: the window's
 -- delivery count, the hole test and the sigma test. There is no second definition anywhere in this
--- file, and in particular there is no per-family one.
+-- file, and in particular there is no per-family one — mapped_day aggregates over EVERY family.
 --
--- WHY THE OR IS THE RIGHT PREDICATE. The question is "did this date's advertising data ARRIVE", not
--- "did money move on it". A date of genuinely zero-cost delivery is a date the feed arrived on and
--- nobody spent, and it must be readable as exactly that.
+-- WHY THE OR INSIDE EACH. The question is "did this date's advertising data ARRIVE", not "did money
+-- move on it". A date of genuinely zero-cost delivery is a date the feed arrived on and nobody
+-- spent, and it must be readable as exactly that.
 --
--- WHY IT READS THE ADS FACT AND NOT V_UNIFIED_DAILY, EVEN THOUGH V_UNIFIED_DAILY IS WHAT THE
--- NUMERATOR SUMS. V_UNIFIED_DAILY keeps only rows whose advertised ASIN resolves through
--- COALESCE(most_advertised_asin_impressions, advertised_asins, ASIN_BY_CAMPAIGN_NAME) AND whose ASIN
--- joins V_PRODUCT_FAMILY_MAP AND whose date joins DIM_TIME. Every one of those is a FAMILY-LEVEL
--- filter, and the delivery signal exists precisely to be independent of family-level machinery. Read
--- from V_UNIFIED_DAILY, a remapping that unmaps a family would delete dates from the account-level
--- signal — the instrument would move with the very thing it is measuring, and would certify its own
--- hole as "the date never arrived". Read from FACT_AMAZON_ADS it cannot. Whether the two sets agree
--- TODAY is a measurement and not a guarantee; the query that takes it is printed at acct_day.
+-- WHY THE AND BETWEEN THEM, WHICH IS THE REPAIR THIS ROUND MAKES. Round 5 read delivery from
+-- V_UNIFIED_DAILY, and round 6 moved it to FACT_AMAZON_ADS for a reason that still holds:
+-- V_UNIFIED_DAILY keeps only rows whose advertised ASIN resolves and joins V_PRODUCT_FAMILY_MAP and
+-- DIM_TIME, all family-level filters, so a remapping that unmaps a family could delete dates from
+-- the very signal meant to be independent of family-level machinery. But the FACT ALONE leaves the
+-- mirror hole, and it is the worse one, because the numerator still SUMS V_UNIFIED_DAILY: a loss
+-- confined to the numerator's own join path is then completely invisible. Every date reads
+-- delivered, the window reads complete, the basis string still says 28 complete days — and the rate
+-- collapses in silence, in the permissive direction. A verifier demonstrated it by removing all six
+-- families' V_UNIFIED_DAILY rows for a 26-day stretch with the fact left intact.
+--
+-- SO THE TWO SOURCES MUST AGREE, AND A DISAGREEMENT IS ITSELF A REASON TO WITHHOLD. A date only one
+-- of them carries is not delivered. It is also not merely "missing": it means one of the two paths
+-- lost something, and which one changes what a person does about it, so the disagreement is COUNTED
+-- AND NAMED rather than folded into the hole count — rate_window_days_in_fact_not_in_mapped and
+-- rate_window_fact_not_mapped_days for the mapping-loss direction (the operationally interesting
+-- one: it is a defect in the family map, and the numerator is summed from the side that lost the
+-- date), rate_window_days_in_mapped_not_in_fact for the direction that should be impossible, counted
+-- so that "should be impossible" is a measurement and not an assumption.
+--
+-- WHAT WAS REJECTED: moving the numerator to FACT_AMAZON_ADS. That would make the two agree by
+-- construction and would take the rate off V_UNIFIED_DAILY, which is the source the whole two-book
+-- design measures money with. The instrument moves to the numerator's path; the numerator does not
+-- move to the instrument's.
+--
+-- WHETHER THE TWO SETS AGREE TODAY IS A MEASUREMENT AND NOT A GUARANTEE. The query is printed at
+-- mapped_day. THE COUPLING THIS BUYS BACK, STATED: delivery is now partly a function of the family
+-- map again — account-wide, over every family, so no single family can delete a date, but not
+-- immune. The direction is fail-closed: a date drops OUT of delivery and the window is withheld;
+-- it can never make a hole read as a zero.
 --
 -- THE DIRECTION THIS CHOICE ERRS IN. Calling a date delivered when it was not turns a hole into a
 -- zero, still divided by the full window length, and biases the rate DOWN — permissive, the
@@ -245,13 +295,15 @@
 --
 -- THE RULE NOW, AND IT IS TWO QUESTIONS ASKED SEPARATELY:
 --
---   (1) HAS THIS DATE ARRIVED? An ACCOUNT-level property of the DATE, derived once in acct_day from
---       FACT_AMAZON_ADS over the whole window, for every family alike. It never consults a family.
+--   (1) HAS THIS DATE ARRIVED? An ACCOUNT-level property of the DATE, derived once in fact_day and
+--       mapped_day, for every family alike. It never consults the family being judged: fact_day
+--       reads FACT_AMAZON_ADS and mapped_day aggregates V_UNIFIED_DAILY over EVERY family.
 --   (2) DID THIS FAMILY SPEND ON A DELIVERED DATE? If the date is delivered and this family has no
 --       row on it, the family spent nothing that day. That is a GENUINE ZERO and it belongs in the
 --       denominator, exactly as the argument above requires.
 --
--- Everything else is a HOLE: a date the ACCOUNT's feed never delivered at all. A window with any hole
+-- Everything else is a HOLE: a date at least one of the two account-level paths did not deliver — a
+-- date the ads fact never carried, or a date the family-mapped view lost account-wide. A window with any hole
 -- in it has its spend and its rate WITHHELD — NULL, never a short sum dressed as a full one — and
 -- the withheld reason names the missing days BY DATE, not merely by count, so a reader knows which
 -- loads to go and look for. protection_qualified fails closed. This is Ori's rule applied literally:
@@ -284,40 +336,60 @@
 --     delivery is account-level: the per-family staleness test was an instrument for a job that no
 --     longer exists.
 --
--- (B) THIS FAMILY'S TRAILING SILENCE, anchored to win_end:
+-- (B) THIS FAMILY'S TRAILING SILENCE, MEASURED INSIDE THE WINDOW:
 --
---         trailing_silent_days = GREATEST(0, win_end - family_ads_last_day)
+--         trailing_silent_days = win_end - (this family's newest ads row IN THE WINDOW)
+--                              = the whole window when it has no row in the window at all
 --
---     win_end is where zero-filling can first begin, so win_end is where the test must start. The
---     OLD test asked (today - family_ads_last_day) > feed_stale_after_days. Since win_end = feed_end
---     - 1 and feed_age_days = today - feed_end,
+--     WHY "IN THE WINDOW" IS THE WHOLE POINT. The previous cut wrote
+--     GREATEST(0, win_end - family_ads_last_day) off the family's GLOBAL newest row over the
+--     201-day scan. win_end is feed_end - 1, so a row at feed_end — one day AFTER the window ends,
+--     which is where the ordinary newest row sits — made the difference negative and the count 0.
+--     ANY surviving later row defeated the guard, and the trailing-silence experiments the previous
+--     round reported as showing 1, 2 and 6 silent days return 0 against that expression. A guard
+--     that a single ordinary row switches off is not a guard. The rule now reads only rows that lie
+--     between win_start and win_end, so nothing outside the window can answer for the window.
 --
---         today - last = trailing_silent_days + feed_age_days + 1
+--     There is no constant to tune: ANY trailing silent day is one, and one is enough.
 --
---     so the old flag fired only when trailing_silent_days > feed_stale_after_days - feed_age_days
---     - 1, i.e. at the ordinary feed age of 1, only when trailing_silent_days > 1. A family exactly
---     ONE day silent at the newest end of the window — family feed age 3 — was zero-filled and NOT
---     flagged: a GUARANTEED uncovered band, guaranteed because the two tests counted from different
---     days. Anchoring to win_end removes it with no constant left to tune. ANY trailing silent day
---     is one, and one is enough.
+-- (C) THIS FAMILY'S LEADING SILENCE, MEASURED THE SAME WAY, AND NOW IT GATES OVER PART OF ITS CLASS:
 --
--- WHAT (B) DOES AND DOES NOT DO. It does NOT withhold the rate — a genuine stop must publish an
--- honest number, and on delivered dates the zeros are real. It blocks CERTIFICATION only:
--- rate_window_is_stale reads TRUE and protection_qualified fails closed. Refusing protection to a
--- family that spent nothing costs that family nothing. Granting it on rows that had not landed is
--- the failure this measure keeps having.
+--         leading_silent_days = (this family's oldest ads row IN THE WINDOW) - win_start
 --
--- LEADING SILENCE IS PUBLISHED AND DOES NOT GATE, and the reason is not squeamishness. A launch that
--- began advertising inside the window has leading silence BY DEFINITION, so gating on it would
--- refuse protection to every real launch on the grounds of being new — not a fail-closed rule, an
--- arbitrary one. family_leading_silent_window_days rides on the row for the reader who suspects a
--- history was re-labelled; this view cannot decide that question and says so.
+--     It had the mirror defect — DATE_DIFF(first_ads_day, win_start) off the family's GLOBAL oldest
+--     row, so any surviving older history drove it to 0 — and that defeated count was offered in
+--     this header as the entire defence for the disclosed leading-edge hole.
+--
+--     WITH A REAL IN-WINDOW MEASURE, PART OF THE CLASS CAN BE CLOSED RATHER THAN DISCLOSED. Leading
+--     silence has two causes and one fact separates most of them: did this family have a delivered
+--     ads row BEFORE win_start? If it DID, it was advertising up to the window's edge and the
+--     silence is a GAP in a history — which is the shape a re-labelling or a partial backfill makes
+--     — so certification is refused. If it did NOT, the same silence is what every launch that
+--     began advertising inside the window looks like, this view cannot tell that from a history
+--     truncated at the front, and gating would refuse protection to every real launch for being new.
+--     There it stays DISCLOSED and does not gate.
+--
+--     WHAT THE CLOSED HALF COSTS, STATED: a family that paused before the window and resumed inside
+--     it is refused certification for as long as the gap sits in the window, even though the pause
+--     was real. Refusing protection to a family that was not advertising costs that family nothing;
+--     certifying zeros that may not be zeros is the failure this measure keeps having.
+--     family_advertised_before_window and family_leading_silence_is_a_gap publish which half applies.
+--
+-- WHAT (B) AND (C) DO AND DO NOT DO. Neither withholds the rate — a genuine stop must publish an
+-- honest number, and on delivered dates the zeros are real. They block CERTIFICATION only:
+-- rate_window_is_stale (also published as rate_window_uncertifiable) reads TRUE and
+-- protection_qualified fails closed.
+--
+-- WHAT NEITHER OF THEM COVERS, NAMED RATHER THAN LEFT OUT: silence in the MIDDLE of the window.
+-- family_interior_silent_window_days publishes it, rate_window_basis says it in words, and nothing
+-- gates on it — a mid-window pause and a mid-window loss of this family's rows are the same picture.
 --
 -- WHAT THE GATE DOES WHEN A WINDOW IS NOT CERTIFIABLE: protection_qualified FAILS CLOSED — no
 -- protection. A rate whose window is COMPLETE is still PUBLISHED, because it is a true statement
 -- about the days it covers, and rate_window_is_stale, rate_window_uncertifiable_reason,
--- family_trailing_silent_window_days, family_ads_last_day, ads_feed_last_day and rate_window_basis
--- all say plainly why it is not certified.
+-- family_trailing_silent_window_days, family_leading_silent_window_days,
+-- family_last_ads_day_in_window, family_first_ads_day_in_window, ads_feed_last_day and
+-- rate_window_basis all say plainly why it is not certified.
 --
 -- THE SIGMA IS WITHHELD ON A HOLE TOO, AND IN THE FAIL-CLOSED DIRECTION. The noise window is
 -- zero-filled, so a hole in it manufactures a step down and a step up: two large first differences
@@ -497,14 +569,18 @@ u AS (
 -- account-level question and is answered here, once, for every family alike. "Did THIS FAMILY spend
 -- on a delivered date?" is then a separate and unambiguous question, answered in the spine.
 --
--- WHY THIS READS THE ADS FACT AND NOT u. u is V_UNIFIED_DAILY, which INNER JOINs
--- V_PRODUCT_FAMILY_MAP and DIM_TIME. Derived from u, the account-level delivery signal would be
--- filtered by exactly the family-level machinery it exists to be independent of: a date whose ads
+-- WHY THIS HALF READS THE ADS FACT AND NOT u. u is V_UNIFIED_DAILY, which INNER JOINs
+-- V_PRODUCT_FAMILY_MAP and DIM_TIME. Derived from u ALONE, the account-level delivery signal would
+-- be filtered by exactly the family-level machinery it exists to be independent of: a date whose ads
 -- rows all belong to unmapped ASINs, or a remapping that unmaps a family, deletes the date from the
 -- signal — and the signal would then certify its own hole as "the date never arrived", or worse,
 -- move with the very family whose absence it is being asked to judge. Reading FACT_AMAZON_ADS makes
--- delivery independent of the map, of the family and of DIM_TIME. Whether the two agree TODAY is a
--- measurement, not a guarantee, and this query is how to take it:
+-- this half independent of the map, of the family and of DIM_TIME.
+-- AND WHY IT IS ONLY HALF (U3). The fact cannot see a loss confined to the path the NUMERATOR sums,
+-- and that loss is the permissive one: the window reads complete and the rate collapses. So delivery
+-- is the CONJUNCTION of this half and mapped_day below, and a disagreement withholds rather than
+-- passes. Whether the two agree TODAY is a measurement, not a guarantee, and this query is how to
+-- take it — the same two predicates this file uses, over the same 201-day scan:
 --   SELECT COUNTIF(f.day IS NULL) AS only_in_unified, COUNTIF(u.day IS NULL) AS only_in_fact
 --   FROM (SELECT date AS day FROM `onyga-482313.OI.FACT_AMAZON_ADS`
 --         WHERE date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 201 DAY)
@@ -518,12 +594,29 @@ u AS (
 -- test errs towards calling a date UNDELIVERED. The cost of that choice is named and not hidden: an
 -- account-wide day on which nothing at all ran is indistinguishable from a day that never loaded,
 -- and this view calls it a hole and withholds rather than dividing by it.
-acct_day AS (
+fact_day AS (
   SELECT date AS day
   FROM `onyga-482313.OI.FACT_AMAZON_ADS`
   WHERE date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 201 DAY)
   GROUP BY date
   HAVING SUM(Ads_cost) > 0 OR SUM(Ads_impressions) > 0
+),
+-- ═══ AND THE SAME QUESTION ASKED OF THE PATH THE NUMERATOR ACTUALLY SUMS ══════════════════════════
+-- THE SECOND HALF OF THE INSTRUMENT (U3). fact_day above answers "did this date arrive in the ads
+-- fact". It does NOT answer "did this date arrive in the view the rate is summed from". Those are
+-- different questions the moment V_UNIFIED_DAILY's inner joins to V_PRODUCT_FAMILY_MAP and DIM_TIME
+-- drop something, and a loss confined to that path is invisible to a fact-only instrument: every
+-- date reads delivered, the window reads complete, and the rate collapses in silence. The
+-- experiment that demonstrates it is printed at the delivered flag in the spine, and the query that
+-- prices the disagreement across the whole scan is printed above at fact_day.
+-- ACCOUNT-WIDE, deliberately: it aggregates over EVERY family in u, not the family being judged, so
+-- one family losing its mapping cannot by itself delete a date. What it does catch is the loss that
+-- takes the date away from the mapped path altogether.
+mapped_day AS (
+  SELECT date AS day
+  FROM u
+  GROUP BY date
+  HAVING SUM(ad_cost) > 0 OR SUM(impressions) > 0
 ),
 -- EACH FAMILY'S OWN ADVERTISING SPAN INSIDE THE SCAN. Both ends NULL when no delivered ads row for
 -- that family has ever reached this view — and a family with no span has no known zero days at all,
@@ -535,13 +628,19 @@ span AS (
 -- THE ACCOUNT'S NEWEST DELIVERED ADS DAY, capped at yesterday (LA). See the header: the cap is
 -- deliberately NOT FN_ADS_ANCHOR_CAP(), so the window cannot move at 22:00 LA and the newest day
 -- inside it is always at least age 2 and therefore essentially fully settled.
--- It reads acct_day for the same reason acct_day reads the fact: the newest day the ACCOUNT
--- delivered must not be able to move because one family lost its mapping. An empty acct_day still
+-- It reads fact_day for the same reason fact_day reads the fact: the newest day the ACCOUNT
+-- delivered must not be able to move because one family lost its mapping. An empty fact_day still
 -- returns one all-NULL row here, so the CROSS JOINs below cannot delete a family.
+-- THE ANCHOR STAYS ON THE FACT ALONE, AND THAT IS A DECISION, NOT AN OVERSIGHT. Anchoring on the
+-- newest date the two paths AGREE on would slide the window backwards off a disagreement and then
+-- publish a clean-looking rate over the days behind it — the disagreement would be stepped around
+-- instead of reported. Anchored on the fact, a mapped-path loss at the newest end lands INSIDE the
+-- window, where it withholds the rate and gets named. Publish the disagreement, do not walk away
+-- from it.
 acct AS (
   SELECT LEAST(MAX(day),
                DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)) AS feed_end
-  FROM acct_day
+  FROM fact_day
 ),
 -- THE WINDOW EDGES, ONE ROW, derived once from the tunables so no line quietly re-states a length.
 -- With no rows at all this still returns a single all-NULL row, which is what keeps the CROSS JOIN
@@ -595,12 +694,48 @@ spine AS (
     day,
     COALESCE(u.ad_cost, 0)                                                     AS spend,
     COALESCE(u.has_ads_row, FALSE)                                             AS family_row,
-    (ad.day IS NOT NULL)                                                       AS delivered
+    -- ─── DELIVERED MEANS BOTH PATHS CARRY THE DATE (U3) ──────────────────────────────────────────
+    -- The instrument and the numerator must live on the same path or the instrument is not measuring
+    -- the numerator. fd is the ads fact — independent of the family map, which is why the delivery
+    -- signal reads it. md is the family-mapped daily view, ACCOUNT-WIDE — the path the numerator is
+    -- actually summed from. A date counts as DELIVERED only when BOTH carry it.
+    --
+    -- WHY AN AND AND NOT THE FACT ALONE. Round 6 moved delivery to the fact for a good reason and
+    -- that reason still holds: read from V_UNIFIED_DAILY alone, a remap that unmaps a family deletes
+    -- dates from the very signal meant to be independent of the family. But the fact ALONE leaves the
+    -- opposite hole: a loss confined to the numerator's own join path is invisible, every date reads
+    -- delivered, the window reads complete, and the rate silently collapses. Reproduce it — drop the
+    -- mapped path for a stretch inside the window and watch the fact-only rule publish a rate:
+    --   WITH a AS (SELECT LEAST(MAX(date), DATE_SUB(CURRENT_DATE('America/Los_Angeles'),
+    --                                                 INTERVAL 1 DAY)) AS fe
+    --              FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
+    --        w AS (SELECT fe, DATE_SUB(fe, INTERVAL 28 DAY) AS win_start,
+    --                         DATE_SUB(fe, INTERVAL  1 DAY) AS win_end FROM a),
+    --        u AS (SELECT date, SUM(ad_cost) AS c FROM `onyga-482313.OI.V_UNIFIED_DAILY`
+    --              WHERE family = 'Bunny' GROUP BY date),
+    --        -- 26 of the window's 28 days lost from the MAPPED path only; the fact keeps all 28
+    --        d AS (SELECT day, w.win_start, w.win_end,
+    --                     day BETWEEN DATE_SUB(w.win_end, INTERVAL 25 DAY) AND w.win_end AS lost
+    --              FROM w, UNNEST(GENERATE_DATE_ARRAY(w.win_start, w.win_end)) AS day)
+    --   SELECT COUNT(*)      AS window_days,
+    --          COUNTIF(lost) AS days_the_mapped_path_lost,
+    --          ROUND(SUM(IF(lost, 0, COALESCE(u.c, 0))) / 28, 2)
+    --                        AS rate_a_fact_only_instrument_would_still_publish,
+    --          ROUND(SUM(COALESCE(u.c, 0)) / 28, 2) AS rate_before_the_loss
+    --   FROM d LEFT JOIN u ON u.date = d.day;
+    --
+    -- A DISAGREEMENT IS ITSELF A REASON TO WITHHOLD, and it is not the same fault as a feed hole: it
+    -- means the MAPPING lost something. So the two disagreement directions are counted and named
+    -- separately below rather than folded into one "missing days" number.
+    (fd.day IS NOT NULL AND md.day IS NOT NULL)                                AS delivered,
+    (fd.day IS NOT NULL AND md.day IS NULL)                                    AS fact_only,
+    (fd.day IS NULL     AND md.day IS NOT NULL)                                AS mapped_only
   FROM b
   CROSS JOIN win w
   CROSS JOIN UNNEST(GENERATE_DATE_ARRAY(w.noise_start, w.win_end)) AS day
-  LEFT JOIN u        ON u.family = b.family AND u.date = day
-  LEFT JOIN acct_day ad ON ad.day = day
+  LEFT JOIN u          ON u.family = b.family AND u.date = day
+  LEFT JOIN fact_day   fd ON fd.day = day
+  LEFT JOIN mapped_day md ON md.day = day
 ),
 -- PER-FAMILY WINDOW AGGREGATES, all off the one spine. Each window is counted on its own days.
 fam AS (
@@ -619,6 +754,28 @@ fam AS (
                   FORMAT_DATE('%-d %B', day), NULL), ', ' ORDER BY day)         AS win_missing_days,
     STRING_AGG(IF(day BETWEEN sh_start  AND win_end AND NOT delivered,
                   FORMAT_DATE('%-d %B', day), NULL), ', ' ORDER BY day)         AS sh_missing_days,
+    -- ─── THE DISAGREEMENT BETWEEN THE TWO PATHS, PUBLISHED AND NOT HIDDEN (U3) ───────────────────
+    -- fact_only: the ads fact carries the date and the family-mapped daily view does not. That is a
+    -- MAPPING loss, not a feed hole, and it is a real operational signal — the numerator is summed
+    -- from the path that lost it. mapped_only: the reverse, which should not be possible and is
+    -- counted so that "should not be possible" is a measurement rather than an assumption.
+    COUNTIF(day BETWEEN win_start AND win_end AND fact_only)                    AS win_days_fact_only,
+    COUNTIF(day BETWEEN sh_start  AND win_end AND fact_only)                    AS sh_days_fact_only,
+    COUNTIF(day BETWEEN win_start AND win_end AND mapped_only)                  AS win_days_mapped_only,
+    COUNTIF(day BETWEEN sh_start  AND win_end AND mapped_only)                  AS sh_days_mapped_only,
+    STRING_AGG(IF(day BETWEEN win_start AND win_end AND fact_only,
+                  FORMAT_DATE('%-d %B', day), NULL), ', ' ORDER BY day)         AS win_fact_only_days,
+    STRING_AGG(IF(day BETWEEN sh_start  AND win_end AND fact_only,
+                  FORMAT_DATE('%-d %B', day), NULL), ', ' ORDER BY day)         AS sh_fact_only_days,
+    -- ─── SILENCE MEASURED INSIDE THE WINDOW, NEVER FROM A GLOBAL MIN OR MAX (U1/U2) ──────────────
+    -- These two are the whole of the trailing and leading silence measures. They read the family's
+    -- NEWEST and OLDEST rows THAT LIE IN THE WINDOW. The defect they replace derived both counts
+    -- from the family's global span over the 201-day scan, so a single surviving row OUTSIDE the
+    -- window — at feed_end, or today, or years of older history — drove the count to 0 and defeated
+    -- the guard that was the whole defence. NULL here means the family had no row in the window at
+    -- all, which the reader below turns into full-window silence rather than into zero.
+    MAX(IF(day BETWEEN win_start AND win_end AND family_row, day, NULL))        AS last_row_in_win,
+    MIN(IF(day BETWEEN win_start AND win_end AND family_row, day, NULL))        AS first_row_in_win,
     -- a hole anywhere in the noise window inflates sigma, so it withholds sigma
     COUNTIF(NOT delivered)                                                      AS noise_days_undelivered
   FROM spine
@@ -664,6 +821,14 @@ core AS (
     COALESCE(f.sh_days_delivered,  0)                                          AS sh_days_delivered,
     f.win_missing_days,
     f.sh_missing_days,
+    COALESCE(f.win_days_fact_only,   0)                                        AS win_days_fact_only,
+    COALESCE(f.sh_days_fact_only,    0)                                        AS sh_days_fact_only,
+    COALESCE(f.win_days_mapped_only, 0)                                        AS win_days_mapped_only,
+    COALESCE(f.sh_days_mapped_only,  0)                                        AS sh_days_mapped_only,
+    f.win_fact_only_days,
+    f.sh_fact_only_days,
+    f.first_row_in_win,
+    f.last_row_in_win,
     COALESCE(f.noise_days_undelivered, w.noise_window_days)                    AS noise_days_undelivered,
     n.daily_spend_sigma                                                        AS raw_daily_spend_sigma,
     n.noise_days_measured,
@@ -674,31 +839,57 @@ core AS (
     DATE_DIFF(CURRENT_DATE('America/Los_Angeles'),
               LEAST(sp.last_ads_day, w.feed_end), DAY)                         AS family_feed_age_days,
     sp.first_ads_day                                                           AS family_ads_first_day,
-    -- ─── Q3: THE OFF-BY-ONE, CLOSED BY DERIVATION RATHER THAN BY A NEW CONSTANT ───────────────────
-    -- TRAILING SILENCE: the number of window days at the NEWEST end on which this family has no ads
-    -- row, counted from win_end — the day zero-filling can first begin — and not from today.
-    --   trailing = GREATEST(0, win_end - family_ads_last_day)
-    -- THE OLD TEST asked family_feed_age_days > feed_stale_after_days, i.e. (today - last) > 3. Since
-    -- win_end = feed_end - 1 and feed_age_days = today - feed_end,
-    --   today - last = (win_end - last) + feed_age_days + 1 = trailing + feed_age_days + 1
-    -- so the old flag fired only when trailing > 2 - feed_age_days. At the ordinary feed age of 1 that
-    -- is trailing > 1: a family exactly ONE day silent at the newest end of the window — family age 3 —
-    -- was zero-filled and NOT flagged. That was the guaranteed uncovered band, and it was guaranteed
-    -- because the two tests were anchored to different days. Anchoring the test to win_end removes the
-    -- band with no constant left to tune: ANY trailing silent day is one, and one is enough.
-    -- NULL-safe: a family with no ads day at all is silent for the whole window.
-    LEAST(w.win_days,
-          GREATEST(0, COALESCE(DATE_DIFF(w.win_end, LEAST(sp.last_ads_day, w.feed_end), DAY),
-                               w.win_days)))                                   AS trailing_silent_days,
-    -- LEADING SILENCE: the mirror count at the OLDEST end. It is PUBLISHED and it does NOT gate, and
-    -- the reason is not squeamishness — it is that a launch which started advertising inside the
-    -- window has leading silence BY DEFINITION, so gating on it would refuse protection to every real
-    -- launch on the grounds of being new. It is the number a reader checks when a family's history
-    -- looks like it moved. See the concerns in the header: on a delivered date this view cannot tell
-    -- "was not advertising yet" from "its history was re-labelled", and it does not pretend to.
-    LEAST(w.win_days,
-          GREATEST(0, COALESCE(DATE_DIFF(sp.first_ads_day, w.win_start, DAY), w.win_days)))
-                                                                               AS leading_silent_days,
+    -- ─── SILENCE IS MEASURED INSIDE THE WINDOW. NOTHING OUTSIDE IT MAY ANSWER FOR IT (U1/U2). ────
+    -- TRAILING SILENCE: the number of consecutive days at the NEWEST end of the window on which this
+    -- family has no ads row. It is DATE_DIFF(win_end, the family's newest row IN THE WINDOW), and if
+    -- the family has no row in the window at all it is the whole window length.
+    --
+    -- THE DEFECT THIS REPLACES, WHICH WAS ITSELF THE PREVIOUS ROUND'S REPAIR. The count used to be
+    -- derived from the family's GLOBAL span over the 201-day scan:
+    --     LEAST(win_days, GREATEST(0, DATE_DIFF(win_end, LEAST(last_ads_day, feed_end))))
+    -- and win_end = feed_end - 1, so ANY surviving row at feed_end or later made the DATE_DIFF
+    -- negative and the whole expression 0. A family silent across the newest days of the window
+    -- reported ZERO trailing silence as long as one later row existed anywhere — which is the ORDINARY
+    -- case, because feed_end itself is outside the window and normally carries rows. The guard was
+    -- not weak, it was defeated: the trailing silence experiments the previous round reported as
+    -- showing 1, 2 and 6 silent days return 0 on that expression. Re-run them against this one:
+    --   WITH a AS (SELECT LEAST(MAX(date), DATE_SUB(CURRENT_DATE('America/Los_Angeles'),
+    --                                                 INTERVAL 1 DAY)) AS fe
+    --              FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
+    --        w AS (SELECT fe, DATE_SUB(fe, INTERVAL  1 DAY) AS win_end,
+    --                         DATE_SUB(fe, INTERVAL 28 DAY) AS win_start FROM a),
+    --        u AS (SELECT family, date FROM `onyga-482313.OI.V_UNIFIED_DAILY`
+    --              GROUP BY family, date HAVING SUM(ad_cost) > 0 OR SUM(impressions) > 0),
+    --        -- the family's rows with the newest n days OF THE WINDOW removed. Every row outside
+    --        -- the window is left exactly where it is, including the ordinary one at feed_end.
+    --        m AS (SELECT n, w.fe, w.win_end, w.win_start, u.date
+    --              FROM w, UNNEST([1, 2, 3, 7]) AS n
+    --              JOIN u ON u.family = 'Bunny'
+    --              WHERE u.date NOT BETWEEN DATE_SUB(w.win_end, INTERVAL n - 1 DAY) AND w.win_end)
+    --   SELECT n AS silent_days_at_the_newest_end_of_the_window,
+    --          LEAST(28, GREATEST(0, DATE_DIFF(win_end, LEAST(MAX(date), fe), DAY)))
+    --                     AS trailing_days_the_global_span_reports,
+    --          COALESCE(DATE_DIFF(win_end,
+    --                   MAX(IF(date BETWEEN win_start AND win_end, date, NULL)), DAY), 28)
+    --                     AS trailing_days_the_in_window_rule_reports
+    --   FROM m GROUP BY n, fe, win_end, win_start ORDER BY n;
+    -- The global-span column reads 0 on every row; the in-window column reads 1, 2, 3 and 7.
+    COALESCE(DATE_DIFF(w.win_end, f.last_row_in_win, DAY), w.win_days)          AS trailing_silent_days,
+    -- LEADING SILENCE: the mirror count at the OLDEST end, measured the same way and for the same
+    -- reason. The old form read DATE_DIFF(first_ads_day, win_start) off the family's GLOBAL MIN, so
+    -- any surviving OLDER row — which every family that advertised before the window has — drove it
+    -- to 0. That count was offered in the header as the entire defence for the disclosed leading-edge
+    -- hole, so the defence was defeated by the ordinary case as well.
+    COALESCE(DATE_DIFF(f.first_row_in_win, w.win_start, DAY), w.win_days)       AS leading_silent_days,
+    -- ─── AND THE FACT THAT LETS LEADING SILENCE BE JUDGED RATHER THAN ONLY DISCLOSED ─────────────
+    -- Leading silence has two completely different causes and until now this view could not name
+    -- which: a launch that BEGAN ADVERTISING INSIDE THE WINDOW has it by definition, and a history
+    -- that was RE-LABELLED OR PARTIALLY BACKFILLED has it as damage. One fact separates most of them:
+    -- did this family have a delivered ads row BEFORE the window started? If it did, it was
+    -- advertising up to the window's edge, so silence at the front of the window is a GAP and not a
+    -- beginning — and a gap is exactly the shape a lost slice of history makes. If it did not, this
+    -- view cannot tell a truncated history from a new launch, and it says so instead of guessing.
+    COALESCE(sp.first_ads_day < w.win_start, FALSE)                            AS family_ads_before_window,
     -- IS THE WINDOW INSIDE THE DAYS THIS VIEW ACTUALLY READ? NULL-safe: an undefined window is
     -- outside the scan, which is the fail-closed reading.
     COALESCE(w.win_start >= w.scan_floor, FALSE)                               AS win_inside_scan,
@@ -714,9 +905,20 @@ core AS (
       WHEN COALESCE(f.win_days_delivered, 0) < w.win_days THEN
         CONCAT(CAST(w.win_days - COALESCE(f.win_days_delivered, 0) AS STRING), ' of its ',
                CAST(w.win_days AS STRING),
-               ' days never arrived in the account\'s advertising feed at all, so they are holes and ',
-               'not zero-spend days, and no rate can be divided across them. The missing days are: ',
-               IFNULL(f.win_missing_days, 'unknown'))
+               ' days did not arrive in full, so they are holes and not zero-spend days, and no rate ',
+               'can be divided across them. The missing days are: ',
+               IFNULL(f.win_missing_days, 'unknown'),
+               -- A MAPPING LOSS IS NOT A FEED HOLE AND IS NOT DESCRIBED AS ONE (U3). The two paths
+               -- must agree before a date counts as delivered; where they disagree, say which one
+               -- lost the date, because the action is different — a feed hole waits for a load, a
+               -- mapping loss is a defect in the family map and the numerator is summed from the
+               -- side that lost it.
+               IF(COALESCE(f.win_days_fact_only, 0) > 0,
+                  CONCAT('. Of those, ', CAST(f.win_days_fact_only AS STRING),
+                         ' ARE CARRIED BY THE ACCOUNT\'S ADVERTISING FACT AND ARE MISSING FROM THE ',
+                         'FAMILY-MAPPED DAILY VIEW THE SPEND IS SUMMED FROM, which is a loss in the ',
+                         'family mapping rather than a hole in the feed: ',
+                         IFNULL(f.win_fact_only_days, 'unknown')), ''))
       ELSE NULL
     END                                                                        AS rate_withheld_reason,
     CASE
@@ -728,9 +930,20 @@ core AS (
       WHEN COALESCE(f.sh_days_delivered, 0) < w.sh_days THEN
         CONCAT(CAST(w.sh_days - COALESCE(f.sh_days_delivered, 0) AS STRING), ' of its ',
                CAST(w.sh_days AS STRING),
-               ' days never arrived in the account\'s advertising feed at all, so they are holes and ',
-               'not zero-spend days, and no rate can be divided across them. The missing days are: ',
-               IFNULL(f.sh_missing_days, 'unknown'))
+               ' days did not arrive in full, so they are holes and not zero-spend days, and no rate ',
+               'can be divided across them. The missing days are: ',
+               IFNULL(f.sh_missing_days, 'unknown'),
+               -- A MAPPING LOSS IS NOT A FEED HOLE AND IS NOT DESCRIBED AS ONE (U3). The two paths
+               -- must agree before a date counts as delivered; where they disagree, say which one
+               -- lost the date, because the action is different — a feed hole waits for a load, a
+               -- mapping loss is a defect in the family map and the numerator is summed from the
+               -- side that lost it.
+               IF(COALESCE(f.sh_days_fact_only, 0) > 0,
+                  CONCAT('. Of those, ', CAST(f.sh_days_fact_only AS STRING),
+                         ' ARE CARRIED BY THE ACCOUNT\'S ADVERTISING FACT AND ARE MISSING FROM THE ',
+                         'FAMILY-MAPPED DAILY VIEW THE SPEND IS SUMMED FROM, which is a loss in the ',
+                         'family mapping rather than a hole in the feed: ',
+                         IFNULL(f.sh_fact_only_days, 'unknown')), ''))
       ELSE NULL
     END                                                                        AS short_withheld_reason,
     -- HOW MANY DAYS OF EACH WINDOW PRECEDE THE SANCTION. Zero means the arm may judge.
@@ -794,8 +1007,26 @@ gate AS (
     -- consumers use it for: "read none of this as current".
     COALESCE(p.trailing_silent_days > 0, TRUE)                                 AS family_window_silent,
     COALESCE(p.feed_age_days        > p.feed_stale_after_days, TRUE)           AS account_is_stale,
+    -- ─── (3) LEADING SILENCE THAT IS A GAP RATHER THAN A BEGINNING (U2) ──────────────────────────
+    -- Silence at the OLDEST end of the window blocks certification ONLY when this family had a
+    -- delivered ads row BEFORE the window started. With a pre-window row on file the family was
+    -- advertising up to the window's edge, so front-of-window silence is a GAP — the shape a lost
+    -- slice of history makes — and certifying across zeros that may not be zeros is the failure this
+    -- measure keeps having. With no pre-window row the same silence is what EVERY launch that began
+    -- advertising inside the window looks like, and refusing protection for being new would be an
+    -- arbitrary rule rather than a fail-closed one, so there it is disclosed and does not gate.
+    -- WHAT THIS CLOSES AND WHAT IT DOES NOT is stated in the header under the guarantees, in those
+    -- words, because the previous round called this class handled when it was not.
+    (COALESCE(p.leading_silent_days > 0, TRUE) AND p.family_ads_before_window)  AS family_leading_gap,
+    -- ─── THE ONE OWNER OF "THIS WINDOW MAY NOT BE CERTIFIED" ─────────────────────────────────────
+    -- Three causes, one flag, read by protection_qualified and by nothing else that restates it.
+    -- It keeps the published name rate_window_is_stale because consumers read that name, and it is
+    -- ALSO published under the name that describes it: rate_window_uncertifiable. Two names, one
+    -- expression, so they cannot drift apart.
     (COALESCE(p.feed_age_days > p.feed_stale_after_days, TRUE)
-     OR COALESCE(p.trailing_silent_days > 0, TRUE))                            AS family_is_stale,
+     OR COALESCE(p.trailing_silent_days > 0, TRUE)
+     OR (COALESCE(p.leading_silent_days > 0, TRUE) AND p.family_ads_before_window))
+                                                                               AS family_is_stale,
     p.daily_investment + p.breach_margin                                       AS short_breach_threshold,
     -- ─── THE TWO ARMS: IS THE MEASURED RATE ABOVE THE SANCTIONED RATE? ───
     -- Arithmetic over a named window whose days all arrived. NULL only when there is nothing to
@@ -884,30 +1115,34 @@ g2 AS (
       WHEN IF(g.adherence_judged_7d,  g.breached_7d,  NULL) = FALSE THEN 'the 7-day window'
       ELSE NULL
     END                                                                        AS clear_arm_phrase,
-    -- WHY THIS WINDOW IS NOT CERTIFIABLE, IN WORDS, NAMING THE ACTUAL CAUSE. The old sentence said
-    -- "this family's advertising figures have not moved for N days" for every cause alike, which was
-    -- wrong twice over: it blamed the family when the whole account feed had stopped, and it counted
-    -- from today when the thing at stake begins at win_end. NULL when the window IS certifiable.
-    CASE
-      WHEN NOT (g.account_is_stale OR g.family_window_silent) THEN NULL
-      WHEN g.account_is_stale AND g.family_window_silent THEN
-        CONCAT('the account\'s advertising feed is ',
-               IFNULL(CAST(g.feed_age_days AS STRING), 'an unknown number of'),
-               ' days behind, and this family has no advertising row on the last ',
-               IFNULL(CAST(g.trailing_silent_days AS STRING), 'unknown number of'),
-               IF(g.trailing_silent_days = 1, ' day', ' days'), ' of the window')
-      WHEN g.account_is_stale THEN
-        CONCAT('the account\'s advertising feed is ',
-               IFNULL(CAST(g.feed_age_days AS STRING), 'an unknown number of'), ' days behind')
-      ELSE
-        CONCAT('this family has no advertising row on the last ',
-               IFNULL(CAST(g.trailing_silent_days AS STRING), 'unknown number of'),
-               IF(g.trailing_silent_days = 1, ' day', ' days'),
-               ' of the window. Those days were delivered by the account, so their zero is ',
-               'published as a real zero and the rate above is honest — but a family that went quiet ',
-               'at the newest end of the window and a family whose own rows have not landed yet look ',
-               'identical here, so the window is reported and not certified')
-    END                                                                        AS uncertifiable_phrase,
+    -- WHY THIS WINDOW IS NOT CERTIFIABLE, IN WORDS, NAMING EVERY CAUSE THAT APPLIES. The old form
+    -- was a CASE that enumerated combinations of two causes; with three causes that enumeration is
+    -- eight branches and it would rot on the next one. So the causes are written once each and the
+    -- ones that apply are joined. NULL when the window IS certifiable. ARRAY_TO_STRING drops NULL
+    -- elements, so a cause that does not apply contributes nothing — not even a separator.
+    NULLIF(ARRAY_TO_STRING([
+      IF(g.account_is_stale,
+         CONCAT('the account\'s advertising feed is ',
+                IFNULL(CAST(g.feed_age_days AS STRING), 'an unknown number of'), ' days behind'),
+         NULL),
+      IF(g.family_window_silent,
+         CONCAT('this family has no advertising row on the last ',
+                IFNULL(CAST(g.trailing_silent_days AS STRING), 'unknown number of'),
+                IF(g.trailing_silent_days = 1, ' day', ' days'),
+                ' of the window. Those days were delivered, so their zero is published as a real zero ',
+                'and the rate above is honest — but a family that went quiet at the newest end of the ',
+                'window and a family whose own rows have not landed yet look identical here, so the ',
+                'window is reported and not certified'),
+         NULL),
+      IF(g.family_leading_gap,
+         CONCAT('this family has no advertising row on the first ',
+                IFNULL(CAST(g.leading_silent_days AS STRING), 'unknown number of'),
+                IF(g.leading_silent_days = 1, ' day', ' days'),
+                ' of the window, and it DID have advertising rows before the window started, so that ',
+                'is a gap in its history rather than the beginning of it — the rate above divides ',
+                'those days as zeros and they may not be zeros'),
+         NULL)
+    ], '; '), '')                                                              AS uncertifiable_phrase,
     -- "too new to judge" is a statement about a sanction that EXISTS and is young. A missing
     -- sanctioned_on is a different fault and says so in its own words rather than borrowing this one.
     (NOT (g.adherence_judged_28d OR g.adherence_judged_7d)
@@ -985,9 +1220,26 @@ SELECT
     IF(COALESCE(g.leading_silent_days, 0) > 0,
        CONCAT('. This family has no advertising row on the first ',
               CAST(g.leading_silent_days AS STRING),
-              IF(g.leading_silent_days = 1, ' day', ' days'), ' of the window either. On delivered dates that is a real zero and is divided as ',
-              'one, and for a launch that began advertising inside the window it is simply the truth ',
-              '— but it is also what a re-labelled history looks like, so check it before acting'), ''),
+              IF(g.leading_silent_days = 1, ' day', ' days'), ' of the window either, counted inside ',
+              'the window and not from the family\'s oldest row anywhere',
+              IF(g.family_ads_before_window,
+                 CONCAT('. It DID advertise before the window started, so that is a gap in its ',
+                        'history and not the beginning of it: the window is not certified'),
+                 CONCAT('. It has no advertising row before the window started either, so this view ',
+                        'cannot tell a launch that began inside the window from a history that was ',
+                        'truncated, and it does not gate on the difference — check it before acting'))),
+       ''),
+    IF(COALESCE(g.win_days_with_ads, 0) < g.win_days
+       AND (g.win_days - g.win_days_with_ads
+            - COALESCE(g.trailing_silent_days, 0) - COALESCE(g.leading_silent_days, 0)) > 0,
+       CONCAT('. A further ',
+              CAST(g.win_days - g.win_days_with_ads
+                   - COALESCE(g.trailing_silent_days, 0) - COALESCE(g.leading_silent_days, 0) AS STRING),
+              ' day(s) inside the window carry no advertising row for this family at neither end. ',
+              'Those were delivered dates, so they are divided as real zeros and nothing here gates ',
+              'on them — a mid-window pause and a mid-window loss of this family\'s rows are the same ',
+              'picture to this view'),
+       ''),
     '.')
   END                                                                                 AS rate_window_basis,
   -- The same window compressed to a clause that drops into the middle of a sentence.
@@ -1004,6 +1256,13 @@ SELECT
   (g.win_days - g.win_days_delivered)                                                 AS rate_window_days_missing,
   -- WHICH days are missing, by date. A count says how bad; the list says where to go and look.
   g.win_missing_days                                                                  AS rate_window_missing_days,
+  -- ─── WHERE THE TWO PATHS DISAGREED, PUBLISHED (U3) ───────────────────────────────────────────
+  -- days the ads fact carries and the family-mapped daily view does not. Those days are NOT
+  -- delivered — the rate is withheld on them like any other hole — but they are a different fault
+  -- with a different action, so they are counted and named on their own.
+  g.win_days_fact_only                                                                AS rate_window_days_in_fact_not_in_mapped,
+  g.win_fact_only_days                                                                AS rate_window_fact_not_mapped_days,
+  g.win_days_mapped_only                                                              AS rate_window_days_in_mapped_not_in_fact,
   (g.rate_withheld_reason IS NULL)                                                    AS rate_window_data_complete,
   g.rate_withheld_reason                                                              AS rate_window_withheld_reason,
   g.family_ads_data_present,
@@ -1051,6 +1310,9 @@ SELECT
   g.sh_days_delivered                                                                 AS short_window_days_delivered,
   (g.sh_days - g.sh_days_delivered)                                                   AS short_window_days_missing,
   g.sh_missing_days                                                                   AS short_window_missing_days,
+  g.sh_days_fact_only                                                                 AS short_window_days_in_fact_not_in_mapped,
+  g.sh_fact_only_days                                                                 AS short_window_fact_not_mapped_days,
+  g.sh_days_mapped_only                                                               AS short_window_days_in_mapped_not_in_fact,
   (g.short_withheld_reason IS NULL)                                                   AS short_window_data_complete,
   g.short_withheld_reason                                                             AS short_window_withheld_reason,
   -- ─── HOW THE SHORT ARM'S THRESHOLD WAS DERIVED, PUBLISHED SO IT CAN BE CHECKED ───
@@ -1084,11 +1346,28 @@ SELECT
   -- definition, and refusing protection for being new is not a fail-closed rule, it is an arbitrary one.
   g.trailing_silent_days                                                              AS family_trailing_silent_window_days,
   g.leading_silent_days                                                               AS family_leading_silent_window_days,
+  -- THE REST OF THE WINDOW'S SILENCE, so the three counts add up and a reader can see which end a
+  -- loss is at. Interior silence does NOT gate and does not withhold: on delivered dates it is a
+  -- real zero, and a mid-window pause is indistinguishable from a mid-window loss of this family's
+  -- rows. It is published so that "indistinguishable" is visible rather than merely true.
+  GREATEST(0, g.win_days - COALESCE(g.win_days_with_ads, 0)
+              - COALESCE(g.trailing_silent_days, 0) - COALESCE(g.leading_silent_days, 0))
+                                                                                      AS family_interior_silent_window_days,
+  -- The window rows the two silence counts are actually measured from, so the counts can be checked
+  -- without re-deriving them, and so they can never be confused with family_ads_last_day — which is
+  -- the family's newest row ANYWHERE in the scan and is exactly what must not answer this question.
+  g.first_row_in_win                                                                  AS family_first_ads_day_in_window,
+  g.last_row_in_win                                                                   AS family_last_ads_day_in_window,
+  g.family_ads_before_window                                                          AS family_advertised_before_window,
+  g.family_leading_gap                                                                AS family_leading_silence_is_a_gap,
   g.family_window_silent                                                              AS family_trailing_silence,
   -- THE GATE'S certifiability flag. It keeps its published name because consumers read it, and it
   -- means what they use it for: read none of this as current. It is TRUE when the ACCOUNT feed is
   -- stale, or when this family is silent at the newest end of its own window.
   g.family_is_stale                                                                   AS rate_window_is_stale,
+  -- THE SAME EXPRESSION UNDER THE NAME THAT DESCRIBES IT. rate_window_is_stale keeps its name for
+  -- the consumers that read it, but two of its three causes have nothing to do with staleness.
+  g.family_is_stale                                                                   AS rate_window_uncertifiable,
   g.uncertifiable_phrase                                                              AS rate_window_uncertifiable_reason,
   g.sanction_too_new                                                                  AS sanction_too_new_to_judge,
   -- CAN ANY PUBLISHED WINDOW BE READ AS ADHERENCE TO THE AGREEMENT? TRUE only when at least one of
@@ -1294,25 +1573,39 @@ SELECT
   -- whatever this says. Wiring this to the engine is Task 8b, and Task 8b is not built. Until it is,
   -- the only thing standing between an over-sanction launch and the money is a person reading it.
   --
-  -- IT FAILS CLOSED, ON EIGHT COUNTS. Protection is granted only on POSITIVE evidence of adherence:
-  -- inside the sanctioned window, a sanctioned rate on file, a MEASURED non-breach on BOTH windows,
-  -- EVERY DAY OF BOTH WINDOWS DELIVERED BY THE ACCOUNT'S ADS FEED (a hole is not a zero), A WINDOW
-  -- THE SANCTION ACTUALLY COVERED (a promise cannot be kept over days that preceded it), a ceiling on
-  -- file with a measured loss under it, A CERTIFIABLE WINDOW (the account feed is fresh AND this
-  -- family is not silent at the newest end of the window), and EXACTLY ONE BOOK ASSIGNMENT ROW. Any
-  -- one of those missing and the answer is FALSE. Silence is not compliance; neither is a frozen
-  -- feed, a feed with a hole in it, nor a sanction too new to have been tested.
+  -- IT FAILS CLOSED. Protection is granted only on POSITIVE evidence of adherence, and the test is
+  -- a single AND over every condition below — so ANY one of them missing, unmeasured or unknown
+  -- makes the answer FALSE. Silence is not compliance; neither is a frozen feed, a feed with a hole
+  -- in it, a family map that lost a date, nor a sanction too new to have been tested.
   --
-  -- WHAT THE FOURTH CLAUSE GUARANTEES, EXACTLY, AND WHAT IT DOES NOT. It guarantees that every DATE
-  -- in both windows arrived in the ACCOUNT's ads feed. It does NOT guarantee that this family's own
-  -- rows for those dates arrived, because on a delivered date nothing in the ads fact separates "this
-  -- family was not advertising" from "this family's rows have not landed". That gap is covered where
-  -- a lag actually shows — the NEWEST end of the window — by the seventh clause, which refuses
-  -- certification on ANY trailing silent day. It is NOT covered at the OLDEST end: a contiguous loss
-  -- of older rows on delivered dates still zero-fills the front of the window, and gating on that
-  -- would refuse protection to every launch that began advertising inside the window.
-  -- family_leading_silent_window_days publishes the count and rate_window_basis says it in words.
-  -- Nothing here claims that hole is closed; the honest statement is that it is disclosed.
+  -- HOW MANY CONDITIONS THERE ARE IS A MEASUREMENT AND IS NOT WRITTEN HERE. This header said "on
+  -- eight counts" against a conjunction that had fourteen top-level conjuncts, which is what a count
+  -- of things in the code does: it is true on the day it is typed and rots on the next edit, exactly
+  -- like any other pinned number (Standing Rule 0). Count them from the deployed object instead:
+  --   WITH v AS (
+  --     SELECT ARRAY_TO_STRING(ARRAY(
+  --              SELECT l FROM UNNEST(SPLIT(view_definition, '\n')) AS l
+  --              WHERE NOT STARTS_WITH(LTRIM(l), '--')), '\n') AS body
+  --     FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS` WHERE table_name = 'V_INVEST_STATUS')
+  --   SELECT ARRAY_LENGTH(SPLIT(REGEXP_EXTRACT(body,
+  --            r"(?s)CURRENT_DATE\('America/Los_Angeles'\) <= g\.stop_date(.*?) AS protection_qualified"),
+  --          ' AND ')) AS top_level_conjuncts
+  --   FROM v
+  -- It strips the comment lines first, because the prose inside this very block contains the word
+  -- AND and would otherwise be counted as code.
+  --
+  -- WHAT THE DELIVERY CLAUSES GUARANTEE, EXACTLY, AND WHAT THEY DO NOT. They guarantee that every
+  -- DATE in both windows arrived in BOTH the account's ads fact and, account-wide, the family-mapped
+  -- daily view the spend is summed from. They do NOT guarantee that THIS family's own rows for those
+  -- dates arrived, because on a delivered date nothing separates "this family was not advertising"
+  -- from "this family's rows have not landed". That gap is covered at the NEWEST end by the trailing
+  -- silence clause, which refuses certification on ANY trailing silent day; and at the OLDEST end by
+  -- the leading-gap clause, but only where the family had a delivered row BEFORE the window, which
+  -- is where front-of-window silence is a gap in a history rather than the start of one. Where no
+  -- pre-window row survives, and anywhere in the MIDDLE of the window, it is not covered at all:
+  -- family_leading_silent_window_days, family_advertised_before_window,
+  -- family_interior_silent_window_days and rate_window_basis publish those corners in numbers and in
+  -- words. Nothing here claims they are closed.
   -- ---------------------------------------------------------------------------------------------
   -- The outer COALESCE closes the last hole: a family with no stop date on file would otherwise
   -- leave the whole chain NULL, and NULL is not FALSE to a consumer that only tests for FALSE.
