@@ -71,7 +71,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     { id: 'sqp_show_rate', label: 'SQP Show%', tip: 'SQP show rate (last 4w avg)', group: 'SQP' },
     { id: 'spend_4w', label: 'Ads Spend (4w)', tip: 'Ads spend last 4 weeks', group: 'Ads (4w)' },
     { id: 'orders_4w', label: 'Ads Ord (4w)', tip: 'Ads orders last 4 weeks', group: 'Ads (4w)' },
-    { id: 'roas_4w', label: 'Ads ROAS (4w)', tip: 'Ads ROAS last 4 weeks', group: 'Ads (4w)' },
+    { id: 'roas_4w', label: 'Net ROAS (4w)', tip: 'Net ROAS last 4 weeks — sales less landed COGS, over spend. The same basis every engine bar is judged on.', group: 'Ads (4w)' },
     { id: 'conv_rate_4w', label: 'Ads Conv% (4w)', tip: 'Ads conv% last 4 weeks', group: 'Ads (4w)' },
     { id: 'spend_ly_peak', label: 'Ads Spend (LY)', tip: 'Ads spend during matched peak period last year', group: 'Ads LY Peak' },
     { id: 'orders_ly_peak', label: 'Ads Ord (LY)', tip: 'Ads orders during matched peak period last year', group: 'Ads LY Peak' },
@@ -101,7 +101,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     { id: 'sqp_show_rate', label: 'SQP Show%', tip: 'SQP show rate (last 4w avg)', group: 'SQP' },
     { id: 'spend_4w', label: 'Ads Spend (4w)', tip: 'Ads spend last 4 weeks', group: 'Ads (4w)' },
     { id: 'orders_4w', label: 'Ads Ord (4w)', tip: 'Ads orders last 4 weeks', group: 'Ads (4w)' },
-    { id: 'roas_4w', label: 'Ads ROAS (4w)', tip: 'Ads ROAS last 4 weeks', group: 'Ads (4w)' },
+    { id: 'roas_4w', label: 'Net ROAS (4w)', tip: 'Net ROAS last 4 weeks — sales less landed COGS, over spend. The same basis every engine bar is judged on.', group: 'Ads (4w)' },
     { id: 'conv_rate_4w', label: 'Ads Conv% (4w)', tip: 'Ads conv% last 4 weeks', group: 'Ads (4w)' },
     { id: 'spend_ly_peak', label: 'Ads Spend (LY)', tip: 'Ads spend during matched peak period last year', group: 'Ads LY Peak' },
     { id: 'orders_ly_peak', label: 'Ads Ord (LY)', tip: 'Ads orders during matched peak period last year', group: 'Ads LY Peak' },
@@ -132,7 +132,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     { id: 'sqp_show_rate', label: 'SQP Show%', tip: 'SQP show rate (last 4w avg)', group: 'SQP' },
     { id: 'spend_4w', label: 'Ads Spend (4w)', tip: 'Ads spend last 4 weeks', group: 'Ads (4w)' },
     { id: 'orders_4w', label: 'Ads Ord (4w)', tip: 'Ads orders last 4 weeks', group: 'Ads (4w)' },
-    { id: 'roas_4w', label: 'Ads ROAS (4w)', tip: 'Ads ROAS last 4 weeks', group: 'Ads (4w)' },
+    { id: 'roas_4w', label: 'Net ROAS (4w)', tip: 'Net ROAS last 4 weeks — sales less landed COGS, over spend. The same basis every engine bar is judged on.', group: 'Ads (4w)' },
     { id: 'conv_rate_4w', label: 'Ads Conv% (4w)', tip: 'Ads conv% last 4 weeks', group: 'Ads (4w)' },
     { id: 'spend_ly_peak', label: 'Ads Spend (LY)', tip: 'Ads spend during matched peak period last year', group: 'Ads LY Peak' },
     { id: 'orders_ly_peak', label: 'Ads Ord (LY)', tip: 'Ads orders during matched peak period last year', group: 'Ads LY Peak' },
@@ -166,27 +166,63 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
     return { start: ly.pre_season_start, end: peakEnd };
   }, [data.peak, data.holidays]);
 
-  const getSignal = (m: any, node?: any) => {
-    const signals: { type: keyof typeof ACTION_META; reason: string }[] = [];
-    if (m.spend_4w >= 10 && m.orders_4w === 0) {
-      signals.push({ type: 'NEGATE', reason: `High spend (${fM(m.spend_4w || 0)}) with 0 orders` });
-    } else if (m.roas_4w != null && m.roas_4w < 1.0 && (m.spend_4w || 0) > 5) {
-      signals.push({ type: 'REDUCE_BID', reason: `Low ROAS (${fR(m.roas_4w)}) on $5+ spend` });
+  /**
+   * THE ENGINE'S OWN DECISION — not this page's (v27.99, audit C7).
+   *
+   * What used to live here was a SECOND decision ladder, hardcoded in React: it invented
+   * NEGATE / REDUCE_BID / SCALE_UP / START / SWITCH_HERO out of four thresholds (10 / 1.0 / 2.5 /
+   * 20) that appear nowhere in DE_COACH_THRESHOLDS, and rendered them through the SAME
+   * ACTION_META the real engine actions use — so a page-invented NEGATE was pixel-identical to an
+   * engine NEGATE_TERM, on a column that is on by default. Worse, it judged on a GROSS 4-week
+   * ROAS while every engine bar is NET: at the account's margin a gross 1.0 is a net ~0.40, so
+   * the page painted green straight across the engine's cut band.
+   *
+   * Decision logic belongs in the engine SQL (feedback_all_logic_in_backend). This now reads
+   * `data.actions` — V_ADS_COACH's published decisions at (campaign, search term) grain — and
+   * renders the action with the engine's OWN reason as the tooltip. Where the engine has no
+   * opinion for a row, the cell is empty; the page never fills that silence with one of its own.
+   */
+  const engineByCampaignTerm = useMemo(() => {
+    const m = new Map<string, { action: string; reason: string }>();
+    for (const a of data.actions || []) {
+      if (!a.campaign_id || !a.search_term || !a.action) continue;
+      const key = `${a.campaign_id}\0${a.search_term.toLowerCase().trim()}`;
+      const prev = m.get(key);
+      // one decision per (campaign, term): the highest-priority slice speaks, as the engine's own
+      // snapshot does. Ties keep the first, which the feed already orders by priority.
+      if (!prev) m.set(key, { action: a.action, reason: a.action_explanation || a.reason || '' });
     }
-    if (m.roas_4w != null && m.roas_4w >= 2.5 && (m.spend_4w || 0) < 20 && (m.spend_4w || 0) > 0) {
-      signals.push({ type: 'SCALE_UP', reason: `High ROAS (${fR(m.roas_4w)}) - increase bid` });
+    return m;
+  }, [data.actions]);
+
+  /** Term-level roll-up: a term the engine judges the SAME way in every campaign it runs in can
+   *  speak for itself. Where campaigns disagree the opinion is campaign-specific, so the roll-up
+   *  says nothing rather than picking a winner. */
+  const engineByTerm = useMemo(() => {
+    const acc = new Map<string, { action: string; reason: string; conflict: boolean }>();
+    for (const a of data.actions || []) {
+      if (!a.search_term || !a.action) continue;
+      const key = a.search_term.toLowerCase().trim();
+      const prev = acc.get(key);
+      if (!prev) acc.set(key, { action: a.action, reason: a.action_explanation || a.reason || '', conflict: false });
+      else if (prev.action !== a.action) prev.conflict = true;
     }
-    if (m.sqp_organic_units >= 5 && (m.spend_4w || 0) === 0) {
-      signals.push({ type: 'START', reason: `High organic demand (${m.sqp_organic_units} ord) - add keyword` });
-    }
-    // Switch Hero logic: if this search term's top product revenue > 2x current campaign product revenue
-    if (node?.level === 'search_term' && node?.children?.length > 1) {
-       const sorted = [...node.children].sort((a: any, b: any) => (b.metrics.sales || 0) - (a.metrics.sales || 0));
-       if (sorted[0].metrics.sales > sorted[1].metrics.sales * 2) {
-          signals.push({ type: 'SWITCH_HERO', reason: `Product "${sorted[0].label}" selling 2x better than others` });
-       }
-    }
-    return signals;
+    const m = new Map<string, { action: string; reason: string }>();
+    for (const [k, v] of acc) if (!v.conflict) m.set(k, { action: v.action, reason: v.reason });
+    return m;
+  }, [data.actions]);
+
+  const engineDecision = (m: any, node?: any): { action: string; reason: string }[] => {
+    const term = String(node?.level === 'search_term' ? node.key : (m?.search_term ?? '')).toLowerCase().trim();
+    if (!term) return [];
+    const campaignId = m?.campaign_id
+      ?? (node?.campaignIds && node.campaignIds.size === 1 ? [...node.campaignIds][0] : null);
+    const exact = campaignId ? engineByCampaignTerm.get(`${campaignId}\0${term}`) : undefined;
+    const d = exact ?? engineByTerm.get(term);
+    if (!d) return [];
+    // the tooltip is the ENGINE's sentence; only if a row carries none does the action's own
+    // published criteria stand in. The page never writes a reason of its own.
+    return [{ action: d.action, reason: d.reason || ACTION_META[d.action]?.criteria || d.action }];
   };
   const visibleAdsTermsCols = useMemo(() => ADS_TERMS_COLUMNS.filter(c => adsTermsCols.has(c.id)), [adsTermsCols]);
   const visibleAdsHierCols = useMemo(() => ADS_HIER_COLUMNS.filter(c => adsHierCols.has(c.id)), [adsHierCols]);
@@ -378,7 +414,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
       if (!target[key]) {
         target[key] = {
           ...r, spend: 0, orders: 0, clicks: 0, impressions: 0, sales: 0, cogs: 0, gross_profit: 0, search_terms_count: 0,
-          spend_4w: 0, orders_4w: 0, clicks_4w: 0, sales_4w: 0, spend_ly_peak: 0, orders_ly_peak: 0, sales_ly_peak: 0
+          spend_4w: 0, orders_4w: 0, clicks_4w: 0, sales_4w: 0, cogs_4w: 0, spend_ly_peak: 0, orders_ly_peak: 0, sales_ly_peak: 0
         };
       }
       const a = target[key];
@@ -387,7 +423,10 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
         a.cogs = (a.cogs ?? 0) + (r.cogs ?? 0); a.gross_profit = (a.gross_profit ?? 0) + (r.gross_profit ?? 0);
         if (r.row_type === 'campaign') a.search_terms_count = (a.search_terms_count ?? 0) + (r.search_terms_count ?? 0);
       }
-      if (is4w) { a.spend_4w! += r.spend; a.orders_4w! += r.orders; a.clicks_4w! += r.clicks; a.sales_4w! += r.sales; }
+      // v27.99 (audit C7): COGS is carried over the 4-week window too, so the 4w ROAS can be NET
+      // like every other ROAS on this page and like every bar the engine judges against. It used
+      // to be sales/spend — GROSS — while wearing a badge coloured on net thresholds.
+      if (is4w) { a.spend_4w! += r.spend; a.orders_4w! += r.orders; a.clicks_4w! += r.clicks; a.sales_4w! += r.sales; a.cogs_4w = (a.cogs_4w ?? 0) + (r.cogs ?? 0); }
       if (isLyPeak) { a.spend_ly_peak! += r.spend; a.orders_ly_peak! += r.orders; a.sales_ly_peak! += r.sales; }
       
       const term = (r.search_term || '').toLowerCase().trim();
@@ -411,13 +450,14 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
       if (!k) continue;
       if (!campFromTerms[k]) {
         campFromTerms[k] = { ...t, row_type: 'campaign', search_term: null, spend: 0, orders: 0, clicks: 0, impressions: 0, sales: 0, cogs: 0, search_terms_count: 0,
-          spend_4w: 0, orders_4w: 0, clicks_4w: 0, sales_4w: 0, spend_ly_peak: 0, orders_ly_peak: 0, sales_ly_peak: 0
+          spend_4w: 0, orders_4w: 0, clicks_4w: 0, sales_4w: 0, cogs_4w: 0, spend_ly_peak: 0, orders_ly_peak: 0, sales_ly_peak: 0
         };
       }
       const a = campFromTerms[k];
       a.spend += t.spend; a.orders += t.orders; a.clicks += t.clicks; a.impressions += t.impressions; a.sales += t.sales;
       a.cogs = (a.cogs ?? 0) + (t.cogs ?? 0); a.search_terms_count = (a.search_terms_count ?? 0) + 1;
       a.spend_4w! += t.spend_4w || 0; a.orders_4w! += t.orders_4w || 0; a.clicks_4w! += t.clicks_4w || 0; a.sales_4w! += t.sales_4w || 0;
+      a.cogs_4w = (a.cogs_4w ?? 0) + (t.cogs_4w ?? 0);
       a.spend_ly_peak! += t.spend_ly_peak || 0; a.orders_ly_peak! += t.orders_ly_peak || 0; a.sales_ly_peak! += t.sales_ly_peak || 0;
     }
     const allCampAgg = { ...campAgg };
@@ -427,6 +467,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
         a.spend += c.spend; a.orders += c.orders; a.clicks += c.clicks; a.impressions += c.impressions; a.sales += c.sales;
         a.cogs = (a.cogs ?? 0) + (c.cogs ?? 0); a.search_terms_count = (a.search_terms_count ?? 0) + (c.search_terms_count ?? 0);
         a.spend_4w! += c.spend_4w || 0; a.orders_4w! += c.orders_4w || 0; a.clicks_4w! += c.clicks_4w || 0; a.sales_4w! += c.sales_4w || 0;
+        a.cogs_4w = (a.cogs_4w ?? 0) + (c.cogs_4w ?? 0);
         a.spend_ly_peak! += c.spend_ly_peak || 0; a.orders_ly_peak! += c.orders_ly_peak || 0; a.sales_ly_peak! += c.sales_ly_peak || 0;
       } else {
         allCampAgg[k] = c;
@@ -437,7 +478,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
       a.conv_rate = a.clicks > 0 ? (a.orders * 100) / a.clicks : 0;
       a.roas = a.spend > 0 ? (a.sales - (a.cogs || 0)) / a.spend : 0;
       a.gross_roas = a.spend > 0 ? a.sales / a.spend : 0;
-      a.roas_4w = (a.spend_4w || 0) > 0 ? (a.sales_4w! / a.spend_4w!) : 0;
+      a.roas_4w = (a.spend_4w || 0) > 0 ? ((a.sales_4w! - (a.cogs_4w || 0)) / a.spend_4w!) : 0;
       a.conv_rate_4w = (a.clicks_4w || 0) > 0 ? ((a.orders_4w || 0) * 100) / a.clicks_4w! : 0;
       a.roas_ly_peak = (a.spend_ly_peak || 0) > 0 ? (a.sales_ly_peak! / a.spend_ly_peak!) : 0;
     };
@@ -584,8 +625,8 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
         gross_roas: t.spend > 0 ? sales / t.spend : 0,
         // campaign_search_terms is a 90-day aggregate — use as proxy for 4w metrics
         // so Money Bleeders and action signals can detect zero-order terms
-        spend_4w: t.spend, orders_4w: t.orders, clicks_4w: t.clicks, sales_4w: sales,
-        roas_4w: t.spend > 0 ? sales / t.spend : 0,
+        spend_4w: t.spend, orders_4w: t.orders, clicks_4w: t.clicks, sales_4w: sales, cogs_4w: cogs,
+        roas_4w: t.spend > 0 ? (sales - cogs) / t.spend : 0,
         conv_rate_4w: t.clicks > 0 ? (t.orders * 100) / t.clicks : 0,
         sqp_volume_ly_peak: det?.volume_ly_peak || 0,
         sqp_orders_ly_peak: det?.orders_ly_peak || 0,
@@ -919,7 +960,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
           visibleCols={visibleAdsCampCols}
           sqpVolumeByTerm={sqpVolumeByTerm}
           sqpDetailsByTerm={sqpDetailsByTerm}
-          getSignal={getSignal}
+          engineDecision={engineDecision}
           minClicksFilter={campMinClicks}
           trendByCampaignId={campaignTrendByCampaignId}
           trendAxisLen={campaignDayAxis.length}
@@ -938,7 +979,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
             </button>
           ))}
         </div>
-        <HierarchicalTermsTable terms={bestTerms} highlight="best" sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} sqpWeekly={data.sqp_weekly || []} keywordProductMap={data.keyword_product_map || []} visibleCols={visibleAdsHierCols} getSignal={getSignal} trendByTerm={bestTrendByTerm} trendColor="var(--color-positive)" trendBaseline={0} />
+        <HierarchicalTermsTable terms={bestTerms} highlight="best" sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} sqpWeekly={data.sqp_weekly || []} keywordProductMap={data.keyword_product_map || []} visibleCols={visibleAdsHierCols} engineDecision={engineDecision} trendByTerm={bestTrendByTerm} trendColor="var(--color-positive)" trendBaseline={0} />
       </Section>
 
       {/* Drainer Search Terms */}
@@ -952,7 +993,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
             </button>
           ))}
         </div>
-        <TermsTable terms={drainers} highlight="drain" visibleCols={visibleAdsTermsCols} sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} getSignal={getSignal} trendByKey={drainerTrendByKey} trendColor="var(--color-negative)" />
+        <TermsTable terms={drainers} highlight="drain" visibleCols={visibleAdsTermsCols} sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} engineDecision={engineDecision} trendByKey={drainerTrendByKey} trendColor="var(--color-negative)" />
       </Section>
 
       {/* Low Conversion High Spend */}
@@ -965,7 +1006,7 @@ export function AdsPerformancePage({ data }: { data: DashboardData }) {
             </div>
             <div className="text-[10px] text-subtle mt-1">These terms get traffic but rarely convert. Review listing relevance, adjust bids, or negate.</div>
           </div>
-          <TermsTable terms={lowConvHighSpend} highlight="warn" visibleCols={visibleAdsTermsCols} sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} getSignal={getSignal} trendByKey={lowConvTrendByKey} trendColor="var(--color-warning)" />
+          <TermsTable terms={lowConvHighSpend} highlight="warn" visibleCols={visibleAdsTermsCols} sqpVolume={sqpVolumeByTerm} sqpDetails={sqpDetailsByTerm} engineDecision={engineDecision} trendByKey={lowConvTrendByKey} trendColor="var(--color-warning)" />
         </Section>
       )}
     </div>
@@ -986,7 +1027,7 @@ function DynamicHierarchyCampaignsTable({
   visibleCols,
   sqpVolumeByTerm,
   sqpDetailsByTerm,
-  getSignal,
+  engineDecision,
   minClicksFilter,
   trendByCampaignId,
   trendAxisLen,
@@ -1004,7 +1045,7 @@ function DynamicHierarchyCampaignsTable({
   visibleCols: MeasureDef[];
   sqpVolumeByTerm: Record<string, number>;
   sqpDetailsByTerm: Record<string, any>;
-  getSignal: (m: any, node?: any) => { type: keyof typeof ACTION_META; reason: string }[];
+  engineDecision: (m: any, node?: any) => { action: string; reason: string }[];
   minClicksFilter?: number | null;
   trendByCampaignId?: Map<string, number[]>;
   trendAxisLen?: number;
@@ -1034,7 +1075,7 @@ function DynamicHierarchyCampaignsTable({
   };
 
   const { filters } = useFilters();
-  type Node = { key: string; label: string; level: string; children: Node[]; rows: Ads7dRow[]; campaignIds?: Set<string>; metrics: { spend: number; sales: number; orders: number; clicks: number; conv_rate: number; cpc: number; roas: number; gross_roas: number; search_terms_count: number; sqp_volume: number; sqp_clicks: number; sqp_cart_adds: number; sqp_orders: number; sqp_organic_units: number; sqp_organic_pct: number; sqp_show_rate: number; spend_4w: number; orders_4w: number; clicks_4w: number; sales_4w: number; roas_4w: number; conv_rate_4w: number; spend_ly_peak: number; orders_ly_peak: number; sales_ly_peak: number; roas_ly_peak: number; sqp_volume_ly_peak: number; sqp_orders_ly_peak: number; } };
+  type Node = { key: string; label: string; level: string; children: Node[]; rows: Ads7dRow[]; campaignIds?: Set<string>; metrics: { spend: number; sales: number; orders: number; clicks: number; conv_rate: number; cpc: number; roas: number; gross_roas: number; search_terms_count: number; sqp_volume: number; sqp_clicks: number; sqp_cart_adds: number; sqp_orders: number; sqp_organic_units: number; sqp_organic_pct: number; sqp_show_rate: number; spend_4w: number; orders_4w: number; clicks_4w: number; sales_4w: number; cogs_4w: number; roas_4w: number; conv_rate_4w: number; spend_ly_peak: number; orders_ly_peak: number; sales_ly_peak: number; roas_ly_peak: number; sqp_volume_ly_peak: number; sqp_orders_ly_peak: number; } };
   // Index synthesized search-term rows by campaign once per data change, so buildTree
   // can look up a node's terms in O(1) instead of re-scanning the full searchTerms
   // array (up to ~100k rows) at every node — the cause of multi-second render freezes.
@@ -1123,7 +1164,7 @@ function DynamicHierarchyCampaignsTable({
         : [...new Set(termsFor(ids).map(t => (t.search_term || '').toLowerCase().trim()).filter(Boolean))];
       let sqp_volume = 0, sqp_clicks = 0, sqp_cart_adds = 0, sqp_orders = 0, sqp_ads_orders = 0, sqp_show_rate_sum = 0, sqp_show_rate_cnt = 0;
       let sqp_volume_ly = 0, sqp_orders_ly = 0;
-      let spend_4w = 0, orders_4w = 0, clicks_4w = 0, sales_4w = 0, spend_ly_peak = 0, orders_ly_peak = 0, sales_ly_peak = 0;
+      let spend_4w = 0, orders_4w = 0, clicks_4w = 0, sales_4w = 0, cogs_4w = 0, spend_ly_peak = 0, orders_ly_peak = 0, sales_ly_peak = 0;
       const seen = new Set<string>();
       for (const term of sqpTermsForGroup) {
         if (seen.has(term)) continue; seen.add(term);
@@ -1142,6 +1183,7 @@ function DynamicHierarchyCampaignsTable({
       }
       for (const r of groupRows) {
         spend_4w += r.spend_4w || 0; orders_4w += r.orders_4w || 0; clicks_4w += r.clicks_4w || 0; sales_4w += r.sales_4w || 0;
+        cogs_4w += r.cogs_4w || 0;
         spend_ly_peak += r.spend_ly_peak || 0; orders_ly_peak += r.orders_ly_peak || 0; sales_ly_peak += r.sales_ly_peak || 0;
       }
       const sqp_organic_units = Math.max(0, sqp_orders - sqp_ads_orders);
@@ -1155,8 +1197,9 @@ function DynamicHierarchyCampaignsTable({
         gross_roas: spend > 0 ? sales / spend : 0,
         search_terms_count,
         sqp_volume, sqp_clicks, sqp_cart_adds, sqp_orders, sqp_organic_units, sqp_organic_pct, sqp_show_rate,
-        spend_4w, orders_4w, clicks_4w, sales_4w,
-        roas_4w: spend_4w > 0 ? sales_4w / spend_4w : 0,
+        spend_4w, orders_4w, clicks_4w, sales_4w, cogs_4w,
+        // v27.99 (audit C7): NET, like every engine bar and like the current-window ROAS above.
+        roas_4w: spend_4w > 0 ? (sales_4w - cogs_4w) / spend_4w : 0,
         conv_rate_4w: clicks_4w > 0 ? (orders_4w * 100) / clicks_4w : 0,
         spend_ly_peak, orders_ly_peak, sales_ly_peak,
         roas_ly_peak: spend_ly_peak > 0 ? sales_ly_peak / spend_ly_peak : 0,
@@ -1188,12 +1231,12 @@ function DynamicHierarchyCampaignsTable({
   };
 
   const cellValues = (node: Node, m: any) => {
-    const signals = getSignal(m, node);
+    const signals = engineDecision(m, node);
     const actionCell = signals.length > 0 ? (
       <div className="flex flex-col gap-1 items-end pr-2">
         {signals.map((s, i) => (
           <Tip key={i} text={s.reason}>
-             <Badge variant={ACTION_META[s.type]?.variant || 'zinc'} className="!text-[9px] cursor-help h-4 flex items-center">{ACTION_META[s.type]?.label || s.type}</Badge>
+             <Badge variant={ACTION_META[s.action]?.variant || 'zinc'} className="!text-[9px] cursor-help h-4 flex items-center">{ACTION_META[s.action]?.label || s.action}</Badge>
           </Tip>
         ))}
       </div>
@@ -1480,7 +1523,7 @@ function productByTermMap(kwMap: KeywordMapRow[], sqp: SqpWeeklyRow[]): Record<s
 }
 
 /** Hierarchy: search_term -> product -> campaign */
-function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sqpDetails = {}, sqpWeekly, keywordProductMap, visibleCols, getSignal, trendByTerm, trendColor, trendBaseline }: { terms: Ads7dRow[]; highlight: 'best' | 'drain' | 'warn'; sqpVolume?: Record<string, number>; sqpDetails?: Record<string, any>; sqpWeekly: SqpWeeklyRow[]; keywordProductMap: KeywordMapRow[]; visibleCols: MeasureDef[]; getSignal: (m: any, node?: any) => { type: keyof typeof ACTION_META; reason: string }[]; trendByTerm?: Map<string, number[]>; trendColor?: string; trendBaseline?: number }) {
+function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sqpDetails = {}, sqpWeekly, keywordProductMap, visibleCols, engineDecision, trendByTerm, trendColor, trendBaseline }: { terms: Ads7dRow[]; highlight: 'best' | 'drain' | 'warn'; sqpVolume?: Record<string, number>; sqpDetails?: Record<string, any>; sqpWeekly: SqpWeeklyRow[]; keywordProductMap: KeywordMapRow[]; visibleCols: MeasureDef[]; engineDecision: (m: any, node?: any) => { action: string; reason: string }[]; trendByTerm?: Map<string, number[]>; trendColor?: string; trendBaseline?: number }) {
   const [expandedTerms, setExpandedTerms] = useState<Set<string>>(new Set());
   const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
   const s = useSort('spend');
@@ -1585,11 +1628,11 @@ function HierarchicalTermsTable({ terms, highlight, sqpVolume: sqpVolumeProp, sq
               cpc: fCpc(tot.cpc),
               gross_roas: <RoasBadge value={tot.gross_roas} />,
               roas: <RoasBadge value={tot.roas} />,
-              action: getSignal(tot, { level: 'search_term', key: term }).length > 0 ? (
+              action: engineDecision(tot, { level: 'search_term', key: term }).length > 0 ? (
                 <div className="flex flex-col gap-1 items-end pr-2">
-                  {getSignal(tot, { level: 'search_term', key: term }).map((s, i) => (
+                  {engineDecision(tot, { level: 'search_term', key: term }).map((s, i) => (
                     <Tip key={i} text={s.reason}>
-                       <Badge variant={ACTION_META[s.type]?.variant || 'zinc'} className="!text-[9px] cursor-help h-4 flex items-center">{ACTION_META[s.type]?.label || s.type}</Badge>
+                       <Badge variant={ACTION_META[s.action]?.variant || 'zinc'} className="!text-[9px] cursor-help h-4 flex items-center">{ACTION_META[s.action]?.label || s.action}</Badge>
                     </Tip>
                   ))}
                 </div>
@@ -1716,7 +1759,7 @@ function TrendCell({ series, color, baseline }: { series?: number[]; color: stri
   return <td className="px-3 py-2">{trendInline(series, color, baseline)}</td>;
 }
 
-function TermsTable({ terms, highlight, visibleCols, sqpVolume = {}, sqpDetails = {}, getSignal, trendByKey, trendColor, trendBaseline }: { terms: Ads7dRow[]; highlight: 'best' | 'drain' | 'warn'; visibleCols: MeasureDef[]; sqpVolume?: Record<string, number>; sqpDetails?: Record<string, any>; getSignal: (m: any, node?: any) => { type: keyof typeof ACTION_META; reason: string }[]; trendByKey?: Map<string, number[]>; trendColor?: string; trendBaseline?: number }) {
+function TermsTable({ terms, highlight, visibleCols, sqpVolume = {}, sqpDetails = {}, engineDecision, trendByKey, trendColor, trendBaseline }: { terms: Ads7dRow[]; highlight: 'best' | 'drain' | 'warn'; visibleCols: MeasureDef[]; sqpVolume?: Record<string, number>; sqpDetails?: Record<string, any>; engineDecision: (m: any, node?: any) => { action: string; reason: string }[]; trendByKey?: Map<string, number[]>; trendColor?: string; trendBaseline?: number }) {
   const s = useSort('spend');
   if (!terms.length) return <Empty message="No matching terms" />;
   const filtered = visibleCols.filter(c => c.id !== 'action' || highlight === 'drain');
@@ -1758,11 +1801,11 @@ function TermsTable({ terms, highlight, visibleCols, sqpVolume = {}, sqpDetails 
               sqp_organic_pct: <td key="sqp_organic_pct" className="px-3 py-2 text-right font-mono">{det && det.orders > 0 ? fP(orgPct) : ''}</td>,
               sqp_show_rate: <td key="sqp_show_rate" className="px-3 py-2 text-right font-mono">{det?.show_rate_cnt ? fP(det.show_rate_sum / det.show_rate_cnt) : ''}</td>,
               action: <td key="action" className="px-3 py-2">
-                 {getSignal(t).length > 0 && (
+                 {engineDecision(t).length > 0 && (
                    <div className="flex flex-col gap-1 items-end">
-                     {getSignal(t).map((s, i) => (
+                     {engineDecision(t).map((s, i) => (
                        <Tip key={i} text={s.reason}>
-                         <Badge variant={ACTION_META[s.type]?.variant || 'zinc'} className="!text-[9px] cursor-help h-4 flex items-center">{ACTION_META[s.type]?.label || s.type}</Badge>
+                         <Badge variant={ACTION_META[s.action]?.variant || 'zinc'} className="!text-[9px] cursor-help h-4 flex items-center">{ACTION_META[s.action]?.label || s.action}</Badge>
                        </Tip>
                      ))}
                    </div>

@@ -1980,8 +1980,24 @@ SELECT
            ELSE d.ads_net_roas_1w
          END < d.th_negate_roas
       AND d.ads_clicks_8w >= d.th_min_clicks AND d.ads_clicks_recent_5d > 0
-      THEN CONCAT('Losing $', CAST(ROUND(ABS(COALESCE(d.ads_net_profit_8w, 0)), 0) AS STRING),
-                   ' on ', CAST(d.ads_clicks_8w AS STRING), ' clicks (Effective ROAS ',
+      -- v27.99 (audit C1): the profit was wrapped in ABS() behind the word "Losing", so a term
+      -- that MADE money over eight weeks read "Losing $7" — measured 2026-08-21: 41 of the 73
+      -- rows carrying this sentence described a PROFIT. The gate is a SHORT-window return under
+      -- the bar and is correct; only the sentence was wrong. Branch on the sign of the eight-week
+      -- profit and say what it is. The branch is taken on the ROUNDED dollar so a 40-cent profit
+      -- never prints as "Made $0".
+      THEN CONCAT(CASE
+                    WHEN ROUND(COALESCE(d.ads_net_profit_8w, 0), 0) < 0
+                      THEN CONCAT('Losing $', CAST(-ROUND(COALESCE(d.ads_net_profit_8w, 0), 0) AS STRING),
+                                  ' over eight weeks on ', CAST(d.ads_clicks_8w AS STRING), ' clicks')
+                    WHEN ROUND(COALESCE(d.ads_net_profit_8w, 0), 0) > 0
+                      THEN CONCAT('Made $', CAST(ROUND(COALESCE(d.ads_net_profit_8w, 0), 0) AS STRING),
+                                  ' over eight weeks on ', CAST(d.ads_clicks_8w AS STRING),
+                                  ' clicks, but the recent window has turned')
+                    ELSE CONCAT('Break-even over eight weeks on ', CAST(d.ads_clicks_8w AS STRING),
+                                ' clicks, and the recent window is below the bar')
+                  END,
+                   ' (Effective ROAS ',
                    CAST(CASE
            WHEN d.coach_mode IN ('GUARDIAN', 'COOLDOWN') THEN d.ads_net_roas_1w_os
            WHEN d.coach_mode = 'BLITZ' AND d.current_phase = 'PEAK' THEN d.ads_net_roas_1w

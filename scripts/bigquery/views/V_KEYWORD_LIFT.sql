@@ -274,7 +274,8 @@ SELECT pub.* EXCEPT (veto_raise, veto_cut, exp_ord_1d) REPLACE (
       CAST(lv.veto_clk1 AS STRING), ' clicks). Complete-day windows decide moves; the filling day',
       ' may only hold one — the cut waits for the day to complete (was ', pub.action,
       ' to $', FORMAT('%.2f', pub.suggested_bid), ')')
-    ELSE pub.reason END AS reason,
+    -- v27.99 C8: '(was X)' naming the action the row publishes reads like an override; drop it.
+    ELSE REGEXP_REPLACE(pub.reason, CONCAT(r' \(was ', pub.action, r'\)'), '') END AS reason,
   CASE
     WHEN pub.veto_raise THEN CONCAT('yday: ', CAST(pub.clicks_1d AS STRING), 'c at ',
       FORMAT('%.2f', COALESCE(pub.roas_1d, 0)), 'x ⇒ raise waits a day')
@@ -1145,7 +1146,11 @@ cap_state AS (
 -- v27.45: the single budget authority — PHASE's instruction verbatim for its campaigns
 -- (PHASE applies its own applied-hold, so bud_hold is bypassed for these rows)
 phase_bud AS (
-  SELECT CAST(campaign_id AS STRING) cid, suggested_budget AS ph_budget, reason AS ph_reason
+  -- v27.99 C5: PHASE's SHORT travels with its instruction, from PHASE's own facts.
+  SELECT CAST(campaign_id AS STRING) cid, suggested_budget AS ph_budget, reason AS ph_reason,
+         CONCAT('hit budget cap ', CAST(COALESCE(days_capped_7d, 0) AS STRING), ' of 7 days · last 3d ',
+                FORMAT('%.2f', COALESCE(roas_3d, 0)), 'x ⇒ budget $', FORMAT('%.2f', current_budget),
+                '→$', FORMAT('%.2f', suggested_budget)) AS ph_reason_short
   FROM `onyga-482313.OI.V_OOB_BUDGET_PHASE`
 ),
 out AS (
@@ -1178,7 +1183,7 @@ SELECT
   CAST(a.clk3 AS INT64) AS clicks_3d, ROUND(SAFE_DIVIDE(a.gp3, NULLIF(a.sp3, 0)), 2) AS roas_3d,
   CAST(a.clk4_14 AS INT64) AS clicks_4_14, ROUND(SAFE_DIVIDE(a.gp4_14, NULLIF(a.sp4_14, 0)), 2) AS roas_4_14,
   a.is_auto_campaign, a.camp_clk3 AS camp_clicks_3d, a.camp_roas_3d, a.camp_clk4_14 AS camp_clicks_4_14, a.camp_roas_4_14,
-  a.camp_clk1 AS camp_clicks_1d, a.camp_roas_1d,
+  a.camp_clk1 AS camp_clicks_1d, a.camp_roas_1d, a.camp_roas_w,  -- v27.99 C5: W, published
   a.camp_clk2 AS camp_clicks_prev2, a.camp_roas_prev2,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
@@ -1245,9 +1250,12 @@ SELECT
       THEN CONCAT('dark ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% AND losing both windows — cut 20%; the brakes trim the clicked clauses')
     WHEN NOT a.is_defense AND NOT (a.is_auto_campaign AND a.capped) AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
         AND a.camp_sp > 0 AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
-      THEN CONCAT('W ', CAST(COALESCE(a.camp_roas_w,0) AS STRING), 'x AND today ',
-                   CAST(COALESCE(a.camp_roas_1d,0) AS STRING), 'x — both losing → cut 20% (floor $',
-                   CAST(CAST((SELECT IF(in_peak, 15, 10) FROM season) AS INT64) AS STRING), ')')
+      -- v27.99 C6: 'both losing' was printed for days nothing ran. GATE UNTOUCHED; text only.
+      THEN CONCAT('last ', CAST(CAST((SELECT w_days FROM cap) AS INT64) AS STRING), 'd ',
+                   FORMAT('%.2f', COALESCE(a.camp_roas_w,0)), 'x on $', FORMAT('%.2f', a.camp_sp),
+                   IF(COALESCE(a.camp_clk1, 0) = 0, ' — the last day carries no clicks yet and is still filling, so the settled window is the whole verdict',
+                      CONCAT(' and the last day ', FORMAT('%.2f', COALESCE(a.camp_roas_1d,0)), 'x on $', FORMAT('%.2f', COALESCE(a.camp_sp1, 0)), ' — both losing')),
+                   ' → cut the budget 20% (floor $', CAST(CAST((SELECT IF(in_peak, 15, 10) FROM season) AS INT64) AS STRING), ')')
   END AS budget_reason,
   CASE
     -- probe verdicts first
@@ -1745,7 +1753,10 @@ SELECT
          -- nothing left to achieve -- it only entrenches the invisibility that the last-day
          -- click gate (v27.21) exists to detect. No clicks yesterday => HOLD, not a cut.
          AND COALESCE(a.clk1, 0) >= 1
-      THEN CONCAT('auto clause underperforming — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ', FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x this week (full evidence, over the 30-click floor): trim -15%/day (floor $0.20); the real lever is negating its bad terms')
+      -- v27.99 C2: gates on >=4 clicks yet claimed "over the 30-click floor". Two honest halves.
+      THEN CONCAT('auto clause underperforming — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ', FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x over the last ', CAST(CAST((SELECT w_days FROM cap) AS INT64) AS STRING), 'd',
+                  IF(a.clk_w >= 30, ', full evidence over the 30-click floor: trim -15%/day (floor $0.20); the real lever is negating its bad terms',
+                                    ', still under the 30-click floor so this is a partial read: trim -15%/day (floor $0.20) while the evidence builds — no negate until the verdict lands'))
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4
       THEN CONCAT('evidence in — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no profit and the bid already at the floor: negate its bad terms, nothing left to trim')
     WHEN a.is_auto AND a.class = 'LOSER' THEN 'auto clause in its 4-click trial — keep gathering; negate bad terms as they show'
@@ -1819,7 +1830,7 @@ SELECT
   CAST(a.clk3 AS INT64) AS clicks_3d, ROUND(SAFE_DIVIDE(a.gp3, NULLIF(a.sp3, 0)), 2) AS roas_3d,
   CAST(a.clk4_14 AS INT64) AS clicks_4_14, ROUND(SAFE_DIVIDE(a.gp4_14, NULLIF(a.sp4_14, 0)), 2) AS roas_4_14,
   a.is_auto_campaign, a.camp_clk3 AS camp_clicks_3d, a.camp_roas_3d, a.camp_clk4_14 AS camp_clicks_4_14, a.camp_roas_4_14,
-  a.camp_clk1 AS camp_clicks_1d, a.camp_roas_1d,
+  a.camp_clk1 AS camp_clicks_1d, a.camp_roas_1d, a.camp_roas_w,  -- v27.99 C5: W, published
   a.camp_clk2 AS camp_clicks_prev2, a.camp_roas_prev2,
   CAST(a.camp_clk7 AS INT64) AS camp_clicks_7d, a.camp_roas7 AS camp_roas_7d,
   CAST(a.camp_clk8_28 AS INT64) AS camp_clicks_8_28, a.camp_roas8_28 AS camp_roas_8_28,
@@ -1886,9 +1897,12 @@ SELECT
       THEN CONCAT('dark ', CAST(CAST(a.pct_dark AS INT64) AS STRING), '% AND losing both windows — cut 20%; the brakes trim the clicked clauses')
     WHEN NOT a.is_defense AND NOT (a.is_auto_campaign AND a.capped) AND COALESCE(a.camp_roas_w, 0) < 0.6 AND COALESCE(a.camp_roas_1d, 0) < 0.6
         AND a.camp_sp > 0 AND a.budget > (SELECT IF(in_peak, 15.0, 10.0) FROM season)
-      THEN CONCAT('W ', CAST(COALESCE(a.camp_roas_w,0) AS STRING), 'x AND today ',
-                   CAST(COALESCE(a.camp_roas_1d,0) AS STRING), 'x — both losing → cut 20% (floor $',
-                   CAST(CAST((SELECT IF(in_peak, 15, 10) FROM season) AS INT64) AS STRING), ')')
+      -- v27.99 C6: 'both losing' was printed for days nothing ran. GATE UNTOUCHED; text only.
+      THEN CONCAT('last ', CAST(CAST((SELECT w_days FROM cap) AS INT64) AS STRING), 'd ',
+                   FORMAT('%.2f', COALESCE(a.camp_roas_w,0)), 'x on $', FORMAT('%.2f', a.camp_sp),
+                   IF(COALESCE(a.camp_clk1, 0) = 0, ' — the last day carries no clicks yet and is still filling, so the settled window is the whole verdict',
+                      CONCAT(' and the last day ', FORMAT('%.2f', COALESCE(a.camp_roas_1d,0)), 'x on $', FORMAT('%.2f', COALESCE(a.camp_sp1, 0)), ' — both losing')),
+                   ' → cut the budget 20% (floor $', CAST(CAST((SELECT IF(in_peak, 15, 10) FROM season) AS INT64) AS STRING), ')')
   END AS budget_reason,
   CASE
     WHEN a.is_defense THEN 'DEFENSE'
@@ -2381,7 +2395,10 @@ SELECT
          -- nothing left to achieve -- it only entrenches the invisibility that the last-day
          -- click gate (v27.21) exists to detect. No clicks yesterday => HOLD, not a cut.
          AND COALESCE(a.clk1, 0) >= 1
-      THEN CONCAT('auto clause underperforming — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ', FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x this week (full evidence, over the 30-click floor): trim -15%/day (floor $0.20); the real lever is negating its bad terms')
+      -- v27.99 C2: gates on >=4 clicks yet claimed "over the 30-click floor". Two honest halves.
+      THEN CONCAT('auto clause underperforming — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks at ', FORMAT('%.2f', COALESCE(a.roas_w, 0)), 'x over the last ', CAST(CAST((SELECT w_days FROM cap) AS INT64) AS STRING), 'd',
+                  IF(a.clk_w >= 30, ', full evidence over the 30-click floor: trim -15%/day (floor $0.20); the real lever is negating its bad terms',
+                                    ', still under the 30-click floor so this is a partial read: trim -15%/day (floor $0.20) while the evidence builds — no negate until the verdict lands'))
     WHEN a.is_auto AND a.class = 'LOSER' AND a.clk_w >= 4
       THEN CONCAT('evidence in — ', CAST(CAST(a.clk_w AS INT64) AS STRING), ' clicks this window with no profit and the bid already at the floor: negate its bad terms, nothing left to trim')
     WHEN a.is_auto AND a.class = 'LOSER' THEN 'auto clause in its 4-click trial — keep gathering; negate bad terms as they show'
@@ -3078,13 +3095,13 @@ SELECT o.* EXCEPT (bid_hold, bud_hold, bid_floor, probe_bid) REPLACE (
       THEN CONCAT('REVIVED at its calibrated bid $',
                   FORMAT('%.2f', ROUND(GREATEST(o.bid_floor, LEAST(rv.revive_bid,
                     IF(COALESCE(g.life_clk, 0) >= 30 AND g.life_conv_cpc IS NOT NULL, ROUND(1.2 * g.life_conv_cpc, 2), 999))), 2)),
-                  ' (min(pre-park bid, 1.1x settled CPC), floor $0.31 — never the $1 probe entry)',
+                  ' — priced off its own pre-park bid and its settled click cost, never the flat probe entry',
                   -- v27.52 FIX 3: say so when the lifetime record, not the calibration, set the price.
                   IF(COALESCE(g.life_clk, 0) >= 30 AND g.life_conv_cpc IS NOT NULL
                      AND ROUND(1.2 * g.life_conv_cpc, 2) < rv.revive_bid - 0.005,
-                     CONCAT(', RECORD-CAPPED from $', FORMAT('%.2f', rv.revive_bid), ' — ',
-                            CAST(g.life_clk AS STRING), ' lifetime clicks price it at $',
-                            FORMAT('%.2f', g.life_conv_cpc), ' converting CPC (x1.2)'), ''),
+                     CONCAT(', capped down from $', FORMAT('%.2f', rv.revive_bid), ' by its own record — ',
+                            CAST(g.life_clk AS STRING), ' lifetime clicks price a converting click at $',
+                            FORMAT('%.2f', g.life_conv_cpc), ', and the revival may sit only a fifth above that'), ''),
                   '. ', COALESCE(rv.reverdict_reason, ''))
     -- v27.48.2 record-loser probe block + record-cap no-move reasons — same predicates as the
     -- other two ladders (v27.52 FIX 3: PROBE_ADJUST included, raise-only).
@@ -3239,6 +3256,22 @@ SELECT o.* EXCEPT (bid_hold, bud_hold, bid_floor, probe_bid) REPLACE (
             ' — waiting for Amazon sync')
        ELSE o.budget_reason END AS budget_reason
 ),
+  -- v27.99 C5: the budget SHORT is built HERE, beside the long, off the same window and the same
+  -- destination. It was composed in the snapshot from camp_roas_7d ('week') while the paragraph
+  -- judged camp_roas_w ('W') — 31 of 57 rows disagreed. The span is now named, not 'week'.
+  CASE WHEN pb.cid IS NOT NULL THEN pb.ph_reason_short
+       WHEN bud_hold THEN CONCAT('budget applied $', FORMAT('%.2f', ab.last.new_budget), ' — waiting for Amazon sync')
+       WHEN o.suggested_budget IS NULL THEN NULL
+       WHEN o.is_auto_campaign AND o.capped
+         THEN CONCAT('dark ', CAST(CAST(o.pct_dark AS INT64) AS STRING), '% · last day ',
+                     FORMAT('%.2f', COALESCE(o.camp_roas_1d, 0)), 'x ⇒ budget $',
+                     FORMAT('%.2f', o.budget), '→$', FORMAT('%.2f', o.suggested_budget))
+       ELSE CONCAT('last ', CAST(o.w_days AS STRING), 'd ', FORMAT('%.2f', COALESCE(o.camp_roas_w, 0)), 'x · ',
+                   IF(COALESCE(o.camp_clicks_1d, 0) = 0, 'last day still filling',
+                      CONCAT('last day ', FORMAT('%.2f', COALESCE(o.camp_roas_1d, 0)), 'x')),
+                   ' ⇒ budget $', FORMAT('%.2f', o.budget), '→$', FORMAT('%.2f', o.suggested_budget))
+  END AS budget_reason_short
+,
 -- v27.42: the season-context gate, visible per row (PARK_CONTEXT appears ONLY here — advisory).
 cg.gate_action AS context_gate,
 cg.gate_reason AS context_gate_reason,

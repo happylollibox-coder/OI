@@ -76,10 +76,15 @@ BEGIN
   SELECT snap, 'LIFT', 'BUDGET', CAST(campaign_id AS STRING), ANY_VALUE(campaign_name),
          NULL, CAST(NULL AS STRING), NULL, NULL, ANY_VALUE(channel),
          'BUDGET_CHANGE', NULL, NULL, ANY_VALUE(budget), ANY_VALUE(suggested_budget), ANY_VALUE(budget_reason),
-         -- audit rewrite: 'W 0x' was undecodable — name the windows, show the dollars
-         ANY_VALUE(CONCAT('week ', FORMAT('%.2f', COALESCE(camp_roas_7d, 0)), 'x · today ',
-                          FORMAT('%.2f', COALESCE(camp_roas_1d, 0)), 'x ⇒ budget $',
-                          FORMAT('%.2f', budget), '→$', FORMAT('%.2f', suggested_budget))), CAST(NULL AS BOOL)
+         -- v27.99 (audit C5): THE SHORT IS NO LONGER COMPOSED HERE. It was built out of
+         -- camp_roas_7d and labelled 'week', while the paragraph beside it judged camp_roas_w —
+         -- three days in a live peak — and labelled it 'W'. Two windows, two indistinguishable
+         -- labels, one row: they disagreed on 31 of 57 budget rows, 17 shorts sat at or above the
+         -- very bar the paragraph called breached, and 6 announced a 20% cut next to a week ROAS
+         -- of 1.0 or better. V_KEYWORD_LIFT now builds budget_reason_short from the SAME branches
+         -- and the SAME numbers as budget_reason, and names the span ('last 3d') instead of
+         -- calling it a week. Taking it verbatim is what keeps them from drifting again.
+         ANY_VALUE(budget_reason_short), CAST(NULL AS BOOL)
   FROM `onyga-482313.OI.V_KEYWORD_LIFT`
   WHERE suggested_budget IS NOT NULL
   GROUP BY campaign_id;  -- one budget per campaign — ANY_VALUE here is safe: every keyword row
@@ -149,7 +154,12 @@ BEGIN
      match_type, channel, action, current_bid, suggested_bid, current_budget, suggested_budget, reason, reason_short, season_relax_applied)
   SELECT snap, 'REVERDICT', 'REVIVE', CAST(r.campaign_id AS STRING), dc.campaign_name,
          CAST(r.keyword_id AS STRING), CAST(r.ad_group_id AS STRING), r.keyword_text, r.match_type, r.channel,
-         'REVIVE', r.current_bid, r.revive_bid, NULL, NULL, r.reverdict_reason,
+         -- v27.99 (audit C8): V_PARK_REVERDICT no longer bakes the price into its verdict
+         -- sentence (its consumers may cap the revival lower and were closing by naming a bid
+         -- they had rejected). Here the reverdict IS the proposal, so this is where its price
+         -- belongs — stated once, from the same column the row proposes.
+         'REVIVE', r.current_bid, r.revive_bid, NULL, NULL,
+         CONCAT(r.reverdict_reason, ' — un-park at $', FORMAT('%.2f', r.revive_bid)),
          CONCAT('90d: ', CAST(COALESCE(r.s90_clk, 0) AS STRING), ' clicks at ',
                 FORMAT('%.2f', COALESCE(r.s90_gp_roas, 0)), 'x ⇒ un-park at $',
                 FORMAT('%.2f', r.revive_bid)),
@@ -210,18 +220,37 @@ BEGIN
   SELECT snap, 'COACH', 'NEGATE', g.cid, g.s.campaign_name,
          NULL, g.s.ad_group_id, g.term, 'NEGATIVE_EXACT',
          IF(dc.campaign_type LIKE 'SPONSORED_BRANDS%', 'SB', 'SP'),
+         -- v27.99 (audit C4): THE VISIBLE WHY ON A NEGATE NOW CARRIES EVIDENCE.
+         -- This was a compile-time literal — 'coach rule: irrelevant or money-losing term ⇒
+         -- block this search term' — with no data in it at all, and the only number-free
+         -- reason_short in the whole snapshot. TodayDecisions prints reason_short as the visible
+         -- why-column and hides the paragraph in a hover title, so on the ONE action class that is
+         -- practically irreversible (a negative lands in DE_NEGATIVE_KEYWORDS and the term is
+         -- suppressed for good) the justification Ori actually sees stated nothing. The OOB negate
+         -- short thirty lines above has always carried its numbers; this is that same shape.
+         -- The figures are the ad-group-grain block evidence — the grain the negative acts on —
+         -- taken from the SAME highest-priority slice as the paragraph, so short and long agree.
          'NEGATE_TERM', NULL, NULL, NULL, NULL, g.s.reason,
          IF(g.peak_converts,
             CONCAT('bought in past gift peaks (', CAST(g.peak_orders AS STRING),
                    IF(g.peak_orders = 1, ' order', ' orders'), ') — check before blocking'),
-            'coach rule: irrelevant or money-losing term ⇒ block this search term'),
+            CONCAT(
+              CAST(COALESCE(g.s.block_clicks_8w, 0) AS STRING), ' clicks in 8 weeks, ',
+              CASE
+                WHEN COALESCE(g.s.block_orders_8w, 0) = 0 THEN 'no order'
+                ELSE CONCAT(CAST(g.s.block_orders_8w AS STRING),
+                            IF(g.s.block_orders_8w = 1, ' order', ' orders'), ' but -$',
+                            FORMAT('%.0f', ABS(COALESCE(g.s.block_net_profit_8w, 0))))
+              END,
+              ' ⇒ block this search term')),
          g.peak_converts
   FROM (
     SELECT CAST(w.campaign_id AS STRING) AS cid, w.search_term AS term,
            LOGICAL_OR(COALESCE(w.peak_converts, FALSE)) AS peak_converts,
            MAX(COALESCE(w.peak_orders, 0)) AS peak_orders,
            -- highest-priority slice speaks; ORDER BY is total so a re-run is byte-identical
-           ARRAY_AGG(STRUCT(w.campaign_name, w.ad_group_id, w.reason)
+           ARRAY_AGG(STRUCT(w.campaign_name, w.ad_group_id, w.reason,
+                            w.block_clicks_8w, w.block_orders_8w, w.block_net_profit_8w)
                      ORDER BY w.priority_score DESC, w.keyword_id LIMIT 1)[OFFSET(0)] AS s
     FROM `onyga-482313.OI.V_WEEKLY_RUN_NEGATIVE` w
     GROUP BY 1, 2

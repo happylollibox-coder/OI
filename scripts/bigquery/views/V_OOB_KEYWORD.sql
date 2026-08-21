@@ -296,7 +296,10 @@ SELECT pub.* EXCEPT (veto_raise, veto_cut) REPLACE (
       CAST(lv.veto_clk1 AS STRING), ' clicks). Complete-day windows decide moves; the filling day',
       ' may only hold one — the cut waits for the day to complete (was ', pub.bid_action,
       ' to $', FORMAT('%.2f', pub.suggested_bid), ')')
-    ELSE pub.bid_reason END AS bid_reason,
+    -- v27.99 (audit C8): drop a '(was X)' that names the very action the row publishes — on a row
+    -- where nothing was overridden it reads like an override and says nothing. Real overrides,
+    -- which name a DIFFERENT action, are untouched.
+    ELSE REGEXP_REPLACE(pub.bid_reason, CONCAT(r' \(was ', pub.bid_action, r'\)'), '') END AS bid_reason,
   CASE
     WHEN pub.veto_raise THEN CONCAT('yday: ', CAST(pub.clicks_1d AS STRING), 'c at ',
       FORMAT('%.2f', COALESCE(pub.roas_1d, 0)), 'x ⇒ raise waits a day')
@@ -1260,7 +1263,11 @@ SELECT
                       'd of 7) — a revival is only budget-neutral if it replaces a park: clear the darkness, then revive. ',
                       COALESCE(b.reverdict_reason, ''))
         WHEN b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64))
-          THEN CONCAT('REVIVED at its calibrated bid (min(pre-park bid, 1.1x settled CPC), floor $0.31 — never the $1 probe entry: proven record, not an anchorless probe). ',
+          -- v27.99 (audit C8): the formula is gone from the sentence, and the price is named
+          -- once — the value this row actually proposes, not the one it inherited.
+          THEN CONCAT('REVIVED at its calibrated bid $',
+                      FORMAT('%.2f', ROUND(LEAST(GREATEST(COALESCE(b.revive_bid, 0.31), b.bid_floor), x.bid_max), 2)),
+                      ' — priced off its own pre-park bid and its settled click cost, never the flat probe entry: a proven record, not an anchorless test. ',
                       COALESCE(b.reverdict_reason, ''))
         ELSE CONCAT('REVIVE verdict — seat ready, activates on a coming day (20% pace). ', COALESCE(b.reverdict_reason, ''))
         END
@@ -1285,7 +1292,8 @@ SELECT
                 CAST(COALESCE(b.park_count, 0) AS STRING), ': ease the bids to clear the darkness, then activate'),
       IF(b.act_rank <= GREATEST(1, CAST(FLOOR(0.20 * b.budget / 4) AS INT64)),
          CONCAT(IF(b.seasonal_now, 'SEASONAL REVIVAL (sold in this window last year) — ', ''),
-                'seat freed — ACTIVATE at ', IF(b.tcpc IS NOT NULL, '1.5x target CPC (floor $0.31, capped by the seat CPC — v27.69, the $1 floor retired)', 'the seat CPC (no anchor — v27.69)'),
+                -- v27.99 (audit C8): version tags stripped — a sentence read aloud never carries one.
+                'seat freed — ACTIVATE at ', IF(b.tcpc IS NOT NULL, '1.5x its target click cost, floored at $0.31 and capped by what the seat can afford', 'what the seat can afford, since it has no target click cost to anchor to'),
                 ' to resume its test (', CAST(b.clk90 AS STRING), '/', CAST(x.tested_clk AS STRING), ' clicks so far)'),
          'seat ready — activates on a coming day (20% pace: 80% of the budget keeps feeding the winners)'))
     WHEN b.converting THEN CASE

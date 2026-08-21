@@ -1327,15 +1327,27 @@ tgt_action AS (
                   CONCAT(' ⚠️ Settled class ', f.target_class,
                          ' — the settled windows have not caught up; the short window wins.'), ''))
       -- ── the v27.59 CRITICAL halve, and the three ways it stops short of a move ────────────────
+      -- v27.99 (audit C3): the sentence asserted 'Both under 1.0x' unconditionally, counting an
+      -- empty or still-filling last day as one of two FAILED windows. THE GATE IS CORRECT and is
+      -- untouched — `escalated` requires the week to have spend and to fail on its own, and the
+      -- last day can only veto (it spares a target, it never condemns one), exactly per the rule.
+      -- The view already publishes a three-state profit_1d carrying 'NO_SPEND'; the sentence threw
+      -- it away. Use it: when the last day has no spend, say so and let the week be the verdict.
       WHEN f.escalated AND f.halve_viable THEN
-        CONCAT('NOT PROFITABLE ON EITHER SHORT WINDOW in a CRITICAL family. Last day (',
-               CAST(f.last_ads_day AS STRING), '): ', CAST(f.d1_clicks AS STRING), ' clicks, ',
-               CAST(f.d1_orders AS STRING), ' orders, $', CAST(f.d1_spend AS STRING), ', ',
-               COALESCE(CAST(f.d1_gp_roas AS STRING), '—'), 'x GP-ROAS. Last ',
+        CONCAT('NOT PROFITABLE ON THE SETTLED WINDOW in a CRITICAL family. Last day (',
+               CAST(f.last_ads_day AS STRING), '): ',
+               IF(f.profit_1d = 'NO_SPEND', 'no spend — nothing ran, so there is nothing to judge there',
+                  CONCAT(CAST(f.d1_clicks AS STRING), ' clicks, ',
+                         CAST(f.d1_orders AS STRING), ' orders, $', CAST(f.d1_spend AS STRING), ', ',
+                         COALESCE(CAST(f.d1_gp_roas AS STRING), '—'), 'x GP-ROAS')), '. Last ',
                CAST(f.w_days AS STRING), ' days', IF(f.in_peak, ' (peak window)', ''), ': ',
                CAST(f.w_clicks AS STRING), ' clicks, ', CAST(f.w_orders AS STRING), ' orders, $',
                CAST(f.w_spend AS STRING), ', ', COALESCE(CAST(f.w_gp_roas AS STRING), '—'),
-               'x GP-ROAS. Both under 1.0x, so every unit it does sell is a unit ', f.family,
+               'x GP-ROAS. ',
+               IF(f.profit_1d = 'NO_SPEND',
+                  CONCAT('The ', CAST(f.w_days AS STRING), '-day window is under 1.0x and the last day has no volume to overturn it, so'),
+                  'Both under 1.0x, so'),
+               ' every unit it does sell is a unit ', f.family,
                ' cannot replace (', CAST(CAST(ROUND(f.binding_cover_days) AS INT64) AS STRING),
                ' days of cover on ', f.binding_product_name, ', ',
                IF(f.family_next_arrival_date IS NULL, 'NOTHING BOOKED',
@@ -1448,10 +1460,17 @@ tgt_action AS (
                IF(f.w_gp_roas IS NULL, 'no spend', CONCAT(FORMAT('%.2f', f.w_gp_roas), 'x')),
                ' ⇒ halve bid $', FORMAT('%.2f', f.current_bid), '→$',
                FORMAT('%.2f', f.suggested_bid), ' to slow sales')
+      -- v27.99 (audit C3): same three-state as the paragraph — a last day with no spend is not a
+      -- second failed window, and these two shorts said it was.
       WHEN f.escalated AND f.current_bid IS NULL THEN
-        'both windows under 1.0x — no bid at target grain'
+        CONCAT(IF(f.profit_1d = 'NO_SPEND',
+                  CONCAT(CAST(f.w_days AS STRING), 'd under 1.0x, last day quiet'),
+                  'both windows under 1.0x'), ' — no bid at target grain')
       WHEN f.escalated THEN
-        CONCAT('both windows under 1.0x — already at the $', CAST(f.bid_floor AS STRING), ' floor')
+        CONCAT(IF(f.profit_1d = 'NO_SPEND',
+                  CONCAT(CAST(f.w_days AS STRING), 'd under 1.0x, last day quiet'),
+                  'both windows under 1.0x'),
+               ' — already at the $', CAST(f.bid_floor AS STRING), ' floor')
       WHEN f.target_class = 'THIN' THEN
         CONCAT('only ', CAST(f.s28_clicks AS STRING), ' settled clicks — too thin to call')
       WHEN f.target_class = 'STALLED' THEN

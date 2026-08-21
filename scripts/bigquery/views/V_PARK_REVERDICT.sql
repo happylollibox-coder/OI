@@ -603,7 +603,13 @@ SELECT
                 CONCAT(' — under 1.0, relaxed to the 0.80 bar by a mature ', COALESCE(c.win_labels, ''),
                        ' WIN (same season as today, prior occurrence ended ',
                        CAST(c.win_prior_end AS STRING), ')'), ''),
-             ' — the settled record overturns the park; revive at $', FORMAT('%.2f', c.revive_bid),
+             -- v27.99 (audit C8): the PRICE used to be stated here, and this sentence is
+             -- inherited VERBATIM by V_KEYWORD_LIFT and V_OOB_KEYWORD, which may cap the revival
+             -- lower against the keyword's lifetime record. The row then closed by naming a bid
+             -- it had just rejected. The verdict travels; the price does not. Each consumer names
+             -- the price it actually proposes, exactly once — including this view's own snapshot
+             -- row, where the price is revive_bid and SP_SNAPSHOT_ENGINE_PROPOSALS appends it.
+             ' — the settled record overturns the park',
              IF(c.manual_parked_recent, ' [MANUAL park <14d — sweep-only, engines defer]', ''))
     -- v27.68 sibling reasons — same predicate as the verdict ladder (no-drift rule)
     WHEN c.s90_clk >= 10 AND bs.sib_clk IS NOT NULL

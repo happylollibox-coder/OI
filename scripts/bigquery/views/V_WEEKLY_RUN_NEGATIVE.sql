@@ -18,7 +18,17 @@ WITH neg AS (
     ANY_VALUE(hero_product_name) AS hero_product_name,
     ANY_VALUE(hero_ads_cvr_pct)  AS hero_cvr,
     LOGICAL_OR(COALESCE(hero_asin IS NOT NULL AND NOT is_hero_match, FALSE)) AS wrong_asin,
-    MAX(priority_score)      AS priority_score
+    MAX(priority_score)      AS priority_score,
+    -- v27.99 (audit C4): the block's OWN evidence, published so the visible why-line can carry a
+    -- number instead of a rule name. These are the ad-group-grain figures the v27.9x grain fix
+    -- introduced — the grain an Amazon negative keyword actually switches off — so they are
+    -- identical on every row of this group and MAX() reads them exactly. Nothing is divided here:
+    -- clicks, orders and dollars only, so no ANY_VALUE pairing can drift.
+    MAX(ng_clicks_8w)        AS block_clicks_8w,
+    MAX(ng_orders_8w)        AS block_orders_8w,
+    MAX(ng_net_profit_8w)    AS block_net_profit_8w,
+    MAX(ng_lt_clicks)        AS block_lifetime_clicks,
+    MAX(ng_lt_orders)        AS block_lifetime_orders
   FROM `onyga-482313.OI.V_ADS_COACH` vc
   WHERE vc.action = 'NEGATE_TERM'
     AND vc.search_term IS NOT NULL
@@ -72,6 +82,9 @@ SELECT
   neg.parent_name, neg.campaign_id, neg.keyword_id, neg.ad_group_id,
   neg.campaign_name, neg.targeting, neg.match_type, neg.search_term, neg.reason, neg.priority_score,
   neg.hero_asin, neg.hero_product_name, ROUND(neg.hero_cvr, 1) AS hero_cvr, neg.wrong_asin,
+  neg.block_clicks_8w, neg.block_orders_8w,
+  ROUND(neg.block_net_profit_8w, 2) AS block_net_profit_8w,
+  neg.block_lifetime_clicks, neg.block_lifetime_orders,
   COALESCE(p.peak_clicks, 0) AS peak_clicks,
   COALESCE(p.peak_orders, 0) AS peak_orders,
   p.peak_net                 AS peak_net,
