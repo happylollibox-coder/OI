@@ -4,6 +4,13 @@
 keyword" — every keyword in exactly ONE state, with exactly ONE owner, and always ONE NEXT
 APPOINTMENT (a date on which something will re-judge it).
 
+**v27.104 (2026-08-22): THE FLOOR RULING — SHIPPED.** Ori, verbatim: "floor question bid-up-to-floor
+if after a few days still loosing kill it" and "i think it is not 0.25 (we already checked it)". One
+floor per channel and creative (`FN_BID_FLOOR` via `V_BID_FLOOR`), affordability in BID space,
+`FLOOR_PROBATION`, the kill only at the floor after an elapsed probation, and the guard extended to
+AT_BAR's standing price. Gate: `SIM_2026-08-22_ladder_floor_probation.sql` (TMP_SIM_LADDER_FLOOR) —
+the SP reproduced it **855/855 exact, 0 differing** on the consistent 2026-08-22 snapshot chain.
+
 **v27.103 (2026-08-22): THE BAR/SE LADDER.** Four Ori rulings plus the clean-then-judge guard,
 gated on the A1 clean-rerun simulation (`scripts/bigquery/simulations/SIM_2026-08-22_ladder_clean_rerun.sql`,
 result table TMP_SIM_LADDER_CLEAN — SP output verified 854/855 exact key-level agreement; the one
@@ -16,6 +23,8 @@ difference is the PACED_WINNER overlay reading today's live pace instruction, by
 | `SP_SNAPSHOT_KEYWORD_STATE` | Assembles reverdict/ownership/pacing verdicts from the other snapshots AND owns the bar/SE judgment (the one place the account says what a keyword's record is worth against its family's bar). Orchestrator Task 20.8, after the preflight (20.7) and after `SP_SNAPSHOT_FAMILY_BAR`. Reads FACT_AMAZON_ADS at term grain for the guard (~40s). |
 | `FACT_KEYWORD_STATE` | One row per (campaign, keyword): state, owner, next appointment, settled record, bar machinery (family_bar, se_eff, N_f, affordable_cpc, click sufficiency), guard columns (ns_share, cleaned record, negate-valve population), season context, view-authored reason. |
 | `V_KEYWORD_STATE` | Thin read surface. No logic. `SELECT *` freezes schema — redeploy it with every FACT column change. |
+| `FN_BID_FLOOR` / `V_BID_FLOOR` | The ONE floor definition (channel × creative) and its per-ad-group resolution; the SP reaches it through `DIM_KEYWORD.ad_group_id` (unresolved ad group → `FN_BID_FLOOR(channel, NULL)`, source suffixed `_NO_ADGROUP`). |
+| `V_BID_CPC_TRANSFER` | `m_effective` (MAX over target kinds per campaign) — the A4 placement translation from affordable CPC to affordable BID, done once in the SP (`affordable_bid`, `clean_affordable_bid`). |
 | `tools/build_reprice_bulksheet.py` | THE ONLY EXECUTOR. NO ENGINE reads the state table — the new states move bids exclusively through the manual reprice book Ori uploads by hand. |
 
 ## The states (first match wins — the derivation order IS the doctrine)
@@ -29,9 +38,10 @@ difference is the PACED_WINNER overlay reading today's live pace instruction, by
 | `LAUNCH_CONTAINED` | bar_exempt family AND flat-era loser record (roas < 0.6 at ≥ 10 clk) — **a launch is never judged on profit, including in its label (A8)** | +7d |
 | `PACED_WINNER` | clears the bar beyond noise + a GO bid-lowering instruction live today | tomorrow |
 | `WINNER` | settled_roas90 − family_bar > se_eff at ≥ 10 settled clicks | last change + 14d else +7d rolling |
-| `AT_BAR` | \|settled_roas90 − family_bar\| ≤ se_eff AND the click record does not rule the bar out — **winner demotion (ruling 2) lands here: labels only, no bid moves on a relabel** | +7d re-read (A9 — the band collapses at N_f orders; the re-read reads it when it lands) |
-| `REPRICE` | below bar beyond noise AND an affordable price exists above the platform floor AND settled CPC sits materially (one 5% ease step) above it | after the price move: last applied + 14d (the scorecard's settled read); else +7d |
-| `LOSER` | below bar beyond noise AND **failed AT its price** (ruling 4): settled CPC already at/below affordable, or no affordable price above the floor, or bid at/below the floor — includes the A2b unexecutable AT_BAR (bid below floor) | +7d |
+| `AT_BAR` | \|settled_roas90 − family_bar\| ≤ se_eff AND the click record does not rule the bar out — whatever the bid — **winner demotion (ruling 2) lands here: labels only, no bid moves on a relabel**; standing price = `GREATEST(affordable_bid, bid_floor)` | the EARLIER of `nf_collapse_forecast_date` (from its own 90d order pace) and the 7d re-read, never before tomorrow (A9) |
+| `REPRICE` | below bar beyond noise AND an affordable **bid** (`affordable_bid` = affordable CPC / m_effective) exists at/above the keyword's own floor AND the bid is above the floor — move to it, re-judge after settle | last applied + 14d when still ahead (the scorecard's settled read); else +7d |
+| `FLOOR_PROBATION` | below bar beyond noise AND (bid at/below its floor, ±½¢, OR no affordable bid at/above it) — the move is TO THE FLOOR from either side; `floor_since` is written (seeded on entry, carried forward from the table's own prior row) | `probation_due_date` = probation clock start + `settle_days_eff` (SP 3 / SB 14) + CEIL(10 / own 90d click pace), never before tomorrow; no pace → settle + 7 |
+| `LOSER` | ONLY: `probation_elapsed` (≥ 10 settled clicks dated on/after the probation clock start = later of `floor_since` and the last bid change) AND `at_floor` AND still below bar beyond noise. **An above-bar keyword is never a kill, whatever its bid.** | +7d |
 | `TRIAL` | everything else (clk < 10, or 0 orders under 15 clicks) | guard settle_due else +7d |
 
 ### The bar and its noise band (rulings 1 + 2)
@@ -53,23 +63,23 @@ difference is the PACED_WINNER overlay reading today's live pace instruction, by
   affordable_cpc = gp_per_click / bar_f, or their cleaned equivalents). Live 7d CPC appears only
   in the reprice book, labelled as context.
 
-### THE KILL CLAUSE (ruling 4 — replaces the repealed safety assertion)
+### THE KILL CLAUSE (ruling 4 + the floor ruling — v27.104)
 
-The former assertion — "the ladder produces zero below-floor LOSERs" — is **REPEALED**. The
-standing assertion is now its opposite: **every LOSER has failed AT its price** — its settled CPC
-is at/below its affordable price, or no affordable price exists above the platform floor ($0.25,
-the account's operative park price), or its bid already sits at/below the floor. There is no
-cheaper price at which its record clears the bar, so the move is a kill (pause via the book,
-CHECK FIRST), not a reprice. Self-check, must return 0:
+The v27.103 assertion ("every LOSER has failed AT its price" — settled CPC at/below affordable, or
+no affordable price above a flat $0.25, or bid at/below $0.25) is **REPEALED**: two of its three
+arms were phantom kills against a parking price. The standing assertion is now: **every LOSER is a
+keyword that failed AT ITS OWN FLOOR, after its probation** — `probation_elapsed AND at_floor AND
+below bar`. `V_ENGINE_HEALTH.loser_kill_clause` reads it (red > 0); self-check, must return 0:
 
 ```sql
 SELECT COUNT(*) FROM `onyga-482313.OI.V_KEYWORD_STATE`
-WHERE state = 'LOSER' AND NOT (
-  COALESCE(IF(guard_deferred, clean_cpc90, settled_cpc90), 0)
-    <= COALESCE(IF(guard_deferred, clean_affordable_cpc, affordable_cpc), 0) * 1.05
-  OR COALESCE(IF(guard_deferred, clean_affordable_cpc, affordable_cpc), 0) <= 0.25
-  OR COALESCE(current_bid, 0) <= 0.25);
+WHERE state = 'LOSER'
+  AND NOT (probation_elapsed AND at_floor AND COALESCE(settled_roas90, 0) < family_bar);
 ```
+
+Companion (`state_floor_resolution`, red > 0): no priced state (AT_BAR / REPRICE / FLOOR_PROBATION /
+LOSER) may carry a NULL `bid_floor`; rows resolved on channel alone (`*_NO_ADGROUP`) are counted in
+the detail so a silent drift to the conservative $0.25 is visible.
 
 ### The floors (v27.104, 2026-08-22 — Ori: "i think it is not 0.25 (we already checked it)")
 
@@ -94,8 +104,8 @@ measured placement multiplier (`V_BID_CPC_TRANSFER.m_effective`, A4).
 
 ### FLOOR_PROBATION — the floor ruling (Ori 2026-08-22, verbatim: "bid-up-to-floor if after a few days still loosing kill it")
 
-**Status: SIMULATED AND GATED (Step 1); the SP still runs v27.103's flat-floor ladder until Step 2
-ships it.** Simulation of record: `scripts/bigquery/simulations/SIM_2026-08-22_ladder_floor_probation.sql`
+**Status: SHIPPED (Step 2, v27.104) — `SP_SNAPSHOT_KEYWORD_STATE` runs this ladder; production
+`FACT_KEYWORD_STATE` reproduced the simulation 855/855, 0 differing.** Simulation of record: `scripts/bigquery/simulations/SIM_2026-08-22_ladder_floor_probation.sql`
 (TMP_SIM_LADDER_FLOOR, 7-day expiry), on the 2026-08-22 07:41–08:09 UTC snapshot chain.
 
 | state | predicate |
@@ -113,7 +123,26 @@ Today's two probation rows forecast 6 and 7 days. No snapshot has ever recorded 
 so `floor_since` is NULL everywhere and **the sim asserts ZERO LOSERs today**.
 
 The guard defers every deterioration verdict (REPRICE / FLOOR_PROBATION / LOSER) and re-reads it
-cleaned, as before.
+cleaned, as before — **and, since v27.104, AT_BAR's standing price** (see the guard section: `guard_scope`).
+
+#### Probation memory (how `floor_since` is honest)
+
+The SP reads its own prior `FACT_KEYWORD_STATE` row into a temp table before the rebuild (the column
+is absent before the first v27.104 run and the table absent on a fresh project; both cases are
+handled, never a first-run failure). `floor_since` = `COALESCE(prior floor_since, today)` while the
+state is FLOOR_PROBATION or LOSER; any other state clears it. The probation CLOCK starts at the later
+of `floor_since` and `FACT_KEYWORD_GUARD.last_bid_change_date` — the bid must actually have landed at
+the floor for clicks to count as evidence at the floor (a book row that is never uploaded never
+starts the clock; a raise off the floor ends `at_floor` and the kill arm with it).
+`probation_clk_settled` = clicks dated on/after the clock start and on/before wm − settle_days_eff.
+The SP reading its own previous output is not an engine reading the table: no engine reads it.
+
+Published columns (v27.104, beside the v27.103 set): `ad_group_id`, `creative_type`, `bid_floor`,
+`bid_floor_source`, `m_effective`, `is_brand_defense`, `affordable_bid`, `clean_affordable_bid`,
+`at_floor`, `guard_scope`, `raw_state`, `clean_state`, `settle_days_eff`, `floor_since`,
+`probation_clock_start`, `probation_clk_settled`, `probation_elapsed`, `probation_due_date`,
+`probation_bid`, `nf_collapse_forecast_date`, `prior_state`. `state_reason` is one plain sentence per
+state on the numbers the verdict used (guard-cleaned where the guard fired).
 
 #### v27.104 transition matrix (live v27.103 state → floor-corrected state, 855 tracked keys)
 
@@ -134,12 +163,16 @@ untracked spenders). **The third v27.103 "flip" — `complements` BOX-SP/AUTO (P
 (LOSER) because of the phantom $0.25 floor; at the real $0.20 floor it reads AT_BAR within noise
 (se 0.29) and the guard, which fires only on deterioration verdicts, leaves it there. Its AT_BAR
 standing price ($0.17 affordable bid, under the floor) would book a cut to $0.20 on a mix the guard
-already knows is drifted — **open for Step 2: the guard must cover every verdict that can move a
-bid DOWN, AT_BAR's standing price included.**
+already knows is drifted — **closed in Step 2: the guard covers every verdict that can move a bid
+DOWN, AT_BAR's standing price included** (`guard_scope = 'AT_BAR_PRICE'`: the label stays AT_BAR,
+`guard_deferred` is TRUE and the book prices the cleaned record — $0.56 bid on 1.90x own-terms for
+this row). Live at ship: 2 AT_BAR_PRICE deferrals, 2 DETERIORATION flips (both → WINNER).
 
 ### CLEAN-THEN-JUDGE (the mix-drift guard)
 
-Before any deterioration verdict (REPRICE or LOSER) stands, the SP measures the share of the
+Before any verdict that can move a bid DOWN stands — a deterioration verdict (REPRICE /
+FLOOR_PROBATION / LOSER), or AT_BAR whose standing price would cut the bid by more than the book's
+5% step — the SP measures the share of the
 judging window's clicks on search terms **never seen** for that keyword in the prior comparison
 window (the preceding 90d), **on measurable terms only** (≥ 5 judging clicks — the one-off
 long-tail churns ~100% in every window pair and is background in both windows). The materiality
@@ -147,7 +180,9 @@ bar is **derived at run time** as the account click-weighted never-seen share on
 measurable-term basis over keys with a measurable prior record (≥ 10 prior clicks) — a keyword
 defers only when its own mix drifted beyond the account's measured background. A deferred keyword
 is RE-READ excluding its zero-order never-seen terms and only the cleaned reading may downgrade
-(`guard_deferred`, `guard_flip`, `clean_*` columns). The excluded population (`ns_zero_ord_terms`,
+(`guard_deferred`, `guard_scope` ∈ {DETERIORATION, AT_BAR_PRICE}, `guard_flip`, `clean_*` columns).
+DETERIORATION re-labels from the clean ladder; AT_BAR_PRICE keeps the label (the band is terminal)
+and defers only the price the book may act on. The excluded population (`ns_zero_ord_terms`,
 `ns_zero_ord_clicks`) is the **negate valve's** — it routes through the coach pipeline (negatives
 act at AD GROUP grain — see fact_oi_negate_grain_mismatch), never as a raw list. Guard applies
 only where a prior record exists; a keyword absent from the prior window has no comparison and its
@@ -159,14 +194,24 @@ record IS its record.
 
 1. **One state:** `SELECT campaign_id, keyword_id … HAVING COUNT(*) > 1` returns 0 rows.
 2. **No keyword without a next appointment:** `COUNTIF(next_check_date IS NULL AND state != 'DEAD') = 0`.
+3. **The kill clause (v27.104):** `loser_kill_clause = 0` — see THE KILL CLAUSE above.
+4. **Every priced row has its floor (v27.104):** `state_floor_resolution = 0`.
 
 ## THE REPRICE BOOK — the manual executor
 
 `tools/build_reprice_bulksheet.py` (conventions of `build_stop_nonconverting_bulksheet.py`):
 
 - Emits keyword/target **bid updates** for REPRICE and AT_BAR rows whose placement-translated
-  affordable bid differs from the current bid by more than one 5% ease step (the engine's own
-  smallest standing move), and **pause rows** for LOSERs (always CHECK FIRST).
+  affordable bid (`affordable_bid` / `clean_affordable_bid` when the guard fired, never below the
+  row's own `bid_floor`) differs from the current bid by more than one 5% ease step (the engine's
+  own smallest standing move); **to-the-floor moves** for FLOOR_PROBATION rows (from either side;
+  a row already at its floor is shown as PROBATION_RUNNING); and **pause rows** ONLY for LOSERs
+  whose `probation_elapsed AND at_floor` — any other LOSER is shown as REFUSED_PAUSE (always
+  CHECK FIRST on a pause). No flat floor constant exists in the book (v27.104).
+- **One keyword, one price:** a key carrying a live GO instruction in `T_ENGINE_PREFLIGHT` today is
+  shown as ENGINE_INSTRUCTED and never executed — the engine speaks for it that day.
+- Batch ids are time-stamped (`reprice_book_YYYYMMDD_HHMM`) so a re-derived book never collides
+  with an earlier build's batch; `--no-log` skips the change-log insert.
 - **A4 placement translation:** new_bid = affordable_cpc / M_campaign, where M is
   `V_BID_CPC_TRANSFER.m_effective` (the campaign's measured placement multiplier — the model's
   trustworthy part; β = 0 on brand defense). A naive CPC→bid mapping would RAISE bids on
@@ -210,3 +255,14 @@ terms — and it is N_f-condemned (62 orders ≥ N_f 20), so the book marks it C
 - The 360° SIGNAL PANEL remains the task's second half.
 - The negate valve for guard-excluded terms is exposed as columns (`ns_zero_ord_*`) but not yet
   wired into the coach pipeline's negate flow.
+- A probation is judged on the whole settled-90 window (A3), not on the floor-period clicks alone —
+  the floor-period record improves the window as it accrues; a floor-only read is a possible
+  refinement, not built.
+- The book logs its batch at BUILD time. A batch that is never uploaded must be marked
+  `FAILED_UPLOAD` (the README says so) — otherwise `V_PPC_CHANGE_LOG_APPLIED` readers (the guard,
+  LIFT, OOB, this SP's REPRICE appointment) treat moves that never happened as applied. The v27.103
+  build's batch `reprice_book_20260822` (54 rows, never uploaded) sat unmarked at v27.104 ship and
+  the automated run could not mark it (write blocked by policy) — Ori marks it:
+  `UPDATE OI.FACT_PPC_CHANGE_LOG SET upload_status='FAILED_UPLOAD' WHERE batch_id='reprice_book_20260822' AND upload_status IS NULL`.
+- 85 overdue appointments at ship are all PARKED / REVIVED_SETTLING rows whose reverdict
+  `settle_due` lies in the past — other objects' verdicts, assembled unchanged; not this ladder's.

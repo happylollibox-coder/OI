@@ -7,6 +7,7 @@
 -- read by BOTH #6 and #7. Statuses are the VIEW's — GREEN / AMBER / RED / INFO — with the
 -- threshold printed beside the measurement so a reader never has to guess what "bad" means.
 -- A quiet board is the goal state, not a malfunction.
+-- v27.104 (2026-08-22): c12 loser_kill_clause + c13 state_floor_resolution (KEYWORD_STATE.md).
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -186,8 +187,40 @@ c11 AS (  -- v27.102: one keyword, one price, on the day's EXPORTABLE plan
     GROUP BY 1, 2, 3
     HAVING COUNT(DISTINCT COALESCE(suggested_bid, suggested_budget)) > 1
   )
+),
+c12 AS (  -- v27.104: THE KILL CLAUSE — a LOSER is only ever a keyword that failed AT its floor
+  -- (ruling 4 + Ori's floor ruling, 2026-08-22). The SP asserts it by construction; this is the
+  -- belt: a LOSER whose probation has not elapsed, or whose bid is not at its own channel floor,
+  -- or which clears its family bar, is a phantom kill and must never reach the reprice book.
+  SELECT 'loser_kill_clause',
+    CAST(COUNTIF(state = 'LOSER'
+                 AND NOT (COALESCE(probation_elapsed, FALSE) AND COALESCE(at_floor, FALSE)
+                          AND COALESCE(settled_roas90, 0) < family_bar)) AS FLOAT64),
+    'LOSERs not (probation elapsed AND bid at its floor AND below bar) · red > 0',
+    IF(COUNTIF(state = 'LOSER'
+               AND NOT (COALESCE(probation_elapsed, FALSE) AND COALESCE(at_floor, FALSE)
+                        AND COALESCE(settled_roas90, 0) < family_bar)) > 0, 'RED', 'GREEN'),
+    CONCAT(CAST(COUNTIF(state = 'LOSER') AS STRING), ' LOSERs · ',
+           CAST(COUNTIF(state = 'FLOOR_PROBATION') AS STRING), ' on floor probation · ',
+           'KEYWORD_STATE.md "The floors" — a keyword is only ever killed at its floor, after its probation')
+  FROM ks
+),
+c13 AS (  -- v27.104: every judged row carries a resolved floor from the ONE definition
+  -- (FN_BID_FLOOR via V_BID_FLOOR). A NULL floor means a private constant crept back in, or the
+  -- DIM_KEYWORD -> ad group resolution broke; *_NO_ADGROUP sources are the fallback, counted here
+  -- as detail so a silent drift to the conservative $0.25 is visible.
+  SELECT 'state_floor_resolution',
+    CAST(COUNTIF(bid_floor IS NULL AND state IN ('AT_BAR', 'REPRICE', 'FLOOR_PROBATION', 'LOSER')) AS FLOAT64),
+    'priced states (AT_BAR/REPRICE/FLOOR_PROBATION/LOSER) with no floor · red > 0',
+    IF(COUNTIF(bid_floor IS NULL AND state IN ('AT_BAR', 'REPRICE', 'FLOOR_PROBATION', 'LOSER')) > 0, 'RED', 'GREEN'),
+    CONCAT(CAST(COUNTIF(bid_floor_source LIKE '%_NO_ADGROUP') AS STRING),
+           ' rows resolved on channel alone (ad group unresolved) · sources: ',
+           COALESCE((SELECT STRING_AGG(CONCAT(src, ' ', CAST(n AS STRING)), ', ' ORDER BY n DESC)
+                     FROM (SELECT bid_floor_source src, COUNT(*) n FROM ks GROUP BY 1)), 'none'))
+  FROM ks
 )
 SELECT * FROM c1 UNION ALL SELECT * FROM c2 UNION ALL SELECT * FROM c3
 UNION ALL SELECT * FROM c4 UNION ALL SELECT * FROM c5 UNION ALL SELECT * FROM c6
 UNION ALL SELECT * FROM c7 UNION ALL SELECT * FROM c8 UNION ALL SELECT * FROM c9
-UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11;
+UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11 UNION ALL SELECT * FROM c12
+UNION ALL SELECT * FROM c13;

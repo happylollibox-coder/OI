@@ -28,3 +28,4 @@ cube(`RunUnchanged`, {
   },
 });
 // cache-bust 2026-08-16b: + recordClass passthrough (V_RUN_UNCHANGED record_class)
+// cache-bust 2026-08-22 (v27.104): class passthrough gains FLOOR_PROBATION; LOSER relabelled (V_RUN_UNCHANGED)

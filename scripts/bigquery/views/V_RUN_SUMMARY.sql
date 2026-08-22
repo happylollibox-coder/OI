@@ -46,10 +46,12 @@ unchanged AS (
       WHEN 'TRIAL' THEN 'trial — gathering evidence'
       WHEN 'PARKED' THEN 'parked at minimum bid'
       WHEN 'DEAD' THEN 'tested losers (closed)'
-      -- v27.103 bar/SE ladder states (LOSER_BLEED kept for safety; superseded by the ladder)
+      -- v27.103 bar/SE ladder states (LOSER_BLEED kept for safety; superseded by the ladder);
+      -- v27.104: FLOOR_PROBATION added, LOSER now means "probation at the floor elapsed"
       WHEN 'AT_BAR' THEN 'at their family bar — holding within noise'
       WHEN 'REPRICE' THEN 'priced above their record — in the reprice book'
-      WHEN 'LOSER' THEN 'failed at their price — kill candidates (reprice book)'
+      WHEN 'FLOOR_PROBATION' THEN 'on probation at their floor — re-judged once clicks settle there'
+      WHEN 'LOSER' THEN 'failed at their floor after probation — kill candidates (reprice book)'
       WHEN 'LAUNCH_CONTAINED' THEN 'launch — contained, never judged on profit'
       WHEN 'LOSER_BLEED' THEN 'proven losers still spending'
       WHEN 'REVIVED_SETTLING' THEN 'revived — waiting for final sales data'

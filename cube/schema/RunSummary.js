@@ -19,3 +19,4 @@ cube(`RunSummary`, {
 // cache-bust 2026-08-16: new cube — Weekly Run summary strip
 // cache-bust 2026-08-22 (v27.103): bar/SE ladder — UNCHANGED strip now carries AT_BAR / REPRICE /
 // LOSER / LAUNCH_CONTAINED labels from V_RUN_SUMMARY (passthrough — no column changes needed)
+// cache-bust 2026-08-22b (v27.104): + FLOOR_PROBATION label; LOSER = probation at the floor elapsed

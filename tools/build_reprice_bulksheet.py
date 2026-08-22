@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """THE REPRICE BOOK — the manual bulksheet that executes the bar/SE keyword states.
 
+v27.104 (2026-08-22, Ori's floor ruling — "bid-up-to-floor if after a few days still loosing
+kill it" / "i think it is not 0.25"): the flat $0.25 FLOOR constant is GONE. Every row carries
+its OWN floor from the state table (FN_BID_FLOOR via V_BID_FLOOR: SP $0.20, SB collection
+$0.10, SB video/unknown $0.25) and its placement-translated affordable BID (affordable_bid /
+clean_affordable_bid, the SP's A4 translation). New dispositions: FLOOR_PROBATION rows move the
+bid TO THE FLOOR from either side (BID_DOWN / BID_UP) and are re-judged by the state machine once
+10 settled clicks exist at the floor; LOSER pause rows exist ONLY for keywords whose probation has
+elapsed (the SP asserts it; the book refuses any other pause). A key with a live GO instruction
+from an engine today is shown as ENGINE_INSTRUCTED and not executed (one keyword, one price).
+Batch ids are time-stamped so a re-derived book never collides with an earlier build's batch.
+
 WHY THIS EXISTS
     v27.103 gave every keyword a verdict against its FAMILY's bar (AT_BAR / REPRICE / LOSER —
     see architecture/KEYWORD_STATE.md). NO ENGINE acts on those states, by ruling: the one
@@ -66,12 +77,11 @@ PROJECT = "onyga-482313"
 # Declared constants, each derived from a house instrument (Standing Rule 0 exempt):
 #   MATERIAL_STEP   one daily ease step, the engine's smallest standing move (dark ease -5%/day;
 #                   the same 5% the state ladder uses for "materially above affordable").
-#   FLOOR           $0.25 — the account's operative park/floor price (V_KEYWORD_LIFT parks
-#                   at $0.25; the state ladder's platform_floor).
+#   (the floor)     NOT a constant here — each row's bid_floor comes from the state table,
+#                   which reads the ONE definition (FN_BID_FLOOR via V_BID_FLOOR). v27.104.
 #   RAISE_CEILING   $2.00 — the house's standing bid ceiling (GUARDIAN threshold redesign);
 #                   applies to bid RAISES only, a bid-down needs no ceiling.
 MATERIAL_STEP = 0.05
-FLOOR = 0.25
 RAISE_CEILING = 2.00
 
 SQL = """
@@ -79,7 +89,16 @@ WITH wm AS (
   SELECT MAX(date) AS d FROM `{p}.OI.FACT_AMAZON_ADS`
 ),
 ks AS (
-  SELECT * FROM `{p}.OI.V_KEYWORD_STATE` WHERE state IN ('AT_BAR','REPRICE','LOSER')
+  SELECT * FROM `{p}.OI.V_KEYWORD_STATE`
+  WHERE state IN ('AT_BAR','REPRICE','FLOOR_PROBATION','LOSER')
+),
+-- one keyword, one price: a key with a live GO instruction today belongs to its engine
+instructed AS (
+  SELECT campaign_id cid, COALESCE(keyword_id, '') kid,
+         STRING_AGG(DISTINCT CONCAT(engine, ' ', lever)) engines
+  FROM `{p}.OI.T_ENGINE_PREFLIGHT`
+  WHERE verdict = 'GO'
+  GROUP BY 1, 2
 ),
 camp AS (
   SELECT CAST(campaign_id AS STRING) cid,
@@ -145,6 +164,10 @@ SELECT
   ks.family_bar, ks.nf_orders, ks.se_eff, ks.affordable_cpc,
   ks.guard_deferred, ks.guard_flip, ks.clean_roas90, ks.clean_cpc90, ks.clean_affordable_cpc,
   ks.state_reason,
+  ks.bid_floor, ks.bid_floor_source, ks.affordable_bid, ks.clean_affordable_bid,
+  ks.guard_scope, ks.at_floor, ks.floor_since, ks.probation_clock_start,
+  ks.probation_clk_settled, ks.probation_elapsed, ks.probation_due_date, ks.probation_bid,
+  instr.engines AS engine_instruction,
   camp.campaign_type, camp.campaign_state, camp.live_portfolio_id,
   restore.portfolio_id AS echo_portfolio_id,
   pf.portfolio_name,
@@ -165,6 +188,7 @@ LEFT JOIN hold ON hold.cid = ks.campaign_id
 LEFT JOIN bc ON bc.keyword_text = ks.target_text AND NOT COALESCE(ks.is_auto, FALSE)
             AND NOT COALESCE(ks.is_pt, FALSE)
 LEFT JOIN live7 ON live7.cid = ks.campaign_id AND live7.kid = ks.keyword_id
+LEFT JOIN instructed instr ON instr.cid = ks.campaign_id AND instr.kid = ks.keyword_id
 CROSS JOIN wm
 ORDER BY ks.state, ks.family, ks.campaign_name, ks.target_text
 """
@@ -193,26 +217,35 @@ def classify(r):
     """One row -> (disposition, action, new_bid, check_first, story_bits).
 
     Dispositions: BID_DOWN / BID_UP / PAUSE (executable) · SEASON_BLOCKED / HOLDOUT_EXCLUDED /
-    NOT_ENABLED / BRAND_DEFENSE_EXCLUDED / NO_MOVE / NO_RAISE_BELOW_BAR (book-visible, not
-    executable).
+    ENGINE_INSTRUCTED / NOT_ENABLED / BRAND_DEFENSE_EXCLUDED / NO_MOVE / NO_RAISE_BELOW_BAR /
+    PROBATION_RUNNING / REFUSED_PAUSE (book-visible, not executable).
     """
     state = r['state']
     cur = num(r['current_bid'])
     guard = b(r['guard_deferred'])
+    floor = num(r['bid_floor'])
     afford = num(r['clean_affordable_cpc'] if guard else r['affordable_cpc'])
+    afford_bid = num(r['clean_affordable_bid'] if guard else r['affordable_bid'])
     cpc = num(r['clean_cpc90'] if guard else r['settled_cpc90'])
     roas = num(r['clean_roas90'] if guard else r['settled_roas90'])
     m_eff = num(r['m_effective'], 1.0) or 1.0
     bits = {
-        'afford': afford, 'cpc_settled': cpc, 'roas_used': roas, 'm_eff': m_eff,
-        'guard': guard,
+        'afford': afford, 'afford_bid': afford_bid, 'cpc_settled': cpc, 'roas_used': roas,
+        'm_eff': m_eff, 'guard': guard, 'floor': floor,
+        'floor_source': r.get('bid_floor_source') or '',
     }
+    if floor is None:
+        # the SP resolves a floor for every row; a NULL here is a broken join, not a row to price
+        return 'NO_MOVE', None, None, False, bits
 
     # exclusions first — a row the book must not execute
     if b(r['is_brand_defense']):
         return 'BRAND_DEFENSE_EXCLUDED', None, None, False, bits
     if r['holdout_eligible_from'] and r['today_la'] >= r['holdout_eligible_from']:
         return 'HOLDOUT_EXCLUDED', None, None, False, bits
+    if r.get('engine_instruction'):
+        # one keyword, one price: an engine already speaks for this key today
+        return 'ENGINE_INSTRUCTED', None, None, False, bits
     if (r.get('campaign_state') or 'ENABLED').upper() != 'ENABLED' or \
        (r.get('ad_keyword_status') or 'ENABLED').upper() not in ('ENABLED',):
         return 'NOT_ENABLED', None, None, False, bits
@@ -223,18 +256,34 @@ def classify(r):
     bits['nf_condemned'] = nf_condemned
 
     if state == 'LOSER':
-        # ruling 4: failed AT its price — the move is a pause, never a reprice
+        # the ONLY kill: probation at the floor elapsed. The SP asserts it; the book refuses
+        # anything else outright rather than trusting the label.
+        if not (b(r['probation_elapsed']) and b(r['at_floor'])):
+            return 'REFUSED_PAUSE', None, None, False, bits
         if r['block_cut_reason']:
             return 'SEASON_BLOCKED', 'PAUSE', None, True, bits
         return 'PAUSE', 'PAUSE', None, True, bits
 
-    # AT_BAR / REPRICE: price the verdict's own evidence (A3), translate through the
-    # campaign's placement multiplier (A4)
-    if afford is None or cur is None:
+    if cur is None:
         return 'NO_MOVE', None, None, False, bits
-    raw = afford / m_eff
-    new_bid = round(max(raw, FLOOR), 2)
-    bits['raw_bid'] = raw
+
+    if state == 'FLOOR_PROBATION':
+        # the move is TO THE FLOOR, from either side; at the floor, the probation simply runs
+        new_bid = round(floor, 2)
+        if abs(cur - new_bid) <= 0.005:
+            return 'PROBATION_RUNNING', None, None, False, bits
+        if new_bid < cur:
+            if r['block_cut_reason']:
+                return 'SEASON_BLOCKED', 'BID', new_bid, nf_condemned, bits
+            return 'BID_DOWN', 'BID', new_bid, nf_condemned, bits
+        return 'BID_UP', 'BID', new_bid, nf_condemned, bits
+
+    # AT_BAR / REPRICE: the verdict's own evidence (A3), already translated through the
+    # campaign's placement multiplier by the SP (A4), never below the row's own floor
+    if afford_bid is None:
+        return 'NO_MOVE', None, None, False, bits
+    new_bid = round(max(afford_bid, floor), 2)
+    bits['raw_bid'] = afford_bid
 
     if new_bid > cur:  # a raise
         if state == 'REPRICE':
@@ -261,36 +310,59 @@ def story(r, disp, new_bid, bits):
     fam = r['family'] or 'unmapped'
     bar = num(r['family_bar'], 1.0)
     roas = bits['roas_used']
+    floor = bits['floor']
     guard_note = (" (judged on its own terms — the mix-drift guard excluded never-seen "
                   "zero-order search terms)" if bits['guard'] else "")
-    ev = (f"its settled 90-day record returns {roas:.2f} gross-profit dollars per ad dollar "
+    ev = (f"its settled 90-day record returns {(roas or 0):.2f} gross-profit dollars per ad dollar "
           f"against the {fam} bar of {bar:.2f}{guard_note}")
-    if disp == 'PAUSE' or (disp == 'SEASON_BLOCKED' and r['state'] == 'LOSER'):
-        # ruling 4 has three kill paths — say which one fired
-        if cur is not None and cur < FLOOR:
-            path = (f"its bid (${cur:.2f}) already sits below the ${FLOOR:.2f} executable "
-                    f"floor — there is no price left to move to, and the record does not "
-                    f"clear the bar beyond its own noise")
-        elif bits['afford'] is not None and bits['afford'] <= FLOOR:
-            path = (f"no price above the ${FLOOR:.2f} floor is affordable at this record")
+    floor_txt = (f"${floor:.2f} floor" if floor is not None else "floor") + \
+                (f" ({bits['floor_source']})" if bits.get('floor_source') else "")
+    state = r['state']
+    if disp in ('PAUSE', 'REFUSED_PAUSE') or (disp == 'SEASON_BLOCKED' and state == 'LOSER'):
+        if disp == 'REFUSED_PAUSE':
+            move = (f"the book REFUSES to pause '{tgt}' — the state says LOSER but its probation "
+                    f"at the {floor_txt} has not elapsed or its bid is not at the floor; a kill "
+                    f"is only ever a keyword that failed AT its floor")
         else:
-            path = (f"its settled CPC already sits at/below its affordable price — it failed "
-                    f"AT its price")
-        move = f"pause '{tgt}' — {path}"
-    elif disp in ('BID_DOWN', 'BID_UP') or (disp == 'SEASON_BLOCKED'):
+            move = (f"pause '{tgt}' — it has been on probation at its {floor_txt} since "
+                    f"{r['floor_since']} with {int(num(r['probation_clk_settled'], 0))} settled "
+                    f"clicks at the floor, and the record still does not clear the bar; there is "
+                    f"no cheaper price left to try")
+    elif state == 'FLOOR_PROBATION' and disp in ('BID_DOWN', 'BID_UP', 'SEASON_BLOCKED', 'PROBATION_RUNNING'):
+        if disp == 'PROBATION_RUNNING':
+            move = (f"no move — the bid already sits at its {floor_txt}; probation runs since "
+                    f"{r['floor_since']} ({int(num(r['probation_clk_settled'], 0))} of 10 settled "
+                    f"clicks at the floor so far), re-judged on {r['probation_due_date']} at the "
+                    f"earliest")
+        else:
+            direction = 'down' if (new_bid or 0) < (cur or 0) else 'up'
+            why = (f"its record affords only a ${bits['afford_bid']:.2f} bid, under the floor"
+                   if bits['afford_bid'] is not None and bits['afford_bid'] < (floor or 0)
+                   else "no affordable price exists above the floor")
+            move = (f"move the bid {direction} from ${cur:.2f} to ${new_bid:.2f} — its {floor_txt}"
+                    f" — because {why}; the state machine re-judges it once 10 settled clicks "
+                    f"exist at the floor (earliest {r['probation_due_date']}), and only THEN can "
+                    f"it become a kill")
+    elif disp in ('BID_DOWN', 'BID_UP') or disp == 'SEASON_BLOCKED':
         direction = 'down' if (new_bid or 0) < (cur or 0) else 'up'
         move = (f"move the bid {direction} from ${cur:.2f} to ${new_bid:.2f} — the record "
-                f"affords ${bits['afford']:.2f} per click at the bar, which is a "
-                f"${new_bid:.2f} bid through this campaign's measured placement multiplier "
-                f"of {bits['m_eff']:.2f}")
+                f"affords ${(bits['afford'] or 0):.2f} per click at the bar, which is a "
+                f"${(bits['afford_bid'] or 0):.2f} bid through this campaign's measured placement "
+                f"multiplier of {bits['m_eff']:.2f}, never below its {floor_txt}")
+    elif disp == 'ENGINE_INSTRUCTED':
+        move = (f"no book row — {r['engine_instruction']} already carries a GO instruction on "
+                f"this keyword today (one keyword, one price); the book yields")
     else:
         move = "no executable move"
     trigger = {
         'AT_BAR': "the keyword sits at its family bar within noise",
         'REPRICE': "the keyword sits below its family bar beyond noise but an affordable "
-                   "price exists",
-        'LOSER': "the keyword sits below its family bar beyond noise at its price",
-    }[r['state']]
+                   "bid exists above its floor",
+        'FLOOR_PROBATION': "the keyword sits below its family bar beyond noise and no "
+                           "affordable bid exists above its floor (or it is already there)",
+        'LOSER': "the keyword sits below its family bar beyond noise after its probation at "
+                 "the floor",
+    }[state]
     s = f"{trigger} - {ev} => {move}."
     if bits.get('nf_condemned'):
         s += (f" CHECK FIRST: at {int(num(r['settled_ord90'],0))} orders this keyword is past "
@@ -391,7 +463,7 @@ def log_batch(rows, batch_id):
 
         structs.append(
             "STRUCT("
-            f"{q('reprice-' + batch_id.split('_')[-1] + '-' + cid + '-' + kid)} AS change_id, "
+            f"{q('reprice-' + '-'.join(batch_id.split('_')[2:]) + '-' + cid + '-' + kid)} AS change_id, "
             f"{q(batch_id)} AS batch_id, CURRENT_TIMESTAMP() AS applied_at, "
             f"{q(action)} AS action, {q(r['target_text'])} AS targeting, "
             f"{q(kid)} AS keyword_id, {q(r['match_type'])} AS match_type, "
@@ -428,11 +500,12 @@ def main():
 
     rows = bq(SQL.format(p=PROJECT))
     if not rows:
-        print("No AT_BAR / REPRICE / LOSER keywords — the book is empty today.")
+        print("No AT_BAR / REPRICE / FLOOR_PROBATION / LOSER keywords — the book is empty today.")
         return
 
     today_la = rows[0]['today_la']
-    batch_id = f"reprice_book_{today_la.replace('-', '')}"
+    # time-stamped: a re-derived book never collides with an earlier build's batch
+    batch_id = f"reprice_book_{today_la.replace('-', '')}_{datetime.now(timezone.utc):%H%M}"
 
     executable = []   # (row, disposition, new_bid)
     visible = []      # every candidate with disposition + story
@@ -485,6 +558,8 @@ def main():
                      'channel', 'is_auto', 'is_pt', 'portfolio_id', 'portfolio',
                      'family_bar', 'roas90_used', 'orders90', 'nf_orders', 'se_eff',
                      'settled_cpc_used', 'affordable_cpc', 'm_effective',
+                     'affordable_bid', 'bid_floor', 'bid_floor_source',
+                     'probation_since', 'probation_clicks_settled', 'probation_due',
                      'old_bid', 'new_bid', 'guard_deferred',
                      'live_7d_spend_CONTEXT_ONLY', 'live_7d_cpc_CONTEXT_ONLY',
                      'story'])
@@ -503,6 +578,11 @@ def main():
                 f"{(bits['cpc_settled'] or 0):.2f}",
                 f"{(bits['afford'] or 0):.2f}" if bits['afford'] is not None else '',
                 f"{bits['m_eff']:.3f}",
+                f"{bits['afford_bid']:.3f}" if bits.get('afford_bid') is not None else '',
+                f"{bits['floor']:.2f}" if bits.get('floor') is not None else '',
+                bits.get('floor_source') or '',
+                r.get('floor_since') or '', r.get('probation_clk_settled') or '',
+                r.get('probation_due_date') or '',
                 f"{num(r['current_bid'], 0):.2f}", f"{new_bid:.2f}" if new_bid else '',
                 'yes' if bits['guard'] else '',
                 f"{num(r['sp7'], 0):.2f}",
@@ -536,6 +616,13 @@ def main():
                 f"forecasts — a per-day dollar effect from a bid move would be invented "
                 f"precision). The rows being cut or paused spent ${down_spend7:.2f} in the "
                 f"last 7 days; the rows being raised spent ${up_spend7:.2f}.\n\n")
+        n_prob = sum(1 for r, d, _ in executable if r['state'] == 'FLOOR_PROBATION')
+        f.write(f"Floors are per channel and creative (SP $0.20 house; SB collection $0.10 and "
+                f"SB video $0.25, Amazon's minimums) — never a flat number. {n_prob} row(s) "
+                f"move a keyword TO its floor (probation): the state machine re-judges each "
+                f"once 10 settled clicks exist at the floor, and only a keyword that still "
+                f"fails AFTER that probation can ever become a pause. "
+                f"{'No keyword has completed a probation yet, so there are no pauses today.' if n_pause == 0 else ''}\n\n")
         f.write("Every row echoes its campaign's portfolio (a blank portfolio cell detaches a "
                 "campaign; uniform echo keeps the convention safe). Pauses are reversible with "
                 "one enabled row; the restore sheet next to this file carries every old value "
@@ -581,13 +668,13 @@ def main():
     print(f"\n{len(rows)} candidate rows -> {len(executable)} executable "
           f"({n_down} down · {n_up} up · {n_pause} pause) · "
           f"{len(blocked)} season-blocked · {len(rows) - len(executable) - len(blocked)} other\n")
-    hdr = f"{'target':<34} {'campaign':<38} {'st':<7} {'old':>5} {'new':>5}  disposition"
+    hdr = f"{'target':<34} {'campaign':<38} {'st':<9} {'old':>5} {'new':>5}  disposition"
     print(hdr)
     print('-' * len(hdr))
     for r, disp, nb, cf, bits, st in visible:
         mark = ' *CHECK FIRST*' if (cf and disp in ('BID_DOWN', 'BID_UP', 'PAUSE')) else ''
         print(f"{(r['target_text'] or '')[:33]:<34} {(r['campaign_name'] or '')[:37]:<38} "
-              f"{r['state'][:7]:<7} {num(r['current_bid'], 0):>5.2f} "
+              f"{r['state'][:9]:<9} {num(r['current_bid'], 0):>5.2f} "
               f"{(f'{nb:.2f}' if nb else ('PAUSE' if disp == 'PAUSE' else '-')):>5}  {disp}{mark}")
 
     # ---- change log -----------------------------------------------------------------

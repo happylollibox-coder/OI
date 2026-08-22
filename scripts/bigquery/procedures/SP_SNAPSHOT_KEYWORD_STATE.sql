@@ -1,75 +1,109 @@
 -- =============================================
 -- SP_SNAPSHOT_KEYWORD_STATE — the roadmap of each keyword (2026-08-16, Task 2.1).
 -- v27.103 (2026-08-22): THE BAR/SE LADDER — Ori's four rulings + the clean-then-judge guard.
--- Spec: architecture/KEYWORD_STATE.md. Simulation of record: TMP_SIM_LADDER_CLEAN
--- (scripts/bigquery/simulations/SIM_2026-08-22_ladder_clean_rerun.sql, the A1 clean rerun that
--- gated this implementation).
+-- v27.104 (2026-08-22): THE FLOOR RULING — one floor per channel and creative (FN_BID_FLOOR via
+--   V_BID_FLOOR), affordability tested in BID space, FLOOR_PROBATION, the kill only at the floor,
+--   and the guard extended to AT_BAR's standing price. Spec: architecture/KEYWORD_STATE.md.
+--   Simulation of record: TMP_SIM_LADDER_FLOOR
+--   (scripts/bigquery/simulations/SIM_2026-08-22_ladder_floor_probation.sql) — the gate this
+--   implementation had to reproduce row for row (855 tracked keys).
 --
--- WHAT CHANGED vs the flat ladder (all Ori-approved, 2026-08-22):
---   RULING 1  a keyword is judged against ITS FAMILY'S bar (T_FAMILY_BAR.keyword_bar), inside a
---             noise band se = settled_roas90/SQRT(settled_ord90). The band COLLAPSES at the
---             per-family order count N_f = CEIL((bar_f/(1-bar_f))^2), computed from T_FAMILY_BAR
---             AT RUN TIME, never hardcoded — above N_f orders the verdict is wherever the number
---             sits.
---   RULING 2  WINNER DEMOTION: a winner that does not clear its family bar beyond its own noise
---             relabels AT_BAR. Labels only — no bid is ever moved by a relabel; NO ENGINE reads
---             this table and the only executor is the manual reprice book.
---   RULING 4  AT-FLOOR KILL: LOSER = below bar beyond noise AND already failed AT its price —
---             its settled CPC is at/below its affordable price, or no affordable price exists
---             above the platform floor, or its bid already sits at/below the floor. The former
---             safety assertion ("zero below-floor LOSERs") is REPEALED; the SOP asserts the kill
---             clause instead.
---   A2        CLICK-SPACE SUFFICIENCY beside the order SE: at the family's measured GP-per-order
---             gpo_f, a keyword running AT the bar on its settled spend would have produced
---             ord_bar = spend x bar / gpo_f orders; if observed orders fall short beyond
---             SQRT(ord_bar), the click record rules the bar out and the order-SE band may NOT
---             hide the row (the 489-click/4-order bleeder never re-enters a band).
---   A2b       a would-be AT_BAR row whose bid sits below the platform floor is unexecutable and
---             resolves to LOSER (ruling 4).
---   A3        ONE WINDOW: verdict and price both read the settled-90 window (settled_cpc90 /
---             affordable_cpc, or their cleaned same-window equivalents). Live 7d CPC appears
---             only in the reprice book, labelled as context, never in a verdict.
---   A7        DEAD is re-derived from current data every run (clk90>=15 AND ord90=0), never
---             passed through from yesterday's state.
---   A8        bar_exempt families (INVEST book: launches) are never judged on profit, including
---             in their label: the would-be flat-era LOSER_BLEED reads LAUNCH_CONTAINED.
---   GUARD     CLEAN-THEN-JUDGE: before any deterioration verdict (REPRICE or LOSER), the share
---             of the judging window's clicks on search terms NEVER SEEN for that keyword in the
---             prior comparison window is measured ON MEASURABLE TERMS (>= 5 judging clicks; the
---             one-off long-tail churns ~100% in every window pair and is background in both).
---             The materiality bar is DERIVED AT RUN TIME as the account click-weighted
---             never-seen share on the same measurable-term basis. A keyword above the bar is
---             judged on its CLEANED reading (zero-order never-seen terms excluded — that
---             excluded population is the negate valve's, exposed here as ns_zero_ord_*); only
---             the cleaned reading may downgrade. Guard applies only where a prior record exists
---             (prior clicks >= prior_meas_clk): a keyword with no prior window has no comparison
---             and its record IS its record.
+-- WHAT CHANGED vs v27.103 (Ori, verbatim: "floor question bid-up-to-floor if after a few days
+-- still loosing kill it" and "i think it is not 0.25 (we already checked it)"):
+--   FLOOR     the flat $0.25 "platform_floor" is GONE. It was V_OOB_KEYWORD's bid_park — a PARKING
+--             price, not a floor — and it manufactured three phantom kills. A keyword's floor is
+--             its CHANNEL's and CREATIVE's: DIM_KEYWORD -> ad_group_id -> V_BID_FLOOR
+--             (FN_BID_FLOOR: SP $0.20 house; SB collection/spotlight $0.10; SB video / unknown
+--             creative $0.25). A keyword whose ad group cannot be resolved falls back to
+--             FN_BID_FLOOR(channel, NULL) and says so in bid_floor_source.
+--   A4 PRICE  affordable BID = affordable CPC / the campaign's measured placement multiplier
+--             (V_BID_CPC_TRANSFER.m_effective, MAX over target kinds — the book's own reading).
+--             The floor is a BID floor, so executability is tested in bid space.
+--   FLOOR_PROBATION (NEW)  below bar beyond noise AND (the bid sits at/below its floor OR no
+--             affordable bid exists at/above it): the move is TO THE FLOOR, from either side, and
+--             the keyword is re-judged after a few settled days AT the floor. "A few days" is
+--             DERIVED, never a round number: probation ELAPSES on evidence — >= vol_floor (10)
+--             settled clicks dated on/after the probation clock start — and its appointment is
+--             the earliest date that evidence can exist: clock start + settle_days_eff (the
+--             guard's own discipline, SP 3 / SB 14) + CEIL(10 / the keyword's own 90d click pace).
+--   MEMORY    floor_since is the date this state machine put the keyword on probation. It is
+--             carried forward from THIS TABLE's OWN PRIOR ROW (read into a temp table before the
+--             rebuild — the SP reading its own previous output is not an engine reading the
+--             table) and seeded on the first v27.104 run. The probation CLOCK starts at the
+--             later of floor_since and the keyword's last bid change (the bid has to have landed
+--             at the floor for clicks to count as evidence at the floor). Leaving probation for
+--             any non-kill state clears the memory.
+--   LOSER     ONLY a keyword whose probation has ELAPSED, whose bid sits at its floor, and which
+--             still reads below bar beyond noise. An above-bar keyword is NEVER a kill, whatever
+--             its bid (the v27.103 A2b "unexecutable AT_BAR -> LOSER" arm is REPEALED); the
+--             v27.103 "failed AT its price" CPC-materiality kill arm is REPEALED too — a keyword
+--             is only ever killed at the floor.
+--   GUARD     clean-then-judge now defers EVERY verdict that can move a bid DOWN: the three
+--             deterioration verdicts (REPRICE / FLOOR_PROBATION / LOSER — re-read cleaned; only
+--             the cleaned reading may downgrade the LABEL) and AT_BAR's standing price when it
+--             would cut the bid (guard_scope = AT_BAR_PRICE: the label stays AT_BAR — the raw
+--             record is what it is and the band is terminal — but guard_deferred is TRUE and
+--             the book prices the row on its cleaned record, never on a mix the guard already
+--             knows is drifted). Step-1 finding: `complements` BOX-SP/AUTO (Purple), 0.57x shown
+--             / 1.90x on its own terms, would otherwise have booked a cut to the floor.
+--   A9        next_check_date is NULL only on DEAD. AT_BAR gets the EARLIER of its forecast N_f
+--             collapse date (from its own 90d order pace) and the 7d re-read; REPRICE gets
+--             last-applied + 14d when that date is still ahead, else the 7d re-read;
+--             FLOOR_PROBATION gets its derived probation due date; LOSER the 7d re-read.
 --
--- STILL ASSEMBLY WHERE VERDICTS EXIST ELSEWHERE: reverdict rules (PARKED / PENDING_SETTLE /
--- REVIVED_SETTLING), ownership, pacing and appointments are other objects' verdicts, assembled
--- unchanged. The bar/SE ladder is THIS object's own judgment now — the one place the account
--- says what a keyword's record is worth against its family's bar.
+-- Everything below that is not named above is v27.103 unchanged: rulings 1/2 (family bar, SE band
+-- collapsing at per-family N_f computed at run time, winner demotion), A2 click-space
+-- sufficiency, A3 one window, A7 DEAD re-derived every run, A8 launch exemption, the guard's
+-- run-time-derived background bar, and the assembly of reverdict / ownership / pacing verdicts.
 --
--- READS FACT_AMAZON_ADS at term grain for the guard (two 90d windows) — no longer a
--- seconds-only snapshot assembly; measured ~40s standalone. Orchestrator Task 20.8, after the
+-- NO ENGINE reads FACT_KEYWORD_STATE. The only executor is the manual reprice book
+-- (tools/build_reprice_bulksheet.py) Ori uploads by hand. Orchestrator Task 20.8, after the
 -- preflight (20.7) and after SP_SNAPSHOT_FAMILY_BAR (T_FAMILY_BAR must be fresh).
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_SNAPSHOT_KEYWORD_STATE`()
 OPTIONS (
-  description = "Keyword state machine, bar/SE ladder (v27.103, 2026-08-22): one row per (campaign, keyword) — state (DEAD | PENDING_SETTLE | REVIVED_SETTLING | PARKED | PACED_WINNER | WINNER | AT_BAR | REPRICE | LOSER | LAUNCH_CONTAINED | TRIAL, first-match ladder), judged against the FAMILY bar (T_FAMILY_BAR) inside an SE noise band that collapses at per-family N_f orders, with the A2 click-space sufficiency check, the ruling-4 at-floor kill, the A8 launch exemption and the clean-then-judge mix-drift guard (deterioration verdicts re-read on the keyword's own terms before they stand). Owner ladder + appointments unchanged. NO ENGINE reads this table — the only executor is the manual reprice book (tools/build_reprice_bulksheet.py). Invariants read by V_ENGINE_HEALTH. Spec: architecture/KEYWORD_STATE.md."
+  description = "Keyword state machine, bar/SE ladder with per-channel floors (v27.104, 2026-08-22): one row per (campaign, keyword) — state (DEAD | PENDING_SETTLE | REVIVED_SETTLING | PARKED | PACED_WINNER | WINNER | AT_BAR | REPRICE | FLOOR_PROBATION | LOSER | LAUNCH_CONTAINED | TRIAL, first-match ladder), judged against the FAMILY bar (T_FAMILY_BAR) inside an SE noise band that collapses at per-family N_f orders, the A2 click-space sufficiency check, the A8 launch exemption, affordability in BID space (affordable CPC / V_BID_CPC_TRANSFER.m_effective) against the keyword's OWN floor (DIM_KEYWORD -> V_BID_FLOOR -> FN_BID_FLOOR: SP $0.20, SB collection $0.10, SB video/unknown $0.25), FLOOR_PROBATION (bid to the floor, re-judged when >= 10 settled clicks exist at the floor — floor_since carried forward from this table's own prior row), LOSER only after an elapsed probation at the floor, and the clean-then-judge guard over every verdict that can move a bid down (deterioration labels re-read cleaned; AT_BAR's standing price deferred to its cleaned record). NO ENGINE reads this table — the only executor is the manual reprice book (tools/build_reprice_bulksheet.py). Invariants read by V_ENGINE_HEALTH. Spec: architecture/KEYWORD_STATE.md."
 )
 BEGIN
+  DECLARE has_table BOOL DEFAULT FALSE;
+  DECLARE has_memory BOOL DEFAULT FALSE;
+
+  -- PROBATION MEMORY: read this table's own prior row BEFORE the rebuild. The column is absent
+  -- before the first v27.104 run (and the table itself is absent on a fresh project), so the
+  -- read is shaped by what exists — never a failure on first run.
+  SET has_table = (SELECT COUNT(*) > 0 FROM `onyga-482313.OI.INFORMATION_SCHEMA.TABLES`
+                   WHERE table_name = 'FACT_KEYWORD_STATE');
+  SET has_memory = (SELECT COUNT(*) > 0 FROM `onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS`
+                    WHERE table_name = 'FACT_KEYWORD_STATE' AND column_name = 'floor_since');
+  IF has_memory THEN
+    CREATE TEMP TABLE prior_snapshot AS
+    SELECT campaign_id, keyword_id, state AS prior_state, floor_since AS prior_floor_since
+    FROM `onyga-482313.OI.FACT_KEYWORD_STATE`;
+  ELSEIF has_table THEN
+    CREATE TEMP TABLE prior_snapshot AS
+    SELECT campaign_id, keyword_id, state AS prior_state, CAST(NULL AS DATE) AS prior_floor_since
+    FROM `onyga-482313.OI.FACT_KEYWORD_STATE`;
+  ELSE
+    CREATE TEMP TABLE prior_snapshot AS
+    SELECT CAST(NULL AS STRING) AS campaign_id, CAST(NULL AS STRING) AS keyword_id,
+           CAST(NULL AS STRING) AS prior_state, CAST(NULL AS DATE) AS prior_floor_since
+    WHERE FALSE;
+  END IF;
+
   CREATE OR REPLACE TABLE `onyga-482313.OI.FACT_KEYWORD_STATE` AS
   WITH
   -- Declared constants (Standing Rule 0 exempt), each with its derivation:
-  --   vol_floor 10        the guard's own settled-click floor (V_KEYWORD_GUARD min_settled_clk)
-  --   platform_floor 0.25 the account's operative park/floor price (V_KEYWORD_LIFT parks at $0.25)
-  --   reprice_material 5% one daily ease step — the engine's smallest standing move; within one
-  --                       day's move of its affordable price counts as AT price
+  --   vol_floor 10        the guard's own settled-click floor (V_KEYWORD_GUARD min_settled_clk);
+  --                       also the evidence a probation needs before it can elapse
+  --   reprice_material 5% one daily ease step — the engine's smallest standing move; the book's
+  --                       materiality step and the guard's "would this cut the bid" test
   --   term_meas_clk 5     a term is measurable in the judging window at >= 5 clicks
   --   prior_meas_clk 10   a prior record exists at >= 10 prior-window clicks
-  k AS (SELECT 10 AS vol_floor, 0.25 AS platform_floor, 0.05 AS reprice_material,
-               5 AS term_meas_clk, 10 AS prior_meas_clk),
+  --   bid_tol 0.005       half a cent: bulk uploads round to the cent, so a bid within half a
+  --                       cent of its floor IS at its floor
+  k AS (SELECT 10 AS vol_floor, 0.05 AS reprice_material,
+               5 AS term_meas_clk, 10 AS prior_meas_clk, 0.005 AS bid_tol),
+  today AS (SELECT CURRENT_DATE('America/Los_Angeles') AS d),
   wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
          FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
   g AS (
@@ -77,7 +111,8 @@ BEGIN
            keyword_text, match_type, channel, is_auto, is_pt, current_bid, parent_name,
            settled_clk90, settled_ord90, settled_roas90, settled_cpc90,
            settled_gp90, settled_sp90,
-           settle_ok, settle_due, last_click_date, season_win_prior, last_bid_change_date
+           settle_ok, settle_due, last_click_date, season_win_prior, last_bid_change_date,
+           CAST(settle_days_eff AS INT64) AS settle_days_eff
     FROM `onyga-482313.OI.FACT_KEYWORD_GUARD`
   ),
   -- family bar + exemption, campaign grain (T_FAMILY_BAR is the nightly snapshot — READ THE
@@ -92,6 +127,31 @@ BEGIN
   -- quantity that is noisy at low orders
   gpo AS (SELECT fb.family, SAFE_DIVIDE(SUM(g.settled_gp90), NULLIF(SUM(g.settled_ord90), 0)) AS gpo_f
           FROM g JOIN fb ON fb.campaign_id = g.cid GROUP BY 1),
+  -- THE FLOOR: keyword -> ad group (DIM_KEYWORD, current row first) -> V_BID_FLOOR (the one
+  -- definition, resolved per ad group from its creative_type)
+  kag AS (SELECT CAST(keyword_id AS STRING) kid, CAST(ad_group_id AS STRING) ad_group_id
+          FROM `onyga-482313.OI.DIM_KEYWORD`
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY is_current DESC, effective_from DESC) = 1),
+  bf AS (SELECT ad_group_id, bid_floor, bid_floor_source, creative_type
+         FROM `onyga-482313.OI.V_BID_FLOOR`),
+  -- A4: the campaign's measured placement multiplier (MAX over target kinds, as the book reads it)
+  m AS (SELECT CAST(campaign_id AS STRING) cid, MAX(m_effective) AS m_eff,
+               LOGICAL_OR(is_brand_defense) AS is_brand_defense
+        FROM `onyga-482313.OI.V_BID_CPC_TRANSFER` GROUP BY 1),
+  pr AS (SELECT campaign_id cid, keyword_id kid, prior_state, prior_floor_since FROM prior_snapshot),
+  -- PROBATION EVIDENCE: settled clicks since the probation clock started (the later of the
+  -- probation start and the last bid change), inside the guard's own settle discipline
+  cs AS (
+    SELECT pr.cid, pr.kid, SUM(f.Ads_clicks) AS clk_since_floor_settled
+    FROM pr
+    JOIN g ON g.cid = pr.cid AND g.kid = pr.kid
+    JOIN `onyga-482313.OI.FACT_AMAZON_ADS` f
+      ON CAST(f.campaign_id AS STRING) = pr.cid AND CAST(f.keyword_id AS STRING) = pr.kid
+    CROSS JOIN wm
+    WHERE pr.prior_floor_since IS NOT NULL
+      AND f.date >= GREATEST(pr.prior_floor_since, COALESCE(g.last_bid_change_date, pr.prior_floor_since))
+      AND f.date <= DATE_SUB(wm.d, INTERVAL COALESCE(g.settle_days_eff, IF(g.channel = 'SB', 14, 3)) DAY)
+    GROUP BY 1, 2),
   -- GUARD term grain: judging window = the guard view's own settled frame (SP [wm-92, wm-3],
   -- SB [wm-103, wm-14]); prior comparison window = the preceding 90d
   tg AS (
@@ -183,6 +243,7 @@ BEGIN
       g.settled_clk90, g.settled_ord90, g.settled_roas90, g.settled_cpc90,
       g.settled_gp90, g.settled_sp90,
       g.settle_ok, g.settle_due, g.last_click_date, g.season_win_prior, g.last_bid_change_date,
+      COALESCE(g.settle_days_eff, IF(COALESCE(g.channel, rv.channel) = 'SB', 14, 3)) AS settle_days_eff,
       rv.reverdict, rv.revive_bid, rv.revive_settling, rv.park_date, rv.rv_settle_due,
       rv.rv_roas90, rv.rv_clk90
     FROM g
@@ -197,10 +258,21 @@ BEGIN
       COALESCE(fb.bar_exempt, FALSE) AS bar_exempt,
       nf.nf_orders,
       gpo.gpo_f,
+      -- THE FLOOR (one definition; unresolved ad group -> the channel's conservative floor)
+      kag.ad_group_id, bf.creative_type,
+      COALESCE(bf.bid_floor, `onyga-482313.OI.FN_BID_FLOOR`(b.channel, NULL).bid_floor) AS bid_floor,
+      COALESCE(bf.bid_floor_source,
+               CONCAT(`onyga-482313.OI.FN_BID_FLOOR`(b.channel, NULL).bid_floor_source, '_NO_ADGROUP')) AS bid_floor_source,
+      m.m_eff AS m_effective,
+      COALESCE(m.is_brand_defense, FALSE) AS is_brand_defense,
       SAFE_DIVIDE(b.settled_gp90, NULLIF(b.settled_clk90, 0)) AS gp_per_click,
-      -- the price this record affords at the family bar (settled window — A3)
+      -- the price this record affords at the family bar (settled window — A3), in CPC space...
       SAFE_DIVIDE(SAFE_DIVIDE(b.settled_gp90, NULLIF(b.settled_clk90, 0)),
                   COALESCE(fb.keyword_bar, 1.0)) AS affordable_cpc,
+      -- ...and translated to BID space through the campaign's placement multiplier (A4)
+      SAFE_DIVIDE(SAFE_DIVIDE(SAFE_DIVIDE(b.settled_gp90, NULLIF(b.settled_clk90, 0)),
+                              COALESCE(fb.keyword_bar, 1.0)),
+                  COALESCE(m.m_eff, 1.0)) AS affordable_bid,
       -- SE band, collapsed above N_f (RULING 1)
       IF(COALESCE(b.settled_ord90, 0) >= COALESCE(nf.nf_orders, 999999), 0.0,
          IF(COALESCE(b.settled_ord90, 0) > 0,
@@ -216,11 +288,17 @@ BEGIN
       SAFE_DIVIDE(w.c_sp, NULLIF(w.c_clk, 0)) AS clean_cpc90,
       SAFE_DIVIDE(SAFE_DIVIDE(w.c_gp, NULLIF(w.c_clk, 0)),
                   COALESCE(fb.keyword_bar, 1.0)) AS clean_affordable_cpc,
+      SAFE_DIVIDE(SAFE_DIVIDE(SAFE_DIVIDE(w.c_gp, NULLIF(w.c_clk, 0)),
+                              COALESCE(fb.keyword_bar, 1.0)),
+                  COALESCE(m.m_eff, 1.0)) AS clean_affordable_bid,
       IF(COALESCE(w.c_ord, 0) >= COALESCE(nf.nf_orders, 999999), 0.0,
          IF(COALESCE(w.c_ord, 0) > 0,
             SAFE_DIVIDE(w.c_gp, NULLIF(w.c_sp, 0)) / SQRT(w.c_ord), NULL)) AS clean_se_eff,
       SAFE_DIVIDE(w.c_sp * COALESCE(fb.keyword_bar, 1.0), gpo.gpo_f) AS clean_ord_bar,
-      w.ns_zero_ord_terms, w.ns_zero_ord_clicks
+      w.ns_zero_ord_terms, w.ns_zero_ord_clicks,
+      -- probation memory (this table's own prior row) and the evidence gathered since
+      pr.prior_state, pr.prior_floor_since,
+      cs.clk_since_floor_settled
     FROM base b
     LEFT JOIN po ON po.cid = b.campaign_id
     LEFT JOIN pf ON pf.cid = b.campaign_id AND pf.kid = b.keyword_id
@@ -230,15 +308,27 @@ BEGIN
     LEFT JOIN gpo ON gpo.family = fb.family
     LEFT JOIN kwg w ON w.cid = b.campaign_id AND w.kid = b.keyword_id
     LEFT JOIN pw ON pw.cid = b.campaign_id AND pw.kid = b.keyword_id
+    LEFT JOIN kag ON kag.kid = b.keyword_id
+    LEFT JOIN bf ON bf.ad_group_id = kag.ad_group_id
+    LEFT JOIN m ON m.cid = b.campaign_id
+    LEFT JOIN pr ON pr.cid = b.campaign_id AND pr.kid = b.keyword_id
+    LEFT JOIN cs ON cs.cid = b.campaign_id AND cs.kid = b.keyword_id
     CROSS JOIN bg
   ),
   verd AS (
-    SELECT c.*, k.platform_floor, k.reprice_material, k.vol_floor, k.prior_meas_clk,
+    SELECT c.*, k.reprice_material, k.vol_floor, k.prior_meas_clk, k.bid_tol,
       (COALESCE(c.settled_roas90, 0) < c.family_bar AND c.ord_bar_expected IS NOT NULL
        AND (c.ord_bar_expected - COALESCE(c.settled_ord90, 0)) > SQRT(c.ord_bar_expected)) AS click_collapse,
       (COALESCE(c.clean_roas90, 0) < c.family_bar AND c.clean_ord_bar IS NOT NULL
        AND (c.clean_ord_bar - COALESCE(c.clean_ord90, 0)) > SQRT(c.clean_ord_bar)) AS clean_click_collapse,
-      (COALESCE(c.guard_prior_clk, 0) >= k.prior_meas_clk) AS guard_applicable
+      (COALESCE(c.guard_prior_clk, 0) >= k.prior_meas_clk) AS guard_applicable,
+      -- the bid sits at/below its own floor (half a cent of tolerance: bulk uploads round)
+      (COALESCE(c.current_bid, 999) <= c.bid_floor + k.bid_tol) AS at_floor,
+      -- probation elapsed = >= vol_floor settled clicks since the probation clock started
+      (c.prior_floor_since IS NOT NULL AND COALESCE(c.clk_since_floor_settled, 0) >= k.vol_floor) AS probation_elapsed,
+      -- would AT_BAR's standing price move the bid DOWN by more than the book's materiality step?
+      (GREATEST(COALESCE(c.affordable_bid, 0), c.bid_floor)
+         < COALESCE(c.current_bid, 0) - GREATEST(k.reprice_material * COALESCE(c.current_bid, 0), 0.01)) AS at_bar_would_cut
     FROM calc c CROSS JOIN k
   ),
   st AS (
@@ -263,51 +353,87 @@ BEGIN
         WHEN COALESCE(v.settled_ord90, 0) = 0 THEN 'TRIAL'
         WHEN COALESCE(v.settled_roas90, 0) - v.family_bar > COALESCE(v.se_eff, 0)
           THEN IF(v.paced_today, 'PACED_WINNER', 'WINNER')
-        -- the noise band (A2: click sufficiency may forbid hiding; A2b: an unexecutable price
-        -- resolves to LOSER per ruling 4)
+        -- the noise band (A2: click sufficiency may forbid hiding). AT_BAR whatever the bid —
+        -- an at/above-bar keyword is NEVER a kill.
         WHEN ABS(COALESCE(v.settled_roas90, 0) - v.family_bar) <= COALESCE(v.se_eff, 0)
-             AND NOT v.click_collapse
-          THEN IF(COALESCE(v.current_bid, 999) < v.platform_floor, 'LOSER', 'AT_BAR')
-        -- below bar beyond noise, but an affordable price EXISTS above the floor and it is not
-        -- there yet: the move is a REPRICE, not a kill
-        WHEN COALESCE(v.affordable_cpc, 0) > v.platform_floor
-             AND COALESCE(v.settled_cpc90, 0) > COALESCE(v.affordable_cpc, 0) * (1 + v.reprice_material)
-             AND COALESCE(v.current_bid, 999) > v.platform_floor THEN 'REPRICE'
-        -- RULING 4: failed AT its price
-        ELSE 'LOSER'
+             AND NOT v.click_collapse THEN 'AT_BAR'
+        -- below bar beyond noise, from here down. The ONLY kill: probation elapsed AT the floor.
+        WHEN v.probation_elapsed AND v.at_floor THEN 'LOSER'
+        -- at/below the floor, or no affordable bid at/above it: to the floor, then re-judge
+        WHEN v.at_floor OR COALESCE(v.affordable_bid, 0) < v.bid_floor THEN 'FLOOR_PROBATION'
+        -- an affordable bid exists at/above the floor and the bid is above the floor: move to it
+        ELSE 'REPRICE'
       END AS raw_state,
-      -- THE CLEAN LADDER (same shape, cleaned numbers) — only consulted when the guard defers
+      -- THE CLEAN LADDER (same shape, cleaned numbers) — consulted when the guard defers
       CASE
         WHEN COALESCE(v.clean_clk90, 0) < v.vol_floor THEN 'TRIAL'
         WHEN COALESCE(v.clean_ord90, 0) = 0 THEN IF(COALESCE(v.clean_clk90, 0) >= 15, 'DEAD', 'TRIAL')
         WHEN COALESCE(v.clean_roas90, 0) - v.family_bar > COALESCE(v.clean_se_eff, 0) THEN 'WINNER'
         WHEN ABS(COALESCE(v.clean_roas90, 0) - v.family_bar) <= COALESCE(v.clean_se_eff, 0)
-             AND NOT v.clean_click_collapse
-          THEN IF(COALESCE(v.current_bid, 999) < v.platform_floor, 'LOSER', 'AT_BAR')
-        WHEN COALESCE(v.clean_affordable_cpc, 0) > v.platform_floor
-             AND COALESCE(v.clean_cpc90, 0) > COALESCE(v.clean_affordable_cpc, 0) * (1 + v.reprice_material)
-             AND COALESCE(v.current_bid, 999) > v.platform_floor THEN 'REPRICE'
-        ELSE 'LOSER'
-      END AS clean_state
+             AND NOT v.clean_click_collapse THEN 'AT_BAR'
+        WHEN v.probation_elapsed AND v.at_floor THEN 'LOSER'
+        WHEN v.at_floor OR COALESCE(v.clean_affordable_bid, 0) < v.bid_floor THEN 'FLOOR_PROBATION'
+        ELSE 'REPRICE'
+      END AS clean_state,
+      (v.guard_applicable AND COALESCE(v.guard_ns_share, 0) > v.guard_bar_material) AS guard_fires
     FROM verd v
   ),
   fin AS (
     SELECT s.*,
-      -- THE GUARD: a deterioration verdict on a drifted mix is deferred and re-read cleaned
-      (s.guard_applicable AND COALESCE(s.guard_ns_share, 0) > s.guard_bar_material
-       AND s.raw_state IN ('REPRICE', 'LOSER')) AS guard_deferred_c,
-      IF(s.guard_applicable AND COALESCE(s.guard_ns_share, 0) > s.guard_bar_material
-         AND s.raw_state IN ('REPRICE', 'LOSER'), s.clean_state, s.raw_state) AS state_c
+      -- THE GUARD covers every verdict that can move a bid DOWN:
+      --   DETERIORATION  REPRICE / FLOOR_PROBATION / LOSER on a drifted mix — re-read cleaned;
+      --                  only the cleaned reading may downgrade the label
+      --   AT_BAR_PRICE   AT_BAR whose standing price would cut the bid — label stays, the
+      --                  price the book may act on is the cleaned one
+      CASE WHEN s.guard_fires AND s.raw_state IN ('REPRICE', 'FLOOR_PROBATION', 'LOSER') THEN 'DETERIORATION'
+           WHEN s.guard_fires AND s.raw_state = 'AT_BAR' AND s.at_bar_would_cut THEN 'AT_BAR_PRICE'
+           ELSE NULL END AS guard_scope,
+      IF(s.guard_fires AND s.raw_state IN ('REPRICE', 'FLOOR_PROBATION', 'LOSER'),
+         s.clean_state, s.raw_state) AS state_c
     FROM st s
+  ),
+  fin2 AS (
+    SELECT f.*, today.d AS today_d,
+      (f.guard_scope IS NOT NULL) AS guard_deferred_c,
+      -- PROBATION MEMORY, written: kept while on probation or condemned by it; cleared otherwise
+      CASE WHEN f.state_c IN ('FLOOR_PROBATION', 'LOSER') THEN COALESCE(f.prior_floor_since, today.d)
+           ELSE NULL END AS floor_since_c,
+      -- the keyword's own 90d click pace (clicks/day) — the rate at which evidence can arrive
+      SAFE_DIVIDE(f.settled_clk90, 90.0) AS click_pace,
+      -- N_f collapse forecast from the keyword's own order pace (AT_BAR appointment, A9)
+      IF(f.nf_orders IS NOT NULL AND COALESCE(f.settled_ord90, 0) > 0
+         AND f.nf_orders > COALESCE(f.settled_ord90, 0),
+         DATE_ADD(today.d, INTERVAL CAST(CEIL((f.nf_orders - f.settled_ord90) / (f.settled_ord90 / 90.0)) AS INT64) DAY),
+         NULL) AS nf_collapse_forecast_date
+    FROM fin f CROSS JOIN today
+  ),
+  fin3 AS (
+    SELECT f.*,
+      -- the probation clock: the later of the probation start and the last bid change
+      IF(f.floor_since_c IS NOT NULL,
+         GREATEST(f.floor_since_c, COALESCE(f.last_bid_change_date, f.floor_since_c)), NULL) AS probation_clock_start,
+      -- "a few days", derived: clock start + settle discipline + the days this keyword's own
+      -- pace needs for vol_floor clicks; never earlier than tomorrow (a past appointment is
+      -- no appointment); no pace measured -> settle + the 7d re-read cadence
+      IF(f.state_c = 'FLOOR_PROBATION',
+         GREATEST(
+           DATE_ADD(
+             DATE_ADD(GREATEST(f.floor_since_c, COALESCE(f.last_bid_change_date, f.floor_since_c)),
+                      INTERVAL f.settle_days_eff DAY),
+             INTERVAL COALESCE(CAST(CEIL(SAFE_DIVIDE(f.vol_floor, NULLIF(f.click_pace, 0))) AS INT64), 7) DAY),
+           DATE_ADD(f.today_d, INTERVAL 1 DAY)),
+         NULL) AS probation_due_date
+    FROM fin2 f
   )
   SELECT
-    CURRENT_DATE('America/Los_Angeles') AS snapshot_date,
+    s.today_d AS snapshot_date,
     s.campaign_id, s.keyword_id, s.target_text, s.match_type, s.channel, s.is_auto, s.is_pt,
     s.campaign_name, s.family, s.current_bid,
     s.state_c AS state,
     CASE WHEN s.reverdict = 'REVIVE' AND COALESCE(s.campaign_owner, 'LIFT') = 'LIFT'
          THEN 'REVERDICT' ELSE COALESCE(s.campaign_owner, 'LIFT') END AS owner_engine,
     CASE WHEN s.state_c IN ('PARKED', 'PENDING_SETTLE') THEN s.park_date
+         WHEN s.state_c IN ('FLOOR_PROBATION', 'LOSER') THEN s.floor_since_c
          ELSE COALESCE(s.last_bid_change_date, s.last_applied) END AS state_since,
     s.settled_clk90, s.settled_ord90, s.settled_roas90, s.settled_cpc90,
     s.settled_gp90, s.settled_sp90,
@@ -315,29 +441,36 @@ BEGIN
     -- NEXT APPOINTMENT (invariant 2: NULL only on DEAD — A9)
     CASE s.state_c
       WHEN 'DEAD' THEN CAST(NULL AS DATE)
-      WHEN 'PENDING_SETTLE' THEN COALESCE(s.rv_settle_due, DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY))
-      WHEN 'REVIVED_SETTLING' THEN COALESCE(s.rv_settle_due, DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY))
+      WHEN 'PENDING_SETTLE' THEN COALESCE(s.rv_settle_due, DATE_ADD(s.today_d, INTERVAL 7 DAY))
+      WHEN 'REVIVED_SETTLING' THEN COALESCE(s.rv_settle_due, DATE_ADD(s.today_d, INTERVAL 7 DAY))
       WHEN 'PARKED' THEN CASE s.reverdict
-          WHEN 'REVIVE' THEN CURRENT_DATE('America/Los_Angeles')
-          WHEN 'SIBLING_REVIVE' THEN CURRENT_DATE('America/Los_Angeles')
-          WHEN 'CONFIRM_PARK' THEN DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
-          WHEN 'REDUNDANT' THEN DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
-          ELSE COALESCE(s.rv_settle_due, DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)) END
-      WHEN 'PACED_WINNER' THEN DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)
-      -- A9: AT_BAR gets a real appointment — the 7d re-read cadence (its N_f collapse date
-      -- cannot be forecast from a rate; the re-read reads it when it lands)
-      WHEN 'AT_BAR' THEN DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY)
+          WHEN 'REVIVE' THEN s.today_d
+          WHEN 'SIBLING_REVIVE' THEN s.today_d
+          WHEN 'CONFIRM_PARK' THEN DATE_ADD(s.today_d, INTERVAL 14 DAY)
+          WHEN 'REDUNDANT' THEN DATE_ADD(s.today_d, INTERVAL 14 DAY)
+          ELSE COALESCE(s.rv_settle_due, DATE_ADD(s.today_d, INTERVAL 14 DAY)) END
+      WHEN 'PACED_WINNER' THEN DATE_ADD(s.today_d, INTERVAL 1 DAY)
+      -- A9: AT_BAR — the earlier of its forecast N_f collapse and the 7d re-read, never before
+      -- tomorrow
+      WHEN 'AT_BAR' THEN GREATEST(
+          LEAST(COALESCE(s.nf_collapse_forecast_date, DATE_ADD(s.today_d, INTERVAL 7 DAY)),
+                DATE_ADD(s.today_d, INTERVAL 7 DAY)),
+          DATE_ADD(s.today_d, INTERVAL 1 DAY))
       -- A9: REPRICE is re-judged after the price move lands (T+14 = the scorecard's settled
-      -- read); until a move is applied, the 7d re-read stands
-      WHEN 'REPRICE' THEN COALESCE(
-          IF(s.last_applied IS NOT NULL, DATE_ADD(s.last_applied, INTERVAL 14 DAY), NULL),
-          DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY))
-      WHEN 'LOSER' THEN DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY)
-      WHEN 'LAUNCH_CONTAINED' THEN DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY)
+      -- read) when that date is still ahead; otherwise the 7d re-read stands
+      WHEN 'REPRICE' THEN IF(s.last_applied IS NOT NULL
+                             AND DATE_ADD(s.last_applied, INTERVAL 14 DAY) > s.today_d,
+                             DATE_ADD(s.last_applied, INTERVAL 14 DAY),
+                             DATE_ADD(s.today_d, INTERVAL 7 DAY))
+      -- A9: FLOOR_PROBATION — its derived due date
+      WHEN 'FLOOR_PROBATION' THEN COALESCE(s.probation_due_date, DATE_ADD(s.today_d, INTERVAL 7 DAY))
+      WHEN 'LOSER' THEN DATE_ADD(s.today_d, INTERVAL 7 DAY)
+      WHEN 'LAUNCH_CONTAINED' THEN DATE_ADD(s.today_d, INTERVAL 7 DAY)
       ELSE COALESCE(
         IF(NOT COALESCE(s.settle_ok, TRUE), s.settle_due, NULL),
-        IF(s.last_applied IS NOT NULL, DATE_ADD(s.last_applied, INTERVAL 14 DAY), NULL),
-        DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY)) END AS next_check_date,
+        IF(s.last_applied IS NOT NULL AND DATE_ADD(s.last_applied, INTERVAL 14 DAY) > s.today_d,
+           DATE_ADD(s.last_applied, INTERVAL 14 DAY), NULL),
+        DATE_ADD(s.today_d, INTERVAL 7 DAY)) END AS next_check_date,
     CASE s.state_c
       WHEN 'DEAD' THEN 'tested loser — thesis falsified; only family sibling evidence reopens it'
       WHEN 'PENDING_SETTLE' THEN 'park re-judged when its clicks settle'
@@ -348,11 +481,16 @@ BEGIN
           ELSE 'parked, record too thin to judge — re-read at settle' END
       WHEN 'PACED_WINNER' THEN 'winner being paced today (capped budget) — pace re-fires daily'
       WHEN 'WINNER' THEN 'clears its family bar beyond noise — holding; the budget raise is the lever'
-      WHEN 'AT_BAR' THEN 'at its family bar within noise — 7d re-read; the band collapses at N_f orders'
-      WHEN 'REPRICE' THEN 'affordable price exists below its CPC — the reprice book carries the move'
-      WHEN 'LOSER' THEN 'failed at its price — kill candidate in the reprice book (CHECK FIRST)'
+      WHEN 'AT_BAR' THEN IF(s.nf_collapse_forecast_date IS NOT NULL
+                            AND s.nf_collapse_forecast_date <= DATE_ADD(s.today_d, INTERVAL 7 DAY),
+                            'at its family bar within noise — its band is forecast to collapse at N_f orders by this date',
+                            'at its family bar within noise — 7d re-read; the band collapses at N_f orders')
+      WHEN 'REPRICE' THEN 'an affordable bid exists above its floor — the reprice book carries the move; re-judged after it settles'
+      WHEN 'FLOOR_PROBATION' THEN 'on probation at its floor — re-judged once 10 settled clicks exist at the floor (this is the earliest that evidence can exist)'
+      WHEN 'LOSER' THEN 'probation at the floor elapsed, still below bar — kill candidate in the reprice book (CHECK FIRST)'
       WHEN 'LAUNCH_CONTAINED' THEN 'launch family — never judged on profit; contained by the launch model'
       ELSE 'gathering evidence at seat pace' END AS next_check_what,
+    -- STATE REASON: one plain sentence per state, on the numbers the verdict actually used
     CASE s.state_c
       WHEN 'DEAD' THEN CONCAT(CAST(s.settled_clk90 AS STRING), ' settled clicks, 0 orders')
       WHEN 'WINNER' THEN CONCAT(FORMAT('%.2f', COALESCE(s.settled_roas90, 0)), 'x vs bar ',
@@ -362,26 +500,42 @@ BEGIN
       WHEN 'AT_BAR' THEN CONCAT(FORMAT('%.2f', COALESCE(s.settled_roas90, 0)), 'x vs bar ',
           FORMAT('%.2f', s.family_bar), ' within its noise band (se ',
           FORMAT('%.2f', COALESCE(s.se_eff, 0)), ') at ', CAST(COALESCE(s.settled_ord90, 0) AS STRING),
-          ' orders; band collapses at ', CAST(COALESCE(s.nf_orders, 0) AS STRING))
-      WHEN 'REPRICE' THEN CONCAT(FORMAT('%.2f', COALESCE(s.settled_roas90, 0)), 'x vs bar ',
-          FORMAT('%.2f', s.family_bar), ' beyond noise; settled CPC $',
-          FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_cpc90, s.settled_cpc90), 0)),
-          ' vs affordable $',
-          FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_affordable_cpc, s.affordable_cpc), 0)))
-      WHEN 'LOSER' THEN CONCAT(FORMAT('%.2f', COALESCE(s.settled_roas90, 0)), 'x vs bar ',
-          FORMAT('%.2f', s.family_bar),
-          -- ruling 4 has three kill paths; name the one that actually fired
-          CASE
-            WHEN COALESCE(s.current_bid, 999) < s.platform_floor THEN
-              CONCAT(' — bid $', FORMAT('%.2f', COALESCE(s.current_bid, 0)),
-                     ' already sits below the $', FORMAT('%.2f', s.platform_floor),
-                     ' floor: no executable price left, and the record does not clear the bar beyond its noise')
-            WHEN COALESCE(IF(s.guard_deferred_c, s.clean_affordable_cpc, s.affordable_cpc), 0)
-                 <= s.platform_floor THEN
-              CONCAT(' beyond noise — no price above the $', FORMAT('%.2f', s.platform_floor),
-                     ' floor is affordable at this record')
-            ELSE ' beyond noise, and already at/below its affordable price — failed AT its price'
-          END)
+          ' orders; band collapses at ', CAST(COALESCE(s.nf_orders, 0) AS STRING),
+          '; standing price $', FORMAT('%.2f', GREATEST(COALESCE(s.affordable_bid, 0), s.bid_floor)),
+          ' bid vs $', FORMAT('%.2f', COALESCE(s.current_bid, 0)), ' now',
+          IF(s.guard_scope = 'AT_BAR_PRICE',
+             CONCAT(' — the mix-drift guard holds that cut: ', FORMAT('%.0f', COALESCE(s.guard_ns_share, 0) * 100),
+                    '% of judged clicks are on never-seen terms, so the book prices the cleaned record ($',
+                    FORMAT('%.2f', COALESCE(s.clean_affordable_bid, 0)), ' bid, ',
+                    FORMAT('%.2f', COALESCE(s.clean_roas90, 0)), 'x on its own terms)'),
+             ''))
+      WHEN 'REPRICE' THEN CONCAT(FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_roas90, s.settled_roas90), 0)),
+          'x vs bar ', FORMAT('%.2f', s.family_bar), ' beyond noise; the record affords a $',
+          FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_affordable_bid, s.affordable_bid), 0)),
+          ' bid ($', FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_affordable_cpc, s.affordable_cpc), 0)),
+          ' CPC through a ', FORMAT('%.2f', COALESCE(s.m_effective, 1.0)), ' placement multiplier) against $',
+          FORMAT('%.2f', COALESCE(s.current_bid, 0)), ' now, above its $', FORMAT('%.2f', s.bid_floor),
+          ' floor', IF(s.guard_deferred_c, ' — judged on its own terms (mix-drift guard)', ''))
+      WHEN 'FLOOR_PROBATION' THEN CONCAT(FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_roas90, s.settled_roas90), 0)),
+          'x vs bar ', FORMAT('%.2f', s.family_bar), ' beyond noise — ',
+          CASE WHEN s.at_floor THEN CONCAT('its bid $', FORMAT('%.2f', COALESCE(s.current_bid, 0)),
+                                            ' already sits at its $', FORMAT('%.2f', s.bid_floor), ' floor')
+               ELSE CONCAT('the record affords only a $',
+                           FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_affordable_bid, s.affordable_bid), 0)),
+                           ' bid, under its $', FORMAT('%.2f', s.bid_floor), ' floor; the move is $',
+                           FORMAT('%.2f', COALESCE(s.current_bid, 0)), ' -> $', FORMAT('%.2f', s.bid_floor)) END,
+          '; on probation since ', CAST(s.floor_since_c AS STRING), ' with ',
+          CAST(COALESCE(s.clk_since_floor_settled, 0) AS STRING), ' of ', CAST(s.vol_floor AS STRING),
+          ' settled clicks at the floor — re-judged on ', CAST(COALESCE(s.probation_due_date, DATE_ADD(s.today_d, INTERVAL 7 DAY)) AS STRING),
+          ' at the earliest (', CAST(s.settle_days_eff AS STRING), 'd settle + its own click pace)',
+          IF(s.guard_deferred_c, ' — judged on its own terms (mix-drift guard)', ''))
+      WHEN 'LOSER' THEN CONCAT(FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_roas90, s.settled_roas90), 0)),
+          'x vs bar ', FORMAT('%.2f', s.family_bar), ' beyond noise AFTER its probation at the $',
+          FORMAT('%.2f', s.bid_floor), ' floor: ', CAST(COALESCE(s.clk_since_floor_settled, 0) AS STRING),
+          ' settled clicks at the floor since ', CAST(s.probation_clock_start AS STRING),
+          ' (probation began ', CAST(s.floor_since_c AS STRING),
+          ') and the record still does not clear the bar — no cheaper price exists, the move is a pause (CHECK FIRST)',
+          IF(s.guard_deferred_c, ' — judged on its own terms (mix-drift guard)', ''))
       WHEN 'LAUNCH_CONTAINED' THEN CONCAT('launch family (bar-exempt): ',
           FORMAT('%.2f', COALESCE(s.settled_roas90, 0)), 'x over ',
           CAST(COALESCE(s.settled_clk90, 0) AS STRING), ' clicks — contained, not condemned')
@@ -401,8 +555,24 @@ BEGIN
     -- clean-then-judge guard, published
     s.guard_prior_clk, s.guard_ns_share, s.guard_bar_material,
     s.guard_deferred_c AS guard_deferred,
-    (s.guard_deferred_c AND s.clean_state NOT IN ('REPRICE', 'LOSER')) AS guard_flip,
+    (s.guard_scope = 'DETERIORATION' AND s.clean_state NOT IN ('REPRICE', 'FLOOR_PROBATION', 'LOSER')) AS guard_flip,
     s.clean_clk90, s.clean_ord90, s.clean_roas90, s.clean_cpc90, s.clean_affordable_cpc,
-    s.ns_zero_ord_terms, s.ns_zero_ord_clicks
-  FROM fin s;
+    s.ns_zero_ord_terms, s.ns_zero_ord_clicks,
+    -- v27.104: the floor, the bid-space price, the guard's scope, the probation record
+    s.ad_group_id, s.creative_type, s.bid_floor, s.bid_floor_source,
+    s.m_effective, s.is_brand_defense,
+    s.affordable_bid, s.clean_affordable_bid,
+    s.at_floor,
+    s.guard_scope,
+    s.raw_state, s.clean_state,
+    s.settle_days_eff,
+    s.floor_since_c AS floor_since,
+    s.probation_clock_start,
+    IF(s.floor_since_c IS NOT NULL, COALESCE(s.clk_since_floor_settled, 0), NULL) AS probation_clk_settled,
+    s.probation_elapsed,
+    s.probation_due_date,
+    IF(s.state_c = 'FLOOR_PROBATION', s.bid_floor, NULL) AS probation_bid,
+    s.nf_collapse_forecast_date,
+    s.prior_state
+  FROM fin3 s;
 END;
