@@ -15,7 +15,13 @@ Ori); and the batch written to the change log is asserted to be exactly the rows
         standing price may only move a bid TOWARD the bar. The v27.104 book cut five above-bar
         keywords and raised six below-bar ones because it keyed the rule on state == 'REPRICE'.
     F2  MOVE-SIZE CAP, derived (see the constants): three engine steps per upload, symmetric.
-        Every row with <= 2 settled orders, or whose uncapped move exceeds the cap, is CHECK FIRST.
+        Every row whose uncapped move exceeds the cap is CHECK FIRST.
+    F2b TOO THIN (v27.107). A bid move resting on <= 2 settled orders is NOT EXECUTABLE: with one
+        order the noise band equals the reading itself (se == roas), so the keyword is AT_BAR by
+        construction and the SIDE of the bar is noise. Such a row is disposition TOO_THIN — off the
+        sheet, shown in the audit and README with its reason. A file handed over is the file
+        uploaded; "delete these lines" is not an instruction a generator may leave to its reader.
+        Exception: a FLOOR_PROBATION row is a floor landing, not an evidence-based move — kept.
     F3  PLACEMENT.  A keyword with >= 10 settled clicks since its last bid change prices through
         its OWN realised cpc/bid ratio in V_BID_CPC_TRANSFER's ratio form (k_seg and M cancel
         within a keyword): new_bid = bid x (affordable_cpc / realised_cpc)^(1/gamma). Otherwise
@@ -105,7 +111,8 @@ PROJECT = "onyga-482313"
 #   VOL_FLOOR       10 settled clicks: the guard's own floor (V_KEYWORD_GUARD min_settled_clk);
 #                   the evidence a keyword's own cpc/bid ratio needs before it is used.
 #   THIN_ORDERS     2: at <= 2 settled orders the SE band equals the reading itself (se =
-#                   roas / sqrt(orders)) — every such row is CHECK FIRST.
+#                   roas / sqrt(orders)) — a bid move on such a record is TOO_THIN, not executable
+#                   (F2b); only a floor landing (FLOOR_PROBATION) is exempt.
 #   RMSE_LOG        0.2805: V_BID_CPC_TRANSFER's leave-one-campaign-out held-out RMSE of
 #                   log(cpc) — the tolerance beyond which a keyword's own ratio is said to
 #                   DIVERGE from the campaign model.
@@ -316,13 +323,30 @@ def cap_move(cur, raw):
     return raw, False
 
 
+TOO_THIN_REASON = ("one or two orders cannot tell which side of its bar this keyword is on "
+                   "— no bid change")
+
+
 def classify(r):
     """One row -> (disposition, action, new_bid, check_reasons, story_bits).
 
-    Executable: BID_DOWN / BID_UP / PAUSE. Book-visible only: SEASON_BLOCKED / HOLDOUT_EXCLUDED /
-    ENGINE_INSTRUCTED / NOT_ENABLED / BRAND_DEFENSE_EXCLUDED / NO_MOVE / NO_CUT_ABOVE_BAR /
-    NO_RAISE_BELOW_BAR / PROBATION_RUNNING / REFUSED_PAUSE.
+    Executable: BID_DOWN / BID_UP / PAUSE. Book-visible only: TOO_THIN / SEASON_BLOCKED /
+    HOLDOUT_EXCLUDED / ENGINE_INSTRUCTED / NOT_ENABLED / BRAND_DEFENSE_EXCLUDED / NO_MOVE /
+    NO_CUT_ABOVE_BAR / NO_RAISE_BELOW_BAR / PROBATION_RUNNING / REFUSED_PAUSE.
+
+    F2b is the last gate: a row that would have executed on <= THIN_ORDERS settled orders is
+    TOO_THIN unless it is a FLOOR_PROBATION landing. The priced bid is kept in story_bits so the
+    audit still shows what the record would have said.
     """
+    disp, action, new_bid, checks, bits = _classify(r)
+    if disp in EXECUTABLE and r['state'] != 'FLOOR_PROBATION' \
+       and num(r['settled_ord90'], 0) <= THIN_ORDERS:
+        bits['thin_bid'] = new_bid
+        return 'TOO_THIN', None, None, [], bits
+    return disp, action, new_bid, checks, bits
+
+
+def _classify(r):
     state = r['state']
     cur = num(r['current_bid'])
     guard = b(r['guard_deferred'])
@@ -363,9 +387,9 @@ def classify(r):
         checks.append(f"at {int(ord90)} orders this keyword is past its family's collapse point "
                       f"of {int(nf)} orders — the noise band no longer shelters it; this verdict "
                       f"is new under the per-family rule")
-    if ord90 <= THIN_ORDERS:
-        checks.append(f"only {int(ord90)} settled order(s) — the noise band equals the reading "
-                      f"itself; one order more or less flips the verdict")
+    if ord90 <= THIN_ORDERS and state == 'FLOOR_PROBATION':
+        checks.append(f"only {int(ord90)} settled order(s) — the record is noise, but a floor "
+                      f"landing is not an evidence-based move")
 
     if state == 'LOSER':
         if not (b(r['probation_elapsed']) and b(r['at_floor'])):
@@ -519,6 +543,11 @@ def story(r, disp, new_bid, bits, checks):
         move = (f"move the bid {direction} from ${cur:.2f} to ${new_bid:.2f}{cap_txt} — the record "
                 f"affords ${(bits['afford'] or 0):.2f} per click at the bar, translated to a bid "
                 f"{transfer_txt()}, never below its {floor_txt}")
+    elif disp == 'TOO_THIN':
+        tb = bits.get('thin_bid')
+        move = (f"no bid change — {TOO_THIN_REASON}"
+                + (f" (the record would have priced ${cur:.2f} -> ${tb:.2f}; it is not on the sheet)"
+                   if tb is not None and cur is not None else ""))
     elif disp == 'NO_CUT_ABOVE_BAR':
         move = (f"no cut — the record is ABOVE its bar, a paying keyword is never pulled down "
                 f"(the standing price ${(bits['raw_bid'] or 0):.2f} would have cut ${cur:.2f}; "
@@ -631,25 +660,34 @@ def q(s):
 
 
 def prior_unmarked_batches():
-    """Earlier reprice batches still carrying upload_status NULL — each is a claim the scorecard
-    will grade. Printed every run; labelled only by an explicit --supersede."""
-    return bq(f"SELECT batch_id, COUNT(*) n, MIN(applied_at) first_at "
+    """Earlier reprice batches still carrying upload_status NULL (the scorecard grades them) or
+    PENDING_UPLOAD (still waiting on Ori). Printed every run; labelled only by an explicit
+    --supersede."""
+    return bq(f"SELECT batch_id, upload_status, COUNT(*) n, MIN(applied_at) first_at "
               f"FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
-              f"WHERE batch_id LIKE 'reprice_book_%' AND upload_status IS NULL "
-              f"GROUP BY 1 ORDER BY 3")
+              f"WHERE batch_id LIKE 'reprice_book_%' "
+              f"AND (upload_status IS NULL OR upload_status = 'PENDING_UPLOAD') "
+              f"GROUP BY 1, 2 ORDER BY 4")
 
 
 def supersede(batch_ids, new_batch):
     for bid in batch_ids:
         note = (f"never uploaded; superseded by {new_batch} "
                 f"({datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}) — labelled by the generator")
+        # v27.107: a book logged since v27.106 sits at PENDING_UPLOAD, not NULL — both are
+        # "never uploaded" and both are labelled; anything else (FAILED_UPLOAD, already
+        # superseded) is left alone.
         sql = (f"UPDATE `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` SET upload_status = 'SUPERSEDED_NEVER_UPLOADED', "
-               f"upload_note = {q(note)} WHERE batch_id = {q(bid)} AND upload_status IS NULL")
+               f"upload_note = {q(note)} WHERE batch_id = {q(bid)} "
+               f"AND (upload_status IS NULL OR upload_status = 'PENDING_UPLOAD')")
         out = subprocess.run(['bq', 'query', '--use_legacy_sql=false', '--nouse_cache',
                               f'--project_id={PROJECT}', sql], capture_output=True, text=True)
         if out.returncode != 0:
             sys.exit(f"supersede failed for {bid}:\n{out.stderr}")
-        print(f"  labelled batch {bid} SUPERSEDED_NEVER_UPLOADED: {out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ''}")
+        left = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` WHERE batch_id = {q(bid)} "
+                  f"AND upload_status = 'SUPERSEDED_NEVER_UPLOADED'")
+        print(f"  labelled batch {bid} SUPERSEDED_NEVER_UPLOADED — {int(left[0]['n'])} row(s) now carry the label")
+        assert int(left[0]['n']) > 0, f"--supersede {bid}: no rows labelled (unknown id, or already labelled otherwise)"
 
 
 def log_batch(rows, batch_id, readme_path):
@@ -878,6 +916,7 @@ def main():
     down_spend7 = sum(num(r['sp7'], 0) for r, d, _ in executable if d in ('BID_DOWN', 'PAUSE'))
     up_spend7 = sum(num(r['sp7'], 0) for r, d, _ in executable if d == 'BID_UP')
     blocked = [(r, st) for r, disp, nb, cf, bits, st in visible if disp == 'SEASON_BLOCKED']
+    thin = [(r, st) for r, disp, nb, cf, bits, st in visible if disp == 'TOO_THIN']
     check_rows = [(r, disp, nb, st) for r, disp, nb, cf, bits, st in visible
                   if cf and disp in EXECUTABLE]
     n_capped = sum(1 for r, disp, nb, cf, bits, st in visible if disp in EXECUTABLE and bits.get('capped'))
@@ -906,6 +945,12 @@ def main():
                 f"capped at the engine's blind run: (1.05)^{BLIND_STEPS} - 1 = +{CAP_UP*100:.2f}% up, "
                 f"1 - (0.95)^{BLIND_STEPS} = -{CAP_DOWN*100:.2f}% down. {n_capped} row(s) were capped; "
                 f"the record's own price is printed beside each so the next book can step again.\n\n")
+        f.write(f"**Too thin to price.** A bid move resting on {THIN_ORDERS} or fewer settled orders "
+                f"is not on this sheet: {TOO_THIN_REASON}. With one order the noise band equals "
+                f"the reading itself, so the keyword sits at its bar by construction and the side "
+                f"of the bar is noise. {len(thin)} such row(s) are listed below, shown not "
+                f"executed. A floor landing (probation) is not an evidence-based move and is "
+                f"exempt.\n\n")
         f.write("**Prices.** The record's affordable cost per click (settled gross profit per click "
                 f"divided by the family bar) becomes a bid through the keyword's OWN realised cost "
                 f"per click at its current bid where it has {VOL_FLOOR}+ settled clicks since its "
@@ -967,6 +1012,12 @@ def main():
                 sheet, ln = line_of.get((r['campaign_id'], r['keyword_id']), ('not in sheet', ''))
                 f.write(f"- **{sheet} row {ln}** — `{r['target_text']}` in {r['campaign_name']}: {st}\n")
             f.write("\n")
+        if thin:
+            f.write(f"---\n\n## Too thin to price — shown, not executed ({len(thin)})\n\n")
+            for r, st in thin:
+                f.write(f"- `{r['target_text']}` in {r['campaign_name']} "
+                        f"({int(num(r['settled_ord90'], 0))} settled order(s)): {st}\n")
+            f.write("\n")
         if blocked:
             f.write("---\n\n## Blocked by the season ledger — shown, not executed\n\n")
             for r, st in blocked:
@@ -983,7 +1034,7 @@ def main():
                     f"nothing else in the sheet changes — then label its change-log row "
                     f"FAILED_UPLOAD.\n\n")
         others = [(r, disp, st) for r, disp, nb, cf, bits, st in visible
-                  if disp not in EXECUTABLE + ('SEASON_BLOCKED',)]
+                  if disp not in EXECUTABLE + ('SEASON_BLOCKED', 'TOO_THIN')]
         if others:
             f.write("---\n\n## Candidates with no executable row (audit visibility)\n\n")
             for r, disp, st in others:
@@ -992,7 +1043,8 @@ def main():
     # ---- review table ---------------------------------------------------------------
     print(f"\n{len(rows)} candidate rows -> {len(executable)} executable "
           f"({n_down} down · {n_up} up · {n_pause} pause) · "
-          f"{len(blocked)} season-blocked · {len(rows) - len(executable) - len(blocked)} other\n")
+          f"{len(blocked)} season-blocked · {len(thin)} too thin · "
+          f"{len(rows) - len(executable) - len(blocked) - len(thin)} other\n")
     hdr = f"{'target':<30} {'campaign':<34} {'st':<8} {'side':<5} {'ord':>3} {'old':>5} {'new':>5} {'raw':>5}  disposition"
     print(hdr)
     print('-' * len(hdr))
@@ -1008,9 +1060,9 @@ def main():
     # ---- change log -----------------------------------------------------------------
     prior = prior_unmarked_batches()
     if prior:
-        print("\nEarlier reprice batches still unlabelled (upload_status NULL = the scorecard grades them):")
+        print("\nEarlier reprice batches not yet uploaded or labelled (NULL = the scorecard grades them; PENDING_UPLOAD = waiting on Ori):")
         for p in prior:
-            print(f"  {p['batch_id']}  {p['n']} rows  first {p['first_at']}")
+            print(f"  {p['batch_id']}  {p['n']} rows  {p['upload_status'] or 'NULL (graded)'}  first {p['first_at']}")
     logged = ''
     if executable and not args.no_log:
         if args.supersede:
