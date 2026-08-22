@@ -64,12 +64,16 @@
 --   B18 Overdue settling (R-i): a settling SEAT row whose due_on is before as_of says 'was due to
 --       settle on <date> — overdue by N days; the ladder has not re-judged it' in its sentence and
 --       its move, with N = as_of − due_on; a settling row not yet due never says 'overdue'.
---   B19 Product targets (R-k): a GAP row whose target is a product target (asin= / category=)
---       says 'the verdict ladder does not track product targets' in its sentence and its move and
---       never promises a verdict 'on the next state run'; a keyword GAP row keeps the 'next state
---       run' sentence; the FAMILY 'what closes the gap' sentence says the same — it promises a
---       verdict only for the keyword gaps and names the product-target gaps as untracked until the
---       ladder tracks them.
+--   B19 Gap causes (R-k, refined 2026-08-23): every GAP row is worded by its MEASURED cause.
+--       keyword_id −1 (how SB video / PT product-target rows reach the warehouse — no keyword id)
+--       says the ladder cannot see it and promises no verdict; a paused / archived current
+--       DIM_KEYWORD row says the spend is trailing and leaves the universe when it stops; an
+--       enabled row keeps the 'next state run' sentence; a row with a real id but no current
+--       DIM_KEYWORD row says 'check why'. The retired blanket phrase 'the verdict ladder does not
+--       track product targets' appears NOWHERE in the register (it was false on live rows: the
+--       ladder tracks SP product targets and this register seats them). The FAMILY 'what closes
+--       the gap' sentence words each bucket the same way and promises 'next state run' only when
+--       an enabled untracked row exists.
 --   B20 REFERENCE wording (D4): the launch-family sentence names the good side as 'winning, at its
 --       bar or waiting for a verdict' (the side includes waiting).
 --   B21 Projection counts (D5): on every FAMILY row the '<N> seats', '<N> leaks' and '<N> untracked'
@@ -98,6 +102,13 @@
 --       keyword has clicks > 0 on the basis window (the category counts equal the re-derivation).
 --   B28 Whole-phrase defense (D9): the 'brand defense' CATEGORY count per working family equals
 --       the whole-phrase three-way re-derivation over the universe.
+--   B29 Gap-closure honesty: on every FAMILY 'today' row whose 20% side is over its allowance
+--       (over_by > 0), the parenthesised (−$…/day) recoveries listed in the 'what closes the gap'
+--       sentence are summed and compared to over_by on the row itself. When the listed moves
+--       recover clearly less than the gap the sentence says they do not close it and names what
+--       does (the untracked spend, or — when even that is not enough — growth of the 80% side);
+--       when they cover it the sentence never carries the shortfall clause. A reader who does
+--       everything on the row is never promised a closure the moves cannot deliver.
 -- =============================================================================================
 CREATE TEMP TABLE reg AS SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
 WITH
@@ -123,6 +134,10 @@ lastchg AS (
   QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY applied_at DESC, change_id DESC) = 1),
 bidv AS (SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid, COUNT(DISTINCT ROUND(bid, 2)) AS bid_versions
          FROM `onyga-482313.OI.DIM_KEYWORD` GROUP BY 1, 2),
+-- the current DIM_KEYWORD row per keyword (R-k refined: the gap cause reads its state)
+dimk AS (SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid, UPPER(state) AS dim_state
+         FROM `onyga-482313.OI.DIM_KEYWORD` WHERE is_current
+         QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY effective_from DESC, effective_to DESC) = 1),
 sp AS (
   SELECT CAST(f.campaign_id AS STRING) AS cid, CAST(f.keyword_id AS STRING) AS kid,
          ARRAY_AGG(f.campaign_name ORDER BY f.date DESC, f.campaign_name LIMIT 1)[OFFSET(0)] AS ads_campaign_name,
@@ -204,10 +219,30 @@ rd AS (
                  AND NOT (at_floor AND spend7 = 0 AND clicks7 = 0) AND NOT no_clock AND NOT (spend7 = 0 AND clicks7 = 0)) AS n_waiting,
          COUNTIF(state = 'PARKED' AND NOT is_defense AND spend7 > 0 AND next_check_date >= (SELECT d FROM run_day)) AS n_parked_seat,
          COUNTIF(NOT is_defense AND spend7 > 0 AND (state = 'DEAD' OR (state = 'PARKED' AND NOT (next_check_date >= (SELECT d FROM run_day))))) AS n_leak,
-         COUNTIF(is_defense) AS n_defense,
-         COUNTIF(NOT is_defense AND NOT on_ladder AND is_product_target) AS n_gap_pt,
-         COUNTIF(NOT is_defense AND NOT on_ladder AND NOT is_product_target) AS n_gap_kw
+         COUNTIF(is_defense) AS n_defense
   FROM pos GROUP BY 1),
+-- the gap causes re-derived per family (R-k refined): no keyword id / disabled trailing /
+-- enabled next-run / unknown. The gap filter lives inside COUNTIF, never in a WHERE: filtering
+-- on the universe's EXISTS-derived is_defense in a WHERE trips BigQuery's non-equality
+-- ANTISEMI-join limitation (the house anti-join rule).
+rd_gap AS (
+  SELECT p.family,
+         COUNTIF(NOT p.is_defense AND NOT p.on_ladder AND p.keyword_id = '-1') AS n_blind,
+         COUNTIF(NOT p.is_defense AND NOT p.on_ladder AND p.keyword_id != '-1' AND dk.dim_state IN ('PAUSED', 'ARCHIVED')) AS n_trailing,
+         COUNTIF(NOT p.is_defense AND NOT p.on_ladder AND p.keyword_id != '-1' AND dk.dim_state = 'ENABLED') AS n_next,
+         COUNTIF(NOT p.is_defense AND NOT p.on_ladder AND p.keyword_id != '-1'
+                 AND (dk.dim_state IS NULL OR dk.dim_state NOT IN ('PAUSED', 'ARCHIVED', 'ENABLED'))) AS n_check
+  FROM pos p
+  LEFT JOIN dimk dk ON dk.cid = p.campaign_id AND dk.kid = p.keyword_id
+  GROUP BY 1),
+-- every GAP row with its re-derived cause (the row's wording must match it)
+gapc AS (
+  SELECT x.*, CASE WHEN x.keyword_id = '-1' THEN 'NO_ID'
+                   WHEN dk.dim_state IN ('PAUSED', 'ARCHIVED') THEN 'DISABLED'
+                   WHEN dk.dim_state = 'ENABLED' THEN 'NEWLY_SEEN'
+                   ELSE 'UNKNOWN' END AS cause
+  FROM (SELECT * FROM r WHERE row_type = 'GAP') x
+  LEFT JOIN dimk dk ON dk.cid = x.campaign_id AND dk.kid = x.keyword_id),
 ledger_open AS (SELECT family, campaign_id, keyword_id, seat_no FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL),
 famrow AS (SELECT * FROM r WHERE row_type IN ('FAMILY', 'REFERENCE')),
 cat AS (SELECT * FROM r WHERE row_type = 'CATEGORY'),
@@ -353,17 +388,23 @@ checks AS (
                  OR (due_on >= as_of AND (sentence LIKE '%overdue%' OR move LIKE '%overdue%'))
                  OR due_on IS NULL))
   UNION ALL
-  SELECT 'B19 product targets (R-k): a product-target GAP says the ladder does not track product targets and promises no verdict; a keyword GAP keeps the next-state-run sentence; the FAMILY sentence says the same',
-         (SELECT COUNT(*) FROM r WHERE row_type = 'GAP'
-            AND IF(REGEXP_CONTAINS(LOWER(COALESCE(target_text, '')), r'^\s*(asin|category)\s*='),
-                   NOT (sentence LIKE '%the verdict ladder does not track product targets%' AND move LIKE '%the verdict ladder does not track product targets%')
-                     OR sentence LIKE '%next state run%' OR move LIKE '%next state run%',
-                   NOT (sentence LIKE '%next state run%' AND move LIKE '%next state run%')))
-         + (SELECT COUNT(*) FROM famrow f JOIN rd ON rd.family = f.family
+  SELECT 'B19 gap causes (R-k refined): every GAP row worded by its measured cause (no keyword id / paused trailing / enabled next state run / check why); the retired blanket phrase appears nowhere; the FAMILY sentence words each bucket the same way',
+         (SELECT COUNT(*) FROM gapc
+          WHERE CASE cause
+                  WHEN 'NO_ID' THEN NOT (sentence LIKE '%no keyword id%' AND sentence LIKE '%cannot see%' AND move LIKE '%no keyword id%' AND move LIKE '%cannot see%')
+                                    OR sentence LIKE '%next state run%' OR move LIKE '%next state run%'
+                  WHEN 'DISABLED' THEN NOT (sentence LIKE '%trailing%' AND move LIKE '%trailing%')
+                                       OR sentence LIKE '%next state run%' OR move LIKE '%next state run%'
+                  WHEN 'NEWLY_SEEN' THEN NOT (sentence LIKE '%next state run%' AND move LIKE '%next state run%')
+                  ELSE NOT (sentence LIKE '%check why%' AND move LIKE '%check why%') END)
+         + (SELECT COUNT(*) FROM r WHERE COALESCE(sentence, '') LIKE '%the verdict ladder does not track product targets%'
+                                      OR COALESCE(move, '') LIKE '%the verdict ladder does not track product targets%')
+         + (SELECT COUNT(*) FROM famrow f JOIN rd_gap g ON g.family = f.family
             WHERE f.row_type = 'FAMILY' AND f.horizon = 'today' AND f.doctrine_status != 'IN'
-              AND ((rd.n_gap_pt > 0 AND NOT (f.sentence LIKE CONCAT('%', CAST(rd.n_gap_pt AS STRING), ' untracked product target%') AND f.sentence LIKE '%the verdict ladder does not track product targets%'))
-                   OR (rd.n_gap_kw > 0 AND NOT f.sentence LIKE CONCAT('%', CAST(rd.n_gap_kw AS STRING), ' untracked keyword%next state run%'))
-                   OR (rd.n_gap_kw = 0 AND f.sentence LIKE '%next state run%')))
+              AND ((g.n_blind > 0 AND NOT (f.sentence LIKE CONCAT('%', CAST(g.n_blind AS STRING), ' SB video product target%') AND f.sentence LIKE '%no keyword id%'))
+                   OR (g.n_trailing > 0 AND NOT f.sentence LIKE CONCAT('%', CAST(g.n_trailing AS STRING), ' paused target%trailing%'))
+                   OR (g.n_next > 0 AND NOT f.sentence LIKE CONCAT('%', CAST(g.n_next AS STRING), ' enabled target%next state run%'))
+                   OR (g.n_next = 0 AND f.sentence LIKE '%next state run%')))
   UNION ALL
   SELECT 'B20 REFERENCE wording (D4): the launch-family sentence names the good side as winning, at its bar or waiting for a verdict',
          (SELECT COUNT(*) FROM r WHERE row_type = 'REFERENCE' AND sentence NOT LIKE '%winning, at its bar or waiting for a verdict%')
@@ -419,6 +460,23 @@ checks AS (
   SELECT 'B28 whole-phrase defense (D9): the brand-defense CATEGORY count per working family equals the whole-phrase three-way re-derivation',
          (SELECT COUNT(*) FROM rd LEFT JOIN cat_named d ON d.family = rd.family AND d.horizon = 'today' AND d.category = 'brand defense — never judged on profit'
           WHERE rd.n_defense IS DISTINCT FROM COALESCE(d.nk, 0))
+  UNION ALL
+  SELECT 'B29 gap-closure honesty: a family whose listed moves recover less than the gap says they do not close it and names what does; one whose moves cover it carries no shortfall clause',
+         (SELECT COUNT(*) FROM (
+            SELECT f.sentence, f.over_by_per_day,
+                   COALESCE((SELECT SUM(CAST(v AS FLOAT64))
+                             FROM UNNEST(REGEXP_EXTRACT_ALL(f.sentence, r'\(−\$([0-9]+\.[0-9]+)/day')) v), 0) AS recov
+            FROM famrow f
+            WHERE f.row_type = 'FAMILY' AND f.horizon = 'today' AND f.over_by_per_day > 0)
+          WHERE CASE
+                  -- clearly short: the sentence must say the moves do not close it and name the rest
+                  WHEN recov < over_by_per_day - 0.05 THEN
+                    NOT (sentence LIKE '%recover only $%'
+                         AND (sentence LIKE '%they do not close it%' OR sentence LIKE '%leaves it open%'))
+                  -- clearly covered: the shortfall clause must be absent
+                  WHEN recov > over_by_per_day + 0.05 THEN sentence LIKE '%recover only $%'
+                  -- within rounding of the line: either wording is honest
+                  ELSE FALSE END)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks ORDER BY check_name;

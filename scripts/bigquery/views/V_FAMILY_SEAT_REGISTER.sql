@@ -5,6 +5,12 @@
 -- repair pass 2026-08-23 (defects D1–D14: R-f sign-aware stalled proposal, R-g per-family band,
 -- R-h parked seats, R-i overdue settling, R-j not yet serving, R-k product targets, three-way
 -- queue defense, whole-phrase brand match, two-digit dates, one raise clock, horizon-true counts).
+-- Second repair pass 2026-08-23: R-k REFINED — gap rows are worded by their MEASURED cause, the
+-- blanket phrase 'the ladder does not track product targets' is retired as false (the ladder
+-- tracks SP product targets and this register seats them; the blind spot is rows arriving with
+-- keyword_id −1, how SB video / PT product targets reach the warehouse); and the FAMILY 'what
+-- closes the gap' sentence is HONEST — when the listed moves recover less than the gap it says
+-- they do not close it and names what does (B29).
 --
 -- WHAT IT SAYS. For every WORKING family (the HARVEST book in V_BOOK_ASSIGNMENT) it groups the
 -- verdict ladder's keywords (FACT_KEYWORD_STATE, one snapshot) into plain-language categories,
@@ -44,9 +50,18 @@
 --   LEAK       one per closed-but-spending keyword (PARKED / DEAD with spend in the window).
 --   GAP        one per keyword that SPENT on the basis window with no verdict row on the ladder
 --              (a keyword with no ladder row and $0 on the basis window is not in the universe).
---              A product target (asin= / category=) is told the truth: the ladder reads DIM_KEYWORD
---              only, so no verdict will ever arrive (ruling R-k); only a keyword gets the
---              'next state run' sentence.
+--              The row is worded by the MEASURED cause (ruling R-k, refined 2026-08-23):
+--                keyword_id −1  how SB video / PT product-target rows reach the warehouse — no
+--                               keyword id, so no DIM_KEYWORD row can exist and the ladder cannot
+--                               see it; extending the pipeline to these rows is a ruling for Ori.
+--                paused/archived  the current DIM_KEYWORD row is disabled on Amazon: the spend is
+--                               trailing and the row leaves the universe when it stops.
+--                enabled        the verdict arrives on the next state run (a newly mapped
+--                               campaign, or a target the ladder has not yet swept).
+--                anything else  'check why' — a real keyword id with no current DIM_KEYWORD row.
+--              The ladder DOES track SP product targets (they live in DIM_KEYWORD and this
+--              register seats them); the retired blanket phrase 'the verdict ladder does not
+--              track product targets' was false on live rows and appears nowhere (B19).
 --   NO_CLOCK   one per trial whose bid moved outside the change log (ruling R-d): 80% side, its
 --              own sentence ("no date to judge it from") and move ("log the bid so the clock starts").
 --   ABSORB     advisory only: an above-bar campaign in the family capped ≥ k.absorb_capped_days of
@@ -166,6 +181,12 @@ bidv AS (
   SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid,
          COUNT(DISTINCT ROUND(bid, 2)) AS bid_versions
   FROM `onyga-482313.OI.DIM_KEYWORD` GROUP BY 1, 2),
+-- the keyword's CURRENT DIM_KEYWORD state (R-k refined): the gap cause reads it — a paused or
+-- archived row is trailing spend, an enabled row gets its verdict on the next state run
+dimk AS (
+  SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid, UPPER(state) AS dim_state
+  FROM `onyga-482313.OI.DIM_KEYWORD` WHERE is_current
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY effective_from DESC, effective_to DESC) = 1),
 -- the ads scan starts at the context window or the OLDEST standing raise, whichever is earlier,
 -- so clicks_since_raise is never truncated by an arbitrary window (Task 1 polish P2)
 scan_from AS (
@@ -264,8 +285,9 @@ u AS (
          COALESCE(a.spend7, 0) AS spend7, COALESCE(a.clicks7, 0) AS clicks7,
          COALESCE(a.spend28, 0) AS spend28, COALESCE(a.clicks_since_raise, 0) AS clicks_since_raise,
          f.keyword_bar,
-         -- R-k: a product / category target (asin= / category= expression). The verdict ladder reads
-         -- DIM_KEYWORD only, so an untracked product target never gets a verdict.
+         -- a product / category target (asin= / category= expression) — wording only. The ladder
+         -- tracks SP product targets (they live in DIM_KEYWORD); the untrackable rows are those
+         -- arriving with keyword_id −1 (SB video / PT), whatever the target type (R-k refined).
          REGEXP_CONTAINS(LOWER(COALESCE(s.target_text, a.targeting, '')), r'^\s*(asin|category)\s*=') AS is_product_target
   FROM snap s
   FULL OUTER JOIN kw_ads a ON a.cid = s.campaign_id AND a.kid = s.keyword_id
@@ -315,7 +337,14 @@ c AS (
          h.campaign_id IS NOT NULL AS holdout,
          oc.seat_cpc AS seat_price, oc.slots AS campaign_slots,
          pb.bid_park,
-         run_day.d AS snap_d
+         run_day.d AS snap_d,
+         dk.dim_state,
+         -- the MEASURED gap cause (R-k refined): why an off-ladder spender has no verdict row
+         CASE WHEN u.on_ladder THEN CAST(NULL AS STRING)
+              WHEN u.keyword_id = '-1' THEN 'NO_ID'
+              WHEN dk.dim_state IN ('PAUSED', 'ARCHIVED') THEN 'DISABLED'
+              WHEN dk.dim_state = 'ENABLED' THEN 'NEWLY_SEEN'
+              ELSE 'UNKNOWN' END AS gap_cause
   FROM u CROSS JOIN k CROSS JOIN run_day CROSS JOIN park_bid pb
   LEFT JOIN books b ON b.family = u.family
   LEFT JOIN probes p ON p.kid = u.keyword_id
@@ -323,7 +352,8 @@ c AS (
   LEFT JOIN pending pd ON pd.campaign_id = u.campaign_id AND pd.keyword_id = u.keyword_id
   LEFT JOIN bidv bv ON bv.cid = u.campaign_id AND bv.kid = u.keyword_id
   LEFT JOIN holdout h ON h.campaign_id = u.campaign_id
-  LEFT JOIN oob_camp oc ON oc.campaign_id = u.campaign_id),
+  LEFT JOIN oob_camp oc ON oc.campaign_id = u.campaign_id
+  LEFT JOIN dimk dk ON dk.cid = u.campaign_id AND dk.kid = u.keyword_id),
 coded AS (
   SELECT c.*,
     CASE
@@ -421,14 +451,21 @@ fam_h AS (
          COUNTIF(occupant_kind IS NOT NULL AND side_h = '20') AS seats_h,
          COUNTIF(occupant_kind = 'settling') AS seats_settling,
          COUNTIF(code_h = 'LEAK') AS n_leaks, COUNTIF(code_h = 'GAP') AS n_gaps,
-         COUNTIF(code = 'GAP' AND is_product_target) AS n_gap_pt,
-         COUNTIF(code = 'GAP' AND NOT is_product_target) AS n_gap_kw,
-         SUM(IF(code = 'GAP' AND is_product_target, cost_today, 0)) AS gap_pt_today,
+         -- the gap-cause buckets (R-k refined): blind (no keyword id), trailing (disabled on
+         -- Amazon), next-run (enabled, verdict coming), check (real id, no current DIM row)
+         COUNTIF(code = 'GAP' AND gap_cause = 'NO_ID') AS n_gap_blind,
+         SUM(IF(code = 'GAP' AND gap_cause = 'NO_ID', cost_today, 0)) AS gap_blind_today,
+         COUNTIF(code = 'GAP' AND gap_cause = 'DISABLED') AS n_gap_trailing,
+         SUM(IF(code = 'GAP' AND gap_cause = 'DISABLED', cost_today, 0)) AS gap_trailing_today,
+         COUNTIF(code = 'GAP' AND gap_cause = 'NEWLY_SEEN') AS n_gap_next_run,
+         COUNTIF(code = 'GAP' AND gap_cause = 'UNKNOWN') AS n_gap_check,
+         SUM(IF(code = 'GAP' AND gap_cause = 'UNKNOWN', cost_today, 0)) AS gap_check_today,
          COUNTIF(code = 'REPAIR') AS n_repair, COUNTIF(code = 'STALLED_PROBE') AS n_stalled,
          COUNTIF(code = 'FAILED') AS n_failed, COUNTIF(code = 'PROBATION') AS n_probation,
          COUNTIF(code = 'PROBE') AS n_probe, COUNTIF(code = 'DEFENSE') AS n_defense,
          SUM(IF(code = 'REPAIR', cost_day1, 0)) AS repair_day1,
          SUM(IF(code = 'STALLED_PROBE', cost_today, 0)) AS stalled_today,
+         SUM(IF(code = 'FAILED', cost_today, 0)) AS failed_today,
          COUNT(*) AS n_keywords
   FROM kw_h CROSS JOIN k
   GROUP BY 1, 2, 3, 4),
@@ -584,10 +621,32 @@ shape AS (
                               IF(f.n_leaks > 0, FORMAT('pause the %d leaks (−$%.2f/day); ', f.n_leaks, f.leak_per_day), ''),
                               IF(f.n_repair > 0, FORMAT('let the %d repairs hold at their bar (−$%.2f/day moves to the good side at the re-judged horizon); ', f.n_repair, f.repair_day1), ''),
                               IF(f.n_stalled > 0, FORMAT('re-price or park the %d stalled probes (−$%.2f/day); ', f.n_stalled, f.stalled_today), ''),
-                              IF(f.n_failed > 0, FORMAT('kill the %d failed keywords; ', f.n_failed), ''),
-                              -- R-k: only a KEYWORD in a mapped campaign gets a verdict on the next state run
-                              IF(f.n_gap_kw > 0, FORMAT('the %d untracked keywords get a verdict on the next state run; ', f.n_gap_kw), ''),
-                              IF(f.n_gap_pt > 0, FORMAT('the %d untracked product targets ($%.2f/day) stay where they are — the verdict ladder does not track product targets; this spend stays untracked until it does (extending the ladder is a ruling for Ori, not a mapping fix).', f.n_gap_pt, f.gap_pt_today), ''))
+                              IF(f.n_failed > 0, FORMAT('kill the %d failed keywords (−$%.2f/day); ', f.n_failed, f.failed_today), ''),
+                              -- the gap causes (R-k refined): each bucket worded by what was measured
+                              IF(f.n_gap_next_run > 0,
+                                 IF(f.n_gap_next_run = 1, 'the 1 enabled target with no verdict row gets one on the next state run; ',
+                                    FORMAT('the %d enabled targets with no verdict row get one on the next state run; ', f.n_gap_next_run)), ''),
+                              IF(f.n_gap_blind > 0,
+                                 IF(f.n_gap_blind = 1, FORMAT('the 1 SB video product target ($%.2f/day) arrives with no keyword id, so the verdict ladder cannot see it — this spend stays untracked until the ladder learns to read these rows (a ruling for Ori, not a mapping fix); ', f.gap_blind_today),
+                                    FORMAT('the %d SB video product targets ($%.2f/day) arrive with no keyword id, so the verdict ladder cannot see them — this spend stays untracked until the ladder learns to read these rows (a ruling for Ori, not a mapping fix); ', f.n_gap_blind, f.gap_blind_today)), ''),
+                              IF(f.n_gap_trailing > 0,
+                                 IF(f.n_gap_trailing = 1, FORMAT('the 1 paused target ($%.2f/day) is trailing spend and leaves the universe when it stops; ', f.gap_trailing_today),
+                                    FORMAT('the %d paused targets ($%.2f/day) are trailing spend and leave the universe when it stops; ', f.n_gap_trailing, f.gap_trailing_today)), ''),
+                              IF(f.n_gap_check > 0,
+                                 IF(f.n_gap_check = 1, FORMAT('check why the ladder does not track the 1 remaining row ($%.2f/day); ', f.gap_check_today),
+                                    FORMAT('check why the ladder does not track the %d remaining rows ($%.2f/day); ', f.n_gap_check, f.gap_check_today)), ''),
+                              -- gap-closure honesty (B29): never promise a closure the listed moves cannot deliver
+                              CASE WHEN NOT (f.over_by_per_day > 0) THEN ''
+                                   WHEN f.leak_per_day + f.repair_day1 + f.stalled_today + f.failed_today >= f.over_by_per_day - 0.005 THEN
+                                     FORMAT('Together these moves recover $%.2f/day — enough to close the $%.2f/day gap.',
+                                            f.leak_per_day + f.repair_day1 + f.stalled_today + f.failed_today, f.over_by_per_day)
+                                   WHEN f.gap_per_day >= f.over_by_per_day - (f.leak_per_day + f.repair_day1 + f.stalled_today + f.failed_today) - 0.005 THEN
+                                     FORMAT('Together the keyword moves recover only $%.2f/day of the $%.2f/day gap — they do not close it; the rest is the untracked spend: only tracking or pausing those targets closes it (a ruling for Ori), not another keyword move.',
+                                            f.leak_per_day + f.repair_day1 + f.stalled_today + f.failed_today, f.over_by_per_day)
+                                   ELSE
+                                     FORMAT('Together the keyword moves recover only $%.2f/day of the $%.2f/day gap, and even ending all $%.2f/day of untracked spend leaves it open — the rest closes only by growing the 80%% side.',
+                                            f.leak_per_day + f.repair_day1 + f.stalled_today + f.failed_today, f.over_by_per_day, f.gap_per_day)
+                              END)
                   END)
          END AS sentence,
     FORMAT('%s|%02d|%02d|', f.family, IF(f.book = 'INVEST', 9, 1), f.hz_order) AS sort_key
@@ -983,16 +1042,31 @@ shape AS (
     CAST(NULL AS STRING) AS at_line_band_derivation,
     1 AS n_keywords,
     CAST(NULL AS STRING) AS horizon_assumption,
-    IF(w.is_product_target,
-       'no sheet row — the verdict ladder does not track product targets (it reads DIM_KEYWORD only), so no verdict will arrive; this spend stays untracked until it does — extending the ladder is a ruling for Ori, not a mapping fix',
-       'no sheet row — the verdict arrives on the next state run if the campaign is mapped; otherwise check why the ladder does not track this keyword') AS move,
-    IF(w.is_product_target,
-       FORMAT('%s (%s) is a product target that spent $%.2f/day on the basis window with no verdict row — the verdict ladder does not track product targets, so no verdict will arrive; this spend stays untracked on the 20%% side until the ladder does (a ruling for Ori, not a mapping fix).%s',
-              w.target_text, w.campaign_name, w.cost_today,
-              IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', '')),
-       FORMAT('%s (%s) spent $%.2f/day on the basis window with no verdict row on the ladder — untracked spend counts on the 20%% side. If the campaign was mapped to %s recently, the verdict arrives on the next state run; otherwise check why the ladder does not track this keyword.%s',
-              w.target_text, w.campaign_name, w.cost_today, w.family,
-              IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', ''))) AS sentence,
+    -- R-k refined: the move is worded by the MEASURED cause, never a blanket claim
+    CASE w.gap_cause
+      WHEN 'NO_ID' THEN 'no sheet row — this row reaches the warehouse with no keyword id (keyword_id −1, how SB video / PT product targets arrive), so the verdict ladder cannot see it; the spend stays untracked until the ladder learns to read these rows (a ruling for Ori, not a mapping fix)'
+      WHEN 'DISABLED' THEN FORMAT('no sheet row — this target is %s on Amazon (its current DIM_KEYWORD row): the spend is trailing and the row leaves the universe when it stops; no verdict is coming and none is needed', LOWER(COALESCE(w.dim_state, 'disabled')))
+      WHEN 'NEWLY_SEEN' THEN 'no sheet row — the target is enabled with no verdict row yet: the verdict arrives on the next state run if the campaign is mapped; otherwise check why the ladder does not track it'
+      ELSE 'no sheet row — check why the ladder does not track this target: it has a real keyword id but no current DIM_KEYWORD row'
+    END AS move,
+    CASE w.gap_cause
+      WHEN 'NO_ID' THEN
+        FORMAT('%s (%s) spent $%.2f/day on the basis window with no verdict row — %s from the SB video report, which carries no keyword id (keyword_id −1), so the verdict ladder cannot see it (the ladder does track SP product targets, which carry one); the spend stays untracked on the 20%% side until the ladder learns to read these rows (a ruling for Ori, not a mapping fix).%s',
+               w.target_text, w.campaign_name, w.cost_today, IF(w.is_product_target, 'a product target', 'a row'),
+               IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', ''))
+      WHEN 'DISABLED' THEN
+        FORMAT('%s (%s) is %s on Amazon (its current DIM_KEYWORD row) yet spent $%.2f/day on the basis window — trailing spend, not a live gap: it counts on the 20%% side while it lasts and leaves the universe when it stops. No verdict is coming and none is needed.%s',
+               w.target_text, w.campaign_name, LOWER(COALESCE(w.dim_state, 'disabled')), w.cost_today,
+               IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', ''))
+      WHEN 'NEWLY_SEEN' THEN
+        FORMAT('%s (%s) spent $%.2f/day on the basis window with no verdict row on the ladder — untracked spend counts on the 20%% side. The target is enabled: if the campaign was mapped to %s recently, the verdict arrives on the next state run; otherwise check why the ladder does not track it.%s',
+               w.target_text, w.campaign_name, w.cost_today, w.family,
+               IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', ''))
+      ELSE
+        FORMAT('%s (%s) spent $%.2f/day on the basis window with no verdict row, a real keyword id and no current DIM_KEYWORD row — check why the ladder does not track it; untracked on the 20%% side until then.%s',
+               w.target_text, w.campaign_name, w.cost_today,
+               IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', ''))
+    END AS sentence,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 6, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.code = 'GAP'
