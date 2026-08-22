@@ -681,11 +681,17 @@ def log_batch(rows, batch_id, readme_path):
             f"{q(r['ad_group_id'])} AS ad_group_id, "
             f"{('CAST(' + repr(old_bid) + ' AS FLOAT64)') if old_bid is not None else 'NULL'} AS old_bid, "
             f"{('CAST(' + repr(new_bid) + ' AS FLOAT64)') if new_bid is not None else 'NULL'} AS new_bid, "
-            f"{q('MANUAL')} AS source, {q('MANUAL_BULKSHEET')} AS coach_mode, {q(note)} AS upload_note)"
+            f"{q('MANUAL')} AS source, {q('MANUAL_BULKSHEET')} AS coach_mode, {q(note)} AS upload_note, "
+            # v27.106: a book is logged at BUILD time so its batch id is on record, but nothing has
+            # reached Amazon until Ori uploads it. PENDING_UPLOAD keeps the rows out of
+            # V_PPC_CHANGE_LOG_APPLIED, so the keyword state machine does not re-read a file that is
+            # still on disk as changes that happened (it did, once: cooldowns and re-judge dates
+            # moved on an un-uploaded book). --mark-uploaded BATCH flips the status to NULL.
+            f"{q('PENDING_UPLOAD')} AS upload_status)"
         )
     cols = ("change_id, batch_id, applied_at, action, targeting, keyword_id, match_type, "
             "campaign_id, campaign_name, campaign_type, ad_group_id, old_bid, new_bid, source, "
-            "coach_mode, upload_note")
+            "coach_mode, upload_note, upload_status")
     sql = (f"INSERT INTO `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` ({cols}) "
            f"SELECT {cols} FROM UNNEST([{', '.join(structs)}])")
     out = subprocess.run(
@@ -708,7 +714,33 @@ def main():
                     help='skip the FACT_PPC_CHANGE_LOG batch insert')
     ap.add_argument('--supersede', nargs='*', default=[],
                     help='earlier never-uploaded batch ids to label SUPERSEDED_NEVER_UPLOADED')
+    ap.add_argument('--mark-uploaded', metavar='BATCH_ID',
+                    help='Ori has uploaded this batch: flip its rows from PENDING_UPLOAD to applied '
+                         '(NULL) so the scorecard grades them and the state machine sees them. '
+                         'Builds nothing.')
     args = ap.parse_args()
+
+    if args.mark_uploaded:
+        # v27.106: the only way a book becomes "applied" is Ori saying so. Flipping the status is
+        # the upload confirmation; rows deleted from the sheet before upload should be set
+        # FAILED_UPLOAD by hand afterwards, per the README.
+        bid = args.mark_uploaded
+        pending = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
+                     f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
+        n = int(pending[0]['n'])
+        if n == 0:
+            sys.exit(f"{bid}: no PENDING_UPLOAD rows — nothing to mark (already applied, superseded, or unknown id)")
+        note = f" | marked uploaded by Ori {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}"
+        sql = (f"UPDATE `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` SET upload_status = NULL, "
+               f"upload_note = CONCAT(COALESCE(upload_note, ''), {q(note)}) "
+               f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
+        out = subprocess.run(['bq', 'query', '--use_legacy_sql=false', '--nouse_cache',
+                              f'--project_id={PROJECT}', sql], capture_output=True, text=True)
+        if out.returncode != 0:
+            sys.exit(f"mark-uploaded failed:\n{out.stderr}")
+        print(f"{bid}: {n} row(s) now applied. The next SP_SNAPSHOT_KEYWORD_STATE run will read them.")
+        return
+
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
 
     rows = bq(SQL.format(p=PROJECT))

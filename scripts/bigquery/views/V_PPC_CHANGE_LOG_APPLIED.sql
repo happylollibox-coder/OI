@@ -18,4 +18,9 @@
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED` AS
 SELECT *
 FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
-WHERE COALESCE(upload_status, '') NOT IN ('FAILED_UPLOAD', 'SUPERSEDED_NEVER_UPLOADED');
+-- PENDING_UPLOAD (v27.106): a hand-built book is LOGGED at build time so its batch id is on record,
+-- but nothing has reached Amazon until Ori uploads it. Until he confirms, the rows must not read
+-- as applied — otherwise the keyword state machine re-reads them as changes that happened
+-- (cooldowns, holds and re-judge dates all moved on a file that was still on disk). Flip the
+-- status to NULL on confirmation; never delete the rows.
+WHERE COALESCE(upload_status, '') NOT IN ('FAILED_UPLOAD', 'SUPERSEDED_NEVER_UPLOADED', 'PENDING_UPLOAD');
