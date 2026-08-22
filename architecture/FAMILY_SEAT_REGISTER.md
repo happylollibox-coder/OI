@@ -19,6 +19,10 @@ and is retired; see the R-k ruling and Open ruling 7), and the FAMILY "what clos
 sentence made HONEST — when the listed moves recover less than the gap it says so and names
 what does (gap-closure honesty, B29).
 Tasks 3–5 (leak generator arm, morning surface, health checks) pending — this file grows with each.
+**Drift check 2026-08-23** (see "Drift check" below): the two new steps are DEPLOYED but had not yet
+run inside an orchestrator pass; the ledger and the seat-economics table have only ever been written
+by hand. The drift instrument the A-suite was missing now exists
+(`scripts/bigquery/tests/DE_FAMILY_SEAT_LEDGER_drift.sql`).
 
 ## The doctrine in one paragraph
 
@@ -168,7 +172,10 @@ SELECT COUNT(*) n, FARM_FINGERPRINT(STRING_AGG(TO_JSON_STRING(t), '|' ORDER BY f
 FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` t;
 ```
 
-**Acceptance** (`scripts/bigquery/tests/DE_FAMILY_SEAT_LEDGER_acceptance.sql`, every check passes):
+**Acceptance** — two files. `scripts/bigquery/tests/DE_FAMILY_SEAT_LEDGER_acceptance.sql` (A01–A16)
+judges the ledger against ONE snapshot; `scripts/bigquery/tests/DE_FAMILY_SEAT_LEDGER_drift.sql`
+(D01–D08) judges what a NEW snapshot did to it — see "Drift check" below, and run it whenever the
+question is whether a pass kept the numbers. A01–A16, every check passes:
 one open row per ladder occupant; no open row without an occupant; one keyword per open
 number in a family; numbers ≥ 1; no launch-family row; closed rows carry a mapped reason;
 open probe / stalled-probe seats hold TRIAL keywords; the occupancy key is unique; no keyword
@@ -461,6 +468,106 @@ SELECT campaign_name, cost_per_day, holdout, move
 FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER` WHERE row_type = 'UNMAPPED' ORDER BY sort_key;
 ```
 
+## Drift check — what a new snapshot must not break
+
+**The gap this closes.** The A-suite judges the ledger against ONE snapshot. It cannot see whether a
+seat number survived the night, because the number is a stored column and no live table remembers
+what it was yesterday; and while the live ledger has never closed a row, its closure checks (A06,
+A15) and the reuse of a freed number pass VACUOUSLY. `DE_FAMILY_SEAT_LEDGER_drift.sql` (D01–D08) is
+the missing half: it compares an AFTER ledger against a BEFORE one and asserts the three things a
+pass must not break — a continuing occupant keeps its number (D01), every closed row carries the
+mapped code, the snapshot date and the SOP's own sentence (D02–D05), and admissions take the lowest
+free numbers without ever landing on a number a still-seated keyword holds (D06–D08).
+
+**What the check found first (2026-08-23).** There was no pass to check. Both new steps —
+orchestrator Task 20.8b and `SP_REFRESH_CUBE_TABLES` step 0b — were deployed AFTER the last full
+pass had already started, so neither had ever executed inside one: `SP_MAINTAIN_FAMILY_SEATS` has
+no row in `LOG_PIPELINE_RUNS` at all, and every logged `SP_REFRESH_CUBE_TABLES` run predates the
+step-0b deploy. The ledger and `T_OOB_SEAT_ECONOMICS` were current only because the build session
+ran them by hand. Nothing is broken — the wiring is deployed and correct in both routine bodies —
+but **the first automated proof of the ledger is the first pass after 2026-08-22**, and the check
+that matters is the one above, run against it. Confirm the wiring any time with:
+
+```sql
+SELECT routine_name,
+       REGEXP_CONTAINS(routine_definition, r'CALL `onyga-482313.OI.SP_MAINTAIN_FAMILY_SEATS`\(\)') AS calls_seats,
+       REGEXP_CONTAINS(routine_definition, r'CREATE OR REPLACE TABLE `onyga-482313.OI.T_OOB_SEAT_ECONOMICS`') AS builds_seat_economics
+FROM `onyga-482313.OI.INFORMATION_SCHEMA.ROUTINES`
+WHERE routine_name IN ('SP_ORCHESTRATE_DAILY_REFRESH', 'SP_REFRESH_CUBE_TABLES');
+```
+
+Also measured that day: re-running `SP_MAINTAIN_FAMILY_SEATS` on the unchanged live snapshot closed,
+reopened and admitted nothing and left the table fingerprint identical — idempotence holds on the
+live ledger, not only on a copy.
+
+**How to run it.** There is no ledger archive today, so the BEFORE image is the live table and the
+AFTER image is a `TMP_` pair the pass is replayed on (house rule: synthetic rows only on `TMP_`
+copies, dropped afterwards). The recipe is in the file's header: copy the snapshot with
+`snapshot_date` advanced one day (plus whatever departures and arrivals the case needs), copy the
+ledger, `sed` the procedure's two table names onto the copies, CALL it, run the file, drop the
+copies. **A permanent, pass-by-pass version of D01 needs a ledger archive** — the ledger cannot
+detect a number that was rewritten in place without one. That is a Task 5 (health checks) item, not
+a defect in the ledger.
+
+**Record 2026-08-23 (TDD, on `TMP_` copies; the copies were dropped).** Two replays of tomorrow's
+pass against the live snapshot advanced one day.
+*Injected case* — a repair flipped to `WINNER`, a repair deleted from the snapshot, a stalled probe
+flipped to `LAUNCH_CONTAINED`, a parked seat flipped to `DEAD`, and two non-seated winners flipped
+to `REPRICE`: run BEFORE the replay, D04 and D05 FAILED; after it every check PASSED, the ledger's
+first-ever closures carried `TO_GOOD_SIDE` / `PAUSED` / `STATE_CHANGED` / `KILLED` / `PARK_LAPSED`
+each with its mapped sentence, the two admissions took the two numbers the closures had freed in the
+procedure's own total order, and two consecutive replays gave an identical fingerprint.
+*Plain case* (the date advance alone, no injection): D05 FAILED before the replay and PASSED after;
+A01–A16 and B01–B29 both passed on the new snapshot, and this time A06 / A15 were NOT vacuous.
+The plain case also produced the register's first real closures **without any injection at all**:
+the parked seats whose re-verdict appointment falls on the current snapshot date lapse the moment
+the date moves, and close `PARK_LAPSED`. Their `next_check_what` reads "revival proposed — in
+today's plan", so whether they actually lapse in the live pass depends on whether the ladder
+renews the appointment that night — the seat code does the right thing either way. Read who is
+about to lapse with:
+
+```sql
+SELECT l.family, l.seat_no, s.next_check_date, s.next_check_what
+FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` l
+JOIN `onyga-482313.OI.FACT_KEYWORD_STATE` s USING (campaign_id, keyword_id)
+WHERE l.closed_on IS NULL AND s.state = 'PARKED'
+  AND s.next_check_date <= (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_KEYWORD_STATE`)
+ORDER BY l.family, l.seat_no;
+```
+
+**A canary, not a defect (B08 + B02).** Under the injected case, `LAUNCH_CONTAINED` on a
+working-family keyword — a state the register's category table does not name — landed in
+`other — not earning, not being tested` (20% side, by design, so a family cannot pass by hiding
+spend), and that made B08 fail ("no `other` category in a working family") AND B02 fail
+(`SEAT + LEAK + GAP` no longer equals the bad side, because `other` is on the bad side and is none
+of the three). Both are the SAME alarm and it is working: **if the verdict ladder ever emits a state
+the register does not name, B08 fires first and B02 fires with it, and the fix is to name the state
+in the category table — never to widen the test.** Neither check fired on the plain case.
+
+**What a pass costs.** The seat ledger step and the seat-economics step are separate costs; both are
+measurements, so take them from the log and a timed uncached run, never from this file:
+
+```sql
+SELECT run_date, procedure_name, status, duration_seconds
+FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
+WHERE procedure_name IN ('SP_SNAPSHOT_KEYWORD_STATE', 'SP_MAINTAIN_FAMILY_SEATS', 'SP_REFRESH_CUBE_TABLES')
+ORDER BY started_at DESC LIMIT 20;
+```
+
+```bash
+# step 0b on its own — one evaluation of the view, into a TMP_ so the live table is untouched
+time bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "CREATE OR REPLACE TABLE \`onyga-482313.OI.TMP_FSR_SEATECON\` AS SELECT * FROM \`onyga-482313.OI.V_OOB_KEYWORD\`"
+```
+
+**Measured 2026-08-23** (a measurement of that day, not a property of the code — re-run the two
+above): step 0b took just over seven minutes on its own, against a `SP_REFRESH_CUBE_TABLES` whose
+median over the preceding fortnight was about thirteen minutes — so it grows the cube-refresh step
+by roughly half again. `SP_MAINTAIN_FAMILY_SEATS` took well under a minute. **This prices Open
+ruling 4**: folding the build into `SP_SNAPSHOT_ENGINE_PROPOSALS`, which already evaluates
+`V_OOB_KEYWORD`, would recover that time; keeping it where it is buys the register a table with the
+same freshness contract as `T_LIFT_PROBES`. The number, not the design, is what was missing.
+
 ## Open rulings for Ori (register, 2026-08-22)
 
 Each is a design choice the register was BUILT with; none is a defect. Ori may overrule; the
@@ -477,6 +584,9 @@ change is then a derivation or a source, never a literal.
 4. **Where `T_OOB_SEAT_ECONOMICS` is built.** `SP_REFRESH_CUBE_TABLES` step 0b (one extra
    evaluation of `V_OOB_KEYWORD` per pass, minutes) vs folding it into
    `SP_SNAPSHOT_ENGINE_PROPOSALS`, which already evaluates the view. Built as the former.
+   **Now priced** (drift check 2026-08-23, see "What a pass costs"): the extra evaluation is
+   minutes, not seconds, and is a large fraction of the whole cube-refresh step. Re-measure with
+   the timed command in that section before ruling.
 5. **Stalled probes outside the budget engine** (e.g. the COPYCAT campaigns) have no published
    seat price. CLOSED by R-f (2026-08-23): the row says "price it by hand or park it at the
    engine's park price" — the park price is the engine's published `bid_park`, so even a
