@@ -23,11 +23,17 @@
 --                                 in the basis window (ruling R-a: a floor-priced TRIAL that buys
 --                                 nothing is idle, not a probe).
 --                     stalled probe — ruling R-b: NOT on the engine's list and NOT at the floor,
---                                 still holding the raised bid of its latest applied bid change
---                                 (an INCREASE_BID in V_PPC_CHANGE_LOG_APPLIED whose new_bid is the
---                                 current bid — the activation entry it was parked at), that raise
---                                 older than the engine's probe window (k_probe_window_days) and
---                                 fewer than the verdict's clicks (k_verdict_clicks) bought since.
+--                                 whose latest applied bid change (V_PPC_CHANGE_LOG_APPLIED) is an
+--                                 INCREASE_BID that still stands — the live bid is at or above the
+--                                 logged new_bid and above the logged old_bid, i.e. never lowered
+--                                 since (at or above, not equal: the generator's $1.00 activation
+--                                 floor can lift a bid past the logged raise after the row is
+--                                 written, and a keyword parked there is exactly the activation
+--                                 entry R-b names) — that raise older than the engine's probe
+--                                 window (k_probe_window_days) and fewer than the verdict's clicks
+--                                 (k_verdict_clicks) bought since. The change log is the authority
+--                                 for WHEN the raise happened; a bid raised with no applied log row
+--                                 at all has no raise date and reads WAITING (the SOP says so).
 --                                 A test that cannot produce a verdict at its pace is NOT "waiting
 --                                 for results": it is a seat on the 20% side with a standing
 --                                 proposal (re-price to the seat price, or park). The two
@@ -52,10 +58,13 @@
 --                     TO_WAITING      still TRIAL but in none of the three probe positions —
 --                                     back to waiting for clicks on the 80% side, no verdict yet
 --                   WHY THE LEDGER REMEMBERS: FACT_KEYWORD_STATE is CREATE OR REPLACE'd by
---                   SP_SNAPSHOT_KEYWORD_STATE and holds exactly ONE snapshot, so "what did this
---                   keyword read yesterday" cannot be asked of it. The ledger's
---                   last_observed_state (step 5) is the only memory; a row opened before that
---                   column existed (NULL) falls back to the kind it opened with (failed → KILLED).
+--                   SP_SNAPSHOT_KEYWORD_STATE and holds exactly ONE snapshot. A keyword still on
+--                   it carries prior_state (the snapshot procedure reads the old table before
+--                   replacing it), but a keyword that VANISHED from the snapshot has no row at
+--                   all — and the vanish is precisely the KILLED-vs-PAUSED case. The ledger's
+--                   last_observed_state (step 5) is the only memory for a vanished keyword; a row
+--                   opened before that column existed (NULL) falls back to the kind it opened
+--                   with (failed → KILLED).
 --   3. REOPEN     — a row closed on THIS snapshot date whose key is an occupant again is reopened
 --                   (closed_on / closed_reason / closed_reason_text cleared) so a same-day flip
 --                   keeps its number and the key (family, campaign, keyword, opened_on) stays unique.
@@ -86,7 +95,7 @@
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_MAINTAIN_FAMILY_SEATS`()
 OPTIONS (
-  description = "Maintains DE_FAMILY_SEAT_LEDGER from the FACT_KEYWORD_STATE snapshot (the table holds one snapshot) for the WORKING families (V_BOOK_ASSIGNMENT book = HARVEST; launches never seated; brand-defense keywords never seated — defense is never judged on profit). Occupants: REPRICE (repair), FLOOR_PROBATION (probation), LOSER (failed), REVIVED_SETTLING / PENDING_SETTLE (settling), and three probe positions of a TRIAL keyword — probe at an entry bid (on the engine's probe list T_LIFT_PROBES, spend or no spend: ruling R-a), probe at the park bid (the ladder's at_floor, i.e. the live bid at the published channel floor, WITH spend in the basis window = 7 complete days ending at the ads watermark - 1: ruling R-a), and stalled probe (ruling R-b: not engine-listed, not at the floor, still holding the raised bid of its latest applied INCREASE_BID in V_PPC_CHANGE_LOG_APPLIED, that raise older than the engine's probe window with fewer than the verdict's clicks since — a seat with a standing proposal, never 'waiting for results'). A TRIAL keyword in none of the three positions is waiting (80% side), never seated. Steps: CLOSE open rows that left the occupant set, dated on the snapshot, with a reason code and the same reason as a plain sentence (closed_reason_text), first-match KILLED (gone from the snapshot after a LOSER/DEAD last_observed_state in the ledger, or DEAD now) > PAUSED (gone otherwise, or PARKED) > LEFT_FAMILY (another family, or family left the HARVEST book) > DEFENSE_EXEMPT (now brand defense) > TO_GOOD_SIDE (WINNER / PACED_WINNER / AT_BAR) > TO_WAITING (still TRIAL, in no probe position); REOPEN a row closed on the same snapshot date whose key is an occupant again (keeps its number, keeps the key unique); ADMIT new occupants at the LOWEST seat number not held by an open row of the family, several admissions ordered totally (kind, spend DESC, campaign_id, keyword_id); OBSERVE: stamp every open row with last_observed_kind / last_observed_state — the ledger's only memory of yesterday, since the snapshot table is replaced daily. Idempotent on the same snapshot; continuing occupants keep their number whatever their kind becomes. T_LIFT_PROBES is the previous pass's (Task 21 rebuilds it after 20.8b) — deliberate, the engine's probe window is two weeks. Orchestrator Task 20.8b, right after SP_SNAPSHOT_KEYWORD_STATE. No engine reads the ledger. Spec: architecture/FAMILY_SEAT_REGISTER.md."
+  description = "Maintains DE_FAMILY_SEAT_LEDGER from the FACT_KEYWORD_STATE snapshot (the table holds one snapshot) for the WORKING families (V_BOOK_ASSIGNMENT book = HARVEST; launches never seated; brand-defense keywords never seated — defense is never judged on profit). Occupants: REPRICE (repair), FLOOR_PROBATION (probation), LOSER (failed), REVIVED_SETTLING / PENDING_SETTLE (settling), and three probe positions of a TRIAL keyword — probe at an entry bid (on the engine's probe list T_LIFT_PROBES, spend or no spend: ruling R-a), probe at the park bid (the ladder's at_floor, i.e. the live bid at the published channel floor, WITH spend in the basis window = 7 complete days ending at the ads watermark - 1: ruling R-a), and stalled probe (ruling R-b: not engine-listed, not at the floor, whose latest applied bid change in V_PPC_CHANGE_LOG_APPLIED is an INCREASE_BID that still stands — the live bid at or above the logged new_bid and above the logged old_bid, never lowered since; at-or-above because the generator's $1.00 activation floor can lift a bid past the logged raise — that raise older than the engine's probe window with fewer than the verdict's clicks since — a seat with a standing proposal, never 'waiting for results'; the change log is the authority for the raise date, a raise with no applied log row reads waiting). A TRIAL keyword in none of the three positions is waiting (80% side), never seated. Steps: CLOSE open rows that left the occupant set, dated on the snapshot, with a reason code and the same reason as a plain sentence (closed_reason_text), first-match KILLED (gone from the snapshot after a LOSER/DEAD last_observed_state in the ledger, or DEAD now) > PAUSED (gone otherwise, or PARKED) > LEFT_FAMILY (another family, or family left the HARVEST book) > DEFENSE_EXEMPT (now brand defense) > TO_GOOD_SIDE (WINNER / PACED_WINNER / AT_BAR) > TO_WAITING (still TRIAL, in no probe position); REOPEN a row closed on the same snapshot date whose key is an occupant again (keeps its number, keeps the key unique); ADMIT new occupants at the LOWEST seat number not held by an open row of the family, several admissions ordered totally (kind, spend DESC, campaign_id, keyword_id); OBSERVE: stamp every open row with last_observed_kind / last_observed_state — the ledger's only memory of a keyword that has VANISHED from the snapshot (a keyword still on the snapshot carries prior_state; a vanished one has no row, and the vanish is the KILLED-vs-PAUSED case). Idempotent on the same snapshot; continuing occupants keep their number whatever their kind becomes. T_LIFT_PROBES is the previous pass's (Task 21 rebuilds it after 20.8b) — deliberate, the engine's probe window is two weeks. Orchestrator Task 20.8b, right after SP_SNAPSHOT_KEYWORD_STATE. No engine reads the ledger. Spec: architecture/FAMILY_SEAT_REGISTER.md."
 )
 BEGIN
   -- Declared constants. k_basis_days: the spend basis is the complete days ending at the ads
@@ -114,7 +123,7 @@ BEGIN
   probes AS (SELECT DISTINCT CAST(keyword_id AS STRING) AS kid FROM `onyga-482313.OI.T_LIFT_PROBES`),
   -- the keyword's latest APPLIED bid change — the entry it was parked at, if that change was a raise
   lastchg AS (
-    SELECT campaign_id, keyword_id, action, DATE(applied_at, 'America/Los_Angeles') AS chg_date, new_bid
+    SELECT campaign_id, keyword_id, action, DATE(applied_at, 'America/Los_Angeles') AS chg_date, old_bid, new_bid
     FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
     WHERE action IN ('INCREASE_BID', 'REDUCE_BID') AND new_bid IS NOT NULL
       AND keyword_id IS NOT NULL AND keyword_id != ''
@@ -140,7 +149,11 @@ BEGIN
            (COALESCE(s.at_floor, FALSE) AND COALESCE(sp.spend_basis, 0) > 0) AS park_probe,
            (p.kid IS NULL AND NOT COALESCE(s.at_floor, FALSE)
             AND lc.action = 'INCREASE_BID'
-            AND ABS(s.current_bid - lc.new_bid) < 0.005
+            -- the raise still stands: the live bid is AT OR ABOVE the logged new_bid and above the
+            -- logged old_bid (never lowered since). At-or-above, not equal: the generator's $1.00
+            -- activation floor can lift a bid past the logged raise AFTER the log row is written
+            -- (a known defect), and a keyword parked there is exactly the population R-b names.
+            AND s.current_bid >= lc.new_bid - 0.005 AND s.current_bid > lc.old_bid + 0.005
             AND lc.chg_date <= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL k_probe_window_days DAY)
             AND COALESCE(sp.clicks_since_raise, 0) < k_verdict_clicks) AS stalled_probe
     FROM s

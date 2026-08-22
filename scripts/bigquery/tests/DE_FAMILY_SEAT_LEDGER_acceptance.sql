@@ -27,9 +27,12 @@
 --       seated.
 --   A12 Ruling R-a, positive half: every engine-listed TRIAL keyword in a working family (spend or
 --       no spend) and every at-floor TRIAL keyword with spend holds exactly one open row.
---   A13 Ruling R-b: every stalled probe — TRIAL, not engine-listed, not at the floor, still holding
---       the raised bid of its latest applied INCREASE_BID, that raise older than the engine's probe
---       window (k_probe_window_days) with fewer than the verdict's clicks (k_verdict_clicks) since —
+--   A13 Ruling R-b: every stalled probe — TRIAL, not engine-listed, not at the floor, whose latest
+--       applied bid change is an INCREASE_BID that still stands (the live bid is at or above the
+--       logged new_bid and above the logged old_bid — never lowered since; at or above, not equal,
+--       because the generator's $1.00 activation floor can lift a bid past the logged raise after
+--       the log row is written), that raise older than the engine's probe window
+--       (k_probe_window_days) with fewer than the verdict's clicks (k_verdict_clicks) since —
 --       holds exactly one open row, and the row's last_observed_kind reads 'stalled probe'.
 --   A14 Memory: every open row carries last_observed_kind and last_observed_state, and
 --       last_observed_state equals the keyword's ladder state today (the ledger is the only memory
@@ -44,7 +47,7 @@ wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d FROM 
 working AS (SELECT family FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT` WHERE book = 'HARVEST'),
 probes AS (SELECT DISTINCT CAST(keyword_id AS STRING) AS kid FROM `onyga-482313.OI.T_LIFT_PROBES`),
 lastchg AS (
-  SELECT campaign_id, keyword_id, action, DATE(applied_at, 'America/Los_Angeles') AS chg_date, new_bid
+  SELECT campaign_id, keyword_id, action, DATE(applied_at, 'America/Los_Angeles') AS chg_date, old_bid, new_bid
   FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
   WHERE action IN ('INCREASE_BID', 'REDUCE_BID') AND new_bid IS NOT NULL
     AND keyword_id IS NOT NULL AND keyword_id != ''
@@ -65,7 +68,7 @@ today AS (
          COALESCE(sp.spend_basis, 0) > 0 AS has_spend,
          (p.kid IS NULL AND NOT COALESCE(s.at_floor, FALSE)
           AND lc.action = 'INCREASE_BID'
-          AND ABS(s.current_bid - lc.new_bid) < 0.005
+          AND s.current_bid >= lc.new_bid - 0.005 AND s.current_bid > lc.old_bid + 0.005
           AND lc.chg_date <= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL k.probe_window_days DAY)
           AND COALESCE(sp.clicks_since_raise, 0) < k.verdict_clicks) AS stalled,
          s.family IN (SELECT family FROM working) AS in_working

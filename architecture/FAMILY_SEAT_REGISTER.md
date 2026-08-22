@@ -33,7 +33,7 @@ register.
 | Occupants | REPRICE (repair), FLOOR_PROBATION (probation), LOSER (failed), TRIAL keywords in a probe position (probe / stalled probe — see the two probe rulings below), REVIVED_SETTLING / PENDING_SETTLE (settling — reported on the 80% side, seated on the 20% ledger). |
 | Brand defense | never seated, never given a profit-based move (house rule: defense is never judged on profit). A seated keyword that becomes defense is closed `DEFENSE_EXEMPT`. The register (Task 2) shows defense keywords with a label, outside the seat count. |
 | **R-a — a probe** (2026-08-22) | A TRIAL keyword on the engine's own probe list `T_LIFT_PROBES` (a bid raised within the engine's probe window with fewer than the verdict's clicks since; the set `V_OOB_KEYWORD` calls `is_lift_probe`) is a seat **whether or not it spent this week** — it costs $0 today and still answers "what am I probing". A TRIAL keyword at the **park bid** — the ladder's `at_floor` (the live bid observed at the channel floor `FN_BID_FLOOR` publishes, never a literal) — that the engine does NOT list is a seat **only with spend** in the basis window: a floor-priced keyword buying nothing is idle, not a probe. |
-| **R-b — a stalled probe** (2026-08-22) | A TRIAL keyword parked at an activation entry bid — still holding the raised bid of its latest applied `INCREASE_BID` in `V_PPC_CHANGE_LOG_APPLIED` — past the engine's probe window (`k_probe_window_days`) with fewer than the verdict's clicks (`k_verdict_clicks`) since, no longer engine-listed and not at the floor, is a **STALLED PROBE**: a seat on the 20% side with a standing proposal (re-price to the seat price, or park), NOT "waiting for results" on the 80% side. A test that cannot produce a verdict at its pace is not a test. The set is read from the data on every run (the change log × the snapshot), never from a list. |
+| **R-b — a stalled probe** (2026-08-22) | A TRIAL keyword parked at an activation entry bid — its latest applied bid change in `V_PPC_CHANGE_LOG_APPLIED` is an `INCREASE_BID` that still stands: the live bid is **at or above** the logged `new_bid` and above the logged `old_bid`, never lowered since — past the engine's probe window (`k_probe_window_days`) with fewer than the verdict's clicks (`k_verdict_clicks`) since, no longer engine-listed and not at the floor, is a **STALLED PROBE**: a seat on the 20% side with a standing proposal (re-price to the seat price, or park), NOT "waiting for results" on the 80% side. A test that cannot produce a verdict at its pace is not a test. The set is read from the data on every run (the change log × the snapshot), never from a list. **At or above, not equal** (repair pass 2026-08-22): the generator's $1.00 activation floor can lift a bid past the logged raise after the log row is written (a known defect), so a keyword logged as a +$0.02 nudge but sitting live at $1.00 is exactly the parked entry this ruling names and is seated. **The change log is the authority for the raise date**: a bid raised with no applied log row at all has no date to age, reads WAITING on the 80% side, and is not seated — a raise outside the log is a logging gap to close, not a position to guess. A `REDUCE_BID` that lands on $1.00 is a cut, not an entry, and reads WAITING. |
 | Waiting | A TRIAL keyword in none of the three probe positions (engine-listed; at the floor with spend; stalled) is WAITING on the 80% side and is never seated. |
 
 ## Objects
@@ -59,7 +59,7 @@ register.
 | `LOSER` | failed |
 | `REVIVED_SETTLING`, `PENDING_SETTLE` | settling |
 | `TRIAL` AND (on the engine's probe list `T_LIFT_PROBES`, spend or not — OR `at_floor` with spend in the basis window) | probe (R-a) |
-| `TRIAL` AND not engine-listed AND not `at_floor` AND the latest applied bid change is an `INCREASE_BID` whose `new_bid` is still the current bid, dated on or before today − `k_probe_window_days`, with fewer than `k_verdict_clicks` clicks since | stalled probe (R-b) |
+| `TRIAL` AND not engine-listed AND not `at_floor` AND the latest applied bid change is an `INCREASE_BID` that still stands (live bid ≥ its `new_bid` and > its `old_bid`), dated on or before today − `k_probe_window_days`, with fewer than `k_verdict_clicks` clicks since | stalled probe (R-b) |
 | any state AND `is_brand_defense` | never an occupant |
 
 The basis window is the `k_basis_days` (declared 7) complete days ending at the ads watermark − 1,
@@ -92,12 +92,15 @@ its job, not a new seat). `occupant_kind_at_open` records what the seat held on 
 live by the register.
 
 **Memory.** `FACT_KEYWORD_STATE` is `CREATE OR REPLACE`'d by `SP_SNAPSHOT_KEYWORD_STATE` on every
-run and holds exactly one snapshot, so "what did this keyword read yesterday" cannot be asked of
-it. The ledger is the only memory: on every run each OPEN row is stamped with
-`last_observed_kind` / `last_observed_state` from today's occupant set (re-stamping the same
-snapshot writes the same values). When a keyword vanishes from the snapshot, KILLED vs PAUSED is
-decided from `last_observed_state`; a row opened before the memory columns existed (NULL) falls
-back to the kind it opened with.
+run and holds exactly one snapshot. A keyword still on the snapshot does carry `prior_state` — the
+snapshot procedure reads the old table into `prior_snapshot` before replacing it — so "what did
+this keyword read yesterday" CAN be asked of it for a keyword that is still there. A keyword that
+has VANISHED from the snapshot (paused or archived in Amazon) has no row at all, and the vanish is
+precisely the KILLED-vs-PAUSED question. For that keyword the ledger is the only memory: on every
+run each OPEN row is stamped with `last_observed_kind` / `last_observed_state` from today's
+occupant set (re-stamping the same snapshot writes the same values). When a keyword vanishes,
+KILLED vs PAUSED is decided from `last_observed_state`; a row opened before the memory columns
+existed (NULL) falls back to the kind it opened with.
 
 **Closure.** An open row whose keyword is no longer an occupant is closed on the snapshot date with
 one reason code and the same reason as one plain sentence (`closed_reason_text`), first match
@@ -145,6 +148,10 @@ holds one open row observed as 'stalled probe'); every open row remembers its la
 and state and the state matches the ladder today; every closed row carries the sentence mapped to
 its code. TDD record 2026-08-22: with the memory columns added but the old procedure live, A13
 (stalled probes unseated) and A14 (no memory) FAILED; after the new procedure, 15/15 PASS.
+Repair pass, same day: A13 rewritten to the at-or-above gate FAILED on the live procedure
+(violations = the keywords logged as a small nudge but parked at the activation floor); after the
+gate was deployed and the procedure run, they were admitted, 15/15 PASS, and two consecutive runs
+gave an identical fingerprint.
 
 **Synthetic tests** are run by hand on `TMP_` copies, never on the live snapshot or ledger (house
 rule: no synthetic rows in a production table consumers read). Ship record: a `TMP_` copy of the
@@ -170,6 +177,30 @@ FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` l
 LEFT JOIN sp ON sp.cid = l.campaign_id AND sp.kid = l.keyword_id
 WHERE l.closed_on IS NULL GROUP BY 1, 2 ORDER BY 1, 2;
 ```
+
+## Open rulings for Ori (recorded, not decided here)
+
+1. **Engine parity vs activation-sized entries.** The stalled-probe position is the engine's own
+   probing test expired — ANY applied `INCREASE_BID`, whatever its size. So a coach nudge of a few
+   cents that bought no clicks in two weeks is seated as a stalled probe beside a $1.00 activation
+   entry. The spec's words are "activation entry bid"; no published entry-bid column exists
+   (`V_KEYWORD_LIFT.probe_bid` is internal and excluded from its schema), so narrowing the set would
+   need either a published column or a declared threshold. Until Ori rules, engine parity stands —
+   it is the only definition that reads from published data. Measure the split with:
+   ```sql
+   SELECT l.family, l.seat_no, s.target_text, s.current_bid, c.old_bid, c.new_bid, c.source,
+          DATE(c.applied_at, 'America/Los_Angeles') AS raised_on
+   FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` l
+   JOIN `onyga-482313.OI.FACT_KEYWORD_STATE` s USING (campaign_id, keyword_id)
+   JOIN `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED` c USING (campaign_id, keyword_id)
+   WHERE l.closed_on IS NULL AND l.last_observed_kind = 'stalled probe'
+   QUALIFY ROW_NUMBER() OVER (PARTITION BY l.family, l.seat_no ORDER BY c.applied_at DESC, c.change_id DESC) = 1
+   ORDER BY 1, 2;
+   ```
+2. **A raise with no applied log row.** R-b keys on the applied change log for the raise date. A
+   TRIAL whose bid moved without any `INCREASE_BID` / `REDUCE_BID` row reads WAITING. The
+   alternative — age the bid from `FACT_KEYWORD_STATE.state_since` — would seat raises the book
+   never made; not built.
 
 ## What the register never does
 
