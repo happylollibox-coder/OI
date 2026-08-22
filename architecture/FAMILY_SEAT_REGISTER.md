@@ -7,7 +7,9 @@ probing or waiting for results." Design spec: `docs/superpowers/specs/2026-08-22
 (Approach A, approved). Plan: `docs/superpowers/plans/2026-08-22-family-seat-register.md`.
 
 **Status:** Task 1 (the ledger) SHIPPED 2026-08-22; repaired the same day (rulings R-a / R-b
-encoded, ledger memory added, plain-sentence reasons). Tasks 2–5 (register view, leak generator
+encoded, ledger memory added, plain-sentence reasons); polished with Task 2 (snapshot-dated
+window, raise-bounded click count, no silent catch-all, brand words). Task 2 (the register view
+`V_FAMILY_SEAT_REGISTER`, rulings R-c / R-d / R-e) SHIPPED 2026-08-22. Tasks 3–5 (leak generator
 arm, morning surface, health checks) pending — this file grows with each.
 
 ## The doctrine in one paragraph
@@ -31,10 +33,13 @@ register.
 | The lever | keyword moves by manual bulksheet. Budgets shown, never moved. |
 | A seat | a dollar-sized slot in the 20% allowance, occupied by one keyword; numbers are stable per keyword, not per rank. |
 | Occupants | REPRICE (repair), FLOOR_PROBATION (probation), LOSER (failed), TRIAL keywords in a probe position (probe / stalled probe — see the two probe rulings below), REVIVED_SETTLING / PENDING_SETTLE (settling — reported on the 80% side, seated on the 20% ledger). |
-| Brand defense | never seated, never given a profit-based move (house rule: defense is never judged on profit). A seated keyword that becomes defense is closed `DEFENSE_EXEMPT`. The register (Task 2) shows defense keywords with a label, outside the seat count. |
+| Brand defense | never seated, never given a profit-based move (house rule: defense is never judged on profit). A seated keyword that becomes defense is closed `DEFENSE_EXEMPT`. The register shows defense spend as its own category OUTSIDE both sides of the ratio. **Defense is tested three ways** (Task 2): the ladder's `is_brand_defense`, the campaign-name rule the ladder's source uses (`V_BID_CPC_TRANSFER`: "BRAND DEFENSE" in the name), and the keyword text against the house brand phrases (`DIM_BRAND_PHRASES`, `phrase_type = 'BRAND'`) — the flag alone misses brand-word keywords in SB campaigns (the Bottle "happy lolli truth or dare" trials). Never a literal list in a view. |
 | **R-a — a probe** (2026-08-22) | A TRIAL keyword on the engine's own probe list `T_LIFT_PROBES` (a bid raised within the engine's probe window with fewer than the verdict's clicks since; the set `V_OOB_KEYWORD` calls `is_lift_probe`) is a seat **whether or not it spent this week** — it costs $0 today and still answers "what am I probing". A TRIAL keyword at the **park bid** — the ladder's `at_floor` (the live bid observed at the channel floor `FN_BID_FLOOR` publishes, never a literal) — that the engine does NOT list is a seat **only with spend** in the basis window: a floor-priced keyword buying nothing is idle, not a probe. |
 | **R-b — a stalled probe** (2026-08-22) | A TRIAL keyword parked at an activation entry bid — its latest applied bid change in `V_PPC_CHANGE_LOG_APPLIED` is an `INCREASE_BID` that still stands: the live bid is **at or above** the logged `new_bid` and above the logged `old_bid`, never lowered since — past the engine's probe window (`k_probe_window_days`) with fewer than the verdict's clicks (`k_verdict_clicks`) since, no longer engine-listed and not at the floor, is a **STALLED PROBE**: a seat on the 20% side with a standing proposal (re-price to the seat price, or park), NOT "waiting for results" on the 80% side. A test that cannot produce a verdict at its pace is not a test. The set is read from the data on every run (the change log × the snapshot), never from a list. **At or above, not equal** (repair pass 2026-08-22): the generator's $1.00 activation floor can lift a bid past the logged raise after the log row is written (a known defect), so a keyword logged as a +$0.02 nudge but sitting live at $1.00 is exactly the parked entry this ruling names and is seated. **The change log is the authority for the raise date**: a bid raised with no applied log row at all has no date to age, reads WAITING on the 80% side, and is not seated — a raise outside the log is a logging gap to close, not a position to guess. A `REDUCE_BID` that lands on $1.00 is a cut, not an entry, and reads WAITING. |
 | Waiting | A TRIAL keyword in none of the three probe positions (engine-listed; at the floor with spend; stalled) is WAITING on the 80% side and is never seated. |
+| **R-c — engine parity stands** (2026-08-22, closes Open ruling 1) | Any standing applied raise that expired the engine's own test is stalled, whatever its size: a keyword that could not buy the verdict's clicks in the probe window at its raised bid is neither earning nor being tested. The register publishes the raise on the row (`raise_old_bid → raise_new_bid`, `raised_on`, `clicks_since_raise`, `days_since_raise`) and words the sentence by its size: a raise of `k.entry_raise_ratio` (1.5×) or more reads "entered at $1.00 on Aug 4 — 8 clicks in the 17 complete days since"; a smaller one reads "was nudged $0.45→$0.47 on Aug 4 — 0 clicks …"; a bid lifted past the logged raise adds ", now sitting at $1.00". Proposal on both: "raise to the seat price $s to get a verdict, or park it at its floor". The seat price is READ from the budget engine's seat economics (`T_OOB_SEAT_ECONOMICS.seat_cpc`, materialised from `V_OOB_KEYWORD`), never restated; a campaign outside the engine has no seat price and the sentence says so. |
+| **R-d — no test clock** (2026-08-22, closes Open ruling 2) | A TRIAL whose bid moved (more than one distinct bid in `DIM_KEYWORD`'s history) with NO applied change-log row — or away from the last logged bid since, other than the activation-floor lift R-b already treats as the raise standing — is NOT seated and is NOT "waiting": it is its own category **"waiting — no test clock"** on the 80% side, with the sentence "this bid was set outside the change log, so there is no date to judge it from" and the move "log the bid (or restore it by sheet) so the clock can start". A `REDUCE_BID` that lands on an entry price is a cut, not an entry (Bottle "truth or dare game" stays waiting). |
+| **R-e — idle at the floor** (2026-08-22) | A TRIAL at the park bid with $0 spend and 0 clicks in the basis window is the category **"idle at the floor"**: $0, shown so nothing is silent, on neither side (no ratio is affected). |
 
 ## Objects
 
@@ -42,7 +47,8 @@ register.
 |---|---|---|
 | `DE_FAMILY_SEAT_LEDGER` | The only state the register keeps: one row per occupancy (family, campaign_id, keyword_id, opened_on) with `seat_no`, `closed_on`, `closed_reason`, `closed_reason_text`, `occupant_kind_at_open`, `last_observed_kind`, `last_observed_state`. | shipped |
 | `SP_MAINTAIN_FAMILY_SEATS` | Orchestrator Task 20.8b, right after `SP_SNAPSHOT_KEYWORD_STATE`. Closes, reopens, admits, observes. Idempotent on the same snapshot. | shipped |
-| `V_FAMILY_SEAT_REGISTER` | FAMILY / SEAT / LEAK / GAP / REFERENCE rows — the object Ori reads. | Task 2 |
+| `V_FAMILY_SEAT_REGISTER` | FAMILY / CATEGORY / SEAT / OPEN_SEAT / LEAK / GAP / ABSORB / REFERENCE rows — the object Ori reads. | shipped |
+| `T_OOB_SEAT_ECONOMICS` | The budget engine's seat economics (slots, seat_rank, seat_cpc, role …) materialised once per pass from `V_OOB_KEYWORD` by `SP_REFRESH_CUBE_TABLES` step 0b, right after `T_LIFT_PROBES`. Exists because `V_OOB_KEYWORD` is a planner-ceiling view measured in minutes and the register may never inline it. | shipped |
 | leak arm of `tools/build_reprice_bulksheet.py` | pause rows + ad-group-grain negates for closed-but-spending keywords. | Task 3 |
 | `V_DAILY_BRIEF` SEATS section, `SeatRegister` cube | the morning surface. | Task 4 |
 | `V_ENGINE_HEALTH` checks | reconciliation, idempotence, every occupant numbered. | Task 5 |
@@ -67,6 +73,12 @@ where the watermark is `LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` over `FACT_AMAZON
 anchor the ladder uses. `k_probe_window_days` (declared 14) and `k_verdict_clicks` (declared 20)
 mirror the engine's own probing test in `V_KEYWORD_LIFT` (raised within 14 days, under 20 episode
 clicks) — a stalled probe is that test expired; if the engine changes them, change them here.
+The window is aged against the SNAPSHOT date (`run_day`), never the wall clock, so the occupant
+set is a pure function of the snapshot; the clicks since the raise are counted on complete days
+(before the watermark) from the raise date itself — the ads scan starts at the basis window or
+the oldest standing raise, whichever is earlier — so the count is never truncated by a fixed
+window (`FACT_AMAZON_ADS` is partitioned by year: the dry-run byte bound is the same as the old
+120-day scan; only the rows read change).
 Every kind except the floor-priced probe is seated on its verdict alone, spend or no spend (a
 repair with no spend this week is still in repair — its seat simply costs nothing today; an
 engine-listed probe with no clicks yet is still being funded; a stalled probe with no clicks is
@@ -113,8 +125,9 @@ to be shown wherever a person reads the code:
 | `PAUSED` | The keyword is gone from the snapshot, or the ladder now reads parked, without a failed verdict first. The seat is free. |
 | `LEFT_FAMILY` | The keyword is still tracked but now belongs to another family, or its family left the working (HARVEST) book. The seat is free. |
 | `DEFENSE_EXEMPT` | The keyword is now brand defense. Defense is never judged on profit, so it is never seated. The seat is free. |
-| `TO_GOOD_SIDE` | The keyword is now winning or at its bar: it moved to the 80% side. The seat is free. |
+| `TO_GOOD_SIDE` | The keyword is now winning or at its bar: it moved to the 80% side. The seat is free. (`WINNER`, `PACED_WINNER`, `AT_BAR` — named explicitly, never a catch-all.) |
 | `TO_WAITING` | The keyword is still a trial but is no longer bought at an entry or park bid and is not a stalled probe: it is back to waiting for clicks on the 80% side, no verdict yet. The seat is free. |
+| `STATE_CHANGED` | The keyword left the seat set — it now reads *\<the state in plain words\>*. The seat is free. (Any state the rows above do not name — e.g. "launch, contained by the launch controller" — so nothing closes silently. Synthetic record 2026-08-22 on `TMP_` copies: a repair seat flipped to `LAUNCH_CONTAINED` closed with exactly that sentence; a repair seat flipped to `REVIVED_SETTLING` stayed open, number kept, kind re-observed as settling.) |
 
 Occupant kinds, for the same reason: repair = "losing, being re-priced toward its bar";
 probation = "losing, held at its floor to be seen serving"; failed = "lost at its floor";
@@ -137,8 +150,8 @@ SELECT COUNT(*) n, FARM_FINGERPRINT(STRING_AGG(TO_JSON_STRING(t), '|' ORDER BY f
 FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` t;
 ```
 
-**Acceptance** (`scripts/bigquery/tests/DE_FAMILY_SEAT_LEDGER_acceptance.sql`, every row PASS, 15
-checks): one open row per ladder occupant; no open row without an occupant; one keyword per open
+**Acceptance** (`scripts/bigquery/tests/DE_FAMILY_SEAT_LEDGER_acceptance.sql`, every check passes):
+one open row per ladder occupant; no open row without an occupant; one keyword per open
 number in a family; numbers ≥ 1; no launch-family row; closed rows carry one of the six reasons;
 open probe / stalled-probe seats hold TRIAL keywords; the occupancy key is unique; no keyword
 holds two open rows; no brand-defense keyword holds an open seat; R-a both ways (every open TRIAL
@@ -146,12 +159,16 @@ seat is engine-listed, or at the floor WITH spend, or stalled — and every engi
 spend or not, and every at-floor TRIAL with spend, holds one open row); R-b (every stalled probe
 holds one open row observed as 'stalled probe'); every open row remembers its last observed kind
 and state and the state matches the ladder today; every closed row carries the sentence mapped to
-its code. TDD record 2026-08-22: with the memory columns added but the old procedure live, A13
-(stalled probes unseated) and A14 (no memory) FAILED; after the new procedure, 15/15 PASS.
+its code (for `STATE_CHANGED`, the mapped prefix, the state in plain words, and "The seat is
+free."). TDD record 2026-08-22: with the memory columns added but the old procedure live, A13
+(stalled probes unseated) and A14 (no memory) FAILED; after the new procedure, every check PASSED.
 Repair pass, same day: A13 rewritten to the at-or-above gate FAILED on the live procedure
 (violations = the keywords logged as a small nudge but parked at the activation floor); after the
-gate was deployed and the procedure run, they were admitted, 15/15 PASS, and two consecutive runs
-gave an identical fingerprint.
+gate was deployed and the procedure run, they were admitted, every check PASSED, and two
+consecutive runs gave an identical fingerprint. Task 2 polish, same day: the snapshot-dated window,
+the raise-bounded click count and the brand-word test changed no live occupant (every check passed
+before and after; two runs, identical fingerprint); `STATE_CHANGED` was proven on `TMP_` copies
+(above) because no live seat had left for an unnamed state.
 
 **Synthetic tests** are run by hand on `TMP_` copies, never on the live snapshot or ledger (house
 rule: no synthetic rows in a production table consumers read). Ship record: a `TMP_` copy of the
@@ -178,9 +195,14 @@ LEFT JOIN sp ON sp.cid = l.campaign_id AND sp.kid = l.keyword_id
 WHERE l.closed_on IS NULL GROUP BY 1, 2 ORDER BY 1, 2;
 ```
 
-## Open rulings for Ori (recorded, not decided here)
+## Rulings closed on 2026-08-22 (kept for the record)
 
-1. **Engine parity vs activation-sized entries.** The stalled-probe position is the engine's own
+Both open rulings below were closed by R-c and R-d in the rulings table above. The measurement
+query under item 1 still answers "which stalled seats are entries and which are nudges" — read
+the register's `raise_old_bid` / `raise_new_bid` instead, it carries the same facts.
+
+1. **Engine parity vs activation-sized entries.** (closed by R-c — parity stands; the sentence is
+   size-aware and the raise is published on the row.) The stalled-probe position is the engine's own
    probing test expired — ANY applied `INCREASE_BID`, whatever its size. So a coach nudge of a few
    cents that bought no clicks in two weeks is seated as a stalled probe beside a $1.00 activation
    entry. The spec's words are "activation entry bid"; no published entry-bid column exists
@@ -197,10 +219,119 @@ WHERE l.closed_on IS NULL GROUP BY 1, 2 ORDER BY 1, 2;
    QUALIFY ROW_NUMBER() OVER (PARTITION BY l.family, l.seat_no ORDER BY c.applied_at DESC, c.change_id DESC) = 1
    ORDER BY 1, 2;
    ```
-2. **A raise with no applied log row.** R-b keys on the applied change log for the raise date. A
-   TRIAL whose bid moved without any `INCREASE_BID` / `REDUCE_BID` row reads WAITING. The
-   alternative — age the bid from `FACT_KEYWORD_STATE.state_since` — would seat raises the book
-   never made; not built.
+2. **A raise with no applied log row.** (closed by R-d — "waiting — no test clock", its own
+   category with its own move; never seated, never aged from `state_since`.)
+
+## The register (Task 2 — `V_FAMILY_SEAT_REGISTER`)
+
+One view, one wide shape, every row carrying a `sentence` a new reader can act on and a
+`sort_key` that orders the whole register totally (determinism). Read it sorted:
+
+```sql
+SELECT row_type, family, horizon, seat_no, category, side, cost_per_day, move, sentence
+FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER` ORDER BY sort_key;
+```
+
+**Row types.** `FAMILY` (one per working family per horizon — the doctrine read), `CATEGORY`
+(one per family × category × horizon; they sum to the family's spend on that horizon to the
+cent), `SEAT` (one per occupant, numbered by the ledger), `OPEN_SEAT` (one per working family:
+the lowest free number, the open capacity and the next probe the capacity can afford from the
+budget engine's queue), `LEAK` (closed but still spending), `GAP` (spending with no verdict row), `NO_CLOCK` (a trial whose bid moved outside the change
+log — its own sentence and move, R-d),
+`ABSORB` (advisory: an above-bar campaign capped on at least `k.absorb_capped_days` of the last
+7 that could take freed spend — shown, never moved), `REFERENCE` (the launch families, same
+categories, never judged).
+
+**Categories and sides** (category ← ladder state; the codes live only inside the view, a person
+reads the category words):
+
+| category | ladder state / position | side |
+|---|---|---|
+| winning | `WINNER`, `PACED_WINNER` | 80 |
+| marginal — at its bar | `AT_BAR` | 80 |
+| waiting — too few clicks yet | `TRIAL` in no probe position, bid set by the book | 80 |
+| waiting — no test clock | `TRIAL`, bid moved outside the change log (R-d) | 80 |
+| waiting — verdict settling | `REVIVED_SETTLING`, `PENDING_SETTLE` — seated, counted on the 80% side by ruling | 80 |
+| losing — in repair | `REPRICE` | 20 · seat |
+| losing — on probation at its floor | `FLOOR_PROBATION` | 20 · seat |
+| losing — failed at its floor | `LOSER` | 20 · seat |
+| probe — being bought at an entry bid | `TRIAL` engine-listed, or at the floor with spend (R-a) | 20 · seat |
+| probe — stalled | `TRIAL`, standing applied raise past the engine's test (R-b, R-c) | 20 · seat |
+| closed but still spending | `PARKED` / `DEAD` with spend | 20 · leak |
+| untracked — no verdict row | spend with no ladder row | 20 · gap |
+| idle at the floor | `TRIAL` at the floor, $0, 0 clicks (R-e) | none, $0 |
+| closed — not spending | `PARKED` / `DEAD`, $0 | none, $0 |
+| brand defense — never judged on profit | the three-way defense test | outside the ratio |
+| launch — contained | `LAUNCH_CONTAINED` (reference families) | outside the doctrine |
+| other — not earning, not being tested | any state not named above | 20 (a family cannot pass by hiding spend) |
+
+**The ratio.** `judged_per_day` = good side + bad side; `good_share` = good ÷ judged;
+`allowance_per_day` = `k.allowance_share` (0.20) × judged; `open_capacity` = allowance − bad side;
+`over_by` = the excess when OUT. Brand-defense spend is published beside the ratio
+(`defense_per_day`) and is in neither side, so the allowance is 20% of the JUDGED spend — a
+choice recorded here for Ori (the alternative, 20% of all spend including defense, would let
+defense dollars buy seats). `doctrine_status`: IN at 80% or above; AT_LINE within `at_line_band`
+under the line; OUT below that. **`at_line_band` is derived, never declared**: the relative noise
+of a 7-day spend read for the smallest working family — stddev ÷ mean of its daily spend over the
+context window, ÷ √(basis days) — published with its derivation in words on every FAMILY row:
+
+```sql
+SELECT DISTINCT at_line_band, at_line_band_derivation
+FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER` WHERE row_type = 'FAMILY';
+```
+
+**Horizons** (FAMILY and CATEGORY rows, column `horizon`, each with `as_of`, the basis dates and
+`horizon_assumption` on the row): `today` is measured; `day one` assumes the PENDING_UPLOAD book
+lands — every keyword on it spends in proportion to new bid ÷ old bid (a linear guess, labelled
+as such) and the leaks are paused; `re-judged` assumes the repairs hold at their bar and move to
+the good side at their day-one cost, probation keywords stay at their floor, failed keywords are
+killed, stalled probes are parked, engine probes and settling verdicts hold, untracked spend is
+unchanged. Projections are labelled projections in the sentence.
+
+**Seat economics.** A seat costs what its occupant spends per day on the basis window. A probe's
+admission cost is the engine's own: the campaign's `seat_cpc` × `k.click_goal_day` (4 — the seat
+model's one 4-click trial a day), read from `T_OOB_SEAT_ECONOMICS`; the OPEN_SEAT row proposes
+the first QUEUED keyword (by the engine's `seat_rank`) the open capacity can afford. The register
+proposes; the engine activates; nobody here bids.
+
+**Holdout.** Every SEAT / LEAK / GAP row in a holdout campaign (`DE_HOLDOUT_ASSIGNMENT`, arm
+HOLDOUT) carries `holdout`, `holdout_eligible_from` and a note; from `eligible_from` the move
+reads "no sheet row".
+
+**Planner.** Reads tables and light views only: `FACT_KEYWORD_STATE`, `T_FAMILY_BAR`,
+`FACT_AMAZON_ADS`, `DE_FAMILY_SEAT_LEDGER`, `T_LIFT_PROBES`, `T_OOB_SEAT_ECONOMICS`,
+`V_CAMPAIGN_CAP_STATE` (measured in seconds and tens of MB), `V_PPC_CHANGE_LOG_APPLIED`,
+`FACT_PPC_CHANGE_LOG` (PENDING_UPLOAD only), `DIM_KEYWORD`, `DIM_BRAND_PHRASES`,
+`DE_HOLDOUT_ASSIGNMENT`, `V_BOOK_ASSIGNMENT`. `V_OOB_KEYWORD` is a planner-ceiling view measured
+in minutes and is never inlined — its seat economics come through `T_OOB_SEAT_ECONOMICS`. The read
+cost is a measurement; take it from a dry run, never from this file:
+
+```
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --dry_run \
+  "SELECT * FROM \`onyga-482313.OI.V_FAMILY_SEAT_REGISTER\`"
+```
+
+**Acceptance** (`scripts/bigquery/tests/V_FAMILY_SEAT_REGISTER_acceptance.sql`, a script that
+reads the view once into a temp table; every check passes): category rows sum to the family spend
+on every horizon to the cent; SEAT (20% side) + LEAK + GAP equal the bad side; every keyword of a
+working family is counted exactly once against an independent re-derivation; every seat is
+numbered by its open ledger row and every open ledger row has a seat; no launch family in a
+FAMILY row; no brand-defense keyword holds a move (three-way test); `sort_key` is unique; every
+row has a sentence and every actionable row a move; holdout marked exactly where it belongs;
+stalled-probe rows publish the raise and a size-aware sentence; three horizons per family; the
+R-d / R-e categories match a re-derivation; one OPEN_SEAT row per family at the lowest free
+number; ABSORB rows are capped, non-defense campaigns; the FAMILY figures reconcile. TDD record
+2026-08-22: run before the view existed, the script failed (object not found); after deploy one
+check (B12) FAILED on a NULL-swallowing re-derivation in the TEST (a stalled test with no log row
+is NULL, and `NOT NULL` hid the keyword) — the view was right, the test was fixed, then every check
+PASSED. Determinism: two uncached pulls, identical MD5 (query at the bottom of the test file).
+
+**The morning read** is a measurement — take it from the view, never from this file:
+
+```sql
+SELECT family, sentence FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`
+WHERE row_type = 'FAMILY' AND horizon = 'today' ORDER BY family;
+```
 
 ## What the register never does
 
@@ -212,7 +343,10 @@ register, but are excluded from every sheet the register prescribes.
 ## Standing Rule 0
 
 Mechanism in prose, queries for numbers. The only constants declared here are `k_basis_days` = 7
-(the spend basis), `k_probe_window_days` = 14 and `k_verdict_clicks` = 20 (the engine's probing
-test, mirrored for the stalled-probe position) and, from the spec, `allowance_share` = 0.20
-(Task 2). Today's seat counts and costs come from the ledger and the register, never from this
+(the spend basis), `k_context_days` = 28 (context), `k_probe_window_days` = 14 and
+`k_verdict_clicks` = 20 (the engine's probing test, mirrored for the stalled-probe position),
+`allowance_share` = 0.20 (the doctrine), `click_goal_day` = 4 (the seat model's daily click goal,
+mirrored from `V_OOB_KEYWORD`), `absorb_capped_days` = 4 and `entry_raise_ratio` = 1.5 (the
+wording rule of R-c). `at_line_band` is derived, not declared. Today's seat counts, costs, shares
+and the acceptance tallies come from the ledger, the register and the test files, never from this
 file.

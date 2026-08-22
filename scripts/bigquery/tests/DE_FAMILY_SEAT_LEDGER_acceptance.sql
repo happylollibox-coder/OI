@@ -14,13 +14,16 @@
 --   A3  One keyword per number: among OPEN rows, (family, seat_no) is unique.
 --   A4  Numbers start at 1 and are never NULL or negative.
 --   A5  No launch-family row, ever (open or closed): only HARVEST-book families are seated.
---   A6  Every closed row carries one of the six reasons; every open row carries none.
+--   A6  Every closed row carries one of the mapped reasons (incl. STATE_CHANGED, P3); every open
+--       row carries none.
 --   A7  Probe rows are TRIAL keywords: an open seat opened as 'probe' or 'stalled probe' reads
 --       TRIAL on the ladder.
 --   A8  Key uniqueness: (family, campaign_id, keyword_id, opened_on) appears once.
 --   A9  Idempotence evidence is external (two runs, identical fingerprint — see the SOP); here we
 --       assert the necessary condition that no keyword holds two open rows anywhere.
---   A10 No brand-defense keyword holds an open seat (defense is never judged on profit).
+--   A10 No brand-defense keyword holds an open seat (defense is never judged on profit) — defense
+--       tested three ways: the ladder flag, 'BRAND DEFENSE' in the campaign name, a house brand
+--       phrase (DIM_BRAND_PHRASES) in the keyword text.
 --   A11 Ruling R-a, negative half: every open TRIAL seat is an engine-listed probe (spend or not),
 --       OR at the park bid WITH spend in the basis window, OR a stalled probe. A TRIAL keyword at
 --       the park bid with NO spend, or at neither bid and not stalled, is waiting and must not be
@@ -32,13 +35,15 @@
 --       logged new_bid and above the logged old_bid — never lowered since; at or above, not equal,
 --       because the generator's $1.00 activation floor can lift a bid past the logged raise after
 --       the log row is written), that raise older than the engine's probe window
---       (k_probe_window_days) with fewer than the verdict's clicks (k_verdict_clicks) since —
+--       (k_probe_window_days) AGAINST THE SNAPSHOT DATE (P1) with fewer than the verdict's clicks
+--       (k_verdict_clicks) since, counted on complete days from the raise date (P2) —
 --       holds exactly one open row, and the row's last_observed_kind reads 'stalled probe'.
 --   A14 Memory: every open row carries last_observed_kind and last_observed_state, and
 --       last_observed_state equals the keyword's ladder state today (the ledger is the only memory
 --       of yesterday — FACT_KEYWORD_STATE holds one snapshot).
 --   A15 Plain words: every closed row carries closed_reason_text, and the text is the sentence the
---       SOP maps to its code; every open row carries none.
+--       SOP maps to its code (for STATE_CHANGED: the mapped prefix, the state in plain words, and
+--       'The seat is free.'); every open row carries none.
 -- =============================================================================================
 WITH
 k AS (SELECT 7 AS basis_days, 14 AS probe_window_days, 20 AS verdict_clicks),  -- mirrors SP_MAINTAIN_FAMILY_SEATS / V_KEYWORD_LIFT probing
@@ -55,27 +60,37 @@ lastchg AS (
 sp AS (
   SELECT CAST(f.campaign_id AS STRING) AS cid, CAST(f.keyword_id AS STRING) AS kid,
          SUM(IF(f.date BETWEEN DATE_SUB(wm.d, INTERVAL k.basis_days DAY) AND DATE_SUB(wm.d, INTERVAL 1 DAY), f.Ads_cost, 0)) AS spend_basis,
-         SUM(IF(lc.chg_date IS NOT NULL AND f.date > lc.chg_date, f.Ads_clicks, 0)) AS clicks_since_raise
+         -- complete days since the raise; the scan is bounded by the oldest standing raise, never a fixed window (P2)
+         SUM(IF(lc.chg_date IS NOT NULL AND f.date > lc.chg_date AND f.date < wm.d, f.Ads_clicks, 0)) AS clicks_since_raise
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` f CROSS JOIN wm CROSS JOIN k
   LEFT JOIN lastchg lc ON lc.campaign_id = CAST(f.campaign_id AS STRING) AND lc.keyword_id = CAST(f.keyword_id AS STRING)
-  WHERE f.date > DATE_SUB(wm.d, INTERVAL 120 DAY)
+  WHERE f.date >= LEAST(DATE_SUB(wm.d, INTERVAL k.basis_days DAY), COALESCE((SELECT MIN(chg_date) FROM lastchg), wm.d))
+    AND f.date < wm.d
   GROUP BY 1, 2),
+brand_hit AS (
+  SELECT DISTINCT s.campaign_id, s.keyword_id FROM `onyga-482313.OI.FACT_KEYWORD_STATE` s
+  JOIN (SELECT DISTINCT LOWER(phrase) AS phrase FROM `onyga-482313.OI.DIM_BRAND_PHRASES` WHERE phrase_type = 'BRAND') b
+    ON LOWER(s.target_text) LIKE CONCAT('%', b.phrase, '%')),
 today AS (
   SELECT s.family, s.campaign_id, s.keyword_id, s.state,
-         COALESCE(s.is_brand_defense, FALSE) AS is_brand_defense,
+         -- brand defense three ways: the ladder's flag, the campaign-name rule, the house brand phrases
+         (COALESCE(s.is_brand_defense, FALSE)
+          OR REGEXP_CONTAINS(UPPER(COALESCE(s.campaign_name, '')), r'BRAND DEFENSE')
+          OR bh.keyword_id IS NOT NULL) AS is_brand_defense,
          COALESCE(s.at_floor, FALSE) AS at_floor,
          p.kid IS NOT NULL AS engine_probe,
          COALESCE(sp.spend_basis, 0) > 0 AS has_spend,
          (p.kid IS NULL AND NOT COALESCE(s.at_floor, FALSE)
           AND lc.action = 'INCREASE_BID'
           AND s.current_bid >= lc.new_bid - 0.005 AND s.current_bid > lc.old_bid + 0.005
-          AND lc.chg_date <= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL k.probe_window_days DAY)
+          AND lc.chg_date <= DATE_SUB(run_day.d, INTERVAL k.probe_window_days DAY)  -- aged against the snapshot (P1)
           AND COALESCE(sp.clicks_since_raise, 0) < k.verdict_clicks) AS stalled,
          s.family IN (SELECT family FROM working) AS in_working
   FROM `onyga-482313.OI.FACT_KEYWORD_STATE` s CROSS JOIN run_day CROSS JOIN k
   LEFT JOIN probes p ON p.kid = s.keyword_id
   LEFT JOIN sp ON sp.cid = s.campaign_id AND sp.kid = s.keyword_id
   LEFT JOIN lastchg lc ON lc.campaign_id = s.campaign_id AND lc.keyword_id = s.keyword_id
+  LEFT JOIN brand_hit bh ON bh.campaign_id = s.campaign_id AND bh.keyword_id = s.keyword_id
   WHERE s.snapshot_date = run_day.d),
 ladder_occ AS (
   SELECT family, campaign_id, keyword_id FROM today
@@ -96,7 +111,8 @@ reason_text AS (
   SELECT 'LEFT_FAMILY', 'The keyword is still tracked but now belongs to another family, or its family left the working (HARVEST) book. The seat is free.' UNION ALL
   SELECT 'DEFENSE_EXEMPT', 'The keyword is now brand defense. Defense is never judged on profit, so it is never seated. The seat is free.' UNION ALL
   SELECT 'TO_GOOD_SIDE', 'The keyword is now winning or at its bar: it moved to the 80% side. The seat is free.' UNION ALL
-  SELECT 'TO_WAITING', 'The keyword is still a trial but is no longer bought at an entry or park bid and is not a stalled probe: it is back to waiting for clicks on the 80% side, no verdict yet. The seat is free.'),
+  SELECT 'TO_WAITING', 'The keyword is still a trial but is no longer bought at an entry or park bid and is not a stalled probe: it is back to waiting for clicks on the 80% side, no verdict yet. The seat is free.' UNION ALL
+  SELECT 'STATE_CHANGED', 'The keyword left the seat set — it now reads '),  -- prefix: the state follows in plain words
 checks AS (
   SELECT 'A01 every ladder occupant has exactly one open row' AS check_name,
          (SELECT COUNT(*) FROM ladder_occ o
@@ -121,10 +137,10 @@ checks AS (
   SELECT 'A05 no launch-family row (HARVEST book only)',
          (SELECT COUNT(*) FROM ledger l LEFT JOIN working w ON w.family = l.family WHERE w.family IS NULL)
   UNION ALL
-  SELECT 'A06 closed rows carry one of six reasons; open rows carry none',
+  SELECT 'A06 closed rows carry one of the mapped reasons; open rows carry none',
          (SELECT COUNT(*) FROM ledger
           WHERE (closed_on IS NOT NULL AND closed_reason NOT IN
-                   ('TO_GOOD_SIDE', 'TO_WAITING', 'KILLED', 'PAUSED', 'LEFT_FAMILY', 'DEFENSE_EXEMPT'))
+                   ('TO_GOOD_SIDE', 'TO_WAITING', 'KILLED', 'PAUSED', 'LEFT_FAMILY', 'DEFENSE_EXEMPT', 'STATE_CHANGED'))
              OR (closed_on IS NULL AND closed_reason IS NOT NULL))
   UNION ALL
   SELECT 'A07 open probe and stalled-probe seats hold TRIAL keywords',
@@ -167,7 +183,10 @@ checks AS (
   UNION ALL
   SELECT 'A15 every closed row carries the plain sentence mapped to its reason; open rows carry none',
          (SELECT COUNT(*) FROM ledger l LEFT JOIN reason_text x ON x.code = l.closed_reason
-          WHERE (l.closed_on IS NOT NULL AND (l.closed_reason_text IS NULL OR l.closed_reason_text != x.text))
+          WHERE (l.closed_on IS NOT NULL AND (l.closed_reason_text IS NULL
+                                              OR IF(l.closed_reason = 'STATE_CHANGED',
+                                                    NOT STARTS_WITH(l.closed_reason_text, x.text) OR NOT ENDS_WITH(l.closed_reason_text, '. The seat is free.'),
+                                                    l.closed_reason_text != x.text)))
              OR (l.closed_on IS NULL AND l.closed_reason_text IS NOT NULL))
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
