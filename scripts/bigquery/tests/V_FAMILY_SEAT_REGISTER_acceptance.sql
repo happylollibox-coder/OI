@@ -2,8 +2,8 @@
 -- V_FAMILY_SEAT_REGISTER acceptance — every row must read PASS (spec §8 guarantees, rulings R-a…R-e).
 -- Run after SP_MAINTAIN_FAMILY_SEATS on the latest FACT_KEYWORD_STATE snapshot:
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
--- The view is read ONCE into a temp table (a script, not a single query) so the fifteen checks
--- do not re-plan the register per correlated subquery.
+-- The view is read ONCE into a temp table (a script, not a single query) so the checks do not
+-- re-plan the register per correlated subquery.
 -- TDD record: run BEFORE the view exists it cannot pass (the object is not found); after deploy
 -- every check reads PASS. Determinism is asserted externally with the query at the bottom.
 --
@@ -14,20 +14,25 @@
 --   B02 Sides: on 'today', SEAT rows on the 20% side + LEAK + GAP rows sum to bad_side_per_day to
 --       the cent (settling seats are counted on the 80% side by ruling and are excluded).
 --   B03 Every keyword exactly once: the CATEGORY keyword counts of a working family on 'today'
---       equal the family's universe re-derived here (ladder rows ∪ keywords with spend in the
---       basis window, in campaigns T_FAMILY_BAR maps to the family); and no keyword appears in
---       two of SEAT / LEAK / GAP / NO_CLOCK.
+--       equal the family's universe re-derived here (ladder rows ∪ keywords with spend > 0 on the
+--       BASIS window — never the wider scan window — in campaigns T_FAMILY_BAR maps to the
+--       family); and no keyword appears in two of SEAT / LEAK / GAP / NO_CLOCK.
 --   B04 Seats are numbered: every SEAT row carries a seat_no; (family, seat_no) is unique among
 --       SEAT rows; the number is the open ledger row's; every open ledger row has a SEAT row.
 --   B05 No launch family is judged: zero FAMILY rows for INVEST families; REFERENCE rows carry
 --       doctrine_status 'REFERENCE' and never IN / AT_LINE / OUT.
---   B06 Brand defense never gets a move: no SEAT / LEAK / GAP row whose keyword is defense by the
---       ladder flag, by the campaign-name rule, or by the house brand phrases (DIM_BRAND_PHRASES).
+--   B06 Brand defense never gets a move: no SEAT / LEAK / GAP / NO_CLOCK row whose keyword is
+--       defense by the ladder flag, by the campaign-name rule, or by the house brand phrases
+--       (DIM_BRAND_PHRASES) — tested on the ROW's own campaign_name and target_text (so an
+--       off-ladder keyword is tested too), and on the ladder flag through the snapshot.
 --   B07 Total ordering: sort_key is unique over all rows (the determinism precondition).
 --   B08 Plain words: every row has a non-empty sentence; every SEAT / LEAK / GAP / NO_CLOCK /
 --       OPEN_SEAT row has a move; no category reads 'other' in a working family.
---   B09 Holdout: every SEAT / LEAK / GAP row in a HOLDOUT campaign carries holdout TRUE, its
---       eligible_from and a note; no row outside one carries the marker.
+--   B09 Holdout: every row that names a campaign (SEAT / LEAK / GAP / NO_CLOCK / ABSORB / UNMAPPED,
+--       and OPEN_SEAT with a candidate) in a HOLDOUT campaign carries holdout TRUE, its
+--       eligible_from and a note; no row outside one carries the marker; from eligible_from the
+--       move of such a row reads 'no sheet row' / 'advisory suppressed' and no OPEN_SEAT candidate
+--       sits in one.
 --   B10 Stalled probes (R-b / R-c): every 'probe — stalled' SEAT row publishes raise_old_bid,
 --       raise_new_bid, raised_on, clicks_since_raise, days_since_raise and a sentence that says
 --       'entered at' or 'was nudged'; its due_on is NULL (no clock); its move names the seat
@@ -44,6 +49,11 @@
 --   B15 Every FAMILY row's figures reconcile: allowance = 0.20 × judged; judged = good + bad;
 --       open_capacity = allowance − bad; good_share = good ÷ judged; spend_basis = judged +
 --       defense (+ launch, + $0 categories) — all to the cent.
+--   B16 Spend in the cracks: the UNMAPPED campaign rows equal an independent re-derivation (every
+--       campaign with spend > 0 on the basis window that has no T_FAMILY_BAR row and no ladder row
+--       with a family), cost per day to the cent; the total row equals their sum and count.
+--   B17 No phantom gap: every GAP row costs more than $0 on the basis window (the definition of
+--       a gap is spend with no verdict row).
 -- =============================================================================================
 CREATE TEMP TABLE reg AS SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
 WITH
@@ -68,6 +78,8 @@ bidv AS (SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) A
          FROM `onyga-482313.OI.DIM_KEYWORD` GROUP BY 1, 2),
 sp AS (
   SELECT CAST(f.campaign_id AS STRING) AS cid, CAST(f.keyword_id AS STRING) AS kid,
+         ARRAY_AGG(f.campaign_name ORDER BY f.date DESC, f.campaign_name LIMIT 1)[OFFSET(0)] AS ads_campaign_name,
+         ARRAY_AGG(f.targeting ORDER BY f.date DESC, f.targeting LIMIT 1)[OFFSET(0)] AS targeting,
          SUM(IF(f.date BETWEEN DATE_SUB(wm.d, INTERVAL k.basis_days DAY) AND DATE_SUB(wm.d, INTERVAL 1 DAY), f.Ads_cost, 0)) AS spend7,
          SUM(IF(f.date BETWEEN DATE_SUB(wm.d, INTERVAL k.basis_days DAY) AND DATE_SUB(wm.d, INTERVAL 1 DAY), f.Ads_clicks, 0)) AS clicks7,
          SUM(IF(lc.chg_date IS NOT NULL AND f.date > lc.chg_date AND f.date < wm.d, f.Ads_clicks, 0)) AS clicks_since_raise
@@ -87,12 +99,25 @@ snap AS (
 -- the universe the register must cover, re-derived
 universe AS (
   SELECT COALESCE(s.campaign_id, sp.cid) AS campaign_id, COALESCE(s.keyword_id, sp.kid) AS keyword_id,
-         COALESCE(s.family, f.family) AS family, s.state, COALESCE(s.is_defense, FALSE) AS is_defense,
+         COALESCE(s.family, f.family) AS family, s.state,
+         (COALESCE(s.is_defense, FALSE)
+          OR REGEXP_CONTAINS(UPPER(COALESCE(s.campaign_name, sp.ads_campaign_name, '')), r'BRAND DEFENSE')
+          OR EXISTS (SELECT 1 FROM brand b WHERE LOWER(COALESCE(s.target_text, sp.targeting, '')) LIKE CONCAT('%', b.phrase, '%'))) AS is_defense,
          COALESCE(s.at_floor, FALSE) AS at_floor, s.current_bid, COALESCE(sp.spend7, 0) AS spend7, COALESCE(sp.clicks7, 0) AS clicks7,
          COALESCE(sp.clicks_since_raise, 0) AS clicks_since_raise
   FROM snap s FULL OUTER JOIN sp ON sp.cid = s.campaign_id AND sp.kid = s.keyword_id
   LEFT JOIN fam f ON f.campaign_id = COALESCE(s.campaign_id, sp.cid)
-  WHERE COALESCE(s.family, f.family) IS NOT NULL),
+  -- an off-ladder keyword belongs to the universe only with spend on the BASIS window
+  WHERE COALESCE(s.family, f.family) IS NOT NULL AND (s.campaign_id IS NOT NULL OR COALESCE(sp.spend7, 0) > 0)),
+-- spend in the cracks, re-derived at campaign grain on the basis window (no keyword filter)
+unmapped_rd AS (
+  SELECT CAST(f.campaign_id AS STRING) AS campaign_id, SUM(f.Ads_cost) / MAX(k.basis_days) AS cost_per_day
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` f CROSS JOIN wm CROSS JOIN k
+  WHERE f.date BETWEEN DATE_SUB(wm.d, INTERVAL k.basis_days DAY) AND DATE_SUB(wm.d, INTERVAL 1 DAY)
+  GROUP BY 1
+  HAVING SUM(f.Ads_cost) > 0
+     AND campaign_id NOT IN (SELECT campaign_id FROM fam)
+     AND campaign_id NOT IN (SELECT DISTINCT campaign_id FROM snap WHERE family IS NOT NULL)),
 wu AS (SELECT u.* FROM universe u JOIN working w ON w.family = u.family),
 -- R-d / R-e re-derived
 rd AS (
@@ -116,6 +141,8 @@ ledger_open AS (SELECT family, campaign_id, keyword_id, seat_no FROM `onyga-4823
 famrow AS (SELECT * FROM r WHERE row_type IN ('FAMILY', 'REFERENCE')),
 cat AS (SELECT * FROM r WHERE row_type = 'CATEGORY'),
 kwrows AS (SELECT * FROM r WHERE row_type IN ('SEAT', 'LEAK', 'GAP', 'NO_CLOCK')),
+-- every row that names a campaign (the holdout marker's domain)
+camprows AS (SELECT * FROM r WHERE campaign_id IS NOT NULL AND row_type IN ('SEAT', 'LEAK', 'GAP', 'NO_CLOCK', 'ABSORB', 'UNMAPPED', 'OPEN_SEAT')),
 -- aggregates used by several checks (plain joins; BigQuery refuses correlated subqueries over tables)
 cat_sum AS (SELECT family, horizon, SUM(cost_per_day) AS s, SUM(n_keywords) AS nk FROM cat GROUP BY 1, 2),
 cat_named AS (SELECT family, horizon, category, SUM(n_keywords) AS nk, SUM(cost_per_day) AS s FROM cat GROUP BY 1, 2, 3),
@@ -154,8 +181,11 @@ checks AS (
          + (SELECT COUNT(*) FROM r WHERE row_type = 'REFERENCE' AND doctrine_status != 'REFERENCE')
          + (SELECT COUNT(*) FROM r JOIN launch l ON l.family = r.family WHERE r.row_type IN ('SEAT', 'LEAK', 'GAP', 'OPEN_SEAT', 'ABSORB'))
   UNION ALL
-  SELECT 'B06 no brand-defense keyword holds a SEAT / LEAK / GAP row (ladder flag, campaign name, or house brand phrase)',
-         (SELECT COUNT(*) FROM kwrows x JOIN universe u ON u.campaign_id = x.campaign_id AND u.keyword_id = x.keyword_id WHERE u.is_defense)
+  SELECT 'B06 no brand-defense keyword holds a SEAT / LEAK / GAP / NO_CLOCK row (ladder flag, campaign name, or house brand phrase — tested on the row itself)',
+         (SELECT COUNT(*) FROM kwrows x LEFT JOIN snap s ON s.campaign_id = x.campaign_id AND s.keyword_id = x.keyword_id
+          WHERE COALESCE(s.is_brand_defense, FALSE)
+             OR REGEXP_CONTAINS(UPPER(COALESCE(x.campaign_name, '')), r'BRAND DEFENSE')
+             OR EXISTS (SELECT 1 FROM brand b WHERE LOWER(COALESCE(x.target_text, '')) LIKE CONCAT('%', b.phrase, '%')))
   UNION ALL
   SELECT 'B07 sort_key is unique over all rows (total ordering)',
          (SELECT COUNT(*) FROM (SELECT sort_key FROM r GROUP BY 1 HAVING COUNT(*) > 1))
@@ -166,10 +196,16 @@ checks AS (
          + (SELECT COUNT(*) FROM r WHERE row_type IN ('SEAT', 'LEAK', 'GAP', 'NO_CLOCK', 'OPEN_SEAT') AND (move IS NULL OR move = ''))
          + (SELECT COUNT(*) FROM cat c JOIN working w ON w.family = c.family WHERE c.category LIKE 'other%')
   UNION ALL
-  SELECT 'B09 holdout marked on every SEAT / LEAK / GAP row of a holdout campaign, and only there',
-         (SELECT COUNT(*) FROM kwrows x LEFT JOIN holdout h ON h.campaign_id = x.campaign_id
+  SELECT 'B09 holdout marked on every row that names a holdout campaign (SEAT / LEAK / GAP / NO_CLOCK / ABSORB / UNMAPPED / OPEN_SEAT candidate), only there; from eligible_from the move is suppressed and no candidate sits in one',
+         (SELECT COUNT(*) FROM camprows x LEFT JOIN holdout h ON h.campaign_id = x.campaign_id
           WHERE (h.campaign_id IS NOT NULL AND (NOT COALESCE(x.holdout, FALSE) OR x.holdout_eligible_from IS DISTINCT FROM h.eligible_from OR x.holdout_note IS NULL))
              OR (h.campaign_id IS NULL AND (COALESCE(x.holdout, FALSE) OR x.holdout_note IS NOT NULL)))
+         + (SELECT COUNT(*) FROM r x WHERE x.holdout IS NULL AND x.campaign_id IS NULL AND (x.holdout_note IS NOT NULL OR x.holdout_eligible_from IS NOT NULL))
+         + (SELECT COUNT(*) FROM camprows x JOIN holdout h ON h.campaign_id = x.campaign_id CROSS JOIN run_day
+            WHERE run_day.d >= h.eligible_from
+              AND (x.row_type = 'OPEN_SEAT'
+                   OR NOT (x.move LIKE 'no sheet row%' OR x.move LIKE 'advisory suppressed%' OR x.row_type = 'UNMAPPED')
+                   OR x.sentence NOT LIKE '%HOLDOUT%'))
   UNION ALL
   SELECT 'B10 stalled-probe SEAT rows publish the raise (old, new, date, clicks, days), a size-aware sentence, no due date, and a seat-price proposal',
          (SELECT COUNT(*) FROM r WHERE row_type = 'SEAT' AND occupant_kind = 'stalled probe'
@@ -212,6 +248,16 @@ checks AS (
              OR ABS(f.open_capacity_per_day - (f.allowance_per_day - f.bad_side_per_day)) > 0.01
              OR (f.judged_per_day > 0 AND ABS(f.good_share - f.good_side_per_day / f.judged_per_day) > 0.001)
              OR c.s IS NULL OR ABS(f.spend_horizon_per_day - c.s) > 0.01)
+  UNION ALL
+  SELECT 'B16 UNMAPPED rows equal the re-derived spend in the cracks (campaign set, cost to the cent); the total row equals their sum and count',
+         (SELECT COUNT(*) FROM unmapped_rd u FULL OUTER JOIN (SELECT * FROM r WHERE row_type = 'UNMAPPED' AND campaign_id IS NOT NULL) x ON x.campaign_id = u.campaign_id
+          WHERE u.campaign_id IS NULL OR x.campaign_id IS NULL OR ABS(u.cost_per_day - x.cost_per_day) > 0.01)
+         + (SELECT COUNT(*) FROM (SELECT COUNT(*) AS n, SUM(cost_per_day) AS s FROM r WHERE row_type = 'UNMAPPED' AND campaign_id IS NOT NULL) d
+            CROSS JOIN (SELECT COUNT(*) AS nt, MAX(n_keywords) AS nk, MAX(cost_per_day) AS st FROM r WHERE row_type = 'UNMAPPED' AND campaign_id IS NULL) t
+            WHERE (d.n > 0 AND (t.nt != 1 OR t.nk != d.n OR ABS(t.st - d.s) > 0.01)) OR (d.n = 0 AND t.nt != 0))
+  UNION ALL
+  SELECT 'B17 no phantom gap: every GAP row spent more than $0 on the basis window',
+         (SELECT COUNT(*) FROM r WHERE row_type = 'GAP' AND NOT (cost_per_day > 0))
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks ORDER BY check_name;

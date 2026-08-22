@@ -47,7 +47,7 @@ register.
 |---|---|---|
 | `DE_FAMILY_SEAT_LEDGER` | The only state the register keeps: one row per occupancy (family, campaign_id, keyword_id, opened_on) with `seat_no`, `closed_on`, `closed_reason`, `closed_reason_text`, `occupant_kind_at_open`, `last_observed_kind`, `last_observed_state`. | shipped |
 | `SP_MAINTAIN_FAMILY_SEATS` | Orchestrator Task 20.8b, right after `SP_SNAPSHOT_KEYWORD_STATE`. Closes, reopens, admits, observes. Idempotent on the same snapshot. | shipped |
-| `V_FAMILY_SEAT_REGISTER` | FAMILY / CATEGORY / SEAT / OPEN_SEAT / LEAK / GAP / ABSORB / REFERENCE rows — the object Ori reads. | shipped |
+| `V_FAMILY_SEAT_REGISTER` | FAMILY / CATEGORY / SEAT / OPEN_SEAT / LEAK / GAP / NO_CLOCK / ABSORB / REFERENCE / UNMAPPED rows — the object Ori reads. | shipped |
 | `T_OOB_SEAT_ECONOMICS` | The budget engine's seat economics (slots, seat_rank, seat_cpc, role …) materialised once per pass from `V_OOB_KEYWORD` by `SP_REFRESH_CUBE_TABLES` step 0b, right after `T_LIFT_PROBES`. Exists because `V_OOB_KEYWORD` is a planner-ceiling view measured in minutes and the register may never inline it. | shipped |
 | leak arm of `tools/build_reprice_bulksheet.py` | pause rows + ad-group-grain negates for closed-but-spending keywords. | Task 3 |
 | `V_DAILY_BRIEF` SEATS section, `SeatRegister` cube | the morning surface. | Task 4 |
@@ -236,11 +236,23 @@ FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER` ORDER BY sort_key;
 (one per family × category × horizon; they sum to the family's spend on that horizon to the
 cent), `SEAT` (one per occupant, numbered by the ledger), `OPEN_SEAT` (one per working family:
 the lowest free number, the open capacity and the next probe the capacity can afford from the
-budget engine's queue), `LEAK` (closed but still spending), `GAP` (spending with no verdict row), `NO_CLOCK` (a trial whose bid moved outside the change
-log — its own sentence and move, R-d),
-`ABSORB` (advisory: an above-bar campaign capped on at least `k.absorb_capped_days` of the last
-7 that could take freed spend — shown, never moved), `REFERENCE` (the launch families, same
-categories, never judged).
+budget engine's queue), `LEAK` (closed but still spending), `GAP` (a keyword that SPENT on the
+basis window with no verdict row — an off-ladder keyword at $0 on the basis window is not in the
+universe and gets no row), `NO_CLOCK` (a trial whose bid moved outside the change log — its own
+sentence and move, R-d), `ABSORB` (advisory: an above-bar campaign capped on at least
+`k.absorb_capped_days` of the last 7 that could take freed spend — shown, never moved),
+`REFERENCE` (the launch families, same categories, never judged), `UNMAPPED` (spend in the
+cracks, spec §2: one row per campaign that spent on the basis window and that no family claims —
+no `T_FAMILY_BAR` row and no ladder row with a family — plus one total row; the family column
+reads `Unmapped`, the side `UNMAPPED`, the move is Admin's: map the campaign. The register never
+guesses a family from a campaign name; the dollars are published so no family read is silently
+short, and the total row says so).
+
+**Brand defense, on and off the ladder.** The three-way test (ladder flag, 'BRAND DEFENSE' in
+the campaign name, a house brand phrase from `DIM_BRAND_PHRASES` in the keyword text) is applied
+to the ads rows too — campaign name and targeting text — so an untracked keyword in a defense
+campaign is `brand defense — never judged on profit`, never a GAP on the 20% side. Defense is
+tested BEFORE the gap test.
 
 **Categories and sides** (category ← ladder state; the codes live only inside the view, a person
 reads the category words):
@@ -258,7 +270,7 @@ reads the category words):
 | probe — being bought at an entry bid | `TRIAL` engine-listed, or at the floor with spend (R-a) | 20 · seat |
 | probe — stalled | `TRIAL`, standing applied raise past the engine's test (R-b, R-c) | 20 · seat |
 | closed but still spending | `PARKED` / `DEAD` with spend | 20 · leak |
-| untracked — no verdict row | spend with no ladder row | 20 · gap |
+| untracked — no verdict row | spend on the basis window, no ladder row | 20 · gap |
 | idle at the floor | `TRIAL` at the floor, $0, 0 clicks (R-e) | none, $0 |
 | closed — not spending | `PARKED` / `DEAD`, $0 | none, $0 |
 | brand defense — never judged on profit | the three-way defense test | outside the ratio |
@@ -294,9 +306,15 @@ model's one 4-click trial a day), read from `T_OOB_SEAT_ECONOMICS`; the OPEN_SEA
 the first QUEUED keyword (by the engine's `seat_rank`) the open capacity can afford. The register
 proposes; the engine activates; nobody here bids.
 
-**Holdout.** Every SEAT / LEAK / GAP row in a holdout campaign (`DE_HOLDOUT_ASSIGNMENT`, arm
-HOLDOUT) carries `holdout`, `holdout_eligible_from` and a note; from `eligible_from` the move
-reads "no sheet row".
+**Holdout.** Every row that names a campaign — SEAT / LEAK / GAP / NO_CLOCK / ABSORB / UNMAPPED
+and the OPEN_SEAT candidate — in a holdout campaign (`DE_HOLDOUT_ASSIGNMENT`, arm HOLDOUT)
+carries `holdout`, `holdout_eligible_from` and a note; before `eligible_from` the sentence says
+when the campaign joins the arm. From `eligible_from`: every SEAT move (repair, probation,
+failed, stalled, probe, settling alike) reads "no sheet row — holdout campaign", the LEAK / GAP /
+NO_CLOCK moves read "no sheet row", the ABSORB advisory reads "advisory suppressed" (no freed
+spend is sent there), and the probe queue skips the campaign so no OPEN_SEAT candidate can sit in
+one. Proven on a `TMP_` copy of the view with `eligible_from` shifted 60 days back (every holdout
+row suppressed, no candidate in a holdout campaign); the copy dropped afterwards.
 
 **Planner.** Reads tables and light views only: `FACT_KEYWORD_STATE`, `T_FAMILY_BAR`,
 `FACT_AMAZON_ADS`, `DE_FAMILY_SEAT_LEDGER`, `T_LIFT_PROBES`, `T_OOB_SEAT_ECONOMICS`,
@@ -320,11 +338,19 @@ FAMILY row; no brand-defense keyword holds a move (three-way test); `sort_key` i
 row has a sentence and every actionable row a move; holdout marked exactly where it belongs;
 stalled-probe rows publish the raise and a size-aware sentence; three horizons per family; the
 R-d / R-e categories match a re-derivation; one OPEN_SEAT row per family at the lowest free
-number; ABSORB rows are capped, non-defense campaigns; the FAMILY figures reconcile. TDD record
+number; ABSORB rows are capped, non-defense campaigns; the FAMILY figures reconcile; the UNMAPPED
+rows equal an independent re-derivation of the spend in the cracks (campaign set and cost to the
+cent, total row = sum and count); no GAP row at $0. TDD record
 2026-08-22: run before the view existed, the script failed (object not found); after deploy one
 check (B12) FAILED on a NULL-swallowing re-derivation in the TEST (a stalled test with no log row
 is NULL, and `NOT NULL` hid the keyword) — the view was right, the test was fixed, then every check
-PASSED. Determinism: two uncached pulls, identical MD5 (query at the bottom of the test file).
+PASSED. Repair pass, same day: the universe re-derivation tightened to spend on the BASIS window,
+the defense test moved onto the row itself, the holdout check widened to every row naming a
+campaign and to the move text, and two checks added (unmapped spend, no phantom gap); against the
+first view, five checks FAILED (the phantom $0 gaps, the 'happy lolli' defense target published
+as a gap, the two holdout campaigns on ABSORB rows, the unmapped campaigns, the $0 GAP rows);
+after the repaired view, every check PASSED, and two uncached pulls gave an identical MD5.
+Determinism: two uncached pulls, identical MD5 (query at the bottom of the test file).
 
 **The morning read** is a measurement — take it from the view, never from this file:
 
@@ -333,12 +359,46 @@ SELECT family, sentence FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`
 WHERE row_type = 'FAMILY' AND horizon = 'today' ORDER BY family;
 ```
 
+**Spend in the cracks** is a measurement; read it from the register, never from this file:
+
+```sql
+SELECT campaign_name, cost_per_day, holdout, move
+FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER` WHERE row_type = 'UNMAPPED' ORDER BY sort_key;
+```
+
+## Open rulings for Ori (register, 2026-08-22)
+
+Each is a design choice the register was BUILT with; none is a defect. Ori may overrule; the
+change is then a derivation or a source, never a literal.
+
+1. **Allowance base.** The 20% allowance is computed on the JUDGED spend (80% side + 20% side);
+   brand-defense dollars are published beside the ratio and buy no seats. The alternative — 20%
+   of all family spend including defense — would let defense dollars buy seats.
+2. **`at_line_band`.** Derived as (stddev ÷ mean of the smallest working family's daily spend
+   over the context window) ÷ √(basis days); read today's value from the view. Accept the
+   derivation, or name another (e.g. the same noise for the family being judged, not the
+   smallest).
+3. **R-d detection.** "The bid moved" reads `DIM_KEYWORD`'s distinct bid count; a raise the SCD2
+   did not capture reads "waiting", not "waiting — no test clock". Under-detection only — never a
+   false seat. Accept, or point the test at another bid-history source.
+4. **Where `T_OOB_SEAT_ECONOMICS` is built.** `SP_REFRESH_CUBE_TABLES` step 0b (one extra
+   evaluation of `V_OOB_KEYWORD` per pass, minutes) vs folding it into
+   `SP_SNAPSHOT_ENGINE_PROPOSALS`, which already evaluates the view. Built as the former.
+5. **Stalled probes outside the budget engine** (e.g. the COPYCAT campaigns) have no published
+   seat price; the row says "price it by hand or park it". Confirm that reading, or name a
+   fallback price source.
+6. **Unmapped spend** is published as its own block and charged to no family. The alternative —
+   charging it to the 20% side of the family a campaign NAME suggests — would be a guess the
+   register refuses to make; mapping is Admin's job (Campaign Mapping).
+
 ## What the register never does
 
 No engine reads it. No budget is moved. No seat count is chosen — counts fall out of dollars and
-the engine's seat cost. No change to the verdict ladder, the bar or the floors. Holdout campaigns
-(`DE_HOLDOUT_ASSIGNMENT`, arm HOLDOUT, from `eligible_from`) may hold seats and are marked in the
-register, but are excluded from every sheet the register prescribes.
+the engine's seat cost. No change to the verdict ladder, the bar or the floors. No family is
+guessed from a campaign name — unmapped spend is published as unmapped. Holdout campaigns
+(`DE_HOLDOUT_ASSIGNMENT`, arm HOLDOUT, from `eligible_from`) may hold seats and are marked on
+every register row that names them, but are excluded from every sheet the register prescribes,
+from the absorption advisory and from the probe queue.
 
 ## Standing Rule 0
 

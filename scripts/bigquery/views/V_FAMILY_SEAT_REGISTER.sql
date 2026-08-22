@@ -14,7 +14,9 @@
 -- is three-fold — the ladder's own flag, the campaign-name rule the ladder's source uses
 -- (V_BID_CPC_TRANSFER: 'BRAND DEFENSE' in the name), AND the keyword text against the house brand
 -- phrases in DIM_BRAND_PHRASES (phrase_type BRAND) — because the ladder's flag misses brand-word
--- keywords in SB campaigns (the Bottle 'happy lolli truth or dare' family of trials).
+-- keywords in SB campaigns (the Bottle 'happy lolli truth or dare' family of trials). The test is
+-- applied to OFF-LADDER keywords too (campaign name and targeting text from the ads rows), so an
+-- untracked target in a defense campaign is DEFENSE, never a GAP judged on profit.
 --
 -- ROW TYPES (row_type), every one carrying a sentence a new reader can act on:
 --   FAMILY     one per working family per HORIZON (today · day one · re-judged): the doctrine
@@ -33,12 +35,17 @@
 --              next probe candidate from the budget engine's queue the capacity can afford
 --              (admission cost = seat price × the engine's daily click goal).
 --   LEAK       one per closed-but-spending keyword (PARKED / DEAD with spend in the window).
---   GAP        one per spending keyword with no verdict row on the ladder.
+--   GAP        one per keyword that SPENT on the basis window with no verdict row on the ladder
+--              (a keyword with no ladder row and $0 on the basis window is not in the universe).
 --   NO_CLOCK   one per trial whose bid moved outside the change log (ruling R-d): 80% side, its
 --              own sentence ("no date to judge it from") and move ("log the bid so the clock starts").
 --   ABSORB     advisory only: an above-bar campaign in the family capped ≥ k.absorb_capped_days of
 --              the last 7 that could take freed spend. Budgets are never moved by this register.
 --   REFERENCE  one per launch family: the same categories priced, no doctrine read.
+--   UNMAPPED   spend in the cracks (spec §2): one row per campaign that SPENT on the basis window
+--              but that no family claims (no T_FAMILY_BAR row and no ladder row with a family), and
+--              one total row. Outside every family read, published so nothing is silent; the move
+--              is Admin's (map the campaign). Holdout is marked here too.
 --
 -- CATEGORIES (category ← ladder state, rulings in the SOP):
 --   winning                                  WINNER, PACED_WINNER                              80
@@ -53,7 +60,7 @@
 --   probe — stalled                          TRIAL, standing applied raise past the engine's test  20 seat (R-b, R-c)
 --   idle at the floor                        TRIAL at the floor, $0, 0 clicks — shown, no side  (R-e)
 --   closed but still spending                PARKED / DEAD with spend                          20 leak
---   untracked — no verdict row               spend with no FACT_KEYWORD_STATE row              20 gap
+--   untracked — no verdict row               spend on the basis window, no FACT_KEYWORD_STATE row  20 gap
 --   brand defense — never judged on profit   see above                                         outside
 --   launch — contained                       LAUNCH_CONTAINED (reference families only)        outside
 --   Anything else is 'other — <state>' on the 20% side: a family cannot pass by hiding spend.
@@ -86,8 +93,10 @@
 -- V_BOOK_ASSIGNMENT. Never a ceiling view.
 --
 -- WHAT IT NEVER DOES. No engine reads it. No budget is moved. No bid is set. Every sheet it
--- prescribes is built by a generator and uploaded by Ori. Holdout campaigns are marked on every
--- SEAT / LEAK / GAP row and excluded from every sheet from their eligible_from date.
+-- prescribes is built by a generator and uploaded by Ori. Holdout campaigns are marked on EVERY
+-- row that names a campaign (SEAT / LEAK / GAP / NO_CLOCK / ABSORB / OPEN_SEAT / UNMAPPED): from
+-- their eligible_from date the move reads 'no sheet row', the absorption advisory is suppressed
+-- and the probe queue skips them.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_FAMILY_SEAT_REGISTER` AS
 WITH
@@ -188,6 +197,10 @@ brand_hit AS (
   SELECT DISTINCT s.campaign_id, s.keyword_id
   FROM `onyga-482313.OI.FACT_KEYWORD_STATE` s
   JOIN brand b ON LOWER(s.target_text) LIKE CONCAT('%', b.phrase, '%')),
+-- the same brand-phrase test on the ads rows, for keywords the ladder does not carry
+ads_brand_hit AS (
+  SELECT DISTINCT a.cid, a.kid
+  FROM kw_ads a JOIN brand b ON LOWER(COALESCE(a.targeting, '')) LIKE CONCAT('%', b.phrase, '%')),
 snap AS (
   SELECT s.campaign_id, s.keyword_id, s.family, s.campaign_name, s.target_text, s.match_type,
          s.channel, s.state, s.current_bid, s.bid_floor, COALESCE(s.at_floor, FALSE) AS at_floor,
@@ -206,7 +219,8 @@ oob_camp AS (SELECT campaign_id, MAX(seat_cpc) AS seat_cpc, MAX(slots) AS slots 
 ledger AS (
   SELECT family, campaign_id, keyword_id, seat_no, opened_on
   FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL),
--- ── the universe: every keyword in a family campaign that is on the ladder OR spent in the window
+-- ── the universe: every keyword in a family campaign that is on the ladder OR SPENT on the basis
+--    window (an off-ladder keyword with $0 on the basis window is not a gap and is not counted)
 u AS (
   SELECT COALESCE(s.campaign_id, a.cid) AS campaign_id,
          COALESCE(s.keyword_id, a.kid) AS keyword_id,
@@ -214,15 +228,37 @@ u AS (
          COALESCE(s.campaign_name, a.ads_campaign_name) AS campaign_name,
          COALESCE(s.target_text, a.targeting) AS target_text,
          s.match_type, s.channel, s.state, s.current_bid, s.bid_floor, COALESCE(s.at_floor, FALSE) AS at_floor,
-         s.next_check_date, s.state_since, COALESCE(s.is_defense, FALSE) AS is_defense,
+         s.next_check_date, s.state_since,
+         -- brand defense three ways, on and OFF the ladder (house rule 12)
+         (COALESCE(s.is_defense, FALSE)
+          OR REGEXP_CONTAINS(UPPER(COALESCE(s.campaign_name, a.ads_campaign_name, '')), r'BRAND DEFENSE')
+          OR ab.kid IS NOT NULL) AS is_defense,
          s.campaign_id IS NOT NULL AS on_ladder,
          COALESCE(a.spend7, 0) AS spend7, COALESCE(a.clicks7, 0) AS clicks7,
          COALESCE(a.spend28, 0) AS spend28, COALESCE(a.clicks_since_raise, 0) AS clicks_since_raise,
          f.keyword_bar
   FROM snap s
   FULL OUTER JOIN kw_ads a ON a.cid = s.campaign_id AND a.kid = s.keyword_id
+  LEFT JOIN ads_brand_hit ab ON ab.cid = a.cid AND ab.kid = a.kid
   LEFT JOIN fam f ON f.campaign_id = COALESCE(s.campaign_id, a.cid)
-  WHERE COALESCE(s.family, f.family) IS NOT NULL),
+  WHERE COALESCE(s.family, f.family) IS NOT NULL
+    AND (s.campaign_id IS NOT NULL OR COALESCE(a.spend7, 0) > 0)),
+-- ── spend in the cracks: campaigns that spent on the basis window and that no family claims
+camp_basis AS (
+  SELECT CAST(f.campaign_id AS STRING) AS cid,
+         ARRAY_AGG(f.campaign_name ORDER BY f.date DESC, f.campaign_name LIMIT 1)[OFFSET(0)] AS campaign_name,
+         SUM(f.Ads_cost) AS spend7, SUM(f.Ads_clicks) AS clicks7
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` f CROSS JOIN win
+  WHERE f.date BETWEEN win.basis_from AND win.basis_to
+  GROUP BY 1),
+unmapped AS (
+  SELECT cb.cid AS campaign_id, cb.campaign_name, cb.spend7, cb.clicks7,
+         h.campaign_id IS NOT NULL AS holdout, h.eligible_from AS holdout_eligible_from
+  FROM camp_basis cb
+  LEFT JOIN fam f ON f.campaign_id = cb.cid
+  LEFT JOIN (SELECT DISTINCT campaign_id FROM snap WHERE family IS NOT NULL) sf ON sf.campaign_id = cb.cid
+  LEFT JOIN holdout h ON h.campaign_id = cb.cid
+  WHERE f.campaign_id IS NULL AND sf.campaign_id IS NULL AND cb.spend7 > 0),
 -- ── the positions (R-a … R-e) and the code
 c AS (
   SELECT u.*, b.book,
@@ -259,8 +295,8 @@ c AS (
 coded AS (
   SELECT c.*,
     CASE
-      WHEN NOT on_ladder                                          THEN 'GAP'
       WHEN is_defense                                             THEN 'DEFENSE'
+      WHEN NOT on_ladder                                          THEN 'GAP'
       WHEN state IN ('WINNER', 'PACED_WINNER')                    THEN 'WINNING'
       WHEN state = 'AT_BAR'                                       THEN 'MARGINAL'
       WHEN state = 'REPRICE'                                      THEN 'REPAIR'
@@ -384,16 +420,22 @@ free_no AS (
   WHERE b.book = 'HARVEST' AND l.seat_no IS NULL
   GROUP BY 1),
 -- ── the probe queue: the engine's QUEUED keywords in the family, cheapest admission first by rank
+-- (a holdout campaign leaves the queue from its eligible_from date; before then the candidate
+--  carries the holdout marker)
 queue AS (
   SELECT f.family, o.campaign_id, o.campaign_name, o.keyword_id, o.target_text,
          o.seat_rank - o.slots AS queue_pos, o.seat_cpc, o.seat_cpc * k.click_goal_day AS admission_cost_per_day,
+         h.campaign_id IS NOT NULL AS holdout, h.eligible_from AS holdout_eligible_from,
          ROW_NUMBER() OVER (PARTITION BY f.family ORDER BY o.seat_rank, o.campaign_id, o.keyword_id) AS rk
-  FROM oob o CROSS JOIN k
+  FROM oob o CROSS JOIN k CROSS JOIN run_day
   JOIN fam f ON f.campaign_id = o.campaign_id
   JOIN books b ON b.family = f.family AND b.book = 'HARVEST'
-  WHERE o.role = 'QUEUED' AND NOT COALESCE(o.oob_is_defense, FALSE)),
+  LEFT JOIN holdout h ON h.campaign_id = o.campaign_id
+  WHERE o.role = 'QUEUED' AND NOT COALESCE(o.oob_is_defense, FALSE)
+    AND NOT (h.campaign_id IS NOT NULL AND run_day.d >= h.eligible_from)),
 next_probe AS (
-  SELECT q.family, q.campaign_id, q.campaign_name, q.keyword_id, q.target_text, q.queue_pos, q.seat_cpc, q.admission_cost_per_day
+  SELECT q.family, q.campaign_id, q.campaign_name, q.keyword_id, q.target_text, q.queue_pos, q.seat_cpc, q.admission_cost_per_day,
+         q.holdout, q.holdout_eligible_from
   FROM queue q
   JOIN fam_rows fr ON fr.family = q.family AND fr.horizon = 'today'
   WHERE q.admission_cost_per_day <= fr.open_capacity_per_day
@@ -401,11 +443,13 @@ next_probe AS (
 -- ── absorption advisory: above-bar campaigns capped ≥ k.absorb_capped_days of the last 7
 absorb AS (
   SELECT f.family, cs.campaign_id, cs.campaign_name, cs.days_capped_7d, cs.spend_7d, cs.budget_7d,
-         SAFE_DIVIDE(ca.gp7, NULLIF(ca.spend7, 0)) AS gp_roas_7d, f.keyword_bar
+         SAFE_DIVIDE(ca.gp7, NULLIF(ca.spend7, 0)) AS gp_roas_7d, f.keyword_bar,
+         h.campaign_id IS NOT NULL AS holdout, h.eligible_from AS holdout_eligible_from
   FROM `onyga-482313.OI.V_CAMPAIGN_CAP_STATE` cs CROSS JOIN k
   JOIN fam f ON f.campaign_id = cs.campaign_id
   JOIN books b ON b.family = f.family AND b.book = 'HARVEST'
   LEFT JOIN camp_ads ca ON ca.cid = cs.campaign_id
+  LEFT JOIN holdout h ON h.campaign_id = cs.campaign_id
   WHERE cs.days_capped_7d >= k.absorb_capped_days AND NOT cs.is_defense
     AND NOT COALESCE(f.bar_exempt, FALSE)
     AND SAFE_DIVIDE(ca.gp7, NULLIF(ca.spend7, 0)) >= f.keyword_bar),
@@ -467,7 +511,7 @@ shape AS (
     f.horizon_assumption AS horizon_assumption,
     CAST(NULL AS STRING) AS move,
     CASE WHEN f.book = 'INVEST' THEN
-           FORMAT('%s — launch family (reference only, never judged on profit): $%.2f/day on the %s horizon, of which $%.2f/day launch-contained, $%.2f/day winning or at its bar, $%.2f/day losing, probed, leaking or untracked, $%.2f/day brand defense. V_INVEST_STATUS owns its governance.',
+           FORMAT('%s — launch family (reference only, never judged on profit): $%.2f/day on the %s horizon, of which $%.2f/day launch-contained, $%.2f/day winning or at its bar, $%.2f/day losing, probed, leaking or untracked, $%.2f/day brand defense. The launch controller governs it; this register only shows it.',
                   UPPER(f.family), f.spend_h_per_day, f.horizon, f.launch_per_day, f.good_side_per_day, f.bad_side_per_day, f.defense_per_day)
          WHEN f.good_share IS NULL THEN
            FORMAT('%s — no judged spend on the basis window (%s horizon); nothing to read.', UPPER(f.family), f.horizon)
@@ -481,7 +525,7 @@ shape AS (
                   f.bad_side_per_day, f.seats_20, f.seats_cost_per_day, f.n_leaks, f.leak_per_day, f.n_gaps, f.gap_per_day,
                   IF(f.open_capacity_per_day < 0, FORMAT('−$%.2f', -f.open_capacity_per_day), FORMAT('$%.2f', f.open_capacity_per_day)),
                   f.seats_settling, f.defense_per_day,
-                  CASE WHEN f.horizon != 'today' THEN 'This row is a projection — read horizon_assumption.'
+                  CASE WHEN f.horizon != 'today' THEN 'This row is a projection; the assumption it rests on is written on the row.'
                        WHEN f.doctrine_status = 'IN' THEN 'The family passes today; the open capacity is what a new probe may cost.'
                        ELSE CONCAT('What closes the gap: ',
                               IF(f.n_leaks > 0, FORMAT('pause the %d leaks (−$%.2f/day); ', f.n_leaks, f.leak_per_day), ''),
@@ -615,12 +659,13 @@ shape AS (
     CAST(NULL AS STRING) AS at_line_band_derivation,
     1 AS n_keywords,
     CAST(NULL AS STRING) AS horizon_assumption,
-    CASE w.code
+    CASE WHEN w.holdout AND run_day.d >= w.holdout_eligible_from THEN 'no sheet row — holdout campaign; the seat stays as it is while the arm runs'
+         ELSE CASE w.code
            WHEN 'REPAIR' THEN IF(w.book_new_bid IS NOT NULL,
-                                 FORMAT('on the pending book %s: $%.2f → $%.2f (%s); re-judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, w.book_action, CAST(w.next_check_date AS STRING)),
+                                 FORMAT('on the pending book %s: $%.2f → $%.2f (%s); re-judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, IF(w.book_action = 'INCREASE_BID', 'a raise', 'a cut'), CAST(w.next_check_date AS STRING)),
                                  FORMAT('no row on the pending book — the reprice generator (tools/build_reprice_bulksheet.py) prices it; re-judge %s', CAST(w.next_check_date AS STRING)))
            WHEN 'PROBATION' THEN IF(w.book_new_bid IS NOT NULL,
-                                 FORMAT('on the pending book %s: $%.2f → $%.2f (%s) — hold at the floor, judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, w.book_action, CAST(w.next_check_date AS STRING)),
+                                 FORMAT('on the pending book %s: $%.2f → $%.2f (%s) — hold at the floor, judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, IF(w.book_action = 'INCREASE_BID', 'a raise', 'a cut'), CAST(w.next_check_date AS STRING)),
                                  FORMAT('hold at its floor $%.2f; judge %s', COALESCE(w.bid_floor, 0), CAST(w.next_check_date AS STRING)))
            WHEN 'FAILED' THEN 'kill it on the next book (pause row) — it lost at its floor after probation'
            WHEN 'PROBE' THEN 'no move — the engine is buying its verdict; the seat closes on the verdict'
@@ -628,7 +673,7 @@ shape AS (
            WHEN 'STALLED_PROBE' THEN IF(w.seat_price IS NOT NULL,
                                  FORMAT('raise to the seat price $%.2f to get a verdict, or park it at its floor $%.2f', w.seat_price, COALESCE(w.bid_floor, 0)),
                                  FORMAT('its campaign is outside the budget engine\'s seat model, so no seat price is published — price it by hand to get a verdict, or park it at its floor $%.2f', COALESCE(w.bid_floor, 0)))
-         END AS move,
+         END END AS move,
     CONCAT(
            FORMAT('seat %s — %s (%s) ', COALESCE(CAST(w.seat_no AS STRING), '?'), w.target_text, w.campaign_name),
            CASE w.code
@@ -660,7 +705,8 @@ shape AS (
                                         FORMAT('No seat price is published for its campaign (outside the budget engine); price it by hand or park it at its floor $%.2f.', COALESCE(w.bid_floor, 0)))
            END,
            IF(w.seat_no IS NULL, ' (Not yet numbered: the seat ledger runs after the snapshot.)', ''),
-           IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch; excluded from every sheet.', '')
+           IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch; excluded from every sheet, whatever the move above would have been.', ''),
+           IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s; no sheet touches it from then.', CAST(w.holdout_eligible_from AS STRING)), '')
          ) AS sentence,
     FORMAT('%s|%02d|%05d|%s|%s', w.family, 3, COALESCE(w.seat_no, 99999), w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN k CROSS JOIN win CROSS JOIN run_day
@@ -698,9 +744,10 @@ shape AS (
     CAST(NULL AS INT64) AS days_since_raise,
     np.seat_cpc AS seat_price,
     CAST(NULL AS DATE) AS due_on,
-    CAST(NULL AS BOOL) AS holdout,
-    CAST(NULL AS DATE) AS holdout_eligible_from,
-    CAST(NULL AS STRING) AS holdout_note,
+    IF(np.keyword_id IS NULL, NULL, np.holdout) AS holdout,
+    np.holdout_eligible_from AS holdout_eligible_from,
+    CASE WHEN np.keyword_id IS NULL OR NOT np.holdout THEN NULL
+         ELSE FORMAT('HOLDOUT arm from %s — the candidate may be admitted until then; from that date its campaign leaves the queue', CAST(np.holdout_eligible_from AS STRING)) END AS holdout_note,
     CAST(NULL AS FLOAT64) AS spend_basis_per_day,
     CAST(NULL AS FLOAT64) AS spend_context_per_day,
     CAST(NULL AS FLOAT64) AS spend_horizon_per_day,
@@ -728,9 +775,10 @@ shape AS (
               WHEN np.keyword_id IS NULL THEN
                 FORMAT('seat %d (open) in %s — $%.2f/day of capacity, but no queued candidate in the budget engine fits it (or the family has no queued keyword).', fn.lowest_free_seat, UPPER(fr.family), fr.open_capacity_per_day)
               ELSE
-                FORMAT('seat %d (open) in %s — $%.2f/day of capacity. Next affordable probe: %s in %s, queue #%d, at the seat price $%.2f/click × %d clicks a day ≈ $%.2f/day.', fn.lowest_free_seat, UPPER(fr.family), fr.open_capacity_per_day, np.target_text, np.campaign_name, np.queue_pos, np.seat_cpc, k.click_goal_day, np.admission_cost_per_day) END AS sentence,
+                CONCAT(FORMAT('seat %d (open) in %s — $%.2f/day of capacity. Next affordable probe: %s in %s, queue #%d, at the seat price $%.2f/click × %d clicks a day ≈ $%.2f/day.', fn.lowest_free_seat, UPPER(fr.family), fr.open_capacity_per_day, np.target_text, np.campaign_name, np.queue_pos, np.seat_cpc, k.click_goal_day, np.admission_cost_per_day),
+                       IF(np.holdout, FORMAT(' Its campaign joins the holdout arm on %s and leaves the queue then.', CAST(np.holdout_eligible_from AS STRING)), '')) END AS sentence,
     FORMAT('%s|%02d|%05d||', fr.family, 4, fn.lowest_free_seat) AS sort_key
-  FROM fam_rows fr CROSS JOIN k
+  FROM fam_rows fr CROSS JOIN k CROSS JOIN run_day
   JOIN free_no fn ON fn.family = fr.family
   LEFT JOIN next_probe np ON np.family = fr.family
   WHERE fr.horizon = 'today' AND fr.book = 'HARVEST'
@@ -965,9 +1013,11 @@ shape AS (
     CAST(NULL AS INT64) AS days_since_raise,
     CAST(NULL AS FLOAT64) AS seat_price,
     CAST(NULL AS DATE) AS due_on,
-    CAST(NULL AS BOOL) AS holdout,
-    CAST(NULL AS DATE) AS holdout_eligible_from,
-    CAST(NULL AS STRING) AS holdout_note,
+    a.holdout AS holdout,
+    a.holdout_eligible_from AS holdout_eligible_from,
+    CASE WHEN NOT a.holdout THEN NULL
+              WHEN run_day.d >= a.holdout_eligible_from THEN FORMAT('HOLDOUT — do not touch: this campaign is in the holdout arm since %s and is excluded from every sheet', CAST(a.holdout_eligible_from AS STRING))
+              ELSE FORMAT('HOLDOUT arm from %s — a sheet may touch it until then and must not after', CAST(a.holdout_eligible_from AS STRING)) END AS holdout_note,
     CAST(NULL AS FLOAT64) AS spend_basis_per_day,
     CAST(NULL AS FLOAT64) AS spend_context_per_day,
     CAST(NULL AS FLOAT64) AS spend_horizon_per_day,
@@ -987,11 +1037,90 @@ shape AS (
     CAST(NULL AS STRING) AS at_line_band_derivation,
     CAST(NULL AS INT64) AS n_keywords,
     CAST(NULL AS STRING) AS horizon_assumption,
-    'advisory only — budgets are shown, never moved by the register' AS move,
-    FORMAT('could absorb freed spend: %s — above its family bar (7-day GP-ROAS %.2fx vs bar %.2fx), capped %d of the last 7 days ($%.2f spent on a $%.2f budget). Advisory only; the register moves no budget.',
-                a.campaign_name, a.gp_roas_7d, a.keyword_bar, a.days_capped_7d, a.spend_7d, a.budget_7d) AS sentence,
+    IF(a.holdout AND run_day.d >= a.holdout_eligible_from,
+       'advisory suppressed — holdout campaign; send no freed spend here while the arm runs',
+       'advisory only — budgets are shown, never moved by the register') AS move,
+    CONCAT(FORMAT('could absorb freed spend: %s — above its family bar (7-day GP-ROAS %.2fx vs bar %.2fx), capped %d of the last 7 days ($%.2f spent on a $%.2f budget). Advisory only; the register moves no budget.',
+                a.campaign_name, a.gp_roas_7d, a.keyword_bar, a.days_capped_7d, a.spend_7d, a.budget_7d),
+           CASE WHEN a.holdout AND run_day.d >= a.holdout_eligible_from THEN ' HOLDOUT — advisory suppressed: this campaign is in the holdout arm and takes no freed spend.'
+                WHEN a.holdout THEN FORMAT(' Its campaign joins the holdout arm on %s; the advisory stops then.', CAST(a.holdout_eligible_from AS STRING))
+                ELSE '' END) AS sentence,
     FORMAT('%s|%02d|%s||', a.family, 7, a.campaign_id) AS sort_key
-  FROM absorb a
+  FROM absorb a CROSS JOIN run_day
+  UNION ALL
+  -- UNMAPPED rows — spend in the cracks: one per campaign no family claims, plus one total row
+  SELECT
+    'UNMAPPED' AS row_type,
+    'Unmapped' AS family,
+    CAST(NULL AS STRING) AS book,
+    'today' AS horizon,
+    CAST(NULL AS INT64) AS seat_no,
+    'unmapped — no family claims this spend' AS category,
+    'UNMAPPED' AS side,
+    CAST(NULL AS STRING) AS occupant_kind,
+    x.campaign_id AS campaign_id,
+    x.campaign_name AS campaign_name,
+    CAST(NULL AS STRING) AS keyword_id,
+    CAST(NULL AS STRING) AS target_text,
+    CAST(NULL AS STRING) AS match_type,
+    CAST(NULL AS STRING) AS state,
+    CAST(NULL AS FLOAT64) AS current_bid,
+    CAST(NULL AS FLOAT64) AS bid_floor,
+    ROUND(x.spend7 / k.basis_days, 4) AS cost_per_day,
+    ROUND(x.spend7 / k.basis_days, 4) AS cost_day_one,
+    ROUND(x.spend7 / k.basis_days, 4) AS cost_rejudged,
+    CAST(NULL AS STRING) AS book_batch_id,
+    CAST(NULL AS STRING) AS book_action,
+    CAST(NULL AS FLOAT64) AS book_old_bid,
+    CAST(NULL AS FLOAT64) AS book_new_bid,
+    CAST(NULL AS FLOAT64) AS raise_old_bid,
+    CAST(NULL AS FLOAT64) AS raise_new_bid,
+    CAST(NULL AS DATE) AS raised_on,
+    CAST(NULL AS INT64) AS clicks_since_raise,
+    CAST(NULL AS INT64) AS days_since_raise,
+    CAST(NULL AS FLOAT64) AS seat_price,
+    CAST(NULL AS DATE) AS due_on,
+    IF(x.campaign_id IS NULL, NULL, x.holdout) AS holdout,
+    x.holdout_eligible_from AS holdout_eligible_from,
+    CASE WHEN x.campaign_id IS NULL OR NOT x.holdout THEN NULL
+              WHEN run_day.d >= x.holdout_eligible_from THEN FORMAT('HOLDOUT — do not touch: this campaign is in the holdout arm since %s and is excluded from every sheet', CAST(x.holdout_eligible_from AS STRING))
+              ELSE FORMAT('HOLDOUT arm from %s — a sheet may touch it until then and must not after', CAST(x.holdout_eligible_from AS STRING)) END AS holdout_note,
+    ROUND(x.spend7 / k.basis_days, 4) AS spend_basis_per_day,
+    CAST(NULL AS FLOAT64) AS spend_context_per_day,
+    ROUND(x.spend7 / k.basis_days, 4) AS spend_horizon_per_day,
+    CAST(NULL AS FLOAT64) AS judged_per_day,
+    CAST(NULL AS FLOAT64) AS defense_per_day,
+    CAST(NULL AS FLOAT64) AS good_side_per_day,
+    CAST(NULL AS FLOAT64) AS bad_side_per_day,
+    CAST(NULL AS FLOAT64) AS good_share,
+    'UNMAPPED' AS doctrine_status,
+    CAST(NULL AS FLOAT64) AS allowance_per_day,
+    CAST(NULL AS FLOAT64) AS seats_cost_per_day,
+    CAST(NULL AS FLOAT64) AS leak_per_day,
+    CAST(NULL AS FLOAT64) AS gap_per_day,
+    CAST(NULL AS FLOAT64) AS open_capacity_per_day,
+    CAST(NULL AS FLOAT64) AS over_by_per_day,
+    CAST(NULL AS FLOAT64) AS at_line_band,
+    CAST(NULL AS STRING) AS at_line_band_derivation,
+    x.n_campaigns AS n_keywords,
+    CAST(NULL AS STRING) AS horizon_assumption,
+    IF(x.campaign_id IS NULL,
+       'map every campaign below to its family in Admin (Campaign Mapping); the next state run then judges it inside that family',
+       'map this campaign to its family in Admin (Campaign Mapping) — the register cannot guess a family from a name; until then no family answers for this spend') AS move,
+    IF(x.campaign_id IS NULL,
+       FORMAT('UNMAPPED — $%.2f/day on the basis window in %d campaigns that no family claims (no family bar, no verdict row with a family). This money is outside every family read above, so no family can pass by leaving it here. Map each campaign to its family in Admin; the next state run judges it there.',
+              x.spend7 / k.basis_days, x.n_campaigns),
+       CONCAT(FORMAT('%s spent $%.2f/day on the basis window (%d clicks) and no family claims it — it is in no family read. Map it to its family in Admin; until then no family answers for this spend.',
+                     x.campaign_name, x.spend7 / k.basis_days, x.clicks7),
+              IF(x.holdout AND run_day.d >= x.holdout_eligible_from, ' HOLDOUT — do not touch; no sheet row.', ''),
+              IF(x.holdout AND run_day.d < x.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(x.holdout_eligible_from AS STRING)), ''))) AS sentence,
+    FORMAT('%s|%02d|%010.2f|%s|', 'Unmapped', IF(x.campaign_id IS NULL, 1, 2), IF(x.campaign_id IS NULL, 0, 99999 - x.spend7 / k.basis_days), COALESCE(x.campaign_id, '')) AS sort_key
+  FROM (
+    SELECT campaign_id, campaign_name, spend7, clicks7, holdout, holdout_eligible_from, CAST(NULL AS INT64) AS n_campaigns FROM unmapped
+    UNION ALL
+    SELECT NULL, NULL, SUM(spend7), SUM(clicks7), NULL, NULL, COUNT(*) FROM unmapped
+  ) x CROSS JOIN k CROSS JOIN run_day
+  WHERE x.campaign_id IS NOT NULL OR x.n_campaigns > 0
 )
 SELECT s.*, run_day.d AS as_of, win.basis_to AS ads_basis_to, win.basis_from AS ads_basis_from
 FROM shape s CROSS JOIN run_day CROSS JOIN win;
