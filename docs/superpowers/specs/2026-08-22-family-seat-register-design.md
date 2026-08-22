@@ -39,7 +39,8 @@ halo, from `T_FAMILY_BAR`). The register only *groups* those verdicts:
 | losing — in repair | `REPRICE` | 20 · seat |
 | losing — on probation at its floor | `FLOOR_PROBATION` | 20 · seat |
 | losing — failed at its floor | `LOSER` | 20 · seat |
-| probe — being bought at an entry bid | `TRIAL` at the park/entry bid with spend | 20 · seat |
+| probe — being bought at an entry bid | `TRIAL` that the engine itself lists as a probe (its lift-probe set), **whether or not it spent this week** — a reserved probe seat costs $0 today and still answers "what am I probing"; plus any `TRIAL` at its channel floor / park bid **with spend** | 20 · seat |
+| probe — stalled | `TRIAL` sitting at an activation entry bid past the engine's probe window (14 days) with fewer than the verdict's 20 clicks, no longer listed by the engine — a test that cannot produce a verdict at its pace is **not** "waiting for results"; it is a seat with a standing proposal: re-price to the seat price or park | 20 · seat |
 | closed but still spending | `PARKED`, `DEAD` with spend in the window | 20 · leak |
 | untracked | spending keyword with no `FACT_KEYWORD_STATE` row | 20 · gap |
 | launch | `LAUNCH_CONTAINED` (INVEST families) | outside |
