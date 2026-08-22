@@ -1,6 +1,9 @@
 // Cube: OobSearchTerm — search-term layer of the Out-of-budget phase, from V_OOB_SEARCH_TERM (live
-// read). 28-day window; is_negate = ≥10 clicks · 0 orders · term ≠ keyword (AUTO skips the term test,
-// PT excluded). Spec: architecture/OOB_BUDGET_PHASE.md §v2.
+// read). 28-day window. v27.100: the view is one row per (campaign, keyword, AD GROUP, term) — a
+// negative lands on the ad group, so evidence is rolled to that grain and a block needs the ad
+// group's own record to be losing (28d, 90d AND lifetime, with an organic guard). ad_group_ids is
+// therefore part of the row identity below — without it a term under one keyword in two ad groups
+// collides into one cube row. Spec: architecture/OOB_BUDGET_PHASE.md §v2.
 cube(`OobSearchTerm`, {
   sql: `SELECT campaign_id, engine, keyword_id, target_text, search_term, kind, clicks, orders, spend, spend_1d, sales,
                net_roas, net_roas_90d, clicks_90d, orders_90d, spend_90d, ad_group_ids, term_clicks_90d, term_orders_90d, is_big, sqp_wait, market_purchases_90d, term_is_keyword, is_winner, is_add_candidate, is_negate
@@ -12,7 +15,7 @@ cube(`OobSearchTerm`, {
   measures: { count: { type: `count` } },
 
   dimensions: {
-    rowId:      { sql: `CONCAT(campaign_id, '|', target_text, '|', search_term)`, type: `string`, primaryKey: true },
+    rowId:      { sql: `CONCAT(campaign_id, '|', target_text, '|', search_term, '|', COALESCE(ad_group_ids, ''))`, type: `string`, primaryKey: true },
     campaignId: { sql: `campaign_id`, type: `string` },
     engine:     { sql: `engine`,      type: `string` },   // 'OOB' | 'LIFT' — which panel owns the campaign
     keywordId:  { sql: `keyword_id`,  type: `string` },

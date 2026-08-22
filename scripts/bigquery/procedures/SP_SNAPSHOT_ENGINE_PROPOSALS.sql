@@ -45,7 +45,7 @@
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_SNAPSHOT_ENGINE_PROPOSALS`()
 OPTIONS (
-  description = "Daily engine-proposal snapshot (2026-08-15, negates v27.72). Deletes today's partition of FACT_ENGINE_PROPOSALS and re-inserts every live instruction from V_KEYWORD_LIFT (bids + budgets), V_OOB_KEYWORD, V_OOB_BUDGET_PHASE, V_LOW_STOCK_ADS (TARGET bids + CAMPAIGN budgets), V_LAUNCH_BID_LADDER, V_PARK_REVERDICT (REVIVE), plus NEGATE rows from V_OOB_SEARCH_TERM (OOB+LIFT populations) and V_WEEKLY_RUN_NEGATIVE (COACH). One single-view scan per INSERT (planner-ceiling doctrine). HOLD/WATCH/DEFER rows excluded. Runs in SP_ORCHESTRATE_DAILY_REFRESH after the ownership snapshot, before the cube T_ builds. Spec: architecture/DAILY_BRIEF.md. v27.98 (2026-08-21): the LAST-DAY VETO no longer erases what it held. The veto rewrites action to HOLD and NULLs the bid, which broke both conjuncts of the bid filters, so a vetoed proposal vanished with its reason and no snapshot ever carried a word of veto text — the one suppression in the engine that ERASED instead of LABELLING, against the doctrine SP_ENGINE_PREFLIGHT states for the holdout arm (block the export, never the judgement). INSERTs 1 (LIFT) and 3 (OOB) now also admit rows carrying hold_source, IN THE SAME SCAN (a separate INSERT would re-read a planning-ceiling view for nothing), writing held_action/held_bid additively, leaving action=HOLD and suggested_bid=NULL untouched so no existing consumer moves, and stamping verdict=EXCLUDE with the veto's own sentence as verdict_reason. The verdict is written HERE rather than by the gate because a held row is not an instruction to judge: it carries no value, and admitting it to the single-owner contention would let a held row outrank and silence an engine that was ready to act. SP_ENGINE_PREFLIGHT skips hold_source rows, so held rows never reach T_ENGINE_PREFLIGHT, the cube, the decisions feed or the bulksheet export."
+  description = "Daily engine-proposal snapshot (2026-08-15, negates v27.72). Deletes today's partition of FACT_ENGINE_PROPOSALS and re-inserts every live instruction from V_KEYWORD_LIFT (bids + budgets), V_OOB_KEYWORD, V_OOB_BUDGET_PHASE, V_LOW_STOCK_ADS (TARGET bids + CAMPAIGN budgets), V_LAUNCH_BID_LADDER, V_PARK_REVERDICT (REVIVE), plus NEGATE rows from V_OOB_SEARCH_TERM (OOB+LIFT populations) and V_WEEKLY_RUN_NEGATIVE (COACH). One single-view scan per INSERT (planner-ceiling doctrine). HOLD/WATCH/DEFER rows excluded. Runs in SP_ORCHESTRATE_DAILY_REFRESH after the ownership snapshot, before the cube T_ builds. Spec: architecture/DAILY_BRIEF.md. v27.98 (2026-08-21): the LAST-DAY VETO no longer erases what it held. The veto rewrites action to HOLD and NULLs the bid, which broke both conjuncts of the bid filters, so a vetoed proposal vanished with its reason and no snapshot ever carried a word of veto text — the one suppression in the engine that ERASED instead of LABELLING, against the doctrine SP_ENGINE_PREFLIGHT states for the holdout arm (block the export, never the judgement). INSERTs 1 (LIFT) and 3 (OOB) now also admit rows carrying hold_source, IN THE SAME SCAN (a separate INSERT would re-read a planning-ceiling view for nothing), writing held_action/held_bid additively, leaving action=HOLD and suggested_bid=NULL untouched so no existing consumer moves, and stamping verdict=EXCLUDE with the veto's own sentence as verdict_reason. The verdict is written HERE rather than by the gate because a held row is not an instruction to judge: it carries no value, and admitting it to the single-owner contention would let a held row outrank and silence an engine that was ready to act. SP_ENGINE_PREFLIGHT skips hold_source rows, so held rows never reach T_ENGINE_PREFLIGHT, the cube, the decisions feed or the bulksheet export. v27.100 (2026-08-21): two negate fixes. (1) COVERAGE — both negate INSERTs collapse to one row per (campaign, term) and used to keep only the representative slice's ad group, so a term running in several ad groups was blocked in one and left live in the others; each now carries the union of every ad group whose own record earned the block (the consumer already splits the comma list, upload report 29). (2) The paragraph on a peak-converting coach negate is written HERE now: the short line said the term was bought in past gift peaks while the paragraph beside it said it had never once sold — both true of their own scope, neither saying which, and a straight contradiction to read on the one action class that cannot be undone."
 )
 BEGIN
   DECLARE snap DATE DEFAULT CURRENT_DATE('America/Los_Angeles');
@@ -182,10 +182,19 @@ BEGIN
     (snapshot_date, engine, grain, campaign_id, campaign_name, keyword_id, ad_group_id, target_text,
      match_type, channel, action, current_bid, suggested_bid, current_budget, suggested_budget, reason, reason_short, season_relax_applied)
   SELECT snap, g.engine, 'NEGATE', g.cid, dc.campaign_name,
-         NULL, g.s.ad_group_ids, g.term, 'NEGATIVE_EXACT', g.s.channel,
+         NULL, g.ad_group_ids, g.term, 'NEGATIVE_EXACT', g.s.channel,
          'NEGATE_TERM', NULL, NULL, NULL, NULL, g.s.reason, g.s.reason_short, CAST(NULL AS BOOL)
   FROM (
     SELECT CAST(t.campaign_id AS STRING) AS cid, t.engine, t.search_term AS term,
+           -- v27.100 COVERAGE: EVERY ad group whose OWN record earned the block, not just the
+           -- representative slice's. A negative keyword lands on ONE ad group, so collapsing to
+           -- one row per (campaign, term) and keeping a single slice's ad group left the term
+           -- live in every other group it ran in — the block was proposed, applied, and the
+           -- spend carried on somewhere else in the same campaign. The view is now one row per
+           -- ad group and each row passed the guards for its own ad group, so the union of them
+           -- is exactly the set of groups that deserve the negative. The consumer already splits
+           -- this comma list into one bulksheet row per ad group (upload report 29).
+           STRING_AGG(DISTINCT t.ad_group_ids, ',' ORDER BY t.ad_group_ids) AS ad_group_ids,
            ARRAY_AGG(STRUCT(
              t.ad_group_ids,
              IF(t.kind = 'SB', 'SB', 'SP') AS channel,
@@ -218,7 +227,10 @@ BEGIN
     (snapshot_date, engine, grain, campaign_id, campaign_name, keyword_id, ad_group_id, target_text,
      match_type, channel, action, current_bid, suggested_bid, current_budget, suggested_budget, reason, reason_short, season_relax_applied)
   SELECT snap, 'COACH', 'NEGATE', g.cid, g.s.campaign_name,
-         NULL, g.s.ad_group_id, g.term, 'NEGATIVE_EXACT',
+         -- v27.100 COVERAGE: every ad group the coacher decided to block this term in, not just
+         -- the highest-priority slice's. See the note on the OOB negate insert above; the
+         -- consumer splits this comma list into one bulksheet row per ad group.
+         NULL, g.ad_group_ids, g.term, 'NEGATIVE_EXACT',
          IF(dc.campaign_type LIKE 'SPONSORED_BRANDS%', 'SB', 'SP'),
          -- v27.99 (audit C4): THE VISIBLE WHY ON A NEGATE NOW CARRIES EVIDENCE.
          -- This was a compile-time literal — 'coach rule: irrelevant or money-losing term ⇒
@@ -230,7 +242,25 @@ BEGIN
          -- short thirty lines above has always carried its numbers; this is that same shape.
          -- The figures are the ad-group-grain block evidence — the grain the negative acts on —
          -- taken from the SAME highest-priority slice as the paragraph, so short and long agree.
-         'NEGATE_TERM', NULL, NULL, NULL, NULL, g.s.reason,
+         'NEGATE_TERM', NULL, NULL, NULL, NULL,
+         -- v27.100: THE PARAGRAPH AND THE SHORT LINE NO LONGER CONTRADICT EACH OTHER.
+         -- On a term that converted in past gift peaks the short line said "bought in past gift
+         -- peaks (4 orders) — check before blocking" while the paragraph beside it said the term
+         -- "has never once sold" — and on some rows "it has never sold here at all". Both were
+         -- true of their own scope and neither said which: the paragraph is the ad group's last
+         -- eight weeks, the peak figure is the campaign's whole history inside gift-season
+         -- windows. Read together they read as a straight contradiction on the one action class
+         -- that cannot be undone. So where a peak conversion exists the paragraph is written HERE,
+         -- from the same two facts the short line uses, and says both of them in one breath.
+         IF(g.peak_converts,
+            CONCAT('"', g.term, '" has taken ', CAST(COALESCE(g.s.block_clicks_8w, 0) AS STRING),
+                   ' clicks across everything this ad group runs in the last eight weeks without selling once — but it did sell in this campaign during past gift peaks (',
+                   CAST(g.peak_orders AS STRING), IF(g.peak_orders = 1, ' order', ' orders'),
+                   IF(g.peak_net IS NULL, '',
+                      CONCAT(', ', IF(g.peak_net < 0, '-$', '$'),
+                             FORMAT('%.0f', ABS(g.peak_net)), ' after cost of goods')),
+                   '), so the last eight weeks are reading an off-season and not a dead term => check it against the season before blocking it for good.'),
+            g.s.reason),
          IF(g.peak_converts,
             CONCAT('bought in past gift peaks (', CAST(g.peak_orders AS STRING),
                    IF(g.peak_orders = 1, ' order', ' orders'), ') — check before blocking'),
@@ -248,6 +278,11 @@ BEGIN
     SELECT CAST(w.campaign_id AS STRING) AS cid, w.search_term AS term,
            LOGICAL_OR(COALESCE(w.peak_converts, FALSE)) AS peak_converts,
            MAX(COALESCE(w.peak_orders, 0)) AS peak_orders,
+           -- peak_net is a campaign x term figure, identical on every row of this group
+           MAX(w.peak_net) AS peak_net,
+           -- v27.100: every ad group this term is blocked in (see the note on the SELECT above)
+           STRING_AGG(DISTINCT CAST(w.ad_group_id AS STRING), ','
+                      ORDER BY CAST(w.ad_group_id AS STRING)) AS ad_group_ids,
            -- highest-priority slice speaks; ORDER BY is total so a re-run is byte-identical
            ARRAY_AGG(STRUCT(w.campaign_name, w.ad_group_id, w.reason,
                             w.block_clicks_8w, w.block_orders_8w, w.block_net_profit_8w)
