@@ -2271,14 +2271,14 @@ stored_procedures:
       - FACT_ENGINE_PROPOSALS
 
   - name: "V_RUN_SUMMARY"
-    description: "The Weekly Run front page as one small-table query (Phase 6 Task 2, 2026-08-16). Three sections, one row per cell: CHANGES (today's GO instructions by direction; $/day on BUDGET moves ONLY — bid-level $/day would be invented precision), HELD (the gate's exclusions/flags by class — REVIEW labels stripped of per-row numbers so they group), UNCHANGED (the rest of the account from FACT_KEYWORD_STATE — the state machine IS the unchanged taxonomy, superseding the plan's interim guard CASE). Reads only snapshot tables; measured ~4s. Read by the RunSummary cube → RunSummaryStrip. Spec: architecture/WEEKLY_RUN_UX.md."
+    description: "The Weekly Run front page as one small-table query (Phase 6 Task 2, 2026-08-16). Three sections, one row per cell: CHANGES (today's GO instructions by direction; $/day on BUDGET moves ONLY — bid-level $/day would be invented precision), HELD (the gate's exclusions/flags by class — REVIEW labels stripped of per-row numbers so they group), UNCHANGED (the rest of the account from FACT_KEYWORD_STATE — the state machine IS the unchanged taxonomy, superseding the plan's interim guard CASE; v27.103 labels the bar/SE states AT_BAR / REPRICE / LOSER / LAUNCH_CONTAINED so nothing falls through to a blank). Reads only snapshot tables; measured ~4s. Read by the RunSummary cube → RunSummaryStrip. Spec: architecture/WEEKLY_RUN_UX.md."
     source_files: ["scripts/bigquery/views/V_RUN_SUMMARY.sql"]
     dependencies:
       - T_ENGINE_PREFLIGHT
       - FACT_KEYWORD_STATE
 
   - name: "V_RUN_UNCHANGED"
-    description: "Row-grain drill behind V_RUN_SUMMARY's UNCHANGED strip (Phase 6 Task 7): one row per keyword with NO instruction today — state-machine class (labels shared with the summary, no-drift), settled record, next appointment, and the state machine's own reason sentence as why_short. Read by the RunUnchanged cube → the strip's class drill. Spec: architecture/WEEKLY_RUN_UX.md."
+    description: "Row-grain drill behind V_RUN_SUMMARY's UNCHANGED strip (Phase 6 Task 7): one row per keyword with NO instruction today — state-machine class (labels shared with the summary, no-drift; v27.103 adds the bar/SE states), settled record, next appointment, and the state machine's own reason sentence as why_short. record_class recolors BAR-RELATIVE in v27.103: GOOD clears the keyword's own family_bar, MID keeps the 0.6 catastrophic RATIO relative to the bar. Read by the RunUnchanged cube → the strip's class drill. Spec: architecture/WEEKLY_RUN_UX.md."
     source_files: ["scripts/bigquery/views/V_RUN_UNCHANGED.sql"]
     dependencies:
       - T_ENGINE_PREFLIGHT
@@ -2319,20 +2319,22 @@ stored_procedures:
       - FACT_PANEL_OWNERSHIP
 
   - name: "SP_SNAPSHOT_KEYWORD_STATE"
-    description: "The keyword state machine (engine-finalization Task 2.1, 2026-08-16): CREATE OR REPLACE TABLE FACT_KEYWORD_STATE — one row per (campaign, keyword) with state (DEAD | PENDING_SETTLE | REVIVED_SETTLING | PARKED | PACED_WINNER | WINNER | LOSER_BLEED | TRIAL, first-match ladder), owner_engine (FACT_PANEL_OWNERSHIP ladder + REVERDICT-above-LIFT keyword overlay), next_check_date (invariant: never NULL except DEAD), state_since (best-effort v1), settled record, season context and view-authored reasons. PURE ASSEMBLY of other snapshots' verdicts (guard, reverdict, panel ownership, today's T_ENGINE_PREFLIGHT, change log) — if a state looks wrong the fix belongs in the source object. Orchestrator Task 20.8, after the preflight. First run 2026-08-16: 877 keywords — 529 PARKED / 117 TRIAL / 92 WINNER / 46 DEAD / 45 LOSER_BLEED / 30 REVIVED_SETTLING / 11 PENDING_SETTLE / 7 PACED_WINNER; both invariants 0. v1 gaps (SOP): SEASONAL_HOLD not yet a state (gate unsnapshotted); the 360-degree signal panel is the task's second half. Spec: architecture/KEYWORD_STATE.md."
+    description: "The keyword state machine, bar/SE ladder (Task 2.1 2026-08-16; v27.103 2026-08-22): CREATE OR REPLACE TABLE FACT_KEYWORD_STATE — one row per (campaign, keyword) with state (DEAD | PENDING_SETTLE | REVIVED_SETTLING | PARKED | PACED_WINNER | WINNER | AT_BAR | REPRICE | LOSER | LAUNCH_CONTAINED | TRIAL, first-match ladder). v27.103 = Ori's four rulings + the clean-then-judge guard, gated on the A1 clean-rerun simulation (TMP_SIM_LADDER_CLEAN; 854/855 key-level agreement at ship): a keyword is judged against its FAMILY bar (T_FAMILY_BAR) inside an SE noise band se=roas90/SQRT(ord90) that COLLAPSES at per-family N_f=CEIL((bar/(1-bar))^2) orders computed at run time; winner demotion to AT_BAR (labels only — no engine acts on this table, the only executor is the manual reprice book); the A2 click-space sufficiency check (ord_bar shortfall beyond SQRT may not hide in the band); the ruling-4 at-floor kill (LOSER = below bar beyond noise AND failed AT its price — the old zero-below-floor-LOSERs assertion is REPEALED, the SOP asserts the kill clause instead); A7 DEAD re-derived every run; A8 bar_exempt launches read LAUNCH_CONTAINED never a profit label; and the CLEAN-THEN-JUDGE guard — REPRICE/LOSER verdicts on a mix drifted beyond the account's run-time-measured never-seen background are re-read excluding zero-order never-seen terms (the negate valve's population, ns_zero_ord_*) and only the cleaned reading may downgrade. Reads FACT_AMAZON_ADS at term grain for the guard (~9s measured). Orchestrator Task 20.8, after the preflight and SP_SNAPSHOT_FAMILY_BAR. Spec: architecture/KEYWORD_STATE.md."
     source_files: ["scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql"]
     dependencies:
       - FACT_KEYWORD_GUARD
       - FACT_PARK_REVERDICT
       - FACT_PANEL_OWNERSHIP
       - T_ENGINE_PREFLIGHT
+      - T_FAMILY_BAR
+      - FACT_AMAZON_ADS
 
   - name: "FACT_KEYWORD_STATE"
-    description: "The roadmap of each keyword — the state-machine snapshot written daily by SP_SNAPSHOT_KEYWORD_STATE (orchestrator 20.8). Read via V_KEYWORD_STATE; the Weekly Run UNCHANGED taxonomy (Phase 6 UX plan) and V_ENGINE_HEALTH invariant checks upgrade to it. Spec: architecture/KEYWORD_STATE.md."
+    description: "The roadmap of each keyword — the state-machine snapshot written daily by SP_SNAPSHOT_KEYWORD_STATE (orchestrator 20.8). v27.103 adds the bar/SE machinery (family_bar, bar_exempt, nf_orders, se_eff, affordable_cpc, ord_bar_expected, click_collapse) and the clean-then-judge guard columns (guard_*, clean_*, ns_zero_ord_*). Read via V_KEYWORD_STATE; the Weekly Run UNCHANGED taxonomy, V_ENGINE_HEALTH invariants and tools/build_reprice_bulksheet.py (the manual book — the ONLY executor of the new states) read it. Spec: architecture/KEYWORD_STATE.md."
     source_files: ["scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql"]
 
   - name: "V_KEYWORD_STATE"
-    description: "Thin read surface over FACT_KEYWORD_STATE — no logic, stable name for cubes/panels/audits. Spec: architecture/KEYWORD_STATE.md."
+    description: "Thin read surface over FACT_KEYWORD_STATE — no logic, stable name for cubes/panels/audits. SELECT * freezes schema: redeployed v27.103 for the bar/SE ladder columns. Spec: architecture/KEYWORD_STATE.md."
     source_files: ["scripts/bigquery/views/V_KEYWORD_STATE.sql"]
     dependencies:
       - FACT_KEYWORD_STATE
