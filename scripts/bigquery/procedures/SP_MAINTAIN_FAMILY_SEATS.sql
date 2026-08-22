@@ -43,6 +43,14 @@
 --                                 (raised within 14 days, under 20 episode clicks) — if the engine
 --                                 changes them, change them here.
 --                   A TRIAL keyword in none of the three positions is WAITING (80% side), never seated.
+--                     parked — awaiting re-verdict — ruling R-h (2026-08-23): a PARKED keyword WITH
+--                                 spend in the basis window whose re-verdict appointment
+--                                 (next_check_date, the ladder's own) is on or after the snapshot
+--                                 date. The ladder parks a keyword at the park bid WITH an
+--                                 appointment: until that date it is being tested, not leaking.
+--                                 Past the appointment, or without spend, it is not a seat (with
+--                                 spend it is a LEAK — the register's pause row). Occupant kind
+--                                 'parked — awaiting re-verdict', 20% side, cost = its spend.
 --                   Basis window: the k_basis_days complete days ending at the ads watermark − 1.
 --   2. CLOSE      — every OPEN ledger row whose (family, campaign, keyword) is not in today's
 --                   occupant set is closed on the snapshot date with one reason code and the same
@@ -51,7 +59,10 @@
 --                                     observed state for it was LOSER or DEAD (the book paused a
 --                                     failed keyword); or the ladder now reads DEAD
 --                     PAUSED          the keyword is gone from the snapshot with any other last
---                                     observed state, or the ladder reads PARKED
+--                                     observed state
+--                     PARK_LAPSED     the ladder reads PARKED but the keyword is no longer a parked
+--                                     seat (R-h): no spend on the basis window, or its re-verdict
+--                                     appointment has passed (with spend it is a leak)
 --                     LEFT_FAMILY     still tracked but under another family, or its family is no
 --                                     longer in the HARVEST book
 --                     DEFENSE_EXEMPT  the keyword is now brand defense — never judged on profit,
@@ -76,8 +87,8 @@
 --                   keeps its number and the key (family, campaign, keyword, opened_on) stays unique.
 --   4. ADMIT      — occupants without an open row get the LOWEST seat number not held by an open
 --                   row of their family. Several admissions in one run are ordered totally
---                   (kind: repair, probation, failed, settling, probe, stalled probe; then spend
---                   DESC, campaign_id, keyword_id) and take the free numbers in ascending order,
+--                   (kind: repair, probation, failed, settling, parked, probe, stalled probe; then
+--                   spend DESC, campaign_id, keyword_id) and take the free numbers in ascending order,
 --                   so the run is deterministic.
 --   5. OBSERVE    — every OPEN row is stamped with last_observed_kind / last_observed_state from
 --                   today's occupant set. A continuing occupant's NUMBER is never touched; only
@@ -101,7 +112,7 @@
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_MAINTAIN_FAMILY_SEATS`()
 OPTIONS (
-  description = "Maintains DE_FAMILY_SEAT_LEDGER from the FACT_KEYWORD_STATE snapshot (the table holds one snapshot) for the WORKING families (V_BOOK_ASSIGNMENT book = HARVEST; launches never seated; brand-defense keywords never seated — the ladder's is_brand_defense, OR 'BRAND DEFENSE' in the campaign name, OR a house brand phrase from DIM_BRAND_PHRASES in the keyword text; defense is never judged on profit). The stalled-probe window is aged against the snapshot date (run_day), never the wall clock, and clicks since the raise are counted on complete days from the raise date itself, never a fixed window. Occupants: REPRICE (repair), FLOOR_PROBATION (probation), LOSER (failed), REVIVED_SETTLING / PENDING_SETTLE (settling), and three probe positions of a TRIAL keyword — probe at an entry bid (on the engine's probe list T_LIFT_PROBES, spend or no spend: ruling R-a), probe at the park bid (the ladder's at_floor, i.e. the live bid at the published channel floor, WITH spend in the basis window = 7 complete days ending at the ads watermark - 1: ruling R-a), and stalled probe (ruling R-b: not engine-listed, not at the floor, whose latest applied bid change in V_PPC_CHANGE_LOG_APPLIED is an INCREASE_BID that still stands — the live bid at or above the logged new_bid and above the logged old_bid, never lowered since; at-or-above because the generator's $1.00 activation floor can lift a bid past the logged raise — that raise older than the engine's probe window with fewer than the verdict's clicks since — a seat with a standing proposal, never 'waiting for results'; the change log is the authority for the raise date, a raise with no applied log row reads waiting). A TRIAL keyword in none of the three positions is waiting (80% side), never seated. Steps: CLOSE open rows that left the occupant set, dated on the snapshot, with a reason code and the same reason as a plain sentence (closed_reason_text), first-match KILLED (gone from the snapshot after a LOSER/DEAD last_observed_state in the ledger, or DEAD now) > PAUSED (gone otherwise, or PARKED) > LEFT_FAMILY (another family, or family left the HARVEST book) > DEFENSE_EXEMPT (now brand defense) > TO_GOOD_SIDE (WINNER / PACED_WINNER / AT_BAR, named explicitly) > TO_WAITING (still TRIAL, in no probe position) > STATE_CHANGED (any other state, named in plain words on the row); REOPEN a row closed on the same snapshot date whose key is an occupant again (keeps its number, keeps the key unique); ADMIT new occupants at the LOWEST seat number not held by an open row of the family, several admissions ordered totally (kind, spend DESC, campaign_id, keyword_id); OBSERVE: stamp every open row with last_observed_kind / last_observed_state — the ledger's only memory of a keyword that has VANISHED from the snapshot (a keyword still on the snapshot carries prior_state; a vanished one has no row, and the vanish is the KILLED-vs-PAUSED case). Idempotent on the same snapshot; continuing occupants keep their number whatever their kind becomes. T_LIFT_PROBES is the previous pass's (Task 21 rebuilds it after 20.8b) — deliberate, the engine's probe window is two weeks. Orchestrator Task 20.8b, right after SP_SNAPSHOT_KEYWORD_STATE. No engine reads the ledger. Spec: architecture/FAMILY_SEAT_REGISTER.md."
+  description = "Maintains DE_FAMILY_SEAT_LEDGER from the FACT_KEYWORD_STATE snapshot (the table holds one snapshot) for the WORKING families (V_BOOK_ASSIGNMENT book = HARVEST; launches never seated; brand-defense keywords never seated — the ladder's is_brand_defense, OR 'BRAND DEFENSE' in the campaign name, OR a house brand phrase from DIM_BRAND_PHRASES in the keyword text; defense is never judged on profit). The stalled-probe window is aged against the snapshot date (run_day), never the wall clock, and clicks since the raise are counted on complete days from the raise date itself, never a fixed window. Occupants: REPRICE (repair), FLOOR_PROBATION (probation), LOSER (failed), REVIVED_SETTLING / PENDING_SETTLE (settling), and three probe positions of a TRIAL keyword — probe at an entry bid (on the engine's probe list T_LIFT_PROBES, spend or no spend: ruling R-a), probe at the park bid (the ladder's at_floor, i.e. the live bid at the published channel floor, WITH spend in the basis window = 7 complete days ending at the ads watermark - 1: ruling R-a), and stalled probe (ruling R-b: not engine-listed, not at the floor, whose latest applied bid change in V_PPC_CHANGE_LOG_APPLIED is an INCREASE_BID that still stands — the live bid at or above the logged new_bid and above the logged old_bid, never lowered since; at-or-above because the generator's $1.00 activation floor can lift a bid past the logged raise — that raise older than the engine's probe window with fewer than the verdict's clicks since — a seat with a standing proposal, never 'waiting for results'; the change log is the authority for the raise date, a raise with no applied log row reads waiting). A TRIAL keyword in none of the three positions is waiting (80% side), never seated. Ruling R-h (2026-08-23): a PARKED keyword with spend in the basis window whose re-verdict appointment (next_check_date) is on or after the snapshot date is a seat of kind 'parked — awaiting re-verdict' (the ladder is testing it through its revive cycle); past its appointment or without spend it is not a seat (with spend it is a leak). Brand phrases are matched as WHOLE phrases on word boundaries (D9), never as bare substrings. Steps: CLOSE open rows that left the occupant set, dated on the snapshot, with a reason code and the same reason as a plain sentence (closed_reason_text), first-match KILLED (gone from the snapshot after a LOSER/DEAD last_observed_state in the ledger, or DEAD now) > PAUSED (gone otherwise) > PARK_LAPSED (reads PARKED but is no longer a parked seat: no spend, or its appointment passed) > LEFT_FAMILY (another family, or family left the HARVEST book) > DEFENSE_EXEMPT (now brand defense) > TO_GOOD_SIDE (WINNER / PACED_WINNER / AT_BAR, named explicitly) > TO_WAITING (still TRIAL, in no probe position) > STATE_CHANGED (any other state, named in plain words on the row); REOPEN a row closed on the same snapshot date whose key is an occupant again (keeps its number, keeps the key unique); ADMIT new occupants at the LOWEST seat number not held by an open row of the family, several admissions ordered totally (kind repair > probation > failed > settling > parked > probe > stalled probe, spend DESC, campaign_id, keyword_id); OBSERVE: stamp every open row with last_observed_kind / last_observed_state — the ledger's only memory of a keyword that has VANISHED from the snapshot (a keyword still on the snapshot carries prior_state; a vanished one has no row, and the vanish is the KILLED-vs-PAUSED case). Idempotent on the same snapshot; continuing occupants keep their number whatever their kind becomes. T_LIFT_PROBES is the previous pass's (Task 21 rebuilds it after 20.8b) — deliberate, the engine's probe window is two weeks. Orchestrator Task 20.8b, right after SP_SNAPSHOT_KEYWORD_STATE. No engine reads the ledger. Spec: architecture/FAMILY_SEAT_REGISTER.md."
 )
 BEGIN
   -- Declared constants. k_basis_days: the spend basis is the complete days ending at the ads
@@ -155,10 +166,13 @@ BEGIN
   -- keywords in SB campaigns (the Bottle 'happy lolli truth or dare' trials). Never a literal list.
   brand_hit AS (SELECT DISTINCT s.campaign_id, s.keyword_id
                 FROM `onyga-482313.OI.FACT_KEYWORD_STATE` s
-                JOIN (SELECT DISTINCT LOWER(phrase) AS phrase FROM `onyga-482313.OI.DIM_BRAND_PHRASES`
-                      WHERE phrase_type = 'BRAND') b
-                  ON LOWER(s.target_text) LIKE CONCAT('%', b.phrase, '%')),
-  s AS (SELECT s.family, s.campaign_id, s.keyword_id, s.state, s.at_floor, s.current_bid
+                -- D9 (2026-08-23): a WHOLE phrase on word boundaries, never a bare substring — the
+                -- house phrase 'lolli' as a substring would claim 'lolli pop' and 'lolli and pops'
+                JOIN (SELECT DISTINCT CONCAT(r'\b', REGEXP_REPLACE(TRIM(LOWER(phrase), ' |,'), r'([.*+?^${}()|\[\]\\])', r'\\\1'), r'\b') AS rx
+                      FROM `onyga-482313.OI.DIM_BRAND_PHRASES`
+                      WHERE phrase_type = 'BRAND' AND TRIM(LOWER(phrase), ' |,') != '') b
+                  ON REGEXP_CONTAINS(LOWER(s.target_text), b.rx)),
+  s AS (SELECT s.family, s.campaign_id, s.keyword_id, s.state, s.at_floor, s.current_bid, s.next_check_date
         FROM `onyga-482313.OI.FACT_KEYWORD_STATE` s
         JOIN working w ON w.family = s.family
         LEFT JOIN brand_hit bh ON bh.campaign_id = s.campaign_id AND bh.keyword_id = s.keyword_id
@@ -171,6 +185,11 @@ BEGIN
            COALESCE(sp.spend_basis, 0) AS spend_basis,
            p.kid IS NOT NULL AS engine_probe,
            (COALESCE(s.at_floor, FALSE) AND COALESCE(sp.spend_basis, 0) > 0) AS park_probe,
+           -- R-h (2026-08-23): a PARKED keyword that still spends and holds a re-verdict appointment
+           -- (next_check_date on or after the snapshot date) is being TESTED by the ladder's revive
+           -- cycle, not leaking: a seat. Past its appointment, or without spend, it is not a seat
+           -- (with spend it is a leak — the register's pause row).
+           (s.state = 'PARKED' AND COALESCE(sp.spend_basis, 0) > 0 AND s.next_check_date >= run_day) AS parked_seat,
            (p.kid IS NULL AND NOT COALESCE(s.at_floor, FALSE)
             AND lc.action = 'INCREASE_BID'
             -- the raise still stands: the live bid is AT OR ABOVE the logged new_bid and above the
@@ -192,11 +211,13 @@ BEGIN
            WHEN 'REVIVED_SETTLING' THEN 'settling'
            WHEN 'PENDING_SETTLE'   THEN 'settling'
            WHEN 'TRIAL'            THEN IF(engine_probe OR park_probe, 'probe', 'stalled probe')
+           WHEN 'PARKED'           THEN 'parked — awaiting re-verdict'
          END AS occupant_kind,
          spend_basis
   FROM pos
   WHERE state IN ('REPRICE', 'FLOOR_PROBATION', 'LOSER', 'REVIVED_SETTLING', 'PENDING_SETTLE')
-     OR (state = 'TRIAL' AND (engine_probe OR park_probe OR COALESCE(stalled_probe, FALSE)));
+     OR (state = 'TRIAL' AND (engine_probe OR park_probe OR COALESCE(stalled_probe, FALSE)))
+     OR (state = 'PARKED' AND COALESCE(parked_seat, FALSE));
 
   -- ── 2. CLOSE ──────────────────────────────────────────────────────────────────────────────
   CREATE TEMP TABLE leaving AS
@@ -205,9 +226,12 @@ BEGIN
   -- where the keyword is today, any family — one row per (campaign, keyword) on the snapshot
   brand_hit AS (SELECT DISTINCT s.campaign_id, s.keyword_id
                 FROM `onyga-482313.OI.FACT_KEYWORD_STATE` s
-                JOIN (SELECT DISTINCT LOWER(phrase) AS phrase FROM `onyga-482313.OI.DIM_BRAND_PHRASES`
-                      WHERE phrase_type = 'BRAND') b
-                  ON LOWER(s.target_text) LIKE CONCAT('%', b.phrase, '%')),
+                -- D9 (2026-08-23): a WHOLE phrase on word boundaries, never a bare substring — the
+                -- house phrase 'lolli' as a substring would claim 'lolli pop' and 'lolli and pops'
+                JOIN (SELECT DISTINCT CONCAT(r'\b', REGEXP_REPLACE(TRIM(LOWER(phrase), ' |,'), r'([.*+?^${}()|\[\]\\])', r'\\\1'), r'\b') AS rx
+                      FROM `onyga-482313.OI.DIM_BRAND_PHRASES`
+                      WHERE phrase_type = 'BRAND' AND TRIM(LOWER(phrase), ' |,') != '') b
+                  ON REGEXP_CONTAINS(LOWER(s.target_text), b.rx)),
   today AS (SELECT s.campaign_id, s.keyword_id, s.family, s.state,
                    (COALESCE(s.is_brand_defense, FALSE)
                     OR REGEXP_CONTAINS(UPPER(COALESCE(s.campaign_name, '')), r'BRAND DEFENSE')
@@ -225,7 +249,7 @@ BEGIN
              WHEN t.family IS DISTINCT FROM l.family OR NOT t.in_working THEN 'LEFT_FAMILY'
              WHEN t.is_brand_defense THEN 'DEFENSE_EXEMPT'
              WHEN t.state = 'DEAD'   THEN 'KILLED'
-             WHEN t.state = 'PARKED' THEN 'PAUSED'
+             WHEN t.state = 'PARKED' THEN 'PARK_LAPSED'   -- R-h: no spend, or its re-verdict appointment passed
              WHEN t.state = 'TRIAL'  THEN 'TO_WAITING'
              WHEN t.state IN ('WINNER', 'PACED_WINNER', 'AT_BAR') THEN 'TO_GOOD_SIDE'
              -- P3: no silent catch-all — any other state is named, in plain words, on the row
@@ -251,6 +275,7 @@ BEGIN
          CASE c.closed_reason
            WHEN 'KILLED'         THEN 'The keyword is gone from the snapshot after its last verdict was failed or dead, or the ladder now reads dead: the book paused a failed keyword. The seat is free.'
            WHEN 'PAUSED'         THEN 'The keyword is gone from the snapshot, or the ladder now reads parked, without a failed verdict first. The seat is free.'
+           WHEN 'PARK_LAPSED'    THEN 'The keyword reads parked on the ladder but is no longer a parked seat: it has no spend on the basis window, or its re-verdict appointment has passed. A parked keyword that still spends past its appointment is a leak (pause row). The seat is free.'
            WHEN 'LEFT_FAMILY'    THEN 'The keyword is still tracked but now belongs to another family, or its family left the working (HARVEST) book. The seat is free.'
            WHEN 'DEFENSE_EXEMPT' THEN 'The keyword is now brand defense. Defense is never judged on profit, so it is never seated. The seat is free.'
            WHEN 'TO_GOOD_SIDE'   THEN 'The keyword is now winning or at its bar: it moved to the 80% side. The seat is free.'
@@ -305,7 +330,8 @@ BEGIN
            ROW_NUMBER() OVER (PARTITION BY n.family
              ORDER BY CASE n.occupant_kind WHEN 'repair' THEN 1 WHEN 'probation' THEN 2
                                            WHEN 'failed' THEN 3 WHEN 'settling' THEN 4
-                                           WHEN 'probe' THEN 5 ELSE 6 END,
+                                           WHEN 'parked — awaiting re-verdict' THEN 5
+                                           WHEN 'probe' THEN 6 ELSE 7 END,
                       n.spend_basis DESC, n.campaign_id, n.keyword_id) AS rk
     FROM admits n)
   SELECT r.family, r.campaign_id, r.keyword_id, f.seat_no, run_day,
@@ -323,9 +349,10 @@ BEGIN
     AND (l.last_observed_kind IS DISTINCT FROM o.occupant_kind
          OR l.last_observed_state IS DISTINCT FROM o.state);
 
-  SELECT FORMAT('SP_MAINTAIN_FAMILY_SEATS: snapshot %s — %d occupants (%d stalled probes), %d seats closed',
+  SELECT FORMAT('SP_MAINTAIN_FAMILY_SEATS: snapshot %s — %d occupants (%d stalled probes, %d parked awaiting re-verdict), %d seats closed',
                 CAST(run_day AS STRING),
                 (SELECT COUNT(*) FROM occupants),
                 (SELECT COUNT(*) FROM occupants WHERE occupant_kind = 'stalled probe'),
+                (SELECT COUNT(*) FROM occupants WHERE occupant_kind = 'parked — awaiting re-verdict'),
                 (SELECT COUNT(*) FROM leaving)) AS log_message;
 END;

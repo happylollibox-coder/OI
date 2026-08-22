@@ -29,10 +29,10 @@ BEGIN
   -- Same freshness contract as T_LIFT_PROBES: the register reads the previous pass's table until
   -- this step runs. Read by V_FAMILY_SEAT_REGISTER only.
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_OOB_SEAT_ECONOMICS`
-  OPTIONS (description = 'Seat economics of the budget engine, materialised once per pass from V_OOB_KEYWORD (a planner-ceiling view that must never be inlined): one row per keyword the engine prices — its campaign slots, seat_rank, seat_cpc, role, bid_floor, current_bid, bid_action, suggested_bid — so the family seat register can read the seat price and the probe queue from a table. Built by SP_REFRESH_CUBE_TABLES step 0b, right after T_LIFT_PROBES. Read by V_FAMILY_SEAT_REGISTER. Spec: architecture/FAMILY_SEAT_REGISTER.md.') AS
+  OPTIONS (description = 'Seat economics of the budget engine, materialised once per pass from V_OOB_KEYWORD (a planner-ceiling view that must never be inlined): one row per keyword the engine prices — its campaign slots, seat_rank, seat_cpc, role, bid_floor, current_bid, bid_action, suggested_bid, and the engine park price bid_park (published by V_OOB_KEYWORD since 2026-08-23, ruling R-f) — so the family seat register can read the seat price, the park price and the probe queue from a table. Built by SP_REFRESH_CUBE_TABLES step 0b, right after T_LIFT_PROBES. Read by V_FAMILY_SEAT_REGISTER. Spec: architecture/FAMILY_SEAT_REGISTER.md.') AS
     SELECT campaign_id, campaign_name, keyword_id, ad_group_id, target_text, match_type, is_auto, is_pt, is_sb,
            is_defense, days_capped_7d, bid_floor, current_bid, slots, seat_rank, seat_cpc, role, bid_action,
-           suggested_bid, clk90, ord90, roas90, CURRENT_DATE('America/Los_Angeles') AS built_on
+           suggested_bid, clk90, ord90, roas90, bid_park, CURRENT_DATE('America/Los_Angeles') AS built_on
     FROM `onyga-482313.OI.V_OOB_KEYWORD`;
 
   -- 1. Unified Daily

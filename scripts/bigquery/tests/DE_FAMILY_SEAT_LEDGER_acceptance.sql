@@ -14,8 +14,8 @@
 --   A3  One keyword per number: among OPEN rows, (family, seat_no) is unique.
 --   A4  Numbers start at 1 and are never NULL or negative.
 --   A5  No launch-family row, ever (open or closed): only HARVEST-book families are seated.
---   A6  Every closed row carries one of the mapped reasons (incl. STATE_CHANGED, P3); every open
---       row carries none.
+--   A6  Every closed row carries one of the mapped reasons (incl. PARK_LAPSED, R-h; STATE_CHANGED,
+--       P3); every open row carries none.
 --   A7  Probe rows are TRIAL keywords: an open seat opened as 'probe' or 'stalled probe' reads
 --       TRIAL on the ladder.
 --   A8  Key uniqueness: (family, campaign_id, keyword_id, opened_on) appears once.
@@ -44,6 +44,12 @@
 --   A15 Plain words: every closed row carries closed_reason_text, and the text is the sentence the
 --       SOP maps to its code (for STATE_CHANGED: the mapped prefix, the state in plain words, and
 --       'The seat is free.'); every open row carries none.
+--   A16 Ruling R-h: every PARKED keyword in a working family, not brand defense, with spend on the
+--       basis window and a re-verdict appointment (next_check_date) on or after the snapshot date
+--       holds exactly one open row observed as 'parked — awaiting re-verdict'; no PARKED keyword
+--       outside that position holds an open row (past its appointment with spend it is a leak).
+--   Brand defense is tested with WHOLE-PHRASE word-boundary matches of the house brand phrases
+--   (D9), never a bare substring.
 -- =============================================================================================
 WITH
 k AS (SELECT 7 AS basis_days, 14 AS probe_window_days, 20 AS verdict_clicks),  -- mirrors SP_MAINTAIN_FAMILY_SEATS / V_KEYWORD_LIFT probing
@@ -69,8 +75,10 @@ sp AS (
   GROUP BY 1, 2),
 brand_hit AS (
   SELECT DISTINCT s.campaign_id, s.keyword_id FROM `onyga-482313.OI.FACT_KEYWORD_STATE` s
-  JOIN (SELECT DISTINCT LOWER(phrase) AS phrase FROM `onyga-482313.OI.DIM_BRAND_PHRASES` WHERE phrase_type = 'BRAND') b
-    ON LOWER(s.target_text) LIKE CONCAT('%', b.phrase, '%')),
+  -- D9: a WHOLE phrase on word boundaries, never a bare substring
+  JOIN (SELECT DISTINCT CONCAT(r'\b', REGEXP_REPLACE(TRIM(LOWER(phrase), ' |,'), r'([.*+?^${}()|\[\]\\])', r'\\\1'), r'\b') AS rx
+        FROM `onyga-482313.OI.DIM_BRAND_PHRASES` WHERE phrase_type = 'BRAND' AND TRIM(LOWER(phrase), ' |,') != '') b
+    ON REGEXP_CONTAINS(LOWER(s.target_text), b.rx)),
 today AS (
   SELECT s.family, s.campaign_id, s.keyword_id, s.state,
          -- brand defense three ways: the ladder's flag, the campaign-name rule, the house brand phrases
@@ -80,6 +88,8 @@ today AS (
          COALESCE(s.at_floor, FALSE) AS at_floor,
          p.kid IS NOT NULL AS engine_probe,
          COALESCE(sp.spend_basis, 0) > 0 AS has_spend,
+         -- R-h: a parked keyword with spend and a re-verdict appointment still ahead is a seat
+         (s.state = 'PARKED' AND COALESCE(sp.spend_basis, 0) > 0 AND s.next_check_date >= run_day.d) AS parked_seat,
          (p.kid IS NULL AND NOT COALESCE(s.at_floor, FALSE)
           AND lc.action = 'INCREASE_BID'
           AND s.current_bid >= lc.new_bid - 0.005 AND s.current_bid > lc.old_bid + 0.005
@@ -103,11 +113,15 @@ probe_occ AS (
 stalled_occ AS (
   SELECT family, campaign_id, keyword_id FROM today
   WHERE in_working AND NOT is_brand_defense AND state = 'TRIAL' AND stalled),
+parked_occ AS (
+  SELECT family, campaign_id, keyword_id FROM today
+  WHERE in_working AND NOT is_brand_defense AND parked_seat),
 ledger AS (SELECT * FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`),
 open_rows AS (SELECT * FROM ledger WHERE closed_on IS NULL),
 reason_text AS (
   SELECT 'KILLED' AS code, 'The keyword is gone from the snapshot after its last verdict was failed or dead, or the ladder now reads dead: the book paused a failed keyword. The seat is free.' AS text UNION ALL
   SELECT 'PAUSED', 'The keyword is gone from the snapshot, or the ladder now reads parked, without a failed verdict first. The seat is free.' UNION ALL
+  SELECT 'PARK_LAPSED', 'The keyword reads parked on the ladder but is no longer a parked seat: it has no spend on the basis window, or its re-verdict appointment has passed. A parked keyword that still spends past its appointment is a leak (pause row). The seat is free.' UNION ALL
   SELECT 'LEFT_FAMILY', 'The keyword is still tracked but now belongs to another family, or its family left the working (HARVEST) book. The seat is free.' UNION ALL
   SELECT 'DEFENSE_EXEMPT', 'The keyword is now brand defense. Defense is never judged on profit, so it is never seated. The seat is free.' UNION ALL
   SELECT 'TO_GOOD_SIDE', 'The keyword is now winning or at its bar: it moved to the 80% side. The seat is free.' UNION ALL
@@ -126,7 +140,8 @@ checks AS (
              OR NOT t.in_working
              OR t.is_brand_defense
              OR NOT (t.state IN ('REPRICE', 'FLOOR_PROBATION', 'LOSER', 'REVIVED_SETTLING', 'PENDING_SETTLE')
-                     OR (t.state = 'TRIAL' AND (t.engine_probe OR (t.at_floor AND t.has_spend) OR t.stalled))))
+                     OR (t.state = 'TRIAL' AND (t.engine_probe OR (t.at_floor AND t.has_spend) OR t.stalled))
+                     OR t.parked_seat))
   UNION ALL
   SELECT 'A03 one keyword per open seat number within a family',
          (SELECT COUNT(*) FROM (SELECT family, seat_no FROM open_rows GROUP BY 1, 2 HAVING COUNT(*) > 1))
@@ -140,7 +155,7 @@ checks AS (
   SELECT 'A06 closed rows carry one of the mapped reasons; open rows carry none',
          (SELECT COUNT(*) FROM ledger
           WHERE (closed_on IS NOT NULL AND closed_reason NOT IN
-                   ('TO_GOOD_SIDE', 'TO_WAITING', 'KILLED', 'PAUSED', 'LEFT_FAMILY', 'DEFENSE_EXEMPT', 'STATE_CHANGED'))
+                   ('TO_GOOD_SIDE', 'TO_WAITING', 'KILLED', 'PAUSED', 'PARK_LAPSED', 'LEFT_FAMILY', 'DEFENSE_EXEMPT', 'STATE_CHANGED'))
              OR (closed_on IS NULL AND closed_reason IS NOT NULL))
   UNION ALL
   SELECT 'A07 open probe and stalled-probe seats hold TRIAL keywords',
@@ -188,6 +203,15 @@ checks AS (
                                                     NOT STARTS_WITH(l.closed_reason_text, x.text) OR NOT ENDS_WITH(l.closed_reason_text, '. The seat is free.'),
                                                     l.closed_reason_text != x.text)))
              OR (l.closed_on IS NULL AND l.closed_reason_text IS NOT NULL))
+  UNION ALL
+  SELECT 'A16 R-h: every parked keyword with spend and a re-verdict appointment ahead holds one open row observed as parked — awaiting re-verdict; no other PARKED keyword holds an open row',
+         (SELECT COUNT(*) FROM parked_occ o
+          WHERE (SELECT COUNT(*) FROM open_rows r
+                 WHERE r.family = o.family AND r.campaign_id = o.campaign_id AND r.keyword_id = o.keyword_id
+                   AND r.last_observed_kind = 'parked — awaiting re-verdict') != 1)
+         + (SELECT COUNT(*) FROM open_rows r
+            JOIN today t ON t.campaign_id = r.campaign_id AND t.keyword_id = r.keyword_id
+            WHERE t.state = 'PARKED' AND NOT t.parked_seat)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks

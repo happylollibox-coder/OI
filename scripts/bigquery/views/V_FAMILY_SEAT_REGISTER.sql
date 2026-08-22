@@ -1,7 +1,10 @@
 -- =============================================
 -- V_FAMILY_SEAT_REGISTER — the object Ori reads every morning for the 80/20 doctrine.
 -- Spec: docs/superpowers/specs/2026-08-22-family-seat-register-design.md §3–§6 and
--- architecture/FAMILY_SEAT_REGISTER.md (rulings R-a … R-e). Task 2 of the family seat register.
+-- architecture/FAMILY_SEAT_REGISTER.md (rulings R-a … R-k). Task 2 of the family seat register;
+-- repair pass 2026-08-23 (defects D1–D14: R-f sign-aware stalled proposal, R-g per-family band,
+-- R-h parked seats, R-i overdue settling, R-j not yet serving, R-k product targets, three-way
+-- queue defense, whole-phrase brand match, two-digit dates, one raise clock, horizon-true counts).
 --
 -- WHAT IT SAYS. For every WORKING family (the HARVEST book in V_BOOK_ASSIGNMENT) it groups the
 -- verdict ladder's keywords (FACT_KEYWORD_STATE, one snapshot) into plain-language categories,
@@ -30,13 +33,20 @@
 --              only state the register keeps), with the occupant's kind, bid, cost per day, the
 --              move on the pending book if any, the re-judge date, and for a STALLED probe the
 --              raise it is parked at (old_bid → new_bid, the date, clicks since) in a sentence
---              worded by the size of the raise (ruling R-c).
+--              worded by the size of the raise (ruling R-c); its proposal branches on the SIGN of
+--              (seat price − live bid): raise to the seat price only if the live bid is below it,
+--              otherwise park at the engine's published park price (ruling R-f). A settling seat
+--              past its due date says it is overdue (ruling R-i). A parked keyword with spend and a
+--              re-verdict appointment ahead is a seat, not a leak (ruling R-h).
 --   OPEN_SEAT  one per working family: the lowest free seat number, the open capacity, and the
 --              next probe candidate from the budget engine's queue the capacity can afford
 --              (admission cost = seat price × the engine's daily click goal).
 --   LEAK       one per closed-but-spending keyword (PARKED / DEAD with spend in the window).
 --   GAP        one per keyword that SPENT on the basis window with no verdict row on the ladder
 --              (a keyword with no ladder row and $0 on the basis window is not in the universe).
+--              A product target (asin= / category=) is told the truth: the ladder reads DIM_KEYWORD
+--              only, so no verdict will ever arrive (ruling R-k); only a keyword gets the
+--              'next state run' sentence.
 --   NO_CLOCK   one per trial whose bid moved outside the change log (ruling R-d): 80% side, its
 --              own sentence ("no date to judge it from") and move ("log the bid so the clock starts").
 --   ABSORB     advisory only: an above-bar campaign in the family capped ≥ k.absorb_capped_days of
@@ -50,8 +60,9 @@
 -- CATEGORIES (category ← ladder state, rulings in the SOP):
 --   winning                                  WINNER, PACED_WINNER                              80
 --   marginal — at its bar                    AT_BAR                                            80
---   waiting — too few clicks yet             TRIAL in no probe position, bid moved by the book  80
+--   waiting — too few clicks yet             TRIAL in no probe position WITH clicks on the window 80
 --   waiting — no test clock                  TRIAL whose bid moved with NO applied log row     80  (R-d)
+--   waiting — not yet serving                TRIAL in no probe position, $0 and 0 clicks — shown, no side  (R-j)
 --   waiting — verdict settling               REVIVED_SETTLING, PENDING_SETTLE (seated, 80 side)  80
 --   losing — in repair                       REPRICE                                           20 seat
 --   losing — on probation at its floor       FLOOR_PROBATION                                   20 seat
@@ -59,7 +70,8 @@
 --   probe — being bought at an entry bid     TRIAL engine-listed (T_LIFT_PROBES) or at floor w/ spend  20 seat (R-a)
 --   probe — stalled                          TRIAL, standing applied raise past the engine's test  20 seat (R-b, R-c)
 --   idle at the floor                        TRIAL at the floor, $0, 0 clicks — shown, no side  (R-e)
---   closed but still spending                PARKED / DEAD with spend                          20 leak
+--   parked — awaiting re-verdict             PARKED with spend and next_check_date ≥ snapshot  20 seat (R-h)
+--   closed but still spending                PARKED past its appointment with spend, DEAD with spend  20 leak
 --   untracked — no verdict row               spend on the basis window, no FACT_KEYWORD_STATE row  20 gap
 --   brand defense — never judged on profit   see above                                         outside
 --   launch — contained                       LAUNCH_CONTAINED (reference families only)        outside
@@ -72,8 +84,9 @@
 --              keywords are paused (→ $0); everything else as today.
 --   re-judged  repairs hold at their bar and move to the good side at their day-one cost;
 --              probation keywords stay on the 20% side at their floor; failed keywords are killed
---              (→ $0); stalled probes are parked (→ $0); engine probes keep their day-one cost;
---              settling verdicts hold; leaks paused; untracked unchanged.
+--              (→ $0); stalled probes are parked (→ $0); engine probes and parked seats keep their
+--              day-one cost; settling verdicts hold; leaks paused; untracked unchanged.
+--   The counts in a projection's sentence are the HORIZON's own (side_h), never today's (D5).
 --
 -- DECLARED CONSTANTS (the k CTE; Standing Rule 0 exempt — design choices, not measurements):
 --   allowance_share 0.20 (the doctrine) · basis_days 7 · context_days 28 · probe_window_days 14
@@ -81,9 +94,10 @@
 --   click_goal_day 4 (V_OOB_KEYWORD's seat model: slots = budget ÷ $4, one 4-click trial a day) ·
 --   absorb_capped_days 4 · entry_raise_ratio 1.5 (a raise by half or more is an ENTRY, less is a
 --   NUDGE — the wording rule of R-c) · bid_tol 0.005.
---   at_line_band is DERIVED, not declared: the relative noise of a 7-day spend read for the
---   SMALLEST working family — stddev ÷ mean of its daily spend over the context window, divided
---   by sqrt(basis_days) — published on every FAMILY row with its derivation in words.
+--   at_line_band is DERIVED, not declared: the relative noise of a 7-day spend read for the JUDGED
+--   family ITSELF — stddev ÷ mean of its own daily spend over the context window, divided by
+--   sqrt(basis_days) — one band per family, published on every FAMILY row with its derivation
+--   (ruling R-g). The engine's park price (bid_park) is READ from T_OOB_SEAT_ECONOMICS (ruling R-f).
 --
 -- PLANNER DOCTRINE. Reads FACT_KEYWORD_STATE, T_FAMILY_BAR, FACT_AMAZON_ADS, DE_FAMILY_SEAT_LEDGER,
 -- T_LIFT_PROBES, T_OOB_SEAT_ECONOMICS (V_OOB_KEYWORD is a planner-ceiling view that takes minutes;
@@ -119,8 +133,12 @@ fam AS (
   SELECT campaign_id, family, keyword_bar, bar_exempt
   FROM `onyga-482313.OI.T_FAMILY_BAR`
   QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY family, keyword_bar) = 1),
-brand AS (SELECT DISTINCT LOWER(phrase) AS phrase
-          FROM `onyga-482313.OI.DIM_BRAND_PHRASES` WHERE phrase_type = 'BRAND'),
+-- D9 (2026-08-23): a house brand phrase is matched as a WHOLE phrase on word boundaries, never a
+-- bare substring — 'lolli' as a substring would claim 'lolli pop' and 'lolli and pops'. Leading /
+-- trailing separators are trimmed off the phrase; regex metacharacters are escaped.
+brand AS (SELECT DISTINCT CONCAT(r'\b', REGEXP_REPLACE(TRIM(LOWER(phrase), ' |,'), r'([.*+?^${}()|\[\]\\])', r'\\\1'), r'\b') AS rx
+          FROM `onyga-482313.OI.DIM_BRAND_PHRASES`
+          WHERE phrase_type = 'BRAND' AND TRIM(LOWER(phrase), ' |,') != ''),
 probes AS (SELECT DISTINCT CAST(keyword_id AS STRING) AS kid FROM `onyga-482313.OI.T_LIFT_PROBES`),
 holdout AS (
   SELECT unit_id AS campaign_id, MIN(eligible_from) AS eligible_from
@@ -174,33 +192,34 @@ kw_ads AS (
 camp_ads AS (
   SELECT a.cid, SUM(a.Ads_cost) AS spend7, SUM(a.GROSS_PROFIT) AS gp7
   FROM ads a CROSS JOIN win WHERE a.date >= win.basis_from GROUP BY 1),
--- at_line_band: the relative noise of a 7-day spend read for the smallest working family
+-- at_line_band (ruling R-g, 2026-08-23): the relative noise of a 7-day spend read for the JUDGED
+-- family itself — stddev ÷ mean of ITS OWN daily spend over the context window ÷ sqrt(basis days),
+-- one band per family, published with its derivation on every FAMILY row. Never another family's
+-- noise (Bottle's noise must not decide whether LolliME is at the line).
 fam_day AS (
   SELECT f.family, a.date, SUM(a.Ads_cost) AS sp
   FROM ads a JOIN fam f ON f.campaign_id = a.cid
-  JOIN books b ON b.family = f.family AND b.book = 'HARVEST'
   CROSS JOIN win
   WHERE a.date >= win.context_from
   GROUP BY 1, 2),
 fam_noise AS (
-  SELECT family, SUM(sp) AS sp_ctx, AVG(sp) AS mean_day, STDDEV_SAMP(sp) AS sd_day, COUNT(*) AS days_seen
+  SELECT family, AVG(sp) AS mean_day, STDDEV_SAMP(sp) AS sd_day, COUNT(*) AS days_seen
   FROM fam_day GROUP BY 1),
 band AS (
-  SELECT n.family AS smallest_family,
+  SELECT n.family,
          ROUND(SAFE_DIVIDE(n.sd_day, NULLIF(n.mean_day, 0)) / SQRT(k.basis_days), 3) AS at_line_band,
-         FORMAT('at_line_band = (stddev ÷ mean of daily spend over the %d-day context window for the smallest working family, %s, on its %d days with spend) ÷ sqrt(%d basis days) = %.3f — a share within that many points under the 80%% line is indistinguishable from the line on a 7-day read',
-                k.context_days, n.family, n.days_seen, k.basis_days,
+         FORMAT('at_line_band for %s = (stddev ÷ mean of its OWN daily spend over the %d-day context window, on its %d days with spend) ÷ sqrt(%d basis days) = %.3f — a share within that many points under the 80%% line is indistinguishable from the line on a 7-day read of this family (ruling R-g: each family is judged against its own noise, never another family\'s)',
+                n.family, k.context_days, n.days_seen, k.basis_days,
                 ROUND(SAFE_DIVIDE(n.sd_day, NULLIF(n.mean_day, 0)) / SQRT(k.basis_days), 3)) AS at_line_band_derivation
-  FROM fam_noise n CROSS JOIN k
-  ORDER BY n.sp_ctx, n.family LIMIT 1),
+  FROM fam_noise n CROSS JOIN k),
 brand_hit AS (
   SELECT DISTINCT s.campaign_id, s.keyword_id
   FROM `onyga-482313.OI.FACT_KEYWORD_STATE` s
-  JOIN brand b ON LOWER(s.target_text) LIKE CONCAT('%', b.phrase, '%')),
+  JOIN brand b ON REGEXP_CONTAINS(LOWER(s.target_text), b.rx)),
 -- the same brand-phrase test on the ads rows, for keywords the ladder does not carry
 ads_brand_hit AS (
   SELECT DISTINCT a.cid, a.kid
-  FROM kw_ads a JOIN brand b ON LOWER(COALESCE(a.targeting, '')) LIKE CONCAT('%', b.phrase, '%')),
+  FROM kw_ads a JOIN brand b ON REGEXP_CONTAINS(LOWER(COALESCE(a.targeting, '')), b.rx)),
 snap AS (
   SELECT s.campaign_id, s.keyword_id, s.family, s.campaign_name, s.target_text, s.match_type,
          s.channel, s.state, s.current_bid, s.bid_floor, COALESCE(s.at_floor, FALSE) AS at_floor,
@@ -213,9 +232,17 @@ snap AS (
   WHERE s.snapshot_date = run_day.d),
 oob AS (
   SELECT campaign_id, keyword_id, target_text, campaign_name, slots, seat_rank, seat_cpc, role,
-         is_defense AS oob_is_defense
+         is_defense AS oob_is_defense, bid_park
   FROM `onyga-482313.OI.T_OOB_SEAT_ECONOMICS`),
 oob_camp AS (SELECT campaign_id, MAX(seat_cpc) AS seat_cpc, MAX(slots) AS slots FROM oob GROUP BY 1),
+-- the engine's park price (R-f): V_OOB_KEYWORD publishes bid_park (one engine-wide value), read
+-- through the T_ — never a literal. NULL if the T_ was built before the column existed: the row
+-- then reads NULL rather than a guessed price.
+park_bid AS (SELECT MAX(bid_park) AS bid_park FROM oob),
+-- the three-way defense test on the engine's rows too (D6): the engine flag alone is one-way
+oob_brand_hit AS (
+  SELECT DISTINCT o.campaign_id, o.keyword_id
+  FROM oob o JOIN brand b ON REGEXP_CONTAINS(LOWER(COALESCE(o.target_text, '')), b.rx)),
 ledger AS (
   SELECT family, campaign_id, keyword_id, seat_no, opened_on
   FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL),
@@ -236,7 +263,10 @@ u AS (
          s.campaign_id IS NOT NULL AS on_ladder,
          COALESCE(a.spend7, 0) AS spend7, COALESCE(a.clicks7, 0) AS clicks7,
          COALESCE(a.spend28, 0) AS spend28, COALESCE(a.clicks_since_raise, 0) AS clicks_since_raise,
-         f.keyword_bar
+         f.keyword_bar,
+         -- R-k: a product / category target (asin= / category= expression). The verdict ladder reads
+         -- DIM_KEYWORD only, so an untracked product target never gets a verdict.
+         REGEXP_CONTAINS(LOWER(COALESCE(s.target_text, a.targeting, '')), r'^\s*(asin|category)\s*=') AS is_product_target
   FROM snap s
   FULL OUTER JOIN kw_ads a ON a.cid = s.campaign_id AND a.kid = s.keyword_id
   LEFT JOIN ads_brand_hit ab ON ab.cid = a.cid AND ab.kid = a.kid
@@ -283,8 +313,10 @@ c AS (
                    AND NOT (lc.action = 'INCREASE_BID' AND u.current_bid > lc.new_bid)))) AS moved_outside_log,
          h.eligible_from AS holdout_eligible_from,
          h.campaign_id IS NOT NULL AS holdout,
-         oc.seat_cpc AS seat_price, oc.slots AS campaign_slots
-  FROM u CROSS JOIN k CROSS JOIN run_day
+         oc.seat_cpc AS seat_price, oc.slots AS campaign_slots,
+         pb.bid_park,
+         run_day.d AS snap_d
+  FROM u CROSS JOIN k CROSS JOIN run_day CROSS JOIN park_bid pb
   LEFT JOIN books b ON b.family = u.family
   LEFT JOIN probes p ON p.kid = u.keyword_id
   LEFT JOIN lastchg lc ON lc.campaign_id = u.campaign_id AND lc.keyword_id = u.keyword_id
@@ -307,7 +339,11 @@ coded AS (
       WHEN state = 'TRIAL' AND stalled                            THEN 'STALLED_PROBE'
       WHEN state = 'TRIAL' AND at_floor AND spend7 = 0 AND clicks7 = 0 THEN 'IDLE_FLOOR'
       WHEN state = 'TRIAL' AND moved_outside_log                  THEN 'WAITING_NO_CLOCK'
+      -- R-j: 'too few clicks yet' needs clicks; $0 and 0 clicks is not yet serving (no side, $0)
+      WHEN state = 'TRIAL' AND spend7 = 0 AND clicks7 = 0         THEN 'WAITING_NOT_SERVING'
       WHEN state = 'TRIAL'                                        THEN 'WAITING'
+      -- R-h: parked WITH spend and a re-verdict appointment still ahead = a seat being re-tested
+      WHEN state = 'PARKED' AND spend7 > 0 AND next_check_date >= snap_d THEN 'PARKED_SEAT'
       WHEN state IN ('PARKED', 'DEAD') AND spend7 > 0             THEN 'LEAK'
       WHEN state IN ('PARKED', 'DEAD')                            THEN 'CLOSED_QUIET'
       WHEN state = 'LAUNCH_CONTAINED' AND book = 'INVEST'         THEN 'LAUNCH'
@@ -326,13 +362,15 @@ codes AS (
   SELECT 'FAILED',                   'losing — failed at its floor',                    '20',         'failed',                       8  UNION ALL
   SELECT 'PROBE',                    'probe — being bought at an entry bid',            '20',         'probe',                        9  UNION ALL
   SELECT 'STALLED_PROBE',            'probe — stalled',                                 '20',         'stalled probe',                10 UNION ALL
-  SELECT 'LEAK',                     'closed but still spending',                       '20',         NULL,                           11 UNION ALL
-  SELECT 'GAP',                      'untracked — no verdict row',                      '20',         NULL,                           12 UNION ALL
-  SELECT 'OTHER',                    'other — not earning, not being tested',           '20',         NULL,                           13 UNION ALL
-  SELECT 'IDLE_FLOOR',               'idle at the floor',                               'NONE',       NULL,                           14 UNION ALL
-  SELECT 'CLOSED_QUIET',             'closed — not spending',                           'NONE',       NULL,                           15 UNION ALL
-  SELECT 'DEFENSE',                  'brand defense — never judged on profit',          'DEFENSE',    NULL,                           16 UNION ALL
-  SELECT 'LAUNCH',                   'launch — contained',                              'LAUNCH',     NULL,                           17),
+  SELECT 'PARKED_SEAT',              'parked — awaiting re-verdict',                    '20',         'parked — awaiting re-verdict', 11 UNION ALL
+  SELECT 'LEAK',                     'closed but still spending',                       '20',         NULL,                           12 UNION ALL
+  SELECT 'GAP',                      'untracked — no verdict row',                      '20',         NULL,                           13 UNION ALL
+  SELECT 'OTHER',                    'other — not earning, not being tested',           '20',         NULL,                           14 UNION ALL
+  SELECT 'IDLE_FLOOR',               'idle at the floor',                               'NONE',       NULL,                           15 UNION ALL
+  SELECT 'WAITING_NOT_SERVING',      'waiting — not yet serving',                       'NONE',       NULL,                           16 UNION ALL
+  SELECT 'CLOSED_QUIET',             'closed — not spending',                           'NONE',       NULL,                           17 UNION ALL
+  SELECT 'DEFENSE',                  'brand defense — never judged on profit',          'DEFENSE',    NULL,                           18 UNION ALL
+  SELECT 'LAUNCH',                   'launch — contained',                              'LAUNCH',     NULL,                           19),
 -- ── per-keyword costs on the three horizons
 kw AS (
   SELECT d.*, x.category, x.side, x.occupant_kind, x.cat_order,
@@ -378,9 +416,14 @@ fam_h AS (
          SUM(IF(side_h = '20' AND occupant_kind IS NOT NULL, cost_h, 0)) AS seats_cost_per_day,
          SUM(IF(code_h = 'LEAK', cost_h, 0)) AS leak_per_day,
          SUM(IF(code_h = 'GAP', cost_h, 0)) AS gap_per_day,
-         COUNTIF(occupant_kind IS NOT NULL AND side = '20') AS seats_20,
+         -- counts by the HORIZON's own side (D5): a projection never pairs today's counts with
+         -- projected dollars — a repair that moved to the good side at re-judged is not a seat there
+         COUNTIF(occupant_kind IS NOT NULL AND side_h = '20') AS seats_h,
          COUNTIF(occupant_kind = 'settling') AS seats_settling,
-         COUNTIF(code = 'LEAK') AS n_leaks, COUNTIF(code = 'GAP') AS n_gaps,
+         COUNTIF(code_h = 'LEAK') AS n_leaks, COUNTIF(code_h = 'GAP') AS n_gaps,
+         COUNTIF(code = 'GAP' AND is_product_target) AS n_gap_pt,
+         COUNTIF(code = 'GAP' AND NOT is_product_target) AS n_gap_kw,
+         SUM(IF(code = 'GAP' AND is_product_target, cost_today, 0)) AS gap_pt_today,
          COUNTIF(code = 'REPAIR') AS n_repair, COUNTIF(code = 'STALLED_PROBE') AS n_stalled,
          COUNTIF(code = 'FAILED') AS n_failed, COUNTIF(code = 'PROBATION') AS n_probation,
          COUNTIF(code = 'PROBE') AS n_probe, COUNTIF(code = 'DEFENSE') AS n_defense,
@@ -394,7 +437,7 @@ fam_read AS (
          good_side_per_day + bad_side_per_day AS judged_per_day,
          SAFE_DIVIDE(good_side_per_day, NULLIF(good_side_per_day + bad_side_per_day, 0)) AS good_share,
          k.allowance_share * (good_side_per_day + bad_side_per_day) AS allowance_per_day
-  FROM fam_h f CROSS JOIN k LEFT JOIN band ON TRUE),
+  FROM fam_h f CROSS JOIN k LEFT JOIN band ON band.family = f.family),
 fam_rows AS (
   SELECT f.*,
          allowance_per_day - bad_side_per_day AS open_capacity_per_day,
@@ -431,7 +474,11 @@ queue AS (
   JOIN fam f ON f.campaign_id = o.campaign_id
   JOIN books b ON b.family = f.family AND b.book = 'HARVEST'
   LEFT JOIN holdout h ON h.campaign_id = o.campaign_id
+  LEFT JOIN oob_brand_hit ob ON ob.campaign_id = o.campaign_id AND ob.keyword_id = o.keyword_id
+  -- D6: defense three ways here too — the engine flag, the campaign name, a house brand phrase
   WHERE o.role = 'QUEUED' AND NOT COALESCE(o.oob_is_defense, FALSE)
+    AND NOT REGEXP_CONTAINS(UPPER(COALESCE(o.campaign_name, '')), r'BRAND DEFENSE')
+    AND ob.keyword_id IS NULL
     AND NOT (h.campaign_id IS NOT NULL AND run_day.d >= h.eligible_from)),
 next_probe AS (
   SELECT q.family, q.campaign_id, q.campaign_name, q.keyword_id, q.target_text, q.queue_pos, q.seat_cpc, q.admission_cost_per_day,
@@ -511,20 +558,26 @@ shape AS (
     f.horizon_assumption AS horizon_assumption,
     CAST(NULL AS STRING) AS move,
     CASE WHEN f.book = 'INVEST' THEN
-           FORMAT('%s — launch family (reference only, never judged on profit): $%.2f/day on the %s horizon, of which $%.2f/day launch-contained, $%.2f/day winning or at its bar, $%.2f/day losing, probed, leaking or untracked, $%.2f/day brand defense. The launch controller governs it; this register only shows it.',
+           FORMAT('%s — launch family (reference only, never judged on profit): $%.2f/day on the %s horizon, of which $%.2f/day launch-contained, $%.2f/day winning, at its bar or waiting for a verdict, $%.2f/day losing, probed, leaking or untracked, $%.2f/day brand defense. The launch controller governs it; this register only shows it.',
                   UPPER(f.family), f.spend_h_per_day, f.horizon, f.launch_per_day, f.good_side_per_day, f.bad_side_per_day, f.defense_per_day)
          WHEN f.good_share IS NULL THEN
            FORMAT('%s — no judged spend on the basis window (%s horizon); nothing to read.', UPPER(f.family), f.horizon)
          ELSE
-           FORMAT('%s — %d%% good · %s%s (%s horizon). Allowance $%.2f/day (%d%% of the $%.2f/day judged); the 20%% side holds $%.2f/day: %d seats costing $%.2f/day, %d leaks $%.2f/day, %d untracked $%.2f/day; open capacity %s/day. %d settling verdicts are seated but count on the 80%% side. Brand defense $%.2f/day sits outside the ratio. %s',
+           FORMAT('%s — %d%% good · %s%s (%s horizon). Allowance $%.2f/day (%d%% of the $%.2f/day judged); the 20%% side holds $%.2f/day: %s, %s, %d untracked $%.2f/day; open capacity %s/day. %d settling verdicts are seated but count on the 80%% side. Brand defense $%.2f/day sits outside the ratio. At-the-line band %.1f points (this family\'s own 7-day noise; derivation on the row). %s',
                   UPPER(f.family), CAST(ROUND(100 * f.good_share) AS INT64),
                   CASE f.doctrine_status WHEN 'IN' THEN 'IN' WHEN 'AT_LINE' THEN 'AT THE LINE' ELSE 'OUT' END,
                   IF(f.doctrine_status = 'OUT', FORMAT(' by $%.2f/day', f.over_by_per_day),
-                     IF(f.doctrine_status = 'AT_LINE', FORMAT(' (within %.0f points of 80%%, the 7-day noise)', 100 * f.at_line_band), '')),
+                     IF(f.doctrine_status = 'AT_LINE', FORMAT(' (within %.1f points of 80%%, this family\'s own 7-day noise)', 100 * f.at_line_band), '')),
                   f.horizon, f.allowance_per_day, CAST(ROUND(100 * f.allowance_share) AS INT64), f.judged_per_day,
-                  f.bad_side_per_day, f.seats_20, f.seats_cost_per_day, f.n_leaks, f.leak_per_day, f.n_gaps, f.gap_per_day,
+                  f.bad_side_per_day,
+                  -- D5: on a projection the counts are the horizon's own and the verb is conditional
+                  IF(f.horizon = 'today', FORMAT('%d seats costing $%.2f/day', f.seats_h, f.seats_cost_per_day),
+                                          FORMAT('the %d seats would cost $%.2f/day', f.seats_h, f.seats_cost_per_day)),
+                  IF(f.horizon = 'today', FORMAT('%d leaks $%.2f/day', f.n_leaks, f.leak_per_day),
+                                          FORMAT('%d leaks paused ($%.2f/day)', f.n_leaks, f.leak_per_day)),
+                  f.n_gaps, f.gap_per_day,
                   IF(f.open_capacity_per_day < 0, FORMAT('−$%.2f', -f.open_capacity_per_day), FORMAT('$%.2f', f.open_capacity_per_day)),
-                  f.seats_settling, f.defense_per_day,
+                  f.seats_settling, f.defense_per_day, 100 * COALESCE(f.at_line_band, 0),
                   CASE WHEN f.horizon != 'today' THEN 'This row is a projection; the assumption it rests on is written on the row.'
                        WHEN f.doctrine_status = 'IN' THEN 'The family passes today; the open capacity is what a new probe may cost.'
                        ELSE CONCAT('What closes the gap: ',
@@ -532,7 +585,9 @@ shape AS (
                               IF(f.n_repair > 0, FORMAT('let the %d repairs hold at their bar (−$%.2f/day moves to the good side at the re-judged horizon); ', f.n_repair, f.repair_day1), ''),
                               IF(f.n_stalled > 0, FORMAT('re-price or park the %d stalled probes (−$%.2f/day); ', f.n_stalled, f.stalled_today), ''),
                               IF(f.n_failed > 0, FORMAT('kill the %d failed keywords; ', f.n_failed), ''),
-                              IF(f.n_gaps > 0, FORMAT('the %d untracked targets get a verdict on the next state run.', f.n_gaps), ''))
+                              -- R-k: only a KEYWORD in a mapped campaign gets a verdict on the next state run
+                              IF(f.n_gap_kw > 0, FORMAT('the %d untracked keywords get a verdict on the next state run; ', f.n_gap_kw), ''),
+                              IF(f.n_gap_pt > 0, FORMAT('the %d untracked product targets ($%.2f/day) stay where they are — the verdict ladder does not track product targets; this spend stays untracked until it does (extending the ladder is a ruling for Ori, not a mapping fix).', f.n_gap_pt, f.gap_pt_today), ''))
                   END)
          END AS sentence,
     FORMAT('%s|%02d|%02d|', f.family, IF(f.book = 'INVEST', 9, 1), f.hz_order) AS sort_key
@@ -632,7 +687,8 @@ shape AS (
     IF(w.code = 'STALLED_PROBE', w.raise_new_bid, NULL) AS raise_new_bid,
     IF(w.code = 'STALLED_PROBE', w.raised_on, NULL) AS raised_on,
     IF(w.code = 'STALLED_PROBE', w.clicks_since_raise, NULL) AS clicks_since_raise,
-    IF(w.code = 'STALLED_PROBE', DATE_DIFF(win.basis_to, w.raised_on, DAY), NULL) AS days_since_raise,
+    -- D8: ONE clock — the raise is aged against the snapshot date, the same clock the 14-day test uses
+    IF(w.code = 'STALLED_PROBE', DATE_DIFF(run_day.d, w.raised_on, DAY), NULL) AS days_since_raise,
     w.seat_price AS seat_price,
     IF(w.code = 'STALLED_PROBE', NULL, w.next_check_date) AS due_on,
     w.holdout AS holdout,
@@ -669,10 +725,21 @@ shape AS (
                                  FORMAT('hold at its floor $%.2f; judge %s', COALESCE(w.bid_floor, 0), CAST(w.next_check_date AS STRING)))
            WHEN 'FAILED' THEN 'kill it on the next book (pause row) — it lost at its floor after probation'
            WHEN 'PROBE' THEN 'no move — the engine is buying its verdict; the seat closes on the verdict'
-           WHEN 'SETTLING' THEN FORMAT('no move — its verdict settles %s', CAST(w.next_check_date AS STRING))
-           WHEN 'STALLED_PROBE' THEN IF(w.seat_price IS NOT NULL,
-                                 FORMAT('raise to the seat price $%.2f to get a verdict, or park it at its floor $%.2f', w.seat_price, COALESCE(w.bid_floor, 0)),
-                                 FORMAT('its campaign is outside the budget engine\'s seat model, so no seat price is published — price it by hand to get a verdict, or park it at its floor $%.2f', COALESCE(w.bid_floor, 0)))
+           -- R-i: an overdue settling verdict is named as overdue, never published as a future event
+           WHEN 'SETTLING' THEN IF(w.next_check_date < run_day.d,
+                                 FORMAT('no move — was due to settle on %s, overdue by %d days; the ladder has not re-judged it (the cause is upstream and under diagnosis; the register never changes the ladder)', CAST(w.next_check_date AS STRING), DATE_DIFF(run_day.d, w.next_check_date, DAY)),
+                                 FORMAT('no move — its verdict settles %s', CAST(w.next_check_date AS STRING)))
+           -- R-h: parked with an appointment ahead — the ladder's revive cycle re-judges it
+           WHEN 'PARKED_SEAT' THEN FORMAT('no move — re-judged on %s by the ladder\'s revive cycle; parked at bid $%.2f and still buying clicks until then', CAST(w.next_check_date AS STRING), w.current_bid)
+           -- R-f: branch on the SIGN of (seat price − live bid); never a raise to a lower or equal price
+           WHEN 'STALLED_PROBE' THEN CASE
+                                 WHEN w.seat_price IS NULL THEN
+                                   FORMAT('its campaign is outside the budget engine\'s seat model, so no seat price is published — price it by hand to get a verdict, or park it at the engine\'s park price $%.2f and let the ladder\'s revive cycle re-test it', w.bid_park)
+                                 WHEN w.current_bid < w.seat_price - k.bid_tol THEN
+                                   FORMAT('raise to the seat price $%.2f to get a verdict (live bid $%.2f), or park it at the engine\'s park price $%.2f', w.seat_price, w.current_bid, w.bid_park)
+                                 ELSE
+                                   FORMAT('park it — bid to the engine\'s park price $%.2f and let the ladder\'s revive cycle re-test it: its live bid $%.2f is already at or above the seat price $%.2f and still bought no verdict', w.bid_park, w.current_bid, w.seat_price)
+                                 END
          END END AS move,
     CONCAT(
            FORMAT('seat %s — %s (%s) ', COALESCE(CAST(w.seat_no AS STRING), '?'), w.target_text, w.campaign_name),
@@ -682,15 +749,22 @@ shape AS (
              WHEN 'FAILED' THEN FORMAT('lost at its floor: $%.2f/day at bid $%.2f', w.cost_today, w.current_bid)
              WHEN 'PROBE' THEN FORMAT('is a trial being bought at an entry bid: $%.2f/day at bid $%.2f%s', w.cost_today, w.current_bid,
                                       IF(w.engine_probe, ' (on the engine\'s probe list)', ' (at the park bid, with spend)'))
-             WHEN 'SETTLING' THEN FORMAT('has a verdict pending until its clicks settle: $%.2f/day at bid $%.2f', w.cost_today, w.current_bid)
+             WHEN 'SETTLING' THEN CONCAT(
+               FORMAT('has a verdict pending until its clicks settle: $%.2f/day at bid $%.2f', w.cost_today, w.current_bid),
+               IF(w.next_check_date < run_day.d,
+                  FORMAT(' — was due to settle on %s — overdue by %d days; the ladder has not re-judged it', FORMAT_DATE('%b %d', w.next_check_date), DATE_DIFF(run_day.d, w.next_check_date, DAY)),
+                  ''))
+             WHEN 'PARKED_SEAT' THEN FORMAT('is parked by the ladder with a re-verdict appointment on %s and is still buying clicks: $%.2f/day at bid $%.2f — being re-tested, not leaking', FORMAT_DATE('%b %d', w.next_check_date), w.cost_today, w.current_bid)
              WHEN 'STALLED_PROBE' THEN
                CONCAT(
                  IF(SAFE_DIVIDE(w.raise_new_bid, NULLIF(w.raise_old_bid, 0)) >= k.entry_raise_ratio,
-                    FORMAT('entered at $%.2f on %s', w.raise_new_bid, FORMAT_DATE('%b %e', w.raised_on)),
-                    FORMAT('was nudged $%.2f→$%.2f on %s', w.raise_old_bid, w.raise_new_bid, FORMAT_DATE('%b %e', w.raised_on))),
+                    FORMAT('entered at $%.2f on %s', w.raise_new_bid, FORMAT_DATE('%b %d', w.raised_on)),
+                    FORMAT('was nudged $%.2f→$%.2f on %s', w.raise_old_bid, w.raise_new_bid, FORMAT_DATE('%b %d', w.raised_on))),
                  IF(w.current_bid > w.raise_new_bid + k.bid_tol, FORMAT(', now sitting at $%.2f', w.current_bid), ''),
-                 FORMAT(' — %d clicks in the %d complete days since ($%.2f/day): the engine\'s own test (%d clicks in %d days) has expired without a verdict, so it is neither earning nor being tested',
-                        w.clicks_since_raise, DATE_DIFF(win.basis_to, w.raised_on, DAY), w.cost_today, k.verdict_clicks, k.probe_window_days))
+                 -- D8: both clocks on the row — the clicks are counted on complete ads days, the age is on the snapshot date
+                 FORMAT(' — %d clicks on the %d complete ads days since (through %s, $%.2f/day); the raise is %d days old on the snapshot date (%s), past the engine\'s own test (%d clicks in %d days), so it is neither earning nor being tested',
+                        w.clicks_since_raise, DATE_DIFF(win.basis_to, w.raised_on, DAY), FORMAT_DATE('%b %d', win.basis_to), w.cost_today,
+                        DATE_DIFF(run_day.d, w.raised_on, DAY), FORMAT_DATE('%b %d', run_day.d), k.verdict_clicks, k.probe_window_days))
            END,
            IF(w.occupant_kind = 'settling', ' — seated, but counted on the 80% side (ruling)', ''),
            '. ',
@@ -699,10 +773,13 @@ shape AS (
              WHEN 'PROBATION' THEN FORMAT('Judge %s.', CAST(w.next_check_date AS STRING))
              WHEN 'FAILED' THEN 'Kill it on the next book.'
              WHEN 'PROBE' THEN 'No move; the seat closes on the verdict.'
-             WHEN 'SETTLING' THEN FORMAT('No move; settles %s.', CAST(w.next_check_date AS STRING))
-             WHEN 'STALLED_PROBE' THEN IF(w.seat_price IS NOT NULL,
-                                        FORMAT('Raise to the seat price $%.2f to get a verdict, or park it at its floor $%.2f.', w.seat_price, COALESCE(w.bid_floor, 0)),
-                                        FORMAT('No seat price is published for its campaign (outside the budget engine); price it by hand or park it at its floor $%.2f.', COALESCE(w.bid_floor, 0)))
+             WHEN 'SETTLING' THEN IF(w.next_check_date < run_day.d, 'No move; the ladder owes it a re-judgement.', FORMAT('No move; settles %s.', CAST(w.next_check_date AS STRING)))
+             WHEN 'PARKED_SEAT' THEN FORMAT('No move; re-judged on %s.', CAST(w.next_check_date AS STRING))
+             WHEN 'STALLED_PROBE' THEN CASE
+                                        WHEN w.seat_price IS NULL THEN FORMAT('No seat price is published for its campaign (outside the budget engine); price it by hand or park it at the engine\'s park price $%.2f.', w.bid_park)
+                                        WHEN w.current_bid < w.seat_price - k.bid_tol THEN FORMAT('Raise to the seat price $%.2f to get a verdict, or park it at the engine\'s park price $%.2f.', w.seat_price, w.bid_park)
+                                        ELSE FORMAT('Park it at the engine\'s park price $%.2f: it could not buy a verdict even at or above the seat price $%.2f.', w.bid_park, w.seat_price)
+                                      END
            END,
            IF(w.seat_no IS NULL, ' (Not yet numbered: the seat ledger runs after the snapshot.)', ''),
            IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch; excluded from every sheet, whatever the move above would have been.', ''),
@@ -906,10 +983,16 @@ shape AS (
     CAST(NULL AS STRING) AS at_line_band_derivation,
     1 AS n_keywords,
     CAST(NULL AS STRING) AS horizon_assumption,
-    'no sheet row — the verdict arrives on the next state run if the campaign is mapped; otherwise check why the ladder does not track this target' AS move,
-    FORMAT('%s (%s) spent $%.2f/day on the basis window with no verdict row on the ladder — untracked spend counts on the 20%% side. If the campaign was mapped to %s recently, the verdict arrives on the next state run; otherwise check why the ladder does not track this target.%s',
-                w.target_text, w.campaign_name, w.cost_today, w.family,
-                IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', '')) AS sentence,
+    IF(w.is_product_target,
+       'no sheet row — the verdict ladder does not track product targets (it reads DIM_KEYWORD only), so no verdict will arrive; this spend stays untracked until it does — extending the ladder is a ruling for Ori, not a mapping fix',
+       'no sheet row — the verdict arrives on the next state run if the campaign is mapped; otherwise check why the ladder does not track this keyword') AS move,
+    IF(w.is_product_target,
+       FORMAT('%s (%s) is a product target that spent $%.2f/day on the basis window with no verdict row — the verdict ladder does not track product targets, so no verdict will arrive; this spend stays untracked on the 20%% side until the ladder does (a ruling for Ori, not a mapping fix).%s',
+              w.target_text, w.campaign_name, w.cost_today,
+              IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', '')),
+       FORMAT('%s (%s) spent $%.2f/day on the basis window with no verdict row on the ladder — untracked spend counts on the 20%% side. If the campaign was mapped to %s recently, the verdict arrives on the next state run; otherwise check why the ladder does not track this keyword.%s',
+              w.target_text, w.campaign_name, w.cost_today, w.family,
+              IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', ''))) AS sentence,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 6, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.code = 'GAP'

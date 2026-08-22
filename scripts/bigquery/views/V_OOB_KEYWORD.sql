@@ -1420,7 +1420,10 @@ SELECT
                      'MANUAL park < 14d old — the engine defers to Ori: '),
                   COALESCE(b.reverdict_reason, 'settled evidence confirms the park'))
     ELSE 'no clicks yesterday (its bid did not eat the budget) or already at the $0.20 floor — hold'
-  END AS bid_reason
+  END AS bid_reason,
+  -- v27.113 (2026-08-23, family seat register R-f): the engine's park price is PUBLISHED so the
+  -- register can read it through T_OOB_SEAT_ECONOMICS instead of restating a literal.
+  x.bid_park AS bid_park
 FROM seats3 b CROSS JOIN k x
 ),
 -- ── v27.42 SEASON-CONTEXT GATE LAYER (2026-08-08, SEASON_CONTEXT_LEDGER.md §5) ──────────────
