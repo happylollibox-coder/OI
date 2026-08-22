@@ -138,6 +138,23 @@ applies to MANUAL and SB keywords), AUTO targets skip the term≠keyword test (e
 differs by construction; the 0-order gate protects harvesting), PT targets excluded entirely
 (the "term" is the targeted ASIN). Winners (orders in 90d) are shown, never negated.
 
+**v27.100 — THE BLOCK IS JUDGED AT THE GRAIN IT ACTS ON.** An Amazon negative keyword lands on
+the **ad group** and kills the term for every ASIN and every targeting keyword in it, so evidence
+sliced finer than the ad group must never emit one (the coach was caught proposing to block a term
+its ad group earned 3.29× on, because one ASIN's slice looked bad — the same class the coach fix
+closed, now closed here too). Mechanism, deliberately **roll-up as guard, never as trigger**: the
+per-slice rules above still *fire* the candidate, and five ad-group-grain guards can only
+*withdraw* it — the block dies if the ad group has any order on the term in the judging window, is
+net-positive on it over 28d, over 90d, or over its whole **lifetime**, or sells it organically net
+of ads (SQP, summed across every product the ad group advertises). Triggering at ad-group grain
+instead would over-block (it multiplies the candidate list several-fold); the guard direction can
+only ever shrink it. The view is therefore one row per (campaign, target, **ad group**, term),
+`block_*` columns publish the acting-grain evidence every reason must quote, and the snapshot
+aggregates the ad groups that independently earned the block into the one proposal row.
+Season-flagged negates (past gift-peak converters) inherit their REVIEW flag across engine
+collisions in the preflight (`season_relax_group`), so two engines agreeing can no longer silently
+drop the warning.
+
 `days_since_budget_change` (from `FACT_PPC_CHANGE_LOG`) is displayed so re-suggestions after a
 fresh change are visibly "just changed".
 
