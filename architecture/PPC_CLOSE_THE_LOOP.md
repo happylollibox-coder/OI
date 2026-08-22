@@ -73,7 +73,8 @@ why the extra week is not optional.
 | `target_net_roas_8w` | FLOAT64 | coach snapshot |
 | `coach_mode` | STRING | GUARDIAN / COOLDOWN / BLITZ / DEFAULT at decision time |
 | `source` | STRING NOT NULL | `'COACH'` (queued from a coach recommendation) or `'MANUAL'` |
-| `upload_status` | STRING | `NULL` = assumed landed in Amazon (default). `'FAILED_UPLOAD'` = verified never landed (bulksheet exported + logged, but the Amazon upload silently failed). Set **only** by audited migrations after comparing the log against the live Fivetran mirrors — never by the writer. |
+| `upload_status` | STRING | `NULL` = assumed landed in Amazon (default). `'FAILED_UPLOAD'` = verified never landed (bulksheet exported + logged, but the Amazon upload silently failed). `'SUPERSEDED_NEVER_UPLOADED'` (2026-08-22) = exported and logged, never uploaded, replaced by a later batch (a manual book that failed verification). Set **only** by audited migrations or the bulksheet generator's explicit `--supersede` — never by the writer, never deleted. |
+| `upload_note` | STRING | Free text beside `upload_status` (2026-08-22): why a row is FAILED_UPLOAD / SUPERSEDED_NEVER_UPLOADED, or the build note a generator wrote at log time (batch, README, what to label if not uploaded). |
 
 ## Upload verification & FAILED_UPLOAD marking (2026-08-08)
 
@@ -86,7 +87,8 @@ cooldowns, and the v27.14 negate retirement.
 Doctrine:
 
 - **`V_PPC_CHANGE_LOG_APPLIED`** (`scripts/bigquery/views/V_PPC_CHANGE_LOG_APPLIED.sql`) =
-  `FACT_PPC_CHANGE_LOG` minus `upload_status='FAILED_UPLOAD'` rows. **Every analytical consumer
+  `FACT_PPC_CHANGE_LOG` minus `upload_status IN ('FAILED_UPLOAD', 'SUPERSEDED_NEVER_UPLOADED')`
+  rows (only NULL means landed). **Every analytical consumer
   reads this view** — outcome scoring (`V_PPC_ACTION_OUTCOMES`), cooldowns
   (`V_ADS_COACH_DATA`, `V_RUN_TARGET`, `V_SB_LAUNCH_TARGET`, `V_WEEKLY_RUN_*`), APPLIED_HOLD +
   probe episodes (`V_OOB_KEYWORD`, `V_KEYWORD_LIFT`, `V_OOB_BUDGET_PHASE`), negate retirement
@@ -429,6 +431,7 @@ so Weekly Run always renders.
 |---|---|
 | 2026-06-11 | Initial design + implementation (table, view, endpoint, DO-page wiring, Cube, scorecard). |
 | 2026-06-16 | **Idempotent ingestion**: deterministic `change_id` + staging-table `MERGE` (no more duplicate-logged rows); client mount-flush now dedups. **`UNNEGATE` action_group**: `REMOVE_NEGATIVE`/`REMOVE_CONFLICTING_NEGATIVE` now scored term-scoped (did the re-allowed term convert?) instead of falling into campaign-level `OTHER`. |
+| 2026-08-22 | **`SUPERSEDED_NEVER_UPLOADED` + `upload_note`**: the reprice book's 07:56 UTC batch `reprice_book_20260822` (54 rows: 27 raises, 22 cuts, 5 KEYWORD_PAUSE with NULL new_bid) failed adversarial verification and was never uploaded; labelled by migration `2026-08-22_reprice_batch_superseded.sql`, `V_PPC_CHANGE_LOG_APPLIED` now excludes both non-NULL statuses, and `SP_SNAPSHOT_KEYWORD_STATE` v27.105 reads the applied view for its probation clock. The generator (`tools/build_reprice_bulksheet.py`) asserts sheet rows == logged rows and labels prior batches only by explicit `--supersede`. |
 | 2026-08-12 | **`V_CHANGE_SCORECARD`** — the settled OUTCOME half of Ori's "1 day for opportunity, 7 days for outcome" doctrine, finally built. Graded `[T+1,T+7]` (SB `[T+1,T+14]`) read no earlier than T+14 (SB T+21), against the entity's own settled `[T-28,T-1]` record. Verdicts CONFIRMED / NEUTRAL / REVERSED / INSUFFICIENT; REVERSED restores the pre-change value and never goes lower. Tier-COGS GP-ROAS, same currency as the revival bar. |
 | 2026-08-12 | **Weekly Run surfaces**: `ChangeScorecard` cube + "How did last week's changes do?" panel (this doc, §Cube + Dashboard), and `ParkReverdict` cube + Revivals panel (`SEASON_CONTEXT_LEDGER.md` §7.11). Both display-only, both on the page where Ori initiates changes. Not deployed — needs a cube restart + cache stamp. |
 | 2026-08-08 | **`upload_status` + `V_PPC_CHANGE_LOG_APPLIED`**: three whole 2026-08-06 batches (38 rows + 2 negates) silently never landed in Amazon; column added, rows marked `FAILED_UPLOAD` (migration `2026-08-08_upload_status_failed_batches.sql`), all analytical consumers switched to the filtered view. Audit artifacts in `.tmp/` (re-upload XLSX + 582-row classification). |

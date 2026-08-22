@@ -1,5 +1,20 @@
 -- =============================================================================
--- V_BID_CPC_TRANSFER   —  SHADOW.  NOTHING READS THIS.
+-- V_BID_CPC_TRANSFER   —  LIVE since 2026-08-22.  Two readers price bids through it:
+--   * SP_SNAPSHOT_KEYWORD_STATE (v27.104+): affordable_bid = affordable_cpc / m_effective
+--     (campaign M, MAX over target kinds) — the STATE's affordability test against the
+--     channel floor (FLOOR_PROBATION). This is a deliberate simplification of the model
+--     below: k_seg and gamma are dropped because the test only asks whether an
+--     affordable bid exists above a $0.10-0.25 floor, where the level term is the
+--     noisiest part of the model (KNOWN DEFECT 2) and M is the trustworthy part.
+--   * tools/build_reprice_bulksheet.py (v27.105+): the PRICE a hand upload carries.
+--     It honours the model in its ratio form — within a keyword k_seg and M cancel, so
+--     new_bid = current_bid x (target_cpc / realised_cpc)^(1/gamma) over the keyword's
+--     own settled clicks since its last bid change (>= 10 of them); a keyword without
+--     that record falls back to the documented campaign inverse
+--     bid = (target_cpc / (k_pure x M))^(1/gamma), and the book flags any keyword whose
+--     own realised cpc/bid ratio sits more than one held-out RMSE (0.2805 in log space,
+--     measured below) from what k_pure x bid^(gamma-1) x M predicts.
+--   FN_TARGET_BID_SHADOW (the original consumer) remains shadow.
 -- Built 2026-08-11.  Corrects the pooled bid->CPC curve of 2026-08-10.
 --
 -- THE MODEL

@@ -130,10 +130,21 @@ cleaned, as before — **and, since v27.104, AT_BAR's standing price** (see the 
 The SP reads its own prior `FACT_KEYWORD_STATE` row into a temp table before the rebuild (the column
 is absent before the first v27.104 run and the table absent on a fresh project; both cases are
 handled, never a first-run failure). `floor_since` = `COALESCE(prior floor_since, today)` while the
-state is FLOOR_PROBATION or LOSER; any other state clears it. The probation CLOCK starts at the later
-of `floor_since` and `FACT_KEYWORD_GUARD.last_bid_change_date` — the bid must actually have landed at
-the floor for clicks to count as evidence at the floor (a book row that is never uploaded never
-starts the clock; a raise off the floor ends `at_floor` and the kill arm with it).
+state is FLOOR_PROBATION or LOSER; any other state clears it.
+
+**The probation CLOCK starts only when a floor bid has LANDED (v27.105).** It starts once the live
+bid is OBSERVED at the floor (`at_floor` — a change-log row is a claim until the mirror confirms it;
+a book logged at build time and never uploaded must never start a clock), and
+`probation_clock_start` is the day the floor bid was APPLIED: the earliest `V_PPC_CHANGE_LOG_APPLIED`
+row on that keyword with `new_bid ≤ bid_floor + bid_tol`, dated after the last applied row ABOVE the
+floor and on/after `floor_since` (so the 1–2 day mirror lag delays the start without shifting the
+date); failing a log row, `last_bid_change_date` dates it. Until the bid is at the floor the clock,
+`probation_clk_settled` and `probation_due_date` are NULL, `state_reason` says
+"WAITING FOR THE FLOOR BID TO LAND", and `next_check_date` is the 7d re-read (invariant 2). v27.104
+started the clock at the later of `floor_since` and the last bid change, which stamped a running
+clock on keywords whose floor bid had never been uploaded (the two BOTTLE-SP/AUTO clauses at $0.22 /
+$0.24 over a $0.20 floor) — a fiction the book then yielded to LIFT. A book row that is never
+uploaded never starts the clock; a raise off the floor ends `at_floor` and the kill arm with it.
 `probation_clk_settled` = clicks dated on/after the clock start and on/before wm − settle_days_eff.
 The SP reading its own previous output is not an engine reading the table: no engine reads it.
 
@@ -201,33 +212,63 @@ record IS its record.
 
 `tools/build_reprice_bulksheet.py` (conventions of `build_stop_nonconverting_bulksheet.py`):
 
-- Emits keyword/target **bid updates** for REPRICE and AT_BAR rows whose placement-translated
-  affordable bid (`affordable_bid` / `clean_affordable_bid` when the guard fired, never below the
-  row's own `bid_floor`) differs from the current bid by more than one 5% ease step (the engine's
-  own smallest standing move); **to-the-floor moves** for FLOOR_PROBATION rows (from either side;
-  a row already at its floor is shown as PROBATION_RUNNING); and **pause rows** ONLY for LOSERs
-  whose `probation_elapsed AND at_floor` — any other LOSER is shown as REFUSED_PAUSE (always
-  CHECK FIRST on a pause). No flat floor constant exists in the book (v27.104).
+- **The SIDE of the bar decides the only direction allowed (v27.105, F1).** AT_BAR is two-sided.
+  `sign(roas_used − family_bar)` (guard-cleaned where the guard fired) gates every AT_BAR / REPRICE
+  row: ABOVE the bar a keyword is never cut (`NO_CUT_ABOVE_BAR`) — a raise is booked only if its
+  own record prices one; BELOW the bar a keyword is never raised (`NO_RAISE_BELOW_BAR`). The
+  v27.104 book keyed the no-raise rule on `state == 'REPRICE'` and cut five above-bar keywords /
+  raised six below-bar ones — the DO_NOT_UPLOAD verdict of 2026-08-22.
+- Emits keyword/target **bid updates** for AT_BAR / REPRICE rows whose capped price differs from
+  the current bid by more than one 5% ease step (the engine's own smallest standing move) and
+  never below the row's own `bid_floor`; **to-the-floor moves** for FLOOR_PROBATION rows (a row
+  already at its floor is shown as PROBATION_RUNNING); and **pause rows** ONLY for LOSERs whose
+  `probation_elapsed AND at_floor` — any other LOSER is shown as REFUSED_PAUSE (always CHECK
+  FIRST on a pause). No flat floor constant exists in the book (v27.104).
+- **One upload is one move — the cap (v27.105, F2), derived:** the engines step 5%/day and are
+  blind to their own move for the days spend takes to settle — `V_ADS_SETTLE_CURVE` has spend at
+  its final value by age 2–3 on both channels and the guard's SP settle discipline is 3 days. A
+  hand upload gets no further steps before its next re-read, so it is capped at the engine's
+  blind run: up ≤ (1.05)³ − 1 = +15.76%, down ≤ 1 − (0.95)³ = −14.26%. Rows with ≤ 2 settled orders
+  or an uncapped move beyond the cap are CHECK FIRST. A to-the-floor move lands on the floor when
+  the floor lies within one more engine step beyond the cap (a residual under the smallest
+  standing move is not a move; a bid one cent over the floor never starts the clock); an up-move
+  to a platform minimum is never capped.
+- **Placement translation (v27.105, F3):** a keyword with ≥ 10 settled clicks since its last bid
+  change (the guard's `vol_floor`) is priced on its OWN realised cpc/bid ratio in
+  `V_BID_CPC_TRANSFER`'s ratio form — `new_bid = bid × (affordable_cpc / realised_cpc)^(1/γ)`,
+  where k_seg and M cancel within a keyword; otherwise the documented campaign inverse
+  `bid = (cpc / (k_pure × M))^(1/γ)`. A keyword whose own ratio sits more than one held-out RMSE
+  (0.2805 in log space, the view's own figure) from `k_pure × bid^(γ−1) × M` is flagged
+  PLACEMENT_DIVERGES. The SP keeps the simpler `affordable_cpc / M` for the STATE's affordability
+  test (the view header says why). A naive CPC→bid mapping would RAISE bids on below-bar
+  keywords in placement-dosed campaigns (Fresh ~85% placement-dosed) — hence F1's sign gate.
 - **One keyword, one price:** a key carrying a live GO instruction in `T_ENGINE_PREFLIGHT` today is
-  shown as ENGINE_INSTRUCTED and never executed — the engine speaks for it that day.
-- Batch ids are time-stamped (`reprice_book_YYYYMMDD_HHMM`) so a re-derived book never collides
-  with an earlier build's batch; `--no-log` skips the change-log insert.
-- **A4 placement translation:** new_bid = affordable_cpc / M_campaign, where M is
-  `V_BID_CPC_TRANSFER.m_effective` (the campaign's measured placement multiplier — the model's
-  trustworthy part; β = 0 on brand defense). A naive CPC→bid mapping would RAISE bids on
-  below-bar keywords in placement-dosed campaigns (Fresh ~85% placement-dosed).
+  shown as ENGINE_INSTRUCTED and never executed — the engine speaks for it that day — EXCEPT a
+  FLOOR_PROBATION row (v27.105, F5), which is always emitted CHECK FIRST naming the competing
+  instruction, because the probation clock cannot start until a floor bid lands; Ori keeps one of
+  the two prices by deleting the other line.
+- **Provenance (v27.105, F4):** batch ids are time-stamped (`reprice_book_YYYYMMDD_HHMM`) and
+  written into the README; the batch holds ONLY rows on a sheet, with a non-NULL `new_bid` on
+  every bid row, a direction assertion, and an `upload_note`; the insert is read back and asserted
+  equal to the sheet. Earlier never-uploaded batches are never deleted — `--supersede BATCH_ID`
+  labels them `SUPERSEDED_NEVER_UPLOADED` (migration `2026-08-22_reprice_batch_superseded.sql`
+  did this for the 54-row `reprice_book_20260822` batch); every run prints any reprice batch still
+  unlabelled. `--no-log` skips the insert.
 - **A5 season interlock:** every bid-down and pause row is checked against the season ledger's
   BLOCK_CUT (`V_KEYWORD_CONTEXT_GATE`, keyword grain); a blocked row appears in the book with its
   reason and is NOT emitted as an executable row.
 - **HOLDOUT:** campaigns in `DE_HOLDOUT_ASSIGNMENT` arm = HOLDOUT are excluded from their
-  `eligible_from` date (2026-09-01) — a hand upload into the holdout invalidates the trial.
+  `eligible_from` date (2026-09-01) — a hand upload into the holdout invalidates the trial. Rows
+  allowed today in a holdout-arm campaign are LISTED in the README with that deadline (F6).
 - Brand-defense campaigns never appear with a profit-based row.
 - CHECK FIRST: rows the per-family N_f collapse newly condemns, and every LOSER pause row.
-- Portfolio echoed on every row (blank DETACHES on Campaign rows); SP and SB routed to their
-  sheets; audit CSV + plain-English README; restore generator
+- Portfolio echoed on every row (blank DETACHES on Campaign rows; on keyword/target rows Amazon
+  ignores the column — the README names campaigns whose LATEST history row is NULL, F6); SP and
+  SB routed to their sheets; audit CSV + plain-English README; restore generator
   (`tools/build_restore_reprice_bulksheet.py`) rebuilds the inverse sheet from the audit CSV.
 - The batch is logged to FACT_PPC_CHANGE_LOG (source MANUAL, coach_mode MANUAL_BULKSHEET) so the
-  scorecard grades it; if the book is never uploaded, mark the batch FAILED_UPLOAD.
+  scorecard grades it; if the book is never uploaded, label the batch SUPERSEDED_NEVER_UPLOADED
+  (uploaded-but-never-landed is FAILED_UPLOAD) — never delete a log row.
 
 ## v27.103 transition matrix (A1 — the clean rerun that gated this ship, 2026-08-22)
 
@@ -258,11 +299,14 @@ terms — and it is N_f-condemned (62 orders ≥ N_f 20), so the book marks it C
 - A probation is judged on the whole settled-90 window (A3), not on the floor-period clicks alone —
   the floor-period record improves the window as it accrues; a floor-only read is a possible
   refinement, not built.
-- The book logs its batch at BUILD time. A batch that is never uploaded must be marked
-  `FAILED_UPLOAD` (the README says so) — otherwise `V_PPC_CHANGE_LOG_APPLIED` readers (the guard,
-  LIFT, OOB, this SP's REPRICE appointment) treat moves that never happened as applied. The v27.103
-  build's batch `reprice_book_20260822` (54 rows, never uploaded) sat unmarked at v27.104 ship and
-  the automated run could not mark it (write blocked by policy) — Ori marks it:
-  `UPDATE OI.FACT_PPC_CHANGE_LOG SET upload_status='FAILED_UPLOAD' WHERE batch_id='reprice_book_20260822' AND upload_status IS NULL`.
+- The book logs its batch at BUILD time. A batch that is never uploaded must be labelled
+  `SUPERSEDED_NEVER_UPLOADED` (the README says so) — otherwise `V_PPC_CHANGE_LOG_APPLIED` readers
+  (the guard, LIFT, OOB, this SP's REPRICE appointment and, since v27.105, its probation clock)
+  treat moves that never happened as applied. The v27.103 build's batch `reprice_book_20260822`
+  (54 rows, never uploaded) was labelled by migration `2026-08-22_reprice_batch_superseded.sql`
+  at v27.105; its removal moved ten REPRICE appointments off the phantom "applied 08-22 + 14d"
+  date (2026-09-05) back to their real re-reads.
+- A FLOOR_PROBATION row's down-move is capped like any cut; if the floor is more than one engine
+  step beyond the cap the book steps toward it and the clock waits for a later book to land it.
 - 85 overdue appointments at ship are all PARKED / REVIVED_SETTLING rows whose reverdict
   `settle_due` lies in the past — other objects' verdicts, assembled unchanged; not this ladder's.

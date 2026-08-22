@@ -7,6 +7,19 @@
 --   Simulation of record: TMP_SIM_LADDER_FLOOR
 --   (scripts/bigquery/simulations/SIM_2026-08-22_ladder_floor_probation.sql) — the gate this
 --   implementation had to reproduce row for row (855 tracked keys).
+-- v27.105 (2026-08-22): THE CLOCK STARTS WHEN THE FLOOR BID LANDS. The v27.104 clock started at
+--   the later of floor_since and the last bid change — which stamped a running clock and a due
+--   date on keywords whose floor bid had never been uploaded (the two BOTTLE-SP/AUTO clauses sat
+--   at $0.22 / $0.24 over a $0.20 floor with a clock "running"). Now: the clock starts only once
+--   the live bid is OBSERVED at the floor (at_floor — a change-log row is a claim until the
+--   Fivetran mirror confirms it; a book logged at build time and never uploaded must never start
+--   a clock), and probation_clock_start is the date the floor bid LANDED: the earliest applied
+--   row in V_PPC_CHANGE_LOG_APPLIED at/below the floor (half a cent of tolerance) after the last
+--   row above it and on/after floor_since — so the 1-2 day mirror lag only delays the start, it
+--   does not shift the date — else the last bid change. Until then the clock, the settled-click
+--   count and the due date are NULL and the state publishes "waiting for the floor bid"; the
+--   appointment falls back to the 7d re-read so invariant 2 holds. Nothing else in the ladder
+--   changed — state counts are identical to v27.104 except these probation fields.
 --
 -- WHAT CHANGED vs v27.103 (Ori, verbatim: "floor question bid-up-to-floor if after a few days
 -- still loosing kill it" and "i think it is not 0.25 (we already checked it)"):
@@ -29,10 +42,9 @@
 --   MEMORY    floor_since is the date this state machine put the keyword on probation. It is
 --             carried forward from THIS TABLE's OWN PRIOR ROW (read into a temp table before the
 --             rebuild — the SP reading its own previous output is not an engine reading the
---             table) and seeded on the first v27.104 run. The probation CLOCK starts at the
---             later of floor_since and the keyword's last bid change (the bid has to have landed
---             at the floor for clicks to count as evidence at the floor). Leaving probation for
---             any non-kill state clears the memory.
+--             table) and seeded on the first v27.104 run. The probation CLOCK (v27.105 rule, see
+--             above) starts only once the floor bid has landed. Leaving probation for any
+--             non-kill state clears the memory.
 --   LOSER     ONLY a keyword whose probation has ELAPSED, whose bid sits at its floor, and which
 --             still reads below bar beyond noise. An above-bar keyword is NEVER a kill, whatever
 --             its bid (the v27.103 A2b "unexecutable AT_BAR -> LOSER" arm is REPEALED); the
@@ -62,7 +74,7 @@
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_SNAPSHOT_KEYWORD_STATE`()
 OPTIONS (
-  description = "Keyword state machine, bar/SE ladder with per-channel floors (v27.104, 2026-08-22): one row per (campaign, keyword) — state (DEAD | PENDING_SETTLE | REVIVED_SETTLING | PARKED | PACED_WINNER | WINNER | AT_BAR | REPRICE | FLOOR_PROBATION | LOSER | LAUNCH_CONTAINED | TRIAL, first-match ladder), judged against the FAMILY bar (T_FAMILY_BAR) inside an SE noise band that collapses at per-family N_f orders, the A2 click-space sufficiency check, the A8 launch exemption, affordability in BID space (affordable CPC / V_BID_CPC_TRANSFER.m_effective) against the keyword's OWN floor (DIM_KEYWORD -> V_BID_FLOOR -> FN_BID_FLOOR: SP $0.20, SB collection $0.10, SB video/unknown $0.25), FLOOR_PROBATION (bid to the floor, re-judged when >= 10 settled clicks exist at the floor — floor_since carried forward from this table's own prior row), LOSER only after an elapsed probation at the floor, and the clean-then-judge guard over every verdict that can move a bid down (deterioration labels re-read cleaned; AT_BAR's standing price deferred to its cleaned record). NO ENGINE reads this table — the only executor is the manual reprice book (tools/build_reprice_bulksheet.py). Invariants read by V_ENGINE_HEALTH. Spec: architecture/KEYWORD_STATE.md."
+  description = "Keyword state machine, bar/SE ladder with per-channel floors (v27.105, 2026-08-22 — the probation clock starts only when the live bid is observed at the floor, dated by the applied change-log row that landed it; NULL = waiting for the floor bid): one row per (campaign, keyword) — state (DEAD | PENDING_SETTLE | REVIVED_SETTLING | PARKED | PACED_WINNER | WINNER | AT_BAR | REPRICE | FLOOR_PROBATION | LOSER | LAUNCH_CONTAINED | TRIAL, first-match ladder), judged against the FAMILY bar (T_FAMILY_BAR) inside an SE noise band that collapses at per-family N_f orders, the A2 click-space sufficiency check, the A8 launch exemption, affordability in BID space (affordable CPC / V_BID_CPC_TRANSFER.m_effective) against the keyword's OWN floor (DIM_KEYWORD -> V_BID_FLOOR -> FN_BID_FLOOR: SP $0.20, SB collection $0.10, SB video/unknown $0.25), FLOOR_PROBATION (bid to the floor, re-judged when >= 10 settled clicks exist at the floor — floor_since carried forward from this table's own prior row), LOSER only after an elapsed probation at the floor, and the clean-then-judge guard over every verdict that can move a bid down (deterioration labels re-read cleaned; AT_BAR's standing price deferred to its cleaned record). NO ENGINE reads this table — the only executor is the manual reprice book (tools/build_reprice_bulksheet.py). Invariants read by V_ENGINE_HEALTH. Spec: architecture/KEYWORD_STATE.md."
 )
 BEGIN
   DECLARE has_table BOOL DEFAULT FALSE;
@@ -139,18 +151,58 @@ BEGIN
                LOGICAL_OR(is_brand_defense) AS is_brand_defense
         FROM `onyga-482313.OI.V_BID_CPC_TRANSFER` GROUP BY 1),
   pr AS (SELECT campaign_id cid, keyword_id kid, prior_state, prior_floor_since FROM prior_snapshot),
-  -- PROBATION EVIDENCE: settled clicks since the probation clock started (the later of the
-  -- probation start and the last bid change), inside the guard's own settle discipline
-  cs AS (
-    SELECT pr.cid, pr.kid, SUM(f.Ads_clicks) AS clk_since_floor_settled
+  -- v27.105 THE FLOOR BID LANDED: for a keyword on probation, the date the applied change log
+  -- first shows a bid at/below its channel floor (bid_tol) after the last applied bid ABOVE it,
+  -- on/after floor_since. A book row that is never uploaded never appears here.
+  landed AS (
+    SELECT pr.cid, pr.kid, MIN(DATE(l.applied_at, 'America/Los_Angeles')) AS floor_bid_landed
+    FROM pr
+    JOIN kag ON kag.kid = pr.kid
+    JOIN bf ON bf.ad_group_id = kag.ad_group_id
+    JOIN `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED` l
+      ON CAST(l.campaign_id AS STRING) = pr.cid AND CAST(l.keyword_id AS STRING) = pr.kid
+     AND l.new_bid IS NOT NULL
+    CROSS JOIN k
+    WHERE pr.prior_floor_since IS NOT NULL
+      AND DATE(l.applied_at, 'America/Los_Angeles') >= pr.prior_floor_since
+      AND l.new_bid <= bf.bid_floor + k.bid_tol
+      AND DATE(l.applied_at, 'America/Los_Angeles') > COALESCE((
+            SELECT MAX(DATE(a.applied_at, 'America/Los_Angeles'))
+            FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED` a
+            WHERE CAST(a.campaign_id AS STRING) = pr.cid AND CAST(a.keyword_id AS STRING) = pr.kid
+              AND a.new_bid > bf.bid_floor + k.bid_tol), DATE '1900-01-01')
+    GROUP BY 1, 2),
+  -- THE PROBATION CLOCK (v27.105): starts only once the live bid is OBSERVED at the floor (a
+  -- logged row is a claim until the mirror confirms it — a book logged at build time and never
+  -- uploaded must never start a clock); the applied log supplies the landing DATE (the mirror
+  -- lags 1-2 days, so the start is back-dated to the day the floor bid was applied), else the
+  -- last bid change dates it. Not at the floor -> NULL: the clock has not started.
+  clock AS (
+    SELECT pr.cid, pr.kid,
+           IF(COALESCE(g.current_bid, 999) <= bf.bid_floor + k.bid_tol,
+              COALESCE(ld.floor_bid_landed,
+                       GREATEST(pr.prior_floor_since, COALESCE(g.last_bid_change_date, pr.prior_floor_since))),
+              NULL) AS clock_start
     FROM pr
     JOIN g ON g.cid = pr.cid AND g.kid = pr.kid
-    JOIN `onyga-482313.OI.FACT_AMAZON_ADS` f
-      ON CAST(f.campaign_id AS STRING) = pr.cid AND CAST(f.keyword_id AS STRING) = pr.kid
+    LEFT JOIN kag ON kag.kid = pr.kid
+    LEFT JOIN bf ON bf.ad_group_id = kag.ad_group_id
+    LEFT JOIN landed ld ON ld.cid = pr.cid AND ld.kid = pr.kid
+    CROSS JOIN k
+    WHERE pr.prior_floor_since IS NOT NULL AND bf.bid_floor IS NOT NULL),
+  -- PROBATION EVIDENCE: settled clicks since the probation clock started (the day the floor bid
+  -- landed — v27.105), inside the guard's own settle discipline
+  cs AS (
+    SELECT c.cid, c.kid, ANY_VALUE(c.clock_start) AS clock_start,
+           SUM(f.Ads_clicks) AS clk_since_floor_settled
+    FROM clock c
+    JOIN g ON g.cid = c.cid AND g.kid = c.kid
+    LEFT JOIN `onyga-482313.OI.FACT_AMAZON_ADS` f
+      ON CAST(f.campaign_id AS STRING) = c.cid AND CAST(f.keyword_id AS STRING) = c.kid
+     AND f.date >= c.clock_start
     CROSS JOIN wm
-    WHERE pr.prior_floor_since IS NOT NULL
-      AND f.date >= GREATEST(pr.prior_floor_since, COALESCE(g.last_bid_change_date, pr.prior_floor_since))
-      AND f.date <= DATE_SUB(wm.d, INTERVAL COALESCE(g.settle_days_eff, IF(g.channel = 'SB', 14, 3)) DAY)
+    WHERE c.clock_start IS NOT NULL
+      AND (f.date IS NULL OR f.date <= DATE_SUB(wm.d, INTERVAL COALESCE(g.settle_days_eff, IF(g.channel = 'SB', 14, 3)) DAY))
     GROUP BY 1, 2),
   -- GUARD term grain: judging window = the guard view's own settled frame (SP [wm-92, wm-3],
   -- SB [wm-103, wm-14]); prior comparison window = the preceding 90d
@@ -298,7 +350,8 @@ BEGIN
       w.ns_zero_ord_terms, w.ns_zero_ord_clicks,
       -- probation memory (this table's own prior row) and the evidence gathered since
       pr.prior_state, pr.prior_floor_since,
-      cs.clk_since_floor_settled
+      cs.clk_since_floor_settled,
+      cs.clock_start AS floor_clock_start   -- v27.105: NULL until the floor bid has landed
     FROM base b
     LEFT JOIN po ON po.cid = b.campaign_id
     LEFT JOIN pf ON pf.cid = b.campaign_id AND pf.kid = b.keyword_id
@@ -324,8 +377,10 @@ BEGIN
       (COALESCE(c.guard_prior_clk, 0) >= k.prior_meas_clk) AS guard_applicable,
       -- the bid sits at/below its own floor (half a cent of tolerance: bulk uploads round)
       (COALESCE(c.current_bid, 999) <= c.bid_floor + k.bid_tol) AS at_floor,
-      -- probation elapsed = >= vol_floor settled clicks since the probation clock started
-      (c.prior_floor_since IS NOT NULL AND COALESCE(c.clk_since_floor_settled, 0) >= k.vol_floor) AS probation_elapsed,
+      -- probation elapsed = the clock has started (the floor bid landed — v27.105) AND
+      -- >= vol_floor settled clicks since it started
+      (c.prior_floor_since IS NOT NULL AND c.floor_clock_start IS NOT NULL
+       AND COALESCE(c.clk_since_floor_settled, 0) >= k.vol_floor) AS probation_elapsed,
       -- would AT_BAR's standing price move the bid DOWN by more than the book's materiality step?
       (GREATEST(COALESCE(c.affordable_bid, 0), c.bid_floor)
          < COALESCE(c.current_bid, 0) - GREATEST(k.reprice_material * COALESCE(c.current_bid, 0), 0.01)) AS at_bar_would_cut
@@ -409,17 +464,16 @@ BEGIN
   ),
   fin3 AS (
     SELECT f.*,
-      -- the probation clock: the later of the probation start and the last bid change
-      IF(f.floor_since_c IS NOT NULL,
-         GREATEST(f.floor_since_c, COALESCE(f.last_bid_change_date, f.floor_since_c)), NULL) AS probation_clock_start,
+      -- the probation clock (v27.105): the day the floor bid LANDED (applied log, or a bid
+      -- observed at the floor dated by its last change); NULL until then — no fiction
+      IF(f.floor_since_c IS NOT NULL, f.floor_clock_start, NULL) AS probation_clock_start,
       -- "a few days", derived: clock start + settle discipline + the days this keyword's own
       -- pace needs for vol_floor clicks; never earlier than tomorrow (a past appointment is
-      -- no appointment); no pace measured -> settle + the 7d re-read cadence
-      IF(f.state_c = 'FLOOR_PROBATION',
+      -- no appointment); no pace measured -> settle + the 7d re-read cadence; NO CLOCK -> NULL
+      IF(f.state_c = 'FLOOR_PROBATION' AND f.floor_clock_start IS NOT NULL,
          GREATEST(
            DATE_ADD(
-             DATE_ADD(GREATEST(f.floor_since_c, COALESCE(f.last_bid_change_date, f.floor_since_c)),
-                      INTERVAL f.settle_days_eff DAY),
+             DATE_ADD(f.floor_clock_start, INTERVAL f.settle_days_eff DAY),
              INTERVAL COALESCE(CAST(CEIL(SAFE_DIVIDE(f.vol_floor, NULLIF(f.click_pace, 0))) AS INT64), 7) DAY),
            DATE_ADD(f.today_d, INTERVAL 1 DAY)),
          NULL) AS probation_due_date
@@ -486,7 +540,9 @@ BEGIN
                             'at its family bar within noise — its band is forecast to collapse at N_f orders by this date',
                             'at its family bar within noise — 7d re-read; the band collapses at N_f orders')
       WHEN 'REPRICE' THEN 'an affordable bid exists above its floor — the reprice book carries the move; re-judged after it settles'
-      WHEN 'FLOOR_PROBATION' THEN 'on probation at its floor — re-judged once 10 settled clicks exist at the floor (this is the earliest that evidence can exist)'
+      WHEN 'FLOOR_PROBATION' THEN IF(s.probation_clock_start IS NULL,
+          'waiting for the floor bid to land — the reprice book carries the move to the floor; the probation clock starts the day it lands (7d re-read until then)',
+          'on probation at its floor — re-judged once 10 settled clicks exist at the floor (this is the earliest that evidence can exist)')
       WHEN 'LOSER' THEN 'probation at the floor elapsed, still below bar — kill candidate in the reprice book (CHECK FIRST)'
       WHEN 'LAUNCH_CONTAINED' THEN 'launch family — never judged on profit; contained by the launch model'
       ELSE 'gathering evidence at seat pace' END AS next_check_what,
@@ -524,10 +580,13 @@ BEGIN
                            FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_affordable_bid, s.affordable_bid), 0)),
                            ' bid, under its $', FORMAT('%.2f', s.bid_floor), ' floor; the move is $',
                            FORMAT('%.2f', COALESCE(s.current_bid, 0)), ' -> $', FORMAT('%.2f', s.bid_floor)) END,
-          '; on probation since ', CAST(s.floor_since_c AS STRING), ' with ',
-          CAST(COALESCE(s.clk_since_floor_settled, 0) AS STRING), ' of ', CAST(s.vol_floor AS STRING),
-          ' settled clicks at the floor — re-judged on ', CAST(COALESCE(s.probation_due_date, DATE_ADD(s.today_d, INTERVAL 7 DAY)) AS STRING),
-          ' at the earliest (', CAST(s.settle_days_eff AS STRING), 'd settle + its own click pace)',
+          '; on probation since ', CAST(s.floor_since_c AS STRING),
+          IF(s.probation_clock_start IS NULL,
+             ' — WAITING FOR THE FLOOR BID TO LAND: the live bid is not at the floor, so the probation clock has not started (re-read in 7d; the day an applied floor bid is confirmed, the clock back-dates to it)',
+             CONCAT(' with ', CAST(COALESCE(s.clk_since_floor_settled, 0) AS STRING), ' of ', CAST(s.vol_floor AS STRING),
+                    ' settled clicks at the floor since it landed on ', CAST(s.probation_clock_start AS STRING),
+                    ' — re-judged on ', CAST(COALESCE(s.probation_due_date, DATE_ADD(s.today_d, INTERVAL 7 DAY)) AS STRING),
+                    ' at the earliest (', CAST(s.settle_days_eff AS STRING), 'd settle + its own click pace)')),
           IF(s.guard_deferred_c, ' — judged on its own terms (mix-drift guard)', ''))
       WHEN 'LOSER' THEN CONCAT(FORMAT('%.2f', COALESCE(IF(s.guard_deferred_c, s.clean_roas90, s.settled_roas90), 0)),
           'x vs bar ', FORMAT('%.2f', s.family_bar), ' beyond noise AFTER its probation at the $',
@@ -568,7 +627,9 @@ BEGIN
     s.settle_days_eff,
     s.floor_since_c AS floor_since,
     s.probation_clock_start,
-    IF(s.floor_since_c IS NOT NULL, COALESCE(s.clk_since_floor_settled, 0), NULL) AS probation_clk_settled,
+    -- v27.105: NULL until the clock has started (no floor bid landed = no evidence at the floor)
+    IF(s.floor_since_c IS NOT NULL AND s.probation_clock_start IS NOT NULL,
+       COALESCE(s.clk_since_floor_settled, 0), NULL) AS probation_clk_settled,
     s.probation_elapsed,
     s.probation_due_date,
     IF(s.state_c = 'FLOOR_PROBATION', s.bid_floor, NULL) AS probation_bid,

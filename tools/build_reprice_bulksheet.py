@@ -1,16 +1,36 @@
 #!/usr/bin/env python3
 """THE REPRICE BOOK — the manual bulksheet that executes the bar/SE keyword states.
 
-v27.104 (2026-08-22, Ori's floor ruling — "bid-up-to-floor if after a few days still loosing
-kill it" / "i think it is not 0.25"): the flat $0.25 FLOOR constant is GONE. Every row carries
-its OWN floor from the state table (FN_BID_FLOOR via V_BID_FLOOR: SP $0.20, SB collection
-$0.10, SB video/unknown $0.25) and its placement-translated affordable BID (affordable_bid /
-clean_affordable_bid, the SP's A4 translation). New dispositions: FLOOR_PROBATION rows move the
-bid TO THE FLOOR from either side (BID_DOWN / BID_UP) and are re-judged by the state machine once
-10 settled clicks exist at the floor; LOSER pause rows exist ONLY for keywords whose probation has
-elapsed (the SP asserts it; the book refuses any other pause). A key with a live GO instruction
-from an engine today is shown as ENGINE_INSTRUCTED and not executed (one keyword, one price).
-Batch ids are time-stamped so a re-derived book never collides with an earlier build's batch.
+v27.105 (2026-08-22, after the adversarial verification returned DO_NOT_UPLOAD on the v27.104
+book): the book is now gated on the SIGN of the keyword's record against its family bar, not on
+the state label; every move is capped per upload; the placement translation prices each keyword
+on its OWN realised cpc/bid ratio where one exists; a floor-probation row is emitted even when an
+engine also speaks for the key (CHECK FIRST, naming the competing instruction, one price chosen by
+Ori); and the batch written to the change log is asserted to be exactly the rows on the sheet.
+
+    F1  SIGN, NOT LABEL.  AT_BAR is two-sided. Above the bar the record is a paying keyword — a
+        winner is never pulled down (NO_CUT_ABOVE_BAR); a raise is booked only if the standing
+        price implies one. Below the bar a keyword is never raised (NO_RAISE_BELOW_BAR) — A4's
+        failure mode is a placement translation that says a below-bar bid is "cheap". AT_BAR's
+        standing price may only move a bid TOWARD the bar. The v27.104 book cut five above-bar
+        keywords and raised six below-bar ones because it keyed the rule on state == 'REPRICE'.
+    F2  MOVE-SIZE CAP, derived (see the constants): three engine steps per upload, symmetric.
+        Every row with <= 2 settled orders, or whose uncapped move exceeds the cap, is CHECK FIRST.
+    F3  PLACEMENT.  A keyword with >= 10 settled clicks since its last bid change prices through
+        its OWN realised cpc/bid ratio in V_BID_CPC_TRANSFER's ratio form (k_seg and M cancel
+        within a keyword): new_bid = bid x (affordable_cpc / realised_cpc)^(1/gamma). Otherwise
+        the documented campaign inverse bid = (cpc / (k_pure x M))^(1/gamma). Rows whose own
+        ratio sits more than one held-out RMSE (0.2805 in log space — the view's own figure) from
+        the campaign model are flagged PLACEMENT_DIVERGES in the audit and README.
+    F4  PROVENANCE.  One batch per build, time-stamped, logged ONLY for rows on a sheet, with a
+        non-NULL new_bid on every bid row and an upload_note; the row count written is read back
+        and asserted equal to the sheet. Earlier never-uploaded batches are never deleted — they
+        are labelled SUPERSEDED_NEVER_UPLOADED by --supersede BATCH_ID (deliberate, never silent).
+    F5  PROBATION.  The state machine's clock starts only when a floor bid has LANDED (v27.105
+        SP). A FLOOR_PROBATION row is therefore always emitted — even over an engine's GO on the
+        same key — as CHECK FIRST naming the competing instruction, so Ori picks one price.
+    F6  README lists every executable row in a HOLDOUT-arm campaign with its 2026-09-01 deadline,
+        and names the campaigns whose latest history row carries a NULL portfolio.
 
 WHY THIS EXISTS
     v27.103 gave every keyword a verdict against its FAMILY's bar (AT_BAR / REPRICE / LOSER —
@@ -19,24 +39,18 @@ WHY THIS EXISTS
     Amazon Ads > Bulk operations. This script prepares; it never touches Amazon.
 
 WHAT IT EMITS
-    - Bid updates for REPRICE and AT_BAR rows whose placement-translated affordable bid differs
-      from the current bid by more than one 5% ease step (the engine's own smallest standing
-      move — the materiality floor is derived from that step, not invented).
-    - Pause rows for LOSERs (ruling 4: failed AT their price) — ALWAYS marked CHECK FIRST.
+    - Bid updates for AT_BAR / REPRICE rows whose capped price differs from the current bid by
+      more than one 5% ease step (the engine's smallest standing move), in the direction the
+      record's side of the bar allows.
+    - To-the-floor moves for FLOOR_PROBATION rows (down-moves capped per upload like any other
+      cut, except that a floor within one more engine step beyond the cap is landed on — a
+      residual under the smallest standing move is not a move, and a bid one cent over the
+      floor never starts the clock; an up-move to a platform minimum is not capped — a bid
+      under the minimum is invalid).
+    - Pause rows for LOSERs (ruling 4: failed AT the floor after probation) — ALWAYS CHECK FIRST.
     - An audit CSV with every candidate row and its disposition, a plain-English README
       (TRIGGER - EVIDENCE => MOVE, no codes), and a restore sheet via
       build_restore_reprice_bulksheet.py, so reversibility is a property, not a claim.
-
-THE PRICE (A3 + A4)
-    The verdict's own settled-90d window prices the verdict's evidence: affordable CPC =
-    settled GP-per-click / family bar (the guard-cleaned reading where the mix-drift guard
-    deferred). That CPC becomes a BID through the campaign's measured placement multiplier
-    (V_BID_CPC_TRANSFER.m_effective — the model's trustworthy part; beta=0 on brand defense):
-        new_bid = affordable_cpc / m_effective
-    A naive CPC->bid mapping would RAISE bids on below-bar keywords in placement-dosed
-    campaigns (Fresh is ~85% placement-dosed) — that is the failure A4 exists to prevent, and
-    the book additionally refuses ANY bid raise on a below-bar (REPRICE) keyword outright.
-    Live 7d CPC appears in the audit as labelled CONTEXT ONLY — never in a verdict or a price.
 
 INTERLOCKS
     - SEASON (A5): every bid-down and pause row is checked against the season ledger's
@@ -44,23 +58,25 @@ INTERLOCKS
       and is NOT emitted as an executable row — nothing executes-by-hand into a live peak.
     - HOLDOUT: campaigns in DE_HOLDOUT_ASSIGNMENT arm=HOLDOUT are excluded from their
       eligible_from date — a hand upload into the holdout invalidates the trial. Asserted on
-      every run and printed.
+      every run; rows allowed today in a holdout campaign are LISTED with the deadline.
     - BRAND DEFENSE: never judged on profit, so never in this book with a profit-based row.
     - PORTFOLIO: echoed on every row. A blank Portfolio ID DETACHES a campaign on Campaign
-      rows; echoing it on keyword rows is harmless and keeps the convention uniform.
+      rows; on keyword rows Amazon ignores the column, so the echo is a uniform convention,
+      not a lever — and the README names campaigns whose latest history row is NULL.
 
 USAGE
-    /usr/bin/python3 tools/build_reprice_bulksheet.py [-o PATH] [--no-log]
+    /usr/bin/python3 tools/build_reprice_bulksheet.py [-o PATH] [--no-log] [--supersede BATCH_ID ...]
 
     Re-derives everything from BigQuery on every run; there is no embedded row list. The batch
     is logged to FACT_PPC_CHANGE_LOG (source MANUAL, coach_mode MANUAL_BULKSHEET) so the
-    scorecard grades it — if the book is NOT uploaded, mark the batch FAILED_UPLOAD (the
-    2026-08-06 precedent) or the outcome scoring will grade moves that never happened.
+    scorecard grades it — if the book is NOT uploaded, mark the batch FAILED_UPLOAD (uploaded
+    but never landed) or SUPERSEDED_NEVER_UPLOADED (never uploaded) — never delete the rows.
 """
 
 import argparse
 import csv
 import json
+import math
 import os
 import subprocess
 import sys
@@ -77,12 +93,38 @@ PROJECT = "onyga-482313"
 # Declared constants, each derived from a house instrument (Standing Rule 0 exempt):
 #   MATERIAL_STEP   one daily ease step, the engine's smallest standing move (dark ease -5%/day;
 #                   the same 5% the state ladder uses for "materially above affordable").
-#   (the floor)     NOT a constant here — each row's bid_floor comes from the state table,
-#                   which reads the ONE definition (FN_BID_FLOOR via V_BID_FLOOR). v27.104.
+#   BLIND_STEPS     how many daily steps an engine takes before the FIRST settled reading of its
+#                   own move can exist: spend settles by age 2-3 on both channels
+#                   (V_ADS_SETTLE_CURVE: spend_pct_of_final_median 100.0/100.1 at age 2/3 for SP,
+#                   100.1/100.2 for SB) and the guard's SP settle discipline is 3 days
+#                   (V_KEYWORD_GUARD sp_settle_days). So an engine moves blind for 3 steps, then
+#                   every further step is informed. A hand upload gets NO further steps before
+#                   its next re-read, so its one move is capped at the engine's blind run:
+#   CAP_UP          (1 + 0.05)^3 - 1 = +15.76%      CAP_DOWN  1 - (1 - 0.05)^3 = -14.26%
+#                   (three compounding steps in each direction — symmetric in step count).
+#   VOL_FLOOR       10 settled clicks: the guard's own floor (V_KEYWORD_GUARD min_settled_clk);
+#                   the evidence a keyword's own cpc/bid ratio needs before it is used.
+#   THIN_ORDERS     2: at <= 2 settled orders the SE band equals the reading itself (se =
+#                   roas / sqrt(orders)) — every such row is CHECK FIRST.
+#   RMSE_LOG        0.2805: V_BID_CPC_TRANSFER's leave-one-campaign-out held-out RMSE of
+#                   log(cpc) — the tolerance beyond which a keyword's own ratio is said to
+#                   DIVERGE from the campaign model.
+#   GAMMA_DEFAULT   0.778: the view's gamma, used only if a row arrives without one.
 #   RAISE_CEILING   $2.00 — the house's standing bid ceiling (GUARDIAN threshold redesign);
 #                   applies to bid RAISES only, a bid-down needs no ceiling.
+#   (the floor)     NOT a constant here — each row's bid_floor comes from the state table,
+#                   which reads the ONE definition (FN_BID_FLOOR via V_BID_FLOOR). v27.104.
 MATERIAL_STEP = 0.05
+BLIND_STEPS = 3
+CAP_UP = (1 + MATERIAL_STEP) ** BLIND_STEPS - 1        # 0.157625
+CAP_DOWN = 1 - (1 - MATERIAL_STEP) ** BLIND_STEPS      # 0.142625
+VOL_FLOOR = 10
+THIN_ORDERS = 2
+RMSE_LOG = 0.2805
+GAMMA_DEFAULT = 0.778
 RAISE_CEILING = 2.00
+
+EXECUTABLE = ('BID_DOWN', 'BID_UP', 'PAUSE')
 
 SQL = """
 WITH wm AS (
@@ -92,10 +134,12 @@ ks AS (
   SELECT * FROM `{p}.OI.V_KEYWORD_STATE`
   WHERE state IN ('AT_BAR','REPRICE','FLOOR_PROBATION','LOSER')
 ),
--- one keyword, one price: a key with a live GO instruction today belongs to its engine
+-- one keyword, one price: a key with a live GO instruction today belongs to its engine —
+-- except a floor-probation row, which is emitted CHECK FIRST beside the instruction (F5)
 instructed AS (
-  SELECT campaign_id cid, COALESCE(keyword_id, '') kid,
-         STRING_AGG(DISTINCT CONCAT(engine, ' ', lever)) engines
+  SELECT CAST(campaign_id AS STRING) cid, COALESCE(CAST(keyword_id AS STRING), '') kid,
+         STRING_AGG(DISTINCT CONCAT(engine, ' ', lever, ' $', FORMAT('%.2f', current_bid),
+                                    ' -> $', FORMAT('%.2f', suggested_bid))) engines
   FROM `{p}.OI.T_ENGINE_PREFLIGHT`
   WHERE verdict = 'GO'
   GROUP BY 1, 2
@@ -109,11 +153,11 @@ camp AS (
   FROM `{p}.OI.V_DIM_CAMPAIGN_CURRENT`
   GROUP BY 1
 ),
--- last NON-NULL portfolio: a blank Portfolio ID means "no portfolio" on a Campaign Update row
--- and DETACHES the campaign, so every row echoes one.
+-- last NON-NULL portfolio (the echo) AND the latest row's portfolio (NULL = the D8 caveat)
 restore AS (
   SELECT CAST(campaign_id AS STRING) cid,
-         ARRAY_AGG(portfolio_id IGNORE NULLS ORDER BY date DESC LIMIT 1)[SAFE_OFFSET(0)] AS portfolio_id
+         ARRAY_AGG(portfolio_id IGNORE NULLS ORDER BY date DESC LIMIT 1)[SAFE_OFFSET(0)] AS portfolio_id,
+         ARRAY_AGG(portfolio_id ORDER BY date DESC LIMIT 1)[SAFE_OFFSET(0)] AS latest_portfolio_id
   FROM `{p}.OI.V_SRC_AmazonAds_campaign_history`
   GROUP BY 1
 ),
@@ -123,19 +167,16 @@ pf AS (
   QUALIFY ROW_NUMBER() OVER (PARTITION BY portfolio_id ORDER BY last_updated_date DESC) = 1
 ),
 ag AS (
-  -- V_SRC_AmazonAds_keyword unifies SP keywords, SB keywords AND targeting clauses, each with
-  -- its ad_group_id — the one source that covers every entity this book can address.
   SELECT campaign_id cid, keyword_id kid,
          ad_group_id, UPPER(COALESCE(state, 'ENABLED')) ad_keyword_status
   FROM `{p}.OI.V_SRC_AmazonAds_keyword`
   QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY date DESC) = 1
 ),
+-- the transfer model, per campaign x target kind: M (campaign constant), k_pure, gamma
 m AS (
-  SELECT CAST(campaign_id AS STRING) cid,
-         MAX(m_effective) m_effective,          -- campaign-level constant; MAX over target kinds
-         LOGICAL_OR(is_brand_defense) is_brand_defense
+  SELECT CAST(campaign_id AS STRING) cid, target_kind, m_effective, k_pure, gamma,
+         is_brand_defense
   FROM `{p}.OI.V_BID_CPC_TRANSFER`
-  GROUP BY 1
 ),
 hold AS (
   SELECT CAST(unit_id AS STRING) cid, MIN(eligible_from) eligible_from
@@ -156,6 +197,22 @@ live7 AS (
   WHERE date BETWEEN DATE_SUB(wm.d, INTERVAL 7 DAY) AND DATE_SUB(wm.d, INTERVAL 1 DAY)
     AND keyword_id IS NOT NULL
   GROUP BY 1, 2
+),
+-- F3: the keyword's OWN realised cost and clicks at its CURRENT bid — settled days strictly
+-- after its last bid change, inside the guard's own settled frame
+own AS (
+  SELECT CAST(f.campaign_id AS STRING) cid, CAST(f.keyword_id AS STRING) kid,
+         SUM(f.Ads_cost) own_cost, SUM(f.Ads_clicks) own_clk,
+         MIN(f.date) own_from, MAX(f.date) own_to
+  FROM `{p}.OI.FACT_AMAZON_ADS` f
+  JOIN `{p}.OI.FACT_KEYWORD_GUARD` g
+    ON CAST(g.campaign_id AS STRING) = CAST(f.campaign_id AS STRING)
+   AND CAST(g.keyword_id AS STRING) = CAST(f.keyword_id AS STRING)
+  CROSS JOIN wm
+  WHERE f.date >= GREATEST(DATE_SUB(wm.d, INTERVAL IF(g.channel = 'SB', 103, 92) DAY),
+                           COALESCE(DATE_ADD(g.last_bid_change_date, INTERVAL 1 DAY), DATE '1900-01-01'))
+    AND f.date <= DATE_SUB(wm.d, INTERVAL COALESCE(CAST(g.settle_days_eff AS INT64), IF(g.channel = 'SB', 14, 3)) DAY)
+  GROUP BY 1, 2
 )
 SELECT
   ks.campaign_id, ks.keyword_id, ks.target_text, ks.match_type, ks.channel,
@@ -170,9 +227,11 @@ SELECT
   instr.engines AS engine_instruction,
   camp.campaign_type, camp.campaign_state, camp.live_portfolio_id,
   restore.portfolio_id AS echo_portfolio_id,
+  restore.latest_portfolio_id,
   pf.portfolio_name,
   ag.ad_group_id, ag.ad_keyword_status,
-  m.m_effective, COALESCE(m.is_brand_defense, FALSE) AS is_brand_defense,
+  m.m_effective, m.k_pure, m.gamma, COALESCE(m.is_brand_defense, FALSE) AS is_brand_defense,
+  own.own_cost, own.own_clk, own.own_from, own.own_to,
   hold.eligible_from AS holdout_eligible_from,
   bc.gate_reason AS block_cut_reason,
   COALESCE(live7.sp7, 0) AS sp7, COALESCE(live7.clk7, 0) AS clk7,
@@ -184,6 +243,10 @@ LEFT JOIN restore ON restore.cid = ks.campaign_id
 LEFT JOIN pf ON pf.portfolio_id = restore.portfolio_id
 LEFT JOIN ag ON ag.cid = ks.campaign_id AND ag.kid = ks.keyword_id
 LEFT JOIN m ON m.cid = ks.campaign_id
+           AND m.target_kind = CASE WHEN COALESCE(ks.is_auto, FALSE) THEN 'AUTO'
+                                    WHEN COALESCE(ks.is_pt, FALSE) THEN 'PRODUCT'
+                                    ELSE 'KEYWORD' END
+LEFT JOIN own ON own.cid = ks.campaign_id AND own.kid = ks.keyword_id
 LEFT JOIN hold ON hold.cid = ks.campaign_id
 LEFT JOIN bc ON bc.keyword_text = ks.target_text AND NOT COALESCE(ks.is_auto, FALSE)
             AND NOT COALESCE(ks.is_pt, FALSE)
@@ -194,15 +257,15 @@ ORDER BY ks.state, ks.family, ks.campaign_name, ks.target_text
 """
 
 
-def bq(sql):
+def bq(sql, fmt='json'):
     out = subprocess.run(
-        ['bq', 'query', '--use_legacy_sql=false', '--format=json', '--max_rows=100000',
+        ['bq', 'query', '--use_legacy_sql=false', f'--format={fmt}', '--max_rows=100000',
          '--nouse_cache', f'--project_id={PROJECT}', sql],
         capture_output=True, text=True,
     )
     if out.returncode != 0:
         sys.exit(f"BigQuery failed:\n{out.stderr}")
-    return json.loads(out.stdout or '[]')
+    return json.loads(out.stdout or '[]') if fmt == 'json' else out.stdout
 
 
 def num(v, default=None):
@@ -213,111 +276,211 @@ def b(v):
     return v is True or v == 'true'
 
 
-def classify(r):
-    """One row -> (disposition, action, new_bid, check_first, story_bits).
+def price(r, afford_cpc, cur):
+    """F3: the affordable CPC -> a BID, through the keyword's own realised ratio where it has
+    one, else the campaign model. Returns (raw_bid, transfer_method, detail dict)."""
+    gamma = num(r.get('gamma'), GAMMA_DEFAULT) or GAMMA_DEFAULT
+    m_eff = num(r.get('m_effective'))
+    k_pure = num(r.get('k_pure'))
+    own_clk = num(r.get('own_clk'), 0)
+    own_cost = num(r.get('own_cost'), 0)
+    d = {'gamma': gamma, 'm_eff': m_eff, 'k_pure': k_pure, 'own_clk': int(own_clk),
+         'own_cpc': None, 'own_ratio': None, 'model_ratio': None, 'diverges': False}
+    if cur and m_eff and k_pure:
+        d['model_ratio'] = k_pure * (cur ** (gamma - 1)) * m_eff
+    if cur and own_clk >= VOL_FLOOR and own_cost > 0:
+        d['own_cpc'] = own_cost / own_clk
+        d['own_ratio'] = d['own_cpc'] / cur
+        if d['model_ratio']:
+            d['diverges'] = abs(math.log(d['own_ratio'] / d['model_ratio'])) > RMSE_LOG
+        # ratio form of the documented model: k_seg and M cancel within the keyword
+        raw = cur * (afford_cpc / d['own_cpc']) ** (1.0 / gamma)
+        return raw, 'OWN_RATIO', d
+    if m_eff and k_pure:
+        # the documented campaign inverse
+        raw = (afford_cpc / (k_pure * m_eff)) ** (1.0 / gamma)
+        return raw, 'CAMPAIGN_MODEL', d
+    # no model row at all: the SP's own simplification (cpc / M), M defaulting to 1
+    return afford_cpc / (m_eff or 1.0), 'CPC_OVER_M', d
 
-    Dispositions: BID_DOWN / BID_UP / PAUSE (executable) · SEASON_BLOCKED / HOLDOUT_EXCLUDED /
-    ENGINE_INSTRUCTED / NOT_ENABLED / BRAND_DEFENSE_EXCLUDED / NO_MOVE / NO_RAISE_BELOW_BAR /
-    PROBATION_RUNNING / REFUSED_PAUSE (book-visible, not executable).
+
+def cap_move(cur, raw):
+    """F2: clamp raw to [cur x (1 - CAP_DOWN), cur x (1 + CAP_UP)]. Returns (bid, capped).
+    A capped value is rounded INWARD to the cent (raises floor, cuts ceil) so cent rounding
+    can never carry a move past the cap."""
+    lo, hi = cur * (1 - CAP_DOWN), cur * (1 + CAP_UP)
+    if raw > hi:
+        return math.floor(hi * 100 + 1e-9) / 100, True
+    if raw < lo:
+        return math.ceil(lo * 100 - 1e-9) / 100, True
+    return raw, False
+
+
+def classify(r):
+    """One row -> (disposition, action, new_bid, check_reasons, story_bits).
+
+    Executable: BID_DOWN / BID_UP / PAUSE. Book-visible only: SEASON_BLOCKED / HOLDOUT_EXCLUDED /
+    ENGINE_INSTRUCTED / NOT_ENABLED / BRAND_DEFENSE_EXCLUDED / NO_MOVE / NO_CUT_ABOVE_BAR /
+    NO_RAISE_BELOW_BAR / PROBATION_RUNNING / REFUSED_PAUSE.
     """
     state = r['state']
     cur = num(r['current_bid'])
     guard = b(r['guard_deferred'])
     floor = num(r['bid_floor'])
     afford = num(r['clean_affordable_cpc'] if guard else r['affordable_cpc'])
-    afford_bid = num(r['clean_affordable_bid'] if guard else r['affordable_bid'])
     cpc = num(r['clean_cpc90'] if guard else r['settled_cpc90'])
     roas = num(r['clean_roas90'] if guard else r['settled_roas90'])
-    m_eff = num(r['m_effective'], 1.0) or 1.0
+    bar = num(r['family_bar'])
+    ord90 = num(r['settled_ord90'], 0)
+    nf = num(r['nf_orders'])
+    checks = []
     bits = {
-        'afford': afford, 'afford_bid': afford_bid, 'cpc_settled': cpc, 'roas_used': roas,
-        'm_eff': m_eff, 'guard': guard, 'floor': floor,
-        'floor_source': r.get('bid_floor_source') or '',
+        'afford': afford, 'cpc_settled': cpc, 'roas_used': roas, 'bar': bar, 'guard': guard,
+        'floor': floor, 'floor_source': r.get('bid_floor_source') or '',
+        'side': None, 'raw_bid': None, 'capped': False, 'transfer': None, 'pd': {},
+        'sp_afford_bid': num(r['clean_affordable_bid'] if guard else r['affordable_bid']),
+        'engine': r.get('engine_instruction') or '',
     }
+    if roas is not None and bar is not None:
+        bits['side'] = 'ABOVE' if roas > bar else 'BELOW' if roas < bar else 'AT'
     if floor is None:
-        # the SP resolves a floor for every row; a NULL here is a broken join, not a row to price
-        return 'NO_MOVE', None, None, False, bits
+        return 'NO_MOVE', None, None, checks, bits   # broken floor join, not a row to price
 
     # exclusions first — a row the book must not execute
     if b(r['is_brand_defense']):
-        return 'BRAND_DEFENSE_EXCLUDED', None, None, False, bits
+        return 'BRAND_DEFENSE_EXCLUDED', None, None, checks, bits
     if r['holdout_eligible_from'] and r['today_la'] >= r['holdout_eligible_from']:
-        return 'HOLDOUT_EXCLUDED', None, None, False, bits
-    if r.get('engine_instruction'):
-        # one keyword, one price: an engine already speaks for this key today
-        return 'ENGINE_INSTRUCTED', None, None, False, bits
+        return 'HOLDOUT_EXCLUDED', None, None, checks, bits
+    if bits['engine'] and state != 'FLOOR_PROBATION':
+        return 'ENGINE_INSTRUCTED', None, None, checks, bits
     if (r.get('campaign_state') or 'ENABLED').upper() != 'ENABLED' or \
        (r.get('ad_keyword_status') or 'ENABLED').upper() not in ('ENABLED',):
-        return 'NOT_ENABLED', None, None, False, bits
+        return 'NOT_ENABLED', None, None, checks, bits
 
-    nf = num(r['nf_orders'])
-    ord90 = num(r['settled_ord90'], 0)
     nf_condemned = nf is not None and ord90 >= nf
     bits['nf_condemned'] = nf_condemned
+    if nf_condemned:
+        checks.append(f"at {int(ord90)} orders this keyword is past its family's collapse point "
+                      f"of {int(nf)} orders — the noise band no longer shelters it; this verdict "
+                      f"is new under the per-family rule")
+    if ord90 <= THIN_ORDERS:
+        checks.append(f"only {int(ord90)} settled order(s) — the noise band equals the reading "
+                      f"itself; one order more or less flips the verdict")
 
     if state == 'LOSER':
-        # the ONLY kill: probation at the floor elapsed. The SP asserts it; the book refuses
-        # anything else outright rather than trusting the label.
         if not (b(r['probation_elapsed']) and b(r['at_floor'])):
-            return 'REFUSED_PAUSE', None, None, False, bits
+            return 'REFUSED_PAUSE', None, None, [], bits
+        checks.append("a pause is the one irreversible-feeling move; confirm the probation record")
         if r['block_cut_reason']:
-            return 'SEASON_BLOCKED', 'PAUSE', None, True, bits
-        return 'PAUSE', 'PAUSE', None, True, bits
+            return 'SEASON_BLOCKED', 'PAUSE', None, checks, bits
+        return 'PAUSE', 'PAUSE', None, checks, bits
 
     if cur is None:
-        return 'NO_MOVE', None, None, False, bits
+        return 'NO_MOVE', None, None, checks, bits
 
     if state == 'FLOOR_PROBATION':
-        # the move is TO THE FLOOR, from either side; at the floor, the probation simply runs
-        new_bid = round(floor, 2)
-        if abs(cur - new_bid) <= 0.005:
-            return 'PROBATION_RUNNING', None, None, False, bits
-        if new_bid < cur:
+        # the move is TO THE FLOOR. Down: capped like any cut (the clock starts only when the
+        # floor actually lands — the state says so). Up to a platform minimum: never capped.
+        if cur <= floor + 0.005:
+            return 'PROBATION_RUNNING', None, None, [], bits
+        if bits['engine']:
+            checks.append(f"an engine also speaks for this key today — {bits['engine']} — the "
+                          f"book's floor row and the engine's row are two prices for one "
+                          f"keyword; keep ONE (delete this line to let the engine's stand)")
+        if floor < cur:
+            # LANDING RULE: if the floor lies within one more engine step beyond the cap
+            # (i.e. inside (1 - 0.05)^(BLIND_STEPS + 1) of the bid), land AT the floor — a
+            # residual smaller than the engine's smallest standing move is not a separate
+            # move, and a bid one cent over the floor never starts the probation clock.
+            if floor >= cur * (1 - MATERIAL_STEP) ** (BLIND_STEPS + 1):
+                new_bid, capped = floor, False
+            else:
+                new_bid, capped = cap_move(cur, floor)
+            new_bid = round(max(new_bid, floor), 2)
+            bits['capped'] = capped
+            bits['raw_bid'] = floor
+            if capped:
+                checks.append(f"the floor ${floor:.2f} is more than one upload's cap below "
+                              f"${cur:.2f}; this row steps to ${new_bid:.2f} and the probation "
+                              f"clock starts only when a bid AT the floor lands")
             if r['block_cut_reason']:
-                return 'SEASON_BLOCKED', 'BID', new_bid, nf_condemned, bits
-            return 'BID_DOWN', 'BID', new_bid, nf_condemned, bits
-        return 'BID_UP', 'BID', new_bid, nf_condemned, bits
+                return 'SEASON_BLOCKED', 'BID', new_bid, checks, bits
+            return 'BID_DOWN', 'BID', new_bid, checks, bits
+        bits['raw_bid'] = floor
+        return 'BID_UP', 'BID', round(floor, 2), checks, bits
 
-    # AT_BAR / REPRICE: the verdict's own evidence (A3), already translated through the
-    # campaign's placement multiplier by the SP (A4), never below the row's own floor
-    if afford_bid is None:
-        return 'NO_MOVE', None, None, False, bits
-    new_bid = round(max(afford_bid, floor), 2)
-    bits['raw_bid'] = afford_bid
+    # AT_BAR / REPRICE — F1: the SIDE of the bar decides the only direction allowed
+    if afford is None or bits['side'] is None:
+        return 'NO_MOVE', None, None, checks, bits
+    raw, method, pd = price(r, afford, cur)
+    bits['raw_bid'], bits['transfer'], bits['pd'] = raw, method, pd
+    if pd.get('diverges'):
+        checks.append(f"PLACEMENT_DIVERGES: its own realised cpc/bid ratio {pd['own_ratio']:.2f} "
+                      f"sits beyond one model RMSE from the campaign model's {pd['model_ratio']:.2f}"
+                      f" — priced on its own ratio, but eyeball the level")
+    if bits['side'] == 'AT':
+        return 'NO_MOVE', None, None, checks, bits
 
-    if new_bid > cur:  # a raise
-        if state == 'REPRICE':
-            # A4's failure mode: never raise a below-bar keyword because the placement
-            # translation says its bid is cheap — its RECORD is below bar.
-            return 'NO_RAISE_BELOW_BAR', None, None, False, bits
-        new_bid = min(new_bid, RAISE_CEILING)
-        if new_bid <= cur or (new_bid - cur) <= max(MATERIAL_STEP * cur, 0.01):
-            return 'NO_MOVE', None, None, False, bits
-        return 'BID_UP', 'BID', new_bid, nf_condemned, bits
+    if bits['side'] == 'ABOVE':
+        # a winner is never pulled down
+        if raw <= cur:
+            return 'NO_CUT_ABOVE_BAR', None, None, [], bits
+        new_bid, capped = cap_move(cur, raw)
+        new_bid = round(min(new_bid, RAISE_CEILING), 2)
+        bits['capped'] = capped
+        if capped:
+            checks.append(f"the record's own price ${raw:.2f} is more than +{CAP_UP*100:.1f}% "
+                          f"above ${cur:.2f}; capped to ${new_bid:.2f} — one upload is one move")
+        if (new_bid - cur) <= max(MATERIAL_STEP * cur, 0.01):
+            return 'NO_MOVE', None, None, checks, bits
+        return 'BID_UP', 'BID', new_bid, checks, bits
 
-    # a cut (or equal)
+    # BELOW the bar: a below-bar keyword is never raised
+    if raw >= cur:
+        return 'NO_RAISE_BELOW_BAR', None, None, [], bits
+    new_bid, capped = cap_move(cur, raw)
+    new_bid = round(max(new_bid, floor), 2)
+    bits['capped'] = capped
+    if capped:
+        checks.append(f"the record's own price ${raw:.2f} is more than {CAP_DOWN*100:.1f}% "
+                      f"below ${cur:.2f}; capped to ${new_bid:.2f} — one upload is one move")
     if (cur - new_bid) <= max(MATERIAL_STEP * cur, 0.01):
-        return 'NO_MOVE', None, None, False, bits
+        return 'NO_MOVE', None, None, checks, bits
     if r['block_cut_reason']:
-        return 'SEASON_BLOCKED', 'BID', new_bid, nf_condemned, bits
-    return 'BID_DOWN', 'BID', new_bid, nf_condemned, bits
+        return 'SEASON_BLOCKED', 'BID', new_bid, checks, bits
+    return 'BID_DOWN', 'BID', new_bid, checks, bits
 
 
-def story(r, disp, new_bid, bits):
+def story(r, disp, new_bid, bits, checks):
     """Plain sentence: TRIGGER - EVIDENCE => MOVE. No codes."""
     cur = num(r['current_bid'])
     tgt = r['target_text']
     fam = r['family'] or 'unmapped'
-    bar = num(r['family_bar'], 1.0)
+    bar = bits['bar'] if bits['bar'] is not None else 1.0
     roas = bits['roas_used']
     floor = bits['floor']
+    side_txt = {'ABOVE': 'above', 'BELOW': 'below', 'AT': 'exactly at'}.get(bits['side'], '')
     guard_note = (" (judged on its own terms — the mix-drift guard excluded never-seen "
                   "zero-order search terms)" if bits['guard'] else "")
     ev = (f"its settled 90-day record returns {(roas or 0):.2f} gross-profit dollars per ad dollar "
-          f"against the {fam} bar of {bar:.2f}{guard_note}")
+          f"against the {fam} bar of {bar:.2f} — {side_txt} the bar on "
+          f"{int(num(r['settled_ord90'], 0))} settled orders{guard_note}")
     floor_txt = (f"${floor:.2f} floor" if floor is not None else "floor") + \
                 (f" ({bits['floor_source']})" if bits.get('floor_source') else "")
     state = r['state']
+    pd = bits.get('pd') or {}
+
+    def transfer_txt():
+        if bits.get('transfer') == 'OWN_RATIO':
+            return (f"through its OWN realised cost per click of ${pd['own_cpc']:.2f} at the "
+                    f"${cur:.2f} bid over {pd['own_clk']} settled clicks since its last bid change "
+                    f"(the model's ratio form, gamma {pd['gamma']:.3f})")
+        if bits.get('transfer') == 'CAMPAIGN_MODEL':
+            return (f"through the campaign model (fewer than {VOL_FLOOR} settled clicks at this "
+                    f"bid: k {pd['k_pure']:.3f} x placement multiplier {pd['m_eff']:.2f}, "
+                    f"gamma {pd['gamma']:.3f})")
+        return "through the campaign's placement multiplier alone (no model row)"
+
     if disp in ('PAUSE', 'REFUSED_PAUSE') or (disp == 'SEASON_BLOCKED' and state == 'LOSER'):
         if disp == 'REFUSED_PAUSE':
             move = (f"the book REFUSES to pause '{tgt}' — the state says LOSER but its probation "
@@ -330,28 +493,47 @@ def story(r, disp, new_bid, bits):
                     f"no cheaper price left to try")
     elif state == 'FLOOR_PROBATION' and disp in ('BID_DOWN', 'BID_UP', 'SEASON_BLOCKED', 'PROBATION_RUNNING'):
         if disp == 'PROBATION_RUNNING':
-            move = (f"no move — the bid already sits at its {floor_txt}; probation runs since "
-                    f"{r['floor_since']} ({int(num(r['probation_clk_settled'], 0))} of 10 settled "
-                    f"clicks at the floor so far), re-judged on {r['probation_due_date']} at the "
-                    f"earliest")
+            move = (f"no move — the bid already sits at its {floor_txt}; "
+                    + (f"probation runs since {r['probation_clock_start']} "
+                       f"({int(num(r['probation_clk_settled'], 0))} of {VOL_FLOOR} settled clicks at "
+                       f"the floor so far), re-judged on {r['probation_due_date']} at the earliest"
+                       if r.get('probation_clock_start') else
+                       "the state machine will start its clock on the next snapshot"))
         else:
             direction = 'down' if (new_bid or 0) < (cur or 0) else 'up'
-            why = (f"its record affords only a ${bits['afford_bid']:.2f} bid, under the floor"
-                   if bits['afford_bid'] is not None and bits['afford_bid'] < (floor or 0)
+            why = (f"its record affords only a ${bits['sp_afford_bid']:.2f} bid, under the floor"
+                   if bits['sp_afford_bid'] is not None and bits['sp_afford_bid'] < (floor or 0)
                    else "no affordable price exists above the floor")
-            move = (f"move the bid {direction} from ${cur:.2f} to ${new_bid:.2f} — its {floor_txt}"
-                    f" — because {why}; the state machine re-judges it once 10 settled clicks "
-                    f"exist at the floor (earliest {r['probation_due_date']}), and only THEN can "
-                    f"it become a kill")
+            landing = ("this lands AT the floor, so the probation clock starts the day Amazon "
+                       "applies it" if abs((new_bid or 0) - (floor or 0)) < 0.005 else
+                       "this steps toward the floor; the clock starts only when a bid AT the "
+                       "floor lands")
+            move = (f"move the bid {direction} from ${cur:.2f} to ${new_bid:.2f} toward its "
+                    f"{floor_txt} because {why}; {landing}; the state machine re-judges it once "
+                    f"{VOL_FLOOR} settled clicks exist at the floor, and only THEN can it become a kill")
     elif disp in ('BID_DOWN', 'BID_UP') or disp == 'SEASON_BLOCKED':
         direction = 'down' if (new_bid or 0) < (cur or 0) else 'up'
-        move = (f"move the bid {direction} from ${cur:.2f} to ${new_bid:.2f} — the record "
-                f"affords ${(bits['afford'] or 0):.2f} per click at the bar, which is a "
-                f"${(bits['afford_bid'] or 0):.2f} bid through this campaign's measured placement "
-                f"multiplier of {bits['m_eff']:.2f}, never below its {floor_txt}")
+        cap_txt = (f" (the record's own price is ${bits['raw_bid']:.2f}; one upload moves at most "
+                   f"{CAP_UP*100:.1f}% up or {CAP_DOWN*100:.1f}% down — three engine steps)"
+                   if bits.get('capped') else "")
+        move = (f"move the bid {direction} from ${cur:.2f} to ${new_bid:.2f}{cap_txt} — the record "
+                f"affords ${(bits['afford'] or 0):.2f} per click at the bar, translated to a bid "
+                f"{transfer_txt()}, never below its {floor_txt}")
+    elif disp == 'NO_CUT_ABOVE_BAR':
+        move = (f"no cut — the record is ABOVE its bar, a paying keyword is never pulled down "
+                f"(the standing price ${(bits['raw_bid'] or 0):.2f} would have cut ${cur:.2f}; "
+                f"its settled cost per click ${(bits['cpc_settled'] or 0):.2f} is already at or "
+                f"under the ${(bits['afford'] or 0):.2f} the bar affords)")
+    elif disp == 'NO_RAISE_BELOW_BAR':
+        move = (f"no raise — the record is BELOW its bar, a below-bar keyword is never raised "
+                f"(the placement translation would have raised ${cur:.2f} to "
+                f"${(bits['raw_bid'] or 0):.2f}; its record does not earn that)")
     elif disp == 'ENGINE_INSTRUCTED':
-        move = (f"no book row — {r['engine_instruction']} already carries a GO instruction on "
+        move = (f"no book row — {bits['engine']} already carries a GO instruction on "
                 f"this keyword today (one keyword, one price); the book yields")
+    elif disp == 'HOLDOUT_EXCLUDED':
+        move = (f"no book row — its campaign is in the HOLDOUT arm and the exclusion is in force "
+                f"since {r['holdout_eligible_from']}")
     else:
         move = "no executable move"
     trigger = {
@@ -364,11 +546,8 @@ def story(r, disp, new_bid, bits):
                  "the floor",
     }[state]
     s = f"{trigger} - {ev} => {move}."
-    if bits.get('nf_condemned'):
-        s += (f" CHECK FIRST: at {int(num(r['settled_ord90'],0))} orders this keyword is past "
-              f"its family's collapse point of {int(num(r['nf_orders'],0))} orders — the noise "
-              f"band no longer shelters it; this verdict is new under the per-family rule, so "
-              f"eyeball it before uploading.")
+    if checks and disp in EXECUTABLE:
+        s += " CHECK FIRST: " + "; ".join(checks) + "."
     if disp == 'SEASON_BLOCKED':
         s += (f" BLOCKED BY THE SEASON LEDGER — {r['block_cut_reason']} — this row is shown, "
               f"not executed; do not hand-carry it into a live peak.")
@@ -447,20 +626,50 @@ def sb_pause_row(r):
     return row
 
 
-def log_batch(rows, batch_id):
-    """Log the executable rows to FACT_PPC_CHANGE_LOG the way the stop sheet's batch was
-    logged (source MANUAL, coach_mode MANUAL_BULKSHEET), so the scorecard grades them."""
+def q(s):
+    return "'" + str(s).replace('\\', '\\\\').replace("'", "\\'") + "'" if s not in (None, '') else 'NULL'
+
+
+def prior_unmarked_batches():
+    """Earlier reprice batches still carrying upload_status NULL — each is a claim the scorecard
+    will grade. Printed every run; labelled only by an explicit --supersede."""
+    return bq(f"SELECT batch_id, COUNT(*) n, MIN(applied_at) first_at "
+              f"FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
+              f"WHERE batch_id LIKE 'reprice_book_%' AND upload_status IS NULL "
+              f"GROUP BY 1 ORDER BY 3")
+
+
+def supersede(batch_ids, new_batch):
+    for bid in batch_ids:
+        note = (f"never uploaded; superseded by {new_batch} "
+                f"({datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}) — labelled by the generator")
+        sql = (f"UPDATE `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` SET upload_status = 'SUPERSEDED_NEVER_UPLOADED', "
+               f"upload_note = {q(note)} WHERE batch_id = {q(bid)} AND upload_status IS NULL")
+        out = subprocess.run(['bq', 'query', '--use_legacy_sql=false', '--nouse_cache',
+                              f'--project_id={PROJECT}', sql], capture_output=True, text=True)
+        if out.returncode != 0:
+            sys.exit(f"supersede failed for {bid}:\n{out.stderr}")
+        print(f"  labelled batch {bid} SUPERSEDED_NEVER_UPLOADED: {out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ''}")
+
+
+def log_batch(rows, batch_id, readme_path):
+    """F4: log EXACTLY the executable rows, one batch, unique id, non-NULL new_bid on every bid
+    row, an upload_note; read the count back and assert it equals the sheet."""
+    exists = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` WHERE batch_id = {q(batch_id)}")
+    assert int(exists[0]['n']) == 0, f"batch id {batch_id} already exists in the change log"
+    note = (f"reprice book {batch_id}, built {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}; "
+            f"README {os.path.basename(readme_path)}; manual upload pending — if this book is not "
+            f"uploaded set upload_status SUPERSEDED_NEVER_UPLOADED; if uploaded and a line was "
+            f"deleted first, set that row FAILED_UPLOAD")
     structs = []
     for r, disp, new_bid in rows:
         action = ('KEYWORD_PAUSE' if disp == 'PAUSE'
                   else 'REDUCE_BID' if disp == 'BID_DOWN' else 'INCREASE_BID')
         old_bid = num(r['current_bid'])
-        cid = str(r['campaign_id'])
-        kid = str(r['keyword_id'])
-
-        def q(s):
-            return "'" + str(s).replace('\\', '\\\\').replace("'", "\\'") + "'" if s not in (None, '') else 'NULL'
-
+        if disp != 'PAUSE':
+            assert new_bid is not None and old_bid is not None, f"NULL bid on {r['target_text']}"
+            assert (new_bid < old_bid) == (disp == 'BID_DOWN'), f"direction mismatch on {r['target_text']}"
+        cid, kid = str(r['campaign_id']), str(r['keyword_id'])
         structs.append(
             "STRUCT("
             f"{q('reprice-' + '-'.join(batch_id.split('_')[2:]) + '-' + cid + '-' + kid)} AS change_id, "
@@ -472,22 +681,24 @@ def log_batch(rows, batch_id):
             f"{q(r['ad_group_id'])} AS ad_group_id, "
             f"{('CAST(' + repr(old_bid) + ' AS FLOAT64)') if old_bid is not None else 'NULL'} AS old_bid, "
             f"{('CAST(' + repr(new_bid) + ' AS FLOAT64)') if new_bid is not None else 'NULL'} AS new_bid, "
-            f"{q('MANUAL')} AS source, {q('MANUAL_BULKSHEET')} AS coach_mode)"
+            f"{q('MANUAL')} AS source, {q('MANUAL_BULKSHEET')} AS coach_mode, {q(note)} AS upload_note)"
         )
-    sql = (
-        f"INSERT INTO `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
-        f"(change_id, batch_id, applied_at, action, targeting, keyword_id, match_type, "
-        f"campaign_id, campaign_name, campaign_type, ad_group_id, old_bid, new_bid, source, coach_mode) "
-        f"SELECT change_id, batch_id, applied_at, action, targeting, keyword_id, match_type, "
-        f"campaign_id, campaign_name, campaign_type, ad_group_id, old_bid, new_bid, source, coach_mode "
-        f"FROM UNNEST([{', '.join(structs)}])"
-    )
+    cols = ("change_id, batch_id, applied_at, action, targeting, keyword_id, match_type, "
+            "campaign_id, campaign_name, campaign_type, ad_group_id, old_bid, new_bid, source, "
+            "coach_mode, upload_note")
+    sql = (f"INSERT INTO `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` ({cols}) "
+           f"SELECT {cols} FROM UNNEST([{', '.join(structs)}])")
     out = subprocess.run(
         ['bq', 'query', '--use_legacy_sql=false', '--nouse_cache', f'--project_id={PROJECT}', sql],
         capture_output=True, text=True)
     if out.returncode != 0:
         sys.exit(f"change-log insert failed:\n{out.stderr}")
-    return batch_id
+    back = bq(f"SELECT COUNT(*) n, COUNTIF(action <> 'KEYWORD_PAUSE' AND new_bid IS NULL) null_bids "
+              f"FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` WHERE batch_id = {q(batch_id)}")
+    n_logged, null_bids = int(back[0]['n']), int(back[0]['null_bids'])
+    assert n_logged == len(rows), f"logged {n_logged} rows but the sheet holds {len(rows)}"
+    assert null_bids == 0, f"{null_bids} bid rows logged with NULL new_bid"
+    return n_logged
 
 
 def main():
@@ -495,6 +706,8 @@ def main():
     ap.add_argument('-o', '--out', default=f".tmp/reprice_book_{date.today():%Y%m%d}.xlsx")
     ap.add_argument('--no-log', action='store_true',
                     help='skip the FACT_PPC_CHANGE_LOG batch insert')
+    ap.add_argument('--supersede', nargs='*', default=[],
+                    help='earlier never-uploaded batch ids to label SUPERSEDED_NEVER_UPLOADED')
     args = ap.parse_args()
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
 
@@ -511,22 +724,37 @@ def main():
     visible = []      # every candidate with disposition + story
     holdout_hits = []
     for r in rows:
-        disp, action, new_bid, check_first, bits = classify(r)
-        st = story(r, disp, new_bid, bits)
-        visible.append((r, disp, new_bid, check_first, bits, st))
-        if disp in ('BID_DOWN', 'BID_UP', 'PAUSE'):
+        disp, action, new_bid, checks, bits = classify(r)
+        st = story(r, disp, new_bid, bits, checks)
+        visible.append((r, disp, new_bid, checks, bits, st))
+        if disp in EXECUTABLE:
             executable.append((r, disp, new_bid))
         if disp == 'HOLDOUT_EXCLUDED':
             holdout_hits.append(r)
 
-    # HOLDOUT ASSERTION — a hand upload into the holdout invalidates the trial.
-    armed = sorted({r['holdout_eligible_from'] for r in rows if r['holdout_eligible_from']})
+    # DOCTRINE ASSERTIONS — no executable row may break them
     for r, disp, new_bid in executable:
         assert not (r['holdout_eligible_from'] and today_la >= r['holdout_eligible_from']), \
             f"HOLDOUT VIOLATION: {r['campaign_name']} is in the holdout arm and eligible"
-    print(f"HOLDOUT check: {len(holdout_hits)} row(s) excluded today; "
-          f"exclusion armed from {armed[0] if armed else 'n/a'} "
-          f"(today {today_la}).")
+        cur = num(r['current_bid'])
+        bits = next(v[4] for v in visible if v[0] is r)
+        if r['state'] in ('AT_BAR', 'REPRICE'):
+            assert not (bits['side'] == 'ABOVE' and disp == 'BID_DOWN'), f"above-bar cut on {r['target_text']}"
+            assert not (bits['side'] == 'BELOW' and disp == 'BID_UP'), f"below-bar raise on {r['target_text']}"
+        if disp == 'BID_UP' and r['state'] != 'FLOOR_PROBATION':
+            assert new_bid <= round(cur * (1 + CAP_UP), 2) + 0.005, f"cap breach up on {r['target_text']}"
+        if disp == 'BID_DOWN':
+            lands_on_floor = (r['state'] == 'FLOOR_PROBATION'
+                              and abs(new_bid - num(r['bid_floor'])) < 0.005
+                              and num(r['bid_floor']) >= cur * (1 - MATERIAL_STEP) ** (BLIND_STEPS + 1))
+            assert lands_on_floor or new_bid >= round(cur * (1 - CAP_DOWN), 2) - 0.005, \
+                f"cap breach down on {r['target_text']}"
+            assert new_bid >= num(r['bid_floor']) - 0.005, f"below floor on {r['target_text']}"
+    armed = sorted({r['holdout_eligible_from'] for r in rows if r['holdout_eligible_from']})
+    holdout_allowed = [(r, d, nb) for r, d, nb in executable if r['holdout_eligible_from']]
+    print(f"HOLDOUT check: {len(holdout_hits)} row(s) excluded today; {len(holdout_allowed)} "
+          f"executable row(s) sit in holdout-arm campaigns whose exclusion arms "
+          f"{armed[0] if armed else 'n/a'} (today {today_la}).")
 
     sp_rows = [(r, d, nb) for r, d, nb in executable if (r.get('campaign_type') or r['channel']).upper() != 'SB']
     sb_rows = [(r, d, nb) for r, d, nb in executable if (r.get('campaign_type') or r['channel']).upper() == 'SB']
@@ -548,46 +776,66 @@ def main():
             ws.append([(sb_pause_row(r) if d == 'PAUSE' else sb_bid_row(r, nb))[h] for h in SB_HEADERS])
             line_of[(r['campaign_id'], r['keyword_id'])] = (SB_SHEET, i)
     wb.save(args.out)
+    assert len(line_of) == len(executable), "sheet rows != executable rows"
 
     # ---- audit csv (every candidate row, executable or not) -------------------------
     audit_path = args.out.rsplit('.', 1)[0] + '_audit.csv'
     with open(audit_path, 'w', newline='') as f:
         wr = csv.writer(f)
-        wr.writerow(['sheet', 'excel_row', 'disposition', 'check_first', 'state', 'family',
-                     'campaign_id', 'campaign', 'ad_group_id', 'keyword_id', 'target', 'match',
-                     'channel', 'is_auto', 'is_pt', 'portfolio_id', 'portfolio',
+        wr.writerow(['sheet', 'excel_row', 'disposition', 'check_first', 'state', 'bar_side',
+                     'family', 'campaign_id', 'campaign', 'ad_group_id', 'keyword_id', 'target',
+                     'match', 'channel', 'is_auto', 'is_pt', 'portfolio_id', 'portfolio',
+                     'latest_history_portfolio_id',
                      'family_bar', 'roas90_used', 'orders90', 'nf_orders', 'se_eff',
-                     'settled_cpc_used', 'affordable_cpc', 'm_effective',
-                     'affordable_bid', 'bid_floor', 'bid_floor_source',
-                     'probation_since', 'probation_clicks_settled', 'probation_due',
-                     'old_bid', 'new_bid', 'guard_deferred',
+                     'settled_cpc_used', 'affordable_cpc',
+                     'transfer_method', 'own_clicks_at_bid', 'own_cpc_at_bid', 'own_ratio',
+                     'model_ratio', 'placement_flag', 'm_effective', 'k_pure', 'gamma',
+                     'sp_affordable_bid', 'raw_bid', 'cap_applied', 'bid_floor', 'bid_floor_source',
+                     'probation_since', 'probation_clock_start', 'probation_clicks_settled',
+                     'probation_due', 'engine_instruction', 'holdout_eligible_from',
+                     'old_bid', 'new_bid', 'move_pct', 'guard_deferred',
                      'live_7d_spend_CONTEXT_ONLY', 'live_7d_cpc_CONTEXT_ONLY',
-                     'story'])
-        for r, disp, new_bid, check_first, bits, st in visible:
+                     'check_reasons', 'story'])
+        for r, disp, new_bid, checks, bits, st in visible:
             sheet, ln = line_of.get((r['campaign_id'], r['keyword_id']), ('', ''))
             clk7 = num(r['clk7'], 0)
+            cur = num(r['current_bid'], 0)
+            pd = bits.get('pd') or {}
             wr.writerow([
-                sheet, ln, disp, 'CHECK FIRST' if (check_first and disp in ('BID_DOWN', 'BID_UP', 'PAUSE')) else '',
-                r['state'], r['family'], r['campaign_id'], r['campaign_name'],
+                sheet, ln, disp, 'CHECK FIRST' if (checks and disp in EXECUTABLE) else '',
+                r['state'], bits.get('side') or '', r['family'], r['campaign_id'], r['campaign_name'],
                 r['ad_group_id'], r['keyword_id'], r['target_text'], r['match_type'],
                 r['channel'], r['is_auto'], r['is_pt'],
                 r['echo_portfolio_id'], r.get('portfolio_name') or '',
-                f"{num(r['family_bar'], 1.0):.4f}",
+                r.get('latest_portfolio_id') or '',
+                f"{(bits['bar'] or 1.0):.4f}",
                 f"{(bits['roas_used'] or 0):.3f}", int(num(r['settled_ord90'], 0)),
                 r['nf_orders'] or '', f"{num(r['se_eff'], 0):.3f}" if r['se_eff'] not in (None, '') else '',
                 f"{(bits['cpc_settled'] or 0):.2f}",
                 f"{(bits['afford'] or 0):.2f}" if bits['afford'] is not None else '',
-                f"{bits['m_eff']:.3f}",
-                f"{bits['afford_bid']:.3f}" if bits.get('afford_bid') is not None else '',
+                bits.get('transfer') or '', pd.get('own_clk', ''),
+                f"{pd['own_cpc']:.3f}" if pd.get('own_cpc') else '',
+                f"{pd['own_ratio']:.3f}" if pd.get('own_ratio') else '',
+                f"{pd['model_ratio']:.3f}" if pd.get('model_ratio') else '',
+                'PLACEMENT_DIVERGES' if pd.get('diverges') else '',
+                f"{num(r['m_effective'], 0):.3f}" if r.get('m_effective') else '',
+                f"{num(r['k_pure'], 0):.4f}" if r.get('k_pure') else '',
+                f"{num(r['gamma'], 0):.3f}" if r.get('gamma') else '',
+                f"{bits['sp_afford_bid']:.3f}" if bits.get('sp_afford_bid') is not None else '',
+                f"{bits['raw_bid']:.3f}" if bits.get('raw_bid') is not None else '',
+                'yes' if bits.get('capped') else '',
                 f"{bits['floor']:.2f}" if bits.get('floor') is not None else '',
                 bits.get('floor_source') or '',
-                r.get('floor_since') or '', r.get('probation_clk_settled') or '',
-                r.get('probation_due_date') or '',
-                f"{num(r['current_bid'], 0):.2f}", f"{new_bid:.2f}" if new_bid else '',
+                r.get('floor_since') or '', r.get('probation_clock_start') or '',
+                r.get('probation_clk_settled') if r.get('probation_clk_settled') not in (None, '') else '',
+                r.get('probation_due_date') or '', bits.get('engine') or '',
+                r.get('holdout_eligible_from') or '',
+                f"{cur:.2f}", f"{new_bid:.2f}" if new_bid else '',
+                f"{100 * (new_bid / cur - 1):+.1f}%" if (new_bid and cur) else '',
                 'yes' if bits['guard'] else '',
                 f"{num(r['sp7'], 0):.2f}",
                 f"{(num(r['sp7'], 0) / clk7):.2f}" if clk7 else '',
-                st])
+                ' | '.join(checks), st])
 
     # ---- plain-English readme -------------------------------------------------------
     n_down = sum(1 for _, d, _ in executable if d == 'BID_DOWN')
@@ -599,43 +847,88 @@ def main():
     up_spend7 = sum(num(r['sp7'], 0) for r, d, _ in executable if d == 'BID_UP')
     blocked = [(r, st) for r, disp, nb, cf, bits, st in visible if disp == 'SEASON_BLOCKED']
     check_rows = [(r, disp, nb, st) for r, disp, nb, cf, bits, st in visible
-                  if cf and disp in ('BID_DOWN', 'BID_UP', 'PAUSE')]
-
+                  if cf and disp in EXECUTABLE]
+    n_capped = sum(1 for r, disp, nb, cf, bits, st in visible if disp in EXECUTABLE and bits.get('capped'))
+    n_no_cut = sum(1 for v in visible if v[1] == 'NO_CUT_ABOVE_BAR')
+    n_no_raise = sum(1 for v in visible if v[1] == 'NO_RAISE_BELOW_BAR')
+    null_pf = sorted({(r['campaign_name'], r['echo_portfolio_id']) for r, d, nb in executable
+                      if not r.get('latest_portfolio_id')})
     readme_path = args.out.rsplit('.', 1)[0] + '_README.md'
     with open(readme_path, 'w') as f:
         f.write("# The reprice book — what each row does and why\n\n")
         f.write(f"Built {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} from `{args.out}` "
-                f"(ads watermark {rows[0]['watermark']}, states of {today_la}).\n\n")
-        f.write("Every price here is the keyword's own settled 90-day evidence divided by its "
-                "family's bar, then translated to a bid through the campaign's measured "
-                "placement multiplier. The 7-day figures in the audit are context only — no "
-                "verdict and no price reads them.\n\n")
+                f"(ads watermark {rows[0]['watermark']}, states of {today_la}). "
+                f"Change-log batch: **`{batch_id}`**"
+                f"{' (NOT logged — --no-log)' if args.no_log else ''}.\n\n")
+        f.write("**The doctrine every row obeys.** A keyword is judged on which SIDE of its family "
+                "bar its settled 90-day record sits, not on its state label. Above the bar it is a "
+                "paying keyword and is never pulled down — the only move allowed is a raise, and only "
+                "if its own record prices one. Below the bar it is never raised — the only move "
+                "allowed is a cut toward what its record affords, never below its channel floor. "
+                "A launch family and brand defense never get a profit row. A holdout campaign is "
+                "untouchable from 2026-09-01.\n\n")
+        f.write(f"**One upload is one move.** The engines step 5% a day and are blind to their own "
+                f"move for the {BLIND_STEPS} days spend takes to settle (V_ADS_SETTLE_CURVE: spend is "
+                f"at its final value by age 2-3 on both channels; the guard's SP settle discipline is "
+                f"3 days). A hand upload gets no further steps before its next re-read, so it is "
+                f"capped at the engine's blind run: (1.05)^{BLIND_STEPS} - 1 = +{CAP_UP*100:.2f}% up, "
+                f"1 - (0.95)^{BLIND_STEPS} = -{CAP_DOWN*100:.2f}% down. {n_capped} row(s) were capped; "
+                f"the record's own price is printed beside each so the next book can step again.\n\n")
+        f.write("**Prices.** The record's affordable cost per click (settled gross profit per click "
+                f"divided by the family bar) becomes a bid through the keyword's OWN realised cost "
+                f"per click at its current bid where it has {VOL_FLOOR}+ settled clicks since its "
+                "last bid change — V_BID_CPC_TRANSFER's model in ratio form, where the campaign "
+                "placement multiplier and the segment constant cancel; otherwise through the "
+                "campaign model (k x M, gamma). Rows whose own ratio sits more than one model RMSE "
+                "from the campaign model are flagged PLACEMENT_DIVERGES. The 7-day figures in the "
+                "audit are context only — no verdict and no price reads them.\n\n")
         f.write(f"**{len(executable)} executable rows**: {n_down} bid-downs, {n_up} bid-ups, "
-                f"{n_pause} pauses. Bid-space totals: −${bid_down_total:.2f} across the downs, "
-                f"+${bid_up_total:.2f} across the ups (these are bid deltas, not spend "
-                f"forecasts — a per-day dollar effect from a bid move would be invented "
-                f"precision). The rows being cut or paused spent ${down_spend7:.2f} in the "
-                f"last 7 days; the rows being raised spent ${up_spend7:.2f}.\n\n")
+                f"{n_pause} pauses. Held back by doctrine: {n_no_cut} above-bar row(s) whose standing "
+                f"price would have cut them (NO_CUT_ABOVE_BAR), {n_no_raise} below-bar row(s) whose "
+                f"placement translation would have raised them (NO_RAISE_BELOW_BAR). Bid-space "
+                f"totals: −${bid_down_total:.2f} across the downs, +${bid_up_total:.2f} across the "
+                f"ups (bid deltas, not spend forecasts). The rows being cut or paused spent "
+                f"${down_spend7:.2f} in the last 7 days; the rows being raised spent ${up_spend7:.2f}.\n\n")
         n_prob = sum(1 for r, d, _ in executable if r['state'] == 'FLOOR_PROBATION')
         f.write(f"Floors are per channel and creative (SP $0.20 house; SB collection $0.10 and "
-                f"SB video $0.25, Amazon's minimums) — never a flat number. {n_prob} row(s) "
-                f"move a keyword TO its floor (probation): the state machine re-judges each "
-                f"once 10 settled clicks exist at the floor, and only a keyword that still "
-                f"fails AFTER that probation can ever become a pause. "
+                f"SB video $0.25, Amazon's minimums) — never a flat number. {n_prob} row(s) move a "
+                f"keyword toward its floor (probation). The state machine's probation clock starts "
+                f"only on the day a bid AT the floor actually lands (it reads the applied change "
+                f"log); until then the state says 'waiting for the floor bid'. It re-judges once "
+                f"{VOL_FLOOR} settled clicks exist at the floor, and only a keyword that still fails "
+                f"AFTER that probation can ever become a pause. "
                 f"{'No keyword has completed a probation yet, so there are no pauses today.' if n_pause == 0 else ''}\n\n")
-        f.write("Every row echoes its campaign's portfolio (a blank portfolio cell detaches a "
-                "campaign; uniform echo keeps the convention safe). Pauses are reversible with "
-                "one enabled row; the restore sheet next to this file carries every old value "
-                "back.\n\n")
-        f.write(f"The batch is logged as `{batch_id}` in the change log so the scorecard "
-                f"grades it. **If you do not upload this book, mark the batch FAILED_UPLOAD** — "
-                f"otherwise the outcome scoring will grade moves that never happened. If you "
-                f"delete individual lines before uploading, mark those rows FAILED_UPLOAD "
-                f"too.\n\n")
-        if armed:
-            f.write(f"Holdout interlock: campaigns in the HOLDOUT arm are excluded from this "
-                    f"book from {armed[0]}; today that excluded {len(holdout_hits)} row(s). A "
-                    f"hand upload into the holdout invalidates the trial.\n\n")
+        f.write("Every row echoes its campaign's last non-null portfolio. On a Campaign row a blank "
+                "portfolio cell DETACHES the campaign; on the keyword/target rows this book emits, "
+                "Amazon ignores the column — the echo is a uniform convention, not a lever. ")
+        if null_pf:
+            f.write("Portfolio caveat: the LATEST campaign-history row carries a NULL portfolio for "
+                    + "; ".join(f"**{n}** (echoing older {p})" for n, p in null_pf)
+                    + " — Amazon currently reports these campaigns without a portfolio; the echoed "
+                    "id is the last one seen and is not what these keyword rows change.\n\n")
+        else:
+            f.write("\n\n")
+        f.write("Pauses are reversible with one enabled row; the restore sheet next to this file "
+                "carries every old value back.\n\n")
+        f.write(f"**Provenance.** The batch `{batch_id}` in FACT_PPC_CHANGE_LOG holds exactly the "
+                f"{len(executable)} rows on this sheet (asserted after the insert), each with its "
+                f"old and new bid and an upload note. **If you do not upload this book, label the "
+                f"batch `SUPERSEDED_NEVER_UPLOADED`** (never delete a log row); if you delete a line "
+                f"before uploading, label that row `FAILED_UPLOAD`. Otherwise the scorecard grades "
+                f"moves that never happened and the guard treats them as applied.\n\n")
+        if holdout_allowed or armed:
+            f.write(f"**Holdout interlock.** Campaigns in the HOLDOUT arm are excluded from this "
+                    f"book from **{armed[0] if armed else 'n/a'}**; today that excluded "
+                    f"{len(holdout_hits)} row(s). {len(holdout_allowed)} executable row(s) sit in "
+                    f"holdout-arm campaigns and are allowed today by the letter — upload this book "
+                    f"BEFORE that date or delete these lines; a hand upload into the holdout after "
+                    f"it invalidates the trial:\n\n")
+            for r, d, nb in holdout_allowed:
+                sheet, ln = line_of[(r['campaign_id'], r['keyword_id'])]
+                f.write(f"- {sheet} row {ln} — `{r['target_text']}` in {r['campaign_name']} "
+                        f"({d} ${num(r['current_bid'],0):.2f} -> "
+                        f"{('$%.2f' % nb) if nb else 'PAUSE'}), excluded from {r['holdout_eligible_from']}\n")
+            f.write("\n")
         if check_rows:
             f.write("---\n\n## CHECK FIRST — eyeball these before uploading\n\n")
             for r, disp, nb, st in check_rows:
@@ -649,16 +942,16 @@ def main():
             f.write("\n")
         f.write("---\n\n## Row by row\n\n")
         for r, disp, nb, cf, bits, st in visible:
-            if disp not in ('BID_DOWN', 'BID_UP', 'PAUSE'):
+            if disp not in EXECUTABLE:
                 continue
             sheet, ln = line_of[(r['campaign_id'], r['keyword_id'])]
             f.write(f"### {sheet} — row {ln}: `{r['target_text']}` ({r['campaign_name']})\n\n")
             f.write(f"- {st}\n")
             f.write(f"- Delete this line and `{r['target_text']}` keeps its current bid/state; "
-                    f"nothing else in the sheet changes — then mark its change-log row "
+                    f"nothing else in the sheet changes — then label its change-log row "
                     f"FAILED_UPLOAD.\n\n")
         others = [(r, disp, st) for r, disp, nb, cf, bits, st in visible
-                  if disp not in ('BID_DOWN', 'BID_UP', 'PAUSE', 'SEASON_BLOCKED')]
+                  if disp not in EXECUTABLE + ('SEASON_BLOCKED',)]
         if others:
             f.write("---\n\n## Candidates with no executable row (audit visibility)\n\n")
             for r, disp, st in others:
@@ -668,21 +961,33 @@ def main():
     print(f"\n{len(rows)} candidate rows -> {len(executable)} executable "
           f"({n_down} down · {n_up} up · {n_pause} pause) · "
           f"{len(blocked)} season-blocked · {len(rows) - len(executable) - len(blocked)} other\n")
-    hdr = f"{'target':<34} {'campaign':<38} {'st':<9} {'old':>5} {'new':>5}  disposition"
+    hdr = f"{'target':<30} {'campaign':<34} {'st':<8} {'side':<5} {'ord':>3} {'old':>5} {'new':>5} {'raw':>5}  disposition"
     print(hdr)
     print('-' * len(hdr))
     for r, disp, nb, cf, bits, st in visible:
-        mark = ' *CHECK FIRST*' if (cf and disp in ('BID_DOWN', 'BID_UP', 'PAUSE')) else ''
-        print(f"{(r['target_text'] or '')[:33]:<34} {(r['campaign_name'] or '')[:37]:<38} "
-              f"{r['state'][:9]:<9} {num(r['current_bid'], 0):>5.2f} "
-              f"{(f'{nb:.2f}' if nb else ('PAUSE' if disp == 'PAUSE' else '-')):>5}  {disp}{mark}")
+        mark = ' *CHECK FIRST*' if (cf and disp in EXECUTABLE) else ''
+        raw = bits.get('raw_bid')
+        print(f"{(r['target_text'] or '')[:29]:<30} {(r['campaign_name'] or '')[:33]:<34} "
+              f"{r['state'][:8]:<8} {(bits.get('side') or '')[:5]:<5} {int(num(r['settled_ord90'],0)):>3} "
+              f"{num(r['current_bid'], 0):>5.2f} "
+              f"{(f'{nb:.2f}' if nb else ('PAUSE' if disp == 'PAUSE' else '-')):>5} "
+              f"{(f'{raw:.2f}' if raw is not None else '-'):>5}  {disp}{mark}")
 
     # ---- change log -----------------------------------------------------------------
+    prior = prior_unmarked_batches()
+    if prior:
+        print("\nEarlier reprice batches still unlabelled (upload_status NULL = the scorecard grades them):")
+        for p in prior:
+            print(f"  {p['batch_id']}  {p['n']} rows  first {p['first_at']}")
     logged = ''
     if executable and not args.no_log:
-        logged = log_batch(executable, batch_id)
-        print(f"\nLogged {len(executable)} rows to FACT_PPC_CHANGE_LOG as batch {logged} "
-              f"(mark FAILED_UPLOAD if the book is not uploaded).")
+        if args.supersede:
+            supersede(args.supersede, batch_id)
+        n_logged = log_batch(executable, batch_id, readme_path)
+        logged = batch_id
+        print(f"\nLogged {n_logged} rows to FACT_PPC_CHANGE_LOG as batch {logged} — read back and "
+              f"asserted equal to the {len(executable)} sheet rows "
+              f"(label SUPERSEDED_NEVER_UPLOADED if the book is not uploaded).")
 
     stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     print(f"\n[{stamp}] wrote {len(executable)} rows -> {args.out}")
