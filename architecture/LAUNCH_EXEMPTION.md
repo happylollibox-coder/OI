@@ -362,7 +362,11 @@ nowhere.
 | SB, `PRODUCT_COLLECTION` / `STORE_SPOTLIGHT` | **$0.10** | Amazon `minBid` for those creatives |
 
 The same floors `V_OOB_KEYWORD` / `V_KEYWORD_LIFT` already use — one floor governs the system.
-Creative type comes from `DIM_AD_GROUP.creative_type` (`is_current`). When the floor binds,
+**v27.104 (2026-08-22):** the three numbers are declared ONCE in `FN_BID_FLOOR(channel, creative_type)`
+and this view calls it (`bid_floor` / `bid_floor_source`); the keyword state ladder reads the same
+function through `V_BID_FLOOR`. Output byte-identical before/after (keyed diff, 72 rows, 0 differing).
+Creative type comes from `DIM_AD_GROUP.creative_type` (`is_current`); an SB ad group with a NULL
+creative type resolves to the $0.25 video floor (conservative). When the floor binds,
 `floor_binding = TRUE` and the reason string says the realised trim is smaller than the band rather
 than quietly reporting "−10%". If the floor leaves no room at all the row reads
 `LAUNCH_BID_HOLD_AT_FLOOR` and proposes nothing.

@@ -71,6 +71,72 @@ WHERE state = 'LOSER' AND NOT (
   OR COALESCE(current_bid, 0) <= 0.25);
 ```
 
+### The floors (v27.104, 2026-08-22 — Ori: "i think it is not 0.25 (we already checked it)")
+
+A floor is a property of the CHANNEL and the CREATIVE, never a flat number. The ONE definition is
+`FN_BID_FLOOR(channel, creative_type)`; `V_BID_FLOOR` resolves it per current ad group
+(`DIM_AD_GROUP.creative_type`, `is_current`), and a keyword reaches its floor through
+`DIM_KEYWORD.ad_group_id`. `V_LAUNCH_BID_LADDER` calls the same function (byte-identical output).
+
+| row | floor | source |
+|---|---|---|
+| SP (anything not SB) | **$0.20** | house floor — Amazon's SP minimum is $0.02, but a bid that low buys no placement worth having |
+| SB, `PRODUCT_COLLECTION` / `STORE_SPOTLIGHT` | **$0.10** | Amazon `minBid` |
+| SB, video (`BRAND_VIDEO` / `VIDEO`) or NULL creative | **$0.25** | Amazon `minBid` ($0.15 / $0.20 rejected in r32 / r33); NULL resolves conservatively |
+
+`V_OOB_KEYWORD`'s `0.25` is **`bid_park`** — a PARKING price, not a floor. v27.103's state ladder
+borrowed it as a flat `platform_floor` and manufactured three phantom kills: `close-match`
+BOX-SP/AUTO (Purple) at $0.24 and `complements` BOX -SP/AUTO (Blue) at $0.21 — both ABOVE the real
+$0.20 SP floor and both at/above their family bar — and `tween girl gifts` (BOX-SBS/BROAD, an SB
+collection keyword) whose floor is $0.10 and whose affordable $0.49 CPC ($0.46 bid) is perfectly
+executable. Executability is tested in BID space: affordable bid = affordable CPC / the campaign's
+measured placement multiplier (`V_BID_CPC_TRANSFER.m_effective`, A4).
+
+### FLOOR_PROBATION — the floor ruling (Ori 2026-08-22, verbatim: "bid-up-to-floor if after a few days still loosing kill it")
+
+**Status: SIMULATED AND GATED (Step 1); the SP still runs v27.103's flat-floor ladder until Step 2
+ships it.** Simulation of record: `scripts/bigquery/simulations/SIM_2026-08-22_ladder_floor_probation.sql`
+(TMP_SIM_LADDER_FLOOR, 7-day expiry), on the 2026-08-22 07:41–08:09 UTC snapshot chain.
+
+| state | predicate |
+|---|---|
+| `REPRICE` | below bar beyond noise AND an affordable BID exists at/above the channel floor AND the bid is above the floor — move to it, re-judge after settle. The v27.103 "failed AT its price" CPC-materiality kill arm is REPEALED: a keyword is only ever killed at its floor (the book still applies the 5% materiality step to whether a row is emitted). |
+| `FLOOR_PROBATION` | below bar beyond noise AND (the bid sits at/below its channel floor OR no affordable bid exists at/above it) — the move is TO THE FLOOR, from either side, and the keyword is re-judged after a few settled days AT the floor. |
+| `LOSER` | ONLY a keyword whose FLOOR_PROBATION has ELAPSED and still reads below bar beyond noise. An above-bar keyword is NEVER a kill, whatever its bid (the v27.103 A2b "unexecutable AT_BAR → LOSER" arm is REPEALED). |
+
+**"A few days" is derived, never a round number.** Probation ELAPSES on evidence: ≥ `vol_floor` (10)
+settled clicks dated on/after `floor_since` (the date the state machine put the keyword at its
+floor — carried forward by the SP from its own prior row; seeded by the first v27.104 run). The
+appointment is the earliest date that evidence can exist: `floor_since + settle_days_eff`
+(`FACT_KEYWORD_GUARD`'s own discipline, SP 3 / SB 14) `+ CEIL(10 / the keyword's 90d click pace)`.
+Today's two probation rows forecast 6 and 7 days. No snapshot has ever recorded a FLOOR_PROBATION,
+so `floor_since` is NULL everywhere and **the sim asserts ZERO LOSERs today**.
+
+The guard defers every deterioration verdict (REPRICE / FLOOR_PROBATION / LOSER) and re-reads it
+cleaned, as before.
+
+#### v27.104 transition matrix (live v27.103 state → floor-corrected state, 855 tracked keys)
+
+| v27.103 \ v27.104 | AT_BAR | FLOOR_PROBATION | REPRICE | WINNER | (unchanged) |
+|---|---|---|---|---|---|
+| LOSER (5) | 2 | 2 | 1 | — | — |
+| WINNER (76) | 1 | — | — | 75 | — |
+| AT_BAR (50) / REPRICE (11) / PACED_WINNER (7) / TRIAL (70) / LAUNCH_CONTAINED (28) / DEAD (33) / PARKED (546) / PENDING (3) / REVIVED (26) | — | — | — | — | 826 |
+
+Assertions (all on TMP_SIM_LADDER_FLOOR): 0 LOSERs; the two Bottle auto clauses (`loose-match`
+$0.22, `substitutes` $0.24, affordable bids $0.03 / $0.14 under the $0.20 floor) land
+FLOOR_PROBATION → bid to $0.20; `close-match` (Purple) and `complements` (Blue) land AT_BAR;
+`tween girl gifts` lands REPRICE ($0.70 → $0.46 affordable bid, floor $0.10); the guard re-derives
+its bar at 12.0% and the two drift flips reproduce (`substitutes` BOX-SP/AUTO White 0.58x → WINNER,
+`shower gift set` FRESH-VIDEO 0.72x → WINNER); sums hold (884 rows = 884 keys = 855 tracked + 29
+untracked spenders). **The third v27.103 "flip" — `complements` BOX-SP/AUTO (Purple), 0.57x shown
+/ 1.90x on its own terms — no longer reaches the guard:** its raw verdict was only a deterioration
+(LOSER) because of the phantom $0.25 floor; at the real $0.20 floor it reads AT_BAR within noise
+(se 0.29) and the guard, which fires only on deterioration verdicts, leaves it there. Its AT_BAR
+standing price ($0.17 affordable bid, under the floor) would book a cut to $0.20 on a mix the guard
+already knows is drifted — **open for Step 2: the guard must cover every verdict that can move a
+bid DOWN, AT_BAR's standing price included.**
+
 ### CLEAN-THEN-JUDGE (the mix-drift guard)
 
 Before any deterioration verdict (REPRICE or LOSER) stands, the SP measures the share of the

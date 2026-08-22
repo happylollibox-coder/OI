@@ -123,7 +123,9 @@
 --                                                a bid that low buys no placement worth having)
 --   SB, video creative                    $0.25  Amazon's SB minBid — under it the row is rejected
 --   SB, PRODUCT_COLLECTION/STORE_SPOTLIGHT $0.10 Amazon's minBid for those creatives
--- The same floors V_OOB_KEYWORD / V_KEYWORD_LIFT already use; one floor governs the system. When the
+-- v27.104 (2026-08-22): the three numbers are DECLARED ONCE in FN_BID_FLOOR (channel, creative_type)
+-- and this view calls it; the keyword state ladder reads the same function through V_BID_FLOOR. The
+-- output is byte-identical to v27.98 (keyed diff, 72 rows @ 2026-08-22). When the
 -- floor binds, floor_binding = TRUE and the realised trim is smaller than the band's nominal % — the
 -- reason string says so rather than quietly reporting "-10%". If the floor leaves no room at all
 -- (bid already at or under it) the row reads LAUNCH_BID_HOLD_AT_FLOOR and proposes nothing.
@@ -169,9 +171,8 @@ WITH k AS (
     0.90 AS band_improve_hi,  -- [0.70, 0.90)        -> improving, no action; >= 0.90 profitable
     0.90 AS factor_trim10,    -- the -10% multiplier
     0.95 AS factor_trim5,     -- the -5%  multiplier
-    0.20 AS floor_sp,         -- house SP floor (Amazon minimum is $0.02; below $0.20 buys nothing)
-    0.25 AS floor_sb_video,   -- Amazon SB minBid for video creatives
-    0.10 AS floor_sb_coll,    -- Amazon SB minBid for PRODUCT_COLLECTION / STORE_SPOTLIGHT
+    -- v27.104: the three bid floors (SP $0.20 house / SB video $0.25 / SB collection $0.10) no
+    -- longer live here — FN_BID_FLOOR is the ONE definition, called in `graded` below.
     3    AS thin_clicks,      -- under this many window clicks the evidence is LABELLED thin
     35   AS fact_scan_days    -- bounds the FACT scan; only the last w_days are ever read
 ),
@@ -340,17 +341,10 @@ joined AS (
 graded AS (
   SELECT
     j.*,
-    -- the row's platform/house floor
-    CASE
-      WHEN j.campaign_type <> 'SB'                                        THEN j.floor_sp
-      WHEN j.creative_type IN ('PRODUCT_COLLECTION', 'STORE_SPOTLIGHT')   THEN j.floor_sb_coll
-      ELSE j.floor_sb_video
-    END AS bid_floor,
-    CASE
-      WHEN j.campaign_type <> 'SB'                                        THEN 'SP_HOUSE_0.20'
-      WHEN j.creative_type IN ('PRODUCT_COLLECTION', 'STORE_SPOTLIGHT')   THEN 'SB_COLLECTION_0.10'
-      ELSE 'SB_VIDEO_0.25'
-    END AS bid_floor_source,
+    -- the row's platform/house floor — FN_BID_FLOOR is the one definition (v27.104); the rule is
+    -- unchanged: SP $0.20 house, SB collection/spotlight $0.10, SB video or unknown creative $0.25
+    `onyga-482313.OI.FN_BID_FLOOR`(j.campaign_type, j.creative_type).bid_floor        AS bid_floor,
+    `onyga-482313.OI.FN_BID_FLOOR`(j.campaign_type, j.creative_type).bid_floor_source AS bid_floor_source,
     -- the band, decided on the W-WINDOW (half-open, so no GP-ROAS lands in two)
     CASE
       WHEN j.w_spend <= 0            THEN 'NO_EVIDENCE'
