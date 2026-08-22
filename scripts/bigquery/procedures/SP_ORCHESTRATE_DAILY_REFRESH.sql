@@ -2206,6 +2206,39 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 20.8b (2026-08-22, family seat register Task 1): the seat ledger. Reads the
+  -- keyword-state snapshot Task 20.8 just wrote and keeps DE_FAMILY_SEAT_LEDGER honest for the
+  -- WORKING families (HARVEST book): closes seats whose keyword left the occupant set (with a
+  -- reason), admits new occupants at the family's lowest free seat number, never touches a
+  -- continuing occupant. Idempotent on the same snapshot. No engine reads the ledger; the
+  -- register (V_FAMILY_SEAT_REGISTER) reads it for seat numbers only.
+  -- Spec: architecture/FAMILY_SEAT_REGISTER.md.
+  -- ============================================
+  SET procedure_name = 'SP_MAINTAIN_FAMILY_SEATS';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_MAINTAIN_FAMILY_SEATS`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 21: Refresh Cube Tables (T_*)
   -- Convert all Cube-facing V_* logical views into physical T_* snapshot tables
   -- ============================================
