@@ -37,7 +37,9 @@
 
 ## Calendar note the engineer needs
 
-On 2026-08-23 the live `DIM_US_HOLIDAYS` carries Back to School 2026 with `boost_start` 2026-08-01, `peak_start` 2026-08-10, `holiday_date` 2026-09-14, `cooldown_end` NULL. `FN_PLAN_CALENDAR_STATE` (T0) therefore reads **PEAK** from 2026-08-10 through 2026-09-17 (`holiday_date + 3`), and **OFF_PEAK** from 2026-09-18 until Christmas's `boost_start` 2026-10-01 (**BOOST** until 2026-11-02, then **PEAK**). The first plan nights run in PEAK: window 3 complete days, share 0.20.
+On 2026-08-23 the live `DIM_US_HOLIDAYS` carries Back to School 2026 with `boost_start` 2026-08-01, `peak_start` 2026-08-10, `holiday_date` 2026-09-14, `cooldown_end` NULL. `FN_PLAN_CALENDAR_STATE` (T0) therefore reads **PEAK** from 2026-08-10 through 2026-09-17 (`holiday_date + 3`), and **OFF_PEAK** from 2026-09-18 until Christmas's `boost_start` 2026-10-01. The first plan nights run in PEAK: window 3 complete days, share 0.20.
+
+**Correction, measured against the live calendar while building T0 (2026-08-23):** the Q4 half of the sentence above was wrong, and the T0 acceptance was corrected with it. Christmas's run-up does NOT run to 2026-11-02 — Halloween carries `peak_start` 2026-10-10 (cooldown NULL, `holiday_date` 2026-10-31), and PEAK wins over an overlapping BOOST, so the BOOST stretch is only 2026-10-01..2026-10-09 and PEAK runs from 2026-10-10 through Christmas's `cooldown_end`. The T0 acceptance therefore asserts 2026-10-05 = BOOST and 2026-10-15 = PEAK (the precedence, on a live overlap date) instead of the plan's original 2026-10-15 = BOOST, which the live calendar does not support. Read the year's shape from `FN_PLAN_CALENDAR_STATE` itself (the query is in `architecture/NEXT_WEEK_MONEY.md` §1), never from this paragraph. Ori's ruling is open: if the pre-Black-Friday weeks should be judged as a run-up at the BOOST share, that is a calendar edit or a precedence ruling, not a code change.
 
 ---
 
