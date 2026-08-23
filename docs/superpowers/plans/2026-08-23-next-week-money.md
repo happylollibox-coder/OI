@@ -25,7 +25,7 @@
 - Back up before redeploying an existing object: `cp FILE FILE.bak.v27.NNN.$(date +%H%M)`. Backups are not committed.
 - Every object registered in `config.yaml` in the right section (`views:` starts line 102, `tables:` 1592, `stored_procedures:` 2232, `functions:` 2747). Insert next to its siblings, never at the end of the file. Commit `config.yaml` via `git add -p config.yaml` selecting only your hunks.
 - Standing Rule 0: mechanism in prose, queries for numbers, no pinned measurement in an SOP, header, or registry description. Declared constants (0.20, 7, 3, $0.25, the $20.01–$31.99 band) are exempt.
-- Complete days only: every window ends at `wm − 1` where `wm = LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` over `FACT_AMAZON_ADS` (America/Los_Angeles). The filling day never enters a window (P-10).
+- Complete days only, AND FENCED: every window ends at `window_to = LEAST(wm − 1, CURRENT_DATE('America/Los_Angeles') − 2)` where `wm = LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` over `FACT_AMAZON_ADS` (P-10 + the P-14a fence). The filling day never enters a window, and neither does a day younger than two — `FN_ADS_ANCHOR_CAP()` advances to the current Los Angeles date at 22:00 LA, and the published settle curve puts an age-1 day's SPEND materially short of final. Before 22:00 the two terms are equal and the fence costs nothing. **Never a bare `MAX(date)`** — that was the v27.132 defect in `tools/build_reprice_bulksheet.py`, whose window was age-1 all day, not only after 22:00.
 - Calendar is read on `CURRENT_DATE('America/New_York')`; ads facts on America/Los_Angeles.
 - Never change `SP_SNAPSHOT_KEYWORD_STATE`, `T_FAMILY_BAR`/`V_FAMILY_BAR`, `FN_BID_FLOOR`/`V_BID_FLOOR`.
 - Never delete a `FACT_PPC_CHANGE_LOG` row; books land `PENDING_UPLOAD`; `--supersede` and `--mark-uploaded` act on `PENDING_UPLOAD` rows only. Never upload to Amazon. Never commit `.tmp/`.
@@ -191,12 +191,17 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.DE_PLAN_CONFIG`
 )
 OPTIONS (description = "v27.130 (2026-08-23) next-week money plan settings, one row per calendar state (OFF_PEAK | BOOST | PEAK): window_days (complete days, P-10), allowance_share (share of the good side's window spend for the not-good side, P-2/P-13), live_plan (A|B, P-9), ramp_steps (P-8). The plan reads the latest is_active row per state; never a literal. Seed rows carry updated_by = 'plan_seed' and are the only rows the DDL file rewrites. Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md. SOP: architecture/NEXT_WEEK_MONEY.md");
 
--- NOTE (v27.131). The seed sketched here — an unconditional DELETE of the seed rows and a
--- re-INSERT active with CURRENT_TIMESTAMP() — is the shape that SHIPPED AND WAS REPAIRED, because
--- it silently reverts a setting Ori changed by hand: his row survives the delete but stops being
--- the row the reader takes, since the reader takes the LATEST active row per state. The shipped
--- file seeds only a state with NO row at all, deletes only its own row for a state nobody has
--- ruled on, and stamps a declared sentinel updated_at. Read the deployed file, not this sketch:
+-- NOTE (v27.131, then v27.132). The seed sketched here — an unconditional DELETE of the seed rows
+-- and a re-INSERT active with CURRENT_TIMESTAMP() — is the shape that SHIPPED AND WAS REPAIRED
+-- TWICE. It silently reverted a setting Ori changed by hand: his row survived the delete but
+-- stopped being the row the reader takes, since the reader takes the LATEST active row per state.
+-- v27.131 guarded the DELETE on updated_by, which only protects a change that arrives as a NEW
+-- ROW — an `UPDATE ... SET allowance_share = 0.33 WHERE calendar_state = 'PEAK' AND is_active`
+-- leaves the row labelled plan_seed, so the delete still fired and the seed came back; the same
+-- clause also re-activated a state retired without a replacement. v27.132 declares the seed once
+-- into a TEMP table and guards the DELETE on the VALUES: it fires only on a row still active and
+-- still equal, setting for setting, to the declaration, and the INSERT writes only a state with
+-- no row at all. Read the deployed file, not this sketch:
 --   scripts/bigquery/tables/DE/DE_PLAN_CONFIG.sql
 ```
 
@@ -249,7 +254,17 @@ Expected: the first prints three statements' results (table created, 0 rows dele
 Run: `bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/PLAN_CONFIG_acceptance.sql)"`
 Expected: four rows, every `result` = `PASS`.
 
-- [ ] **Step 7: Register in config.yaml**
+- [x] **Step 7: Register in config.yaml** — DONE, and the two blocks below are the ORIGINAL
+  v27.130 sketch, kept only as history. **DO NOT PASTE THEM OVER THE LIVE ENTRIES.** The live
+  `config.yaml` carries the repaired v27.132 descriptions; the `DE_PLAN_CONFIG` description below
+  is wrong twice over — it publishes the change recipe as "inserting a new active row and
+  retiring the old", which is the ORDER that leaves two active rows and turns `C01` permanently
+  red (retire FIRST, insert second), and it says "the DDL rewrites only `updated_by = 'plan_seed'`
+  rows", which is the v27.131 guard that still reverted an in-place `UPDATE` and still
+  re-activated a retired state. Read the live entries and
+  `scripts/bigquery/tables/DE/DE_PLAN_CONFIG.sql`, not these blocks.
+
+<details><summary>the original v27.130 sketch (history only — do not paste)</summary>
 
 Insert after the `DE_PEAK_WINDOW_OVERRIDE` entry in `tables:` (after its `source_files:` line, ~line 1800):
 
@@ -268,6 +283,8 @@ Insert after the `FN_ADS_ANCHOR_CAP` entry in `functions:` (~line 2752):
     source_files: ["scripts/bigquery/functions/FN_PLAN_CALENDAR_STATE.sql"]
     type: "sql_udf"
 ```
+
+</details>
 
 Verify: `/usr/local/bin/python3 -c "import yaml,collections; d=yaml.safe_load(open('config.yaml')); n=[e['name'] for s in ('views','tables','stored_procedures','functions') for e in d[s]]; print(len(n), [k for k,v in collections.Counter(n).items() if v>1])"`
 Expected: a count and `[]` (no duplicate names).
@@ -310,9 +327,11 @@ Expected: a count of at least `4` (the ruling row, the §3a section heading, and
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-1, P-3..P-7, P-10, P-14.
 -- Checks:
---   C01 the window is complete days only: window_to = watermark - 1 and the window is exactly
---       window_days long (P-10); no window day is younger than age 2 (the precondition P-14a's
---       factor floor relies on)
+--   C01 the window is complete days only AND FENCED: window_to = LEAST(watermark - 1,
+--       CURRENT_DATE('America/Los_Angeles') - 2) and the window is exactly window_days long
+--       (P-10 + P-14a). The two clauses must agree: asserting window_to = watermark - 1 on its
+--       own goes RED exactly when the fence does its job (after 22:00 LA the anchor cap advances
+--       and the fence holds the window a day back), which is how this sketch was first written.
 --   C02 the universe is the HARVEST book, enabled campaigns, no brand defense, no launch (P-11 §8)
 --   C03 one row per (campaign_id, keyword_id) — the judgement is a keyword-grain object
 --   C04 every row carries a side for BOTH plans, and both are one of the declared values (P-9)
@@ -330,7 +349,8 @@ WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
 sc AS (SELECT * FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION`),
 c01 AS (
   SELECT 'C01 complete days only, no day younger than age 2' AS check_name,
-         COUNTIF(window_to != DATE_SUB(watermark, INTERVAL 1 DAY)
+         COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY),
+                                    DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 2 DAY))
                  OR DATE_DIFF(window_to, window_from, DAY) + 1 != window_days
                  OR DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), window_to, DAY) < 2) AS violations
   FROM j
@@ -683,7 +703,7 @@ AS
 WITH k AS (
   -- P-3/P-13: min_orders is NOT a literal — it is read from DE_PLAN_CONFIG in the cfg CTE below
   -- and joined in. Writing `2 AS min_orders` here would put the order floor in two places that
-  -- can disagree, which is the exact defect DE_PLAN_CONFIG exists to prevent (v27.131 fix).
+  -- can disagree, which is the exact defect DE_PLAN_CONFIG exists to prevent (v27.131/132 fix).
   SELECT 0.05   AS material_step,     -- mirrored from tools/build_reprice_bulksheet.py MATERIAL_STEP
          3      AS blind_steps,       -- ...and BLIND_STEPS: the engine's blind run before a re-read
          2.00   AS raise_ceiling,     -- the house bid ceiling (GUARDIAN threshold redesign)

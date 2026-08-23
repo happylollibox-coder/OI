@@ -104,6 +104,7 @@ import math
 import os
 import subprocess
 import sys
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
 import openpyxl
@@ -229,18 +230,23 @@ def read_plan_config():
     return cfg
 
 
-def window_bounds(watermark, window_days):
-    """P-10: COMPLETE DAYS ONLY. The window is `window_days` days ending at the ads watermark
-    minus one; the filling day (the watermark itself) never enters a window. Returns
-    (window_from, window_to), both inclusive."""
+def window_bounds(watermark, window_days, today_la=None):
+    """P-10 COMPLETE DAYS ONLY + THE P-14a FENCE. The window is `window_days` days ending at
+    `window_to = LEAST(watermark - 1, today_la - 2)`: the filling day never enters a window, and
+    neither does a day younger than two, because the anchor cap advances at 22:00 Los Angeles and
+    the published settle curve puts an age-1 day's SPEND materially short of final. Before 22:00
+    the two terms are equal and the fence costs nothing. Returns (window_from, window_to)."""
     wm = watermark if isinstance(watermark, date) else date.fromisoformat(str(watermark))
     window_to = wm - timedelta(days=1)
+    if today_la is not None:
+        t = today_la if isinstance(today_la, date) else date.fromisoformat(str(today_la))
+        window_to = min(window_to, t - timedelta(days=2))
     return window_to - timedelta(days=window_days - 1), window_to
 
 
-def assert_window_complete(watermark, window_from, window_to, window_days):
+def assert_window_complete(watermark, window_from, window_to, window_days, today_la=None):
     """The guarantee spec §9 asks for, run against whatever the query actually returned."""
-    lo, hi = window_bounds(watermark, window_days)
+    lo, hi = window_bounds(watermark, window_days, today_la)
     def d(v):
         return v if isinstance(v, date) else date.fromisoformat(str(v))
     assert d(window_to) == hi, (f"the window ends {window_to}, not {hi} — a window may never "
@@ -249,11 +255,18 @@ def assert_window_complete(watermark, window_from, window_to, window_days):
                                   f"{window_days} complete days end at {hi}")
 
 
-def calendar_state(in_peak, peak_start, today):
-    """P-13, read from the house calendar (V_PEAK_WINDOW_RULE over DIM_US_HOLIDAYS): OFF_PEAK
-    outside a season; inside one, BOOST from the occurrence's boost_start until its peak_start
-    and PEAK from then on. A peak whose calendar row carries no peak_start is judged PEAK — both
-    states declare the same window, so the split cannot change what this book reads."""
+def legacy_calendar_state(in_peak, peak_start, today):
+    """THE OLD RULE, KEPT ONLY TO REPORT WHEN IT DISAGREES WITH THE PLAN'S AUTHORITY.
+
+    Until v27.132 this book derived the calendar state itself: OFF_PEAK outside a season; inside
+    one, BOOST from the SINGLE OWNING occurrence's boost_start (V_PEAK_WINDOW_RULE resolves the
+    owner as the earliest boost_start) until its peak_start, PEAK from then on, compared on the
+    Los Angeles date. FN_PLAN_CALENDAR_STATE — the plan's declared authority, and the key
+    DE_PLAN_CONFIG is read by — uses a different precedence (a peak ANYWHERE wins) on the New
+    York date. P-11 says one engine, so the function decides and this is only an alarm: swept
+    across 2026 the two part on 24 days, the whole Black-Friday run-up, where this rule says
+    BOOST (allowance_share 0.50) and the authority says PEAK (0.20). Re-derive the sweep rather
+    than trusting the sentence; the SOP publishes the query."""
     if not in_peak:
         return 'OFF_PEAK'
     if peak_start and str(today) < str(peak_start):
@@ -262,54 +275,128 @@ def calendar_state(in_peak, peak_start, today):
 
 
 def rule_b(r):
-    """P-1/P-3/P-5 — judge ONE keyword on the WINDOW. Returns
-    {'good': bool, 'verdict': str, 'reason': plain-English sentence, 'ret': float|None}.
+    """P-1/P-3/P-5/P-14 — judge ONE keyword on the WINDOW. Returns
+    {'good': bool, 'verdict': str, 'reason': plain-English sentence, 'ret': float|None,
+     'settle_arm': str, 'decided_by': str, 'settle_due_on': str|None}.
 
     The margin is the ladder's own: window gross profit is SUM(FACT_AMAZON_ADS.GROSS_PROFIT) over
     the window at the keyword's own grain — the same stored column V_KEYWORD_GUARD sums for
     settled_gp90 and the bar is compared against (see THE GP RULE in that view). No margin is
     invented here and nothing is hardcoded.
 
-    verdict: GOOD · GRACE · LOSING · ONE_ORDER · NO_SALE · NOT_SERVING.
+    P-14, BUILT AS SPECIFIED AND SAID ON EVERY ROW (Ori has not ruled; to overrule, one sentence:
+    "judge the window as it reads"):
+      (a) CORRECTION — the judged margin is the window's gross profit divided, per day, by the
+          published completion factor for the day's channel and age (V_ADS_SETTLE_CURVE, read as
+          a table by the query). Because every factor is <= 1 the correction can only ever RAISE
+          the margin, so it can only ever PROMOTE. Where the curve cannot answer for a day the
+          factor is 1.0 and the row says UNCORRECTED_NO_CURVE. Order COUNTS are never inflated.
+      (b) ASYMMETRIC GUARD — a keyword may be promoted on fresh corrected evidence, but it is
+          never demoted until its window has SETTLED (SP 7 / SB 14 complete days after
+          window_to). A would-be demotion of a keyword that WAS good is held, on the good side,
+          with its settle-due date on the row. "Was good" here is the bootstrap the spec
+          declares: the ladder's own settled 90-day record at or above the family bar with the
+          order floor met (there is no previous night's plan to read — the plan's own tables are
+          Task 1, and this book is the only live judge until they exist).
+      (c) Every row publishes settle_arm and decided_by, and the plain-English reason says which
+          arm decided it and when the window settles.
+
+    verdict: GOOD · GRACE · HELD_UNSETTLED · LOSING · ONE_ORDER · NO_SALE · NOT_SERVING.
     """
     ordw = int(num(r.get('w_ord'), 0) or 0)
     clkw = int(num(r.get('w_clk'), 0) or 0)
     spw = num(r.get('w_sp'), 0) or 0.0
     gpw = num(r.get('w_gp'), 0) or 0.0
+    # w_gp_corr is always supplied by the query. A caller that does not supply it gets the raw
+    # margin and is told so on the row rather than silently judged on a zero.
+    gpc = num(r.get('w_gp_corr'), None)
+    no_curve = int(num(r.get('w_days_no_curve'), 0) or 0) > 0
+    if gpc is None:
+        gpc, no_curve = gpw, True
+    settled = b(r.get('window_settled'))
+    due = r.get('settle_due_on')
     bar = num(r.get('family_bar'), 1.0)
     bar = 1.0 if bar is None else bar
-    ret = (gpw / spw) if spw > 0 else None
+
+    ret_raw = (gpw / spw) if spw > 0 else None
+    ret = (gpc / spw) if spw > 0 else None          # P-14a: the corrected margin is the judged one
     days = r.get('window_days')
     win = (f"the {days}-day window {r.get('window_from')} to {r.get('window_to')}"
            if r.get('window_from') else "the window")
+
+    # which arm is speaking, before any verdict
+    if no_curve:
+        arm = 'UNCORRECTED_NO_CURVE'
+    elif settled:
+        arm = 'SETTLED'
+    elif ret is not None and ret_raw is not None and ret >= bar > ret_raw:
+        arm = 'PROMOTED_ON_FRESH'
+    else:
+        arm = 'CORRECTED'
+
+    lift = (f", lifted from {ret_raw:.2f} by the settle correction"
+            if (ret is not None and ret_raw is not None and ret - ret_raw > 0.005) else "")
     took = (f"{ordw} order(s) on ${spw:.2f} of ad spend in {win}"
-            + (f", returning {ret:.2f} gross-profit dollars per ad dollar against its "
+            + (f", returning {ret:.2f} gross-profit dollars per ad dollar{lift} against its "
                f"{r.get('family') or 'family'} bar of {bar:.2f}" if ret is not None else ""))
+    caveat = ("" if settled else
+              (f" NOT YET SETTLED: the window's orders are still arriving (SP 7 / SB 14 complete "
+               f"days), so this reading settles on {due}. The margin above is CORRECTED for "
+               f"settle completion from the published curve"
+               + (" — except that the curve could not answer for at least one day of this "
+                  "window, so that day was left uncorrected (P-14a)." if no_curve else
+                  " (P-14a); order counts are never corrected.")))
+
+    def out(good, verdict, decided_by, reason):
+        return {'good': good, 'verdict': verdict, 'ret': ret, 'ret_raw': ret_raw,
+                'settle_arm': arm, 'decided_by': decided_by,
+                'settle_due_on': None if settled else due, 'reason': reason}
 
     if ordw >= RULE_B_MIN_ORDERS and ret is not None and ret >= bar:
-        return {'good': True, 'verdict': 'GOOD', 'ret': ret,
-                'reason': (f"GOOD on the window — {took}. The good side is never cut and is not "
-                           f"re-priced, so this keyword is left exactly as it is (P-4).")}
+        return out(True, 'GOOD', 'P-3',
+                   f"GOOD on the window — {took}. The good side is never cut and is not "
+                   f"re-priced, so this keyword is left exactly as it is (P-4)."
+                   + (f" Decided by the {arm} arm." if arm != 'SETTLED' else "") + caveat)
+
     if ordw < RULE_B_MIN_ORDERS and (r.get('state') or '') in GRACE_LADDER_STATES:
-        return {'good': True, 'verdict': 'GRACE', 'ret': ret,
-                'reason': (f"GRACE — the ladder calls this a settled winner ({r.get('state')}) and "
-                           f"its window is quiet: {took}. A proven winner keeps the good side for "
-                           f"ONE quiet window (P-5), held, not cut. NOTE: there is no two-window "
-                           f"memory table yet, so this grace is granted on the ladder state alone "
-                           f"— it cannot see whether the previous window was also quiet, and a "
-                           f"second quiet window should have let rule B stand.")}
+        return out(True, 'GRACE', 'P-5',
+                   f"GRACE — the ladder calls this a settled winner ({r.get('state')}) and "
+                   f"its window is quiet: {took}. A proven winner keeps the good side for "
+                   f"ONE quiet window (P-5), held, not cut. NOTE: there is no two-window "
+                   f"memory table yet, so this grace is granted on the ladder state alone "
+                   f"— it cannot see whether the previous window was also quiet, and a "
+                   f"second quiet window should have let rule B stand." + caveat)
+
+    # P-14b: never demote a keyword that was good until its window has settled.
+    sgp, ssp = num(r.get('settled_gp90'), 0) or 0.0, num(r.get('settled_sp90'), 0) or 0.0
+    was_good = (int(num(r.get('settled_ord90'), 0) or 0) >= RULE_B_MIN_ORDERS
+                and ssp > 0 and (sgp / ssp) >= bar)
+    if was_good and not settled:
+        return out(True, 'HELD_UNSETTLED', 'P-14b',
+                   f"HELD, NOT DEMOTED (P-14b) — {took}, which would put it on the not-good "
+                   f"side. Its window has not settled, and the ladder's own settled 90-day "
+                   f"record clears the {r.get('family') or 'family'} bar of {bar:.2f} on "
+                   f"{int(num(r.get('settled_ord90'), 0) or 0)} settled orders, so it keeps the "
+                   f"good side until {due}. A keyword may be promoted on fresh evidence but "
+                   f"never demoted on it: unmeasured never reads as bad." + caveat)
+
     if ordw >= RULE_B_MIN_ORDERS:
-        return {'good': False, 'verdict': 'LOSING', 'ret': ret,
-                'reason': f"LOSING on the window — {took}, under the bar."}
+        return out(False, 'LOSING', 'P-3',
+                   f"LOSING on the window — {took}, under the bar." + caveat)
     if ordw == 1:
-        return {'good': False, 'verdict': 'ONE_ORDER', 'ret': ret,
-                'reason': (f"WAITING, one order — {took}. One order is not evidence whatever the "
-                           f"return, so this keyword is on the not-good side.")}
+        return out(False, 'ONE_ORDER', 'P-3',
+                   f"WAITING, one order — {took}. One order is not evidence whatever the "
+                   f"return, so this keyword is on the not-good side." + caveat)
     if spw > 0 or clkw > 0:
-        return {'good': False, 'verdict': 'NO_SALE', 'ret': ret,
-                'reason': f"NO SALE — {took}. Spend with no order is on the not-good side."}
-    return {'good': False, 'verdict': 'NOT_SERVING', 'ret': ret,
-            'reason': f"NOT SERVING — no spend and no clicks in {win}."}
+        return out(False, 'NO_SALE', 'P-3',
+                   f"NO SALE — {took}. Spend with no order is on the not-good side." + caveat)
+    return out(False, 'NOT_SERVING', 'P-3',
+               f"NOT SERVING — no spend and no clicks in {win}. There is nothing here for the "
+               f"settle curve to correct and nothing arriving later: a keyword that took no "
+               f"clicks has no sales in flight"
+               + ("" if settled else
+                  f", so the settle question does not arise even though the window itself does "
+                  f"not settle until {due} (P-14)") + ".")
 
 
 def rule_b_gate(disp, r, bits):
@@ -323,7 +410,17 @@ def rule_b_gate(disp, r, bits):
 
 SQL = """
 WITH wm AS (
-  SELECT MAX(date) AS d FROM `{p}.OI.FACT_AMAZON_ADS`
+  -- THE HOUSE WATERMARK (P-10, SOP §1): LEAST(MAX(date), FN_ADS_ANCHOR_CAP()), never a bare
+  -- MAX(date). v27.132 defect, measured: at 10:15 America/Los_Angeles on 2026-08-23 the raw
+  -- MAX(date) was 2026-08-23 while FN_ADS_ANCHOR_CAP() was 2026-08-22, so this book's window
+  -- ended on a day ONE day old — and V_ADS_SETTLE_CURVE publishes SP spend at ~5/6 and SP sales
+  -- at ~2/3 of final at age 1. It judged good vs not-good on a day a third of whose sales had
+  -- not arrived, which is exactly the defect Ori raised P-14 for. Read the curve, never a
+  -- literal: SELECT channel, age_days, spend_pct_of_final_median, sales_pct_of_final_median
+  -- FROM `{p}.OI.V_ADS_SETTLE_CURVE` WHERE age_days <= 2 ORDER BY channel, age_days.
+  -- The cap also governs live7 and the `own` settled frame below: one day older, strictly safer,
+  -- and one definition of "the last complete ads day" in this file instead of two.
+  SELECT LEAST(MAX(date), `{p}.OI.FN_ADS_ANCHOR_CAP`()) AS d FROM `{p}.OI.FACT_AMAZON_ADS`
 ),
 ks AS (
   SELECT * FROM `{p}.OI.V_KEYWORD_STATE`
@@ -398,31 +495,69 @@ cal AS (
             AND h.boost_start = pw.occurrence_start) AS peak_start
   FROM `{p}.OI.V_PEAK_WINDOW_RULE` pw
 ),
+-- P-11, ONE ENGINE, ONE CALENDAR AUTHORITY. The state is FN_PLAN_CALENDAR_STATE on the New York
+-- calendar date — the plan's declared authority, the one DE_PLAN_CONFIG is keyed by and the one
+-- PLAN_CONFIG_acceptance C03 asserts. Until v27.132 this CTE derived the state itself, from
+-- V_PEAK_WINDOW_RULE's SINGLE owning occurrence (earliest boost_start wins) on the Los Angeles
+-- date. That is a DIFFERENT PRECEDENCE from the function's (a peak anywhere wins) and it is not
+-- academic: swept across 2026 the two agree on 341 days and part on 24 — 2026-10-10..2026-11-02,
+-- the whole Black-Friday run-up — where the old rule said BOOST (allowance_share 0.50) and the
+-- plan's authority says PEAK (0.20). Re-derive it rather than trusting this comment; the sweep
+-- is published in the SOP. The old rule is kept in Python as legacy_calendar_state() and the
+-- build prints a WARNING when the two disagree, so the divergence is visible, not silent.
 st AS (
   SELECT cal.*,
-         CASE WHEN NOT COALESCE(cal.in_peak, FALSE) THEN 'OFF_PEAK'
-              WHEN cal.peak_start IS NOT NULL
-                   AND CURRENT_DATE('America/Los_Angeles') < cal.peak_start THEN 'BOOST'
-              ELSE 'PEAK' END AS calendar_state
+         `{p}.OI.FN_PLAN_CALENDAR_STATE`(CURRENT_DATE('America/New_York')) AS calendar_state
   FROM cal
 ),
 winr AS (
-  SELECT st.*,
-         CASE st.calendar_state WHEN 'OFF_PEAK' THEN {w_off} WHEN 'BOOST' THEN {w_boost}
-              ELSE {w_peak} END AS window_days,
-         -- P-10: COMPLETE DAYS ONLY — the window ends at wm - 1; the filling day never enters it
-         DATE_SUB(wm.d, INTERVAL (CASE st.calendar_state WHEN 'OFF_PEAK' THEN {w_off}
-                                       WHEN 'BOOST' THEN {w_boost} ELSE {w_peak} END) DAY) AS window_from,
-         DATE_SUB(wm.d, INTERVAL 1 DAY) AS window_to
-  FROM st CROSS JOIN wm
+  SELECT st.*, w.window_days, w.window_to,
+         DATE_SUB(w.window_to, INTERVAL w.window_days - 1 DAY) AS window_from
+  FROM (
+    SELECT st.calendar_state,
+           CASE st.calendar_state WHEN 'OFF_PEAK' THEN {w_off} WHEN 'BOOST' THEN {w_boost}
+                ELSE {w_peak} END AS window_days,
+           -- P-10 COMPLETE DAYS ONLY + THE P-14a FENCE. The window ends at wm - 1, and never on
+           -- a day younger than two: FN_ADS_ANCHOR_CAP() advances to the current Los Angeles
+           -- date at 22:00 LA, so wm - 1 alone can still be an age-1 day, where the published
+           -- curve puts spend materially short of final. Before 22:00 the two terms are equal
+           -- and the fence costs nothing; after it, the fence gives up one day rather than judge
+           -- money on a day the warehouse has not finished writing. Spec P-14a, section 3.
+           LEAST(DATE_SUB(wm.d, INTERVAL 1 DAY),
+                 DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 2 DAY)) AS window_to
+    FROM st CROSS JOIN wm
+  ) w
+  JOIN st ON st.calendar_state = w.calendar_state
+),
+-- the channel of each judged keyword, for the settle curve and the settle clock (SP 7 / SB 14)
+ksch AS (
+  SELECT CAST(campaign_id AS STRING) cid, CAST(keyword_id AS STRING) kid,
+         ANY_VALUE(channel) channel
+  FROM ks GROUP BY 1, 2
 ),
 -- the keyword's own record in the window. GP is FACT_AMAZON_ADS.GROSS_PROFIT, the stored column
 -- the ladder's own guard sums for settled_gp90 — the same margin source, not a new one.
 kwin AS (
   SELECT CAST(f.campaign_id AS STRING) cid, CAST(f.keyword_id AS STRING) kid,
          SUM(f.Ads_cost) w_sp, SUM(f.Ads_clicks) w_clk, SUM(f.Ads_orders) w_ord,
-         SUM(f.GROSS_PROFIT) w_gp
-  FROM `{p}.OI.FACT_AMAZON_ADS` f, winr
+         SUM(f.GROSS_PROFIT) w_gp,
+         -- P-14a THE CORRECTION: each DAY's gross profit divided by the published completion
+         -- factor for its channel and its age, read from V_ADS_SETTLE_CURVE as a table — never a
+         -- literal and never a hardcoded factor. Where the curve cannot answer, the factor is
+         -- 1.0 and w_days_no_curve counts the day, so the row can say the correction was
+         -- unavailable and rest on the asymmetric guard alone. ORDER COUNTS ARE NEVER INFLATED
+         -- (a count cannot be fractionally corrected), so w_ord above is the observed count and
+         -- the P-3 floor is always read on it.
+         SUM(f.GROSS_PROFIT
+             / (COALESCE(NULLIF(sc.sales_pct_of_final_median, 0), 100.0) / 100.0)) w_gp_corr,
+         COUNTIF(sc.sales_pct_of_final_median IS NULL) w_days_no_curve
+  FROM `{p}.OI.FACT_AMAZON_ADS` f
+  CROSS JOIN winr
+  JOIN ksch ON ksch.cid = CAST(f.campaign_id AS STRING)
+           AND ksch.kid = CAST(f.keyword_id AS STRING)
+  LEFT JOIN `{p}.OI.V_ADS_SETTLE_CURVE` sc
+    ON sc.channel  = ksch.channel
+   AND sc.age_days = DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), f.date, DAY)
   WHERE f.date BETWEEN winr.window_from AND winr.window_to
     AND f.keyword_id IS NOT NULL
   GROUP BY 1, 2
@@ -474,6 +609,14 @@ SELECT
   COALESCE(live7.sp7, 0) AS sp7, COALESCE(live7.clk7, 0) AS clk7,
   COALESCE(kwin.w_sp, 0) AS w_sp, COALESCE(kwin.w_clk, 0) AS w_clk,
   COALESCE(kwin.w_ord, 0) AS w_ord, COALESCE(kwin.w_gp, 0) AS w_gp,
+  -- P-14a / P-14b: the corrected window margin, whether the curve could answer, and the clock
+  COALESCE(kwin.w_gp_corr, 0) AS w_gp_corr,
+  COALESCE(kwin.w_days_no_curve, 0) AS w_days_no_curve,
+  ks.settled_gp90, ks.settled_sp90,
+  CAST(DATE_ADD(winr.window_to,
+                INTERVAL IF(ks.channel = 'SB', 14, 7) DAY) AS STRING) AS settle_due_on,
+  CURRENT_DATE('America/Los_Angeles')
+    >= DATE_ADD(winr.window_to, INTERVAL IF(ks.channel = 'SB', 14, 7) DAY) AS window_settled,
   CAST(winr.window_from AS STRING) AS window_from,
   CAST(winr.window_to AS STRING) AS window_to,
   winr.window_days, winr.calendar_state, winr.in_peak AS cal_in_peak,
@@ -1165,14 +1308,28 @@ def main():
     cal_state = w0.get('calendar_state') or 'OFF_PEAK'
     win_days = int(num(w0.get('window_days'), PLAN_WINDOW_DAYS[cal_state]))
     win_from, win_to = w0.get('window_from'), w0.get('window_to')
-    assert_window_complete(w0['watermark'], win_from, win_to, win_days)
+    assert_window_complete(w0['watermark'], win_from, win_to, win_days, today_la)
     assert win_days == PLAN_WINDOW_DAYS[cal_state], \
         f"the query returned a {win_days}-day window for {cal_state}; P-13 declares " \
         f"{PLAN_WINDOW_DAYS[cal_state]}"
-    assert cal_state == calendar_state(b(w0.get('cal_in_peak')), w0.get('cal_peak_start'),
-                                       today_la), "the query's calendar state and this file's disagree"
+    # P-11: FN_PLAN_CALENDAR_STATE decides. The OLD in-book rule is kept only as an alarm — it
+    # parts from the authority on the Black-Friday run-up, where it said BOOST (share 0.50) and
+    # the authority says PEAK (0.20). Never silent.
+    legacy_state = legacy_calendar_state(b(w0.get('cal_in_peak')), w0.get('cal_peak_start'),
+                                         today_la)
+    if legacy_state != cal_state:
+        print(f"WARNING — CALENDAR DIVERGENCE: the plan's authority FN_PLAN_CALENDAR_STATE says "
+              f"{cal_state} for {today_la}; the rule this book used before v27.132 says "
+              f"{legacy_state}. The authority wins (P-11) and DE_PLAN_CONFIG is read on it. "
+              f"This is a ruling for Ori, not a bug to patch here — see architecture/"
+              f"NEXT_WEEK_MONEY.md.")
+    fenced = (date.fromisoformat(str(win_to))
+              != date.fromisoformat(str(w0['watermark'])) - timedelta(days=1))
     win_txt = (f"{win_days} complete days, {win_from} to {win_to} (the ads watermark is "
-               f"{w0['watermark']} and never enters the window)")
+               f"{w0['watermark']} and never enters the window"
+               + ("; the P-14a fence gave up one more day so that no judged day is younger than "
+                  "two — the anchor cap has advanced past 22:00 Los Angeles" if fenced else "")
+               + ")")
     if args.rule_b:
         print(f"RULE B: calendar {cal_state}"
               + (f" — {w0.get('cal_occurrence')} occurrence" if b(w0.get('cal_in_peak')) else "")
@@ -1270,9 +1427,16 @@ def main():
                      'live_7d_spend_CONTEXT_ONLY', 'live_7d_cpc_CONTEXT_ONLY',
                      # RULE B (F7) — the window every keyword was judged on, and the verdict.
                      # rule_b_dropped_row names the row this filter REMOVED: never silent.
+                     # P-14: rule_b_gp is the OBSERVED window gross profit; rule_b_gp_corrected
+                     # is the same money divided by the published settle-completion factor per
+                     # day (V_ADS_SETTLE_CURVE), which is the margin rule_b_return is computed on.
+                     # settle_arm and decided_by say WHICH ARM decided the row; settle_due is the
+                     # date the window settles (blank = already settled).
                      'rule_b_window', 'rule_b_orders', 'rule_b_spend', 'rule_b_gp',
-                     'rule_b_return', 'rule_b_bar', 'rule_b_verdict', 'rule_b_dropped_row',
-                     'rule_b_reason',
+                     'rule_b_gp_corrected',
+                     'rule_b_return', 'rule_b_bar', 'rule_b_verdict',
+                     'rule_b_settle_arm', 'rule_b_decided_by', 'rule_b_settle_due',
+                     'rule_b_dropped_row', 'rule_b_reason',
                      'check_reasons', 'story'])
         dropped_by_key = {(x[0]['campaign_id'], x[0]['keyword_id']): (x[1], x[2])
                           for x in rule_b_dropped}
@@ -1321,10 +1485,14 @@ def main():
                 f"{r.get('calendar_state')})",
                 int(num(r.get('w_ord'), 0)), f"{num(r.get('w_sp'), 0):.2f}",
                 f"{num(r.get('w_gp'), 0):.2f}",
+                f"{num(r.get('w_gp_corr'), 0):.2f}",
                 (f"{(bits.get('rule_b') or {}).get('ret'):.3f}"
                  if (bits.get('rule_b') or {}).get('ret') is not None else ''),
                 f"{(bits['bar'] or 1.0):.4f}",
                 (bits.get('rule_b') or {}).get('verdict', ''),
+                (bits.get('rule_b') or {}).get('settle_arm', ''),
+                (bits.get('rule_b') or {}).get('decided_by', ''),
+                (bits.get('rule_b') or {}).get('settle_due_on') or '',
                 (f"{disp_before} ${num(r['current_bid'], 0):.2f} -> "
                  f"{('PAUSE' if disp_before == 'PAUSE' else '$%.2f' % nb_before)}"
                  if disp == RULE_B_GOOD else ''),
@@ -1362,6 +1530,7 @@ def main():
         if args.rule_b:
             n_good = sum(1 for _, _, _, v in rule_b_dropped if v['verdict'] == 'GOOD')
             n_grace = sum(1 for _, _, _, v in rule_b_dropped if v['verdict'] == 'GRACE')
+            n_held = sum(1 for _, _, _, v in rule_b_dropped if v['verdict'] == 'HELD_UNSETTLED')
             f.write("## Rule B — the good side is left alone\n\n")
             f.write(f"This book was built with **rule B on**. Rule B judges every keyword on the "
                     f"**window** — the last stretch of finished days — instead of on its 90-day "
@@ -1398,21 +1567,49 @@ def main():
                        f"reads. ")
                     + f"The newest ads day ({w0['watermark']}) is still filling and is deliberately "
                     f"left out: only finished days are judged.\n\n")
-            f.write(f"**Attribution caveat — read this before trusting a 'not good' verdict.** "
-                    f"The window's sales are still settling. Sponsored Products sales keep "
-                    f"arriving for about a week after the click and Sponsored Brands for about "
-                    f"two, so a keyword judged in a {win_days}-day window that ends "
-                    f"{win_to} has NOT yet been credited with everything it earned. That makes "
-                    f"rule B conservative in one direction only: the good side is understated "
-                    f"(a keyword called quiet today may be good once its sales land), while a "
-                    f"keyword called good has already proved it. This is the known cost of "
-                    f"judging on the window; the plan's shadow arm and the T+14 scorecard exist "
-                    f"to measure it.\n\n")
+            n_arm = Counter((v.get('settle_arm') or '') for _, _, _, v in rule_b_dropped)
+            f.write(f"### The window's sales are still arriving — and this book says so on "
+                    f"every row (P-14)\n\n")
+            f.write(f"Sponsored Products sales keep landing for about a week after the click and "
+                    f"Sponsored Brands for about two, so a keyword judged in a {win_days}-day "
+                    f"window ending {win_to} has NOT yet been credited with everything it "
+                    f"earned. Left alone, that overstates the **not-good** side — it parks "
+                    f"keywords for the crime of being recent. Two things are done about it, and "
+                    f"the audit CSV names which one decided each row "
+                    f"(`rule_b_settle_arm`, `rule_b_decided_by`, `rule_b_settle_due`):\n\n"
+                    f"1. **The margin is corrected.** Each day's gross profit is divided by the "
+                    f"published completion factor for its channel and its age, read from "
+                    f"`V_ADS_SETTLE_CURVE` as a table — never a factor typed into this file. "
+                    f"Every factor is at most 1, so the correction can only ever RAISE a "
+                    f"keyword's return: it can promote, never demote. **Order counts are never "
+                    f"corrected** — a count cannot be fractional, so the {RULE_B_MIN_ORDERS}-"
+                    f"order floor is always read on orders actually observed. Column "
+                    f"`rule_b_gp_corrected` beside `rule_b_gp` shows both.\n"
+                    f"2. **Nothing is demoted before it has settled.** A keyword whose settled "
+                    f"90-day record clears its family bar keeps the good side until its window "
+                    f"settles ({win_to} plus 7 days for Sponsored Products, 14 for Sponsored "
+                    f"Brands), even when the window reads badly. Those rows say "
+                    f"`HELD_UNSETTLED` and carry the date they settle. Unmeasured never reads "
+                    f"as bad.\n\n")
+            f.write(f"**This is UNRULED.** Ori raised the defect on 2026-08-23 and has not "
+                    f"chosen between the offered fixes; the above is the build-as-specified "
+                    f"answer (spec P-14). To overrule it, one sentence — *\"judge the window as "
+                    f"it reads\"* — and both halves come out. Worth knowing before you rule: "
+                    f"the correction is real but it moves almost nobody across a bar, because "
+                    f"the overstatement lives behind the ORDER FLOOR (keywords with one order "
+                    f"or none), which the ruling's own wording forbids correcting. On this "
+                    f"book the arms fired: "
+                    + (", ".join(f"{k or 'n/a'} {n}" for k, n in sorted(n_arm.items())) or "none")
+                    + f". Re-derive it yourself rather than trusting this sentence — the "
+                    f"comparison is `rule_b_gp` against `rule_b_gp_corrected` in the audit "
+                    f"CSV.\n\n")
             if rule_b_dropped:
                 f.write(f"**{len(rule_b_dropped)} row(s) were dropped by rule B** — {n_good} on a "
                         f"keyword the window calls good, {n_grace} held by grace (the ladder "
                         f"calls it a settled winner and its window was merely quiet; a proven "
-                        f"winner keeps the good side for one quiet window, held, never cut). "
+                        f"winner keeps the good side for one quiet window, held, never cut), "
+                        f"and {n_held} held because the window has not settled yet (P-14b: a "
+                        f"keyword may be promoted on fresh evidence but never demoted on it). "
                         f"Note the limit on grace: there is no two-window memory table yet, so "
                         f"grace here is granted on the ladder's state alone — this book cannot "
                         f"see whether the previous window was also quiet.\n\n")

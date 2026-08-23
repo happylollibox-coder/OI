@@ -1,5 +1,5 @@
 -- =============================================================================================
--- DE_PLAN_CONFIG + FN_PLAN_CALENDAR_STATE acceptance — v27.131 (2026-08-23).
+-- DE_PLAN_CONFIG + FN_PLAN_CALENDAR_STATE acceptance — v27.132 (2026-08-23).
 -- EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-13, §3.
@@ -24,6 +24,16 @@
 --       evidence discipline, and their re-measure clocks can grant a 7. P-11 says one engine, so
 --       DE_PLAN_CONFIG is the plan's authority — but the two must not disagree silently. When
 --       this check goes red, someone rules; it is not a bug to be patched away in the view.
+--   C09 every ACTIVE seed row still carries the SETTINGS the DDL declares. This is the alarm for
+--       the v27.131 defect: that guard keyed on updated_by, so an UPDATE IN PLACE of a seeded
+--       row (`SET allowance_share = 0.33 WHERE calendar_state = 'PEAK' AND is_active`) left
+--       updated_by = 'plan_seed' and the next re-deploy silently reverted it. v27.132 keys the
+--       DELETE on the VALUES, so the edit now survives — and this check makes it VISIBLE rather
+--       than silent: a plan_seed row whose settings no longer match the declaration is a hand
+--       change wearing the seed's label, and the fix is to retire it and insert an owned row
+--       (the SOP's recipe). The seed values below are DECLARED CONSTANTS copied from the DDL,
+--       not measurements (Standing Rule 0 exempt); if the DDL's declared seed changes, change
+--       them here in the same commit.
 --
 -- C03 dates are DECLARED CALENDAR DATES read off DIM_US_HOLIDAYS, not measurements (Standing
 -- Rule 0 exempt). If Ori edits the live calendar these dates move with it and this check is the
@@ -108,6 +118,24 @@ c08 AS (
     QUALIFY ROW_NUMBER() OVER (PARTITION BY calendar_state ORDER BY updated_at DESC) = 1
   ) p
 ),
+c09 AS (
+  SELECT 'C09 active seed rows still carry the declared seed settings' AS check_name,
+         COUNTIF(sd.calendar_state IS NULL) AS violations
+  FROM `onyga-482313.OI.DE_PLAN_CONFIG` t
+  LEFT JOIN UNNEST([
+    STRUCT('OFF_PEAK' AS calendar_state, 7 AS window_days, 0.20 AS allowance_share,
+           'B' AS live_plan, 3 AS ramp_steps, 2 AS min_orders),
+    STRUCT('BOOST', 3, 0.50, 'B', 3, 2),
+    STRUCT('PEAK',  3, 0.20, 'B', 3, 2)
+  ]) sd
+    ON  sd.calendar_state  = t.calendar_state
+    AND sd.window_days     = t.window_days
+    AND sd.allowance_share = t.allowance_share
+    AND sd.live_plan       = t.live_plan
+    AND sd.ramp_steps      = t.ramp_steps
+    AND sd.min_orders      = t.min_orders
+  WHERE t.updated_by = 'plan_seed' AND t.is_active
+),
 c05 AS (
   SELECT 'C05 every state the function emits has an active config row' AS check_name,
          (SELECT COUNT(*) FROM (
@@ -121,5 +149,6 @@ c05 AS (
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c04 UNION ALL SELECT * FROM c05
-      UNION ALL SELECT * FROM c06 UNION ALL SELECT * FROM c07 UNION ALL SELECT * FROM c08)
+      UNION ALL SELECT * FROM c06 UNION ALL SELECT * FROM c07 UNION ALL SELECT * FROM c08
+      UNION ALL SELECT * FROM c09)
 ORDER BY check_name;

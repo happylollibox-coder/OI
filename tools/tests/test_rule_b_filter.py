@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 from build_reprice_bulksheet import (  # noqa: E402
     EXECUTABLE, GRACE_LADDER_STATES, PLAN_WINDOW_DAYS, RULE_B_GOOD, RULE_B_MIN_ORDERS,
-    assert_window_complete, build_parser, calendar_state, rule_b, rule_b_gate, window_bounds)
+    assert_window_complete, build_parser, legacy_calendar_state, rule_b, rule_b_gate,
+    window_bounds)
 
 WM = date(2026, 8, 22)          # the ads watermark: the newest ads day, still filling
 BAR = 1.20                      # a family bar (T_FAMILY_BAR), the ladder's own number
@@ -36,8 +37,17 @@ def kw(**over):
         w_ord=2, w_clk=40, w_sp=20.00, w_gp=12.00,          # 0.60x — below the 1.20 bar
         window_from='2026-08-19', window_to='2026-08-21', window_days=3,
         calendar_state='PEAK',
+        # P-14: by default the settle curve answered and changed nothing, the window has SETTLED,
+        # and the ladder's own 90-day record does NOT clear the bar — so neither P-14 arm fires
+        # and the P-1..P-5 fixtures below judge exactly what they judged before.
+        w_gp_corr=12.00, w_days_no_curve=0, window_settled=True,
+        settle_due_on='2026-08-28', settled_ord90=0, settled_gp90=0.0, settled_sp90=0.0,
     )
     r.update(over)
+    # a test that moves the observed gross profit without saying otherwise means "the curve
+    # answered and changed nothing" — so the corrected margin follows it (P-14a is promote-only)
+    if 'w_gp_corr' not in over:
+        r['w_gp_corr'] = r['w_gp']
     return r
 
 
@@ -193,10 +203,10 @@ def test_the_declared_windows_are_seven_off_peak_and_three_in_a_peak():
 
 
 def test_the_calendar_state_reads_the_house_calendar():
-    assert calendar_state(False, None, date(2026, 3, 1)) == 'OFF_PEAK'
-    assert calendar_state(True, date(2026, 8, 10), date(2026, 8, 5)) == 'BOOST'
-    assert calendar_state(True, date(2026, 8, 10), date(2026, 8, 23)) == 'PEAK'
-    assert calendar_state(True, None, date(2026, 8, 23)) == 'PEAK', \
+    assert legacy_calendar_state(False, None, date(2026, 3, 1)) == 'OFF_PEAK'
+    assert legacy_calendar_state(True, date(2026, 8, 10), date(2026, 8, 5)) == 'BOOST'
+    assert legacy_calendar_state(True, date(2026, 8, 10), date(2026, 8, 23)) == 'PEAK'
+    assert legacy_calendar_state(True, None, date(2026, 8, 23)) == 'PEAK', \
         "a peak whose peak_start the calendar does not carry is judged as a peak (same window)"
 
 
@@ -209,3 +219,104 @@ def test_rule_b_is_off_by_default():
 
 def test_rule_b_turns_on_with_the_flag():
     assert build_parser().parse_args(['--rule-b']).rule_b is True
+
+
+# ── P-14 (v27.132): the settle correction, the asymmetric guard, and saying so on the row ─────
+#
+# Ori raised the defect on 2026-08-23: the window's sales are still settling (SP ~D+7, SB ~D+14),
+# so a 3-day window read today has seen a fraction of its orders and the NOT-GOOD side is
+# overstated. P-14 is the build-as-specified answer and is still UNRULED. These fixtures pin the
+# behaviour so overruling it is a deliberate act, not a drift.
+
+def test_the_correction_can_promote_a_keyword_across_the_bar():
+    # observed 0.60x, corrected 1.30x — the curve says a third of the sales have not landed
+    v = rule_b(kw(w_ord=2, w_sp=20.00, w_gp=12.00, w_gp_corr=26.00, window_settled=False))
+    assert v['good'] is True and v['verdict'] == 'GOOD'
+    assert v['settle_arm'] == 'PROMOTED_ON_FRESH'
+    assert v['decided_by'] == 'P-3'
+
+
+def test_the_correction_never_demotes_only_promotes():
+    # a keyword good on the observed numbers stays good; the correction only ever raises margin
+    v = rule_b(kw(w_ord=2, w_sp=20.00, w_gp=24.00, w_gp_corr=24.00))
+    assert v['good'] is True and v['settle_arm'] == 'SETTLED'
+
+
+def test_a_was_good_keyword_is_never_demoted_before_its_window_settles():
+    v = rule_b(kw(w_ord=2, w_sp=20.00, w_gp=12.00, w_gp_corr=12.00, window_settled=False,
+                  settle_due_on='2026-08-28',
+                  settled_ord90=14, settled_gp90=300.0, settled_sp90=200.0))   # 1.50x, over bar
+    assert v['good'] is True
+    assert v['verdict'] == 'HELD_UNSETTLED'
+    assert v['decided_by'] == 'P-14b'
+    assert v['settle_due_on'] == '2026-08-28'
+    assert 'never demoted' in v['reason']
+
+
+def test_the_guard_releases_once_the_window_has_settled():
+    v = rule_b(kw(w_ord=2, w_sp=20.00, w_gp=12.00, w_gp_corr=12.00, window_settled=True,
+                  settled_ord90=14, settled_gp90=300.0, settled_sp90=200.0))
+    assert v['good'] is False and v['verdict'] == 'LOSING'
+
+
+def test_the_guard_does_not_rescue_a_keyword_that_was_never_good():
+    v = rule_b(kw(w_ord=2, w_sp=20.00, w_gp=12.00, w_gp_corr=12.00, window_settled=False,
+                  settled_ord90=14, settled_gp90=100.0, settled_sp90=200.0))   # 0.50x, under bar
+    assert v['good'] is False and v['verdict'] == 'LOSING'
+
+
+def test_every_not_good_verdict_says_the_window_is_still_settling():
+    for over in (dict(w_ord=2, w_sp=20.00, w_gp=12.00),        # LOSING
+                 dict(w_ord=1, w_sp=20.00, w_gp=40.00),        # ONE_ORDER
+                 dict(w_ord=0, w_sp=20.00, w_gp=0.00)):        # NO_SALE
+        v = rule_b(kw(window_settled=False, settle_due_on='2026-08-28', **over))
+        assert v['good'] is False
+        assert 'NOT YET SETTLED' in v['reason'], v['verdict']
+        assert '2026-08-28' in v['reason']
+        assert v['settle_due_on'] == '2026-08-28'
+
+
+def test_every_row_names_its_arm_and_who_decided_it():
+    for over in (dict(w_ord=2, w_sp=20.00, w_gp=24.00),
+                 dict(w_ord=2, w_sp=20.00, w_gp=12.00),
+                 dict(w_ord=1, w_sp=20.00, w_gp=40.00),
+                 dict(w_ord=0, w_sp=0.00, w_gp=0.00)):
+        v = rule_b(kw(**over))
+        assert v['settle_arm'] in ('SETTLED', 'CORRECTED', 'PROMOTED_ON_FRESH',
+                                   'HELD_UNSETTLED', 'UNCORRECTED_NO_CURVE')
+        assert v['decided_by'] in ('P-3', 'P-5', 'P-14b')
+
+
+def test_a_window_the_curve_cannot_answer_says_so_and_rests_on_the_guard():
+    v = rule_b(kw(w_ord=2, w_sp=20.00, w_gp=12.00, w_gp_corr=12.00,
+                  w_days_no_curve=1, window_settled=False, settle_due_on='2026-08-28'))
+    assert v['settle_arm'] == 'UNCORRECTED_NO_CURVE'
+    assert 'could not answer' in v['reason']
+
+
+def test_order_counts_are_never_inflated_by_the_correction():
+    # a huge correction cannot buy the second order the floor demands
+    v = rule_b(kw(w_ord=1, w_sp=20.00, w_gp=12.00, w_gp_corr=200.00, state='REPRICE'))
+    assert v['good'] is False and v['verdict'] == 'ONE_ORDER'
+
+
+# ── P-14a: the fence, which the book's own window must obey ───────────────────────────────────
+
+def test_the_window_never_ends_on_a_day_younger_than_two():
+    # watermark 2026-08-23 (the anchor cap has advanced past 22:00 LA), today 2026-08-23:
+    # wm - 1 would be an age-1 day, so the fence holds the window one day back
+    lo, hi = window_bounds(date(2026, 8, 23), 3, date(2026, 8, 23))
+    assert hi == date(2026, 8, 21)
+    assert lo == date(2026, 8, 19)
+
+
+def test_the_fence_costs_nothing_on_the_normal_path():
+    # watermark 2026-08-22 (anchor-capped), today 2026-08-23: wm - 1 is already age 2
+    lo, hi = window_bounds(date(2026, 8, 22), 3, date(2026, 8, 23))
+    assert hi == date(2026, 8, 21) and lo == date(2026, 8, 19)
+
+
+def test_an_unfenced_window_is_refused():
+    with pytest.raises(AssertionError):
+        assert_window_complete(date(2026, 8, 23), date(2026, 8, 20), date(2026, 8, 22), 3,
+                               date(2026, 8, 23))
