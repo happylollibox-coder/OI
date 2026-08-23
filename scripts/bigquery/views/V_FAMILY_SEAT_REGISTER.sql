@@ -27,6 +27,22 @@
 -- not deliver. B29 re-derives that figure from the register's OWN per-row costs (never from the
 -- sentence) with a stated tolerance; B30 keeps the two non-recovering lines named and excluded;
 -- B31 asserts the order.
+-- Fifth repair pass 2026-08-23 — R-l carried into the two PROJECTIONS and into the wording:
+--   (1) the re-judged horizon no longer zeroes a stalled probe. It used to model parking as
+--       taking the spend to $0, which is the very belief R-l retired, in the exact row the today
+--       sentence sends the reader to. A stalled probe is now re-priced by the move on its OWN row
+--       (R-f: raise to the seat price where the live bid is below it, otherwise park at the
+--       engine's park price) and keeps spending at that price on the same linear bid→spend guess
+--       the day-one horizon uses; it stays on the 20% side until a verdict arrives (B33).
+--   (2) both projections now respect the holdout arm. A campaign in the holdout arm from its
+--       eligible_from date gets no sheet row of any kind, so neither day one nor re-judged may
+--       book a change for it: its cost on both is its cost today, a repair in one never moves to
+--       the good side, and the family clause lists no move for it (B34).
+--   (3) the FAMILY row names the book its pauses ride on instead of promising an upload 'today'.
+--       Every dollar of the recovered-today figure rides the NEXT BOOK a generator builds — the
+--       leak arm of tools/build_reprice_bulksheet.py for a leak (Task 3), the shipped reprice
+--       generator's pause row for a failed keyword — exactly as the LEAK row's own move already
+--       says. The arithmetic is untouched; only the promise is (B32).
 --
 -- WHAT IT SAYS. For every WORKING family (the HARVEST book in V_BOOK_ASSIGNMENT) it groups the
 -- verdict ladder's keywords (FACT_KEYWORD_STATE, one snapshot) into plain-language categories,
@@ -422,19 +438,39 @@ kw AS (
   SELECT d.*, x.category, x.side, x.occupant_kind, x.cat_order,
          l.seat_no, l.opened_on AS seat_opened_on,
          d.spend7 / k.basis_days AS cost_today,
-         -- day one: the pending book lands (linear bid→spend), leaks paused
-         CASE WHEN d.code = 'LEAK' THEN 0
+         -- R-l holdout half, applied to BOTH projections: a campaign in the holdout arm from its
+         -- eligible_from date gets NO sheet row of any kind, so nothing a generator would have
+         -- done to it lands and neither projection may book an improvement from it.
+         (d.holdout AND d.snap_d >= d.holdout_eligible_from) AS no_sheet,
+         -- the price a stalled probe would carry after the move ITS OWN row proposes (R-f):
+         -- raised to the seat price where the live bid is below it, otherwise parked at the
+         -- engine's park price. Parking LOWERS a price — it never takes the spend to $0 (R-l).
+         CASE WHEN d.seat_price IS NOT NULL AND d.current_bid < d.seat_price - k.bid_tol THEN d.seat_price
+              ELSE d.bid_park END AS stalled_proposed_bid,
+         -- day one: the pending book lands (linear bid→spend), leaks paused — unless the row is in
+         -- a holdout campaign, where no sheet lands and the row is exactly as it is today
+         CASE WHEN d.holdout AND d.snap_d >= d.holdout_eligible_from THEN d.spend7 / k.basis_days
+              WHEN d.code = 'LEAK' THEN 0
               WHEN d.book_new_bid IS NOT NULL THEN d.spend7 / k.basis_days * SAFE_DIVIDE(d.book_new_bid, d.book_old_bid)
               ELSE d.spend7 / k.basis_days END AS cost_day1,
          x.side AS side_day1,
-         -- re-judged: repairs hold at their bar (good side), probation at its floor, failed killed,
-         -- stalled parked, probes and settling hold, leaks paused, untracked unchanged
-         CASE WHEN d.code IN ('LEAK', 'FAILED', 'STALLED_PROBE') THEN 0
+         -- re-judged: repairs hold at their bar (good side), probation at its floor, failed killed
+         -- (a kill IS a pause → $0), leaks paused (→ $0), STALLED PROBES RE-PRICED — not zeroed:
+         -- the move on their row is 'raise to the seat price' or 'park at the engine's park price',
+         -- and both leave the keyword serving, so the spend continues at the proposed price (the
+         -- same linear bid→spend guess the day-one horizon uses). Probes and settling hold,
+         -- untracked unchanged; a holdout-suppressed row is unchanged on every count.
+         CASE WHEN d.holdout AND d.snap_d >= d.holdout_eligible_from THEN d.spend7 / k.basis_days
+              WHEN d.code IN ('LEAK', 'FAILED') THEN 0
+              WHEN d.code = 'STALLED_PROBE' THEN d.spend7 / k.basis_days
+                   * COALESCE(SAFE_DIVIDE(CASE WHEN d.seat_price IS NOT NULL AND d.current_bid < d.seat_price - k.bid_tol THEN d.seat_price
+                                               ELSE d.bid_park END, NULLIF(d.current_bid, 0)), 1)
               WHEN d.code = 'PROBATION' THEN d.spend7 / k.basis_days
                    * COALESCE(SAFE_DIVIDE(LEAST(COALESCE(d.book_new_bid, d.current_bid), d.current_bid), NULLIF(d.current_bid, 0)), 1)
               WHEN d.book_new_bid IS NOT NULL THEN d.spend7 / k.basis_days * SAFE_DIVIDE(d.book_new_bid, d.book_old_bid)
               ELSE d.spend7 / k.basis_days END AS cost_rejudged,
-         IF(d.code = 'REPAIR', '80', x.side) AS side_rejudged
+         -- a repair in a holdout campaign is never re-priced, so it never earns the good side
+         IF(d.code = 'REPAIR' AND NOT (d.holdout AND d.snap_d >= d.holdout_eligible_from), '80', x.side) AS side_rejudged
   FROM coded d CROSS JOIN k
   JOIN codes x ON x.code = d.code
   LEFT JOIN ledger l ON l.family = d.family AND l.campaign_id = d.campaign_id AND l.keyword_id = d.keyword_id),
@@ -447,8 +483,8 @@ kw_h AS (
   SELECT kw.*, hz.horizon, hz.hz_order,
          CASE hz.horizon WHEN 'today' THEN cost_today WHEN 'day one' THEN cost_day1 ELSE cost_rejudged END AS cost_h,
          CASE hz.horizon WHEN 're-judged' THEN side_rejudged ELSE side END AS side_h,
-         CASE hz.horizon WHEN 're-judged' THEN IF(code = 'REPAIR', 'MARGINAL', code) ELSE code END AS code_h,
-         CASE hz.horizon WHEN 're-judged' THEN IF(code = 'REPAIR', 'marginal — at its bar', category) ELSE category END AS category_h
+         CASE hz.horizon WHEN 're-judged' THEN IF(code = 'REPAIR' AND NOT no_sheet, 'MARGINAL', code) ELSE code END AS code_h,
+         CASE hz.horizon WHEN 're-judged' THEN IF(code = 'REPAIR' AND NOT no_sheet, 'marginal — at its bar', category) ELSE category END AS category_h
   FROM kw CROSS JOIN hz),
 fam_h AS (
   SELECT family, book, horizon, hz_order,
@@ -488,8 +524,15 @@ fam_h AS (
          SUM(IF(code = 'LEAK' AND NOT (holdout AND snap_d >= holdout_eligible_from), cost_today, 0)) AS leak_exec_today,
          COUNTIF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from)) AS n_failed_exec,
          SUM(IF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from), cost_today, 0)) AS failed_exec_today,
-         COUNTIF(code IN ('LEAK', 'FAILED') AND holdout AND snap_d >= holdout_eligible_from) AS n_pause_holdout,
-         SUM(IF(code IN ('LEAK', 'FAILED') AND holdout AND snap_d >= holdout_eligible_from, cost_today, 0)) AS pause_holdout_today,
+         -- and the same guard on the two lines that recover nothing: a stalled probe or a repair in
+         -- a holdout campaign cannot even be re-priced, so it is never listed as a move
+         COUNTIF(code = 'STALLED_PROBE' AND NOT no_sheet) AS n_stalled_exec,
+         SUM(IF(code = 'STALLED_PROBE' AND NOT no_sheet, cost_today, 0)) AS stalled_exec_today,
+         COUNTIF(code = 'REPAIR' AND NOT no_sheet) AS n_repair_exec,
+         SUM(IF(code = 'REPAIR' AND NOT no_sheet, cost_day1, 0)) AS repair_exec_day1,
+         -- every 20%-side row that gets no sheet row at all while the holdout arm runs
+         COUNTIF(side_h = '20' AND no_sheet) AS n_bad_holdout,
+         SUM(IF(side_h = '20' AND no_sheet, cost_h, 0)) AS bad_holdout_today,
          COUNT(*) AS n_keywords
   FROM kw_h CROSS JOIN k
   GROUP BY 1, 2, 3, 4),
@@ -513,8 +556,8 @@ fam_rows AS (
          CASE horizon
            WHEN 'today' THEN FORMAT('measured on the %d complete days %s to %s; nothing assumed',
                                     k.basis_days, CAST(win.basis_from AS STRING), CAST(win.basis_to AS STRING))
-           WHEN 'day one' THEN 'projection: the pending book lands — every keyword on it spends in proportion to new bid ÷ old bid (a linear bid→spend guess, not a measurement); closed-but-spending keywords are paused (→ $0); everything else as today'
-           ELSE 'projection: the repairs hold at their bar and move to the good side at their day-one cost; probation keywords stay on the 20% side at their floor; failed keywords are killed (→ $0); stalled probes are parked (→ $0); engine probes keep their day-one cost; settling verdicts hold; leaks stay paused; untracked spend is unchanged until the ladder sees it'
+           WHEN 'day one' THEN 'projection: the pending book lands — every keyword on it spends in proportion to new bid ÷ old bid (a linear bid→spend guess, not a measurement); closed-but-spending keywords are paused (→ $0); everything else as today. A keyword in a holdout campaign on or after its eligible_from date gets no sheet row at all, so it is unchanged here — no book lands on it while the arm runs.'
+           ELSE 'projection: the repairs hold at their bar and move to the good side at their day-one cost; probation keywords stay on the 20% side at their floor; failed keywords are killed with a pause row (→ $0); leaks stay paused (→ $0); stalled probes are re-priced by the move on their own row — raised to the seat price where the live bid is below it, otherwise parked at the engine\'s park price — and keep spending at that price (the same linear bid→spend guess), because parking lowers a price and does not stop the spend, so they stay on the 20% side until a verdict arrives; engine probes keep their day-one cost; settling verdicts hold; untracked spend is unchanged until the ladder sees it. A keyword in a holdout campaign on or after its eligible_from date gets no sheet row at all, so it is unchanged here and a repair in one never moves to the good side.'
          END AS horizon_assumption
   FROM fam_read f CROSS JOIN k CROSS JOIN win),
 -- ── the lowest free seat number per working family
@@ -650,15 +693,15 @@ shape AS (
                               -- R-l, the executable recovery: PAUSES ONLY. These are the only two
                               -- moves whose dollars provably leave the 20% side when the sheet
                               -- lands, and they are the only ones written in the (−$…/day) form.
-                              IF(f.n_leaks_exec > 0, FORMAT('pause the %d leaks (−$%.2f/day); ', f.n_leaks_exec, f.leak_exec_today), ''),
-                              IF(f.n_failed_exec > 0, FORMAT('kill the %d failed keywords with a pause row (−$%.2f/day); ', f.n_failed_exec, f.failed_exec_today), ''),
-                              IF(f.n_pause_holdout > 0, FORMAT('%d closed or failed keywords ($%.2f/day) sit in holdout campaigns and get no sheet row, so they recover nothing; ', f.n_pause_holdout, f.pause_holdout_today), ''),
-                              IF(f.n_leaks_exec + f.n_failed_exec = 0, 'there is nothing to pause today; ', ''),
+                              IF(f.n_leaks_exec > 0, FORMAT('pause the %d leaks on the next book (leak arm) (−$%.2f/day); ', f.n_leaks_exec, f.leak_exec_today), ''),
+                              IF(f.n_failed_exec > 0, FORMAT('kill the %d failed keywords on the next book with a pause row (−$%.2f/day); ', f.n_failed_exec, f.failed_exec_today), ''),
+                              IF(f.n_bad_holdout > 0, FORMAT('%d keywords on the 20%% side ($%.2f/day) sit in holdout campaigns and get no sheet row of any kind while the arm runs, so nothing listed here moves them; ', f.n_bad_holdout, f.bad_holdout_today), ''),
+                              IF(f.n_leaks_exec + f.n_failed_exec = 0, 'there is nothing to pause on the next book; ', ''),
                               -- R-l, the lines that recover NOTHING today. Neither may wear the
                               -- (−$…/day) form: parking lowers a price and the spend continues,
                               -- and re-pricing a repair gives back nothing today by construction.
-                              IF(f.n_stalled > 0, FORMAT('re-price or park the %d stalled probes — parking lowers their price, it does not stop their spend, so their $%.2f/day stays at risk of continuing and is not recovered today; ', f.n_stalled, f.stalled_today), ''),
-                              IF(f.n_repair > 0, FORMAT('the %d repairs are being re-priced toward their bar — a change of price, not a recovery: it gives back nothing today, and $%.2f/day moves to the good side only when they are re-judged, and only if they hold at their bar; ', f.n_repair, f.repair_day1), ''),
+                              IF(f.n_stalled_exec > 0, FORMAT('re-price or park the %d stalled probes — parking lowers their price, it does not stop their spend, so their $%.2f/day stays at risk of continuing and is not recovered today; ', f.n_stalled_exec, f.stalled_exec_today), ''),
+                              IF(f.n_repair_exec > 0, FORMAT('the %d repairs are being re-priced toward their bar — a change of price, not a recovery: it gives back nothing today, and $%.2f/day moves to the good side only when they are re-judged, and only if they hold at their bar; ', f.n_repair_exec, f.repair_exec_day1), ''),
                               -- the gap causes (R-k refined): each bucket worded by what was measured
                               IF(f.n_gap_next_run > 0,
                                  IF(f.n_gap_next_run = 1, 'the 1 enabled target with no verdict row gets one on the next state run; ',
@@ -679,16 +722,17 @@ shape AS (
                               -- this family's re-judged row. No projection is inside the number.
                               CASE WHEN NOT (f.over_by_per_day > 0) THEN ''
                                    WHEN f.recovered_today >= f.over_by_per_day - 0.005 THEN
-                                     FORMAT('The pauses you can upload today recover $%.2f/day against the $%.2f/day gap — that closes it. Everything else on this row changes a price rather than stopping spend; read this family\'s re-judged row to see where those dollars land.',
+                                     FORMAT('The pauses on the next book recover $%.2f/day against the $%.2f/day gap — that closes it. Everything else on this row changes a price rather than stopping spend; read this family\'s re-judged row to see where those dollars land.',
                                             f.recovered_today, f.over_by_per_day)
                                    ELSE
-                                     FORMAT('The pauses you can upload today recover $%.2f/day against the $%.2f/day gap — that does not close it. The remaining $%.2f/day depends on %s; read this family\'s re-judged row to see where those dollars land.',
+                                     FORMAT('The pauses on the next book recover $%.2f/day against the $%.2f/day gap — that does not close it. The remaining $%.2f/day depends on %s; read this family\'s re-judged row to see where those dollars land.',
                                             f.recovered_today, f.over_by_per_day, f.over_by_per_day - f.recovered_today,
                                             COALESCE(NULLIF(ARRAY_TO_STRING(ARRAY(SELECT x FROM UNNEST([
-                                              IF(f.n_repair > 0, FORMAT('the %d repairs holding at their bar when they are re-judged (a projection worth $%.2f/day, not money in hand)', f.n_repair, f.repair_day1), NULL),
-                                              IF(f.n_stalled > 0, FORMAT('the %d stalled probes ($%.2f/day) being re-priced or parked and then producing a verdict', f.n_stalled, f.stalled_today), NULL),
+                                              IF(f.n_repair_exec > 0, FORMAT('the %d repairs holding at their bar when they are re-judged (a projection worth $%.2f/day, not money in hand)', f.n_repair_exec, f.repair_exec_day1), NULL),
+                                              IF(f.n_stalled_exec > 0, FORMAT('the %d stalled probes ($%.2f/day) being re-priced or parked and then producing a verdict — parking lowers their price, so those dollars keep running at the parked price until a verdict arrives', f.n_stalled_exec, f.stalled_exec_today), NULL),
                                               IF(f.n_probation > 0, FORMAT('the %d probation keywords being judged at their floor', f.n_probation), NULL),
-                                              IF(f.gap_per_day > 0, FORMAT('the $%.2f/day of untracked spend being tracked or stopped (a ruling for Ori, not a keyword move)', f.gap_per_day), NULL)
+                                              IF(f.gap_per_day > 0, FORMAT('the $%.2f/day of untracked spend being tracked or stopped (a ruling for Ori, not a keyword move)', f.gap_per_day), NULL),
+                                              IF(f.n_bad_holdout > 0, FORMAT('the $%.2f/day in holdout campaigns, which no sheet may touch until the arm ends', f.bad_holdout_today), NULL)
                                             ]) AS x WHERE x IS NOT NULL), ', and on '), ''),
                                               'growing the 80% side — there is no other lever on this row'))
                               END)

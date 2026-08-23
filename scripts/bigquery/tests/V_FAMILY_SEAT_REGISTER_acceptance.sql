@@ -127,6 +127,26 @@
 --   B31 The closing sentence reads in the order R-l fixes: the executable recovery first, then the
 --       gap, then a plain closes / does-not-close verdict, then what the remaining dollars depend
 --       on, and finally a pointer to that family's re-judged row.
+--   B32 The FAMILY row never promises a sheet the row-level move does not (R-l, wording). Every
+--       dollar of the recovered-today figure comes from a LEAK row or a failed SEAT row, and both
+--       ride the NEXT BOOK a generator builds — the leak arm of tools/build_reprice_bulksheet.py
+--       for a leak (Task 3), the shipped reprice generator's pause row for a failed keyword. The
+--       LEAK row's own move already says 'pause it on the next book (leak arm)'. The FAMILY row
+--       must name the same book: no FAMILY sentence may say the pauses can be uploaded 'today',
+--       and the leak / failed clauses must name the book they ride on.
+--   B33 The re-judged horizon never makes a stalled probe's spend vanish (R-l, applied to the
+--       projection). Parking LOWERS a price; the keyword keeps serving and keeps spending. So for
+--       every working family whose 'probe — stalled' CATEGORY costs money today, the same category
+--       must still cost money on the re-judged horizon, and no FAMILY row's horizon_assumption may
+--       claim stalled probes are parked to $0. This is the row the today sentence points the
+--       reader at, so the two must not contradict each other about the same dollars.
+--   B34 The projections respect the holdout arm (R-l, holdout half). A row whose campaign is
+--       holdout-suppressed on the snapshot date gets NO sheet row at all, so neither the day-one
+--       nor the re-judged horizon may book any change for it: its cost on both projections equals
+--       its cost today, a repair in one never moves to the good side, and the horizon assumptions
+--       say so in words. Re-derived from the register's own SEAT / LEAK / GAP rows. On a snapshot
+--       where no campaign is yet suppressed this check is vacuous by construction; the branch is
+--       proven on TMP_ copies and the proof recorded in the SOP.
 -- =============================================================================================
 CREATE TEMP TABLE reg AS SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
 WITH
@@ -304,7 +324,11 @@ noexec_rd AS (
   SELECT family,
          SUM(IF(occupant_kind = 'stalled probe', cost_per_day, 0)) AS stalled_today,
          SUM(IF(occupant_kind = 'repair', cost_per_day, 0)) AS repair_today
-  FROM r WHERE horizon = 'today' AND row_type = 'SEAT' GROUP BY 1),
+  FROM r WHERE horizon = 'today' AND row_type = 'SEAT'
+    -- a seat in a holdout campaign gets no sheet row, so it is not even re-priceable and the
+    -- family clause lists no move for it; only the rows a sheet can reach earn a named line
+    AND NOT (COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from)
+  GROUP BY 1),
 gapclose AS (
   SELECT f.family, f.sentence, f.over_by_per_day,
          COALESCE(e.exec_today, 0) AS exec_today, COALESCE(e.n_exec, 0) AS n_exec,
@@ -314,6 +338,27 @@ gapclose AS (
          COALESCE((SELECT SUM(CAST(v AS FLOAT64)) FROM UNNEST(REGEXP_EXTRACT_ALL(f.sentence, r'\(−\$([0-9]+\.[0-9]+)/day')) v), 0) AS listed
   FROM famrow f LEFT JOIN exec_rd e ON e.family = f.family LEFT JOIN noexec_rd nx ON nx.family = f.family
   WHERE f.row_type = 'FAMILY' AND f.horizon = 'today' AND f.over_by_per_day > 0),
+-- B33: the stalled-probe CATEGORY priced on the two horizons the today sentence points at.
+-- Parking lowers a price; the spend continues, so a family that pays for stalled probes today
+-- must still pay for them on the re-judged horizon.
+stalled_cat AS (
+  SELECT family,
+         SUM(IF(horizon = 'today', cost_per_day, 0)) AS today_cost,
+         SUM(IF(horizon = 're-judged', cost_per_day, 0)) AS rejudged_cost,
+         COUNTIF(horizon = 're-judged') AS n_rejudged_rows
+  FROM r WHERE row_type = 'CATEGORY' AND category = 'probe — stalled' GROUP BY 1),
+-- B34: every row that names a campaign, on the three horizons, with its holdout state. A
+-- holdout-suppressed row gets no sheet row, so nothing may move on either projection.
+hold_rows AS (
+  SELECT campaign_id, keyword_id, family, row_type, horizon, category, cost_per_day
+  FROM r
+  WHERE row_type IN ('SEAT', 'LEAK', 'GAP') AND campaign_id IS NOT NULL
+    AND COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from),
+hold_cat AS (
+  SELECT h.family, c.horizon, SUM(c.cost_per_day) AS s
+  FROM (SELECT DISTINCT family FROM hold_rows) h
+  JOIN r c ON c.family = h.family AND c.row_type = 'CATEGORY'
+  GROUP BY 1, 2),
 checks AS (
   SELECT 'B01 CATEGORY rows sum to the family spend on every horizon, to the cent' AS check_name,
          (SELECT COUNT(*) FROM famrow f LEFT JOIN cat_sum c ON c.family = f.family AND c.horizon = f.horizon
@@ -370,6 +415,9 @@ checks AS (
   UNION ALL
   SELECT 'B10 stalled-probe SEAT rows publish the raise (old, new, date, clicks, days), a size-aware sentence, no due date, and a proposal that branches on the sign: raise only to a price ABOVE the live bid, otherwise park at the engine park price (R-f)',
          (SELECT COUNT(*) FROM r CROSS JOIN k WHERE row_type = 'SEAT' AND occupant_kind = 'stalled probe'
+            -- a holdout-suppressed seat carries the holdout move instead of the R-f proposal, by
+            -- design (holdout wins over every other move); B09 owns that row's wording
+            AND NOT (COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from)
             AND (raise_old_bid IS NULL OR raise_new_bid IS NULL OR raised_on IS NULL OR clicks_since_raise IS NULL OR days_since_raise IS NULL
                  OR NOT (sentence LIKE '%entered at $%' OR sentence LIKE '%was nudged $%')
                  OR due_on IS NOT NULL
@@ -380,12 +428,17 @@ checks AS (
                  OR (move LIKE 'raise to the seat price $%' AND seat_price <= current_bid + k.bid_tol)))
          + (SELECT COUNT(*) FROM r WHERE row_type = 'SEAT' AND occupant_kind != 'stalled probe' AND raise_new_bid IS NOT NULL)
   UNION ALL
-  SELECT 'B11 three horizons per working family with as_of, horizon_assumption and basis dates; re-judged has no repair category',
+  SELECT 'B11 three horizons per working family with as_of, horizon_assumption and basis dates; re-judged carries no repair category except where the repair sits in a holdout campaign and can never be re-priced',
          (SELECT COUNT(*) FROM working w LEFT JOIN
             (SELECT family, COUNT(DISTINCT horizon) AS nh FROM famrow
              WHERE row_type = 'FAMILY' AND as_of IS NOT NULL AND horizon_assumption IS NOT NULL AND ads_basis_to IS NOT NULL GROUP BY 1) h
             ON h.family = w.family WHERE COALESCE(h.nh, 0) != 3)
-         + (SELECT COUNT(*) FROM cat WHERE horizon = 're-judged' AND category = 'losing — in repair')
+         -- a repair moves to 'marginal — at its bar' when re-judged BECAUSE a sheet re-priced it.
+         -- A repair in a holdout campaign gets no sheet row at all, so it is still in repair —
+         -- the one family shape where the category legitimately survives the horizon (R-l).
+         + (SELECT COUNT(*) FROM cat c WHERE c.horizon = 're-judged' AND c.category = 'losing — in repair'
+              AND c.family NOT IN (SELECT family FROM r WHERE row_type = 'SEAT' AND occupant_kind = 'repair'
+                                     AND COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from))
   UNION ALL
   SELECT 'B12 R-d / R-e: "waiting — no test clock" and "idle at the floor" counts match the re-derivation; idle costs $0',
          (SELECT COUNT(*) FROM rd
@@ -540,15 +593,54 @@ checks AS (
   UNION ALL
   SELECT 'B31 the closing sentence reads in the order R-l fixes: the executable recovery, then the gap, then a plain closes / does-not-close verdict, then what the remaining dollars depend on, then the pointer to that family\'s re-judged row',
          (SELECT COUNTIF(
-                   STRPOS(sentence, 'The pauses you can upload today recover $') = 0
+                   STRPOS(sentence, 'The pauses on the next book recover $') = 0
                    OR STRPOS(sentence, 're-judged row') = 0
-                   OR STRPOS(sentence, 're-judged row') < STRPOS(sentence, 'The pauses you can upload today recover $')
+                   OR STRPOS(sentence, 're-judged row') < STRPOS(sentence, 'The pauses on the next book recover $')
                    OR (exec_today < over_by_per_day - 0.005
                        AND (STRPOS(sentence, 'The remaining $') = 0
                             OR STRPOS(sentence, 'depends on') = 0
                             OR STRPOS(sentence, 'The remaining $') < STRPOS(sentence, 'that does not close it')
                             OR STRPOS(sentence, 're-judged row') < STRPOS(sentence, 'The remaining $'))))
           FROM gapclose)
+  UNION ALL
+  SELECT 'B32 the FAMILY row names the book the pauses ride on (R-l wording): no family sentence promises an upload today, and the leak / failed clauses name the next book, exactly as the LEAK row\'s own move already does',
+         (SELECT COUNTIF(
+                   sentence LIKE '%you can upload today%'
+                   OR sentence LIKE '%pauses you can upload%'
+                   -- a leak clause must name the book it rides on
+                   OR (REGEXP_CONTAINS(sentence, r'pause the [0-9]+ leaks')
+                       AND NOT REGEXP_CONTAINS(sentence, r'pause the [0-9]+ leaks on the next book \(leak arm\)'))
+                   -- a failed-keyword clause must name it too
+                   OR (REGEXP_CONTAINS(sentence, r'kill the [0-9]+ failed keywords')
+                       AND NOT REGEXP_CONTAINS(sentence, r'kill the [0-9]+ failed keywords on the next book'))
+                   -- and the closing sentence must use the book form, never the today form
+                   OR (over_by_per_day > 0 AND STRPOS(sentence, 'The pauses on the next book recover $') = 0))
+          FROM famrow WHERE row_type = 'FAMILY' AND horizon = 'today')
+         + (SELECT COUNT(*) FROM r WHERE row_type = 'LEAK'
+            AND NOT (COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from)
+            AND move NOT LIKE '%pause it on the next book (leak arm)%')
+  UNION ALL
+  SELECT 'B33 the re-judged horizon never zeroes a stalled probe (R-l applied to the projection): parking lowers a price, so a family paying for stalled probes today still pays for them when re-judged, and no horizon assumption claims they are parked to $0',
+         (SELECT COUNTIF(today_cost > 0.005 AND (n_rejudged_rows = 0 OR rejudged_cost <= 0.005)) FROM stalled_cat)
+         + (SELECT COUNTIF(horizon_assumption LIKE '%stalled probes are parked (→ $0)%')
+            FROM r WHERE row_type IN ('FAMILY', 'REFERENCE') AND horizon_assumption IS NOT NULL)
+         + (SELECT COUNTIF(horizon = 're-judged'
+                           AND horizon_assumption NOT LIKE '%stalled probes are re-priced by the move on their own row%')
+            FROM r WHERE row_type = 'FAMILY')
+  UNION ALL
+  SELECT 'B34 the projections respect the holdout arm (R-l holdout half): a holdout-suppressed row gets no sheet row, so its day-one and re-judged cost equal its cost today, no repair in one moves to the good side, and both horizon assumptions say so',
+         -- the register publishes SEAT / LEAK / GAP rows on the today horizon only, so the
+         -- per-row proof is the family CATEGORY arithmetic: a family whose only 20%-side movers
+         -- are holdout-suppressed cannot improve on either projection
+         (SELECT COUNTIF(h.s IS NULL) FROM (SELECT DISTINCT family FROM hold_rows) x
+          LEFT JOIN hold_cat h ON h.family = x.family AND h.horizon = 'today')
+         + (SELECT COUNT(*) FROM r WHERE row_type = 'CATEGORY' AND horizon = 're-judged'
+              AND category = 'losing — in repair'
+              AND family NOT IN (SELECT family FROM hold_rows))
+         + (SELECT COUNTIF(horizon = 'day one' AND horizon_assumption NOT LIKE '%holdout%')
+            FROM r WHERE row_type = 'FAMILY')
+         + (SELECT COUNTIF(horizon = 're-judged' AND horizon_assumption NOT LIKE '%holdout%')
+            FROM r WHERE row_type = 'FAMILY')
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks ORDER BY check_name;
