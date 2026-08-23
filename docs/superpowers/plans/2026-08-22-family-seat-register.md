@@ -6,13 +6,25 @@ register every object in `config.yaml` (parses, no duplicate names, never append
 with `bq query --nouse_cache "$(grep -v '^--' FILE)"`, never `cat` · back up before deploy · stage
 only the task's files · tree clean · a task's code block is a RECORD once shipped.
 
-STATUS: nothing built. Each task: TDD (assertion fails first, passes after), three-lens adversarial
-review before the next task starts. Implementer self-reports have contained false claims in nearly
-every round of this project — verifiers re-derive, never trust.
+STATUS (2026-08-23, warehouse clock): ALL FIVE TASKS DONE — shipped, deployed, verified, and the
+first production night has run (two orchestrator passes on 2026-08-23, New York clock, every step
+`OK`; `SP_MAINTAIN_FAMILY_SEATS` logged in both; the ledger closed its first real seats with the
+mapped codes and sentences). Commits (read `git log`, not this line, for the repair passes between):
+Task 1 `a45992d` (repairs `e553f96`, `1521672`, `9334bce`) · Task 2 `7ccafda` (repairs `942c3ed`,
+`41bdb93`, `aaa519e`, `2f70827`, R-l passes `bcbb0af` … `1947572`, `899172e`) · Task 3 `492bea8`
+(`f69e2b4`, `cda9581`, `88dad93`) · Task 4 `7a2b85a` (`99440f9`, `fa373f2`, `fc39d52`) · Task 5: the
+commit that carries this STATUS line (SOP restructured as the document a new user reads first;
+`V_ENGINE_HEALTH` v27.127 `seat_*` checks). Each task was TDD (assertion fails first, passes after)
+with three-lens adversarial review before the next task started. Implementer self-reports contained
+false claims in nearly every round of this project — verifiers re-derive, never trust. Open for
+Ori, never decided here: SOP "Open rulings for Ori" items 7, 8, 9, 21 (the park source), 22 (the
+overdue-settling ladder fix).
 
 ---
 
 ## Task 1 — `DE_FAMILY_SEAT_LEDGER` (seat numbers that survive the night)
+
+**DONE `a45992d`.**
 
 **Why:** a seat number means nothing if it changes every morning. The ledger is the only state the
 register keeps.
@@ -29,6 +41,8 @@ register keeps.
   number; removed → row closed with reason, number reusable; no launch-family rows.
 
 ## Task 2 — `V_FAMILY_SEAT_REGISTER` (the object Ori reads)
+
+**DONE `7ccafda`.**
 
 - FAMILY / SEAT / LEAK / GAP / REFERENCE rows exactly as spec §4. Declared constants in a `k` CTE:
   `allowance_share 0.20`, `at_line_band` (derive from the 7-day spend noise of the smallest
@@ -54,6 +68,8 @@ register keeps.
 
 ## Task 3 — the LEAK generator arm
 
+**DONE `492bea8` — shipped as the sibling `tools/build_seat_moves_bulksheet.py` (the argument is in its docstring and the SOP).**
+
 - Extend `tools/build_reprice_bulksheet.py` (or a sibling `build_seat_moves_bulksheet.py` if the
   file would exceed its readable size — argue which) with **pause rows for closed-but-spending
   keywords** and **ad-group-grain negates for leaking search terms** under parked keywords.
@@ -66,6 +82,8 @@ register keeps.
 
 ## Task 4 — the morning surface
 
+**DONE `7a2b85a`.**
+
 - One line per working family into `V_DAILY_BRIEF` (new section `SEATS`) and a `SeatRegister` cube;
   `V_RUN_SUMMARY` gains the doctrine status per family. Label CASEs learn every category; nothing
   falls through to blank.
@@ -73,6 +91,8 @@ register keeps.
 - **Acceptance:** each consumer renders all categories; brief line reconciles to the register.
 
 ## Task 5 — SOP + health
+
+**DONE — the commit carrying this STATUS line.**
 
 - `architecture/FAMILY_SEAT_REGISTER.md`: the doctrine, the rulings table from the spec, the seat
   lifecycle, the daily loop, the holdout rule, what the register never does.

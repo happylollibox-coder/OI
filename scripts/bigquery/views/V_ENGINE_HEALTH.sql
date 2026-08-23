@@ -8,6 +8,13 @@
 -- threshold printed beside the measurement so a reader never has to guess what "bad" means.
 -- A quiet board is the goal state, not a malfunction.
 -- v27.104 (2026-08-22): c12 loser_kill_clause + c13 state_floor_resolution (KEYWORD_STATE.md).
+-- v27.127 (2026-08-23): c14–c22, the family seat register's checks (FAMILY_SEAT_REGISTER.md,
+-- "Health"). They read the register's once-per-pass IMAGE (T_FAMILY_SEAT_REGISTER, the table the
+-- morning surfaces read), the seat ledger, the keyword-state snapshot, the change log, the holdout
+-- table and LOG_PIPELINE_RUNS — never the live register view (tens of seconds) and never a
+-- ceiling view. Two are REPORTS (INFO) by design: the overdue-appointment counter, whose cause is
+-- upstream of the register (the park-era settle_due, diagnosed, not applied), and the days-since
+-- counter, which is a clock on the orchestrator (New York), not a verdict on the ledger.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -218,9 +225,165 @@ c13 AS (  -- v27.104: every judged row carries a resolved floor from the ONE def
            COALESCE((SELECT STRING_AGG(CONCAT(src, ' ', CAST(n AS STRING)), ', ' ORDER BY n DESC)
                      FROM (SELECT bid_floor_source src, COUNT(*) n FROM ks GROUP BY 1)), 'none'))
   FROM ks
+),
+-- ───────────────────────────────────────────────────────────────────────────────────────────
+-- c14–c22: the family seat register (v27.127, FAMILY_SEAT_REGISTER.md "Health"). Sources are the
+-- pass IMAGE and small tables only. `sr` is T_FAMILY_SEAT_REGISTER — what the brief, the Weekly
+-- Run and the cube read — so a check here judges the same image a reader saw, not a live view that
+-- may already have moved on (the live view re-anchors the moment the ads watermark advances; the
+-- ledger moves only when SP_MAINTAIN_FAMILY_SEATS runs — see "When B04 is valid" in the SOP).
+-- Tolerances: $0.01 on a reconciliation, the acceptance suite's own (B01/B02) — an aggregate
+-- rendered to the cent against a sum of per-row costs each rounded on its own row (ruling R-m:
+-- one cent of aggregate-vs-components drift is a display fact). bid_tol 0.005 mirrors the view's.
+-- ───────────────────────────────────────────────────────────────────────────────────────────
+sr AS (SELECT * FROM `onyga-482313.OI.T_FAMILY_SEAT_REGISTER`),
+sl AS (SELECT * FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`),
+sl_open AS (SELECT * FROM sl WHERE closed_on IS NULL),
+c14 AS (  -- the register reconciles: categories = the family's spend; seats + leaks + gaps = the bad side
+  SELECT 'seat_reconciliation_gap',
+    CAST(COUNT(*) AS FLOAT64),
+    'FAMILY rows (any horizon) whose CATEGORY rows miss the spend, or whose SEAT(20%)+LEAK+GAP miss the bad side today, by more than $0.01 · red > 0',
+    IF(COUNT(*) > 0, 'RED', 'GREEN'),
+    CONCAT('largest gap found $', FORMAT('%.4f', COALESCE(MAX(gap), 0)), '/day on the pass image (T_FAMILY_SEAT_REGISTER, as of ',
+           COALESCE((SELECT CAST(MAX(as_of) AS STRING) FROM sr), 'no image'), ') — the acceptance suite (B01/B02) holds the live view to the same cent')
+  FROM (
+    SELECT f.family, f.horizon,
+           GREATEST(ABS(COALESCE(c.s, 0) - f.spend_horizon_per_day),
+                    IF(f.horizon = 'today', ABS(COALESCE(b.s, 0) - f.bad_side_per_day), 0)) AS gap
+    FROM sr f
+    LEFT JOIN (SELECT family, horizon, SUM(cost_per_day) AS s FROM sr WHERE row_type = 'CATEGORY' GROUP BY 1, 2) c
+           ON c.family = f.family AND c.horizon = f.horizon
+    LEFT JOIN (SELECT family, SUM(cost_per_day) AS s FROM sr
+               WHERE (row_type = 'SEAT' AND side = '20') OR row_type IN ('LEAK', 'GAP') GROUP BY 1) b
+           ON b.family = f.family AND f.horizon = 'today'
+    WHERE f.row_type = 'FAMILY'
+  )
+  WHERE gap > 0.01
+),
+c15 AS (  -- the ledger's invariants — the ones a second, non-idempotent admission or a re-insert on one snapshot would break
+  -- Idempotence PROPER is proven by two runs with one fingerprint (the query in the SOP, "Idempotence");
+  -- a view cannot run the procedure twice, so this is the necessary condition, standing every day.
+  SELECT 'seat_ledger_idempotence',
+    CAST((SELECT COUNT(*) FROM (SELECT family, campaign_id, keyword_id, opened_on FROM sl GROUP BY 1, 2, 3, 4 HAVING COUNT(*) > 1))
+       + (SELECT COUNT(*) FROM (SELECT family, campaign_id, keyword_id FROM sl_open GROUP BY 1, 2, 3 HAVING COUNT(*) > 1))
+       + (SELECT COUNT(*) FROM (SELECT family, seat_no FROM sl_open GROUP BY 1, 2 HAVING COUNT(*) > 1))
+       + (SELECT COUNTIF(seat_no < 1 OR closed_on < opened_on OR opened_on > (SELECT MAX(snapshot_date) FROM ks)) FROM sl) AS FLOAT64),
+    'duplicate occupancy keys + keys with two open rows + two keywords on one open number + malformed rows · red > 0',
+    IF((SELECT COUNT(*) FROM (SELECT family, campaign_id, keyword_id, opened_on FROM sl GROUP BY 1, 2, 3, 4 HAVING COUNT(*) > 1))
+       + (SELECT COUNT(*) FROM (SELECT family, campaign_id, keyword_id FROM sl_open GROUP BY 1, 2, 3 HAVING COUNT(*) > 1))
+       + (SELECT COUNT(*) FROM (SELECT family, seat_no FROM sl_open GROUP BY 1, 2 HAVING COUNT(*) > 1))
+       + (SELECT COUNTIF(seat_no < 1 OR closed_on < opened_on OR opened_on > (SELECT MAX(snapshot_date) FROM ks)) FROM sl) > 0, 'RED', 'GREEN'),
+    CONCAT((SELECT CAST(COUNT(*) AS STRING) FROM sl_open), ' open seats · ', (SELECT CAST(COUNT(*) AS STRING) FROM sl), ' occupancies · ',
+           'a second run on the same snapshot must close, reopen and admit nothing — the proof is two runs, one fingerprint (SOP)')
+),
+c16 AS (  -- every occupant on the image carries its number, once; numbers agree with the ledger
+  -- RED only for what the image itself gets wrong (an unnumbered seat, a number held twice).
+  -- Image-vs-ledger disagreement is AMBER: between orchestrator step 20.8b (the ledger) and
+  -- SP_REFRESH_CUBE_TABLES step 0c (the image) of one pass the two are legitimately apart.
+  SELECT 'seat_every_occupant_numbered',
+    CAST((SELECT COUNTIF(seat_no IS NULL) FROM sr WHERE row_type = 'SEAT')
+       + (SELECT COUNT(*) FROM (SELECT family, seat_no FROM sr WHERE row_type = 'SEAT' AND seat_no IS NOT NULL GROUP BY 1, 2 HAVING COUNT(*) > 1)) AS FLOAT64),
+    'SEAT rows on the image with no seat number, or a number held by two seats of one family · red > 0; ledger disagreements amber > 0 (transient inside a pass)',
+    CASE WHEN (SELECT COUNTIF(seat_no IS NULL) FROM sr WHERE row_type = 'SEAT')
+            + (SELECT COUNT(*) FROM (SELECT family, seat_no FROM sr WHERE row_type = 'SEAT' AND seat_no IS NOT NULL GROUP BY 1, 2 HAVING COUNT(*) > 1)) > 0 THEN 'RED'
+         WHEN (SELECT COUNT(*) FROM sr s LEFT JOIN sl_open l ON l.family = s.family AND l.campaign_id = s.campaign_id AND l.keyword_id = s.keyword_id
+               WHERE s.row_type = 'SEAT' AND (l.seat_no IS NULL OR l.seat_no != s.seat_no))
+            + (SELECT COUNT(*) FROM sl_open l LEFT JOIN sr s ON s.row_type = 'SEAT' AND s.family = l.family AND s.campaign_id = l.campaign_id AND s.keyword_id = l.keyword_id
+               WHERE s.keyword_id IS NULL) > 0 THEN 'AMBER'
+         ELSE 'GREEN' END,
+    CONCAT((SELECT CAST(COUNT(*) AS STRING) FROM sr WHERE row_type = 'SEAT'), ' seats on the image · ',
+           CAST((SELECT COUNT(*) FROM sr s LEFT JOIN sl_open l ON l.family = s.family AND l.campaign_id = s.campaign_id AND l.keyword_id = s.keyword_id
+                 WHERE s.row_type = 'SEAT' AND (l.seat_no IS NULL OR l.seat_no != s.seat_no)) AS STRING), ' image seats the ledger numbers differently or not at all · ',
+           CAST((SELECT COUNT(*) FROM sl_open l LEFT JOIN sr s ON s.row_type = 'SEAT' AND s.family = l.family AND s.campaign_id = l.campaign_id AND s.keyword_id = l.keyword_id
+                 WHERE s.keyword_id IS NULL) AS STRING), ' open ledger rows with no seat on the image (compare the last SP_MAINTAIN_FAMILY_SEATS in LOG_PIPELINE_RUNS against the image as_of before calling it a defect)')
+),
+c17 AS (  -- a launch family is never seated, never judged (house rule 12; V_BOOK_ASSIGNMENT decides the book)
+  SELECT 'seat_no_launch_seat',
+    CAST((SELECT COUNT(*) FROM sl l LEFT JOIN `onyga-482313.OI.V_BOOK_ASSIGNMENT` b USING (family) WHERE COALESCE(b.book, '') != 'HARVEST')
+       + (SELECT COUNT(*) FROM sr s JOIN `onyga-482313.OI.V_BOOK_ASSIGNMENT` b USING (family)
+          WHERE b.book != 'HARVEST' AND s.row_type IN ('FAMILY', 'SEAT', 'OPEN_SEAT', 'LEAK', 'GAP', 'ABSORB')) AS FLOAT64),
+    'ledger rows (open or closed) outside the HARVEST book + image rows judging a non-HARVEST family · red > 0',
+    IF((SELECT COUNT(*) FROM sl l LEFT JOIN `onyga-482313.OI.V_BOOK_ASSIGNMENT` b USING (family) WHERE COALESCE(b.book, '') != 'HARVEST')
+       + (SELECT COUNT(*) FROM sr s JOIN `onyga-482313.OI.V_BOOK_ASSIGNMENT` b USING (family)
+          WHERE b.book != 'HARVEST' AND s.row_type IN ('FAMILY', 'SEAT', 'OPEN_SEAT', 'LEAK', 'GAP', 'ABSORB')) > 0, 'RED', 'GREEN'),
+    'launch (INVEST) families appear on the register as REFERENCE rows only — never a FAMILY read, never a seat, never a move'
+),
+c18 AS (  -- house rule 13: a holdout campaign is on no sheet from its eligible_from
+  -- Reads the register's two books in the change log by batch prefix (seat_moves_ / reprice_book_)
+  -- at EVERY upload status — a superseded book was still a sheet built with a holdout row on it.
+  SELECT 'seat_holdout_row_on_sheet',
+    CAST(COUNT(*) AS FLOAT64),
+    'change-log rows of the seat books (seat_moves_* / reprice_book_*) naming a HOLDOUT-arm campaign, built on or after its eligible_from · red > 0',
+    IF(COUNT(*) > 0, 'RED', 'GREEN'),
+    CONCAT(CAST(COUNTIF(c.upload_status = 'PENDING_UPLOAD') AS STRING), ' pending · ',
+           CAST(COUNTIF(c.upload_status IS NULL) AS STRING), ' applied · ',
+           CAST(COUNTIF(c.upload_status NOT IN ('PENDING_UPLOAD') AND c.upload_status IS NOT NULL) AS STRING), ' labelled · ',
+           'the arm starts ', COALESCE((SELECT CAST(MIN(eligible_from) AS STRING) FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` WHERE arm = 'HOLDOUT'), 'never'),
+           ' — before it a holdout campaign may sit on a book; from it no generator may write one')
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` c
+  JOIN `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` h
+    ON h.unit_id = c.campaign_id AND h.arm = 'HOLDOUT'
+  WHERE (c.batch_id LIKE 'seat_moves_%' OR c.batch_id LIKE 'reprice_book_%')
+    AND DATE(c.applied_at, 'America/Los_Angeles') >= h.eligible_from
+),
+c19 AS (  -- ruling R-f: a "raise" is only ever to a price ABOVE the live bid
+  SELECT 'seat_raise_at_or_below_live_bid',
+    CAST(COUNTIF(move LIKE 'raise to the seat price $%' AND seat_price <= current_bid + 0.005) AS FLOAT64),
+    'stalled-probe seats proposing a raise to a seat price at or below the live bid · red > 0',
+    IF(COUNTIF(move LIKE 'raise to the seat price $%' AND seat_price <= current_bid + 0.005) > 0, 'RED', 'GREEN'),
+    CONCAT(CAST(COUNTIF(move LIKE 'raise to the seat price $%') AS STRING), ' raise proposals · ',
+           CAST(COUNTIF(move LIKE 'park it%') AS STRING), ' park proposals · ',
+           CAST(COUNTIF(seat_price IS NULL) AS STRING), ' outside the seat model (by hand or park) — the move branches on the sign of seat price − live bid')
+  FROM sr WHERE row_type = 'SEAT' AND occupant_kind = 'stalled probe'
+),
+c20 AS (  -- ruling R-i: a due date already past is never printed as a future event
+  SELECT 'seat_past_due_in_future_tense',
+    CAST(COUNTIF(due_on < as_of AND NOT (sentence LIKE '%overdue%' AND move LIKE '%overdue%')) AS FLOAT64),
+    'seats whose due date is before the image date but whose sentence or move does not say overdue · red > 0',
+    IF(COUNTIF(due_on < as_of AND NOT (sentence LIKE '%overdue%' AND move LIKE '%overdue%')) > 0, 'RED', 'GREEN'),
+    CONCAT(CAST(COUNTIF(due_on < as_of) AS STRING), ' seats past their due date on the image, all named overdue when this is green · ',
+           'the cause is upstream of the register (see seat_overdue_vs_snapshot)')
+  FROM sr WHERE row_type = 'SEAT'
+),
+c21 AS (  -- REPORTS only: appointments the ladder owes, measured on the SNAPSHOT's own date
+  -- Not a verdict: the cause is the snapshot procedure stamping a park-era settle_due on revived
+  -- and parked rows (diagnosed 2026-08-23, fix proposed and NOT applied — the ladder is outside
+  -- the seat register's scope). overdue_appointments (c5) measures the same rows against today's
+  -- wall clock; this one against the snapshot date the register judged them on, so it is a pure
+  -- function of the snapshot and moves only when the ladder does.
+  SELECT 'seat_overdue_vs_snapshot',
+    CAST(COUNTIF(next_check_date < snapshot_date AND state != 'DEAD') AS FLOAT64),
+    'keywords whose next_check_date is before the snapshot date they were judged on · INFO (reports, never red)',
+    'INFO',
+    CONCAT('by state: ',
+           COALESCE((SELECT STRING_AGG(CONCAT(state, ' ', CAST(n AS STRING)), ', ' ORDER BY n DESC, state)
+                     FROM (SELECT state, COUNT(*) n FROM ks WHERE next_check_date < snapshot_date AND state != 'DEAD' GROUP BY 1)), 'none'),
+           ' · the register names each seated one overdue (R-i); the ladder fix is open for Ori (FAMILY_SEAT_REGISTER.md "Open rulings")')
+  FROM ks
+),
+c22 AS (  -- REPORTS: days since the seat step last ran inside an orchestrator pass (New York clock)
+  -- LOG_PIPELINE_RUNS is written by the orchestrator only — a hand CALL leaves no row — so a row
+  -- here IS a pass. started_at is a UTC timestamp; run_date is the UTC date; the orchestrator is
+  -- scheduled on New York time, so the day is read as DATE(started_at, 'America/New_York').
+  SELECT 'seat_step_days_since_pass',
+    CAST(DATE_DIFF(CURRENT_DATE('America/New_York'), MAX(DATE(started_at, 'America/New_York')), DAY) AS FLOAT64),
+    'days since SP_MAINTAIN_FAMILY_SEATS last logged OK in a pass, New York clock · amber > 1, red > 2 (the pass is nightly); red when never logged',
+    CASE WHEN MAX(started_at) IS NULL THEN 'RED'
+         WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), MAX(DATE(started_at, 'America/New_York')), DAY) > 2 THEN 'RED'
+         WHEN DATE_DIFF(CURRENT_DATE('America/New_York'), MAX(DATE(started_at, 'America/New_York')), DAY) > 1 THEN 'AMBER'
+         ELSE 'GREEN' END,
+    CONCAT('last OK pass ', COALESCE(FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', MAX(started_at), 'America/New_York'), 'never'), ' New York · ',
+           CAST(COUNT(*) AS STRING), ' OK passes logged · image as of ',
+           COALESCE((SELECT CAST(MAX(as_of) AS STRING) FROM sr), 'no image'),
+           ' (snapshot ', COALESCE((SELECT CAST(MAX(snapshot_date) AS STRING) FROM ks), 'none'), ')')
+  FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
+  WHERE procedure_name = 'SP_MAINTAIN_FAMILY_SEATS' AND status = 'OK'
 )
 SELECT * FROM c1 UNION ALL SELECT * FROM c2 UNION ALL SELECT * FROM c3
 UNION ALL SELECT * FROM c4 UNION ALL SELECT * FROM c5 UNION ALL SELECT * FROM c6
 UNION ALL SELECT * FROM c7 UNION ALL SELECT * FROM c8 UNION ALL SELECT * FROM c9
 UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11 UNION ALL SELECT * FROM c12
-UNION ALL SELECT * FROM c13;
+UNION ALL SELECT * FROM c13 UNION ALL SELECT * FROM c14 UNION ALL SELECT * FROM c15
+UNION ALL SELECT * FROM c16 UNION ALL SELECT * FROM c17 UNION ALL SELECT * FROM c18
+UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21
+UNION ALL SELECT * FROM c22;
