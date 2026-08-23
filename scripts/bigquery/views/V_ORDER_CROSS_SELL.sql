@@ -78,10 +78,15 @@ dim AS (
 ),
 
 -- One row per (window, order, asin): an order containing the same ASIN on two
--- lines must count once, or every pair involving it doubles.
+-- lines must count once, or every pair involving it doubles. The order key is
+-- composite — (selling_partner_id, amazon_order_id), always both, per the
+-- SOP's Standing facts — so selling_partner_id travels with amazon_order_id
+-- everywhere an order is being counted or joined below, even though only one
+-- selling partner exists today.
 scoped AS (
   SELECT DISTINCT
     w.window_days,
+    f.selling_partner_id,
     f.amazon_order_id,
     f.asin
   FROM `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM` f
@@ -92,13 +97,15 @@ scoped AS (
 ),
 
 totals AS (
-  SELECT window_days, COUNT(DISTINCT amazon_order_id) AS total_orders
+  SELECT window_days,
+         COUNT(DISTINCT CONCAT(selling_partner_id, '#', amazon_order_id)) AS total_orders
   FROM scoped
   GROUP BY 1
 ),
 
 asin_orders AS (
-  SELECT window_days, asin, COUNT(DISTINCT amazon_order_id) AS orders_with_asin
+  SELECT window_days, asin,
+         COUNT(DISTINCT CONCAT(selling_partner_id, '#', amazon_order_id)) AS orders_with_asin
   FROM scoped
   GROUP BY 1, 2
 ),
@@ -108,11 +115,12 @@ pairs AS (
     a.window_days,
     a.asin AS asin_a,
     b.asin AS asin_b,
-    COUNT(DISTINCT a.amazon_order_id) AS co_orders
+    COUNT(DISTINCT CONCAT(a.selling_partner_id, '#', a.amazon_order_id)) AS co_orders
   FROM scoped a
   JOIN scoped b
-    ON  a.window_days     = b.window_days
-    AND a.amazon_order_id = b.amazon_order_id
+    ON  a.window_days        = b.window_days
+    AND a.selling_partner_id = b.selling_partner_id
+    AND a.amazon_order_id    = b.amazon_order_id
     AND a.asin < b.asin
   GROUP BY 1, 2, 3
 )

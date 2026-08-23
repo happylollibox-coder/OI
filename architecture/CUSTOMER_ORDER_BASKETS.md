@@ -44,6 +44,21 @@ only asks "does at least one item row exist for this order", not "have all
 its lines arrived" — a partially-synced order still counts as covered, and
 `units_missing` is what catches that at month level.
 
+**Two different completeness bars — use the right one for the job.**
+`is_month_complete` is `coverage_pct >= 99.99`, a strict bar chosen to match
+the tie-out verification the schema-divergence section describes (the exact
+bar that makes an asymptotic month count as "done"). This SOP's operational
+rule above is looser — `coverage_pct >= 99` — because 99.99 is stricter than
+any real month needs to be trusted for basket analysis. Verified 2026-08-23,
+of the 13 months with any item coverage at all (2024-08 through 2025-08):
+`is_month_complete` is TRUE for only **3** (2024-08, 2024-11, 2025-06); the
+operational `>= 99` bar admits **12** — every month in that range clears it
+except 2025-08 at 98.93%, just under. Filtering `WHERE is_month_complete` —
+the obvious thing to do with a column named that — silently discards nine
+months that are perfectly usable for analysis. Use `is_month_complete` only
+when you need the strict tie-out guarantee; use `coverage_pct >= 99` (the
+rule above) for ordinary basket/cross-sell analysis.
+
 ## What the coverage gate does NOT guarantee
 
 `V_ORDER_ITEM_COVERAGE.coverage_pct` answers exactly one question: *of the
@@ -51,6 +66,13 @@ order headers currently on file for this month, how many have their line
 items arrived?* It does **not** answer *are the headers themselves complete
 for this month?* — those are two different failure modes, and the gate is
 blind to the second one.
+
+**Two different horizons feed this pipeline.** `V_ORDER_ITEM_COVERAGE` reads
+`V_SRC_ListOrder`/`V_SRC_ListOrderItems` — the live source — while
+`items_through_date` (on every `V_ORDER_CROSS_SELL` row) is `MAX(purchase_date)`
+from `FACT_CUSTOMER_ORDER_ITEM`, the loaded table; between a Daton sync and
+the next `SP_LOAD_FACT_CUSTOMER_ORDER_ITEM` run, the gate can report a month
+covered while those lines are not yet in the fact at all.
 
 **Worked example: 2024-08 reads 100% and is still wrong.**
 
@@ -173,12 +195,27 @@ comparison at once and A1 cannot see it. A9 reads `V_SRC_ListOrderItems` and
 `V_SRC_ListOrder` directly (a `LEFT JOIN ... WHERE header IS NULL`) to catch
 exactly that case.
 
+**B7 can FAIL benignly on ordinary sync lag — this is the same class of
+problem A1 has, just undocumented until now.** B7 compares `V_ORDER_BASKET`'s
+`is_canceled`, which is *frozen* onto `FACT_CUSTOMER_ORDER_ITEM` at load time,
+against `V_SRC_ListOrder.is_canceled`, which is *live*. If a customer cancels
+an order in the window between a Daton sync and the next
+`SP_LOAD_FACT_CUSTOMER_ORDER_ITEM` run, `V_SRC_ListOrder` already shows it
+canceled while the frozen fact (and therefore `V_ORDER_BASKET`) still does
+not — B7 reads that order as "canceled order leaked into the basket view" and
+fails, even though nothing is actually broken. As with A1, **rerun the loader
+before treating a B7 FAIL as a real defect** — it may just mean the last load
+predates the latest cancellation.
+
 **B5 only examines windows that HAVE rows.** It groups the cross-sell view by
 `window_days` and checks `MAX(total_orders) > 0` for each group present — a
 window that produces *zero rows* (see Windows, below) is invisible to it, not
-failing. With the 90- and 365-day windows currently empty, B5 validates
-exactly one window (9999), not three. Do not read a green B5 as proof all
-three windows are healthy.
+failing. B5 validates whichever windows currently have rows in them, which
+can be one, two, or three of the 90/365/9999 windows depending on where the
+item-feed backfill sits relative to each window's cutoff on any given day —
+today that is two of the three, not one. Do not read a green B5 as proof
+*all three* windows are healthy; check which windows actually have rows
+(see Windows, below) before drawing that conclusion.
 
 ## Known coverage gaps
 
@@ -217,9 +254,39 @@ an ad hoc change, not a script waiting to be run.
 `V_ORDER_CROSS_SELL` computes three lookback windows: 90, 365, and 9999 days,
 all rolling from `CURRENT_DATE('America/Los_Angeles')`.
 
-**As of 2026-08-23, the 90- and 365-day windows are EMPTY.** The item feed's
-horizon (bounded by how far the backfill has reached) predates both window
-start dates. Only the lifetime window (9999) currently returns rows.
+**The rule, not a snapshot:** each window's cutoff is computed from *today*,
+but the fact only has line items up to `items_through_date` (the item feed
+backfills oldest-first and lags the header feed badly — see the coverage gate
+above), and nothing past it. A window's effective data range is therefore
+never "the last N days" — it is whatever overlap exists between
+`[cutoff, today]` and `[order history start, items_through_date]`. Two
+things can happen while the backfill is behind `today`:
+
+- **`items_through_date` falls before the window's cutoff** (the cutoff asks
+  for dates newer than anything loaded): the overlap is empty and the window
+  returns **zero rows**. Safe — it reads as "no data" and gets treated with
+  the suspicion it deserves.
+- **`items_through_date` falls at or after the window's cutoff, but still
+  before today** (the backfill's horizon lands inside the window's range):
+  the overlap is real but is only `items_through_date − cutoff` days wide,
+  not the full `window_days`. This is the dangerous case — the window
+  returns actual rows, typically with `co_orders = 1` on each pair, that
+  look like a genuine N-day answer and get trusted as one, when they in fact
+  describe a thin, accidental sliver at the tail of the backfill.
+
+A window is only a trustworthy picture of its stated length once
+`items_through_date` has caught up to (or past) `today` for that window —
+i.e. the backfill has fully closed the gap to the present.
+
+**Before trusting any non-lifetime window, compare `items_through_date`
+(carried on every row) against that window's cutoff** — computed as
+`DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL window_days DAY)`. If
+`items_through_date` is not at (or very near) today, the window's rows are
+either empty or a partial-backfill sliver — never the full lookback period
+its name implies. **Prefer `window_days = 9999` for any real analysis until
+the backfill has caught up to the present** — it is the only window immune
+to this failure mode, because its cutoff (1999-04-08, see below) sits behind
+all order history rather than chasing a moving `today`.
 
 `9999` is a **sentinel**, not a real day count. `DATE_SUB(CURRENT_DATE(...),
 INTERVAL 9999 DAY)` computes a real cutoff date of **1999-04-08**. It behaves
@@ -304,13 +371,113 @@ spectacular lift and mean nothing.
 **The `DISTINCT` in `V_ORDER_CROSS_SELL`'s `scoped` CTE** exists to bound
 self-join cardinality — without it, an order with the same ASIN on two lines
 would count twice going into the self-join. It does **not**, by itself,
-prevent double-counting a *pair*: the downstream `COUNT(DISTINCT
-amazon_order_id)` in the `pairs` CTE is what actually guarantees each pair is
-counted once per order. A reviewer proved the `DISTINCT` in `scoped` is
-redundant for pair-counting by building the un-deduplicated variant and
-diffing — zero rows differed. It is kept anyway because it is cheap and
-correct defense-in-depth against the join fanning out before the aggregation
-that actually enforces correctness runs.
+prevent double-counting a *pair*: the downstream `COUNT(DISTINCT ...)` over
+the composite `(selling_partner_id, amazon_order_id)` order key in the
+`pairs` CTE is what actually guarantees each pair is counted once per order.
+A reviewer proved the `DISTINCT` in `scoped` is redundant for pair-counting
+by building the un-deduplicated variant and diffing — zero rows differed. It
+is kept anyway because it is cheap and correct defense-in-depth against the
+join fanning out before the aggregation that actually enforces correctness
+runs.
+
+## How to actually query this
+
+Neither view exposes per-product **units** within a basket on its own.
+`V_ORDER_BASKET.basket_label` is a `STRING_AGG(DISTINCT ...)` — it drops
+quantities, so a basket with two of the same product looks identical to a
+basket with one. `V_ORDER_CROSS_SELL` counts **orders** a pair appeared in
+(`co_orders`), not units of either product. Both views deliberately
+summarise; line-level quantity only lives in `FACT_CUSTOMER_ORDER_ITEM`.
+Answering "which products were in this order and how many of each" means
+joining back to it.
+
+### (a) Basket composition for one family
+
+Orders containing a given family, with every product in the basket and its
+unit count:
+
+```sql
+SELECT b.purchase_date, b.amazon_order_id, b.basket_kind, b.units AS basket_units,
+       STRING_AGG(FORMAT('%s x%d', f.product_short_name, f.quantity_ordered)
+                  ORDER BY f.product_short_name) AS units_per_product
+FROM `onyga-482313.OI.V_ORDER_BASKET` b
+JOIN `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM` f USING (selling_partner_id, amazon_order_id)
+WHERE NOT f.is_canceled AND f.quantity_ordered > 0
+  AND b.amazon_order_id IN (
+    SELECT amazon_order_id FROM `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM`
+    WHERE parent_name = 'Lollibox' AND NOT is_canceled AND quantity_ordered > 0)
+GROUP BY 1,2,3,4 HAVING COUNT(*) > 1 ORDER BY b.purchase_date DESC LIMIT 20
+```
+
+Verified 2026-08-23 — runs and returns Lollibox baskets, most recent five:
+
+| purchase_date | amazon_order_id | basket_kind | basket_units | units_per_product |
+|---|---|---|---|---|
+| 2025-08-27 | 111-3190523-9194648 | MULTI_PRODUCT | 2 | Purple Lollibox x1, White Lollibox x1 |
+| 2025-08-27 | 111-6271888-6155443 | MULTI_PRODUCT | 2 | Blue Lollibox x1, Pink LolliME x1 |
+| 2025-08-25 | 112-8160273-8805047 | MULTI_PRODUCT | 2 | Pink Lollibox x1, White Lollibox x1 |
+| 2025-08-19 | 112-5912954-9044227 | MULTI_PRODUCT | 2 | Fresh in Beige x1, Pink Lollibox x1 |
+| 2025-08-19 | 111-1172590-9264224 | MULTI_PRODUCT | 2 | Fresh in Pink x1, Purple Lollibox x1 |
+
+Swap `parent_name = 'Lollibox'` for any other family to answer this question
+for that family. This is the query to run for LolliBall once the backfill
+reaches **2026-06-26** (LolliBall's first sale) — before that,
+`V_ORDER_ITEM_COVERAGE` will show no items for that month and an empty
+result means "not loaded yet," not "no one buys two LolliBalls."
+
+### (b) Which products sell together, aggregated
+
+A `V_ORDER_CROSS_SELL` query with the `co_orders` guard applied (drop
+low-count pairs before trusting `lift`) and gated on `both_mapped` (per
+`same_family` semantics, above — an unmapped side makes `same_family`
+meaningless):
+
+```sql
+SELECT name_a, name_b, family_a, family_b, same_family, co_orders, lift
+FROM `onyga-482313.OI.V_ORDER_CROSS_SELL`
+WHERE window_days = 9999 AND co_orders >= 5 AND both_mapped
+ORDER BY same_family DESC, lift DESC
+```
+
+Verified 2026-08-23 — real output, all 18 qualifying rows:
+
+| name_a | name_b | family_a | family_b | same_family | co_orders | lift |
+|---|---|---|---|---|---|---|
+| Mint LolliME | Pink LolliME | LolliME | LolliME | true | 12 | 4.29 |
+| Purple LolliME | Pink LolliME | LolliME | LolliME | true | 10 | 3.70 |
+| Mint LolliME | Purple LolliME | LolliME | LolliME | true | 10 | 3.59 |
+| Fresh in Beige | Fresh in Pink | Fresh | Fresh | true | 153 | 1.12 |
+| Purple Lollibox | Blue Lollibox | Lollibox | Lollibox | true | 108 | 0.43 |
+| Purple Lollibox | Pink Lollibox | Lollibox | Lollibox | true | 242 | 0.42 |
+| Pink Lollibox | Blue Lollibox | Lollibox | Lollibox | true | 103 | 0.41 |
+| White Lollibox | Pink Lollibox | Lollibox | Lollibox | true | 329 | 0.20 |
+| White Lollibox | Blue Lollibox | Lollibox | Lollibox | true | 130 | 0.18 |
+| Purple Lollibox | White Lollibox | Lollibox | Lollibox | true | 259 | 0.16 |
+| Fresh in Beige | Blue Lollibox | Fresh | Lollibox | false | 7 | 0.09 |
+| Pink Lollibox | Fresh in Beige | Lollibox | Fresh | false | 12 | 0.07 |
+| Pink Lollibox | Fresh in Pink | Lollibox | Fresh | false | 27 | 0.06 |
+| Purple Lollibox | Fresh in Beige | Lollibox | Fresh | false | 11 | 0.06 |
+| Purple Lollibox | Fresh in Pink | Lollibox | Fresh | false | 20 | 0.05 |
+| White Lollibox | Fresh in Beige | Lollibox | Fresh | false | 28 | 0.05 |
+| White Lollibox | Fresh in Pink | Lollibox | Fresh | false | 50 | 0.04 |
+| Fresh in Pink | Blue Lollibox | Fresh | Lollibox | false | 5 | 0.03 |
+
+**Read this for what it actually says, not what might be assumed.** Every
+cross-family pair here (`same_family = false`) sits well below 1.0 — the
+highest is 0.09. It is *same*-family variant pairs that produce the highest
+lift: LolliME color variants cluster from 3.59 to 4.29, meaning buyers pick
+up two-plus LolliME colors together far more than chance would predict.
+Lollibox variant pairs, by contrast, mostly sit below 1.0 (0.16-0.43) —
+buyers who take one Lollibox color are *less* likely than chance to add a
+second, i.e. colors substitute for each other rather than stacking. Fresh
+in Beige / Fresh in Pink is the one same-family pair that lands just above
+1.0 (1.12) at real volume (153 co-orders). Do not assume same-family pairs
+are low-lift substitutes and cross-family pairs are the real cross-sell
+signal — on this data, it is the reverse: cross-family affinity is
+uniformly weak, and same-family affinity varies by family from strong
+complement (LolliME) to substitute (Lollibox). Re-run this query rather than
+trusting last measurement — these numbers move every time the item feed
+backfills further.
 
 ## Orchestrator position
 
