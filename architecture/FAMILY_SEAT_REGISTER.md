@@ -17,11 +17,17 @@ Second repair pass 2026-08-22 after verification: R-k REFINED — gap rows worde
 MEASURED cause (the blanket "the ladder does not track product targets" was false on live rows
 and is retired; see the R-k ruling and Open ruling 7), and the FAMILY "what closes the gap"
 sentence made HONEST — when the listed moves recover less than the gap it says so and names
-what does (gap-closure honesty, B29). Third repair pass 2026-08-22: that closing promise now counts
-ONLY money a person recovers by doing what the row lists today — the repair dollars were being added
-to it, so a family could read "enough to close the gap" off $1.12/day of real moves and $117.12/day
-of a re-judged-horizon projection; B29 now re-derives the executable total from the register's own
-rows instead of from the sentence, and B30 forbids the projection ever wearing the `(−$…/day)` form.
+what does (gap-closure honesty, B29). Third repair pass 2026-08-22: that closing promise counts
+ONLY money a person recovers by doing what the row lists today — the repair dollars had been added
+to it, so a family could read "enough to close the gap" off a small executable total plus a large
+re-judged-horizon projection; B29 was rewritten to re-derive the executable total from the
+register's own rows instead of from the sentence, and B30 to forbid the projection ever wearing the
+`(−$…/day)` form. Fourth repair pass 2026-08-22: **R-l settled the arithmetic** — only a PAUSE
+counts as recovered today; parking a stalled probe and re-pricing a repair each get their own named
+line outside that total, and the closing sentence reads in one fixed order (recovery, gap, verdict,
+what the rest depends on, pointer to the re-judged row). B29 re-derives the figure from the
+register's own per-row costs with a stated tolerance, B30 keeps the two non-recovering lines named
+and excluded, B31 asserts the order. Read the numbers from the view, never from this file.
 Tasks 3–5 (leak generator arm, morning surface, health checks) pending — this file grows with each.
 
 **Which clock every date in this file is on.** Data dates (`snapshot_date`, `opened_on`, `closed_on`,
@@ -76,6 +82,8 @@ register.
 | **R-i — an overdue settling verdict is named overdue** (2026-08-22) | `REVIVED_SETTLING` / `PENDING_SETTLE` with `next_check_date` before the snapshot date stays on the 80% side (waiting = 80, Ori's ruling) but the sentence and the move read "was due to settle on <date> — overdue by N days; the ladder has not re-judged it". The cause is upstream and is being diagnosed read-only; the register never changes the ladder (B18). *To overrule:* move overdue settling to the 20% side — one side value in the codes table. |
 | **R-j — "too few clicks yet" needs clicks** (2026-08-22) | "waiting — too few clicks yet" requires clicks > 0 on the basis window (spec §3). A TRIAL with $0 and 0 clicks that is neither at the floor nor no-clock is **"waiting — not yet serving"**: $0, published, on no side (affects no ratio) (B27). *To overrule:* fold it back into waiting — one branch in the code. |
 | **R-k — a gap is worded by its MEASURED cause** (2026-08-22; refined the same day after verification) | The original reading — "the verdict ladder reads `DIM_KEYWORD` only, so a product target never gets a verdict" — was FALSE on live rows: SP product targets live in `DIM_KEYWORD`, the ladder tracks them and this register seats them (repairs, probes, settling and parked seats with `asin=` targets exist on the snapshot; query the SEAT rows for `asin=` to see them — and when COUNTING product targets, match `asin=` OR `category=`: the snapshot carries both prefixes, and an `asin=`-only count silently drops the `category=` rows, a mislabel a verification pass actually caught). The real blind spot is narrower: SB video / PT product-target rows reach the warehouse with **`keyword_id` −1** — no keyword id, so no `DIM_KEYWORD` row can exist and the ladder cannot see them. Every GAP row is therefore worded by the cause the view MEASURES (`keyword_id` and the current `DIM_KEYWORD` state): `keyword_id` −1 → "no keyword id — the ladder cannot see it; a ruling for Ori, not a mapping fix"; a paused/archived current row → "trailing spend — leaves the universe when it stops; no verdict is coming and none is needed"; an enabled row → "verdict arrives on the next state run"; a real id with no current row → "check why". The blanket phrase "the verdict ladder does not track product targets" is retired and B19 asserts it appears nowhere. **Extending the pipeline/ladder to the no-keyword-id SB video rows is a RULING FOR ORI**, not built here. *To overrule:* give those rows an identity the ladder can read (or extend `SP_SNAPSHOT_KEYWORD_STATE` to a synthetic key) — the blind gap rows then disappear on their own. |
+| **R-l — the gap-closure arithmetic** (2026-08-22, settled; three verifier rounds died on it) | A family's "what closes the gap" clause may count as RECOVERED TODAY only dollars that provably leave the bad side when the sheet lands — that is, a **PAUSE** (the keyword's spend goes to $0) and nothing else: a leak paused, or a failed keyword killed with a pause row. A row in a holdout campaign gets no sheet row from its `eligible_from`, so it recovers nothing either. **Parking a stalled probe LOWERS its price; the spend does not vanish** — it is its own line, its dollars named as spend at risk of continuing, and it is EXCLUDED from the recovered-today total. **Re-pricing a repair recovers nothing today by construction** — its own line too, named as a change of price whose result arrives at the re-judged horizon. The sentence must, in this order: name the executable recovery (pauses only), name the gap, state plainly whether the recovery closes it, then say what the remaining dollars depend on and point to the family's re-judged row. No projection may appear inside the recovered-today number, and no sentence may claim a closure its own executable recovery does not deliver. The acceptance check re-derives the recovered-today figure from the register's OWN per-row costs — the today-horizon LEAK rows and failed SEAT rows, holdout-suppressed rows removed — and never from the sentence it is testing, comparing within a **$0.02** tolerance whose reason is on the row: the sentence renders one aggregate to two decimals while the re-derivation sums per-row costs each rounded on its own row (R-m). B29 / B30 / B31. *To overrule:* name another move whose dollars provably leave the bad side on upload — it joins the pause set in one branch of the view and the same branch of B29. |
+| **R-m — report prose is not an artifact** (2026-08-22) | A number in an agent's report is ephemeral. A false or drifted figure blocks ONLY if it lives in a committed file or a published sentence, cited `path:line`; otherwise it is a note. **Rounding differences of one cent between an aggregate and the sum of independently rounded components are display facts, not defects** — stated here once, and not re-litigated anywhere in this design. Every tolerance a check uses carries its reason on the check. |
 
 ## Objects
 
@@ -428,11 +436,13 @@ refined); the REFERENCE wording names waiting; projection
 counts are the horizon's own (D5); no OPEN_SEAT candidate is defense three ways (D6); dates are
 two-digit (D7); one raise clock (D8); the at-the-line band is the family's own (R-g); parked seats
 and leaks match their re-derivation (R-h); not-yet-serving matches its re-derivation (R-j); the
-defense category matches the whole-phrase re-derivation (D9); and a family whose listed moves
-recover less than its gap is told they do not close it, with what does named on the row —
-gap-closure honesty, so a reader who does everything on the row is never promised a closure the
-moves cannot deliver (B29). The checks read their constants from
-the test's `k` CTE, which mirrors the view's. TDD record
+defense category matches the whole-phrase re-derivation (D9); and the gap-closure arithmetic of
+R-l — the recovered-today figure is the register's OWN pause rows and nothing else, within a stated
+tolerance whose reason is on the check (B29); the stalled-probe and repair lines are named for what
+they are and are excluded from that figure (B30); and the closing sentence reads recovery, gap,
+verdict, what the rest depends on, pointer to the re-judged row (B31) — so a reader who does
+everything on the row is never promised a closure the pauses cannot deliver.
+The checks read their constants from the test's `k` CTE, which mirrors the view's. TDD record
 2026-08-22: run before the view existed, the script failed (object not found); after deploy one
 check (B12) FAILED on a NULL-swallowing re-derivation in the TEST (a stalled test with no log row
 is NULL, and `NOT NULL` hid the keyword) — the view was right, the test was fixed, then every check
@@ -460,33 +470,70 @@ an identical MD5. (A test-side lesson recorded in the test file: filtering on th
 EXISTS-derived defense flag in a WHERE trips BigQuery's non-equality ANTISEMI-join limitation —
 the house anti-join rule — so the gap-cause re-derivation keeps its filters inside COUNTIF.)
 
-**Third repair pass 2026-08-22 — the closing promise now counts only money you recover today
+**Third repair pass 2026-08-22 — the closing promise counts only money you recover today
 (B29 rewritten, B30 added).** The gap-closure sentence added four numbers together and called the
 total a recovery: the leaks, the stalled probes, the failed keywords **and the repairs**. A repair
 is not a recovery. Nothing comes back when you re-price a losing keyword; the dollars move to the
 good side only if that keyword then holds at its bar when it is re-judged, which is a projection.
-So a family could read "enough to close the gap" off moves that recover a hundredth of it, and the
+So a family could read "enough to close the gap" off moves that recover a fraction of it, and the
 register contradicted itself one row away — query the FAMILY rows across the three horizons and
 compare the today row's promise against the day-one row's `over_by_per_day` to see it. Two changes.
 The repair clause no longer borrows the `(−$…/day)` form the executable moves use; it says the
 repairs give back nothing today and names the projection as a projection. The closing sentence
-counts only leaks + stalled probes + failed keywords, and where the repairs are what would close
-the gap it says so and sends the reader to that family's re-judged row.
+counted only leaks + stalled probes + failed keywords.
 
-**Why the test could not catch it, and what replaced it.** B29 re-derived the recovery by
+**Fourth repair pass 2026-08-22 — R-l: only a PAUSE is a recovery (B29 rewritten again, B30
+rewritten, B31 added).** The third pass had removed the repairs but left the stalled probes in the
+recovered total, and that was still wrong for the same reason one step down: **the move on a stalled
+probe is "re-price it, or park it", and parking LOWERS a price — the keyword keeps serving and keeps
+spending.** Money only provably leaves the 20% side when a keyword is PAUSED: a leak paused, or a
+failed keyword killed with a pause row. A holdout campaign gets no sheet row at all from its
+`eligible_from`, so its rows recover nothing either, and the register now says which of its closed
+or failed keywords are in that position instead of silently counting them.
+
+Read the ruling in the table (R-l). What it changed in the view: the recovered-today figure is
+`leak_exec_today + failed_exec_today` and nothing else; the stalled probes get their own line naming
+their dollars as **spend at risk of continuing, not recovered today**; the repairs get theirs naming
+themselves **a change of price, not a recovery**, whose result arrives at the re-judged horizon; and
+the closing sentence reads in one fixed order — the executable recovery, the gap, a plain *closes /
+does not close* verdict, what the remaining dollars depend on, and a pointer to that family's
+re-judged row. A reader who does everything the row lists today is never promised a closure the
+pauses cannot deliver, and every dollar the row mentions is either recovered, at risk of continuing,
+or explicitly a projection.
+
+**Why the test could not catch it, and what replaced it.** The first B29 re-derived the recovery by
 regex-extracting every `(−$…/day)` parenthetical out of the sentence the VIEW had just written —
-test and view shared the assumption, so folding a projection into the total passed both. B29 now
-re-derives the executable total INDEPENDENTLY from the register's own keyword rows (the LEAK rows
-plus the SEAT rows whose occupant is a stalled probe or a failed keyword, on the today horizon),
-requires the sentence's listed recoveries to equal it to the cent, and judges the closing promise
-on that number and never on the sentence's own arithmetic — a short row must say so and must not
-contain "enough to close". B30 is the structural half: the repair clause may never use the
-executable `(−$…/day)` form and must name itself a projection. B30 deliberately does NOT forbid a
-family that has repairs from also claiming a closure — a family whose leaks and stalled probes
-alone reach its gap may legitimately do both, and that is B29's call on the re-derived number.
-TDD, both directions: the new B29 and B30 were run against the PRE-FIX definition stood up under
-a `TMP_` name (never against production, and dropped afterwards) and read 2 violations each while
-B01–B28 all passed; against the repaired view all thirty read PASS, and A01–A16 stayed 16/16.
+test and view shared the assumption, so folding a projection into the total passed both. Since the
+third pass B29 re-derives INDEPENDENTLY from the register's own keyword rows and never from the
+sentence; since R-l that re-derivation is the **pause rows only** — the today-horizon LEAK rows plus
+the SEAT rows whose occupant is `failed`, minus any row whose campaign is holdout-suppressed. B29
+requires the sentence's stated recovery, its listed `(−$…/day)` moves and that re-derivation to
+agree within **$0.02** — the tolerance a two-decimal rendering of one aggregate carries against a
+sum of per-row costs each rounded on its own row (R-m) — requires the gap it names to be the row's
+own `over_by_per_day`, and judges the closes / does-not-close verdict on the re-derived number.
+B30 is the structural half: neither the stalled-probe clause nor the repair clause may wear the
+executable `(−$…/day)` form, each must name what it actually is, and neither family's dollars may
+sit inside the recovered figure. B31 asserts the sentence's fixed order. B30 deliberately does NOT
+forbid a family that has repairs or stalled probes from also claiming a closure — a family whose
+pauses alone reach its gap may legitimately do both, and that is B29's call on the re-derived
+number.
+
+**TDD record (R-l, 2026-08-22).** The rewritten B29, the rewritten B30 and the new B31 were run
+against the LIVE deployed view first and each read **3 violations** — one for every family whose 20%
+side is over its allowance — while B01–B28 all passed; the deployed sentences were counting the
+stalled probes' dollars as recovered. After the repaired view was deployed, all **31** checks read
+PASS, A01–A16 stayed 16/16, and two uncached pulls gave an identical MD5. Earlier record (third
+pass): the then-new B29 and B30 were run against the PRE-FIX definition stood up under a `TMP_` name
+(never against production, dropped afterwards) and read 2 violations each while B01–B28 passed.
+
+**The holdout branch of R-l, proven on a `TMP_` copy (2026-08-22).** No live row exercises it: the
+holdout arm's `eligible_from` is still ahead of the snapshot, so nothing is suppressed today and the
+clause would read as untested. A `TMP_` copy of the view was pointed at a one-row `TMP_` holdout
+table naming a working family's leak campaign with an `eligible_from` in the past (never
+`DE_HOLDOUT_ASSIGNMENT`; both copies dropped afterwards). The family's sentence then paused only the
+leaks outside that campaign, named the suppressed ones as sitting in holdout campaigns with no sheet
+row and recovering nothing, and its recovered-today figure fell by exactly their cost — the
+suppressed dollars never entered the total. Re-run it that way whenever the holdout rule changes.
 
 Determinism: two uncached pulls, identical MD5 (query at the bottom of the test file).
 

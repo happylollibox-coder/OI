@@ -11,13 +11,22 @@
 -- keyword_id −1, how SB video / PT product targets reach the warehouse); and the FAMILY 'what
 -- closes the gap' sentence is HONEST — when the listed moves recover less than the gap it says
 -- they do not close it and names what does (B29).
--- Third repair pass 2026-08-22: the closing promise now counts ONLY money a person recovers by
--- doing what the row lists TODAY (pause the leaks, re-price or park the stalled probes, kill the
--- failed keywords). The repair dollars were being added to that total, so a family could read
--- 'enough to close the gap' off $1.12/day of real moves and $117.12/day of a re-judged-horizon
--- projection; the repairs are now named as the projection they are and the reader is sent to the
--- horizon row where they would land (B29 re-derives the executable total from the register's own
--- keyword rows; B30 forbids the projection ever appearing in a (−$…/day) recovery).
+-- Third repair pass 2026-08-22: the closing promise counts only money a person recovers by doing
+-- what the row lists TODAY; the repair dollars had been added to it, so a family could read
+-- 'enough to close the gap' off a small executable total and a large re-judged-horizon projection.
+-- R-l, 2026-08-22 (the settled gap-closure arithmetic). Only a PAUSE provably takes dollars off
+-- the 20% side when the sheet lands: a leak paused, or a failed keyword killed with a pause row.
+-- Parking a stalled probe LOWERS its price — the spend does not vanish — so it is its own line,
+-- its dollars named as spend at risk of continuing, and it is OUT of the recovered-today total.
+-- Re-pricing a repair recovers nothing today by construction: its own line too, named as a change
+-- of price whose result arrives at the re-judged horizon. A holdout campaign gets no sheet row, so
+-- its rows recover nothing either. The closing sentence then reads in one fixed order — the
+-- executable recovery, the gap, a plain closes / does-not-close verdict, what the remaining
+-- dollars depend on, and a pointer to that family's re-judged row. No projection may appear inside
+-- the recovered-today number, and no sentence may claim a closure its own executable recovery does
+-- not deliver. B29 re-derives that figure from the register's OWN per-row costs (never from the
+-- sentence) with a stated tolerance; B30 keeps the two non-recovering lines named and excluded;
+-- B31 asserts the order.
 --
 -- WHAT IT SAYS. For every WORKING family (the HARVEST book in V_BOOK_ASSIGNMENT) it groups the
 -- verdict ladder's keywords (FACT_KEYWORD_STATE, one snapshot) into plain-language categories,
@@ -473,11 +482,21 @@ fam_h AS (
          SUM(IF(code = 'REPAIR', cost_day1, 0)) AS repair_day1,
          SUM(IF(code = 'STALLED_PROBE', cost_today, 0)) AS stalled_today,
          SUM(IF(code = 'FAILED', cost_today, 0)) AS failed_today,
+         -- R-l: the executable recovery is PAUSES ONLY — a leak paused, a failed keyword killed
+         -- with a pause row — and a holdout campaign gets no sheet row, so it recovers nothing.
+         COUNTIF(code = 'LEAK' AND NOT (holdout AND snap_d >= holdout_eligible_from)) AS n_leaks_exec,
+         SUM(IF(code = 'LEAK' AND NOT (holdout AND snap_d >= holdout_eligible_from), cost_today, 0)) AS leak_exec_today,
+         COUNTIF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from)) AS n_failed_exec,
+         SUM(IF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from), cost_today, 0)) AS failed_exec_today,
+         COUNTIF(code IN ('LEAK', 'FAILED') AND holdout AND snap_d >= holdout_eligible_from) AS n_pause_holdout,
+         SUM(IF(code IN ('LEAK', 'FAILED') AND holdout AND snap_d >= holdout_eligible_from, cost_today, 0)) AS pause_holdout_today,
          COUNT(*) AS n_keywords
   FROM kw_h CROSS JOIN k
   GROUP BY 1, 2, 3, 4),
 fam_read AS (
   SELECT f.*, k.allowance_share, band.at_line_band, band.at_line_band_derivation,
+         -- R-l: the recovered-today figure, and nothing else, may be called a recovery
+         f.leak_exec_today + f.failed_exec_today AS recovered_today,
          good_side_per_day + bad_side_per_day AS judged_per_day,
          SAFE_DIVIDE(good_side_per_day, NULLIF(good_side_per_day + bad_side_per_day, 0)) AS good_share,
          k.allowance_share * (good_side_per_day + bad_side_per_day) AS allowance_per_day
@@ -625,14 +644,21 @@ shape AS (
                   CASE WHEN f.horizon != 'today' THEN 'This row is a projection; the assumption it rests on is written on the row.'
                        WHEN f.doctrine_status = 'IN' THEN 'The family passes today; the open capacity is what a new probe may cost.'
                        ELSE CONCAT('What closes the gap: ',
-                              IF(f.n_leaks > 0, FORMAT('pause the %d leaks (−$%.2f/day); ', f.n_leaks, f.leak_per_day), ''),
-                              -- a repair is NOT an executable recovery (B29/B30): it is never written
-                              -- in the (−$…/day) form the other moves use, because uploading it
-                              -- gives back nothing today — the dollars move only if the keyword then
-                              -- holds at its bar when it is re-judged, which is a projection.
-                              IF(f.n_repair > 0, FORMAT('the %d repairs are being re-priced toward their bar — that gives back nothing today; $%.2f/day moves to the good side only if they hold at their bar when they are re-judged, which is a projection and not money in hand; ', f.n_repair, f.repair_day1), ''),
-                              IF(f.n_stalled > 0, FORMAT('re-price or park the %d stalled probes (−$%.2f/day); ', f.n_stalled, f.stalled_today), ''),
-                              IF(f.n_failed > 0, FORMAT('kill the %d failed keywords (−$%.2f/day); ', f.n_failed, f.failed_today), ''),
+                              -- the clause list is semicolon-separated; the last separator
+                              -- becomes a full stop so the closing sentence starts a sentence
+                              REGEXP_REPLACE(CONCAT(
+                              -- R-l, the executable recovery: PAUSES ONLY. These are the only two
+                              -- moves whose dollars provably leave the 20% side when the sheet
+                              -- lands, and they are the only ones written in the (−$…/day) form.
+                              IF(f.n_leaks_exec > 0, FORMAT('pause the %d leaks (−$%.2f/day); ', f.n_leaks_exec, f.leak_exec_today), ''),
+                              IF(f.n_failed_exec > 0, FORMAT('kill the %d failed keywords with a pause row (−$%.2f/day); ', f.n_failed_exec, f.failed_exec_today), ''),
+                              IF(f.n_pause_holdout > 0, FORMAT('%d closed or failed keywords ($%.2f/day) sit in holdout campaigns and get no sheet row, so they recover nothing; ', f.n_pause_holdout, f.pause_holdout_today), ''),
+                              IF(f.n_leaks_exec + f.n_failed_exec = 0, 'there is nothing to pause today; ', ''),
+                              -- R-l, the lines that recover NOTHING today. Neither may wear the
+                              -- (−$…/day) form: parking lowers a price and the spend continues,
+                              -- and re-pricing a repair gives back nothing today by construction.
+                              IF(f.n_stalled > 0, FORMAT('re-price or park the %d stalled probes — parking lowers their price, it does not stop their spend, so their $%.2f/day stays at risk of continuing and is not recovered today; ', f.n_stalled, f.stalled_today), ''),
+                              IF(f.n_repair > 0, FORMAT('the %d repairs are being re-priced toward their bar — a change of price, not a recovery: it gives back nothing today, and $%.2f/day moves to the good side only when they are re-judged, and only if they hold at their bar; ', f.n_repair, f.repair_day1), ''),
                               -- the gap causes (R-k refined): each bucket worded by what was measured
                               IF(f.n_gap_next_run > 0,
                                  IF(f.n_gap_next_run = 1, 'the 1 enabled target with no verdict row gets one on the next state run; ',
@@ -646,32 +672,25 @@ shape AS (
                               IF(f.n_gap_check > 0,
                                  IF(f.n_gap_check = 1, FORMAT('check why the ladder does not track the 1 remaining row ($%.2f/day); ', f.gap_check_today),
                                     FORMAT('check why the ladder does not track the %d remaining rows ($%.2f/day); ', f.n_gap_check, f.gap_check_today)), ''),
-                              -- gap-closure honesty (B29/B30): the closing promise is measured ONLY in
-                              -- money a person recovers by doing what this row lists today — pause the
-                              -- leaks, re-price or park the stalled probes, kill the failed keywords.
-                              -- The repair dollars are deliberately NOT in this total: they are a
-                              -- re-judged-horizon projection that arrives only if the repriced keywords
-                              -- hold at their bar, and folding them in once let a family read
-                              -- 'enough to close the gap' off $1.12/day of actual moves and $117.12/day
-                              -- of hope. Where the repairs matter they are named as what they are, and
-                              -- the reader is sent to the horizon row where they would land.
+                              ''), r'; $', '. '),
+                              -- R-l, the closing sentence, in one fixed order: the executable
+                              -- recovery (pauses only), the gap, a plain closes / does-not-close
+                              -- verdict, what the remaining dollars depend on, and a pointer to
+                              -- this family's re-judged row. No projection is inside the number.
                               CASE WHEN NOT (f.over_by_per_day > 0) THEN ''
-                                   WHEN f.leak_per_day + f.stalled_today + f.failed_today >= f.over_by_per_day - 0.005 THEN
-                                     FORMAT('Together the moves you make today recover $%.2f/day — enough to close the $%.2f/day gap.',
-                                            f.leak_per_day + f.stalled_today + f.failed_today, f.over_by_per_day)
-                                   WHEN f.leak_per_day + f.stalled_today + f.failed_today + f.repair_day1 >= f.over_by_per_day - 0.005 THEN
-                                     FORMAT('Together the moves you make today recover only $%.2f/day of the $%.2f/day gap — they do not close it; the rest arrives only if the %d repairs hold at their bar when they are re-judged. Read this family\'s re-judged row to see what that would look like.',
-                                            f.leak_per_day + f.stalled_today + f.failed_today, f.over_by_per_day, f.n_repair)
-                                   WHEN f.gap_per_day >= f.over_by_per_day - (f.leak_per_day + f.repair_day1 + f.stalled_today + f.failed_today) - 0.005 THEN
-                                     CONCAT(FORMAT('Together the moves you make today recover only $%.2f/day of the $%.2f/day gap — they do not close it',
-                                                   f.leak_per_day + f.stalled_today + f.failed_today, f.over_by_per_day),
-                                            IF(f.n_repair > 0, FORMAT(', and the %d repairs holding at their bar would move a further $%.2f/day only when they are re-judged', f.n_repair, f.repair_day1), ''),
-                                            '; the rest is the untracked spend: only tracking or pausing those targets closes it (a ruling for Ori), not another keyword move.')
+                                   WHEN f.recovered_today >= f.over_by_per_day - 0.005 THEN
+                                     FORMAT('The pauses you can upload today recover $%.2f/day against the $%.2f/day gap — that closes it. Everything else on this row changes a price rather than stopping spend; read this family\'s re-judged row to see where those dollars land.',
+                                            f.recovered_today, f.over_by_per_day)
                                    ELSE
-                                     CONCAT(FORMAT('Together the moves you make today recover only $%.2f/day of the $%.2f/day gap',
-                                                   f.leak_per_day + f.stalled_today + f.failed_today, f.over_by_per_day),
-                                            IF(f.n_repair > 0, FORMAT(', the %d repairs holding at their bar would move a further $%.2f/day only when they are re-judged', f.n_repair, f.repair_day1), ''),
-                                            FORMAT(', and even ending all $%.2f/day of untracked spend leaves it open — the rest closes only by growing the 80%% side.', f.gap_per_day))
+                                     FORMAT('The pauses you can upload today recover $%.2f/day against the $%.2f/day gap — that does not close it. The remaining $%.2f/day depends on %s; read this family\'s re-judged row to see where those dollars land.',
+                                            f.recovered_today, f.over_by_per_day, f.over_by_per_day - f.recovered_today,
+                                            COALESCE(NULLIF(ARRAY_TO_STRING(ARRAY(SELECT x FROM UNNEST([
+                                              IF(f.n_repair > 0, FORMAT('the %d repairs holding at their bar when they are re-judged (a projection worth $%.2f/day, not money in hand)', f.n_repair, f.repair_day1), NULL),
+                                              IF(f.n_stalled > 0, FORMAT('the %d stalled probes ($%.2f/day) being re-priced or parked and then producing a verdict', f.n_stalled, f.stalled_today), NULL),
+                                              IF(f.n_probation > 0, FORMAT('the %d probation keywords being judged at their floor', f.n_probation), NULL),
+                                              IF(f.gap_per_day > 0, FORMAT('the $%.2f/day of untracked spend being tracked or stopped (a ruling for Ori, not a keyword move)', f.gap_per_day), NULL)
+                                            ]) AS x WHERE x IS NOT NULL), ', and on '), ''),
+                                              'growing the 80% side — there is no other lever on this row'))
                               END)
                   END)
          END AS sentence,

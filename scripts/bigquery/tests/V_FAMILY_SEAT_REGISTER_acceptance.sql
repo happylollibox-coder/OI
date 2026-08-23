@@ -102,24 +102,31 @@
 --       keyword has clicks > 0 on the basis window (the category counts equal the re-derivation).
 --   B28 Whole-phrase defense (D9): the 'brand defense' CATEGORY count per working family equals
 --       the whole-phrase three-way re-derivation over the universe.
---   B29 Gap-closure honesty: on every FAMILY 'today' row whose 20% side is over its allowance
---       (over_by > 0), the parenthesised (−$…/day) recoveries listed in the 'what closes the gap'
---       sentence are summed and compared to the EXECUTABLE recovery re-derived INDEPENDENTLY from
---       the register's own keyword rows — the leaks, the stalled probes and the failed keywords on
---       the 'today' horizon, which are the moves a person actually performs today. The two must
---       agree to the cent, so the sentence cannot list a dollar the rows do not carry. Then, judged
---       on that re-derived number and never on the sentence's own arithmetic: when the executable
---       moves recover clearly less than the gap the sentence must say they do not close it and must
---       NOT claim 'enough to close'; when they cover it the sentence must claim the closure and
---       carry no shortfall clause. A reader who does everything on the row is never promised a
---       closure the moves cannot deliver.
---   B30 The repair projection is never dressed as a recovery: a repaired keyword's dollars arrive
---       only if it holds at its bar when it is re-judged, so on a FAMILY 'today' row the repair
---       clause must never use the (−$…/day) form the executable moves use, must name itself a
---       projection, and must not be inside a sentence that promises a closure the executable moves
---       cannot deliver. This is the check that a shared assumption between view and test once hid:
---       B29's re-derivation used to read the same sentence the view wrote, so folding a
---       $117.12/day projection into a $1.12/day recovery passed both.
+--   B29 Recovered today = pauses only (R-l). On every FAMILY 'today' row whose 20% side is over
+--       its allowance (over_by > 0), the figure the closing sentence names as recovered today is
+--       re-derived INDEPENDENTLY from the register's OWN per-row costs: the rows a person can
+--       actually pause when the sheet lands — LEAK rows and failed SEAT rows, minus any row whose
+--       campaign is holdout-suppressed, because a holdout row gets no sheet row at all. Nothing
+--       else counts: parking a stalled probe LOWERS its price and its spend continues, and
+--       re-pricing a repair recovers nothing today by construction. The sentence's figure, the
+--       sum of its listed (−$…/day) moves, and the re-derivation must agree within $0.02 — the
+--       tolerance a two-decimal rendering of one aggregate carries against a sum of per-row costs
+--       each rounded on its own row (R-m: a one-cent difference between an aggregate and the sum
+--       of independently rounded components is a display fact, not a defect). The gap the sentence
+--       names must be the row's own over_by. Then the closure claim is judged on the re-derived
+--       number and never on the sentence's own arithmetic: short of the gap it must say it does
+--       not close it; at or above it, it must say it closes.
+--   B30 The two lines that recover nothing today are named and excluded (R-l). The stalled-probe
+--       clause may never wear the executable (−$…/day) form and must name its dollars as spend at
+--       risk of continuing, not recovered today; the repair clause may never wear it either and
+--       must name itself a change of price whose result arrives at the re-judged horizon; and
+--       neither family's stalled or repair dollars may sit inside the recovered-today figure.
+--       This is the check that a shared assumption between view and test once hid: B29's
+--       re-derivation used to read the same sentence the view wrote, so a projection folded into
+--       the recovery passed both. It now reads the rows, never the sentence.
+--   B31 The closing sentence reads in the order R-l fixes: the executable recovery first, then the
+--       gap, then a plain closes / does-not-close verdict, then what the remaining dollars depend
+--       on, and finally a pointer to that family's re-judged row.
 -- =============================================================================================
 CREATE TEMP TABLE reg AS SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
 WITH
@@ -281,6 +288,32 @@ lowest AS (
   FROM working w CROSS JOIN UNNEST(GENERATE_ARRAY(1, 1 + (SELECT COALESCE(MAX(seat_no), 0) FROM ledger_open))) AS n
   LEFT JOIN ledger_open l ON l.family = w.family AND l.seat_no = n
   WHERE l.seat_no IS NULL GROUP BY 1),
+-- R-l, the gap-closure arithmetic. The ONLY move that takes dollars off the 20% side when the
+-- sheet lands is a PAUSE: a leak paused, or a failed keyword killed with a pause row. A holdout
+-- campaign gets no sheet row, so its rows recover nothing either. Everything below is re-derived
+-- from the register's OWN rows so no check ever reads the sentence it is judging.
+pause_rows AS (
+  SELECT family, cost_per_day
+  FROM r
+  WHERE horizon = 'today'
+    AND (row_type = 'LEAK' OR (row_type = 'SEAT' AND occupant_kind = 'failed'))
+    AND NOT (COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from)),
+exec_rd AS (SELECT family, SUM(cost_per_day) AS exec_today, COUNT(*) AS n_exec FROM pause_rows GROUP BY 1),
+-- the two kinds whose dollars do NOT leave the bad side today, priced from their own seat rows
+noexec_rd AS (
+  SELECT family,
+         SUM(IF(occupant_kind = 'stalled probe', cost_per_day, 0)) AS stalled_today,
+         SUM(IF(occupant_kind = 'repair', cost_per_day, 0)) AS repair_today
+  FROM r WHERE horizon = 'today' AND row_type = 'SEAT' GROUP BY 1),
+gapclose AS (
+  SELECT f.family, f.sentence, f.over_by_per_day,
+         COALESCE(e.exec_today, 0) AS exec_today, COALESCE(e.n_exec, 0) AS n_exec,
+         COALESCE(nx.stalled_today, 0) AS stalled_today, COALESCE(nx.repair_today, 0) AS repair_today,
+         CAST(REGEXP_EXTRACT(f.sentence, r'recover \$([0-9]+\.[0-9]+)/day against the \$[0-9]+\.[0-9]+/day gap') AS FLOAT64) AS said_recover,
+         CAST(REGEXP_EXTRACT(f.sentence, r'recover \$[0-9]+\.[0-9]+/day against the \$([0-9]+\.[0-9]+)/day gap') AS FLOAT64) AS said_gap,
+         COALESCE((SELECT SUM(CAST(v AS FLOAT64)) FROM UNNEST(REGEXP_EXTRACT_ALL(f.sentence, r'\(−\$([0-9]+\.[0-9]+)/day')) v), 0) AS listed
+  FROM famrow f LEFT JOIN exec_rd e ON e.family = f.family LEFT JOIN noexec_rd nx ON nx.family = f.family
+  WHERE f.row_type = 'FAMILY' AND f.horizon = 'today' AND f.over_by_per_day > 0),
 checks AS (
   SELECT 'B01 CATEGORY rows sum to the family spend on every horizon, to the cent' AS check_name,
          (SELECT COUNT(*) FROM famrow f LEFT JOIN cat_sum c ON c.family = f.family AND c.horizon = f.horizon
@@ -472,53 +505,50 @@ checks AS (
          (SELECT COUNT(*) FROM rd LEFT JOIN cat_named d ON d.family = rd.family AND d.horizon = 'today' AND d.category = 'brand defense — never judged on profit'
           WHERE rd.n_defense IS DISTINCT FROM COALESCE(d.nk, 0))
   UNION ALL
-  SELECT 'B29 gap-closure honesty: the listed recoveries equal the executable moves re-derived from the register\'s own rows, and the closing promise is judged on that number, never on the sentence\'s own arithmetic',
-         (SELECT COUNT(*) FROM (
-            SELECT f.sentence, f.over_by_per_day,
-                   -- INDEPENDENT re-derivation: the moves a person performs today, taken from the
-                   -- register's own keyword rows. A repair is not here — its dollars are a
-                   -- re-judged-horizon projection, and counting it is exactly the defect B30 names.
-                   COALESCE((SELECT SUM(IF(r.row_type = 'LEAK', r.cost_per_day, 0)
-                                        + IF(r.occupant_kind IN ('stalled probe', 'failed'), r.cost_per_day, 0))
-                             FROM reg r
-                             WHERE r.family = f.family AND r.horizon = 'today'
-                               AND r.row_type IN ('SEAT', 'LEAK')), 0) AS exec_today,
-                   COALESCE((SELECT SUM(CAST(v AS FLOAT64))
-                             FROM UNNEST(REGEXP_EXTRACT_ALL(f.sentence, r'\(−\$([0-9]+\.[0-9]+)/day')) v), 0) AS listed
-            FROM famrow f
-            WHERE f.row_type = 'FAMILY' AND f.horizon = 'today' AND f.over_by_per_day > 0)
-          WHERE
-            -- (a) the sentence may not list a recovery the rows do not carry (0.02 = two-decimal
-            -- formatting of the aggregate against the four-decimal per-row costs)
-            ABS(listed - exec_today) > 0.02
-            -- (b) the promise is judged on the re-derived executable number
-            OR CASE
-                  -- clearly short: say so, name the rest, and never claim the closure
-                  WHEN exec_today < over_by_per_day - 0.05 THEN
-                    NOT (sentence LIKE '%recover only $%'
-                         AND (sentence LIKE '%they do not close it%' OR sentence LIKE '%leaves it open%')
-                         AND (sentence LIKE '%repairs hold at their bar%' OR sentence LIKE '%untracked spend%'
-                              OR sentence LIKE '%rest closes only by growing%'))
-                    OR sentence LIKE '%enough to close%'
-                  -- clearly covered: claim the closure, carry no shortfall clause
-                  WHEN exec_today > over_by_per_day + 0.05 THEN
-                    sentence LIKE '%recover only $%' OR sentence NOT LIKE '%enough to close%'
-                  -- within rounding of the line: either wording is honest
-                  ELSE FALSE END)
-  UNION ALL
-  SELECT 'B30 the repair projection is never dressed as an executable recovery: no (−$…/day) form on the repair clause, it names itself a projection, and it never sits inside a promised closure',
+  SELECT 'B29 recovered today = pauses only (R-l): the sentence\'s recovered-today figure, the moves it lists and the register\'s own per-row pause costs agree within $0.02 (the tolerance of a two-decimal aggregate against a sum of independently rounded per-row costs), the gap it names is the row\'s own over_by, and the closure claim is judged on the re-derived number, never on the sentence',
          (SELECT COUNTIF(
-                   -- the repair clause must not borrow the executable moves' (−$…/day) form
-                   REGEXP_CONTAINS(sentence, r'repairs[^;]*\(−\$')
-                   -- when a repair clause is present it must say what it is
-                   -- when a repair clause is present it must say what it is. (Whether a promised
-                   -- closure is honest is B29's job, judged on the independently re-derived
-                   -- executable total — a family CAN legitimately have repairs and still close its
-                   -- gap on today's moves alone, so B30 must not forbid that pairing.)
-                   OR (sentence LIKE '%repairs are being re-priced%'
-                       AND sentence NOT LIKE '%a projection and not money in hand%'))
-          FROM famrow
-          WHERE row_type = 'FAMILY' AND horizon = 'today' AND over_by_per_day > 0)
+                   -- (a) the sentence must state a recovery and a gap at all
+                   said_recover IS NULL OR said_gap IS NULL
+                   -- (b) the recovered-today figure IS the register's own pause rows
+                   OR ABS(said_recover - exec_today) > 0.02
+                   -- (c) the moves it lists in the executable (−$…/day) form add to the same figure
+                   OR ABS(listed - exec_today) > 0.02
+                   -- (d) the gap it names is the row's own
+                   OR ABS(said_gap - over_by_per_day) > 0.02
+                   -- (e) the verdict is judged on the re-derived number, never on the sentence
+                   OR (exec_today < over_by_per_day - 0.005
+                       AND (sentence NOT LIKE '%that does not close it%' OR sentence LIKE '%that closes it%'))
+                   OR (exec_today >= over_by_per_day - 0.005
+                       AND (sentence NOT LIKE '%that closes it%' OR sentence LIKE '%that does not close it%')))
+          FROM gapclose)
+  UNION ALL
+  SELECT 'B30 the lines that recover nothing today are named and excluded (R-l): the stalled-probe clause never wears the executable (−$…/day) form and names its dollars as spend at risk of continuing; the repair clause never wears it and names itself a change of price whose result arrives at the re-judged horizon; neither sits inside the recovered-today figure',
+         (SELECT COUNTIF(
+                   -- neither clause may borrow the executable moves' (−$…/day) form
+                   REGEXP_CONTAINS(sentence, r'stalled probes[^;]*\(−\$')
+                   OR REGEXP_CONTAINS(sentence, r'repairs[^;]*\(−\$')
+                   -- parking lowers a price; the spend continues, and the row must say so
+                   OR (stalled_today > 0 AND (sentence NOT LIKE '%stays at risk of continuing%'
+                                              OR sentence NOT LIKE '%not recovered today%'))
+                   -- a repair is a change of price whose result arrives at the re-judged horizon
+                   OR (repair_today > 0 AND (sentence NOT LIKE '%a change of price, not a recovery%'
+                                             OR sentence NOT LIKE '%re-judged%'))
+                   -- and neither may be folded into the recovered-today figure
+                   OR (stalled_today > 0.05 AND ABS(said_recover - (exec_today + stalled_today)) <= 0.005)
+                   OR (repair_today > 0.05 AND ABS(said_recover - (exec_today + repair_today)) <= 0.005))
+          FROM gapclose)
+  UNION ALL
+  SELECT 'B31 the closing sentence reads in the order R-l fixes: the executable recovery, then the gap, then a plain closes / does-not-close verdict, then what the remaining dollars depend on, then the pointer to that family\'s re-judged row',
+         (SELECT COUNTIF(
+                   STRPOS(sentence, 'The pauses you can upload today recover $') = 0
+                   OR STRPOS(sentence, 're-judged row') = 0
+                   OR STRPOS(sentence, 're-judged row') < STRPOS(sentence, 'The pauses you can upload today recover $')
+                   OR (exec_today < over_by_per_day - 0.005
+                       AND (STRPOS(sentence, 'The remaining $') = 0
+                            OR STRPOS(sentence, 'depends on') = 0
+                            OR STRPOS(sentence, 'The remaining $') < STRPOS(sentence, 'that does not close it')
+                            OR STRPOS(sentence, 're-judged row') < STRPOS(sentence, 'The remaining $'))))
+          FROM gapclose)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks ORDER BY check_name;
