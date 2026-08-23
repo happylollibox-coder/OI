@@ -480,11 +480,42 @@ the floor and sits just under its bar (§1b).
 
 `decided_by` is the ruling (`P-3`, `P-5`, `P-14b`) and `settle_arm` is what the correction did
 (`SETTLED`, `CORRECTED`, `PROMOTED_ON_FRESH`, `HELD_UNSETTLED`, `NOT_CORRECTABLE_NO_GP`,
-`UNCORRECTED_NO_CURVE`). The order of the arms in the view is: GOOD on the corrected window →
-**HELD_UNSETTLED** (the guard) → GRACE (P-5) → LOSING / ONE_ORDER / NO_SALE / NOT_SERVING. The
-guard is tested **before** grace so a one-window grace is not spent while the evidence is still
-arriving. (`tools/build_reprice_bulksheet.py --rule-b` orders grace first; both put the row on the
-good side, so only the arm's NAME differs — Task 4 aligns the book to the view.)
+`UNCORRECTED_NO_CURVE`). The order of the arms is: GOOD on the corrected window → **GRACE (P-5)**
+→ **HELD_UNSETTLED (the guard)** → LOSING / ONE_ORDER / NO_SALE / NOT_SERVING.
+
+**Grace is tested BEFORE the guard (v27.135), and the order was doing real damage the other way
+round.** Both arms put the row on the good side, so no money moves with the order — but every
+ladder-settled winner is by definition "was good", so the guard reached them first and answered for
+36 of the 39 winners with a quiet window. Three things followed. P-5's "one quiet window" was
+replaced on those rows by a ruling that buys *every* window and has no expiry, so the limit could
+never bite for a keyword that carries spend. The shipped reprice book, which has always tested
+grace first, named a **different ruling than the view on the same money**. And the `unguarded`
+counterfactual below — the one Ori is told to read before he rules — was wrong by that money,
+because dropping the guard drops those rows into grace, not into the queue. Re-derive the three
+counts on the live view before trusting this paragraph:
+
+```sql
+SELECT COUNTIF(ladder_state IN ('WINNER','PACED_WINNER') AND w_ord < min_orders)  AS quiet_winners,
+       COUNTIF(verdict = 'GRACE')                                                AS graced,
+       COUNTIF(verdict = 'HELD_UNSETTLED')                                        AS held,
+       ROUND(SUM(IF(verdict = 'GRACE', w_sp, 0)) / MAX(window_days), 2)           AS graced_per_day
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
+```
+
+**The book and the view now agree row for row.** `tools/build_reprice_bulksheet.py --rule-b` was
+the only live judge and it had drifted from the view on more than the arm's name: it held keywords
+that never served (a *side* divergence the v27.134 service repair created), it labelled every audit
+row `CORRECTED` including rows nothing corrected, and it divided by the RAW `V_ADS_SETTLE_CURVE`
+with none of `V_PLAN_SETTLE_COMPLETION`'s cap, floor, monotone smoothing or thin-curve gate. All
+four are aligned in v27.135, and the alignment changed **no move**: the same eight rows, the same
+dispositions, the same corrected margins. Check the agreement by joining the audit CSV to the view
+on `campaign_id, keyword_id` and comparing `rule_b_verdict` / `rule_b_decided_by` /
+`rule_b_settle_arm` with `verdict` / `decided_by` / `settle_arm` — it must be exact.
+
+**One divergence remains and it is disclosed on both surfaces:** the book cannot see P-5's
+one-window limit, because that limit is read from `FACT_PLAN_NEXT_WEEK` and no builder writes it
+until Task 2. Neither can the view — `grace_limit_armed` is FALSE, and both artifacts say so in
+words on the row rather than promising a limit nothing enforces.
 
 Four properties of those arms were repaired in **v27.134** and each is now asserted:
 
@@ -564,12 +595,49 @@ FROM j GROUP BY ROLLUP(family) ORDER BY family NULLS FIRST;   -- the NULL family
 Compare `allowance_guarded` with `queue_guarded` per family: wherever the allowance is the larger
 number, the seats are not scarce and P-7's ranking is decorative for that family.
 
-**Not every held row is waiting for evidence.** Some held keywords already MET the order floor in
-the window and still read *under* their family bar on CORRECTED numbers. They are not quiet; they
-are losing, with the evidence in hand, and the guard holds them anyway on the side P-4 protects.
-`held_despite_evidence` is TRUE on exactly those rows and their sentence now says so in those
-words, so "we do not know yet" is no longer available as a reading of money the window has already
-spoken about. The `held_though_losing` columns above count them.
+**Why the `unguarded` columns are now arithmetically right, and were not before.** They read
+`verdict IN ('GOOD','GRACE')` — the side the book would take if the `HELD_UNSETTLED` branch were
+deleted. That is only true if the branch UNDER the guard catches what the guard was catching. Until
+v27.135 the guard was tested *before* grace, so 36 held rows would have fallen into P-5 grace and
+not into the queue, and the published `pot_unguarded` was short by their spend — a quarter of the
+pot, erring in the direction that made the guard look more expensive than it is, directly under the
+one ruling this layer put on Ori's desk. Grace is now tested first, so the rows the guard still
+holds are exactly the rows that would be demoted without it and the counterfactual is a real
+one-step read. Verify it rather than trusting it — the two must be equal:
+
+```sql
+SELECT ROUND(SUM(IF(verdict IN ('GOOD','GRACE'), w_sp, 0)) / MAX(window_days), 2) AS pot_unguarded,
+       ROUND(SUM(IF(verdict != 'HELD_UNSETTLED' AND side_b = 'GOOD', w_sp, 0))
+             / MAX(window_days), 2)                                              AS pot_minus_the_guard
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
+```
+
+**Not every held row is waiting for evidence, and there are TWO kinds, not one.** Some held
+keywords already MET the order floor in the window and still read *under* their family bar on
+CORRECTED numbers: they are not quiet, they are losing with the evidence in hand, and the guard
+holds them anyway on the side P-4 protects (`held_despite_evidence`, counted by the
+`held_though_losing` columns above). **The larger population by money is the other one:** keywords
+that took clicks, spent real money and **sold nothing**. Their arm sentence used to read "promotion
+is allowed on fresh evidence" — a promise the correction cannot keep, because it scales gross
+profit and their window has none. That is the identical fact pattern the NOT-GOOD side gets a
+dedicated arm and an explicit sentence for (`NOT_CORRECTABLE_NO_GP`); the only difference is that
+these keywords' 90-day ladder records clear the bar, so until v27.135 the disclosure ran the
+*opposite* way on the side carrying more money. `held_with_no_sale` marks them, `good_side_no_sale`
+marks the same fact wherever it sits on the protected side (grace included, since v27.135's reorder
+moves some of them there), and `C20` asserts the sentence. Price both populations:
+
+```sql
+SELECT family,
+       COUNTIF(held_despite_evidence)                                        AS held_though_losing,
+       ROUND(SUM(IF(held_despite_evidence, w_sp, 0)) / MAX(window_days), 2)  AS losing_per_day,
+       COUNTIF(good_side_no_sale)                                            AS protected_no_sale,
+       ROUND(SUM(IF(good_side_no_sale, w_sp, 0)) / MAX(window_days), 2)      AS no_sale_per_day
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
+GROUP BY ROLLUP(family) ORDER BY family NULLS FIRST;
+```
+
+Neither population can be read as "we do not know yet": the first has its evidence and it says
+losing, and the second has spent money the correction is arithmetically incapable of redeeming.
 
 The per-arm breakdown is still worth reading alongside it:
 
@@ -586,7 +654,34 @@ GROUP BY 1, 2, 3 ORDER BY family, side_b, spend_per_day DESC;
 columns above in one step. *"The guard is a delay, not a veto"* — demote on the last window that
 **has** settled (a second window ending `settle_days` before `window_to`) while promotion keeps
 reading the fresh one; that is a change to P-14b's evidence, and nobody has made it. Either line
-changes the allowance as well as the queue, so read both columns before choosing.
+changes the allowance as well as the queue, so read both columns before choosing. Both are now
+priced honestly: the `unguarded` columns are a true one-step read since grace moved ahead of the
+guard (above).
+
+### A SECOND OPEN QUESTION: P-5's limit is written, built, and not armed
+
+The grace limit is real code and it is read from the live plan's own history — grace is spent until
+the keyword earns a GOOD window back. But no builder writes `FACT_PLAN_NEXT_WEEK` until Task 2, so
+there is no history, `grace_limit_armed` is FALSE, and grace is re-granted every night. **Today
+grace is a permanent exemption, not the one window P-5 buys**, and the row says so in those words
+rather than promising a limit nothing can enforce. Two consequences worth Ori's eye. First, the
+population is not small — grace now answers for the ladder winners the guard used to swallow, so
+read what it is protecting:
+
+```sql
+SELECT COUNTIF(verdict = 'GRACE')                                      AS graced,
+       COUNTIF(verdict = 'GRACE' AND good_side_no_sale)                AS graced_and_sold_nothing,
+       ROUND(SUM(IF(verdict = 'GRACE' AND good_side_no_sale, w_sp, 0))
+             / MAX(window_days), 2)                                    AS no_sale_per_day,
+       LOGICAL_OR(grace_limit_armed)                                   AS limit_armed
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
+```
+
+Second, "quiet" is P-5's own word and the view reads it as *under the order floor* — which includes
+a keyword that took dozens of clicks and real money and sold nothing. Those rows say so on their
+face now (`good_side_no_sale`), because P-4 then forbids cutting or re-pricing them. **Ori rules:**
+is a window that spent money and returned no sale a *quiet* window for the purposes of P-5, or is
+grace only for a winner that genuinely was not shown?
 
 ### Candidacy, price, seat cost and rank
 
@@ -595,6 +690,24 @@ changes the allowance as well as the queue, so read both columns before choosing
   and is a candidate only if LIFT's probe list nominates it (P-11 keeps that list as a candidate
   *source*) — otherwise every dormant keyword would queue for a zero-cost seat and bury the
   ranking the seats exist for.
+- **The seat SENTENCE and the candidacy COLUMN come from the same expression** (v27.135, `C18`,
+  `C19`). They did not. The clause branched on holdout membership before it branched on service, so
+  dormant keywords in holdout campaigns were told in words that they "compete for a seat at the
+  repaired price today" while their own `is_candidate` refused them one — and `C15` could not catch
+  it, because it only asked whether the word *holdout* appeared, never whether the row actually
+  competes. A further set read "only if the probe list nominates it", which it does not. Between
+  them that left most of the not-good side with **neither a seat nor a queue position named
+  anywhere**, against §9's promise that every not-good keyword has exactly one of them. **§9's
+  guarantee is about CANDIDATES.** A keyword with no spend, no clicks and no nomination has nothing
+  to repair, so it takes no seat *and* no queue position — parking a keyword that spends nothing
+  saves nothing — and its row now says exactly that. Count the three populations:
+
+```sql
+SELECT side_b, is_candidate, COUNT(*) AS keywords,
+       COUNTIF(REGEXP_CONTAINS(sentence, r'competes for a seat at the repaired price')) AS promised_a_seat,
+       COUNTIF(REGEXP_CONTAINS(sentence, r'does not compete for a seat'))               AS told_it_has_no_move
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1, 2 ORDER BY 1, 2;
+```
 - **Repaired price** (P-6) = the ladder's `affordable_bid`, capped at three 5 % steps either way
   from the live bid, floored at the row's own `bid_floor`, ceilinged at the house $2.00 on a
   raise. The cap constants are mirrored from the reprice book so the book and the plan cannot
@@ -621,15 +734,40 @@ SELECT bid_park_source, COUNT(*) AS keywords, COUNTIF(is_candidate) AS candidate
 FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
 ```
 
-- **Rank** (P-7) = dollars at stake × closeness to the bar, ties by clicks then by the keyword key
-  (a total ordering, so two reads never disagree).
-- **P-7 scores ZERO wherever there is no gross profit — which is most of the queue.** Closeness to
-  the bar is zero when a keyword sold nothing, so a keyword burning real money with no order ranks
-  *below every losing keyword* and can never be seated for a repair; the ordering falls through to
-  clicks and the keyword key, which is a total ordering but is not P-7's ordering. That is a
-  property of the formula P-7 declares, not of the view, and it is not absorbed silently:
-  `rank_is_degenerate` is TRUE on every candidate whose rank is zero. Read how much of the queue
-  that is, and what it carries, before Task 2 hands out seats:
+- **Rank** (P-7) is written "dollars at stake × closeness to the bar", ties by clicks then by the
+  keyword key (a total ordering, so two reads never disagree).
+- **THE TWO FACTORS ARE NOT TWO FACTORS: THE SPEND CANCELS, IDENTICALLY, ON EVERY ROW.** Return is
+  gross profit *divided by* spend, so
+  `(w_sp / days) × (w_gp_corrected / w_sp) / bar` = `w_gp_corrected / (days × bar)`.
+  Window spend contributes **nothing** to the ordering: the seat queue is ordered by corrected
+  gross profit alone, rescaled by a constant per family. That is the exact inversion P-7's own
+  rationale exists to prevent — "closest first alone seats a $0.50/day keyword before a $50/day
+  one" — because a keyword returning $3 of gross profit on $0.50/day now outranks one returning $2
+  on $50/day. Every published sentence about the rank, here and in the spec, described a product of
+  two independent terms until v27.135, and disclosed only the *special case* (rank = 0 when a
+  keyword sold nothing), which narrows a total collapse into an edge case. Both factors are now
+  published separately — `rank_dollars_at_stake` and `rank_closeness` — so the multiplication can be
+  read rather than trusted, and `C21` asserts the identity. **The formula is Ori's ruling and is
+  untouched.** Prove the collapse and see the inversion on today's queue:
+
+```sql
+SELECT COUNTIF(ABS(rank_score - SAFE_DIVIDE(w_gp_corrected, window_days * family_bar)) > 1e-9)
+         AS rows_where_spend_matters          -- must be 0: the spend cancels everywhere
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
+
+SELECT family, target_text, ROUND(rank_dollars_at_stake, 2) AS at_stake_per_day,
+       ROUND(rank_closeness, 3) AS closeness, ROUND(rank_score, 3) AS rank_score
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
+WHERE is_candidate ORDER BY rank_score DESC, w_clk DESC LIMIT 10;
+```
+
+- **P-7 scores ZERO wherever there is no gross profit — which is most of the queue.** That is the
+  same collapse seen at its endpoint: closeness to the bar is zero when a keyword sold nothing, so
+  a keyword burning real money with no order ranks *below every losing keyword* and can never be
+  seated for a repair; the ordering falls through to clicks and the keyword key, which is a total
+  ordering but is not P-7's ordering. It is not absorbed silently: `rank_is_degenerate` is TRUE on
+  every candidate whose rank is zero. Read how much of the queue that is, and what it carries,
+  before Task 2 hands out seats:
 
 ```sql
 SELECT COUNTIF(is_candidate) AS candidates,
@@ -639,9 +777,14 @@ SELECT COUNTIF(is_candidate) AS candidates,
 FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
 ```
 
-  **Ori's ruling:** park them (the rank is right — a keyword with no sale should queue, and its
-  repair is a cut that saves money by parking), or the rank needs a term for money burned with no
-  return. Nobody has made it, and Task 2 hands out seats in this order.
+  **Ori's ruling, and it is now two questions, not one.** (1) Park the no-sale keywords (the rank
+  is right — a keyword with no sale should queue, and its repair is a cut that saves money by
+  parking), or give the rank a term for money burned with no return. (2) Should "dollars at stake"
+  be real at all? As written it cannot be, because the second factor already divides by the first.
+  If Ori wants money weighted, the second factor has to be an absolute gap rather than a ratio —
+  ranking on the gross-profit **shortfall** per day, `spend/day × (bar − return)/bar`, which does
+  not cancel and which scores a no-sale keyword at its full spend instead of at zero, answering
+  both questions in one line. Nobody has ruled, and Task 2 hands out seats in the order above.
 - **The holdout is named in words, not only in a column** (v27.134). `holdout` is TRUE only from the
   campaign's `eligible_from`, so a holdout campaign judged *before* that date is a candidate today
   and silent tomorrow. The sentence used to promise those rows a seat with no mention of the
@@ -660,7 +803,7 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep 
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql)"
 ```
 
-The acceptance is **seventeen** checks and **every row must read PASS**: the fenced complete-days
+The acceptance is **twenty-two** checks and **every row must read PASS**: the fenced complete-days
 window (C01), the universe (C02), the keyword grain (C03), both plans' sides (C04), the
 correction's honesty (C05, C09, C10), the asymmetric guard including its service precondition
 (C06), the order floor read on observed orders and `decided_by` always named (C07), a usable price
@@ -668,12 +811,24 @@ correction's honesty (C05, C09, C10), the asymmetric guard including its service
 park source on every row (C11), P-5 as written — one quiet window held and grace never granted
 twice in a row (C12), the holdout never a candidate (C13), **no executable price or seat cost on
 the good side (C14)**, **the holdout named in words wherever a seat is named (C15)**, **a park
-price at or above its floor with a declared source on every candidate (C16)**, and **no arm
-claiming work it did not do (C17)**.
+price at or above its floor with a declared source on every candidate (C16)**, **no arm
+claiming work it did not do (C17)**, and the five added in v27.135: **a seat promised in words only
+to a row that competes for one (C18)**, **a not-good keyword with no seat and no queue position
+saying so (C19)**, **a protected window that sold nothing saying it sold nothing, whichever ruling
+protects it (C20)**, **P-7's two named factors published with the score as their product (C21)**,
+and **the GRACE sentence stating whether the one-window limit is armed (C22)**.
 
 C13 is vacuous until a holdout campaign reaches its `eligible_from`; C15 is the one that bites
 today, and the two are read together. C14, C15, C16 and C17 were each run against the v27.133 view
-before the repair and each read FAIL.
+before the v27.134 repair and each read FAIL. C12-restated, C18, C19, C20 and C22 were each run
+against the v27.134 view before the v27.135 repair and each read FAIL (36 / 41 / 195 / 45 / 3
+violations); C21 could not run at all, because the columns it asserts did not exist.
+
+**C12 was a tautology and is not any more.** It used to assert that a ladder-settled winner with a
+quiet window sits on the good side — which the branch order guaranteed by putting the guard first,
+so the check read 0 for the wrong reason, exactly the structural vacuity this SOP condemns in C13.
+It now asserts the ARM THAT ANSWERS: such a row must read `verdict = 'GRACE'`, so if anything takes
+P-5's population back, C12 goes red.
 
 `FACT_PLAN_NEXT_WEEK` is `CREATE TABLE IF NOT EXISTS` — re-running the file can never drop a
 written plan. It is created in this task because the guard reads last night's side from it; until

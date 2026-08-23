@@ -324,13 +324,25 @@ def rule_b(r):
     win = (f"the {days}-day window {r.get('window_from')} to {r.get('window_to')}"
            if r.get('window_from') else "the window")
 
-    # which arm is speaking, before any verdict
-    if no_curve:
-        arm = 'UNCORRECTED_NO_CURVE'
-    elif settled:
+    # WHICH ARM IS SPEAKING, before any verdict. The order and the arms are the ones
+    # V_PLAN_WINDOW_JUDGMENT publishes, so the book and the view never name different work on the
+    # same keyword (v27.135 alignment; before it, EVERY row in this book's audit read CORRECTED —
+    # including keywords that never served and keywords that sold nothing, neither of which any
+    # correction touched).
+    served = (spw > 0 or clkw > 0)
+    if not served and gpw == 0:
+        # nothing was read, so nothing was corrected and nothing is in flight
         arm = 'SETTLED'
+    elif no_curve:
+        arm = 'UNCORRECTED_NO_CURVE'
     elif ret is not None and ret_raw is not None and ret >= bar > ret_raw:
         arm = 'PROMOTED_ON_FRESH'
+    elif settled:
+        arm = 'SETTLED'
+    elif gpw == 0:
+        # the correction SCALES gross profit and this window has none: zero over any factor is
+        # zero, so no correction was possible and the row must not claim one
+        arm = 'NOT_CORRECTABLE_NO_GP'
     else:
         arm = 'CORRECTED'
 
@@ -339,17 +351,26 @@ def rule_b(r):
     took = (f"{ordw} order(s) on ${spw:.2f} of ad spend in {win}"
             + (f", returning {ret:.2f} gross-profit dollars per ad dollar{lift} against its "
                f"{r.get('family') or 'family'} bar of {bar:.2f}" if ret is not None else ""))
-    caveat = ("" if settled else
-              (f" NOT YET SETTLED: the window's orders are still arriving (SP 7 / SB 14 complete "
-               f"days), so this reading settles on {due}. The margin above is CORRECTED for "
-               f"settle completion from the published curve"
-               + (" — except that the curve could not answer for at least one day of this "
-                  "window, so that day was left uncorrected (P-14a)." if no_curve else
-                  " (P-14a); order counts are never corrected.")))
+    no_gp = (served and gpw == 0)
+    if settled:
+        caveat = ""
+    elif no_gp:
+        caveat = (f" NOT YET SETTLED: the window's orders are still arriving (SP 7 / SB 14 "
+                  f"complete days), so this reading settles on {due}. NO CORRECTION WAS APPLIED "
+                  f"AND NONE WAS POSSIBLE: the settle correction scales gross profit and this "
+                  f"window has none, so only the order floor (P-3) or the guard (P-14b) can "
+                  f"change this side (P-14a).")
+    else:
+        caveat = (f" NOT YET SETTLED: the window's orders are still arriving (SP 7 / SB 14 complete "
+                  f"days), so this reading settles on {due}. The margin above is CORRECTED for "
+                  f"settle completion from the published curve"
+                  + (" — except that the curve could not answer for at least one day of this "
+                     "window, so that day was left uncorrected (P-14a)." if no_curve else
+                     " (P-14a); order counts are never corrected."))
 
-    def out(good, verdict, decided_by, reason):
+    def out(good, verdict, decided_by, reason, arm_override=None):
         return {'good': good, 'verdict': verdict, 'ret': ret, 'ret_raw': ret_raw,
-                'settle_arm': arm, 'decided_by': decided_by,
+                'settle_arm': arm_override or arm, 'decided_by': decided_by,
                 'settle_due_on': None if settled else due, 'reason': reason}
 
     if ordw >= RULE_B_MIN_ORDERS and ret is not None and ret >= bar:
@@ -362,23 +383,33 @@ def rule_b(r):
         return out(True, 'GRACE', 'P-5',
                    f"GRACE — the ladder calls this a settled winner ({r.get('state')}) and "
                    f"its window is quiet: {took}. A proven winner keeps the good side for "
-                   f"ONE quiet window (P-5), held, not cut. NOTE: there is no two-window "
-                   f"memory table yet, so this grace is granted on the ladder state alone "
-                   f"— it cannot see whether the previous window was also quiet, and a "
-                   f"second quiet window should have let rule B stand." + caveat)
+                   f"ONE quiet window (P-5), held, not cut. NOTE: the one-window limit is NOT "
+                   f"armed anywhere yet — it is read from the live plan's own history in "
+                   f"FACT_PLAN_NEXT_WEEK, which no builder writes until Task 2 — so this grace "
+                   f"is granted on the ladder state alone, is re-granted every run, and the "
+                   f"second quiet window that should let rule B stand never arrives. "
+                   f"V_PLAN_WINDOW_JUDGMENT is the authority on the limit once it is armed."
+                   + caveat)
 
     # P-14b: never demote a keyword that was good until its window has settled.
     sgp, ssp = num(r.get('settled_gp90'), 0) or 0.0, num(r.get('settled_sp90'), 0) or 0.0
     was_good = (int(num(r.get('settled_ord90'), 0) or 0) >= RULE_B_MIN_ORDERS
                 and ssp > 0 and (sgp / ssp) >= bar)
-    if was_good and not settled:
+    # THE GUARD REQUIRES SERVICE (v27.135 alignment with V_PLAN_WINDOW_JUDGMENT). P-14b exists
+    # because sales are still ARRIVING; a keyword with no spend and no clicks in the window has
+    # none in flight, so the guard has no basis and must not hold it. Without this clause the book
+    # held such rows on the good side — where P-4 forbids re-pricing them — while its own
+    # NOT SERVING text said, correctly, that nothing was arriving. Rule B only ever REMOVES a move,
+    # so the clause returns those keywords to whatever the engine itself proposed for them.
+    if was_good and not settled and served:
         return out(True, 'HELD_UNSETTLED', 'P-14b',
                    f"HELD, NOT DEMOTED (P-14b) — {took}, which would put it on the not-good "
                    f"side. Its window has not settled, and the ladder's own settled 90-day "
                    f"record clears the {r.get('family') or 'family'} bar of {bar:.2f} on "
                    f"{int(num(r.get('settled_ord90'), 0) or 0)} settled orders, so it keeps the "
                    f"good side until {due}. A keyword may be promoted on fresh evidence but "
-                   f"never demoted on it: unmeasured never reads as bad." + caveat)
+                   f"never demoted on it: unmeasured never reads as bad." + caveat,
+                   arm_override='HELD_UNSETTLED')
 
     if ordw >= RULE_B_MIN_ORDERS:
         return out(False, 'LOSING', 'P-3',
@@ -542,22 +573,30 @@ kwin AS (
          SUM(f.Ads_cost) w_sp, SUM(f.Ads_clicks) w_clk, SUM(f.Ads_orders) w_ord,
          SUM(f.GROSS_PROFIT) w_gp,
          -- P-14a THE CORRECTION: each DAY's gross profit divided by the published completion
-         -- factor for its channel and its age, read from V_ADS_SETTLE_CURVE as a table — never a
-         -- literal and never a hardcoded factor. Where the curve cannot answer, the factor is
-         -- 1.0 and w_days_no_curve counts the day, so the row can say the correction was
-         -- unavailable and rest on the asymmetric guard alone. ORDER COUNTS ARE NEVER INFLATED
+         -- factor for its channel and its age, read as a table — never a literal and never a
+         -- hardcoded factor. THE SOURCE IS V_PLAN_SETTLE_COMPLETION, NOT THE RAW CURVE (v27.135):
+         -- this file used to divide by V_ADS_SETTLE_CURVE.sales_pct_of_final_median directly,
+         -- with none of the plan view's safety — no 1.0 cap, no 0.50 floor, no monotone-in-age
+         -- smoothing and no thin-curve gate. That is latent today (no published median exceeds
+         -- 100) and wrong the day the curve is rebuilt: a median above 100 would SHRINK a window's
+         -- gross profit, breaking the §9 guarantee that the correction is never smaller in
+         -- magnitude, in the one path that is live; and a thin low-age median would inflate it
+         -- without the declared twofold ceiling. One curve source now answers for the book and
+         -- the plan, so the two can never correct the same keyword differently.
+         -- Where the curve cannot answer, the factor is 1.0 and w_days_no_curve counts the day,
+         -- so the row can say the correction was unavailable and rest on the asymmetric guard
+         -- alone. ORDER COUNTS ARE NEVER INFLATED
          -- (a count cannot be fractionally corrected), so w_ord above is the observed count and
          -- the P-3 floor is always read on it.
-         SUM(f.GROSS_PROFIT
-             / (COALESCE(NULLIF(sc.sales_pct_of_final_median, 0), 100.0) / 100.0)) w_gp_corr,
-         COUNTIF(sc.sales_pct_of_final_median IS NULL) w_days_no_curve
+         SUM(f.GROSS_PROFIT / COALESCE(sc.sales_completion, 1.0)) w_gp_corr,
+         COUNTIF(NOT COALESCE(sc.curve_available, FALSE)) w_days_no_curve
   FROM `{p}.OI.FACT_AMAZON_ADS` f
   CROSS JOIN winr
   JOIN ksch ON ksch.cid = CAST(f.campaign_id AS STRING)
            AND ksch.kid = CAST(f.keyword_id AS STRING)
-  LEFT JOIN `{p}.OI.V_ADS_SETTLE_CURVE` sc
+  LEFT JOIN `{p}.OI.V_PLAN_SETTLE_COMPLETION` sc
     ON sc.channel  = ksch.channel
-   AND sc.age_days = DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), f.date, DAY)
+   AND sc.age_days = LEAST(DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), f.date, DAY), 120)
   WHERE f.date BETWEEN winr.window_from AND winr.window_to
     AND f.keyword_id IS NOT NULL
   GROUP BY 1, 2

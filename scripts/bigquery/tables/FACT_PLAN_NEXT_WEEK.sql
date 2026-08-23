@@ -22,13 +22,23 @@
 --             the authority and the ladder's 90-day record is no longer consulted (v27.134). Write
 --             a wrong side and the guard holds the wrong keyword tomorrow.
 --   `verdict` the P-5 grace limit. A row whose verdict is 'GRACE' means the one quiet window P-5
---             buys has been SPENT, and tomorrow's judgement refuses a second one (v27.134). A
---             builder that collapses GRACE into 'GOOD' turns grace back into a permanent exemption.
+--             buys has been SPENT, and the judgement refuses another until the keyword earns a
+--             GOOD window back (v27.135: the limit reads this table's WHOLE history, not just last
+--             night — the most recent GRACE later than the most recent GOOD is what "spent" means.
+--             Reading one night bought one NIGHT of grace on a plan that runs nightly, and made an
+--             unserved winner oscillate GOOD / NOT_GOOD / GOOD). A builder that collapses GRACE
+--             into 'GOOD' turns grace back into a permanent exemption.
+-- UNTIL SP_BUILD_NEXT_WEEK_PLAN WRITES ITS FIRST ROW, both memories are absent by construction:
+-- the guard falls back to the ladder bootstrap and the grace limit is NOT ARMED — every judgement
+-- row publishes grace_limit_armed = FALSE and says in words that grace is re-granted every night.
+-- Arming it is Task 2's job, and it is a doctrine deliverable, not a reporting one.
 --
--- v27.134 also adds the columns the repaired judgement publishes (ALTER TABLE ADD COLUMN on the
--- empty table, mirrored here so the file and the live schema cannot drift): served, prior_grace,
--- held_despite_evidence, rank_is_degenerate, bid_park / bid_park_source / bid_park_seat_econ and
--- holdout_member. planned_bid and seat_cost_per_day are NULL on every good-side row (P-4).
+-- v27.134 and v27.135 add the columns the repaired judgement publishes (ALTER TABLE ADD COLUMN on
+-- the empty table, mirrored here so the file and the live schema cannot drift): served,
+-- prior_grace, last_grace_on, grace_limit_armed, held_despite_evidence, held_with_no_sale,
+-- good_side_no_sale, rank_score / rank_dollars_at_stake / rank_closeness / rank_is_degenerate,
+-- bid_park / bid_park_source / bid_park_seat_econ and holdout_member. planned_bid and
+-- seat_cost_per_day are NULL on every good-side row (P-4).
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §4, §5, P-9, P-14.
 -- SOP: architecture/NEXT_WEEK_MONEY.md §2.
 -- =============================================================================================
@@ -74,10 +84,16 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   verdict                    STRING,
   is_candidate               BOOL,
   rank_score                 FLOAT64,
+  rank_dollars_at_stake      FLOAT64,
+  rank_closeness             FLOAT64,
   rank_is_degenerate         BOOL,
   served                     BOOL,
   prior_grace                BOOL,
+  last_grace_on              DATE,
+  grace_limit_armed          BOOL,
   held_despite_evidence      BOOL,
+  held_with_no_sale          BOOL,
+  good_side_no_sale          BOOL,
   rank_no                    INT64,
   seat_no                    INT64,
   seat_cost_per_day          FLOAT64,
@@ -107,4 +123,4 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
 )
 PARTITION BY as_of
 CLUSTER BY plan, family, campaign_id
-OPTIONS (description = "v27.134 (2026-08-23) the next-week money plan, one row per (as_of, plan, campaign, keyword) for the working families (HARVEST book). Two plans every night: 'B' is live (the window decides the side and the amount, rule B) and 'A' is shadow (the ladder decides the side, the window decides the amount) — spec P-9. Carries the window and its record raw AND corrected for settle completion, the arm that decided the side (settle_arm / decided_by, spec P-14), the family's pot / allowance / ramp step, the seat number and seat cost, the planned price and the executable move, the campaign budget the plan implies, and the plain sentence a person reads. Append-only; the builder rewrites only today's partition. Created empty by Task 1 because V_PLAN_WINDOW_JUDGMENT reads it back as the plan's MEMORY: `side` is the P-14b guard's \"was good\" once a keyword has been judged here (the ladder is only the bootstrap for a keyword the plan has never seen) and `verdict = GRACE` marks the one quiet window P-5 buys as spent, so a second consecutive quiet window is refused; written by SP_BUILD_NEXT_WEEK_PLAN (orchestrator 20.8c); read by SP_SNAPSHOT_ENGINE_PROPOSALS, V_PLAN_SCORECARD, tools/build_plan_bulksheet.py and T_PLAN_NEXT_WEEK. Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md. SOP: architecture/NEXT_WEEK_MONEY.md");
+OPTIONS (description = "v27.135 (2026-08-23) the next-week money plan, one row per (as_of, plan, campaign, keyword) for the working families (HARVEST book). Two plans every night: 'B' is live (the window decides the side and the amount, rule B) and 'A' is shadow (the ladder decides the side, the window decides the amount) — spec P-9. Carries the window and its record raw AND corrected for settle completion, the arm that decided the side (settle_arm / decided_by, spec P-14), the family's pot / allowance / ramp step, the seat number and seat cost, the planned price and the executable move, the campaign budget the plan implies, and the plain sentence a person reads. Append-only; the builder rewrites only today's partition. Created empty by Task 1 because V_PLAN_WINDOW_JUDGMENT reads it back as the plan's MEMORY: `side` is the P-14b guard's \"was good\" once a keyword has been judged here (the ladder is only the bootstrap for a keyword the plan has never seen) and `verdict = GRACE` marks the one quiet window P-5 buys as spent, so another is refused until the keyword earns a GOOD window back (the limit reads this table's whole history). Until the builder writes its first row neither memory exists: the guard falls back to the ladder bootstrap and grace_limit_armed is FALSE on every judgement row, which the row says in words. Written by written by SP_BUILD_NEXT_WEEK_PLAN (orchestrator 20.8c); read by SP_SNAPSHOT_ENGINE_PROPOSALS, V_PLAN_SCORECARD, tools/build_plan_bulksheet.py and T_PLAN_NEXT_WEEK. Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md. SOP: architecture/NEXT_WEEK_MONEY.md");
