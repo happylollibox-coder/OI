@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM` (
   -- Keys
   selling_partner_id         STRING,
   amazon_order_id            STRING,
-  order_item_id               STRING,
+  order_item_id              STRING,
 
   -- Order header, denormalized
   purchase_date              DATE,
