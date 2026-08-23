@@ -206,15 +206,32 @@ Create `scripts/bigquery/tables/FACT/FACT_CUSTOMER_ORDER_ITEM.sql`:
 -- units, before tax. It does not tie to the order total (which adds tax and
 -- shipping) nor to SRC_ACC_SALES_TRAFFIC_DAILY.SALES_AMOUNT. Only units tie.
 --
+-- promotion_ids is a plain STRING despite the plural name, not an array —
+-- do not UNNEST it.
+--
+-- shipping_price_amount and shipping_discount_amount from the source view are
+-- deliberately omitted: basket composition does not need shipping detail.
+--
+-- DEPLOYED-SCHEMA DIVERGENCE (2026-08-23): the live table carries the
+-- PRIMARY KEY below but NOT the NOT NULL constraints on the three key
+-- columns. BigQuery has no ALTER that promotes an existing NULLABLE column
+-- to REQUIRED, and the table already held 25,094 rows when this constraint
+-- was added, so the key was applied live via ALTER TABLE ... ADD PRIMARY KEY
+-- instead of a drop/rebuild. The NOT NULLs in this file take effect only on
+-- a fresh CREATE. Beware: CREATE TABLE IF NOT EXISTS is a SILENT NO-OP
+-- against the existing table, so re-running this file will NOT reconcile
+-- the gap. Acceptance check A3 covers it by failing on any NULL key column;
+-- the three key columns held zero NULLs across all rows when this was written.
+--
 -- Spec: architecture/CUSTOMER_ORDER_BASKETS.md
 --
 -- =============================================
 
 CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM` (
   -- Keys
-  selling_partner_id         STRING,
-  amazon_order_id            STRING,
-  order_item_id              STRING,
+  selling_partner_id         STRING NOT NULL,
+  amazon_order_id            STRING NOT NULL,
+  order_item_id              STRING NOT NULL,
 
   -- Order header, denormalized
   purchase_date              DATE,
@@ -246,7 +263,9 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM` (
   promotion_ids              STRING,
   is_gift                    BOOL,
 
-  loaded_at                  TIMESTAMP
+  loaded_at                  TIMESTAMP,
+
+  PRIMARY KEY (selling_partner_id, amazon_order_id, order_item_id) NOT ENFORCED
 )
 PARTITION BY purchase_date
 CLUSTER BY asin, amazon_order_id
