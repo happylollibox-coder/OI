@@ -186,6 +186,14 @@ views:
     description: "Daily sales/traffic from Daton SalesAndTrafficReportByChildASIN"
     source_files: ["scripts/bigquery/interface_views/V_SRC_sales_and_traffic_business_sku_report_daily.sql"]
 
+  - name: "V_SRC_ListOrder"
+    description: "Customer ORDER HEADERS from Daton ListOrder (SP-API Orders). One row per (selling_partner_id, amazon_order_id), deduped to the latest Daton batch. JOIN to V_SRC_ListOrderItems on BOTH selling_partner_id AND amazon_order_id — only one partner exists today (AE97SA4TCRHH) so it is currently a no-op, but sellingPartnerId is part of Daton's grain and a second seller account would otherwise make the dedup pick one row across partners. Supplies purchase_date (America/Los_Angeles — the business date, ties out exactly to SRC_ACC_SALES_TRAFFIC_DAILY.date; the raw UTC date does NOT), order_status, fulfillment/sales channel, ship-to city+state, order total and the Prime/business flags. Source PurchaseDate is naive UTC DATETIME. History floors at ~2024-08-22 (SP-API Orders 2-year window). OrderStatus spells it 'Canceled' (one L); canceled orders carry zero units and are kept, not filtered. ShippingAddress.PostalCode is always NULL on this feed. Enabled 2026-08-22."
+    source_files: ["scripts/bigquery/interface_views/V_SRC_ListOrder.sql"]
+
+  - name: "V_SRC_ListOrderItems"
+    description: "Customer ORDER LINE ITEMS from Daton ListOrderItems (SP-API Order Items). One row per (selling_partner_id, amazon_order_id, order_item_id). THE basket-composition source — grouping by amazon_order_id is the only way to see which products were bought together. CANNOT BE USED ALONE: the payload has no purchase date and no order status, so it must be joined to V_SRC_ListOrder on (selling_partner_id, amazon_order_id) before anything is dated or filtered (_daton_batch_runtime is a sync stamp, not a business date). Source join key is lower-camel amazonOrderId here vs upper-camel AmazonOrderId in ListOrder; both exposed as amazon_order_id. ItemPrice is extended over quantity_ordered, not a unit price. Enabled 2026-08-22."
+    source_files: ["scripts/bigquery/interface_views/V_SRC_ListOrderItems.sql"]
+
   - name: "V_SRC_ActiveListingsReport"
     description: "Listing pricing data from Daton ActiveListingsReport (deduped by business key)"
     source_files: ["scripts/bigquery/interface_views/V_SRC_ActiveListingsReport.sql"]
