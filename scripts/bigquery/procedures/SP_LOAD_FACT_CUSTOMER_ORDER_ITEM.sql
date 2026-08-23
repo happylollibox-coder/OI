@@ -5,8 +5,10 @@
 -- Purpose: Load FACT_CUSTOMER_ORDER_ITEM from the two order interface views.
 -- Pattern: FULL MERGE on the composite key — no watermark.
 --
--- Why a full MERGE and not an incremental window: the whole source is ~70k rows,
--- so a full pass is seconds, and orders RESTATE (an order shipped yesterday can
+-- Why a full MERGE and not an incremental window: V_SRC_ListOrder (order headers)
+-- is ~70k rows, and the INNER-JOINed source that actually drives this MERGE is
+-- smaller still (line items lag headers — see V_ORDER_ITEM_COVERAGE), so a full
+-- pass is seconds either way. Orders also RESTATE (an order shipped yesterday can
 -- be canceled tomorrow, and Daton re-emits it). A date-windowed load would leave
 -- stale is_canceled flags behind the window. Full MERGE is the cheap correct one.
 --
@@ -64,6 +66,14 @@ BEGIN
     JOIN `onyga-482313.OI.V_SRC_ListOrder` o
       USING (selling_partner_id, amazon_order_id)
     LEFT JOIN (
+      -- Ordering is chosen for DETERMINISM, not recency: SP_MERGE_PRODUCT_DIM sets
+      -- updated_at = CURRENT_TIMESTAMP() once per MERGE run, so every DIM_PRODUCT
+      -- row from a given refresh shares one timestamp — updated_at DESC has no
+      -- discriminating power and the tiebreak collapses to "smallest sku
+      -- alphabetically". That is still deterministic, which is the property that
+      -- matters here (it closes this codebase's known nondeterministic-pairing
+      -- hazard on paired ANY_VALUE columns). As of this writing there are zero
+      -- duplicate ASINs in DIM_PRODUCT, so this clause is currently dormant.
       SELECT asin, parent_name, product_short_name
       FROM `onyga-482313.OI.DIM_PRODUCT`
       QUALIFY ROW_NUMBER() OVER (PARTITION BY asin ORDER BY updated_at DESC, sku) = 1
