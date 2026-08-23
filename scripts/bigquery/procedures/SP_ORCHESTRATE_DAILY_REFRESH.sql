@@ -142,33 +142,6 @@ BEGIN
   END;
 
   -- ============================================
-  -- Refresh Task 0.5: FACT_CUSTOMER_ORDER_ITEM (Daton → V_SRC → FACT)
-  -- Customer-order line items: the basket-composition fact.
-  -- ============================================
-  SET procedure_name = 'SP_LOAD_FACT_CUSTOMER_ORDER_ITEM';
-  SET procedure_start_time = CURRENT_TIMESTAMP();
-  SET total_procedures = total_procedures + 1;
-
-  BEGIN
-    CALL `onyga-482313.OI.SP_LOAD_FACT_CUSTOMER_ORDER_ITEM`();
-    SET success_count = success_count + 1;
-    SET error_msg = NULL;
-    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
-      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
-    VALUES
-      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
-    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
-  EXCEPTION WHEN ERROR THEN
-    SET failure_count = failure_count + 1;
-    SET error_msg = @@error.message;
-    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
-      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
-    VALUES
-      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
-    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
-  END;
-
-  -- ============================================
   -- Refresh Task 1: PRODUCT_DIM
   -- ============================================
   SET procedure_name = 'SP_MERGE_PRODUCT_DIM_SMART';
@@ -201,6 +174,36 @@ BEGIN
       @@error.message,
       CAST(CURRENT_TIMESTAMP() AS STRING)
     ) as log_message;
+  END;
+
+  -- ============================================
+  -- Refresh Task 1.1: FACT_CUSTOMER_ORDER_ITEM (depends on DIM_PRODUCT)
+  -- Customer-order line items: the basket-composition fact. This FACT load
+  -- joins DIM_PRODUCT (parent_name, product_short_name, is_mapped_product),
+  -- so it must run after Task 1 (SP_MERGE_PRODUCT_DIM_SMART) refreshes the
+  -- dimension -- not merely after the Daton source loads.
+  -- ============================================
+  SET procedure_name = 'SP_LOAD_FACT_CUSTOMER_ORDER_ITEM';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_LOAD_FACT_CUSTOMER_ORDER_ITEM`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
   END;
 
   -- ============================================

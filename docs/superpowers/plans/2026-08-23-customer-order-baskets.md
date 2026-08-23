@@ -1162,7 +1162,9 @@ git commit -m "feat: acceptance for baskets and pairs — B6 checks the label ag
 
 ### Task 8: Wire the loader into the daily orchestrator
 
-The loader must run after the source views have fresh Daton data and before anything reads the fact. `SP_ORCHESTRATE_DAILY_REFRESH` already runs the other Daton-sourced loads in its Task 0 block.
+The loader joins `DIM_PRODUCT` to populate `parent_name`, `product_short_name` and `is_mapped_product`, so it must run after `DIM_PRODUCT` has been refreshed for the day — not merely after the Daton source views are fresh. `SP_ORCHESTRATE_DAILY_REFRESH` refreshes `DIM_PRODUCT` in its `Refresh Task 1: PRODUCT_DIM` block (`CALL SP_MERGE_PRODUCT_DIM_SMART`); the new step belongs immediately after that block completes.
+
+(An earlier version of this plan placed the step at "Task 0.5", right after the Daton source loads and before `SP_MERGE_PRODUCT_DIM_SMART` runs. That was wrong: on a new-product-launch day, `SRC_ACC_PRODUCTS` (Task 0.1) can already carry a new ASIN while `DIM_PRODUCT` hasn't been merged yet, so the fact would be written with `is_mapped_product = FALSE` and NULL labels for that ASIN — self-healing on the next day's run, but landing exactly on the day it matters least to get wrong. `V_SRC_ListOrder`/`V_SRC_ListOrderItems` are plain views over continuously-synced Daton tables and gain nothing from running after Tasks 0.1–0.4.)
 
 **Files:**
 - Modify: `scripts/bigquery/procedures/SP_ORCHESTRATE_DAILY_REFRESH.sql`
@@ -1170,19 +1172,22 @@ The loader must run after the source views have fresh Daton data and before anyt
 - [ ] **Step 1: Find the insertion point**
 
 ```bash
-grep -n "Refresh Task 0.4\|SP_SRC_ACC_REPEAT_PURCHASE" scripts/bigquery/procedures/SP_ORCHESTRATE_DAILY_REFRESH.sql | head
+grep -n "Refresh Task 1: PRODUCT_DIM\|SP_MERGE_PRODUCT_DIM_SMART\|Refresh Task 1.5" scripts/bigquery/procedures/SP_ORCHESTRATE_DAILY_REFRESH.sql | head
 ```
 
-Expected: a `Refresh Task 0.4` comment block calling `SP_SRC_ACC_REPEAT_PURCHASE`. The new step goes immediately after that block's closing `END;` — that is, after the last Daton source load and before the DIM merges begin.
+Expected: a `Refresh Task 1: PRODUCT_DIM` comment block calling `SP_MERGE_PRODUCT_DIM_SMART`, followed later by a `Refresh Task 1.5: REMOVED` comment-only block. The new step goes immediately after the `PRODUCT_DIM` block's closing `END;` and before the `Refresh Task 1.5: REMOVED` comment — i.e. right after `DIM_PRODUCT` is refreshed for the day.
 
 - [ ] **Step 2: Insert the new wrapped step**
 
-Insert this block after the `SP_SRC_ACC_REPEAT_PURCHASE` block's closing `END;`. It follows the file's existing wrapper pattern exactly — same logging table, same counters, same exception arm:
+Insert this block after the `SP_MERGE_PRODUCT_DIM_SMART` block's closing `END;` (before the `Refresh Task 1.5: REMOVED` comment). It follows the file's existing wrapper pattern exactly — same logging table, same counters, same exception arm. It is numbered `1.1` (not `1.5`, which is already used by the removed `STG_PRODUCT_COST_DATA` comment marker) to signal it depends on Task 1 having just completed:
 
 ```sql
   -- ============================================
-  -- Refresh Task 0.5: FACT_CUSTOMER_ORDER_ITEM (Daton → V_SRC → FACT)
-  -- Customer-order line items: the basket-composition fact.
+  -- Refresh Task 1.1: FACT_CUSTOMER_ORDER_ITEM (depends on DIM_PRODUCT)
+  -- Customer-order line items: the basket-composition fact. This FACT load
+  -- joins DIM_PRODUCT (parent_name, product_short_name, is_mapped_product),
+  -- so it must run after Task 1 (SP_MERGE_PRODUCT_DIM_SMART) refreshes the
+  -- dimension -- not merely after the Daton source loads.
   -- ============================================
   SET procedure_name = 'SP_LOAD_FACT_CUSTOMER_ORDER_ITEM';
   SET procedure_start_time = CURRENT_TIMESTAMP();
@@ -1228,7 +1233,7 @@ Expected: `true`.
 
 ```bash
 git add scripts/bigquery/procedures/SP_ORCHESTRATE_DAILY_REFRESH.sql
-git commit -m "feat: the order-item load joins the daily refresh after the Daton sources and before the DIM merges, so the fact is never built from yesterday's views"
+git commit -m "feat: the order-item load joins the daily refresh right after DIM_PRODUCT is merged, so a same-day product launch is never mislabeled unmapped"
 ```
 
 ---
