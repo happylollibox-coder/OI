@@ -566,6 +566,14 @@ CREATE OR REPLACE TABLE `onyga-482313.OI.TMP_FSR_STATE` AS
   SELECT * FROM `onyga-482313.OI.FACT_KEYWORD_STATE`;
 ```
 
+**The BEFORE image for the first automated pass has been taken.** `TMP_FSR_LEDGER_BEFORE` was
+created at 2026-08-22 20:57 New York, hours ahead of the ~01:00 pass, holding 88 rows all open —
+the same 88 the live ledger holds, which had not been written since 19:16 New York that day.
+Whoever reads the register after the pass finishes runs only the two AFTER copies above and then
+the drift file; check the BEFORE copy is still the pre-pass image before trusting the result
+(D00 reports `VACUOUS` if it is not). Re-take it by hand before every later pass until the ledger
+archive of Open ruling 10 exists.
+
 Then run the file, and drop the three copies. To check without waiting for a pass, replay it: copy
 the ledger twice (BEFORE and AFTER), copy the snapshot with `snapshot_date` advanced one day plus
 whatever departures and arrivals the case needs, `sed` the procedure's two table names onto
