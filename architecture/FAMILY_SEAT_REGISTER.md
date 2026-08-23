@@ -88,7 +88,7 @@ register.
 | **R-i — an overdue settling verdict is named overdue** (2026-08-22) | `REVIVED_SETTLING` / `PENDING_SETTLE` with `next_check_date` before the snapshot date stays on the 80% side (waiting = 80, Ori's ruling) but the sentence and the move read "was due to settle on <date> — overdue by N days; the ladder has not re-judged it". The cause is upstream and is being diagnosed read-only; the register never changes the ladder (B18). *To overrule:* move overdue settling to the 20% side — one side value in the codes table. |
 | **R-j — "too few clicks yet" needs clicks** (2026-08-22) | "waiting — too few clicks yet" requires clicks > 0 on the basis window (spec §3). A TRIAL with $0 and 0 clicks that is neither at the floor nor no-clock is **"waiting — not yet serving"**: $0, published, on no side (affects no ratio) (B27). *To overrule:* fold it back into waiting — one branch in the code. |
 | **R-k — a gap is worded by its MEASURED cause** (2026-08-22; refined the same day after verification) | The original reading — "the verdict ladder reads `DIM_KEYWORD` only, so a product target never gets a verdict" — was FALSE on live rows: SP product targets live in `DIM_KEYWORD`, the ladder tracks them and this register seats them (repairs, probes, settling and parked seats with `asin=` targets exist on the snapshot; query the SEAT rows for `asin=` to see them — and when COUNTING product targets, match `asin=` OR `category=`: the snapshot carries both prefixes, and an `asin=`-only count silently drops the `category=` rows, a mislabel a verification pass actually caught). The real blind spot is narrower: SB video / PT product-target rows reach the warehouse with **`keyword_id` −1** — no keyword id, so no `DIM_KEYWORD` row can exist and the ladder cannot see them. Every GAP row is therefore worded by the cause the view MEASURES (`keyword_id` and the current `DIM_KEYWORD` state): `keyword_id` −1 → "no keyword id — the ladder cannot see it; a ruling for Ori, not a mapping fix"; a paused/archived current row → "trailing spend — leaves the universe when it stops; no verdict is coming and none is needed"; an enabled row → "verdict arrives on the next state run"; a real id with no current row → "check why". The blanket phrase "the verdict ladder does not track product targets" is retired and B19 asserts it appears nowhere. **Extending the pipeline/ladder to the no-keyword-id SB video rows is a RULING FOR ORI**, not built here. *To overrule:* give those rows an identity the ladder can read (or extend `SP_SNAPSHOT_KEYWORD_STATE` to a synthetic key) — the blind gap rows then disappear on their own. |
-| **R-l — the gap-closure arithmetic** (2026-08-22, settled; three verifier rounds died on it) | A family's "what closes the gap" clause may count as RECOVERED TODAY only dollars that provably leave the bad side when the sheet lands — that is, a **PAUSE** (the keyword's spend goes to $0) and nothing else: a leak paused, or a failed keyword killed with a pause row. A row in a holdout campaign gets no sheet row from its `eligible_from`, so it recovers nothing either. **Parking a stalled probe LOWERS its price; the spend does not vanish** — it is its own line, its dollars named as spend at risk of continuing, and it is EXCLUDED from the recovered-today total. **Re-pricing a repair recovers nothing today by construction** — its own line too, named as a change of price whose result arrives at the re-judged horizon. The sentence must, in this order: name the executable recovery (pauses only), name the gap, state plainly whether the recovery closes it, then say what the remaining dollars depend on and point to the family's re-judged row. No projection may appear inside the recovered-today number, and no sentence may claim a closure its own executable recovery does not deliver. The acceptance check re-derives the recovered-today figure from the register's OWN per-row costs — the today-horizon LEAK rows and failed SEAT rows, holdout-suppressed rows removed — and never from the sentence it is testing, comparing within a **$0.02** tolerance whose reason is on the row: the sentence renders one aggregate to two decimals while the re-derivation sums per-row costs each rounded on its own row (R-m). B29 / B30 / B31. **R-l binds the PROJECTIONS too (2026-08-23, fifth repair pass).** (a) The re-judged horizon used to model parking a stalled probe as taking the spend to $0 — the very belief R-l retired — in the exact row the today sentence points the reader at. A stalled probe is now re-priced by the move on its OWN row (R-f: raise to the seat price where the live bid is below it, otherwise park at the engine's park price) and keeps spending at that price on the same linear bid→spend guess the day-one horizon uses; it stays on the 20% side until a verdict arrives (B33). (b) Both projections respect the holdout arm: a campaign in the holdout arm from its `eligible_from` gets no sheet row of any kind, so neither day one nor re-judged may book a change for it — its cost on both equals its cost today, a repair in one never moves to the good side and keeps the 'losing — in repair' category, and the family clause lists no move for it (B34; B10 and B11 carry the same guard). (c) The FAMILY row names the BOOK its pauses ride on instead of promising an upload 'today': every dollar of the recovered-today figure rides the next book a generator builds — the leak arm of `tools/build_reprice_bulksheet.py` for a leak (Task 3, not yet shipped), the shipped reprice generator's pause row for a failed keyword — exactly as the LEAK row's own move already said. The arithmetic is untouched; only the promise is (B32). *To overrule:* name another move whose dollars provably leave the bad side on upload — it joins the pause set in one branch of the view and the same branch of B29. |
+| **R-l — the gap-closure arithmetic** (2026-08-22, settled; three verifier rounds died on it) | A family's "what closes the gap" clause may count as RECOVERED TODAY only dollars that provably leave the bad side when the sheet lands — that is, a **PAUSE** (the keyword's spend goes to $0) and nothing else: a leak paused, or a failed keyword killed with a pause row. A row in a holdout campaign gets no sheet row from its `eligible_from`, so it recovers nothing either. **Parking a stalled probe LOWERS its price; the spend does not vanish** — it is its own line, its dollars named as spend at risk of continuing, and it is EXCLUDED from the recovered-today total. **Re-pricing a repair recovers nothing today by construction** — its own line too, named as a change of price whose result arrives at the re-judged horizon. The sentence must, in this order: name the executable recovery (pauses only), name the gap, state plainly whether the recovery closes it, then say what the remaining dollars depend on and point to the family's re-judged row. No projection may appear inside the recovered-today number, and no sentence may claim a closure its own executable recovery does not deliver. The acceptance check re-derives the recovered-today figure from the register's OWN per-row costs — the today-horizon LEAK rows and failed SEAT rows, holdout-suppressed rows removed — and never from the sentence it is testing, comparing within a **$0.02** tolerance whose reason is on the row: the sentence renders one aggregate to two decimals while the re-derivation sums per-row costs each rounded on its own row (R-m). B29 / B30 / B31. **R-l binds the PROJECTIONS too (2026-08-23, fifth repair pass).** (a) The re-judged horizon used to model parking a stalled probe as taking the spend to $0 — the very belief R-l retired — in the exact row the today sentence points the reader at. A stalled probe is now re-priced by the move on its OWN row (R-f: raise to the seat price where the live bid is below it, otherwise park at the engine's park price) and keeps spending at that price on the same linear bid→spend guess the day-one horizon uses; it stays on the 20% side until a verdict arrives (B33). (b) Both projections respect the holdout arm: a campaign in the holdout arm from its `eligible_from` gets no sheet row of any kind, so neither day one nor re-judged may book a change for it — its cost on both equals its cost today, a repair in one never moves to the good side and keeps the 'losing — in repair' category, and the family clause lists no move for it (B34; B10 and B11 carry the same guard). (c) The FAMILY row names the BOOK its pauses ride on instead of promising an upload 'today': every dollar of the recovered-today figure rides the next book a generator builds — the leak arm of `tools/build_reprice_bulksheet.py` for a leak (Task 3, not yet shipped), the shipped reprice generator's pause row for a failed keyword — exactly as the LEAK row's own move already said. The arithmetic is untouched; only the promise is (B32). **(d) The leak half binds the projections too (2026-08-23, sixth repair pass).** (c) changed the today sentence and left both projections crediting the same unbuilt sheet: `cost_day1` and `cost_rejudged` took every LEAK row to $0, and the published day-one assumption attributed that pause to the PENDING_UPLOAD book — a book that carries bid changes only. Neither projection zeroes a leak now: a leak costs on day one and on re-judged what it costs today (a book row that touches one re-prices it linearly like any other keyword, never to $0), both assumptions name the unbuilt leak arm the dollars wait on, and the projection sentence reads "N leaks still costing $…/day (nothing pauses them until the leak arm ships)" instead of "N leaks paused". The FAILED half is untouched and still goes to $0 on re-judged, because the shipped generator builds that pause row today — same rule, opposite answer, because one sheet exists and the other does not (B35). *To overrule:* ship the leak arm — the sheet then exists and the branch is one line in the same two CASE expressions, with B35's first three legs flipping with it. *To overrule (the original rule):* name another move whose dollars provably leave the bad side on upload — it joins the pause set in one branch of the view and the same branch of B29. |
 | **R-m — report prose is not an artifact** (2026-08-22) | A number in an agent's report is ephemeral. A false or drifted figure blocks ONLY if it lives in a committed file or a published sentence, cited `path:line`; otherwise it is a note. **Rounding differences of one cent between an aggregate and the sum of independently rounded components are display facts, not defects** — stated here once, and not re-litigated anywhere in this design. Every tolerance a check uses carries its reason on the check. |
 
 ## Objects
@@ -385,10 +385,32 @@ re-derives the counts from that horizon's CATEGORY rows.
 **Horizons** (FAMILY and CATEGORY rows, column `horizon`, each with `as_of`, the basis dates and
 `horizon_assumption` on the row): `today` is measured; `day one` assumes the PENDING_UPLOAD book
 lands — every keyword on it spends in proportion to new bid ÷ old bid (a linear guess, labelled
-as such) and the leaks are paused; `re-judged` assumes the repairs hold at their bar and move to
-the good side at their day-one cost, probation keywords stay at their floor, failed keywords are
-killed, stalled probes are parked, engine probes and settling verdicts hold, untracked spend is
-unchanged. Projections are labelled projections in the sentence.
+as such) — and nothing else; `re-judged` assumes the repairs hold at their bar and move to the
+good side at their day-one cost, probation keywords stay at their floor, failed keywords are
+killed with a pause row, engine probes and settling verdicts hold, untracked spend is unchanged.
+Projections are labelled projections in the sentence.
+
+**A projection may never spend back dollars no sheet recovers (R-l, both halves — read this
+paragraph with R-l, not instead of it).** Three consequences, all of them in the published
+`horizon_assumption` and asserted:
+
+- **Leaks are NOT paused on either projection** (leak half, B35). The sheet that would pause a
+  closed-but-spending keyword is the **leak arm** of `tools/build_reprice_bulksheet.py`, recorded
+  in the object table above as **Task 3, not shipped** — the shipped generator selects
+  `AT_BAR / REPRICE / FLOOR_PROBATION / LOSER` only. So a leak costs on day one and on re-judged
+  exactly what it costs today, and both assumptions name the unbuilt arm the dollars wait on. The
+  **failed** half is different and stays at $0 on re-judged: its pause row (`KEYWORD_PAUSE`,
+  `State: PAUSED`) is one the shipped generator builds today. Same rule, opposite answer, because
+  one sheet exists and the other does not.
+- **A stalled probe is re-priced, never parked to $0** (B33). The move on its own row is R-f's
+  sign branch — raise to the seat price where the live bid is below it, otherwise park at the
+  engine's `bid_park` — and it keeps spending at that price on the same linear bid→spend guess,
+  because parking lowers a price and does not stop the spend. It stays on the 20% side until a
+  verdict arrives.
+- **A holdout campaign gets no sheet row on either projection** (holdout half, B34). From its
+  `eligible_from`, every row it holds costs on both projections what it costs today, a repair in
+  one never moves to the good side and keeps `losing — in repair`, and the family clause lists no
+  move for it.
 
 **Seat economics.** A seat costs what its occupant spends per day on the basis window. A probe's
 admission cost is the engine's own: the campaign's `seat_cpc` × `k.click_goal_day` (4 — the seat
@@ -571,6 +593,28 @@ exact row the today sentence sends the reader to. Three things:
 violations, the new B32 3, the new B33 14 and the new B34 8, while B01–B30 all passed. After the
 repaired view was deployed all **34** checks read PASS, `DE_FAMILY_SEAT_LEDGER` A01–A16 stayed
 16/16, and two uncached pulls gave an identical MD5.
+
+**Sixth repair pass (2026-08-23) — the leak half, and the prose the SQL suite cannot see.** The
+fifth pass carried R-l into the stalled-probe and holdout halves of both projections and left the
+LEAK half exactly as it was: `cost_day1` and `cost_rejudged` still took every leak to $0, and the
+published day-one assumption attributed that pause to the PENDING_UPLOAD book — the book that
+carries bid changes only. So the register said two things about the same dollars in adjacent rows:
+the today row sent the reader to "the next book (leak arm)", the day-one row priced those keywords
+as already paused. It changed a published verdict, not just wording: one family's day-one row read
+IN on the strength of dollars nothing recovers and now reads AT THE LINE (read the rows, don't take
+a number from this file). Neither projection zeroes a leak now; the FAILED half is untouched,
+because the shipped generator builds that pause row today. B35 asserts all six halves of it.
+Two committed files also still carried the RETIRED model in the one place that summarises it — the
+view's own header block and the SOP's Horizons paragraph — while every check passed, because the
+deploy strips `--` lines and the suite reads only the deployed definition. Both were rewritten with
+the code, the Horizons paragraph now carries all three "a projection may never spend back dollars no
+sheet recovers" consequences, and the acceptance file records the grep that is the only instrument
+for those two files.
+
+**TDD record (sixth pass, 2026-08-23).** Against the LIVE deployed view the new B35 read **65**
+violations while B01–B34 all passed; after the repaired view was deployed all **35** read PASS,
+`DE_FAMILY_SEAT_LEDGER` A01–A16 stayed 16/16, two uncached pulls gave 331 rows and an identical
+MD5, and the dry-run read stayed at the same order (~163 MB) with no ceiling view inlined.
 
 **The holdout branch, re-proven on `TMP_` copies (2026-08-23) — and what the proof caught.** Still
 no live row exercises it (the arm's `eligible_from` is ahead of the snapshot), so a `TMP_` holdout
@@ -872,7 +916,13 @@ change is then a derivation or a source, never a literal.
    Amazon (a `State: paused` row), not an archive or a delete — if it is an archive, the same
    reasoning that excludes parking from the recovery may exclude it too; (b) decide whether Task 3
    ships before the register's recovered-today figure is acted on, since until it does the leak
-   half of that figure has no generator behind it. Read what is waiting:
+   half of that figure has no generator behind it. **Since 2026-08-23 the two PROJECTIONS say the
+   same thing** (R-l leak half, B35): neither day one nor re-judged takes a leak to $0 any more,
+   because the sheet that would pause it does not exist. That is the honest reading, and it makes a
+   family's projected rows worse, not better — a family whose day-one row read IN on the strength of
+   those unearned dollars can now read AT THE LINE. Nothing about the failed half changed: the
+   shipped generator builds that pause row today, so it still goes to $0 on re-judged. Read what is
+   waiting:
    `SELECT family, campaign_name, target_text, cost_per_day, move FROM
     onyga-482313.OI.V_FAMILY_SEAT_REGISTER WHERE row_type = 'LEAK' ORDER BY cost_per_day DESC;`
 

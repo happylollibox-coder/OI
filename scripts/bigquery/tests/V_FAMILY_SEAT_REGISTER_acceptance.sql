@@ -147,6 +147,33 @@
 --       say so in words. Re-derived from the register's own SEAT / LEAK / GAP rows. On a snapshot
 --       where no campaign is yet suppressed this check is vacuous by construction; the branch is
 --       proven on TMP_ copies and the proof recorded in the SOP.
+--   B35 No projection credits a pause no generator builds (R-l, leak half). A leak is a PARKED or
+--       DEAD keyword that still spends; the sheet that would pause it is the leak arm of
+--       tools/build_reprice_bulksheet.py, recorded in the SOP's object table as Task 3 and NOT
+--       shipped — the shipped generator selects AT_BAR / REPRICE / FLOOR_PROBATION / LOSER only,
+--       so it emits a pause row for a failed keyword and none for a leak. The day-one horizon is
+--       defined as "the PENDING_UPLOAD book lands", and that book carries bid changes only. So
+--       neither projection may take a leak's cost to $0: every LEAK row's day-one and re-judged
+--       cost is its today cost (exactly, where no book row touches it), the 'closed but still
+--       spending' CATEGORY still costs money on both projections wherever it costs money today,
+--       no horizon assumption may say the leaks are paused, both projections must name the leak
+--       arm as the unbuilt sheet the dollars wait on, and no projection sentence may read
+--       "N leaks paused". The failed half is NOT affected: its pause row is built today, which is
+--       exactly why the two halves are worded differently.
+--
+-- WHAT THIS SUITE CANNOT SEE (2026-08-23). The deploy command strips every `--` line, so the
+-- view's own header block does not exist in the deployed definition: no check here, and no query
+-- against INFORMATION_SCHEMA.VIEWS, can catch a stale sentence in the header of
+-- scripts/bigquery/views/V_FAMILY_SEAT_REGISTER.sql or in architecture/FAMILY_SEAT_REGISTER.md.
+-- A retired belief once survived in both while every check passed. The instrument for those two
+-- files is a grep of the RETIRED phrases, run on the source, and it must return nothing:
+--   grep -nE 'closed-but-spending keywords are paused|leaks stay paused|the leaks are paused|stalled probes are parked|pauses you can upload' \
+--     scripts/bigquery/views/V_FAMILY_SEAT_REGISTER.sql architecture/FAMILY_SEAT_REGISTER.md
+-- (This test file itself contains those phrases as the forbidden-phrase assertions above, which
+--  is why the grep names the two files and not the directory.) A match is allowed ONLY inside
+-- quotation marks in the SOP's repair-pass narrative, where it records what a retired sentence
+-- used to say; a match outside quotes — in the view header, the Horizons paragraph or a rulings
+-- row — is the defect.
 -- =============================================================================================
 CREATE TEMP TABLE reg AS SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
 WITH
@@ -347,6 +374,21 @@ stalled_cat AS (
          SUM(IF(horizon = 're-judged', cost_per_day, 0)) AS rejudged_cost,
          COUNTIF(horizon = 're-judged') AS n_rejudged_rows
   FROM r WHERE row_type = 'CATEGORY' AND category = 'probe — stalled' GROUP BY 1),
+-- B35: the leak half of R-l. The LEAK rows priced on the three horizons, and the
+-- 'closed but still spending' CATEGORY on the two projections. No generator builds a leak's
+-- pause row today, so no projection may spend its dollars back.
+leak_rows AS (
+  SELECT family, campaign_id, keyword_id, cost_per_day, cost_day_one, cost_rejudged,
+         book_batch_id, COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from AS no_sheet
+  FROM r WHERE row_type = 'LEAK'),
+leak_cat AS (
+  SELECT family,
+         SUM(IF(horizon = 'today', cost_per_day, 0)) AS today_cost,
+         SUM(IF(horizon = 'day one', cost_per_day, 0)) AS day1_cost,
+         SUM(IF(horizon = 're-judged', cost_per_day, 0)) AS rejudged_cost,
+         COUNTIF(horizon = 'day one') AS n_day1_rows,
+         COUNTIF(horizon = 're-judged') AS n_rejudged_rows
+  FROM r WHERE row_type = 'CATEGORY' AND category = 'closed but still spending' GROUP BY 1),
 -- B34: every row that names a campaign, on the three horizons, with its holdout state. A
 -- holdout-suppressed row gets no sheet row, so nothing may move on either projection.
 hold_rows AS (
@@ -641,6 +683,34 @@ checks AS (
             FROM r WHERE row_type = 'FAMILY')
          + (SELECT COUNTIF(horizon = 're-judged' AND horizon_assumption NOT LIKE '%holdout%')
             FROM r WHERE row_type = 'FAMILY')
+  UNION ALL
+  SELECT 'B35 no projection credits a pause no generator builds (R-l leak half): a leak costs on day one and re-judged what it costs today, both assumptions name the unbuilt leak arm, and no sentence says the leaks are paused',
+         -- (1) no LEAK row may be zeroed on either projection while it costs money today
+         (SELECT COUNTIF(cost_per_day > 0.005
+                         AND (COALESCE(cost_day_one, 0) <= 0.005 OR COALESCE(cost_rejudged, 0) <= 0.005))
+          FROM leak_rows)
+         -- (2) and where no book row touches it, both projections equal today to the cent
+         --     (0.005: the register publishes costs rounded to four decimals on each row)
+         + (SELECT COUNTIF(book_batch_id IS NULL
+                           AND (ABS(COALESCE(cost_day_one, 0) - cost_per_day) > 0.005
+                                OR ABS(COALESCE(cost_rejudged, 0) - cost_per_day) > 0.005))
+            FROM leak_rows)
+         -- (3) the family CATEGORY says the same thing on both projections
+         + (SELECT COUNTIF(today_cost > 0.005
+                           AND (n_day1_rows = 0 OR day1_cost <= 0.005
+                                OR n_rejudged_rows = 0 OR rejudged_cost <= 0.005))
+            FROM leak_cat)
+         -- (4) no assumption may claim the pause
+         + (SELECT COUNTIF(horizon_assumption LIKE '%leaks are paused%'
+                           OR horizon_assumption LIKE '%leaks stay paused%'
+                           OR horizon_assumption LIKE '%closed-but-spending keywords are paused%')
+            FROM r WHERE row_type IN ('FAMILY', 'REFERENCE') AND horizon_assumption IS NOT NULL)
+         -- (5) both projections must name the unbuilt sheet the dollars wait on
+         + (SELECT COUNTIF(horizon IN ('day one', 're-judged') AND horizon_assumption NOT LIKE '%leak arm%')
+            FROM r WHERE row_type = 'FAMILY')
+         -- (6) and no projection sentence may read 'N leaks paused'
+         + (SELECT COUNTIF(horizon != 'today' AND sentence LIKE '%leaks paused%')
+            FROM famrow WHERE row_type = 'FAMILY')
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks ORDER BY check_name;
