@@ -20,7 +20,7 @@ planned from what its good keywords actually spent in the last window. Good keyw
 not-good keywords compete for numbered, dollar-sized seats inside that allowance; the rest queue at zero
 spend. One engine decides prices and budgets for these families; Ori uploads one file.
 
-## 2. Rulings (made in conversation 2026-08-23; each overrulable by one line)
+## 2. Rulings (made in conversation 2026-08-23; each overrulable by one line. P-14 is the answer to a defect Ori raised and has NOT ruled on — it is built as written until he does.)
 
 | # | ruling | why |
 |---|---|---|
@@ -37,6 +37,7 @@ spend. One engine decides prices and budgets for these families; Ori uploads one
 | P-11 | **One engine.** For working families the plan is the sole authority on keyword bids and campaign budgets. LIFT and OOB retire as price and budget authorities for these families (their proposals are still recorded and held — "the plan owns this price" — so the scorecard can grade them); LIFT's probe list and REVERDICT's revival list remain candidate sources for the seat queue. Programs that do not set prices stay: negates (search-term blocking), low-stock override, launch controller (INVEST families), holdout. | Ori: "there should be one engine (and not multiple)." |
 | P-12 | Every seat carries a **verdict date** (settle discipline at the new price: 7 days SP / 14 days SB): graduate, step again, or give the seat up. The allowance share and the window are declared settings per calendar state — see P-13. | Prevents the queue becoming a parking lot; keeps the share and the window out of code. |
 | P-13 | **Calendar states and their settings** (`DE_PLAN_CONFIG`, one row per state; the plan reads the table, never a literal): **OFF-PEAK** — window 7 complete days, allowance share 0.20 · **BOOST** (the run-up before a peak, `boost_start` → `peak_start` on the house calendar) — window 3 complete days, allowance share **0.50** (Ori, 2026-08-23: "in boosting phase (before peak) make it 50% instead of 20%") · **PEAK** — window 3 complete days, allowance share 0.20 until Ori says otherwise. Ori is not sure 0.50 is right — **the correct share per state is a learning question**: the scorecard (P-9) publishes, per state, the realized net of the seats opened under the share in force, and the backtest replays 0.20 / 0.35 / 0.50 per state so the setting is chosen on evidence (the retired LIFT engine used 0.40 in peaks — recorded, not adopted). | Before a peak the queue must open seats for seasonal terms that have no record yet; once the peak starts the money should already be seated. The 3-day window at boost_start follows the house calendar convention the budget engine already used. |
+| P-14 | **The window is corrected for settle completion, and the demotion guard is asymmetric.** (a) **CORRECTION** — a window's gross profit is divided by the published completion factor for its channel and the day's age, read from `V_ADS_SETTLE_CURVE` (`sales_pct_of_final_median` per `channel` x `age_days`) as a table, never as a literal or a hardcoded factor; where the curve cannot answer for a channel and age the factor is 1.0 and the row says the correction was unavailable, and the plan then rests on (b) alone. **Spend is not corrected** — the same curve publishes spend at essentially 100% of final by age 2, and every window day is at least age 2 by P-10. **Order COUNTS are never inflated**: a count cannot be fractionally corrected, so the 2-order floor of P-3 is always read on observed orders. (b) **ASYMMETRIC GUARD** — a keyword may be PROMOTED to the good side on corrected fresh evidence, but it is never DEMOTED to the not-good side until its window has settled (SP 7 / SB 14 complete days after `window_to`). An unsettled would-be demotion of a keyword that was good keeps the good side, held, with its settle-due date on the row. "Was good" = the previous night's plan said GOOD, or the ladder's own settled 90-day record is at or above the family bar with 2+ settled orders (the bootstrap on the first night). (c) Every row publishes **which arm decided it** — `settle_arm` in `SETTLED` / `CORRECTED` / `PROMOTED_ON_FRESH` / `HELD_UNSETTLED` / `UNCORRECTED_NO_CURVE` — and `decided_by` in `P-3` / `P-14b` / `P-5`, and the book and the panel print it in words. | Ori raised the defect on 2026-08-23 and has **not ruled** between the three offered fixes; this is the build-as-specified answer, recorded so it can be overruled in one line. The window's sales are still accruing (SP ~D+7, SB ~D+14), so a 3-day window read today has seen a fraction of its orders and the not-good side is overstated -- the plan would park keywords for the crime of being recent. Correction fixes the AVERAGE; the guard fixes the TAIL, because a median curve still mis-reads an individual keyword and a wrong demotion costs a working keyword its seat and its price. House rule: unmeasured never reads as bad. **To overrule:** Ori says "judge the window as it reads" -- drop the `corr` CTE and the `HELD_UNSETTLED` arm from `V_PLAN_WINDOW_JUDGMENT`; every other object is unchanged, because both live only in that view. |
 
 ## 3. Windows and clocks
 
@@ -45,6 +46,25 @@ spend. One engine decides prices and budgets for these families; Ori uploads one
 - Calendar state (OFF-PEAK / BOOST / PEAK) comes from `DIM_US_HOLIDAYS` (`boost_start`, peak, anchor dates for Back-to-School, Q4, Prime Day); window and allowance share per state are in `DE_PLAN_CONFIG` (P-13); the plan reads both, never a date literal.
 - The plan is recomputed every night by the orchestrator (New York clock) after the keyword-state snapshot; Ori uploads at Weekly Run (Sunday) off-peak, every 3 days in peaks.
 - Attribution lag is stated on every row: window sales are read as of the run day and are incomplete for the newest days (SP settles ~D+7, SB ~D+14). The plan uses them anyway (rule B); the shadow plan and the T+14 scorecard measure what that costs.
+
+## 3a. Settle completion and the asymmetric guard (P-14)
+
+The window record is read twice. **Raw** is what the warehouse holds today. **Corrected** divides each
+window day's gross profit by the completion factor the settle curve publishes for that day's channel and
+age, so a 3-day window read on the day after it closes is compared with the bar on the scale it will
+eventually have. The factor is read from `V_ADS_SETTLE_CURVE` through `V_PLAN_SETTLE_COMPLETION`, which
+makes it monotone in age (the published medians wobble by a point either way), caps it at 1.0, floors it
+at a declared 0.50 so no rebuilt curve can ever inflate a window more than twofold, and marks the rows
+where the curve has too few report dates to answer. Nothing here is a constant in code: if the curve is
+rebuilt, the correction moves with it, and if it cannot answer the plan says so on the row.
+
+The correction alone is not enough, because it is a median over the whole account and an individual
+keyword can sit anywhere around it. So the side is asymmetric in time: **promotion is allowed on fresh
+evidence, demotion waits for settlement.** A keyword that was good and now reads not-good on a window
+younger than its channel's attribution length keeps the good side, held, and carries the date its window
+settles. On that date it is judged again with no guard, and it goes where the settled record says. The
+guard is self-clearing and costs at most one settle window of allowance; a wrong demotion costs a working
+keyword its price, its seat and its ranking for as long as it takes anyone to notice.
 
 ## 4. The plan, per family, every night
 
@@ -100,6 +120,8 @@ overdue-settle ladder fix) · launch governance (`V_INVEST_STATUS`) · brand def
 - Grace: no settled winner is moved to the not-good side after a single quiet window.
 - Ownership: zero GO rows from LIFT / OOB / REVERDICT on BID or BUDGET in working families; every held row carries the plan's sentence.
 - Both plans written every night; determinism (two uncached pulls identical); backtest reproducible from its query.
+- Settle correction (P-14a): the corrected window gross profit never changes sign against the raw one and is never smaller in magnitude (a factor below 1 scales a profit up and a loss down — more unsettled orders are still arriving on both); no window day is younger than age 2; every row names its `settle_arm`, and a row whose curve could not answer says `UNCORRECTED_NO_CURVE`.
+- Asymmetric guard (P-14b): no keyword that was good is on the not-good side while its window is unsettled; every `HELD_UNSETTLED` row carries a settle-due date in the future; promotion on fresh evidence is allowed and counted.
 - Standing Rule 0: no measured figure pinned in an SOP, header or registry entry.
 
 ## 10. What Ori sees on Weekly Run
