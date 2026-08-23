@@ -37,6 +37,16 @@ Ori); and the batch written to the change log is asserted to be exactly the rows
         same key — as CHECK FIRST naming the competing instruction, so Ori picks one price.
     F6  README lists every executable row in a HOLDOUT-arm campaign with its 2026-09-01 deadline,
         and names the campaigns whose latest history row carries a NULL portfolio.
+    F7  RULE B (--rule-b, OFF by default — nothing changes unless it is asked for). The plan
+        judges a keyword on the WINDOW, not on the ladder's 90-day record: good = 2+ orders in
+        the window AND window gross profit per ad dollar at or above the family bar; one order
+        (whatever the return) is not good; spend with no order is not good; 2+ orders under the
+        bar is losing. THE GOOD SIDE IS NEVER CUT AND IS NOT RE-PRICED (P-4), so a good keyword's
+        row is dropped in BOTH directions — a cut and a raise alike. A keyword the ladder calls
+        WINNER / PACED_WINNER whose window is quiet keeps the good side for one window (P-5
+        grace). Every dropped row is named with its window numbers in the audit CSV and the
+        README: rule B removes rows, it never adds one and never changes a price.
+        Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md (P-1..P-13).
 
 WHY THIS EXISTS
     v27.103 gave every keyword a verdict against its FAMILY's bar (AT_BAR / REPRICE / LOSER —
@@ -71,7 +81,8 @@ INTERLOCKS
       not a lever — and the README names campaigns whose latest history row is NULL.
 
 USAGE
-    /usr/bin/python3 tools/build_reprice_bulksheet.py [-o PATH] [--no-log] [--supersede BATCH_ID ...]
+    /usr/bin/python3 tools/build_reprice_bulksheet.py [-o PATH] [--no-log] [--rule-b]
+                                                     [--supersede BATCH_ID ...]
 
     Re-derives everything from BigQuery on every run; there is no embedded row list. The batch
     is logged to FACT_PPC_CHANGE_LOG (source MANUAL, coach_mode MANUAL_BULKSHEET) so the
@@ -86,7 +97,7 @@ import math
 import os
 import subprocess
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import openpyxl
 
@@ -149,6 +160,115 @@ GAMMA_DEFAULT = 0.778
 RAISE_CEILING = 2.00
 
 EXECUTABLE = ('BID_DOWN', 'BID_UP', 'PAUSE')
+
+# ── RULE B (F7) ───────────────────────────────────────────────────────────────────────────────
+# The plan's settings live in DE_PLAN_CONFIG by ruling P-13 — that table DOES NOT EXIST YET, so
+# they are DECLARED here, once, and the README says they were declared here. When the table is
+# built these three constants and RULE_B_MIN_ORDERS become a read of it, and nothing else moves.
+#   PLAN_WINDOW_DAYS   P-13: OFF-PEAK 7 complete days · BOOST 3 · PEAK 3.
+#   RULE_B_MIN_ORDERS  P-3: one order at 3x is mostly luck; two is the cheapest guard.
+#   GRACE_LADDER_STATES P-5: the ladder's settled-winner states. Grace buys ONE window, and only
+#                      for a QUIET window (under the order floor) — a window with 2+ orders is
+#                      evidence, and rule B stands over it. There is no two-window memory table
+#                      yet, so this generator grants grace on the LADDER STATE ALONE and says so
+#                      on the row: it cannot see whether the previous window was also quiet.
+PLAN_WINDOW_DAYS = {'OFF_PEAK': 7, 'BOOST': 3, 'PEAK': 3}
+RULE_B_MIN_ORDERS = 2
+GRACE_LADDER_STATES = ('WINNER', 'PACED_WINNER')
+RULE_B_GOOD = 'RULE_B_GOOD'          # the disposition a dropped row carries
+
+
+def window_bounds(watermark, window_days):
+    """P-10: COMPLETE DAYS ONLY. The window is `window_days` days ending at the ads watermark
+    minus one; the filling day (the watermark itself) never enters a window. Returns
+    (window_from, window_to), both inclusive."""
+    wm = watermark if isinstance(watermark, date) else date.fromisoformat(str(watermark))
+    window_to = wm - timedelta(days=1)
+    return window_to - timedelta(days=window_days - 1), window_to
+
+
+def assert_window_complete(watermark, window_from, window_to, window_days):
+    """The guarantee spec §9 asks for, run against whatever the query actually returned."""
+    lo, hi = window_bounds(watermark, window_days)
+    def d(v):
+        return v if isinstance(v, date) else date.fromisoformat(str(v))
+    assert d(window_to) == hi, (f"the window ends {window_to}, not {hi} — a window may never "
+                                f"touch the filling day {watermark}")
+    assert d(window_from) == lo, (f"the window starts {window_from}, not {lo} — "
+                                  f"{window_days} complete days end at {hi}")
+
+
+def calendar_state(in_peak, peak_start, today):
+    """P-13, read from the house calendar (V_PEAK_WINDOW_RULE over DIM_US_HOLIDAYS): OFF_PEAK
+    outside a season; inside one, BOOST from the occurrence's boost_start until its peak_start
+    and PEAK from then on. A peak whose calendar row carries no peak_start is judged PEAK — both
+    states declare the same window, so the split cannot change what this book reads."""
+    if not in_peak:
+        return 'OFF_PEAK'
+    if peak_start and str(today) < str(peak_start):
+        return 'BOOST'
+    return 'PEAK'
+
+
+def rule_b(r):
+    """P-1/P-3/P-5 — judge ONE keyword on the WINDOW. Returns
+    {'good': bool, 'verdict': str, 'reason': plain-English sentence, 'ret': float|None}.
+
+    The margin is the ladder's own: window gross profit is SUM(FACT_AMAZON_ADS.GROSS_PROFIT) over
+    the window at the keyword's own grain — the same stored column V_KEYWORD_GUARD sums for
+    settled_gp90 and the bar is compared against (see THE GP RULE in that view). No margin is
+    invented here and nothing is hardcoded.
+
+    verdict: GOOD · GRACE · LOSING · ONE_ORDER · NO_SALE · NOT_SERVING.
+    """
+    ordw = int(num(r.get('w_ord'), 0) or 0)
+    clkw = int(num(r.get('w_clk'), 0) or 0)
+    spw = num(r.get('w_sp'), 0) or 0.0
+    gpw = num(r.get('w_gp'), 0) or 0.0
+    bar = num(r.get('family_bar'), 1.0)
+    bar = 1.0 if bar is None else bar
+    ret = (gpw / spw) if spw > 0 else None
+    days = r.get('window_days')
+    win = (f"the {days}-day window {r.get('window_from')} to {r.get('window_to')}"
+           if r.get('window_from') else "the window")
+    took = (f"{ordw} order(s) on ${spw:.2f} of ad spend in {win}"
+            + (f", returning {ret:.2f} gross-profit dollars per ad dollar against its "
+               f"{r.get('family') or 'family'} bar of {bar:.2f}" if ret is not None else ""))
+
+    if ordw >= RULE_B_MIN_ORDERS and ret is not None and ret >= bar:
+        return {'good': True, 'verdict': 'GOOD', 'ret': ret,
+                'reason': (f"GOOD on the window — {took}. The good side is never cut and is not "
+                           f"re-priced, so this keyword is left exactly as it is (P-4).")}
+    if ordw < RULE_B_MIN_ORDERS and (r.get('state') or '') in GRACE_LADDER_STATES:
+        return {'good': True, 'verdict': 'GRACE', 'ret': ret,
+                'reason': (f"GRACE — the ladder calls this a settled winner ({r.get('state')}) and "
+                           f"its window is quiet: {took}. A proven winner keeps the good side for "
+                           f"ONE quiet window (P-5), held, not cut. NOTE: there is no two-window "
+                           f"memory table yet, so this grace is granted on the ladder state alone "
+                           f"— it cannot see whether the previous window was also quiet, and a "
+                           f"second quiet window should have let rule B stand.")}
+    if ordw >= RULE_B_MIN_ORDERS:
+        return {'good': False, 'verdict': 'LOSING', 'ret': ret,
+                'reason': f"LOSING on the window — {took}, under the bar."}
+    if ordw == 1:
+        return {'good': False, 'verdict': 'ONE_ORDER', 'ret': ret,
+                'reason': (f"WAITING, one order — {took}. One order is not evidence whatever the "
+                           f"return, so this keyword is on the not-good side.")}
+    if spw > 0 or clkw > 0:
+        return {'good': False, 'verdict': 'NO_SALE', 'ret': ret,
+                'reason': f"NO SALE — {took}. Spend with no order is on the not-good side."}
+    return {'good': False, 'verdict': 'NOT_SERVING', 'ret': ret,
+            'reason': f"NOT SERVING — no spend and no clicks in {win}."}
+
+
+def rule_b_gate(disp, r, bits):
+    """P-4, both directions. Returns (disposition, verdict). Rule B only ever REMOVES an
+    executable row — it never creates one, and it never changes a price."""
+    v = rule_b(r)
+    bits['rule_b'] = v
+    if v['good'] and disp in EXECUTABLE:
+        return RULE_B_GOOD, v
+    return disp, v
 
 SQL = """
 WITH wm AS (
@@ -214,6 +334,47 @@ bc AS (
   WHERE gate_action = 'BLOCK_CUT'
   GROUP BY 1
 ),
+-- RULE B (F7): the calendar state, the declared window, and the keyword's record INSIDE it.
+-- The state comes from the house calendar helper V_PEAK_WINDOW_RULE (one row, resolved over
+-- DIM_US_HOLIDAYS: in_peak, the owning occurrence and its boost_start); peak_start comes from
+-- the calendar row that owns that boost_start, so BOOST and PEAK can be told apart. The WINDOW
+-- LENGTHS are the constants declared in this file (P-13: DE_PLAN_CONFIG does not exist yet).
+cal AS (
+  SELECT pw.in_peak, pw.occurrence_type, pw.occurrence_start, pw.w_days AS helper_w_days,
+         (SELECT MIN(h.peak_start) FROM `{p}.OI.DIM_US_HOLIDAYS` h
+          WHERE h.category IN ('gift_season','prime_event','back_to_school','seasonal')
+            AND h.boost_start = pw.occurrence_start) AS peak_start
+  FROM `{p}.OI.V_PEAK_WINDOW_RULE` pw
+),
+st AS (
+  SELECT cal.*,
+         CASE WHEN NOT COALESCE(cal.in_peak, FALSE) THEN 'OFF_PEAK'
+              WHEN cal.peak_start IS NOT NULL
+                   AND CURRENT_DATE('America/Los_Angeles') < cal.peak_start THEN 'BOOST'
+              ELSE 'PEAK' END AS calendar_state
+  FROM cal
+),
+winr AS (
+  SELECT st.*,
+         CASE st.calendar_state WHEN 'OFF_PEAK' THEN {w_off} WHEN 'BOOST' THEN {w_boost}
+              ELSE {w_peak} END AS window_days,
+         -- P-10: COMPLETE DAYS ONLY — the window ends at wm - 1; the filling day never enters it
+         DATE_SUB(wm.d, INTERVAL (CASE st.calendar_state WHEN 'OFF_PEAK' THEN {w_off}
+                                       WHEN 'BOOST' THEN {w_boost} ELSE {w_peak} END) DAY) AS window_from,
+         DATE_SUB(wm.d, INTERVAL 1 DAY) AS window_to
+  FROM st CROSS JOIN wm
+),
+-- the keyword's own record in the window. GP is FACT_AMAZON_ADS.GROSS_PROFIT, the stored column
+-- the ladder's own guard sums for settled_gp90 — the same margin source, not a new one.
+kwin AS (
+  SELECT CAST(f.campaign_id AS STRING) cid, CAST(f.keyword_id AS STRING) kid,
+         SUM(f.Ads_cost) w_sp, SUM(f.Ads_clicks) w_clk, SUM(f.Ads_orders) w_ord,
+         SUM(f.GROSS_PROFIT) w_gp
+  FROM `{p}.OI.FACT_AMAZON_ADS` f, winr
+  WHERE f.date BETWEEN winr.window_from AND winr.window_to
+    AND f.keyword_id IS NOT NULL
+  GROUP BY 1, 2
+),
 live7 AS (
   SELECT CAST(campaign_id AS STRING) cid, CAST(keyword_id AS STRING) kid,
          SUM(Ads_cost) sp7, SUM(Ads_clicks) clk7
@@ -259,6 +420,14 @@ SELECT
   hold.eligible_from AS holdout_eligible_from,
   bc.gate_reason AS block_cut_reason,
   COALESCE(live7.sp7, 0) AS sp7, COALESCE(live7.clk7, 0) AS clk7,
+  COALESCE(kwin.w_sp, 0) AS w_sp, COALESCE(kwin.w_clk, 0) AS w_clk,
+  COALESCE(kwin.w_ord, 0) AS w_ord, COALESCE(kwin.w_gp, 0) AS w_gp,
+  CAST(winr.window_from AS STRING) AS window_from,
+  CAST(winr.window_to AS STRING) AS window_to,
+  winr.window_days, winr.calendar_state, winr.in_peak AS cal_in_peak,
+  CAST(winr.peak_start AS STRING) AS cal_peak_start,
+  winr.occurrence_type AS cal_occurrence, winr.helper_w_days AS cal_helper_w_days,
+  CAST(winr.occurrence_start AS STRING) AS cal_occurrence_start,
   CAST(wm.d AS STRING) AS watermark,
   CAST(CURRENT_DATE('America/Los_Angeles') AS STRING) AS today_la
 FROM ks
@@ -275,8 +444,10 @@ LEFT JOIN hold ON hold.cid = ks.campaign_id
 LEFT JOIN bc ON bc.keyword_text = ks.target_text AND NOT COALESCE(ks.is_auto, FALSE)
             AND NOT COALESCE(ks.is_pt, FALSE)
 LEFT JOIN live7 ON live7.cid = ks.campaign_id AND live7.kid = ks.keyword_id
+LEFT JOIN kwin ON kwin.cid = ks.campaign_id AND kwin.kid = ks.keyword_id
 LEFT JOIN instructed instr ON instr.cid = ks.campaign_id AND instr.kid = ks.keyword_id
 CROSS JOIN wm
+CROSS JOIN winr
 -- house rule 9: a total ordering — (campaign_id, target_text) is not a key in the state table,
 -- so the tiebreak reaches the keyword key and two builds of one snapshot emit one row order
 ORDER BY ks.state, ks.family, ks.campaign_name, ks.target_text, ks.campaign_id, ks.keyword_id
@@ -579,6 +750,12 @@ def story(r, disp, new_bid, bits, checks):
     elif disp == 'ENGINE_INSTRUCTED':
         move = (f"no book row — {bits['engine']} already carries a GO instruction on "
                 f"this keyword today (one keyword, one price); the book yields")
+    elif disp == RULE_B_GOOD:
+        v = bits.get('rule_b') or {}
+        held = bits.get('rule_b_held') or 'a move'
+        move = (f"no book row — rule B judges this keyword on the window and it is on the GOOD "
+                f"side: {v.get('reason', '')} The book had priced {held}; that row is dropped, "
+                f"not re-priced, and '{tgt}' keeps its ${(cur or 0):.2f} bid")
     elif disp == 'HOLDOUT_EXCLUDED':
         move = (f"no book row — its campaign is in the HOLDOUT arm and the exclusion is in force "
                 f"since {r['holdout_eligible_from']}")
@@ -795,9 +972,13 @@ def log_batch(rows, batch_id, readme_path):
     return n_logged
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('-o', '--out', default=f".tmp/reprice_book_{date.today():%Y%m%d}.xlsx")
+    ap.add_argument('--rule-b', action='store_true',
+                    help='F7: judge every keyword on the WINDOW and drop every row on a keyword '
+                         'the window calls GOOD — a cut and a raise alike (P-4). OFF by default: '
+                         'without it this book is exactly the book it was before rule B existed.')
     ap.add_argument('--no-log', action='store_true',
                     help='skip the FACT_PPC_CHANGE_LOG batch insert')
     ap.add_argument('--supersede', nargs='*', default=[],
@@ -810,7 +991,11 @@ def main():
                     help='a TMP_/TEMP_ copy of FACT_PPC_CHANGE_LOG to act on instead of the live '
                          'log — the instrument that proves --supersede / --mark-uploaded leave an '
                          'applied batch alone. Any other name is refused.')
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
     if args.change_log_table != LIVE_CHANGE_LOG:
         print(f"CHANGE LOG OVERRIDE: every statement acts on {set_change_log_table(args.change_log_table)}")
 
@@ -829,7 +1014,8 @@ def main():
 
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
 
-    rows = bq(SQL.format(p=PROJECT))
+    rows = bq(SQL.format(p=PROJECT, w_off=PLAN_WINDOW_DAYS['OFF_PEAK'],
+                         w_boost=PLAN_WINDOW_DAYS['BOOST'], w_peak=PLAN_WINDOW_DAYS['PEAK']))
     if not rows:
         print("No AT_BAR / REPRICE / FLOOR_PROBATION / LOSER keywords — the book is empty today.")
         return
@@ -838,17 +1024,50 @@ def main():
     # time-stamped: a re-derived book never collides with an earlier build's batch
     batch_id = f"reprice_book_{today_la.replace('-', '')}_{datetime.now(timezone.utc):%H%M}"
 
+    # RULE B (F7): the window every keyword is judged on, proved complete before it is used
+    w0 = rows[0]
+    cal_state = w0.get('calendar_state') or 'OFF_PEAK'
+    win_days = int(num(w0.get('window_days'), PLAN_WINDOW_DAYS[cal_state]))
+    win_from, win_to = w0.get('window_from'), w0.get('window_to')
+    assert_window_complete(w0['watermark'], win_from, win_to, win_days)
+    assert win_days == PLAN_WINDOW_DAYS[cal_state], \
+        f"the query returned a {win_days}-day window for {cal_state}; P-13 declares " \
+        f"{PLAN_WINDOW_DAYS[cal_state]}"
+    assert cal_state == calendar_state(b(w0.get('cal_in_peak')), w0.get('cal_peak_start'),
+                                       today_la), "the query's calendar state and this file's disagree"
+    win_txt = (f"{win_days} complete days, {win_from} to {win_to} (the ads watermark is "
+               f"{w0['watermark']} and never enters the window)")
+    if args.rule_b:
+        print(f"RULE B: calendar {cal_state}"
+              + (f" — {w0.get('cal_occurrence')} occurrence" if b(w0.get('cal_in_peak')) else "")
+              + f"; window = {win_txt}.")
+
     executable = []   # (row, disposition, new_bid)
     visible = []      # every candidate with disposition + story
     holdout_hits = []
+    rule_b_dropped = []   # (row, the disposition rule B removed, its bid, the verdict)
     for r in rows:
         disp, action, new_bid, checks, bits = classify(r)
+        if args.rule_b:
+            gated, v = rule_b_gate(disp, r, bits)
+            if gated != disp:
+                bits['rule_b_held'] = (
+                    'a pause' if disp == 'PAUSE' else
+                    f"a bid {'cut' if disp == 'BID_DOWN' else 'raise'} "
+                    f"${num(r['current_bid'], 0):.2f} -> ${new_bid:.2f}")
+                rule_b_dropped.append((r, disp, new_bid, v))
+                disp, new_bid, checks = gated, None, []
         st = story(r, disp, new_bid, bits, checks)
         visible.append((r, disp, new_bid, checks, bits, st))
         if disp in EXECUTABLE:
             executable.append((r, disp, new_bid))
         if disp == 'HOLDOUT_EXCLUDED':
             holdout_hits.append(r)
+    if args.rule_b:
+        # P-4 in one assertion: no executable row survives on a keyword the window calls good.
+        for r, disp, nb in executable:
+            v = next(x[4] for x in visible if x[0] is r)['rule_b']
+            assert not v['good'], f"RULE B VIOLATION: {r['target_text']} is on the good side"
 
     # DOCTRINE ASSERTIONS — no executable row may break them
     for r, disp, new_bid in executable:
@@ -913,9 +1132,18 @@ def main():
                      'probation_due', 'engine_instruction', 'holdout_eligible_from',
                      'old_bid', 'new_bid', 'move_pct', 'guard_deferred',
                      'live_7d_spend_CONTEXT_ONLY', 'live_7d_cpc_CONTEXT_ONLY',
+                     # RULE B (F7) — the window every keyword was judged on, and the verdict.
+                     # rule_b_dropped_row names the row this filter REMOVED: never silent.
+                     'rule_b_window', 'rule_b_orders', 'rule_b_spend', 'rule_b_gp',
+                     'rule_b_return', 'rule_b_bar', 'rule_b_verdict', 'rule_b_dropped_row',
+                     'rule_b_reason',
                      'check_reasons', 'story'])
+        dropped_by_key = {(x[0]['campaign_id'], x[0]['keyword_id']): (x[1], x[2])
+                          for x in rule_b_dropped}
         for r, disp, new_bid, checks, bits, st in visible:
             sheet, ln = line_of.get((r['campaign_id'], r['keyword_id']), ('', ''))
+            disp_before, nb_before = dropped_by_key.get((r['campaign_id'], r['keyword_id']),
+                                                        ('', None))
             clk7 = num(r['clk7'], 0)
             cur = num(r['current_bid'], 0)
             pd = bits.get('pd') or {}
@@ -953,6 +1181,18 @@ def main():
                 'yes' if bits['guard'] else '',
                 f"{num(r['sp7'], 0):.2f}",
                 f"{(num(r['sp7'], 0) / clk7):.2f}" if clk7 else '',
+                f"{r.get('window_from')} to {r.get('window_to')} ({r.get('window_days')}d "
+                f"{r.get('calendar_state')})",
+                int(num(r.get('w_ord'), 0)), f"{num(r.get('w_sp'), 0):.2f}",
+                f"{num(r.get('w_gp'), 0):.2f}",
+                (f"{(bits.get('rule_b') or {}).get('ret'):.3f}"
+                 if (bits.get('rule_b') or {}).get('ret') is not None else ''),
+                f"{(bits['bar'] or 1.0):.4f}",
+                (bits.get('rule_b') or {}).get('verdict', ''),
+                (f"{disp_before} ${num(r['current_bid'], 0):.2f} -> "
+                 f"{('PAUSE' if disp_before == 'PAUSE' else '$%.2f' % nb_before)}"
+                 if disp == RULE_B_GOOD else ''),
+                (bits.get('rule_b') or {}).get('reason', ''),
                 ' | '.join(checks), st])
 
     # ---- plain-English readme -------------------------------------------------------
@@ -979,6 +1219,106 @@ def main():
                 f"(ads watermark {rows[0]['watermark']}, states of {today_la}). "
                 f"Change-log batch: **`{batch_id}`**"
                 f"{' (NOT logged — --no-log)' if args.no_log else ''}.\n\n")
+        if args.rule_b:
+            n_good = sum(1 for _, _, _, v in rule_b_dropped if v['verdict'] == 'GOOD')
+            n_grace = sum(1 for _, _, _, v in rule_b_dropped if v['verdict'] == 'GRACE')
+            f.write("## Rule B — the good side is left alone\n\n")
+            f.write(f"This book was built with **rule B on**. Rule B judges every keyword on the "
+                    f"**window** — the last stretch of finished days — instead of on its 90-day "
+                    f"record, and it asks one question: *did this keyword actually work in the "
+                    f"window?* A keyword **worked** if it took **{RULE_B_MIN_ORDERS} or more "
+                    f"orders** in the window **and** the gross profit those sales left, divided "
+                    f"by what the keyword spent, is **at or above its family's bar**. One order "
+                    f"is not enough however good the return looks — one sale is mostly luck. "
+                    f"Spending with no sale is not working. Two or more orders below the bar is "
+                    f"losing.\n\n")
+            f.write(f"**A keyword that worked is not touched by this book — neither cut nor "
+                    f"raised.** It is earning as it is, and the house rule is that holding pays "
+                    f"and churn loses. So every row this book had priced on a working keyword is "
+                    f"**dropped**, in both directions, and listed below with its numbers.\n\n")
+            f.write(f"**The window was {win_txt}.** The calendar says **{cal_state}**"
+                    + ((f" — we are inside the {w0.get('cal_occurrence')} season, which the house "
+                        f"calendar (DIM_US_HOLIDAYS, read through V_PEAK_WINDOW_RULE) opens on "
+                        f"{w0.get('cal_occurrence_start') or w0.get('cal_peak_start') or 'its recorded start'}"
+                        + (f" and turns to peak on {w0['cal_peak_start']}"
+                           if w0.get('cal_peak_start') else ""))
+                       if b(w0.get('cal_in_peak')) else "")
+                    + f". Off-peak the window is {PLAN_WINDOW_DAYS['OFF_PEAK']} days; in the "
+                    f"run-up to a peak and inside one it is {PLAN_WINDOW_DAYS['PEAK']} days, "
+                    f"because a peak moves too fast to be judged on a week. Those two numbers "
+                    f"are **declared in the generator, not read from a settings table** — the "
+                    f"plan's settings table (DE_PLAN_CONFIG, ruling P-13) does not exist yet. "
+                    f"When it is built, this book reads it instead and nothing else changes. "
+                    f"The newest ads day ({w0['watermark']}) is still filling and is deliberately "
+                    f"left out: only finished days are judged.\n\n")
+            f.write(f"**Attribution caveat — read this before trusting a 'not good' verdict.** "
+                    f"The window's sales are still settling. Sponsored Products sales keep "
+                    f"arriving for about a week after the click and Sponsored Brands for about "
+                    f"two, so a keyword judged in a {win_days}-day window that ends "
+                    f"{win_to} has NOT yet been credited with everything it earned. That makes "
+                    f"rule B conservative in one direction only: the good side is understated "
+                    f"(a keyword called quiet today may be good once its sales land), while a "
+                    f"keyword called good has already proved it. This is the known cost of "
+                    f"judging on the window; the plan's shadow arm and the T+14 scorecard exist "
+                    f"to measure it.\n\n")
+            if rule_b_dropped:
+                f.write(f"**{len(rule_b_dropped)} row(s) were dropped by rule B** — {n_good} on a "
+                        f"keyword the window calls good, {n_grace} held by grace (the ladder "
+                        f"calls it a settled winner and its window was merely quiet; a proven "
+                        f"winner keeps the good side for one quiet window, held, never cut). "
+                        f"Note the limit on grace: there is no two-window memory table yet, so "
+                        f"grace here is granted on the ladder's state alone — this book cannot "
+                        f"see whether the previous window was also quiet.\n\n")
+                if n_grace == 0:
+                    f.write(f"(Grace could not fire today by construction: this book only ever "
+                            f"prices keywords the ladder has put in AT_BAR, REPRICE, "
+                            f"FLOOR_PROBATION or LOSER, so a settled {' / '.join(GRACE_LADDER_STATES)} "
+                            f"never reaches it. The rule is implemented and tested for the day the "
+                            f"plan's own generator — which does see every keyword — reads it.)\n\n")
+                for r, d0, nb0, v in rule_b_dropped:
+                    was = ('PAUSE' if d0 == 'PAUSE'
+                           else f"{'cut' if d0 == 'BID_DOWN' else 'raise'} "
+                                f"${num(r['current_bid'], 0):.2f} -> ${nb0:.2f}")
+                    f.write(f"- `{r['target_text']}` in {r['campaign_name']} "
+                            f"({r['family'] or 'unmapped'}) — the book had priced a **{was}**; "
+                            f"dropped. {v['reason']}\n")
+                f.write("\n")
+            else:
+                f.write("**No row was dropped by rule B today** — every row this book priced "
+                        "sits on a keyword the window does not call good.\n\n")
+            # WHAT RULE B DID NOT DO. The filter only REMOVES rows on the good side; it does not
+            # re-price the not-good side (that is the plan's seat queue, not this book). So a row
+            # can survive on a keyword whose WINDOW lost while its 90-day record is above the bar
+            # — the ladder and rule B disagreeing out loud. Those rows are named, never buried.
+            kept_v = [(r, d, nb, (bits.get('rule_b') or {}))
+                      for r, d, nb, cf, bits, st in visible if d in EXECUTABLE]
+            disagree = [(r, d, nb, v) for r, d, nb, v in kept_v
+                        if v.get('verdict') == 'LOSING' and d == 'BID_UP']
+            counts = {}
+            for _, _, _, v in kept_v:
+                counts[v.get('verdict', '?')] = counts.get(v.get('verdict', '?'), 0) + 1
+            f.write("**What rule B did NOT do.** It only takes rows away. It never re-prices a "
+                    "keyword and never adds a row, so every row still on the sheet was priced by "
+                    "the book's own 90-day doctrine and only survived because the window does "
+                    "not call that keyword good. The rows that survived stand on windows that "
+                    "say: "
+                    + ", ".join(f"{n} {k.lower().replace('_', ' ')}" for k, n in sorted(counts.items()))
+                    + ".\n\n")
+            if disagree:
+                f.write(f"**The ladder and rule B disagree out loud on "
+                        f"{len(disagree)} row(s).** Each is a RAISE, because the keyword's settled "
+                        f"90-day record sits above its family bar — while the window just past "
+                        f"says it lost money. The book raises it (the 90-day record is the "
+                        f"deeper evidence and rule B's job here is only to protect the good "
+                        f"side), but you are the last gate: delete the line if the window is the "
+                        f"story you believe.\n\n")
+                for r, d, nb, v in disagree:
+                    sheet, ln = line_of[(r['campaign_id'], r['keyword_id'])]
+                    f.write(f"- **{sheet} row {ln}** — `{r['target_text']}` in "
+                            f"{r['campaign_name']}: raise ${num(r['current_bid'], 0):.2f} -> "
+                            f"${nb:.2f}. {v['reason']}\n")
+                f.write("\n")
+            f.write("---\n\n")
         f.write("**The doctrine every row obeys.** A keyword is judged on which SIDE of its family "
                 "bar its settled 90-day record sits, not on its state label. Above the bar it is a "
                 "paying keyword and is never pulled down — the only move allowed is a raise, and only "
@@ -1008,7 +1348,10 @@ def main():
                 "from the campaign model are flagged PLACEMENT_DIVERGES. The 7-day figures in the "
                 "audit are context only — no verdict and no price reads them.\n\n")
         f.write(f"**{len(executable)} executable rows**: {n_down} bid-downs, {n_up} bid-ups, "
-                f"{n_pause} pauses. Held back by doctrine: {n_no_cut} above-bar row(s) whose standing "
+                f"{n_pause} pauses"
+                + (f" — after rule B dropped {len(rule_b_dropped)} row(s) on good keywords"
+                   if args.rule_b else "")
+                + f". Held back by doctrine: {n_no_cut} above-bar row(s) whose standing "
                 f"price would have cut them (NO_CUT_ABOVE_BAR), {n_no_raise} below-bar row(s) whose "
                 f"placement translation would have raised them (NO_RAISE_BELOW_BAR). Bid-space "
                 f"totals: −${bid_down_total:.2f} across the downs, +${bid_up_total:.2f} across the "
@@ -1082,7 +1425,7 @@ def main():
                     f"nothing else in the sheet changes — then label its change-log row "
                     f"FAILED_UPLOAD.\n\n")
         others = [(r, disp, st) for r, disp, nb, cf, bits, st in visible
-                  if disp not in EXECUTABLE + ('SEASON_BLOCKED', 'TOO_THIN')]
+                  if disp not in EXECUTABLE + ('SEASON_BLOCKED', 'TOO_THIN', RULE_B_GOOD)]
         if others:
             f.write("---\n\n## Candidates with no executable row (audit visibility)\n\n")
             for r, disp, st in others:
@@ -1091,8 +1434,9 @@ def main():
     # ---- review table ---------------------------------------------------------------
     print(f"\n{len(rows)} candidate rows -> {len(executable)} executable "
           f"({n_down} down · {n_up} up · {n_pause} pause) · "
-          f"{len(blocked)} season-blocked · {len(thin)} too thin · "
-          f"{len(rows) - len(executable) - len(blocked) - len(thin)} other\n")
+          + (f"{len(rule_b_dropped)} dropped by rule B · " if args.rule_b else "")
+          + f"{len(blocked)} season-blocked · {len(thin)} too thin · "
+          f"{len(rows) - len(executable) - len(blocked) - len(thin) - len(rule_b_dropped)} other\n")
     hdr = f"{'target':<30} {'campaign':<34} {'st':<8} {'side':<5} {'ord':>3} {'old':>5} {'new':>5} {'raw':>5}  disposition"
     print(hdr)
     print('-' * len(hdr))
