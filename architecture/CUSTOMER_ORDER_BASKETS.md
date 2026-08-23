@@ -510,3 +510,42 @@ It is a full MERGE and is idempotent — running it twice changes nothing.
 Every row must read `PASS`. See **Acceptance-suite semantics** above before
 treating a `FAIL` (or a `PASS`) at face value — several checks have
 non-obvious edge cases baked into their design.
+
+## Why the orders watermark was NOT advanced (parked 2026-08-23)
+
+Considered and rejected for now: using the order feed to advance the orders
+watermark (`architecture/ORDERS_WATERMARK.md`) so the P&L, 7-day summary and
+forecast views could cut on a later date. Two findings killed it.
+
+**There is no proven freshness gain.** It is tempting to compare the maximum
+date PRESENT in the order feed against the maximum date PUBLISHED by Sales &
+Traffic and conclude orders run two days ahead. That comparison is wrong — it
+puts max-date-present against max-date-complete. Measured 2026-08-23: every day
+from 2026-08-14 to 2026-08-21 ties Sales & Traffic exactly on units, and Sales &
+Traffic already has 2026-08-21 (~25h past day-end). The only day the order feed
+adds is 2026-08-22 at one hour past day-end, which the 14h median / 41h p90
+ingestion lag says is nowhere near settled. Require any settling period and the
+two sources converge.
+
+**The completeness gate cannot be calibrated yet.** The sessions gate exists
+because an uncalibrated watermark advance cost a 54% under-report on 2026-08-05.
+Any order-feed equivalent needs its own completeness signal. Two candidates were
+tested and both failed:
+
+- *Last arrival per day* — useless. Orders are re-emitted on status change, so
+  `MAX(batch_time)` per purchase_date reads "last touched", not "last new order".
+  Days as old as 2026-08-18 still showed arrivals.
+- *Arrival curve vs. day-end* — not yet measurable. The connector went live
+  2026-08-22, so every earlier day was bulk-loaded during the backfill sweep and
+  its "first arrival" records when Daton caught up, not when Amazon released the
+  order. The curve came back as 0% complete at 24h for 2026-08-19/20 and 100% at
+  midnight for 2026-08-22 — an artifact, not behaviour.
+
+**When to revisit:** once several days have been ingested incrementally from
+their own midnight (roughly a week after 2026-08-22), rebuild the arrival curve
+from the raw Daton table using each order's FIRST `_daton_batch_runtime` grouped
+by LA purchase date, and measure what share of a day's final units have landed
+at 6h / 12h / 24h past that day's midnight. If days are ~99% complete well
+before Sales & Traffic publishes them, an age-gated advance becomes defensible
+with a measured threshold rather than a guessed one. Until then the sessions
+gate stands and is correct.
