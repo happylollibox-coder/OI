@@ -44,6 +44,79 @@ only asks "does at least one item row exist for this order", not "have all
 its lines arrived" — a partially-synced order still counts as covered, and
 `units_missing` is what catches that at month level.
 
+## What the coverage gate does NOT guarantee
+
+`V_ORDER_ITEM_COVERAGE.coverage_pct` answers exactly one question: *of the
+order headers currently on file for this month, how many have their line
+items arrived?* It does **not** answer *are the headers themselves complete
+for this month?* — those are two different failure modes, and the gate is
+blind to the second one.
+
+**Worked example: 2024-08 reads 100% and is still wrong.**
+
+```
+month,      fact_units, st_units, diff
+2024-08-01, 434,        1043,     -609
+2024-11-01, 3639,       3639,     0
+2025-06-01, 799,        799,      0
+```
+
+`V_ORDER_ITEM_COVERAGE` reports August 2024 at 100% coverage — correctly, by
+its own definition: every header present that month does have its items (A6,
+the header-reconciliation check, confirms 0 mismatches). But the headers
+themselves are incomplete. `V_SRC_ListOrder` — the order-HEADER feed, upstream
+of everything in this pipeline — is sparse from 2024-08-01 through roughly
+2024-08-20 (a handful of orders a day against 25-50 units/day of real Sales &
+Traffic volume), then ties Sales & Traffic almost exactly from **2024-08-22**
+onward (22=22, 23=20/20, 25=37/37, 31=44/44, day-by-day). This is the SP-API
+Orders **two-year retention boundary**: as of today (2026-08-23) an order
+placed before roughly 2024-08-22 falls outside that window and the API no
+longer returns it by default — the handful that do appear earlier (back to
+2024-08-03) are orders that surfaced only because something about them was
+updated later, not a complete record of that period. Comparing 2024-08 fact
+units (434) against Sales & Traffic (1043) makes the gap concrete: **-609
+units**, entirely a header problem, not an item-sync problem — confirmed by
+A6 passing clean on the same month.
+
+**Reconciling an apparent contradiction:** this SOP says history floors at
+~2024-08-22 elsewhere, while the earliest order in the fact is 2024-08-03.
+Both are true at once and describe different things. ~2024-08-22 is where
+**complete** history starts — the header feed ties Sales & Traffic from there
+on. 2024-08-03 is merely the earliest **surviving** order from before that —
+a scattered straggler the API still returns because it was touched again
+after the retention window would otherwise have dropped it. Do not read
+2024-08-03 as "data starts here"; read ~2024-08-22 as "data starts here."
+
+**Practical rule:** for any analysis reaching into 2024-08, do not trust the
+coverage gate alone — cross-check the month against
+`SRC_ACC_SALES_TRAFFIC_DAILY` units the same way the worked example above
+does. This class of gap (headers missing, not just items lagging) is
+specific to the two-year retention boundary and is not expected elsewhere,
+but the cross-check is cheap and worth running on **any** month whose numbers
+look surprising, not only August 2024 — coverage_pct cannot tell you if it is
+wrong about something upstream of itself.
+
+**The tie-out method itself is sound.** The other two qualifying months
+(`coverage_pct >= 99.99`) tie exactly: 2024-11 (3,639 = 3,639) and 2025-06
+(799 = 799), both diff 0. 2024-08 is a real data boundary, not a broken
+comparison — the method correctly flags it as an outlier rather than
+silently averaging it away.
+
+**Go / no-go, verified 2026-08-23** (the item feed's horizon moves as the
+backfill progresses — re-run `V_ORDER_ITEM_COVERAGE` before trusting this
+list on a later date; it is a snapshot, not a standing fact):
+
+| Range | Status |
+|---|---|
+| 2024-09 through 2025-07 | Usable for basket/cross-sell analysis, every month at `coverage_pct` 99.7-100% — subject to the 2024-08-style residual gaps already documented, and always worth a spot cross-check |
+| 2025-08 | **Not clean** — `coverage_pct` 98.93%, just under the 99% bar; do not draw conclusions from it without cross-checking against Sales & Traffic first |
+| 2025-09 | **Not usable** — `coverage_pct` 4.27%, mid-backfill |
+| 2025-10 through 2026-08 | **Not usable** — `coverage_pct` 0.0%, not yet reached by the item-feed backfill |
+
+Item feed horizon (`MAX(purchase_date)` in `FACT_CUSTOMER_ORDER_ITEM`) as of
+2026-08-23: **2025-08-28**. Anything past that date has no line items at all
+yet, regardless of how many order headers exist for it.
+
 ## Standing facts
 
 - **Join key is composite:** `(selling_partner_id, amazon_order_id)`, always both.
