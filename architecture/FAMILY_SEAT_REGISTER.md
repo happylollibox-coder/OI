@@ -647,6 +647,19 @@ leak no book carries is sent to the next leak book. B32 was rewritten to assert 
 it from `FACT_PPC_CHANGE_LOG` and checking that every batch id a sentence names is one the log
 actually holds.
 
+**When B04 is valid, and the drift a mid-day run reports (2026-08-23).** The acceptance suite's
+B04 compares two objects on different clocks: the register's occupant set follows the BASIS WINDOW,
+which moves the moment the ads watermark advances, while `DE_FAMILY_SEAT_LEDGER` moves only when
+`SP_MAINTAIN_FAMILY_SEATS` runs (step 20.8b, right after the keyword-state snapshot). Run the suite
+in between and B04 reports that gap as violations — new occupants with no ledger row yet (`seat_no`
+NULL, and two NULLs in one family also read as a duplicate `(family, seat_no)` pair), and open
+ledger rows whose keyword stopped spending. It is the pipeline's ordinary mid-day state, not a
+defect in the view, and it clears on the next pass. Before treating a B04 failure as a defect,
+compare the last `SP_MAINTAIN_FAMILY_SEATS` in `LOG_PIPELINE_RUNS` against the current ads
+watermark; if the watermark is newer, re-run after the next pass. The check that a change did not
+CAUSE it is to point a `TMP_` copy of the previous view body at the same ledger and read the same
+number — which is exactly how the seventh pass cleared itself.
+
 **TDD record (sixth pass, 2026-08-23).** Against the LIVE deployed view the new B35 read **65**
 violations while B01–B34 all passed; after the repaired view was deployed all **35** read PASS,
 `DE_FAMILY_SEAT_LEDGER` A01–A16 stayed 16/16, two uncached pulls gave 331 rows and an identical
@@ -1111,6 +1124,25 @@ change is then a derivation or a source, never a literal.
    `SELECT batch_id, upload_status, COUNT(*) AS rows_in_batch FROM
     onyga-482313.OI.FACT_PPC_CHANGE_LOG WHERE action = 'KEYWORD_PAUSE'
     GROUP BY 1, 2 ORDER BY 1;`
+13. **A negative for a self-target its own pause only PARTLY covers** (2026-08-23, from the leak
+   arm). Where a bleeding search term is the very ASIN the ad group's product target buys, and that
+   target is the only keyword drawing it, the leak's pause already removes every dollar a negative
+   would — so the arm refuses the negative and says why (`SELF_TARGET_PAUSE_COVERS`). Today all
+   three candidates were that case. The rule as written DOES emit a negative when OTHER keywords in
+   the ad group also draw the term, on the reasoning that the pause cannot reach those clicks. Nobody
+   has ruled that this is wanted: blocking an ASIN an ad group deliberately targets elsewhere may be
+   wrong even where the arithmetic favours it. No live row has hit the case yet. *To overrule:* one
+   branch in `classify_negate`, and the refusal reason changes with it.
+14. **Does the leak arm cover LAUNCH (INVEST) families?** (2026-08-23.) It is HARVEST-only today,
+   because the register publishes LEAK rows for working families only and launch families are
+   outside the doctrine entirely (rule 12: launches are never judged on profit). A DEAD keyword
+   still bleeding inside a launch campaign therefore gets no sheet row from anything in this
+   design. That may be right — a launch is buying information, not profit — or it may be a hole,
+   because a keyword the ladder has already CLOSED is not buying information either. Your call.
+   Read what would be in scope if it changed:
+   `SELECT family, campaign_name, target_text, state, next_check_date FROM
+    onyga-482313.OI.FACT_KEYWORD_STATE s JOIN onyga-482313.OI.V_BOOK_ASSIGNMENT b USING (family)
+    WHERE b.book = 'INVEST' AND s.state IN ('DEAD', 'PARKED');`
 
 ## What the register never does
 

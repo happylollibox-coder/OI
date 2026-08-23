@@ -21,6 +21,17 @@
 --       family); and no keyword appears in two of SEAT / LEAK / GAP / NO_CLOCK.
 --   B04 Seats are numbered: every SEAT row carries a seat_no; (family, seat_no) is unique among
 --       SEAT rows; the number is the open ledger row's; every open ledger row has a SEAT row.
+--       WHEN THIS CHECK IS VALID (2026-08-23). It compares two objects on DIFFERENT clocks: the
+--       register's occupant set is derived from the basis window, which moves when the ads
+--       watermark advances, while DE_FAMILY_SEAT_LEDGER only moves when SP_MAINTAIN_FAMILY_SEATS
+--       runs (orchestrator step 20.8b, right after the keyword-state snapshot). Run the suite
+--       between a watermark advance and the next 20.8b and B04 reports the drift as violations:
+--       occupants the ledger has not been offered yet come through with a NULL seat_no (and two
+--       NULLs in one family also read as a duplicate (family, seat_no) pair), and occupants that
+--       stopped spending leave an open ledger row with no SEAT row. That is the pipeline's
+--       ordinary state mid-day, not a defect in the view — before treating a B04 failure as one,
+--       check `LOG_PIPELINE_RUNS` for the last SP_MAINTAIN_FAMILY_SEATS against the current ads
+--       watermark, and re-run after the next pass. The register never writes the ledger.
 --   B05 No launch family is judged: zero FAMILY rows for INVEST families; REFERENCE rows carry
 --       doctrine_status 'REFERENCE' and never IN / AT_LINE / OUT.
 --   B06 Brand defense never gets a move: no SEAT / LEAK / GAP / NO_CLOCK row whose keyword is
