@@ -47,6 +47,13 @@ Ori); and the batch written to the change log is asserted to be exactly the rows
         grace). Every dropped row is named with its window numbers in the audit CSV and the
         README: rule B removes rows, it never adds one and never changes a price.
         Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md (P-1..P-13).
+    F8  THE README IS EXECUTABLE, AND A HALF-BUILT BOOK IS NEVER PUBLISHED. Every instruction
+        the README gives carries the command that performs it — where the sheet is uploaded,
+        --mark-uploaded after Ori uploads, --supersede on the next build if he does not, the
+        FAILED_UPLOAD label for a deleted line, and the restore sheet by NAME with the command
+        that builds it. The book, the audit and the README are written as `.partial` drafts and
+        renamed onto their final names only AFTER the change-log insert, so a build that dies
+        early leaves no book naming a batch that has no rows behind it.
 
 WHY THIS EXISTS
     v27.103 gave every keyword a verdict against its FAMILY's bar (AT_BAR / REPRICE / LOSER —
@@ -871,6 +878,86 @@ def prior_unmarked_batches():
     return bq(prior_unmarked_sql())
 
 
+# ---- F8: the README is executable, and a half-built book is never published --------------
+DRAFT_SUFFIX = '.partial'
+HOUSE_PYTHON = '/usr/local/bin/python3'
+
+
+def draft_path(final_path):
+    """Every output is written under this name first and renamed onto its final name only
+    after the change log holds the batch (see publish_drafts)."""
+    return final_path + DRAFT_SUFFIX
+
+
+def publish_drafts(final_paths):
+    """Rename every draft onto its final name, or nothing at all.
+
+    WHY: a build that wrote the book, the audit and the README and then died before the
+    change-log insert used to leave a complete-looking trio at the DEFAULT output path naming
+    a batch id with no rows behind it. Uploading that sheet would be invisible to the
+    scorecard and to the guard. Publishing after the log makes 'a book exists on disk' mean
+    'its batch exists in the log'."""
+    for p in final_paths:
+        assert os.path.exists(draft_path(p)), f"draft missing, nothing published: {draft_path(p)}"
+    for p in final_paths:
+        os.replace(draft_path(p), p)
+
+
+def restore_path_for(out_path):
+    """The name build_restore_reprice_bulksheet.py will write, so the README can NAME the file
+    instead of saying 'next to this one'. That script's default is
+    .tmp/restore_reprice_<today>.xlsx — derived here from the book's own date so the two agree."""
+    base = os.path.basename(out_path).rsplit('.', 1)[0]
+    digits = ''.join(c for c in base if c.isdigit())[:8]
+    if len(digits) != 8:                      # an ad-hoc book name carries no date: use today's
+        digits = f"{date.today():%Y%m%d}"
+    return os.path.join(os.path.dirname(out_path) or '.', f"restore_reprice_{digits}.xlsx")
+
+
+def lifecycle_section(batch_id, out_path, audit_path, restore_path, no_log=False):
+    """The README section that lets a reader who has ONLY this file run the whole lifecycle.
+
+    The book told Ori to label the batch and never showed him a command; every instruction now
+    carries the invocation that performs it. Nothing here uploads: the sheet goes to Amazon by
+    hand, and --mark-uploaded is the confirmation that he did it."""
+    s = ["## What to do with this file\n\n"]
+    s.append(
+        f"**1. Read it, then upload it by hand.** Open `{os.path.basename(out_path)}` in Amazon "
+        f"Ads > Sponsored ads > **Bulk operations** > *Upload file*. No script in this repo ever "
+        f"uploads to Amazon — this one only prepares the sheet. Delete any line you disagree "
+        f"with before uploading; the row-by-row notes below say exactly what deleting each line "
+        f"costs.\n\n")
+    if no_log:
+        s.append(
+            f"**2. This build did NOT log a batch — the batch was not logged** (`--no-log`), so "
+            f"`{batch_id}` is a name on "
+            f"this page and nothing else — there are no change-log rows behind it. Do not upload "
+            f"this sheet as a real move: rebuild without `--no-log` so the batch exists and the "
+            f"scorecard can grade it.\n\n")
+        return ''.join(s)
+    s.append(
+        f"**2. If you uploaded it, say so** — that is what flips the batch from pending to "
+        f"applied, so the scorecard grades these moves and the state machine sees them:\n\n"
+        f"```\n{HOUSE_PYTHON} tools/build_reprice_bulksheet.py --mark-uploaded {batch_id}\n```\n\n")
+    s.append(
+        f"**3. If you did NOT upload it**, the batch must be labelled `SUPERSEDED_NEVER_UPLOADED` "
+        f"(never deleted) or the guard will treat these bids as live. The label is written by the "
+        f"next book, which supersedes this one as it logs its own:\n\n"
+        f"```\n{HOUSE_PYTHON} tools/build_reprice_bulksheet.py --rule-b --supersede {batch_id}\n"
+        f"```\n\nThat flag acts on `PENDING_UPLOAD` rows only — an already-uploaded batch stops "
+        f"the build with a sentence rather than being re-labelled.\n\n")
+    s.append(
+        f"**4. If you deleted a line before uploading**, label that one row `FAILED_UPLOAD` in "
+        f"`FACT_PPC_CHANGE_LOG` by hand (batch `{batch_id}`, matched on its target and campaign). "
+        f"A change-log row is labelled, never deleted.\n\n")
+    s.append(
+        f"**5. To put every bid back**, build the undo sheet from this book's own audit — it "
+        f"restores exactly what this book changed, nothing re-derived:\n\n"
+        f"```\n{HOUSE_PYTHON} tools/build_restore_reprice_bulksheet.py --audit {audit_path}\n"
+        f"```\n\nIt writes `{os.path.basename(restore_path)}`, which is uploaded the same way.\n\n")
+    return ''.join(s)
+
+
 def pending_count_sql(bid):
     return (f"SELECT COUNT(*) n FROM `{CHANGE_LOG}` "
             f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
@@ -1112,12 +1199,12 @@ def main():
         for i, (r, d, nb) in enumerate(sb_rows, start=2):
             ws.append([(sb_pause_row(r) if d == 'PAUSE' else sb_bid_row(r, nb))[h] for h in SB_HEADERS])
             line_of[(r['campaign_id'], r['keyword_id'])] = (SB_SHEET, i)
-    wb.save(args.out)
+    wb.save(draft_path(args.out))
     assert len(line_of) == len(executable), "sheet rows != executable rows"
 
     # ---- audit csv (every candidate row, executable or not) -------------------------
     audit_path = args.out.rsplit('.', 1)[0] + '_audit.csv'
-    with open(audit_path, 'w', newline='') as f:
+    with open(draft_path(audit_path), 'w', newline='') as f:
         wr = csv.writer(f)
         wr.writerow(['sheet', 'excel_row', 'disposition', 'check_first', 'state', 'bar_side',
                      'family', 'campaign_id', 'campaign', 'ad_group_id', 'keyword_id', 'target',
@@ -1213,12 +1300,16 @@ def main():
     null_pf = sorted({(r['campaign_name'], r['echo_portfolio_id']) for r, d, nb in executable
                       if not r.get('latest_portfolio_id')})
     readme_path = args.out.rsplit('.', 1)[0] + '_README.md'
-    with open(readme_path, 'w') as f:
+    restore_path = restore_path_for(args.out)
+    with open(draft_path(readme_path), 'w') as f:
         f.write("# The reprice book — what each row does and why\n\n")
         f.write(f"Built {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} from `{args.out}` "
                 f"(ads watermark {rows[0]['watermark']}, states of {today_la}). "
                 f"Change-log batch: **`{batch_id}`**"
                 f"{' (NOT logged — --no-log)' if args.no_log else ''}.\n\n")
+        # F8: every instruction this file gives carries the command that performs it.
+        f.write(lifecycle_section(batch_id, args.out, audit_path, restore_path,
+                                  no_log=args.no_log))
         if args.rule_b:
             n_good = sum(1 for _, _, _, v in rule_b_dropped if v['verdict'] == 'GOOD')
             n_grace = sum(1 for _, _, _, v in rule_b_dropped if v['verdict'] == 'GRACE')
@@ -1383,7 +1474,9 @@ def main():
                 f"old and new bid and an upload note. **If you do not upload this book, label the "
                 f"batch `SUPERSEDED_NEVER_UPLOADED`** (never delete a log row); if you delete a line "
                 f"before uploading, label that row `FAILED_UPLOAD`. Otherwise the scorecard grades "
-                f"moves that never happened and the guard treats them as applied.\n\n")
+                f"moves that never happened and the guard treats them as applied. "
+                f"**The commands for all of that are in 'What to do with this file' at the top of "
+                f"this page.**\n\n")
         if holdout_allowed or armed:
             f.write(f"**Holdout interlock.** Campaigns in the HOLDOUT arm are excluded from this "
                     f"book from **{armed[0] if armed else 'n/a'}**; today that excluded "
@@ -1464,6 +1557,11 @@ def main():
         print(f"\nLogged {n_logged} rows to {CHANGE_LOG.split('.')[-1]} as batch {logged} — read back and "
               f"asserted equal to the {len(executable)} sheet rows "
               f"(label SUPERSEDED_NEVER_UPLOADED if the book is not uploaded).")
+
+    # F8: publish only now. Until this line the three outputs carry a .partial suffix, so a
+    # build that died before the log leaves no book at the output path naming a batch that
+    # does not exist. A book on disk means its batch is in the change log.
+    publish_drafts([args.out, audit_path, readme_path])
 
     stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     print(f"\n[{stamp}] wrote {len(executable)} rows -> {args.out}")
