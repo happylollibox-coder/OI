@@ -2,7 +2,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md` (rulings P-1..P-14)
 **Plan:** `docs/superpowers/plans/2026-08-23-next-week-money.md` (Tasks 0..8)
-**Status:** Task 0 shipped (v27.130), repaired (v27.131, v27.132). This SOP grows one section per task; Task 8 completes it.
+**Status:** Task 0 shipped (v27.130), repaired (v27.131, v27.132); Task 1, the judgement layer, shipped (v27.133). This SOP grows one section per task; Task 8 completes it.
 
 > One engine plans next week's not-good money for the working families (HARVEST book: Bottle,
 > Lollibox, LolliME, Fresh). Good keywords are never cut and never re-priced (P-4). The not-good
@@ -298,7 +298,12 @@ judges keywords today, `tools/build_reprice_bulksheet.py --rule-b`:
   `rule_b_gp_corrected`) and in the plain-English reason the README prints.
 
 **To overrule:** one sentence — *"judge the window as it reads"* — and both halves come out of
-`rule_b()` and, when Task 1 lands, out of `V_PLAN_WINDOW_JUDGMENT`. Nothing else changes.
+`rule_b()` and out of `V_PLAN_WINDOW_JUDGMENT` (§2, shipped v27.133). Nothing else changes.
+
+**Since v27.133 there is a second, sharper question underneath it:** under a rolling window the
+guard never lifts, so it does not delay a demotion, it prevents one. §2 states the consequence,
+publishes the query that measures it, and gives the one-line ruling that would turn the veto
+back into a delay.
 
 ### What the correction is actually worth — measure it, do not take a number from this page
 
@@ -402,7 +407,158 @@ the live share is whatever `DE_PLAN_CONFIG` declares for today's state, which ma
 
 ---
 
-## 2. The judgement layer (Task 1) — to be written
+## 2. The judgement layer (Task 1, v27.133)
+
+Three objects, deployed in this order:
+
+| object | one responsibility |
+|---|---|
+| `V_PLAN_SETTLE_COMPLETION` | per (channel, age in days), how much of that day's ads sales had arrived when we read it (P-14a) |
+| `FACT_PLAN_NEXT_WEEK` | the nightly plan table — **created empty here**, filled by the builder in Task 2 |
+| `V_PLAN_WINDOW_JUDGMENT` | one row per working-family keyword: the window, its record raw and corrected, the side both plans give it, the arm that decided it, the repaired price, the seat cost and the rank |
+
+Nothing in this layer moves money. It judges, and it says out loud who judged. The potting,
+seating, queueing and the budgets are Task 2 (`SP_BUILD_NEXT_WEEK_PLAN`).
+
+### The window, and why it is fenced
+
+`window_days` complete days ending at
+
+```
+window_to = LEAST(watermark - 1, CURRENT_DATE('America/Los_Angeles') - 2)
+watermark = LEAST(MAX(date), FN_ADS_ANCHOR_CAP())   over FACT_AMAZON_ADS
+```
+
+The first term is P-10: the filling day never enters a window. The second is the P-14a fence:
+`FN_ADS_ANCHOR_CAP()` advances to the current Los Angeles date at 22:00 LA, so a late-evening run
+would otherwise judge a day that is only one day old — and the published curve puts an age-1 day's
+**spend** materially short of final, which would understate the pot, the allowance and every seat
+cost in the same direction, silently. Before 22:00 LA the two terms are equal and the fence costs
+nothing. `window_days` and the order floor come from `DE_PLAN_CONFIG` for the state
+`FN_PLAN_CALENDAR_STATE` reads today; no setting is a literal in the SQL.
+
+Read today's window, never copy one from this page:
+
+```sql
+SELECT DISTINCT calendar_state, window_days, min_orders, watermark, window_from, window_to
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
+```
+
+### The correction (P-14a), and the one number a reader can check
+
+Each window day has a completion factor for its channel and age, read from `V_ADS_SETTLE_CURVE`
+through `V_PLAN_SETTLE_COMPLETION` (forward-filled over unmeasured ages, made monotone in age,
+capped at 1.0, floored at a declared 0.50, and honest — `curve_available = FALSE` means the curve
+could not answer and the factor is 1.0). The window's gross profit is then corrected by **one
+reversible division**:
+
+```
+settle_factor_eff = SUM(|gp_day|) / SUM(|gp_day| / factor_day)      -- in (0, 1]
+w_gp_corrected    = w_gp / settle_factor_eff
+```
+
+When every day of a window has the same sign — the normal case — this is algebraically the same as
+dividing each day by its own factor, which is how the ruling describes it. Writing it as one
+division is what makes the §9 guarantee true *by construction* rather than by luck: gross profit
+can be negative on a day, and a mixed-sign window corrected day-by-day can come out **smaller** in
+magnitude than the raw window, which is the opposite of what the correction is for. The acceptance
+(C10) checks that `w_gp_corrected × settle_factor_eff` reconstructs `w_gp`, so the correction stays
+a single audited step. **Spend is never corrected** — the same curve publishes spend at its final
+value from age 2, and the fence guarantees age 2. Check that claim against the curve, not this
+page:
+
+```sql
+SELECT channel, age_days, sales_completion, spend_completion, curve_available, factor_source
+FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION` WHERE age_days <= 4 ORDER BY channel, age_days;
+```
+
+**Order counts are never corrected.** A count cannot be fractional, so the P-3 floor always reads
+observed orders — which is also why the correction can promote only a keyword that already clears
+the floor and sits just under its bar (§1b).
+
+### Who decided each row
+
+`decided_by` is the ruling (`P-3`, `P-5`, `P-14b`) and `settle_arm` is what the correction did
+(`SETTLED`, `CORRECTED`, `PROMOTED_ON_FRESH`, `HELD_UNSETTLED`, `UNCORRECTED_NO_CURVE`). The order
+of the arms in the view is: GOOD on the corrected window → **HELD_UNSETTLED** (the guard) → GRACE
+(P-5) → LOSING / ONE_ORDER / NO_SALE / NOT_SERVING. The guard is tested **before** grace so a
+one-window grace is not spent while the evidence is still arriving. (`tools/build_reprice_bulksheet.py
+--rule-b` orders grace first; both put the row on the good side, so only the arm's NAME differs —
+Task 4 aligns the book to the view.)
+
+Every row also carries two plain sentences: `sentence` (what the keyword did and what happens to
+it) and `settle_arm_sentence` (which arm decided it). A keyword that took no spend and no clicks
+in the window is `SETTLED` with "nothing to correct and nothing arriving" — `UNCORRECTED_NO_CURVE`
+is reserved for rows the curve genuinely could not answer, because that label is the one that tells
+Ori the plan is resting on the guard alone.
+
+```sql
+SELECT family, verdict, decided_by, settle_arm, sentence, settle_arm_sentence
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` ORDER BY w_sp DESC LIMIT 20;
+```
+
+### THE OPEN QUESTION THIS LAYER PUT ON ORI'S DESK
+
+P-14b says a keyword that was good is not demoted **until its window has settled**. Under a rolling
+window that always ends two days ago, a window is never settled at the moment it is judged: the
+"judged again with no guard" date in §3a never arrives, because the next night judges a **new**
+unsettled window. So as built the guard is not a delay — it is a **veto**: a keyword whose ladder
+record clears its family bar cannot be moved to the not-good side by rule B at all, whatever the
+window says. That pulls rule B (P-1: the window decides the side) back towards plan A (the ladder
+decides), and it moves real money to the good side, where P-4 says it is never cut and never
+re-priced. It is built exactly as the ruling is written. Measure it before arguing about it:
+
+```sql
+SELECT family, side_b, settle_arm, COUNT(*) AS keywords,
+       ROUND(SUM(w_sp) / MAX(window_days), 2) AS spend_per_day,
+       COUNTIF(is_candidate) AS candidates
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
+GROUP BY 1, 2, 3 ORDER BY family, side_b, spend_per_day DESC;
+```
+
+**To overrule, one line each.** *"Judge the window as it reads"* — drop the correction and the
+`HELD_UNSETTLED` arm (§1b). *"The guard is a delay, not a veto"* — demote on the last window that
+**has** settled (a second window ending `settle_days` before `window_to`) while promotion keeps
+reading the fresh one; that is a change to P-14b's evidence, and nobody has made it.
+
+### Candidacy, price, seat cost and rank
+
+- **Candidate** = a not-good keyword, not in the holdout, with something to repair (losing, one
+  order, or spend with no sale). A keyword that took no spend and no clicks has no repair to buy
+  and is a candidate only if LIFT's probe list nominates it (P-11 keeps that list as a candidate
+  *source*) — otherwise every dormant keyword would queue for a zero-cost seat and bury the
+  ranking the seats exist for.
+- **Repaired price** (P-6) = the ladder's `affordable_bid`, capped at three 5 % steps either way
+  from the live bid, floored at the row's own `bid_floor`, ceilinged at the house $2.00 on a
+  raise. The cap constants are mirrored from the reprice book so the book and the plan cannot
+  price the same keyword differently.
+- **Seat cost** (P-6) = spend at *that* price, per day — the window's spend per day scaled by the
+  price change; a candidate with no window spend is costed from `T_OOB_SEAT_ECONOMICS`.
+- **Rank** (P-7) = dollars at stake × closeness to the bar, ties by clicks then by the keyword key
+  (a total ordering, so two reads never disagree).
+
+### Deploy and verify
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/views/V_PLAN_SETTLE_COMPLETION.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tables/FACT_PLAN_NEXT_WEEK.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql)"
+```
+
+The acceptance is thirteen checks and **every row must read PASS**: the fenced complete-days window
+(C01), the universe (C02), the keyword grain (C03), both plans' sides (C04), the correction's
+honesty (C05, C09, C10), the asymmetric guard (C06), the order floor read on observed orders and
+`decided_by` always named (C07), a usable price / seat cost / rank on every not-good row (C08), a
+plain sentence and a declared arm on every row (C11), the P-5 guarantee that no settled winner is
+demoted on one quiet window (C12), and the holdout never a candidate (C13).
+
+`FACT_PLAN_NEXT_WEEK` is `CREATE TABLE IF NOT EXISTS` — re-running the file can never drop a
+written plan. It is created in this task because the guard reads last night's side from it; until
+the builder runs it is empty and the guard falls back to the declared bootstrap (the ladder's own
+settled record clearing the bar with the window's order floor met).
+
 
 ## 3. The nightly builder (Task 2) — to be written
 
