@@ -33,12 +33,32 @@
 -- reporting on data that has not arrived. Check it before believing a number,
 -- and check V_ORDER_ITEM_COVERAGE for the per-month picture.
 --
+-- same_family compares COALESCE(parent_name, 'UNMAPPED:<asin>') on both sides,
+-- not parent_name directly, because plain NULL = NULL. Two different unmapped
+-- ASINs then correctly compare as different families; two rows for the SAME
+-- unmapped ASIN can't occur here since asin_a < asin_b already prevents a self
+-- pair. Confirmed live: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F ("BFF 1")
+-- are both ACTIVE, catalogued products in DIM_PRODUCT with no parent_name
+-- assigned — not a retired-product gap. both_mapped is a different, stricter
+-- test built from two IS NOT NULL checks, and it is never NULL.
+--
+-- name_a/name_b/family_a/family_b are looked up live from DIM_PRODUCT at
+-- query time. V_ORDER_BASKET instead reads the copy of these labels frozen
+-- onto FACT_CUSTOMER_ORDER_ITEM at load time, so the two sibling views can
+-- disagree briefly on the label for the same ASIN if DIM_PRODUCT changes
+-- between a fact load and a query here. No drift exists today; the fact's
+-- next load reconciles them.
+--
 -- Spec: architecture/CUSTOMER_ORDER_BASKETS.md
 --
 -- =============================================
 
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ORDER_CROSS_SELL` AS
 
+-- 9999 is a sentinel meaning "lifetime", not a real day count: DATE_SUB with
+-- INTERVAL 9999 DAY computes a cutoff of 1999-04-08, which only behaves as
+-- "since the beginning" because order history starts 2024-08-03. Arithmetic
+-- coincidence, not an asserted invariant — holds until roughly 2051.
 WITH windows AS (
   SELECT * FROM UNNEST([90, 365, 9999]) AS window_days
 ),
@@ -104,7 +124,8 @@ SELECT
   db.parent_name                     AS family_b,
   da.parent_name IS NOT NULL
     AND db.parent_name IS NOT NULL   AS both_mapped,
-  da.parent_name = db.parent_name    AS same_family,
+  COALESCE(da.parent_name, CONCAT('UNMAPPED:', p.asin_a))
+    = COALESCE(db.parent_name, CONCAT('UNMAPPED:', p.asin_b))  AS same_family,
 
   p.co_orders,
   oa.orders_with_asin                AS orders_a,
