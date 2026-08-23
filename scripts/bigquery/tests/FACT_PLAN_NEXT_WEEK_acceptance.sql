@@ -1,5 +1,5 @@
 -- =============================================================================================
--- FACT_PLAN_NEXT_WEEK acceptance — v27.136 (2026-08-23). The spec's §9 guarantees, read on the
+-- FACT_PLAN_NEXT_WEEK acceptance — v27.137 (2026-08-24). The spec's §9 guarantees, read on the
 -- latest as_of partition. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §9, P-2, P-4, P-6..P-9,
@@ -21,6 +21,30 @@
 --       and does not fire — and the draft would have failed on exactly those rows.
 --   C11 adds the half that protects P-4: a campaign's planned budget may never sit UNDER the
 --       good-side spend inside it. A budget cut below the good side is a cut, whatever it is called.
+--
+-- SIX CHECKS WERE ADDED OR RESTATED IN v27.137, EACH AFTER IT WENT RED ON THE DEPLOYED v27.136
+-- PARTITION (the repair pass; the violation counts are in the task report, never pinned here):
+--   C10 RESTATED from "every REPRICED seat" to "every SEAT". P-12 says every seat carries a
+--       verdict date; the old check asserted the narrowing instead of the ruling, and a seat held
+--       at its current price is precisely the parking lot P-12 exists to prevent.
+--   C11 GAINS the seats it opened: a campaign's budget may never sit under the spend the plan
+--       itself planned inside that campaign (good side + the seats it seated there). Flooring at
+--       the good side alone publishes a cap that cannot pay for the plan's own moves.
+--   C17 NEW — the plan's seat numbers against DE_FAMILY_SEAT_LEDGER's OPEN rows. A number whose
+--       ledger row has closed_on IS NULL has not been freed and may not be reissued to another
+--       keyword (§9: "freed numbers reused lowest-first"). C05's uniqueness clause is scoped to
+--       the plan's own partition and can never see this.
+--   C18 NEW — the seat walk is spec §4.4's FIT TEST, not a prefix stop: after the walk, no queued
+--       candidate's seat cost fits the allowance the family has left. A prefix stop halts at the
+--       first candidate that does not fit and parks everything behind it, however cheap.
+--   C19 NEW — the §9 reconciliation, RESTATED to what the arithmetic can actually guarantee (see
+--       the ruling recorded in the SOP): the not-good side's PLANNED spend equals the seats' cost
+--       to the cent, and the queue's residual — what parking lowers but does not stop — is
+--       published rather than netted to zero and forgotten.
+--   C20 NEW — planned_spend_delta_per_day is exactly planned minus current on every row, so a
+--       plan that RAISES the not-good side says so in a column and not only in prose.
+--   C21 NEW — PAUSE fires only on a keyword the ladder has already closed (§4.5, "paused if
+--       already closed"), and a paused row carries no planned bid for a book to upload.
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -28,6 +52,13 @@ WITH p AS (
 ),
 b AS (SELECT * FROM p WHERE is_live_plan),
 j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
+led AS (
+  SELECT family, CAST(campaign_id AS STRING) AS campaign_id,
+         CAST(keyword_id AS STRING) AS keyword_id, MIN(seat_no) AS seat_no
+  FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`
+  WHERE closed_on IS NULL
+  GROUP BY 1, 2, 3
+),
 c01 AS (
   SELECT 'C01 window is complete days only and fenced to age 2 (P-10, P-14a)' AS check_name,
          COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY),
@@ -74,7 +105,7 @@ c05 AS (
 c06 AS (
   SELECT 'C06 one move per CANDIDATE, none on the good side, none where there is nothing to repair (P-4, §9)',
          COUNTIF(side = 'GOOD' AND move != 'NONE')
-       + COUNTIF(is_candidate AND move NOT IN ('REPRICE','HOLD_AT_PRICE','PARK','PAUSE'))
+       + COUNTIF(is_candidate AND move NOT IN ('REPRICE','HOLD_AT_PRICE','PARK','HOLD_AT_PARK','PAUSE'))
        + COUNTIF(NOT is_candidate AND holdout AND move != 'NONE_HOLDOUT')
        + COUNTIF(NOT is_candidate AND NOT holdout AND side = 'NOT_GOOD' AND move != 'NONE')
        + COUNTIF(move IS NULL)
@@ -103,19 +134,20 @@ c09 AS (
   FROM b
 ),
 c10 AS (
-  SELECT 'C10 P-12: every repriced seat carries a verdict date in the future',
-         COUNTIF(move = 'REPRICE' AND (verdict_date IS NULL OR verdict_date <= as_of))
-       + COUNTIF(move != 'REPRICE' AND verdict_date IS NOT NULL)
+  SELECT 'C10 P-12: every SEAT carries a verdict date in the future, held or repriced',
+         COUNTIF(seat_no IS NOT NULL AND (verdict_date IS NULL OR verdict_date <= as_of))
+       + COUNTIF(seat_no IS NULL AND verdict_date IS NOT NULL)
   FROM p
 ),
 c11 AS (
-  SELECT 'C11 budgets: never in the forbidden $20.01-$31.99 band, never under $1.00, never under the good side (P-4)',
+  SELECT "C11 budgets: outside the forbidden band, over $1.00, and never under the plan's own spend inside them (P-4)",
          (SELECT COUNTIF(campaign_planned_budget > 20.00 AND campaign_planned_budget < 32.00)
                 + COUNTIF(campaign_planned_budget < 1.00)
                 + COUNTIF(campaign_planned_budget IS NULL) FROM p)
-       + (SELECT COUNTIF(bud < good_spend - 0.005)
+       + (SELECT COUNTIF(bud < good_spend - 0.005) + COUNTIF(bud < implied - 0.005)
           FROM (SELECT plan, campaign_id, MAX(campaign_planned_budget) bud,
-                       SUM(IF(side = 'GOOD', planned_spend_per_day, 0)) good_spend
+                       SUM(IF(side = 'GOOD', planned_spend_per_day, 0)) good_spend,
+                       SUM(planned_spend_per_day) implied
                 FROM p GROUP BY 1, 2))
 ),
 c12 AS (
@@ -136,7 +168,7 @@ c13 AS (
 ),
 c14 AS (
   SELECT 'C14 every candidate has exactly ONE of a seat or a queue position (§9)',
-         COUNTIF(is_candidate AND seat_no IS NULL AND move NOT IN ('PARK','PAUSE'))
+         COUNTIF(is_candidate AND seat_no IS NULL AND move NOT IN ('PARK','HOLD_AT_PARK','PAUSE'))
        + COUNTIF(is_candidate AND seat_no IS NOT NULL AND move NOT IN ('REPRICE','HOLD_AT_PRICE'))
        + COUNTIF(is_candidate AND rank_no IS NULL)
   FROM p
@@ -154,6 +186,51 @@ c16 AS (
                  OR allowance_share <= 0 OR allowance_share > 1
                  OR calendar_state IS NULL OR sentence IS NULL OR family IS NULL)
   FROM p
+),
+c17 AS (
+  SELECT 'C17 no seat number the register still holds OPEN for another keyword is reissued (§9)',
+         (SELECT COUNT(*)
+          FROM p JOIN led l ON l.family = p.family AND l.seat_no = p.seat_no
+          WHERE p.seat_no IS NOT NULL AND l.keyword_id != p.keyword_id)
+       + (SELECT COUNT(*)
+          FROM p JOIN led l ON l.family = p.family
+                           AND l.campaign_id = p.campaign_id AND l.keyword_id = p.keyword_id
+          WHERE p.seat_no IS NOT NULL AND l.seat_no != p.seat_no)
+),
+c18 AS (
+  SELECT 'C18 the seat walk is a FIT TEST: no queued candidate fits the allowance left over (§4.4)',
+         (SELECT COUNTIF(min_queued_cost <= allowance - seat_cost + 0.0001)
+          FROM (SELECT plan, family,
+                       MAX(allowance_ramped_per_day) AS allowance,
+                       SUM(IF(seat_no IS NOT NULL, seat_cost_per_day, 0)) AS seat_cost,
+                       MIN(IF(is_candidate AND seat_no IS NULL, seat_cost_per_day, NULL))
+                         AS min_queued_cost
+                FROM p GROUP BY 1, 2)
+          WHERE min_queued_cost IS NOT NULL)
+),
+c19 AS (
+  SELECT "C19 §9 reconciliation as the arithmetic can hold it: not-good PLANNED spend = the seats' cost",
+         (SELECT COUNTIF(ABS(notgood_planned - seat_cost) > 0.01)
+          FROM (SELECT plan, family,
+                       SUM(IF(side = 'NOT_GOOD' AND NOT holdout AND is_candidate,
+                              planned_spend_per_day, 0)) AS notgood_planned,
+                       SUM(IF(seat_no IS NOT NULL, seat_cost_per_day, 0)) AS seat_cost
+                FROM p GROUP BY 1, 2))
+       + (SELECT COUNTIF(is_candidate AND (seat_no IS NOT NULL) = (move IN ('PARK','HOLD_AT_PARK','PAUSE')))
+          FROM p)
+),
+c20 AS (
+  SELECT "C20 the plan says on the row whether it RAISES or cuts each keyword's spend",
+         COUNTIF(planned_spend_delta_per_day IS NULL)
+       + COUNTIF(ABS(planned_spend_delta_per_day
+                     - (planned_spend_per_day - COALESCE(SAFE_DIVIDE(w_sp, window_days), 0))) > 0.005)
+  FROM p
+),
+c21 AS (
+  SELECT 'C21 PAUSE only on a keyword the ladder has already closed, and it carries no bid (§4.5)',
+         COUNTIF(move = 'PAUSE' AND ladder_state != 'DEAD')
+       + COUNTIF(move = 'PAUSE' AND planned_bid IS NOT NULL)
+  FROM p
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
@@ -161,5 +238,6 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c07 UNION ALL SELECT * FROM c08 UNION ALL SELECT * FROM c09
       UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11 UNION ALL SELECT * FROM c12
       UNION ALL SELECT * FROM c13 UNION ALL SELECT * FROM c14 UNION ALL SELECT * FROM c15
-      UNION ALL SELECT * FROM c16)
+      UNION ALL SELECT * FROM c16 UNION ALL SELECT * FROM c17 UNION ALL SELECT * FROM c18
+      UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21)
 ORDER BY check_name;

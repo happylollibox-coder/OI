@@ -836,7 +836,7 @@ the builder runs it is empty and the guard falls back to the declared bootstrap 
 settled record clearing the bar with the window's order floor met).
 
 
-## 3. The nightly builder (Task 2, v27.136)
+## 3. The nightly builder (Task 2, v27.136 · repaired v27.137)
 
 `SP_BUILD_NEXT_WEEK_PLAN` reads `V_PLAN_WINDOW_JUDGMENT` once and turns the judgement into money.
 It writes one partition of `FACT_PLAN_NEXT_WEEK` per night — **both plans**, `B` live and `A` in
@@ -852,15 +852,53 @@ maintains and the judgement reads the snapshot 20.8 writes.
 | 1 POT | the **GOOD side's** window spend per day, per family. Not the family total, and not a budget anyone set — it is what the good keywords actually bought. | P-2 |
 | 2 ALLOWANCE | `allowance_share × pot`. The share and the window come from `DE_PLAN_CONFIG` for today's calendar state; neither is a literal anywhere in the procedure. | P-2, P-13 |
 | 3 RAMP | close **one third of the gap** between today's not-good spend and the allowance this window. A family already inside its allowance gets the full allowance and is never ramped *upwards* into a bigger loss budget. Recomputed from actual spend every night, so the sequence converges whether or not anyone uploads on schedule. | P-8 |
-| 4 SEATS | candidates ranked, each costing its spend **at the repaired price**, taking numbered seats while the running cost fits the ramped allowance. Costs are non-negative, so the running total is monotone and the fit is a **prefix** of the ranking — that is what makes the seating reproducible. | P-6, P-7 |
-| 5 QUEUE | everything that did not fit: parked at the engine park price, or paused when it is already there. | §4.5 |
+| 4 SEATS | candidates ranked, each costing its spend **at the repaired price**, walked in rank order: a candidate takes the lowest free seat **whenever its own cost fits the allowance still unspent**, and one it cannot afford is skipped rather than closing the queue behind it. The walk is a recursive rank walk over a total order, so it is exactly as reproducible as a prefix sum and does not park candidates the allowance can pay for. | P-6, P-7, §4.4 |
+| 5 QUEUE | everything that did not fit: parked at the engine park price, **held** at the price it already has when that is at or below the park price (nothing to upload), or **paused only when the ladder has already closed the keyword** (`ladder_state = 'DEAD'`). | §4.5 |
 | 6 MOVES | exactly one executable instruction per **candidate**; none on the good side. | P-4, §4.6 |
-| 7 BUDGETS | the sum of the campaign's planned spend, ramped one step, floored at the campaign's own good-side spend, snapped out of the forbidden $20.01–$31.99 band, floored at $1.00. | §4.7 |
+| 7 BUDGETS | the sum of the campaign's planned spend, ramped one step, floored at **that same sum** — the campaign's good side plus the seats the plan seated inside it — snapped out of the forbidden $20.01–$31.99 band, floored at $1.00. | §4.7 |
 
-**Seat numbers are the ledger's, not the plan's.** A continuing occupant keeps the number
-`DE_FAMILY_SEAT_LEDGER` holds for it; a new occupant takes the family's lowest free number in rank
-order. If two open ledger rows ever claim one number, the better-ranked keyword keeps it and the
-other is admitted as new — so "numbered exactly once" cannot be broken by a ledger inconsistency.
+**Seat numbers are the ledger's, not the plan's — and a number is FREE only when the ledger has
+freed it.** A continuing occupant keeps the number `DE_FAMILY_SEAT_LEDGER` holds for it; a new
+occupant takes the family's lowest number **no open ledger row is holding** (`closed_on IS NULL`
+means occupied, whether or not tonight's plan seats that occupant). If two open ledger rows ever
+claim one number, the better-ranked keyword keeps it and the other is admitted as new — so "numbered
+exactly once" cannot be broken by a ledger inconsistency. `C17` compares the plan's numbering with
+the register's, and the builder asserts it before it writes; read the two side by side with:
+
+```sql
+SELECT p.family, p.seat_no, p.target_text AS plan_occupant, l.keyword_id AS ledger_occupant
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p
+LEFT JOIN (SELECT family, CAST(keyword_id AS STRING) keyword_id, MIN(seat_no) seat_no
+           FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL GROUP BY 1, 2) l
+  ON l.family = p.family AND l.seat_no = p.seat_no
+WHERE p.as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`)
+  AND p.is_live_plan AND p.seat_no IS NOT NULL AND l.keyword_id != p.keyword_id;
+```
+
+**A repair can be a RAISE, and the plan says which on the row.** A seat costs its spend *at the
+repaired price* (P-6), and the repaired price is the ladder's affordable price — which is sometimes
+above today's bid. So the plan can add money to a family's not-good side while staying inside the
+allowance, and a family whose allowance exceeds its whole not-good side has no ranking pressure to
+stop it. `planned_spend_delta_per_day` is that number on every row and the seat sentence prints it
+in words. Read the direction per family before any upload — a family reading positive is one the
+plan is spending MORE on, not less:
+
+```sql
+SELECT family,
+       ROUND(SUM(IF(seat_no IS NOT NULL, planned_spend_delta_per_day, 0)), 2) AS seats_delta_per_day,
+       COUNTIF(seat_no IS NOT NULL AND planned_spend_delta_per_day > 0.005)   AS seats_that_raise,
+       ROUND(MAX(notgood_today_per_day), 2)                                   AS notgood_today,
+       ROUND(MAX(allowance_ramped_per_day), 2)                                AS allowance_this_window
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`) AND is_live_plan
+GROUP BY 1 ORDER BY 2 DESC;
+```
+
+**The queue's residual is not zero money.** A queued row's PLANNED spend is zero because parking
+lowers a price and does not stop a spend; what the family actually keeps paying until the park price
+bites is the difference between its real not-good spend and the seats' cost. §9's reconciliation is
+restated to the identity that holds (`C19`), and whether the arithmetic should carry the residual
+instead is one of Ori's open rulings below.
 
 **The ramp is geometric, not linear, and three windows is not the whole gap.** One third of the
 *remaining* gap closes each window, exactly like the three-step bid cap, so after three windows
@@ -910,8 +948,10 @@ SELECT DISTINCT grace_limit_armed FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
 4. **The implied budget sees only the plan's own keywords.** Brand defense, launch-contained keywords
    and non-keyword targets are outside the universe (§8), so a mixed campaign's implied budget is
    below its real need. That is why the budget is **ramped** from today's budget rather than set to
-   the implied figure, and floored at the campaign's own good-side spend — a cap under the good side
-   is a cut, and P-4 forbids cuts. Read the campaigns where the two disagree most before any upload:
+   the implied figure, and floored at **the plan's own spend inside that campaign** — its good side
+   plus the seats the plan seated there. A cap under the good side is a cut and P-4 forbids cuts; a
+   cap under the seats is a promise the move cannot keep, which is what v27.136 published on six
+   campaigns before the repair. Read the campaigns where the two disagree most before any upload:
 
 ```sql
 SELECT campaign_name, MAX(campaign_current_budget) AS today_budget,
@@ -958,8 +998,14 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/tests/FACT_PLAN_NEXT_WEEK_acceptance.sql)"
 ```
 
-Sixteen checks, every row `PASS`. Six assertions fire inside the procedure itself and name the
-guarantee they protect — **fix the arithmetic, never the assertion.** Idempotence is proved by
+Twenty-one checks, every row `PASS`. Ten assertions fire inside the procedure and name the
+guarantee they protect — **fix the arithmetic, never the assertion.** They run **before the
+partition is touched**: the rows are built into a temp table carrying the fact table's own schema,
+the assertions read that, and only a clean build reaches the `DELETE`/`INSERT`. A failing build
+therefore leaves *yesterday's* plan standing, which is the safe state — stale and correct beats
+fresh and wrong. (v27.136 deleted, inserted and only then asserted, inside the orchestrator's
+`BEGIN … EXCEPTION WHEN ERROR THEN` wrapper, so a broken guarantee left the violating partition
+committed and the pass carried on.) Idempotence is proved by
 running the CALL twice and comparing a fingerprint of the partition, not its row count alone:
 
 ```sql
@@ -985,7 +1031,75 @@ moved between them, re-run both.)
   no clicks has no sales in flight, so P-14b has no basis and does not fire — and the draft's form
   failed on exactly those rows on the live view before a line of the builder was written.
 - **C11** adds the half that protects P-4: a campaign's planned budget may never sit under the
-  good-side spend inside it. A cap below the good side is a cut, whatever it is called.
+  good-side spend inside it — nor, from v27.137, under the plan's *own* spend inside it. A cap below
+  the good side is a cut; a cap below the seats is a move the budget cannot pay for.
+
+### Six checks added or restated in the v27.137 repair pass
+
+Each went red on the deployed v27.136 partition before the repair and green after it; the violation
+counts live in the task report, never on this page.
+
+- **C10** was written as "every *repriced* seat carries a verdict date". P-12 says **every seat**,
+  and a seat held at its current price — allowance spent, nothing uploaded — is exactly the parking
+  lot the ruling exists to prevent. The narrowing was in the check, the procedure, the header and
+  the registry entry; all four now say what P-12 says.
+- **C17** compares the plan's seat numbers with `DE_FAMILY_SEAT_LEDGER`'s **open** rows. `C05` tests
+  uniqueness inside the plan's own partition and can never see a number the register is still
+  holding for someone else.
+- **C18** asserts the seat walk is §4.4's **fit test**: after the walk, no queued candidate's cost
+  fits the allowance the family has left. Greedy skip-and-continue makes that invariant true by
+  construction, because the remaining allowance only falls as the walk proceeds.
+- **C19** is §9's reconciliation restated to the identity the arithmetic can hold — the not-good
+  side's PLANNED spend equals the seats' cost, and every candidate has exactly one of a seat or a
+  queue position. The original wording ("seats + queued = the not-good side") was asserted by none
+  of the sixteen v27.136 checks and does not hold with a queue planned at zero.
+- **C20** asserts `planned_spend_delta_per_day` is exactly planned minus current, so a plan that
+  RAISES a family's not-good spend says so in a column.
+- **C21** asserts `PAUSE` fires only where the ladder has already closed the keyword (§4.5's "paused
+  if already closed"), and that a paused row carries **no** planned bid for a book to upload.
+
+### What the v27.137 pass changed in the money, and what it did not
+
+Nothing in the doctrine moved: the bar, the floors, the ladder, the pot, the share and the ramp are
+untouched. What moved is **which candidates get seats inside the allowance that was already
+declared** (the fit test seats the cheap candidates a prefix stop was parking), **which seat numbers
+they are called by** (the register's, not the plan's), **which queued keywords are paused** (only
+those the ladder has closed), **what the campaign cap will pay for** (the seats the plan itself
+opened) and **whether a build that breaks a guarantee can reach the table** (it cannot). Re-read the
+per-family picture after any run rather than trusting this paragraph:
+
+```sql
+SELECT family, ROUND(MAX(allowance_ramped_per_day), 2) AS allowance_this_window,
+       COUNTIF(seat_no IS NOT NULL) AS seats,
+       ROUND(SUM(IF(seat_no IS NOT NULL, seat_cost_per_day, 0)), 2) AS seat_cost_per_day,
+       COUNTIF(is_candidate AND seat_no IS NULL) AS queued,
+       ROUND(MAX(notgood_today_per_day), 2) AS notgood_today
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`) AND is_live_plan
+GROUP BY 1 ORDER BY 1;
+```
+
+### What Ori rules from this pass
+
+1. **The queue's residual.** A queued keyword's planned spend is zero and its real spend is not.
+   §9's reconciliation is restated (`C19`) rather than left as a claim nothing checked. *To
+   overrule:* make `planned_spend_per_day` on a queued row the spend it will keep making at the park
+   price, and re-derive `C05`, `C07`, `C15` and `C19` — the plan's not-good total would then read as
+   the money at risk rather than as the money the plan intends.
+2. **A seat that raises.** P-6 costs a seat at the repaired price, and the ladder's repaired price
+   can be above today's bid; where a family's allowance exceeds its whole not-good side, nothing in
+   the ranking stops the plan spending more there. It is now published per row and per family
+   (`planned_spend_delta_per_day`). *To overrule:* forbid a seat whose repair raises the spend, or
+   cap the book's total raise — either is one predicate in step 4, and neither is in the spec today.
+3. **P-7's degenerate rank still hands out the seats** (§2's open ruling, unchanged): every
+   spend-with-no-sale keyword scores exactly zero, so the biggest bleeders rank last. The fit test
+   now lets cheap candidates behind them take seats, which *reduces* the damage but does not fix the
+   ordering.
+4. **The book and the plan now read one grace memory.** `tools/build_reprice_bulksheet.py --rule-b`
+   reads `FACT_PLAN_NEXT_WEEK` for P-5's one-window limit with the same expression
+   `V_PLAN_WINDOW_JUDGMENT` uses, so the two cannot grant and refuse the same grace. Nothing to rule
+   unless Ori wants the book to stop judging at all and read the plan's `side` directly — which is
+   Task 4's design question, not a defect.
 
 ## 4. Ownership and the preflight (Task 3) — to be written
 

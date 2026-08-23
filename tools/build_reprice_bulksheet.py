@@ -178,9 +178,12 @@ EXECUTABLE = ('BID_DOWN', 'BID_UP', 'PAUSE')
 #   RULE_B_MIN_ORDERS  P-3: one order at 3x is mostly luck; two is the cheapest guard.
 #   GRACE_LADDER_STATES P-5: the ladder's settled-winner states. Grace buys ONE window, and only
 #                      for a QUIET window (under the order floor) — a window with 2+ orders is
-#                      evidence, and rule B stands over it. There is no two-window memory table
-#                      yet, so this generator grants grace on the LADDER STATE ALONE and says so
-#                      on the row: it cannot see whether the previous window was also quiet.
+#                      evidence, and rule B stands over it. v27.137: the limit is now READ, not
+#                      assumed away — SP_BUILD_NEXT_WEEK_PLAN writes FACT_PLAN_NEXT_WEEK nightly
+#                      and the `plan_grace` CTE below reads the live plan's own history with the
+#                      same expression V_PLAN_WINDOW_JUDGMENT uses, so a keyword whose grace is
+#                      already spent is refused here exactly as it is refused there. One keyword,
+#                      one judge.
 PLAN_WINDOW_DAYS = {'OFF_PEAK': 7, 'BOOST': 3, 'PEAK': 3}
 RULE_B_MIN_ORDERS = 2
 GRACE_LADDER_STATES = ('WINNER', 'PACED_WINNER')
@@ -379,17 +382,27 @@ def rule_b(r):
                    f"re-priced, so this keyword is left exactly as it is (P-4)."
                    + (f" Decided by the {arm} arm." if arm != 'SETTLED' else "") + caveat)
 
-    if ordw < RULE_B_MIN_ORDERS and (r.get('state') or '') in GRACE_LADDER_STATES:
+    # P-5, WITH ITS LIMIT (v27.137). prior_grace is the LIVE PLAN's own memory, read in the SQL
+    # from FACT_PLAN_NEXT_WEEK with the same expression V_PLAN_WINDOW_JUDGMENT uses — one judge,
+    # one answer. A second quiet window in a row falls through to the guard and then to rule B.
+    prior_grace = bool(r.get('prior_grace'))
+    armed = bool(r.get('grace_limit_armed'))
+    if ordw < RULE_B_MIN_ORDERS and (r.get('state') or '') in GRACE_LADDER_STATES \
+            and not prior_grace:
         return out(True, 'GRACE', 'P-5',
                    f"GRACE — the ladder calls this a settled winner ({r.get('state')}) and "
                    f"its window is quiet: {took}. A proven winner keeps the good side for "
-                   f"ONE quiet window (P-5), held, not cut. NOTE: the one-window limit is NOT "
-                   f"armed anywhere yet — it is read from the live plan's own history in "
-                   f"FACT_PLAN_NEXT_WEEK, which no builder writes until Task 2 — so this grace "
-                   f"is granted on the ladder state alone, is re-granted every run, and the "
-                   f"second quiet window that should let rule B stand never arrives. "
-                   f"V_PLAN_WINDOW_JUDGMENT is the authority on the limit once it is armed."
-                   + caveat)
+                   f"ONE quiet window (P-5), held, not cut. "
+                   + (f"This is that window: the limit is ARMED — the plan's own history in "
+                      f"FACT_PLAN_NEXT_WEEK is read on every build — so grace is now SPENT and "
+                      f"will be refused until this keyword earns a GOOD window back."
+                      if armed else
+                      f"THE LIMIT IS NOT ARMED FOR THIS KEYWORD YET: it is read from the live "
+                      f"plan's own history in FACT_PLAN_NEXT_WEEK and no partition earlier than "
+                      f"today exists to read, so grace is granted on the ladder state alone this "
+                      f"run. From the plan's next nightly build the limit bites.")
+                   + f" V_PLAN_WINDOW_JUDGMENT and this book read the same memory with the same "
+                     f"expression, so they cannot answer differently." + caveat)
 
     # P-14b: never demote a keyword that was good until its window has settled.
     sgp, ssp = num(r.get('settled_gp90'), 0) or 0.0, num(r.get('settled_sp90'), 0) or 0.0
@@ -456,6 +469,29 @@ WITH wm AS (
 ks AS (
   SELECT * FROM `{p}.OI.V_KEYWORD_STATE`
   WHERE state IN ('AT_BAR','REPRICE','FLOOR_PROBATION','LOSER')
+),
+-- P-5's ONE-WINDOW LIMIT, READ FROM THE PLAN'S OWN MEMORY (v27.137). Until SP_BUILD_NEXT_WEEK_PLAN
+-- shipped there was no memory to read and this generator granted grace on the ladder state alone,
+-- saying so on every row. The builder now writes FACT_PLAN_NEXT_WEEK nightly and
+-- V_PLAN_WINDOW_JUDGMENT arms the limit from it — so a book that kept computing grace in Python
+-- would become a SECOND JUDGE of the same ruling on the same keyword, which is the defect v27.135
+-- was written to close. Same expression as the view: grace is SPENT until the keyword earns a GOOD
+-- window back, i.e. its most recent GRACE is later than its most recent GOOD (or it has never had
+-- one). Empty table => no rows => prior_grace FALSE everywhere, exactly as before.
+plan_grace AS (
+  SELECT CAST(campaign_id AS STRING) cid, CAST(keyword_id AS STRING) kid,
+         (MAX(IF(verdict = 'GRACE', as_of, NULL)) IS NOT NULL
+          AND (MAX(IF(verdict = 'GOOD', as_of, NULL)) IS NULL
+               OR MAX(IF(verdict = 'GRACE', as_of, NULL))
+                  > MAX(IF(verdict = 'GOOD', as_of, NULL)))) AS prior_grace
+  FROM `{p}.OI.FACT_PLAN_NEXT_WEEK`
+  WHERE is_live_plan AND as_of < CURRENT_DATE('America/Los_Angeles')
+  GROUP BY 1, 2
+),
+plan_armed AS (
+  SELECT COUNT(*) > 0 AS grace_limit_armed
+  FROM `{p}.OI.FACT_PLAN_NEXT_WEEK`
+  WHERE is_live_plan AND as_of < CURRENT_DATE('America/Los_Angeles')
 ),
 -- one keyword, one price: a key with a live GO instruction today belongs to its engine —
 -- except a floor-probation row, which is emitted CHECK FIRST beside the instruction (F5)
@@ -652,6 +688,8 @@ SELECT
   COALESCE(kwin.w_gp_corr, 0) AS w_gp_corr,
   COALESCE(kwin.w_days_no_curve, 0) AS w_days_no_curve,
   ks.settled_gp90, ks.settled_sp90,
+  COALESCE(pg.prior_grace, FALSE) AS prior_grace,
+  pa.grace_limit_armed,
   CAST(DATE_ADD(winr.window_to,
                 INTERVAL IF(ks.channel = 'SB', 14, 7) DAY) AS STRING) AS settle_due_on,
   CURRENT_DATE('America/Los_Angeles')
@@ -680,8 +718,10 @@ LEFT JOIN bc ON bc.keyword_text = ks.target_text AND NOT COALESCE(ks.is_auto, FA
 LEFT JOIN live7 ON live7.cid = ks.campaign_id AND live7.kid = ks.keyword_id
 LEFT JOIN kwin ON kwin.cid = ks.campaign_id AND kwin.kid = ks.keyword_id
 LEFT JOIN instructed instr ON instr.cid = ks.campaign_id AND instr.kid = ks.keyword_id
+LEFT JOIN plan_grace pg ON pg.cid = ks.campaign_id AND pg.kid = ks.keyword_id
 CROSS JOIN wm
 CROSS JOIN winr
+CROSS JOIN plan_armed pa
 -- house rule 9: a total ordering — (campaign_id, target_text) is not a key in the state table,
 -- so the tiebreak reaches the keyword key and two builds of one snapshot emit one row order
 ORDER BY ks.state, ks.family, ks.campaign_name, ks.target_text, ks.campaign_id, ks.keyword_id
@@ -1649,9 +1689,12 @@ def main():
                         f"winner keeps the good side for one quiet window, held, never cut), "
                         f"and {n_held} held because the window has not settled yet (P-14b: a "
                         f"keyword may be promoted on fresh evidence but never demoted on it). "
-                        f"Note the limit on grace: there is no two-window memory table yet, so "
-                        f"grace here is granted on the ladder's state alone — this book cannot "
-                        f"see whether the previous window was also quiet.\n\n")
+                        f"The limit on grace is READ, not assumed: the plan's nightly builder "
+                        f"writes FACT_PLAN_NEXT_WEEK and this book reads that history with the "
+                        f"same expression V_PLAN_WINDOW_JUDGMENT uses, so a second quiet window "
+                        f"in a row is refused here exactly as the plan refuses it. Until a "
+                        f"partition earlier than today exists there is nothing to read and each "
+                        f"grace row says so on itself.\n\n")
                 if n_grace == 0:
                     f.write(f"(Grace could not fire today by construction: this book only ever "
                             f"prices keywords the ladder has put in AT_BAR, REPRICE, "

@@ -105,6 +105,11 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   bid_park_seat_econ         FLOAT64,
   move                       STRING,
   planned_spend_per_day      FLOAT64,
+  -- v27.137: planned minus current, per day. A seat's cost is its spend AT THE REPAIRED PRICE
+  -- (P-6), and a repair can be a RAISE — so the plan can add money to the not-good side while
+  -- staying inside the allowance. This column is that number on the row, so the direction never
+  -- has to be inferred from prose.
+  planned_spend_delta_per_day FLOAT64,
   verdict_date               DATE,
   pot_per_day                FLOAT64,
   allowance_target_per_day   FLOAT64,
@@ -124,3 +129,11 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
 PARTITION BY as_of
 CLUSTER BY plan, family, campaign_id
 OPTIONS (description = "v27.135 (2026-08-23) the next-week money plan, one row per (as_of, plan, campaign, keyword) for the working families (HARVEST book). Two plans every night: 'B' is live (the window decides the side and the amount, rule B) and 'A' is shadow (the ladder decides the side, the window decides the amount) — spec P-9. Carries the window and its record raw AND corrected for settle completion, the arm that decided the side (settle_arm / decided_by, spec P-14), the family's pot / allowance / ramp step, the seat number and seat cost, the planned price and the executable move, the campaign budget the plan implies, and the plain sentence a person reads. Append-only; the builder rewrites only today's partition. Created empty by Task 1 because V_PLAN_WINDOW_JUDGMENT reads it back as the plan's MEMORY: `side` is the P-14b guard's \"was good\" once a keyword has been judged here (the ladder is only the bootstrap for a keyword the plan has never seen) and `verdict = GRACE` marks the one quiet window P-5 buys as spent, so another is refused until the keyword earns a GOOD window back (the limit reads this table's whole history). Until the builder writes its first row neither memory exists: the guard falls back to the ladder bootstrap and grace_limit_armed is FALSE on every judgement row, which the row says in words. Written by written by SP_BUILD_NEXT_WEEK_PLAN (orchestrator 20.8c); read by SP_SNAPSHOT_ENGINE_PROPOSALS, V_PLAN_SCORECARD, tools/build_plan_bulksheet.py and T_PLAN_NEXT_WEEK. Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md. SOP: architecture/NEXT_WEEK_MONEY.md");
+
+-- CREATE TABLE IF NOT EXISTS is a SILENT NO-OP against a table that already exists, so a column
+-- added after the first deploy has to be applied explicitly or the file and the warehouse drift.
+-- v27.137 adds planned_spend_delta_per_day: planned minus current spend per day, so a repair that
+-- RAISES a keyword's spend (a seat costs its spend AT THE REPAIRED PRICE, P-6, and the repaired
+-- price can be above today's bid) is readable as a number and not only as prose.
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS planned_spend_delta_per_day FLOAT64;
