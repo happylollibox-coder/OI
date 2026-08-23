@@ -129,6 +129,14 @@ def test_the_leak_book_refuses_to_log_a_second_pending_book_silently():
         leak.refuse_second_pending_book([], replaces=['seat_moves_20260822_0431'])
 
 
+def test_the_reprice_sql_orders_totally_beyond_the_target_text():
+    """House rule 9, the sibling book: state / family / campaign / target_text is not a key —
+    FACT_KEYWORD_STATE can hold two rows with one (campaign_id, target_text) — so the tiebreak
+    must reach (campaign_id, keyword_id) or two builds of one snapshot can differ in row order."""
+    order = reprice.SQL.rstrip().rsplit('ORDER BY', 1)[1]
+    assert 'target_text' in order and 'campaign_id' in order and 'keyword_id' in order
+
+
 def test_the_leak_sql_orders_totally_beyond_the_rounded_cost():
     """House rule 9: cost_per_day is rounded in the register, so ties are ordinary; the tiebreak
     must reach a unique key (campaign_id, keyword_id) or two builds of one snapshot differ."""

@@ -175,6 +175,11 @@
 --   B37 sheet_row (2026-08-23): published on every SEAT and LEAK row and nowhere else, from a
 --       closed set, and agreeing row by row with the change log and the one-book state. It is
 --       what the brief derives its action from (SEAT_SURFACE_acceptance C11).
+--   B38 (2026-08-23, repair pass) the SEAT side's engine parity, the twin of B36: a repair or
+--       failed seat with no pending row promises a book row only where the reprice generator
+--       will WRITE one — ENGINE_PRICES where T_ENGINE_PREFLIGHT carries a GO instruction for the
+--       key, NO_SHEET_ROW for a failed keyword not yet elapsed at its floor, TOO_THIN_TO_PRICE at
+--       or under the generator's thin-orders rule — re-derived from the generator's own sources.
 --   B35 A projection credits a leak's pause ONLY where the sheet that pauses it EXISTS, row by row
 --       (R-l, leak half, after its own overrule clause fired). A leak is a PARKED-past-appointment
 --       or DEAD keyword that still spends. Until 2026-08-23 no generator built its pause row, so
@@ -867,7 +872,7 @@ checks AS (
                + COUNTIF(row_type NOT IN ('SEAT', 'LEAK') AND sheet_row IS NOT NULL)
                + COUNTIF(sheet_row IS NOT NULL AND sheet_row NOT IN
                          ('PENDING_BOOK', 'NEXT_LEAK_BOOK', 'NEXT_REPRICE_BOOK', 'REBUILD_LEAK_BOOK',
-                          'BY_HAND', 'NO_SHEET_ROW', 'NONE'))
+                          'ENGINE_PRICES', 'TOO_THIN_TO_PRICE', 'BY_HAND', 'NO_SHEET_ROW', 'NONE'))
           FROM r)
          + (SELECT COUNTIF(sheet_row IS DISTINCT FROM
                    CASE WHEN refusal IS NOT NULL THEN 'NO_SHEET_ROW'
@@ -878,10 +883,54 @@ checks AS (
          + (SELECT COUNTIF(sheet_row IS DISTINCT FROM
                    CASE WHEN COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from THEN 'NO_SHEET_ROW'
                         WHEN occupant_kind IN ('repair', 'probation') AND book_batch_id IS NOT NULL THEN 'PENDING_BOOK'
+                        -- which of the three a repair/failed seat gets is B38's question (engine parity)
+                        WHEN occupant_kind IN ('repair', 'failed') AND sheet_row IN ('ENGINE_PRICES', 'TOO_THIN_TO_PRICE') THEN sheet_row
+                        WHEN occupant_kind = 'failed' AND sheet_row = 'NO_SHEET_ROW' THEN sheet_row
                         WHEN occupant_kind IN ('repair', 'failed') THEN 'NEXT_REPRICE_BOOK'
                         WHEN occupant_kind = 'stalled probe' THEN 'BY_HAND'
                         ELSE 'NONE' END)
             FROM r WHERE row_type = 'SEAT')
+  UNION ALL
+  -- B38 (2026-08-23): the SEAT side's engine parity, the twin of B36. The reprice generator
+  -- (tools/build_reprice_bulksheet.py, classify) refuses a repair or failed seat for three rules
+  -- the register can read from the generator's OWN sources — a live GO instruction in
+  -- T_ENGINE_PREFLIGHT (ENGINE_INSTRUCTED: one keyword, one price), a failed keyword whose
+  -- probation has not elapsed at its floor (REFUSED_PAUSE), and a record of THIN_ORDERS (2)
+  -- settled orders or fewer (TOO_THIN, applied last and only to a move that would have executed).
+  -- Re-derived HERE from those sources, never from the register's own belief. TDD record: against
+  -- the v27.124 view this read 3 — two repairs the engine already carried (LIFT / OOB GO) and one
+  -- with two settled orders — every one published 'the reprice generator prices it' and counted by
+  -- the brief as a row for the next book, while the generator built that morning had refused all
+  -- three in its audit CSV.
+  SELECT 'B38 a repair or failed seat with no pending row promises a book row ONLY where the reprice generator will write one: a key with a GO instruction in T_ENGINE_PREFLIGHT reads ENGINE_PRICES, a failed keyword not yet elapsed at its floor reads NO_SHEET_ROW, a record at or under the generator\'s thin-orders rule reads TOO_THIN_TO_PRICE, and every refusal says so in the move and is kept out of the executable kill count',
+         (SELECT COUNTIF(x.sheet_row IS DISTINCT FROM x.expected)
+                 + COUNTIF(x.expected IN ('ENGINE_PRICES', 'TOO_THIN_TO_PRICE') AND x.move NOT LIKE '%refuses%')
+                 + COUNTIF(x.expected = 'NO_SHEET_ROW' AND x.move NOT LIKE 'no pause row%')
+                 + COUNTIF(x.expected = 'ENGINE_PRICES' AND x.move NOT LIKE '%GO instruction%')
+                 + COUNTIF(x.expected = 'NEXT_REPRICE_BOOK' AND x.move LIKE '%refuses%')
+          FROM (SELECT s.sheet_row, s.move,
+                       CASE WHEN COALESCE(s.holdout, FALSE) AND s.as_of >= s.holdout_eligible_from THEN 'NO_SHEET_ROW'
+                            WHEN go.cid IS NOT NULL THEN 'ENGINE_PRICES'
+                            WHEN s.occupant_kind = 'failed'
+                                 AND NOT (COALESCE(st.probation_elapsed, FALSE) AND COALESCE(st.at_floor, FALSE)) THEN 'NO_SHEET_ROW'
+                            WHEN COALESCE(st.settled_ord90, 0) <= 2 THEN 'TOO_THIN_TO_PRICE'
+                            ELSE 'NEXT_REPRICE_BOOK' END AS expected
+                FROM r s
+                LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS cid, COALESCE(CAST(keyword_id AS STRING), '') AS kid
+                           FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT` WHERE verdict = 'GO' GROUP BY 1, 2) go
+                       ON go.cid = s.campaign_id AND go.kid = s.keyword_id
+                LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid,
+                                  settled_ord90, probation_elapsed, at_floor
+                           FROM `onyga-482313.OI.FACT_KEYWORD_STATE` f CROSS JOIN run_day WHERE f.snapshot_date = run_day.d) st
+                       ON st.cid = s.campaign_id AND st.kid = s.keyword_id
+                WHERE s.row_type = 'SEAT' AND s.occupant_kind IN ('repair', 'failed') AND s.book_batch_id IS NULL) x)
+         -- the family clause: a refused failed keyword is named, never silently counted as a kill
+         + (SELECT COUNTIF(f.sentence LIKE '%kill the % failed keywords on the next book%'
+                           AND n.n_refused_failed = n.n_failed)
+            FROM famrow f JOIN (SELECT family, COUNTIF(occupant_kind = 'failed') AS n_failed,
+                                       COUNTIF(occupant_kind = 'failed' AND sheet_row != 'NEXT_REPRICE_BOOK') AS n_refused_failed
+                                FROM r WHERE row_type = 'SEAT' GROUP BY 1) n ON n.family = f.family
+            WHERE f.row_type = 'FAMILY' AND f.horizon = 'today' AND n.n_failed > 0)
   UNION ALL
   SELECT 'B33 the re-judged horizon never zeroes a stalled probe (R-l applied to the projection): parking lowers a price, so a family paying for stalled probes today still pays for them when re-judged, and no horizon assumption claims they are parked to $0',
          (SELECT COUNTIF(today_cost > 0.005 AND (n_rejudged_rows = 0 OR rejudged_cost <= 0.005)) FROM stalled_cat)

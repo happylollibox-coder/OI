@@ -1,5 +1,15 @@
 -- =============================================
 -- V_FAMILY_SEAT_REGISTER — the object Ori reads every morning for the 80/20 doctrine.
+-- Repair pass 2026-08-23 (v27.125): the SEAT side gets the engine parity the LEAK side had (B36 →
+-- B38). A repair or failed seat with no row on the pending book used to promise 'the reprice
+-- generator prices it' / 'kill it on the next book' and the brief counted it as a row for the next
+-- book — but the generator REFUSES three of those rows by rules the register can read from the
+-- same sources: a live GO instruction in T_ENGINE_PREFLIGHT (one keyword, one price — the engine's
+-- upload carries it), a record of k.thin_orders settled orders or fewer (noise, never priced), and
+-- a failed keyword whose probation has not elapsed AT its floor. Such a row now publishes
+-- sheet_row ENGINE_PRICES / TOO_THIN_TO_PRICE / NO_SHEET_ROW with the reason in words, its
+-- dollars leave the executable kill count, and the re-judged projection no longer zeroes a kill
+-- no book will write.
 -- First-production-night cleanup 2026-08-23 (v27.124): (1) sheet_row — every SEAT and LEAK row
 -- publishes what a sheet does with it today (PENDING_BOOK / NEXT_LEAK_BOOK / NEXT_REPRICE_BOOK /
 -- REBUILD_LEAK_BOOK / BY_HAND / NO_SHEET_ROW / NONE), so the brief derives its action from what is
@@ -153,7 +163,8 @@
 --              change log; a leak no book carries costs here exactly what it costs today.
 --   re-judged  repairs hold at their bar and move to the good side at their day-one cost;
 --              probation keywords stay on the 20% side at their floor; failed keywords are killed
---              with a pause row the reprice generator builds today (→ $0); A LEAK reaches $0 only
+--              with a pause row the reprice generator builds today (→ $0) — only where it WILL
+--              (book_refusal IS NULL, B38); a refused kill keeps costing; A LEAK reaches $0 only
 --              where a pending pause row carries it, otherwise it keeps costing; STALLED PROBES ARE
 --              RE-PRICED by the move on their own row (R-f's sign branch) and keep spending at that
 --              price — parking lowers a price, it does not stop the spend; engine probes and parked
@@ -192,7 +203,10 @@ WITH
 k AS (
   SELECT 0.20 AS allowance_share, 7 AS basis_days, 28 AS context_days,
          14 AS probe_window_days, 20 AS verdict_clicks, 4 AS click_goal_day,
-         4 AS absorb_capped_days, 1.5 AS entry_raise_ratio, 0.005 AS bid_tol),
+         4 AS absorb_capped_days, 1.5 AS entry_raise_ratio, 0.005 AS bid_tol,
+         -- mirrored from tools/build_reprice_bulksheet.py THIN_ORDERS: at or under this many
+         -- settled orders the generator never executes a bid move (TOO_THIN) — declared, not measured
+         2 AS thin_orders),
 run_day AS (SELECT MAX(snapshot_date) AS d FROM `onyga-482313.OI.FACT_KEYWORD_STATE`),
 wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
        FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
@@ -215,6 +229,17 @@ brand AS (SELECT DISTINCT CONCAT(r'\b', REGEXP_REPLACE(TRIM(LOWER(phrase), ' |,'
           FROM `onyga-482313.OI.DIM_BRAND_PHRASES`
           WHERE phrase_type = 'BRAND' AND TRIM(LOWER(phrase), ' |,') != ''),
 probes AS (SELECT DISTINCT CAST(keyword_id AS STRING) AS kid FROM `onyga-482313.OI.T_LIFT_PROBES`),
+-- ONE KEYWORD, ONE PRICE (B38, 2026-08-23): a key with a live GO instruction today belongs to its
+-- engine — the reprice generator's `instructed` CTE reads exactly this and refuses the row
+-- (ENGINE_INSTRUCTED), so the register must not promise a book row for it. Same table, same
+-- verdict, same grain; the instructions are listed in one total order.
+engine_go AS (
+  SELECT CAST(campaign_id AS STRING) AS cid, COALESCE(CAST(keyword_id AS STRING), '') AS kid,
+         STRING_AGG(DISTINCT FORMAT('%s %s $%.2f → $%.2f', engine, lever, current_bid, suggested_bid), '; '
+                    ORDER BY FORMAT('%s %s $%.2f → $%.2f', engine, lever, current_bid, suggested_bid)) AS instr
+  FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`
+  WHERE verdict = 'GO'
+  GROUP BY 1, 2),
 holdout AS (
   SELECT unit_id AS campaign_id, MIN(eligible_from) AS eligible_from
   FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
@@ -340,6 +365,8 @@ snap AS (
   SELECT s.campaign_id, s.keyword_id, s.family, s.campaign_name, s.target_text, s.match_type,
          s.channel, s.state, s.current_bid, s.bid_floor, COALESCE(s.at_floor, FALSE) AS at_floor,
          s.next_check_date, s.state_since,
+         -- what the reprice generator reads before it prices (B38 engine parity)
+         s.settled_ord90, COALESCE(s.probation_elapsed, FALSE) AS probation_elapsed,
          (COALESCE(s.is_brand_defense, FALSE)
           OR REGEXP_CONTAINS(UPPER(COALESCE(s.campaign_name, '')), r'BRAND DEFENSE')
           OR bh.keyword_id IS NOT NULL) AS is_defense
@@ -372,6 +399,7 @@ u AS (
          COALESCE(s.target_text, a.targeting) AS target_text,
          s.match_type, s.channel, s.state, s.current_bid, s.bid_floor, COALESCE(s.at_floor, FALSE) AS at_floor,
          s.next_check_date, s.state_since,
+         s.settled_ord90, COALESCE(s.probation_elapsed, FALSE) AS probation_elapsed,
          -- brand defense three ways, on and OFF the ladder (house rule 12)
          (COALESCE(s.is_defense, FALSE)
           OR REGEXP_CONTAINS(UPPER(COALESCE(s.campaign_name, a.ads_campaign_name, '')), r'BRAND DEFENSE')
@@ -410,6 +438,7 @@ unmapped AS (
 c AS (
   SELECT u.*, b.book,
          p.kid IS NOT NULL AS engine_probe,
+         eg.instr AS engine_instruction,
          lc.action AS raise_action, lc.chg_date AS raised_on, lc.old_bid AS raise_old_bid, lc.new_bid AS raise_new_bid,
          pd.batch_id AS book_batch_id, pd.action AS book_action, pd.old_bid AS book_old_bid, pd.new_bid AS book_new_bid,
          pp.batch_id AS pause_batch_id, pp.batch_id IS NOT NULL AS pause_pending,
@@ -458,7 +487,8 @@ c AS (
   LEFT JOIN bidv bv ON bv.cid = u.campaign_id AND bv.kid = u.keyword_id
   LEFT JOIN holdout h ON h.campaign_id = u.campaign_id
   LEFT JOIN oob_camp oc ON oc.campaign_id = u.campaign_id
-  LEFT JOIN dimk dk ON dk.cid = u.campaign_id AND dk.kid = u.keyword_id),
+  LEFT JOIN dimk dk ON dk.cid = u.campaign_id AND dk.kid = u.keyword_id
+  LEFT JOIN engine_go eg ON eg.cid = u.campaign_id AND eg.kid = u.keyword_id),
 coded AS (
   SELECT c.*,
     CASE
@@ -507,6 +537,21 @@ codes AS (
   SELECT 'DEFENSE',                  'brand defense — never judged on profit',          'DEFENSE',    NULL,                           18 UNION ALL
   SELECT 'LAUNCH',                   'launch — contained',                              'LAUNCH',     NULL,                           19),
 -- ── per-keyword costs on the three horizons
+-- WHY A REPAIR OR FAILED SEAT MAY GET NO BOOK ROW, measured (B38, engine parity with
+-- tools/build_reprice_bulksheet.py's classify, in the generator's own order). NULL = the reprice
+-- generator will write the row on its next build (or names a refusal the register cannot afford
+-- to re-derive — a season block or a price that does not move — in that build's audit CSV);
+-- anything else is a rule that stops it for certain, read from the same sources the generator
+-- reads, and the row then promises no book row and recovers nothing.
+refused AS (
+  SELECT d.*,
+         CASE WHEN d.code NOT IN ('REPAIR', 'FAILED')                       THEN CAST(NULL AS STRING)
+              WHEN d.book_new_bid IS NOT NULL                                THEN CAST(NULL AS STRING)
+              WHEN d.engine_instruction IS NOT NULL                          THEN 'ENGINE'
+              WHEN d.code = 'FAILED' AND NOT (d.probation_elapsed AND d.at_floor) THEN 'NOT_AT_FLOOR'
+              WHEN COALESCE(d.settled_ord90, 0) <= k.thin_orders             THEN 'THIN'
+              ELSE CAST(NULL AS STRING) END AS book_refusal
+  FROM coded d CROSS JOIN k),
 kw AS (
   SELECT d.*, x.category, x.side, x.occupant_kind, x.cat_order,
          l.seat_no, l.opened_on AS seat_opened_on,
@@ -533,7 +578,9 @@ kw AS (
               ELSE d.spend7 / k.basis_days END AS cost_day1,
          x.side AS side_day1,
          -- re-judged: repairs hold at their bar (good side), probation at its floor, failed killed
-         -- (a kill IS a pause → $0, and the SHIPPED generator builds that row for a LOSER today);
+         -- (a kill IS a pause → $0, and the SHIPPED generator builds that row for a LOSER today —
+         -- but ONLY where it will: a failed seat the generator refuses (book_refusal, B38) keeps
+         -- costing, because a pause that is never written recovers nothing — R-l);
          -- A LEAK reaches $0 only where a pause row for it is on a PENDING_UPLOAD book (the leak
          -- arm, shipped 2026-08-23); a leak no book carries keeps costing; STALLED PROBES RE-PRICED:
          -- the move on their row is 'raise to the seat price' or 'park at the engine's park price',
@@ -541,7 +588,7 @@ kw AS (
          -- same linear bid→spend guess the day-one horizon uses). Probes and settling hold,
          -- untracked unchanged; a holdout-suppressed row is unchanged on every count.
          CASE WHEN d.holdout AND d.snap_d >= d.holdout_eligible_from THEN d.spend7 / k.basis_days
-              WHEN d.code = 'FAILED' THEN 0
+              WHEN d.code = 'FAILED' THEN IF(d.book_refusal IS NULL, 0, d.spend7 / k.basis_days)
               WHEN d.code = 'LEAK' THEN IF(d.pause_pending, 0, d.spend7 / k.basis_days)
               WHEN d.code = 'STALLED_PROBE' THEN d.spend7 / k.basis_days
                    * COALESCE(SAFE_DIVIDE(CASE WHEN d.seat_price IS NOT NULL AND d.current_bid < d.seat_price - k.bid_tol THEN d.seat_price
@@ -571,7 +618,7 @@ kw AS (
               WHEN d.live_state = '' THEN 'the switch could not be read in Amazon at all, and nothing is paused blind'
               WHEN d.live_state != 'ENABLED' THEN 'already switched off in Amazon (this is trailing spend; a pause row would change nothing)'
               ELSE CAST(NULL AS STRING) END AS leak_block_words
-  FROM coded d CROSS JOIN k
+  FROM refused d CROSS JOIN k
   JOIN codes x ON x.code = d.code
   LEFT JOIN ledger l ON l.family = d.family AND l.campaign_id = d.campaign_id AND l.keyword_id = d.keyword_id),
 -- ── ONE LEAK BOOK, ONE SEQUENCE (2026-08-23, first-production-night cleanup). The leak book
@@ -684,8 +731,16 @@ fam_h AS (
          COUNTIF(code = 'LEAK' AND NOT pause_pending AND leak_block IS NULL) AS n_leaks_exec_off_book,
          STRING_AGG(DISTINCT IF(code = 'LEAK' AND pause_pending AND leak_block IS NULL, pause_batch_id, NULL), ', '
                     ORDER BY IF(code = 'LEAK' AND pause_pending AND leak_block IS NULL, pause_batch_id, NULL)) AS leak_pause_books,
-         COUNTIF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from)) AS n_failed_exec,
-         ROUND(SUM(IF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from), cost_today, 0)), 4) AS failed_exec_today,
+         -- …a failed keyword is a kill ONLY where the reprice generator will write the pause row
+         -- (book_refusal IS NULL, B38); a refused one is named below, never counted as recovered
+         COUNTIF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from) AND book_refusal IS NULL) AS n_failed_exec,
+         ROUND(SUM(IF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from) AND book_refusal IS NULL, cost_today, 0)), 4) AS failed_exec_today,
+         COUNTIF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from) AND book_refusal IS NOT NULL) AS n_failed_refused,
+         ROUND(SUM(IF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from) AND book_refusal IS NOT NULL, cost_today, 0)), 4) AS failed_refused_today,
+         -- …and of the repairs, which the BOOK prices and which it refuses — the engine's own
+         -- instruction carries one, a record too thin to read carries none (B38)
+         COUNTIF(code = 'REPAIR' AND NOT no_sheet AND book_refusal = 'ENGINE') AS n_repair_engine,
+         COUNTIF(code = 'REPAIR' AND NOT no_sheet AND book_refusal = 'THIN') AS n_repair_thin,
          -- and the same guard on the two lines that recover nothing: a stalled probe or a repair in
          -- a holdout campaign cannot even be re-priced, so it is never listed as a move
          COUNTIF(code = 'STALLED_PROBE' AND NOT no_sheet) AS n_stalled_exec,
@@ -719,7 +774,7 @@ fam_rows AS (
            WHEN 'today' THEN FORMAT('measured on the %d complete days %s to %s; nothing assumed',
                                     k.basis_days, CAST(win.basis_from AS STRING), CAST(win.basis_to AS STRING))
            WHEN 'day one' THEN 'projection: the pending books land — every keyword on a pending BID row spends in proportion to new bid ÷ old bid (a linear bid→spend guess, not a measurement); everything else as today. A closed-but-spending keyword reaches $0 here ONLY when a pause row for that exact keyword is on a pending book of its own — the leak arm (tools/build_seat_moves_bulksheet.py) shipped on 2026-08-23, so that sheet now exists, and the credit is checked row by row against the change log rather than assumed for the category. A leak no book carries costs here exactly what it costs today. A keyword in a holdout campaign on or after its eligible_from date gets no sheet row at all, so it is unchanged here — no book lands on it while the arm runs.'
-           ELSE 'projection: the repairs hold at their bar and move to the good side at their day-one cost; probation keywords stay on the 20% side at their floor; failed keywords are killed with a pause row (→ $0) — the shipped reprice generator builds that row today; a leak reaches $0 only where a pause row for it sits on a pending book from the leak arm (tools/build_seat_moves_bulksheet.py, shipped 2026-08-23), checked row by row against the change log, and a leak no book carries keeps costing what it costs today; stalled probes are re-priced by the move on their own row — raised to the seat price where the live bid is below it, otherwise parked at the engine\'s park price — and keep spending at that price (the same linear bid→spend guess), because parking lowers a price and does not stop the spend, so they stay on the 20% side until a verdict arrives; engine probes keep their day-one cost; settling verdicts hold; untracked spend is unchanged until the ladder sees it. A keyword in a holdout campaign on or after its eligible_from date gets no sheet row at all, so it is unchanged here and a repair in one never moves to the good side.'
+           ELSE 'projection: the repairs hold at their bar and move to the good side at their day-one cost; probation keywords stay on the 20% side at their floor; failed keywords are killed with a pause row (→ $0) where the shipped reprice generator will write one — a failed keyword it refuses (an engine instruction carries it, probation not elapsed at its floor, or a record too thin) keeps costing; a leak reaches $0 only where a pause row for it sits on a pending book from the leak arm (tools/build_seat_moves_bulksheet.py, shipped 2026-08-23), checked row by row against the change log, and a leak no book carries keeps costing what it costs today; stalled probes are re-priced by the move on their own row — raised to the seat price where the live bid is below it, otherwise parked at the engine\'s park price — and keep spending at that price (the same linear bid→spend guess), because parking lowers a price and does not stop the spend, so they stay on the 20% side until a verdict arrives; engine probes keep their day-one cost; settling verdicts hold; untracked spend is unchanged until the ladder sees it. A keyword in a holdout campaign on or after its eligible_from date gets no sheet row at all, so it is unchanged here and a repair in one never moves to the good side.'
          END AS horizon_assumption
   FROM fam_read f CROSS JOIN k CROSS JOIN win),
 -- ── the lowest free seat number per working family
@@ -893,7 +948,16 @@ shape AS (
                               -- (−$…/day) form: parking lowers a price and the spend continues,
                               -- and re-pricing a repair gives back nothing today by construction.
                               IF(f.n_stalled_exec > 0, FORMAT('re-price or park the %d stalled probes — parking lowers their price, it does not stop their spend, so their $%.2f/day stays at risk of continuing and is not recovered today; ', f.n_stalled_exec, f.stalled_exec_today), ''),
-                              IF(f.n_repair_exec > 0, FORMAT('the %d repairs are being re-priced toward their bar — a change of price, not a recovery: it gives back nothing today, and $%.2f/day moves to the good side only when they are re-judged, and only if they hold at their bar; ', f.n_repair_exec, f.repair_exec_day1), ''),
+                              IF(f.n_repair_exec > 0, FORMAT('the %d repairs are being re-priced toward their bar%s — a change of price, not a recovery: it gives back nothing today, and $%.2f/day moves to the good side only when they are re-judged, and only if they hold at their bar; ', f.n_repair_exec,
+                                                             -- B38: WHO prices each — the book, the engine's own instruction, or nobody (too thin)
+                                                             CASE WHEN f.n_repair_engine + f.n_repair_thin = 0 THEN ''
+                                                                  ELSE CONCAT(' (',
+                                                                              IF(f.n_repair_engine > 0, FORMAT('%d priced by the engine\'s own GO instruction, not by the reprice book', f.n_repair_engine), ''),
+                                                                              IF(f.n_repair_engine > 0 AND f.n_repair_thin > 0, '; ', ''),
+                                                                              IF(f.n_repair_thin > 0, FORMAT('%d too thin for any book to price — only the ladder\'s re-judgement moves %s', f.n_repair_thin, IF(f.n_repair_thin = 1, 'it', 'them')), ''),
+                                                                              ')') END,
+                                                             f.repair_exec_day1), ''),
+                              IF(f.n_failed_refused > 0, FORMAT('%d failed keyword%s ($%.2f/day) get%s no pause row — the reprice generator refuses it (an engine instruction already carries it, its probation has not elapsed at its floor, or its record is too thin) — so those dollars are not part of the recovery above; ', f.n_failed_refused, IF(f.n_failed_refused = 1, '', 's'), f.failed_refused_today, IF(f.n_failed_refused = 1, 's', '')), ''),
                               -- the gap causes (R-k refined): each bucket worded by what was measured
                               IF(f.n_gap_next_run > 0,
                                  IF(f.n_gap_next_run = 1, 'the 1 enabled target with no verdict row gets one on the next state run; ',
@@ -1059,13 +1123,29 @@ shape AS (
     CAST(NULL AS STRING) AS horizon_assumption,
     CASE WHEN w.holdout AND run_day.d >= w.holdout_eligible_from THEN 'no sheet row — holdout campaign; the seat stays as it is while the arm runs'
          ELSE CASE w.code
-           WHEN 'REPAIR' THEN IF(w.book_new_bid IS NOT NULL,
-                                 FORMAT('on the pending book %s: $%.2f → $%.2f (%s); re-judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, IF(w.book_action = 'INCREASE_BID', 'a raise', 'a cut'), CAST(w.next_check_date AS STRING)),
-                                 FORMAT('no row on the pending book — the reprice generator (tools/build_reprice_bulksheet.py) prices it; re-judge %s', CAST(w.next_check_date AS STRING)))
+           WHEN 'REPAIR' THEN CASE
+                                 WHEN w.book_new_bid IS NOT NULL THEN
+                                   FORMAT('on the pending book %s: $%.2f → $%.2f (%s); re-judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, IF(w.book_action = 'INCREASE_BID', 'a raise', 'a cut'), CAST(w.next_check_date AS STRING))
+                                 -- B38: a promise the book cannot keep is never published — the refusal is said instead
+                                 WHEN w.book_refusal = 'ENGINE' THEN
+                                   FORMAT('no row on any reprice book — the engine already carries a GO instruction for it today (%s), and one keyword gets one price, so the reprice generator refuses it and the engine\'s own upload re-prices it; re-judge %s', w.engine_instruction, CAST(w.next_check_date AS STRING))
+                                 WHEN w.book_refusal = 'THIN' THEN
+                                   FORMAT('no row on any reprice book — %d settled order%s cannot say which side of its bar it is on, so the reprice generator refuses to price it (at or under %d orders a bid move is noise); nothing re-prices it before the ladder re-judges it %s', CAST(COALESCE(w.settled_ord90, 0) AS INT64), IF(COALESCE(w.settled_ord90, 0) = 1, '', 's'), k.thin_orders, CAST(w.next_check_date AS STRING))
+                                 ELSE
+                                   FORMAT('no row on the pending book — the reprice generator (tools/build_reprice_bulksheet.py) prices it on its next build, or names in that build\'s audit CSV why it will not; re-judge %s', CAST(w.next_check_date AS STRING))
+                                 END
            WHEN 'PROBATION' THEN IF(w.book_new_bid IS NOT NULL,
                                  FORMAT('on the pending book %s: $%.2f → $%.2f (%s) — hold at the floor, judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, IF(w.book_action = 'INCREASE_BID', 'a raise', 'a cut'), CAST(w.next_check_date AS STRING)),
                                  FORMAT('hold at its floor $%.2f; judge %s', COALESCE(w.bid_floor, 0), CAST(w.next_check_date AS STRING)))
-           WHEN 'FAILED' THEN 'kill it on the next book (pause row) — it lost at its floor after probation'
+           WHEN 'FAILED' THEN CASE
+                                 WHEN w.book_refusal = 'ENGINE' THEN
+                                   FORMAT('no pause row — the engine already carries a GO instruction for it today (%s), and one keyword gets one price, so the reprice generator refuses it; the ladder re-judges it', w.engine_instruction)
+                                 WHEN w.book_refusal = 'NOT_AT_FLOOR' THEN
+                                   FORMAT('no pause row — the reprice generator kills a failed keyword only once its probation has elapsed AT its floor, and this one is %s; the ladder re-judges it', IF(NOT w.probation_elapsed, 'still on its probation clock', FORMAT('sitting above its floor at $%.2f', w.current_bid)))
+                                 WHEN w.book_refusal = 'THIN' THEN
+                                   FORMAT('no pause row — %d settled order%s are too few for the reprice generator to act on (at or under %d orders a move is noise); the ladder re-judges it', CAST(COALESCE(w.settled_ord90, 0) AS INT64), IF(COALESCE(w.settled_ord90, 0) = 1, '', 's'), k.thin_orders)
+                                 ELSE 'kill it on the next book (pause row) — it lost at its floor after probation'
+                                 END
            WHEN 'PROBE' THEN 'no move — the engine is buying its verdict; the seat closes on the verdict'
            -- R-i: an overdue settling verdict is named as overdue, never published as a future event
            WHEN 'SETTLING' THEN IF(w.next_check_date < run_day.d,
@@ -1111,9 +1191,13 @@ shape AS (
            IF(w.occupant_kind = 'settling', ' — seated, but counted on the 80% side (ruling)', ''),
            '. ',
            CASE w.code
-             WHEN 'REPAIR' THEN IF(w.book_new_bid IS NOT NULL, FORMAT('On the book: $%.2f → $%.2f; re-judge %s.', w.book_old_bid, w.book_new_bid, CAST(w.next_check_date AS STRING)), FORMAT('Re-judge %s.', CAST(w.next_check_date AS STRING)))
+             WHEN 'REPAIR' THEN CASE
+                                  WHEN w.book_new_bid IS NOT NULL THEN FORMAT('On the book: $%.2f → $%.2f; re-judge %s.', w.book_old_bid, w.book_new_bid, CAST(w.next_check_date AS STRING))
+                                  WHEN w.book_refusal = 'ENGINE' THEN FORMAT('No book row: the engine\'s own instruction prices it; re-judge %s.', CAST(w.next_check_date AS STRING))
+                                  WHEN w.book_refusal = 'THIN' THEN FORMAT('No book row: too thin to price; the ladder re-judges it %s.', CAST(w.next_check_date AS STRING))
+                                  ELSE FORMAT('Re-judge %s.', CAST(w.next_check_date AS STRING)) END
              WHEN 'PROBATION' THEN FORMAT('Judge %s.', CAST(w.next_check_date AS STRING))
-             WHEN 'FAILED' THEN 'Kill it on the next book.'
+             WHEN 'FAILED' THEN IF(w.book_refusal IS NULL, 'Kill it on the next book.', 'No pause row: the reprice generator refuses it; not counted as recovered.')
              WHEN 'PROBE' THEN 'No move; the seat closes on the verdict.'
              WHEN 'SETTLING' THEN IF(w.next_check_date < run_day.d, 'No move; the ladder owes it a re-judgement.', FORMAT('No move; settles %s.', CAST(w.next_check_date AS STRING)))
              WHEN 'PARKED_SEAT' THEN FORMAT('No move; re-judged on %s.', CAST(w.next_check_date AS STRING))
@@ -1129,10 +1213,16 @@ shape AS (
          ) AS sentence,
     -- sheet_row: what a sheet does with this row today (2026-08-23). PENDING_BOOK = a pending
     -- book already carries it; NEXT_REPRICE_BOOK = the reprice generator writes it on its next
-    -- build; BY_HAND = a stalled probe, priced or parked by hand (R-f); NO_SHEET_ROW = holdout;
-    -- NONE = nothing to do today. The brief derives its action from these, never from the status.
+    -- build; ENGINE_PRICES = an engine GO instruction carries it today, so no book does (B38);
+    -- TOO_THIN_TO_PRICE = the generator refuses it on its record (B38); BY_HAND = a stalled probe,
+    -- priced or parked by hand (R-f); NO_SHEET_ROW = holdout, or a failed keyword the generator
+    -- will not kill (B38); NONE = nothing to do today. The brief derives its action from these,
+    -- never from the status — and counts only NEXT_* as rows for the next book.
     CASE WHEN w.holdout AND run_day.d >= w.holdout_eligible_from THEN 'NO_SHEET_ROW'
          WHEN w.code IN ('REPAIR', 'PROBATION') AND w.book_new_bid IS NOT NULL THEN 'PENDING_BOOK'
+         WHEN w.code IN ('REPAIR', 'FAILED') AND w.book_refusal = 'ENGINE' THEN 'ENGINE_PRICES'
+         WHEN w.code IN ('REPAIR', 'FAILED') AND w.book_refusal = 'THIN' THEN 'TOO_THIN_TO_PRICE'
+         WHEN w.code = 'FAILED' AND w.book_refusal IS NOT NULL THEN 'NO_SHEET_ROW'
          WHEN w.code IN ('REPAIR', 'FAILED') THEN 'NEXT_REPRICE_BOOK'
          WHEN w.code = 'STALLED_PROBE' THEN 'BY_HAND'
          ELSE 'NONE' END AS sheet_row,

@@ -99,6 +99,13 @@
 -- row prints the ads window it was measured on and the keyword snapshot it came from, so a reader
 -- who built a book since the last pass can see that this line has not seen it yet.
 --
+-- v27.125 (2026-08-23, repair pass): (1) the 'rebuild the leak book' action NAMES THE BATCH —
+-- `--replaces <batch>` — because the generator's --replaces takes one or more batch ids and
+-- refuses a build that does not name the pending book, so the earlier template ('--replaces)'
+-- with nothing after it) was an instruction a new user could not execute as written; the batch
+-- ids are read register-wide off the LEAK rows that carry them (one leak book at a time, R-n).
+-- (2) A repair the register now marks ENGINE_PRICES or TOO_THIN_TO_PRICE (B38) is NOT a row for
+-- the next book: it is named in the detail as 'not on any sheet', never counted toward an action.
 -- THE ACTION IS DERIVED FROM WHAT IS EXECUTABLE (v27.124, 2026-08-23), never from the doctrine
 -- status alone: the register publishes sheet_row on every SEAT and LEAK row, and this section
 -- counts those — a stale leak book to rebuild, a pending book to upload, rows for the next book,
@@ -342,8 +349,20 @@ seat_counts AS (
          STRING_AGG(DISTINCT IF(sheet_row = 'PENDING_BOOK', book_batch_id, NULL), ', '
                     ORDER BY IF(sheet_row = 'PENDING_BOOK', book_batch_id, NULL)) AS pending_books,
          COUNTIF(sheet_row IN ('NEXT_LEAK_BOOK', 'NEXT_REPRICE_BOOK'))  AS n_next,
-         COUNTIF(sheet_row = 'BY_HAND')                                  AS n_hand
+         COUNTIF(sheet_row = 'BY_HAND')                                  AS n_hand,
+         -- B38 (v27.125): rows NO sheet will carry — the engine's own instruction prices one, a
+         -- record too thin to read prices none. Named, never counted as executable.
+         COUNTIF(sheet_row = 'ENGINE_PRICES')                            AS n_engine,
+         COUNTIF(sheet_row = 'TOO_THIN_TO_PRICE')                        AS n_thin
   FROM seat_reg GROUP BY 1
+),
+-- The stale pending leak book(s), read ONCE register-wide (R-n: one leak book at a time, so the
+-- state is account-wide, not per family): the batch ids the REBUILD_LEAK_BOOK leak rows carry.
+-- The generator's --replaces needs them by name and refuses a build that does not name them.
+stale_books AS (
+  SELECT STRING_AGG(DISTINCT book_batch_id, ' ' ORDER BY book_batch_id) AS books
+  FROM seat_reg
+  WHERE row_type = 'LEAK' AND sheet_row = 'REBUILD_LEAK_BOOK' AND book_batch_id IS NOT NULL
 ),
 -- One row per WORKING family. A launch family is published by the register as a REFERENCE row, not
 -- a FAMILY row, so this filter is what keeps the house rule — a launch family is never judged on
@@ -356,8 +375,12 @@ seat_family AS (
               COALESCE(c.n_pending, 0) AS n_pending,
               c.pending_books,
               COALESCE(c.n_next, 0) AS n_next,
-              COALESCE(c.n_hand, 0) AS n_hand
+              COALESCE(c.n_hand, 0) AS n_hand,
+              COALESCE(c.n_engine, 0) AS n_engine,
+              COALESCE(c.n_thin, 0) AS n_thin,
+              sb.books AS stale_books
   FROM seat_reg f LEFT JOIN seat_counts c ON c.family = f.family
+  CROSS JOIN stale_books sb
   WHERE f.row_type = 'FAMILY' AND f.horizon = 'today'
 ),
 seats AS (
@@ -375,7 +398,14 @@ seats AS (
     -- and only when nothing is executable does the doctrine status speak — and then it says
     -- 'nothing executable', never 'close the gap' (the gap may depend on rulings, not moves).
     CASE WHEN s.n_rebuild > 0 THEN
-           FORMAT('rebuild the leak book — %d leak%s wait on it (tools/build_seat_moves_bulksheet.py --replaces)', s.n_rebuild, IF(s.n_rebuild = 1, '', 's'))
+           -- the batch is NAMED (v27.125): --replaces takes the pending batch id(s), and the
+           -- generator refuses a build that does not name them. If no leak row carries a batch
+           -- (every row of the pending book left the leak population), the generator still names
+           -- the pending batch when it refuses — say so rather than print an empty argument.
+           FORMAT('rebuild the leak book: `tools/build_seat_moves_bulksheet.py --replaces %s` — %d leak%s wait on it; do not upload %s',
+                  COALESCE(s.stale_books, '<the pending batch id the generator names when it refuses a build without it>'),
+                  s.n_rebuild, IF(s.n_rebuild = 1, '', 's'),
+                  COALESCE(s.stale_books, 'the old book'))
          WHEN s.n_pending > 0 THEN
            FORMAT('upload the pending book%s %s — %d row%s wait on %s (or label %s never-uploaded)',
                   IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 's', ''), COALESCE(s.pending_books, '?'),
@@ -433,6 +463,15 @@ seats AS (
              s.n_next, IF(s.n_next = 1, '', 's'),
              s.n_hand, IF(s.n_hand = 1, '', 's'),
              IF(s.n_pending + s.n_rebuild + s.n_next + s.n_hand = 0, ' — nothing executable today', '')),
+      -- B38 (v27.125): the rows no sheet will carry, named so nothing waits unseen — and never
+      -- counted above, because a book row the generator refuses is not executable
+      IF(s.n_engine + s.n_thin > 0,
+         CONCAT(' Not on any sheet: ',
+                IF(s.n_engine > 0, FORMAT('%d repair%s priced by the engine\'s own GO instruction', s.n_engine, IF(s.n_engine = 1, '', 's')), ''),
+                IF(s.n_engine > 0 AND s.n_thin > 0, '; ', ''),
+                IF(s.n_thin > 0, FORMAT('%d repair%s too thin for any book to price (the ladder re-judges %s)', s.n_thin, IF(s.n_thin = 1, '', 's'), IF(s.n_thin = 1, 'it', 'them')), ''),
+                '.'),
+         ''),
       -- the two dates that let a reader tell whether this line has seen what he did yesterday
       FORMAT(' Measured on the %d complete ads days to %s, from the keyword snapshot of %s.',
              DATE_DIFF(s.ads_basis_to, s.ads_basis_from, DAY) + 1,

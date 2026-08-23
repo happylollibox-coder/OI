@@ -277,7 +277,9 @@ LEFT JOIN bc ON bc.keyword_text = ks.target_text AND NOT COALESCE(ks.is_auto, FA
 LEFT JOIN live7 ON live7.cid = ks.campaign_id AND live7.kid = ks.keyword_id
 LEFT JOIN instructed instr ON instr.cid = ks.campaign_id AND instr.kid = ks.keyword_id
 CROSS JOIN wm
-ORDER BY ks.state, ks.family, ks.campaign_name, ks.target_text
+-- house rule 9: a total ordering — (campaign_id, target_text) is not a key in the state table,
+-- so the tiebreak reaches the keyword key and two builds of one snapshot emit one row order
+ORDER BY ks.state, ks.family, ks.campaign_name, ks.target_text, ks.campaign_id, ks.keyword_id
 """
 
 

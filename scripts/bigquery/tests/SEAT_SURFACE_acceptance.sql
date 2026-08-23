@@ -63,6 +63,10 @@
 --   C12 (2026-08-23) The run summary's detail sets the WHOLE 20% side against the allowance —
 --       like with like, to the cent — before naming the parts. Before: the seats' cost alone
 --       against the whole allowance.
+--   C13 (2026-08-23, repair pass) The brief's 'rebuild the leak book' action names every stale
+--       batch after --replaces (the generator refuses a build that does not), and a repair the
+--       register marks ENGINE_PRICES / TOO_THIN_TO_PRICE (B38) is named 'not on any sheet' and
+--       never counted as a row for the next book.
 --
 -- The cube's own shape (a dimension for every column a person reads, and the doctrine label CASEs
 -- naming every status the register can emit) is asserted by the file checker that SQL cannot run:
@@ -214,6 +218,32 @@ checks AS (
              OR b.action LIKE '%close the gap%' OR b.action = 'passes — no action'
              OR b.detail NOT LIKE '%Executable today:%')
          + (SELECT IF(n_brief = 0 OR n_fam = 0, 1, 0) FROM pop)
+  UNION ALL
+  -- C13 (2026-08-23, repair pass): the rebuild instruction is EXECUTABLE AS WRITTEN. The
+  -- generator's --replaces takes one or more batch ids and refuses a build that does not name
+  -- the pending book, so a 'rebuild' action must carry every stale batch id the register's own
+  -- REBUILD_LEAK_BOOK leak rows name. Latent on a day no book is stale (0 by absence, stated
+  -- here); the fail-first proof was a TMP_ copy of the image with one family's leak rows flipped
+  -- to REBUILD_LEAK_BOOK, over which the v27.124 brief printed '(… --replaces)' with no batch
+  -- after it and the v27.125 brief printed '--replaces seat_moves_<batch>'. A second leg: a
+  -- repair the register marks ENGINE_PRICES / TOO_THIN_TO_PRICE (B38) is never counted as a row
+  -- for the next book, and is named in the detail as 'not on any sheet'.
+  SELECT 'C13 the brief rebuild action names every stale batch after --replaces (executable as written), and a repair no book will price is named as not on any sheet and never counted as a row for the next book',
+         (SELECT COUNTIF(b.action LIKE 'rebuild the leak book%'
+                         AND (NOT REGEXP_CONTAINS(b.action, r'--replaces [A-Za-z0-9_]+')
+                              OR EXISTS (SELECT 1 FROM (SELECT DISTINCT book_batch_id AS bid FROM tab
+                                                        WHERE row_type = 'LEAK' AND sheet_row = 'REBUILD_LEAK_BOOK' AND book_batch_id IS NOT NULL)
+                                         WHERE STRPOS(b.action, bid) = 0)))
+          FROM brief b)
+         + (SELECT COUNTIF((n.n_engine + n.n_thin > 0 AND b.detail NOT LIKE '%Not on any sheet:%')
+                           OR (n.n_engine + n.n_thin = 0 AND b.detail LIKE '%Not on any sheet:%')
+                           OR (n.n_engine + n.n_thin > 0 AND n.n_next = 0 AND b.action LIKE 'build the next book%'))
+            FROM brief b JOIN (SELECT family,
+                                      COUNTIF(sheet_row = 'ENGINE_PRICES') AS n_engine,
+                                      COUNTIF(sheet_row = 'TOO_THIN_TO_PRICE') AS n_thin,
+                                      COUNTIF(sheet_row IN ('NEXT_LEAK_BOOK', 'NEXT_REPRICE_BOOK')) AS n_next
+                               FROM tab WHERE row_type IN ('SEAT', 'LEAK') GROUP BY 1) n ON n.family = b.campaign_name)
+         + (SELECT IF(n_brief = 0 OR n_tab = 0, 1, 0) FROM pop)
   UNION ALL
   SELECT 'C12 the run summary detail sets the WHOLE 20% side against the allowance (like with like), to the cent, and then names the parts',
          (SELECT COUNT(*) FROM rs r JOIN famrow f ON r.label LIKE CONCAT(f.family, ' — %')
