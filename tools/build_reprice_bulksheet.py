@@ -169,9 +169,10 @@ RAISE_CEILING = 2.00
 EXECUTABLE = ('BID_DOWN', 'BID_UP', 'PAUSE')
 
 # ── RULE B (F7) ───────────────────────────────────────────────────────────────────────────────
-# The plan's settings live in DE_PLAN_CONFIG by ruling P-13 — that table DOES NOT EXIST YET, so
-# they are DECLARED here, once, and the README says they were declared here. When the table is
-# built these three constants and RULE_B_MIN_ORDERS become a read of it, and nothing else moves.
+# The plan's settings live in DE_PLAN_CONFIG by ruling P-13, and as of v27.131 THIS GENERATOR
+# READS THAT TABLE (read_plan_config() below, called once at the top of a build). The values
+# below are the DECLARED FALLBACK, used only when the table cannot be read — and when they are
+# used the README says so on the page, because a book must never quote a setting it did not read.
 #   PLAN_WINDOW_DAYS   P-13: OFF-PEAK 7 complete days · BOOST 3 · PEAK 3.
 #   RULE_B_MIN_ORDERS  P-3: one order at 3x is mostly luck; two is the cheapest guard.
 #   GRACE_LADDER_STATES P-5: the ladder's settled-winner states. Grace buys ONE window, and only
@@ -183,6 +184,49 @@ PLAN_WINDOW_DAYS = {'OFF_PEAK': 7, 'BOOST': 3, 'PEAK': 3}
 RULE_B_MIN_ORDERS = 2
 GRACE_LADDER_STATES = ('WINNER', 'PACED_WINNER')
 RULE_B_GOOD = 'RULE_B_GOOD'          # the disposition a dropped row carries
+PLAN_CONFIG_SOURCE = 'fallback'      # set by read_plan_config(); 'DE_PLAN_CONFIG' or 'fallback'
+
+
+def read_plan_config():
+    """P-13: the plan's settings are DATA, not literals. Reads the latest ACTIVE row per calendar
+    state from DE_PLAN_CONFIG and rebinds PLAN_WINDOW_DAYS and RULE_B_MIN_ORDERS onto it, so a
+    setting Ori changes without a deploy reaches the one book that currently moves money.
+
+    If the table cannot be read, or does not carry all three states, the declared fallbacks above
+    stand and PLAN_CONFIG_SOURCE stays 'fallback' — which the README then prints, naming the
+    numbers as declared-in-the-generator rather than read. Never silently.
+    """
+    global PLAN_WINDOW_DAYS, RULE_B_MIN_ORDERS, PLAN_CONFIG_SOURCE
+    sql = f"""
+    SELECT calendar_state, window_days, min_orders, allowance_share, ramp_steps, live_plan
+    FROM `{PROJECT}.OI.DE_PLAN_CONFIG`
+    WHERE is_active
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY calendar_state ORDER BY updated_at DESC) = 1
+    """
+    out = subprocess.run(
+        ['bq', 'query', '--use_legacy_sql=false', '--format=json', '--nouse_cache',
+         f'--project_id={PROJECT}', sql],
+        capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        tail = out.stderr.strip().splitlines()[-1] if out.stderr.strip() else 'no detail'
+        print(f"DE_PLAN_CONFIG unreadable ({tail}); the generator's declared fallback settings "
+              f"stand and the README will say so.")
+        return {}
+    rows = json.loads(out.stdout or '[]')
+    cfg = {r['calendar_state']: r for r in rows}
+    if not all(st in cfg for st in ('OFF_PEAK', 'BOOST', 'PEAK')):
+        print("DE_PLAN_CONFIG does not carry all three calendar states; the declared fallback "
+              "settings stand and the README will say so.")
+        return {}
+    floors = {int(cfg[st]['min_orders']) for st in ('OFF_PEAK', 'BOOST', 'PEAK')}
+    if len(floors) > 1:
+        sys.exit(f"DE_PLAN_CONFIG carries different min_orders per state {sorted(floors)}; rule B "
+                 f"has one order floor (P-3). Make them agree before building a book.")
+    PLAN_WINDOW_DAYS = {st: int(cfg[st]['window_days']) for st in ('OFF_PEAK', 'BOOST', 'PEAK')}
+    RULE_B_MIN_ORDERS = floors.pop()
+    PLAN_CONFIG_SOURCE = 'DE_PLAN_CONFIG'
+    return cfg
 
 
 def window_bounds(watermark, window_days):
@@ -345,7 +389,8 @@ bc AS (
 -- The state comes from the house calendar helper V_PEAK_WINDOW_RULE (one row, resolved over
 -- DIM_US_HOLIDAYS: in_peak, the owning occurrence and its boost_start); peak_start comes from
 -- the calendar row that owns that boost_start, so BOOST and PEAK can be told apart. The WINDOW
--- LENGTHS are the constants declared in this file (P-13: DE_PLAN_CONFIG does not exist yet).
+-- LENGTHS are substituted from DE_PLAN_CONFIG, read once at the top of the build (P-13); this
+-- file's own constants are only the fallback for when that table cannot be read.
 cal AS (
   SELECT pw.in_peak, pw.occurrence_type, pw.occurrence_start, pw.w_days AS helper_w_days,
          (SELECT MIN(h.peak_start) FROM `{p}.OI.DIM_US_HOLIDAYS` h
@@ -1101,6 +1146,10 @@ def main():
 
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
 
+    # P-13: settings first, so the window lengths substituted into the query are the ones the
+    # settings table declares — not the ones this file happens to carry.
+    read_plan_config()
+
     rows = bq(SQL.format(p=PROJECT, w_off=PLAN_WINDOW_DAYS['OFF_PEAK'],
                          w_boost=PLAN_WINDOW_DAYS['BOOST'], w_peak=PLAN_WINDOW_DAYS['PEAK']))
     if not rows:
@@ -1336,11 +1385,18 @@ def main():
                        if b(w0.get('cal_in_peak')) else "")
                     + f". Off-peak the window is {PLAN_WINDOW_DAYS['OFF_PEAK']} days; in the "
                     f"run-up to a peak and inside one it is {PLAN_WINDOW_DAYS['PEAK']} days, "
-                    f"because a peak moves too fast to be judged on a week. Those two numbers "
-                    f"are **declared in the generator, not read from a settings table** — the "
-                    f"plan's settings table (DE_PLAN_CONFIG, ruling P-13) does not exist yet. "
-                    f"When it is built, this book reads it instead and nothing else changes. "
-                    f"The newest ads day ({w0['watermark']}) is still filling and is deliberately "
+                    f"because a peak moves too fast to be judged on a week. "
+                    + (f"Those numbers, and the order floor of {RULE_B_MIN_ORDERS}, were **read "
+                       f"from the plan's settings table** (DE_PLAN_CONFIG, ruling P-13) when this "
+                       f"book was built — change a setting there and the next book follows it, "
+                       f"with no deploy and no edit to the generator. "
+                       if PLAN_CONFIG_SOURCE == 'DE_PLAN_CONFIG' else
+                       f"**WARNING — the settings table could not be read for this build.** Those "
+                       f"numbers, and the order floor of {RULE_B_MIN_ORDERS}, are the generator's "
+                       f"**declared fallbacks**, not DE_PLAN_CONFIG (ruling P-13). If you changed "
+                       f"a setting there, THIS BOOK DOES NOT REFLECT IT — rebuild once the table "
+                       f"reads. ")
+                    + f"The newest ads day ({w0['watermark']}) is still filling and is deliberately "
                     f"left out: only finished days are judged.\n\n")
             f.write(f"**Attribution caveat — read this before trusting a 'not good' verdict.** "
                     f"The window's sales are still settling. Sponsored Products sales keep "

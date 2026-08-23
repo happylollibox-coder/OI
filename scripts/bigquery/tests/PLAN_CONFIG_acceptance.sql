@@ -1,5 +1,5 @@
 -- =============================================================================================
--- DE_PLAN_CONFIG + FN_PLAN_CALENDAR_STATE acceptance — v27.130 (2026-08-23).
+-- DE_PLAN_CONFIG + FN_PLAN_CALENDAR_STATE acceptance — v27.131 (2026-08-23).
 -- EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-13, §3.
@@ -14,6 +14,16 @@
 --   C04 the function never returns NULL or an unknown state over a two-year sweep
 --   C05 the three states the config declares are exactly the states the function can return
 --       (a state the function emits with no config row would leave the plan with no window)
+--   C06 every seed row carries the DECLARED SENTINEL updated_at, never a deploy-time clock —
+--       so re-running the DDL can never out-rank, by recency, a row Ori entered by hand. This
+--       is the check that failed on v27.130, where the seed carried CURRENT_TIMESTAMP().
+--   C07 where a state carries a row someone entered by hand, that row is the ACTIVE WINNER: no
+--       plan_seed row may win a state Ori has ruled on.
+--   C08 the plan's window agrees with the house's OLDER window authority for today's state.
+--       V_PEAK_WINDOW_RULE + DE_PEAK_WINDOW_OVERRIDE already answer "3 or 7 in a peak" on Ori's
+--       evidence discipline, and their re-measure clocks can grant a 7. P-11 says one engine, so
+--       DE_PLAN_CONFIG is the plan's authority — but the two must not disagree silently. When
+--       this check goes red, someone rules; it is not a bug to be patched away in the view.
 --
 -- C03 dates are DECLARED CALENDAR DATES read off DIM_US_HOLIDAYS, not measurements (Standing
 -- Rule 0 exempt). If Ori edits the live calendar these dates move with it and this check is the
@@ -67,6 +77,37 @@ c04 AS (
                     NOT IN ('OFF_PEAK', 'BOOST', 'PEAK')) AS violations
   FROM UNNEST(GENERATE_DATE_ARRAY(DATE '2025-01-01', DATE '2026-12-31')) d
 ),
+c06 AS (
+  SELECT 'C06 seed rows carry the declared sentinel updated_at' AS check_name,
+         COUNTIF(updated_at != TIMESTAMP '2026-08-23 00:00:00 UTC') AS violations
+  FROM `onyga-482313.OI.DE_PLAN_CONFIG`
+  WHERE updated_by = 'plan_seed'
+),
+c07 AS (
+  SELECT 'C07 a hand-entered row always wins its state' AS check_name,
+         COUNT(*) AS violations
+  FROM (
+    SELECT calendar_state, updated_by
+    FROM `onyga-482313.OI.DE_PLAN_CONFIG`
+    WHERE is_active
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY calendar_state ORDER BY updated_at DESC) = 1
+  ) w
+  WHERE w.updated_by = 'plan_seed'
+    AND EXISTS (SELECT 1 FROM `onyga-482313.OI.DE_PLAN_CONFIG` o
+                WHERE o.calendar_state = w.calendar_state AND o.updated_by != 'plan_seed')
+),
+c08 AS (
+  SELECT 'C08 plan window agrees with V_PEAK_WINDOW_RULE today' AS check_name,
+         COUNTIF(p.window_days != r.w_days) AS violations
+  FROM (SELECT w_days FROM `onyga-482313.OI.V_PEAK_WINDOW_RULE`) r
+  CROSS JOIN (
+    SELECT window_days
+    FROM `onyga-482313.OI.DE_PLAN_CONFIG`
+    WHERE is_active
+      AND calendar_state = `onyga-482313.OI.FN_PLAN_CALENDAR_STATE`(CURRENT_DATE('America/New_York'))
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY calendar_state ORDER BY updated_at DESC) = 1
+  ) p
+),
 c05 AS (
   SELECT 'C05 every state the function emits has an active config row' AS check_name,
          (SELECT COUNT(*) FROM (
@@ -79,5 +120,6 @@ c05 AS (
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
-      UNION ALL SELECT * FROM c04 UNION ALL SELECT * FROM c05)
+      UNION ALL SELECT * FROM c04 UNION ALL SELECT * FROM c05
+      UNION ALL SELECT * FROM c06 UNION ALL SELECT * FROM c07 UNION ALL SELECT * FROM c08)
 ORDER BY check_name;

@@ -183,22 +183,25 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.DE_PLAN_CONFIG`
   allowance_share  FLOAT64 NOT NULL,
   live_plan        STRING  NOT NULL,
   ramp_steps       INT64   NOT NULL,
+  min_orders       INT64   NOT NULL,   -- P-3, the window order floor; a setting, not a literal
   is_active        BOOL    NOT NULL,
-  note             STRING,
+  description      STRING,
   updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
   updated_by       STRING
 )
 OPTIONS (description = "v27.130 (2026-08-23) next-week money plan settings, one row per calendar state (OFF_PEAK | BOOST | PEAK): window_days (complete days, P-10), allowance_share (share of the good side's window spend for the not-good side, P-2/P-13), live_plan (A|B, P-9), ramp_steps (P-8). The plan reads the latest is_active row per state; never a literal. Seed rows carry updated_by = 'plan_seed' and are the only rows the DDL file rewrites. Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md. SOP: architecture/NEXT_WEEK_MONEY.md");
 
-DELETE FROM `onyga-482313.OI.DE_PLAN_CONFIG` WHERE updated_by = 'plan_seed';
-
-INSERT INTO `onyga-482313.OI.DE_PLAN_CONFIG`
-  (calendar_state, window_days, allowance_share, live_plan, ramp_steps, is_active, note, updated_at, updated_by)
-VALUES
-  ('OFF_PEAK', 7, 0.20, 'B', 3, TRUE, 'P-13: 7 complete days, one fifth of the good side (Ori 2026-08-23)', CURRENT_TIMESTAMP(), 'plan_seed'),
-  ('BOOST',    3, 0.50, 'B', 3, TRUE, 'P-13: 3 complete days; half of the good side before a peak so seasonal terms with no record get seats (Ori 2026-08-23, a learning question)', CURRENT_TIMESTAMP(), 'plan_seed'),
-  ('PEAK',     3, 0.20, 'B', 3, TRUE, 'P-13: 3 complete days, one fifth of the good side until Ori says otherwise', CURRENT_TIMESTAMP(), 'plan_seed');
+-- NOTE (v27.131). The seed sketched here — an unconditional DELETE of the seed rows and a
+-- re-INSERT active with CURRENT_TIMESTAMP() — is the shape that SHIPPED AND WAS REPAIRED, because
+-- it silently reverts a setting Ori changed by hand: his row survives the delete but stops being
+-- the row the reader takes, since the reader takes the LATEST active row per state. The shipped
+-- file seeds only a state with NO row at all, deletes only its own row for a state nobody has
+-- ruled on, and stamps a declared sentinel updated_at. Read the deployed file, not this sketch:
+--   scripts/bigquery/tables/DE/DE_PLAN_CONFIG.sql
 ```
+
+**Read the deployed DE_PLAN_CONFIG.sql, not the sketch above** — the shipped table carries
+`min_orders` (REQUIRED) and `description` (not `note`), and its seed defers to a hand-entered row.
 
 - [ ] **Step 4: Write FN_PLAN_CALENDAR_STATE**
 
@@ -678,8 +681,10 @@ CREATE OR REPLACE VIEW `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
 OPTIONS (description = "v27.131 (2026-08-23): one row per working-family (HARVEST) keyword — the complete-days window from DE_PLAN_CONFIG for today's calendar state, the keyword's record in it raw AND corrected for settle completion via V_PLAN_SETTLE_COMPLETION, the side rule B gives it (P-1/P-3), the P-14b asymmetric guard (promote on fresh evidence, never demote until the window has settled: SP 7 / SB 14), the P-5 grace for ladder-settled winners, the shadow plan A side from the ladder state (P-9), the repaired price capped at three 5% steps and floored at the row's own bid_floor (P-6), the seat cost at that price, and the P-7 rank. Publishes settle_arm and decided_by on every row so a reader can see which arm decided it. Judges only; SP_BUILD_NEXT_WEEK_PLAN does the potting, seating and queueing. Brand defense, launch-contained keywords and non-enabled campaigns are outside the universe. Spec P-1..P-14, §3a. SOP: architecture/NEXT_WEEK_MONEY.md")
 AS
 WITH k AS (
-  SELECT 2      AS min_orders,        -- P-3: one order at 3x is mostly luck; two is the guard
-         0.05   AS material_step,     -- mirrored from tools/build_reprice_bulksheet.py MATERIAL_STEP
+  -- P-3/P-13: min_orders is NOT a literal — it is read from DE_PLAN_CONFIG in the cfg CTE below
+  -- and joined in. Writing `2 AS min_orders` here would put the order floor in two places that
+  -- can disagree, which is the exact defect DE_PLAN_CONFIG exists to prevent (v27.131 fix).
+  SELECT 0.05   AS material_step,     -- mirrored from tools/build_reprice_bulksheet.py MATERIAL_STEP
          3      AS blind_steps,       -- ...and BLIND_STEPS: the engine's blind run before a re-read
          2.00   AS raise_ceiling,     -- the house bid ceiling (GUARDIAN threshold redesign)
          4      AS click_goal_day,    -- mirrored from V_FAMILY_SEAT_REGISTER k.click_goal_day
@@ -697,7 +702,8 @@ today AS (
          CURRENT_DATE('America/New_York')    AS d_ny
 ),
 cfg AS (
-  SELECT calendar_state, window_days, allowance_share, live_plan, ramp_steps
+  -- Every setting, min_orders included. Copy this CTE, not a subset of it.
+  SELECT calendar_state, window_days, allowance_share, live_plan, ramp_steps, min_orders
   FROM `onyga-482313.OI.DE_PLAN_CONFIG`
   WHERE is_active
   QUALIFY ROW_NUMBER() OVER (PARTITION BY calendar_state ORDER BY updated_at DESC) = 1
@@ -711,13 +717,23 @@ wm AS (
   FROM `onyga-482313.OI.FACT_AMAZON_ADS`
 ),
 win AS (
+  -- P-10 + the P-14a FENCE. window_to is NOT simply wm - 1: FN_ADS_ANCHOR_CAP() advances to the
+  -- current LA date at 22:00 LA, so a late-evening run would otherwise admit an age-1 day, whose
+  -- SPEND the settle curve publishes as materially short of final — understating the pot, the
+  -- allowance and every seat cost in the same direction. The fence gives up a day instead. Before
+  -- 22:00 LA the two terms are equal and it costs nothing.
   SELECT s.calendar_state, c.window_days, c.allowance_share, c.live_plan, c.ramp_steps,
-         wm.d                                                 AS watermark,
-         DATE_SUB(wm.d, INTERVAL 1 DAY)                        AS window_to,
-         DATE_SUB(wm.d, INTERVAL c.window_days DAY)            AS window_from
+         c.min_orders,
+         wm.d                                                  AS watermark,
+         LEAST(DATE_SUB(wm.d, INTERVAL 1 DAY),
+               DATE_SUB(t.d_la, INTERVAL 2 DAY))               AS window_to,
+         DATE_SUB(LEAST(DATE_SUB(wm.d, INTERVAL 1 DAY),
+                        DATE_SUB(t.d_la, INTERVAL 2 DAY)),
+                  INTERVAL c.window_days - 1 DAY)              AS window_from
   FROM state s
   JOIN cfg c USING (calendar_state)
   CROSS JOIN wm
+  CROSS JOIN today t
 ),
 books AS (
   SELECT family, book FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT` WHERE book = 'HARVEST'
@@ -832,7 +848,7 @@ base AS (
     (h.cid IS NOT NULL AND t.d_la >= h.eligible_from) AS holdout,
     h.eligible_from AS holdout_eligible_from,
     IF(ks.channel = 'SB', caps.settle_days_sb, caps.settle_days_sp) AS settle_days,
-    caps.min_orders, caps.cap_up, caps.cap_down, caps.raise_ceiling, caps.click_goal_day,
+    win.min_orders, caps.cap_up, caps.cap_down, caps.raise_ceiling, caps.click_goal_day,
     t.d_la AS today_la
   FROM ks
   CROSS JOIN win

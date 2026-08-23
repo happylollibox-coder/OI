@@ -1,5 +1,5 @@
 -- =============================================================================================
--- FN_PLAN_CALENDAR_STATE(d) — v27.130 (2026-08-23): which calendar state a date is in, read
+-- FN_PLAN_CALENDAR_STATE(d) — v27.131 (2026-08-23): which calendar state a date is in, read
 -- from the LIVE DIM_US_HOLIDAYS (the authority; the repo seed is stale — config.yaml says so,
 -- and the Prime Day BLITZ fix is the scar that proves it).
 --   PEAK     d BETWEEN peak_start AND COALESCE(cooldown_end, holiday_date + 3)   (wins)
@@ -13,6 +13,14 @@
 -- run-up everywhere. PLAN_CONFIG_acceptance C03 asserts the precedence on a live overlap date
 -- rather than trusting this paragraph.
 --
+-- CONSEQUENCE NOBODY HAS RULED ON (v27.131): with the seasons as the live calendar carries them,
+-- this precedence makes PEAK the MAJORITY state of the year, not the exception — so the plan
+-- judges on the short window most of the time and OFF-PEAK, the doctrine's normal case, is the
+-- minority. Do not pin the split here; read it (the SOP publishes the query). It matters most
+-- for P-14, whose settle correction and asymmetric guard then carry most of the year. Overruling
+-- is one CASE here, or one edit to a peak_start on DIM_US_HOLIDAYS — and C03 fails the moment
+-- either moves, so the change has to be re-asserted deliberately.
+--
 -- Categories = the four the house gate V_SEASON_PEAK_GATE uses. The season end follows the
 -- gate's COALESCE(cooldown_end, holiday_date + 3) (Back to School and Halloween carry NULL
 -- cooldowns). Rows with no boost_start cannot describe a run-up and are skipped.
@@ -24,7 +32,7 @@
 -- =============================================================================================
 CREATE OR REPLACE FUNCTION `onyga-482313.OI.FN_PLAN_CALENDAR_STATE`(d DATE)
 RETURNS STRING
-OPTIONS (description = "v27.130 (2026-08-23): calendar state of a date for the next-week money plan — PEAK (peak_start .. COALESCE(cooldown_end, holiday_date+3)) wins over BOOST (boost_start .. the day before COALESCE(peak_start, holiday_date)) over OFF_PEAK; categories gift_season/prime_event/back_to_school/seasonal, read from the LIVE DIM_US_HOLIDAYS, never a date literal. PEAK wins because the live seasons overlap and the plan needs one window and one share per date; the tighter window is the safer read. Never returns NULL. Pair with DE_PLAN_CONFIG for the window, the share, the ramp and the order floor. Acceptance: scripts/bigquery/tests/PLAN_CONFIG_acceptance.sql. Spec P-13, §3.")
+OPTIONS (description = "v27.131 (2026-08-23): calendar state of a date for the next-week money plan — PEAK (peak_start .. COALESCE(cooldown_end, holiday_date+3)) wins over BOOST (boost_start .. the day before COALESCE(peak_start, holiday_date)) over OFF_PEAK; categories gift_season/prime_event/back_to_school/seasonal, read from the LIVE DIM_US_HOLIDAYS, never a date literal. PEAK wins because the live seasons overlap and the plan needs one window and one share per date; the tighter window is the safer read — which on the live calendar makes PEAK the majority state of the year, a consequence Ori has not ruled on (see the SOP). Never returns NULL. Pair with DE_PLAN_CONFIG for the window, the share, the ramp and the order floor. Acceptance: scripts/bigquery/tests/PLAN_CONFIG_acceptance.sql. Spec P-13, §3.")
 AS ((
   SELECT COALESCE(
     IF(COUNTIF(d BETWEEN peak_start
