@@ -2268,6 +2268,50 @@ BEGIN
     SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
   END;
 
+
+  -- ============================================
+  -- Refresh Task 20.8c (2026-08-23, next week's money Task 2): the plan. Reads the keyword-state
+  -- snapshot (20.8) through V_PLAN_WINDOW_JUDGMENT and the seat ledger (20.8b), and writes today's
+  -- partition of FACT_PLAN_NEXT_WEEK — both plans, every night (spec P-9). MUST run after 20.8b,
+  -- because a continuing occupant's seat number comes from the ledger that step maintains, and
+  -- after 20.8, whose snapshot the judgement view reads.
+  -- IT ALSO ARMS TWO RULINGS. The judgement view reads this table back as the plan's MEMORY: the
+  -- live rows' `side` becomes the P-14b guard's "was good" (the ladder is only the bootstrap for a
+  -- keyword the plan has never seen), and `verdict = 'GRACE'` spends P-5's one quiet window. Until
+  -- this step ran for the first time both memories were absent and grace was a permanent exemption.
+  -- ONE PASS OF LAG, DELIBERATE AND MEASURED: the proposal snapshot (Task 20.6) and the preflight
+  -- (20.7) run EARLIER in this pass than the keyword state machine (20.8) does — that ordering
+  -- predates this plan and is not changed here. So the PLAN rows a given pass writes are read by
+  -- the NEXT pass's proposal snapshot, exactly as the ladder's own snapshot is already read a pass
+  -- late by everything below it. Closing the lag means moving 20.6 and 20.7 below 20.8c, which is a
+  -- change to another owner's ordering — recorded as an open ruling for Ori, not taken here.
+  -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md. SOP: architecture/NEXT_WEEK_MONEY.md §3.
+  -- ============================================
+
+  SET procedure_name = 'SP_BUILD_NEXT_WEEK_PLAN';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
   -- ============================================
   -- Refresh Task 21: Refresh Cube Tables (T_*)
   -- Convert all Cube-facing V_* logical views into physical T_* snapshot tables

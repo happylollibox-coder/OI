@@ -836,7 +836,156 @@ the builder runs it is empty and the guard falls back to the declared bootstrap 
 settled record clearing the bar with the window's order floor met).
 
 
-## 3. The nightly builder (Task 2) — to be written
+## 3. The nightly builder (Task 2, v27.136)
+
+`SP_BUILD_NEXT_WEEK_PLAN` reads `V_PLAN_WINDOW_JUDGMENT` once and turns the judgement into money.
+It writes one partition of `FACT_PLAN_NEXT_WEEK` per night — **both plans**, `B` live and `A` in
+shadow (P-9) — and nothing else. It is idempotent (it rewrites only today's `as_of`) and
+deterministic (every ordering reaches the keyword key). Orchestrator step **20.8c**, after the seat
+ledger at 20.8b, because a continuing occupant's seat number comes from the ledger that step
+maintains and the judgement reads the snapshot 20.8 writes.
+
+### The seven steps, and where each ruling lives
+
+| step | what it does | ruling |
+|---|---|---|
+| 1 POT | the **GOOD side's** window spend per day, per family. Not the family total, and not a budget anyone set — it is what the good keywords actually bought. | P-2 |
+| 2 ALLOWANCE | `allowance_share × pot`. The share and the window come from `DE_PLAN_CONFIG` for today's calendar state; neither is a literal anywhere in the procedure. | P-2, P-13 |
+| 3 RAMP | close **one third of the gap** between today's not-good spend and the allowance this window. A family already inside its allowance gets the full allowance and is never ramped *upwards* into a bigger loss budget. Recomputed from actual spend every night, so the sequence converges whether or not anyone uploads on schedule. | P-8 |
+| 4 SEATS | candidates ranked, each costing its spend **at the repaired price**, taking numbered seats while the running cost fits the ramped allowance. Costs are non-negative, so the running total is monotone and the fit is a **prefix** of the ranking — that is what makes the seating reproducible. | P-6, P-7 |
+| 5 QUEUE | everything that did not fit: parked at the engine park price, or paused when it is already there. | §4.5 |
+| 6 MOVES | exactly one executable instruction per **candidate**; none on the good side. | P-4, §4.6 |
+| 7 BUDGETS | the sum of the campaign's planned spend, ramped one step, floored at the campaign's own good-side spend, snapped out of the forbidden $20.01–$31.99 band, floored at $1.00. | §4.7 |
+
+**Seat numbers are the ledger's, not the plan's.** A continuing occupant keeps the number
+`DE_FAMILY_SEAT_LEDGER` holds for it; a new occupant takes the family's lowest free number in rank
+order. If two open ledger rows ever claim one number, the better-ranked keyword keeps it and the
+other is admitted as new — so "numbered exactly once" cannot be broken by a ledger inconsistency.
+
+**The ramp is geometric, not linear, and three windows is not the whole gap.** One third of the
+*remaining* gap closes each window, exactly like the three-step bid cap, so after three windows
+about seventy per cent of the original gap is closed and the rest follows. Anybody who reads
+"ramped over three windows" as "arrives at the allowance on the third upload" will be wrong by the
+last third. Read where a family actually is:
+
+```sql
+SELECT family, MAX(notgood_today_per_day) AS notgood_day, MAX(allowance_target_per_day) AS allowance_day,
+       MAX(allowance_ramped_per_day) AS this_window_day, MAX(ramp_step) AS step_of, MAX(ramp_steps) AS steps
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`) AND is_live_plan
+GROUP BY 1 ORDER BY 2 DESC;
+```
+
+### Writing this table ARMS two rulings
+
+`V_PLAN_WINDOW_JUDGMENT` reads `FACT_PLAN_NEXT_WEEK` back as the plan's **memory**. From the night
+after the first write, the live rows' `side` is the P-14b guard's "was good" (the ladder is only the
+bootstrap for a keyword the plan has never seen), and `verdict = 'GRACE'` **spends** P-5's one quiet
+window. So the builder writes `GRACE` as `GRACE` and never collapses it into `GOOD`: a builder that
+collapsed it would silently restore the permanent exemption §2 describes. `C13` of the acceptance
+asserts the live plan reproduces the view row for row on `side`, `verdict` and `is_candidate`, which
+is the check that stands over this. Confirm the limit is armed the morning after a first run:
+
+```sql
+SELECT DISTINCT grace_limit_armed FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
+```
+
+### What Ori still rules — four readings this builder had to make
+
+1. **The holdout is outside the money, not only outside the sheet.** A holdout campaign's spend is
+   excluded from the pot, from the not-good side and from the ramp base: a measurement control's
+   money is not the plan's to allocate. It still gets a row, a side and a sentence — the
+   counterfactual — and no move. No campaign is eligible before 2026-09-01, so this costs nothing
+   today and everything afterwards. *To overrule:* drop `AND NOT holdout` from the `fam` aggregation.
+2. **A not-good keyword with nothing to repair gets no move** (spec §9, v27.135): no spend, no
+   clicks, no probe nomination means no seat, no queue position and `move = 'NONE'`. Parking a
+   keyword that spends nothing saves nothing.
+3. **The shadow cannot always be priced.** P-4 makes the judgement view withhold `planned_bid` and
+   `seat_cost_per_day` wherever *rule B* calls the row GOOD. Some of those rows are not good to the
+   *ladder*, so plan A wants to price a keyword the live plan protects. Rather than compute the
+   repaired price a second time — the "one keyword, two prices" defect — the shadow holds such a row
+   at its current price, costs its seat at its current spend, and says so on the row. Plan A is never
+   uploaded. *To fix properly:* publish the unmasked price under a second name in the judgement view,
+   never a second formula here.
+4. **The implied budget sees only the plan's own keywords.** Brand defense, launch-contained keywords
+   and non-keyword targets are outside the universe (§8), so a mixed campaign's implied budget is
+   below its real need. That is why the budget is **ramped** from today's budget rather than set to
+   the implied figure, and floored at the campaign's own good-side spend — a cap under the good side
+   is a cut, and P-4 forbids cuts. Read the campaigns where the two disagree most before any upload:
+
+```sql
+SELECT campaign_name, MAX(campaign_current_budget) AS today_budget,
+       MAX(campaign_planned_budget) AS planned, ROUND(SUM(planned_spend_per_day), 2) AS implied_from_plan_keywords
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`) AND is_live_plan
+GROUP BY 1 ORDER BY ABS(MAX(campaign_planned_budget) - MAX(campaign_current_budget)) DESC LIMIT 20;
+```
+
+### The question this layer answers, and the query that answers it
+
+"Will this take the not-good side down to the allowance?" cannot be answered from the plan alone,
+because **the side the plan judges is not the side the doctrine's arithmetic was quoted on**. P-5
+grace and the P-14b guard move real money onto the GOOD side, which both shrinks the queue and — since
+the pot is the good side's spend — *enlarges* the allowance rationing it. Both halves must be read
+together or the plan looks either far too tight or far too loose:
+
+```sql
+SELECT ROUND(SUM(w_sp) / MAX(window_days), 2)                                AS universe_per_day,
+       ROUND(SUM(IF(verdict = 'GOOD', w_sp, 0)) / MAX(window_days), 2)       AS good_p3_alone,
+       ROUND(SUM(IF(verdict != 'GOOD', w_sp, 0)) / MAX(window_days), 2)      AS notgood_p3_alone,
+       ROUND(SUM(IF(side_b = 'GOOD', w_sp, 0)) / MAX(window_days), 2)        AS good_as_the_plan_judges_it,
+       ROUND(SUM(IF(verdict = 'GRACE', w_sp, 0)) / MAX(window_days), 2)      AS moved_by_grace,
+       ROUND(SUM(IF(verdict = 'HELD_UNSETTLED', w_sp, 0)) / MAX(window_days), 2) AS moved_by_the_guard,
+       COUNTIF(settle_arm = 'PROMOTED_ON_FRESH')                             AS promoted_by_the_correction
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
+```
+
+`promoted_by_the_correction` is the one to look at before ruling on P-14: arm (a) lifts the whole
+book's gross profit, but it can only carry a keyword across a bar that keyword already has the orders
+to reach, and the overstatement Ori described lives *behind* the order floor. If that column reads
+zero, every dollar the guard protects was protected by arm (b) alone, and the open ruling is whether
+the ORDER FLOOR should bend for an unsettled window — a change to P-3, not to P-14.
+
+### Deploy and verify
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "CALL \`onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN\`()"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/tests/FACT_PLAN_NEXT_WEEK_acceptance.sql)"
+```
+
+Sixteen checks, every row `PASS`. Six assertions fire inside the procedure itself and name the
+guarantee they protect — **fix the arithmetic, never the assertion.** Idempotence is proved by
+running the CALL twice and comparing a fingerprint of the partition, not its row count alone:
+
+```sql
+SELECT COUNT(*) AS n, ROUND(SUM(planned_spend_per_day), 4) AS spend,
+       FARM_FINGERPRINT(STRING_AGG(CONCAT(plan, campaign_id, keyword_id, move,
+              CAST(COALESCE(seat_no, -1) AS STRING), CAST(ROUND(planned_spend_per_day, 4) AS STRING))
+              ORDER BY plan, campaign_id, keyword_id)) AS fingerprint
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of = CURRENT_DATE('America/Los_Angeles');
+```
+
+(Both runs must land in the same Los Angeles day and behind the same ads watermark; if the watermark
+moved between them, re-run both.)
+
+### Four checks that depart from the plan's draft, and why
+
+- **C01** asserts the P-14a **fence** (`window_to = LEAST(watermark − 1, as_of − 2)`), not
+  `watermark − 1`. The draft's form fails by construction after 22:00 Los Angeles, when
+  `FN_ADS_ANCHOR_CAP()` advances and the fence gives up a day on purpose.
+- **C06** reads **candidacy**. The draft required one of four moves on every not-good row; §9
+  (v27.135) says the guarantee is about candidates, and a keyword with nothing to repair takes no
+  seat, no queue position and no move.
+- **C09** carries the guard's **service clause** (v27.134, T1's C17): a keyword that took no spend and
+  no clicks has no sales in flight, so P-14b has no basis and does not fire — and the draft's form
+  failed on exactly those rows on the live view before a line of the builder was written.
+- **C11** adds the half that protects P-4: a campaign's planned budget may never sit under the
+  good-side spend inside it. A cap below the good side is a cut, whatever it is called.
 
 ## 4. Ownership and the preflight (Task 3) — to be written
 
