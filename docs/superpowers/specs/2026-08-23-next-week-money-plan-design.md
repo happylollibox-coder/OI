@@ -37,11 +37,12 @@ spend. One engine decides prices and budgets for these families; Ori uploads one
 | P-11 | **One engine.** For working families the plan is the sole authority on keyword bids and campaign budgets. LIFT and OOB retire as price and budget authorities for these families (their proposals are still recorded and held — "the plan owns this price" — so the scorecard can grade them); LIFT's probe list and REVERDICT's revival list remain candidate sources for the seat queue. Programs that do not set prices stay: negates (search-term blocking), low-stock override, launch controller (INVEST families), holdout. | Ori: "there should be one engine (and not multiple)." |
 | P-12 | Every seat carries a **verdict date** (settle discipline at the new price: 7 days SP / 14 days SB): graduate, step again, or give the seat up. The allowance share is a **declared setting per calendar** (`DE_PLAN_CONFIG`), 0.20 everywhere today; the peak value is learnable. | Prevents the queue becoming a parking lot; keeps the share out of code. |
 
+| P-13 | **Calendar states and their settings** (`DE_PLAN_CONFIG`, one row per state): OFF-PEAK — window 7 complete days, allowance share 0.20 · BOOST (the run-up before a peak, from the calendar's `boost_start` to its peak) — window 3 complete days, allowance share **0.50** · PEAK — window 3 complete days, allowance share 0.20. The plan reads the state from `DIM_US_HOLIDAYS`, never a date literal. | Ori 2026-08-23: "in boosting phase (before peak) make it 50% instead of 20%." The 3-day window in BOOST follows the house practice of switching the window at `boost_start`; it is a setting, not code. |
 ## 3. Windows and clocks
 
 - Ads watermark `wm` = last complete ads day (`LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` over `FACT_AMAZON_ADS`).
 - Off-peak window = the 7 complete days ending at `wm − 1`. Peak window = the 3 complete days ending at `wm − 1`.
-- Peak = the house calendar's boost windows (`DIM_US_HOLIDAYS`: Back-to-School, Q4, Prime Day); the plan reads the calendar, never a date literal.
+- Calendar state (OFF-PEAK / BOOST / PEAK) comes from `DIM_US_HOLIDAYS` (`boost_start`, peak, anchor dates for Back-to-School, Q4, Prime Day); window and allowance share per state are in `DE_PLAN_CONFIG` (P-13); the plan reads both, never a date literal.
 - The plan is recomputed every night by the orchestrator (New York clock) after the keyword-state snapshot; Ori uploads at Weekly Run (Sunday) off-peak, every 3 days in peaks.
 - Attribution lag is stated on every row: window sales are read as of the run day and are incomplete for the newest days (SP settles ~D+7, SB ~D+14). The plan uses them anyway (rule B); the shadow plan and the T+14 scorecard measure what that costs.
 
