@@ -5,7 +5,10 @@
 -- Spec: architecture/CUSTOMER_ORDER_BASKETS.md
 --
 -- Checks:
---   A1 No loss, no fan-out: fact row count equals the joined source row count.
+--   A1 No fan-out: fact row count never exceeds the joined source row count. fact < src is
+--      ordinary sync lag (the source is a continuously-syncing feed, the loader runs daily)
+--      and PASSes with the lag stated; fact > src is a defect — rows the no-DELETE-arm MERGE
+--      in SP_LOAD_FACT_CUSTOMER_ORDER_ITEM would never clean up.
 --   A2 Key uniqueness: (selling_partner_id, amazon_order_id, order_item_id) appears once.
 --   A3 No NULL keys and no NULL purchase_date.
 --   A4 Referential integrity: every fact order exists in V_SRC_ListOrder.
@@ -14,8 +17,15 @@
 --      to the header's own unit count. A mismatch means line items are missing for that
 --      order, which is the failure mode that silently shrinks baskets.
 --   A7 Mapping drift guard: unmapped ASINs stay under 10% of units. ~4% is expected
---      (retired products); a jump means DIM_PRODUCT lost live ASINs.
+--      (retired products); a jump means DIM_PRODUCT lost live ASINs. Note: is_mapped_product
+--      only tests that a DIM_PRODUCT row exists, not that it carries a family — rows with
+--      is_mapped_product = TRUE and parent_name IS NULL pass A7 uncaught; that gap belongs to
+--      DIM_PRODUCT's completeness, not this fact.
 --   A8 Canceled orders carry no units, so they can never inflate a basket.
+--   A9 No source item without an order header: the loader INNER JOINs items to headers, so an
+--      item with no matching header is silently dropped and invisible to A1 (missing from both
+--      sides of that comparison at once). Both sides here read the same live views in one
+--      query, so this check carries no sync-lag artifact.
 -- =============================================================================================
 WITH
 src AS (
@@ -26,9 +36,19 @@ src AS (
 fact AS (SELECT COUNT(*) AS n FROM `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM`),
 
 a1 AS (
-  SELECT 'A1 no loss / no fan-out' AS check_name,
-         IF((SELECT n FROM fact) = (SELECT n FROM src), 'PASS', 'FAIL') AS status,
-         FORMAT('fact=%d source=%d', (SELECT n FROM fact), (SELECT n FROM src)) AS detail
+  SELECT 'A1 no fan-out (fact never exceeds source)' AS check_name,
+         IF((SELECT n FROM fact) <= (SELECT n FROM src), 'PASS', 'FAIL') AS status,
+         CASE
+           WHEN (SELECT n FROM fact) > (SELECT n FROM src)
+             THEN FORMAT('fact=%d source=%d — fact is AHEAD by %d: rows the no-DELETE MERGE never cleaned',
+                         (SELECT n FROM fact), (SELECT n FROM src),
+                         (SELECT n FROM fact) - (SELECT n FROM src))
+           WHEN (SELECT n FROM fact) < (SELECT n FROM src)
+             THEN FORMAT('fact=%d source=%d — fact is BEHIND by %d: ordinary sync lag, rerun the loader',
+                         (SELECT n FROM fact), (SELECT n FROM src),
+                         (SELECT n FROM src) - (SELECT n FROM fact))
+           ELSE FORMAT('fact=%d source=%d — exact', (SELECT n FROM fact), (SELECT n FROM src))
+         END AS detail
 ),
 
 a2 AS (
@@ -101,6 +121,16 @@ a8 AS (
          FORMAT('%d canceled rows with units', COUNT(*)) AS detail
   FROM `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM`
   WHERE is_canceled AND quantity_ordered > 0
+),
+
+a9 AS (
+  SELECT 'A9 no source item without an order header' AS check_name,
+         IF(COUNT(*) = 0, 'PASS', 'FAIL') AS status,
+         FORMAT('%d source items the loader would silently drop', COUNT(*)) AS detail
+  FROM `onyga-482313.OI.V_SRC_ListOrderItems` i
+  LEFT JOIN `onyga-482313.OI.V_SRC_ListOrder` o
+    USING (selling_partner_id, amazon_order_id)
+  WHERE o.amazon_order_id IS NULL
 )
 
 SELECT * FROM a1
@@ -111,4 +141,5 @@ UNION ALL SELECT * FROM a5
 UNION ALL SELECT * FROM a6
 UNION ALL SELECT * FROM a7
 UNION ALL SELECT * FROM a8
+UNION ALL SELECT * FROM a9
 ORDER BY check_name;
