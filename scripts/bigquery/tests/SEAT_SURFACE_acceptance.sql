@@ -53,6 +53,16 @@
 --       publishes as REFERENCE, in the brief and in the run summary.
 --   C10 The brief's SEATS row names no campaign and no keyword — which is why the holdout rule has
 --       nothing to mark on it — and section_rank 6 belongs to SEATS and to nothing else.
+--   C11 (2026-08-23) The brief's ACTION is derived from what is EXECUTABLE — re-derived here from
+--       the register rows' sheet_row in the fixed priority (rebuild the leak book > upload the
+--       pending book > build the next book > by hand > nothing executable) — and never from the
+--       doctrine status alone. TDD record: before the fix the brief said 'close the gap' to
+--       Bottle (nothing to pause) and 'passes — no action' to Fresh and LolliME (leaks already
+--       on a pending book); the check dies on the missing sheet_row column against the old image
+--       and reads FAIL against the old brief once the image carries it.
+--   C12 (2026-08-23) The run summary's detail sets the WHOLE 20% side against the allowance —
+--       like with like, to the cent — before naming the parts. Before: the seats' cost alone
+--       against the whole allowance.
 --
 -- The cube's own shape (a dimension for every column a person reads, and the doctrine label CASEs
 -- naming every status the register can emit) is asserted by the file checker that SQL cannot run:
@@ -94,6 +104,15 @@ said AS (
          SAFE_CAST(REGEXP_EXTRACT(b.detail, r'untracked keywords? \(\$([0-9.]+)/day\)') AS FLOAT64) AS gap_cost
   FROM brief b),
 rs AS (SELECT * FROM runs WHERE section = 'SEATS'),
+-- C11: what is executable per family, from the register's own sheet_row (B37 asserts that column
+-- against the change log; here it is only counted, so the brief is never asked to confirm itself)
+exec_rows AS (
+  SELECT family,
+         COUNTIF(sheet_row = 'REBUILD_LEAK_BOOK') AS n_rebuild,
+         COUNTIF(sheet_row = 'PENDING_BOOK') AS n_pending,
+         COUNTIF(sheet_row IN ('NEXT_LEAK_BOOK', 'NEXT_REPRICE_BOOK')) AS n_next,
+         COUNTIF(sheet_row = 'BY_HAND') AS n_hand
+  FROM tab WHERE row_type IN ('SEAT', 'LEAK') GROUP BY 1),
 -- NON-VACUITY. Every check below that reads only one of these populations counts an EMPTY
 -- population as a violation of itself. Without this, a check that inspects the brief's SEATS rows
 -- reports PASS the moment the section stops existing — which is precisely the failure it is there
@@ -183,6 +202,27 @@ checks AS (
          (SELECT COUNT(*) FROM brief b JOIN refrow r ON r.family = b.campaign_name)
          + (SELECT COUNT(*) FROM rs x JOIN refrow r ON x.label LIKE CONCAT(r.family, ' — %'))
          + (SELECT IF(n_brief = 0 OR n_rs = 0 OR (SELECT COUNT(*) FROM refrow) = 0, 1, 0) FROM pop)
+  UNION ALL
+  SELECT 'C11 the brief ACTION is derived from what is executable (re-derived from the register rows sheet_row, in the fixed priority rebuild > upload pending > build next > by hand > nothing executable) and never from the doctrine status alone',
+         (SELECT COUNT(*) FROM brief b JOIN famrow f ON f.family = b.campaign_name
+          LEFT JOIN exec_rows e ON e.family = f.family
+          WHERE CASE WHEN COALESCE(e.n_rebuild, 0) > 0 THEN b.action NOT LIKE 'rebuild the leak book%'
+                     WHEN COALESCE(e.n_pending, 0) > 0 THEN b.action NOT LIKE 'upload the pending book%'
+                     WHEN COALESCE(e.n_next, 0) > 0 THEN b.action NOT LIKE 'build the next book%'
+                     WHEN COALESCE(e.n_hand, 0) > 0 THEN b.action NOT LIKE 'by hand%'
+                     ELSE b.action NOT LIKE '%nothing executable today%' END
+             OR b.action LIKE '%close the gap%' OR b.action = 'passes — no action'
+             OR b.detail NOT LIKE '%Executable today:%')
+         + (SELECT IF(n_brief = 0 OR n_fam = 0, 1, 0) FROM pop)
+  UNION ALL
+  SELECT 'C12 the run summary detail sets the WHOLE 20% side against the allowance (like with like), to the cent, and then names the parts',
+         (SELECT COUNT(*) FROM rs r JOIN famrow f ON r.label LIKE CONCAT(f.family, ' — %')
+          WHERE ABS(COALESCE(SAFE_CAST(REGEXP_EXTRACT(r.detail, r'the 20% side costs \$([0-9.]+)/day') AS FLOAT64), -1)
+                    - COALESCE(f.bad_side_per_day, -2)) > 0.01
+             OR ABS(COALESCE(SAFE_CAST(REGEXP_EXTRACT(r.detail, r'against its allowance of \$([0-9.]+)/day') AS FLOAT64), -1)
+                    - COALESCE(f.allowance_per_day, -2)) > 0.01
+             OR r.detail NOT LIKE '%numbered seat%')
+         + (SELECT IF(n_rs = 0 OR n_fam = 0, 1, 0) FROM pop)
   UNION ALL
   SELECT 'C10 the brief SEATS row names no campaign and no keyword; section_rank 6 belongs to SEATS alone',
          (SELECT COUNTIF(campaign_id IS NOT NULL OR keyword_id IS NOT NULL) FROM brief)

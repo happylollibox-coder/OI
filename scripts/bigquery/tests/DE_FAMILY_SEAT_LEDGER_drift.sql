@@ -54,8 +54,10 @@
 --   D02 (b) PLAIN WORDS — every closed row carries closed_reason_text, and the text is exactly
 --       the sentence the SOP maps to its code (for STATE_CHANGED: the mapped prefix, the state
 --       in plain words, and 'The seat is free.').
---   D03 (b) CODE AND DATE — every closed row carries one of the mapped codes and is closed on
---       the snapshot date, never the wall clock.
+--   D03 (b) CODE AND DATE — every closed row carries one of the mapped codes, and every row
+--       closed since the BEFORE image (closed in AFTER, not in BEFORE) is dated on a snapshot
+--       between the BEFORE image's newest date and the AFTER snapshot — a pair may span two
+--       passes — never the wall clock. A row closed before the BEFORE image keeps its own date.
 --   D04 (b) THE INJECTED DEPARTURES closed with the code the case expects. Edit the `expected`
 --       CTE to the keys the run under test moved; an empty list makes this check vacuous, which
 --       is honest — it then asserts nothing rather than pretending to.
@@ -74,6 +76,16 @@ before AS (SELECT family, campaign_id, keyword_id, seat_no
 after_open AS (SELECT family, campaign_id, keyword_id, seat_no, opened_on
                FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` WHERE closed_on IS NULL),
 after_closed AS (SELECT * FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` WHERE closed_on IS NOT NULL),
+-- the rows THIS pass closed: closed in AFTER and not already closed in BEFORE. D03 judges these
+-- and only these — a row closed on an earlier snapshot carries that snapshot's date, and judging
+-- it against today's run_day reported 4 false violations on the first real production night
+-- (2026-08-23: the four seats closed on 2026-08-22 were still, correctly, dated 2026-08-22).
+new_closed AS (
+  SELECT c.* FROM after_closed c
+  LEFT JOIN `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE` b
+    ON b.family = c.family AND b.campaign_id = c.campaign_id AND b.keyword_id = c.keyword_id
+   AND b.opened_on = c.opened_on AND b.closed_on IS NOT NULL
+  WHERE b.campaign_id IS NULL),
 -- the same image, taken twice, is not a before-and-after pair (D00)
 fp AS (
   SELECT
@@ -115,10 +127,17 @@ checks AS (
              OR (c.closed_reason = 'STATE_CHANGED'
                  AND NOT (c.closed_reason_text LIKE 'The keyword left the seat set — it now reads %'
                           AND c.closed_reason_text LIKE '%. The seat is free.')))
-  UNION ALL SELECT 'D03 (b) every closed row carries a mapped reason code and closed_on = the snapshot date',
-         (SELECT COUNT(*) FROM after_closed c, run_day
-          WHERE c.closed_reason NOT IN ('KILLED','PAUSED','PARK_LAPSED','LEFT_FAMILY','DEFENSE_EXEMPT','TO_GOOD_SIDE','TO_WAITING','STATE_CHANGED')
-             OR c.closed_on != run_day.d)
+  UNION ALL SELECT 'D03 (b) every closed row carries a mapped reason code; every row closed since the BEFORE image is dated on a snapshot between that image and the AFTER snapshot',
+         (SELECT COUNT(*) FROM after_closed c
+          WHERE c.closed_reason NOT IN ('KILLED','PAUSED','PARK_LAPSED','LEFT_FAMILY','DEFENSE_EXEMPT','TO_GOOD_SIDE','TO_WAITING','STATE_CHANGED'))
+         -- a BEFORE/AFTER pair may span MORE THAN ONE pass (the first production night ran two:
+         -- 01:28 and 04:18 New York, snapshots 2026-08-22 and 2026-08-23), so a closure is dated on
+         -- SOME snapshot between the BEFORE image's newest date and the AFTER snapshot — never the
+         -- wall clock, never a date the BEFORE image already knew.
+         + (SELECT COUNT(*) FROM new_closed c, run_day,
+                 (SELECT MAX(GREATEST(opened_on, COALESCE(closed_on, opened_on))) AS d
+                  FROM `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE`) bmax
+            WHERE c.closed_on > run_day.d OR c.closed_on < bmax.d)
   UNION ALL SELECT 'D04 (b) the injected departures closed with the expected code',
          (SELECT COUNT(*) FROM expected e
           LEFT JOIN after_closed c ON c.campaign_id = e.cid AND c.keyword_id = e.kid

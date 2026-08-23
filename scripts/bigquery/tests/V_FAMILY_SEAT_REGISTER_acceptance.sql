@@ -167,6 +167,14 @@
 --       say so in words. Re-derived from the register's own SEAT / LEAK / GAP rows. On a snapshot
 --       where no campaign is yet suppressed this check is vacuous by construction; the branch is
 --       proven on TMP_ copies and the proof recorded in the SOP.
+--       ONE BOOK (2026-08-23 cleanup): when the pending leak book is STALE — an executable leak
+--       on no pending book while another is on one, or two pending books — every executable
+--       leak row and every family clause carry the single 'rebuild the leak book … --replaces
+--       <batch>' instruction and the word 'upload' appears on no leak row; the mixed family form
+--       ('N are already written … and M ride the next leak book') is forbidden outright.
+--   B37 sheet_row (2026-08-23): published on every SEAT and LEAK row and nowhere else, from a
+--       closed set, and agreeing row by row with the change log and the one-book state. It is
+--       what the brief derives its action from (SEAT_SURFACE_acceptance C11).
 --   B35 A projection credits a leak's pause ONLY where the sheet that pauses it EXISTS, row by row
 --       (R-l, leak half, after its own overrule clause fired). A leak is a PARKED-past-appointment
 --       or DEAD keyword that still spends. Until 2026-08-23 no generator built its pause row, so
@@ -490,7 +498,7 @@ pending_pause_chk AS (
   GROUP BY 1, 2),
 leak_rows AS (
   SELECT l.family, l.campaign_id, l.keyword_id, l.cost_per_day, l.cost_day_one, l.cost_rejudged,
-         l.book_batch_id, l.book_action, l.move, l.sentence,
+         l.book_batch_id, l.book_action, l.move, l.sentence, l.sheet_row,
          COALESCE(l.holdout, FALSE) AND l.as_of >= l.holdout_eligible_from AS no_sheet,
          pp.keyword_id IS NOT NULL AS pause_pending,
          pp.batch_ids, lf.season_blocked, lf.refusal
@@ -503,6 +511,14 @@ leak_rows AS (
 -- sheet row at all) the pending pause book already carries, re-derived from the change log. The
 -- family's leak clause must be worded by this split, because a reader sent to "the next leak book"
 -- for a keyword the pending book already carries builds a SECOND batch of the same pause rows.
+-- ONE LEAK BOOK (2026-08-23): the book is STALE when an executable leak is on no pending book
+-- while another is on one, or when more than one pending batch exists. Then every executable leak
+-- row and every family clause must carry the single 'rebuild' instruction and the word 'upload'
+-- may appear on no leak row — two instructions a reader cannot both obey is the defect (B32/B37).
+leak_book_stale AS (
+  SELECT COUNTIF(pause_pending) > 0
+           AND (COUNTIF(NOT pause_pending) > 0 OR COUNT(DISTINCT batch_ids) > 1) AS stale
+  FROM leak_rows WHERE refusal IS NULL),
 leak_book_split AS (
   SELECT family,
          COUNTIF(refusal IS NULL) AS n_exec,
@@ -795,21 +811,24 @@ checks AS (
                    -- book, instead of asserting one book for all of them
                    OR (over_by_per_day > 0 AND STRPOS(sentence, 'The pauses named above recover $') = 0))
           FROM famrow WHERE row_type = 'FAMILY' AND horizon = 'today')
-         -- the FAMILY leak clause is worded by the log-derived split, not by a fixed phrase
+         -- the FAMILY leak clause is worded by the log-derived split, not by a fixed phrase —
+         -- and by the ONE-BOOK state: stale → 'rebuild' (and never 'upload'); all on one pending
+         -- book → 'upload that book'; none on a book → 'the next leak book'. The mixed form
+         -- ('N are already written … and M ride the next leak book') is FORBIDDEN: it was two
+         -- instructions the reader could not both obey (the next book carries the N again).
          + (SELECT COUNTIF(
-                   -- every leak already on a book: name the batch, forbid 'the next leak book'
-                   (s.n_off_book = 0 AND s.n_exec > 0
-                    AND (NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks? — every one is already written on the pending leak book ')
+                   (st.stale AND s.n_exec > 0
+                    AND (NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks? — rebuild the leak book: `tools/build_seat_moves_bulksheet\.py --replaces ')
+                         OR REGEXP_CONTAINS(f.sentence, r'so the move is to upload that book')
                          OR REGEXP_CONTAINS(f.sentence, r'leaks? on the next leak book')))
-                   -- no leak on a book: the next-book form, and no batch may be named
-                   OR (s.n_on_book = 0 AND s.n_exec > 0
+                   OR (NOT st.stale AND s.n_on_book > 0 AND s.n_exec > 0
+                       AND (NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks? — every one is already written on the pending leak book ')
+                            OR REGEXP_CONTAINS(f.sentence, r'leaks? on the next leak book')))
+                   OR (NOT st.stale AND s.n_on_book = 0 AND s.n_exec > 0
                        AND NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks? on the next leak book \(tools/build_seat_moves_bulksheet\.py\)'))
-                   -- mixed: both counts and both destinations named
-                   OR (s.n_on_book > 0 AND s.n_off_book > 0
-                       AND (NOT REGEXP_CONTAINS(f.sentence, r'are already written on the pending leak book ')
-                            OR NOT REGEXP_CONTAINS(f.sentence, r'ride the next leak book \(tools/build_seat_moves_bulksheet\.py\)')))
+                   OR REGEXP_CONTAINS(f.sentence, r'ride the next leak book')
                    )
-            FROM famrow f JOIN leak_book_split s ON s.family = f.family
+            FROM famrow f JOIN leak_book_split s ON s.family = f.family CROSS JOIN leak_book_stale st
             -- only families that publish the gap clause carry a leak clause at all: a family
             -- inside its allowance (doctrine IN) is told what its open capacity buys, not what to
             -- pause, and has no clause to word
@@ -820,22 +839,49 @@ checks AS (
          + (SELECT COUNT(*) FROM fam_named_books n
             LEFT JOIN fam_log_books l ON l.family = n.family AND l.log_batch = n.named_batch
             WHERE l.log_batch IS NULL)
-         -- and the LEAK row's own move is the same measurement, row by row
+         -- and the LEAK row's own move is the same measurement, row by row — ONE instruction
          + (SELECT COUNTIF(
-                   -- off-book: the next leak book, named by its file. Only a leak the generator
-                   -- will WRITE gets a book at all — a refused one is worded by B36, not here.
-                   (refusal IS NULL AND NOT pause_pending
-                    AND move NOT LIKE '%pause it on the next leak book (tools/build_seat_moves_bulksheet.py)%')
+                   -- stale book: every executable row says rebuild, names the batch, never 'upload'
+                   (st.stale AND refusal IS NULL
+                    AND (move NOT LIKE 'rebuild the leak book: `tools/build_seat_moves_bulksheet.py --replaces %'
+                         OR move LIKE '%upload%' OR move LIKE '%next leak book%'
+                         OR (pause_pending AND (book_batch_id IS NULL OR book_action != 'KEYWORD_PAUSE'))))
+                   -- off-book (only possible when no book is pending): the next leak book, by file
+                   OR (NOT st.stale AND refusal IS NULL AND NOT pause_pending
+                       AND move NOT LIKE '%pause it on the next leak book (tools/build_seat_moves_bulksheet.py)%')
                    -- on-book: upload THAT batch, never build another, and publish the id
-                   OR (refusal IS NULL AND pause_pending
-                       AND (move NOT LIKE CONCAT('%pending leak book ', COALESCE(book_batch_id, '~'), '%')
+                   OR (NOT st.stale AND refusal IS NULL AND pause_pending
+                       AND (move NOT LIKE CONCAT('upload the pending leak book ', COALESCE(book_batch_id, '~'), '%')
                             OR move LIKE '%next leak book%'
                             OR book_action != 'KEYWORD_PAUSE'
                             OR book_batch_id IS NULL
                             OR STRPOS(CONCAT(',', COALESCE(batch_ids, ''), ','),
                                       CONCAT(',', COALESCE(book_batch_id, '~'), ',')) = 0
-                            OR sentence NOT LIKE CONCAT('%pending leak book ', COALESCE(book_batch_id, '~'), '%'))))
-            FROM leak_rows)
+                            OR sentence NOT LIKE CONCAT('%pending leak book ', COALESCE(book_batch_id, '~'), '%')))
+                   -- and never two instructions in one move: 'upload' and 'next leak book' together
+                   OR (move LIKE '%upload%' AND move LIKE '%next leak book%'))
+            FROM leak_rows CROSS JOIN leak_book_stale st)
+  UNION ALL
+  SELECT 'B37 sheet_row is published on every SEAT and LEAK row and nowhere else, from a closed set, and agrees with the change log and the one-book state: REBUILD_LEAK_BOOK on every executable leak when the pending book is stale, PENDING_BOOK exactly where a pending row carries the keyword, NEXT_* where none does, NO_SHEET_ROW on a refused leak or a holdout row, BY_HAND on a stalled probe, NONE otherwise',
+         (SELECT COUNTIF(row_type IN ('SEAT', 'LEAK') AND sheet_row IS NULL)
+               + COUNTIF(row_type NOT IN ('SEAT', 'LEAK') AND sheet_row IS NOT NULL)
+               + COUNTIF(sheet_row IS NOT NULL AND sheet_row NOT IN
+                         ('PENDING_BOOK', 'NEXT_LEAK_BOOK', 'NEXT_REPRICE_BOOK', 'REBUILD_LEAK_BOOK',
+                          'BY_HAND', 'NO_SHEET_ROW', 'NONE'))
+          FROM r)
+         + (SELECT COUNTIF(sheet_row IS DISTINCT FROM
+                   CASE WHEN refusal IS NOT NULL THEN 'NO_SHEET_ROW'
+                        WHEN st.stale THEN 'REBUILD_LEAK_BOOK'
+                        WHEN pause_pending THEN 'PENDING_BOOK'
+                        ELSE 'NEXT_LEAK_BOOK' END)
+            FROM leak_rows CROSS JOIN leak_book_stale st)
+         + (SELECT COUNTIF(sheet_row IS DISTINCT FROM
+                   CASE WHEN COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from THEN 'NO_SHEET_ROW'
+                        WHEN occupant_kind IN ('repair', 'probation') AND book_batch_id IS NOT NULL THEN 'PENDING_BOOK'
+                        WHEN occupant_kind IN ('repair', 'failed') THEN 'NEXT_REPRICE_BOOK'
+                        WHEN occupant_kind = 'stalled probe' THEN 'BY_HAND'
+                        ELSE 'NONE' END)
+            FROM r WHERE row_type = 'SEAT')
   UNION ALL
   SELECT 'B33 the re-judged horizon never zeroes a stalled probe (R-l applied to the projection): parking lowers a price, so a family paying for stalled probes today still pays for them when re-judged, and no horizon assumption claims they are parked to $0',
          (SELECT COUNTIF(today_cost > 0.005 AND (n_rejudged_rows = 0 OR rejudged_cost <= 0.005)) FROM stalled_cat)

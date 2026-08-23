@@ -1,5 +1,12 @@
 -- =============================================
 -- V_FAMILY_SEAT_REGISTER — the object Ori reads every morning for the 80/20 doctrine.
+-- First-production-night cleanup 2026-08-23 (v27.124): (1) sheet_row — every SEAT and LEAK row
+-- publishes what a sheet does with it today (PENDING_BOOK / NEXT_LEAK_BOOK / NEXT_REPRICE_BOOK /
+-- REBUILD_LEAK_BOOK / BY_HAND / NO_SHEET_ROW / NONE), so the brief derives its action from what is
+-- EXECUTABLE and never from the doctrine status alone (a family can be OUT with nothing to pause,
+-- and IN with a pending book waiting). (2) One leak book, one instruction: see leak_book_state —
+-- when the pending leak book is stale the register says 'rebuild it' on every leak row and in the
+-- family clause, never 'upload this one' beside 'build the next'. B32/B37.
 -- Spec: docs/superpowers/specs/2026-08-22-family-seat-register-design.md §3–§6 and
 -- architecture/FAMILY_SEAT_REGISTER.md (rulings R-a … R-k). Task 2 of the family seat register;
 -- repair pass 2026-08-22 (defects D1–D14: R-f sign-aware stalled proposal, R-g per-family band,
@@ -567,6 +574,23 @@ kw AS (
   FROM coded d CROSS JOIN k
   JOIN codes x ON x.code = d.code
   LEFT JOIN ledger l ON l.family = d.family AND l.campaign_id = d.campaign_id AND l.keyword_id = d.keyword_id),
+-- ── ONE LEAK BOOK, ONE SEQUENCE (2026-08-23, first-production-night cleanup). The leak book
+-- carries EVERY executable leak the day it is built; the next day's register can hold a new
+-- leak no pending book carries beside sixteen a pending book does. Publishing 'upload that book'
+-- on one row and 'pause it on the next leak book' on the next hands the reader two instructions
+-- he cannot both obey — the next book, built, would carry the sixteen again. So the book's state
+-- is read ONCE, register-wide: it is STALE when an executable leak is on no pending book while
+-- another is on one, or when more than one pending book exists; then every executable leak row
+-- and every family clause carry the same single instruction — rebuild the book with
+-- `--replaces <the pending batch>`, which logs one book carrying every leak and labels the old
+-- one as replaced by it (a row is never deleted) — and the word 'upload' appears on no leak row.
+-- When it is not stale, an on-book leak says upload that one book and an off-book leak (only
+-- possible when NO book is pending) says build the next. Published per row as sheet_row (B37).
+leak_book_state AS (
+  SELECT COUNTIF(pause_pending) > 0
+           AND (COUNTIF(NOT pause_pending) > 0 OR COUNT(DISTINCT pause_batch_id) > 1) AS stale,
+         COALESCE(STRING_AGG(DISTINCT pause_batch_id, ' ' ORDER BY pause_batch_id), '') AS books
+  FROM kw WHERE book = 'HARVEST' AND code = 'LEAK' AND leak_block IS NULL),
 -- ── family figures per horizon
 hz AS (
   SELECT 'today' AS horizon, 1 AS hz_order UNION ALL
@@ -581,10 +605,12 @@ kw_h AS (
   FROM kw CROSS JOIN hz),
 fam_h AS (
   -- EVERY DOLLAR AGGREGATE IS ROUNDED HERE, AT SOURCE (2026-08-23, eighth pass). A distributed
-  -- FLOAT64 SUM is not associative: the same read of this view returned bad_side_per_day as a
-  -- double just under 48.965 on one run and just over it on the next, so the published COLUMN
-  -- (rounded to four decimals) read the same both times while the SENTENCE, formatted from the
-  -- raw double with %.2f, alternated between "$48.96/day" and "$48.97/day". The rows were
+  -- FLOAT64 SUM is not associative: the same read of this view returned one family's
+  -- bad_side_per_day as a double just under a half-cent boundary on one run and just over it on
+  -- the next, so the published COLUMN (rounded to four decimals) read the same both times while
+  -- the SENTENCE, formatted from the raw double with %.2f, alternated one cent apart (Standing
+  -- Rule 0: the family and the figure are not pinned here — re-run the determinism fingerprint
+  -- at the foot of the acceptance suite to see it or not see it). The rows were
   -- otherwise byte-identical; a keyed FULL OUTER JOIN of two in-session reads found exactly one
   -- differing row, and the pre-change view body reproduced it, so it is not this pass's doing —
   -- it is the register failing its own determinism guarantee (spec §8) on a half-cent boundary.
@@ -845,15 +871,17 @@ shape AS (
                               -- pause rows, which is why the wording follows the same per-row
                               -- measurement the projections do (R-l(e)).
                               CASE WHEN f.n_leaks_exec = 0 THEN ''
-                                   WHEN f.n_leaks_exec_off_book = 0 THEN
+                                   -- ONE BOOK: a stale pending book is never 'uploaded' beside a
+                                   -- 'next book' — the single instruction is to rebuild it
+                                   WHEN lbs.stale THEN
+                                     FORMAT('pause the %d %s — rebuild the leak book: `tools/build_seat_moves_bulksheet.py --replaces %s` builds ONE book that carries every leak and labels %s never-uploaded, so do not upload %s (−$%.2f/day); ',
+                                            f.n_leaks_exec, IF(f.n_leaks_exec = 1, 'leak', 'leaks'), lbs.books, lbs.books, lbs.books, f.leak_exec_today)
+                                   WHEN f.n_leaks_exec_on_book > 0 THEN
                                      FORMAT('pause the %d %s — every one is already written on the pending leak book %s, so the move is to upload that book (or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s`), not to build another (−$%.2f/day); ',
                                             f.n_leaks_exec, IF(f.n_leaks_exec = 1, 'leak', 'leaks'), f.leak_pause_books, f.leak_pause_books, f.leak_exec_today)
-                                   WHEN f.n_leaks_exec_on_book = 0 THEN
-                                     FORMAT('pause the %d %s on the next leak book (tools/build_seat_moves_bulksheet.py) (−$%.2f/day); ',
-                                            f.n_leaks_exec, IF(f.n_leaks_exec = 1, 'leak', 'leaks'), f.leak_exec_today)
                                    ELSE
-                                     FORMAT('pause the %d %s — %d are already written on the pending leak book %s (upload it, or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s`) and %d ride the next leak book (tools/build_seat_moves_bulksheet.py) (−$%.2f/day); ',
-                                            f.n_leaks_exec, IF(f.n_leaks_exec = 1, 'leak', 'leaks'), f.n_leaks_exec_on_book, f.leak_pause_books, f.leak_pause_books, f.n_leaks_exec_off_book, f.leak_exec_today) END,
+                                     FORMAT('pause the %d %s on the next leak book (tools/build_seat_moves_bulksheet.py) (−$%.2f/day); ',
+                                            f.n_leaks_exec, IF(f.n_leaks_exec = 1, 'leak', 'leaks'), f.leak_exec_today) END,
                               IF(f.n_failed_exec > 0, FORMAT('kill the %d failed keywords on the next book with a pause row (−$%.2f/day); ', f.n_failed_exec, f.failed_exec_today), ''),
                               -- R-l, engine parity: leaks the leak book REFUSES. Their dollars are
                               -- not in the recovered-today number above, and the reason each is
@@ -902,8 +930,9 @@ shape AS (
                               END)
                   END)
          END AS sentence,
+    CAST(NULL AS STRING) AS sheet_row,
     FORMAT('%s|%02d|%02d|', f.family, IF(f.book = 'INVEST', 9, 1), f.hz_order) AS sort_key
-  FROM fam_rows f
+  FROM fam_rows f CROSS JOIN leak_book_state lbs
   UNION ALL
   -- CATEGORY rows (all families, all horizons) — they sum to the family's spend on that horizon
   SELECT
@@ -966,6 +995,7 @@ shape AS (
                             WHEN 'DEFENSE' THEN 'outside the ratio (defense is never judged on profit)'
                             WHEN 'LAUNCH' THEN 'outside the doctrine (launch family)'
                             ELSE 'shown so nothing is silent; $0 by construction, no side' END) AS sentence,
+    CAST(NULL AS STRING) AS sheet_row,
     FORMAT('%s|%02d|%02d|%02d', family, IF(book = 'INVEST', 9, 2), hz_order, MIN(cat_order)) AS sort_key
   FROM kw_h
   GROUP BY family, book, horizon, hz_order, category_h, side_h
@@ -1097,6 +1127,15 @@ shape AS (
            IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch; excluded from every sheet, whatever the move above would have been.', ''),
            IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s; no sheet touches it from then.', CAST(w.holdout_eligible_from AS STRING)), '')
          ) AS sentence,
+    -- sheet_row: what a sheet does with this row today (2026-08-23). PENDING_BOOK = a pending
+    -- book already carries it; NEXT_REPRICE_BOOK = the reprice generator writes it on its next
+    -- build; BY_HAND = a stalled probe, priced or parked by hand (R-f); NO_SHEET_ROW = holdout;
+    -- NONE = nothing to do today. The brief derives its action from these, never from the status.
+    CASE WHEN w.holdout AND run_day.d >= w.holdout_eligible_from THEN 'NO_SHEET_ROW'
+         WHEN w.code IN ('REPAIR', 'PROBATION') AND w.book_new_bid IS NOT NULL THEN 'PENDING_BOOK'
+         WHEN w.code IN ('REPAIR', 'FAILED') THEN 'NEXT_REPRICE_BOOK'
+         WHEN w.code = 'STALLED_PROBE' THEN 'BY_HAND'
+         ELSE 'NONE' END AS sheet_row,
     FORMAT('%s|%02d|%05d|%s|%s', w.family, 3, COALESCE(w.seat_no, 99999), w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN k CROSS JOIN win CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.occupant_kind IS NOT NULL
@@ -1166,6 +1205,7 @@ shape AS (
               ELSE
                 CONCAT(FORMAT('seat %d (open) in %s — $%.2f/day of capacity. Next affordable probe: %s in %s, queue #%d, at the seat price $%.2f/click × %d clicks a day ≈ $%.2f/day.', fn.lowest_free_seat, UPPER(fr.family), fr.open_capacity_per_day, np.target_text, np.campaign_name, np.queue_pos, np.seat_cpc, k.click_goal_day, np.admission_cost_per_day),
                        IF(np.holdout, FORMAT(' Its campaign joins the holdout arm on %s and leaves the queue then.', CAST(np.holdout_eligible_from AS STRING)), '')) END AS sentence,
+    CAST(NULL AS STRING) AS sheet_row,
     FORMAT('%s|%02d|%05d||', fr.family, 4, fn.lowest_free_seat) AS sort_key
   FROM fam_rows fr CROSS JOIN k CROSS JOIN run_day
   JOIN free_no fn ON fn.family = fr.family
@@ -1240,18 +1280,28 @@ shape AS (
               -- there is NO row to write, so the move may not read 'pause it' (R-l, engine parity).
               WHEN w.leak_block = 'ALREADY_PAUSED' THEN FORMAT('no sheet row — it already reads %s in Amazon, so this is trailing spend from before the switch and a pause row would change nothing; it leaves the register on its own when the spend stops', LOWER(w.live_state))
               WHEN w.leak_block = 'LIVE_STATE_UNKNOWN' THEN 'no sheet row — the state of this switch could not be read in Amazon at all, and nothing is paused blind; check the keyword in Amazon by hand'
-              WHEN w.pause_pending THEN FORMAT('its pause row is already written on the pending leak book %s — upload that book, or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s`; do not build another. If its spend comes from search terms under a closed keyword, the negate is judged at the ad group', w.pause_batch_id, w.pause_batch_id)
-              ELSE 'pause it on the next leak book (tools/build_seat_moves_bulksheet.py); if its spend comes from search terms under a closed keyword, the negate is judged at the ad group' END AS move,
+              -- ONE instruction per row (2026-08-23): a stale book is rebuilt, never uploaded
+              -- beside a 'next book'; the negate is the same book's business, said in the sentence
+              WHEN lbs.stale THEN FORMAT('rebuild the leak book: `tools/build_seat_moves_bulksheet.py --replaces %s` — one book carries every leak, this one included, and %s is labelled never-uploaded; do not upload %s', lbs.books, lbs.books, lbs.books)
+              WHEN w.pause_pending THEN FORMAT('upload the pending leak book %s (or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s`); do not build another', w.pause_batch_id, w.pause_batch_id)
+              ELSE 'pause it on the next leak book (tools/build_seat_moves_bulksheet.py)' END AS move,
     FORMAT('%s (%s) reads %s on the ladder yet spent $%.2f/day on the basis window at bid $%.2f. %s%s',
                 w.target_text, w.campaign_name, IF(w.state = 'DEAD', 'dead', 'parked'), w.cost_today, COALESCE(w.current_bid, 0),
                 CASE WHEN w.leak_block = 'HOLDOUT' THEN 'HOLDOUT — do not touch; no sheet row.'
                      WHEN w.leak_block = 'ALREADY_PAUSED' THEN FORMAT('It already reads %s in Amazon, so this is trailing spend from before the switch: no book will write a pause row for it and none is needed. It leaves the register on its own when the spend stops, and its dollars are not counted as recovered.', LOWER(w.live_state))
                      WHEN w.leak_block = 'LIVE_STATE_UNKNOWN' THEN 'The state of this switch could not be read in Amazon at all, so no book will write a pause row for it — nothing is paused blind. Check the keyword in Amazon by hand; its dollars are not counted as recovered.'
-                     WHEN w.pause_pending THEN FORMAT('Its pause row is already on the pending leak book %s: upload that book, or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s` — that is why this row costs $0 on both projections. If the spend is a search term under a closed keyword, negate it at the ad group (the acting grain).', w.pause_batch_id, w.pause_batch_id)
-                     ELSE 'Pause it on the next leak book; if the spend is a search term under a closed keyword, negate it at the ad group (the acting grain).' END,
+                     WHEN lbs.stale THEN FORMAT('Its pause row %s; the pending leak book is STALE (a leak exists that no pending book carries), so the one move is to rebuild the book with `tools/build_seat_moves_bulksheet.py --replaces %s` — one book then carries every leak and the old one is labelled never-uploaded. Do not upload %s. The same book judges any search term bleeding under it at the ad group (the acting grain).',
+                                                IF(w.pause_pending, FORMAT('is on the pending leak book %s', w.pause_batch_id), 'is on no pending book'), lbs.books, lbs.books)
+                     WHEN w.pause_pending THEN FORMAT('Its pause row is already on the pending leak book %s: upload that book, or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s` — that is why this row costs $0 on both projections. The same book judges any search term bleeding under it at the ad group (the acting grain).', w.pause_batch_id, w.pause_batch_id)
+                     ELSE 'Pause it on the next leak book; the same book judges any search term bleeding under it at the ad group (the acting grain).' END,
                 IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(w.holdout_eligible_from AS STRING)), '')) AS sentence,
+    -- sheet_row (2026-08-23): the one instruction above, as a code the surfaces can count
+    CASE WHEN w.leak_block IS NOT NULL THEN 'NO_SHEET_ROW'
+         WHEN lbs.stale THEN 'REBUILD_LEAK_BOOK'
+         WHEN w.pause_pending THEN 'PENDING_BOOK'
+         ELSE 'NEXT_LEAK_BOOK' END AS sheet_row,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 5, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
-  FROM kw w CROSS JOIN run_day
+  FROM kw w CROSS JOIN run_day CROSS JOIN leak_book_state lbs
   WHERE w.book = 'HARVEST' AND w.code = 'LEAK'
   UNION ALL
   -- GAP rows — spending with no verdict row
@@ -1335,6 +1385,7 @@ shape AS (
                w.target_text, w.campaign_name, w.cost_today,
                IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', ''))
     END AS sentence,
+    CAST(NULL AS STRING) AS sheet_row,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 6, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.code = 'GAP'
@@ -1402,6 +1453,7 @@ shape AS (
                 IF(w.holdout AND run_day.d >= w.holdout_eligible_from, 'HOLDOUT — do not touch; no sheet row.',
                    'Log the bid (or restore it by sheet) so the clock can start; it counts on the 80% side until then.'),
                 IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(w.holdout_eligible_from AS STRING)), '')) AS sentence,
+    CAST(NULL AS STRING) AS sheet_row,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 8, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.code = 'WAITING_NO_CLOCK'
@@ -1470,6 +1522,7 @@ shape AS (
            CASE WHEN a.holdout AND run_day.d >= a.holdout_eligible_from THEN ' HOLDOUT — advisory suppressed: this campaign is in the holdout arm and takes no freed spend.'
                 WHEN a.holdout THEN FORMAT(' Its campaign joins the holdout arm on %s; the advisory stops then.', CAST(a.holdout_eligible_from AS STRING))
                 ELSE '' END) AS sentence,
+    CAST(NULL AS STRING) AS sheet_row,
     FORMAT('%s|%02d|%s||', a.family, 7, a.campaign_id) AS sort_key
   FROM absorb a CROSS JOIN run_day
   UNION ALL
@@ -1539,6 +1592,7 @@ shape AS (
                      x.campaign_name, x.spend7 / k.basis_days, x.clicks7),
               IF(x.holdout AND run_day.d >= x.holdout_eligible_from, ' HOLDOUT — do not touch; no sheet row.', ''),
               IF(x.holdout AND run_day.d < x.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(x.holdout_eligible_from AS STRING)), ''))) AS sentence,
+    CAST(NULL AS STRING) AS sheet_row,
     FORMAT('%s|%02d|%010.2f|%s|', 'Unmapped', IF(x.campaign_id IS NULL, 1, 2), IF(x.campaign_id IS NULL, 0, 99999 - x.spend7 / k.basis_days), COALESCE(x.campaign_id, '')) AS sort_key
   FROM (
     SELECT campaign_id, campaign_name, spend7, clicks7, holdout, holdout_eligible_from, CAST(NULL AS INT64) AS n_campaigns FROM unmapped

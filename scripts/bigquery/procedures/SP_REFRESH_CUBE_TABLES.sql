@@ -23,6 +23,18 @@ BEGIN
     SELECT DISTINCT keyword_id FROM `onyga-482313.OI.V_KEYWORD_LIFT`
     WHERE probing OR action = 'PROBE_START';
 
+  -- 0a. Re-observe the family seat ledger against the probe list JUST rebuilt (family seat
+  -- register, first-production-night cleanup 2026-08-23). Orchestrator step 20.8b runs
+  -- SP_MAINTAIN_FAMILY_SEATS before this procedure, so the ledger it writes reads the PREVIOUS
+  -- pass's T_LIFT_PROBES; a probe the engine drops in the rebuild above (its 14-day window
+  -- expired) is therefore still stamped 'probe' on the ledger while the same snapshot, read
+  -- against the fresh list, calls it a stalled probe — the ledger acceptance (A13) failed live on
+  -- exactly that pair on 2026-08-23. The procedure is idempotent on one snapshot, so a second
+  -- call here costs seconds, closes/admits/re-stamps against the list this pass will publish,
+  -- and the register image built at 0c then agrees with the ledger it reads. Nothing else moves:
+  -- it is the same procedure, the same snapshot, a fresher probe list.
+  CALL `onyga-482313.OI.SP_MAINTAIN_FAMILY_SEATS`();
+
   -- 0b. Seat economics of the budget engine (family seat register Task 2, 2026-08-22).
   -- V_OOB_KEYWORD is a planner-ceiling view measured in MINUTES; the register must never inline it,
   -- so its seat price (seat_cpc), slots, queue rank and role are materialised here once per pass.

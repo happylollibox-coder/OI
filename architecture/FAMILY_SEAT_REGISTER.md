@@ -59,6 +59,27 @@ its dollars named and excluded (B36). (3) `--supersede` and `--rewrite-readme` b
 actions, because every LEAK row offered a choice whose second half had no executable command behind
 it. (4) The retired-phrase check became a script that reads three files instead of two and collapses
 whitespace, and it found the two remaining stale clauses the moment it ran.
+Ninth pass 2026-08-23 — **the first production night, audited, and the cleanup the verifiers
+asked for** (v27.124). (a) Both generators' `--supersede` and "earlier batches" listing matched
+`upload_status IS NULL` — the APPLIED state — so a label could silently un-apply a batch Ori had
+really uploaded; both now act on `PENDING_UPLOAD` rows only, refuse loudly before any UPDATE when a
+batch has none, and never delete a row (proved on a `TMP_` copy of the change log both ways; see
+"The change-log discipline"). (b) The ledger acceptance A13 failed live on two seats the ledger
+still read as 'probe' after the engine had dropped them: orchestrator step 20.8b runs before
+`T_LIFT_PROBES` is rebuilt, so the ledger was stamped against the previous pass's probe list.
+`SP_REFRESH_CUBE_TABLES` now re-observes the ledger (step 0a) right after it rebuilds the list.
+(c) The night itself: every continuing occupant kept its number, the eight closures carry the
+right code and sentence, freed numbers were reused, and the drift suite's D03 was wrong, not the
+ledger — a BEFORE/AFTER pair can span two passes with two snapshot dates. (d) Both pending books
+were stale against today's ladder and were rebuilt, the old batches labelled as replaced, never
+deleted; the leak book's README now states its window as the book's OWN and says the register
+re-anchors daily. (e) The brief's action is derived from what is EXECUTABLE (`sheet_row`, B37,
+C11), the Weekly Run sets the whole 20% side against the allowance (C12), UNMAPPED is a status
+every consumer and the checker know, and the register publishes ONE instruction per LEAK row —
+a stale leak book is rebuilt with `--replaces`, never uploaded beside a 'next book' (R-n). (f)
+Standing Rule 0: the worked dollar examples in R-b / R-c and the rounding example in the view
+header are gone; the queries stand. (g) Commit `88dad93` carried a `config.yaml` hunk belonging
+to the customer-order session (`FACT_CUSTOMER_ORDER_ITEM`); recorded under house rule 5 below.
 
 **Which clock every date in this file is on.** Data dates (`snapshot_date`, `opened_on`, `closed_on`,
 basis windows) are Los Angeles, the warehouse clock. Pass times (`LOG_PIPELINE_RUNS`, when a routine
@@ -109,9 +130,9 @@ register.
 | Occupants | REPRICE (repair), FLOOR_PROBATION (probation), LOSER (failed), TRIAL keywords in a probe position (probe / stalled probe — see the two probe rulings below), REVIVED_SETTLING / PENDING_SETTLE (settling — reported on the 80% side, seated on the 20% ledger). |
 | Brand defense | never seated, never given a profit-based move (house rule: defense is never judged on profit). A seated keyword that becomes defense is closed `DEFENSE_EXEMPT`. The register shows defense spend as its own category OUTSIDE both sides of the ratio. **Defense is tested three ways** (Task 2): the ladder's `is_brand_defense`, the campaign-name rule the ladder's source uses (`V_BID_CPC_TRANSFER`: "BRAND DEFENSE" in the name), and the keyword text against the house brand phrases (`DIM_BRAND_PHRASES`, `phrase_type = 'BRAND'`) — the flag alone misses brand-word keywords in SB campaigns (the Bottle "happy lolli truth or dare" trials). Never a literal list in a view. |
 | **R-a — a probe** (2026-08-22) | A TRIAL keyword on the engine's own probe list `T_LIFT_PROBES` (a bid raised within the engine's probe window with fewer than the verdict's clicks since; the set `V_OOB_KEYWORD` calls `is_lift_probe`) is a seat **whether or not it spent this week** — it costs $0 today and still answers "what am I probing". A TRIAL keyword at the **park bid** — the ladder's `at_floor` (the live bid observed at the channel floor `FN_BID_FLOOR` publishes, never a literal) — that the engine does NOT list is a seat **only with spend** in the basis window: a floor-priced keyword buying nothing is idle, not a probe. |
-| **R-b — a stalled probe** (2026-08-22) | A TRIAL keyword parked at an activation entry bid — its latest applied bid change in `V_PPC_CHANGE_LOG_APPLIED` is an `INCREASE_BID` that still stands: the live bid is **at or above** the logged `new_bid` and above the logged `old_bid`, never lowered since — past the engine's probe window (`k_probe_window_days`) with fewer than the verdict's clicks (`k_verdict_clicks`) since, no longer engine-listed and not at the floor, is a **STALLED PROBE**: a seat on the 20% side with a standing proposal (re-price to the seat price, or park), NOT "waiting for results" on the 80% side. A test that cannot produce a verdict at its pace is not a test. The set is read from the data on every run (the change log × the snapshot), never from a list. **At or above, not equal** (repair pass 2026-08-22): the generator's $1.00 activation floor can lift a bid past the logged raise after the log row is written (a known defect), so a keyword logged as a +$0.02 nudge but sitting live at $1.00 is exactly the parked entry this ruling names and is seated. **The change log is the authority for the raise date**: a bid raised with no applied log row at all has no date to age, reads WAITING on the 80% side, and is not seated — a raise outside the log is a logging gap to close, not a position to guess. A `REDUCE_BID` that lands on $1.00 is a cut, not an entry, and reads WAITING. |
+| **R-b — a stalled probe** (2026-08-22) | A TRIAL keyword parked at an activation entry bid — its latest applied bid change in `V_PPC_CHANGE_LOG_APPLIED` is an `INCREASE_BID` that still stands: the live bid is **at or above** the logged `new_bid` and above the logged `old_bid`, never lowered since — past the engine's probe window (`k_probe_window_days`) with fewer than the verdict's clicks (`k_verdict_clicks`) since, no longer engine-listed and not at the floor, is a **STALLED PROBE**: a seat on the 20% side with a standing proposal (re-price to the seat price, or park), NOT "waiting for results" on the 80% side. A test that cannot produce a verdict at its pace is not a test. The set is read from the data on every run (the change log × the snapshot), never from a list. **At or above, not equal** (repair pass 2026-08-22): the generator's $1.00 activation floor can lift a bid past the logged raise after the log row is written (a known defect), so a keyword logged as a few-cent nudge but sitting live at the activation floor is exactly the parked entry this ruling names and is seated (read them: `SELECT family, target_text, raise_old_bid, raise_new_bid, current_bid FROM onyga-482313.OI.V_FAMILY_SEAT_REGISTER WHERE row_type = 'SEAT' AND occupant_kind = 'stalled probe' AND current_bid > raise_new_bid + 0.005`). **The change log is the authority for the raise date**: a bid raised with no applied log row at all has no date to age, reads WAITING on the 80% side, and is not seated — a raise outside the log is a logging gap to close, not a position to guess. A `REDUCE_BID` that lands on $1.00 is a cut, not an entry, and reads WAITING. |
 | Waiting | A TRIAL keyword in none of the three probe positions (engine-listed; at the floor with spend; stalled) is WAITING on the 80% side and is never seated. |
-| **R-c — engine parity stands** (2026-08-22, closes Open ruling 1) | Any standing applied raise that expired the engine's own test is stalled, whatever its size: a keyword that could not buy the verdict's clicks in the probe window at its raised bid is neither earning nor being tested. The register publishes the raise on the row (`raise_old_bid → raise_new_bid`, `raised_on`, `clicks_since_raise`, `days_since_raise`) and words the sentence by its size: a raise of `k.entry_raise_ratio` (1.5×) or more reads "entered at $1.00 on Aug 4 — 8 clicks in the 17 complete days since"; a smaller one reads "was nudged $0.45→$0.47 on Aug 4 — 0 clicks …"; a bid lifted past the logged raise adds ", now sitting at $1.00". Proposal on both, superseded by R-f (2026-08-22): the move branches on the sign of (seat price − live bid) and the park price is the engine's published `bid_park`, never the floor and never a literal. The seat price is READ from the budget engine's seat economics (`T_OOB_SEAT_ECONOMICS.seat_cpc`, materialised from `V_OOB_KEYWORD`), never restated; a campaign outside the engine has no seat price and the sentence says so. |
+| **R-c — engine parity stands** (2026-08-22, closes Open ruling 1) | Any standing applied raise that expired the engine's own test is stalled, whatever its size: a keyword that could not buy the verdict's clicks in the probe window at its raised bid is neither earning nor being tested. The register publishes the raise on the row (`raise_old_bid → raise_new_bid`, `raised_on`, `clicks_since_raise`, `days_since_raise`) and words the sentence by its size: a raise of `k.entry_raise_ratio` (1.5×) or more reads "entered at $<new bid> on <date> — <n> clicks in the <d> complete days since"; a smaller one reads "was nudged $<old>→$<new> on <date> — <n> clicks …"; a bid lifted past the logged raise adds ", now sitting at $<live bid>" (the figures are the row's own; none is pinned here — Standing Rule 0). Proposal on both, superseded by R-f (2026-08-22): the move branches on the sign of (seat price − live bid) and the park price is the engine's published `bid_park`, never the floor and never a literal. The seat price is READ from the budget engine's seat economics (`T_OOB_SEAT_ECONOMICS.seat_cpc`, materialised from `V_OOB_KEYWORD`), never restated; a campaign outside the engine has no seat price and the sentence says so. |
 | **R-d — no test clock** (2026-08-22, closes Open ruling 2) | A TRIAL whose bid moved (more than one distinct bid in `DIM_KEYWORD`'s history) with NO applied change-log row — or away from the last logged bid since, other than the activation-floor lift R-b already treats as the raise standing — is NOT seated and is NOT "waiting": it is its own category **"waiting — no test clock"** on the 80% side, with the sentence "this bid was set outside the change log, so there is no date to judge it from" and the move "log the bid (or restore it by sheet) so the clock can start". A `REDUCE_BID` that lands on an entry price is a cut, not an entry (Bottle "truth or dare game" stays waiting). |
 | **R-e — idle at the floor** (2026-08-22) | A TRIAL at the park bid with $0 spend and 0 clicks in the basis window is the category **"idle at the floor"**: $0, shown so nothing is silent, on neither side (no ratio is affected). |
 | **R-f — a stalled probe at or above the seat price is parked, never "raised"** (2026-08-22) | The stalled-probe proposal branches on the SIGN of (seat price − live bid). Live bid BELOW the seat price: "raise to the seat price $X to get a verdict". Live bid AT OR ABOVE it: it could not buy a verdict even at the seat price, so the move is "park it — bid to the engine's park price and let the ladder's revive cycle re-test it". The park price is the engine's own `bid_park`, published by `V_OOB_KEYWORD` (column added 2026-08-22) and read through `T_OOB_SEAT_ECONOMICS` — never a literal; a campaign outside the engine has no seat price and is told so, with the same park price. A "raise" to a price at or below the live bid is never printed (asserted, B10). **`bid_park` is not a floor and not a channel price.** It is FLAT across every engine role, while `bid_floor` on the same rows varies by channel and creative, and most of those rows are not SB — so it is the house PARK price the engine's PARK / PARK_WAIT actions bid to, which merely coincides with the SB video floor and sits above the SP and SB-collection floors. Do not pin the figures (Standing Rule 0) — read them: `SELECT role, COUNT(*) n, COUNT(DISTINCT bid_park) distinct_park, MIN(bid_park) min_park, MAX(bid_park) max_park, MIN(bid_floor) min_floor, MAX(bid_floor) max_floor, COUNTIF(UPPER(channel) = 'SB') sb FROM onyga-482313.OI.T_OOB_SEAT_ECONOMICS GROUP BY 1 ORDER BY 1`. Calling it "the SB video park price" is wrong twice over: it is not SB-only and it is not a floor. (The same confusion once cost three phantom kills — the keyword-state ladder borrowed `bid_park` as a flat floor; see `V_BID_FLOOR` / `FN_BID_FLOOR`.) *To overrule:* name another park source (e.g. the channel floor `FN_BID_FLOOR`) — the register then reads that column; no literal. |
@@ -120,6 +141,7 @@ register.
 | **R-i — an overdue settling verdict is named overdue** (2026-08-22) | `REVIVED_SETTLING` / `PENDING_SETTLE` with `next_check_date` before the snapshot date stays on the 80% side (waiting = 80, Ori's ruling) but the sentence and the move read "was due to settle on <date> — overdue by N days; the ladder has not re-judged it". The cause is upstream and is being diagnosed read-only; the register never changes the ladder (B18). *To overrule:* move overdue settling to the 20% side — one side value in the codes table. |
 | **R-j — "too few clicks yet" needs clicks** (2026-08-22) | "waiting — too few clicks yet" requires clicks > 0 on the basis window (spec §3). A TRIAL with $0 and 0 clicks that is neither at the floor nor no-clock is **"waiting — not yet serving"**: $0, published, on no side (affects no ratio) (B27). *To overrule:* fold it back into waiting — one branch in the code. |
 | **R-k — a gap is worded by its MEASURED cause** (2026-08-22; refined the same day after verification) | The original reading — "the verdict ladder reads `DIM_KEYWORD` only, so a product target never gets a verdict" — was FALSE on live rows: SP product targets live in `DIM_KEYWORD`, the ladder tracks them and this register seats them (repairs, probes, settling and parked seats with `asin=` targets exist on the snapshot; query the SEAT rows for `asin=` to see them — and when COUNTING product targets, match `asin=` OR `category=`: the snapshot carries both prefixes, and an `asin=`-only count silently drops the `category=` rows, a mislabel a verification pass actually caught). The real blind spot is narrower: SB video / PT product-target rows reach the warehouse with **`keyword_id` −1** — no keyword id, so no `DIM_KEYWORD` row can exist and the ladder cannot see them. Every GAP row is therefore worded by the cause the view MEASURES (`keyword_id` and the current `DIM_KEYWORD` state): `keyword_id` −1 → "no keyword id — the ladder cannot see it; a ruling for Ori, not a mapping fix"; a paused/archived current row → "trailing spend — leaves the universe when it stops; no verdict is coming and none is needed"; an enabled row → "verdict arrives on the next state run"; a real id with no current row → "check why". The blanket phrase "the verdict ladder does not track product targets" is retired and B19 asserts it appears nowhere. **Extending the pipeline/ladder to the no-keyword-id SB video rows is a RULING FOR ORI**, not built here. *To overrule:* give those rows an identity the ladder can read (or extend `SP_SNAPSHOT_KEYWORD_STATE` to a synthetic key) — the blind gap rows then disappear on their own. |
+| **R-n — one leak book, one instruction** (2026-08-23, first-production-night cleanup) | The leak book carries EVERY executable leak the day it is built; the next day the register can hold a new leak no pending book carries beside sixteen a pending book does. Publishing "upload that book" on one row and "pause it on the next leak book" on the next — or a family clause that says both — hands the reader two instructions he cannot both obey, because the next book, built, carries the sixteen again. The book's state is read ONCE, register-wide (`leak_book_state`): it is STALE when an executable leak is on no pending book while another is on one, or when more than one pending book exists. Then every executable LEAK row and every family clause carry one instruction — rebuild it with `tools/build_seat_moves_bulksheet.py --replaces <batch>`, which logs ONE book carrying every leak and labels the old batch as replaced by it — and the word "upload" appears on no leak row. Not stale: an on-book leak says upload that one book, an off-book leak (only possible when no book is pending) says build the next. The negate is the same book's business and is said in the sentence, never as a second move. Every SEAT and LEAK row publishes `sheet_row` (PENDING_BOOK / NEXT_LEAK_BOOK / NEXT_REPRICE_BOOK / REBUILD_LEAK_BOOK / BY_HAND / NO_SHEET_ROW / NONE) so the surfaces count what is executable instead of inferring it. B32 (rewritten), B37, C11. *To overrule:* allow two pending leak books — one branch in `leak_book_state` and the generator's `refuse_second_pending_book`. |
 | **R-l — the gap-closure arithmetic** (2026-08-22, settled; three verifier rounds died on it) | A family's "what closes the gap" clause may count as RECOVERED TODAY only dollars that provably leave the bad side when the sheet lands — that is, a **PAUSE** (the keyword's spend goes to $0) and nothing else: a leak paused, or a failed keyword killed with a pause row. A row in a holdout campaign gets no sheet row from its `eligible_from`, so it recovers nothing either. **Parking a stalled probe LOWERS its price; the spend does not vanish** — it is its own line, its dollars named as spend at risk of continuing, and it is EXCLUDED from the recovered-today total. **Re-pricing a repair recovers nothing today by construction** — its own line too, named as a change of price whose result arrives at the re-judged horizon. The sentence must, in this order: name the executable recovery (pauses only), name the gap, state plainly whether the recovery closes it, then say what the remaining dollars depend on and point to the family's re-judged row. No projection may appear inside the recovered-today number, and no sentence may claim a closure its own executable recovery does not deliver. The acceptance check re-derives the recovered-today figure from the register's OWN per-row costs — the today-horizon LEAK rows and failed SEAT rows, holdout-suppressed rows removed — and never from the sentence it is testing, comparing within a **$0.02** tolerance whose reason is on the row: the sentence renders one aggregate to two decimals while the re-derivation sums per-row costs each rounded on its own row (R-m). B29 / B30 / B31. **R-l binds the PROJECTIONS too (2026-08-23, fifth repair pass).** (a) The re-judged horizon used to model parking a stalled probe as taking the spend to $0 — the very belief R-l retired — in the exact row the today sentence points the reader at. A stalled probe is now re-priced by the move on its OWN row (R-f: raise to the seat price where the live bid is below it, otherwise park at the engine's park price) and keeps spending at that price on the same linear bid→spend guess the day-one horizon uses; it stays on the 20% side until a verdict arrives (B33). (b) Both projections respect the holdout arm: a campaign in the holdout arm from its `eligible_from` gets no sheet row of any kind, so neither day one nor re-judged may book a change for it — its cost on both equals its cost today, a repair in one never moves to the good side and keeps the 'losing — in repair' category, and the family clause lists no move for it (B34; B10 and B11 carry the same guard). (c) The FAMILY row names the BOOK its pauses ride on instead of promising an upload 'today': every dollar of the recovered-today figure rides the next book a generator builds — the leak arm — at the time an unshipped task, and named in that pass's wording as an arm of the reprice book; it shipped later the same day as the SIBLING generator `tools/build_seat_moves_bulksheet.py`, see (e) — for a leak, the shipped reprice generator's pause row for a failed keyword — exactly as the LEAK row's own move already said. The arithmetic is untouched; only the promise is (B32). **(d) The leak half bound the projections too (2026-08-23, sixth repair pass — SUPERSEDED THE SAME DAY by (e); recorded because it is the reasoning (e) rests on, not because it is current).** (c) changed the today sentence and left both projections crediting a sheet that did not exist: `cost_day1` and `cost_rejudged` took every LEAK row to $0, and the published day-one assumption attributed that pause to the PENDING_UPLOAD book — a book that carries bid changes only. That pass made neither projection zero a leak: a leak cost on day one and on re-judged what it cost today, both assumptions named the generator the dollars were waiting on, and the projection clause said the leaks were still costing rather than paused. The FAILED half was untouched and still goes to $0 on re-judged, because the shipped reprice generator builds that pause row today. The rule survives (d) intact and is what (e) applies per row: **a projection may credit a pause only where the sheet that performs it exists** — same rule, opposite answer, because the sheet did not exist that morning and does now (B35). **(e) THE LEAK HALF'S OVERRULE HAS FIRED (2026-08-23, Task 3).** The leak arm shipped as `tools/build_seat_moves_bulksheet.py`, so the sheet that pauses a leak now exists and (d) no longer holds. The flip was taken in the ONLY form that stays honest: **per row, measured against the change log, never per category.** A LEAK reaches $0 on day one and on re-judged exactly when a `KEYWORD_PAUSE` row for that campaign+keyword sits at `upload_status = 'PENDING_UPLOAD'` in `FACT_PPC_CHANGE_LOG` (the `pending_pause` CTE); a leak no book carries still equals its today cost on both projections, and a holdout-suppressed leak is never zeroed whatever the log says. Both horizon assumptions name the generator by its file so a reader can find the sheet the dollars ride on, and the projection clause names BOTH counts — the leaks a pending book pauses and the ones no book carries. B35 was rewritten to enforce this, and it re-derives the pending pause book from the change log itself rather than asking the view what it believes. *To overrule:* nothing further — the sheet either exists for a row or it does not, and the check reads the log. *To overrule (the original rule):* name another move whose dollars provably leave the bad side on upload — it joins the pause set in one branch of the view and the same branch of B29. |
 | **R-m — report prose is not an artifact** (2026-08-22) | A number in an agent's report is ephemeral. A false or drifted figure blocks ONLY if it lives in a committed file or a published sentence, cited `path:line`; otherwise it is a note. **Rounding differences of one cent between an aggregate and the sum of independently rounded components are display facts, not defects** — stated here once, and not re-litigated anywhere in this design. Every tolerance a check uses carries its reason on the check. |
 
@@ -131,7 +153,7 @@ register.
 | `SP_MAINTAIN_FAMILY_SEATS` | Orchestrator Task 20.8b, right after `SP_SNAPSHOT_KEYWORD_STATE`. Closes, reopens, admits, observes. Idempotent on the same snapshot. | shipped |
 | `V_FAMILY_SEAT_REGISTER` | FAMILY / CATEGORY / SEAT / OPEN_SEAT / LEAK / GAP / NO_CLOCK / ABSORB / REFERENCE / UNMAPPED rows — the object Ori reads. | shipped |
 | `T_OOB_SEAT_ECONOMICS` | The budget engine's seat economics (slots, seat_rank, seat_cpc, role, and since 2026-08-22 the engine's park price `bid_park` — R-f) materialised once per pass from `V_OOB_KEYWORD` by `SP_REFRESH_CUBE_TABLES` step 0b, right after `T_LIFT_PROBES`. Exists because `V_OOB_KEYWORD` is a planner-ceiling view measured in minutes and the register may never inline it. | shipped |
-| `tools/build_seat_moves_bulksheet.py` | THE LEAK BOOK — one pause row per pausable LEAK row, or one stated no-action reason; ad-group-grain negatives for the search terms bleeding under a closed keyword. A SIBLING of the reprice book, not an arm of it (the argument is in its docstring and repeated below). Batch `seat_moves_<day>_<HHMM>` logged `PENDING_UPLOAD`. Three terminal actions that build nothing: `--mark-uploaded` when Ori has uploaded, `--supersede` when he will not, `--rewrite-readme` to re-issue a logged book's README from its own audit CSV. Anchors on the register's own watermark (`WM_CTE`). | shipped 2026-08-23 |
+| `tools/build_seat_moves_bulksheet.py` | THE LEAK BOOK — one pause row per pausable LEAK row, or one stated no-action reason; ad-group-grain negatives for the search terms bleeding under a closed keyword. A SIBLING of the reprice book, not an arm of it (the argument is in its docstring and repeated below). Batch `seat_moves_<day>_<HHMM>` logged `PENDING_UPLOAD`. Three terminal actions that build nothing: `--mark-uploaded` when Ori has uploaded, `--supersede` when he will not, `--rewrite-readme` to re-issue a logged book's README from its own audit CSV; `--replaces <batch>` builds ONE book that carries every leak and labels the pending one as replaced by it (R-n); every label acts on `PENDING_UPLOAD` rows only, never on an applied batch. Anchors on the register's own watermark (`WM_CTE`). | shipped 2026-08-23 |
 | `tools/build_restore_seat_moves_bulksheet.py` | Puts back the state every paused row carried. Names every negative it CANNOT undo, because a sheet cannot. | shipped 2026-08-23 |
 | `scripts/bigquery/tests/SEAT_MOVES_LEAK_ARM_probe.sql` | The TMP_ probe that exercises the leak arm's branches the live day does not reach. Real evidence, synthetic membership. | shipped 2026-08-23 |
 | `tools/check_retired_phrases.py` | The only instrument for the files the SQL suite cannot read — the view header (stripped before deploy), this SOP, the `config.yaml` entry and the leak book's docstring. Whitespace-insensitive, so a retired phrase that wraps across a line is still found; a hit is allowed ONLY inside quotation marks, and a straight `"` in `config.yaml` is a YAML delimiter rather than a quotation. Replaces the `grep` that used to live in the acceptance suite's comment, which missed both. Exit 1 on any unquoted hit. | shipped 2026-08-23 |
@@ -139,7 +161,8 @@ register.
 | `V_DAILY_BRIEF` SEATS section (`section_rank` 6) | One plain line per WORKING family: the doctrine read, what the 20% side costs against its allowance, and what that side is made of. A position, not a proposal. | shipped 2026-08-23 |
 | `V_RUN_SUMMARY` SEATS section | The doctrine status per working family on the Weekly Run front page — label, seat count, open capacity. | shipped 2026-08-23 |
 | `cube/schema/SeatRegister.js` | The register on the dashboard. Passthrough only; `rowId` = `sort_key` (the register's total ordering); a dimension for every column. Cache keyed on the orchestration stamp. | shipped 2026-08-23 |
-| `scripts/bigquery/tests/SEAT_SURFACE_acceptance.sql` | C01–C10. Every check re-derives from the register's own rows, and every check counts an EMPTY population as a violation of itself. | shipped 2026-08-23 |
+| `scripts/bigquery/tests/SEAT_SURFACE_acceptance.sql` | C01–C12 (C11 the action from `sheet_row`, C12 like with like). Every check re-derives from the register's own rows, and every check counts an EMPTY population as a violation of itself. | shipped 2026-08-23 |
+| `tools/tests/test_change_log_discipline.py` | Both books, one rule: a label is written on `PENDING_UPLOAD` rows only, never on an applied (NULL) batch; a `--supersede` with no pending row stops before any UPDATE; no DELETE anywhere; a change-log override must be a `TMP_` copy; one pending leak book at a time (`--replaces`). | shipped 2026-08-23 |
 | `scripts/bigquery/tests/check_seat_surface_labels.py` | The two guarantees SQL cannot assert, because they live in files: a cube dimension for every register column, and every label CASE naming every `doctrine_status` the register can emit. | shipped 2026-08-23 |
 | `V_ENGINE_HEALTH` checks | reconciliation, idempotence, every occupant numbered. | Task 5 |
 
@@ -177,11 +200,28 @@ exactly the problem). Only a TRIAL keyword at the park bid needs spend to be sea
 therefore never flips a seat day to day: a probe seat closes when the engine drops the keyword
 from its list or its bid leaves the floor, not when a quiet week passes.
 
-**Probe-list freshness.** `T_LIFT_PROBES` is rebuilt by `SP_REFRESH_CUBE_TABLES` (Task 21), which
-runs AFTER this procedure (20.8b) in the same orchestrator pass, so the list read is the previous
-pass's. Deliberate: inlining `V_KEYWORD_LIFT` here cost tens of seconds and risks BigQuery's
-planning limit, the engine's probe window is two weeks, and the register never reads a ceiling
-view.
+**Probe-list freshness — and the second call that closes the gap (2026-08-23).** `T_LIFT_PROBES`
+is rebuilt by `SP_REFRESH_CUBE_TABLES` (Task 21), which runs AFTER this procedure (20.8b) in the
+same orchestrator pass, so the list 20.8b reads is the previous pass's. Deliberate: inlining
+`V_KEYWORD_LIFT` here cost tens of seconds and risks BigQuery's planning limit, the engine's probe
+window is two weeks, and the register never reads a ceiling view. **What that cost on the first
+production night:** two seats the engine dropped from its list in the 04:18 (New York) rebuild —
+their 14-day window had expired — were still stamped 'probe' by the ledger written a minute
+earlier, while the same snapshot read against the fresh list called them stalled probes; A13 failed
+live with exactly those two. The procedure had re-stamped correctly against what it was given; what
+it was given was a minute stale. So `SP_REFRESH_CUBE_TABLES` now calls this procedure again as
+**step 0a, immediately after rebuilding `T_LIFT_PROBES`** and before step 0b: same snapshot, same
+idempotent procedure, a fresher list, seconds of cost. The register image built at step 0c then
+reads a ledger maintained against the list the pass publishes. Assert the order in the deployed
+routine, never the file:
+```sql
+SELECT STRPOS(ddl, 'T_LIFT_PROBES') < STRPOS(ddl, 'CALL `onyga-482313.OI.SP_MAINTAIN_FAMILY_SEATS`') AS reobserve_after_probes,
+       STRPOS(ddl, 'CALL `onyga-482313.OI.SP_MAINTAIN_FAMILY_SEATS`') < STRPOS(ddl, 'T_OOB_SEAT_ECONOMICS') AS reobserve_before_0b
+FROM `onyga-482313.OI.INFORMATION_SCHEMA.ROUTINES` WHERE routine_name = 'SP_REFRESH_CUBE_TABLES';
+```
+TDD record: A13 = 2 on the live ledger after the 04:18 pass; the hand call that step 0a now
+performs brought it to 0 with every other check green, and two consecutive calls gave one
+fingerprint.
 
 **Admission.** An occupant with no open row gets the LOWEST seat number not held by an open row of
 its family. Several admissions in one run are ordered totally (kind: repair, probation, failed,
@@ -817,6 +857,42 @@ pass must not break — a continuing occupant keeps its number (D01), every clos
 mapped code, the snapshot date and the SOP's own sentence (D02–D05), and admissions take the lowest
 free numbers without ever landing on a number a still-seated keyword holds (D06–D08).
 
+**What the first production night showed (2026-08-23, two passes: 01:28 and 04:18 New York).**
+Against a BEFORE image taken before the first pass, D00–D08 read PASS on everything the ledger did:
+every continuing occupant kept its number, the closures carry their code and sentence, the freed
+numbers were reused by the admissions, and no admission landed on a held number. The one FAIL was
+the suite's, not the ledger's: D03 compared every new closure's date to the AFTER snapshot's, and
+the night had TWO snapshots — the first pass closed four seats dated on its own snapshot, the second
+closed four more dated on the next. D03 now judges only the rows closed since the BEFORE image and
+accepts any snapshot date between that image's newest date and the AFTER snapshot. Read the night's
+closures yourself (the codes, the sentences, the dates):
+```sql
+SELECT family, seat_no, closed_on, closed_reason, last_observed_kind, last_observed_state, closed_reason_text
+FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NOT NULL ORDER BY closed_on, family, seat_no;
+```
+and the number stability and the admissions against the BEFORE copy:
+```sql
+WITH b AS (SELECT * FROM `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE` WHERE closed_on IS NULL),
+     a AS (SELECT * FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL)
+SELECT COUNTIF(a.seat_no = b.seat_no) kept, COUNTIF(a.seat_no != b.seat_no) renumbered
+FROM b JOIN a USING (family, campaign_id, keyword_id);
+```
+**What a pass costs, measured on that night** (read it, never restate it): the jobs that built
+`T_OOB_SEAT_ECONOMICS` and `T_FAMILY_SEAT_REGISTER` inside each `SP_REFRESH_CUBE_TABLES` run, with
+their seconds and slot-minutes, against the run's total from `LOG_PIPELINE_RUNS`:
+```sql
+SELECT creation_time, destination_table.table_id, TIMESTAMP_DIFF(end_time, start_time, SECOND) secs,
+       ROUND(total_slot_ms / 60000, 1) slot_min, STARTS_WITH(job_id, 'script_job') in_pass
+FROM `onyga-482313`.`region-us`.INFORMATION_SCHEMA.JOBS
+WHERE destination_table.table_id IN ('T_OOB_SEAT_ECONOMICS', 'T_FAMILY_SEAT_REGISTER')
+  AND creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY) ORDER BY creation_time;
+SELECT started_at, duration_seconds FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
+WHERE procedure_name = 'SP_REFRESH_CUBE_TABLES' AND status = 'OK' ORDER BY started_at DESC LIMIT 4;
+```
+On that night step 0c had not run in a pass at all — it was deployed after the second pass, and the
+only image until then was built by hand; the first in-pass build is the refresh that followed the
+deploy (the same query shows `in_pass` true for it).
+
 **What the check found first (2026-08-22).** There was no pass to check. Both new steps —
 orchestrator Task 20.8b and `SP_REFRESH_CUBE_TABLES` step 0b — were deployed AFTER the last full
 pass had already started, so neither had ever executed inside one: `SP_MAINTAIN_FAMILY_SEATS` has
@@ -1093,6 +1169,12 @@ There is now **one** `WM_CTE`, on the register's anchor, and both queries are bu
 there: one asserts both queries apply `FN_ADS_ANCHOR_CAP` and neither carries a bare
 `SELECT MAX(date) AS wm`, the other that the CTE is a single shared definition.
 
+**The README states the book's OWN window, and says the register does not hold still (2026-08-23).**
+An earlier README claimed the register's `cost_per_day` and the book's dollars "are that same
+week" — true on the morning it was built and false from the next complete ads day, because the
+register re-anchors daily on `LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` while a book is fixed the
+moment it is built. The README now names its window as the book's own, says the register moves,
+and tells the reader to compare a row against the register of the day the book names only.
 **The README names the seven days, not only the anchor.** The anchor is the last complete ads day;
 the basis window ends the day BEFORE it (`basis_from = wm − 7`, `basis_to = wm − 1`). Stating only
 the anchor is how a book came to claim one watermark while every dollar in it was measured on a
@@ -1119,7 +1201,20 @@ instruction was to build another book, which the same sentence forbids in the sa
 third exists for the same reason: a README already on disk gains a note the writer learned after
 it was written WITHOUT a second book of the same rows. Both are named in the register's own move
 and in the README's provenance paragraph, so a reader never meets an instruction with no
-executable path. **A log row is never deleted.** Every date
+executable path. **The change-log discipline (2026-08-23 cleanup; `tools/tests/test_change_log_discipline.py`).**
+`NULL` `upload_status` is the APPLIED state — `V_PPC_CHANGE_LOG_APPLIED` selects it and
+`--mark-uploaded` writes it. Both generators' `--supersede` and their "earlier batches" listing used
+to match `IS NULL OR PENDING_UPLOAD`, so a `--supersede` naming a batch Ori had really uploaded would
+have re-labelled it never-uploaded — un-applying, silently, a change that had reached Amazon — and a
+book marked uploaded stayed listed as "not yet uploaded", inviting exactly that. Now, in both books:
+`--supersede`, `--mark-uploaded` and the listing act on `PENDING_UPLOAD` rows only; a `--supersede`
+that finds no pending row stops BEFORE any UPDATE and says why; no code path deletes a row. Proved
+on a `TMP_` copy of the change log with `--change-log-table TMP_…` (any other name is refused): an
+applied copy of each batch survived `--supersede` and `--mark-uploaded` in both books untouched, a
+pending copy was labelled, and a reprice build aimed at an applied batch refused before logging.
+**One leak book at a time (R-n).** A build that finds a PENDING leak book it does not name stops;
+`--replaces <batch>` logs the new book first and then labels the old one as replaced BY it (the
+note names the replacement). **A log row is never deleted.** Every date
 the book carries — the batch id and the file name included — is on the WAREHOUSE's clock, because the
 machine running it can already be on tomorrow while Los Angeles is not.
 
@@ -1310,6 +1405,29 @@ change is then a derivation or a source, never a literal.
    category ("closed — trailing spend, nothing to do"), or leaving it exactly as it is. Not a
    defect either way; a reading preference, and yours.
 
+17. **Nothing remembers yesterday's FAMILY figures.** (2026-08-23, first production night.) The
+   audit could measure what the LEDGER did overnight only because an operator took a copy by hand
+   before the pass (open ruling 10); the register's FAMILY rows have no copy at all, so "how did each
+   family's 20% side move day over day, and why" cannot be answered from the warehouse — only the
+   composition of the change can (closures, admissions, the window sliding one day). One row per
+   FAMILY row per snapshot date, written by step 0c beside `T_FAMILY_SEAT_REGISTER`, would answer it
+   from the next night on. Build it, or accept that the day-over-day read is a composition story.
+
+18. **Is `--replaces` the right default when a new leak appears?** (2026-08-23.) R-n says a stale
+   leak book is rebuilt, never uploaded beside a next book; the cost is that Ori re-reads a whole
+   README for one new row. The alternative — upload the old book, mark it, and let the new leak ride
+   tomorrow's — is what R-n forbids because the register credits the old book's rows until they
+   are marked, and nobody has ruled which friction is the lesser. Read how often it bites:
+   `SELECT batch_id, upload_status, COUNT(*) FROM onyga-482313.OI.FACT_PPC_CHANGE_LOG
+    WHERE batch_id LIKE 'seat_moves_%' GROUP BY 1, 2 ORDER BY 1;`
+
+**House rule 5, recorded (2026-08-23).** Commit `88dad93` (the eighth pass) staged a `config.yaml`
+hunk that was not its own: the `FACT_CUSTOMER_ORDER_ITEM` registry entry, written in the working
+tree by the concurrent customer-order session, whose own commit (`67393e4`, four minutes later)
+registered the rest of its objects. History is not rewritten. The entry was checked on 2026-08-23:
+it describes the live table and its migration correctly, both source files exist, the registry
+parses with no duplicate name in any section, and the entry remains that session's to maintain.
+
 ## The morning surface (Task 4 — where the doctrine is read from)
 
 The register is one wide object, and reading it whole is a deliberate act. Task 4 is the part a
@@ -1341,6 +1459,22 @@ yet. To bring the surfaces forward by hand, rebuild the one table and stamp `LOG
 (`tools/trigger_refresh.py` does both, for every `T_`); the cube's cache is keyed on that stamp, so
 without it a rebuilt table is still invisible on the page.
 
+**The action is what is executable (2026-08-23).** The brief's `action` used to be a CASE on the
+doctrine status alone: 'close the gap' for OUT, 'passes — no action' for IN. On the first production
+morning that said 'close the gap' to Bottle, whose register row said there was nothing to pause (its
+gap is untracked spend and stalled probes — a ruling and a re-judgement, not a move), and 'no action'
+to Fresh and LolliME, which had leaks already written on a pending book. The action is now derived
+from the register's own `sheet_row` counts, in one fixed priority — rebuild a stale leak book >
+upload the pending book > build the next book > by hand (stalled probes) > nothing executable — and
+only when nothing is executable does the status speak, and an OUT family then reads "nothing
+executable today — the gap depends on rulings and re-judging". The detail names every count. C11
+re-derives the action from the image's rows. **Like with like (C12):** the Weekly Run detail set the
+SEATS' cost alone against the allowance — a part against a whole, reading as a pass while the side
+was over — and now sets the whole 20% side against it before naming the parts. **UNMAPPED is a
+status** the register emits as a bare literal on its unmapped block, not from its CASE; the file
+checker now reads bare `'X' AS doctrine_status` literals as well as CASE arms, failed on it, and
+both surfaces' CASEs name it.
+
 **The brief's SEATS section** (`section_rank` 6, appended — the five older sections keep their
 numbers and their order). One line per working family, in the brief's uniform row shape:
 `campaign_name` is the family, `from_value` what the 20% side COSTS, `to_value` what it is ALLOWED
@@ -1360,7 +1494,7 @@ family as a `REFERENCE` row rather than a `FAMILY` row, so filtering on `row_typ
 the house rule that a launch family is never judged on profit.
 
 **Nothing may render blank.** Every label CASE names every `doctrine_status` the register can emit
-— `IN`, `AT_LINE`, `OUT`, `NO_SPEND`, `REFERENCE` — and its fall-through is a sentence, not a
+— `IN`, `AT_LINE`, `OUT`, `NO_SPEND`, `REFERENCE`, and the bare `UNMAPPED` literal — and its fall-through is a sentence, not a
 value. Every `FORMAT` argument is `COALESCE`d, because `CONCAT` with one NULL argument returns NULL
 and an empty line is worse than a wrong one. The same pass closed the one real fall-through already
 in the house: `V_RUN_SUMMARY`'s UNCHANGED arm ended in `ELSE LOWER(state)`, which is NULL for a row

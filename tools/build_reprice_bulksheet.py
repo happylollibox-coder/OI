@@ -96,6 +96,23 @@ from build_stop_nonconverting_bulksheet import (  # noqa: E402
 
 PROJECT = "onyga-482313"
 
+# THE CHANGE LOG, and the one rule every statement against it obeys (2026-08-23 cleanup): a label
+# is written on PENDING_UPLOAD rows only, and a row is never deleted. NULL upload_status is the
+# APPLIED state — V_PPC_CHANGE_LOG_APPLIED selects it and --mark-uploaded writes it — so the old
+# `IS NULL OR PENDING_UPLOAD` clause could silently un-apply a batch Ori really uploaded. The live
+# proof runs against a TMP_ copy named with --change-log-table; any override must be a TMP_/TEMP_
+# copy. Shared shape with tools/build_seat_moves_bulksheet.py (tools/tests/test_change_log_discipline.py).
+LIVE_CHANGE_LOG = "FACT_PPC_CHANGE_LOG"
+CHANGE_LOG = f"{PROJECT}.OI.{LIVE_CHANGE_LOG}"
+
+
+def set_change_log_table(table):
+    global CHANGE_LOG
+    assert table == LIVE_CHANGE_LOG or table.startswith(('TMP_', 'TEMP_')), \
+        f"{table}: a change-log override must be a TMP_/TEMP_ copy — never another live table"
+    CHANGE_LOG = f"{PROJECT}.OI.{table}"
+    return CHANGE_LOG
+
 # Declared constants, each derived from a house instrument (Standing Rule 0 exempt):
 #   MATERIAL_STEP   one daily ease step, the engine's smallest standing move (dark ease -5%/day;
 #                   the same 5% the state ladder uses for "materially above affordable").
@@ -659,41 +676,72 @@ def q(s):
     return "'" + str(s).replace('\\', '\\\\').replace("'", "\\'") + "'" if s not in (None, '') else 'NULL'
 
 
+def prior_unmarked_sql():
+    """Earlier reprice books still waiting on Ori: PENDING_UPLOAD and nothing else. A batch at
+    NULL is APPLIED — the scorecard grades it and the state machine reads it — and is never
+    listed as waiting: listing it was how the listing ate its own tail and invited a --supersede
+    on a book Ori had uploaded."""
+    return (f"SELECT batch_id, upload_status, COUNT(*) n, MIN(applied_at) first_at "
+            f"FROM `{CHANGE_LOG}` "
+            f"WHERE batch_id LIKE 'reprice_book_%' "
+            f"AND upload_status = 'PENDING_UPLOAD' "
+            f"GROUP BY 1, 2 ORDER BY 4")
+
+
 def prior_unmarked_batches():
-    """Earlier reprice batches still carrying upload_status NULL (the scorecard grades them) or
-    PENDING_UPLOAD (still waiting on Ori). Printed every run; labelled only by an explicit
-    --supersede."""
-    return bq(f"SELECT batch_id, upload_status, COUNT(*) n, MIN(applied_at) first_at "
-              f"FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
-              f"WHERE batch_id LIKE 'reprice_book_%' "
-              f"AND (upload_status IS NULL OR upload_status = 'PENDING_UPLOAD') "
-              f"GROUP BY 1, 2 ORDER BY 4")
+    return bq(prior_unmarked_sql())
+
+
+def pending_count_sql(bid):
+    return (f"SELECT COUNT(*) n FROM `{CHANGE_LOG}` "
+            f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
+
+
+def supersede_sql(bid, note):
+    """Label ONE never-uploaded batch. PENDING_UPLOAD only: an applied batch (NULL) is untouched,
+    a FAILED_UPLOAD row is untouched, an already-labelled row is untouched."""
+    return (f"UPDATE `{CHANGE_LOG}` SET upload_status = 'SUPERSEDED_NEVER_UPLOADED', "
+            f"upload_note = {q(note)} WHERE batch_id = {q(bid)} "
+            f"AND upload_status = 'PENDING_UPLOAD'")
+
+
+def mark_uploaded_sql(bid, note):
+    return (f"UPDATE `{CHANGE_LOG}` SET upload_status = NULL, "
+            f"upload_note = CONCAT(COALESCE(upload_note, ''), {q(note)}) "
+            f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
+
+
+def run_update(sql, what):
+    out = subprocess.run(['bq', 'query', '--use_legacy_sql=false', '--nouse_cache',
+                          f'--project_id={PROJECT}', sql], capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"{what} failed:\n{out.stderr}")
 
 
 def supersede(batch_ids, new_batch):
     for bid in batch_ids:
+        # PENDING_UPLOAD only, counted BEFORE the UPDATE: an applied batch (NULL) has zero
+        # pending rows and stops the build here with a sentence — it is never re-labelled,
+        # because NULL means Amazon has it. A row is never deleted.
+        n_pending = int(bq(pending_count_sql(bid))[0]['n'])
+        if n_pending == 0:
+            sys.exit(f"--supersede {bid}: no PENDING_UPLOAD rows under that id — it is already "
+                     f"applied (uploaded), already labelled, or unknown. Nothing was changed and "
+                     f"no batch was logged: a label is written on PENDING_UPLOAD rows only.")
         note = (f"never uploaded; superseded by {new_batch} "
                 f"({datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}) — labelled by the generator")
-        # v27.107: a book logged since v27.106 sits at PENDING_UPLOAD, not NULL — both are
-        # "never uploaded" and both are labelled; anything else (FAILED_UPLOAD, already
-        # superseded) is left alone.
-        sql = (f"UPDATE `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` SET upload_status = 'SUPERSEDED_NEVER_UPLOADED', "
-               f"upload_note = {q(note)} WHERE batch_id = {q(bid)} "
-               f"AND (upload_status IS NULL OR upload_status = 'PENDING_UPLOAD')")
-        out = subprocess.run(['bq', 'query', '--use_legacy_sql=false', '--nouse_cache',
-                              f'--project_id={PROJECT}', sql], capture_output=True, text=True)
-        if out.returncode != 0:
-            sys.exit(f"supersede failed for {bid}:\n{out.stderr}")
-        left = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` WHERE batch_id = {q(bid)} "
+        run_update(supersede_sql(bid, note), 'supersede')
+        left = bq(f"SELECT COUNT(*) n FROM `{CHANGE_LOG}` WHERE batch_id = {q(bid)} "
                   f"AND upload_status = 'SUPERSEDED_NEVER_UPLOADED'")
-        print(f"  labelled batch {bid} SUPERSEDED_NEVER_UPLOADED — {int(left[0]['n'])} row(s) now carry the label")
-        assert int(left[0]['n']) > 0, f"--supersede {bid}: no rows labelled (unknown id, or already labelled otherwise)"
+        print(f"  labelled batch {bid} SUPERSEDED_NEVER_UPLOADED — {int(left[0]['n'])} row(s) "
+              f"now carry the label ({n_pending} were pending)")
+        assert int(left[0]['n']) >= n_pending, f"--supersede {bid}: fewer rows labelled than were pending"
 
 
 def log_batch(rows, batch_id, readme_path):
     """F4: log EXACTLY the executable rows, one batch, unique id, non-NULL new_bid on every bid
     row, an upload_note; read the count back and assert it equals the sheet."""
-    exists = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` WHERE batch_id = {q(batch_id)}")
+    exists = bq(f"SELECT COUNT(*) n FROM `{CHANGE_LOG}` WHERE batch_id = {q(batch_id)}")
     assert int(exists[0]['n']) == 0, f"batch id {batch_id} already exists in the change log"
     note = (f"reprice book {batch_id}, built {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}; "
             f"README {os.path.basename(readme_path)}; manual upload pending — if this book is not "
@@ -730,7 +778,7 @@ def log_batch(rows, batch_id, readme_path):
     cols = ("change_id, batch_id, applied_at, action, targeting, keyword_id, match_type, "
             "campaign_id, campaign_name, campaign_type, ad_group_id, old_bid, new_bid, source, "
             "coach_mode, upload_note, upload_status")
-    sql = (f"INSERT INTO `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` ({cols}) "
+    sql = (f"INSERT INTO `{CHANGE_LOG}` ({cols}) "
            f"SELECT {cols} FROM UNNEST([{', '.join(structs)}])")
     out = subprocess.run(
         ['bq', 'query', '--use_legacy_sql=false', '--nouse_cache', f'--project_id={PROJECT}', sql],
@@ -738,7 +786,7 @@ def log_batch(rows, batch_id, readme_path):
     if out.returncode != 0:
         sys.exit(f"change-log insert failed:\n{out.stderr}")
     back = bq(f"SELECT COUNT(*) n, COUNTIF(action <> 'KEYWORD_PAUSE' AND new_bid IS NULL) null_bids "
-              f"FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` WHERE batch_id = {q(batch_id)}")
+              f"FROM `{CHANGE_LOG}` WHERE batch_id = {q(batch_id)}")
     n_logged, null_bids = int(back[0]['n']), int(back[0]['null_bids'])
     assert n_logged == len(rows), f"logged {n_logged} rows but the sheet holds {len(rows)}"
     assert null_bids == 0, f"{null_bids} bid rows logged with NULL new_bid"
@@ -756,26 +804,24 @@ def main():
                     help='Ori has uploaded this batch: flip its rows from PENDING_UPLOAD to applied '
                          '(NULL) so the scorecard grades them and the state machine sees them. '
                          'Builds nothing.')
+    ap.add_argument('--change-log-table', default=LIVE_CHANGE_LOG, metavar='TABLE',
+                    help='a TMP_/TEMP_ copy of FACT_PPC_CHANGE_LOG to act on instead of the live '
+                         'log — the instrument that proves --supersede / --mark-uploaded leave an '
+                         'applied batch alone. Any other name is refused.')
     args = ap.parse_args()
+    if args.change_log_table != LIVE_CHANGE_LOG:
+        print(f"CHANGE LOG OVERRIDE: every statement acts on {set_change_log_table(args.change_log_table)}")
 
     if args.mark_uploaded:
         # v27.106: the only way a book becomes "applied" is Ori saying so. Flipping the status is
         # the upload confirmation; rows deleted from the sheet before upload should be set
         # FAILED_UPLOAD by hand afterwards, per the README.
         bid = args.mark_uploaded
-        pending = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
-                     f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
-        n = int(pending[0]['n'])
+        n = int(bq(pending_count_sql(bid))[0]['n'])
         if n == 0:
             sys.exit(f"{bid}: no PENDING_UPLOAD rows — nothing to mark (already applied, superseded, or unknown id)")
         note = f" | marked uploaded by Ori {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}"
-        sql = (f"UPDATE `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` SET upload_status = NULL, "
-               f"upload_note = CONCAT(COALESCE(upload_note, ''), {q(note)}) "
-               f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
-        out = subprocess.run(['bq', 'query', '--use_legacy_sql=false', '--nouse_cache',
-                              f'--project_id={PROJECT}', sql], capture_output=True, text=True)
-        if out.returncode != 0:
-            sys.exit(f"mark-uploaded failed:\n{out.stderr}")
+        run_update(mark_uploaded_sql(bid, note), 'mark-uploaded')
         print(f"{bid}: {n} row(s) now applied. The next SP_SNAPSHOT_KEYWORD_STATE run will read them.")
         return
 
@@ -1060,16 +1106,16 @@ def main():
     # ---- change log -----------------------------------------------------------------
     prior = prior_unmarked_batches()
     if prior:
-        print("\nEarlier reprice batches not yet uploaded or labelled (NULL = the scorecard grades them; PENDING_UPLOAD = waiting on Ori):")
+        print("\nEarlier reprice batches still PENDING_UPLOAD (waiting on Ori; an applied batch is never listed here):")
         for p in prior:
-            print(f"  {p['batch_id']}  {p['n']} rows  {p['upload_status'] or 'NULL (graded)'}  first {p['first_at']}")
+            print(f"  {p['batch_id']}  {p['n']} rows  {p['upload_status']}  first {p['first_at']}")
     logged = ''
     if executable and not args.no_log:
         if args.supersede:
             supersede(args.supersede, batch_id)
         n_logged = log_batch(executable, batch_id, readme_path)
         logged = batch_id
-        print(f"\nLogged {n_logged} rows to FACT_PPC_CHANGE_LOG as batch {logged} — read back and "
+        print(f"\nLogged {n_logged} rows to {CHANGE_LOG.split('.')[-1]} as batch {logged} — read back and "
               f"asserted equal to the {len(executable)} sheet rows "
               f"(label SUPERSEDED_NEVER_UPLOADED if the book is not uploaded).")
 

@@ -99,8 +99,17 @@
 -- row prints the ads window it was measured on and the keyword snapshot it came from, so a reader
 -- who built a book since the last pass can see that this line has not seen it yet.
 --
--- THE LABEL CASE LEARNS EVERY STATUS THE REGISTER CAN EMIT — IN, AT_LINE, OUT, NO_SPEND and
--- REFERENCE — and its fall-through says so in words instead of returning NULL. Nothing here may
+-- THE ACTION IS DERIVED FROM WHAT IS EXECUTABLE (v27.124, 2026-08-23), never from the doctrine
+-- status alone: the register publishes sheet_row on every SEAT and LEAK row, and this section
+-- counts those — a stale leak book to rebuild, a pending book to upload, rows for the next book,
+-- stalled probes by hand — in that priority. Only when nothing is executable does the status
+-- speak, and an OUT family then reads 'nothing executable today', because its gap may depend on
+-- a ruling (untracked spend) or a re-judgement, not on a move. Asserted by C11.
+--
+-- THE LABEL CASE LEARNS EVERY STATUS THE REGISTER CAN EMIT — IN, AT_LINE, OUT, NO_SPEND,
+-- REFERENCE and the bare UNMAPPED literal the unmapped block selects (the file checker reads
+-- bare literals as well as CASE arms since 2026-08-23) — and its fall-through says so in words
+-- instead of returning NULL. Nothing here may
 -- render blank: every FORMAT argument is COALESCEd, because CONCAT with one NULL argument returns
 -- NULL and would publish an empty line rather than a wrong one, which is worse. The acceptance
 -- suite (scripts/bigquery/tests/SEAT_SURFACE_acceptance.sql, C04) asserts no row is blank and no
@@ -321,7 +330,19 @@ seat_counts AS (
   SELECT family,
          COUNTIF(row_type = 'SEAT' AND side = '20') AS n_seats,
          COUNTIF(row_type = 'LEAK')                 AS n_leaks,
-         COUNTIF(row_type = 'GAP')                  AS n_gaps
+         COUNTIF(row_type = 'GAP')                  AS n_gaps,
+         -- WHAT IS EXECUTABLE TODAY (v27.124, 2026-08-23): counted from the register's own
+         -- per-row sheet_row, never inferred from the doctrine status. A family can be OUT with
+         -- nothing to pause (Bottle: its gap is untracked spend and stalled probes) and IN with a
+         -- pending book waiting (Fresh, LolliME: leaks already written on a pending leak book) —
+         -- the action column used to say 'close the gap' to the first and 'no action' to the
+         -- second, each the opposite of what the register's rows said.
+         COUNTIF(sheet_row = 'REBUILD_LEAK_BOOK')                        AS n_rebuild,
+         COUNTIF(sheet_row = 'PENDING_BOOK')                             AS n_pending,
+         STRING_AGG(DISTINCT IF(sheet_row = 'PENDING_BOOK', book_batch_id, NULL), ', '
+                    ORDER BY IF(sheet_row = 'PENDING_BOOK', book_batch_id, NULL)) AS pending_books,
+         COUNTIF(sheet_row IN ('NEXT_LEAK_BOOK', 'NEXT_REPRICE_BOOK'))  AS n_next,
+         COUNTIF(sheet_row = 'BY_HAND')                                  AS n_hand
   FROM seat_reg GROUP BY 1
 ),
 -- One row per WORKING family. A launch family is published by the register as a REFERENCE row, not
@@ -330,7 +351,12 @@ seat_counts AS (
 seat_family AS (
   SELECT f.*, COALESCE(c.n_seats, 0) AS n_seats,
               COALESCE(c.n_leaks, 0) AS n_leaks,
-              COALESCE(c.n_gaps,  0) AS n_gaps
+              COALESCE(c.n_gaps,  0) AS n_gaps,
+              COALESCE(c.n_rebuild, 0) AS n_rebuild,
+              COALESCE(c.n_pending, 0) AS n_pending,
+              c.pending_books,
+              COALESCE(c.n_next, 0) AS n_next,
+              COALESCE(c.n_hand, 0) AS n_hand
   FROM seat_reg f LEFT JOIN seat_counts c ON c.family = f.family
   WHERE f.row_type = 'FAMILY' AND f.horizon = 'today'
 ),
@@ -343,13 +369,32 @@ seats AS (
            s.n_seats, IF(s.n_seats = 1, '', 's'),
            s.n_leaks, IF(s.n_leaks = 1, '', 's'),
            s.n_gaps) AS item,
-    CASE s.doctrine_status
-      WHEN 'IN'        THEN 'passes — no action'
-      WHEN 'AT_LINE'   THEN 'at the line — watch'
-      WHEN 'OUT'       THEN 'close the gap'
-      WHEN 'NO_SPEND'  THEN 'no judged spend — nothing to read'
-      WHEN 'REFERENCE' THEN 'reference only — never judged on profit'
-      ELSE 'a doctrine status this brief has not learned — read the register'
+    -- THE ACTION IS WHAT IS EXECUTABLE, in one fixed priority: a stale leak book is rebuilt
+    -- before anything else is uploaded; a pending book is uploaded (or labelled) before the next
+    -- one is built; a by-hand move (a stalled probe) is named when no sheet carries anything;
+    -- and only when nothing is executable does the doctrine status speak — and then it says
+    -- 'nothing executable', never 'close the gap' (the gap may depend on rulings, not moves).
+    CASE WHEN s.n_rebuild > 0 THEN
+           FORMAT('rebuild the leak book — %d leak%s wait on it (tools/build_seat_moves_bulksheet.py --replaces)', s.n_rebuild, IF(s.n_rebuild = 1, '', 's'))
+         WHEN s.n_pending > 0 THEN
+           FORMAT('upload the pending book%s %s — %d row%s wait on %s (or label %s never-uploaded)',
+                  IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 's', ''), COALESCE(s.pending_books, '?'),
+                  s.n_pending, IF(s.n_pending = 1, '', 's'),
+                  IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 'them', 'it'),
+                  IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 'them', 'it'))
+         WHEN s.n_next > 0 THEN
+           FORMAT('build the next book — %d row%s wait on it', s.n_next, IF(s.n_next = 1, '', 's'))
+         WHEN s.n_hand > 0 THEN
+           FORMAT('by hand — %d stalled probe%s to re-price or park', s.n_hand, IF(s.n_hand = 1, '', 's'))
+         ELSE CASE s.doctrine_status
+           WHEN 'IN'        THEN 'passes — nothing executable today'
+           WHEN 'AT_LINE'   THEN 'at the line — nothing executable today'
+           WHEN 'OUT'       THEN 'nothing executable today — the gap depends on rulings and re-judging; read the register'
+           WHEN 'NO_SPEND'  THEN 'no judged spend — nothing to read'
+           WHEN 'REFERENCE' THEN 'reference only — never judged on profit'
+           WHEN 'UNMAPPED'  THEN 'unmapped spend — map the campaign to its family in Admin'
+           ELSE 'a doctrine status this brief has not learned — read the register'
+         END
     END AS action,
     -- from → to is the honest pair here: what the 20% side COSTS today, against what it is
     -- ALLOWED to cost. No bid and no budget is proposed by this section.
@@ -367,6 +412,7 @@ seats AS (
                               100 * COALESCE(s.good_share, 0))
         WHEN 'NO_SPEND' THEN 'spent nothing the doctrine judges on this window, so there is no ratio to read.'
         WHEN 'REFERENCE' THEN 'is a launch family and is never judged on profit.'
+        WHEN 'UNMAPPED' THEN 'is spend no family claims; map the campaign to its family in Admin.'
         ELSE 'carries a doctrine status this brief has not learned; read the register.'
       END,
       FORMAT(' The 20%% side costs $%.2f/day against an allowance of $%.2f/day',
@@ -379,6 +425,14 @@ seats AS (
              s.n_seats, IF(s.n_seats = 1, '', 's'), COALESCE(s.seats_cost_per_day, 0),
              s.n_leaks, IF(s.n_leaks = 1, '', 's'), COALESCE(s.leak_per_day, 0),
              s.n_gaps,  IF(s.n_gaps  = 1, '', 's'), COALESCE(s.gap_per_day, 0)),
+      -- what is executable today, counted from the register's own rows (the action above is the
+      -- first of these in priority; the rest are named here so nothing waits unseen)
+      FORMAT(' Executable today: %d row%s on a pending book%s, %d row%s for the next book, %d stalled probe%s by hand%s.',
+             s.n_pending + s.n_rebuild, IF(s.n_pending + s.n_rebuild = 1, '', 's'),
+             IF(s.n_rebuild > 0, ' that is STALE and must be rebuilt', IF(s.pending_books IS NULL, '', CONCAT(' (', s.pending_books, ')'))),
+             s.n_next, IF(s.n_next = 1, '', 's'),
+             s.n_hand, IF(s.n_hand = 1, '', 's'),
+             IF(s.n_pending + s.n_rebuild + s.n_next + s.n_hand = 0, ' — nothing executable today', '')),
       -- the two dates that let a reader tell whether this line has seen what he did yesterday
       FORMAT(' Measured on the %d complete ads days to %s, from the keyword snapshot of %s.',
              DATE_DIFF(s.ads_basis_to, s.ads_basis_from, DAY) + 1,

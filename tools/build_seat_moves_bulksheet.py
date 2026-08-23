@@ -119,6 +119,23 @@ PROJECT = "onyga-482313"
 LIVE_REGISTER = "V_FAMILY_SEAT_REGISTER"
 LIVE_NEGATES = "T_WEEKLY_RUN_NEGATIVE"
 
+# THE CHANGE LOG, and the one rule every statement against it obeys (2026-08-23 cleanup):
+# a label is written on PENDING_UPLOAD rows only, and a row is never deleted. NULL upload_status
+# is the APPLIED state — V_PPC_CHANGE_LOG_APPLIED selects it and --mark-uploaded writes it — so a
+# statement that also matched NULL could silently un-apply a batch Ori really uploaded. The live
+# proof runs against a TMP_ copy named with --change-log-table; any override must be a TMP_/TEMP_
+# copy, so a test can never be aimed at the production log by a typo.
+LIVE_CHANGE_LOG = "FACT_PPC_CHANGE_LOG"
+CHANGE_LOG = f"{PROJECT}.OI.{LIVE_CHANGE_LOG}"
+
+
+def set_change_log_table(table):
+    global CHANGE_LOG
+    assert table == LIVE_CHANGE_LOG or table.startswith(('TMP_', 'TEMP_')), \
+        f"{table}: a change-log override must be a TMP_/TEMP_ copy — never another live table"
+    CHANGE_LOG = f"{PROJECT}.OI.{table}"
+    return CHANGE_LOG
+
 # dispositions
 PAUSE = 'PAUSE'
 NEGATE_KEYWORD = 'NEGATE_KEYWORD'
@@ -725,8 +742,13 @@ def write_readme(readme_path, out_name, batch_id, watermark, today_la, no_log, r
         f.write(f"**The week these dollars are measured on: {window}.** The watermark above is "
                 f"the register's ANCHOR — the last complete ads day (the current Los Angeles day "
                 f"only counts once it is past 22:00 there) — and the basis window ends the day "
-                f"BEFORE it. Every figure in this file and every cost_per_day the register "
-                f"publishes are that same week.{corrected}\n\n")
+                f"BEFORE it. Every figure in this file is measured on that week — the book's OWN "
+                f"window, fixed the moment it was built. The register is not frozen: it re-anchors "
+                f"every day (LEAST(MAX(date), FN_ADS_ANCHOR_CAP())), so from the next complete ads "
+                f"day its cost_per_day is a different week from this file's, and a dollar here "
+                f"that no longer matches the register is the window moving, not an error. Compare "
+                f"a row against the register of {today_la} only; the audit CSV carries the window "
+                f"on every row.{corrected}\n\n")
         n_noact = len(leak_rows) - len(pauses)
         f.write(f"**{len(pauses)} pause row(s)** covering ${paused_spend:.2f}/day of spend on the "
                 f"7-day basis window, and **{len(negates)} negative(s)**. "
@@ -762,7 +784,12 @@ def write_readme(readme_path, out_name, batch_id, watermark, today_la, no_log, r
                 f"file with `--supersede {batch_id}` — it labels and stops, building nothing, and "
                 f"a log row is never deleted. If you delete a line before uploading, label that "
                 f"row `FAILED_UPLOAD`. When you have uploaded it, run this file with "
-                f"`--mark-uploaded {batch_id}`.\n\n")
+                f"`--mark-uploaded {batch_id}`. **One leak book at a time.** If the register "
+                f"shows a leak this book does not carry (it says the book is STALE and every leak "
+                f"row reads 'rebuild the leak book'), do not upload this file: run this generator "
+                f"with `--replaces {batch_id}` — it logs ONE new book carrying every leak and "
+                f"labels this batch as replaced by it. A label is only ever written on "
+                f"PENDING_UPLOAD rows; a batch you have marked uploaded is never touched.\n\n")
         f.write("---\n\n## Pauses — row by row\n\n")
         for x in leak_rows:
             if x['disp'] != PAUSE:
@@ -867,11 +894,58 @@ def bq(sql):
     return json.loads(out.stdout or '[]')
 
 
+def prior_unmarked_sql():
+    """Earlier leak books still waiting on Ori: PENDING_UPLOAD and nothing else. A batch at NULL
+    is APPLIED (Ori said so with --mark-uploaded) and is never listed as waiting — listing it was
+    how the listing ate its own tail and invited a --supersede on an uploaded book."""
+    return (f"SELECT batch_id, upload_status, COUNT(*) n, MIN(applied_at) first_at "
+            f"FROM `{CHANGE_LOG}` WHERE batch_id LIKE 'seat_moves_%' "
+            f"AND upload_status = 'PENDING_UPLOAD' "
+            f"GROUP BY 1, 2 ORDER BY 4")
+
+
 def prior_unmarked_batches():
-    return bq(f"SELECT batch_id, upload_status, COUNT(*) n, MIN(applied_at) first_at "
-              f"FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` WHERE batch_id LIKE 'seat_moves_%' "
-              f"AND (upload_status IS NULL OR upload_status = 'PENDING_UPLOAD') "
-              f"GROUP BY 1, 2 ORDER BY 4")
+    return bq(prior_unmarked_sql())
+
+
+def pending_count_sql(bid):
+    return (f"SELECT COUNT(*) n FROM `{CHANGE_LOG}` "
+            f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
+
+
+def supersede_sql(bid, note):
+    """Label ONE never-uploaded batch. PENDING_UPLOAD only: an applied batch (NULL) is untouched,
+    a FAILED_UPLOAD row is untouched, an already-labelled row is untouched."""
+    return (f"UPDATE `{CHANGE_LOG}` SET upload_status = 'SUPERSEDED_NEVER_UPLOADED', "
+            f"upload_note = {q(note)} WHERE batch_id = {q(bid)} "
+            f"AND upload_status = 'PENDING_UPLOAD'")
+
+
+def mark_uploaded_sql(bid, note):
+    return (f"UPDATE `{CHANGE_LOG}` SET upload_status = NULL, "
+            f"upload_note = CONCAT(COALESCE(upload_note, ''), {q(note)}) "
+            f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
+
+
+def refuse_second_pending_book(prior, replaces):
+    """A build may not log a second PENDING leak book beside one already waiting: the register
+    credits a keyword's pause per pending row, so two books would hand Ori two sheets for one
+    pause and the projections a double credit. The build proceeds only when it names every
+    pending book it replaces (--replaces), and it may not name a book that is not pending —
+    nothing is labelled blind."""
+    pending = {p['batch_id'] for p in prior if p.get('upload_status') == 'PENDING_UPLOAD'}
+    named = set(replaces or [])
+    unnamed = sorted(pending - named)
+    not_pending = sorted(named - pending)
+    if unnamed:
+        sys.exit(f"a leak book is already PENDING_UPLOAD: {', '.join(unnamed)}. Either upload it "
+                 f"(then --mark-uploaded), label it (--supersede), or rebuild with "
+                 f"--replaces {' '.join(unnamed)} so ONE book carries every leak and the old one "
+                 f"is labelled as replaced by it. Nothing was built or logged.")
+    if not_pending:
+        sys.exit(f"--replaces {', '.join(not_pending)}: no PENDING_UPLOAD rows under that id "
+                 f"(already applied, already labelled, or unknown) — nothing is labelled blind. "
+                 f"Nothing was built or logged.")
 
 
 def run_update(sql, what):
@@ -899,22 +973,28 @@ def supersede(batch_ids, new_batch=None):
     exactly one mechanism — the tail of a build that logged a NEW batch — so obeying the second
     half of the instruction meant building another book, which the same sentence forbids."""
     for bid in batch_ids:
+        # PENDING_UPLOAD only, counted BEFORE the UPDATE: an applied batch (NULL) has zero pending
+        # rows and stops here with a sentence — it is never re-labelled, because NULL means Amazon
+        # has it (V_PPC_CHANGE_LOG_APPLIED). A row is never deleted.
+        n_pending = int(bq(pending_count_sql(bid))[0]['n'])
+        if n_pending == 0:
+            sys.exit(f"--supersede {bid}: no PENDING_UPLOAD rows under that id — it is already "
+                     f"applied (uploaded), already labelled, or unknown. Nothing was changed: a "
+                     f"label is written on PENDING_UPLOAD rows only.")
         note = supersede_note(new_batch)
-        run_update(
-            f"UPDATE `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` SET upload_status = 'SUPERSEDED_NEVER_UPLOADED', "
-            f"upload_note = {q(note)} WHERE batch_id = {q(bid)} "
-            f"AND (upload_status IS NULL OR upload_status = 'PENDING_UPLOAD')", 'supersede')
-        left = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
+        run_update(supersede_sql(bid, note), 'supersede')
+        left = bq(f"SELECT COUNT(*) n FROM `{CHANGE_LOG}` "
                   f"WHERE batch_id = {q(bid)} AND upload_status = 'SUPERSEDED_NEVER_UPLOADED'")
-        print(f"  labelled batch {bid} SUPERSEDED_NEVER_UPLOADED — {int(left[0]['n'])} row(s)")
-        assert int(left[0]['n']) > 0, f"--supersede {bid}: no rows labelled"
+        print(f"  labelled batch {bid} SUPERSEDED_NEVER_UPLOADED — {int(left[0]['n'])} row(s) "
+              f"({n_pending} were pending)")
+        assert int(left[0]['n']) >= n_pending, f"--supersede {bid}: fewer rows labelled than were pending"
 
 
 def log_batch(rows, batch_id, readme_path):
     """Log EXACTLY the executable rows, one batch, unique id, an upload note; read the count back
     and assert it equals the sheet. A pause carries the old bid it had when it was switched off;
     a negative carries no bid at all — it is not a bid change, and NULL is the honest value."""
-    exists = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
+    exists = bq(f"SELECT COUNT(*) n FROM `{CHANGE_LOG}` "
                 f"WHERE batch_id = {q(batch_id)}")
     assert int(exists[0]['n']) == 0, f"batch id {batch_id} already exists in the change log"
     note = (f"leak book {batch_id}, built {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}; "
@@ -946,9 +1026,9 @@ def log_batch(rows, batch_id, readme_path):
     cols = ("change_id, batch_id, applied_at, action, targeting, keyword_id, match_type, "
             "campaign_id, campaign_name, campaign_type, ad_group_id, old_bid, new_bid, source, "
             "coach_mode, upload_note, upload_status")
-    run_update(f"INSERT INTO `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` ({cols}) "
+    run_update(f"INSERT INTO `{CHANGE_LOG}` ({cols}) "
                f"SELECT {cols} FROM UNNEST([{', '.join(structs)}])", 'change-log insert')
-    back = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
+    back = bq(f"SELECT COUNT(*) n FROM `{CHANGE_LOG}` "
               f"WHERE batch_id = {q(batch_id)}")
     n_logged = int(back[0]['n'])
     assert n_logged == len(rows), f"logged {n_logged} rows but the sheet holds {len(rows)}"
@@ -967,6 +1047,15 @@ def build_parser():
     ap.add_argument('--mark-uploaded', metavar='BATCH_ID',
                     help='Ori has uploaded this batch: flip its rows from PENDING_UPLOAD to '
                          'applied (NULL). Builds nothing.')
+    ap.add_argument('--replaces', nargs='+', default=[], metavar='BATCH_ID',
+                    help='build ONE book that carries every leak and label these PENDING leak '
+                         'books SUPERSEDED_NEVER_UPLOADED as replaced by it (the label names the '
+                         'new batch). A build that finds a pending leak book it does not name '
+                         'stops: two pending books would credit one pause twice.')
+    ap.add_argument('--change-log-table', default=LIVE_CHANGE_LOG, metavar='TABLE',
+                    help='a TMP_/TEMP_ copy of FACT_PPC_CHANGE_LOG to act on instead of the live '
+                         'log — the instrument that proves --supersede / --mark-uploaded leave an '
+                         'applied batch alone. Any other name is refused.')
     ap.add_argument('--register-table', default=LIVE_REGISTER,
                     help='TMP_ copy of V_FAMILY_SEAT_REGISTER (proving a branch the day does not '
                          'exercise). Forces --no-log.')
@@ -996,6 +1085,8 @@ def build_parser():
 def main():
     ap = build_parser()
     args = ap.parse_args()
+    if args.change_log_table != LIVE_CHANGE_LOG:
+        print(f"CHANGE LOG OVERRIDE: every statement acts on {set_change_log_table(args.change_log_table)}")
 
     if args.rewrite_readme:
         out = rewrite_readme_from_audit(args.rewrite_readme, batch_id=args.batch,
@@ -1014,16 +1105,12 @@ def main():
 
     if args.mark_uploaded:
         bid = args.mark_uploaded
-        pending = bq(f"SELECT COUNT(*) n FROM `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` "
-                     f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'")
-        n = int(pending[0]['n'])
+        n = int(bq(pending_count_sql(bid))[0]['n'])
         if n == 0:
-            sys.exit(f"{bid}: no PENDING_UPLOAD rows — nothing to mark")
+            sys.exit(f"{bid}: no PENDING_UPLOAD rows — nothing to mark (already applied, "
+                     f"labelled, or unknown id)")
         note = f" | marked uploaded by Ori {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}"
-        run_update(f"UPDATE `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` SET upload_status = NULL, "
-                   f"upload_note = CONCAT(COALESCE(upload_note, ''), {q(note)}) "
-                   f"WHERE batch_id = {q(bid)} AND upload_status = 'PENDING_UPLOAD'",
-                   'mark-uploaded')
+        run_update(mark_uploaded_sql(bid, note), 'mark-uploaded')
         print(f"{bid}: {n} row(s) now applied.")
         return
 
@@ -1195,14 +1282,20 @@ def main():
 
     prior = prior_unmarked_batches()
     if prior:
-        print("\nEarlier leak batches not yet uploaded or labelled:")
+        print("\nEarlier leak batches still PENDING_UPLOAD (waiting on Ori):")
         for p in prior:
-            print(f"  {p['batch_id']}  {p['n']} rows  {p['upload_status'] or 'NULL (graded)'}")
+            print(f"  {p['batch_id']}  {p['n']} rows  {p['upload_status']}")
     logged = ''
     if executable and not args.no_log:
+        # one pending leak book at a time: a second one is logged only as the REPLACEMENT of the
+        # first, and the first is labelled AFTER the new batch is on record so the register never
+        # meets a moment with no pending pause row for a leak it had already credited.
+        refuse_second_pending_book(prior, args.replaces)
         n = log_batch(executable, batch_id, readme_path)
         logged = batch_id
-        print(f"\nLogged {n} rows to FACT_PPC_CHANGE_LOG as batch {logged} (PENDING_UPLOAD).")
+        print(f"\nLogged {n} rows to {CHANGE_LOG.split('.')[-1]} as batch {logged} (PENDING_UPLOAD).")
+        if args.replaces:
+            supersede(args.replaces, new_batch=batch_id)
 
     print(f"\n[{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}] "
           f"wrote {len(executable)} rows -> {args.out}")

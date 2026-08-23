@@ -77,6 +77,9 @@ cube(`SeatRegister`, {
     bookAction:  { sql: `book_action`,   type: `string` },
     bookOldBid:  { sql: `book_old_bid`,  type: `number` },
     bookNewBid:  { sql: `book_new_bid`,  type: `number` },
+    // what a sheet does with this row today (2026-08-23): PENDING_BOOK | NEXT_LEAK_BOOK |
+    // NEXT_REPRICE_BOOK | REBUILD_LEAK_BOOK | BY_HAND | NO_SHEET_ROW | NONE — the brief's action
+    sheetRow:    { sql: `sheet_row`,     type: `string` },
 
     // ── the standing raise behind a stalled probe (rulings R-b / R-c)
     raiseOldBid:      { sql: `raise_old_bid`,     type: `number` },

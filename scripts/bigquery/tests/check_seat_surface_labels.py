@@ -114,7 +114,11 @@ def table_columns():
 
 
 def statuses_the_register_can_emit():
-    """Every literal the register's own doctrine_status CASE can return."""
+    """Every literal the register can publish as doctrine_status: the arms of its CASE, AND every
+    bare literal selected as the column in another branch of the UNION. The UNMAPPED block emits
+    `'UNMAPPED' AS doctrine_status` with no CASE at all, and until 2026-08-23 this function read
+    the CASE only — so a status the register really publishes was invisible to the check that
+    exists to make every consumer learn it."""
     text = open(REGISTER_SQL).read()
     end = text.find("END AS doctrine_status")
     if end < 0:
@@ -126,7 +130,8 @@ def statuses_the_register_can_emit():
     if not found:
         die("found the doctrine_status CASE but no literals in it — refusing to "
             "report a vacuous pass")
-    return sorted(set(found))
+    bare = re.findall(r"'([A-Za-z_]+)'\s+AS\s+doctrine_status", text)
+    return sorted(set(found) | set(bare))
 
 
 def statuses_a_surface_names(path):

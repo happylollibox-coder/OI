@@ -111,3 +111,14 @@ def test_it_flags_the_registry_clause_that_task_3_killed():
                'the family spend to the cent), SEAT (one per occupant…"')
     phrase = 'same rule, opposite answer, because one sheet exists and the other does not'
     assert not _at(shipped, phrase, straight_quotes=False)
+
+
+def test_scan_end_to_end_finds_a_phrase_that_straddles_a_hard_wrap(tmp_path):
+    """The whole instrument, not only collapse(): a retired phrase wrapped across a newline in a
+    Markdown file is reported as an UNQUOTED hit with the line of its first word (2026-08-23,
+    first-production-night cleanup — the grep this replaced missed exactly this)."""
+    f = tmp_path / 'straddle.md'
+    f.write_text("intro line\nthe projection assumes leaks stay\npaused, which is the defect\n")
+    hits = scan(files=[(str(f), True)])
+    unquoted = [h for h in hits if not h[3]]
+    assert unquoted and unquoted[0][1] == 2, hits

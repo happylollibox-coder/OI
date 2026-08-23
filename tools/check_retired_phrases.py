@@ -52,6 +52,9 @@ FILES = [
     ('architecture/FAMILY_SEAT_REGISTER.md', True),
     ('config.yaml', False),
     ('tools/build_seat_moves_bulksheet.py', True),
+    ('tools/build_reprice_bulksheet.py', True),
+    ('scripts/bigquery/views/V_DAILY_BRIEF.sql', True),
+    ('scripts/bigquery/views/V_RUN_SUMMARY.sql', True),
 ]
 
 # (regex, retired on, what replaced it). The regex is matched against the file with ALL runs of
@@ -86,6 +89,17 @@ RETIRED = [
      'the recovered-today figure counts only the pauses the leak book will WRITE (B36)'),
     (r'ads watermark [0-9-]+\)\s*while', '2026-08-23',
      'the book and the register measure one window: LEAST(MAX(date), FN_ADS_ANCHOR_CAP())'),
+    # ── ninth pass, 2026-08-23 (first-production-night cleanup) ──────────────────────────────
+    (r'publishes are that same week', '2026-08-23',
+     'the README states the book\'s OWN window; the register re-anchors daily'),
+    (r'ride the next leak book \(tools', '2026-08-23',
+     'one leak book, one instruction (R-n): a stale book is rebuilt with --replaces, never '
+     'uploaded beside a next book'),
+    (r"upload_status IS NULL OR upload_status = 'PENDING_UPLOAD'", '2026-08-23',
+     'a label is written on PENDING_UPLOAD rows only; NULL is the applied state'),
+    (r"THEN 'passes — no action'", '2026-08-23',
+     'the brief action is derived from what is executable (sheet_row), never the status alone'),
+    (r"THEN 'close the gap'", '2026-08-23', 'same'),
 ]
 
 # how far either side of a match a quotation mark may sit and still be the one enclosing it

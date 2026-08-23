@@ -17,7 +17,9 @@
 --
 -- SEATS is one row per WORKING family: its doctrine status in plain words, the number of numbered
 -- seats its 20% side holds, and the open capacity in $/day (negative when the side is over its
--- allowance). It reads T_FAMILY_SEAT_REGISTER — the same image the SEATS section of V_DAILY_BRIEF
+-- allowance). The detail sets the WHOLE 20% side against the allowance (v27.124: the seats alone
+-- used to be set against it — a part against a whole — and read as a pass while the side was
+-- over) and then names the parts; the label CASE also names the bare UNMAPPED literal. It reads T_FAMILY_SEAT_REGISTER — the same image the SEATS section of V_DAILY_BRIEF
 -- and the SeatRegister cube read, so the three surfaces cannot disagree — and it judges nothing
 -- itself: a launch family is published by the register as a REFERENCE row rather than a FAMILY
 -- row, so filtering on row_type is what keeps the house rule that a launch family is never judged
@@ -109,15 +111,21 @@ seats AS (
         WHEN 'OUT'       THEN 'below the 80/20 line: the 20% side is over its allowance'
         WHEN 'NO_SPEND'  THEN 'no judged spend on this window'
         WHEN 'REFERENCE' THEN 'launch family — never judged on profit'
+        WHEN 'UNMAPPED'  THEN 'unmapped spend — no family claims it; map it in Admin'
         ELSE 'a doctrine status this summary has not learned — read the register'
       END) AS label,
     COALESCE(c.n_seats, 0) AS n,
     -- open capacity: positive is room a new probe could take, negative is the overspend. This is
     -- the register's own column, not a second arithmetic.
     ROUND(f.open_capacity_per_day, 2) AS dollars_per_day,
-    FORMAT('%d numbered seat%s cost $%.2f/day against an allowance of $%.2f/day; %d leak%s ($%.2f/day) and %d untracked keyword%s ($%.2f/day) sit on the same side. Keyword snapshot %s — the seat-by-seat read, and every move, is V_FAMILY_SEAT_REGISTER.',
+    -- LIKE WITH LIKE (v27.124, 2026-08-23): the allowance is for the WHOLE 20% side, so the
+    -- whole side is what is set against it; the seats, leaks and untracked are its parts. The
+    -- earlier wording set the seats' cost alone against the allowance and read as a pass while
+    -- the side was over it.
+    FORMAT('the 20%% side costs $%.2f/day against its allowance of $%.2f/day — %d numbered seat%s ($%.2f/day), %d leak%s ($%.2f/day) and %d untracked keyword%s ($%.2f/day). Keyword snapshot %s — the seat-by-seat read, and every move, is V_FAMILY_SEAT_REGISTER.',
+           COALESCE(f.bad_side_per_day, 0), COALESCE(f.allowance_per_day, 0),
            COALESCE(c.n_seats, 0), IF(COALESCE(c.n_seats, 0) = 1, '', 's'),
-           COALESCE(f.seats_cost_per_day, 0), COALESCE(f.allowance_per_day, 0),
+           COALESCE(f.seats_cost_per_day, 0),
            COALESCE(c.n_leaks, 0), IF(COALESCE(c.n_leaks, 0) = 1, '', 's'), COALESCE(f.leak_per_day, 0),
            COALESCE(c.n_gaps,  0), IF(COALESCE(c.n_gaps,  0) = 1, '', 's'), COALESCE(f.gap_per_day, 0),
            FORMAT_DATE('%b %d', f.as_of)) AS detail
