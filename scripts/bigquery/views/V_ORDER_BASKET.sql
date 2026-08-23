@@ -23,13 +23,14 @@
 --
 -- family_label falls back to 'UNMAPPED:<asin>' whenever parent_name is NULL,
 -- so two different unmapped ASINs never look like the same product bought
--- twice. That fallback is NOT limited to retired products absent from
--- DIM_PRODUCT — it also catches live, catalogued, currently-selling products
--- that ARE present in DIM_PRODUCT but simply have no family assigned there.
--- Confirmed live: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F ("BFF 1") are
--- both active products with is_mapped_product = TRUE and parent_name NULL,
--- so their family_label reads 'UNMAPPED:B0CHJY7XLQ' / 'UNMAPPED:B0CHJZDD3F'
--- despite being fully mapped rows in DIM_PRODUCT.
+-- twice. That fallback covers two distinct situations: ASINs genuinely
+-- absent from DIM_PRODUCT, and ASINs present there with no family assigned.
+-- Example of the second kind: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F
+-- ("BFF 1") are both present in DIM_PRODUCT with parent_name NULL, so their
+-- family_label reads 'UNMAPPED:B0CHJY7XLQ' / 'UNMAPPED:B0CHJZDD3F'. Neither
+-- is a live product: oi_is_active = FALSE (the manually-managed business
+-- truth flag) and no sales since July 2025, even though is_active = TRUE
+-- because Amazon simply hasn't deleted the catalog record.
 --
 -- Spec: architecture/CUSTOMER_ORDER_BASKETS.md
 --

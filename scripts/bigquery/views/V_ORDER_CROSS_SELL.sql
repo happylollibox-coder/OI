@@ -37,10 +37,13 @@
 -- not parent_name directly, because plain NULL = NULL. Two different unmapped
 -- ASINs then correctly compare as different families; two rows for the SAME
 -- unmapped ASIN can't occur here since asin_a < asin_b already prevents a self
--- pair. Confirmed live: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F ("BFF 1")
--- are both ACTIVE, catalogued products in DIM_PRODUCT with no parent_name
--- assigned — not a retired-product gap. both_mapped is a different, stricter
--- test built from two IS NOT NULL checks, and it is never NULL.
+-- pair. 'UNMAPPED:<asin>' covers two distinct situations: ASINs genuinely
+-- absent from DIM_PRODUCT, and ASINs present there with no family assigned.
+-- Example of the second kind: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F
+-- ("BFF 1") are present in DIM_PRODUCT with no parent_name, but neither is
+-- live — oi_is_active = FALSE and no sales since July 2025 — so this is not
+-- the retired-and-absent case. both_mapped is a different, stricter test
+-- built from two IS NOT NULL checks, and it is never NULL.
 --
 -- name_a/name_b/family_a/family_b are looked up live from DIM_PRODUCT at
 -- query time. V_ORDER_BASKET instead reads the copy of these labels frozen

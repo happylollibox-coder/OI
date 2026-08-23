@@ -708,13 +708,14 @@ Create `scripts/bigquery/views/V_ORDER_BASKET.sql`:
 --
 -- family_label falls back to 'UNMAPPED:<asin>' whenever parent_name is NULL,
 -- so two different unmapped ASINs never look like the same product bought
--- twice. That fallback is NOT limited to retired products absent from
--- DIM_PRODUCT — it also catches live, catalogued, currently-selling products
--- that ARE present in DIM_PRODUCT but simply have no family assigned there.
--- Confirmed live: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F ("BFF 1") are
--- both active products with is_mapped_product = TRUE and parent_name NULL,
--- so their family_label reads 'UNMAPPED:B0CHJY7XLQ' / 'UNMAPPED:B0CHJZDD3F'
--- despite being fully mapped rows in DIM_PRODUCT.
+-- twice. That fallback covers two distinct situations: ASINs genuinely
+-- absent from DIM_PRODUCT, and ASINs present there with no family assigned.
+-- Example of the second kind: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F
+-- ("BFF 1") are both present in DIM_PRODUCT with parent_name NULL, so their
+-- family_label reads 'UNMAPPED:B0CHJY7XLQ' / 'UNMAPPED:B0CHJZDD3F'. Neither
+-- is a live product: oi_is_active = FALSE (the manually-managed business
+-- truth flag) and no sales since July 2025, even though is_active = TRUE
+-- because Amazon simply hasn't deleted the catalog record.
 --
 -- Spec: architecture/CUSTOMER_ORDER_BASKETS.md
 --
@@ -871,10 +872,13 @@ Create `scripts/bigquery/views/V_ORDER_CROSS_SELL.sql`:
 -- not parent_name directly, because plain NULL = NULL. Two different unmapped
 -- ASINs then correctly compare as different families; two rows for the SAME
 -- unmapped ASIN can't occur here since asin_a < asin_b already prevents a self
--- pair. Confirmed live: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F ("BFF 1")
--- are both ACTIVE, catalogued products in DIM_PRODUCT with no parent_name
--- assigned — not a retired-product gap. both_mapped is a different, stricter
--- test built from two IS NOT NULL checks, and it is never NULL.
+-- pair. 'UNMAPPED:<asin>' covers two distinct situations: ASINs genuinely
+-- absent from DIM_PRODUCT, and ASINs present there with no family assigned.
+-- Example of the second kind: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F
+-- ("BFF 1") are present in DIM_PRODUCT with no parent_name, but neither is
+-- live — oi_is_active = FALSE and no sales since July 2025 — so this is not
+-- the retired-and-absent case. both_mapped is a different, stricter test
+-- built from two IS NOT NULL checks, and it is never NULL.
 --
 -- name_a/name_b/family_a/family_b are looked up live from DIM_PRODUCT at
 -- query time. V_ORDER_BASKET instead reads the copy of these labels frozen
