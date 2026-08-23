@@ -9,20 +9,46 @@
 -- AFTER a pass against the ledger BEFORE it, and it is the file to run whenever the question is
 -- "did last night's pass keep the numbers".
 --
--- HOW TO RUN IT (the TMP_ recipe — house rule: synthetic rows only on TMP_ copies, never in a
--- production table; drop the copies afterwards):
---   1. TMP_FSR_STATE  = FACT_KEYWORD_STATE with snapshot_date advanced one day (plus whatever
+-- THE THREE IMAGES IT READS. This file NEVER reads a live table. It reads three copies the
+-- operator makes, so that the BEFORE image can never silently be the same image as the AFTER one:
+--   TMP_FSR_LEDGER_BEFORE  the ledger as it stood BEFORE the pass (or replay) under test
+--   TMP_FSR_LEDGER_AFTER   the ledger as it stands AFTER it
+--   TMP_FSR_STATE          the keyword snapshot the AFTER ledger was maintained against
+-- If any copy is missing the query ERRORS on the table name. That is deliberate: an earlier
+-- version read the BEFORE image from the LIVE ledger, which means that once a real pass has
+-- written the live table, BEFORE and AFTER are the same image and D01 compares the table to
+-- itself and reports PASS having tested nothing. D00 below now catches that case by name.
+--
+-- HOW TO RUN IT AFTER A REAL PASS (house rule: copies only, dropped afterwards):
+--   BEFORE the pass runs (this is the step there is no second chance at — the ledger has no
+--   archive, so once the pass overwrites it the BEFORE image is gone):
+--     CREATE OR REPLACE TABLE `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE` AS
+--       SELECT * FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`;
+--   AFTER it finishes:
+--     CREATE OR REPLACE TABLE `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` AS
+--       SELECT * FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`;
+--     CREATE OR REPLACE TABLE `onyga-482313.OI.TMP_FSR_STATE` AS
+--       SELECT * FROM `onyga-482313.OI.FACT_KEYWORD_STATE`;
+--   Then run this file; every row must read PASS. Then DROP the three copies.
+--
+-- HOW TO RUN IT AS A REPLAY, when there is no pass to wait for (the TMP_ recipe — house rule:
+-- synthetic rows only on TMP_ copies, never in a production table):
+--   1. TMP_FSR_LEDGER_BEFORE = a copy of DE_FAMILY_SEAT_LEDGER (the BEFORE image).
+--   2. TMP_FSR_STATE  = FACT_KEYWORD_STATE with snapshot_date advanced one day (plus whatever
 --                       departures and arrivals the case under test needs).
---   2. TMP_FSR_LEDGER = a copy of DE_FAMILY_SEAT_LEDGER (this is the BEFORE image; the live
---                       table stays the BEFORE reference the checks below read).
---   3. TMP_SP_FSR_SEATS = SP_MAINTAIN_FAMILY_SEATS with the two table names swapped for the
---                       TMP_ pair, then CALL it.
---   4. Run this file. Every row must read PASS.
---   5. DROP the TMP_ objects.
--- After a REAL pass the same checks run with `before` pointed at an archive of the ledger; there
--- is no archive today (a Task 5 health-check item), which is why the TMP_ pair is the harness.
+--   3. TMP_FSR_LEDGER_AFTER = a second copy of DE_FAMILY_SEAT_LEDGER — the procedure writes it.
+--   4. TMP_SP_FSR_SEATS = SP_MAINTAIN_FAMILY_SEATS with its two table names swapped for
+--                       TMP_FSR_STATE and TMP_FSR_LEDGER_AFTER, then CALL it.
+--   5. Run this file. Every row must read PASS.
+--   6. DROP the TMP_ objects.
 --
 -- Checks:
+--   D00 THE TWO IMAGES ARE DIFFERENT IMAGES. If the BEFORE and AFTER copies are byte-identical,
+--       every check below is comparing a table to itself: D01 asserts nothing and the closure and
+--       reuse checks run on an empty set. The row then reads VACUOUS, not PASS. Two innocent
+--       causes: the pass genuinely changed nothing (confirm in LOG_PIPELINE_RUNS), or the BEFORE
+--       copy was taken after the pass instead of before it — in which case the run proves nothing
+--       and must be repeated at the next pass.
 --   D01 (a) STABILITY — every keyword that is seated in BOTH images kept its seat number. A
 --       continuing occupant's number is never touched, whatever its kind became.
 --   D02 (b) PLAIN WORDS — every closed row carries closed_reason_text, and the text is exactly
@@ -44,10 +70,19 @@
 WITH
 run_day AS (SELECT MAX(snapshot_date) AS d FROM `onyga-482313.OI.TMP_FSR_STATE`),
 before AS (SELECT family, campaign_id, keyword_id, seat_no
-           FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL),
+           FROM `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE` WHERE closed_on IS NULL),
 after_open AS (SELECT family, campaign_id, keyword_id, seat_no, opened_on
-               FROM `onyga-482313.OI.TMP_FSR_LEDGER` WHERE closed_on IS NULL),
-after_closed AS (SELECT * FROM `onyga-482313.OI.TMP_FSR_LEDGER` WHERE closed_on IS NOT NULL),
+               FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` WHERE closed_on IS NULL),
+after_closed AS (SELECT * FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` WHERE closed_on IS NOT NULL),
+-- the same image, taken twice, is not a before-and-after pair (D00)
+fp AS (
+  SELECT
+    (SELECT FARM_FINGERPRINT(STRING_AGG(TO_JSON_STRING(t), '|'
+              ORDER BY family, campaign_id, keyword_id, opened_on))
+     FROM `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE` t) AS fp_before,
+    (SELECT FARM_FINGERPRINT(STRING_AGG(TO_JSON_STRING(t), '|'
+              ORDER BY family, campaign_id, keyword_id, opened_on))
+     FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` t) AS fp_after),
 -- the sentences the SOP and SP_MAINTAIN_FAMILY_SEATS both carry, verbatim
 sop AS (SELECT * FROM UNNEST([
   STRUCT('KILLED' AS code, 'The keyword is gone from the snapshot after its last verdict was failed or dead, or the ladder now reads dead: the book paused a failed keyword. The seat is free.' AS txt),
@@ -68,9 +103,11 @@ fam_free AS (
   LEFT JOIN after_open o ON o.family = f.family AND o.seat_no = cand
   WHERE o.seat_no IS NULL GROUP BY f.family),
 checks AS (
-  SELECT 'D01 (a) every continuing occupant kept its seat number' AS check_name,
+  SELECT 'D00 the BEFORE and AFTER images are different images (else every check below is vacuous)' AS check_name,
+         (SELECT COUNTIF(fp_before = fp_after) FROM fp) AS violations
+  UNION ALL SELECT 'D01 (a) every continuing occupant kept its seat number',
          (SELECT COUNT(*) FROM before b JOIN after_open a USING (family, campaign_id, keyword_id)
-          WHERE a.seat_no != b.seat_no) AS violations
+          WHERE a.seat_no != b.seat_no)
   UNION ALL SELECT 'D02 (b) every closed row carries the SOP sentence mapped to its code',
          (SELECT COUNT(*) FROM after_closed c LEFT JOIN sop s ON s.code = c.closed_reason
           WHERE c.closed_reason_text IS NULL
@@ -108,4 +145,8 @@ checks AS (
                                       WHERE z.family = b.family AND z.campaign_id = b.campaign_id
                                         AND z.keyword_id = b.keyword_id)))
 )
-SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result FROM checks ORDER BY check_name;
+SELECT check_name, violations,
+       CASE WHEN violations = 0 THEN 'PASS'
+            WHEN check_name LIKE 'D00%' THEN 'VACUOUS — the BEFORE copy is the AFTER copy; this run proves nothing'
+            ELSE 'FAIL' END AS result
+FROM checks ORDER BY check_name;

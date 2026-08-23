@@ -2,10 +2,10 @@
 -- V_FAMILY_SEAT_REGISTER — the object Ori reads every morning for the 80/20 doctrine.
 -- Spec: docs/superpowers/specs/2026-08-22-family-seat-register-design.md §3–§6 and
 -- architecture/FAMILY_SEAT_REGISTER.md (rulings R-a … R-k). Task 2 of the family seat register;
--- repair pass 2026-08-23 (defects D1–D14: R-f sign-aware stalled proposal, R-g per-family band,
+-- repair pass 2026-08-22 (defects D1–D14: R-f sign-aware stalled proposal, R-g per-family band,
 -- R-h parked seats, R-i overdue settling, R-j not yet serving, R-k product targets, three-way
 -- queue defense, whole-phrase brand match, two-digit dates, one raise clock, horizon-true counts).
--- Second repair pass 2026-08-23: R-k REFINED — gap rows are worded by their MEASURED cause, the
+-- Second repair pass 2026-08-22: R-k REFINED — gap rows are worded by their MEASURED cause, the
 -- blanket phrase 'the ladder does not track product targets' is retired as false (the ladder
 -- tracks SP product targets and this register seats them; the blind spot is rows arriving with
 -- keyword_id −1, how SB video / PT product targets reach the warehouse); and the FAMILY 'what
@@ -50,7 +50,7 @@
 --   LEAK       one per closed-but-spending keyword (PARKED / DEAD with spend in the window).
 --   GAP        one per keyword that SPENT on the basis window with no verdict row on the ladder
 --              (a keyword with no ladder row and $0 on the basis window is not in the universe).
---              The row is worded by the MEASURED cause (ruling R-k, refined 2026-08-23):
+--              The row is worded by the MEASURED cause (ruling R-k, refined 2026-08-22):
 --                keyword_id −1  how SB video / PT product-target rows reach the warehouse — no
 --                               keyword id, so no DIM_KEYWORD row can exist and the ladder cannot
 --                               see it; extending the pipeline to these rows is a ruling for Ori.
@@ -148,7 +148,7 @@ fam AS (
   SELECT campaign_id, family, keyword_bar, bar_exempt
   FROM `onyga-482313.OI.T_FAMILY_BAR`
   QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id ORDER BY family, keyword_bar) = 1),
--- D9 (2026-08-23): a house brand phrase is matched as a WHOLE phrase on word boundaries, never a
+-- D9 (2026-08-22): a house brand phrase is matched as a WHOLE phrase on word boundaries, never a
 -- bare substring — 'lolli' as a substring would claim 'lolli pop' and 'lolli and pops'. Leading /
 -- trailing separators are trimmed off the phrase; regex metacharacters are escaped.
 brand AS (SELECT DISTINCT CONCAT(r'\b', REGEXP_REPLACE(TRIM(LOWER(phrase), ' |,'), r'([.*+?^${}()|\[\]\\])', r'\\\1'), r'\b') AS rx
@@ -213,7 +213,7 @@ kw_ads AS (
 camp_ads AS (
   SELECT a.cid, SUM(a.Ads_cost) AS spend7, SUM(a.GROSS_PROFIT) AS gp7
   FROM ads a CROSS JOIN win WHERE a.date >= win.basis_from GROUP BY 1),
--- at_line_band (ruling R-g, 2026-08-23): the relative noise of a 7-day spend read for the JUDGED
+-- at_line_band (ruling R-g, 2026-08-22): the relative noise of a 7-day spend read for the JUDGED
 -- family itself — stddev ÷ mean of ITS OWN daily spend over the context window ÷ sqrt(basis days),
 -- one band per family, published with its derivation on every FAMILY row. Never another family's
 -- noise (Bottle's noise must not decide whether LolliME is at the line).

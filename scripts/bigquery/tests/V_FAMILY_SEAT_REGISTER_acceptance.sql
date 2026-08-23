@@ -64,7 +64,7 @@
 --   B18 Overdue settling (R-i): a settling SEAT row whose due_on is before as_of says 'was due to
 --       settle on <date> — overdue by N days; the ladder has not re-judged it' in its sentence and
 --       its move, with N = as_of − due_on; a settling row not yet due never says 'overdue'.
---   B19 Gap causes (R-k, refined 2026-08-23): every GAP row is worded by its MEASURED cause.
+--   B19 Gap causes (R-k, refined 2026-08-22): every GAP row is worded by its MEASURED cause.
 --       keyword_id −1 (how SB video / PT product-target rows reach the warehouse — no keyword id)
 --       says the ladder cannot see it and promises no verdict; a paused / archived current
 --       DIM_KEYWORD row says the spend is trailing and leaves the universe when it stops; an
