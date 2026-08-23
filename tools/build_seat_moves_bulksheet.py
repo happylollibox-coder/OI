@@ -77,8 +77,19 @@ WHAT IT NEVER DOES
 
 USAGE
     /usr/bin/python3 tools/build_seat_moves_bulksheet.py [-o PATH] [--no-log]
-        [--supersede BATCH_ID ...] [--mark-uploaded BATCH_ID]
         [--register-table TMP_...] [--negates-table TMP_...]
+
+    Three TERMINAL actions that build nothing, log nothing and upload nothing:
+        --mark-uploaded BATCH_ID   Ori has uploaded that book: its rows leave PENDING_UPLOAD.
+        --supersede BATCH_ID ...   Ori will NOT upload it: label it SUPERSEDED_NEVER_UPLOADED.
+                                   This is the executable half of the choice every LEAK row in
+                                   the register publishes; before 2026-08-23 the label only fired
+                                   at the end of a build that logged a NEW batch, so the only way
+                                   to obey it was to build another book — which the same sentence
+                                   forbids.
+        --rewrite-readme AUDIT     rewrite a logged book's README from its own audit CSV, so a
+                                   README on disk can gain a note the writer learned after it was
+                                   written without building a second book of the same rows.
 
     The two *-table flags exist so the arm can be proven on a TMP_ copy with injected rows on a
     day the live data does not exercise a branch. Anything other than the live default must be
@@ -326,11 +337,23 @@ def sb_negative_keyword_row(c, portfolio_id):
 
 # ── SQL ───────────────────────────────────────────────────────────────────────────────────────
 
-LEAK_SQL = """
-WITH wm AS (
-  SELECT MAX(date) AS wm, DATE_SUB(MAX(date), INTERVAL 1 DAY) AS win_end
+# ── the basis window ──────────────────────────────────────────────────────────────────────────
+# ONE definition of the watermark, shared by both queries, and it is the REGISTER'S (see
+# V_FAMILY_SEAT_REGISTER.sql: LEAST(MAX(date), FN_ADS_ANCHOR_CAP())). FN_ADS_ANCHOR_CAP is a
+# wall-clock routine: before 22:00 Los Angeles it caps the anchor at YESTERDAY, so for 22 hours of
+# every day it sits one day behind MAX(date). A book anchored on a bare MAX(date) therefore prints
+# the register's cost_per_day — measured on the capped week — beside its own 7-day spend measured
+# on the uncapped week, in the same row of the same query, and its README states a watermark the
+# dollars did not come from. The shipped book seat_moves_20260822_0431 was built at 21:31 LA and
+# is inside that gap: its 16 rows carry the week ending 2026-08-20 in cost_per_day and the week
+# ending 2026-08-21 in spend_7d.
+WM_CTE = """WITH wm AS (
+  SELECT LEAST(MAX(date), `{p}.OI.FN_ADS_ANCHOR_CAP`()) AS wm,
+         DATE_SUB(LEAST(MAX(date), `{p}.OI.FN_ADS_ANCHOR_CAP`()), INTERVAL 1 DAY) AS win_end
   FROM `{p}.OI.FACT_AMAZON_ADS`
-),
+),"""
+
+LEAK_SQL = WM_CTE + """
 lk AS (
   SELECT campaign_id, keyword_id, family, campaign_name, target_text, match_type, state,
          current_bid, bid_floor, cost_per_day, holdout, holdout_eligible_from
@@ -432,11 +455,7 @@ CROSS JOIN wm
 ORDER BY lk.cost_per_day DESC, lk.campaign_id, lk.keyword_id
 """
 
-NEGATE_SQL = """
-WITH wm AS (
-  SELECT MAX(date) AS wm, DATE_SUB(MAX(date), INTERVAL 1 DAY) AS win_end
-  FROM `{p}.OI.FACT_AMAZON_ADS`
-),
+NEGATE_SQL = WM_CTE + """
 -- the coach's published GLOBAL click floor, read (never restated). The strictest of the global
 -- rows is used: this is a SECOND floor over the per-strategy one the engine already applied.
 clkfloor AS (
@@ -630,6 +649,214 @@ def routing_note(campaign_name, is_sb):
     return None
 
 
+
+# ── the README ────────────────────────────────────────────────────────────────────────────────
+# The README is the only human-readable cross-reference a reader gets for this workbook: Amazon's
+# SB Multi Ad Group schema has no campaign-name column, so every SB line is bare ids. It is written
+# from a list of plain dicts — one per visible row — so the SAME writer can be re-run over an audit
+# CSV of a book already logged (--rewrite-readme), which is how a README on disk gains a note the
+# writer learned after it was written. Building another book to regenerate it is exactly what the
+# register's LEAK rows forbid.
+
+def basis_window(watermark):
+    """The seven COMPLETE days the register prices on, from its anchor. The anchor is the last
+    complete ads day; the window ENDS THE DAY BEFORE it (V_FAMILY_SEAT_REGISTER's win CTE:
+    basis_from = wm - 7, basis_to = wm - 1). Stating only the anchor is how a book came to claim
+    watermark 2026-08-22 while every dollar in it was measured on 2026-08-14..2026-08-20."""
+    from datetime import timedelta
+    wm = date.fromisoformat(str(watermark)[:10])
+    return ((wm - timedelta(days=7)).isoformat(), (wm - timedelta(days=1)).isoformat())
+
+
+def readme_row(r, disp, reason, kind, line_of, key_of, is_sb):
+    sheet, line = line_of.get(key_of(r, disp), ('', ''))
+    return {
+        'kind': kind, 'disp': disp, 'reason': reason, 'sheet': sheet, 'line': line,
+        'is_sb': bool(is_sb(r)),
+        'campaign_name': r.get('campaign_name'),
+        'target_text': r.get('target_text'), 'search_term': r.get('search_term'),
+        'cost_per_day': num(r.get('cost_per_day'), 0) if kind == 'LEAK' else 0.0,
+    }
+
+
+def write_readme(readme_path, out_name, batch_id, watermark, today_la, no_log, rows,
+                 had_negate_candidates, built_at=None, prior_watermark=None):
+    leak_rows = [x for x in rows if x['kind'] == 'LEAK']
+    neg_rows = [x for x in rows if x['kind'] == 'NEGATE']
+    pauses = [x for x in rows if x['disp'] == PAUSE]
+    negates = [x for x in rows if x['disp'] in (NEGATE_KEYWORD, NEGATE_TARGET)]
+    executable = pauses + negates
+    paused_spend = sum(x['cost_per_day'] for x in pauses)
+    stamp = f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}"
+    # a rewrite may correct the week a README STATES, and must say when it does: the dollars in
+    # the audit never move, only the sentence that names the window they came from
+    corrected = ''
+    if prior_watermark and str(prior_watermark).strip() != str(watermark).strip():
+        corrected = (f" This file previously stated {prior_watermark} as the watermark; that was "
+                     f"the raw MAX(date) of the ads table rather than the register's anchor, and "
+                     f"it named a week the dollars did not come from. Not one figure changed.")
+    with open(readme_path, 'w') as f:
+        f.write("# The leak book — what each row does and why\n\n")
+        if built_at:
+            f.write(f"Built {built_at} from `{out_name}` (ads watermark {watermark}, register of "
+                    f"{today_la}); this file REWRITTEN {stamp} from the book's own audit CSV — "
+                    f"the rows and the batch are unchanged, only the wording of this file. "
+                    f"Change-log batch: **`{batch_id}`**.\n\n")
+        else:
+            f.write(f"Built {stamp} from `{out_name}` "
+                    f"(ads watermark {watermark}, register of {today_la}). Change-log batch: "
+                    f"**`{batch_id}`**{' (NOT logged — --no-log)' if no_log else ''}.\n\n")
+        f.write("**What a leak is.** The family seat register calls a keyword a LEAK when the "
+                "ladder has CLOSED it — it is DEAD (it took its settled clicks and never "
+                "ordered) or it is parked past the date the revive cycle was due to re-judge it "
+                "— and it is still taking money. Nothing is testing a leak and nothing is "
+                "pending on one. This book switches them off.\n\n")
+        f.write("**Why these pauses are executable.** The ladder's only probation-gated kill is "
+                "LOSER: a keyword below its bar that is still ordering may only be paused after "
+                "it has sat at its floor and failed there, and the reprice book owns that row. "
+                "DEAD is a different rung and a different question — zero orders on settled "
+                "clicks, fired whatever the bid, with no re-check date. A parked keyword past "
+                "its appointment has had its test and it lapsed. Neither waits on probation.\n\n")
+        try:
+            b_from, b_to = basis_window(watermark)
+            window = f"the seven complete days {b_from} to {b_to}"
+        except (ValueError, TypeError):
+            window = "the seven complete days ending the day before the watermark above"
+        f.write(f"**The week these dollars are measured on: {window}.** The watermark above is "
+                f"the register's ANCHOR — the last complete ads day (the current Los Angeles day "
+                f"only counts once it is past 22:00 there) — and the basis window ends the day "
+                f"BEFORE it. Every figure in this file and every cost_per_day the register "
+                f"publishes are that same week.{corrected}\n\n")
+        n_noact = len(leak_rows) - len(pauses)
+        f.write(f"**{len(pauses)} pause row(s)** covering ${paused_spend:.2f}/day of spend on the "
+                f"7-day basis window, and **{len(negates)} negative(s)**. "
+                + (f"{n_noact} leak row(s) get no pause; the rule that stopped each is listed "
+                   f"below.\n\n" if n_noact else
+                   "Every leak row on the register today has a pause row on this sheet.\n\n"))
+        f.write("**Why a negative sits beside a pause.** They act at different grains. The pause "
+                "switches off one target. A negative switches the search term off for EVERY "
+                "keyword and EVERY product in the ad group, which is also why its evidence is "
+                "summed at the ad group and never sliced by ASIN: blocking a term off one "
+                "product's slice throws away whatever the other slices earn from it. A negative "
+                "is refused here whenever the ad group took an order on the term, is net "
+                "positive on it over the window or over its whole lifetime, sells it "
+                "organically, has too few clicks on it, or has stopped drawing clicks.\n\n")
+        f.write("**A negative cannot be undone by a sheet.** The restore sheet next to this file "
+                "re-enables every keyword this book pauses, and that is all it can do. A "
+                "negative keyword or negative product target is CREATED by this sheet without an "
+                "id; removing it later needs the id Amazon assigns on creation, and this "
+                "warehouse's negative-keyword feed has been frozen since 2026-01-03 "
+                "(`DE_NEGATIVE_KEYWORDS` is the registry of record precisely because the feed "
+                "stopped). So the id never comes back on its own. Treat every negative on this "
+                "sheet as permanent: if you are not sure, delete the line.\n\n")
+        f.write("**This book never counts a negative as money recovered today.** The register's "
+                "gap-closure arithmetic (ruling R-l) counts pauses only, because only a pause "
+                "provably takes a keyword's spend to zero on upload. The dollars beside each "
+                "negative are what the ad group has already lost on the term, not a saving.\n\n")
+        f.write("**Holdout.** Campaigns in the HOLDOUT arm get no row of any kind from their "
+                "eligible_from date. Every executable row is asserted against the arm before the "
+                "sheet is written.\n\n")
+        f.write(f"**Provenance.** The batch `{batch_id}` in FACT_PPC_CHANGE_LOG holds exactly the "
+                f"{len(executable)} rows on this sheet (read back and asserted). If you do NOT "
+                f"upload this book, label the batch `SUPERSEDED_NEVER_UPLOADED` by running this "
+                f"file with `--supersede {batch_id}` — it labels and stops, building nothing, and "
+                f"a log row is never deleted. If you delete a line before uploading, label that "
+                f"row `FAILED_UPLOAD`. When you have uploaded it, run this file with "
+                f"`--mark-uploaded {batch_id}`.\n\n")
+        f.write("---\n\n## Pauses — row by row\n\n")
+        for x in leak_rows:
+            if x['disp'] != PAUSE:
+                continue
+            f.write(f"### {x['sheet']} — row {x['line']}: `{x['target_text']}` "
+                    f"({x['campaign_name']})\n\n")
+            f.write(f"- {x['reason']}\n")
+            note = routing_note(x['campaign_name'], x['is_sb'])
+            if note:
+                f.write(f"- **Sheet check.** {note}\n")
+            f.write("- Delete this line and it keeps running exactly as it is; then label its "
+                    "change-log row FAILED_UPLOAD.\n\n")
+        no_action = [x for x in leak_rows if x['disp'] != PAUSE]
+        if no_action:
+            f.write(f"---\n\n## Leaks with no row today ({len(no_action)}) — and the rule that "
+                    f"stopped each\n\n")
+            for x in no_action:
+                f.write(f"- **{x['disp']}** — {x['reason']}\n")
+            f.write("\n")
+        if negates:
+            f.write("---\n\n## Negatives — row by row (permanent; delete any you are unsure of)\n\n")
+            for x in neg_rows:
+                if x['disp'] not in EXECUTABLE:
+                    continue
+                f.write(f"### {x['sheet']} — row {x['line']}: `{x['search_term']}` "
+                        f"({x['campaign_name']})\n\n")
+                f.write(f"- {x['reason']}\n")
+                note = routing_note(x['campaign_name'], x['is_sb'])
+                if note:
+                    f.write(f"- **Sheet check.** {note}\n")
+                f.write("\n")
+        neg_no = [x for x in neg_rows if x['disp'] not in EXECUTABLE]
+        if neg_no:
+            f.write(f"---\n\n## Negate candidates refused ({len(neg_no)}) — and why\n\n")
+            for x in neg_no:
+                f.write(f"- **{x['disp']}** — {x['reason']}\n")
+            f.write("\n")
+        if not had_negate_candidates:
+            f.write("---\n\n## Negatives\n\nNo search term under any leaking keyword is on the "
+                    "engine's negate list today, so this book carries no negative.\n\n")
+    return readme_path
+
+
+PRIOR_HEADER_RE = re.compile(
+    r'Built (?P<built>[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} UTC).*?'
+    r'ads watermark (?P<wm>[^,]+), register of (?P<day>[^)]+)' + re.escape(')') +
+    r'.*?batch: ' + re.escape('**`') + r'(?P<batch>[^`]+)' + re.escape('`**'), re.S)
+
+
+def prior_readme_facts(readme_path):
+    """The build facts of the README being replaced: when it was built, the window it was measured
+    on, and its batch. A rewrite may never invent any of them — for a book built before the audit
+    CSV carried the window, the README it is replacing is the record."""
+    if not os.path.exists(readme_path):
+        return {}
+    m = PRIOR_HEADER_RE.search(open(readme_path).read()[:4000])
+    return m.groupdict() if m else {}
+
+
+def rewrite_readme_from_audit(audit_path, batch_id=None, watermark=None, today_la=None):
+    """Rewrite the README beside an audit CSV, from the audit itself. No workbook, no change log,
+    no batch — the audit is the record of what the book already contains, and the README is the
+    only artefact that has to change when the writer learns something new."""
+    rows, audit_wm, audit_day = [], [], []
+    with open(audit_path, newline='') as f:
+        for a in csv.DictReader(f):
+            audit_wm.append((a.get('watermark') or '').strip())
+            audit_day.append((a.get('register_day') or '').strip())
+            rows.append({
+                'kind': a['kind'], 'disp': a['disposition'], 'reason': a['reason'],
+                'sheet': a['sheet'], 'line': a['excel_row'],
+                # the sheet a row was WRITTEN on is the authority here: it is what the reader is
+                # holding, and it is what the routing note has to explain
+                'is_sb': a['sheet'] == SB_SHEET,
+                'campaign_name': a['campaign'],
+                'target_text': a['target'], 'search_term': a['search_term'],
+                'cost_per_day': num(a.get('cost_per_day'), 0) if a['kind'] == 'LEAK' else 0.0,
+            })
+    stem = audit_path[:-len('_audit.csv')] if audit_path.endswith('_audit.csv') else \
+        audit_path.rsplit('.', 1)[0]
+    readme_path = stem + '_README.md'
+    prior = prior_readme_facts(readme_path)
+    wm = watermark or next((a for a in audit_wm if a), None) or prior.get('wm')
+    day = today_la or next((a for a in audit_day if a), None) or prior.get('day')
+    bid = batch_id or prior.get('batch') or os.path.basename(stem)
+    assert wm and day, (
+        f"{readme_path}: neither the audit CSV nor the README being replaced states the window "
+        f"these dollars were measured on. Pass --watermark / --register-day rather than let this "
+        f"file state a week it cannot prove.")
+    return write_readme(readme_path, os.path.basename(stem) + '.xlsx', bid, wm, day, False, rows,
+                        any(x['kind'] == 'NEGATE' for x in rows),
+                        built_at=prior.get('built'), prior_watermark=prior.get('wm'))
+
+
 def bq(sql):
     out = subprocess.run(
         ['bq', 'query', f'--project_id={PROJECT}', '--use_legacy_sql=false', '--nouse_cache',
@@ -654,10 +881,25 @@ def run_update(sql, what):
         sys.exit(f"{what} failed:\n{out.stderr}")
 
 
-def supersede(batch_ids, new_batch):
+def supersede_note(new_batch):
+    """The upload_note a SUPERSEDED_NEVER_UPLOADED label carries. Two cases, two true sentences:
+    a book replaced by a later one names its replacement; a book simply abandoned says so, because
+    'superseded by None' would be a lie and a reader would go looking for a batch that never
+    existed."""
+    stamp = f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}"
+    if new_batch:
+        return (f"never uploaded; superseded by {new_batch} ({stamp}) — labelled by the generator")
+    return (f"never uploaded; no later book replaces it ({stamp}) — labelled by hand with "
+            f"--supersede")
+
+
+def supersede(batch_ids, new_batch=None):
+    """Label never-uploaded batches. Callable WITHOUT a replacement: every LEAK row in the register
+    offers Ori 'upload that book, or label it never-uploaded', and until 2026-08-23 the label had
+    exactly one mechanism — the tail of a build that logged a NEW batch — so obeying the second
+    half of the instruction meant building another book, which the same sentence forbids."""
     for bid in batch_ids:
-        note = (f"never uploaded; superseded by {new_batch} "
-                f"({datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}) — labelled by the generator")
+        note = supersede_note(new_batch)
         run_update(
             f"UPDATE `{PROJECT}.OI.FACT_PPC_CHANGE_LOG` SET upload_status = 'SUPERSEDED_NEVER_UPLOADED', "
             f"upload_note = {q(note)} WHERE batch_id = {q(bid)} "
@@ -713,12 +955,15 @@ def log_batch(rows, batch_id, readme_path):
     return n_logged
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('-o', '--out', default=None,
                     help="default .tmp/seat_moves_<the warehouse's own day>.xlsx")
     ap.add_argument('--no-log', action='store_true')
-    ap.add_argument('--supersede', nargs='*', default=[])
+    ap.add_argument('--supersede', nargs='+', default=[], metavar='BATCH_ID',
+                    help='label these never-uploaded batches SUPERSEDED_NEVER_UPLOADED and stop. '
+                         'Builds nothing, logs nothing — this is the executable half of the '
+                         'choice the register publishes on every LEAK row.')
     ap.add_argument('--mark-uploaded', metavar='BATCH_ID',
                     help='Ori has uploaded this batch: flip its rows from PENDING_UPLOAD to '
                          'applied (NULL). Builds nothing.')
@@ -732,7 +977,40 @@ def main():
                          'exercise a rule that arms in the future (the holdout arm). Allowed '
                          'ONLY together with a TMP_ source, so a live book can never be built '
                          'for a day that is not today.')
+    ap.add_argument('--rewrite-readme', metavar='AUDIT_CSV',
+                    help='rewrite the README beside this audit CSV with the current writer, from '
+                         'the audit itself. Builds nothing, logs nothing, touches no workbook — '
+                         'the way a README already on disk gains a note the writer learned after '
+                         'it was written, without building a second book of the same rows.')
+    ap.add_argument('--batch', metavar='BATCH_ID',
+                    help='--rewrite-readme: the batch id to state. Defaults to the one the README '
+                         'being replaced already states.')
+    ap.add_argument('--watermark', metavar='YYYY-MM-DD',
+                    help='--rewrite-readme: the ads watermark to state. Defaults to the audit '
+                         'CSV, then to the README being replaced; a rewrite never invents one.')
+    ap.add_argument('--register-day', metavar='YYYY-MM-DD',
+                    help='--rewrite-readme: the register day to state. Same fallbacks.')
+    return ap
+
+
+def main():
+    ap = build_parser()
     args = ap.parse_args()
+
+    if args.rewrite_readme:
+        out = rewrite_readme_from_audit(args.rewrite_readme, batch_id=args.batch,
+                                        watermark=args.watermark, today_la=args.register_day)
+        print(f"\nRewrote {out} from {args.rewrite_readme}. No workbook, no batch, no upload.")
+        return {'readme': out}
+
+    # --supersede is TERMINAL: it labels and returns, building nothing. This is the executable
+    # half of the choice every LEAK row publishes ('upload that book, or label it never-uploaded').
+    if args.supersede:
+        supersede(args.supersede)
+        print(f"\nLabelled {len(args.supersede)} batch(es) SUPERSEDED_NEVER_UPLOADED. "
+              f"Nothing was built and no batch was logged. The register's LEAK rows will send you "
+              f"to the next leak book on the next read.")
+        return {'superseded': list(args.supersede)}
 
     if args.mark_uploaded:
         bid = args.mark_uploaded
@@ -871,7 +1149,10 @@ def main():
                      'ng_clicks_8w', 'ng_orders_8w', 'ng_spend_8w', 'ng_net_profit_8w',
                      'ng_clicks_recent_5d', 'ng_lt_clicks', 'ng_lt_orders', 'ng_lt_net_profit',
                      'ng_organic_units_8w', 'own_kw_clicks_8w', 'block_min_clicks',
-                     'holdout_eligible_from', 'season_block', 'engine_reason', 'reason'])
+                     'holdout_eligible_from', 'season_block', 'engine_reason', 'reason',
+                     # the window and the day, on every row, so a README rewritten later from
+                     # this file states the same week the dollars came from instead of guessing
+                     'watermark', 'register_day'])
         for r, disp, reason, kind in visible:
             sheet, ln = line_of.get(key_of(r, disp), ('', ''))
             wr.writerow([
@@ -890,104 +1171,14 @@ def main():
                 r.get('ng_lt_orders'), r.get('ng_lt_net_profit'), r.get('ng_organic_units_8w'),
                 r.get('own_kw_clicks_8w'), r.get('min_clicks'),
                 r.get('holdout_eligible_from'), r.get('block_cut_reason'),
-                r.get('engine_reason'), reason])
+                r.get('engine_reason'), reason, watermark, today_la])
 
     # ── README ───────────────────────────────────────────────────────────────────────────────
     readme_path = args.out.rsplit('.', 1)[0] + '_README.md'
-    leak_rows = [v for v in visible if v[3] == 'LEAK']
-    neg_rows = [v for v in visible if v[3] == 'NEGATE']
-    paused_spend = sum(num(r.get('cost_per_day'), 0) for r, d, k in pauses)
-    with open(readme_path, 'w') as f:
-        f.write("# The leak book — what each row does and why\n\n")
-        f.write(f"Built {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} from `{args.out}` "
-                f"(ads watermark {watermark}, register of {today_la}). Change-log batch: "
-                f"**`{batch_id}`**{' (NOT logged — --no-log)' if args.no_log else ''}.\n\n")
-        f.write("**What a leak is.** The family seat register calls a keyword a LEAK when the "
-                "ladder has CLOSED it — it is DEAD (it took its settled clicks and never "
-                "ordered) or it is parked past the date the revive cycle was due to re-judge it "
-                "— and it is still taking money. Nothing is testing a leak and nothing is "
-                "pending on one. This book switches them off.\n\n")
-        f.write("**Why these pauses are executable.** The ladder's only probation-gated kill is "
-                "LOSER: a keyword below its bar that is still ordering may only be paused after "
-                "it has sat at its floor and failed there, and the reprice book owns that row. "
-                "DEAD is a different rung and a different question — zero orders on settled "
-                "clicks, fired whatever the bid, with no re-check date. A parked keyword past "
-                "its appointment has had its test and it lapsed. Neither waits on probation.\n\n")
-        n_noact = len(leak_rows) - len(pauses)
-        f.write(f"**{len(pauses)} pause row(s)** covering ${paused_spend:.2f}/day of spend on the "
-                f"7-day basis window, and **{len(negates)} negative(s)**. "
-                + (f"{n_noact} leak row(s) get no pause; the rule that stopped each is listed "
-                   f"below.\n\n" if n_noact else
-                   "Every leak row on the register today has a pause row on this sheet.\n\n"))
-        f.write("**Why a negative sits beside a pause.** They act at different grains. The pause "
-                "switches off one target. A negative switches the search term off for EVERY "
-                "keyword and EVERY product in the ad group, which is also why its evidence is "
-                "summed at the ad group and never sliced by ASIN: blocking a term off one "
-                "product's slice throws away whatever the other slices earn from it. A negative "
-                "is refused here whenever the ad group took an order on the term, is net "
-                "positive on it over the window or over its whole lifetime, sells it "
-                "organically, has too few clicks on it, or has stopped drawing clicks.\n\n")
-        f.write("**A negative cannot be undone by a sheet.** The restore sheet next to this file "
-                "re-enables every keyword this book pauses, and that is all it can do. A "
-                "negative keyword or negative product target is CREATED by this sheet without an "
-                "id; removing it later needs the id Amazon assigns on creation, and this "
-                "warehouse's negative-keyword feed has been frozen since 2026-01-03 "
-                "(`DE_NEGATIVE_KEYWORDS` is the registry of record precisely because the feed "
-                "stopped). So the id never comes back on its own. Treat every negative on this "
-                "sheet as permanent: if you are not sure, delete the line.\n\n")
-        f.write("**This book never counts a negative as money recovered today.** The register's "
-                "gap-closure arithmetic (ruling R-l) counts pauses only, because only a pause "
-                "provably takes a keyword's spend to zero on upload. The dollars beside each "
-                "negative are what the ad group has already lost on the term, not a saving.\n\n")
-        f.write("**Holdout.** Campaigns in the HOLDOUT arm get no row of any kind from their "
-                "eligible_from date. Every executable row is asserted against the arm before the "
-                "sheet is written.\n\n")
-        f.write(f"**Provenance.** The batch `{batch_id}` in FACT_PPC_CHANGE_LOG holds exactly the "
-                f"{len(executable)} rows on this sheet (read back and asserted). If you do NOT "
-                f"upload this book, label the batch `SUPERSEDED_NEVER_UPLOADED` — never delete a "
-                f"log row. If you delete a line before uploading, label that row "
-                f"`FAILED_UPLOAD`. When you have uploaded it, run this file with "
-                f"`--mark-uploaded {batch_id}`.\n\n")
-        f.write("---\n\n## Pauses — row by row\n\n")
-        for r, disp, reason, kind in leak_rows:
-            if disp != PAUSE:
-                continue
-            sheet, ln = line_of[key_of(r, disp)]
-            f.write(f"### {sheet} — row {ln}: `{r['target_text']}` ({r['campaign_name']})\n\n")
-            f.write(f"- {reason}\n")
-            note = routing_note(r.get('campaign_name'), is_sb(r))
-            if note:
-                f.write(f"- **Sheet check.** {note}\n")
-            f.write(f"- Delete this line and it keeps running exactly as it is; then label its "
-                    f"change-log row FAILED_UPLOAD.\n\n")
-        no_action = [v for v in leak_rows if v[1] != PAUSE]
-        if no_action:
-            f.write(f"---\n\n## Leaks with no row today ({len(no_action)}) — and the rule that "
-                    f"stopped each\n\n")
-            for r, disp, reason, kind in no_action:
-                f.write(f"- **{disp}** — {reason}\n")
-            f.write("\n")
-        if negates:
-            f.write("---\n\n## Negatives — row by row (permanent; delete any you are unsure of)\n\n")
-            for r, disp, reason, kind in neg_rows:
-                if disp not in EXECUTABLE:
-                    continue
-                sheet, ln = line_of[key_of(r, disp)]
-                f.write(f"### {sheet} — row {ln}: `{r['search_term']}` ({r['campaign_name']})\n\n")
-                f.write(f"- {reason}\n")
-                note = routing_note(r.get('campaign_name'), is_sb(r))
-                if note:
-                    f.write(f"- **Sheet check.** {note}\n")
-                f.write("\n")
-        neg_no = [v for v in neg_rows if v[1] not in EXECUTABLE]
-        if neg_no:
-            f.write(f"---\n\n## Negate candidates refused ({len(neg_no)}) — and why\n\n")
-            for r, disp, reason, kind in neg_no:
-                f.write(f"- **{disp}** — {reason}\n")
-            f.write("\n")
-        if not negs:
-            f.write("---\n\n## Negatives\n\nNo search term under any leaking keyword is on the "
-                    "engine's negate list today, so this book carries no negative.\n\n")
+    write_readme(readme_path, os.path.basename(args.out), batch_id, watermark, today_la,
+                 args.no_log, [readme_row(r, disp, reason, kind, line_of, key_of, is_sb)
+                               for r, disp, reason, kind in visible],
+                 bool(negs))
 
     # ── console ──────────────────────────────────────────────────────────────────────────────
     print(f"\n{len(leaks)} LEAK row(s) + {len(negs)} negate candidate(s) -> "
@@ -1009,8 +1200,6 @@ def main():
             print(f"  {p['batch_id']}  {p['n']} rows  {p['upload_status'] or 'NULL (graded)'}")
     logged = ''
     if executable and not args.no_log:
-        if args.supersede:
-            supersede(args.supersede, batch_id)
         n = log_batch(executable, batch_id, readme_path)
         logged = batch_id
         print(f"\nLogged {n} rows to FACT_PPC_CHANGE_LOG as batch {logged} (PENDING_UPLOAD).")

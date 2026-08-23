@@ -186,31 +186,93 @@
 --       can find the sheet the dollars ride on. The failed half is unchanged: its pause row comes
 --       from the reprice generator and always has.
 --
--- WHAT THIS SUITE CANNOT SEE (2026-08-23). The deploy command strips every `--` line, so the
--- view's own header block does not exist in the deployed definition: no check here, and no query
--- against INFORMATION_SCHEMA.VIEWS, can catch a stale sentence in the header of
--- scripts/bigquery/views/V_FAMILY_SEAT_REGISTER.sql or in architecture/FAMILY_SEAT_REGISTER.md.
--- A retired belief once survived in both while every check passed. The instrument for those two
--- files is a grep of the RETIRED phrases, run on the source, and it must return nothing:
---   grep -nE 'closed-but-spending keywords are paused|leaks stay paused|the leaks are paused|stalled probes are parked|pauses you can upload|Task 3, not shipped|Task 3, not yet shipped|Leaks are NOT paused on either projection|nothing pauses them until the leak arm ships|leak arm of .tools/build_reprice_bulksheet|the sheet that would pause it does not exist|the unbuilt (leak )?arm|The pauses on the next book recover' \
---     scripts/bigquery/views/V_FAMILY_SEAT_REGISTER.sql architecture/FAMILY_SEAT_REGISTER.md
--- (This test file itself contains those phrases as the forbidden-phrase assertions above, which
---  is why the grep names the two files and not the directory.) A match is allowed ONLY inside
--- quotation marks in the SOP's repair-pass narrative, where it records what a retired sentence
--- used to say; a match outside quotes — in the view header, the Horizons paragraph or a rulings
--- row — is the defect.
--- THE GREP IS PART OF THE CHANGE, NOT A FIXED LIST (added 2026-08-23, seventh repair pass). The
--- first half of this list is the SIXTH pass's retired model — "no generator pauses a leak". When
--- Task 3 shipped that model was itself retired and its phrases became the new defect, but the
--- grep still hunted only the older set: it returned nothing while three paragraphs of the SOP
--- (the opening summary, the Horizons paragraph and open ruling 12) went on telling the reader
--- that the leak arm was unbuilt, that no projection zeroes a leak, and that Ori still had to
--- decide whether Task 3 should ship — every clause false against the deployed view, and the
--- second half of this list is what caught it. So: WHENEVER A MODEL IS RETIRED, ITS PHRASES ARE
--- ADDED HERE IN THE SAME COMMIT that retires it. A grep that only knows yesterday's wrong answer
--- passes over today's.
+--   B36 The recovered-today figure counts ONLY the pauses the leak book will WRITE (R-l, engine
+--       parity). The holdout guard was one of FOUR measured refusals in
+--       tools/build_seat_moves_bulksheet.py's classify_leak; the other three — already switched
+--       off in Amazon, no readable live state, season BLOCK_CUT — were not applied to the
+--       arithmetic, so the register could promise dollars no sheet can move. This check
+--       re-derives all four FROM THE SOURCES (both keyword feeds with the generator's rule that a
+--       disagreement never reads as ENABLED, plus V_KEYWORD_CONTEXT_GATE) and asserts: a refused
+--       leak publishes 'no sheet row' and says its dollars are not recovered; a leak the book WILL
+--       write never publishes 'no sheet row'; NO season-blocked leak is counted as recoverable;
+--       and the family clause names the refused ones instead of dropping them.
+--       Leg (3) is load-bearing for a decision made on measurement: the season gate is read HERE
+--       and not in the view because joined into the register it re-plans on every branch and takes
+--       a full read from ~24s to 45-98s. That is safe only while leg (3) reads zero. If it fires,
+--       materialise the gate into a T_ the register can afford — never widen the tolerance.
+--       TDD record (2026-08-23): proven on TMP_ copies, never on live rows. TMP_KWFEED_PROOF is a
+--       copy of the keyword feed with one live leak forced to 'paused'; against a register built
+--       on it WITH this guard, B29/B32/B36 = 0/0/0, and against the same register with the guard
+--       removed (the pre-change arithmetic) B29 = 1 and B36 = 2. All three TMP_ objects dropped.
+--
+-- WHAT THIS SUITE CANNOT SEE. The deploy command strips every `--` line, so the view's own header
+-- block does not exist in the deployed definition: no check here, and no query against
+-- INFORMATION_SCHEMA.VIEWS, can catch a stale sentence in the header of
+-- scripts/bigquery/views/V_FAMILY_SEAT_REGISTER.sql, in architecture/FAMILY_SEAT_REGISTER.md, or
+-- in the config.yaml entry. A retired belief has survived in those files twice while every check
+-- here passed. The instrument for them is:
+--
+--     /usr/bin/python3 tools/check_retired_phrases.py
+--
+-- It replaces the `grep -nE '…'` that used to live in this comment, which failed twice and both
+-- times structurally: it was LINE-based and the files are hard-wrapped (a retired phrase that
+-- straddles a newline is invisible to it — 'the sheet that would pause it does not exist' IS in
+-- the SOP and the documented grep does not return it; run as written it found 2 hits where a
+-- whitespace-insensitive scan of the same files finds 4), and it read two files when three carry
+-- the doctrine (config.yaml holds the same prose at book length and sat outside it, which is
+-- where the next retired clause was found). The script collapses whitespace, scans every file
+-- that publishes the doctrine, allows a hit ONLY inside quotation marks, and knows that a
+-- straight " in config.yaml is a YAML delimiter and not a quotation.
+-- WHENEVER A MODEL IS RETIRED, ITS PHRASES ARE ADDED TO THAT SCRIPT IN THE SAME COMMIT. A check
+-- that only knows yesterday's wrong answer passes over today's.
 -- =============================================================================================
 CREATE TEMP TABLE reg AS SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
+
+-- ── B36 / B29 / B32: WHICH LEAKS THE BOOK WILL ACTUALLY WRITE A PAUSE ROW FOR.
+-- The recovered-today figure may only count a pause the generator writes, so this suite
+-- re-derives the generator's four refusals from the SOURCES (never from the register), in the
+-- generator's own order: holdout, unreadable live state, already switched off, season BLOCK_CUT.
+-- The live switch is read from BOTH feeds with the generator's rule — a disagreement never reads
+-- as ENABLED — and the season gate is read HERE rather than in the view, on purpose: joined into
+-- the register V_KEYWORD_CONTEXT_GATE re-plans on every branch and triples the read (24s -> 45-98s
+-- measured 2026-08-23), so the expensive guard lives in the check and B36 is what makes its
+-- absence safe. A B36 failure means a real season-blocked leak exists and the gate must be
+-- materialised into a T_ the register can afford.
+-- It is its own TEMP TABLE for the same reason `reg` is: two of the checks read it, and left as a
+-- CTE the season gate re-planned per reference and took the suite from about five minutes to over
+-- forty. Read once, then joined.
+CREATE TEMP TABLE leak_refusal AS
+WITH leak_feed AS (
+  SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid,
+         UPPER(COALESCE(state, '')) AS st
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_keyword`
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY date DESC) = 1),
+leak_dim AS (
+  SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid,
+         UPPER(COALESCE(state, '')) AS st
+  FROM `onyga-482313.OI.DIM_KEYWORD` WHERE is_current
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY effective_from DESC, effective_to DESC) = 1),
+leak_season AS (
+  SELECT keyword_text, ANY_VALUE(gate_reason) AS gate_reason
+  FROM `onyga-482313.OI.V_KEYWORD_CONTEXT_GATE`
+  WHERE gate_action = 'BLOCK_CUT' GROUP BY 1),
+leak_pick AS (
+  SELECT l.campaign_id, l.keyword_id,
+         sn.gate_reason IS NOT NULL AS season_blocked,
+         CASE WHEN COALESCE(l.holdout, FALSE) AND l.as_of >= l.holdout_eligible_from THEN 'HOLDOUT'
+              WHEN kf.st IS NULL AND kd.st IS NULL THEN 'LIVE_STATE_UNKNOWN'
+              WHEN NOT (COALESCE(kf.st, kd.st) = 'ENABLED' AND COALESCE(kd.st, kf.st) = 'ENABLED')
+                THEN 'ALREADY_PAUSED'
+              WHEN sn.gate_reason IS NOT NULL THEN 'SEASON_BLOCKED'
+              ELSE CAST(NULL AS STRING) END AS refusal
+  FROM reg l
+  LEFT JOIN leak_feed kf ON kf.cid = CAST(l.campaign_id AS STRING) AND kf.kid = CAST(l.keyword_id AS STRING)
+  LEFT JOIN leak_dim  kd ON kd.cid = CAST(l.campaign_id AS STRING) AND kd.kid = CAST(l.keyword_id AS STRING)
+  LEFT JOIN leak_season sn ON sn.keyword_text = l.target_text
+                          AND NOT REGEXP_CONTAINS(LOWER(COALESCE(l.target_text, '')), r'^\s*(asin|category)\s*=')
+  WHERE l.row_type = 'LEAK' AND l.horizon = 'today')
+SELECT * FROM leak_pick;
+
 WITH
 k AS (SELECT 7 AS basis_days, 28 AS context_days, 14 AS probe_window_days, 20 AS verdict_clicks,
              0.005 AS bid_tol, 0.20 AS allowance_share, 4 AS absorb_capped_days),
@@ -374,12 +436,17 @@ lowest AS (
 -- sheet lands is a PAUSE: a leak paused, or a failed keyword killed with a pause row. A holdout
 -- campaign gets no sheet row, so its rows recover nothing either. Everything below is re-derived
 -- from the register's OWN rows so no check ever reads the sentence it is judging.
+-- R-l, re-derived: the pauses the sheets will actually WRITE. A LEAK the generator refuses on a
+-- measured ground (already switched off, unreadable, season-blocked) recovers nothing and may not
+-- sit inside the recovered-today figure; the holdout guard was only the first of the four.
 pause_rows AS (
-  SELECT family, cost_per_day
-  FROM r
-  WHERE horizon = 'today'
-    AND (row_type = 'LEAK' OR (row_type = 'SEAT' AND occupant_kind = 'failed'))
-    AND NOT (COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from)),
+  SELECT r.family, r.cost_per_day
+  FROM r LEFT JOIN leak_refusal lf
+    ON lf.campaign_id = r.campaign_id AND lf.keyword_id = r.keyword_id AND r.row_type = 'LEAK'
+  WHERE r.horizon = 'today'
+    AND (r.row_type = 'LEAK' OR (r.row_type = 'SEAT' AND r.occupant_kind = 'failed'))
+    AND NOT (COALESCE(r.holdout, FALSE) AND r.as_of >= r.holdout_eligible_from)
+    AND (r.row_type != 'LEAK' OR lf.refusal IS NULL)),
 exec_rd AS (SELECT family, SUM(cost_per_day) AS exec_today, COUNT(*) AS n_exec FROM pause_rows GROUP BY 1),
 -- the two kinds whose dollars do NOT leave the bad side today, priced from their own seat rows
 noexec_rd AS (
@@ -426,10 +493,11 @@ leak_rows AS (
          l.book_batch_id, l.book_action, l.move, l.sentence,
          COALESCE(l.holdout, FALSE) AND l.as_of >= l.holdout_eligible_from AS no_sheet,
          pp.keyword_id IS NOT NULL AS pause_pending,
-         pp.batch_ids
+         pp.batch_ids, lf.season_blocked, lf.refusal
   FROM r l
   LEFT JOIN pending_pause_chk pp
     ON pp.campaign_id = CAST(l.campaign_id AS STRING) AND pp.keyword_id = CAST(l.keyword_id AS STRING)
+  LEFT JOIN leak_refusal lf ON lf.campaign_id = l.campaign_id AND lf.keyword_id = l.keyword_id
   WHERE l.row_type = 'LEAK'),
 -- B32: how many of each family's EXECUTABLE leaks (holdout-suppressed rows removed — they get no
 -- sheet row at all) the pending pause book already carries, re-derived from the change log. The
@@ -437,9 +505,10 @@ leak_rows AS (
 -- for a keyword the pending book already carries builds a SECOND batch of the same pause rows.
 leak_book_split AS (
   SELECT family,
-         COUNTIF(NOT no_sheet) AS n_exec,
-         COUNTIF(NOT no_sheet AND pause_pending) AS n_on_book,
-         COUNTIF(NOT no_sheet AND NOT pause_pending) AS n_off_book
+         COUNTIF(refusal IS NULL) AS n_exec,
+         COUNTIF(refusal IS NULL AND pause_pending) AS n_on_book,
+         COUNTIF(refusal IS NULL AND NOT pause_pending) AS n_off_book,
+         COUNTIF(refusal IS NOT NULL AND refusal != 'HOLDOUT') AS n_refused
   FROM leak_rows GROUP BY 1),
 -- every batch id a FAMILY sentence NAMES, and every batch id the CHANGE LOG holds for that
 -- family's leaks: B32 anti-joins one against the other, so a sentence can never invent a book
@@ -730,11 +799,11 @@ checks AS (
          + (SELECT COUNTIF(
                    -- every leak already on a book: name the batch, forbid 'the next leak book'
                    (s.n_off_book = 0 AND s.n_exec > 0
-                    AND (NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks — every one is already written on the pending leak book ')
-                         OR REGEXP_CONTAINS(f.sentence, r'leaks on the next leak book')))
+                    AND (NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks? — every one is already written on the pending leak book ')
+                         OR REGEXP_CONTAINS(f.sentence, r'leaks? on the next leak book')))
                    -- no leak on a book: the next-book form, and no batch may be named
                    OR (s.n_on_book = 0 AND s.n_exec > 0
-                       AND NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks on the next leak book \(tools/build_seat_moves_bulksheet\.py\)'))
+                       AND NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks? on the next leak book \(tools/build_seat_moves_bulksheet\.py\)'))
                    -- mixed: both counts and both destinations named
                    OR (s.n_on_book > 0 AND s.n_off_book > 0
                        AND (NOT REGEXP_CONTAINS(f.sentence, r'are already written on the pending leak book ')
@@ -753,11 +822,12 @@ checks AS (
             WHERE l.log_batch IS NULL)
          -- and the LEAK row's own move is the same measurement, row by row
          + (SELECT COUNTIF(
-                   -- off-book: the next leak book, named by its file
-                   (NOT no_sheet AND NOT pause_pending
+                   -- off-book: the next leak book, named by its file. Only a leak the generator
+                   -- will WRITE gets a book at all — a refused one is worded by B36, not here.
+                   (refusal IS NULL AND NOT pause_pending
                     AND move NOT LIKE '%pause it on the next leak book (tools/build_seat_moves_bulksheet.py)%')
                    -- on-book: upload THAT batch, never build another, and publish the id
-                   OR (NOT no_sheet AND pause_pending
+                   OR (refusal IS NULL AND pause_pending
                        AND (move NOT LIKE CONCAT('%pending leak book ', COALESCE(book_batch_id, '~'), '%')
                             OR move LIKE '%next leak book%'
                             OR book_action != 'KEYWORD_PAUSE'
@@ -827,6 +897,31 @@ checks AS (
                            AND (SELECT COUNTIF(NOT lr.pause_pending OR lr.no_sheet)
                                 FROM leak_rows lr WHERE lr.family = f.family) > 0)
             FROM famrow f WHERE f.row_type = 'FAMILY')
+  UNION ALL
+  SELECT 'B36 the recovered-today figure counts only pauses the leak book will WRITE (R-l, engine parity): every leak the generator refuses is published as no-sheet-row and kept out of the recovery, and no season-blocked leak is counted as recoverable',
+         -- (1) a leak the generator REFUSES must not read as a pause on its own row: its move
+         --     must open 'no sheet row' and its sentence must say the dollars are not recovered.
+         --     Refusals are re-derived from the sources (leak_refusal), never from the register.
+         (SELECT COUNTIF(refusal IS NOT NULL
+                         AND (move NOT LIKE 'no sheet row%'
+                              OR (refusal != 'HOLDOUT' AND sentence NOT LIKE '%not counted as recovered%')))
+          FROM leak_rows)
+         -- (2) and the converse: a leak the generator WILL write must never read as no-sheet-row
+         + (SELECT COUNTIF(refusal IS NULL AND move LIKE 'no sheet row%') FROM leak_rows)
+         -- (3) THE GUARD THE VIEW CANNOT AFFORD TO CARRY. V_KEYWORD_CONTEXT_GATE re-plans on every
+         --     branch of the register (24s -> 45-98s a read, measured 2026-08-23), so the season
+         --     BLOCK_CUT is read here and NOT in the view. That is safe only while this leg reads
+         --     zero: a leak the season ledger blocks gets no pause row from the generator, and the
+         --     register would still be counting its dollars as recovered. If this ever fires, the
+         --     fix is a T_ materialisation of the gate that the register can afford to join —
+         --     never a quiet tolerance.
+         + (SELECT COUNTIF(season_blocked AND move NOT LIKE 'no sheet row%') FROM leak_rows)
+         -- (4) the family's leak clause must count only the leaks the book will write, and must
+         --     name the refused ones separately rather than dropping them silently
+         + (SELECT COUNTIF(bs.n_refused > 0
+                           AND f.sentence NOT LIKE '%get no pause row at all%')
+            FROM famrow f JOIN leak_book_split bs ON bs.family = f.family
+            WHERE f.row_type = 'FAMILY' AND f.horizon = 'today' AND f.over_by_per_day > 0)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks ORDER BY check_name;

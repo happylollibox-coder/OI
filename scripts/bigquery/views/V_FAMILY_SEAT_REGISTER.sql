@@ -244,12 +244,37 @@ bidv AS (
   SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid,
          COUNT(DISTINCT ROUND(bid, 2)) AS bid_versions
   FROM `onyga-482313.OI.DIM_KEYWORD` GROUP BY 1, 2),
+-- ENGINE PARITY FOR THE LEAK PAUSE (R-c, added 2026-08-23). The recovered-today figure may only
+-- count a pause the leak book will actually WRITE. tools/build_seat_moves_bulksheet.py refuses a
+-- leak on four measured grounds — holdout, no readable live state, already switched off in Amazon,
+-- and a season BLOCK_CUT. Three of the four are read here; the fourth is NOT, and deliberately.
+-- Without this the arithmetic promises dollars no sheet can move: a leak that is already paused in
+-- Amazon still carries trailing spend on the basis window, and a pause row for it changes nothing.
+--   the live switch: two independent feeds, and a row counts as SERVING only when the ones that
+--   exist agree on ENABLED — a disagreement must never read as enabled (the generator's rule).
+--   THE SEASON BLOCK_CUT IS NOT READ HERE, AND THE REASON IS MEASURED. V_KEYWORD_CONTEXT_GATE is a
+--   ceiling-shaped view: joined into this register it is re-evaluated on every branch that reads a
+--   keyword, and the same read that costs 24s without it costs 45-98s with it — the register is
+--   the object Ori reads, and tripling it to carry a guard that fires on no row today is the wrong
+--   trade (house rule 11's spirit). The guard is enforced OUTSIDE the hot path instead: acceptance
+--   check B36 queries the gate ONCE against the executable LEAK set and FAILS if any leak the
+--   register counts as recovered is one the generator would refuse on the season ledger. If that
+--   check ever fires, the answer is a T_ materialisation of the gate, not an inline join.
+kwfeed AS (
+  SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid,
+         UPPER(COALESCE(state, '')) AS st
+  FROM `onyga-482313.OI.V_SRC_AmazonAds_keyword`
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY date DESC) = 1),
 -- the keyword's CURRENT DIM_KEYWORD state (R-k refined): the gap cause reads it — a paused or
 -- archived row is trailing spend, an enabled row gets its verdict on the next state run
 dimk AS (
-  SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid, UPPER(state) AS dim_state
-  FROM `onyga-482313.OI.DIM_KEYWORD` WHERE is_current
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY effective_from DESC, effective_to DESC) = 1),
+  SELECT d.cid, d.kid, d.dim_state, kf.st AS feed_state
+  FROM (
+    SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid,
+           UPPER(state) AS dim_state, keyword_text
+    FROM `onyga-482313.OI.DIM_KEYWORD` WHERE is_current
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY effective_from DESC, effective_to DESC) = 1) d
+  LEFT JOIN kwfeed kf ON kf.cid = d.cid AND kf.kid = d.kid),
 -- the ads scan starts at the context window or the OLDEST standing raise, whichever is earlier,
 -- so clicks_since_raise is never truncated by an arbitrary window (Task 1 polish P2)
 scan_from AS (
@@ -403,6 +428,14 @@ c AS (
          pb.bid_park,
          run_day.d AS snap_d,
          dk.dim_state,
+         -- the live switch, read exactly as the leak book reads it: '' = unreadable in BOTH feeds,
+         -- 'ENABLED' only when the ones that exist agree, otherwise the value that disagrees. A
+         -- disagreement must never read as enabled — nothing is paused blind.
+         CASE WHEN dk.feed_state IS NULL AND dk.dim_state IS NULL THEN ''
+              WHEN COALESCE(dk.feed_state, dk.dim_state) = 'ENABLED'
+                   AND COALESCE(dk.dim_state, dk.feed_state) = 'ENABLED' THEN 'ENABLED'
+              ELSE COALESCE(NULLIF(dk.feed_state, 'ENABLED'), NULLIF(dk.dim_state, 'ENABLED'), 'ENABLED')
+         END AS live_state,
          -- the MEASURED gap cause (R-k refined): why an off-ladder spender has no verdict row
          CASE WHEN u.on_ladder THEN CAST(NULL AS STRING)
               WHEN u.keyword_id = '-1' THEN 'NO_ID'
@@ -511,7 +544,26 @@ kw AS (
               WHEN d.book_new_bid IS NOT NULL THEN d.spend7 / k.basis_days * SAFE_DIVIDE(d.book_new_bid, d.book_old_bid)
               ELSE d.spend7 / k.basis_days END AS cost_rejudged,
          -- a repair in a holdout campaign is never re-priced, so it never earns the good side
-         IF(d.code = 'REPAIR' AND NOT (d.holdout AND d.snap_d >= d.holdout_eligible_from), '80', x.side) AS side_rejudged
+         IF(d.code = 'REPAIR' AND NOT (d.holdout AND d.snap_d >= d.holdout_eligible_from), '80', x.side) AS side_rejudged,
+         -- WHY A LEAK MAY GET NO PAUSE ROW, measured (R-l, engine parity with the leak book's
+         -- classify_leak; added 2026-08-23). NULL = the leak book will WRITE its pause row;
+         -- anything else is the rule that stops it, and the row's dollars must then stay OUT of
+         -- the recovered-today total, because a pause that is never written recovers nothing.
+         -- The order matches the generator's, and every input is carried by dimk so the guard
+         -- costs the wide query no extra join (house rule 11's spirit; the season gate, which is
+         -- NOT read here, is the one that could not be afforded — see the kwfeed block above).
+         CASE WHEN d.code != 'LEAK'                                  THEN CAST(NULL AS STRING)
+              WHEN d.holdout AND d.snap_d >= d.holdout_eligible_from THEN 'HOLDOUT'
+              WHEN d.live_state = ''                                 THEN 'LIVE_STATE_UNKNOWN'
+              WHEN d.live_state != 'ENABLED'                         THEN 'ALREADY_PAUSED'
+              ELSE CAST(NULL AS STRING) END AS leak_block,
+         -- the same refusals in the words the family sentence uses. HOLDOUT is worded by its own
+         -- clause (n_bad_holdout) and is NULL here so it is never said twice.
+         CASE WHEN d.code != 'LEAK'                                  THEN CAST(NULL AS STRING)
+              WHEN d.holdout AND d.snap_d >= d.holdout_eligible_from THEN CAST(NULL AS STRING)
+              WHEN d.live_state = '' THEN 'the switch could not be read in Amazon at all, and nothing is paused blind'
+              WHEN d.live_state != 'ENABLED' THEN 'already switched off in Amazon (this is trailing spend; a pause row would change nothing)'
+              ELSE CAST(NULL AS STRING) END AS leak_block_words
   FROM coded d CROSS JOIN k
   JOIN codes x ON x.code = d.code
   LEFT JOIN ledger l ON l.family = d.family AND l.campaign_id = d.campaign_id AND l.keyword_id = d.keyword_id),
@@ -528,17 +580,30 @@ kw_h AS (
          CASE hz.horizon WHEN 're-judged' THEN IF(code = 'REPAIR' AND NOT no_sheet, 'marginal — at its bar', category) ELSE category END AS category_h
   FROM kw CROSS JOIN hz),
 fam_h AS (
+  -- EVERY DOLLAR AGGREGATE IS ROUNDED HERE, AT SOURCE (2026-08-23, eighth pass). A distributed
+  -- FLOAT64 SUM is not associative: the same read of this view returned bad_side_per_day as a
+  -- double just under 48.965 on one run and just over it on the next, so the published COLUMN
+  -- (rounded to four decimals) read the same both times while the SENTENCE, formatted from the
+  -- raw double with %.2f, alternated between "$48.96/day" and "$48.97/day". The rows were
+  -- otherwise byte-identical; a keyed FULL OUTER JOIN of two in-session reads found exactly one
+  -- differing row, and the pre-change view body reproduced it, so it is not this pass's doing —
+  -- it is the register failing its own determinism guarantee (spec §8) on a half-cent boundary.
+  -- Rounding the aggregate ONCE, here, gives every consumer the same double: the column, the
+  -- derived figures (judged, allowance, open capacity, over_by) and the sentence can no longer
+  -- disagree with each other or with themselves between two reads. Four decimals, because that is
+  -- what the published columns already carry, and a cent-level reconciliation (B01/B02/B15)
+  -- cannot notice the difference.
   SELECT family, book, horizon, hz_order,
-         SUM(cost_today) AS spend_basis_per_day,
-         SUM(spend28) / MAX(k.context_days) AS spend_context_per_day,
-         SUM(cost_h) AS spend_h_per_day,
-         SUM(IF(side_h = '80', cost_h, 0)) AS good_side_per_day,
-         SUM(IF(side_h = '20', cost_h, 0)) AS bad_side_per_day,
-         SUM(IF(side_h = 'DEFENSE', cost_h, 0)) AS defense_per_day,
-         SUM(IF(side_h = 'LAUNCH', cost_h, 0)) AS launch_per_day,
-         SUM(IF(side_h = '20' AND occupant_kind IS NOT NULL, cost_h, 0)) AS seats_cost_per_day,
-         SUM(IF(code_h = 'LEAK', cost_h, 0)) AS leak_per_day,
-         SUM(IF(code_h = 'GAP', cost_h, 0)) AS gap_per_day,
+         ROUND(SUM(cost_today), 4) AS spend_basis_per_day,
+         ROUND(SUM(spend28) / MAX(k.context_days), 4) AS spend_context_per_day,
+         ROUND(SUM(cost_h), 4) AS spend_h_per_day,
+         ROUND(SUM(IF(side_h = '80', cost_h, 0)), 4) AS good_side_per_day,
+         ROUND(SUM(IF(side_h = '20', cost_h, 0)), 4) AS bad_side_per_day,
+         ROUND(SUM(IF(side_h = 'DEFENSE', cost_h, 0)), 4) AS defense_per_day,
+         ROUND(SUM(IF(side_h = 'LAUNCH', cost_h, 0)), 4) AS launch_per_day,
+         ROUND(SUM(IF(side_h = '20' AND occupant_kind IS NOT NULL, cost_h, 0)), 4) AS seats_cost_per_day,
+         ROUND(SUM(IF(code_h = 'LEAK', cost_h, 0)), 4) AS leak_per_day,
+         ROUND(SUM(IF(code_h = 'GAP', cost_h, 0)), 4) AS gap_per_day,
          -- counts by the HORIZON's own side (D5): a projection never pairs today's counts with
          -- projected dollars — a repair that moved to the good side at re-judged is not a seat there
          COUNTIF(occupant_kind IS NOT NULL AND side_h = '20') AS seats_h,
@@ -553,47 +618,57 @@ fam_h AS (
          -- the gap-cause buckets (R-k refined): blind (no keyword id), trailing (disabled on
          -- Amazon), next-run (enabled, verdict coming), check (real id, no current DIM row)
          COUNTIF(code = 'GAP' AND gap_cause = 'NO_ID') AS n_gap_blind,
-         SUM(IF(code = 'GAP' AND gap_cause = 'NO_ID', cost_today, 0)) AS gap_blind_today,
+         ROUND(SUM(IF(code = 'GAP' AND gap_cause = 'NO_ID', cost_today, 0)), 4) AS gap_blind_today,
          COUNTIF(code = 'GAP' AND gap_cause = 'DISABLED') AS n_gap_trailing,
-         SUM(IF(code = 'GAP' AND gap_cause = 'DISABLED', cost_today, 0)) AS gap_trailing_today,
+         ROUND(SUM(IF(code = 'GAP' AND gap_cause = 'DISABLED', cost_today, 0)), 4) AS gap_trailing_today,
          COUNTIF(code = 'GAP' AND gap_cause = 'NEWLY_SEEN') AS n_gap_next_run,
          COUNTIF(code = 'GAP' AND gap_cause = 'UNKNOWN') AS n_gap_check,
-         SUM(IF(code = 'GAP' AND gap_cause = 'UNKNOWN', cost_today, 0)) AS gap_check_today,
+         ROUND(SUM(IF(code = 'GAP' AND gap_cause = 'UNKNOWN', cost_today, 0)), 4) AS gap_check_today,
          COUNTIF(code = 'REPAIR') AS n_repair, COUNTIF(code = 'STALLED_PROBE') AS n_stalled,
          COUNTIF(code = 'FAILED') AS n_failed, COUNTIF(code = 'PROBATION') AS n_probation,
          COUNTIF(code = 'PROBE') AS n_probe, COUNTIF(code = 'DEFENSE') AS n_defense,
-         SUM(IF(code = 'REPAIR', cost_day1, 0)) AS repair_day1,
-         SUM(IF(code = 'STALLED_PROBE', cost_today, 0)) AS stalled_today,
-         SUM(IF(code = 'FAILED', cost_today, 0)) AS failed_today,
+         ROUND(SUM(IF(code = 'REPAIR', cost_day1, 0)), 4) AS repair_day1,
+         ROUND(SUM(IF(code = 'STALLED_PROBE', cost_today, 0)), 4) AS stalled_today,
+         ROUND(SUM(IF(code = 'FAILED', cost_today, 0)), 4) AS failed_today,
          -- R-l: the executable recovery is PAUSES ONLY — a leak paused, a failed keyword killed
          -- with a pause row — and a holdout campaign gets no sheet row, so it recovers nothing.
-         COUNTIF(code = 'LEAK' AND NOT (holdout AND snap_d >= holdout_eligible_from)) AS n_leaks_exec,
-         SUM(IF(code = 'LEAK' AND NOT (holdout AND snap_d >= holdout_eligible_from), cost_today, 0)) AS leak_exec_today,
+         -- EXECUTABLE means the leak book will actually WRITE the row (leak_block IS NULL): the
+         -- holdout guard is only the first of four measured refusals, and counting a leak the
+         -- generator will refuse promises dollars no sheet can move (added 2026-08-23; before it,
+         -- this pair counted every non-holdout leak and the promise diverged from the book the
+         -- moment a leak was switched off in Amazon, season-blocked, or unreadable).
+         COUNTIF(code = 'LEAK' AND leak_block IS NULL) AS n_leaks_exec,
+         ROUND(SUM(IF(code = 'LEAK' AND leak_block IS NULL, cost_today, 0)), 4) AS leak_exec_today,
+         -- …and the leaks the book refuses, with the measured rule that refuses each, so the
+         -- sentence can say what those dollars depend on instead of silently dropping them
+         -- (house rule 10: unmeasured never reads as bad — these are MEASURED, and named).
+         COUNTIF(code = 'LEAK' AND leak_block IS NOT NULL
+                 AND leak_block != 'HOLDOUT') AS n_leaks_blocked,
+         ROUND(SUM(IF(code = 'LEAK' AND leak_block IS NOT NULL AND leak_block != 'HOLDOUT',
+                      cost_today, 0)), 4) AS leak_blocked_today,
+         STRING_AGG(DISTINCT IF(code = 'LEAK', leak_block_words, NULL), '; '
+                    ORDER BY IF(code = 'LEAK', leak_block_words, NULL)) AS leak_blocked_reasons,
          -- …and WHICH BOOK each of those pauses rides on, per row. A leak whose KEYWORD_PAUSE row
          -- already sits at PENDING_UPLOAD is on a sheet that EXISTS: the reader's move is to upload
          -- that batch (or label it SUPERSEDED_NEVER_UPLOADED), not to build another book. A leak no
          -- book carries rides the next one the generator builds. Same split as the projection
          -- counts above, but on the TODAY code and restricted to the executable set, because this
          -- pair words the recovered-today clause and must agree with n_leaks_exec to the row.
-         COUNTIF(code = 'LEAK' AND pause_pending
-                 AND NOT (holdout AND snap_d >= holdout_eligible_from)) AS n_leaks_exec_on_book,
-         COUNTIF(code = 'LEAK' AND NOT pause_pending
-                 AND NOT (holdout AND snap_d >= holdout_eligible_from)) AS n_leaks_exec_off_book,
-         STRING_AGG(DISTINCT IF(code = 'LEAK' AND pause_pending
-                                AND NOT (holdout AND snap_d >= holdout_eligible_from), pause_batch_id, NULL), ', '
-                    ORDER BY IF(code = 'LEAK' AND pause_pending
-                                AND NOT (holdout AND snap_d >= holdout_eligible_from), pause_batch_id, NULL)) AS leak_pause_books,
+         COUNTIF(code = 'LEAK' AND pause_pending AND leak_block IS NULL) AS n_leaks_exec_on_book,
+         COUNTIF(code = 'LEAK' AND NOT pause_pending AND leak_block IS NULL) AS n_leaks_exec_off_book,
+         STRING_AGG(DISTINCT IF(code = 'LEAK' AND pause_pending AND leak_block IS NULL, pause_batch_id, NULL), ', '
+                    ORDER BY IF(code = 'LEAK' AND pause_pending AND leak_block IS NULL, pause_batch_id, NULL)) AS leak_pause_books,
          COUNTIF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from)) AS n_failed_exec,
-         SUM(IF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from), cost_today, 0)) AS failed_exec_today,
+         ROUND(SUM(IF(code = 'FAILED' AND NOT (holdout AND snap_d >= holdout_eligible_from), cost_today, 0)), 4) AS failed_exec_today,
          -- and the same guard on the two lines that recover nothing: a stalled probe or a repair in
          -- a holdout campaign cannot even be re-priced, so it is never listed as a move
          COUNTIF(code = 'STALLED_PROBE' AND NOT no_sheet) AS n_stalled_exec,
-         SUM(IF(code = 'STALLED_PROBE' AND NOT no_sheet, cost_today, 0)) AS stalled_exec_today,
+         ROUND(SUM(IF(code = 'STALLED_PROBE' AND NOT no_sheet, cost_today, 0)), 4) AS stalled_exec_today,
          COUNTIF(code = 'REPAIR' AND NOT no_sheet) AS n_repair_exec,
-         SUM(IF(code = 'REPAIR' AND NOT no_sheet, cost_day1, 0)) AS repair_exec_day1,
+         ROUND(SUM(IF(code = 'REPAIR' AND NOT no_sheet, cost_day1, 0)), 4) AS repair_exec_day1,
          -- every 20%-side row that gets no sheet row at all while the holdout arm runs
          COUNTIF(side_h = '20' AND no_sheet) AS n_bad_holdout,
-         SUM(IF(side_h = '20' AND no_sheet, cost_h, 0)) AS bad_holdout_today,
+         ROUND(SUM(IF(side_h = '20' AND no_sheet, cost_h, 0)), 4) AS bad_holdout_today,
          COUNT(*) AS n_keywords
   FROM kw_h CROSS JOIN k
   GROUP BY 1, 2, 3, 4),
@@ -771,15 +846,19 @@ shape AS (
                               -- measurement the projections do (R-l(e)).
                               CASE WHEN f.n_leaks_exec = 0 THEN ''
                                    WHEN f.n_leaks_exec_off_book = 0 THEN
-                                     FORMAT('pause the %d leaks — every one is already written on the pending leak book %s, so the move is to upload that book (or label it SUPERSEDED_NEVER_UPLOADED), not to build another (−$%.2f/day); ',
-                                            f.n_leaks_exec, f.leak_pause_books, f.leak_exec_today)
+                                     FORMAT('pause the %d %s — every one is already written on the pending leak book %s, so the move is to upload that book (or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s`), not to build another (−$%.2f/day); ',
+                                            f.n_leaks_exec, IF(f.n_leaks_exec = 1, 'leak', 'leaks'), f.leak_pause_books, f.leak_pause_books, f.leak_exec_today)
                                    WHEN f.n_leaks_exec_on_book = 0 THEN
-                                     FORMAT('pause the %d leaks on the next leak book (tools/build_seat_moves_bulksheet.py) (−$%.2f/day); ',
-                                            f.n_leaks_exec, f.leak_exec_today)
+                                     FORMAT('pause the %d %s on the next leak book (tools/build_seat_moves_bulksheet.py) (−$%.2f/day); ',
+                                            f.n_leaks_exec, IF(f.n_leaks_exec = 1, 'leak', 'leaks'), f.leak_exec_today)
                                    ELSE
-                                     FORMAT('pause the %d leaks — %d are already written on the pending leak book %s (upload it, or label it SUPERSEDED_NEVER_UPLOADED) and %d ride the next leak book (tools/build_seat_moves_bulksheet.py) (−$%.2f/day); ',
-                                            f.n_leaks_exec, f.n_leaks_exec_on_book, f.leak_pause_books, f.n_leaks_exec_off_book, f.leak_exec_today) END,
+                                     FORMAT('pause the %d %s — %d are already written on the pending leak book %s (upload it, or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s`) and %d ride the next leak book (tools/build_seat_moves_bulksheet.py) (−$%.2f/day); ',
+                                            f.n_leaks_exec, IF(f.n_leaks_exec = 1, 'leak', 'leaks'), f.n_leaks_exec_on_book, f.leak_pause_books, f.leak_pause_books, f.n_leaks_exec_off_book, f.leak_exec_today) END,
                               IF(f.n_failed_exec > 0, FORMAT('kill the %d failed keywords on the next book with a pause row (−$%.2f/day); ', f.n_failed_exec, f.failed_exec_today), ''),
+                              -- R-l, engine parity: leaks the leak book REFUSES. Their dollars are
+                              -- not in the recovered-today number above, and the reason each is
+                              -- refused is measured, not assumed, so it is said in words here.
+                              IF(f.n_leaks_blocked > 0, FORMAT('%s%d %s ($%.2f/day) get no pause row at all — %s — so their dollars are not part of the recovery above; ', IF(f.n_leaks_exec > 0, 'a further ', ''), f.n_leaks_blocked, IF(f.n_leaks_blocked = 1, 'leak', 'leaks'), f.leak_blocked_today, f.leak_blocked_reasons), ''),
                               IF(f.n_bad_holdout > 0, FORMAT('%d keywords on the 20%% side ($%.2f/day) sit in holdout campaigns and get no sheet row of any kind while the arm runs, so nothing listed here moves them; ', f.n_bad_holdout, f.bad_holdout_today), ''),
                               IF(f.n_leaks_exec + f.n_failed_exec = 0, 'there is nothing to pause on the next book; ', ''),
                               -- R-l, the lines that recover NOTHING today. Neither may wear the
@@ -1156,13 +1235,19 @@ shape AS (
     -- PENDING_UPLOAD is on a book that EXISTS — and it is the same fact that takes this row to $0
     -- on both projections, so telling the reader to build "the next leak book" would send him to
     -- create a second batch of the pause row he already has. The batch id is published beside it.
-    CASE WHEN w.holdout AND run_day.d >= w.holdout_eligible_from THEN 'no sheet row — holdout campaign'
-              WHEN w.pause_pending THEN FORMAT('its pause row is already written on the pending leak book %s — upload that book (or label it SUPERSEDED_NEVER_UPLOADED); do not build another. If its spend comes from search terms under a closed keyword, the negate is judged at the ad group', w.pause_batch_id)
+    CASE WHEN w.leak_block = 'HOLDOUT' THEN 'no sheet row — holdout campaign'
+              -- the three measured refusals the leak book applies after holdout. Each is a reason
+              -- there is NO row to write, so the move may not read 'pause it' (R-l, engine parity).
+              WHEN w.leak_block = 'ALREADY_PAUSED' THEN FORMAT('no sheet row — it already reads %s in Amazon, so this is trailing spend from before the switch and a pause row would change nothing; it leaves the register on its own when the spend stops', LOWER(w.live_state))
+              WHEN w.leak_block = 'LIVE_STATE_UNKNOWN' THEN 'no sheet row — the state of this switch could not be read in Amazon at all, and nothing is paused blind; check the keyword in Amazon by hand'
+              WHEN w.pause_pending THEN FORMAT('its pause row is already written on the pending leak book %s — upload that book, or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s`; do not build another. If its spend comes from search terms under a closed keyword, the negate is judged at the ad group', w.pause_batch_id, w.pause_batch_id)
               ELSE 'pause it on the next leak book (tools/build_seat_moves_bulksheet.py); if its spend comes from search terms under a closed keyword, the negate is judged at the ad group' END AS move,
     FORMAT('%s (%s) reads %s on the ladder yet spent $%.2f/day on the basis window at bid $%.2f. %s%s',
                 w.target_text, w.campaign_name, IF(w.state = 'DEAD', 'dead', 'parked'), w.cost_today, COALESCE(w.current_bid, 0),
-                CASE WHEN w.holdout AND run_day.d >= w.holdout_eligible_from THEN 'HOLDOUT — do not touch; no sheet row.'
-                     WHEN w.pause_pending THEN FORMAT('Its pause row is already on the pending leak book %s: upload that book, or label it SUPERSEDED_NEVER_UPLOADED — that is why this row costs $0 on both projections. If the spend is a search term under a closed keyword, negate it at the ad group (the acting grain).', w.pause_batch_id)
+                CASE WHEN w.leak_block = 'HOLDOUT' THEN 'HOLDOUT — do not touch; no sheet row.'
+                     WHEN w.leak_block = 'ALREADY_PAUSED' THEN FORMAT('It already reads %s in Amazon, so this is trailing spend from before the switch: no book will write a pause row for it and none is needed. It leaves the register on its own when the spend stops, and its dollars are not counted as recovered.', LOWER(w.live_state))
+                     WHEN w.leak_block = 'LIVE_STATE_UNKNOWN' THEN 'The state of this switch could not be read in Amazon at all, so no book will write a pause row for it — nothing is paused blind. Check the keyword in Amazon by hand; its dollars are not counted as recovered.'
+                     WHEN w.pause_pending THEN FORMAT('Its pause row is already on the pending leak book %s: upload that book, or label it never-uploaded with `tools/build_seat_moves_bulksheet.py --supersede %s` — that is why this row costs $0 on both projections. If the spend is a search term under a closed keyword, negate it at the ad group (the acting grain).', w.pause_batch_id, w.pause_batch_id)
                      ELSE 'Pause it on the next leak book; if the spend is a search term under a closed keyword, negate it at the ad group (the acting grain).' END,
                 IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(w.holdout_eligible_from AS STRING)), '')) AS sentence,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 5, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key

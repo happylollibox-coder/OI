@@ -274,3 +274,160 @@ def test_the_token_is_a_word_not_a_substring():
     # 'SPRING' must never read as SP, nor 'SBX' as SB
     assert routing_note('FRESH SPRING GIFTS', is_sb=True) is None
     assert routing_note('FRESH SBX GIFTS', is_sb=False) is None
+
+
+# ── the basis window (2026-08-23): the book must measure the week the register measures ───────
+# The register anchors at LEAST(MAX(date), FN_ADS_ANCHOR_CAP()); the cap is YESTERDAY (LA) for the
+# 22 hours before 22:00 LA. A generator that anchors at a bare MAX(date) therefore prints the
+# register's cost_per_day (capped week) beside its own 7-day spend (uncapped week) in the same row
+# of the same query, and states a watermark the dollars did not come from.
+
+def test_both_queries_anchor_on_the_register_s_capped_watermark():
+    from build_seat_moves_bulksheet import LEAK_SQL, NEGATE_SQL
+    for name, sql in (('LEAK_SQL', LEAK_SQL), ('NEGATE_SQL', NEGATE_SQL)):
+        assert 'FN_ADS_ANCHOR_CAP' in sql, f"{name} does not apply the register's anchor cap"
+        assert 'SELECT MAX(date) AS wm' not in sql, (
+            f"{name} still anchors on a bare MAX(date) — one day ahead of the register for 22 "
+            f"hours of every day")
+
+
+def test_the_anchor_cte_is_one_definition_shared_by_both_queries():
+    from build_seat_moves_bulksheet import WM_CTE, LEAK_SQL, NEGATE_SQL
+    assert WM_CTE in LEAK_SQL and WM_CTE in NEGATE_SQL
+
+
+# ── labelling a book never uploaded (2026-08-23) ──────────────────────────────────────────────
+# Every LEAK row tells Ori to upload the pending book "or label it never uploaded". Before this
+# fix the label had exactly one mechanism and it fired only at the end of a build that logged a
+# NEW batch — so the only way to obey the second half of the instruction was to build another
+# book, which the same sentence forbids.
+
+def test_supersede_note_names_the_replacement_when_a_new_book_replaces_it():
+    from build_seat_moves_bulksheet import supersede_note
+    note = supersede_note('seat_moves_20260901_0700')
+    assert 'superseded by seat_moves_20260901_0700' in note
+
+
+def test_supersede_note_says_so_plainly_when_no_later_book_replaces_it():
+    from build_seat_moves_bulksheet import supersede_note
+    note = supersede_note(None)
+    assert 'superseded by' not in note
+    assert 'no later book replaces it' in note
+
+
+def test_supersede_is_a_terminal_action_that_builds_nothing():
+    from build_seat_moves_bulksheet import build_parser
+    args = build_parser().parse_args(['--supersede', 'seat_moves_20260822_0431'])
+    assert args.supersede == ['seat_moves_20260822_0431']
+
+
+# ── the README of a book already logged (2026-08-23) ──────────────────────────────────────────
+# The README is the only human-readable cross-reference for a workbook whose SB sheet is bare ids.
+# When the writer gains a note, the READMEs already on disk do not — and regenerating one by
+# building another book is exactly what the register forbids. So a README is rewritable from its
+# own audit CSV, with no batch logged and no sheet written.
+
+def _audit_fixture(tmpdir):
+    import csv as _csv
+    path = os.path.join(tmpdir, 'seat_moves_test_audit.csv')
+    with open(path, 'w', newline='') as f:
+        w = _csv.writer(f)
+        w.writerow(['sheet', 'excel_row', 'kind', 'disposition', 'family', 'campaign_id',
+                    'campaign', 'ad_group_id', 'keyword_id', 'target', 'search_term',
+                    'match', 'channel', 'is_auto', 'is_pt', 'ladder_state', 'live_state',
+                    'old_state', 'old_bid', 'portfolio_id', 'latest_history_portfolio_id',
+                    'next_check_date', 'settled_clk90', 'settled_ord90',
+                    'cost_per_day', 'spend_7d',
+                    'ng_clicks_8w', 'ng_orders_8w', 'ng_spend_8w', 'ng_net_profit_8w',
+                    'ng_clicks_recent_5d', 'ng_lt_clicks', 'ng_lt_orders', 'ng_lt_net_profit',
+                    'ng_organic_units_8w', 'own_kw_clicks_8w', 'block_min_clicks',
+                    'holdout_eligible_from', 'season_block', 'engine_reason', 'reason'])
+        w.writerow(['SB Multi Ad Group Campaigns', '2', 'LEAK', 'PAUSE', 'Fresh', '1',
+                    'FRESH SP/BROAD (Hunter ,Pink, Gift)', '7', '9', 'gift for 18 year old girl',
+                    '', 'BROAD', 'SB', 'False', 'False', 'DEAD', 'ENABLED', 'ENABLED', '1.0',
+                    '', '', '', '15', '0', '1.24', '8.68',
+                    '', '', '', '', '', '', '', '', '', '', '',
+                    '', '', '', 'it is DEAD on the ladder => pause it.'])
+    return path
+
+
+def test_a_readme_rewritten_from_its_audit_carries_the_sheet_check(tmp_path):
+    from build_seat_moves_bulksheet import rewrite_readme_from_audit
+    audit = _audit_fixture(str(tmp_path))
+    out = rewrite_readme_from_audit(audit, batch_id='seat_moves_test', watermark='2026-08-21',
+                                    today_la='2026-08-22')
+    text = open(out).read()
+    assert 'Sheet check' in text
+    assert 'NAMED SP but Amazon has it as a Sponsored Brands campaign' in text
+    assert 'row 2: `gift for 18 year old girl`' in text
+
+
+def test_rewriting_a_readme_writes_no_workbook_and_logs_no_batch(tmp_path):
+    from build_seat_moves_bulksheet import rewrite_readme_from_audit
+    audit = _audit_fixture(str(tmp_path))
+    out = rewrite_readme_from_audit(audit, batch_id='seat_moves_test', watermark='2026-08-21',
+                                    today_la='2026-08-22')
+    names = sorted(os.listdir(str(tmp_path)))
+    assert names == ['seat_moves_test_README.md', 'seat_moves_test_audit.csv']
+    assert out.endswith('seat_moves_test_README.md')
+
+
+def test_a_rewrite_states_the_window_the_dollars_came_from_never_invents_one(tmp_path):
+    """A rewritten README must not quietly restate the week. The audit CSV carries it now; for a
+    book built before it did, the README being replaced is the record."""
+    from build_seat_moves_bulksheet import rewrite_readme_from_audit
+    audit = _audit_fixture(str(tmp_path))
+    readme = os.path.join(str(tmp_path), 'seat_moves_test_README.md')
+    with open(readme, 'w') as f:
+        f.write("# The leak book — what each row does and why\n\n"
+                "Built 2026-08-23 04:31 UTC from `seat_moves_test.xlsx` (ads watermark "
+                "2026-08-21, register of 2026-08-22). Change-log batch: "
+                "**`seat_moves_20260822_0431`**.\n\n")
+    out = rewrite_readme_from_audit(audit)
+    text = open(out).read()
+    assert 'Built 2026-08-23 04:31 UTC' in text          # the build time is preserved
+    assert 'REWRITTEN' in text                            # and the rewrite is declared
+    assert 'ads watermark 2026-08-21' in text             # the week is the one it was built on
+    assert 'seat_moves_20260822_0431' in text             # and so is the batch
+
+
+def test_a_rewrite_refuses_rather_than_state_a_week_it_cannot_prove(tmp_path):
+    from build_seat_moves_bulksheet import rewrite_readme_from_audit
+    audit = _audit_fixture(str(tmp_path))
+    try:
+        rewrite_readme_from_audit(audit)
+    except AssertionError as e:
+        assert 'window' in str(e)
+    else:
+        raise AssertionError('a README with no provable window must not be written')
+
+
+def test_the_audit_csv_carries_the_window_on_every_row():
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
+                            'build_seat_moves_bulksheet.py')).read()
+    assert "'watermark', 'register_day'])" in src
+
+
+def test_the_readme_names_the_seven_days_not_only_the_anchor(tmp_path):
+    """The watermark is the ANCHOR; the basis window is the seven complete days ending the day
+    BEFORE it. Stating only the anchor is what let a book claim watermark 2026-08-22 while its
+    dollars came from 2026-08-14..2026-08-20."""
+    from build_seat_moves_bulksheet import basis_window
+    assert basis_window('2026-08-21') == ('2026-08-14', '2026-08-20')
+    assert basis_window('2026-08-22') == ('2026-08-15', '2026-08-21')
+
+
+def test_a_rewrite_that_corrects_the_stated_week_says_so(tmp_path):
+    from build_seat_moves_bulksheet import rewrite_readme_from_audit
+    audit = _audit_fixture(str(tmp_path))
+    readme = os.path.join(str(tmp_path), 'seat_moves_test_README.md')
+    with open(readme, 'w') as f:
+        f.write("# The leak book — what each row does and why\n\n"
+                "Built 2026-08-23 04:31 UTC from `seat_moves_test.xlsx` (ads watermark "
+                "2026-08-22, register of 2026-08-22). Change-log batch: "
+                "**`seat_moves_20260822_0431`**.\n\n")
+    out = rewrite_readme_from_audit(audit, watermark='2026-08-21')
+    text = open(out).read()
+    assert 'ads watermark 2026-08-21' in text
+    assert 'previously stated 2026-08-22' in text
+    assert '2026-08-14' in text and '2026-08-20' in text

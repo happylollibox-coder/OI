@@ -41,6 +41,18 @@ view; the LEAK row's move and the FAMILY leak clause now name the book PER ROW �
 batch where one already carries the keyword, build the next book where none does — instead of
 sending every reader to build a book that already exists (B32). Task 3 SHIPPED; Tasks 4–5 (morning
 surface, health checks) pending — this file grows with each.
+Eighth repair pass 2026-08-23: **the book and the register now measure ONE week, only the pauses a
+sheet will actually write are counted as recovered, and the instructions the register publishes all
+have an executable path.** (1) The generator anchored on a bare `MAX(date)` while the register
+anchors on `LEAST(MAX(date), FN_ADS_ANCHOR_CAP())`, so for the twenty-two hours before 22:00 Los
+Angeles a book printed the register's cost beside its own seven-day spend measured on a different
+week — one shared `WM_CTE`, on the register's anchor, now serves both queries. (2) R-l's recovered-
+today figure counted every non-holdout leak; the leak book refuses four kinds, so the register now
+reads the live switch the way the generator does and publishes a refused leak as "no sheet row" with
+its dollars named and excluded (B36). (3) `--supersede` and `--rewrite-readme` became terminal
+actions, because every LEAK row offered a choice whose second half had no executable command behind
+it. (4) The retired-phrase check became a script that reads three files instead of two and collapses
+whitespace, and it found the two remaining stale clauses the moment it ran.
 
 **Which clock every date in this file is on.** Data dates (`snapshot_date`, `opened_on`, `closed_on`,
 basis windows) are Los Angeles, the warehouse clock. Pass times (`LOG_PIPELINE_RUNS`, when a routine
@@ -55,10 +67,18 @@ SQL sources and one deployed table description; count it yourself against a pre-
 `grep -o '2026-08-23' FILE | wc -l` (the per-file line count is not the occurrence count, and a
 repair pass once published the one for the other). Before dating anything in this file, read the clock you mean:
 `TZ=America/New_York date` / `TZ=America/Los_Angeles date`.
-**Drift check 2026-08-22** (see "Drift check" below): the two new steps are DEPLOYED but had not yet
-run inside an orchestrator pass; the ledger and the seat-economics table have only ever been written
-by hand. The drift instrument the A-suite was missing now exists
-(`scripts/bigquery/tests/DE_FAMILY_SEAT_LEDGER_drift.sql`, D00–D08).
+**Drift check.** The instrument the A-suite was missing exists
+(`scripts/bigquery/tests/DE_FAMILY_SEAT_LEDGER_drift.sql`, D00–D08). **Both new steps have now run
+inside a real orchestrator pass** (first observed 2026-08-23, New York clock: `SP_SNAPSHOT_KEYWORD_STATE`,
+then `SP_MAINTAIN_FAMILY_SEATS`, then `SP_REFRESH_CUBE_TABLES` whose step 0b builds
+`T_OOB_SEAT_ECONOMICS`, all `OK` in `LOG_PIPELINE_RUNS`) — until then the ledger and the
+seat-economics table had only ever been written by hand, and neither the wiring nor B04's recovery
+had been observed end to end. B04, which had been reading violations purely from the clock gap
+described under "When B04 is valid" below, cleared on that pass with no change to the view. Confirm
+it yourself rather than trusting this paragraph:
+`SELECT procedure_name, run_date, status, started_at FROM onyga-482313.OI.LOG_PIPELINE_RUNS
+ WHERE procedure_name IN ('SP_MAINTAIN_FAMILY_SEATS','SP_REFRESH_CUBE_TABLES')
+ ORDER BY started_at DESC LIMIT 4;`
 
 ## The doctrine in one paragraph
 
@@ -105,9 +125,10 @@ register.
 | `SP_MAINTAIN_FAMILY_SEATS` | Orchestrator Task 20.8b, right after `SP_SNAPSHOT_KEYWORD_STATE`. Closes, reopens, admits, observes. Idempotent on the same snapshot. | shipped |
 | `V_FAMILY_SEAT_REGISTER` | FAMILY / CATEGORY / SEAT / OPEN_SEAT / LEAK / GAP / NO_CLOCK / ABSORB / REFERENCE / UNMAPPED rows — the object Ori reads. | shipped |
 | `T_OOB_SEAT_ECONOMICS` | The budget engine's seat economics (slots, seat_rank, seat_cpc, role, and since 2026-08-22 the engine's park price `bid_park` — R-f) materialised once per pass from `V_OOB_KEYWORD` by `SP_REFRESH_CUBE_TABLES` step 0b, right after `T_LIFT_PROBES`. Exists because `V_OOB_KEYWORD` is a planner-ceiling view measured in minutes and the register may never inline it. | shipped |
-| `tools/build_seat_moves_bulksheet.py` | THE LEAK BOOK — one pause row per pausable LEAK row, or one stated no-action reason; ad-group-grain negatives for the search terms bleeding under a closed keyword. A SIBLING of the reprice book, not an arm of it (the argument is in its docstring and repeated below). Batch `seat_moves_<day>_<HHMM>` logged `PENDING_UPLOAD`; `--mark-uploaded` when Ori has uploaded. | shipped 2026-08-23 |
+| `tools/build_seat_moves_bulksheet.py` | THE LEAK BOOK — one pause row per pausable LEAK row, or one stated no-action reason; ad-group-grain negatives for the search terms bleeding under a closed keyword. A SIBLING of the reprice book, not an arm of it (the argument is in its docstring and repeated below). Batch `seat_moves_<day>_<HHMM>` logged `PENDING_UPLOAD`. Three terminal actions that build nothing: `--mark-uploaded` when Ori has uploaded, `--supersede` when he will not, `--rewrite-readme` to re-issue a logged book's README from its own audit CSV. Anchors on the register's own watermark (`WM_CTE`). | shipped 2026-08-23 |
 | `tools/build_restore_seat_moves_bulksheet.py` | Puts back the state every paused row carried. Names every negative it CANNOT undo, because a sheet cannot. | shipped 2026-08-23 |
 | `scripts/bigquery/tests/SEAT_MOVES_LEAK_ARM_probe.sql` | The TMP_ probe that exercises the leak arm's branches the live day does not reach. Real evidence, synthetic membership. | shipped 2026-08-23 |
+| `tools/check_retired_phrases.py` | The only instrument for the files the SQL suite cannot read — the view header (stripped before deploy), this SOP, the `config.yaml` entry and the leak book's docstring. Whitespace-insensitive, so a retired phrase that wraps across a line is still found; a hit is allowed ONLY inside quotation marks, and a straight `"` in `config.yaml` is a YAML delimiter rather than a quotation. Replaces the `grep` that used to live in the acceptance suite's comment, which missed both. Exit 1 on any unquoted hit. | shipped 2026-08-23 |
 | `V_DAILY_BRIEF` SEATS section, `SeatRegister` cube | the morning surface. | Task 4 |
 | `V_ENGINE_HEALTH` checks | reconciliation, idempotence, every occupant numbered. | Task 5 |
 
@@ -426,6 +447,39 @@ paragraph with R-l, not instead of it).** Three consequences, all of them in the
   one never moves to the good side and keeps `losing — in repair`, and the family clause lists no
   move for it.
 
+**The recovered-today figure counts only the pauses the leak book will WRITE (R-l, engine parity;
+2026-08-23, eighth repair pass; B36).** Holdout was the FIRST of four measured refusals in the leak
+book's `classify_leak`, and the arithmetic applied only that one. The other three are now applied
+here too, in the generator's own order:
+
+| the book refuses because… | the register publishes | in the recovery? |
+|---|---|---|
+| the campaign is in the HOLDOUT arm from its `eligible_from` | `no sheet row — holdout campaign` | no (it never was) |
+| neither keyword feed can be read at all | `no sheet row — the state of this switch could not be read in Amazon at all` | no |
+| the keyword already reads paused/archived in Amazon | `no sheet row — it already reads … in Amazon, so this is trailing spend from before the switch and a pause row would change nothing` | no |
+| the season ledger `BLOCK_CUT`s the text | *not read in the view — see below* | enforced by B36 |
+
+The live switch is read from **both** feeds (`V_SRC_AmazonAds_keyword` and the current
+`DIM_KEYWORD` row) with the generator's own rule — **a disagreement never reads as ENABLED** — and
+carried by the existing `dimk` lookup, so the wide query gains no join. The family clause names the
+refused leaks and their dollars in their own line rather than dropping them silently, and the LEAK
+row says on its own face why nothing will pause it.
+
+*Why this mattered before any row hit it.* The very action the register asks Ori to take next —
+upload the pending book and run `--mark-uploaded` — creates the case: for up to seven basis days
+those keywords keep trailing spend, stay LEAK, lose their pending pause row, and would have been
+counted again as recoverable while the generator printed "a pause row would change nothing".
+
+**The season gate is deliberately read in the CHECK and not in the view.** Joined into this
+register, `V_KEYWORD_CONTEXT_GATE` re-plans on every branch that reads a keyword and takes a full
+read from about 24 seconds to 45–98 seconds (measured three ways on 2026-08-23: the guard at full
+width, the guard on the candidate set, and the same view with the gate stubbed out). The register is
+the object Ori reads. So the expensive guard lives in acceptance check **B36**, which queries the
+gate ONCE against the executable leak set and fails if any leak the register counts is one the
+generator would refuse on the season ledger. That is what makes its absence from the view safe —
+**if B36 ever fires, the answer is a `T_` materialisation of the gate the register can afford, never
+a widened tolerance.**
+
 **Seat economics.** A seat costs what its occupant spends per day on the basis window. A probe's
 admission cost is the engine's own: the campaign's `seat_cpc` × `k.click_goal_day` (4 — the seat
 model's one 4-click trial a day), read from `T_OOB_SEAT_ECONOMICS`; the OPEN_SEAT row proposes
@@ -658,7 +712,37 @@ defect in the view, and it clears on the next pass. Before treating a B04 failur
 compare the last `SP_MAINTAIN_FAMILY_SEATS` in `LOG_PIPELINE_RUNS` against the current ads
 watermark; if the watermark is newer, re-run after the next pass. The check that a change did not
 CAUSE it is to point a `TMP_` copy of the previous view body at the same ledger and read the same
-number — which is exactly how the seventh pass cleared itself.
+number — which is exactly how the seventh pass cleared itself. **Confirmed 2026-08-23 (eighth
+pass):** the first real orchestrator pass ran the step and B04 went to zero with no change to the
+view, which is what the paragraph above predicted.
+
+**Determinism, and the half-cent that broke it (found and fixed 2026-08-23, eighth pass).** Spec §8
+promises the register is deterministic: two uncached reads must be identical. They were not. A
+keyed FULL OUTER JOIN of two in-session reads found exactly ONE differing row, and the difference
+was one character — a family sentence rendering its 20%-side total as `$48.96/day` on one read and
+`$48.97/day` on the next, while the published COLUMN read the same both times. A distributed
+`FLOAT64` `SUM` is not associative, so the aggregate landed either side of a half-cent boundary;
+the column was rounded to four decimals and absorbed it, and the sentence, formatted from the raw
+double with `%.2f`, did not. The pre-change view body reproduced it, so it was not that pass's
+doing. **Every dollar aggregate in `fam_h` is now rounded once, at source**, so the column, the
+derived figures (judged, allowance, open capacity, over_by) and the sentence all read the same
+double and cannot disagree — with each other or with themselves between two reads. Four uncached
+fingerprints now return one value where they previously alternated between two. This is a
+different animal from R-m's one-cent display fact: R-m is an aggregate against a sum of separately
+rounded parts, which is arithmetic; this was the same number rendering two ways on two reads,
+which is a broken guarantee.
+
+**TDD record (eighth pass, 2026-08-23) — how B36 was proven, since no live row exercises it.**
+House rule 15 forbids synthetic rows in live tables, so the proof was built out of `TMP_` copies
+and then dropped. `TMP_KWFEED_PROOF` is a copy of `V_SRC_AmazonAds_keyword` with ONE live leak's
+state forced to `paused`. Against a register built on that feed **with** the new guard, B29 / B32 /
+B36 read 0 / 0 / 0, the doctored LEAK row published `no sheet row — it already reads paused in
+Amazon …`, and the family's gap clause read `… a further 1 leak ($…/day) get no pause row at all —
+already switched off in Amazon …`. Against the same register with the guard removed — the
+arithmetic exactly as it stood before this pass — B29 read **1** and B36 read **2** on the same
+feed. Both checks can therefore fail, and this change is what makes them pass. All three `TMP_`
+objects were dropped. Two of B36's four legs are vacuous on live data today, by design: nothing is
+season-blocked and nothing is switched off, which is the point.
 
 **TDD record (sixth pass, 2026-08-23).** Against the LIVE deployed view the new B35 read **65**
 violations while B01–B34 all passed; after the repaired view was deployed all **35** read PASS,
@@ -941,6 +1025,15 @@ RACE, not against the ladder: the ladder's universe is enabled keywords only, so
 and `LIVE_STATE_UNKNOWN` exist because Amazon's live state can change between the snapshot the
 register reads and the moment the sheet is built. Both are exercised on the TMP_ probe.
 
+**The register applies the same list, and must (2026-08-23, eighth pass).** Until then only the
+holdout rule was mirrored into the register's arithmetic, so a leak this file would refuse could
+still be counted as money the next sheet recovers. That divergence is not hypothetical: the very
+action the register asks Ori to take — upload the pending book, then `--mark-uploaded` — makes
+those keywords read paused in Amazon while their trailing spend keeps them LEAK for up to seven
+basis days. See **The recovered-today figure counts only the pauses the leak book will WRITE**
+above; B36 holds the two sides together, including the season gate, which the register does not
+read and the check does.
+
 ### The negatives, and the grain they are judged on
 
 Candidates are the engine's own `NEGATE_TERM` proposals for the leaking keyword
@@ -970,13 +1063,50 @@ cannot undo rather than staying silent about the gap.
 **A negative is never counted as money recovered today.** R-l counts pauses only; the dollars printed
 beside a negative are what the ad group has already lost on the term, not a saving.
 
+### The week the book measures — one anchor, shared
+
+The generator prints two dollar figures for the same keyword: `cost_per_day`, taken straight from
+the register, and its own seven-day spend `sp7`, summed from `FACT_AMAZON_ADS`. They must be the
+same week. Until 2026-08-23 they were not: the register anchors at
+`LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` while both of the generator's `wm` CTEs used a bare
+`MAX(date)`. `FN_ADS_ANCHOR_CAP` is a **wall-clock** routine — it caps the anchor at yesterday
+(Los Angeles) until 22:00 there — so for twenty-two hours of every day the two sit one day apart,
+and a book built inside that window printed the register's cost beside a spend measured on a
+different seven days, under a stated watermark the dollars had not come from. A book built after
+22:00 LA was internally consistent; one built before was not, and that is the normal case.
+
+There is now **one** `WM_CTE`, on the register's anchor, and both queries are built from it
+(`WM_CTE + """…` in `tools/build_seat_moves_bulksheet.py`). Two unit tests hold it
+there: one asserts both queries apply `FN_ADS_ANCHOR_CAP` and neither carries a bare
+`SELECT MAX(date) AS wm`, the other that the CTE is a single shared definition.
+
+**The README names the seven days, not only the anchor.** The anchor is the last complete ads day;
+the basis window ends the day BEFORE it (`basis_from = wm − 7`, `basis_to = wm − 1`). Stating only
+the anchor is how a book came to claim one watermark while every dollar in it was measured on a
+window ending two days earlier. The audit CSV carries `watermark` and `register_day` on every row
+for the same reason, so a README rewritten later never has to guess; for a book built before those
+columns existed, the README being replaced is the record and a rewrite that corrects the stated
+week says so on the row, with the dollars untouched.
+
 ### The books, and how they reach Amazon
 
 `seat_moves_<warehouse day>_<HHMM>`, logged `PENDING_UPLOAD` at build time so the batch id is on
 record while nothing has reached Amazon. `PENDING_UPLOAD` keeps the rows out of
 `V_PPC_CHANGE_LOG_APPLIED`, so the state machine never re-reads a file that is still on disk as
-changes that happened. `--mark-uploaded BATCH` when Ori has uploaded; `--supersede BATCH` labels an
-earlier never-uploaded book `SUPERSEDED_NEVER_UPLOADED`. **A log row is never deleted.** Every date
+changes that happened.
+
+**Three TERMINAL actions, each of which builds nothing, logs nothing and uploads nothing.**
+`--mark-uploaded BATCH` when Ori has uploaded a book; `--supersede BATCH ...` when he will not,
+which labels those batches `SUPERSEDED_NEVER_UPLOADED` and stops; `--rewrite-readme AUDIT` to
+rewrite a logged book's README from its own audit CSV. The second of these is why the pass of
+2026-08-23 touched the generator at all: every LEAK row in the register offers Ori "upload that
+book, or label it never-uploaded", and until that day the label had exactly one mechanism — the
+tail of a build that logged a NEW batch — so the only way to obey the second half of the
+instruction was to build another book, which the same sentence forbids in the same breath. The
+third exists for the same reason: a README already on disk gains a note the writer learned after
+it was written WITHOUT a second book of the same rows. Both are named in the register's own move
+and in the README's provenance paragraph, so a reader never meets an instruction with no
+executable path. **A log row is never deleted.** Every date
 the book carries — the batch id and the file name included — is on the WAREHOUSE's clock, because the
 machine running it can already be on tomorrow while Los Angeles is not.
 
@@ -1143,6 +1273,29 @@ change is then a derivation or a source, never a literal.
    `SELECT family, campaign_name, target_text, state, next_check_date FROM
     onyga-482313.OI.FACT_KEYWORD_STATE s JOIN onyga-482313.OI.V_BOOK_ASSIGNMENT b USING (family)
     WHERE b.book = 'INVEST' AND s.state IN ('DEAD', 'PARKED');`
+
+15. **The FAILED half of the recovery has the same shape as the leak half had, and has not been
+   given the same guard.** (2026-08-23, eighth pass.) `failed_exec_today` counts every non-holdout
+   `FAILED` seat as a kill the reprice book will write, exactly as `leak_exec_today` counted every
+   non-holdout leak before B36. The reprice generator has its own refusals, and nobody has checked
+   whether they can diverge from this count the way the leak book's could. It was left alone
+   deliberately: the verifier's finding was about leaks, the fix there is measured and proven, and
+   extending it to a second generator on the same night would ship an unproven guard on a busier
+   path. Decide whether to (a) apply the same treatment to the reprice arm, (b) leave it and record
+   why, or (c) merge the two into one "will a sheet write this row?" predicate both books and the
+   register read. Read the current gap between count and generator with:
+   `SELECT family, campaign_id, keyword_id, target_text, cost_per_day FROM
+    onyga-482313.OI.V_FAMILY_SEAT_REGISTER WHERE row_type = 'SEAT' AND occupant_kind = 'failed'
+    AND horizon = 'today' ORDER BY cost_per_day DESC;`
+   then compare against what `tools/build_reprice_bulksheet.py` emits for the same keywords.
+
+16. **Should a leak already switched off in Amazon leave the register, or stay as a named line?**
+   (2026-08-23, eighth pass.) B36 stops such a row being counted as recoverable and words it as
+   trailing spend, which is the same treatment R-k gives an off-ladder paused keyword — but it is
+   still a LEAK row on the 20% side, carrying real dollars nobody can act on, for up to seven basis
+   days after the switch. That is honest and it is also noise. The alternatives are a separate
+   category ("closed — trailing spend, nothing to do"), or leaving it exactly as it is. Not a
+   defect either way; a reading preference, and yours.
 
 ## What the register never does
 
