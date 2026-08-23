@@ -1,5 +1,5 @@
 -- =============================================================================================
--- SP_BUILD_NEXT_WEEK_PLAN — v27.137 (2026-08-24): the nightly plan for the working families.
+-- SP_BUILD_NEXT_WEEK_PLAN — v27.138 (2026-08-24): the nightly plan for the working families.
 -- Reads V_PLAN_WINDOW_JUDGMENT (the side and the price) ONCE and turns it into money:
 --   1. POT (P-2)        the GOOD side's window spend per day, per family. Not the family total.
 --   2. ALLOWANCE (P-2)  allowance_share x pot, from DE_PLAN_CONFIG for today's calendar state.
@@ -11,22 +11,33 @@
 --                       each costing its spend AT THE REPAIRED PRICE, walked in rank order: a
 --                       candidate takes the lowest free seat WHENEVER ITS OWN COST FITS THE
 --                       ALLOWANCE STILL UNSPENT (§4.4 — a fit test, not a prefix stop; one lumpy
---                       candidate does not close the queue behind it). A continuing occupant keeps
---                       its number from DE_FAMILY_SEAT_LEDGER; a new occupant takes the family's
---                       lowest number the LEDGER is not still holding open, in rank order.
+--                       candidate does not close the queue behind it). A KEYWORD THE LADDER HAS
+--                       CLOSED IS NOT SEATABLE AT ANY PRICE (v27.138). A continuing occupant keeps
+--                       its number from DE_FAMILY_SEAT_LEDGER, or failing that from LAST NIGHT'S
+--                       PLAN (v27.138 — the register only admits ladder occupant states, so half
+--                       the plan's seats can never hold a ledger row and were re-numbered nightly
+--                       from a rank order that is recomputed every night); a new occupant takes
+--                       the family's lowest number neither source is still holding, in rank order.
 --   5. QUEUE (§4.5)     every candidate that did not fit: parked at the engine's park price, held
 --                       at the price it already has when that is at or below the park price, or
 --                       paused when THE LADDER HAS ALREADY CLOSED IT. Planned spend zero — see
 --                       the note.
 --   6. MOVES (§4.6)     one executable instruction per CANDIDATE; none on the good side, and none
 --                       on a not-good keyword with nothing to repair (§9, v27.135).
---   7. BUDGETS (§4.7)   a campaign's planned budget = the sum of its keywords' planned spend,
---                       ramped from today's budget by the same one-third step, floored at THE
---                       SPEND THE PLAN ITSELF PUT INSIDE THAT CAMPAIGN (its good side plus the
---                       seats the plan seated there — a budget under the good side is a cut and
---                       P-4 forbids cuts, and a budget under the seats is a promise the move
---                       cannot keep), snapped out of the forbidden $20.01-$31.99 band, floored at
---                       Amazon's $1.00 minimum.
+--   7. BUDGETS (§4.7)   a campaign's planned budget is ramped from today's budget by the same
+--                       one-third step and floored at THE MONEY THE PLAN CAN SEE INSIDE THAT
+--                       CAMPAIGN — its good side, its seats at the repaired price, AND the queue
+--                       that keeps buying clicks at the park price (v27.138: the v27.137 floor
+--                       counted the queue at zero, which is the plan's own arithmetic and not the
+--                       money, so a campaign whose spend is all queued was ramped towards a figure
+--                       the plan's own PARK sentence disowns). NO MOVE AT ALL on a campaign the
+--                       plan measured nothing in, or on a brand-defense campaign (v27.138: the
+--                       ramp was a one-third step towards zero on 19 unmeasured campaigns, one of
+--                       them brand defense, compounding nightly). Then snapped out of the
+--                       forbidden $20.01-$31.99 band and floored at Amazon's $1.00 minimum. Every
+--                       row publishes the cap's delta, its basis and the visible spend, and says
+--                       all three in words — the cap is the largest number here and used to be
+--                       the silent one.
 -- BOTH PLANS ARE WRITTEN (P-9): 'B' is live (rule B decides the side), 'A' is the shadow (the
 -- ladder decides the side, the window decides the amount). The scorecard grades both at T+14.
 --
@@ -67,10 +78,13 @@
 --       its current spend per day, and the row says so. This touches plan A only; plan A is never
 --       uploaded. If Ori wants the shadow priced properly, the one-line fix is in the judgement
 --       view (publish the unmasked price under a second name), never here.
---   (d) THE IMPLIED BUDGET SEES ONLY THE PLAN'S OWN KEYWORDS. Brand defense, launch-contained and
---       non-keyword targets are outside the universe (§8), so a campaign that mixes them has an
---       implied budget below its real need. That is why the budget is RAMPED from today's budget
---       rather than set to the implied figure, and floored at the plan's own spend inside it.
+--   (d) THE BUDGET SEES ONLY THE PLAN'S OWN KEYWORDS, SO IT IS RAMPED AND FLOORED AND SOMETIMES
+--       NOT MOVED AT ALL. Brand defense, launch-contained and non-keyword targets are outside the
+--       universe (§8), so a campaign that mixes them looks cheaper to the plan than it is. Ramping
+--       only SLOWS a wrong descent; it does not stop one, and a cap the ramp re-reads every night
+--       compounds. So v27.138 adds the two floors ramping cannot supply: the cap is never set
+--       below the money the plan can SEE inside the campaign (queue included), and a campaign the
+--       plan measured nothing in — or a brand-defense campaign — is not moved at all.
 --
 -- Idempotent: deletes today's as_of partition and rewrites it. Never touches an earlier one.
 -- Deterministic: every ordering reaches the keyword key.
@@ -80,7 +94,7 @@
 -- SOP: architecture/NEXT_WEEK_MONEY.md §3.
 -- =============================================================================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN`()
-OPTIONS (description = "v27.137 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
+OPTIONS (description = "v27.138 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
 BEGIN
   DECLARE as_of_d DATE DEFAULT CURRENT_DATE('America/Los_Angeles');
   DECLARE live_plan_code STRING DEFAULT 'B';
@@ -139,8 +153,19 @@ BEGIN
   CREATE OR REPLACE TEMP TABLE fam2 AS
   SELECT f.*,
          f.allowance_share * f.pot_per_day AS allowance_target_per_day,
-         -- P-8: close one third of the gap this window. A family already inside its allowance
-         -- gets the full allowance (GREATEST), never a ramp upwards into a bigger loss budget.
+         -- P-8 RAMPS DOWNWARDS AND NOT UPWARDS, AND THE GREATEST IS WHY (comment corrected
+         -- v27.138 — the previous one said the opposite of what this line does). The ramp term
+         -- alone closes one third of the gap between today's not-good spend and the allowance, in
+         -- whichever direction the gap runs. The GREATEST removes the DOWNWARD half of that for a
+         -- family already inside its allowance: instead of being ramped up one third at a time
+         -- towards the allowance, it is handed THE WHOLE ALLOWANCE ON NIGHT ONE. So the GREATEST
+         -- does not protect a family from a bigger loss budget — it GRANTS one immediately, and a
+         -- family whose allowance exceeds its entire not-good side (LolliME on the first
+         -- partition; SOP §3 publishes the query) is rationed by nothing: every candidate fits,
+         -- and P-6's repaired price can then RAISE the family's not-good spend.
+         -- That consequence is on the row (planned_spend_delta_per_day, and the seat sentence
+         -- prints the direction) and per family in the SOP. Whether a seat may raise at all is
+         -- one of the rulings recorded for Ori; the arithmetic here is the spec's, unchanged.
          GREATEST(f.allowance_share * f.pot_per_day,
                   f.notgood_today_per_day
                   - (f.notgood_today_per_day - f.allowance_share * f.pot_per_day) / f.ramp_steps)
@@ -149,10 +174,21 @@ BEGIN
 
   -- 4. Rank the candidates (P-7). The ordering reaches the keyword key, so the walk below is
   -- deterministic on any re-run.
+  -- A KEYWORD THE LADDER HAS CLOSED IS NOT SEATABLE (v27.138). It still gets a rank and a queue
+  -- position — every candidate has exactly one of a seat or a queue position (§9) — but it can
+  -- never take a seat, hold family allowance or be published with a price. v27.137 tested DEAD
+  -- only AFTER the two seat branches of the move CASE, so whether a closed keyword was stopped or
+  -- re-priced was decided by whether its cost happened to fit: on the first partition ten closed
+  -- keywords took seats and were published with an executable bid while a single closed keyword
+  -- that did not fit was told "a closed keyword is stopped, not re-priced". Two opposite
+  -- instructions from one ladder state in one partition. Deciding it here rather than only in the
+  -- move CASE is what makes it true of the MONEY as well as of the words: a closed keyword no
+  -- longer consumes allowance a repairable keyword could have used.
   CREATE OR REPLACE TEMP TABLE ranked AS
   SELECT r2.plan, r2.family, r2.campaign_id, r2.keyword_id,
          ROW_NUMBER() OVER w AS rank_no,
-         COALESCE(r2.plan_seat_cost, 0) AS cost
+         COALESCE(r2.plan_seat_cost, 0) AS cost,
+         (r2.ladder_state = 'DEAD') AS is_closed
   FROM r2
   WHERE r2.is_cand
   WINDOW w AS (PARTITION BY r2.plan, r2.family
@@ -175,16 +211,16 @@ BEGIN
   WITH RECURSIVE w AS (
     SELECT k.plan, k.family, k.campaign_id, k.keyword_id, k.rank_no, k.cost,
            f.allowance_ramped_per_day AS allow,
-           (k.cost <= f.allowance_ramped_per_day + 0.0001) AS took,
-           IF(k.cost <= f.allowance_ramped_per_day + 0.0001, k.cost, 0.0) AS spent
+           (NOT k.is_closed AND k.cost <= f.allowance_ramped_per_day + 0.0001) AS took,
+           IF(NOT k.is_closed AND k.cost <= f.allowance_ramped_per_day + 0.0001, k.cost, 0.0) AS spent
     FROM ranked k
     JOIN fam2 f ON f.plan = k.plan AND f.family = k.family
     WHERE k.rank_no = 1
     UNION ALL
     SELECT k.plan, k.family, k.campaign_id, k.keyword_id, k.rank_no, k.cost,
            w.allow,
-           (w.spent + k.cost <= w.allow + 0.0001),
-           w.spent + IF(w.spent + k.cost <= w.allow + 0.0001, k.cost, 0.0)
+           (NOT k.is_closed AND w.spent + k.cost <= w.allow + 0.0001),
+           w.spent + IF(NOT k.is_closed AND w.spent + k.cost <= w.allow + 0.0001, k.cost, 0.0)
     FROM w
     JOIN ranked k ON k.plan = w.plan AND k.family = w.family AND k.rank_no = w.rank_no + 1
   )
@@ -198,16 +234,52 @@ BEGIN
   WHERE closed_on IS NULL
   GROUP BY 1, 2, 3;
 
+  -- THE PLAN'S OWN LAST PARTITION IS THE SECOND SOURCE OF CONTINUITY (v27.138). §9 promises "seat
+  -- numbers stable across days for continuing occupants", and the ledger alone cannot deliver it:
+  -- SP_MAINTAIN_FAMILY_SEATS admits only LADDER occupant states, so a keyword the PLAN seats whose
+  -- ladder state the register closes (AT_BAR closes TO_GOOD_SIDE, DEAD closes KILLED) never
+  -- acquires an open ledger row and, on v27.137, was handed a fresh number every night from an
+  -- index into THAT NIGHT'S rank order — which is recomputed from the window nightly. Half the
+  -- first partition's seats were in that position, so "SEAT 52 of LolliME" named a different
+  -- keyword from one night to the next and nothing could see it: C05 checks uniqueness inside one
+  -- partition and C17 checks non-collision with the register.
+  -- The precedence is register > last night's plan > lowest free number. The register still wins,
+  -- because it is the authority Ori's vocabulary comes from; last night's plan only fills the gap
+  -- the register leaves, and only with a number the register is not holding open for anyone else.
+  CREATE OR REPLACE TEMP TABLE prior_plan AS
+  WITH h AS (
+    SELECT plan, family, CAST(campaign_id AS STRING) AS campaign_id,
+           CAST(keyword_id AS STRING) AS keyword_id, seat_no, as_of,
+           MAX(as_of) OVER (PARTITION BY plan) AS last_as_of
+    FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+    WHERE as_of < as_of_d AND seat_no IS NOT NULL)
+  SELECT plan, family, campaign_id, keyword_id, MIN(seat_no) AS prior_seat_no
+  FROM h WHERE as_of = last_as_of
+  GROUP BY 1, 2, 3, 4;
+
   CREATE OR REPLACE TEMP TABLE seated AS
-  SELECT k.plan, k.family, k.campaign_id, k.keyword_id, k.rank_no,
-         -- a ledger number is honoured ONCE per family: if two open ledger rows claim the same
-         -- seat, the better-ranked keyword keeps it and the other is treated as a new occupant,
-         -- so the "numbered exactly once" guarantee cannot be broken by a ledger inconsistency.
-         IF(ROW_NUMBER() OVER (PARTITION BY k.plan, k.family, l.led_seat_no ORDER BY k.rank_no) = 1,
-            l.led_seat_no, NULL) AS led_seat_no
-  FROM walk k
-  LEFT JOIN led l ON l.family = k.family AND l.campaign_id = k.campaign_id AND l.keyword_id = k.keyword_id
-  WHERE k.took;
+  WITH c AS (
+    SELECT k.plan, k.family, k.campaign_id, k.keyword_id, k.rank_no,
+           l.led_seat_no,
+           -- last night's number is only a claim if the register is not holding it for someone else
+           IF(pp.prior_seat_no IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM led l2
+                              WHERE l2.family = k.family AND l2.led_seat_no = pp.prior_seat_no),
+              pp.prior_seat_no, NULL) AS prior_seat_no
+    FROM walk k
+    LEFT JOIN led l  ON l.family = k.family AND l.campaign_id = k.campaign_id
+                    AND l.keyword_id = k.keyword_id
+    LEFT JOIN prior_plan pp ON pp.plan = k.plan AND pp.family = k.family
+                           AND pp.campaign_id = k.campaign_id AND pp.keyword_id = k.keyword_id
+    WHERE k.took)
+  SELECT plan, family, campaign_id, keyword_id, rank_no, led_seat_no,
+         -- a number is honoured ONCE per family: if two rows claim the same seat, the REGISTER's
+         -- claimant keeps it and the other is treated as a new occupant, so the "numbered exactly
+         -- once" guarantee cannot be broken by an inconsistency in either source.
+         IF(ROW_NUMBER() OVER (PARTITION BY plan, family, COALESCE(led_seat_no, prior_seat_no)
+                               ORDER BY (led_seat_no IS NULL), rank_no) = 1,
+            COALESCE(led_seat_no, prior_seat_no), NULL) AS kept_seat_no
+  FROM c;
 
   -- the free seat numbers, lowest first, and the new occupants that take them in rank order
   -- SEAT NUMBERS ARE THE REGISTER'S, NOT THE PLAN'S (§9, repaired v27.137). A number is FREE only
@@ -224,14 +296,23 @@ BEGIN
     SELECT plan, family, COUNT(*) AS n_seated FROM seated GROUP BY 1, 2),
   ledmax AS (
     SELECT family, MAX(led_seat_no) AS max_led FROM led GROUP BY 1),
+  keptmax AS (
+    SELECT plan, family, MAX(kept_seat_no) AS max_kept FROM seated GROUP BY 1, 2),
   nums AS (
     SELECT c.plan, c.family, x AS seat_no
     FROM cnt c
-    LEFT JOIN ledmax lm ON lm.family = c.family,
-    UNNEST(GENERATE_ARRAY(1, c.n_seated + COALESCE(lm.max_led, 0))) AS x),
+    LEFT JOIN ledmax lm ON lm.family = c.family
+    LEFT JOIN keptmax km ON km.plan = c.plan AND km.family = c.family,
+    UNNEST(GENERATE_ARRAY(
+      1, c.n_seated + GREATEST(COALESCE(lm.max_led, 0), COALESCE(km.max_kept, 0)))) AS x),
+  -- occupied = every number the REGISTER still holds open for this family, plus every number a
+  -- continuing occupant kept tonight. Both must be excluded or a new occupant takes a number that
+  -- is already somebody's.
   taken AS (
     SELECT c.plan, c.family, l.led_seat_no AS seat_no
-    FROM cnt c JOIN led l ON l.family = c.family),
+    FROM cnt c JOIN led l ON l.family = c.family
+    UNION DISTINCT
+    SELECT plan, family, kept_seat_no FROM seated WHERE kept_seat_no IS NOT NULL),
   free AS (
     SELECT n.plan, n.family, n.seat_no,
            ROW_NUMBER() OVER (PARTITION BY n.plan, n.family ORDER BY n.seat_no) AS free_ix
@@ -241,9 +322,12 @@ BEGIN
   fresh AS (
     SELECT plan, family, campaign_id, keyword_id,
            ROW_NUMBER() OVER (PARTITION BY plan, family ORDER BY rank_no) AS new_ix
-    FROM seated WHERE led_seat_no IS NULL)
+    FROM seated WHERE kept_seat_no IS NULL)
   SELECT s.plan, s.family, s.campaign_id, s.keyword_id,
-         COALESCE(s.led_seat_no, fr.seat_no) AS seat_no
+         COALESCE(s.kept_seat_no, fr.seat_no) AS seat_no,
+         CASE WHEN s.led_seat_no IS NOT NULL  THEN 'REGISTER'
+              WHEN s.kept_seat_no IS NOT NULL THEN 'PLAN_CONTINUITY'
+              ELSE 'NEW_LOWEST_FREE' END AS seat_no_source
   FROM seated s
   LEFT JOIN fresh n ON n.plan = s.plan AND n.family = s.family
                    AND n.campaign_id = s.campaign_id AND n.keyword_id = s.keyword_id
@@ -261,17 +345,20 @@ BEGIN
       WHEN r2.side = 'GOOD'                                             THEN 'NONE'
       WHEN r2.holdout                                                   THEN 'NONE_HOLDOUT'
       WHEN NOT r2.is_cand                                               THEN 'NONE'
+      -- §4.5: "parked at the channel park price OR PAUSED IF ALREADY CLOSED". Closed is the
+      -- ladder's own DEAD state, not "the park price is not below the current bid" — v27.136 read
+      -- the second and paused serving keywords on their FIRST window in the queue, against §4.5's
+      -- own kill ladder (bid to the floor, probation, then kill).
+      -- CLOSED IS TESTED BEFORE THE SEAT (v27.138), not merely before parking. "The stronger of
+      -- the two instructions, not the fallback" was written of parking in v27.137 and then placed
+      -- BELOW both seat branches, so on the first partition ten closed keywords were seated and
+      -- re-priced while one was stopped — the difference being only whether the cost fitted. The
+      -- walk above already refuses them a seat, so this branch can never be shadowed again.
+      WHEN r2.ladder_state = 'DEAD'                                     THEN 'PAUSE'
       WHEN m.seat_no IS NOT NULL
            AND ABS(COALESCE(r2.plan_bid, r2.current_bid, 0) - COALESCE(r2.current_bid, 0)) > 0.005
                                                                         THEN 'REPRICE'
       WHEN m.seat_no IS NOT NULL                                        THEN 'HOLD_AT_PRICE'
-      -- §4.5: "parked at the channel park price OR PAUSED IF ALREADY CLOSED". Closed is the
-      -- ladder's own DEAD state, not "the park price is not below the current bid" — v27.136 read
-      -- the second and paused serving keywords on their FIRST window in the queue, against §4.5's
-      -- own kill ladder (bid to the floor, probation, then kill). CLOSED IS TESTED FIRST: parking a
-      -- keyword the ladder has already killed leaves it buying clicks at the park price, and "or
-      -- paused if already closed" is the stronger of the two instructions, not the fallback.
-      WHEN r2.ladder_state = 'DEAD'                                     THEN 'PAUSE'
       WHEN COALESCE(r2.bid_park, r2.bid_floor, 0) < COALESCE(r2.current_bid, 0) - 0.005 THEN 'PARK'
       -- a queued keyword already at or below its park price has nothing to upload: it holds its
       -- queue position at the price it has, and the probation clock decides when it dies.
@@ -309,38 +396,84 @@ BEGIN
     IF(a.seat_no IS NOT NULL, DATE_ADD(as_of_d, INTERVAL a.settle_days DAY), NULL) AS verdict_date
   FROM assembled a;
 
-  -- 7. Campaign budgets: sum of planned spend, ramped one step, floored at the campaign's own
-  -- good-side spend (P-4), band-snapped and floored at $1.00.
+  -- 7. Campaign budgets. THE CAP IS THE LARGEST EXECUTABLE NUMBER THIS PROCEDURE PUBLISHES, and
+  -- v27.137's floor — "the plan's own spend inside the campaign" — was satisfied by construction
+  -- rather than by protecting anything, because the plan's own spend is exactly the figure that
+  -- counts a queued keyword at zero and a keyword it never judged at nothing at all. Two ways that
+  -- became an executable cut on the first partition:
+  --   (i)  THE QUEUE'S RESIDUAL STEERED THE BUDGET. A campaign whose money is in the QUEUE implies
+  --        almost nothing (queued rows are planned at zero) and was ramped towards that figure,
+  --        which the plan's own PARK sentence disowns in words on the same row: parking lowers a
+  --        price, it does not stop a spend. One campaign implied $2.56/day against $53.13/day of
+  --        spend the plan could see, and its cap was ramped down by a third.
+  --   (ii) CAMPAIGNS THE PLAN COULD NOT MEASURE WERE CUT TOWARDS ZERO. 19 campaigns had every
+  --        keyword NOT_SERVING with no spend and no clicks in a three-day August window; implied
+  --        was 0, so the ramp was a one-third step towards zero — $153.35/day of cuts on evidence
+  --        the plan does not have, compounding nightly because the ramp re-reads the cap it wrote
+  --        ($150 -> $100 -> $66.67 -> ...). One of them was a BRAND DEFENSE campaign whose five
+  --        keywords are the house's own brand terms. That breaks two binding house rules at once:
+  --        unmeasured never reads as bad, and brand defense is never judged on profit (§8).
+  -- The repair (v27.138) is three parts:
+  --   NEED is the money the plan can SEE inside the campaign — its good side, its seats at the
+  --   repaired price, AND the queue's continuing spend at today's rate. Parking is expected to
+  --   lower that, so using today's rate is deliberately conservative: it can only over-fund.
+  --   THE UNMEASURED GATE: a campaign with no spend and no clicks on any keyword the plan can see
+  --   gets NO MOVE. The plan has measured nothing there and has nothing to say about its cap.
+  --   THE DEFENSE GATE: a brand-defense campaign gets NO MOVE, whatever the window says. Detected
+  --   the way the seat register detects it (the ladder flag OR 'BRAND DEFENSE' in the campaign
+  --   name) — the ladder flag alone reads FALSE on the live defense campaign, which is why §8's
+  --   filter in the judgement view did not catch it. That the flag is wrong is a Task 1 file and
+  --   is recorded for Ori, not patched here.
   CREATE OR REPLACE TEMP TABLE budgets AS
   WITH implied AS (
     SELECT plan, campaign_id,
            SUM(planned_spend_per_day)                          AS implied_budget,
-           SUM(IF(side = 'GOOD', planned_spend_per_day, 0))     AS good_budget,
+           SUM(IF(side = 'GOOD', planned_spend_per_day, 0))    AS good_budget,
+           -- the queue's residual: what parking lowers and does not stop. A PAUSED row is the one
+           -- queue position whose spend really does stop, so it is not funded.
+           SUM(IF(is_cand AND seat_no IS NULL AND move != 'PAUSE',
+                  COALESCE(SAFE_DIVIDE(w_sp, window_days), 0), 0))  AS queue_spend,
+           -- everything the plan can see this campaign spending, whatever side it is on
+           SUM(COALESCE(SAFE_DIVIDE(w_sp, window_days), 0))    AS visible_spend,
+           SUM(COALESCE(w_clk, 0))                             AS visible_clicks,
+           LOGICAL_OR(COALESCE(is_brand_defense, FALSE)
+                      OR UPPER(COALESCE(campaign_name, '')) LIKE '%BRAND DEFENSE%')
+                                                               AS is_defense,
            MAX(campaign_current_budget)                        AS current_budget,
            MAX(fam_ramp_steps)                                 AS ramp_steps
     FROM priced GROUP BY 1, 2),
+  needed AS (
+    SELECT i.*,
+           i.implied_budget + i.queue_spend AS need_budget,
+           (i.visible_spend <= 0.0001 AND i.visible_clicks = 0
+            AND i.current_budget IS NOT NULL)                  AS unmeasured
+    FROM implied i),
   rampd AS (
-    -- THE FLOOR IS THE PLAN'S OWN SPEND, NOT THE GOOD SIDE ALONE (repaired v27.137). v27.136
-    -- floored at good_budget, so whenever the ramp pulled a campaign's budget below the plan's
-    -- implied spend the seats the plan had just opened inside that campaign were simply not in
-    -- the budget: the plan seated a keyword, costed it at the repaired price, charged it against
-    -- the family allowance, and then published a cap that could not pay for it. Flooring at
-    -- implied_budget (= the campaign's good side + the seats seated there; queued rows are zero)
-    -- only ever bites in the under-funding direction: when implied < current the ramped figure is
-    -- already above implied and the ramp still governs the descent.
-    SELECT plan, campaign_id, current_budget, good_budget, implied_budget,
+    SELECT n.*,
            GREATEST(
-             COALESCE(current_budget, implied_budget)
-             + (implied_budget - COALESCE(current_budget, implied_budget)) / ramp_steps,
-             implied_budget, good_budget, 1.00) AS raw_budget
-    FROM implied)
-  SELECT plan, campaign_id, current_budget,
-         ROUND(
-           CASE WHEN raw_budget > 20.00 AND raw_budget < 32.00
-                -- never snap a cap BELOW the spend the plan itself put inside this campaign
-                THEN IF(raw_budget < 26.00 AND implied_budget <= 20.00, 20.00, 32.00)
-                ELSE raw_budget END, 2) AS campaign_planned_budget
-  FROM rampd;
+             COALESCE(n.current_budget, n.need_budget)
+             + (n.need_budget - COALESCE(n.current_budget, n.need_budget)) / n.ramp_steps,
+             n.need_budget, n.good_budget, 1.00) AS raw_budget
+    FROM needed n),
+  snapped AS (
+    SELECT r.*,
+           ROUND(
+             CASE WHEN r.raw_budget > 20.00 AND r.raw_budget < 32.00
+                  -- never snap a cap BELOW the money the plan can see inside this campaign
+                  THEN IF(r.raw_budget < 26.00 AND r.need_budget <= 20.00, 20.00, 32.00)
+                  ELSE r.raw_budget END, 2) AS ramped_budget
+    FROM rampd r)
+  SELECT plan, campaign_id, current_budget, need_budget, visible_spend,
+         CASE WHEN is_defense OR unmeasured
+                THEN ROUND(COALESCE(current_budget, ramped_budget), 2)
+              ELSE ramped_budget END AS campaign_planned_budget,
+         CASE WHEN is_defense                          THEN 'NO_MOVE_BRAND_DEFENSE'
+              WHEN unmeasured                          THEN 'NO_MOVE_UNMEASURED'
+              WHEN ramped_budget <= need_budget + 0.005
+                   AND COALESCE(current_budget, need_budget) > need_budget
+                                                       THEN 'FLOORED_AT_NEED'
+              ELSE 'RAMPED' END AS campaign_budget_basis
+  FROM snapped;
 
   -- THE GUARANTEES ARE ASSERTED BEFORE THE PARTITION IS TOUCHED (repaired v27.137). v27.136
   -- DELETEd, INSERTed and only then ASSERTed. BigQuery scripts are not transactional here and the
@@ -365,8 +498,9 @@ BEGIN
      bid_park_source, bid_park_seat_econ, move, planned_spend_per_day,
      planned_spend_delta_per_day, verdict_date, pot_per_day,
      allowance_target_per_day, allowance_ramped_per_day, notgood_today_per_day, ramp_step,
-     ramp_steps, allowance_share, campaign_planned_budget, campaign_current_budget, holdout,
-     holdout_member, holdout_eligible_from, sentence, built_at)
+     ramp_steps, allowance_share, campaign_planned_budget, campaign_current_budget,
+     campaign_planned_budget_delta_per_day, campaign_budget_basis, campaign_visible_spend_per_day,
+     holdout, holdout_member, holdout_eligible_from, sentence, built_at)
   SELECT
     as_of_d, p.plan, (p.plan = live_plan_code), p.family, p.book, p.campaign_id, p.campaign_name,
     p.keyword_id, p.ad_group_id, p.target_text, p.match_type, p.channel, p.is_auto, p.is_pt,
@@ -393,6 +527,9 @@ BEGIN
           1 + DIV(DATE_DIFF(as_of_d, COALESCE(fs.first_as_of, as_of_d), DAY), p.window_days)),
     p.fam_ramp_steps, p.allowance_share,
     b.campaign_planned_budget, p.campaign_current_budget,
+    ROUND(b.campaign_planned_budget - COALESCE(p.campaign_current_budget,
+                                               b.campaign_planned_budget), 4),
+    b.campaign_budget_basis, ROUND(b.visible_spend, 4),
     p.holdout, p.holdout_member, p.holdout_eligible_from,
     CONCAT(
       IF(p.plan = live_plan_code, '', 'SHADOW PLAN A, recorded for grading and never uploaded (P-9). '),
@@ -403,15 +540,30 @@ BEGIN
           COALESCE(p.seat_no, 0), p.family, COALESCE(p.current_bid, 0),
           COALESCE(p.planned_bid_final, 0), COALESCE(p.plan_seat_cost, 0),
           COALESCE(p.allowance_ramped_per_day, 0),
-          IF(p.planned_spend_per_day
-             - COALESCE(SAFE_DIVIDE(p.w_sp, p.window_days), 0) > 0.005,
-             'A RAISE', 'a cut'),
+          CASE WHEN p.planned_spend_per_day
+                    - COALESCE(SAFE_DIVIDE(p.w_sp, p.window_days), 0) > 0.005 THEN 'A RAISE'
+               WHEN COALESCE(SAFE_DIVIDE(p.w_sp, p.window_days), 0)
+                    - p.planned_spend_per_day > 0.005                         THEN 'a cut'
+               ELSE 'no change' END,
           ABS(p.planned_spend_per_day - COALESCE(SAFE_DIVIDE(p.w_sp, p.window_days), 0)),
           COALESCE(p.verdict_date, as_of_d))
+        -- THE DIRECTION CLAUSE BELONGS HERE MOST OF ALL (v27.138). A held seat's sentence says
+        -- nothing is uploaded, and a reader stops there — but the seat is still COSTED at the
+        -- repaired price (P-6), so the plan can have budgeted MORE for this keyword than it is
+        -- spending while telling the reader there is nothing to do. v27.137 added the clause to
+        -- the REPRICE sentence only and its own account said both; these are exactly the rows
+        -- where the number is invisible without it.
         WHEN 'HOLD_AT_PRICE' THEN FORMAT(
-          ' SEAT %d of %s: the price is already where the plan wants it, so nothing is uploaded; it keeps its seat at about $%.2f a day of the $%.2f a day this family allows the not-good side. A held seat is still a seat and still carries a clock: judged again on %t (P-12), when it graduates, steps again, or gives the seat up.',
+          ' SEAT %d of %s: the price is already where the plan wants it, so nothing is uploaded; it keeps its seat at about $%.2f a day of the $%.2f a day this family allows the not-good side. That is %s of about $%.2f a day against what this keyword is spending now, uploaded or not. A held seat is still a seat and still carries a clock: judged again on %t (P-12), when it graduates, steps again, or gives the seat up.',
           COALESCE(p.seat_no, 0), p.family, COALESCE(p.plan_seat_cost, 0),
-          COALESCE(p.allowance_ramped_per_day, 0), COALESCE(p.verdict_date, as_of_d))
+          COALESCE(p.allowance_ramped_per_day, 0),
+          CASE WHEN p.planned_spend_per_day
+                    - COALESCE(SAFE_DIVIDE(p.w_sp, p.window_days), 0) > 0.005 THEN 'A RAISE'
+               WHEN COALESCE(SAFE_DIVIDE(p.w_sp, p.window_days), 0)
+                    - p.planned_spend_per_day > 0.005                         THEN 'a cut'
+               ELSE 'no change' END,
+          ABS(p.planned_spend_per_day - COALESCE(SAFE_DIVIDE(p.w_sp, p.window_days), 0)),
+          COALESCE(p.verdict_date, as_of_d))
         WHEN 'PARK' THEN FORMAT(
           ' QUEUED at rank %d, no seat: park the bid at $%.2f. Parking LOWERS the price, it does not stop the spend — this keyword keeps buying clicks at the park price until it earns a seat or is killed, so the real not-good spend of this family sits above the $%.2f a day allowance until then.',
           COALESCE(p.rank_no, 0), COALESCE(p.planned_bid_final, 0),
@@ -420,7 +572,7 @@ BEGIN
           ' QUEUED at rank %d, no seat — and its bid is already at or below the $%.2f park price, so there is NOTHING TO UPLOAD for this keyword: it holds its queue position at the price it already has. It is not paused and it is not dead; it keeps buying clicks at that price. A keyword that queues a whole window with no seat is a kill candidate, and the probation ladder — bid to the floor, probation, then kill — decides that, not this plan.',
           COALESCE(p.rank_no, 0), COALESCE(COALESCE(p.bid_park, p.bid_floor), 0))
         WHEN 'PAUSE' THEN FORMAT(
-          ' QUEUED at rank %d, no seat, and THE LADDER HAS ALREADY CLOSED THIS KEYWORD (state DEAD): pause it. This supersedes any parking the line above describes — a closed keyword is stopped, not re-priced, so the plan publishes no bid on this row.',
+          ' QUEUED at rank %d, and THE LADDER HAS ALREADY CLOSED THIS KEYWORD (state DEAD): pause it. THIS SUPERSEDES THE WHOLE JUDGEMENT ABOVE — a closed keyword does not compete for a seat at any price, holds none of the family allowance, and is stopped rather than parked or re-priced, so the plan publishes no bid on this row.',
           COALESCE(p.rank_no, 0))
         WHEN 'NONE_HOLDOUT' THEN
           ' This campaign is a measurement control: the plan records what it would have done, uploads nothing to it, and leaves its money out of the pot, the not-good side and the ramp.'
@@ -430,7 +582,31 @@ BEGIN
       END,
       IF(p.shadow_unpriced,
          ' SHADOW PRICING NOTE: the live plan calls this keyword GOOD, so P-4 withholds a repaired price for it and the shadow holds it at its current price and costs its seat at its current spend.',
-         '')) AS sentence,
+         ''),
+      -- THE CAMPAIGN CAP IS ALSO A MOVE, AND IT USED TO BE THE SILENT ONE (v27.138). Every
+      -- campaign in the first partition got a different cap from the one it has, and no sentence
+      -- anywhere mentioned the budget. A cap is executable in a way a bid is not: it starves every
+      -- keyword in the campaign, including the ones the plan never judged. So it says its number,
+      -- its direction and its reason on the row, next to the keyword move.
+      CASE b.campaign_budget_basis
+        WHEN 'NO_MOVE_BRAND_DEFENSE' THEN FORMAT(
+          ' CAMPAIGN CAP: unchanged at $%.2f a day. This is a BRAND DEFENSE campaign and defense is never judged on profit (spec §8), so the plan does not move its budget whatever the window says.',
+          COALESCE(b.campaign_planned_budget, 0))
+        WHEN 'NO_MOVE_UNMEASURED' THEN FORMAT(
+          ' CAMPAIGN CAP: unchanged at $%.2f a day. Not one keyword the plan can see in this campaign took a click or spent a cent in the window, so the plan has MEASURED NOTHING here and says nothing about the cap. Unmeasured never reads as bad.',
+          COALESCE(b.campaign_planned_budget, 0))
+        ELSE FORMAT(
+          ' CAMPAIGN CAP: $%.2f -> $%.2f a day, %s of $%.2f. The plan can see about $%.2f a day of spend inside this campaign (its good side, its seats at the repaired price, and the queue that keeps buying clicks at the park price) and the cap is never set below that%s.',
+          COALESCE(p.campaign_current_budget, 0), COALESCE(b.campaign_planned_budget, 0),
+          IF(COALESCE(b.campaign_planned_budget, 0)
+             - COALESCE(p.campaign_current_budget, 0) > 0.005, 'A RAISE', 'a cut'),
+          ABS(COALESCE(b.campaign_planned_budget, 0)
+              - COALESCE(p.campaign_current_budget, 0)),
+          COALESCE(b.need_budget, 0),
+          IF(b.campaign_budget_basis = 'FLOORED_AT_NEED',
+             ', which is what stopped this one going lower tonight',
+             ' — tonight the one-third ramp decided it'))
+      END) AS sentence,
     CURRENT_TIMESTAMP()
   FROM priced p
   LEFT JOIN budgets b   ON b.plan = p.plan AND b.campaign_id = p.campaign_id
@@ -453,9 +629,12 @@ BEGIN
   ASSERT (SELECT COUNTIF(min_queued <= allowance - seat_cost + 0.0001) FROM (
             SELECT plan, family, MAX(allowance_ramped_per_day) allowance,
                    SUM(IF(seat_no IS NOT NULL, seat_cost_per_day, 0)) seat_cost,
-                   MIN(IF(is_candidate AND seat_no IS NULL, seat_cost_per_day, NULL)) min_queued
+                   -- a keyword the ladder has closed is not seatable at any price, so it is not
+                   -- evidence of a prefix stop (v27.138)
+                   MIN(IF(is_candidate AND seat_no IS NULL AND ladder_state != 'DEAD',
+                          seat_cost_per_day, NULL)) min_queued
             FROM final GROUP BY 1, 2) WHERE min_queued IS NOT NULL) = 0
-    AS 'the seat walk is a fit test: no queued candidate may fit the allowance left over (§4.4)';
+    AS 'the seat walk is a fit test: no seatable queued candidate may fit the allowance left over (§4.4)';
   -- the seat register is one authority, not two (§9)
   ASSERT (SELECT COUNT(*)
           FROM final f
@@ -475,15 +654,56 @@ BEGIN
   ASSERT (SELECT COUNTIF(holdout AND (move NOT IN ('NONE', 'NONE_HOLDOUT') OR seat_no IS NOT NULL))
           FROM final) = 0
     AS 'a holdout campaign gets a record and no move';
-  ASSERT (SELECT COUNTIF(campaign_planned_budget > 20.00 AND campaign_planned_budget < 32.00)
+  -- the band rule governs a cap the plan SETS. Leaving a cap exactly where it is, on a campaign
+  -- the plan measured nothing in, is not a move into the band.
+  ASSERT (SELECT COUNTIF(campaign_planned_budget > 20.00 AND campaign_planned_budget < 32.00
+                         AND campaign_budget_basis NOT IN
+                             ('NO_MOVE_UNMEASURED', 'NO_MOVE_BRAND_DEFENSE'))
           FROM final) = 0
-    AS 'no campaign budget may sit in the forbidden $20.01-$31.99 band';
-  -- a budget that cannot pay for the plan's own seats is not a budget, it is a squeeze
-  ASSERT (SELECT COUNTIF(bud < implied - 0.005) FROM (
+    AS 'no campaign budget the plan MOVES may land in the forbidden $20.01-$31.99 band';
+  -- a budget that cannot pay for the money the plan can SEE is not a budget, it is a squeeze
+  ASSERT (SELECT COUNTIF(bud < need - 0.005) FROM (
             SELECT plan, campaign_id, MAX(campaign_planned_budget) bud,
-                   SUM(planned_spend_per_day) implied
-            FROM final GROUP BY 1, 2)) = 0
-    AS 'a campaign budget may never sit under the spend the plan itself planned inside it (P-4)';
+                   SUM(planned_spend_per_day)
+                   + SUM(IF(is_candidate AND seat_no IS NULL AND move != 'PAUSE',
+                            COALESCE(SAFE_DIVIDE(w_sp, window_days), 0), 0)) need
+            FROM final GROUP BY 1, 2)
+          WHERE bud IS NOT NULL) = 0
+    AS 'a campaign budget may never sit under the money the plan can SEE inside it — its good side, its seats, and the queue parking does not stop (P-4)';
+  -- unmeasured never reads as bad, and defense is never judged on profit (§8)
+  ASSERT (SELECT COUNT(*) FROM (
+            SELECT plan, campaign_id, MAX(campaign_planned_budget) bud,
+                   MAX(campaign_current_budget) cur, MAX(campaign_visible_spend_per_day) vis,
+                   SUM(COALESCE(w_clk, 0)) clk,
+                   LOGICAL_OR(UPPER(COALESCE(campaign_name, '')) LIKE '%BRAND DEFENSE%') def
+            FROM final GROUP BY 1, 2)
+          WHERE cur IS NOT NULL AND bud < cur - 0.005
+            AND ((vis <= 0.0001 AND clk = 0) OR def)) = 0
+    AS 'a campaign the plan measured nothing in, and a brand-defense campaign, may never have its budget cut';
+  -- the ladder's closed keywords hold no seat, no allowance and no price (§4.5)
+  ASSERT (SELECT COUNTIF(ladder_state = 'DEAD'
+                         AND (seat_no IS NOT NULL OR planned_bid IS NOT NULL
+                              OR (is_candidate AND move != 'PAUSE')))
+          FROM final) = 0
+    AS 'a keyword the ladder has closed takes no seat, carries no price, and its move is PAUSE (§4.5)';
+  -- §9: seat numbers are stable across days for a continuing occupant
+  ASSERT (SELECT COUNT(*)
+          FROM final f
+          JOIN (SELECT plan, family, CAST(campaign_id AS STRING) cid,
+                       CAST(keyword_id AS STRING) kid, MIN(seat_no) seat_no
+                FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+                WHERE seat_no IS NOT NULL
+                  AND as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+                               WHERE as_of < as_of_d)
+                GROUP BY 1, 2, 3, 4) h
+            ON h.plan = f.plan AND h.family = f.family
+           AND h.cid = f.campaign_id AND h.kid = f.keyword_id
+          WHERE f.seat_no IS NOT NULL AND h.seat_no != f.seat_no
+            AND NOT EXISTS (SELECT 1 FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` l
+                            WHERE l.closed_on IS NULL AND l.family = f.family
+                              AND l.seat_no = h.seat_no
+                              AND CAST(l.keyword_id AS STRING) != f.keyword_id)) = 0
+    AS 'a continuing occupant keeps its seat number from one night to the next unless the register reassigned it (§9)';
 
   DELETE FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of = as_of_d;
   INSERT INTO `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` SELECT * FROM final;

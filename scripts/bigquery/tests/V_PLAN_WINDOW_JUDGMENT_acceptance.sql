@@ -71,8 +71,15 @@
 --       cancels the spend identically, so the ordering is corrected gross profit alone. The check
 --       pins both halves: the factors exist, and rank_score is exactly their product.
 --   C22 the GRACE sentence states whether the one-window limit is armed. It is read from
---       FACT_PLAN_NEXT_WEEK, which no builder writes until Task 2, so a row must not promise a
---       limit that nothing can enforce tonight.
+--       FACT_PLAN_NEXT_WEEK; SP_BUILD_NEXT_WEEK_PLAN writes that table nightly, so the flag is
+--       FALSE only for a keyword with no partition EARLIER than today and the sentence must name
+--       THAT condition — v27.138: it went on saying "no builder writes it until Task 2 ships"
+--       after Task 2 had shipped and written a partition, telling Ori the opposite of what the
+--       next run does.
+--   C23 NEW (v27.138) — the P-14b hold has a CLOCK. was_good reads last night's SIDE and a held
+--       row's side is GOOD, while `settled` reads a window that rolls forward nightly, so the
+--       guard used to re-arm itself forever: every HELD row must carry the anchor date its hold
+--       lifts on, no row may be held past that date, and no expired hold may still read GOOD.
 -- =============================================================================================
 WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
 sc AS (SELECT * FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION`),
@@ -221,7 +228,17 @@ c21 AS (
 c22 AS (
   SELECT 'C22 the grace sentence says whether the one-window limit is armed',
          COUNTIF(verdict = 'GRACE'
-                 AND NOT REGEXP_CONTAINS(sentence, r'(NOT ARMED YET|grace is now SPENT)'))
+                 AND NOT REGEXP_CONTAINS(sentence, r'(NOT ARMED TONIGHT|grace is now SPENT)'))
+       + COUNTIF(REGEXP_CONTAINS(sentence, r'no builder writes'))
+  FROM j
+),
+c23 AS (
+  SELECT 'C23 P-14b the hold carries a clock: an anchor date, and nothing held past it',
+         COUNTIF(verdict = 'HELD_UNSETTLED'
+                 AND COALESCE(hold_settles_on, settle_due_on) IS NULL)
+       + COUNTIF(verdict = 'HELD_UNSETTLED' AND hold_expired)
+       + COUNTIF(hold_expired AND side_b = 'GOOD' AND verdict NOT IN ('GOOD', 'GRACE'))
+       + COUNTIF(hold_since IS NOT NULL AND hold_settles_on IS NULL)
   FROM j
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
@@ -232,5 +249,5 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c13 UNION ALL SELECT * FROM c14 UNION ALL SELECT * FROM c15
       UNION ALL SELECT * FROM c16 UNION ALL SELECT * FROM c17 UNION ALL SELECT * FROM c18
       UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21
-      UNION ALL SELECT * FROM c22)
+      UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23)
 ORDER BY check_name;

@@ -407,7 +407,7 @@ the live share is whatever `DE_PLAN_CONFIG` declares for today's state, which ma
 
 ---
 
-## 2. The judgement layer (Task 1, v27.133 · repaired v27.134)
+## 2. The judgement layer (Task 1, v27.133 · repaired v27.134, v27.135 and v27.138)
 
 Three objects, deployed in this order:
 
@@ -512,10 +512,13 @@ dispositions, the same corrected margins. Check the agreement by joining the aud
 on `campaign_id, keyword_id` and comparing `rule_b_verdict` / `rule_b_decided_by` /
 `rule_b_settle_arm` with `verdict` / `decided_by` / `settle_arm` — it must be exact.
 
-**One divergence remains and it is disclosed on both surfaces:** the book cannot see P-5's
-one-window limit, because that limit is read from `FACT_PLAN_NEXT_WEEK` and no builder writes it
-until Task 2. Neither can the view — `grace_limit_armed` is FALSE, and both artifacts say so in
-words on the row rather than promising a limit nothing enforces.
+**That divergence is closed (v27.137, corrected here in v27.138).** The book now reads P-5's
+one-window limit from `FACT_PLAN_NEXT_WEEK` with the SAME expression `V_PLAN_WINDOW_JUDGMENT` uses
+(the most recent `GRACE` later than the most recent `GOOD`), so the two cannot grant and refuse the
+same grace. Task 2 shipped and writes that table nightly, so `grace_limit_armed` reads FALSE only
+for a keyword the plan has no partition EARLIER THAN TODAY for; both artifacts say which condition
+is unmet and when it lifts, rather than the sentence they carried after the builder had already
+shipped ("no builder writes it until Task 2").
 
 Four properties of those arms were repaired in **v27.134** and each is now asserted:
 
@@ -553,6 +556,29 @@ Ori the plan is resting on the guard alone.
 SELECT family, verdict, decided_by, settle_arm, sentence, settle_arm_sentence
 FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` ORDER BY w_sp DESC LIMIT 20;
 ```
+
+### The guard's clock (P-14b, v27.138) — read it before reading the open question below
+
+`was_good` is last night's live-plan SIDE, and a held row's side is GOOD. `settled` reads the window
+being judged, and that window rolls forward every night (`window_to` = the watermark − 1), so it is
+never settled on a healthy night. Put together, one night on the protected side wrote the evidence
+that re-armed the guard the next night, forever: the protected side was a one-way door, the ladder
+gate the spec attributes the guard to stopped applying after night one, and a keyword whose P-5
+grace was spent fell straight through into a permanent hold instead of into the queue. The hold is
+now ANCHORED to the window that triggered it — `hold_since` and `hold_settles_on`, read from the
+plan's own history — and lifts once that window has settled and the sales it was waiting for have
+landed. Promotion on fresh evidence is untouched every night. Read the clock:
+
+```sql
+SELECT verdict, COUNT(*) AS kw,
+       ROUND(SUM(w_sp) / MAX(window_days), 2) AS spend_per_day,
+       MIN(hold_since) AS oldest_hold, MIN(hold_settles_on) AS next_lift,
+       COUNTIF(hold_expired) AS clock_run_out
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 3 DESC;
+```
+
+**Ori rules** whether the guard is this delay, or the unlimited veto it was: one line either way
+(§3 of this SOP, item 4).
 
 ### THE OPEN QUESTION THIS LAYER PUT ON ORI'S DESK
 
@@ -658,14 +684,16 @@ changes the allowance as well as the queue, so read both columns before choosing
 priced honestly: the `unguarded` columns are a true one-step read since grace moved ahead of the
 guard (above).
 
-### A SECOND OPEN QUESTION: P-5's limit is written, built, and not armed
+### A SECOND OPEN QUESTION: P-5's limit, and the day it arms
 
 The grace limit is real code and it is read from the live plan's own history — grace is spent until
-the keyword earns a GOOD window back. But no builder writes `FACT_PLAN_NEXT_WEEK` until Task 2, so
-there is no history, `grace_limit_armed` is FALSE, and grace is re-granted every night. **Today
-grace is a permanent exemption, not the one window P-5 buys**, and the row says so in those words
-rather than promising a limit nothing can enforce. Two consequences worth Ori's eye. First, the
-population is not small — grace now answers for the ladder winners the guard used to swallow, so
+the keyword earns a GOOD window back. **Task 2 shipped and `SP_BUILD_NEXT_WEEK_PLAN` writes
+`FACT_PLAN_NEXT_WEEK` every night (orchestrator 20.8c), so `grace_limit_armed` reads FALSE only for
+a keyword the plan has no partition EARLIER THAN TODAY for — the day the first partition is written,
+and never again after it** (v27.138 correction: the view, its OPTIONS description and `config.yaml`
+all still said "no builder writes that table until Task 2 ships" after the builder had shipped and
+written a partition, which is the opposite of what happens on the next run). Two consequences worth
+Ori's eye. First, the population is not small — grace now answers for the ladder winners the guard used to swallow, so
 read what it is protecting:
 
 ```sql
@@ -836,7 +864,7 @@ the builder runs it is empty and the guard falls back to the declared bootstrap 
 settled record clearing the bar with the window's order floor met).
 
 
-## 3. The nightly builder (Task 2, v27.136 · repaired v27.137)
+## 3. The nightly builder (Task 2, v27.136 · repaired v27.137 and v27.138)
 
 `SP_BUILD_NEXT_WEEK_PLAN` reads `V_PLAN_WINDOW_JUDGMENT` once and turns the judgement into money.
 It writes one partition of `FACT_PLAN_NEXT_WEEK` per night — **both plans**, `B` live and `A` in
@@ -1034,7 +1062,7 @@ moved between them, re-run both.)
   good-side spend inside it — nor, from v27.137, under the plan's *own* spend inside it. A cap below
   the good side is a cut; a cap below the seats is a move the budget cannot pay for.
 
-### Six checks added or restated in the v27.137 repair pass
+### Checks added or restated in the repair passes
 
 Each went red on the deployed v27.136 partition before the repair and green after it; the violation
 counts live in the task report, never on this page.
@@ -1079,6 +1107,43 @@ WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`) AND
 GROUP BY 1 ORDER BY 1;
 ```
 
+### What the v27.138 pass changed, and the queries that read it
+
+Again nothing in the doctrine moved. Five things did, and each is a number a reader can pull:
+
+1. **A keyword the ladder has CLOSED is no longer seatable.** `DEAD` was tested only after the two
+   seat branches, so whether a closed keyword was stopped or re-priced depended on whether its cost
+   happened to fit — one partition carried both instructions at once. The seat walk now refuses it,
+   `PAUSE` is decided first, and `C22` asserts the converse `C21` never tested.
+2. **Seat numbers survive the night.** The register only admits ladder occupant states, so the
+   plan's `AT_BAR` and `DEAD` seats can never hold an open ledger row and were re-numbered from an
+   index into that night's rank order. Precedence is now register > last night's plan > lowest free
+   number (`C23`).
+3. **The campaign cap stopped cutting what the plan cannot see.** The floor is the good side + the
+   seats + the queue's continuing spend, and a campaign the plan measured nothing in — or a brand
+   defense campaign — is not moved at all (`C11`, `C24`).
+4. **The cap says its own move.** Every row carries `campaign_planned_budget_delta_per_day`,
+   `campaign_budget_basis` and `campaign_visible_spend_per_day`, and prints all three.
+5. **Every seat sentence names the direction**, not only the repriced ones (`C25`).
+
+```sql
+-- what the caps did tonight, by the reason the plan gives
+SELECT campaign_budget_basis, COUNT(*) AS campaigns,
+       ROUND(SUM(GREATEST(d, 0)), 2) AS raises_per_day,
+       ROUND(SUM(GREATEST(-d, 0)), 2) AS cuts_per_day
+FROM (SELECT DISTINCT campaign_id, campaign_budget_basis,
+             campaign_planned_budget_delta_per_day AS d
+      FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+      WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`)
+        AND is_live_plan)
+GROUP BY 1 ORDER BY 1;
+
+-- the guard's clock: who is held, since when, and when the hold lifts (P-14b, v27.138)
+SELECT verdict, COUNT(*) AS kw, MIN(hold_since) AS oldest_hold,
+       MIN(hold_settles_on) AS next_lift, COUNTIF(hold_expired) AS clock_run_out
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
+```
+
 ### What Ori rules from this pass
 
 1. **The queue's residual.** A queued keyword's planned spend is zero and its real spend is not.
@@ -1095,7 +1160,26 @@ GROUP BY 1 ORDER BY 1;
    spend-with-no-sale keyword scores exactly zero, so the biggest bleeders rank last. The fit test
    now lets cheap candidates behind them take seats, which *reduces* the damage but does not fix the
    ordering.
-4. **The book and the plan now read one grace memory.** `tools/build_reprice_bulksheet.py --rule-b`
+4. **P-14b IS NOW A DELAY WITH A CLOCK, AND THAT IS A READING, NOT A RULING ORI MADE.** The guard
+   was a permanent veto: `was_good` reads last night's SIDE, a held row's side is GOOD, and the
+   window rolls so `settled` is never true — so the protected side was a one-way door, the ladder
+   gate the spec attributes the guard to stopped applying after night one, and P-5's one-window
+   limit went inert in money. The hold is now anchored to the window that TRIGGERED it and lifts
+   when that window settles, which is the literal reading of "not demoted until ITS window has
+   settled". *To overrule (either direction):* restore the unlimited veto by dropping `hold_expired`
+   from the `HELD_UNSETTLED` branch; or go the other way and demote on the last window that HAS
+   settled while promotion keeps reading the fresh one. Both are one line in
+   `V_PLAN_WINDOW_JUDGMENT`. **P-14 as a whole is still unruled** and is still the biggest number
+   in the plan.
+5. **May a brand-defense campaign be judged at all?** The live defense campaign reaches the plan
+   because the ladder's `is_brand_defense` reads FALSE on all five of its keywords, so §8's filter
+   in the judgement view does not catch it: it is published `NOT_GOOD` and, before this pass, its
+   cap was cut. The budget step now detects defense the way the seat register does (the flag OR
+   "BRAND DEFENSE" in the campaign name) and refuses to move its cap. *To overrule / to finish:*
+   fix the FLAG in the ladder snapshot so the judgement view excludes those keywords from the
+   universe entirely — a Task 1 / ladder file, recorded here rather than patched from the builder,
+   because widening candidacy inside the builder would break `C13`.
+6. **The book and the plan now read one grace memory.** `tools/build_reprice_bulksheet.py --rule-b`
    reads `FACT_PLAN_NEXT_WEEK` for P-5's one-window limit with the same expression
    `V_PLAN_WINDOW_JUDGMENT` uses, so the two cannot grant and refuse the same grace. Nothing to rule
    unless Ori wants the book to stop judging at all and read the plan's `side` directly — which is

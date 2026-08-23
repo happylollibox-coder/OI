@@ -414,14 +414,29 @@ def rule_b(r):
     # held such rows on the good side — where P-4 forbids re-pricing them — while its own
     # NOT SERVING text said, correctly, that nothing was arriving. Rule B only ever REMOVES a move,
     # so the clause returns those keywords to whatever the engine itself proposed for them.
-    if was_good and not settled and served:
+    # THE HOLD HAS A CLOCK, AND IT IS THE PLAN'S CLOCK (v27.138). `settled` here reads the window
+    # being judged, and that window rolls forward every night, so on its own it would hold a
+    # keyword for as long as its ladder record kept clearing the bar. V_PLAN_WINDOW_JUDGMENT
+    # anchors the hold to the window that TRIGGERED it and lifts when that window settles; the
+    # book reads the SAME anchor out of FACT_PLAN_NEXT_WEEK (plan_hold), so one keyword has one
+    # judge for P-14b exactly as it now has one for P-5.
+    hold_expired = bool(r.get('hold_expired'))
+    if was_good and not settled and served and not hold_expired:
+        anchor = r.get('hold_settles_on')
         return out(True, 'HELD_UNSETTLED', 'P-14b',
                    f"HELD, NOT DEMOTED (P-14b) — {took}, which would put it on the not-good "
-                   f"side. Its window has not settled, and the ladder's own settled 90-day "
-                   f"record clears the {r.get('family') or 'family'} bar of {bar:.2f} on "
-                   f"{int(num(r.get('settled_ord90'), 0) or 0)} settled orders, so it keeps the "
-                   f"good side until {due}. A keyword may be promoted on fresh evidence but "
-                   f"never demoted on it: unmeasured never reads as bad." + caveat,
+                   f"side. The window that started this hold has not settled, and the ladder's own "
+                   f"settled 90-day record clears the {r.get('family') or 'family'} bar of "
+                   f"{bar:.2f} on {int(num(r.get('settled_ord90'), 0) or 0)} settled orders, so it "
+                   f"keeps the good side until "
+                   f"{anchor if anchor else due}. A keyword may be promoted on fresh evidence but "
+                   f"never demoted on it: unmeasured never reads as bad. "
+                   + (f"The anchor date comes from the live plan's own memory in "
+                      f"FACT_PLAN_NEXT_WEEK, the same one V_PLAN_WINDOW_JUDGMENT reads."
+                      if anchor else
+                      f"The plan has no earlier partition for this keyword yet, so the hold "
+                      f"starts tonight and its anchor is this window's own settle date.")
+                   + caveat,
                    arm_override='HELD_UNSETTLED')
 
     if ordw >= RULE_B_MIN_ORDERS:
@@ -492,6 +507,26 @@ plan_armed AS (
   SELECT COUNT(*) > 0 AS grace_limit_armed
   FROM `{p}.OI.FACT_PLAN_NEXT_WEEK`
   WHERE is_live_plan AND as_of < CURRENT_DATE('America/Los_Angeles')
+),
+-- P-14b's HOLD CLOCK, READ FROM THE SAME MEMORY (v27.138). The view's guard is anchored to the
+-- window that TRIGGERED the hold and lifts when that window settles; a book that kept holding on
+-- the ladder record alone would be the second judge of P-14b exactly as it was about to become the
+-- second judge of P-5. Same expression as V_PLAN_WINDOW_JUDGMENT: the current hold RUN starts
+-- after the last night the plan did NOT hold this keyword, and its anchor date is that first
+-- night's settle_due_on. Empty table => no rows => hold_expired FALSE, exactly as before.
+plan_hold AS (
+  SELECT cid, kid,
+         MIN(IF(is_held AND (last_unheld_on IS NULL OR as_of > last_unheld_on),
+                settle_due_on, NULL)) AS hold_settles_on
+  FROM (
+    SELECT CAST(campaign_id AS STRING) cid, CAST(keyword_id AS STRING) kid, as_of, settle_due_on,
+           (verdict = 'HELD_UNSETTLED') AS is_held,
+           MAX(IF(verdict != 'HELD_UNSETTLED', as_of, NULL))
+             OVER (PARTITION BY CAST(campaign_id AS STRING),
+                                CAST(keyword_id AS STRING)) AS last_unheld_on
+    FROM `{p}.OI.FACT_PLAN_NEXT_WEEK`
+    WHERE is_live_plan AND as_of < CURRENT_DATE('America/Los_Angeles'))
+  GROUP BY 1, 2
 ),
 -- one keyword, one price: a key with a live GO instruction today belongs to its engine —
 -- except a floor-probation row, which is emitted CHECK FIRST beside the instruction (F5)
@@ -690,6 +725,9 @@ SELECT
   ks.settled_gp90, ks.settled_sp90,
   COALESCE(pg.prior_grace, FALSE) AS prior_grace,
   pa.grace_limit_armed,
+  ph.hold_settles_on,
+  (ph.hold_settles_on IS NOT NULL
+   AND CURRENT_DATE('America/Los_Angeles') > ph.hold_settles_on) AS hold_expired,
   CAST(DATE_ADD(winr.window_to,
                 INTERVAL IF(ks.channel = 'SB', 14, 7) DAY) AS STRING) AS settle_due_on,
   CURRENT_DATE('America/Los_Angeles')
@@ -719,6 +757,7 @@ LEFT JOIN live7 ON live7.cid = ks.campaign_id AND live7.kid = ks.keyword_id
 LEFT JOIN kwin ON kwin.cid = ks.campaign_id AND kwin.kid = ks.keyword_id
 LEFT JOIN instructed instr ON instr.cid = ks.campaign_id AND instr.kid = ks.keyword_id
 LEFT JOIN plan_grace pg ON pg.cid = ks.campaign_id AND pg.kid = ks.keyword_id
+LEFT JOIN plan_hold  ph ON ph.cid = ks.campaign_id AND ph.kid = ks.keyword_id
 CROSS JOIN wm
 CROSS JOIN winr
 CROSS JOIN plan_armed pa
@@ -1664,12 +1703,18 @@ def main():
                     f"corrected** — a count cannot be fractional, so the {RULE_B_MIN_ORDERS}-"
                     f"order floor is always read on orders actually observed. Column "
                     f"`rule_b_gp_corrected` beside `rule_b_gp` shows both.\n"
-                    f"2. **Nothing is demoted before it has settled.** A keyword whose settled "
-                    f"90-day record clears its family bar keeps the good side until its window "
-                    f"settles ({win_to} plus 7 days for Sponsored Products, 14 for Sponsored "
+                    f"2. **Nothing is demoted before it has settled — and the hold has an "
+                    f"END.** A keyword whose settled 90-day record clears its family bar keeps "
+                    f"the good side while the window that triggered the hold is still settling "
+                    f"(that window's last day plus 7 for Sponsored Products, 14 for Sponsored "
                     f"Brands), even when the window reads badly. Those rows say "
-                    f"`HELD_UNSETTLED` and carry the date they settle. Unmeasured never reads "
-                    f"as bad.\n\n")
+                    f"`HELD_UNSETTLED` and carry the date the hold lifts. The date is ANCHORED "
+                    f"to the window that started the hold, read from the plan's own memory in "
+                    f"FACT_PLAN_NEXT_WEEK — the same anchor V_PLAN_WINDOW_JUDGMENT reads — "
+                    f"because the window judged each night rolls forward, so a hold measured "
+                    f"against 'the current window' would renew itself every night and never "
+                    f"expire. Promotion on fresh evidence stays available every night; only the "
+                    f"demotion waits. Unmeasured never reads as bad.\n\n")
             f.write(f"**This is UNRULED.** Ori raised the defect on 2026-08-23 and has not "
                     f"chosen between the offered fixes; the above is the build-as-specified "
                     f"answer (spec P-14). To overrule it, one sentence — *\"judge the window as "

@@ -1,5 +1,5 @@
 -- =============================================================================================
--- V_PLAN_WINDOW_JUDGMENT — v27.135 (2026-08-23): ONE ROW PER working-family keyword, carrying the
+-- V_PLAN_WINDOW_JUDGMENT — v27.138 (2026-08-24): ONE ROW PER working-family keyword, carrying the
 -- window, the window record (raw AND corrected for settle completion), the side BOTH plans give
 -- it, the arm that decided it, the repaired price, the seat cost and the rank. It decides nothing
 -- about money: the builder (SP_BUILD_NEXT_WEEK_PLAN) does the potting, seating and queueing. This
@@ -48,15 +48,32 @@
 --               NIGHT, as v27.134 did, bought one NIGHT on a plan that runs nightly, and made an
 --               unserved winner oscillate GOOD / NOT_GOOD / GOOD every night — flipping the side
 --               that the P-14b memory and the T+14 scorecard both read.
---               THE LIMIT IS NOT ARMED UNTIL TASK 2 WRITES FACT_PLAN_NEXT_WEEK. No builder writes
---               that table yet, so there is no history, grace is re-granted every night and the
---               second quiet window never arrives. That is a permanent exemption today, not the
---               one window P-5 buys, and grace_limit_armed publishes it while the GRACE sentence
---               says it in words (C22) rather than promising a limit nothing can enforce.
+--               THE LIMIT ARMS FROM THE PLAN'S FIRST PARTITION EARLIER THAN TODAY (corrected
+--               v27.138). SP_BUILD_NEXT_WEEK_PLAN ships and writes FACT_PLAN_NEXT_WEEK nightly at
+--               orchestrator 20.8c, so grace_limit_armed reads FALSE only on a keyword the plan
+--               has no EARLIER partition for — the day the first partition is written, and never
+--               again after it. The sentence used to say "no builder writes that table until Task
+--               2 ships", which stayed live in the deployed view and in config.yaml after the
+--               builder shipped; it now says which condition is unmet and when it lifts (C22).
 --   HELD_UNSETTLED (P-14b) a keyword that WAS good, THAT SERVED IN THE WINDOW, and now reads
 --               not-good while its window has not settled (SP 7 / SB 14 complete days after
 --               window_to). It keeps the good side, held. Promotion is allowed on fresh evidence;
 --               only demotion waits. This is the ASYMMETRY.
+--               THE GUARD IS A CLOCK, NOT A RATCHET (v27.138 repair). `was_good` reads last
+--               night's SIDE, and a HELD row's side is GOOD — so one night under the guard wrote
+--               the evidence that re-armed it the next night, while `settled` could never rescue
+--               the row because the window ROLLS (window_to = the watermark - 1, so every night
+--               brings a new unsettled window and settle_due_on is always ahead). The protected
+--               side became a one-way door: a keyword could enter and never leave, the LADDER GATE
+--               the spec attributes the guard to stopped applying after night one, and P-5's
+--               one-window limit went inert in money because a keyword whose grace was spent fell
+--               straight through into a permanent hold. The hold is now ANCHORED to the window
+--               that triggered it: hold_since / hold_settles_on remember that window from the
+--               plan's own history, and the guard lifts once its settle date has passed. This is
+--               the literal reading of "not demoted until ITS WINDOW has settled" — one window,
+--               which can settle. Promotion on fresh evidence is untouched and stays available
+--               every night; the asymmetry is intact. Whether the delay should instead be an
+--               unlimited veto is Ori's to rule (spec P-14, SOP §2).
 --               THE GUARD REQUIRES SERVICE (v27.134 repair). P-14b exists because sales are still
 --               ARRIVING. A keyword that took no spend and no clicks in the window has nothing in
 --               flight, so there is no unsettled evidence to wait for and the guard has no basis.
@@ -228,7 +245,7 @@
 -- Acceptance: scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql.
 -- =============================================================================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
-OPTIONS (description = "v27.135 (2026-08-23): one row per working-family (HARVEST) keyword — the complete-days window from DE_PLAN_CONFIG for today's calendar state, fenced so no judged day is younger than age 2 (P-10 + P-14a), the keyword's record in it raw AND corrected for settle completion via V_PLAN_SETTLE_COMPLETION, the side rule B gives it (P-1/P-3), and the arms in the order P-5 then P-14b: the grace for a ladder-settled winner with a quiet window comes FIRST (v27.135 — with the guard first it reached 36 of 39 such winners, so the ruling that buys ONE window was replaced by the one that buys every window, the shipped reprice book named a different ruling on the same rows, and the published unguarded counterfactual was wrong by 28% of the pot), and the grace limit is ONE WINDOW read from the live plan's own history — spent until the keyword earns a GOOD window back — with grace_limit_armed publishing that no builder writes FACT_PLAN_NEXT_WEEK yet, so the limit is not armed and the row says so. Then the P-14b asymmetric guard (promote on fresh evidence, never demote until the window has settled: SP 7 / SB 14; the guard requires that the keyword actually SERVED, because a keyword with no clicks has no sales in flight), with held_despite_evidence AND held_with_no_sale naming the two populations it holds — the second is the larger by money and used to be told that promotion is allowed on fresh evidence on a window with no gross profit to promote. Also the shadow plan A side (P-9), the repaired price capped at three 5% steps and floored at the row's own bid_floor (P-6) published on the NOT-GOOD side only because P-4 forbids re-pricing the good side, the seat cost at that price, the park price with a declared source and a bid_floor fallback, and the P-7 rank — whose two named factors are published separately (rank_dollars_at_stake, rank_closeness) because their product cancels the spend identically and the ordering is corrected gross profit alone. Every seat sentence branches on is_candidate, so no row is promised a seat its own column refuses it and a keyword with no seat and no queue position says so. Publishes settle_arm, decided_by and two plain sentences on every row. Judges only; SP_BUILD_NEXT_WEEK_PLAN does the potting, seating and queueing. Spec P-1..P-14, §3a. SOP: architecture/NEXT_WEEK_MONEY.md")
+OPTIONS (description = "v27.138 (2026-08-24): one row per working-family (HARVEST) keyword — the complete-days window from DE_PLAN_CONFIG for today's calendar state, fenced so no judged day is younger than age 2 (P-10 + P-14a), the keyword's record in it raw AND corrected for settle completion via V_PLAN_SETTLE_COMPLETION, the side rule B gives it (P-1/P-3), and the arms in the order P-5 then P-14b: the grace for a ladder-settled winner with a quiet window comes FIRST (v27.135 — with the guard first it reached 36 of 39 such winners, so the ruling that buys ONE window was replaced by the one that buys every window, the shipped reprice book named a different ruling on the same rows, and the published unguarded counterfactual was wrong by 28% of the pot), and the grace limit is ONE WINDOW read from the live plan's own history — spent until the keyword earns a GOOD window back — with grace_limit_armed publishing whether the plan has a partition EARLIER than today to read it from (v27.138: SP_BUILD_NEXT_WEEK_PLAN ships and writes that table nightly, so the old wording 'no builder writes it yet' was live and false in this description and in the row's own sentence). Then the P-14b asymmetric guard (promote on fresh evidence, never demote until the window has settled: SP 7 / SB 14; the guard requires that the keyword actually SERVED, because a keyword with no clicks has no sales in flight; and v27.138 gives the hold a CLOCK — it is anchored via hold_since / hold_settles_on to the window that TRIGGERED it and lifts when that window settles, because was_good reads last night's side and a held row's side is GOOD, which made the protected side a one-way door no keyword could ever leave and left P-5's one-window limit inert in money), with held_despite_evidence AND held_with_no_sale naming the two populations it holds — the second is the larger by money and used to be told that promotion is allowed on fresh evidence on a window with no gross profit to promote. Also the shadow plan A side (P-9), the repaired price capped at three 5% steps and floored at the row's own bid_floor (P-6) published on the NOT-GOOD side only because P-4 forbids re-pricing the good side, the seat cost at that price, the park price with a declared source and a bid_floor fallback, and the P-7 rank — whose two named factors are published separately (rank_dollars_at_stake, rank_closeness) because their product cancels the spend identically and the ordering is corrected gross profit alone. Every seat sentence branches on is_candidate, so no row is promised a seat its own column refuses it and a keyword with no seat and no queue position says so. Publishes settle_arm, decided_by and two plain sentences on every row. Judges only; SP_BUILD_NEXT_WEEK_PLAN does the potting, seating and queueing. Spec P-1..P-14, §3a. SOP: architecture/NEXT_WEEK_MONEY.md")
 AS
 WITH k AS (
   -- P-3/P-13: min_orders is NOT a literal — it is read from DE_PLAN_CONFIG in the cfg CTE below
@@ -351,11 +368,35 @@ rec AS (
 -- read. So grace is SPENT until the keyword earns the good side back on its own: the most recent
 -- GRACE is later than the most recent GOOD (or there has never been a GOOD). That is "one quiet
 -- window, held; a second and rule B stands" as P-5 words it, and it is stable under a nightly run.
+-- P-14b IS A DELAY WITH A CLOCK, NOT A ONE-WAY RATCHET (v27.138 repair). The guard's own memory
+-- made it permanent. `was_good` reads last night's SIDE, and side is GOOD for a HELD row — so one
+-- night under the guard wrote the evidence that re-armed the guard the next night, and `settled`
+-- can never rescue it because the window ROLLS: window_to is the watermark - 1, so every night
+-- brings a brand-new unsettled window and settle_due_on is always in the future. Measured before
+-- the repair on the first live partition: `settled` was FALSE on every row, and every keyword the
+-- plan had put on the good side once satisfied the HELD_UNSETTLED branch unconditionally
+-- thereafter, P-4 then forbidding any cut or re-price. Two things followed. The LADDER GATE the
+-- spec attributes the guard to ("a keyword whose ladder record clears its family bar") stopped
+-- applying after night one — the plan's own memory replaced it. And P-5's one-window limit went
+-- inert in money: a keyword whose grace was spent fell straight through into a permanent hold, so
+-- the armed sentence's promise that "rule B stands on the next quiet one" could never come true.
+-- THE CLOCK. P-14b says a keyword is not demoted "until its window has settled". That is a
+-- statement about ONE window — the window that produced the adverse read — and it can only be
+-- honoured by remembering which one. So the hold is anchored: the first night of a hold run
+-- records that window's settle_due_on, and the guard holds until that date passes. Promotion is
+-- untouched and stays available every night (the asymmetry is the whole ruling). After the anchor
+-- date the window that triggered the hold HAS settled, its sales have landed, and rule B judges on
+-- the numbers. A keyword that earns the good side back starts a fresh clock on its next bad
+-- window. Whether the delay should instead be a veto is Ori's to rule (spec P-14, SOP §2).
 plan_hist AS (
   SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid,
-         as_of, side, verdict,
+         as_of, side, verdict, settle_due_on,
          MAX(as_of) OVER (PARTITION BY CAST(campaign_id AS STRING),
-                                       CAST(keyword_id AS STRING)) AS last_as_of
+                                       CAST(keyword_id AS STRING)) AS last_as_of,
+         -- the last night this keyword was NOT under the guard; the current hold run starts after it
+         MAX(IF(verdict != 'HELD_UNSETTLED', as_of, NULL))
+           OVER (PARTITION BY CAST(campaign_id AS STRING),
+                              CAST(keyword_id AS STRING)) AS last_unheld_on
   FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   WHERE is_live_plan AND as_of < (SELECT d_la FROM today)
 ),
@@ -367,7 +408,16 @@ prior AS (
          (MAX(IF(verdict = 'GRACE', as_of, NULL)) IS NOT NULL
           AND (MAX(IF(verdict = 'GOOD', as_of, NULL)) IS NULL
                OR MAX(IF(verdict = 'GRACE', as_of, NULL))
-                  > MAX(IF(verdict = 'GOOD', as_of, NULL))))  AS prior_grace
+                  > MAX(IF(verdict = 'GOOD', as_of, NULL))))  AS prior_grace,
+         -- the hold run in force: when it started, and the settle date of the window that started
+         -- it. MIN over the run picks the FIRST night's settle_due_on, because settle_due_on rolls
+         -- forward with the window.
+         MIN(IF(verdict = 'HELD_UNSETTLED'
+                AND (last_unheld_on IS NULL OR as_of > last_unheld_on), as_of, NULL))
+           AS hold_since,
+         MIN(IF(verdict = 'HELD_UNSETTLED'
+                AND (last_unheld_on IS NULL OR as_of > last_unheld_on), settle_due_on, NULL))
+           AS hold_settles_on
   FROM plan_hist
   GROUP BY 1, 2
 ),
@@ -422,6 +472,8 @@ base AS (
     COALESCE(pr.prior_good, FALSE)  AS prior_good,
     COALESCE(pr.prior_grace, FALSE) AS prior_grace,
     pr.last_grace_on,
+    pr.hold_since,
+    pr.hold_settles_on,
     am.grace_limit_armed,
     (pb.kid IS NOT NULL) AS is_probe,
     se.seat_cpc,
@@ -488,7 +540,11 @@ sided AS (
     (d.w_ord >= d.min_orders AND COALESCE(d.ret_raw, -1)       >= d.family_bar) AS good_raw,
     (d.w_ord >= d.min_orders AND COALESCE(d.ret_corrected, -1) >= d.family_bar) AS good_corrected,
     -- "if there is one": last night's plan wins once it exists; the ladder is the bootstrap only.
-    IF(d.prior_seen, d.prior_good, d.ladder_settled_good)                       AS was_good
+    IF(d.prior_seen, d.prior_good, d.ladder_settled_good)                       AS was_good,
+    -- the hold's clock (v27.138). A run that has been going since a window whose settle date has
+    -- passed has had exactly the delay P-14b buys, and rule B judges the row on the numbers.
+    (d.hold_since IS NOT NULL AND d.hold_settles_on IS NOT NULL
+     AND d.today_la > d.hold_settles_on)                                        AS hold_expired
   FROM derived d
 ),
 judged AS (
@@ -506,8 +562,12 @@ judged AS (
       -- makes the limited ruling the one that speaks, and makes both other surfaces true.
       WHEN s.w_ord < s.min_orders AND s.ladder_state IN ('WINNER', 'PACED_WINNER')
            AND NOT s.prior_grace THEN 'GRACE'
-      -- P-14b: the guard needs sales in flight, and sales in flight need service.
-      WHEN s.was_good AND NOT s.settled AND s.served THEN 'HELD_UNSETTLED'
+      -- P-14b: the guard needs sales in flight, and sales in flight need service — AND IT NEEDS AN
+      -- END (v27.138). hold_expired is FALSE on the first night of a hold (there is no run yet) and
+      -- stays FALSE until the settle date of the window that STARTED the hold has passed. Without
+      -- it the branch was satisfied unconditionally for anything the plan had put on the good side
+      -- once, because `settled` reads a window that rolls forward every night and never settles.
+      WHEN s.was_good AND NOT s.settled AND s.served AND NOT s.hold_expired THEN 'HELD_UNSETTLED'
       WHEN s.w_ord >= s.min_orders THEN 'LOSING'
       WHEN s.w_ord = 1 THEN 'ONE_ORDER'
       WHEN s.served THEN 'NO_SALE'
@@ -588,6 +648,7 @@ SELECT
   f.settle_factor_min, f.settle_factor_eff, f.settle_curve_available, f.min_age_days,
   f.settled, f.settle_due_on, f.settle_days, f.settle_arm, f.decided_by, f.was_good,
   f.served, f.prior_seen, f.prior_good, f.prior_grace, f.last_grace_on, f.grace_limit_armed,
+  f.hold_since, f.hold_settles_on, f.hold_expired,
   f.held_despite_evidence, f.held_with_no_sale, f.good_side_no_sale,
   f.family_bar, f.ret_raw, f.ret_corrected, f.good_raw, f.good_corrected,
   f.ladder_state, f.verdict, f.side_b, f.side_a,
@@ -614,11 +675,13 @@ SELECT
           f.w_ord, f.w_sp, f.window_from, f.window_to, COALESCE(f.ret_corrected, 0), f.family, f.family_bar)
         -- the biggest population the guard holds, and the one nothing used to name in words
         WHEN f.held_with_no_sale THEN FORMAT(
-          'HELD, AND THE WINDOW SOLD NOTHING — $%.2f of ad spend and %d clicks from %t to %t bought nothing at all, so this window carries no gross profit. The settle correction cannot change that: it SCALES gross profit, and no factor turns zero into a sale, so "promotion on fresh evidence" is not available to this row. It keeps the good side only because its own settled 90-day record clears the %s bar of %.2f and the window has not settled (P-14b) — and P-4 then forbids cutting or re-pricing it. The hold does not expire on its own: the plan judges a NEW unsettled window every night, so it lifts only if Ori rules the guard is a delay rather than a veto (spec P-14, the second defect).',
-          f.w_sp, f.w_clk, f.window_from, f.window_to, f.family, f.family_bar)
+          'HELD, AND THE WINDOW SOLD NOTHING — $%.2f of ad spend and %d clicks from %t to %t bought nothing at all, so this window carries no gross profit. The settle correction cannot change that: it SCALES gross profit, and no factor turns zero into a sale, so "promotion on fresh evidence" is not available to this row. It keeps the good side only because its own settled 90-day record clears the %s bar of %.2f and the window that started this hold has not settled yet (P-14b) — and P-4 then forbids cutting or re-pricing it. THE HOLD HAS AN END: it lifts after %t, the settle date of the window that triggered it (v27.138 — before that repair the hold renewed itself every night and was permanent).',
+          f.w_sp, f.w_clk, f.window_from, f.window_to, f.family, f.family_bar,
+          COALESCE(f.hold_settles_on, f.settle_due_on))
         ELSE FORMAT(
-          'HELD — this keyword was good and its window (%t to %t) has not settled, so it is not demoted today (P-14b). %s sales accrue for %d days and this window is due to settle on %t. The hold does not expire on its own: the plan judges a NEW unsettled window every night, so it lifts only if Ori rules the guard is a delay rather than a veto (spec P-14, the second defect).',
-          f.window_from, f.window_to, f.channel, f.settle_days, f.settle_due_on)
+          'HELD — this keyword was good and the window that started this hold has not settled, so it is not demoted today (P-14b). %s sales accrue for %d days; this window runs %t to %t and the hold lifts after %t, when the sales it is waiting for have landed and rule B judges the numbers (v27.138 — before that repair the hold renewed itself against a window that rolls forward nightly, so it never expired at all).',
+          f.channel, f.settle_days, f.window_from, f.window_to,
+          COALESCE(f.hold_settles_on, f.settle_due_on))
       END
     WHEN 'GRACE' THEN FORMAT(
       'GRACE — the ladder calls this a settled winner (%s) and its window is quiet (%d order(s) on $%.2f). A proven winner keeps the good side for ONE quiet window (P-5), held, not cut.%s %s',
@@ -628,8 +691,8 @@ SELECT
                 f.w_clk, f.w_sp),
          ''),
       IF(f.grace_limit_armed,
-         'This is that window: grace is now SPENT and will be refused every night until this keyword earns a GOOD window back, after which rule B stands on the next quiet one.',
-         'THE ONE-WINDOW LIMIT IS NOT ARMED YET: it is read from the live plan\'s own history in FACT_PLAN_NEXT_WEEK, which no builder writes until Task 2 ships, so grace is re-granted every night and no second quiet window ever arrives. Until then this is a permanent exemption, not the one window P-5 buys.'))
+         'This is that window: grace is now SPENT and will be refused every night until this keyword earns a GOOD window back, after which rule B stands on the next quiet one — though the P-14b guard may still delay the demotion until the window that triggers it has settled (v27.138: the guard is a clock, not a veto).',
+         'THE ONE-WINDOW LIMIT IS NOT ARMED TONIGHT: it is read from the live plan\'s own history in FACT_PLAN_NEXT_WEEK, and that table holds no partition EARLIER THAN TODAY for this keyword — so there is nothing yet for the limit to read and grace is granted again. SP_BUILD_NEXT_WEEK_PLAN writes tonight\'s partition at the end of the pass (orchestrator 20.8c), and from the next run this reads TRUE and the limit bites.'))
     WHEN 'LOSING' THEN FORMAT(
       'LOSING on the window — %d orders on $%.2f of ad spend returning %.2f per ad dollar, under the %s bar of %.2f. ',
       f.w_ord, f.w_sp, COALESCE(f.ret_corrected, 0), f.family, f.family_bar) || f.seat_clause

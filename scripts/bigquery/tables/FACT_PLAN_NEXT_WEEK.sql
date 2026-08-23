@@ -120,6 +120,14 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   allowance_share            FLOAT64,
   campaign_planned_budget    FLOAT64,
   campaign_current_budget    FLOAT64,
+  -- v27.138: the campaign cap moves too, and it is the larger number. planned minus current, and
+  -- the reason the plan gives for the move — RAMPED (the one-third step), FLOORED_AT_NEED (the
+  -- step would have gone under the money the plan can SEE inside the campaign), NO_MOVE_UNMEASURED
+  -- (no spend and no clicks on any keyword the plan can see: unmeasured never reads as bad) or
+  -- NO_MOVE_BRAND_DEFENSE (defense is never judged on profit, spec §8).
+  campaign_planned_budget_delta_per_day FLOAT64,
+  campaign_budget_basis      STRING,
+  campaign_visible_spend_per_day FLOAT64,
   holdout                    BOOL,
   holdout_member             BOOL,
   holdout_eligible_from      DATE,
@@ -137,3 +145,14 @@ OPTIONS (description = "v27.135 (2026-08-23) the next-week money plan, one row p
 -- price can be above today's bid) is readable as a number and not only as prose.
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   ADD COLUMN IF NOT EXISTS planned_spend_delta_per_day FLOAT64;
+
+-- v27.138 adds the campaign cap's own disclosure. The keyword raise got a column and a sentence in
+-- v27.137; the campaign budget moved on EVERY campaign in the same partition with neither. It is
+-- the larger number of the two, and a cap is executable in a way a keyword bid is not — it can
+-- starve keywords the plan never judged.
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS campaign_planned_budget_delta_per_day FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS campaign_budget_basis STRING;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS campaign_visible_spend_per_day FLOAT64;

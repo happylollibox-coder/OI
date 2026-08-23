@@ -1,5 +1,5 @@
 -- =============================================================================================
--- FACT_PLAN_NEXT_WEEK acceptance — v27.137 (2026-08-24). The spec's §9 guarantees, read on the
+-- FACT_PLAN_NEXT_WEEK acceptance — v27.138 (2026-08-24). The spec's §9 guarantees, read on the
 -- latest as_of partition. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §9, P-2, P-4, P-6..P-9,
@@ -140,14 +140,22 @@ c10 AS (
   FROM p
 ),
 c11 AS (
-  SELECT "C11 budgets: outside the forbidden band, over $1.00, and never under the plan's own spend inside them (P-4)",
-         (SELECT COUNTIF(campaign_planned_budget > 20.00 AND campaign_planned_budget < 32.00)
+  SELECT "C11 budgets: outside the forbidden band, over $1.00, and never under the money the plan can SEE inside them (P-4)",
+         (SELECT COUNTIF(campaign_planned_budget > 20.00 AND campaign_planned_budget < 32.00
+                         AND campaign_budget_basis NOT IN
+                             ('NO_MOVE_UNMEASURED', 'NO_MOVE_BRAND_DEFENSE'))
                 + COUNTIF(campaign_planned_budget < 1.00)
                 + COUNTIF(campaign_planned_budget IS NULL) FROM p)
-       + (SELECT COUNTIF(bud < good_spend - 0.005) + COUNTIF(bud < implied - 0.005)
+       + (SELECT COUNTIF(bud < good_spend - 0.005) + COUNTIF(bud < need - 0.005)
           FROM (SELECT plan, campaign_id, MAX(campaign_planned_budget) bud,
                        SUM(IF(side = 'GOOD', planned_spend_per_day, 0)) good_spend,
-                       SUM(planned_spend_per_day) implied
+                       -- v27.138: the plan's own arithmetic counts a queued keyword at ZERO, and
+                       -- the plan's own PARK sentence says parking does not stop a spend. Flooring
+                       -- at the arithmetic is satisfied by construction; flooring at the MONEY is
+                       -- what stops a cap being ramped towards a figure nobody believes.
+                       SUM(planned_spend_per_day)
+                       + SUM(IF(is_candidate AND seat_no IS NULL AND move != 'PAUSE',
+                                COALESCE(SAFE_DIVIDE(w_sp, window_days), 0), 0)) need
                 FROM p GROUP BY 1, 2))
 ),
 c12 AS (
@@ -203,7 +211,9 @@ c18 AS (
           FROM (SELECT plan, family,
                        MAX(allowance_ramped_per_day) AS allowance,
                        SUM(IF(seat_no IS NOT NULL, seat_cost_per_day, 0)) AS seat_cost,
-                       MIN(IF(is_candidate AND seat_no IS NULL, seat_cost_per_day, NULL))
+                       -- a keyword the ladder has closed is not seatable at any price (v27.138)
+                       MIN(IF(is_candidate AND seat_no IS NULL AND ladder_state != 'DEAD',
+                              seat_cost_per_day, NULL))
                          AS min_queued_cost
                 FROM p GROUP BY 1, 2)
           WHERE min_queued_cost IS NOT NULL)
@@ -231,6 +241,77 @@ c21 AS (
          COUNTIF(move = 'PAUSE' AND ladder_state != 'DEAD')
        + COUNTIF(move = 'PAUSE' AND planned_bid IS NOT NULL)
   FROM p
+),
+-- C22 IS C21'S MISSING CONVERSE. C21 only ever tested "PAUSE implies closed", which is the
+-- direction that passed; nothing tested "closed implies not seated", and on the v27.137 partition
+-- ten closed keywords held seats, held family allowance and were published with an executable bid
+-- while a single closed keyword that did not fit was told a closed keyword is stopped, not
+-- re-priced. Same class of narrowing as the "every REPRICED seat" C10 blessed a pass earlier.
+c22 AS (
+  SELECT 'C22 a keyword the ladder has CLOSED takes no seat, holds no allowance and carries no price (§4.5)',
+         COUNTIF(ladder_state = 'DEAD' AND seat_no IS NOT NULL)
+       + COUNTIF(ladder_state = 'DEAD' AND planned_bid IS NOT NULL)
+       + COUNTIF(ladder_state = 'DEAD' AND is_candidate AND move != 'PAUSE')
+       + COUNTIF(ladder_state = 'DEAD' AND seat_cost_per_day > 0 AND seat_no IS NOT NULL)
+  FROM p
+),
+-- C23: §9's "seat numbers stable across days for continuing occupants". C05 checks uniqueness
+-- inside ONE partition and C17 checks non-collision with the register; neither can see a seat
+-- being re-numbered from one night to the next, which is what happened to every seat the register
+-- does not hold an open row for — and the register only admits LADDER occupant states, so the
+-- plan's AT_BAR and DEAD seats can never acquire one. Trivially green while only one partition
+-- exists; it is the check that goes red the first night a number moves.
+c23 AS (
+  SELECT 'C23 §9: a continuing occupant keeps its seat number from one night to the next',
+         (SELECT COUNT(*)
+          FROM p JOIN (
+            SELECT plan, family, CAST(campaign_id AS STRING) campaign_id,
+                   CAST(keyword_id AS STRING) keyword_id, MIN(seat_no) seat_no
+            FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+            WHERE seat_no IS NOT NULL
+              AND as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+                           WHERE as_of < (SELECT MAX(as_of)
+                                          FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`))
+            GROUP BY 1, 2, 3, 4) h
+            USING (plan, family, campaign_id, keyword_id)
+          WHERE p.seat_no IS NOT NULL AND h.seat_no != p.seat_no
+            AND NOT EXISTS (SELECT 1 FROM led l
+                            WHERE l.family = p.family AND l.seat_no = h.seat_no
+                              AND l.keyword_id != p.keyword_id))
+),
+-- C24: the two house rules the budget step broke. "Unmeasured never reads as bad" and "brand
+-- defense is never judged on profit" (spec §8). On the v27.137 partition 19 campaigns whose every
+-- keyword took no click and spent nothing in the window were ramped one third of the way towards
+-- ZERO, compounding nightly because the ramp re-reads the cap it wrote; one of them was a brand
+-- defense campaign whose keywords are the house's own brand terms.
+c24 AS (
+  SELECT 'C24 a campaign the plan measured nothing in, and a brand-defense campaign, is never cut, and every cap says its move',
+         (SELECT COUNT(*) FROM (
+            SELECT plan, campaign_id, MAX(campaign_planned_budget) bud,
+                   MAX(campaign_current_budget) cur,
+                   MAX(campaign_visible_spend_per_day) vis, SUM(COALESCE(w_clk, 0)) clk,
+                   LOGICAL_OR(UPPER(COALESCE(campaign_name, '')) LIKE '%BRAND DEFENSE%') def
+            FROM p GROUP BY 1, 2)
+          WHERE cur IS NOT NULL AND bud < cur - 0.005
+            AND ((vis <= 0.0001 AND clk = 0) OR def))
+       + (SELECT COUNTIF(campaign_budget_basis IS NULL
+                         OR campaign_planned_budget_delta_per_day IS NULL
+                         OR sentence NOT LIKE '%CAMPAIGN CAP:%') FROM p)
+       + (SELECT COUNTIF(ABS(campaign_planned_budget_delta_per_day
+                             - (campaign_planned_budget
+                                - COALESCE(campaign_current_budget, campaign_planned_budget)))
+                         > 0.005) FROM p)
+),
+-- C25: the seat sentence must name the DIRECTION on every seat, not only on the repriced ones.
+-- v27.137 added the clause to REPRICE and its own account claimed both; the ten HOLD_AT_PRICE
+-- rows — the seats whose sentence says nothing is uploaded — carried a raise and did not say so.
+c25 AS (
+  SELECT 'C25 every SEAT sentence names whether the plan raises or cuts that keyword (P-6 disclosure)',
+         COUNTIF(seat_no IS NOT NULL
+                 AND sentence NOT LIKE '%A RAISE of about%'
+                 AND sentence NOT LIKE '%a cut of about%'
+                 AND sentence NOT LIKE '%no change of about%')
+  FROM p
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
@@ -239,5 +320,7 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11 UNION ALL SELECT * FROM c12
       UNION ALL SELECT * FROM c13 UNION ALL SELECT * FROM c14 UNION ALL SELECT * FROM c15
       UNION ALL SELECT * FROM c16 UNION ALL SELECT * FROM c17 UNION ALL SELECT * FROM c18
-      UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21)
+      UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21
+      UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23 UNION ALL SELECT * FROM c24
+      UNION ALL SELECT * FROM c25)
 ORDER BY check_name;
