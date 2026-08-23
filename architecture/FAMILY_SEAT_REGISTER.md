@@ -17,7 +17,11 @@ Second repair pass 2026-08-22 after verification: R-k REFINED — gap rows worde
 MEASURED cause (the blanket "the ladder does not track product targets" was false on live rows
 and is retired; see the R-k ruling and Open ruling 7), and the FAMILY "what closes the gap"
 sentence made HONEST — when the listed moves recover less than the gap it says so and names
-what does (gap-closure honesty, B29).
+what does (gap-closure honesty, B29). Third repair pass 2026-08-22: that closing promise now counts
+ONLY money a person recovers by doing what the row lists today — the repair dollars were being added
+to it, so a family could read "enough to close the gap" off $1.12/day of real moves and $117.12/day
+of a re-judged-horizon projection; B29 now re-derives the executable total from the register's own
+rows instead of from the sentence, and B30 forbids the projection ever wearing the `(−$…/day)` form.
 Tasks 3–5 (leak generator arm, morning surface, health checks) pending — this file grows with each.
 
 **Which clock every date in this file is on.** Data dates (`snapshot_date`, `opened_on`, `closed_on`,
@@ -28,7 +32,10 @@ because a repair pass wrote its own record as 2026-08-23 while it was still 2026
 York and Los Angeles: the author's machine runs on Israel time, seven hours ahead of New York, so
 every evening's work lands on tomorrow's date locally. A reader comparing a record header here to a
 ledger `opened_on` or a `LOG_PIPELINE_RUNS` `run_date` was off by a day. Every such date has been
-corrected to the warehouse clock. Before dating anything in this file, read the clock you mean:
+corrected to the warehouse clock — 46 of them, on 43 lines, across this file, `config.yaml`, four
+SQL sources and one deployed table description; count it yourself against a pre-fix backup with
+`grep -o '2026-08-23' FILE | wc -l` (the per-file line count is not the occurrence count, and a
+repair pass once published the one for the other). Before dating anything in this file, read the clock you mean:
 `TZ=America/New_York date` / `TZ=America/Los_Angeles date`.
 **Drift check 2026-08-22** (see "Drift check" below): the two new steps are DEPLOYED but had not yet
 run inside an orchestrator pass; the ledger and the seat-economics table have only ever been written
@@ -452,6 +459,35 @@ moves could not deliver; after the repaired view every check PASSED and two unca
 an identical MD5. (A test-side lesson recorded in the test file: filtering on the universe's
 EXISTS-derived defense flag in a WHERE trips BigQuery's non-equality ANTISEMI-join limitation —
 the house anti-join rule — so the gap-cause re-derivation keeps its filters inside COUNTIF.)
+
+**Third repair pass 2026-08-22 — the closing promise now counts only money you recover today
+(B29 rewritten, B30 added).** The gap-closure sentence added four numbers together and called the
+total a recovery: the leaks, the stalled probes, the failed keywords **and the repairs**. A repair
+is not a recovery. Nothing comes back when you re-price a losing keyword; the dollars move to the
+good side only if that keyword then holds at its bar when it is re-judged, which is a projection.
+So a family could read "enough to close the gap" off moves that recover a hundredth of it, and the
+register contradicted itself one row away — query the FAMILY rows across the three horizons and
+compare the today row's promise against the day-one row's `over_by_per_day` to see it. Two changes.
+The repair clause no longer borrows the `(−$…/day)` form the executable moves use; it says the
+repairs give back nothing today and names the projection as a projection. The closing sentence
+counts only leaks + stalled probes + failed keywords, and where the repairs are what would close
+the gap it says so and sends the reader to that family's re-judged row.
+
+**Why the test could not catch it, and what replaced it.** B29 re-derived the recovery by
+regex-extracting every `(−$…/day)` parenthetical out of the sentence the VIEW had just written —
+test and view shared the assumption, so folding a projection into the total passed both. B29 now
+re-derives the executable total INDEPENDENTLY from the register's own keyword rows (the LEAK rows
+plus the SEAT rows whose occupant is a stalled probe or a failed keyword, on the today horizon),
+requires the sentence's listed recoveries to equal it to the cent, and judges the closing promise
+on that number and never on the sentence's own arithmetic — a short row must say so and must not
+contain "enough to close". B30 is the structural half: the repair clause may never use the
+executable `(−$…/day)` form and must name itself a projection. B30 deliberately does NOT forbid a
+family that has repairs from also claiming a closure — a family whose leaks and stalled probes
+alone reach its gap may legitimately do both, and that is B29's call on the re-derived number.
+TDD, both directions: the new B29 and B30 were run against the PRE-FIX definition stood up under
+a `TMP_` name (never against production, and dropped afterwards) and read 2 violations each while
+B01–B28 all passed; against the repaired view all thirty read PASS, and A01–A16 stayed 16/16.
+
 Determinism: two uncached pulls, identical MD5 (query at the bottom of the test file).
 
 **`TMP_` proofs of 2026-08-22** (house rule: synthetic rows only on `TMP_` copies, never in a

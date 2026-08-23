@@ -104,11 +104,22 @@
 --       the whole-phrase three-way re-derivation over the universe.
 --   B29 Gap-closure honesty: on every FAMILY 'today' row whose 20% side is over its allowance
 --       (over_by > 0), the parenthesised (−$…/day) recoveries listed in the 'what closes the gap'
---       sentence are summed and compared to over_by on the row itself. When the listed moves
---       recover clearly less than the gap the sentence says they do not close it and names what
---       does (the untracked spend, or — when even that is not enough — growth of the 80% side);
---       when they cover it the sentence never carries the shortfall clause. A reader who does
---       everything on the row is never promised a closure the moves cannot deliver.
+--       sentence are summed and compared to the EXECUTABLE recovery re-derived INDEPENDENTLY from
+--       the register's own keyword rows — the leaks, the stalled probes and the failed keywords on
+--       the 'today' horizon, which are the moves a person actually performs today. The two must
+--       agree to the cent, so the sentence cannot list a dollar the rows do not carry. Then, judged
+--       on that re-derived number and never on the sentence's own arithmetic: when the executable
+--       moves recover clearly less than the gap the sentence must say they do not close it and must
+--       NOT claim 'enough to close'; when they cover it the sentence must claim the closure and
+--       carry no shortfall clause. A reader who does everything on the row is never promised a
+--       closure the moves cannot deliver.
+--   B30 The repair projection is never dressed as a recovery: a repaired keyword's dollars arrive
+--       only if it holds at its bar when it is re-judged, so on a FAMILY 'today' row the repair
+--       clause must never use the (−$…/day) form the executable moves use, must name itself a
+--       projection, and must not be inside a sentence that promises a closure the executable moves
+--       cannot deliver. This is the check that a shared assumption between view and test once hid:
+--       B29's re-derivation used to read the same sentence the view wrote, so folding a
+--       $117.12/day projection into a $1.12/day recovery passed both.
 -- =============================================================================================
 CREATE TEMP TABLE reg AS SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
 WITH
@@ -461,22 +472,53 @@ checks AS (
          (SELECT COUNT(*) FROM rd LEFT JOIN cat_named d ON d.family = rd.family AND d.horizon = 'today' AND d.category = 'brand defense — never judged on profit'
           WHERE rd.n_defense IS DISTINCT FROM COALESCE(d.nk, 0))
   UNION ALL
-  SELECT 'B29 gap-closure honesty: a family whose listed moves recover less than the gap says they do not close it and names what does; one whose moves cover it carries no shortfall clause',
+  SELECT 'B29 gap-closure honesty: the listed recoveries equal the executable moves re-derived from the register\'s own rows, and the closing promise is judged on that number, never on the sentence\'s own arithmetic',
          (SELECT COUNT(*) FROM (
             SELECT f.sentence, f.over_by_per_day,
+                   -- INDEPENDENT re-derivation: the moves a person performs today, taken from the
+                   -- register's own keyword rows. A repair is not here — its dollars are a
+                   -- re-judged-horizon projection, and counting it is exactly the defect B30 names.
+                   COALESCE((SELECT SUM(IF(r.row_type = 'LEAK', r.cost_per_day, 0)
+                                        + IF(r.occupant_kind IN ('stalled probe', 'failed'), r.cost_per_day, 0))
+                             FROM reg r
+                             WHERE r.family = f.family AND r.horizon = 'today'
+                               AND r.row_type IN ('SEAT', 'LEAK')), 0) AS exec_today,
                    COALESCE((SELECT SUM(CAST(v AS FLOAT64))
-                             FROM UNNEST(REGEXP_EXTRACT_ALL(f.sentence, r'\(−\$([0-9]+\.[0-9]+)/day')) v), 0) AS recov
+                             FROM UNNEST(REGEXP_EXTRACT_ALL(f.sentence, r'\(−\$([0-9]+\.[0-9]+)/day')) v), 0) AS listed
             FROM famrow f
             WHERE f.row_type = 'FAMILY' AND f.horizon = 'today' AND f.over_by_per_day > 0)
-          WHERE CASE
-                  -- clearly short: the sentence must say the moves do not close it and name the rest
-                  WHEN recov < over_by_per_day - 0.05 THEN
+          WHERE
+            -- (a) the sentence may not list a recovery the rows do not carry (0.02 = two-decimal
+            -- formatting of the aggregate against the four-decimal per-row costs)
+            ABS(listed - exec_today) > 0.02
+            -- (b) the promise is judged on the re-derived executable number
+            OR CASE
+                  -- clearly short: say so, name the rest, and never claim the closure
+                  WHEN exec_today < over_by_per_day - 0.05 THEN
                     NOT (sentence LIKE '%recover only $%'
-                         AND (sentence LIKE '%they do not close it%' OR sentence LIKE '%leaves it open%'))
-                  -- clearly covered: the shortfall clause must be absent
-                  WHEN recov > over_by_per_day + 0.05 THEN sentence LIKE '%recover only $%'
+                         AND (sentence LIKE '%they do not close it%' OR sentence LIKE '%leaves it open%')
+                         AND (sentence LIKE '%repairs hold at their bar%' OR sentence LIKE '%untracked spend%'
+                              OR sentence LIKE '%rest closes only by growing%'))
+                    OR sentence LIKE '%enough to close%'
+                  -- clearly covered: claim the closure, carry no shortfall clause
+                  WHEN exec_today > over_by_per_day + 0.05 THEN
+                    sentence LIKE '%recover only $%' OR sentence NOT LIKE '%enough to close%'
                   -- within rounding of the line: either wording is honest
                   ELSE FALSE END)
+  UNION ALL
+  SELECT 'B30 the repair projection is never dressed as an executable recovery: no (−$…/day) form on the repair clause, it names itself a projection, and it never sits inside a promised closure',
+         (SELECT COUNTIF(
+                   -- the repair clause must not borrow the executable moves' (−$…/day) form
+                   REGEXP_CONTAINS(sentence, r'repairs[^;]*\(−\$')
+                   -- when a repair clause is present it must say what it is
+                   -- when a repair clause is present it must say what it is. (Whether a promised
+                   -- closure is honest is B29's job, judged on the independently re-derived
+                   -- executable total — a family CAN legitimately have repairs and still close its
+                   -- gap on today's moves alone, so B30 must not forbid that pairing.)
+                   OR (sentence LIKE '%repairs are being re-priced%'
+                       AND sentence NOT LIKE '%a projection and not money in hand%'))
+          FROM famrow
+          WHERE row_type = 'FAMILY' AND horizon = 'today' AND over_by_per_day > 0)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks ORDER BY check_name;
