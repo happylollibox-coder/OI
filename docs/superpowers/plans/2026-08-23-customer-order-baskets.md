@@ -706,9 +706,15 @@ Create `scripts/bigquery/views/V_ORDER_BASKET.sql`:
 --   MULTI_UNIT_SAME one product, several units  (a "buy two" signal)
 --   MULTI_PRODUCT   more than one product       (a cross-sell signal)
 --
--- Unmapped ASINs (retired products absent from DIM_PRODUCT) keep their identity
--- as 'UNMAPPED:<asin>' rather than collapsing into one bucket, so two different
--- retired products never look like the same product bought twice.
+-- family_label falls back to 'UNMAPPED:<asin>' whenever parent_name is NULL,
+-- so two different unmapped ASINs never look like the same product bought
+-- twice. That fallback is NOT limited to retired products absent from
+-- DIM_PRODUCT — it also catches live, catalogued, currently-selling products
+-- that ARE present in DIM_PRODUCT but simply have no family assigned there.
+-- Confirmed live: ASIN B0CHJY7XLQ ("Popsicle") and B0CHJZDD3F ("BFF 1") are
+-- both active products with is_mapped_product = TRUE and parent_name NULL,
+-- so their family_label reads 'UNMAPPED:B0CHJY7XLQ' / 'UNMAPPED:B0CHJZDD3F'
+-- despite being fully mapped rows in DIM_PRODUCT.
 --
 -- Spec: architecture/CUSTOMER_ORDER_BASKETS.md
 --
@@ -737,6 +743,11 @@ WITH lines AS (
 SELECT
   selling_partner_id,
   amazon_order_id,
+
+  -- purchase_date, ship_state and is_business_order are 1:1 with the order
+  -- (one header row per amazon_order_id in V_SRC_ListOrder), so grouping by
+  -- them alongside the order key is safe and lets callers read them here
+  -- without a second join back to the header.
   purchase_date,
   ship_state,
   is_business_order,
@@ -745,8 +756,19 @@ SELECT
   COUNT(DISTINCT asin)                      AS distinct_asins,
   COUNT(DISTINCT family_label)              AS distinct_families,
   SUM(quantity_ordered)                     AS units,
+
+  -- item_revenue is the GROSS extended list price (item_price_amount summed):
+  -- pre-tax and pre-discount (before promotion_discount_amount). It does not
+  -- reconcile to the order total and does not tie to Amazon-reported sales in
+  -- SRC_ACC_SALES_TRAFFIC_DAILY. Only units are safe to treat as authoritative.
   ROUND(SUM(item_price_amount), 2)          AS item_revenue,
-  LOGICAL_AND(is_mapped_product)            AS all_products_mapped,
+
+  -- all_asins_in_dim is TRUE only when every ASIN in the basket has a
+  -- DIM_PRODUCT row (is_mapped_product). It does NOT mean every product has a
+  -- usable family — DIM_PRODUCT rows can still have parent_name NULL (see
+  -- header comment), so distinct_families can count an 'UNMAPPED:' label in a
+  -- basket where this column reads TRUE.
+  LOGICAL_AND(is_mapped_product)            AS all_asins_in_dim,
 
   CASE
     WHEN COUNT(DISTINCT asin) > 1     THEN 'MULTI_PRODUCT'
