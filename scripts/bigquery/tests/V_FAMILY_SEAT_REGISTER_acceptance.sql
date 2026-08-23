@@ -180,6 +180,13 @@
 --       will WRITE one — ENGINE_PRICES where T_ENGINE_PREFLIGHT carries a GO instruction for the
 --       key, NO_SHEET_ROW for a failed keyword not yet elapsed at its floor, TOO_THIN_TO_PRICE at
 --       or under the generator's thin-orders rule — re-derived from the generator's own sources.
+--   B39 (2026-08-23, repair pass) two prices for one keyword are SAID: every SEAT row publishes
+--       engine_instruction exactly where T_ENGINE_PREFLIGHT carries a GO for its key (NULL
+--       elsewhere, NULL on every non-SEAT row); a probation seat with one — the generator's F5
+--       rule writes its floor row beside the engine's GO, CHECK FIRST — reads 'two prices for one
+--       keyword' in its move, names the instruction, and its sentence says 'keep one'; a
+--       probation seat without one never says so. Fail-first against the v27.125 image: 2 (the
+--       two Bottle floor-probation rows on the pending reprice book, each with a LIFT GO).
 --   B35 A projection credits a leak's pause ONLY where the sheet that pauses it EXISTS, row by row
 --       (R-l, leak half, after its own overrule clause fired). A leak is a PARKED-past-appointment
 --       or DEAD keyword that still spends. Until 2026-08-23 no generator built its pause row, so
@@ -931,6 +938,30 @@ checks AS (
                                        COUNTIF(occupant_kind = 'failed' AND sheet_row != 'NEXT_REPRICE_BOOK') AS n_refused_failed
                                 FROM r WHERE row_type = 'SEAT' GROUP BY 1) n ON n.family = f.family
             WHERE f.row_type = 'FAMILY' AND f.horizon = 'today' AND n.n_failed > 0)
+  UNION ALL
+  -- B39 (2026-08-23): re-derived from T_ENGINE_PREFLIGHT in the view's own instruction format,
+  -- never from the register's belief. The generator's F5 rule: a FLOOR_PROBATION row is emitted
+  -- even over an engine GO on the same key, as CHECK FIRST naming the competing instruction, so
+  -- the register must publish both prices and pick neither.
+  SELECT 'B39 two prices for one keyword are said: engine_instruction is published on every SEAT row exactly where T_ENGINE_PREFLIGHT carries a GO for the key (NULL elsewhere and on every other row type), and a probation seat with one reads two prices for one keyword in its move, names the instruction, and says keep one',
+         (SELECT COUNTIF(s.row_type != 'SEAT' AND s.engine_instruction IS NOT NULL)
+                 + COUNTIF(s.row_type = 'SEAT' AND (s.engine_instruction IS NOT NULL) != (go.cid IS NOT NULL))
+                 + COUNTIF(s.row_type = 'SEAT' AND go.cid IS NOT NULL AND s.engine_instruction != go.instr)
+                 + COUNTIF(s.row_type = 'SEAT' AND s.occupant_kind = 'probation' AND go.cid IS NOT NULL
+                           AND NOT (COALESCE(s.holdout, FALSE) AND s.as_of >= s.holdout_eligible_from)
+                           AND (s.move NOT LIKE '%two prices for one keyword%'
+                                OR s.move NOT LIKE CONCAT('%', go.instr, '%')
+                                OR s.move NOT LIKE '%picks neither%'
+                                OR s.sentence NOT LIKE '%keep one%'
+                                OR (s.book_batch_id IS NOT NULL AND (s.move NOT LIKE CONCAT('%', s.book_batch_id, '%') OR s.move NOT LIKE '%CHECK FIRST%'))))
+                 + COUNTIF(s.row_type = 'SEAT' AND s.occupant_kind = 'probation' AND go.cid IS NULL
+                           AND (s.move LIKE '%two prices%' OR s.sentence LIKE '%keep one%'))
+          FROM r s
+          LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS cid, COALESCE(CAST(keyword_id AS STRING), '') AS kid,
+                            STRING_AGG(DISTINCT FORMAT('%s %s $%.2f → $%.2f', engine, lever, current_bid, suggested_bid), '; '
+                                       ORDER BY FORMAT('%s %s $%.2f → $%.2f', engine, lever, current_bid, suggested_bid)) AS instr
+                     FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT` WHERE verdict = 'GO' GROUP BY 1, 2) go
+                 ON go.cid = s.campaign_id AND go.kid = s.keyword_id)
   UNION ALL
   SELECT 'B33 the re-judged horizon never zeroes a stalled probe (R-l applied to the projection): parking lowers a price, so a family paying for stalled probes today still pays for them when re-judged, and no horizon assumption claims they are parked to $0',
          (SELECT COUNTIF(today_cost > 0.005 AND (n_rejudged_rows = 0 OR rejudged_cost <= 0.005)) FROM stalled_cat)

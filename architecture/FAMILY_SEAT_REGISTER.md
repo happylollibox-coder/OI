@@ -105,6 +105,29 @@ the batch (C13). (c) The reprice book's SQL orders totally — `(campaign_id, ta
 key in the state table (two such groups exist today, none in the reprice population), and the
 sibling leak book already had this unit test; now both do (`tools/tests/test_change_log_discipline.py`).
 
+**Eleventh pass (2026-08-23, repair pass 2): two prices for one keyword are said, and a failed
+keyword is named by its cause.** (a) The reprice generator's F5 rule writes a floor-probation row
+EVEN OVER an engine GO for the same key — as CHECK FIRST, naming the competing instruction, so Ori
+keeps one price. The register's PROBATION move published the book's cut alone while the brief's
+PLANNED section listed the engine's raise for the same key (two Bottle auto-targets on
+`reprice_book_20260823_1044`, each with a LIFT GO): two instructions one reader got on one morning.
+Every SEAT row now publishes `engine_instruction` (the GO(s) `T_ENGINE_PREFLIGHT` carries for its
+key, in the view's own `engine lever $from → $to` form; NULL when none), a probation move with one
+reads "two prices for one keyword", names both, says the book row is CHECK FIRST and that the
+register picks neither; its `sheet_row` stays `PENDING_BOOK` because the book DOES carry it. The
+brief's upload action says how many pending rows carry two prices and that one is kept per keyword
+before uploading (B39, C14; fail-first 2 and 1 against the v27.125 objects). (b) The brief's "Not on
+any sheet" clause called every `ENGINE_PRICES` / `TOO_THIN_TO_PRICE` row a repair, though the
+register lands both values on a FAILED seat too, and a failed keyword refused NOT_AT_FLOOR
+(`sheet_row` `NO_SHEET_ROW` on a LOSER outside the holdout arm) was neither counted nor named — the
+one thing the clause exists to prevent. The clause now counts by `state` and names five kinds apart
+(repair priced by the engine; failed keyword the engine carries; repair too thin; failed keyword too
+thin; failed keyword whose probation has not elapsed at its floor). Latent today (0 LOSER rows in
+the snapshot), asserted by C14 on the same re-derivation. What this pass did NOT decide: which price
+stands on a two-price key (open ruling 19), and the same two-price shape on rows the register does
+not word as a conflict — stalled probes and parked seats the engine also carries a GO for, and a
+leak on the pending leak book whose key has a GO (open ruling 20).
+
 **Which clock every date in this file is on.** Data dates (`snapshot_date`, `opened_on`, `closed_on`,
 basis windows) are Los Angeles, the warehouse clock. Pass times (`LOG_PIPELINE_RUNS`, when a routine
 was deployed) are New York, the orchestrator clock. Dates recording when a ruling was made or a
@@ -185,7 +208,7 @@ register.
 | `V_DAILY_BRIEF` SEATS section (`section_rank` 6) | One plain line per WORKING family: the doctrine read, what the 20% side costs against its allowance, and what that side is made of. A position, not a proposal. | shipped 2026-08-23 |
 | `V_RUN_SUMMARY` SEATS section | The doctrine status per working family on the Weekly Run front page — label, seat count, open capacity. | shipped 2026-08-23 |
 | `cube/schema/SeatRegister.js` | The register on the dashboard. Passthrough only; `rowId` = `sort_key` (the register's total ordering); a dimension for every column. Cache keyed on the orchestration stamp. | shipped 2026-08-23 |
-| `scripts/bigquery/tests/SEAT_SURFACE_acceptance.sql` | C01–C13 (C11 the action from `sheet_row`, C12 like with like, C13 the rebuild action names the batch and a refused book row is never a row for the next book). Every check re-derives from the register's own rows, and every check counts an EMPTY population as a violation of itself. | shipped 2026-08-23 |
+| `scripts/bigquery/tests/SEAT_SURFACE_acceptance.sql` | C01–C14 (C11 the action from `sheet_row`, C12 like with like, C13 the rebuild action names the batch and a refused book row is never a row for the next book). Every check re-derives from the register's own rows, and every check counts an EMPTY population as a violation of itself. | shipped 2026-08-23 |
 | `tools/tests/test_change_log_discipline.py` | Both books, one rule: a label is written on `PENDING_UPLOAD` rows only, never on an applied (NULL) batch; a `--supersede` with no pending row stops before any UPDATE; no DELETE anywhere; a change-log override must be a `TMP_` copy; one pending leak book at a time (`--replaces`). | shipped 2026-08-23 |
 | `scripts/bigquery/tests/check_seat_surface_labels.py` | The two guarantees SQL cannot assert, because they live in files: a cube dimension for every register column, and every label CASE naming every `doctrine_status` the register can emit. | shipped 2026-08-23 |
 | `V_ENGINE_HEALTH` checks | reconciliation, idempotence, every occupant numbered. | Task 5 |
@@ -580,6 +603,26 @@ LEFT JOIN `onyga-482313.OI.FACT_KEYWORD_STATE` st
        ON st.snapshot_date = r.as_of AND CAST(st.campaign_id AS STRING) = r.campaign_id
       AND CAST(st.keyword_id AS STRING) = r.keyword_id
 WHERE r.row_type = 'SEAT' AND r.occupant_kind IN ('repair', 'failed') AND r.book_batch_id IS NULL
+ORDER BY r.sort_key;
+```
+
+**Two prices for one keyword are said (B39, eleventh pass, 2026-08-23).** The generator's F5
+rule is the one place the one-keyword-one-price rule is deliberately broken: a FLOOR_PROBATION row
+is written even over an engine's GO for the same key, CHECK FIRST, naming the competing
+instruction, because the probation clock starts only when a floor bid has LANDED. So a probation
+seat on the pending book can carry two prices on the same morning — the book's cut to the floor
+and the engine's GO — and the register must say both and pick neither. Every SEAT row publishes
+`engine_instruction` (from `T_ENGINE_PREFLIGHT`, `verdict = 'GO'`, the same source and grain the
+generator's `instructed` CTE reads); a probation move with one reads "two prices for one keyword —
+on the pending book …, and the engine's own GO instruction today (…); the book row is CHECK FIRST:
+keep ONE before uploading … the register picks neither", and a probation seat with a GO but no
+book row yet says the next build will put the two side by side. `sheet_row` stays `PENDING_BOOK`:
+the book carries the row. Re-derive it with:
+
+```sql
+SELECT r.family, r.seat_no, r.occupant_kind, r.sheet_row, r.book_batch_id, r.engine_instruction, r.move
+FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER` r
+WHERE r.row_type = 'SEAT' AND r.engine_instruction IS NOT NULL
 ORDER BY r.sort_key;
 ```
 
@@ -1473,6 +1516,32 @@ change is then a derivation or a source, never a literal.
    `SELECT batch_id, upload_status, COUNT(*) FROM onyga-482313.OI.FACT_PPC_CHANGE_LOG
     WHERE batch_id LIKE 'seat_moves_%' GROUP BY 1, 2 ORDER BY 1;`
 
+19. **Which price stands on a two-price key?** (2026-08-23, eleventh pass.) A floor-probation row
+   on the pending reprice book beside an engine GO for the same key (the generator's F5 rule) is
+   two prices for one keyword, and the register now says so and picks neither. The book's cut lands
+   the floor and starts the probation clock; the engine's GO (today a LIFT raise) keeps the keyword
+   off its floor and the clock never starts. F5 leaves the pick to you row by row. If there is a
+   standing answer — the floor landing always wins for a FLOOR_PROBATION key, or the engine always
+   does — it is one line in the generator's `classify` and one branch in the register's PROBATION
+   move, and the register would stop publishing the conflict. Read today's:
+   `SELECT family, seat_no, book_batch_id, book_old_bid, book_new_bid, engine_instruction
+    FROM onyga-482313.OI.V_FAMILY_SEAT_REGISTER
+    WHERE row_type = 'SEAT' AND sheet_row = 'PENDING_BOOK' AND engine_instruction IS NOT NULL ORDER BY sort_key;`
+
+20. **The same two-price shape on rows the register does not word as a conflict.** (2026-08-23.)
+   `engine_instruction` is published on every seat, and it is not only probation rows that carry
+   one: stalled probes the register sends BY_HAND (R-f: raise to the seat price or park) while the
+   OOB engine already carries a GO parking them at its park price, parked seats with a REVERDICT
+   GO, and a leak on the pending leak book whose key has a GO (the leak book's generator reads no
+   engine instruction at all — it has no F5 and no ENGINE_INSTRUCTED). Whether a by-hand move
+   should defer to an engine GO that does the same thing, and whether the leak book should refuse
+   or flag a key the engine carries, is yours; until ruled, the register names the instruction on
+   the row and the move stands as R-f / R-l word it. Count them:
+   `SELECT row_type, occupant_kind, sheet_row, COUNT(*) FROM onyga-482313.OI.V_FAMILY_SEAT_REGISTER
+    WHERE engine_instruction IS NOT NULL GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;`
+   (LEAK rows publish NULL today — the join is on SEAT rows only; the count for leaks is the
+   register joined to `T_ENGINE_PREFLIGHT` GO rows on `(campaign_id, keyword_id)`.)
+
 **House rule 5, recorded (2026-08-23).** Commit `88dad93` (the eighth pass) staged a `config.yaml`
 hunk that was not its own: the `FACT_CUSTOMER_ORDER_ITEM` registry entry, written in the working
 tree by the concurrent customer-order session, whose own commit (`67393e4`, four minutes later)
@@ -1539,6 +1608,17 @@ detail's 'Executable today' counts only `NEXT_*` as rows for the next book; a re
 marks `ENGINE_PRICES` or `TOO_THIN_TO_PRICE` (B38) is named in a separate 'Not on any sheet'
 clause. C13 asserts both; its fail-first proof ran over a `TMP_` image with one family's leak rows
 flipped to `REBUILD_LEAK_BOOK`, the only way to exercise the branch on a day no book is stale.
+
+**Two prices are said on the surface, and a failed keyword is named by its cause (eleventh pass,
+2026-08-23).** The upload action reads `… — N rows wait on it (or label it never-uploaded); M of
+them carry two prices — the book's floor row beside an engine GO instruction the PLANNED section
+lists — keep one per keyword before uploading (the register's rows name both)` whenever a pending
+row carries `engine_instruction` (B39). The 'Not on any sheet' clause counts by the ladder `state`
+the row carries and names apart: repairs priced by the engine, failed keywords the engine carries
+(no pause row), repairs too thin to price, failed keywords too thin to act on, and failed keywords
+whose probation has not elapsed at its floor (`NO_SHEET_ROW` on a LOSER outside the holdout arm) —
+so a failed keyword is never published as a repair and never waits unseen. C14 asserts both legs
+on the register's own rows; the failed-keyword legs are latent until a LOSER row exists.
 
 **The brief's SEATS section** (`section_rank` 6, appended — the five older sections keep their
 numbers and their order). One line per working family, in the brief's uniform row shape:

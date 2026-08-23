@@ -67,6 +67,14 @@
 --       batch after --replaces (the generator refuses a build that does not), and a repair the
 --       register marks ENGINE_PRICES / TOO_THIN_TO_PRICE (B38) is named 'not on any sheet' and
 --       never counted as a row for the next book.
+--   C14 (2026-08-23, repair pass) Two prices for one keyword are said on the surface (B39): when
+--       a family's pending-book rows carry an engine GO (register engine_instruction), the
+--       upload action says how many carry two prices and that one is kept per keyword before
+--       uploading; and the 'Not on any sheet' clause names a FAILED keyword by its own cause
+--       (the engine carries it / too thin / probation not elapsed at its floor) and never calls
+--       it a repair — re-derived from the register's own rows by state and sheet_row.
+--       Fail-first against the v27.125 brief: 1 (Bottle's two floor-probation rows on the pending
+--       reprice book each carry a LIFT GO; the action said only 'upload the pending book').
 --
 -- The cube's own shape (a dimension for every column a person reads, and the doctrine label CASEs
 -- naming every status the register can emit) is asserted by the file checker that SQL cannot run:
@@ -243,6 +251,32 @@ checks AS (
                                       COUNTIF(sheet_row = 'TOO_THIN_TO_PRICE') AS n_thin,
                                       COUNTIF(sheet_row IN ('NEXT_LEAK_BOOK', 'NEXT_REPRICE_BOOK')) AS n_next
                                FROM tab WHERE row_type IN ('SEAT', 'LEAK') GROUP BY 1) n ON n.family = b.campaign_name)
+         + (SELECT IF(n_brief = 0 OR n_tab = 0, 1, 0) FROM pop)
+  UNION ALL
+  -- C14 (2026-08-23): re-derived from tab by sheet_row, state and engine_instruction; the brief
+  -- is never asked to confirm itself. The failed-keyword legs are latent on a day with no LOSER
+  -- row (0 by absence, stated here); the two-price leg is live today.
+  SELECT 'C14 the brief upload action says how many pending rows carry two prices (a book floor row beside an engine GO, kept one per keyword before uploading), and the not-on-any-sheet clause names a failed keyword by its cause and never as a repair',
+         (SELECT COUNTIF((n.n_two > 0 AND (b.action NOT LIKE FORMAT('%%%d of them carr%%', n.n_two) OR b.action NOT LIKE '%two prices%' OR b.action NOT LIKE '%keep one per keyword before uploading%'))
+                         OR (n.n_two = 0 AND b.action LIKE '%two prices%')
+                         OR (n.n_engine_repair > 0 AND b.detail NOT LIKE FORMAT('%%%d repair%% priced by the engine%%', n.n_engine_repair))
+                         OR (n.n_engine_repair = 0 AND b.detail LIKE '%repair% priced by the engine%')
+                         OR (n.n_engine_failed > 0 AND b.detail NOT LIKE FORMAT('%%%d failed keyword%% the engine\'s own GO instruction carries%%', n.n_engine_failed))
+                         OR (n.n_thin_repair > 0 AND b.detail NOT LIKE FORMAT('%%%d repair%% too thin for any book to price%%', n.n_thin_repair))
+                         OR (n.n_thin_repair = 0 AND b.detail LIKE '%repair% too thin%')
+                         OR (n.n_thin_failed > 0 AND b.detail NOT LIKE FORMAT('%%%d failed keyword%% too thin%%', n.n_thin_failed))
+                         OR (n.n_not_at_floor > 0 AND b.detail NOT LIKE FORMAT('%%%d failed keyword%% whose probation has not elapsed at its floor%%', n.n_not_at_floor))
+                         OR (n.n_not_at_floor = 0 AND b.detail LIKE '%probation has not elapsed at its floor%')
+                         OR (n.n_engine_repair + n.n_engine_failed + n.n_thin_repair + n.n_thin_failed + n.n_not_at_floor = 0 AND b.detail LIKE '%Not on any sheet:%'))
+          FROM brief b JOIN (SELECT family,
+                                    COUNTIF(sheet_row = 'PENDING_BOOK' AND engine_instruction IS NOT NULL) AS n_two,
+                                    COUNTIF(sheet_row = 'ENGINE_PRICES' AND state = 'REPRICE') AS n_engine_repair,
+                                    COUNTIF(sheet_row = 'ENGINE_PRICES' AND state = 'LOSER') AS n_engine_failed,
+                                    COUNTIF(sheet_row = 'TOO_THIN_TO_PRICE' AND state = 'REPRICE') AS n_thin_repair,
+                                    COUNTIF(sheet_row = 'TOO_THIN_TO_PRICE' AND state = 'LOSER') AS n_thin_failed,
+                                    COUNTIF(row_type = 'SEAT' AND state = 'LOSER' AND sheet_row = 'NO_SHEET_ROW'
+                                            AND NOT (COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from)) AS n_not_at_floor
+                             FROM tab WHERE row_type IN ('SEAT', 'LEAK') GROUP BY 1) n ON n.family = b.campaign_name)
          + (SELECT IF(n_brief = 0 OR n_tab = 0, 1, 0) FROM pop)
   UNION ALL
   SELECT 'C12 the run summary detail sets the WHOLE 20% side against the allowance (like with like), to the cent, and then names the parts',

@@ -99,6 +99,15 @@
 -- row prints the ads window it was measured on and the keyword snapshot it came from, so a reader
 -- who built a book since the last pass can see that this line has not seen it yet.
 --
+-- v27.126 (2026-08-23, repair pass, B39/C14): (1) TWO PRICES FOR ONE KEYWORD ARE SAID. A floor-
+-- probation row on the pending reprice book can sit beside an engine GO for the same key (the
+-- generator's F5 rule writes it anyway, CHECK FIRST); the PLANNED section then lists the engine's
+-- raise while SEATS said 'upload the pending book'. The register now publishes engine_instruction
+-- on every seat; this section counts pending rows that carry one and says so in the action
+-- ('N of them carry two prices … keep one per keyword before uploading'). (2) The 'Not on any
+-- sheet' clause names FAILED keywords by their own cause — the engine carries it, too thin, or
+-- its probation has not elapsed at its floor (sheet_row NO_SHEET_ROW on a LOSER outside the
+-- holdout arm) — instead of calling every such row a 'repair' and leaving the last kind unsaid.
 -- v27.125 (2026-08-23, repair pass): (1) the 'rebuild the leak book' action NAMES THE BATCH —
 -- `--replaces <batch>` — because the generator's --replaces takes one or more batch ids and
 -- refuses a build that does not name the pending book, so the earlier template ('--replaces)'
@@ -352,8 +361,20 @@ seat_counts AS (
          COUNTIF(sheet_row = 'BY_HAND')                                  AS n_hand,
          -- B38 (v27.125): rows NO sheet will carry — the engine's own instruction prices one, a
          -- record too thin to read prices none. Named, never counted as executable.
-         COUNTIF(sheet_row = 'ENGINE_PRICES')                            AS n_engine,
-         COUNTIF(sheet_row = 'TOO_THIN_TO_PRICE')                        AS n_thin
+         -- (v27.126) split by the ladder state the row carries, because a FAILED keyword gets the
+         -- same two values and must not be called a repair; and the third refusal — a failed
+         -- keyword whose probation has not elapsed at its floor (NO_SHEET_ROW on a LOSER outside
+         -- the holdout arm) — is counted so it never waits unseen
+         COUNTIF(sheet_row = 'ENGINE_PRICES' AND state = 'REPRICE')      AS n_engine_repair,
+         COUNTIF(sheet_row = 'ENGINE_PRICES' AND state = 'LOSER')        AS n_engine_failed,
+         COUNTIF(sheet_row = 'TOO_THIN_TO_PRICE' AND state = 'REPRICE')  AS n_thin_repair,
+         COUNTIF(sheet_row = 'TOO_THIN_TO_PRICE' AND state = 'LOSER')    AS n_thin_failed,
+         COUNTIF(row_type = 'SEAT' AND state = 'LOSER' AND sheet_row = 'NO_SHEET_ROW'
+                 AND NOT (COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from)) AS n_failed_not_at_floor,
+         -- (v27.126, B39) rows a pending book carries that ALSO carry an engine GO today: the
+         -- book's floor row is CHECK FIRST beside it (the generator's F5 rule), and one price
+         -- must be kept per keyword before the book is uploaded
+         COUNTIF(sheet_row = 'PENDING_BOOK' AND engine_instruction IS NOT NULL) AS n_two_prices
   FROM seat_reg GROUP BY 1
 ),
 -- The stale pending leak book(s), read ONCE register-wide (R-n: one leak book at a time, so the
@@ -376,8 +397,12 @@ seat_family AS (
               c.pending_books,
               COALESCE(c.n_next, 0) AS n_next,
               COALESCE(c.n_hand, 0) AS n_hand,
-              COALESCE(c.n_engine, 0) AS n_engine,
-              COALESCE(c.n_thin, 0) AS n_thin,
+              COALESCE(c.n_engine_repair, 0) AS n_engine_repair,
+              COALESCE(c.n_engine_failed, 0) AS n_engine_failed,
+              COALESCE(c.n_thin_repair, 0) AS n_thin_repair,
+              COALESCE(c.n_thin_failed, 0) AS n_thin_failed,
+              COALESCE(c.n_failed_not_at_floor, 0) AS n_failed_not_at_floor,
+              COALESCE(c.n_two_prices, 0) AS n_two_prices,
               sb.books AS stale_books
   FROM seat_reg f LEFT JOIN seat_counts c ON c.family = f.family
   CROSS JOIN stale_books sb
@@ -407,11 +432,18 @@ seats AS (
                   s.n_rebuild, IF(s.n_rebuild = 1, '', 's'),
                   COALESCE(s.stale_books, 'the old book'))
          WHEN s.n_pending > 0 THEN
-           FORMAT('upload the pending book%s %s — %d row%s wait on %s (or label %s never-uploaded)',
-                  IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 's', ''), COALESCE(s.pending_books, '?'),
-                  s.n_pending, IF(s.n_pending = 1, '', 's'),
-                  IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 'them', 'it'),
-                  IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 'them', 'it'))
+           CONCAT(
+             FORMAT('upload the pending book%s %s — %d row%s wait on %s (or label %s never-uploaded)',
+                    IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 's', ''), COALESCE(s.pending_books, '?'),
+                    s.n_pending, IF(s.n_pending = 1, '', 's'),
+                    IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 'them', 'it'),
+                    IF(STRPOS(COALESCE(s.pending_books, ''), ',') > 0, 'them', 'it')),
+             -- B39: a book row beside an engine GO is CHECK FIRST — say how many, and that one
+             -- price per keyword is kept BEFORE the upload (the register's rows name both prices)
+             IF(s.n_two_prices > 0,
+                FORMAT('; %d of %s carr%s two prices — the book\'s floor row beside an engine GO instruction the PLANNED section lists — keep one per keyword before uploading (the register\'s rows name both)',
+                       s.n_two_prices, IF(s.n_two_prices = 1, 'them', 'them'), IF(s.n_two_prices = 1, 'ies', 'y')),
+                ''))
          WHEN s.n_next > 0 THEN
            FORMAT('build the next book — %d row%s wait on it', s.n_next, IF(s.n_next = 1, '', 's'))
          WHEN s.n_hand > 0 THEN
@@ -464,12 +496,19 @@ seats AS (
              s.n_hand, IF(s.n_hand = 1, '', 's'),
              IF(s.n_pending + s.n_rebuild + s.n_next + s.n_hand = 0, ' — nothing executable today', '')),
       -- B38 (v27.125): the rows no sheet will carry, named so nothing waits unseen — and never
-      -- counted above, because a book row the generator refuses is not executable
-      IF(s.n_engine + s.n_thin > 0,
+      -- counted above, because a book row the generator refuses is not executable. v27.126: a
+      -- repair and a failed keyword are named apart (the same sheet_row lands on both), and the
+      -- failed keyword whose probation has not elapsed at its floor is named as well.
+      IF(s.n_engine_repair + s.n_engine_failed + s.n_thin_repair + s.n_thin_failed + s.n_failed_not_at_floor > 0,
          CONCAT(' Not on any sheet: ',
-                IF(s.n_engine > 0, FORMAT('%d repair%s priced by the engine\'s own GO instruction', s.n_engine, IF(s.n_engine = 1, '', 's')), ''),
-                IF(s.n_engine > 0 AND s.n_thin > 0, '; ', ''),
-                IF(s.n_thin > 0, FORMAT('%d repair%s too thin for any book to price (the ladder re-judges %s)', s.n_thin, IF(s.n_thin = 1, '', 's'), IF(s.n_thin = 1, 'it', 'them')), ''),
+                ARRAY_TO_STRING(ARRAY(
+                  SELECT part FROM UNNEST([
+                    IF(s.n_engine_repair > 0, FORMAT('%d repair%s priced by the engine\'s own GO instruction', s.n_engine_repair, IF(s.n_engine_repair = 1, '', 's')), NULL),
+                    IF(s.n_engine_failed > 0, FORMAT('%d failed keyword%s the engine\'s own GO instruction carries today (no pause row; the ladder re-judges %s)', s.n_engine_failed, IF(s.n_engine_failed = 1, '', 's'), IF(s.n_engine_failed = 1, 'it', 'them')), NULL),
+                    IF(s.n_thin_repair > 0, FORMAT('%d repair%s too thin for any book to price (the ladder re-judges %s)', s.n_thin_repair, IF(s.n_thin_repair = 1, '', 's'), IF(s.n_thin_repair = 1, 'it', 'them')), NULL),
+                    IF(s.n_thin_failed > 0, FORMAT('%d failed keyword%s too thin for any book to act on (no pause row; the ladder re-judges %s)', s.n_thin_failed, IF(s.n_thin_failed = 1, '', 's'), IF(s.n_thin_failed = 1, 'it', 'them')), NULL),
+                    IF(s.n_failed_not_at_floor > 0, FORMAT('%d failed keyword%s whose probation has not elapsed at its floor (no pause row yet; the ladder re-judges %s)', s.n_failed_not_at_floor, IF(s.n_failed_not_at_floor = 1, '', 's'), IF(s.n_failed_not_at_floor = 1, 'it', 'them')), NULL)
+                  ]) AS part WITH OFFSET o WHERE part IS NOT NULL ORDER BY o), '; '),
                 '.'),
          ''),
       -- the two dates that let a reader tell whether this line has seen what he did yesterday

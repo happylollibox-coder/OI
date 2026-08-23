@@ -80,6 +80,9 @@ cube(`SeatRegister`, {
     // what a sheet does with this row today (2026-08-23): PENDING_BOOK | NEXT_LEAK_BOOK |
     // NEXT_REPRICE_BOOK | REBUILD_LEAK_BOOK | BY_HAND | NO_SHEET_ROW | NONE — the brief's action
     sheetRow:    { sql: `sheet_row`,     type: `string` },
+    // the engine GO instruction(s) for this key today (B39, 2026-08-23): when a pending book row
+    // sits beside one, the seat carries two prices and its move says so — NULL when none
+    engineInstruction: { sql: `engine_instruction`, type: `string` },
 
     // ── the standing raise behind a stalled probe (rulings R-b / R-c)
     raiseOldBid:      { sql: `raise_old_bid`,     type: `number` },

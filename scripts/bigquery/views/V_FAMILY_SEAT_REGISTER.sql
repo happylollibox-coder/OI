@@ -1,5 +1,15 @@
 -- =============================================
 -- V_FAMILY_SEAT_REGISTER — the object Ori reads every morning for the 80/20 doctrine.
+-- Repair pass 2026-08-23 (v27.126): ONE KEYWORD, TWO PRICES IS SAID, NEVER HIDDEN (B39). The
+-- reprice generator's F5 rule emits a floor-probation row EVEN OVER an engine's GO for the same
+-- key — as CHECK FIRST, naming the competing instruction, so Ori keeps one price. The register's
+-- PROBATION move used to publish the book's cut alone ('on the pending book …: $0.22 → $0.20')
+-- while the brief's PLANNED section listed the engine's raise for the same key — two instructions
+-- a reader cannot both obey, on the same morning. Every SEAT row now publishes
+-- engine_instruction (the GO(s) T_ENGINE_PREFLIGHT carries for its key today, NULL when none),
+-- and a probation move with one says 'two prices for one keyword', names both, and says the book
+-- row is CHECK FIRST and that the register picks neither. The brief counts such rows on the
+-- pending book (they ARE on it) and says how many carry two prices.
 -- Repair pass 2026-08-23 (v27.125): the SEAT side gets the engine parity the LEAK side had (B36 →
 -- B38). A repair or failed seat with no row on the pending book used to promise 'the reprice
 -- generator prices it' / 'kill it on the next book' and the brief counted it as a row for the next
@@ -995,6 +1005,7 @@ shape AS (
                   END)
          END AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
+    CAST(NULL AS STRING) AS engine_instruction,
     FORMAT('%s|%02d|%02d|', f.family, IF(f.book = 'INVEST', 9, 1), f.hz_order) AS sort_key
   FROM fam_rows f CROSS JOIN leak_book_state lbs
   UNION ALL
@@ -1060,6 +1071,7 @@ shape AS (
                             WHEN 'LAUNCH' THEN 'outside the doctrine (launch family)'
                             ELSE 'shown so nothing is silent; $0 by construction, no side' END) AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
+    CAST(NULL AS STRING) AS engine_instruction,
     FORMAT('%s|%02d|%02d|%02d', family, IF(book = 'INVEST', 9, 2), hz_order, MIN(cat_order)) AS sort_key
   FROM kw_h
   GROUP BY family, book, horizon, hz_order, category_h, side_h
@@ -1134,9 +1146,20 @@ shape AS (
                                  ELSE
                                    FORMAT('no row on the pending book — the reprice generator (tools/build_reprice_bulksheet.py) prices it on its next build, or names in that build\'s audit CSV why it will not; re-judge %s', CAST(w.next_check_date AS STRING))
                                  END
-           WHEN 'PROBATION' THEN IF(w.book_new_bid IS NOT NULL,
-                                 FORMAT('on the pending book %s: $%.2f → $%.2f (%s) — hold at the floor, judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, IF(w.book_action = 'INCREASE_BID', 'a raise', 'a cut'), CAST(w.next_check_date AS STRING)),
-                                 FORMAT('hold at its floor $%.2f; judge %s', COALESCE(w.bid_floor, 0), CAST(w.next_check_date AS STRING)))
+           -- B39: the reprice generator's F5 rule writes a floor-probation row EVEN OVER an engine's
+           -- GO for the same key, as CHECK FIRST naming the competing instruction — so the register
+           -- says both prices and picks neither; a probation row with no book row yet says the
+           -- same conflict will be on the next build.
+           WHEN 'PROBATION' THEN CASE
+                                 WHEN w.book_new_bid IS NOT NULL AND w.engine_instruction IS NOT NULL THEN
+                                   FORMAT('two prices for one keyword — on the pending book %s: $%.2f → $%.2f (%s, to its floor), and the engine\'s own GO instruction today (%s); the book row is CHECK FIRST: keep ONE before uploading — delete the book line to let the engine\'s price stand, or keep the floor landing and leave the engine\'s row out — the register picks neither; judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, IF(w.book_action = 'INCREASE_BID', 'a raise', 'a cut'), w.engine_instruction, CAST(w.next_check_date AS STRING))
+                                 WHEN w.book_new_bid IS NOT NULL THEN
+                                   FORMAT('on the pending book %s: $%.2f → $%.2f (%s) — hold at the floor, judge %s', w.book_batch_id, w.book_old_bid, w.book_new_bid, IF(w.book_action = 'INCREASE_BID', 'a raise', 'a cut'), CAST(w.next_check_date AS STRING))
+                                 WHEN w.engine_instruction IS NOT NULL THEN
+                                   FORMAT('hold at its floor $%.2f — but the engine carries a GO instruction for it today (%s), and the reprice generator writes its floor row BESIDE that instruction on its next build (CHECK FIRST): two prices for one keyword, keep ONE then — the register picks neither; judge %s', COALESCE(w.bid_floor, 0), w.engine_instruction, CAST(w.next_check_date AS STRING))
+                                 ELSE
+                                   FORMAT('hold at its floor $%.2f; judge %s', COALESCE(w.bid_floor, 0), CAST(w.next_check_date AS STRING))
+                                 END
            WHEN 'FAILED' THEN CASE
                                  WHEN w.book_refusal = 'ENGINE' THEN
                                    FORMAT('no pause row — the engine already carries a GO instruction for it today (%s), and one keyword gets one price, so the reprice generator refuses it; the ladder re-judges it', w.engine_instruction)
@@ -1196,7 +1219,9 @@ shape AS (
                                   WHEN w.book_refusal = 'ENGINE' THEN FORMAT('No book row: the engine\'s own instruction prices it; re-judge %s.', CAST(w.next_check_date AS STRING))
                                   WHEN w.book_refusal = 'THIN' THEN FORMAT('No book row: too thin to price; the ladder re-judges it %s.', CAST(w.next_check_date AS STRING))
                                   ELSE FORMAT('Re-judge %s.', CAST(w.next_check_date AS STRING)) END
-             WHEN 'PROBATION' THEN FORMAT('Judge %s.', CAST(w.next_check_date AS STRING))
+             WHEN 'PROBATION' THEN IF(w.engine_instruction IS NULL,
+                                      FORMAT('Judge %s.', CAST(w.next_check_date AS STRING)),
+                                      FORMAT('Two prices for one keyword today (the floor row and the engine\'s %s): keep one. Judge %s.', w.engine_instruction, CAST(w.next_check_date AS STRING)))
              WHEN 'FAILED' THEN IF(w.book_refusal IS NULL, 'Kill it on the next book.', 'No pause row: the reprice generator refuses it; not counted as recovered.')
              WHEN 'PROBE' THEN 'No move; the seat closes on the verdict.'
              WHEN 'SETTLING' THEN IF(w.next_check_date < run_day.d, 'No move; the ladder owes it a re-judgement.', FORMAT('No move; settles %s.', CAST(w.next_check_date AS STRING)))
@@ -1217,7 +1242,9 @@ shape AS (
     -- TOO_THIN_TO_PRICE = the generator refuses it on its record (B38); BY_HAND = a stalled probe,
     -- priced or parked by hand (R-f); NO_SHEET_ROW = holdout, or a failed keyword the generator
     -- will not kill (B38); NONE = nothing to do today. The brief derives its action from these,
-    -- never from the status — and counts only NEXT_* as rows for the next book.
+    -- never from the status — and counts only NEXT_* as rows for the next book. A PROBATION row on
+    -- a pending book stays PENDING_BOOK even when an engine GO competes with it (B39): the book
+    -- DOES carry it, CHECK FIRST; the conflict is published in engine_instruction and the move.
     CASE WHEN w.holdout AND run_day.d >= w.holdout_eligible_from THEN 'NO_SHEET_ROW'
          WHEN w.code IN ('REPAIR', 'PROBATION') AND w.book_new_bid IS NOT NULL THEN 'PENDING_BOOK'
          WHEN w.code IN ('REPAIR', 'FAILED') AND w.book_refusal = 'ENGINE' THEN 'ENGINE_PRICES'
@@ -1226,6 +1253,9 @@ shape AS (
          WHEN w.code IN ('REPAIR', 'FAILED') THEN 'NEXT_REPRICE_BOOK'
          WHEN w.code = 'STALLED_PROBE' THEN 'BY_HAND'
          ELSE 'NONE' END AS sheet_row,
+    -- B39: the GO instruction(s) T_ENGINE_PREFLIGHT carries for this key today (engine lever
+    -- $from → $to; NULL when none) — published on EVERY seat so a second price is never hidden
+    w.engine_instruction AS engine_instruction,
     FORMAT('%s|%02d|%05d|%s|%s', w.family, 3, COALESCE(w.seat_no, 99999), w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN k CROSS JOIN win CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.occupant_kind IS NOT NULL
@@ -1296,6 +1326,7 @@ shape AS (
                 CONCAT(FORMAT('seat %d (open) in %s — $%.2f/day of capacity. Next affordable probe: %s in %s, queue #%d, at the seat price $%.2f/click × %d clicks a day ≈ $%.2f/day.', fn.lowest_free_seat, UPPER(fr.family), fr.open_capacity_per_day, np.target_text, np.campaign_name, np.queue_pos, np.seat_cpc, k.click_goal_day, np.admission_cost_per_day),
                        IF(np.holdout, FORMAT(' Its campaign joins the holdout arm on %s and leaves the queue then.', CAST(np.holdout_eligible_from AS STRING)), '')) END AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
+    CAST(NULL AS STRING) AS engine_instruction,
     FORMAT('%s|%02d|%05d||', fr.family, 4, fn.lowest_free_seat) AS sort_key
   FROM fam_rows fr CROSS JOIN k CROSS JOIN run_day
   JOIN free_no fn ON fn.family = fr.family
@@ -1390,6 +1421,7 @@ shape AS (
          WHEN lbs.stale THEN 'REBUILD_LEAK_BOOK'
          WHEN w.pause_pending THEN 'PENDING_BOOK'
          ELSE 'NEXT_LEAK_BOOK' END AS sheet_row,
+    CAST(NULL AS STRING) AS engine_instruction,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 5, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day CROSS JOIN leak_book_state lbs
   WHERE w.book = 'HARVEST' AND w.code = 'LEAK'
@@ -1476,6 +1508,7 @@ shape AS (
                IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch.', ''))
     END AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
+    CAST(NULL AS STRING) AS engine_instruction,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 6, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.code = 'GAP'
@@ -1544,6 +1577,7 @@ shape AS (
                    'Log the bid (or restore it by sheet) so the clock can start; it counts on the 80% side until then.'),
                 IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(w.holdout_eligible_from AS STRING)), '')) AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
+    CAST(NULL AS STRING) AS engine_instruction,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 8, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.code = 'WAITING_NO_CLOCK'
@@ -1613,6 +1647,7 @@ shape AS (
                 WHEN a.holdout THEN FORMAT(' Its campaign joins the holdout arm on %s; the advisory stops then.', CAST(a.holdout_eligible_from AS STRING))
                 ELSE '' END) AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
+    CAST(NULL AS STRING) AS engine_instruction,
     FORMAT('%s|%02d|%s||', a.family, 7, a.campaign_id) AS sort_key
   FROM absorb a CROSS JOIN run_day
   UNION ALL
@@ -1683,6 +1718,7 @@ shape AS (
               IF(x.holdout AND run_day.d >= x.holdout_eligible_from, ' HOLDOUT — do not touch; no sheet row.', ''),
               IF(x.holdout AND run_day.d < x.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(x.holdout_eligible_from AS STRING)), ''))) AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
+    CAST(NULL AS STRING) AS engine_instruction,
     FORMAT('%s|%02d|%010.2f|%s|', 'Unmapped', IF(x.campaign_id IS NULL, 1, 2), IF(x.campaign_id IS NULL, 0, 99999 - x.spend7 / k.basis_days), COALESCE(x.campaign_id, '')) AS sort_key
   FROM (
     SELECT campaign_id, campaign_name, spend7, clicks7, holdout, holdout_eligible_from, CAST(NULL AS INT64) AS n_campaigns FROM unmapped
