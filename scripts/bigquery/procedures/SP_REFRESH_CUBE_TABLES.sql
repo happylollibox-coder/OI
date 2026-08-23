@@ -35,6 +35,29 @@ BEGIN
            suggested_bid, clk90, ord90, roas90, bid_park, CURRENT_DATE('America/Los_Angeles') AS built_on
     FROM `onyga-482313.OI.V_OOB_KEYWORD`;
 
+  -- 0c. The family seat register, materialised (family seat register Task 4, 2026-08-23).
+  -- MUST follow 0b: V_FAMILY_SEAT_REGISTER reads T_OOB_SEAT_ECONOMICS (the seat price, the park
+  -- price and the probe queue) and T_LIFT_PROBES (step 0), so building it here gives the image the
+  -- freshest of both in the same pass. It also follows orchestrator step 20.8b, which writes the
+  -- seat ledger the register reads for its numbers.
+  --
+  -- WHY MATERIALISE A VIEW THREE SURFACES COULD EACH READ LIVE. The register is a once-per-pass
+  -- object by construction — FACT_KEYWORD_STATE holds exactly ONE snapshot — and it is read by
+  -- three consumers that a person compares against each other: the SEATS section of V_DAILY_BRIEF,
+  -- the SEATS section of V_RUN_SUMMARY and the SeatRegister cube. Reading the live view from each
+  -- would let them quote different numbers at the same reader on the same morning, which is the one
+  -- failure a morning surface may not have. One image, one pass, three surfaces that cannot
+  -- disagree — and the cube gets to key on the orchestration stamp like every other T_.
+  --
+  -- FRESHNESS, STATED SO NOBODY IS SURPRISED: the surfaces read the PREVIOUS pass's image until
+  -- this step runs. Building a book or marking one uploaded moves the live register (the day-one
+  -- horizon reads the pending change log) before it moves the surfaces. Every SEATS line therefore
+  -- prints the snapshot date it was measured from; to bring the surfaces forward by hand, rebuild
+  -- this one table and stamp LOG_PIPELINE_RUNS (tools/trigger_refresh.py does both for all of them).
+  CREATE OR REPLACE TABLE `onyga-482313.OI.T_FAMILY_SEAT_REGISTER`
+  OPTIONS (description = 'The family seat register, materialised once per pass so the morning surfaces all read ONE image of it (family seat register Task 4). V_FAMILY_SEAT_REGISTER is a live view over the keyword-state snapshot, the seat ledger, the ads facts and the change log; the SEATS section of V_DAILY_BRIEF, the SEATS section of V_RUN_SUMMARY and the SeatRegister cube read THIS table instead, so the three surfaces can never quote different numbers at the same reader, and so the cube can key on the orchestration stamp like every other T_. Built by SP_REFRESH_CUBE_TABLES step 0c, after step 0b T_OOB_SEAT_ECONOMICS (the register reads it) and therefore after orchestrator step 20.8b, which writes the seat ledger the same pass. Freshness contract: the surfaces read the previous pass image until this step runs, so a book built or marked uploaded between passes moves the live register before it moves the surfaces — rebuild this one table and stamp LOG_PIPELINE_RUNS to bring them forward. Row-for-row identical to the view by sort_key; sort_key is the cube primary key. Spec: architecture/FAMILY_SEAT_REGISTER.md.') AS
+    SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
+
   -- 1. Unified Daily
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_UNIFIED_DAILY` AS SELECT * FROM `onyga-482313.OI.V_UNIFIED_DAILY`;
   

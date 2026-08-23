@@ -10,7 +10,8 @@ purpose is to make it better. meaning if after a change it became worse this is 
 |---|---|
 | `FACT_ENGINE_PROPOSALS` | The engine's memory of its own **opinions** — one row per (day, engine, instruction), applied or not. Partitioned by `snapshot_date`. |
 | `SP_SNAPSHOT_ENGINE_PROPOSALS` | Writes today's partition (delete-today-then-insert, idempotent). One single-view scan per INSERT — planner-ceiling doctrine. Orchestrator Task 20.6. |
-| `V_DAILY_BRIEF` | The one-query answer. Five sections, uniform row shape. |
+| `V_DAILY_BRIEF` | The one-query answer. Six sections, uniform row shape. |
+| `T_FAMILY_SEAT_REGISTER` | The family seat register's once-per-pass image, built by `SP_REFRESH_CUBE_TABLES` step 0c. The SEATS section reads it — not the live view — so the brief, the Weekly Run front page and the `SeatRegister` cube all quote one image. Spec: `architecture/FAMILY_SEAT_REGISTER.md`. |
 | `SP_ENGINE_PREFLIGHT` | Not a brief object, but the brief now reads its verdict. Nothing reaches PLANNED that the gate refused. Spec: `architecture/ENGINE_PREFLIGHT.md`. |
 
 ## The daily ritual
@@ -34,6 +35,28 @@ ORDER BY section_rank, campaign_name;
   instrument**: a change is graded on [T+1, T+7] and read no earlier than T+14 (SB [T+1, T+14],
   read T+21). Early reads systematically under-read your own change and manufacture churn — so
   "what actually happened" arrives on a delay, by design, the morning it is finally honest.
+- **SEATS** — the 80/20 doctrine read, one plain line per **working** family (v27.123,
+  2026-08-23; family seat register Task 4). Not a sixth list of instructions: the other five
+  sections answer *what was planned, what happened, what needs a hand*, and this one answers the
+  standing question underneath them — is each working family still spending 80% of its money on
+  keywords that are winning, at their bar, or waiting for a verdict? The row shape carries it
+  without stretching: `campaign_name` is the family, `from_value` what the 20% side COSTS,
+  `to_value` what it is ALLOWED to cost, `status` the doctrine status, `item` what that side is
+  made of, `detail` the sentence.
+
+  **It proposes nothing, and that is a rule rather than an omission.** The gap-closure arithmetic
+  (ruling R-l in the seat register's SOP) is stated once in `V_FAMILY_SEAT_REGISTER` and asserted
+  once there; a second place doing it is a second place for it to drift. So the line names no book,
+  restates no projection, promises no recovery, and its closing clause sends the reader to that
+  family's own rows. It also names no campaign and no keyword, which is why the holdout rule has
+  nothing to mark on it.
+
+  **It reads an image, and says which one.** The source is `T_FAMILY_SEAT_REGISTER`, built once per
+  pass. Building a leak book or marking one uploaded moves the LIVE register — its day-one horizon
+  reads the pending change log — before it moves this line, so every SEATS row prints the ads
+  window it was measured on and the keyword snapshot it came from. A reader who acted since the
+  last pass can see that the line has not seen it yet.
+
 - **ACTION_ITEM** — `REVERSED` verdicts not yet superseded: the change made things worse on settled
   evidence. Remedy is **always restore `remedy_value`, never lower** (a false cut kills a winner
   forever; a false restore delays a day). This section is the owner's sentence — "if after a change
@@ -79,6 +102,26 @@ Three places quoted a price; all three now quote the survivor:
 verdicts existed, or one the gate has not stamped yet, still reads as a plan — the brief must not
 go blank because a procedure did not run.
 
+## The SEATS section (v27.123, 2026-08-23)
+
+Asserted by `scripts/bigquery/tests/SEAT_SURFACE_acceptance.sql` (C01–C04, C09, C10) and the file
+checker `scripts/bigquery/tests/check_seat_surface_labels.py`. Two properties of that suite are
+worth borrowing anywhere else in this view:
+
+1. **A surface is never asked to confirm itself.** Every figure is re-derived from the register's
+   own per-row rows and only then compared with what the line printed. The dollar comparisons carry
+   a `$0.02` tolerance whose reason is stated on the check — an aggregate rendered to two decimals
+   against a sum of per-row rounded costs; the count comparisons are exact, because a count has no
+   rounding.
+2. **An empty population is a violation of the check that reads it.** The first run of that suite,
+   before the section existed, reported five green checks against nothing at all.
+
+**Nothing may render blank.** The label CASE names every `doctrine_status` the register can emit —
+`IN`, `AT_LINE`, `OUT`, `NO_SPEND`, `REFERENCE` — and its fall-through is a sentence, not a value.
+Every `FORMAT` argument is `COALESCE`d, because `CONCAT` with one NULL argument returns NULL, and a
+blank line is worse than a wrong one: it tells the reader nothing, including that anything is wrong.
+The file checker fails the build if a status is added to the register's own CASE and not learned here.
+
 **Standing assertion.** `V_ENGINE_HEALTH.plan_price_ambiguity` asks the question of the proposal
 table (cheap, deployed, on the board). `scripts/bigquery/check_one_price_per_key.py`, wired into
 `scripts/run_tests.sh`, asks it of the proposal table **and of PLANNED itself** — the second is
@@ -86,7 +129,8 @@ what would have caught this, because on the day it was found the table was clean
 not. Both were proven to fire by re-deploying the pre-change view on purpose.
 
 `section_rank` renumbered, order unchanged: PLANNED 1, SKIPPED 2, HAPPENED 3, VERDICT_NEW 4,
-ACTION_ITEM 5.
+ACTION_ITEM 5. SEATS was APPENDED at 6 in v27.123, so all five keep their numbers and the ritual
+query is byte-identical above the new section.
 
 ## Honest-reading rules
 

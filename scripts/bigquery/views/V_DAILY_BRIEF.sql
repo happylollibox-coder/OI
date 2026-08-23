@@ -19,6 +19,12 @@
 --                  systematically under-reads your own change and manufactures churn
 --                  (V_CHANGE_SCORECARD header). So "what actually happened" arrives on a delay,
 --                  by design, and this section is where it lands the morning it is finally honest.
+--   SEATS        — the 80/20 doctrine read, one plain line per WORKING family, from the family
+--                  seat register. Not an instruction: a standing position. It says how much of the
+--                  family's judged spend is winning, at its bar or waiting for a verdict, what the
+--                  20% side costs against its allowance, and what that side is made of (numbered
+--                  seats, leaks still spending, untracked keywords). It never proposes a move of
+--                  its own — the moves are on the register's own rows, and the line says so.
 --   ACTION_ITEM  — verdicts that DEMAND a hand: REVERSED (restore the pre-change value, NEVER
 --                  lower — remedy_value is the number) still unrestored, from the last 14 days of
 --                  newly-readable grades. "if after a change it became worse this is not good" —
@@ -69,6 +75,38 @@
 -- SECTION_RANK RENUMBERED, order unchanged: PLANNED 1, SKIPPED 2, HAPPENED 3, VERDICT_NEW 4,
 -- ACTION_ITEM 5. The ritual is ORDER BY section_rank, so the sections still arrive in the order
 -- they always did with the new one in the place it belongs.
+--
+-- ####################################################################
+-- # v27.123 — SEATS: the 80/20 doctrine read joins the morning brief. #
+-- ####################################################################
+-- (2026-08-23, family seat register Task 4. Spec: architecture/FAMILY_SEAT_REGISTER.md.)
+-- SECTION_RANK 6, APPENDED — the five existing sections keep their numbers and their order, so
+-- the ritual query and every reader of it are byte-identical above the new section.
+--
+-- SEATS is not a sixth list of instructions. The other five sections answer "what was planned,
+-- what happened, what needs a hand"; this one answers the standing question underneath them —
+-- is each working family still spending 80% of its money on keywords that are winning, at their
+-- bar, or waiting for a verdict? It is a POSITION, not a proposal, and the line says so in its
+-- last clause: the moves live on the register's own rows, where the gap-closure arithmetic
+-- (ruling R-l) is stated once and asserted once. This section deliberately re-states no
+-- projection, promises no recovery and names no book — a second place doing R-l's arithmetic is a
+-- second place for it to drift.
+--
+-- IT READS THE MATERIALISED REGISTER, NOT THE LIVE VIEW. T_FAMILY_SEAT_REGISTER is built by
+-- SP_REFRESH_CUBE_TABLES step 0c, and the SeatRegister cube and V_RUN_SUMMARY's SEATS section read
+-- the same table. Three surfaces, one image: they cannot quote different numbers at the same
+-- reader on the same morning. The cost of that choice is stated on the line itself — every SEATS
+-- row prints the ads window it was measured on and the keyword snapshot it came from, so a reader
+-- who built a book since the last pass can see that this line has not seen it yet.
+--
+-- THE LABEL CASE LEARNS EVERY STATUS THE REGISTER CAN EMIT — IN, AT_LINE, OUT, NO_SPEND and
+-- REFERENCE — and its fall-through says so in words instead of returning NULL. Nothing here may
+-- render blank: every FORMAT argument is COALESCEd, because CONCAT with one NULL argument returns
+-- NULL and would publish an empty line rather than a wrong one, which is worse. The acceptance
+-- suite (scripts/bigquery/tests/SEAT_SURFACE_acceptance.sql, C04) asserts no row is blank and no
+-- row wears the fall-through wording; the file checker
+-- scripts/bigquery/tests/check_seat_surface_labels.py asserts the CASE still names every status
+-- the register's own doctrine_status CASE can produce, so adding one there fails the build here.
 --
 -- The standing assertion for this defect is V_ENGINE_HEALTH's plan_price_ambiguity check, with a
 -- pre-deploy twin in scripts/bigquery/check_one_price_per_key.py.
@@ -269,10 +307,93 @@ action_items AS (
     AND ABS(COALESCE(live_kw.bid, live_c.daily_budget) - SAFE_CAST(s.new_value AS FLOAT64)) <= 0.011
     AND ABS(SAFE_CAST(s.remedy_value AS FLOAT64) - SAFE_CAST(s.new_value AS FLOAT64)) > 0.011  -- no-op remedies out
     AND s.read_gate_date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
+),
+
+-- v27.123 SEATS. The register's image, read once: a small table scan, not a plan (the register
+-- itself is the expensive object, and step 0c has already paid for it).
+seat_reg AS (
+  SELECT * FROM `onyga-482313.OI.T_FAMILY_SEAT_REGISTER`
+),
+-- What the 20% side is MADE of, counted from the register's own per-row rows rather than re-read
+-- off its family sentence. Settling seats are numbered on the ledger but counted on the 80% side
+-- by Ori's ruling, so the seat count here is the 20% side's — the same set the family row prices.
+seat_counts AS (
+  SELECT family,
+         COUNTIF(row_type = 'SEAT' AND side = '20') AS n_seats,
+         COUNTIF(row_type = 'LEAK')                 AS n_leaks,
+         COUNTIF(row_type = 'GAP')                  AS n_gaps
+  FROM seat_reg GROUP BY 1
+),
+-- One row per WORKING family. A launch family is published by the register as a REFERENCE row, not
+-- a FAMILY row, so this filter is what keeps the house rule — a launch family is never judged on
+-- profit — rather than a list of names anyone could forget to update.
+seat_family AS (
+  SELECT f.*, COALESCE(c.n_seats, 0) AS n_seats,
+              COALESCE(c.n_leaks, 0) AS n_leaks,
+              COALESCE(c.n_gaps,  0) AS n_gaps
+  FROM seat_reg f LEFT JOIN seat_counts c ON c.family = f.family
+  WHERE f.row_type = 'FAMILY' AND f.horizon = 'today'
+),
+seats AS (
+  SELECT
+    'SEATS' AS section, 6 AS section_rank,
+    'SEAT REGISTER' AS source,
+    s.family AS campaign_name,
+    FORMAT('%d seat%s · %d leak%s · %d untracked',
+           s.n_seats, IF(s.n_seats = 1, '', 's'),
+           s.n_leaks, IF(s.n_leaks = 1, '', 's'),
+           s.n_gaps) AS item,
+    CASE s.doctrine_status
+      WHEN 'IN'        THEN 'passes — no action'
+      WHEN 'AT_LINE'   THEN 'at the line — watch'
+      WHEN 'OUT'       THEN 'close the gap'
+      WHEN 'NO_SPEND'  THEN 'no judged spend — nothing to read'
+      WHEN 'REFERENCE' THEN 'reference only — never judged on profit'
+      ELSE 'a doctrine status this brief has not learned — read the register'
+    END AS action,
+    -- from → to is the honest pair here: what the 20% side COSTS today, against what it is
+    -- ALLOWED to cost. No bid and no budget is proposed by this section.
+    s.bad_side_per_day  AS from_value,
+    s.allowance_per_day AS to_value,
+    s.doctrine_status   AS status,
+    CONCAT(
+      UPPER(s.family), ' ',
+      CASE s.doctrine_status
+        WHEN 'IN' THEN FORMAT('passes the 80/20 line: %.0f%% of its judged spend is winning, at its bar, or waiting for a verdict.',
+                              100 * COALESCE(s.good_share, 0))
+        WHEN 'AT_LINE' THEN FORMAT('sits at the 80/20 line: %.0f%% good, which is inside this family\'s own 7-day spend noise of %.1f points.',
+                              100 * COALESCE(s.good_share, 0), 100 * COALESCE(s.at_line_band, 0))
+        WHEN 'OUT' THEN FORMAT('is below the 80/20 line: %.0f%% of its judged spend is winning, at its bar, or waiting for a verdict.',
+                              100 * COALESCE(s.good_share, 0))
+        WHEN 'NO_SPEND' THEN 'spent nothing the doctrine judges on this window, so there is no ratio to read.'
+        WHEN 'REFERENCE' THEN 'is a launch family and is never judged on profit.'
+        ELSE 'carries a doctrine status this brief has not learned; read the register.'
+      END,
+      FORMAT(' The 20%% side costs $%.2f/day against an allowance of $%.2f/day',
+             COALESCE(s.bad_side_per_day, 0), COALESCE(s.allowance_per_day, 0)),
+      IF(s.doctrine_status = 'OUT',
+         FORMAT(' — over by $%.2f/day.', COALESCE(s.over_by_per_day, 0)),
+         FORMAT(' — $%.2f/day of capacity is open, which is what a new probe may cost.',
+                COALESCE(s.open_capacity_per_day, 0))),
+      FORMAT(' That side is %d numbered seat%s ($%.2f/day), %d leak%s still spending ($%.2f/day) and %d untracked keyword%s ($%.2f/day).',
+             s.n_seats, IF(s.n_seats = 1, '', 's'), COALESCE(s.seats_cost_per_day, 0),
+             s.n_leaks, IF(s.n_leaks = 1, '', 's'), COALESCE(s.leak_per_day, 0),
+             s.n_gaps,  IF(s.n_gaps  = 1, '', 's'), COALESCE(s.gap_per_day, 0)),
+      -- the two dates that let a reader tell whether this line has seen what he did yesterday
+      FORMAT(' Measured on the %d complete ads days to %s, from the keyword snapshot of %s.',
+             DATE_DIFF(s.ads_basis_to, s.ads_basis_from, DAY) + 1,
+             FORMAT_DATE('%b %d', s.ads_basis_to), FORMAT_DATE('%b %d', s.as_of)),
+      ' Seat by seat — and, where the family is short, what closes the gap and what the rest depends on — is on this family\'s rows in V_FAMILY_SEAT_REGISTER; this line proposes no move of its own.'
+    ) AS detail,
+    -- names no campaign and no keyword, which is why the holdout rule has nothing to mark here:
+    -- a family is not a campaign, and no sheet is built from this section.
+    CAST(NULL AS STRING) AS campaign_id, CAST(NULL AS STRING) AS keyword_id
+  FROM seat_family s
 )
 
 SELECT * FROM planned
 UNION ALL SELECT * FROM skipped
 UNION ALL SELECT * FROM happened
 UNION ALL SELECT * FROM verdict_new
-UNION ALL SELECT * FROM action_items;
+UNION ALL SELECT * FROM action_items
+UNION ALL SELECT * FROM seats;

@@ -39,8 +39,14 @@ row, measured against the change log. Three paragraphs still described the model
 (this summary, the Horizons paragraph, open ruling 12) and were rewritten against the deployed
 view; the LEAK row's move and the FAMILY leak clause now name the book PER ROW — upload the pending
 batch where one already carries the keyword, build the next book where none does — instead of
-sending every reader to build a book that already exists (B32). Task 3 SHIPPED; Tasks 4–5 (morning
-surface, health checks) pending — this file grows with each.
+sending every reader to build a book that already exists (B32). Task 3 SHIPPED.
+Task 4 (the morning surface) SHIPPED 2026-08-23: `T_FAMILY_SEAT_REGISTER` (`SP_REFRESH_CUBE_TABLES`
+step 0c) is the one image all three surfaces read — the `SEATS` section of `V_DAILY_BRIEF`
+(`section_rank` 6), the `SEATS` section of `V_RUN_SUMMARY`, and the `SeatRegister` cube — so no two
+of them can quote different numbers at the same reader. Acceptance C01–C10
+(`SEAT_SURFACE_acceptance.sql`) plus the file checker `check_seat_surface_labels.py`; the brief line
+deliberately restates none of R-l's arithmetic and points at the register instead. See "The morning
+surface (Task 4)" below. Task 5 (health checks) pending — this file grows with each.
 Eighth repair pass 2026-08-23: **the book and the register now measure ONE week, only the pauses a
 sheet will actually write are counted as recovered, and the instructions the register publishes all
 have an executable path.** (1) The generator anchored on a bare `MAX(date)` while the register
@@ -129,7 +135,12 @@ register.
 | `tools/build_restore_seat_moves_bulksheet.py` | Puts back the state every paused row carried. Names every negative it CANNOT undo, because a sheet cannot. | shipped 2026-08-23 |
 | `scripts/bigquery/tests/SEAT_MOVES_LEAK_ARM_probe.sql` | The TMP_ probe that exercises the leak arm's branches the live day does not reach. Real evidence, synthetic membership. | shipped 2026-08-23 |
 | `tools/check_retired_phrases.py` | The only instrument for the files the SQL suite cannot read — the view header (stripped before deploy), this SOP, the `config.yaml` entry and the leak book's docstring. Whitespace-insensitive, so a retired phrase that wraps across a line is still found; a hit is allowed ONLY inside quotation marks, and a straight `"` in `config.yaml` is a YAML delimiter rather than a quotation. Replaces the `grep` that used to live in the acceptance suite's comment, which missed both. Exit 1 on any unquoted hit. | shipped 2026-08-23 |
-| `V_DAILY_BRIEF` SEATS section, `SeatRegister` cube | the morning surface. | Task 4 |
+| `T_FAMILY_SEAT_REGISTER` | The register materialised once per pass by `SP_REFRESH_CUBE_TABLES` step 0c (after 0b, which builds the seat economics the register reads). THE morning image: all three surfaces read it, so they cannot disagree. Row-for-row identical to the view; `sort_key` unique. | shipped 2026-08-23 |
+| `V_DAILY_BRIEF` SEATS section (`section_rank` 6) | One plain line per WORKING family: the doctrine read, what the 20% side costs against its allowance, and what that side is made of. A position, not a proposal. | shipped 2026-08-23 |
+| `V_RUN_SUMMARY` SEATS section | The doctrine status per working family on the Weekly Run front page — label, seat count, open capacity. | shipped 2026-08-23 |
+| `cube/schema/SeatRegister.js` | The register on the dashboard. Passthrough only; `rowId` = `sort_key` (the register's total ordering); a dimension for every column. Cache keyed on the orchestration stamp. | shipped 2026-08-23 |
+| `scripts/bigquery/tests/SEAT_SURFACE_acceptance.sql` | C01–C10. Every check re-derives from the register's own rows, and every check counts an EMPTY population as a violation of itself. | shipped 2026-08-23 |
+| `scripts/bigquery/tests/check_seat_surface_labels.py` | The two guarantees SQL cannot assert, because they live in files: a cube dimension for every register column, and every label CASE naming every `doctrine_status` the register can emit. | shipped 2026-08-23 |
 | `V_ENGINE_HEALTH` checks | reconciliation, idempotence, every occupant numbered. | Task 5 |
 
 ## The seat lifecycle (Task 1 — what the ledger does)
@@ -719,8 +730,10 @@ view, which is what the paragraph above predicted.
 **Determinism, and the half-cent that broke it (found and fixed 2026-08-23, eighth pass).** Spec §8
 promises the register is deterministic: two uncached reads must be identical. They were not. A
 keyed FULL OUTER JOIN of two in-session reads found exactly ONE differing row, and the difference
-was one character — a family sentence rendering its 20%-side total as `$48.96/day` on one read and
-`$48.97/day` on the next, while the published COLUMN read the same both times. A distributed
+was one character — a family sentence rendering its 20%-side total ONE CENT APART on two reads,
+while the published COLUMN read the same both times. (Standing Rule 0: the two figures are not
+pinned here. Re-read them if you need them — the fingerprint query at the end of
+`V_FAMILY_SEAT_REGISTER_acceptance.sql` is what found the row.) A distributed
 `FLOAT64` `SUM` is not associative, so the aggregate landed either side of a half-cent boundary;
 the column was rounded to four decimals and absorbed it, and the sentence, formatted from the raw
 double with `%.2f`, did not. The pre-change view body reproduced it, so it was not that pass's
@@ -1296,6 +1309,86 @@ change is then a derivation or a source, never a literal.
    days after the switch. That is honest and it is also noise. The alternatives are a separate
    category ("closed — trailing spend, nothing to do"), or leaving it exactly as it is. Not a
    defect either way; a reading preference, and yours.
+
+## The morning surface (Task 4 — where the doctrine is read from)
+
+The register is one wide object, and reading it whole is a deliberate act. Task 4 is the part a
+person meets without deciding to: the daily brief, the Weekly Run front page and the dashboard.
+
+**One image, three surfaces.** `SP_REFRESH_CUBE_TABLES` step 0c materialises the register into
+`T_FAMILY_SEAT_REGISTER`, and all three surfaces read THAT table — never the live view. The reason
+is not cost (though a full read of the view is measured in tens of seconds): it is that a person
+compares these three against each other, and two surfaces quoting different numbers at the same
+reader on the same morning is the one failure a morning surface may not have. The register is a
+once-per-pass object anyway — `FACT_KEYWORD_STATE` holds exactly one snapshot — so an image loses
+nothing that was ever live.
+
+Step 0c must stay after step 0b (`T_OOB_SEAT_ECONOMICS`, which the register reads) and therefore
+after orchestrator step 20.8b, which writes the seat ledger in the same pass. Order is asserted by
+reading the deployed routine, not by trusting the file:
+
+```sql
+SELECT STRPOS(ddl, 'T_OOB_SEAT_ECONOMICS') < STRPOS(ddl, 'T_FAMILY_SEAT_REGISTER') AS zero_c_after_zero_b
+FROM `onyga-482313.OI.INFORMATION_SCHEMA.ROUTINES` WHERE routine_name = 'SP_REFRESH_CUBE_TABLES';
+```
+
+**THE FRESHNESS COST, STATED RATHER THAN HIDDEN.** The surfaces read the PREVIOUS pass's image
+until step 0c runs again. That matters because the register's day-one horizon reads the pending
+change log: building a leak book, or marking one uploaded, moves the LIVE register before it moves
+the surfaces. So every SEATS line prints the ads window it was measured on and the keyword snapshot
+it came from — a reader who built a book since the last pass can see that the line has not seen it
+yet. To bring the surfaces forward by hand, rebuild the one table and stamp `LOG_PIPELINE_RUNS`
+(`tools/trigger_refresh.py` does both, for every `T_`); the cube's cache is keyed on that stamp, so
+without it a rebuilt table is still invisible on the page.
+
+**The brief's SEATS section** (`section_rank` 6, appended — the five older sections keep their
+numbers and their order). One line per working family, in the brief's uniform row shape:
+`campaign_name` is the family, `from_value` what the 20% side COSTS, `to_value` what it is ALLOWED
+to cost, `status` the doctrine status, `item` the make-up of that side, and `detail` the sentence.
+It names no campaign and no keyword, which is why the holdout rule has nothing to mark on it.
+
+It is a POSITION, not a proposal, and its last clause says so: the moves live on the register's own
+rows. **This is deliberate and is the rule for any future surface.** The gap-closure arithmetic of
+R-l is stated once, in the register, and asserted once, by B29–B36. A second place doing that
+arithmetic is a second place for it to drift, so the brief line names no book, restates no
+projection and promises no recovery.
+
+**The Weekly Run's SEATS section**: label = family + the doctrine status in plain words, `n` = the
+numbered seats on the 20% side, `$/day` = the register's own open capacity (negative when the side
+is over its allowance). Neither surface carries a family name list: the register publishes a launch
+family as a `REFERENCE` row rather than a `FAMILY` row, so filtering on `row_type` is what keeps
+the house rule that a launch family is never judged on profit.
+
+**Nothing may render blank.** Every label CASE names every `doctrine_status` the register can emit
+— `IN`, `AT_LINE`, `OUT`, `NO_SPEND`, `REFERENCE` — and its fall-through is a sentence, not a
+value. Every `FORMAT` argument is `COALESCE`d, because `CONCAT` with one NULL argument returns NULL
+and an empty line is worse than a wrong one. The same pass closed the one real fall-through already
+in the house: `V_RUN_SUMMARY`'s UNCHANGED arm ended in `ELSE LOWER(state)`, which is NULL for a row
+the snapshot ever writes with no state — an empty cell on the front page with nothing to say
+whether it meant "none" or "unnamed".
+
+**What asserts it.**
+
+- `scripts/bigquery/tests/SEAT_SURFACE_acceptance.sql` (C01–C10). Two properties worth copying:
+  every check RE-DERIVES its figure from the register's own per-row rows and only then compares it
+  with what the surface printed — a surface is never asked to confirm itself; and every check
+  counts an EMPTY population as a violation of itself. The first run of the suite, before the
+  sections existed, reported five green checks against nothing at all, which is exactly the failure
+  the suite exists to catch. The dollar comparisons carry a `$0.02` tolerance whose reason is on
+  the check (an aggregate rendered to two decimals against a sum of per-row rounded costs — R-m);
+  the count comparisons are exact, because a count has no rounding.
+- `scripts/bigquery/tests/check_seat_surface_labels.py` — the two guarantees SQL cannot assert
+  because they live in FILES: a cube dimension for every column of `T_FAMILY_SEAT_REGISTER`, and
+  every label CASE naming every status the register's own CASE can emit. It reads the cube by
+  EVALUATING it in node with `cube` stubbed, not by regex, so what it inspects is what Cube loads.
+  Add a status to the register's CASE and this fails until both surfaces have learned it.
+
+**The cube.** `cube/schema/SeatRegister.js`, passthrough only. `rowId` is `sort_key` — the
+register's total ordering, asserted unique by B07 and again by C07 — because the register mixes
+grains on purpose and no natural key (campaign, keyword, family) is unique across it. A dimension
+for every column, not a curated subset. The dollar MEASURES are honest only under a filter to one
+`row_type` and one `horizon`: a register that mixes a FAMILY row with its own CATEGORY rows
+double-counts by construction, and the measures are named for the filter they need.
 
 ## What the register never does
 
