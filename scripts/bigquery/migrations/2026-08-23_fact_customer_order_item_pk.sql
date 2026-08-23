@@ -1,0 +1,54 @@
+-- =============================================
+-- Migration 2026-08-23 — FACT_CUSTOMER_ORDER_ITEM PRIMARY KEY
+-- =============================================
+--
+-- ALREADY APPLIED — THIS FILE IS A RECORD, NOT A SCRIPT TO RUN.
+--   The statement below was executed ad hoc during the customer-order-baskets
+--   build (2026-08-23) and is already live on `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM`.
+--   Re-running it is harmless (ADD PRIMARY KEY ... NOT ENFORCED is idempotent —
+--   BigQuery replaces the existing declaration rather than erroring), but it
+--   will NOT change anything: nobody should run this expecting a schema change.
+--   It exists purely so this schema change has a migration file, matching every
+--   other live schema change in this repo (see 2026-08-15_landed_cogs_amount.sql,
+--   2026-08-08_upload_status_failed_batches.sql,
+--   2026-08-22_reprice_batch_superseded.sql for the house pattern).
+--
+-- WHY
+--   FACT_CUSTOMER_ORDER_ITEM.sql declares
+--     PRIMARY KEY (selling_partner_id, amazon_order_id, order_item_id) NOT ENFORCED
+--   in its CREATE TABLE. BigQuery does not backfill a PRIMARY KEY onto a table
+--   from a DDL file automatically — CREATE TABLE IF NOT EXISTS is a silent
+--   no-op against a table that already exists, so once the table was created
+--   and populated, the key had to be added with an explicit ALTER TABLE. This
+--   file records that ALTER.
+--
+-- WHY NOT NULL COULD NOT BE APPLIED THE SAME WAY
+--   The same CREATE TABLE also declares selling_partner_id, amazon_order_id
+--   and order_item_id as NOT NULL. BigQuery has NO ALTER COLUMN that promotes
+--   an existing NULLABLE column to REQUIRED — that direction of nullability
+--   change is not supported on a populated table (only REQUIRED -> NULLABLE
+--   is). The table already held 25,094 rows when the key was added, so a
+--   drop-and-rebuild was the only way to also get NOT NULL, and was judged
+--   not worth the downtime for a constraint BigQuery does not enforce anyway
+--   (NOT ENFORCED keys and NULL-ability are both advisory to the query planner,
+--   not hard guarantees). The result is a deliberate, permanent divergence:
+--   the live table carries the PRIMARY KEY but not the NOT NULLs the DDL file
+--   declares. The DDL file's NOT NULLs only take effect on a fresh CREATE
+--   (e.g. in a from-scratch environment) and are otherwise decorative against
+--   the table that actually exists in onyga-482313.
+--
+--   Acceptance check A3 in scripts/bigquery/tests/FACT_CUSTOMER_ORDER_ITEM_acceptance.sql
+--   is what actually polices the gap: it fails on any NULL key or purchase_date
+--   column, so the missing NOT NULL constraint is covered functionally even
+--   though it isn't covered structurally. The three key columns held zero
+--   NULLs across all rows when this migration was written.
+--
+-- SAFETY
+--   ALTER TABLE ... ADD PRIMARY KEY ... NOT ENFORCED only. No data was moved,
+--   no rows were rewritten, no column was added, dropped or retyped.
+--
+-- Spec: architecture/CUSTOMER_ORDER_BASKETS.md
+-- =============================================
+
+ALTER TABLE `onyga-482313.OI.FACT_CUSTOMER_ORDER_ITEM`
+  ADD PRIMARY KEY (selling_partner_id, amazon_order_id, order_item_id) NOT ENFORCED;

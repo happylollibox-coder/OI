@@ -1561,6 +1561,29 @@ views:
       - V_LAUNCH_EXEMPTION
       - T_COACH_CAMPAIGN_BUDGET
 
+  - name: "V_ORDER_ITEM_COVERAGE"
+    type: "view"
+    description: "THE BACKFILL GATE for customer-order baskets. One row per purchase month: header orders, how many have their line items loaded (orders_with_items), coverage_pct, header_units vs item_units and units_missing, and is_month_complete (coverage_pct >= 99.99, not exact equality — a handful of very old orders may never return items, and a month that asymptotes just under 100% must not stay flagged incomplete forever; this is the same bar the downstream verification uses). The Daton item feed backfills OLDEST-FIRST and lags the header feed badly, so a recent month can show plenty of orders while most of their line items have not arrived — every basket statistic for that month is quietly wrong. Read this before trusting V_ORDER_CROSS_SELL or V_ORDER_BASKET for a period; rule of thumb is do not draw a conclusion about a month whose coverage_pct is below 99. Canceled header orders are excluded from the denominator (zero units, no items needed). coverage_pct and units_missing must be read together: orders_with_items only asks whether at least one item row exists for an order, not whether every line has arrived — a partially-synced order still counts as covered, and units_missing is what catches that at month level. Spec: architecture/CUSTOMER_ORDER_BASKETS.md"
+    source_files: ["scripts/bigquery/views/V_ORDER_ITEM_COVERAGE.sql"]
+    dependencies:
+      - V_SRC_ListOrder
+      - V_SRC_ListOrderItems
+
+  - name: "V_ORDER_BASKET"
+    type: "view"
+    description: "One row per customer order (selling_partner_id, amazon_order_id) describing basket SHAPE: line_count, distinct_asins, distinct_families, units, item_revenue (gross extended list price — pre-tax, pre-discount; does not tie to the order total or to Amazon-reported sales), all_asins_in_dim (TRUE only when every ASIN in the basket has a DIM_PRODUCT row — does NOT mean every product has a usable family, since a mapped ASIN can still carry parent_name IS NULL), basket_kind (SINGLE / MULTI_UNIT_SAME / MULTI_PRODUCT) and a readable basket_label. Excludes canceled orders AND canceled lines (quantity_ordered > 0) — filtering only the order leaves phantom units behind. Unmapped ASINs get family_label = 'UNMAPPED:<asin>' so two different unmapped products never look like one product bought twice; this fallback covers BOTH an ASIN genuinely absent from DIM_PRODUCT and an ASIN present there with parent_name NULL (e.g. B0CHJY7XLQ / B0CHJZDD3F — both present, oi_is_active = FALSE, no sales since July 2025; Amazon's own is_active stays TRUE because the catalog record was never deleted, which is why every production view treats active as is_active AND oi_is_active). parent_name/product_short_name are the copy FROZEN onto FACT_CUSTOMER_ORDER_ITEM at load time, so this view can disagree briefly with V_ORDER_CROSS_SELL (which reads DIM_PRODUCT live) until the next fact load. Spec: architecture/CUSTOMER_ORDER_BASKETS.md"
+    source_files: ["scripts/bigquery/views/V_ORDER_BASKET.sql"]
+    dependencies:
+      - FACT_CUSTOMER_ORDER_ITEM
+
+  - name: "V_ORDER_CROSS_SELL"
+    type: "view"
+    description: "MEASURED same-basket co-purchase: one row per (window_days, asin_a, asin_b) with asin_a < asin_b, carrying co_orders, support_pct, pct_of_a_orders, pct_of_b_orders, both_mapped, same_family and lift = P(A and B)/(P(A)*P(B)). Windows are 90, 365 and 9999 (lifetime), rolling from CURRENT_DATE('America/Los_Angeles') — never sum across windows, they overlap. As of 2026-08-23 the 90- and 365-day windows are EMPTY (the item feed's horizon predates both window start dates); only the 9999 window returns rows until the backfill catches up. 9999 is a sentinel, not a real day count — DATE_SUB(..., INTERVAL 9999 DAY) computes a real cutoff of 1999-04-08, and it only behaves as 'lifetime' because that predates all order history (earliest 2024-08-03); the two diverge around 2051. DISTINCT from V_ADS_COACH_CROSSSELL and does not replace it: that view reads ad-attributed purchased-product data ('clicked A's ad, later bought B', possibly separate orders); this one reads actual baskets ('A and B in the SAME order'). Read lift WITH co_orders — a pair seen twice can post a huge lift and mean nothing. same_family uses the same 'UNMAPPED:<asin>' COALESCE fallback as V_ORDER_BASKET so it is never NULL, but it is guaranteed FALSE whenever both_mapped is FALSE (structurally so when both sides are unmapped, since asin_a < asin_b forces distinct labels; true today but not enforced when only one side is unmapped, because no real parent_name happens to look like 'UNMAPPED:...') — for any unmapped pair, same_family adds nothing beyond both_mapped, so gate on both_mapped. name_a/name_b/family_a/family_b are looked up LIVE from DIM_PRODUCT at query time, unlike V_ORDER_BASKET's frozen copy — the two can disagree briefly after a DIM_PRODUCT change until the next fact load. items_through_date is on every row because the item feed backfills oldest-first; check V_ORDER_ITEM_COVERAGE for the per-month picture. The DISTINCT in the scoped CTE exists to bound self-join cardinality (one ASIN cannot count twice on one order) — it does not itself prevent pair double-counting, which the downstream COUNT(DISTINCT amazon_order_id) already guarantees. Spec: architecture/CUSTOMER_ORDER_BASKETS.md"
+    source_files: ["scripts/bigquery/views/V_ORDER_CROSS_SELL.sql"]
+    dependencies:
+      - FACT_CUSTOMER_ORDER_ITEM
+      - DIM_PRODUCT
+
 
 # ═══════════════════════════════════════════════════════════════
 # TABLES
@@ -2597,6 +2620,15 @@ stored_procedures:
     description: "Load SRC_ACC_PRODUCTS from V_SRC_Products (TRUNCATE + INSERT)"
     source_files: ["scripts/bigquery/procedures/SP_SRC_ACC_PRODUCTS.sql"]
     schedule: "daily"
+
+  - name: "SP_LOAD_FACT_CUSTOMER_ORDER_ITEM"
+    description: "Loads FACT_CUSTOMER_ORDER_ITEM from V_SRC_ListOrderItems joined to V_SRC_ListOrder on (selling_partner_id, amazon_order_id). Full MERGE, no watermark, no DELETE arm — the joined source is small and orders restate (an order shipped yesterday can be canceled tomorrow), so a windowed load would leave stale is_canceled flags behind the window; a full pass is seconds either way. DIM_PRODUCT is deduped with QUALIFY ROW_NUMBER(), not ANY_VALUE, so parent_name and product_short_name on a row always come from the same DIM_PRODUCT record. Runs in SP_ORCHESTRATE_DAILY_REFRESH as Refresh Task 1.1, immediately AFTER Task 1 (SP_MERGE_PRODUCT_DIM_SMART) and not merely after the Daton source loads — the join needs DIM_PRODUCT already refreshed, or an ASIN newly added in the same run would mislabel until the next day's load self-heals it. Idempotent: verified re-running it twice changes nothing. Spec: architecture/CUSTOMER_ORDER_BASKETS.md"
+    source_files: ["scripts/bigquery/procedures/SP_LOAD_FACT_CUSTOMER_ORDER_ITEM.sql"]
+    dependencies:
+      - FACT_CUSTOMER_ORDER_ITEM
+      - V_SRC_ListOrder
+      - V_SRC_ListOrderItems
+      - DIM_PRODUCT
 
   - name: "SP_SRC_ACC_SALES_TRAFFIC"
     description: "Load SRC_ACC_SALES_TRAFFIC_DAILY from V_SRC (MERGE)"
