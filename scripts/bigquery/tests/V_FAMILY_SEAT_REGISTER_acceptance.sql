@@ -127,13 +127,22 @@
 --   B31 The closing sentence reads in the order R-l fixes: the executable recovery first, then the
 --       gap, then a plain closes / does-not-close verdict, then what the remaining dollars depend
 --       on, and finally a pointer to that family's re-judged row.
---   B32 The FAMILY row never promises a sheet the row-level move does not (R-l, wording). Every
---       dollar of the recovered-today figure comes from a LEAK row or a failed SEAT row, and both
---       ride the NEXT BOOK a generator builds — the leak arm of tools/build_reprice_bulksheet.py
---       for a leak (Task 3), the shipped reprice generator's pause row for a failed keyword. The
---       LEAK row's own move already says 'pause it on the next book (leak arm)'. The FAMILY row
---       must name the same book: no FAMILY sentence may say the pauses can be uploaded 'today',
---       and the leak / failed clauses must name the book they ride on.
+--   B32 Every published move names the book it rides on, and names it PER ROW (R-l, wording,
+--       rewritten 2026-08-23 after the arm shipped). Every dollar of the recovered-today figure
+--       comes from a LEAK row or a failed SEAT row. A failed keyword's pause row rides the next
+--       book the shipped reprice generator builds. A LEAK is now one of two different things and
+--       the sentence must say which, measured against the change log, exactly as the projections
+--       are: if a KEYWORD_PAUSE row for it already sits at PENDING_UPLOAD its sheet EXISTS, and
+--       the move is to upload THAT batch — named by id on the row and published in book_batch_id
+--       / book_action — and explicitly not to build another; if no book carries it, it rides the
+--       next leak book, named by its file. The old unconditional 'pause it on the next leak book'
+--       was the defect this check now forbids: it contradicted the $0 the same row published on
+--       both projections, and a reader who followed it would have built a second batch of pause
+--       rows he already had. The FAMILY leak clause is worded by the same split (all-on-book,
+--       none-on-book, mixed), the split is re-derived HERE from FACT_PPC_CHANGE_LOG, every batch
+--       id a sentence names must be one the log actually holds for that family's leaks, and no
+--       FAMILY sentence may say the pauses can be uploaded 'today'. The closing sentence points at
+--       the clauses ('The pauses named above recover $…') rather than asserting one book for all.
 --   B33 The re-judged horizon never makes a stalled probe's spend vanish (R-l, applied to the
 --       projection). Parking LOWERS a price; the keyword keeps serving and keeps spending. So for
 --       every working family whose 'probe — stalled' CATEGORY costs money today, the same category
@@ -172,13 +181,23 @@
 -- scripts/bigquery/views/V_FAMILY_SEAT_REGISTER.sql or in architecture/FAMILY_SEAT_REGISTER.md.
 -- A retired belief once survived in both while every check passed. The instrument for those two
 -- files is a grep of the RETIRED phrases, run on the source, and it must return nothing:
---   grep -nE 'closed-but-spending keywords are paused|leaks stay paused|the leaks are paused|stalled probes are parked|pauses you can upload' \
+--   grep -nE 'closed-but-spending keywords are paused|leaks stay paused|the leaks are paused|stalled probes are parked|pauses you can upload|Task 3, not shipped|Task 3, not yet shipped|Leaks are NOT paused on either projection|nothing pauses them until the leak arm ships|leak arm of .tools/build_reprice_bulksheet|the sheet that would pause it does not exist|the unbuilt (leak )?arm|The pauses on the next book recover' \
 --     scripts/bigquery/views/V_FAMILY_SEAT_REGISTER.sql architecture/FAMILY_SEAT_REGISTER.md
 -- (This test file itself contains those phrases as the forbidden-phrase assertions above, which
 --  is why the grep names the two files and not the directory.) A match is allowed ONLY inside
 -- quotation marks in the SOP's repair-pass narrative, where it records what a retired sentence
 -- used to say; a match outside quotes — in the view header, the Horizons paragraph or a rulings
 -- row — is the defect.
+-- THE GREP IS PART OF THE CHANGE, NOT A FIXED LIST (added 2026-08-23, seventh repair pass). The
+-- first half of this list is the SIXTH pass's retired model — "no generator pauses a leak". When
+-- Task 3 shipped that model was itself retired and its phrases became the new defect, but the
+-- grep still hunted only the older set: it returned nothing while three paragraphs of the SOP
+-- (the opening summary, the Horizons paragraph and open ruling 12) went on telling the reader
+-- that the leak arm was unbuilt, that no projection zeroes a leak, and that Ori still had to
+-- decide whether Task 3 should ship — every clause false against the deployed view, and the
+-- second half of this list is what caught it. So: WHENEVER A MODEL IS RETIRED, ITS PHRASES ARE
+-- ADDED HERE IN THE SAME COMMIT that retires it. A grep that only knows yesterday's wrong answer
+-- passes over today's.
 -- =============================================================================================
 CREATE TEMP TABLE reg AS SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
 WITH
@@ -382,19 +401,45 @@ stalled_cat AS (
 -- B35: the leak half of R-l, after the arm shipped. The pending PAUSE book is re-derived HERE
 -- from the change log — the check never asks the view what it believes is pending.
 pending_pause_chk AS (
-  SELECT DISTINCT CAST(campaign_id AS STRING) AS campaign_id, CAST(keyword_id AS STRING) AS keyword_id
+  SELECT CAST(campaign_id AS STRING) AS campaign_id, CAST(keyword_id AS STRING) AS keyword_id,
+         -- every batch that carries a pending pause for this keyword, in a total ordering: B32
+         -- asserts the batch the register NAMES is one of them, so the id on a published sentence
+         -- is re-derived from the log and never taken from the view's own belief
+         STRING_AGG(DISTINCT batch_id, ',' ORDER BY batch_id) AS batch_ids
   FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
   WHERE upload_status = 'PENDING_UPLOAD' AND action = 'KEYWORD_PAUSE'
-    AND keyword_id IS NOT NULL AND keyword_id != ''),
+    AND keyword_id IS NOT NULL AND keyword_id != ''
+  GROUP BY 1, 2),
 leak_rows AS (
   SELECT l.family, l.campaign_id, l.keyword_id, l.cost_per_day, l.cost_day_one, l.cost_rejudged,
-         l.book_batch_id,
+         l.book_batch_id, l.book_action, l.move, l.sentence,
          COALESCE(l.holdout, FALSE) AND l.as_of >= l.holdout_eligible_from AS no_sheet,
-         pp.keyword_id IS NOT NULL AS pause_pending
+         pp.keyword_id IS NOT NULL AS pause_pending,
+         pp.batch_ids
   FROM r l
   LEFT JOIN pending_pause_chk pp
     ON pp.campaign_id = CAST(l.campaign_id AS STRING) AND pp.keyword_id = CAST(l.keyword_id AS STRING)
   WHERE l.row_type = 'LEAK'),
+-- B32: how many of each family's EXECUTABLE leaks (holdout-suppressed rows removed — they get no
+-- sheet row at all) the pending pause book already carries, re-derived from the change log. The
+-- family's leak clause must be worded by this split, because a reader sent to "the next leak book"
+-- for a keyword the pending book already carries builds a SECOND batch of the same pause rows.
+leak_book_split AS (
+  SELECT family,
+         COUNTIF(NOT no_sheet) AS n_exec,
+         COUNTIF(NOT no_sheet AND pause_pending) AS n_on_book,
+         COUNTIF(NOT no_sheet AND NOT pause_pending) AS n_off_book
+  FROM leak_rows GROUP BY 1),
+-- every batch id a FAMILY sentence NAMES, and every batch id the CHANGE LOG holds for that
+-- family's leaks: B32 anti-joins one against the other, so a sentence can never invent a book
+fam_named_books AS (
+  SELECT f.family, bid AS named_batch
+  FROM r f, UNNEST(REGEXP_EXTRACT_ALL(f.sentence, r'pending leak book ([A-Za-z0-9_]+)')) bid
+  WHERE f.row_type = 'FAMILY' AND f.horizon = 'today'),
+fam_log_books AS (
+  SELECT DISTINCT lr.family, b AS log_batch
+  FROM leak_rows lr, UNNEST(SPLIT(COALESCE(lr.batch_ids, ''), ',')) b
+  WHERE b != ''),
 leak_cat AS (
   SELECT family,
          SUM(IF(horizon = 'today', cost_per_day, 0)) AS today_cost,
@@ -649,9 +694,9 @@ checks AS (
   UNION ALL
   SELECT 'B31 the closing sentence reads in the order R-l fixes: the executable recovery, then the gap, then a plain closes / does-not-close verdict, then what the remaining dollars depend on, then the pointer to that family\'s re-judged row',
          (SELECT COUNTIF(
-                   STRPOS(sentence, 'The pauses on the next book recover $') = 0
+                   STRPOS(sentence, 'The pauses named above recover $') = 0
                    OR STRPOS(sentence, 're-judged row') = 0
-                   OR STRPOS(sentence, 're-judged row') < STRPOS(sentence, 'The pauses on the next book recover $')
+                   OR STRPOS(sentence, 're-judged row') < STRPOS(sentence, 'The pauses named above recover $')
                    OR (exec_today < over_by_per_day - 0.005
                        AND (STRPOS(sentence, 'The remaining $') = 0
                             OR STRPOS(sentence, 'depends on') = 0
@@ -659,22 +704,57 @@ checks AS (
                             OR STRPOS(sentence, 're-judged row') < STRPOS(sentence, 'The remaining $'))))
           FROM gapclose)
   UNION ALL
-  SELECT 'B32 the FAMILY row names the book the pauses ride on (R-l wording): no family sentence promises an upload today, and the leak / failed clauses name the next book, exactly as the LEAK row\'s own move already does',
+  SELECT 'B32 every published move names the book it rides on, and names it PER ROW (R-l wording after the arm shipped): a leak the pending book already carries is told to upload that batch by id and not to build another, a leak no book carries rides the next leak book, the FAMILY clause is worded by the same split re-derived from the change log, and no sentence promises an upload today',
          (SELECT COUNTIF(
                    sentence LIKE '%you can upload today%'
                    OR sentence LIKE '%pauses you can upload%'
-                   -- a leak clause must name the book it rides on
-                   OR (REGEXP_CONTAINS(sentence, r'pause the [0-9]+ leaks')
-                       AND NOT REGEXP_CONTAINS(sentence, r'pause the [0-9]+ leaks on the next leak book \(tools/build_seat_moves_bulksheet\.py\)'))
-                   -- a failed-keyword clause must name it too
+                   -- a failed-keyword clause must name the book it rides on
                    OR (REGEXP_CONTAINS(sentence, r'kill the [0-9]+ failed keywords')
                        AND NOT REGEXP_CONTAINS(sentence, r'kill the [0-9]+ failed keywords on the next book'))
-                   -- and the closing sentence must use the book form, never the today form
-                   OR (over_by_per_day > 0 AND STRPOS(sentence, 'The pauses on the next book recover $') = 0))
+                   -- and the closing sentence points at the clauses, each of which names its own
+                   -- book, instead of asserting one book for all of them
+                   OR (over_by_per_day > 0 AND STRPOS(sentence, 'The pauses named above recover $') = 0))
           FROM famrow WHERE row_type = 'FAMILY' AND horizon = 'today')
-         + (SELECT COUNT(*) FROM r WHERE row_type = 'LEAK'
-            AND NOT (COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from)
-            AND move NOT LIKE '%pause it on the next leak book (tools/build_seat_moves_bulksheet.py)%')
+         -- the FAMILY leak clause is worded by the log-derived split, not by a fixed phrase
+         + (SELECT COUNTIF(
+                   -- every leak already on a book: name the batch, forbid 'the next leak book'
+                   (s.n_off_book = 0 AND s.n_exec > 0
+                    AND (NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks — every one is already written on the pending leak book ')
+                         OR REGEXP_CONTAINS(f.sentence, r'leaks on the next leak book')))
+                   -- no leak on a book: the next-book form, and no batch may be named
+                   OR (s.n_on_book = 0 AND s.n_exec > 0
+                       AND NOT REGEXP_CONTAINS(f.sentence, r'pause the [0-9]+ leaks on the next leak book \(tools/build_seat_moves_bulksheet\.py\)'))
+                   -- mixed: both counts and both destinations named
+                   OR (s.n_on_book > 0 AND s.n_off_book > 0
+                       AND (NOT REGEXP_CONTAINS(f.sentence, r'are already written on the pending leak book ')
+                            OR NOT REGEXP_CONTAINS(f.sentence, r'ride the next leak book \(tools/build_seat_moves_bulksheet\.py\)')))
+                   )
+            FROM famrow f JOIN leak_book_split s ON s.family = f.family
+            -- only families that publish the gap clause carry a leak clause at all: a family
+            -- inside its allowance (doctrine IN) is told what its open capacity buys, not what to
+            -- pause, and has no clause to word
+            WHERE f.row_type = 'FAMILY' AND f.horizon = 'today'
+              AND f.sentence LIKE '%What closes the gap%')
+         -- and any batch id a FAMILY sentence names must be one the change log actually holds for
+         -- one of that family's leaks (an anti-join, so nothing here reads the view's own belief)
+         + (SELECT COUNT(*) FROM fam_named_books n
+            LEFT JOIN fam_log_books l ON l.family = n.family AND l.log_batch = n.named_batch
+            WHERE l.log_batch IS NULL)
+         -- and the LEAK row's own move is the same measurement, row by row
+         + (SELECT COUNTIF(
+                   -- off-book: the next leak book, named by its file
+                   (NOT no_sheet AND NOT pause_pending
+                    AND move NOT LIKE '%pause it on the next leak book (tools/build_seat_moves_bulksheet.py)%')
+                   -- on-book: upload THAT batch, never build another, and publish the id
+                   OR (NOT no_sheet AND pause_pending
+                       AND (move NOT LIKE CONCAT('%pending leak book ', COALESCE(book_batch_id, '~'), '%')
+                            OR move LIKE '%next leak book%'
+                            OR book_action != 'KEYWORD_PAUSE'
+                            OR book_batch_id IS NULL
+                            OR STRPOS(CONCAT(',', COALESCE(batch_ids, ''), ','),
+                                      CONCAT(',', COALESCE(book_batch_id, '~'), ',')) = 0
+                            OR sentence NOT LIKE CONCAT('%pending leak book ', COALESCE(book_batch_id, '~'), '%'))))
+            FROM leak_rows)
   UNION ALL
   SELECT 'B33 the re-judged horizon never zeroes a stalled probe (R-l applied to the projection): parking lowers a price, so a family paying for stalled probes today still pays for them when re-judged, and no horizon assumption claims they are parked to $0',
          (SELECT COUNTIF(today_cost > 0.005 AND (n_rejudged_rows = 0 OR rejudged_cost <= 0.005)) FROM stalled_cat)

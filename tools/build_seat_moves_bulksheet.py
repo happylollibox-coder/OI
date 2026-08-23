@@ -406,7 +406,11 @@ SELECT
   restore.portfolio_id AS echo_portfolio_id, restore.latest_portfolio_id,
   hold.eligible_from AS holdout_eligible_from,
   bc.gate_reason AS block_cut_reason,
-  COALESCE(sp7.sp7, 0) AS sp7, COALESCE(sp7.clk7, 0) AS clk7,
+  -- rounded so the audit CSV is byte-reproducible: a distributed SUM of FLOAT64 is not
+  -- associative, so the same query on the same rows returns 12.98 on one run and
+  -- 12.979999999999999 on the next, and a reviewer diffing two builds of the same snapshot would
+  -- see a change that is not one
+  ROUND(COALESCE(sp7.sp7, 0), 4) AS sp7, COALESCE(sp7.clk7, 0) AS clk7,
   CAST(wm.wm AS STRING) AS watermark,
   CAST(CURRENT_DATE('America/Los_Angeles') AS STRING) AS today_la
 FROM lk
@@ -420,7 +424,12 @@ LEFT JOIN bc ON bc.keyword_text = lk.target_text
             AND NOT COALESCE(ks.is_auto, FALSE) AND NOT COALESCE(ks.is_pt, FALSE)
 LEFT JOIN sp7 ON sp7.cid = lk.campaign_id AND sp7.kid = lk.keyword_id
 CROSS JOIN wm
-ORDER BY lk.cost_per_day DESC
+-- HOUSE RULE 9 — a TOTAL ordering. cost_per_day is rounded to 4 decimals in the register, so ties
+-- are ordinary (two leaks sat at exactly 0.0314 on the first live build and swapped places between
+-- two runs of the same snapshot, moving four workbook lines and the README's 'row N' pointers).
+-- The sibling reprice book orders totally for the same reason; a reviewer must be able to re-run
+-- this generator on the same snapshot and diff the workbook byte for byte.
+ORDER BY lk.cost_per_day DESC, lk.campaign_id, lk.keyword_id
 """
 
 NEGATE_SQL = """
@@ -587,8 +596,38 @@ LEFT JOIN already_tg ON already_tg.campaign_id = c.campaign_id
                     AND already_tg.search_term = c.search_term
 LEFT JOIN restore ON restore.cid = c.campaign_id
 LEFT JOIN hold ON hold.cid = c.campaign_id
-ORDER BY blk.ng_spend_8w DESC
+-- a total ordering here too (house rule 9): ng_spend_8w is rounded to cents and ties freely
+ORDER BY blk.ng_spend_8w DESC, c.campaign_id, c.ad_group_id, c.search_term, c.keyword_id
 """
+
+
+
+def routing_note(campaign_name, is_sb):
+    """The README's sheet check: a campaign whose NAME reads as one channel while Amazon has it as
+    the other.
+
+    The routing itself is already right — the campaign DIMENSION is the authority and the ladder's
+    channel is the fallback, with a disagreement raised rather than resolved. But this README is
+    the only human-readable cross-reference a reader gets: Amazon's SB Multi Ad Group schema has no
+    campaign-name column, so every SB line in the workbook is bare ids (Campaign Id / Ad Group Id /
+    Keyword Id / State). Read cold, an SP-named campaign under the SB heading looks like a misroute,
+    and "fixing" it puts an SP row in an SB campaign, which fails the whole upload. So the
+    disagreement is stated on the row instead of being left for the reader to find.
+
+    The channel is matched as a WORD, never a substring — 'SPRING' is not SP.
+    """
+    name = (campaign_name or '').upper()
+    name_sb = bool(re.search(r'\bSB\b', name))
+    name_sp = bool(re.search(r'\bSP\b', name))
+    if is_sb and name_sp and not name_sb:
+        return ("This campaign is NAMED SP but Amazon has it as a Sponsored Brands campaign (the "
+                "campaign dimension and the keyword ladder agree), so the row belongs on the SB "
+                "sheet exactly where it is. Do not move it to the Sponsored Products sheet — an SP "
+                "row for an SB campaign fails the whole upload.")
+    if not is_sb and name_sb and not name_sp:
+        return ("This campaign is NAMED SB but Amazon has it as a Sponsored Products campaign, so "
+                "the row belongs on the SP sheet exactly where it is. Do not move it.")
+    return None
 
 
 def bq(sql):
@@ -916,6 +955,9 @@ def main():
             sheet, ln = line_of[key_of(r, disp)]
             f.write(f"### {sheet} — row {ln}: `{r['target_text']}` ({r['campaign_name']})\n\n")
             f.write(f"- {reason}\n")
+            note = routing_note(r.get('campaign_name'), is_sb(r))
+            if note:
+                f.write(f"- **Sheet check.** {note}\n")
             f.write(f"- Delete this line and it keeps running exactly as it is; then label its "
                     f"change-log row FAILED_UPLOAD.\n\n")
         no_action = [v for v in leak_rows if v[1] != PAUSE]
@@ -932,7 +974,11 @@ def main():
                     continue
                 sheet, ln = line_of[key_of(r, disp)]
                 f.write(f"### {sheet} — row {ln}: `{r['search_term']}` ({r['campaign_name']})\n\n")
-                f.write(f"- {reason}\n\n")
+                f.write(f"- {reason}\n")
+                note = routing_note(r.get('campaign_name'), is_sb(r))
+                if note:
+                    f.write(f"- **Sheet check.** {note}\n")
+                f.write("\n")
         neg_no = [v for v in neg_rows if v[1] not in EXECUTABLE]
         if neg_no:
             f.write(f"---\n\n## Negate candidates refused ({len(neg_no)}) — and why\n\n")

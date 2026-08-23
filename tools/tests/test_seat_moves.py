@@ -13,7 +13,7 @@ from datetime import date
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 from build_seat_moves_bulksheet import (  # noqa: E402
-    classify_leak, classify_negate, is_asin_term, target_asin,
+    classify_leak, classify_negate, is_asin_term, target_asin, routing_note,
     sp_negative_keyword_row, sp_negative_target_row, sb_negative_keyword_row,
     PAUSE, NEGATE_KEYWORD, NEGATE_TARGET, EXECUTABLE)
 
@@ -241,3 +241,36 @@ def test_sb_negative_keyword_row_uses_the_sb_casing():
     assert r['Campaign Id'] == '1' and r['Ad Group Id'] == '7'
     assert r['Match Type'] == 'negativeExact'
     assert 'Campaign ID' not in r, 'the SB sheet uses its own casing'
+
+
+# ── the README's sheet-check note ────────────────────────────────────────────────────────────
+# Amazon's SB Multi Ad Group sheet has no campaign-name column, so every SB line in the workbook
+# is bare ids and the README is the only human-readable cross-reference. A campaign NAMED SP that
+# Amazon holds as SB therefore reads like a misroute — and "fixing" it fails the whole upload.
+
+
+def test_an_sp_named_campaign_on_the_sb_sheet_is_flagged_as_correctly_routed():
+    note = routing_note('FRESH SP/BROAD (Hunter ,Pink, Gift)', is_sb=True)
+    assert note and 'NAMED SP' in note
+    assert 'fails the whole upload' in note
+
+
+def test_an_sb_named_campaign_on_the_sp_sheet_is_flagged_too():
+    note = routing_note('ME-SB/VIDEO (Gift)', is_sb=False)
+    assert note and 'NAMED SB' in note
+
+
+def test_a_campaign_whose_name_agrees_with_its_sheet_gets_no_note():
+    assert routing_note('FRESH-SP/BROAD (Back to School)', is_sb=False) is None
+    assert routing_note('BOX-SB/VIDEO (Blue)', is_sb=True) is None
+
+
+def test_a_name_with_no_channel_token_gets_no_note():
+    assert routing_note('BOX -AUTO (Blue)', is_sb=True) is None
+    assert routing_note('', is_sb=False) is None
+
+
+def test_the_token_is_a_word_not_a_substring():
+    # 'SPRING' must never read as SP, nor 'SBX' as SB
+    assert routing_note('FRESH SPRING GIFTS', is_sb=True) is None
+    assert routing_note('FRESH SBX GIFTS', is_sb=False) is None
