@@ -644,7 +644,7 @@ ORDER BY check_name;
 bq --project_id=onyga-482313 --location=US query --use_legacy_sql=false --nouse_cache --format=csv < scripts/bigquery/tests/FACT_CUSTOMER_ORDER_ITEM_acceptance.sql
 ```
 
-Expected: 8 rows, every `status` reading `PASS`.
+Expected: 9 rows, every `status` reading `PASS`.
 
 - [ ] **Step 3: If A6 fails, diagnose before proceeding**
 
@@ -1380,7 +1380,7 @@ Expected: completes with no error.
 bq --project_id=onyga-482313 --location=US query --use_legacy_sql=false --nouse_cache --format=csv < scripts/bigquery/tests/FACT_CUSTOMER_ORDER_ITEM_acceptance.sql && bq --project_id=onyga-482313 --location=US query --use_legacy_sql=false --nouse_cache --format=csv < scripts/bigquery/tests/V_ORDER_CROSS_SELL_acceptance.sql
 ```
 
-Expected: 16 rows total, every `status` reading `PASS`.
+Expected: 17 rows total, every `status` reading `PASS`.
 
 - [ ] **Step 3: Report the coverage picture honestly**
 
