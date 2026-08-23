@@ -40,7 +40,7 @@
 --       the good side, and the family clause lists no move for it (B34).
 --   (3) the FAMILY row names the book its pauses ride on instead of promising an upload 'today'.
 --       Every dollar of the recovered-today figure rides the NEXT BOOK a generator builds — the
---       leak arm of tools/build_reprice_bulksheet.py for a leak (Task 3), the shipped reprice
+--       leak arm tools/build_seat_moves_bulksheet.py for a leak (SHIPPED 2026-08-23), the reprice
 --       generator's pause row for a failed keyword — exactly as the LEAK row's own move already
 --       says. The arithmetic is untouched; only the promise is (B32).
 --
@@ -128,14 +128,14 @@
 --   today      measured on the basis window; nothing assumed.
 --   day one    the PENDING_UPLOAD book lands: each keyword on it spends in proportion to
 --              new_bid ÷ old_bid (a linear bid→spend guess, not a measurement); everything else
---              as today. A LEAK IS NOT PAUSED HERE (R-l, leak half): that book carries bid changes
---              only, and the sheet that would pause a closed-but-spending keyword — the leak arm
---              of tools/build_reprice_bulksheet.py — is not built yet, so a leak costs on this
---              horizon exactly what it costs today.
+--              as today. A LEAK reaches $0 here ONLY where a PENDING_UPLOAD pause row for that
+--              exact keyword exists (R-l, leak half, after the arm shipped on 2026-08-23:
+--              tools/build_seat_moves_bulksheet.py). The credit is checked per row against the
+--              change log; a leak no book carries costs here exactly what it costs today.
 --   re-judged  repairs hold at their bar and move to the good side at their day-one cost;
 --              probation keywords stay on the 20% side at their floor; failed keywords are killed
---              with a pause row THE SHIPPED GENERATOR BUILDS TODAY (→ $0); LEAKS KEEP COSTING what
---              they cost today, because no generator yet builds their pause row; STALLED PROBES ARE
+--              with a pause row the reprice generator builds today (→ $0); A LEAK reaches $0 only
+--              where a pending pause row carries it, otherwise it keeps costing; STALLED PROBES ARE
 --              RE-PRICED by the move on their own row (R-f's sign branch) and keep spending at that
 --              price — parking lowers a price, it does not stop the spend; engine probes and parked
 --              seats keep their day-one cost; settling verdicts hold; untracked unchanged.
@@ -215,6 +215,16 @@ pending AS (
   FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
   WHERE upload_status = 'PENDING_UPLOAD'
     AND action IN ('INCREASE_BID', 'REDUCE_BID') AND new_bid IS NOT NULL AND old_bid > 0
+    AND keyword_id IS NOT NULL AND keyword_id != ''
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY applied_at DESC, change_id DESC) = 1),
+-- the pending PAUSE book: KEYWORD_PAUSE rows logged at build time and not yet uploaded. The leak
+-- arm (tools/build_seat_moves_bulksheet.py) SHIPPED on 2026-08-23, so a leak's pause row now
+-- exists — but only for the leaks a book actually carries. A leak with no row here is credited
+-- nothing on either projection: the flip R-l pre-authorised is per ROW, measured, never blanket.
+pending_pause AS (
+  SELECT campaign_id, keyword_id, batch_id
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE upload_status = 'PENDING_UPLOAD' AND action = 'KEYWORD_PAUSE'
     AND keyword_id IS NOT NULL AND keyword_id != ''
   QUALIFY ROW_NUMBER() OVER (PARTITION BY campaign_id, keyword_id ORDER BY applied_at DESC, change_id DESC) = 1),
 -- how many distinct bids the keyword has ever carried (DIM_KEYWORD SCD2): > 1 means the bid moved
@@ -358,6 +368,7 @@ c AS (
          p.kid IS NOT NULL AS engine_probe,
          lc.action AS raise_action, lc.chg_date AS raised_on, lc.old_bid AS raise_old_bid, lc.new_bid AS raise_new_bid,
          pd.batch_id AS book_batch_id, pd.action AS book_action, pd.old_bid AS book_old_bid, pd.new_bid AS book_new_bid,
+         pp.batch_id AS pause_batch_id, pp.batch_id IS NOT NULL AS pause_pending,
          COALESCE(bv.bid_versions, 1) AS bid_versions,
          -- R-b: the latest applied change is a raise that still stands (live bid at or above the
          -- logged new_bid — the $1.00 activation floor can lift it past the log — and above old_bid),
@@ -391,6 +402,7 @@ c AS (
   LEFT JOIN probes p ON p.kid = u.keyword_id
   LEFT JOIN lastchg lc ON lc.campaign_id = u.campaign_id AND lc.keyword_id = u.keyword_id
   LEFT JOIN pending pd ON pd.campaign_id = u.campaign_id AND pd.keyword_id = u.keyword_id
+  LEFT JOIN pending_pause pp ON pp.campaign_id = u.campaign_id AND pp.keyword_id = u.keyword_id
   LEFT JOIN bidv bv ON bv.cid = u.campaign_id AND bv.kid = u.keyword_id
   LEFT JOIN holdout h ON h.campaign_id = u.campaign_id
   LEFT JOIN oob_camp oc ON oc.campaign_id = u.campaign_id
@@ -456,26 +468,29 @@ kw AS (
          -- engine's park price. Parking LOWERS a price — it never takes the spend to $0 (R-l).
          CASE WHEN d.seat_price IS NOT NULL AND d.current_bid < d.seat_price - k.bid_tol THEN d.seat_price
               ELSE d.bid_park END AS stalled_proposed_bid,
-         -- day one: the pending book lands (linear bid→spend) — unless the row is in a holdout
-         -- campaign, where no sheet lands and the row is exactly as it is today. A LEAK IS NOT
-         -- ZEROED HERE (R-l, leak half): the pending book carries bid changes only and no shipped
-         -- generator emits a leak's pause row (the leak arm is Task 3), so a leak that no book row
-         -- touches costs what it costs today, and one that a book row does touch is re-priced by
-         -- the same linear guess as any other keyword — never taken to $0 by a sheet nobody built.
+         -- day one: the pending books land (linear bid→spend) — unless the row is in a holdout
+         -- campaign, where no sheet lands and the row is exactly as it is today. A LEAK reaches $0
+         -- here ONLY when a pause row for that exact keyword is on a PENDING_UPLOAD book: the leak
+         -- arm shipped on 2026-08-23 (R-l's own overrule clause), so the sheet exists — but the
+         -- credit is per row and measured against the change log, never a blanket assumption. A
+         -- leak no book carries costs what it costs today; one a BID row touches is re-priced by
+         -- the same linear guess as any other keyword.
          CASE WHEN d.holdout AND d.snap_d >= d.holdout_eligible_from THEN d.spend7 / k.basis_days
+              WHEN d.code = 'LEAK' AND d.pause_pending THEN 0
               WHEN d.book_new_bid IS NOT NULL THEN d.spend7 / k.basis_days * SAFE_DIVIDE(d.book_new_bid, d.book_old_bid)
               ELSE d.spend7 / k.basis_days END AS cost_day1,
          x.side AS side_day1,
          -- re-judged: repairs hold at their bar (good side), probation at its floor, failed killed
          -- (a kill IS a pause → $0, and the SHIPPED generator builds that row for a LOSER today);
-         -- LEAKS ARE NOT ZEROED (R-l, leak half) — the only sheet that would pause them is the
-         -- unbuilt leak arm, so they keep costing what they cost today; STALLED PROBES RE-PRICED:
+         -- A LEAK reaches $0 only where a pause row for it is on a PENDING_UPLOAD book (the leak
+         -- arm, shipped 2026-08-23); a leak no book carries keeps costing; STALLED PROBES RE-PRICED:
          -- the move on their row is 'raise to the seat price' or 'park at the engine's park price',
          -- and both leave the keyword serving, so the spend continues at the proposed price (the
          -- same linear bid→spend guess the day-one horizon uses). Probes and settling hold,
          -- untracked unchanged; a holdout-suppressed row is unchanged on every count.
          CASE WHEN d.holdout AND d.snap_d >= d.holdout_eligible_from THEN d.spend7 / k.basis_days
               WHEN d.code = 'FAILED' THEN 0
+              WHEN d.code = 'LEAK' THEN IF(d.pause_pending, 0, d.spend7 / k.basis_days)
               WHEN d.code = 'STALLED_PROBE' THEN d.spend7 / k.basis_days
                    * COALESCE(SAFE_DIVIDE(CASE WHEN d.seat_price IS NOT NULL AND d.current_bid < d.seat_price - k.bid_tol THEN d.seat_price
                                                ELSE d.bid_park END, NULLIF(d.current_bid, 0)), 1)
@@ -517,6 +532,12 @@ fam_h AS (
          COUNTIF(occupant_kind IS NOT NULL AND side_h = '20') AS seats_h,
          COUNTIF(occupant_kind = 'settling') AS seats_settling,
          COUNTIF(code_h = 'LEAK') AS n_leaks, COUNTIF(code_h = 'GAP') AS n_gaps,
+         -- R-l leak half, after the arm shipped: how many of this family's leaks a PENDING_UPLOAD
+         -- book actually pauses, and how many no sheet carries. The projection sentence names both.
+         COUNTIF(code_h = 'LEAK' AND pause_pending
+                 AND NOT (holdout AND snap_d >= holdout_eligible_from)) AS n_leaks_on_book,
+         COUNTIF(code_h = 'LEAK' AND NOT (pause_pending
+                 AND NOT (holdout AND snap_d >= holdout_eligible_from))) AS n_leaks_off_book,
          -- the gap-cause buckets (R-k refined): blind (no keyword id), trailing (disabled on
          -- Amazon), next-run (enabled, verdict coming), check (real id, no current DIM row)
          COUNTIF(code = 'GAP' AND gap_cause = 'NO_ID') AS n_gap_blind,
@@ -570,8 +591,8 @@ fam_rows AS (
          CASE horizon
            WHEN 'today' THEN FORMAT('measured on the %d complete days %s to %s; nothing assumed',
                                     k.basis_days, CAST(win.basis_from AS STRING), CAST(win.basis_to AS STRING))
-           WHEN 'day one' THEN 'projection: the pending book lands — every keyword on it spends in proportion to new bid ÷ old bid (a linear bid→spend guess, not a measurement); everything else as today. Closed-but-spending keywords are NOT paused here: that book carries bid changes only, and the sheet that would pause them — the leak arm of the reprice generator — is not built yet, so a leak costs here exactly what it costs today and this horizon books none of its dollars back. A keyword in a holdout campaign on or after its eligible_from date gets no sheet row at all, so it is unchanged here — no book lands on it while the arm runs.'
-           ELSE 'projection: the repairs hold at their bar and move to the good side at their day-one cost; probation keywords stay on the 20% side at their floor; failed keywords are killed with a pause row (→ $0) — the shipped reprice generator builds that row today; leaks keep costing what they cost today, because the only sheet that would pause them is the leak arm, which is not built yet, so no horizon books their dollars back; stalled probes are re-priced by the move on their own row — raised to the seat price where the live bid is below it, otherwise parked at the engine\'s park price — and keep spending at that price (the same linear bid→spend guess), because parking lowers a price and does not stop the spend, so they stay on the 20% side until a verdict arrives; engine probes keep their day-one cost; settling verdicts hold; untracked spend is unchanged until the ladder sees it. A keyword in a holdout campaign on or after its eligible_from date gets no sheet row at all, so it is unchanged here and a repair in one never moves to the good side.'
+           WHEN 'day one' THEN 'projection: the pending books land — every keyword on a pending BID row spends in proportion to new bid ÷ old bid (a linear bid→spend guess, not a measurement); everything else as today. A closed-but-spending keyword reaches $0 here ONLY when a pause row for that exact keyword is on a pending book of its own — the leak arm (tools/build_seat_moves_bulksheet.py) shipped on 2026-08-23, so that sheet now exists, and the credit is checked row by row against the change log rather than assumed for the category. A leak no book carries costs here exactly what it costs today. A keyword in a holdout campaign on or after its eligible_from date gets no sheet row at all, so it is unchanged here — no book lands on it while the arm runs.'
+           ELSE 'projection: the repairs hold at their bar and move to the good side at their day-one cost; probation keywords stay on the 20% side at their floor; failed keywords are killed with a pause row (→ $0) — the shipped reprice generator builds that row today; a leak reaches $0 only where a pause row for it sits on a pending book from the leak arm (tools/build_seat_moves_bulksheet.py, shipped 2026-08-23), checked row by row against the change log, and a leak no book carries keeps costing what it costs today; stalled probes are re-priced by the move on their own row — raised to the seat price where the live bid is below it, otherwise parked at the engine\'s park price — and keep spending at that price (the same linear bid→spend guess), because parking lowers a price and does not stop the spend, so they stay on the 20% side until a verdict arrives; engine probes keep their day-one cost; settling verdicts hold; untracked spend is unchanged until the ladder sees it. A keyword in a holdout campaign on or after its eligible_from date gets no sheet row at all, so it is unchanged here and a repair in one never moves to the good side.'
          END AS horizon_assumption
   FROM fam_read f CROSS JOIN k CROSS JOIN win),
 -- ── the lowest free seat number per working family
@@ -693,11 +714,15 @@ shape AS (
                   -- D5: on a projection the counts are the horizon's own and the verb is conditional
                   IF(f.horizon = 'today', FORMAT('%d seats costing $%.2f/day', f.seats_h, f.seats_cost_per_day),
                                           FORMAT('the %d seats would cost $%.2f/day', f.seats_h, f.seats_cost_per_day)),
-                  -- R-l, leak half: a projection may not spend back dollars no sheet recovers —
-                  -- the leak arm that would pause these keywords is not built yet, so the leaks
-                  -- are still costing on this horizon and the clause says which sheet they wait on
+                  -- R-l, leak half: a projection may still spend back only dollars a sheet
+                  -- actually recovers. The leak arm shipped, so the clause names BOTH counts —
+                  -- the leaks a pending book pauses, and the ones no book carries, which keep
+                  -- costing on this horizon exactly as before.
                   IF(f.horizon = 'today', FORMAT('%d leaks $%.2f/day', f.n_leaks, f.leak_per_day),
-                                          FORMAT('%d leaks still costing $%.2f/day (nothing pauses them until the leak arm ships)', f.n_leaks, f.leak_per_day)),
+                     CASE WHEN f.n_leaks = 0 THEN '0 leaks'
+                          WHEN f.n_leaks_off_book = 0 THEN FORMAT('all %d leaks paused by a pending leak book', f.n_leaks_on_book)
+                          WHEN f.n_leaks_on_book = 0 THEN FORMAT('%d leaks still costing $%.2f/day (no leak book carries them yet)', f.n_leaks_off_book, f.leak_per_day)
+                          ELSE FORMAT('%d of %d leaks paused by a pending leak book, %d still costing $%.2f/day', f.n_leaks_on_book, f.n_leaks, f.n_leaks_off_book, f.leak_per_day) END),
                   f.n_gaps, f.gap_per_day,
                   IF(f.open_capacity_per_day < 0, FORMAT('−$%.2f', -f.open_capacity_per_day), FORMAT('$%.2f', f.open_capacity_per_day)),
                   f.seats_settling, f.defense_per_day, 100 * COALESCE(f.at_line_band, 0),
@@ -710,7 +735,7 @@ shape AS (
                               -- R-l, the executable recovery: PAUSES ONLY. These are the only two
                               -- moves whose dollars provably leave the 20% side when the sheet
                               -- lands, and they are the only ones written in the (−$…/day) form.
-                              IF(f.n_leaks_exec > 0, FORMAT('pause the %d leaks on the next book (leak arm) (−$%.2f/day); ', f.n_leaks_exec, f.leak_exec_today), ''),
+                              IF(f.n_leaks_exec > 0, FORMAT('pause the %d leaks on the next leak book (tools/build_seat_moves_bulksheet.py) (−$%.2f/day); ', f.n_leaks_exec, f.leak_exec_today), ''),
                               IF(f.n_failed_exec > 0, FORMAT('kill the %d failed keywords on the next book with a pause row (−$%.2f/day); ', f.n_failed_exec, f.failed_exec_today), ''),
                               IF(f.n_bad_holdout > 0, FORMAT('%d keywords on the 20%% side ($%.2f/day) sit in holdout campaigns and get no sheet row of any kind while the arm runs, so nothing listed here moves them; ', f.n_bad_holdout, f.bad_holdout_today), ''),
                               IF(f.n_leaks_exec + f.n_failed_exec = 0, 'there is nothing to pause on the next book; ', ''),
@@ -1082,11 +1107,11 @@ shape AS (
     1 AS n_keywords,
     CAST(NULL AS STRING) AS horizon_assumption,
     IF(w.holdout AND run_day.d >= w.holdout_eligible_from, 'no sheet row — holdout campaign',
-            'pause it on the next book (leak arm); if its spend comes from search terms under a parked keyword, the negate is judged at the ad group') AS move,
+            'pause it on the next leak book (tools/build_seat_moves_bulksheet.py); if its spend comes from search terms under a closed keyword, the negate is judged at the ad group') AS move,
     FORMAT('%s (%s) reads %s on the ladder yet spent $%.2f/day on the basis window at bid $%.2f. %s%s',
                 w.target_text, w.campaign_name, IF(w.state = 'DEAD', 'dead', 'parked'), w.cost_today, COALESCE(w.current_bid, 0),
                 IF(w.holdout AND run_day.d >= w.holdout_eligible_from, 'HOLDOUT — do not touch; no sheet row.',
-                   'Pause it on the next book; if the spend is a search term under a parked keyword, negate it at the ad group (the acting grain).'),
+                   'Pause it on the next leak book; if the spend is a search term under a closed keyword, negate it at the ad group (the acting grain).'),
                 IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(w.holdout_eligible_from AS STRING)), '')) AS sentence,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 5, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day

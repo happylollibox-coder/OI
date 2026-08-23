@@ -147,19 +147,24 @@
 --       say so in words. Re-derived from the register's own SEAT / LEAK / GAP rows. On a snapshot
 --       where no campaign is yet suppressed this check is vacuous by construction; the branch is
 --       proven on TMP_ copies and the proof recorded in the SOP.
---   B35 No projection credits a pause no generator builds (R-l, leak half). A leak is a PARKED or
---       DEAD keyword that still spends; the sheet that would pause it is the leak arm of
---       tools/build_reprice_bulksheet.py, recorded in the SOP's object table as Task 3 and NOT
---       shipped — the shipped generator selects AT_BAR / REPRICE / FLOOR_PROBATION / LOSER only,
---       so it emits a pause row for a failed keyword and none for a leak. The day-one horizon is
---       defined as "the PENDING_UPLOAD book lands", and that book carries bid changes only. So
---       neither projection may take a leak's cost to $0: every LEAK row's day-one and re-judged
---       cost is its today cost (exactly, where no book row touches it), the 'closed but still
---       spending' CATEGORY still costs money on both projections wherever it costs money today,
---       no horizon assumption may say the leaks are paused, both projections must name the leak
---       arm as the unbuilt sheet the dollars wait on, and no projection sentence may read
---       "N leaks paused". The failed half is NOT affected: its pause row is built today, which is
---       exactly why the two halves are worded differently.
+--   B35 A projection credits a leak's pause ONLY where the sheet that pauses it EXISTS, row by row
+--       (R-l, leak half, after its own overrule clause fired). A leak is a PARKED-past-appointment
+--       or DEAD keyword that still spends. Until 2026-08-23 no generator built its pause row, so
+--       neither projection could take it to $0. The leak arm SHIPPED that day
+--       (tools/build_seat_moves_bulksheet.py), and R-l's recorded overrule path — "ship the leak
+--       arm — the sheet then exists and the branch is one line in the same two CASE expressions,
+--       with B35's first three legs flipping with it" — is what this check now enforces, in the
+--       ONLY form that stays honest: PER ROW, against the change log, never per category.
+--       This check re-derives the pending pause book ITSELF from FACT_PPC_CHANGE_LOG
+--       (upload_status = 'PENDING_UPLOAD', action = 'KEYWORD_PAUSE') and never reads the view's
+--       own belief about it. Then: (1) a LEAK with a pending pause row must reach $0 on BOTH
+--       projections; (2) a LEAK with no pending pause row and no book bid row must equal its
+--       today cost on both, to the cent; (3) a holdout-suppressed LEAK is never zeroed, whatever
+--       the change log says, because it gets no sheet row at all; (4) no horizon assumption may
+--       claim a blanket pause of the category — the credit is per row and the assumption must
+--       say so; (5) both projection assumptions still name the leak arm by its file, so a reader
+--       can find the sheet the dollars ride on. The failed half is unchanged: its pause row comes
+--       from the reprice generator and always has.
 --
 -- WHAT THIS SUITE CANNOT SEE (2026-08-23). The deploy command strips every `--` line, so the
 -- view's own header block does not exist in the deployed definition: no check here, and no query
@@ -374,13 +379,22 @@ stalled_cat AS (
          SUM(IF(horizon = 're-judged', cost_per_day, 0)) AS rejudged_cost,
          COUNTIF(horizon = 're-judged') AS n_rejudged_rows
   FROM r WHERE row_type = 'CATEGORY' AND category = 'probe — stalled' GROUP BY 1),
--- B35: the leak half of R-l. The LEAK rows priced on the three horizons, and the
--- 'closed but still spending' CATEGORY on the two projections. No generator builds a leak's
--- pause row today, so no projection may spend its dollars back.
+-- B35: the leak half of R-l, after the arm shipped. The pending PAUSE book is re-derived HERE
+-- from the change log — the check never asks the view what it believes is pending.
+pending_pause_chk AS (
+  SELECT DISTINCT CAST(campaign_id AS STRING) AS campaign_id, CAST(keyword_id AS STRING) AS keyword_id
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE upload_status = 'PENDING_UPLOAD' AND action = 'KEYWORD_PAUSE'
+    AND keyword_id IS NOT NULL AND keyword_id != ''),
 leak_rows AS (
-  SELECT family, campaign_id, keyword_id, cost_per_day, cost_day_one, cost_rejudged,
-         book_batch_id, COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from AS no_sheet
-  FROM r WHERE row_type = 'LEAK'),
+  SELECT l.family, l.campaign_id, l.keyword_id, l.cost_per_day, l.cost_day_one, l.cost_rejudged,
+         l.book_batch_id,
+         COALESCE(l.holdout, FALSE) AND l.as_of >= l.holdout_eligible_from AS no_sheet,
+         pp.keyword_id IS NOT NULL AS pause_pending
+  FROM r l
+  LEFT JOIN pending_pause_chk pp
+    ON pp.campaign_id = CAST(l.campaign_id AS STRING) AND pp.keyword_id = CAST(l.keyword_id AS STRING)
+  WHERE l.row_type = 'LEAK'),
 leak_cat AS (
   SELECT family,
          SUM(IF(horizon = 'today', cost_per_day, 0)) AS today_cost,
@@ -651,7 +665,7 @@ checks AS (
                    OR sentence LIKE '%pauses you can upload%'
                    -- a leak clause must name the book it rides on
                    OR (REGEXP_CONTAINS(sentence, r'pause the [0-9]+ leaks')
-                       AND NOT REGEXP_CONTAINS(sentence, r'pause the [0-9]+ leaks on the next book \(leak arm\)'))
+                       AND NOT REGEXP_CONTAINS(sentence, r'pause the [0-9]+ leaks on the next leak book \(tools/build_seat_moves_bulksheet\.py\)'))
                    -- a failed-keyword clause must name it too
                    OR (REGEXP_CONTAINS(sentence, r'kill the [0-9]+ failed keywords')
                        AND NOT REGEXP_CONTAINS(sentence, r'kill the [0-9]+ failed keywords on the next book'))
@@ -660,7 +674,7 @@ checks AS (
           FROM famrow WHERE row_type = 'FAMILY' AND horizon = 'today')
          + (SELECT COUNT(*) FROM r WHERE row_type = 'LEAK'
             AND NOT (COALESCE(holdout, FALSE) AND as_of >= holdout_eligible_from)
-            AND move NOT LIKE '%pause it on the next book (leak arm)%')
+            AND move NOT LIKE '%pause it on the next leak book (tools/build_seat_moves_bulksheet.py)%')
   UNION ALL
   SELECT 'B33 the re-judged horizon never zeroes a stalled probe (R-l applied to the projection): parking lowers a price, so a family paying for stalled probes today still pays for them when re-judged, and no horizon assumption claims they are parked to $0',
          (SELECT COUNTIF(today_cost > 0.005 AND (n_rejudged_rows = 0 OR rejudged_cost <= 0.005)) FROM stalled_cat)
@@ -684,33 +698,44 @@ checks AS (
          + (SELECT COUNTIF(horizon = 're-judged' AND horizon_assumption NOT LIKE '%holdout%')
             FROM r WHERE row_type = 'FAMILY')
   UNION ALL
-  SELECT 'B35 no projection credits a pause no generator builds (R-l leak half): a leak costs on day one and re-judged what it costs today, both assumptions name the unbuilt leak arm, and no sentence says the leaks are paused',
-         -- (1) no LEAK row may be zeroed on either projection while it costs money today
-         (SELECT COUNTIF(cost_per_day > 0.005
-                         AND (COALESCE(cost_day_one, 0) <= 0.005 OR COALESCE(cost_rejudged, 0) <= 0.005))
+  SELECT 'B35 a projection credits a leak pause only where the sheet exists, row by row (R-l leak half after the arm shipped): a leak on a PENDING_UPLOAD pause row reaches $0 on both projections, a leak on none equals today, a holdout leak is never zeroed, and both assumptions name the leak arm by its file',
+         -- (1) a leak the pending pause book carries must reach $0 on BOTH projections
+         (SELECT COUNTIF(pause_pending AND NOT no_sheet
+                         AND (COALESCE(cost_day_one, 1) > 0.005 OR COALESCE(cost_rejudged, 1) > 0.005))
           FROM leak_rows)
-         -- (2) and where no book row touches it, both projections equal today to the cent
+         -- (2) a leak NO pause row and NO bid row carries must equal today on both, to the cent
          --     (0.005: the register publishes costs rounded to four decimals on each row)
-         + (SELECT COUNTIF(book_batch_id IS NULL
+         + (SELECT COUNTIF(NOT pause_pending AND book_batch_id IS NULL
                            AND (ABS(COALESCE(cost_day_one, 0) - cost_per_day) > 0.005
                                 OR ABS(COALESCE(cost_rejudged, 0) - cost_per_day) > 0.005))
             FROM leak_rows)
-         -- (3) the family CATEGORY says the same thing on both projections
-         + (SELECT COUNTIF(today_cost > 0.005
-                           AND (n_day1_rows = 0 OR day1_cost <= 0.005
-                                OR n_rejudged_rows = 0 OR rejudged_cost <= 0.005))
-            FROM leak_cat)
-         -- (4) no assumption may claim the pause
-         + (SELECT COUNTIF(horizon_assumption LIKE '%leaks are paused%'
+         -- (3) a holdout-suppressed leak gets no sheet row at all: never zeroed, log or no log
+         + (SELECT COUNTIF(no_sheet AND cost_per_day > 0.005
+                           AND (COALESCE(cost_day_one, 0) <= 0.005 OR COALESCE(cost_rejudged, 0) <= 0.005))
+            FROM leak_rows)
+         -- (4) the 'closed but still spending' CATEGORY may only fall to $0 on a projection when
+         --     EVERY leak in that family is on the pending pause book
+         + (SELECT COUNTIF(lc.today_cost > 0.005 AND lc.day1_cost <= 0.005
+                           AND (SELECT COUNTIF(NOT pause_pending OR no_sheet) FROM leak_rows lr WHERE lr.family = lc.family) > 0)
+            FROM leak_cat lc)
+         -- (5) no assumption may claim a blanket pause of the category
+         + (SELECT COUNTIF(horizon_assumption LIKE '%the leaks are paused%'
                            OR horizon_assumption LIKE '%leaks stay paused%'
                            OR horizon_assumption LIKE '%closed-but-spending keywords are paused%')
             FROM r WHERE row_type IN ('FAMILY', 'REFERENCE') AND horizon_assumption IS NOT NULL)
-         -- (5) both projections must name the unbuilt sheet the dollars wait on
-         + (SELECT COUNTIF(horizon IN ('day one', 're-judged') AND horizon_assumption NOT LIKE '%leak arm%')
+         -- (6) both projections must still name the leak arm by its file
+         + (SELECT COUNTIF(horizon IN ('day one', 're-judged')
+                           AND horizon_assumption NOT LIKE '%build_seat_moves_bulksheet.py%')
             FROM r WHERE row_type = 'FAMILY')
          -- (6) and no projection sentence may read 'N leaks paused'
-         + (SELECT COUNTIF(horizon != 'today' AND sentence LIKE '%leaks paused%')
-            FROM famrow WHERE row_type = 'FAMILY')
+         -- (7) a projection sentence may say a leak is paused ONLY where a pending pause row
+         --     carries it: 'all N leaks paused' is forbidden while any leak of that family is
+         --     off-book or holdout-suppressed, and the mixed form must name both counts.
+         + (SELECT COUNTIF(f.horizon != 'today'
+                           AND REGEXP_CONTAINS(f.sentence, r'all [0-9]+ leaks paused')
+                           AND (SELECT COUNTIF(NOT lr.pause_pending OR lr.no_sheet)
+                                FROM leak_rows lr WHERE lr.family = f.family) > 0)
+            FROM famrow f WHERE f.row_type = 'FAMILY')
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks ORDER BY check_name;

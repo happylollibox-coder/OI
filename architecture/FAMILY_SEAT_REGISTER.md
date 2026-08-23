@@ -82,13 +82,13 @@ register.
 | **R-c — engine parity stands** (2026-08-22, closes Open ruling 1) | Any standing applied raise that expired the engine's own test is stalled, whatever its size: a keyword that could not buy the verdict's clicks in the probe window at its raised bid is neither earning nor being tested. The register publishes the raise on the row (`raise_old_bid → raise_new_bid`, `raised_on`, `clicks_since_raise`, `days_since_raise`) and words the sentence by its size: a raise of `k.entry_raise_ratio` (1.5×) or more reads "entered at $1.00 on Aug 4 — 8 clicks in the 17 complete days since"; a smaller one reads "was nudged $0.45→$0.47 on Aug 4 — 0 clicks …"; a bid lifted past the logged raise adds ", now sitting at $1.00". Proposal on both, superseded by R-f (2026-08-22): the move branches on the sign of (seat price − live bid) and the park price is the engine's published `bid_park`, never the floor and never a literal. The seat price is READ from the budget engine's seat economics (`T_OOB_SEAT_ECONOMICS.seat_cpc`, materialised from `V_OOB_KEYWORD`), never restated; a campaign outside the engine has no seat price and the sentence says so. |
 | **R-d — no test clock** (2026-08-22, closes Open ruling 2) | A TRIAL whose bid moved (more than one distinct bid in `DIM_KEYWORD`'s history) with NO applied change-log row — or away from the last logged bid since, other than the activation-floor lift R-b already treats as the raise standing — is NOT seated and is NOT "waiting": it is its own category **"waiting — no test clock"** on the 80% side, with the sentence "this bid was set outside the change log, so there is no date to judge it from" and the move "log the bid (or restore it by sheet) so the clock can start". A `REDUCE_BID` that lands on an entry price is a cut, not an entry (Bottle "truth or dare game" stays waiting). |
 | **R-e — idle at the floor** (2026-08-22) | A TRIAL at the park bid with $0 spend and 0 clicks in the basis window is the category **"idle at the floor"**: $0, shown so nothing is silent, on neither side (no ratio is affected). |
-| **R-f — a stalled probe at or above the seat price is parked, never "raised"** (2026-08-22) | The stalled-probe proposal branches on the SIGN of (seat price − live bid). Live bid BELOW the seat price: "raise to the seat price $X to get a verdict". Live bid AT OR ABOVE it: it could not buy a verdict even at the seat price, so the move is "park it — bid to the engine's park price and let the ladder's revive cycle re-test it". The park price is the engine's own `bid_park`, published by `V_OOB_KEYWORD` (column added 2026-08-22) and read through `T_OOB_SEAT_ECONOMICS` — never a literal; a campaign outside the engine has no seat price and is told so, with the same park price. A "raise" to a price at or below the live bid is never printed (asserted, B10). **`bid_park` is not a floor and not a channel price.** It reads $0.25 on all 212 rows of `T_OOB_SEAT_ECONOMICS` today across all nine engine roles, while `bid_floor` on those same rows ranges $0.10–$0.25 and only 69 of them are SB — so the flat $0.25 is the house PARK price the engine's PARK / PARK_WAIT actions bid to, which happens to coincide with the SB video floor and sits ABOVE the $0.10 and $0.20 floors. Calling it "the SB video park price" is wrong twice over: it is not SB-only and it is not a floor. (The same confusion once cost three phantom kills — the keyword-state ladder borrowed `bid_park` as a flat floor; see `V_BID_FLOOR` / `FN_BID_FLOOR`.) *To overrule:* name another park source (e.g. the channel floor `FN_BID_FLOOR`) — the register then reads that column; no literal. |
+| **R-f — a stalled probe at or above the seat price is parked, never "raised"** (2026-08-22) | The stalled-probe proposal branches on the SIGN of (seat price − live bid). Live bid BELOW the seat price: "raise to the seat price $X to get a verdict". Live bid AT OR ABOVE it: it could not buy a verdict even at the seat price, so the move is "park it — bid to the engine's park price and let the ladder's revive cycle re-test it". The park price is the engine's own `bid_park`, published by `V_OOB_KEYWORD` (column added 2026-08-22) and read through `T_OOB_SEAT_ECONOMICS` — never a literal; a campaign outside the engine has no seat price and is told so, with the same park price. A "raise" to a price at or below the live bid is never printed (asserted, B10). **`bid_park` is not a floor and not a channel price.** It is FLAT across every engine role, while `bid_floor` on the same rows varies by channel and creative, and most of those rows are not SB — so it is the house PARK price the engine's PARK / PARK_WAIT actions bid to, which merely coincides with the SB video floor and sits above the SP and SB-collection floors. Do not pin the figures (Standing Rule 0) — read them: `SELECT role, COUNT(*) n, COUNT(DISTINCT bid_park) distinct_park, MIN(bid_park) min_park, MAX(bid_park) max_park, MIN(bid_floor) min_floor, MAX(bid_floor) max_floor, COUNTIF(UPPER(channel) = 'SB') sb FROM onyga-482313.OI.T_OOB_SEAT_ECONOMICS GROUP BY 1 ORDER BY 1`. Calling it "the SB video park price" is wrong twice over: it is not SB-only and it is not a floor. (The same confusion once cost three phantom kills — the keyword-state ladder borrowed `bid_park` as a flat floor; see `V_BID_FLOOR` / `FN_BID_FLOOR`.) *To overrule:* name another park source (e.g. the channel floor `FN_BID_FLOOR`) — the register then reads that column; no literal. |
 | **R-g — the at-the-line band is the judged family's OWN noise** (2026-08-22, closes Open ruling 2) | `at_line_band` is derived per family: stddev ÷ mean of THAT family's daily spend over the 28-day context window ÷ √(basis days). One family's spend level never decides whether another is at the line, and the band is a RATIO published in POINTS, never a dollar figure — a small family's spend is noisier relative to its own mean than a large one's, which is the whole reason the band is per-family. Do not pin the number (Standing Rule 0) — read it: `SELECT family, at_line_band, at_line_band_derivation FROM onyga-482313.OI.V_FAMILY_SEAT_REGISTER WHERE row_type = 'FAMILY' AND horizon = 'today'`. The band and its derivation in words are published on every FAMILY row (B25 re-derives it). *To overrule:* name a pooled or fixed band — it becomes a declared constant in `k`, recorded here, never a hidden literal. |
 | **R-h — a parked keyword with an appointment is a seat, not a leak** (2026-08-22) | The ladder parks a keyword at the park bid WITH a re-verdict appointment (`FACT_KEYWORD_STATE.next_check_date`): until that date it is being tested by the revive cycle. PARKED + spend on the basis window + appointment on or after the snapshot date = a SEAT, occupant kind **"parked — awaiting re-verdict"** (20% side, cost = its spend, move "no move — re-judged on <date>"). PARKED past its appointment with spend, or DEAD with spend = LEAK (pause row). **Which case held (measured 2026-08-22):** every PARKED row on the snapshot carried a usable `next_check_date` (the `next_check_what` texts read "re-read at settle" / "14d revival sweep re-checks" / "revival proposed"), so the appointment reading is LIVE; the spec's original all-leak reading was not needed. The ledger seats them (`SP_MAINTAIN_FAMILY_SEATS`; closure code `PARK_LAPSED` when the appointment passes or the spend stops; A16). *To overrule:* treat every PARKED spender as a leak — one branch in the occupant set and the code, the acceptance rows A16 / B26 flip with it. |
 | **R-i — an overdue settling verdict is named overdue** (2026-08-22) | `REVIVED_SETTLING` / `PENDING_SETTLE` with `next_check_date` before the snapshot date stays on the 80% side (waiting = 80, Ori's ruling) but the sentence and the move read "was due to settle on <date> — overdue by N days; the ladder has not re-judged it". The cause is upstream and is being diagnosed read-only; the register never changes the ladder (B18). *To overrule:* move overdue settling to the 20% side — one side value in the codes table. |
 | **R-j — "too few clicks yet" needs clicks** (2026-08-22) | "waiting — too few clicks yet" requires clicks > 0 on the basis window (spec §3). A TRIAL with $0 and 0 clicks that is neither at the floor nor no-clock is **"waiting — not yet serving"**: $0, published, on no side (affects no ratio) (B27). *To overrule:* fold it back into waiting — one branch in the code. |
 | **R-k — a gap is worded by its MEASURED cause** (2026-08-22; refined the same day after verification) | The original reading — "the verdict ladder reads `DIM_KEYWORD` only, so a product target never gets a verdict" — was FALSE on live rows: SP product targets live in `DIM_KEYWORD`, the ladder tracks them and this register seats them (repairs, probes, settling and parked seats with `asin=` targets exist on the snapshot; query the SEAT rows for `asin=` to see them — and when COUNTING product targets, match `asin=` OR `category=`: the snapshot carries both prefixes, and an `asin=`-only count silently drops the `category=` rows, a mislabel a verification pass actually caught). The real blind spot is narrower: SB video / PT product-target rows reach the warehouse with **`keyword_id` −1** — no keyword id, so no `DIM_KEYWORD` row can exist and the ladder cannot see them. Every GAP row is therefore worded by the cause the view MEASURES (`keyword_id` and the current `DIM_KEYWORD` state): `keyword_id` −1 → "no keyword id — the ladder cannot see it; a ruling for Ori, not a mapping fix"; a paused/archived current row → "trailing spend — leaves the universe when it stops; no verdict is coming and none is needed"; an enabled row → "verdict arrives on the next state run"; a real id with no current row → "check why". The blanket phrase "the verdict ladder does not track product targets" is retired and B19 asserts it appears nowhere. **Extending the pipeline/ladder to the no-keyword-id SB video rows is a RULING FOR ORI**, not built here. *To overrule:* give those rows an identity the ladder can read (or extend `SP_SNAPSHOT_KEYWORD_STATE` to a synthetic key) — the blind gap rows then disappear on their own. |
-| **R-l — the gap-closure arithmetic** (2026-08-22, settled; three verifier rounds died on it) | A family's "what closes the gap" clause may count as RECOVERED TODAY only dollars that provably leave the bad side when the sheet lands — that is, a **PAUSE** (the keyword's spend goes to $0) and nothing else: a leak paused, or a failed keyword killed with a pause row. A row in a holdout campaign gets no sheet row from its `eligible_from`, so it recovers nothing either. **Parking a stalled probe LOWERS its price; the spend does not vanish** — it is its own line, its dollars named as spend at risk of continuing, and it is EXCLUDED from the recovered-today total. **Re-pricing a repair recovers nothing today by construction** — its own line too, named as a change of price whose result arrives at the re-judged horizon. The sentence must, in this order: name the executable recovery (pauses only), name the gap, state plainly whether the recovery closes it, then say what the remaining dollars depend on and point to the family's re-judged row. No projection may appear inside the recovered-today number, and no sentence may claim a closure its own executable recovery does not deliver. The acceptance check re-derives the recovered-today figure from the register's OWN per-row costs — the today-horizon LEAK rows and failed SEAT rows, holdout-suppressed rows removed — and never from the sentence it is testing, comparing within a **$0.02** tolerance whose reason is on the row: the sentence renders one aggregate to two decimals while the re-derivation sums per-row costs each rounded on its own row (R-m). B29 / B30 / B31. **R-l binds the PROJECTIONS too (2026-08-23, fifth repair pass).** (a) The re-judged horizon used to model parking a stalled probe as taking the spend to $0 — the very belief R-l retired — in the exact row the today sentence points the reader at. A stalled probe is now re-priced by the move on its OWN row (R-f: raise to the seat price where the live bid is below it, otherwise park at the engine's park price) and keeps spending at that price on the same linear bid→spend guess the day-one horizon uses; it stays on the 20% side until a verdict arrives (B33). (b) Both projections respect the holdout arm: a campaign in the holdout arm from its `eligible_from` gets no sheet row of any kind, so neither day one nor re-judged may book a change for it — its cost on both equals its cost today, a repair in one never moves to the good side and keeps the 'losing — in repair' category, and the family clause lists no move for it (B34; B10 and B11 carry the same guard). (c) The FAMILY row names the BOOK its pauses ride on instead of promising an upload 'today': every dollar of the recovered-today figure rides the next book a generator builds — the leak arm of `tools/build_reprice_bulksheet.py` for a leak (Task 3, not yet shipped), the shipped reprice generator's pause row for a failed keyword — exactly as the LEAK row's own move already said. The arithmetic is untouched; only the promise is (B32). **(d) The leak half binds the projections too (2026-08-23, sixth repair pass).** (c) changed the today sentence and left both projections crediting the same unbuilt sheet: `cost_day1` and `cost_rejudged` took every LEAK row to $0, and the published day-one assumption attributed that pause to the PENDING_UPLOAD book — a book that carries bid changes only. Neither projection zeroes a leak now: a leak costs on day one and on re-judged what it costs today (a book row that touches one re-prices it linearly like any other keyword, never to $0), both assumptions name the unbuilt leak arm the dollars wait on, and the projection sentence reads "N leaks still costing $…/day (nothing pauses them until the leak arm ships)" instead of "N leaks paused". The FAILED half is untouched and still goes to $0 on re-judged, because the shipped generator builds that pause row today — same rule, opposite answer, because one sheet exists and the other does not (B35). *To overrule:* ship the leak arm — the sheet then exists and the branch is one line in the same two CASE expressions, with B35's first three legs flipping with it. *To overrule (the original rule):* name another move whose dollars provably leave the bad side on upload — it joins the pause set in one branch of the view and the same branch of B29. |
+| **R-l — the gap-closure arithmetic** (2026-08-22, settled; three verifier rounds died on it) | A family's "what closes the gap" clause may count as RECOVERED TODAY only dollars that provably leave the bad side when the sheet lands — that is, a **PAUSE** (the keyword's spend goes to $0) and nothing else: a leak paused, or a failed keyword killed with a pause row. A row in a holdout campaign gets no sheet row from its `eligible_from`, so it recovers nothing either. **Parking a stalled probe LOWERS its price; the spend does not vanish** — it is its own line, its dollars named as spend at risk of continuing, and it is EXCLUDED from the recovered-today total. **Re-pricing a repair recovers nothing today by construction** — its own line too, named as a change of price whose result arrives at the re-judged horizon. The sentence must, in this order: name the executable recovery (pauses only), name the gap, state plainly whether the recovery closes it, then say what the remaining dollars depend on and point to the family's re-judged row. No projection may appear inside the recovered-today number, and no sentence may claim a closure its own executable recovery does not deliver. The acceptance check re-derives the recovered-today figure from the register's OWN per-row costs — the today-horizon LEAK rows and failed SEAT rows, holdout-suppressed rows removed — and never from the sentence it is testing, comparing within a **$0.02** tolerance whose reason is on the row: the sentence renders one aggregate to two decimals while the re-derivation sums per-row costs each rounded on its own row (R-m). B29 / B30 / B31. **R-l binds the PROJECTIONS too (2026-08-23, fifth repair pass).** (a) The re-judged horizon used to model parking a stalled probe as taking the spend to $0 — the very belief R-l retired — in the exact row the today sentence points the reader at. A stalled probe is now re-priced by the move on its OWN row (R-f: raise to the seat price where the live bid is below it, otherwise park at the engine's park price) and keeps spending at that price on the same linear bid→spend guess the day-one horizon uses; it stays on the 20% side until a verdict arrives (B33). (b) Both projections respect the holdout arm: a campaign in the holdout arm from its `eligible_from` gets no sheet row of any kind, so neither day one nor re-judged may book a change for it — its cost on both equals its cost today, a repair in one never moves to the good side and keeps the 'losing — in repair' category, and the family clause lists no move for it (B34; B10 and B11 carry the same guard). (c) The FAMILY row names the BOOK its pauses ride on instead of promising an upload 'today': every dollar of the recovered-today figure rides the next book a generator builds — the leak arm of `tools/build_reprice_bulksheet.py` for a leak (Task 3, not yet shipped), the shipped reprice generator's pause row for a failed keyword — exactly as the LEAK row's own move already said. The arithmetic is untouched; only the promise is (B32). **(d) The leak half binds the projections too (2026-08-23, sixth repair pass).** (c) changed the today sentence and left both projections crediting the same unbuilt sheet: `cost_day1` and `cost_rejudged` took every LEAK row to $0, and the published day-one assumption attributed that pause to the PENDING_UPLOAD book — a book that carries bid changes only. Neither projection zeroes a leak now: a leak costs on day one and on re-judged what it costs today (a book row that touches one re-prices it linearly like any other keyword, never to $0), both assumptions name the unbuilt leak arm the dollars wait on, and the projection sentence reads "N leaks still costing $…/day (nothing pauses them until the leak arm ships)" instead of "N leaks paused". The FAILED half is untouched and still goes to $0 on re-judged, because the shipped generator builds that pause row today — same rule, opposite answer, because one sheet exists and the other does not (B35). **(e) THE LEAK HALF'S OVERRULE HAS FIRED (2026-08-23, Task 3).** The leak arm shipped as `tools/build_seat_moves_bulksheet.py`, so the sheet that pauses a leak now exists and (d) no longer holds. The flip was taken in the ONLY form that stays honest: **per row, measured against the change log, never per category.** A LEAK reaches $0 on day one and on re-judged exactly when a `KEYWORD_PAUSE` row for that campaign+keyword sits at `upload_status = 'PENDING_UPLOAD'` in `FACT_PPC_CHANGE_LOG` (the `pending_pause` CTE); a leak no book carries still equals its today cost on both projections, and a holdout-suppressed leak is never zeroed whatever the log says. Both horizon assumptions name the generator by its file so a reader can find the sheet the dollars ride on, and the projection clause names BOTH counts — the leaks a pending book pauses and the ones no book carries. B35 was rewritten to enforce this, and it re-derives the pending pause book from the change log itself rather than asking the view what it believes. *To overrule:* nothing further — the sheet either exists for a row or it does not, and the check reads the log. *To overrule (the original rule):* name another move whose dollars provably leave the bad side on upload — it joins the pause set in one branch of the view and the same branch of B29. |
 | **R-m — report prose is not an artifact** (2026-08-22) | A number in an agent's report is ephemeral. A false or drifted figure blocks ONLY if it lives in a committed file or a published sentence, cited `path:line`; otherwise it is a note. **Rounding differences of one cent between an aggregate and the sum of independently rounded components are display facts, not defects** — stated here once, and not re-litigated anywhere in this design. Every tolerance a check uses carries its reason on the check. |
 
 ## Objects
@@ -99,7 +99,9 @@ register.
 | `SP_MAINTAIN_FAMILY_SEATS` | Orchestrator Task 20.8b, right after `SP_SNAPSHOT_KEYWORD_STATE`. Closes, reopens, admits, observes. Idempotent on the same snapshot. | shipped |
 | `V_FAMILY_SEAT_REGISTER` | FAMILY / CATEGORY / SEAT / OPEN_SEAT / LEAK / GAP / NO_CLOCK / ABSORB / REFERENCE / UNMAPPED rows — the object Ori reads. | shipped |
 | `T_OOB_SEAT_ECONOMICS` | The budget engine's seat economics (slots, seat_rank, seat_cpc, role, and since 2026-08-22 the engine's park price `bid_park` — R-f) materialised once per pass from `V_OOB_KEYWORD` by `SP_REFRESH_CUBE_TABLES` step 0b, right after `T_LIFT_PROBES`. Exists because `V_OOB_KEYWORD` is a planner-ceiling view measured in minutes and the register may never inline it. | shipped |
-| leak arm of `tools/build_reprice_bulksheet.py` | pause rows + ad-group-grain negates for closed-but-spending keywords. | Task 3 |
+| `tools/build_seat_moves_bulksheet.py` | THE LEAK BOOK — one pause row per pausable LEAK row, or one stated no-action reason; ad-group-grain negatives for the search terms bleeding under a closed keyword. A SIBLING of the reprice book, not an arm of it (the argument is in its docstring and repeated below). Batch `seat_moves_<day>_<HHMM>` logged `PENDING_UPLOAD`; `--mark-uploaded` when Ori has uploaded. | shipped 2026-08-23 |
+| `tools/build_restore_seat_moves_bulksheet.py` | Puts back the state every paused row carried. Names every negative it CANNOT undo, because a sheet cannot. | shipped 2026-08-23 |
+| `scripts/bigquery/tests/SEAT_MOVES_LEAK_ARM_probe.sql` | The TMP_ probe that exercises the leak arm's branches the live day does not reach. Real evidence, synthetic membership. | shipped 2026-08-23 |
 | `V_DAILY_BRIEF` SEATS section, `SeatRegister` cube | the morning surface. | Task 4 |
 | `V_ENGINE_HEALTH` checks | reconciliation, idempotence, every occupant numbered. | Task 5 |
 
@@ -584,9 +586,10 @@ exact row the today sentence sends the reader to. Three things:
    keeps its "losing — in repair" category, and the family clause lists no move for it. B34 asserts
    it; B10, B11 and B30's re-derivation carry the same guard.
 3. **The FAMILY row names the book its pauses ride on.** It said "the pauses you can upload today",
-   but today every dollar of that figure comes from LEAK rows and the leak arm that would emit their
-   pause rows is Task 3, not yet shipped — while the LEAK row's own move had always said "pause it
-   on the next book (leak arm)". The FAMILY row now says the same thing. The arithmetic did not
+   but at the time every dollar of that figure came from LEAK rows and the leak arm that would emit
+   their pause rows was Task 3, not yet built — while the LEAK row's own move had always named the
+   next book. The FAMILY row now says the same thing. (The arm shipped on 2026-08-23; both clauses
+   now name it by its file, `tools/build_seat_moves_bulksheet.py`.) The arithmetic did not
    change; the promise did. B32 asserts it, and open ruling 12 records what is still Ori's.
 
 **TDD record (fifth pass, 2026-08-23).** Against the LIVE deployed view the rewritten B31 read 3
@@ -833,6 +836,135 @@ price. Folding the build into `SP_SNAPSHOT_ENGINE_PROPOSALS`, which already eval
 `V_OOB_KEYWORD`, recovers the whole of it, tail included; keeping it where it is buys the register a
 table with the same freshness contract as `T_LIFT_PROBES`. Re-measure before ruling: run the timed
 command at least three times and read the slot-minutes beside the seconds.
+
+## The leak arm (Task 3 — `tools/build_seat_moves_bulksheet.py`)
+
+Shipped 2026-08-23. The register says which keywords leak; this file is the sheet that stops them.
+It prepares only — it never uploads, never moves a bid, never touches a budget.
+
+### Why a sibling file and not an arm of the reprice book
+
+The plan allowed either and asked for the argument. Three facts decided it, and they are the
+reasons to keep them apart if anyone is ever tempted to merge them.
+
+1. **Different population, different question.** The reprice book's population is the ladder's LIVE
+   half — `AT_BAR` / `REPRICE` / `FLOOR_PROBATION` / `LOSER` — and its whole body is bid arithmetic:
+   the move cap, the placement translation, the thin-evidence gate, the sign-of-the-bar doctrine.
+   A leak has no price to compute. Its keyword is already closed; the only question is whether the
+   switch is still on.
+2. **Different reversibility.** Every row the reprice book emits is undone by one restore row. Half
+   of what the leak book emits — the negatives — cannot be undone by a sheet at all. Two files, two
+   restore promises, each of them true.
+3. **Different batch, different grain.** A negative acts on the AD GROUP, not on the keyword the
+   register listed, and its evidence is summed across every product and every keyword in that group.
+   Logging it inside the reprice batch would put two grains under one batch id.
+
+What is shared IS shared, imported and not re-typed: the sheet headers and sheet names, the pause
+rows, the SQL-literal quoting, the change-log batch discipline, the holdout interlock.
+
+### What is pausable — and the earlier claim that is retired
+
+An earlier report said no leak pause is executable "because the ladder requires floor probation
+first". That is a misreading of the ladder and it does not survive contact with
+`SP_SNAPSHOT_KEYWORD_STATE`. Read the raw ladder in order:
+
+- **Probation gates exactly one rung.** `WHEN probation_elapsed AND at_floor THEN 'LOSER'` — the
+  only kill of a keyword that is below its bar but *still ordering*. The reprice book owns that
+  pause, and that is the rung the earlier claim was describing.
+- **DEAD is the FIRST rung and a different question.** The verdict's own clicks with ZERO orders,
+  fired whatever the bid and whatever the probation clock says, `next_check_date` NULL, reason
+  "tested loser — thesis falsified; only family sibling evidence reopens it". Nothing is pending on
+  a DEAD row; there is no probation for it to complete.
+- **PARKED is the revive cycle's holding pen.** R-h seats a PARKED keyword while its appointment is
+  still ahead; the register publishes it as a LEAK only once that appointment has PASSED. Nothing is
+  testing it either.
+
+So a LEAK row is **pausable** when all of these hold, and each is named on the row when it does not:
+
+| rule | not pausable when | what the row says instead |
+|---|---|---|
+| still serving | Amazon's own record does not read ENABLED | `ALREADY_PAUSED` — trailing spend from before it was switched off; the row would change nothing |
+| a live record exists | neither the keyword feed nor `DIM_KEYWORD` has a current row | `LIVE_STATE_UNKNOWN` — never pause a row whose live state you cannot see |
+| nothing pending | PARKED with its appointment still ahead | `APPOINTMENT_PENDING` — that is a seat, and the register needs a look |
+| holdout (house rule 13) | the campaign is in the HOLDOUT arm on or after `eligible_from` | `HOLDOUT_EXCLUDED` — no sheet row of any kind |
+| the season ledger | `V_KEYWORD_CONTEXT_GATE` BLOCK_CUT on the text | `SEASON_BLOCKED` — a pause is the largest cut there is |
+| defense | brand defense | `DEFENSE_EXEMPT` — defense is never judged on profit |
+
+Two of these can never fire on a register row as the pipeline stands today and are guards against a
+RACE, not against the ladder: the ladder's universe is enabled keywords only, so `ALREADY_PAUSED`
+and `LIVE_STATE_UNKNOWN` exist because Amazon's live state can change between the snapshot the
+register reads and the moment the sheet is built. Both are exercised on the TMP_ probe.
+
+### The negatives, and the grain they are judged on
+
+Candidates are the engine's own `NEGATE_TERM` proposals for the leaking keyword
+(`T_WEEKLY_RUN_NEGATIVE`, the materialised `V_ADS_COACH` negate list — already deduped against
+`DE_NEGATIVE_KEYWORDS` / `DE_NEGATIVE_TARGETS` and already fit-, season- and defense-guarded). The
+leak book then re-derives the evidence **independently** from `FACT_AMAZON_ADS` at
+campaign × ad group × search term — never ASIN-sliced, because that is the grain a negative actually
+switches off — and refuses any candidate whose ad group took an order on the term in the window, is
+net-positive on it over the window, is net-positive on it over its whole LIFETIME (a block is
+permanent), sells it organically (the SQP guard, group-wide), has fewer clicks on it than the coach's
+published global click floor, or has stopped drawing clicks in the last five complete days.
+
+**A negative sits BESIDE a pause, not instead of it**, because they act at different grains: the
+pause stops one target, the negative stops the term for every keyword and every product in the ad
+group and survives the pause. The one exception is MEASURED, not assumed: where the leak's target IS
+the term (a product target on the very ASIN the term reports) and that one target drew ALL of the ad
+group's clicks on it, the pause already removes every dollar the negative would, and a negative on an
+ad group's own deliberate target is a contradiction. That row is refused `SELF_TARGET_PAUSE_COVERS`
+with its measurement on it.
+
+**A negative cannot be undone by a sheet, and the README says so.** It is CREATED without an id;
+archiving it later needs the id Amazon assigns at creation, and the warehouse's negative-keyword feed
+has been frozen since 2026-01-03 (`DE_NEGATIVE_KEYWORDS` is the registry of record precisely because
+the feed stopped), so the id never arrives on its own. The restore generator prints every negative it
+cannot undo rather than staying silent about the gap.
+
+**A negative is never counted as money recovered today.** R-l counts pauses only; the dollars printed
+beside a negative are what the ad group has already lost on the term, not a saving.
+
+### The books, and how they reach Amazon
+
+`seat_moves_<warehouse day>_<HHMM>`, logged `PENDING_UPLOAD` at build time so the batch id is on
+record while nothing has reached Amazon. `PENDING_UPLOAD` keeps the rows out of
+`V_PPC_CHANGE_LOG_APPLIED`, so the state machine never re-reads a file that is still on disk as
+changes that happened. `--mark-uploaded BATCH` when Ori has uploaded; `--supersede BATCH` labels an
+earlier never-uploaded book `SUPERSEDED_NEVER_UPLOADED`. **A log row is never deleted.** Every date
+the book carries — the batch id and the file name included — is on the WAREHOUSE's clock, because the
+machine running it can already be on tomorrow while Los Angeles is not.
+
+Sheet routing reads the campaign DIMENSION first and the ladder's channel as a fallback, and a
+disagreement between the two is raised rather than resolved silently: one campaign in this account
+is named `...SP/BROAD...` and is a real SB campaign, and putting an SP row on the SB sheet fails the
+whole upload.
+
+### Proving it on a day the data does not exercise it
+
+The live register's LEAK set is small and does not reach every branch. `--register-table` and
+`--negates-table` point the generator at TMP_ copies; anything other than the live default must be
+named `TMP_`/`TEMP_`, and using either flag FORCES `--no-log`, so a synthetic batch can never reach
+the change log. `--as-of DATE` evaluates the doctrine as if today were another day — the only way to
+exercise a rule that arms in the future (the holdout arm) — and is allowed only together with a TMP_
+source, so a live book can never be built for a day that is not today.
+
+The probe that builds those copies is `scripts/bigquery/tests/SEAT_MOVES_LEAK_ARM_probe.sql`. It
+injects **membership**, never evidence: every row it names is a real campaign, a real keyword and a
+real search term whose block-grain record comes from `FACT_AMAZON_ADS` unchanged. It writes only
+`TMP_` tables; no live table is touched (house rule 15).
+
+    bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+      "$(grep -v '^ *--' scripts/bigquery/tests/SEAT_MOVES_LEAK_ARM_probe.sql)"
+    .venv/bin/python tools/build_seat_moves_bulksheet.py \
+      --register-table TMP_SEATREG_T3 --negates-table TMP_NEGATES_T3 -o .tmp/probe.xlsx
+    .venv/bin/python tools/build_seat_moves_bulksheet.py \
+      --register-table TMP_SEATREG_T3 --negates-table TMP_NEGATES_T3 --as-of 2026-09-01 -o .tmp/probe_holdout.xlsx
+
+The doctrine rules themselves are unit-tested without a warehouse in `tools/tests/test_seat_moves.py`
+(`.venv/bin/python -m pytest tools/tests/test_seat_moves.py`). The live assertions — every register
+LEAK row maps to exactly one sheet row or one stated no-action reason, zero holdout rows, zero
+negates on a term profitable at ad-group grain, the logged batch equals the sheet — run inside the
+generator on every build and stop it before a sheet is written.
 
 ## Open rulings for Ori (register, 2026-08-22)
 
