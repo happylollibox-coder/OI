@@ -407,7 +407,7 @@ the live share is whatever `DE_PLAN_CONFIG` declares for today's state, which ma
 
 ---
 
-## 2. The judgement layer (Task 1, v27.133)
+## 2. The judgement layer (Task 1, v27.133 · repaired v27.134)
 
 Three objects, deployed in this order:
 
@@ -479,12 +479,38 @@ the floor and sits just under its bar (§1b).
 ### Who decided each row
 
 `decided_by` is the ruling (`P-3`, `P-5`, `P-14b`) and `settle_arm` is what the correction did
-(`SETTLED`, `CORRECTED`, `PROMOTED_ON_FRESH`, `HELD_UNSETTLED`, `UNCORRECTED_NO_CURVE`). The order
-of the arms in the view is: GOOD on the corrected window → **HELD_UNSETTLED** (the guard) → GRACE
-(P-5) → LOSING / ONE_ORDER / NO_SALE / NOT_SERVING. The guard is tested **before** grace so a
-one-window grace is not spent while the evidence is still arriving. (`tools/build_reprice_bulksheet.py
---rule-b` orders grace first; both put the row on the good side, so only the arm's NAME differs —
-Task 4 aligns the book to the view.)
+(`SETTLED`, `CORRECTED`, `PROMOTED_ON_FRESH`, `HELD_UNSETTLED`, `NOT_CORRECTABLE_NO_GP`,
+`UNCORRECTED_NO_CURVE`). The order of the arms in the view is: GOOD on the corrected window →
+**HELD_UNSETTLED** (the guard) → GRACE (P-5) → LOSING / ONE_ORDER / NO_SALE / NOT_SERVING. The
+guard is tested **before** grace so a one-window grace is not spent while the evidence is still
+arriving. (`tools/build_reprice_bulksheet.py --rule-b` orders grace first; both put the row on the
+good side, so only the arm's NAME differs — Task 4 aligns the book to the view.)
+
+Four properties of those arms were repaired in **v27.134** and each is now asserted:
+
+- **The guard requires service.** P-14b exists because sales are still *arriving*. A keyword that
+  took no spend and no clicks in the window has nothing in flight, so the guard has no basis and
+  no longer fires: `served` is a precondition, and `C17` asserts no `HELD_UNSETTLED` row has an
+  empty window. Before the repair such rows were held on the good side — where P-4 then forbade
+  re-pricing them — while their own `settle_arm_sentence` said, correctly, that the settle question
+  did not arise for them. Two published sentences contradicted each other on the same row.
+- **An arm never claims work it did not do.** The correction *scales gross profit*. A window with
+  money spent, clicks taken and nothing sold has none, and zero divided by any factor is zero — so
+  no correction is possible, and those rows no longer print "the window record was corrected". They
+  carry `NOT_CORRECTABLE_NO_GP` and say that only the order floor (P-3) or the guard (P-14b) can
+  change their side. **These are exactly the keywords Ori's defect was about**, and the plan used
+  to tell him on each one that the settle correction had already handled it.
+- **Grace is one window, not a standing exemption.** P-5 reads "two quiet windows in a row and rule
+  B stands". The view implemented the grant and not the limit, so a settled winner with a
+  permanently quiet window kept the good side forever. Grace is now refused when last night's live
+  plan already granted it (`prior_grace`, read back from `FACT_PLAN_NEXT_WEEK.verdict`), and `C12`
+  asserts both halves. **Task 2 must write `verdict = 'GRACE'` faithfully** — a builder that
+  collapses GRACE into GOOD turns grace back into a permanent exemption.
+- **"Was good" prefers last night's plan.** It is `IF(prior_seen, prior_good, ladder_settled_good)`,
+  which is what this SOP and the ruling always described. It used to be an unconditional `OR`:
+  invisible while the plan table is empty, and decisive once Task 2 fills it, because a keyword the
+  live plan demoted last night would have been re-held every night for as long as its 90-day ladder
+  record cleared the bar — a demotion could never stick and the guard could never be worked off.
 
 Every row also carries two plain sentences: `sentence` (what the keyword did and what happens to
 it) and `settle_arm_sentence` (which arm decided it). A keyword that took no spend and no clicks
@@ -506,7 +532,46 @@ unsettled window. So as built the guard is not a delay — it is a **veto**: a k
 record clears its family bar cannot be moved to the not-good side by rule B at all, whatever the
 window says. That pulls rule B (P-1: the window decides the side) back towards plan A (the ladder
 decides), and it moves real money to the good side, where P-4 says it is never cut and never
-re-priced. It is built exactly as the ruling is written. Measure it before arguing about it:
+re-priced. It is built exactly as the ruling is written.
+
+**The guard moves money in BOTH directions, and every earlier account of it on this page named only
+one.** Money held on the good side leaves the seat queue — that half was always disclosed. But P-2
+defines the **pot** as what the GOOD side actually spent, and the **allowance** is a share of the
+pot, so the very same held keywords *enlarge the loss budget the shrunken queue is rationing*. The
+guard therefore removes candidates and raises the allowance at the same time, from the same rows.
+Ori is entitled to see both halves before he rules, so the measurement query prints both — and it
+prints them per family, because a family's allowance can exceed its entire not-good side, at which
+point every candidate is seated with money to spare and the seat queue rations nothing at all:
+
+```sql
+WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
+d AS (SELECT MAX(window_days) AS wd, MAX(allowance_share) AS share FROM j)
+SELECT family,
+       ROUND(SUM(IF(side_b = 'GOOD', w_sp, 0)) / (SELECT wd FROM d), 2)             AS pot_guarded,
+       ROUND(SUM(IF(side_b = 'GOOD', w_sp, 0)) / (SELECT wd FROM d)
+             * (SELECT share FROM d), 2)                                           AS allowance_guarded,
+       ROUND(SUM(IF(verdict IN ('GOOD','GRACE'), w_sp, 0)) / (SELECT wd FROM d), 2) AS pot_unguarded,
+       ROUND(SUM(IF(verdict IN ('GOOD','GRACE'), w_sp, 0)) / (SELECT wd FROM d)
+             * (SELECT share FROM d), 2)                                           AS allowance_unguarded,
+       ROUND(SUM(IF(side_b = 'NOT_GOOD', w_sp, 0)) / (SELECT wd FROM d), 2)        AS queue_guarded,
+       ROUND(SUM(IF(verdict NOT IN ('GOOD','GRACE'), w_sp, 0)) / (SELECT wd FROM d), 2) AS queue_unguarded,
+       COUNTIF(settle_arm = 'HELD_UNSETTLED')                                      AS held,
+       COUNTIF(held_despite_evidence)                                              AS held_though_losing,
+       ROUND(SUM(IF(held_despite_evidence, w_sp, 0)) / (SELECT wd FROM d), 2)      AS held_though_losing_per_day
+FROM j GROUP BY ROLLUP(family) ORDER BY family NULLS FIRST;   -- the NULL family row is the book
+```
+
+Compare `allowance_guarded` with `queue_guarded` per family: wherever the allowance is the larger
+number, the seats are not scarce and P-7's ranking is decorative for that family.
+
+**Not every held row is waiting for evidence.** Some held keywords already MET the order floor in
+the window and still read *under* their family bar on CORRECTED numbers. They are not quiet; they
+are losing, with the evidence in hand, and the guard holds them anyway on the side P-4 protects.
+`held_despite_evidence` is TRUE on exactly those rows and their sentence now says so in those
+words, so "we do not know yet" is no longer available as a reading of money the window has already
+spoken about. The `held_though_losing` columns above count them.
+
+The per-arm breakdown is still worth reading alongside it:
 
 ```sql
 SELECT family, side_b, settle_arm, COUNT(*) AS keywords,
@@ -517,9 +582,11 @@ GROUP BY 1, 2, 3 ORDER BY family, side_b, spend_per_day DESC;
 ```
 
 **To overrule, one line each.** *"Judge the window as it reads"* — drop the correction and the
-`HELD_UNSETTLED` arm (§1b). *"The guard is a delay, not a veto"* — demote on the last window that
+`HELD_UNSETTLED` arm (§1b); the pot, the allowance and the queue all revert to the `unguarded`
+columns above in one step. *"The guard is a delay, not a veto"* — demote on the last window that
 **has** settled (a second window ending `settle_days` before `window_to`) while promotion keeps
-reading the fresh one; that is a change to P-14b's evidence, and nobody has made it.
+reading the fresh one; that is a change to P-14b's evidence, and nobody has made it. Either line
+changes the allowance as well as the queue, so read both columns before choosing.
 
 ### Candidacy, price, seat cost and rank
 
@@ -534,8 +601,54 @@ reading the fresh one; that is a change to P-14b's evidence, and nobody has made
   price the same keyword differently.
 - **Seat cost** (P-6) = spend at *that* price, per day — the window's spend per day scaled by the
   price change; a candidate with no window spend is costed from `T_OOB_SEAT_ECONOMICS`.
+- **The good side carries no price and no seat cost** (P-4, v27.134). `planned_bid` and
+  `seat_cost_per_day` are **NULL** whenever `side_b = 'GOOD'`. They used to be published on every
+  row, so an executable price — sometimes a *cut* — sat one column away from a sentence reading
+  "the good side is never cut and is not re-priced", with only `is_candidate` between that column
+  and a move and no check standing over it. `C14` asserts it here, at the layer that publishes the
+  number, rather than trusting each consumer to re-derive the side.
+- **Park price** (§4 step 5, v27.134). `T_OOB_SEAT_ECONOMICS` only knows keywords that entered OOB
+  seat economics, so the park price used to be NULL on most of the queue — a gap Task 2 would have
+  met as a NULL, with no honesty column. `bid_park` now falls back to the row's own `bid_floor`
+  (the one house floor definition, already on every row) and is never below it; `bid_park_source`
+  declares which source answered (`SEAT_ECONOMICS` / `BID_FLOOR_FALLBACK` / `NONE`) exactly as
+  `V_PLAN_SETTLE_COMPLETION.curve_available` does for the curve, and `bid_park_seat_econ` keeps the
+  raw value so the coverage gap stays measurable. **Which** park price the plan *should* use is
+  still one of Ori's open rulings (spec §8); this makes the queue answerable, not the ruling made.
+
+```sql
+SELECT bid_park_source, COUNT(*) AS keywords, COUNTIF(is_candidate) AS candidates
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
+```
+
 - **Rank** (P-7) = dollars at stake × closeness to the bar, ties by clicks then by the keyword key
   (a total ordering, so two reads never disagree).
+- **P-7 scores ZERO wherever there is no gross profit — which is most of the queue.** Closeness to
+  the bar is zero when a keyword sold nothing, so a keyword burning real money with no order ranks
+  *below every losing keyword* and can never be seated for a repair; the ordering falls through to
+  clicks and the keyword key, which is a total ordering but is not P-7's ordering. That is a
+  property of the formula P-7 declares, not of the view, and it is not absorbed silently:
+  `rank_is_degenerate` is TRUE on every candidate whose rank is zero. Read how much of the queue
+  that is, and what it carries, before Task 2 hands out seats:
+
+```sql
+SELECT COUNTIF(is_candidate) AS candidates,
+       COUNTIF(rank_is_degenerate) AS ranked_zero,
+       ROUND(SUM(IF(rank_is_degenerate, w_sp, 0)) / MAX(window_days), 2) AS ranked_zero_spend_per_day,
+       ROUND(SUM(IF(is_candidate, seat_cost_per_day, 0)), 2) AS candidate_seat_cost_per_day
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
+```
+
+  **Ori's ruling:** park them (the rank is right — a keyword with no sale should queue, and its
+  repair is a cut that saves money by parking), or the rank needs a term for money burned with no
+  return. Nobody has made it, and Task 2 hands out seats in this order.
+- **The holdout is named in words, not only in a column** (v27.134). `holdout` is TRUE only from the
+  campaign's `eligible_from`, so a holdout campaign judged *before* that date is a candidate today
+  and silent tomorrow. The sentence used to promise those rows a seat with no mention of the
+  holdout, and `C13` ("the holdout is never a candidate") passed only because no campaign had
+  reached its date — a vacuous check on exactly the arm that would break. `holdout_member` is TRUE
+  for membership at any date, the sentence names the holdout and its date wherever it names a seat,
+  and `C15` asserts that on live rows today.
 
 ### Deploy and verify
 
@@ -547,12 +660,20 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep 
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql)"
 ```
 
-The acceptance is thirteen checks and **every row must read PASS**: the fenced complete-days window
-(C01), the universe (C02), the keyword grain (C03), both plans' sides (C04), the correction's
-honesty (C05, C09, C10), the asymmetric guard (C06), the order floor read on observed orders and
-`decided_by` always named (C07), a usable price / seat cost / rank on every not-good row (C08), a
-plain sentence and a declared arm on every row (C11), the P-5 guarantee that no settled winner is
-demoted on one quiet window (C12), and the holdout never a candidate (C13).
+The acceptance is **seventeen** checks and **every row must read PASS**: the fenced complete-days
+window (C01), the universe (C02), the keyword grain (C03), both plans' sides (C04), the
+correction's honesty (C05, C09, C10), the asymmetric guard including its service precondition
+(C06), the order floor read on observed orders and `decided_by` always named (C07), a usable price
+/ seat cost / rank on every not-good row (C08), a plain sentence, a declared arm and a declared
+park source on every row (C11), P-5 as written — one quiet window held and grace never granted
+twice in a row (C12), the holdout never a candidate (C13), **no executable price or seat cost on
+the good side (C14)**, **the holdout named in words wherever a seat is named (C15)**, **a park
+price at or above its floor with a declared source on every candidate (C16)**, and **no arm
+claiming work it did not do (C17)**.
+
+C13 is vacuous until a holdout campaign reaches its `eligible_from`; C15 is the one that bites
+today, and the two are read together. C14, C15, C16 and C17 were each run against the v27.133 view
+before the repair and each read FAIL.
 
 `FACT_PLAN_NEXT_WEEK` is `CREATE TABLE IF NOT EXISTS` — re-running the file can never drop a
 written plan. It is created in this task because the guard reads last night's side from it; until

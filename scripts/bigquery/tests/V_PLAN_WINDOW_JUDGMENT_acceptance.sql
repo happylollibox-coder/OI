@@ -1,5 +1,5 @@
 -- =============================================================================================
--- V_PLAN_SETTLE_COMPLETION + V_PLAN_WINDOW_JUDGMENT acceptance — v27.133 (2026-08-23).
+-- V_PLAN_SETTLE_COMPLETION + V_PLAN_WINDOW_JUDGMENT acceptance — v27.134 (2026-08-23).
 -- EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-1, P-3..P-7, P-10, P-14
@@ -17,8 +17,11 @@
 --   C05 P-14a: the corrected gross profit never flips sign and is never smaller in magnitude than
 --       the raw one; the per-day factor floor is in (0, 1]; a row the curve could not answer for
 --       says UNCORRECTED_NO_CURVE and carries factor 1.0.
---   C06 P-14b: no keyword that was good sits on the not-good side while its window is unsettled,
---       and every HELD_UNSETTLED row is on the good side with a settle-due date in the future.
+--   C06 P-14b: no keyword that was good AND SERVED IN THE WINDOW sits on the not-good side while
+--       its window is unsettled, and every HELD_UNSETTLED row is on the good side, with a
+--       settle-due date in the future AND a window it actually served in. The service clause is
+--       the doctrine, not a loophole: the guard exists because sales are still ARRIVING, and a
+--       keyword with no clicks in the window has none in flight (v27.134).
 --   C07 P-3: a GOOD row has min_orders OBSERVED orders (counts are never inflated) unless the
 --       grace or the guard put it there; every row names decided_by.
 --   C08 P-6/P-7: every not-good row has a planned price at or above its own floor, a seat cost
@@ -26,9 +29,26 @@
 --   C09 P-14a: the completion curve is monotone in age, above zero and never above 1.
 --   C10 P-14a: the correction is exactly ONE published division — corrected x effective factor
 --       reconstructs the raw window gross profit, and the effective factor is in (0, 1].
---   C11 every row carries a plain sentence, an arm sentence, and a declared settle_arm.
---   C12 P-5 (§9 "no settled winner is moved to the not-good side after a single quiet window").
---   C13 the holdout is never a candidate (house rule, from its eligible_from).
+--   C11 every row carries a plain sentence, an arm sentence, a declared settle_arm and a declared
+--       park-price source.
+--   C12 P-5 as WRITTEN — "one quiet window, held; two quiet windows in a row and rule B stands".
+--       A ladder-settled winner with a quiet window is on the good side UNLESS last night's live
+--       plan already granted it a grace, and no grace is granted twice in a row (v27.134: the
+--       view used to implement the grant and not the limit, making grace permanent).
+--   C13 the holdout is never a candidate (house rule, from its eligible_from). NOTE: this check is
+--       vacuous whenever no holdout campaign has reached its eligible_from — C15 is the one that
+--       bites today, and the two must be read together.
+--   C14 P-4: the good side carries NO executable price and NO seat cost. The §9 guarantee "no good
+--       keyword has a move" has to be asserted at the layer that PUBLISHES the number, not at the
+--       one that consumes it (v27.134: 116 good rows carried a planned_bid, 22 of them a cut).
+--   C15 the holdout is named in WORDS wherever a seat is named, at any date. Non-vacuous today:
+--       holdout membership is known now and eligible_from is in the future, which is exactly the
+--       state C13 cannot see.
+--   C16 §4 step 5: every candidate has a park price, at or above its own floor, with a declared
+--       source (v27.134: the park price used to be NULL on two thirds of the queue).
+--   C17 no arm claims work it did not do — nothing reads CORRECTED with an effective factor of
+--       1.0 (the correction scales gross profit and cannot touch a window with none), and nothing
+--       reads HELD_UNSETTLED on a window it did not serve in.
 -- =============================================================================================
 WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
 sc AS (SELECT * FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION`),
@@ -63,12 +83,13 @@ c05 AS (
   FROM j
 ),
 c06 AS (
-  SELECT 'C06 P-14b no unsettled demotion of a keyword that was good',
-         COUNTIF((side_b = 'NOT_GOOD' AND was_good AND NOT settled)
+  SELECT 'C06 P-14b no unsettled demotion of a keyword that was good and served',
+         COUNTIF((side_b = 'NOT_GOOD' AND was_good AND NOT settled AND served)
                  OR (settle_arm = 'HELD_UNSETTLED'
                      AND (settle_due_on IS NULL
                           OR settle_due_on <= CURRENT_DATE('America/Los_Angeles')
-                          OR side_b != 'GOOD')))
+                          OR side_b != 'GOOD'
+                          OR NOT served)))
   FROM j
 ),
 c07 AS (
@@ -107,18 +128,47 @@ c11 AS (
          COUNTIF(sentence IS NULL OR LENGTH(sentence) < 40
                  OR settle_arm_sentence IS NULL OR LENGTH(settle_arm_sentence) < 40
                  OR settle_arm NOT IN ('SETTLED','CORRECTED','PROMOTED_ON_FRESH',
-                                       'HELD_UNSETTLED','UNCORRECTED_NO_CURVE'))
+                                       'HELD_UNSETTLED','NOT_CORRECTABLE_NO_GP',
+                                       'UNCORRECTED_NO_CURVE')
+                 OR bid_park_source NOT IN ('SEAT_ECONOMICS','BID_FLOOR_FALLBACK','NONE'))
   FROM j
 ),
 c12 AS (
-  SELECT 'C12 P-5 no settled winner demoted on a single quiet window',
-         COUNTIF(ladder_state IN ('WINNER','PACED_WINNER') AND w_ord < min_orders
-                 AND side_b = 'NOT_GOOD')
+  SELECT 'C12 P-5 one quiet window is held, and grace is never granted twice in a row',
+         COUNTIF((ladder_state IN ('WINNER','PACED_WINNER') AND w_ord < min_orders
+                  AND side_b = 'NOT_GOOD' AND NOT prior_grace)
+                 OR (verdict = 'GRACE' AND prior_grace))
   FROM j
 ),
 c13 AS (
   SELECT 'C13 the holdout is never a candidate',
          COUNTIF(holdout AND is_candidate)
+  FROM j
+),
+c14 AS (
+  SELECT 'C14 P-4 no executable price or seat cost on the good side',
+         COUNTIF(side_b = 'GOOD' AND (planned_bid IS NOT NULL OR seat_cost_per_day IS NOT NULL))
+  FROM j
+),
+c15 AS (
+  SELECT 'C15 a holdout campaign is never promised a seat in words',
+         COUNTIF(holdout_member
+                 AND REGEXP_CONTAINS(sentence, r'competes for a seat')
+                 AND NOT REGEXP_CONTAINS(sentence, r'(?i)holdout'))
+  FROM j
+),
+c16 AS (
+  SELECT 'C16 every candidate has a park price at or above its floor, with a declared source',
+         COUNTIF(is_candidate
+                 AND (bid_park IS NULL
+                      OR bid_park < bid_floor - 0.0001
+                      OR bid_park_source = 'NONE'))
+  FROM j
+),
+c17 AS (
+  SELECT 'C17 no arm claims work it did not do',
+         COUNTIF((settle_arm = 'CORRECTED' AND ABS(settle_factor_eff - 1.0) < 1e-9)
+                 OR (settle_arm = 'HELD_UNSETTLED' AND NOT served))
   FROM j
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
@@ -126,5 +176,6 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c04 UNION ALL SELECT * FROM c05 UNION ALL SELECT * FROM c06
       UNION ALL SELECT * FROM c07 UNION ALL SELECT * FROM c08 UNION ALL SELECT * FROM c09
       UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11 UNION ALL SELECT * FROM c12
-      UNION ALL SELECT * FROM c13)
+      UNION ALL SELECT * FROM c13 UNION ALL SELECT * FROM c14 UNION ALL SELECT * FROM c15
+      UNION ALL SELECT * FROM c16 UNION ALL SELECT * FROM c17)
 ORDER BY check_name;
