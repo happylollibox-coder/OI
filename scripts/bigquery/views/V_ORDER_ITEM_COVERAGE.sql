@@ -16,6 +16,16 @@
 -- READ THIS BEFORE TRUSTING V_ORDER_CROSS_SELL: a month whose coverage_pct is
 -- below 99 is still filling. See architecture/CUSTOMER_ORDER_BASKETS.md.
 --
+-- is_month_complete is coverage_pct >= 99.99, NOT exact equality: SP-API may
+-- never return items for a handful of very old orders, and a month that will
+-- asymptote just under 100% must not stay flagged incomplete forever. This is
+-- the same bar the downstream verification uses.
+--
+-- coverage_pct and units_missing must be read together: orders_with_items only
+-- asks "does at least one item row exist for this order", not "have all its
+-- lines arrived" -- a partially-synced order still counts as covered, and
+-- units_missing is what catches that at month level.
+--
 -- =============================================
 
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ORDER_ITEM_COVERAGE` AS
@@ -48,7 +58,7 @@ SELECT
   SUM(h.units_total)                                              AS header_units,
   SUM(COALESCE(i.item_units, 0))                                  AS item_units,
   SUM(h.units_total) - SUM(COALESCE(i.item_units, 0))             AS units_missing,
-  COUNTIF(i.amazon_order_id IS NOT NULL) = COUNT(*)               AS is_month_complete
+  ROUND(100 * COUNTIF(i.amazon_order_id IS NOT NULL) / COUNT(*), 2) >= 99.99  AS is_month_complete
 FROM headers h
 LEFT JOIN items i
   USING (selling_partner_id, amazon_order_id)
