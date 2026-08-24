@@ -24,6 +24,7 @@ position from an accident. Newest last.
 | 2026-08-24 16:11 | `3b6c0c3` | **§2.1 subject types, §2.2 the grain ladder.** Ori observed that an auto-targeting group is not a real keyword. `substitutes` and its siblings are containers whose contents Amazon changes, so the subject is family × product × mode and cross-family comparison of "the same one" is meaningless — though the mode-level question is legitimate at the campaign-type grain. A real keyword shares its demand signal across families but never its worth; a product target does compare, being the same competitor. Also records that the family bar is a Catalog answer rather than a shared constant, and that bare target text is never a valid subject. |
 | 2026-08-24 16:37 | `a92960b` | **§3.2 `LEAN_IN`, §3.3 open questions.** Ori: the Brain must always ask what it could do better, *including on the earning side* — "leave it alone" guards against churn but is not a licence to stop thinking. Adds the sixth intent and names the two populations the Brain must examine besides the losing side: turns (record says losing, window says earning — protected today, never funded, though the evidence is already bought) and constrained winners. Also: the 10 % holdout is not only the engine-vs-nothing baseline, it is the only place the Brain can honestly answer its own method questions. |
 | 2026-08-24 17:09 | `11a562c` | **§2.3 evidence on probation, §2.4 `rank()`, §6 rewritten.** Ori: the Catalog must see SQP but distrust it until it earns trust — recorded with four nameable grounds rather than a disposition, and a hard limit that demand data alone may never move a verdict to `WORTH`. The Catalog must also answer *what is worth having* in a family, not only what a named subject is worth; refined from Ori's "best CVR" to expected profit contribution at the ceiling, because ranking on conversion rate alone fills an allowance with keywords too small to matter. §6 rewritten so all three layers recompute daily and are graded on their own question — including Pacing, whose scorecard nobody builds and which is the only way to test house constants like the entry anchor. §6.2 adds the attribution discipline the principle requires: only one layer may run a live method experiment in a family at a time, or the measurement is destroyed. |
+| 2026-08-24 18:30 | `pending` | **§2.5 quantity, §2.6 what is advertised, §6.3 demonstrate don't assert, §10 the baseline.** A simulated keyword-year against the doctrine, measured across the account, then put through two adversarial verifiers. The arithmetic passed; **three of the four largest claims did not** — each had measured a population correctly and then asserted a loss without testing the innocent explanation. That failure produced the three new rules. §2.5: worth is a curve over volume, not a scalar price — the post-season month that looked like mispricing was the account buying more clicks at the right price into weaker conversion. §2.6 (Ori's correction of my "substitution" framing): the Catalog must know **what is advertised** — format, placement, creative, match width — because most of the "destroyed" seasonal sales were the same demand arriving through a wider match. §6.3 makes the discipline standing. §10 records the survivors, the disproved claims, and three violations in §8 the research corrected — including that the coverage gap is entirely deliberate and that the move cap is not enforced in *either* direction. |
 
 ### How to add an entry
 
@@ -202,6 +203,53 @@ budget and a deadline like any other; a live one is funded as `EARN`, `LEAN_IN` 
 its verdict. Research-sourced keywords enter here — they are Catalog candidates, not a separate
 decision-making system.
 
+### 2.5 Worth is a curve over quantity, not a single price
+
+`ceiling_cpc` answers *what may we pay for a click*. It does not answer **how many clicks to buy**, and
+a doctrine that prices without quantifying cannot tell overpaying apart from over-buying — two failures
+that need opposite responses.
+
+The baseline research (§10) found this the hard way. Across one post-season month, spend rose sharply
+while the cost per click barely moved: the account bought far **more** clicks, correctly priced, into a
+market whose conversion rate had fallen. Every price was defensible; the quantity was the question, and
+no layer had language for it.
+
+So the Catalog's answer is a **response curve**, not a scalar: for a subject and a window, what volume
+is available at what price, and what does the marginal click return at each point. `ceiling_cpc` is then
+simply the point on that curve where marginal return meets the bar — a derived reading, not the primitive.
+
+This is the same curve §2 already requires for marginal-versus-average pricing, used for a second
+purpose, so it is one piece of work and not two. It gives the Brain the question it currently cannot ask:
+**at what volume does the next click stop clearing the bar?** — which is the allocation question, stated
+properly.
+
+### 2.6 The Catalog must know what is advertised
+
+Worth is not a property of a search phrase alone. The same demand can be bought through different
+**vehicles**, and Amazon prices each one differently:
+
+- **format** — Sponsored Products, Sponsored Brands, Sponsored Brands with video
+- **placement** — top of search, rest of search, product pages, each with its own multiplier
+- **creative** — which specific video or image is running, since one performs materially better than
+  another and the account has both
+- **match width** — the same query can be caught by an exact keyword, a phrase, a broad, or an auto mode
+
+A Catalog that knows only "this phrase is worth X" cannot answer *which vehicle should carry it*, and
+that is a real allocation question the Brain has no way to pose today.
+
+**This also explains an apparent loss that was not one.** The research measured a large sum of last-season
+sales sitting behind paused keywords and called it money at stake. Challenged, the overwhelming majority
+of those queries turned out to be **bought elsewhere in the account already** — the same demand arriving
+through a wider match. Nothing was lost; the traffic changed vehicle. A per-subject valuation cannot see
+this, and will keep reporting recaptured demand as destroyed value until the Catalog carries the vehicle
+dimension.
+
+Two consequences follow. **A pause is cheaper than §5 assumes when the demand is recaptured, and exactly
+as expensive as §5 assumes when it is not** — and only a vehicle-aware Catalog can tell which case is in
+front of you. And **the Brain should be allocating across vehicles, not only across phrases**: the
+question "should this family's money go to SB video or to SP" is a grain-3 question (§2.2) that nothing
+currently asks.
+
 ---
 
 ## 3. The Brain → Pacing contract
@@ -303,6 +351,35 @@ door that only closes, and a silent window is not evidence that it should.
 seasonal, or simply bid too low to win an auction — three very different things that look identical
 to a window-based judge.
 
+### 6.3 A loss must be demonstrated, not asserted
+
+The baseline research (§10) produced four confident, well-measured claims about money being wasted. All
+four had sound arithmetic. Three of them were wrong, and they were wrong in the same way: **a population
+was measured correctly, and then a loss was asserted without testing the obvious innocent explanation.**
+
+So the discipline §6.1 applies to method questions applies equally to analysis:
+
+> **Name the innocent explanation and test it before claiming money was wasted.** A finding that has not
+> survived its own best counter-argument is a hypothesis, not a measurement.
+
+The innocent explanations that actually fired, and are therefore the standing checklist:
+
+| the claim | the innocent explanation that proved true |
+|---|---|
+| "we overpaid into a dead market" | the price barely moved; **volume** rose and conversion fell — a demand shift, not a pricing error (§2.5) |
+| "pausing these destroyed their sales" | the demand was **recaptured** by a wider match already running (§2.6) |
+| "something keeps cutting already-floored keywords" | those cuts **were** the parking actions themselves |
+| "the account overspends its bar by $X" | the metric summed one-sided deviations; the account clears its bar **in aggregate** |
+
+Two rules fall out of the last one, because they will recur:
+
+- **A one-sided metric always finds what it looks for.** Any sum of `GREATEST(actual − target, 0)` is
+  positive under ordinary dispersion even when the population is healthy. Report the net alongside it, or
+  do not report it.
+- **Beware selecting on the pattern noise produces.** A cohort chosen for "recent window bad, long record
+  good" will be populated by regression to the mean at small samples. Test that the deterioration
+  persists out of sample before calling it decline.
+
 ---
 
 ## 6. Every layer must get better on its own
@@ -373,6 +450,9 @@ answers.
 - A generator or book that stands aside for an engine on an answered keyword (precedence is: the
   Brain's instruction wins).
 - Pricing to an average CPC where a marginal one is the correct number.
+- Pricing a subject without regard to how much volume is being bought at that price (§2.5).
+- Valuing a subject as if no other vehicle in the account could serve the same demand (§2.6).
+- Asserting a loss without naming and testing the innocent explanation (§6.3).
 
 ---
 
@@ -399,8 +479,9 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
 9. `NOT_WORTH_NOW` does not exist, so dormant seasonal subjects are paused as dead.
 10. It protects turns but never funds them: `LEAN_IN` is doctrine, not code.
 11. Ranking uses a proxy (dollars at stake x closeness) because no marginal value exists.
-12. It covers part of the account — a few hundred of the Catalog's subjects — and the uncovered
-    remainder is where the "nothing to do" hole lives.
+12. ~~It covers part of the account and the uncovered remainder is a hole.~~ **CORRECTED 2026-08-24
+    (§10.3): the entire Catalog-to-Brain gap is deliberate — launch families plus brand defense. There
+    is no hole here.** The real uncovered money is Catalog-side, in violation 4.
 
 **Pacing**
 13. It has no scorecard: nothing measures whether the bid it chose delivered the clicks and CPC it
@@ -409,9 +490,21 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
     subjects took zero clicks in a week — a park is safe from cost and safe from discovery at once, so
     a recovery there can never be found by anyone.
 
+**Quantity and vehicle** (found by the §10 baseline)
+
+17. Nothing anywhere decides **how many** clicks to buy — worth is a scalar price, not a curve over
+    volume (§2.5).
+18. The Catalog does not know **what is advertised** — format, placement, creative or match width — so it
+    cannot say which vehicle should carry a demand, nor tell a destroyed sale from a recaptured one (§2.6).
+19. Term composition is treated as an auto-mode problem; measured, **BROAD drifts nearly as hard and
+    carries far more money** (§10.1).
+
 **Boundaries**
 15. The book defers to Pacing on answered subjects (`ENGINE_INSTRUCTED`) — precedence backwards.
-16. The move cap is symmetric, so a confident cut is slowed as much as a speculative raise.
+16. ~~The move cap is symmetric, so a confident cut is slowed as much as a speculative raise.~~
+    **CORRECTED 2026-08-24 (§10.3): the cap is not enforced in either direction — both sides break it,
+    and cuts break theirs proportionally more often than raises break theirs.** Asymmetry (§3.1) is
+    still the right design; the prior defect is that no cap binds at all.
 
 ## 9. How the UI must present a decision (binding on future implementation)
 
@@ -444,6 +537,84 @@ Rules for the surface:
   down, the morning brief, and the README of any book that is uploaded.
 
 ---
+
+## 10. Baseline — where the money actually is (measured 2026-08-24)
+
+This section is the doctrine's **first assumption**: a dated measurement of how much of the account each
+failure mode touches, taken so that it can be **re-measured later and compared**. It is the declared
+exception to Standing Rule 0 — figures are pinned here on purpose, and every one carries its query in the
+research record so a re-run is a re-run and not a fresh argument.
+
+**Read the units before the numbers.** Four incompatible things are easy to rank as if they were one:
+current spend on a population, current spend *above* what the record supports, last season's net divided
+by the season's days, and a counterfactual efficiency delta. They are not commensurable. Every figure
+below states which it is.
+
+**Account context.** Roughly $1,320/day of spend is attributable to a subject; the full run rate is
+around $1,375/day. Pooled gross-profit-per-ad-dollar across the account is **above** the reference bar —
+so the account is not in aggregate losing money, and no finding below should be read as if it were.
+
+### 10.1 What survived both verifiers
+
+| finding | what it is | size | unit | confidence |
+|---|---|---|---|---|
+| **Outside the Catalog entirely** | Spending rows with no Catalog row at all — chiefly SB product targets arriving under a sentinel `keyword_id = '-1'`, unowned since June. No layer can see them; nothing reconciles ads spenders against the keyword universe. | **$132.71/day** at 0.528 GP-ROAS, against 0.906 inside the Catalog. 74 rows | current spend | HIGH |
+| **The slow converter** | Rule B needs two orders inside the window. For subjects converting below about 5 %, that takes ~69 days on average — so the window re-condemns them forever. For subjects the window *can* see it works well (3.9 days). | **216 subjects, $273.53/day** | current spend | HIGH |
+| **The seat is last window's spend** | Not merely undersized — an identity. Correlation between seat cost and prior-window spend is **0.995**, mean ratio 0.973. The seat has no relationship to the price of the answer it demands. | 40 of 53 live seats underfunded, holding $29.73/day | current spend | HIGH |
+| **The drifting basket** | Measured against an EXACT control at 19.1 % month-over-month term turnover: BROAD drifts at **63.7 %**, auto modes 57–68 %. §2.1 blamed auto modes; the money is in BROAD. | BROAD alone carries **$468.73/day** | current spend | HIGH |
+| **The umbrella** | Subjects the Catalog's own test calls conclusively below bar, still spending. Median 19 days in that state. | 84 subjects, **$137.96/day above** what the record supports | excess over bar | HIGH |
+| **Decided, logged, never uploaded** | Correct decisions that never reached Amazon. Restricted to keywords also conclusively below bar today: 11 subjects. | **$28.40/day** excess; oldest unexecuted decision 17 days | excess over bar | HIGH |
+| **The park trap** | Parked subjects take no clicks, so they generate no evidence, so no layer can ever discover a recovery. A park is an absorbing state. | 31 dark-parked subjects earned **$202.86/day** of net in last year's season | last season's net ÷ season days | HIGH |
+| **The harvest gap** | Search terms converting well with no keyword of their own. Nothing promotes a converting term to a subject. | 130 terms, 488 orders, **$56.10/day**, CVR 6.49 % against an account 3.97 % | current spend | MEDIUM — survivorship-selected |
+
+### 10.2 Claimed and disproved — the record of §6.3
+
+Kept deliberately. Knowing that the January trough was **not** a pricing failure is worth as much as any
+finding above, and a doctrine that quietly deleted its wrong answers would teach nothing.
+
+| claimed | what killed it |
+|---|---|
+| A post-season month cost ~$300/day because a trailing window held holiday prices | Cost per click moved only ~8 %. Clicks rose ~28 % and conversion fell ~18 %: the account bought **more** clicks at the right price. The trough was still profitable. **A demand shift, not mispricing** — and the reason §2.5 exists. |
+| ~$240/day of last season's net was destroyed by pausing 79 keywords | About **87 %** of those sales had their exact query bought elsewhere in the account within 28 days, through a wider match. The traffic changed vehicle. **The reason §2.6 exists.** |
+| Something keeps cutting keywords already at the floor | Those cuts **were** the parking actions — average bid before them $0.69, after $0.29. Misread, not malfunctioning. |
+| The account overspends its bar by ~$210/day | The metric summed one-sided deviations. Pooled, the account is **above** its bar. The figure is a dispersion artefact, not a loss. |
+| The kill gate is jammed by a circular dependency | The fields cited are NULL **by definition** outside probation. The count carried no information. |
+| The pre-season signal is 8.9x wrong | Base rate omitted. The trailing signal separates a 41 % hit rate from 78 % — informative, not blind. |
+
+### 10.3 What the research corrected in this document
+
+Three of §8's violations were wrong, and are corrected in place:
+
+1. **Coverage (was violation 12).** The claim was that the Brain covers only part of the account and the
+   remainder is a hole. Measured, the entire gap is **deliberate**: launch families plus brand defense.
+   There is no hole. What is *not* covered — and is a real defect — is §10.1's "outside the Catalog".
+2. **The move cap (was violation 16).** The claim was that the cap is symmetric and so slows a confident
+   cut as much as a speculative raise. Measured, **both** sides break their nominal caps, and cuts break
+   theirs proportionally *more often* than raises break theirs. The defect is that the cap is not
+   enforced, which is a different and larger problem than asymmetry.
+3. **Demand data as a candidate generator (§2.4).** The section assumed search-query data would let
+   `rank()` propose subjects the account has never bought. Measured, it yields **no usable candidates**
+   today. §2.4's mechanism stands; its assumed input does not exist yet, and the harvest gap in §10.1 is
+   the nearer path to the same goal.
+
+### 10.4 What could not be measured, and why it matters
+
+- **Dwell time in any state.** The Catalog holds one snapshot and is replaced nightly, so no "how long has
+  this been stuck" question is answerable anywhere. This is violation 6 obstructing the measurement of
+  every other violation, and it is the single highest-value thing to fix first.
+- **Bid-to-click response.** Nothing records the clicks and price a chosen bid was expected to deliver
+  against what it delivered, so §2.5's curve cannot yet be estimated and Pacing cannot be graded at all.
+- **Seasonal versus dead.** Two holiday seasons sit in the ads data and the Catalog does not read them, so
+  a dormant subject and a dead one remain indistinguishable — the failure §4 exists to prevent.
+- **Marginal versus average value.** Every "excess" figure above is computed against an average ceiling and
+  therefore misstates the true overpayment in an unknown direction.
+
+### 10.5 How to re-run this
+
+Every figure came from a query recorded in the research output. When re-measuring: keep the unit labels,
+re-derive the account context first (a finding's share of the account matters more than its absolute
+size), and apply §6.3 — for each finding that has grown, name the innocent explanation and test it before
+concluding the system got worse.
 
 ## Appendix A — worked example: an answered keyword
 
