@@ -29,6 +29,7 @@ position from an accident. Newest last.
 | 2026-08-24 19:20 | `d2af2ab` | **§1.4 — each layer is independently usable.** Ori: any module in the system, or he himself, must be able to use a layer for its own needs. The three layers are services, not stages of a nightly job: a stable contract, no ordering dependency, durable queryable state of their own, asking changes nothing, and answers are attributable. This is what the narrow interface was always for, and it reinforces §1.1 — a verdict shaped like a command is meaningless to a caller that is not the Brain. Notes honestly that all three are pipeline stages today and the Catalog keeps one snapshot, so independence is required and not yet held. |
 | 2026-08-24 19:40 | `2b3cb8d` | **§2.7 confidence, §2.8 market volume.** Ori chose option C for the confidence scale: **separation × stability** — how sure we are which side of the bar a subject sits, discounted by whether the thing measured stayed the same thing, since BROAD terms turn over ~64 % a month against an EXACT control at 19 %. `NO_EVIDENCE` is a fourth state distinct from `LOW`, because §10 found zeros sitting on 0.2 expected clicks and a scale that reads those as "low confidence it is good" licenses kills on noise. §2.8 answers Ori's question about a keyword's volume on Amazon: `expected_clicks` meant *our* history, which cannot value an unbought subject nor say whether an owned one is capturing its opportunity. The market figures are already in the warehouse and read by nothing — a query the market buys 71 times a week where we hold 0.02 % of impressions, whose keyword we had paused. Two new violations recorded. |
 | 2026-08-24 20:10 | `17d73ad` | **§4.1 — a campaign is a seasonal subject, and pause is its only park.** Ori: seasonal campaigns must be enabled and paused at the right time, and that is the Brain asking and the Catalog answering. The Catalog therefore answers for a campaign subject, not only keywords. The asymmetry that makes it urgent: a keyword can park at its floor, a campaign is on or off — so a campaign pause is the one irreversible action permitted on `NOT_WORTH_NOW`, and only on condition it **carries its reopen date**, recorded where a layer will act on it rather than remembered by a person. Adds `OPEN · by date D` and `CLOSE · reopen D`, and makes lead time part of the answer, since a campaign enabled on day one of its season has not been running when the season starts. Measured: ten paused campaigns hold $127,352 of last-season sales at 1.49 GP-ROAS, five stopped on one day in mid-July, and none has a reopen date. Also records the rename hazard that nearly inverted the finding — join campaign history on the id, never the name. |
+| 2026-08-24 20:35 | `a8b3373` | **§2.9 negatives belong to the Catalog and expire; the account total is deliberately homeless.** Ori: negatives are managed by the Catalog — the Brain asks *how do I improve this*, and one answer is to negate a term. Adds `improve()` as a third question beside `ask()` and `rank()`. Critically, **the answer expires**: asked again a month later the Catalog may say *remove the negate*, for the same term, either because the data now says so or because a peak makes a high-volume term worth unblocking simply to buy data. So a negative is a standing answer with an expiry, never a settled fact. Records the asymmetry that a negative is created by a bulksheet but removed only by hand, and that the account's registry — not Amazon — is the record of what is blocked. Ori also confirmed the account's total budget is deliberately outside the doctrine: the Brain allocates within a pot, and the total emerges from the parts. |
 
 ### How to add an entry
 
@@ -69,6 +70,11 @@ confidence and volume; the Brain decides.
 subject to be worth its money. It sits below 1.0 because advertising also drives organic sales — the
 organic halo — so a subject can clear its bar while returning less than a dollar on ads alone. It is a
 property of a family, not of a keyword, and (§2.2) it is a Catalog answer rather than a shared constant.
+
+**The account's total budget is not the Brain's** (Ori, 2026-08-24 — deliberate). The Brain allocates
+*within* a family's pot and the pot is defined by what that family's good keywords spent, so the account
+total emerges from the parts rather than being handed down. How big the account should be is a decision
+outside this doctrine.
 
 The Brain holds the pot (the 80/20 allowance per family) and spends it. It asks the Catalog per
 keyword, compares **within the family** — because the pot, the bar and the halo are all family-scoped
@@ -354,6 +360,43 @@ fraction of a percent of impressions, is not evidence that the subject is dead.
 **On probation like any external evidence (§2.3).** The query-to-subject join is not one-to-one, the
 totals are market-wide rather than ours, the data is weekly, and coverage is partial. Market volume may
 size an opportunity and inform a curve; it may not by itself move a verdict to `WORTH`.
+
+### 2.9 Negatives are a Catalog answer, and they expire
+
+Blocking a search term is a statement about **worth** — this traffic is not worth buying — so it belongs
+to the Catalog, not to whichever engine happened to notice it.
+
+This gives the Brain a third question, beside "what is this worth" (§2) and "what is worth having" (§2.4):
+
+```
+catalog.improve(subject, window_from, window_to)  ->  ordered suggestions
+```
+
+*"How do I make this better?"* One available answer is **negate this search term**. Others are the
+ordinary moves — reprice, park, change what carries it (§2.6) — ranked the same way as anything else, by
+what they are worth.
+
+**And the answer expires.** When the Brain asks again a month later, the Catalog may answer **remove the
+negate** — for the very same term — on either of two grounds:
+
+- **the data now says so.** A term blocked on a thin or seasonal record is a judgement, and judgements are
+  re-made when the evidence changes (§4: worth is answered for a *requested window*, and a term worthless
+  in July may not be worthless in December).
+- **the peak makes it worth re-learning.** A high-volume term (§2.8) blocked before a season may be worth
+  unblocking simply to buy data, even without a positive record — the same logic as funding a question
+  (§3 `TEST`). Volume is the reason; a term nobody searches is never worth re-testing.
+
+So **a negative is a standing answer with an expiry, not a permanent state.** Nothing may treat "we
+negated this once" as settled, and the set of live negatives is re-asked like everything else.
+
+**One asymmetry that must be stated rather than discovered.** The *decision* is reversible; the
+*execution* is not symmetric. A negative is created by a bulksheet but cannot be removed by one — undoing
+it is a hand edit in the console. And the account's record of what is negated is a **local registry**, not
+a read-back from Amazon, because the negative feed has been frozen since early 2026. So the Catalog can
+only reconsider negatives the registry knows about, and any recommendation to remove one lands on a person
+rather than in a book. That is a limitation of the hands, not of the answer — but it means a negate is
+expensive to reverse and should be recommended with that in mind (§5's caution about one-way doors applies
+in spirit even though the Brain, not Pacing, owns the call).
 
 ---
 
@@ -687,6 +730,9 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
     **not one holds a reopen date**.
 23. Campaign-level history keyed on **name** misattributes renamed campaigns; only `campaign_id` is
     stable (§4.1).
+24. **`improve()` does not exist and negatives have no owner in code** (§2.9). Blocking decisions are made
+    by whichever engine notices a term, nothing re-asks them, and no live negative is ever reconsidered —
+    so "we negated this once" is treated as settled, which the doctrine forbids.
 
 21. **Market volume is in the warehouse and used by nothing** (§2.8). The search-query data carries the
     query's total impressions, clicks and purchases beside our own and our impression share; no layer
