@@ -18,19 +18,30 @@
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 ```
 
-**Back up before every re-deploy of an existing object.** The house convention stamps the file with the next unused `v27` number and the time. Derive the number, never guess it:
+**STEP 0 OF EVERY TASK — BACK UP EVERY FILE THE TASK LISTS UNDER `Modify:`.** This is a numbered,
+non-skippable step of **every** task in this plan, whether or not that task's own step list opens
+with one. Several tasks below spell the backup out; the ones that do not are not exempt — they are
+abbreviated, and this rule is what they abbreviate. The house convention stamps the file with the
+next unused `v27` number and the time. Derive the number, never guess it. Run this, verbatim, with
+the task's own `Modify:` paths substituted into `FILES`:
 
 ```bash
 cd /Users/ori/Develop/OI
 NEXT=$(ls scripts/bigquery/**/*.bak.v27.*.* docs/superpowers/plans/*.bak.v27.*.* 2>/dev/null \
        | sed -E 's/.*\.bak\.v27\.([0-9]+)\..*/\1/' | sort -n | tail -1)
 NEXT=$((NEXT + 1)); echo "next version: v27.$NEXT"
-# then, for each file you are about to re-deploy — this is the real form, with a real file:
-cp scripts/bigquery/views/V_BID_FLOOR.sql \
-   scripts/bigquery/views/V_BID_FLOOR.sql.bak.v27.$NEXT.$(date +%H%M)
+# FILES = every path this task lists under **Modify:** that already exists in the repo.
+FILES="scripts/bigquery/views/V_BID_FLOOR.sql scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql"
+for f in $FILES; do
+  [ -f "$f" ] && cp "$f" "$f.bak.v27.$NEXT.$(date +%H%M)" && echo "backed up $f"
+done
 ```
 
-Bump `NEXT` by one for each subsequent backup in the same session.
+Bump `NEXT` by one for each subsequent backup in the same session. `config.yaml` and files being
+CREATED are not backed up; everything else under `Modify:` is. If a task's step list has no explicit
+backup step, run the block above before its first step anyway — the tasks that omit it are
+`2.4`, `5.3`, `5.5`, `5.6`, `6.2`–`6.9`, `7.3`–`7.6`, `8.2`, `8.6`, `8.7`, `9.3`, `9.5`, `10.3`,
+`11.4`, `13.4` and `13.5`, and every one of them re-deploys a live object.
 
 **Running an acceptance suite.** Suites in `scripts/bigquery/tests/` are standalone. There is **no aggregator** — `RUN_ALL_TESTS.sql` and `tests_manifest.json` in that directory belong to a legacy `SP_MERGE_SQP_WEEKLY` suite about `FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY` and must not be edited by this plan. Run a suite exactly the way `FACT_PLAN_NEXT_WEEK_acceptance.sql` documents in its own header:
 
@@ -199,14 +210,16 @@ not a fresh argument, and a fix cannot be shown to have worked against a number 
 | `scripts/bigquery/views/V_WEEKLY_RUN_NEGATIVE.sql` *(modify)* | re-ask at expiry instead of never again |
 | `scripts/bigquery/procedures/SP_SYNC_NEGATIVES.sql` *(modify)* | tighten the removal key; record `change_id` |
 
-### Phase 10 — the response curve
+### Phase 10 — the response curve, and two layers graded
 
 | file | responsibility |
 |---|---|
+| `scripts/bigquery/functions/FN_MATCH_WIDTH.sql` *(create)* | the curve's segment axis, in one place, callable from both the fit and the read |
 | `scripts/bigquery/views/V_CLICK_RESPONSE_CURVE.sql` *(create)* | clicks and CPC as a function of bid, per segment |
 | `scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql` *(modify)* | `ceiling_cpc` from the curve; `ceiling_basis` flips to `MARGINAL` |
 | `scripts/bigquery/views/V_PACING_SCORECARD.sql` *(create)* | predicted against delivered, per change |
-| `scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql` *(modify)* | rank on expected profit at the ceiling, discounted by confidence |
+| `scripts/bigquery/views/V_CATALOG_SCORECARD.sql` *(create)* | was the Catalog's own published ceiling, verdict and appointment right? |
+| `scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql` *(modify)* | rank on expected profit at the marginal ceiling **measured against the bar**, discounted by confidence |
 
 ### Phase 11 — demand data on probation
 
@@ -247,7 +260,7 @@ All 23 live violations. Violations 12 and 16 are struck through in §8 as CORREC
 | 4a | Spending rows outside the Catalog | 2 | 2.1 – 2.4 |
 | 4b | No demand data reaches the Catalog | 11 | 11.1 – 11.5 |
 | 5 | No `rank(family, window)` | 12 | 12.1 – 12.4 |
-| 6 | The Catalog keeps no memory | 0 | 0.2, 0.3, 0.4 |
+| 6 | The Catalog keeps no memory | 0, 10 | 0.2, 0.3, 0.4 (the memory) · 10.8 (the grading the memory exists for) |
 | 7 | Brain ignores the Catalog; `NOT_SERVING` | 6 | 6.2 |
 | 8 | Seats do not fund the answers they demand | 6 | 6.4, 6.5 |
 | 9 | `NOT_WORTH_NOW` does not exist | 6 | 6.6, 6.9 |
@@ -263,7 +276,7 @@ All 23 live violations. Violations 12 and 16 are struck through in §8 as CORREC
 | 18 | The Catalog does not know what is advertised | 13 | 13.1 – 13.6 |
 | 19 | Drift treated as an auto-mode problem | 7 | 7.2, 7.3 |
 | 20 | `confidence` specified, computed nowhere | 7 | 7.4, 7.5 |
-| 21 | Market volume used by nothing | 11 | 11.1 – 11.5 |
+| 21 | Market volume used by nothing | 11 | 11.1 – 11.5 (10.8 is the instrument that can raise it off probation) |
 | 22a | No campaign verdict — the OPEN half | 4 | 4.1 – 4.8 |
 | 22b | No campaign verdict — the CLOSE half | 7 | 7.6 |
 | 23 | Campaign history keyed on name | 3 | 3.1 – 3.6 |
@@ -446,12 +459,26 @@ k10 AS (
          COUNTIF(probation_clock_start IS NULL AND probation_clk_settled IS NOT NULL)
        + COUNTIF(probation_clock_start IS NOT NULL AND probation_due_date IS NULL)
   FROM s
+),
+k02b AS (
+  -- THE MEMORY IS COMPLETE, not merely present. Task 0.3's append copies BY COLUMN NAME, so a
+  -- column added to FACT_KEYWORD_STATE without the matching ALTER TABLE on the history table is
+  -- silently not recorded — no error, no alarm, and unbackfillable. Nine later tasks in this plan
+  -- add columns (2.3, 2.4, 5.5, 7.3, 7.4, 8.2, 10.3, 11.4, 13.4); this check is what makes
+  -- forgetting one loud on the same night.
+  SELECT 'K02b the history table carries every column of the current table (the append is by name)',
+         (SELECT COUNT(*)
+          FROM `onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS` c
+          WHERE c.table_name = 'FACT_KEYWORD_STATE'
+            AND c.column_name NOT IN (SELECT h.column_name
+                                      FROM `onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS` h
+                                      WHERE h.table_name = 'FACT_KEYWORD_STATE_HISTORY'))
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM k01 UNION ALL SELECT * FROM k02 UNION ALL SELECT * FROM k03
       UNION ALL SELECT * FROM k04 UNION ALL SELECT * FROM k05 UNION ALL SELECT * FROM k06
       UNION ALL SELECT * FROM k07 UNION ALL SELECT * FROM k08 UNION ALL SELECT * FROM k09
-      UNION ALL SELECT * FROM k10)
+      UNION ALL SELECT * FROM k10 UNION ALL SELECT * FROM k02b)
 ORDER BY check_name;
 ```
 
@@ -465,7 +492,7 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
 
 Expected: the whole query FAILS with `Not found: Table onyga-482313:OI.FACT_KEYWORD_STATE_HISTORY` — the measured violation is that the history table does not exist at all. This is the red state Task 0.3 turns green.
 
-- [ ] **Step 3: Confirm the other nine checks by themselves**
+- [ ] **Step 3: Confirm the other ten checks by themselves**
 
 Run the same file with the `h` CTE and `k01` temporarily unavailable, by measuring the memory violation directly:
 
@@ -484,9 +511,10 @@ cd /Users/ori/Develop/OI
 git add scripts/bigquery/tests/FACT_KEYWORD_STATE_acceptance.sql
 git commit -m "test(catalog): first acceptance suite for FACT_KEYWORD_STATE
 
-Ten checks: grain, ladder set, appointment rule, floor identity, ad-group
-uniqueness, bar clamp, at_floor, one-sided guard, probation coherence, and K01 —
-the memory check, red until FACT_KEYWORD_STATE_HISTORY exists."
+Eleven checks: grain, ladder set, appointment rule, floor identity, ad-group
+uniqueness, bar clamp, at_floor, one-sided guard, probation coherence, K02b (the
+history carries every column, because the append is by name), and K01 — the memory
+check, red until FACT_KEYWORD_STATE_HISTORY exists."
 ```
 
 ---
@@ -651,10 +679,45 @@ with:
   WHERE snapshot_date IN (SELECT DISTINCT snapshot_date
                           FROM `onyga-482313.OI.FACT_KEYWORD_STATE`);
 
-  INSERT INTO `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`
-  SELECT * FROM `onyga-482313.OI.FACT_KEYWORD_STATE`;
+  -- THE APPEND IS BY COLUMN NAME, NEVER BY POSITION, AND THIS IS NOT A STYLE PREFERENCE.
+  -- `INSERT INTO history SELECT * FROM current` maps columns POSITIONALLY. NINE later tasks in this
+  -- plan add columns to FACT_KEYWORD_STATE (2.3, 2.4, 5.5, 7.3, 7.4, 8.2, 10.3, 11.4, 13.4), and
+  -- two of them add columns in the MIDDLE of the
+  -- procedure's final SELECT rather than at the end (Task 2.3 places subject_key and
+  -- is_sentinel_target immediately after keyword_id; Task 8.2 places the four-field contract FIRST
+  -- in the row), while every column reaching this history table arrives by ALTER TABLE ADD COLUMN,
+  -- which appends at the END. After Task 2.3 a positional insert would map subject_key (STRING)
+  -- onto target_text and is_sentinel_target (BOOL) onto match_type (STRING) — the nightly pass
+  -- fails at the INSERT, and where the types happen to line up it does not fail, it writes the
+  -- wrong data silently. So the column list is built from INFORMATION_SCHEMA at run time, by name,
+  -- and a column that exists on the current table but not yet on the history table is simply not
+  -- copied (the acceptance suite's K02b catches that case loudly rather than letting it rot).
+  BEGIN
+    DECLARE append_sql STRING;
+    SET append_sql = (
+      SELECT CONCAT(
+        'INSERT INTO `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY` (', cols, ') ',
+        'SELECT ', cols, ' FROM `onyga-482313.OI.FACT_KEYWORD_STATE`')
+      FROM (
+        SELECT STRING_AGG(h.column_name, ', ' ORDER BY h.ordinal_position) AS cols
+        FROM `onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS` h
+        WHERE h.table_name = 'FACT_KEYWORD_STATE_HISTORY'
+          AND h.column_name IN (SELECT c.column_name
+                                FROM `onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS` c
+                                WHERE c.table_name = 'FACT_KEYWORD_STATE')
+      )
+    );
+    EXECUTE IMMEDIATE append_sql;
+  END;
 END;
 ```
+
+**A standing rule this creates, binding on every later task in this plan.** Every task that adds a
+column to `FACT_KEYWORD_STATE` must add the **same column name** to
+`scripts/bigquery/tables/FACT_KEYWORD_STATE_HISTORY.sql` as an `ALTER TABLE ... ADD COLUMN IF NOT
+EXISTS` line **and deploy that DDL** in the same step. All nine tasks that add a column — 2.3, 2.4,
+5.5, 7.3, 7.4, 8.2, 10.3, 11.4 and 13.4 — carry that `ALTER TABLE` block already; this is why. Position no longer matters — only
+the name — so a column may be added anywhere in the procedure's final `SELECT`.
 
 - [ ] **Step 4: Deploy, run twice, and prove idempotency**
 
@@ -670,9 +733,17 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
           COUNT(*) - COUNT(DISTINCT CONCAT(campaign_id,'|',keyword_id)) AS duplicate_subjects
    FROM \`onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY\`
    GROUP BY 1 ORDER BY 1"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "SELECT c.column_name AS on_current_but_not_on_history
+   FROM \`onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS\` c
+   WHERE c.table_name = 'FACT_KEYWORD_STATE'
+     AND c.column_name NOT IN (SELECT h.column_name
+                               FROM \`onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS\` h
+                               WHERE h.table_name = 'FACT_KEYWORD_STATE_HISTORY')
+   ORDER BY 1"
 ```
 
-Expected: one row, `duplicate_subjects = 0`, and `rows_written` equal to the row count of `FACT_KEYWORD_STATE`. Two calls produce one partition, not two copies.
+Expected: one row from the first query, `duplicate_subjects = 0`, and `rows_written` equal to the row count of `FACT_KEYWORD_STATE`. Two calls produce one partition, not two copies. **Zero rows from the second query** — a name listed there is a column the name-keyed append is silently dropping, and the fix is the missing `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` line in the history DDL, never a change to the append.
 
 - [ ] **Step 5: Register in `config.yaml`**
 
@@ -924,36 +995,54 @@ Insert immediately after the `DELETE`:
   -- Doctrine 6: Pacing's scorecard is "did it deliver what it was asked for, at the price it
   -- predicted?", and 10.4 records that nothing captured the prediction, so Pacing could not be
   -- graded at all and 2.5's response curve had no input. This table is where the prediction lives.
-  -- ONE TEMP TABLE, joined by every INSERT below, so the nine surfaces cannot disagree about the
+  -- TWO TEMP TABLES, joined by every INSERT below, so the nine surfaces cannot disagree about the
   -- model. CREATE OR REPLACE TEMP TABLE because the orchestrator may call this procedure twice in
   -- one pass (house rule after the 2026-08-24 cube outage).
   --
-  -- THE MODEL IS V_BID_CPC_TRANSFER's OWN, unchanged and not re-derived here:
-  --   realised CPC = k_effective * bid ^ gamma * m_effective
-  -- expected_clicks is our own recent click rate at the CURRENT price, carried forward — it is
+  -- THE MODEL IS V_BID_CPC_TRANSFER's OWN, unchanged and not re-derived here. Read its header
+  -- before touching this: line 21 states the forward model as
+  --     realised_CPC = k_seg * bid^gamma * M_campaign
+  -- and line 301 publishes k_effective = k_pure * m_effective — that is, k_effective ALREADY
+  -- CONTAINS the campaign's placement multiplier. So the expression is
+  --     expected_cpc = k_effective * bid ^ gamma
+  -- and multiplying by m_effective a second time double-counts placement. (Verified 2026-08-24:
+  -- COUNTIF(ABS(k_effective - k_pure*m_effective) > 1e-4) = 0 over all 415 rows of the view.)
+  --
+  -- THE GRAIN IS THE VIEW'S OWN GRAIN: one row per (campaign_id, channel, target_kind) — 415 rows
+  -- over 152 campaigns, verified 1:1. k_effective VARIES BY target_kind inside a campaign (SP AUTO
+  -- 0.70–3.62, SP KEYWORD 0.77–3.96), so collapsing the campaign with independent MAX()es would
+  -- pair a level from one target kind with a gamma from another and produce a curve that belongs to
+  -- no real segment — the ANY_VALUE-pairing hazard the house has a standing rule about. The QUALIFY
+  -- below takes k_eff and gamma FROM THE SAME ROW, and the row is chosen by the key, not by a max.
+  CREATE OR REPLACE TEMP TABLE bid_cpc_model AS
+  SELECT CAST(campaign_id AS STRING) AS cid,
+         channel,
+         target_kind,
+         k_effective AS k_eff,
+         gamma
+  FROM `onyga-482313.OI.V_BID_CPC_TRANSFER`
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY CAST(campaign_id AS STRING), channel, target_kind
+    ORDER BY k_effective DESC) = 1;   -- defensive only: the grain is already 1:1
+
+  -- our own click rate per day over the last 28 complete days, per (campaign, keyword).
+  -- A SEPARATE TABLE, NOT A COLUMN ON THE ONE ABOVE. Written as one table joined on cid alone, a
+  -- keyword with no 28-day click rate produced a NULL kid and therefore matched NOTHING, so
+  -- 'CPC_ONLY_NO_OWN_CLICK_RATE' was unreachable and every dormant or parked keyword — precisely
+  -- the population 2.5's curve most needs — was mislabelled 'NO_TRANSFER_MODEL'.
+  -- expected_clicks is our own recent rate at the CURRENT price, carried forward — it is
   -- deliberately NOT elasticity-adjusted, because no bid-to-click-quantity model exists anywhere
   -- yet (that is violation 17, built in Phase 10). prediction_source says so on the row.
-  CREATE OR REPLACE TEMP TABLE bid_model AS
+  CREATE OR REPLACE TEMP TABLE own_click_rate AS
   WITH wm AS (
     SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
     FROM `onyga-482313.OI.FACT_AMAZON_ADS`
-  ),
-  tr AS (
-    SELECT CAST(campaign_id AS STRING) AS cid,
-           MAX(k_effective) AS k_eff, MAX(gamma) AS gamma, MAX(m_effective) AS m_eff
-    FROM `onyga-482313.OI.V_BID_CPC_TRANSFER`
-    GROUP BY 1
-  ),
-  -- our own click rate per day over the last 28 complete days, per (campaign, keyword)
-  rate AS (
-    SELECT CAST(a.campaign_id AS STRING) AS cid, CAST(a.keyword_id AS STRING) AS kid,
-           SAFE_DIVIDE(SUM(a.Ads_clicks), 28.0) AS clicks_per_day
-    FROM `onyga-482313.OI.FACT_AMAZON_ADS` a, wm
-    WHERE a.date BETWEEN DATE_SUB(wm.d, INTERVAL 28 DAY) AND DATE_SUB(wm.d, INTERVAL 1 DAY)
-    GROUP BY 1, 2
   )
-  SELECT tr.cid, rate.kid, tr.k_eff, tr.gamma, tr.m_eff, rate.clicks_per_day
-  FROM tr LEFT JOIN rate ON rate.cid = tr.cid;
+  SELECT CAST(a.campaign_id AS STRING) AS cid, CAST(a.keyword_id AS STRING) AS kid,
+         SAFE_DIVIDE(SUM(a.Ads_clicks), 28.0) AS clicks_per_day
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` a, wm
+  WHERE a.date BETWEEN DATE_SUB(wm.d, INTERVAL 28 DAY) AND DATE_SUB(wm.d, INTERVAL 1 DAY)
+  GROUP BY 1, 2;
 ```
 
 - [ ] **Step 4: Carry the prediction on every INSERT**
@@ -972,22 +1061,48 @@ and the four expressions appended to its `SELECT` list, before the `FROM`:
 
 ```sql
          -- the prediction. NULL suggested_bid (a held row) predicts nothing, and says so.
+         -- k_eff already carries the campaign's placement multiplier — see the model comment above;
+         -- multiplying by m_effective here would double-count it.
          IF(v.suggested_bid IS NULL, NULL,
-            bm.k_eff * POW(v.suggested_bid, bm.gamma) * bm.m_eff)          AS expected_cpc,
-         IF(v.suggested_bid IS NULL, NULL, bm.clicks_per_day)              AS expected_clicks,
-         CAST(NULL AS FLOAT64)                                             AS ceiling_at_proposal,
-         CASE WHEN v.suggested_bid IS NULL              THEN 'NONE_HELD_ROW'
-              WHEN bm.k_eff IS NULL OR bm.gamma IS NULL THEN 'NO_TRANSFER_MODEL'
-              WHEN bm.clicks_per_day IS NULL            THEN 'CPC_ONLY_NO_OWN_CLICK_RATE'
-              ELSE 'V_BID_CPC_TRANSFER_CPC_PLUS_OWN_28D_CLICK_RATE' END   AS prediction_source
+            COALESCE(bm.k_eff, bmk.k_eff)
+              * POW(v.suggested_bid, COALESCE(bm.gamma, bmk.gamma)))        AS expected_cpc,
+         IF(v.suggested_bid IS NULL, NULL, cr.clicks_per_day)               AS expected_clicks,
+         CAST(NULL AS FLOAT64)                                              AS ceiling_at_proposal,
+         -- FOUR REACHABLE OUTCOMES, and every one of them is a real state a row can be in.
+         CASE WHEN v.suggested_bid IS NULL                    THEN 'NONE_HELD_ROW'
+              WHEN COALESCE(bm.k_eff, bmk.k_eff) IS NULL      THEN 'NO_TRANSFER_MODEL'
+              WHEN cr.clicks_per_day IS NULL AND bm.k_eff IS NULL
+                                                              THEN 'CPC_KEYWORD_FALLBACK_NO_OWN_CLICK_RATE'
+              WHEN cr.clicks_per_day IS NULL                  THEN 'CPC_ONLY_NO_OWN_CLICK_RATE'
+              WHEN bm.k_eff IS NULL                           THEN 'CPC_KEYWORD_FALLBACK_PLUS_OWN_28D_CLICK_RATE'
+              ELSE 'V_BID_CPC_TRANSFER_CPC_PLUS_OWN_28D_CLICK_RATE' END    AS prediction_source
 ```
 
-with the source view aliased as `v` and this join added at the end of the statement:
+with the source view aliased as `v` and these three joins added at the end of the statement:
 
 ```sql
-  LEFT JOIN bid_model bm
-    ON bm.cid = CAST(v.campaign_id AS STRING)
-   AND bm.kid = CAST(v.keyword_id AS STRING)
+  -- the segment's own curve...
+  LEFT JOIN bid_cpc_model bm
+    ON bm.cid         = CAST(v.campaign_id AS STRING)
+   AND bm.channel     = IF(UPPER(COALESCE(v.channel, 'SP')) LIKE 'SB%', 'SB', 'SP')
+   AND bm.target_kind = CASE
+         WHEN UPPER(COALESCE(v.match_type, '')) LIKE 'AUTO%'      THEN 'AUTO'
+         WHEN UPPER(COALESCE(v.match_type, '')) LIKE 'ASIN%'
+           OR UPPER(COALESCE(v.match_type, '')) LIKE 'CATEGORY%'
+           OR UPPER(COALESCE(v.match_type, '')) = 'TARGETING_EXPRESSION' THEN 'PRODUCT'
+         ELSE 'KEYWORD' END
+  -- ...and the campaign's KEYWORD segment as the named fallback, because V_BID_CPC_TRANSFER has no
+  -- SB AUTO row at all and the proposals' match_type vocabulary is messier than the view's
+  -- (measured on the 2026-08-21 snapshot: 'Automatic', 'AUTOMATIC', 'broad', 'BROAD', 'ASIN',
+  -- 'TARGETING_EXPRESSION' and NULL all appear). A fallback that is NAMED on the row is honest; a
+  -- silent NULL prediction is not.
+  LEFT JOIN bid_cpc_model bmk
+    ON bmk.cid         = CAST(v.campaign_id AS STRING)
+   AND bmk.channel     = IF(UPPER(COALESCE(v.channel, 'SP')) LIKE 'SB%', 'SB', 'SP')
+   AND bmk.target_kind = 'KEYWORD'
+  LEFT JOIN own_click_rate cr
+    ON cr.cid = CAST(v.campaign_id AS STRING)
+   AND cr.kid = CAST(v.keyword_id AS STRING)
 ```
 
 `ceiling_at_proposal` is `NULL` in this phase on purpose: no layer publishes a ceiling until Phase 1 widens `SP_ENGINE_PREFLIGHT`, and §6.3's discipline says do not assert a number we have not computed. Phase 1 Task 1.2 fills it.
@@ -1012,7 +1127,32 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
    GROUP BY 1 ORDER BY n DESC"
 ```
 
-Expected: every row carries a non-null `prediction_source`; rows sourced `V_BID_CPC_TRANSFER_CPC_PLUS_OWN_28D_CLICK_RATE` carry both an `expected_cpc` and an `expected_clicks`; `NOT_A_PRICE_LEVER` and `NONE_HELD_ROW` rows carry neither. Two calls produce one partition.
+Expected: every row carries a non-null `prediction_source`; rows sourced
+`V_BID_CPC_TRANSFER_CPC_PLUS_OWN_28D_CLICK_RATE` carry both an `expected_cpc` and an
+`expected_clicks`; `NOT_A_PRICE_LEVER` and `NONE_HELD_ROW` rows carry neither. Two calls produce one
+partition. **`CPC_ONLY_NO_OWN_CLICK_RATE` must be REACHABLE** — a parked or dormant keyword with a
+priced proposal and no clicks in the last 28 days lands there, and if that bucket is empty while
+`NO_TRANSFER_MODEL` is large, the click-rate join has been folded back into the CPC table and the
+two must be separated again. Sanity-check the CPC prediction against the view it comes from, which
+must agree to the cent:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT COUNTIF(ABS(expected_cpc - t.expected_cpc_at_bid_1_00 * POW(p.suggested_bid, t.gamma)) > 0.01)
+         AS rows_that_disagree_with_the_published_model
+FROM \`onyga-482313.OI.FACT_ENGINE_PROPOSALS\` p
+JOIN \`onyga-482313.OI.V_BID_CPC_TRANSFER\` t
+  ON CAST(t.campaign_id AS STRING) = CAST(p.campaign_id AS STRING)
+ AND t.channel = IF(UPPER(COALESCE(p.channel,'SP')) LIKE 'SB%','SB','SP')
+ AND t.target_kind = 'KEYWORD'
+WHERE p.snapshot_date = (SELECT MAX(snapshot_date) FROM \`onyga-482313.OI.FACT_ENGINE_PROPOSALS\`)
+  AND p.prediction_source = 'CPC_KEYWORD_FALLBACK_PLUS_OWN_28D_CLICK_RATE'
+  AND p.expected_cpc IS NOT NULL"
+```
+
+Expected: `0`. `expected_cpc_at_bid_1_00` is `k_effective * 1^gamma`, so this is the same expression
+read from the other end — if it disagrees, `m_effective` has been reintroduced somewhere.
 
 - [ ] **Step 6: Commit**
 
@@ -1257,15 +1397,34 @@ GROUP BY ks.state ORDER BY n DESC"
 
 Expected: a non-zero `above_ceiling`. On 2026-08-24 the GO BID rows joined to ladder states TRIAL 18, AT_BAR 9, WINNER 8, PARKED 8, REPRICE 4, PACED_WINNER 4, LAUNCH_CONTAINED 1, FLOOR_PROBATION 1. Record the number you measure — it is the violation count Task 1.5's acceptance suite drives to zero.
 
-- [ ] **Step 2: Prove no cap binds anywhere in SQL**
+- [ ] **Step 2: Locate every copy of the cap, and prove none of them binds on an engine proposal**
 
 ```bash
 cd /Users/ori/Develop/OI
-grep -rn "0.157625\|0.142625\|BLIND_STEPS" scripts/bigquery/ | wc -l
-grep -rn "CAP_UP\|CAP_DOWN\|cap_move" tools/*.py | wc -l
+grep -rn "0.157625\|0.142625\|BLIND_STEPS\|blind_steps\|material_step" scripts/bigquery/ \
+  | grep -v "\.bak\."
+grep -rn "CAP_UP\|CAP_DOWN\|cap_move\|MATERIAL_STEP\|BLIND_STEPS" tools/*.py | wc -l
+grep -rn "cap_up\|cap_down\|FN_MOVE_CAP" scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql \
+        scripts/bigquery/views/V_OOB_KEYWORD.sql scripts/bigquery/views/V_KEYWORD_LIFT.sql \
+  | grep -v "\.bak\." | wc -l
 ```
 
-Expected: `0` from the first command (the cap exists in zero `.sql` files), a small non-zero count from the second (it lives only in `tools/build_reprice_bulksheet.py`, where `cap_move()` has exactly three callers, all inside that one generator).
+**Expected, and it is NOT zero — read this carefully before writing the function.** The first
+command finds the cap in exactly **one live `.sql` file**: `V_PLAN_WINDOW_JUDGMENT.sql:254-264`,
+which declares `0.05 AS material_step, 3 AS blind_steps` in its `k` CTE and derives
+`POW(1 + material_step, blind_steps) - 1 AS cap_up` and
+`1 - POW(1 - material_step, blind_steps) AS cap_down` in its `caps` CTE. That is the same cap in
+SQL, and it binds on the Brain's repaired price (P-6) — nowhere else. (Any additional hits are
+`.bak` files, which the `grep -v` above already drops; if it still returns `.bak` paths, tighten the
+filter rather than counting them.) The second command returns a small non-zero count: the Python
+copy in `tools/build_reprice_bulksheet.py`, where `cap_move()` has exactly three callers, all inside
+that one generator. **The third command returns `0`, and that is the actual defect** — no cap of any
+kind is applied to an engine proposal in either direction, which is §10.3's correction of violation
+16 verbatim.
+
+So the cap lives in **two** places today, both of them narrow, and `FN_MOVE_CAP` is built in Task 1.3
+to be the third and last: Task 1.3 Step 5 migrates `V_PLAN_WINDOW_JUDGMENT`'s copy onto the function
+so the count goes back to two — the function and the Python generator — rather than to three.
 
 - [ ] **Step 3: Record the measurement and commit it**
 
@@ -1352,29 +1511,67 @@ Replace with:
   ),
 ```
 
-- [ ] **Step 3: Resolve the ceiling once, in the final SELECT**
+- [ ] **Step 3: Resolve the ceiling ONE CTE EARLIER, inside `ranked` — never in the final SELECT**
 
-In the final `SELECT` of the `T_ENGINE_PREFLIGHT` build, immediately after the existing `rc.settled_roas90, rc.settled_clk90,` line, add:
+**Read this before typing.** BigQuery does not expose a `SELECT`-list alias to any other expression
+in the same `SELECT` list. The verdict `CASE` in Step 4 and the `verdict_reason` `CASE` live in the
+**same** final `SELECT` as the ceiling columns, so a ceiling resolved there would be unreachable from
+them. Confirm it yourself in one line before you start, so the shape below is obviously necessary
+rather than merely asserted:
 
-```sql
-         -- THE CEILING, AND WHO SET IT. The Brain's price wins where it exists, because the Brain
-         -- is the layer that allocates (doctrine 1.2); the Catalog's affordable bid is the
-         -- fallback, because a keyword outside the plan still has a worth; and a subject with
-         -- neither has no ceiling and is left alone by this arm rather than blocked on a guess.
-         COALESCE(br.planned_bid, ct.affordable_bid)                       AS ceiling_bid,
-         CASE WHEN br.planned_bid   IS NOT NULL THEN 'BRAIN'
-              WHEN ct.affordable_bid IS NOT NULL THEN 'CATALOG'
-              ELSE 'NONE' END                                              AS ceiling_source,
-         ct.state                                                          AS catalog_state,
-         ct.next_check_date                                                AS catalog_next_check,
-         br.move                                                           AS brain_move,
+```bash
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "SELECT 1 AS ceiling_bid, CASE WHEN ceiling_bid > 0 THEN 'x' END AS v"
 ```
 
-and add the two joins beside the existing `rc` join:
+Expected: `Error ... Unrecognized name: ceiling_bid`.
+
+So the ceiling is resolved in the `ranked` CTE, which the final `SELECT` reads as `r`. `ranked` today
+ends:
 
 ```sql
-  LEFT JOIN cat   ct ON ct.cid = CAST(r.campaign_id AS STRING) AND ct.kid = CAST(r.keyword_id AS STRING)
-  LEFT JOIN brain br ON br.cid = CAST(r.campaign_id AS STRING) AND br.kid = CAST(r.keyword_id AS STRING)
+    FROM p
+    LEFT JOIN own o  ON o.cid = CAST(p.campaign_id AS STRING)
+    LEFT JOIN hold h ON h.cid = CAST(p.campaign_id AS STRING)
+  )
+```
+
+Replace those four lines with:
+
+```sql
+      -- THE CEILING, AND WHO SET IT. The Brain's price wins where it exists, because the Brain
+      -- is the layer that allocates (doctrine 1.2); the Catalog's affordable bid is the
+      -- fallback, because a keyword outside the plan still has a worth; and a subject with
+      -- neither has no ceiling and is left alone by this arm rather than blocked on a guess.
+      -- RESOLVED HERE, NOT IN THE FINAL SELECT: the verdict CASE below is in the same SELECT list
+      -- as the published columns, and BigQuery cannot read a select-list alias from a sibling
+      -- expression. Computing it once in this CTE is also what stops the COALESCE being written
+      -- out three times and drifting.
+      COALESCE(br.planned_bid, ct.affordable_bid)                          AS ceiling_bid,
+      CASE WHEN br.planned_bid    IS NOT NULL THEN 'BRAIN'
+           WHEN ct.affordable_bid IS NOT NULL THEN 'CATALOG'
+           ELSE 'NONE' END                                                 AS ceiling_source,
+      ct.state                                                             AS catalog_state,
+      ct.next_check_date                                                   AS catalog_next_check,
+      br.move                                                              AS brain_move
+    FROM p
+    LEFT JOIN own o  ON o.cid = CAST(p.campaign_id AS STRING)
+    LEFT JOIN hold h ON h.cid = CAST(p.campaign_id AS STRING)
+    -- both joins are 1:1 by the source's own key and cannot fan `p` out. VERIFY IT, do not assume
+    -- it: on 2026-08-24 FACT_KEYWORD_STATE's latest snapshot held 838 rows over 838 distinct
+    -- (campaign_id, keyword_id) pairs and the live plan partition held 365 over 365. Phase 2 Task
+    -- 2.3 adds sentinel SB targets, which ARE many-per-(campaign, keyword) — that task carries the
+    -- step that re-keys this join onto subject_key before it can fan anything out.
+    LEFT JOIN cat   ct ON ct.cid = CAST(p.campaign_id AS STRING) AND ct.kid = CAST(p.keyword_id AS STRING)
+    LEFT JOIN brain br ON br.cid = CAST(p.campaign_id AS STRING) AND br.kid = CAST(p.keyword_id AS STRING)
+  )
+```
+
+Then, in the final `SELECT`, immediately after the existing `rc.settled_roas90, rc.settled_clk90,`
+line, publish them off `r`:
+
+```sql
+         r.ceiling_bid, r.ceiling_source, r.catalog_state, r.catalog_next_check, r.brain_move,
 ```
 
 - [ ] **Step 4: Add the verdict arm above `ELSE 'GO'`**
@@ -1396,26 +1593,27 @@ Replace with:
       -- twenty-day failure in Appendix A happened while everybody agreed on the price. A proposal
       -- above the ceiling is not a judgement call, it is a proposal to overpay.
       -- The >$2.00 arm above stays as a second, weaker net for subjects with no ceiling at all.
-      WHEN r.lever = 'BID' AND ceiling_bid IS NOT NULL
-        AND r.suggested_bid > ceiling_bid + 0.005 THEN 'EXCLUDE'
+      WHEN r.lever = 'BID' AND r.ceiling_bid IS NOT NULL
+        AND r.suggested_bid > r.ceiling_bid + 0.005 THEN 'EXCLUDE'
       ELSE 'GO' END AS verdict,
 ```
 
 and in the `verdict_reason` `CASE`, immediately above its own final `ELSE`, add the matching sentence:
 
 ```sql
-      WHEN r.lever = 'BID' AND ceiling_bid IS NOT NULL
-        AND r.suggested_bid > ceiling_bid + 0.005
-        THEN CONCAT('skipped — ', IF(ceiling_source = 'BRAIN', 'the plan', 'the keyword state'),
-                    ' prices this keyword at $', CAST(ROUND(ceiling_bid, 2) AS STRING),
+      WHEN r.lever = 'BID' AND r.ceiling_bid IS NOT NULL
+        AND r.suggested_bid > r.ceiling_bid + 0.005
+        THEN CONCAT('skipped — ', IF(r.ceiling_source = 'BRAIN', 'the plan', 'the keyword state'),
+                    ' prices this keyword at $', CAST(ROUND(r.ceiling_bid, 2) AS STRING),
                     ' and this proposal would pay $', CAST(ROUND(r.suggested_bid, 2) AS STRING),
                     '. Worth is decided above the auction, not in it: the engine may find the path '
                     'to a price, never choose one higher than the price it was given.')
 ```
 
-- [ ] **Step 5: Publish the new columns**
+- [ ] **Step 5: Deploy and confirm the columns reach the table**
 
-Add `ceiling_bid`, `ceiling_source`, `catalog_state`, `catalog_next_check` and `brain_move` to the column list the procedure publishes on `T_ENGINE_PREFLIGHT` — they are already in the final `SELECT` from Step 3, so nothing further is needed beyond confirming they survive to the table:
+The five columns are published off `r` in Step 3, which resolves them in the `ranked` CTE — so the
+verdict arms in Step 4 can read them and the table receives them. Confirm both:
 
 ```bash
 cd /Users/ori/Develop/OI
@@ -1449,7 +1647,8 @@ publishes it with its source, and EXCLUDEs any BID proposal above it."
 
 **Files:**
 - Create: `scripts/bigquery/functions/FN_MOVE_CAP.sql`
-- Modify: `scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql` (apply the cap)
+- Modify: `scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql` (apply the cap, both directions)
+- Modify: `scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql:261-266` (the `caps` CTE — migrate the second copy of the constant onto the function)
 - Modify: `config.yaml` (`functions:` section, beside `FN_BID_FLOOR` at index 2)
 
 §3.1: a cut to a known ceiling at HIGH confidence goes immediately, because a cut to a ceiling cannot overshoot; a raise into unknown territory keeps the blind-step limit. The constants live today only in `tools/build_reprice_bulksheet.py:160-170` and bind inside one generator.
@@ -1460,11 +1659,18 @@ publishes it with its source, and EXCLUDEs any BID proposal above it."
 -- =============================================================================================
 -- FN_MOVE_CAP — how far one upload may move a bid, in ONE place, callable from SQL.
 --
--- WHY IT EXISTS. The house per-upload cap (three blind 5% steps: +15.7625% / -14.2625%) lived only
--- in tools/build_reprice_bulksheet.py, where cap_move() has three callers, all inside that one
--- generator. A grep over scripts/bigquery finds the cap in zero .sql files, so no cap bound on any
--- engine proposal in either direction. architecture/THREE_LAYERS.md 10.3 corrected violation 16 to
--- exactly this: the defect is not that the cap is symmetric, it is that no cap binds at all.
+-- WHY IT EXISTS. The house per-upload cap (three blind 5% steps: +15.7625% / -14.2625%) lived in
+-- exactly two narrow places and bound on no engine proposal in either direction:
+--   * tools/build_reprice_bulksheet.py, where cap_move() has three callers, all inside that one
+--     generator; and
+--   * V_PLAN_WINDOW_JUDGMENT.sql's k / caps CTEs, which declare material_step 0.05 and
+--     blind_steps 3 and derive cap_up / cap_down from them — binding only on the Brain's repaired
+--     price (P-6), and on nothing that Pacing emits.
+-- Neither reaches SP_ENGINE_PREFLIGHT, V_OOB_KEYWORD or V_KEYWORD_LIFT, so an engine proposal was
+-- bounded by nothing. architecture/THREE_LAYERS.md 10.3 corrected violation 16 to exactly this: the
+-- defect is not that the cap is symmetric, it is that no cap binds at all.
+-- THIS FUNCTION IS THE ONE DEFINITION IN SQL. Step 5 of this task migrates V_PLAN_WINDOW_JUDGMENT's
+-- copy onto it in the same commit, so the constant does not end up living in three places.
 --
 -- THE ASYMMETRY IS 3.1's, AND IT IS ABOUT WHAT CAN OVERSHOOT.
 --   * A CUT TO A KNOWN CEILING AT HIGH CONFIDENCE CANNOT OVERSHOOT — the ceiling is the target, and
@@ -1526,8 +1732,9 @@ In the final `SELECT` of `SP_ENGINE_PREFLIGHT`, immediately after the `brain_mov
          -- ── THE MOVE CAP, PUBLISHED SO IT BINDS ON EVERY EMITTER (2026-08-25). The cap has never
          -- existed in SQL — only inside one Python generator — so nothing bounded an engine's step.
          -- Confidence is not computed until Phase 7, so it is passed as NULL here and every move
-         -- walks. That is the safe reading, and the arm below flips to immediate cuts the day
-         -- FACT_KEYWORD_STATE publishes a confidence band.
+         -- walks. That is the safe reading. Task 7.5 Step 4 is the task that replaces this literal
+         -- NULL with ct.confidence_band and re-deploys this procedure; nothing else does, and
+         -- leaving it at NULL forever would silently keep confident cuts walking.
          CASE WHEN r.lever = 'BID' AND r.suggested_bid IS NOT NULL AND r.current_bid IS NOT NULL
                    AND r.suggested_bid < r.current_bid
               THEN `onyga-482313.OI.FN_MOVE_CAP`(r.current_bid, 'DOWN', NULL)
@@ -1537,26 +1744,46 @@ In the final `SELECT` of `SP_ENGINE_PREFLIGHT`, immediately after the `brain_mov
               ELSE NULL END                                             AS move_cap_bid,
 ```
 
-and add one more arm to the verdict `CASE`, immediately below the ceiling arm added in Task 1.2:
+and add **two** more arms to the verdict `CASE` — one per direction — immediately below the ceiling
+arm added in Task 1.2. **Both directions, deliberately:** §10.3's measured finding, which is this
+phase's whole motivation, is that CUTS break their cap proportionally MORE often than raises break
+theirs. A one-directional cap would leave the larger half of the measured breach unlabelled.
 
 ```sql
-      -- a raise beyond one upload's cap is not refused, it is TRIMMED by the consumer — but a
+      -- a move beyond one upload's cap is not refused, it is TRIMMED by the consumer — but a
       -- proposal that ignores the cap entirely is a defect, so it is labelled here.
       WHEN r.lever = 'BID' AND r.current_bid IS NOT NULL AND r.suggested_bid IS NOT NULL
+        AND r.suggested_bid > r.current_bid
         AND r.suggested_bid > `onyga-482313.OI.FN_MOVE_CAP`(r.current_bid, 'UP', NULL) + 0.005
+        THEN 'REVIEW'
+      -- the CUT arm. FN_MOVE_CAP returns 0.0 for a HIGH-confidence cut (go straight to the target),
+      -- so this arm can never fire once Task 7.5 passes a real confidence band — which is exactly
+      -- 3.1's asymmetry expressing itself rather than a special case bolted on.
+      WHEN r.lever = 'BID' AND r.current_bid IS NOT NULL AND r.suggested_bid IS NOT NULL
+        AND r.suggested_bid < r.current_bid
+        AND r.suggested_bid < `onyga-482313.OI.FN_MOVE_CAP`(r.current_bid, 'DOWN', NULL) - 0.005
         THEN 'REVIEW'
 ```
 
-with the matching `verdict_reason` arm, placed in the same relative position:
+with the matching `verdict_reason` arms, placed in the same relative positions:
 
 ```sql
       WHEN r.lever = 'BID' AND r.current_bid IS NOT NULL AND r.suggested_bid IS NOT NULL
+        AND r.suggested_bid > r.current_bid
         AND r.suggested_bid > `onyga-482313.OI.FN_MOVE_CAP`(r.current_bid, 'UP', NULL) + 0.005
         THEN CONCAT('needs a look — this raises $', CAST(ROUND(r.current_bid, 2) AS STRING),
                     ' to $', CAST(ROUND(r.suggested_bid, 2) AS STRING),
                     ', further than one upload may move a bid it cannot observe ($',
                     CAST(ROUND(`onyga-482313.OI.FN_MOVE_CAP`(r.current_bid, 'UP', NULL), 2) AS STRING),
                     '). Raising into unknown territory is walked, never taken in one step.')
+      WHEN r.lever = 'BID' AND r.current_bid IS NOT NULL AND r.suggested_bid IS NOT NULL
+        AND r.suggested_bid < r.current_bid
+        AND r.suggested_bid < `onyga-482313.OI.FN_MOVE_CAP`(r.current_bid, 'DOWN', NULL) - 0.005
+        THEN CONCAT('needs a look — this cuts $', CAST(ROUND(r.current_bid, 2) AS STRING),
+                    ' to $', CAST(ROUND(r.suggested_bid, 2) AS STRING),
+                    ', below the furthest one upload may cut a bid it is not yet sure about ($',
+                    CAST(ROUND(`onyga-482313.OI.FN_MOVE_CAP`(r.current_bid, 'DOWN', NULL), 2) AS STRING),
+                    '). A cut to a ceiling we are sure of goes in one step; this is not one.')
 ```
 
 - [ ] **Step 4: Deploy and verify**
@@ -1569,11 +1796,78 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "CALL \`onyga-482313.OI.SP_ENGINE_PREFLIGHT\`()"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "SELECT verdict, COUNT(*) n,
-          COUNTIF(suggested_bid > move_cap_bid + 0.005 AND suggested_bid > current_bid) beyond_cap
+          COUNTIF(suggested_bid > current_bid
+                  AND suggested_bid > move_cap_bid + 0.005) beyond_cap_up,
+          COUNTIF(suggested_bid < current_bid
+                  AND suggested_bid < move_cap_bid - 0.005) beyond_cap_down
    FROM \`onyga-482313.OI.T_ENGINE_PREFLIGHT\` WHERE lever = 'BID' GROUP BY 1 ORDER BY n DESC"
 ```
 
-Expected: every row with `beyond_cap > 0` reads verdict `REVIEW` or `EXCLUDE`, never `GO`.
+Expected: every row with `beyond_cap_up > 0` **or** `beyond_cap_down > 0` reads verdict `REVIEW` or
+`EXCLUDE`, never `GO`. **Both columns matter**: §10.3 measured cuts breaking their cap more often
+than raises, so a check that only looked upward would report green on the larger half.
+
+- [ ] **Step 4b: Migrate `V_PLAN_WINDOW_JUDGMENT`'s copy of the cap onto the function**
+
+Back up the view (header Step 0), then in `scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql` replace
+the `caps` CTE at lines 261–266, which today reads:
+
+```sql
+caps AS (
+  SELECT k.*,
+         POW(1 + k.material_step, k.blind_steps) - 1 AS cap_up,
+         1 - POW(1 - k.material_step, k.blind_steps) AS cap_down
+  FROM k
+),
+```
+
+with:
+
+```sql
+caps AS (
+  -- 2026-08-25: the cap is FN_MOVE_CAP's, not this view's. material_step and blind_steps stay in k
+  -- because the row sentences quote them ("three 5% steps"), but the arithmetic that binds on P-6's
+  -- repaired price is now the same arithmetic that binds on every engine proposal — one definition,
+  -- in one place, per 10.3's correction of violation 16. cap_up / cap_down keep their meaning
+  -- (fractions, not prices) so line 532's expression and every sentence below are untouched.
+  SELECT k.*,
+         `onyga-482313.OI.FN_MOVE_CAP`(1.0, 'UP',   NULL) - 1.0 AS cap_up,
+         1.0 - `onyga-482313.OI.FN_MOVE_CAP`(1.0, 'DOWN', NULL) AS cap_down
+  FROM k
+),
+```
+
+`FN_MOVE_CAP(1.0, …)` returns the cap as a fraction of a $1.00 bid because the function is a
+distance, which is exactly what `cap_up` and `cap_down` already were. Verify the two agree to the
+cent before and after — the function rounds inward to the cent and the old expression did not, so a
+tiny difference is expected and is the function being stricter, never looser:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT POW(1.05, 3) - 1                                          AS old_cap_up,
+       \`onyga-482313.OI.FN_MOVE_CAP\`(1.0, 'UP', NULL) - 1.0     AS new_cap_up,
+       1 - POW(0.95, 3)                                          AS old_cap_down,
+       1.0 - \`onyga-482313.OI.FN_MOVE_CAP\`(1.0, 'DOWN', NULL)   AS new_cap_down"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql)"
+```
+
+Expected, and verified on 2026-08-24 before this task was written: `old_cap_up 0.157625` becomes
+`new_cap_up 0.15`, and `old_cap_down 0.142625` becomes `new_cap_down 0.14`. **Both shrink**, because
+the function rounds INWARD to the cent in each direction — a capped raise floors, a capped cut ceils
+— so the new caps are strictly the more conservative of the two on a $1.00 bid. Assert the
+direction, not equality:
+
+- `new_cap_up <= old_cap_up + 1e-9`
+- `new_cap_down <= old_cap_down + 1e-9`
+
+This is a real, small behaviour change to P-6's repaired price: it moves at most a cent per dollar of
+bid, and it moves it toward the current price. Say so in the commit message. If an acceptance row
+fails on a tolerance rather than a behaviour, widen that check's tolerance to the cent and say so in
+the check's comment — never widen the cap.
 
 - [ ] **Step 5: Register `FN_MOVE_CAP` in `config.yaml`**
 
@@ -1600,7 +1894,8 @@ Insert in the `functions:` list immediately after `FN_BID_FLOOR` (index 2):
 ```bash
 cd /Users/ori/Develop/OI
 git add scripts/bigquery/functions/FN_MOVE_CAP.sql \
-        scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql config.yaml
+        scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql \
+        scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql config.yaml
 git commit -m "feat(pacing): FN_MOVE_CAP publishes the move cap so it binds outside Python
 
 Implements 3.1's asymmetry — an immediate confident cut, a walked raise — and
@@ -1811,6 +2106,18 @@ e04 AS (
                  AND suggested_bid > `onyga-482313.OI.FN_MOVE_CAP`(current_bid, 'UP', NULL) + 0.005)
   FROM t
 ),
+e04b AS (
+  -- BOTH DIRECTIONS. 10.3's measured finding is that CUTS break their cap proportionally MORE often
+  -- than raises break theirs, so a suite that only checked upward would report green on the larger
+  -- half of the breach. FN_MOVE_CAP returns 0.0 for a HIGH-confidence cut, so once Task 7.5 passes a
+  -- real confidence band this check simply stops firing on confident cuts — which is 3.1's
+  -- asymmetry, not an exemption.
+  SELECT 'E04b no GO bid cut exceeds one upload move cap (3.1, the direction 10.3 measured)',
+         COUNTIF(verdict = 'GO' AND lever = 'BID'
+                 AND current_bid IS NOT NULL AND suggested_bid < current_bid
+                 AND suggested_bid < `onyga-482313.OI.FN_MOVE_CAP`(current_bid, 'DOWN', NULL) - 0.005)
+  FROM t
+),
 e05 AS (
   SELECT 'E05 the gate judges exactly one partition, and it is the latest proposals partition',
          (SELECT ABS(1 - COUNT(DISTINCT snapshot_date)) FROM t)
@@ -1825,7 +2132,8 @@ e06 AS (
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM e01 UNION ALL SELECT * FROM e02 UNION ALL SELECT * FROM e03
-      UNION ALL SELECT * FROM e04 UNION ALL SELECT * FROM e05 UNION ALL SELECT * FROM e06)
+      UNION ALL SELECT * FROM e04 UNION ALL SELECT * FROM e04b
+      UNION ALL SELECT * FROM e05 UNION ALL SELECT * FROM e06)
 ORDER BY check_name;
 ```
 
@@ -1837,7 +2145,7 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/tests/ENGINE_PREFLIGHT_acceptance.sql)"
 ```
 
-Expected: six rows, all `PASS`. If E01 reads `FAIL`, the ceiling arm from Task 1.2 was not deployed — re-run the deploy line for `SP_ENGINE_PREFLIGHT.sql` and `CALL` it.
+Expected: seven rows, all `PASS`. If E01 reads `FAIL`, the ceiling arm from Task 1.2 was not deployed — re-run the deploy line for `SP_ENGINE_PREFLIGHT.sql` and `CALL` it.
 
 - [ ] **Step 3: Commit**
 
@@ -2095,9 +2403,14 @@ kw AS (
     ) WHERE rn = 1
   ) c
   FULL OUTER JOIN (
-    -- ARM 2: spend. The judging frame is the guard's own 104-day bound, so a subject that spent at
-    -- any point the guard can still see is admitted; the settled windows downstream decide whether
-    -- there is a record worth judging.
+    -- ARM 2a: spend, NON-SENTINEL. The judging frame is the guard's own 104-day bound, so a subject
+    -- that spent at any point the guard can still see is admitted; the settled windows downstream
+    -- decide whether there is a record worth judging.
+    -- ANY_VALUE IS SAFE HERE AND ONLY HERE, and the reason is measured rather than assumed: over the
+    -- same 104-day window on 2026-08-24, spending (campaign_id, keyword_id, LOWER(TRIM(targeting)))
+    -- triples where keyword_id != '-1' numbered 631 over 631 distinct (campaign_id, keyword_id)
+    -- pairs — exactly 1:1, so there is only ever one text to choose from. Re-run that count before
+    -- trusting this comment; if it is ever not 1:1, this arm must be grained like 2b below.
     SELECT sp.campaign_id, sp.keyword_id, sp.keyword_text, sp.match_type, sp.channel,
            sp.current_bid, sp.dim_state, sp.campaign_state
     FROM (
@@ -2120,13 +2433,75 @@ kw AS (
         AND a.date <= DATE_SUB((SELECT d FROM wm), INTERVAL 1 DAY)
         AND a.Ads_cost > 0
         AND a.keyword_id IS NOT NULL
+        AND CAST(a.keyword_id AS STRING) != '-1'
       GROUP BY 1, 2
     ) sp
   ) sp
     ON  sp.campaign_id = c.campaign_id
    AND  sp.keyword_id  = c.keyword_id
 ),
+-- ── ARM 2b: THE SB SENTINEL TARGETS, GRAINED ON THE TEXT (2026-08-25) ────────────────────────
+-- Amazon reports an SB product target with no keyword identity under keyword_id '-1', and MANY
+-- DISTINCT TARGETS IN ONE CAMPAIGN SHARE IT. Measured 2026-08-24 over the same window: 50 distinct
+-- (campaign_id, '-1', targeting) triples over just 11 (campaign_id, keyword_id) pairs. Grouping them
+-- by (campaign_id, keyword_id) like arm 2a would pool up to a dozen unrelated product targets into
+-- one row, label it with an arbitrarily chosen sibling's text, and judge them all on the pooled
+-- record — which is exactly the cross-subject blending doctrine 2.2 forbids, and it would also make
+-- Task 2.3's subject_key nondeterministic between nightly runs because the label came from
+-- ANY_VALUE. So the text is a GROUPING COLUMN here, not an aggregate.
+--
+-- THEY ARE UNIONED, NOT JOINED. keyword_id '-1' has no DIM_KEYWORD row by construction, so an arm-2b
+-- row can never have an arm-1 counterpart and the FULL OUTER JOIN above has nothing to match it to.
+-- Unioning after the join keeps that join strictly 1:1 on (campaign_id, keyword_id).
+sentinel AS (
+  SELECT CAST(a.campaign_id AS STRING)      AS campaign_id,
+         CAST(a.keyword_id AS STRING)       AS keyword_id,
+         LOWER(TRIM(a.targeting))           AS keyword_text,
+         ANY_VALUE(a.targeting_type)        AS match_type,
+         IF(UPPER(ANY_VALUE(COALESCE(a.campaign_type, 'SP'))) LIKE 'SB%', 'SB', 'SP') AS channel,
+         CAST(NULL AS FLOAT64)              AS current_bid,
+         ANY_VALUE(dc.campaign_state)       AS campaign_state
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
+  LEFT JOIN `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` dc
+    ON dc.campaign_id = CAST(a.campaign_id AS STRING)
+  WHERE a.date > DATE_SUB((SELECT d FROM wm), INTERVAL 104 DAY)
+    AND a.date <= DATE_SUB((SELECT d FROM wm), INTERVAL 1 DAY)
+    AND a.Ads_cost > 0
+    AND CAST(a.keyword_id AS STRING) = '-1'
+    AND a.targeting IS NOT NULL AND TRIM(a.targeting) != ''
+  GROUP BY 1, 2, 3
+),
+kw_all AS (
+  SELECT * FROM kw
+  UNION ALL
+  SELECT campaign_id, keyword_id, keyword_text, match_type, channel, current_bid,
+         FALSE                                                                  AS is_auto,
+         TRUE                                                                   AS is_pt,
+         'SPEND'                                                                AS universe_source,
+         'SB sentinel target: no DIM_KEYWORD row exists for keyword_id -1'       AS serving_blocked_reason
+  FROM sentinel
+),
 ```
+
+**`kw_all` replaces `kw` in every downstream reference inside this view.** Find them and repoint them
+in the same edit — do not leave `kw` readable, or half the view will see the sentinels and half will
+not:
+
+```bash
+cd /Users/ori/Develop/OI
+grep -n "FROM kw$\|FROM kw \|JOIN kw \|JOIN kw$" scripts/bigquery/views/V_KEYWORD_GUARD.sql
+```
+
+On 2026-08-24 that returns exactly one hit: `FROM kw` at `:189`, inside the `kws` CTE. **Repoint it
+with the alias preserved** — `kws` refers to its source as `kw.*`, `kw.is_auto`, `kw.match_type`,
+`kw.campaign_id` and `kw.keyword_text`, and a bare `FROM kw_all` would break every one of them:
+
+```sql
+  FROM kw_all kw
+```
+
+The `kw` CTE itself keeps its name so the diff stays readable, and `wm` is declared at `:133`, above
+both new CTEs, so `(SELECT d FROM wm)` resolves inside `sentinel`.
 
 - [ ] **Step 3: Carry the two new columns through to the published SELECT**
 
@@ -2144,7 +2519,29 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
    FROM \`onyga-482313.OI.V_KEYWORD_GUARD\` GROUP BY 1,2 ORDER BY n DESC"
 ```
 
-Expected: three `universe_source` values, and every `SPEND` row carrying a non-null `serving_blocked_reason`.
+Expected: three `universe_source` values, and every `SPEND` row carrying a non-null
+`serving_blocked_reason`. Then prove the sentinels arrived individuated rather than pooled:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT COUNT(*) sentinel_rows,
+       COUNT(DISTINCT CONCAT(campaign_id, '|', keyword_text)) distinct_targets,
+       COUNT(DISTINCT campaign_id) campaigns
+FROM \`onyga-482313.OI.V_KEYWORD_GUARD\` WHERE keyword_id = '-1'"
+```
+
+Expected: `sentinel_rows = distinct_targets`, and both materially larger than `campaigns`. Measured
+2026-08-24 the population was 50 distinct targets over 11 (campaign, keyword) pairs, so a result
+where `sentinel_rows` is close to `campaigns` means the text grouping was dropped and the pooling is
+back.
+
+**One grain consequence, stated here because Task 2.3 depends on it.** After this change
+`V_KEYWORD_GUARD` — and therefore `FACT_KEYWORD_GUARD` and `FACT_KEYWORD_STATE` — is one row per
+**subject**, which is `(campaign_id, keyword_id)` everywhere except the sentinels, where it is
+`(campaign_id, keyword_id, keyword_text)`. Anything joining those tables on `(campaign_id,
+keyword_id)` alone can now fan out on eleven campaigns' worth of SB targets. Task 2.3 Step 3 audits
+every such join and repoints the one on the money path.
 
 - [ ] **Step 5: Refresh the guard snapshot the ladder reads**
 
@@ -2179,6 +2576,9 @@ serving_blocked_reason make the population auditable rather than implied."
 
 **Files:**
 - Modify: `scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql` (final `SELECT`)
+- Modify: `scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql` (re-key the `cat` join onto `subject_key`)
+- Modify: `scripts/bigquery/tables/FACT_KEYWORD_STATE_HISTORY.sql`, `scripts/bigquery/views/V_KEYWORD_STATE.sql`
+- Modify: `tools/build_reprice_bulksheet.py` (a sentinel is judged but never uploaded)
 
 **The design decision, written down.** A sentinel is not a keyword. `keyword_id = '-1'` is what Amazon reports for an SB product target that has no keyword identity, and 31 distinct (campaign, targeting) pairs share it, spending $70.61/day across 10 SB campaigns — 17 targets worth $69.66/day priced by Pacing only, 14 worth $0.95/day with no layer at all. Minting a synthetic `keyword_id` would be shorter but dangerous: a synthetic id must never reach a bulksheet that addresses Amazon by id. So the Catalog carries a **separate `subject_key` column**, and `keyword_id` keeps meaning exactly what Amazon means by it.
 
@@ -2204,13 +2604,98 @@ In the final `SELECT` of `SP_SNAPSHOT_KEYWORD_STATE`, immediately after the line
     -- Amazon means by it. A SYNTHETIC ID IS DELIBERATELY NOT MINTED: SP_SYNC_NEGATIVES's MD5
     -- precedent shows how, and DE_NEGATIVE_KEYWORDS shows the cost — 119 rows carry an id Amazon
     -- cannot accept. A key that can never address Amazon must never look like one that can.
+    -- IT IS DETERMINISTIC BECAUSE ITS INPUT IS. Task 2.2's arm 2b makes LOWER(TRIM(targeting)) a
+    -- GROUPING column on the sentinel rows rather than an ANY_VALUE, so the text on the row is the
+    -- row's own identity and cannot change between two runs of the same night. Built on an
+    -- ANY_VALUE it would have been a key that silently re-pointed itself, which would break
+    -- FACT_KEYWORD_STATE_HISTORY's identity and V_CATALOG_DWELL's whole premise.
     IF(s.keyword_id = '-1',
        CONCAT('sbtarget|', s.campaign_id, '|', LOWER(TRIM(COALESCE(s.target_text, '')))),
        CONCAT('kw|', s.campaign_id, '|', s.keyword_id))                 AS subject_key,
     (s.keyword_id = '-1')                                               AS is_sentinel_target,
 ```
 
-- [ ] **Step 3: Add `subject_key` to the history table and re-deploy `V_KEYWORD_STATE`**
+- [ ] **Step 3: Audit every join that assumes one row per (campaign_id, keyword_id) — BEFORE deploying**
+
+Task 2.2 made the Catalog's grain `(campaign_id, keyword_id)` **except on the sentinels**, where it
+is `(campaign_id, keyword_id, target_text)`. Any consumer joining `FACT_KEYWORD_STATE`,
+`V_KEYWORD_STATE` or `FACT_KEYWORD_GUARD` on the pair alone can now multiply rows. Find them all:
+
+```bash
+cd /Users/ori/Develop/OI
+grep -rln "FACT_KEYWORD_STATE\b\|V_KEYWORD_STATE\b\|FACT_KEYWORD_GUARD\b" \
+  scripts/bigquery/views scripts/bigquery/procedures scripts/bigquery/tests tools cube \
+  | grep -v "\.bak"
+```
+
+Measured 2026-08-24 that returns 23 files. **Only two of them are on the money path and only one of
+them needs a code change now:**
+
+1. **`SP_ENGINE_PREFLIGHT.sql` — the `cat` join added in Task 1.2.** It joins on `(cid, kid)` and
+   would give every sentinel proposal as many ceiling rows as its campaign has SB targets, fanning
+   the whole proposal set out. Re-key it onto the subject, which the proposal side can compute
+   identically because `FACT_ENGINE_PROPOSALS` carries `target_text`. Replace the `cat` CTE and its
+   join with:
+
+```sql
+  cat AS (
+    SELECT subject_key, affordable_bid, family_bar, bid_floor, state, next_check_date
+    FROM `onyga-482313.OI.FACT_KEYWORD_STATE`
+    WHERE snapshot_date = (SELECT MAX(snapshot_date)
+                           FROM `onyga-482313.OI.FACT_KEYWORD_STATE`)
+  ),
+```
+
+```sql
+    -- 2026-08-25: keyed on SUBJECT, not on (campaign, keyword). An SB product target with no keyword
+    -- identity arrives under the sentinel keyword_id '-1' and many targets in one campaign share it,
+    -- so a pair-keyed join fans this proposal set out. The expression below is the same one
+    -- SP_SNAPSHOT_KEYWORD_STATE publishes as subject_key, and it must stay that way.
+    LEFT JOIN cat ct
+      ON ct.subject_key = IF(CAST(p.keyword_id AS STRING) = '-1',
+           CONCAT('sbtarget|', CAST(p.campaign_id AS STRING), '|',
+                  LOWER(TRIM(COALESCE(p.target_text, '')))),
+           CONCAT('kw|', CAST(p.campaign_id AS STRING), '|', CAST(p.keyword_id AS STRING)))
+```
+
+   The `brain` join is left on `(cid, kid)`: `FACT_PLAN_NEXT_WEEK` is built from
+   `V_PLAN_WINDOW_JUDGMENT`, which is HARVEST-family keyword grain and carries no sentinel row, so it
+   is still 1:1. Prove it in the same step rather than asserting it.
+
+2. **`tools/build_reprice_bulksheet.py`** reads `V_KEYWORD_STATE` row by row and never joins it, so
+   it needs no key change — but a sentinel row has `keyword_id = '-1'`, which Amazon cannot accept on
+   a bulksheet. Add one exclusion beside the book's other exclusions so a sentinel can never become
+   an upload row, and say why:
+
+```python
+    # A sentinel SB target has no keyword id Amazon will accept ('-1' is a report artefact, not an
+    # identity). The Catalog judges it — that is violation 4's whole point — but no book may address
+    # it, and a synthetic id must never be minted to make one look addressable.
+    if str(r.get('keyword_id')) == '-1':
+        return 'SKIPPED_SENTINEL_TARGET', None, None, [], bits
+```
+
+Then verify no fan-out, before and after:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT COUNT(*) proposals,
+       (SELECT COUNT(*) FROM \`onyga-482313.OI.T_ENGINE_PREFLIGHT\`) AS preflight_rows
+FROM \`onyga-482313.OI.FACT_ENGINE_PROPOSALS\`
+WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM \`onyga-482313.OI.FACT_ENGINE_PROPOSALS\`)
+  AND hold_source IS NULL"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT COUNT(*) plan_rows,
+       COUNT(DISTINCT CONCAT(campaign_id,'|',keyword_id)) pairs
+FROM \`onyga-482313.OI.FACT_PLAN_NEXT_WEEK\`
+WHERE as_of = (SELECT MAX(as_of) FROM \`onyga-482313.OI.FACT_PLAN_NEXT_WEEK\`) AND is_live_plan"
+```
+
+Expected: `preflight_rows = proposals` (the gate neither drops nor multiplies a row), and
+`plan_rows = pairs` (the Brain's side is still pair-unique, so the `brain` join is safe as written).
+
+- [ ] **Step 4: Add `subject_key` to the history table and re-deploy `V_KEYWORD_STATE`**
 
 ```bash
 cd /Users/ori/Develop/OI
@@ -2235,15 +2720,33 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
    FROM \`onyga-482313.OI.V_KEYWORD_STATE\`"
 ```
 
-Expected: `rows = subjects` (the key is unique) and a non-zero `sentinels` count.
+Expected: `rows = subjects` (the key is unique) and a non-zero `sentinels` count. **Also check the
+weaker claim that `rows = subjects` cannot see**, because it passes trivially on a pooled population:
 
-- [ ] **Step 4: Commit**
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT COUNTIF(is_sentinel_target) sentinel_subjects,
+       COUNT(DISTINCT IF(is_sentinel_target, campaign_id, NULL)) sentinel_campaigns,
+       COUNTIF(is_sentinel_target
+               AND (target_text IS NULL OR TRIM(target_text) = '')) unlabelled_sentinels
+FROM \`onyga-482313.OI.V_KEYWORD_STATE\`"
+```
+
+Expected: `sentinel_subjects` materially larger than `sentinel_campaigns` (measured 2026-08-24: 31
+distinct (campaign, target) pairs across 10 SB campaigns in the ENABLED set, 50 across 11 over the
+guard's full 104-day window), and `unlabelled_sentinels = 0` — an unlabelled sentinel would collapse
+into a shared key `sbtarget|<campaign>|` and re-pool exactly what this task exists to separate.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 cd /Users/ori/Develop/OI
 git add scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql \
+        scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql \
         scripts/bigquery/tables/FACT_KEYWORD_STATE_HISTORY.sql \
-        scripts/bigquery/views/V_KEYWORD_STATE.sql
+        scripts/bigquery/views/V_KEYWORD_STATE.sql \
+        tools/build_reprice_bulksheet.py
 git commit -m "feat(catalog): subject_key — a sentinel SB target is not a keyword
 
 31 distinct (campaign, targeting) pairs share keyword_id '-1'. The Catalog gets
@@ -2330,21 +2833,68 @@ In the `st` CTE, the `raw_state` `CASE` is a first-match ladder. Insert a new **
       -- This is the precursor of 2.7's NO_EVIDENCE, which Phase 7 completes; the two are folded
       -- together there. Until then NO_RECORD is a state, and the acceptance suite asserts that a
       -- subject with no settled clicks can never read DEAD, LOSER or FLOOR_PROBATION.
-      WHEN COALESCE(g.settled_clk90, 0) = 0 THEN 'NO_RECORD'
+      -- THE ALIAS IS `v`, NOT `g`. The `st` CTE reads `FROM verd v` and every existing arm beside
+      -- this one says `v.settled_clk90`; `g` is a different CTE eleven levels upstream and is not
+      -- in scope here.
+      WHEN COALESCE(v.settled_clk90, 0) = 0 THEN 'NO_RECORD'
 ```
 
-Add `'NO_RECORD'` to the enumerated ladder set in `scripts/bigquery/tests/FACT_KEYWORD_STATE_acceptance.sql` check K03, and give it an appointment so K04 stays green — in the `next_check_date` expression, add as its first arm:
+**And gate the two TERMINAL arms on the same admission.** The arm above shields only subjects with
+*zero* settled clicks, which is not the population Phase 2 admits. Measured 2026-08-24: 321
+(campaign, keyword) pairs enter on the guard's spend arm and **75 of them carry ≥ 15 settled clicks
+with 0 settled orders**, which is A7's `DEAD` condition exactly. `DEAD` is a one-way action —
+`SP_BUILD_NEXT_WEEK_PLAN.sql:357` turns it straight into `'PAUSE'` — and doctrine 5 forbids a one-way
+action below HIGH confidence, which does not exist until Phase 7. Without this, Phase 2 makes a
+wrong action happen faster, which is the exact failure the phase order exists to prevent.
+
+In the same `raw_state` `CASE`, add one predicate to the `DEAD` arm and one to the `LOSER` arm:
 
 ```sql
-      WHEN s.state_c = 'NO_RECORD'
-        THEN DATE_ADD(t.d, INTERVAL COALESCE(s.settle_days_eff, 7) DAY)
+        WHEN COALESCE(v.settled_clk90, 0) >= 15 AND COALESCE(v.settled_ord90, 0) = 0
+         AND COALESCE(v.reverdict, '') NOT IN ('SIBLING_REVIVE', 'REDUNDANT')
+         -- 2026-08-25: a subject admitted on SPEND ALONE has no configuration row, so nothing about
+         -- it has ever been judged and nothing about it can be uploaded by id. It falls through to
+         -- the evidential ladder below (TRIAL / WINNER / AT_BAR / REPRICE / FLOOR_PROBATION), all of
+         -- which are reversible — judgement without a kill. Task 7.5 Step 1 deletes this predicate
+         -- and replaces it with the confidence band, which is the real gate doctrine 5 asks for.
+         AND COALESCE(v.universe_source, 'CONFIG') != 'SPEND' THEN 'DEAD'
 ```
 
-and in `next_check_what`:
+```sql
+        WHEN v.probation_elapsed AND v.at_floor
+         AND COALESCE(v.universe_source, 'CONFIG') != 'SPEND' THEN 'LOSER'
+```
+
+Add `'NO_RECORD'` to the enumerated ladder set in `scripts/bigquery/tests/FACT_KEYWORD_STATE_acceptance.sql` check K03, and give it an appointment so K04 stays green.
+
+**The three appointment expressions are VALUE-form `CASE`s, not searched ones.** All three open
+`CASE s.state_c` and every existing arm is a bare literal (`WHEN 'DEAD' THEN …`), so an arm written
+`WHEN s.state_c = 'NO_RECORD'` compares a `STRING` operand against a `BOOL` `WHEN`-expression and the
+deploy fails. Write the bare literal. In the `next_check_date` expression add as its first arm —
+note `s.today_d`, which is the alias `fin2` introduces; there is no `t` alias anywhere in this
+procedure:
 
 ```sql
-      WHEN s.state_c = 'NO_RECORD'
+      WHEN 'NO_RECORD'
+        THEN DATE_ADD(s.today_d, INTERVAL COALESCE(s.settle_days_eff, 7) DAY)
+```
+
+in `next_check_what`:
+
+```sql
+      WHEN 'NO_RECORD'
         THEN 'this subject spends but has no settled record yet — re-read when its first settled clicks arrive'
+```
+
+and in `state_reason`, so the row explains itself rather than falling through to a sentence written
+for a different state:
+
+```sql
+      WHEN 'NO_RECORD'
+        THEN CONCAT('spends but has no settled record to judge yet — admitted on spend (',
+                    COALESCE(s.universe_source, 'CONFIG'), '), ',
+                    CAST(COALESCE(s.settled_clk90, 0) AS STRING),
+                    ' settled clicks. A silent window is never evidence of worthlessness.')
 ```
 
 - [ ] **Step 4: Add the new columns to the history table and re-deploy the view**
@@ -2358,7 +2908,28 @@ ALTER TABLE \`onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY\`
   ADD COLUMN IF NOT EXISTS serving_blocked_reason STRING"
 ```
 
-Append the same three `ALTER TABLE` lines to `scripts/bigquery/tables/FACT_KEYWORD_STATE_HISTORY.sql`, carry `universe_source` and `serving_blocked_reason` from the guard through to the final `SELECT` of the procedure, then:
+Append the same three `ALTER TABLE` lines to
+`scripts/bigquery/tables/FACT_KEYWORD_STATE_HISTORY.sql`, then carry `universe_source` and
+`serving_blocked_reason` from the guard through to the final `SELECT`. **Spell the carry out — the
+`DEAD` and `LOSER` predicates in Step 3 read `v.universe_source`, so it must reach `verd`, not only
+the published row:**
+
+- in the `g` CTE (`:121-129`), add `universe_source, serving_blocked_reason` to the select list;
+- in the `base` CTE (`:286-303`), add `g.universe_source, g.serving_blocked_reason` beside
+  `g.settle_ok, g.settle_due, …`;
+- `calc`, `verd`, `st`, `fin`, `fin2` and `fin3` each select `*` from their predecessor, so nothing
+  further is needed between `base` and the final `SELECT`;
+- add `s.universe_source, s.serving_blocked_reason,` to the final `SELECT`'s column list.
+
+Confirm the carry landed before deploying anything that depends on it:
+
+```bash
+cd /Users/ori/Develop/OI
+grep -n "universe_source" scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql
+```
+
+Expected: at least four hits — the `g` CTE, the `base` CTE, the two ladder predicates in `st`, and
+the final `SELECT`. Then:
 
 ```bash
 cd /Users/ori/Develop/OI
@@ -2393,7 +2964,7 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/tests/FACT_KEYWORD_STATE_acceptance.sql)"
 ```
 
-Expected: five rows all `PASS` from the first, ten rows all `PASS` from the second (K01 passes once the history table has two days; if it is still the first night, note it and re-run tomorrow).
+Expected: five rows all `PASS` from the first, eleven rows all `PASS` from the second (K01 passes once the history table has two days; if it is still the first night, note it and re-run tomorrow).
 
 - [ ] **Step 7: Verify the 27 downstream readers still compile**
 
@@ -3198,6 +3769,52 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
 ```
 
 Expected: `subjects_with_no_bar` falls sharply from its Phase 2 level.
+
+- [ ] **Step 6b: Dry-run every downstream reader of the widened map — this is the largest blast radius in the plan**
+
+`V_CAMPAIGN_FAMILY_MAP` goes from 90 campaigns to roughly 1,113 in one deploy, and `T_FAMILY_BAR` is
+not its only consumer — the `grep` above returned **eighteen** files on 2026-08-24. Step 5 checks the
+bar's clamp; it checks nothing about the other objects that read the map, one of which (`V_PANEL_OWNERSHIP`) carries a **1:1 single-home claim that
+`SP_ENGINE_PREFLIGHT.sql:141-144` relies on to guarantee its join cannot fan the proposal set out**.
+Find the readers and check every one:
+
+```bash
+cd /Users/ori/Develop/OI
+grep -rln "V_CAMPAIGN_FAMILY_MAP" scripts/bigquery cube tools | grep -v "\.bak"
+for v in V_PANEL_OWNERSHIP V_CAMPAIGN_HALO V_BUDGET_STEP1_CAMPAIGN V_BUDGET_STEP1_FAMILY \
+         V_CAMPAIGN_BUDGET_BASE V_CHANGE_SCORECARD V_HOLDOUT_ELIGIBLE V_DIM_CAMPAIGN_FAMILY \
+         V_LOW_STOCK_ADS V_LAUNCH_EXEMPTION V_FAMILY_NET_PROFIT_7D V_TWO_BOOK_BRIEF \
+         V_BOOK_ASSIGNMENT V_FAMILY_BAR; do
+  bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --dry_run \
+    "SELECT 1 FROM \`onyga-482313.OI.$v\` LIMIT 0" >/dev/null 2>&1 \
+    && echo "OK   $v" || echo "FAIL $v"
+done
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT COUNT(*) rows_, COUNT(DISTINCT campaign_id) campaigns,
+       COUNT(*) - COUNT(DISTINCT campaign_id) AS single_home_claim_broken
+FROM \`onyga-482313.OI.V_PANEL_OWNERSHIP\`"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/tests/BUDGET_WATERFALL_INVARIANTS.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "CALL \`onyga-482313.OI.SP_ENGINE_PREFLIGHT\`()"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT (SELECT COUNT(*) FROM \`onyga-482313.OI.FACT_ENGINE_PROPOSALS\`
+        WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM \`onyga-482313.OI.FACT_ENGINE_PROPOSALS\`)
+          AND hold_source IS NULL) AS proposals,
+       (SELECT COUNT(*) FROM \`onyga-482313.OI.T_ENGINE_PREFLIGHT\`) AS preflight_rows"
+```
+
+Expected: `OK` on every view; `single_home_claim_broken = 0`; every invariant row `PASS`; and
+`preflight_rows = proposals`. **`single_home_claim_broken > 0` is a stop-the-line result** — widening
+the map has given a campaign two panel homes, `SP_ENGINE_PREFLIGHT`'s defensive `GROUP BY` is now
+load-bearing rather than defensive, and the ownership snapshot must be fixed before anything else in
+Phase 4 proceeds.
+
+**One deliberate side effect to look at, not to fix here.** Widening the learning window to all
+history re-arms the name-prefix learning corpus with archived campaigns, which cuts against Task
+3.5's demotion of the prefix arm. Task 4.3's disagreement measurement is where that shows up; if the
+three family definitions diverge *more* after this change than before it, that is the prefix arm
+talking and Task 4.3 is the task that rules on it.
 
 - [ ] **Step 7: Commit**
 
@@ -4668,58 +5285,125 @@ wider window in an old one."
 -- two families' economics into one wrong answer.
 --
 -- THE TEXT-GRAIN VIEW IS NOT CHANGED. It has its own readers and its own meaning (an account-wide
--- prior over a phrase); this is a twin at the grain the verdict needs. Same occurrence source, same
--- maturity rule, same settled_through fence — only the GROUP BY differs.
+-- prior over a phrase); this is a twin at the grain the verdict needs.
+--
+-- IT IS AN IDENTICAL TWIN, AND THAT IS A REQUIREMENT, NOT A STYLE NOTE. The guard's re-keyed `seas`
+-- CTE filters on mature_at_start and drives season_win_prior, which gates BLOCK_CUT and ENTRY_BLOCK
+-- today and NOT_WORTH_NOW after Task 5.5 — all live safety gates. So EVERY rule below is copied
+-- from V_KEYWORD_CONTEXT_LEDGER verbatim and only the GROUP BY differs:
+--   * the anchor is LEAST(MAX(date), FN_ADS_ANCHOR_CAP()) and the ledger sums SETTLED DAYS ONLY,
+--     date <= anchor - 7 — NOT watermark - 1, which would let six unsettled days manufacture a
+--     false loss verdict inside the very window the gate protects;
+--   * mature_at_start is first_click_date <= occurrence_start - 30 DAYS — NOT
+--     first_click_date < occurrence_start, which drops the 30-day margin and admits launch ramp as
+--     season signal, the exact thing the maturity guard exists to exclude;
+--   * occurrence_closed is V_SEASON_CONTEXT's own column, carried through, never recomputed here;
+--   * settled_through is anchor - 7, the same date the sums are fenced at;
+--   * gross_profit is Ads_sales - IFNULL(TOTAL_COST_PER_UNIT,0)*Ads_units — the doctrine formula
+--     verbatim, deliberately NOT FACT_AMAZON_ADS.GROSS_PROFIT, which is the tier-COGS variant the
+--     engines use. The ledger stays self-contained;
+--   * tested is clicks >= 15, and the HAVING keeps a row only where the subject had clicks or spend
+--     inside the occurrence.
+-- If either view's rules move, BOTH move, in one commit. A drift here is a silent loosening of a
+-- live gate that no acceptance check would catch, because both views would still be internally
+-- consistent.
 -- =============================================================================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_KEYWORD_CONTEXT_LEDGER_BY_SUBJECT` AS
-WITH wm AS (
-  SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
+WITH
+anchor AS (
+  SELECT LEAST((SELECT MAX(date) FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
+               `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS a
+),
+fx AS (
+  SELECT
+    CAST(campaign_id AS STRING) AS campaign_id,
+    CAST(keyword_id  AS STRING) AS keyword_id,
+    LOWER(TRIM(targeting))      AS keyword_text,
+    date,
+    Ads_clicks,
+    Ads_cost,
+    Ads_sales,
+    Ads_units,
+    Ads_orders,
+    Ads_sales - IFNULL(TOTAL_COST_PER_UNIT, 0) * Ads_units AS gp
   FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+  WHERE targeting IS NOT NULL AND TRIM(targeting) != ''
+    AND keyword_id IS NOT NULL
 ),
-f AS (
-  SELECT CAST(a.campaign_id AS STRING) AS campaign_id,
-         CAST(a.keyword_id  AS STRING) AS keyword_id,
-         LOWER(TRIM(a.targeting))      AS keyword_text,
-         a.date,
-         a.Ads_clicks, a.Ads_cost, a.Ads_sales, a.Ads_orders, a.Ads_units, a.GROSS_PROFIT
-  FROM `onyga-482313.OI.FACT_AMAZON_ADS` a, wm
-  WHERE a.targeting IS NOT NULL AND TRIM(a.targeting) != ''
-    AND a.keyword_id IS NOT NULL
-    AND a.date <= DATE_SUB(wm.d, INTERVAL 1 DAY)
-),
--- the subject's own first click, which is what "mature at the start of the occurrence" means
+-- the SUBJECT's own first click. FULL history, not settled-capped — same as the text-grain view.
 first_click AS (
   SELECT campaign_id, keyword_id, MIN(IF(Ads_clicks > 0, date, NULL)) AS first_click_date
-  FROM f GROUP BY 1, 2
+  FROM fx
+  GROUP BY campaign_id, keyword_id
+),
+led AS (
+  SELECT
+    f.campaign_id,
+    f.keyword_id,
+    ANY_VALUE(f.keyword_text)      AS keyword_text,   -- 1:1 with the pair; label only, never a key
+    c.context_label,
+    c.occurrence_key,
+    c.occurrence_start,
+    c.occurrence_end,
+    c.is_peak,
+    c.occurrence_closed,
+    SUM(f.Ads_clicks)              AS clicks,
+    ROUND(SUM(f.Ads_cost), 2)      AS spend,
+    ROUND(SUM(f.Ads_sales), 2)     AS sales,
+    ROUND(SUM(f.gp), 2)            AS gross_profit,
+    ROUND(SUM(f.gp) - SUM(f.Ads_cost), 2) AS net,
+    SUM(f.Ads_orders)              AS orders,
+    SUM(f.Ads_units)               AS units,
+    MIN(f.date)                    AS first_active_date,
+    MAX(f.date)                    AS last_active_date,
+    COUNT(DISTINCT f.date)         AS active_days
+  FROM fx f
+  JOIN `onyga-482313.OI.V_SEASON_CONTEXT` c ON c.date = f.date
+  CROSS JOIN anchor an
+  WHERE f.date <= DATE_SUB(an.a, INTERVAL 7 DAY)   -- SETTLED days only, identical to the twin
+  GROUP BY 1, 2, 4, 5, 6, 7, 8, 9
+  HAVING SUM(f.Ads_clicks) > 0 OR SUM(f.Ads_cost) > 0
 )
 SELECT
-  f.campaign_id,
-  f.keyword_id,
-  ANY_VALUE(f.keyword_text)                                     AS keyword_text,
-  c.occurrence_key,
-  ANY_VALUE(c.context_label)                                    AS context_label,
-  MIN(c.occurrence_start)                                       AS occurrence_start,
-  MAX(c.occurrence_end)                                         AS occurrence_end,
-  LOGICAL_OR(c.is_peak)                                         AS is_peak,
-  -- an occurrence is closed once its end is behind the settled fence
-  (MAX(c.occurrence_end) <= DATE_SUB((SELECT d FROM wm), INTERVAL 14 DAY))
-                                                                AS occurrence_closed,
-  SUM(f.Ads_clicks)                                             AS clicks,
-  SUM(f.Ads_cost)                                               AS spend,
-  SUM(f.Ads_sales)                                              AS sales,
-  SUM(f.GROSS_PROFIT)                                           AS gross_profit,
-  SUM(f.GROSS_PROFIT) - SUM(f.Ads_cost)                         AS net,
-  SUM(f.Ads_orders)                                             AS orders,
-  SUM(f.Ads_units)                                              AS units,
-  COUNT(DISTINCT IF(f.Ads_clicks > 0, f.date, NULL))            AS active_days,
-  ANY_VALUE(fc.first_click_date)                                AS first_click_date,
-  (ANY_VALUE(fc.first_click_date) < MIN(c.occurrence_start))    AS mature_at_start,
-  DATE_SUB((SELECT d FROM wm), INTERVAL 14 DAY)                 AS settled_through
-FROM f
-JOIN `onyga-482313.OI.V_SEASON_CONTEXT` c ON c.date = f.date
-LEFT JOIN first_click fc ON fc.campaign_id = f.campaign_id AND fc.keyword_id = f.keyword_id
-GROUP BY f.campaign_id, f.keyword_id, c.occurrence_key;
+  l.*,
+  fc.first_click_date,
+  (fc.first_click_date IS NOT NULL
+   AND fc.first_click_date <= DATE_SUB(l.occurrence_start, INTERVAL 30 DAY)) AS mature_at_start,
+  l.clicks >= 15 AS tested,
+  (SELECT DATE_SUB(a, INTERVAL 7 DAY) FROM anchor) AS settled_through
+FROM led l
+LEFT JOIN first_click fc
+  ON fc.campaign_id = l.campaign_id AND fc.keyword_id = l.keyword_id;
 ```
+
+- [ ] **Step 1b: Prove the twin is a twin**
+
+Before anything reads it, check that the subject-grain view rolls up to the text-grain one on the
+rules that matter. A difference here is a rule that drifted, not a grain effect:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+WITH t AS (SELECT keyword_text, occurrence_key, SUM(clicks) c, SUM(spend) sp,
+                  COUNTIF(mature_at_start) m, MAX(settled_through) st
+           FROM \`onyga-482313.OI.V_KEYWORD_CONTEXT_LEDGER\` GROUP BY 1,2),
+     b AS (SELECT keyword_text, occurrence_key, SUM(clicks) c, SUM(spend) sp,
+                  COUNTIF(mature_at_start) m, MAX(settled_through) st
+           FROM \`onyga-482313.OI.V_KEYWORD_CONTEXT_LEDGER_BY_SUBJECT\` GROUP BY 1,2)
+SELECT COUNTIF(ABS(t.c - b.c) > 0)        AS click_totals_that_disagree,
+       COUNTIF(ABS(t.sp - b.sp) > 0.01)   AS spend_totals_that_disagree,
+       COUNTIF(t.st != b.st)              AS settled_fences_that_disagree,
+       COUNTIF(t.m > 0 AND b.m = 0)       AS occurrences_that_lost_their_maturity_flag,
+       COUNTIF(t.m = 0 AND b.m > 0)       AS occurrences_that_GAINED_a_maturity_flag
+FROM t JOIN b USING (keyword_text, occurrence_key)"
+```
+
+Expected: `settled_fences_that_disagree = 0` and, above all,
+`occurrences_that_GAINED_a_maturity_flag = 0` — a gain means the twin's maturity rule is looser than
+the live one and the safety gate has been quietly widened. Click and spend totals may differ by the
+rows the text-grain view keeps and this one drops (`keyword_id IS NULL`); report the difference
+rather than assuming it is zero, and if it is large, find out which rows carry no keyword id before
+proceeding.
 
 - [ ] **Step 2: Add the id columns to the verdict table**
 
@@ -5008,9 +5692,15 @@ next holiday occurrence, which is the prior behaviour."
 - Modify: `scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql` (a new CTE, the `st` CTE's `raw_state` CASE, the appointment expressions, the final `SELECT`)
 - Re-deploy: `scripts/bigquery/views/V_KEYWORD_STATE.sql`
 
-- [ ] **Step 1: Join the seasonal window into the procedure**
+- [ ] **Step 1: Join the seasonal window into the procedure — CTE, join AND carry**
 
-Add a CTE beside the existing `fb` / `nf` / `gpo` block:
+Three edits, not one. A CTE that is declared and never joined is invisible to the ladder, and the
+ladder runs three CTEs downstream of where the join happens.
+
+**(a)** Add the CTE beside the existing `fb` / `nf` / `gpo` block (`:132-143`). It CROSS JOINs the
+procedure's own `today` CTE (`:118`) rather than calling `CURRENT_DATE()` again, and resolves
+"is the window still ahead of us" **here**, because `today_d` does not exist until the `fin2` CTE at
+`:450` — five CTEs below the ladder that needs the answer:
 
 ```sql
   -- ── THE SEASONAL EVIDENCE (2026-08-25, violation 2) ────────────────────────────────────────
@@ -5021,16 +5711,46 @@ Add a CTE beside the existing `fb` / `nf` / `gpo` block:
   -- condemned seasonal subjects on a trailing average, which doctrine 4 calls the single most
   -- expensive mistake it exists to prevent.
   sw AS (
-    SELECT campaign_id AS cid, keyword_id AS kid,
-           window_from, window_to, window_label,
-           ly_clicks, ly_spend, ly_orders, ly_gp,
-           SAFE_DIVIDE(ly_gp, NULLIF(ly_spend, 0))     AS ly_gp_roas,
-           SAFE_DIVIDE(ly_orders, NULLIF(ly_clicks, 0)) AS ly_cvr,
-           now_clicks, now_orders, now_spend, now_gp,
-           SAFE_DIVIDE(now_orders, NULLIF(now_clicks, 0)) AS now_cvr
-    FROM `onyga-482313.OI.V_KEYWORD_SEASON_WINDOW`
+    SELECT CAST(w.campaign_id AS STRING) AS cid, CAST(w.keyword_id AS STRING) AS kid,
+           w.window_from, w.window_to, w.window_label,
+           w.ly_clicks, w.ly_spend, w.ly_orders, w.ly_gp,
+           SAFE_DIVIDE(w.ly_gp, NULLIF(w.ly_spend, 0))       AS ly_gp_roas,
+           SAFE_DIVIDE(w.ly_orders, NULLIF(w.ly_clicks, 0))  AS ly_cvr,
+           w.now_clicks, w.now_orders, w.now_spend, w.now_gp,
+           SAFE_DIVIDE(w.now_orders, NULLIF(w.now_clicks, 0)) AS now_cvr,
+           (w.window_from > t.d)                             AS window_is_ahead
+    FROM `onyga-482313.OI.V_KEYWORD_SEASON_WINDOW` w
+    CROSS JOIN today t
   ),
 ```
+
+**(b)** Join it into `calc` (`:304-370`), beside the `fb` / `nf` / `gpo` joins that already sit
+there, and publish its columns in `calc`'s select list so they reach `verd` and `st` — both of which
+select `*` from their predecessor, so no further edit is needed between `calc` and the final
+`SELECT`:
+
+```sql
+    LEFT JOIN sw ON sw.cid = b.campaign_id AND sw.kid = b.keyword_id
+```
+
+```sql
+      -- carried for the ladder arm in Step 2 and the three sentences in Step 3
+      sw.window_from  AS season_window_from,
+      sw.window_to    AS season_window_to,
+      sw.window_label AS season_window_label,
+      sw.window_is_ahead AS season_window_is_ahead,
+      sw.ly_clicks, sw.ly_spend, sw.ly_orders, sw.ly_gp, sw.ly_gp_roas, sw.ly_cvr,
+      sw.now_clicks, sw.now_orders, sw.now_spend, sw.now_gp, sw.now_cvr,
+```
+
+**(c)** Confirm the carry before writing the ladder arm:
+
+```bash
+cd /Users/ori/Develop/OI
+grep -n "season_window_is_ahead\|LEFT JOIN sw\|sw AS (" scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql
+```
+
+Expected: three hits at least — the CTE, the join in `calc`, and the carried column.
 
 - [ ] **Step 2: Add the seasonal arm to `raw_state`**
 
@@ -5048,25 +5768,33 @@ In the `st` CTE, insert this arm immediately **after** the `NO_RECORD` arm added
       -- to, from a trailing average to the window actually being asked about.
       -- THE GATE IS EVIDENCE, NOT OPTIMISM: it needs real settled clicks in last year's window
       -- (the guard's own min_settled_clk of 10), so a single lucky order cannot rescue a subject.
-      WHEN COALESCE(sw.ly_clicks, 0) >= 10
-       AND COALESCE(sw.ly_gp_roas, 0) >= COALESCE(fb.keyword_bar, 1.0)
-       AND sw.window_from > t.d
+      -- EVERY REFERENCE IS `v.`, THE `st` CTE'S ONLY ALIAS. `st` reads `FROM verd v`; `sw`, `fb` and
+      -- `t` are none of them in scope here, which is why Step 1 carries the seasonal columns and the
+      -- resolved window_is_ahead boolean all the way down through `calc`. `v.family_bar` is `calc`'s
+      -- own COALESCE(fb.keyword_bar, 1.0), so the bar is read once and cannot diverge.
+      WHEN COALESCE(v.ly_clicks, 0) >= 10
+       AND COALESCE(v.ly_gp_roas, 0) >= COALESCE(v.family_bar, 1.0)
+       AND COALESCE(v.season_window_is_ahead, FALSE)
         THEN 'NOT_WORTH_NOW'
 ```
 
 - [ ] **Step 3: Give it an appointment and a sentence**
 
+**All three are VALUE-form `CASE`s** — each opens `CASE s.state_c` and every existing arm is a bare
+literal (`WHEN 'DEAD' THEN …`). An arm written `WHEN s.state_c = 'NOT_WORTH_NOW'` compares a `STRING`
+operand against a `BOOL` `WHEN`-expression and the deploy fails. Write the bare literal.
+
 In the `next_check_date` expression, add as the first arm:
 
 ```sql
       -- the appointment IS the season: re-read when the window opens, not on a rolling clock
-      WHEN s.state_c = 'NOT_WORTH_NOW' THEN s.season_window_from
+      WHEN 'NOT_WORTH_NOW' THEN s.season_window_from
 ```
 
 in `next_check_what`:
 
 ```sql
-      WHEN s.state_c = 'NOT_WORTH_NOW'
+      WHEN 'NOT_WORTH_NOW'
         THEN CONCAT('dormant until ', CAST(s.season_window_from AS STRING),
                     ' — it earned in this same window last year; re-read when the window opens')
 ```
@@ -5074,13 +5802,18 @@ in `next_check_what`:
 and in `state_reason`:
 
 ```sql
-      WHEN s.state_c = 'NOT_WORTH_NOW'
+      WHEN 'NOT_WORTH_NOW'
         THEN FORMAT('NOT WORTH NOW, not dead. In %s last year (%t to %t) it took %d clicks on $%.2f and returned %.2f gross-profit dollars per ad dollar against a bar of %.2f. It is quiet today because the season is not here, and a silent window is never evidence of worthlessness.',
                     s.season_window_label, s.season_window_from, s.season_window_to,
                     s.ly_clicks, s.ly_spend, s.ly_gp_roas, COALESCE(s.family_bar, 1.0))
 ```
 
-Carry `sw.window_from AS season_window_from`, `sw.window_to AS season_window_to`, `sw.window_label AS season_window_label`, `sw.ly_clicks`, `sw.ly_spend`, `sw.ly_gp_roas` and `sw.ly_cvr` through the CTE chain to the final `SELECT`, and publish all seven.
+Step 1(b) already carried every column these three sentences read (`season_window_from`,
+`season_window_to`, `season_window_label`, `season_window_is_ahead`, `ly_clicks`, `ly_spend`,
+`ly_orders`, `ly_gp`, `ly_gp_roas`, `ly_cvr` and the four `now_*` columns) down to `fin3`. Publish
+seven of them on the final `SELECT` — `season_window_from`, `season_window_to`,
+`season_window_label`, `ly_clicks`, `ly_spend`, `ly_gp_roas`, `ly_cvr` — which are the seven Step 4
+adds to the history table.
 
 - [ ] **Step 4: Add the columns to the history table and re-deploy the view**
 
@@ -5125,7 +5858,7 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^--' scripts/bigquery/tests/FACT_KEYWORD_STATE_acceptance.sql)"
 ```
 
-Expected: ten rows, all `PASS`.
+Expected: eleven rows, all `PASS`.
 
 - [ ] **Step 6: Commit**
 
@@ -5147,9 +5880,30 @@ dormant, and its appointment is the day the window opens."
 ### Task 5.6: Auto modes and product targets get a seasonal memory
 
 **Files:**
-- Modify: `scripts/bigquery/views/V_KEYWORD_CONTEXT_GATE.sql`
+- Create: `scripts/bigquery/views/V_KEYWORD_CONTEXT_GATE_BY_SUBJECT.sql`
+- Modify: `config.yaml` (`views:` — insert immediately after the `V_KEYWORD_CONTEXT_GATE` entry, so the twin sits beside the view it twins)
 
 `V_KEYWORD_CONTEXT_GATE` is one row per bare `keyword_text` by its own header, and explicitly excludes auto clauses, `asin%` / `category%` product targets and `'*'` at lines 102–104, 161–163 and 188–189 — so 66 auto modes and 116 product targets have no seasonal memory of any kind.
+
+**BUILD THE TWIN; DO NOT RE-GRAIN THE LIVE VIEW.** Re-graining `V_KEYWORD_CONTEXT_GATE` onto
+`(campaign_id, keyword_id)` would fan out **five live consumers that join it `ON keyword_text`**, two
+of them on the money path:
+
+| consumer | join | consequence of a re-grain |
+|---|---|---|
+| `V_OOB_KEYWORD.sql:1727-1728` | `cg.keyword_text = LOWER(TRIM(o.target_text))` | a ceiling view feeding engine proposals through `T_OOB_KEYWORD` — one text matching N subject rows multiplies proposal rows |
+| `V_KEYWORD_LIFT.sql:3485-3486` | same shape | the other ceiling view, same multiplication |
+| `V_PARK_REVERDICT.sql:489-490` | `g.keyword_text = LOWER(TRIM(COALESCE(tn.fact_tgt, p.keyword_text)))` | the revival verdict fans out |
+| `FN_TARGET_BID_SHADOW.sql:378-385` | `gate` CTE groups by `LOWER(TRIM(keyword_text))` | aggregates, so it survives — but only if `keyword_text` still exists |
+| `V_SEASON_NEGATE_CANDIDATES.sql:25-32` | selects `keyword_text` directly | duplicate negate candidates |
+| `V_FAMILY_SEAT_REGISTER_acceptance.sql:316` | reads the view | the suite's counts move for no real reason |
+
+Doctrine §2.2 is satisfied by the twin — the subject-grain answer exists and every subject kind is in
+it — and the five text-keyed readers keep the account-wide prior over a phrase, which is a different
+and still-meaningful thing. Note that `V_OOB_KEYWORD` and `V_KEYWORD_LIFT` already restrict their
+gate join with `AND NOT o.is_auto AND NOT o.is_pt` for exactly the grain reason this task is fixing;
+migrating them is a separate, later change that must be measured on its own, not a side effect of
+this one.
 
 - [ ] **Step 1: Measure the hole**
 
@@ -5162,41 +5916,80 @@ FROM \`onyga-482313.OI.V_KEYWORD_STATE\` GROUP BY 1,2 ORDER BY usd_per_day DESC"
 
 Record the auto and product-target counts and spend — that is the population with no seasonal memory today.
 
-- [ ] **Step 2: Extend the gate to every subject kind**
+- [ ] **Step 2: Build the subject-grain twin, covering every subject kind**
 
-Remove the three exclusion predicates (lines 102–104, 161–163, 188–189) and re-grain the whole view onto `(campaign_id, keyword_id)`, reading `V_KEYWORD_CONTEXT_LEDGER_BY_SUBJECT` in place of the text-grain ledger. Change the header's grain line from `One row per keyword_text, KEYWORD GRAIN ONLY` to:
+Copy `scripts/bigquery/views/V_KEYWORD_CONTEXT_GATE.sql` to
+`scripts/bigquery/views/V_KEYWORD_CONTEXT_GATE_BY_SUBJECT.sql` and make exactly four changes to the
+copy. Every gate rule, threshold, tier and sentence is carried across **verbatim** — the same
+requirement, and for the same reason, as Task 5.3's twin:
+
+1. rename the created object to `V_KEYWORD_CONTEXT_GATE_BY_SUBJECT`;
+2. read `V_KEYWORD_CONTEXT_LEDGER_BY_SUBJECT` wherever the original reads
+   `V_KEYWORD_CONTEXT_LEDGER`, and add `campaign_id, keyword_id` to every `GROUP BY`, `PARTITION BY`
+   and join key that today carries `keyword_text` alone;
+3. **delete the three exclusion predicates** at lines 102–104, 161–163 and 188–189 (the auto-clause
+   list, the `asin%` / `category%` patterns, and the `'*'` sentinel) — they exist only because the
+   text-grain ledger pools account-wide, which the subject-grain ledger does not;
+4. replace the header's grain line, which today reads `One row per keyword_text, KEYWORD GRAIN ONLY`:
 
 ```sql
--- Grain: one row per (campaign_id, keyword_id) — EVERY subject kind, since 2026-08-25.
--- WHAT CHANGED AND WHY. This view was one row per bare keyword_text and explicitly excluded auto
--- clauses, asin%/category% product targets and the '*' sentinel, so auto modes and product targets
--- had no seasonal memory of any kind — while carrying real money. Doctrine 2.1 says an auto mode is
--- a legitimate subject at family x product x mode grain, and 2.2 forbids bare text as a subject at
--- all. Re-grained onto the ids, reading V_KEYWORD_CONTEXT_LEDGER_BY_SUBJECT.
+-- Grain: one row per (campaign_id, keyword_id, occurrence) — EVERY subject kind.
+-- WHY A TWIN AND NOT A RE-GRAIN OF V_KEYWORD_CONTEXT_GATE. That view is one row per bare
+-- keyword_text and explicitly excluded auto clauses, asin%/category% product targets and the '*'
+-- sentinel, so auto modes and product targets had no seasonal memory of any kind while carrying
+-- real money. Doctrine 2.1 says an auto mode is a legitimate subject at family x product x mode
+-- grain, and 2.2 forbids bare text as a subject at all — which this view satisfies.
+-- The TEXT-GRAIN view is left exactly as it is because five live objects join it ON keyword_text
+-- (V_OOB_KEYWORD:1727, V_KEYWORD_LIFT:3485, V_PARK_REVERDICT:489, FN_TARGET_BID_SHADOW:383,
+-- V_SEASON_NEGATE_CANDIDATES:31), two of them ceiling views on the money path: re-graining it would
+-- turn one text into N subject rows and multiply engine proposals. Those five keep the account-wide
+-- prior over a phrase, which is a different and still-meaningful thing. Migrating them is a
+-- separate change with its own measurement.
+-- EVERY GATE RULE IS THE TEXT-GRAIN VIEW'S, VERBATIM. If one moves, both move, in one commit.
 ```
 
-- [ ] **Step 3: Deploy and confirm the population**
+- [ ] **Step 3: Deploy and confirm the population, and that nothing downstream moved**
 
 ```bash
 cd /Users/ori/Develop/OI
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
-  "$(grep -v '^--' scripts/bigquery/views/V_KEYWORD_CONTEXT_GATE.sql)"
+  "$(grep -v '^--' scripts/bigquery/views/V_KEYWORD_CONTEXT_GATE_BY_SUBJECT.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
-  "SELECT COUNT(*) rows, COUNT(DISTINCT CONCAT(campaign_id,'|',keyword_id)) subjects
+  "SELECT COUNT(*) rows_,
+          COUNT(DISTINCT CONCAT(campaign_id,'|',keyword_id,'|',occurrence_key)) subjects_occurrences,
+          COUNT(DISTINCT CONCAT(campaign_id,'|',keyword_id)) subjects
+   FROM \`onyga-482313.OI.V_KEYWORD_CONTEXT_GATE_BY_SUBJECT\`"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "SELECT COUNT(*) AS text_grain_rows_unchanged
    FROM \`onyga-482313.OI.V_KEYWORD_CONTEXT_GATE\`"
+for v in V_OOB_KEYWORD V_KEYWORD_LIFT V_PARK_REVERDICT V_SEASON_NEGATE_CANDIDATES; do
+  bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --dry_run \
+    "SELECT 1 FROM \`onyga-482313.OI.$v\` LIMIT 0" >/dev/null 2>&1 \
+    && echo "OK   $v" || echo "FAIL $v"
+done
 ```
 
-Expected: `rows = subjects`, and a count that now includes auto modes and product targets.
+Expected: `rows_ = subjects_occurrences`; a `subjects` count that now includes auto modes and product
+targets (Step 1 recorded how many of each); `text_grain_rows_unchanged` identical to its value before
+this task, because nothing about that view was touched; and `OK` on all four readers.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Register and commit**
+
+Insert the entry in `config.yaml` under `views:` **immediately after the `V_KEYWORD_CONTEXT_GATE`
+entry** — never appended at the end of the file — with a description saying it is the subject-grain
+twin covering every subject kind, that the text-grain view is deliberately unchanged because five
+live objects join it on `keyword_text`, and that both views' gate rules must move together. Verify
+with the `config.yaml` duplicate check in the plan header, then:
 
 ```bash
 cd /Users/ori/Develop/OI
-git add scripts/bigquery/views/V_KEYWORD_CONTEXT_GATE.sql
+git add scripts/bigquery/views/V_KEYWORD_CONTEXT_GATE_BY_SUBJECT.sql config.yaml
 git commit -m "feat(catalog): auto modes and product targets get a seasonal memory
 
-The gate was one row per bare keyword_text and excluded both kinds outright, so
-subjects carrying real money had no seasonal record at all."
+A subject-grain twin of the season gate. The text-grain view excluded auto clauses
+and product targets outright, so subjects carrying real money had no seasonal
+record at all. Built as a twin, not a re-grain: five live objects join the
+text-grain view ON keyword_text, two of them ceiling views on the money path."
 ```
 
 ---
@@ -5565,6 +6358,47 @@ it now consults were already on the joined row and simply unselected."
 
 The published product form cancels spend identically on every row — the view's own header proves it at lines 195–218 — which is why 56 of 66 candidates score exactly zero and $72.90/day of subjects compete unordered. The alternative Ori already wrote into that header at lines 216–218 is the gross-profit **shortfall** per day, which does not cancel.
 
+- [ ] **Step 0: RULE ON P-7 FIRST — the formula is named as Ori's in the code**
+
+**Do not write Step 1 before this step returns an answer.** `V_PLAN_WINDOW_JUDGMENT.sql:214-218`
+says, in the view's own header:
+
+> *The FORMULA is Ori's ruling and is untouched here; what changed is that it is now described
+> correctly. Ori rules whether to park the no-sale keywords, or to make "dollars at stake" real by
+> ranking on the gross-profit SHORTFALL per day (spend/day x (bar − return)/bar), which does not
+> cancel; until he does, the ordering is corrected gross profit and then falls through to clicks and
+> the key.*
+
+This is not one of §6.4's four open rulings, so it is not carried as a declared constant — but it is
+the same class of decision as the P-4 collision in Task 8.5, and this plan does not settle one of
+those on its own authority either. Steps 1–5 implement **one** of the two branches Ori named. Put
+both in front of him with the money attached:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT rank_is_degenerate,
+       COUNT(*) candidates,
+       ROUND(SUM(rank_dollars_at_stake), 2) usd_per_day,
+       COUNTIF(w_ord = 0)  AS no_sale_in_the_window,
+       COUNTIF(w_ord >= 1) AS sold_something
+FROM \`onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT\`
+WHERE is_candidate GROUP BY 1"
+```
+
+Then ask him, in these words:
+
+> Two branches, both yours, both in the view header. **(a) Park the no-sale keywords** — they leave
+> the queue entirely and the product form stays. **(b) Rank on the gross-profit shortfall per day**
+> — they stay in the queue and are ordered by how much money they are losing per day relative to
+> the bar. Steps 1–5 below build (b). If you rule (a), stop: the change is a candidacy filter in
+> the `is_candidate` expression, not a new score, C21 stays exactly as it is, and this task is
+> rewritten before anything is deployed.
+
+Record the ruling in the measurements file with the query output beside it, so the reason is
+readable later. **Both factors stay published either way** — that part is not in dispute and is what
+lets Ori order by either alone while the ruling is fresh.
+
 - [ ] **Step 1: Replace the score**
 
 Lines 625–632 today publish `rank_dollars_at_stake`, `rank_closeness` and their product. Replace the `rank_score` expression only, keeping both factors published:
@@ -5581,8 +6415,11 @@ Lines 625–632 today publish `rank_dollars_at_stake`, `rank_closeness` and thei
     -- and it is larger for a subject losing more money faster — which is what a repair queue is for.
     --   shortfall/day = spend/day x (bar - return) / bar
     -- A subject ABOVE its bar scores zero or below and cannot outrank one below it.
-    -- Phase 10 re-bases this on expected profit contribution at the marginal ceiling, discounted by
-    -- confidence, which is doctrine 2.4's actual ordering. This is the buildable interim.
+    -- Phase 10 Task 10.6 re-bases this on expected profit contribution at the marginal ceiling,
+    -- measured against the bar and discounted by confidence, which is doctrine 2.4's ordering with
+    -- the one arithmetic correction Task 12.3's header derives (the cost term carries the bar, or
+    -- the score is negative for every subject whose ceiling exceeds its gross profit per click —
+    -- 260 of 359 on 2026-08-24). This is the buildable interim until then.
     (j.w_sp / j.window_days)
       * COALESCE(SAFE_DIVIDE(NULLIF(j.family_bar, 0) - COALESCE(j.ret_corrected, 0),
                              NULLIF(j.family_bar, 0)), 0)                    AS rank_score,
@@ -6296,7 +7133,9 @@ SELECT
     AND b.campaign_id = a.campaign_id AND b.keyword_id = a.keyword_id
     AND b.plan != a.plan
    WHERE a.as_of = l.as_of AND a.family = l.family AND a.plan = l.plan
-     AND (a.move != b.move OR a.seat_no IS NULL != (b.seat_no IS NULL)))
+     -- BOTH SIDES PARENTHESISED. BigQuery rejects `x IS NULL != y` with "Expression to the left of
+     -- comparison must be parenthesized"; the IS NULL binds looser than the comparison.
+     AND (a.move != b.move OR (a.seat_no IS NULL) != (b.seat_no IS NULL)))
                                                                  AS rows_the_two_plans_disagreed_on
 FROM per_plan l
 JOIN per_plan s ON s.as_of = l.as_of AND s.family = l.family AND s.plan != l.plan
@@ -6356,6 +7195,33 @@ grep -c "^\s*CREATE TEMP TABLE" scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_P
 
 Expected: a non-zero first count and `0` from the second. If the second is not zero, a task in this phase introduced a bare `CREATE TEMP TABLE` — fix it before moving on.
 
+- [ ] **Step 3: Record the CONFIRMATION and commit it**
+
+This task takes no red measurement — it confirms that two things a later phase could quietly break
+are still intact. That confirmation is still written down, for the same reason every measurement in
+this plan is: a recheck must be a re-run and not a fresh argument, and "we checked the lag was still
+there" is worthless six weeks later if nobody recorded what "there" looked like.
+
+```bash
+cd /Users/ori/Develop/OI
+mkdir -p docs/superpowers/specs
+cat >> docs/superpowers/specs/2026-08-25-gap-closure-measurements.md <<'EOF'
+
+## Task 6.11 — confirmed YYYY-MM-DD
+
+Replace the date above with the date you ran it. Paste below, unsummarised: the output of the
+`sed -n '2280,2290p'` on SP_ORCHESTRATE_DAILY_REFRESH.sql from Step 1, and the two `grep -c` counts
+from Step 2. This is a CONSTRAINT CONFIRMATION, not a measurement: the orchestrator lag is an open
+ruling for Ori and no phase of this plan may close it as a side effect, and every temp table in
+SP_BUILD_NEXT_WEEK_PLAN must stay CREATE OR REPLACE after the 2026-08-24 cube outage.
+EOF
+git add docs/superpowers/specs/2026-08-25-gap-closure-measurements.md
+git commit -m "chore(brain): confirm the orchestrator lag is untouched and every temp table idempotent
+
+Not a fix and not a measurement — an executed constraint. The lag is Ori's open
+ruling; closing it means moving another owner's tasks."
+```
+
 ---
 ## Phase 7 — Confidence, and the door that only opens on it
 
@@ -6368,30 +7234,6 @@ Expected: a non-zero first count and `0` from the second. If the second is not z
 **Unblocks:** every one-way action in the system — the campaign CLOSE arm, the Brain's PAUSE, the books' pause rows. Phase 8's verdict field needs confidence as one of its four columns; Phase 10's rank discount needs it as a multiplier.
 
 **Size:** M–L — 1.5–2 weeks. One genuinely new computation (stability), two derived columns, and a gate wired into three places.
-
-- [ ] **Step 3: Record the measurement and commit it**
-
-Every red measurement in this plan is a number the green run is compared against, so it is written
-down rather than remembered. Append what you measured — the query, the date, and the count — to the
-running record, creating the file on the first task that reaches this step:
-
-```bash
-cd /Users/ori/Develop/OI
-mkdir -p docs/superpowers/specs
-cat >> docs/superpowers/specs/2026-08-25-gap-closure-measurements.md <<'EOF'
-
-## Task 6.11 — measured YYYY-MM-DD
-
-Replace the date above with the date you ran it, and paste below: the query you ran (unchanged from
-the task), and its output. Do not summarise the output — the point of this file is that a re-run is
-a re-run and not a fresh argument, which is the same reason
-docs/superpowers/specs/2026-08-24-three-layers-baseline.md exists.
-EOF
-git add docs/superpowers/specs/2026-08-25-gap-closure-measurements.md
-git commit -m "measure(task 6.11): record the red measurement before the fix
-
-The number the green run is compared against, written down rather than remembered."
-```
 
 ---
 
@@ -6631,7 +7473,17 @@ and publish, in the final `SELECT`:
     st.terms_also_present_before,
 ```
 
-with the join `LEFT JOIN stab st ON st.cid = s.cid AND st.kid = s.kid` added at the point the final `SELECT` assembles its row.
+with the join added at the point the final `SELECT` assembles its row. **The final `SELECT` reads
+`FROM fin3 s`, and `fin3` carries `campaign_id` / `keyword_id` — there is no `s.cid` or `s.kid`
+anywhere in this procedure**, so the join is:
+
+```sql
+  LEFT JOIN stab st ON st.cid = s.campaign_id AND st.kid = s.keyword_id
+```
+
+`stab` aliases `V_KEYWORD_STABILITY`'s own `campaign_id` / `keyword_id` to `cid` / `kid`, so the
+predicate is id-to-id with the CTE doing the renaming, which is the shape every other join in this
+procedure's final `SELECT` uses.
 
 - [ ] **Step 2: Add the columns to history, deploy, re-deploy the view**
 
@@ -6813,22 +7665,66 @@ reaches a terminal state without consulting it, which is the next task."
 **Files:**
 - Modify: `scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql` (the ladder's terminal arms)
 - Modify: `scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql:357` and `:684-688`
+- Modify: `scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql` (the `FN_MOVE_CAP` confidence argument — the only task that closes Task 1.3's hard-coded `NULL`)
 - Modify: `tools/build_reprice_bulksheet.py:897-903`
 - Modify: `tools/tests/test_reprice_precedence.py`
 
-- [ ] **Step 1: Gate the ladder's own terminal arms**
+- [ ] **Step 1: Gate the ladder's own terminal arms, and retire Phase 2's placeholder gate**
 
-In the `raw_state` CASE, the arms that emit `LOSER` and `DEAD` must not fire below HIGH. Add this condition to each of those two arms — for `LOSER`:
+In the `raw_state` CASE, the arms that emit `LOSER` and `DEAD` must not fire below HIGH. Two edits
+per arm: add the confidence condition, and **delete the
+`AND COALESCE(v.universe_source, 'CONFIG') != 'SPEND'` predicate Task 2.4 added**. That predicate was
+a placeholder standing in for exactly this gate — it kept 75 newly admitted spending subjects out of
+a one-way door while confidence did not exist. Leaving both in place would permanently exempt every
+spend-admitted subject from ever being closed, which is a different bug in the opposite direction.
+
+For `LOSER`, the arm becomes:
 
 ```sql
-      -- doctrine 5: only the Brain may take an irreversible action, and only on NOT_WORTH with HIGH
-      -- confidence. The ladder may still SAY a record is losing; what it may not do is reach the
-      -- state that a book turns into a pause. Below HIGH the subject holds at FLOOR_PROBATION,
-      -- which is reversible, visible and keeps buying the evidence the verdict would need.
-       AND s_conf.confidence_band = 'HIGH'
+        -- doctrine 5: only the Brain may take an irreversible action, and only on NOT_WORTH with
+        -- HIGH confidence. The ladder may still SAY a record is losing; what it may not do is reach
+        -- the state that a book turns into a pause. Below HIGH the subject holds at
+        -- FLOOR_PROBATION, which is reversible, visible and keeps buying the evidence the verdict
+        -- would need.
+        -- 2026-08-25: this REPLACES the universe_source != 'SPEND' placeholder from Task 2.4 —
+        -- delete that predicate in the same edit. It was the crude version of this gate, and a
+        -- spend-admitted subject with a HIGH-confidence losing record should be closable like any
+        -- other.
+        WHEN v.probation_elapsed AND v.at_floor
+         AND v.confidence_band = 'HIGH' THEN 'LOSER'
 ```
 
-with `s_conf` being a CTE carrying the same `confidence_band` expression from Task 7.4 (compute it once in a CTE named `conf` and reference it in both the ladder and the final `SELECT`, so the two can never disagree).
+and the `DEAD` arm, identically:
+
+```sql
+        WHEN COALESCE(v.settled_clk90, 0) >= 15 AND COALESCE(v.settled_ord90, 0) = 0
+         AND COALESCE(v.reverdict, '') NOT IN ('SIBLING_REVIVE', 'REDUNDANT')
+         AND v.confidence_band = 'HIGH' THEN 'DEAD'
+```
+
+`v.confidence_band` must therefore exist in `verd`, which is three CTEs above where Task 7.4
+published it. **Compute it once, in a CTE, and read it in both places** — a second copy of the
+expression in the final `SELECT` is a copy that can drift from the one the ladder used:
+
+- add a `conf` CTE immediately after `calc`, carrying `campaign_id`, `keyword_id`, `confidence` and
+  `confidence_band` computed from Task 7.4's expression over `calc`'s own columns;
+- `LEFT JOIN conf cf ON cf.campaign_id = c.campaign_id AND cf.keyword_id = c.keyword_id` inside
+  `verd`, publishing `cf.confidence, cf.confidence_band` there;
+- in the final `SELECT`, publish `s.confidence, s.confidence_band` — the values carried up from
+  `verd`, **not** a re-derivation.
+
+Confirm there is exactly one copy of the expression, and that the placeholder is gone, before
+deploying:
+
+```bash
+cd /Users/ori/Develop/OI
+grep -n "confidence_band" scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql
+grep -n "universe_source" scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql
+```
+
+Expected: the band's defining `CASE` appears once (inside `conf`) and every other hit is a reference;
+and `universe_source` appears only in the `g` CTE, the `base` CTE and the final `SELECT` — never in a
+ladder arm any more.
 
 - [ ] **Step 2: Gate the Brain's PAUSE branch**
 
@@ -6912,6 +7808,42 @@ Run it, watch it fail, then in `tools/build_reprice_bulksheet.py` replace the `i
 
 and add `confidence`, `confidence_band`, `separation`, `stability` and `season_window_label` to the columns the book selects from `V_KEYWORD_STATE` at line 486.
 
+- [ ] **Step 3b: Close Task 1.3's hard-coded NULL confidence in the preflight**
+
+`SP_ENGINE_PREFLIGHT` calls `FN_MOVE_CAP(r.current_bid, …, NULL)` in three places — `move_cap_bid`
+and the two verdict arms — with a literal `NULL`, because confidence did not exist when Task 1.3 was
+written. The function's whole asymmetry is inert until that literal is replaced: with `NULL` every
+cut walks, including a cut to a ceiling nobody disputes, which is §3.1's rule inverted. **No other
+task in this plan touches those call sites.** Back up the procedure (header Step 0), then:
+
+- widen the `cat` CTE's select list with `confidence_band`;
+- carry it into `ranked` beside `catalog_state`, as `ct.confidence_band AS catalog_confidence_band`;
+- in the final `SELECT`, the three calls become
+  `FN_MOVE_CAP(r.current_bid, 'DOWN', r.catalog_confidence_band)` and
+  `FN_MOVE_CAP(r.current_bid, 'UP', r.catalog_confidence_band)`;
+- publish `r.catalog_confidence_band` on `T_ENGINE_PREFLIGHT` so an audit can see which band produced
+  the cap.
+
+Then deploy and check the asymmetry is actually live:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "CALL \`onyga-482313.OI.SP_ENGINE_PREFLIGHT\`()"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT COALESCE(catalog_confidence_band, '(none)') band,
+       COUNTIF(suggested_bid < current_bid) cuts,
+       COUNTIF(suggested_bid < current_bid AND move_cap_bid = 0.0) cuts_allowed_in_one_step
+FROM \`onyga-482313.OI.T_ENGINE_PREFLIGHT\` WHERE lever = 'BID' GROUP BY 1 ORDER BY cuts DESC"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/tests/ENGINE_PREFLIGHT_acceptance.sql)"
+```
+
+Expected: `cuts_allowed_in_one_step` equals `cuts` on the `HIGH` band and is `0` on every other band
+— that is §3.1's asymmetry finally binding — and every acceptance row `PASS`, `E04b` included.
+
 - [ ] **Step 4: Deploy everything and run every suite**
 
 ```bash
@@ -6952,12 +7884,15 @@ git add scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql \
         scripts/bigquery/tables/FACT_PLAN_NEXT_WEEK.sql \
         scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql \
         scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql \
+        scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql \
         tools/build_reprice_bulksheet.py tools/tests/test_reprice_precedence.py
 git commit -m "feat(all): no irreversible action below HIGH confidence
 
 Closes violation 20. Gated in three places — the ladder's terminal arms, the
-Brain's PAUSE branch, and the book's pause row — and every irreversible row now
-carries its justification: the verdict, the confidence, and the season."
+Brain's PAUSE branch, and the book's pause row — every irreversible row now
+carries its justification (the verdict, the confidence, and the season), and the
+preflight's move cap finally receives a real confidence band instead of NULL, so
+3.1's asymmetry binds."
 ```
 
 ---
@@ -7539,7 +8474,11 @@ In `V_PLAN_WINDOW_JUDGMENT.sql`, keep `planned_bid` NULL on the good side exactl
     -- IT IS WALKED, NOT TAKEN IN ONE STEP (doctrine 3.1): a lean-in is a raise into partly-unknown
     -- territory — the evidence supports the DIRECTION, not the magnitude — so it goes through
     -- FN_MOVE_CAP like every other raise.
-    IF(j.side_b = 'GOOD'
+    -- `side_b` IS CREATED IN THIS SAME SELECT LIST (line 580) and cannot be read from a sibling
+    -- expression — which is exactly why the neighbouring seat_cost_per_day at line 616 spells the
+    -- predicate out as j.verdict IN (...). Do the same here, or the deploy fails with
+    -- "Unrecognized name: side_b".
+    IF(j.verdict IN ('GOOD', 'HELD_UNSETTLED', 'GRACE')
        AND j.confidence_band IN ('HIGH', 'MEDIUM')
        AND j.affordable_bid IS NOT NULL
        AND j.current_bid IS NOT NULL
@@ -7549,7 +8488,15 @@ In `V_PLAN_WINDOW_JUDGMENT.sql`, keep `planned_bid` NULL on the good side exactl
        NULL)                                                            AS lean_in_bid,
 ```
 
-Carry `confidence_band` into `base` from the Catalog row (Phase 7 already publishes it on `FACT_KEYWORD_STATE`).
+Two carries, both required:
+
+- **into `base`**: add `ks.confidence_band` beside `ks.state AS ladder_state, ks.current_bid,
+  ks.affordable_bid, ks.bid_floor` at `:454`. `affordable_bid` is already there; `confidence_band`
+  is the one Phase 7 added to `FACT_KEYWORD_STATE`. `judged` and `final` both select `*` from their
+  predecessor, so `j.confidence_band` and `j.affordable_bid` then resolve inside `final`.
+- **out of `final`**: add `f.lean_in_bid,` and `f.confidence_band,` to the view's outer `SELECT`
+  (beside `f.current_bid, f.bid_floor,` at `:668`). A column computed in `final` and not republished
+  there does not exist to any consumer, and `SP_BUILD_NEXT_WEEK_PLAN` reads the view, not the CTE.
 
 - [ ] **Step 2: Let the builder issue the intent**
 
@@ -7602,14 +8549,18 @@ Replace the assertion at 620–622 with:
                          AND (move NOT IN ('NONE', 'NONE_HOLDOUT', 'LEAN_IN')
                               OR planned_bid IS NOT NULL
                               OR seat_cost_per_day IS NOT NULL
+                              -- `final` is CREATE OR REPLACE TEMP TABLE final AS SELECT * FROM
+                              -- FACT_PLAN_NEXT_WEEK WHERE FALSE (:486-487), so its column is
+                              -- planned_bid. planned_bid_final is an alias of the `priced` CTE and
+                              -- does not exist here.
                               OR (move = 'LEAN_IN'
-                                  AND COALESCE(planned_bid_final, 0) <= COALESCE(current_bid, 0))))
+                                  AND COALESCE(planned_bid, 0) <= COALESCE(current_bid, 0))))
           FROM final) = 0
     AS 'the good side is never cut and takes no seat; it may carry a raise-only lean-in price (P-4, restated)';
   -- 3.1: a raise is walked. A lean-in that exceeds one upload's cap is a magnitude nobody has
   -- evidence for.
   ASSERT (SELECT COUNTIF(move = 'LEAN_IN'
-                         AND planned_bid_final
+                         AND planned_bid
                              > `onyga-482313.OI.FN_MOVE_CAP`(current_bid, 'UP', confidence_band) + 0.005)
           FROM final) = 0
     AS 'a lean-in is walked, never taken in one step (3.1)';
@@ -7639,7 +8590,10 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
 SELECT move, COUNT(*) n,
        ROUND(SUM(planned_spend_per_day - COALESCE(w_sp / window_days, 0)), 2) usd_per_day_added,
-       COUNTIF(move = 'LEAN_IN' AND planned_bid_final <= current_bid) any_cut_disguised_as_a_raise
+       -- the PUBLISHED column is planned_bid. planned_bid_final is an internal alias inside
+       -- SP_BUILD_NEXT_WEEK_PLAN's `priced` CTE (:384) and is written out as planned_bid (:517,
+       -- :541, :569); it does not exist on the table.
+       COUNTIF(move = 'LEAN_IN' AND COALESCE(planned_bid, 0) <= current_bid) any_cut_disguised_as_a_raise
 FROM \`onyga-482313.OI.FACT_PLAN_NEXT_WEEK\`
 WHERE as_of = (SELECT MAX(as_of) FROM \`onyga-482313.OI.FACT_PLAN_NEXT_WEEK\`) AND is_live_plan
 GROUP BY 1 ORDER BY n DESC"
@@ -7698,6 +8652,13 @@ evidence supports the direction and not the magnitude (3.1)."
 
 - [ ] **Step 1: Rewrite the plan's sentence in three named parts**
 
+**Where this expression lives, and therefore what its alias is.** The `sentence` column is built at
+`SP_BUILD_NEXT_WEEK_PLAN.sql:609` inside the `INSERT INTO final (…) SELECT … FROM priced p` block
+(`:489-612`), so **every reference below is `p.`**, and the price column at that point is
+`p.planned_bid_final` — the `priced` CTE's alias (`:384`), which the INSERT writes out into the
+table's `planned_bid` column (`:517`). Do not write `f.`; there is no `f` in that block. Do not write
+`p.planned_bid`; that name only exists after the row lands on the table.
+
 Replace the `sentence` expression in the `final` CTE with:
 
 ```sql
@@ -7710,57 +8671,57 @@ Replace the `sentence` expression in the `final` CTE with:
     -- hidden behind the surviving instruction.
     CONCAT(
       FORMAT('CATALOG · %s at %s confidence. %s',
-             COALESCE(f.verdict_catalog, 'UNKNOWN'),
-             COALESCE(f.confidence_band, 'NO_EVIDENCE'),
-             COALESCE(f.catalog_reason, 'no keyword-state row for this subject.')),
-      IF(f.season_window_label IS NOT NULL,
-         FORMAT(' Its season is %s (%t to %t).', f.season_window_label,
-                f.season_window_from, f.season_window_to),
+             COALESCE(p.verdict_catalog, 'UNKNOWN'),
+             COALESCE(p.confidence_band, 'NO_EVIDENCE'),
+             COALESCE(p.catalog_reason, 'no keyword-state row for this subject.')),
+      IF(p.season_window_label IS NOT NULL,
+         FORMAT(' Its season is %s (%t to %t).', p.season_window_label,
+                p.season_window_from, p.season_window_to),
          ''),
       FORMAT('  BRAIN · %s. %s',
-             CASE f.move
-               WHEN 'REPRICE'       THEN FORMAT('REPAIR to a ceiling of $%.2f', f.planned_bid)
+             CASE p.move
+               WHEN 'REPRICE'       THEN FORMAT('REPAIR to a ceiling of $%.2f', p.planned_bid_final)
                WHEN 'HOLD_AT_PRICE' THEN 'REPAIR, already at its price'
-               WHEN 'LEAN_IN'       THEN FORMAT('LEAN IN toward $%.2f', f.planned_bid)
-               WHEN 'PARK'          THEN FORMAT('PARK at $%.2f', f.planned_bid)
-               WHEN 'PARK_SEASONAL' THEN FORMAT('PARK until %t', f.revisit_date)
+               WHEN 'LEAN_IN'       THEN FORMAT('LEAN IN toward $%.2f', p.planned_bid_final)
+               WHEN 'PARK'          THEN FORMAT('PARK at $%.2f', p.planned_bid_final)
+               WHEN 'PARK_SEASONAL' THEN FORMAT('PARK until %t', p.revisit_date)
                WHEN 'HOLD_AT_PARK'  THEN 'HOLD at its park price'
                WHEN 'TEST_RETEST'   THEN FORMAT('TEST — buy %d clicks by %t',
-                                                f.retest_clicks_bought, f.verdict_date)
+                                                p.retest_clicks_bought, p.verdict_date)
                WHEN 'PAUSE'         THEN 'STOP'
                ELSE                      'EARN — leave it alone'
              END,
-             IF(f.seat_no IS NOT NULL,
-                FORMAT('It holds seat %d in %s at $%.2f a day, against a family allowance of $%.2f.',
-                       f.seat_no, f.family, f.seat_cost_per_day, f.allowance_ramped_per_day),
+             IF(p.seat_no IS NOT NULL,
+                FORMAT('It holds seat %d in %s at $%.2f a day, against a family allowance of $%.2p.',
+                       p.seat_no, p.family, p.seat_cost_per_day, p.allowance_ramped_per_day),
                 FORMAT('It takes no seat: %s.',
-                       IF(f.is_candidate, 'the family allowance is spent on higher-ranked questions',
+                       IF(p.is_candidate, 'the family allowance is spent on higher-ranked questions',
                           'it is earning on its settled record')))),
       FORMAT('  PACING · %s',
              CASE
-               WHEN f.planned_bid_final IS NULL THEN 'nothing is uploaded for this keyword.'
-               WHEN f.planned_bid_final < f.current_bid
-                 THEN FORMAT('cut $%.2f to $%.2f, immediately — a cut to a known ceiling cannot overshoot. Its floor is $%.2f.',
-                             f.current_bid, f.planned_bid_final, f.bid_floor)
-               WHEN f.planned_bid_final > f.current_bid
-                 THEN FORMAT('raise $%.2f to $%.2f, walked — one upload may move it no further than $%.2f. Its floor is $%.2f.',
-                             f.current_bid, f.planned_bid_final,
-                             `onyga-482313.OI.FN_MOVE_CAP`(f.current_bid, 'UP', f.confidence_band),
-                             f.bid_floor)
-               ELSE FORMAT('hold at $%.2f; nothing reaches Amazon.', f.current_bid)
+               WHEN p.planned_bid_final IS NULL THEN 'nothing is uploaded for this keyword.'
+               WHEN p.planned_bid_final < p.current_bid
+                 THEN FORMAT('cut $%.2f to $%.2f, immediately — a cut to a known ceiling cannot overshoot. Its floor is $%.2p.',
+                             p.current_bid, p.planned_bid_final, p.bid_floor)
+               WHEN p.planned_bid_final > p.current_bid
+                 THEN FORMAT('raise $%.2f to $%.2f, walked — one upload may move it no further than $%.2p. Its floor is $%.2p.',
+                             p.current_bid, p.planned_bid_final,
+                             `onyga-482313.OI.FN_MOVE_CAP`(p.current_bid, 'UP', p.confidence_band),
+                             p.bid_floor)
+               ELSE FORMAT('hold at $%.2f; nothing reaches Amazon.', p.current_bid)
              END),
       -- the disagreement, shown rather than hidden (doctrine 9)
-      IF(f.verdict_catalog = 'NOT_WORTH' AND f.side = 'GOOD',
+      IF(p.verdict_catalog = 'NOT_WORTH' AND p.side = 'GOOD',
          '  DISAGREEMENT · the settled record says this is not worth having and the window says it is earning. The window is protected (P-4) and the record is the longer view; the next settled window decides it.',
          ''),
-      IF(f.move = 'PAUSE',
+      IF(p.move = 'PAUSE',
          FORMAT('  IRREVERSIBLE · this is a one-way door. It is taken on verdict %s at %s confidence, with no season contradicting it.',
-                f.verdict_catalog, f.confidence_band),
+                p.verdict_catalog, p.confidence_band),
          '')
     )                                                                   AS sentence
 ```
 
-Carry `verdict AS verdict_catalog`, `confidence_band`, `catalog_reason`, `season_window_label`, `season_window_from` and `season_window_to` from the Catalog row through the view into the builder.
+Carry `verdict AS verdict_catalog`, `confidence_band`, `catalog_reason`, `season_window_label`, `season_window_from` and `season_window_to` from the Catalog row through `V_PLAN_WINDOW_JUDGMENT`'s `base` CTE and its outer `SELECT` into the builder's `priced` CTE, so every `p.` reference above resolves. Add the same six columns to `scripts/bigquery/tables/FACT_PLAN_NEXT_WEEK.sql` as `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` lines and to the INSERT's explicit column list at `:489-503` — that list is positional and a column added to the SELECT without being added to the list shifts every column after it.
 
 - [ ] **Step 2: Record the row shape in the doctrine**
 
@@ -7770,7 +8731,7 @@ Add a short subsection under §9 of `architecture/THREE_LAYERS.md` naming the co
 |---|---|
 | **1. Catalog** | `verdict_catalog`, `confidence`, `confidence_band`, `ceiling_cpc`, `season_window_label`, `season_window_from`, `season_window_to`, `catalog_reason` |
 | **2. Brain** | `move`, `planned_bid`, `lean_in_bid`, `seat_no`, `seat_cost_per_day`, `verdict_date`, `revisit_date`, `revisit_reason`, `allowance_ramped_per_day`, `rank_no` |
-| **3. Pacing** | `planned_bid_final`, `current_bid`, `bid_floor`, `bid_park`, `bid_park_source`, and the cap from `FN_MOVE_CAP` |
+| **3. Pacing** | `planned_bid` (the published name of the builder's internal `planned_bid_final`), `current_bid`, `bid_floor`, `bid_park`, `bid_park_source`, and the cap from `FN_MOVE_CAP` |
 | **disagreement** | `held_despite_evidence`, `good_side_no_sale`, and `verdict_catalog` against `side` |
 
 - [ ] **Step 3: Deploy, read a sentence, and commit**
@@ -8834,9 +9795,13 @@ Rule 4's volume floor is ORI'S OPEN RULING, seeded and flagged."
 Expected: every ENABLED negative carries a review date, both `V_CATALOG_IMPROVE` arms return rows, and all Python tests PASS.
 
 ---
-## Phase 10 — The response curve, and Pacing finally graded
+## Phase 10 — The response curve, and two layers finally graded
 
-**Closes:** violations 3 and 17 (one fix), and the grading half of violation 13.
+**Closes:** violations 3 and 17 (one fix), the grading half of violation 13, **and the grading half
+of violation 6** — Phase 0 gave the Catalog a memory so that §6 could be satisfied, and Task 10.8 is
+the task that actually satisfies it. It sits here, not in Phase 0, because a scorecard is gated on
+elapsed time exactly like the curve is: a prediction made on day D cannot be graded until day D's
+window has settled.
 
 **Why 3 and 17 are one piece of work.** §2.5 says so in as many words: the curve §2 requires for marginal-versus-average pricing, used for a second purpose, is *"one piece of work and not two"*. 3 is the marginal defect — `affordable_cpc` is `(settled_gp90 / settled_clk90) / keyword_bar` (`SP_SNAPSHOT_KEYWORD_STATE.sql:320-323`), a flat 90-day average with a cleaned twin of the same scalar shape at 341–345. 17 is the quantity defect — nothing decides how many clicks to buy. Both are the same curve read at two points.
 
@@ -8846,7 +9811,7 @@ Expected: every ENABLED negative carries a review date, both `V_CATALOG_IMPROVE`
 
 **Unblocks:** Phase 12's `rank()` ordering; the honest re-statement of every excess figure in the baseline; and the entry-anchor question — whether bidding $1.27 to buy decision data actually buys decision data.
 
-**Size:** L — 2–3 weeks, and the only phase whose schedule depends on **elapsed time** rather than effort. It cannot start until `FACT_ENGINE_PROPOSALS` and `FACT_KEYWORD_STATE_HISTORY` hold enough paired days to fit a curve — check before starting.
+**Size:** L — 2–3 weeks, and the only phase whose schedule depends on **elapsed time** rather than effort. It cannot start until `FACT_ENGINE_PROPOSALS` and `FACT_KEYWORD_STATE_HISTORY` hold enough paired days to fit a curve and to grade a prediction — check before starting. Eight tasks: the segment axis (`FN_MATCH_WIDTH`), the curve, the marginal ceiling and quantity answer, the Pacing scorecard, the two house constants, the re-based rank, the re-stated excess figures, and the Catalog scorecard.
 
 ---
 
@@ -8916,10 +9881,90 @@ The number the green run is compared against, written down rather than remembere
 ### Task 10.2: `V_CLICK_RESPONSE_CURVE`
 
 **Files:**
+- Create: `scripts/bigquery/functions/FN_MATCH_WIDTH.sql`
 - Create: `scripts/bigquery/views/V_CLICK_RESPONSE_CURVE.sql`
-- Modify: `config.yaml` (`views:`)
+- Modify: `config.yaml` (`functions:` beside `FN_MOVE_CAP`; `views:` beside `V_KEYWORD_GUARD`)
 
 **Fit per SEGMENT, not per keyword.** §2 is explicit: elasticity is realistically estimated per family × match type × placement and applied per keyword — *"do not promise per-keyword precision the data cannot support."*
+
+- [ ] **Step 0: `FN_MATCH_WIDTH` — one definition of the segment axis, callable from both sides**
+
+The curve is fitted over `FACT_AMAZON_ADS`, whose targeting columns are `targeting` /
+`targeting_type`. It is READ in Task 10.3 over `FACT_KEYWORD_STATE`, whose columns are `target_text`
+/ `match_type` and which sources them from `DIM_KEYWORD`. **The two vocabularies are not the same**,
+and a comment saying "keep these identical" does not make them identical. Measured 2026-08-24 on the
+838-row keyword-state snapshot against 30 days of ads: writing the fit side as
+`UPPER(COALESCE(targeting_type,'UNKNOWN'))` and the read side as
+`UPPER(COALESCE(match_type,'UNKNOWN'))` puts **309 of 838 subjects** into buckets the fit side never
+produces — 288 rows reading `ASIN` and 21 reading `ASIN EXPANDED` where the ads side says `PT`. Every
+one of them would silently fall back to `ceiling_basis = 'AVERAGE'` with no error and no alarm, so
+violations 3 and 17 would read as closed while the marginal ceiling reached barely half the account.
+
+So the axis is a function, taking the `(text, type)` pair both sides actually have:
+
+```sql
+-- =============================================================================================
+-- FN_MATCH_WIDTH — the segment axis of the click response curve, in ONE place.
+--
+-- WHY A FUNCTION AND NOT A COPIED CASE. V_CLICK_RESPONSE_CURVE fits over FACT_AMAZON_ADS
+-- (targeting, targeting_type) and SP_SNAPSHOT_KEYWORD_STATE reads the fit over FACT_KEYWORD_STATE
+-- (target_text, match_type, sourced from DIM_KEYWORD). Both are (text, type) pairs and their
+-- vocabularies OVERLAP WITHOUT MATCHING: the ads side carries AUTOMATIC and the four auto clauses,
+-- the config side carries ASIN, 'ASIN EXPANDED', PRODUCT and TARGETING_EXPRESSION. A copied CASE
+-- diverges the first time either source gains a value, and the failure is silent — the join simply
+-- misses and the subject falls back to the average ceiling. Measured before this function existed:
+-- 309 of 838 subjects fell into buckets the fit side never produced.
+--
+-- THE TEXT WINS OVER THE TYPE, because the four auto clauses and the asin/category prefixes are the
+-- most reliable signals either source carries; the type is the fallback. UNKNOWN is a real answer
+-- and is published as one: a segment nothing maps to simply has no subjects reading it.
+-- =============================================================================================
+CREATE OR REPLACE FUNCTION `onyga-482313.OI.FN_MATCH_WIDTH`(target_text STRING, target_type STRING)
+RETURNS STRING
+AS (
+  CASE
+    WHEN LOWER(COALESCE(target_text, ''))
+           IN ('close-match','loose-match','substitutes','complements')      THEN 'AUTO'
+    WHEN UPPER(COALESCE(target_type, '')) LIKE 'AUTO%'                       THEN 'AUTO'
+    WHEN LOWER(COALESCE(target_text, '')) LIKE 'asin%'
+      OR LOWER(COALESCE(target_text, '')) LIKE 'category%'                   THEN 'PT'
+    WHEN UPPER(COALESCE(target_type, '')) LIKE 'ASIN%'
+      OR UPPER(COALESCE(target_type, '')) LIKE 'CATEGORY%'
+      OR UPPER(COALESCE(target_type, '')) IN ('PRODUCT','PT','TARGETING_EXPRESSION')
+                                                                             THEN 'PT'
+    WHEN UPPER(COALESCE(target_type, '')) IN ('BROAD','PHRASE','EXACT')
+                                                                             THEN UPPER(target_type)
+    ELSE 'UNKNOWN'
+  END
+);
+```
+
+Deploy it and prove the two sides now agree on a vocabulary — this is the check that makes the
+`ceiling_basis` result in Task 10.3 trustworthy:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/functions/FN_MATCH_WIDTH.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+WITH st AS (
+  SELECT \`onyga-482313.OI.FN_MATCH_WIDTH\`(target_text, match_type) w, COUNT(*) n
+  FROM \`onyga-482313.OI.FACT_KEYWORD_STATE\`
+  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM \`onyga-482313.OI.FACT_KEYWORD_STATE\`)
+  GROUP BY 1),
+ad AS (
+  SELECT \`onyga-482313.OI.FN_MATCH_WIDTH\`(targeting, targeting_type) w, COUNT(*) n
+  FROM \`onyga-482313.OI.FACT_AMAZON_ADS\`
+  WHERE date > DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 364 DAY)
+  GROUP BY 1)
+SELECT st.w AS state_bucket, st.n AS subjects,
+       ad.n AS ads_rows_in_the_same_bucket
+FROM st LEFT JOIN ad USING (w) ORDER BY subjects DESC"
+```
+
+Expected: **every** `state_bucket` has a non-null `ads_rows_in_the_same_bucket`. A NULL there is a
+segment the fit will never produce, and Task 10.3's join would miss every subject in it. Register
+`FN_MATCH_WIDTH` in `config.yaml` under `functions:`, immediately after `FN_MOVE_CAP`.
 
 - [ ] **Step 1: Write the view**
 
@@ -8975,11 +10020,10 @@ seg AS (
     CAST(a.campaign_id AS STRING)                                   AS campaign_id,
     CAST(a.keyword_id  AS STRING)                                   AS keyword_id,
     COALESCE(fb.family, 'Unknown')                                  AS family,
-    CASE WHEN LOWER(COALESCE(a.targeting, '')) IN
-              ('close-match','loose-match','substitutes','complements')          THEN 'AUTO'
-         WHEN LOWER(COALESCE(a.targeting, '')) LIKE 'asin%'
-           OR LOWER(COALESCE(a.targeting, '')) LIKE 'category%'                  THEN 'PT'
-         ELSE UPPER(COALESCE(a.targeting_type, 'UNKNOWN')) END                   AS match_width,
+    -- THE SEGMENT AXIS IS FN_MATCH_WIDTH's, never a CASE written out here. Task 10.3 calls the
+    -- same function over FACT_KEYWORD_STATE's (target_text, match_type); a copy in either place is
+    -- a divergence waiting to happen, and the divergence is silent.
+    `onyga-482313.OI.FN_MATCH_WIDTH`(a.targeting, a.targeting_type)              AS match_width,
     COALESCE(a.placement_type, 'UNKNOWN')                           AS placement,
     DATE_TRUNC(a.date, WEEK(SUNDAY))                                AS wk,
     SUM(a.Ads_clicks)                                               AS clicks,
@@ -9068,9 +10112,17 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
 
 - [ ] **Step 3: Register and commit**
 
+Insert `V_CLICK_RESPONSE_CURVE` in `config.yaml` under `views:` **immediately after the
+`V_KEYWORD_GUARD` entry** — never appended at the end of the file — describing it as the per-segment
+click response curve read by `SP_SNAPSHOT_KEYWORD_STATE` for the marginal ceiling, and noting that
+`n_points`, `r_squared` and `fit_warning` are published on every row so a consumer can refuse a fit
+made on too little. `FN_MATCH_WIDTH` was registered under `functions:` in Step 0. Verify with the
+`config.yaml` duplicate check in the plan header, then:
+
 ```bash
 cd /Users/ori/Develop/OI
-git add scripts/bigquery/views/V_CLICK_RESPONSE_CURVE.sql config.yaml
+git add scripts/bigquery/functions/FN_MATCH_WIDTH.sql \
+        scripts/bigquery/views/V_CLICK_RESPONSE_CURVE.sql config.yaml
 git commit -m "feat(catalog): V_CLICK_RESPONSE_CURVE — how many clicks a price buys, per segment
 
 The input violation 17 never had. Fitted per family x match width x placement,
@@ -9113,6 +10165,15 @@ Add the CTE:
            SUM(segment_cvr * segment_geomean_clicks_per_day)
              / NULLIF(SUM(segment_geomean_clicks_per_day), 0)          AS segment_cvr,
            AVG(segment_gp_per_order)                                   AS segment_gp_per_order,
+           -- THE TWO ANCHOR POINTS OF THE CURVE, AND THEY MUST SURVIVE THIS GROUP BY.
+           -- clicks_per_day(p) = geomean_clicks_per_day * (p / geomean_cpc)^b is evaluated at two
+           -- prices in Step 2 and again in Task 11.4; without both anchors here every one of those
+           -- expressions fails with "Unrecognized name". The CPC anchor is click-weighted like the
+           -- elasticity, because it must describe the same mix; the clicks anchor is a SUM, because
+           -- the placements' volumes ADD — the subject buys all of them.
+           SUM(segment_geomean_cpc * segment_geomean_clicks_per_day)
+             / NULLIF(SUM(segment_geomean_clicks_per_day), 0)          AS segment_geomean_cpc,
+           SUM(segment_geomean_clicks_per_day)                         AS segment_geomean_clicks_per_day,
            LOGICAL_AND(usable)                                         AS usable,
            STRING_AGG(DISTINCT fit_warning, '; ')                      AS fit_warning
     FROM crv GROUP BY 1, 2
@@ -9128,12 +10189,30 @@ The Phase 8 contract published `s.affordable_cpc AS ceiling_cpc` and `'AVERAGE' 
     -- The average click's worth is gp_per_click / bar — that is what affordable_cpc has always been.
     -- The MARGINAL click's worth is lower, and by how much is exactly the curve's job.
     --
-    -- With clicks(p) proportional to p^b, total gross profit at price p is proportional to p^b, so
-    -- the marginal gross profit per marginal click is (1/b) of the average at that price. The next
-    -- click is therefore worth avg_gp_per_click x (1/b) LESS than the average suggests when b < 1,
-    -- which is the ordinary case: 1/b > 1 means each extra click costs more than the last to win.
-    --   marginal_gp_per_click = avg_gp_per_click * b        (b <= 1, so the marginal is smaller)
-    --   ceiling_cpc           = marginal_gp_per_click / bar
+    -- THE DERIVATION, IN FULL, BECAUSE THIS ONE EXPRESSION SETS EVERY PRICE IN THE ACCOUNT ONCE
+    -- ceiling_basis FLIPS TO MARGINAL. Write n(p) for clicks bought per day at price p. The fit says
+    --     n(p) = A * p^b,        b > 0, and typically b < 1 (diminishing returns)
+    -- Total SPEND at price p is p * n(p) = A * p^(b+1). Total gross profit is g * n(p) = g * A * p^b,
+    -- where g is gross profit per click, which the fit treats as a property of the segment and not
+    -- of the price. What we want is the gross profit of the LAST click bought at price p — that is,
+    -- d(total gross profit)/d(spend), the return on the marginal dollar:
+    --     d(GP)/dp     = g * A * b * p^(b-1)
+    --     d(spend)/dp  = A * (b+1) * p^b
+    -- Dividing gives the marginal gross profit per marginal DOLLAR, and multiplying by p gives it
+    -- per marginal CLICK:
+    --     marginal_gp_per_click = g * b / (b + 1) * ... — and this is where the exact algebra stops
+    -- being worth its precision, because b is fitted with a wide interval and g is a segment average.
+    -- SO THE HOUSE TAKES THE SIMPLE, CONSERVATIVE FORM AND SAYS SO:
+    --     marginal_gp_per_click = avg_gp_per_click * b,  b clamped to at most 1.0
+    -- It has the two properties that matter and no false precision. (a) It is never LARGER than the
+    -- average, because b <= 1 after the clamp — so the marginal ceiling can never exceed the average
+    -- ceiling and this change can only ever lower a price, never raise one. (b) It shrinks as the
+    -- segment's returns diminish faster: a segment where paying 10% more buys only 3% more clicks
+    -- (b = 0.3) prices the next click at 30% of the average, and a segment where price barely
+    -- diminishes at all (b -> 1) prices it at the average, which is where we started.
+    --     ceiling_cpc = marginal_gp_per_click / bar
+    -- NOTE THE DIRECTION, and do not "fix" it to 1/b: multiplying by b with b < 1 makes the marginal
+    -- SMALLER than the average, which is the whole point. Dividing by b would make it larger.
     --
     -- WHERE THE CURVE IS NOT USABLE THE AVERAGE STANDS AND THE ROW SAYS SO. 6.3: an unusable fit
     -- must not be dressed up as a marginal number. ceiling_basis is the field a consumer reads to
@@ -9152,22 +10231,33 @@ The Phase 8 contract published `s.affordable_cpc AS ceiling_cpc` and `'AVERAGE' 
     -- question stated properly, and the thing that separates OVERPAYING from OVER-BUYING.
     -- At the ceiling price, the segment's curve says how many clicks a day this subject would take:
     --   clicks_per_day(p) = geomean_clicks_per_day * (p / geomean_cpc)^b
-    CASE
-      WHEN cs.usable AND cs.click_elasticity IS NOT NULL
-       AND cs.segment_geomean_cpc > 0
-        THEN cs.segment_geomean_clicks_per_day
-             * POW(GREATEST(s.affordable_cpc, 0.01) / cs.segment_geomean_cpc,
-                   cs.click_elasticity)
-      ELSE NULL
-    END                                                                 AS clicks_per_day_at_ceiling,
-    -- and the same number restated as the thing the Brain actually needs to hear: beyond this many
-    -- clicks a day, the next one no longer clears the bar.
+    -- BOTH COLUMNS ARE EVALUATED AT THE CEILING THIS ROW ACTUALLY PUBLISHES — the marginal one where
+    -- the fit is usable, the average one where it is not. Evaluating "clicks at the ceiling" at
+    -- s.affordable_cpc while the row's ceiling_cpc is the smaller marginal number would publish two
+    -- columns priced at two different prices without telling anyone, and would overstate the volume
+    -- at the price the Brain is going to pay. The expression is written out rather than referencing
+    -- the ceiling_cpc alias above, because BigQuery does not expose a select-list alias to a sibling
+    -- expression in the same SELECT list.
     CASE
       WHEN cs.usable AND cs.click_elasticity IS NOT NULL
        AND cs.segment_geomean_cpc > 0
         THEN cs.segment_geomean_clicks_per_day
              * POW(GREATEST(s.gp_per_click * LEAST(cs.click_elasticity, 1.0)
                             / COALESCE(s.family_bar, 1.0), 0.01) / cs.segment_geomean_cpc,
+                   cs.click_elasticity)
+      ELSE NULL
+    END                                                                 AS clicks_per_day_at_ceiling,
+    -- and the same curve read at the BAR PRICE — what the subject would take if it were priced at
+    -- exactly break-even against its family bar, which is the volume beyond which the next click no
+    -- longer clears it. Where the fit is usable the marginal ceiling IS the bar price by
+    -- construction, so these two agree; they diverge only if a later task prices the ceiling below
+    -- the bar, and publishing both is what makes that visible instead of silent.
+    CASE
+      WHEN cs.usable AND cs.click_elasticity IS NOT NULL
+       AND cs.segment_geomean_cpc > 0
+        THEN cs.segment_geomean_clicks_per_day
+             * POW(GREATEST(s.gp_per_click / COALESCE(s.family_bar, 1.0), 0.01)
+                   / cs.segment_geomean_cpc,
                    cs.click_elasticity)
       ELSE NULL
     END                                                                 AS clicks_per_day_at_the_bar,
@@ -9180,16 +10270,37 @@ two can never disagree. Add it where the final `SELECT` assembles its row:
 ```sql
   LEFT JOIN crv_seg cs
     ON cs.family = s.family
-   AND cs.match_width = CASE
-         WHEN s.is_auto THEN 'AUTO'
-         WHEN s.is_pt   THEN 'PT'
-         ELSE UPPER(COALESCE(s.match_type, 'UNKNOWN'))
-       END
+   AND cs.match_width = `onyga-482313.OI.FN_MATCH_WIDTH`(s.target_text, s.match_type)
 ```
 
-That `CASE` is character-for-character the one in `V_CLICK_RESPONSE_CURVE.sql`'s `seg` CTE, and it
-must stay that way — if one of the two moves, segments silently fail to join and every affected
-subject falls back to the average ceiling with no error and no alarm.
+**The axis is the function, on both sides.** `V_CLICK_RESPONSE_CURVE`'s `seg` CTE calls
+`FN_MATCH_WIDTH(a.targeting, a.targeting_type)` and this join calls it on
+`(s.target_text, s.match_type)`; there is no `CASE` to keep in sync in either place, which is exactly
+why Task 10.2 Step 0 built it. Do **not** replace either call with an inline `CASE` "for readability"
+— a divergence here does not fail, it silently misses, and every affected subject falls back to the
+average ceiling with no error and no alarm.
+
+Verify the join actually lands before believing the `ceiling_basis` counts in Step 3:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+WITH st AS (
+  SELECT family, \`onyga-482313.OI.FN_MATCH_WIDTH\`(target_text, match_type) w, COUNT(*) n
+  FROM \`onyga-482313.OI.FACT_KEYWORD_STATE\`
+  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM \`onyga-482313.OI.FACT_KEYWORD_STATE\`)
+    AND family IS NOT NULL
+  GROUP BY 1, 2)
+SELECT SUM(IF(c.family IS NULL, st.n, 0)) AS subjects_with_no_curve_segment,
+       SUM(st.n)                          AS subjects_with_a_family
+FROM st
+LEFT JOIN (SELECT DISTINCT family, match_width FROM \`onyga-482313.OI.V_CLICK_RESPONSE_CURVE\`) c
+  ON c.family = st.family AND c.match_width = st.w"
+```
+
+Expected: `subjects_with_no_curve_segment` is a small number and every row in it is explainable (a
+family with too little history to fit anything). A large number here means the axis is diverging
+again, and the fix is `FN_MATCH_WIDTH`, never a widening of the join.
 
 - [ ] **Step 3: Add the columns to history, deploy, re-deploy the view, verify**
 
@@ -9362,6 +10473,13 @@ Expected: a spread across `DELIVERED`, `PRICE_MISSED`, `VOLUME_MISSED` and `TOO_
 
 - [ ] **Step 3: Register and commit**
 
+Insert the entry in `config.yaml` under `views:` **immediately after the `V_CHANGE_SCORECARD`
+entry** — never appended at the end of the file — describing it as Pacing's scorecard, that it joins
+`FACT_PPC_CHANGE_LOG`'s recorded prediction to `V_CHANGE_SCORECARD`'s observed outcome on that view's
+own settle-safe gate, that both sides are published per §6.3, and that its 20%/50% tolerances are
+declared constants carried in the file. Verify with the `config.yaml` duplicate check in the plan
+header, then:
+
 ```bash
 cd /Users/ori/Develop/OI
 git add scripts/bigquery/views/V_PACING_SCORECARD.sql config.yaml
@@ -9430,6 +10548,13 @@ read after the fact to suit a preference."
 
 §2.4's ordering is **expected profit contribution at the ceiling, discounted by confidence** — and all three terms now exist.
 
+**Carry the three new inputs into `base` first.** `ceiling_basis`, `clicks_per_day_at_the_bar` and
+`confidence` all live on `FACT_KEYWORD_STATE` after Phases 7 and 10 and none of them is selected by
+`V_PLAN_WINDOW_JUDGMENT` today. Add them beside `ks.gp_per_click` at `:455`; `judged` and `final`
+select `*` from their predecessors, so `j.` then resolves. Confirm with
+`grep -n "clicks_per_day_at_the_bar" scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql` before
+writing Step 1.
+
 - [ ] **Step 1: Replace the interim shortfall with the doctrinal score**
 
 ```sql
@@ -9445,15 +10570,25 @@ read after the fact to suit a preference."
     -- THE DISCOUNT IS WHAT STOPS AN UNKNOWN OUTRANKING A PROVEN ONE ON OPTIMISM ALONE.
     -- A subject with no usable curve falls back to Phase 6's shortfall rather than to zero, so the
     -- queue never silently loses a candidate to a missing model.
+    -- THE COST TERM IS MULTIPLIED BY THE BAR, and Task 12.3's header carries the full derivation:
+    -- expected conversions x margin is exactly expected clicks x gp_per_click, so writing the cost
+    -- term as expected clicks x ceiling_cpc with no bar makes the whole expression
+    -- clicks x gp_per_click x (1 - ceiling/gp_per_click), which is negative for any subject whose
+    -- ceiling exceeds its gross profit per click — 260 of the 359 subjects carrying both on
+    -- 2026-08-24, because this house's bars are deliberately below 1.0. Measured against the bar
+    -- instead, and with the MARGINAL ceiling, the score is clicks x gp_per_click x (1 - b) x
+    -- confidence, which is never negative and is larger the faster the segment's returns diminish.
+    -- gp_per_click is read straight off the row (base carries ks.gp_per_click at :455); do NOT
+    -- reconstruct it from settled_ord90 / settled_clk90, because settled_clk90 is not carried by
+    -- this view at all.
     COALESCE(
       CASE WHEN j.ceiling_basis = 'MARGINAL' AND j.clicks_per_day_at_the_bar IS NOT NULL
         THEN (
           -- expected conversions x margin, over the window
-          j.clicks_per_day_at_the_bar * j.window_days
-            * COALESCE(SAFE_DIVIDE(j.settled_ord90, NULLIF(j.settled_clk90, 0)), 0)
-            * COALESCE(SAFE_DIVIDE(j.settled_gp90, NULLIF(j.settled_ord90, 0)), 0)
-          -- minus expected clicks x ceiling CPC
-          - j.clicks_per_day_at_the_bar * j.window_days * COALESCE(j.ceiling_cpc, 0)
+          j.clicks_per_day_at_the_bar * j.window_days * COALESCE(j.gp_per_click, 0)
+          -- minus what those clicks cost at the ceiling, in the currency the bar is written in
+          - j.clicks_per_day_at_the_bar * j.window_days
+              * COALESCE(j.family_bar, 1.0) * COALESCE(j.ceiling_cpc, 0)
         ) / NULLIF(j.window_days, 0) * COALESCE(j.confidence, 0.0)
       END,
       -- the Phase 6 interim, unchanged, for a subject whose segment has no usable curve
@@ -9510,7 +10645,7 @@ Expected: both bases present, and every acceptance row `PASS`.
 cd /Users/ori/Develop/OI
 git add scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql \
         scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql
-git commit -m "feat(brain): rank on expected profit at the ceiling, discounted by confidence
+git commit -m "feat(brain): rank on expected profit at the ceiling against the bar, discounted by confidence
 
 2.4's actual ordering, buildable now that the marginal ceiling and confidence both
 exist. A subject with no usable curve keeps Phase 6's shortfall rather than
@@ -9567,6 +10702,251 @@ git commit -m "docs(doctrine): re-state the excess figures against the marginal 
 10.4 recorded that every excess figure was computed against an average ceiling and
 misstated the overpayment in an unknown direction. It no longer does, and the net
 is reported beside every one-sided sum per 6.3."
+```
+
+---
+
+### Task 10.8: `V_CATALOG_SCORECARD` — grade the layer that does the valuing
+
+**Files:**
+- Create: `scripts/bigquery/views/V_CATALOG_SCORECARD.sql`
+- Modify: `config.yaml` (`views:` — insert immediately after the `V_CATALOG_DWELL` entry Task 0.4 added)
+
+**Why this task exists at all, and why here.** Violation 6's own words are *"it keeps no memory … so
+the Catalog cannot be graded on its own predictions and §6 is currently impossible to satisfy."*
+Phase 0 built the memory (`FACT_KEYWORD_STATE_HISTORY`) and the dwell view, which makes grading
+**possible** — and then nothing in this plan ever performed it. The Brain got `V_PLAN_SCORECARD`
+(Task 6.10) and Pacing got `V_PACING_SCORECARD` (Task 10.4); the Catalog, the layer whose entire job
+is valuing, got neither. That is half of violation 6 left open on its own terms, and it hard-blocks
+one other thing: Task 11.3 sets `probation_weight = 0.0` and says in the code that it is raised
+*"only after the Catalog scorecard has measured this source predicting better than the incumbent
+estimator"* — an instrument that would otherwise not exist, leaving violation 21's demand data on a
+probation it could never leave.
+
+It sits here rather than in Phase 0 for the same reason Task 10.1 does: **it is gated on elapsed
+time, not effort.** A prediction made on day D can only be graded once day D's window has settled, so
+the view is buildable on day one and readable only after `FACT_KEYWORD_STATE_HISTORY` has accrued
+enough partitions. Run Task 10.1's readiness gate against the history table before reading anything
+here.
+
+- [ ] **Step 1: Write the view**
+
+```sql
+-- =============================================================================================
+-- V_CATALOG_SCORECARD — was the Catalog's answer right? (doctrine 6, 6.2)
+--
+-- 6 asks each layer a different question. The Brain's is "did the allocation earn?"
+-- (V_PLAN_SCORECARD). Pacing's is "did the bid deliver what it implied?" (V_PACING_SCORECARD).
+-- The CATALOG's is the one this view answers: ON DATE D YOU SAID THIS SUBJECT WAS WORTH X AND
+-- AFFORDED A CPC OF Y — WAS IT?
+--
+-- THE PREDICTION IS THE ROW ITSELF. FACT_KEYWORD_STATE_HISTORY records, per subject per day, the
+-- state, the ceiling, the confidence and the appointment. Nothing extra had to be recorded; the
+-- Catalog's answer IS its prediction, which is why violation 6 was about memory and not about
+-- instrumentation.
+--
+-- THE GRADE IS THE SUBSEQUENT SETTLED WINDOW, and the gate is the same settle-safe one every other
+-- scorecard in this warehouse uses: a prediction made on D is readable at D + settle_days_eff + 7,
+-- so SP rows grade at D+14 and SB rows at D+21. A row inside its gate reads TOO_EARLY, never a
+-- provisional grade — 6.3 forbids a number that looks like an answer and is not one.
+--
+-- 6.3 IS BINDING HERE TOO: both sides are published on every row (predicted AND realised), never
+-- only the error, and never only the sign of the error. A subject whose realised window carries no
+-- clicks is UNREADABLE, not wrong: silence is not evidence (doctrine 5).
+--
+-- THREE GRADES, EACH ANSWERING A DIFFERENT QUESTION THE DOCTRINE ASKS:
+--   * ceiling_grade   — did the subject's realised gross profit per click land at or above the
+--                       ceiling the Catalog published? An over-published ceiling is the failure
+--                       that costs money; an under-published one costs opportunity, and both are
+--                       reported, signed.
+--   * verdict_grade   — did a subject the Catalog called WORTH go on to clear its bar, and did one
+--                       it called NOT_WORTH go on to miss it? This is the only grade that can
+--                       falsify a terminal state, which is why doctrine 5 gates those on HIGH
+--                       confidence and why confidence_band is carried onto every row here.
+--   * appointment_grade — was next_check_date kept? An appointment nobody kept is a promise the
+--                       Catalog made and broke, and V_CATALOG_DWELL already measures the overdue
+--                       side; this joins it to whether keeping it would have changed anything.
+--
+-- WHAT IT IS FOR, CONCRETELY: (a) violation 6's grading half; (b) the named instrument for raising
+-- V_SUBJECT_MARKET_HEADROOM.probation_weight off 0.0 — join this view to that one on
+-- (campaign_id, keyword_id) and compare ceiling_grade where market_coverage = 'COVERED' against
+-- where it is not, which is a 6.1 experiment, declared before it is run and never read after the
+-- fact to suit a preference; (c) the evidence for or against every constant in the ladder,
+-- re-runnable rather than argued.
+--
+-- IT DOES NOT CARRY market_coverage ITSELF, deliberately: that column reaches
+-- FACT_KEYWORD_STATE_HISTORY in Task 11.4, one phase LATER than this view is built, and a view that
+-- selected it would not deploy. The experiment joins the two views instead, which is also the
+-- honest shape — the market source is on probation and does not belong inside the instrument that
+-- judges it.
+-- =============================================================================================
+CREATE OR REPLACE VIEW `onyga-482313.OI.V_CATALOG_SCORECARD` AS
+WITH wm AS (
+  SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+),
+-- every answer the Catalog has ever published, one row per subject per day
+said AS (
+  SELECT
+    h.snapshot_date,
+    h.campaign_id,
+    h.keyword_id,
+    h.subject_key,
+    h.family,
+    h.target_text,
+    h.state,
+    h.verdict,
+    h.confidence,
+    h.confidence_band,
+    h.family_bar,
+    h.gp_per_click                                            AS predicted_gp_per_click,
+    h.ceiling_cpc,
+    h.ceiling_basis,
+    h.current_bid,
+    h.next_check_date,
+    COALESCE(h.settle_days_eff, IF(h.channel = 'SB', 14, 3))  AS settle_days_eff,
+    -- the settle-safe gate: the window opens at D+1 and is readable a full settle period after it
+    -- closes, which is the same shape V_CHANGE_SCORECARD uses.
+    DATE_ADD(h.snapshot_date,
+             INTERVAL COALESCE(h.settle_days_eff, IF(h.channel = 'SB', 14, 3)) + 7 DAY)
+                                                              AS read_gate_date
+  FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY` h
+),
+-- what the subject actually did in the window that followed the answer
+did AS (
+  SELECT
+    sd.snapshot_date,
+    sd.campaign_id,
+    sd.keyword_id,
+    SUM(a.Ads_clicks)                                         AS win_clicks,
+    SUM(a.Ads_cost)                                           AS win_spend,
+    SUM(a.Ads_orders)                                         AS win_orders,
+    SUM(a.GROSS_PROFIT)                                       AS win_gp
+  FROM (SELECT DISTINCT snapshot_date, campaign_id, keyword_id, settle_days_eff FROM said) sd
+  JOIN `onyga-482313.OI.FACT_AMAZON_ADS` a
+    ON CAST(a.campaign_id AS STRING) = sd.campaign_id
+   AND CAST(a.keyword_id  AS STRING) = sd.keyword_id
+   AND a.date >  sd.snapshot_date
+   AND a.date <= DATE_ADD(sd.snapshot_date, INTERVAL sd.settle_days_eff DAY)
+  GROUP BY 1, 2, 3
+)
+SELECT
+  s.snapshot_date,
+  s.campaign_id,
+  s.keyword_id,
+  s.subject_key,
+  s.family,
+  s.target_text,
+  s.state,
+  s.verdict,
+  s.confidence,
+  s.confidence_band,
+  s.ceiling_basis,
+  s.read_gate_date,
+  (s.read_gate_date <= (SELECT d FROM wm))                    AS readable,
+
+  -- ── BOTH SIDES, ALWAYS (6.3) ────────────────────────────────────────────────────────────────
+  s.predicted_gp_per_click,
+  SAFE_DIVIDE(d.win_gp, NULLIF(d.win_clicks, 0))              AS realised_gp_per_click,
+  s.ceiling_cpc                                               AS predicted_ceiling_cpc,
+  SAFE_DIVIDE(d.win_spend, NULLIF(d.win_clicks, 0))           AS realised_cpc,
+  s.family_bar,
+  SAFE_DIVIDE(d.win_gp, NULLIF(d.win_spend, 0))               AS realised_gp_roas,
+  d.win_clicks, d.win_spend, d.win_orders, d.win_gp,
+
+  -- signed, never a one-sided sum. A positive error means the Catalog published a ceiling the
+  -- subject did not earn back — the direction that costs money.
+  ROUND(s.ceiling_cpc - SAFE_DIVIDE(d.win_gp, NULLIF(d.win_clicks, 0)) / NULLIF(s.family_bar, 0), 4)
+                                                              AS ceiling_error,
+
+  CASE
+    WHEN s.read_gate_date > (SELECT d FROM wm)                THEN 'TOO_EARLY'
+    WHEN COALESCE(d.win_clicks, 0) = 0                        THEN 'UNREADABLE_NO_CLICKS'
+    WHEN s.ceiling_cpc IS NULL                                THEN 'NO_CEILING_PUBLISHED'
+    WHEN SAFE_DIVIDE(d.win_gp, NULLIF(d.win_clicks, 0)) / NULLIF(s.family_bar, 0)
+           >= s.ceiling_cpc                                   THEN 'CEILING_EARNED_BACK'
+    ELSE                                                           'CEILING_TOO_HIGH'
+  END                                                         AS ceiling_grade,
+
+  CASE
+    WHEN s.read_gate_date > (SELECT d FROM wm)                THEN 'TOO_EARLY'
+    WHEN COALESCE(d.win_clicks, 0) = 0                        THEN 'UNREADABLE_NO_CLICKS'
+    WHEN s.verdict = 'WORTH'
+     AND SAFE_DIVIDE(d.win_gp, NULLIF(d.win_spend, 0)) >= s.family_bar
+                                                              THEN 'WORTH_CONFIRMED'
+    WHEN s.verdict = 'WORTH'                                  THEN 'WORTH_FALSIFIED'
+    WHEN s.verdict = 'NOT_WORTH'
+     AND SAFE_DIVIDE(d.win_gp, NULLIF(d.win_spend, 0)) <  s.family_bar
+                                                              THEN 'NOT_WORTH_CONFIRMED'
+    WHEN s.verdict = 'NOT_WORTH'                              THEN 'NOT_WORTH_FALSIFIED'
+    ELSE                                                           'NOT_GRADED_UNKNOWN_VERDICT'
+  END                                                         AS verdict_grade,
+
+  -- the appointment: was the date the Catalog set actually honoured by a later snapshot?
+  s.next_check_date,
+  EXISTS (SELECT 1 FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY` h2
+          WHERE h2.campaign_id = s.campaign_id AND h2.keyword_id = s.keyword_id
+            AND h2.snapshot_date = s.next_check_date)         AS appointment_snapshot_exists,
+  CASE
+    WHEN s.next_check_date IS NULL                            THEN 'NO_APPOINTMENT'
+    WHEN s.next_check_date > (SELECT d FROM wm)               THEN 'NOT_DUE_YET'
+    WHEN EXISTS (SELECT 1 FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY` h3
+                 WHERE h3.campaign_id = s.campaign_id AND h3.keyword_id = s.keyword_id
+                   AND h3.snapshot_date = s.next_check_date
+                   AND h3.state != s.state)                   THEN 'KEPT_AND_CHANGED'
+    WHEN EXISTS (SELECT 1 FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY` h4
+                 WHERE h4.campaign_id = s.campaign_id AND h4.keyword_id = s.keyword_id
+                   AND h4.snapshot_date = s.next_check_date)  THEN 'KEPT_AND_UNCHANGED'
+    ELSE                                                           'MISSED'
+  END                                                         AS appointment_grade
+FROM said s
+LEFT JOIN did d
+  ON d.snapshot_date = s.snapshot_date
+ AND d.campaign_id   = s.campaign_id
+ AND d.keyword_id    = s.keyword_id;
+```
+
+- [ ] **Step 2: Deploy and read the first grades honestly**
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/views/V_CATALOG_SCORECARD.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT ceiling_grade, verdict_grade, COUNT(*) n,
+       ROUND(AVG(ceiling_error), 4) avg_signed_ceiling_error
+FROM \`onyga-482313.OI.V_CATALOG_SCORECARD\`
+GROUP BY 1, 2 ORDER BY n DESC"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT appointment_grade, COUNT(*) n
+FROM \`onyga-482313.OI.V_CATALOG_SCORECARD\` GROUP BY 1 ORDER BY n DESC"
+```
+
+**Read this the way Task 10.2 says to read the curve.** If almost everything is `TOO_EARLY`, the
+history has not accrued and the honest answer is to say so and come back — not to shorten the gate.
+A large `MISSED` bucket is a real finding about the orchestrator, not about the ladder. Record what
+you measure in the doctrine's §10 table either way; a scorecard whose first reading is "not enough
+data yet" is still a scorecard, and it is the one thing violation 6 asked for.
+
+- [ ] **Step 3: Register and commit**
+
+Insert the entry in `config.yaml` under `views:` **immediately after the `V_CATALOG_DWELL` entry**
+Task 0.4 added — never appended at the end of the file — describing it as the Catalog's scorecard,
+that it grades the Catalog's own published ceiling, verdict and appointment against the settled
+window that followed, that both sides are published per §6.3, and that it is the named instrument
+for raising `V_SUBJECT_MARKET_HEADROOM.probation_weight` off `0.0`. Verify with the `config.yaml`
+duplicate check in the plan header, then:
+
+```bash
+cd /Users/ori/Develop/OI
+git add scripts/bigquery/views/V_CATALOG_SCORECARD.sql config.yaml
+git commit -m "feat(catalog): V_CATALOG_SCORECARD — the layer that values is finally graded
+
+Closes the grading half of violation 6. Phase 0 made the question answerable;
+nothing asked it. Grades the published ceiling, verdict and appointment against
+the settled window that followed, on the same settle-safe gate every other
+scorecard uses, with both sides published per 6.3. It is also the named instrument
+for raising demand data off its 0.0 probation weight."
 ```
 
 ---
@@ -9746,6 +11126,14 @@ Expected: **both `MUST_BE_ZERO` columns read 0.** If either is non-zero, the col
 
 - [ ] **Step 3: Register and commit**
 
+Insert the entry in `config.yaml` under `views:` **beside the other `V_SRC_` interface views, in the
+`V_SRC_` block** — never appended at the end of the file. If no `V_SRC_` block exists yet, place it
+in alphabetical position among its neighbours and say so in the commit message. The description says
+it is the one interface onto `FACT_SEARCH_QUERY`'s market columns, that the market totals are `MAX`ed
+and our own figures `SUM`med because the totals repeat on every ASIN row of the same query-week, and
+that nothing else in the warehouse may read those columns directly. Verify with the `config.yaml`
+duplicate check in the plan header, then:
+
 ```bash
 cd /Users/ori/Develop/OI
 git add scripts/bigquery/views/V_SRC_MARKET_VOLUME.sql config.yaml
@@ -9867,9 +11255,13 @@ SELECT
 
   -- ── THE PROBATION WEIGHT (2.3), which starts near zero and is raised only by measurement ──
   -- A DECLARED CONSTANT, and deliberately not a free parameter: 0.0 means this source informs
-  -- sizing and the curve and contributes NOTHING to any valuation. It is raised only after the
-  -- Catalog scorecard has measured this source predicting better than the incumbent estimator,
-  -- which is a 6.1 experiment and not an edit.
+  -- sizing and the curve and contributes NOTHING to any valuation. It is raised only after
+  -- V_CATALOG_SCORECARD (built in Task 10.8, and named here so this is a reference and not a wish)
+  -- has measured this source predicting better than the incumbent estimator — specifically, its
+  -- ceiling_grade, joined to this view on (campaign_id, keyword_id), where market_coverage =
+  -- 'COVERED' against where it is not, over enough settled windows to mean something. That is a 6.1 experiment and not an edit, and NO TASK IN THE
+  -- GAP-CLOSURE PLAN RAISES THIS WEIGHT: the plan builds the instrument and leaves the raise to a
+  -- declared experiment whose result Ori reads.
   0.0                                                              AS probation_weight,
   'market volume may size an opportunity and inform the response curve; it may never by itself move a verdict from UNKNOWN to WORTH (2.3)'
                                                                    AS probation_note
@@ -9894,6 +11286,14 @@ FROM \`onyga-482313.OI.V_SUBJECT_MARKET_HEADROOM\` GROUP BY 1 ORDER BY subjects 
 Expected: a `COVERED` bucket at roughly the measured match rate, and three distinct `NO_MARKET_DATA` reasons — **never a zero share standing in for an absent one**.
 
 - [ ] **Step 3: Register and commit**
+
+Insert the entry in `config.yaml` under `views:` **immediately after the `V_SRC_MARKET_VOLUME` entry**
+added in Task 11.2 — never appended at the end of the file — describing it as market volume, our
+share and the headroom per Catalog subject; that the join key is `LOWER(TRIM(query_text))` against
+`LOWER(TRIM(target_text))` and is an estimate rather than a mapping; that auto modes and product
+targets publish `NO_MARKET_DATA` and never zero; and that `probation_weight` is a declared constant
+at `0.0` raised only by `V_CATALOG_SCORECARD` (§2.3). Verify with the `config.yaml` duplicate check
+in the plan header, then:
 
 ```bash
 cd /Users/ori/Develop/OI
@@ -9931,7 +11331,27 @@ Add the CTE and the published columns:
   ),
 ```
 
-and in the final `SELECT`, immediately after `expected_clicks_source`:
+with the join added where the final `SELECT` assembles its row, beside the `crv_seg` join Task 10.3
+added. **The final `SELECT` reads `FROM fin3 s`, whose keys are `campaign_id` / `keyword_id`; the
+`mh` CTE does the renaming, so the predicate is id-to-id:**
+
+```sql
+  LEFT JOIN mh ON mh.cid = s.campaign_id AND mh.kid = s.keyword_id
+```
+
+`V_SUBJECT_MARKET_HEADROOM` is one row per subject by construction, but a fan-out here multiplies the
+ladder itself, so prove it rather than assume it:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT COUNT(*) rows_, COUNT(DISTINCT CONCAT(campaign_id,'|',keyword_id)) pairs
+FROM \`onyga-482313.OI.V_SUBJECT_MARKET_HEADROOM\`"
+```
+
+Expected: `rows_ = pairs`.
+
+Then, in the final `SELECT`, immediately after `expected_clicks_source`:
 
 ```sql
     -- 2.8: our volume, the market's volume, and the headroom between them. expected_clicks stays
@@ -9997,6 +11417,11 @@ Expected: sixteen rows, all `PASS`, K16 among them.
 
 The curve extrapolates clicks from our own history and can therefore predict more clicks than the market has. Replace **both** quantity expressions Task 10.3 added to `SP_SNAPSHOT_KEYWORD_STATE.sql` with the clamped versions below.
 
+**Both replacements keep Task 10.3's corrected prices** — `clicks_per_day_at_ceiling` is evaluated at
+the MARGINAL ceiling (the price the row publishes), not at `s.affordable_cpc`. If the expressions
+below do not match what is in the procedure, Task 10.3 was applied from an older revision of this
+plan; fix that first.
+
 `clicks_per_day_at_ceiling` becomes:
 
 ```sql
@@ -10011,7 +11436,8 @@ The curve extrapolates clicks from our own history and can therefore predict mor
        AND cs.segment_geomean_cpc > 0
         THEN LEAST(
                cs.segment_geomean_clicks_per_day
-                 * POW(GREATEST(s.affordable_cpc, 0.01) / cs.segment_geomean_cpc,
+                 * POW(GREATEST(s.gp_per_click * LEAST(cs.click_elasticity, 1.0)
+                                / COALESCE(s.family_bar, 1.0), 0.01) / cs.segment_geomean_cpc,
                        cs.click_elasticity),
                COALESCE(mh.market_clicks_per_day, 1e18))
       ELSE NULL
@@ -10026,8 +11452,8 @@ and `clicks_per_day_at_the_bar` becomes:
        AND cs.segment_geomean_cpc > 0
         THEN LEAST(
                cs.segment_geomean_clicks_per_day
-                 * POW(GREATEST(s.gp_per_click * LEAST(cs.click_elasticity, 1.0)
-                                / COALESCE(s.family_bar, 1.0), 0.01) / cs.segment_geomean_cpc,
+                 * POW(GREATEST(s.gp_per_click / COALESCE(s.family_bar, 1.0), 0.01)
+                       / cs.segment_geomean_cpc,
                        cs.click_elasticity),
                COALESCE(mh.market_clicks_per_day, 1e18))
       ELSE NULL
@@ -10354,12 +11780,19 @@ WITH wm AS (
   FROM `onyga-482313.OI.FACT_AMAZON_ADS`
 ),
 req AS (
+  -- the requested window if Ori has asked for one, otherwise the coming week.
+  -- NOTE THE `FROM UNNEST([1])` ON THE FALLBACK ARM: BigQuery rejects a WHERE clause on a query
+  -- with no FROM ("Query without FROM clause cannot have a WHERE clause"), and the fallback arm is
+  -- a constant row guarded by a NOT EXISTS. Verify with
+  --   bq query --dry_run "SELECT 1 WHERE NOT EXISTS (SELECT 1)"
+  -- before deciding this is decoration.
   SELECT window_from, window_to, request_label AS window_label
   FROM `onyga-482313.OI.DE_CATALOG_WINDOW_REQUEST` WHERE is_active
   UNION ALL
   SELECT DATE_ADD((SELECT d FROM wm), INTERVAL 1 DAY),
          DATE_ADD((SELECT d FROM wm), INTERVAL 7 DAY),
          'the coming week'
+  FROM UNNEST([1])
   WHERE NOT EXISTS (SELECT 1 FROM `onyga-482313.OI.DE_CATALOG_WINDOW_REQUEST` WHERE is_active)
 ),
 -- ── LIVE CANDIDATES: subjects the Catalog already answers for ────────────────────────────────
@@ -10385,6 +11818,8 @@ live AS (
                                                                  AS expected_clicks,
     SAFE_DIVIDE(ks.settled_ord90, NULLIF(ks.settled_clk90, 0))   AS cvr,
     SAFE_DIVIDE(ks.settled_gp90, NULLIF(ks.settled_ord90, 0))    AS gp_per_order,
+    ks.family_bar,
+    ks.settled_cpc90                                             AS observed_cpc,
     'LIVE'                                                       AS evidence_grade,
     ks.state_reason                                              AS evidence_note
   FROM `onyga-482313.OI.FACT_KEYWORD_STATE` ks
@@ -10421,13 +11856,59 @@ new_c AS (
                                                                  AS expected_clicks,
     hc.cvr,
     hc.gp_per_order,
+    hc.campaign_bar                                              AS family_bar,
+    hc.cpc                                                       AS observed_cpc,
     hc.evidence_grade,
     hc.evidence_note
   FROM `onyga-482313.OI.V_HARVEST_CANDIDATE` hc
   CROSS JOIN req r
   WHERE hc.family IS NOT NULL
 ),
-all_c AS (SELECT * FROM live UNION ALL SELECT * FROM new_c)
+all_c AS (SELECT * FROM live UNION ALL SELECT * FROM new_c),
+-- ── THE SCORE, AND WHY IT IS NOT EVALUATED AT THE CEILING ───────────────────────────────────
+-- 2.4 words the ordering as "(expected conversions x margin) - (expected clicks x ceiling CPC),
+-- discounted by confidence". Implemented literally that is DEGENERATE IN THIS ACCOUNT, and the
+-- arithmetic says why in one line. For a live subject,
+--     cvr x gp_per_order = (orders/clicks) x (gp/orders) = gp_per_click
+-- and the ceiling is gp_per_click / bar by construction (SP_SNAPSHOT_KEYWORD_STATE:321-323). So
+--     expected profit at the ceiling = clicks x gp_per_click x (1 - 1/bar)
+-- which is ZERO at bar = 1.0 and NEGATIVE for every bar below it — because paying the ceiling means
+-- landing exactly ON the bar, and this house's bars are deliberately below 1.0 (halo and lifetime
+-- value are why). Measured 2026-08-24: family_bar runs 0.7384 to 1.0000, mean 0.9106, with 502 of
+-- 838 subjects strictly below 1.0, and affordable_cpc exceeds gp_per_click on 260 of the 359 rows
+-- carrying both. Scored both ways over those 359 subjects on the same date: the corrected form below
+-- returns 166 positive / 69 zero / 26 negative, and the literal at-the-ceiling form returns exactly
+-- ONE positive row out of 359. Under the literal reading the ORDER BY would rank the
+-- LARGEST opportunity LAST, a 0.10-confidence candidate would outrank a proven one because
+-- multiplying a negative by 0.10 moves it toward zero, and Task 12.4's `rank_value > 0` gate would
+-- admit nothing at all.
+--
+-- THE CEILING IS A LIMIT, NOT A PLAN. What 2.4 is asking for — "expected profit contribution" — is
+-- evaluated at the price the Brain would ACTUALLY PAY, and measured in the currency the bar is
+-- written in:
+--     planned_cpc = LEAST(the subject's own observed CPC, its ceiling)   -- never above the ceiling
+--     rank_value  = expected_clicks x (gp_per_click - bar x planned_cpc) x confidence
+-- This is zero exactly AT the bar, positive above it, negative below it, and it scales with volume —
+-- which is the property 2.4 spends a paragraph on ("a high-CVR subject with almost no volume is
+-- worth less than a moderate-CVR subject with real volume"). The doctrine's literal expression is
+-- still PUBLISHED, as expected_profit_at_ceiling, so the two can be read side by side and the
+-- structural sign is on the row rather than hidden. RECORD THIS in architecture/THREE_LAYERS.md 10
+-- as an amendment to 2.4's wording, with the bar distribution above beside it; it is arithmetic,
+-- not taste, but it changes a sentence Ori wrote and he should see it changed.
+scored AS (
+  SELECT
+    c.*,
+    COALESCE(c.cvr, 0) * COALESCE(c.gp_per_order, 0)                   AS gp_per_click,
+    COALESCE(c.family_bar, 1.0)                                        AS bar,
+    LEAST(COALESCE(c.observed_cpc, c.ceiling_cpc, 0),
+          COALESCE(c.ceiling_cpc, c.observed_cpc, 0))                  AS planned_cpc
+  FROM all_c c
+),
+-- the whole published row, scored but not yet ranked. THE RANKING IS A SEPARATE OUTER SELECT
+-- because a window function's ORDER BY cannot read a select-list alias from its own SELECT, and
+-- writing the score expression a second time inside the OVER(...) is a copy that can drift from
+-- the published rank_value — which is precisely how the ordering and the gate came apart before.
+ranked AS (
 SELECT
   c.family,
   (SELECT window_from FROM req)                                  AS window_from,
@@ -10451,22 +11932,33 @@ SELECT
   c.gp_per_order,
   c.evidence_grade,
   c.evidence_note,
-  -- ── THE SCORE (2.4), spelled out so it can be argued with ─────────────────────────────────
-  ROUND(COALESCE(c.expected_clicks, 0) * COALESCE(c.cvr, 0) * COALESCE(c.gp_per_order, 0), 4)
-                                                                 AS expected_gross_profit,
+  -- ── THE SCORE (2.4), spelled out so it can be argued with. See the `scored` CTE header. ───
+  c.bar                                                          AS family_bar,
+  ROUND(c.planned_cpc, 4)                                        AS planned_cpc,
+  ROUND(COALESCE(c.expected_clicks, 0) * c.gp_per_click, 4)      AS expected_gross_profit,
+  ROUND(COALESCE(c.expected_clicks, 0) * c.planned_cpc, 4)       AS expected_cost_at_planned_price,
   ROUND(COALESCE(c.expected_clicks, 0) * COALESCE(c.ceiling_cpc, 0), 4)
                                                                  AS expected_cost_at_ceiling,
-  ROUND((COALESCE(c.expected_clicks, 0) * COALESCE(c.cvr, 0) * COALESCE(c.gp_per_order, 0)
+  -- 2.4's literal expression, published so the amendment above is auditable rather than asserted.
+  -- It is <= 0 by construction wherever the family bar is <= 1.0, which is most of this account.
+  ROUND((COALESCE(c.expected_clicks, 0) * c.gp_per_click
          - COALESCE(c.expected_clicks, 0) * COALESCE(c.ceiling_cpc, 0))
-        * COALESCE(c.confidence, 0), 4)                          AS rank_value,
+        * COALESCE(c.confidence, 0), 4)                          AS expected_profit_at_ceiling,
+  -- THE ORDERING SCORE: expected profit contribution at the price we would actually pay, measured
+  -- against the bar, discounted by confidence.
+  ROUND(COALESCE(c.expected_clicks, 0)
+        * (c.gp_per_click - c.bar * c.planned_cpc)
+        * COALESCE(c.confidence, 0), 4)                          AS rank_value
+FROM scored c
+)
+SELECT
+  r.*,
   -- within the family, never across it (1.2)
-  ROW_NUMBER() OVER (
-    PARTITION BY c.family
-    ORDER BY (COALESCE(c.expected_clicks, 0) * COALESCE(c.cvr, 0) * COALESCE(c.gp_per_order, 0)
-              - COALESCE(c.expected_clicks, 0) * COALESCE(c.ceiling_cpc, 0))
-             * COALESCE(c.confidence, 0) DESC,
-             c.expected_clicks DESC, c.subject_key)              AS rank_in_family
-FROM all_c c;
+  ROW_NUMBER() OVER (PARTITION BY r.family
+                     ORDER BY r.rank_value DESC,
+                              r.expected_clicks DESC,
+                              r.subject_key)                     AS rank_in_family
+FROM ranked r;
 ```
 
 - [ ] **Step 2: Deploy and read the ranked list**
@@ -10485,18 +11977,43 @@ SELECT is_new, COUNT(*) candidates, ROUND(AVG(rank_in_family), 1) avg_rank
 FROM \`onyga-482313.OI.V_CATALOG_RANK\` GROUP BY 1"
 ```
 
-**Sanity check the ordering:** a new candidate at 0.10 confidence should rarely outrank a proven live one, and where it does it should be because its expected profit is many times larger. If new candidates dominate the top of every family, the discount is not doing its job and §2.4's "cannot outrank a proven one on optimism alone" is being violated.
+**Sanity check the ordering, in this order, because the first check explains most failures of the
+second:**
+
+1. **`rank_value` must have both signs.** Run
+   `SELECT COUNTIF(rank_value > 0) pos, COUNTIF(rank_value = 0) zero, COUNTIF(rank_value < 0) neg
+   FROM V_CATALOG_RANK`. If `pos = 0`, the score is being evaluated at the ceiling rather than at
+   `planned_cpc` — read the `scored` CTE header, which explains why that is zero-at-the-bar by
+   construction and negative below it. Do **not** reach for the confidence discount; it is not the
+   cause. `expected_profit_at_ceiling` is expected to be almost entirely `<= 0`, and that is the
+   published evidence for the amendment, not a bug.
+2. **Then check the discount.** A new candidate at 0.10 confidence should rarely outrank a proven
+   live one, and where it does it should be because its expected profit is many times larger. If new
+   candidates dominate the top of every family, the discount is not doing its job and §2.4's "cannot
+   outrank a proven one on optimism alone" is being violated. Note that with a correctly-signed
+   score the discount now works in the right direction — multiplying a positive by 0.10 moves it
+   toward zero, which demotes it, where multiplying a negative by 0.10 promoted it.
 
 - [ ] **Step 3: Register and commit**
+
+Insert the entry in `config.yaml` under `views:` **immediately after the `V_HARVEST_CANDIDATE` entry**
+added in Task 12.2 — never appended at the end of the file — describing it as
+`catalog.rank(family, window)`, that it orders live and new candidates by expected profit
+contribution at the price the Brain would actually pay, discounted by confidence, never by CVR; that
+§2.4's literal at-the-ceiling expression is published beside it as `expected_profit_at_ceiling` and
+is `<= 0` by construction wherever the family bar is `<= 1.0`; and that ranking is within the family
+and never across it. Verify with the `config.yaml` duplicate check in the plan header, then:
 
 ```bash
 cd /Users/ori/Develop/OI
 git add scripts/bigquery/views/V_CATALOG_RANK.sql config.yaml
 git commit -m "feat(catalog): V_CATALOG_RANK — what is worth having, not only what this is worth
 
-Closes violation 5. Ordered by expected profit at the ceiling discounted by
-confidence, never by CVR, and compared within the family because the pot, the bar
-and the halo are all family-scoped."
+Closes violation 5. Ordered by expected profit contribution at the price the Brain
+would actually pay, discounted by confidence, never by CVR, and compared within the
+family because the pot, the bar and the halo are all family-scoped. 2.4's literal
+at-the-ceiling expression is published beside it and is <= 0 by construction
+wherever the family bar is <= 1.0 — which is 502 of 838 subjects."
 ```
 
 ---
@@ -10966,6 +12483,13 @@ Expected: a high average recapture rate, in the region the baseline measured (~8
 
 - [ ] **Step 3: Register and commit**
 
+Insert the entry in `config.yaml` under `views:` **immediately after the `V_SUBJECT_VEHICLE` entry**
+added in Task 13.2 — never appended at the end of the file — describing it as the standing §6.3 check
+for any pause valuation: it separates a sale that was DESTROYED by a pause from one that was simply
+RECAPTURED by another vehicle, and publishes `sales_recapture_rate`, `net_genuinely_at_stake` and the
+vehicles that did the recapturing. Verify with the `config.yaml` duplicate check in the plan header,
+then:
+
 ```bash
 cd /Users/ori/Develop/OI
 git add scripts/bigquery/views/V_DEMAND_RECAPTURE.sql config.yaml
@@ -11027,7 +12551,31 @@ and publish in the final `SELECT`:
     rc.recapture_vehicles,
 ```
 
-with `LEFT JOIN veh vh` and `LEFT JOIN rec_cap rc` on `(cid, kid)`.
+with both joins added where the final `SELECT` assembles its row. **The final `SELECT` reads
+`FROM fin3 s` and `fin3` carries `campaign_id` / `keyword_id`; there is no `s.cid` or `s.kid` in this
+procedure**, so the CTEs do the renaming and the predicates are:
+
+```sql
+  LEFT JOIN veh     vh ON vh.cid = s.campaign_id AND vh.kid = s.keyword_id
+  LEFT JOIN rec_cap rc ON rc.cid = s.campaign_id AND rc.kid = s.keyword_id
+```
+
+Both source views are one row per `(campaign_id, keyword_id)`; confirm that before deploying rather
+than after, because a fan-out here multiplies the ladder itself:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "
+SELECT 'V_SUBJECT_VEHICLE' v, COUNT(*) rows_,
+       COUNT(DISTINCT CONCAT(campaign_id,'|',keyword_id)) pairs
+FROM \`onyga-482313.OI.V_SUBJECT_VEHICLE\`
+UNION ALL
+SELECT 'V_DEMAND_RECAPTURE', COUNT(*),
+       COUNT(DISTINCT CONCAT(campaign_id,'|',keyword_id))
+FROM \`onyga-482313.OI.V_DEMAND_RECAPTURE\`"
+```
+
+Expected: `rows_ = pairs` on both.
 
 - [ ] **Step 2: Add the columns to history, deploy, re-deploy the view, run every suite**
 
@@ -11274,13 +12822,13 @@ fell, per 10.2's own reason for existing."
 | 7 — confidence | 6 | 26 | 13 | 2.25 | **41.25** | 1.5–2 weeks |
 | 8 — the four-field contract | 7 | 24 | 12 | 2.62 | **38.62** | 1.5–2 weeks |
 | 9 — negatives | 5 | 20 | 10 | 1.88 | **31.88** | 1–1.5 weeks |
-| 10 — the response curve | 7 | 30 | 16 | 2.62 | **48.62** | 2–3 weeks* |
+| 10 — the response curve, and two layers graded | 8 | 36 | 18 | 3 | **57** | 2–3 weeks* |
 | 11 — demand data on probation | 5 | 16 | 8 | 1.88 | **25.88** | 1–1.5 weeks |
 | 12 — rank() | 4 | 22 | 11 | 1.5 | **34.5** | 1.5–2 weeks |
 | 13 — the vehicle | 6 | 28 | 14 | 2.25 | **44.25** | 2–3 weeks |
-| **total** | **88** | **329** | **164** | **33** | **526** | — |
+| **total** | **89** | **335** | **166** | **33.38** | **534.38** | — |
 
-**Roughly 530 hours of engineer time.** Verification is budgeted at half of build throughout, which is what this project's own history supports for work that touches money. The repair allowance is 45 minutes per task, on the assumption that roughly half of all tasks need one round.
+**Roughly 535 hours of engineer time.** Verification is budgeted at half of build throughout, which is what this project's own history supports for work that touches money. The repair allowance is 45 minutes per task, on the assumption that roughly half of all tasks need one round.
 
 **\*Phase 10's calendar is gated on elapsed time, not effort.** It cannot start until Phase 0's recording has accrued enough paired predictions to fit a curve — Task 10.1's readiness gate is the check. If Phase 0 ships on day one and Phase 10 starts at week 20, the data will be there; if Phase 0 slips, Phase 10 slips by the same amount regardless of how much engineering capacity is available.
 
@@ -11347,7 +12895,7 @@ fell, per 10.2's own reason for existing."
 |---|---|---|
 | **A nightly pass fails and the account runs on stale decisions.** | every task that deploys a procedure the orchestrator calls | Each orchestrator `CALL` is wrapped in `BEGIN ... EXCEPTION`, logs `FAIL` to `LOG_PIPELINE_RUNS`, and lets the pass continue. `SP_BUILD_NEXT_WEEK_PLAN`'s assertion block runs **above** its `DELETE`, so a failed build leaves yesterday's partition standing rather than writing a bad one. Verify after every deploy with the `LOG_PIPELINE_RUNS` query in Task 4.6. |
 | **A bad price reaches Amazon.** | 1.2, 1.3, 6.4, 7.5, 8.6 | Nothing in this plan uploads. Every book lands `PENDING_UPLOAD` and Ori uploads by hand. Phase 1's ceiling arm and `FN_MOVE_CAP` are the second net, and Phase 7's HIGH-confidence gate is the third. |
-| **An irreversible action on thin evidence.** | 2.4, 4.5, 7.5, 7.6 | Phase 2 admits new subjects behind a `NO_RECORD` arm that cannot reach a terminal state; Phase 4 withholds CLOSE entirely; Phase 7 gates all three emitters on HIGH confidence and asserts it in SQL (K13) and in the builder. |
+| **An irreversible action on thin evidence.** | 2.4, 4.5, 7.5, 7.6 | Phase 2 does **two** things, because the `NO_RECORD` arm alone shields only zero-click subjects and 75 of the 321 newly admitted pairs carry ≥ 15 settled clicks with no orders: the `NO_RECORD` arm, **and** a `universe_source != 'SPEND'` predicate on the `DEAD` and `LOSER` arms so a spend-admitted subject is judged but never killed. Task 7.5 Step 1 deletes that predicate and replaces it with the confidence band. Phase 4 withholds CLOSE entirely; Phase 7 gates all three emitters on HIGH confidence and asserts it in SQL (K13) and in the builder. |
 | **`V_KEYWORD_STATE` goes stale and a book fails on a `KeyError`.** | 2.3, 2.4, 5.5, 7.3, 7.4, 8.2, 10.3, 11.4, 13.4 | `V_KEYWORD_STATE` is `SELECT *` and freezes its schema at CREATE time. **Every task that adds a column re-deploys it in the same step** — that instruction appears in each of those tasks, not once. |
 | **A schema change breaks one of 27 readers.** | the same tasks | Adding columns is safe for all of them; **renaming or removing is not**, and no task in this plan renames or removes one. Task 2.4 Step 7 dry-runs ten views and the full Python suite after the first large addition. |
 | **A procedure called twice in one pass fails on a bare temp table.** | 0.1, 4.5, 6.11 | The 2026-08-24 cube outage is the precedent. Task 0.1 converts the three known offenders, Task 4.5 uses `CREATE OR REPLACE TEMP TABLE` throughout, and Task 6.11 greps for regressions. Every new procedure is called twice in its own verification step. |
