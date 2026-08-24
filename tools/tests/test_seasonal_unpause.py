@@ -236,3 +236,202 @@ def test_this_book_never_emits_a_pause_or_an_archive():
         built = book.sb_unpause_row(r, 0.25) if book.is_sb(r) else book.sp_unpause_row(r, 0.20)
         assert built['State'].lower() == 'enabled', built['State']
         assert built['Operation'] == 'Update', 'a create or an archive is not this book'
+
+
+# ── §2.8 market volume: evidence in the README, never a filter ─────────────────────────────────
+# Added 2026-08-24. "Volume is a market fact, not only our history" — a query the market buys every
+# week, on which we hold a fraction of a percent of impressions, is not evidence the subject is
+# dead. SQP is on probation (§2.3): it may inform the reader and it may NOT move a verdict, so
+# every test below pins one of the two halves — it must be reported, and it must not decide.
+
+def sqp(**over):
+    """The SQP columns as the book's SQL returns them for one keyword."""
+    r = {
+        'sqp_weeks_all': 31, 'sqp_season_weeks': 4,
+        'sqp_season_mkt_impr_wk': 170000.0, 'sqp_season_mkt_clicks_wk': 2100.0,
+        'sqp_season_mkt_purch_wk': 119.0, 'sqp_season_volume_wk': 6675.0,
+        'sqp_season_our_impr_wk': 38.0, 'sqp_season_share_pct': 0.02,
+        'sqp_last_week': '2026-02-01', 'sqp_last_mkt_impr': 169886, 'sqp_last_mkt_clicks': 2000,
+        'sqp_last_mkt_purch': 119, 'sqp_last_our_impr': 38, 'sqp_last_share_pct': 0.02,
+        'sqp_last_volume': 6675,
+    }
+    r.update(over)
+    return r
+
+
+def test_the_market_line_reports_what_the_market_buys_and_the_share_we_hold():
+    line = book.market_line(row(**sqp()))
+    assert '119' in line, 'the market purchases per week must be in the line'
+    assert '0.02' in line, "our share of impressions must be in the line"
+    assert '%' in line
+
+
+def test_a_query_with_no_sqp_row_says_so_and_never_invents_a_zero():
+    """§2.3 ground 4: SQP coverage is partial in this account. 'No row' is a gap in the source,
+    not a market of size zero, and a README that prints 0 would be asserting the opposite."""
+    line = book.market_line(row(**sqp(sqp_weeks_all=0, sqp_season_weeks=0, sqp_last_week=None,
+                                     sqp_season_mkt_purch_wk=None, sqp_season_share_pct=None,
+                                     sqp_last_mkt_purch=None, sqp_last_share_pct=None)))
+    assert 'no ' in line.lower() and 'sqp' in line.lower()
+    assert 'buys 0' not in line and '0 purchases' not in line
+    assert 'coverage' in line.lower() or 'not a zero' in line.lower()
+
+
+def test_a_query_seen_by_sqp_but_never_in_the_season_falls_back_to_the_week_it_was_seen():
+    line = book.market_line(row(**sqp(sqp_season_weeks=0, sqp_season_mkt_purch_wk=None,
+                                      sqp_season_share_pct=None)))
+    assert '2026-02-01' in line, 'the last observed week must be named when the season has none'
+    assert '119' in line
+
+
+def test_the_median_click_price_columns_are_never_read_as_a_cost():
+    """total_median_click_price / asin_median_click_price are the median PRICE OF THE ITEM
+    CLICKED, not a CPC. Presenting one as a cost would misprice a park by an order of magnitude,
+    so this generator does not touch them at all."""
+    src = open(book.__file__).read()
+    for col in ('median_click_price', 'total_median_click_price', 'asin_median_click_price'):
+        assert col not in src, f'{col} must not appear in the generator: it is not a cost'
+
+
+def test_market_volume_never_changes_a_disposition():
+    """SQP is on probation: it is evidence, never a filter. A keyword the market buys 10,000
+    times a week and one SQP has never heard of must classify identically."""
+    huge = book.classify(row(**sqp(sqp_season_mkt_purch_wk=10000.0)), book.date(2026, 8, 24))
+    none = book.classify(row(**sqp(sqp_weeks_all=0, sqp_season_weeks=0, sqp_last_week=None,
+                                   sqp_season_mkt_purch_wk=None, sqp_last_mkt_purch=None)),
+                         book.date(2026, 8, 24))
+    assert huge == none, 'a demand figure moved a verdict — §2.3 forbids exactly this'
+
+
+def test_the_sql_reads_the_market_for_the_named_ids_only():
+    sql = book.SQL.format(p='onyga-482313', ids="'1','2'", season_from='2025-11-01',
+                          season_to='2025-12-31')
+    assert 'FACT_SEARCH_QUERY' in sql
+    body = sql.split('FACT_SEARCH_QUERY', 1)[1]
+    assert 'dimk' in body.split('GROUP BY', 1)[0], \
+        'the market read must be restricted to the named keywords, never the whole table'
+
+
+# ── the README counts its own rows ────────────────────────────────────────────────────────────
+
+def test_the_readme_headline_counts_the_rows_it_carries(tmp_path):
+    """The first build of this book carried six keywords and the headline said 'six' in words.
+    A book that carries twelve must not greet the reader with 'six'."""
+    def build(n):
+        rows = [{'disp': book.UNPAUSE_PARK, 'reason': 'r', 'sheet': 'Sponsored Products Campaigns',
+                 'sheet_line': i + 2, 'is_sb': False, 'target_text': f'kw{i}',
+                 'campaign_name': 'C', 'season_orders': 5, 'season_sales': 100.0,
+                 'season_clicks': 10, 'recent_orders': 0, 'recent_clicks': 0, 'recent_cost': 0.0,
+                 'old_bid': 1.0, 'price': 0.2, 'price_source': 'CHANNEL_FLOOR',
+                 'price_provenance': 'V_BID_FLOOR', 'paused_by_batch': 'b', 'paused_on': None,
+                 'market': 'no SQP row'} for i in range(n)]
+        p = tmp_path / f'r{n}.md'
+        book.write_readme(str(p), 'x.xlsx', 'batch', book.date(2026, 8, 24), '2026-08-23', True,
+                          rows, {'from': '2025-11-01', 'to': '2025-12-31'})
+        return p.read_text()
+
+    twelve = build(12)
+    assert 'twelve' in twelve.split('\n')[0].lower(), twelve.split('\n')[0]
+    assert 'six' not in twelve.lower().replace('superseded', ''), \
+        'a count from the first build leaked into a book of a different size'
+    assert 'three' in build(3).split('\n')[0].lower()
+
+
+def test_the_readme_carries_the_market_line_for_every_row(tmp_path):
+    rows = [{'disp': book.UNPAUSE_PARK, 'reason': 'r', 'sheet': 'Sponsored Products Campaigns',
+             'sheet_line': 2, 'is_sb': False, 'target_text': 'bath accessories',
+             'campaign_name': 'C', 'season_orders': 14, 'season_sales': 910.8,
+             'season_clicks': 60, 'recent_orders': 0, 'recent_clicks': 0, 'recent_cost': 0.0,
+             'old_bid': 1.0, 'price': 0.25, 'price_source': 'CHANNEL_FLOOR',
+             'price_provenance': 'V_BID_FLOOR', 'paused_by_batch': 'b', 'paused_on': None,
+             'market': 'the market buys this 119 times a week; we hold 0.02% of its impressions'}]
+    p = tmp_path / 'r.md'
+    book.write_readme(str(p), 'x.xlsx', 'batch', book.date(2026, 8, 24), '2026-08-23', True, rows,
+                      {'from': '2025-11-01', 'to': '2025-12-31'})
+    text = p.read_text()
+    assert '119 times a week' in text
+    assert '0.02%' in text
+
+
+# ── the README may not overclaim, and must be able to carry the population argument ───────────
+
+def readme_row(**over):
+    r = {'disp': book.UNPAUSE_PARK, 'reason': 'r', 'sheet': 'Sponsored Products Campaigns',
+         'sheet_line': 2, 'is_sb': False, 'target_text': 'kw', 'campaign_name': 'C',
+         'season_orders': 5, 'season_sales': 100.0, 'season_clicks': 10, 'recent_orders': 0,
+         'recent_clicks': 0, 'recent_cost': 0.0, 'old_bid': 0.8, 'price': 0.2,
+         'price_source': 'CHANNEL_FLOOR', 'price_provenance': 'V_BID_FLOOR',
+         'paused_by_batch': None, 'paused_on': None, 'bid_is_recorded': False,
+         'market': 'no SQP row'}
+    r.update(over)
+    return r
+
+
+def make_readme(tmp_path, rows, **kw):
+    p = tmp_path / 'r.md'
+    book.write_readme(str(p), 'x.xlsx', 'batch', book.date(2026, 8, 24), '2026-08-23', True, rows,
+                      {'from': '2025-11-01', 'to': '2025-12-31'}, **kw)
+    return p.read_text()
+
+
+def test_a_bid_no_pause_row_recorded_is_never_called_the_bid_it_was_paused_from(tmp_path):
+    """Only ONE of the twelve keywords in the 2026-08-24 book was switched off by a book of ours;
+    the other eleven were paused by hand or by Amazon, so no change-log row records the bid they
+    were paused FROM. The column then falls back to DIM_KEYWORD's stored bid, which is a different
+    claim, and the README must not present the two as the same thing."""
+    text = make_readme(tmp_path, [readme_row(bid_is_recorded=False)])
+    assert 'stored bid' in text.lower()
+    text2 = make_readme(tmp_path, [readme_row(bid_is_recorded=True, paused_on='2026-08-23',
+                                              paused_by_batch='seat_moves_20260823_1045')])
+    assert 'seat_moves_20260823_1045' in text2
+
+
+def test_the_readme_counts_agree_in_number(tmp_path):
+    """'1 come back at the same price' is the kind of sentence that makes a reader stop trusting
+    the arithmetic around it."""
+    text = make_readme(tmp_path, [readme_row(old_bid=0.8, price=0.2),
+                                  readme_row(old_bid=0.2, price=0.2)])
+    assert '1 come back' not in text and '1 comes back' in text
+
+
+def test_the_population_note_is_carried_verbatim(tmp_path):
+    """The rule that chose the twelve lives OUTSIDE this generator on purpose — the book never
+    derives a population (see the module docstring). So the argument for the population travels
+    with it as text the book prints and never interprets."""
+    note = "## How these twelve were chosen\n\n42 others were dropped: covered elsewhere.\n"
+    text = make_readme(tmp_path, [readme_row()], population_note=note)
+    assert '42 others were dropped: covered elsewhere.' in text
+    assert text.index('How these twelve were chosen') < text.index('## Row by row')
+
+
+def test_a_population_note_cannot_add_or_remove_a_sheet_row(tmp_path):
+    """It is prose. If it could change the sheet it would be a population, and this book has
+    exactly one source for that: the explicit id list."""
+    with_note = make_readme(tmp_path, [readme_row()], population_note='## anything\n')
+    without = make_readme(tmp_path, [readme_row()])
+    assert with_note.count('| 2 |') == without.count('| 2 |')
+    assert book.build_parser().parse_args(['--keyword', '1', '--population-note', 'f']) \
+        .population_note == 'f'
+
+
+def test_the_readme_never_blames_a_book_of_ours_for_a_pause_it_did_not_take(tmp_path):
+    """§6.3, turned on the README itself. Eleven of the twelve keywords in the 2026-08-24 book have
+    no applied pause row in the change log — nothing of ours switched them off. Prose that says
+    'yesterday's leak book paused these' would be asserting an authorship the record does not
+    support, in the same document that asks the reader to distrust asserted losses."""
+    text = make_readme(tmp_path, [readme_row(bid_is_recorded=False)])
+    assert "leak book read the second as the first" not in text
+    both = make_readme(tmp_path, [readme_row(bid_is_recorded=True, paused_by_batch='b1'),
+                                  readme_row(bid_is_recorded=False)])
+    assert '1 of the 2' in both or '1 of 2' in both
+
+
+def test_the_readme_never_calls_an_unattributed_bid_a_leak(tmp_path):
+    """The keyword that comes back cheapest is worth pointing at. Calling the bid it held 'the bid
+    that made it a leak' is a verdict on money nobody measured here."""
+    text = make_readme(tmp_path, [readme_row(old_bid=0.80, price=0.20, target_text='x',
+                                             bid_is_recorded=False)])
+    # 'a later leak book' names a real tool and is fine; 'the bid that made it a leak' is a
+    # verdict on money this book never measured.
+    assert 'made it a leak' not in text.lower()
+    assert 'a leak in the first place' not in text.lower()

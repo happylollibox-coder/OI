@@ -181,6 +181,85 @@ def assert_park_is_not_a_restore(r, old_bid, price):
             f"A park never funds a keyword.")
 
 
+# ── §2.8 the market, as evidence ──────────────────────────────────────────────────────────────
+
+def _n(v):
+    """A number out of a BigQuery JSON string, or None. Never a zero standing in for a gap."""
+    return num(v, None)
+
+
+def market_line(r):
+    """What the MARKET buys on this query per week, and the share of its impressions we hold —
+    read from FACT_SEARCH_QUERY (THREE_LAYERS.md §2.8: volume is a market fact, not only our
+    history). Returned as one plain sentence for the README.
+
+    It is EVIDENCE AND NOTHING ELSE. `classify()` never sees it, so no figure below can add a row
+    to the sheet or take one off it — SQP is on probation (§2.3) and may not move a verdict.
+
+    Three cases, and the third is the one that matters most:
+      - seen in the reference season -> report the season's weekly average;
+      - seen, but not in that season -> name the last week it WAS seen and report that week;
+      - never seen at all -> say so in words. SQP coverage in this account is partial and known
+        to be (§2.3 ground 4), so a missing row is a hole in the source, NOT a market of size
+        zero, and printing 0 would assert the opposite of what is known.
+
+    The market columns are TOTAL_IMPRESSIONS / TOTAL_CLICKS / TOTAL_PURCHASES — the whole query's,
+    across all sellers (§2.3 ground 2), never ours. Ours are `impressions` / `clicks`. The two are
+    never added together. The median-click-price columns are the median price of the ITEM clicked,
+    not a cost per click, so this generator does not read them at all.
+    """
+    weeks_all = _n(r.get('sqp_weeks_all')) or 0
+    if not weeks_all:
+        return ("No SQP row for this query at all. SQP coverage in this account is partial, so "
+                "that is a gap in the source and not a market of size zero — the market size here "
+                "is simply unknown.")
+    season_weeks = _n(r.get('sqp_season_weeks')) or 0
+    if season_weeks:
+        purch = _n(r.get('sqp_season_mkt_purch_wk'))
+        impr = _n(r.get('sqp_season_mkt_impr_wk'))
+        clicks = _n(r.get('sqp_season_mkt_clicks_wk'))
+        share = _n(r.get('sqp_season_share_pct'))
+        ours = _n(r.get('sqp_season_our_impr_wk'))
+        when = (f"Across the {int(season_weeks)} week(s) of the reference season SQP covers, "
+                f"the market")
+    else:
+        purch = _n(r.get('sqp_last_mkt_purch'))
+        impr = _n(r.get('sqp_last_mkt_impr'))
+        clicks = _n(r.get('sqp_last_mkt_clicks'))
+        share = _n(r.get('sqp_last_share_pct'))
+        ours = _n(r.get('sqp_last_our_impr'))
+        when = (f"SQP has no week inside the reference season for this query; in the last week it "
+                f"did see ({r.get('sqp_last_week')}) the market")
+    parts = [when]
+    parts.append(f"bought it {purch:,.0f} times a week" if purch is not None
+                 else "bought it an unrecorded number of times")
+    if clicks is not None:
+        parts.append(f"on {clicks:,.0f} clicks")
+    if impr is not None:
+        parts.append(f"and {impr:,.0f} impressions")
+    sent = ' '.join(parts) + '. '
+    if share is not None and impr:
+        sent += (f"We held **{share:.2f}%** of those impressions"
+                 + (f" ({ours:,.0f} a week)" if ours is not None else "") + ". ")
+    elif ours is not None:
+        sent += f"We took {ours:,.0f} impressions a week; the share could not be computed. "
+    sent += (f"SQP has seen this query in {int(weeks_all)} week(s) altogether. Market figures are "
+             f"the whole query across all sellers, never ours.")
+    return sent
+
+
+_COUNT_WORDS = ('no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+                'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
+                'seventeen', 'eighteen', 'nineteen', 'twenty')
+
+
+def count_word(n):
+    """The README says how many keywords it carries in words, counted from the rows it actually
+    holds. The first build of this book carried six and the headline said so as a literal; a book
+    of a different size must never greet the reader with the last book's number."""
+    return _COUNT_WORDS[n] if 0 <= n < len(_COUNT_WORDS) else f"{n:,}"
+
+
 # ── the rule ──────────────────────────────────────────────────────────────────────────────────
 
 def classify(r, today):
@@ -404,6 +483,34 @@ season AS (
     AND CAST(keyword_id AS STRING) IN ({ids})
   GROUP BY 1
 ),
+-- §2.8 THE MARKET. FACT_SEARCH_QUERY is per (query_text, ASIN, week): TOTAL_* is the whole
+-- query across all sellers and repeats on every ASIN row, so it is taken with MAX per week and
+-- never summed; `impressions`/`clicks` are OURS and are summed across our ASINs. Read for the
+-- NAMED keywords only (the join is to dimk), so nothing here can widen the population. A product
+-- target has no query text and therefore no row, which is correct: it is not a search query.
+sqp_wk AS (
+  SELECT LOWER(TRIM(f.query_text)) qt, f.week_start_date wk,
+         MAX(f.TOTAL_IMPRESSIONS) mkt_impr, MAX(f.TOTAL_CLICKS) mkt_clicks,
+         MAX(f.TOTAL_PURCHASES) mkt_purch, MAX(f.search_query_volume) mkt_volume,
+         SUM(f.impressions) our_impr, SUM(f.clicks) our_clicks, SUM(f.conversions) our_conv
+  FROM `{p}.OI.FACT_SEARCH_QUERY` f
+  WHERE LOWER(TRIM(f.query_text)) IN (SELECT LOWER(TRIM(keyword_text)) FROM dimk)
+  GROUP BY 1, 2
+),
+sqp_all AS (SELECT qt, COUNT(*) weeks_all FROM sqp_wk GROUP BY 1),
+sqp_season AS (
+  SELECT qt, COUNT(*) season_weeks,
+         ROUND(AVG(mkt_impr), 0) mkt_impr_wk, ROUND(AVG(mkt_clicks), 0) mkt_clicks_wk,
+         ROUND(AVG(mkt_purch), 1) mkt_purch_wk, ROUND(AVG(mkt_volume), 0) volume_wk,
+         ROUND(AVG(our_impr), 0) our_impr_wk,
+         ROUND(SAFE_DIVIDE(SUM(our_impr), SUM(mkt_impr)) * 100, 4) share_pct
+  FROM sqp_wk WHERE wk BETWEEN '{season_from}' AND '{season_to}' GROUP BY 1
+),
+sqp_last AS (
+  SELECT qt, CAST(wk AS STRING) last_week, mkt_impr, mkt_clicks, mkt_purch, mkt_volume, our_impr,
+         ROUND(SAFE_DIVIDE(our_impr, mkt_impr) * 100, 4) share_pct
+  FROM sqp_wk QUALIFY ROW_NUMBER() OVER (PARTITION BY qt ORDER BY wk DESC) = 1
+),
 -- and this summer's, so the README can show the silence the pause was read from
 recent AS (
   SELECT CAST(f.keyword_id AS STRING) kid,
@@ -437,6 +544,15 @@ SELECT
   COALESCE(season.season_sales, 0) season_sales, COALESCE(season.season_cost, 0) season_cost,
   COALESCE(recent.recent_clicks, 0) recent_clicks, COALESCE(recent.recent_orders, 0) recent_orders,
   COALESCE(recent.recent_cost, 0) recent_cost,
+  COALESCE(sqp_all.weeks_all, 0) sqp_weeks_all,
+  COALESCE(sqp_season.season_weeks, 0) sqp_season_weeks,
+  sqp_season.mkt_impr_wk sqp_season_mkt_impr_wk, sqp_season.mkt_clicks_wk sqp_season_mkt_clicks_wk,
+  sqp_season.mkt_purch_wk sqp_season_mkt_purch_wk, sqp_season.volume_wk sqp_season_volume_wk,
+  sqp_season.our_impr_wk sqp_season_our_impr_wk, sqp_season.share_pct sqp_season_share_pct,
+  sqp_last.last_week sqp_last_week, sqp_last.mkt_impr sqp_last_mkt_impr,
+  sqp_last.mkt_clicks sqp_last_mkt_clicks, sqp_last.mkt_purch sqp_last_mkt_purch,
+  sqp_last.mkt_volume sqp_last_volume, sqp_last.our_impr sqp_last_our_impr,
+  sqp_last.share_pct sqp_last_share_pct,
   '{season_from}' AS season_from, '{season_to}' AS season_to,
   CAST(wm.wm AS STRING) AS watermark,
   CAST(CURRENT_DATE('America/Los_Angeles') AS STRING) AS today_la
@@ -453,6 +569,9 @@ LEFT JOIN hold ON hold.cid = dimk.campaign_id
 LEFT JOIN paused ON paused.kid = dimk.keyword_id
 LEFT JOIN season ON season.kid = dimk.keyword_id
 LEFT JOIN recent ON recent.kid = dimk.keyword_id
+LEFT JOIN sqp_all ON sqp_all.qt = LOWER(TRIM(dimk.keyword_text))
+LEFT JOIN sqp_season ON sqp_season.qt = LOWER(TRIM(dimk.keyword_text))
+LEFT JOIN sqp_last ON sqp_last.qt = LOWER(TRIM(dimk.keyword_text))
 -- HOUSE RULE 9 — a TOTAL ordering, so two builds of one snapshot diff byte for byte. Last
 -- season's orders tie freely (three of today's six sit in single digits), so the tiebreak reaches
 -- the unique key (campaign_id, keyword_id).
@@ -602,7 +721,8 @@ def log_batch(rows, batch_id, readme_path):
 
 # ── the README ────────────────────────────────────────────────────────────────────────────────
 
-def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, rows, season):
+def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, rows, season,
+                 population_note=None):
     """Plain words a reader who has never met this system can act on. `rows` is a list of dicts,
     one per keyword the book looked at, so the writer never reaches back into the warehouse."""
     doing = [x for x in rows if x['disp'] == UNPAUSE_PARK]
@@ -610,15 +730,29 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
     stamp = f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}"
     daily = sum(x['price'] for x in doing)
     with open(readme_path, 'w') as f:
-        f.write("# Bringing six seasonal keywords back — what each row does and why\n\n")
+        n_word = count_word(len(doing))
+        f.write(f"# Bringing {n_word} seasonal keyword{'' if len(doing) == 1 else 's'} back — "
+                f"what each row does and why\n\n")
         f.write(f"Built {stamp} from `{out_name}` (ads watermark {watermark}, warehouse day "
                 f"{today_la}). Change-log batch: **`{batch_id}`**"
                 f"{' (NOT logged — --no-log)' if no_log else ''}.\n\n")
         f.write("## What a seasonal park is\n\n")
+        by_us = [x for x in doing if x.get('bid_is_recorded')]
         f.write("A keyword can be quiet for two completely different reasons, and they look "
                 "identical in a spreadsheet: it is **worthless**, or it is **out of season**. "
-                "Yesterday's leak book read the second as the first. It paused keywords whose "
-                "last few weeks were silent — and for the ones below, the silence is August.\n\n")
+                "Whoever paused the keywords below read the second as the first: their last few "
+                "weeks were silent — and for these, the silence is August.\n\n")
+        if len(by_us) == len(doing):
+            f.write("Every one of them was switched off by a book of ours, and the change log "
+                    "names which.\n\n")
+        elif by_us:
+            f.write(f"{len(by_us)} of the {len(doing)} were switched off by a book of ours; the "
+                    f"change log holds no applied pause for the rest, so who paused them is not "
+                    f"recorded and this file does not guess.\n\n")
+        else:
+            f.write("The change log holds no applied pause for any of them, so **none of these "
+                    "was switched off by a book of ours** — who paused them is not recorded, and "
+                    "this file does not guess. What is recorded is that they are paused now.\n\n")
         f.write("A pause is not a small mistake here. Pausing a keyword removes it from the "
                 "warehouse table every part of this system reads, so afterwards nothing can see "
                 "it, nothing re-judges it, and nothing brings it back. It is a door that only "
@@ -652,30 +786,65 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
                 f"days ending {recent_end} — the silence the pause was read from. (The ads "
                 f"watermark is {watermark}, the last complete ads day; every window ends the day "
                 f"before it.)\n\n")
-        f.write("| sheet row | keyword | campaign | last season | this summer | paused from | "
-                "park price |\n")
+        f.write("| sheet row | keyword | campaign | last season | this summer | bid it was "
+                "switched off at | park price |\n")
         f.write("|---|---|---|---|---|---|---|\n")
         for i, x in enumerate(doing, 1):
             f.write(f"| {x['sheet_line']} | `{x['target_text']}` | {x['campaign_name']} | "
                     f"{x['season_orders']} orders · ${x['season_sales']:,.0f} sales · "
                     f"{x['season_clicks']} clicks | {x['recent_orders']} orders · "
                     f"{x['recent_clicks']} clicks · ${x['recent_cost']:,.2f} spent | "
-                    f"${x['old_bid']:.2f} | **${x['price']:.2f}** ({x['price_source']}) |\n")
+                    f"${x['old_bid']:.2f}{'' if x.get('bid_is_recorded') else ' *(stored bid)*'}"
+                    f" | **${x['price']:.2f}** ({x['price_source']}) |\n")
         cut = [x for x in doing if x['price'] < x['old_bid'] - 1e-9]
         same = [x for x in doing if abs(x['price'] - x['old_bid']) <= 1e-9]
+        def _n(k, verb_s, verb_p):
+            return f"{k} {verb_s if k == 1 else verb_p}"
         f.write(f"\nRead the last two columns together. Not one keyword comes back on a HIGHER "
-                f"bid than the one it was paused from: {len(cut)} come back cheaper")
+                f"bid than the one it was switched off at: "
+                f"{_n(len(cut), 'comes', 'come')} back cheaper")
         if same:
-            f.write(f" and {len(same)} come back at the same price, because that price already "
-                    f"was the floor for their ad group")
+            f.write(f" and {_n(len(same), 'comes', 'come')} back at the same price, because that "
+                    f"price already was the floor for its ad group")
         f.write(". ")
+        stored = [x for x in doing if not x.get('bid_is_recorded')]
+        if stored:
+            f.write(f"**{_n(len(stored), 'row is', 'rows are')} marked *(stored bid)*.** For "
+                    f"{'that one' if len(stored) == 1 else 'those'} the change log holds no "
+                    f"applied pause — nothing of ours switched them off — so the figure shown is "
+                    f"the bid `DIM_KEYWORD` currently stores for the keyword, which is what it "
+                    f"would run at if it were simply re-enabled. It is not a recorded pause "
+                    f"price, and this book does not claim it is. ")
         worst = max(doing, key=lambda x: x['old_bid'] - x['price']) if doing else None
         if worst and worst['old_bid'] > worst['price'] + 1e-9:
-            f.write(f"`{worst['target_text']}` is the one to look at: it was running at "
-                    f"${worst['old_bid']:.2f} and comes back at ${worst['price']:.2f}. "
-                    f"Re-enabling it without repricing it would have put it straight back on the "
-                    f"bid that made it a leak in the first place.")
+            f.write(f"`{worst['target_text']}` is the one to look at: the bid on record for it "
+                    f"is ${worst['old_bid']:.2f} and it comes back at ${worst['price']:.2f}. "
+                    f"Re-enabling it without repricing it would have funded it at "
+                    f"${worst['old_bid']:.2f} a click — which is exactly what a park is not. "
+                    f"Whether that bid was ever the right one is a question for the seasonal "
+                    f"review, not something this book has measured.")
         f.write("\n\n")
+        if population_note:
+            # PRINTED, NEVER INTERPRETED. The rule that chose these keywords lives outside this
+            # generator by design (this book never derives a population), so the argument for the
+            # population travels with it as text. Nothing here can add or remove a sheet row.
+            f.write(population_note.rstrip() + "\n\n")
+        f.write("## What the market buys on these queries\n\n")
+        f.write("The table above is **our** history. It cannot say whether a query is small or "
+                "whether we were simply absent from a large one, and those need opposite "
+                "responses (`architecture/THREE_LAYERS.md` §2.8). The figures below come from "
+                "Search Query Performance, which reports the **whole query across all sellers** — "
+                "never ours. Our own share of its impressions is the second number.\n\n")
+        f.write("**Read this as evidence and nothing else.** SQP is on probation in this system "
+                "(§2.3): its coverage here is partial, its join to a keyword is an estimate, and "
+                "it is weekly. Not one row was added to or removed from this sheet because of a "
+                "number in this section — the population was fixed before SQP was read, and a "
+                "query SQP has never heard of is a hole in the source, not a market of size "
+                "zero.\n\n")
+        f.write("| keyword | what SQP says |\n|---|---|\n")
+        for x in doing:
+            f.write(f"| `{x['target_text']}` | {x['market']} |\n")
+        f.write("\n")
         f.write("## Row by row\n\n")
         for x in doing:
             f.write(f"### {x['sheet']} — row {x['sheet_line']}: `{x['target_text']}` "
@@ -684,6 +853,7 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
             f.write(f"- The park price ${x['price']:.2f} comes from **{x['price_source']}** "
                     f"({x['price_provenance']}). It is read for this ad group's channel and "
                     f"creative; no price is written into the generator.\n")
+            f.write(f"- **What the market buys (evidence, not a reason).** {x['market']}\n")
             f.write(f"- Paused on {x['paused_on'] or 'an unrecorded date'} by batch "
                     f"`{x['paused_by_batch'] or 'unknown'}`, from ${x['old_bid']:.2f}.\n")
             note = routing_note(x['campaign_name'], x['is_sb'])
@@ -727,7 +897,7 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
                 "question. **Put a note in the calendar for early October**: that is when a "
                 "November window is close enough to price, and each of these should be asked what "
                 "a click is worth in that window and funded — or not — on the answer. Until then "
-                "the correct state for all six is exactly what this sheet gives them: on, "
+                f"the correct state for all {n_word} is exactly what this sheet gives them: on, "
                 "visible, and cheap.\n\n")
         f.write("One more thing to watch: if a later leak book runs before that review and reads "
                 "the same trailing silence, it will propose pausing them again. That is the "
@@ -749,6 +919,11 @@ def build_parser():
     ap.add_argument('-o', '--out', default=None,
                     help="default .tmp/seasonal_unpause_<the warehouse's own day>.xlsx")
     ap.add_argument('--no-log', action='store_true')
+    ap.add_argument('--population-note', default=None, metavar='FILE',
+                    help='a markdown file explaining how this population was chosen. It is '
+                         'printed into the README verbatim and NEVER interpreted: it cannot add '
+                         'or remove a sheet row. The rule that picks the keywords lives outside '
+                         'this generator by design, so the argument for it travels with the book.')
     ap.add_argument('--season-from', default=DEFAULT_SEASON_FROM, metavar='YYYY-MM-DD',
                     help='first day of the reference season the README reports (default '
                          f'{DEFAULT_SEASON_FROM}).')
@@ -925,13 +1100,22 @@ def main():
             'recent_clicks': int(num(r.get('recent_clicks'), 0)),
             'recent_cost': num(r.get('recent_cost'), 0.0),
             'old_bid': old or 0.0, 'price': price or 0.0, 'price_source': source or '',
+            # TRUE only when an APPLIED pause row in the change log records the bid it was
+            # switched off at. Otherwise old_bid is DIM_KEYWORD's stored bid and says so.
+            'bid_is_recorded': num(r.get('paused_from_bid'), None) is not None,
             'price_provenance': provenance.get(source, ''),
             'paused_by_batch': r.get('paused_by_batch'), 'paused_on': r.get('paused_on'),
+            # §2.8, read once here and never again from the warehouse by the writer
+            'market': market_line(r),
         })
     readme_path = args.out.rsplit('.', 1)[0] + '_README.md'
+    note = None
+    if args.population_note:
+        with open(args.population_note, encoding='utf-8') as f:
+            note = f.read()
     write_readme(readme_path, os.path.basename(args.out), batch_id, today_la, watermark,
                  args.no_log, readme_rows,
-                 {'from': args.season_from, 'to': args.season_to})
+                 {'from': args.season_from, 'to': args.season_to}, population_note=note)
 
     # ── console ───────────────────────────────────────────────────────────────────────────────
     print(f"\n{len(ids)} keyword(s) named -> {len(executable)} unpause+park row(s)\n")
