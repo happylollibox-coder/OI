@@ -26,6 +26,7 @@ position from an accident. Newest last.
 | 2026-08-24 17:09 | `11a562c` | **§2.3 evidence on probation, §2.4 `rank()`, §6 rewritten.** Ori: the Catalog must see SQP but distrust it until it earns trust — recorded with four nameable grounds rather than a disposition, and a hard limit that demand data alone may never move a verdict to `WORTH`. The Catalog must also answer *what is worth having* in a family, not only what a named subject is worth; refined from Ori's "best CVR" to expected profit contribution at the ceiling, because ranking on conversion rate alone fills an allowance with keywords too small to matter. §6 rewritten so all three layers recompute daily and are graded on their own question — including Pacing, whose scorecard nobody builds and which is the only way to test house constants like the entry anchor. §6.2 adds the attribution discipline the principle requires: only one layer may run a live method experiment in a family at a time, or the measurement is destroyed. |
 | 2026-08-24 18:30 | `1ca33b0` | **§2.5 quantity, §2.6 what is advertised, §6.3 demonstrate don't assert, §10 the baseline.** A simulated keyword-year against the doctrine, measured across the account, then put through two adversarial verifiers. The arithmetic passed; **three of the four largest claims did not** — each had measured a population correctly and then asserted a loss without testing the innocent explanation. That failure produced the three new rules. §2.5: worth is a curve over volume, not a scalar price — the post-season month that looked like mispricing was the account buying more clicks at the right price into weaker conversion. §2.6 (Ori's correction of my "substitution" framing): the Catalog must know **what is advertised** — format, placement, creative, match width — because most of the "destroyed" seasonal sales were the same demand arriving through a wider match. §6.3 makes the discipline standing. §10 records the survivors, the disproved claims, and three violations in §8 the research corrected — including that the coverage gap is entirely deliberate and that the move cap is not enforced in *either* direction. |
 | 2026-08-24 19:05 | `5f999c3` | **Baseline queries committed, five gaps closed.** §10.5 promised re-runnable queries that lived only in ephemeral scratch — all 76 are now committed at `docs/superpowers/specs/2026-08-24-three-layers-baseline.md`, which is what makes a recheck a re-run rather than a fresh argument. §3 gains the **park re-test obligation**: §8 and §10 both named a park as an absorbing state and no rule said so. §3 also gains `CARRY`, the vehicle intent §2.6 made possible but the contract could not express. §1.2 finally defines **the bar**. §9's UI table was missing `LEAN_IN`. §6.4 records the open rulings — including that the confidence scale is undefined, which leaves §5's irreversibility rule unenforceable as written. |
+| 2026-08-24 19:20 | `d2af2ab` | **§1.4 — each layer is independently usable.** Ori: any module in the system, or he himself, must be able to use a layer for its own needs. The three layers are services, not stages of a nightly job: a stable contract, no ordering dependency, durable queryable state of their own, asking changes nothing, and answers are attributable. This is what the narrow interface was always for, and it reinforces §1.1 — a verdict shaped like a command is meaningless to a caller that is not the Brain. Notes honestly that all three are pipeline stages today and the Catalog keeps one snapshot, so independence is required and not yet held. |
 
 ### How to add an entry
 
@@ -80,6 +81,37 @@ becomes a CPC. It receives an intent and a constraint from the Brain and finds t
 delivers it. It is accountable for results: if the Brain buys an answer, Pacing must push until the
 answer arrives — and if it cannot buy clicks at any permitted price, **that is itself the answer**,
 reported back.
+
+### 1.4 Each layer is independently usable
+
+The three layers are **not a pipeline with one consumer**. Each is a service that Ori, a dashboard page,
+a bulksheet generator, a notebook, or a module that does not exist yet may call for its own purpose,
+without running the others.
+
+That is what the narrow interface (§2) is *for*. It is not tidiness — it is the condition that lets a
+layer be improved on its own (§6) and reused by something its author never anticipated. Concretely it
+requires:
+
+- **A stable, documented contract.** A caller uses `ask()` / `rank()` and the intents without knowing any
+  internals, and an internal change that does not alter the contract may not break a caller.
+- **No ordering dependency.** The Catalog must answer whether or not the Brain has run tonight; Pacing
+  must be usable against a hand-written intent. A layer that only works as stage *n* of a nightly job is
+  not a layer, it is a step.
+- **Durable, queryable state of its own.** A caller must be able to read a layer's answers directly and
+  historically. A layer whose output exists only as a side effect of a pipeline run cannot be consulted,
+  audited or graded (§6).
+- **Asking changes nothing.** A query to any layer is read-only. Nothing is spent, moved or recorded
+  because someone asked a question.
+- **Answers are attributable.** A caller can tell which layer answered and on what date — the same
+  requirement §9 places on the UI, applied to every consumer.
+
+**This is also why the Catalog may not emit commands (§1.1).** A verdict shaped like an instruction is
+meaningless to a consumer that is not the Brain: a dashboard asking "what is this worth in November"
+cannot act on `DEAD`. Worth, ceiling, confidence and volume mean the same thing to every caller.
+
+**Where the build stands:** all three layers are currently pipeline stages, and the Catalog keeps one
+snapshot (violation 6), so no caller can ask it a historical question. Independence is therefore a
+property the doctrine requires and the system does not yet have.
 
 ---
 
