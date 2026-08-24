@@ -50,6 +50,27 @@
 -- remove the lag entirely is a bigger, riskier change than this task asked for, and one pass of lag
 -- on a nightly plan is immaterial (unchanged from the prior header's own reasoning).
 --
+-- v27.140 CORRECTION (2026-08-24, repair pass): "which on any night after the first is YESTERDAY's
+-- plan" above assumes as_of advances by exactly one calendar day each night. It doesn't — as_of is
+-- anchored to the ads watermark (FN_ADS_ANCHOR_CAP over FACT_AMAZON_ADS), which can itself lag or
+-- stall for more than one day (fact_oi_ads_lag). When that happens, SP_BUILD_NEXT_WEEK_PLAN can
+-- REWRITE THE SAME as_of PARTITION with different content on a later night without as_of itself
+-- ever changing. This procedure's freshness read (MAX(as_of) WHERE plan = 'B') has NO way to tell
+-- "the same as_of, same content as last time I ran" apart from "the same as_of, but rewritten
+-- underneath me" — because it never caches; it reads whatever is CURRENTLY there. That is exactly
+-- what makes the self-heal real (the very next run picks up the current content, whatever as_of
+-- says) and exactly what makes the gap in between real too: there is no push signal, so a run of
+-- this procedure that finishes BEFORE 20.8c's rewrite leaves the ledger (and V_FAMILY_SEAT_REGISTER)
+-- reading STALE until this procedure runs again — which, on the night as_of first turns real, is
+-- the SAME night, right after 20.8c, and requires someone (a person, or a second 20.8b-style call)
+-- to run it. Measured live 2026-08-24: 20.8b ran 05:32:57, 20.8c rewrote the plan 05:33:32–05:34:33,
+-- and the ledger held 8 stale open rows (one HELD_DISPUTED row still publishing "judges disagree"
+-- for a keyword that had since gone GOOD on both sides) until re-run by hand — see
+-- architecture/FAMILY_SEAT_REGISTER.md ruling R-o for the full account and the two named options
+-- if this drift window needs closing (a second same-pass call, or a built_at-aware freshness key).
+-- Re-derive reconciliation live with D09 (DE_FAMILY_SEAT_LEDGER_drift.sql) or the query in its
+-- header — never trust a pinned "0 orphans" claim anywhere as a standing fact (Standing Rule 0).
+--
 -- WHAT AN OCCUPANT'S KIND IS. occupant_kind is still read from TODAY's FACT_KEYWORD_STATE snapshot
 -- (freshest ground truth for "what is happening right now"), by the SAME probe test as before
 -- (engine-listed on T_LIFT_PROBES, at the floor with spend, or a stalled standing raise past the

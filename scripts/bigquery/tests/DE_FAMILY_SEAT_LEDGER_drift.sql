@@ -44,7 +44,16 @@
 --   D04 THE INJECTED DEPARTURES closed with the code the case expects (edit `expected`).
 --   D05 R-h — every parked keyword whose re-verdict appointment has passed and that this pass
 --       actually released (closed, not held) closed PARK_LAPSED.
---   D06 REUSE — admissions took the LOWEST free numbers.
+--   D06 REUSE — admissions took the LOWEST free numbers. "Admitted this pass" is the true
+--       BEFORE/AFTER diff (a key open in AFTER that was not already open in BEFORE) — never
+--       `opened_on = run_day`, which is only a proxy and a false one whenever `run_day` (the
+--       FACT_KEYWORD_STATE snapshot date, which can lag the calendar for days) is shared by more
+--       than one real pass: a key genuinely admitted by an EARLIER pass sharing today's stale
+--       run_day would then read as "admitted this pass" too, inflating fam_admits with a seat
+--       number this pass never assigned and never had the chance to place at the lowest free
+--       gap another pass opened up later. Found live 2026-08-24: two such false positives
+--       (LolliME, Fresh) on a real BEFORE/AFTER pair spanning a repair-pass re-run against a
+--       stale-but-current run_day; the diff-based fix reads 0 on the same pair.
 --   D07 one keyword per open seat number within a family; numbers >= 1.
 --   D08 NO OVERWRITE — no admission took a number a still-seated keyword of the family holds.
 --   D09 (v27.139) PLAN RECONCILIATION (Task 6): the AFTER ledger's open, non-held seat set for
@@ -97,8 +106,18 @@ sop AS (SELECT * FROM UNNEST([
   ('TO_WAITING', 'The keyword is still a trial but is no longer bought at an entry or park bid and is not a stalled probe: it is back to waiting for clicks on the 80% side, no verdict yet. The seat is free.')])),
 -- the departures the run under test injected; edit for the case being proven
 expected AS (SELECT * FROM UNNEST(ARRAY<STRUCT<cid STRING, kid STRING, code STRING>>[])),
+-- true new admissions THIS pass: a key open in AFTER that was NOT already an open key in BEFORE
+-- (a reopen of a same-run flip-flop stays open in both images and is correctly excluded; a key
+-- admitted by an earlier pass sharing today's stale run_day is also open in BEFORE and is
+-- correctly excluded — see the D06 header note above for why `opened_on = run_day` alone is not
+-- a safe proxy for this).
+new_admits AS (
+  SELECT a.family, a.campaign_id, a.keyword_id, a.seat_no
+  FROM after_open a
+  LEFT JOIN before b ON b.family = a.family AND b.campaign_id = a.campaign_id AND b.keyword_id = a.keyword_id
+  WHERE b.campaign_id IS NULL),
 fam_admits AS (SELECT family, MAX(seat_no) AS max_admit
-               FROM after_open, run_day WHERE opened_on = run_day.d GROUP BY family),
+               FROM new_admits GROUP BY family),
 fam_free AS (
   SELECT f.family, MIN(cand) AS min_free
   FROM (SELECT family, MAX(seat_no) AS mx FROM after_open GROUP BY family) f,
