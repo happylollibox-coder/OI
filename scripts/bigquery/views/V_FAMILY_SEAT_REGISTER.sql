@@ -1,5 +1,21 @@
 -- =============================================
 -- V_FAMILY_SEAT_REGISTER — the object Ori reads every morning for the 80/20 doctrine.
+-- Repair pass 2026-08-24 (v27.142, Defect 1 fix, R-q). SEAT-ROW POPULATION IS NOW LEDGER-DRIVEN,
+-- NEVER A CASE THAT CAN DROP THE ROW. Before this pass a SEAT row existed only where occupant_kind
+-- (a CASE over the ladder's own `code`, populated for the seven classic seat kinds — repair,
+-- probation, failed, probe, stalled probe, settling, parked-awaiting-re-verdict) was non-NULL. R-o
+-- (v27.139) made a DISPUTED ledger occupant hold its seat past its ladder state improving to
+-- WINNER / PACED_WINNER / AT_BAR — a state the CASE was never written to admit as a seat kind — so
+-- 23 of the ledger's then-70 open rows (12 of them WINNER/PACED_WINNER/AT_BAR, measured 2026-08-24)
+-- had NO seat row at all, including a holdout-arm campaign. FIX: the SEAT-row predicate now reads
+-- `occupant_kind IS NOT NULL OR seat_no IS NOT NULL` — seat_no comes from the `ledger` LEFT JOIN
+-- (never an INNER JOIN, never a further CASE), so an open ledger row always produces exactly one
+-- SEAT row whatever its current ladder state, while every not-yet-numbered occupant the old
+-- predicate already carried (seat_no still NULL, occupant_kind set) keeps its row too — an OR, not
+-- a replacement. A ledger occupant whose code has no bespoke move/sentence branch gets a plain,
+-- true fallback naming its category and pointing at the CATEGORY row, rather than a NULL. B04
+-- (V_FAMILY_SEAT_REGISTER_acceptance.sql) is the standing proof: RED (95 violations) before this
+-- fix, GREEN (0) after. See architecture/FAMILY_SEAT_REGISTER.md ruling R-q.
 -- Repair pass 2026-08-23 (v27.126): ONE KEYWORD, TWO PRICES IS SAID, NEVER HIDDEN (B39). The
 -- reprice generator's F5 rule emits a floor-probation row EVEN OVER an engine's GO for the same
 -- key — as CHECK FIRST, naming the competing instruction, so Ori keeps one price. The register's
@@ -106,15 +122,19 @@
 --              PROJECTIONS and say so in horizon_assumption.
 --   CATEGORY   one per (family, category, horizon) with its dollars per day and side — these sum
 --              to the family's spend basis to the cent (asserted).
---   SEAT       one per seat occupant of a working family — numbered by DE_FAMILY_SEAT_LEDGER (the
---              only state the register keeps), with the occupant's kind, bid, cost per day, the
+--   SEAT       one per seat occupant of a working family — every open DE_FAMILY_SEAT_LEDGER row
+--              produces exactly one (ruling R-q, v27.142: occupant_kind IS NOT NULL OR seat_no IS
+--              NOT NULL — never occupant_kind alone, which can drop a DISPUTED occupant whose
+--              ladder state has since improved), with the occupant's kind, bid, cost per day, the
 --              move on the pending book if any, the re-judge date, and for a STALLED probe the
 --              raise it is parked at (old_bid → new_bid, the date, clicks since) in a sentence
 --              worded by the size of the raise (ruling R-c); its proposal branches on the SIGN of
 --              (seat price − live bid): raise to the seat price only if the live bid is below it,
 --              otherwise park at the engine's published park price (ruling R-f). A settling seat
 --              past its due date says it is overdue (ruling R-i). A parked keyword with spend and a
---              re-verdict appointment ahead is a seat, not a leak (ruling R-h).
+--              re-verdict appointment ahead is a seat, not a leak (ruling R-h). A held seat whose
+--              ladder state has no bespoke move (e.g. it has improved to winning or at-the-bar)
+--              reads a plain fallback naming its category (ruling R-q).
 --   OPEN_SEAT  one per working family: the lowest free seat number, the open capacity, and the
 --              next probe candidate from the budget engine's queue the capacity can afford
 --              (admission cost = seat price × the engine's daily click goal).
@@ -1198,6 +1218,13 @@ shape AS (
                                  ELSE
                                    FORMAT('park it — bid to the engine\'s park price $%.2f and let the ladder\'s revive cycle re-test it: its live bid $%.2f is already at or above the seat price $%.2f and still bought no verdict', w.bid_park, w.current_bid, w.seat_price)
                                  END
+           -- v27.142 (Defect 1 fix): a ledger occupant whose CURRENT ladder state is not one of the
+           -- classic seat kinds above (winning, marginal, plain waiting, closed, untracked, defense,
+           -- launch — codes the old occupant_kind CASE never treated as a seat) still gets a plain,
+           -- true sentence rather than a NULL move. It names what the ladder reads today and points
+           -- the reader at that state's own doctrine (the CATEGORY row), because this row type has
+           -- no bespoke move logic for every ladder state — only the seven classic occupant kinds do.
+           ELSE FORMAT('no seat-specific move — the ladder reads it %s today (%s side); the ledger holds this seat open past what a normal close would have done, and the ladder\'s own next read governs it, not a book row from here', w.category, IF(w.side = '80', '80%', IF(w.side = '20', '20%', w.side)))
          END END AS move,
     CONCAT(
            FORMAT('seat %s — %s (%s) ', COALESCE(CAST(w.seat_no AS STRING), '?'), w.target_text, w.campaign_name),
@@ -1223,6 +1250,8 @@ shape AS (
                  FORMAT(' — %d clicks on the %d complete ads days since (through %s, $%.2f/day); the raise is %d days old on the snapshot date (%s), past the engine\'s own test (%d clicks in %d days), so it is neither earning nor being tested',
                         w.clicks_since_raise, DATE_DIFF(win.basis_to, w.raised_on, DAY), FORMAT_DATE('%b %d', win.basis_to), w.cost_today,
                         DATE_DIFF(run_day.d, w.raised_on, DAY), FORMAT_DATE('%b %d', run_day.d), k.verdict_clicks, k.probe_window_days))
+             -- v27.142 (Defect 1 fix): ledger occupant, no classic seat-kind sentence for it
+             ELSE FORMAT('is held as a seat on the ledger past a normal close; the ladder reads it %s today: $%.2f/day at bid $%.2f', w.category, w.cost_today, COALESCE(w.current_bid, 0))
            END,
            IF(w.occupant_kind = 'settling', ' — seated, but counted on the 80% side (ruling)', ''),
            '. ',
@@ -1244,6 +1273,8 @@ shape AS (
                                         WHEN w.current_bid < w.seat_price - k.bid_tol THEN FORMAT('Raise to the seat price $%.2f to get a verdict, or park it at the engine\'s park price $%.2f.', w.seat_price, w.bid_park)
                                         ELSE FORMAT('Park it at the engine\'s park price $%.2f: it could not buy a verdict even at or above the seat price $%.2f.', w.bid_park, w.seat_price)
                                       END
+             -- v27.142 (Defect 1 fix): matches the ELSE above
+             ELSE 'No seat-specific move; see the CATEGORY row for this ladder state.'
            END,
            IF(w.seat_no IS NULL, ' (Not yet numbered: the seat ledger runs after the snapshot.)', ''),
            IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch; excluded from every sheet, whatever the move above would have been.', ''),
@@ -1283,7 +1314,33 @@ shape AS (
     w.held_reason_text AS held_reason_text,
     FORMAT('%s|%02d|%05d|%s|%s', w.family, 3, COALESCE(w.seat_no, 99999), w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN k CROSS JOIN win CROSS JOIN run_day
-  WHERE w.book = 'HARVEST' AND w.occupant_kind IS NOT NULL
+  -- v27.142 (2026-08-24, Defect 1 fix): a SEAT row is published for EVERY open ledger occupant,
+  -- not only the ones the ladder-derived occupant_kind CASE happens to classify as a seat kind.
+  -- Before this fix the predicate was occupant_kind IS NOT NULL alone — a CASE (line ~535 above)
+  -- that was never written to admit WINNER / PACED_WINNER / AT_BAR (or plain TRIAL / PARKED / DEAD
+  -- readings with no dedicated seat kind) as an occupant, because before R-o (v27.139) a ledger
+  -- occupant's CURRENT ladder state could never BE one of those — a DISPUTED seat is now held open
+  -- past its ladder state improving (P-4/P-5), so it can. Measured live 2026-08-24 (before this
+  -- fix): 23 open ledger rows had no matching SEAT row at all (12 of them WINNER/PACED_WINNER/
+  -- AT_BAR); B04's fourth term in V_FAMILY_SEAT_REGISTER_acceptance.sql is the standing proof.
+  -- w.seat_no is populated by the `ledger` LEFT JOIN above (line ~640) for every keyword the ledger
+  -- holds open, independent of `code` / occupant_kind — so ORing it in, rather than replacing the
+  -- occupant_kind test, ADDS ledger-driven coverage without dropping the not-yet-numbered occupant
+  -- rows the old predicate alone already carried (a fresh probe/repair/etc. classified by the
+  -- ladder before SP_MAINTAIN_FAMILY_SEATS has run at all today — seat_no NULL, occupant_kind set;
+  -- see the "(Not yet numbered...)" sentence clause below, unchanged). Every open ledger row is
+  -- itself already admitted into `u`/`kw` today (0 off-ladder ledger rows live, verified
+  -- 2026-08-24: every open row currently carries a FACT_KEYWORD_STATE row, so it flows through
+  -- `snap` into `u` regardless of state) — a ledger occupant with no ladder row and no basis-window
+  -- spend at all is a further, currently-unobserved edge case flagged in the SOP (ruling R-q) rather
+  -- than solved here, since solving it would mean widening `u`'s own documented universe (Task 2's
+  -- other row types were explicitly out of scope for this pass).
+  -- LEAK / GAP / WAITING_NO_CLOCK also publish their OWN dedicated per-keyword row_type below
+  -- (row_type = 'LEAK' / 'GAP' / 'NO_CLOCK', keyed on w.code alone) — so THOSE three row-type
+  -- blocks each carry a companion `AND w.seat_no IS NULL` exclusion (R-q), making the ledger's
+  -- claim win the roof a keyword appears under: a ledger occupant is SEAT, full stop, whatever its
+  -- code, and never ALSO LEAK / GAP / NO_CLOCK — one row_type per keyword, matching B03.
+  WHERE w.book = 'HARVEST' AND (w.occupant_kind IS NOT NULL OR w.seat_no IS NOT NULL)
   UNION ALL
   -- OPEN_SEAT rows — the lowest free number and the next affordable probe
   SELECT
@@ -1455,7 +1512,11 @@ shape AS (
     CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 5, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day CROSS JOIN leak_book_state lbs
-  WHERE w.book = 'HARVEST' AND w.code = 'LEAK'
+  -- v27.142 (R-q companion): a keyword the ledger holds open (seat_no IS NOT NULL) is a SEAT
+  -- row now, never ALSO a LEAK row, so its dollars are counted exactly once (B03) and under
+  -- the roof the ledger actually claims it under; its LEAK-shaped ladder reading still shows
+  -- on the SEAT row's category and fallback sentence.
+  WHERE w.book = 'HARVEST' AND w.code = 'LEAK' AND w.seat_no IS NULL
   UNION ALL
   -- GAP rows — spending with no verdict row
   SELECT
@@ -1545,7 +1606,8 @@ shape AS (
     CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 6, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
-  WHERE w.book = 'HARVEST' AND w.code = 'GAP'
+  -- v27.142 (R-q companion): see the LEAK block above — a ledger-held keyword is SEAT, never GAP
+  WHERE w.book = 'HARVEST' AND w.code = 'GAP' AND w.seat_no IS NULL
   UNION ALL
   -- NO_CLOCK rows — a trial whose bid moved outside the change log (R-d): its own category, its own move
   SELECT
@@ -1617,7 +1679,8 @@ shape AS (
     CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 8, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
-  WHERE w.book = 'HARVEST' AND w.code = 'WAITING_NO_CLOCK'
+  -- v27.142 (R-q companion): see the LEAK block above — a ledger-held keyword is SEAT, never NO_CLOCK
+  WHERE w.book = 'HARVEST' AND w.code = 'WAITING_NO_CLOCK' AND w.seat_no IS NULL
   UNION ALL
   -- ABSORB rows — advisory only
   SELECT

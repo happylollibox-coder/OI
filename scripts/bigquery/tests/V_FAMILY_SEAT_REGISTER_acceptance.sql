@@ -33,30 +33,44 @@
 --       check `LOG_PIPELINE_RUNS` for the last SP_MAINTAIN_FAMILY_SEATS against the current ads
 --       watermark, and re-run after the next pass. The register never writes the ledger.
 --       A SECOND, STRUCTURAL SOURCE OF B04 FAILURE, KNOWN AND MEASURED (2026-08-24, v27.139,
---       ruling R-o, Task 5). SP_MAINTAIN_FAMILY_SEATS's occupant set moved from an independent
---       re-derivation off FACT_KEYWORD_STATE (the same ladder rule this view's SEAT/category
---       classification still uses) to FACT_PLAN_NEXT_WEEK plan='B''s own seated keywords (the
---       window-driven, budget-rationed decision). This VIEW's SEAT row population is UNCHANGED —
---       it is still Task 2's ladder-derived classification — so the two occupant sets now diverge
---       BY DESIGN, not only by pipeline timing: a keyword the ladder alone calls a repair/probation/
---       failed/probe occupant may have no open ledger row at all (the window no longer seats it and
---       the ladder alone is not enough to admit a NEW seat under R-o), and a keyword the ledger
---       holds open as HELD_DISPUTED (held_reason = 'HELD_DISPUTED', see V_FAMILY_SEAT_REGISTER's
---       agreement_tier / held_reason / held_reason_text on the SEAT row) may carry a ladder state
---       this view's own `codes` table does not classify as an occupant kind at all (WINNER /
---       PACED_WINNER / AT_BAR / DEAD), so it never becomes a SEAT row here in the first place.
---       Measured 2026-08-24: 96 violations, one root cause (register SEAT rows with no matching
---       open ledger row, surfaced four ways by this check's four terms). This is NOT a defect to
---       patch by re-deriving the old occupant test in SP_MAINTAIN_FAMILY_SEATS (that would break
---       the exact plan reconciliation R-o and Task 6 require) and NOT a case for widening this
---       check's tolerance (R-m: never the fix for a failing check). It is a RECORDED, OPEN GAP:
---       fully reconciling means migrating THIS VIEW's own SEAT-row population to read the plan-
---       driven ledger as its occupant authority instead of re-deriving one from FACT_KEYWORD_STATE
---       — a further task (the plan-book unification, referred to elsewhere as T4, not yet built),
---       out of scope for R-o. Until then, a B04 failure whose four terms all point at the same
---       small set of keywords (cross-check against the count above) is this known gap, not a new
---       defect; a NEW kind of B04 violation (numbers colliding, or a SEAT row genuinely missing a
---       number for a keyword the ledger DOES hold open) is still a real defect and blocks.
+--       ruling R-o, Task 5) — HALF OF IT FIXED THE SAME DAY (ruling R-q, v27.142). SP_MAINTAIN_
+--       FAMILY_SEATS's occupant set moved from an independent re-derivation off FACT_KEYWORD_STATE
+--       (the same ladder rule this view's SEAT/category classification still uses) to FACT_PLAN_
+--       NEXT_WEEK plan='B''s own seated keywords (the window-driven, budget-rationed decision). This
+--       created TWO separate divergences between the register's SEAT rows and the ledger's open
+--       rows, surfaced together by this check's four terms — only one of the two is fixed:
+--       (1) FIXED (R-q): a keyword the ledger holds open as HELD_DISPUTED may carry a ladder state
+--       this view's own `codes` table has no dedicated occupant kind for (WINNER / PACED_WINNER /
+--       AT_BAR, or a plain WAITING / PARKED / DEAD reading) — before R-q this meant it never became
+--       a SEAT row here at all (the fourth term: "every open ledger row has a SEAT row"). The
+--       SEAT-row predicate now reads `occupant_kind IS NOT NULL OR seat_no IS NOT NULL`, so every
+--       open ledger row produces exactly one SEAT row whatever its current ladder state. Measured
+--       2026-08-24: this term alone was 23 of a 95-violation total before the fix, 0 after —
+--       re-derive with `SELECT COUNT(*) FROM ledger_open l LEFT JOIN r s ON s.row_type = 'SEAT' AND
+--       s.family = l.family AND s.campaign_id = l.campaign_id AND s.keyword_id = l.keyword_id WHERE
+--       s.keyword_id IS NULL` (the check's own fourth term, isolated).
+--       (2) STILL OPEN, NOT THIS PASS'S DEFECT: this view's SEAT row population for the CLASSIC
+--       occupant kinds (repair/probation/failed/probe/stalled probe/settling/parked-awaiting-re-
+--       verdict) is STILL Task 2's independent ladder-derived classification, unrelated to ledger
+--       membership — so a keyword the ladder alone currently classifies as e.g. "repair" or
+--       "stalled probe" gets a SEAT row here whether or not the PLAN (and therefore the ledger) has
+--       actually admitted it: the window may not seat it at all, or may not have caught up yet. This
+--       is the check's first three terms (SEAT rows with a NULL seat_no, duplicate (family,
+--       seat_no) NULLs, and a SEAT row with no matching ledger row) and remains BY DESIGN, not a
+--       defect: patching it by re-deriving the old occupant test in SP_MAINTAIN_FAMILY_SEATS would
+--       break the exact plan reconciliation R-o and Task 6 require, and it is not a case for
+--       widening this check's tolerance (R-m: never the fix for a failing check). Fully closing it
+--       means migrating the CLASSIC occupant kinds too, so the register's whole SEAT population
+--       reads the plan-driven ledger as ITS occupant authority instead of re-deriving one from
+--       FACT_KEYWORD_STATE — the "T4 / plan-book unification" migration named in R-o's own text,
+--       still not built (R-q's fix reads the ledger for MEMBERSHIP — does every open row get a row —
+--       not for WHICH rows exist at all, which is the wider, unbuilt migration). Until then, a B04
+--       failure whose first three terms point at ladder-classified, plan-unseated keywords (cross-
+--       check: `SELECT COUNT(*) FROM r s LEFT JOIN ledger_open l ON l.family=s.family AND
+--       l.campaign_id=s.campaign_id AND l.keyword_id=s.keyword_id WHERE s.row_type='SEAT' AND
+--       s.occupant_kind IS NOT NULL AND l.campaign_id IS NULL`) is this known, disclosed gap, not a
+--       new defect; a NEW kind of B04 violation on the FOURTH term (an open ledger row genuinely
+--       missing a SEAT row) would be a regression of R-q and blocks.
 --   B05 No launch family is judged: zero FAMILY rows for INVEST families; REFERENCE rows carry
 --       doctrine_status 'REFERENCE' and never IN / AT_LINE / OUT.
 --   B06 Brand defense never gets a move: no SEAT / LEAK / GAP / NO_CLOCK row whose keyword is
@@ -401,6 +415,9 @@ unmapped_rd AS (
      AND campaign_id NOT IN (SELECT campaign_id FROM fam)
      AND campaign_id NOT IN (SELECT DISTINCT campaign_id FROM snap WHERE family IS NOT NULL)),
 wu AS (SELECT u.* FROM universe u JOIN working w ON w.family = u.family),
+-- moved up from below (was defined after `rd`) so `pos` can read it: which keywords the ledger
+-- currently holds open, independent of ladder state (R-q, v27.142)
+ledger_open AS (SELECT family, campaign_id, keyword_id, seat_no FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL),
 -- the TRIAL positions re-derived once (R-a … R-e, R-j), per keyword
 pos AS (
   SELECT u.*,
@@ -410,22 +427,36 @@ pos AS (
                   AND lc.chg_date <= DATE_SUB(run_day.d, INTERVAL k.probe_window_days DAY)
                   AND u.clicks_since_raise < k.verdict_clicks, FALSE) AS stalled,
          (COALESCE(bv.bid_versions, 1) > 1
-          AND (lc.campaign_id IS NULL OR (ABS(u.current_bid - lc.new_bid) > k.bid_tol AND NOT (lc.action = 'INCREASE_BID' AND u.current_bid > lc.new_bid)))) AS no_clock
+          AND (lc.campaign_id IS NULL OR (ABS(u.current_bid - lc.new_bid) > k.bid_tol AND NOT (lc.action = 'INCREASE_BID' AND u.current_bid > lc.new_bid)))) AS no_clock,
+         -- R-q (v27.142): a keyword the ledger holds open is a SEAT row, never ALSO LEAK / GAP /
+         -- WAITING_NO_CLOCK (the view excludes it from those three with its own `seat_no IS NULL`
+         -- guard) — the re-derivation below must exclude it from those counts the same way, or it
+         -- double-counts a keyword the view now (correctly) counts once, under SEAT.
+         lo.campaign_id IS NOT NULL AS is_ledger_seat
   FROM wu u CROSS JOIN k CROSS JOIN run_day
   LEFT JOIN probes p ON p.kid = u.keyword_id
   LEFT JOIN lastchg lc ON lc.campaign_id = u.campaign_id AND lc.keyword_id = u.keyword_id
-  LEFT JOIN bidv bv ON bv.cid = u.campaign_id AND bv.kid = u.keyword_id),
+  LEFT JOIN bidv bv ON bv.cid = u.campaign_id AND bv.kid = u.keyword_id
+  LEFT JOIN ledger_open lo ON lo.campaign_id = u.campaign_id AND lo.keyword_id = u.keyword_id),
 rd AS (
   SELECT family,
+         -- n_no_clock: the CATEGORY total ('waiting — no test clock' keywords, whatever row_type
+         -- carries them — R-q means a ledger-held one now shows as SEAT, not NO_CLOCK, so this
+         -- count must NOT exclude ledger membership: it matches cat_named, the category aggregate,
+         -- which is computed independently of row_type routing.
          COUNTIF(state = 'TRIAL' AND NOT is_defense AND NOT engine_probe AND NOT (at_floor AND spend7 > 0) AND NOT stalled
                  AND NOT (at_floor AND spend7 = 0 AND clicks7 = 0) AND no_clock) AS n_no_clock,
+         -- n_no_clock_row: the same population EXCLUDING ledger-held keywords — matches the actual
+         -- row_type = 'NO_CLOCK' row count (R-q: a ledger-held one is SEAT there, never NO_CLOCK).
+         COUNTIF(state = 'TRIAL' AND NOT is_defense AND NOT engine_probe AND NOT (at_floor AND spend7 > 0) AND NOT stalled
+                 AND NOT (at_floor AND spend7 = 0 AND clicks7 = 0) AND no_clock AND NOT is_ledger_seat) AS n_no_clock_row,
          COUNTIF(state = 'TRIAL' AND NOT is_defense AND NOT engine_probe AND at_floor AND spend7 = 0 AND clicks7 = 0) AS n_idle,
          COUNTIF(state = 'TRIAL' AND NOT is_defense AND NOT engine_probe AND NOT (at_floor AND spend7 > 0) AND NOT stalled
                  AND NOT (at_floor AND spend7 = 0 AND clicks7 = 0) AND NOT no_clock AND spend7 = 0 AND clicks7 = 0) AS n_not_serving,
          COUNTIF(state = 'TRIAL' AND NOT is_defense AND NOT engine_probe AND NOT (at_floor AND spend7 > 0) AND NOT stalled
                  AND NOT (at_floor AND spend7 = 0 AND clicks7 = 0) AND NOT no_clock AND NOT (spend7 = 0 AND clicks7 = 0)) AS n_waiting,
          COUNTIF(state = 'PARKED' AND NOT is_defense AND spend7 > 0 AND next_check_date >= (SELECT d FROM run_day)) AS n_parked_seat,
-         COUNTIF(NOT is_defense AND spend7 > 0 AND (state = 'DEAD' OR (state = 'PARKED' AND NOT (next_check_date >= (SELECT d FROM run_day))))) AS n_leak,
+         COUNTIF(NOT is_defense AND spend7 > 0 AND NOT is_ledger_seat AND (state = 'DEAD' OR (state = 'PARKED' AND NOT (next_check_date >= (SELECT d FROM run_day))))) AS n_leak,
          COUNTIF(is_defense) AS n_defense
   FROM pos GROUP BY 1),
 -- the gap causes re-derived per family (R-k refined): no keyword id / disabled trailing /
@@ -450,7 +481,6 @@ gapc AS (
                    ELSE 'UNKNOWN' END AS cause
   FROM (SELECT * FROM r WHERE row_type = 'GAP') x
   LEFT JOIN dimk dk ON dk.cid = x.campaign_id AND dk.kid = x.keyword_id),
-ledger_open AS (SELECT family, campaign_id, keyword_id, seat_no FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL),
 famrow AS (SELECT * FROM r WHERE row_type IN ('FAMILY', 'REFERENCE')),
 cat AS (SELECT * FROM r WHERE row_type = 'CATEGORY'),
 kwrows AS (SELECT * FROM r WHERE row_type IN ('SEAT', 'LEAK', 'GAP', 'NO_CLOCK')),
@@ -680,8 +710,11 @@ checks AS (
           LEFT JOIN cat_named ic ON ic.family = rd.family AND ic.horizon = 'today' AND ic.category = 'idle at the floor'
           WHERE rd.n_no_clock IS DISTINCT FROM COALESCE(nc.nk, 0) OR rd.n_idle IS DISTINCT FROM COALESCE(ic.nk, 0))
          + (SELECT COUNT(*) FROM cat WHERE category = 'idle at the floor' AND cost_per_day != 0)
+         -- R-q (v27.142): the actual NO_CLOCK row_type count excludes a ledger-held keyword (it
+         -- shows as SEAT there instead), so this term compares against n_no_clock_row, not the
+         -- CATEGORY-total n_no_clock the first term above uses.
          + (SELECT COUNT(*) FROM rd LEFT JOIN (SELECT family, COUNT(*) AS n FROM r WHERE row_type = 'NO_CLOCK' GROUP BY 1) x ON x.family = rd.family
-            WHERE rd.n_no_clock IS DISTINCT FROM COALESCE(x.n, 0))
+            WHERE rd.n_no_clock_row IS DISTINCT FROM COALESCE(x.n, 0))
   UNION ALL
   SELECT 'B13 one OPEN_SEAT row per working family at the lowest free number; its candidate fits the capacity',
          (SELECT COUNT(*) FROM working w LEFT JOIN (SELECT family, COUNT(*) AS n FROM r WHERE row_type = 'OPEN_SEAT' GROUP BY 1) o ON o.family = w.family

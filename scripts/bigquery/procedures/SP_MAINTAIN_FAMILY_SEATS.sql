@@ -113,6 +113,29 @@
 -- open ruling for Ori in architecture/FAMILY_SEAT_REGISTER.md: this is a genuine, disclosed trade
 -- against Task 6's CRITICAL, live-measured defect, not an oversight.
 --
+-- v27.142 (2026-08-24, Defect 2 fix, ruling R-r). v27.141 fixed Task 6's number-EQUALITY defect by
+-- adopting the plan's own seat_no directly, but its safety net (the collision-fallback free-slot
+-- walk) checked a fresh admission's number only against the ledger's PRE-RUN open set — never
+-- against a number ANOTHER admission in the SAME run was simultaneously about to claim, whether by
+-- its own plan_seat_no (the 'clean' path skipped the fallback's guard entirely) or by a fallback
+-- pick of its own. Two admissions in one family the same night could theoretically be handed the
+-- identical number. THE FIX: step 4 now ranks a family's fresh admissions in ONE total order
+-- (CONFIRMED before DISPUTED, then rank_score DESC, then keyword_id, then campaign_id) and walks
+-- them SEQUENTIALLY with a `claimed` set that accumulates both the pre-run open numbers and every
+-- number this pass has already handed out — so a later-ranked admission can never collide with an
+-- earlier one, by construction, not by coincidence. Proven on injected TMP_ data exercising 5
+-- same-run admissions with three separate collisions (A21/A22, DE_FAMILY_SEAT_LEDGER_acceptance.sql
+-- — production has never carried enough simultaneous admissions to exercise this on its own).
+-- CONSEQUENCE FOR THE TIER-ORDER RULING (R-r, supersedes nothing in R-p, adds to it): this makes
+-- CONFIRMED-before-DISPUTED numbering a REAL, PROVABLE guarantee wherever two admissions actually
+-- compete for a number — the only form of priority this procedure can enforce without re-deriving
+-- a number the plan already assigned (which would break A20's exact plan-number equality). Where
+-- two admissions do not compete at all (each keeps a distinct plan-offered number), their relative
+-- ORDER still follows FACT_PLAN_NEXT_WEEK's own rank_no, which carries no agreement_tier concept —
+-- confirmed live: the column does not exist in FACT_PLAN_NEXT_WEEK's schema, so rank_no cannot by
+-- construction be tier-aware. A17 / D12 remain standing measurements on that non-colliding path,
+-- not a guarantee this procedure re-asserts unilaterally — see "Open rulings for Ori" #23.
+--
 -- WHAT AN OCCUPANT'S KIND IS. occupant_kind is still read from TODAY's FACT_KEYWORD_STATE snapshot
 -- (freshest ground truth for "what is happening right now"), by the SAME probe test as before
 -- (engine-listed on T_LIFT_PROBES, at the floor with spend, or a stalled standing raise past the
@@ -187,11 +210,13 @@
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_MAINTAIN_FAMILY_SEATS`()
 OPTIONS (
-  description = "v27.141 (2026-08-24, repair pass 3): maintains DE_FAMILY_SEAT_LEDGER from FACT_PLAN_NEXT_WEEK plan='B' (the live plan)'s own SEATED keywords (seat_no IS NOT NULL, its own budget-rationed decision, not re-derived) at the most recent available as_of (one pass of lag by construction, since SP_BUILD_NEXT_WEEK_PLAN writes today's partition AFTER this procedure runs in the same orchestrator pass — mirrors the existing T_LIFT_PROBES lag). Joined to plan='A' (the ladder-driven shadow) on (family, campaign_id, keyword_id): agreement_tier = CONFIRMED when plan A's side is also NOT_GOOD (side_a: GOOD only for WINNER / PACED_WINNER / AT_BAR / TRIAL / PENDING_SETTLE / REVIVED_SETTLING), else DISPUTED (plan A says GOOD, or carries no row for the key). occupant_kind is read from today's FACT_KEYWORD_STATE snapshot by the existing probe test (engine-listed T_LIFT_PROBES / at-floor-with-spend / stalled standing raise, rulings R-a/R-b), with a NEW fallback value 'disputed' for a ladder state the old CASE never covered (WINNER / PACED_WINNER / AT_BAR / DEAD / no snapshot row) — occurring only on a DISPUTED occupant by construction. CLOSURE is agreement-tier gated (P-4/P-5 spirit): a key leaving the occupant set closes through the unchanged first-match reason ladder (KILLED > PAUSED > PARK_LAPSED > LEFT_FAMILY > DEFENSE_EXEMPT > TO_GOOD_SIDE > TO_WAITING > STATE_CHANGED) ONLY when plan A also no longer says NOT_GOOD (both judges agree it left); when plan A still says NOT_GOOD the seat is HELD OPEN instead — a NEW column pair held_reason='HELD_DISPUTED' / held_reason_text (never an overload of closed_reason) — and an existing occupant is never evicted for turning disputed. ADMISSION (v27.141 FIX) adopts FACT_PLAN_NEXT_WEEK plan='B''s own seat_no DIRECTLY for every fresh admission — not a second, independently-derived number — because two independent free-slot walks over a ledger that can change shape between them cannot guarantee the same number for the same key (measured live: Lollibox 488973733209950/445052966395752 held seat 5 in the ledger while the plan published 6 for the identical key). The old CONFIRMED-before-DISPUTED, rank_score-DESC free-slot walk survives only as a defensive fallback for the case a plan_seat_no collides with a number a DIFFERENT key already holds open in this ledger. An already-open continuing occupant's seat_no is still never touched (D01 stability unchanged) — adoption applies only at first admission. REOPEN and OBSERVE are unchanged. Brand-defense filtering is inherited from the plan's own universe (the ladder's is_brand_defense flag only, via V_PLAN_WINDOW_JUDGMENT), not re-derived with the three-way test here, so the ledger's admissions reconcile exactly with the plan's; the three-way test still runs as a standing acceptance safety check (A10), not a filter. Idempotent on the same snapshot and the same plan partitions. Orchestrator Task 20.8b, before SP_BUILD_NEXT_WEEK_PLAN (20.8c). Spec: architecture/FAMILY_SEAT_REGISTER.md (ruling R-o)."
+  description = "v27.142 (2026-08-24, Defect 2 fix, ruling R-r): maintains DE_FAMILY_SEAT_LEDGER from FACT_PLAN_NEXT_WEEK plan='B' (the live plan)'s own SEATED keywords (seat_no IS NOT NULL, its own budget-rationed decision, not re-derived) at the most recent available as_of (one pass of lag by construction, since SP_BUILD_NEXT_WEEK_PLAN writes today's partition AFTER this procedure runs in the same orchestrator pass — mirrors the existing T_LIFT_PROBES lag). Joined to plan='A' (the ladder-driven shadow) on (family, campaign_id, keyword_id): agreement_tier = CONFIRMED when plan A's side is also NOT_GOOD (side_a: GOOD only for WINNER / PACED_WINNER / AT_BAR / TRIAL / PENDING_SETTLE / REVIVED_SETTLING), else DISPUTED (plan A says GOOD, or carries no row for the key). occupant_kind is read from today's FACT_KEYWORD_STATE snapshot by the existing probe test (engine-listed T_LIFT_PROBES / at-floor-with-spend / stalled standing raise, rulings R-a/R-b), with a fallback value 'disputed' for a ladder state the old CASE never covered (WINNER / PACED_WINNER / AT_BAR / DEAD / no snapshot row) — occurring only on a DISPUTED occupant by construction. CLOSURE is agreement-tier gated (P-4/P-5 spirit): a key leaving the occupant set closes through the unchanged first-match reason ladder (KILLED > PAUSED > PARK_LAPSED > LEFT_FAMILY > DEFENSE_EXEMPT > TO_GOOD_SIDE > TO_WAITING > STATE_CHANGED) ONLY when plan A also no longer says NOT_GOOD (both judges agree it left); when plan A still says NOT_GOOD the seat is HELD OPEN instead — held_reason='HELD_DISPUTED' / held_reason_text (never an overload of closed_reason) — and an existing occupant is never evicted for turning disputed. ADMISSION (v27.142 FIX) ranks a family's fresh admissions in ONE total order (CONFIRMED before DISPUTED, then rank_score DESC, then keyword_id, then campaign_id) and walks them SEQUENTIALLY, each taking FACT_PLAN_NEXT_WEEK plan='B''s own seat_no where offered and not already claimed by an earlier-ranked admission THIS RUN, otherwise the lowest number free against BOTH the pre-run open set and every number already claimed earlier in this same pass — closing the intra-run collision window v27.141's fallback (which checked only the pre-run open set) left open. An already-open continuing occupant's seat_no is still never touched (D01 stability unchanged) — the walk applies only at first admission. REOPEN and OBSERVE are unchanged. Brand-defense filtering is inherited from the plan's own universe (the ladder's is_brand_defense flag only, via V_PLAN_WINDOW_JUDGMENT), not re-derived with the three-way test here, so the ledger's admissions reconcile exactly with the plan's; the three-way test still runs as a standing acceptance safety check (A10), not a filter. Idempotent on the same snapshot and the same plan partitions. Orchestrator Task 20.8b, before SP_BUILD_NEXT_WEEK_PLAN (20.8c). Spec: architecture/FAMILY_SEAT_REGISTER.md (rulings R-o, R-p, R-r)."
 )
 BEGIN
   DECLARE run_day DATE;      -- today's FACT_KEYWORD_STATE snapshot — freshest ground truth for occupant_kind and closure reason wording
   DECLARE plan_as_of DATE;   -- the most recent FACT_PLAN_NEXT_WEEK partition — the occupant-set and agreement-tier authority
+  DECLARE admit_step INT64;  -- v27.142 (Defect 2 fix): the rank position being walked in step 4's sequential per-family numbering pass
+  DECLARE admit_max_rk INT64; -- v27.142: the highest rank position any family's admissions reach this run
 
   SET run_day = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_KEYWORD_STATE`);
   SET plan_as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B');
@@ -398,71 +423,116 @@ BEGIN
                     WHERE z.family = l.family AND z.campaign_id = l.campaign_id
                       AND z.keyword_id = l.keyword_id AND z.closed_on IS NULL);
 
-  -- ── 4. ADMIT — adopt the PLAN'S OWN seat_no directly (v27.141, Task 6 fix) ─────────────────
-  -- A fresh admission takes occupants.plan_seat_no (FACT_PLAN_NEXT_WEEK plan='B''s own number for
-  -- this key) verbatim, instead of re-deriving one independently. See the v27.141 header comment
-  -- for the live defect this replaces (Lollibox seat 5 vs plan's 6 for the identical key) and why
-  -- two independent free-slot walks over a ledger that can change shape between them can never
-  -- guarantee the same number for the same key, no matter how promptly either is re-run. The old
-  -- free-slot walk (GENERATE_ARRAY, CONFIRMED-before-DISPUTED, rank_score DESC) survives ONLY as a
-  -- defensive fallback for the case a plan_seat_no collides with a number a DIFFERENT key already
-  -- holds open in THIS ledger — should not occur under the plan's own collision guard, but is
-  -- exactly the drift-window state this bug came from, so it is re-checked rather than assumed.
+  -- ── 4. ADMIT — one deterministic per-family numbering PASS, intra-run collision-safe ───────
+  -- (v27.142, Defect 2 fix, closes the collision window v27.141 left open.) v27.141 adopted the
+  -- plan's own seat_no directly at admission (Task 6) but only checked a fresh admission's number
+  -- against the ledger's PRE-RUN open set — never against numbers OTHER admissions in this SAME
+  -- run were simultaneously about to claim, whether via their own plan_seat_no (the 'clean' path,
+  -- which did no cross-checking against siblings at all) or via a fallback number (whose
+  -- GENERATE_ARRAY walk excluded only open_seats, never a sibling's plan_seat_no or fallback pick).
+  -- Two admissions in the same family the same night could theoretically be handed the same
+  -- number — no live case has hit it (0 fresh admissions the night this shipped; see
+  -- DE_FAMILY_SEAT_LEDGER_acceptance.sql A21/A22 for a synthetic, injected 5-admission proof, since
+  -- production has never carried enough simultaneous admissions to exercise this by itself).
+  -- THE FIX: rank every fresh admission of a family in ONE total order — CONFIRMED before DISPUTED,
+  -- then rank_score DESC, then keyword_id, then campaign_id (a deterministic tiebreak — ties broken
+  -- by keyword_id first, per the ruling) — and walk it sequentially. Each admission takes its own
+  -- plan_seat_no where offered and not already claimed by an earlier-ranked admission THIS PASS;
+  -- otherwise it takes the lowest number free against BOTH the pre-run open set and every number
+  -- already claimed earlier in this same pass. `claimed` accumulates both, so no two admissions —
+  -- clean or fallback, same family, same run — can ever land on the same number, by construction:
+  -- each step's candidate pool explicitly excludes every number the walk has already handed out.
+  -- KNOWN, DISCLOSED CONSEQUENCE (ruling R-r, unchanged from R-p's own disclosure): this makes
+  -- CONFIRMED-before-DISPUTED a real, provable guarantee exactly where two admissions COMPETE for
+  -- one number (this is the only form of "priority" this procedure can enforce without re-deriving
+  -- a number the plan already assigned, which would break Task 6/R-p's exact plan-number equality,
+  -- A20). Where two admissions do NOT compete — each keeps a distinct plan_seat_no the plan itself
+  -- offered — their RELATIVE absolute numbers still follow the plan's own rank_no, which does not
+  -- weigh agreement_tier (FACT_PLAN_NEXT_WEEK carries no such column). A17 / D12 remain standing
+  -- measurements, not full guarantees, on that non-colliding path — see architecture/
+  -- FAMILY_SEAT_REGISTER.md ruling R-r and "Open rulings for Ori" for the two ways to close it.
+  CREATE TEMP TABLE admits AS
+  SELECT o.*
+  FROM occupants o
+  LEFT JOIN (SELECT family, campaign_id, keyword_id
+             FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL) l
+    ON l.family = o.family AND l.campaign_id = o.campaign_id AND l.keyword_id = o.keyword_id
+  WHERE l.campaign_id IS NULL;
+
+  CREATE TEMP TABLE admits_ranked AS
+  SELECT a.*,
+         ROW_NUMBER() OVER (PARTITION BY a.family
+           ORDER BY CASE a.agreement_tier WHEN 'CONFIRMED' THEN 1 ELSE 2 END,
+                    COALESCE(a.rank_score, 0) DESC, a.keyword_id, a.campaign_id) AS rk
+  FROM admits a;
+
+  -- claimed starts as the ledger's PRE-RUN open set (after steps 2/2a/2b/3 have already run) and
+  -- grows by exactly one row per family per loop iteration — the running "already spoken for" set
+  -- both halves of the spec ask for (pre-run open set ∪ every number claimed earlier this pass).
+  CREATE TEMP TABLE claimed AS
+  SELECT family, seat_no FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL;
+
+  CREATE TEMP TABLE assigned (
+    family STRING, campaign_id STRING, keyword_id STRING, seat_no INT64,
+    occupant_kind STRING, agreement_tier STRING
+  );
+
+  SET admit_step = 1;
+  SET admit_max_rk = (SELECT COALESCE(MAX(rk), 0) FROM admits_ranked);
+
+  LOOP
+    IF admit_step > admit_max_rk THEN
+      LEAVE;
+    END IF;
+
+    -- one family's rank-`admit_step` admission gets a number this iteration (families with fewer
+    -- admissions than admit_step simply have no row at this rk and are skipped, naturally).
+    -- DECORRELATED (JOINs, not nested correlated subqueries): a GENERATE_ARRAY bound that is
+    -- itself a correlated subquery, nested inside another correlated subquery's WHERE, is a shape
+    -- BigQuery refuses to plan ("Correlated subqueries that reference other tables are not
+    -- supported unless they can be de-correlated") — caught before this ever ran live, because the
+    -- LOOP body never executed on a night with 0 fresh admissions (see DE_FAMILY_SEAT_LEDGER_
+    -- acceptance.sql A21/A22, which hit this exact error first on injected data and is the reason
+    -- this is a JOIN, not a scalar subquery, here).
+    CREATE OR REPLACE TEMP TABLE step_ar AS
+    SELECT * FROM admits_ranked WHERE rk = admit_step;
+
+    CREATE OR REPLACE TEMP TABLE step_free AS
+    SELECT b.family, cand AS seat_no
+    FROM (SELECT family, COUNT(*) AS n_claimed FROM claimed GROUP BY family) b,
+         UNNEST(GENERATE_ARRAY(1, b.n_claimed + 1)) AS cand
+    LEFT JOIN claimed c ON c.family = b.family AND c.seat_no = cand
+    WHERE c.seat_no IS NULL;
+
+    CREATE OR REPLACE TEMP TABLE step_free_min AS
+    SELECT family, MIN(seat_no) AS lowest_free FROM step_free GROUP BY family;
+
+    CREATE OR REPLACE TEMP TABLE step_assign AS
+    SELECT ar.family, ar.campaign_id, ar.keyword_id, ar.occupant_kind, ar.agreement_tier,
+           -- keep the plan's own number if it is not already spoken for; otherwise the lowest
+           -- number free against claimed (pre-run open ∪ this pass so far)
+           IF(ar.plan_seat_no IS NOT NULL AND cl.seat_no IS NULL, ar.plan_seat_no, fm.lowest_free) AS seat_no
+    FROM step_ar ar
+    LEFT JOIN claimed cl ON cl.family = ar.family AND cl.seat_no = ar.plan_seat_no
+    LEFT JOIN step_free_min fm ON fm.family = ar.family;
+
+    INSERT INTO claimed (family, seat_no)
+    SELECT family, seat_no FROM step_assign;
+
+    INSERT INTO assigned (family, campaign_id, keyword_id, seat_no, occupant_kind, agreement_tier)
+    SELECT family, campaign_id, keyword_id, seat_no, occupant_kind, agreement_tier FROM step_assign;
+
+    SET admit_step = admit_step + 1;
+  END LOOP;
+
   INSERT INTO `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`
     (family, campaign_id, keyword_id, seat_no, opened_on, closed_on, closed_reason, occupant_kind_at_open,
      last_observed_kind, last_observed_state, closed_reason_text, agreement_tier, held_reason, held_reason_text)
-  WITH
-  open_seats AS (SELECT family, seat_no FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL),
-  open_seats_keys AS (SELECT family, campaign_id, keyword_id
-                      FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL),
-  admits AS (
-    SELECT o.*
-    FROM occupants o
-    LEFT JOIN open_seats_keys l
-      ON l.family = o.family AND l.campaign_id = o.campaign_id AND l.keyword_id = o.keyword_id
-    WHERE l.campaign_id IS NULL),
-  -- the plan's number collides with a number a DIFFERENT key already holds open here — fall back
-  collide AS (
-    SELECT a.family, a.campaign_id, a.keyword_id
-    FROM admits a
-    JOIN open_seats s ON s.family = a.family AND s.seat_no = a.plan_seat_no),
-  clean AS (
-    SELECT a.* FROM admits a
-    LEFT JOIN collide c
-      ON c.family = a.family AND c.campaign_id = a.campaign_id AND c.keyword_id = a.keyword_id
-    WHERE c.campaign_id IS NULL),
-  fallback AS (
-    SELECT a.* FROM admits a
-    JOIN collide c
-      ON c.family = a.family AND c.campaign_id = a.campaign_id AND c.keyword_id = a.keyword_id),
-  need AS (
-    SELECT n.family, COUNT(*) AS n_new,
-           (SELECT COUNT(*) FROM open_seats s WHERE s.family = n.family) AS n_open
-    FROM fallback n GROUP BY n.family),
-  free AS (
-    SELECT c.family, cand AS seat_no,
-           ROW_NUMBER() OVER (PARTITION BY c.family ORDER BY cand) AS rk
-    FROM need c, UNNEST(GENERATE_ARRAY(1, c.n_open + c.n_new)) AS cand
-    LEFT JOIN open_seats s ON s.family = c.family AND s.seat_no = cand
-    WHERE s.seat_no IS NULL),
-  ranked AS (
-    SELECT n.*,
-           ROW_NUMBER() OVER (PARTITION BY n.family
-             ORDER BY CASE n.agreement_tier WHEN 'CONFIRMED' THEN 1 ELSE 2 END,
-                      COALESCE(n.rank_score, 0) DESC, n.campaign_id, n.keyword_id) AS rk
-    FROM fallback n)
   SELECT family, campaign_id, keyword_id, seat_no, run_day,
          CAST(NULL AS DATE), CAST(NULL AS STRING), occupant_kind,
          occupant_kind, CAST(NULL AS STRING), CAST(NULL AS STRING), agreement_tier,
          CAST(NULL AS STRING), CAST(NULL AS STRING)
-  FROM (
-    SELECT family, campaign_id, keyword_id, plan_seat_no AS seat_no, occupant_kind, agreement_tier
-    FROM clean
-    UNION ALL
-    SELECT r.family, r.campaign_id, r.keyword_id, f.seat_no, r.occupant_kind, r.agreement_tier
-    FROM ranked r
-    JOIN free f ON f.family = r.family AND f.rk = r.rk
-  );
+  FROM assigned;
 
   -- last_observed_state on a fresh admission — set from today's ladder, mirroring what OBSERVE
   -- would write on the very next run (kept out of the INSERT above to avoid a second FACT_KEYWORD_STATE

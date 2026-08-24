@@ -71,7 +71,117 @@
 -- guarantee this procedure enforces by itself on the primary path. Recorded as an open ruling for
 -- Ori in architecture/FAMILY_SEAT_REGISTER.md: a genuine, disclosed trade against Task 6's CRITICAL,
 -- live-measured defect, not an oversight.
+--
+-- v27.142 (2026-08-24, Defect 2 fix, ruling R-r) — A21 / A22, INTRA-RUN COLLISION SAFETY, PROVEN
+-- ON INJECTED DATA. v27.141's collision-fallback free-slot walk excluded only the ledger's PRE-RUN
+-- open set, never a number OTHER admissions in the SAME run were simultaneously claiming (neither
+-- via their own plan_seat_no on the 'clean' path, which did no sibling check at all, nor via
+-- another fallback pick). Two admissions in one family the same night could theoretically be handed
+-- the same number. Production has never carried enough simultaneous admissions to exercise this on
+-- its own (0 fresh admissions the night this shipped — see the query in A21's own comment below),
+-- so the proof runs the SAME sequential-walk algorithm SP_MAINTAIN_FAMILY_SEATS's step 4 now uses
+-- (rank CONFIRMED-before-DISPUTED, then rank_score DESC, then keyword_id, then campaign_id; walk in
+-- rank order; each admission keeps its own plan_seat_no if not already claimed, otherwise the
+-- lowest number free against the running claimed set) against a HAND-DESIGNED, INJECTED scratch
+-- scenario on TMP_ tables — never live production rows (house rule) — built to contain three
+-- separate same-run collisions in one family: two admissions offered the identical plan_seat_no,
+-- one admission's plan_seat_no colliding with a pre-run open seat, and one admission with no
+-- plan_seat_no at all needing a fallback. This is a designed TEST FIXTURE with a hand-verified
+-- expected result (Standing Rule 0 exempts declared test fixtures, not live measurements — see the
+-- comment on A22 for the worked expectation). A21 asserts the general property (no two synthetic
+-- admissions land on the same number, none collides with the pre-run open set); A22 asserts the
+-- EXACT expected assignment for this scenario, so a future change to the ranking rule is caught
+-- even if it happens to preserve A21's weaker property.
 -- =============================================================================================
+-- ── A21/A22 FIXTURE (v27.142): the SAME sequential-walk algorithm SP_MAINTAIN_FAMILY_SEATS's step
+-- 4 runs, against an INJECTED scratch scenario (TMP_ tables only, never a live table). Family
+-- 'ZZ_SYNTH_TEST' — a name that cannot collide with any real family — has two pre-run open seats
+-- (2, 4) and five fresh admissions engineered to force three separate same-run collisions:
+--   K1 CONFIRMED rank_score=90 plan_seat_no=2  (collides with the pre-run open seat 2)
+--   K2 CONFIRMED rank_score=80 plan_seat_no=5  (free)
+--   K5 CONFIRMED rank_score=60 plan_seat_no=1  (free when offered, but K1's fallback claims it first)
+--   K3 DISPUTED  rank_score=95 plan_seat_no=5  (collides with K2's own plan_seat_no — the exact
+--                                               shape of the live defect: two admissions the SAME
+--                                               plan_seat_no)
+--   K4 DISPUTED  rank_score=70 plan_seat_no=NULL (no seat offered at all — needs a pure fallback)
+-- Rank order (CONFIRMED before DISPUTED, then rank_score DESC, then keyword_id): K1, K2, K5, K3, K4.
+-- HAND-WORKED expected walk (claimed starts {2,4}):
+--   K1: wants 2, claimed → fallback, lowest free of {1,2,3}\{2,4} = 1.            claimed={1,2,4}
+--   K2: wants 5, free → 5.                                                        claimed={1,2,4,5}
+--   K5: wants 1, now claimed (by K1) → fallback, lowest free of {1..5}\claimed = 3. claimed={1,2,3,4,5}
+--   K3: wants 5, claimed (by K2) → fallback, lowest free of {1..6}\claimed = 6.    claimed={1,2,3,4,5,6}
+--   K4: no plan_seat_no → fallback, lowest free of {1..7}\claimed = 7.            claimed={1..7}
+-- Expected: K1→1, K2→5, K5→3, K3→6, K4→7 — five DISTINCT numbers, none in {2,4}, and every
+-- CONFIRMED number (1,3,5) below every DISPUTED number (6,7) despite two genuine mid-walk
+-- collisions and one pure-fallback admission. This is a declared test fixture (Standing Rule 0
+-- exempt), not a live measurement — re-run this file to reproduce it deterministically any time.
+DECLARE synth_step INT64 DEFAULT 1;
+DECLARE synth_max_rk INT64 DEFAULT 0;
+
+CREATE TEMP TABLE synth_open AS
+SELECT 'ZZ_SYNTH_TEST' AS family, seat_no FROM UNNEST([2, 4]) AS seat_no;
+
+CREATE TEMP TABLE synth_admits AS
+SELECT 'ZZ_SYNTH_TEST' AS family, 'C1' AS campaign_id, 'K1' AS keyword_id, 'CONFIRMED' AS agreement_tier, 90.0 AS rank_score, 2 AS plan_seat_no UNION ALL
+SELECT 'ZZ_SYNTH_TEST', 'C1', 'K2', 'CONFIRMED', 80.0, 5 UNION ALL
+SELECT 'ZZ_SYNTH_TEST', 'C1', 'K5', 'CONFIRMED', 60.0, 1 UNION ALL
+SELECT 'ZZ_SYNTH_TEST', 'C1', 'K3', 'DISPUTED', 95.0, 5 UNION ALL
+SELECT 'ZZ_SYNTH_TEST', 'C1', 'K4', 'DISPUTED', 70.0, CAST(NULL AS INT64);
+
+CREATE TEMP TABLE synth_ranked AS
+SELECT a.*,
+       ROW_NUMBER() OVER (PARTITION BY a.family
+         ORDER BY CASE a.agreement_tier WHEN 'CONFIRMED' THEN 1 ELSE 2 END,
+                  COALESCE(a.rank_score, 0) DESC, a.keyword_id, a.campaign_id) AS rk
+FROM synth_admits a;
+
+CREATE TEMP TABLE synth_claimed AS
+SELECT family, seat_no FROM synth_open;
+
+CREATE TEMP TABLE synth_assigned (
+  family STRING, campaign_id STRING, keyword_id STRING, seat_no INT64, agreement_tier STRING
+);
+
+SET synth_max_rk = (SELECT COALESCE(MAX(rk), 0) FROM synth_ranked);
+
+LOOP
+  IF synth_step > synth_max_rk THEN
+    LEAVE;
+  END IF;
+
+  -- decorrelated (JOINs, not nested correlated subqueries — BigQuery refuses to plan a scalar
+  -- subquery whose GENERATE_ARRAY bound is itself a correlated subquery nested inside another
+  -- correlated subquery's WHERE; this exact shape is what the first version of this fixture hit,
+  -- and what the deployed SP_MAINTAIN_FAMILY_SEATS was rewritten to avoid at the same time)
+  CREATE OR REPLACE TEMP TABLE synth_step_ar AS
+  SELECT * FROM synth_ranked WHERE rk = synth_step;
+
+  CREATE OR REPLACE TEMP TABLE synth_step_free AS
+  SELECT b.family, cand AS seat_no
+  FROM (SELECT family, COUNT(*) AS n_claimed FROM synth_claimed GROUP BY family) b,
+       UNNEST(GENERATE_ARRAY(1, b.n_claimed + 1)) AS cand
+  LEFT JOIN synth_claimed c ON c.family = b.family AND c.seat_no = cand
+  WHERE c.seat_no IS NULL;
+
+  CREATE OR REPLACE TEMP TABLE synth_step_free_min AS
+  SELECT family, MIN(seat_no) AS lowest_free FROM synth_step_free GROUP BY family;
+
+  CREATE OR REPLACE TEMP TABLE synth_step_assign AS
+  SELECT ar.family, ar.campaign_id, ar.keyword_id, ar.agreement_tier,
+         IF(ar.plan_seat_no IS NOT NULL AND cl.seat_no IS NULL, ar.plan_seat_no, fm.lowest_free) AS seat_no
+  FROM synth_step_ar ar
+  LEFT JOIN synth_claimed cl ON cl.family = ar.family AND cl.seat_no = ar.plan_seat_no
+  LEFT JOIN synth_step_free_min fm ON fm.family = ar.family;
+
+  INSERT INTO synth_claimed (family, seat_no)
+  SELECT family, seat_no FROM synth_step_assign;
+
+  INSERT INTO synth_assigned (family, campaign_id, keyword_id, seat_no, agreement_tier)
+  SELECT family, campaign_id, keyword_id, seat_no, agreement_tier FROM synth_step_assign;
+
+  SET synth_step = synth_step + 1;
+END LOOP;
+
 WITH
 mx AS (SELECT MAX(as_of) AS d FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B'),
 run_day AS (SELECT MAX(snapshot_date) AS d FROM `onyga-482313.OI.FACT_KEYWORD_STATE`),
@@ -210,6 +320,25 @@ checks AS (
          (SELECT COUNT(*) FROM open_rows r
           JOIN plan_b p ON p.family = r.family AND p.campaign_id = r.campaign_id AND p.keyword_id = r.keyword_id
           WHERE r.held_reason IS NULL AND r.seat_no != p.plan_seat_no)
+  UNION ALL
+  -- A21 (v27.142, Defect 2 fix): general intra-run collision-safety property on the injected
+  -- fixture — every synthetic admission got a number, all five are distinct, and none landed on a
+  -- pre-run open seat (2 or 4).
+  SELECT 'A21 intra-run collision safety (synthetic fixture): 5 admissions, 5 distinct numbers, none on the pre-run open set',
+         (SELECT COUNT(*) FROM synth_assigned WHERE seat_no IS NULL)
+         + (SELECT COUNT(*) FROM synth_assigned) - (SELECT COUNT(DISTINCT seat_no) FROM synth_assigned)
+         + (SELECT COUNT(*) FROM synth_assigned a JOIN synth_open o ON o.family = a.family AND o.seat_no = a.seat_no)
+         + IF((SELECT COUNT(*) FROM synth_assigned) != 5, 1, 0)
+  UNION ALL
+  -- A22 (v27.142, Defect 2 fix): the EXACT hand-worked assignment for the fixture (see the header
+  -- comment above synth_open) — catches a future change to the ranking/walk that happens to keep
+  -- A21's weaker distinctness property but changes WHICH number an admission gets.
+  SELECT 'A22 intra-run collision safety (synthetic fixture): the exact hand-worked assignment (K1→1, K2→5, K5→3, K3→6, K4→7)',
+         (SELECT COUNT(*) FROM (
+            SELECT 'K1' AS keyword_id, 1 AS want UNION ALL SELECT 'K2', 5 UNION ALL SELECT 'K5', 3
+            UNION ALL SELECT 'K3', 6 UNION ALL SELECT 'K4', 7) exp
+          LEFT JOIN synth_assigned a ON a.keyword_id = exp.keyword_id AND a.family = 'ZZ_SYNTH_TEST'
+          WHERE a.seat_no IS DISTINCT FROM exp.want)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks
