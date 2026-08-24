@@ -158,6 +158,57 @@ cannot observe*. It is a pacing constraint, not an evidence one, and it should n
 - Pacing keeps one veto on immediacy: if a sharp drop surrenders a placement that is expensive to
   regain, it may walk instead — within the ceiling, never above it.
 
+### 3.2 The Brain is restless — including about what is already earning
+
+The Brain's job is not only to stop losses. **It must always be asking what it could do better, and that
+includes the earning side.** "Leave it alone" (§3, `EARN`) is a protection against churn, not a licence to
+stop thinking: a keyword that is working may still be underfunded, priced below what it could afford, or
+winning a placement it could win more of.
+
+So the Brain carries a sixth intent:
+
+| the Brain issues | meaning | Pacing's obligation |
+|---|---|---|
+| `LEAN_IN · ceiling C` | the evidence improved and we believe it; spend more here | raise toward the new ceiling, gradually (§3.1 — this is a raise) |
+
+Two populations it must look at every window, not just the losing side:
+
+- **Turns** — the record says losing, the window says earning. Today the Brain only *protects* these
+  (`move = NONE`); protection is not investment, and a keyword that has genuinely turned is the cheapest
+  growth in the account because the evidence is already bought.
+- **Constrained winners** — earning, but capped: out of budget, losing impression share, or bidding below
+  the ceiling the Catalog would allow. The money is available and the worth is proven; nothing currently
+  asks the question.
+
+The asymmetry with §3.1 stands: **a `LEAN_IN` is a raise into partially-unknown territory and is walked,
+never taken in one step.** The evidence supports the direction, not the magnitude.
+
+### 3.3 The holdout is the Brain's laboratory, not only a scorecard
+
+The 10 % control group (`DE_HOLDOUT_ASSIGNMENT`, arm `HOLDOUT`) exists so the account can answer
+"does the engine beat doing nothing". **It is also the only place the Brain can ask its own design
+questions and get an honest answer**, and it must be used that way.
+
+The Brain's open questions are settings, not code: the window length per calendar state (is 3 days right
+in peak, or 7, or 1?), the allowance share (0.20 off-peak, 0.50 in boost — Ori has explicitly flagged
+0.50 as unproven), the minimum-orders floor, the verdict click count, the ramp step. Each is a declared
+constant in `DE_PLAN_CONFIG`, which is exactly what makes it testable: a question the Brain can pose by
+running a slice differently and measuring the outcome.
+
+Rules for using it:
+
+- **The holdout arm itself is never experimented on.** It is the "do nothing" baseline; contaminating it
+  destroys the only clean comparison the account has. Design questions are asked by splitting the
+  *treated* population, never by borrowing the control.
+- **One question at a time per family**, or the answers cannot be attributed.
+- **A question must be declared before it is run** — which setting, which slice, what outcome decides it,
+  and by when — so the result cannot be read after the fact to suit a preference.
+- **The answer is a setting change, never a code change.** If answering a question requires new code, it
+  was not a question about a setting and does not belong in this mechanism.
+- **The shadow plan is the cheap version of the same instrument**: plan A runs alongside plan B every
+  night and costs nothing, so any question expressible as "would the other rule have allocated better"
+  should be asked there first, and only questions that need real spend go to a live slice.
+
 ---
 
 ## 4. Seasonality belongs to the Catalog
