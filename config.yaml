@@ -1603,6 +1603,26 @@ views:
       - FACT_CUSTOMER_ORDER_ITEM
       - DIM_PRODUCT
 
+  # ── Unowned spend: the money the three layers cannot see (2026-08-25) ──
+  - name: "V_UNOWNED_SPEND"
+    type: "view"
+    description: "THE MONEY THE THREE LAYERS CANNOT SEE (2026-08-25). One row per spending SUBJECT — (campaign_id, keyword_id, targeting) — with NO row in FACT_KEYWORD_STATE, over the complete days ending at the ads watermark minus one. A subject with no state row is invisible to all three layers at once: never valued by the Catalog, never funded by the Brain, never priced by Pacing, unreachable by any park, ceiling or stop. It spends anyway. REPORTING ONLY — reads everything, writes nothing, read by no engine, book or generator, and NOT in the orchestrator, so asking changes nothing (THREE_LAYERS.md §1.4). IT ISSUES NO VERDICT: where the campaign maps to a family it prints family_bar beside gp_roas_28d and one distance and stops; where it does not, the bar columns are NULL and judgeability says why; verdict_withheld_because is never blank. Unmeasured never reads as bad — reading is NO_EVIDENCE at zero clicks and THIN below the declared min_clicks_for_a_reading, and no bar distance is published for either. WHY EACH ROW IS INVISIBLE, exhaustively, by first-match precedence ordered by what BINDS: SENTINEL (keyword_id '-1', an SB product target under a sentinel that is not an id, so no (campaign, keyword) key can exist) | CAMPAIGN_OUTSIDE_UNIVERSE (campaign absent from the campaign dimension, or not ENABLED) | SUBJECT_OUTSIDE_UNIVERSE (no DIM_KEYWORD row at all, or no current ENABLED one) | DROPPED_DOWNSTREAM (passes every universe gate and still has no state row — a build defect, not a wiring gap). The gates mirror V_KEYWORD_GUARD's own kw CTE; if that CTE changes this view must change with it or it will give a confident wrong reason. READ THE TWO WINDOWS TOGETHER: spend_per_day_28d and spend_per_day_7d. A subject whose campaign was paused three weeks ago still carries 28-day spend and is a tail, not a leak. days_in_current_run counts days of SPENDING inside a 365-day lookback, NOT days unowned — the Catalog keeps one snapshot so nothing knows what it held last month. Descends from the OUTSIDE THE CATALOG ENTIRELY probe in docs/superpowers/specs/2026-08-24-three-layers-baseline.md and improves on it four ways: target grain (the sentinel bundled many targets into one pair), the 7-day window, the classified reason, and refusing the declared reference bar the baseline itself marked MEDIUM. CLOSING THE GAP IS ORI'S DECISION AND HAS NOT BEEN MADE — do not wire these subjects into FACT_KEYWORD_STATE, any book, or the orchestrator. Acceptance: scripts/bigquery/tests/V_UNOWNED_SPEND_acceptance.sql (ten assertions). SOP: architecture/UNOWNED_SPEND.md."
+    source_files: ["scripts/bigquery/views/V_UNOWNED_SPEND.sql"]
+    dependencies:
+      - FACT_AMAZON_ADS
+      - FACT_KEYWORD_STATE
+      - DIM_KEYWORD
+      - V_DIM_CAMPAIGN_CURRENT
+      - T_FAMILY_BAR
+
+  - name: "V_UNOWNED_SPEND_SUMMARY"
+    type: "view"
+    description: "THE DAILY NUMBER FOR MONEY NO LAYER CAN SEE (2026-08-25). Companion to V_UNOWNED_SPEND: how much of the account spends with no row in FACT_KEYWORD_STATE, what it returns, and its share of the account — so the figure is watched daily rather than rediscovered by a research pass. One row per reason_class (SENTINEL | CAMPAIGN_OUTSIDE_UNIVERSE | SUBJECT_OUTSIDE_UNIVERSE | DROPPED_DOWNSTREAM) plus a grand total under reason_class = '__ALL__'. The classes partition the total exactly and sum to it, and the total reconciles against FACT_AMAZON_ADS — unowned + owned + unkeyed = the account over the same window — both asserted in the acceptance suite. NOTE THE ROUNDING: each class is rounded to cents independently, so the class sum can sit up to 0.005 x classes away from the rounded total with nothing wrong; the suite derives its tolerance from that grid rather than pinning one. READ THE TWO WINDOWS TOGETHER — spend_per_day_28d is the headline, spend_per_day_7d is the live half, and they diverge a great deal by class: spend on a paused campaign is a tail that decays on its own, spend under the sentinel is money leaving today. Both carry their share of the account, which is the figure that survives the account changing size. NO VERDICT IS ISSUED: gp_roas is printed and no bar is applied to a population that does not own one; unjudgeable_subjects and unjudgeable_spend_per_day_28d say how much of the money cannot be scored at all, which is a fact about the hole rather than about the subjects. Every row carries one plain-language sentence. REPORTING ONLY — writes nothing, read by no engine or book, not in the orchestrator. SOP: architecture/UNOWNED_SPEND.md."
+    source_files: ["scripts/bigquery/views/V_UNOWNED_SPEND_SUMMARY.sql"]
+    dependencies:
+      - V_UNOWNED_SPEND
+      - FACT_AMAZON_ADS
+
 
 # ═══════════════════════════════════════════════════════════════
 # TABLES
