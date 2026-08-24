@@ -32,6 +32,31 @@
 --       ordinary state mid-day, not a defect in the view — before treating a B04 failure as one,
 --       check `LOG_PIPELINE_RUNS` for the last SP_MAINTAIN_FAMILY_SEATS against the current ads
 --       watermark, and re-run after the next pass. The register never writes the ledger.
+--       A SECOND, STRUCTURAL SOURCE OF B04 FAILURE, KNOWN AND MEASURED (2026-08-24, v27.139,
+--       ruling R-o, Task 5). SP_MAINTAIN_FAMILY_SEATS's occupant set moved from an independent
+--       re-derivation off FACT_KEYWORD_STATE (the same ladder rule this view's SEAT/category
+--       classification still uses) to FACT_PLAN_NEXT_WEEK plan='B''s own seated keywords (the
+--       window-driven, budget-rationed decision). This VIEW's SEAT row population is UNCHANGED —
+--       it is still Task 2's ladder-derived classification — so the two occupant sets now diverge
+--       BY DESIGN, not only by pipeline timing: a keyword the ladder alone calls a repair/probation/
+--       failed/probe occupant may have no open ledger row at all (the window no longer seats it and
+--       the ladder alone is not enough to admit a NEW seat under R-o), and a keyword the ledger
+--       holds open as HELD_DISPUTED (held_reason = 'HELD_DISPUTED', see V_FAMILY_SEAT_REGISTER's
+--       agreement_tier / held_reason / held_reason_text on the SEAT row) may carry a ladder state
+--       this view's own `codes` table does not classify as an occupant kind at all (WINNER /
+--       PACED_WINNER / AT_BAR / DEAD), so it never becomes a SEAT row here in the first place.
+--       Measured 2026-08-24: 96 violations, one root cause (register SEAT rows with no matching
+--       open ledger row, surfaced four ways by this check's four terms). This is NOT a defect to
+--       patch by re-deriving the old occupant test in SP_MAINTAIN_FAMILY_SEATS (that would break
+--       the exact plan reconciliation R-o and Task 6 require) and NOT a case for widening this
+--       check's tolerance (R-m: never the fix for a failing check). It is a RECORDED, OPEN GAP:
+--       fully reconciling means migrating THIS VIEW's own SEAT-row population to read the plan-
+--       driven ledger as its occupant authority instead of re-deriving one from FACT_KEYWORD_STATE
+--       — a further task (the plan-book unification, referred to elsewhere as T4, not yet built),
+--       out of scope for R-o. Until then, a B04 failure whose four terms all point at the same
+--       small set of keywords (cross-check against the count above) is this known gap, not a new
+--       defect; a NEW kind of B04 violation (numbers colliding, or a SEAT row genuinely missing a
+--       number for a keyword the ledger DOES hold open) is still a real defect and blocks.
 --   B05 No launch family is judged: zero FAMILY rows for INVEST families; REFERENCE rows carry
 --       doctrine_status 'REFERENCE' and never IN / AT_LINE / OUT.
 --   B06 Brand defense never gets a move: no SEAT / LEAK / GAP / NO_CLOCK row whose keyword is
