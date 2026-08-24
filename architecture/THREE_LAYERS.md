@@ -28,6 +28,7 @@ position from an accident. Newest last.
 | 2026-08-24 19:05 | `5f999c3` | **Baseline queries committed, five gaps closed.** §10.5 promised re-runnable queries that lived only in ephemeral scratch — all 76 are now committed at `docs/superpowers/specs/2026-08-24-three-layers-baseline.md`, which is what makes a recheck a re-run rather than a fresh argument. §3 gains the **park re-test obligation**: §8 and §10 both named a park as an absorbing state and no rule said so. §3 also gains `CARRY`, the vehicle intent §2.6 made possible but the contract could not express. §1.2 finally defines **the bar**. §9's UI table was missing `LEAN_IN`. §6.4 records the open rulings — including that the confidence scale is undefined, which leaves §5's irreversibility rule unenforceable as written. |
 | 2026-08-24 19:20 | `d2af2ab` | **§1.4 — each layer is independently usable.** Ori: any module in the system, or he himself, must be able to use a layer for its own needs. The three layers are services, not stages of a nightly job: a stable contract, no ordering dependency, durable queryable state of their own, asking changes nothing, and answers are attributable. This is what the narrow interface was always for, and it reinforces §1.1 — a verdict shaped like a command is meaningless to a caller that is not the Brain. Notes honestly that all three are pipeline stages today and the Catalog keeps one snapshot, so independence is required and not yet held. |
 | 2026-08-24 19:40 | `2b3cb8d` | **§2.7 confidence, §2.8 market volume.** Ori chose option C for the confidence scale: **separation × stability** — how sure we are which side of the bar a subject sits, discounted by whether the thing measured stayed the same thing, since BROAD terms turn over ~64 % a month against an EXACT control at 19 %. `NO_EVIDENCE` is a fourth state distinct from `LOW`, because §10 found zeros sitting on 0.2 expected clicks and a scale that reads those as "low confidence it is good" licenses kills on noise. §2.8 answers Ori's question about a keyword's volume on Amazon: `expected_clicks` meant *our* history, which cannot value an unbought subject nor say whether an owned one is capturing its opportunity. The market figures are already in the warehouse and read by nothing — a query the market buys 71 times a week where we hold 0.02 % of impressions, whose keyword we had paused. Two new violations recorded. |
+| 2026-08-24 20:10 | `17d73ad` | **§4.1 — a campaign is a seasonal subject, and pause is its only park.** Ori: seasonal campaigns must be enabled and paused at the right time, and that is the Brain asking and the Catalog answering. The Catalog therefore answers for a campaign subject, not only keywords. The asymmetry that makes it urgent: a keyword can park at its floor, a campaign is on or off — so a campaign pause is the one irreversible action permitted on `NOT_WORTH_NOW`, and only on condition it **carries its reopen date**, recorded where a layer will act on it rather than remembered by a person. Adds `OPEN · by date D` and `CLOSE · reopen D`, and makes lead time part of the answer, since a campaign enabled on day one of its season has not been running when the season starts. Measured: ten paused campaigns hold $127,352 of last-season sales at 1.49 GP-ROAS, five stopped on one day in mid-July, and none has a reopen date. Also records the rename hazard that nearly inverted the finding — join campaign history on the id, never the name. |
 
 ### How to add an entry
 
@@ -157,6 +158,7 @@ targets — re-derive with a GROUP BY on the target text pattern over `FACT_KEYW
 |---|---|---|---|
 | **real keyword** | the phrase, scoped to its family | share the **demand** signal; never the **worth** | the phrase carries intent that genuinely travels; the bar, product margin and halo do not |
 | **auto-targeting mode** (`substitutes`, `complements`, `close-match`, `loose-match`) | **family x product x mode** | **never as "the same subject"** | it is a container, not a phrase: `substitutes` for one product targets entirely different competitors than for another |
+| **campaign** | the campaign itself — is it worth running in this window at all (§4.1) | not compared across families; a campaign belongs to one | seasonal campaigns are opened and closed on the Catalog's answer, and a campaign has no park (§4.1) |
 | **product target** (`asin=`, `category=`) | the competitor target, scoped to its family | **legitimate** — same competitor, different product of ours advertised against it | "does this competitor's traffic convert for us" is one coherent question |
 
 **An auto-targeting mode is a basket whose contents Amazon changes.** Its history is therefore a weaker
@@ -461,6 +463,50 @@ Three verdicts must stay distinct, because they license different actions:
 Collapsing `NOT_WORTH_NOW` or `UNKNOWN` into `NOT_WORTH` is the single most expensive mistake this
 doctrine exists to prevent (Appendix B).
 
+### 4.1 A campaign is a seasonal subject too — and pause is its only park
+
+**Seasonal campaigns must be opened and closed at the right time, and that is a Brain question the Catalog
+answers.** The Brain asks; the Catalog answers for the window requested; the Brain acts with enough lead
+time for the answer to be worth anything.
+
+The Catalog therefore answers for a **campaign** as a subject, not only for keywords and targets (§2.1).
+Nothing in the doctrine ever said otherwise, but nothing said so explicitly either, and the omission is
+expensive: a seasonal campaign is `NOT_WORTH_NOW` in the summer and `WORTH` in November, exactly like a
+seasonal keyword, and no layer currently has a verdict for it at all.
+
+**The asymmetry that makes this urgent: a campaign has no park.** A keyword can sit at its floor —
+visible, costing pennies, re-judgeable (§3, §4). A campaign is on or off. So the only available
+expression of `NOT_WORTH_NOW` at this grain **is** a pause, which means the campaign pause is the one
+irreversible action the doctrine must permit on something other than `NOT_WORTH`.
+
+It is permitted only on one condition: **a seasonal close carries its reopen date.** A campaign paused
+because its season ended is a scheduled close, not a kill, and the reopen must be recorded where a layer
+will act on it — not remembered by a person. A close without a reopen date is the one-way door of §5
+wearing different clothes.
+
+Two campaign-grain intents follow:
+
+| the Brain issues | meaning | Pacing's obligation |
+|---|---|---|
+| `OPEN · by date D` | the Catalog says this campaign is worth running in the coming window | enable it with enough lead time to re-learn before the window opens |
+| `CLOSE · reopen D` | its season has ended | pause it, and carry the reopen date |
+
+**Lead time is part of the answer, not an afterthought.** A campaign enabled on the first day of its
+season has not been running when the season starts: it needs time to re-accumulate the signal Amazon
+prices it on. So the Catalog's answer for a November window must be available in October, which is only
+possible because it answers for a **requested** window (§4) rather than for "now".
+
+**Measured 2026-08-24 (§10):** ten paused campaigns carry 2,826 orders and $127,352 of last-season sales
+at a pooled GP-ROAS of 1.49 — well above every family bar. Five of them stopped on a single day in
+mid-July, so this was a deliberate seasonal wind-down and not decay. **Nothing anywhere holds a reopen
+date for any of them.**
+
+**A measurement hazard, recorded because it nearly inverted this finding.** Campaign names change.
+`DIM_CAMPAIGN` holds today's name while `FACT_AMAZON_ADS` holds the name as it was, so any campaign-level
+history keyed on name silently misattributes renamed campaigns — the first pass at this measurement
+showed these campaigns as near-dead, and only a join on `campaign_id` revealed December returns of
+3.4x to 7.1x. **Join campaign history on the id, never on the name.**
+
 ---
 
 ## 5. Irreversibility
@@ -636,6 +682,12 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
     carries far more money** (§10.1).
 20. `confidence` is specified (§2.7) but not computed anywhere, so §5's irreversibility rule is
     unenforceable in code.
+22. **The Catalog has no verdict for a campaign** (§4.1), so nothing can say whether a seasonal campaign
+    should be running. Ten paused campaigns carry $127,352 of last-season sales at 1.49 GP-ROAS and
+    **not one holds a reopen date**.
+23. Campaign-level history keyed on **name** misattributes renamed campaigns; only `campaign_id` is
+    stable (§4.1).
+
 21. **Market volume is in the warehouse and used by nothing** (§2.8). The search-query data carries the
     query's total impressions, clicks and purchases beside our own and our impression share; no layer
     reads it, so no subject can be valued on the demand available rather than the demand we captured.
