@@ -30,6 +30,7 @@ position from an accident. Newest last.
 | 2026-08-24 19:40 | `2b3cb8d` | **§2.7 confidence, §2.8 market volume.** Ori chose option C for the confidence scale: **separation × stability** — how sure we are which side of the bar a subject sits, discounted by whether the thing measured stayed the same thing, since BROAD terms turn over ~64 % a month against an EXACT control at 19 %. `NO_EVIDENCE` is a fourth state distinct from `LOW`, because §10 found zeros sitting on 0.2 expected clicks and a scale that reads those as "low confidence it is good" licenses kills on noise. §2.8 answers Ori's question about a keyword's volume on Amazon: `expected_clicks` meant *our* history, which cannot value an unbought subject nor say whether an owned one is capturing its opportunity. The market figures are already in the warehouse and read by nothing — a query the market buys 71 times a week where we hold 0.02 % of impressions, whose keyword we had paused. Two new violations recorded. |
 | 2026-08-24 20:10 | `17d73ad` | **§4.1 — a campaign is a seasonal subject, and pause is its only park.** Ori: seasonal campaigns must be enabled and paused at the right time, and that is the Brain asking and the Catalog answering. The Catalog therefore answers for a campaign subject, not only keywords. The asymmetry that makes it urgent: a keyword can park at its floor, a campaign is on or off — so a campaign pause is the one irreversible action permitted on `NOT_WORTH_NOW`, and only on condition it **carries its reopen date**, recorded where a layer will act on it rather than remembered by a person. Adds `OPEN · by date D` and `CLOSE · reopen D`, and makes lead time part of the answer, since a campaign enabled on day one of its season has not been running when the season starts. Measured: ten paused campaigns hold $127,352 of last-season sales at 1.49 GP-ROAS, five stopped on one day in mid-July, and none has a reopen date. Also records the rename hazard that nearly inverted the finding — join campaign history on the id, never the name. |
 | 2026-08-24 20:35 | `a8b3373` | **§2.9 negatives belong to the Catalog and expire; the account total is deliberately homeless.** Ori: negatives are managed by the Catalog — the Brain asks *how do I improve this*, and one answer is to negate a term. Adds `improve()` as a third question beside `ask()` and `rank()`. Critically, **the answer expires**: asked again a month later the Catalog may say *remove the negate*, for the same term, either because the data now says so or because a peak makes a high-volume term worth unblocking simply to buy data. So a negative is a standing answer with an expiry, never a settled fact. Records the asymmetry that a negative is created by a bulksheet but removed only by hand, and that the account's registry — not Amazon — is the record of what is blocked. Ori also confirmed the account's total budget is deliberately outside the doctrine: the Brain allocates within a pot, and the total emerges from the parts. |
+| 2026-08-24 20:50 | `4e12846` | **§2.9 corrected — a negative CAN be removed by bulksheet.** Ori challenged the claim that removal needs a console edit, and he was right. Checked: `negative_id` is populated on every live negative in the registry, one removal has already been executed, and Amazon accepts an `Entity: Negative Keyword` row with `Operation: Update` and `State: archived`. The real gap is narrower and ours — every book this account builds emits `Operation: Create` for negatives and nothing else, so the Catalog's expiry answer has no book to travel in (new violation 25). The surviving constraint is coverage, not capability: the registry rather than Amazon is the record of what is blocked, so a negative created outside our books is invisible to the Catalog. |
 
 ### How to add an entry
 
@@ -389,14 +390,17 @@ negate** — for the very same term — on either of two grounds:
 So **a negative is a standing answer with an expiry, not a permanent state.** Nothing may treat "we
 negated this once" as settled, and the set of live negatives is re-asked like everything else.
 
-**One asymmetry that must be stated rather than discovered.** The *decision* is reversible; the
-*execution* is not symmetric. A negative is created by a bulksheet but cannot be removed by one — undoing
-it is a hand edit in the console. And the account's record of what is negated is a **local registry**, not
-a read-back from Amazon, because the negative feed has been frozen since early 2026. So the Catalog can
-only reconsider negatives the registry knows about, and any recommendation to remove one lands on a person
-rather than in a book. That is a limitation of the hands, not of the answer — but it means a negate is
-expensive to reverse and should be recommended with that in mind (§5's caution about one-way doors applies
-in spirit even though the Brain, not Pacing, owns the call).
+**Removal is executable — the gap is in our hands, not the platform.** A negative can be archived by
+bulksheet like anything else: an `Entity: Negative Keyword` row with `Operation: Update` and
+`State: archived`, addressed by the negative's id. The account's registry holds that id for every live
+negative, and a removal has been executed before. **What does not exist is the generator arm** — every
+book this account builds emits `Operation: Create` for negatives and nothing else, so the Catalog's
+"remove the negate" answer currently has no book to travel in.
+
+One real constraint remains and shapes what the Catalog can reconsider: the record of what is negated is
+a **local registry**, not a read-back from Amazon, because the negative feed has been frozen since early
+2026. So the Catalog can only reconsider negatives the registry knows about, and a negative created
+outside our books is invisible to it. That is a coverage limit on the question, not on the answer.
 
 ---
 
@@ -733,6 +737,9 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
 24. **`improve()` does not exist and negatives have no owner in code** (§2.9). Blocking decisions are made
     by whichever engine notices a term, nothing re-asks them, and no live negative is ever reconsidered —
     so "we negated this once" is treated as settled, which the doctrine forbids.
+25. **No generator can remove a negative** (§2.9). Every book emits `Operation: Create` for negatives and
+    nothing else, though the platform accepts an archive row and the registry holds the id for every live
+    negative. The Catalog's expiry answer has nowhere to go until that arm exists.
 
 21. **Market volume is in the warehouse and used by nothing** (§2.8). The search-query data carries the
     query's total impressions, clicks and purchases beside our own and our impression share; no layer
