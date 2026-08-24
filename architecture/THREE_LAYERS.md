@@ -124,6 +124,61 @@ scoped enough to be unambiguous. A keyword id is safe (Amazon scopes it to an ad
 campaign and family); bare target text is not — several phrases in this account exist in three or more
 families at once, and a query keyed on text alone silently blends their economics into one wrong answer.
 
+### 2.3 External evidence enters on probation
+
+The Catalog values a subject on what the account already spent. That is a severe limit: it can only
+describe what was captured, never what was available. **Demand data — Search Query Performance above
+all — belongs in the Catalog**, because "how big is this query and what share do we hold" is a
+statement about worth, not about allocation or execution.
+
+**It enters distrusted, and earns trust by prediction.** A new evidence source arrives weighted near
+zero, makes forecasts alongside the existing estimator, is scored against outcomes like any other
+Catalog prediction (§6), and its weight rises or falls with its measured accuracy. Trust is a
+measurement, never an assumption.
+
+For SQP specifically the suspicion has four nameable grounds, and each is a thing to measure rather
+than a reason to avoid it:
+
+1. **The join is not one-to-one.** SQP is reported per search query; the Catalog's subjects are
+   keywords, auto-targeting modes and product targets. One broad keyword matches many queries and one
+   query is matched by many keywords, so any query→subject attribution is itself an estimate.
+2. **It is market-level, not ours.** Its impressions, clicks and purchases are the whole query's, across
+   all sellers. Our share is a separate and smaller number, and confusing the two overstates worth.
+3. **It is weekly, not daily**, so it cannot answer a 3-day window directly.
+4. **Coverage is partial** in this account, and known to be so — a source that describes part of the
+   traffic must not be read as describing all of it.
+
+Until it has earned trust, SQP may inform `expected_clicks` and may propose candidates (§2.4), but it
+may not by itself move a `verdict` from `UNKNOWN` to `WORTH`. Spending money still requires evidence
+the account itself produced.
+
+### 2.4 The Catalog answers "what is worth having", not only "what is this worth"
+
+The Brain must be able to come to the Catalog with a family and a window and ask for the **ranked
+opportunities**, not merely to price subjects it already knows about. This is what makes the Brain
+proactive rather than reactive — otherwise it can only judge keywords that already exist and already
+spend, and the account can never grow except by accident.
+
+```
+catalog.rank(family, window_from, window_to)  ->  ordered candidates
+```
+
+Each candidate carries the ordinary four fields (§2), plus whether it is **live** (already running) or
+**new** (proposed from demand data and research, never yet bought).
+
+**The ranking is expected profit contribution at the ceiling — not CVR.** Conversion rate is an input,
+not the ordering: a high-CVR subject with almost no volume is worth less than a moderate-CVR subject
+with real volume, and ranking on CVR alone quietly fills an allowance with keywords too small to matter.
+The order is (expected conversions x margin) − (expected clicks x ceiling CPC), over the requested
+window, with the whole thing discounted by confidence so an `UNKNOWN` candidate cannot outrank a proven
+one on optimism alone.
+
+**The Brain then does what it always does:** take the ranked list, fund down it until the family's
+allowance is spent, and queue the rest. A new candidate is funded as a question (`TEST`, §3) with a
+budget and a deadline like any other; a live one is funded as `EARN`, `LEAN_IN` or `REPAIR` according to
+its verdict. Research-sourced keywords enter here — they are Catalog candidates, not a separate
+decision-making system.
+
 ---
 
 ## 3. The Brain → Pacing contract
@@ -183,31 +238,12 @@ Two populations it must look at every window, not just the losing side:
 The asymmetry with §3.1 stands: **a `LEAN_IN` is a raise into partially-unknown territory and is walked,
 never taken in one step.** The evidence supports the direction, not the magnitude.
 
-### 3.3 The holdout is the Brain's laboratory, not only a scorecard
+### 3.3 The Brain's open questions are settings, not code
 
-The 10 % control group (`DE_HOLDOUT_ASSIGNMENT`, arm `HOLDOUT`) exists so the account can answer
-"does the engine beat doing nothing". **It is also the only place the Brain can ask its own design
-questions and get an honest answer**, and it must be used that way.
-
-The Brain's open questions are settings, not code: the window length per calendar state (is 3 days right
-in peak, or 7, or 1?), the allowance share (0.20 off-peak, 0.50 in boost — Ori has explicitly flagged
-0.50 as unproven), the minimum-orders floor, the verdict click count, the ramp step. Each is a declared
-constant in `DE_PLAN_CONFIG`, which is exactly what makes it testable: a question the Brain can pose by
-running a slice differently and measuring the outcome.
-
-Rules for using it:
-
-- **The holdout arm itself is never experimented on.** It is the "do nothing" baseline; contaminating it
-  destroys the only clean comparison the account has. Design questions are asked by splitting the
-  *treated* population, never by borrowing the control.
-- **One question at a time per family**, or the answers cannot be attributed.
-- **A question must be declared before it is run** — which setting, which slice, what outcome decides it,
-  and by when — so the result cannot be read after the fact to suit a preference.
-- **The answer is a setting change, never a code change.** If answering a question requires new code, it
-  was not a question about a setting and does not belong in this mechanism.
-- **The shadow plan is the cheap version of the same instrument**: plan A runs alongside plan B every
-  night and costs nothing, so any question expressible as "would the other rule have allocated better"
-  should be asked there first, and only questions that need real spend go to a live slice.
+The Brain's own uncertainties — the window length per calendar state, the allowance share, the
+minimum-orders floor, the verdict click count, the ramp step — are all declared constants in
+`DE_PLAN_CONFIG`. That is deliberate: a setting can be tested, and code cannot. How they are tested,
+and the discipline that keeps the answers honest, is §6.1.
 
 ---
 
@@ -246,21 +282,61 @@ to a window-based judge.
 
 ---
 
-## 6. How each layer improves — two scorecards, not one
+## 6. Every layer must get better on its own
 
-The layers are graded separately, on different questions:
+**All three layers are recomputed daily, and all three are obliged to ask what they could do better.**
+A layer that only executes its current rules is a layer that decays: the account changes, the season
+turns, Amazon's auction moves, and a fixed rule silently drifts out of correctness. Improvement is part
+of the job, not a project someone schedules.
 
-- **Catalog scorecard — valuation.** The Catalog makes predictions, so it is graded against outcomes
-  without reference to the Brain: *"In October you said this was worth 4.6x in December. Was it?"*
-  This is how the Catalog improves its estimator (trailing → seasonal → same-period-last-year →
-  whatever wins) and proves the improvement, while no other layer changes by a line.
-- **Brain scorecard — allocation.** Given the Catalog's answers, did the money go to the right places?
-  This is the A-vs-B shadow-plan comparison at T+14.
+Each layer is graded on **its own question**, which is what lets it improve without waiting for the others:
 
-A layer that cannot be graded on its own question cannot improve independently, which is the whole
-point of the narrow interface.
+| layer | its scorecard asks | how it is measured |
+|---|---|---|
+| **Catalog** | *was the valuation right?* | its own predictions against outcomes — "in October you said this was worth 4.6x in December; was it?" |
+| **Brain** | *did the money go to the right places?* | the shadow plan at T+14 — would the other allocation rule have earned more? |
+| **Pacing** | *did it deliver what it was asked for, at the price it predicted?* | clicks and CPC actually achieved against the bid it chose and the outcome the Brain paid for |
 
----
+**Pacing's scorecard is the one nobody thinks to build**, and it is the only way to know whether "bid
+$1.27 to buy decision data" actually buys decision data, or whether the entry anchor is simply a number
+the house has never checked.
+
+### 6.1 Answering methodology questions — the control group
+
+Some questions cannot be answered by looking harder at existing data, because they are about the method
+itself: is a 3-day window right in peak, or 7, or 1? Is the boost allowance 0.50 or 0.35? Is the
+2-order floor hiding slow converters? Is the entry anchor at 1.5x target CPC the right price to buy a
+verdict? **These are settings, not code** — every one is a declared constant — and settings are exactly
+what a control group can test.
+
+The 10 % holdout (`DE_HOLDOUT_ASSIGNMENT`) therefore serves two purposes: the standing engine-vs-nothing
+baseline, and the instrument for questions like these. Rules:
+
+- **Never experiment on the control arm.** It is the "do nothing" baseline; contaminating it destroys
+  the only clean comparison the account has. Method questions are asked by splitting the *treated*
+  population.
+- **Declare the question before running it** — which setting, which slice, what outcome decides it, by
+  when — so the result cannot be read after the fact to suit a preference.
+- **The answer is a setting change, never a code change.** If answering it needs new code, it was not a
+  question about a setting and does not belong in this mechanism.
+- **Ask the free version first.** The shadow plan runs a second allocation rule every night at no cost;
+  any question expressible as "would the other rule have allocated better" is answered there before
+  anything is asked of real money.
+
+### 6.2 The attribution discipline — the price of improving everywhere
+
+Three layers improving at once destroys the measurement that justifies any of it: a Pacing change and a
+Brain change in the same family in the same week make both unreadable, and the outcome is attributed to
+whichever story is told most confidently afterwards.
+
+So: **one layer experiments at a time within a family**, or the experiments run on disjoint families.
+Everything else — the daily recompute, the routine self-questioning, improvements that are provably
+neutral — continues everywhere. It is only *live method experiments* that must not overlap.
+
+A corollary the account does not currently satisfy: **a layer cannot be graded on predictions it does
+not keep.** `FACT_KEYWORD_STATE` is replaced every night and holds one day, so the Catalog has no record
+of what it said last month and cannot be scored on it. Any layer expected to improve must retain its own
+answers.
 
 ## 7. What this doctrine forbids
 
@@ -281,22 +357,38 @@ point of the narrow interface.
 
 Recorded honestly so the gap is visible; each is a defect against this doctrine, not a design choice.
 
-1. **The Catalog emits commands.** `FACT_KEYWORD_STATE` publishes `WINNER` / `DEAD` / `REPRICE`, which
-   flow into books as actions.
-2. **The Catalog is not seasonal.** `settled_*90` is a trailing settled window with no seasonal
-   resolution, though two full Decembers of ads data exist.
-3. **The Catalog has no marginal model.** `affordable_cpc = gp_per_click / bar` is an average.
-   No elasticity or response curve exists anywhere.
-4. **The Brain ignores the Catalog.** `V_PLAN_WINDOW_JUDGMENT` judges on its own window; a quiet
-   window produces `NOT_SERVING` — a "nothing to do" state this doctrine forbids.
-5. **Seats do not fund their answers.** `seat_cost_per_day` is last window's spend repriced, not the
-   cost of the verdict demanded.
-6. **The book defers to Pacing on answered keywords** (`ENGINE_INSTRUCTED`) — precedence backwards.
-7. **The move cap is symmetric**, so a confident cut is slowed as much as a speculative raise.
-8. **`NOT_WORTH_NOW` does not exist**, so dormant seasonal keywords are paused as dead.
-9. **Ranking uses a proxy** (`dollars_at_stake x closeness`) because no marginal value exists.
+**Catalog**
+1. It emits commands — `WINNER` / `DEAD` / `REPRICE` flow into books as actions.
+2. It is not seasonal, though two full holiday seasons of ads data exist.
+3. It has no marginal model: the affordable price is an average, and no response curve or elasticity
+   exists anywhere.
+4. It sees only what the account already spent — **no demand data (SQP) reaches it at all**, so it can
+   describe what was captured but never what was available.
+5. It cannot propose candidates: there is no `rank(family, window)`, so the Brain can only judge
+   keywords that already exist and already spend.
+6. **It keeps no memory** — the state table is replaced nightly and holds one day, so the Catalog cannot
+   be graded on its own predictions and §6 is currently impossible to satisfy.
 
----
+**Brain**
+7. It ignores the Catalog, judging on its own window; a quiet window yields `NOT_SERVING` — the
+   "nothing to do" state this doctrine forbids.
+8. Seats do not fund the answers they demand.
+9. `NOT_WORTH_NOW` does not exist, so dormant seasonal subjects are paused as dead.
+10. It protects turns but never funds them: `LEAN_IN` is doctrine, not code.
+11. Ranking uses a proxy (dollars at stake x closeness) because no marginal value exists.
+12. It covers part of the account — a few hundred of the Catalog's subjects — and the uncovered
+    remainder is where the "nothing to do" hole lives.
+
+**Pacing**
+13. It has no scorecard: nothing measures whether the bid it chose delivered the clicks and CPC it
+    implied, so house constants like the entry anchor have never been checked.
+14. **A park carries no re-test obligation.** Measured today, the overwhelming majority of parked
+    subjects took zero clicks in a week — a park is safe from cost and safe from discovery at once, so
+    a recovery there can never be found by anyone.
+
+**Boundaries**
+15. The book defers to Pacing on answered subjects (`ENGINE_INSTRUCTED`) — precedence backwards.
+16. The move cap is symmetric, so a confident cut is slowed as much as a speculative raise.
 
 ## 9. How the UI must present a decision (binding on future implementation)
 
