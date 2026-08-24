@@ -27,6 +27,7 @@ position from an accident. Newest last.
 | 2026-08-24 18:30 | `1ca33b0` | **§2.5 quantity, §2.6 what is advertised, §6.3 demonstrate don't assert, §10 the baseline.** A simulated keyword-year against the doctrine, measured across the account, then put through two adversarial verifiers. The arithmetic passed; **three of the four largest claims did not** — each had measured a population correctly and then asserted a loss without testing the innocent explanation. That failure produced the three new rules. §2.5: worth is a curve over volume, not a scalar price — the post-season month that looked like mispricing was the account buying more clicks at the right price into weaker conversion. §2.6 (Ori's correction of my "substitution" framing): the Catalog must know **what is advertised** — format, placement, creative, match width — because most of the "destroyed" seasonal sales were the same demand arriving through a wider match. §6.3 makes the discipline standing. §10 records the survivors, the disproved claims, and three violations in §8 the research corrected — including that the coverage gap is entirely deliberate and that the move cap is not enforced in *either* direction. |
 | 2026-08-24 19:05 | `5f999c3` | **Baseline queries committed, five gaps closed.** §10.5 promised re-runnable queries that lived only in ephemeral scratch — all 76 are now committed at `docs/superpowers/specs/2026-08-24-three-layers-baseline.md`, which is what makes a recheck a re-run rather than a fresh argument. §3 gains the **park re-test obligation**: §8 and §10 both named a park as an absorbing state and no rule said so. §3 also gains `CARRY`, the vehicle intent §2.6 made possible but the contract could not express. §1.2 finally defines **the bar**. §9's UI table was missing `LEAN_IN`. §6.4 records the open rulings — including that the confidence scale is undefined, which leaves §5's irreversibility rule unenforceable as written. |
 | 2026-08-24 19:20 | `d2af2ab` | **§1.4 — each layer is independently usable.** Ori: any module in the system, or he himself, must be able to use a layer for its own needs. The three layers are services, not stages of a nightly job: a stable contract, no ordering dependency, durable queryable state of their own, asking changes nothing, and answers are attributable. This is what the narrow interface was always for, and it reinforces §1.1 — a verdict shaped like a command is meaningless to a caller that is not the Brain. Notes honestly that all three are pipeline stages today and the Catalog keeps one snapshot, so independence is required and not yet held. |
+| 2026-08-24 19:40 | `2b3cb8d` | **§2.7 confidence, §2.8 market volume.** Ori chose option C for the confidence scale: **separation × stability** — how sure we are which side of the bar a subject sits, discounted by whether the thing measured stayed the same thing, since BROAD terms turn over ~64 % a month against an EXACT control at 19 %. `NO_EVIDENCE` is a fourth state distinct from `LOW`, because §10 found zeros sitting on 0.2 expected clicks and a scale that reads those as "low confidence it is good" licenses kills on noise. §2.8 answers Ori's question about a keyword's volume on Amazon: `expected_clicks` meant *our* history, which cannot value an unbought subject nor say whether an owned one is capturing its opportunity. The market figures are already in the warehouse and read by nothing — a query the market buys 71 times a week where we hold 0.02 % of impressions, whose keyword we had paused. Two new violations recorded. |
 
 ### How to add an entry
 
@@ -130,7 +131,7 @@ Returns exactly:
 |---|---|---|
 | `verdict` | `WORTH` · `NOT_WORTH` · `NOT_WORTH_NOW` · `UNKNOWN` | fund · stop · park · buy an answer |
 | `ceiling_cpc` | the **marginal** value of the next click, at the bar, for that window | the hard cap handed to Pacing |
-| `confidence` | how much settled evidence stands behind the verdict | act on it, or buy more evidence |
+| `confidence` | how sure the verdict is — **separation × stability**, see §2.7 | act on it, or buy more evidence |
 | `expected_clicks` | clicks the subject typically takes in such a window | **sizes the seat** — what an answer costs |
 
 **Hidden inside, and never exposed:** seasonal resolution · the family bar and the organic halo ·
@@ -287,6 +288,70 @@ as expensive as §5 assumes when it is not** — and only a vehicle-aware Catalo
 front of you. And **the Brain should be allocating across vehicles, not only across phrases**: the
 question "should this family's money go to SB video or to SP" is a grain-3 question (§2.2) that nothing
 currently asks.
+
+### 2.7 Confidence — separation discounted by stability
+
+§5 forbids an irreversible action below HIGH confidence, so confidence must be a computed thing, not an
+impression. It has two factors, and both are necessary.
+
+**Separation — how sure are we which side of the bar this is on?** Not "how much data is there", which
+asks the wrong question: a subject far below its bar needs little evidence to be certain, one sitting on
+the bar needs a great deal. The ladder already computes the noise band, so:
+
+```
+separation = |return − bar| / se        where se = return / sqrt(orders)
+```
+
+**Stability — did the thing being measured stay the same thing?** A record is only as trustworthy as the
+constancy of what produced it. Measured (§10.1): terms behind a BROAD subject turn over at about 64 % a
+month and auto modes at 57–68 %, against an EXACT control at 19 %. Two subjects with identical click
+counts are therefore not equally knowable, and separation alone would call them equal. Stability is the
+share of a record that came from composition still present.
+
+**Confidence is the product**, published as a continuous score and read through three bands:
+
+| band | meaning | what it licenses |
+|---|---|---|
+| `HIGH` | well separated from the bar on a stable record | everything, including an irreversible action (§5) |
+| `MEDIUM` | separated but on a drifting record, or near the bar on a stable one | reversible moves; repair, park, lean in |
+| `LOW` | not separated | no move justified by worth alone |
+| `NO_EVIDENCE` | **distinct from LOW** — the record cannot speak at all | buy an answer (§3 `TEST`) or park. **Never** a kill |
+
+**`NO_EVIDENCE` is a separate state on purpose.** §10 found subjects whose zero orders sat on a median of
+0.2 *expected* clicks — a zero that means nothing. A scale that collapses "no information" into "low
+confidence it is good" will license kills on noise, which is exactly the failure §5 exists to prevent.
+
+The two factors also give §2.3 somewhere to live: an evidence source on probation enters with a low
+stability weight and earns a higher one by predicting well.
+
+### 2.8 Volume is a market fact, not only our history
+
+`expected_clicks` (§2) means **our** volume — what this subject has taken for us. That is the wrong
+number for two of the questions the doctrine asks. It cannot value a subject the account has never
+bought, and it cannot say whether a subject we already own is capturing its opportunity or a sliver of it.
+
+So the Catalog carries **market volume** beside our own:
+
+| | source | what it answers |
+|---|---|---|
+| **our volume** | our ads history | what this subject takes for us today |
+| **market volume** | the search-query report — the query's total impressions, clicks and purchases | how much this demand is worth **on Amazon**, whether or not we are in it |
+| **our share** | the two together | the **headroom**: how much of it we are not capturing |
+
+This is the missing input, and it is already in the warehouse and used by nothing. The search-query data
+carries market totals alongside our own figures, our impression share, the query's volume, and the median
+price of the item clicked — which is a positioning signal rather than a cost one, and worth keeping
+distinct from CPC.
+
+**What headroom makes possible.** It is the input `rank()` (§2.4) needs to propose a subject never bought
+— the research found no usable candidates precisely because nothing looked here. It is the ceiling on
+§2.5's volume curve: available clicks are a market quantity, not an extrapolation of ours. And it turns a
+dormant subject's silence into a measurable question — a query the market buys weekly, on which we hold a
+fraction of a percent of impressions, is not evidence that the subject is dead.
+
+**On probation like any external evidence (§2.3).** The query-to-subject join is not one-to-one, the
+totals are market-wide rather than ours, the data is weekly, and coverage is partial. Market volume may
+size an opportunity and inform a curve; it may not by itself move a verdict to `WORTH`.
 
 ---
 
@@ -446,7 +511,7 @@ would settle it.
 
 | ruling | status | what would settle it |
 |---|---|---|
-| **The confidence scale** (§2) — what HIGH / MEDIUM / LOW mean and where the thresholds sit. §5 forbids an irreversible action below HIGH confidence, so that rule is unenforceable until this is answered. | **open — with Ori** | a chosen definition; the machinery to compute it already exists |
+| ~~The confidence scale~~ | **SETTLED 2026-08-24 — §2.7: separation × stability, with `NO_EVIDENCE` distinct from `LOW`.** | — |
 | **Agreement-tier ranking** — when the long record and the short window disagree, should the seat queue prefer subjects both judges condemn? | **deferred by Ori, 2026-08-24** | a real case: a confirmed candidate with real money queued behind a lower-ranked disputed one that got funded. At the time of deferral every confirmed candidate in the queue carried $0 at stake, so nothing was being lost |
 | **The re-test cadence for a park** (§3) — how often, and how much, to buy fresh evidence on a parked subject | **open — a setting** | §6.1: declare it, run it on a treated slice, measure |
 | **The boost allowance share** — 0.50 in the run-up to a peak | **open — flagged unproven** | §6.1, or the free shadow plan |
@@ -569,6 +634,11 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
     cannot say which vehicle should carry a demand, nor tell a destroyed sale from a recaptured one (§2.6).
 19. Term composition is treated as an auto-mode problem; measured, **BROAD drifts nearly as hard and
     carries far more money** (§10.1).
+20. `confidence` is specified (§2.7) but not computed anywhere, so §5's irreversibility rule is
+    unenforceable in code.
+21. **Market volume is in the warehouse and used by nothing** (§2.8). The search-query data carries the
+    query's total impressions, clicks and purchases beside our own and our impression share; no layer
+    reads it, so no subject can be valued on the demand available rather than the demand we captured.
 
 **Boundaries**
 15. The book defers to Pacing on answered subjects (`ENGINE_INSTRUCTED`) — precedence backwards.
