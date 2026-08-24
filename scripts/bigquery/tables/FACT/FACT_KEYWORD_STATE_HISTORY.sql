@@ -1,5 +1,5 @@
 -- =============================================================================================
--- FACT_KEYWORD_STATE_HISTORY — the Catalog's memory. v27.143 (2026-08-24).
+-- FACT_KEYWORD_STATE_HISTORY — the Catalog's memory. v27.145 (2026-08-25).
 --
 -- WHY IT EXISTS. THREE_LAYERS.md §8 violation 6: `FACT_KEYWORD_STATE` is CREATE OR REPLACE'd on
 -- every orchestrator pass and holds exactly one snapshot, so the Catalog cannot be asked a
@@ -43,20 +43,35 @@
 -- procedure) sit in the same table as the 65-column rows without either being distorted.
 --
 -- PARTITION / CLUSTER. Partitioned by snapshot_date because every question asked of this table is
--- bounded in time and because the write step replaces exactly one date's partition. Clustered by
+-- bounded in time and because every write, repair and read the writer performs is scoped to a
+-- date — the append, the duplicate-stamp prune and the dwell view alike. Clustered by
 -- keyword_id first: the doctrinal question §1.4 demands a caller be able to ask is "what did you
 -- say about THIS SUBJECT on that date", and the subject is scoped by its keyword id (§2.2 — bare
 -- target text is never a valid subject). campaign_id completes the grain, state and family carry
 -- the population reads.
 --
--- PROVENANCE. Every row says when it was written and where it came from, so a recovered row is
--- never mistaken for one the pipeline appended live:
---   captured_at    the moment the row was written into the history (NOT the moment the Catalog
---                  computed it — that is snapshot_date).
---   source         'ORCHESTRATOR' for a row appended by the nightly pass; 'BACKFILL_TIME_TRAVEL'
---                  for a row recovered from BigQuery's own 7-day table history.
---   source_detail  free text naming exactly what was read — for a backfill, the time-travel
---                  timestamp, which is the whole audit trail for that row.
+-- PROVENANCE — THREE CLOCKS, AND THEY ANSWER DIFFERENT QUESTIONS. Every row says when it was
+-- written, which build it was copied from, and where it came from, so a recovered row is never
+-- mistaken for one the pipeline appended live:
+--   snapshot_date      the day the Catalog was speaking ABOUT.
+--   captured_at        the moment the row was written into the history.
+--   snapshot_built_at  the moment the BUILD of FACT_KEYWORD_STATE that this row was copied from
+--                      was made (the snapshot table's own last-modified clock). Added v27.145;
+--                      NULL on every row written before then, which is the honest reading — those
+--                      rows did not record it, and a backfilled value would be a fabrication.
+--   source             'ORCHESTRATOR' for a row appended by the nightly pass; 'BACKFILL_TIME_TRAVEL'
+--                      for a row recovered from BigQuery's own 7-day table history.
+--   source_detail      free text naming exactly what was read — for a backfill, the time-travel
+--                      timestamp, which is the whole audit trail for that row.
+--
+-- WHY THE THIRD CLOCK EARNS ITS COLUMN (v27.145). With only two clocks, two situations are
+-- IDENTICAL in the data. (1) The pass ran, built a fresh snapshot and copied it. (2) The pass's
+-- Task 20.8 FAILED — it has its own exception handler, so the append still runs — the previous
+-- build was still standing, and copying it again moved captured_at while the build behind it
+-- stood still. Case (2) is a falsified provenance record: the row now claims a read time at which
+-- the Catalog said nothing new. The writer refuses it (GUARD 3), but a refusal that no check can
+-- confirm is a promise, not a property. snapshot_built_at makes the difference visible after the
+-- fact and is what acceptance check C14 tests.
 --
 -- Written by: SP_APPEND_KEYWORD_STATE_HISTORY (orchestrator Task 20.8a, immediately after 20.8).
 -- Read by:    V_CATALOG_DWELL, and any caller asking the Catalog a historical question.
@@ -66,11 +81,28 @@
 --
 -- CREATE TABLE IF NOT EXISTS — re-running this file can never drop a kept snapshot. There is no
 -- CREATE OR REPLACE anywhere in this object's lifecycle, and that is the entire point of it.
+--
+-- THE PRICE OF THAT, AND THE TRAP IT SET ONCE (v27.145). Because this is IF NOT EXISTS, running
+-- this file against a table that already exists changes NOTHING — not the columns, and not the
+-- OPTIONS description. Editing the text below therefore does NOT update the deployed object, and
+-- for one release it did not: the live description went on asserting that the writer "replaces
+-- exactly the snapshot's own date partition, so ... no earlier partition is ever touched" after
+-- v27.144 had made both halves false, while the registry entry for the same table said the
+-- opposite. A person hunting for rows missing from an old partition would have read the live text,
+-- ruled the writer out, and looked in the wrong place. ANY CHANGE TO THE SCHEMA OR THE DESCRIPTION
+-- OF THIS TABLE MUST SHIP AS AN EXPLICIT ALTER IN scripts/bigquery/migrations/ AND BE MIRRORED
+-- HERE — the file is the record, the ALTER is the deployment. The v27.145 pair is
+-- scripts/bigquery/migrations/2026-08-25_keyword_state_history_build_clock.sql.
 -- =============================================================================================
 CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`
 (
   snapshot_date              DATE    NOT NULL,
   captured_at                TIMESTAMP NOT NULL,
+  -- v27.145. NULL on every row written before it existed. It is declared here beside the other
+  -- two clocks because that is where it belongs to a reader; on the LIVE table it sits last,
+  -- because it arrived by ALTER TABLE ADD COLUMN. The difference is cosmetic and stays that way:
+  -- the writer inserts by explicit column NAME, so ordinal position is never load-bearing.
+  snapshot_built_at          TIMESTAMP,
   source                     STRING  NOT NULL,
   source_detail              STRING,
 
@@ -142,4 +174,4 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`
 )
 PARTITION BY snapshot_date
 CLUSTER BY keyword_id, campaign_id, state, family
-OPTIONS (description = "The Catalog's memory (THREE_LAYERS.md §8 violation 6, closed 2026-08-24). Append-only history of FACT_KEYWORD_STATE, which is CREATE OR REPLACE'd nightly and holds exactly one snapshot — so before this table existed no caller could ask the ladder what it said on any day but today, and §6's Catalog scorecard ('was the valuation right?') was impossible to compute. One row per (snapshot_date, campaign_id, keyword_id): the WHOLE snapshot row — verdict, the settled record it was read off, the family bar, the noise band, the affordable price, the floor, the mix-drift guard's cleaned re-reading and the promised appointment — because a verdict without its evidence cannot be graded, only counted. Provenance on every row: captured_at (when it was written here, not when the Catalog computed it), source ORCHESTRATOR | BACKFILL_TIME_TRAVEL, and source_detail naming exactly what was read. Written by SP_APPEND_KEYWORD_STATE_HISTORY (orchestrator Task 20.8a) which replaces exactly the snapshot's own date partition, so a pass that runs twice leaves one copy and no earlier partition is ever touched; the writer reads the live column list from INFORMATION_SCHEMA and ADD COLUMN IF NOT EXISTS-es what it lacks, so the columns §2.7 (confidence), §2.8 (market volume) and §4 (seasonality) will add appear here the day they exist, with older partitions honestly NULL rather than backfilled. NO ENGINE, GENERATOR OR BOOK READS THIS TABLE — it records what was already recorded and can move no bid, budget or pause. Read by V_CATALOG_DWELL. Acceptance: scripts/bigquery/tests/KEYWORD_STATE_HISTORY_acceptance.sql. Spec: architecture/THREE_LAYERS.md §1.4/§6/§8/§10.4. SOP: architecture/KEYWORD_STATE.md.");
+OPTIONS (description = "The Catalog's memory (THREE_LAYERS.md §8 violation 6, closed 2026-08-24). Append-only history of FACT_KEYWORD_STATE, which is CREATE OR REPLACE'd nightly and holds exactly one snapshot — so before this table existed no caller could ask the ladder what it said on any day but today, and §6's Catalog scorecard ('was the valuation right?') was impossible to compute. One row per (snapshot_date, campaign_id, keyword_id): the WHOLE snapshot row — verdict, the settled record it was read off, the family bar, the noise band, the affordable price, the floor, the mix-drift guard's cleaned re-reading and the promised appointment — because a verdict without its evidence cannot be graded, only counted. THREE CLOCKS, and they answer different questions: snapshot_date is the day the Catalog was speaking about, captured_at is when the row was written here, and snapshot_built_at is when the BUILD it was copied from was made (NULL before v27.145, which is the honest reading — those rows did not record it). Provenance is completed by source (ORCHESTRATOR | BACKFILL_TIME_TRAVEL) and source_detail naming exactly what was read. Written by SP_APPEND_KEYWORD_STATE_HISTORY (orchestrator Task 20.8a), which INSERTs the whole snapshot stamped with the run's captured_at and then PRUNEs any snapshot_date carrying more than one captured_at down to its newest stamp — append-first, so a crash between the two statements can only leave a duplicate, never a lost day, and two passes on one snapshot_date leave exactly one copy. THE WRITER CAN AND DOES REACH AN EARLIER PARTITION, deliberately: the prune is keyed on the history's OWN duplicate stamps rather than on the date the live snapshot happens to carry, and it runs before the append as well as after, so a strand left on any date is repaired by any later call including a manual one. What it may NOT do is restamp a build the history has already recorded — a pass whose Task 20.8 failed still reaches this step with the previous build standing, and re-copying it would move captured_at while the build behind it stood still, making the provenance claim a read time at which the Catalog said nothing. The writer refuses that copy by comparing the snapshot table's own last-modified clock against the stamp the history already holds for that date, which is a test of the BUILD and not of the calendar, so it holds for repeat passes inside one LA day as well as across days. The writer reads the live column list from INFORMATION_SCHEMA and ADD COLUMN IF NOT EXISTS-es what it lacks, so the columns §2.7 (confidence), §2.8 (market volume) and §4 (seasonality) will add appear here the day they exist, with older partitions honestly NULL rather than backfilled. NO ENGINE, GENERATOR OR BOOK READS THIS TABLE — it records what was already recorded and can move no bid, budget or pause. Read by V_CATALOG_DWELL. Acceptance: scripts/bigquery/tests/KEYWORD_STATE_HISTORY_acceptance.sql. Spec: architecture/THREE_LAYERS.md §1.4/§6/§8/§10.4. SOP: architecture/KEYWORD_STATE.md.");

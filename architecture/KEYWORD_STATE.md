@@ -108,15 +108,37 @@ different date. It is now stated as the invariant it always meant: **a `snapshot
 one `captured_at`, and the newest wins.** The prune runs before the append as well as after, so a
 call that adds nothing today still heals a strand left by an earlier one. `C12` is the alarm.
 
-**A pass that did not build the snapshot may not restamp it** (v27.144). Task 20.8 sits in its own
+**A pass may not restamp a build the history already holds** (v27.145). Task 20.8 sits in its own
 `BEGIN ... EXCEPTION` block, so a pass where the snapshot build FAILS still reaches 20.8a — with the
-previous build's table standing. Re-copying it would give an older partition tonight's `captured_at`
-and a `source_detail` naming a read time at which the Catalog said nothing: the rows identical, the
-provenance a lie. GUARD 3 refuses it — a snapshot older than the current LA date whose day the
-history already holds is not appended. A stale snapshot carrying a date the history does *not* hold
-still is, because that is memory gained rather than provenance rewritten. What stays writable is the
-LA day the pass is running in, which is the day it belongs to, and there re-copying is the intended
-"the day's final word" semantics. `C13` is the alarm.
+previous build's table standing. Re-copying it would move that partition's `captured_at` and give it
+a `source_detail` naming a read time at which the Catalog said nothing new: the rows identical, the
+provenance a lie. GUARD 3 refuses it.
+
+**The guard tests the build, not the calendar.** Its first shape asked only whether the snapshot's
+date was older than the current LA date. That left it blind for the whole of the day it was running
+in — and `snapshot_date` is `CURRENT_DATE('America/Los_Angeles')` while passes run several times a
+night, so *several passes sharing one LA date is the normal case*, not an edge one. A pass whose
+Task 20.8 failed in the small hours carried the same date as the pass that had already appended, and
+the partition was restamped anyway, with no check able to see it. What the guard reads now is
+`snapshot_built_at` — the snapshot table's own last-modified clock. If it has not moved past the
+stamp the history already carries for that date, the table standing *is* the build already recorded
+and there is nothing to add; a genuine rebuild always moves it, so the last pass of an LA day still
+writes that day's final word. The LA-date clause is kept beside the build test for a different case:
+a snapshot rebuilt by hand under an old date is a new build, but it must not overwrite what was said
+back then. A snapshot carrying a date the history does *not* hold is appended whatever its clocks
+say, because that is memory gained rather than provenance rewritten.
+
+**Every row now records which build it came from.** `snapshot_built_at` sits beside `snapshot_date`
+(the day being spoken about) and `captured_at` (when the row was written here). It is NULL on every
+row written before v27.145 — those rows did not record it, and a backfilled value would be exactly
+the fabrication this object refuses.
+
+**What the alarms can and cannot see, stated plainly.** `C13` catches a restamp that crosses days.
+A restamp *inside* one LA day cannot be detected from the committed rows at all: it moves
+`captured_at` while `snapshot_built_at` stands still, which is indistinguishable from an honest write
+whose build simply happened earlier the same day. That is a write-time property or nothing, so `C14`
+asserts the two things that are provable — no partition records a build later than its own write, and
+the guard is still deployed and still reading the build clock. Delete the guard and `C14` goes red.
 
 ### It cannot break the pass
 

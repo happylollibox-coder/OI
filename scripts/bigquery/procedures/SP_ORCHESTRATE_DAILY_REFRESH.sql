@@ -2260,13 +2260,19 @@ BEGIN
   -- before the append as well as after, so a strand on ANY date is repaired by ANY later call
   -- (v27.144 — the old date-scoped prune could never reach a strand left on the last pass of an LA
   -- day, because every later pass carried a different date).
-  -- IT WILL NOT RESTAMP A DAY THIS PASS DID NOT BUILD (v27.144). Task 20.8 above has its own
+  -- IT WILL NOT RESTAMP A BUILD THE HISTORY ALREADY HOLDS (v27.145). Task 20.8 above has its own
   -- exception handler, so a pass where the snapshot build FAILED still reaches this task with the
-  -- previous build's table standing. Copying it again would stamp an older partition with tonight's
-  -- captured_at and a source_detail naming a read time at which the Catalog said nothing. The
-  -- procedure's GUARD 3 refuses that: a snapshot older than the current LA date whose day the
-  -- history already holds is not appended. A stale snapshot carrying a date the history does NOT
-  -- hold still is — that is memory gained, not provenance rewritten.
+  -- previous build's table standing. Copying it again would move that partition's captured_at and
+  -- give it a source_detail naming a read time at which the Catalog said nothing new. GUARD 3
+  -- refuses it, and the test is on the BUILD rather than on the calendar: the procedure compares
+  -- the snapshot table's own last-modified clock against the stamp the history already carries for
+  -- that date, and a build that has not moved has nothing to add. The first shape of the guard
+  -- asked only whether the date was older than the current LA date, which left it blind for the
+  -- whole of the day it was running in — and since snapshot_date is CURRENT_DATE('America/
+  -- Los_Angeles') while several passes run each night, sharing one LA date is the normal case, not
+  -- an edge one. A snapshot carrying a date the history does NOT hold is still appended — that is
+  -- memory gained, not provenance rewritten. Every row now records snapshot_built_at, so which
+  -- build a partition came from is part of the memory rather than an assumption about it.
   -- Spec: architecture/THREE_LAYERS.md §8 violation 6, §10.4. SOP: architecture/KEYWORD_STATE.md.
   -- ============================================
   SET procedure_name = 'SP_APPEND_KEYWORD_STATE_HISTORY';

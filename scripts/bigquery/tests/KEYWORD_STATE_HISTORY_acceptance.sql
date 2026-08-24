@@ -1,6 +1,6 @@
 -- =============================================================================================
 -- FACT_KEYWORD_STATE_HISTORY + SP_APPEND_KEYWORD_STATE_HISTORY + V_CATALOG_DWELL
--- acceptance — v27.143 (2026-08-24). EVERY ROW MUST READ PASS.
+-- acceptance — v27.145 (2026-08-25). EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: architecture/THREE_LAYERS.md §1.4, §6, §6.2, §8 (violation 6), §10.4.
 -- SOP:  architecture/KEYWORD_STATE.md §"The history".
@@ -71,6 +71,42 @@
 --       nothing. That is the right trade: the check names something a person should look at, and
 --       silencing it would also silence the restamp it exists to catch. Separate the two by reading
 --       the offending partition's source_detail, which names what was read and when.
+--   C14 THE BUILD CLOCK (added v27.145). C13 could not see a restamp that happens INSIDE one LA
+--       day, and neither could C05 — both compare captured_at across partitions, and a same-day
+--       restamp moves the newest partition's stamp, which is the one partition they use as the
+--       reference rather than test. That blind spot was not exotic: snapshot_date is
+--       CURRENT_DATE('America/Los_Angeles') and several passes share one LA date every night, so
+--       a pass whose Task 20.8 FAILED restamped the day it did not build, silently, and the first
+--       shape of GUARD 3 — which asked only whether the date was older than today — waved it
+--       through. Measured against live state at the time: the guard refused nothing, one partition
+--       was restamped, and C05, C12 and C13 all read 0.
+--       WHAT THE COMMITTED DATA CAN AND CANNOT PROVE — SAID PLAINLY, BECAUSE THE FIRST DRAFT OF
+--       THIS CHECK GOT IT WRONG AND A CHECK THAT ONLY LOOKS LIKE COVERAGE IS WORSE THAN NONE.
+--       The draft asserted that a partition's build must postdate the captured_at of the partition
+--       before it. Measured, it was wrong twice over: it read 1 violation against an HONEST history
+--       (the backfill wrote seven old partitions with a fresh capture time, so an ordinary build
+--       predates the capture of the day before it — a false alarm at the backfill boundary), and
+--       against a clean steady-state history carrying a genuine same-day restamp it read 0. It
+--       neither held on good data nor fired on bad.
+--       The reason is structural, and worth keeping written down: a restamp moves captured_at while
+--       snapshot_built_at stands still, and the result is INDISTINGUISHABLE from an honest write in
+--       which the build simply happened earlier in the same day. Both are legal orderings of the
+--       same two clocks. No predicate over the committed rows separates them. This is a property
+--       enforced at WRITE time or not at all — which is what GUARD 3 is.
+--       So C14 asserts the two things that ARE provable, and claims nothing more:
+--         (a) DATA. No partition records a build LATER than the moment it was written. A row
+--             cannot have read a build that had not happened yet; this is a genuine invariant and
+--             it is what the clock makes checkable at all.
+--         (b) STRUCTURE. The deployed SP_APPEND_KEYWORD_STATE_HISTORY still reads the snapshot's
+--             last_modified_time, still compares it against the stamp the history holds, and still
+--             records snapshot_built_at. This is the honest way to assert a write-time guarantee
+--             that leaves no footprint in the data: check that the guarantee is still installed.
+--             Delete the guard and this goes red on the next run of the suite — which is precisely
+--             the alarm that was missing when the same-day restamp was silent.
+--       HONEST SCOPE OF (a): it is SILENT on every row written before v27.145, because those rows
+--       carry NULL for snapshot_built_at — they did not record it, and inventing a value would be
+--       the fabrication this whole object exists to refuse. Until the first pass appends under
+--       v27.145 (a) reads 0 for want of evidence, not for want of violations; (b) has teeth today.
 -- =============================================================================================
 WITH
 live AS (
@@ -221,11 +257,31 @@ c13 AS (
                    LEAD(MAX(captured_at)) OVER (ORDER BY snapshot_date) AS next_ts
             FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`
             GROUP BY snapshot_date)) AS violations
+),
+c14 AS (
+  -- One representative row per snapshot_date, taken from the NEWEST stamp: captured_at and
+  -- snapshot_built_at must come from the SAME row, so this picks a row rather than pairing two
+  -- independent aggregates (paired MAX/ANY_VALUE over one GROUP BY is not a coherent pair when a
+  -- date carries a strand). Rows within one stamp are identical on both columns by construction.
+  SELECT 'C14 build clock is real, and the guard that uses it is deployed' AS check_name,
+         (SELECT COUNTIF(built > cap)
+          FROM (
+            SELECT captured_at AS cap, snapshot_built_at AS built
+            FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY snapshot_date
+                                       ORDER BY captured_at DESC) = 1)
+          WHERE built IS NOT NULL)
+       + (SELECT COUNTIF(NOT (
+            REGEXP_CONTAINS(ddl, r'last_modified_time')
+            AND REGEXP_CONTAINS(ddl, r'snap_built_at\s*<=\s*stored_stamp')
+            AND REGEXP_CONTAINS(ddl, r'snapshot_built_at')))
+          FROM `onyga-482313.OI.INFORMATION_SCHEMA.ROUTINES`
+          WHERE routine_name = 'SP_APPEND_KEYWORD_STATE_HISTORY') AS violations
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c04 UNION ALL SELECT * FROM c05 UNION ALL SELECT * FROM c06
       UNION ALL SELECT * FROM c07 UNION ALL SELECT * FROM c08 UNION ALL SELECT * FROM c09
       UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11 UNION ALL SELECT * FROM c12
-      UNION ALL SELECT * FROM c13)
+      UNION ALL SELECT * FROM c13 UNION ALL SELECT * FROM c14)
 ORDER BY check_name;
