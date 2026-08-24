@@ -31,6 +31,7 @@ position from an accident. Newest last.
 | 2026-08-24 20:10 | `17d73ad` | **§4.1 — a campaign is a seasonal subject, and pause is its only park.** Ori: seasonal campaigns must be enabled and paused at the right time, and that is the Brain asking and the Catalog answering. The Catalog therefore answers for a campaign subject, not only keywords. The asymmetry that makes it urgent: a keyword can park at its floor, a campaign is on or off — so a campaign pause is the one irreversible action permitted on `NOT_WORTH_NOW`, and only on condition it **carries its reopen date**, recorded where a layer will act on it rather than remembered by a person. Adds `OPEN · by date D` and `CLOSE · reopen D`, and makes lead time part of the answer, since a campaign enabled on day one of its season has not been running when the season starts. Measured: ten paused campaigns hold $127,352 of last-season sales at 1.49 GP-ROAS, five stopped on one day in mid-July, and none has a reopen date. Also records the rename hazard that nearly inverted the finding — join campaign history on the id, never the name. |
 | 2026-08-24 20:35 | `a8b3373` | **§2.9 negatives belong to the Catalog and expire; the account total is deliberately homeless.** Ori: negatives are managed by the Catalog — the Brain asks *how do I improve this*, and one answer is to negate a term. Adds `improve()` as a third question beside `ask()` and `rank()`. Critically, **the answer expires**: asked again a month later the Catalog may say *remove the negate*, for the same term, either because the data now says so or because a peak makes a high-volume term worth unblocking simply to buy data. So a negative is a standing answer with an expiry, never a settled fact. Records the asymmetry that a negative is created by a bulksheet but removed only by hand, and that the account's registry — not Amazon — is the record of what is blocked. Ori also confirmed the account's total budget is deliberately outside the doctrine: the Brain allocates within a pot, and the total emerges from the parts. |
 | 2026-08-24 20:50 | `4e12846` | **§2.9 corrected — a negative CAN be removed by bulksheet.** Ori challenged the claim that removal needs a console edit, and he was right. Checked: `negative_id` is populated on every live negative in the registry, one removal has already been executed, and Amazon accepts an `Entity: Negative Keyword` row with `Operation: Update` and `State: archived`. The real gap is narrower and ours — every book this account builds emits `Operation: Create` for negatives and nothing else, so the Catalog's expiry answer has no book to travel in (new violation 25). The surviving constraint is coverage, not capability: the registry rather than Amazon is the record of what is blocked, so a negative created outside our books is invisible to the Catalog. |
+| 2026-08-24 21:40 | `ca01597` | **Violation 6 CLOSED — the Catalog keeps a memory.** Ori chose this as the first violation to close, on one decisive ground: every other one costs the same to fix next week, while this one got permanently more expensive every night — `FACT_KEYWORD_STATE` is `CREATE OR REPLACE`d on each pass and holds a single day, so each pass destroyed a day of verdicts that could never be recovered. Built additively, with nothing that can reach Amazon reading any new object: `FACT_KEYWORD_STATE_HISTORY` (append-only, partitioned by `snapshot_date`, the WHOLE ladder row — because §6 asks *was the valuation right?* and a verdict without the record, the bar, the band, the price and the appointment behind it can be counted but not graded), `SP_APPEND_KEYWORD_STATE_HISTORY` at orchestrator Task 20.8a (append-then-prune, so the failure mode leaves a duplicate rather than a lost day, and pruning is scoped to the snapshot's own dates so no pass can rewrite a day it did not produce; no hard-coded column list, so §2.7, §2.8 and §4's future columns are kept the night they appear), and `V_CATALOG_DWELL`, which answers §10.4 while REFUSING to answer more than the evidence allows — dwell is a bound with a stated basis, and a run reaching the start of the history reads `AT_LEAST` with a deliberately NULL maximum. Two findings the memory produced on its first day, both previously unaskable: the ladder's own `state_since` column disagrees with the observed state start for the overwhelming majority of subjects (it is the park date / `floor_since` / last bid change, not a state clock), and subjects that VANISH from the snapshot — doctrine Appendix B's failure — are now visible as rows rather than absences. Seeded from BigQuery's own seven-day table history: real replaced versions at their true dates, two schema eras loaded with the columns each actually had, nothing invented, and no other surviving copy existed anywhere in the account. What is closed is the RETENTION; §6's Catalog scorecard is still to be built, and the Brain and Pacing still keep no answers of their own. |
 
 ### How to add an entry
 
@@ -118,9 +119,12 @@ requires:
 meaningless to a consumer that is not the Brain: a dashboard asking "what is this worth in November"
 cannot act on `DEAD`. Worth, ceiling, confidence and volume mean the same thing to every caller.
 
-**Where the build stands:** all three layers are currently pipeline stages, and the Catalog keeps one
-snapshot (violation 6), so no caller can ask it a historical question. Independence is therefore a
-property the doctrine requires and the system does not yet have.
+**Where the build stands:** all three layers are still pipeline stages, so the ordering-dependency
+requirement is not met. The *durable state* requirement is now met for the Catalog alone:
+`FACT_KEYWORD_STATE_HISTORY` (2026-08-24, violation 6 CLOSED) is queryable directly and historically
+by any caller, and `V_CATALOG_DWELL` reads only that history, so it answers whether or not tonight's
+pass has run. The Brain and Pacing still keep no answers of their own. Independence remains a
+property the doctrine requires and the system only partly has.
 
 ---
 
@@ -662,10 +666,11 @@ So: **one layer experiments at a time within a family**, or the experiments run 
 Everything else — the daily recompute, the routine self-questioning, improvements that are provably
 neutral — continues everywhere. It is only *live method experiments* that must not overlap.
 
-A corollary the account does not currently satisfy: **a layer cannot be graded on predictions it does
-not keep.** `FACT_KEYWORD_STATE` is replaced every night and holds one day, so the Catalog has no record
-of what it said last month and cannot be scored on it. Any layer expected to improve must retain its own
-answers.
+A corollary: **a layer cannot be graded on predictions it does not keep.** Any layer expected to
+improve must retain its own answers. The Catalog did not, until 2026-08-24: `FACT_KEYWORD_STATE` was
+replaced every night and held one day (violation 6, now CLOSED — `FACT_KEYWORD_STATE_HISTORY` keeps
+every ladder row per day and `V_CATALOG_DWELL` reads it). The retention exists; the Catalog's
+scorecard itself is still to be built, and the Brain's and Pacing's answers are still not retained.
 
 ## 7. What this doctrine forbids
 
@@ -698,8 +703,24 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
    describe what was captured but never what was available.
 5. It cannot propose candidates: there is no `rank(family, window)`, so the Brain can only judge
    keywords that already exist and already spend.
-6. **It keeps no memory** — the state table is replaced nightly and holds one day, so the Catalog cannot
-   be graded on its own predictions and §6 is currently impossible to satisfy.
+6. ~~**It keeps no memory** — the state table is replaced nightly and holds one day, so the Catalog
+   cannot be graded on its own predictions and §6 is currently impossible to satisfy.~~
+   **CLOSED 2026-08-24 (commit `ca01597`).** `FACT_KEYWORD_STATE_HISTORY` is an append-only,
+   snapshot_date-partitioned copy of the WHOLE ladder row, written by
+   `SP_APPEND_KEYWORD_STATE_HISTORY` as orchestrator Task 20.8a immediately after the snapshot is
+   built. The whole row, not a `(date, subject, state)` triple, because §6 asks *was the valuation
+   right?* and a verdict stripped of the record it was read off, the bar, the noise band, the
+   affordable price and the promised appointment can be counted but never graded. The write is
+   append-first and idempotent — it inserts, then prunes earlier stamps **from the snapshot's own
+   dates only** — so two passes leave one copy, no pass can rewrite a day it did not produce, and a
+   crash between the two statements leaves a duplicate rather than a lost day. It carries no
+   hard-coded column list, so §2.7's `confidence`, §2.8's market volume and §4's seasonality will be
+   kept the night they exist, with earlier partitions honestly NULL. `V_CATALOG_DWELL` answers §10.4's
+   question over it, publishing dwell as a BOUND with a stated basis (`EXACT` / `BETWEEN` /
+   `AT_LEAST`) rather than a number a short history cannot support. Seeded from BigQuery's own
+   seven-day table history — real snapshots at their true dates, nothing invented; the account had no
+   other surviving copy. **What is closed is the RETENTION, not the scorecard**: the Catalog now keeps
+   its predictions, so §6 can be satisfied. Building the scorecard that grades them is still open.
 
 **Brain**
 7. It ignores the Catalog, judging on its own window; a quiet window yields `NOT_SERVING` — the
@@ -845,9 +866,15 @@ Three of §8's violations were wrong, and are corrected in place:
 
 ### 10.4 What could not be measured, and why it matters
 
-- **Dwell time in any state.** The Catalog holds one snapshot and is replaced nightly, so no "how long has
-  this been stuck" question is answerable anywhere. This is violation 6 obstructing the measurement of
-  every other violation, and it is the single highest-value thing to fix first.
+- ~~**Dwell time in any state.** The Catalog holds one snapshot and is replaced nightly, so no "how long
+  has this been stuck" question is answerable anywhere. This is violation 6 obstructing the measurement
+  of every other violation, and it is the single highest-value thing to fix first.~~
+  **MEASURABLE FROM 2026-08-24 (commit `ca01597`)** — `V_CATALOG_DWELL` over
+  `FACT_KEYWORD_STATE_HISTORY`. Read the answer with the caveat it carries: dwell is published as a
+  BOUND with a basis, and a subject whose run reaches the start of the history reads `AT_LEAST` with a
+  NULL maximum, because the true start is genuinely unknown. Every re-measurement of §10 from here on
+  should state `history_days` beside any dwell figure, since a censored population shrinks as the
+  history lengthens and a dwell distribution taken today is not comparable to one taken in a month.
 - **Bid-to-click response.** Nothing records the clicks and price a chosen bid was expected to deliver
   against what it delivered, so §2.5's curve cannot yet be estimated and Pacing cannot be graded at all.
 - **Seasonal versus dead.** Two holiday seasons sit in the ads data and the Catalog does not read them, so
