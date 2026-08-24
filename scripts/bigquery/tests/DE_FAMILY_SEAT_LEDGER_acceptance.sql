@@ -51,12 +51,32 @@
 --       is still NOT_GOOD.
 --   A19 No held row is also closed, and no closed row also carries a held_reason (the two states
 --       are mutually exclusive by construction).
+--   A20 (v27.141, Task 6, CRITICAL FIX) PLAN NUMBER EQUALITY: every open, non-held row's seat_no
+--       EQUALS FACT_PLAN_NEXT_WEEK plan='B''s seat_no for the SAME (family, campaign_id,
+--       keyword_id). A01 only ever tested that a row EXISTS; a shared key could carry two DIFFERENT
+--       numbers in the ledger and the plan and still read A01 PASS — exactly the live defect a
+--       verifier found (Lollibox/488973733209950/445052966395752: ledger seat 5, plan seat 6) and
+--       exactly what D09 (DE_FAMILY_SEAT_LEDGER_drift.sql) also failed to test before this pass.
+--       SP_MAINTAIN_FAMILY_SEATS now adopts the plan's seat_no directly at admission (v27.141); this
+--       check is the standing proof that the adoption held.
+--
+-- v27.141 KNOWN, DISCLOSED CONSEQUENCE FOR A17 (recorded, not hidden): A17 tests that no DISPUTED
+-- candidate is admitted lower than a CONFIRMED one on the SAME admission day — true by CONSTRUCTION
+-- before v27.141 (the register invented every fresh number itself, tier-ordered). Since v27.141 a
+-- fresh admission adopts the plan's own seat_no directly (A20, above) rather than inventing one, so
+-- on the normal (non-colliding) path A17's ordering is inherited from FACT_PLAN_NEXT_WEEK's own
+-- rank_no, which does not consider agreement_tier — the register's tier-priority walk survives only
+-- in the (should-be-rare) defensive collision-fallback branch. A17 still reads PASS live and is kept
+-- as a standing measurement of the plan's own admission order, not removed — but it is no longer a
+-- guarantee this procedure enforces by itself on the primary path. Recorded as an open ruling for
+-- Ori in architecture/FAMILY_SEAT_REGISTER.md: a genuine, disclosed trade against Task 6's CRITICAL,
+-- live-measured defect, not an oversight.
 -- =============================================================================================
 WITH
 mx AS (SELECT MAX(as_of) AS d FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B'),
 run_day AS (SELECT MAX(snapshot_date) AS d FROM `onyga-482313.OI.FACT_KEYWORD_STATE`),
 working AS (SELECT family FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT` WHERE book = 'HARVEST'),
-plan_b AS (SELECT p.family, p.campaign_id, p.keyword_id, p.ladder_state, p.rank_score
+plan_b AS (SELECT p.family, p.campaign_id, p.keyword_id, p.ladder_state, p.rank_score, p.seat_no AS plan_seat_no
            FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p CROSS JOIN mx
            WHERE p.plan = 'B' AND p.as_of = mx.d AND p.seat_no IS NOT NULL),
 plan_a AS (SELECT p.family, p.campaign_id, p.keyword_id, p.side AS side_a
@@ -185,6 +205,11 @@ checks AS (
   UNION ALL
   SELECT 'A19 held and closed are mutually exclusive',
          (SELECT COUNT(*) FROM ledger WHERE held_reason IS NOT NULL AND closed_on IS NOT NULL)
+  UNION ALL
+  SELECT 'A20 plan number equality: every open non-held row\'s seat_no equals plan B\'s seat_no for the same key',
+         (SELECT COUNT(*) FROM open_rows r
+          JOIN plan_b p ON p.family = r.family AND p.campaign_id = r.campaign_id AND p.keyword_id = r.keyword_id
+          WHERE r.held_reason IS NULL AND r.seat_no != p.plan_seat_no)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks

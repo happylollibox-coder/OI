@@ -37,7 +37,17 @@
 -- Checks:
 --   D00 THE TWO LEDGER IMAGES ARE DIFFERENT IMAGES. If BEFORE and AFTER are byte-identical, every
 --       check below compares a table to itself and reads VACUOUS, not PASS.
---   D01 STABILITY — every keyword seated in BOTH images kept its seat number.
+--   D01 STABILITY — every keyword seated in BOTH images kept its seat number. EXPECTED, DOCUMENTED
+--       EXCEPTION (2026-08-24, v27.141 repair pass): a BEFORE/AFTER pair spanning the v27.141 fix
+--       itself will show exactly ONE violation here — the single live row the pre-fix admission bug
+--       had already mis-numbered (Lollibox/488973733209950/445052966395752, ledger seat 5 vs the
+--       plan's 6) was corrected by a ONE-TIME manual UPDATE, not by a code path that ever renumbers
+--       an open row (the procedure still never does that — see the v27.141 header in
+--       SP_MAINTAIN_FAMILY_SEATS.sql). That one-time correction is, by definition, a seat-number
+--       change on a continuing occupant, so D01 correctly flags it on that specific pair; it will
+--       not recur on any later BEFORE/AFTER pair once the corrected value is itself the BEFORE
+--       image. A run reading MORE than 1 violation here, or any violation on a pair that does not
+--       span that specific correction, is a real regression.
 --   D02 PLAIN WORDS — every closed row carries closed_reason_text mapped to its code.
 --   D03 CODE AND DATE — every closed row carries a mapped code; every row closed since BEFORE is
 --       dated between BEFORE's newest date and the AFTER snapshot.
@@ -56,9 +66,16 @@
 --       stale-but-current run_day; the diff-based fix reads 0 on the same pair.
 --   D07 one keyword per open seat number within a family; numbers >= 1.
 --   D08 NO OVERWRITE — no admission took a number a still-seated keyword of the family holds.
---   D09 (v27.139) PLAN RECONCILIATION (Task 6): the AFTER ledger's open, non-held seat set for
---       plan B's seated keywords (TMP_FSR_PLAN, plan='B', seat_no IS NOT NULL) equals plan B's
---       seated set EXACTLY — one seat number per seated keyword, no orphans either direction.
+--   D09 (v27.139, STRENGTHENED v27.141) PLAN RECONCILIATION (Task 6): the AFTER ledger's open,
+--       non-held seat set for plan B's seated keywords (TMP_FSR_PLAN, plan='B', seat_no IS NOT
+--       NULL) equals plan B's seated set EXACTLY — every plan-B key has exactly one open ledger
+--       row, no ledger-only or plan-only orphans, AND (v27.141 — the live verifier finding this
+--       closes) that row's seat_no EQUALS the plan's seat_no for the SAME key. Before v27.141 this
+--       check only tested membership and within-ledger uniqueness — a shared key could (and once
+--       did, live: Lollibox/488973733209950/445052966395752, ledger 5 vs plan 6) carry two
+--       DIFFERENT numbers in the two objects and still read D09 PASS, exactly the gap the verifier
+--       found and architecture/FAMILY_SEAT_REGISTER.md's R-o wrongly pointed readers here to
+--       re-verify. The added term now makes that impossible to miss.
 --   D10 (v27.139) CONFIRMED-ONLY CLOSURE, PRECISE — every row THIS PASS closed (closed in AFTER,
 --       not in BEFORE) reads agreement_tier = 'CONFIRMED'. Unlike the acceptance suite's A16 this
 --       cannot be fooled by a pre-migration same-day closure, because it reads the true diff.
@@ -68,7 +85,14 @@
 --       never cut on one judge's word alone) or continue being held (or resume as an occupant).
 --   D12 (v27.139) ADMISSION ORDER ACROSS THE PASS — among rows admitted (opened) on this pass, no
 --       DISPUTED candidate took a lower seat number than a CONFIRMED one admitted in the same
---       family on the same pass (the before/after-precise version of A17).
+--       family on the same pass (the before/after-precise version of A17). v27.141 KNOWN, DISCLOSED
+--       CONSEQUENCE: since v27.141 a fresh admission adopts FACT_PLAN_NEXT_WEEK's own seat_no
+--       directly (D09/A20) rather than inventing one — on the normal (non-colliding) path this
+--       ordering is inherited from the plan's own rank_no, which does not weigh agreement_tier, so
+--       D12 is now a standing MEASUREMENT of the plan's own admission order rather than a guarantee
+--       this procedure enforces unilaterally (the old tier-ordered walk survives only in the
+--       defensive collision-fallback branch). Recorded as an open ruling for Ori — see
+--       architecture/FAMILY_SEAT_REGISTER.md.
 -- =============================================================================================
 WITH
 run_day AS (SELECT MAX(snapshot_date) AS d FROM `onyga-482313.OI.TMP_FSR_STATE`),
@@ -78,7 +102,8 @@ before_full AS (SELECT * FROM `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE`),
 after_open AS (SELECT family, campaign_id, keyword_id, seat_no, opened_on, agreement_tier, held_reason
                FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` WHERE closed_on IS NULL),
 after_closed AS (SELECT * FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` WHERE closed_on IS NOT NULL),
-plan_b AS (SELECT family, campaign_id, keyword_id FROM `onyga-482313.OI.TMP_FSR_PLAN` WHERE plan = 'B' AND seat_no IS NOT NULL),
+plan_b AS (SELECT family, campaign_id, keyword_id, seat_no AS plan_seat_no
+           FROM `onyga-482313.OI.TMP_FSR_PLAN` WHERE plan = 'B' AND seat_no IS NOT NULL),
 plan_a AS (SELECT family, campaign_id, keyword_id, side AS side_a FROM `onyga-482313.OI.TMP_FSR_PLAN` WHERE plan = 'A'),
 -- the rows THIS pass closed: closed in AFTER and not already closed in BEFORE
 new_closed AS (
@@ -172,7 +197,7 @@ checks AS (
                           AND EXISTS (SELECT 1 FROM after_open z
                                       WHERE z.family = b.family AND z.campaign_id = b.campaign_id
                                         AND z.keyword_id = b.keyword_id)))
-  UNION ALL SELECT 'D09 (Task 6) the AFTER ledger\'s open non-held seat set for plan B\'s seated keywords equals plan B\'s seated set exactly, one number each, no orphans either direction',
+  UNION ALL SELECT 'D09 (Task 6) the AFTER ledger\'s open non-held seat set for plan B\'s seated keywords equals plan B\'s seated set exactly, SAME seat number each, no orphans either direction',
          (SELECT COUNT(*) FROM plan_b p
           LEFT JOIN after_open o ON o.family = p.family AND o.campaign_id = p.campaign_id AND o.keyword_id = p.keyword_id
           WHERE o.campaign_id IS NULL OR o.held_reason IS NOT NULL)
@@ -180,6 +205,11 @@ checks AS (
             LEFT JOIN plan_b p ON p.family = o.family AND p.campaign_id = o.campaign_id AND p.keyword_id = o.keyword_id
             WHERE o.held_reason IS NULL AND p.campaign_id IS NULL)
          + (SELECT COUNT(*) FROM (SELECT family, seat_no FROM after_open WHERE held_reason IS NULL GROUP BY 1, 2 HAVING COUNT(*) > 1))
+         -- v27.141: THE MISSING TERM — a matched key must carry the SAME number in both objects,
+         -- not merely appear in both (the exact gap the live verifier finding exploited).
+         + (SELECT COUNT(*) FROM plan_b p
+            JOIN after_open o ON o.family = p.family AND o.campaign_id = p.campaign_id AND o.keyword_id = p.keyword_id
+            WHERE o.held_reason IS NULL AND o.seat_no != p.plan_seat_no)
   UNION ALL SELECT 'D10 every row THIS PASS closed reads agreement_tier = CONFIRMED',
          (SELECT COUNT(*) FROM new_closed WHERE agreement_tier IS DISTINCT FROM 'CONFIRMED')
   UNION ALL SELECT 'D11 no HELD_DISPUTED occupant is evicted while plan A still says NOT_GOOD',
