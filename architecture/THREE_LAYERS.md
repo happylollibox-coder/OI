@@ -459,3 +459,26 @@ invisible to all three layers, with no mechanism to return, three months before 
 
 A scan of keywords with strong last-season sales and no orders this summer showed this is systemic,
 not isolated. The query is in `FAMILY_SEAT_REGISTER.md`; run it before any seasonal pause.
+
+---
+
+## Changelog
+
+Every entry records **what was decided and why**, not merely what was edited. A doctrine change is a
+ruling: it names who made it and what evidence moved it, so a later reader can tell a considered
+position from an accident. Newest last.
+
+| when | commit | what changed, and what moved it |
+|---|---|---|
+| 2026-08-24 16:00 | `d87cbe6` | **The doctrine created.** Three layers named and bounded (Catalog / Brain / Pacing), the Catalog's four-field contract, the Brain→Pacing intents, seasonality assigned to the Catalog, the irreversibility rule, and the scorecards. Written after tracing two live failures end to end: a keyword whose correct price had been known for twenty days and never executed, and a seasonal keyword with a strong last holiday season paused as dead in August. Supersedes the "one engine" wording of P-11 — the boundary is not one engine, it is who decides worth, who decides funding, and who decides today's bid. |
+| 2026-08-24 16:04 | `695030a` | **§9 — the UI must explain top-down.** Ori: every action shown to a person is presented Catalog → Brain → Pacing, in that order, because that is the order the decision was made in. Every number names the layer that produced it, so a reader who disagrees knows whether the argument is with a valuation, an allocation or an execution — the ambiguity that let a mechanics rule quietly make an economics decision. Disagreements between layers are surfaced, never hidden. |
+| 2026-08-24 16:11 | `3b6c0c3` | **§2.1 subject types, §2.2 the grain ladder.** Ori observed that an auto-targeting group is not a real keyword. `substitutes` and its siblings are containers whose contents Amazon changes, so the subject is family × product × mode and cross-family comparison of "the same one" is meaningless — though the mode-level question is legitimate at the campaign-type grain. A real keyword shares its demand signal across families but never its worth; a product target does compare, being the same competitor. Also records that the family bar is a Catalog answer rather than a shared constant, and that bare target text is never a valid subject. |
+| 2026-08-24 16:37 | `a92960b` | **§3.2 `LEAN_IN`, §3.3 open questions.** Ori: the Brain must always ask what it could do better, *including on the earning side* — "leave it alone" guards against churn but is not a licence to stop thinking. Adds the sixth intent and names the two populations the Brain must examine besides the losing side: turns (record says losing, window says earning — protected today, never funded, though the evidence is already bought) and constrained winners. Also: the 10 % holdout is not only the engine-vs-nothing baseline, it is the only place the Brain can honestly answer its own method questions. |
+| 2026-08-24 17:09 | `11a562c` | **§2.3 evidence on probation, §2.4 `rank()`, §6 rewritten.** Ori: the Catalog must see SQP but distrust it until it earns trust — recorded with four nameable grounds rather than a disposition, and a hard limit that demand data alone may never move a verdict to `WORTH`. The Catalog must also answer *what is worth having* in a family, not only what a named subject is worth; refined from Ori's "best CVR" to expected profit contribution at the ceiling, because ranking on conversion rate alone fills an allowance with keywords too small to matter. §6 rewritten so all three layers recompute daily and are graded on their own question — including Pacing, whose scorecard nobody builds and which is the only way to test house constants like the entry anchor. §6.2 adds the attribution discipline the principle requires: only one layer may run a live method experiment in a family at a time, or the measurement is destroyed. |
+
+### How to add an entry
+
+Amend this table in the same commit as the change. Record the ruling and the evidence that moved it —
+a measurement, a failure, or an explicit decision by Ori — never just the diff. If a later ruling
+overturns an earlier one, leave the old row standing and add a new one saying what replaced it and why:
+the history of a position is part of the position.
