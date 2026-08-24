@@ -2236,6 +2236,53 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 20.8a (2026-08-24, THREE_LAYERS violation 6): THE CATALOG KEEPS ITS MEMORY.
+  -- Task 20.8 above is a CREATE OR REPLACE TABLE — every pass it destroys a day of the ladder's
+  -- verdicts, permanently and unrecoverably. THREE_LAYERS.md §6.2: "a layer cannot be graded on
+  -- predictions it does not keep"; §1.4: a layer needs "durable, queryable state of its own" a
+  -- caller can read "directly AND HISTORICALLY"; §10.4 names dwell time — how long has this been
+  -- stuck — as the single highest-value thing to fix first, because its absence obstructs the
+  -- measurement of every other violation. This step appends the snapshot 20.8 just built into
+  -- FACT_KEYWORD_STATE_HISTORY before anything can overwrite it.
+  -- IMMEDIATELY AFTER 20.8 and before every reader below, so the memory can never lag the day.
+  -- IT CHANGES NOTHING. It copies a table that was already written into a table no engine,
+  -- generator, book or bulksheet reads. It writes nothing any other task consults and cannot move
+  -- a bid, a budget or a pause. Every step below sees exactly what it would have seen without it.
+  -- IT CANNOT BREAK THE PASS. The procedure is guarded internally (a missing or empty snapshot is
+  -- a no-op, never an emptied partition) and wrapped here in the house exception handler, so a
+  -- failure logs FAIL to LOG_PIPELINE_RUNS and the pass carries straight on to 20.8b.
+  -- IDEMPOTENT ON A DOUBLE CALL, which the house assumes (SP_REFRESH_CUBE_TABLES already calls
+  -- SP_MAINTAIN_FAMILY_SEATS a second time each pass): it INSERTs the whole snapshot stamped with
+  -- this run's captured_at and then DELETEs earlier stamps FROM THE SNAPSHOT'S OWN DATES ONLY —
+  -- append-first, so a crash between the two can only leave a duplicate the next run prunes, and
+  -- no earlier partition is ever in scope. Two passes on one snapshot_date leave one copy.
+  -- Spec: architecture/THREE_LAYERS.md §8 violation 6, §10.4. SOP: architecture/KEYWORD_STATE.md.
+  -- ============================================
+  SET procedure_name = 'SP_APPEND_KEYWORD_STATE_HISTORY';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_APPEND_KEYWORD_STATE_HISTORY`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 20.8b (2026-08-22, family seat register Task 1): the seat ledger. Reads the
   -- keyword-state snapshot Task 20.8 just wrote and keeps DE_FAMILY_SEAT_LEDGER honest for the
   -- WORKING families (HARVEST book): closes seats whose keyword left the occupant set (with a

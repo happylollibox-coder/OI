@@ -25,7 +25,180 @@ difference is the PACED_WINNER overlay reading today's live pace instruction, by
 | `V_KEYWORD_STATE` | Thin read surface. No logic. `SELECT *` freezes schema — redeploy it with every FACT column change. |
 | `FN_BID_FLOOR` / `V_BID_FLOOR` | The ONE floor definition (channel × creative) and its per-ad-group resolution; the SP reaches it through `DIM_KEYWORD.ad_group_id` (unresolved ad group → `FN_BID_FLOOR(channel, NULL)`, source suffixed `_NO_ADGROUP`). |
 | `V_BID_CPC_TRANSFER` | `m_effective` (MAX over target kinds per campaign) — the A4 placement translation from affordable CPC to affordable BID, done once in the SP (`affordable_bid`, `clean_affordable_bid`). |
+| `FACT_KEYWORD_STATE_HISTORY` | THE MEMORY (v27.143). Append-only, partitioned by `snapshot_date`, clustered on `keyword_id` first. One row per (snapshot_date, campaign, keyword) holding the WHOLE snapshot row. No engine, generator or book reads it. |
+| `SP_APPEND_KEYWORD_STATE_HISTORY` | The write step. Orchestrator Task 20.8a, immediately after 20.8. Append-first, idempotent, schema-evolving. Cannot break the pass. |
+| `V_CATALOG_DWELL` | How long a subject has been in its state, what it changed from, how overdue its appointment is — with an explicit basis, never a bare number. Reads the history only. |
 | `tools/build_reprice_bulksheet.py` | THE ONLY EXECUTOR. NO ENGINE reads the state table — the new states move bids exclusively through the manual reprice book Ori uploads by hand. |
+
+## THE HISTORY — the Catalog's memory (v27.143, 2026-08-24)
+
+**What was wrong.** `SP_SNAPSHOT_KEYWORD_STATE` builds `FACT_KEYWORD_STATE` with `CREATE OR REPLACE
+TABLE`. The table therefore holds exactly one snapshot, and every orchestrator pass — several a day
+— destroyed the previous one permanently. `THREE_LAYERS.md` records this as violation 6, and §10.4
+names its consequence as the single highest-value thing in the account to fix first: with one
+snapshot, **no "how long has this been stuck" question is answerable anywhere**, which obstructs
+the measurement of every other violation. §6.2 states the second consequence: *a layer cannot be
+graded on predictions it does not keep*, so the Catalog's own scorecard — "was the valuation
+right?" — was not merely unbuilt, it was impossible.
+
+**What was built.** Three objects, all ADDITIVE. Nothing in the ladder's verdicts, the bar, the
+floors or the book changed; the history records what was already being recorded and nothing reads
+it that can act.
+
+### What the history keeps, and why the whole row
+
+The whole snapshot row, plus provenance. The temptation is a narrow `(date, subject, state)` table,
+which is much smaller and answers dwell. It cannot answer the question §6 actually poses. A
+prediction is not the label — it is the verdict **together with the evidence and the arithmetic
+that justified it**: the settled record it was read off, the family bar it was judged against, the
+noise band that decided whether the gap was real, the affordable price and the floor that made the
+move executable or not, the guard's cleaned re-reading, and the appointment the ladder promised. "In
+August you said this keyword's price was X — was it?" needs X, not `REPRICE`. The storage argument
+runs the other way from intuition: this table is small, and a column not kept is a column that can
+**never** be recovered, because the source is destroyed nightly.
+
+Three provenance columns say where each row came from, so a recovered row is never mistaken for a
+live-appended one: `captured_at` (when the row was written here — *not* when the Catalog computed
+it, which is `snapshot_date`), `source` (`ORCHESTRATOR` | `BACKFILL_TIME_TRAVEL`), and
+`source_detail` naming exactly what was read.
+
+### Schema evolution — §2.7, §2.8 and §4 are columns that do not exist yet
+
+`confidence` (§2.7), market volume (§2.8) and seasonality (§4) will all add columns to the ladder.
+The append step contains **no hard-coded column list**. Every run it reads the live column set of
+`FACT_KEYWORD_STATE` from `INFORMATION_SCHEMA`, issues `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+for anything the history lacks, and inserts **by column name**. So:
+
+- a column the Catalog gains tonight is in the history tonight, with no edit to any file;
+- partitions written before that night keep NULL for it — the honest reading, since the Catalog did
+  not say it then, and a backfilled value would be a fabrication;
+- a column REMOVED upstream is never dropped here; it keeps what it held and goes NULL going
+  forward. Append-only means the record of a retired field outlives the field.
+
+The seeded partitions already prove this: the earliest ones come from a 22-column era of the
+procedure and sit in the same table as the current wide rows, neither distorting the other. Confirm
+the eras with a `COUNTIF(family_bar IS NOT NULL)` grouped by `snapshot_date`.
+
+One name collision is deliberately left LOUD rather than silent: if the ladder ever publishes a
+column called `captured_at`, `source` or `source_detail`, the generated INSERT names it twice and
+the step errors. The orchestrator logs FAIL, the pass continues, and a person renames the column.
+Silently dropping it would put a hole in the memory no later run could fill.
+
+### Idempotency — and why the order is append-then-prune
+
+Assume any procedure may be called twice a night; the orchestrator already calls
+`SP_MAINTAIN_FAMILY_SEATS` a second time each pass through `SP_REFRESH_CUBE_TABLES`. The step
+therefore:
+
+1. **INSERTs** the whole snapshot, stamped with this run's `captured_at`;
+2. **DELETEs**, *from the snapshot's own `snapshot_date` values only*, every row stamped earlier.
+
+Two passes on one `snapshot_date` leave exactly one copy. The order is not arbitrary. A
+delete-then-insert has its failure pointing the wrong way — a crash between the statements destroys
+a day of memory, which is the exact defect this object exists to end. Append-first can only ever
+leave a duplicate, which the next run prunes. And note what the DELETE cannot reach: it is keyed on
+the snapshot's own dates, so **no pass can rewrite a day it did not produce**.
+
+### It cannot break the pass
+
+Two independent guarantees. The procedure is guarded internally — a missing or empty snapshot
+returns having done nothing, never emptying a partition — and the orchestrator wraps the CALL in the
+house `BEGIN ... EXCEPTION WHEN ERROR` block, which logs FAIL to `LOG_PIPELINE_RUNS` and carries
+straight on to Task 20.8b. Every step below 20.8a sees exactly what it would have seen without it.
+
+### What it makes answerable
+
+Read it through **`V_CATALOG_DWELL`**, one row per subject:
+
+- **How long has this been in this state, and what did it change from.** Measured from OBSERVATION.
+- **Was the appointment kept?** `days_overdue` against the ladder's own `next_check_date`.
+- **How unstable is this subject?** `state_changes_28d` / `state_changes_90d`, over *observed* days.
+- **What vanished?** A subject that leaves the snapshot keeps its row (`is_current = FALSE`,
+  `absent_since`, `absent_days`) with the last verdict ever given it. This is doctrine Appendix B's
+  failure — a keyword paused into invisibility — and a one-snapshot table cannot even report it.
+- **Was the valuation right?** The history carries `affordable_cpc`, `affordable_bid`, `family_bar`
+  and the settled record per day, which is the raw material of §6's Catalog scorecard. The scorecard
+  itself is NOT built; the evidence for it now accrues, which it previously did not.
+
+### Honest degradation — the rule the view is built around
+
+On the day the history starts, every subject has been in its state for "at least one day" and
+nothing can be said about how much longer. A view that printed a number there would manufacture the
+very memory violation 6 is about. So `days_in_state` is **always the floor** — the number that is
+certainly true — and `dwell_basis` says how it was arrived at:
+
+| `dwell_basis` | meaning | `days_in_state_max` |
+|---|---|---|
+| `EXACT` | the change was observed: the previous snapshot for this subject is the day before the run started, and it read a different state | equals `days_in_state` |
+| `BETWEEN` | the change fell inside an observation gap — it happened after the previous observation and by the run start | a real, larger bound |
+| `AT_LEAST` | the run reaches back to the subject's FIRST row in the history. The true start is UNKNOWN and may be far earlier | **NULL, deliberately** — so an arithmetic consumer cannot average a censored value into a fake mean |
+
+A consumer reading `days_in_state` alone is therefore told *less* than the truth and never more.
+`dwell_gap_days` counts days inside the run for which the history HAS a snapshot but this subject has
+no row — a run with holes is a weaker claim than one without, and it is said out loud rather than
+hidden. `state_changes_28d` / `_90d` are counts over windows the history may not yet span; read them
+against `history_days`, which every row carries.
+
+### `state_since` is NOT when the state began — and the view says so
+
+`FACT_KEYWORD_STATE.state_since` has a misleading name. Read the procedure: it is the park date for
+a park, `floor_since` on probation, and otherwise the last bid change or the last applied change-log
+row. It is a proxy for "when did something last happen to this keyword", it is NULL for a large
+share of the account, and it is derived from the change log rather than from the ladder's own
+verdicts — so it can move while the state stands still, and stand still while the state moves. The
+v1 honesty note "`state_since` is best-effort" understated it.
+
+`V_CATALOG_DWELL` therefore measures dwell from observation and publishes the declared column beside
+it as `state_since_declared`, with `declared_agrees`. Measure the disagreement rather than trusting
+a figure written here:
+
+```sql
+SELECT COUNTIF(NOT COALESCE(declared_agrees, FALSE)) AS disagree,
+       COUNTIF(state_since_declared IS NULL)        AS declared_null,
+       COUNT(*)                                     AS subjects
+FROM `onyga-482313.OI.V_CATALOG_DWELL`;
+```
+
+### Where the history came from, and why it starts where it does
+
+No copy of an earlier snapshot existed anywhere in the warehouse — no `TMP_`, no `T_`, no cube
+materialisation, no export. What did exist is **BigQuery's own seven-day table history**: the
+versions `CREATE OR REPLACE` replaced are still readable through `FOR SYSTEM_TIME AS OF`, and they
+carry their TRUE `snapshot_date`. `scripts/bigquery/migrations/2026-08-24_keyword_state_history_backfill.sql`
+recovered every day that window held, taking for each date the LAST version that carried it — the
+same rule the live append follows, since the last pass of a day is that day's final word. Nothing
+was interpolated, synthesised or dated by inference, and `source_detail` on every recovered row
+names the exact time-travel timestamp it came from.
+
+**That file has a fuse and is committed as an audit record, not a repeatable step.** Its timestamps
+leave the seven-day window about a week after it ran, and it then becomes unrunnable. Everything
+later comes from the nightly append. The history is only ever this thin once — check where it
+actually begins:
+
+```sql
+SELECT MIN(snapshot_date) AS history_from, MAX(snapshot_date) AS history_to,
+       COUNT(DISTINCT snapshot_date) AS days, COUNT(*) AS rows,
+       COUNTIF(source = 'BACKFILL_TIME_TRAVEL') AS recovered_rows
+FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`;
+```
+
+### Operating it
+
+- **Acceptance:** `scripts/bigquery/tests/KEYWORD_STATE_HISTORY_acceptance.sql` — eleven checks, every
+  row must read PASS. It asserts partitioning, row-count parity with the snapshot, one row per
+  (date, subject), partition integrity, that no earlier partition is ever rewritten, dwell coverage,
+  honest degradation, bound arithmetic, that the view invents no subject, that every ladder column
+  reaches the history, and content fidelity for the live date.
+- **If `SP_SNAPSHOT_KEYWORD_STATE` is ever run WITHOUT the append**, checks C02 and C11 go red until
+  the next pass. That is not a false alarm — it is the history being stale. The fix is safe to run
+  at any time:
+
+  ```sql
+  CALL `onyga-482313.OI.SP_APPEND_KEYWORD_STATE_HISTORY`();
+  ```
+
+- **Adding a ladder column needs no change here.** Deploy it upstream; the next pass carries it.
+  C10 is the alarm if it somehow does not.
 
 ## The states (first match wins — the derivation order IS the doctrine)
 
@@ -292,7 +465,10 @@ terms — and it is N_f-condemned (62 orders ≥ N_f 20), so the book marks it C
 ## v1 honesty notes (still true)
 
 - `SEASONAL_HOLD` is NOT yet a state (the gate's ENTRY_BLOCK verdict is not snapshotted).
-- `state_since` is best-effort.
+- `state_since` is best-effort — and worse than that phrase implies. See the history section:
+  it is the park date / `floor_since` / last bid change, NULL for much of the account, and it can
+  move while the state stands still. `V_CATALOG_DWELL` measures dwell from observation instead and
+  publishes `state_since` beside it as `state_since_declared` with `declared_agrees`.
 - The 360° SIGNAL PANEL remains the task's second half.
 - The negate valve for guard-excluded terms is exposed as columns (`ns_zero_ord_*`) but not yet
   wired into the coach pipeline's negate flow.
