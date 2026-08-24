@@ -61,6 +61,11 @@ confidence and volume; the Brain decides.
 
 ### 1.2 The Brain is the buyer
 
+**The bar** is the family's break-even: how many gross-profit dollars an ad dollar must return for a
+subject to be worth its money. It sits below 1.0 because advertising also drives organic sales — the
+organic halo — so a subject can clear its bar while returning less than a dollar on ads alone. It is a
+property of a family, not of a keyword, and (§2.2) it is a Catalog answer rather than a shared constant.
+
 The Brain holds the pot (the 80/20 allowance per family) and spends it. It asks the Catalog per
 keyword, compares **within the family** — because the pot, the bar and the halo are all family-scoped
 — and stops when marginal return reaches the bar or the money runs out.
@@ -260,13 +265,25 @@ The Brain issues an intent, a constraint, and — when it is buying an answer �
 |---|---|---|
 | `REPAIR · ceiling C` | worth is known; do not pay above C | move to the ceiling; **never exceed it** |
 | `TEST · seat $X/day · N clicks by date D` | worth is unknown and we are buying the answer | push for clicks within the budget; report back if unbuyable |
-| `PARK` | not worth **now**; keep it alive | hold at the channel floor |
+| `PARK` | not worth **now**; keep it alive | hold at the channel floor **and owe a periodic re-test** — see below |
 | `STOP` | not worth in any season | execute the pause |
 | `EARN` | it is working; do not disturb | small daily maintenance only |
 
 **Two groups, and no third.** Every keyword is either **answered** (the Brain acts) or has an **open
 question** (the Brain funds it and demands a verdict). *"Nothing to do"* is not a legal state — it is
 how keywords sit in limbo, spending or dormant, owned by no one.
+
+**A park is not a resting place — it carries a re-test obligation.** A parked subject takes no clicks, so
+it generates no evidence, so no layer can ever discover that it recovered: the Catalog learns nothing new,
+the Brain's window stays empty, and the subject can sit forever. Measured (§10.1), the overwhelming
+majority of parked subjects take zero clicks in a week. A park is therefore an **absorbing state** unless
+something deliberately buys fresh evidence.
+
+So Pacing owes a park periodic clicks — enough to produce a verdict, not enough to bleed — and the Brain
+funds that re-test exactly as it funds any other question, with a budget and a deadline (`TEST`). If the
+re-test buys clicks and no orders, the answer is confirmed and the park continues. If it buys orders, the
+Brain promotes. **The re-test cadence is a setting, not code** (§3.3), and therefore something §6.1 can
+answer with evidence.
 
 **The seat must fund the answer it demands.** If the Brain wants N clicks by date D, the seat is
 priced `(N x expected CPC) / days`, not by what the keyword happened to spend last window. A
@@ -296,6 +313,15 @@ So the Brain carries a sixth intent:
 | the Brain issues | meaning | Pacing's obligation |
 |---|---|---|
 | `LEAN_IN · ceiling C` | the evidence improved and we believe it; spend more here | raise toward the new ceiling, gradually (§3.1 — this is a raise) |
+
+And one intent that is not about a single subject at all, which §2.6 makes possible:
+
+| the Brain issues | meaning | Pacing's obligation |
+|---|---|---|
+| `CARRY · vehicle V` | this demand should be bought through this format, placement or creative rather than another | shift budget and bids toward V; do not re-open the choice daily |
+
+A vehicle decision is slower-moving than a bid and belongs to the Brain, because it is an allocation
+question — which instrument carries the family's money — not an auction question.
 
 Two populations it must look at every window, not just the losing side:
 
@@ -518,7 +544,7 @@ The order is fixed, because it is the order in which the decision was actually m
 | shown | from | answers |
 |---|---|---|
 | **1. Catalog** — what this is worth | the Catalog's answer for the window in question, with its confidence and the season if it matters | *why do we believe this?* |
-| **2. Brain** — what we decided | the intent (`REPAIR` / `TEST` / `PARK` / `STOP` / `EARN`), the ceiling or the seat and its budget, and why this and not something else in the family | *why are we spending — or not spending — here?* |
+| **2. Brain** — what we decided | the intent (`EARN` / `LEAN_IN` / `REPAIR` / `TEST` / `PARK` / `STOP`), the ceiling or the seat and its budget, and why this and not something else in the family | *why are we spending — or not spending — here?* |
 | **3. Pacing** — what happens in the account | today's bid, the path (immediately or walked), the floor or cap that binds it, and what reaches Amazon | *what will actually change?* |
 
 Rules for the surface:
@@ -611,7 +637,9 @@ Three of §8's violations were wrong, and are corrected in place:
 
 ### 10.5 How to re-run this
 
-Every figure came from a query recorded in the research output. When re-measuring: keep the unit labels,
+Every query behind §10 is committed at `docs/superpowers/specs/2026-08-24-three-layers-baseline.md`
+— 76 of them, grouped by probe, with the measurement window hard-coded so a re-run is a re-run.
+Move the dates and keep everything else. When re-measuring: keep the unit labels,
 re-derive the account context first (a finding's share of the account matters more than its absolute
 size), and apply §6.3 — for each finding that has grown, name the innocent explanation and test it before
 concluding the system got worse.
