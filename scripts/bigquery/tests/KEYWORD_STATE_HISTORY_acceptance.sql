@@ -49,6 +49,28 @@
 --       NOTE: if SP_SNAPSHOT_KEYWORD_STATE is ever run WITHOUT the append step that follows it,
 --       C02 and C11 go red until the next pass. That is not a false alarm — it is the history
 --       being stale — and the fix is to CALL `onyga-482313.OI.SP_APPEND_KEYWORD_STATE_HISTORY`().
+--   C12 ONE captured_at PER snapshot_date (added v27.144). This is the invariant the write step's
+--       prune enforces, stated at the stamp level rather than the row level: if an append's INSERT
+--       succeeds and its prune fails, the date carries two stamps. C03 sees the resulting duplicate
+--       rows; C12 names the cause, and it is the check that proves the prune is now keyed on the
+--       history's OWN duplicate stamps rather than on whichever date the live snapshot happens to
+--       carry. Under the old date-scoped prune a strand left on the last pass of an LA day could
+--       never be reached again by any later call — C12 would have stayed red permanently.
+--   C13 PROVENANCE IS MONOTONE IN snapshot_date (added v27.144). A day's captured_at may never be
+--       later than the captured_at of a day that follows it. This is what a restamp looks like from
+--       the data: a pass where Task 20.8 FAILED still reaches the append with the previous build's
+--       table standing, and re-copying it would stamp an older partition with tonight's time — the
+--       rows identical, the provenance a lie about when the Catalog spoke. GUARD 3 in the write
+--       step refuses that copy; C13 is the alarm if it ever stops doing so. Strictly stronger than
+--       C05, which compares older partitions only against the newest one.
+--       ONE BENIGN PATH CAN TRIP C13, AND IT IS LEFT LOUD RATHER THAN EXCUSED. If the history ever
+--       MISSES a day and a later pass then runs against a stale snapshot carrying exactly that
+--       missing day, GUARD 3 lets the append through — deliberately, because a day the history does
+--       not hold is memory GAINED, not provenance rewritten — and the gap-filling partition lands
+--       with a stamp later than the day after it. C13 goes red on an out-of-order write that lost
+--       nothing. That is the right trade: the check names something a person should look at, and
+--       silencing it would also silence the restamp it exists to catch. Separate the two by reading
+--       the offending partition's source_detail, which names what was read and when.
 -- =============================================================================================
 WITH
 live AS (
@@ -183,10 +205,27 @@ c11 AS (
             SELECT * FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`
              WHERE snapshot_date = (SELECT d FROM live)) h
             ON h.campaign_id = s.campaign_id AND h.keyword_id = s.keyword_id) AS violations
+),
+c12 AS (
+  SELECT 'C12 one captured_at per snapshot_date: no stranded second copy' AS check_name,
+         (SELECT COUNT(*) FROM (
+            SELECT snapshot_date
+            FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`
+            GROUP BY snapshot_date
+            HAVING COUNT(DISTINCT captured_at) > 1)) AS violations
+),
+c13 AS (
+  SELECT 'C13 provenance is monotone in snapshot_date: no day restamped later' AS check_name,
+         (SELECT COUNTIF(ts > next_ts) FROM (
+            SELECT MAX(captured_at) AS ts,
+                   LEAD(MAX(captured_at)) OVER (ORDER BY snapshot_date) AS next_ts
+            FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`
+            GROUP BY snapshot_date)) AS violations
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c04 UNION ALL SELECT * FROM c05 UNION ALL SELECT * FROM c06
       UNION ALL SELECT * FROM c07 UNION ALL SELECT * FROM c08 UNION ALL SELECT * FROM c09
-      UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11)
+      UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11 UNION ALL SELECT * FROM c12
+      UNION ALL SELECT * FROM c13)
 ORDER BY check_name;

@@ -91,13 +91,32 @@ Assume any procedure may be called twice a night; the orchestrator already calls
 therefore:
 
 1. **INSERTs** the whole snapshot, stamped with this run's `captured_at`;
-2. **DELETEs**, *from the snapshot's own `snapshot_date` values only*, every row stamped earlier.
+2. **PRUNEs**: within any `snapshot_date` now carrying more than one `captured_at`, keeps the newest
+   stamp and drops the rest.
 
 Two passes on one `snapshot_date` leave exactly one copy. The order is not arbitrary. A
 delete-then-insert has its failure pointing the wrong way — a crash between the statements destroys
 a day of memory, which is the exact defect this object exists to end. Append-first can only ever
-leave a duplicate, which the next run prunes. And note what the DELETE cannot reach: it is keyed on
-the snapshot's own dates, so **no pass can rewrite a day it did not produce**.
+leave a duplicate.
+
+**That duplicate is repaired by any later call, on any date** (v27.144). The prune used to be keyed
+on whichever `snapshot_date` the live snapshot happened to carry, which made the self-healing
+conditional in exactly the case it was claimed for: `snapshot_date` is
+`CURRENT_DATE('America/Los_Angeles')`, so a strand left when the INSERT succeeded and the prune
+failed on the *last* pass of an LA day could never be reached again — every later pass carried a
+different date. It is now stated as the invariant it always meant: **a `snapshot_date` holds exactly
+one `captured_at`, and the newest wins.** The prune runs before the append as well as after, so a
+call that adds nothing today still heals a strand left by an earlier one. `C12` is the alarm.
+
+**A pass that did not build the snapshot may not restamp it** (v27.144). Task 20.8 sits in its own
+`BEGIN ... EXCEPTION` block, so a pass where the snapshot build FAILS still reaches 20.8a — with the
+previous build's table standing. Re-copying it would give an older partition tonight's `captured_at`
+and a `source_detail` naming a read time at which the Catalog said nothing: the rows identical, the
+provenance a lie. GUARD 3 refuses it — a snapshot older than the current LA date whose day the
+history already holds is not appended. A stale snapshot carrying a date the history does *not* hold
+still is, because that is memory gained rather than provenance rewritten. What stays writable is the
+LA day the pass is running in, which is the day it belongs to, and there re-copying is the intended
+"the day's final word" semantics. `C13` is the alarm.
 
 ### It cannot break the pass
 

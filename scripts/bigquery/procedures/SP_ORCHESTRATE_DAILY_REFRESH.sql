@@ -2253,9 +2253,20 @@ BEGIN
   -- failure logs FAIL to LOG_PIPELINE_RUNS and the pass carries straight on to 20.8b.
   -- IDEMPOTENT ON A DOUBLE CALL, which the house assumes (SP_REFRESH_CUBE_TABLES already calls
   -- SP_MAINTAIN_FAMILY_SEATS a second time each pass): it INSERTs the whole snapshot stamped with
-  -- this run's captured_at and then DELETEs earlier stamps FROM THE SNAPSHOT'S OWN DATES ONLY —
-  -- append-first, so a crash between the two can only leave a duplicate the next run prunes, and
-  -- no earlier partition is ever in scope. Two passes on one snapshot_date leave one copy.
+  -- this run's captured_at and then PRUNEs any snapshot_date carrying more than one captured_at
+  -- down to its newest stamp — append-first, so a crash between the two can only leave a duplicate,
+  -- never a lost day. Two passes on one snapshot_date leave one copy. The prune is keyed on the
+  -- history's OWN duplicate stamps, not on the dates the live snapshot happens to carry, and runs
+  -- before the append as well as after, so a strand on ANY date is repaired by ANY later call
+  -- (v27.144 — the old date-scoped prune could never reach a strand left on the last pass of an LA
+  -- day, because every later pass carried a different date).
+  -- IT WILL NOT RESTAMP A DAY THIS PASS DID NOT BUILD (v27.144). Task 20.8 above has its own
+  -- exception handler, so a pass where the snapshot build FAILED still reaches this task with the
+  -- previous build's table standing. Copying it again would stamp an older partition with tonight's
+  -- captured_at and a source_detail naming a read time at which the Catalog said nothing. The
+  -- procedure's GUARD 3 refuses that: a snapshot older than the current LA date whose day the
+  -- history already holds is not appended. A stale snapshot carrying a date the history does NOT
+  -- hold still is — that is memory gained, not provenance rewritten.
   -- Spec: architecture/THREE_LAYERS.md §8 violation 6, §10.4. SOP: architecture/KEYWORD_STATE.md.
   -- ============================================
   SET procedure_name = 'SP_APPEND_KEYWORD_STATE_HISTORY';
