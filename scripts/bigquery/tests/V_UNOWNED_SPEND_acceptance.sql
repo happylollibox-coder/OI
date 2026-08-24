@@ -31,6 +31,17 @@
 --       reads it — it creates and mutates nothing
 --   A10 lineage — the population and the spend equal the baseline probe's own query, re-run
 --       (docs/superpowers/specs/2026-08-24-three-layers-baseline.md, "OUTSIDE THE CATALOG ENTIRELY")
+--   A11 every counted population the summary PUBLISHES equals the fact its column name claims,
+--       re-derived from V_UNOWNED_SPEND itself — per reason class and for the total. Six figures:
+--       unjudgeable (judgeability <> 'HAS_BAR'), no bar (family_bar IS NULL), no family
+--       (family IS NULL), each as a subject count and as spend/day. This exists because a name and
+--       a definition drifted apart: the family columns were once COUNTIF(judgeability =
+--       'NO_BAR_NO_FAMILY'), and judgeability applies READING precedence first, so every subject
+--       with no family that took fewer than the reading threshold of clicks was labelled
+--       TOO_THIN_TO_READ and silently dropped out of a column whose name promised a family census.
+--       Run failing-first against the defective summary it returned violations = 4.
+--       Tolerance on the spend arms is 0.006: each summary figure is a single ROUND to cents of the
+--       same subset this assertion sums unrounded, so the honest gap is at most 0.005.
 -- =============================================
 WITH
 u AS (SELECT * FROM `onyga-482313.OI.V_UNOWNED_SPEND`),
@@ -109,6 +120,45 @@ cols AS (
 baseline AS (
   SELECT COUNTIF(c.keyword_id IS NULL) AS rows_outside, ROUND(SUM(IF(c.keyword_id IS NULL, p.spend_d, 0)), 2) AS spend_outside
   FROM pairs p LEFT JOIN cat c ON c.campaign_id = p.campaign_id AND c.keyword_id = p.keyword_id
+),
+-- A11: the summary's published populations, re-derived from the row-level view by their own names.
+-- Grouped by class and unioned with the total, exactly the shape the summary itself builds.
+red AS (
+  SELECT reason_class AS rc,
+         COUNTIF(judgeability <> 'HAS_BAR')                            AS n_uj,
+         SUM(IF(judgeability <> 'HAS_BAR', spend_per_day_28d, 0))      AS sp_uj,
+         COUNTIF(family_bar IS NULL)                                   AS n_nb,
+         SUM(IF(family_bar IS NULL, spend_per_day_28d, 0))             AS sp_nb,
+         COUNTIF(family IS NULL)                                       AS n_nf,
+         SUM(IF(family IS NULL, spend_per_day_28d, 0))                 AS sp_nf
+  FROM u GROUP BY reason_class
+  UNION ALL
+  SELECT '__ALL__',
+         COUNTIF(judgeability <> 'HAS_BAR'),
+         SUM(IF(judgeability <> 'HAS_BAR', spend_per_day_28d, 0)),
+         COUNTIF(family_bar IS NULL),
+         SUM(IF(family_bar IS NULL, spend_per_day_28d, 0)),
+         COUNTIF(family IS NULL),
+         SUM(IF(family IS NULL, spend_per_day_28d, 0))
+  FROM u
+),
+named AS (
+  SELECT
+    COUNTIF(s.unjudgeable_subjects <> red.n_uj)
+  + COUNTIF(ABS(s.unjudgeable_spend_per_day_28d - red.sp_uj) > 0.006)
+  + COUNTIF(s.subjects_with_no_bar <> red.n_nb)
+  + COUNTIF(ABS(s.no_bar_spend_per_day_28d - red.sp_nb) > 0.006)
+  + COUNTIF(s.subjects_with_no_family <> red.n_nf)
+  + COUNTIF(ABS(s.no_family_spend_per_day_28d - red.sp_nf) > 0.006)
+  -- and the nesting the header claims, checked rather than asserted in prose
+  + COUNTIF(s.subjects_with_no_family > s.subjects_with_no_bar)
+  + COUNTIF(s.subjects_with_no_bar > s.unjudgeable_subjects)
+  -- every class present in the view must have a summary row, or the join hid a mismatch
+  + (SELECT IF(COUNT(*) = (SELECT COUNT(*) FROM red), 0, 1) FROM s)                AS n,
+    STRING_AGG(FORMAT('%s no-family %d/$%.2f (true %d/$%.2f)', s.reason_class,
+                      s.subjects_with_no_family, s.no_family_spend_per_day_28d,
+                      red.n_nf, red.sp_nf), ' | ' ORDER BY s.reason_class)         AS detail
+  FROM s JOIN red ON red.rc = s.reason_class
 ),
 vocab AS (
   SELECT ['SENTINEL_TARGET_ID', 'CAMPAIGN_ABSENT_FROM_DIM', 'CAMPAIGN_NOT_ENABLED',
@@ -265,5 +315,12 @@ SELECT 10, 'A10 lineage — population and spend equal the baseline probe, re-ru
                  ' pairs at $', (SELECT FORMAT('%.2f', SUM(spend_per_day_28d)) FROM u), '/day over ',
                  (SELECT CAST(COUNT(*) AS STRING) FROM u), ' target-grain rows')
    FROM baseline b)
+
+UNION ALL
+SELECT 11, 'A11 every published population equals the fact its column name claims',
+  (SELECT n FROM named),
+  (SELECT n FROM named) = 0,
+  (SELECT CONCAT('per-class check of unjudgeable / no-bar / no-family, count and spend: ', detail)
+   FROM named)
 
 ORDER BY ord;

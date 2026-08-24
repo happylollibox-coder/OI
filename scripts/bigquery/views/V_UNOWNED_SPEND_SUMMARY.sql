@@ -24,12 +24,21 @@
 -- unjudgeable_subjects / unjudgeable_spend_per_day_28d count exactly how much of the money cannot be
 -- scored at all, which is a fact about the hole rather than about the subjects.
 --
+-- THREE NESTED POPULATIONS, AND EACH IS COUNTED BY THE FACT ITS NAME CLAIMS. unjudgeable = has no
+-- usable bar OR too few clicks to read. no_bar = its campaign maps to no family, or to an INVEST
+-- family that is bar-exempt. no_family = its campaign maps to no family at all — the ATTRIBUTION
+-- question, the one that asks how much of this money could even be assigned to a product line.
+-- None of the three is derived from a judgeability label, because judgeability applies reading
+-- precedence FIRST: a subject with no family that took too few clicks reads TOO_THIN_TO_READ, and a
+-- family count taken off that label silently drops it. It did, before 2026-08-25; A11 now asserts
+-- all six figures against their own re-derivation, per class and for the total.
+--
 -- REPORTING ONLY. Reads. Writes nothing. Read by no engine, no book, no generator, not in the
 -- orchestrator. Asking changes nothing (§1.4).
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_UNOWNED_SPEND_SUMMARY`
 OPTIONS (
-  description = "THE DAILY NUMBER FOR MONEY NO LAYER CAN SEE (2026-08-25). Companion to V_UNOWNED_SPEND: how much of the account spends with no row in FACT_KEYWORD_STATE, what it returns, and its share of the account. One row per reason_class — SENTINEL | CAMPAIGN_OUTSIDE_UNIVERSE | SUBJECT_OUTSIDE_UNIVERSE | DROPPED_DOWNSTREAM — plus a grand total under reason_class = '__ALL__'. The classes partition the total exactly and sum to it (asserted in scripts/bigquery/tests/V_UNOWNED_SPEND_acceptance.sql), and the total reconciles against FACT_AMAZON_ADS: unowned + owned = the account's spend over the same window. READ THE TWO WINDOWS TOGETHER — spend_per_day_28d is the headline, spend_per_day_7d is the live half, and they diverge a lot: spend on a paused campaign is a tail that decays on its own, spend under the sentinel is money leaving today. Both carry their share of the account, which is the figure that survives the account changing size. NO VERDICT IS ISSUED: gp_roas is printed and no bar is applied to a population that does not own one; unjudgeable_subjects and unjudgeable_spend_per_day_28d say how much of it cannot be scored at all. Every row carries one plain-language sentence. REPORTING ONLY — writes nothing, read by no engine or book, not in the orchestrator. SOP: architecture/UNOWNED_SPEND.md."
+  description = "THE DAILY NUMBER FOR MONEY NO LAYER CAN SEE (2026-08-25). Companion to V_UNOWNED_SPEND: how much of the account spends with no row in FACT_KEYWORD_STATE, what it returns, and its share of the account. One row per reason_class — SENTINEL | CAMPAIGN_OUTSIDE_UNIVERSE | SUBJECT_OUTSIDE_UNIVERSE | DROPPED_DOWNSTREAM — plus a grand total under reason_class = '__ALL__'. The classes partition the total exactly and sum to it (asserted in scripts/bigquery/tests/V_UNOWNED_SPEND_acceptance.sql), and the total reconciles against FACT_AMAZON_ADS: unowned + owned = the account's spend over the same window. READ THE TWO WINDOWS TOGETHER — spend_per_day_28d is the headline, spend_per_day_7d is the live half, and they diverge a lot: spend on a paused campaign is a tail that decays on its own, spend under the sentinel is money leaving today. Both carry their share of the account, which is the figure that survives the account changing size. NO VERDICT IS ISSUED: gp_roas is printed and no bar is applied to a population that does not own one; unjudgeable_subjects / unjudgeable_spend_per_day_28d say how much of it cannot be scored at all (no usable bar, or too few clicks to read), subjects_with_no_bar / no_bar_spend_per_day_28d how much has no bar (no family, or an INVEST family that is bar-exempt), and subjects_with_no_family / no_family_spend_per_day_28d how much cannot be attributed to a product family at all. The three nest, and each is counted from the fact it names rather than from a judgeability label — judgeability applies reading precedence first, so a label-derived family count silently drops the subjects too thin to read. Asserted per class and for the total by A11 in scripts/bigquery/tests/V_UNOWNED_SPEND_acceptance.sql. Every row carries one plain-language sentence. REPORTING ONLY — writes nothing, read by no engine or book, not in the orchestrator. SOP: architecture/UNOWNED_SPEND.md."
 )
 AS
 WITH
@@ -69,10 +78,22 @@ agg AS (
     SUM(g.clicks_28d)                                                 AS clicks_28,
     SUM(g.orders_28d)                                                 AS orders_28,
     COUNTIF(g.spending_in_last_7d)                                    AS subjects_spending_in_last_7d,
+    -- THREE NESTED POPULATIONS, EACH MEASURED BY ITS OWN NAME AND NOT BY A PROXY.
+    --   unjudgeable  = judgeability <> 'HAS_BAR'   (no family, an exempt family, or too thin to read)
+    --   no bar       = family_bar IS NULL          (no family, or an INVEST family that is bar-exempt)
+    --   no family    = family IS NULL              (the campaign maps to no family at all)
+    -- They nest: every no-family subject has no bar, and every no-bar subject is unjudgeable.
+    -- They must be counted from the fact they name, NOT
+    -- from a judgeability label: judgeability applies READING precedence first, so a subject with no
+    -- family that took fewer than the reading threshold of clicks is labelled TOO_THIN_TO_READ and
+    -- would vanish from a family count derived from the label. That is exactly the bug this shape
+    -- fixes, and A11 asserts every one of these six figures against its own re-derivation.
     COUNTIF(g.judgeability <> 'HAS_BAR')                              AS unjudgeable_subjects,
     SUM(IF(g.judgeability <> 'HAS_BAR', g.spend_per_day_28d, 0))      AS unjudgeable_spend_28,
-    COUNTIF(g.judgeability = 'NO_BAR_NO_FAMILY')                      AS subjects_with_no_family,
-    SUM(IF(g.judgeability = 'NO_BAR_NO_FAMILY', g.spend_per_day_28d, 0)) AS no_family_spend_28,
+    COUNTIF(g.family_bar IS NULL)                                     AS subjects_with_no_bar,
+    SUM(IF(g.family_bar IS NULL, g.spend_per_day_28d, 0))             AS no_bar_spend_28,
+    COUNTIF(g.family IS NULL)                                         AS subjects_with_no_family,
+    SUM(IF(g.family IS NULL, g.spend_per_day_28d, 0))                 AS no_family_spend_28,
     MAX(g.days_in_current_run)                                        AS longest_run_days,
     STRING_AGG(DISTINCT g.reason ORDER BY g.reason)                   AS reasons_present
   FROM grouped g
@@ -105,6 +126,8 @@ SELECT
   ROUND(SAFE_DIVIDE(acct.a_gp_7, acct.a_spend_7), 4)                  AS account_gp_roas_7d,
   agg.unjudgeable_subjects,
   ROUND(agg.unjudgeable_spend_28, 2)                                  AS unjudgeable_spend_per_day_28d,
+  agg.subjects_with_no_bar,
+  ROUND(agg.no_bar_spend_28, 2)                                       AS no_bar_spend_per_day_28d,
   agg.subjects_with_no_family,
   ROUND(agg.no_family_spend_28, 2)                                    AS no_family_spend_per_day_28d,
   agg.longest_run_days,
@@ -132,6 +155,13 @@ SELECT
               FORMAT('%.2f', agg.unjudgeable_spend_28),
               '/day, cannot be judged at all — no family bar, an exempt family, or too few clicks ',
               'to read — so no verdict is available for that money at any price. ')),
+    IF(agg.subjects_with_no_family = 0,
+       'Every subject here maps to a family, so all of this money is at least attributable.',
+       CONCAT(CAST(agg.subjects_with_no_family AS STRING), ' carry no family at all — $',
+              FORMAT('%.2f', agg.no_family_spend_28),
+              '/day that cannot even be attributed to a product family, let alone judged. ',
+              'That count is of subjects whose campaign maps to no family, not of subjects wearing ',
+              'a particular judgeability label, and it includes ones too thin to read.')),
     ' Nothing here is a verdict: this is a census of subjects the Catalog has never met.'
   )                                                                   AS sentence,
   CURRENT_DATE('America/Los_Angeles')                                 AS computed_on

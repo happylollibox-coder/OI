@@ -7,7 +7,7 @@ Read `THREE_LAYERS.md` first — this document derives from it and never overrid
 |---|---|
 | `V_UNOWNED_SPEND` | one row per spending **subject** — `(campaign_id, keyword_id, targeting)` — with no row in `FACT_KEYWORD_STATE` |
 | `V_UNOWNED_SPEND_SUMMARY` | the account-level number, one row per reason class plus a grand total under `reason_class = '__ALL__'` |
-| `scripts/bigquery/tests/V_UNOWNED_SPEND_acceptance.sql` | the ten assertions that keep both honest |
+| `scripts/bigquery/tests/V_UNOWNED_SPEND_acceptance.sql` | the eleven assertions that keep both honest |
 
 ---
 
@@ -104,6 +104,26 @@ order at this account's own conversion rate. Below that a zero return is the ord
 perfectly good subject. No bar distance is published for such a row at all — the acceptance suite
 asserts it (A7). A large `unjudgeable_spend_per_day_28d` is a fact **about the hole**, not about the
 subjects inside it.
+
+**Three nested populations in the summary, and each is counted by the fact its name claims.** They
+answer three different questions and are routinely confused, so read the names literally:
+
+| Column pair | Means | Question it answers |
+| --- | --- | --- |
+| `unjudgeable_subjects` / `unjudgeable_spend_per_day_28d` | `judgeability <> 'HAS_BAR'` | how much of this money cannot be scored **today**, for any reason — including too few clicks |
+| `subjects_with_no_bar` / `no_bar_spend_per_day_28d` | `family_bar IS NULL` | how much of it has **no bar to score against** even with unlimited clicks — no family, or an INVEST family that is bar-exempt |
+| `subjects_with_no_family` / `no_family_spend_per_day_28d` | `family IS NULL` | how much of it cannot be **attributed to a product family at all** |
+
+Every no-family subject has no bar, and every no-bar subject is unjudgeable, so the three nest and
+the counts can only decrease across that table. None of them is derived from a `judgeability` label,
+and that is the point: `judgeability` applies **reading precedence first**, so a subject with no
+family that took fewer than `min_clicks_for_a_reading` clicks is labelled `TOO_THIN_TO_READ`, and a
+family count taken off that label silently drops it. The summary did exactly that until 2026-08-25 —
+its family columns were `COUNTIF(judgeability = 'NO_BAR_NO_FAMILY')`, which understated both the
+count and the money, worst of all on `CAMPAIGN_OUTSIDE_UNIVERSE` where every subject has no family.
+A11 now re-derives all six figures from `V_UNOWNED_SPEND` itself, per class and for the total, and
+checks the nesting. The lesson generalises: **a column counted through a label inherits that label's
+precedence, not its own name's meaning.**
 
 ## 4. Provenance, and where it improves on the baseline
 
