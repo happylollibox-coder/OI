@@ -298,12 +298,35 @@ def classify(r, today):
     old = num(r.get('paused_from_bid'), None)
     old_txt = f"${old:.2f}" if old is not None else "an unrecorded bid"
     return UNPAUSE_PARK, (
-        f"{text} was paused from {old_txt} on a trailing window that was silent because of the "
-        f"season, not because the keyword is worthless. It sold in the reference season "
-        f"({int(num(r.get('season_orders'), 0))} order(s), "
+        f"{text} was paused from {old_txt}. {recent_window_phrase(r)} It sold in the reference "
+        f"season ({int(num(r.get('season_orders'), 0))} order(s), "
         f"${num(r.get('season_sales'), 0):.2f}), so it is NOT_WORTH_NOW rather than NOT_WORTH => "
         f"re-enable it and park it at ${price:.2f} ({source.lower().replace('_', ' ')}). It comes "
         f"back visible and alive, not funded.")
+
+
+def recent_window_phrase(r):
+    """What the trailing window ACTUALLY says, per row — never one assertion over the population.
+
+    §6.3 (a loss must be demonstrated, not asserted), turned on this book's own prose. The first
+    build told every row it 'was paused on a trailing window that was silent because of the
+    season'. For `gift for 20 year old female` that window was 59 clicks and $48.41 with no
+    orders, and FACT_KEYWORD_SEASON_VERDICT records the same stretch OFF/LOSS — loud and
+    unprofitable, not silent. Both rows still get the same action (§4: a season it does not sell
+    in is NOT_WORTH_NOW, and §5 forbids the pause either way), but the reason must match the
+    record, because a book that asks the reader to distrust asserted losses may not assert one."""
+    clicks = int(num(r.get('recent_clicks'), 0))
+    orders = int(num(r.get('recent_orders'), 0))
+    cost = num(r.get('recent_cost'), 0.0)
+    if clicks <= 0:
+        return ("Its trailing window was silent — no clicks at all — which in August is what an "
+                "out-of-season keyword looks like, not what a worthless one looks like.")
+    if orders > 0:
+        return (f"Its trailing window was NOT silent: {clicks} click(s), {orders} order(s) and "
+                f"${cost:,.2f} spent out of season.")
+    return (f"Its trailing window was not silent: {clicks} click(s) and ${cost:,.2f} spent with "
+            f"no orders, so out of season it was losing money — a demonstrated out-of-season "
+            f"loss, which is what a park is for, not a pause.")
 
 
 def _d(v):
@@ -626,6 +649,36 @@ def supersede_sql(bid, note):
             f"AND upload_status = 'PENDING_UPLOAD'")
 
 
+def mark_row_failed_sql(bid, keyword_id, note):
+    """Label ONE row of a still-pending batch FAILED_UPLOAD — the remedy for a line the reader
+    deleted from the sheet before uploading.
+
+    Why this exists: every row of the README told the reader to 'label its change-log row
+    FAILED_UPLOAD' and nothing could do it. `--supersede` labels the whole batch and
+    `--mark-uploaded` flips every PENDING row to applied, after which the deleted keyword is on
+    record as re-enabled when it was deliberately left out. PENDING_UPLOAD only, one keyword, and
+    never a delete — the same discipline every other label in this file keeps."""
+    return (f"UPDATE `{CHANGE_LOG}` SET upload_status = 'FAILED_UPLOAD', "
+            f"upload_note = CONCAT(COALESCE(upload_note, ''), {q(note)}) "
+            f"WHERE batch_id = {q(bid)} AND CAST(keyword_id AS STRING) = {q(str(keyword_id))} "
+            f"AND upload_status = 'PENDING_UPLOAD'")
+
+
+def mark_row_failed(bid, keyword_id):
+    n = bq(f"SELECT COUNT(*) n FROM `{CHANGE_LOG}` WHERE batch_id = {q(bid)} "
+           f"AND CAST(keyword_id AS STRING) = {q(str(keyword_id))} "
+           f"AND upload_status = 'PENDING_UPLOAD'")
+    if int(n[0]['n']) == 0:
+        sys.exit(f"--mark-row-failed {bid} {keyword_id}: no PENDING_UPLOAD row for that keyword "
+                 f"under that batch. If you have already run --mark-uploaded, the row is applied "
+                 f"and this label can no longer be written — label a deleted line BEFORE you tell "
+                 f"the warehouse the batch went up. Nothing was changed.")
+    note = (f" | deleted from the sheet before upload, never sent to Amazon "
+            f"({datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC})")
+    run_update(mark_row_failed_sql(bid, keyword_id, note), 'mark-row-failed')
+    print(f"{bid} / keyword {keyword_id}: {int(n[0]['n'])} row(s) now FAILED_UPLOAD.")
+
+
 def mark_uploaded_sql(bid, note):
     return (f"UPDATE `{CHANGE_LOG}` SET upload_status = NULL, "
             f"upload_note = CONCAT(COALESCE(upload_note, ''), {q(note)}) "
@@ -738,15 +791,31 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
                 f"{' (NOT logged — --no-log)' if no_log else ''}.\n\n")
         f.write("## What a seasonal park is\n\n")
         by_us = [x for x in doing if x.get('bid_is_recorded')]
+        # §6.3 on the book's own prose: assert silence only over rows that were actually silent.
+        noisy = [x for x in doing if int(x.get('recent_clicks') or 0) > 0]
         f.write("A keyword can be quiet for two completely different reasons, and they look "
                 "identical in a spreadsheet: it is **worthless**, or it is **out of season**. "
-                "Whoever paused the keywords below read the second as the first: their last few "
-                "weeks were silent — and for these, the silence is August.\n\n")
+                "Whoever paused the keywords below read the second as the first.\n\n")
+        if not noisy:
+            f.write("For every one of them the trailing window was silent — no clicks at all — "
+                    "and in August that is what an out-of-season keyword looks like.\n\n")
+        else:
+            names = ', '.join(f"`{x['target_text']}`" for x in noisy)
+            quiet_n = len(doing) - len(noisy)
+            f.write(f"For {quiet_n} of the {len(doing)} the trailing window was silent — no "
+                    f"clicks at all — and in August that is what an out-of-season keyword looks "
+                    f"like. **It was not silent for {names}**: "
+                    f"{'that one' if len(noisy) == 1 else 'those'} took clicks out of season and "
+                    f"did not convert, which is a demonstrated OUT-OF-SEASON loss. §4 answers a "
+                    f"loss confined to one season with a park, never with a pause — so the action "
+                    f"is the same and the reason is not. The table below prints both windows; "
+                    f"read them rather than take this paragraph's word for it.\n\n")
         if len(by_us) == len(doing):
             f.write("Every one of them was switched off by a book of ours, and the change log "
                     "names which.\n\n")
         elif by_us:
-            f.write(f"{len(by_us)} of the {len(doing)} were switched off by a book of ours; the "
+            f.write(f"{len(by_us)} of the {len(doing)} "
+                    f"{'was' if len(by_us) == 1 else 'were'} switched off by a book of ours; the "
                     f"change log holds no applied pause for the rest, so who paused them is not "
                     f"recorded and this file does not guess.\n\n")
         else:
@@ -769,11 +838,23 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
                 "close enough to plan, these keywords get asked the real question — what is a "
                 "click worth in a November window — and whatever answer comes back is what they "
                 "get funded with. Nothing on this sheet pre-judges that.\n\n")
-        f.write(f"**Not one of them returns to the bid it was paused from.** The park price is "
-                f"read from the warehouse per row (the engine's published park price where it has "
-                f"one, otherwise the floor for that ad group's channel and creative), never "
-                f"chosen here. Total cost of the whole sheet if every keyword took a click a day: "
-                f"about ${daily:.2f}/day.\n\n")
+        # §6.3 on the book's own prose. The first build claimed in bold that "not one of them
+        # returns to the bid it was paused from" and then, twenty lines on, that one comes back at
+        # the same price — true for a keyword already sitting at its floor when it was paused. The
+        # defensible claim is about DIRECTION: no row comes back higher. Say only that unless
+        # every row really is cheaper.
+        n_same = len([x for x in doing if abs(x['price'] - x['old_bid']) <= 1e-9])
+        f.write("**Not one of them comes back at a HIGHER bid than it was switched off at**"
+                + ("" if not n_same else
+                   f" — and {n_same} of them, already sitting at its floor when it was paused, "
+                   f"comes back at exactly the same price")
+                + ".")
+        if not n_same:
+            f.write(" Every one comes back cheaper.")
+        f.write(f" The park price is read from the warehouse per row (the engine's published park "
+                f"price where it has one, otherwise the floor for that ad group's channel and "
+                f"creative), never chosen here. Total cost of the whole sheet if every keyword "
+                f"took a click a day: about ${daily:.2f}/day.\n\n")
         f.write(f"## The record each one is coming back on\n\n")
         recent_end = watermark
         try:
@@ -783,7 +864,7 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
             pass
         f.write(f"Last season below is **{season['from']} to {season['to']}**, re-derived from "
                 f"`FACT_AMAZON_ADS` when this file was built. *This summer* is the 90 complete "
-                f"days ending {recent_end} — the silence the pause was read from. (The ads "
+                f"days ending {recent_end} — the trailing window the pause was read from. (The ads "
                 f"watermark is {watermark}, the last complete ads day; every window ends the day "
                 f"before it.)\n\n")
         f.write("| sheet row | keyword | campaign | last season | this summer | bid it was "
@@ -859,8 +940,12 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
             note = routing_note(x['campaign_name'], x['is_sb'])
             if note:
                 f.write(f"- **Sheet check.** {note}\n")
-            f.write("- Delete this line and the keyword simply stays paused and invisible; then "
-                    "label its change-log row FAILED_UPLOAD.\n\n")
+            f.write(f"- Delete this line and the keyword simply stays paused and invisible. Say "
+                    f"so **before** you run step 6, or the change log will record it as "
+                    f"re-enabled:\n"
+                    f"  `/usr/local/bin/python3 tools/build_seasonal_unpause_bulksheet.py "
+                    f"--mark-row-failed {batch_id} {x['keyword_id']}` — that labels this one row "
+                    f"FAILED_UPLOAD.\n\n")
         if skipped:
             f.write(f"## Keywords with no row today ({len(skipped)}) — and the rule that stopped "
                     f"each\n\n")
@@ -869,7 +954,11 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
             f.write("\n")
         f.write("## How to upload it\n\n")
         f.write("1. Open `" + out_name + "` and read the row-by-row section above beside it. "
-                "Delete any line you disagree with — a deleted line changes nothing in Amazon.\n"
+                "Delete any line you disagree with — a deleted line changes nothing in Amazon. "
+                "**If you delete one, run its `--mark-row-failed` command (printed under that "
+                "row) BEFORE step 6**, or the change log will record a keyword as re-enabled that "
+                "never went up — step 6 flips every pending row to applied and the label can no "
+                "longer be written.\n"
                 "2. Go to **Amazon Ads → Sponsored ads → Bulk operations**.\n"
                 "3. Under *Upload a bulk file*, choose the file and upload it. Do not edit the "
                 "header row, do not move a row between sheets, and do not fill the blank "
@@ -931,6 +1020,12 @@ def build_parser():
                     help=f'last day of the reference season (default {DEFAULT_SEASON_TO}).')
     ap.add_argument('--supersede', nargs='+', default=[], metavar='BATCH_ID',
                     help='label these never-uploaded batches SUPERSEDED_NEVER_UPLOADED and stop.')
+    ap.add_argument('--mark-row-failed', nargs=2, default=None,
+                    metavar=('BATCH_ID', 'KEYWORD_ID'),
+                    help='you deleted one line from the sheet before uploading: label just that '
+                         "keyword's change-log row FAILED_UPLOAD. PENDING_UPLOAD rows only, and "
+                         'it must be run BEFORE --mark-uploaded — that flag flips every pending '
+                         'row to applied and the deleted one can never be labelled afterwards.')
     ap.add_argument('--mark-uploaded', metavar='BATCH_ID',
                     help='Ori has uploaded this batch: flip its rows from PENDING_UPLOAD to '
                          'applied (NULL). Builds nothing.')
@@ -957,6 +1052,11 @@ def main():
         print(f"\nLabelled {len(args.supersede)} batch(es) SUPERSEDED_NEVER_UPLOADED. Nothing was "
               f"built and no batch was logged.")
         return {'superseded': list(args.supersede)}
+
+    if args.mark_row_failed:
+        bid, kid = args.mark_row_failed
+        mark_row_failed(bid, kid)
+        return {'row_failed': [bid, kid]}
 
     if args.mark_uploaded:
         bid = args.mark_uploaded
@@ -1091,6 +1191,7 @@ def main():
             old = num(r.get('dim_bid'), 0.0)
         readme_rows.append({
             'disp': disp, 'reason': reason, 'sheet': sheet, 'sheet_line': ln,
+            'keyword_id': r.get('keyword_id'),
             'is_sb': bool(r.get('campaign_type') or r.get('channel')) and is_sb(r),
             'target_text': r.get('target_text'), 'campaign_name': r.get('campaign_name'),
             'season_orders': int(num(r.get('season_orders'), 0)),

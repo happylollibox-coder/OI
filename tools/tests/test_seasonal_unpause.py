@@ -324,7 +324,7 @@ def test_the_readme_headline_counts_the_rows_it_carries(tmp_path):
                  'season_clicks': 10, 'recent_orders': 0, 'recent_clicks': 0, 'recent_cost': 0.0,
                  'old_bid': 1.0, 'price': 0.2, 'price_source': 'CHANNEL_FLOOR',
                  'price_provenance': 'V_BID_FLOOR', 'paused_by_batch': 'b', 'paused_on': None,
-                 'market': 'no SQP row'} for i in range(n)]
+                 'keyword_id': f'{i}', 'market': 'no SQP row'} for i in range(n)]
         p = tmp_path / f'r{n}.md'
         book.write_readme(str(p), 'x.xlsx', 'batch', book.date(2026, 8, 24), '2026-08-23', True,
                           rows, {'from': '2025-11-01', 'to': '2025-12-31'})
@@ -344,7 +344,7 @@ def test_the_readme_carries_the_market_line_for_every_row(tmp_path):
              'season_clicks': 60, 'recent_orders': 0, 'recent_clicks': 0, 'recent_cost': 0.0,
              'old_bid': 1.0, 'price': 0.25, 'price_source': 'CHANNEL_FLOOR',
              'price_provenance': 'V_BID_FLOOR', 'paused_by_batch': 'b', 'paused_on': None,
-             'market': 'the market buys this 119 times a week; we hold 0.02% of its impressions'}]
+             'keyword_id': '1', 'market': 'the market buys this 119 times a week; we hold 0.02% of its impressions'}]
     p = tmp_path / 'r.md'
     book.write_readme(str(p), 'x.xlsx', 'batch', book.date(2026, 8, 24), '2026-08-23', True, rows,
                       {'from': '2025-11-01', 'to': '2025-12-31'})
@@ -362,7 +362,7 @@ def readme_row(**over):
          'recent_clicks': 0, 'recent_cost': 0.0, 'old_bid': 0.8, 'price': 0.2,
          'price_source': 'CHANNEL_FLOOR', 'price_provenance': 'V_BID_FLOOR',
          'paused_by_batch': None, 'paused_on': None, 'bid_is_recorded': False,
-         'market': 'no SQP row'}
+         'keyword_id': '534864099331513', 'market': 'no SQP row'}
     r.update(over)
     return r
 
@@ -435,3 +435,95 @@ def test_the_readme_never_calls_an_unattributed_bid_a_leak(tmp_path):
     # verdict on money this book never measured.
     assert 'made it a leak' not in text.lower()
     assert 'a leak in the first place' not in text.lower()
+
+
+# ── repair pass 2026-08-24: five README/generator overclaims a verifier caught ────────────────
+
+def test_the_intro_never_says_no_row_returns_to_its_pause_bid_when_one_does(tmp_path):
+    """VERIFIER (repair pass 1). The intro said in bold 'Not one of them returns to the bid it was
+    paused from', and twenty lines later the table paragraph said '1 comes back at the same price'
+    — true for `gift for 20 year old female`, paused at $0.25 by seat_moves_20260823_1045 and
+    returned at $0.25. The defensible claim is the one about direction: no row comes back HIGHER.
+    A reader who hits both sentences stops trusting the arithmetic between them."""
+    text = make_readme(tmp_path, [readme_row(old_bid=0.25, price=0.25, bid_is_recorded=True,
+                                             paused_by_batch='seat_moves_20260823_1045'),
+                                  readme_row(old_bid=0.80, price=0.20)])
+    assert 'not one of them returns to the bid it was paused from' not in text.lower()
+    assert 'higher' in text.lower()
+    # and when every row really is cheaper, the stronger sentence is allowed back
+    all_cut = make_readme(tmp_path, [readme_row(old_bid=0.80, price=0.20)])
+    assert 'same price' not in all_cut.lower()
+
+
+def test_a_row_whose_recent_window_took_clicks_is_never_called_silent():
+    """VERIFIER (repair pass 1), and THREE_LAYERS.md §6.3. classify() asserted every row was
+    'paused on a trailing window that was silent because of the season'. For
+    `gift for 20 year old female` that window was 59 clicks and $48.41 with no orders — loud and
+    unprofitable, not silent. FACT_KEYWORD_SEASON_VERDICT records it OFF/LOSS, 52 clicks 0 orders.
+    The unpause is still right on §4 and §5; the stated REASON must match the record."""
+    disp, reason = book.classify(row(recent_clicks=59, recent_orders=0, recent_cost='48.41'),
+                                 book.date(2026, 8, 24))
+    assert disp == book.UNPAUSE_PARK
+    assert 'window was silent' not in reason.lower(), reason
+    assert 'was not silent' in reason.lower(), reason
+    assert '59' in reason and '48.41' in reason, reason
+    quiet_disp, quiet = book.classify(row(recent_clicks=0, recent_orders=0, recent_cost='0'),
+                                      book.date(2026, 8, 24))
+    assert quiet_disp == book.UNPAUSE_PARK
+    assert 'window was silent' in quiet.lower(), quiet
+
+
+def test_the_readme_opening_never_asserts_silence_over_a_row_that_took_clicks(tmp_path):
+    """The same overclaim at the top of the document, asserted over the whole population."""
+    text = make_readme(tmp_path, [readme_row(recent_clicks=59, recent_cost=48.41),
+                                  readme_row(recent_clicks=0)])
+    assert 'their last few weeks were silent' not in text.lower()
+    all_quiet = make_readme(tmp_path, [readme_row(recent_clicks=0), readme_row(recent_clicks=0)])
+    assert 'silent' in all_quiet.lower()
+
+
+def test_a_deleted_line_has_a_remedy_the_reader_can_actually_run(tmp_path):
+    """VERIFIER (repair pass 1). Every row said 'then label its change-log row FAILED_UPLOAD' and
+    no command anywhere could do it: --supersede labels the WHOLE batch, and --mark-uploaded flips
+    every PENDING row to applied, after which no documented path can ever label the deleted one.
+    An instruction the reader cannot execute is worse than none: the change log ends up recording
+    a keyword as re-enabled that was deliberately removed from the sheet."""
+    text = make_readme(tmp_path, [readme_row(target_text='kw-a')])
+    assert 'FAILED_UPLOAD' in text
+    assert '--mark-row-failed' in text, 'the README names a state with no way to reach it'
+    # and the ordering hazard is spelled out where the reader meets --mark-uploaded
+    upload = text[text.index('## How to upload it'):]
+    assert 'before' in upload.lower() and '--mark-row-failed' in upload
+
+
+def test_mark_row_failed_labels_exactly_one_pending_row():
+    """PENDING_UPLOAD only, one keyword, never a delete — the same discipline --supersede keeps."""
+    sql = book.mark_row_failed_sql('seasonal_unpause_20260824_1643', '534864099331513', 'note')
+    assert sql.strip().upper().startswith('UPDATE')
+    assert 'FAILED_UPLOAD' in sql
+    assert "upload_status = 'PENDING_UPLOAD'" in sql
+    assert '534864099331513' in sql and 'seasonal_unpause_20260824_1643' in sql
+    assert 'DELETE' not in sql.upper()
+    assert book.build_parser().parse_args(
+        ['--mark-row-failed', 'b1', '99']).mark_row_failed == ['b1', '99']
+
+
+def test_the_summer_window_is_not_labelled_silence_over_a_row_that_took_clicks(tmp_path):
+    """The table caption called the trailing window 'the silence the pause was read from' — the
+    same §6.3 overclaim as the opening paragraph, in the caption of the table that disproves it."""
+    text = make_readme(tmp_path, [readme_row(recent_clicks=59, recent_cost=48.41),
+                                  readme_row(recent_clicks=0)])
+    assert 'the silence the pause was read from' not in text.lower()
+    assert 'the trailing window the pause was read from' in text.lower()
+
+
+def test_the_pause_attribution_sentence_agrees_in_number(tmp_path):
+    """'1 of the 11 were switched off' reads like the arithmetic around it was not checked."""
+    text = make_readme(tmp_path, [readme_row(bid_is_recorded=True, paused_by_batch='b1'),
+                                  readme_row(bid_is_recorded=False),
+                                  readme_row(bid_is_recorded=False)])
+    assert '1 of the 3 was switched off' in text, text[:1500]
+    two = make_readme(tmp_path, [readme_row(bid_is_recorded=True, paused_by_batch='b1'),
+                                 readme_row(bid_is_recorded=True, paused_by_batch='b2'),
+                                 readme_row(bid_is_recorded=False)])
+    assert '2 of the 3 were switched off' in two
