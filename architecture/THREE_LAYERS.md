@@ -83,6 +83,47 @@ margin. The Catalog owns the response curve; the Brain owns the comparison acros
 budget. (Elasticity is realistically estimated per segment — family x match type x placement — and
 applied per keyword; do not promise per-keyword precision the data cannot support.)
 
+### 2.1 Subject types — not everything the ladder holds is a keyword
+
+`ask()` takes a **subject type** alongside the subject, because the three types the account actually
+contains behave differently and may not be compared the same way. Measured 2026-08-24, the split by
+settled spend is roughly half real keywords, a quarter auto-targeting modes, and the remainder product
+targets — re-derive with a GROUP BY on the target text pattern over `FACT_KEYWORD_STATE`.
+
+| type | the subject is | cross-family comparison | why |
+|---|---|---|---|
+| **real keyword** | the phrase, scoped to its family | share the **demand** signal; never the **worth** | the phrase carries intent that genuinely travels; the bar, product margin and halo do not |
+| **auto-targeting mode** (`substitutes`, `complements`, `close-match`, `loose-match`) | **family x product x mode** | **never as "the same subject"** | it is a container, not a phrase: `substitutes` for one product targets entirely different competitors than for another |
+| **product target** (`asin=`, `category=`) | the competitor target, scoped to its family | **legitimate** — same competitor, different product of ours advertised against it | "does this competitor's traffic convert for us" is one coherent question |
+
+**An auto-targeting mode is a basket whose contents Amazon changes.** Its history is therefore a weaker
+predictor than a keyword's history of the same length, and `confidence` must say so rather than letting
+a 90-day auto record be trusted like a 90-day keyword record. The account has already seen this: the
+mix-drift guard found one auto mode reading far below its bar raw and far above it once never-seen
+zero-order terms were stripped — the same subject, a many-fold swing, from composition alone.
+
+**The mode-level question is legitimate at its own grain.** *"What is `substitutes` worth?"* is
+meaningless across families; *"does substitutes-targeting work for us as an instrument, and for which
+families?"* is a real allocation question at grain 3 (§2.2), and one nothing currently asks despite the
+money involved.
+
+### 2.2 The grain ladder — the Brain asks top-down
+
+The subject is the grain of the decision, and the Brain works downward in the same order as the doctrine:
+
+| grain | the question | what the answer decides |
+|---|---|---|
+| **family** | what does this family need to break even after halo, and what is a marginal click worth to it? | the bar and the stopping rule for everything below |
+| **product** | which of this family's products is worth advertising in this window? | where the pot points |
+| **campaign / targeting type** | what is a conquest click worth versus brand defense, or auto-substitutes versus exact? | which instruments the money flows through |
+| **keyword / target** (scoped) | what is this worth, in this family, for this window? | fund, repair, park or stop |
+
+Two consequences: **the family bar is a Catalog answer, not a shared constant** — it is what the Catalog
+returns when asked about a family, and it is seasonal like everything else; and a subject must always be
+scoped enough to be unambiguous. A keyword id is safe (Amazon scopes it to an ad group, hence to one
+campaign and family); bare target text is not — several phrases in this account exist in three or more
+families at once, and a query keyed on text alone silently blends their economics into one wrong answer.
+
 ---
 
 ## 3. The Brain → Pacing contract
