@@ -109,8 +109,9 @@ tasks (7 and 14 and 22 each do), the strike goes on the **second**, and the firs
 
 The tasks this binds, by the violation each closes: `1.2`+`1.4` (15), `1.3` (16's live half),
 `2.2`+`2.4` (4's Catalog-side population), `3.3`–`3.5` (23), `4.5`+`7.6`+`7.7` (22), `5.5`+`5.6` (2),
-`6.2` (7), `6.3`+`10.6` (11), `6.4`+`6.5` (8), `6.6`+`6.9` (9), `6.7` (14), `0.3` (6's memory half)
-and `10.8` (6's grading half), `0.5`+`0.6`+`10.4` (13), `7.2` (19), `7.4`+`7.5` (20), `8.2`+`8.3` (1),
+`6.2` (7), `6.3`+`10.6` (11), `6.4`+`6.5` (8), `6.6`+`6.9` (9), `6.7` (14), `10.8` (6's grading half
+— 6's retention half was struck on 2026-08-24 by another session, so `10.8` AMENDS that entry rather
+than striking it again), `0.5`+`0.6`+`10.4` (13), `7.2` (19), `7.4`+`7.5` (20), `8.2`+`8.3` (1),
 `8.6` (10), `9.3` (25), `9.4`+`9.5` (24), `10.3` (3 and 17), `11.3`+`11.4` (21), `12.3`+`12.4` (5),
 `13.4`+`13.5` (18). **Task 13.7 verifies at the end that none was missed** and is the only place the
 list above may be treated as complete.
@@ -321,6 +322,48 @@ two corrections this plan made to §8's own wording (violations 19 and 21).
 
 ---
 ## Phase 0 — Start both clocks
+
+> ### ⚠️ RECONCILE BEFORE YOU BUILD — the Catalog's memory SHIPPED on 2026-08-24, from another session
+>
+> **Violation 6 is already struck through in §8** (commit `ca01597`, changelog row `2026-08-24 21:40`),
+> and a second session shipped `V_UNOWNED_SPEND` on 2026-08-25 (`99129ac`) measuring the same
+> population Task 2.1 measures. Do **not** rebuild any of it. What exists, verified in the repo and
+> the warehouse on 2026-08-25:
+>
+> | object | where | note |
+> |---|---|---|
+> | `FACT_KEYWORD_STATE_HISTORY` | `scripts/bigquery/tables/FACT/FACT_KEYWORD_STATE_HISTORY.sql` | **not** the path Task 0.3 names; live and empty as of 2026-08-25 |
+> | `SP_APPEND_KEYWORD_STATE_HISTORY` | `scripts/bigquery/procedures/` | a **separate orchestrator task 20.8a**, append-then-prune — not an append arm inside `SP_SNAPSHOT_KEYWORD_STATE` as Task 0.3 describes |
+> | `V_CATALOG_DWELL` | `scripts/bigquery/views/V_CATALOG_DWELL.sql` | Task 0.4's object, built |
+> | `KEYWORD_STATE_HISTORY_acceptance.sql` | `scripts/bigquery/tests/` | **not** `FACT_KEYWORD_STATE_acceptance.sql`, the name Task 0.2 creates |
+> | `V_UNOWNED_SPEND` / `_SUMMARY` | `scripts/bigquery/views/` | Phase 2's measurement, standing as durable state |
+>
+> **The shipped design is better than Task 0.3's on two counts** and should be kept: a separate
+> procedure means the failure mode leaves a duplicate rather than a lost day, and it reads the live
+> column list out of `INFORMATION_SCHEMA` on every run — which is exactly what this plan's Task 0.3
+> Step 3 arrived at independently, and it makes the "every column added to `FACT_KEYWORD_STATE` must
+> arrive on the history DDL" rule automatic rather than remembered.
+>
+> **So do this instead of Tasks 0.2–0.4 as written:**
+>
+> 1. Read the three shipped files and `architecture/KEYWORD_STATE.md` before touching anything.
+> 2. **Task 0.3 becomes a verification task**, not a build: confirm the append runs, confirm 20.8a's
+>    position, and confirm the schema-evolution arm actually adds a new column on the night it
+>    appears. **Never add a second writer to that table.**
+> 3. **Task 0.2's suite is `KEYWORD_STATE_HISTORY_acceptance.sql`, which already exists** — merge
+>    Task 0.2's eleven checks into it rather than creating a second file, and keep the K-numbering
+>    this plan uses (`K01`–`K10`, `K02b`) only where it does not collide with what is there.
+> 4. **Every later `ALTER TABLE ... FACT_KEYWORD_STATE_HISTORY` in this plan is probably redundant**
+>    — the append procedure adds columns itself. Run the append once after each column addition and
+>    check the history's schema rather than issuing the `ALTER`; keep the `ALTER` only where the
+>    check shows the column did not arrive. Acceptance `K02b` is the instrument either way.
+> 5. **Task 2.1's red measurement should be taken against `V_UNOWNED_SPEND`**, which is already at
+>    TARGET grain — finer than the baseline's `(campaign, keyword)` pairs, and the reason its largest
+>    row "was not a subject". Do not build a second measurement of the same money.
+>
+> Everything else in Phase 0 — Task 0.1's idempotency fix and Tasks 0.5/0.6's Pacing prediction
+> columns, which close violation 13's recording half — is untouched by that session and stands
+> exactly as written.
 
 **Closes:** violation 6 (the Catalog keeps no memory) and the recording half of violation 13 (Pacing records no prediction).
 
