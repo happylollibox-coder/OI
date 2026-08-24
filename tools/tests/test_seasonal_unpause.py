@@ -527,3 +527,45 @@ def test_the_pause_attribution_sentence_agrees_in_number(tmp_path):
                                  readme_row(bid_is_recorded=True, paused_by_batch='b2'),
                                  readme_row(bid_is_recorded=False)])
     assert '2 of the 3 were switched off' in two
+
+
+# ── repair pass 2026-08-24 (second): identifying a row you are about to delete ────────────────
+
+def test_every_row_heading_carries_the_keyword_id_the_sheet_can_be_matched_on(tmp_path):
+    """VERIFIER (repair pass 2). The workbook carries NO human-readable identifier: Keyword Text
+    and Campaign Name are blank on every row, and correctly so — a blank cell means 'leave
+    unchanged'. The only column that names the subject is **Keyword Id**. The README addressed
+    every keyword by SPREADSHEET ROW NUMBER, and step 1 invites the reader to delete lines. Delete
+    one and every row number below it shifts, after which 'row 7' points at a different keyword
+    and nothing in the document tells the reader how to re-find it. So the id the sheet actually
+    carries must be in the heading, next to the row number."""
+    rows = [readme_row(sheet_line=2, keyword_id='534864099331513', target_text='kw-a'),
+            readme_row(sheet_line=3, keyword_id='389779878299034', target_text='kw-b')]
+    text = make_readme(tmp_path, rows)
+    for r in rows:
+        headings = [ln for ln in text.splitlines()
+                    if ln.startswith('### ') and r['target_text'] in ln]
+        assert headings, f"no heading for {r['target_text']}"
+        assert r['keyword_id'] in headings[0], \
+            f"heading {headings[0]!r} names a row number but not the Keyword Id the sheet carries"
+
+
+def test_the_record_table_carries_the_keyword_id_beside_the_row_number(tmp_path):
+    """The same reason, in the table the reader reads first."""
+    text = make_readme(tmp_path, [readme_row(keyword_id='534864099331513')])
+    table = text[text.index('## The record each one is coming back on'):]
+    table = table[:table.index('\n\n', table.index('|---'))]
+    assert 'Keyword Id' in table, 'the table names rows only by a number that deletion invalidates'
+    assert '534864099331513' in table
+
+
+def test_the_upload_step_tells_the_reader_to_match_on_keyword_id_not_row_number(tmp_path):
+    """Deleting a line is the one thing step 1 asks the reader to do, and it is the thing that
+    breaks every row number in the document. Say so where they are about to do it."""
+    text = make_readme(tmp_path, [readme_row(), readme_row(sheet_line=3, target_text='b')])
+    upload = text[text.index('## How to upload it'):]
+    step1 = upload[:upload.index('\n2. ')]
+    assert 'Keyword Id' in step1, step1
+    low = step1.lower()
+    assert 'shift' in low or 'shifts' in low, \
+        'the reader is never warned that deleting a row renumbers every row below it'

@@ -867,11 +867,20 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
                 f"days ending {recent_end} — the trailing window the pause was read from. (The ads "
                 f"watermark is {watermark}, the last complete ads day; every window ends the day "
                 f"before it.)\n\n")
-        f.write("| sheet row | keyword | campaign | last season | this summer | bid it was "
-                "switched off at | park price |\n")
-        f.write("|---|---|---|---|---|---|---|\n")
+        # The workbook's Keyword Text and Campaign Name cells are BLANK by design (a blank cell
+        # means "leave unchanged"), so the only column in the sheet that names the subject is
+        # Keyword Id. Row numbers are the identifier a reader reaches for and the one that stops
+        # being true the moment they delete a line, so print both and lead with the durable one.
+        f.write("Rows are identified in the sheet by the **Keyword Id** column — the sheet's "
+                "Keyword Text cells are deliberately blank, and the row number below is only "
+                "where the row sits *as built*. Delete a line and every row number under it "
+                "shifts; the Keyword Id does not.\n\n")
+        f.write("| Keyword Id | sheet row | keyword | campaign | last season | this summer | bid "
+                "it was switched off at | park price |\n")
+        f.write("|---|---|---|---|---|---|---|---|\n")
         for i, x in enumerate(doing, 1):
-            f.write(f"| {x['sheet_line']} | `{x['target_text']}` | {x['campaign_name']} | "
+            f.write(f"| `{x['keyword_id']}` | {x['sheet_line']} | `{x['target_text']}` | "
+                    f"{x['campaign_name']} | "
                     f"{x['season_orders']} orders · ${x['season_sales']:,.0f} sales · "
                     f"{x['season_clicks']} clicks | {x['recent_orders']} orders · "
                     f"{x['recent_clicks']} clicks · ${x['recent_cost']:,.2f} spent | "
@@ -928,8 +937,13 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
         f.write("\n")
         f.write("## Row by row\n\n")
         for x in doing:
-            f.write(f"### {x['sheet']} — row {x['sheet_line']}: `{x['target_text']}` "
+            # Keyword Id FIRST: it is the only identifier the workbook actually carries, and the
+            # only one that survives the reader deleting a line above this one.
+            f.write(f"### Keyword Id `{x['keyword_id']}` — `{x['target_text']}` "
                     f"({x['campaign_name']})\n\n")
+            f.write(f"- **Find it in the sheet** on the *{x['sheet']}* tab, by **Keyword Id "
+                    f"{x['keyword_id']}** in the `Keyword Id` column — row {x['sheet_line']} as "
+                    f"built, which is no longer true once a line above it is deleted.\n")
             f.write(f"- {x['reason']}\n")
             f.write(f"- The park price ${x['price']:.2f} comes from **{x['price_source']}** "
                     f"({x['price_provenance']}). It is read for this ad group's channel and "
@@ -954,6 +968,10 @@ def write_readme(readme_path, out_name, batch_id, today_la, watermark, no_log, r
             f.write("\n")
         f.write("## How to upload it\n\n")
         f.write("1. Open `" + out_name + "` and read the row-by-row section above beside it. "
+                "**Match each section to its line by the `Keyword Id` column, not by the row "
+                "number** — the sheet's Keyword Text cells are blank on purpose, and the moment "
+                "you delete one line every row number below it shifts, so the row numbers in this "
+                "file stop being true and the Keyword Ids do not. "
                 "Delete any line you disagree with — a deleted line changes nothing in Amazon. "
                 "**If you delete one, run its `--mark-row-failed` command (printed under that "
                 "row) BEFORE step 6**, or the change log will record a keyword as re-enabled that "
