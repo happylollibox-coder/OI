@@ -40,6 +40,12 @@
 -- ids are STRING end to end (19-digit Amazon ids exceed 2^53).
 -- Columns added after first ship are appended with ALTER TABLE ... ADD COLUMN IF NOT EXISTS so a
 -- redeploy of this file is idempotent on the live table.
+--
+-- v27.139 (2026-08-24, ruling R-o): the occupant set is now READ FROM FACT_PLAN_NEXT_WEEK plan='B'
+-- (the live window plan)'s own seated keywords, joined to plan='A' (the ladder shadow) to publish
+-- agreement_tier (CONFIRMED | DISPUTED) on every open row, and held_reason / held_reason_text carry
+-- the HELD_DISPUTED state — a seat held open, not closed, when the two judges disagree about its
+-- departure. See the ALTER TABLE block below and SP_MAINTAIN_FAMILY_SEATS for the full mechanism.
 -- =============================================
 CREATE TABLE IF NOT EXISTS `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` (
   family                STRING NOT NULL,  -- the working family (HARVEST book) that owns the seat
@@ -58,6 +64,32 @@ CLUSTER BY family, campaign_id, keyword_id
 OPTIONS (description = 'Seat numbers for the family seat register — one row per occupancy (family, campaign_id, keyword_id, opened_on) of a keyword inside the 20% allowance of a WORKING family (HARVEST book only; launches never appear). Occupants: REPRICE (repair), FLOOR_PROBATION (probation), LOSER (failed), a TRIAL keyword at an entry bid (engine probe list T_LIFT_PROBES, spend or not) or at the park bid (ladder at_floor, with spend in the basis window) (probe), a TRIAL keyword whose latest applied bid change is an INCREASE_BID that still stands (live bid at or above the logged new_bid, never lowered since) past the engine probe window with fewer than the verdict clicks since and no longer engine-listed (stalled probe), REVIVED_SETTLING / PENDING_SETTLE (settling); brand-defense keywords never seated. seat_no is assigned on admission as the LOWEST number not held by an open row of the family and is kept for as long as the keyword stays an occupant, whatever its kind becomes; last_observed_kind / last_observed_state are refreshed on every run while the row is open (FACT_KEYWORD_STATE holds one snapshot; a keyword still on it carries prior_state, but a keyword that vanished has no row, and the ledger is the only memory for it); when the keyword leaves the occupant set the row is closed with closed_on, closed_reason and closed_reason_text (KILLED = dead, or gone from the snapshot after a LOSER/DEAD last observed state; PAUSED = parked, or gone otherwise; LEFT_FAMILY = the campaign now maps to another family or the family left the HARVEST book; DEFENSE_EXEMPT = now brand defense; TO_GOOD_SIDE = winning or at its bar; TO_WAITING = still TRIAL but at neither an entry nor a park bid and not stalled; STATE_CHANGED = any other state, named in plain words in closed_reason_text) and the number is free for the next admission. Maintained by SP_MAINTAIN_FAMILY_SEATS (orchestrator Task 20.8b, right after SP_SNAPSHOT_KEYWORD_STATE); idempotent on the same snapshot. Read by V_FAMILY_SEAT_REGISTER only; no engine reads it. Spec: architecture/FAMILY_SEAT_REGISTER.md.');
 
 ALTER TABLE `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`
-  ADD COLUMN IF NOT EXISTS last_observed_kind  STRING OPTIONS (description = 'the occupant kind (repair | probation | failed | probe | stalled probe | settling) on the latest snapshot the row was open on; refreshed every run'),
+  ADD COLUMN IF NOT EXISTS last_observed_kind  STRING OPTIONS (description = 'the occupant kind (repair | probation | failed | probe | stalled probe | settling | parked — awaiting re-verdict | parked | disputed) on the latest snapshot the row was open on; refreshed every run'),
   ADD COLUMN IF NOT EXISTS last_observed_state STRING OPTIONS (description = 'the ladder state on the latest snapshot the row was open on; decides KILLED vs PAUSED when the keyword vanishes from the snapshot'),
   ADD COLUMN IF NOT EXISTS closed_reason_text  STRING OPTIONS (description = 'closed_reason as one plain sentence; NULL while the seat is open');
+
+-- v27.139 (2026-08-24, ruling R-o, architecture/FAMILY_SEAT_REGISTER.md): UNIFIED WITH THE PLAN,
+-- AGREEMENT-TIER AWARE. The occupant set is now read from FACT_PLAN_NEXT_WEEK plan='B' (the live
+-- window plan)'s own seated keywords, joined to plan='A' (the ladder-driven shadow) on
+-- (family, campaign_id, keyword_id) — SP_MAINTAIN_FAMILY_SEATS. Three new columns:
+--   agreement_tier    CONFIRMED (plan A's side is also NOT_GOOD — both the 90-day ladder and the
+--                      window agree this keyword is not-good) or DISPUTED (plan A disagrees: its
+--                      side is GOOD, or it carries no row for the key). Published on every OPEN
+--                      row, refreshed every run (last_observed_kind / last_observed_state pattern).
+--                      A CONFIRMED candidate is admitted to a free seat number before any DISPUTED
+--                      one queued for the same number; a DISPUTED occupant already holding a seat
+--                      is never evicted for turning disputed (P-4/P-5 spirit: never cut on one
+--                      judge's word alone).
+--   held_reason        NULL on a normal open or closed row. 'HELD_DISPUTED' — NEW VALUE, never an
+--                      overload of closed_reason — when the keyword left the plan's seated set
+--                      (plan B) but plan A still calls it not-good: the two judges disagree about
+--                      the departure, so the seat is HELD OPEN rather than closed. Cleared (NULL)
+--                      the moment the row is a normal occupant again or is properly closed.
+--   held_reason_text   held_reason as one plain sentence (mirrors closed_reason_text); NULL
+--                      whenever held_reason is NULL.
+-- A row that closed BEFORE this column shipped carries agreement_tier = NULL (no backfill; the
+-- column describes standing GOING FORWARD, not a re-derived history).
+ALTER TABLE `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`
+  ADD COLUMN IF NOT EXISTS agreement_tier   STRING OPTIONS (description = 'CONFIRMED (plan A and plan B both call this keyword not-good) or DISPUTED (plan A disagrees); published on every open row, refreshed every run; NULL on a row closed before this column shipped'),
+  ADD COLUMN IF NOT EXISTS held_reason      STRING OPTIONS (description = 'HELD_DISPUTED when the keyword left the plan-B seated set but plan A still calls it not-good, so the seat is held open rather than closed; NULL otherwise (never an overload of closed_reason)'),
+  ADD COLUMN IF NOT EXISTS held_reason_text STRING OPTIONS (description = 'held_reason as one plain sentence; NULL whenever held_reason is NULL');

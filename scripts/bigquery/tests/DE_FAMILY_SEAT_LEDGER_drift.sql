@@ -1,27 +1,27 @@
 -- =============================================================================================
--- DE_FAMILY_SEAT_LEDGER drift acceptance — what a NEW snapshot must not break.
+-- DE_FAMILY_SEAT_LEDGER drift acceptance — what a NEW pass must not break.
+-- v27.139 REWRITE (2026-08-24, ruling R-o): the occupant set moved from FACT_KEYWORD_STATE alone
+-- to FACT_PLAN_NEXT_WEEK plan='B''s own seated keywords, agreement-tier joined to plan='A'. Every
+-- check below that reads "today's occupant set" now reads it from a PLAN snapshot copy
+-- (TMP_FSR_PLAN), not a live table — same discipline the ledger images already followed.
 --
 -- WHY THIS FILE EXISTS. The A-suite (DE_FAMILY_SEAT_LEDGER_acceptance.sql) judges the ledger
--- against ONE snapshot: it cannot see whether a seat number survived the night, because the
--- number is a stored column and nothing in the live tables remembers what it was yesterday.
--- On the live ledger the closure checks (A06, A15) and the reuse of a freed number are also
--- VACUOUS while no row has ever closed. This file is the missing half: it compares a ledger
--- AFTER a pass against the ledger BEFORE it, and it is the file to run whenever the question is
--- "did last night's pass keep the numbers".
+-- against ONE snapshot: it cannot see whether a seat number survived the night, whether a
+-- newly-closed row's tier is right (a pre-migration row closed on the same calendar date carries
+-- no tier and would be a false positive there), or whether a DISPUTED occupant already open was
+-- ever evicted. This file is the missing half: it compares a ledger AFTER a pass against the
+-- ledger BEFORE it, and the plan snapshot the AFTER ledger was maintained against.
 --
--- THE THREE IMAGES IT READS. This file NEVER reads a live table. It reads three copies the
--- operator makes, so that the BEFORE image can never silently be the same image as the AFTER one:
+-- THE FOUR IMAGES IT READS. This file NEVER reads a live table. It reads four copies the operator
+-- makes, so the BEFORE image can never silently be the same image as the AFTER one:
 --   TMP_FSR_LEDGER_BEFORE  the ledger as it stood BEFORE the pass (or replay) under test
 --   TMP_FSR_LEDGER_AFTER   the ledger as it stands AFTER it
 --   TMP_FSR_STATE          the keyword snapshot the AFTER ledger was maintained against
--- If any copy is missing the query ERRORS on the table name. That is deliberate: an earlier
--- version read the BEFORE image from the LIVE ledger, which means that once a real pass has
--- written the live table, BEFORE and AFTER are the same image and D01 compares the table to
--- itself and reports PASS having tested nothing. D00 below now catches that case by name.
+--   TMP_FSR_PLAN           FACT_PLAN_NEXT_WEEK (both plans, the as_of the AFTER ledger read)
+-- If any copy is missing the query ERRORS on the table name. That is deliberate — see D00.
 --
 -- HOW TO RUN IT AFTER A REAL PASS (house rule: copies only, dropped afterwards):
---   BEFORE the pass runs (this is the step there is no second chance at — the ledger has no
---   archive, so once the pass overwrites it the BEFORE image is gone):
+--   BEFORE the pass runs:
 --     CREATE OR REPLACE TABLE `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE` AS
 --       SELECT * FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`;
 --   AFTER it finishes:
@@ -29,57 +29,49 @@
 --       SELECT * FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`;
 --     CREATE OR REPLACE TABLE `onyga-482313.OI.TMP_FSR_STATE` AS
 --       SELECT * FROM `onyga-482313.OI.FACT_KEYWORD_STATE`;
---   Then run this file; every row must read PASS. Then DROP the three copies.
---
--- HOW TO RUN IT AS A REPLAY, when there is no pass to wait for (the TMP_ recipe — house rule:
--- synthetic rows only on TMP_ copies, never in a production table):
---   1. TMP_FSR_LEDGER_BEFORE = a copy of DE_FAMILY_SEAT_LEDGER (the BEFORE image).
---   2. TMP_FSR_STATE  = FACT_KEYWORD_STATE with snapshot_date advanced one day (plus whatever
---                       departures and arrivals the case under test needs).
---   3. TMP_FSR_LEDGER_AFTER = a second copy of DE_FAMILY_SEAT_LEDGER — the procedure writes it.
---   4. TMP_SP_FSR_SEATS = SP_MAINTAIN_FAMILY_SEATS with its two table names swapped for
---                       TMP_FSR_STATE and TMP_FSR_LEDGER_AFTER, then CALL it.
---   5. Run this file. Every row must read PASS.
---   6. DROP the TMP_ objects.
+--     CREATE OR REPLACE TABLE `onyga-482313.OI.TMP_FSR_PLAN` AS
+--       SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+--       WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B');
+--   Then run this file; every row must read PASS. Then DROP the four copies.
 --
 -- Checks:
---   D00 THE TWO IMAGES ARE DIFFERENT IMAGES. If the BEFORE and AFTER copies are byte-identical,
---       every check below is comparing a table to itself: D01 asserts nothing and the closure and
---       reuse checks run on an empty set. The row then reads VACUOUS, not PASS. Two innocent
---       causes: the pass genuinely changed nothing (confirm in LOG_PIPELINE_RUNS), or the BEFORE
---       copy was taken after the pass instead of before it — in which case the run proves nothing
---       and must be repeated at the next pass.
---   D01 (a) STABILITY — every keyword that is seated in BOTH images kept its seat number. A
---       continuing occupant's number is never touched, whatever its kind became.
---   D02 (b) PLAIN WORDS — every closed row carries closed_reason_text, and the text is exactly
---       the sentence the SOP maps to its code (for STATE_CHANGED: the mapped prefix, the state
---       in plain words, and 'The seat is free.').
---   D03 (b) CODE AND DATE — every closed row carries one of the mapped codes, and every row
---       closed since the BEFORE image (closed in AFTER, not in BEFORE) is dated on a snapshot
---       between the BEFORE image's newest date and the AFTER snapshot — a pair may span two
---       passes — never the wall clock. A row closed before the BEFORE image keeps its own date.
---   D04 (b) THE INJECTED DEPARTURES closed with the code the case expects. Edit the `expected`
---       CTE to the keys the run under test moved; an empty list makes this check vacuous, which
---       is honest — it then asserts nothing rather than pretending to.
---   D05 (b) R-h — every parked keyword whose re-verdict appointment has passed closed
---       PARK_LAPSED. This is the closure a plain date advance produces on its own.
---   D06 (c) REUSE — admissions took the LOWEST free numbers: in every family, no free number
---       sits below a number admitted on this run.
---   D07 (c) one keyword per open seat number within a family; numbers >= 1.
---   D08 (c) NO OVERWRITE — no row admitted on this run took a number that a still-seated
---       keyword of the same family holds.
+--   D00 THE TWO LEDGER IMAGES ARE DIFFERENT IMAGES. If BEFORE and AFTER are byte-identical, every
+--       check below compares a table to itself and reads VACUOUS, not PASS.
+--   D01 STABILITY — every keyword seated in BOTH images kept its seat number.
+--   D02 PLAIN WORDS — every closed row carries closed_reason_text mapped to its code.
+--   D03 CODE AND DATE — every closed row carries a mapped code; every row closed since BEFORE is
+--       dated between BEFORE's newest date and the AFTER snapshot.
+--   D04 THE INJECTED DEPARTURES closed with the code the case expects (edit `expected`).
+--   D05 R-h — every parked keyword whose re-verdict appointment has passed and that this pass
+--       actually released (closed, not held) closed PARK_LAPSED.
+--   D06 REUSE — admissions took the LOWEST free numbers.
+--   D07 one keyword per open seat number within a family; numbers >= 1.
+--   D08 NO OVERWRITE — no admission took a number a still-seated keyword of the family holds.
+--   D09 (v27.139) PLAN RECONCILIATION (Task 6): the AFTER ledger's open, non-held seat set for
+--       plan B's seated keywords (TMP_FSR_PLAN, plan='B', seat_no IS NOT NULL) equals plan B's
+--       seated set EXACTLY — one seat number per seated keyword, no orphans either direction.
+--   D10 (v27.139) CONFIRMED-ONLY CLOSURE, PRECISE — every row THIS PASS closed (closed in AFTER,
+--       not in BEFORE) reads agreement_tier = 'CONFIRMED'. Unlike the acceptance suite's A16 this
+--       cannot be fooled by a pre-migration same-day closure, because it reads the true diff.
+--   D11 (v27.139) NO EVICTION OF A DISPUTED OCCUPANT — no row held open (held_reason =
+--       'HELD_DISPUTED') in BEFORE is CLOSED in AFTER while plan A (TMP_FSR_PLAN, plan='A') still
+--       calls it NOT_GOOD. A held row may only close once plan A stops objecting (P-4/P-5 spirit:
+--       never cut on one judge's word alone) or continue being held (or resume as an occupant).
+--   D12 (v27.139) ADMISSION ORDER ACROSS THE PASS — among rows admitted (opened) on this pass, no
+--       DISPUTED candidate took a lower seat number than a CONFIRMED one admitted in the same
+--       family on the same pass (the before/after-precise version of A17).
 -- =============================================================================================
 WITH
 run_day AS (SELECT MAX(snapshot_date) AS d FROM `onyga-482313.OI.TMP_FSR_STATE`),
 before AS (SELECT family, campaign_id, keyword_id, seat_no
            FROM `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE` WHERE closed_on IS NULL),
-after_open AS (SELECT family, campaign_id, keyword_id, seat_no, opened_on
+before_full AS (SELECT * FROM `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE`),
+after_open AS (SELECT family, campaign_id, keyword_id, seat_no, opened_on, agreement_tier, held_reason
                FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` WHERE closed_on IS NULL),
 after_closed AS (SELECT * FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` WHERE closed_on IS NOT NULL),
--- the rows THIS pass closed: closed in AFTER and not already closed in BEFORE. D03 judges these
--- and only these — a row closed on an earlier snapshot carries that snapshot's date, and judging
--- it against today's run_day reported 4 false violations on the first real production night
--- (2026-08-23: the four seats closed on 2026-08-22 were still, correctly, dated 2026-08-22).
+plan_b AS (SELECT family, campaign_id, keyword_id FROM `onyga-482313.OI.TMP_FSR_PLAN` WHERE plan = 'B' AND seat_no IS NOT NULL),
+plan_a AS (SELECT family, campaign_id, keyword_id, side AS side_a FROM `onyga-482313.OI.TMP_FSR_PLAN` WHERE plan = 'A'),
+-- the rows THIS pass closed: closed in AFTER and not already closed in BEFORE
 new_closed AS (
   SELECT c.* FROM after_closed c
   LEFT JOIN `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE` b
@@ -95,7 +87,6 @@ fp AS (
     (SELECT FARM_FINGERPRINT(STRING_AGG(TO_JSON_STRING(t), '|'
               ORDER BY family, campaign_id, keyword_id, opened_on))
      FROM `onyga-482313.OI.TMP_FSR_LEDGER_AFTER` t) AS fp_after),
--- the sentences the SOP and SP_MAINTAIN_FAMILY_SEATS both carry, verbatim
 sop AS (SELECT * FROM UNNEST([
   STRUCT('KILLED' AS code, 'The keyword is gone from the snapshot after its last verdict was failed or dead, or the ladder now reads dead: the book paused a failed keyword. The seat is free.' AS txt),
   ('PAUSED', 'The keyword is gone from the snapshot, or the ladder now reads parked, without a failed verdict first. The seat is free.'),
@@ -117,45 +108,44 @@ fam_free AS (
 checks AS (
   SELECT 'D00 the BEFORE and AFTER images are different images (else every check below is vacuous)' AS check_name,
          (SELECT COUNTIF(fp_before = fp_after) FROM fp) AS violations
-  UNION ALL SELECT 'D01 (a) every continuing occupant kept its seat number',
+  UNION ALL SELECT 'D01 every continuing occupant kept its seat number',
          (SELECT COUNT(*) FROM before b JOIN after_open a USING (family, campaign_id, keyword_id)
           WHERE a.seat_no != b.seat_no)
-  UNION ALL SELECT 'D02 (b) every closed row carries the SOP sentence mapped to its code',
+  UNION ALL SELECT 'D02 every closed row carries the SOP sentence mapped to its code',
          (SELECT COUNT(*) FROM after_closed c LEFT JOIN sop s ON s.code = c.closed_reason
           WHERE c.closed_reason_text IS NULL
              OR (c.closed_reason != 'STATE_CHANGED' AND c.closed_reason_text IS DISTINCT FROM s.txt)
              OR (c.closed_reason = 'STATE_CHANGED'
                  AND NOT (c.closed_reason_text LIKE 'The keyword left the seat set — it now reads %'
                           AND c.closed_reason_text LIKE '%. The seat is free.')))
-  UNION ALL SELECT 'D03 (b) every closed row carries a mapped reason code; every row closed since the BEFORE image is dated on a snapshot between that image and the AFTER snapshot',
+  UNION ALL SELECT 'D03 every closed row carries a mapped reason code; every row closed since the BEFORE image is dated on a snapshot between that image and the AFTER snapshot',
          (SELECT COUNT(*) FROM after_closed c
           WHERE c.closed_reason NOT IN ('KILLED','PAUSED','PARK_LAPSED','LEFT_FAMILY','DEFENSE_EXEMPT','TO_GOOD_SIDE','TO_WAITING','STATE_CHANGED'))
-         -- a BEFORE/AFTER pair may span MORE THAN ONE pass (the first production night ran two:
-         -- 01:28 and 04:18 New York, snapshots 2026-08-22 and 2026-08-23), so a closure is dated on
-         -- SOME snapshot between the BEFORE image's newest date and the AFTER snapshot — never the
-         -- wall clock, never a date the BEFORE image already knew.
          + (SELECT COUNT(*) FROM new_closed c, run_day,
                  (SELECT MAX(GREATEST(opened_on, COALESCE(closed_on, opened_on))) AS d
                   FROM `onyga-482313.OI.TMP_FSR_LEDGER_BEFORE`) bmax
             WHERE c.closed_on > run_day.d OR c.closed_on < bmax.d)
-  UNION ALL SELECT 'D04 (b) the injected departures closed with the expected code',
+  UNION ALL SELECT 'D04 the injected departures closed with the expected code',
          (SELECT COUNT(*) FROM expected e
           LEFT JOIN after_closed c ON c.campaign_id = e.cid AND c.keyword_id = e.kid
           WHERE c.closed_reason IS DISTINCT FROM e.code)
-  UNION ALL SELECT 'D05 (b) R-h: every parked seat past its appointment closed PARK_LAPSED',
+  UNION ALL SELECT 'D05 R-h: every parked seat past its appointment that was actually released (closed, not held) closed PARK_LAPSED',
          (SELECT COUNT(*) FROM before b
           JOIN `onyga-482313.OI.TMP_FSR_STATE` s
             ON s.campaign_id = b.campaign_id AND s.keyword_id = b.keyword_id
           LEFT JOIN after_closed c
             ON c.campaign_id = b.campaign_id AND c.keyword_id = b.keyword_id, run_day
+          LEFT JOIN after_open o2
+            ON o2.campaign_id = b.campaign_id AND o2.keyword_id = b.keyword_id
           WHERE s.state = 'PARKED' AND s.next_check_date < run_day.d
+            AND o2.campaign_id IS NULL  -- not held open this pass
             AND c.closed_reason IS DISTINCT FROM 'PARK_LAPSED')
-  UNION ALL SELECT 'D06 (c) admissions took the lowest free numbers (no free number below any admitted one)',
+  UNION ALL SELECT 'D06 admissions took the lowest free numbers (no free number below any admitted one)',
          (SELECT COUNT(*) FROM fam_admits a JOIN fam_free f USING (family) WHERE f.min_free < a.max_admit)
-  UNION ALL SELECT 'D07 (c) one keyword per open seat number within a family; numbers >= 1',
+  UNION ALL SELECT 'D07 one keyword per open seat number within a family; numbers >= 1',
          (SELECT COUNT(*) FROM (SELECT family, seat_no FROM after_open GROUP BY 1, 2 HAVING COUNT(*) > 1))
          + (SELECT COUNTIF(seat_no IS NULL OR seat_no < 1) FROM after_open)
-  UNION ALL SELECT 'D08 (c) no admission took a number a still-seated keyword of the family holds',
+  UNION ALL SELECT 'D08 no admission took a number a still-seated keyword of the family holds',
          (SELECT COUNT(*) FROM after_open a, run_day WHERE a.opened_on = run_day.d
             AND EXISTS (SELECT 1 FROM before b
                         WHERE b.family = a.family AND b.seat_no = a.seat_no
@@ -163,6 +153,28 @@ checks AS (
                           AND EXISTS (SELECT 1 FROM after_open z
                                       WHERE z.family = b.family AND z.campaign_id = b.campaign_id
                                         AND z.keyword_id = b.keyword_id)))
+  UNION ALL SELECT 'D09 (Task 6) the AFTER ledger\'s open non-held seat set for plan B\'s seated keywords equals plan B\'s seated set exactly, one number each, no orphans either direction',
+         (SELECT COUNT(*) FROM plan_b p
+          LEFT JOIN after_open o ON o.family = p.family AND o.campaign_id = p.campaign_id AND o.keyword_id = p.keyword_id
+          WHERE o.campaign_id IS NULL OR o.held_reason IS NOT NULL)
+         + (SELECT COUNT(*) FROM after_open o
+            LEFT JOIN plan_b p ON p.family = o.family AND p.campaign_id = o.campaign_id AND p.keyword_id = o.keyword_id
+            WHERE o.held_reason IS NULL AND p.campaign_id IS NULL)
+         + (SELECT COUNT(*) FROM (SELECT family, seat_no FROM after_open WHERE held_reason IS NULL GROUP BY 1, 2 HAVING COUNT(*) > 1))
+  UNION ALL SELECT 'D10 every row THIS PASS closed reads agreement_tier = CONFIRMED',
+         (SELECT COUNT(*) FROM new_closed WHERE agreement_tier IS DISTINCT FROM 'CONFIRMED')
+  UNION ALL SELECT 'D11 no HELD_DISPUTED occupant is evicted while plan A still says NOT_GOOD',
+         (SELECT COUNT(*) FROM before_full b
+          JOIN after_closed c
+            ON c.family = b.family AND c.campaign_id = b.campaign_id AND c.keyword_id = b.keyword_id
+           AND c.opened_on = b.opened_on
+          JOIN plan_a a ON a.family = b.family AND a.campaign_id = b.campaign_id AND a.keyword_id = b.keyword_id
+          WHERE b.closed_on IS NULL AND b.held_reason = 'HELD_DISPUTED' AND a.side_a = 'NOT_GOOD')
+  UNION ALL SELECT 'D12 admission order across the pass: no DISPUTED candidate admitted this pass took a lower seat number than a CONFIRMED one admitted in the same family this pass',
+         (SELECT COUNT(*) FROM after_open d
+          JOIN after_open c ON c.family = d.family AND c.opened_on = d.opened_on, run_day
+          WHERE d.opened_on = run_day.d AND d.agreement_tier = 'DISPUTED'
+            AND c.agreement_tier = 'CONFIRMED' AND c.seat_no > d.seat_no)
 )
 SELECT check_name, violations,
        CASE WHEN violations = 0 THEN 'PASS'

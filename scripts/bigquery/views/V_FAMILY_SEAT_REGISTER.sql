@@ -396,8 +396,14 @@ park_bid AS (SELECT MAX(bid_park) AS bid_park FROM oob),
 oob_brand_hit AS (
   SELECT DISTINCT o.campaign_id, o.keyword_id
   FROM oob o JOIN brand b ON REGEXP_CONTAINS(LOWER(COALESCE(o.target_text, '')), b.rx)),
+-- v27.139 (2026-08-24, ruling R-o, Task 5): agreement_tier / held_reason / held_reason_text —
+-- SP_MAINTAIN_FAMILY_SEATS's own agreement-tier read against FACT_PLAN_NEXT_WEEK plan A/B, never
+-- re-derived here. A HELD_DISPUTED row (closed_on IS NULL, held_reason set) is an OPEN ledger row
+-- like any other and reads through the same `ledger` CTE — the register does not distinguish it
+-- from a normal seat for JOIN purposes; the SEAT row's own sentence names the hold.
 ledger AS (
-  SELECT family, campaign_id, keyword_id, seat_no, opened_on
+  SELECT family, campaign_id, keyword_id, seat_no, opened_on,
+         agreement_tier, held_reason, held_reason_text
   FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL),
 -- ── the universe: every keyword in a family campaign that is on the ladder OR SPENT on the basis
 --    window (an off-ladder keyword with $0 on the basis window is not a gap and is not counted)
@@ -565,6 +571,7 @@ refused AS (
 kw AS (
   SELECT d.*, x.category, x.side, x.occupant_kind, x.cat_order,
          l.seat_no, l.opened_on AS seat_opened_on,
+         l.agreement_tier, l.held_reason, l.held_reason_text,
          d.spend7 / k.basis_days AS cost_today,
          -- R-l holdout half, applied to BOTH projections: a campaign in the holdout arm from its
          -- eligible_from date gets NO sheet row of any kind, so nothing a generator would have
@@ -1006,6 +1013,9 @@ shape AS (
          END AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
     CAST(NULL AS STRING) AS engine_instruction,
+    CAST(NULL AS STRING) AS agreement_tier,
+    CAST(NULL AS STRING) AS held_reason,
+    CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%02d|', f.family, IF(f.book = 'INVEST', 9, 1), f.hz_order) AS sort_key
   FROM fam_rows f CROSS JOIN leak_book_state lbs
   UNION ALL
@@ -1072,6 +1082,9 @@ shape AS (
                             ELSE 'shown so nothing is silent; $0 by construction, no side' END) AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
     CAST(NULL AS STRING) AS engine_instruction,
+    CAST(NULL AS STRING) AS agreement_tier,
+    CAST(NULL AS STRING) AS held_reason,
+    CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%02d|%02d', family, IF(book = 'INVEST', 9, 2), hz_order, MIN(cat_order)) AS sort_key
   FROM kw_h
   GROUP BY family, book, horizon, hz_order, category_h, side_h
@@ -1234,7 +1247,11 @@ shape AS (
            END,
            IF(w.seat_no IS NULL, ' (Not yet numbered: the seat ledger runs after the snapshot.)', ''),
            IF(w.holdout AND run_day.d >= w.holdout_eligible_from, ' HOLDOUT — do not touch; excluded from every sheet, whatever the move above would have been.', ''),
-           IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s; no sheet touches it from then.', CAST(w.holdout_eligible_from AS STRING)), '')
+           IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s; no sheet touches it from then.', CAST(w.holdout_eligible_from AS STRING)), ''),
+           -- v27.139 (ruling R-o): a HELD_DISPUTED seat carries the ledger's own sentence naming
+           -- the disagreement — published, never dropped, so a reader sees WHY this seat did not
+           -- close and did not silently stay as if nothing changed.
+           IF(w.held_reason = 'HELD_DISPUTED', CONCAT(' ', w.held_reason_text), '')
          ) AS sentence,
     -- sheet_row: what a sheet does with this row today (2026-08-23). PENDING_BOOK = a pending
     -- book already carries it; NEXT_REPRICE_BOOK = the reprice generator writes it on its next
@@ -1256,6 +1273,14 @@ shape AS (
     -- B39: the GO instruction(s) T_ENGINE_PREFLIGHT carries for this key today (engine lever
     -- $from → $to; NULL when none) — published on EVERY seat so a second price is never hidden
     w.engine_instruction AS engine_instruction,
+    -- v27.139 (ruling R-o, Task 5): published on every SEAT row, never dropped. agreement_tier is
+    -- CONFIRMED (both the ladder's 90-day record and this week's window agree) or DISPUTED (they
+    -- disagree — a window-only or ladder-only seat); held_reason / held_reason_text carry
+    -- 'HELD_DISPUTED' and its plain sentence when the seat is being kept open past what a normal
+    -- close would have done, because the two judges disagree about its departure.
+    w.agreement_tier AS agreement_tier,
+    w.held_reason AS held_reason,
+    w.held_reason_text AS held_reason_text,
     FORMAT('%s|%02d|%05d|%s|%s', w.family, 3, COALESCE(w.seat_no, 99999), w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN k CROSS JOIN win CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.occupant_kind IS NOT NULL
@@ -1327,6 +1352,9 @@ shape AS (
                        IF(np.holdout, FORMAT(' Its campaign joins the holdout arm on %s and leaves the queue then.', CAST(np.holdout_eligible_from AS STRING)), '')) END AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
     CAST(NULL AS STRING) AS engine_instruction,
+    CAST(NULL AS STRING) AS agreement_tier,
+    CAST(NULL AS STRING) AS held_reason,
+    CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%05d||', fr.family, 4, fn.lowest_free_seat) AS sort_key
   FROM fam_rows fr CROSS JOIN k CROSS JOIN run_day
   JOIN free_no fn ON fn.family = fr.family
@@ -1422,6 +1450,9 @@ shape AS (
          WHEN w.pause_pending THEN 'PENDING_BOOK'
          ELSE 'NEXT_LEAK_BOOK' END AS sheet_row,
     CAST(NULL AS STRING) AS engine_instruction,
+    CAST(NULL AS STRING) AS agreement_tier,
+    CAST(NULL AS STRING) AS held_reason,
+    CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 5, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day CROSS JOIN leak_book_state lbs
   WHERE w.book = 'HARVEST' AND w.code = 'LEAK'
@@ -1509,6 +1540,9 @@ shape AS (
     END AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
     CAST(NULL AS STRING) AS engine_instruction,
+    CAST(NULL AS STRING) AS agreement_tier,
+    CAST(NULL AS STRING) AS held_reason,
+    CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 6, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.code = 'GAP'
@@ -1578,6 +1612,9 @@ shape AS (
                 IF(w.holdout AND run_day.d < w.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(w.holdout_eligible_from AS STRING)), '')) AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
     CAST(NULL AS STRING) AS engine_instruction,
+    CAST(NULL AS STRING) AS agreement_tier,
+    CAST(NULL AS STRING) AS held_reason,
+    CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%010.2f|%s|%s', w.family, 8, 99999 - w.cost_today, w.campaign_id, w.keyword_id) AS sort_key
   FROM kw w CROSS JOIN run_day
   WHERE w.book = 'HARVEST' AND w.code = 'WAITING_NO_CLOCK'
@@ -1648,6 +1685,9 @@ shape AS (
                 ELSE '' END) AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
     CAST(NULL AS STRING) AS engine_instruction,
+    CAST(NULL AS STRING) AS agreement_tier,
+    CAST(NULL AS STRING) AS held_reason,
+    CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%s||', a.family, 7, a.campaign_id) AS sort_key
   FROM absorb a CROSS JOIN run_day
   UNION ALL
@@ -1719,6 +1759,9 @@ shape AS (
               IF(x.holdout AND run_day.d < x.holdout_eligible_from, FORMAT(' Its campaign joins the holdout arm on %s.', CAST(x.holdout_eligible_from AS STRING)), ''))) AS sentence,
     CAST(NULL AS STRING) AS sheet_row,
     CAST(NULL AS STRING) AS engine_instruction,
+    CAST(NULL AS STRING) AS agreement_tier,
+    CAST(NULL AS STRING) AS held_reason,
+    CAST(NULL AS STRING) AS held_reason_text,
     FORMAT('%s|%02d|%010.2f|%s|', 'Unmapped', IF(x.campaign_id IS NULL, 1, 2), IF(x.campaign_id IS NULL, 0, 99999 - x.spend7 / k.basis_days), COALESCE(x.campaign_id, '')) AS sort_key
   FROM (
     SELECT campaign_id, campaign_name, spend7, clicks7, holdout, holdout_eligible_from, CAST(NULL AS INT64) AS n_campaigns FROM unmapped
