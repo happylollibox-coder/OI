@@ -206,6 +206,38 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
 
 ---
 
+## 9. How the UI must present a decision (binding on future implementation)
+
+**Every action shown to a person is explained top-down, through the three layers, in order.** Never a
+bare instruction, never a single number, never one layer's reasoning standing alone. A reader must be
+able to see *what is true*, *what we decided to do about it*, and *how it will be executed* — and to
+tell which layer to argue with.
+
+The order is fixed, because it is the order in which the decision was actually made:
+
+| shown | from | answers |
+|---|---|---|
+| **1. Catalog** — what this is worth | the Catalog's answer for the window in question, with its confidence and the season if it matters | *why do we believe this?* |
+| **2. Brain** — what we decided | the intent (`REPAIR` / `TEST` / `PARK` / `STOP` / `EARN`), the ceiling or the seat and its budget, and why this and not something else in the family | *why are we spending — or not spending — here?* |
+| **3. Pacing** — what happens in the account | today's bid, the path (immediately or walked), the floor or cap that binds it, and what reaches Amazon | *what will actually change?* |
+
+Rules for the surface:
+
+- **Attribution is always visible.** A number on screen names the layer that produced it. A reader who
+  disagrees must be able to tell instantly whether the argument is with a valuation, an allocation, or
+  an execution.
+- **A disagreement between layers is shown, never hidden.** When Pacing wanted something the ceiling
+  forbade, or the Catalog's answer changed the Brain's mind, that is the most informative thing on the
+  row — surface it rather than showing only the surviving instruction.
+- **`NOT_WORTH_NOW` and `UNKNOWN` must read differently from `NOT_WORTH`** in words a person can act
+  on ("dormant until November" is not "dead"). The three must never render alike.
+- **An irreversible action carries its justification on the row** — the verdict, the confidence, and
+  the fact that no season contradicts it (§5).
+- The same three-part shape applies wherever a decision appears: the Weekly Run list, a keyword drill-
+  down, the morning brief, and the README of any book that is uploaded.
+
+---
+
 ## Appendix A — worked example: an answered keyword
 
 `asin="B0CCCPFWZF"`, ME-SP/PT (Competitors, Mint, A1), LolliME. Measured 2026-08-24; re-derive with
