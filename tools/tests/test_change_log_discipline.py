@@ -27,8 +27,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 import build_seat_moves_bulksheet as leak  # noqa: E402
 import build_reprice_bulksheet as reprice  # noqa: E402
+import build_seasonal_unpause_bulksheet as unpause  # noqa: E402
 
-BOOKS = [leak, reprice]
+# Every book that writes a row into FACT_PPC_CHANGE_LOG obeys the same discipline, so every book
+# is parametrised here. The seasonal unpause book (2026-08-24) joined the day it was written: it
+# labels and lists exactly like its siblings, and it reverses a pause rather than making one.
+BOOKS = [leak, reprice, unpause]
 
 
 def _pending_only(sql):
