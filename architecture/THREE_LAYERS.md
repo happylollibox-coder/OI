@@ -25,6 +25,7 @@ position from an accident. Newest last.
 | 2026-08-24 16:37 | `a92960b` | **§3.2 `LEAN_IN`, §3.3 open questions.** Ori: the Brain must always ask what it could do better, *including on the earning side* — "leave it alone" guards against churn but is not a licence to stop thinking. Adds the sixth intent and names the two populations the Brain must examine besides the losing side: turns (record says losing, window says earning — protected today, never funded, though the evidence is already bought) and constrained winners. Also: the 10 % holdout is not only the engine-vs-nothing baseline, it is the only place the Brain can honestly answer its own method questions. |
 | 2026-08-24 17:09 | `11a562c` | **§2.3 evidence on probation, §2.4 `rank()`, §6 rewritten.** Ori: the Catalog must see SQP but distrust it until it earns trust — recorded with four nameable grounds rather than a disposition, and a hard limit that demand data alone may never move a verdict to `WORTH`. The Catalog must also answer *what is worth having* in a family, not only what a named subject is worth; refined from Ori's "best CVR" to expected profit contribution at the ceiling, because ranking on conversion rate alone fills an allowance with keywords too small to matter. §6 rewritten so all three layers recompute daily and are graded on their own question — including Pacing, whose scorecard nobody builds and which is the only way to test house constants like the entry anchor. §6.2 adds the attribution discipline the principle requires: only one layer may run a live method experiment in a family at a time, or the measurement is destroyed. |
 | 2026-08-24 18:30 | `1ca33b0` | **§2.5 quantity, §2.6 what is advertised, §6.3 demonstrate don't assert, §10 the baseline.** A simulated keyword-year against the doctrine, measured across the account, then put through two adversarial verifiers. The arithmetic passed; **three of the four largest claims did not** — each had measured a population correctly and then asserted a loss without testing the innocent explanation. That failure produced the three new rules. §2.5: worth is a curve over volume, not a scalar price — the post-season month that looked like mispricing was the account buying more clicks at the right price into weaker conversion. §2.6 (Ori's correction of my "substitution" framing): the Catalog must know **what is advertised** — format, placement, creative, match width — because most of the "destroyed" seasonal sales were the same demand arriving through a wider match. §6.3 makes the discipline standing. §10 records the survivors, the disproved claims, and three violations in §8 the research corrected — including that the coverage gap is entirely deliberate and that the move cap is not enforced in *either* direction. |
+| 2026-08-24 19:05 | `5f999c3` | **Baseline queries committed, five gaps closed.** §10.5 promised re-runnable queries that lived only in ephemeral scratch — all 76 are now committed at `docs/superpowers/specs/2026-08-24-three-layers-baseline.md`, which is what makes a recheck a re-run rather than a fresh argument. §3 gains the **park re-test obligation**: §8 and §10 both named a park as an absorbing state and no rule said so. §3 also gains `CARRY`, the vehicle intent §2.6 made possible but the contract could not express. §1.2 finally defines **the bar**. §9's UI table was missing `LEAN_IN`. §6.4 records the open rulings — including that the confidence scale is undefined, which leaves §5's irreversibility rule unenforceable as written. |
 
 ### How to add an entry
 
@@ -405,6 +406,18 @@ Two rules fall out of the last one, because they will recur:
 - **Beware selecting on the pattern noise produces.** A cohort chosen for "recent window bad, long record
   good" will be populated by regression to the mean at small samples. Test that the deterioration
   persists out of sample before calling it decline.
+
+### 6.4 Open rulings — decisions the doctrine is waiting on
+
+Recorded here so a deferral stays a deferral rather than quietly becoming a default. Each names what
+would settle it.
+
+| ruling | status | what would settle it |
+|---|---|---|
+| **The confidence scale** (§2) — what HIGH / MEDIUM / LOW mean and where the thresholds sit. §5 forbids an irreversible action below HIGH confidence, so that rule is unenforceable until this is answered. | **open — with Ori** | a chosen definition; the machinery to compute it already exists |
+| **Agreement-tier ranking** — when the long record and the short window disagree, should the seat queue prefer subjects both judges condemn? | **deferred by Ori, 2026-08-24** | a real case: a confirmed candidate with real money queued behind a lower-ranked disputed one that got funded. At the time of deferral every confirmed candidate in the queue carried $0 at stake, so nothing was being lost |
+| **The re-test cadence for a park** (§3) — how often, and how much, to buy fresh evidence on a parked subject | **open — a setting** | §6.1: declare it, run it on a treated slice, measure |
+| **The boost allowance share** — 0.50 in the run-up to a peak | **open — flagged unproven** | §6.1, or the free shadow plan |
 
 ---
 
