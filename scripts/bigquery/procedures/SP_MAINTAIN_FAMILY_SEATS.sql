@@ -235,13 +235,13 @@ BEGIN
   -- keyword the plan judged, whatever plan B did with it. A key absent from plan A entirely (never
   -- judged) defaults to 'GOOD' — the conservative reading in both directions: it cannot CONFIRM a
   -- not-good admission, and it cannot hold open a departure the ladder never spoke about.
-  CREATE TEMP TABLE plan_a AS
+  CREATE OR REPLACE TEMP TABLE plan_a AS
   SELECT family, campaign_id, keyword_id, side AS side_a
   FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   WHERE plan = 'A' AND as_of = plan_as_of;
 
   -- today's occupant set: plan B's own SEATED keywords — its already budget-rationed decision.
-  CREATE TEMP TABLE occupants_raw AS
+  CREATE OR REPLACE TEMP TABLE occupants_raw AS
   SELECT b.family, b.campaign_id, b.keyword_id, b.ladder_state, b.rank_score,
          b.seat_no AS plan_seat_no,  -- v27.141: the plan's own number, adopted verbatim at admission (Task 6)
          IF(COALESCE(a.side_a, 'GOOD') = 'NOT_GOOD', 'CONFIRMED', 'DISPUTED') AS agreement_tier
@@ -251,7 +251,7 @@ BEGIN
   WHERE b.plan = 'B' AND b.as_of = plan_as_of AND b.seat_no IS NOT NULL;
 
   -- ── 1. OCCUPANT KIND — read fresh from TODAY's FACT_KEYWORD_STATE (unchanged probe test) ──────
-  CREATE TEMP TABLE occupants AS
+  CREATE OR REPLACE TEMP TABLE occupants AS
   WITH
   wm AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
          FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
@@ -316,7 +316,7 @@ BEGIN
   -- or is HELD depends on plan A's CURRENT side for that key (same plan_as_of read as step 0):
   --   plan A still NOT_GOOD  → the ladder disagrees with letting it go → HOLD (held_reason)
   --   plan A GOOD or absent  → both judges agree it left            → CLOSE (closed_reason, unchanged ladder)
-  CREATE TEMP TABLE leaving_keys AS
+  CREATE OR REPLACE TEMP TABLE leaving_keys AS
   SELECT l.family, l.campaign_id, l.keyword_id, l.opened_on,
          IF(COALESCE(a.side_a, 'GOOD') = 'NOT_GOOD', TRUE, FALSE) AS ladder_disagrees
   FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` l
@@ -341,7 +341,7 @@ BEGIN
     AND x.ladder_disagrees;
 
   -- ── 2b. CLOSE (both judges agree it left) — the unchanged reason ladder, read from TODAY ───────
-  CREATE TEMP TABLE leaving AS
+  CREATE OR REPLACE TEMP TABLE leaving AS
   WITH
   working AS (SELECT family FROM `onyga-482313.OI.V_BOOK_ASSIGNMENT` WHERE book = 'HARVEST'),
   brand_hit AS (SELECT DISTINCT s.campaign_id, s.keyword_id
@@ -451,7 +451,7 @@ BEGIN
   -- weigh agreement_tier (FACT_PLAN_NEXT_WEEK carries no such column). A17 / D12 remain standing
   -- measurements, not full guarantees, on that non-colliding path — see architecture/
   -- FAMILY_SEAT_REGISTER.md ruling R-r and "Open rulings for Ori" for the two ways to close it.
-  CREATE TEMP TABLE admits AS
+  CREATE OR REPLACE TEMP TABLE admits AS
   SELECT o.*
   FROM occupants o
   LEFT JOIN (SELECT family, campaign_id, keyword_id
@@ -459,7 +459,7 @@ BEGIN
     ON l.family = o.family AND l.campaign_id = o.campaign_id AND l.keyword_id = o.keyword_id
   WHERE l.campaign_id IS NULL;
 
-  CREATE TEMP TABLE admits_ranked AS
+  CREATE OR REPLACE TEMP TABLE admits_ranked AS
   SELECT a.*,
          ROW_NUMBER() OVER (PARTITION BY a.family
            ORDER BY CASE a.agreement_tier WHEN 'CONFIRMED' THEN 1 ELSE 2 END,
@@ -469,10 +469,10 @@ BEGIN
   -- claimed starts as the ledger's PRE-RUN open set (after steps 2/2a/2b/3 have already run) and
   -- grows by exactly one row per family per loop iteration — the running "already spoken for" set
   -- both halves of the spec ask for (pre-run open set ∪ every number claimed earlier this pass).
-  CREATE TEMP TABLE claimed AS
+  CREATE OR REPLACE TEMP TABLE claimed AS
   SELECT family, seat_no FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` WHERE closed_on IS NULL;
 
-  CREATE TEMP TABLE assigned (
+  CREATE OR REPLACE TEMP TABLE assigned (
     family STRING, campaign_id STRING, keyword_id STRING, seat_no INT64,
     occupant_kind STRING, agreement_tier STRING
   );
