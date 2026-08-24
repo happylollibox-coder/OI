@@ -332,7 +332,7 @@ two corrections this plan made to §8's own wording (violations 19 and 21).
 >
 > | object | where | note |
 > |---|---|---|
-> | `FACT_KEYWORD_STATE_HISTORY` | `scripts/bigquery/tables/FACT/FACT_KEYWORD_STATE_HISTORY.sql` | **not** the path Task 0.3 names; live and empty as of 2026-08-25 |
+> | `FACT_KEYWORD_STATE_HISTORY` | `scripts/bigquery/tables/FACT/FACT_KEYWORD_STATE_HISTORY.sql` | **not** the path Task 0.3 names. **Live and NOT empty** — it holds 8 partitions / 6,814 rows (2026-08-17..2026-08-24), seven of them recovered from BigQuery time travel and **not re-creatable**. An earlier version of this row said "live and empty", which was already wrong when written. A second, immutable copy exists: `FACT_KEYWORD_STATE_HISTORY_SEED_20260824`. |
 > | `SP_APPEND_KEYWORD_STATE_HISTORY` | `scripts/bigquery/procedures/` | a **separate orchestrator task 20.8a**, append-then-prune — not an append arm inside `SP_SNAPSHOT_KEYWORD_STATE` as Task 0.3 describes |
 > | `V_CATALOG_DWELL` | `scripts/bigquery/views/V_CATALOG_DWELL.sql` | Task 0.4's object, built |
 > | `KEYWORD_STATE_HISTORY_acceptance.sql` | `scripts/bigquery/tests/` | **not** `FACT_KEYWORD_STATE_acceptance.sql`, the name Task 0.2 creates |

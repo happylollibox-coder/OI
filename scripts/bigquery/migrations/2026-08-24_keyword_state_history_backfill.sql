@@ -14,11 +14,28 @@
 -- is a row the Catalog actually wrote, and source_detail on each names the exact time-travel
 -- timestamp it was read from, so any reader can re-derive it — until the fuse burns.
 --
--- THE FUSE. BigQuery's time-travel window is seven days. These timestamps stop being readable
--- around 2026-08-31 and this file becomes unrunnable. It is committed as the AUDIT RECORD of how
--- those seven partitions got there, not as a repeatable step. Everything after 2026-08-24 comes
--- from SP_APPEND_KEYWORD_STATE_HISTORY on the live pass, which is why the history is only ever
--- this thin once.
+-- THE FUSE IS SEVEN DATES, NOT ONE, AND THE FIRST ONE IS 2026-08-25 (corrected v27.146). The
+-- window is 168 hours (dataset maxTimeTravelHours = 168, checked), and each timestamp below leaves
+-- it on its OWN day — so "around 2026-08-31", as this header first read, is the LAST expiry and not
+-- the first:
+--
+--     snapshot_date  read from            unrecoverable after
+--     2026-08-17     2026-08-18 06:00Z    2026-08-25 06:00Z   <- FIRST
+--     2026-08-18     2026-08-19 06:00Z    2026-08-26 06:00Z
+--     2026-08-19     2026-08-20 06:00Z    2026-08-27 06:00Z
+--     2026-08-20     2026-08-21 06:00Z    2026-08-28 06:00Z
+--     2026-08-21     2026-08-22 06:00Z    2026-08-29 06:00Z
+--     2026-08-22     2026-08-23 06:00Z    2026-08-30 06:00Z
+--     2026-08-23     2026-08-24 06:00Z    2026-08-31 06:00Z
+--
+-- This file is committed as the AUDIT RECORD of how those seven partitions got there, not as a
+-- repeatable step. Everything after 2026-08-24 comes from SP_APPEND_KEYWORD_STATE_HISTORY on the
+-- live pass, which is why the history is only ever this thin once.
+--
+-- BECAUSE THE FIRST EXPIRY LANDED HOURS AFTER THIS FILE RAN, A SECOND COPY WAS TAKEN:
+-- FACT_KEYWORD_STATE_HISTORY_SEED_20260824, an immutable snapshot created 2026-08-24 23:15 UTC
+-- (scripts/bigquery/tables/FACT/FACT_KEYWORD_STATE_HISTORY_SEED_20260824.sql). The history's own
+-- time travel is NOT a second copy — it expires on the same rolling window.
 --
 -- TWO SCHEMA ERAS, HONESTLY LOADED. 2026-08-17..21 predate v27.103/104/105 and the procedure
 -- published 22 columns then; 2026-08-22..23 publish the current 65. Each date is inserted with

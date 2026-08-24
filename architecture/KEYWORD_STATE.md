@@ -211,10 +211,41 @@ same rule the live append follows, since the last pass of a day is that day's fi
 was interpolated, synthesised or dated by inference, and `source_detail` on every recovered row
 names the exact time-travel timestamp it came from.
 
-**That file has a fuse and is committed as an audit record, not a repeatable step.** Its timestamps
-leave the seven-day window about a week after it ran, and it then becomes unrunnable. Everything
-later comes from the nightly append. The history is only ever this thin once — check where it
-actually begins:
+**That file has a fuse and is committed as an audit record, not a repeatable step.** Everything
+later comes from the nightly append; the history is only ever this thin once.
+
+**The fuse is seven dates, not one, and the first burned on 2026-08-25 (v27.146).** The header of
+that migration said its timestamps expire "around 2026-08-31" — which is the LAST expiry. The window
+is 168 hours and each source timestamp leaves it on its own day:
+
+| snapshot_date | read from | unrecoverable after |
+|---|---|---|
+| 2026-08-17 | 2026-08-18 06:00Z | **2026-08-25 06:00Z** |
+| 2026-08-18 | 2026-08-19 06:00Z | 2026-08-26 06:00Z |
+| 2026-08-19 | 2026-08-20 06:00Z | 2026-08-27 06:00Z |
+| 2026-08-20 | 2026-08-21 06:00Z | 2026-08-28 06:00Z |
+| 2026-08-21 | 2026-08-22 06:00Z | 2026-08-29 06:00Z |
+| 2026-08-22 | 2026-08-23 06:00Z | 2026-08-30 06:00Z |
+| 2026-08-23 | 2026-08-24 06:00Z | 2026-08-31 06:00Z |
+
+After each of those moments this table is the **only** copy of that day. Its own time travel is
+**not** a second copy — it runs on the same rolling seven-day window, so it protects only against a
+loss noticed inside a week. So a second, permanent copy was taken before the first expiry:
+`FACT_KEYWORD_STATE_HISTORY_SEED_20260824`, an immutable BigQuery SNAPSHOT of all eight partitions
+(`scripts/bigquery/tables/FACT/FACT_KEYWORD_STATE_HISTORY_SEED_20260824.sql`). It is delta-stored,
+survives deletion of the base table, and cannot be written to — a `DELETE` against it errors with
+*snapshots are immutable*. **Nothing reads it and nothing should.** It is insurance, not a source
+and not a fallback path. Drop it only when the recovered partitions stop being of interest.
+
+If a recovered partition is ever lost, restore it FROM THE SNAPSHOT, not from time travel:
+
+```sql
+-- inspect first; then insert only the missing snapshot_date(s)
+SELECT snapshot_date, COUNT(*) FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY_SEED_20260824`
+GROUP BY 1 ORDER BY 1;
+```
+
+Check where the history actually begins:
 
 ```sql
 SELECT MIN(snapshot_date) AS history_from, MAX(snapshot_date) AS history_to,
@@ -225,7 +256,7 @@ FROM `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY`;
 
 ### Operating it
 
-- **Acceptance:** `scripts/bigquery/tests/KEYWORD_STATE_HISTORY_acceptance.sql` — eleven checks, every
+- **Acceptance:** `scripts/bigquery/tests/KEYWORD_STATE_HISTORY_acceptance.sql` — fourteen checks (C01..C14), every
   row must read PASS. It asserts partitioning, row-count parity with the snapshot, one row per
   (date, subject), partition integrity, that no earlier partition is ever rewritten, dwell coverage,
   honest degradation, bound arithmetic, that the view invents no subject, that every ladder column
