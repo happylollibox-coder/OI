@@ -180,6 +180,59 @@ predicting this one — and that transfers at 300–400 % error.
 the whole build. The only reason it is not in the changelog as one is that the holdout was run before
 the claim was made. A model that has seen the answer will always look excellent.
 
+
+---
+
+## 3.3 MEASURED — every approach tried, and why 15 % ON NET PROFIT is the wrong metric
+
+Five shapes were tested against family-level net profit over the last 28 days. **Out-of-sample, none
+comes close to 15 %.**
+
+| approach | family-level error |
+|---|---|
+| 365-day profile, keyword dimensions | 145 – 506 % |
+| customer dimensions, **in-sample** | 1.5 – 25 % *(memorisation — the profile contains the test window)* |
+| customer dimensions, out-of-sample | 59 – 832 % |
+| recent 28-day base | 57 – 780 % |
+| recent base × account seasonal index | **46 – 167 %** |
+
+**And a structural fact was found that explains all of it.** Net profit is a small **difference between
+two large numbers**:
+
+| family | gross profit | ad cost | net profit | GP ÷ \|NP\| | **accuracy needed on GP to hit 15 % on NP** |
+|---|---|---|---|---|---|
+| LolliME | $12,413 | $11,216 | $1,197 | 10.4× | **1.45 %** |
+| Bottle | $424 | $387 | $37 | 11.4× | **1.32 %** |
+| Fresh | $4,502 | $5,176 | −$674 | 6.7× | 2.25 % |
+| Lollibox | $8,626 | $10,120 | −$1,493 | 5.8× | 2.60 % |
+| LolliBall | $3,525 | $4,186 | −$661 | 5.3× | 2.81 % |
+
+**To score 15 % on LolliME's net profit, gross profit must be predicted to 1.45 %.** Predicting a 4 %
+conversion rate to ±10 % — which would be an excellent model — gives ±10 % on gross profit and therefore
+**±100 % on net profit**. The metric amplifies every error by five to eleven times, and it does so
+*worse* the closer a family sits to break-even, which is exactly where the account lives.
+
+**Two further findings, each of which independently blocks the seasonal fix:**
+
+1. **The subject population turns over faster than a year.** The 849 live subjects have **zero clicks**
+   from Aug–Sep 2025. A same-season index cannot be learned from their own history because they have
+   none; the index has to come from the account, across subjects that no longer exist.
+2. **The account-level index is 0.098** — back-to-school net profit per click is under a tenth of the
+   annual average. Applying it helps three families and hurts four, and its best result is 46 %.
+
+**What this changes, and it is the metric rather than the model.** The Catalog should still **maximise**
+net profit — that is the objective and §2.0.1 is unchanged. But it should be **scored** where scoring is
+meaningful:
+
+- **the links** — clicks, CVR, gross profit per order, CPC — each of which is directly predictable and
+  where 15 % is a reasonable bar;
+- **net profit in DOLLARS against a floor**, not as a percentage, so a family sitting near break-even is
+  not scored on the ratio of a rounding error;
+- **gross profit or ROAS as the headline percentage**, since those do not cancel.
+
+This is not a retreat from the 85 %. It is the difference between a target that can be met and one whose
+arithmetic makes it unmeetable no matter how good the forecast is.
+
 ---
 
 ## 4. CUSTOMER PURCHASE FLOWS — what the Catalog uses when it has no data
