@@ -191,9 +191,15 @@ LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS campaign_id,
                   SUM(Ads_cost)                     AS spend_28d,
                   SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)) AS gp_roas_28d
            FROM `{PROJECT}.OI.FACT_AMAZON_ADS`
+           -- THE SAME SETTLED WINDOW THE MEND USES, ending 7 days back. The first cut measured to
+           -- the watermark while the mend measured to watermark-7, and a campaign can be profitable
+           -- on one and losing on the other — which put both claims in ONE sentence: "made $31.45,
+           -- so it may be grown" immediately followed by "a losing campaign is capped while it is
+           -- fixed". Two windows is two opinions; the gate and the mend must share one.
            WHERE date BETWEEN DATE_SUB((SELECT MAX(date) FROM `{PROJECT}.OI.FACT_AMAZON_ADS`),
-                                       INTERVAL 27 DAY)
-                          AND (SELECT MAX(date) FROM `{PROJECT}.OI.FACT_AMAZON_ADS`)
+                                       INTERVAL 34 DAY)
+                          AND DATE_SUB((SELECT MAX(date) FROM `{PROJECT}.OI.FACT_AMAZON_ADS`),
+                                       INTERVAL 7 DAY)
            GROUP BY 1) np USING (campaign_id)
 -- BLANK IS NOT "UNCHANGED" ON A CAMPAIGN UPDATE ROW — it DETACHES the campaign from its portfolio.
 -- DIM_CAMPAIGN.portfolio_id is NULL for a campaign that is detached RIGHT NOW, so echoing it would
@@ -541,10 +547,10 @@ def explain(rec):
             f"${a['_visible_spend']:.2f}/day today ("
             + (f"{a['_utilisation'] * 100:.0f}% of it" if a['_utilisation'] is not None else "n/a")
             + f") and the plan expects its spend to move {a['_spend_delta']:+.2f}/day. "
-            + (f"The campaign has made ${a['_net_profit_28d']:,.2f} net profit over 28 days "
+            + (f"The campaign has made ${a['_net_profit_28d']:,.2f} net profit over 28 SETTLED days "
                f"(GP-ROAS {a['_gp_roas_28d']:.2f}), so it may be grown."
                if (a.get('_net_profit_28d') or 0) > 0 else
-               (f"The campaign has LOST ${abs(a['_net_profit_28d']):,.2f} over 28 days "
+               (f"The campaign has LOST ${abs(a['_net_profit_28d']):,.2f} over 28 SETTLED days "
                 f"(GP-ROAS {a['_gp_roas_28d']:.2f}) — it is being mended, not grown."
                 if a.get('_net_profit_28d') is not None else
                 "No 28-day profit reading, so the profit gate abstained."))
