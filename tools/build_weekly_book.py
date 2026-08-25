@@ -581,9 +581,18 @@ def write_book(path, kept, conflicts, refused, no_log=False):
 #    A row is NEVER deleted, only labelled.
 # ---------------------------------------------------------------------------------------------
 
+# THE ACCOUNT'S OWN VOCABULARY, NOT A NEW ONE. The SOP promised "no new action string is invented
+# here" and the first cut broke that promise twice: it wrote INCREASE_BUDGET / REDUCE_BUDGET when
+# FACT_PPC_CHANGE_LOG has carried BUDGET_CHANGE since 2026-07-18 (183 rows), and NEGATE when the log
+# uses NEGATE_TERM (125 rows). A synonym in a log is worse than a typo: every existing query for
+# budget history would silently miss these rows, and the miss looks like "no budget changed".
+# Verified against SELECT DISTINCT action FROM FACT_PPC_CHANGE_LOG before this table was written.
 ACTION_OF = {
-    'BID_UP': 'INCREASE_BID', 'BID_DOWN': 'REDUCE_BID', 'PAUSE': 'KEYWORD_PAUSE',
-    'BUDGET_UP': 'INCREASE_BUDGET', 'BUDGET_DOWN': 'REDUCE_BUDGET',
+    'BID_UP': 'INCREASE_BID',        # 616 rows in the log
+    'BID_DOWN': 'REDUCE_BID',        # 1006
+    'PAUSE': 'KEYWORD_PAUSE',        # 86
+    'BUDGET_UP': 'BUDGET_CHANGE',    # 183 — direction lives in old_bid/new_bid, not in the verb
+    'BUDGET_DOWN': 'BUDGET_CHANGE',
 }
 
 
@@ -593,7 +602,7 @@ def log_action(rec):
     if disp in ACTION_OF:
         return ACTION_OF[disp]
     if (a.get('kind') or '').upper().startswith('NEG'):
-        return 'NEGATE'
+        return 'NEGATE_TERM'   # 125 rows in the log; 'NEGATE' would be a synonym nothing queries
     return disp or 'SEAT_MOVE'
 
 

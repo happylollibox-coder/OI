@@ -142,3 +142,29 @@ def test_campaign_and_keyword_rows_are_not_a_conflict():
            'audit': {'campaign_id': '9', 'keyword_id': '77', 'disposition': 'BID_UP'}}
     kept, conflicts = w.resolve([budget, bid])
     assert len(kept) == 2 and not conflicts
+
+
+# --- the change-log vocabulary -------------------------------------------------------------------
+# Added after the first cut invented INCREASE_BUDGET / REDUCE_BUDGET while the log has carried
+# BUDGET_CHANGE since 2026-07-18, and NEGATE while the log uses NEGATE_TERM. A synonym in a log is
+# worse than a typo: every existing query for budget history silently misses the rows, and the miss
+# reads as "no budget changed". These are the strings the log actually holds.
+
+LIVE_ACTIONS = {'INCREASE_BID', 'REDUCE_BID', 'BUDGET_CHANGE', 'NEGATE_TERM', 'KEYWORD_PAUSE',
+                'KEYWORD_UNPAUSE_PARK', 'CAMPAIGN_PAUSE', 'ADD_COMPETITOR_TARGET'}
+
+
+def test_every_mapped_action_is_one_the_log_already_uses():
+    for disp, action in w.ACTION_OF.items():
+        assert action in LIVE_ACTIONS, f"{disp} -> {action} is not a string the change log uses"
+
+
+def test_budget_direction_lives_in_the_amounts_not_the_verb():
+    """BUDGET_CHANGE both ways — old_bid/new_bid carry the direction, as the log's own rows do."""
+    assert w.ACTION_OF['BUDGET_UP'] == w.ACTION_OF['BUDGET_DOWN'] == 'BUDGET_CHANGE'
+
+
+def test_a_negative_logs_as_NEGATE_TERM():
+    rec = {'source': 'seats', 'sheet': w.SP_SHEET, 'cells': {},
+           'audit': {'kind': 'NEGATIVE_KEYWORD', 'disposition': 'NEGATE'}}
+    assert w.log_action(rec) == 'NEGATE_TERM'
