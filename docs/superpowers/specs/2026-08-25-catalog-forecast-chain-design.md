@@ -138,6 +138,48 @@ window changed underneath it. And it does not say 28 days is the answer — Loll
 with the sign inverted, which is a family that genuinely improved recently and a half-life would handle
 better than either fixed window.
 
+
+---
+
+## 3.2 MEASURED 2026-08-25 — the customer dimensions fit beautifully and forecast badly
+
+The tree was rebuilt on Ori's five customer dimensions — time and family forced, intent and ads type
+earned, placement carried as a modifier — and scored on **net profit per click** rather than CVR. Then
+it was tested twice.
+
+| family | 365-day, keyword dims | **customer dims, IN-SAMPLE** | **customer dims, OUT-OF-SAMPLE** |
+|---|---|---|---|
+| Lollibox | 394 % | **25.2 %** | **397.9 %** |
+| LolliME | 202 % | **8.2 %** | 304.1 % |
+| Fresh | 407 % | **1.5 %** | 300.4 % |
+| LolliBall | 425 % | **4.5 %** | 386.0 % |
+| Bunny | 158 % | **2.1 %** | 59.0 % |
+| UNMAPPED | 145 % | **7.4 %** | 101.5 % |
+| Bottle | 506 % | 15.1 % | 831.8 % |
+
+**The in-sample column is the model reading the answer.** Its profile is learned over 365 days, which
+contains the 28 days being predicted, so five of seven families landing inside 15 % measures *fit* and
+not *forecast*. It was about to be reported as a result.
+
+**The out-of-sample column is the honest one, and it is no better than where we started.** Training on
+`BACK_TO_SCHOOL` days excluding the last 28 means training on **last year's** back-to-school and
+predicting this one — and that transfers at 300–400 % error.
+
+**What this actually establishes, which is worth more than the failed number:**
+
+1. **Same-season-last-year does not predict this year for this account.** Seasonality is real —
+   GP-ROAS runs 0.947 to 1.577 across the year — but the business changed enough between the two
+   August windows that last August is a poor guide to this one.
+2. **Recency beat seasonality when both were tried.** A plain 28-day profile scored Fresh at 10.4 %
+   and LolliBall at 19.4 % (§3.1); the same-season-last-year profile scores them at 300 % and 386 %.
+3. **So season is probably an ADJUSTMENT, not a base.** The shape to test next is a recent base — what
+   is happening now — multiplied by a seasonal index describing how this season differs from average,
+   rather than a base drawn from the same season a year ago.
+
+**And the process lesson, which §6.3 already names:** the in-sample table looked like the best result of
+the whole build. The only reason it is not in the changelog as one is that the holdout was run before
+the claim was made. A model that has seen the answer will always look excellent.
+
 ---
 
 ## 4. CUSTOMER PURCHASE FLOWS — what the Catalog uses when it has no data
