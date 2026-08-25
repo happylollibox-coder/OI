@@ -33,6 +33,13 @@ promise AS (
            target_text, match_type, channel, clicks_due_date
 ),
 wm AS (SELECT MAX(date) AS watermark FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
+-- THE DECLARED SETTLE LAG (§1.5). Amazon's, and stated once so that porting sets a value rather than
+-- hunting for a literal. Anything without a match falls back to the conservative SP figure.
+settle_lag AS (
+  SELECT 'SP' AS channel, 7 AS settle_days UNION ALL
+  SELECT 'SB', 14 UNION ALL
+  SELECT 'SD', 7
+),
 
 -- WHAT ACTUALLY ARRIVED, over the promise's own span: from the first day it was asked for to the
 -- day it was due. Keyed on campaign_id AND targeting because FACT_AMAZON_ADS carries no keyword id
@@ -116,10 +123,18 @@ graded AS (
     -- SETTLE DISCIPLINE. SP sales accrue for 7 days, SB for 14. A window judged before it has
     -- settled marks the Catalog down for sales that have not landed yet, which is the opposite of
     -- a fair grade.
-    IF(UPPER(p.channel) = 'SB', 14, 7)                                  AS settle_days,
-    DATE_ADD(p.clicks_due_date, INTERVAL IF(UPPER(p.channel) = 'SB', 14, 7) DAY) AS settles_on
+    -- THE SETTLE LAG IS DECLARED, NOT INLINE (§1.5). It is the most domain-specific number in this
+    -- system — Amazon SP sales accrue for 7 days and SB for 14 — and the first version of this view
+    -- wrote it as a literal TWICE inside a scoring expression. Porting the engine anywhere else
+    -- (a stock settles T+2 and has no channel at all) would then have been a rewrite of the grading
+    -- logic rather than a change of one number, which is exactly the difference §1.5 exists to keep.
+    -- One name, one place, read by both the day count and the date.
+    COALESCE(st.settle_days, 7) AS settle_days,
+    DATE_ADD(p.clicks_due_date, INTERVAL COALESCE(st.settle_days, 7) DAY) AS settles_on
   FROM promise p
   CROSS JOIN wm w
+  -- the declared lag per channel, joined rather than hard-coded at the point of use
+  LEFT JOIN settle_lag st ON st.channel = UPPER(p.channel)
   LEFT JOIN delivered d USING (plan, campaign_id, keyword_id, clicks_due_date)
   LEFT JOIN oob       o USING (plan, campaign_id, keyword_id, clicks_due_date)
 )
