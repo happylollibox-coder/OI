@@ -57,15 +57,15 @@ REPRICE_TIER = {
 }
 # An action's kind is what it DOES, independent of which module built it — which is what lets one
 # explanation branch serve every source and stops the tiers parroting each other.
-BID_MOVE, KEYWORD_PAUSE, NEGATE, PARK, SEAT_MOVE, BUDGET = (
-    'BID_MOVE', 'KEYWORD_PAUSE', 'NEGATE', 'PARK', 'SEAT_MOVE', 'BUDGET')
+BID_MOVE, KEYWORD_PAUSE, NEGATE, PARK, SEAT_MOVE, BUDGET, MEND_TRIM = (
+    'BID_MOVE', 'KEYWORD_PAUSE', 'NEGATE', 'PARK', 'SEAT_MOVE', 'BUDGET', 'MEND_TRIM')
 
 # Most of what the seat book emits is a CATALOG verdict, not a Brain one: dead, parked and negated
 # all answer "is this worth having", which is the Catalog's question. The Brain's own rows are the
 # ones that move MONEY between subjects — budgets and seat reassignment.
 KIND_TIER = {
     BID_MOVE: PACING, KEYWORD_PAUSE: CATALOG, NEGATE: CATALOG, PARK: CATALOG,
-    SEAT_MOVE: BRAIN, BUDGET: BRAIN,
+    SEAT_MOVE: BRAIN, BUDGET: BRAIN, MEND_TRIM: BRAIN,
 }
 
 
@@ -313,6 +313,205 @@ def bar_basis(fam):
     return txt
 
 
+# ---------------------------------------------------------------------------------------------
+# THE MEND — a losing campaign is walked back to profit, budget AND bids together.
+# ---------------------------------------------------------------------------------------------
+# Ori, 2026-08-25: "if the campaign is not profitable the brain can use his budget tool to reduce
+# it so it wont loose a lot of money until he fix the campaign to be profitable... but if you
+# reduce unprofitable budget you should also trim bids to try to make it profitable."
+#
+# BOTH ARMS, BECAUSE THEY DO DIFFERENT THINGS. Cutting the budget caps the TOTAL loss and changes
+# no unit economics — the campaign loses less only because it buys less. Trimming the bid attacks
+# the CAUSE: a lower CPC is a higher return per ad dollar. A budget cut alone is a tourniquet; the
+# pair is a tourniquet and a stitch.
+#
+# WHY THE LADDER CANNOT DRIVE THIS, and it is the finding that shaped the whole design. The ladder
+# judges on a SETTLED 90-DAY window, and on that window the losing campaigns look healthy: across
+# them the ladder calls only NINE keywords below bar, worth $4.30 of trimmable bid. Judged on their
+# own RECENT settled 28 days, ONE HUNDRED AND NINETY-NINE are below their own bar, carrying
+# $12,903.61 of spend. The campaigns are not full of mispriced keywords by the ladder's reckoning —
+# they are full of keywords whose RECENT record has fallen away from a 90-day average that has not
+# caught up. So the mend reads the recent window, and it says so on every row.
+#
+# IT NEVER TRIMS A KEYWORD THAT IS EARNING. A campaign can lose money with every keyword inside it
+# correctly priced, and trimming a correct price to fix a campaign-level number would be the Brain
+# overruling the Catalog on the Catalog's own question (§1.1). Where nothing qualifies, the mend is
+# BUDGET ONLY and the book says so in words rather than leaving a reader to wonder.
+MEND_STEP = 0.15                  # one window's walk, both arms. Declared, not buried (§3.3).
+MEND_MIN_SPEND_28D = 50.0         # below this a campaign's loss is noise, not a pattern worth acting on
+
+MEND_SQL = """
+WITH wm AS (SELECT MAX(date) AS w FROM `{P}.OI.FACT_AMAZON_ADS`),
+-- SETTLED window: ends 7 days back, because SP sales accrue for 7 days and a window ending at the
+-- watermark counts all the spend against only part of the sales. Checked before relying on it: the
+-- unsettled window shows 80 losing campaigns and the settled one 78, so the losses are real and not
+-- a settle artifact — but the settled window is the honest one to act on.
+camp AS (
+  SELECT CAST(a.campaign_id AS STRING) AS campaign_id,
+         ANY_VALUE(a.campaign_name) AS campaign_name,
+         SUM(a.GROSS_PROFIT) - SUM(a.Ads_cost) AS net_profit_28d,
+         SUM(a.Ads_cost) AS spend_28d,
+         SAFE_DIVIDE(SUM(a.GROSS_PROFIT), NULLIF(SUM(a.Ads_cost), 0)) AS gp_roas_28d
+  FROM `{P}.OI.FACT_AMAZON_ADS` a CROSS JOIN wm
+  WHERE a.date BETWEEN DATE_SUB(wm.w, INTERVAL 34 DAY) AND DATE_SUB(wm.w, INTERVAL 7 DAY)
+    AND a.campaign_id IS NOT NULL
+  GROUP BY 1),
+losers AS (SELECT * FROM camp WHERE net_profit_28d < 0 AND spend_28d >= {MINSPEND}),
+kw AS (
+  SELECT CAST(a.campaign_id AS STRING) AS campaign_id, LOWER(TRIM(a.targeting)) AS t,
+         SUM(a.Ads_cost) AS kw_spend_28d,
+         SAFE_DIVIDE(SUM(a.GROSS_PROFIT), NULLIF(SUM(a.Ads_cost), 0)) AS kw_roas_28d
+  FROM `{P}.OI.FACT_AMAZON_ADS` a CROSS JOIN wm
+  WHERE a.date BETWEEN DATE_SUB(wm.w, INTERVAL 34 DAY) AND DATE_SUB(wm.w, INTERVAL 7 DAY)
+  GROUP BY 1,2)
+SELECT
+  l.campaign_id, l.campaign_name, l.net_profit_28d, l.spend_28d, l.gp_roas_28d,
+  s.keyword_id, s.ad_group_id, s.target_text, s.match_type, s.channel, s.family,
+  s.state AS ladder_state, s.current_bid, s.bid_floor, s.bid_floor_source, s.family_bar,
+  s.settled_roas90, s.is_pt,
+  k.kw_spend_28d, k.kw_roas_28d,
+  d.campaign_type, d.state AS campaign_state, d.portfolio_id,
+  e.echo_portfolio_id
+FROM losers l
+JOIN `{P}.OI.FACT_KEYWORD_STATE` s ON CAST(s.campaign_id AS STRING) = l.campaign_id
+JOIN kw k ON k.campaign_id = l.campaign_id AND k.t = LOWER(TRIM(s.target_text))
+LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS cid2, campaign_type, state, portfolio_id
+           FROM `{P}.OI.DIM_CAMPAIGN` WHERE is_current) d ON d.cid2 = l.campaign_id
+LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS cid3,
+                  ARRAY_AGG(portfolio_id IGNORE NULLS ORDER BY date DESC LIMIT 1)[SAFE_OFFSET(0)]
+                    AS echo_portfolio_id
+           FROM `{P}.OI.V_SRC_AmazonAds_campaign_history` GROUP BY campaign_id) e
+       ON e.cid3 = l.campaign_id
+WHERE d.state = 'ENABLED'
+  -- TWO CONDITIONS, AND THE SECOND ONE IS THE ONE THAT MATTERS.
+  -- (1) The keyword's OWN recent record condemns it: below its family bar on the settled 28 days.
+  -- (2) The LADDER ALSO ALREADY READS IT AS AT-OR-BELOW BAR. Without (2) the first cut of this
+  --     trimmed 100 keywords across 24 campaigns, and the states it caught were wrong in four
+  --     separate ways: 39 PARKED (already sitting at the Catalog's own park price — there is
+  --     nothing to walk), 21 LAUNCH_CONTAINED (the launch ruling is explicit that a launch is never
+  --     loss-cut — find the right bid, bleed via negate), 10 DEAD (those belong to a PAUSE, not a
+  --     trim), 13 TRIAL (a probe the Brain funded with a click goal; halving its bid mid-window is
+  --     the half-funded question that answers nothing) and 4 WINNER (the ladder says it earns on 90
+  --     settled days, and overruling that on a 28-day dip is the Brain deciding the Catalog's own
+  --     question, which §1.1 forbids).
+  --     What survives is the honest set: keywords the CATALOG ITSELF already calls at or below bar.
+  AND k.kw_roas_28d IS NOT NULL AND k.kw_roas_28d < s.family_bar
+  AND s.state IN ('REPRICE', 'AT_BAR', 'FLOOR_PROBATION')
+  AND s.current_bid > s.bid_floor + 0.005
+ORDER BY l.net_profit_28d ASC, k.kw_spend_28d DESC
+"""
+
+
+def mend_budgets(budget_recs, losing, step=MEND_STEP):
+    """ARM 1 of the mend: a losing campaign's budget WALKS DOWN, whatever the ramp said.
+
+    Ori: "the brain can use his budget tool to reduce it so it wont loose a lot of money until he
+    fix the campaign to be profitable." The ramp has no opinion about profit — measured, its budget
+    moves correlate NEGATIVELY with net profit (-0.396 on dollars), so a losing campaign is as
+    likely to be handed more as less. This overrides the ramp's number for losing campaigns only.
+
+    THE MEND IS A FLOOR ON THE CUT, NOT A CEILING. Where the ramp already cuts deeper than a step,
+    the deeper cut stands — the mend exists to stop a loser being GROWN or left flat, not to protect
+    it from a cut the allowance already justified."""
+    out = []
+    for r in budget_recs:
+        if action_kind(r) != BUDGET:
+            out.append(r)
+            continue
+        a = r['audit']
+        cid = str(a.get('campaign_id') or '')
+        info = losing.get(cid)
+        if not info:
+            out.append(r)
+            continue
+        old_b = a.get('_old_budget') or 0
+        ramp_b = a.get('_new_budget') or 0
+        walked = round(old_b * (1 - step), 2)
+        new_b = min(ramp_b, walked)            # whichever is lower: the mend never softens a cut
+        if abs(new_b - ramp_b) < 0.005:
+            out.append(r)                      # the ramp already cut at least this far
+            continue
+        a = dict(a, _new_budget=new_b, _mended=True, _ramp_budget=ramp_b,
+                 disposition='BUDGET_DOWN' if new_b < old_b else 'BUDGET_UP')
+        cells = dict(r['cells'])
+        cells['Budget' if r['sheet'] == SB_SHEET else 'Daily Budget'] = f"{new_b:.2f}"
+        out.append({**r, 'audit': a, 'cells': cells})
+    return out
+
+
+def mend_rows(step=MEND_STEP, min_spend=MEND_MIN_SPEND_28D, skip_keys=frozenset()):
+    """Budget cuts and bid trims for campaigns losing money. Returns a list of book records.
+
+    skip_keys: (campaign_id, keyword_id) pairs another source already prices. The reprice book is
+    already acting on those, and a second opinion on one keyword in one night is two prices, not a
+    stronger one."""
+    rows = bq(MEND_SQL.replace('{P}', PROJECT).replace('{MINSPEND}', repr(float(min_spend))))
+    out, by_campaign = [], defaultdict(list)
+    for r in rows:
+        by_campaign[r['campaign_id']].append(r)
+
+    for cid, ks in by_campaign.items():
+        head = ks[0]
+        is_sb = (head.get('campaign_type') or '').upper() == 'SB'
+        echo = head.get('portfolio_id') or head.get('echo_portfolio_id') or ''
+        never_had = not (head.get('portfolio_id') or head.get('echo_portfolio_id'))
+
+        # ARM 1 (the budget) is applied to the plan's own budget row by mend_budgets() below, so a
+        # campaign never carries two competing budget rows in one book.
+        # ARM 2: attack the cause — each condemned keyword walks down the same step.
+        spend_day = num(head.get('spend_28d')) / 28.0
+        for k in ks:
+            if (cid, str(k['keyword_id'])) in skip_keys:
+                continue
+            ob = num(k.get('current_bid'))
+            floor = num(k.get('bid_floor'))
+            if ob is None or floor is None:
+                continue
+            nb = round(max(ob * (1 - step), floor), 2)
+            if nb >= ob - 0.005:          # already at or below its floor — nothing to walk
+                continue
+            if is_sb:
+                cells = {h: '' for h in SB_HEADERS}
+                cells.update({'Product': 'Sponsored Brands',
+                              'Entity': 'Product Targeting' if k.get('is_pt') else 'Keyword',
+                              'Operation': 'Update', 'Campaign Id': cid,
+                              'Ad Group Id': str(k.get('ad_group_id') or ''),
+                              'Keyword Id': str(k['keyword_id']), 'Bid': f"{nb:.2f}"})
+                sheet = SB_SHEET
+            else:
+                cells = {h: '' for h in SP_HEADERS}
+                cells.update({'Product': 'Sponsored Products',
+                              'Entity': 'Product Targeting' if k.get('is_pt') else 'Keyword',
+                              'Operation': 'Update', 'Campaign ID': cid,
+                              'Ad Group ID': str(k.get('ad_group_id') or ''),
+                              ('Product Targeting ID' if k.get('is_pt') else 'Keyword ID'):
+                                  str(k['keyword_id']),
+                              'Bid': f"{nb:.2f}"})
+                sheet = SP_SHEET
+            out.append({
+                'source': 'mend', 'sheet': sheet, 'cells': cells,
+                'audit': {
+                    'disposition': 'MEND_BID_DOWN', 'campaign_id': cid,
+                    'campaign': head.get('campaign_name') or '', 'keyword_id': str(k['keyword_id']),
+                    'ad_group_id': str(k.get('ad_group_id') or ''),
+                    'target': k.get('target_text') or '', 'match': k.get('match_type') or '',
+                    'channel': k.get('channel') or '', 'family': k.get('family') or '',
+                    'old_bid': repr(ob), 'new_bid': repr(nb),
+                    'ladder_state': k.get('ladder_state'),
+                    'bid_floor': k.get('bid_floor'), 'bid_floor_source': k.get('bid_floor_source'),
+                    'family_bar': k.get('family_bar'),
+                    '_kw_roas_28d': num(k.get('kw_roas_28d')),
+                    '_kw_spend_28d': num(k.get('kw_spend_28d')),
+                    '_camp_net_profit': num(head.get('net_profit_28d')),
+                    '_camp_spend': num(head.get('spend_28d')),
+                    '_camp_roas': num(head.get('gp_roas_28d')),
+                    '_camp_spend_day': spend_day,
+                    '_step': step,
+                    '_never_had_portfolio': never_had,
+                }})
+    return out
+
+
 def _f(v, default=None):
     try:
         return float(v)
@@ -349,9 +548,32 @@ def explain(rec):
                 f"(GP-ROAS {a['_gp_roas_28d']:.2f}) — it is being mended, not grown."
                 if a.get('_net_profit_28d') is not None else
                 "No 28-day profit reading, so the profit gate abstained."))
+            + (f" MENDED — the ramp wanted ${a['_ramp_budget']:.2f}/day and the Brain walked the "
+               f"budget down {(1 - new_b / old_b) * 100:.0f}% instead, because a losing campaign is "
+               f"capped while it is fixed. The bids of its below-bar keywords walk down with it."
+               if a.get('_mended') else "")
             + f" Pot ${a['_pot']:.2f}/day, ramped allowance ${a['_allowance']:.2f}/day at "
             f"{a['_share']:.2f} share. Basis: {a['_basis'] or 'not stated'}.",
             "Not consulted — a budget is a daily ceiling, not a price. Bids unchanged.")
+
+    if kind == MEND_TRIM:
+        npf = a.get('_camp_net_profit') or 0
+        cat = (f"'{subj}' returned {(a.get('_kw_roas_28d') or 0):.2f} on its own last settled 28 days "
+               f"(${(a.get('_kw_spend_28d') or 0):.2f} spent) against {fam}'s "
+               f"{(_f(a.get('family_bar')) or 0):.2f} bar. The ladder still reads it "
+               f"{a.get('ladder_state')} on 90 settled days — this is the RECENT window disagreeing "
+               f"with the average, which is why the campaign loses while the ladder looks calm.")
+        brain = (f"The campaign lost ${abs(npf):,.2f} over 28 settled days on "
+                 f"${(a.get('_camp_spend') or 0):,.2f} (GP-ROAS {(a.get('_camp_roas') or 0):.2f}), so "
+                 f"the Brain is MENDING it: the budget walks down "
+                 f"{(a.get('_step') or 0) * 100:.0f}% and every keyword whose own recent record is "
+                 f"below bar walks down with it. Cutting the budget alone would cap the loss without "
+                 f"fixing it.")
+        ob, nb = _f(a.get('old_bid')), _f(a.get('new_bid'))
+        pace = (f"${ob:.2f} → ${nb:.2f} ({(nb / ob - 1) * 100 if ob else 0:+.1f}%), floored at "
+                f"${_f(a.get('bid_floor')) or 0:.2f} ({a.get('bid_floor_source') or 'unstated'}). "
+                f"Pacing chose neither the subject nor the step.")
+        return cat, brain, pace
 
     if kind == BID_MOVE:
         bar, roas = _f(a.get('family_bar')), _f(a.get('roas90_used'))
@@ -431,6 +653,11 @@ def action_kind(rec):
         return PARK
     if disp == 'PAUSE':
         return KEYWORD_PAUSE
+    if disp == 'MEND_BID_DOWN':
+        # THE BRAIN DECIDED THIS ONE, not Pacing. Pacing prices a keyword on the keyword's own
+        # question; this trim exists because the CAMPAIGN is losing money and the Brain chose to
+        # mend it. Filing it under Pacing would hide the only reason it is in the book.
+        return MEND_TRIM
     if src == 'reprice' and disp in ('BID_UP', 'BID_DOWN'):
         return BID_MOVE
     return SEAT_MOVE
@@ -772,6 +999,7 @@ ACTION_OF = {
     'BID_UP': 'INCREASE_BID',        # 616 rows in the log
     'BID_DOWN': 'REDUCE_BID',        # 1006
     'PAUSE': 'KEYWORD_PAUSE',        # 86
+    'MEND_BID_DOWN': 'REDUCE_BID',   # a bid cut is a bid cut in the log; the TIER says who chose it
     'BUDGET_UP': 'BUDGET_CHANGE',    # 183 — direction lives in old_bid/new_bid, not in the verb
     'BUDGET_DOWN': 'BUDGET_CHANGE',
 }
@@ -1035,6 +1263,13 @@ def build_parser():
                          "±25%%). Held rows go to the Refused sheet with their actual percentage — "
                          "never dropped. Symmetric: a cut is as unreviewed as a raise. Pass a large "
                          "number to ship every move.")
+    ap.add_argument('--mend-step', type=float, default=MEND_STEP, metavar='PCT',
+                    help="one window's walk for a losing campaign, applied to BOTH its budget and "
+                         "the bids of keywords whose own recent record is below their bar "
+                         "(default 0.15 = -15%%).")
+    ap.add_argument('--no-mend', action='store_true',
+                    help="skip the mend entirely: no budget walk-down and no bid trims on losing "
+                         "campaigns.")
     ap.add_argument('--unprofitable-max-raise', type=float,
                     default=DEFAULT_UNPROFITABLE_MAX_RAISE, metavar='PCT',
                     help="the most a campaign LOSING money over 28 days may have its budget raised "
@@ -1069,6 +1304,7 @@ def _main(args):
                    args.reuse_stage),
         run_source('seats', 'tools/build_seat_moves_bulksheet.py', [], stage, args.reuse_stage),
     ]
+    mend = []
     records, refused = [], []
     for s in sources:
         if not s['ok']:
@@ -1079,8 +1315,26 @@ def _main(args):
         refused += rf
         print(f"  {s['name']}: {len(ex)} executable, {len(rf)} refused")
 
+    # THE MEND, ARM 2 — bid trims on keywords whose OWN recent record condemns them, inside
+    # campaigns that are losing money. Built before the budgets so arm 1 knows which campaigns are
+    # losing, and skipping any keyword the reprice book already prices: two opinions on one keyword
+    # in one night is two prices, not a stronger one.
+    if not args.no_mend:
+        already = {(str(r['audit'].get('campaign_id')), str(r['audit'].get('keyword_id')))
+                   for r in records}
+        mend = mend_rows(args.mend_step, skip_keys=already)
+        records += mend
+        sources.append({'name': 'mend (losing campaigns)', 'ok': True, 'error': None})
+        camps = len({r['audit']['campaign_id'] for r in mend})
+        print(f"  mend: {len(mend)} bid trims across {camps} losing campaign(s)")
+
     if not args.no_budgets:
         b = budget_rows(args.plan)
+        # THE MEND, ARM 1 — before the cap, because a mended budget is a CUT and the cap must judge
+        # the number that will actually ship rather than the ramp's discarded one.
+        losing = {str(x['audit']['campaign_id']): x['audit'] for x in mend
+                  if (x['audit'].get('_camp_net_profit') or 0) < 0}
+        b = mend_budgets(b, losing, args.mend_step)
         b, over_cap = cap_budget_moves(b, args.budget_max_move, args.unprofitable_max_raise)
         records += b
         refused += over_cap
