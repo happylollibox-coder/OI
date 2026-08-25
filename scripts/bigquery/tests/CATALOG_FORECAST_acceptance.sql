@@ -54,9 +54,22 @@ f06 AS (SELECT COUNTIF(
 --     it past the highest price a keyword was ever paid invents clicks that were never observed.
 f07 AS (SELECT COUNTIF(best_cpc > grid_hi + 0.0001 OR best_cpc < grid_lo - 0.0001) AS v FROM f),
 
--- F08 THE CLICKS LEG AND THE MONEY LEG SHARE A SEASON. Otherwise a December answer carries
---     December conversion on August traffic, and the row describes two different months.
-f08 AS (SELECT COUNTIF(clicks_basis LIKE 'DATA:%' AND STRPOS(clicks_basis, season) = 0) AS v
+-- F08 THE SEASONAL ADJUSTMENT IS AN IDENTITY IN THE CURRENT SEASON, AND ONLY THERE.
+--     Rewritten after a backtest killed the previous design. The clicks leg used to be a
+--     season-native base -- a subject's season clicks over every calendar day of that season --
+--     which understated the daily rate 11x to 52x because the median subject runs on under a tenth
+--     of those days; the chain then lost to plain persistence on every link at every as-of date.
+--     The base is now the recent settled run rate with the season applied as a RATIO, so a
+--     near-term answer must reduce EXACTLY to persistence (multiplier 1.0) and a distant one must
+--     not. A multiplier that drifts off 1.0 in the current season means the chain has silently
+--     stopped agreeing with the only baseline it has been shown to match.
+f08 AS (SELECT COUNTIF(
+          (season = (SELECT CASE
+              WHEN EXTRACT(MONTH FROM CURRENT_DATE('America/Los_Angeles')) IN (11,12) THEN 'HOLIDAY'
+              WHEN EXTRACT(MONTH FROM CURRENT_DATE('America/Los_Angeles')) IN (8,9)   THEN 'BACK_TO_SCHOOL'
+              WHEN EXTRACT(MONTH FROM CURRENT_DATE('America/Los_Angeles')) IN (1,2)   THEN 'POST_HOLIDAY'
+              ELSE 'OFF_SEASON' END))
+          <> (ABS(season_multiplier - 1.0) < 0.0001)) AS v
         FROM f),
 
 -- F09 ads_net_roas IS gross profit over cost, with no halo in it. The halo belongs to net_roas.
@@ -100,7 +113,7 @@ SELECT * FROM (
   SELECT 5,  'F05 one row per subject per season',              v FROM f05 UNION ALL
   SELECT 6,  'F06 contribution is the arithmetic it claims',    v FROM f06 UNION ALL
   SELECT 7,  'F07 the grid never prices beyond the evidence',   v FROM f07 UNION ALL
-  SELECT 8,  'F08 the clicks leg and money leg share a season', v FROM f08 UNION ALL
+  SELECT 8,  'F08 the seasonal adjustment is an identity only in-season', v FROM f08 UNION ALL
   SELECT 9,  'F09 ads_net_roas has no halo in it',              v FROM f09 UNION ALL
   SELECT 10, 'F10 net_roas carries the halo exactly once',      v FROM f10 UNION ALL
   SELECT 11, 'F11 a recommendation rests on a positive rate',   v FROM f11 UNION ALL

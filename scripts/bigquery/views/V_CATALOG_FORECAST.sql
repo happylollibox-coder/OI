@@ -61,44 +61,63 @@ priced AS (
     HAVING SUM(Ads_clicks) >= 2 AND SUM(Ads_cost) > 0)
   GROUP BY 1, 2
 ),
--- THE CLICKS LEG MUST SIT IN THE SAME SEASON AS THE MONEY LEG. Without this the HOLIDAY row would
--- carry December conversion rates on August traffic -- the two legs describing different months
--- inside one answer. Measured, 157 live subjects have real November-December history carrying
--- 197,521 clicks (more than back-to-school), so for those the December question is answered with
--- December evidence rather than seasonally translated.
--- The denominator is every calendar day of that season PRESENT IN THE DATA, so the rate reads
--- "clicks per day across the Novembers and Decembers we have", not "per day it happened to run".
-season_days AS (
-  SELECT season, COUNT(DISTINCT date) AS days
-  FROM (
-    SELECT date,
-           CASE WHEN EXTRACT(MONTH FROM date) IN (11,12) THEN 'HOLIDAY'
-                WHEN EXTRACT(MONTH FROM date) IN (8,9)   THEN 'BACK_TO_SCHOOL'
-                WHEN EXTRACT(MONTH FROM date) IN (1,2)   THEN 'POST_HOLIDAY'
-                ELSE 'OFF_SEASON' END AS season
-    FROM `onyga-482313.OI.FACT_AMAZON_ADS`)
-  GROUP BY season
+-- SEASONALITY IS A MULTIPLIER ON THE RECENT RUN RATE, NOT A BASE OF ITS OWN.
+-- The first version of this leg made the season the BASE: a subject's clicks in that season divided
+-- by every calendar day of the season present in the data. A BACKTEST AT THREE AS-OF DATES KILLED
+-- IT. The median subject is active on 9% of back-to-school days and 1.9% of off-season days, so
+-- that denominator understated the daily rate by 11x to 52x, the chain under-forecast clicks by
+-- 2-3x, and it lost to plain persistence -- "next week equals this week" -- on EVERY link at BOTH
+-- grains at ALL THREE dates. On net-profit dollars it also lost to forecasting nothing at all.
+-- So the base is now the RECENT SETTLED RUN RATE, which is what persistence uses and what won, and
+-- the season enters only as a RATIO between the target season and the one we are in. For a
+-- near-term window that ratio is 1 and the chain reduces to the baseline it could not beat; for a
+-- December window it scales by the measured holiday lift. THE INDEX IS MEASURED AT FAMILY GRAIN
+-- because a family runs on most days, so the active-day problem that wrecked the keyword-grain
+-- denominator does not arise there. Families with no history in a season fall back to the account
+-- index rather than to 1.0 -- assuming no seasonality is itself a strong claim, and a wrong one here.
+fam_of_campaign AS (
+  SELECT CAST(campaign_id AS STRING) AS cid, ANY_VALUE(family) AS family
+  FROM `onyga-482313.OI.T_FAMILY_BAR` GROUP BY 1
 ),
-season_kw AS (
-  SELECT CAST(a.campaign_id AS STRING) AS campaign_id, LOWER(TRIM(a.targeting)) AS targeting,
+season_of_day AS (
+  SELECT a.date,
          CASE WHEN EXTRACT(MONTH FROM a.date) IN (11,12) THEN 'HOLIDAY'
               WHEN EXTRACT(MONTH FROM a.date) IN (8,9)   THEN 'BACK_TO_SCHOOL'
               WHEN EXTRACT(MONTH FROM a.date) IN (1,2)   THEN 'POST_HOLIDAY'
               ELSE 'OFF_SEASON' END AS season,
-         SUM(a.Ads_clicks) AS clicks, SUM(a.Ads_cost) AS cost,
-         COUNT(DISTINCT a.date) AS active_days
+         f.family, a.Ads_clicks AS clicks
   FROM `onyga-482313.OI.FACT_AMAZON_ADS` a
+  JOIN fam_of_campaign f ON f.cid = CAST(a.campaign_id AS STRING)
   WHERE a.targeting IS NOT NULL
-  GROUP BY 1, 2, 3
-  HAVING SUM(a.Ads_clicks) >= 5 AND SUM(a.Ads_cost) > 0
 ),
-season_base AS (
-  SELECT k.campaign_id, k.targeting, k.season,
-         SAFE_DIVIDE(k.clicks, d.days)          AS season_clicks_per_day,
-         SAFE_DIVIDE(k.cost, NULLIF(k.clicks,0)) AS season_cpc,
-         k.clicks AS season_clicks, k.active_days AS season_active_days, d.days AS season_calendar_days
-  FROM season_kw k JOIN season_days d USING (season)
+fam_season AS (
+  SELECT family, season, SAFE_DIVIDE(SUM(clicks), NULLIF(COUNT(DISTINCT date), 0)) AS cpd
+  FROM season_of_day GROUP BY 1, 2
 ),
+acct_season AS (
+  SELECT season, SAFE_DIVIDE(SUM(clicks), NULLIF(COUNT(DISTINCT date), 0)) AS cpd
+  FROM season_of_day GROUP BY 1
+),
+now_season AS (
+  SELECT CASE WHEN EXTRACT(MONTH FROM CURRENT_DATE('America/Los_Angeles')) IN (11,12) THEN 'HOLIDAY'
+              WHEN EXTRACT(MONTH FROM CURRENT_DATE('America/Los_Angeles')) IN (8,9)   THEN 'BACK_TO_SCHOOL'
+              WHEN EXTRACT(MONTH FROM CURRENT_DATE('America/Los_Angeles')) IN (1,2)   THEN 'POST_HOLIDAY'
+              ELSE 'OFF_SEASON' END AS season
+),
+season_mult AS (
+  SELECT f.family, t.season AS target_season,
+         COALESCE(SAFE_DIVIDE(ft.cpd, NULLIF(fn.cpd, 0)),
+                  SAFE_DIVIDE(acct_t.cpd, NULLIF(acct_n.cpd, 0)), 1.0) AS mult,
+         ft.cpd IS NOT NULL AND fn.cpd IS NOT NULL AS mult_from_family
+  FROM (SELECT DISTINCT family FROM fam_season) f
+  CROSS JOIN (SELECT DISTINCT season FROM fam_season) t
+  CROSS JOIN now_season ns
+  LEFT JOIN fam_season ft ON ft.family = f.family AND ft.season = t.season
+  LEFT JOIN fam_season fn ON fn.family = f.family AND fn.season = ns.season
+  LEFT JOIN acct_season acct_t ON acct_t.season = t.season
+  LEFT JOIN acct_season acct_n ON acct_n.season = ns.season
+),
+
 flow AS (
   SELECT CAST(n.campaign_id AS STRING) AS campaign_id, CAST(n.keyword_id AS STRING) AS keyword_id,
          n.season, n.node_id, n.depth,
@@ -111,15 +130,21 @@ subject_season AS (
   SELECT ks.*, sd.season,
          c.elasticity, c.elasticity_basis,
          -- Season evidence first; the recent settled window only when the season has none.
-         COALESCE(sb.season_cpc, c.baseline_cpc) AS baseline_cpc,
-         COALESCE(sb.season_clicks_per_day, c.baseline_clicks_per_day) AS baseline_clicks_per_day,
-         sb.season_clicks, sb.season_active_days, sb.season_calendar_days,
-         CASE WHEN sb.season_clicks_per_day IS NOT NULL
-                THEN CONCAT('DATA: ', CAST(sb.season_clicks AS STRING), ' clicks over ',
-                            CAST(sb.season_calendar_days AS STRING), ' days of ', sd.season)
-              WHEN c.baseline_clicks_per_day IS NOT NULL
-                THEN 'CARRIED: no history in this season, using the recent settled window'
-              ELSE 'UNKNOWN: no click history' END AS clicks_basis,
+         -- THE ANCHOR PAIR MUST MATCH. The power curve is clicks0 * (cpc/cpc0)^e, so cpc0 and
+         -- clicks0 have to come from the SAME window; anchoring a recent click rate to a
+         -- season-average price would scale from a price that rate was never observed at.
+         c.baseline_cpc AS baseline_cpc,
+         c.baseline_clicks_per_day * COALESCE(sm.mult, 1.0) AS baseline_clicks_per_day,
+         COALESCE(sm.mult, 1.0) AS season_multiplier,
+         CASE WHEN c.baseline_clicks_per_day IS NULL THEN 'UNKNOWN: no recent click history'
+              WHEN sm.mult IS NULL OR sm.mult = 1.0
+                THEN 'DATA: recent settled run rate, same season as now (no adjustment)'
+              WHEN sm.mult_from_family
+                THEN CONCAT('DATA: recent settled run rate x ', CAST(ROUND(sm.mult, 2) AS STRING),
+                            ' (', ks.family, ' ', sd.season, ' vs now)')
+              ELSE CONCAT('DATA: recent settled run rate x ', CAST(ROUND(sm.mult, 2) AS STRING),
+                          ' (ACCOUNT index -- ', ks.family, ' has no ', sd.season, ' history)')
+         END AS clicks_basis,
          p.max_priced_cpc, p.min_priced_cpc,
          h.halo_factor, h.keyword_bar, h.halo_credit,
          fl.node_id, fl.depth AS flow_depth, fl.flow_cvr, fl.flow_gp_per_order,
@@ -127,8 +152,7 @@ subject_season AS (
   FROM ks
   CROSS JOIN (SELECT season FROM season_def) sd
   LEFT JOIN curve c ON c.campaign_id = ks.campaign_id AND c.targeting = ks.targeting
-  LEFT JOIN season_base sb ON sb.campaign_id = ks.campaign_id AND sb.targeting = ks.targeting
-                          AND sb.season = sd.season
+  LEFT JOIN season_mult sm ON sm.family = ks.family AND sm.target_season = sd.season
   LEFT JOIN priced p ON p.campaign_id = ks.campaign_id AND p.targeting = ks.targeting
   LEFT JOIN halo h ON h.family = ks.family
   LEFT JOIN flow fl ON fl.campaign_id = ks.campaign_id AND fl.keyword_id = ks.keyword_id
@@ -258,7 +282,7 @@ SELECT
   ROUND(elasticity, 3)        AS elasticity,
   ROUND(baseline_cpc, 4)      AS baseline_cpc,
   ROUND(baseline_clicks_per_day, 3) AS baseline_clicks_per_day,
-  clicks_basis, season_clicks, season_active_days, season_calendar_days,
+  clicks_basis, ROUND(season_multiplier, 3) AS season_multiplier,
   ROUND(halo_factor, 4)       AS halo_factor,
   ROUND(keyword_bar, 4)       AS keyword_bar,
   halo_credit,
