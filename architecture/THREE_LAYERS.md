@@ -46,6 +46,7 @@ position from an accident. Newest last.
 | 2026-08-25 | `f7295c2` | **Violation 31 — the Catalog cannot see a regime change, and the Brain must not fix that by overruling it.** Ori: *"what is the brain doing when catalog (90 days) says keywords are good but see that campaign is loosing the last 3 or 7 days?"* Answered from the data. The ladder judges on a settled 90-day window, so a campaign can lose for a week while every keyword inside still reads `WINNER` — a bad week barely moves a 90-day average. Of the campaigns losing on the last 7 settled days: 7 have below-bar keywords (−$505.68), 10 are winners plus `AT_BAR` (−$446.91), **8 are ONLY winners (−$236.22) where nothing may be trimmed at all**, and 13 have no judged keywords (−$443.52, the coverage gap). **What the Brain does today is exactly two things:** rule B can VETO a raise — its own source says it *"only ever REMOVES an executable row… never changes a price"* — and the mend CUTS THE CAMPAIGN BUDGET. On the only-winners campaigns that is the entire toolkit: the ceiling comes down and not one bid moves. **That is correct rather than a gap in the Brain.** Trimming a keyword that genuinely earns above bar on 90 settled days, because its campaign had a bad week, is the Brain deciding the Catalog's own question (§1.1). The fault is upstream: a 90-day average is the right estimator for a stable subject and the wrong one for a subject whose regime shifted three weeks ago, and nothing in the Catalog distinguishes the two. **The fix belongs in the Catalog — a recency-aware verdict — not in a Brain override.** Until then a losing campaign full of winners is capped and waited on, which is the honest response to *we cannot yet tell noise from a change*. |
 | 2026-08-25 | `832fae6` | **§2.0 — THE CATALOG IS A FORECASTER, NOT A HISTORIAN (Ori), and measured against that it does not beat a constant guess.** Ori's purpose statement, now the top of §2: *"the main purpose of catalog is not say what happened last 90 days. it is to predict what will be the result for the window the brain ask him. this is the real meaning of the catalog. the catalog needs to measure it self how much he is correct and strive to at least 85% correction."* Everything else in §2 is subordinate: `settled_roas90` is an INPUT to an answer, not the answer, and a layer that publishes a backward average and calls it a verdict has left the Brain to do the forecasting itself, uninstrumented. **Backtested the same day** — reconstructing what the Catalog would have said at five past as-of dates and scoring each against the 28 days that followed, on subjects taking ≥10 clicks, against the Brain's actual question (*will this land above or below the bar?*): **84.9 % → 82.4 % → 74.7 % → 62.4 % → 55.9 %**, a five-month decay, against a constant "always above the bar" scoring **86.3 % → 85.1 % → 74.7 % → 58.8 % → 58.2 %**. **It beats the constant in one window out of five**, and its accuracy rises and falls with the BASE RATE — the signature of a backward average with no forecasting model, not of a predictor. March's 84.9 % was not skill but an easy month in which blind guessing scored higher, so **the 85 % target has never been met by forecasting, only approached by a period when guessing worked.** Recorded as violation 32. This also reframes §6: the Catalog's scorecard stops being a nice-to-have and becomes the definition of the layer working, and `V_SEAT_REQUEST_OUTCOME` already has the scoring machinery — what it grades is currently a memory rather than a forecast. |
 | 2026-08-25 | `321da02` | **§2.0.1 — the full answer is a CHAIN conditional on a price, the objective is family NET PROFIT, and 85 % is measured on the sum (Ori).** Ori rejected interval coverage outright and named why: *"if i define it like this you can be correct but you wont be approved. i preffer you be wrong but you will get better."* A wide interval is trivially 85 % correct and teaches nothing; a falsifiable point that misses tells you HOW it missed. So the Catalog's answer to *"if the CPC is $1.00 over 2026-09-01 to 09-08"* is **clicks → orders → cost → ads net ROAS → net ROAS → contribution to family net profit**, the last being **the objective it must MAXIMISE**, not merely predict. Because the answer is conditional on a CPC, the Brain can ask at several prices and take the maximum — which is the response curve violation 17 says does not exist, arriving as a consequence of the contract rather than as a separate feature. **85 % means the NET PROFIT figure is within 15 %** — not the clicks, not the ROAS, the money. **A chain is DIAGNOSABLE and that is the whole point:** each link is scored separately, so a wrong contribution names its own fault — Ori: *"the catalog could understand what it needs to be correct — maybe more clicks, maybe less cpc, maybe something else."* **Measured the same day, the grain question this forces:** the quantum is one order, so ±1 sale must fit inside 15 %, which needs ~7 orders. Per 7-day window only **13.8 % of keywords** clear that (avg 4.2 orders), against 31.1 % of campaigns and **100 % of families** (avg 886.9). So the target cannot be scored per keyword on a short window — it would be measuring dice. **Resolution: predict per subject, score in aggregate.** The Catalog still answers for the keyword, but the 85 % is measured on the SUM against family net profit; per-subject error is still recorded because that is what says which link to fix, it is just not the pass mark. |
+| 2026-08-25 | `PENDING` | **Correction — the CATALOG chooses the price, not the Brain (Ori).** *"the catalog should check what is the best cpc (not the brain, i dont think the brain should send cpc)."* §2.0.1 as written an hour earlier had the Brain supply a CPC and the Catalog answer conditionally; that was wrong in the direction §1.1 cares about — **finding the price at which a subject is worth the most IS establishing worth**, which is the Catalog's own question. A Brain that picks the price is doing valuation, and a Catalog that only answers what-ifs has been reduced to a calculator. The contract is therefore `ask(subject, window)`, with the Catalog searching over price itself and returning the CPC that maximises contribution plus the chain at that CPC. **This also exposes a distinction the doctrine had been blurring: the CEILING and the OPTIMUM are different prices.** §2's original `ceiling_cpc` is the marginal price where contribution reaches ZERO — the highest price still worth paying, at which nothing is earned. The optimum, where contribution PEAKS, sits below it. Both are useful and answer different questions; publishing only the ceiling told the Brain the edge of the cliff and not where to stand. The boundary is now: the Catalog says *at $0.83 this contributes $100, the most it can, and above $1.24 it contributes nothing*; the Brain says *I have $70 — do I buy that $100 or another subject's $120*; Pacing walks the bid toward $0.83. **The Brain never names a price and the Catalog never decides whether the money is spent.** |
 
 ### How to add an entry
 
@@ -191,8 +192,16 @@ be wrong but you will get better."* **A wide interval is trivially 85 % correct 
 falsifiable point estimate that misses tells you *how* it missed, and a layer obliged to improve needs
 the second kind of answer.
 
-**The answer is a CHAIN, conditional on a price.** Asked *"if the CPC is $1.00 over 2026-09-01 to
-09-08"*, the Catalog answers all of:
+**The answer is a CHAIN, and the CATALOG CHOOSES THE PRICE — corrected by Ori, 2026-08-25:** *"the
+catalog should check what is the best cpc (not the brain, i don't think the brain should send cpc)."*
+
+The first shape of this section had the Brain supply a CPC and the Catalog answer conditionally. That
+was wrong, and wrong in the direction §1.1 cares about: **finding the price at which a subject is worth
+the most IS establishing worth**, which is the Catalog's own question. A Brain that picks the price is
+a Brain doing valuation, and a Catalog that only answers what-ifs has been reduced to a calculator.
+
+So the contract is `ask(subject, window)` and the Catalog **searches over price itself**, returning the
+CPC that maximises contribution together with the chain at that CPC:
 
 | link | example |
 |---|---|
@@ -204,9 +213,27 @@ the second kind of answer.
 | **contribution to family net profit** | **$100** |
 
 **The last line is the objective, and the Catalog's job is to MAXIMISE it** — not to be right about it
-passively. Because the answer is conditional on a CPC, the Brain can ask the same question at several
-prices and take the one that maximises contribution. That is the response curve violation 17 says does
-not exist, arriving as a consequence of the contract rather than as a separate feature.
+passively. Evaluating the chain across a range of prices and returning the peak IS the response curve
+violation 17 says does not exist; it arrives as a consequence of the contract rather than as a separate
+feature.
+
+**THE CEILING AND THE OPTIMUM ARE DIFFERENT PRICES, and the doctrine has been blurring them.** §2's
+original contract published `ceiling_cpc` — the marginal price, where contribution reaches **zero**.
+That is the highest price still worth paying, and paying it earns nothing. The price the Catalog must
+now return is where contribution **peaks**, which sits *below* the ceiling. Both are useful and they
+answer different questions: the optimum is what to bid, the ceiling is how much room there is before a
+bid becomes worthless. A layer that published only the ceiling was telling the Brain the edge of the
+cliff and not where to stand.
+
+**What each layer is left with, stated plainly, because this is the boundary the correction fixes:**
+
+| layer | its sentence about this subject |
+|---|---|
+| **Catalog** | *"At $0.83 this subject contributes $100 to Lollibox's net profit, which is the most it can contribute. Above $1.24 it contributes nothing."* |
+| **Brain** | *"I have $70 of allowance. Do I buy that $100, or another subject's $120?"* |
+| **Pacing** | *"Walk the bid toward $0.83, three 5 % steps at a time, floored at $0.20."* |
+
+The Brain never names a price and the Catalog never decides whether the money is spent.
 
 **85 % correct means the net profit figure is within 15 %.** Not the clicks, not the ROAS — the money.
 
