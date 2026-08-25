@@ -8,6 +8,28 @@ Each phase ships on its own and leaves the system working. The order is set by f
 **memory first, then safety, then dependency, then money** — with the season's calendar allowed to pull
 one phase earlier.
 
+## Out of sequence, by Ori's call: the weekly book (2026-08-25)
+
+Ori: *"I want to be able to deliver a working product as soon as possible and then enhance it (maybe
+priority will change after trying it)"* — and, asked what that meant: *"you can create bulksheet that
+support the 3 tiers and can explain each action."*
+
+So `tools/build_weekly_book.py` was built ahead of every phase below. It is deliberately **not** a
+phase: it closes no violation and decides nothing. It assembles what the nine existing builders already
+decide into one workbook, ranks conflicting rows under Catalog > Brain > Pacing, and gives every row
+three sentences naming the layer that produced each one. SOP: `architecture/WEEKLY_BOOK.md`.
+
+**Why this ordering is right rather than a detour.** The phases below are ordered for *correctness*;
+this is ordered for *feedback*. Until the decisions are visible in one place, a priority change after
+trying it — which is what Ori asked for the option to do — has nothing to act on. It also makes the
+phases below arguable row by row instead of in the abstract: the first build showed CATALOG 2, BRAIN 42,
+PACING 17, which says on its face that the Brain's budget arm is carrying nearly everything and the
+Catalog is barely speaking. That is a finding no plan document produced in a week of work.
+
+**It also found a live defect in its own first build**: 3 of 42 campaign budget rows carried a blank
+`Portfolio ID`, which on a Campaign Update row does not mean *unchanged* — it **detaches** the campaign
+from its portfolio. Preflight now refuses rather than warns.
+
 ## The phases
 
 | # | phase | closes | size | why it sits here |
