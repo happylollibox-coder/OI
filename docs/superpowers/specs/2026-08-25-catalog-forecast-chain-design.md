@@ -54,7 +54,14 @@ the error decomposes onto a link**, and four of the six links cannot be the culp
 
 ## 3. The response curve — and the finding that shapes it
 
-**Measured 2026-08-25 over 180 days, 718 keywords with clicks:**
+**The window is 365 days (Ori, 2026-08-25).** Measured both ways before settling it: at 180 days
+718 keywords carry clicks and 382 are fittable; **at 365 days, 1,810 carry clicks and 933 are
+fittable — 2.4× the base at the same 51.5 % rate.** A year also spans a full seasonal cycle, so the
+curve is not fit entirely inside one demand regime. The cost is that a year-old price may no longer
+buy what it did, which §4.1 handles by weighting recent buckets more heavily rather than by shortening
+the window.
+
+**Measured over the last 180 days of that year, on the subjects fittable there:**
 
 | | |
 |---|---|
@@ -77,7 +84,7 @@ keywords we can actually measure.
 | tier | population | what the Catalog does |
 |---|---|---|
 | **FITTED** | ≥30 days of clicks and ≥$0.20 CPC spread — 253 keywords | fit the subject's own curve |
-| **POOLED** | has clicks but not enough spread or history | use the family × match-type curve, shrunk toward it by evidence |
+| **FLOW** | has clicks but not enough spread or history | use a matching **customer purchase flow** (§4), shrunk toward it by evidence, and **name the flow in the answer** |
 | **UNKNOWN** | no usable history | **abstain — publish no forecast** (§2.7: `NO_EVIDENCE` is not `LOW`) |
 
 **Functional form: piecewise-linear over a CPC grid, not a fitted equation.** Evaluate observed
@@ -88,14 +95,62 @@ see the buckets. **Never extrapolate a rising curve past the highest CPC ever pa
 
 ---
 
-## 4. Conversion — shrinkage, not averaging
+## 4. CUSTOMER PURCHASE FLOWS — what the Catalog uses when it has no data
+
+**Ruled by Ori, 2026-08-25:** *"The Catalog should create assumptions based on other changes it created
+— call it customer purchase flows. So when there is no data you can use a customer purchase flow you
+know is working in order to estimate it. When you answer the Brain you should write to him if the
+estimation was based on data, or mention the customer purchase flow you used."*
+
+This replaces the "shrink toward family × match-type" pooling the first draft proposed, and it is
+better for a reason worth stating: **family × match-type is an arbitrary grouping; a flow is a
+behavioural one, and it has a NAME.** A named thing can be cited, argued with, and — most importantly —
+**scored**.
+
+**A flow is a pattern of how a customer arrives and buys**, learned from subjects that have data and
+applied to subjects that do not. Each one carries:
+
+| field | what it holds |
+|---|---|
+| `flow_name` | e.g. `COMPETITOR_CONQUEST_VIDEO`, `GIFT_OCCASION_EXACT`, `AUTO_DISCOVERY_CLOSE_MATCH` |
+| membership rule | **declared**, from fields that already exist: `match_type`, `is_pt`, `channel`, the supervised intent (`DE_SEARCH_TERM_INTENT`, 92.3 % coverage), and Research's `occasion` / `age_group` / `product_type` |
+| the learned profile | the response curve shape, CVR, GP per order, from members that ARE fittable |
+| its own evidence | how many members, how much data, over what period |
+| **its own track record** | how well subjects estimated through it have actually performed |
+
+**The loop that makes this more than a prior: A FLOW IS SCORED TOO.** When a subject estimated through
+`GIFT_OCCASION_EXACT` misses, that is evidence about the flow, not only about the subject. Flows
+therefore get better with use, and a flow that keeps missing is retired rather than quietly relied on.
+This is §6's improvement obligation applied to the assumptions themselves — the part of the Catalog
+that *"strives"*.
+
+**A flow is never invented for one subject.** It must have enough fittable members to have been learned
+from something, or it does not exist. A flow with one member is that member wearing a general name.
+
+### 4.1 Conversion inside a flow
 
 CVR at keyword grain is desperately thin: the median subject has **4.2 orders per 7-day window**
-(measured §2.0.1). A raw `orders / clicks` on 4 orders is noise.
+(§2.0.1). Raw `orders / clicks` on 4 orders is noise.
 
-`cvr_used = (k · cvr_family + n · cvr_subject) / (k + n)` where `n` is the subject's clicks and `k` is a
-declared prior weight. A subject with no clicks reads exactly the family rate; a subject with thousands
-reads its own. **`k` is a declared constant, tested per §6.1, never tuned silently.**
+`cvr_used = (k · cvr_flow + n · cvr_subject) / (k + n)` — the subject's own rate, pulled toward **its
+flow's** rate by a declared prior weight `k`. A subject with no clicks reads exactly its flow; a subject
+with thousands reads itself. **`k` is a declared constant, tested per §6.1, never tuned silently.**
+
+Recent buckets are weighted more heavily than year-old ones by a declared half-life, which is how a
+365-day window is used without pretending a price paid last August still buys what it did.
+
+## 4.2 Disclosure — every answer says where it came from
+
+**The Brain is always told which it got.** `basis` is not optional and is never blank:
+
+| basis | meaning |
+|---|---|
+| `DATA` | the subject's own fitted curve — with its day count and CPC spread |
+| `FLOW: <name>` | estimated through a named flow — **with the flow's own track record attached** |
+| `UNKNOWN` | no data and no matching flow. **Publishes nulls, not numbers.** |
+
+A forecast that does not say where it came from is worse than no forecast, because the Brain cannot
+weigh it. And a `FLOW:` answer that cannot state the flow's accuracy is a guess with a label on it.
 
 ---
 
@@ -151,7 +206,9 @@ needs pointing at a chain instead of a backward average, plus a family-level rol
 3. `best_cpc ≤ ceiling_cpc` on every row, always.
 4. UNKNOWN subjects publish nulls, never numbers.
 5. The chain reconciles: `contribution = gp × halo − cost` to the cent.
-6. Backtest against the same five as-of dates used in §2.0, reporting family-level 15 % accuracy
+6. Every row states its `basis`, and no `FLOW:` row omits the flow's own track record.
+7. No flow is used that has fewer than a declared minimum of fittable members.
+8. Backtest against the same five as-of dates used in §2.0, reporting family-level 15 % accuracy
    **against the 55.9 % / constant-guess baseline already measured.** A version that does not beat the
    constant is not shipped.
 
@@ -161,7 +218,8 @@ needs pointing at a chain instead of a backward average, plus a family-level rol
 
 | step | what | size |
 |---|---|---|
-| 1 | `V_CPC_RESPONSE` — the bucketed curve per subject and per pool, plus its tier | 2–3 days |
+| 0 | `DE_CUSTOMER_PURCHASE_FLOW` — the declared flows and their membership rules; learn each profile from its fittable members | 2–3 days |
+| 1 | `V_CPC_RESPONSE` — the bucketed curve per subject and per flow, over 365 days, plus its tier and basis | 2–3 days |
 | 2 | `V_CATALOG_FORECAST` — the chain and the grid search over it | 2–3 days |
 | 3 | point `V_SEAT_REQUEST_OUTCOME` at the chain; add the family roll-up and the 85 % | 1–2 days |
 | 4 | backtest against §2.0's five dates; ship only if it beats the constant | 1 day |
