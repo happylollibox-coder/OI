@@ -156,3 +156,24 @@ ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   ADD COLUMN IF NOT EXISTS campaign_budget_basis STRING;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   ADD COLUMN IF NOT EXISTS campaign_visible_spend_per_day FLOAT64;
+
+-- v27.146 (2026-08-25, plan step 4) — THE SEAT NAMES ITS QUESTION (violation 27, §3.0 step 2).
+-- Shipped as scripts/bigquery/migrations/2026-08-25_plan_seat_click_target.sql; mirrored here
+-- because this file is CREATE TABLE IF NOT EXISTS and never alters a live table.
+-- Nothing here is a forecast. An ORDINARY seat asks for exactly last window's clicks (w_clk),
+-- because the seat is that window's spend at a repaired price and the price ratio cancels — it
+-- asks for the same clicks at a better price, not for more. A PROBE asks click_goal_day x
+-- window_days, a goal the seat register already declares.
+-- clicks_due_date is the seat's own verdict_date (P-12), NOT window_to: window_to closes the
+-- window that was JUDGED and is in the past, and using it made every request overdue on the day it
+-- was written (caught by acceptance S08 on all 94 seats).
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS clicks_requested INT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS clicks_due_date DATE;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS expected_cpc FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS implied_daily_spend FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS request_basis STRING;

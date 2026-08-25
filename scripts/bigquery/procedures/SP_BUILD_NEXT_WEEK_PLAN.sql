@@ -500,7 +500,9 @@ BEGIN
      allowance_target_per_day, allowance_ramped_per_day, notgood_today_per_day, ramp_step,
      ramp_steps, allowance_share, campaign_planned_budget, campaign_current_budget,
      campaign_planned_budget_delta_per_day, campaign_budget_basis, campaign_visible_spend_per_day,
-     holdout, holdout_member, holdout_eligible_from, sentence, built_at)
+     holdout, holdout_member, holdout_eligible_from, sentence, built_at,
+     -- v27.146 (plan step 4, violation 27, §3.0 step 2): the seat names its question.
+     clicks_requested, clicks_due_date, expected_cpc, implied_daily_spend, request_basis)
   SELECT
     as_of_d, p.plan, (p.plan = live_plan_code), p.family, p.book, p.campaign_id, p.campaign_name,
     p.keyword_id, p.ad_group_id, p.target_text, p.match_type, p.channel, p.is_auto, p.is_pt,
@@ -607,7 +609,41 @@ BEGIN
              ', which is what stopped this one going lower tonight',
              ' — tonight the one-third ramp decided it'))
       END) AS sentence,
-    CURRENT_TIMESTAMP()
+    CURRENT_TIMESTAMP(),
+    -- ------------------------------------------------------------------------------------------
+    -- v27.146 — THE SEAT NAMES ITS QUESTION (violation 27, §3.0 step 2).
+    -- Ori: the Brain must decide "what answers per keyword he is going to buy with it (seats) and
+    -- HOW MANY CLICKS he want to deliver in a SPECIFIC TIME WINDOW."
+    --
+    -- NOTHING HERE IS A FORECAST. Both numbers were always implied by the seat's own dollars and
+    -- were simply never written where anything could check them:
+    --   ORDINARY: seat_cost = (w_sp/days) x (planned/current). At the new price CPC scales by the
+    --   SAME ratio, so it cancels and the clicks bought are EXACTLY w_clk. An ordinary seat asks
+    --   for the same clicks at a better price — it does not ask for more.
+    --   PROBE: seat_cost = seat_cpc x click_goal_day, a goal the register already declares. A
+    --   probe has always named its question; only the ordinary path was silent.
+    -- click_goal_day is read from the view rather than re-declared here, so the register stays the
+    -- single owner of it.
+    -- NULL ON EVERY ROW WITHOUT A SEAT: a row that took no seat asked no question, and writing a
+    -- target on it would invent an intention the Brain never had.
+    IF(p.seat_no IS NULL, NULL,
+       IF(p.is_probe, CAST(p.click_goal_day * p.window_days AS INT64),
+                      CAST(p.w_clk AS INT64)))                                AS clicks_requested,
+    -- THE DUE DATE IS THE SEAT'S OWN VERDICT DATE, NOT THE WINDOW'S END. window_to closes the
+    -- window that was JUDGED (in the past — it is the evidence), while the seat funds the
+    -- window ahead. The first cut used window_to and acceptance check S08 caught it on all 94
+    -- seats: every request was already overdue on the day it was written, which would have
+    -- graded as a Pacing failure that never had a chance to succeed. verdict_date is the date
+    -- P-12 already promises this seat will be judged on, so the clicks are due exactly then —
+    -- and it needs no new constant.
+    IF(p.seat_no IS NULL, NULL, p.verdict_date)                               AS clicks_due_date,
+    IF(p.seat_no IS NULL, NULL,
+       ROUND(SAFE_DIVIDE(p.plan_seat_cost * p.window_days,
+                         NULLIF(IF(p.is_probe, p.click_goal_day * p.window_days, p.w_clk), 0)),
+             4))                                                              AS expected_cpc,
+    IF(p.seat_no IS NULL, NULL, ROUND(p.plan_seat_cost, 4))                   AS implied_daily_spend,
+    IF(p.seat_no IS NULL, NULL,
+       IF(p.is_probe, 'PROBE_GOAL', 'WINDOW_CLICKS'))                         AS request_basis
   FROM priced p
   LEFT JOIN budgets b   ON b.plan = p.plan AND b.campaign_id = p.campaign_id
   LEFT JOIN first_seen fs ON fs.family = p.family;
@@ -617,6 +653,17 @@ BEGIN
   -- assertion — and leaves the previous partition standing.
   ASSERT (SELECT COUNT(DISTINCT plan) FROM final) = 2
     AS 'both plans must be written every night (P-9)';
+  -- v27.146: a seat without a question is not a seat (violation 27, §3.0 step 2).
+  ASSERT (SELECT COUNTIF(seat_no IS NOT NULL
+                         AND (clicks_requested IS NULL OR clicks_requested <= 0
+                              OR clicks_due_date IS NULL OR request_basis IS NULL
+                              OR clicks_due_date <= as_of_d))
+          FROM final) = 0
+    AS 'every seat names how many clicks, by a FUTURE date, and how the number was derived (violation 27)';
+  ASSERT (SELECT COUNTIF(seat_no IS NULL
+                         AND (clicks_requested IS NOT NULL OR clicks_due_date IS NOT NULL))
+          FROM final) = 0
+    AS 'a row that took no seat asked no question — no request without a seat';
   ASSERT (SELECT COUNTIF(side = 'GOOD' AND (move != 'NONE' OR planned_bid IS NOT NULL OR seat_cost_per_day IS NOT NULL))
           FROM final) = 0
     AS 'the good side is never cut, is not re-priced, and carries no executable price (P-4)';

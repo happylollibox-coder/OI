@@ -662,6 +662,11 @@ SELECT
   -- P-4: the good side carries no executable price and no seat cost
   IF(f.side_b = 'GOOD', NULL, ROUND(f.planned_bid_raw, 2)) AS planned_bid,
   ROUND(f.seat_cost_per_day, 4) AS seat_cost_per_day,
+  -- v27.146 (plan step 4, violation 27): the two inputs a seat's CLICK TARGET is derived
+  -- from. Published so SP_BUILD_NEXT_WEEK_PLAN can write the target without re-deriving a
+  -- constant this view already owns — a second copy of click_goal_day would drift the day
+  -- the register changes it. Neither column changes any decision here.
+  f.click_goal_day, f.seat_cpc,
   f.is_probe, f.holdout, f.holdout_member, f.holdout_eligible_from,
   -- the plain sentence, printed on the book, the panel and the brief
   CASE f.verdict
