@@ -38,6 +38,7 @@ position from an accident. Newest last.
 | 2026-08-25 | `82db0e3` | **Repair — the memory's no-restamp guard was blind inside the day it ran in, and its own table still published the mechanism the previous repair removed.** Two defects in the object whose whole purpose is to be trusted about what was said when. (1) `GUARD 3` refused a stale snapshot only when its date was older than `CURRENT_DATE('America/Los_Angeles')`. But `snapshot_date` IS that LA date and several passes run each night, so *sharing one LA date is the normal case*: a pass whose Task 20.8 failed at 03:00 carried the same date as the pass that had already appended, the guard waved it through, and the partition was restamped — `captured_at` and `source_detail` moved to a read time at which the Catalog said nothing new. Measured against live state before the fix: the guard refused nothing, one partition was restamped, and `C05`, `C12` and `C13` all read 0 — silent, which is worse than loud. The guard now tests the BUILD rather than the calendar, comparing the snapshot table's own last-modified clock against the stamp the history holds for that date; a build that has not moved has nothing to add, while a genuine rebuild still writes the day's final word, and a date the history does not hold is still appended because that is memory gained. Every row now records `snapshot_built_at`, so which build a partition came from is part of the memory rather than an assumption about it. (2) The DEPLOYED table description still asserted the v27.143 mechanism — *"replaces exactly the snapshot's own date partition ... no earlier partition is ever touched"* — after v27.144 had made both halves false, and it contradicted the registry entry for the same table, which had been corrected. A person hunting for rows missing from an old partition would have read it, ruled the writer out and looked elsewhere. The cause is worth remembering: the table's DDL is `CREATE TABLE IF NOT EXISTS`, so editing the file cannot update a live description — it takes an explicit `ALTER`, shipped here as `scripts/bigquery/migrations/2026-08-25_keyword_state_history_build_clock.sql`, and the file now says so. `C14` was drafted with a third assertion and it was CUT after measurement: it read 1 violation on an honest history and 0 on a genuine restamp. A same-day restamp cannot be detected from committed rows at all — it is a write-time property or none — so `C14` asserts only what is provable: no partition records a build later than its own write, and the guard is still deployed and still reading the build clock. All 14 checks pass, both halves with negative controls. Nothing about what the ladder records changed. |
 | 2026-08-25 | `9638be7` | **The recovered memory gets a second copy, because the fuse turned out to be seven dates and the first one was hours away.** The backfill migration's own header said its time-travel timestamps expire "around 2026-08-31". That is the LAST expiry, not the first. BigQuery's window is 168 hours and each source timestamp leaves it on its own day, so `2026-08-17` — read from the `2026-08-18 06:00Z` version — became **permanently unrecoverable at 2026-08-25 06:00Z**, about seven hours after the discrepancy was noticed, with one further day joining it every 24h until 2026-08-31. Nobody had misread anything; the header stated the true end of the range and everyone, including the writer of the closing report, carried that date forward as though it were the deadline for all seven. From each of those moments `FACT_KEYWORD_STATE_HISTORY` is the ONLY copy of that day, and **its own time travel is not a second copy** — it expires on the same rolling window, so it protects only against a loss noticed inside a week. `FACT_KEYWORD_STATE_HISTORY_SEED_20260824` is therefore an immutable BigQuery SNAPSHOT of all eight partitions, taken at 23:15Z: delta-stored so it costs almost nothing, it survives deletion of the base table, and a `DELETE` against it fails with *snapshots are immutable* — verified as a negative control rather than assumed. Verified at creation against the live history: 8 dates / 6,814 rows, every date's row count AND `captured_at` identical, 69 columns both sides with zero type mismatches. Nothing reads it and nothing should; it is insurance, not a source, and it can move no bid, budget or pause. **The doctrine point this makes is §5's, one level up from bids:** violation 6 was chosen first on the ground that its cost was *permanent and compounding*, and a recovery performed once under that reasoning was then left as a single copy standing on a clock nobody had read to the day. An irreversible asset deserves the same treatment as an irreversible action — the migration header and the gap-closure plan's "live and empty" row are both corrected, since a stale note about an unrepeatable recovery is itself a hazard. |
 | 2026-08-25 | `afef20e` | **Two rulings by Ori, and the park re-test gets an answer with teeth.** (1) **The park re-test cadence is SETTLED** (§3, §6.4): *per family, once off-season and once at the December peak, gated on the subject's volume being worth it.* Three things follow that were not obvious from the sentence — the cadence is a FAMILY property and there is no account-wide interval, because families do not share a season; the volume gate is the **Catalog's** answer via §2.8 market volume, not the Brain's guess, so a re-test below the gate is SKIPPED and the skip is recorded with its reason; and two occasions is a **ceiling, not a floor**, which is the doctrine deliberately accepting permanent parks — but only ones it can name the reason for. The December occasion is there because peak is when a high-volume term is worth unblocking simply to buy data, the same argument §2.9 already makes for negatives, and it is the cheapest evidence of the year per click. Still open: how many clicks a re-test buys and at what price (§6.1). (2) **Phase 2 approved** — the unowned subjects will be wired into the Catalog's universe; `V_UNOWNED_SPEND` stops being a report and becomes a work list, and the $64.38/day under the `-1` sentinel gets a structural fix (key SB product targets on campaign plus target text) before any pricing decision about them is expressible. Also recorded: the appointment machinery is **already there and already ignored** — all 544 parked subjects carry a `next_check_date`, 63 have passed, the oldest by 281 days. Violation 14 is therefore not "a park carries no re-test obligation" but the narrower and more fixable "the obligation is recorded and never read as a trigger". |
+| 2026-08-25 | `PENDING` | **Ori specifies the Brain's order of work, Pacing's obligation to keep pushing, and — new — that the Brain grades the other two layers against its own record.** Three rulings and one genuinely new mechanism. (1) **§3.0, the Brain works in a fixed order and may not skip a step:** evaluate the allowance it actually has; decide *which answers it is buying per keyword*, naming **how many clicks and by when**; then check the campaign budget can carry the implied daily spend. The second step redefines a seat — it is not a bid and not a budget, it is **a question with a price**, and a click count with a date is the only form of a request that can be checked afterwards. The third step has no code at all behind it. (2) **§3.1, Pacing must keep pushing:** a bid set once and left is a decision pretending to be an execution; if the clicks are not arriving, standing still is a choice to fail the request, and the correct behaviour is a further small step every day until the clicks arrive or the ceiling, the floor or the date stops it. (3) **§6.0 — THE REQUEST LEDGER, and the part of this that is new.** The scorecards in §6 grade each layer on its own question, which each can do alone and which leaves every grade retrospective and self-marked: the Catalog decides whether its own valuation was right, Pacing decides whether its own bid worked, and nobody holds the request the answer was supposed to satisfy. Ori's ruling puts that record in the layer that *made* the request — the Brain writes what it asked for (subject, clicks, date, expected CPC, implied daily spend, which campaign must carry it, and the Catalog claim it bought on) and closes the loop when the window ends, grading **the Catalog** on whether its recommendation performed as claimed, **Pacing** on whether the clicks actually arrived rather than whether the bid moved, and **the campaign** on out-of-budget time, whose target is zero. It belongs to the Brain because it is the only layer that knows what was supposed to happen — §1.1's whole point is that an action does not carry its reason, so a grader built anywhere else must reconstruct intent from actions. Three violations recorded: **27** a seat names no click target or date so no request is gradeable; **28** nothing checks the campaign budget can carry the seat — measured the same day, one book cut a campaign's budget 32% while raising a bid inside it and nothing flagged the pair; **29** out-of-budget time is never read back, though it is the one mechanism that makes a correct seat and a correct bid deliver nothing. |
 
 ### How to add an entry
 
@@ -476,7 +477,34 @@ as meaning.
 priced `(N x expected CPC) / days`, not by what the keyword happened to spend last window. A
 half-funded question answers nothing and wastes the money; prefer fewer, fully funded questions.
 
-### 3.1 Speed of movement — direction matters
+### 3.0 The Brain's order of work — allowance, then answers, then can the budget carry it
+
+**Ruled by Ori, 2026-08-25.** The Brain works in this order and may not skip a step:
+
+1. **Evaluate the allowance it actually has.** Not what it spent last week and not the campaign's
+   budget — the pot is what this family's GOOD keywords spent in the judging window, and the allowance
+   is the declared share of it (§3.3). Everything below is spending *that* number.
+2. **Decide which answers it is buying, per keyword.** A seat is not a bid and not a budget: it is a
+   **question with a price**. The Brain names the subject, **how many clicks it wants, and by when**.
+   That is the unit of allocation, and it is what makes a seat gradeable — a click count and a date can
+   be checked afterwards, "we raised it a bit" cannot.
+3. **Check the campaign budget can carry the implied daily spend.** A seat that needs N clicks by date D
+   implies `(N x expected CPC) / days` a day inside a specific campaign. If that campaign's budget
+   cannot carry it, the question will not be answered no matter how correct the seat was — and today
+   nothing checks this. **Measured 2026-08-25: the same book cut a campaign's budget 32% (`$20.48 →
+   $13.94/day`) while raising the bid on a keyword inside it, and no layer noticed.**
+
+The third step is the one with no code behind it at all. The first two exist in `FACT_PLAN_NEXT_WEEK`;
+the budget check does not, which is why a plan can be arithmetically correct and undeliverable.
+
+### 3.1 Speed of movement — direction matters, and Pacing must keep pushing
+
+**Ruled by Ori, 2026-08-25:** Pacing *"needs to push forward in order to get answers slowly and daily."*
+A bid set once and left is not pacing, it is a decision pretending to be an execution. If the Brain has
+asked for N clicks by date D and the clicks are not arriving, **standing still is a choice to fail the
+request** — the correct behaviour is a further small step, every day, until either the clicks arrive or
+the ceiling, the floor or the date stops it. Daily and small is what makes it safe; not moving is what
+makes it useless.
 
 The house's per-upload cap (three blind 5% steps: +15.76% / −14.26%) exists because *a hand upload
 cannot observe*. It is a pacing constraint, not an evidence one, and it should not be symmetric.
@@ -670,6 +698,50 @@ Each layer is graded on **its own question**, which is what lets it improve with
 $1.27 to buy decision data" actually buys decision data, or whether the entry anchor is simply a number
 the house has never checked.
 
+### 6.0 The Brain keeps the ledger, and grades the other two layers against its own request
+
+**Ruled by Ori, 2026-08-25:** *"Brain should also save his request and results and report if the catalog
+and pacing performed like expected... by doing so we can examine what need to get better."*
+
+The scorecards above grade each layer on its own question, which each layer can do alone. This adds the
+thing none of them can do alone: **a record of what was ASKED, kept by the layer that asked it.** Without
+it every scorecard is retrospective and self-marked — the Catalog decides whether its own valuation was
+right, Pacing decides whether its own bid worked — and no one holds the request the answer was supposed
+to satisfy.
+
+**The Brain writes the request when it funds a seat**, and it is a promise with numbers in it:
+
+| field | what it records |
+|---|---|
+| subject | the keyword, target or mode being asked about |
+| the question | how many clicks, by what date |
+| the price | expected CPC, and the daily spend that implies |
+| the campaign | which campaign must carry it, and whether its budget can |
+| the Catalog's claim | the verdict and expected return the seat was bought on |
+
+**And it closes the loop when the window ends**, grading both other layers against that record:
+
+- **Did the Catalog's recommendation perform as it said it would?** The seat was bought on a claim —
+  *this subject returns X against a bar of Y*. Compare the claim to what the window actually returned.
+  A Catalog that is systematically optimistic is a Catalog whose bar or whose settle window is wrong,
+  and nothing else will reveal that.
+- **Did Pacing answer the question it was asked?** Not *did it move the bid* — **did the clicks arrive**.
+  N clicks by date D was the request; delivery is the grade. A bid that moved correctly and bought 3 of
+  the 40 clicks asked for has failed, and today that failure is invisible because nobody wrote the 40 down.
+- **Was the campaign out of budget?** The target is **zero, or near zero**. Out-of-budget time is the
+  single mechanism that can make a correct seat and a correct bid deliver nothing, and it is measurable
+  per campaign per day. A non-zero figure means the answer was never buyable, which is a **Brain** fault
+  under §3.0 step 3, not a Pacing one.
+
+**Why this belongs to the Brain and not to a report.** The Brain is the only layer that knows what was
+supposed to happen, because it is the only layer that decided. A grading pass built anywhere else has to
+reconstruct the intent from the actions, and the whole point of §1.1 is that an action does not carry its
+reason. The ledger is what makes "what needs to get better" answerable with evidence rather than opinion.
+
+**None of this exists yet.** The Brain records its plan (`FACT_PLAN_NEXT_WEEK`) but not a click target,
+not a delivery grade, and not an out-of-budget reading — so no seat has ever been checked against what it
+promised.
+
 ### 6.1 Answering methodology questions — the control group
 
 Some questions cannot be answered by looking harder at existing data, because they are about the method
@@ -845,6 +917,18 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
     the explanation had been dressing a veto up as funding. Distinct from violation 8 (seats do not fund
     the answers they demand): that one is about `TEST` going unfunded, this one is that the ordinary
     price path never reaches the Brain's allocation at all.
+
+27. **A seat names no click target and no date, so no request can ever be graded** (§3.0 step 2, §6.0).
+    The Brain funds a seat in dollars per day and never records *how many clicks by when*, which is the
+    only form of a question that can be checked afterwards. "We raised it a bit" is not a request.
+28. **Nothing checks that the campaign budget can carry the seat** (§3.0 step 3). A seat implies
+    `(N x expected CPC) / days` inside one campaign, and no layer compares that to the campaign's budget.
+    Measured 2026-08-25: one book cut a campaign's budget from $20.48 to $13.94/day while raising the bid
+    on a keyword inside it, and nothing flagged the pair.
+29. **Out-of-budget time is never read back as a grade** (§6.0). It is the one mechanism that makes a
+    correct seat and a correct bid deliver nothing, it is measurable per campaign per day, and no layer
+    reports it against a request. The target is zero or near zero and the account does not know its
+    figure.
 
 ### 8.1 The Research module already does part of the Catalog's job — outside the layers
 
