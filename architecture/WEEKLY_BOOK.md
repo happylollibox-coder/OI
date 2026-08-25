@@ -30,10 +30,18 @@ An action's tier is decided by **which question it answers**, never by which tab
 |---|---|---|---|
 | **CATALOG** | *is this worth having at all?* | negate a term, un-negate a term, park a subject at its floor, un-park it, enable/pause a seasonal subject | `build_seat_moves_bulksheet` (negatives), `build_seasonal_unpause_bulksheet` (enable + park) |
 | **BRAIN** | *what does it get funded to do?* | campaign budget up/down, seat moves between subjects, fund a `TEST` | `FACT_PLAN_NEXT_WEEK` (budgets), `build_seat_moves_bulksheet` (seats) |
-| **PACING** | *what is today's bid?* | raise bid, lower bid, hold at floor, pause a keyword Amazon-side | `build_reprice_bulksheet` |
+| **PACING** | *what is today's bid?* | raise bid, lower bid, hold at floor | `build_reprice_bulksheet` |
 
 A row carries **exactly one tier**. If it seems to belong to two, it has been described wrong — go back
 to the question it answers.
+
+**Corrected during the build (2026-08-25).** This table first put *"pause a keyword Amazon-side"* under
+PACING, and that was wrong. A keyword pause at the end of probation is *executed* by Pacing but
+**decided** by the ladder's `DEAD`/`LOSER` verdict — the question it answers is *is this worth having*,
+which is the Catalog's. Filing it under Pacing would have put a worth verdict in the one layer §1.1
+forbids to make one. **The tier is the tier that DECIDED, never the one that executes**, and the code
+now derives it from what the row does (`action_kind`) rather than from which module built it — which is
+also what stopped two tiers printing the same sentence.
 
 ## 3. Precedence — what happens when two tiers touch one subject
 
@@ -94,7 +102,20 @@ Because one book now carries rows from several sources, the log's `source` colum
 module** and a new note records the **tier**, so a later reader can ask "what did the Brain do in August"
 without re-deriving it from the action verb.
 
-## 7. What v1 does not do
+## 7. Preflight — refusals, not warnings
+
+Before a single cell is written the assembled rows are checked, and any violation **refuses the whole
+build**. Not a warning: a warning printed above a hundred lines of output at 2am is a warning nobody
+reads. Each check exists because this account has actually been bitten by it.
+
+| check | why |
+|---|---|
+| `Product` / `Entity` / `Operation` present on every row | Amazon rejects the line, and a rejected line inside an accepted book is the hardest failure to notice |
+| **no blank portfolio on a `Campaign` row** unless the campaign never had one | **blank is not "unchanged" — it DETACHES.** Caught 3 of the first 42 budget rows carrying a blank, because `DIM_CAMPAIGN.portfolio_id` is NULL for a campaign detached *right now*, so echoing it makes a temporary detachment permanent. The echo is the last non-null portfolio the campaign has ever carried, read from campaign history |
+| SB `Campaign Name` always blank | it is a **real** column on the SB sheet — filling it renames the campaign to whatever the warehouse held at build time |
+| a bid move carries a non-empty `Bid` | a bid row with no bid is a silent no-op that still consumes a change-log row, so the log claims a change that never happened |
+
+## 8. What v1 does not do
 
 Stated so nobody reads more into it than is there:
 
