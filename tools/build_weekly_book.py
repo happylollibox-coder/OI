@@ -84,17 +84,29 @@ def bq(sql, fmt='json'):
 #    own would double-count the same change under two batch ids and make the log unreadable.
 # ---------------------------------------------------------------------------------------------
 
-def run_source(name, script, extra_args, stage_dir):
+def run_source(name, script, extra_args, stage_dir, reuse=False):
     out_path = os.path.join(stage_dir, f"{name}.xlsx")
+    audit_path = out_path.rsplit('.', 1)[0] + '_audit.csv'
+    # --reuse-stage: rebuild the BOOK from source output already on disk without re-running the
+    # sources. They take minutes and hit BigQuery repeatedly, so iterating on the explanation or the
+    # precedence should not mean re-deciding the account. The staged files are stamped in the README
+    # so a reused build can never be mistaken for a fresh one.
+    if reuse and os.path.exists(out_path) and os.path.exists(audit_path):
+        age = datetime.now(timezone.utc) - datetime.fromtimestamp(
+            os.path.getmtime(out_path), tz=timezone.utc)
+        print(f"  reusing staged {name} ({age.total_seconds()/60:.0f} min old)", flush=True)
+        return {'name': name, 'ok': True, 'error': None, 'out': out_path, 'audit': audit_path,
+                'reused': True, 'staged_at': datetime.fromtimestamp(
+                    os.path.getmtime(out_path), tz=timezone.utc)}
     cmd = [HOUSE_PYTHON, script, '--no-log', '-o', out_path] + list(extra_args)
     print(f"  running {name} ...", flush=True)
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         return {'name': name, 'ok': False, 'error': (res.stderr or res.stdout)[-1500:],
-                'out': out_path, 'audit': None}
-    audit = out_path.rsplit('.', 1)[0] + '_audit.csv'
+                'out': out_path, 'audit': None, 'reused': False}
     return {'name': name, 'ok': True, 'error': None, 'out': out_path,
-            'audit': audit if os.path.exists(audit) else None}
+            'audit': audit_path if os.path.exists(audit_path) else None, 'reused': False,
+            'staged_at': datetime.now(timezone.utc)}
 
 
 def read_source(src):
@@ -476,7 +488,7 @@ def preflight(kept):
     return True
 
 
-def write_book(path, kept, conflicts, refused):
+def write_book(path, kept, conflicts, refused, no_log=False):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     ws_sp, ws_sb = wb.create_sheet(SP_SHEET), wb.create_sheet(SB_SHEET)
@@ -496,6 +508,10 @@ def write_book(path, kept, conflicts, refused):
         line_of[id(rec)] = (SB_SHEET if is_sb else SP_SHEET, ws.max_row)
 
     ws_x = wb.create_sheet('Explained')
+    if no_log:
+        # A person opens the workbook, not the README. The draft state has to be visible HERE.
+        ws_x.append(['⛔ DRAFT — NO CHANGE-LOG BATCH WAS WRITTEN. DO NOT UPLOAD. '
+                     'Re-run without --no-log to produce an uploadable book.'])
     ws_x.append(EXPLAINED_HEADERS)
     for rec in kept:
         a = rec['audit']
@@ -535,10 +551,10 @@ def write_book(path, kept, conflicts, refused):
                      'no reason recorded by the source'])
 
     for ws in (ws_x, ws_c, ws_r):
+        ws.freeze_panes = 'A3' if (no_log and ws is ws_x) else 'A2'
         for col, width in zip('ABCDEFGHIJKLMNO', (6, 6, 9, 14, 14, 11, 34, 18, 30, 18, 12, 12,
                                                   90, 90, 90)):
             ws.column_dimensions[col].width = width
-        ws.freeze_panes = 'A2'
     wb.save(path)
     return line_of
 
@@ -625,11 +641,22 @@ def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, n
         by_tier[tier_of(r)].append(r)
     L = [f"# Weekly book — {batch_id}", "",
          f"Built {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}. Workbook: `{book_name}`.",
-         "SOP: `architecture/WEEKLY_BOOK.md`. Doctrine: `architecture/THREE_LAYERS.md`.", "",
-         "**Nothing here has reached Amazon.** Upload the two Amazon sheets by hand, then run",
-         f"`--mark-uploaded {batch_id}`. If you do not upload it, mark it",
-         "`SUPERSEDED_NEVER_UPLOADED` — never delete a change-log row.", "",
-         "## What is in it", "",
+         "SOP: `architecture/WEEKLY_BOOK.md`. Doctrine: `architecture/THREE_LAYERS.md`.", ""]
+    # THE UPLOAD INSTRUCTION AND THE DRAFT WARNING MUST NEVER BOTH BE TRUE. The first shape put
+    # "upload it, then --mark-uploaded" at the top and the --no-log warning at the BOTTOM, so a
+    # draft with no batch to mark still opened by telling the reader to upload it. The two are now
+    # mutually exclusive and the draft case wins the top of the page.
+    if no_log:
+        L += ["> ## ⛔ DRAFT — DO NOT UPLOAD THIS BOOK", ">",
+              "> `--no-log` was used, so **no change-log batch was written** and the batch id above",
+              "> exists nowhere but this file. An uploaded book with no logged batch is a change",
+              "> nothing can attribute, measure or restore.", ">",
+              "> To produce an uploadable book, run the same command without `--no-log`.", ""]
+    else:
+        L += ["**Nothing here has reached Amazon.** Upload the two Amazon sheets by hand, then run",
+              f"`--mark-uploaded {batch_id}`. If you do not upload it, mark it",
+              "`SUPERSEDED_NEVER_UPLOADED` — never delete a change-log row.", ""]
+    L += ["## What is in it", "",
          "| tier | rows | what this tier decided |", "|---|---|---|"]
     for tier, what in ((CATALOG, "whether the subject is worth having at all"),
                        (BRAIN, "what it gets funded to do"),
@@ -659,7 +686,15 @@ def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, n
           "than omitted so it can be argued with.", "",
           "## Sources", "", "| source | status |", "|---|---|"]
     for s in sources:
-        L.append(f"| `{s['name']}` | {'ok' if s['ok'] else '**FAILED — ' + (s['error'] or '')[:200] + '**'} |")
+        if not s['ok']:
+            status = '**FAILED — ' + (s['error'] or '')[:200] + '**'
+        elif s.get('reused'):
+            age = (datetime.now(timezone.utc) - s['staged_at']).total_seconds() / 60
+            status = (f"**REUSED from disk, staged {age:.0f} min ago** — these decisions are that "
+                      f"old, not tonight's")
+        else:
+            status = 'ok — run fresh for this book'
+        L.append(f"| `{s['name']}` | {status} |")
     L += ["", "## What this book does not do", "",
           "- It **decides nothing**. Every row was decided by a source module tonight; this file",
           "  merges, ranks and explains.",
@@ -667,11 +702,41 @@ def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, n
           "  (violation 20 open).",
           "- It does **not** re-open campaigns. Campaign state is yours by hand this season (§4.1).",
           "- It does **not** upload. You upload, always.", ""]
-    if no_log:
-        L += ["> **--no-log was used: no change-log batch was written.** This book is a draft and",
-              "> must not be uploaded — an uploaded book with no logged batch is a change nothing",
-              "> can attribute or restore.", ""]
     open(path, 'w').write("\n".join(L))
+
+
+# ---------------------------------------------------------------------------------------------
+# THE OUTPUT LOCK. Two builds writing one path do not fail — they CLOBBER, and the failure is worse
+# than a crash: the slower run's README can land beside the faster run's workbook, so the file
+# describing the rows and the file holding them come from different builds. That happened during
+# this tool's own development and read as a bug in the README writer for twenty minutes. A book
+# whose README describes other rows is worse than no book.
+# ---------------------------------------------------------------------------------------------
+
+def acquire_output_lock(out_path):
+    lock_path = out_path + '.lock'
+    if os.path.exists(lock_path):
+        try:
+            holder = open(lock_path).read().strip()
+        except OSError:
+            holder = 'unknown'
+        pid = holder.split()[0] if holder else ''
+        alive = False
+        if pid.isdigit():
+            try:
+                os.kill(int(pid), 0)
+                alive = True
+            except OSError:
+                alive = False
+        if alive:
+            sys.exit(f"refusing to build: another build is writing {out_path}\n"
+                     f"  holder: {holder}\n"
+                     f"  wait for it, or use -o to write somewhere else.")
+        print(f"  clearing a stale lock from a dead build ({holder})")
+        os.unlink(lock_path)
+    with open(lock_path, 'w') as f:
+        f.write(f"{os.getpid()} started {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S UTC}")
+    return lock_path
 
 
 def build_parser():
@@ -683,6 +748,10 @@ def build_parser():
     ap.add_argument('--no-log', action='store_true',
                     help="skip the change-log batch insert. The book is then a DRAFT and must not "
                          "be uploaded.")
+    ap.add_argument('--reuse-stage', action='store_true',
+                    help="rebuild the book from source output already staged on disk instead of "
+                         "re-running the sources (they take minutes and re-query BigQuery). The "
+                         "README stamps how old each staged source is.")
     ap.add_argument('--no-budgets', action='store_true',
                     help="omit the Brain's campaign-budget rows (bids and Catalog actions only)")
     ap.add_argument('--change-log-table', default=None,
@@ -691,8 +760,7 @@ def build_parser():
     return ap
 
 
-def main():
-    args = build_parser().parse_args()
+def _main(args):
     change_log = CHANGE_LOG
     if args.change_log_table:
         base = args.change_log_table.rsplit('.', 1)[-1]
@@ -701,13 +769,17 @@ def main():
         change_log = args.change_log_table if '.' in args.change_log_table \
             else f"{PROJECT}.OI.{args.change_log_table}"
 
+    os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
+    lock_path = acquire_output_lock(args.out)
+    _main._lock_path = lock_path
     stage = os.path.join(os.path.dirname(args.out) or '.', '_weekly_stage')
     os.makedirs(stage, exist_ok=True)
 
     print("Assembling the weekly book. Sources run with --no-log; this file writes the one batch.")
     sources = [
-        run_source('reprice', 'tools/build_reprice_bulksheet.py', ['--rule-b'], stage),
-        run_source('seats', 'tools/build_seat_moves_bulksheet.py', [], stage),
+        run_source('reprice', 'tools/build_reprice_bulksheet.py', ['--rule-b'], stage,
+                   args.reuse_stage),
+        run_source('seats', 'tools/build_seat_moves_bulksheet.py', [], stage, args.reuse_stage),
     ]
     records, refused = [], []
     for s in sources:
@@ -734,7 +806,7 @@ def main():
 
     batch_id = f"weekly_book_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
-    write_book(args.out, kept, conflicts, refused)
+    write_book(args.out, kept, conflicts, refused, args.no_log)
     readme_path = args.out.rsplit('.', 1)[0] + '_README.md'
     write_readme(readme_path, os.path.basename(args.out), batch_id, kept, conflicts, refused,
                  sources, args.no_log)
@@ -755,6 +827,22 @@ def main():
     if any(c['same_tier'] for c in conflicts):
         print("  ⚠️  SAME-TIER collisions are in the book and need a human ruling — see Conflicts.")
     return {'out': args.out, 'readme': readme_path, 'batch': batch_id, 'kept': len(kept)}
+
+
+def main():
+    args = build_parser().parse_args()
+    try:
+        return _main(args)
+    finally:
+        # The lock is released even on sys.exit — including a preflight refusal, which is the case
+        # most likely to be re-run immediately.
+        lp = getattr(_main, '_lock_path', None)
+        if lp and os.path.exists(lp):
+            try:
+                if open(lp).read().split()[0] == str(os.getpid()):
+                    os.unlink(lp)
+            except (OSError, IndexError):
+                pass
 
 
 if __name__ == '__main__':
