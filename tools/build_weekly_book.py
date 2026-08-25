@@ -415,6 +415,62 @@ def subject_key(rec):
     return (cid, kid) if kid else (cid, '__CAMPAIGN__')
 
 
+def budget_carry_check(records):
+    """VIOLATION 28 — can the campaign carry what is being asked of it?
+
+    A campaign budget row and a bid row inside that campaign are NOT a precedence conflict: the two
+    tiers are doing their own jobs, and `test_campaign_and_keyword_rows_are_not_a_conflict` pins
+    that. But a budget being CUT while bids inside it are RAISED is a request the campaign may not
+    be able to carry, and the book showed the two rows twenty-five lines apart with nothing relating
+    them. Measured 2026-08-25: BOX-SP/EXACT (teen-girl-gift, White 2) cut 32% ($20.48 -> $13.94/day)
+    while `teen girl gifts` rose $0.72 -> $0.83 inside it.
+
+    IT WARNS, IT DOES NOT REFUSE. The pair can be deliberate — trimming a campaign's ceiling while
+    concentrating it on its better keywords is a legitimate rebalance — and refusing would make that
+    undeliverable. What is not acceptable is it being invisible.
+
+    Only a CUT with RAISES inside is flagged. A cut with cuts inside is coherent; a raise with
+    raises inside is the two layers agreeing, which is the doctrine working rather than failing."""
+    budgets, raises = {}, defaultdict(list)
+    for r in records:
+        a = r['audit']
+        cid = str(a.get('campaign_id') or '')
+        if not cid:
+            continue
+        if action_kind(r) == BUDGET:
+            budgets[cid] = r
+        elif action_kind(r) == BID_MOVE:
+            ob, nb = _f(a.get('old_bid')), _f(a.get('new_bid'))
+            if ob is not None and nb is not None and nb > ob:
+                raises[cid].append(r)
+
+    notes = []
+    for cid, brec in budgets.items():
+        a = brec['audit']
+        old_b, new_b = a['_old_budget'], a['_new_budget']
+        if new_b >= old_b or not raises.get(cid):
+            continue
+        ups = raises[cid]
+        # What the raised bids would cost a day if every raised keyword took the clicks it took
+        # last window at its NEW price. Deliberately a floor, not a forecast: it counts only the
+        # keywords being raised, so the true demand on the budget is at least this.
+        implied = sum((_f(u['audit'].get('new_bid')) or 0) for u in ups)
+        notes.append({
+            'campaign_id': cid,
+            'campaign': a.get('campaign') or '',
+            'old_budget': old_b, 'new_budget': new_b,
+            'pct': (new_b / old_b - 1) * 100 if old_b else 0,
+            'raises': len(ups),
+            'subjects': ', '.join(str(u['audit'].get('target') or '?') for u in ups[:6]),
+            'sum_new_bids': implied,
+            'note': (f"budget CUT {abs((new_b / old_b - 1) * 100) if old_b else 0:.0f}% "
+                     f"(${old_b:.2f} → ${new_b:.2f}/day) while {len(ups)} bid(s) inside it are "
+                     f"RAISED. The Brain is taking money out of the campaign the raises need. "
+                     f"Neither row is wrong alone — decide whether the pair is what you meant."),
+        })
+    return sorted(notes, key=lambda n: n['pct'])
+
+
 def resolve(records):
     """Higher tier wins; loser dropped, never blended, never silent (SOP §3)."""
     by_subject = defaultdict(list)
@@ -504,7 +560,7 @@ def preflight(kept):
     return True
 
 
-def write_book(path, kept, conflicts, refused, no_log=False):
+def write_book(path, kept, conflicts, refused, no_log=False, carry=()):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     ws_sp, ws_sb = wb.create_sheet(SP_SHEET), wb.create_sheet(SB_SHEET)
@@ -555,6 +611,20 @@ def write_book(path, kept, conflicts, refused, no_log=False):
                      wt, w['audit'].get('disposition') or w['audit'].get('kind') or '', w['source'],
                      lt, l['audit'].get('disposition') or l['audit'].get('kind') or '', l['source'],
                      'YES' if c['same_tier'] else 'no', why, l_pace])
+
+    # VIOLATION 28 — the budget-carry warnings share the Conflicts sheet, below the precedence
+    # conflicts, because a reader who opens that sheet is already asking "what disagrees here".
+    if carry:
+        ws_c.append([])
+        ws_c.append(['BUDGET CARRY — a campaign losing budget while bids inside it are raised. '
+                     'Not a precedence conflict; both rows ship. Decide whether the pair is intended.'])
+        ws_c.append(['Campaign', 'Campaign ID', 'Budget', 'Move', 'Bids raised',
+                     'Sum of new bids', 'Subjects', 'What it means'])
+        for n in carry:
+            ws_c.append([n['campaign'], n['campaign_id'],
+                         f"${n['old_budget']:.2f} → ${n['new_budget']:.2f}/day",
+                         f"{n['pct']:+.0f}%", n['raises'], f"${n['sum_new_bids']:.2f}",
+                         n['subjects'], n['note']])
 
     ws_r = wb.create_sheet('Refused')
     ws_r.append(REFUSED_HEADERS)
@@ -660,7 +730,8 @@ def log_batch(kept, batch_id, book_name, change_log):
 # 6. The README — the thing Ori actually reads before uploading.
 # ---------------------------------------------------------------------------------------------
 
-def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, no_log):
+def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, no_log,
+                 carry=()):
     by_tier = defaultdict(list)
     for r in kept:
         by_tier[tier_of(r)].append(r)
@@ -704,6 +775,18 @@ def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, n
     else:
         L += ["## Conflicts", "",
               "None. No subject was touched by more than one tier this build.", ""]
+    if carry:
+        L += ["## Budget carry — read this before uploading", "",
+              f"**{len(carry)} campaign(s) are losing budget while bids inside them are raised.**",
+              "That is not a precedence conflict — the Brain sets ceilings and Pacing sets prices, and",
+              "both rows ship. But the Brain is taking money out of the campaign the raises need, and",
+              "nothing in this system checks whether the smaller budget can still carry them",
+              "(violation 28). Decide whether each pair is what you meant.", "",
+              "| campaign | budget | move | bids raised | subjects |", "|---|---|---|---|---|"]
+        for n in carry:
+            L.append(f"| {n['campaign']} | ${n['old_budget']:.2f} → ${n['new_budget']:.2f}/day | "
+                     f"{n['pct']:+.0f}% | {n['raises']} | {n['subjects']} |")
+        L.append("")
     L += ["## Refused — money deliberately NOT moved", "",
           f"{len(refused)} candidate row(s) were built by a source and then refused: season-blocked,",
           "holdout arm, engine-instructed, or judged on the good side of the window. They are on the",
@@ -827,14 +910,15 @@ def _main(args):
 
     kept, conflicts = resolve(records)
     preflight(kept)
+    carry = budget_carry_check(kept)
     print(f"\n  {len(kept)} rows kept, {len(conflicts)} conflict(s), {len(refused)} refused")
 
     batch_id = f"weekly_book_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
-    write_book(args.out, kept, conflicts, refused, args.no_log)
+    write_book(args.out, kept, conflicts, refused, args.no_log, carry)
     readme_path = args.out.rsplit('.', 1)[0] + '_README.md'
     write_readme(readme_path, os.path.basename(args.out), batch_id, kept, conflicts, refused,
-                 sources, args.no_log)
+                 sources, args.no_log, carry)
 
     if args.no_log:
         print("  --no-log: NO change-log batch written. This book is a DRAFT; do not upload it.")
@@ -849,6 +933,12 @@ def _main(args):
     print(f"  readme -> {readme_path}")
     print(f"  tiers  -> CATALOG {by_tier[CATALOG]}, BRAIN {by_tier[BRAIN]}, "
           f"PACING {by_tier[PACING]}")
+    if carry:
+        print(f"  ⚠️  {len(carry)} BUDGET CARRY warning(s) — a campaign is losing budget while bids "
+              f"inside it are raised. See Conflicts.")
+        for n in carry[:5]:
+            print(f"       {n['pct']:+.0f}%  ${n['old_budget']:.2f} → ${n['new_budget']:.2f}/day  "
+                  f"{n['raises']} raise(s)  {n['campaign']}")
     if any(c['same_tier'] for c in conflicts):
         print("  ⚠️  SAME-TIER collisions are in the book and need a human ruling — see Conflicts.")
     return {'out': args.out, 'readme': readme_path, 'batch': batch_id, 'kept': len(kept)}

@@ -168,3 +168,64 @@ def test_a_negative_logs_as_NEGATE_TERM():
     rec = {'source': 'seats', 'sheet': w.SP_SHEET, 'cells': {},
            'audit': {'kind': 'NEGATIVE_KEYWORD', 'disposition': 'NEGATE'}}
     assert w.log_action(rec) == 'NEGATE_TERM'
+
+
+# --- STEP 2: the budget-carry check (violation 28) -----------------------------------------------
+# A campaign budget row and a bid row inside that campaign are NOT a precedence conflict - the two
+# tiers are doing their own jobs. But a budget being CUT while bids inside it are RAISED is a
+# request the campaign may not be able to carry, and the book showed the two rows 25 lines apart
+# with nothing relating them. Measured 2026-08-25: BOX-SP/EXACT cut 32% while a bid inside it rose.
+
+def _budget_row(cid, old, new, campaign='C'):
+    return {'source': 'plan-budgets', 'sheet': w.SP_SHEET, 'cells': {},
+            'audit': {'campaign_id': cid, 'keyword_id': '', 'campaign': campaign,
+                      'disposition': 'BUDGET_DOWN' if new < old else 'BUDGET_UP',
+                      '_old_budget': old, '_new_budget': new}}
+
+
+def _bid_row(cid, kid, old, new, campaign='C', target='kw'):
+    return {'source': 'reprice', 'sheet': w.SP_SHEET, 'cells': {},
+            'audit': {'campaign_id': cid, 'keyword_id': kid, 'campaign': campaign,
+                      'target': target, 'old_bid': str(old), 'new_bid': str(new),
+                      'disposition': 'BID_UP' if new > old else 'BID_DOWN'}}
+
+
+def test_bid_raise_inside_a_budget_cut_is_surfaced():
+    notes = w.budget_carry_check([_budget_row('9', 20.48, 13.94),
+                                  _bid_row('9', '77', 0.72, 0.83)])
+    assert len(notes) == 1
+    assert notes[0]['campaign_id'] == '9'
+    assert notes[0]['raises'] == 1
+    assert 'cut' in notes[0]['note'].lower()
+
+
+def test_a_budget_cut_with_no_raises_inside_is_not_flagged():
+    notes = w.budget_carry_check([_budget_row('9', 20.48, 13.94),
+                                  _bid_row('9', '77', 0.83, 0.72)])
+    assert notes == []
+
+
+def test_a_budget_raise_with_raises_inside_is_not_flagged():
+    """Agreement, not tension — the Brain is funding what Pacing is pricing up."""
+    notes = w.budget_carry_check([_budget_row('9', 13.94, 20.48),
+                                  _bid_row('9', '77', 0.72, 0.83)])
+    assert notes == []
+
+
+def test_a_bid_raise_with_no_budget_row_is_not_flagged():
+    assert w.budget_carry_check([_bid_row('9', '77', 0.72, 0.83)]) == []
+
+
+def test_the_note_counts_every_raise_in_the_campaign():
+    notes = w.budget_carry_check([_budget_row('9', 20.48, 13.94),
+                                  _bid_row('9', '77', 0.72, 0.83),
+                                  _bid_row('9', '78', 0.50, 0.60),
+                                  _bid_row('9', '79', 0.90, 0.80)])
+    assert len(notes) == 1 and notes[0]['raises'] == 2
+
+
+def test_carry_check_never_drops_a_row():
+    """It WARNS. Refusing would make a legitimate rebalance undeliverable."""
+    recs = [_budget_row('9', 20.48, 13.94), _bid_row('9', '77', 0.72, 0.83)]
+    kept, conflicts = w.resolve(recs)
+    assert len(kept) == 2

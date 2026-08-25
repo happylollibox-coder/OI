@@ -102,6 +102,28 @@ Because one book now carries rows from several sources, the log's `source` colum
 module** and a new note records the **tier**, so a later reader can ask "what did the Brain do in August"
 without re-deriving it from the action verb.
 
+## 6.1 Budget carry — a warning, not a refusal (violation 28)
+
+A campaign budget row and a bid row inside that campaign are **not** a precedence conflict — §3 pins
+that, and a test asserts it. But a budget being **cut** while bids inside it are **raised** is a request
+the campaign may not be able to carry, and before this check the two rows sat twenty-five lines apart in
+the same book with nothing relating them.
+
+`budget_carry_check()` flags exactly that shape: a `BUDGET_DOWN` row with one or more executable
+`BID_UP` rows in the same campaign. Not a cut with cuts inside (coherent), not a raise with raises inside
+(the two layers agreeing, which is the doctrine working). Warnings land on the `Conflicts` sheet below
+the precedence conflicts, in the README, and on stdout.
+
+**It warns and never refuses**, and never drops a row. Trimming a campaign's ceiling while concentrating
+it on its better keywords is a legitimate rebalance; refusing would make that undeliverable. What is not
+acceptable is it being invisible.
+
+**Measured on the first live run: ten campaigns, twelve raised bids** — the largest a 29% cut
+(`$160.00 → $113.51/day`) with two raises inside it. The single pair found by hand beforehand was not
+among them, and that is the check behaving correctly rather than missing: `BOX-SP/EXACT` is still a cut
+(`$20.48 → $14.68`), but rule B has since vetoed the raise inside it, so there is no executable raise to
+carry. A cut with no raise inside is not a carry problem.
+
 ## 7. Preflight — refusals, not warnings
 
 Before a single cell is written the assembled rows are checked, and any violation **refuses the whole
