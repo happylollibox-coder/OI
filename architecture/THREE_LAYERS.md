@@ -50,6 +50,7 @@ position from an accident. Newest last.
 | 2026-08-25 | `f57c244` | **§1.5 — each layer is a MODULE and the domain is an adapter (Ori).** *"Always think that you are creating separate modules that I can decide to use in different systems if I want — for example if I want to use it on stocks, I can reuse most of it."* Stronger than §1.4: that one says a layer must be callable on its own INSIDE this account, this says it must be portable OFF it. The test is concrete rather than aesthetic — the same sentence must make sense about a share of stock: *"at $0.83 CPC this contributes $100 to Lollibox's net profit"* becomes *"at $41.20 entry this contributes $100 to the portfolio's expected return"*, and the Brain's and Pacing's sentences translate too. **What does not survive the translation is the NOUN**, so the seam runs between three packages: **CORE** (domain-free — the contracts, the forecast→score→improve loop, allocation-with-a-ledger, the bounded walk, the 85 % standard and the error decomposition), **ADAPTER** (one per domain — what a subject is, what a price is, where actuals come from, how an action executes, the settle lag), and **INSTANCE** (one per account — bars, floors, families, constants). The keeping-apart rule: *if a sentence in CORE names a campaign, a keyword, a bulksheet or a CPC, it is in the wrong package* — CORE says subject, price, outcome, contribution. **Honest audit of today's code, since the principle arrives after it:** `build_weekly_book.py` 299 Amazon-specific lines of 1,423; `V_SEAT_REQUEST_OUTCOME` 63 of 182; `FACT_SEAT_REQUEST` 14 of 79. The two most general IDEAS in the system — a ledger of what was asked, and a grade of what arrived — are domain-free logic wearing Amazon nouns: the ledger is 82 % portable by line and 0 % by column name. **Not a promise to rewrite:** the book builder is an execution adapter and SHOULD be Amazon-specific, since bulksheets are not a portable concept. But **the forecast chain has not been written yet and is the most reusable piece in the design** — *given a subject, a window and a response model, find the parameter that maximises contribution, then score the prediction and decompose the error* has no ads in it at all. **That one starts in CORE.** |
 | 2026-08-25 | `0f16f5e` | **§1.5 rewritten — the same engines should port with SMALL TWEAKING, and the test is RENAME vs REWRITE (Ori, correcting me).** I over-read the modularity ruling and proposed a CORE/ADAPTER/INSTANCE split with domain-free vocabulary. Ori: *"i prefer to use naming of amazon for now. if i decide to use it somewhere else we will change naming. what i tried to say is that we can use the same engines with other systems with small tweaking."* **The vocabulary stays Amazon's** — renaming a column is cheap and can be done the day it is needed, while an abstraction layer against a move that may never happen is a cost paid today for a benefit that may never arrive. The section now says what actually matters: **would porting be a RENAME or a REWRITE?** A rename is fine (`keyword_id` → `symbol`, `CPC` → `entry_price`, `family_bar` → `hurdle_rate`); what must be avoided is a domain assumption welded into a formula or an execution detail decided inside a decision. **Two things keep it a rename, and only two:** domain assumptions are declared rather than inline, and decisions never know how they will be executed. The second is already true — `cap_budget_moves`, `budget_carry_check`, `resolve` and `mend_rows` decide on plain records and never touch `SP_HEADERS` — which is why the book builder being Amazon-specific costs nothing. The first was **violated by my own code from this morning**: `V_SEAT_REQUEST_OUTCOME` wrote `IF(UPPER(channel)='SB',14,7)` as a literal twice inside a scoring expression, and a stock settles T+2 with no channel at all. Fixed the same day into a declared `settle_lag` read once; acceptance 10/10 after. **What this does NOT license:** no generic `Subject`/`Price` interfaces, no plugin registry, no speculative adapter layer — that is the abstraction tax this ruling refuses. |
 | 2026-08-25 | `80d96b1` | **§2.0.2 — CUSTOMER PURCHASE FLOWS: named assumptions, scored, and always disclosed (Ori).** *"the catalog should create assumptions based on other changes it created (will call it customer purchase flows). so when there is no data you can use a customer purchase flow you know is working in order to estimate it. when you answer the brain you should write to him if the estimation was based on data or mention the customer purchase flow you used."* A flow is a pattern of how a customer arrives and buys — learned from subjects that HAVE data, applied to subjects that do not — with a name, a declared membership rule, a learned profile, and **its own track record**. **This replaces the "shrink toward family × match-type" pooling the forecast spec first proposed, and is better for a nameable reason:** family × match-type is an arbitrary bucket nobody can argue with because it has no identity; a flow is a CLAIM — *this subject will behave like `GIFT_OCCASION_EXACT`, and here is how that flow has performed* — and a claim can be cited, disputed and **scored**. **The scoring is what makes it improve:** when a subject estimated through a flow misses, that is evidence about THE FLOW, so flows get better with use and one that keeps missing is retired rather than quietly relied on — §6's improvement obligation reaching the ASSUMPTIONS, not just the answers. A flow is never invented for one subject; a flow with one member is that member wearing a general name. **Disclosure is not optional:** every answer states `DATA`, `FLOW: <name>` with the flow's own accuracy attached, or `UNKNOWN` publishing nulls — *a forecast that does not say where it came from is worse than no forecast, because the Brain cannot weigh it.* **Window set to 365 days**, measured first: 180 days gives 718 keywords with clicks and 382 fittable, 365 gives **1,810 and 933** — 2.4× the base at the same rate, and a year spans a full seasonal cycle so the curve is not fit inside one demand regime; recency is handled by weighting recent buckets, not by shortening the window. |
+| 2026-08-25 | `PENDING` | **§2.0.3 — the flow tree is GROWN greedily, not declared, and stopping early is a RESULT (Ori).** Three rulings in sequence: ten levels generic→detailed with level 1 universal; then *"the catalog can have more than 10 levels and should add a level only if it improve the accuracy is has (not necessarily in a specific order)"*; then *"if with only 1 level have the best accuracy of estimation it means it enough."* **Depth is never the goal** — a node that refuses to split has answered the question rather than failed it. **The fixed coverage-ordered ladder built first was measured and found almost exactly wrong:** scoring every dimension at the root by the click-weighted dispersion of the children it would produce, the best are `age_group` (0.581) and `subject_kind` (0.581) — which the ladder had at levels 8 and 3 — while the ladder's own **level 2, `channel`, ranks seventh of nine (0.885)** and its levels 4 and 5, `intent_type` (0.917) and `family` (0.914), are the two **worst** dimensions available. **Coverage tells you which fields are safe to use and nothing about which are informative.** `SP_BUILD_CUSTOMER_PURCHASE_FLOWS` now grows the tree greedily: at each node every unused dimension is scored, the best is taken, and a split happens only if the improvement clears a declared threshold AND both children keep enough members and clicks. Different branches split on different dimensions at the same depth — measured on the first grown tree: `product_type` on one, `family` on another, `channel` on a third. **Two defects the first build had, both found by reading output rather than code:** it placed only the 327 subjects that TAUGHT the tree and left 522 (62 %) with no flow at all, breaking the one promise the root exists for — teaching and membership are different things; and internal nodes carried no profile, so falling back to a shallower flow had nothing to fall back TO. Every subject is now walked down the tree by its own facets, and every node's profile rolls up all its descendants. 849 placed across 27 nodes, 168 of them resting at depth 1 because splitting them further did not help. |
 
 ### How to add an entry
 
@@ -259,6 +260,53 @@ it. This is §9's top-down explanation rule reaching inside the Catalog's own an
 clicks and 382 are fittable; at **365 days, 1,810 carry clicks and 933 are fittable**, 2.4× the base at
 the same rate, and a year spans a full seasonal cycle so the curve is not fit inside one demand regime.
 Recency is handled by weighting recent buckets more heavily, not by shortening the window.
+
+### 2.0.3 The flow tree is GROWN, not declared — and stopping early is a result
+
+**Ruled by Ori, 2026-08-25, in two steps.** First: *"flow should have 10 levels between 1 level
+(generic) and 10 levels (detailed)… 1 level should return a generic result to any keyword… catalog
+should decide how many levels it needs based on accurate."* Then, correcting a fixed ladder built from
+that: *"the catalog can have more than 10 levels and should add a level only if it improves the accuracy
+it has (not necessarily in a specific order)."* And finally: **"if with only 1 level you have the best
+accuracy of estimation it means it is enough."**
+
+**So depth is never the goal.** A tree that stops at one level because one level predicts well is a
+**success**. The rule is *split only when splitting helps*, and a node that refuses to split has
+answered the question rather than failed it.
+
+**The first attempt was a fixed ladder ordered by coverage, and measurement showed it was almost
+exactly wrong.** Scoring every candidate dimension at the root by the click-weighted dispersion of the
+children it would produce:
+
+| dimension | weighted child dispersion | where the fixed ladder put it |
+|---|---|---|
+| `age_group` | **0.581** | level 8 |
+| `subject_kind` | **0.581** | level 3 |
+| `term_kind` | 0.610 | level 6 |
+| `is_gift` | 0.768 | level 7 |
+| `product_type` | 0.809 | level 10 |
+| `channel` | 0.885 | **level 2** |
+| `family` | 0.914 | level 5 |
+| `intent_type` | 0.917 | level 4 |
+
+The two best splits sat at levels 8 and 3; the ladder's own **level 2 was the seventh-best of nine**,
+and levels 4 and 5 were the two **worst** dimensions available. **Coverage tells you which fields are
+safe to use, and nothing about which are informative.**
+
+**So the tree is grown greedily.** At each node every unused dimension is scored, the best is taken, and
+a split happens only when the improvement clears a declared threshold **and** both children keep enough
+members and clicks. Different branches therefore split on different things — measured on the first
+grown tree, one branch split on `product_type`, another on `family`, another on `channel`, all at the
+same depth. No fixed ordering can express that.
+
+**Teaching and membership are different, and conflating them abandoned most of the account.** The tree
+is *grown* from subjects with enough clicks to be informative (327 of 849) but must *answer* for all of
+them. The first build placed only the teaching members and left 62 % of subjects with no flow at all —
+breaking the one promise the root exists for. Every subject is now walked down the grown tree by its own
+facets; it simply stops where its facets stop.
+
+**Every node carries a profile rolled up from all its descendants**, so a shallower node is a real
+fallback and not an empty row. Without that, "step up when the deep node is thin" has nothing to step to.
 
 ### 2.0.1 The full answer, and what 85 % is measured on
 
