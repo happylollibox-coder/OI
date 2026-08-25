@@ -15,7 +15,7 @@ one phase earlier.
 | **0** | **Start both clocks** | 6, 13 (recording) | **1–2 days** | Moves no money on purpose. Every night without it is history that can never be recovered — and nothing later can be shown to have helped. |
 | **1** | **Precedence, and a ceiling that binds** | 15 | 2–4 days | Pure safety, and the doctrine's own motivating failure: a known-correct price sat unexecuted for 20 days while a mechanics rule filled the vacuum. Must precede anything that speeds execution up. |
 | **2** | **Everything that spends is judged** | 4 (coverage) | 4–7 days | The largest survivor by current spend: **$132.71/day at 0.528 GP-ROAS** on rows no layer can see. |
-| **3** | **Join campaign history on the id** | 23 | 2–3 days | Cheap, independent, and a hard prerequisite for both seasonal phases. 54 campaign ids carry more than one name, covering **61 % of lifetime spend**. |
+| **3** | **Join campaign history on the id** | 23 | 2–3 days | Cheap, independent, and a hard prerequisite for both seasonal phases. **53 real campaign ids carry more than one name, covering 46.7 % of real-id lifetime spend** ($258,178 of $552,602), plus 6 names each shared by two ids, merging $68,126. (The 54-ids / 61 % first stated here counted the `-1` sentinel as a campaign — see the sentinel note below.) |
 | **4** | **The campaign becomes a subject** | 22 (OPEN) | 1.5–2.5 wk | ⏰ **Dated.** Ten paused campaigns hold **$127,352** of last-season sales at 1.49 GP-ROAS, none with a reopen date. |
 | **5** | **Seasonality reaches the verdict** | 2 | 2–3 wk | ⏰ **Dated.** The doctrine's most expensive mistake — collapsing *not now* into *never*. |
 | **6** | **The Brain stops saying "nothing to do"** | 7, 8, 9, 11, 14 | 3–4 wk | Five violations, one file pair, one change window. |
@@ -28,6 +28,23 @@ one phase earlier.
 | **13** | **The vehicle** | 18 | 2–3 wk | Last, and gated on data availability rather than effort. |
 
 Violations **12** and **16** need no phase — the baseline corrected them (§10.3).
+
+## The `-1` sentinel — a hole in last season's evidence that Phase 3 does NOT close
+
+Measured 2026-08-25 while scoping Phase 3. `campaign_id = -1` is not a campaign; it is the absence of
+one, and it appears twice in this system with different urgencies:
+
+- **Campaign grain — historical, unfixable forward.** Spend arrived under `-1` until **2025-10-27** and
+  never since. In last season alone (2025-09-01..12-31) that is **$32,773 of spend and $91,733 of sales
+  across 29 campaign names — 10.8 % of the season's sales with no campaign identity at all.** Real ids
+  begin 2025-10-28. Joining on the id rather than the name does not recover this: there is no id to
+  join to. Phases 4 and 5 must therefore treat the first ~8 weeks of last season as evidence that
+  exists at the account and family grain but **not** at the campaign grain, and say so rather than
+  reading a campaign's season record as thin.
+- **Target grain — live today.** The same sentinel makes 48 SB product targets unpriceable, spending as
+  recently as 2026-08-23. That is Phase 2's `$64.38/day`, and it IS fixable forward.
+
+Both were found by looking at the same `-1`. Neither is a rename, which is why Phase 3 leaves both standing.
 
 ## The deadline that shapes everything
 
