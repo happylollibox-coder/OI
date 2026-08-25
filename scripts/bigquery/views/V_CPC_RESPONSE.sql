@@ -57,11 +57,21 @@ j AS (
          s.clicks, s.cost, IFNULL(s.days_observed, 0) AS days_observed,
          c.elasticity AS chan_elasticity, c.elasticity_holdout,
          SAFE_DIVIDE(s.cost, NULLIF(s.clicks, 0)) AS baseline_cpc,
-         SAFE_DIVIDE(s.clicks, NULLIF(s.days_observed, 0)) AS baseline_clicks_per_day
+         -- DIVIDE BY THE WINDOW, NOT BY THE DAYS THE KEYWORD HAPPENED TO RUN. Measured: 446 of 502
+         -- keywords ran fewer than 28 days, the median ran 12 and 98 ran three or fewer, so
+         -- clicks/days_present overstates the sustainable daily rate by about 5.7x on average. A
+         -- forecast for a full window that starts from an active-day rate is inflated before any
+         -- price has moved. The active-day rate is still published beside it, because a keyword
+         -- that runs 3 days in 28 is intermittent and the Brain must be able to see that rather
+         -- than infer it from a silently different denominator.
+         SAFE_DIVIDE(s.clicks, k2.baseline_days) AS baseline_clicks_per_day,
+         SAFE_DIVIDE(s.clicks, NULLIF(s.days_observed, 0)) AS clicks_per_active_day,
+         SAFE_DIVIDE(s.days_observed, k2.baseline_days) AS active_day_share
   FROM universe u
   JOIN asof a USING (cid)
   LEFT JOIN settled s ON s.cid = u.cid AND s.targeting = u.targeting
   LEFT JOIN chan c ON c.channel = a.channel
+  CROSS JOIN k AS k2
 ),
 e AS (
   SELECT j.*,
@@ -80,6 +90,8 @@ SELECT
   clicks AS baseline_clicks, ROUND(cost, 2) AS baseline_cost,
   ROUND(baseline_cpc, 4) AS baseline_cpc,
   ROUND(baseline_clicks_per_day, 3) AS baseline_clicks_per_day,
+  ROUND(clicks_per_active_day, 3)   AS clicks_per_active_day,
+  ROUND(active_day_share, 3)        AS active_day_share,
   ROUND(elasticity, 3) AS elasticity,
   elasticity_basis,
   ROUND(baseline_clicks_per_day * POW(0.75, elasticity), 3) AS clicks_per_day_at_075x,
