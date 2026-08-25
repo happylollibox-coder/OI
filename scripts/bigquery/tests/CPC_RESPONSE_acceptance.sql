@@ -61,9 +61,13 @@ c06 AS (SELECT COUNTIF(NOT is_usable
 
 -- C07 THE BASELINE IS SETTLED, AND SB WAITS LONGER THAN SP. An unsettled baseline undercounts
 --     clicks, which makes every candidate price look worse than it truly is.
-c07 AS (SELECT COUNTIF(settled_through > (SELECT watermark FROM wm)) AS v FROM r),
-c07b AS (SELECT IF((SELECT MAX(settled_through) FROM r WHERE channel = 'SB')
-                   < (SELECT MAX(settled_through) FROM r WHERE channel = 'SP'), 0, 1) AS v),
+-- REWRITTEN: the settle lag was REMOVED from the traffic leg after a backtest showed waiting for
+-- settle roughly doubles the click error. C07 now only forbids reading the future; C07b forbids
+-- reintroducing a per-channel lag here, which is a rule about SALES and cost accuracy when applied
+-- to clicks.
+c07 AS (SELECT COUNTIF(baseline_through > (SELECT watermark FROM wm)) AS v FROM r),
+c07b AS (SELECT IF((SELECT MAX(baseline_through) FROM r WHERE channel = 'SB')
+                   = (SELECT MAX(baseline_through) FROM r WHERE channel = 'SP'), 0, 1) AS v),
 
 -- C08 ONE ROW PER KEYWORD. A duplicated keyword would be double-counted by any caller that sums
 --     predicted clicks across a campaign.
@@ -92,8 +96,8 @@ SELECT * FROM (
   SELECT 4,  'C04 paying more never buys fewer clicks',               v FROM c04  UNION ALL
   SELECT 5,  'C05 channel is only SP or SB, and both are present',    v FROM c05  UNION ALL
   SELECT 6,  'C06 the elasticity is stable out of sample',            v FROM c06  UNION ALL
-  SELECT 7,  'C07 the baseline is settled',                           v FROM c07  UNION ALL
-  SELECT 8,  'C07b SB waits longer to settle than SP',                v FROM c07b UNION ALL
+  SELECT 7,  'C07 the baseline never reads the future',                           v FROM c07  UNION ALL
+  SELECT 8,  'C07b the traffic leg is the same length on both channels',                v FROM c07b UNION ALL
   SELECT 9,  'C08 one row per keyword',                               v FROM c08  UNION ALL
   SELECT 10, 'C09 a baseline CPC is a real price',                    v FROM c09  UNION ALL
   SELECT 11, 'C10 the coverage gap stays visible',                    v FROM c10  UNION ALL
