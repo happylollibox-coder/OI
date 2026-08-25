@@ -835,6 +835,52 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
     and cuts break theirs proportionally more often than raises break theirs.** Asymmetry (§3.1) is
     still the right design; the prior defect is that no cap binds at all.
 
+### 8.1 The Research module already does part of the Catalog's job — outside the layers
+
+**Raised by Ori, 2026-08-25: "in research page we built already a research module — are the modules the
+same? can the catalog do today what the research is doing?"** Checked, and the answer changes how four
+violations should be read.
+
+`FACT_RESEARCH_RANKED` / `V_RESEARCH_RANKED` already computes, for 363,055 terms:
+
+| what it computes | the violation that says nothing does this |
+|---|---|
+| `weekly_market_impressions` / `_clicks` / `_purchases` | **21** — "market volume is in the warehouse and **used by nothing**" |
+| `cvr_christmas`, `cvr_easter`, `cvr_valentines`, `cvr_mothers_day`, `cvr_back_to_school`, `cvr_graduation`, `is_holiday_active` | **2** — "it is **not seasonal**, though two full holiday seasons of ads data exist" |
+| `rank`, `overall_fit`, `purchase_rank`, and `FACT_RESEARCH_RECOMMENDATIONS` (623 live ADD candidates by match type) | **5** — "it **cannot propose candidates**: there is no `rank(family, window)`" |
+| `est_cps_curve` — clicks-per-sale as a **curve**, not a point | **17** — "worth is a **scalar price, not a curve** over volume" |
+
+Each of those violations is literally true — *no **layer** reads it* — and materially misleading, because
+the capability exists in this account and has for months. **The violations were written from inside the
+doctrine and the doctrine did not know about Research.** That is the failure §6.3 warns about arriving
+from the other direction: not asserting a loss without testing the innocent explanation, but asserting an
+absence without checking the whole account.
+
+**They are not the same module, and the difference is the dangerous part.**
+
+- **Different population.** The Catalog values 649 subjects the account **owns**. Research ranks 363,055
+  terms it **could** own. But they are not disjoint: **291 of the 649 — 45% — are ranked by both.**
+- **Different question, and this is the real divergence.** The Catalog asks *does this earn at least the
+  family bar?* — a profit question, bar-relative, in gross-profit dollars per ad dollar. Research asks
+  *how well does this term fit, and how efficiently does it convert?* — a 0–100 fit score against a
+  market CPS curve. **`V_RESEARCH_RANKED` does not reference the family bar anywhere** (checked).
+
+So on 291 terms this account holds two independent valuations, computed from different inputs against
+different standards, with **no rule saying which wins**. Nothing has gone wrong yet only because nothing
+consumes both. The moment `rank()` is wired, it would.
+
+**The ruling this needs is not "rebuild it in the Catalog".** Rebuilding would discard working market and
+seasonal machinery and produce a *third* answer. The Catalog should **own the contract and adopt Research
+as its `rank()` and market-volume arm**: Research keeps computing demand, fit and the CPS curve; the
+Catalog converts them into `verdict` / `ceiling_cpc` / `confidence` **against the family bar**, so exactly
+one definition of worth leaves the layer. Research stops being a page and becomes a source.
+
+**What must be true before that wiring, and is not true today:** one term must not be able to receive two
+verdicts. Whatever the Catalog publishes for a subject it owns must be the same answer Research's rank
+implies for that same term, or the disagreement must be surfaced rather than resolved silently (§9).
+
+---
+
 ## 9. How the UI must present a decision (binding on future implementation)
 
 **Every action shown to a person is explained top-down, through the three layers, in order.** Never a

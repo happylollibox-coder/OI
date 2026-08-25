@@ -45,11 +45,31 @@ from its portfolio. Preflight now refuses rather than warns.
 | **8** | **The four-field contract, and the first lean-in** | 1, 10 | 1.5–2 wk | Deliberately late: publishing `verdict` before seasonality and confidence existed would be a rename, not a fix. |
 | **9** | **Negatives get an owner, a book and an expiry** | 24, 25 | 1–1.5 wk | Independent; can slip without stalling anything. |
 | **10** | **The response curve, and Pacing graded** | 3, 17, 13 (grading) | 2–3 wk | The only phase gated by *elapsed time* — it needs weeks of the clock started in Phase 0. |
-| **11** | **Demand data enters on probation** | 4 (demand), 21 | 1–1.5 wk | Market volume and headroom. |
-| **12** | **`rank()`, and the Brain becomes proactive** | 5 | 1.5–2 wk | Needs the ceiling (10), confidence (7) and volume (11) first. |
+| **11** | **Demand data enters on probation** | 4 (demand), 21 | **1 wk, was 1–1.5** | Market volume and headroom — **and it is already computed**, in `FACT_RESEARCH_RANKED`. This becomes *adopt and put on probation*, not *build*. |
+| **12** | **`rank()` — adopt Research as the Catalog's ranking arm** | 5, part of 2 and 17 | **1–1.5 wk, was 1.5–2** | ⚠️ **Re-scoped 2026-08-25 (§8.1).** Research already ranks 363,055 terms with seasonal CVR and a CPS *curve*. The work is not building a ranker — it is putting the family bar in front of one that exists, and killing the double valuation on the 291 terms both modules already judge. |
 | **13** | **The vehicle** | 18 | 2–3 wk | Last, and gated on data availability rather than effort. |
 
 Violations **12** and **16** need no phase — the baseline corrected them (§10.3).
+
+## Research is not a phase — it is a source the doctrine did not know about
+
+Ori, 2026-08-25: *"in research page we built already a research module — are the modules the same? can
+the catalog do today what the research is doing?"*
+
+No, and it is the other way round: **Research already does part of what the Catalog is specified to do**,
+for terms the account does not own. It computes market volume (violation 21's "used by nothing"),
+per-occasion seasonal CVR (violation 2's "not seasonal"), a ranked candidate list (violation 5's "cannot
+propose candidates") and a clicks-per-sale **curve** (violation 17's "not a curve"). All four violations
+are literally true — *no **layer** reads it — and materially misleading.
+
+**The risk it creates is live, not theoretical.** 291 of the Catalog's 649 owned subjects are also ranked
+by Research, and the two judge on different standards: the Catalog against the family profit bar,
+Research against a 0–100 fit score and a market CPS curve, with **no reference to the family bar anywhere
+in `V_RESEARCH_RANKED`**. Two valuations, no precedence rule. Nothing consumes both yet; wiring `rank()`
+would make it consume both on day one.
+
+**So Phases 11 and 12 change from build to adopt** — see the table — and both gain one non-negotiable
+acceptance condition: *one term, one verdict.* Full argument: `architecture/THREE_LAYERS.md` §8.1.
 
 ## The `-1` sentinel — a hole in last season's evidence that Phase 3 does NOT close
 
