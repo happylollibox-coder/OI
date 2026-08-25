@@ -19,18 +19,22 @@ That is why Step 2 (a check) sits between Step 1 and Step 3 (both uploads).
 
 ## The arc at a glance
 
-| step | what it adds | uploadable after? | size |
-|---|---|---|---|
-| **1** | Fresh bids + pauses, no budgets | **yes — 19 rows today** | minutes |
-| **2** | The budget-carry check (violation 28) | no — it guards step 3 | half a day |
-| **3** | Budget rows, bounded slice | **yes — the small movers** | half a day |
-| **4** | A seat names N clicks by date D (violation 27) | no — makes requests gradeable | 1 day |
-| **5** | The request ledger, write arm (§6.0) | no — records what was asked | 1 day |
-| **6** | The delivery grade + out-of-budget read-back (29) | no — first real answer to "is this working" | 1–2 days |
-| **7** | Negative removal rows (violation 25) | **yes — a new action type** | half a day |
-| **8** | Campaign history joined on id (violation 23) | no — gates step 9 | 1–2 days |
-| **9** | Campaign open/close with reopen dates (violation 22) | **yes — the dated seasonal chain** | 3–5 days |
-| **10** | Market volume reaches the Catalog (violations 4, 21) | no — `expected_clicks` becomes real | 3–5 days |
+| step | what it adds | uploadable after? | size | status |
+|---|---|---|---|---|
+| **1** | Fresh bids + pauses, no budgets | **yes — 21 rows** | minutes | **BUILT — `weekly_book_20260825_084009`, PENDING_UPLOAD, waiting on Ori** |
+| **2** | The budget-carry check (violation 28) | no — it guards step 3 | half a day | ✅ **DONE** `a0739bc` — found 10 campaigns / 12 raised bids |
+| **3** | Budget rows, bounded slice | **yes — the small movers** | half a day | next |
+| **4** | A seat names N clicks by date D (violation 27) | no — makes requests gradeable | 1 day | ✅ **DONE** `fcfbeab` — violation 27 CLOSED |
+| **5** | The request ledger, write arm (§6.0) | no — records what was asked | 1 day | ✅ **DONE** `b068194` — 94 seats, 1,613 clicks |
+| **6** | The delivery grade + out-of-budget read-back (29) | no — first real answer to "is this working" | 1–2 days | ✅ **DONE** `400ccc2` — violation 29 CLOSED; **first grades 2026-09-01** |
+| **7** | Negative removal rows (violation 25) | **yes — a new action type** | half a day | |
+| **8** | Campaign history joined on id (violation 23) | no — gates step 9 | 1–2 days | |
+| **9** | Campaign open/close with reopen dates (violation 22) | **yes — the dated seasonal chain** | 3–5 days | |
+| **10** | Market volume reaches the Catalog (violations 4, 21) | no — `expected_clicks` becomes real | 3–5 days | |
+
+**2026-09-01 is now a date on this plan.** The first seat requests fall due then, and
+`V_SEAT_REQUEST_OUTCOME` produces its first real grades — the first time the system says whether its
+own decisions worked. Nothing needs building for that to happen; it needs the calendar.
 
 ---
 
