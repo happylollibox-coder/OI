@@ -81,7 +81,16 @@ f12 AS (SELECT IF(COUNT(DISTINCT ROUND(cpd, 2)) > 1, 0, 1) AS v
 -- F13 THE VIEW DECIDES NOTHING. It must publish no bid, budget or pause column.
 f13 AS (SELECT COUNTIF(LOWER(column_name) IN ('new_bid','bid','budget','action','apply','pause')) AS v
         FROM `onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS`
-        WHERE table_name = 'V_CATALOG_FORECAST')
+        WHERE table_name = 'V_CATALOG_FORECAST'),
+
+-- F14 THE CATALOG AND THE ENGINE CREDIT THE HALO IDENTICALLY. Ori 2026-08-25: "both should do the
+--     same." The Catalog must never re-derive the credit -- it divides by the same keyword_bar the
+--     engine judges against. This recovers the credit the Catalog IMPLIES and checks it against the
+--     credit the bar DECLARES. A future edit reaching for halo_factor directly would credit at 1.0
+--     and value keywords up to 27% above what the bar permits, while every other check still passed.
+f14 AS (SELECT COUNTIF(ABS(SAFE_DIVIDE(1/keyword_bar - 1, NULLIF(halo_factor - 1, 0)) - halo_credit)
+                       > 0.001) AS v
+        FROM f WHERE halo_factor > 1.0001)
 
 SELECT * FROM (
   SELECT 1  AS n, 'F01 the ceiling reproduces house affordable_cpc' AS check_name, v FROM f01 UNION ALL
@@ -96,6 +105,7 @@ SELECT * FROM (
   SELECT 10, 'F10 net_roas carries the halo exactly once',      v FROM f10 UNION ALL
   SELECT 11, 'F11 a recommendation rests on a positive rate',   v FROM f11 UNION ALL
   SELECT 12, 'F12 the seasons actually differ',                 v FROM f12 UNION ALL
-  SELECT 13, 'F13 the view decides nothing',                    v FROM f13
+  SELECT 13, 'F13 the view decides nothing',                    v FROM f13 UNION ALL
+  SELECT 14, 'F14 Catalog and engine credit the halo identically', v FROM f14
 )
 ORDER BY n;

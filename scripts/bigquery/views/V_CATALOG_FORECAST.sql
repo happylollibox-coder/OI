@@ -31,8 +31,14 @@ ks AS (
 -- HALO JOINS ON FAMILY, NOT ON CAMPAIGN. Measured: T_FAMILY_BAR is one row per (campaign_id, family)
 -- with halo constant inside a family, so a family join cannot fan out and it also covers subjects
 -- whose campaign is absent from the table.
+-- ONE HALO CREDIT, SHARED, NOT A SECOND COPY OF THE RULE. The Catalog does not re-derive how much
+-- of the halo to credit; it divides by the SAME keyword_bar the engine judges against, so the two
+-- layers cannot be spending against different definitions of money. halo_credit is carried through
+-- purely so acceptance can prove the agreement rather than assume it -- the failure this guards is
+-- a future edit that reaches for halo_factor directly and quietly re-credits at 1.0.
 halo AS (
-  SELECT family, ANY_VALUE(halo_factor) AS halo_factor, ANY_VALUE(keyword_bar) AS keyword_bar
+  SELECT family, ANY_VALUE(halo_factor) AS halo_factor, ANY_VALUE(keyword_bar) AS keyword_bar,
+         ANY_VALUE(halo_credit) AS halo_credit
   FROM `onyga-482313.OI.T_FAMILY_BAR` GROUP BY family
 ),
 curve AS (
@@ -115,7 +121,7 @@ subject_season AS (
                 THEN 'CARRIED: no history in this season, using the recent settled window'
               ELSE 'UNKNOWN: no click history' END AS clicks_basis,
          p.max_priced_cpc, p.min_priced_cpc,
-         h.halo_factor, h.keyword_bar,
+         h.halo_factor, h.keyword_bar, h.halo_credit,
          fl.node_id, fl.depth AS flow_depth, fl.flow_cvr, fl.flow_gp_per_order,
          fl.flow_members, fl.split_dim, fl.split_value
   FROM ks
@@ -255,6 +261,7 @@ SELECT
   clicks_basis, season_clicks, season_active_days, season_calendar_days,
   ROUND(halo_factor, 4)       AS halo_factor,
   ROUND(keyword_bar, 4)       AS keyword_bar,
+  halo_credit,
   settled_clk90, settled_ord90,
   ROUND(affordable_cpc, 4)    AS house_affordable_cpc,   -- the ceiling this chain must reproduce
   node_id AS flow_node_id, flow_depth, flow_members,
