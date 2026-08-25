@@ -102,6 +102,25 @@ Because one book now carries rows from several sources, the log's `source` colum
 module** and a new note records the **tier**, so a later reader can ask "what did the Brain do in August"
 without re-deriving it from the action verb.
 
+## 6.2 The budget move cap — and the trap inside it (plan step 3)
+
+Campaign budgets are a **new action type for a book**: no generator in this account has ever emitted
+one. `--budget-max-move` (default **0.25**) holds any move beyond ±25% on the `Refused` sheet, carrying
+its actual percentage so it can be judged rather than merely noticed. **Held, never dropped** — a budget
+change that vanishes without a word is indistinguishable from one the plan never proposed. The cap is
+**symmetric**: a 40% cut is exactly as unreviewed as a 40% raise. A move from a zero budget is refused
+rather than let through, because no percentage exists to measure it against.
+
+**THE CAP CAN REVERSE THE BOOK'S DIRECTION, and that is not a smaller version of the plan.** Measured on
+the first live run: the plan's 44 rows move budgets **+$135.62/day**, but the 21 that survive a ±25% cap
+move them **−$85.77/day**. The moves beyond the cap are overwhelmingly *raises* (23 held, +$221.39/day),
+so holding them leaves their opposites standing alone and a book meant to be *conservative* becomes a
+book that **cuts spend**.
+
+The README and stdout both say so explicitly whenever the two directions disagree in sign. A reader must
+not discover this after uploading — being cautious about *size* while silently inverting *direction* is
+a worse failure than shipping the big movers would have been.
+
 ## 6.1 Budget carry — a warning, not a refusal (violation 28)
 
 A campaign budget row and a bid row inside that campaign are **not** a precedence conflict — §3 pins

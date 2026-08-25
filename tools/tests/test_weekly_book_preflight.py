@@ -229,3 +229,51 @@ def test_carry_check_never_drops_a_row():
     recs = [_budget_row('9', 20.48, 13.94), _bid_row('9', '77', 0.72, 0.83)]
     kept, conflicts = w.resolve(recs)
     assert len(kept) == 2
+
+
+# --- STEP 3: the budget move cap ------------------------------------------------------------------
+# A first upload of a brand-new action type must not contain a +127% move. The cap ships the small
+# movers and HOLDS the big ones for an explicit decision — held, never dropped: a budget change that
+# vanishes without a word is indistinguishable from one the plan never proposed.
+
+def test_a_move_inside_the_cap_is_kept():
+    kept, refused = w.cap_budget_moves([_budget_row('9', 20.00, 22.00)], 0.25)
+    assert len(kept) == 1 and refused == []
+
+
+def test_a_move_beyond_the_cap_is_refused_not_dropped():
+    kept, refused = w.cap_budget_moves([_budget_row('9', 70.00, 159.03)], 0.25)
+    assert kept == [] and len(refused) == 1
+    assert 'cap' in refused[0]['audit']['reason'].lower()
+    assert '127' in refused[0]['audit']['reason']          # the actual move, so it can be judged
+    assert refused[0]['cells'] is None                     # Refused rows carry no Amazon cells
+
+
+def test_the_cap_is_symmetric():
+    """A 40% CUT is as unreviewed as a 40% raise on a first upload."""
+    kept, refused = w.cap_budget_moves([_budget_row('9', 100.00, 60.00)], 0.25)
+    assert kept == [] and len(refused) == 1
+
+
+def test_the_boundary_is_inclusive():
+    """Exactly at the cap ships — a cap that rejects its own boundary is a different cap."""
+    kept, _ = w.cap_budget_moves([_budget_row('9', 100.00, 125.00)], 0.25)
+    assert len(kept) == 1
+
+
+def test_a_zero_cap_holds_every_budget_row():
+    kept, refused = w.cap_budget_moves([_budget_row('9', 100.00, 100.50)], 0.0)
+    assert kept == [] and len(refused) == 1
+
+
+def test_a_from_zero_budget_is_refused_rather_than_divided_by_zero():
+    """No prior budget means no percentage exists. Refuse it; never let it through unmeasured."""
+    kept, refused = w.cap_budget_moves([_budget_row('9', 0.0, 25.00)], 0.25)
+    assert kept == [] and len(refused) == 1
+    assert 'no prior budget' in refused[0]['audit']['reason'].lower()
+
+
+def test_the_cap_touches_only_budget_rows():
+    bid = _bid_row('9', '77', 0.72, 2.00)                  # a +178% BID move, not a budget
+    kept, refused = w.cap_budget_moves([bid], 0.25)
+    assert kept == [bid] and refused == []

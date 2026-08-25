@@ -415,6 +415,51 @@ def subject_key(rec):
     return (cid, kid) if kid else (cid, '__CAMPAIGN__')
 
 
+DEFAULT_BUDGET_MAX_MOVE = 0.25
+
+
+def cap_budget_moves(records, max_move):
+    """STEP 3 — ship the small budget movers, HOLD the big ones for an explicit decision.
+
+    Campaign budgets are a brand-new action type for a book: no generator in this account has ever
+    emitted one. The 44 rows the plan proposes net to a mild +$78.41/day (+5.3%), and that netting
+    hides that SEVEN campaigns move more than 50%, the largest +127% ($70.00 -> $159.03/day). A
+    first upload of a new action type should not contain a 127% move riding along with a reprice.
+
+    HELD, NEVER DROPPED. A budget change that vanishes without a word is indistinguishable from one
+    the plan never proposed, and the whole argument for the Refused sheet is that money deliberately
+    NOT moved is a decision that has to be visible. Each held row carries its actual percentage, so
+    it can be judged rather than merely noticed.
+
+    The cap is SYMMETRIC: a 40% cut is exactly as unreviewed as a 40% raise. Returns (kept, refused);
+    it touches only budget rows and passes everything else through untouched."""
+    kept, refused = [], []
+    for r in records:
+        if action_kind(r) != BUDGET:
+            kept.append(r)
+            continue
+        a = r['audit']
+        old_b, new_b = a.get('_old_budget'), a.get('_new_budget')
+        # A move from nothing has no percentage. Refuse rather than let it through unmeasured — the
+        # one shape where "it is not over the cap" would be true only because the cap cannot see it.
+        if not old_b or old_b <= 0:
+            a = dict(a, reason=(f"no prior budget to measure the move against "
+                                f"(${old_b or 0:.2f} → ${new_b or 0:.2f}/day), so the cap cannot "
+                                f"judge it — decide this one explicitly"))
+            refused.append({**r, 'audit': a, 'cells': None, 'sheet': None})
+            continue
+        pct = new_b / old_b - 1
+        if abs(pct) > max_move + 1e-9:
+            a = dict(a, reason=(f"budget move {pct * 100:+.0f}% (${old_b:.2f} → ${new_b:.2f}/day) is "
+                                f"beyond the ±{max_move * 100:.0f}% cap for this book — held, not "
+                                f"dropped. Decide it explicitly, then raise --budget-max-move or "
+                                f"change it by hand."))
+            refused.append({**r, 'audit': a, 'cells': None, 'sheet': None})
+        else:
+            kept.append(r)
+    return kept, refused
+
+
 def budget_carry_check(records):
     """VIOLATION 28 — can the campaign carry what is being asked of it?
 
@@ -730,8 +775,16 @@ def log_batch(kept, batch_id, book_name, change_log):
 # 6. The README — the thing Ori actually reads before uploading.
 # ---------------------------------------------------------------------------------------------
 
+def budget_net(records):
+    """Net daily budget change across a set of budget rows: (rows, old_total, new_total)."""
+    rows = [r for r in records if action_kind(r) == BUDGET]
+    o = sum((r['audit'].get('_old_budget') or 0) for r in rows)
+    n = sum((r['audit'].get('_new_budget') or 0) for r in rows)
+    return len(rows), o, n
+
+
 def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, no_log,
-                 carry=()):
+                 carry=(), budget_cap=None):
     by_tier = defaultdict(list)
     for r in kept:
         by_tier[tier_of(r)].append(r)
@@ -775,6 +828,30 @@ def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, n
     else:
         L += ["## Conflicts", "",
               "None. No subject was touched by more than one tier this build.", ""]
+    # THE CAP CAN INVERT THE BOOK'S DIRECTION, and a reader must not discover that after uploading.
+    # Measured 2026-08-25: the full 44 rows net +$78.41/day, but the capped 21 net -$85.77/day —
+    # because the big movers are nearly all RAISES, so holding them leaves the cuts standing alone.
+    # A book that quietly reverses what the plan intended is a hazard, not a conservative choice.
+    n_k, o_k, w_k = budget_net(kept)
+    n_h, o_h, w_h = budget_net(refused)
+    if n_k or n_h:
+        L += ["## Campaign budgets — what ships, and which way it points", "",
+              "| | rows | daily budget | net |", "|---|---|---|---|",
+              f"| **ships in this book** | {n_k} | ${o_k:,.2f} → ${w_k:,.2f} | "
+              f"**{w_k - o_k:+,.2f}/day** |"]
+        if n_h:
+            L.append(f"| held beyond the cap | {n_h} | ${o_h:,.2f} → ${w_h:,.2f} | "
+                     f"{w_h - o_h:+,.2f}/day |")
+            L.append(f"| **the plan as a whole** | {n_k + n_h} | ${o_k + o_h:,.2f} → "
+                     f"${w_k + w_h:,.2f} | **{(w_k + w_h) - (o_k + o_h):+,.2f}/day** |")
+        L.append("")
+        if n_h and (w_k - o_k) * ((w_k + w_h) - (o_k + o_h)) < 0:
+            L += ["> ⚠️ **THE CAP HAS REVERSED THE DIRECTION OF THIS BOOK.** The plan as a whole "
+                  f"moves budgets **{(w_k + w_h) - (o_k + o_h):+,.2f}/day**, but what ships here "
+                  f"moves them **{w_k - o_k:+,.2f}/day** — because the moves beyond the cap are "
+                  "mostly in the other direction, and holding them leaves their opposites standing "
+                  "alone. Uploading this is not a smaller version of the plan; it is a different "
+                  "decision. Read the held rows on `Refused` before you upload.", ""]
     if carry:
         L += ["## Budget carry — read this before uploading", "",
               f"**{len(carry)} campaign(s) are losing budget while bids inside them are raised.**",
@@ -860,6 +937,12 @@ def build_parser():
                     help="rebuild the book from source output already staged on disk instead of "
                          "re-running the sources (they take minutes and re-query BigQuery). The "
                          "README stamps how old each staged source is.")
+    ap.add_argument('--budget-max-move', type=float, default=DEFAULT_BUDGET_MAX_MOVE,
+                    metavar='PCT',
+                    help="hold any campaign budget move beyond this fraction (default 0.25 = "
+                         "±25%%). Held rows go to the Refused sheet with their actual percentage — "
+                         "never dropped. Symmetric: a cut is as unreviewed as a raise. Pass a large "
+                         "number to ship every move.")
     ap.add_argument('--no-budgets', action='store_true',
                     help="omit the Brain's campaign-budget rows (bids and Catalog actions only)")
     ap.add_argument('--change-log-table', default=None,
@@ -901,9 +984,20 @@ def _main(args):
 
     if not args.no_budgets:
         b = budget_rows(args.plan)
+        b, over_cap = cap_budget_moves(b, args.budget_max_move)
         records += b
+        refused += over_cap
         sources.append({'name': f'plan-budgets ({args.plan})', 'ok': True, 'error': None})
-        print(f"  plan-budgets: {len(b)} campaign budget rows")
+        print(f"  plan-budgets: {len(b)} campaign budget rows"
+              + (f", {len(over_cap)} HELD beyond the ±{args.budget_max_move * 100:.0f}% cap"
+                 if over_cap else ""))
+        for r in sorted(over_cap,
+                        key=lambda x: -abs((x['audit'].get('_new_budget') or 0)
+                                           / (x['audit'].get('_old_budget') or 1) - 1))[:8]:
+            a = r['audit']
+            ob, nb = a.get('_old_budget') or 0, a.get('_new_budget') or 0
+            pct = (nb / ob - 1) * 100 if ob else float('nan')
+            print(f"       HELD {pct:+7.0f}%  ${ob:8.2f} → ${nb:8.2f}  {a.get('campaign')}")
 
     if not records:
         sys.exit("no executable rows from any source — nothing to build")
@@ -918,7 +1012,7 @@ def _main(args):
     write_book(args.out, kept, conflicts, refused, args.no_log, carry)
     readme_path = args.out.rsplit('.', 1)[0] + '_README.md'
     write_readme(readme_path, os.path.basename(args.out), batch_id, kept, conflicts, refused,
-                 sources, args.no_log, carry)
+                 sources, args.no_log, carry, args.budget_max_move)
 
     if args.no_log:
         print("  --no-log: NO change-log batch written. This book is a DRAFT; do not upload it.")
@@ -933,6 +1027,13 @@ def _main(args):
     print(f"  readme -> {readme_path}")
     print(f"  tiers  -> CATALOG {by_tier[CATALOG]}, BRAIN {by_tier[BRAIN]}, "
           f"PACING {by_tier[PACING]}")
+    nk, ok_, wk = budget_net(kept)
+    nh, oh, wh = budget_net(refused)
+    if nk or nh:
+        print(f"  budgets: {nk} ship ({wk - ok_:+.2f}/day), {nh} held ({wh - oh:+.2f}/day)")
+        if nh and (wk - ok_) * ((wk + wh) - (ok_ + oh)) < 0:
+            print(f"  ⚠️  THE CAP REVERSED THE BOOK'S DIRECTION: the plan moves "
+                  f"{(wk + wh) - (ok_ + oh):+.2f}/day, what ships moves {wk - ok_:+.2f}/day.")
     if carry:
         print(f"  ⚠️  {len(carry)} BUDGET CARRY warning(s) — a campaign is losing budget while bids "
               f"inside it are raised. See Conflicts.")
