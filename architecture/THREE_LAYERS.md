@@ -44,6 +44,7 @@ position from an accident. Newest last.
 | 2026-08-25 | `1958af3` | **§3.0 — the campaign is a CHOICE, and a losing one is mended before it is grown (Ori).** *"The Brain should choose the campaign he added the open questions… if this campaign is not profitable it needs to do it slowly until it is profitable first. This is his job — make sure campaigns are the most net profit dollars they can, and also keep improving going forward."* Two consequences: where a seat SITS is part of the allocation rather than an accident of which campaign the keyword happens to be in; and **a campaign losing money may not be GROWN, only MENDED** — cuts free, raises capped at a declared 5% until it earns. Slowly and not never, because holding a losing campaign perfectly still is its own way of never finding out whether it can recover. **Measured the day the rule was made, before any gate existed: eight campaigns were being handed +$209.91/day of extra ceiling while losing $1,659.54 over 28 days**, against three profitable ones sharing +$115.10 — and the single largest budget move in the book, `BOX-SBS/BROAD (Hunter, By Age)` at +173% ($70.00 → $191.29/day), was going to a campaign that had lost **$1,151.66 on $3,427.07 of spend at GP-ROAS 0.66**. Nothing had an opinion about that, because nothing asked whether a campaign deserved its money before deciding how much more to give it. **The gate is not the size cap and is not made redundant by it:** the cap asks *is this move too big to ship unreviewed*, the gate asks *should this campaign be grown at all*, and the gate held a **+19%** raise sitting comfortably inside a ±25% cap on a campaign losing $53.99. Related: the same day established that **a budget is a ceiling and not a spend** — utilisation across the 45 campaigns with budget changes is 0.798, so the 24 rows held by cap and gate raise ceilings by $223.28/day while their expected SPEND falls $44.75/day. A test on a ceiling is not a test on money. |
 | 2026-08-25 | `a115f08` | **Violation 30 — the Brain never cuts a budget to stem a loss, and its budget moves run BACKWARDS to profit.** Ori asked whether the Brain uses budget as a loss-limiting tool on an unprofitable campaign. **It does not, and the relationship is inverted.** Every one of the 45 campaigns whose budget moves carries `campaign_budget_basis = 'RAMPED'` — the number is the 80/20 allowance ramp, the sum of planned spend on the keywords inside — and the allowance funds the **not-good side**, so a campaign full of losing keywords being repaired receives a *bigger* budget for precisely that reason. The mechanism is self-consistent and has no opinion about the campaign. Measured: campaigns losing more than $500 average **+84.7 %** budget moves while campaigns earning under $200 average **−13.9 %**; correlation between 28-day net profit and budget move is **−0.317** on percentage and **−0.396** on dollars. `BOX-SBS/BROAD (Hunter, By Age)` lost **$1,151.66 at GP-ROAS 0.66** and was handed **+173 %** ($70.00 → $191.29/day) while already spending $181.69/day. The profit gate added earlier today BLOCKS those raises, which is half the answer; **the missing half is the active cut Ori named — a gate that only refuses to grow a loser still leaves it losing at its current rate.** Not built: capping a live campaign's budget moves money down and is Ori's decision, not a consequence of having measured it. |
 | 2026-08-25 | `f7295c2` | **Violation 31 — the Catalog cannot see a regime change, and the Brain must not fix that by overruling it.** Ori: *"what is the brain doing when catalog (90 days) says keywords are good but see that campaign is loosing the last 3 or 7 days?"* Answered from the data. The ladder judges on a settled 90-day window, so a campaign can lose for a week while every keyword inside still reads `WINNER` — a bad week barely moves a 90-day average. Of the campaigns losing on the last 7 settled days: 7 have below-bar keywords (−$505.68), 10 are winners plus `AT_BAR` (−$446.91), **8 are ONLY winners (−$236.22) where nothing may be trimmed at all**, and 13 have no judged keywords (−$443.52, the coverage gap). **What the Brain does today is exactly two things:** rule B can VETO a raise — its own source says it *"only ever REMOVES an executable row… never changes a price"* — and the mend CUTS THE CAMPAIGN BUDGET. On the only-winners campaigns that is the entire toolkit: the ceiling comes down and not one bid moves. **That is correct rather than a gap in the Brain.** Trimming a keyword that genuinely earns above bar on 90 settled days, because its campaign had a bad week, is the Brain deciding the Catalog's own question (§1.1). The fault is upstream: a 90-day average is the right estimator for a stable subject and the wrong one for a subject whose regime shifted three weeks ago, and nothing in the Catalog distinguishes the two. **The fix belongs in the Catalog — a recency-aware verdict — not in a Brain override.** Until then a losing campaign full of winners is capped and waited on, which is the honest response to *we cannot yet tell noise from a change*. |
+| 2026-08-25 | `PENDING` | **§2.0 — THE CATALOG IS A FORECASTER, NOT A HISTORIAN (Ori), and measured against that it does not beat a constant guess.** Ori's purpose statement, now the top of §2: *"the main purpose of catalog is not say what happened last 90 days. it is to predict what will be the result for the window the brain ask him. this is the real meaning of the catalog. the catalog needs to measure it self how much he is correct and strive to at least 85% correction."* Everything else in §2 is subordinate: `settled_roas90` is an INPUT to an answer, not the answer, and a layer that publishes a backward average and calls it a verdict has left the Brain to do the forecasting itself, uninstrumented. **Backtested the same day** — reconstructing what the Catalog would have said at five past as-of dates and scoring each against the 28 days that followed, on subjects taking ≥10 clicks, against the Brain's actual question (*will this land above or below the bar?*): **84.9 % → 82.4 % → 74.7 % → 62.4 % → 55.9 %**, a five-month decay, against a constant "always above the bar" scoring **86.3 % → 85.1 % → 74.7 % → 58.8 % → 58.2 %**. **It beats the constant in one window out of five**, and its accuracy rises and falls with the BASE RATE — the signature of a backward average with no forecasting model, not of a predictor. March's 84.9 % was not skill but an easy month in which blind guessing scored higher, so **the 85 % target has never been met by forecasting, only approached by a period when guessing worked.** Recorded as violation 32. This also reframes §6: the Catalog's scorecard stops being a nice-to-have and becomes the definition of the layer working, and `V_SEAT_REQUEST_OUTCOME` already has the scoring machinery — what it grades is currently a memory rather than a forecast. |
 
 ### How to add an entry
 
@@ -141,6 +142,51 @@ property the doctrine requires and the system only partly has.
 ---
 
 ## 2. The Catalog contract
+
+### 2.0 THE CATALOG IS A FORECASTER, NOT A HISTORIAN
+
+**Ruled by Ori, 2026-08-25 — the purpose statement this whole layer derives from:**
+
+> *"The main purpose of the Catalog is not to say what happened in the last 90 days. It is to predict
+> what the result will be for the window the Brain asks him. This is the real meaning of the Catalog.
+> The Catalog needs to measure itself — how much it is correct — and strive for at least 85%."*
+
+Everything else in §2 is subordinate to this. `settled_roas90` is not the Catalog's answer; it is one
+**input** to an answer. The answer is a **prediction about a future window**, and a layer that publishes
+a backward average and calls it a verdict has not done its job — it has reported the past and left the
+Brain to do the forecasting itself, uninstrumented.
+
+**The standard is 85% and it is a declared target, not an aspiration.** A layer with a target can be
+measured against it; a layer without one can only be argued about.
+
+**Measured 2026-08-25 — what the Catalog scores today.** Reconstructing what it would have said at five
+past dates and scoring each against the 28 days that followed, on subjects that took at least 10 clicks,
+against the question the Brain actually asks (*will this land above or below the family bar?*):
+
+| as of | subjects | Catalog correct | a constant guess |
+|---|---|---|---|
+| 2026-03-30 | 73 | 84.9 % | **86.3 %** |
+| 2026-04-27 | 74 | 82.4 % | **85.1 %** |
+| 2026-05-25 | 79 | 74.7 % | 74.7 % |
+| 2026-06-22 | 85 | **62.4 %** | 58.8 % |
+| 2026-07-20 | 170 | 55.9 % | **58.2 %** |
+
+Two things, and the second is worse than the first.
+
+1. **Accuracy has decayed from 84.9 % to 55.9 %** across five months.
+2. **It beats a constant guess exactly once.** "Always say above the bar" scores as well or better in
+   four windows out of five. The Catalog's accuracy rises and falls *with the base rate* — the
+   signature of a backward average with no forecasting model in it, not of a predictor.
+
+March's 84.9 % was therefore not skill. It was an easy month: 86 % of subjects landed above the bar and
+saying so blindly would have scored higher. **The 85 % target has never actually been met by
+forecasting**, only approached by a period when guessing worked.
+
+**What this makes true of the rest of the doctrine.** The Catalog's scorecard (§6) stops being a
+nice-to-have and becomes the definition of the layer working. `V_SEAT_REQUEST_OUTCOME` (§6.0) already
+scores a Catalog claim against what happened — the machinery exists; what it grades is currently a
+backward average, so it measures memory rather than foresight.
+
 
 The interface is deliberately narrow. All pricing complexity lives behind it, so the Catalog can be
 improved without any other layer changing.
@@ -1048,6 +1094,17 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
     record has departed from its long record* — and not in a Brain override. Until it exists, a
     losing campaign full of winners is capped and waited on, which is the honest response to *we
     cannot yet tell noise from a change*.
+
+32. **The Catalog is not measured as a forecaster, and when measured it does not beat a constant
+    guess** (§2.0, ruled by Ori 2026-08-25). Its purpose is to predict the window the Brain asks about;
+    it publishes a settled 90-day average instead, and nothing has ever scored it. Backtested across
+    five as-of dates against the 28 days that followed, it was correct **84.9 %, 82.4 %, 74.7 %,
+    62.4 %, 55.9 %** — a five-month decay — while a constant "always above the bar" scored **86.3 %,
+    85.1 %, 74.7 %, 58.8 %, 58.2 %**. It wins one window in five, and its accuracy tracks the base
+    rate rather than the subject. Against the declared 85 % target it currently scores **55.9 %**.
+    Closing this is not a tweak to the window: it needs a **prediction for the requested window**, an
+    interval rather than a point (a point forecast on four orders cannot be 85 % correct, a calibrated
+    interval can), and a **scored track record** the Catalog reads back and improves against (§6).
 
 ### 8.1 The Research module already does part of the Catalog's job — outside the layers
 
