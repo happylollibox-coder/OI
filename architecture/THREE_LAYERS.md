@@ -835,6 +835,17 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
     and cuts break theirs proportionally more often than raises break theirs.** Asymmetry (§3.1) is
     still the right design; the prior defect is that no cap binds at all.
 
+26. **A bid row consults no seat, no allowance and no pot — the Brain's only power over a price is a
+    veto.** §1.2 says the Brain "holds the pot and spends it", but on the pricing path it does neither.
+    `build_reprice_bulksheet.py` reads `allowance_share` **only** to pick a window length, never to fund
+    anything, and rule B is documented in its own source as *"only ever REMOVES an executable row — it
+    never creates one, and it never changes a price."* So a bid change is money moving **inside** what a
+    subject already had, with no layer asking whether that subject should hold it. Raised by Ori
+    2026-08-25 asking what the Brain had added to a `BID_UP` row; the honest answer was *nothing*, and
+    the explanation had been dressing a veto up as funding. Distinct from violation 8 (seats do not fund
+    the answers they demand): that one is about `TEST` going unfunded, this one is that the ordinary
+    price path never reaches the Brain's allocation at all.
+
 ### 8.1 The Research module already does part of the Catalog's job — outside the layers
 
 **Raised by Ori, 2026-08-25: "in research page we built already a research module — are the modules the

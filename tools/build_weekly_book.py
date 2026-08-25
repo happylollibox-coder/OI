@@ -251,6 +251,48 @@ def budget_rows(plan_arm):
 #    as an oversight and an explicit refusal reads as the fact it is.
 # ---------------------------------------------------------------------------------------------
 
+_FAMILY_BAR = None
+
+
+def family_bar_facts():
+    """The bar's BASIS, not just its value.
+
+    Ori, 2026-08-25: "you used gross-profit — are we not using net ad roas". The sentence said
+    "against the Lollibox bar of 0.81" and never said WHY 0.81, so a reader who knows the account's
+    ads_net_roas reasonably reads it as accepting a sub-break-even return. The number was right and
+    the sentence hid the only thing that made it make sense: the bar is 1/(1 + 0.5*(halo-1)), the
+    family's break-even once HALF its measured organic halo is credited (V_FAMILY_BAR: adjust the
+    bar, never the measurement — organic sales are real at family grain and unattributable at
+    keyword grain). An explanation that omits the adjustment is not shorter, it is wrong."""
+    global _FAMILY_BAR
+    if _FAMILY_BAR is None:
+        _FAMILY_BAR = {}
+        try:
+            for r in bq("SELECT DISTINCT family, keyword_bar, halo_factor, ads_net_roas "
+                        "FROM `onyga-482313.OI.T_FAMILY_BAR`"):
+                _FAMILY_BAR[r['family']] = r
+        except SystemExit:
+            _FAMILY_BAR = {}
+    return _FAMILY_BAR
+
+
+def bar_basis(fam):
+    r = family_bar_facts().get(fam)
+    if not r:
+        return ""
+    halo, anr = _f(r.get('halo_factor')), _f(r.get('ads_net_roas'))
+    if halo is None or halo <= 1.0:
+        return (" That bar is 1.00 — no halo credit, because this family's measured organic lift is "
+                "not above 1.")
+    txt = (f" That bar is not a target, it is {fam}'s break-even: its measured organic halo is "
+           f"{halo:.2f}x and HALF of that is credited, so 1/(1+0.5x{halo - 1:.2f}) = "
+           f"{_f(r.get('keyword_bar')):.4f}.")
+    if anr is not None:
+        txt += (f" On ads alone, with no halo credited at all, {fam} returns {anr:.3f} — which is "
+                f"why the bar sits below 1.00 rather than at it.")
+    return txt
+
+
 def _f(v, default=None):
     try:
         return float(v)
@@ -285,20 +327,32 @@ def explain(rec):
                f"{(roas if roas is not None else 0):.2f} gross-profit dollars per ad dollar against "
                f"the {fam} bar of {(bar if bar is not None else 0):.2f}"
                + (f" — {side} the bar" if side else "")
-               + f" on {orders or 0} settled orders. Its floor is "
+               + f" on {orders or 0} settled orders."
+               + bar_basis(fam)
+               + " Its floor is "
                + (f"${floor:.2f} ({floor_src})." if floor is not None else f"unset ({floor_src})."))
         verdict = a.get('rule_b_verdict') or ''
         rb_ret, rb_bar = _f(a.get('rule_b_return')), _f(a.get('rule_b_bar'))
+        # WHAT THE BRAIN ACTUALLY CONTRIBUTED, INCLUDING WHEN THAT IS NOTHING (Ori, 2026-08-25:
+        # "what the brain added"). On a bid row the Brain's ONLY power is a veto — the reprice
+        # book's own words are "rule B only ever REMOVES an executable row; it never creates one
+        # and it never changes a price" — and it consults no seat, no allowance and no pot
+        # (violation 26). Reporting rule B's verdict as though it were an allocation decision
+        # dressed a veto up as funding, which is exactly the parroting failure §4 forbids.
         if verdict:
-            brain = (f"The Brain judged the window as well: {verdict}"
+            brain = (f"The Brain reviewed the window and did not veto: {verdict}"
                      + (f", returning {rb_ret:.2f} against a {rb_bar:.2f} bar"
                         if rb_ret is not None and rb_bar is not None else "")
                      + f" over {a.get('rule_b_window') or 'the plan window'}"
-                     + (f" on {a.get('rule_b_orders')} orders." if a.get('rule_b_orders') else "."))
+                     + (f" on {a.get('rule_b_orders')} orders." if a.get('rule_b_orders') else ".")
+                     + " It did not FUND this row and could not have: a bid change consults no "
+                       "seat, no allowance and no pot, so the Brain's only power over a price "
+                       "today is to remove the row (violation 26).")
         else:
-            brain = (f"The Brain did not rule on this row — it carries no window verdict, so the "
-                     f"funding question was never reached and this is a price change inside money "
-                     f"the subject already has.")
+            brain = ("The Brain contributed nothing to this row — it carries no window verdict, so "
+                     "even the veto was never exercised. A bid change consults no seat, no "
+                     "allowance and no pot, so this is a price moving inside money the subject "
+                     "already had (violation 26).")
         old_bid, new_bid = _f(a.get('old_bid')), _f(a.get('new_bid'))
         disp = a.get('disposition') or ''
         if disp == 'PAUSE':
