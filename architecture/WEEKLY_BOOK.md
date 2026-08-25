@@ -111,15 +111,31 @@ change that vanishes without a word is indistinguishable from one the plan never
 **symmetric**: a 40% cut is exactly as unreviewed as a 40% raise. A move from a zero budget is refused
 rather than let through, because no percentage exists to measure it against.
 
-**THE CAP CAN REVERSE THE BOOK'S DIRECTION, and that is not a smaller version of the plan.** Measured on
-the first live run: the plan's 44 rows move budgets **+$135.62/day**, but the 21 that survive a ±25% cap
-move them **−$85.77/day**. The moves beyond the cap are overwhelmingly *raises* (23 held, +$221.39/day),
-so holding them leaves their opposites standing alone and a book meant to be *conservative* becomes a
-book that **cuts spend**.
+### A BUDGET IS A CEILING, NOT A SPEND — and the first version of this section got that wrong
 
-The README and stdout both say so explicitly whenever the two directions disagree in sign. A reader must
-not discover this after uploading — being cautious about *size* while silently inverting *direction* is
-a worse failure than shipping the big movers would have been.
+Ori, 2026-08-25: *"check not only budget also real spend with the estimated new cost."* He was right,
+and the correction reverses a warning this file previously carried.
+
+The first cut compared **ceiling totals** and announced that the cap "reverses the direction of the
+book": the plan's 44 rows move ceilings **+$135.62/day** while the 21 under a ±25% cap move them
+**−$85.77/day**. True, and **not money**. Measured against the plan's own spend estimate:
+
+| | rows | ceiling moves | spending now | **expected spend change** |
+|---|---|---|---|---|
+| ships under the cap | 21 | −$85.77/day | $488.17/day (65% of ceiling) | **−$64.73/day** |
+| held beyond the cap | 23 | **+$221.39/day** | $730.04/day (100% of ceiling) | **−$44.75/day** |
+| the plan as a whole | 44 | +$135.62/day | $1,218.21/day | **−$109.49/day** |
+
+**There is no reversal.** Both point the same way; the cap makes a $109/day cut into a $65/day cut. And
+the held rows raise ceilings by **$221/day while their expected spend FALLS $44.75/day** — because
+across all 45 campaigns with budget changes utilisation is **0.798**, so most ceilings are not binding
+and raising one buys nothing.
+
+**The rule this establishes:** *a test on a ceiling is not a test on money.* The warning now fires on
+`planned_spend_delta_per_day` — the plan's own estimate of what will actually be spent — and never on
+the ceiling. Both figures are published side by side with utilisation, so a reader can see when a
+ceiling move is buying nothing, and the README says so in words whenever the held rows' spend effect is
+small against their ceiling effect.
 
 ## 6.1 Budget carry — a warning, not a refusal (violation 28)
 

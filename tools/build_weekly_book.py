@@ -159,7 +159,13 @@ per_campaign AS (
     MAX(allowance_ramped_per_day) AS allowance_per_day,
     MAX(allowance_share)         AS allowance_share,
     LOGICAL_OR(IFNULL(holdout, FALSE)) AS holdout,
-    MAX(campaign_visible_spend_per_day) AS visible_spend_per_day
+    MAX(campaign_visible_spend_per_day) AS visible_spend_per_day,
+    -- A BUDGET IS A CEILING, NOT A SPEND (Ori, 2026-08-25). The plan publishes its own estimate of
+    -- what each keyword's spend will actually do, and summing it per campaign is the only honest
+    -- answer to "which way does this book point". Measured: across the 45 campaigns with budget
+    -- changes, budgets move +$119.31/day while the plan expects spend to move -$41.27/day, because
+    -- utilisation is 0.798 and most ceilings are not binding.
+    SUM(planned_spend_delta_per_day)    AS planned_spend_delta_per_day
   FROM latest
   WHERE campaign_id IS NOT NULL
   GROUP BY campaign_id
@@ -239,6 +245,8 @@ def budget_rows(plan_arm):
                 '_allowance': num(r.get('allowance_per_day')),
                 '_share': num(r.get('allowance_share')),
                 '_visible_spend': num(r.get('visible_spend_per_day')),
+                '_spend_delta': num(r.get('planned_spend_delta_per_day')),
+                '_utilisation': (num(r.get('visible_spend_per_day')) / old_b) if old_b else None,
                 '_never_had_portfolio': never_had,
             }})
     return out
@@ -313,9 +321,12 @@ def explain(rec):
         return (
             "No verdict — the Catalog does not value campaigns (violation 22).",
             f"{'Raises' if new_b > old_b else 'Lowers'} {fam}'s budget "
-            f"${old_b:.2f} → ${new_b:.2f}/day. Pot ${a['_pot']:.2f}/day, ramped allowance "
-            f"${a['_allowance']:.2f}/day at {a['_share']:.2f} share; visible spend "
-            f"${a['_visible_spend']:.2f}/day. Basis: {a['_basis'] or 'not stated'}.",
+            f"${old_b:.2f} → ${new_b:.2f}/day, but a budget is a CEILING: the campaign spends "
+            f"${a['_visible_spend']:.2f}/day today ("
+            + (f"{a['_utilisation'] * 100:.0f}% of it" if a['_utilisation'] is not None else "n/a")
+            + f") and the plan expects its spend to move {a['_spend_delta']:+.2f}/day. Pot "
+            f"${a['_pot']:.2f}/day, ramped allowance ${a['_allowance']:.2f}/day at "
+            f"{a['_share']:.2f} share. Basis: {a['_basis'] or 'not stated'}.",
             "Not consulted — a budget is a daily ceiling, not a price. Bids unchanged.")
 
     if kind == BID_MOVE:
@@ -776,11 +787,20 @@ def log_batch(kept, batch_id, book_name, change_log):
 # ---------------------------------------------------------------------------------------------
 
 def budget_net(records):
-    """Net daily budget change across a set of budget rows: (rows, old_total, new_total)."""
+    """(rows, old_ceiling, new_ceiling, expected_spend_delta, spend_now).
+
+    A BUDGET IS A CEILING, NOT A SPEND. The first version of this returned only the ceiling totals
+    and drove a "the cap reversed the book's direction" warning off them — which was measuring the
+    wrong quantity. Measured on live data: the rows held beyond the ±25% cap raise ceilings by
+    $204.06/day and are expected to move actual spend by $11.00/day, because only 10 of those 26
+    campaigns are within 5% of their ceiling. A ceiling raised over a campaign that was never
+    reaching it buys nothing."""
     rows = [r for r in records if action_kind(r) == BUDGET]
     o = sum((r['audit'].get('_old_budget') or 0) for r in rows)
     n = sum((r['audit'].get('_new_budget') or 0) for r in rows)
-    return len(rows), o, n
+    sd = sum((r['audit'].get('_spend_delta') or 0) for r in rows)
+    sn = sum((r['audit'].get('_visible_spend') or 0) for r in rows)
+    return len(rows), o, n, sd, sn
 
 
 def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, no_log,
@@ -832,26 +852,43 @@ def write_readme(path, book_name, batch_id, kept, conflicts, refused, sources, n
     # Measured 2026-08-25: the full 44 rows net +$78.41/day, but the capped 21 net -$85.77/day —
     # because the big movers are nearly all RAISES, so holding them leaves the cuts standing alone.
     # A book that quietly reverses what the plan intended is a hazard, not a conservative choice.
-    n_k, o_k, w_k = budget_net(kept)
-    n_h, o_h, w_h = budget_net(refused)
+    n_k, o_k, w_k, sd_k, sn_k = budget_net(kept)
+    n_h, o_h, w_h, sd_h, sn_h = budget_net(refused)
     if n_k or n_h:
-        L += ["## Campaign budgets — what ships, and which way it points", "",
-              "| | rows | daily budget | net |", "|---|---|---|---|",
-              f"| **ships in this book** | {n_k} | ${o_k:,.2f} → ${w_k:,.2f} | "
-              f"**{w_k - o_k:+,.2f}/day** |"]
+        util_k = (sn_k / o_k) if o_k else None
+        util_h = (sn_h / o_h) if o_h else None
+        L += ["## Campaign budgets — the ceiling, and what it actually buys", "",
+              "**A budget is a ceiling, not a spend.** The two columns move independently, and only",
+              "the second one is money. Where a campaign is not reaching its ceiling, raising it buys",
+              "nothing — so read the right-hand column first.", "",
+              "| | rows | ceiling moves | spending now | **expected spend change** |",
+              "|---|---|---|---|---|",
+              f"| **ships in this book** | {n_k} | {w_k - o_k:+,.2f}/day | ${sn_k:,.2f}/day"
+              + (f" ({util_k * 100:.0f}% of ceiling)" if util_k is not None else "")
+              + f" | **{sd_k:+,.2f}/day** |"]
         if n_h:
-            L.append(f"| held beyond the cap | {n_h} | ${o_h:,.2f} → ${w_h:,.2f} | "
-                     f"{w_h - o_h:+,.2f}/day |")
-            L.append(f"| **the plan as a whole** | {n_k + n_h} | ${o_k + o_h:,.2f} → "
-                     f"${w_k + w_h:,.2f} | **{(w_k + w_h) - (o_k + o_h):+,.2f}/day** |")
+            L.append(f"| held beyond the cap | {n_h} | {w_h - o_h:+,.2f}/day | ${sn_h:,.2f}/day"
+                     + (f" ({util_h * 100:.0f}% of ceiling)" if util_h is not None else "")
+                     + f" | {sd_h:+,.2f}/day |")
+            L.append(f"| **the plan as a whole** | {n_k + n_h} | "
+                     f"{(w_k + w_h) - (o_k + o_h):+,.2f}/day | ${sn_k + sn_h:,.2f}/day | "
+                     f"**{sd_k + sd_h:+,.2f}/day** |")
         L.append("")
-        if n_h and (w_k - o_k) * ((w_k + w_h) - (o_k + o_h)) < 0:
-            L += ["> ⚠️ **THE CAP HAS REVERSED THE DIRECTION OF THIS BOOK.** The plan as a whole "
-                  f"moves budgets **{(w_k + w_h) - (o_k + o_h):+,.2f}/day**, but what ships here "
-                  f"moves them **{w_k - o_k:+,.2f}/day** — because the moves beyond the cap are "
-                  "mostly in the other direction, and holding them leaves their opposites standing "
-                  "alone. Uploading this is not a smaller version of the plan; it is a different "
-                  "decision. Read the held rows on `Refused` before you upload.", ""]
+        if n_h and abs(w_h - o_h) > 1 and abs(sd_h) < abs(w_h - o_h) * 0.25:
+            L += [f"> **The {n_h} held rows move ceilings by {w_h - o_h:+,.2f}/day and are expected "
+                  f"to move spend by only {sd_h:+,.2f}/day.** Most of those campaigns are not "
+                  "reaching the ceiling they already have, so raising it changes little. Holding "
+                  "them is a smaller decision than the ceiling figures suggest.", ""]
+        # THE WARNING IS ON SPEND, NOT ON THE CEILING. The first version compared ceiling totals and
+        # announced a reversal that did not exist in money: the plan's ceilings move +$135.62/day
+        # while its own spend estimate moves -$41.27/day, so a ceiling-based test fires on a
+        # disagreement between a ceiling and a ceiling and calls it a change of direction.
+        if n_h and sd_k * (sd_k + sd_h) < 0:
+            L += ["> ⚠️ **THE CAP HAS REVERSED THE DIRECTION OF THIS BOOK — in spend, not just in "
+                  f"ceilings.** The plan as a whole expects spend to move **{sd_k + sd_h:+,.2f}/day**, "
+                  f"but what ships here moves it **{sd_k:+,.2f}/day**. Uploading this is not a "
+                  "smaller version of the plan; it is a different decision. Read the held rows on "
+                  "`Refused` first.", ""]
     if carry:
         L += ["## Budget carry — read this before uploading", "",
               f"**{len(carry)} campaign(s) are losing budget while bids inside them are raised.**",
@@ -1027,13 +1064,14 @@ def _main(args):
     print(f"  readme -> {readme_path}")
     print(f"  tiers  -> CATALOG {by_tier[CATALOG]}, BRAIN {by_tier[BRAIN]}, "
           f"PACING {by_tier[PACING]}")
-    nk, ok_, wk = budget_net(kept)
-    nh, oh, wh = budget_net(refused)
+    nk, ok_, wk, sdk, snk = budget_net(kept)
+    nh, oh, wh, sdh, snh = budget_net(refused)
     if nk or nh:
-        print(f"  budgets: {nk} ship ({wk - ok_:+.2f}/day), {nh} held ({wh - oh:+.2f}/day)")
-        if nh and (wk - ok_) * ((wk + wh) - (ok_ + oh)) < 0:
-            print(f"  ⚠️  THE CAP REVERSED THE BOOK'S DIRECTION: the plan moves "
-                  f"{(wk + wh) - (ok_ + oh):+.2f}/day, what ships moves {wk - ok_:+.2f}/day.")
+        print(f"  budgets: {nk} ship (ceiling {wk - ok_:+.2f}/day, SPEND {sdk:+.2f}/day), "
+              f"{nh} held (ceiling {wh - oh:+.2f}/day, SPEND {sdh:+.2f}/day)")
+        if nh and sdk * (sdk + sdh) < 0:
+            print(f"  ⚠️  THE CAP REVERSED THE BOOK'S DIRECTION IN SPEND: the plan moves "
+                  f"{sdk + sdh:+.2f}/day, what ships moves {sdk:+.2f}/day.")
     if carry:
         print(f"  ⚠️  {len(carry)} BUDGET CARRY warning(s) — a campaign is losing budget while bids "
               f"inside it are raised. See Conflicts.")
