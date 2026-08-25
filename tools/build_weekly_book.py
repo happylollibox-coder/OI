@@ -152,7 +152,14 @@ per_campaign AS (
   WHERE campaign_id IS NOT NULL
   GROUP BY campaign_id
 )
-SELECT c.*, d.campaign_type, d.state AS campaign_state, d.portfolio_id
+SELECT c.*, d.campaign_type, d.state AS campaign_state, d.portfolio_id,
+       e.echo_portfolio_id,
+       -- Whether the campaign was FOUND in history at all. Without this, a bug in the echo
+       -- join (there was one: the column was joined and never selected) reads as "this
+       -- campaign never had a portfolio" and preflight waves the blank through. An escape
+       -- hatch keyed on a NULL cannot tell absence from breakage; this one is keyed on a
+       -- fact the query asserts.
+       e.campaign_id IS NOT NULL AS seen_in_history
 FROM per_campaign c
 LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS campaign_id, campaign_type, state, portfolio_id
            FROM `{PROJECT}.OI.DIM_CAMPAIGN` WHERE is_current) d USING (campaign_id)
@@ -182,7 +189,8 @@ def budget_rows(plan_arm):
         # The live value if there is one, else the last one ever seen. Only genuinely blank when
         # the campaign has never belonged to a portfolio, in which case a blank detaches nothing.
         echo = r.get('portfolio_id') or r.get('echo_portfolio_id') or ''
-        never_had = not (r.get('portfolio_id') or r.get('echo_portfolio_id'))
+        # A blank is only safe when history was actually consulted AND it holds no portfolio.
+        never_had = bool(r.get('seen_in_history')) and not echo
         new_b, old_b = num(r['planned_budget']), num(r['current_budget'])
         if is_sb:
             cells = {h: '' for h in SB_HEADERS}
