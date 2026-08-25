@@ -47,6 +47,7 @@ position from an accident. Newest last.
 | 2026-08-25 | `832fae6` | **§2.0 — THE CATALOG IS A FORECASTER, NOT A HISTORIAN (Ori), and measured against that it does not beat a constant guess.** Ori's purpose statement, now the top of §2: *"the main purpose of catalog is not say what happened last 90 days. it is to predict what will be the result for the window the brain ask him. this is the real meaning of the catalog. the catalog needs to measure it self how much he is correct and strive to at least 85% correction."* Everything else in §2 is subordinate: `settled_roas90` is an INPUT to an answer, not the answer, and a layer that publishes a backward average and calls it a verdict has left the Brain to do the forecasting itself, uninstrumented. **Backtested the same day** — reconstructing what the Catalog would have said at five past as-of dates and scoring each against the 28 days that followed, on subjects taking ≥10 clicks, against the Brain's actual question (*will this land above or below the bar?*): **84.9 % → 82.4 % → 74.7 % → 62.4 % → 55.9 %**, a five-month decay, against a constant "always above the bar" scoring **86.3 % → 85.1 % → 74.7 % → 58.8 % → 58.2 %**. **It beats the constant in one window out of five**, and its accuracy rises and falls with the BASE RATE — the signature of a backward average with no forecasting model, not of a predictor. March's 84.9 % was not skill but an easy month in which blind guessing scored higher, so **the 85 % target has never been met by forecasting, only approached by a period when guessing worked.** Recorded as violation 32. This also reframes §6: the Catalog's scorecard stops being a nice-to-have and becomes the definition of the layer working, and `V_SEAT_REQUEST_OUTCOME` already has the scoring machinery — what it grades is currently a memory rather than a forecast. |
 | 2026-08-25 | `321da02` | **§2.0.1 — the full answer is a CHAIN conditional on a price, the objective is family NET PROFIT, and 85 % is measured on the sum (Ori).** Ori rejected interval coverage outright and named why: *"if i define it like this you can be correct but you wont be approved. i preffer you be wrong but you will get better."* A wide interval is trivially 85 % correct and teaches nothing; a falsifiable point that misses tells you HOW it missed. So the Catalog's answer to *"if the CPC is $1.00 over 2026-09-01 to 09-08"* is **clicks → orders → cost → ads net ROAS → net ROAS → contribution to family net profit**, the last being **the objective it must MAXIMISE**, not merely predict. Because the answer is conditional on a CPC, the Brain can ask at several prices and take the maximum — which is the response curve violation 17 says does not exist, arriving as a consequence of the contract rather than as a separate feature. **85 % means the NET PROFIT figure is within 15 %** — not the clicks, not the ROAS, the money. **A chain is DIAGNOSABLE and that is the whole point:** each link is scored separately, so a wrong contribution names its own fault — Ori: *"the catalog could understand what it needs to be correct — maybe more clicks, maybe less cpc, maybe something else."* **Measured the same day, the grain question this forces:** the quantum is one order, so ±1 sale must fit inside 15 %, which needs ~7 orders. Per 7-day window only **13.8 % of keywords** clear that (avg 4.2 orders), against 31.1 % of campaigns and **100 % of families** (avg 886.9). So the target cannot be scored per keyword on a short window — it would be measuring dice. **Resolution: predict per subject, score in aggregate.** The Catalog still answers for the keyword, but the 85 % is measured on the SUM against family net profit; per-subject error is still recorded because that is what says which link to fix, it is just not the pass mark. |
 | 2026-08-25 | `8951183` | **Correction — the CATALOG chooses the price, not the Brain (Ori).** *"the catalog should check what is the best cpc (not the brain, i dont think the brain should send cpc)."* §2.0.1 as written an hour earlier had the Brain supply a CPC and the Catalog answer conditionally; that was wrong in the direction §1.1 cares about — **finding the price at which a subject is worth the most IS establishing worth**, which is the Catalog's own question. A Brain that picks the price is doing valuation, and a Catalog that only answers what-ifs has been reduced to a calculator. The contract is therefore `ask(subject, window)`, with the Catalog searching over price itself and returning the CPC that maximises contribution plus the chain at that CPC. **This also exposes a distinction the doctrine had been blurring: the CEILING and the OPTIMUM are different prices.** §2's original `ceiling_cpc` is the marginal price where contribution reaches ZERO — the highest price still worth paying, at which nothing is earned. The optimum, where contribution PEAKS, sits below it. Both are useful and answer different questions; publishing only the ceiling told the Brain the edge of the cliff and not where to stand. The boundary is now: the Catalog says *at $0.83 this contributes $100, the most it can, and above $1.24 it contributes nothing*; the Brain says *I have $70 — do I buy that $100 or another subject's $120*; Pacing walks the bid toward $0.83. **The Brain never names a price and the Catalog never decides whether the money is spent.** |
+| 2026-08-25 | `PENDING` | **§1.5 — each layer is a MODULE and the domain is an adapter (Ori).** *"Always think that you are creating separate modules that I can decide to use in different systems if I want — for example if I want to use it on stocks, I can reuse most of it."* Stronger than §1.4: that one says a layer must be callable on its own INSIDE this account, this says it must be portable OFF it. The test is concrete rather than aesthetic — the same sentence must make sense about a share of stock: *"at $0.83 CPC this contributes $100 to Lollibox's net profit"* becomes *"at $41.20 entry this contributes $100 to the portfolio's expected return"*, and the Brain's and Pacing's sentences translate too. **What does not survive the translation is the NOUN**, so the seam runs between three packages: **CORE** (domain-free — the contracts, the forecast→score→improve loop, allocation-with-a-ledger, the bounded walk, the 85 % standard and the error decomposition), **ADAPTER** (one per domain — what a subject is, what a price is, where actuals come from, how an action executes, the settle lag), and **INSTANCE** (one per account — bars, floors, families, constants). The keeping-apart rule: *if a sentence in CORE names a campaign, a keyword, a bulksheet or a CPC, it is in the wrong package* — CORE says subject, price, outcome, contribution. **Honest audit of today's code, since the principle arrives after it:** `build_weekly_book.py` 299 Amazon-specific lines of 1,423; `V_SEAT_REQUEST_OUTCOME` 63 of 182; `FACT_SEAT_REQUEST` 14 of 79. The two most general IDEAS in the system — a ledger of what was asked, and a grade of what arrived — are domain-free logic wearing Amazon nouns: the ledger is 82 % portable by line and 0 % by column name. **Not a promise to rewrite:** the book builder is an execution adapter and SHOULD be Amazon-specific, since bulksheets are not a portable concept. But **the forecast chain has not been written yet and is the most reusable piece in the design** — *given a subject, a window and a response model, find the parameter that maximises contribution, then score the prediction and decompose the error* has no ads in it at all. **That one starts in CORE.** |
 
 ### How to add an entry
 
@@ -106,6 +107,58 @@ becomes a CPC. It receives an intent and a constraint from the Brain and finds t
 delivers it. It is accountable for results: if the Brain buys an answer, Pacing must push until the
 answer arrives — and if it cannot buy clicks at any permitted price, **that is itself the answer**,
 reported back.
+
+### 1.5 Each layer is a MODULE, and the domain is an adapter
+
+**Ruled by Ori, 2026-08-25:** *"Always think that you are creating separate modules that I can decide
+to use in different systems if I want — for example if I want to use it on stocks, I can reuse most of
+it."*
+
+This is stronger than §1.4's "independently usable". §1.4 says a layer must be callable on its own
+*inside this account*. This says a layer must be **portable off this account entirely** — and the test
+is not aesthetic, it is that the same three sentences must make sense about a share of stock.
+
+**The test, applied to one sentence per layer:**
+
+| layer | said about a keyword | said about a stock |
+|---|---|---|
+| **Catalog** | *"At $0.83 CPC this contributes $100 to Lollibox's net profit — the most it can."* | *"At $41.20 entry this contributes $100 to the portfolio's expected return — the most it can."* |
+| **Brain** | *"I have $70 of allowance. Buy that $100 or another subject's $120?"* | *"I have $70,000 of cash. Buy that position or another's better one?"* |
+| **Pacing** | *"Walk the bid toward $0.83 in bounded steps."* | *"Work the order toward $41.20 without moving the price."* |
+
+Every one of those survives the translation. **What does not survive is the noun.** So the seam runs
+between three packages, not two:
+
+| package | holds | changes when |
+|---|---|---|
+| **CORE** — domain-free | the contracts; the forecast → score → improve loop; allocation-with-a-ledger; the bounded walk; the 85 % standard and the error decomposition | never, unless the doctrine changes |
+| **ADAPTER** — one per domain | what a *subject* is, what a *price* is, where actuals come from, how an action is executed, what the settle lag is | when the domain changes (ads → stocks) |
+| **INSTANCE** — one per account | the bars, the floors, the families, the declared constants | when this account changes |
+
+**The rule that keeps them apart:** *if a sentence in CORE names a campaign, a keyword, a bulksheet or a
+CPC, it is in the wrong package.* CORE says **subject**, **price**, **outcome**, **contribution**. The
+adapter says those are a keyword, a CPC, an order, and gross profit against a family bar.
+
+**An honest audit of what was built today, because the principle arrives after the code:**
+
+| file | Amazon-specific lines |
+|---|---|
+| `build_weekly_book.py` | 299 of 1,423 |
+| `V_SEAT_REQUEST_OUTCOME.sql` | 63 of 182 |
+| `FACT_SEAT_REQUEST.sql` | 14 of 79 |
+| `SP_APPEND_SEAT_REQUEST.sql` | 12 of 79 |
+
+The two most general *ideas* in the system — **a ledger of what was asked** and **a grade of what
+arrived** — are written almost entirely in domain-free logic wearing Amazon nouns. `FACT_SEAT_REQUEST`
+is 82 % portable by line count and 0 % portable by column name.
+
+**What this means in practice, stated so it is not read as a promise to rewrite everything.** The book
+builder is an execution adapter and *should* be Amazon-specific — bulksheets are not a portable concept
+and pretending otherwise would be waste. The ledger and the grade are worth making portable **when
+something needs them portable**, not before. But **the forecast chain (§2.0.1) has not been written
+yet, and it is the most reusable piece in the whole design** — *given a subject, a window and a
+response model, find the parameter that maximises contribution, then score the prediction and
+decompose the error* is a sentence with no ads in it at all. That one starts in CORE.
 
 ### 1.4 Each layer is independently usable
 
