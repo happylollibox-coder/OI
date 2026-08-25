@@ -282,14 +282,9 @@ def bar_basis(fam):
         return ""
     halo, anr = _f(r.get('halo_factor')), _f(r.get('ads_net_roas'))
     if halo is None or halo <= 1.0:
-        return (" That bar is 1.00 — no halo credit, because this family's measured organic lift is "
-                "not above 1.")
-    txt = (f" That bar is not a target, it is {fam}'s break-even: its measured organic halo is "
-           f"{halo:.2f}x and HALF of that is credited, so 1/(1+0.5x{halo - 1:.2f}) = "
-           f"{_f(r.get('keyword_bar')):.4f}.")
-    if anr is not None:
-        txt += (f" On ads alone, with no halo credited at all, {fam} returns {anr:.3f} — which is "
-                f"why the bar sits below 1.00 rather than at it.")
+        return " Bar 1.00 — no halo credit; measured organic lift is not above 1."
+    txt = f" Bar = break-even crediting half the family's {halo:.2f}x organic halo"
+    txt += f" (ads-only {anr:.3f})." if anr is not None else "."
     return txt
 
 
@@ -301,124 +296,91 @@ def _f(v, default=None):
 
 
 def explain(rec):
+    """Three sentences, one per tier, AS SHORT AS THEY CAN BE AND STILL BE TRUE (Ori, 2026-08-25).
+
+    NAME THE METRIC THE WAY THE ACCOUNT NAMES IT. This first said "gross-profit dollars per ad
+    dollar", which is the same quantity the account calls NET ROAS — `GROSS_PROFIT / Ads_cost`, and
+    `GROSS_PROFIT` is `Ads_sales - cost_per_unit x units` with ad spend NOT subtracted
+    (V_ADS_COST_CORRECTED), so margin per ad dollar exactly. A second name for one number reads as a
+    second metric, and it cost a round trip asking whether we were using net ad ROAS at all."""
     a, src = rec['audit'], rec['source']
     subj = a.get('target') or '(unnamed)'
     fam = a.get('family') or 'unmapped'
+    kind = action_kind(rec)
 
-    if src == 'plan-budgets':
-        cat = (f"The Catalog is not asked about a campaign — it has no verdict for one (§4.1, "
-               f"violation 22 still open), so nothing here is a statement that this campaign is "
-               f"worth its budget. What the family bar governs is the keywords inside it.")
+    if kind == BUDGET:
         old_b, new_b = a['_old_budget'], a['_new_budget']
-        direction = 'raises' if new_b > old_b else 'lowers'
-        brain = (f"The Brain {direction} {fam}'s campaign budget from ${old_b:.2f} to ${new_b:.2f} a "
-                 f"day. The pot is ${a['_pot']:.2f}/day and the ramped allowance ${a['_allowance']:.2f}"
-                 f"/day at a {a['_share']:.2f} share; the campaign is visibly spending "
-                 f"${a['_visible_spend']:.2f}/day today. Basis: {a['_basis'] or 'not stated'}.")
-        pace = (f"Pacing is not consulted on a budget — a budget is a ceiling on the day, not a "
-                f"price in an auction. Bids inside this campaign are unchanged by this row.")
-        return cat, brain, pace
+        return (
+            "No verdict — the Catalog does not value campaigns (violation 22).",
+            f"{'Raises' if new_b > old_b else 'Lowers'} {fam}'s budget "
+            f"${old_b:.2f} → ${new_b:.2f}/day. Pot ${a['_pot']:.2f}/day, ramped allowance "
+            f"${a['_allowance']:.2f}/day at {a['_share']:.2f} share; visible spend "
+            f"${a['_visible_spend']:.2f}/day. Basis: {a['_basis'] or 'not stated'}.",
+            "Not consulted — a budget is a daily ceiling, not a price. Bids unchanged.")
 
-    if src == 'reprice':
+    if kind == BID_MOVE:
         bar, roas = _f(a.get('family_bar')), _f(a.get('roas90_used'))
-        orders, side = a.get('orders90'), (a.get('bar_side') or '').lower()
+        side = (a.get('bar_side') or '').lower()
         floor, floor_src = _f(a.get('bid_floor')), a.get('bid_floor_source') or 'unstated'
-        cat = (f"The Catalog values '{subj}' on its settled 90-day record: "
-               f"{(roas if roas is not None else 0):.2f} gross-profit dollars per ad dollar against "
-               f"the {fam} bar of {(bar if bar is not None else 0):.2f}"
-               + (f" — {side} the bar" if side else "")
-               + f" on {orders or 0} settled orders."
+        n90 = a.get('orders90') or 0
+        cat = (f"'{subj}': {(roas or 0):.2f} net ROAS on settled 90d "
+               f"({n90} order{'' if str(n90) == '1' else 's'}), "
+               f"{side or 'vs'} {fam}'s {(bar or 0):.2f} bar."
                + bar_basis(fam)
-               + " Its floor is "
-               + (f"${floor:.2f} ({floor_src})." if floor is not None else f"unset ({floor_src})."))
+               + (f" Floor ${floor:.2f} ({floor_src})." if floor is not None
+                  else f" Floor unset ({floor_src})."))
         verdict = a.get('rule_b_verdict') or ''
         rb_ret, rb_bar = _f(a.get('rule_b_return')), _f(a.get('rule_b_bar'))
-        # WHAT THE BRAIN ACTUALLY CONTRIBUTED, INCLUDING WHEN THAT IS NOTHING (Ori, 2026-08-25:
-        # "what the brain added"). On a bid row the Brain's ONLY power is a veto — the reprice
-        # book's own words are "rule B only ever REMOVES an executable row; it never creates one
-        # and it never changes a price" — and it consults no seat, no allowance and no pot
-        # (violation 26). Reporting rule B's verdict as though it were an allocation decision
-        # dressed a veto up as funding, which is exactly the parroting failure §4 forbids.
         if verdict:
-            brain = (f"The Brain reviewed the window and did not veto: {verdict}"
-                     + (f", returning {rb_ret:.2f} against a {rb_bar:.2f} bar"
+            n_ord = a.get('rule_b_orders')
+            brain = (f"Reviewed, no veto: {verdict}"
+                     + (f", {rb_ret:.2f} vs {rb_bar:.2f}"
                         if rb_ret is not None and rb_bar is not None else "")
                      + f" over {a.get('rule_b_window') or 'the plan window'}"
-                     + (f" on {a.get('rule_b_orders')} orders." if a.get('rule_b_orders') else ".")
-                     + " It did not FUND this row and could not have: a bid change consults no "
-                       "seat, no allowance and no pot, so the Brain's only power over a price "
-                       "today is to remove the row (violation 26).")
+                     + (f", {n_ord} order{'' if str(n_ord) == '1' else 's'}." if n_ord else ".")
+                     + " Did not fund it — a bid consults no seat, allowance or pot (violation 26).")
         else:
-            brain = ("The Brain contributed nothing to this row — it carries no window verdict, so "
-                     "even the veto was never exercised. A bid change consults no seat, no "
-                     "allowance and no pot, so this is a price moving inside money the subject "
-                     "already had (violation 26).")
-        old_bid, new_bid = _f(a.get('old_bid')), _f(a.get('new_bid'))
-        disp = a.get('disposition') or ''
-        if disp == 'PAUSE':
-            pace = (f"Pacing executes a pause: '{subj}' has finished its probation at the floor and "
-                    f"stops taking clicks. This is the ladder's verdict being carried out, not a "
-                    f"price Pacing chose.")
-        elif old_bid is not None and new_bid is not None:
-            pct = (new_bid / old_bid - 1) * 100 if old_bid else 0
-            cap = a.get('cap_applied')
-            pace = (f"Pacing moves the bid ${old_bid:.2f} → ${new_bid:.2f} ({pct:+.1f}%)"
-                    + (f", bound by the move cap." if cap in ('1', 'True', 'true', True)
-                       else ".")
-                    + (f" An engine instruction was present ({a.get('engine_instruction')}) and the "
-                       f"book yielded." if a.get('engine_instruction') else ""))
-        else:
-            pace = "Pacing records no bid change on this row."
+            brain = ("Nothing — no window verdict, so not even the veto ran. A bid consults no "
+                     "seat, allowance or pot (violation 26).")
+        ob, nb = _f(a.get('old_bid')), _f(a.get('new_bid'))
+        pct = (nb / ob - 1) * 100 if ob and nb else 0
+        pace = (f"${ob:.2f} → ${nb:.2f} ({pct:+.1f}%)"
+                + (", at the move cap." if a.get('cap_applied') in ('1', 'True', 'true', True)
+                   else ".")
+                + (f" Engine instruction {a.get('engine_instruction')} present; the book yielded."
+                   if a.get('engine_instruction') else ""))
         return cat, brain, pace
 
-    # Everything the seat book emits. Branch on WHAT THE ROW DOES, not which module built it, so
-    # each tier says something distinct and true — the earlier shape had the Brain repeat the
-    # Catalog's sentence verbatim, which is exactly the "missing sentence" failure SOP §4 forbids,
-    # only louder: a tier that parrots the one above it looks like agreement and is really silence.
-    kind = action_kind(rec)
-    reason = (a.get('reason') or '').strip()
-    # The source's reason already ends in its own "=> do this" clause. That clause is the ACTION and
-    # belongs to Pacing's sentence, not the Catalog's evidence — keeping it here is what made the
-    # Catalog appear to be issuing a command (§1.1 forbids exactly that).
-    evidence = reason.split('=>')[0].strip().rstrip('-').strip() or 'no reason recorded'
+    # Catalog-decided actions on an owned subject: pause, negate, park, seat move.
     clk, ordn = a.get('settled_clk90') or 0, a.get('settled_ord90') or 0
     per_day = _f(a.get('cost_per_day'), 0) or 0.0
-    ladder = a.get('ladder_state') or ''
+    ladder = a.get('ladder_state') or 'no ladder state'
     nxt = a.get('next_check_date') or ''
-
-    cat = (f"The Catalog's verdict on '{subj}': {evidence}. Its settled 90-day record is "
-           f"{clk} clicks and {ordn} orders"
-           + (f", and the ladder holds it as {ladder}." if ladder else "."))
+    # The source's own reason is a paragraph and already contains these facts. Restating it whole
+    # made the Catalog sentence four lines that said one line's worth.
+    cat = (f"'{subj}': {ladder} — {clk} clicks, {ordn} orders, ${per_day:.2f}/day"
+           + ("." if nxt else ", no re-check date."))
 
     if kind == NEGATE:
-        brain = (f"The Brain funds nothing here — a blocked term takes no seat, and the "
-                 f"${per_day:.2f}/day it was absorbing returns to {fam}'s pot.")
-        pace = (f"Pacing has no bid to set: a negative removes '{subj}' from the auction rather "
-                f"than pricing it, so there is no price for Pacing to choose.")
-    elif kind == KEYWORD_PAUSE:
-        brain = (f"The Brain holds no seat for a subject the Catalog has called {ladder or 'dead'} — "
-                 f"the ${per_day:.2f}/day it was taking returns to {fam}'s pot and funds a question "
-                 f"that can still be answered."
-                 + ("" if nxt else " It carries no re-check date: nothing is testing it and "
-                                   "nothing is pending."))
-        pace = (f"Pacing stops bidding — '{subj}' is paused Amazon-side and takes no further "
-                f"clicks. This is the ladder's verdict being carried out, not a price Pacing chose.")
-    elif kind == PARK:
-        park_price, park_src = _f(a.get('park_price')), a.get('park_price_source') or 'unstated'
-        brain = (f"The Brain gives '{subj}' no seat this window — ${per_day:.2f}/day returns to "
-                 f"{fam}'s pot. A park is not a verdict of never: it owes a re-test"
-                 + (f", due {nxt}." if nxt else ", and it carries no date, which is the defect "
-                                                "violation 14 names."))
-        pace = (f"Pacing holds it at its park price"
-                + (f" of ${park_price:.2f} ({park_src})" if park_price is not None else "")
-                + f" rather than bidding for it: the subject stays alive and takes no clicks until "
-                  f"something deliberately buys it evidence again.")
-    else:
-        brain = (f"The Brain moves the seat: ${per_day:.2f}/day was going to '{subj}' and is "
-                 f"reallocated inside {fam}. {evidence}.")
-        pace = (f"Pacing executes the move at the price the seat carries; it chose neither the "
-                f"subject nor the amount.")
-    return cat, brain, pace
+        return (cat,
+                f"Funds nothing — a blocked term takes no seat; ${per_day:.2f}/day returns to "
+                f"{fam}'s pot.",
+                "No bid to set — a negative removes it from the auction rather than pricing it.")
+    if kind == KEYWORD_PAUSE:
+        return (cat,
+                f"No seat for a {ladder} subject; ${per_day:.2f}/day returns to {fam}'s pot.",
+                "Paused Amazon-side — the ladder's verdict carried out, not a price Pacing chose.")
+    if kind == PARK:
+        pp, ps = _f(a.get('park_price')), a.get('park_price_source') or 'unstated'
+        return (cat,
+                f"No seat this window; ${per_day:.2f}/day returns to {fam}'s pot. A park owes a "
+                + (f"re-test, due {nxt}." if nxt else "re-test and carries no date (violation 14)."),
+                "Held at its park price"
+                + (f" ${pp:.2f} ({ps})" if pp is not None else "")
+                + " — alive, taking no clicks until something buys it evidence.")
+    return (cat,
+            f"Moves the seat — ${per_day:.2f}/day reallocated inside {fam}.",
+            "Executes at the price the seat carries; chose neither subject nor amount.")
 
 
 def action_kind(rec):
