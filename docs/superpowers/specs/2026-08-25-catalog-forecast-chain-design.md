@@ -93,6 +93,51 @@ it needs no distributional assumption; it cannot invent a response outside the p
 (a fitted power law will happily promise clicks at a CPC never tried); and it is legible — a reader can
 see the buckets. **Never extrapolate a rising curve past the highest CPC ever paid.**
 
+
+---
+
+## 3.1 MEASURED 2026-08-25 — the window, not the grouping, is what breaks the forecast
+
+The flow tree was built and then used to predict: every subject at its node's profile, summed to the
+family, compared to what the family actually did over the last 28 days. **The result was a decisive
+failure, and the failure names its own cause.**
+
+| family | subjects | actual net profit | error, **365-day** profile | error, **28-day** profile |
+|---|---|---|---|---|
+| Lollibox | 50 | −$1,514 | 394 % | **73 %** |
+| LolliME | 142 | +$1,146 | 202 % | 175 % |
+| Bunny | 46 | −$723 | 158 % | **82 %** |
+| Fresh | 54 | −$667 | 407 % | **10 %** ✅ |
+| LolliBall | 35 | −$647 | 425 % | **19 %** |
+| UNMAPPED | 42 | −$537 | 145 % | **50 %** |
+| Bottle | 13 | +$37 | 506 % | 389 % |
+
+**Same tree, same nodes, same members — only the window changed.** A profile learned over 365 days
+predicted **positive** net profit for every family while most were losing money; the same nodes learned
+over the prior 28 days got the sign right everywhere and put Fresh inside the 15 % target.
+
+**So the 365-day window is right for one link and wrong for the others.** A year is needed for the
+RESPONSE CURVE — its shape needs price variation, and 365 days gives 933 fittable subjects against 382
+at 180 (§3). But a year is badly stale for the LEVELS: CVR, gross profit per order, and CPC drift, and a
+year-old average of them is not a forecast of next week. **The links need different windows, and only a
+chain that is split by link could have shown that.**
+
+**Two corrections this forces, both of things stated earlier in this document.**
+
+1. **"Errors cancel in the aggregate" is only true of UNBIASED errors.** §6 argued the 85 % could be
+   met on the sum because per-subject noise averages out. It does — but the 365-day error is not noise,
+   it is **bias in one direction**, and bias does not cancel no matter how many subjects are added. The
+   aggregate was *worse* than the typical subject, not better.
+2. **Percentage error on a near-zero base is meaningless.** Bottle's actual net profit is $37 on 13
+   subjects, so a $145 miss reads as 389 %. The 85 % target needs an **absolute floor** — a family whose
+   net profit is smaller than the floor is scored on dollars, not on percent — or small families will
+   fail the target forever for arithmetic reasons rather than modelling ones.
+
+**What this does not say.** It does not say the tree is wrong: the grouping held its shape while the
+window changed underneath it. And it does not say 28 days is the answer — LolliME is 175 % even there,
+with the sign inverted, which is a family that genuinely improved recently and a half-life would handle
+better than either fixed window.
+
 ---
 
 ## 4. CUSTOMER PURCHASE FLOWS — what the Catalog uses when it has no data
