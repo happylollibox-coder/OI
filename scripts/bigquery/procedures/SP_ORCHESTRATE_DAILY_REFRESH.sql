@@ -2376,6 +2376,47 @@ BEGIN
     SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
   END;
 
+
+  -- ============================================
+  -- Refresh Task 20.8d (2026-08-25, plan step 5, THREE_LAYERS §6.0): THE BRAIN KEEPS ITS LEDGER.
+  -- Task 20.8c above DELETEs and rewrites today's FACT_PLAN_NEXT_WEEK partition every pass, so the
+  -- click target step 4 put on a seat is gone by tomorrow. A window that closes on 2026-09-08 has
+  -- had every promise behind it overwritten a dozen times, and §6.0's grading would have nothing to
+  -- grade against. This step copies the funded seats into FACT_SEAT_REQUEST, which is append-only.
+  -- It is the same shape as Task 20.8a and exists for the same reason violation 6 did.
+  -- MUST RUN IMMEDIATELY AFTER 20.8c and before anything below reads the plan, so the ledger can
+  -- never lag the day it records.
+  -- APPEND-THEN-PRUNE, so the failure mode leaves a duplicate the next call removes rather than a
+  -- lost promise; the prune runs on entry as well as exit, keyed on the LEDGER's own duplicate
+  -- stamps, so a strand on any date is healed by any later call including a manual one.
+  -- It records what 20.8c already decided. It decides nothing, is read by nothing, and can move no
+  -- bid, budget or pause. A failure here logs FAIL and the pass carries straight on.
+  -- ============================================
+
+  SET procedure_name = 'SP_APPEND_SEAT_REQUEST';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_APPEND_SEAT_REQUEST`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
   -- ============================================
   -- Refresh Task 21: Refresh Cube Tables (T_*)
   -- Convert all Cube-facing V_* logical views into physical T_* snapshot tables

@@ -739,9 +739,23 @@ supposed to happen, because it is the only layer that decided. A grading pass bu
 reconstruct the intent from the actions, and the whole point of §1.1 is that an action does not carry its
 reason. The ledger is what makes "what needs to get better" answerable with evidence rather than opinion.
 
-**None of this exists yet.** The Brain records its plan (`FACT_PLAN_NEXT_WEEK`) but not a click target,
-not a delivery grade, and not an out-of-budget reading — so no seat has ever been checked against what it
-promised.
+**Half of it now exists (2026-08-25, plan steps 4 and 5).** The request is written: every funded seat
+carries `clicks_requested`, `clicks_due_date`, `expected_cpc`, `implied_daily_spend` and `request_basis`
+(violation 27), and `FACT_SEAT_REQUEST` accumulates them append-only at orchestrator Task 20.8d.
+
+**The ledger had to be a separate table, and the reason is violation 6 again.** Step 4 put the click
+target on `FACT_PLAN_NEXT_WEEK`, and Task 20.8c deletes and rewrites that partition on every pass — so a
+promise made tonight is gone tomorrow, and a window closing on 2026-09-08 would have had every partition
+behind it overwritten a dozen times before anyone could grade it. **A layer cannot be graded on
+predictions it does not keep, and a table that is replaced does not keep them.**
+
+Each night's ask is kept rather than collapsed, because **an ask that keeps changing is itself a
+finding**. Both plan arms are recorded, because grading only the live one makes the shadow plan's
+counterfactual unmeasurable — which is the whole reason it runs.
+
+**The closing half does not exist.** Nothing reads the request back: no delivery grade, no Catalog
+claim-versus-actual, and no out-of-budget reading (violation 29). So the promise is now kept and still
+never checked.
 
 ### 6.1 Answering methodology questions — the control group
 
