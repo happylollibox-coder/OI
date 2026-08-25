@@ -2418,6 +2418,43 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 20.8e: Record what the Catalog claimed tonight (FACT_CATALOG_FORECAST)
+  -- Runs after 20.8d, and after the family bar (Task ~14) and keyword state (Task 20.7) it reads.
+  -- WITHOUT THIS THE CATALOG CANNOT BE GRADED AT ALL. V_CATALOG_FORECAST is a live view over
+  -- CREATE-OR-REPLACE snapshots, so tomorrow it answers from tomorrow's data and tonight's
+  -- prediction is gone -- the actuals survive and the forecast does not, which makes the per-link
+  -- scoring THREE_LAYERS.md §2.0.1 asks for impossible. This is the Catalog's memory.
+  -- APPEND-THEN-PRUNE, so a crash leaves a duplicate the next call removes rather than a lost
+  -- claim; the prune runs on entry as well as exit, keyed on the LEDGER's own duplicate stamps.
+  -- It records what the Catalog already computed. It decides nothing, is read by nothing that
+  -- acts, and can move no bid, budget or pause. A failure logs FAIL and the pass carries on.
+  -- ============================================
+
+  SET procedure_name = 'SP_APPEND_CATALOG_FORECAST';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_APPEND_CATALOG_FORECAST`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 21: Refresh Cube Tables (T_*)
   -- Convert all Cube-facing V_* logical views into physical T_* snapshot tables
   -- ============================================
