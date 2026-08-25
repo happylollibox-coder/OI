@@ -277,3 +277,55 @@ def test_the_cap_touches_only_budget_rows():
     bid = _bid_row('9', '77', 0.72, 2.00)                  # a +178% BID move, not a budget
     kept, refused = w.cap_budget_moves([bid], 0.25)
     assert kept == [bid] and refused == []
+
+
+# --- STEP 3b: the profit gate (Ori, 2026-08-25) ---------------------------------------------------
+# "if this campaign is not profitable it needs to do it slowly until it is profitable first (this is
+#  his job - make sure campaigns are the most net profit dollars they can and also keep improving)".
+# An unprofitable campaign is MENDED before it is GROWN. Cuts are never held.
+
+def _budget_row_np(cid, old, new, net_profit, campaign='C'):
+    r = _budget_row(cid, old, new, campaign)
+    r['audit'].update({'_net_profit_28d': net_profit, '_spend_28d': 1000.0, '_gp_roas_28d': 0.5})
+    return r
+
+
+def test_a_raise_on_a_losing_campaign_is_held():
+    kept, refused = w.cap_budget_moves([_budget_row_np('9', 100.0, 120.0, -1659.54)], 0.25)
+    assert kept == [] and len(refused) == 1
+    reason = refused[0]['audit']['reason'].lower()
+    assert 'lost' in reason and 'mended before it is grown' in reason
+
+
+def test_a_small_raise_on_a_losing_campaign_still_ships():
+    """Slowly, not never — holding a losing campaign perfectly still is its own way of never
+    finding out whether it can recover."""
+    kept, refused = w.cap_budget_moves([_budget_row_np('9', 100.0, 104.0, -500.0)], 0.25)
+    assert len(kept) == 1 and refused == []
+
+
+def test_a_cut_on_a_losing_campaign_is_never_held_by_the_profit_gate():
+    kept, refused = w.cap_budget_moves([_budget_row_np('9', 100.0, 90.0, -500.0)], 0.25)
+    assert len(kept) == 1 and refused == []
+
+
+def test_a_raise_on_a_profitable_campaign_passes_the_gate():
+    kept, refused = w.cap_budget_moves([_budget_row_np('9', 100.0, 120.0, +829.22)], 0.25)
+    assert len(kept) == 1 and refused == []
+
+
+def test_the_profit_gate_runs_before_the_size_cap():
+    """A losing campaign fails the gate no matter how modest the move; the reason must name the
+    LOSS, not the size, or the reader fixes the wrong thing."""
+    kept, refused = w.cap_budget_moves([_budget_row_np('9', 100.0, 200.0, -500.0)], 0.25)
+    assert kept == [] and len(refused) == 1
+    assert 'mended before it is grown' in refused[0]['audit']['reason']
+
+
+def test_a_campaign_with_no_profit_reading_is_not_gated():
+    """Unmeasured never reads as bad. A campaign with no 28-day history falls through to the size
+    cap alone rather than being treated as a loser."""
+    r = _budget_row('9', 100.0, 110.0)
+    r['audit']['_net_profit_28d'] = None
+    kept, refused = w.cap_budget_moves([r], 0.25)
+    assert len(kept) == 1 and refused == []

@@ -171,6 +171,7 @@ per_campaign AS (
   GROUP BY campaign_id
 )
 SELECT c.*, d.campaign_type, d.state AS campaign_state, d.portfolio_id,
+       np.net_profit_28d, np.spend_28d, np.gp_roas_28d,
        e.echo_portfolio_id,
        -- Whether the campaign was FOUND in history at all. Without this, a bug in the echo
        -- join (there was one: the column was joined and never selected) reads as "this
@@ -181,6 +182,19 @@ SELECT c.*, d.campaign_type, d.state AS campaign_state, d.portfolio_id,
 FROM per_campaign c
 LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS campaign_id, campaign_type, state, portfolio_id
            FROM `{PROJECT}.OI.DIM_CAMPAIGN` WHERE is_current) d USING (campaign_id)
+-- THE BRAIN'S JOB IS NET PROFIT DOLLARS PER CAMPAIGN (Ori, 2026-08-25). A campaign's own 28-day
+-- profitability decides whether it may be GROWN at all: GROSS_PROFIT is sales minus landed COGS with
+-- ad spend NOT subtracted, so net profit is gp - spend. Measured before this gate existed: EIGHT
+-- campaigns were being handed +$209.91/day of extra ceiling while losing $1,659.54 over 28 days.
+LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS campaign_id,
+                  SUM(GROSS_PROFIT) - SUM(Ads_cost) AS net_profit_28d,
+                  SUM(Ads_cost)                     AS spend_28d,
+                  SAFE_DIVIDE(SUM(GROSS_PROFIT), NULLIF(SUM(Ads_cost), 0)) AS gp_roas_28d
+           FROM `{PROJECT}.OI.FACT_AMAZON_ADS`
+           WHERE date BETWEEN DATE_SUB((SELECT MAX(date) FROM `{PROJECT}.OI.FACT_AMAZON_ADS`),
+                                       INTERVAL 27 DAY)
+                          AND (SELECT MAX(date) FROM `{PROJECT}.OI.FACT_AMAZON_ADS`)
+           GROUP BY 1) np USING (campaign_id)
 -- BLANK IS NOT "UNCHANGED" ON A CAMPAIGN UPDATE ROW — it DETACHES the campaign from its portfolio.
 -- DIM_CAMPAIGN.portfolio_id is NULL for a campaign that is detached RIGHT NOW, so echoing it would
 -- silently make a temporary detachment permanent. The echo is the last non-null portfolio the
@@ -247,6 +261,9 @@ def budget_rows(plan_arm):
                 '_visible_spend': num(r.get('visible_spend_per_day')),
                 '_spend_delta': num(r.get('planned_spend_delta_per_day')),
                 '_utilisation': (num(r.get('visible_spend_per_day')) / old_b) if old_b else None,
+                '_net_profit_28d': num(r.get('net_profit_28d')),
+                '_spend_28d': num(r.get('spend_28d')),
+                '_gp_roas_28d': num(r.get('gp_roas_28d')),
                 '_never_had_portfolio': never_had,
             }})
     return out
@@ -324,8 +341,15 @@ def explain(rec):
             f"${old_b:.2f} → ${new_b:.2f}/day, but a budget is a CEILING: the campaign spends "
             f"${a['_visible_spend']:.2f}/day today ("
             + (f"{a['_utilisation'] * 100:.0f}% of it" if a['_utilisation'] is not None else "n/a")
-            + f") and the plan expects its spend to move {a['_spend_delta']:+.2f}/day. Pot "
-            f"${a['_pot']:.2f}/day, ramped allowance ${a['_allowance']:.2f}/day at "
+            + f") and the plan expects its spend to move {a['_spend_delta']:+.2f}/day. "
+            + (f"The campaign has made ${a['_net_profit_28d']:,.2f} net profit over 28 days "
+               f"(GP-ROAS {a['_gp_roas_28d']:.2f}), so it may be grown."
+               if (a.get('_net_profit_28d') or 0) > 0 else
+               (f"The campaign has LOST ${abs(a['_net_profit_28d']):,.2f} over 28 days "
+                f"(GP-ROAS {a['_gp_roas_28d']:.2f}) — it is being mended, not grown."
+                if a.get('_net_profit_28d') is not None else
+                "No 28-day profit reading, so the profit gate abstained."))
+            + f" Pot ${a['_pot']:.2f}/day, ramped allowance ${a['_allowance']:.2f}/day at "
             f"{a['_share']:.2f} share. Basis: {a['_basis'] or 'not stated'}.",
             "Not consulted — a budget is a daily ceiling, not a price. Bids unchanged.")
 
@@ -428,8 +452,17 @@ def subject_key(rec):
 
 DEFAULT_BUDGET_MAX_MOVE = 0.25
 
+# AN UNPROFITABLE CAMPAIGN MAY NOT BE GROWN — it may only be MENDED (Ori, 2026-08-25):
+# "if this campaign is not profitable it needs to do it slowly until it is profitable first (this is
+#  his job — make sure campaigns are the most net profit dollars they can and also keep improving)".
+# Slowly, not never: a losing campaign can still take a small step, because holding it perfectly
+# still is its own way of never finding out. Cuts are never restricted — mending is always allowed.
+# A declared constant, not a buried number (§3.3: the Brain's settings are testable, code is not).
+DEFAULT_UNPROFITABLE_MAX_RAISE = 0.05
 
-def cap_budget_moves(records, max_move):
+
+def cap_budget_moves(records, max_move,
+                     unprofitable_max_raise=DEFAULT_UNPROFITABLE_MAX_RAISE):
     """STEP 3 — ship the small budget movers, HOLD the big ones for an explicit decision.
 
     Campaign budgets are a brand-new action type for a book: no generator in this account has ever
@@ -443,7 +476,13 @@ def cap_budget_moves(records, max_move):
     it can be judged rather than merely noticed.
 
     The cap is SYMMETRIC: a 40% cut is exactly as unreviewed as a 40% raise. Returns (kept, refused);
-    it touches only budget rows and passes everything else through untouched."""
+    it touches only budget rows and passes everything else through untouched.
+
+    TWO GATES, IN ORDER, BECAUSE THEY ASK DIFFERENT QUESTIONS. The PROFIT gate runs first and asks
+    "should this campaign be grown at all" — a raise on a campaign losing money buys more of the
+    loss. The SIZE cap runs second and asks "is this move too big to ship unreviewed". A losing
+    campaign fails the first no matter how modest the move; a profitable one can still fail the
+    second. Cuts pass the profit gate always: mending is never held."""
     kept, refused = [], []
     for r in records:
         if action_kind(r) != BUDGET:
@@ -460,6 +499,22 @@ def cap_budget_moves(records, max_move):
             refused.append({**r, 'audit': a, 'cells': None, 'sheet': None})
             continue
         pct = new_b / old_b - 1
+        # THE PROFIT GATE, applied BEFORE the size cap because it is a different question. The cap
+        # asks "is this move too big to ship unreviewed"; the gate asks "should this campaign be
+        # GROWN AT ALL". A raise on a campaign losing money buys more of the loss, and the Brain's
+        # job is net profit dollars per campaign — so a losing campaign is mended first and grown
+        # after. Measured before this existed: 8 campaigns were being handed +$209.91/day of extra
+        # ceiling while losing $1,659.54 over 28 days, against 3 profitable ones getting +$115.10.
+        npf = a.get('_net_profit_28d')
+        if pct > 0 and npf is not None and npf <= 0 and pct > unprofitable_max_raise + 1e-9:
+            a = dict(a, reason=(
+                f"budget RAISE {pct * 100:+.0f}% (${old_b:.2f} → ${new_b:.2f}/day) on a campaign that "
+                f"LOST ${abs(npf):,.2f} over the last 28 days on ${a.get('_spend_28d') or 0:,.2f} of "
+                f"spend (GP-ROAS {a.get('_gp_roas_28d') or 0:.2f}). An unprofitable campaign is mended "
+                f"before it is grown — raises are held above "
+                f"{unprofitable_max_raise * 100:.0f}% until it earns. Cuts are never held."))
+            refused.append({**r, 'audit': a, 'cells': None, 'sheet': None})
+            continue
         if abs(pct) > max_move + 1e-9:
             a = dict(a, reason=(f"budget move {pct * 100:+.0f}% (${old_b:.2f} → ${new_b:.2f}/day) is "
                                 f"beyond the ±{max_move * 100:.0f}% cap for this book — held, not "
@@ -980,6 +1035,11 @@ def build_parser():
                          "±25%%). Held rows go to the Refused sheet with their actual percentage — "
                          "never dropped. Symmetric: a cut is as unreviewed as a raise. Pass a large "
                          "number to ship every move.")
+    ap.add_argument('--unprofitable-max-raise', type=float,
+                    default=DEFAULT_UNPROFITABLE_MAX_RAISE, metavar='PCT',
+                    help="the most a campaign LOSING money over 28 days may have its budget raised "
+                         "(default 0.05 = +5%%). An unprofitable campaign is mended before it is "
+                         "grown. Cuts are never held by this gate.")
     ap.add_argument('--no-budgets', action='store_true',
                     help="omit the Brain's campaign-budget rows (bids and Catalog actions only)")
     ap.add_argument('--change-log-table', default=None,
@@ -1021,7 +1081,7 @@ def _main(args):
 
     if not args.no_budgets:
         b = budget_rows(args.plan)
-        b, over_cap = cap_budget_moves(b, args.budget_max_move)
+        b, over_cap = cap_budget_moves(b, args.budget_max_move, args.unprofitable_max_raise)
         records += b
         refused += over_cap
         sources.append({'name': f'plan-budgets ({args.plan})', 'ok': True, 'error': None})
