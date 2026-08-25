@@ -45,6 +45,7 @@ position from an accident. Newest last.
 | 2026-08-25 | `a115f08` | **Violation 30 — the Brain never cuts a budget to stem a loss, and its budget moves run BACKWARDS to profit.** Ori asked whether the Brain uses budget as a loss-limiting tool on an unprofitable campaign. **It does not, and the relationship is inverted.** Every one of the 45 campaigns whose budget moves carries `campaign_budget_basis = 'RAMPED'` — the number is the 80/20 allowance ramp, the sum of planned spend on the keywords inside — and the allowance funds the **not-good side**, so a campaign full of losing keywords being repaired receives a *bigger* budget for precisely that reason. The mechanism is self-consistent and has no opinion about the campaign. Measured: campaigns losing more than $500 average **+84.7 %** budget moves while campaigns earning under $200 average **−13.9 %**; correlation between 28-day net profit and budget move is **−0.317** on percentage and **−0.396** on dollars. `BOX-SBS/BROAD (Hunter, By Age)` lost **$1,151.66 at GP-ROAS 0.66** and was handed **+173 %** ($70.00 → $191.29/day) while already spending $181.69/day. The profit gate added earlier today BLOCKS those raises, which is half the answer; **the missing half is the active cut Ori named — a gate that only refuses to grow a loser still leaves it losing at its current rate.** Not built: capping a live campaign's budget moves money down and is Ori's decision, not a consequence of having measured it. |
 | 2026-08-25 | `f7295c2` | **Violation 31 — the Catalog cannot see a regime change, and the Brain must not fix that by overruling it.** Ori: *"what is the brain doing when catalog (90 days) says keywords are good but see that campaign is loosing the last 3 or 7 days?"* Answered from the data. The ladder judges on a settled 90-day window, so a campaign can lose for a week while every keyword inside still reads `WINNER` — a bad week barely moves a 90-day average. Of the campaigns losing on the last 7 settled days: 7 have below-bar keywords (−$505.68), 10 are winners plus `AT_BAR` (−$446.91), **8 are ONLY winners (−$236.22) where nothing may be trimmed at all**, and 13 have no judged keywords (−$443.52, the coverage gap). **What the Brain does today is exactly two things:** rule B can VETO a raise — its own source says it *"only ever REMOVES an executable row… never changes a price"* — and the mend CUTS THE CAMPAIGN BUDGET. On the only-winners campaigns that is the entire toolkit: the ceiling comes down and not one bid moves. **That is correct rather than a gap in the Brain.** Trimming a keyword that genuinely earns above bar on 90 settled days, because its campaign had a bad week, is the Brain deciding the Catalog's own question (§1.1). The fault is upstream: a 90-day average is the right estimator for a stable subject and the wrong one for a subject whose regime shifted three weeks ago, and nothing in the Catalog distinguishes the two. **The fix belongs in the Catalog — a recency-aware verdict — not in a Brain override.** Until then a losing campaign full of winners is capped and waited on, which is the honest response to *we cannot yet tell noise from a change*. |
 | 2026-08-25 | `832fae6` | **§2.0 — THE CATALOG IS A FORECASTER, NOT A HISTORIAN (Ori), and measured against that it does not beat a constant guess.** Ori's purpose statement, now the top of §2: *"the main purpose of catalog is not say what happened last 90 days. it is to predict what will be the result for the window the brain ask him. this is the real meaning of the catalog. the catalog needs to measure it self how much he is correct and strive to at least 85% correction."* Everything else in §2 is subordinate: `settled_roas90` is an INPUT to an answer, not the answer, and a layer that publishes a backward average and calls it a verdict has left the Brain to do the forecasting itself, uninstrumented. **Backtested the same day** — reconstructing what the Catalog would have said at five past as-of dates and scoring each against the 28 days that followed, on subjects taking ≥10 clicks, against the Brain's actual question (*will this land above or below the bar?*): **84.9 % → 82.4 % → 74.7 % → 62.4 % → 55.9 %**, a five-month decay, against a constant "always above the bar" scoring **86.3 % → 85.1 % → 74.7 % → 58.8 % → 58.2 %**. **It beats the constant in one window out of five**, and its accuracy rises and falls with the BASE RATE — the signature of a backward average with no forecasting model, not of a predictor. March's 84.9 % was not skill but an easy month in which blind guessing scored higher, so **the 85 % target has never been met by forecasting, only approached by a period when guessing worked.** Recorded as violation 32. This also reframes §6: the Catalog's scorecard stops being a nice-to-have and becomes the definition of the layer working, and `V_SEAT_REQUEST_OUTCOME` already has the scoring machinery — what it grades is currently a memory rather than a forecast. |
+| 2026-08-25 | `PENDING` | **§2.0.1 — the full answer is a CHAIN conditional on a price, the objective is family NET PROFIT, and 85 % is measured on the sum (Ori).** Ori rejected interval coverage outright and named why: *"if i define it like this you can be correct but you wont be approved. i preffer you be wrong but you will get better."* A wide interval is trivially 85 % correct and teaches nothing; a falsifiable point that misses tells you HOW it missed. So the Catalog's answer to *"if the CPC is $1.00 over 2026-09-01 to 09-08"* is **clicks → orders → cost → ads net ROAS → net ROAS → contribution to family net profit**, the last being **the objective it must MAXIMISE**, not merely predict. Because the answer is conditional on a CPC, the Brain can ask at several prices and take the maximum — which is the response curve violation 17 says does not exist, arriving as a consequence of the contract rather than as a separate feature. **85 % means the NET PROFIT figure is within 15 %** — not the clicks, not the ROAS, the money. **A chain is DIAGNOSABLE and that is the whole point:** each link is scored separately, so a wrong contribution names its own fault — Ori: *"the catalog could understand what it needs to be correct — maybe more clicks, maybe less cpc, maybe something else."* **Measured the same day, the grain question this forces:** the quantum is one order, so ±1 sale must fit inside 15 %, which needs ~7 orders. Per 7-day window only **13.8 % of keywords** clear that (avg 4.2 orders), against 31.1 % of campaigns and **100 % of families** (avg 886.9). So the target cannot be scored per keyword on a short window — it would be measuring dice. **Resolution: predict per subject, score in aggregate.** The Catalog still answers for the keyword, but the 85 % is measured on the SUM against family net profit; per-subject error is still recorded because that is what says which link to fix, it is just not the pass mark. |
 
 ### How to add an entry
 
@@ -181,6 +182,60 @@ Two things, and the second is worse than the first.
 March's 84.9 % was therefore not skill. It was an easy month: 86 % of subjects landed above the bar and
 saying so blindly would have scored higher. **The 85 % target has never actually been met by
 forecasting**, only approached by a period when guessing worked.
+
+### 2.0.1 The full answer, and what 85 % is measured on
+
+**Ruled by Ori, 2026-08-25.** He rejected scoring the Catalog on interval coverage, and the reason is
+the whole design: *"if I define it like this you can be correct but you won't be approved. I prefer you
+be wrong but you will get better."* **A wide interval is trivially 85 % correct and teaches nothing.** A
+falsifiable point estimate that misses tells you *how* it missed, and a layer obliged to improve needs
+the second kind of answer.
+
+**The answer is a CHAIN, conditional on a price.** Asked *"if the CPC is $1.00 over 2026-09-01 to
+09-08"*, the Catalog answers all of:
+
+| link | example |
+|---|---|
+| clicks | 35 |
+| orders | 3 |
+| cost | $35 |
+| ads net ROAS | 0.8 |
+| net ROAS (with halo) | 1.3 |
+| **contribution to family net profit** | **$100** |
+
+**The last line is the objective, and the Catalog's job is to MAXIMISE it** — not to be right about it
+passively. Because the answer is conditional on a CPC, the Brain can ask the same question at several
+prices and take the one that maximises contribution. That is the response curve violation 17 says does
+not exist, arriving as a consequence of the contract rather than as a separate feature.
+
+**85 % correct means the net profit figure is within 15 %.** Not the clicks, not the ROAS — the money.
+
+**And a chain is DIAGNOSABLE, which is the entire point.** When contribution is wrong, each link is
+separately scored, so the Catalog can see *where* it broke: were the clicks over-predicted, was the
+conversion rate wrong, did the CPC land somewhere else? Ori: *"by doing so the catalog could understand
+what it needs to be correct — maybe more clicks, maybe less cpc, maybe something else."* A single number
+that is wrong teaches nothing; a chain that is wrong names its own fault.
+
+**WHERE THE 15 % CAN HONESTLY BE SCORED — measured 2026-08-25.** The quantum of this business is one
+order. If a subject makes 3 sales in a window, being one sale out is 33 % and the target is unreachable
+no matter how good the model is; roughly 7 orders are needed for ±1 order to fit inside 15 %.
+
+| grain, 7-day window | subjects | can reach 15 % | average orders |
+|---|---|---|---|
+| keyword | 159 | **22 (13.8 %)** | 4.2 |
+| campaign | 74 | 23 (31.1 %) | 8.9 |
+| family | 7 | **7 (100 %)** | 886.9 |
+
+**So the 85 % target cannot be scored per keyword on a short window** — for 86 % of keywords a single
+sale is worth more than 15 %, and the metric would be measuring dice. It is scorable at family grain
+always, and at campaign grain for a third of campaigns.
+
+**The resolution: predict per subject, score in aggregate.** The Catalog still answers for the keyword —
+that is what the Brain asks about — but the **85 % is measured on the sum**: do the individual
+predictions add up to within 15 % of what the family actually contributed? A forecaster is allowed to be
+noisy on one subject and accurate across a hundred; that is the normal shape of forecasting, and it is
+what *"contribute to family net profit"* already implies. Per-subject error is still recorded, because
+that is what tells the Catalog which link to fix — it just is not the pass mark.
 
 **What this makes true of the rest of the doctrine.** The Catalog's scorecard (§6) stops being a
 nice-to-have and becomes the definition of the layer working. `V_SEAT_REQUEST_OUTCOME` (§6.0) already
@@ -1095,8 +1150,10 @@ Recorded honestly so the gap is visible; each is a defect against this doctrine,
     losing campaign full of winners is capped and waited on, which is the honest response to *we
     cannot yet tell noise from a change*.
 
-32. **The Catalog is not measured as a forecaster, and when measured it does not beat a constant
-    guess** (§2.0, ruled by Ori 2026-08-25). Its purpose is to predict the window the Brain asks about;
+32. **The Catalog answers with a backward average instead of a forecast chain, and is scored by
+    nothing** (§2.0/§2.0.1, ruled by Ori 2026-08-25). It should answer, conditional on a price, with
+    clicks → orders → cost → ads net ROAS → net ROAS → **contribution to family net profit**, and be
+    graded to within 15 % on the last of those. It publishes `settled_roas90`. Its purpose is to predict the window the Brain asks about;
     it publishes a settled 90-day average instead, and nothing has ever scored it. Backtested across
     five as-of dates against the 28 days that followed, it was correct **84.9 %, 82.4 %, 74.7 %,
     62.4 %, 55.9 %** — a five-month decay — while a constant "always above the bar" scored **86.3 %,
