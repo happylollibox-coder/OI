@@ -10,6 +10,7 @@ import { BrandDefensePhase } from './BrandDefensePhase';
 import { PausedHistoryPhase } from './PausedHistoryPhase';
 import { ChangeScorecardPanel } from './ChangeScorecardPanel';
 import { RevivalsPhase } from './RevivalsPhase';
+import { CampaignSeatsPhase } from './CampaignSeatsPhase';
 import { LaunchExemptionPhase } from './LaunchExemptionPhase';
 import { LowStockPhase } from './LowStockPhase';
 import { RunSummaryStrip } from '../components/RunSummaryStrip';
@@ -862,6 +863,13 @@ export function WeeklyRunPage({ onNav }: { onNav: (page: PageId, family?: Family
                     of the phase stack so the ready-to-revive count is seen, not buried; collapsed
                     unless it holds an open action. Advisory, display-only. Spec: architecture/SEASON_CONTEXT_LEDGER.md §7.11. */}
                 <RevivalsPhase defaultOpen={hasOpen['REVERDICT']} />
+                {/* Campaign seats (Ori 2026-08-25) — how many seats each campaign may hold, and
+                    what they are FOR. ALLOWANCE IS EARNED: clear the family bar and 20% of budget
+                    buys seats at $7 each for keywords under repair; fall under the bar and the
+                    campaign earns nothing but ONE seat, aimed at its most profitable keyword, to
+                    trade its way back. Mend before you grow. Display-only — the view decides
+                    nothing and this panel queues nothing. Source: V_CAMPAIGN_SEAT_PLAN. */}
+                <CampaignSeatsPhase />
                 {/* out-of-budget technical phase — dark campaigns + one budget suggestion each (V_OOB_BUDGET_PHASE) */}
                 {/* 2x2 split (Ori 2026-08-01): state (dark / healthy) x tier (low budget / working) */}
                 {/* v24 + v27: auto campaigns first — their own single home, split by tier */}
