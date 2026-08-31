@@ -111,9 +111,11 @@ r05 AS (
 --     THE `COUNT(*) = 0` TERM IS LOAD-BEARING AND GUARDS R07/R08 TOO. Verified by negative
 --     control: with the view filtered to zero rows the plain COUNTIF form returns 0 — an empty
 --     set has no mean to be off by 0.05 — and R08's duplicate check returns 0 for the same
---     reason. Total failure is reachable: k_season resolves from a single DE_COACH_THRESHOLDS
---     row, and if it is deleted or moved to another coach_mode every phase_index is NULL, the
---     normaliser is NULL and the final WHERE drops the whole view. `m IS NULL` is in the same
+--     reason. Total failure is reachable: k_phase resolves from a single DE_COACH_THRESHOLDS row,
+--     INTENT_PHASE_PRIOR_CLICKS, and if it is deleted or moved to another coach_mode every
+--     phase_index is NULL, the normaliser is NULL and the final WHERE drops the whole view.
+--     NOT k_season / INTENT_CVR_SEASON_PRIOR_CLICKS -- that is the season_month view's prior, and
+--     this index stopped reading it when it got its own grain-specific one. `m IS NULL` is in the same
 --     spirit — a row set whose support_clicks sum to 0 yields a NULL mean, which ABS() > 0.05
 --     would also wave through.
 r06 AS (
