@@ -1107,7 +1107,7 @@ views:
       - V_INTENT_BASE_TUNING
 
   - name: "T_INTENT_INDEX_SCORECARD"
-    description: "Materialized V_INTENT_INDEX_SCORECARD, written by SP_SCORE_INTENT_INDEXES with a scored_at stamp. 77 rows: 2 indexes x 2 tests x (18 target months + 1 pooled row). THIS is what the acceptance suite and the Task 7 diagnostic gate read - the view behind it costs 6,215 slot-seconds per scan. R16 fails the suite if it is more than 8 days old, because R12/R13/R14 verify this copy rather than the view."
+    description: "Materialized V_INTENT_INDEX_SCORECARD, written by SP_SCORE_INTENT_INDEXES with a scored_at stamp. 76 rows: 2 indexes x 2 tests x (18 target months + 1 pooled row), verified against the deployed table. THIS is what the acceptance suite and the Task 7 diagnostic gate read - the view behind it costs 6,215 slot-seconds per scan. R16 fails the suite if it is more than 8 days old, because R12/R13/R14 verify this copy rather than the view."
     source_files: ["scripts/bigquery/procedures/SP_SCORE_INTENT_INDEXES.sql"]
     dependencies:
       - V_INTENT_INDEX_SCORECARD

@@ -239,7 +239,7 @@ verdicts AS (
 --     942 / 92 MB (measured 2026-08-31). Four checks reading the scorecard view would be four
 --     full evaluations, because BigQuery inlines a CTE at every reference -- which is exactly how
 --     the R09-R11 block reached 97,066 CPU-seconds against a 33,500 ceiling and was REJECTED.
---   * the tables are 77 and 9 rows, so scanning them once per check is free and the checks stay
+--   * the tables are 76 and 9 rows, so scanning them once per check is free and the checks stay
 --     readable instead of being folded into another single-scan UNNEST block.
 -- THE COST OF THAT CHOICE: these four checks verify the COPY, not the view. A view edited and
 -- deployed without re-running SP_SCORE_INTENT_INDEXES would not be checked here at all. R16 is
