@@ -1,5 +1,5 @@
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE`
-OPTIONS (description = "Holiday-phase index for the intent CVR curve, projected onto month_of_year. WHY IT EXISTS: month_of_year cannot represent a moving holiday. Easter fell 2025-04-20 and 2026-04-05, so March flipped from pre-peak to peak and the easter x White Lollibox CVR went 0.691% -> 5.562% in the same calendar month while cvr_hat said 2.892% both times. Measured on the phase windows already in DIM_US_HOLIDAYS the shape is consistent across years: BOOST 0.544%/1.925%, PEAK 2.972%/6.984%, COOLDOWN 4.575%/4.718%. Reaches the ~9% of clicks carrying a holiday_name. PROJECTION IS ONE YEAR AHEAD: phases are mapped onto the next 12 months from the ads watermark and blended by days per month, so the curve must be rebuilt when DIM_US_HOLIDAYS rolls forward. Normalised per intent_key to a mean of 1.000 because base_cvr already carries the level. Registered as season_phase. Spec: docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md")
+OPTIONS (description = "Holiday-phase index for the intent CVR curve, projected onto month_of_year. WHY IT EXISTS: month_of_year cannot represent a moving holiday. Easter fell 2025-04-20 and 2026-04-05, so March flipped from pre-peak to peak and the easter x White Lollibox CVR went 0.691% -> 5.562% in the same calendar month while cvr_hat said 2.892% both times. Measured on the phase windows already in DIM_US_HOLIDAYS the shape is consistent across years: BOOST 0.544%/1.925%, PEAK 2.972%/6.984%, COOLDOWN 4.575%/4.718%. Reaches the ~9% of clicks carrying a holiday_name. PROJECTION IS ONE YEAR AHEAD: phases are mapped onto the next 12 months from the ads watermark and blended by days per month, so the curve must be rebuilt when DIM_US_HOLIDAYS rolls forward. Normalised per intent_key to a mean of 1.000 because base_cvr already carries the level, which means the season reads as off-season 0.33 against peak 1.23 rather than as a peak above 1.5: 70.9% of easter clicks are PEAK, so a mean of 1.000 caps PEAK at 1/0.709 = 1.41. Acceptance R07 tests the peak-to-trough RATIO for that reason. Uses INTENT_PHASE_PRIOR_CLICKS (123, this grain's median cell), NOT the season prior 4038, which belongs to a 33x larger grain and flattens this one. NO ROWS IS NOT A BUG for back-to-school or halloween (DIM_US_HOLIDAYS carries NULL cooldown dates, so no phase window resolves) nor for the mothers-day keys, prime-day and cyber-monday (zero orders ever, so there is no shape to measure). Registered as season_phase. Spec: docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md")
 AS
 -- =============================================================================================
 -- V_INTENT_IDX_SEASON_PHASE — holiday-phase multiplier for the intent CVR curve.
@@ -14,40 +14,23 @@ AS
 -- NOTHING READS THIS YET. Registered with is_active = FALSE and joined by nothing until
 -- V_INTENT_CVR_CURVE_SHADOW is built and passes the money gate.
 --
--- !! ACCEPTANCE R07 FAILS AS BUILT. DO NOT ACTIVATE THIS INDEX. !!
---   Measured 2026-08-31 on watermark 2026-08-31: easter projects to Jan 0.9364 / Feb 0.7330 /
---   Mar 1.0797. R07 requires MAX(index_value) >= 1.5 for easter and gets 1.0797. Account-wide
---   the whole view is 76.6% inside [0.95,1.05] against the 85.3% of the hardcoded season_index
---   it was meant to replace — that is not a fix, it is the same inertness at a new grain.
+-- HOW THE SIGNAL READS, AND WHY IT IS NOT A NUMBER ABOVE 1.5. Contract 1 normalises against a
+-- clicks-weighted mean, and for a holiday intent that mean is itself peak-dominated: 70.9% of
+-- easter's clicks fall in PEAK. A mean of 1.000 therefore caps PEAK's index at 1/0.709 = 1.41,
+-- reachable only if every other phase were exactly 0. The index expresses the season as
+-- "off-season is 0.3" rather than "peak is 5x", and that is correct -- base_cvr already carries
+-- the peak-weighted level, so this index's only job is how far each month departs from it.
+-- The first cut of acceptance R07 asked for MAX(index_value) >= 1.5 and so was testing the
+-- normaliser rather than the signal; it is a PEAK-TO-TROUGH RATIO test instead. See spec section
+-- 4.5, AMENDMENT 2026-08-31.
 --
---   THE BAR IS NOT MERELY MISSED, IT IS UNREACHABLE, and the arithmetic says so independently of
---   any parameter. Contract 1 pins SUM(index_value * support_clicks) / SUM(support_clicks) = 1.0
---   per intent_key. March carries 10,180 of easter's 13,673 projected support — a weight of
---   0.7445 — because PEAK is where the clicks are. A weighted mean of 1.0 therefore caps the
---   March index at 1/0.7445 = 1.343, reached only if every other month were exactly 0. R07 asks
---   for 1.5. Contract 1 and R07 cannot both hold for easter, whatever k_season is set to.
---
---   Two further losses stack underneath that ceiling, both measured:
---     a) k_season = 4038 was re-derived in Task 2 for intent_type pooling, where a cell holds
---        100k+ clicks. Easter's whole history is 21,052 clicks, so a 3,666-click BOOST cell is
---        shrunk almost entirely into the intent mean: the real 5x BOOST->PEAK swing
---        (0.955% vs 5.047%) arrives as phase indices of 0.634 vs 1.173, a 1.85x swing.
---     b) Normalising each phase against the intent's OWN all-period CVR is self-defeating when
---        70% of that intent's clicks ARE the peak. Even at k_season = 0 the PEAK phase index is
---        only 1.220, and easter's March index reaches just 1.2533 — still under 1.5.
---   Only k_season = 0 AND weighting the normaliser by DAYS instead of support_clicks reaches the
---   bar (March 1.7439), and that combination abandons both the shrink prior and Contract 1's
---   stated weighting. That is a design change, not a tuning, and is not made here.
---
---   What the index DOES carry: direction and a 1.47x March-over-February ratio for easter, which
---   is real and points the right way. If the curve only ever consumes the index as a ratio
---   between months, R07 is measuring the wrong statistic. That is a question for the spec owner.
---
--- SCOPE. Only intents carrying a holiday_name reach this view — 8.3% of cost / 9.2% of clicks.
--- Deliberately narrow: it exists to fix one specific defect, not to price the account.
--- Back to School and Halloween carry NULL cooldown windows in DIM_US_HOLIDAYS, so phase_of
--- cannot resolve them and they produce no rows here at all; the shadow curve COALESCEs a miss
--- to 1.000, which is the right answer for an intent this index cannot measure.
+-- WHY SOME HOLIDAY INTENTS PRODUCE NO ROWS AT ALL -- absence here is not a bug:
+--   * back-to-school and halloween: DIM_US_HOLIDAYS carries NULL cooldown_start / cooldown_end
+--     for both, so phase_of cannot resolve a window and they never reach obs.
+--   * all five mothers-day keys, prime-day, cyber-monday: zero orders in their entire history, so
+--     intent_lvl.cvr is 0, NULLIF nulls every phase_index and the norm filter drops them. An
+--     intent that has never converted has no shape to measure.
+-- The shadow curve COALESCEs a missing cell to 1.000, which is the right answer in both cases.
 --
 -- Dependencies: FACT_AMAZON_ADS, V_ADS_SEARCH_TERM_INTENT, DIM_PRODUCT, DIM_US_HOLIDAYS,
 --               V_UNIFIED_DAILY, DE_COACH_THRESHOLDS
@@ -59,7 +42,13 @@ WITH params AS (
   -- view read the exact row INTENT_INDEX_acceptance R02/R02b pin, and matches the params CTE in
   -- V_INTENT_IDX_SEASON_MONTH. Without it a threshold later added under BLITZ, or a family-scoped
   -- override, would give MAX() two candidates and it would silently return the larger.
-  SELECT MAX(IF(threshold_key='INTENT_CVR_SEASON_PRIOR_CLICKS', threshold_value, NULL)) AS k_season
+  -- INTENT_PHASE_PRIOR_CLICKS, NOT INTENT_CVR_SEASON_PRIOR_CLICKS. A prior belongs to a GRAIN.
+  -- The season prior (4038) was derived for intent_type x month, median cell 7,163. This grain is
+  -- intent_key x phase: 99 cells, p25 13, median 123, max 15,465 -- 33x smaller. Borrowing 4038
+  -- swamped every cell and published an index 76.6% flat inside [0.95,1.05], the same inertness
+  -- as the hardcoded season_index the project exists to replace. See migration
+  -- 2026-08-31_intent_phase_prior.sql for why the MEDIAN is used here and the p25 rule is not.
+  SELECT MAX(IF(threshold_key='INTENT_PHASE_PRIOR_CLICKS', threshold_value, NULL)) AS k_phase
   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
   WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND product_family IS NULL
 ),
@@ -108,12 +97,12 @@ phase_idx AS (
   SELECT o.intent_key, o.phase,
     SUM(o.clicks) AS phase_clicks,
     SAFE_DIVIDE(
-      SAFE_DIVIDE(SUM(o.orders) + p.k_season * il.cvr, SUM(o.clicks) + p.k_season),
+      SAFE_DIVIDE(SUM(o.orders) + p.k_phase * il.cvr, SUM(o.clicks) + p.k_phase),
       NULLIF(il.cvr, 0)) AS phase_index
   FROM obs o
   JOIN intent_lvl il USING(intent_key)
   CROSS JOIN params p
-  GROUP BY o.intent_key, o.phase, p.k_season, il.cvr
+  GROUP BY o.intent_key, o.phase, p.k_phase, il.cvr
 ),
 
 -- PROJECTION: the next 12 months from the watermark, day by day, each day carrying the phase it
@@ -123,9 +112,13 @@ future_days AS (
          EXTRACT(MONTH FROM d) AS month_of_year,
          COALESCE(p.holiday_name, '') AS holiday_name,
          COALESCE(p.phase, 'OFF') AS phase
+  -- LAST_DAY IS LOAD-BEARING. DATE_ADD(..., INTERVAL 11 MONTH) alone lands on the FIRST of the
+  -- twelfth month, so that month would blend a single day instead of a full one and any holiday
+  -- phase falling there would be read off one date. Still exactly 12 distinct month_of_year
+  -- values, so no month is counted twice.
   FROM wm, UNNEST(GENERATE_DATE_ARRAY(
          DATE_TRUNC(wm.watermark, MONTH),
-         DATE_ADD(DATE_TRUNC(wm.watermark, MONTH), INTERVAL 11 MONTH))) AS d
+         LAST_DAY(DATE_ADD(DATE_TRUNC(wm.watermark, MONTH), INTERVAL 11 MONTH)))) AS d
   LEFT JOIN phase_of p ON p.day = d
 ),
 projected AS (

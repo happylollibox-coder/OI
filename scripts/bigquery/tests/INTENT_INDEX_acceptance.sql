@@ -24,11 +24,15 @@ WITH r01 AS (
 --     COUNT(DISTINCT threshold_key) rather than COUNT(*): product_family is also part of the
 --     grain, so a family-scoped override for one of these keys would push a row count past 5 and
 --     let one extra row cancel out one missing row.
+--     INTENT_PHASE_PRIOR_CLICKS joined this list at Task 3. It is not interchangeable with the
+--     season prior: V_INTENT_IDX_SEASON_PHASE resolves it alone, and if it goes missing every
+--     phase_index is NULL and the whole phase index empties. R06's COUNT(*) = 0 term would catch
+--     the consequence, but only as "the view is empty" -- this check is what names the cause.
 r02 AS (
-  SELECT 5 - COUNT(DISTINCT threshold_key) AS v
+  SELECT 6 - COUNT(DISTINCT threshold_key) AS v
   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
   WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND threshold_key IN (
-    'INTENT_CVR_BASE_PRIOR_CLICKS','INTENT_CVR_SEASON_PRIOR_CLICKS',
+    'INTENT_CVR_BASE_PRIOR_CLICKS','INTENT_CVR_SEASON_PRIOR_CLICKS','INTENT_PHASE_PRIOR_CLICKS',
     'INTENT_CVR_CALIBRATION','INTENT_IDX_MIN_SUPPORT','INTENT_IDX_MIN_SCORED_CLICKS')
 ),
 -- R02b THE VALUES ARE THE ONES THIS MIGRATION LANDED, not merely present. R02 proves the keys
@@ -117,15 +121,22 @@ r06 AS (
     SELECT intent_key, SAFE_DIVIDE(SUM(index_value * support_clicks), NULLIF(SUM(support_clicks),0)) AS m
     FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE` GROUP BY intent_key)
 ),
--- R07 THE PHASE INDEX ACTUALLY PEAKS. Easter measured on phase windows runs BOOST 0.54%/1.93%
---     against PEAK 2.97%/6.98% in 2025/2026 -- roughly 5x. If the projected index for the
---     easter intent never exceeds 1.5 the projection has flattened the signal it exists to carry.
---     COALESCE(...,0) IS LOAD-BEARING. Without it, an easter row set that is empty (or all NULL)
---     makes MAX() NULL, `NULL < 1.5` NULL, and v NULL — which is not the 0 this file defines as
---     PASS but reads like one at a glance. With it, the total-disappearance case scores 1 and
---     fails loudly, which is the correct verdict: no easter row means no moving-holiday fix.
+-- R07 THE PHASE INDEX SEPARATES PEAK FROM TROUGH. A mean-1.000 contract caps the maximum at
+--     1/peak_click_share (1.41 for easter), so testing MAX is testing the normaliser, not the
+--     signal. What must survive is the SPREAD: unshrunk, easter runs PEAK 1.206 against BOOST
+--     0.301, a 4.0x swing. If the ratio collapses the moving-holiday fix has done nothing and
+--     V_INTENT_CVR_CURVE keeps pricing Easter peak week off a pre-peak March average.
+--     REPLACES a first cut that asked for MAX(index_value) >= 1.5. That bar was not merely missed
+--     but UNREACHABLE: R06 pins the clicks-weighted mean to 1.000 and easter's peak month carries
+--     ~74% of the projected support, capping its index at ~1.34 for any prior. The two checks
+--     contradicted each other. See spec section 4.5, AMENDMENT 2026-08-31, Error 1.
+--     COALESCE(..., 0) IS LOAD-BEARING, carried over from that first cut. Without it an empty or
+--     all-NULL easter row set makes the ratio NULL and v NULL -- which is not the 0 this file
+--     defines as PASS but reads like one at a glance. With it, total disappearance scores 0 < 2.0
+--     and fails loudly, which is the correct verdict: no easter row means no moving-holiday fix.
 r07 AS (
-  SELECT CAST(COALESCE(MAX(index_value), 0) < 1.5 AS INT64) AS v
+  SELECT CAST(COALESCE(SAFE_DIVIDE(MAX(index_value), NULLIF(MIN(index_value),0)), 0) < 2.0
+              AS INT64) AS v
   FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE` WHERE intent_key = 'easter'
 ),
 -- R08 ONE ROW PER intent_key x month_of_year. A duplicate multiplies the index twice.
@@ -145,6 +156,6 @@ UNION ALL SELECT 'R03b season_month grid complete and non-empty', v FROM r03b
 UNION ALL SELECT 'R04 season_month index never null or non-positive', v FROM r04
 UNION ALL SELECT 'R05 season_month index is not flat', v FROM r05
 UNION ALL SELECT 'R06 season_phase index normalised per intent_key', v FROM r06
-UNION ALL SELECT 'R07 season_phase index peaks for easter', v FROM r07
+UNION ALL SELECT 'R07 season_phase easter peak-to-trough ratio >= 2.0', v FROM r07
 UNION ALL SELECT 'R08 season_phase one row per intent_key x month', v FROM r08
 ORDER BY check_name;
