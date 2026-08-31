@@ -1,0 +1,243 @@
+# Intent CVR curve: recency, holiday phase, and an index registry
+
+**Date:** 2026-08-31 · **Status:** design approved by Ori, not yet implemented
+**Supersedes nothing.** Modifies `V_INTENT_CVR_CURVE`; leaves its grain and every downstream
+consumer intact.
+
+## 1. Why
+
+`T_INTENT_BID_BASE` is the catalog of willingness-to-pay per intent. It is used to price bids.
+Measured against what actually happened, it under-prices a click by **1.69x**: it says a click is
+worth **$0.387** where the realised value over the following week was **$0.655** (2,107
+keyword-weeks, $159,056 of spend, Jan-Aug 2026, clicks-weighted).
+
+Consequence, simulated on the same data with a rule of "cut if realised CPC exceeds
+`target_bid`": the rule fires CUT on **708 of 730** keyword-weeks (97%) and **395 of those cuts
+land on traffic that was profitable** (54% of all verdicts). Capping spend at `target_bid` would
+have retained 3.6% of spend and forgone **$23,205** of profit.
+
+The catalog is not useless — it *ranks* correctly. Sorted into quintiles by predicted value, the
+realised value per click rises monotonically 0.419 -> 0.594 -> 0.713 -> 0.786 -> **0.976** and net
+ROAS rises 0.944 -> 1.484. It knows which intents are worth more. It does not know what they are
+worth.
+
+## 2. Three defects, each measured
+
+### D1 — `season_index` is inert
+
+`INTENT_CVR_SEASON_PRIOR_CLICKS = 500`, applied at `intent_key x month_of_year`. Of 45,168 such
+cells, **0.9% have >= 500 clicks**, 2.8% have >= 100, and the **median cell has 0**. Everything
+shrinks to the intent's own all-month rate.
+
+Result across the 122,124 catalog rows: **85.3% of `season_index` values fall between 0.95 and
+1.05**; sd 0.0678; p05 0.909, p95 1.058. The seasonal layer contributes nothing.
+
+### D2 — `month_of_year` cannot represent a moving holiday
+
+Easter fell **2025-04-20** and **2026-04-05** — 15 days apart, which moves the peak across the
+month boundary. Same intent, same product (`easter` x White Lollibox):
+
+| year | month | clicks | actual CVR | `cvr_hat` | actual/predicted |
+|---|---|---|---|---|---|
+| 2025 | 3 | 4,341 | 0.691% | 2.892% | 0.24 |
+| 2025 | 4 | 11,820 | 2.504% | 2.806% | 0.89 |
+| 2026 | 3 | 3,218 | **5.562%** | 2.892% | **1.92** |
+| 2026 | 4 | 2,922 | **6.434%** | 2.806% | **2.29** |
+
+March 2025 was pre-peak (peak began 03-31); March 2026 was peak (peak began 03-16). Re-keyed on
+the phase windows already present in `DIM_US_HOLIDAYS`, a consistent shape appears that the month
+key destroys:
+
+| phase | 2025 clicks | 2025 CVR | 2026 clicks | 2026 CVR |
+|---|---|---|---|---|
+| PRE | 527 | 0.380% | — | — |
+| BOOST | 2,575 | 0.544% | 1,091 | 1.925% |
+| **PEAK** | 7,166 | **2.972%** | 7,675 | **6.984%** |
+| COOLDOWN | 612 | 4.575% | 975 | 4.718% |
+
+**~5x swing from BOOST to PEAK within each year.**
+
+Scope: only **8.3% of cost / 9.2% of clicks** carry a `holiday_name`. D2 affects that slice.
+
+### D3 — full-history pooling with no recency weight
+
+`obs` pools all history "on purpose". Account CVR was 3.476% in 2025 and 3.981% in 2026, and
+per-intent the drift is far larger (`easter` PEAK: 2.972% -> 6.984%). Pooling anchors 2026
+predictions to 2025 performance. **D3 affects 100% of the catalog** and is the largest of the
+three by coverage.
+
+Walk-forward test, 499 product x intent cells over 24 months, predicting each cell's next month
+from its history, weighted by clicks:
+
+| estimator | weighted abs error | bias (pred/actual) | predictions |
+|---|---|---|---|
+| **flat full history, k=200 — ships today** | **1.3402%** | **0.830** | 1,300 |
+| nested 1/3/6/12/24m, k=400 | 1.3001% | 0.852 | 1,352 |
+| **nested 1/2/3/6/12m, k=400** | **1.2583%** | 0.869 | **1,350** |
+| exponential half-life 4m, k=400 | 1.2302% | 0.880 | 1,287 |
+| exponential half-life 3m, k=400 | 1.2101% | 0.890 | 1,278 |
+
+Two corrections to prior assumptions, both measured:
+
+- **More shrinkage helps, not less.** k=400 beats k=200 beats k=0 at every decay shape. The
+  original "over-shrinking" hypothesis was false.
+- **Exponential's lower error is partly an easier subset** — it scores 60-70 fewer cells because
+  decay thins evidence below the floor. Nested retains them.
+
+A residual **~13% under-bias survives every shape**, because shrinking toward a global prior pulls
+scored cells (which are the larger, better-converting ones) downward. It is removed by an explicit
+multiplicative calibration.
+
+## 3. Decision
+
+**Approach A — keep the `product x intent x month_of_year` grain, fix the content.**
+
+Rejected: (B) adding a phase dimension to the key, and (C) a date-keyed season view. Both are more
+correct; both break the uniqueness assumption that `T_INTENT_BID_BASE`, the intent-grid popup,
+`tools/intent_grid/build_tier_a.py`, `tools/intent_grid/absorb_existing.py` and
+`tools/intent_grid/backtest_2025.py` rely on. **C is the eventual target**; A is what ships now.
+
+The cost of A: the curve is correct for one year ahead and must be rebuilt when
+`DIM_US_HOLIDAYS` rolls forward. A month straddling two phases receives a clicks-weighted blend.
+
+## 4. Architecture
+
+The curve stops being a hardcoded formula and becomes a base estimator times a **registry of
+indexes**.
+
+```
+cvr_hat = calibration x base_cvr(product, intent) x PRODUCT( index_i )   for every ACTIVE index i
+```
+
+### 4.1 Index contract
+
+Every index is a view named `V_INTENT_IDX_<name>` emitting:
+
+| column | type | rule |
+|---|---|---|
+| *join keys* | — | any subset of `parent_name`, `product_short_name`, `intent_key`, `intent_type`, `month_of_year` |
+| `index_value` | FLOAT64 | **normalised so its clicks-weighted mean is 1.000** |
+| `support_clicks` | INT64 | evidence behind the cell |
+
+Normalisation is load-bearing: an un-normalised index silently shifts the catalog's level and the
+calibration factor absorbs it, hiding the change. Absent cells default to `1.0`, so an index may
+be sparse without punching holes in the curve. An index whose `support_clicks` falls below
+`INTENT_IDX_MIN_SUPPORT` is shrunk toward 1.0 rather than trusted.
+
+### 4.2 New objects
+
+| object | type | purpose |
+|---|---|---|
+| `DE_INTENT_INDEX_REGISTRY` | BASE TABLE | one row per index: `index_name` (PK), `description`, `source_object`, `join_keys` (CSV), `is_active` BOOL, `added_at`, `added_by`, `notes` |
+| `V_INTENT_IDX_SEASON_MONTH` | VIEW | today's `season_index`, re-pooled at `intent_type x month_of_year` |
+| `V_INTENT_IDX_SEASON_PHASE` | VIEW | holiday-phase index projected onto `intent_key x month_of_year` |
+| `V_INTENT_INDEX_SCORECARD` | VIEW | walk-forward verdict per index per month |
+| `V_INTENT_BASE_TUNING` | VIEW | walk-forward error/bias over a grid of base parameters |
+| `SP_SCORE_INTENT_INDEXES` | PROCEDURE | refreshes the scorecard and tuning tables |
+| `V_INTENT_CVR_CURVE_SHADOW` | VIEW | the rebuilt curve, unpromoted |
+
+All must be registered in `OI/config.yaml`.
+
+### 4.3 Changed objects
+
+- **`V_INTENT_CVR_CURVE`** — `obs` gains the nested weighting; the hardcoded `season` CTE is
+  replaced by a join over active registry indexes; `cvr_hat` gains the calibration factor.
+- **`SP_REFRESH_SEARCH_TERM_INTENT`** — rebuilds `T_INTENT_CVR_CURVE` from the new view; gains a
+  call to `SP_SCORE_INTENT_INDEXES`.
+- **`V_INTENT_BID_BASE`** — one change only, see §7.
+
+### 4.4 New thresholds (`DE_COACH_THRESHOLDS`, `strategy_id = 'INTENT'`)
+
+| key | value | note |
+|---|---|---|
+| `INTENT_CVR_RECENCY_WINDOWS` | `1,2,3,6,12` | nested month windows, summed |
+| `INTENT_CVR_BASE_PRIOR_CLICKS` | 200 -> **400** | measured |
+| `INTENT_CVR_SEASON_PRIOR_CLICKS` | 500 -> **derived** | re-derived against pooled cell sizes during implementation; 500 is unusable at the new grain |
+| `INTENT_CVR_CALIBRATION` | **1.151** | = 1 / 0.869, refit periodically |
+| `INTENT_IDX_MIN_SUPPORT` | **100** | per-cell: an index cell with fewer clicks shrinks toward 1.0 |
+| `INTENT_IDX_MIN_SCORED_CLICKS` | **500** | per-month: below this the scorecard returns INSUFFICIENT rather than a verdict |
+
+`INTENT_CVR_CALIBRATION` **will drift** — the account's CVR and AOV both moved more than 30% this
+year. It is a threshold row with a refit query, never a literal in SQL.
+
+## 5. The scorecard
+
+`SP_SCORE_INTENT_INDEXES` walks forward over the **trailing 18 months**. Ads data begins
+2024-09-05; the first ~6 months are launch-ramp noise and are excluded. For each target month M,
+the curve is fitted on observations strictly before M and scored against M. Errors are weighted by
+clicks so verdicts follow the money.
+
+Two tests per index:
+
+- **ADD_ONE_IN** — `error(active set + candidate)` vs `error(active set)`. Answers *"does this new
+  index help?"*
+- **LEAVE_ONE_OUT** — `error(active set)` vs `error(active set - index)`. Answers *"is this index
+  still earning its place?"* Without it the registry only ever grows.
+
+Output columns: `index_name`, `test_kind`, `target_month`, `err_with`, `err_without`,
+`err_delta_pct`, `bias_with`, `bias_without`, `n_predictions`, `clicks_scored`, `verdict`.
+
+`err_delta_pct` is the **relative** change in weighted absolute error,
+`(err_with - err_without) / err_without * 100`, so a value of `-1.0` means the error fell by one
+percent of itself, not by one percentage point.
+
+`verdict` is one of **IMPROVES / NEUTRAL / HURTS / INSUFFICIENT**, evaluated in this order:
+
+1. `INSUFFICIENT` when `clicks_scored < INTENT_IDX_MIN_SCORED_CLICKS`.
+2. `HURTS` when `err_delta_pct >= +1.0`, **or** when `ABS(bias_with - 1.0) > ABS(bias_without - 1.0) + 0.02`.
+3. `IMPROVES` when `err_delta_pct <= -1.0` **and** `ABS(bias_with - 1.0) <= ABS(bias_without - 1.0) + 0.02`.
+4. `NEUTRAL` otherwise.
+
+Bias is checked alongside error because an index can lower error while skewing the level, which is
+exactly how D3 went unnoticed. The 0.02 tolerance stops trivial bias jitter from vetoing a genuine
+error reduction.
+
+A pooled all-months row accompanies the per-month rows, carrying `months_improved` /
+`months_scored` — an index that wins eleven months and loses December is a different thing from
+one that wins six and loses six.
+
+**Promotion is manual.** The scorecard never flips `is_active`. Ori does, the same contract as
+`DE_SEARCH_TERM_INTENT`: automation proposes, a human disposes.
+
+## 6. Rollout
+
+1. Build `V_INTENT_CVR_CURVE_SHADOW` plus the registry and both index views. Nothing repointed.
+2. Register `season_month` and `season_phase` with `is_active = FALSE`.
+3. Run `SP_SCORE_INTENT_INDEXES`. Expect `season_month` to read INSUFFICIENT on the great majority
+   of cells at today's grain, and `season_phase` to read IMPROVES in Feb-Apr and Nov-Dec and
+   NEUTRAL elsewhere. **If it does not, the diagnosis in §2 is wrong and this design stops here.**
+4. Diff shadow against live across all 122,124 rows: `cvr_hat` distribution, count of rows moving
+   more than 2x, and the direction of movement per intent_type.
+5. **Acceptance gate — re-run the §1 simulation against the shadow curve.** Required: the 1.69x
+   under-pricing closes to within 1.15x, and the false-CUT rate falls from 54%.
+6. Only on passing 5: flip the two indexes active, repoint `SP_REFRESH_SEARCH_TERM_INTENT`,
+   rebuild `T_INTENT_CVR_CURVE` and `T_INTENT_BID_BASE`.
+
+This follows the documented lesson from the target-CPC work, where a change went straight to a live
+bidding view and had to be reverted: *write to a shadow view, promote only after safety passes.*
+
+## 7. `gp_per_order` — folded into this change
+
+`T_INTENT_BID_BASE` carries a clicks-weighted `gp_per_order` of **$19.96** against an actual
+trailing-90-day figure of **$13.73** — 45% high. Because `value_per_click = cvr_hat x
+gp_per_order`, this error runs *opposite* to D3 and partially masked it. Fixing `cvr_hat` alone
+would leave the catalog over-priced on margin.
+
+`V_KEYWORD_RATES` (shipped 2026-08-26) already publishes a recency-weighted `gp_per_order` under
+the house's nested-window definition, and its stated purpose is that *"the Catalog and the engine
+cannot price against different money."* **`V_INTENT_BID_BASE` sources `gp_per_order` from that
+shared definition** rather than computing its own.
+
+## 8. Limitations, stated
+
+- The phase projection is correct for **one year ahead**. When `DIM_US_HOLIDAYS` rolls forward the
+  curve must be rebuilt. Approach C removes this; it is not in scope here.
+- The holiday fix reaches **~9% of clicks**. The recency fix reaches all of them. Expect most of
+  the measured gain to come from D3.
+- `INTENT_CVR_CALIBRATION` is fit on current data and drifts with the account.
+- The walk-forward harness scores **CVR prediction**, not profit. A curve that predicts CVR better
+  should price better, but that link is asserted, not proven — which is why §6 step 5 gates on the
+  money simulation rather than on the scorecard.
+- 24 months of history exist; 18 are scored. A yearly-seasonal index therefore gets at most **two
+  observations per month**, which is thin. `season_phase` verdicts should be read with that in
+  mind, and it is a reason to prefer manual promotion.
