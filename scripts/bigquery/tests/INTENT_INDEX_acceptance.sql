@@ -99,6 +99,43 @@ r04 AS (
 r05 AS (
   SELECT CAST(COUNTIF(index_value BETWEEN 0.95 AND 1.05) > COUNT(*) * 0.30 AS INT64) AS v
   FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_MONTH`
+),
+-- R06 PHASE INDEX IS NORMALISED PER INTENT. base_cvr already carries the intent's own level, so
+--     an index whose intent-level mean is not 1.0 would double-count that level.
+--     PER intent_key, not once overall: this view is keyed on intent_key and the shadow curve
+--     joins it on intent_key, so a per-intent level error is exactly what would leak through.
+--     THE `COUNT(*) = 0` TERM IS LOAD-BEARING AND GUARDS R07/R08 TOO. Verified by negative
+--     control: with the view filtered to zero rows the plain COUNTIF form returns 0 — an empty
+--     set has no mean to be off by 0.05 — and R08's duplicate check returns 0 for the same
+--     reason. Total failure is reachable: k_season resolves from a single DE_COACH_THRESHOLDS
+--     row, and if it is deleted or moved to another coach_mode every phase_index is NULL, the
+--     normaliser is NULL and the final WHERE drops the whole view. `m IS NULL` is in the same
+--     spirit — a row set whose support_clicks sum to 0 yields a NULL mean, which ABS() > 0.05
+--     would also wave through.
+r06 AS (
+  SELECT COUNTIF(m IS NULL OR ABS(m - 1.0) > 0.05) + CAST(COUNT(*) = 0 AS INT64) AS v FROM (
+    SELECT intent_key, SAFE_DIVIDE(SUM(index_value * support_clicks), NULLIF(SUM(support_clicks),0)) AS m
+    FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE` GROUP BY intent_key)
+),
+-- R07 THE PHASE INDEX ACTUALLY PEAKS. Easter measured on phase windows runs BOOST 0.54%/1.93%
+--     against PEAK 2.97%/6.98% in 2025/2026 -- roughly 5x. If the projected index for the
+--     easter intent never exceeds 1.5 the projection has flattened the signal it exists to carry.
+--     COALESCE(...,0) IS LOAD-BEARING. Without it, an easter row set that is empty (or all NULL)
+--     makes MAX() NULL, `NULL < 1.5` NULL, and v NULL — which is not the 0 this file defines as
+--     PASS but reads like one at a glance. With it, the total-disappearance case scores 1 and
+--     fails loudly, which is the correct verdict: no easter row means no moving-holiday fix.
+r07 AS (
+  SELECT CAST(COALESCE(MAX(index_value), 0) < 1.5 AS INT64) AS v
+  FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE` WHERE intent_key = 'easter'
+),
+-- R08 ONE ROW PER intent_key x month_of_year. A duplicate multiplies the index twice.
+--     Real risk here, not theory: the projection fans out over V_ADS_SEARCH_TERM_INTENT and over
+--     overlapping holiday windows, and both fan-outs have to collapse in the GROUP BY.
+--     Vacuously green over an empty view; R06's COUNT(*) = 0 term is what covers that case.
+r08 AS (
+  SELECT COUNTIF(n > 1) AS v FROM (
+    SELECT intent_key, month_of_year, COUNT(*) AS n
+    FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE` GROUP BY 1,2)
 )
 SELECT 'R01 registry key unique' AS check_name, v FROM r01
 UNION ALL SELECT 'R02 thresholds present', v FROM r02
@@ -107,4 +144,7 @@ UNION ALL SELECT 'R03 season_month index normalised to mean 1.000', v FROM r03
 UNION ALL SELECT 'R03b season_month grid complete and non-empty', v FROM r03b
 UNION ALL SELECT 'R04 season_month index never null or non-positive', v FROM r04
 UNION ALL SELECT 'R05 season_month index is not flat', v FROM r05
+UNION ALL SELECT 'R06 season_phase index normalised per intent_key', v FROM r06
+UNION ALL SELECT 'R07 season_phase index peaks for easter', v FROM r07
+UNION ALL SELECT 'R08 season_phase one row per intent_key x month', v FROM r08
 ORDER BY check_name;
