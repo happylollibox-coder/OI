@@ -177,7 +177,13 @@ R06 pins each index to a clicks-weighted mean of **1.000 per `intent_key`**. R07
 | PRE | 997 | 2.8% | 0.602% | 0.175 |
 | OFF | 530 | 1.5% | 1.698% | 0.494 |
 
-With PEAK at 70.9% of clicks, a mean of 1.000 caps PEAK's index at **1/0.709 = 1.41**, reachable
+**Scope note.** Those absolute counts are UNSCOPED — they omit the view's own filters
+(`campaign_id <> '-1'`, `parent_name IS NOT NULL / != 'UNKNOWN'`, launch-ramp quarantine). Measured
+at the view's actual scope the totals are **21,052 clicks with 14,841 in PEAK = 70.5%**. The
+conclusion is unaffected: PEAK is ~70% of clicks either way. Flagged because a reader reproducing
+these numbers from the view's own scope will get the smaller set.
+
+With PEAK at ~70% of clicks, a mean of 1.000 caps PEAK's index at **1/0.705 = 1.42**, reachable
 only if every other phase were exactly 0. **`MAX >= 1.5` is unattainable for any `k_season`.**
 
 The signal is nonetheless intact and large — **PEAK/BOOST = 4.0x**, PEAK/PRE = 6.9x. It simply
