@@ -18,6 +18,20 @@ AS
 --   3. every row publishes its support_clicks so a thin cell can be weighed, not just trusted.
 --      support_clicks is THE MONTH'S OWN EVIDENCE, not the phase's — see the projection below.
 --
+-- MOST OF THIS VIEW NEVER REACHES THE CURVE, AND THAT IS THE SAFETY MARGIN. 161 of the 204
+-- published rows sit below INTENT_IDX_MIN_SUPPORT = 100 and are pinned neutral downstream; only
+-- 43 are actually applied. That is why the off-season values are safe to publish at face value:
+-- christmas publishes 0.2567 for its off-season months on 755 OFF clicks carrying 2 orders, at a
+-- month support of 84-86, so the number is visible for inspection but never prices a bid.
+--
+-- WHAT INTENT_IDX_MIN_SUPPORT = 100 ACTUALLY MEANS HERE — read this before tuning it in Task 4.
+-- day_support divides a phase's WHOLE-HISTORY clicks by that phase's day count in ONE projection
+-- year. Ads history covers roughly two occurrences of each holiday, compressed onto twelve
+-- forward months, so per-day support runs about 2x a true one-year rate and the gate behaves like
+-- ~50 clicks in one-year terms. This is also exactly why the conservation invariant below lands
+-- on the intent's own total. It does not distort index_value — the same scaling divides out of
+-- the clicks-weighted normaliser — but the support NUMBER is not a one-year click count.
+--
 -- NOTHING READS THIS YET. Registered with is_active = FALSE and joined by nothing until
 -- V_INTENT_CVR_CURVE_SHADOW is built and passes the money gate.
 --
@@ -116,10 +130,12 @@ obs AS (
 ),
 
 -- The intent's own all-period rate: what a phase is measured against.
--- HAVING cvr > 0 drops intents that have never converted, and it is load-bearing rather than
--- tidy: without it NULLIF would null every phase_index for such an intent, the LEFT JOIN in
--- day_val could not then tell "this phase was never observed" (fall back to 1.000) from "this
--- intent has no rate at all" (drop it), and the zero-order intents would be resurrected at 1.000.
+-- HAVING cvr > 0 drops intents that have never converted (the five mothers-day keys, prime-day,
+-- cyber-monday). HAVING and the removal of NULLIF are a pair -- either one alone drops zero-order
+-- intents; keeping both makes the intent explicit at the point the rate is defined rather than
+-- three CTEs later. Verified: deleting the HAVING and changing nothing else republishes the same
+-- 204 rows over the same 17 intents, because cvr = 0 then makes SAFE_DIVIDE(..., il.cvr) NULL,
+-- LOGICAL_OR poisons all 12 months and the norm filter drops them anyway.
 intent_lvl AS (
   SELECT intent_key, SAFE_DIVIDE(SUM(orders), SUM(clicks)) AS cvr
   FROM obs GROUP BY intent_key
@@ -211,6 +227,13 @@ day_val AS (
   LEFT JOIN phase_idx  pi ON pi.intent_key = idd.intent_key AND pi.phase = idd.phase
   LEFT JOIN phase_days pd ON pd.intent_key = idd.intent_key AND pd.phase = idd.phase
 ),
+-- CONSERVATION INVARIANT, PROPOSED AS A FUTURE ACCEPTANCE CHECK (not implemented here):
+-- SUM(support_clicks) per intent_key equals that intent's measured obs clicks within rounding.
+-- Verified across all 17 intents, worst deviation 4 clicks. It is a stronger check than R08's
+-- uniqueness test because it cannot go vacuously green over a partial grid: a dropped month, a
+-- double-counted phase or a wrong phase_days denominator all break the total, whereas R08 is
+-- satisfied by any set of distinct keys. Worth adding when the shadow curve starts consuming
+-- support_clicks for real.
 projected AS (
   SELECT intent_key, month_of_year,
     IF(LOGICAL_OR(idx_v IS NULL), NULL, AVG(idx_v)) AS raw_index,
