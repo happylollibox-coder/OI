@@ -48,8 +48,47 @@ r02b AS (
   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
   WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN'
     AND threshold_key IN ('INTENT_CVR_BASE_PRIOR_CLICKS','INTENT_CVR_CALIBRATION')
+),
+-- R03 EVERY INDEX IS NORMALISED TO A CLICKS-WEIGHTED MEAN OF 1.000. An un-normalised index
+--     silently shifts the whole catalog's level and INTENT_CVR_CALIBRATION absorbs it, which
+--     hides the change from the scorecard. Tolerance 0.02.
+r03 AS (
+  SELECT COUNTIF(ABS(m - 1.0) > 0.02) AS v FROM (
+    SELECT SAFE_DIVIDE(SUM(index_value * support_clicks), NULLIF(SUM(support_clicks),0)) AS m
+    FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_MONTH`)
+),
+-- R03b THE INDEX GRID IS COMPLETE, AND R03/R04/R05 ARE NOT BEING GREEN OVER AN EMPTY VIEW.
+--      Verified by negative control: with the view filtered to zero rows, R03, R04 and R05 all
+--      return 0 — an empty set has no mean to be off by 0.02, no NULL to find, and 0 flat values
+--      is not > 0 * 0.80. So all three would stay silent on total failure. That is reachable: the
+--      params CTE resolves k_season from a single DE_COACH_THRESHOLDS row, and if that row is
+--      deleted or moved to another coach_mode, k_season is NULL, every raw_index is NULL, the
+--      final WHERE drops every row and the curve loses its whole seasonal layer while acceptance
+--      reports a clean pass. Same shape as the R01 note above: a check over an empty table has
+--      validated nothing. Also fails if any intent_type is missing a month, because the shadow
+--      curve LEFT JOINs this grid and COALESCEs a miss to 1.000 — a silently neutral month.
+r03b AS (
+  SELECT CAST(COUNT(*) = 0
+           OR COUNT(*) != COUNT(DISTINCT intent_type) * 12 AS INT64) AS v
+  FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_MONTH`
+),
+-- R04 NO INDEX IS NULL OR NON-POSITIVE. A NULL multiplies cvr_hat to NULL; a zero or negative
+--     value makes a bid of zero or a negative price.
+r04 AS (
+  SELECT COUNTIF(index_value IS NULL OR index_value <= 0) AS v
+  FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_MONTH`
+),
+-- R05 THE INDEX IS ACTUALLY DOING SOMETHING. The defect this replaces had 85.3% of values inside
+--     [0.95,1.05]. If the replacement is just as flat it has not been fixed.
+r05 AS (
+  SELECT CAST(COUNTIF(index_value BETWEEN 0.95 AND 1.05) > COUNT(*) * 0.80 AS INT64) AS v
+  FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_MONTH`
 )
 SELECT 'R01 registry key unique' AS check_name, v FROM r01
 UNION ALL SELECT 'R02 thresholds present', v FROM r02
 UNION ALL SELECT 'R02b threshold values correct', v FROM r02b
+UNION ALL SELECT 'R03 season_month index normalised to mean 1.000', v FROM r03
+UNION ALL SELECT 'R03b season_month grid complete and non-empty', v FROM r03b
+UNION ALL SELECT 'R04 season_month index never null or non-positive', v FROM r04
+UNION ALL SELECT 'R05 season_month index is not flat', v FROM r05
 ORDER BY check_name;
