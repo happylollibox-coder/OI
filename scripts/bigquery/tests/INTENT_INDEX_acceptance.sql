@@ -149,6 +149,74 @@ r08 AS (
   SELECT COUNTIF(n > 1) AS v FROM (
     SELECT intent_key, month_of_year, COUNT(*) AS n
     FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE` GROUP BY 1,2)
+),
+-- =============================================================================================
+-- R09-R11 cover V_INTENT_CVR_CURVE_SHADOW (plan Task 4). The shadow is the rebuilt curve, wired
+-- to nothing until Task 9. These three exist to keep it DIFFABLE against the live curve, because
+-- that diff is the only evidence the money gate has to work with.
+--
+-- WHY THEY SHARE ONE CTE INSTEAD OF READING THE VIEW THREE TIMES. BigQuery inlines a CTE at every
+-- reference rather than materialising it, so three checks reading the shadow are three full
+-- evaluations of a chain that regexes 337k search terms. Written the obvious way -- R09, R10 and
+-- a two-directional R11 against the live view -- this file used 97,066 CPU seconds against an
+-- on-demand ceiling of 33,500 and was REJECTED by BigQuery, not merely slow. That is the same
+-- wall recorded against T_INTENT_CVR_CURVE in config.yaml ("broke a 3-way UNION at the on-demand
+-- CPU cap on 2026-07-25"). Measured: R01-R08 alone 8,281 slot-seconds / 111 MB; one shadow scan
+-- 12,693 / 131 MB; together well inside the ceiling, which scales at ~256 CPU-seconds per MB
+-- billed. So the shadow is scanned EXACTLY ONCE, into `shadow_vs_served`, and the three verdicts
+-- are read out of a single-row CTE via UNNEST at the bottom of the file. DO NOT "simplify" this
+-- into three separate SELECTs over the view: it will not run.
+--
+-- WHY R11 COMPARES AGAINST T_INTENT_CVR_CURVE AND NOT V_INTENT_CVR_CURVE. Two reasons, one of
+-- them a defect found while building this file.
+--   1. Cost, as above. The live view is a second 7,630-slot-second chain.
+--   2. THE LIVE VIEW IS NOT DETERMINISTIC, so an exact key-set equality against it would be a
+--      flaky check. V_ADS_SEARCH_TERM_FACETS (upstream of V_INTENT_RESOLVED, which both curves
+--      read) picks product_type with
+--        ARRAY_AGG(ptk.product_type ORDER BY ptk.priority ASC, LENGTH(ptk.keyword) DESC LIMIT 1)
+--      and that ORDER BY is not a total order: DE_PRODUCT_TYPE_KEYWORDS has 44 distinct
+--      (priority, keyword-length) groups spanning more than one product_type, 288 values in all
+--      (measured 2026-08-31). product_type composes into intent_key, so a tied term can resolve
+--      to a different intent between two evaluations. Observed while measuring this task: the
+--      live view reported 10,440 product x intent cells on one run and 10,441 on the next, and
+--      the shadow reported 10,441 then 10,440 across three runs, differing by the single cell
+--      "Fresh in Pink" x "teen-bracelet-gift". Same class as the recorded ANY_VALUE pairing
+--      defect. It is upstream of this project and is NOT fixed here.
+-- T_INTENT_CVR_CURVE is the frozen snapshot every consumer actually reads, so "the shadow still
+-- covers what the catalog serves" is both the question worth asking and a stable one to ask.
+-- WHAT THIS COSTS: the direction "the shadow grew keys the live view never had" is not tested
+-- here. R09's uniqueness term catches a JOIN FAN-OUT, which is the mechanism that would produce
+-- them; a genuinely new key can only come from new ads history, which is expected. The full
+-- two-directional shadow-vs-live-view diff is a manual step, run once in Task 4 (result: 1 cell
+-- of 10,441 differed, and that cell was itself the flapping one) and again in Task 7.
+--
+-- ONE SCAN OF EACH SIDE, UNIONED AND KEYED. n_shadow > 1 is a duplicate; n_served > 0 with
+-- n_shadow = 0 is a served key the shadow lost.
+shadow_vs_served AS (
+  SELECT FORMAT('%T|%T|%T', product_short_name, intent_key, month_of_year) AS k,
+         1 AS in_shadow, 0 AS in_served,
+         CAST((cvr_hat IS NULL OR cvr_hat < 0 OR cvr_hat > 1.0
+               OR season_index IS NULL OR season_index <= 0) AS INT64) AS bad
+  FROM `onyga-482313.OI.V_INTENT_CVR_CURVE_SHADOW`
+  UNION ALL
+  SELECT FORMAT('%T|%T|%T', product_short_name, intent_key, month_of_year), 0, 1, 0
+  FROM `onyga-482313.OI.T_INTENT_CVR_CURVE`
+),
+keyed AS (
+  SELECT k, SUM(in_shadow) AS n_shadow, SUM(in_served) AS n_served, SUM(bad) AS n_bad
+  FROM shadow_vs_served GROUP BY k
+),
+-- COALESCE ON EVERY SUM IS LOAD-BEARING, same trap R07 documents. `keyed` is empty only when
+-- BOTH sides are empty, and an aggregate with no GROUP BY still returns one row -- with every
+-- SUM as NULL. Without these, v computes to NULL, which is not the 0 this file defines as PASS
+-- but renders as a blank cell and reads like one. Verified by negative control.
+verdicts AS (
+  SELECT COUNTIF(n_shadow > 1)                       AS dup_shadow_keys,
+         COALESCE(SUM(n_shadow), 0)                  AS rows_shadow,
+         COALESCE(SUM(n_bad), 0)                     AS bad_shadow_rows,
+         COUNTIF(n_served > 0 AND n_shadow = 0)      AS served_keys_missing,
+         COALESCE(SUM(n_served), 0)                  AS rows_served
+  FROM keyed
 )
 SELECT 'R01 registry key unique' AS check_name, v FROM r01
 UNION ALL SELECT 'R02 thresholds present', v FROM r02
@@ -160,4 +228,50 @@ UNION ALL SELECT 'R05 season_month index is not flat', v FROM r05
 UNION ALL SELECT 'R06 season_phase index normalised per intent_key', v FROM r06
 UNION ALL SELECT 'R07 season_phase easter peak-to-trough ratio >= 2.0', v FROM r07
 UNION ALL SELECT 'R08 season_phase one row per intent_key x month', v FROM r08
+-- R09 SHADOW GRAIN IS ONE ROW PER product_short_name x intent_key x month_of_year, AND THE VIEW
+--     IS NOT EMPTY. T_INTENT_BID_BASE, the intent-grid popup and tools/intent_grid/*.py all
+--     assume that uniqueness; a duplicate lets one keyword be priced twice off contradictory
+--     rows, and the shadow adds two LEFT JOINs (idx_month, idx_phase) that are exactly how a
+--     fan-out would arrive.
+--     THE rows_shadow = 0 TERM IS LOAD-BEARING. Negative control, run against the deployed view:
+--     with the shadow replaced by `SELECT ... WHERE FALSE` the bare COUNTIF(n_shadow > 1) form
+--     returns 0 -- an empty set has no duplicate to find -- so total failure reports a clean
+--     pass. Reachable: obs is emptied by any break in V_INTENT_RESOLVED or DIM_PRODUCT.
+-- R10 NO NULL / NEGATIVE / >1 cvr_hat AND NO NULL OR NON-POSITIVE season_index. A NULL cvr_hat
+--     blanks value_per_click across the whole catalog; a CVR above 1 means more orders than
+--     clicks and prices a bid off nonsense.
+--     WHICH ARMS ACTUALLY HAVE TEETH, stated rather than implied. `> 1.0` and `< 0` CANNOT fire
+--     against today's view: it wraps the product in LEAST(..., 1.0) and every factor is positive.
+--     They guard a future edit that removes the cap; they are not testing today. The arms that
+--     CAN fire are the NULLs and the emptiness term, and that is not hypothetical -- cvr_hat
+--     multiplies INTENT_CVR_CALIBRATION, so deleting that threshold row, or moving it to another
+--     coach_mode (which is why the curve's params CTE filters coach_mode), NULLs cvr_hat on all
+--     125k rows while every other check in this file stays green. season_index is included
+--     because it multiplies in BEFORE the cap: a zero or negative index_value republished by an
+--     index view would zero every bid, and the curve COALESCEs a NULL one away, so this is the
+--     only place it would surface. Negative control: over an empty shadow the bare COUNTIF form
+--     returns 0, hence the shared emptiness term.
+-- R11 THE SHADOW STILL COVERS EVERY KEY THE SERVED CATALOG COVERS. Losing keys silently drops
+--     intents from the catalog rather than repricing them. Comparand and its limits are argued
+--     at shadow_vs_served above. Measured 2026-08-31: T_INTENT_CVR_CURVE holds 10,177 cells,
+--     every one of them present in the shadow, which carries 263 more from five weeks of newer
+--     ads history.
+--     TWO WAYS THIS CAN FIRE WITHOUT A REGRESSION, so read the failure before reverting: a human
+--     REJECTing a term in DE_SEARCH_TERM_INTENT nulls its intent_key and legitimately retires a
+--     cell, and the upstream product_type tie-break above can flip one. Both are single cells;
+--     a real drop is structural.
+--     THE rows_served = 0 TERM IS LOAD-BEARING and is the direction that goes vacuous here.
+--     Negative control: with T_INTENT_CVR_CURVE filtered to WHERE FALSE the bare
+--     COUNTIF(n_served > 0 AND n_shadow = 0) form returns 0 while the shadow holds 125k rows --
+--     an empty comparand certifies anything. R09/R10's emptiness term covers the other side.
+UNION ALL
+SELECT x.check_name, x.v
+FROM verdicts CROSS JOIN UNNEST([
+  STRUCT('R09 shadow curve grain unique and non-empty' AS check_name,
+         dup_shadow_keys     + CAST(rows_shadow = 0 AS INT64) AS v),
+  STRUCT('R10 shadow cvr_hat and season_index sane',
+         bad_shadow_rows     + CAST(rows_shadow = 0 AS INT64)),
+  STRUCT('R11 shadow covers every served catalog key',
+         served_keys_missing + CAST(rows_served = 0 AS INT64))
+]) AS x
 ORDER BY check_name;
