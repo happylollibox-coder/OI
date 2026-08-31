@@ -61,7 +61,9 @@ type_lvl AS (
 ),
 
 -- Beta-binomial shrink toward the type's all-month rate, then express as a ratio to it.
--- A month with no evidence lands on 1.000 rather than on noise.
+-- A month with THIN evidence lands near 1.000 rather than on noise. A month with no clicks
+-- at all is a different case: it produces no row and is simply absent from the grid, not
+-- present at 1.000. R03b in the acceptance file is what catches such a hole.
 raw AS (
   SELECT o.intent_type, o.month_of_year,
     SUM(o.clicks) AS support_clicks,
@@ -75,9 +77,14 @@ raw AS (
 ),
 
 -- Contract 1: clicks-weighted mean must be 1.000.
+-- THE WHERE IS LOAD-BEARING, not defensive tidying. SUM() skips NULLs in the numerator, but a
+-- NULL-raw_index row's support_clicks still lands in the DENOMINATOR — so without this filter the
+-- normaliser is computed over a different row set than the final SELECT publishes (that SELECT
+-- drops NULL raw_index), and the published clicks-weighted mean stops being 1.000 the moment any
+-- row is NULL. raw_index goes NULL whenever a type's all-month cvr is 0 or k_season is NULL.
 norm AS (
   SELECT SAFE_DIVIDE(SUM(raw_index * support_clicks), NULLIF(SUM(support_clicks),0)) AS mean_idx
-  FROM raw
+  FROM raw WHERE raw_index IS NOT NULL
 )
 
 SELECT r.intent_type, r.month_of_year,

@@ -67,9 +67,20 @@ r03 AS (
 --      reports a clean pass. Same shape as the R01 note above: a check over an empty table has
 --      validated nothing. Also fails if any intent_type is missing a month, because the shadow
 --      curve LEFT JOINs this grid and COALESCEs a miss to 1.000 — a silently neutral month.
+--      THE EXPECTED TYPE COUNT IS SOURCED FROM DE_INTENT_THEMES, NOT FROM THE VIEW. The first
+--      version compared COUNT(*) against COUNT(DISTINCT intent_type) * 12 read off the view
+--      itself, which cannot detect a whole intent_type disappearing: t.cvr is one value per TYPE,
+--      not per month, so a genuinely-zero all-month CVR nulls raw_index for all 12 of that type's
+--      rows at once and the final WHERE drops the entire type — both sides of that comparison then
+--      shrink together and it stays green while half the grid is gone. Counting the types that
+--      V_ADS_SEARCH_TERM_INTENT can actually resolve (active themes carrying an ads regex) gives
+--      an anchor the view cannot move.
 r03b AS (
   SELECT CAST(COUNT(*) = 0
-           OR COUNT(*) != COUNT(DISTINCT intent_type) * 12 AS INT64) AS v
+           OR COUNT(*) != (SELECT COUNT(DISTINCT intent_type)
+                           FROM `onyga-482313.OI.DE_INTENT_THEMES`
+                           WHERE is_active AND match_ads_regex IS NOT NULL
+                             AND intent_type IS NOT NULL) * 12 AS INT64) AS v
   FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_MONTH`
 ),
 -- R04 NO INDEX IS NULL OR NON-POSITIVE. A NULL multiplies cvr_hat to NULL; a zero or negative
@@ -80,8 +91,13 @@ r04 AS (
 ),
 -- R05 THE INDEX IS ACTUALLY DOING SOMETHING. The defect this replaces had 85.3% of values inside
 --     [0.95,1.05]. If the replacement is just as flat it has not been fixed.
+--     THRESHOLD IS 0.30, NOT 0.80. Over a 24-row grid, 0.80 fires only at 20/24 (83%) — that is
+--     essentially the original 85.3% defect restored exactly, so a regression to 40-50% flat,
+--     serious by any standard, would sit here green. 0.30 fires at 8/24 (33%): far enough above
+--     today's measured 4.2% (1/24) that ordinary drift in the underlying clicks will not trip it,
+--     and small enough a fraction of 85.3% that it actually guards the property it names.
 r05 AS (
-  SELECT CAST(COUNTIF(index_value BETWEEN 0.95 AND 1.05) > COUNT(*) * 0.80 AS INT64) AS v
+  SELECT CAST(COUNTIF(index_value BETWEEN 0.95 AND 1.05) > COUNT(*) * 0.30 AS INT64) AS v
   FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_MONTH`
 )
 SELECT 'R01 registry key unique' AS check_name, v FROM r01
