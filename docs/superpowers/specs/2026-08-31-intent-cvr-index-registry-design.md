@@ -335,6 +335,36 @@ before anyone can activate it.
 the major holidays, whichever comes first. At that point the threshold should be re-derived rather
 than inherited — the same rule §4.5 states for priors.
 
+## 7.6 MEASURED CONSEQUENCE — 30.7% of cells lose their own evidence
+
+Found in Task 4, tested and accepted. The nested 1/2/3/6/12 windows give weight 0 to anything 12+
+months old, so **38,436 of 125,280 catalog rows (30.7%) have `base_clicks = 0`** at today's
+watermark and price entirely off their family rung. The live view has zero such rows.
+
+**The window choice was re-validated against the objection.** The original sweep required >=60
+clicks in the target month, which selects dense cells. Re-run at every density, nested still wins:
+
+| min target-month clicks | flat (ships today) | nested 1/2/3/6/12 | cells scored |
+|---|---|---|---|
+| 60 | 1.3259% | **1.2595%** | 1,378 |
+| 20 | 1.3645% | **1.2985%** | 2,108 |
+| 5 | 1.3973% | **1.3311%** | 3,066 |
+| 1 | 1.4072% | **1.3414%** | 4,255 |
+
+Cells losing all own evidence differ by only 7 between the two shapes (506 vs 499).
+
+**Why the two numbers differ.** The walk-forward evaluates a cell at a target month using earlier
+history — it scores cells while they are active. The 30.7% is measured at the current watermark and
+counts **dormant** cells: product x intent pairs with no click in over a year. For those, falling
+back to the family rung is the honest answer; pooling two-year-old clicks as if current is the
+defect being fixed. Accepted, but **Task 8's money gate must see it explicitly** rather than
+discover it.
+
+Also unresolved and carried to Task 8: the `confidence` cut-points (500/100/20) and
+`base_self_weight` now read recency-weighted clicks but were chosen against raw ones, and
+`V_INTENT_IDX_SEASON_MONTH` has no launch-ramp quarantine, so activating it loses a guard the live
+curve carries.
+
 ## 8. Limitations, stated
 
 - The phase projection is correct for **one year ahead**. When `DIM_US_HOLIDAYS` rolls forward the
