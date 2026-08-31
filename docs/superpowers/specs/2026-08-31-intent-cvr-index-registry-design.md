@@ -306,6 +306,35 @@ the house's nested-window definition, and its stated purpose is that *"the Catal
 cannot price against different money."* **`V_INTENT_BID_BASE` sources `gp_per_order` from that
 shared definition** rather than computing its own.
 
+## 7.5 KNOWN DRIFT — `INTENT_IDX_MIN_SUPPORT` silently loosens over time
+
+Recorded 2026-08-31, raised by the Task 3 implementer and verified by its reviewer. **Not fixed;
+this is a deliberate deferral with a stated trigger.**
+
+`V_INTENT_IDX_SEASON_PHASE` computes `day_support = phase_clicks / n_days`, dividing
+**whole-history** clicks by **one** projection year. Ads history currently spans about two
+occurrences of each holiday compressed onto twelve forward months, so per-day support runs roughly
+**2x a true one-year rate**. That is why the conservation invariant lands on each intent's total
+click count, and it does not distort `index_value` — the scaling divides out of the normaliser.
+
+But it means **`INTENT_IDX_MIN_SUPPORT = 100` currently behaves like ~50 clicks in one-year terms**,
+and that equivalence moves as history accumulates: three occurrences makes it ~33, four makes it
+~25. The gate loosens on its own, without anyone changing it.
+
+This matters because the gate is load-bearing. **161 of 204 published `season_phase` rows sit below
+it and are pinned to 1.000**; only 43 are applied. It is the only thing keeping `christmas`'s
+off-season 0.2567 — resting on 755 OFF clicks carrying **2 orders** — away from the curve.
+
+**Why not fixed now:** correcting it means redefining `support_clicks` a third time, which would
+break the conservation invariant just established and re-open a settled review. The exposure is
+bounded by two things already in place — promotion is manual, and the scorecard judges the index
+before anyone can activate it.
+
+**Trigger to fix:** normalise support to holiday occurrences rather than raw history when either
+(a) `season_phase` is promoted to `is_active = TRUE`, or (b) ads history passes three occurrences of
+the major holidays, whichever comes first. At that point the threshold should be re-derived rather
+than inherited — the same rule §4.5 states for priors.
+
 ## 8. Limitations, stated
 
 - The phase projection is correct for **one year ahead**. When `DIM_US_HOLIDAYS` rolls forward the
