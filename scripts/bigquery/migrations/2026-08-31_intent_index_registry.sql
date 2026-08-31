@@ -1,25 +1,22 @@
--- 2026-08-31 — Task 1 of the intent CVR index registry: the registry table plus the threshold
--- rows the rebuilt curve reads. Nothing consumes these yet; the shadow curve arrives in a later
--- task. Spec: docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md
+-- 2026-08-31 — Task 1 of the intent CVR index registry: the threshold rows the rebuilt curve
+-- reads. Nothing consumes them yet; the shadow curve arrives in a later task.
 --
--- Index registry for the intent CVR curve. Automation proposes, a human promotes:
--- SP_SCORE_INTENT_INDEXES never writes is_active. Same contract as DE_SEARCH_TERM_INTENT.
--- Re-runnable: CREATE IF NOT EXISTS + DELETE/INSERT + idempotent UPDATE.
-CREATE TABLE IF NOT EXISTS `onyga-482313.OI.DE_INTENT_INDEX_REGISTRY` (
-  index_name    STRING  NOT NULL,
-  description   STRING,
-  source_object STRING  NOT NULL,
-  join_keys     STRING  NOT NULL,
-  is_active     BOOL    NOT NULL,
-  added_at      TIMESTAMP,
-  added_by      STRING,
-  notes         STRING
-);
+-- The registry TABLE itself is NOT created here — its DDL lives with every other table at
+-- scripts/bigquery/tables/DE_INTENT_INDEX_REGISTRY.sql. This file carries only the
+-- DE_COACH_THRESHOLDS changes, which are incremental edits to an existing seeded table and so
+-- belong in a migration.
+--
+-- Re-runnable: DELETE/INSERT plus an UPDATE to a constant.
+-- Spec: docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md
 
 DELETE FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
 WHERE strategy_id = 'INTENT'
   AND threshold_key IN ('INTENT_CVR_CALIBRATION','INTENT_IDX_MIN_SUPPORT','INTENT_IDX_MIN_SCORED_CLICKS');
 
+-- coach_mode is GUARDIAN on every row, and that is load-bearing rather than decorative: thresholds
+-- resolve strategy_id+coach_mode -> GLOBAL+coach_mode -> strategy_id+GUARDIAN -> GLOBAL+GUARDIAN
+-- (see DE_COACH_THRESHOLDS.sql and the four-way join in V_ADS_COACH). A row written under the
+-- wrong mode is not found by the curve — it falls through to a GLOBAL default instead.
 -- Column list matches the sibling seed migration 2026-07-24_intent_cvr_curve_thresholds.sql so
 -- these rows carry a description like every other threshold. Only threshold_key, strategy_id and
 -- threshold_value are REQUIRED on the table; the rest are documentation and provenance.

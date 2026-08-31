@@ -2013,7 +2013,7 @@ tables:
   - name: "DE_INTENT_INDEX_REGISTRY"
     description: "Registry of multiplicative indexes applied to the intent CVR curve. One row per index: source view, join grain, is_active. Automation scores every index per month in V_INTENT_INDEX_SCORECARD but NEVER writes is_active -- promotion is manual, the same contract as DE_SEARCH_TERM_INTENT, because the Coacher has twice made unreviewed bid changes that lost money. Spec: docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md"
     type: "data_entry"
-    source_files: ["scripts/bigquery/migrations/migrate_intent_index_registry.sql"]
+    source_files: ["scripts/bigquery/tables/DE_INTENT_INDEX_REGISTRY.sql", "scripts/bigquery/migrations/2026-08-31_intent_index_registry.sql"]
     dependencies: []
 
   - name: "SP_REFRESH_SEARCH_TERM_INTENT"
