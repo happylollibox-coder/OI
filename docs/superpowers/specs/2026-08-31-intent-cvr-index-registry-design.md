@@ -160,6 +160,78 @@ All must be registered in `OI/config.yaml`.
 `INTENT_CVR_CALIBRATION` **will drift** — the account's CVR and AOV both moved more than 30% this
 year. It is a threshold row with a refit query, never a literal in SQL.
 
+## 4.5 AMENDMENT 2026-08-31 — two errors found by the Task 3 implementer
+
+Task 3 came back BLOCKED against its own acceptance bar. Both causes are defects in this spec.
+
+### Error 1: R06 and R07 were mutually contradictory
+
+R06 pins each index to a clicks-weighted mean of **1.000 per `intent_key`**. R07 demanded
+`MAX(index_value) >= 1.5` for `easter`. Measured, `easter`'s phase click shares are:
+
+| phase | clicks | click share | CVR | index (unshrunk) |
+|---|---|---|---|---|
+| **PEAK** | 24,875 | **70.9%** | 4.149% | **1.206** |
+| BOOST | 6,652 | 19.0% | 1.037% | 0.301 |
+| COOLDOWN | 2,029 | 5.8% | 4.485% | 1.304 |
+| PRE | 997 | 2.8% | 0.602% | 0.175 |
+| OFF | 530 | 1.5% | 1.698% | 0.494 |
+
+With PEAK at 70.9% of clicks, a mean of 1.000 caps PEAK's index at **1/0.709 = 1.41**, reachable
+only if every other phase were exactly 0. **`MAX >= 1.5` is unattainable for any `k_season`.**
+
+The signal is nonetheless intact and large — **PEAK/BOOST = 4.0x**, PEAK/PRE = 6.9x. It simply
+expresses as "off-season is 0.18-0.30" rather than "peak is 5x", because the mean it is normalised
+against is itself peak-dominated. That is correct behaviour: `base_cvr` already carries the
+peak-weighted level, so the index's job is to say how far each month departs from it.
+
+**R07 is measuring the wrong statistic.** It is replaced by a RATIO test:
+
+```sql
+-- R07 THE PHASE INDEX SEPARATES PEAK FROM TROUGH. A mean-1.000 contract caps the maximum at
+--     1/peak_click_share (1.41 for easter), so testing MAX is testing the normaliser, not the
+--     signal. What must survive is the SPREAD: unshrunk, easter runs PEAK 1.206 against BOOST
+--     0.301, a 4.0x swing. If the ratio collapses the moving-holiday fix has done nothing and
+--     V_INTENT_CVR_CURVE keeps pricing Easter peak week off a pre-peak March average.
+r07 AS (
+  SELECT CAST(COALESCE(SAFE_DIVIDE(MAX(index_value), NULLIF(MIN(index_value),0)), 0) < 2.0
+              AS INT64) AS v
+  FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE` WHERE intent_key = 'easter'
+)
+```
+
+### Error 2: this index needs its own prior
+
+`INTENT_CVR_SEASON_PRIOR_CLICKS = 4038` was derived in Task 2 for `intent_type x month`, where a
+cell holds 100k+ clicks. The phase grain is 33x smaller:
+
+| grain | cells | p25 | median | max |
+|---|---|---|---|---|
+| `intent_type x month` (Task 2) | 36 | 4,038 | 7,163 | — |
+| **`intent_key x phase` (Task 3)** | **99** | **13** | **123** | **15,465** |
+
+At 4038 the prior swamps every cell: easter's real 4.0x PEAK/BOOST swing arrived as 1.85x. New
+threshold **`INTENT_PHASE_PRIOR_CLICKS = 123`** (this grain's median). Task 2's p25 rule would give
+13, which is too little shrinkage for a 13-click cell — but thin cells are already neutralised
+downstream by `INTENT_IDX_MIN_SUPPORT = 100` in the shadow curve, so the prior only has to handle
+the middle of the distribution, and the median does that.
+
+**Generalised lesson for the registry: a prior belongs to a grain, not to the system.** Any future
+index must derive its own from its own cell distribution. Reusing another index's constant is the
+same class of error as the `k_season = 500` defect this project exists to fix.
+
+### Also recorded, not blocking
+
+- `back-to-school` and `halloween` carry NULL `cooldown_start`/`cooldown_end` in `DIM_US_HOLIDAYS`,
+  so `phase_of` cannot resolve them and they produce no rows. The curve COALESCEs them to 1.000.
+- Latent: `GENERATE_DATE_ARRAY(..., DATE_ADD(..., INTERVAL 11 MONTH))` ends on the *first* of the
+  twelfth month, so that month blends one day rather than a full month. Harmless today (no intent
+  has a row there); fix is `LAST_DAY(...)`.
+- The launch-ramp guard added after Task 2 is correct but **immaterial at this grain**: it drops 2
+  of 47 rows (5 and 2 support clicks) and shifts the largest surviving row by 0.0268. Zero effect on
+  `easter`. Kept because it is correct and cheap, but the premise that "one product's launch can
+  dominate a cell" did not hold.
+
 ## 5. The scorecard
 
 `SP_SCORE_INTENT_INDEXES` walks forward over the **trailing 18 months**. Ads data begins
