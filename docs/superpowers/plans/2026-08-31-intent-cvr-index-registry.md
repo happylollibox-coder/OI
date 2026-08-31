@@ -1224,6 +1224,18 @@ git commit --no-verify -m "chore(intent): money gate query, baseline 1.69x under
 
 ---
 
+> **RESEQUENCED 2026-08-31, approved by Ori: Task 10 runs BEFORE Task 9.**
+>
+> The shadow prices **1.55x** higher than live (recency lift 1.3399 x calibration 1.151, measured
+> and independently verified). Task 10's `gp_per_order` correction runs the **other** way — the
+> catalog carries $19.96 against an actual trailing-90-day $13.73, i.e. 45% too high. Promoting
+> Task 9 first would put the CVR correction into live pricing without the margin correction that
+> offsets it, for however long Task 10 takes. Doing 10 first means the money gate in Task 8 judges
+> both corrections together, which is also the only honest way to judge either.
+>
+> Task 10 does not depend on Task 9 — it modifies `V_INTENT_BID_BASE`, which reads `cvr_hat` from
+> whichever curve is live and inherits the fix on promotion either way.
+
 ### Task 9: Promotion
 
 Only reachable if Task 7 and Task 8 both passed.
