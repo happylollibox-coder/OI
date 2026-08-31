@@ -230,6 +230,92 @@ verdicts AS (
          COUNTIF(n_served > 0 AND n_shadow = 0)      AS served_keys_missing,
          COALESCE(SUM(n_served), 0)                  AS rows_served
   FROM keyed
+),
+-- =============================================================================================
+-- R12-R14 AND R16 COVER THE WALK-FORWARD EVIDENCE LAYER (plan Tasks 5-6). They read the
+-- MATERIALISED tables, T_INTENT_INDEX_SCORECARD and T_INTENT_BASE_TUNING, NOT the views behind
+-- them. That is not a shortcut, it is the only affordable shape:
+--   * V_INTENT_INDEX_SCORECARD costs 6,215 slot-seconds / 116 MB per scan and V_INTENT_BASE_TUNING
+--     942 / 92 MB (measured 2026-08-31). Four checks reading the scorecard view would be four
+--     full evaluations, because BigQuery inlines a CTE at every reference -- which is exactly how
+--     the R09-R11 block reached 97,066 CPU-seconds against a 33,500 ceiling and was REJECTED.
+--   * the tables are 77 and 9 rows, so scanning them once per check is free and the checks stay
+--     readable instead of being folded into another single-scan UNNEST block.
+-- THE COST OF THAT CHOICE: these four checks verify the COPY, not the view. A view edited and
+-- deployed without re-running SP_SCORE_INTENT_INDEXES would not be checked here at all. R16 is
+-- what makes that survivable -- it fails the suite once either table is more than 8 days old --
+-- and it is the reason R16 exists rather than being a nicety.
+--
+-- R12 EVERY REGISTERED INDEX IS SCORED UNDER BOTH TESTS. An index that never appears cannot be
+--     judged, and the whole point of the registry is that nothing enters unmeasured. A missing
+--     pair is silent otherwise: Task 7 reads verdicts by index_name and simply sees no row.
+--     THE EMPTY-REGISTRY TERM IS LOAD-BEARING, AND IT GUARDS R13/R14 TOO. Verified by negative
+--     control: with the registry filtered to zero rows the EXCEPT DISTINCT returns nothing and
+--     the bare form reports a clean 0 -- an empty left side cannot miss anything. The same
+--     control run against the scorecard side shows why this check is the block's emptiness
+--     guard: with T_INTENT_INDEX_SCORECARD filtered to zero rows R12 returns 4 (both indexes,
+--     both tests, all missing) while R13 and R14 both return 0, because an empty table has no
+--     bad verdict and no leaked month. So R13 and R14 are vacuous on their own and R12 is what
+--     makes them mean something.
+r12 AS (
+  SELECT (SELECT COUNT(*) FROM (
+            SELECT r.index_name, t.test_kind
+            FROM `onyga-482313.OI.DE_INTENT_INDEX_REGISTRY` r
+            CROSS JOIN (SELECT 'ADD_ONE_IN' AS test_kind UNION ALL SELECT 'LEAVE_ONE_OUT') t
+            EXCEPT DISTINCT
+            SELECT index_name, test_kind FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD`))
+       + CAST((SELECT COUNT(*) FROM `onyga-482313.OI.DE_INTENT_INDEX_REGISTRY`) = 0 AS INT64) AS v
+),
+-- R13 VERDICTS ARE FROM THE CLOSED SET. Anything else means the CASE fell through and a verdict
+--     is being read that the promotion rule in spec section 5 does not define. Task 7 gates on
+--     'IMPROVES' and Task 9 promotes on it; an unrecognised string there fails open, silently,
+--     as "not IMPROVES" rather than as an error.
+--     `verdict IS NULL OR` IS LOAD-BEARING. NOT IN evaluates to NULL against a NULL verdict, and
+--     COUNTIF does not count NULL -- so the bare form waves through the one value that would
+--     actually appear if the CASE lost its ELSE. Verified by negative control.
+r13 AS (
+  SELECT COUNTIF(verdict IS NULL
+              OR verdict NOT IN ('IMPROVES','NEUTRAL','HURTS','INSUFFICIENT')) AS v
+  FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD`
+),
+-- R14 THE SCORECARD NEVER READS THE FUTURE. A target month must be scored on strictly earlier
+--     evidence or the verdict is leakage, not prediction -- and a leaking scorecard would say
+--     yes to everything, which is the single worst failure this evidence layer can have.
+--     `target_month IS NOT NULL` EXCLUDES THE POOLED ROW BY DESIGN, not by accident: the pooled
+--     row has no target month to be earlier than, and its fitted_through is the MAX across
+--     eighteen of them.
+--     `fitted_through IS NULL` IS LOAD-BEARING: a per-month row with no fitting window at all
+--     has not been scored on earlier evidence, it has been scored on nothing, and `NULL >=
+--     target_month` is NULL, which COUNTIF does not count.
+--     WHAT THIS DOES NOT COVER, stated because the check's name overclaims: it proves the BASE
+--     RATE is walk-forward. The two index views are read as deployed, fitted on all of history
+--     including the target month, so index verdicts carry leakage this check cannot see. That is
+--     limitation L1 in the scorecard's own header, and it is why an IMPROVES here means "take it
+--     to the money gate", never "proven".
+r14 AS (
+  SELECT COUNTIF(fitted_through IS NULL OR fitted_through >= target_month) AS v
+  FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD` WHERE target_month IS NOT NULL
+),
+-- R16 THE MATERIALISED EVIDENCE IS FRESH. A stale table means promotion decisions are being made
+--     against evidence from before the last curve change -- and because R12/R13/R14 read the
+--     tables rather than the views, a stale table also means those three checks are green about
+--     a version of the scorecard that no longer exists.
+--     BOTH TABLES, not just the scorecard. SP_SCORE_INTENT_INDEXES writes them in sequence with
+--     separate CURRENT_TIMESTAMP() calls, so a run that creates the scorecard and then fails on
+--     the tuning view leaves one fresh table and one old one. Checking only the first would call
+--     that a pass.
+--     COALESCE(..., 1) ON EACH ARM IS LOAD-BEARING. Over an empty (or never-written) table
+--     MAX(scored_at) is NULL, TIMESTAMP_DIFF is NULL, and CAST(NULL > 8 AS INT64) is NULL --
+--     which is not the 0 this file defines as PASS but renders as a blank cell and reads like
+--     one. Verified by negative control: the bare form over an emptied table returns NULL, the
+--     COALESCEd form returns 1.
+r16 AS (
+  SELECT COALESCE(CAST(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(),
+           (SELECT MAX(scored_at) FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD`), DAY) > 8
+         AS INT64), 1)
+       + COALESCE(CAST(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(),
+           (SELECT MAX(scored_at) FROM `onyga-482313.OI.T_INTENT_BASE_TUNING`), DAY) > 8
+         AS INT64), 1) AS v
 )
 SELECT 'R01 registry key unique' AS check_name, v FROM r01
 UNION ALL SELECT 'R02 thresholds present', v FROM r02
@@ -297,4 +383,8 @@ FROM verdicts CROSS JOIN UNNEST([
   STRUCT('R11 shadow covers every served catalog key',
          served_keys_missing + CAST(rows_served = 0 AS INT64))
 ]) AS x
+UNION ALL SELECT 'R12 every registered index scored under both tests', v FROM r12
+UNION ALL SELECT 'R13 scorecard verdicts from the closed set', v FROM r13
+UNION ALL SELECT 'R14 scorecard base fitted strictly before target month', v FROM r14
+UNION ALL SELECT 'R16 materialised scorecard and tuning fresh within 8 days', v FROM r16
 ORDER BY check_name;
