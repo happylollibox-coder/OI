@@ -218,7 +218,7 @@ Create `scripts/bigquery/views/V_INTENT_IDX_SEASON_MONTH.sql`:
 
 ```sql
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_INTENT_IDX_SEASON_MONTH`
-OPTIONS (description = "Calendar-month index for the intent CVR curve, pooled at intent_type x month_of_year. REPLACES the hardcoded season_index inside V_INTENT_CVR_CURVE, which was inert: 85.3% of its 122,124 values sat in [0.95,1.05] because k_season=500 was applied at intent_key x month_of_year where only 0.9% of 45,168 cells clear 500 clicks and the median cell has 0. Six intent types is where the density actually lives. Normalised so the clicks-weighted mean is 1.000, as the index contract requires. Registered in DE_INTENT_INDEX_REGISTRY as season_month. Spec: docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md")
+OPTIONS (description = "Calendar-month index for the intent CVR curve, pooled at intent_type x month_of_year. REPLACES the hardcoded season_index inside V_INTENT_CVR_CURVE, which was inert: 85.3% of its 122,124 values sat in [0.95,1.05] because k_season=500 was applied at intent_key x month_of_year where only 0.9% of 45,168 cells clear 500 clicks and the median cell has 0. Pooling at intent_type is where the density actually lives -- the median pooled cell has 21,807 clicks. NOTE: intent_type has only TWO values (GENERIC, TIME_BASED), not six; the six-value taxonomy is intent_segment, a different column in V_ADS_COACH. Normalised so the clicks-weighted mean is 1.000, as the index contract requires. Registered in DE_INTENT_INDEX_REGISTRY as season_month. Spec: docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md")
 AS
 WITH params AS (
   SELECT MAX(IF(threshold_key='INTENT_CVR_SEASON_PRIOR_CLICKS', threshold_value, NULL)) AS k_season
@@ -380,6 +380,15 @@ obs AS (
   WHERE f.campaign_id <> '-1' AND f.Ads_clicks > 0
     AND i.holiday_name IS NOT NULL
     AND d.parent_name IS NOT NULL AND d.parent_name != 'UNKNOWN'
+    -- LAUNCH-RAMP QUARANTINE -- REQUIRED HERE. V_INTENT_CVR_CURVE's season CTE excludes a
+    -- product's first 90 days (in_launch_ramp), added 2026-07-25 after ramp rows produced a false
+    -- "LolliBall 11x back-to-school" signal: a launch curve happens once, a season repeats.
+    -- Measured immaterial at Task 2's intent_type pooling (sd 0.2073 quarantined vs 0.2100 not)
+    -- because pooling across the account dilutes any one product's ramp. This index keys on
+    -- intent_key x phase, where a single product's launch CAN dominate a cell.
+    AND f.date >= DATE_ADD((SELECT MIN(u.date) FROM `onyga-482313.OI.V_UNIFIED_DAILY` u
+                            WHERE u.product_short_name = d.product_short_name AND u.units > 0),
+                           INTERVAL 90 DAY)
 ),
 intent_lvl AS (
   SELECT intent_key, SAFE_DIVIDE(SUM(orders), SUM(clicks)) AS cvr, SUM(clicks) AS all_clicks
