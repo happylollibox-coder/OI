@@ -196,7 +196,20 @@ shadow_vs_served AS (
   SELECT FORMAT('%T|%T|%T', product_short_name, intent_key, month_of_year) AS k,
          1 AS in_shadow, 0 AS in_served,
          CAST((cvr_hat IS NULL OR cvr_hat < 0 OR cvr_hat > 1.0
-               OR season_index IS NULL OR season_index <= 0) AS INT64) AS bad
+               OR season_index IS NULL OR season_index <= 0
+               -- PRE-CAP ARM. cvr_hat is wrapped in LEAST(..., 1.0), so the post-cap arms above
+               -- can NEVER observe a cap that has started to bind -- a runaway index would be
+               -- silently clipped to exactly 1.0 and pass. This reconstructs the uncapped product
+               -- from the published factors so that a binding cap is detectable rather than only
+               -- documented. Approximate by construction: base_cvr is published rounded to 5dp
+               -- and season_index to 4dp, which is far finer than a tripwire at 1.0 needs.
+               -- Headroom today is 2.71x (largest cvr_hat 0.36961), so this arm is expected to
+               -- stay silent; the point is that it CAN speak.
+               OR (SELECT MAX(IF(threshold_key = 'INTENT_CVR_CALIBRATION', threshold_value, NULL))
+                   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
+                   WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN'
+                     AND product_family IS NULL) * base_cvr * season_index > 1.0
+              ) AS INT64) AS bad
   FROM `onyga-482313.OI.V_INTENT_CVR_CURVE_SHADOW`
   UNION ALL
   SELECT FORMAT('%T|%T|%T', product_short_name, intent_key, month_of_year), 0, 1, 0
@@ -231,8 +244,16 @@ UNION ALL SELECT 'R08 season_phase one row per intent_key x month', v FROM r08
 -- R09 SHADOW GRAIN IS ONE ROW PER product_short_name x intent_key x month_of_year, AND THE VIEW
 --     IS NOT EMPTY. T_INTENT_BID_BASE, the intent-grid popup and tools/intent_grid/*.py all
 --     assume that uniqueness; a duplicate lets one keyword be priced twice off contradictory
---     rows, and the shadow adds two LEFT JOINs (idx_month, idx_phase) that are exactly how a
---     fan-out would arrive.
+--     rows.
+--     WHAT THIS CHECK PROVES TODAY, stated precisely because the obvious reading is wrong. The
+--     mechanism worth guarding is the shadow's two new LEFT JOINs, idx_month and idx_phase: a
+--     duplicate (intent_type, month) or (intent_key, month) in an index view would fan p_lvl out.
+--     BUT BOTH REGISTRY ROWS ARE is_active = FALSE, so both CTEs are gated to zero rows by their
+--     `IN (SELECT index_name FROM active_idx)` filter and contribute nothing to join cardinality.
+--     A green R09 today therefore proves only that `p_lvl CROSS JOIN months` is unique -- which it
+--     is by construction, p_lvl being a GROUP BY and months a 12-element literal. This check does
+--     not begin testing the thing it is named for until Task 8 flips an index active, and it MUST
+--     be re-read then. Same class as R01's empty-registry note.
 --     THE rows_shadow = 0 TERM IS LOAD-BEARING. Negative control, run against the deployed view:
 --     with the shadow replaced by `SELECT ... WHERE FALSE` the bare COUNTIF(n_shadow > 1) form
 --     returns 0 -- an empty set has no duplicate to find -- so total failure reports a clean
@@ -240,9 +261,11 @@ UNION ALL SELECT 'R08 season_phase one row per intent_key x month', v FROM r08
 -- R10 NO NULL / NEGATIVE / >1 cvr_hat AND NO NULL OR NON-POSITIVE season_index. A NULL cvr_hat
 --     blanks value_per_click across the whole catalog; a CVR above 1 means more orders than
 --     clicks and prices a bid off nonsense.
---     WHICH ARMS ACTUALLY HAVE TEETH, stated rather than implied. `> 1.0` and `< 0` CANNOT fire
---     against today's view: it wraps the product in LEAST(..., 1.0) and every factor is positive.
---     They guard a future edit that removes the cap; they are not testing today. The arms that
+--     WHICH ARMS ACTUALLY HAVE TEETH, stated rather than implied. The POST-cap `> 1.0` and `< 0`
+--     arms CANNOT fire against today's view: it wraps the product in LEAST(..., 1.0) and every
+--     factor is positive. They guard a future edit that removes the cap; they are not testing
+--     today. That is exactly why a PRE-cap arm was added below -- without it, a cap that starts
+--     binding is invisible to this check by construction. The arms that
 --     CAN fire are the NULLs and the emptiness term, and that is not hypothetical -- cvr_hat
 --     multiplies INTENT_CVR_CALIBRATION, so deleting that threshold row, or moving it to another
 --     coach_mode (which is why the curve's params CTE filters coach_mode), NULLs cvr_hat on all

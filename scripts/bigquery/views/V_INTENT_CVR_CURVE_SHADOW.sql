@@ -1,5 +1,5 @@
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_INTENT_CVR_CURVE_SHADOW`
-OPTIONS (description = "SHADOW REBUILD of V_INTENT_CVR_CURVE. NOTHING READS THIS. Promotion is the plan's Task 9, only after the scorecard and the money gate pass. Three changes against the live curve, all measured in docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md: (1) NESTED MONTHLY RECENCY WEIGHTING on the base estimator, windows 1/2/3/6/12 months summed, the house shape from V_KEYWORD_RATES at monthly scale - the current month counts 5x, one month back 4x, two back 3x, three-to-five back 2x, six-to-eleven back 1x and anything twelve or more months old counts 0x. Walk-forward over 499 product x intent cells: weighted abs error 1.3402% flat-full-history -> 1.2583% nested, on MORE predictions (1,300 -> 1,350), which is why nested and not exponential decay (1.2101% but on ~70 fewer cells). (2) An explicit INTENT_CVR_CALIBRATION factor removing the residual ~13% under-bias that survives every decay shape, because shrinking toward a global prior pulls the scored (larger, better-converting) cells down. (3) The hardcoded season CTE is GONE, replaced by the product of every index in DE_INTENT_INDEX_REGISTRY carrying is_active - each shrunk toward 1.000 by LEAST(1, support_clicks / INTENT_IDX_MIN_SUPPORT), each COALESCEd to 1.000 when absent, so an inactive or sparse index contributes exactly nothing. BOTH INDEXES ARE is_active = FALSE TODAY, so season_index is 1.0000 on every row and this view currently differs from live by recency weighting and calibration only. THREE COLUMNS CHANGED MEANING WITHOUT CHANGING NAME OR TYPE - read the header before consuming them: base_clicks and base_orders are now RECENCY-WEIGHTED (effective) counts, not raw ones, and confidence and base_self_weight are computed from those; season_clicks is the support behind the WEAKEST applied index rather than a pooled cell's raw clicks, and is 0 while no index is active; season_orders has no equivalent under the registry design and is published NULL rather than a fabricated 0. Grain is unchanged: one row per product_short_name x intent_key x month_of_year, all 12 months always present. Acceptance: scripts/bigquery/tests/INTENT_INDEX_acceptance.sql R09-R11.")
+OPTIONS (description = "SHADOW REBUILD of V_INTENT_CVR_CURVE. NOTHING READS THIS. Promotion is the plan's Task 9, only after the scorecard and the money gate pass. Three changes against the live curve, all measured in docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md: (1) NESTED MONTHLY RECENCY WEIGHTING on EVERY rung of the estimator including the global one, windows 1/2/3/6/12 months summed, the house shape from V_KEYWORD_RATES at monthly scale - current month 5x, one back 4x, two back 3x, three-to-five 2x, six-to-eleven 1x, twelve or more 0x. Walk-forward over 499 product x intent cells: weighted abs error 1.3402% flat-full-history -> 1.2583% nested, on MORE predictions (1,300 -> 1,350), which is why nested and not exponential decay (1.2101% but on ~70 fewer cells). (2) An explicit INTENT_CVR_CALIBRATION factor removing the residual ~13% under-bias that survives every decay shape. (3) The hardcoded season CTE is GONE, replaced by the product of every index in DE_INTENT_INDEX_REGISTRY carrying is_active - each shrunk toward 1.000 by LEAST(1, support_clicks / INTENT_IDX_MIN_SUPPORT), each COALESCEd to 1.000 when absent, so an inactive or sparse index contributes exactly nothing. MEASURED AT ADS WATERMARK 2026-08-31, both indexes still is_active = FALSE, so season_index is 1.0000 on every one of 125,280 rows and the whole difference from live is recency plus calibration. LEVEL: sum ratio shadow/live 1.5508, median row ratio 1.5552, decomposing as 1.3412 (the g rung: 3.0486% flat vs 4.0886% nested-weighted) x 1.151 (calibration). DISPERSION, AND READ THIS BEFORE THE MONEY GATE - the per-row ratio is NOT concentrated at the median: it spans 0.3790x (Purple LolliME x implied_low, December) to 8.5625x (Pink Lollibox x under_n-teen-girl, January), with p0.1 0.6312 / p1 0.8849 / p5 1.1518 / p95 2.1849 / p99 3.1786 / p99.9 5.5579; 9,699 rows move up more than 2x, 491 more than 4x, 22 more than 8x, and 12 move DOWN more than 2x. 45.57% of raw clicks are older than twelve months and now carry zero weight, yet weighted clicks total 0.9489x raw because recent clicks count up to 5x - the evidence base is not thinned, which is the argument for nested over exponential decay. THE COST: 38,436 of 125,280 rows (30.7%) carry base_clicks = 0 because all of that cell's own history is older than a year; every one of them has base_cvr exactly equal to family_cvr, base_self_weight 0 and confidence INSUFFICIENT, falling to 2,805 distinct family rungs spanning 0.00514-0.14057, so they are informative rather than collapsed to global. A SECOND, QUIETER COST: a DORMANT cell is now indistinguishable from a NEVER-RUN one. Live reported a cell's historical clicks; the shadow reports 0, so 'this was a 5,000-click winner two years ago' is erased from the grid. Recorded, not fixed. COLUMNS THAT KEEP THEIR NAME AND TYPE BUT CHANGE MEANING: base_clicks and base_orders are recency-weighted effective counts (base_self_weight correctly uses them - it is the exact shrinkage weight the estimator applies); confidence is NOT computed from them but from an unpublished Kish effective sample size, because a weighted count inflates apparent evidence by a median of 2x and up to 5x and would have labelled 157 of 312 HIGH cells on evidence they do not have; season_clicks and season_orders are published NULL because the registry design has no single pooled season cell to count. Schema is otherwise identical to the live view - same 15 columns, same order, same types. Grain unchanged. Acceptance: scripts/bigquery/tests/INTENT_INDEX_acceptance.sql R09-R11.")
 AS
 -- =============================================================================================
 -- V_INTENT_CVR_CURVE_SHADOW
@@ -30,15 +30,58 @@ AS
 -- view no longer sees a second copy of last year's August. It is a deliberate trade — the
 -- walk-forward measured the flat full-history estimator as the WORST of the four shapes tried.
 --
--- THE WEIGHTS APPLY TO THE BASE LADDER ONLY (i_lvl / f_lvl / p_lvl). The registry indexes carry
--- their own estimators and their own priors; weighting them here would double-count.
+-- THE WEIGHTS APPLY TO EVERY RUNG OF THE LADDER, INCLUDING THE GLOBAL ONE (g), AND THAT IS THE
+-- POINT rather than an oversight. Each rung is the shrinkage target of the rung below it, so
+-- leaving g flat would pull a recency-weighted product x intent estimate back toward a stale
+-- full-history global prior — reintroducing at the last rung exactly the defect the weighting
+-- exists to remove, and worst for the thinnest cells, which are the ones most dominated by their
+-- parents. MEASURED AT THIS VIEW'S OWN SCOPE (obs, after the V_INTENT_RESOLVED and DIM_PRODUCT
+-- joins), the g rung reads 3.0486% flat against 4.0886% nested-weighted, a lift of 1.3412 — which
+-- is the ENTIRE recency half of the view's 1.5508 level shift, the other half being the 1.151
+-- calibration. So g is not incidental to the change; it carries most of it.
 --
--- CONSEQUENCE FOR base_clicks / base_orders / confidence / base_self_weight: they are all
--- computed on WEIGHTED counts now. A cell whose evidence is recent reports up to 5x its raw
--- clicks; a cell whose evidence is all older than a year reports 0 and lands on INSUFFICIENT.
--- That is the honest reading — confidence should describe the evidence the estimator actually
--- used — but it means the numbers are NOT comparable row-for-row against the live view, and the
--- 500/100/20 confidence cut-points were chosen against raw clicks and have not been re-derived.
+-- WHAT IS NOT WEIGHTED: the registry indexes. They carry their own estimators, their own priors
+-- and their own normalisation to a clicks-weighted mean of 1.000; weighting them here would
+-- double-count and would break that contract.
+--
+-- ---------------------------------------------------------------------------------------------
+-- CONFIDENCE IS NOT COMPUTED FROM base_clicks, AND THAT IS DELIBERATE
+-- base_clicks is the WEIGHTED evidence the estimator used. It is the right input to shrinkage —
+-- base_self_weight = base_clicks / (base_clicks + k_base) is the exact weight the Beta-binomial
+-- applies, and k_base = 400 was itself fit against nested-weighted counts, so that column is
+-- correct as it stands. It is the WRONG input to a trust label. Weighting multiplies numerator
+-- and denominator alike, so it moves the point estimate but adds no information: a cell with 100
+-- real clicks all in the current month reports base_clicks = 500 and would be labelled HIGH off
+-- the sampling noise of 100 clicks.
+--
+-- That is not hypothetical. Measured over all 10,439 cells at watermark 2026-08-31, the incumbent
+-- 500/100/20 cut-points applied to each candidate basis give:
+--
+--     basis                       HIGH   MEDIUM   LOW   INSUFFICIENT
+--     raw clicks (live's basis)    339      553  1193           8354
+--     weighted clicks              312      497  1106           8524
+--     effective sample size        155      330   723           9231
+--
+-- The middle row is the trap: the recency cut discards 45.57% of all clicks, yet the labels
+-- barely move — HIGH falls only 339 -> 312. That near-agreement is an artefact of the 5x
+-- inflation cancelling the lost history, not evidence that the cells are still well-supported.
+-- 157 of those 312 HIGH cells — 50.3% — do not have 500 effective clicks behind them.
+--
+-- SO CONFIDENCE IS BANDED ON KISH'S EFFECTIVE SAMPLE SIZE, n_eff = (SUM w)^2 / SUM(w^2), summed
+-- over clicks. Two properties make it the right statistic here, and both are why the cut-points
+-- KEEP the values 500/100/20 rather than being re-fitted to a new distribution:
+--   1. IT IS DENOMINATED IN RAW CLICKS. A cell whose evidence sits entirely in one month has
+--      n_eff = c^2*w^2 / (c*w^2) = c, its exact raw click count, whatever w is. So 500/100/20
+--      keep the meaning they have always had, and re-fitting them to the inflated weighted
+--      distribution would be fitting a label to an artefact.
+--   2. IT NEVER OVER-CLAIMS. n_eff <= n always; measured, ZERO of 10,439 cells land in a higher
+--      band under n_eff than their raw click count would give. The weighted count promotes 54
+--      cells past 500 that do not have 500 raw clicks; n_eff promotes none.
+-- The inflation it removes runs at a median of 2.0x, p95 5.0x (max 6.0x, which is rounding on
+-- single-digit cells; the theoretical ceiling is the 5x top weight).
+-- n_eff is INTERNAL: publishing it would add a 16th column and break the diff contract with the
+-- live view that this whole view exists to serve. The formula is right here, in p_lvl, so it is
+-- recomputable by anyone auditing a label. Revisit when Task 9 is free to change the contract.
 -- ---------------------------------------------------------------------------------------------
 --
 -- DIFFERENCES FROM V_INTENT_CVR_CURVE THAT ARE NOT IN THE FOUR PLANNED CHANGES, all deliberate:
@@ -57,8 +100,16 @@ AS
 --     BLITZ-scoped or family-scoped row from silently handing MAX() a second candidate — the
 --     same fix already made in both index views.
 --
--- READ confidence BEFORE ACTING. base_clicks < INSUFFICIENT means the number is mostly its
--- parent's, not its own.
+-- A LOSS THIS DESIGN ACCEPTS, stated because nothing else states it: A DORMANT CELL IS NOW
+-- INDISTINGUISHABLE FROM A NEVER-RUN ONE. Live reported a cell's full historical click count, so
+-- a reader could see "this ran 5,000 clicks two years ago and has been quiet since". Here that
+-- cell reports base_clicks = 0, base_self_weight 0 and INSUFFICIENT — identical to an intent this
+-- product has never advertised on. 30.7% of rows are in that state. The estimator is right to
+-- ignore stale evidence when pricing; the GRID has nonetheless lost the ability to tell "dormant"
+-- from "new", which matters to anyone reading it to decide what to revive. Not fixed here.
+--
+-- READ confidence BEFORE ACTING. INSUFFICIENT means the number is mostly its parent's, not its
+-- own — and now also means the cell's own recent evidence is thin, which is the stronger claim.
 --
 -- Dependencies: FACT_AMAZON_ADS, V_INTENT_RESOLVED, DIM_PRODUCT, DE_COACH_THRESHOLDS,
 --               DE_INTENT_INDEX_REGISTRY, V_INTENT_IDX_SEASON_MONTH, V_INTENT_IDX_SEASON_PHASE
@@ -112,11 +163,18 @@ obs_w AS (
 obs AS (
   SELECT *,
     Ads_clicks * recency_w AS w_clicks,
-    Ads_orders * recency_w AS w_orders
+    Ads_orders * recency_w AS w_orders,
+    -- Sum of SQUARED weights, the denominator of Kish's effective sample size. Carried from here
+    -- so the confidence label can be banded on evidence rather than on inflated evidence; see the
+    -- CONFIDENCE block in the header. Every click in this row shares one weight, so the row's
+    -- contribution to SUM(w^2) is clicks * w * w.
+    Ads_clicks * recency_w * recency_w AS w2_clicks
   FROM obs_w
 ),
 
 -- ---- Rung 4: global -------------------------------------------------------
+-- WEIGHTED, deliberately. See the header: an unweighted g would be the stale prior every thin
+-- cell shrinks toward, and it carries 1.3412 of the view's 1.5508 level shift.
 g AS (SELECT SAFE_DIVIDE(SUM(w_orders), SUM(w_clicks)) AS cvr FROM obs),
 
 -- ---- Rung 3: intent (all products, all months) ----------------------------
@@ -145,6 +203,12 @@ f_lvl AS (
 p_lvl AS (
   SELECT o.parent_name, o.product_short_name, o.intent_key, ANY_VALUE(o.intent_type) AS intent_type,
     SUM(o.w_clicks) AS base_clicks, SUM(o.w_orders) AS base_orders,
+    -- KISH EFFECTIVE SAMPLE SIZE, (SUM w)^2 / SUM(w^2), in raw-click units. Internal: it bands
+    -- `confidence` and is not published, because a 16th column would break the diff contract with
+    -- the live view. NULL when a cell has no surviving evidence, which the CASE reads as
+    -- INSUFFICIENT. Full argument in the header's CONFIDENCE block.
+    CAST(ROUND(SAFE_DIVIDE(POW(SUM(o.w_clicks), 2), NULLIF(SUM(o.w2_clicks), 0))) AS INT64)
+      AS base_clicks_eff,
     SAFE_DIVIDE(SUM(o.w_orders) + p.k_base * f_lvl.cvr,
                 SUM(o.w_clicks) + p.k_base) AS base_cvr,
     f_lvl.cvr AS family_cvr
@@ -173,18 +237,18 @@ active_idx AS (
 -- curve. Spec section 7.5 sets the trigger to re-derive it: whichever comes first of season_phase
 -- being activated or history passing three occurrences. It is NOT re-derived here, because
 -- season_phase is still is_active = FALSE and this view applies nothing.
--- V_INTENT_IDX_SEASON_MONTH's support is a plain click count and needs no such reading.
+-- V_INTENT_IDX_SEASON_MONTH's support is a plain click count and needs no such reading. THE TWO
+-- SUPPORT FIGURES ARE THEREFORE NOT COMMENSURABLE, which is one reason season_clicks below
+-- publishes NULL rather than trying to combine them.
 idx_month AS (
   SELECT s.intent_type, s.month_of_year,
-    1.0 + (s.index_value - 1.0) * LEAST(1.0, SAFE_DIVIDE(s.support_clicks, p.idx_min_support)) AS iv,
-    s.support_clicks
+    1.0 + (s.index_value - 1.0) * LEAST(1.0, SAFE_DIVIDE(s.support_clicks, p.idx_min_support)) AS iv
   FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_MONTH` s CROSS JOIN params p
   WHERE 'season_month' IN (SELECT index_name FROM active_idx)
 ),
 idx_phase AS (
   SELECT s.intent_key, s.month_of_year,
-    1.0 + (s.index_value - 1.0) * LEAST(1.0, SAFE_DIVIDE(s.support_clicks, p.idx_min_support)) AS iv,
-    s.support_clicks
+    1.0 + (s.index_value - 1.0) * LEAST(1.0, SAFE_DIVIDE(s.support_clicks, p.idx_min_support)) AS iv
   FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE` s CROSS JOIN params p
   WHERE 'season_phase' IN (SELECT index_name FROM active_idx)
 ),
@@ -206,42 +270,53 @@ SELECT
 
   -- LEAST(..., 1.0) is a guard, not a working clamp: base_cvr, calibration and every shrunk index
   -- are strictly positive and base_cvr is itself a shrunk rate, so the cap is not expected to
-  -- bind. It exists so that a future index with a large multiplier cannot price a bid off a
-  -- conversion rate above 100%.
+  -- bind — measured, the largest cvr_hat is 0.36961, leaving 2.71x of headroom. It exists so that
+  -- a future index with a large multiplier cannot price a bid off a conversion rate above 100%.
+  -- Acceptance R10 carries a PRE-CAP arm so that a cap which starts binding is DETECTABLE rather
+  -- than silently swallowed, because the post-cap value can never violate the post-cap test.
   ROUND(LEAST(pr.calibration * pl.base_cvr
               * COALESCE(im.iv, 1.0) * COALESCE(ip.iv, 1.0), 1.0), 5)    AS cvr_hat,
 
-  -- RECENCY-WEIGHTED, not raw. See the header. Same names and types as live; different scale.
+  -- RECENCY-WEIGHTED, not raw. Correct for shrinkage, wrong for a trust label — see the header.
   pl.base_clicks,
   pl.base_orders,
 
-  -- NEAREST HONEST EQUIVALENT of live's season_clicks, which was one pooled cell's raw clicks.
-  -- The registry has no single pooled cell: it has one support figure per contributing index.
-  -- The MINIMUM is published because the weakest factor is what bounds how far this row's
-  -- seasonal adjustment can be trusted. MIN over UNNEST skips NULLs, so an index that is
-  -- inactive or has no row for this cell simply does not participate; 0 means no active index
-  -- reached this row at all, which is every row while both indexes are is_active = FALSE.
-  COALESCE((SELECT MIN(s) FROM UNNEST([im.support_clicks, ip.support_clicks]) AS s), 0)
-                                                                         AS season_clicks,
-
-  -- NO EQUIVALENT EXISTS. The index contract (spec section 4.1) publishes index_value and
-  -- support_clicks and no order count, so there is no honest number to put here. Published NULL
-  -- rather than 0, because 0 would be indistinguishable from a genuine measured zero. The column
-  -- is retained because the live view emits it and this view's whole purpose is to be diffable
-  -- against that one. Nothing in the repo reads it (checked: only V_INTENT_BID_BASE reads this
-  -- view, and it selects base_cvr, season_index, cvr_hat, base_clicks, confidence and
-  -- base_self_weight).
+  -- BOTH PUBLISHED NULL, and the honest reason is the same for both: under the registry design
+  -- there is no single pooled "season cell", so there is no single number to count. Live had one
+  -- — the intent x month cell — and reported its clicks and orders.
+  --   * season_orders: no registry index publishes an order count at all. The contract (spec
+  --     section 4.1) is index_value + support_clicks and nothing else.
+  --   * season_clicks: each active index publishes its OWN support, and the two are not
+  --     commensurable — season_month's is a raw click count, season_phase's is a projected
+  --     per-day support running ~2x a one-year rate (spec section 7.5). Summing them
+  --     double-counts the same clicks; taking the MINIMUM, which an earlier cut of this view did,
+  --     names the LEAST influential factor, since an index below INTENT_IDX_MIN_SUPPORT is shrunk
+  --     to ~1.000 and contributes nothing to the row.
+  -- NULL rather than 0 in both cases: 0 is indistinguishable from a measured zero. The columns
+  -- are retained because the live view emits them and this view exists to be diffable against it.
+  -- Nothing in the repo reads either (checked: V_INTENT_BID_BASE is the only consumer of this
+  -- view, and it takes base_cvr, season_index, cvr_hat, base_clicks, confidence, base_self_weight).
+  -- IF a future consumer needs per-index support, add per-index columns to the index contract
+  -- rather than reviving a single blended number; that decision belongs with Task 8/9, when an
+  -- index is actually activated and the contract is free to change.
+  CAST(NULL AS INT64)                                                    AS season_clicks,
   CAST(NULL AS INT64)                                                    AS season_orders,
 
   ROUND(pl.family_cvr, 5)                                                AS family_cvr,
 
-  -- How much of base_cvr is the cell's own evidence rather than its family's, on WEIGHTED
-  -- clicks. clicks / (clicks + k). 0.5 means half-borrowed.
+  -- How much of base_cvr is the cell's own evidence rather than its family's. clicks / (clicks+k)
+  -- on WEIGHTED clicks, which is exactly the weight the Beta-binomial applies and exactly the
+  -- basis k_base = 400 was fit against. 0.5 means half-borrowed. Correct as it stands.
   ROUND(SAFE_DIVIDE(pl.base_clicks, pl.base_clicks + pr.k_base), 3)      AS base_self_weight,
+
+  -- BANDED ON EFFECTIVE SAMPLE SIZE, NOT ON base_clicks. The cut-points are unchanged at
+  -- 500/100/20 because n_eff is denominated in raw clicks, so they mean what they always meant.
+  -- Re-fitting them to the weighted distribution would have fitted a label to a 2x-5x artefact.
+  -- Header, CONFIDENCE block, carries the measured band populations and the argument.
   CASE
-    WHEN pl.base_clicks >= 500 THEN 'HIGH'
-    WHEN pl.base_clicks >= 100 THEN 'MEDIUM'
-    WHEN pl.base_clicks >= 20  THEN 'LOW'
+    WHEN pl.base_clicks_eff >= 500 THEN 'HIGH'
+    WHEN pl.base_clicks_eff >= 100 THEN 'MEDIUM'
+    WHEN pl.base_clicks_eff >= 20  THEN 'LOW'
     ELSE 'INSUFFICIENT'
   END                                                                    AS confidence
 FROM p_lvl pl
