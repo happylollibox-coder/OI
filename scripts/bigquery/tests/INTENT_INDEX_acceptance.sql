@@ -1,7 +1,29 @@
 -- =============================================================================================
 -- INTENT INDEX REGISTRY acceptance. Every check returns a VIOLATION COUNT; PASS is 0.
 -- Spec: docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md
+--
+-- THIS FILE IS A TWO-STATEMENT SCRIPT, NOT ONE QUERY, AND THAT SPLIT IS FORCED (2026-09-01).
+-- R15 reads V_INTENT_BID_BASE, which inlines V_INTENT_CVR_CURVE. Folded into the single
+-- statement, the suite was REJECTED for the third time in this chain's history: 76,659 CPU
+-- seconds against a 43,500 limit at 170 MB of analysis bytes. The parts do not explain the
+-- whole -- the suite alone measured 17,280 slot-seconds and R15's catalog arm 7,221 on its own,
+-- so the excess is planner interaction, the same class as the "too many subqueries" blowup that
+-- comes from a query inlining two heavy views at once (here: the SERVED curve under R15 and the
+-- SHADOW curve under R09-R11). Splitting R15 into its own statement gives each its own CPU/bytes
+-- budget. Measured on the split run that replaced the rejected one: statement 1 (R15) 7,540
+-- slot-seconds on 171 MB, statement 2 (everything else) 17,651 on 143 MB, 25,191 for the script
+-- -- against 76,659 for the same work merged. `bq query` runs the script and prints the final
+-- statement's table, so the invocation is unchanged.
+-- DO NOT re-merge the two statements without re-measuring.
 -- =============================================================================================
+
+-- R15 runs first and alone. Its comment, controls and cost are documented at the r15 CTE below.
+CREATE TEMP TABLE r15_result AS
+SELECT COALESCE(CAST(ABS(SAFE_DIVIDE(cat, hou) - 1.0) > 0.15 AS INT64), 1) AS v FROM (
+  SELECT (SELECT SAFE_DIVIDE(SUM(gp_per_order * month_clicks), NULLIF(SUM(month_clicks), 0))
+          FROM `onyga-482313.OI.V_INTENT_BID_BASE` WHERE month_clicks > 0) AS cat,
+         (SELECT SAFE_DIVIDE(SUM(weighted_gross_profit), NULLIF(SUM(weighted_orders), 0))
+          FROM `onyga-482313.OI.V_KEYWORD_RATES`) AS hou);
 
 -- R01 THE REGISTRY EXISTS AND HAS A UNIQUE KEY. A duplicate index_name would apply the same
 --     multiplier twice and square it.
@@ -296,6 +318,44 @@ r14 AS (
   SELECT COUNTIF(fitted_through IS NULL OR fitted_through >= target_month) AS v
   FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD` WHERE target_month IS NOT NULL
 ),
+-- R15 THE CATALOG AND THE ENGINE PRICE AGAINST THE SAME MONEY. V_KEYWORD_RATES exists precisely
+--     so there is one definition of margin; a catalog gp_per_order more than 15% away from the
+--     house's recency-weighted figure means two definitions are live again.
+--     THIS CHECK READS THE VIEW, NOT T_INTENT_BID_BASE, AND THAT IS THE WHOLE POINT OF IT.
+--     V_INTENT_BID_BASE reflects a change to the margin source immediately; the T_ copy only
+--     moves when SP_REFRESH_SEARCH_TERM_INTENT rebuilds it, so the table LAGS the view by
+--     however long it has been since the last refresh. Read a red R15 against a green view as
+--     "the T_ table is stale", not as "the view is wrong" -- and note the converse is what this
+--     check cannot see: it says nothing about what the T_ copy, which every consumer actually
+--     reads, is currently priced at. Measured 2026-09-01, before this task's rebuild:
+--     view $13.91 (passes, +3.8% from the house's $13.39) while T_INTENT_BID_BASE still carried
+--     $19.96 (+49%, would fail). Both numbers are real; only the view is current.
+--     WHY THE TWO SIDES ARE WEIGHTED DIFFERENTLY, ON PURPOSE. The catalog arm is weighted by
+--     catalog clicks and the house arm by weighted orders, so even a perfect read leaves a mix
+--     difference -- +3.8% today. The 15% band is sized to absorb that and still catch a genuine
+--     second definition (the defect this replaced sat at +44% on the view and +49% in the table).
+--     Tightening it below about 8% would make it a test of product mix, not of margin source.
+--     COALESCE(..., 1) IS LOAD-BEARING and is this check's emptiness guard. Over an empty
+--     V_INTENT_BID_BASE the inner SUM is NULL, SAFE_DIVIDE is NULL and CAST(NULL > 0.15 AS INT64)
+--     is NULL -- which is not the 0 this file defines as PASS but renders as a blank cell and
+--     reads like one. Verified by negative control 2026-09-01: the catalog arm restricted to
+--     `WHERE FALSE` returns NULL in the bare form and 1 in the COALESCEd form; and substituting
+--     the T_ table's $19.96 for the view's figure returns 1 while the view's own $13.91 returns 0,
+--     so the check fires on a wrong number as well as on no number.
+--     COST, MEASURED, because this file has now been rejected at the CPU ceiling three times.
+--     The catalog arm is one full evaluation of V_INTENT_BID_BASE: 7,221 slot-seconds / 131 MB
+--     standalone and 7,540 / 171 MB as statement 1 of the script (2026-09-01), essentially all of
+--     which is V_INTENT_CVR_CURVE underneath it -- that view alone measures 7,598 slot-seconds,
+--     and there is no cheaper formulation, weighting by base_clicks instead of month_clicks
+--     measured the same to four decimals.
+--     The suite ran 17,280 slot-seconds before this check, and folding R15 into that single
+--     statement blew the ceiling at 76,659 -- which is why this check lives in its own statement
+--     at the top of the file (see the header). If even that breaches the ceiling one day, the
+--     mitigation is to point the catalog arm at T_INTENT_BID_BASE and accept the lag described
+--     above, NOT to drop the check.
+--     THE CHECK ITSELF IS THE TEMP TABLE AT THE TOP OF THIS FILE; this CTE only carries it into
+--     the result set.
+r15 AS (SELECT v FROM r15_result),
 -- R16 THE MATERIALISED EVIDENCE IS FRESH. A stale table means promotion decisions are being made
 --     against evidence from before the last curve change -- and because R12/R13/R14 read the
 --     tables rather than the views, a stale table also means those three checks are green about
@@ -386,5 +446,6 @@ FROM verdicts CROSS JOIN UNNEST([
 UNION ALL SELECT 'R12 every registered index scored under both tests', v FROM r12
 UNION ALL SELECT 'R13 scorecard verdicts from the closed set', v FROM r13
 UNION ALL SELECT 'R14 scorecard base fitted strictly before target month', v FROM r14
+UNION ALL SELECT 'R15 catalog gp_per_order within 15% of the house definition (VIEW)', v FROM r15
 UNION ALL SELECT 'R16 materialised scorecard and tuning fresh within 8 days', v FROM r16
 ORDER BY check_name;
