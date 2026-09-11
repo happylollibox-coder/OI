@@ -310,10 +310,12 @@ r13 AS (
 --     has not been scored on earlier evidence, it has been scored on nothing, and `NULL >=
 --     target_month` is NULL, which COUNTIF does not count.
 --     WHAT THIS DOES NOT COVER, stated because the check's name overclaims: it proves the BASE
---     RATE is walk-forward. The two index views are read as deployed, fitted on all of history
---     including the target month, so index verdicts carry leakage this check cannot see. That is
---     limitation L1 in the scorecard's own header, and it is why an IMPROVES here means "take it
---     to the money gate", never "proven".
+--     RATE is walk-forward. The INDEX values are a separate question: since 2026-09-11 they come
+--     from T_INTENT_IDX_HISTORY, scored with the newest snapshot strictly before the target month
+--     where one exists, and every row where none exists yet carries leakage_flag = TRUE. R20
+--     checks those labels against the history. Until snapshots accumulate (the first is 2026-09)
+--     every row is flagged, so an IMPROVES here still means "take it to the money gate", never
+--     "proven" -- read leakage_flag before reading the verdict.
 r14 AS (
   SELECT COUNTIF(fitted_through IS NULL OR fitted_through >= target_month) AS v
   FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD` WHERE target_month IS NOT NULL
@@ -376,6 +378,99 @@ r16 AS (
        + COALESCE(CAST(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(),
            (SELECT MAX(scored_at) FROM `onyga-482313.OI.T_INTENT_BASE_TUNING`), DAY) > 8
          AS INT64), 1) AS v
+),
+-- R17-R20 COVER T_INTENT_IDX_HISTORY, the index snapshot table added 2026-09-11, and the
+-- scorecard's use of it. They read the TABLE and the materialised scorecard only -- the history
+-- is a few hundred rows and the scorecard 76, so these are free, and none of them touches an
+-- index view or the curve.
+--
+-- R17 THE HISTORY HAS THIS MONTH'S SNAPSHOT FOR EVERY REGISTERED INDEX. If it fires, one of two
+--     things is true: SP_SCORE_INTENT_INDEXES has not run this UTC month, so the scorecard's
+--     picker falls back to an older snapshot for every target month and every leakage label is
+--     stale; or the procedure REFUSED a registry row at snapshot time (its guards RAISE on a
+--     source_object that is not ^V_INTENT_IDX_[A-Z_]+$, a join_keys CSV outside the four allowed
+--     names, a declared key arriving NULL, a non-positive index_value, an empty source) and that
+--     index is now scored off last month's values or not at all. Same clock as the procedure:
+--     CURRENT_DATE() with no zone, i.e. UTC, on both sides.
+--     THE EMPTY-REGISTRY TERM IS LOAD-BEARING, same shape as R12: an empty left side of EXCEPT
+--     cannot miss anything. Verified by negative control 2026-09-11: registry filtered to zero
+--     rows -> bare form 0, this form 1; history without season_phase -> 1; history emptied -> 2;
+--     live -> 0.
+r17 AS (
+  SELECT (SELECT COUNT(*) FROM (
+            SELECT index_name FROM `onyga-482313.OI.DE_INTENT_INDEX_REGISTRY`
+            EXCEPT DISTINCT
+            SELECT index_name FROM `onyga-482313.OI.T_INTENT_IDX_HISTORY`
+            WHERE snapshot_month = DATE_TRUNC(CURRENT_DATE(), MONTH)))
+       + CAST((SELECT COUNT(*) FROM `onyga-482313.OI.DE_INTENT_INDEX_REGISTRY`) = 0 AS INT64) AS v
+),
+-- R18 NO HISTORY ROW IS NULL ON ALL THREE WILDCARD KEYS. The scorecard joins a history row to an
+--     observation with (key IS NULL OR key = obs.key) on product_short_name / intent_key /
+--     intent_type, so a row NULL on all three matches EVERY observation for its index in that
+--     calendar month -- a global multiplier nobody registered. The procedure refuses to write
+--     one (join_keys must name at least one non-month key); this checks the TABLE, because the
+--     table accumulates and a hand INSERT or an earlier procedure version could have written one
+--     that no rerun will clean up.
+--     COUNT(*) = 0 IS LOAD-BEARING: COUNTIF over an empty table is 0. Verified by negative
+--     control 2026-09-11: one all-NULL row appended -> 1; history emptied -> bare 0, this form 1;
+--     live -> 0.
+r18 AS (
+  SELECT COUNTIF(product_short_name IS NULL AND intent_key IS NULL AND intent_type IS NULL)
+       + CAST(COUNT(*) = 0 AS INT64) AS v
+  FROM `onyga-482313.OI.T_INTENT_IDX_HISTORY`
+),
+-- R19 THE HISTORY IS UNIQUE ON ITS GRAIN: snapshot_month x index_name x the three wildcard keys
+--     x month_of_year, NULLs grouping together as GROUP BY does. A duplicate fans the scorecard's
+--     cell x index join out and counts that cell's clicks twice in the error, silently. The
+--     procedure's DELETE-then-INSERT is idempotent per run, but two runs overlapping in time can
+--     both pass the DELETE before either INSERTs -- the orchestrator runs three times a day and a
+--     hand run during one of them is the realistic path. Verified by negative control
+--     2026-09-11: one row duplicated -> 1; history emptied -> bare 0, this form 1; live -> 0.
+r19 AS (
+  SELECT COUNTIF(n > 1) + CAST(COUNT(*) = 0 AS INT64) AS v
+  FROM (SELECT snapshot_month, index_name, product_short_name, intent_key, intent_type,
+               month_of_year, COUNT(*) AS n
+        FROM `onyga-482313.OI.T_INTENT_IDX_HISTORY` GROUP BY 1, 2, 3, 4, 5, 6)
+),
+-- R20 THE SCORECARD'S LEAKAGE LABELS MATCH THE HISTORY. For every per-month row,
+--     snapshot_month_used must be the newest snapshot STRICTLY before the target month (else the
+--     latest one), and leakage_flag must be TRUE exactly when no strictly-earlier snapshot
+--     exists; every pooled row's flag must be the OR of its months. If it fires, the materialised
+--     scorecard was built against a different history than the one on disk -- the history grew,
+--     was replaced, or the view's picker was edited, and SP_SCORE_INTENT_INDEXES was not re-run
+--     -- and an IMPROVES is being read under the wrong leakage label: an in-sample verdict
+--     passing as out-of-sample, which is the one thing the history table exists to prevent.
+--     TODAY EVERY ROW IS FLAGGED (one snapshot, 2026-09, and no target month is later than it),
+--     so a check that merely counted TRUEs would be vacuous; this one RECOMPUTES the expected
+--     label from the history and compares. Verified by negative control 2026-09-11, each on a
+--     doctored temp copy: one leakage_flag flipped -> 1; snapshot_month_used shifted on one
+--     target month -> 4; one pooled row's flag wrong -> 2; a 2026-03 snapshot added to the
+--     history -> 24 (the six later target months x 2 indexes x 2 tests now expect 2026-03 and
+--     FALSE while the scorecard still says 2026-09 and TRUE); history emptied -> 72; scorecard
+--     emptied -> bare 0, this form 1; live -> 0.
+r20 AS (
+  SELECT (SELECT COUNTIF(s.snapshot_month_used IS DISTINCT FROM e.exp_snap
+                      OR s.leakage_flag        IS DISTINCT FROM e.exp_leak)
+          FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD` s
+          LEFT JOIN (
+            SELECT s2.index_name, s2.target_month,
+                   COALESCE(MAX(IF(h.snapshot_month < s2.target_month, h.snapshot_month, NULL)),
+                            MAX(h.snapshot_month))                                  AS exp_snap,
+                   MAX(IF(h.snapshot_month < s2.target_month, h.snapshot_month, NULL)) IS NULL AS exp_leak
+            FROM (SELECT DISTINCT index_name, target_month
+                  FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD` WHERE target_month IS NOT NULL) s2
+            LEFT JOIN (SELECT DISTINCT index_name, snapshot_month
+                       FROM `onyga-482313.OI.T_INTENT_IDX_HISTORY`) h USING (index_name)
+            GROUP BY 1, 2) e
+            ON e.index_name = s.index_name AND e.target_month = s.target_month
+          WHERE s.target_month IS NOT NULL)
+       + (SELECT COUNTIF(p.leakage_flag IS DISTINCT FROM m.any_leak)
+          FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD` p
+          JOIN (SELECT index_name, test_kind, LOGICAL_OR(leakage_flag) AS any_leak
+                FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD`
+                WHERE target_month IS NOT NULL GROUP BY 1, 2) m USING (index_name, test_kind)
+          WHERE p.target_month IS NULL)
+       + (SELECT CAST(COUNT(*) = 0 AS INT64) FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD`) AS v
 )
 SELECT 'R01 registry key unique' AS check_name, v FROM r01
 UNION ALL SELECT 'R02 thresholds present', v FROM r02
@@ -448,4 +543,8 @@ UNION ALL SELECT 'R13 scorecard verdicts from the closed set', v FROM r13
 UNION ALL SELECT 'R14 scorecard base fitted strictly before target month', v FROM r14
 UNION ALL SELECT 'R15 catalog gp_per_order within 15% of the house definition (VIEW)', v FROM r15
 UNION ALL SELECT 'R16 materialised scorecard and tuning fresh within 8 days', v FROM r16
+UNION ALL SELECT 'R17 history has this month\'s snapshot for every registered index', v FROM r17
+UNION ALL SELECT 'R18 no history row null on all three wildcard keys', v FROM r18
+UNION ALL SELECT 'R19 history unique on its grain', v FROM r19
+UNION ALL SELECT 'R20 scorecard leakage labels match the history', v FROM r20
 ORDER BY check_name;
