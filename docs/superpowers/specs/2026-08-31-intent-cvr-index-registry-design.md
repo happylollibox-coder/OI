@@ -378,3 +378,117 @@ curve carries.
 - 24 months of history exist; 18 are scored. A yearly-seasonal index therefore gets at most **two
   observations per month**, which is thin. `season_phase` verdicts should be read with that in
   mind, and it is a reason to prefer manual promotion.
+
+## 9. SELF-MAINTENANCE — amendment 2026-09-11
+
+**Status:** shipped 2026-09-11, commits on `feat/campaign-first-strategy`. Written after a
+ten-day check found the system built on 08-31 had never run: `T_INTENT_INDEX_SCORECARD` and
+`T_INTENT_BASE_TUNING` were ten days stale, R16 was firing, `SP_SCORE_INTENT_INDEXES` was called
+from nowhere, and the calibration constant sat 1.8% under what the tuning view said. Four pieces
+fix that. Nothing here changes a bid: `V_INTENT_CVR_CURVE` (the served curve) is untouched, both
+registry rows remain `is_active = FALSE`, and Task 9 promotion is still a human decision.
+
+### 9.1 `T_INTENT_IDX_HISTORY` — the scorecard stops reading the future, by accumulation
+
+Section 8 stated limitation L1: the index views were read *as deployed* at scoring time, fitted
+on all of history including the months they were scored against, so every index verdict was
+optimistic by an unmeasured amount. The fix is a table, not a re-fit.
+
+`T_INTENT_IDX_HISTORY` holds one snapshot per registered index per UTC month, in one long shape:
+the four possible join keys as columns (`product_short_name`, `intent_key`, `intent_type`,
+`month_of_year`), unused ones NULL, plus `index_value` and `support_clicks` as the source view
+published them. `SP_SCORE_INTENT_INDEXES` step 1 writes it for **every** registry row, active or
+not (an inactive index must still be scored or there is nothing to promote on), by DELETE +
+INSERT per index per month, so the last run in a month is that month's snapshot. The INSERT is
+dynamic SQL built from the registry, and it is guarded rather than trusted: `index_name` goes in
+as a query parameter, `source_object` must match `^V_INTENT_IDX_[A-Z_]+$`, `join_keys` must be a
+CSV of the four allowed names including `month_of_year` and at least one other, and a declared
+key arriving NULL, a non-positive `index_value` or an empty source RAISEs — a registry typo stops
+the run instead of snapshotting the wrong thing.
+
+`V_INTENT_INDEX_SCORECARD` now scores target month M with the newest snapshot **strictly before**
+M. Where none exists it uses the latest snapshot and sets `leakage_flag = TRUE`;
+`snapshot_month_used` names the snapshot on every per-month row. Stated plainly: **every target
+month older than the first snapshot still leaks, and is flagged.** The first snapshot is 2026-09,
+so today all 76 rows carry `leakage_flag = TRUE` and the verdicts are numerically identical to
+the 08-31 cut (measured: zero cell differences on the 15 original columns). Leakage clears one
+target month per calendar month from 2026-10 onward, with nothing to edit. An IMPROVES on a
+flagged row still means "take it to the money gate"; an IMPROVES on an unflagged row is a genuine
+out-of-sample result. Read the flag before the verdict.
+
+Cost fell rather than rose: 970 slot-seconds per scorecard scan against 5,575 before, because the
+index views are no longer inlined in the view — their scans moved into the snapshot INSERTs
+(1,873 and 2,962 slot-seconds, once per run). Whole procedure ~6,700 slot-seconds.
+
+### 9.2 Registry-driven scorecard — a new index is one view and one registry row
+
+No index name appears in the scorecard's SQL. The set scored is the row set of
+`DE_INTENT_INDEX_REGISTRY`; index values come from the history; the join is the NULL-wildcard
+contract (`h.key IS NULL OR h.key = obs.key` on the three non-month keys, strict equality on
+`month_of_year`). The active set for LEAVE_ONE_OUT is whatever the registry says `is_active` at
+scoring time, falling back to the whole registry while nothing is active (which reproduces the
+08-31 output exactly). Adding an index is therefore: write `V_INTENT_IDX_<NAME>` to the section 4.1
+contract, INSERT a registry row, wait for the next orchestrator run. Nothing else.
+
+### 9.3 Bounded calibration refit — `INTENT_CVR_CALIBRATION` moves itself inside a band
+
+Section 4.4 said the constant "will drift" and "is a threshold row with a refit query".
+`SP_SCORE_INTENT_INDEXES` step 4 is that query, with the same automation-proposes /
+human-disposes contract the registry uses for `is_active`:
+
+| condition | action | threshold row | log |
+|---|---|---|---|
+| tuning row for `nested_1_2_3_6_12` @ `INTENT_CVR_BASE_PRIOR_CLICKS` missing, or < 200 predictions | SKIPPED | `suggestion_reason` only | row |
+| implied rounds (4 dp) to current | UNCHANGED | not written | row |
+| `ABS(implied / current − 1) <= INTENT_CVR_REFIT_MAX_STEP` (new threshold, **0.10**) | APPLIED | `threshold_value` moved, `source = AUTO_REFIT`, `updated_by = SP_SCORE_INTENT_INDEXES` | row |
+| larger | SUGGESTED | `suggested_value` / `suggestion_reason` written, **`threshold_value` untouched** | row |
+
+Every outcome is one row in `T_INTENT_REFIT_LOG` (previous, implied, new, step, band, n,
+action, reason). First live run: **APPLIED 1.1510 → 1.1717 (+1.80%, 1,153 predictions)**.
+Proven on temp copies of the three tables with the same logic: +25% goes SUGGESTED and leaves
+`threshold_value` alone; 100 predictions goes SKIPPED; an implied equal to current goes
+UNCHANGED. Consequence: `V_INTENT_CVR_CURVE_SHADOW` reads the constant live, so an APPLIED step
+moves the shadow (and the catalog, once promoted) by exactly the step on its next scan;
+`V_INTENT_CVR_CURVE` does not read it, so until promotion a refit changes evidence, not bids.
+The band's 0.10 is a judgement (a few percent of monthly drift vs. the ~35% swing of a regime
+change), not a measurement — `T_INTENT_REFIT_LOG` is the history to re-derive it from.
+
+### 9.4 The chain and its schedule
+
+`SP_REFRESH_SEARCH_TERM_INTENT` now CALLs `SP_SCORE_INTENT_INDEXES` right after it rebuilds
+`T_INTENT_CVR_CURVE` and `T_INTENT_BID_BASE`, and `SP_ORCHESTRATE_DAILY_REFRESH` runs
+`SP_REFRESH_SEARCH_TERM_INTENT` as **Refresh Task 16.1**, immediately after `SP_FACT_AMAZON_ADS`,
+mirroring every other step's `LOG_PIPELINE_RUNS` pattern. The orchestrator runs three times a day
+(05:00, ~07:40, ~16:07 UTC), so the whole chain — catalog, snapshots, scorecard, tuning grid,
+refit — has one schedule and can never be stale relative to the catalog. Each statement inside a
+CALLed procedure has its own on-demand CPU budget, so chaining does not sum toward the ceiling
+that rejected this view chain three times. Expect up to three `T_INTENT_REFIT_LOG` rows a day,
+almost all UNCHANGED.
+
+### 9.5 New acceptance checks (all with negative controls recorded in the file)
+
+| check | fires when |
+|---|---|
+| R17 | any registry row has no snapshot for the current UTC month |
+| R18 | a history row is NULL on all three wildcard keys (a global multiplier nobody registered) |
+| R19 | the history is not unique on its grain (a duplicate double-counts a cell's clicks) |
+| R20 | the scorecard's `leakage_flag` / `snapshot_month_used` disagree with what the history implies (recomputed, not counted — today every row is TRUE, so a count would be vacuous) |
+| R21 | the constant is more than the band from the tuning table's implied value AND the latest log row is not SUGGESTED (silent drift) |
+| R22 | the latest refit log row is older than the tuning table's `scored_at` or than 8 days |
+| R02b (amended) | the constant differs from the latest APPLIED log value (seed 1.151 before any) — a hand edit outside the procedure |
+
+Suite: R01–R22 all 0 on 2026-09-11.
+
+### 9.6 What still needs a human
+
+- **Promotion.** `is_active` is never written by automation. Both indexes are still inactive; the
+  scorecard's own reading is unchanged from 08-31 (`season_month` pools to IMPROVES −16.4% but
+  wins only 8 of 18 months; `season_phase` NEUTRAL), and every row is leakage-flagged until
+  snapshots accumulate. Task 9 (shadow → live) is held.
+- **Out-of-band refits.** A SUGGESTED row is a request for a decision; R21 stays green because
+  it was reported, not because it was resolved.
+- **Edits between runs.** A change to an index view, a threshold or the curve that lands between
+  orchestrator runs is scored only at the next run; re-run `SP_REFRESH_SEARCH_TERM_INTENT` by hand
+  if a decision cannot wait.
+- **Not in scope, still stale:** `DE_SEARCH_TERM_INTENT` verification (30 VERIFIED / 353k PENDING,
+  unchanged since 09-01) is a human queue, not a pipeline defect.
