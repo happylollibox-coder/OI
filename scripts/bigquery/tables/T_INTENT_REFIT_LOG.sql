@@ -16,8 +16,9 @@
 --   APPLIED    threshold_value was moved to implied_value (rounded to 4 dp); step within the band.
 --   SUGGESTED  step outside the band; suggested_value / suggestion_reason written on the threshold
 --              row, threshold_value NOT touched. A human decides.
---   UNCHANGED  implied_value rounds to the current value; nothing written to the threshold row,
---              so its updated_at keeps meaning "when the constant last moved".
+--   UNCHANGED  |step| is below INTENT_CVR_REFIT_MIN_STEP (0.0025, the dead-band added 2026-09-12)
+--              or implied rounds to the current value; nothing written to the threshold row, so
+--              its updated_at keeps meaning "when the constant last moved". Expect most rows here.
 --   SKIPPED    no usable tuning row (shape/k missing from T_INTENT_BASE_TUNING, or fewer than 200
 --              predictions); suggestion_reason on the threshold row says why, nothing else moves.
 --

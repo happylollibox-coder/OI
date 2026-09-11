@@ -439,7 +439,7 @@ human-disposes contract the registry uses for `is_active`:
 | condition | action | threshold row | log |
 |---|---|---|---|
 | tuning row for `nested_1_2_3_6_12` @ `INTENT_CVR_BASE_PRIOR_CLICKS` missing, or < 200 predictions | SKIPPED | `suggestion_reason` only | row |
-| implied rounds (4 dp) to current | UNCHANGED | not written | row |
+| `ABS(implied / current − 1) < INTENT_CVR_REFIT_MIN_STEP` (**0.0025**, dead-band added 2026-09-12) or implied rounds (4 dp) to current | UNCHANGED | not written | row |
 | `ABS(implied / current − 1) <= INTENT_CVR_REFIT_MAX_STEP` (new threshold, **0.10**) | APPLIED | `threshold_value` moved, `source = AUTO_REFIT`, `updated_by = SP_SCORE_INTENT_INDEXES` | row |
 | larger | SUGGESTED | `suggested_value` / `suggestion_reason` written, **`threshold_value` untouched** | row |
 
@@ -452,6 +452,10 @@ moves the shadow (and the catalog, once promoted) by exactly the step on its nex
 `V_INTENT_CVR_CURVE` does not read it, so until promotion a refit changes evidence, not bids.
 The band's 0.10 is a judgement (a few percent of monthly drift vs. the ~35% swing of a regime
 change), not a measurement — `T_INTENT_REFIT_LOG` is the history to re-derive it from.
+**Dead-band, 2026-09-12.** The first scheduled run applied a +0.01% move (1.1717 → 1.1718): a few
+hours of clicks shift the implied value by ~0.0001, so without a floor the procedure would rewrite
+the constant three times a day and `updated_at` would stop meaning anything. Steps below a quarter
+percent are now UNCHANGED; ordinary drift accumulates and applies as one honest move about weekly.
 
 ### 9.4 The chain and its schedule
 

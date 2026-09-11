@@ -73,7 +73,8 @@ BEGIN
   -- same automation-proposes / human-disposes contract as the registry: a step of at most
   -- INTENT_CVR_REFIT_MAX_STEP (0.10 = ten percent) is APPLIED and logged; a larger one is
   -- SUGGESTED -- suggested_value / suggestion_reason written, threshold_value NOT touched, logged
-  -- -- and a human decides; an implied value that rounds to the current one is UNCHANGED and the
+  -- -- and a human decides; a step smaller than INTENT_CVR_REFIT_MIN_STEP (0.0025, the dead-band
+  -- added 2026-09-12 after the first scheduled run applied a +0.01% move) is UNCHANGED and the
   -- threshold row is not written at all, so its updated_at keeps meaning "when it last moved";
   -- no usable tuning row (missing, or under 200 predictions) is SKIPPED with the reason on the
   -- threshold row. Every outcome is one row in T_INTENT_REFIT_LOG.
@@ -212,9 +213,10 @@ BEGIN
   -- the head of a block). Reads the tuning row for the shape the shadow curve ships
   -- (nested_1_2_3_6_12, spec 4.4) at the prior the shadow reads (INTENT_CVR_BASE_PRIOR_CLICKS),
   -- so a change to the prior re-targets the refit on its own. The arithmetic: step = implied /
-  -- current - 1; APPLIED if |step| <= INTENT_CVR_REFIT_MAX_STEP, SUGGESTED otherwise, UNCHANGED if
-  -- implied rounds (4 dp, the stored precision) to the current value, SKIPPED if the tuning row
-  -- is missing or rests on fewer than 200 predictions. Every path writes T_INTENT_REFIT_LOG.
+  -- current - 1; UNCHANGED if |step| < INTENT_CVR_REFIT_MIN_STEP (or implied rounds to current at
+  -- the stored 4 dp), APPLIED if |step| <= INTENT_CVR_REFIT_MAX_STEP, SUGGESTED beyond it, SKIPPED
+  -- if the tuning row is missing or rests on fewer than 200 predictions. Every path writes
+  -- T_INTENT_REFIT_LOG.
   -- The threshold row is addressed by the full key the readers use -- strategy_id INTENT,
   -- coach_mode GUARDIAN, product_family NULL -- because a row under any other mode is a
   -- different threshold to every view that reads this one.
@@ -223,6 +225,7 @@ BEGIN
     DECLARE tune_k     FLOAT64;
     DECLARE cal_cur    FLOAT64;
     DECLARE max_step   FLOAT64;
+    DECLARE min_step   FLOAT64;
     DECLARE cal_new    FLOAT64;
     DECLARE cal_n      INT64;
     DECLARE step_pct   FLOAT64;
@@ -240,10 +243,14 @@ BEGIN
                     FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
                     WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND product_family IS NULL);
 
-    IF tune_k IS NULL OR cal_cur IS NULL OR max_step IS NULL THEN
+    SET min_step = (SELECT MAX(IF(threshold_key = 'INTENT_CVR_REFIT_MIN_STEP', threshold_value, NULL))
+                    FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
+                    WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND product_family IS NULL);
+
+    IF tune_k IS NULL OR cal_cur IS NULL OR max_step IS NULL OR min_step IS NULL THEN
       RAISE USING MESSAGE = FORMAT(
-        'SP_SCORE_INTENT_INDEXES step 4: threshold missing under strategy_id INTENT / coach_mode GUARDIAN / product_family NULL (k_base %T, calibration %T, max_step %T). Refusing to refit against an unknown band.',
-        tune_k, cal_cur, max_step);
+        'SP_SCORE_INTENT_INDEXES step 4: threshold missing under strategy_id INTENT / coach_mode GUARDIAN / product_family NULL (k_base %T, calibration %T, max_step %T, min_step %T). Refusing to refit against an unknown band.',
+        tune_k, cal_cur, max_step, min_step);
     END IF;
 
     -- MAX() over zero rows is NULL, not an error; a missing tuning row is a SKIPPED, not a crash.
@@ -264,9 +271,16 @@ BEGIN
         AND coach_mode = 'GUARDIAN' AND product_family IS NULL;
     ELSE
       SET step_pct = (cal_new / cal_cur - 1.0) * 100.0;
-      IF ROUND(cal_new, 4) = cal_cur THEN
+      IF ABS(cal_new / cal_cur - 1.0) < min_step OR ROUND(cal_new, 4) = cal_cur THEN
+        -- DEAD-BAND (2026-09-12). Without it every run applied a +0.01% move: a few hours of new
+        -- clicks shift implied by ~0.0001, and the log filled with APPLIED rows that meant nothing
+        -- while updated_at on the threshold row stopped meaning "when it last moved". Below
+        -- INTENT_CVR_REFIT_MIN_STEP (0.0025 = a quarter percent) the step is recorded and not
+        -- applied. Ordinary drift accumulates and crosses the band in about a week; it is then
+        -- applied as one honest move.
         SET act = 'UNCHANGED';
-        SET why = FORMAT('implied %.4f rounds to the current value; nothing to apply', cal_new);
+        SET why = FORMAT('implied %.4f is %+.3f%% from current %.4f, inside the %.2f%% dead-band (INTENT_CVR_REFIT_MIN_STEP); nothing to apply',
+                         cal_new, step_pct, cal_cur, min_step * 100.0);
       ELSEIF ABS(cal_new / cal_cur - 1.0) <= max_step THEN
         SET act = 'APPLIED';
         SET new_val = ROUND(cal_new, 4);
