@@ -268,6 +268,10 @@ BEGIN
 
   -- Backfill estimated_start_selling_date (first sale date)
   -- This prevents V_PLAN_FORECAST from needing to join massive daily traffic tables
+  -- NOTE: must be the first date with an actual unit sold (SALES_QUANTITY > 0), not
+  -- the first date the ASIN merely appears in the traffic report (listing went live/
+  -- browsable, often with 0 units) — those two dates can differ by weeks and this
+  -- field drives launch-age math (V_FORECAST_DEMAND age_now/age_f, PHASE transitions).
   UPDATE `onyga-482313.OI.DIM_PRODUCT` p
   SET estimated_start_selling_date = fsd.first_sale
   FROM (
@@ -276,6 +280,7 @@ BEGIN
     JOIN `onyga-482313.OI.V_SRC_sales_and_traffic_business_sku_report_daily` st ON dp.asin = st.child_asin
     WHERE dp.estimated_start_selling_date IS NULL
       AND dp.is_active = TRUE
+      AND st.SALES_QUANTITY > 0
     GROUP BY dp.asin
   ) fsd
   WHERE p.asin = fsd.asin;
