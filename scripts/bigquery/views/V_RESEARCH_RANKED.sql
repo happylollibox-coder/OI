@@ -94,7 +94,9 @@ last_week_per_query AS (
     search_query_volume AS weekly_market_impressions,
     TOTAL_CLICKS AS weekly_market_clicks,
     TOTAL_PURCHASES AS weekly_market_purchases,
-    TOTAL_MEDIAN_CLICK_PRICE AS median_click_price
+    TOTAL_MEDIAN_CLICK_PRICE AS median_click_price,
+    -- cost_tier travels WITH the price it describes (see the note on search_terms_sqp below).
+    cost_tier
   FROM `onyga-482313`.OI.V_SQP_QUERY_WEEKLY
   WHERE query_text != 'OTHER'
   QUALIFY ROW_NUMBER() OVER (PARTITION BY query_text ORDER BY week_start_date DESC) = 1
@@ -102,6 +104,20 @@ last_week_per_query AS (
 
 -- Distinct search terms with segments from SQP
 -- (segments already include manual overrides via V_SQP_QUERY_WEEKLY)
+--
+-- WHY cost_tier COMES FROM lw AND THE OTHER SIX DO NOT (2026-09-01).
+-- This join is on query_text ALONE, so `v` is EVERY week of that query and each ANY_VALUE is
+-- free to come from a different one. The six below are safe: gender/age_group/occasion/holiday/
+-- product_type/brand are derived from the query STRING, so they are identical in every week —
+-- measured, zero query_texts disagree across weeks. cost_tier is NOT: it is a pure function of
+-- that week's TOTAL_MEDIAN_CLICK_PRICE (V_SQP_QUERY_WEEKLY), and it differed across weeks for
+-- thousands of query_texts. Because median_click_price below comes from `lw` (the LATEST week)
+-- while ANY_VALUE(v.cost_tier) came from ANY week, the view was printing a tier next to a price
+-- that did not imply it — and the pair could change between runs. A tier is a LABEL ON THE PRICE
+-- WE SHOW, so it must come from the same row: `lw`, which is one row per query_text, making
+-- MAX() here a single-row pick rather than a choice. Human overrides are unaffected — an
+-- override is constant across weeks, so those queries were never in the ambiguous set.
+-- Same defect class as fact_oi_any_value_pairing_nondeterminism.
 search_terms_sqp AS (
   SELECT
     lw.query_text,
@@ -111,7 +127,7 @@ search_terms_sqp AS (
     ANY_VALUE(v.holiday) AS holiday,
     ANY_VALUE(v.product_type) AS product_type,
     ANY_VALUE(v.brand) AS brand,
-    ANY_VALUE(v.cost_tier) AS cost_tier,
+    MAX(lw.cost_tier) AS cost_tier,
     MAX(lw.weekly_market_impressions) AS weekly_market_impressions,
     MAX(lw.weekly_market_clicks) AS weekly_market_clicks,
     MAX(lw.weekly_market_purchases) AS weekly_market_purchases,
@@ -136,11 +152,14 @@ ads_term_overrides AS (
   QUALIFY ROW_NUMBER() OVER (PARTITION BY LOWER(query_text) ORDER BY updated_at DESC) = 1
 ),
 
--- Product type for ads-only terms from the canonical keyword vocabulary
+-- Product type for ads-only terms from the canonical keyword vocabulary.
+-- (priority, LENGTH(keyword)) alone is NOT a total order — 44 groups in
+-- DE_PRODUCT_TYPE_KEYWORDS tie across different product_types — so the alphabetical tail is
+-- required or the pick flaps between runs. See V_ADS_SEARCH_TERM_FACETS for the full note.
 ads_term_product_type AS (
   SELECT
     ats.query_text,
-    ARRAY_AGG(ptk.product_type ORDER BY ptk.priority ASC, LENGTH(ptk.keyword) DESC LIMIT 1)[OFFSET(0)] AS product_type
+    ARRAY_AGG(ptk.product_type ORDER BY ptk.priority ASC, LENGTH(ptk.keyword) DESC, ptk.product_type ASC, ptk.keyword ASC LIMIT 1)[OFFSET(0)] AS product_type
   FROM search_terms_ads ats
   CROSS JOIN `onyga-482313.OI.DE_PRODUCT_TYPE_KEYWORDS` ptk
   WHERE REGEXP_CONTAINS(LOWER(ats.query_text), CONCAT(r'(?:^|\W)', ptk.keyword, r'(?:\W|$)'))

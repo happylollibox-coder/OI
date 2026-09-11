@@ -17,7 +17,8 @@
 --                                            its regexes; DE_INTENT_THEMES.match_ads_age_regex
 --                                            does, and should converge onto this.
 --   product_type                             DE_PRODUCT_TYPE_KEYWORDS (priority, then longest
---                                            keyword) — same join V_RESEARCH_RANKED uses.
+--                                            keyword, then product_type/keyword alphabetically)
+--                                            — same join V_RESEARCH_RANKED uses.
 --   budget_tier / price_ceiling              FN_EXTRACT_BUDGET. NOT the same as
 --                                            FACT_RESEARCH_RANKED.price_bucket, which is OUR
 --                                            price vs the market. This is what the CUSTOMER
@@ -70,9 +71,19 @@ term_kind AS (
 ),
 
 -- Same join V_RESEARCH_RANKED uses: lowest priority wins, longest keyword breaks the tie.
+--
+-- The alphabetical tail is NOT cosmetic. (priority, LENGTH(keyword)) is not a total order:
+-- DE_PRODUCT_TYPE_KEYWORDS has 44 (priority, length) groups spanning more than one
+-- product_type, and 858 real search terms match >=2 of them tied. Without a final tiebreak
+-- ARRAY_AGG picked arbitrarily and the winner could change between runs — product_type feeds
+-- intent_key, so V_INTENT_CVR_CURVE was observed returning 10,440 then 10,441 product x intent
+-- cells on back-to-back runs, i.e. a bid appearing and vanishing with no change in ads data.
+-- Same defect class as the ANY_VALUE pairing bug fixed in v27.46: any pick-one aggregate needs
+-- an ordering that cannot tie. Alphabetical is arbitrary-but-stable; the real cure for those 44
+-- groups is priority hygiene in DE_PRODUCT_TYPE_KEYWORDS, which this does not attempt.
 ptype AS (
   SELECT t.search_term,
-    ARRAY_AGG(ptk.product_type ORDER BY ptk.priority ASC, LENGTH(ptk.keyword) DESC LIMIT 1)[OFFSET(0)] AS product_type
+    ARRAY_AGG(ptk.product_type ORDER BY ptk.priority ASC, LENGTH(ptk.keyword) DESC, ptk.product_type ASC, ptk.keyword ASC LIMIT 1)[OFFSET(0)] AS product_type
   FROM terms t
   CROSS JOIN `onyga-482313.OI.DE_PRODUCT_TYPE_KEYWORDS` ptk
   WHERE REGEXP_CONTAINS(t.term_lc, CONCAT(r'(?:^|\W)', ptk.keyword, r'(?:\W|$)'))
