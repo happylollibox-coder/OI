@@ -7,8 +7,12 @@ BEGIN
   --                                     snapshot per index per UTC month (DELETE + INSERT)
   --   2. T_INTENT_INDEX_SCORECARD    <- V_INTENT_INDEX_SCORECARD  (index verdicts, 18 months)
   --   3. T_INTENT_BASE_TUNING        <- V_INTENT_BASE_TUNING       (recency shape x k_base grid)
+  --   4. INTENT_CVR_CALIBRATION      <- T_INTENT_BASE_TUNING.implied_calibration, moved only
+  --                                     inside INTENT_CVR_REFIT_MAX_STEP; every decision logged
+  --                                     to T_INTENT_REFIT_LOG
   -- Step 1 runs FIRST because step 2 reads the history: a scorecard built before this month's
-  -- snapshot exists would score every target month off last month's index.
+  -- snapshot exists would score every target month off last month's index. Step 4 runs LAST
+  -- because it reads the tuning table step 3 just rebuilt.
   --
   -- WHY THE SNAPSHOT STEP EXISTS (2026-09-11). Until now the scorecard read the two index views
   -- as deployed -- fitted on all of history, including the months being scored -- and hardcoded
@@ -61,10 +65,32 @@ BEGIN
   -- given permission to: is_active is set by a human, the same contract as DE_SEARCH_TERM_INTENT,
   -- because the Coacher has twice made unreviewed bid changes that lost money.
   --
-  -- CADENCE. R16 fails the suite when either table is more than 8 days old and R17 fails it when
-  -- the current month has no snapshot, so this wants to run at least weekly and in the first days
-  -- of every month, and MUST be re-run after any change to the index views, the thresholds, or
-  -- the curve -- otherwise a promotion decision is made against evidence from before the change.
+  -- THE ONE THING IT DOES WRITE OUTSIDE ITS OWN TABLES (2026-09-11): INTENT_CVR_CALIBRATION, and
+  -- only inside a band. Spec 4.4 says the constant "will drift" and "is a threshold row with a
+  -- refit query"; T_INTENT_BASE_TUNING has published the refit value (implied_calibration = 1 /
+  -- bias for the shipped shape at the shipped prior) since 08-31, and ten days later it read
+  -- 1.1717 against a stored 1.151 with nothing applying it. Step 4 closes that loop with the
+  -- same automation-proposes / human-disposes contract as the registry: a step of at most
+  -- INTENT_CVR_REFIT_MAX_STEP (0.10 = ten percent) is APPLIED and logged; a larger one is
+  -- SUGGESTED -- suggested_value / suggestion_reason written, threshold_value NOT touched, logged
+  -- -- and a human decides; an implied value that rounds to the current one is UNCHANGED and the
+  -- threshold row is not written at all, so its updated_at keeps meaning "when it last moved";
+  -- no usable tuning row (missing, or under 200 predictions) is SKIPPED with the reason on the
+  -- threshold row. Every outcome is one row in T_INTENT_REFIT_LOG.
+  -- CONSEQUENCE, read before touching the band: V_INTENT_CVR_CURVE_SHADOW reads this constant
+  -- LIVE, so an APPLIED step moves the shadow curve -- and T_INTENT_BID_BASE once the shadow is
+  -- promoted -- on its next scan, by exactly the step. V_INTENT_CVR_CURVE, the curve serving bids
+  -- today, does not read it (measured: zero references in its SQL), so until promotion a refit
+  -- changes evidence, not bids. R02b pins the constant to the last APPLIED log value (seed 1.151
+  -- before any), so a hand edit outside this procedure still fails the suite.
+  --
+  -- CADENCE. R16 fails the suite when either table is more than 8 days old, R17 when the current
+  -- month has no snapshot, R22 when the refit log has no row from the last scoring. Since
+  -- 2026-09-11 this runs from SP_REFRESH_SEARCH_TERM_INTENT, which SP_ORCHESTRATE_DAILY_REFRESH
+  -- calls three times a day right after FACT_AMAZON_ADS is rebuilt -- so it is never stale, and
+  -- it MUST still be re-run by hand after any change to the index views, the thresholds, or the
+  -- curve that lands between orchestrator runs, or a promotion decision is made against evidence
+  -- from before the change.
   --
   -- scored_at is stamped per table by its own CURRENT_TIMESTAMP(), so a partial run (the first
   -- statement succeeding and the second failing) leaves the two tables with different stamps and
@@ -180,4 +206,100 @@ BEGIN
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_INTENT_BASE_TUNING` AS
   SELECT CURRENT_TIMESTAMP() AS scored_at, *
   FROM `onyga-482313.OI.V_INTENT_BASE_TUNING`;
+
+  -- ---- STEP 4: bounded refit of INTENT_CVR_CALIBRATION ---------------------------------------
+  -- Its own block so it can DECLARE its own variables (BigQuery scripting allows DECLARE only at
+  -- the head of a block). Reads the tuning row for the shape the shadow curve ships
+  -- (nested_1_2_3_6_12, spec 4.4) at the prior the shadow reads (INTENT_CVR_BASE_PRIOR_CLICKS),
+  -- so a change to the prior re-targets the refit on its own. The arithmetic: step = implied /
+  -- current - 1; APPLIED if |step| <= INTENT_CVR_REFIT_MAX_STEP, SUGGESTED otherwise, UNCHANGED if
+  -- implied rounds (4 dp, the stored precision) to the current value, SKIPPED if the tuning row
+  -- is missing or rests on fewer than 200 predictions. Every path writes T_INTENT_REFIT_LOG.
+  -- The threshold row is addressed by the full key the readers use -- strategy_id INTENT,
+  -- coach_mode GUARDIAN, product_family NULL -- because a row under any other mode is a
+  -- different threshold to every view that reads this one.
+  BEGIN
+    DECLARE tune_shape STRING  DEFAULT 'nested_1_2_3_6_12';
+    DECLARE tune_k     FLOAT64;
+    DECLARE cal_cur    FLOAT64;
+    DECLARE max_step   FLOAT64;
+    DECLARE cal_new    FLOAT64;
+    DECLARE cal_n      INT64;
+    DECLARE step_pct   FLOAT64;
+    DECLARE new_val    FLOAT64;
+    DECLARE act        STRING;
+    DECLARE why        STRING;
+
+    SET tune_k = (SELECT MAX(IF(threshold_key = 'INTENT_CVR_BASE_PRIOR_CLICKS', threshold_value, NULL))
+                  FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
+                  WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND product_family IS NULL);
+    SET cal_cur = (SELECT MAX(IF(threshold_key = 'INTENT_CVR_CALIBRATION', threshold_value, NULL))
+                   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
+                   WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND product_family IS NULL);
+    SET max_step = (SELECT MAX(IF(threshold_key = 'INTENT_CVR_REFIT_MAX_STEP', threshold_value, NULL))
+                    FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
+                    WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND product_family IS NULL);
+
+    IF tune_k IS NULL OR cal_cur IS NULL OR max_step IS NULL THEN
+      RAISE USING MESSAGE = FORMAT(
+        'SP_SCORE_INTENT_INDEXES step 4: threshold missing under strategy_id INTENT / coach_mode GUARDIAN / product_family NULL (k_base %T, calibration %T, max_step %T). Refusing to refit against an unknown band.',
+        tune_k, cal_cur, max_step);
+    END IF;
+
+    -- MAX() over zero rows is NULL, not an error; a missing tuning row is a SKIPPED, not a crash.
+    SET cal_new = (SELECT MAX(implied_calibration) FROM `onyga-482313.OI.T_INTENT_BASE_TUNING`
+                   WHERE shape = tune_shape AND k_base = tune_k);
+    SET cal_n   = (SELECT MAX(n_predictions) FROM `onyga-482313.OI.T_INTENT_BASE_TUNING`
+                   WHERE shape = tune_shape AND k_base = tune_k);
+    SET new_val = cal_cur;
+
+    IF cal_new IS NULL OR cal_n IS NULL OR cal_n < 200 THEN
+      SET act = 'SKIPPED';
+      SET why = IF(cal_new IS NULL OR cal_n IS NULL,
+                   FORMAT('REFIT_SKIPPED: no row for shape %s at k_base %.0f in T_INTENT_BASE_TUNING', tune_shape, tune_k),
+                   FORMAT('REFIT_SKIPPED: shape %s at k_base %.0f rests on %d predictions (< 200)', tune_shape, tune_k, cal_n));
+      UPDATE `onyga-482313.OI.DE_COACH_THRESHOLDS`
+      SET suggestion_reason = why, suggested_at = CURRENT_DATETIME()
+      WHERE strategy_id = 'INTENT' AND threshold_key = 'INTENT_CVR_CALIBRATION'
+        AND coach_mode = 'GUARDIAN' AND product_family IS NULL;
+    ELSE
+      SET step_pct = (cal_new / cal_cur - 1.0) * 100.0;
+      IF ROUND(cal_new, 4) = cal_cur THEN
+        SET act = 'UNCHANGED';
+        SET why = FORMAT('implied %.4f rounds to the current value; nothing to apply', cal_new);
+      ELSEIF ABS(cal_new / cal_cur - 1.0) <= max_step THEN
+        SET act = 'APPLIED';
+        SET new_val = ROUND(cal_new, 4);
+        SET why = FORMAT('AUTO_APPLIED within %.0f%% band from T_INTENT_BASE_TUNING (%s @ k_base %.0f, %d predictions): %.4f -> %.4f (%+.2f%%)',
+                         max_step * 100.0, tune_shape, tune_k, cal_n, cal_cur, new_val, step_pct);
+        UPDATE `onyga-482313.OI.DE_COACH_THRESHOLDS`
+        SET threshold_value   = new_val,
+            updated_at        = CURRENT_DATETIME(),
+            updated_by        = 'SP_SCORE_INTENT_INDEXES',
+            source            = 'AUTO_REFIT',
+            suggested_value   = cal_new,
+            suggested_at      = CURRENT_DATETIME(),
+            suggestion_reason = why
+        WHERE strategy_id = 'INTENT' AND threshold_key = 'INTENT_CVR_CALIBRATION'
+          AND coach_mode = 'GUARDIAN' AND product_family IS NULL;
+      ELSE
+        SET act = 'SUGGESTED';
+        SET why = FORMAT('OUT OF BAND (%+.2f%%, band %.0f%%), human decision required: T_INTENT_BASE_TUNING implies %.4f (%s @ k_base %.0f, %d predictions); current %.4f left untouched',
+                         step_pct, max_step * 100.0, cal_new, tune_shape, tune_k, cal_n, cal_cur);
+        UPDATE `onyga-482313.OI.DE_COACH_THRESHOLDS`
+        SET suggested_value   = cal_new,
+            suggested_at      = CURRENT_DATETIME(),
+            suggestion_reason = why
+        WHERE strategy_id = 'INTENT' AND threshold_key = 'INTENT_CVR_CALIBRATION'
+          AND coach_mode = 'GUARDIAN' AND product_family IS NULL;
+      END IF;
+    END IF;
+
+    INSERT INTO `onyga-482313.OI.T_INTENT_REFIT_LOG`
+      (refit_at, shape, k_base, previous_value, implied_value, new_value, step_pct, max_step,
+       n_predictions, action, reason)
+    VALUES
+      (CURRENT_TIMESTAMP(), tune_shape, tune_k, cal_cur, cal_new, new_val, step_pct, max_step,
+       cal_n, act, why);
+  END;
 END;

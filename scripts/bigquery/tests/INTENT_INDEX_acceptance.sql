@@ -66,13 +66,26 @@ r02 AS (
 --      the base prior it RAISES 200 -> 400, and the calibration constant. The other three are
 --      seeded-and-never-yet-tuned, and Task 2 re-derives the season prior, so pinning those here
 --      would only create a check that has to be edited every time a number is legitimately tuned.
+--      THE CALIBRATION PIN MOVES WITH THE REFIT LOG (2026-09-11). SP_SCORE_INTENT_INDEXES step 4
+--      now moves INTENT_CVR_CALIBRATION inside a band, so a literal 1.151 here would fail on the
+--      first legitimate refit. The pin is the new_value of the latest APPLIED row in
+--      T_INTENT_REFIT_LOG, falling back to the 1.151 seed before any exists. What it still
+--      catches: a hand edit, a re-run seed migration, or any write to the constant that did not
+--      go through the procedure -- those leave the log and the row disagreeing. Verified by
+--      negative control 2026-09-11 on temp copies: threshold set to 1.2000 with the log's latest
+--      APPLIED at 1.1717 -> 1; threshold 1.2000 AND log APPLIED 1.2000 -> 0; log emptied with
+--      threshold 1.151 -> 0, with threshold 1.1717 -> 1; live -> 0.
 r02b AS (
   SELECT COUNTIF(
            (threshold_key = 'INTENT_CVR_BASE_PRIOR_CLICKS' AND threshold_value != 400.0)
-        OR (threshold_key = 'INTENT_CVR_CALIBRATION'       AND threshold_value != 1.151)
+        OR (threshold_key = 'INTENT_CVR_CALIBRATION'
+            AND threshold_value != COALESCE(
+                  (SELECT new_value FROM `onyga-482313.OI.T_INTENT_REFIT_LOG`
+                   WHERE action = 'APPLIED' ORDER BY refit_at DESC LIMIT 1),
+                  1.151))
          ) AS v
   FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
-  WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN'
+  WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND product_family IS NULL
     AND threshold_key IN ('INTENT_CVR_BASE_PRIOR_CLICKS','INTENT_CVR_CALIBRATION')
 ),
 -- R03 EVERY INDEX IS NORMALISED TO A CLICKS-WEIGHTED MEAN OF 1.000. An un-normalised index
@@ -471,6 +484,55 @@ r20 AS (
                 WHERE target_month IS NOT NULL GROUP BY 1, 2) m USING (index_name, test_kind)
           WHERE p.target_month IS NULL)
        + (SELECT CAST(COUNT(*) = 0 AS INT64) FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD`) AS v
+),
+-- R21-R22 COVER THE BOUNDED CALIBRATION REFIT (SP_SCORE_INTENT_INDEXES step 4, 2026-09-11).
+--
+-- R21 THE SHIPPED CALIBRATION IS WITHIN THE REFIT BAND OF THE TUNING TABLE'S IMPLIED VALUE, OR
+--     THE DRIFT HAS BEEN REPORTED. Fires when ABS(current / implied - 1) exceeds
+--     INTENT_CVR_REFIT_MAX_STEP AND the latest T_INTENT_REFIT_LOG row is not SUGGESTED -- i.e.
+--     the constant is far from what the evidence says and nobody has been told. If it fires,
+--     the shadow curve (and the catalog, once promoted) is pricing every bid at a level the
+--     account's own walk-forward says is wrong by more than the band, and the procedure that was
+--     supposed to flag it either did not run or ran against a broken tuning row. A SUGGESTED
+--     latest row is the reported case and reads 0: the human has the number, the decision is
+--     theirs. implied is the tuning row for the shape the shadow ships (nested_1_2_3_6_12) at
+--     k_base = INTENT_CVR_BASE_PRIOR_CLICKS, the same row the procedure reads.
+--     COALESCE(..., 1) IS LOAD-BEARING: a missing threshold, a missing tuning row or an empty
+--     band all make the comparison NULL, and NULL is not the 0 this file defines as PASS. Verified
+--     by negative control 2026-09-11 on temp copies: threshold 25% off with the log's latest row
+--     APPLIED -> 1; the same with the latest row SUGGESTED -> 0; tuning table emptied -> bare
+--     NULL, this form 1; live -> 0.
+r21 AS (
+  SELECT COALESCE(CAST(
+           ABS(SAFE_DIVIDE(t.cur, u.imp) - 1.0) > t.band
+           AND COALESCE(l.last_action, '') != 'SUGGESTED'
+         AS INT64), 1) AS v
+  FROM (SELECT MAX(IF(threshold_key = 'INTENT_CVR_CALIBRATION',      threshold_value, NULL)) AS cur,
+               MAX(IF(threshold_key = 'INTENT_CVR_REFIT_MAX_STEP',   threshold_value, NULL)) AS band,
+               MAX(IF(threshold_key = 'INTENT_CVR_BASE_PRIOR_CLICKS', threshold_value, NULL)) AS k
+        FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
+        WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND product_family IS NULL) t
+  LEFT JOIN (SELECT k_base, MAX(implied_calibration) AS imp
+             FROM `onyga-482313.OI.T_INTENT_BASE_TUNING`
+             WHERE shape = 'nested_1_2_3_6_12' GROUP BY 1) u ON u.k_base = t.k
+  LEFT JOIN (SELECT action AS last_action FROM `onyga-482313.OI.T_INTENT_REFIT_LOG`
+             ORDER BY refit_at DESC LIMIT 1) l ON TRUE
+),
+-- R22 THE REFIT RAN WITH THE LAST SCORING. The latest T_INTENT_REFIT_LOG row must be no older
+--     than T_INTENT_BASE_TUNING's scored_at (step 4 runs after step 3 inside one procedure, so a
+--     log row older than the tuning table means the procedure died between them) and no older
+--     than 8 days (same bar as R16). If it fires, the constant is not being maintained: the
+--     drift R21 guards against is accumulating with nothing looking at it.
+--     COALESCE(..., 1) IS LOAD-BEARING: an empty log makes MAX(refit_at) NULL and the comparison
+--     NULL. Verified by negative control 2026-09-11 on temp copies: log emptied -> bare NULL,
+--     this form 1; latest row back-dated to before the tuning scored_at -> 1; live -> 0.
+r22 AS (
+  SELECT COALESCE(CAST(NOT (
+           (SELECT MAX(refit_at) FROM `onyga-482313.OI.T_INTENT_REFIT_LOG`)
+             >= (SELECT MAX(scored_at) FROM `onyga-482313.OI.T_INTENT_BASE_TUNING`)
+           AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(),
+                 (SELECT MAX(refit_at) FROM `onyga-482313.OI.T_INTENT_REFIT_LOG`), DAY) <= 8
+         ) AS INT64), 1) AS v
 )
 SELECT 'R01 registry key unique' AS check_name, v FROM r01
 UNION ALL SELECT 'R02 thresholds present', v FROM r02
@@ -547,4 +609,6 @@ UNION ALL SELECT 'R17 history has this month\'s snapshot for every registered in
 UNION ALL SELECT 'R18 no history row null on all three wildcard keys', v FROM r18
 UNION ALL SELECT 'R19 history unique on its grain', v FROM r19
 UNION ALL SELECT 'R20 scorecard leakage labels match the history', v FROM r20
+UNION ALL SELECT 'R21 calibration within refit band of implied, or drift reported', v FROM r21
+UNION ALL SELECT 'R22 refit log has a row from the last scoring', v FROM r22
 ORDER BY check_name;
