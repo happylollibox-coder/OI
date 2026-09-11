@@ -2107,7 +2107,7 @@ tables:
     dependencies: []
 
   - name: "SP_REFRESH_SEARCH_TERM_INTENT"
-    description: "Keeps DE_SEARCH_TERM_INTENT in step with the ads term universe and the current DE_INTENT_THEMES rules WITHOUT destroying a human verdict. MERGEs new terms in as PENDING, refreshes suggestions and 365d impact counters on existing rows, then flips any VERIFIED/CORRECTED row whose suggestion no longer matches suggestion_at_verification to RECHECK (IS DISTINCT FROM, so a NULL on either side counts as a change). Idempotent, safe to schedule. Verified 2026-07-24 by deactivating a theme: 9 of 26 verified rows flipped to RECHECK, V_INTENT_RESOLVED kept serving the human answer with is_stale=TRUE, and the other 17 were untouched."
+    description: "SCHEDULED SINCE 2026-09-11 as Refresh Task 16.1 of SP_ORCHESTRATE_DAILY_REFRESH (three runs a day, right after SP_FACT_AMAZON_ADS) and, after rebuilding T_INTENT_CVR_CURVE and T_INTENT_BID_BASE, CALLs SP_SCORE_INTENT_INDEXES -- so the intent catalog, the index snapshot history, the scorecard, the tuning grid and the bounded calibration refit all ride one schedule; before this it was never in the pipeline and the evidence tables went stale. Keeps DE_SEARCH_TERM_INTENT in step with the ads term universe and the current DE_INTENT_THEMES rules WITHOUT destroying a human verdict. MERGEs new terms in as PENDING, refreshes suggestions and 365d impact counters on existing rows, then flips any VERIFIED/CORRECTED row whose suggestion no longer matches suggestion_at_verification to RECHECK (IS DISTINCT FROM, so a NULL on either side counts as a change). Idempotent, safe to schedule. Verified 2026-07-24 by deactivating a theme: 9 of 26 verified rows flipped to RECHECK, V_INTENT_RESOLVED kept serving the human answer with is_stale=TRUE, and the other 17 were untouched."
     type: "procedure"
     source_files: ["scripts/bigquery/procedures/SP_REFRESH_SEARCH_TERM_INTENT.sql"]
 
@@ -2385,7 +2385,7 @@ stored_procedures:
     source_files: ["scripts/bigquery/procedures/SP_SYNC_NEGATIVES.sql"]
 
   - name: "SP_ORCHESTRATE_DAILY_REFRESH"
-    description: "Master daily orchestrator — runs all SPs in dependency order"
+    description: "Master daily orchestrator — runs all SPs in dependency order. Runs three times a day (05:00, ~07:40, ~16:07 UTC) and logs every step to LOG_PIPELINE_RUNS. 2026-09-11: Refresh Task 16.1 added -- SP_REFRESH_SEARCH_TERM_INTENT right after SP_FACT_AMAZON_ADS, which chains SP_SCORE_INTENT_INDEXES; the intent learning system's only schedule."
     source_files: ["scripts/bigquery/procedures/SP_ORCHESTRATE_DAILY_REFRESH.sql"]
     schedule: "daily"
 

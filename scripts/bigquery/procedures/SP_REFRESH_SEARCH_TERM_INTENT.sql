@@ -15,8 +15,12 @@
 -- REJECTED rows are deliberately NOT re-flagged on drift — "this term has no intent" is a
 -- statement about the term, not about the rule that happened to match it.
 --
--- Idempotent. Safe to run on a schedule.
+-- Idempotent. Safe to run on a schedule -- and since 2026-09-11 it IS on one: SP_ORCHESTRATE_DAILY_REFRESH
+-- calls it as Refresh Task 16.1, right after SP_FACT_AMAZON_ADS, three times a day. After the two
+-- T_ rebuilds it CALLs SP_SCORE_INTENT_INDEXES, so the index registry's evidence layer and the
+-- calibration refit ride the same schedule (see the comment above that CALL).
 -- SOP: docs/superpowers/specs/2026-07-24-intent-coverage-phase0-design.md
+--      docs/superpowers/specs/2026-08-31-intent-cvr-index-registry-design.md section 9
 
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_REFRESH_SEARCH_TERM_INTENT`()
 OPTIONS (description = "Refresh machine suggestions + impact counters in DE_SEARCH_TERM_INTENT. Never overwrites verified_*; flips drifted VERIFIED/CORRECTED rows to RECHECK.")
@@ -109,10 +113,30 @@ BEGIN
   CREATE OR REPLACE TABLE `onyga-482313.OI.T_INTENT_BID_BASE` AS
   SELECT * FROM `onyga-482313.OI.V_INTENT_BID_BASE`;
 
+  -- 2026-09-11: the learning system's evidence layer runs right behind the catalog it judges.
+  -- SP_SCORE_INTENT_INDEXES snapshots every registered index into T_INTENT_IDX_HISTORY, rebuilds
+  -- T_INTENT_INDEX_SCORECARD and T_INTENT_BASE_TUNING, and refits INTENT_CVR_CALIBRATION inside
+  -- INTENT_CVR_REFIT_MAX_STEP (logged to T_INTENT_REFIT_LOG). Chained HERE, not scheduled on its
+  -- own, so the evidence can never be stale relative to the catalog (acceptance R16 / R17 / R22
+  -- fail the suite when it is) -- and this procedure is what SP_ORCHESTRATE_DAILY_REFRESH runs
+  -- (Refresh Task 16.1, right after FACT_AMAZON_ADS), so the whole chain has one schedule.
+  -- COST: every statement inside a CALLed procedure gets its own on-demand CPU budget, so this
+  -- does not add to the bid view's ~27k CPU-second scan above; measured 2026-09-11 the scorer is
+  -- ~6,700 slot-seconds / 433 MB in total (index snapshots 1,873 + 2,962, scorecard 970,
+  -- tuning 920, refit negligible).
+  CALL `onyga-482313.OI.SP_SCORE_INTENT_INDEXES`();
+
   SELECT FORMAT(
-    'SP_REFRESH_SEARCH_TERM_INTENT: %d rows total, %d pending, %d flagged RECHECK, T_INTENT_CVR_CURVE %d rows, T_INTENT_BID_BASE %d rows',
+    'SP_REFRESH_SEARCH_TERM_INTENT: %d rows total, %d pending, %d flagged RECHECK, T_INTENT_CVR_CURVE %d rows, T_INTENT_BID_BASE %d rows; SP_SCORE_INTENT_INDEXES: scorecard %d rows scored_at %s, calibration %.4f (%s)',
     (SELECT COUNT(*) FROM `onyga-482313.OI.DE_SEARCH_TERM_INTENT`),
     inserted_count, recheck_count,
     (SELECT COUNT(*) FROM `onyga-482313.OI.T_INTENT_CVR_CURVE`),
-    (SELECT COUNT(*) FROM `onyga-482313.OI.T_INTENT_BID_BASE`)) AS operation_summary;
+    (SELECT COUNT(*) FROM `onyga-482313.OI.T_INTENT_BID_BASE`),
+    (SELECT COUNT(*) FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD`),
+    (SELECT CAST(MAX(scored_at) AS STRING) FROM `onyga-482313.OI.T_INTENT_INDEX_SCORECARD`),
+    (SELECT MAX(IF(threshold_key = 'INTENT_CVR_CALIBRATION', threshold_value, NULL))
+     FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
+     WHERE strategy_id = 'INTENT' AND coach_mode = 'GUARDIAN' AND product_family IS NULL),
+    (SELECT action FROM `onyga-482313.OI.T_INTENT_REFIT_LOG` ORDER BY refit_at DESC LIMIT 1)
+  ) AS operation_summary;
 END;

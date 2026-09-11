@@ -1067,6 +1067,49 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 16.1: SP_REFRESH_SEARCH_TERM_INTENT (depends on FACT_AMAZON_ADS, DE_SEARCH_TERM_INTENT)
+  --   Added 2026-09-11. Refreshes intent suggestions, rebuilds T_INTENT_CVR_CURVE and
+  --   T_INTENT_BID_BASE, then chains SP_SCORE_INTENT_INDEXES (index snapshots into
+  --   T_INTENT_IDX_HISTORY, scorecard, tuning grid, bounded refit of INTENT_CVR_CALIBRATION).
+  --   This step is the intent learning system's ONLY schedule; it was never in the pipeline
+  --   before and the evidence tables went stale. Placed right after FACT_AMAZON_ADS because
+  --   every table it builds reads it. Nothing else in this pipeline reads T_INTENT_* today;
+  --   the consumers are the intent popup endpoint, the month-plan generator and
+  --   tools/intent_grid, which read the T_ tables for pennies.
+  -- ============================================
+  SET procedure_name = 'SP_REFRESH_SEARCH_TERM_INTENT';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_REFRESH_SEARCH_TERM_INTENT`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'OK %s completed successfully in %d seconds',
+      procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)
+    ) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'FAIL %s failed: %s (Error at %s)',
+      procedure_name,
+      @@error.message,
+      CAST(CURRENT_TIMESTAMP() AS STRING)
+    ) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 16.5: FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY (depends on STG_AMAZON_SEARCH_PERFORMANCE_WEEKLY)
   -- ============================================
   SET procedure_name = 'SP_LOAD_FACT_AMAZON_SEARCH_PERFORMANCE_WEEKLY';
