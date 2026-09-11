@@ -464,8 +464,13 @@ phase1_split AS (
 ),
 
 -- D-const: reasonableness-cap knobs (guard B) + plateau reference
+-- momentum_* (added 2026-08-24, Ori): once a product clears 60 days of its own
+-- history, compare its REAL age1->now growth to what the donor's ramp curve
+-- implied over that same span, and apply the excess (or shortfall) as one flat
+-- multiplier on the whole forward forecast — see project_forecast_momentum_calibration.
 model_const AS (
-  SELECT 2.0 AS ramp_ceil, 5.0 AS season_ceil, 120 AS thin_history_days
+  SELECT 2.0 AS ramp_ceil, 5.0 AS season_ceil, 40 AS thin_history_days,
+         30 AS momentum_gate_days, 0.5 AS momentum_floor, 2.5 AS momentum_ceil
 ),
 
 -- D1: current-date anchors
@@ -512,6 +517,24 @@ product_history_days AS (
   WHERE units > 0 GROUP BY 1
 ),
 
+-- D5.5: own product's rate during its own early selling days (gates momentum).
+-- Window is day 6-35 post-launch, not day 1-30: the opening week is usually
+-- near-zero (inventory/ranking/ads still spinning up) and using it as the
+-- "age 1" baseline artificially depresses the denominator, inflating momentum.
+-- Validated against a manual actual-vs-actual comparison (LolliBall vs its donor
+-- LolliME at the same day-since-launch) on 2026-08-24 — see
+-- project_forecast_momentum_calibration.
+own_age1_rate AS (
+  SELECT pp.product, SAFE_DIVIDE(SUM(u.units), 30) AS rate_age1
+  FROM product_phases pp
+  JOIN `onyga-482313.OI.T_UNIFIED_DAILY` u
+    ON u.product_short_name = pp.product
+    AND u.date BETWEEN DATE_ADD(pp.estimated_start_selling_date, INTERVAL 5 DAY)
+                    AND DATE_ADD(pp.estimated_start_selling_date, INTERVAL 34 DAY)
+  WHERE pp.forecast_phase IN ('PHASE_1', 'PHASE_2') AND pp.model_product IS NOT NULL
+  GROUP BY 1
+),
+
 -- D6: month grid x phase-1/2 products (envelope-less families only, as before)
 model_grid AS (
   SELECT mp.product, mp.family, mp.model_product, mp.forecast_phase,
@@ -546,7 +569,16 @@ model_forecast AS (
              hs_now.house_season_index, 1.0) AS season_now,
     COALESCE(CASE WHEN dm.donor_is_mature THEN own_f.seasonality_index END,
              hs_f.house_season_index, 1.0) AS season_f,
-    COALESCE(ph.hist_days, 0) AS hist_days
+    COALESCE(ph.hist_days, 0) AS hist_days,
+    -- momentum: how much faster (or slower) has this product's OWN velocity grown
+    -- from its real age-1 rate to its real age-now rate, versus what the donor's
+    -- ramp curve implied over that same age span. Gated to hist_days >= 60 (below,
+    -- in model_based) so it never fires on the same thin-history window Guard B
+    -- already governs. Clamped [momentum_floor, momentum_ceil].
+    SAFE_DIVIDE(
+      SAFE_DIVIDE(COALESCE(t14.trailing_daily_rate, mfm.month1_daily_rate, 0), oar.rate_age1),
+      SAFE_DIVIDE(COALESCE(r_now.ramp_factor, dp.plateau_ramp, 1.0), r_age1.ramp_factor)
+    ) AS momentum_raw
   FROM model_grid g
   CROSS JOIN now_ref nr
   LEFT JOIN trailing_14d t14 ON t14.product = g.product
@@ -557,6 +589,8 @@ model_forecast AS (
     AND r_now.launch_age_month = CASE WHEN g.forecast_phase = 'PHASE_1' THEN 1 ELSE g.age_now END
   LEFT JOIN `onyga-482313.OI.V_LAUNCH_RAMP` r_f
     ON r_f.donor_product = g.model_product AND r_f.launch_age_month = g.age_f
+  LEFT JOIN `onyga-482313.OI.V_LAUNCH_RAMP` r_age1
+    ON r_age1.donor_product = g.model_product AND r_age1.launch_age_month = 1
   LEFT JOIN donor_plateau dp ON dp.donor_product = g.model_product
   LEFT JOIN donor_maturity dm ON dm.donor = g.model_product
   LEFT JOIN `onyga-482313.OI.V_PRODUCT_SEASONALITY_INDEX` own_now
@@ -566,6 +600,7 @@ model_forecast AS (
   LEFT JOIN `onyga-482313.OI.V_HOUSE_SEASONALITY` hs_now ON hs_now.calendar_month = nr.cur_mo
   LEFT JOIN `onyga-482313.OI.V_HOUSE_SEASONALITY` hs_f ON hs_f.calendar_month = g.forecast_month
   LEFT JOIN product_history_days ph ON ph.product = g.product
+  LEFT JOIN own_age1_rate oar ON oar.product = g.product
 ),
 
 -- D8: final model-based output (same columns as family_based)
@@ -593,7 +628,10 @@ model_based AS (
             ELSE ROUND(mf.anchor_rate
                        * SAFE_DIVIDE(mf.ramp_f, NULLIF(mf.ramp_now,0))
                        * SAFE_DIVIDE(mf.season_f, NULLIF(mf.season_now,0))
-                       * mf.days_in_month)
+                       * mf.days_in_month
+                       * (CASE WHEN mf.hist_days >= mc.momentum_gate_days
+                               THEN LEAST(mc.momentum_ceil, GREATEST(mc.momentum_floor, mf.momentum_raw))
+                               ELSE 1.0 END))
           END
         FROM model_const mc
       )
