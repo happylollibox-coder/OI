@@ -19,6 +19,7 @@ WITH po_aggregated AS (
     SUM(po.quantity) AS quantity,
     SUM(COALESCE(po.ready_quantity, 0)) AS ready_quantity,
     SUM(po.total_amount) AS total_amount,
+    COALESCE(MAX(po.adjustments), 0) AS adjustments,
     ANY_VALUE(po.currency) AS currency,
     STRING_AGG(DISTINCT po.notes, ' | ') AS notes,
     MIN(po.created_at) AS created_at,
@@ -110,12 +111,17 @@ SELECT
   po.estimated_arrival_date,
   CAST(NULL AS FLOAT64) AS unit_price,  -- Not meaningful for aggregated multi-product POs
   po.total_amount,
+  po.adjustments,
+  -- What the PO actually settles at. Every paid/unpaid/open test below uses THIS,
+  -- never the raw line total: a -$4.57 adjustment used to leave a fully-settled PO
+  -- reading as $4.57 outstanding and permanently `is_open`.
+  ROUND(po.total_amount + po.adjustments, 2) AS total_amount_adjusted,
   po.currency,
   po.notes,
 
   -- Payment aggregates
   COALESCE(pt.total_paid, 0) AS total_paid,
-  (po.total_amount - COALESCE(pt.total_paid, 0)) AS unpaid_manufacturer,
+  ROUND((po.total_amount + po.adjustments) - COALESCE(pt.total_paid, 0), 2) AS unpaid_manufacturer,
 
   -- Shipment aggregates
   COALESCE(st.total_shipment_cost, 0) AS total_shipment_cost,
@@ -123,8 +129,8 @@ SELECT
   (COALESCE(st.total_shipment_cost, 0) - COALESCE(st.paid_shipment_cost, 0)) AS unpaid_shipment,
 
   -- Combined unpaid
-  ((po.total_amount - COALESCE(pt.total_paid, 0))
-   + (COALESCE(st.total_shipment_cost, 0) - COALESCE(st.paid_shipment_cost, 0))) AS total_unpaid,
+  ROUND(((po.total_amount + po.adjustments) - COALESCE(pt.total_paid, 0))
+   + (COALESCE(st.total_shipment_cost, 0) - COALESCE(st.paid_shipment_cost, 0)), 2) AS total_unpaid,
 
   -- Shipping progress
   COALESCE(sq.total_quantity_shipped, 0) AS total_quantity_shipped,
@@ -140,14 +146,14 @@ SELECT
 
   -- Payment status
   CASE
-    WHEN ABS(COALESCE(pt.total_paid, 0) - po.total_amount) < 0.01
+    WHEN ABS(COALESCE(pt.total_paid, 0) - (po.total_amount + po.adjustments)) < 0.01
       AND (COALESCE(st.total_shipment_cost, 0) = 0 OR ABS(COALESCE(st.paid_shipment_cost, 0) - COALESCE(st.total_shipment_cost, 0)) < 0.01)
       AND (po.quantity - COALESCE(sq.total_quantity_shipped, 0) <= 0)
     THEN 'Fully Paid'
-    WHEN ABS(COALESCE(pt.total_paid, 0) - po.total_amount) < 0.01
+    WHEN ABS(COALESCE(pt.total_paid, 0) - (po.total_amount + po.adjustments)) < 0.01
       AND (COALESCE(st.total_shipment_cost, 0) = 0 OR ABS(COALESCE(st.paid_shipment_cost, 0) - COALESCE(st.total_shipment_cost, 0)) < 0.01)
     THEN 'PO Paid, Shipment Paid'
-    WHEN ABS(COALESCE(pt.total_paid, 0) - po.total_amount) < 0.01
+    WHEN ABS(COALESCE(pt.total_paid, 0) - (po.total_amount + po.adjustments)) < 0.01
     THEN CONCAT('PO Paid',
                 CASE
                   WHEN COALESCE(st.total_shipment_cost, 0) > 0 AND ABS(COALESCE(st.paid_shipment_cost, 0) - COALESCE(st.total_shipment_cost, 0)) >= 0.01
@@ -167,7 +173,7 @@ SELECT
   END AS payment_status,
 
   -- Is this PO "open" (outstanding PO amount OR remaining quantity to ship)?
-  (ABS(COALESCE(pt.total_paid, 0) - po.total_amount) >= 0.01 OR (po.quantity - COALESCE(sq.total_quantity_shipped, 0)) > 0) AS is_open,
+  (ABS(COALESCE(pt.total_paid, 0) - (po.total_amount + po.adjustments)) >= 0.01 OR (po.quantity - COALESCE(sq.total_quantity_shipped, 0)) > 0) AS is_open,
 
   po.created_at
 
