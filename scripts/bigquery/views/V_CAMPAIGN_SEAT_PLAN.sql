@@ -49,19 +49,70 @@ graded AS (
               ELSE c.ads_net_roas >= c.keyword_bar END AS profitable
   FROM c
 ),
-sized AS (
-  SELECT g.*,
-         IF(g.profitable, g.budget * (SELECT allowance_share FROM k), 0.0) AS allowance_per_day,
-         CASE
-           WHEN g.profitable IS NULL THEN 0
-           WHEN g.profitable THEN CAST(FLOOR(g.budget * (SELECT allowance_share FROM k)
-                                            / (SELECT dollars_per_seat FROM k)) AS INT64)
-           ELSE 1
-         END AS seats_allowed,
-         CASE WHEN g.profitable IS NULL THEN 'UNMEASURED'
-              WHEN g.profitable THEN 'EXPERIMENT'
-              ELSE 'REPAIR' END AS seat_purpose
+-- TWO CEILINGS, NOT ONE (Ori, 2026-08-25 correction). A campaign CLAIMS 20% of its own budget as
+-- allowance -- profitable or not. What it actually GETS is rationed by the FAMILY pot, which is
+-- 20% of that family's PROFITABLE spend. The first build gave unprofitable campaigns nothing at
+-- all; Ori: "so for limited amount of not profitable campaigns there is allowance as well." The
+-- limit is not a rule about profitability, it is the pot running out.
+-- Measured, the pot funds only 19-38% of what campaigns claim, so the rationing is the binding
+-- constraint in every family rather than a rare tie-break.
+claim AS (
+  SELECT g.*, g.budget * (SELECT allowance_share FROM k) AS allowance_claim
   FROM graded g
+),
+pot AS (
+  SELECT family,
+         (SELECT allowance_share FROM k) * SUM(IF(profitable, cost, 0)) / (SELECT window_days FROM k)
+           AS family_pot_per_day
+  FROM claim GROUP BY family
+),
+-- FUNDING ORDER, declared so the ration is arguable rather than arbitrary. Profitable campaigns
+-- first: the pot is 20% of what THEY earned, so their own claim is the one that is actually paid
+-- for. Unprofitable campaigns follow, nearest the bar first -- the house's standing principle that
+-- a repair is ranked by how close it is to paying for itself, not by how much it is losing.
+ranked AS (
+  SELECT c.*, p.family_pot_per_day,
+         ROW_NUMBER() OVER (PARTITION BY c.family
+                            ORDER BY IFNULL(c.profitable, FALSE) DESC,
+                                     SAFE_DIVIDE(c.ads_net_roas, NULLIF(c.keyword_bar, 0)) DESC,
+                                     c.budget DESC, c.campaign_id) AS funding_rank
+  FROM claim c JOIN pot p USING (family)
+  WHERE c.profitable IS NOT NULL
+),
+-- Greedy fill in that order. A campaign is funded only if its WHOLE claim still fits, so the pot
+-- is never split into a fraction of a seat that buys nothing.
+filled AS (
+  SELECT r.*,
+         SUM(r.allowance_claim) OVER (PARTITION BY r.family ORDER BY r.funding_rank
+                                      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+           AS cumulative_claim
+  FROM ranked r
+),
+sized AS (
+  SELECT f.* EXCEPT (cumulative_claim),
+         f.cumulative_claim,
+         f.cumulative_claim <= f.family_pot_per_day AS allowance_funded,
+         IF(f.cumulative_claim <= f.family_pot_per_day, f.allowance_claim, 0.0) AS allowance_per_day,
+         CAST(FLOOR(IF(f.cumulative_claim <= f.family_pot_per_day, f.allowance_claim, 0.0)
+                    / (SELECT dollars_per_seat FROM k)) AS INT64) AS funded_seats,
+         -- THE FALLBACK IS FOR THE UNPROFITABLE ONLY. A profitable campaign the pot could not
+         -- reach is working and simply cannot experiment this week -- leave it alone. An
+         -- unprofitable one still gets its single seat, because mending it is not optional.
+         CASE
+           WHEN CAST(FLOOR(IF(f.cumulative_claim <= f.family_pot_per_day, f.allowance_claim, 0.0)
+                           / (SELECT dollars_per_seat FROM k)) AS INT64) > 0 THEN 'EXPERIMENT'
+           WHEN NOT f.profitable THEN 'REPAIR'
+           ELSE 'NONE'
+         END AS seat_purpose,
+         CASE
+           WHEN CAST(FLOOR(IF(f.cumulative_claim <= f.family_pot_per_day, f.allowance_claim, 0.0)
+                           / (SELECT dollars_per_seat FROM k)) AS INT64) > 0
+             THEN CAST(FLOOR(IF(f.cumulative_claim <= f.family_pot_per_day, f.allowance_claim, 0.0)
+                             / (SELECT dollars_per_seat FROM k)) AS INT64)
+           WHEN NOT f.profitable THEN 1
+           ELSE 0
+         END AS seats_allowed
+  FROM filled f
 ),
 -- For a REPAIR campaign, which keyword the single seat is aimed at: the one earning most per
 -- click. Ranked on gross profit per click rather than total, because the seat prices ONE keyword
@@ -93,6 +144,9 @@ SELECT
   ROUND(s.cost, 2) AS settled_cost, ROUND(s.gross_profit, 2) AS settled_gross_profit,
   ROUND(s.ads_net_roas, 4) AS ads_net_roas, ROUND(s.keyword_bar, 4) AS bar,
   s.profitable, s.bar_exempt,
+  ROUND(s.allowance_claim, 2)     AS allowance_claim,
+  ROUND(s.family_pot_per_day, 2)  AS family_pot_per_day,
+  s.funding_rank, s.allowance_funded,
   ROUND(s.allowance_per_day, 2) AS allowance_per_day,
   s.seats_allowed, s.seat_purpose,
 
@@ -120,8 +174,11 @@ SELECT
        ELSE 'HOLD' END AS repair_direction,
 
   CASE
-    WHEN s.seat_purpose = 'UNMEASURED' THEN CONCAT(
-      s.campaign_name, ' spent nothing in the settled window, so it is not judged and takes no seat.')
+    WHEN s.seat_purpose = 'NONE' THEN CONCAT(
+      s.campaign_name, ' clears its bar but the ', s.family,
+      ' allowance pot of $', CAST(ROUND(s.family_pot_per_day,2) AS STRING),
+      ' a day was spent before rank ', CAST(s.funding_rank AS STRING),
+      '. It is working and cannot experiment this week — leave it alone.')
     WHEN s.seat_purpose = 'EXPERIMENT' THEN CONCAT(
       s.campaign_name, ' clears its bar (', CAST(ROUND(s.ads_net_roas,2) AS STRING), ' vs ',
       CAST(ROUND(s.keyword_bar,2) AS STRING), '), so it earns $',
