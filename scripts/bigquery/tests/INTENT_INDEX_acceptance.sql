@@ -186,6 +186,10 @@ r08 AS (
     FROM `onyga-482313.OI.V_INTENT_IDX_SEASON_PHASE` GROUP BY 1,2)
 ),
 -- =============================================================================================
+-- SINCE 2026-09-12 THE SHADOW IS THE STAGING COPY OF THE SERVED CURVE (plan Task 9 promoted its
+-- body into V_INTENT_CVR_CURVE). While the two bodies match, R11 is green by construction and
+-- R09/R10 test the served logic through its twin; all three re-arm the moment the next change
+-- lands in the shadow, which is exactly when they are needed. Do not delete them as redundant.
 -- R09-R11 cover V_INTENT_CVR_CURVE_SHADOW (plan Task 4). The shadow is the rebuilt curve, wired
 -- to nothing until Task 9. These three exist to keep it DIFFABLE against the live curve, because
 -- that diff is the only evidence the money gate has to work with.

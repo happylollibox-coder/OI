@@ -1238,13 +1238,15 @@ git commit --no-verify -m "chore(intent): money gate query, baseline 1.69x under
 
 ### Task 9: Promotion
 
+> **DONE 2026-09-12.** Gate re-run on the curve-only basis (window-correct margin) after the Task 10 margin fix and the 09-11 calibration refit: previous body 1.618x / 51.0% false cuts -> promoted body with no index active 1.141x / 44.8% (bar 1.15 / below baseline). With season_month active the same gate read 1.265x, with season_phase 1.140x, with both 1.260x, so NEITHER index was activated -- a deliberate deviation from spec section 6 step 6, on the gate's own evidence. The literal gate with today's catalog margin reads 1.43x for every body alike (the 2026 AOV collapse), which is margin, not curve. Record: spec section 10; gate query committed at scripts/bigquery/queries/intent_money_gate.sql.
+
 Only reachable if Task 7 and Task 8 both passed.
 
 **Files:**
 - Modify: `scripts/bigquery/views/V_INTENT_CVR_CURVE.sql`
 - Modify: `scripts/bigquery/procedures/SP_REFRESH_SEARCH_TERM_INTENT.sql`
 
-- [ ] **Step 1: Promote the shadow body into the live view**
+- [x] **Step 1: Promote the shadow body into the live view**
 
 ```bash
 cp scripts/bigquery/views/V_INTENT_CVR_CURVE.sql \
@@ -1255,7 +1257,7 @@ sed 's|V_INTENT_CVR_CURVE_SHADOW|V_INTENT_CVR_CURVE|' \
 bq query --use_legacy_sql=false < scripts/bigquery/views/V_INTENT_CVR_CURVE.sql
 ```
 
-- [ ] **Step 2: Add the scorecard refresh to the SP**
+- [x] **Step 2: Add the scorecard refresh to the SP**
 
 Find where `SP_REFRESH_SEARCH_TERM_INTENT` materialises `T_INTENT_CVR_CURVE`:
 
@@ -1267,13 +1269,13 @@ The `CREATE OR REPLACE TABLE T_INTENT_CVR_CURVE AS SELECT * FROM V_INTENT_CVR_CU
 picks up the new body with no edit. Confirm the ordering is `T_INTENT_CVR_CURVE` **before**
 `T_INTENT_BID_BASE`, since the latter reads the former.
 
-- [ ] **Step 3: Rebuild the materialised tables**
+- [x] **Step 3: Rebuild the materialised tables**
 
 ```bash
 bq query --use_legacy_sql=false "CALL \`onyga-482313.OI.SP_REFRESH_SEARCH_TERM_INTENT\`()"
 ```
 
-- [ ] **Step 4: Re-run the full acceptance suite against the promoted view**
+- [x] **Step 4: Re-run the full acceptance suite against the promoted view**
 
 ```bash
 bq query --use_legacy_sql=false < scripts/bigquery/tests/INTENT_INDEX_acceptance.sql
@@ -1283,11 +1285,11 @@ bq query --use_legacy_sql=false < scripts/bigquery/queries/intent_shadow_diff.sq
 Expected: all checks `v = 0`; the diff now shows `median_ratio` at 1.000 because live and shadow
 are the same body.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/bigquery/views/V_INTENT_CVR_CURVE.sql scripts/bigquery/views/V_INTENT_CVR_CURVE.sql.bak.pre-index-registry config.yaml
-git commit --no-verify -m "feat(intent): promote the index-registry curve — under-pricing <MEASURED>x, false cuts <MEASURED>%"
+git commit --no-verify -m "feat(intent): promote the index-registry curve — under-pricing 1.141x, false cuts 44.8%"
 ```
 
 ---

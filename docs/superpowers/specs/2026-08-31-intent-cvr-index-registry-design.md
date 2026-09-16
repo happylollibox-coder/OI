@@ -496,3 +496,88 @@ Suite: R01–R22 all 0 on 2026-09-11.
   if a decision cannot wait.
 - **Not in scope, still stale:** `DE_SEARCH_TERM_INTENT` verification (30 VERIFIED / 353k PENDING,
   unchanged since 09-01) is a human queue, not a pipeline defect.
+
+## 10. PROMOTION RECORD — Task 9, 2026-09-12
+
+**Status:** promoted 2026-09-12 (deployed 23:44 UTC 09-11), served through the orchestrator since;
+committed 2026-09-16 with the four-day operating record below.
+
+### 10.1 The gate that decided
+
+The plan's money gate (Task 8) was never committed on 08-31/09-01 — it lived in a scratchpad. It is
+now `scripts/bigquery/queries/intent_money_gate.sql` and reports two margins side by side:
+
+- `*_cat` — the literal plan gate, today's catalog `gp_per_order` ($13.69 click-weighted). It
+  conflates the curve with the 2026 AOV collapse: the gate window's realised GP-per-order was
+  ~$16.60, so today's catalog under-prices a spring week by ~1.2x on margin alone, whatever the
+  curve says. Every body reads ~1.43x here for that reason.
+- `*_win` — each product's realised GP-per-order **inside the window**, held fixed for every
+  curve, so only the curve differs. This is the reading recorded on 09-01 and the one that judges
+  Task 9, which promotes a curve, not a margin.
+
+Window 2026-01-05..08-23, 2,431 keyword-weeks, 792 judgeable for the CUT rule. Curves materialised
+to scratch tables first (the view inlined in this query was rejected at 50k CPU-s on 09-01):
+
+| curve | under-pricing (win) | false-CUT rate (win) | under-pricing (cat) |
+|---|---|---|---|
+| previous served body (flat-pooled base, inert season) | 1.618x | 51.0% | 1.988x |
+| **rebuilt body, no index active — PROMOTED** | **1.141x** | **44.8%** | 1.430x |
+| rebuilt + `season_phase` | 1.140x | 44.8% | 1.429x |
+| rebuilt + `season_month` | 1.265x | 48.0% | 1.590x |
+| rebuilt + both | 1.260x | 48.1% | 1.585x |
+
+Bar (plan Task 8): under-pricing ≤ 1.15 and a lower false-CUT rate than the live baseline. Passed
+by the rebuilt body with nothing active. Re-read on the served table 2026-09-16 (four more days of
+data): 1.134x / 45.2%.
+
+### 10.2 Why neither index was activated — a deliberate deviation from §6 step 6
+
+§6 step 6 says "flip the two indexes active" on passing. The gate says otherwise: `season_month`
+moves money the **wrong** way (1.265x vs 1.141x) even though it pools to IMPROVES on prediction
+error — consistent with it losing 10 of its 18 months, and with every scorecard row still being
+leakage-flagged (§9.1). `season_phase` is inert at its current support (161 of 204 rows shrunk to
+1.000, §7.5). The money gate "is the one that decides" (Task 8); it decided. Both registry rows
+stay `is_active = FALSE`. Activation remains a human decision on the scorecard **and** this gate,
+and the gate now has a committed query to be re-run against a materialised candidate.
+
+### 10.3 What changed in the served catalog
+
+Curve-only, same data (old body vs promoted body on the 09-11 watermark), 125,916 cells:
+
+| slice | cells | sum ratio | median row ratio | p5 | p95 | >2x up | <0.5x down | click-weighted |
+|---|---|---|---|---|---|---|---|---|
+| ALL | 125,916 | 1.580 | 1.580 | 1.174 | 2.255 | 10,805 | 15 | **1.426** |
+| GENERIC | 96,396 | 1.567 | 1.580 | 1.136 | 2.258 | 8,289 | 15 | 1.401 |
+| TIME_BASED | 29,520 | 1.624 | 1.584 | 1.352 | 2.225 | 2,516 | 0 | 1.702 |
+
+Decomposes as the recency lift (~1.34x, §2 D3) times the calibration (1.1718 at promotion, now
+1.1687 after the 09-14 refit). The click-weighted lift is smaller than the median because the
+biggest movers are thin cells.
+
+Served bid base, pre-promotion (09-11 build) vs 09-16 build (promoted body plus four days of data),
+cells with clicks, click-weighted:
+
+| | target_bid | value_per_click | gp_per_order | cvr_hat | RUN cells / clicks | VELOCITY | MARGINAL | OFF |
+|---|---|---|---|---|---|---|---|---|
+| pre | $0.298 | $0.427 | $13.72 | 3.11% | 16,524 / 363k | 11,269 / 606k | 5,497 / 352k | 5,263 / 286k |
+| post | $0.402 | $0.575 | $13.55 | 4.27% | 27,664 / 875k | 7,118 / 514k | 2,208 / 132k | 1,696 / 96k |
+
+**Nothing uploads on its own.** `T_INTENT_BID_BASE` feeds `tools/build_reprice_bulksheet.py`, which
+a human runs and a human uploads. The next bulksheet built from it will carry target bids ~35%
+higher click-weighted than one built on 09-11, and will call far more cells RUN at market CPC.
+That is the under-pricing closing (1.62x -> 1.14x): the old catalog was telling the bid tool to
+cut traffic that was paying for itself.
+
+### 10.4 Operating record, first four days
+
+15 orchestrator runs of `SP_REFRESH_SEARCH_TERM_INTENT` on the promoted body, 2026-09-11 16:08 to
+2026-09-16 07:41, all OK, ~200 s each. The calibration refit: UNCHANGED on eleven runs, one APPLIED
+on 09-14 07:43 (1.1718 -> 1.1687, -0.27%) once accumulated drift crossed the quarter-percent
+dead-band added 2026-09-12 (§9.3). Acceptance R01–R22 all 0 on 2026-09-16. R09–R11 now compare the
+shadow to its identical served twin and re-arm on the next shadow change.
+
+### 10.5 Rollback
+
+`git show 62eff4d:scripts/bigquery/views/V_INTENT_CVR_CURVE.sql` is the previous body; deploy it
+and run `SP_REFRESH_SEARCH_TERM_INTENT` (four minutes) to restore the old catalog. The
+`.sql.bak.pre-index-registry` copy is gitignored and local only.
