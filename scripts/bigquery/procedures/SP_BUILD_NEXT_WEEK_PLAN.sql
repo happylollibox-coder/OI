@@ -1,5 +1,5 @@
 -- =============================================================================================
--- SP_BUILD_NEXT_WEEK_PLAN — v27.138 (2026-08-24): the nightly plan for the working families.
+-- SP_BUILD_NEXT_WEEK_PLAN — v27.147 (2026-09-28): the nightly plan for the working families.
 -- Reads V_PLAN_WINDOW_JUDGMENT (the side and the price) ONCE and turns it into money:
 --   1. POT (P-2)        the GOOD side's window spend per day, per family. Not the family total.
 --   2. ALLOWANCE (P-2)  allowance_share x pot, from DE_PLAN_CONFIG for today's calendar state.
@@ -94,7 +94,7 @@
 -- SOP: architecture/NEXT_WEEK_MONEY.md §3.
 -- =============================================================================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN`()
-OPTIONS (description = "v27.138 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
+OPTIONS (description = "v27.147 (2026-09-28): the P-14b assertion checks the judgement is COMPLETE (guard_released_by present on every demotion under the guard's preconditions; every HELD row on the good side with a very good last day, P-14c) instead of re-deriving the guard as a veto -- the v27.136 form refused every partition from 2026-08-29 to 2026-09-28 once the judge's hold clock first expired. Carries hold_since / hold_settles_on / hold_expired, last_day_* and guard_released_by into the plan table. v27.138 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
 BEGIN
   DECLARE as_of_d DATE DEFAULT CURRENT_DATE('America/Los_Angeles');
   DECLARE live_plan_code STRING DEFAULT 'B';
@@ -494,6 +494,8 @@ BEGIN
      was_good, family_bar, ret_raw, ret_corrected, ladder_state, side, verdict, is_candidate,
      rank_score, rank_dollars_at_stake, rank_closeness, rank_is_degenerate, served, prior_grace,
      last_grace_on, grace_limit_armed, held_despite_evidence, held_with_no_sale, good_side_no_sale,
+     hold_since, hold_settles_on, hold_expired, last_day_sp, last_day_clk, last_day_ord, last_day_gp,
+     last_day_gp_corrected, last_day_ret, last_day_strong, guard_released_by,
      rank_no, seat_no, seat_cost_per_day, current_bid, planned_bid, bid_floor, bid_park,
      bid_park_source, bid_park_seat_econ, move, planned_spend_per_day,
      planned_spend_delta_per_day, verdict_date, pot_per_day,
@@ -514,6 +516,8 @@ BEGIN
     p.rank_score, p.rank_dollars_at_stake, p.rank_closeness,
     (p.is_cand AND p.rank_score = 0), p.served, p.prior_grace, p.last_grace_on,
     p.grace_limit_armed, p.held_despite_evidence, p.held_with_no_sale, p.good_side_no_sale,
+    p.hold_since, p.hold_settles_on, p.hold_expired, p.last_day_sp, p.last_day_clk, p.last_day_ord,
+    p.last_day_gp, p.last_day_gp_corrected, p.last_day_ret, p.last_day_strong, p.guard_released_by,
     p.rank_no, p.seat_no,
     IF(p.side = 'GOOD', NULL, ROUND(p.plan_seat_cost, 4)),
     p.current_bid, p.planned_bid_final, p.bid_floor, p.bid_park, p.bid_park_source,
@@ -695,9 +699,26 @@ BEGIN
   ASSERT (SELECT COUNTIF(seat_no IS NOT NULL AND (verdict_date IS NULL OR verdict_date <= as_of))
                 + COUNTIF(seat_no IS NULL AND verdict_date IS NOT NULL) FROM final) = 0
     AS 'every SEAT carries a verdict date in the future, held or repriced (P-12)';
-  ASSERT (SELECT COUNTIF(side = 'NOT_GOOD' AND was_good AND served AND NOT settled)
+  -- P-14b / P-14c, AS THE JUDGE RULES THEM (v27.147, 2026-09-28). The v27.136 form of this
+  -- assertion was `side = NOT_GOOD AND was_good AND served AND NOT settled` = 0 -- a copy of the
+  -- guard's PRECONDITIONS, read as a veto. The judge (v27.138) reads P-14b as a CLOCK anchored to
+  -- the window that triggered the hold, lifting when that window settles. The two agreed until
+  -- the first clock expired (2026-08-29); from that night the view demoted a keyword its rule
+  -- allowed and this line refused the whole partition, every night, for a month -- nothing
+  -- downstream saw a plan newer than 08-28, and because nothing was written the judge's memory
+  -- froze too, so the same rows failed forever. A guard that re-judges is the second engine
+  -- P-11 forbids. The builder now asserts the judgement is COMPLETE, not that it agrees with a
+  -- copy: every demotion of a keyword that was good, served and sits on an unsettled window
+  -- carries the judge's own published release reason (HOLD_EXPIRED, or LAST_DAY_NOT_STRONG
+  -- under Ori's 2026-09-17 ruling), and every row the judge holds is on the good side and
+  -- earned the hold with a very good last day.
+  ASSERT (SELECT COUNTIF(side = 'NOT_GOOD' AND was_good AND served AND NOT settled
+                         AND guard_released_by IS NULL)
           FROM final WHERE is_live_plan) = 0
-    AS 'no keyword that was good and served in the window may be demoted before it settles (P-14b)';
+    AS 'a keyword that was good and served on an unsettled window is demoted only with the judge-published release reason: the hold clock expired, or its last day was not very good (P-14b/P-14c)';
+  ASSERT (SELECT COUNTIF(verdict = 'HELD_UNSETTLED' AND (side != 'GOOD' OR NOT COALESCE(last_day_strong, FALSE)))
+          FROM final WHERE is_live_plan) = 0
+    AS 'every keyword the guard holds is on the good side and earned the hold with a very good last day (P-14c)';
   ASSERT (SELECT COUNTIF(holdout AND (move NOT IN ('NONE', 'NONE_HOLDOUT') OR seat_no IS NOT NULL))
           FROM final) = 0
     AS 'a holdout campaign gets a record and no move';

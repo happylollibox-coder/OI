@@ -106,7 +106,14 @@ c06 AS (
   SELECT 'C06 one move per CANDIDATE, none on the good side, none where there is nothing to repair (P-4, §9)',
          COUNTIF(side = 'GOOD' AND move != 'NONE')
        + COUNTIF(is_candidate AND move NOT IN ('REPRICE','HOLD_AT_PRICE','PARK','HOLD_AT_PARK','PAUSE'))
-       + COUNTIF(NOT is_candidate AND holdout AND move != 'NONE_HOLDOUT')
+       -- v27.147: scoped to the NOT-GOOD side. The builder tests `side = GOOD -> NONE` before
+       -- `holdout -> NONE_HOLDOUT`, and its own assertion (and this check's first term) demand
+       -- NONE on every good-side row -- so a GOOD keyword inside a holdout campaign satisfied term
+       -- 1 and failed this term at once. Latent since v27.136: no holdout campaign was eligible on
+       -- any partition written before 2026-08-29, and the first partition after them became
+       -- eligible (2026-09-28) lit 38 rows. A NOT-GOOD holdout row must still say NONE_HOLDOUT:
+       -- it would otherwise be a candidate, and the label is what explains its silence.
+       + COUNTIF(NOT is_candidate AND holdout AND side = 'NOT_GOOD' AND move != 'NONE_HOLDOUT')
        + COUNTIF(NOT is_candidate AND NOT holdout AND side = 'NOT_GOOD' AND move != 'NONE')
        + COUNTIF(move IS NULL)
   FROM p
@@ -127,10 +134,21 @@ c08 AS (
        + COUNTIF(holdout AND is_candidate)
   FROM p
 ),
+-- C09, RESTATED v27.147 (2026-09-28). The v27.134 form copied the guard's preconditions and
+-- read them as a veto -- the same reading that made the builder refuse every partition from
+-- 2026-08-29 to 2026-09-28. The judge reads P-14b as a clock (v27.138) and, since P-14c (Ori,
+-- 2026-09-17), grants the hold only on a very good last day. A demotion under the guard's
+-- preconditions is legitimate exactly when the judge published why it released the row, so the
+-- check reads guard_released_by and never re-derives the guard (P-11: one engine judges).
+-- Negative controls 2026-09-28 on a temp copy: one such row with guard_released_by nulled -> 1;
+-- one with an unknown reason -> 1; live -> 0.
 c09 AS (
-  SELECT 'C09 P-14: every row names its arm; no unsettled demotion of a keyword that was good AND served',
+  SELECT 'C09 P-14: every row names its arm; a demotion under the guard preconditions carries the judge release reason (HOLD_EXPIRED | LAST_DAY_NOT_STRONG)',
          COUNTIF(settle_arm IS NULL OR decided_by IS NULL
-                 OR (side = 'NOT_GOOD' AND was_good AND served AND NOT settled))
+                 OR (side = 'NOT_GOOD' AND was_good AND served AND NOT settled
+                     AND guard_released_by IS NULL)
+                 OR (guard_released_by IS NOT NULL
+                     AND guard_released_by NOT IN ('HOLD_EXPIRED', 'LAST_DAY_NOT_STRONG')))
   FROM b
 ),
 c10 AS (
@@ -312,6 +330,16 @@ c25 AS (
                  AND sentence NOT LIKE '%a cut of about%'
                  AND sentence NOT LIKE '%no change of about%')
   FROM p
+),
+-- C26 (v27.147): P-14c -- every held row earned the hold with a very good last day and sits on
+-- the good side, and no sale-less window is held (a window that sold nothing cannot have a very
+-- good last day). Negative controls 2026-09-28 on a temp copy: one HELD row with
+-- last_day_strong flipped -> 1; one HELD row with w_ord set to 0 -> 1; live -> 0.
+c26 AS (
+  SELECT 'C26 P-14c: every HELD row has a very good last day and is on the good side; no sale-less window is held',
+         COUNTIF(verdict = 'HELD_UNSETTLED' AND (NOT COALESCE(last_day_strong, FALSE) OR side != 'GOOD'))
+       + COUNTIF(verdict = 'HELD_UNSETTLED' AND COALESCE(w_ord, 0) = 0)
+  FROM b
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
@@ -322,5 +350,5 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c16 UNION ALL SELECT * FROM c17 UNION ALL SELECT * FROM c18
       UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21
       UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23 UNION ALL SELECT * FROM c24
-      UNION ALL SELECT * FROM c25)
+      UNION ALL SELECT * FROM c25 UNION ALL SELECT * FROM c26)
 ORDER BY check_name;

@@ -94,6 +94,18 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   held_despite_evidence      BOOL,
   held_with_no_sale          BOOL,
   good_side_no_sale          BOOL,
+  -- v27.147: the guard's clock and P-14c's last-day test, as the judge published them
+  hold_since                 DATE,
+  hold_settles_on            DATE,
+  hold_expired               BOOL,
+  last_day_sp                FLOAT64,
+  last_day_clk               INT64,
+  last_day_ord               INT64,
+  last_day_gp                FLOAT64,
+  last_day_gp_corrected      FLOAT64,
+  last_day_ret               FLOAT64,
+  last_day_strong            BOOL,
+  guard_released_by          STRING,
   rank_no                    INT64,
   seat_no                    INT64,
   seat_cost_per_day          FLOAT64,
@@ -177,3 +189,23 @@ ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   ADD COLUMN IF NOT EXISTS implied_daily_spend FLOAT64;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   ADD COLUMN IF NOT EXISTS request_basis STRING;
+
+-- v27.147 (2026-09-28) — P-14c AND THE GUARD'S RELEASE REASON. Shipped as
+-- scripts/bigquery/migrations/2026-09-28_plan_guard_release.sql; mirrored here because this
+-- file never alters a live table. The judge's hold clock (hold_since / hold_settles_on /
+-- hold_expired, v27.138) is now carried on the row, with the last complete day's own record
+-- (last_day_*), whether it was VERY GOOD (last_day_strong, P-14c) and guard_released_by -- the
+-- judge's reason for demoting a keyword that was good, served and sits on an unsettled window
+-- (LAST_DAY_NOT_STRONG or HOLD_EXPIRED). The builder asserts that reason is present rather than
+-- re-deriving the guard, which is how it refused every partition from 2026-08-29 to 2026-09-28.
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS hold_since DATE;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS hold_settles_on DATE;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS hold_expired BOOL;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_day_sp FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_day_clk INT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_day_ord INT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_day_gp FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_day_gp_corrected FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_day_ret FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_day_strong BOOL;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS guard_released_by STRING;

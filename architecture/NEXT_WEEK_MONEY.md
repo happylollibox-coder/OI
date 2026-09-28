@@ -580,7 +580,33 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 3 DESC;
 **Ori rules** whether the guard is this delay, or the unlimited veto it was: one line either way
 (§3 of this SOP, item 4).
 
-### THE OPEN QUESTION THIS LAYER PUT ON ORI'S DESK
+### The last-day test (P-14c, v27.147) — Ori ruled, and it closes the open question below
+
+Ruled 2026-09-17, built 2026-09-28. The hold is granted **only when the last complete day of the
+window was very good** — at least one order and a corrected return of at least 1.5× the family bar
+(`strong_day_min_orders`, `strong_day_mult` in the judge's `k` CTE). A losing window whose last day
+won a little is judged on the window. So the guard is a **delay, bounded by the clock, granted on
+one condition** — neither the veto the first build produced nor an unconditional wait.
+
+Read it on the row: `last_day_sp / last_day_ord / last_day_gp_corrected / last_day_ret`,
+`last_day_strong`, and on every NOT-GOOD row that was good, served and unsettled,
+`guard_released_by` = `LAST_DAY_NOT_STRONG` or `HOLD_EXPIRED`. The builder asserts that column is
+never NULL on such a row and that every HELD row has `last_day_strong` — it checks the judgement is
+complete and does not re-derive it (P-11). Acceptance C09 (restated) and C26.
+
+**Why this repair was urgent, and what it says about the two workers.** From 2026-08-29 to
+2026-09-28 `SP_BUILD_NEXT_WEEK_PLAN` failed every night on its own P-14b assertion. The builder's
+v27.136 line copied the guard's preconditions (`was_good AND served AND NOT settled`) and read them
+as a veto; the judge's v27.138 clock lets a hold expire. They agreed until the first clock ran out.
+From that night the judge demoted a keyword its rule allowed, the builder refused the partition, and
+because no partition was written the judge's memory (`hold_since`, `was_good`) froze, so the same
+rows failed forever. Nothing on Amazon moved — bids go up by bulksheet — but every surface read the
+08-28 plan for a month. A guard that re-judges is the second engine P-11 forbids.
+
+`held_with_no_sale` is FALSE by construction from v27.147 (no order in the window ⇒ no very good
+last day); the column stays for the scorecard and this page's history.
+
+### THE OPEN QUESTION THIS LAYER PUT ON ORI'S DESK (answered by P-14c above; kept as the record)
 
 P-14b says a keyword that was good is not demoted **until its window has settled**. Under a rolling
 window that always ends two days ago, a window is never settled at the moment it is judged: the
