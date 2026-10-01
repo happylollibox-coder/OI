@@ -16,12 +16,14 @@
 -- NEGATIVE CONTROLS ARE STANDING CHECKS HERE, NOT A ONE-OFF. Each alarm's expression is copied
 -- into this file and run over LIVE and doctored TEMP copies in one statement — the deployed view
 -- cannot be pointed at a temp table, so the copy is the only way to prove firing, and C03c / C06c
--- / C05c tie each copy to the deployed view's own output on the live data so the two cannot drift
--- apart unseen. THE EXPRESSIONS MUST CHANGE TOGETHER: c32's pipe_fail HAVING, c31's plan_clock
--- GREATEST, c28's guard COUNTIFs, and the brief's `health` aggregate each have one twin below.
+-- / C05c / C04f tie each copy to the deployed view's own output on the live data so the two cannot
+-- drift apart unseen. THE EXPRESSIONS MUST CHANGE TOGETHER: c32's pipe_fail HAVING, c31's
+-- plan_clock GREATEST, c28's guard COUNTIFs, the brief's `health` aggregate and its `system_health`
+-- rendering each have one twin below.
 --
--- RUN 2026-10-01 after the first deploy: 17 rows, every one PASS. The intermediates were then
--- printed from the same temp tables so each PASS is known to be a control that FIRED, not a
+-- RUN 2026-10-01 after the first deploy: 17 rows, every one PASS. RE-RUN 2026-10-01 after the C04a
+-- fix below: 20 rows, every one PASS, on the live board (32 checks, 3 RED). The intermediates were
+-- then printed from the same temp tables so each PASS is known to be a control that FIRED, not a
 -- vacuous one (the live figures are the board's, never this file's):
 --   C02b: LIVE last_plan 2026-10-01 = due 2026-10-01 (GREEN); NC_DROP_LATEST last_plan
 --         2026-09-30 < due 2026-10-01 (RED, 1 night); NC_EMPTY last_plan NULL (RED).
@@ -30,6 +32,13 @@
 --         named nothing, and the deployed check measured 0.
 --   C04: the live brief carried one SYSTEM row, rank 7, status RED, from_value 3, naming the
 --         board's three standing REDs; C04a/b/c each returned >= 1 on the doctored copy.
+--   C04d/e: the row rendered for NC_ALL_GREEN read status GREEN, from_value 0, item '0 of 32
+--         checks RED', action 'nothing to do — no check is RED', detail 'SYSTEM: 0 checks RED —
+--         every check on the board is green, amber or a report · last plan 2026-10-01, 0 night(s)
+--         missing · no step has failed ...', 0 names; the row test read 0 on it as rendered and 1
+--         with from_value 1.0 (and 1 with from_value 1.0 on LIVE and on NC_ALARM too).
+--   C04f: the row rendered for LIVE equalled the deployed SYSTEM row on status, from_value, item,
+--         action and the whole detail, and its names equalled red_names.
 --   C05a: on NC_ALARM the twin read n_red 4, n_alarm 1, and its list led with
 --         'plan_partition_fresh (last plan 2026-09-28, 3 night(s) missing · doctored ...)'.
 --   C05b: on NC_ALL_GREEN the twin read n_red 0, n_alarm 0, list NULL.
@@ -37,9 +46,25 @@
 --   C06a/b: the live plan had 17 rows under the guard preconditions and 2 HELD_UNSETTLED rows;
 --         the twin read 1 on NC_NULL_RELEASE, 1 on NC_HELD_WEAK, 0 on LIVE; the deployed check
 --         measured 0 (C06c).
--- The two '(vacuous when ...)' controls say so in their names: a negative control needs a row to
--- doctor, and a live plan with no row under the guard and nothing held is a legitimate state, not
--- a defect — the live positives C06c and C02 are conclusive on every partition.
+--
+-- THE SUITE ON A BOARD WITH NO RED (measured 2026-10-01). The whole file was run over a scratch
+-- copy in which every RED status on the board read GREEN and the brief's SYSTEM row was the one
+-- the `system_health` twin renders over that board (status GREEN, from_value 0): 20 rows, every
+-- one PASS — C04 0, C04a 0 (nothing to remove), C04b/C04c 0 (each fired), C04d 0, C04e 0, C04f 0,
+-- C05c 0. The committed v27.152 file on the same board read C04a FAIL (violations 1) and scored 0
+-- for a SYSTEM row saying 1 check RED over the clean board: ARRAY_AGG over zero RED rows is NULL,
+-- not [], ARRAY_LENGTH(NULL) is NULL, the IF guarding C04a took its else branch, and the count
+-- term `from_value != ARRAY_LENGTH(red_names)` compared against NULL and went quiet. red_names and
+-- red_names_copies now pin the empty case to [] and sys_row_violations reads a NULL array as [].
+-- The green branch of the rendering twin (the ELSE of status, action and detail) is copied from
+-- the view; the LIVE tie in C04f exercises the RED branch only, and the green branch can be tied
+-- to the deployed row only on a morning the board has no RED.
+--
+-- The '(vacuous when ...)' controls C06a/C06b, and C04a's '(nothing to remove ...)', say so in
+-- their names: a negative control needs a row to doctor, and a live plan with no row under the
+-- guard and nothing held, or a board with no RED, is a legitimate state, not a defect — the live
+-- positives C06c, C02 and C04f, and the board-with-no-RED pair C04d/C04e, are conclusive on every
+-- partition and every board.
 -- =============================================================================================
 
 -- ---- the two surfaces, read ONCE each (both are planning-ceiling views; one scan apiece) ----
@@ -143,11 +168,50 @@ CREATE TEMP TABLE sys_twin AS
                           CONCAT(check_name, ' (', COALESCE(detail, 'no detail'), ')'), check_name),
                        NULL), '; '
                     ORDER BY CASE check_name WHEN 'pipeline_step_failing' THEN 1
-                                             WHEN 'plan_partition_fresh' THEN 2 ELSE 3 END, check_name) AS red_list
+                                             WHEN 'plan_partition_fresh' THEN 2 ELSE 3 END, check_name) AS red_list,
+         COALESCE(MAX(IF(check_name = 'plan_partition_fresh',  SPLIT(detail, ' · ')[SAFE_OFFSET(0)], NULL)),
+                  'plan_partition_fresh is not on the board') AS plan_clause,
+         COALESCE(MAX(IF(check_name = 'pipeline_step_failing', SPLIT(detail, ' · ')[SAFE_OFFSET(0)], NULL)),
+                  'pipeline_step_failing is not on the board') AS pipe_clause
   FROM board_copies GROUP BY 1;
+-- the board's RED names, per copy. ARRAY_AGG over zero RED rows is NULL, not []: ARRAY_LENGTH(NULL)
+-- is NULL, every IF on it takes its else branch and every != against it goes quiet, so the empty
+-- case is pinned to [] here (and in red_names below), and the row test never sees a NULL array.
+-- IGNORE NULLS keeps a copy with no RED row as a row of its own; a WHERE status = 'RED' would drop it.
+CREATE TEMP TABLE red_names_copies AS
+  SELECT copy,
+         COALESCE(ARRAY_AGG(IF(status = 'RED', check_name, NULL) IGNORE NULLS ORDER BY check_name), []) AS names
+  FROM board_copies GROUP BY 1;
+-- TWIN of V_DAILY_BRIEF `system_health` (v27.152): the SYSTEM row as the brief renders it from the
+-- aggregate above — the deployed view cannot be pointed at a doctored board, so this is how the
+-- row test is run on one. C04f ties the LIVE rendering to the deployed row; the all-green branch
+-- (the ELSE of status, action and detail) is copied from the view and can only be tied live on a
+-- morning the board has no RED.
+CREATE TEMP TABLE sys_rows AS
+  SELECT t.copy, 1 AS n_rows, 7 AS section_rank,
+         CASE WHEN t.n_checks = 0 THEN 'RED' WHEN t.n_red > 0 THEN 'RED' ELSE 'GREEN' END AS status,
+         CAST(t.n_red AS FLOAT64) AS from_value,
+         CONCAT('SYSTEM: ', CAST(t.n_red AS STRING), ' check', IF(t.n_red = 1, '', 's'), ' RED',
+                IF(t.n_red > 0,
+                   CONCAT(' — ', COALESCE(t.red_list, '(the list could not be built)')),
+                   CONCAT(' — every check on the board is green, amber or a report · ',
+                          COALESCE(t.plan_clause, 'no plan clause'), ' · ', COALESCE(t.pipe_clause, 'no pipeline clause'))),
+                ' · ', CAST(t.n_checks AS STRING), ' checks read live from V_ENGINE_HEALTH',
+                '; the board: SELECT check_name, measured, status, threshold, detail FROM V_ENGINE_HEALTH ORDER BY status = \'GREEN\', check_name') AS detail,
+         FORMAT('%d of %d checks RED', t.n_red, t.n_checks) AS item,
+         CASE WHEN t.n_checks = 0 THEN 'the board is empty — V_ENGINE_HEALTH returned no rows; read the view by hand before trusting anything above this line'
+              WHEN t.n_alarm > 0 THEN 'A NIGHT WAS NOT SAVED — read the failing step\'s error in this line, fix it, and run the step by hand; nothing re-runs it for you, and PLANNED above may be quoting a plan older than it looks'
+              WHEN t.n_red > 0 THEN 'read the RED rows on V_ENGINE_HEALTH — each names what it measures and what breaks when it fires'
+              ELSE 'nothing to do — no check is RED' END AS action,
+         CAST(NULL AS STRING) AS campaign_id, CAST(NULL AS STRING) AS keyword_id,
+         r.names
+  FROM sys_twin t JOIN red_names_copies r USING (copy);
 
 -- ---- C04: the SYSTEM row's shape, written once and run on the live row and on doctored copies ----
 -- n_rows = how many SYSTEM rows the brief carries (must be 1); red_names = the board's RED checks.
+-- A NULL red_names is read as [] (no RED), never as 'nothing to compare': with a NULL array the
+-- count term scored 0 for a wrong count and the IF guarding C04a took its else branch (measured
+-- 2026-10-01, see the header).
 CREATE TEMP FUNCTION sys_row_violations(n_rows INT64, section_rank INT64, status STRING,
                                         from_value FLOAT64, detail STRING, item STRING, action STRING,
                                         campaign_id STRING, keyword_id STRING,
@@ -156,9 +220,9 @@ CREATE TEMP FUNCTION sys_row_violations(n_rows INT64, section_rank INT64, status
   + IF(section_rank != 7, 1, 0)
   + IF(campaign_id IS NOT NULL OR keyword_id IS NOT NULL, 1, 0)
   + IF(COALESCE(detail, '') NOT LIKE 'SYSTEM: %' OR COALESCE(item, '') = '' OR COALESCE(action, '') = '', 1, 0)
-  + IF(status != IF(ARRAY_LENGTH(red_names) > 0, 'RED', 'GREEN'), 1, 0)
-  + IF(from_value IS NULL OR from_value != ARRAY_LENGTH(red_names), 1, 0)
-  + (SELECT COUNT(*) FROM UNNEST(red_names) AS r WHERE COALESCE(detail, '') NOT LIKE CONCAT('%', r, '%'))
+  + IF(status != IF(ARRAY_LENGTH(COALESCE(red_names, [])) > 0, 'RED', 'GREEN'), 1, 0)
+  + IF(from_value IS NULL OR from_value != ARRAY_LENGTH(COALESCE(red_names, [])), 1, 0)
+  + (SELECT COUNT(*) FROM UNNEST(COALESCE(red_names, [])) AS r WHERE COALESCE(detail, '') NOT LIKE CONCAT('%', r, '%'))
 );
 
 WITH
@@ -168,7 +232,9 @@ expected AS (
                            'plan_settle_curve_coverage', 'plan_proposal_lag_days', 'plan_partition_fresh',
                            'pipeline_step_failing']) AS name
 ),
-red_names AS (SELECT ARRAY_AGG(check_name ORDER BY check_name) AS names FROM board WHERE status = 'RED'),
+-- [] on a board with no RED, never NULL (ARRAY_AGG over zero rows is NULL; C04f holds this equal
+-- to the LIVE row of red_names_copies so the two forms cannot drift)
+red_names AS (SELECT COALESCE(ARRAY_AGG(check_name ORDER BY check_name), []) AS names FROM board WHERE status = 'RED'),
 live_sys AS (
   -- one row even when the brief carries no SYSTEM row, so the function sees n_rows = 0 and fires
   SELECT COUNT(*) AS n_rows, MAX(section_rank) AS section_rank, MAX(status) AS status,
@@ -234,10 +300,10 @@ c04 AS (
           FROM live_sys)
 ),
 -- C04's own negative controls, on doctored copies of the live SYSTEM row (the board's RED names
--- are the live ones; the controls are conclusive only while the board has at least one RED,
--- which it has had every day since 2026-08-16 — see C04b, which is conclusive regardless).
+-- are the live ones). C04a needs a RED name to remove, so on a board with no RED it reads 0 and
+-- says so; C04b/C04c are conclusive on any board, and C04d/C04e cover the board with no RED.
 c04a AS (
-  SELECT 'C04a NEGATIVE CONTROL C04 FIRES when a RED name is removed from the detail (vacuous while the board has no RED)',
+  SELECT 'C04a NEGATIVE CONTROL C04 FIRES when a RED name is removed from the detail (nothing to remove on a board with no RED: 0, see C04d/C04e)',
          (SELECT IF(ARRAY_LENGTH(names) = 0, 0,
                     IF((SELECT sys_row_violations(n_rows, section_rank, status, from_value,
                                                   REPLACE(detail, COALESCE(names[SAFE_OFFSET(0)], ''), 'xx'), item, action,
@@ -258,6 +324,40 @@ c04c AS (
                                                campaign_id, keyword_id, names)
                      FROM live_sys) >= 1, 0, 1)
           FROM red_names)
+),
+-- THE ONE STATE THE LINE CALLS THE GOAL READS FAIL: the morning the board is finally clean, C04
+-- goes red on the SYSTEM row, and Ori learns to read past a FAIL in this file.
+c04d AS (
+  SELECT 'C04d C04 HOLDS on an all-green board: the SYSTEM row rendered for NC_ALL_GREEN is GREEN, counts 0, names nothing, says nothing to do, and passes the row test',
+         (SELECT IF(COUNT(*) = 1, 0, 1) FROM sys_rows WHERE copy = 'NC_ALL_GREEN')
+       + (SELECT COALESCE(MAX(sys_row_violations(n_rows, section_rank, status, from_value, detail, item, action,
+                                                 campaign_id, keyword_id, names)), 1)
+          FROM sys_rows WHERE copy = 'NC_ALL_GREEN')
+       + (SELECT COUNTIF(NOT (status = 'GREEN' AND from_value = 0 AND ARRAY_LENGTH(names) = 0
+                              AND action = 'nothing to do — no check is RED'
+                              AND detail LIKE 'SYSTEM: 0 checks RED — every check on the board is green, amber or a report · last plan %'))
+          FROM sys_rows WHERE copy = 'NC_ALL_GREEN')
+),
+-- A WRONG RED COUNT PASSES ON A GREEN BOARD: with no RED name the count term compared against a
+-- NULL array and went quiet, so a line reading '1 of 32 checks RED' over a clean board read PASS.
+c04e AS (
+  SELECT 'C04e NEGATIVE CONTROL C04 FIRES on an all-green board when the RED count is wrong: from_value 1 with no RED name -> >= 1',
+         (SELECT IF(COUNT(*) = 1, 0, 1) FROM sys_rows WHERE copy = 'NC_ALL_GREEN')
+       + (SELECT IF(COALESCE(MAX(sys_row_violations(n_rows, section_rank, status, 1.0, detail, item, action,
+                                                    campaign_id, keyword_id, names)), 0) >= 1, 0, 1)
+          FROM sys_rows WHERE copy = 'NC_ALL_GREEN')
+),
+-- THE RENDERING TWIN HAS DRIFTED FROM THE VIEW: C04d/C04e prove a row the brief no longer renders.
+c04f AS (
+  SELECT 'C04f the rendering twin\'s LIVE row equals the deployed SYSTEM row (status, from_value, item, action, detail) and its names equal red_names',
+         (SELECT IF(COUNT(*) = 1, 0, 1) FROM sys_rows WHERE copy = 'LIVE')
+       + (SELECT COUNT(*) FROM sys_rows t, live_sys s
+          WHERE t.copy = 'LIVE'
+            AND NOT COALESCE(t.status = s.status AND t.from_value = s.from_value AND t.item = s.item
+                             AND t.action = s.action AND t.detail = s.detail, FALSE))
+       + (SELECT COUNT(*) FROM sys_rows t, red_names r
+          WHERE t.copy = 'LIVE'
+            AND NOT COALESCE(ARRAY_TO_STRING(t.names, '|') = ARRAY_TO_STRING(r.names, '|'), FALSE))
 ),
 -- THE LINE DOES NOT SAY A NIGHT WAS NOT SAVED when the alarm is RED, or does not quote the board's
 -- own words for it (the last plan date, the nights missing): Ori reads 'checks RED' and moves on.
@@ -317,7 +417,8 @@ SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c02b
       UNION ALL SELECT * FROM c03a UNION ALL SELECT * FROM c03b UNION ALL SELECT * FROM c03c
       UNION ALL SELECT * FROM c04 UNION ALL SELECT * FROM c04a UNION ALL SELECT * FROM c04b
-      UNION ALL SELECT * FROM c04c UNION ALL SELECT * FROM c05a UNION ALL SELECT * FROM c05b
+      UNION ALL SELECT * FROM c04c UNION ALL SELECT * FROM c04d UNION ALL SELECT * FROM c04e
+      UNION ALL SELECT * FROM c04f UNION ALL SELECT * FROM c05a UNION ALL SELECT * FROM c05b
       UNION ALL SELECT * FROM c05c UNION ALL SELECT * FROM c06a UNION ALL SELECT * FROM c06b
       UNION ALL SELECT * FROM c06c UNION ALL SELECT * FROM c07)
 ORDER BY check_name;
